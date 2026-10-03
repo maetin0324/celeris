@@ -1006,8 +1006,9 @@ struct RunExtras {
     /// `runs` 索引から組み立てた続きの文脈（`run_worker` は events から求める代わりにこれを使う）。
     continuation_override: Option<task_worker::ContinuationContext>,
     /// ADR-0140 D2: この run が WU の継続 session（`kind = continuation`）を使うなら `(task_id, work_unit_id)`。
+    /// atomic task の task 単位の session なら `work_unit_id` は `None`（付記 session-container）。
     /// `run_worker` が sink に渡し、resume 拒否でその session を retire する（CoS の `session_key` とは別）。
-    continuation_session: Option<(TaskId, String)>,
+    continuation_session: Option<(TaskId, Option<String>)>,
     /// ADR-0072 D13/D14（Phase E3）: task-local な planner run にだけ `Some`
     /// （`RunContext.execution_planner` にそのまま乗る）。
     execution_planner: Option<task_worker::protocol::ExecutionPlannerContext>,

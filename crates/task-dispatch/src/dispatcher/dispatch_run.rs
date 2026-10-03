@@ -524,31 +524,6 @@ impl Dispatcher {
             },
         )?;
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
-        // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
-        // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
-        // planner run はこの少し上で、それぞれ自分で `run_index_start` を呼ぶ）。
-        if current_wu.is_none() && !is_planner_dispatch {
-            let seq = current_run_seq(&self.store.events_for(task.id)?) + 1;
-            if let Err(e) = self.store.run_index_start(task_core::RunRow {
-                run_id: run_id.clone(),
-                task_id: task.id.to_string(),
-                work_unit_id: None,
-                role: task_core::RunIndexRole::Worker,
-                seq,
-                status: task_core::RunIndexStatus::Running,
-                adapter: Some(adapter_id.clone()),
-                model: Some(model.clone()),
-                account: account.clone(),
-                session_id: None,
-                checkpoint: None,
-                usage: None,
-                metrics: None,
-                started_at: rfc3339(OffsetDateTime::now_utc()),
-                finished_at: None,
-            }) {
-                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the (implicit work unit) worker run start in the runs index");
-            }
-        }
         // ADR-0069 D5: この run の routing の監査記録（担当・harness・lane・model・features・規則）。
         if let Some(mut decision) = lane_decision {
             if task_core::model_policy::lane_rank(task.worker_hint.tier)
@@ -653,7 +628,12 @@ impl Dispatcher {
         // （`runs`/`last_run_id` を更新）、`runs` 索引に 1 行作り、prompt に載せる文脈を組み立てる。
         // ADR-0140 D1: WU の worker run は、continuation なら同じ Claude Code session を resume するか、
         // checkpoint 前置きの新しい session に倒すかをここで決める（planner run は判断表 #1 で常に fresh）。
-        if let Some(wu) = &current_wu {
+        // 付記 session-container: 計画の無い atomic task（直行経路を含む）の worker run も同じ判断表で、
+        // task 単位の 1 本（`work_unit_id IS NULL`）を resume するか checkpoint 前置きの fresh に倒す。
+        // CoS の対話 run（`extras.session` が `run_extras` で埋まる）と planner run は対象外。
+        let atomic_worker =
+            current_wu.is_none() && !is_planner_dispatch && extras.session.is_none();
+        if current_wu.is_some() || atomic_worker {
             let cwd = worktree
                 .as_ref()
                 .and_then(|w| w.cwd())
@@ -672,7 +652,7 @@ impl Dispatcher {
             };
             if let Err(e) = self.resolve_continuation_session(
                 &task,
-                wu,
+                current_wu.as_ref(),
                 &run_id,
                 role,
                 &adapter_id,
@@ -680,9 +660,36 @@ impl Dispatcher {
                 &surface,
                 &mut extras,
             ) {
-                tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %e, "failed to resolve the continuation session; running with a fresh context");
+                let work_unit = current_wu.as_ref().map(|wu| wu.key.as_str());
+                tracing::warn!(task_id = %task.id, work_unit, error = %e, "failed to resolve the continuation session; running with a fresh context");
                 extras.session = None;
                 extras.continuation_session = None;
+            }
+        }
+        // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
+        // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
+        // planner run はこの少し下で、それぞれ自分で `run_index_start` を呼ぶ）。付記 session-container: 続きの
+        // session を決めた後に書き、この run が使う session の id を載せる（usage の積み上げの key）。
+        if current_wu.is_none() && !is_planner_dispatch {
+            let seq = current_run_seq(&self.store.events_for(task.id)?) + 1;
+            if let Err(e) = self.store.run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: task.id.to_string(),
+                work_unit_id: None,
+                role: task_core::RunIndexRole::Worker,
+                seq,
+                status: task_core::RunIndexStatus::Running,
+                adapter: Some(adapter_id.clone()),
+                model: Some(model.clone()),
+                account: account.clone(),
+                session_id: extras.session.as_ref().map(|s| s.session_id.clone()),
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+                finished_at: None,
+            }) {
+                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the (implicit work unit) worker run start in the runs index");
             }
         }
         if let Some(wu) = &current_wu

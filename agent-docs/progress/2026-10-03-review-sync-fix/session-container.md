@@ -1,6 +1,6 @@
 ---
 task: review-sync-fix
-wu: container-fix
+wu: container-fix, atomic-resume
 status: done
 completed: 2026-10-03
 ---
@@ -29,7 +29,34 @@ completed: 2026-10-03
 - `cargo clippy --workspace -- -D warnings` → exit 0
 
 ## 未解決事項
-- atomic task（`current_wu` が None）の continuation の resume は並行 WU atomic-resume の範囲。
+- container-fix の時点では atomic task の resume は未対応だった → 下の atomic-resume で対応済み。
+
+## 提案
+- なし
+
+# atomic-resume: atomic task の continuation も同一 session を resume する
+
+## 変更の要点
+- `dispatcher/dispatch_run.rs`: `resolve_continuation_session` を WU の run だけでなく、計画の無い atomic task（直行経路を含む）の worker run（`current_wu = None`・planner でない・CoS の対話 session を持たない）でも呼ぶ。atomic の `runs` 索引の行は session を決めた後に書き、使う session id を `runs.session_id` に載せる。
+- `dispatcher/continuation_session.rs`: `wu: Option<&WorkUnitRow>`。`None` は task 単位の 1 本（`node_sessions.work_unit_id IS NULL`、migration 0043 の規約）で、続きの系列は `runs` の `work_unit_id = NULL`・`role = worker` の行。resume 拒否のやり直しの checkpoint も同じ系列から組む。判断表（`sessions::decide_continuation`）は変えていない。
+- `sinks.rs`・`dispatcher.rs`: 継続 session の key を `(TaskId, Option<String>)` にし、resume 拒否で task 単位の行も retire する。`worker_finish.rs`: usage の積み上げ（`work_unit_session_touch`）を `work_unit_id = NULL` の行にも行う。
+- WU の行（`work_unit_id` 非 NULL）の検索・retire は従来どおり（SQL は `work_unit_id IS ?` で NULL と非 NULL を分ける）。migration は追加していない。
+- ADR-0140 末尾に「付記（2026-10-03、session-container）」（container・非 claude-code の判定順と atomic task の task 単位 session）。
+
+## 試験
+- `dispatcher/tests/session_resume.rs::session_resume_atomic_task_reuses_session`: atomic task の budget → yield → done の 3 run が同じ id（初回 `--session-id`、続き 2 回は `--resume`、checkpoint 前置きあり）、`work_unit_session_current(task, None)` が同じ id、worker の `runs.session_id` 3 本とも同じ id、判断の行は `independent_wu` → `resumed` ×2。後半: 保存 session を別 account の行に差し替えると続きは `account_changed` の fresh（別 id・checkpoint 前置きあり）。
+- 偽アダプタの `Hook::RewriteStored` を atomic run（key `atomic`）にも効くようにした。
+
+## 証拠
+- atomic の分岐を無効にして `cargo test -p task-dispatch --lib session_resume_atomic` → FAILED（初回 run に session が無い）。戻して → ok。
+- `cargo test -p task-dispatch --lib session_resume` → 27 passed / 0 failed（既存の session_resume・container・reviewer 試験を含む）
+- `cargo test -p task-dispatch` → 595 passed / 0 failed（lib）、4 passed（integration）
+- `cargo fmt --all -- --check` → exit 0
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `cargo test --workspace` → exit 0、3771 passed / 0 failed / 13 ignored
+
+## 未解決事項
+- 直行経路の task 専用の試験は置いていない（直行経路も `current_wu = None`・planner でない同じ分岐を通る）。
 
 ## 提案
 - なし

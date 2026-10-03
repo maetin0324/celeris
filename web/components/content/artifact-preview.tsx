@@ -41,7 +41,7 @@ export function ArtifactPreview({ taskId, idx, name }: { taskId: string; idx: nu
         </a>
       )}
       {open && markdown && (
-        <div className="max-h-96 overflow-auto rounded border p-3">
+        <div className="max-h-96 overflow-auto rounded-sm border border-border p-3">
           {error ? (
             <p role="alert">preview を取得できません</p>
           ) : content === undefined ? (

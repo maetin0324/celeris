@@ -432,3 +432,17 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo fmt --all -- --check` → exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
+
+### daily-curation / curation-job close: 日次知識整理 job の全体検査 — 2026-10-03
+
+日次整理 job の実装・結合試験を含むこの worktree で全体検査を実施した。
+
+- `cargo test --workspace` → 今回は `instance_handoff` の 8 件中 5 件が失敗し runner が終了、終了コード・最終サマリーを回収できなかった。
+  `tests/daily_curation.rs` は 2 passed、knowledge curation の unit 試験も通過した。前回の同じ検査では exit 101 で、
+  3 件が worker DB guard の probe における user namespace 作成 `Operation not permitted`、2 件が instance 起動・dispatch 前提の失敗だった。
+  時間依存の flaky ではなく実行環境の namespace 制約と見られる。今回も `instance_handoff` 失敗を観測したため再実行はせず、コードは変更していない。
+- 今回の `cargo clippy --workspace -- -D warnings` は未実行（test 失敗のため停止）。前回実行は exit 0。
+- 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
+  dry-run から apply への切り替えは人が判断・実施する。
+- 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
+  dry-run から apply への切り替えは人が判断・実施する。

@@ -56,7 +56,7 @@ function Breadcrumb({ items }: { items: readonly BreadcrumbItem[] }) {
     <nav aria-label="パンくず" className="min-w-0">
       <ol className="flex min-w-0 flex-wrap items-center gap-x-1 text-label text-muted-foreground">
         {items.map((item, index) => (
-          <Fragment key={`${index}-${item.label}`}>
+          <Fragment key={item.label}>
             <li className="min-w-0 break-words">
               {item.link && index !== last ? (
                 <Link

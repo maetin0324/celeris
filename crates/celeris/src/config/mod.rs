@@ -22,6 +22,7 @@ mod accounts;
 mod adapters;
 mod api;
 mod cluster;
+mod cron;
 mod db;
 mod delegation;
 mod dispatch;
@@ -40,6 +41,7 @@ pub use accounts::*;
 pub use adapters::*;
 pub use api::*;
 pub use cluster::*;
+pub use cron::*;
 pub use db::*;
 pub use delegation::*;
 pub use dispatch::*;
@@ -201,6 +203,10 @@ pub struct Config {
     /// ADR-0043 D3（Phase 56）: コンテナ実行（runtime・既定のイメージ・ビルドの置き場）。
     #[serde(default)]
     pub containers: ContainersConfig,
+    /// ADR-0131 D6 / 付記 D10: `[[cron.seed]]`。空の `cron_jobs` に起動時に一度だけ入れる定期実行の種
+    /// （以後は DB が正。設定は再読込しない）。
+    #[serde(default)]
+    pub cron: CronConfig,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -382,6 +388,8 @@ impl Config {
         let genre_ids = harness::validate_genres(&self.genres, &role_ids)?;
         harness::validate_conversation(self.conversation.as_ref(), &genre_ids)?;
         self.validate_org_seed(&genre_ids)?;
+        self.cron
+            .validate(&task_core::known_harness_ids(&self.genre_specs()))?;
         self.delegation.validate()?;
         // Phase 7 監査: cooldown 0 だと供給側失敗の requeue が毎 tick の再 dispatch になる。
         if self.error_cooldown_secs == 0 {

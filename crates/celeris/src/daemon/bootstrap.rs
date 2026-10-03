@@ -1,4 +1,4 @@
-//! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図の種まき。
+//! 起動時の組み立て: DB の置き場所の検査、`Dispatcher` の構築、組織図と定期実行 job の種まき。
 
 use std::path::Path;
 use std::sync::Arc;
@@ -13,6 +13,7 @@ use super::clusters::{
     cluster_control_persist, cluster_keepalive_secs, master_launchers, tunnel_forward_ensurer,
     tunnel_listener_probe, tunnel_probe,
 };
+use crate::config::ConfigError;
 use crate::{Config, DaemonError};
 
 /// ADR-0013 D5 の前提（DB はローカルディスク）を破っている場合に警告するための、ネットワーク FS の一覧。
@@ -140,6 +141,7 @@ pub fn build_dispatcher(
         },
     )?);
     seed_org_if_empty(store.as_ref(), config)?;
+    seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let policy = StaticPolicy::new(
         config.provider_specs(),
         std::time::Duration::from_secs(config.error_cooldown_secs),
@@ -201,4 +203,61 @@ pub fn seed_org_if_empty(store: &dyn TaskStore, config: &Config) -> Result<usize
         "org: seeded the organization from the config"
     );
     Ok(nodes.len())
+}
+
+/// ADR-0131 D6 / 付記 D10: 定期実行 job の種を蒔く。**`cron_jobs` が空のときだけ**書き、それ以外は
+/// 何もしない（DB が正。2 回目以降の起動で重複も上書きもしない）。検証は API の cron job 作成と同じ
+/// `task_ops::cron_jobs::validate_job` / `create_job` を通し、不正な種は起動時の設定エラーにする。
+/// 全件を先に検証してから書くので、途中の 1 件が不正でも一部だけ入った状態は残らない。蒔いた件数を返す。
+pub fn seed_cron_if_empty(
+    store: &dyn TaskStore,
+    config: &Config,
+    now: OffsetDateTime,
+) -> Result<usize, DaemonError> {
+    if config.cron.seed.is_empty() {
+        return Ok(0);
+    }
+    if !store.cron_job_list()?.is_empty() {
+        tracing::debug!(
+            "cron: cron_jobs is not empty; the config seed is not applied (the DB wins)"
+        );
+        return Ok(0);
+    }
+    let roles = config.role_specs();
+    let genres = config.genre_specs();
+    let ctx = task_ops::cron_jobs::CronFireContext {
+        roles: &roles,
+        genres: &genres,
+        ..Default::default()
+    };
+    let invalid = |name: &str, e: task_ops::OpsError| {
+        DaemonError::Config(ConfigError::Invalid(format!("[[cron.seed]] {name:?}: {e}")))
+    };
+    for seed in &config.cron.seed {
+        let new = seed.to_new_job();
+        let probe = task_core::CronJob {
+            id: task_core::CronJobId::new(),
+            name: new.name,
+            enabled: new.enabled,
+            schedule: new.schedule,
+            timezone: new.timezone,
+            overlap: new.overlap,
+            catch_up: new.catch_up,
+            template: new.template,
+            next_fire_at: None,
+            created_at: now,
+            updated_at: now,
+        };
+        task_ops::cron_jobs::validate_job(store, &ctx, &probe, now)
+            .map_err(|e| invalid(&seed.name, e))?;
+    }
+    for seed in &config.cron.seed {
+        task_ops::cron_jobs::create_job(store, &ctx, seed.to_new_job(), now)
+            .map_err(|e| invalid(&seed.name, e))?;
+    }
+    tracing::info!(
+        count = config.cron.seed.len(),
+        "cron: seeded the cron jobs from the config"
+    );
+    Ok(config.cron.seed.len())
 }

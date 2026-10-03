@@ -83,12 +83,12 @@ export function Shell({ children }: { children: ReactNode }) {
         <button
           ref={menuButton}
           type="button"
-          className={`${buttonVariants({ variant: "secondary" })} ml-auto md:hidden`}
+          className={`${buttonVariants({ variant: "secondary", size: "sm" })} ml-auto md:hidden`}
           aria-expanded={menuOpen}
           aria-controls="shell-nav"
           onClick={() => setMenuOpen((open) => !open)}
         >
-          <Icon name="menu" />
+          <Icon name="menu" size="sm" />
           メニュー
         </button>
         <nav

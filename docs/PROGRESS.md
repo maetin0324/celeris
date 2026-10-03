@@ -902,7 +902,18 @@ main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest
   `cargo test -p task-ops` 431 passed、`-p task-api` 432 passed、`-p task-core` 652 passed、`-p task-dispatch` 514 passed。
 - 未解決: 受信箱の構築は task ごとに events を読む既存の形のまま（読み取り接続で task 数に比例）。本番 active の
   tick loop は 30 秒ごとに `notify::schedule_routes` で受信箱を構築する（verify の退行とは別）。
-- 未実施: `scripts/selfdeploy/release.sh` / `verify.sh` は run の sandbox では `~/.local/celeris` が読み取り専用
-  （`.lock-release: Read-only file system`）で実行できない。人が host で
-  `scripts/selfdeploy/release.sh <この branch の HEAD>` → `scripts/selfdeploy/verify.sh <sha12>` を実行し、
-  `~/.local/celeris/releases/<sha12>/verify.json` の `ok` が true であることを確かめる（昇格はしない）。
+- release/verify（2026-10-03 02:42〜02:51 UTC、検証済み sha `8e42a33ca126aa5f75acae7aad966dfbad018537`）: run の sandbox では
+  `~/.local/celeris/releases` が読み取り専用の mount なので、`CELERIS_STATE_DIR` を run の artifacts の別 dir
+  （`current` は本番の `releases/0b8a225629fd` への symlink、`SD_CELERISCTL=/nonexistent` で scratch lease を使わない、
+  staging port は 17711/17701/17712）にして同じ台本を実行した。本番の DB は `.backup`（mode=ro）で読むだけ、昇格はしていない。
+  - `scripts/selfdeploy/release.sh 8e42a33c`: exit 0（gate.json ok=true。fmt・cargo-test・clippy・build・pnpm の
+    typecheck/test/build・mobile-audit・e2e-mock がすべて exit 0。web 段は既定の `SD_GATE_SKIP_WEB=1` で skip）。
+  - `scripts/selfdeploy/verify.sh 8e42a33ca126`: exit 0、**verify.json ok=true**。検査 1 schema 41・2 件数一致（tasks 699）・
+    3 主要 GET・4 GUI（/ と /projects/<id> を含めて 200）・4b gui-e2e・6 smoke（done 6.3 秒）がすべて true。
+    live_ok=false は検査 5（N-1 の 0b8a2256 が schema 41 の DB を開けない `SchemaTooNew`）で、0037→0041 の migration を
+    含む release では予期どおり（ok には入らない）。
+  - staging log の slow api request（1 秒超）: 修正前 31 件・最大 13.8 秒（org・browser/waits・inbox・integrations）→
+    修正後は最大 1.56 秒（inbox 3 件、gui-e2e 中に並行で読まれる tasks/{id} 244 件が 1.0〜1.45 秒）。org・browser/waits・
+    integrations・notifications は 1 秒を超えなかった。tasks/{id} の 1 秒台は未解決として残す。
+  - 本番の `~/.local/celeris/releases/8e42a33ca126` は作っていない。昇格の前に、人が host で
+    `scripts/selfdeploy/release.sh 8e42a33c` → `scripts/selfdeploy/verify.sh 8e42a33ca126` を実行する。

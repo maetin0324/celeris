@@ -1065,6 +1065,10 @@ pub struct Dispatcher {
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     #[cfg(test)]
     test_policy_clock: Option<Arc<StdMutex<Instant>>>,
+    /// 試験だけの切替: review 前の target 同期（ADR-0118）を飛ばし、旧経路（未同期の HEAD を review）を再現する
+    /// （phase_effect_ab::review_sync の off）。
+    #[cfg(test)]
+    test_skip_pre_review_sync: bool,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     reviewing: HashMap<TaskId, ReviewEntry>,
@@ -1344,6 +1348,8 @@ impl Dispatcher {
             test_now: None,
             #[cfg(test)]
             test_policy_clock: None,
+            #[cfg(test)]
+            test_skip_pre_review_sync: false,
             running: HashMap::new(),
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),

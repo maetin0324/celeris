@@ -3154,6 +3154,71 @@
           "type": "object"
         },
         {
+          "description": "ADR-0131 付記（2026-10-04）: 日次整理の計画を人の承認なしで本番 KB に適用し、変更を 1 commit にして\nKB の remote へ push した（試みた）。状態は変えない監査イベント。`commit_sha` は commit できなかったとき\n`None`（理由は `commit_error`）。`push` は `pushed`・`no_remote`・`failed`・`skipped`（commit できず\npush を省いた）のどれか。push の失敗は apply を失敗にしない（次回の push でまとめて送る）。",
+          "properties": {
+            "commit_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "commit_sha": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "date": {
+              "description": "適用日（job の timezone の `YYYY-MM-DD`）。",
+              "type": "string"
+            },
+            "deleted": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "fixed": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "merged": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "new": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "push": {
+              "type": "string"
+            },
+            "push_detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "knowledge_curation_applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "date",
+            "merged",
+            "new",
+            "deleted",
+            "fixed",
+            "push"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR parallel integration D4: 統合の依頼。状態は変えない。",
           "properties": {
             "origin": {

@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use celeris::config::Config;
-use celeris::knowledge_curation::{self, APPROVE_PREFIX};
+use celeris::knowledge_curation;
 use celeris::reports::{self, ReportsConfig};
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportFilter, ReportId, ReportKind, ReportStore};
@@ -185,6 +185,23 @@ acceptance = [{{ type = "artifact_exists", name = "curation-plan.json" }}]
     }
 }
 
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 fn read_json(path: &Path) -> serde_json::Value {
     serde_json::from_slice(&std::fs::read(path).expect("read json")).expect("json")
 }
@@ -262,43 +279,38 @@ fn knowledge_curation_job_seed_schedule_inputs_dry_run_and_summary() {
 }
 
 #[test]
-fn knowledge_curation_job_approved_apply_and_terminal_task_maintenance() {
+fn knowledge_curation_job_apply_without_approval_commits_pushes_and_terminal_task_maintenance() {
     let f = Fixture::new("apply");
+    // KB を git にし、tempdir の bare repo を origin にする（network には出ない）。
+    git(&f.kb, &["init", "-q", "-b", "main"]);
+    std::fs::write(f.kb.join(".gitignore"), "index.json\n").expect("gitignore");
+    git(&f.kb, &["add", "-A"]);
+    git(&f.kb, &["commit", "-q", "-m", "init"]);
+    let bare = f._dir.path().join("kb-remote.git");
+    git(
+        f._dir.path(),
+        &["init", "-q", "--bare", &bare.to_string_lossy()],
+    );
+    git(&f.kb, &["remote", "add", "origin", &bare.to_string_lossy()]);
+
     let fire = task_ops::cron_jobs::fire_due(&f.store, at("2026-10-03T04:30:00Z"));
     let task_id = fire[0].as_ref().unwrap().task_id.unwrap();
     let task = f.store.get(task_id).unwrap().unwrap();
     f.tick(at("2026-10-03T04:30:01Z"));
     f.fake_worker_done(&task);
-    f.tick(at("2026-10-03T04:31:00Z"));
-    assert!(f.kb.join("projects/b.md").exists(), "approval is required");
-    let decision = f
-        .store
-        .decisions_list(Some(task_id))
-        .expect("decisions")
-        .into_iter()
-        .find(|d| d.request.key == knowledge_curation::APPROVAL_KEY)
-        .expect("approval");
-    assert_eq!(decision.status, DecisionStatus::Open);
-    let approve = decision
-        .request
-        .options
-        .iter()
-        .find(|o| o.key.starts_with(APPROVE_PREFIX))
-        .unwrap()
-        .key
-        .clone();
-    f.store
-        .append_event(
-            task_id,
-            &Event::DecisionAnswered {
-                id: decision.id,
-                option: approve,
-                note: None,
-                by: "human".into(),
-            },
-        )
-        .expect("answer");
-    assert_eq!(f.tick(at("2026-10-03T04:32:00Z")).applied, vec![task_id]);
+    assert_eq!(
+        f.tick(at("2026-10-03T04:31:00Z")).applied,
+        vec![task_id],
+        "承認を待たずに適用する"
+    );
+    assert!(
+        !f.store
+            .decisions_list(Some(task_id))
+            .expect("decisions")
+            .iter()
+            .any(|d| d.request.key == knowledge_curation::APPROVAL_KEY),
+        "curation-apply の決定は出さない"
+    );
     assert!(!f.kb.join("projects/b.md").exists());
     assert!(
         std::fs::read_to_string(f.kb.join("projects/a.md"))
@@ -316,7 +328,31 @@ fn knowledge_curation_job_approved_apply_and_terminal_task_maintenance() {
             .unwrap()
             .contains("## ページ一覧")
     );
+    // 1 commit（題に日付と件数、本文に task id）を origin へ push した。
+    let head = git(&f.kb, &["rev-parse", "HEAD"]);
+    let subject = git(&f.kb, &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.contains("2026-10-03") && subject.contains("統合 1"),
+        "{subject}"
+    );
+    assert!(git(&f.kb, &["log", "-1", "--format=%b"]).contains(&task_id.to_string()));
+    assert_eq!(git(&bare, &["rev-parse", "refs/heads/main"]), head);
+    let applied: Vec<_> = f
+        .store
+        .events_for(task_id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, e)| match e {
+            Event::KnowledgeCurationApplied {
+                commit_sha, push, ..
+            } => Some((commit_sha, push)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(applied, vec![(Some(head.clone()), "pushed".to_string())]);
     assert_eq!(f.reports(&task).len(), 1);
+    assert!(f.reports(&task)[0].body.contains(&head));
+    assert!(f.tick(at("2026-10-03T04:32:00Z")).applied.is_empty());
 
     // 普通の task を終端にしても、旧式の task ごとの知識整理は起動しない。
     let now = at("2026-10-03T04:33:00Z");

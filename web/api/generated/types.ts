@@ -1766,6 +1766,17 @@ export type Event = {
   "reason": DeliverySkipReason;
   "type": "delivery_skipped";
 } | {
+  "commit_error"?: string | null;
+  "commit_sha"?: string | null;
+  "date": string;
+  "deleted": number;
+  "fixed": number;
+  "merged": number;
+  "new": number;
+  "push": string;
+  "push_detail"?: string | null;
+  "type": "knowledge_curation_applied";
+} | {
   "origin": string;
   "request": IntegrationRequest;
   "type": "integration_requested";

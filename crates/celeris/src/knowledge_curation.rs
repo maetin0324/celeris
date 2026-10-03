@@ -14,9 +14,14 @@
 //!   - 検証済み計画の `human_decisions` が 1 件以上なら、mode を問わず 1 件の決定（`curation-human`）に束ねる
 //!     （D11 (2)。回答で KB は変えない）。
 //!   - `dry_run`: 本番 KB は書かない。
-//!   - `apply`: 計画と差分のハッシュを報告に添え、人の決定（`curation-apply`）で同じハッシュの選択肢
-//!     （`approve-<hash>`）が選ばれた後にだけ、再検証して [`task_ops::knowledge_curation::apply`] を呼ぶ。
-//!     未承認・ハッシュ不一致・元ページの変更時は適用しない。
+//!   - `apply`（ADR-0131 付記 2026-10-04）: 人の承認を待たない（`curation-apply` の決定は出さない）。
+//!     検証に通った計画は、その場で本番 KB に対して再検証し（計画と差分のハッシュが一致すること）、
+//!     [`task_ops::knowledge_curation::apply`] を呼ぶ。変更した path を
+//!     [`task_ops::knowledge::commit_curation`] で 1 commit にし、[`task_ops::knowledge::push_remote`] で
+//!     KB の remote へ push する。remote 無しは記録だけ、push の失敗は apply を失敗にせず報告と event
+//!     （[`Event::KnowledgeCurationApplied`]）に残す。検証失敗・元ページの変更・hash/snapshot 不一致では適用しない。
+//!   - 旧方式で状態ファイルに `AwaitingApproval` で残る行は、次の tick で同じ再検証に通れば適用し、
+//!     通らなければ `Stale` にする（開いたままの `curation-apply` の決定は取り下げる）。
 //!
 //! 受信箱の状態（cancel 等）は変えない。報告のまとめ・追加の通知も作らない（報告は 1 件だけ）。
 //! 進み具合は daemon の状態ファイル（`<db>.knowledge-curation.json`）に task ごとに残す（worker が書ける
@@ -36,12 +41,9 @@ use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-/// 人の承認の決定の key（D10 (5)）。
+/// 旧方式（D10 (5)）の人の承認の決定の key。ADR-0131 付記（2026-10-04）で出さなくなった。
+/// 旧方式で開いたまま残る決定を取り下げるためだけに使う。
 pub const APPROVAL_KEY: &str = "curation-apply";
-/// 承認の選択肢の接頭辞（`approve-<hash の先頭 12 桁>`）。
-pub const APPROVE_PREFIX: &str = "approve-";
-/// 却下の選択肢。
-pub const REJECT_OPTION: &str = "reject";
 /// 人への候補（`human_decisions`）を束ねた決定の key（D11 (2)）。`curation-apply` の承認とは別。
 pub const HUMAN_KEY: &str = "curation-human";
 /// 人への候補の決定の選択肢（回答で KB は変えない）。
@@ -71,13 +73,14 @@ pub enum Phase {
     Prepared,
     /// 報告を作った（dry_run・検証失敗・失敗終了。これ以上は何もしない）。
     Reported,
-    /// apply の報告を作り、人の承認を待っている。
+    /// 旧方式: apply の報告を作り、人の承認を待っている。ADR-0131 付記（2026-10-04）以降は作らない。
+    /// 状態ファイルに残る行は次の tick で再検証し、通れば `Applied`、通らなければ `Stale` にする。
     AwaitingApproval,
-    /// 承認された計画を本番 KB に反映した。
+    /// 計画を本番 KB に反映した（commit・push の結果は `commit_sha`・`push`）。
     Applied,
-    /// 却下された。
+    /// 旧方式で却下された（読み込みの互換のためだけに残す）。
     Rejected,
-    /// 承認時に計画・差分・元ページが報告時と違った（適用せず、再度 dry-run を要する）。
+    /// 適用の直前の再検証で計画・差分・元ページが検証時と違った（適用せず、次回の日次整理に任せる）。
     Stale,
 }
 
@@ -97,11 +100,18 @@ pub struct Entry {
     /// D7 の規則別の抑止件数（要約の固定節）。
     #[serde(default)]
     pub suppressed: BTreeMap<String, u32>,
-    /// 承認に使うハッシュ（`sha256(plan) + sha256(diff)` の sha256 の先頭 12 桁）。
+    /// 検証した計画と差分のハッシュ（`sha256(plan) + sha256(diff)` の sha256 の先頭 12 桁）。適用の直前の
+    /// 再検証で同じであることを確かめる（名前は旧方式の承認 hash の互換）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    /// 適用後の KB の commit（commit できなかったときは無い）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit_sha: Option<String>,
+    /// push の結果（人が読む 1 行）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub push: Option<String>,
     pub updated_at: String,
 }
 
@@ -177,7 +187,8 @@ fn workspace_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
     }
 }
 
-/// tick ごとに 1 回呼ぶ。cron の日次整理 job が作った task を見て、入力の準備・終端処理・承認後の反映を行う。
+/// tick ごとに 1 回呼ぶ。cron の日次整理 job が作った task を見て、入力の準備・終端処理（apply の反映・
+/// commit・push）と、旧方式で承認待ちに残る行の再検証・反映を行う。
 /// 1 件の失敗で他を止めない（警告して次へ進む）。
 pub fn tick(
     store: &dyn TaskStore,
@@ -252,6 +263,8 @@ pub fn tick(
                         suppressed: BTreeMap::new(),
                         approval_hash: None,
                         detail: None,
+                        commit_sha: None,
+                        push: None,
                         updated_at: rfc3339(now),
                     });
                     match finish(
@@ -263,9 +276,12 @@ pub fn tick(
                         &mut entry,
                         now,
                     ) {
-                        Ok(()) => {
+                        Ok(applied) => {
                             state.tasks.insert(key, entry);
                             out.reported.push(task_id);
+                            if applied {
+                                out.applied.push(task_id);
+                            }
                         }
                         Err(e) => {
                             tracing::warn!(%task_id, error = %e, "knowledge curation: could not finish the run")
@@ -274,7 +290,7 @@ pub fn tick(
                 }
                 (Some(Phase::AwaitingApproval), _) => {
                     let Some(mut entry) = entry else { continue };
-                    match check_approval(
+                    match apply_pending(
                         store,
                         knowledge_root,
                         workspace_root,
@@ -290,7 +306,7 @@ pub fn tick(
                             state.tasks.insert(key, entry);
                         }
                         Err(e) => {
-                            tracing::warn!(%task_id, error = %e, "knowledge curation: could not check the approval")
+                            tracing::warn!(%task_id, error = %e, "knowledge curation: could not apply the pending plan")
                         }
                     }
                 }
@@ -450,6 +466,8 @@ fn prepare(
         suppressed: inbox.suppressed,
         approval_hash: None,
         detail: None,
+        commit_sha: None,
+        push: None,
         updated_at: rfc3339(now),
     })
 }
@@ -588,7 +606,7 @@ fn check_plan(
     })
 }
 
-/// 承認に使うハッシュ（計画の原文と daemon の差分の両方に結び付ける）。
+/// 計画と差分のハッシュ（計画の原文と daemon の差分の両方に結び付ける）。適用の直前の再検証で比べる。
 pub fn approval_hash(plan_raw: &str, diff: &str) -> String {
     let joined = format!(
         "{}\n{}",
@@ -612,6 +630,7 @@ fn local_date(job: &CronJob, now: OffsetDateTime) -> String {
         })
 }
 
+/// 終端になった日次整理 task を処理する。apply で適用まで済んだら `true`。
 fn finish(
     store: &dyn TaskStore,
     knowledge_root: &Path,
@@ -620,13 +639,13 @@ fn finish(
     task: &Task,
     entry: &mut Entry,
     now: OffsetDateTime,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     entry.updated_at = rfc3339(now);
     if task.status != Status::Done {
         // 失敗・取り下げの報告は dispatcher の bad_news が既に 1 件ある。ここでは何も足さない。
         entry.phase = Phase::Reported;
         entry.detail = Some(format!("task が {:?} で終わった", task.status));
-        return Ok(());
+        return Ok(false);
     }
     let artifacts = artifacts_dir(task, workspace_root)
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
@@ -649,12 +668,24 @@ fn finish(
             .map_err(|e| format!("{WORKER_DIFF}: {e}"))?;
     }
     let worker_summary = std::fs::read_to_string(artifacts.join("daily-summary.md")).ok();
+    let mut applied = false;
     match &checked {
         Ok(c) => {
             std::fs::write(&diff_path, &c.diff).map_err(|e| format!("curation.diff: {e}"))?;
             if entry.mode == "apply" {
-                entry.phase = Phase::AwaitingApproval;
+                // ADR-0131 付記（2026-10-04）: 承認を待たず、その場で再検証して適用・commit・push する。
                 entry.approval_hash = Some(c.hash.clone());
+                applied = apply_validated(
+                    store,
+                    knowledge_root,
+                    &artifacts,
+                    &inputs,
+                    job,
+                    task,
+                    entry,
+                    &c.hash,
+                    now,
+                )?;
             } else {
                 entry.phase = Phase::Reported;
             }
@@ -671,18 +702,13 @@ fn finish(
     }
     append_report(store, task, entry, &summary, worker_summary.as_deref(), now)
         .map_err(|e| e.to_string())?;
-    if entry.phase == Phase::AwaitingApproval
-        && let Ok(c) = &checked
-    {
-        request_approval(store, task, &c.hash).map_err(|e| e.to_string())?;
-    }
     if let Ok(c) = &checked
         && !c.validated.human_decisions.is_empty()
     {
         request_human_decisions(store, task, &c.validated.human_decisions)
             .map_err(|e| e.to_string())?;
     }
-    Ok(())
+    Ok(applied)
 }
 
 /// D8 の固定節: KB の件数（統合・新規・削除・修正・保留）、削除するページ、受信箱（抑止件数と提案）、
@@ -707,10 +733,16 @@ fn render_summary(
     let count = |a: Action| c.validated.kb.iter().filter(|k| k.action == a).count();
     let verb = match (entry.mode.as_str(), entry.phase) {
         ("apply", Phase::Applied) => "反映した",
-        ("apply", _) => "提案（承認待ち・未反映）",
+        ("apply", _) => "反映していない（適用直前の再検証に通らなかった）",
         _ => "提案（dry-run・本番 KB は不変）",
     };
     out.push_str(&format!("## KB（{verb}）\n\n"));
+    if entry.mode == "apply" && entry.phase != Phase::Applied {
+        out.push_str(&format!(
+            "- 本番 KB は変えていない: {}\n",
+            entry.detail.as_deref().unwrap_or("理由不明")
+        ));
+    }
     out.push_str(&format!(
         "- 統合 {}・新規 {}・削除 {}・修正 {}・保持 {}・保留（人の判断） {}\n",
         count(Action::Merge),
@@ -740,16 +772,12 @@ fn render_summary(
     if deleted.len() > 10 {
         out.push_str(&format!("- ほか {} 件\n", deleted.len() - 10));
     }
+    if entry.mode == "apply" && entry.phase == Phase::Applied {
+        push_git(&mut out, entry);
+    }
     push_inbox(&mut out, entry, Some(&c.plan));
     out.push_str("\n## 人が判断すべき残り\n\n");
-    let mut remaining = c.validated.human_decisions.len() + c.plan.inbox.len();
-    if entry.mode == "apply" && entry.phase == Phase::AwaitingApproval {
-        remaining += 1;
-        out.push_str(&format!(
-            "- 本番 KB への反映の承認: 決定 `{APPROVAL_KEY}` で `{APPROVE_PREFIX}{}` を選ぶ（計画と差分のハッシュ）\n",
-            c.hash
-        ));
-    }
+    let remaining = c.validated.human_decisions.len() + c.plan.inbox.len();
     for d in c.validated.human_decisions.iter().take(10) {
         out.push_str(&format!(
             "- `{}`: {}（{}）\n",
@@ -760,6 +788,21 @@ fn render_summary(
     }
     out.push_str(&format!("- 計 {remaining} 件\n"));
     out
+}
+
+/// 適用後の KB の git（commit と push の結果）。誤った適用は `git revert <commit>` で戻す。
+fn push_git(out: &mut String, entry: &Entry) {
+    out.push_str("\n## KB の git\n\n");
+    match &entry.commit_sha {
+        Some(sha) => out.push_str(&format!(
+            "- commit: `{sha}`（誤りは KB で `git revert {sha}` で戻す）\n"
+        )),
+        None => out.push_str("- commit: なし\n"),
+    }
+    out.push_str(&format!(
+        "- push: {}\n",
+        entry.push.as_deref().unwrap_or("未実施")
+    ));
 }
 
 fn push_inbox(out: &mut String, entry: &Entry, plan: Option<&CurationPlan>) {
@@ -852,57 +895,6 @@ fn append_report(
     Ok(Some(r))
 }
 
-/// D10 (5): 人の承認の決定（同じハッシュの選択肢）を出す。同じ task に未回答があれば増やさない。
-fn request_approval(store: &dyn TaskStore, task: &Task, hash: &str) -> Result<(), StoreError> {
-    if open_or_answered(store, task, APPROVAL_KEY)?.is_some() {
-        return Ok(());
-    }
-    let path = decision_path(store, task)?;
-    let approve = format!("{APPROVE_PREFIX}{hash}");
-    let request = task_core::DecisionRequest {
-        id: ulid::Ulid::new().to_string(),
-        key: APPROVAL_KEY.to_string(),
-        kind: task_core::DecisionKind::Choice,
-        question: format!(
-            "日次整理の計画（ハッシュ {hash}）を本番 KB に反映するか。差分は artifacts/curation.diff、要約は報告にある"
-        ),
-        options: vec![
-            task_core::DecisionOption {
-                key: approve.clone(),
-                label: format!("計画 {hash} を本番 KB に反映する"),
-                consequence: Some(
-                    "反映前に同じ計画を再検証する。元ページが変わっていれば反映しない".to_string(),
-                ),
-            },
-            task_core::DecisionOption {
-                key: REJECT_OPTION.to_string(),
-                label: "反映しない".to_string(),
-                consequence: None,
-            },
-        ],
-        recommended: REJECT_OPTION.to_string(),
-        cost_of_reversal: task_core::CostOfReversal::Medium,
-        cost_note: Some("削除したページは _curation/ の記録と KB の履歴から戻す".to_string()),
-        needed_before: vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
-        path,
-        raised_by: task_core::DecisionRaisedBy {
-            task_id: task.id,
-            run_id: None,
-            origin: task_core::DecisionOrigin::Daemon,
-        },
-        status: DecisionStatus::Open,
-        answer: None,
-        withdrawn_reason: None,
-    };
-    store.append_event(
-        task.id,
-        &Event::DecisionRequested {
-            decision: Box::new(request),
-        },
-    )?;
-    Ok(())
-}
-
 /// D11 (2): 検証済み計画の `human_decisions` を 1 件の決定（`curation-human`）に束ねて出す。mode を問わない。
 /// 同じ task に open・answered の決定があれば重ねない。回答で KB は変えない（記録のため）。
 fn request_human_decisions(
@@ -992,8 +984,9 @@ fn open_or_answered(
         .find(|d| d.status != DecisionStatus::Withdrawn))
 }
 
-/// 承認待ちの task: 決定が `approve-<同じハッシュ>` で答えられたときだけ、再検証して反映する。
-fn check_approval(
+/// 旧方式で `AwaitingApproval` のまま残る行: 承認を待たずに、報告時の hash で再検証し、通れば適用する。
+/// 通らなければ `Stale`。開いたままの `curation-apply` の決定は取り下げる（もう答えを使わない）。
+fn apply_pending(
     store: &dyn TaskStore,
     knowledge_root: &Path,
     workspace_root: &Path,
@@ -1002,44 +995,68 @@ fn check_approval(
     entry: &mut Entry,
     now: OffsetDateTime,
 ) -> Result<bool, String> {
-    let Some(row) = open_or_answered(store, task, APPROVAL_KEY).map_err(|e| e.to_string())? else {
-        return Ok(false);
-    };
-    if row.status != DecisionStatus::Answered {
-        return Ok(false);
+    if let Some(row) = open_or_answered(store, task, APPROVAL_KEY).map_err(|e| e.to_string())?
+        && row.status == DecisionStatus::Open
+    {
+        store
+            .append_event(
+                task.id,
+                &Event::DecisionWithdrawn {
+                    id: row.id,
+                    reason: "日次整理の apply は承認を待たずに適用する（ADR-0131 付記 2026-10-04）"
+                        .to_string(),
+                },
+            )
+            .map_err(|e| e.to_string())?;
     }
-    let option = row
-        .request
-        .answer
-        .as_ref()
-        .map(|a| a.option.clone())
-        .unwrap_or_default();
     entry.updated_at = rfc3339(now);
     let Some(expected) = entry.approval_hash.clone() else {
         entry.phase = Phase::Stale;
-        entry.detail = Some("承認に使うハッシュが無い".into());
+        entry.detail = Some("報告時の計画のハッシュが無いので反映しない".into());
         return Ok(false);
     };
-    if option != format!("{APPROVE_PREFIX}{expected}") {
-        entry.phase = Phase::Rejected;
-        entry.detail = Some(format!("人の回答: {option}"));
-        tracing::info!(task_id = %task.id, option, "knowledge curation: the plan was not approved");
-        return Ok(false);
-    }
     let artifacts = artifacts_dir(task, workspace_root)
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
     let inputs = workspace_dir(task, workspace_root)
         .ok_or("入力の作業場所がありません")?
         .join("inputs");
-    let checked = match check_plan(knowledge_root, &artifacts, &inputs, entry, None) {
+    apply_validated(
+        store,
+        knowledge_root,
+        &artifacts,
+        &inputs,
+        job,
+        task,
+        entry,
+        &expected,
+        now,
+    )
+}
+
+/// ADR-0131 付記（2026-10-04）: 検証に通った計画を、本番 KB に対して再検証してから適用し、変更 path を
+/// 1 commit にして push する。再検証に通らない（元ページの変更・hash/snapshot 不一致・検証失敗）なら
+/// 適用せず `Stale` にして `false`。push の失敗は適用を失敗にしない（報告と event に残す）。
+#[allow(clippy::too_many_arguments)]
+fn apply_validated(
+    store: &dyn TaskStore,
+    knowledge_root: &Path,
+    artifacts: &Path,
+    inputs: &Path,
+    job: &CronJob,
+    task: &Task,
+    entry: &mut Entry,
+    expected: &str,
+    now: OffsetDateTime,
+) -> Result<bool, String> {
+    let checked = match check_plan(knowledge_root, artifacts, inputs, entry, None) {
         Ok(c) if c.hash == expected => c,
         Ok(c) => {
             entry.phase = Phase::Stale;
             entry.detail = Some(format!(
-                "承認したハッシュ {expected} と今の計画・差分 {} が違うので反映しない（再度 dry-run が要る）",
+                "検証時のハッシュ {expected} と今の計画・差分 {} が違うので反映しない",
                 c.hash
             ));
-            tracing::warn!(task_id = %task.id, "knowledge curation: the approved plan changed; not applied");
+            tracing::warn!(task_id = %task.id, "knowledge curation: the plan changed before applying; not applied");
             return Ok(false);
         }
         Err(e) => {
@@ -1049,7 +1066,16 @@ fn check_approval(
             return Ok(false);
         }
     };
-    let outcome = curation::apply(knowledge_root, &checked.plan, &local_date(job, now))?;
+    let date = local_date(job, now);
+    let outcome = match curation::apply(knowledge_root, &checked.plan, &date) {
+        Ok(o) => o,
+        Err(e) => {
+            entry.phase = Phase::Stale;
+            entry.detail = Some(format!("適用に失敗したので反映していない: {e}"));
+            tracing::warn!(task_id = %task.id, error = %e, "knowledge curation: apply failed");
+            return Ok(false);
+        }
+    };
     entry.phase = Phase::Applied;
     entry.detail = Some(format!(
         "統合 {}・新規 {}・削除 {}・修正 {}・保持 {}・保留 {}",
@@ -1060,7 +1086,94 @@ fn check_approval(
         outcome.kept,
         outcome.skipped_human
     ));
-    tracing::info!(task_id = %task.id, merged = outcome.merged, new = outcome.new, deleted = outcome.deleted, fixed = outcome.fixed, "knowledge curation: the approved plan was applied to the KB");
+    tracing::info!(task_id = %task.id, merged = outcome.merged, new = outcome.new, deleted = outcome.deleted, fixed = outcome.fixed, "knowledge curation: the plan was applied to the KB");
+
+    // 変更した path（統合先を含む）と、apply が書く `_curation/<date>.md`・`index.json`・`README.md`。
+    let mut paths: Vec<String> = Vec::new();
+    for k in &checked.validated.kb {
+        if k.action == Action::Keep {
+            continue;
+        }
+        paths.push(k.path.clone());
+        if let Some(target) = &k.target {
+            paths.push(target.clone());
+        }
+    }
+    paths.push(format!("_curation/{date}.md"));
+    paths.push(task_core::knowledge::INDEX_FILE.to_string());
+    paths.push("README.md".to_string());
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let counts = task_ops::knowledge::CurationCounts {
+        merged: outcome.merged,
+        new: outcome.new,
+        deleted: outcome.deleted,
+        fixed: outcome.fixed,
+    };
+    let (commit_sha, commit_error) = match task_ops::knowledge::commit_curation(
+        knowledge_root,
+        &date,
+        counts,
+        &task.id.to_string(),
+        &refs,
+    ) {
+        Ok(sha) => (Some(sha), None),
+        Err(e) => {
+            tracing::warn!(task_id = %task.id, error = %e, "knowledge curation: could not commit the KB");
+            (None, Some(e))
+        }
+    };
+    let (push, push_detail, push_line) = if commit_sha.is_some() {
+        match task_ops::knowledge::push_remote(knowledge_root) {
+            task_ops::knowledge::PushOutcome::Pushed { remote, branch } => (
+                "pushed",
+                Some(format!("{remote}/{branch}")),
+                format!("push した（{remote}/{branch}）"),
+            ),
+            task_ops::knowledge::PushOutcome::NoRemote => (
+                "no_remote",
+                None,
+                "remote 無し（push は省いた）".to_string(),
+            ),
+            task_ops::knowledge::PushOutcome::Failed(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "knowledge curation: push failed; the commit stays local");
+                (
+                    "failed",
+                    Some(e.clone()),
+                    format!(
+                        "push に失敗: {e}（commit は手元に残り、次回の日次整理の push でまとめて送る）"
+                    ),
+                )
+            }
+        }
+    } else {
+        (
+            "skipped",
+            None,
+            format!(
+                "commit できなかったので push は省いた: {}",
+                commit_error.as_deref().unwrap_or("理由不明")
+            ),
+        )
+    };
+    entry.commit_sha = commit_sha.clone();
+    entry.push = Some(push_line);
+    let as_u32 = |n: usize| u32::try_from(n).unwrap_or(u32::MAX);
+    store
+        .append_event(
+            task.id,
+            &Event::KnowledgeCurationApplied {
+                date,
+                merged: as_u32(outcome.merged),
+                new: as_u32(outcome.new),
+                deleted: as_u32(outcome.deleted),
+                fixed: as_u32(outcome.fixed),
+                commit_sha,
+                commit_error,
+                push: push.to_string(),
+                push_detail,
+            },
+        )
+        .map_err(|e| e.to_string())?;
     Ok(true)
 }
 

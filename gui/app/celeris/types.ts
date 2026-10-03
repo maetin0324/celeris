@@ -836,6 +836,21 @@ export type Event =
       type: "delivery_skipped";
     }
   | {
+      commit_error?: string | null;
+      commit_sha?: string | null;
+      /**
+       * 適用日（job の timezone の `YYYY-MM-DD`）。
+       */
+      date: string;
+      deleted: number;
+      fixed: number;
+      merged: number;
+      new: number;
+      push: string;
+      push_detail?: string | null;
+      type: "knowledge_curation_applied";
+    }
+  | {
       origin: string;
       request: IntegrationRequest;
       type: "integration_requested";

@@ -149,6 +149,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   integration_repair_resolved: { sets: TLE },
   integration_repair_exhausted: { sets: TLE },
   delivery_skipped: { sets: ["T", "L", "N"] },
+  // ADR-0131 付記（2026-10-04）: 日次整理の適用・commit・push の記録。報告は別に 1 件ある。
+  knowledge_curation_applied: { sets: ["T", "N"] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
 };

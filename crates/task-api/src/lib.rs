@@ -31,6 +31,7 @@ pub mod changes;
 /// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
 pub mod console;
 pub mod conversation;
+pub mod cron_jobs;
 pub mod decisions;
 /// ADR-0044 D7（Phase 57）: 案件の文書（git が正本）。ツリー・ページ・編集・昇格。
 pub mod docs;
@@ -83,6 +84,9 @@ pub use approvals::{
     StandingRuleList,
 };
 pub use conversation::{MessageAccepted, MessageList, MessagePostBody};
+pub use cron_jobs::{
+    CronJobCreateBody, CronJobList, CronJobPatchBody, CronJobRunList, CronJobView, CronRunResult,
+};
 pub use llm_sources::{LlmSourcesReader, SharedLlmSourcesReader};
 pub use memory::MemoryView;
 pub use milestones::{MilestoneDecideBody, MilestoneDecided};

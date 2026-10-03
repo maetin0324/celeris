@@ -957,7 +957,8 @@ pub(crate) fn deliverables_placement_note() -> String {
 pub(crate) fn production_host_note() -> String {
     "## 本番 host の操作 (production host changes)\n\
      本番 host の操作は人が実行する手順として書く（`systemctl --user`・`systemd-run`・\
-     `~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris` の変更、daemon の\
+     `~/.config/systemd`・`~/.local/celeris/releases`・`/local`・`/local/celeris/state/releases`・\
+     `~/.config/celeris` の変更、daemon の\
      再起動・差し替え、本番 DB への書き込みはしない）。必要なら、人が実行する手順（コマンドと\
      確認方法）を成果物に書き、計画では人の決定（decisions）または人の check を置く（ADR-0095 \
      付記 D-d）。\n\n"

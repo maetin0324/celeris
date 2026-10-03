@@ -417,6 +417,10 @@ impl Config {
         for code in cfg.provider_kind_warnings() {
             tracing::warn!(warning = %code, "provider kind compatibility warning");
         }
+        // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
+        for warning in cfg.langmem_auth_warnings() {
+            tracing::warn!(%warning, "knowledge.langmem auth warning");
+        }
         // API を有効にするなら、トークンが読めることを起動時に確かめる（exit 2）。
         if cfg.api.listen.is_some() {
             cfg.api.read_token()?;

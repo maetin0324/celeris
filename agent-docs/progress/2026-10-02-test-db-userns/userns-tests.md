@@ -1,3 +1,9 @@
+---
+title: userns 試験の opt-in 対象一覧
+tasks: [01M3YB21F07GQKTRYPRVN184AR]
+status: done
+updated: 2026-10-03
+---
 # userns 試験の opt-in 対象一覧
 
 tasks: [01M3YB21F07GQKTRYPRVN184AR]

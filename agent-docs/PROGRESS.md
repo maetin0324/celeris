@@ -42,57 +42,6 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
-### verify-record: guard-fix 統合後の検証 — 2026-10-03
-
-#### main 取り込み後の検査（2026-10-03、gate-record）
-
-main `9fb850c6` 取り込み後の HEAD `261eb98a` で、指定コマンドを再実行した。コード変更はない。
-
-- `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation` → **exit 101**。
-  `tests/e2e/tests/worker_db_read_only.rs` の `a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl` が失敗。
-  sandbox では非本番の一時 DB daemon の userns probe が `Operation not permitted` となり、worker が DB の read-only bind で再試行に入り、
-  期待する `probe.txt` が無くなった。`tests/e2e` は本 task の変更範囲外なので未修正。指定の flake は除外済み。
-- `cargo test -p task-dispatch --lib cluster_job_wait` → **exit 0、5 passed / 0 failed**。
-- `cargo test -p task-worker --test browser_launcher_ptrace` → **exit 101、5 passed / 1 failed**。
-  旧 `Protocol` エラーは解消し新 launcher session は起動したが、sandbox 内 `/proc` で想定 UID map の Chrome PID が20秒以内に見つからず失敗。
-  `task-worker` は範囲外のため未修正。main 取り込みにより launcher client の版ずれ自体は解消。
-- `cargo clippy --workspace -- -D warnings` → **exit 0**。
-
-この検査環境では acceptance 0 と browser_launcher_ptrace は未達。workspace の失敗原因は印なし一時 DB daemon の userns probe を sandbox が許可しない環境境界、
-browser の残る失敗は起動後の Chrome PID 可視性であり、いずれも本 task の指定変更範囲外として plan_issue 相当で記録する。
-
-ADR-0126 付記2（guard-fix-impl・repair-impl-1）統合後の HEAD（`e3d615d3`）で、指定の検査コマンドをすべて
-実行し直し、終了コードと件数を記録する。`crates/` は変更していない（本 WU は検証専用）。
-
-- 前提確認: `git diff 7c4772a9ebd9 HEAD -- crates/task-worker` は 0 行（本 branch は task-worker を変えていない）。
-- 受け入れ条件0: `cargo build --workspace --bins` → exit 0。続けて
-  `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation --skip launcher_chrome_denies_daemon_uid_ptrace`
-  → **exit 0**、3367 passed、0 failed（`grep -c FAILED` = 0）。skip した 2 本は本 task の範囲外（下記「未解決」参照）。
-- 受け入れ条件1: `cargo test -p task-dispatch --lib cluster_job_wait`（単独）→ exit 0、5 passed、498 filtered out。
-  `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` を含む全 5 本が単独では pass。
-- 受け入れ条件2:
-  - `cargo test -p celeris --lib worker_guard` → exit 0、4 passed
-    （`worker_guard_opt_out_refuses_production_inside_worker_run`・`worker_guard_exempt_test_db_without_marker`・
-    `worker_guard_probe_production_without_marker`・`worker_guard_opt_out_precheck_refuses_before_opening_db`）。
-  - `cargo test -p celeris --test worker_db_guard_refuse` → exit 0、2 passed
-    （`worker_db_guard_refuse_with_opt_out`・`worker_db_guard_refuse_real_binary_inside_worker_run`）。
-  - `cargo test -p celeris --test instance_handoff` → exit 0、8 passed（うち `a_stale_heartbeat_promotes_the_standby` が約60秒）。
-  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
-- 受け入れ条件3（この節）: 証跡を本節に記載。
-- 当時の個別確認（参考）: main 取り込み前は `browser_launcher_ptrace` が `Protocol` で失敗していた。上記 main 取り込み後の検査では
-  protocol 版ずれは解消し、残る失敗は sandbox 内での Chrome PID 可視性だった。
-- 未解決事項（本 task 範囲外、skip した 2 本）:
-  (a) `task-dispatch::cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は、
-      workspace 並走時に `tick_until` の 60 秒保険で落ちる負荷依存の flake（単独実行では上記のとおり pass）。
-      task-dispatch は本 task の対象パス（crates/celeris/src/daemon, crates/celeris/tests, docs/adr/0126-*）外。
-  (b) `task-worker::browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` は、host launcher の
-      protocol 入れ替え（main の新 protocol、10/03 01:24 更新）と本 branch（main 未取り込み）の launcher client との
-      版ずれが原因。本 branch では task-worker を変更していないため、この task の範囲では直らない。
-- 提案:
-  (a) 別 task で `tick_until` の 60 秒保険を試験の時計（注入した clock・tokio::time::pause 等）で置き換え、
-      workspace 並走時の flake を決定的にする。
-  (b) 別 task で本 branch に main を取り込み（merge）、launcher client の版ずれを解消してから同 test を再実行する。
-
 ## 受信箱と通知の 2 系統（2026-10-02、task 01M3YFCJKMNWQ13HRS52M5BSWW、ADR-0133、WorkUnit verify）
 
 - 完了日: 2026-10-02。全葉（adr / inbox-model / notify-store / notify-feed / api / outbound / gui-compat）完了、
@@ -732,49 +681,6 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
 
-## 試験用 DB の daemon と userns 試験の opt-in（ADR-0126）
-
-worker sandbox 内の e2e・daemon 試験は試験用一時 DB・一時 config・試験 token を使い、本番 DB/token は worker run 内で起動前に拒否する。実 userns を要る browser・runtime・DB guard の試験は既定で理由を表示して skip し、`CELERIS_USERNS_TESTS=1` で実行する。詳細は [sandbox 検証記録](progress/phase-test-db-userns.md) と [opt-in 対象一覧](progress/userns-tests.md) を参照。
-
-### 最終 worker sandbox 検証（2026-10-03）
-
-`CELERIS_USERNS_TESTS` 未設定。最終コードで `cargo build --workspace --bins` → exit 0、`cargo test --workspace` → exit 0（125 test target、3526 passed / 0 failed / 13 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。workspace 試験内で `api_scenarios` 12件、`instance_handoff` 8件が通った。`worker_db_read_only` は実 userns 必須のため skip 理由を表示して早期 return した。既存の本番 DB/token 拒否試験と一時 DB 免除試験も workspace 試験に含まれる。
-
-### 過去の retry 失敗と修正
-
-以前の retry では `instance_handoff` が 5 件失敗した。後の `guard-fix-impl` で一時 DB の通常 daemon を userns probe から免除し、今回の最終実行では 8 件すべて通った。この run の最初の workspace 実行では `worker_db_read_only` が、次の実行では `task-worker` lib の `db_guard_tests` 4 件が userns 制約で失敗した。親 run の worker marker に関係なく実 userns 試験を opt-in にし、最終の workspace 全試験は exit 0 となった。残る host 側の実 userns opt-in 検証は [手順](progress/phase-test-db-userns.md)に記した。
-
-### guard-fix-impl: ADR-0126 付記2 の実装 — 2026-10-02
-
-`crates/celeris/src/daemon/bootstrap.rs` を ADR-0126 付記2 に合わせた。
-
-- 1（opt-out は worker run の外だけ）: `refuse_production_db_in_worker_run`・`install_worker_db_guard` の
-  「`worker_read_only = false` なら判定前に return」をやめた。印 `CELERIS_WORKER_DB_GUARD` がある中で本番（P）に当たる
-  daemon は `worker_read_only`・probe に関わらず DB を開く前に拒否する。DB がまだ無いときも、DB を置く dir（lenient 解決）と
-  token を判定する（本番 token の写しを使う新規 DB も DB を作る前に止まる）。印の中で P が決まらない opt-out も拒否。
-  opt-out の判定は純関数 `worker_db_guard_opt_out_action`。
-- 2（本番に当たらない daemon は Exempt）: `worker_db_guard_decision` で、判定関数の `RequireUserns` を、P が決まっていて
-  印が `ReadOnly` でない（= 本番に当たらないと確かめた上で印が無い・裏付けられない）ときに `Exempt` にする。本番に当たる
-  daemon（`RefuseProduction`）と P 不明は従来どおり probe。task-worker の判定関数（`judge_worker_db_guard`）とその試験は
-  変えていない（変換は celeris 側）。
-- 試験: unit `worker_guard_exempt_test_db_without_marker`・`worker_guard_probe_production_without_marker`・
-  `worker_guard_opt_out_refuses_production_inside_worker_run`・`worker_guard_opt_out_precheck_refuses_before_opening_db` を追加。
-  既存の `worker_db_guard_test_db_requires_userns_outside_worker_run` は期待を `Exempt` に改め
-  `worker_db_guard_test_db_is_exempt_outside_worker_run` に改名（付記2 の 2 が A3 末尾を上書きするため）。起動試験
-  `worker_db_guard_refuse_with_opt_out` を追加（印が無ければ既存と同じ skip、`CELERIS_USERNS_TESTS=1` で unshare の印）。
-- 証拠（すべて worker sandbox の shell、NoNewPrivs=1・Seccomp=2）:
-  - `CELERIS_USERNS_TESTS=1 cargo test -p celeris --test worker_db_guard_refuse` → exit 0（2 passed）。修正前の
-    `bootstrap.rs` に戻すと `worker_db_guard_refuse_with_opt_out` が FAILED（opt-out で起動してしまう）ことを確認。
-  - `cargo test -p celeris --test instance_handoff` → exit 0（8 passed）。この shell では userns が作れるので、probe の
-    失敗を決定的に作るため probe の `sh -c 'test ! -w …'` だけを exit 1 にする stub `sh` を PATH の先頭に置いて再実行 →
-    修正後 exit 0（8 passed）、修正前は 5 failed（`cannot make … read-only for worker runs`）。同じ stub で実 `celeris`
-    （一時 DB・印なし）を起動 → 修正後 exit 0（`worker db guard not installed`）、修正前 exit 1。
-  - `cargo test -p celeris` → exit 0（lib 252 passed ほか全 binary ok）。`cargo test -p celeris worker_guard`・
-    `worker_db_guard` → exit 0。`cargo test -p e2e --test api_scenarios` → exit 0（12 passed）。
-  - `cargo build --workspace --bins`・`cargo clippy --workspace --all-targets -- -D warnings`・
-    `cargo clippy --workspace -- -D warnings`・`cargo fmt --all -- --check` → いずれも exit 0。
-- 未解決: `cargo test --workspace` 全体は今回の葉では未実行（関係 crate に絞った）。
-
 ## provider / LLM source 分離の設定例（2026-10-02、config-docs）
 
 ADR-0132 D2・D7 に合わせ、設定例の provider ID を source 非依存の名前にし、
@@ -850,11 +756,6 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
 - `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
-
-### merge-main: 最新 main（`faa20195`）の統合 — 2026-10-02
-
-`docs/PROGRESS.md` の衝突だけを両側の節を残して解いた（ADR-0126 / test-db-userns の節と main の land-main3・pick-chrome の節）。他の file は自動 merge の結果のまま。`daemon/run.rs` は main の昇格判定（ADR-0040 付記）の後に本件の `refuse_production_db_in_worker_run`（ADR-0126 A2）が来て、その後に `build_dispatcher`・`install_worker_db_guard` が続く順になり、どちらも DB を開く前に判定するので矛盾しない。main は `bootstrap.rs`・`db_guard.rs` を変えていない。上の節にある「`browser_launcher_ptrace.rs` は未作成」は main で作られている（5 本、`CELERIS_LAUNCHER_TESTS=require`）。
-- `cargo build --workspace --all-targets` → exit 0。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 
 ## api_scenarios の負荷 flaky 2 件を出来事待ちに（2026-10-02、task 01M3Z08A0T81ZQ60XVR62XJMPD 葉 e2e-stable）
 

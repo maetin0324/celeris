@@ -3,8 +3,7 @@
 # テンプレート unit を ~/.config/systemd/user/ に置いて `systemctl --user daemon-reload` する
 # （ADR-0040 D4、ADR-0045 D3）。
 #
-# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない
-# （celeris-sccache.service / celeris-scratch-cache.service も置くだけで、有効化しない。ADR-0075 D4 / D5）。
+# **人が一度だけ実行する**（ワーカーは実行しない。D5）。これ自体は何も起動しない。
 # linger は既に有効（`loginctl enable-linger rmaeda`）である前提。
 #
 #   --remove-old  改名前のテンプレート unit も消す。**移行のときだけ**使う。消す対象の名前は
@@ -18,7 +17,20 @@
 #                 **celeris の新しい版が `[[clusters.forwards]]` を張れていることを確認してから**
 #                 実行する（無効化した後にトンネルが必要になったら celeris の設定を直す。ADR-0053 D3）。
 #                 unit が居なければ何もしない（既に消えている環境でも安全に呼べる）。
+#
+# hot の根（ADR-0136「path の契約」）: `CELERIS_STATE_DIR` が環境で立っていればそれ、無ければ
+# `$CELERIS_CONFIG_DIR/paths.env`（既定 ~/.config/celeris/paths.env）の `CELERIS_STATE_DIR=` を読む。
+# 値があり `$HOME/.local/celeris` と違えば、テンプレートの `%h/.local/celeris` をその絶対 path に置き換えて
+# 設置し、`[Service]` に `EnvironmentFile=-%h/.config/celeris/paths.env` と `CELERIS_STATE_DIR` を差し込む
+# （systemd は `WorkingDirectory=` / `ExecStart=` の path に EnvironmentFile の変数を一律には使えないため）。
+# `~/.config/celeris` の参照（config.toml・token・password・secret）は home のまま。
+# 根を指定したときは celeris-credentiald@.service も同じ根で設置する（release の bin と vault が根の下に移るため）。
+# 未指定（または根が従来の場所）のときはテンプレートをそのまま置く（従来と同じ unit）。
+# celeris-web@.service は人の判断で移行の範囲外なので、常にテンプレートのまま置く。
 set -euo pipefail
+
+# lib.sh が既定値を入れる前に、呼び出し側が明示した値だけを控える。
+SD_HOT_ROOT_FROM_ENV="${CELERIS_STATE_DIR:-}"
 
 SD_PROG=install-units
 # shellcheck source=lib.sh
@@ -52,18 +64,72 @@ DEST="${SD_UNIT_DIR:-$HOME/.config/systemd/user}"
 [ -d "$SRC" ] || sd_die "no such directory: $SRC"
 mkdir -p "$DEST"
 
-# ADR-0075 D4（Phase G2）: celeris-sccache.service（sccache の server）も置くだけ。有効化は人
-# （`systemctl --user enable --now celeris-sccache.service`、手順は docs/ops/sccache-l1.md）。
-# ADR-0075 D5 (b)（Phase G3）: celeris-scratch-cache.service（L1 / L2 の cache server）も置くだけ。有効化は人
-# （`systemctl --user enable --now celeris-scratch-cache.service` の後に celeris-sccache.service を再起動）。
+# paths.env から `CELERIS_STATE_DIR=` の値を読む（source はしない。最後の行が勝つ。引用符は外す）。
+paths_env_state_dir() {
+  local f="$CELERIS_CONFIG_DIR/paths.env"
+  [ -f "$f" ] || return 0
+  sed -n 's/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}CELERIS_STATE_DIR=//p' "$f" | tail -n 1 |
+    sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/'
+}
+
+HOT_ROOT="$SD_HOT_ROOT_FROM_ENV"
+[ -n "$HOT_ROOT" ] || HOT_ROOT="$(paths_env_state_dir)"
+HOT_ROOT="${HOT_ROOT%/}"
+if [ -n "$HOT_ROOT" ]; then
+  case "$HOT_ROOT" in
+    /*) ;;
+    *) sd_die "CELERIS_STATE_DIR must be an absolute path: $HOT_ROOT" ;;
+  esac
+  # unit の中で指定子（%）・区切り（空白・引用符）として読まれる文字は受け付けない。
+  case "$HOT_ROOT" in
+    *[%\ \	\"\'\\\|\&]*) sd_die "CELERIS_STATE_DIR has a character that a unit file cannot hold as is: $HOT_ROOT" ;;
+  esac
+  [ "$HOT_ROOT" != "$HOME/.local/celeris" ] || HOT_ROOT=""
+fi
+
+# テンプレートを hot の根に合わせて書き出す（根が空ならそのまま写す）。
+render_unit() {
+  local unit="$1" out="$2" extra=""
+  if [ -z "$HOT_ROOT" ] || [ "$unit" = celeris-web@.service ]; then
+    cat "$SRC/$unit" >"$out"
+    return 0
+  fi
+  if [ "$unit" = celeris-credentiald@.service ]; then
+    extra="Environment=CELERIS_CREDENTIALD_DATA_DIR=$HOT_ROOT/credentiald"
+  fi
+  sed -e "s|%h/\.local/celeris|$HOT_ROOT|g" "$SRC/$unit" | awk -v root="$HOT_ROOT" -v extra="$extra" '
+    { print }
+    $0 == "[Unit]" {
+      print "# ADR-0136: hot の根が無ければ起動しない（rootfs に作り直さない）。"
+      print "AssertPathIsDirectory=" root
+    }
+    $0 == "[Service]" {
+      print "# ADR-0136: install-units.sh が hot の根 " root " を差し込んだ。設定・秘密の参照は home のまま。"
+      print "Environment=CELERIS_STATE_DIR=" root
+      if (extra != "") print extra
+      print "EnvironmentFile=-%h/.config/celeris/paths.env"
+    }' >"$out"
+}
+
+# ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
+# are stopped and removed by a human following docs/ops/sccache-l1.md.
 # web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/web/parallel-operation.md）。
-for unit in celeris@.service celeris-gui@.service celeris-web@.service celeris-sccache.service celeris-scratch-cache.service; do
+UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
+if [ -n "$HOT_ROOT" ]; then
+  UNITS="$UNITS celeris-credentiald@.service"
+  sd_log "hot root: $HOT_ROOT (units read releases and state from there; ~/.config/celeris stays in home)"
+fi
+RENDER_DIR="$(mktemp -d)"
+trap 'rm -rf "$RENDER_DIR"' EXIT
+# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+for unit in $UNITS; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
-  if [ -f "$DEST/$unit" ] && ! cmp -s "$SRC/$unit" "$DEST/$unit"; then
+  render_unit "$unit" "$RENDER_DIR/$unit"
+  if [ -f "$DEST/$unit" ] && ! cmp -s "$RENDER_DIR/$unit" "$DEST/$unit"; then
     cp -p "$DEST/$unit" "$DEST/$unit.bak-$(sd_stamp)"
     sd_log "kept the old $unit as $DEST/$unit.bak-*"
   fi
-  install -m 0644 "$SRC/$unit" "$DEST/$unit"
+  install -m 0644 "$RENDER_DIR/$unit" "$DEST/$unit"
   sd_log "installed $DEST/$unit"
 done
 

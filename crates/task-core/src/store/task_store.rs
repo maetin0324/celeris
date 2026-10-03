@@ -29,12 +29,14 @@ use super::{
 /// ADR-0033 D5（Phase 26）: 認可（`approvals` / `standing_rules`）も同じ形で `crate::approval::ApprovalStore`
 /// にある。
 /// ADR-0037 D1（Phase 39）: 通知の台帳（`notifications`）も同じ形で `crate::notify::NotificationStore` にある。
+/// ADR-0133 D6: dispatcher と daemon が同じ通知 feed を読むため `NoticeStore` も supertrait にする。
 pub trait TaskStore:
     Send
     + Sync
     + crate::report::ReportStore
     + crate::approval::ApprovalStore
     + crate::notify::NotificationStore
+    + crate::feed::NoticeStore
     + crate::knowledge_run::KnowledgeRunStore
     + crate::delivery::DeliveryStore
     + crate::node_session::NodeSessionStore
@@ -225,6 +227,8 @@ pub trait TaskStore:
         after_seq: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventRow>, StoreError>;
+    /// ADR-0121 D3: 各タスクの最新 `delivery_skipped` イベントだけを返す。
+    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError>;
 
     /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
     /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。

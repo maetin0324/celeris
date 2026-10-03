@@ -1,11 +1,11 @@
 # ADR-0115: browser の user namespace 所有者を分離する launcher
 
 ---
-tasks: [01M3W96K79NKX7B4ZM7X9E684S]
+tasks: [01M3W96K79NKX7B4ZM7X9E684S, 01M3WW2RBB9QW9NPN862TZEK9P]
 ---
 
 - 日付: 2026-10-01
-- 状態: 採用（設計のみ。実装・実 process 攻撃試験・本番 admission の解放は未）
+- 状態: 採用（launcher 実装と実 process 攻撃試験は完了。本番 admission の機密能力解放は未）
 - 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md) D1/D2、[ADR-0103](0103-browser-phase4-runtime-selection.md)、[ADR-0105](0105-browser-p4a-same-uid-bwrap-runtime.md)、[ADR-0108](0108-browser-p4a-relay-supervisor-launch-restore.md)、[subuid 手順](../ops/browser-isolated-runtime-subuid.md)、[Phase 4 記録](../progress/phase-browser-4.md)、[A13 後続](../progress/browser-followups.md)
 
 ## 背景と決定
@@ -34,7 +34,7 @@ browser launcher を root が配置した専用サービスとして設け、**�
 
 ## IPC とライフサイクル
 
-- root が配置する launcher executable は systemd の専用 service で `User=celeris-browser` / `Group=celeris-browser` として動かす。daemon は systemd 管理の Unix socket に接続するだけとし、`SO_PEERCRED` と固定 protocol で要求者、session、許された browser action を検査する。同 UID の worker は `SO_PEERCRED` だけでは daemon と区別できないため、session/lease の照合と操作範囲の制限を必須とし、socket 到達を機密 state の受領権限とみなさない。daemon から任意 argv、bind mount、環境、UID map、FD 番号、実行パスを指定させない。要求のサイズ・同時数・期限も制限する。
+- root が配置する launcher executable は systemd の専用 service で `User=celeris-browser` / `Group=celeris-browser` として動かす。daemon は systemd 管理の Unix socket に接続するだけとし、`SO_PEERCRED` と固定 protocol で要求者、session、許された browser action を検査する。（daemon から見た launcher の身元は、socket 起動では `SO_PEERCRED` が systemd を指すため、応答の `SCM_CREDENTIALS` で確かめる。[ADR-0116 付記 D-P](0116-browser-launcher-implementation.md)）同 UID の worker は `SO_PEERCRED` だけでは daemon と区別できないため、session/lease の照合と操作範囲の制限を必須とし、socket 到達を機密 state の受領権限とみなさない。daemon から任意 argv、bind mount、環境、UID map、FD 番号、実行パスを指定させない。要求のサイズ・同時数・期限も制限する。
 - launcher が `bwrap` / sandboxd / Chrome を起動し、CDP pipe と egress 中継の制御 FD を所有する。既存の `--remote-debugging-pipe`、netns 内 loopback listener、接続ごとの proxy、H3 の認証区間・injection-only broker 契約を保つ。CDP pipe、profile FD、開封済み state を daemon UID に返さない。broker は専用 service の peer UID と稼働 session/lease を検証し、秘密を daemon に返さない。
 - session は service 側で登録し、starttime と instance id を伴う PID 記録を専用 user だけが書ける場所に置く。daemon 接続の切断、lease 失効、service 停止では CDP と channel を閉じ、process group / cgroup の全子を停止・回収する。再起動時は記録した starttime を照合して孤児だけを回収し、PID 再利用先や稼働中の別 instance を殺さない。launcher が落ちた時は browser を残して継続せず、admission を閉じる。
 - helper の socket と状態 dir を Chrome の mount に bind しない。service 側の応答は固定の状態・receipt・非機密の観測だけとし、失敗や診断 log に cookie、credential、CDP payload を残さない。
@@ -71,6 +71,8 @@ owner UID の process は子 user namespace で `CAP_SYS_PTRACE` を得るため
 
 この ADR は設計の決定だけであり、launcher の実装、host 設定、systemd unit の配置、実 process 攻撃試験は後続段階で行う。この ADR を根拠に本番 admission の機密能力 `CredentialInjection` / `IdentityRestore` を解放しない。`verify_isolation Ok` と本番 `Attested` 復元成功だけでは十分ではない。daemon UID からの ptrace 拒否、A13 の実 process 試験、controller の秘密非露出、全 lifecycle の回収を揃えてから別の適合・昇格判断を行う。
 
+2026-10-02 の後続実装と host 実証は下記の付記と [Phase 4 記録](../progress/phase-browser-4.md) に記す。上の移行手順は設計時の計画であり、今回の試験は機密能力の解放や本番昇格を意味しない。
+
 ## 検討した代替案
 
 - **daemon が subuid に写像した userns を直接作る**: Chrome の host UID は変わり、`/proc/<pid>/environ` も拒否されるが、daemon UID が owner のままで `CAP_SYS_PTRACE` を得る。今回の実測で棄却。
@@ -78,3 +80,9 @@ owner UID の process は子 user namespace で `CAP_SYS_PTRACE` を得るため
 - **`--cap-drop ALL`、`no_new_privs`、uid_map の変更だけに依存する**: Chrome 自身の capability と owner の capability は別であり、棄却。
 - **daemon に host `CAP_SYS_PTRACE` を与える、または root 常駐 launcher にする**: 境界をさらに広げるため棄却。root は配置と限定された map helper のみに使う。
 - **container / VM に全面移行する**: 別の隔離境界にはなり得るが、現行の CDP・egress・broker 契約と lifecycle を維持したまま owner 問題を解く最小の変更として、まず専用 user の launcher を採る。VM 方式を将来の選択肢から除外しない。
+
+## 実 process 検証（2026-10-02）
+
+後続実装（[ADR-0116](0116-browser-launcher-implementation.md)、commit `86ce1a88`）を配置した LXC host で、worker の db_guard namespace の外にある UID 1001 の通常シェルから `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` を実行し、exit 0（1 passed）を確認した。Chrome の `NS_GET_OWNER_UID` は launcher 観測で 296608、`uid_map` / `gid_map` はともに `1000 296608 1`。Chrome に対する UID 1001 からの `PTRACE_ATTACH` は EPERM (1)、`strace -p` も exit 1 / Operation not permitted、`/proc/<pid>/environ` と `mem` は EACCES (13)。`verify_isolation=Ok`、同 UID の子への attach / detach の正の対照も成功した。詳しい PID、コマンド、出力、host namespace の条件は [Phase 4 記録](../progress/phase-browser-4.md) を参照。
+
+この host は LXC 内にあり、試験 runner の `uid_map` は `0 0 4294967295` ではない。試験は worker namespace（`1001 1001 1`）の外で行われ、Chrome PID を `/proc` で確認できた。機密能力 `CredentialInjection` / `IdentityRestore` は引き続き解放しない。

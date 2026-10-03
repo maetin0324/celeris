@@ -15,10 +15,26 @@ use crate::browser_live::{ControlGate, GatedOutcome, SessionCloser, run_gated};
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct ActionRequest {
-    verb: String,
-    args: Vec<String>,
-    artifact: Option<String>,
+pub(crate) struct ActionRequest {
+    pub(crate) verb: String,
+    pub(crate) args: Vec<String>,
+    pub(crate) artifact: Option<String>,
+}
+
+/// 検査と gate を通った action を実際に出す先。既定は isolated runtime の `/session/actions`
+/// への request file（[`FileExecutor`]）。ADR-0116 D5 の launcher 経路は launcher の client に頼む。
+pub(crate) trait ActionExecutor: Send + Sync {
+    fn run(&self, sequence: u64, req: &ActionRequest) -> std::io::Result<serde_json::Value>;
+}
+
+struct FileExecutor {
+    root: PathBuf,
+}
+
+impl ActionExecutor for FileExecutor {
+    fn run(&self, sequence: u64, req: &ActionRequest) -> std::io::Result<serde_json::Value> {
+        run_action(&self.root, sequence, req)
+    }
 }
 
 pub struct ActionServer {
@@ -35,12 +51,25 @@ impl ActionServer {
         allowed: Vec<String>,
         gate: Arc<dyn ControlGate>,
     ) -> std::io::Result<Self> {
+        let executor = Arc::new(FileExecutor {
+            root: session.to_path_buf(),
+        });
+        Self::start_with(socket, executor, allowed_domains, allowed, gate)
+    }
+
+    /// 同じ検査と gate で、action を `executor` に出す。
+    pub(crate) fn start_with(
+        socket: &Path,
+        executor: Arc<dyn ActionExecutor>,
+        allowed_domains: Vec<String>,
+        allowed: Vec<String>,
+        gate: Arc<dyn ControlGate>,
+    ) -> std::io::Result<Self> {
         let socket = socket.to_path_buf();
         let listener = UnixListener::bind(&socket)?;
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
         listener.set_nonblocking(true)?;
         let (stop, rx) = mpsc::channel();
-        let root = session.to_path_buf();
         let thread = std::thread::Builder::new()
             .name("celeris-browser-actions".into())
             .spawn(move || {
@@ -51,7 +80,7 @@ impl ActionServer {
                         Ok((stream, _)) => {
                             sequence += 1;
                             let ctx = Serve {
-                                root: &root,
+                                executor: executor.as_ref(),
                                 domains: &allowed_domains,
                                 actions: &allowed,
                                 gate: gate.as_ref(),
@@ -143,7 +172,7 @@ fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool 
 }
 
 struct Serve<'a> {
-    root: &'a Path,
+    executor: &'a dyn ActionExecutor,
     domains: &'a [String],
     actions: &'a [String],
     gate: &'a dyn ControlGate,
@@ -153,7 +182,7 @@ struct Serve<'a> {
 /// ADR-0114 D4: `Stopped` closes the session once through the upstream `close` action
 /// (the same close the cancel path issues).
 struct CloseOnce<'a> {
-    root: &'a Path,
+    executor: &'a dyn ActionExecutor,
     sequence: u64,
     closed: &'a AtomicBool,
 }
@@ -165,7 +194,7 @@ impl SessionCloser for CloseOnce<'_> {
                 args: Vec::new(),
                 artifact: None,
             };
-            let _ = run_action(self.root, self.sequence, &close);
+            let _ = self.executor.run(self.sequence, &close);
         }
     }
 }
@@ -186,18 +215,19 @@ fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
     let failed = || serde_json::json!({"status":1,"stdout":""});
     let response = match req.filter(|r| allowed(r, ctx.domains, ctx.actions)) {
         // The supervisor's own version probe is trusted and not an agent action.
-        Some(req) if req.verb == "__version__" => {
-            run_action(ctx.root, sequence, &req).unwrap_or_else(|_| failed())
-        }
+        Some(req) if req.verb == "__version__" => ctx
+            .executor
+            .run(sequence, &req)
+            .unwrap_or_else(|_| failed()),
         // ADR-0113 D1: agent actions reach the browser only while the store's control state
         // lets the agent act; otherwise nothing is written for the action child.
         Some(req) => {
             let closer = CloseOnce {
-                root: ctx.root,
+                executor: ctx.executor,
                 sequence,
                 closed: ctx.closed,
             };
-            match run_gated(ctx.gate, &closer, || run_action(ctx.root, sequence, &req)) {
+            match run_gated(ctx.gate, &closer, || ctx.executor.run(sequence, &req)) {
                 GatedOutcome::Ran(out) => out.unwrap_or_else(|_| failed()),
                 GatedOutcome::Blocked(_) | GatedOutcome::Closed => {
                     serde_json::json!({"status":3,"stdout":""})

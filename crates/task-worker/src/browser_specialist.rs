@@ -60,10 +60,6 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
         Self::wrap(self.inner.with_env(extra))
     }
 
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        Self::wrap(self.inner.with_env_removed(keys))
-    }
-
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_container(plan))
     }

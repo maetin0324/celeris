@@ -50,6 +50,8 @@ pub struct ReviewSubject {
 pub struct ReviewerRun {
     pub node: Option<task_worker::NodeContext>,
     pub profile: Option<task_core::EffectiveProfile>,
+    /// Skills mounted by the subject task's assignee for review (ADR-0122 D4).
+    pub skills: Vec<task_worker::protocol::SkillMount>,
     pub adapter: Arc<dyn WorkerAdapter>,
     pub run_id: String,
     pub limits: RunLimits,
@@ -971,6 +973,7 @@ async fn run_reviewer_inner(
         context: RunContext {
             node: run.node.clone(),
             profile: run.profile.clone(),
+            skills: run.skills.clone(),
             prior_review: vec![],
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。

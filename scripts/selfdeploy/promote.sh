@@ -5,7 +5,7 @@
 #     - ライブ引き継ぎ（verify.json.live_ok が真で、いま動いている celeris の /health が `role` を持つ）
 #     - 停止 → 起動（live_ok が偽、または /health に `role` が無い＝この ADR 以前の版）
 #   のどちらかで切り替え、`current` / `previous` を更新する。すべて
-#   $CELERIS_STATE_DIR/backups/promote-<ts>.log に残る。
+#   $SD_LOGS/promote-<ts>.log に残る。
 set -euo pipefail
 
 SD_PROG=promote
@@ -56,8 +56,8 @@ done
 
 sd_require_json_tool
 TS="$(sd_stamp)"
-mkdir -p "$SD_BACKUPS"
-SD_LOG_FILE="$SD_BACKUPS/promote-$TS.log"
+mkdir -p "$SD_BACKUPS" "$SD_LOGS"
+SD_LOG_FILE="$SD_LOGS/promote-$TS.log"
 sd_log "promote $SHA12 (log: $SD_LOG_FILE)"
 
 REL="$(sd_release_dir "$SHA12")"
@@ -67,8 +67,13 @@ REL="$(sd_release_dir "$SHA12")"
 # 途中終了した場合も含めて EXIT トラップで拾う）。`promoted.json`（成功）と対になる印で、
 # `GET /releases` の `items[].promote_failed` に写り、GUI が赤いバナーで出す。
 # 次の昇格の試みが始まるとき（celeris 側の `start_promote`）に消される — 古い失敗を引きずらない。
+#
+# ADR-0040 付記 2026-10-02: start の直前に置く昇格中の印（`$REL/promoting.json`）も、成功・失敗の
+# どちらでもここで消す（`update_links` の直後に消し損ねた場合、`sd_die` / `set -e` / シグナルでの途中終了）。
+PROMOTING_WRITTEN=false
 record_promote_failure() {
   local ec=$?
+  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
   [ "$ec" -eq 0 ] && return
   [ -d "$REL" ] || return
   {
@@ -79,6 +84,8 @@ record_promote_failure() {
   } >"$REL/promote_failed.json" 2>/dev/null || true
 }
 trap record_promote_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [ -d "$REL" ] || sd_die "no such release: $REL"
 [ -x "$REL/bin/celeris" ] || sd_die "missing $REL/bin/celeris"
@@ -217,12 +224,22 @@ update_links() {
   fi
   sd_set_link "$SD_CURRENT" "$SHA12"
   sd_log "current  -> releases/$SHA12"
+  # `current` が新を指したので、以後の起動は印なしで認可される（ADR-0040 付記 規則 1）。
+  sd_clear_promoting "$SHA12"
+  PROMOTING_WRITTEN=false
+}
+
+# `celeris@$SHA12` を start する直前に呼ぶ（ADR-0040 付記: 未昇格の release は handoff も migrate もしない）。
+mark_promoting() {
+  sd_write_promoting "$SHA12" promote.sh "$MODE"
+  PROMOTING_WRITTEN=true
 }
 
 # ---- ライブ引き継ぎ --------------------------------------------------------
 
 promote_live() {
   backup_db
+  mark_promoting
   sd_log "systemctl --user start celeris@$SHA12"
   systemctl --user start "celeris@$SHA12" || sd_die "failed to start celeris@$SHA12"
   if ! poll_release "$SD_PROD_API/api/v1/health" release "$SHA12" role active 60; then
@@ -316,6 +333,7 @@ promote_stop_start() {
     sd_log "pre-start hook ok"
   fi
 
+  mark_promoting
   sd_log "systemctl --user start celeris@$SHA12"
   if ! systemctl --user start "celeris@$SHA12"; then
     sd_log "start celeris@$SHA12 failed"

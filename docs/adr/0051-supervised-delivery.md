@@ -56,3 +56,7 @@
 （`push_merged` / `maybe_retry_push` / `push_error_display`）、`crates/task-core/src/delivery.rs`
 （`Delivery::pushed_at` / `push_error`）、`crates/celeris/src/config.rs`
 （`SelfdeployConfig::push` / `push_remote`）、`crates/task-ops/src/changes.rs`（`git_with_env`）。
+
+## 付記（2026-10-01）
+
+担当の無い root task の部署解決と、delivery を見送る理由の通知は [ADR-0121](0121-root-delivery-without-assignee.md) に定める。

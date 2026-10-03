@@ -13,6 +13,8 @@ fn provider_ids_reject_path_traversal_and_empty() {
 #[test]
 fn create_body_fills_defaults_like_provider_config() {
     let body = ProviderCreateBody {
+        kind: None,
+        llm_source: None,
         credential_refs: Default::default(),
         tier_models: Default::default(),
         account_id: None,
@@ -34,6 +36,8 @@ fn create_body_fills_defaults_like_provider_config() {
 #[test]
 fn patch_only_overwrites_provided_fields() {
     let file = ProviderConfigFile {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "acct-b".into(),
@@ -73,6 +77,8 @@ fn patch_only_overwrites_provided_fields() {
 fn write_then_read_round_trips() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let file = ProviderConfigFile {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "acct-b".into(),
@@ -107,6 +113,8 @@ fn write_then_read_round_trips() {
 fn patch_round_trip_preserves_hand_edited_command_and_args() {
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let file = ProviderConfigFile {
+        kind: None,
+        llm_source: None,
         tier_models: Default::default(),
         account_id: None,
         id: "opencode-qwen".into(),

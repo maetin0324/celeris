@@ -1,0 +1,13 @@
+# ADR-0135 D3: socket activation で LAN 入口を loopback の web gateway に中継する。
+# gateway の再起動中に接続が重なって proxyd が失敗しても、start-limit-hit で
+# 中継を恒久的に止めない。RestartSec は失敗時の再起動を間引く。
+[Unit]
+Description=Celeris web LAN forwarding proxy
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd 127.0.0.1:7720
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=true

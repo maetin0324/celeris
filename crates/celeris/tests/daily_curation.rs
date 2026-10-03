@@ -409,6 +409,7 @@ fn knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision() {
         .filter(|d| d.request.key == knowledge_curation::HUMAN_KEY)
         .collect();
     assert_eq!(human.len(), 1, "人への候補は 1 件の decision に束ねる");
+    assert_eq!(human[0].request.key, "curation-human");
     assert_eq!(human[0].status, DecisionStatus::Open);
     assert!(human[0].request.question.contains("user/goals.md"));
     assert!(human[0].request.question.contains("user/profile.md"));

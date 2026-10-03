@@ -213,6 +213,82 @@ fn status_clean(dir: &Path) -> bool {
     sh(dir, &["status", "--porcelain"]).is_empty()
 }
 
+#[test]
+fn auto_resolve_progress_appends_keep_both_sections() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    std::fs::create_dir_all(task_tree.join("docs")).unwrap();
+    std::fs::write(task_tree.join("docs/PROGRESS.md"), "# Progress\n").unwrap();
+    std::fs::write(
+        task_tree.join(".gitattributes"),
+        "docs/PROGRESS.md merge=union\n",
+    )
+    .unwrap();
+    commit_all(&task_tree, "base progress").unwrap();
+    let mut items = Vec::new();
+    for (key, section) in [("a", "## A\n"), ("b", "## B\n")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        std::fs::write(
+            wt.dir.join("docs/PROGRESS.md"),
+            format!("# Progress\n{section}"),
+        )
+        .unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    assert!(out.conflict.is_none());
+    let progress = std::fs::read_to_string(task_tree.join("docs/PROGRESS.md")).unwrap();
+    assert!(
+        progress.contains("## A\n") && progress.contains("## B\n"),
+        "{progress}"
+    );
+}
+
+#[test]
+fn auto_resolve_migration_duplicate_is_renumbered_without_touching_target() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    let mut items = Vec::new();
+    for (key, name) in [("a", "alpha"), ("b", "beta")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        let dir = wt.dir.join("crates/task-core/migrations");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("0042_{name}.sql")), format!("-- {name}\n")).unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    assert!(out.conflict.is_none(), "{:?}", out.conflict);
+    let dir = task_tree.join("crates/task-core/migrations");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("0042_alpha.sql")).unwrap(),
+        "-- alpha\n"
+    );
+    assert!(out.actions.iter().any(|a| a.path.ends_with("_beta.sql")));
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+}
+
+#[test]
+fn auto_resolve_code_conflict_returns_request_and_cleans_merge() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    let mut items = Vec::new();
+    for (key, text) in [("a", "line1\nA\nline3\n"), ("b", "line1\nB\nline3\n")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        std::fs::write(wt.dir.join("shared.txt"), text).unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    let request = out.conflict.unwrap().request.unwrap();
+    assert_eq!(request.conflict_files, ["shared.txt"]);
+    assert_eq!(request.source_branch, wu_branch("T1", "b"));
+    assert!(request.to_markdown().contains("統合の依頼"));
+    assert!(rev_parse(&task_tree, "MERGE_HEAD").is_none());
+    assert!(status_clean(&task_tree));
+}
+
 fn dep_row(key: &str, kind: task_core::WorkUnitKind) -> task_core::WorkUnitRow {
     let spec = task_core::WorkUnitSpec {
         key: key.to_string(),

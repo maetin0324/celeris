@@ -25,6 +25,36 @@ fn repair_scope_from_units<'a>(
 }
 
 impl Dispatcher {
+    /// Record one notice per fixed pair of merge heads. A retry with the same heads is idempotent.
+    fn record_integration_request(
+        &self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        request: &crate::auto_resolve::IntegrationRequest,
+    ) -> Result<(), DispatchError> {
+        use task_core::feed::{NoticeEvent, NoticeKind, NoticeLink, NoticeTarget};
+        let id = format!("{}:{}:{}", task.id, request.target_sha, request.source_sha);
+        let title = format!("統合の依頼: {} / {}", integ.key, request.source_branch);
+        self.store.notice_record(&NoticeEvent {
+            source_key: format!("integration_request:{id}"),
+            kind: NoticeKind::BadNews,
+            group_key: format!("integration_request:{id}"),
+            title,
+            summary: request.to_markdown(),
+            project_id: task.project_id.as_ref().map(ToString::to_string),
+            task_id: Some(task.id.to_string()),
+            target: Some(NoticeTarget {
+                kind: "integration_request".into(),
+                id,
+            }),
+            links: vec![NoticeLink {
+                label: "Task".into(),
+                href: format!("/tasks/{}", task.id),
+            }],
+            at: OffsetDateTime::now_utc(),
+        })?;
+        Ok(())
+    }
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
     /// 戻す（次の tick で冪等な手順でやり直す）。
     pub(super) fn reconcile_integration(
@@ -422,6 +452,7 @@ impl Dispatcher {
                 let mut run = IntegrationRun::default();
                 for (i, dir) in repos_for_merge.iter().enumerate() {
                     let out = crate::integration::integrate(dir, &items, &phase_for_merge)?;
+                    run.actions.extend(out.actions);
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
@@ -529,6 +560,10 @@ impl Dispatcher {
             }
         };
         if let Some(conflict) = run.conflict.clone() {
+            if let Some(request) = &conflict.request {
+                self.record_integration_request(&task, &integ, request)?;
+                return self.integration_needs_human(&task, &integ, &request.to_markdown());
+            }
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
         }
         if run.checks.iter().any(|(_, pass, _)| !pass) {
@@ -839,8 +874,27 @@ impl Dispatcher {
         integ: &task_core::WorkUnitRow,
         why: &str,
     ) -> Result<(), DispatchError> {
+        self.integration_failure(task, integ, why, false)
+    }
+
+    fn integration_needs_human(
+        &mut self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        why: &str,
+    ) -> Result<(), DispatchError> {
+        self.integration_failure(task, integ, why, true)
+    }
+
+    fn integration_failure(
+        &mut self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        why: &str,
+        force_human: bool,
+    ) -> Result<(), DispatchError> {
         let replans_so_far = self.counted_replans(task.id)?;
-        let can_replan = replans_so_far < self.effective_max_replans(task.id)?;
+        let can_replan = !force_human && replans_so_far < self.effective_max_replans(task.id)?;
         let mut row = integ.clone();
         row.clear_lease();
         row.updated_at = rfc3339(OffsetDateTime::now_utc());
@@ -967,6 +1021,11 @@ impl Dispatcher {
                     commit: m.commit.clone(),
                     skipped: m.skipped,
                 })
+                .collect(),
+            actions: run
+                .actions
+                .iter()
+                .filter_map(|action| serde_json::to_value(action).ok())
                 .collect(),
             head: run.head.clone(),
             checks: run

@@ -86,7 +86,14 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
     let request_id = request.id_for(task.id);
     assert!(
         env.store
-            .integration_request_record(task.id, &request, "test")
+            .integration_request_record(task.id, &request, "phase:merge")
+            .unwrap()
+    );
+    // Re-recording the same target/source head (e.g. the next dispatcher tick seeing the
+    // same unresolved conflict) must not duplicate the inbox item or the event.
+    assert!(
+        !env.store
+            .integration_request_record(task.id, &request, "phase:merge")
             .unwrap()
     );
     let app = env.router();
@@ -99,6 +106,18 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
     let items = inbox.json()["items"].as_array().unwrap().clone();
     assert_eq!(items.len(), 1, "{items:?}");
     let id = items[0]["id"].as_str().unwrap();
+    assert_eq!(
+        env.store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .filter(|row| matches!(&row.1,
+                Event::IntegrationRequested { request: r, .. }
+                    if r.source_sha == request.source_sha && r.target_sha == request.target_sha))
+            .count(),
+        1,
+        "re-recording the same head must not append a duplicate IntegrationRequested event"
+    );
     task_ops::notify_feed::sync_notifications(&env.store, OffsetDateTime::now_utc()).unwrap();
     let notices = send(&app, get_admin("/api/v1/notifications")).await;
     assert_eq!(notices.status, 200, "{}", notices.text());
@@ -160,7 +179,7 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
         let next_id = next.id_for(task.id);
         assert!(
             env.store
-                .integration_request_record(task.id, &next, "test")
+                .integration_request_record(task.id, &next, "phase:merge")
                 .unwrap()
         );
         let inbox = send(

@@ -252,7 +252,7 @@ mod tests {
     }
 
     /// review sync: main の schema 41 の DB（1〜37 と 41 が当たり、38〜40 は予約で飛び、0042 は未知）を開くと
-    /// 飛んだ 38〜40 と振り直した 0042 が当たり、deliveries に検査対象の列ができる。
+    /// 38〜40 は飛んだままで、振り直した 0042〜0045 が当たり、deliveries に検査対象の列ができる。
     #[test]
     fn migration_0042_fills_gaps_in_main_schema_41_database() {
         let dir = tempfile::tempdir().unwrap();
@@ -269,7 +269,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-        assert_eq!(crate::SCHEMA_VERSION, 42);
+        assert_eq!(crate::SCHEMA_VERSION, 45);
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
@@ -279,7 +279,10 @@ mod tests {
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        assert_eq!(versions, (1..=42).collect::<Vec<u32>>());
+        assert_eq!(
+            versions,
+            (1..=37).chain([41, 42, 43, 44, 45]).collect::<Vec<u32>>()
+        );
         let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();
         let names: Vec<String> = stmt
             .query_map([], |row| row.get(1))

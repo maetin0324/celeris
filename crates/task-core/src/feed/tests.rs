@@ -304,7 +304,7 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     for reserved in crate::store::migrations::RESERVED_VERSIONS {
         assert!(!v.contains(reserved), "reserved {reserved} recorded");
     }
-    // 0041 の記録が無い DB（main の本番の 37 の形に、ブランチの 38〜40・42 は当たり済み）を開くと
+    // 0041 の記録が無い DB（38〜40 は予約で飛び、42〜45 は当たり済み）を開くと
     // 飛んだ 0041 だけが当たる。
     {
         let conn = rusqlite::Connection::open(&path).unwrap();

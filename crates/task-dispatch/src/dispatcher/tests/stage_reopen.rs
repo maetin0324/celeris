@@ -40,6 +40,107 @@ fn reopen_events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<(String, String)
         .collect()
 }
 
+/// ADR-0134: integration check creates a repair, but that repair reports a scope
+/// problem. The planner adds a leaf in the same stage to remove the bad file.
+/// The blocked repair must retire, the leaf must run, and integration must retry
+/// without starting a second replan.
+#[tokio::test]
+async fn blocked_repair_replan_loop_runs_the_new_leaf_once() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "test ! -f fmt-bad.txt && test -f fixed.txt");
+    store.insert(&task).unwrap();
+    let mut b = v2_wu("b", "core", &[]);
+    b.checks = vec![task_core::WorkUnitCheck {
+        cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
+        expect_exit: 0,
+    }];
+    adopt_v2_plan(&store, task.id, &["core"], vec![v2_wu("a", "core", &[]), b]);
+    let delta = serde_json::json!({
+        "schema": task_core::execution_plan::EXECUTION_PLAN_DELTA_SCHEMA,
+        "base_version": 1,
+        "rationale": "repair cannot change the file; add a leaf with the correct scope",
+        "add": [serde_json::to_value(v2_wu("e2e-cancel", "core", &[])).unwrap()]
+    })
+    .to_string();
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(5))
+            .with_file("a", "fmt-bad.txt", "bad")
+            .with_file("b", "b.txt", "b")
+            .with_action("e2e-cancel", |cwd| {
+                std::fs::remove_file(cwd.join("fmt-bad.txt")).unwrap();
+                std::fs::write(cwd.join("fixed.txt"), "fixed").unwrap();
+            })
+            .with_script(
+                "repair-core-1",
+                vec![Terminal::Yielded {
+                    checkpoint: serde_json::json!({
+                        "plan_issue": "fmt-bad.txt is outside this repair scope",
+                        "next_action": "plan a leaf with the correct scope"
+                    }),
+                    usage: None,
+                }],
+            )
+            .with_planner_output(delta),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    d.config.execution.planner.adapter = "instant".to_string();
+    let id = task.id;
+    assert!(
+        run_until(&mut d, 700, || {
+            store.work_units_for(id).unwrap().iter().any(|u| {
+                u.key == "repair-core-1"
+                    && u.status == task_core::WorkUnitStatus::Blocked
+                    && u.blocked_reason == Some(task_core::WorkUnitBlockedReason::PlanIssue)
+            })
+        })
+        .await,
+        "the daemon repair must first stop with plan_issue"
+    );
+    let report = run_until_idle(&mut d, 1000).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(id).unwrap().unwrap().status, Status::Done);
+    let units = store.work_units_for(id).unwrap();
+    let status = |key: &str| units.iter().find(|u| u.key == key).unwrap().status;
+    assert_eq!(
+        status("repair-core-1"),
+        task_core::WorkUnitStatus::Superseded
+    );
+    assert_eq!(status("e2e-cancel"), task_core::WorkUnitStatus::Done);
+    assert_eq!(status("integrate-core"), task_core::WorkUnitStatus::Done);
+    assert_eq!(store.execution_plan_list(id).unwrap().len(), 2);
+    let planner_runs = store
+        .runs_for_task(id)
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.role == task_core::RunIndexRole::Planner)
+        .count();
+    assert_eq!(planner_runs, 1, "only one replan after the fixture plan");
+    assert_eq!(
+        adapter
+            .keys_seen()
+            .iter()
+            .filter(|k| *k == "e2e-cancel")
+            .count(),
+        1
+    );
+    let events = events_of(&store, id);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::WorkUnitTransitioned {
+            key, from: task_core::WorkUnitStatus::Blocked,
+            to: task_core::WorkUnitStatus::Superseded, ..
+        } if key == "repair-core-1"
+    )));
+    assert!(integrations_of(&store, id, "core").iter().any(|merged| {
+        merged
+            .iter()
+            .any(|(key, skipped)| key == "e2e-cancel" && !skipped)
+    }));
+}
+
 /// D2: 段階 s1（a）の統合の後、s2 の b が失敗して planner の replan（差分）が **統合済みの s1** に a2 を足す。
 /// 修正後は `integrate-s1` が `pending` に戻り（`replan v2: stage_reopened`）、a2 の done の後に s1 の統合が
 /// もう一度走って a2 のブランチを task のブランチに入れ、その後で s2 に進む。最終レビューの check

@@ -10,6 +10,19 @@ use task_core::knowledge::front_matter;
 
 use crate::knowledge;
 
+/// 日次整理の harness id（`[[cron.seed.template]] harness`。cron 由来の task の `genre` になる）。
+pub const CURATION_HARNESS: &str = "knowledge-curation";
+
+/// cron が作った日次整理 task か（ADR-0131 付記 D10 (6): この task の報告は daemon が 1 件だけ作り、
+/// 報告のまとめにも入れない）。
+pub fn is_curation_task(task: &task_core::Task) -> bool {
+    task.genre.as_deref() == Some(CURATION_HARNESS)
+        && task
+            .labels
+            .iter()
+            .any(|l| l == crate::cron_jobs::CRON_TASK_LABEL)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct CurationPlan {

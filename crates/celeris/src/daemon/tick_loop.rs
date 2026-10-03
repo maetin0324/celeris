@@ -14,7 +14,7 @@ use super::clusters::ClusterMasters;
 use super::run::RoleState;
 use crate::{
     Config, DaemonError, Exit, RunOptions, accounts_admin, cluster_admin, delivery, doc_gardener,
-    instance, knowledge_gc, knowledge_maint, notify, reports,
+    instance, knowledge_curation, knowledge_gc, knowledge_maint, notify, reports,
 };
 
 /// tick ループ。SIGINT/SIGTERM で停止する。`admin_rx` があれば `POST /api/v1/reload` /
@@ -236,6 +236,40 @@ pub(crate) async fn tick_loop(
                     Ok(_) => {}
                     Err(e) => {
                         tracing::warn!(error = %e, "knowledge: could not retry the failed maintenance runs")
+                    }
+                }
+                // ADR-0131 付記 D10 (2)(5)(6): 日次整理 job の task の入力準備・終端の検証・承認後の反映・
+                // 1 日 1 件の報告（決定的。LLM は呼ばない）。
+                let curation_view = task_ops::view::ViewContext {
+                    workspace_root: config.workspace_root.clone(),
+                    retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
+                    retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
+                    max_requeues: config.max_requeues,
+                    clusters: config.cluster_view_infos(),
+                };
+                match knowledge_curation::tick(
+                    store.as_ref(),
+                    &config.knowledge.root,
+                    &config.workspace_root,
+                    &knowledge_curation::state_path(&config.db.path),
+                    &curation_view,
+                    now,
+                ) {
+                    Ok(o)
+                        if !(o.prepared.is_empty()
+                            && o.reported.is_empty()
+                            && o.applied.is_empty()) =>
+                    {
+                        tracing::info!(
+                            prepared = o.prepared.len(),
+                            reported = o.reported.len(),
+                            applied = o.applied.len(),
+                            "knowledge curation: daily job progressed"
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::warn!(error = %e, "knowledge curation: tick failed; continuing dispatch")
                     }
                 }
                 if config.knowledge.langmem.enabled {

@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 use nix::libc;
 
 use super::protocol::{
-    ActionArgs, ErrorCode, Observation, Outcome, Receipt, Request, Response, SessionFacts,
-    SessionPolicy, SessionState, Verb, decode_request, write_message,
+    ActionArgs, ErrorCode, Observation, Outcome, Receipt, Request, Response, SessionBinding,
+    SessionFacts, SessionPolicy, SessionState, Verb, decode_request, write_message,
 };
 use super::registry::{Registry, SessionRecord, stop_group};
 use super::{now_unix_ms, random_id};
@@ -74,12 +74,17 @@ pub struct StartRequest {
     pub policy: SessionPolicy,
 }
 
-/// 起動できた session。`pid` は process group の leader（bwrap）。
+/// 起動できた session。`pid` は process group の leader（bwrap）。`runtime_*` と `ns_inodes` は
+/// launcher が `verify_isolation` を掛けた runtime process とその namespace の inode で、receipt の
+/// 束縛（protocol v3）に載る。
 pub struct Launched {
     pub session: Box<dyn BackendSession>,
     pub pid: i32,
     pub pgid: i32,
     pub starttime: u64,
+    pub runtime_pid: i32,
+    pub runtime_starttime: u64,
+    pub ns_inodes: std::collections::BTreeMap<task_core::browser_isolation::Namespace, u64>,
 }
 
 /// session の起動の中身（userns・bwrap・Chrome）。単体試験では偽の実装を使う。
@@ -257,7 +262,7 @@ fn accept_loop(inner: &Arc<Inner>, listener: &UnixListener) {
 }
 
 /// `SO_PEERCRED`（pid, uid）。
-fn peer_cred(s: &UnixStream) -> Option<(i32, u32)> {
+pub(super) fn peer_cred(s: &UnixStream) -> Option<(i32, u32)> {
     let mut cred = libc::ucred {
         pid: 0,
         uid: 0,
@@ -379,6 +384,7 @@ fn receipt(
         outcome,
         at_unix_ms: now_unix_ms(),
         isolation_ok,
+        binding: None,
     }
 }
 
@@ -517,19 +523,27 @@ fn start_reserved(
                 l.session.stop();
                 return Err(ErrorCode::IsolationFailed);
             }
-            Ok(l)
+            // receipt の束縛に載せる userns owner（採れなければ None のまま。daemon が拒否する）。
+            let (_, facts) = l.session.observe();
+            Ok((l, facts.ns_owner_uid))
         },
         inner.cfg.limits.start,
-        |late: Result<Launched, ErrorCode>| {
-            if let Ok(l) = late {
+        |late: Result<(Launched, Option<u32>), ErrorCode>| {
+            if let Ok((l, _)) = late {
                 l.session.stop();
             }
         },
     );
-    let launched = match out {
+    let (launched, ns_owner_uid) = match out {
         Some(Ok(l)) => l,
         Some(Err(code)) => return err(code),
         None => return err(ErrorCode::Timeout),
+    };
+    let binding = SessionBinding {
+        pid: launched.runtime_pid,
+        starttime: launched.runtime_starttime,
+        ns_owner_uid,
+        ns_inodes: launched.ns_inodes,
     };
     let record = SessionRecord {
         session_id: session_id.clone(),
@@ -556,10 +570,12 @@ fn start_reserved(
     lock(&inner.state)
         .sessions
         .insert(session_id.clone(), entry.clone());
+    let mut started = receipt(&entry.record, None, Outcome::Started, true);
+    started.binding = Some(binding);
     Response::Started {
         session_id,
         instance_id: entry.record.instance_id.clone(),
-        receipt: receipt(&entry.record, None, Outcome::Started, true),
+        receipt: started,
     }
 }
 

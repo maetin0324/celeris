@@ -32,6 +32,7 @@ pub mod execution;
 pub mod followup;
 pub mod gate;
 pub mod graph;
+pub mod human_inbox;
 pub mod inbox;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本。git・索引・検索・`_inbox`）。
 pub mod knowledge;
@@ -41,6 +42,7 @@ pub mod lifecycle;
 pub mod matching;
 pub mod memory;
 pub mod milestone_review;
+pub mod notify_feed;
 /// ADR-0074 D2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）の判定と人の操作。
 pub mod phase_gate;
 pub mod plan;

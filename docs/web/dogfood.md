@@ -1,7 +1,7 @@
 # web phase 6 P6-03: dogfood の開始と運用
 
 ---
-tasks: [01M3WAKKJQXT79DDDFCF9F5Q3D]
+tasks: [01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3YT4PT3EP8A38111BXH1DCF]
 ---
 
 状態: **開始（2026-10-01 18:32 UTC、release `bf54b41ad627`）**。web gateway は本番 daemon `127.0.0.1:7710` に向けて loopback `127.0.0.1:7720` で稼働中。LAN 入口は `http://192.168.1.103:7721`。
@@ -18,7 +18,7 @@ tasks: [01M3WAKKJQXT79DDDFCF9F5Q3D]
 2. H9（並行運用中のブラウザ通知の扱い）は人の決定待ち。現行の暫定方針は web/ の origin で利用者が許可したときだけ通知すること（[実装計画](implementation-plan.md) §3）。
 3. P6-02 の `celeris-web@.service` と release の web 段を確認済み。H10 の staging 実 celeris 確認は release `bf54b41ad627` で完了済み（`verify.sh` exit 0、読み取り parity 3 passed）。本番で参照している `gate.json` は `web.ok: true`。
 
-本番への配信切替は、この開始判断に含めない。gateway は loopback `127.0.0.1:7720` に bind。user systemd の `celeris-web-lan.socket` と `celeris-web-lan.service` が `192.168.1.103:7721` を `127.0.0.1:7720` へ中継する。`web.env` の `CELERIS_WEB_ALLOWED_HOSTS=192.168.1.103` で Host を許可した。両 unit は start のみで enable はしていないため、再起動後は手動起動が必要。
+本番への配信切替は、この開始判断に含めない。gateway は loopback `127.0.0.1:7720` に bind。user systemd の `celeris-web-lan.socket` と `celeris-web-lan.service` が `192.168.1.103:7721` を `127.0.0.1:7720` へ中継する。これらの unit は [ADR-0135](../adr/0135-web-follow-health-gate.md) に従い `deploy/systemd/` に置いた。service の start limit と socket の trigger limit を無効にした版を人が設置するまでは、本番で動く手製 unit の設定は変わらない。`web.env` の `CELERIS_WEB_ALLOWED_HOSTS=192.168.1.103` で Host を許可した。両 unit は start のみで enable はしていないため、再起動後は手動起動が必要。
 
 ## 2. 起動・確認手順
 

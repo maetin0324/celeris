@@ -117,13 +117,14 @@ render_unit() {
 # ADR-0075 D5 (b)（Phase G3）: celeris-scratch-cache.service（L1 / L2 の cache server）も置くだけ。有効化は人
 # （`systemctl --user enable --now celeris-scratch-cache.service` の後に celeris-sccache.service を再起動）。
 # web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/web/parallel-operation.md）。
-UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-sccache.service celeris-scratch-cache.service"
+UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service celeris-sccache.service celeris-scratch-cache.service"
 if [ -n "$HOT_ROOT" ]; then
   UNITS="$UNITS celeris-credentiald@.service"
   sd_log "hot root: $HOT_ROOT (units read releases and state from there; ~/.config/celeris stays in home)"
 fi
 RENDER_DIR="$(mktemp -d)"
 trap 'rm -rf "$RENDER_DIR"' EXIT
+# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
 for unit in $UNITS; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
   render_unit "$unit" "$RENDER_DIR/$unit"

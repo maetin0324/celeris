@@ -42,6 +42,7 @@ pub struct EnvOptions {
     pub conversation_genre: String,
     /// ADR-0017 M1: `providers.d/` の書き込み先。`None` なら管理系の作成/変更/削除は使えない。
     pub providers_dir: Option<PathBuf>,
+    pub openai_compatible_source_ids: std::collections::HashSet<String>,
     /// ADR-0017 M2: `reload`/`check` を受け取るチャネルの送信側。`None` ならどちらも使えない。
     pub admin_tx: Option<mpsc::Sender<AdminRequest>>,
     /// ADR-0024 D1: `[accounts] claude_dir`。`None` なら claude-code のプールは無し。
@@ -59,6 +60,10 @@ pub struct EnvOptions {
     pub notify_secret_id: String,
     /// ADR-0037 D3: `[notify] gui_base_url`。
     pub notify_gui_base_url: Option<String>,
+    pub notify_inbox_batch_secs: u64,
+    pub notify_inbox_reminder_secs: u64,
+    pub notify_digest_interval_secs: u64,
+    pub notify_digest_max_lines: usize,
     /// ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む係。
     pub releases: Option<task_api::SharedReleaseSource>,
     /// ADR-0040 D4（Phase 47）: `GET /health` の `release` / `mode` と、管理系の 503 に使う役割。
@@ -83,6 +88,7 @@ impl Default for EnvOptions {
             // Phase 30: 既定の対話用分野は他の既定値と同じく `task_core::CONVERSATION_GENRE`。
             conversation_genre: task_core::CONVERSATION_GENRE.to_string(),
             providers_dir: None,
+            openai_compatible_source_ids: Default::default(),
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
@@ -92,6 +98,10 @@ impl Default for EnvOptions {
             memory_dir: None,
             notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
             notify_gui_base_url: None,
+            notify_inbox_batch_secs: 60,
+            notify_inbox_reminder_secs: 86_400,
+            notify_digest_interval_secs: 3_600,
+            notify_digest_max_lines: 10,
             releases: None,
             release: "dev".to_string(),
             mode: task_core::DaemonMode::Normal,
@@ -216,6 +226,11 @@ pub fn config_view() -> ConfigView {
         },
         providers: vec![
             ProviderConfigView {
+                kind: Default::default(),
+                llm_source: Some(task_core::ResolvedLlmSource {
+                    source: task_core::LlmSourceRef::ClaudeOauth,
+                    origin: task_core::SourceOrigin::Derived,
+                }),
                 credential_refs: Default::default(),
                 tier_models: Default::default(),
                 account_id: None,
@@ -228,6 +243,11 @@ pub fn config_view() -> ConfigView {
                 account_pool: false,
             },
             ProviderConfigView {
+                kind: Default::default(),
+                llm_source: Some(task_core::ResolvedLlmSource {
+                    source: task_core::LlmSourceRef::ClaudeOauth,
+                    origin: task_core::SourceOrigin::Derived,
+                }),
                 credential_refs: Default::default(),
                 tier_models: Default::default(),
                 account_id: None,
@@ -302,6 +322,7 @@ pub fn settings(
         instance_id: "01J9ZX5T3K8Q7W6V5R4P3N2M1H".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
         providers_dir: options.providers_dir,
+        openai_compatible_source_ids: options.openai_compatible_source_ids,
         admin_tx: options.admin_tx,
         accounts_roots: {
             let mut roots = std::collections::HashMap::new();
@@ -319,6 +340,10 @@ pub fn settings(
         memory_dir: options.memory_dir,
         notify_secret_id: options.notify_secret_id,
         notify_gui_base_url: options.notify_gui_base_url,
+        notify_inbox_batch_secs: options.notify_inbox_batch_secs,
+        notify_inbox_reminder_secs: options.notify_inbox_reminder_secs,
+        notify_digest_interval_secs: options.notify_digest_interval_secs,
+        notify_digest_max_lines: options.notify_digest_max_lines,
         releases: options.releases,
         release: options.release,
         mode: options.mode,
@@ -435,6 +460,11 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         }],
         providers: vec![
             ProviderLive {
+                kind: Default::default(),
+                llm_source: Some(task_core::ResolvedLlmSource {
+                    source: task_core::LlmSourceRef::ClaudeOauth,
+                    origin: task_core::SourceOrigin::Derived,
+                }),
                 credential_refs: Default::default(),
                 tier_models: Default::default(),
                 account_id: None,
@@ -455,6 +485,11 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
                 account_pool: false,
             },
             ProviderLive {
+                kind: Default::default(),
+                llm_source: Some(task_core::ResolvedLlmSource {
+                    source: task_core::LlmSourceRef::ClaudeOauth,
+                    origin: task_core::SourceOrigin::Derived,
+                }),
                 credential_refs: Default::default(),
                 tier_models: Default::default(),
                 account_id: None,

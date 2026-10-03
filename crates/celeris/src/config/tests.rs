@@ -1,6 +1,154 @@
 use super::*;
 
 #[test]
+fn provider_kind_legacy_production_inference_warnings_and_cheap_tier() {
+    use task_core::{LlmSourceRef as Source, SourceOrigin, Tier};
+    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, fixture).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    for (id, expected) in [
+        ("opencode-qwen", Source::OpenaiCompatible("qwen".into())),
+        ("ldr-qwen", Source::Celeris),
+        ("paperqa-qwen", Source::Celeris),
+        ("langmem-main", Source::Celeris),
+        ("claude-pool", Source::ClaudeOauth),
+        ("codex-pool", Source::CodexOauth),
+        ("unclassified-tool", Source::Unknown),
+    ] {
+        let resolved = cfg.provider_llm_source(id).unwrap();
+        assert_eq!(resolved.source, expected, "{id}");
+        assert_eq!(resolved.origin, SourceOrigin::Derived, "{id}");
+        assert_eq!(
+            cfg.provider_kind(id),
+            Some(task_core::ProviderKind::Adapter)
+        );
+    }
+    assert_eq!(
+        cfg.provider_specs()
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers,
+        vec![Tier::Cheap]
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers
+            .len(),
+        3
+    );
+    let warnings = cfg.provider_kind_warnings();
+    for code in [
+        "deprecated_qwen_provider_id",
+        "direct_qwen_model",
+        "unknown_llm_source",
+        "qwen_fixed_acp_noncheap_tier",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.starts_with(code)),
+            "{code}"
+        );
+    }
+    assert!(!warnings.join(" ").contains("fixture-secret-sentinel"));
+    assert!(!warnings.join(" ").contains("/fixture/qwen.json"));
+}
+
+#[test]
+fn provider_kind_explicit_source_rejects_adapter_model_and_missing_reference() {
+    let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
+    for row in [
+        "id = \"bad\"\nadapter = \"fake\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nllm_source = \"codex_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"claude-code\"\nmodel = \"celeris/cheap\"\nllm_source = \"claude_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"unknown\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:missing\"",
+    ] {
+        let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\n{row}\n")).unwrap();
+        assert!(
+            matches!(cfg.validate(), Err(ConfigError::Invalid(_))),
+            "{row}"
+        );
+    }
+    let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\nid = \"ok\"\nadapter = \"acp\"\nkind = \"adapter\"\nllm_source = \"openai_compatible:qwen\"\n")).unwrap();
+    cfg.validate().unwrap();
+    let resolved = cfg.provider_llm_source("ok").unwrap();
+    assert_eq!(resolved.origin, task_core::SourceOrigin::Explicit);
+    assert_eq!(
+        cfg.provider_kind("ok"),
+        Some(task_core::ProviderKind::Adapter)
+    );
+    assert_eq!(
+        serde_json::to_string(&resolved.source).unwrap(),
+        "\"openai_compatible:qwen\""
+    );
+}
+
+#[test]
+fn provider_kind_qwen_id_without_model_does_not_guess_source() {
+    let cfg: Config = toml::from_str("[[providers]]\nid = \"opencode-qwen\"\nadapter = \"acp\"\nenv = { OPENCODE_CONFIG = \"/fixture/private.json\" }\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.provider_llm_source("opencode-qwen").unwrap().source,
+        task_core::LlmSourceRef::Unknown
+    );
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("unknown_llm_source"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_without_opencode_config_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"direct\"\nadapter = \"acp\"\nmodel = \"qwen3\"\n")
+            .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_source_reference_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config = toml::from_str("[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n[[providers]]\nid = \"source\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:qwen\"\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_proxy_model_keeps_all_tiers() {
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"proxy\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nenv = { OPENCODE_CONFIG = \"/fixture/old-qwen.json\" }\n",
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        !cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());
@@ -1401,7 +1549,7 @@ fn loads_research_example_config() {
     // `.json` を付けずに渡す（実機の仕様）。
     assert_eq!(
         cfg.adapters.paperqa.settings.as_deref(),
-        Some("/home/u/celeris/paperqa/settings/qwen-local")
+        Some("/home/u/celeris/paperqa/settings/proxy")
     );
     assert_eq!(
         cfg.adapters.paperqa.paper_directory.as_deref(),
@@ -2581,7 +2729,7 @@ fn ensure_accounts_dir_creates_the_directories_with_0700() {
 
 // ---- ADR-0037: [notify] ----
 
-/// `[notify]` は書かなくてよく（既定値が入る）、書けば 3 つのキーだけを受ける。
+/// `[notify]` は書かなくても既定値が入り、D6 の送り出し間隔を設定できる。
 #[test]
 fn notify_defaults_are_used_when_the_section_is_absent() {
     let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
@@ -2598,6 +2746,16 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
     assert_eq!(cfg.notify.discord_webhook_secret, "hook");
     assert_eq!(cfg.notify.interval_secs, 60);
     assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7700"));
+
+    let cfg: Config = toml::from_str(
+        "[notify]\ninbox_batch_secs = 15\ninbox_reminder_secs = 7200\n\
+         digest_interval_secs = 1800\ndigest_max_lines = 5\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.notify.inbox_batch_secs, 15);
+    assert_eq!(cfg.notify.inbox_reminder_secs, 7200);
+    assert_eq!(cfg.notify.digest_interval_secs, 1800);
+    assert_eq!(cfg.notify.digest_max_lines, 5);
 
     // 未知キーは拒否。
     assert!(toml::from_str::<Config>("[notify]\nbogus = 1\n").is_err());

@@ -9,11 +9,11 @@
 #     （例 `~/.local/celeris/paperqa/.venv/bin/python`）を指す。旧 `pqa` を指していても自動で同じ
 #     ディレクトリの `python` に置き換えて 1 回警告するが、設定は直しておくこと。
 #   - PaperQA の設定ファイル（下の `settings` が指す `.json`、ここでは
-#     config/paperqa.qwen-local.example.json をコピーして書き換えたもの）に **必ず**:
+#     config/paperqa.proxy.example.json をコピーして書き換えたもの）に **必ず**:
 #       - `agent.agent_type = "fake"`（既定の ToolSelector はこの版の組み合わせで落ちる。ADR-0027 の実機確認）
 #       - `embedding = "sparse"`（鍵無しの埋め込み。Semantic Scholar は鍵無しだと 429 なので使わない）
 #       - `llm_config` / `summary_llm_config` / `agent.agent_llm_config` の `timeout` を伸ばす（既定 60 秒だと
-#         ローカル Qwen のような遅い LLM で 1 要約が 180 秒かかって落ちる。ここでは 900 秒にしてある）
+#         遅い LLM で 1 要約が 180 秒かかって落ちる。ここでは 900 秒にしてある）
 #       - `parsing.multimodal = false`（ADR-0035 の実機確認。既定は PDF の画像を取り出して**既定モデル
 #         `gpt-4o-2024-11-20`** で説明文を作るため、ローカル LLM のエンドポイントでは 404 になり
 #         **PDF の索引作成が丸ごと落ちる**）
@@ -21,7 +21,7 @@
 #         を 3 にしておく（ADR-0063 Phase 109b A4。実機の失敗: 昇格直後の llm-proxy が一瞬すべての
 #         候補を失って 503 `no_source_available` を返し、`pqa` の要約呼び出しがそのまま失敗していた。
 #         litellm がその 503/502/429 を指数バックオフで再試行するようになる。
-#         config/paperqa.qwen-local.example.json は既にこの値）
+#         config/paperqa.proxy.example.json は既にこの値）
 #     を設定しておくこと。
 #   - PDF を索引するには venv に `pillow` も必要（`uv pip install pillow`。pypdf の画像抽出が要求する）。
 #   - `settings` にはファイルパスから **`.json` を付けずに** 渡す（`Settings.from_name` と同じ実機の
@@ -65,8 +65,8 @@ auto_accept = false
 [adapters.paperqa]
 # ADR-0063 Phase 109d C2: `pqa` CLI ではなく venv の python（`paperqa_ask.py` を起動する）。
 command = "/home/u/celeris/paperqa/.venv/bin/python"
-# `.json` を付けない（実機の仕様）。config/paperqa.qwen-local.example.json をコピーして書き換えたものを指す。
-settings = "/home/u/celeris/paperqa/settings/qwen-local"
+# `.json` を付けない（実機の仕様）。config/paperqa.proxy.example.json をコピーして書き換えたものを指す。
+settings = "/home/u/celeris/paperqa/settings/proxy"
 paper_directory = "/home/u/celeris/paperqa/papers"
 index_directory = "/home/u/celeris/paperqa/index"
 # ADR-0063 Phase 109d C3 / Phase 109h: 対象ごとの問い + 総括の問いの上限（既定 10。比較先があるときは
@@ -74,9 +74,8 @@ index_directory = "/home/u/celeris/paperqa/index"
 # `research.json`/`report.md` に「max_asks の制限で問えなかった」対象として残る）。
 # max_asks = 10
 # LiteLLM 経由で OpenAI 互換の口に向ける。ADR-0053 D2（Phase 65）: celeris の LLM source プロキシ
-# （`[llm_proxy]`。既定 `127.0.0.1:18100`）に向ける。Qwen が落ちていれば celeris/standard は自動で
-# Claude/GPT のアカウントプールに倒れる（下の `model` も参照）。`OPENAI_API_KEY` は**プロキシの Bearer**
-# （`[api] token_file` の中身と同じ値。ダミーでは通らない — 直接 Qwen を叩いていた頃と違う点）。
+# （`[llm_proxy]`。既定 `127.0.0.1:18100`）に向ける。celeris/standard は Claude/GPT から選ぶ。`OPENAI_API_KEY` は**プロキシの Bearer**
+# （`[api] token_file` の中身と同じ値。ダミーでは通らない — 直接上流を叩く構成と違う点）。
 # `RES_OPTIONS` は、このホストで見つかった glibc の A/AAAA 並行送信の取りこぼし対策（ADR-0031 の実機記録。
 # 取得ランナーの名前解決が 5 秒待たされる症状が出たら効く）。
 # ADR-0063 D4（Phase 109。実機の事故: `acquire_input.json` に `OPENAI_API_KEY` の値が平文で残っていた
@@ -92,8 +91,8 @@ env = { OPENAI_API_KEY = "<[api] token_file と同じ値>", OPENAI_BASE_URL = "h
 # 重複排除（DOI / arXiv id / タイトル）後に残す候補の上限。**0 にすると取得の段そのものを行わない**
 # （手元の corpus だけで答える従来の使い方。このとき下の `evidence` も見ない）。
 max_candidates = 30
-# 1 run で corpus に入れる PDF の上限。**ローカル LLM で索引を作ると 1 本あたり数分かかる**ので、
-# Qwen をトンネル越しに使う構成では 3〜6 本程度から始めるとよい（索引は案件ごとに使い回される）。
+# 1 run で corpus に入れる PDF の上限。**遅い LLM で索引を作ると 1 本あたり数分かかる**ので、
+# 低速な LLM を使う構成では 3〜6 本程度から始めるとよい（索引は案件ごとに使い回される）。
 max_pdfs = 12
 # 検索語 1 本・エンジン 1 つあたりの取得件数（arXiv の `max_results` / OpenAlex の `per_page`）。
 per_query = 20
@@ -108,8 +107,8 @@ timeout_secs = 30
 # `false` にすると常に決定的な抽出だけを使う（Phase 34 までの挙動）。
 query_llm = true
 # 検索語を立てるモデル。省略すると `[[providers]] model`（`--llm`）→ 上の `settings` の `llm` の順。
-# LiteLLM の `provider/` 接頭辞は落として渡す（`openai/qwen3.8-27b` → `qwen3.8-27b`）。
-# query_model = "qwen3.8-27b"
+# LiteLLM の `provider/` 接頭辞は落として渡す（`openai/celeris/standard` → `celeris/standard`）。
+# query_model = "celeris/standard"
 # その 1 回の呼び出しのタイムアウト（秒）。ローカル LLM は遅いので余裕を持たせる。
 query_timeout_secs = 300
 # OpenAlex の `filter=`。省略すると `is_oa:true,primary_topic.field.id:17`
@@ -139,8 +138,10 @@ min_cited = 2
 insufficient_is_error = false
 
 [[providers]]
-id = "paperqa-qwen"
+id = "paperqa"
+kind = "adapter"
 adapter = "paperqa"
+llm_source = "celeris"
 tiers = ["standard"]
 concurrency = 1
 # 空でなければ `--llm` に渡す（PaperQA の設定ファイルの llm より優先。ADR-0027 D3）。空なら設定ファイルの値のまま。
@@ -150,6 +151,8 @@ model = "openai/celeris/standard"
 
 [[providers]]
 id = "local-fake"
+kind = "adapter"
+llm_source = "none"
 adapter = "fake"
 tiers = ["standard", "cheap"]
 concurrency = 2

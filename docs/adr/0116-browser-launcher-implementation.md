@@ -115,3 +115,25 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 
 - daemon が観測を `RuntimeFacts` に変換するとき、`listen_count` から CDP endpoint を推定しない。launcher の固定 runtime の CDP は `Pipe` とする。
 - launcher は `collect_facts` による netns 分離と `verify_isolation` を起動時と `isolation_ok` で検査する。daemon 側は `isolation_ok = false` を引き続き拒否する。host に露出する CDP TCP を許可する変更ではない。
+
+## 付記 D-P（2026-10-02、socket 起動での launcher の身元確認）
+
+背景: Attested task（01M3WV4BFJ71J9ZWJ020MP2Z4K）の host 実行で、daemon が launcher 接続の `SO_PEERCRED` を読むと uid 0 が返り、本番 admission の前提（launcher UID = `celeris-browser`）が成り立たなかった。launcher は systemd の socket 起動（`celeris-browser-launcher.socket`、`ListenStream=/run/celeris-browser/launcher.sock`、`Accept=no`）で動き、listen socket を `listen()` したのは systemd（root）である。Linux の `SO_PEERCRED` は、connect した側から見ると相手の socket が `listen()` された時点の資格情報を返すので、listen socket を受け継いだ launcher ではなく systemd を指す。daemon の判定は fail closed なので安全側には倒れるが、本番では機密能力を常に許可できない。
+
+決定: daemon 側（`browser_launcher::client::LauncherClient`）は launcher の身元を `SO_PEERCRED` ではなく、**応答に kernel が付ける `SCM_CREDENTIALS`** で確かめる。
+
+- client は接続に `SO_PASSCRED` を立てる。受け手が `SO_PASSCRED` を持つ AF_UNIX socket では、送り手が明示しなくても kernel が送信の時点の送り手の `{pid, uid, gid}`（thread group の pid と送り手の cred）を各 skb に付ける。送り手が明示的に `SCM_CREDENTIALS` を付ける場合も、kernel は自分の pid・自分の real/effective/saved uid 以外を拒否する（`CAP_SYS_ADMIN`/`CAP_SETUID` が無い限り。launcher は `celeris-browser` で動き、どちらも持たない）。値は受け手の pid/user namespace に変換される。
+- client は応答を読む前に `recvmsg(MSG_PEEK)` で先頭の skb の資格情報を覗き、frame はこれまでどおり読む。AF_UNIX stream は資格情報の違う skb を 1 回の読みにまとめないので、先頭 skb の値はその応答を書いた process のもの。全応答で送り手が同じであることを要求し、資格情報の無い応答・送り手の違う応答が 1 度でもあれば以後 `None`（fail closed）。
+- `LauncherSessionProof.launcher_uid` と `LauncherObservation.peer_uid` / `LauncherProofRegistration.peer_uid`（欄の名前は互換のため据え置く）は、この送り手の UID を指す。`verify_launcher_session` の照合規則（[ADR-0138](0138-browser-prod-admission-confidential-release.md) D-L。送り手の UID = 証明の UID = 設定上の launcher UID、root・daemon UID ではない）は変えない。
+- launcher（server）側の検査は変えない。daemon は自分で `connect()` するので、launcher が accept した接続の `SO_PEERCRED` は daemon を正しく指す。protocol の版も変えない（launcher の binary は protocol v3 のままでよい）。
+
+偽装への強さ: 値は kernel が送り手の process から採るもので、自己申告ではない。応答を書けるのは daemon の接続の相手側 FD を持つ process だけで、それは systemd が listen socket を渡した launcher（`User=celeris-browser`）である。root の systemd 自身が応答を書けば uid 0 になり拒否される。
+
+検討した代替案:
+
+- **`SO_PEERPIDFD`（kernel 6.5+）で pid を得て `/proc` で所有 uid を見る**: `SO_PEERPIDFD` も `SO_PEERCRED` と同じく listen した process（systemd、pid 1）を指すので、socket 起動では同じ問題が残る。
+- **systemd の `MainPID` の uid を確かめる**: D-Bus か `systemctl show` が要り、daemon の run namespace では bus を覆っている（ADR-0095）。MainPID と応答の送り手が同じ process である保証も別に要る。
+- **socket を launcher 自身が作る（socket 起動をやめる）**: `/run/celeris-browser/` の所有・`SocketUser=rmaeda` の mode を launcher が root 無しで再現できず、host 準備（`docs/ops/browser-launcher-host-setup.md`）と unit を作り直すことになる。daemon 側だけで直せる上の方法を採る。
+- **launcher が accept 後に明示的に `SCM_CREDENTIALS` を送る**: kernel の検証は同じだが protocol と launcher binary の変更が要る。暗黙に付く資格情報で足りるので採らない。
+
+試験: `browser_launcher::tests::client_identifies_the_responding_process_not_the_listener_creator` は socket 起動と同じ形（listen socket を作る process と、fork した子が accept して応答する）を作り、`SO_PEERCRED` が listen した process を指し、client の `responder()` が応答した子の pid を指すことを確かめる。`client_records_a_consistent_responder_across_requests` は in-process launcher の全応答で送り手が一致することを確かめる。host の実 session（`browser_launcher_ptrace.rs` の `launcher_chrome_denies_daemon_uid_ptrace`）は前提を「応答の `SCM_CREDENTIALS` の uid が `celeris-browser`」に置き換えた。host での再実行手順は `docs/ops/browser-launcher-admission-evidence-run.md`。

@@ -28,34 +28,16 @@ fn repair_scope_from_units<'a>(
 pub(super) const AUTO_RESOLVE_CHECK: &str = "auto_resolve";
 
 impl Dispatcher {
-    /// Record one notice per fixed pair of merge heads. A retry with the same heads is idempotent.
+    /// ADR parallel integration D4: 統合の依頼を追記事象として一件残す。同じ組の未回答依頼があれば追記しない
+    /// （再 tick で重ならない）。一般通知（notice）には書かない。受信箱の項目は事象から投影する。
     fn record_integration_request(
         &self,
         task: &Task,
         integ: &task_core::WorkUnitRow,
         request: &crate::auto_resolve::IntegrationRequest,
     ) -> Result<(), DispatchError> {
-        use task_core::feed::{NoticeEvent, NoticeKind, NoticeLink, NoticeTarget};
-        let id = format!("{}:{}:{}", task.id, request.target_sha, request.source_sha);
-        let title = format!("統合の依頼: {} / {}", integ.key, request.source_branch);
-        self.store.notice_record(&NoticeEvent {
-            source_key: format!("integration_request:{id}"),
-            kind: NoticeKind::BadNews,
-            group_key: format!("integration_request:{id}"),
-            title,
-            summary: request.to_markdown(),
-            project_id: task.project_id.as_ref().map(ToString::to_string),
-            task_id: Some(task.id.to_string()),
-            target: Some(NoticeTarget {
-                kind: "integration_request".into(),
-                id,
-            }),
-            links: vec![NoticeLink {
-                label: "Task".into(),
-                href: format!("/tasks/{}", task.id),
-            }],
-            at: OffsetDateTime::now_utc(),
-        })?;
+        self.store
+            .integration_request_record(task.id, request, &format!("phase:{}", integ.key))?;
         Ok(())
     }
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
@@ -572,7 +554,7 @@ impl Dispatcher {
         if let Some(conflict) = run.conflict.clone() {
             if let Some(request) = &conflict.request {
                 self.record_integration_request(&task, &integ, request)?;
-                return self.integration_needs_human(&task, &integ, &request.to_markdown());
+                return self.block_for_integration_request(&task, &integ);
             }
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
         }
@@ -884,16 +866,35 @@ impl Dispatcher {
         integ: &task_core::WorkUnitRow,
         why: &str,
     ) -> Result<(), DispatchError> {
-        self.integration_failure(task, integ, why, false)
+        self.integration_failure(task, integ, why)
     }
 
-    fn integration_needs_human(
+    /// The request event is the sole inbox item. Keep the integration WU blocked until its answer.
+    fn block_for_integration_request(
         &mut self,
         task: &Task,
         integ: &task_core::WorkUnitRow,
-        why: &str,
     ) -> Result<(), DispatchError> {
-        self.integration_failure(task, integ, why, true)
+        let mut row = integ.clone();
+        row.clear_lease();
+        row.updated_at = rfc3339(OffsetDateTime::now_utc());
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Question);
+        self.store.work_unit_transition(
+            task.id,
+            row,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: integ.status,
+                to: task_core::WorkUnitStatus::Blocked,
+                reason: "integration_request".to_string(),
+                run_id: None,
+            },
+        )?;
+        self.store
+            .apply_transition_with_events(task.id, Trigger::WorkerQuestion, vec![])?;
+        Ok(())
     }
 
     fn integration_failure(
@@ -901,10 +902,9 @@ impl Dispatcher {
         task: &Task,
         integ: &task_core::WorkUnitRow,
         why: &str,
-        force_human: bool,
     ) -> Result<(), DispatchError> {
         let replans_so_far = self.counted_replans(task.id)?;
-        let can_replan = !force_human && replans_so_far < self.effective_max_replans(task.id)?;
+        let can_replan = replans_so_far < self.effective_max_replans(task.id)?;
         let mut row = integ.clone();
         row.clear_lease();
         row.updated_at = rfc3339(OffsetDateTime::now_utc());

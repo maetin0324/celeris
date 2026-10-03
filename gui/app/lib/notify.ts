@@ -26,6 +26,8 @@ export const NOTIFY_KIND_LABEL: Record<NotificationKind, string> = {
   decision_requested: "人の決定を待っている",
   // celeris ADR-0079 D8（Phase R3b）: root の計画の承認待ち（その計画の決定を束ねる）。
   plan_approval: "計画の承認を待っている",
+  digest: "通知のまとめが届いた",
+  inbox_new: "受信箱に新しい判断待ちがある",
 };
 
 export function notifyKindLabel(kind: NotificationKind): string {

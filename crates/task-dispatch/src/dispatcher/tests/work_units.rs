@@ -1457,9 +1457,10 @@ async fn phase_gate_replan_requires_a_note() {
 }
 
 /// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に
-/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。
+/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。統合の依頼は追記事象 1 件で
+/// 残り（ADR parallel integration D4）、一般通知には載らない。
 #[tokio::test]
-async fn auto_resolve_code_conflict_creates_integration_notice() {
+async fn phase_integration_request_is_the_only_inbox_item() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -1482,21 +1483,101 @@ async fn auto_resolve_code_conflict_creates_integration_notice() {
     let stored = store.get(task.id).unwrap().unwrap();
     assert_eq!(stored.status, Status::Blocked, "{stored:?}");
     let units = store.work_units_for(task.id).unwrap();
+    let integ = units
+        .iter()
+        .find(|u| u.kind == task_core::WorkUnitKind::Integrate)
+        .expect("integration WU");
+    assert_eq!(integ.status, task_core::WorkUnitStatus::Blocked);
+    assert_eq!(
+        integ.blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::Question)
+    );
     assert!(
         !units
             .iter()
             .any(|u| u.kind == task_core::WorkUnitKind::Repair)
     );
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1, "{open:?}");
+    let Event::IntegrationRequested { request, origin } = &open[0].event else {
+        panic!("integration_requested を期待: {:?}", open[0].event);
+    };
+    assert_eq!(origin, &format!("phase:{}", integ.key));
+    assert!(
+        request.conflict_files.iter().any(|f| f == "README.md"),
+        "{request:?}"
+    );
+    let events = store.events_for(task.id).unwrap();
+    assert!(
+        events
+            .iter()
+            .all(|(_, event)| !matches!(event, Event::QuestionRaised { .. })),
+        "段の統合依頼は質問を追加しない: {events:?}"
+    );
+    assert!(
+        store
+            .approval_list(Some(true), None, None)
+            .unwrap()
+            .iter()
+            .all(|approval| approval.task_id != Some(task.id)),
+        "段の統合依頼は approval を作らない"
+    );
+    let ctx = task_ops::view::ViewContext {
+        workspace_root: PathBuf::from("/nonexistent"),
+        retry_backoff_base: Duration::ZERO,
+        retry_backoff_max: Duration::ZERO,
+        max_requeues: 5,
+        clusters: Default::default(),
+    };
+    let inbox = task_ops::human_inbox::human_inbox(
+        store.as_ref(),
+        None,
+        &ctx,
+        OffsetDateTime::now_utc(),
+        &|_, _| Vec::new(),
+        None,
+    )
+    .unwrap();
+    let for_task: Vec<_> = inbox
+        .items
+        .iter()
+        .filter(|item| item.task.as_ref().is_some_and(|t| t.id == task.id))
+        .collect();
+    assert_eq!(for_task.len(), 1, "{for_task:?}");
+    assert_eq!(
+        for_task[0].kind,
+        task_ops::human_inbox::InboxKind::IntegrationRequest
+    );
+    // 再 tick でも同じ両端の head の依頼は 1 件のまま。
+    run_until_idle(&mut d, 800).await;
+    assert_eq!(store.open_integration_requests().unwrap().len(), 1);
+    let inbox_after_tick = task_ops::human_inbox::human_inbox(
+        store.as_ref(),
+        None,
+        &ctx,
+        OffsetDateTime::now_utc(),
+        &|_, _| Vec::new(),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        inbox_after_tick
+            .items
+            .iter()
+            .filter(|item| item.task.as_ref().is_some_and(|t| t.id == task.id))
+            .count(),
+        1
+    );
     let notices = store
         .notice_list(&task_core::feed::NoticeQuery::default())
         .unwrap();
-    let notice = notices
-        .items
-        .iter()
-        .find(|n| n.title.contains("統合の依頼"))
-        .expect("notice");
-    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
-    assert!(notice.summary.contains("README.md"), "{}", notice.summary);
+    assert!(
+        notices.items.iter().all(|n| n
+            .target
+            .as_ref()
+            .is_none_or(|t| t.kind != "integration_request")),
+        "統合の依頼は一般通知に載せない"
+    );
 }
 
 /// ADR 2026-10-02-parallel-integration-auto-resolve: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の

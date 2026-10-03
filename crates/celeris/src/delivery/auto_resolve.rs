@@ -11,7 +11,7 @@
 use super::{MERGE_TIMEOUT, git_text, git_text_within, sha};
 use crate::config::Config;
 use std::path::{Path, PathBuf};
-use task_core::{Delivery, NoticeEvent, NoticeKind, NoticeTarget, StoreError, TaskStore};
+use task_core::{Delivery, StoreError, TaskStore};
 use task_dispatch::auto_resolve::{
     CommitIntent, ConflictKind, FileDiffStat, FileIntent, IntegrationRequest, Resolution,
     ResolutionAction, ResolveContext, SideIntent,
@@ -207,48 +207,30 @@ pub(super) fn fall_back(
     }
     match fallback {
         Fallback::NeedsHuman { request } => {
-            record_request(store, d, request, now)?;
+            record_request(store, d, request)?;
             Ok(true)
         }
         Fallback::LimitReached { attempts } => {
             let request =
                 limit_request(config, d, format!("main 追従の再試行上限 ({attempts} 回)"));
-            record_request(store, d, &request, now)?;
+            record_request(store, d, &request)?;
             Ok(true)
         }
         _ => Ok(false),
     }
 }
 
-/// 固定した両端の SHA が同じなら、再 tick でも同じ依頼になる。
+/// 同じ組の両端の SHA の未回答依頼があれば追記しない（再 tick でも 1 件のまま）。一般通知には書かない
+/// （ADR parallel integration D4）。
 pub(super) fn record_request(
     store: &dyn TaskStore,
     d: &Delivery,
     request: &IntegrationRequest,
-    now: OffsetDateTime,
 ) -> Result<(), StoreError> {
-    let id = format!(
-        "{}:{}:{}:{}",
-        d.task_id, request.target_sha, request.source_sha, request.reason
-    );
     let brief = format!("{} ({})", request.reason, request.conflict_files.join(", "));
     let mut next = d.clone();
     next.detail = format!("[needs-human] 統合の依頼: {brief}");
-    store.notice_record(&NoticeEvent {
-        source_key: format!("integration-request:{id}"),
-        kind: NoticeKind::Delivery,
-        group_key: format!("integration-request:{id}"),
-        title: "統合の依頼".into(),
-        summary: request.to_markdown(),
-        project_id: Some(d.project_id.to_string()),
-        task_id: Some(d.task_id.to_string()),
-        target: Some(NoticeTarget {
-            kind: "integration_request".into(),
-            id,
-        }),
-        links: Vec::new(),
-        at: now,
-    })?;
+    store.integration_request_record(d.task_id, request, "delivery")?;
     store.delivery_save(Some(d), &next)?;
     Ok(())
 }

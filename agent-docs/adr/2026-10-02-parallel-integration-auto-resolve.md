@@ -83,6 +83,26 @@ ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに
 
 依頼は ADR-0133 の **notice store** を通して保存・配信し、`target_kind = integration_request` と依頼 id を持つ専用種別として受信箱へ出す。ADR-0133 の既存の一般通知一覧には載せず、人の判断待ちの受信箱項目へ一対一で投影する。notice store に表示だけを正として任せず、依頼の未回答・回答済み状態を正として、回答時には受信箱から消す。既存の delivery detail には `[needs-human] 統合の依頼: <分類と対象の短い要約>` を記し、詳細の `IntegrationRequest` と証跡への参照を載せる。依頼の解決後に判断不要となった配送結果は ADR-0133 の `delivery` notice として出せるが、同じ依頼を受信箱と一般通知へ二重掲載しない。
 
+#### D4 付記: 受信箱への投影（実装対応）
+
+統合の依頼の保存・配信は、上記の notice store 案に代えて task の追記専用 `events` を正とする。配送と段の統合は `Event::IntegrationRequested`（type 名 `integration_requested`）を追記し、D4 の `IntegrationRequest` の全欄（`source_branch`、`source_sha`、`target_branch`、`target_sha`、`merge_base`、`conflict_files`、`intent`、`reason`、`recommendation`、`actions`、`candidate_sha`）と、発生元 `origin = delivery | phase:<integrate unit key>` を保存する。daemon と store に LLM 呼び出しは入れない。
+
+依頼 id は `<task>:<target_sha>:<source_sha>` とする。同じ task で同じ `source_sha`・`target_sha` の未回答依頼が既にあれば、新たな `IntegrationRequested` は追記せず、受信箱にも一件だけ出す。回答は `Event::IntegrationAnswered`（type 名 `integration_answered`）に依頼 id、`answer = integrated | declined | retry`、`note` を載せて追記する。回答済みの依頼は未回答の集合から外す。
+
+`task-ops` は未回答依頼を `AttentionItem` に一対一で投影し、`InboxKind::IntegrationRequest`（wire 名 `integration_request`）として `human_inbox` に出す。人の回答は既存の `POST /api/v1/inbox/items/{id}/answer` を通す。依頼の記録時に `notice_record` を呼ばないため、同じ依頼は ADR-0133 の一般通知一覧に載らない。未回答依頼の問い合わせには migration `0047` で `json_extract(json,'$.type') IN ('integration_requested', 'integration_answered')` の部分 index を追加し、`DeliverySkipped` の migration `0037` と同じ形で events 全体の走査を避ける。
+
+段の統合で人の判断が必要になったときは、統合 WU を `blocked(question)`、task を `blocked` にして止める。ただし、この依頼について `record_question_approval` と `QuestionRaised` は作らない。`blocked` の task から汎用の `question` が組み立てられる経路も、同じ task に未回答の `origin = phase:<統合 WU の key>` の依頼がある間は除外する。したがって判断待ちは `integration_request` の 1 項目だけになる。段の記録元は固定の `phase:merge` ではなく、たとえば `phase:integrate-core` のように実際の統合 WU の key を含める。回答側はこの origin で再開対象の WU を特定する。
+
+段の依頼への回答は `IntegrationAnswered` を追記して受信箱の項目を消すとともに、次のように停止を解く。回答の成功時には依頼だけが消えて task が止まったまま、または汎用 `question` が現れる中間状態を残さない。
+
+| 回答 | 段の統合での効果 |
+|---|---|
+| `integrated` | 人が統合した内容を再検査できるよう、該当の統合 WU の `blocked_reason` を消して `pending` に戻し、既存の質問回答と同じ `Trigger::Answer` で task を再開する。統合の gate は再実行する |
+| `retry` | 人の指示を回答に残し、該当の統合 WU を `pending` に戻して `Trigger::Answer` で task を再開し、統合を再試行する |
+| `declined` | この統合を見送る判断として、既存の task 停止（cancel）経路へ写す。統合 WU を再開しない |
+
+配送の依頼では、これらの回答は `IntegrationAnswered` による判断の記録と受信箱からの除去だけを行う。回答を契機に配送を自動再試行しない。配送の再試行は既存の `auto_resolve` と人の操作に任せる。
+
 ### D5. 再 review と gate
 
 自動解消した merge は種類にかかわらず、解消 commit を含む**候補 SHA を固定して gate を再実行**する。gate 成功の記録は旧 SHA から流用しない。再 review の要否は次の通り。

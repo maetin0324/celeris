@@ -23,7 +23,7 @@ use crate::error::OpsError;
 use crate::inbox::{AttentionItem, DraftGroup, EvidenceView, Inbox};
 use crate::view::{self, TaskRef, ViewContext};
 
-/// D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。
+/// D2: 受信箱の種類。宣言順が D2 の並びの固定順。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxKind {
@@ -40,11 +40,12 @@ pub enum InboxKind {
     Unroutable,
     ClusterLogin,
     DeliverySkipped,
+    IntegrationRequest,
     KnowledgeReview,
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 14] = [
+    pub const ALL: [InboxKind; 15] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -58,6 +59,7 @@ impl InboxKind {
         InboxKind::Unroutable,
         InboxKind::ClusterLogin,
         InboxKind::DeliverySkipped,
+        InboxKind::IntegrationRequest,
         InboxKind::KnowledgeReview,
     ];
 
@@ -76,6 +78,7 @@ impl InboxKind {
             InboxKind::Unroutable => "unroutable",
             InboxKind::ClusterLogin => "cluster_login",
             InboxKind::DeliverySkipped => "delivery_skipped",
+            InboxKind::IntegrationRequest => "integration_request",
             InboxKind::KnowledgeReview => "knowledge_review",
         }
     }
@@ -185,6 +188,7 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::PhaseCheckpoint { .. } => Some(InboxKind::PhaseGate),
         AttentionItem::PlanApproval { .. } => Some(InboxKind::PlanGate),
         AttentionItem::DeliverySkipped { .. } => Some(InboxKind::DeliverySkipped),
+        AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
     }
 }
 
@@ -949,6 +953,48 @@ impl Builder<'_> {
                 created_at: at.clone(),
                 links: Vec::new(),
             }),
+            AttentionItem::IntegrationRequest {
+                task,
+                request_id,
+                request,
+                at,
+            } => {
+                let mut detail = request.to_markdown();
+                if !request.conflict_files.is_empty() {
+                    detail.push_str("\n## 衝突 file\n");
+                    for path in &request.conflict_files {
+                        detail.push_str(&format!("- `{path}`\n"));
+                    }
+                }
+                if let Some(sha) = &request.candidate_sha {
+                    detail.push_str(&format!("\n- 候補 SHA: `{sha}`\n"));
+                }
+                self.finish(Draft {
+                    id: format!("integration_request-{}", id_part(request_id)),
+                    kind: InboxKind::IntegrationRequest,
+                    title: format!("統合の依頼: {}", task.title),
+                    detail: Some(detail),
+                    options: vec![
+                        opt(
+                            "integrated",
+                            "統合した",
+                            false,
+                            "統合済みとして回答を記録する",
+                        ),
+                        opt("declined", "見送る", false, "見送りとして回答を記録する"),
+                        opt("retry", "再試行する", false, "再試行として回答を記録する"),
+                    ],
+                    recommended: None,
+                    due_at: None,
+                    blocking: self.only_task(task),
+                    blocked_by: Vec::new(),
+                    native: None,
+                    project_id: self.project_of(task.id),
+                    task: Some(task.clone()),
+                    created_at: at.clone(),
+                    links: Vec::new(),
+                })
+            }
         })
     }
 

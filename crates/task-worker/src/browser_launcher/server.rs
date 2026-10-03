@@ -20,7 +20,7 @@ use nix::libc;
 
 use super::protocol::{
     ActionArgs, ErrorCode, Observation, Outcome, Receipt, Request, Response, SessionBinding,
-    SessionFacts, SessionPolicy, SessionState, Verb, decode_request,
+    SessionFacts, SessionPolicy, SessionState, Verb, decode_request, write_message,
 };
 use super::registry::{Registry, SessionRecord, stop_group};
 use super::{now_unix_ms, random_id};
@@ -298,7 +298,7 @@ fn admit(inner: &Arc<Inner>, mut stream: UnixStream) {
     if inner.connections.fetch_add(1, Ordering::SeqCst) >= limits.max_connections {
         inner.connections.fetch_sub(1, Ordering::SeqCst);
         let _ = stream.set_write_timeout(Some(limits.request_read));
-        let _ = write_credentialed_response(
+        let _ = write_message(
             &mut stream,
             &Response::Error {
                 code: ErrorCode::Limit,
@@ -364,65 +364,11 @@ fn serve_conn(inner: &Arc<Inner>, mut stream: UnixStream, peer: &Peer) {
             Ok(req) => (handle(inner, req, peer), false),
             Err(code) => (Response::Error { code }, true),
         };
-        if write_credentialed_response(&mut stream, &resp, limits.max_frame).is_err() || close {
+        if write_message(&mut stream, &resp, limits.max_frame).is_err() || close {
             let _ = stream.flush();
             return;
         }
     }
-}
-
-/// Send the first frame byte with the credentials of the process that actually answered.
-/// The remaining bytes use the ordinary stream write path.
-pub(super) fn write_credentialed_response(
-    stream: &mut UnixStream,
-    response: &Response,
-    max: usize,
-) -> Result<(), super::protocol::FrameError> {
-    use super::protocol::FrameError;
-    let body =
-        serde_json::to_vec(response).map_err(|e| FrameError::Io(std::io::Error::other(e)))?;
-    if body.len() > max {
-        return Err(FrameError::TooLarge(body.len()));
-    }
-    let len = u32::try_from(body.len()).map_err(|_| FrameError::TooLarge(body.len()))?;
-    let header = len.to_be_bytes();
-    let space = unsafe { libc::CMSG_SPACE(std::mem::size_of::<libc::ucred>() as u32) } as usize;
-    let mut control = vec![0usize; space.div_ceil(std::mem::size_of::<usize>())];
-    let mut iov = libc::iovec {
-        iov_base: header.as_ptr().cast_mut().cast(),
-        iov_len: 1,
-    };
-    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
-    msg.msg_iov = &mut iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = control.as_mut_ptr().cast();
-    msg.msg_controllen = space;
-    // SAFETY: control is aligned and sized for one ucred ancillary message.
-    unsafe {
-        let cmsg = libc::CMSG_FIRSTHDR(&msg);
-        if cmsg.is_null() {
-            return Err(FrameError::Io(std::io::Error::other(
-                "SCM_CREDENTIALS buffer",
-            )));
-        }
-        (*cmsg).cmsg_level = libc::SOL_SOCKET;
-        (*cmsg).cmsg_type = libc::SCM_CREDENTIALS;
-        (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::ucred>() as u32) as usize;
-        let cred = libc::ucred {
-            pid: libc::getpid(),
-            uid: libc::getuid(),
-            gid: libc::getgid(),
-        };
-        std::ptr::write_unaligned(libc::CMSG_DATA(cmsg).cast::<libc::ucred>(), cred);
-        match libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL) {
-            1 => {}
-            0 => return Err(FrameError::Io(std::io::ErrorKind::WriteZero.into())),
-            _ => return Err(FrameError::Io(std::io::Error::last_os_error())),
-        }
-    }
-    stream.write_all(&header[1..])?;
-    stream.write_all(&body)?;
-    Ok(())
 }
 
 fn receipt(

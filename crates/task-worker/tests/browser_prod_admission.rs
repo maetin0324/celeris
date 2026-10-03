@@ -1,7 +1,7 @@
-//! 本番 identity 復元 admission（`RestoreAdmission::Attested`）の判定（ADR-0116）。
+//! 本番 identity 復元 admission（`RestoreAdmission::Attested`）の判定（ADR-0138）。
 //!
 //! 別 UID・userns owner が daemon でない（ptrace 拒否、ADR-0115 launcher 経由）検証済み隔離
-//! session で、かつ launcher の session 証明（ADR-0116 D-L）を検証できたときだけ通す。
+//! session で、かつ launcher の session 証明（ADR-0138 D-L）を検証できたときだけ通す。
 //! 証明なし・証明の検証失敗・SameUid・非隔離・owner=daemon・owner 不明は拒否する。
 
 use task_core::browser_isolation::{
@@ -49,7 +49,7 @@ fn proof() -> LauncherSessionProof {
     }
 }
 
-/// daemon 自身が採った照合値（`SO_PEERCRED`・設定・`/proc/<pid>/stat`）。
+/// daemon 自身が採った照合値（応答の `SCM_CREDENTIALS`・設定・`/proc/<pid>/stat`）。
 fn seen() -> LauncherObservation {
     LauncherObservation {
         session_id: "prod-s1".into(),

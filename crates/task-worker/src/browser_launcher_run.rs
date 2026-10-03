@@ -48,7 +48,7 @@ pub(crate) struct LauncherRuntime {
     client: Mutex<LauncherClient>,
     session_id: String,
     lease_id: String,
-    /// daemon 側で照合できた launcher の session 証明（ADR-0116 D-L）。照合に失敗したら `None`。
+    /// daemon 側で照合できた launcher の session 証明（ADR-0138 D-L）。照合に失敗したら `None`。
     proof: Option<LauncherSessionProof>,
     stopped: std::sync::atomic::AtomicBool,
 }
@@ -76,7 +76,7 @@ impl LauncherRuntime {
             .start_session(task_id, run_id, &lease_id, policy)
             .map_err(|_| UNAVAILABLE)?;
         let ids = DaemonIds::current();
-        let proof = launcher_session_proof(&started, client.peer_uid(), &ids);
+        let proof = launcher_session_proof(&started, client.responder_uid(), &ids);
         let runtime = Self {
             client: Mutex::new(client),
             session_id: started.session_id.clone(),
@@ -177,16 +177,16 @@ fn live_starttime(pid: i32) -> Option<u64> {
 }
 
 /// launcher の `Started` 応答を daemon 自身の観測と照合し、通ったときだけ
-/// [`LauncherSessionProof`] を組む（ADR-0116 D-L、fail closed）。次のどれかなら `None`:
+/// [`LauncherSessionProof`] を組む（ADR-0138 D-L、fail closed）。次のどれかなら `None`:
 /// receipt に束縛が無い（v1 の launcher）・束縛に 6 つの namespace の inode が揃っていない
 /// （v2 の launcher）・receipt と応答の session / instance が食い違う・
-/// launcher の `isolation_ok` が偽・応答の `SCM_CREDENTIALS` を採れない・pid の process が無い（zombie を含む）・
+/// launcher の `isolation_ok` が偽・応答の送り手（`SCM_CREDENTIALS`、ADR-0116 付記 D-P）を採れない・pid の process が無い（zombie を含む）・
 /// `/proc/<pid>/stat` の starttime が束縛と違う・owner UID が不明か daemon の UID。
 /// 欠けた値を安全そうな値で埋めることはしない。launcher UID の設定値との照合は admission 側
 /// （`verify_launcher_session`）が行う。
 pub(crate) fn launcher_session_proof(
     started: &StartedSession,
-    launcher_uid: Option<u32>,
+    peer_uid: Option<u32>,
     daemon: &DaemonIds,
 ) -> Option<LauncherSessionProof> {
     let r = &started.receipt;
@@ -206,7 +206,7 @@ pub(crate) fn launcher_session_proof(
     {
         return None;
     }
-    let launcher_uid = launcher_uid?;
+    let launcher_uid = peer_uid?;
     let owner = binding.ns_owner_uid?;
     if owner == daemon.uid {
         return None;

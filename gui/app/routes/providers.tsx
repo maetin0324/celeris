@@ -2,7 +2,7 @@ import { useState } from "react";
 import { data, type FetcherWithComponents, isRouteErrorResponse, useFetcher } from "react-router";
 import type { ProviderActionResult } from "~/celeris/action-types";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
-import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
+import { CelerisError, type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import { formString } from "~/celeris/forms";
 import {
   buildProviderCreateInput,
@@ -12,7 +12,7 @@ import {
   deleteProvider,
   patchProvider,
 } from "~/celeris/providers-admin.server";
-import type { Providers, ProviderView, Tier } from "~/celeris/types";
+import type { LlmSourcesView, LlmSourceView, Providers, ProviderView, Tier } from "~/celeris/types";
 import { ProviderActionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
@@ -23,6 +23,15 @@ import { checkboxClass, chipLabelClass, hintClass, inputClass, labelClass, selec
 import { Icon } from "~/components/ui/Icon";
 import { Alert, DataItem, EmptyState, Mono, PageHeader, SectionTitle } from "~/components/ui/misc";
 import type { Tone } from "~/components/ui/tone";
+import {
+  llmSourceOriginLabel,
+  providerLlmSourceDisplay,
+  sourceKindLabel,
+  sourceLabel,
+  sourceStatusWord,
+  sourceTierScopeNote,
+  tiersResolvingTo,
+} from "~/lib/llm-sources";
 import { isTransientStatus } from "~/lib/recovery";
 import { revalidateAfterActionErrors } from "~/lib/revalidate";
 import { formatDuration, secondsBetween } from "~/lib/time-delta";
@@ -34,17 +43,32 @@ import type { Route } from "./+types/providers";
  * `Providers.items[]`（`ProviderView`）をそのまま表にする（docs/adr/0007 D7）。
  * cooldown の残り時間だけは celeris が値を返さないので、BFF 自身がリクエスト前後に取った
  * `fetchedAt`（ISO 文字列）を基準に画面側で減算する（docs/adr/0007 D3）。
+ * ADR-0132 D6: `Providers.items[]` は adapter / harness の実行枠で、モデルの供給元（LLM source）は
+ * 別の節に出す。供給元の正本は `GET /llm/sources`（`/accounts` の「LLM source」節と同じ）。
+ * `[llm_proxy]` が無効（409 `llm_proxy_unavailable`）・取得失敗のときは `llmSources` を `null` にし、
+ * 実行枠の一覧だけを出す（供給元の節が取れないことで画面全体を落とさない）。
  */
 export interface ProvidersData {
   providers: Providers;
+  llmSources: LlmSourcesView | null;
+  llmSourcesUnavailable: boolean;
   fetchedAt: string;
 }
 
-/** `GET /providers` を呼ぶ。応答はそのまま返す（派生の集計はしない）。 */
+/** `GET /providers` と `GET /llm/sources` を呼ぶ。応答はそのまま返す（派生の集計はしない）。 */
 export async function loadProviders(client: CelerisClient, request: Request): Promise<ProvidersData> {
   const providers = await client.get<Providers>("/providers", { signal: request.signal });
+  let llmSources: LlmSourcesView | null = null;
+  let llmSourcesUnavailable = false;
+  try {
+    llmSources = await client.get<LlmSourcesView>("/llm/sources", { signal: request.signal });
+  } catch (e) {
+    if (e instanceof CelerisError && e.status === 409 && e.code === "llm_proxy_unavailable") {
+      llmSourcesUnavailable = true;
+    }
+  }
   const fetchedAt = new Date().toISOString();
-  return { providers, fetchedAt };
+  return { providers, llmSources, llmSourcesUnavailable, fetchedAt };
 }
 
 // 409 / 422 の action 後も再検証する（docs/adr/0005 D2）。追加・変更・削除の後の一覧更新にも要る。
@@ -97,7 +121,7 @@ const TIER_OPTIONS: Tier[] = ["frontier", "standard", "cheap"];
 export const ADAPTER_OPTIONS = ["fake", "claude-code", "codex", "acp", "paperqa", "local-deep-research"] as const;
 
 export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
-  const { providers, fetchedAt } = loaderData;
+  const { providers, llmSources, llmSourcesUnavailable, fetchedAt } = loaderData;
   // celeris の SSE（daemon tick）で自動再検証が走るたびに loader の再取得が起きる（`useCelerisStream`）。
   // 通常の `<Form>` の `actionData` はその再検証のたびに消えてしまう（React Router の仕様）ので、
   // 追加・編集・削除・疎通確認は 1 つの `useFetcher()` にまとめ、その `fetcher.data` を表示する
@@ -116,15 +140,19 @@ export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
             <HelpLink anchor="screens" label="画面ごとの説明" />
           </>
         }
-        description="Claude／GPT の階層と実行モデルを設定します。ログイン・認証情報はアカウント画面で管理し、ここでは参照するアカウントを選びます。"
+        description="adapter / harness の実行枠（claude-code・codex・acp・paperqa・langmem・ldr など）と、それが使う LLM source（Claude OAuth・Codex OAuth・OpenAI 互換の Qwen など）を分けて示します。ログイン・認証情報はアカウント画面で管理します。"
       />
 
       <ProviderActionFlash result={fetcher.data} />
 
       <section aria-labelledby="providers-heading" data-testid="providers-section" className="space-y-4">
         <SectionTitle icon="cpu" id="providers-heading" count={providers.items.length}>
-          プロバイダ一覧
+          adapter / harness の実行枠
         </SectionTitle>
+        <p className={hintClass}>
+          道具（adapter）ごとの実行枠です。各枠の「LLM source」は、その道具がどの供給元のモデルを使うかを示します。
+          <Mono className="text-xs">celeris/&lt;tier&gt;</Mono> は実行時に proxy が供給元を選ぶ抽象モデルです。
+        </p>
         {providers.items.length === 0 ? (
           <EmptyState icon="cpu" title="プロバイダがありません" />
         ) : (
@@ -135,6 +163,8 @@ export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
           </div>
         )}
       </section>
+
+      <LlmSourcesOverview llmSources={llmSources} unavailable={llmSourcesUnavailable} />
 
       <section aria-labelledby="provider-add-heading" className="space-y-4">
         <SectionTitle icon="plus" id="provider-add-heading">
@@ -224,6 +254,110 @@ export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
   );
 }
 
+/** 実行枠の `llm_source` 参照（ADR-0132 D6）。`celeris` は固定の Qwen ではなく実行時の選択と示す。 */
+export function ProviderLlmSourceItem({ item }: { item: ProviderView }) {
+  const display = providerLlmSourceDisplay(item.llm_source);
+  const origin = llmSourceOriginLabel(display.origin);
+  return (
+    <DataItem label="LLM source" wide>
+      <span data-testid="provider-llm-source" data-source-ref={item.llm_source?.source ?? ""}>
+        {display.label}
+      </span>
+      {origin && (
+        <Badge tone="neutral" className="ml-2" data-testid="provider-llm-source-origin">
+          {origin}
+        </Badge>
+      )}
+      {display.note && (
+        <span className="block text-sm text-fg-subtle" data-testid="provider-llm-source-note">
+          {display.note}
+        </span>
+      )}
+    </DataItem>
+  );
+}
+
+/**
+ * 「LLM source」節（ADR-0132 D6）: `GET /llm/sources` の供給元を、実行枠とは別に種類・ID・到達性・
+ * 今どの `celeris/<tier>` の解決先かで示す。残量・cooldown などの詳細は `/accounts#llm-sources`。
+ */
+export function LlmSourcesOverview({
+  llmSources,
+  unavailable,
+}: {
+  llmSources: LlmSourcesView | null;
+  unavailable: boolean;
+}) {
+  return (
+    <section aria-labelledby="provider-llm-sources-heading" data-testid="provider-llm-sources" className="space-y-4">
+      <SectionTitle icon="server" id="provider-llm-sources-heading" count={llmSources?.sources.length}>
+        LLM source
+      </SectionTitle>
+      <p className={hintClass}>
+        モデルを供給するものです。Qwen などの OpenAI 互換源は <Mono className="text-xs">celeris/cheap</Mono>{" "}
+        にだけ使われ、frontier / standard は Claude / GPT から選ばれます。残量と cooldown は{" "}
+        <a href="/accounts#llm-sources" className="underline">
+          アカウント画面
+        </a>
+        で確かめます。
+      </p>
+      {!llmSources ? (
+        <EmptyState
+          icon="server"
+          title={unavailable ? "[llm_proxy] が設定されていません" : "LLM source を取得できませんでした"}
+        />
+      ) : llmSources.sources.length === 0 ? (
+        <EmptyState icon="server" title="供給元がありません" />
+      ) : (
+        <div className="grid items-start gap-4 xl:grid-cols-2">
+          {llmSources.sources.map((source) => (
+            <LlmSourceSummaryCard key={source.id} source={source} llmSources={llmSources} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LlmSourceSummaryCard({ source, llmSources }: { source: LlmSourceView; llmSources: LlmSourcesView }) {
+  const statusWord = sourceStatusWord(source);
+  const tone: Tone = statusWord === "reachable" ? "success" : statusWord === "unreachable" ? "danger" : "neutral";
+  const tiers = tiersResolvingTo(source.id, llmSources.celeris_tiers);
+  const scope = sourceTierScopeNote(source.kind);
+  return (
+    <Card data-testid="provider-llm-source-row" data-source-id={source.id} className="min-w-0">
+      <CardHeader
+        icon="server"
+        tone={tone}
+        title={<span className="break-all">{sourceLabel(source.id)}</span>}
+        description={<Mono className="break-all text-xs text-fg-subtle">{source.id}</Mono>}
+        actions={
+          <Badge tone={tone} dot data-testid="provider-llm-source-status">
+            {statusWord}
+          </Badge>
+        }
+      />
+      <CardBody className="space-y-2">
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          <DataItem label="種類">
+            <span data-testid="provider-llm-source-kind">{sourceKindLabel(source.kind)}</span>
+          </DataItem>
+          <DataItem label="今の解決先の tier">
+            <span data-testid="provider-llm-source-tiers">
+              {tiers.length > 0 ? tiers.map((t) => `celeris/${t}`).join(", ") : "-"}
+            </span>
+          </DataItem>
+        </dl>
+        {scope && (
+          <p className="text-sm text-fg-subtle" data-testid="provider-llm-source-scope">
+            {scope}
+          </p>
+        )}
+      </CardBody>
+    </Card>
+  );
+}
+
 function cnField(base: string, extra?: string): string {
   return extra ? `${base} mt-1.5 min-h-11 min-w-0 ${extra}` : `${base} mt-1.5 min-h-11 min-w-0 w-full`;
 }
@@ -248,9 +382,7 @@ function ProviderCard({
         icon="cpu"
         tone={tone}
         title={<Mono className="text-sm font-semibold text-fg">{item.id}</Mono>}
-        description={
-          item.adapter === "codex" ? "GPT (Codex)" : item.adapter === "claude-code" ? "Claude" : item.adapter
-        }
+        description={<span data-testid="provider-adapter">adapter: {item.adapter}</span>}
         actions={
           <>
             {item.account_pool && (
@@ -276,6 +408,7 @@ function ProviderCard({
             </div>
           </DataItem>
           <DataItem label="concurrency">{item.concurrency}</DataItem>
+          <ProviderLlmSourceItem item={item} />
           <DataItem label="旧設定の共通モデル">{item.model ?? "-"}</DataItem>
           <DataItem label="認証アカウント" wide>
             {item.account_pool

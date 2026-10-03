@@ -191,7 +191,7 @@ async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal(
             drop(w);
         });
         let reply = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(std::time::Duration::from_secs(60))
             .expect("browser answered over CDP pipe");
         assert!(reply.contains("\"id\":1"), "{reply}");
     }

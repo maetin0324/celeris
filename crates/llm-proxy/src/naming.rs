@@ -1,4 +1,5 @@
-//! モデル名の抽象（ADR-0053 D1）。`celeris/<tier>` / `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>` と、
+//! モデル名の抽象（ADR-0053 D1、ADR-0132 D3）。`celeris/<tier>` / `claude/<tier>` /
+//! `gpt/<tier>` / `qwen/cheap` と、
 //! 供給元を明示した素通り（`claude:claude-sonnet-5`）。判断（選択）は `crate::selection` にある。
 
 use task_core::Tier;
@@ -34,7 +35,7 @@ pub enum SourceScope {
 /// 解析されたモデル要求。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModelRequest {
-    /// `celeris/<tier>` / `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`。
+    /// `celeris/<tier>` / `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`。
     Tiered { scope: SourceScope, tier: Tier },
     /// `<source>:<concrete-model>`。tier 写像を経由せず、その供給元へそのまま渡す。
     Explicit { source: SourceKind, model: String },
@@ -48,6 +49,8 @@ pub enum ModelNameError {
     Unknown(String),
     #[error("unknown tier {1:?} for {0}: use frontier | standard | cheap")]
     UnknownTier(String, String),
+    #[error("{0} is unavailable: Qwen supports only the cheap tier")]
+    UnsupportedQwenTier(String),
 }
 
 fn parse_tier(s: &str) -> Option<Tier> {
@@ -103,6 +106,9 @@ pub fn parse_model(name: &str) -> Result<ModelRequest, ModelNameError> {
             rest.to_string(),
         ));
     };
+    if scope == SourceScope::Only(SourceKind::Qwen) && tier != Tier::Cheap {
+        return Err(ModelNameError::UnsupportedQwenTier(name.to_string()));
+    }
     Ok(ModelRequest::Tiered { scope, tier })
 }
 
@@ -157,5 +163,16 @@ mod tests {
         assert!(parse_model("gpt-4").is_err());
         assert!(parse_model("celeris/ultra").is_err());
         assert!(parse_model("mistral/cheap").is_err());
+    }
+
+    #[test]
+    fn cheap_only_qwen_tier_names_reject_frontier_and_standard() {
+        for name in ["qwen/frontier", "qwen/standard"] {
+            assert!(matches!(
+                parse_model(name),
+                Err(ModelNameError::UnsupportedQwenTier(_))
+            ));
+        }
+        assert!(parse_model("qwen:concrete-model").is_ok());
     }
 }

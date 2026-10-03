@@ -830,7 +830,7 @@ impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
 /// identity 復元の隔離 admission（ADR-0114 D2）。production は [`RestoreAdmission::Attested`] だけ。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RestoreAdmission {
-    /// `verify_isolation` の全条件に加え、launcher の session 証明（ADR-0116 D-L）を
+    /// `verify_isolation` の全条件に加え、launcher の session 証明（ADR-0138 D-L）を
     /// `verify_launcher_session` で検証できたときだけ attestation を出す。証明が無い runtime
     /// （daemon が直に起動した bwrap を含む）は owner 検査に通っても拒否する（fail closed）。
     #[default]
@@ -849,7 +849,7 @@ impl RestoreAdmission {
         self.admit_launched(facts, None)
     }
 
-    /// launcher の session 証明と daemon 自身の照合値を添えて判定する（ADR-0116 D-L）。
+    /// launcher の session 証明と daemon 自身の照合値を添えて判定する（ADR-0138 D-L）。
     /// `Attested` は `verify_launcher_session` を通ったときだけ attestation を返す。
     pub fn admit_launched(
         self,

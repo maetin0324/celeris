@@ -3402,6 +3402,21 @@
       ],
       "type": "object"
     },
+    "CommitIntent": {
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "subject"
+      ],
+      "type": "object"
+    },
     "Confidence": {
       "description": "ADR-0047 D1 / D4。",
       "enum": [
@@ -3544,6 +3559,16 @@
         "api"
       ],
       "type": "object"
+    },
+    "ConflictKind": {
+      "enum": [
+        "Record",
+        "Migration",
+        "Adr",
+        "Generated",
+        "Code"
+      ],
+      "type": "string"
     },
     "ConsoleBlock": {
       "description": "Console の 1 ブロック（ADR-0048 D1 の 8 種 + 予約の `knowledge`）。\n`at` は RFC 3339、`cursor` はそのブロックの位置（`since` にそのまま渡せる）。",
@@ -7933,6 +7958,55 @@
           "type": "object"
         },
         {
+          "description": "ADR parallel integration D4: 統合の依頼。状態は変えない。",
+          "properties": {
+            "origin": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/IntegrationRequest"
+            },
+            "type": {
+              "const": "integration_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request",
+            "origin"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR parallel integration D4: 人が依頼に回答した監査事象。",
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "note": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_answered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -9131,6 +9205,44 @@
       ],
       "type": "object"
     },
+    "FileDiffStat": {
+      "properties": {
+        "added": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deleted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "FileIntent": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SideIntent"
+        },
+        "target": {
+          "$ref": "#/$defs/SideIntent"
+        }
+      },
+      "required": [
+        "path",
+        "target",
+        "source"
+      ],
+      "type": "object"
+    },
     "GateSignal": {
       "description": "D13: 当たった信号 1 件（規則表の行、または強制規則・対象外規則）。",
       "properties": {
@@ -9998,6 +10110,70 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationRequest": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ResolutionAction"
+          },
+          "type": "array"
+        },
+        "candidate_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conflict_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "intent": {
+          "items": {
+            "$ref": "#/$defs/FileIntent"
+          },
+          "type": "array"
+        },
+        "merge_base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        },
+        "source_branch": {
+          "type": "string"
+        },
+        "source_sha": {
+          "type": "string"
+        },
+        "target_branch": {
+          "type": "string"
+        },
+        "target_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_branch",
+        "target_sha",
+        "source_branch",
+        "source_sha",
+        "conflict_files",
+        "intent",
+        "reason",
+        "recommendation",
+        "actions"
+      ],
+      "type": "object"
     },
     "IntegrationState": {
       "description": "取り込みの行方（ADR-0043 D5）。",
@@ -16564,6 +16740,25 @@
       ],
       "type": "object"
     },
+    "ResolutionAction": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConflictKind"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "detail"
+      ],
+      "type": "object"
+    },
     "ResolvedLlmSource": {
       "properties": {
         "origin": {
@@ -18347,6 +18542,44 @@
         "classifier",
         "lane",
         "confidence"
+      ],
+      "type": "object"
+    },
+    "SideIntent": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commits": {
+          "items": {
+            "$ref": "#/$defs/CommitIntent"
+          },
+          "type": "array"
+        },
+        "diffstat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileDiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "unavailable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "branch",
+        "path",
+        "commits"
       ],
       "type": "object"
     },

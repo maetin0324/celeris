@@ -136,6 +136,36 @@ fn tree_event_types_match_their_serde_names() {
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
     assert!(EVENT_TYPES.contains(&"decision_requested"));
+    for event in [
+        Event::IntegrationRequested {
+            request: Box::new(task_core::integration_request::IntegrationRequest {
+                target_branch: "main".into(),
+                target_sha: "target".into(),
+                source_branch: "feature".into(),
+                source_sha: "source".into(),
+                merge_base: None,
+                conflict_files: Vec::new(),
+                intent: Vec::new(),
+                reason: "conflict".into(),
+                recommendation: "review".into(),
+                actions: Vec::new(),
+                candidate_sha: None,
+            }),
+            origin: "delivery".into(),
+        },
+        Event::IntegrationAnswered {
+            request_id: "task:target:source".into(),
+            answer: "integrated".into(),
+            note: None,
+        },
+    ] {
+        let serde_name = serde_json::to_value(&event).unwrap()["type"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name.as_str()));
+    }
 }
 
 /// ADR-0090 D3: クラスタ job の wait の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致し、
@@ -193,5 +223,5 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 50);
+    assert_eq!(EVENT_TYPES.len(), 52);
 }

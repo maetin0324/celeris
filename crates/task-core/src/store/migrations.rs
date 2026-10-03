@@ -81,14 +81,18 @@ pub(crate) const MIGRATION_0037: &str =
     include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
 /// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor`（通知の既読と束ね）。
 pub(crate) const MIGRATION_0041: &str = include_str!("../../migrations/0041_feed_notices.sql");
+/// ADR-0131 D1: 定期実行（`cron_jobs`）と実行履歴（`cron_job_runs`）。
+/// （ブランチの 0039 を main の 0041 と並列開発 task の 0042〜0045 の後へ振り直し。）
+pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron_jobs.sql");
+/// ADR-0133 D4 付記: `idx_events_integration_request`（統合の依頼の受信箱投影を絞る部分 index）。
 pub(crate) const MIGRATION_0047: &str =
     include_str!("../../migrations/0047_events_integration_request_index.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
-/// 0039 cron_jobs / write_sets、0040 behind_targets、0042〜0046 は並行ブランチで使用中）。
+/// 0039 write_sets、0040 behind_targets、0042〜0045 review-sync 系）。
 /// `migrate` は飛ばし、`schema_migrations` にも記録しない。統合で本物の
 /// migration が入ったら、ここから外して `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 42, 43, 44, 45, 46];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 42, 43, 44, 45];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
@@ -135,6 +139,7 @@ impl SqliteStore {
             36 => Ok(MIGRATION_0036),
             37 => Ok(MIGRATION_0037),
             41 => Ok(MIGRATION_0041),
+            46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"

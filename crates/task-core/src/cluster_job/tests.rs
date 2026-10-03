@@ -370,7 +370,7 @@ fn a_satisfied_wait_resumes_the_task() {
 }
 
 /// ADR-0090 D2: migration 0034 は schema 33 の DB に `cluster_job_waits` を足し（既存の表・行には触れない）、
-/// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037 も続けて当たり、最新版になる）。
+/// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037・通知の 0041・cron の 0046 も続けて当たり、最新版になる）。
 #[test]
 fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     use crate::TaskStore;
@@ -390,6 +390,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP TABLE browser_control_actions; DROP TABLE browser_identities; \
              ALTER TABLE browser_waits DROP COLUMN trusted_login_json; \
              DROP INDEX idx_events_delivery_skipped; \
+             DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP INDEX idx_events_integration_request; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )

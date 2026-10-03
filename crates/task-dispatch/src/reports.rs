@@ -144,6 +144,11 @@ pub(crate) fn record_run_report(
     }
     let level = report::level_of(&org, assignee);
     let report = match terminal {
+        TerminalReport::Done { .. } if task_ops::knowledge_curation::is_curation_task(task) => {
+            // ADR-0131 付記 D10 (6): 日次整理 task の報告は daemon が検証後に `daily-summary.md` から 1 件だけ作る
+            // （`celeris::knowledge_curation`）。ここで作ると 1 日 2 件になる。
+            return Ok(None);
+        }
         TerminalReport::Done { summary, evidence } => {
             let artifacts = artifacts_of_run(store, task.id, run_id)?;
             // まとめの run なら、objective に載せた子の報告（= このタスクを作った時点で

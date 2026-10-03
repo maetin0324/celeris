@@ -19,6 +19,15 @@
 # ---- 場所 ------------------------------------------------------------------
 
 CELERIS_CONFIG_DIR="${CELERIS_CONFIG_DIR:-$HOME/.config/celeris}"
+# ADR-0136: unit と同じ根を使う（unit は `EnvironmentFile=-%h/.config/celeris/paths.env`）。人が素の
+# shell で promote.sh を起こしたときに読まないと、home 側の current だけを書き換え、daemon が見る
+# $CELERIS_STATE_DIR/current は古いまま残る（2026-10-03、再起動で promotion gate が拒否して停止した）。
+if [ -z "${CELERIS_STATE_DIR:-}" ] && [ -f "$CELERIS_CONFIG_DIR/paths.env" ]; then
+  set -a
+  # shellcheck source=/dev/null
+  . "$CELERIS_CONFIG_DIR/paths.env"
+  set +a
+fi
 CELERIS_STATE_DIR="${CELERIS_STATE_DIR:-$HOME/.local/celeris}"
 # `SD_REPO` を要るのは `release.sh`（作業ツリーを生やす）だけ。`verify.sh` / `promote.sh` /
 # `rollback.sh` / `status.sh` は上の 2 つの下だけを見るので、作業チェックアウトが無くても動く。

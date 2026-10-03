@@ -3036,6 +3036,7 @@ mod build_cache;
 mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;
+mod cron_jobs;
 mod git_workspace;
 mod planning_and_gate;
 mod provider_and_retry;

@@ -282,6 +282,12 @@ mod tests {
 
     #[test]
     fn real_namespace_when_host_is_ready() {
+        // 実 unshare(CLONE_NEWUSER) を試すので userns opt-in の gate に入れる（ADR-0126 B）。
+        if std::env::var("CELERIS_LAUNCHER_TESTS").as_deref() != Ok("require")
+            && crate::test_support::skip_unless_userns_tests()
+        {
+            return;
+        }
         match create() {
             Ok(ns) => {
                 assert!(ns.as_raw_fd() >= 0);

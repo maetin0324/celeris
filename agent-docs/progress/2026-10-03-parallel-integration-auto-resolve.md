@@ -71,3 +71,9 @@ cmd = ["env", "UPDATE_SCHEMA=1", "cargo", "test", "-p", "task-core", "-p", "task
 - 受信箱の投影を次の葉にする: `task-ops::inbox` で `notice` の `target.kind = integration_request` を未回答の依頼として読み、回答（依頼 id に対する人の選択）で消す。試験は notice store と inbox を一時 DB で組んで確かめる。
 - 依頼の一覧に依頼 id を振り、配送 detail と受信箱の両方から同じ id を指すようにする（二重掲載を避ける）。
 - 本番への反映は人が行う: daemon の入れ替え（`celeris` の release と handoff）は本記録の範囲外。launcher 関連の変更（`task-worker/src/browser_launcher/`）は host の `celeris-browser-launcher` binary の入れ替えが要る（`2026-10-03-parallel-integration-auto-resolve/launcher-reap-flake.md` の運用節を参照）。
+
+## 追記（sync-gate WU）: 受信箱投影の完了と main 取り込みゲート
+
+未解決事項 1（受信箱への投影が未実装）は `2026-10-03-parallel-integration-auto-resolve/inbox-request.md` の WU で解消済み: `Event::IntegrationRequested`/`IntegrationAnswered` を追記事象にし（migration `0047_events_integration_request_index.sql`）、`task-ops::human_inbox` が未回答の依頼を `InboxKind::IntegrationRequest` として一対一で受信箱に投影する。回答は既存の `POST /api/v1/inbox/items/{id}/answer` で `IntegrationAnswered` を追記し、受信箱から消える（横断試験 `integration_request_answer_appends_event_and_removes_only_its_inbox_item`）。段の統合経路の依頼も v4 修正で `integration_request` 1 件だけを表示し、回答で統合 WU を再開する（詳細・残課題は同ファイルを参照。既存 notice の backfill と GUI 実画面確認は未実施のまま提案に残る）。
+
+main（`0225c752`）をこのブランチへ `git merge --no-ff` で取り込み（merge commit `1fcb517d`）、取り込み後の tree で `cargo fmt --all -- --check` / `cargo clippy --workspace --all-targets -- -D warnings` / `cargo test --workspace` を実行し、すべて exit 0（test 集計 passed 3663 / failed 0 / ignored 13）。衝突は `crates/task-core/src/store/migrations.rs`（main の migration 0046 とこのブランチの 0047 を両方残し `SCHEMA_VERSION=47`）・`crates/task-core/src/cluster_job/tests.rs`・`crates/task-core/src/store/tests.rs`（版数 assert を 47 に一本化）・`docs/architecture-map.md`（配送 auto_resolve の行と main の Knowledge GC 行を両方残す）の 4 件で、詳細と証拠は `2026-10-03-parallel-integration-auto-resolve/sync-gate.md` を参照。main 側の userns・db guard の変更とこのブランチの `browser_launcher/` の修正は同じ tree で共存することを確認した。

@@ -457,7 +457,14 @@ fn the_default_branch_is_configured_then_detected() {
 fn a_command_that_never_finishes_is_killed() {
     let mut cmd = Command::new("sh");
     cmd.args(["-c", "sleep 30"]);
+    let started = std::time::Instant::now();
     let out = run(cmd, Duration::from_millis(200)).unwrap_or_else(|| panic!("spawn"));
+    // 孫の `sleep` もグループごと殺すので、パイプの読み切りが 30 秒を待たない。
+    assert!(
+        started.elapsed() < Duration::from_secs(20),
+        "took {:?}",
+        started.elapsed()
+    );
     assert!(out.timed_out);
     assert!(!out.ok);
     assert_eq!(out.why(), "コマンドが時間内に終わりませんでした");

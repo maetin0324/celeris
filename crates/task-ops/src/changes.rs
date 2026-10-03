@@ -14,6 +14,7 @@
 //!
 //! **押すのは人だけ**（SPEC §3.6 / ADR-0043 D5）。ワーカーのプロトコルにはこの経路を出さない。
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -71,10 +72,15 @@ impl CmdOutput {
 
 /// 起動して、`timeout` を過ぎたら殺す。パイプは別スレッドで読み切る（詰まらせない）。
 /// 起動そのものに失敗したら `None`（`git` / `gh` が無い）。
+///
+/// 子は自分のプロセスグループに入れ、時間切れでは**グループごと**殺す。子だけを殺すと、
+/// 孫（`git` の `ssh`、`sh -c` の中のコマンド）がパイプを握ったまま残り、読み切りの join が
+/// 孫の終わりまで待って上限が効かない。
 fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .process_group(0);
     let mut child = cmd.spawn().ok()?;
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
@@ -89,6 +95,7 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
+                    kill_group(child.id());
                     let _ = child.kill();
                     break child.wait().ok();
                 }
@@ -106,6 +113,18 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
         stderr,
         timed_out,
     })
+}
+
+/// `process_group(0)` で起こした子のグループ（pgid = 子の pid）へ SIGKILL を送る。
+/// task-ops は signal の crate を持たないので `kill(1)` に頼る。失敗しても呼び出し側が
+/// `child.kill()` で子だけは殺す。
+fn kill_group(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn read_all(pipe: Option<impl std::io::Read>) -> String {

@@ -829,8 +829,8 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
         let p = dir.path();
         let tmp = tempfile::tempdir().unwrap();
         let mut cfg = cfg_for(p, &tmp.path().join("releases"));
-        cfg.delivery.auto_resolve.max_attempts = 1;
-        cfg.delivery.auto_resolve.enabled = !disabled;
+        cfg.selfdeploy.delivery.auto_resolve.max_attempts = 1;
+        cfg.selfdeploy.delivery.auto_resolve.enabled = !disabled;
         if !disabled {
             // 前の試行が 1 回ある（上限 1 に到達）。
             store
@@ -895,7 +895,7 @@ fn auto_resolve_local_repair_limit_requests_integration() {
     );
     let tmp = tempfile::tempdir().unwrap();
     let mut cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
-    cfg.delivery.auto_resolve.enabled = false;
+    cfg.selfdeploy.delivery.auto_resolve.enabled = false;
     cfg.execution.max_repairs = 0;
     advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let still = store.delivery_get(d.task_id).unwrap().unwrap();

@@ -795,6 +795,11 @@ pub fn refresh_seeds(
 ) -> Vec<(String, SeedStep)> {
     let pool = settings.pool();
     let mut out = Vec::new();
+    // build の前に pool で 1 回だけ probe する。不可ならどの repo の seed も作らない。
+    let share = ops.pool_can_share(&pool);
+    if let Err(reason) = &share {
+        tracing::warn!(pool = %pool.root().display(), %reason, "scratch: seed refresh disabled; pool cannot share extents");
+    }
     for repo in repos {
         let key = task_worker::build_cache::repo_cache_key(&repo.path);
         let Some(commit) = repo.commit.as_deref() else {
@@ -803,6 +808,15 @@ pub fn refresh_seeds(
         };
         if !repo.cargo {
             out.push((key, SeedStep::NotCargo));
+            continue;
+        }
+        if let Err(reason) = &share {
+            out.push((
+                key,
+                SeedStep::Held {
+                    reason: format!("pool cannot share extents: {reason}"),
+                },
+            ));
             continue;
         }
         let manifest = scratch::read_current_manifest(&pool, &key);

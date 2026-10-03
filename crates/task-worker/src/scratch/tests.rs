@@ -1134,6 +1134,8 @@ fn refresh(pool: &Pool, commit: &str, secs: u64, fail: bool) -> SeedRefreshOutco
         prepare_checkout: &no_checkout,
         build: &build,
         rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
     refresh_seed(
         pool,
@@ -1143,6 +1145,32 @@ fn refresh(pool: &Pool, commit: &str, secs: u64, fail: bool) -> SeedRefreshOutco
         &ops,
         at(secs),
     )
+}
+
+#[test]
+fn seed_skipped_when_pool_cannot_share() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path().join("scratch"));
+    let build = |_: &Path, _: &[(String, String)]| panic!("cargo build must not run");
+    let ops = SeedBuildOps {
+        prepare_checkout: &no_checkout,
+        build: &build,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Err("test filesystem has no shared extents".to_string()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let out = refresh_seed(
+        &pool,
+        Path::new(SEED_REPO),
+        "1111111111111111",
+        &CargoTuning::default(),
+        &ops,
+        at(T0),
+    );
+    assert!(
+        matches!(out, SeedRefreshOutcome::Failed { reason } if reason.contains("cannot share extents"))
+    );
+    assert!(!seeds_dir(&pool).exists());
 }
 
 /// main が進むと新しい世代を別名で build してから `current` を rename で差し替え、旧世代を退避して消す。
@@ -1290,6 +1318,8 @@ fn seed_refresh_failure_keeps_the_old_seed() {
         prepare_checkout: &bad_checkout,
         build: &build,
         rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
     };
     let out = refresh_seed(
         &pool,

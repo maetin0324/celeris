@@ -841,6 +841,7 @@ async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() 
     let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
     let mut d = worktree_dispatcher(store, done_pool_adapter(&captured), root.path(), None);
     let settings = scratch_on(&mut d, scratch_dir.path());
+    d.config.scratch.seed_reflink = true;
     let pool = settings.pool();
     let repo_dir = sc::seed_repo_dir(&pool, "gone-0000000000");
     std::fs::create_dir_all(repo_dir.join("gen-a/target")).unwrap();

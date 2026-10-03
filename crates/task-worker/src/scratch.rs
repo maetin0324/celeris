@@ -233,7 +233,7 @@ pub struct ScratchSettings {
     pub measure_interval_secs: u64,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     pub cargo: CargoTuning,
-    /// ADR-0129 (4): 新しい owner の target を repo の seed から reflink で作るか（既定 true。seed が無ければ空から）。
+    /// ADR-0129 (4): 新しい owner の target を repo の seed から reflink で作るか（既定 false）。
     pub seed_reflink: bool,
     /// ADR-0129 (3): `dir` を置く mount point（例 `/local`）。`Some` なら起動時に mount されているかを確かめ、
     /// されていなければ `dir` を従来の場所へ戻す（`apply_mount_check`）。
@@ -286,7 +286,7 @@ impl ScratchSettings {
             adopt_max_distance: 200,
             measure_interval_secs: 30,
             cargo: CargoTuning::default(),
-            seed_reflink: true,
+            seed_reflink: false,
             mount: None,
             dir_fallback_reason: None,
         }

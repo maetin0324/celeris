@@ -31,6 +31,8 @@ host 管理の sccache cache（`/local/sccache`、§2）は ADR-0136 が定め�
 
 ## 4. seed と task・WU の target
 
+`[scratch] seed_reflink` の既定は **false** とする。人が `/local` の btrfs へ切り替えた後に明示的に有効にしても、seed の build 前に pool 内の小さなファイルを `cp -a --reflink=auto` で写し、FIEMAP の shared extent を確認する。更新バッチでこの probe は 1 回だけ行い、共有できなければ理由をログに残して seed を作らず、target は空から作る。container では FICLONE が EPERM なので、その成功には依存しない。現行本番の ext4 `/var/lib/celeris/scratch` では共有できず、無条件の seed build は各 repo の target を丸ごと複製してディスクを倍使うため、既定 false と build 前 probe の両方を採る。
+
 seed は repo key ごとに `<scratch>/seeds/<repo-key>/current/target` と manifest（main commit、Cargo/rustc profile、作成日時）を置く。repo key は既存 lease と同じ正規化を使い、異なる repo の seed を混ぜない。main の固定 commit を専用の安定した checkout で build し、既存 owner の target を動かさず新しい seed を作る。main が進んだ後、および release 昇格で新しい main が有効になった後に更新を試みる。古い main と seed が一致しなくても通常の build は続け、次の更新で追いつく。build 成功後だけ、同じ filesystem に置いた世代ディレクトリへの `current` symlink を一時 symlink の rename で原子的に切り替える。`current` が指す旧世代はコピー中の参照がなくなるまで保持する。切替・owner 作成・GC は scratch lock の下で直列化し、コピー中の seed を削除しない。失敗時は旧 seed を残す。
 
 新しい task または WU の空の owner には、互換な seed から `cp -a --reflink=auto` で target を一時ディレクトリへ写してから公開する。container の `/local` では `FICLONE` / `FICLONERANGE` が EPERM でも `copy_file_range(2)` が btrfs extent を共有するため、`--reflink=always` の成否を判定に使わない。`cp --reflink=auto` が通常コピーへ落ちた場合は一時ディレクトリを削除し、空の target から始める。共有の判定は実際のコピーについて `filefrag` の shared 表示、または十分大きい試験ファイルのコピー前後の `df` 増分で行い、判定できない場合も空から始める。`du` や `st_blocks` の合計は共有の証明にならない。既存 owner の target は seed で上書きしない。seed の compiler version、profile、Cargo 設定が違えばコピーせず空から始める。

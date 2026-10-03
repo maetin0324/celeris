@@ -1216,3 +1216,19 @@ main 取り込みは衝突 2 file（事前の `git merge-tree` 見積もりで�
 
 - 本番 host の手順（`/local` への scratch 移行・sccache 設定）は変わらず
   `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は本番 host には触れていない。
+
+## ADR-0129 seed の build 前 probe と既定 false（work unit `seed-probe`）— 2026-10-03
+
+完了日 2026-10-03。現行本番の ext4 `/var/lib/celeris/scratch` で seed を全 repo 分 build しても target に共有できず、ディスクを二重に使う欠陥を修正した。
+`[scratch] seed_reflink` の既定を false にし、明示的に有効にした場合も pool 内で `cp -a --reflink=auto` と FIEMAP shared の probe を build 前に 1 回行う。共有不可なら理由をログと更新結果に残し、seed ディレクトリも cargo build も作らない。task・WU の target は従来どおり空から始まる。
+[ADR-0129](adr/0129-host-sccache-reflink-targets.md) と [人向け切替手順](ops/host-sccache-reflink-targets.md) §3 に既定値と `/local` 移行時の明示的な有効化を記録した。本番 host の設定やサービスは変更していない。
+
+証拠（いずれも exit 0）:
+
+- `cargo fmt --all -- --check`
+- `cargo clippy --workspace --all-targets -- -D warnings`
+- `cargo test -p task-worker scratch` — 34 passed。`seed_skipped_when_pool_cannot_share` を含む。
+- `cargo test -p task-dispatch --lib scratch` — 11 passed。2 repo の更新バッチでも probe 1 回、seed ディレクトリと cargo build は無し。
+- `cargo test -p task-dispatch --lib seed_housekeeping_runs_on_its_interval_and_retires_stale_generations` — 1 passed。
+- `cargo test -p celeris scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off` — 1 passed。
+- `git merge-base --is-ancestor main HEAD` — main `3527c8e3` は本変更前の HEAD `9d326b05` の祖先であり、追加 merge は不要。

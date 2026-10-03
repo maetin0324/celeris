@@ -205,7 +205,47 @@ fn seed_ops() -> scratch::SeedBuildOps<'static> {
         prepare_checkout: &seed_no_checkout,
         build: &seed_fake_build,
         rustc: &seed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
     }
+}
+
+#[test]
+fn seed_skipped_when_pool_cannot_share_in_refresh_batch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let settings = ScratchSettings::with_dir(tmp.path().join("scratch"));
+    let probes = std::cell::Cell::new(0);
+    let unavailable = |_: &scratch::Pool| {
+        probes.set(probes.get() + 1);
+        Err("test filesystem cannot share extents".to_string())
+    };
+    let no_build = |_: &Path, _: &[(String, String)]| panic!("cargo build must not run");
+    let ops = scratch::SeedBuildOps {
+        prepare_checkout: &seed_no_checkout,
+        build: &no_build,
+        rustc: &seed_rustc,
+        share_probe: &unavailable,
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let repos = ["/repo/a", "/repo/b"].map(|path| SeedRepo {
+        path: PathBuf::from(path),
+        commit: Some("c1".to_string()),
+        cargo: true,
+    });
+    let steps = refresh_seeds(
+        &settings,
+        &repos,
+        &seed_rustc,
+        &|_| None,
+        &ops,
+        SystemTime::UNIX_EPOCH,
+    );
+    assert_eq!(probes.get(), 1);
+    assert!(steps.iter().all(|(_, step)| matches!(
+        step,
+        SeedStep::Held { reason } if reason.contains("cannot share extents")
+    )));
+    assert!(!scratch::seeds_dir(&settings.pool()).exists());
 }
 
 /// owner の semantic GC（緊急でも）は seed を消さず、`targets_bytes` にも数えない。退避した seed は削除スレッドの根にある。

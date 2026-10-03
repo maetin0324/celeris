@@ -20,8 +20,8 @@ pub struct ScratchConfig {
     /// `dir` を従来の場所（`dir` を書かないときの既定）へ戻す。
     #[serde(default)]
     pub mount: Option<PathBuf>,
-    /// ADR-0129 (4): 新しい task・WU の target を repo の seed から reflink で作る（既定 true。seed が無ければ空から）。
-    #[serde(default = "default_scratch_enabled")]
+    /// ADR-0129 (4): seed から reflink で作る（既定 false。有効時も pool の共有 probe が必要）。
+    #[serde(default)]
     pub seed_reflink: bool,
     #[serde(default = "default_scratch_targets_max_gb")]
     pub targets_max_gb: u64,
@@ -94,7 +94,7 @@ impl Default for ScratchConfig {
             enabled: default_scratch_enabled(),
             dir: None,
             mount: None,
-            seed_reflink: default_scratch_enabled(),
+            seed_reflink: false,
             targets_max_gb: default_scratch_targets_max_gb(),
             l1_max_gb: default_scratch_l1_max_gb(),
             total_max_gb: default_scratch_total_max_gb(),

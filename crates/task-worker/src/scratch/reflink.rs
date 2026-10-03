@@ -388,6 +388,32 @@ pub fn cp_reflink_auto(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// seed を build する前に、実際の pool 上で extent を共有できるか確かめる。
+/// probe の一時ファイルは `seeds/` を作らずに破棄する。
+pub fn probe_pool_share(pool: &Pool, ops: &SeedCopyOps<'_>) -> Result<(), String> {
+    std::fs::create_dir_all(pool.root())
+        .map_err(|e| format!("cannot create pool for reflink probe: {e}"))?;
+    let dir = tempfile::Builder::new()
+        .prefix(".seed-reflink-probe-")
+        .tempdir_in(pool.root())
+        .map_err(|e| format!("cannot create reflink probe in pool: {e}"))?;
+    let source = dir.path().join("source");
+    let copied = dir.path().join("copied");
+    let mut file = std::fs::File::create(&source)
+        .map_err(|e| format!("cannot create reflink probe source: {e}"))?;
+    use std::io::Write;
+    file.write_all(&vec![0x5a; SHARE_PROBE_MIN_BYTES as usize])
+        .and_then(|()| file.sync_all())
+        .map_err(|e| format!("cannot write reflink probe source: {e}"))?;
+    drop(file);
+    (ops.copy)(&source, &copied).map_err(|e| format!("reflink probe copy failed: {e}"))?;
+    match (ops.is_shared)(&copied) {
+        Ok(true) => Ok(()),
+        Ok(false) => Err("reflink probe copied bytes without shared extents".to_string()),
+        Err(e) => Err(format!("reflink probe FIEMAP failed: {e}")),
+    }
+}
+
 const FS_IOC_FIEMAP: nix::libc::c_ulong = 0xC020_660B;
 const FIEMAP_FLAG_SYNC: u32 = 0x0001;
 const FIEMAP_EXTENT_LAST: u32 = 0x0001;

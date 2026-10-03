@@ -13,15 +13,17 @@
 //! だけを消す。消す・切り替えるは pool の `.lock` の下で行う（owner への写しも `.lock` の下なので、写している
 //! 最中の世代は消えない）。**LLM は呼ばない**（seed の build は cargo を走らせるだけ）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use super::{
-    CARGO_TARGET_DIR_VAR, CargoTuning, Pool, SEED_CURRENT, SEED_MANIFEST, SEEDS_DIR, SeedManifest,
-    TARGET_SUBDIR, cargo_tuning_env, deleting_name, measure_tree, mtime, rfc3339, set_mtime,
+    CARGO_TARGET_DIR_VAR, CargoTuning, Pool, SEED_CURRENT, SEED_MANIFEST, SEEDS_DIR, SeedCopyOps,
+    SeedManifest, TARGET_SUBDIR, cargo_tuning_env, deleting_name, measure_tree, mtime,
+    probe_pool_share, rfc3339, set_mtime,
 };
 
 /// 世代ディレクトリの接頭辞。
@@ -140,6 +142,24 @@ pub struct SeedBuildOps<'a> {
     pub build: &'a SeedBuildFn,
     /// `checkout` の `rustc -V`。
     pub rustc: &'a dyn Fn(&Path) -> Option<String>,
+    /// pool 上での共有 probe。更新バッチ内で同じ pool に対し 1 回だけ実行する。
+    pub share_probe: &'a dyn Fn(&Pool) -> Result<(), String>,
+    pub probe_results: Mutex<HashMap<PathBuf, Result<(), String>>>,
+}
+
+impl SeedBuildOps<'_> {
+    pub fn pool_can_share(&self, pool: &Pool) -> Result<(), String> {
+        self.probe_results
+            .lock()
+            .map_err(|e| format!("reflink probe cache lock failed: {e}"))?
+            .entry(pool.root().to_path_buf())
+            .or_insert_with(|| (self.share_probe)(pool))
+            .clone()
+    }
+}
+
+fn real_share_probe(pool: &Pool) -> Result<(), String> {
+    probe_pool_share(pool, &SeedCopyOps::real())
 }
 
 impl SeedBuildOps<'static> {
@@ -149,6 +169,8 @@ impl SeedBuildOps<'static> {
             prepare_checkout: &git_detached_checkout,
             build: &cargo_build_all_targets,
             rustc: &rustc_version,
+            share_probe: &real_share_probe,
+            probe_results: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -265,6 +287,10 @@ pub fn refresh_seed(
     now: SystemTime,
 ) -> SeedRefreshOutcome {
     let failed = |reason: String| SeedRefreshOutcome::Failed { reason };
+    if let Err(reason) = ops.pool_can_share(pool) {
+        tracing::warn!(pool = %pool.root().display(), %reason, "scratch: seed build skipped; pool cannot share extents");
+        return failed(format!("pool cannot share extents: {reason}"));
+    }
     let repo_key = crate::build_cache::repo_cache_key(repo_path);
     let repo_dir = seed_repo_dir(pool, &repo_key);
     if let Err(e) = std::fs::create_dir_all(&repo_dir) {

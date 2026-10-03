@@ -71,7 +71,7 @@ scratch の正本の置き場は [ADR-0136](../adr/0136-local-hot-data-layout.md
 
 最初に [selfdeploy の release と verify](../selfdeploy.md) を済ませ、新版を昇格できる状態にする。停止する前に進行中の run と release build がないこと、`~/.local/celeris/current/bin/celerisctl scratch status --json`、`du -sh /var/lib/celeris/scratch/{targets,cache-l1} 2>/dev/null`、`df -h /local` を記録する。既存の scratch 全体と config は戻すときまで保存する。
 
-daemon を停止し、`/local` が mount されたことを再確認して `/local/celeris/data/scratch` を作る。新 config の `[scratch]` は次のようにする。`mount` を指定すると `/local` が無い起動では従来の既定 scratch dir（本番では `/var/lib/celeris/scratch`）へ戻り、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。`mount` を省略して `dir` だけを指定するとこの保護は働かない。
+daemon を停止し、`/local` が mount されたことを再確認して `/local/celeris/data/scratch` を作る。`seed_reflink` は既定で false。§1 の共有確認が通った後、切り替え時に次のように **true を明示**する。有効でも Celeris は seed build 前に実際の pool 内でコピーと FIEMAP shared の probe を行い、共有できなければ seed を作らず空の target から build する。不可の理由は `scratch: seed refresh disabled; pool cannot share extents` ログで確認する。`mount` を指定すると `/local` が無い起動では従来の既定 scratch dir（本番では `/var/lib/celeris/scratch`）へ戻り、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。`mount` を省略して `dir` だけを指定するとこの保護は働かない。
 
 ```toml
 [scratch]

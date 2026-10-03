@@ -87,3 +87,24 @@ task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り
 `docs/progress/review-sync-main.md` は親 task の受け入れ条件が読むパスに残した。GUI の型検査では生成型の追加項目に合わせ、通知ラベルと fixture を更新した。`scripts/dev/check-architecture-map.py`、`scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`scripts/dev/check-doc-links.sh`、`cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings`、GUI の `pnpm typecheck` は成功した。
 
 web は再生成型に合わせて `execution_routed` の購読と `NewTaskBody` の参照を補い、`pnpm typecheck` と realtime 関連テスト 47 件が成功した。GUI の対象テストは 58 件成功した。
+
+## 再検証（final review 差し戻し後）
+
+final review の差し戻し（criterion 7/9）を受けて、取り込んだ main と 4 crate の試験を記録し直した。転記元は兄弟 unit の記録（`agent-docs/progress/2026-10-03-review-sync-main/*.md`）。コードは変えていない。
+
+- 取り込んだ main: `merged-main` 行の `c448d9c77d18eb54396907835efb91c5d0a985e8`（HEAD の祖先。`git merge --no-ff`）。この sha は本節の作成時点の main（`f8a89553`）より前で、main の新しい分は取り込んでいない。
+- userns 不可の sandbox での skip（`api-userns-skip`）: `crates/task-api/tests/common/mod.rs` に `userns_available()` を足した（`unshare -Ur true` の probe。`CELERIS_USERNS_TESTS=require` のときだけ偽を assert 失敗にする）。唯一 `unshare` を直接使う 3 試験（`browser_h3_injection.rs`、`browser_restore_deliver.rs`、`browser_restore_live_session.rs`）は probe が偽のとき早期 return する。この sandbox では probe が真で skip は発動しなかった。
+- 同じ sandbox で見えた範囲外の失敗（`credentiald-sandbox`）: `celeris-credentiald` の `broker.rs` の子 process（`serve`・python resolve・`bridge`）に `env_clear()` を入れ、一時の `HOME`・`XDG_RUNTIME_DIR` だけを渡した。`cargo test -p celeris-credentiald --test broker daemon_rejects_worker_secret_retrieval_even_with_valid_lease -- --exact` は exit 0（1 passed）。
+
+### 4 crate の試験結果
+
+| crate | コマンド | exit | passed / failed / ignored | real |
+|---|---|---:|---|---:|
+| task-core | `cargo test -p task-core` | 0 | 688 / 0 / 0 | 16.76 s |
+| task-ops | `cargo test -p task-ops` | 0 | 451 / 0 / 1（手動計測用） | 16.38 s |
+| task-api | `cargo test -p task-api` | 0 | 439 / 0 / 2 | 41.1 s（unit 記録の時点。本節の作成時の再実行は 2 分 37 秒） |
+| task-dispatch | `cargo test -p task-dispatch` | 0 | 578 / 0 / 0（lib 574 + unified_kill 4） | 42.92 s |
+
+- 単体で 60 秒を超えた試験は無し（4 crate とも libtest の警告なし）。
+- 任意の参照: 統合後の `cargo test --workspace` は exit 0（126 試験バイナリすべて ok、5 分 35 秒）、`cargo clippy --workspace -- -D warnings` は exit 0。詳細は `agent-docs/progress/2026-10-03-review-sync-main/core-ops-dispatch-tests/ws-green.md`。
+- 本節の task-api 再実行のログは run の成果物 `task-api-recheck.log` にある。

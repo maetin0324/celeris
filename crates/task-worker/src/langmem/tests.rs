@@ -384,3 +384,102 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     let seen = std::fs::read_to_string(&out_file).unwrap();
     assert_eq!(seen, "new-key");
 }
+
+/// ADR-0139 D4: 起動 env の鍵を `artifacts/seen-env.txt` に写してから偽の抽出器を走らせるスタブ。
+fn env_recording_script() -> String {
+    format!(
+        "artifacts=$(python3 -c \"import json,sys,os; print(os.path.dirname(json.load(open(sys.argv[1]))['candidates_path']))\" \"$2\")\n\
+         mkdir -p \"$artifacts\"\n\
+         printf '%s' \"${{OPENAI_API_KEY-<unset>}}\" > \"$artifacts/seen-env.txt\"\n\
+         {}",
+        fake_extractor_script()
+    )
+}
+
+/// ADR-0139 D4: tier（cheap / standard）と provider の env（古い `OPENAI_API_KEY` あり / なし）の
+/// どの組み合わせでも、langmem の起動 env と入力 JSON に設定された鍵が入る（LLM は呼ばない）。
+#[tokio::test]
+async fn langmem_api_key_reaches_runner_env_for_every_tier_and_provider_env() {
+    use crate::tiered::TieredAdapter;
+    for tier in [task_core::Tier::Cheap, task_core::Tier::Standard] {
+        for provider_env in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut config = stub_langmem(dir.path(), &env_recording_script());
+            config.base_url = Some("http://127.0.0.1:18100/v1".to_string());
+            config.model = Some("celeris/cheap".to_string());
+            config.api_key = Some("proxy-bearer".to_string());
+            if provider_env {
+                // `[adapters.langmem].env` / provider 行の env に残った古い値。
+                config
+                    .env
+                    .push(("OPENAI_API_KEY".to_string(), "stale-row".to_string()));
+            }
+            let tiered = TieredAdapter {
+                base: Arc::new(LangMemAdapter::new(config)),
+                models: task_core::model_routing::TierModels::new(),
+                account_id: None,
+                credential_error: None,
+            };
+            // dispatcher がアカウント等で重ねる env（`with_env`）も鍵を上書きしない。
+            let adapter: Arc<dyn WorkerAdapter> = if provider_env {
+                tiered
+                    .with_env(&[("OPENAI_API_KEY".to_string(), "stale-extra".to_string())])
+                    .unwrap()
+            } else {
+                Arc::new(tiered)
+            };
+            let mut req = sample_req(dir.path().to_path_buf());
+            req.task.worker_hint.tier = tier;
+            let sink = RecordingSink::default();
+            let outcome = adapter
+                .run(req, "run-key", default_limits(), &sink)
+                .await
+                .unwrap();
+            assert!(
+                matches!(outcome.terminal, Terminal::Done { .. }),
+                "{tier:?} provider_env={provider_env}: {:?}",
+                outcome.terminal
+            );
+            let seen = std::fs::read_to_string(dir.path().join("artifacts/seen-env.txt")).unwrap();
+            assert_eq!(seen, "proxy-bearer", "{tier:?} provider_env={provider_env}");
+            let input: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(dir.path().join("runs/run-key/langmem_input.json"))
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(input["llm"]["api_key"], "proxy-bearer");
+            assert_eq!(input["llm"]["base_url"], "http://127.0.0.1:18100/v1");
+        }
+    }
+}
+
+/// ADR-0139 D4: 鍵の env 名は provider で決まり、鍵が無ければ何も入れない（provider の env を消さない）。
+#[test]
+fn langmem_api_key_env_follows_provider_and_is_empty_without_key() {
+    let mut config = LangMemConfig {
+        api_key: Some("k".to_string()),
+        ..LangMemConfig::default()
+    };
+    assert_eq!(
+        api_key_env(&config),
+        vec![("OPENAI_API_KEY".to_string(), "k".to_string())]
+    );
+    config.provider = LangMemProvider::Anthropic;
+    assert_eq!(
+        api_key_env(&config),
+        vec![("ANTHROPIC_API_KEY".to_string(), "k".to_string())]
+    );
+    config.api_key = None;
+    assert!(api_key_env(&config).is_empty());
+    config.api_key = Some(String::new());
+    assert!(api_key_env(&config).is_empty());
+}
+
+/// ADR-0139 D4: ランナーは JSON に鍵が無ければ env の鍵を使う（埋め込みの台本の文面で固定）。
+#[test]
+fn langmem_runner_falls_back_to_env_api_key() {
+    assert!(RUNNER_SCRIPT.contains(
+        "os.environ.get(\"ANTHROPIC_API_KEY\" if provider == \"anthropic\" else \"OPENAI_API_KEY\")"
+    ));
+    assert!(RUNNER_SCRIPT.contains("api_key = llm.get(\"api_key\") or env_key or \"not-needed\""));
+}

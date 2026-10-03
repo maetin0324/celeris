@@ -3546,6 +3546,8 @@ fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
         "systemd-run",
         "~/.config/celeris",
         "~/.local/celeris/releases",
+        "`/local`",
+        "/local/celeris/state/releases",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),

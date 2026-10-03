@@ -76,11 +76,6 @@ pub(crate) const MIGRATION_0035: &str =
 /// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
 pub(crate) const MIGRATION_0036: &str =
     include_str!("../../migrations/0036_browser_trusted_login.sql");
-/// ADR-0118 D3: delivery の検査対象と merge candidate を記録する。
-/// main 取り込み（review sync）で版数 37 が main の `0037_events_delivery_skipped_index` と重複した。
-/// 番号の振り直しは次段の migrations 葉で行う（それまで `migration_sql` の 37 は main 側が当たる）。
-pub(crate) const MIGRATION_0037_REVIEW_TARGET_SYNC: &str =
-    include_str!("../../migrations/0037_review_target_sync.sql");
 /// ADR-0124 D2: `node_sessions` に execute continuation の WU 単位 session の列を足す。
 pub(crate) const MIGRATION_0038: &str =
     include_str!("../../migrations/0038_work_unit_sessions.sql");
@@ -92,6 +87,11 @@ pub(crate) const MIGRATION_0037: &str =
     include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
 /// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor`（通知の既読と束ね）。
 pub(crate) const MIGRATION_0041: &str = include_str!("../../migrations/0041_feed_notices.sql");
+/// ADR-0118 D3: delivery の検査対象と merge candidate を記録する。
+/// ブランチでは 0037 だったが、main の `0037_events_delivery_skipped_index`（本番適用済み）と重複したので
+/// review sync で空き番号 42 へ振り直した。列を足すだけで 0038〜0041 とは依存しない。
+pub(crate) const MIGRATION_0042: &str =
+    include_str!("../../migrations/0042_review_target_sync.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
@@ -101,7 +101,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 41;
+pub const SCHEMA_VERSION: u32 = 42;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -143,13 +143,11 @@ impl SqliteStore {
             35 => Ok(MIGRATION_0035),
             36 => Ok(MIGRATION_0036),
             37 => Ok(MIGRATION_0037),
-            // review sync: 版数の重複（次段の migrations 葉が振り直す）。
-            #[allow(unreachable_patterns)]
-            37 => Ok(MIGRATION_0037_REVIEW_TARGET_SYNC),
             38 => Ok(MIGRATION_0038),
             39 => Ok(MIGRATION_0039),
             40 => Ok(MIGRATION_0040),
             41 => Ok(MIGRATION_0041),
+            42 => Ok(MIGRATION_0042),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

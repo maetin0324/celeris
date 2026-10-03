@@ -1183,6 +1183,14 @@ main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest
 - `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。main で撤去された sccache unit を `install_units_hot_dir.sh` が期待しないよう修正した。drop-in ディレクトリを含む migration 試験も通過した。
 - `cargo test --workspace --no-fail-fast` → exit 101。ログの集計は 3418 passed / 53 failed / 13 ignored（helper の試験結果行を含む）、20 test targets が失敗。`instance_handoff` は 8 passed、`api_scenarios` は 11 passed。失敗は e2e daemon の db guard と実 browser / launcher の user namespace がこの sandbox で `Operation not permitted` になる既知の環境制約に集中した。範囲内の試験失敗は確認されなかった。負荷 flaky を理由とする変更はしていない。
 - `git diff --name-only ea2d9d3252816d01030143f631d3676d9f2d4c2c -- . ':(exclude)crates/**' ':(exclude)scripts/selfdeploy/**' ':(exclude)deploy/systemd/**' ':(exclude)config/**' ':(exclude)docs/**' ':(exclude)tests/e2e/tests/api_scenarios.rs'` → 出力なし。task が触らない path は merged-main と同一。本番 host への操作はしていない。
+### sync-final WorkUnit（2026-10-03、main 40189604024aebe248f603b61dcaffb6ee58dc78）
+
+- `git merge --no-ff main` で最新 main を取り込んだ。衝突した `docs/PROGRESS.md` は両側の記録を保持した。`docs/progress/local-hot-data-verify.md` の `merged-main` をこの完全 SHA に更新した。`git merge-base --is-ancestor main HEAD` → exit 0。範囲外パスを同 SHA と照合した `git diff --exit-code 40189604024aebe248f603b61dcaffb6ee58dc78 -- . ':(exclude)crates/**' ':(exclude)scripts/selfdeploy/**' ':(exclude)deploy/systemd/**' ':(exclude)config/**' ':(exclude)docs/**' ':(exclude)tests/e2e/tests/api_scenarios.rs'` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo test --workspace --no-fail-fast` → exit 101。ログの `test result` 126 行の合計は 3428 passed / 53 failed / 13 ignored（内部 helper の結果行も含む）。cargo は 20 test targets failed と報告。失敗はこの run sandbox で user namespace の生成が `Operation not permitted` となる worker DB guard・実 browser 試験、および launcher 実セッション試験に集中した。`instance_handoff` はこの実行では 8 passed。範囲内のコード変更を要する失敗は確認されなかった。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` と同じ各 script の個別実行 → 15 本すべて exit 0。`migrate_to_local_test.sh` も exit 0。switch の途中失敗時には `switch_failed` trap が自動で旧状態へ戻す。失敗注入 2 ケース（`install-units.sh` 失敗、delta 後の新 tree 欠損）で `config.toml`・`paths.env`・symlink・DB の復元を確認した。unit の drop-in ディレクトリも復元される。
+- 本番 host の操作はしていない。全試験と selfdeploy 試験のログはこの run の成果物ディレクトリに保存した。
+
 main ea2d9d32 取り込み、selfdeploy 試験全 pass（work unit `sync-ea2d`）。
 
 ## 通知フィード同期の退行修正（release 3527c8e39ee2 の verify 失敗、2026-10-03）

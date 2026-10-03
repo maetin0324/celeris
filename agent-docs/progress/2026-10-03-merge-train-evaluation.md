@@ -20,6 +20,13 @@ Phase 1〜5 の導入時点。日時は git の commit 日時（UTC）。
 | 4 atomic direct route | ADR-0124 atomic-direct-route（2026-10-02、`b8c1c897` 2026-10-02 10:38:59） | docs/PROGRESS.md「… Phase 4 統合検証（2026-10-02）」、agent-docs/progress/2026-10-03-phase-direct-route.md | `db7abe3e` 2026-10-02 13:41:08 p4-fast（直行経路）を p3-session と統合 | 入っていない |
 | 5 write-set 並列制御・behind 指標 | ADR-0130（2026-10-02、`9868fec1` 2026-10-02 14:01:29） | docs/PROGRESS.md「…（完了 2026-10-02、ADR-0130）」、agent-docs/progress/2026-10-03-phase-writeset.md | `44bbad17` 2026-10-02 20:26:11 integrate wu/p5-writeset (phase p5) | 入っていない |
 
+Phase 1〜5 の統合後に入れた修正（2026-10-03、同じ task branch。どれも本番 release には入っていない）:
+
+- sync-history（Phase 1）: merge commit を含む branch の review 前同期は rebase ではなく target を `merge --no-ff` し、手で解いた衝突の履歴を保つ。並列 2 task の無衝突着地も試験で固定（`21ba1b45`・`9a27539e`、ADR-0118 付記（2026-10-03）、記録 `agent-docs/progress/2026-10-03-review-sync-fix/sync-history.md`）。
+- fallback-delivery（Phase 2）: IntegrationRepair の fallback を HEAD の変化・target の取り込みで解いて merge candidate を記録し、merge-base 修復から配送成功までを通し試験で確かめた（`0f9089f9`・`17c81961`、ADR-0120「付記: fallback の解除（2026-10-03）」、記録 `.../fallback-delivery.md`）。
+- session-container（Phase 3）: container と claude-code 以外の adapter の run は判定順の先頭で session を作らず、atomic task の continuation も task 単位の session を resume する（`774a71dd`・`1d645021`、ADR-0140「付記（2026-10-03、session-container）」、記録 `.../session-container.md`）。
+- starve-fix（Phase 5）: write-set で待たされた WU の後ろの非重複 WU を同じ tick に走らせ、容量切れの tick に待機の数えを戻さない（`dd44dd28`、ADR `agent-docs/adr/2026-10-03-write-set-no-starvation.md`、記録 `.../starve-fix.md`）。
+
 確かめ方:
 
 ```sh
@@ -34,29 +41,32 @@ for c in a00c28b2 6a385df3 86841071 db7abe3e 44bbad17; do
 git merge-base --is-ancestor 44bbad17 celeris/01M3Z6NZ0RBF4ZH2H2KC69QT9S && echo yes   # → yes（task branch にだけある）
 ```
 
-本番 DB の schema も同じことを示す。本番 DB の migration 0037 は `0037_events_delivery_skipped_index.sql`（release `ea2d9d325281` の tree）で、Phase 1 の `0037_review_target_sync.sql` ではない。Phase 5 の `0039_write_sets`・`0040_behind_targets` は無い。
+本番 DB の schema も同じことを示す。本番 DB に当たっている migration は 0036・0037（`0037_events_delivery_skipped_index.sql`、release `ea2d9d325281` の tree）・0041 までで、Phase 1 の `0042_review_target_sync`・Phase 3 の `0043_work_unit_sessions`・Phase 5 の `0044_write_sets`・`0045_behind_targets` は無い（表 `run_write_sets`・`work_unit_write_sets`・`task_behind_targets` も、`node_sessions` の `task_id`・`work_unit_id` 列も無い）。
 
 ```sh
 git ls-tree --name-only ea2d9d325281 crates/task-core/migrations/ | tail -3   # …0036_browser_trusted_login, 0037_events_delivery_skipped_index, 0041_feed_notices
 sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" "select version, applied_at from schema_migrations where version>=36"   # 36, 37, 41
 sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" "select count(*) from pragma_table_info('deliveries') where name in ('target_sha','reviewed_sha','merge_candidate_sha')"   # 0
-sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" "select count(*) from sqlite_master where name in ('behind_targets','write_sets')"   # 0
+sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" "select count(*) from sqlite_master where name in ('task_behind_targets','run_write_sets','work_unit_write_sets')"   # 0
+sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro" "select count(*) from pragma_table_info('node_sessions') where name in ('task_id','work_unit_id','provider','cwd')"   # 0
 ```
+
+最後の 2 行は、表名・列名を `crates/task-core/migrations/0043_work_unit_sessions.sql`・`0044_write_sets.sql`・`0045_behind_targets.sql` に合わせて書き直した問い合わせ（schema_migrations が 41 で止まっているので 0 になる）。
 
 DB の場所: `crates/celeris/src/config/db.rs` の既定は `~/.local/celeris/celeris.sqlite3` だが、そこには `celeris.sqlite3.moved-20260924-080845` しか無い。docs/ops/home-nfs-migration-2026-09-25.md に書かれているとおり、本番 DB は `/var/lib/celeris/celeris.sqlite3`（2026-10-03 04:56 更新、WAL あり）。
 
 ## 実測
 
-DB は `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro"`（以下 `$RO`）で開いた。指標の取り方は実装の読み込みで決めた: `task-core/src/model.rs` の `Event::ReviewTargetSynced` / `ReviewTargetAdvanced` / `IntegrationRepairScheduled` / `Resolved` / `Exhausted`、`task-core/src/execution.rs` の `is_integration_repair_unit`（`kind = repair` かつ title が `repair (integration_repair)` で始まる WU）、`task-core/src/behind_target.rs` と migration `0040_behind_targets.sql`。session・直行経路・run 指標は `task-core/src/model.rs` の `Usage.session_resumed`・`RunMetrics.wall_ms`・`Event::ExecutionRouted`、`task-core/src/execution_metrics.rs`（`session_resumed` が無い旧 run は unknown）、`task-core/src/node_session.rs`（migration `0038_work_unit_sessions.sql`）。
+DB は `sqlite3 "file:/var/lib/celeris/celeris.sqlite3?mode=ro"`（以下 `$RO`）で開いた。指標の取り方は実装の読み込みで決めた: `task-core/src/model.rs` の `Event::ReviewTargetSynced` / `ReviewTargetAdvanced` / `IntegrationRepairScheduled` / `Resolved` / `Exhausted`、`task-core/src/execution.rs` の `is_integration_repair_unit`（`kind = repair` かつ title が `repair (integration_repair)` で始まる WU）、`task-core/src/behind_target.rs` と migration `0045_behind_targets.sql`（表 `task_behind_targets`。write-set は `0044_write_sets.sql` の表 `run_write_sets`・`work_unit_write_sets`）。session・直行経路・run 指標は `task-core/src/model.rs` の `Usage.session_resumed`・`RunMetrics.wall_ms`・`Event::ExecutionRouted`、`task-core/src/execution_metrics.rs`（`session_resumed` が無い旧 run は unknown）、`task-core/src/node_session.rs`（migration `0043_work_unit_sessions.sql`。表は作らず `node_sessions` に `task_id`・`work_unit_id`・`provider`・`cwd` の列を足し、WU の継続 session は `kind = 'continuation'` の行）。
 
 | 指標 | 導入前 | 導入後 | command / SQL |
 |---|---|---|---|
 | pre-review sync の回数・衝突率 | 取れない: 導入前は機構が無く、記録する event も無い | 取れない: 本番未反映（Phase 1 の `a00c28b2` はどの release にも入っていない）。本番 DB の該当 event は 0 件、`deliveries` に `target_sha` 等の列が無い | `sqlite3 "$RO" "select count(*) from events where json_extract(json,'$.type') in ('review_target_synced','review_target_advanced')"` → 0。`sqlite3 "$RO" "select count(*) from pragma_table_info('deliveries') where name in ('target_sha','reviewed_sha','merge_candidate_sha')"` → 0 |
 | integration repair の回数 | 取れない: 導入前は機構が無い。参考: 統合の結果は `task_integrations` に merge/done 62 件、conflict 0 件 | 取れない: 本番未反映（Phase 2 の `6a385df3` はどの release にも入っていない）。該当 event 0 件、integration_repair WU 0 件 | `sqlite3 "$RO" "select count(*) from events where json_extract(json,'$.type') in ('integration_repair_scheduled','integration_repair_resolved','integration_repair_exhausted')"` → 0。`sqlite3 "$RO" "select count(*) from work_units where kind='repair' and json_extract(json,'$.title') like 'repair (integration_repair)%'"` → 0。参考: `sqlite3 "$RO" "select method, state, count(*) from task_integrations group by 1,2"` → `merge\|done\|62` |
-| Claude session reuse 率 | 0 / 1435（claude-code の run で `runs.session_id` が入っているのは 0 件。`usage_json` に `session_resumed` 欄（`task-core/src/model.rs` の `Usage.session_resumed`）を持つ run も 0 件。session resume の機構が無い） | 取れない: 本番未反映（Phase 3 の `86841071` はどの release にも入っていない）。本番 DB に `work_unit_sessions` table（migration 0038）が無い | `sqlite3 "$RO" "select count(*), count(session_id) from runs where adapter='claude-code'"` → `1435\|0`。`sqlite3 "$RO" "select key, count(*) from runs, json_each(runs.usage_json) group by key"` → `cache_creation_tokens`・`cache_read_tokens`・`cost_usd`・`input_tokens`・`output_tokens` だけ。`sqlite3 "$RO" "select count(*) from sqlite_master where name='work_unit_sessions'"` → 0 |
+| Claude session reuse 率 | 0 / 1435（claude-code の run で `runs.session_id` が入っているのは 0 件。`usage_json` に `session_resumed` 欄（`task-core/src/model.rs` の `Usage.session_resumed`）を持つ run も 0 件。session resume の機構が無い） | 取れない: 本番未反映（Phase 3 の `86841071` はどの release にも入っていない）。本番 DB の `node_sessions` に `work_unit_id` 等の列（migration 0043）が無い | `sqlite3 "$RO" "select count(*), count(session_id) from runs where adapter='claude-code'"` → `1435\|0`。`sqlite3 "$RO" "select key, count(*) from runs, json_each(runs.usage_json) group by key"` → `cache_creation_tokens`・`cache_read_tokens`・`cost_usd`・`input_tokens`・`output_tokens` だけ。`sqlite3 "$RO" "select count(*) from pragma_table_info('node_sessions') where name='work_unit_id'"` → 0 |
 | atomic direct route（fast path）率 | 0（直行経路は無い）。参考: Complexity Gate の判定 `execution_gated` 160 件のうち atomic 50 件（policy 31・human 14・hint 5）、compound 110 件 | 取れない: 本番未反映（Phase 4 の `db7abe3e` はどの release にも入っていない）。`execution_routed` event 0 件 | `sqlite3 "$RO" "select count(*) from events where json_extract(json,'$.type')='execution_routed'"` → 0。`sqlite3 "$RO" "select json_extract(json,'$.decision.mode'), json_extract(json,'$.decision.source'), count(*) from events where json_extract(json,'$.type')='execution_gated' group by 1,2"` → `atomic\|hint\|5`, `atomic\|human\|14`, `atomic\|policy\|31`, `compound\|hint\|5`, `compound\|human\|69`, `compound\|policy\|36` |
 | task あたり run 数・wall time・入力 token | done の execute task 358 件（runs の期間 2026-09-25〜2026-10-03 全体。Phase 3/4 は本番未反映なので全件が導入前）: run 数 平均 4.39・中央値 1。wall time（`metrics_json.wall_ms` の和）平均 1941 秒・中央値 175 秒。入力 token: `input_tokens` の和 平均 4,269,905、`input_tokens`+`cache_read_tokens`+`cache_creation_tokens` の和 平均 8,735,901・中央値 163,716 | 取れない: 本番未反映（Phase 3 `86841071`・Phase 4 `db7abe3e` はどの release にも入っていない）。統合 commit 日時 2026-10-02 13:33:34 以後に始まった done execute task の run は 319 件あるが、どれも導入前の release で動いている | `sqlite3 "$RO" "with t as (select r.task_id, count(*) n, sum(json_extract(r.metrics_json,'$.wall_ms'))/1000.0 wall_s, sum(json_extract(r.usage_json,'$.input_tokens')) inp, sum(coalesce(json_extract(r.usage_json,'$.input_tokens'),0)+coalesce(json_extract(r.usage_json,'$.cache_read_tokens'),0)+coalesce(json_extract(r.usage_json,'$.cache_creation_tokens'),0)) inp_all from runs r join tasks k on k.id=r.task_id where k.status='done' and k.kind='execute' group by r.task_id), o as (select *, row_number() over (order by n) rn_n, row_number() over (order by wall_s) rn_w, row_number() over (order by inp_all) rn_i, count(*) over () c from t) select c, round(avg(n),2), max(case when rn_n=(c+1)/2 then n end), round(avg(wall_s)), max(case when rn_w=(c+1)/2 then round(wall_s) end), round(avg(inp)), round(avg(inp_all)), max(case when rn_i=(c+1)/2 then inp_all end) from o"` → `358\|4.39\|1\|1941.0\|175.0\|4269905.0\|8735901.0\|163716`。`sqlite3 "$RO" "select count(*) from runs r join tasks k on k.id=r.task_id where k.status='done' and k.kind='execute' and r.started_at >= '2026-10-02T13:33:34'"` → 319 |
-| behind commits・age の分布 | 取れない: 導入前は観測しておらず、記録する table も無い | 取れない: 本番未反映（Phase 5 の `44bbad17` はどの release にも入っていない）。本番 DB に `behind_targets` table が無い | `sqlite3 "$RO" "select count(*) from sqlite_master where name in ('behind_targets','write_sets')"` → 0 |
+| behind commits・age の分布 | 取れない: 導入前は観測しておらず、記録する table も無い | 取れない: 本番未反映（Phase 5 の `44bbad17` はどの release にも入っていない）。本番 DB に `task_behind_targets`・`run_write_sets`・`work_unit_write_sets` の表（migration 0044・0045）が無い | `sqlite3 "$RO" "select count(*) from sqlite_master where name in ('task_behind_targets','run_write_sets','work_unit_write_sets')"` → 0 |
 
 事前に調べた event の種類（本番 DB 全体、上位の抜粋）にも `review_target_*`・`integration_repair_*` は無い:
 
@@ -146,7 +156,31 @@ cargo test -p task-dispatch phase_effect_ab -- --nocapture
 - 値は偽の adapter による決まった数え方で、実際の LLM の token や wall time ではない。新 session と resume の token の比（40000 : 4000）は仮に置いた値で、実際の prompt cache の効き方は測っていない。
 - run 数・新 session 数の差は機構で決まる（planner を飛ばす、同じ session を resume する、repair の往復が減る）ので、本番でも差の向きは同じになると見込める。wall time と token の減る割合は、仮に置いた値の比をそのまま映しているだけで、本番の削減率の見積もりには使えない。
 - review_sync は統合（main への取り込み）を試験の中の `git merge --no-ff` で代用している。配送（delivery）の `merge_base` repair の経路と、root と main の間の統合失敗率（'## 評価' の 23%・11%）は模擬していない。merge train が要るかどうかの判断に効くのはこの失敗率で、模擬ではこの値が分からない。
-- Phase 5 の write-set による並列・抑制と、behind による優先は、筋書き 1 本の run 数には出ない（効くのは複数 task が同時に走るとき）。
+- Phase 5 の write-set による抑制と behind による優先は、筋書き 2 task の別の scenario で測った（下の「Phase 5 と Phase 2 の off/on」の表）。
+
+Phase 5 と Phase 2 の off/on（ab-phase5 の記録 `agent-docs/progress/2026-10-03-review-sync-fix/ab-phase5.md`、commit `2f5ca69a`、starve-fix `dd44dd28` の上。`cargo test -p task-dispatch phase_effect_ab -- --nocapture` → exit 0、8 passed、3 回とも同じ値）:
+
+```sh
+# ab-metric write_set off runs=3 wall_secs=1320 input_tokens=120000 fresh_sessions=3 conflicts=1 repairs=1
+# ab-metric write_set on runs=2 wall_secs=1260 input_tokens=80000 fresh_sessions=2 conflicts=0 repairs=0
+# ab-metric stale_priority off runs=2 wall_secs=180 input_tokens=80000 fresh_sessions=2 stale_wait_secs=90
+# ab-metric stale_priority on runs=2 wall_secs=180 input_tokens=80000 fresh_sessions=2 stale_wait_secs=0
+# ab-metric review_sync_phase2 off runs=3 wall_secs=330 input_tokens=120000 fresh_sessions=3 attempts=1
+# ab-metric review_sync_phase2 on runs=3 wall_secs=330 input_tokens=120000 fresh_sessions=3 attempts=0
+```
+
+| scenario（対象） | 指標 | 導入前（off） | 導入後（on） | 差 |
+|---|---|---|---|---|
+| write_set（Phase 5 write-set gate、ADR-0130 D3） | run 数 | 3 | 2 | −1（衝突後のやり直し run が無くなる） |
+| write_set | wall time（秒） | 1320 | 1260 | −60 |
+| write_set | 入力 token | 120000 | 80000 | −40000 |
+| write_set | 衝突・repair | 1・1 | 0・0 | −1・−1 |
+| stale_priority（Phase 5 behind による優先、ADR-0130 D5） | run 数・wall time（秒） | 2・180 | 2・180 | 0 |
+| stale_priority | stale task の待ち（秒） | 90 | 0 | −90 |
+| review_sync_phase2（Phase 2 IntegrationRepair、ADR-0120） | run 数・wall time（秒） | 3・330 | 3・330 | 0 |
+| review_sync_phase2 | 消費した attempts | 1 | 0 | −1（`max_retries = 0` なら off は failed） |
+
+write_set は worktree を切らない共有の作業ディレクトリでの同時編集の衝突を測っている。git worktree の task では gate は統合衝突を減らさない（待たされた run も起動時の target から切られる。ab-phase5 の未解決事項）。worktree の統合衝突は review_sync の行が受け持つ。
 
 release 後の再計測の手順（人が実行する。読み取り専用）:
 
@@ -154,8 +188,11 @@ release 後の再計測の手順（人が実行する。読み取り専用）:
 2. `T` 以後の delivery が 30 件に届くまで待つ: `sqlite3 "$RO" "select count(*) from deliveries where json_extract(json,'$.pushed_at') >= 'T'"`（delivery の JSON に作成日時の欄は無いので、push 済みの数で数える。`task-core/src/delivery.rs` の `pushed_at`）。
 3. '## 実測' の「task あたり run 数・wall time・入力 token」と同じ SQL を流す。ただし `where` に `and r.started_at >= 'T'` を足し、導入前は `< 'T'` で区切る。
 4. 新 session 数と resume の割合を測る: `sqlite3 "$RO" "select count(*), sum(json_extract(usage_json,'$.session_resumed')=1), sum(json_extract(usage_json,'$.session_resumed')=0) from runs where adapter='claude-code' and started_at >= 'T'"`（`session_resumed` が無い run は数に入らない。`task-core/src/model.rs` の `Usage.session_resumed`）。
+   WU 単位の継続 session は `node_sessions` の列で数える（migration `0043_work_unit_sessions.sql`）: `sqlite3 "$RO" "select count(*), count(work_unit_id), sum(turns > 1), sum(retired_at is null) from node_sessions where kind='continuation' and created_at >= 'T'"`（全 continuation 行・WU の行（`work_unit_id` NULL は atomic task 全体の 1 本）・2 run 以上 resume された行・現役の行）。
 5. 直行経路の割合を測る: `sqlite3 "$RO" "select count(*) from events where json_extract(json,'$.type')='execution_routed'"`。'## 結論' の閾値の SQL も同じ時点で流す。
-6. 結果をこの節に「本番・導入後」の列として書き足す。
+6. write-set の記録を測る（migration `0044_write_sets.sql`）: `sqlite3 "$RO" "select status, count(*) from run_write_sets where recorded_at >= 'T' group by 1"` と `sqlite3 "$RO" "select status, count(*) from work_unit_write_sets where recorded_at >= 'T' group by 1"`（`complete` の割合が低ければ gate の判定材料が足りていない）。
+7. behind の分布を測る（migration `0045_behind_targets.sql`）: `sqlite3 "$RO" "select behind_commits, count(*) from task_behind_targets where observed_at >= 'T' group by 1 order by 1"` と、age は `sqlite3 "$RO" "select round((julianday(observed_at) - julianday(behind_since)) * 24, 1) h from task_behind_targets where behind_since is not null and observed_at >= 'T' order by h"`（`behind_commits` NULL は ref 不読で 0 ではない）。
+8. 結果をこの節に「本番・導入後」の列として書き足す。
 
 ## 結論
 
@@ -169,7 +206,7 @@ release 後の再計測の手順（人が実行する。読み取り専用）:
 |---|---|
 | `[needs-human]` で止まる delivery（`merge_base` 上限 + `integration_repair_exhausted`）が **10% 超**（導入前 11%から下がっていない） | `select count(*) from deliveries where json_extract(json,'$.detail') like '[needs-human]%' and json_extract(json,'$.pushed_at') is null` と `select count(*) from events where json_extract(json,'$.type')='integration_repair_exhausted'` |
 | `review_target_advanced` の attempt が上限 3 に達して停止した root が **5% 超**、または 1 delivery あたりの再 sync→再検査の平均回数が **1.5 回超**（stale の往復が review の費用を増やしている） | `select json_extract(json,'$.attempt'), count(*) from events where json_extract(json,'$.type')='review_target_advanced' group by 1` |
-| 同じ repo で **同時に `ready` の delivery が 2 件以上**ある時間が全体の 20% 超、または取り込み時 behind の中央値が **20 commit 超**（列に並べる価値が出る混雑） | `deliveries` の `state='ready'` の時刻の重なり、`behind_targets` の `behind_target_commits`（migration 0040）の delivery 直前の値 |
+| 同じ repo で **同時に `ready` の delivery が 2 件以上**ある時間が全体の 20% 超、または取り込み時 behind の中央値が **20 commit 超**（列に並べる価値が出る混雑） | `deliveries` の `state='ready'` の時刻の重なり、`task_behind_targets` の `behind_commits`（migration 0045）の delivery 直前の値 |
 | `merge_conflict`/`test_small` repair で解消できなかった段末統合（blocked・cancelled のまま）が **10% 超** | `select status, count(*) from work_units where kind='repair' and json_extract(json,'$.title') like 'repair (merge_conflict)%' group by 1` |
 
 閾値に届かない場合に先に手を付けるべきもの（merge train より安く、実測の衝突 file に直接効く。本文書では提案に留め、task は作らない）: `docs/PROGRESS.md` を task ごとの `docs/progress/<slug>.md` に分けて統合時の衝突源を消すこと、ADR 番号・migration 番号を起票時に予約すること、ADR-0120 D5 の event で `merge_base` 上限到達の内訳（衝突か検査不合格か）を残すこと。

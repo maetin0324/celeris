@@ -209,3 +209,12 @@ python3 /var/lib/celeris/workspaces/01M3ZCXG7C34WZFJ46Q64XS8SZ/artifacts/review-
 台本は `require` を設定し、各回で exit 0・skip なし・`ADMISSION[real-session]` 5 行を必須にする。対象 binary はこの worktree の `cargo test -p task-worker --features attack-test-hooks --test browser_launcher_ptrace --no-run --message-format=json` の出力から取得している。ログは同成果物ディレクトリの `review-stream-stutter-{1,2,3}.log`、`review-stream-stutter-summary.json`、`review-launcher-stutter-1.log`、`review-launcher-stutter-summary.json`。上記の host 用コマンドは別名 `review-host-launcher-stutter-*` に保存し、run 内での失敗証跡を上書きしない。
 
 今回の修正後も指定ゲート `cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` は連続実行で exit 0。出力の保存先は `review-final-gate.log`（コンパイル出力の一部は省略、終了結果は保存）。main は引き続き `3527c8e3` で HEAD の祖先であり、追加 merge は不要だった。
+
+## 人の判断による例外の確定と最新 main の取り込み（2026-10-03）
+
+merged-main: f45f218ead72a3b9282cc39b8275b019b2009247
+
+- **launcher（`browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace`）の host stutter 3 回**: 人が host（sandbox の外、load 3.6、host の launcher は main `3527c8e3` の protocol v3）で task の HEAD `569afd79` を build し、`CELERIS_LAUNCHER_TESTS=require CELERIS_USERNS_TESTS=1` で SIGSTOP stutter（`STUTTER_SCOPE=pid`、停止 2 ms・再開 1 ms、CPU を焼かない）の下で 3 回実行した。**3/3 `test result: ok`（1 passed、0.18〜0.19 s）**。上の run 内での失敗（UID 65534）は sandbox の user namespace 制約であり、この host 記録で stutter 3 回の要件を満たす（人の確認による記録）。
+- **`crates/scratch-cache/tests/sccache_webdav_e2e.rs` は対象外（人が例外として承認）**: 外部 WebDAV server を要する `#[ignore]` の手動試験。sccache task `01M3YD2Z58` が main に入って `crates/scratch-cache` ごと撤去されたため、今回の merge で modify/delete 衝突を main 側（削除）で解き、この試験と同 crate の `webdav.rs`・`tests/common/mod.rs` への本 task の変更は消えた。上表の scratch-cache の行は履歴として残す。
+- **deflake-lock との重複の解消**: main に `deflake-lock` の `wait_for_progress`（進捗停止 60 s・総保険 600 s）が入っていたため、`writes_from_celerisctl_and_api_..._database_is_locked` の末尾待ちの衝突は main 側を採り、本 task の同方式の自前ループを捨てた。`database is locked` が出ないこと・celeris が生きていることの主張は main 側の後続検査で維持される。
+- 衝突は `docs/PROGRESS.md`（両側の節を保持）、`tests/e2e/tests/api_scenarios.rs`（上記）、scratch-cache の 3 file（削除）。rebase はしていない。範囲 check の基点は上の `merged-main` 行の sha とする（`git diff --name-only f45f218e HEAD`）。

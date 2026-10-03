@@ -317,3 +317,36 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     assert_eq!(s.notice_unread_count().unwrap().total, 0);
     assert_eq!(versions(&path), v);
 }
+
+/// ADR-0133 付記: まとめての記録は 1 回の書き込み接続で、重複・束ね・走査位置を `notice_record` と同じに扱う。
+#[test]
+fn notification_feed_batch_records_in_one_write_and_skips_known_sources() {
+    let s = store();
+    s.notice_record(&ev("event:1", NoticeKind::TaskDone, "g", "一", T0))
+        .unwrap();
+    let before = s.lock_counts();
+    let outcomes = s
+        .notice_record_batch(
+            &[
+                ev("event:1", NoticeKind::TaskDone, "g", "一", T0),
+                ev("event:2", NoticeKind::TaskDone, "g", "二", T1),
+                ev("event:3", NoticeKind::Report, "r", "三", T2),
+            ],
+            &[("events", "3".to_string())],
+        )
+        .unwrap();
+    assert_eq!(s.lock_counts().since(before).writer, 1);
+    assert!(matches!(outcomes[0], NoticeRecordOutcome::Duplicate(_)));
+    assert!(matches!(outcomes[1], NoticeRecordOutcome::Bundled(_)));
+    assert!(matches!(outcomes[2], NoticeRecordOutcome::Created(_)));
+    assert_eq!(s.feed_cursor_get("events").unwrap().as_deref(), Some("3"));
+    let known = s
+        .notice_sources_known(&["event:1".into(), "event:2".into(), "event:9".into()])
+        .unwrap();
+    assert_eq!(known.len(), 2);
+    assert!(!known.contains("event:9"));
+    // 何も無ければ書き込み接続を取らない。
+    let before = s.lock_counts();
+    assert!(s.notice_record_batch(&[], &[]).unwrap().is_empty());
+    assert_eq!(s.lock_counts().since(before).writer, 0);
+}

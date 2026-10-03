@@ -697,3 +697,7 @@ watermark の圧力では消せる）に分類する規則を `classify` に足�
 - `CARGO_TARGET_DIR` を cwd の中（worktree）に置く: NFS の worktree に `target/` を書かない（D1・CLAUDE.md）。
 - `req.cargo_target_dir`（request.json の監査値）から取る: `with_env` が効いたときにしか入らず、子プロセスが実際に見る値は
   `config.env` の方。env から取れば、人が `[adapters.codex] env` で与えた `CARGO_TARGET_DIR` にも同じに効く。
+
+## 付記: ADR-0129（2026-10-02）
+
+[sccache の host 設定化と reflink target](0129-host-sccache-reflink-targets.md) は、本 ADR の D1–D6 のうち Celeris が sccache / WebDAV cache server を所有する部分と、回収可能な owner を rename で seed として adopt する部分を置き換える。owner ごとの `CARGO_TARGET_DIR` と semantic GC は維持し、repo ごとの独立した seed と btrfs 上の共有 extent を使う。`/local` では container 内の `FICLONE` が EPERM でも `copy_file_range` で共有できるため、コピー方式と検証条件は ADR-0129 に従う。

@@ -1647,9 +1647,9 @@ pub fn launcher_runtime_facts(
 /// [`LauncherSessionProof`]: task_core::browser_isolation::LauncherSessionProof
 pub fn launcher_session_proof(
     started: &crate::browser_launcher::StartedSession,
-    peer_uid: Option<u32>,
+    launcher_uid: Option<u32>,
 ) -> Option<task_core::browser_isolation::LauncherSessionProof> {
-    launcher_run::launcher_session_proof(started, peer_uid, &launcher_run::DaemonIds::current())
+    launcher_run::launcher_session_proof(started, launcher_uid, &launcher_run::DaemonIds::current())
 }
 
 #[cfg(test)]

@@ -20,8 +20,7 @@ cargo nextest --version    # → cargo-nextest 0.9.146 (...)
   `/tmp` で cargo を回さない規則に合わせ、`--target-dir` と `TMPDIR` を scratch に向けてよい:
   `TMPDIR=/var/lib/celeris/scratch/targets/<owner>/tmp cargo install cargo-nextest --locked --version "$(cat tools/nextest/VERSION)" --target-dir /var/lib/celeris/scratch/targets/<owner>/install-target`
   （終わったら `<owner>` ごと消す）。
-- バイナリをリポジトリに置かない（vendor しない）。GitHub の配布バイナリも使わない（照合する sha256 を持たない。sccache と同じ方針。
-  [sccache-l1.md](sccache-l1.md)）。
+- バイナリをリポジトリに置かない（vendor しない）。GitHub の配布バイナリも使わない（照合する sha256 を持たない）。
 - `cargo test` の一部ではない（ネットワークに出る。ADR-0009 P-34）。
 
 ## 版を上げる

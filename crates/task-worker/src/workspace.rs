@@ -66,9 +66,6 @@ pub struct LocalWorkspace {
     container: Option<crate::container::SharedPlan>,
     /// ADR-0074 F5-fix: `exec`（判定コマンド）に足す環境変数（`CARGO_TARGET_DIR` など）。空なら従来どおり。
     env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: `exec` の子プロセスから外す環境変数（親から継いだ `RUSTC_WRAPPER` / `SCCACHE_*` など。
-    /// `env` より先に `Command::env_remove` する）。
-    env_remove: Vec<String>,
 }
 
 impl LocalWorkspace {
@@ -79,7 +76,6 @@ impl LocalWorkspace {
             work_dir: None,
             container: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
         }
     }
 
@@ -89,15 +85,9 @@ impl LocalWorkspace {
         self
     }
 
-    /// ADR-0075 G3-fix1: 判定コマンドの子プロセスから外す環境変数。
-    pub fn with_env_removed(mut self, keys: Vec<String>) -> Self {
-        self.env_remove = keys;
-        self
-    }
-
-    /// ADR-0075 G3-fix1: run と同じ `CargoEnv`（`set` を重ね、`remove` を外す）。
+    /// run と同じ `CargoEnv`（`set` を重ねる。ADR-0129 (1): 継いだ env は外さない）。
     pub fn with_cargo_env(self, env: crate::scratch::CargoEnv) -> Self {
-        self.with_env(env.set).with_env_removed(env.remove)
+        self.with_env(env.set)
     }
 
     /// ADR-0041 D1: `runs/` `inputs/` `artifacts/` は `dir`、コマンドは `work_dir`（worktree）で動かす。
@@ -172,9 +162,6 @@ impl Workspace for LocalWorkspace {
         command.arg("-c").arg(cmd);
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する。
         command.current_dir(self.work_dir());
-        for key in &self.env_remove {
-            command.env_remove(key);
-        }
         command.envs(self.env.iter().cloned());
         // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
         let mut command = crate::db_guard::launch(command, self.container.as_deref());

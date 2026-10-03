@@ -66,6 +66,7 @@ pub(crate) fn router(state: ApiState) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/inbox", get(inbox))
+        .merge(crate::inbox_notifications::routes())
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/tasks/{id}", get(task_detail).patch(patch_task))
         // ADR-0044 D2（Phase 53）: タスク単位のコメントと再開。

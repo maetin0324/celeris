@@ -292,8 +292,8 @@ pub(crate) fn settle_pending_approvals(
     Ok(())
 }
 
-/// 非終端（`draft/ready/running/blocked/reviewing`）のタスクだけを `Trigger::Cancel` で
-/// `cancelled` にする。終端はエラーにし、状態は変えない（ADR-0010 D1, P-4）。子・後続への
+/// 非終端と `failed` のタスクを `Trigger::Cancel` で `cancelled` にする。
+/// `done` / `cancelled` はエラーにする（ADR-0131 D7）。子・後続への
 /// 取り消し伝播は `TaskStore::apply_transition` がストア側の同一トランザクションで行う。
 pub fn cancel(
     store: &dyn TaskStore,
@@ -303,7 +303,7 @@ pub fn cancel(
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
-    if task.status.is_terminal() {
+    if matches!(task.status, Status::Done | Status::Cancelled) {
         return Err(OpsError::InvalidState {
             id,
             context: format!("status={:?}", task.status),

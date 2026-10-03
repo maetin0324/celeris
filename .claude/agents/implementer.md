@@ -20,7 +20,7 @@ cargo を使う前に `eval "$(celerisctl scratch env --owner agent-<worktree �
 `--config` は `CELERIS_CONFIG`）。長いビルドの前には `celerisctl scratch touch --owner agent-<worktree 名>`。
 `CARGO_TARGET_DIR` を自分で決めない。`~/.cargo/config.toml` と `/tmp` と worktree 直下に target を置かない。
 作業が終わったら `celerisctl scratch release --owner agent-<worktree 名>`。
-G2 以降の `scratch env` は sccache の server が動いていれば `RUSTC_WRAPPER`（sccache）と `SCCACHE_*`、常に
-`CARGO_INCREMENTAL=0` と `CARGO_PROFILE_DEV_DEBUG=line-tables-only` も出す。長い「編集 → 再ビルド」のループでは
-`unset CARGO_INCREMENTAL` してよい（sccache は incremental の crate をキャッシュしないだけで、依存の hit は変わらない）。
-G3-fix1 以降の `scratch env` は、与えない sccache の族（server が居なければ `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` の全部）を先頭の `unset` 行で外す（dispatcher が run と checks でするのと同じ）。
+`scratch env` は `CARGO_TARGET_DIR` と `[scratch.cargo]`（`CARGO_INCREMENTAL=0` と
+`CARGO_PROFILE_DEV_DEBUG=line-tables-only`）だけを出す。ADR-0129 (1): sccache は Celeris の外（host の `~/.cargo/config.toml`）に
+なったので、継いだ `RUSTC_WRAPPER` / `SCCACHE_*` には触らない（足しも外しもしない）。長い「編集 → 再ビルド」のループでは
+`unset CARGO_INCREMENTAL` してよい。

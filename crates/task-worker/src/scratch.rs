@@ -24,10 +24,6 @@ pub const LEASE_FILE: &str = "lease.json";
 /// owner のディレクトリの中の `CARGO_TARGET_DIR`。
 pub const TARGET_SUBDIR: &str = "target";
 pub const TARGETS_DIR: &str = "targets";
-/// G2 の sccache の local disk cache（G1 では作るだけ・使わない）。
-pub const L1_DIR: &str = "sccache-l1";
-/// ADR-0075 D5 (b)（Phase G3）: cache server の L1。
-pub const CACHE_L1_DIR: &str = "cache-l1";
 pub const LOCK_FILE: &str = ".lock";
 /// GC が rename した削除待ち（`targets/.deleting-<owner-flat>-<nanos>`）。
 pub const DELETING_PREFIX: &str = ".deleting-";
@@ -222,7 +218,6 @@ pub struct ScratchSettings {
     pub disabled_reason: Option<String>,
     pub dir: PathBuf,
     pub targets_max_bytes: u64,
-    pub l1_max_bytes: u64,
     pub total_max_bytes: u64,
     pub high_watermark: f64,
     pub low_watermark: f64,
@@ -236,95 +231,18 @@ pub struct ScratchSettings {
     pub adopt_max_distance: u64,
     /// 測定スレッドが owner を 1 つ測る間隔（D2。既定 30 秒）。
     pub measure_interval_secs: u64,
-    /// ADR-0075 D4（Phase G2）: `[scratch.sccache]`。
-    pub sccache: SccacheSettings,
     /// ADR-0075 D4（Phase G2）: `[scratch.cargo]`。
     pub cargo: CargoTuning,
-    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]`。
-    pub l2: L2Settings,
-    /// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]`。
-    pub cache_server: CacheServerSettings,
+    /// ADR-0129 (4): 新しい owner の target を repo の seed から reflink で作るか（既定 false）。
+    pub seed_reflink: bool,
+    /// ADR-0129 (3): `dir` を置く mount point（例 `/local`）。`Some` なら起動時に mount されているかを確かめ、
+    /// されていなければ `dir` を従来の場所へ戻す（`apply_mount_check`）。
+    pub mount: Option<PathBuf>,
+    /// `apply_mount_check` が `dir` を従来の場所へ戻した理由（起動ログに出す）。
+    pub dir_fallback_reason: Option<String>,
 }
 
-/// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]` を解決した値（L2 = NFS 上の content-addressed な immutable object）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct L2Settings {
-    pub enabled: bool,
-    /// 既定 `$CELERIS_STATE_DIR/cache/sccache-l2`（NFS）。
-    pub dir: PathBuf,
-    pub max_bytes: u64,
-    /// flusher の帯域（MB/s = 10^6 byte / 秒。0 = 無制限）。
-    pub flush_mbps: u64,
-    pub flush_queue_max_mb: u64,
-    pub get_timeout_ms: u64,
-    pub io_threads: usize,
-    pub gc_interval_secs: u64,
-}
-
-impl L2Settings {
-    pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            dir: PathBuf::new(),
-            max_bytes: 300 * GIB,
-            flush_mbps: 25,
-            flush_queue_max_mb: 4096,
-            get_timeout_ms: 500,
-            io_threads: 4,
-            gc_interval_secs: 86_400,
-        }
-    }
-}
-
-/// ADR-0075 D5 (b)（Phase G3）: `[scratch.cache_server]` を解決した値（`celeris cache-server`、loopback だけ）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CacheServerSettings {
-    pub enabled: bool,
-    pub port: u16,
-    /// DAV の Bearer token（`SCCACHE_WEBDAV_TOKEN`）。既定 `<scratch>/cache-server.token`（cache server が初回に作る）。
-    pub token_file: PathBuf,
-}
-
-/// cache server の既定の port（D5）。
-pub const DEFAULT_CACHE_SERVER_PORT: u16 = 4237;
-
-impl CacheServerSettings {
-    pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            port: DEFAULT_CACHE_SERVER_PORT,
-            token_file: PathBuf::new(),
-        }
-    }
-}
-
-/// ADR-0075 D4（Phase G2）: `[scratch.sccache]` を解決した値。`enabled` でも `binary` が無い・server が応答しない
-/// なら配線しない（`resolve_sccache`）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SccacheSettings {
-    pub enabled: bool,
-    /// 本物の sccache（既定 `$CELERIS_STATE_DIR/tools/sccache/bin/sccache`）。`RUSTC_WRAPPER` にはこれを包む
-    /// `<scratch>/bin/sccache` を与える（`wrapper_script`）。
-    pub binary: PathBuf,
-    /// `SCCACHE_SERVER_PORT`（既定 4236。人が自分で使う sccache の既定 4226 と分ける）。
-    pub server_port: u16,
-}
-
-/// sccache の server の既定の port（D4）。
-pub const DEFAULT_SCCACHE_PORT: u16 = 4236;
-
-impl SccacheSettings {
-    /// 配線しない設定（テストと、sccache を使わない構成）。
-    pub fn disabled() -> Self {
-        Self {
-            enabled: false,
-            binary: PathBuf::new(),
-            server_port: DEFAULT_SCCACHE_PORT,
-        }
-    }
-}
-
-/// ADR-0075 D4（Phase G2）: `[scratch.cargo]` を解決した値。scratch が有効な経路に常に与える（sccache の有無に依らない）。
+/// ADR-0075 D4（Phase G2）: `[scratch.cargo]` を解決した値。scratch が有効な経路に常に与える。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CargoTuning {
     /// `false`（既定）なら `CARGO_INCREMENTAL=0`。`true` なら env を与えない（cargo の既定に任せる）。
@@ -348,15 +266,13 @@ pub const DEFAULT_DEV_DEBUG: &str = "line-tables-only";
 pub const GIB: u64 = 1024 * 1024 * 1024;
 
 impl ScratchSettings {
-    /// 既定値（ADR-0075 の表）で `dir` を指す有効な設定。sccache は配線しない（`[scratch.sccache]` の既定は
-    /// `celeris::config` が解決する。テストが手元の sccache の server を拾わないため）。
+    /// 既定値（ADR-0075 の表）で `dir` を指す有効な設定。
     pub fn with_dir(dir: impl Into<PathBuf>) -> Self {
         Self {
             enabled: true,
             disabled_reason: None,
             dir: dir.into(),
             targets_max_bytes: 100 * GIB,
-            l1_max_bytes: 40 * GIB,
             total_max_bytes: 150 * GIB,
             high_watermark: 0.90,
             low_watermark: 0.70,
@@ -369,10 +285,10 @@ impl ScratchSettings {
             adopt: true,
             adopt_max_distance: 200,
             measure_interval_secs: 30,
-            sccache: SccacheSettings::disabled(),
             cargo: CargoTuning::default(),
-            l2: L2Settings::disabled(),
-            cache_server: CacheServerSettings::disabled(),
+            seed_reflink: false,
+            mount: None,
+            dir_fallback_reason: None,
         }
     }
 
@@ -405,7 +321,7 @@ pub fn is_on_nfs(path: &Path) -> io::Result<bool> {
     Ok(st.filesystem_type() == nix::sys::statfs::NFS_SUPER_MAGIC)
 }
 
-/// 起動時の検査（D1）: `dir` と `sccache-l1/` が NFS 上なら無効化して理由を返す。`probe` は `is_on_nfs`
+/// 起動時の検査（D1）: `dir` が NFS 上なら無効化して理由を返す。`probe` は `is_on_nfs`
 /// （テストでは差し替える）。検査できないときは有効のまま（ローカルを仮定しない理由が無い。ログは呼び出し側）。
 pub fn apply_nfs_check(
     mut settings: ScratchSettings,
@@ -414,15 +330,68 @@ pub fn apply_nfs_check(
     if !settings.enabled {
         return settings;
     }
-    for path in [settings.dir.clone(), settings.dir.join(L1_DIR)] {
-        if let Ok(true) = probe(&path) {
-            settings.enabled = false;
-            settings.disabled_reason = Some(format!(
-                "scratch dir {} is on NFS; falling back to [workspace] build_cache_dir (ADR-0075 D1)",
-                path.display()
-            ));
-            return settings;
+    if let Ok(true) = probe(&settings.dir) {
+        settings.enabled = false;
+        settings.disabled_reason = Some(format!(
+            "scratch dir {} is on NFS; falling back to [workspace] build_cache_dir (ADR-0075 D1)",
+            settings.dir.display()
+        ));
+    }
+    settings
+}
+
+/// path が mount point か（親と `st_dev` が違う、または `/`）。無ければ false。
+pub fn is_mount_point(path: &Path) -> io::Result<bool> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = match std::fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(e),
+    };
+    let Some(parent) = path.parent() else {
+        return Ok(true);
+    };
+    let parent = if parent.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        parent
+    };
+    Ok(std::fs::metadata(parent)?.dev() != meta.dev())
+}
+
+/// ADR-0129 (3): `mount`（例 `/local`）が設定されていれば、それが mount point で `dir` がその下にあるときだけ
+/// `dir` を使う。満たさなければ `dir` を `fallback`（従来の場所）へ戻して理由を残す（mount が外れた `/local` の
+/// 下の root filesystem に scratch を作らない）。`probe` は `is_mount_point`（テストでは差し替える）。
+pub fn apply_mount_check(
+    mut settings: ScratchSettings,
+    fallback: &Path,
+    probe: impl Fn(&Path) -> io::Result<bool>,
+) -> ScratchSettings {
+    let Some(mount) = settings.mount.clone() else {
+        return settings;
+    };
+    if !settings.enabled {
+        return settings;
+    }
+    let reason = if !settings.dir.starts_with(&mount) {
+        Some(format!(
+            "scratch dir {} is not under [scratch] mount {}",
+            settings.dir.display(),
+            mount.display()
+        ))
+    } else {
+        match probe(&mount) {
+            Ok(true) => None,
+            Ok(false) => Some(format!("{} is not mounted", mount.display())),
+            Err(e) => Some(format!("cannot inspect {}: {e}", mount.display())),
         }
+    };
+    if let Some(reason) = reason {
+        settings.dir_fallback_reason = Some(format!(
+            "{reason}; using {} instead (ADR-0129 (3))",
+            fallback.display()
+        ));
+        settings.dir = fallback.to_path_buf();
     }
     settings
 }
@@ -451,13 +420,6 @@ impl Pool {
     }
     pub fn targets_dir(&self) -> PathBuf {
         self.root.join(TARGETS_DIR)
-    }
-    pub fn l1_dir(&self) -> PathBuf {
-        self.root.join(L1_DIR)
-    }
-    /// ADR-0075 D5 (b)（Phase G3）: cache server の L1（G2 の sccache の disk cache `sccache-l1/` とは分ける）。
-    pub fn cache_l1_dir(&self) -> PathBuf {
-        self.root.join(CACHE_L1_DIR)
     }
     pub fn owner_dir(&self, owner: &Owner) -> PathBuf {
         self.targets_dir().join(owner.relative_dir())
@@ -707,11 +669,25 @@ pub struct Allocation {
     pub adopted_from: Option<String>,
     /// lease を新しく作った（既にあったなら false）。
     pub created: bool,
+    /// ADR-0129 (4): `target/` をどう作ったか（既にあった・adopt・seed・空）。
+    pub origin: TargetOrigin,
 }
 
 /// ADR-0075 D3: owner の lease を作る（あれば touch し `released_at` を消す）。`target/` がまだ無ければ adopt を試み、
-/// 無理なら空の `target/` を作る。`.lock` を持って行う。
+/// 無理なら seed から reflink で写し（ADR-0129 (4)。互換の検査はしない）、それも無理なら空の `target/` を作る。
+/// `.lock` を持って行う。
 pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation> {
+    allocate_with_seed(pool, req, &SeedPolicy::unchecked(), &SeedCopyOps::real())
+}
+
+/// `allocate` の seed の条件と写し方を指定する版（dispatcher は `[scratch.cargo]` と rustc の版を渡す）。
+/// seed の写しは `.lock` の下で行う（seed の切り替え・GC と直列）。
+pub fn allocate_with_seed(
+    pool: &Pool,
+    req: &AllocateRequest<'_>,
+    seed: &SeedPolicy<'_>,
+    ops: &SeedCopyOps<'_>,
+) -> io::Result<Allocation> {
     let _lock = pool.lock()?;
     let owner_dir = pool.owner_dir(req.owner);
     let lease_path = owner_dir.join(LEASE_FILE);
@@ -778,12 +754,37 @@ pub fn allocate(pool: &Pool, req: &AllocateRequest<'_>) -> io::Result<Allocation
             }
         }
     }
+    let origin = if target.exists() {
+        match &adopted_from {
+            Some(from) => TargetOrigin::Adopted { from: from.clone() },
+            None => TargetOrigin::Existing,
+        }
+    } else {
+        seed_target(pool, &owner_dir, &repo_key, seed, ops)
+    };
     std::fs::create_dir_all(&target)?;
+    if origin != TargetOrigin::Existing {
+        match &origin {
+            TargetOrigin::Seed { seed, commit } => {
+                tracing::info!(owner = %req.owner, seed = %seed.display(), commit = ?commit, target = %target.display(), "scratch: target created from the seed by reflink (ADR-0129)");
+            }
+            TargetOrigin::Empty {
+                reason: Some(reason),
+            } => {
+                tracing::info!(owner = %req.owner, reason = %reason, target = %target.display(), "scratch: seed not used; target created empty (ADR-0129)");
+            }
+            _ => {}
+        }
+        if let Err(e) = write_target_origin(&owner_dir, &origin) {
+            tracing::warn!(owner = %req.owner, error = %e, "scratch: could not record how the target was created");
+        }
+    }
     write_lease(&lease_path, &lease)?;
     Ok(Allocation {
         target_dir: target,
         adopted_from,
         created,
+        origin,
     })
 }
 
@@ -830,221 +831,6 @@ pub fn target_env(pool: &Pool, owner: &Owner) -> Vec<(String, String)> {
     )]
 }
 
-// ---------------------------------------------------------------------------
-// sccache L1（D4、Phase G2）
-// ---------------------------------------------------------------------------
-
-/// `<scratch>/bin/`（Celeris が生成する wrapper の置き場。`targets/` の外なので GC の対象にならない）。
-pub const WRAPPER_DIR: &str = "bin";
-/// wrapper のファイル名。**`sccache` でなければならない**: cc-rs は `RUSTC_WRAPPER` の stem が `sccache` のときだけ
-/// C/C++ にも同じ wrapper を使う（G2 の U1 の測定）。
-pub const WRAPPER_NAME: &str = "sccache";
-
-/// sccache の配線の状態（`resolve_sccache` の結果）。`scratch status` と起動ログに出す。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SccacheState {
-    /// 配線する。`wrapper` = `RUSTC_WRAPPER` に与える `<scratch>/bin/sccache`。
-    Ready { wrapper: PathBuf },
-    /// `[scratch.sccache] enabled = false`、または scratch 自体が無効。
-    Disabled { reason: String },
-    /// 有効だが使えない（バイナリが無い・server が応答しない・wrapper を書けない）。
-    Unavailable { reason: String },
-}
-
-impl SccacheState {
-    pub fn label(&self) -> &'static str {
-        match self {
-            SccacheState::Ready { .. } => "ready",
-            SccacheState::Disabled { .. } => "disabled",
-            SccacheState::Unavailable { .. } => "unavailable",
-        }
-    }
-    pub fn reason(&self) -> Option<&str> {
-        match self {
-            SccacheState::Ready { .. } => None,
-            SccacheState::Disabled { reason } | SccacheState::Unavailable { reason } => {
-                Some(reason)
-            }
-        }
-    }
-    pub fn wrapper(&self) -> Option<&Path> {
-        match self {
-            SccacheState::Ready { wrapper } => Some(wrapper),
-            _ => None,
-        }
-    }
-}
-
-/// `127.0.0.1:<port>` に TCP で繋がるか（sccache の server が居るか）。**sccache の client は呼ばない**
-/// （`sccache --show-stats` は server が無いと起こしてしまう。server は run の中から起こさない。D4）。
-pub fn server_listening(port: u16) -> bool {
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(300)).is_ok()
-}
-
-/// `path` が実行できる通常のファイルか。
-fn is_executable_file(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-        .unwrap_or(false)
-}
-
-/// sh の単一引用符で包む。
-fn sh_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "'\\''"))
-}
-
-/// `<scratch>/bin/sccache` の中身（決定的）。sccache 0.18 は `CARGO_` で始まる env を全て Rust の key に入れるので、
-/// owner ごとに違う `CARGO_TARGET_DIR` を rustc の env から外してから本物の sccache を exec する（G2 の U1）。
-///
-/// ADR-0075 R7-7: エージェントの sandbox（codex の `workspace-write` でネットワーク無し）の中では `socket(AF_INET)` が
-/// `EPERM` になり、sccache の client は server に繋げず build を落とす。wrapper は compiler の起動のたびに**自分の居る
-/// 場所から** `127.0.0.1:$SCCACHE_SERVER_PORT` に TCP で繋がるか（`server_listening` と同じ見方。sccache の client は
-/// 呼ばない＝server を起こさない）を bash の `/dev/tcp` で見て、届かなければ compiler を直接 exec する。sccache 自身の
-/// 操作（第 1 引数が `-` で始まる・引数なし）と `SCCACHE_SERVER_UDS` があるときは見ずに sccache へ渡す。
-pub fn wrapper_script(binary: &Path) -> String {
-    let sccache = sh_quote(&binary.display().to_string());
-    format!(
-        "#!/bin/bash\n\
-         # Celeris が生成（ADR-0075 D4、Phase G2 / R7-7）。手で編集しない（次の run で書き直される）。\n\
-         # sccache は CARGO_* の env を Rust の cache key に入れる。owner ごとに違う target の場所を外し、\n\
-         # owner をまたいで依存 crate の cache を共有する。\n\
-         unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR\n\
-         # sccache 自身の操作（--show-stats 等）は compiler ではないのでそのまま渡す。\n\
-         case \"${{1-}}\" in\n\
-         \x20 -*|'') exec {sccache} \"$@\" ;;\n\
-         esac\n\
-         # R7-7: ここ（エージェントの sandbox の中でありうる）から server に届くときだけ sccache を通す。\n\
-         # 届かない（ネットワークの無い sandbox では socket が EPERM、server が居なければ refused）なら compiler を直接動かす。\n\
-         if [ -n \"${{SCCACHE_SERVER_UDS-}}\" ] || : 2>/dev/null 3<>\"/dev/tcp/127.0.0.1/${{SCCACHE_SERVER_PORT:-4226}}\"; then\n\
-         \x20 exec {sccache} \"$@\"\n\
-         fi\n\
-         exec \"$@\"\n"
-    )
-}
-
-/// wrapper を置く（中身が同じなら触らない。違えば tmp → rename）。
-pub fn ensure_wrapper(pool: &Pool, binary: &Path) -> io::Result<PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let dir = pool.root().join(WRAPPER_DIR);
-    let path = dir.join(WRAPPER_NAME);
-    let want = wrapper_script(binary);
-    if std::fs::read_to_string(&path).ok().as_deref() == Some(want.as_str())
-        && is_executable_file(&path)
-    {
-        return Ok(path);
-    }
-    std::fs::create_dir_all(&dir)?;
-    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let tmp = dir.join(format!(".{WRAPPER_NAME}.tmp-{}-{seq}", std::process::id()));
-    std::fs::write(&tmp, want.as_bytes())?;
-    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o755))?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(path)
-}
-
-/// sccache を配線するかを決める（D4）。`server_up` は `server_listening`（テストでは差し替える）。
-/// sccache の server が webdav（G3 の cache server）で動いているなら cache server の `/healthz` も見る
-/// （`resolve_sccache_with`）。
-pub fn resolve_sccache(
-    settings: &ScratchSettings,
-    server_up: impl Fn(u16) -> bool,
-) -> SccacheState {
-    resolve_sccache_with(settings, server_up, cache_server_healthy)
-}
-
-/// `resolve_sccache` の本体。`cache_up` は `cache_server_healthy`（テストでは差し替える）。U5: sccache 0.18 は backend の
-/// 応答を timeout なしで待つので、webdav で動く sccache の server に対して cache server が応答しなければ（hang を含む）
-/// `RUSTC_WRAPPER` を与えない（素の cargo）。
-pub fn resolve_sccache_with(
-    settings: &ScratchSettings,
-    server_up: impl Fn(u16) -> bool,
-    cache_up: impl Fn(u16) -> bool,
-) -> SccacheState {
-    let state = resolve_sccache_l1(settings, server_up);
-    if state.wrapper().is_some()
-        && read_sccache_mode(&settings.pool()).as_deref() == Some(SCCACHE_MODE_WEBDAV)
-        && !cache_up(settings.cache_server.port)
-    {
-        return SccacheState::Unavailable {
-            reason: format!(
-                "sccache uses the webdav backend but the cache server on 127.0.0.1:{} does not answer /healthz \
-                 (celeris-scratch-cache.service)",
-                settings.cache_server.port
-            ),
-        };
-    }
-    state
-}
-
-fn resolve_sccache_l1(settings: &ScratchSettings, server_up: impl Fn(u16) -> bool) -> SccacheState {
-    if !settings.enabled {
-        return SccacheState::Disabled {
-            reason: "scratch is disabled".to_string(),
-        };
-    }
-    let s = &settings.sccache;
-    if !s.enabled {
-        return SccacheState::Disabled {
-            reason: "[scratch.sccache] enabled = false".to_string(),
-        };
-    }
-    if !is_executable_file(&s.binary) {
-        return SccacheState::Unavailable {
-            reason: format!(
-                "sccache binary {} not found (run scripts/scratch/setup-sccache.sh)",
-                s.binary.display()
-            ),
-        };
-    }
-    if !server_up(s.server_port) {
-        return SccacheState::Unavailable {
-            reason: format!(
-                "no sccache server on 127.0.0.1:{} (celeris-sccache.service)",
-                s.server_port
-            ),
-        };
-    }
-    match ensure_wrapper(&settings.pool(), &s.binary) {
-        Ok(wrapper) => SccacheState::Ready { wrapper },
-        Err(e) => SccacheState::Unavailable {
-            reason: format!("could not write the sccache wrapper: {e}"),
-        },
-    }
-}
-
-/// sccache の server に与える env（`celeris-sccache.service` と `celerisctl scratch env --server`）。client の env と
-/// 同じ値（D4 の「server は 1 つ、最初に起こした client の env で動く」への備え）。
-pub fn sccache_server_env(settings: &ScratchSettings) -> Vec<(String, String)> {
-    vec![
-        (
-            "SCCACHE_DIR".to_string(),
-            settings.pool().l1_dir().display().to_string(),
-        ),
-        (
-            "SCCACHE_CACHE_SIZE".to_string(),
-            format!("{}G", settings.l1_max_bytes / GIB),
-        ),
-        (
-            "SCCACHE_SERVER_PORT".to_string(),
-            settings.sccache.server_port.to_string(),
-        ),
-        ("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()),
-    ]
-}
-
-/// sccache 系の env（`RUSTC_WRAPPER` と server の env）。`Ready` でなければ空。
-pub fn sccache_env(settings: &ScratchSettings, state: &SccacheState) -> Vec<(String, String)> {
-    let Some(wrapper) = state.wrapper() else {
-        return Vec::new();
-    };
-    let mut env = vec![("RUSTC_WRAPPER".to_string(), wrapper.display().to_string())];
-    env.extend(sccache_server_env(settings));
-    env
-}
-
 /// `[scratch.cargo]` の env（`CARGO_INCREMENTAL=0`、`CARGO_PROFILE_DEV_DEBUG`）。
 pub fn cargo_tuning_env(tuning: &CargoTuning) -> Vec<(String, String)> {
     let mut env = Vec::new();
@@ -1057,321 +843,45 @@ pub fn cargo_tuning_env(tuning: &CargoTuning) -> Vec<(String, String)> {
     env
 }
 
-/// 経路に渡す env の全体（純粋。`state` は `resolve_sccache` の結果）。順序は固定:
-/// `CARGO_TARGET_DIR`、`[scratch.cargo]`、sccache 系。
-pub fn cargo_env_with(
-    settings: &ScratchSettings,
-    owner: &Owner,
-    state: &SccacheState,
-) -> Vec<(String, String)> {
+/// 経路に渡す env（D3 / D4）。dispatcher（run・WU の checks・統合の検査・reviewer の checks）と
+/// `celerisctl scratch env` の両方がこれを使う（ADR-0075 D4 の「env は一か所で組む」）。順序は固定:
+/// `CARGO_TARGET_DIR`、`[scratch.cargo]`。ADR-0129 (1): `RUSTC_WRAPPER` / `SCCACHE_*` は足さない
+/// （compiler wrapper は host の cargo 設定に任せる）。
+pub fn cargo_env(settings: &ScratchSettings, owner: &Owner) -> Vec<(String, String)> {
     let mut env = target_env(&settings.pool(), owner);
     env.extend(cargo_tuning_env(&settings.cargo));
-    env.extend(sccache_env(settings, state));
     env
 }
 
-/// 経路に渡す env（D3 / D4）。dispatcher（run・WU の checks・統合の検査・reviewer の checks）と
-/// `celerisctl scratch env` の両方がこれを使う（ADR-0075 D4 の「env は一か所で組む」）。sccache は server が
-/// 応答するときだけ（`resolve_sccache`）。
-pub fn cargo_env(settings: &ScratchSettings, owner: &Owner) -> Vec<(String, String)> {
-    let state = resolve_sccache(settings, server_listening);
-    cargo_env_with(settings, owner, &state)
-}
-
-// ---------------------------------------------------------------------------
-// 継いだ sccache 系の env を外す（G3-fix1）
-// ---------------------------------------------------------------------------
-
-/// 経路の子プロセスに与える env の全体（G3-fix1）。`set` は `cargo_env` と同じ（重ねる値）、`remove` は
-/// 親（daemon・テストの process・人の shell）から継いだものを**外す** key（`Command::env_remove`）。
-/// sccache を配線しないときに継いだ `RUSTC_WRAPPER` が run に漏れると、Celeris が Celeris を build する run
-/// （ADR-0040 の self-dogfood）の中で配線の判定が親の値に上書きされる。`remove` と `set` は交わらない。
+/// 経路の子プロセスに重ねる env（`set` = `cargo_env` と同じ値）。ADR-0129 (1): 親（daemon・人の shell）から
+/// 継いだ env は外さない（`remove` の欄は持たない）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CargoEnv {
     pub set: Vec<(String, String)>,
-    pub remove: Vec<String>,
 }
 
 impl CargoEnv {
-    /// `set` だけ（`remove` 無し。legacy の `CARGO_TARGET_DIR` など、sccache の判定をしない経路）。
     pub fn set_only(set: Vec<(String, String)>) -> Self {
-        Self {
-            set,
-            remove: Vec::new(),
-        }
-    }
-
-    /// `set` から `remove` を組む（`sccache_env_removals`。親の process の env を見る）。
-    pub fn from_set(set: Vec<(String, String)>) -> Self {
-        let remove = sccache_env_removals(&set);
-        Self { set, remove }
-    }
-
-    /// `env_remove` を持たない経路（`WorkerAdapter::with_env_removed` が `None` のアダプタ）への代替: `remove` に
-    /// ある `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` を空の値で上書きした `set`。cargo は空の値を「未設定」と
-    /// 扱う（cargo 1.98.1 で確かめた。G3-fix1）。`SCCACHE_*` は空にしない（sccache は空の値を「設定あり」と
-    /// 読みうる。wrapper が無ければ cargo は sccache を起こさない）。
-    pub fn set_with_empty_wrappers(&self) -> Vec<(String, String)> {
-        let mut set = self.set.clone();
-        for key in RUSTC_WRAPPER_VARS {
-            if self.remove.iter().any(|k| k == key) {
-                set.push((key.to_string(), String::new()));
-            }
-        }
-        set
+        Self { set }
     }
 }
 
-/// cargo が rustc を包む env（G3-fix1）。sccache を配線しないときは両方、配線するときは `RUSTC_WORKSPACE_WRAPPER`
-/// だけを外す（`RUSTC_WRAPPER` は Celeris の wrapper）。
-pub const RUSTC_WRAPPER_VARS: [&str; 2] = ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"];
-/// sccache が読む env の接頭辞。
-pub const SCCACHE_VAR_PREFIX: &str = "SCCACHE_";
-/// 親の env に無くても `remove` に常に入れる `SCCACHE_*`（Celeris が与えうる key。結果を親の env に依らせない）。
-pub const KNOWN_SCCACHE_VARS: [&str; 7] = [
-    "SCCACHE_DIR",
-    "SCCACHE_CACHE_SIZE",
-    "SCCACHE_SERVER_PORT",
-    "SCCACHE_IDLE_TIMEOUT",
-    "SCCACHE_WEBDAV_ENDPOINT",
-    "SCCACHE_WEBDAV_KEY_PREFIX",
-    "SCCACHE_WEBDAV_TOKEN",
-];
-
-/// sccache の配線に関わる env か（`RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*`）。
-pub fn is_sccache_family(key: &str) -> bool {
-    RUSTC_WRAPPER_VARS.contains(&key) || key.starts_with(SCCACHE_VAR_PREFIX)
-}
-
-/// 外す key（純粋。G3-fix1）: sccache の族（`RUSTC_WRAPPER_VARS`、`KNOWN_SCCACHE_VARS`、`inherited` に居る `SCCACHE_*`）
-/// のうち `set` が与えないもの。並びは辞書順・重複なし。shell の名前にならない key は入れない（`unset` に出すため）。
-pub fn sccache_env_removals_with(
-    set: &[(String, String)],
-    inherited: impl IntoIterator<Item = String>,
-) -> Vec<String> {
-    let mut keys: Vec<String> = RUSTC_WRAPPER_VARS
-        .iter()
-        .chain(KNOWN_SCCACHE_VARS.iter())
-        .map(|k| k.to_string())
-        .chain(inherited.into_iter().filter(|k| {
-            k.starts_with(SCCACHE_VAR_PREFIX)
-                && k.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        }))
-        .filter(|k| !set.iter().any(|(s, _)| s == k))
-        .collect();
-    keys.sort();
-    keys.dedup();
-    keys
-}
-
-/// `sccache_env_removals_with` に今の process の env を渡す。
-pub fn sccache_env_removals(set: &[(String, String)]) -> Vec<String> {
-    sccache_env_removals_with(
-        set,
-        std::env::vars_os().filter_map(|(k, _)| k.into_string().ok()),
-    )
-}
-
-/// `cargo_env_with` に `remove` を足したもの（dispatcher の run・checks が使う）。
-pub fn cargo_child_env_with(
-    settings: &ScratchSettings,
-    owner: &Owner,
-    state: &SccacheState,
-) -> CargoEnv {
-    CargoEnv::from_set(cargo_env_with(settings, owner, state))
-}
-
-/// `cargo_env` に `remove` を足したもの（dispatcher と `celerisctl scratch env` が使う）。
+/// `cargo_env` を `CargoEnv` に包んだもの（dispatcher と `celerisctl scratch env` が使う）。
 pub fn cargo_child_env(settings: &ScratchSettings, owner: &Owner) -> CargoEnv {
-    CargoEnv::from_set(cargo_env(settings, owner))
-}
-
-// ---------------------------------------------------------------------------
-// L2 の cache server（D5 (b)、Phase G3）
-// ---------------------------------------------------------------------------
-
-/// sccache の server が起動時に選んだ backend の記録（`<scratch>/bin/sccache-server.mode`）。
-pub const SCCACHE_MODE_FILE: &str = "sccache-server.mode";
-pub const SCCACHE_MODE_WEBDAV: &str = "webdav";
-pub const SCCACHE_MODE_DISK: &str = "disk";
-/// `SCCACHE_WEBDAV_KEY_PREFIX`（cache server は path の最後の要素だけを key に使うので、値は表示のため）。
-pub const WEBDAV_KEY_PREFIX: &str = "sccache";
-
-/// `http://127.0.0.1:<port>`。
-pub fn cache_server_endpoint(settings: &ScratchSettings) -> String {
-    format!("http://127.0.0.1:{}", settings.cache_server.port)
-}
-
-/// loopback の HTTP/1.1 の GET（`/healthz`・`/stats`）。`(status, body)`。reqwest を持ち込まない最小の実装
-/// （cache server は `Content-Length` を付けて返し、`Connection: close` で閉じる）。
-pub fn http_get_local(port: u16, path: &str, timeout: Duration) -> Option<(u16, String)> {
-    use std::io::{Read, Write};
-    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let mut s = std::net::TcpStream::connect_timeout(&addr, timeout).ok()?;
-    s.set_read_timeout(Some(timeout)).ok()?;
-    s.set_write_timeout(Some(timeout)).ok()?;
-    // 1 回の write にまとめる（`write!` は断片ごとに write し、相手が 1 回の read で要求を読み切れないことがある）。
-    let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n");
-    s.write_all(req.as_bytes()).ok()?;
-    // 読み切り（上限 4 MiB）→ 判定。
-    let mut buf = Vec::new();
-    let _ = s.take(4 * 1024 * 1024).read_to_end(&mut buf);
-    let text = String::from_utf8_lossy(&buf);
-    let (head, body) = text.split_once("\r\n\r\n")?;
-    let code = head.split_whitespace().nth(1)?.parse().ok()?;
-    let length = head.lines().find_map(|l| {
-        let (k, v) = l.split_once(':')?;
-        if k.eq_ignore_ascii_case("content-length") {
-            v.trim().parse::<usize>().ok()
-        } else {
-            None
-        }
-    });
-    let body = match length {
-        Some(n) if n <= body.len() => body[..n].to_string(),
-        Some(_) => return None,
-        None => body.to_string(),
-    };
-    Some((code, body))
-}
-
-/// cache server の `/healthz` が 200 を返すか（300 ms）。
-pub fn cache_server_healthy(port: u16) -> bool {
-    matches!(
-        http_get_local(port, "/healthz", Duration::from_millis(300)),
-        Some((200, _))
-    )
-}
-
-/// `<scratch>/bin/sccache-server.mode` を読む（`webdav` | `disk`）。
-pub fn read_sccache_mode(pool: &Pool) -> Option<String> {
-    let text =
-        std::fs::read_to_string(pool.root().join(WRAPPER_DIR).join(SCCACHE_MODE_FILE)).ok()?;
-    Some(text.split_whitespace().next()?.to_string())
-}
-
-/// `<scratch>/bin/sccache-server.mode` を書く（tmp → rename）。
-pub fn write_sccache_mode(pool: &Pool, mode: &str) -> io::Result<()> {
-    let dir = pool.root().join(WRAPPER_DIR);
-    std::fs::create_dir_all(&dir)?;
-    let tmp = dir.join(format!(".{SCCACHE_MODE_FILE}.tmp-{}", std::process::id()));
-    std::fs::write(&tmp, format!("{mode}\n"))?;
-    std::fs::rename(&tmp, dir.join(SCCACHE_MODE_FILE))
-}
-
-/// token を読む（無い・空なら `None`）。
-pub fn read_token(path: &Path) -> Option<String> {
-    let t = std::fs::read_to_string(path).ok()?;
-    let t = t.trim();
-    (!t.is_empty()).then(|| t.to_string())
-}
-
-/// token を読み、無ければ作る（mode 0600、`/dev/urandom` の 32 byte の 16 進）。cache server が起動時に呼ぶ。
-pub fn ensure_token(path: &Path) -> io::Result<String> {
-    use std::io::{Read, Write};
-    use std::os::unix::fs::OpenOptionsExt;
-    if let Some(t) = read_token(path) {
-        return Ok(t);
-    }
-    let mut raw = [0u8; 32];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut raw)?;
-    let token: String = raw.iter().map(|b| format!("{b:02x}")).collect();
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension(format!("tmp-{}", std::process::id()));
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(&tmp)?;
-    f.write_all(token.as_bytes())?;
-    f.sync_all()?;
-    drop(f);
-    std::fs::rename(&tmp, path)?;
-    Ok(token)
-}
-
-/// sccache の server の backend（`celerisctl scratch env --server` が起動時に選ぶ）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SccacheBackend {
-    /// G3: Celeris の cache server（`SCCACHE_WEBDAV_*`）。
-    Webdav {
-        endpoint: String,
-        token: Option<String>,
-    },
-    /// G2: sccache の local disk cache（`SCCACHE_DIR`）。`reason` は webdav にしなかった理由。
-    Disk { reason: Option<String> },
-}
-
-impl SccacheBackend {
-    pub fn mode(&self) -> &'static str {
-        match self {
-            SccacheBackend::Webdav { .. } => SCCACHE_MODE_WEBDAV,
-            SccacheBackend::Disk { .. } => SCCACHE_MODE_DISK,
-        }
-    }
-}
-
-/// U5: sccache 0.18 は起動時の storage check で backend が応答しないと**起動に失敗する**。cache server が有効で
-/// `/healthz` が応答するときだけ webdav、でなければ G2 の local disk に戻す。
-pub fn choose_sccache_backend(
-    settings: &ScratchSettings,
-    cache_up: impl Fn(u16) -> bool,
-) -> SccacheBackend {
-    let cs = &settings.cache_server;
-    if !cs.enabled {
-        return SccacheBackend::Disk {
-            reason: Some("[scratch.cache_server] enabled = false".to_string()),
-        };
-    }
-    if !cache_up(cs.port) {
-        return SccacheBackend::Disk {
-            reason: Some(format!(
-                "no cache server on 127.0.0.1:{} (celeris-scratch-cache.service)",
-                cs.port
-            )),
-        };
-    }
-    SccacheBackend::Webdav {
-        endpoint: cache_server_endpoint(settings),
-        token: read_token(&cs.token_file),
-    }
-}
-
-/// sccache の server に与える env（backend ごと）。disk は G2 の `sccache_server_env` と同じ。webdav は
-/// `SCCACHE_DIR` を与えない（remote の backend と disk を併記しない）。
-pub fn sccache_server_env_for(
-    settings: &ScratchSettings,
-    backend: &SccacheBackend,
-) -> Vec<(String, String)> {
-    match backend {
-        SccacheBackend::Disk { .. } => sccache_server_env(settings),
-        SccacheBackend::Webdav { endpoint, token } => {
-            let mut env = vec![
-                ("SCCACHE_WEBDAV_ENDPOINT".to_string(), endpoint.clone()),
-                (
-                    "SCCACHE_WEBDAV_KEY_PREFIX".to_string(),
-                    WEBDAV_KEY_PREFIX.to_string(),
-                ),
-            ];
-            if let Some(t) = token {
-                env.push(("SCCACHE_WEBDAV_TOKEN".to_string(), t.clone()));
-            }
-            env.push((
-                "SCCACHE_SERVER_PORT".to_string(),
-                settings.sccache.server_port.to_string(),
-            ));
-            env.push(("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()));
-            env
-        }
-    }
+    CargoEnv::set_only(cargo_env(settings, owner))
 }
 
 // Lease と cargo 環境の管理から GC の分類・回収計画を分離する。
 mod gc;
 pub use gc::*;
+
+// ADR-0129 (4): seed からの reflink。
+mod reflink;
+pub use reflink::*;
+
+// ADR-0129 (4)(5): seed の更新と GC。
+mod seed;
+pub use seed::*;
 
 #[cfg(test)]
 mod tests;

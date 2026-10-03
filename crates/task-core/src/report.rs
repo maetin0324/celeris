@@ -635,6 +635,14 @@ pub trait ReportStore: Send + Sync {
     fn report_get(&self, id: ReportId) -> Result<Option<Report>, StoreError>;
     /// 新しい順（`created_at` 降順、同値は id 降順）。
     fn report_list(&self, filter: &ReportFilter) -> Result<Vec<Report>, StoreError>;
+    /// ADR-0133 付記: `level` の報告を古い順（`created_at` 昇順、同値は id 昇順）に、`since` 以後
+    /// （閉区間、`None` なら最初から）最大 `limit` 件。通知フィードの差分同期が使う（読み取り接続のみ）。
+    fn report_page_since(
+        &self,
+        level: u32,
+        since: Option<OffsetDateTime>,
+        limit: usize,
+    ) -> Result<Vec<Report>, StoreError>;
     /// 既読にする（既に既読のものは触らない）。変えた件数を返す。
     fn report_mark_read(&self, ids: &[ReportId], at: OffsetDateTime) -> Result<usize, StoreError>;
     /// `parent_node_id` の子ノードの報告のうち、まだどの報告の `sources` にも入っていないもの（古い順）。
@@ -819,6 +827,30 @@ impl ReportStore for SqliteStore {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    fn report_page_since(
+        &self,
+        level: u32,
+        since: Option<OffsetDateTime>,
+        limit: usize,
+    ) -> Result<Vec<Report>, StoreError> {
+        // RFC 3339 の小数秒は桁数が揃わないので、文字列ではなく julianday で比べる。
+        let since = since.map(format_rfc3339).transpose()?;
+        let limit = i64::try_from(limit.clamp(1, 1_000)).unwrap_or(1_000);
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(&format!(
+                "{SELECT_REPORT} WHERE level = ?1 \
+                 AND (?2 IS NULL OR julianday(created_at) >= julianday(?2)) \
+                 ORDER BY julianday(created_at) ASC, id ASC LIMIT ?3"
+            ))?;
+            let rows = stmt.query_map(params![i64::from(level), since, limit], row_to_report)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            Ok(out)
+        })
     }
 
     fn report_mark_read(&self, ids: &[ReportId], at: OffsetDateTime) -> Result<usize, StoreError> {

@@ -77,6 +77,8 @@ export type CommentId = string;
  * 人のコメントが何を起こしたか（ADR-0044 D2 の表）。
  */
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
+export type SourceOrigin = "explicit" | "derived";
+export type LlmSourceRef = string;
 /**
  * DESIGN §5.4 の `WorkerHint`。
  */
@@ -2550,6 +2552,8 @@ export interface ProviderConfigView {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -2560,6 +2564,10 @@ export interface ProviderConfigView {
     standard?: ModelBinding;
   };
   tiers: Tier[];
+}
+export interface ResolvedLlmSource {
+  origin: SourceOrigin;
+  source: LlmSourceRef;
 }
 export interface ModelBinding {
   model_id?: string | null;
@@ -3198,11 +3206,13 @@ export interface ProviderLive {
    * 古いスナップショットには無いので既定 0）。
    */
   in_use_cos?: number;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `None`）。
    */
@@ -3241,8 +3251,7 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3290,7 +3299,7 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3305,7 +3314,7 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ * 廃止（ADR-0129）: Celeris の階層 cache server。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3331,8 +3340,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
- * 累計、容量は byte、時刻は RFC 3339。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3515,7 +3523,7 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ * 廃止（ADR-0129）: sccache L1。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3549,7 +3557,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ * 廃止（ADR-0129）: sccache stats。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -6092,8 +6100,7 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6141,7 +6148,7 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -7337,6 +7344,8 @@ export interface ProviderConfigView1 {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -7383,11 +7392,13 @@ export interface ProviderView {
    * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   model?: string | null;
   stats: ProviderStats;
   tier_models?: {

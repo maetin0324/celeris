@@ -18,6 +18,7 @@ use task_core::{
 };
 
 use crate::error::OpsError;
+use crate::execution::is_blocked_daemon_repair;
 
 /// `replay` が検出した 1 件の食い違い。
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -267,6 +268,9 @@ pub fn rebuild_work_units_and_runs(
         }
     }
     let mut plan_step = 0usize;
+    // Replan transition events precede ExecutionPlanned, so remember which
+    // blocked repair rows they retired before their status/reason is cleared.
+    let mut transitioned_blocked_repairs = BTreeSet::new();
     // ADR-0074 D1.4: 統合の repair（`RepairScheduled{origin: integration}`）の直前に統合 WU が
     // pending に戻った（`merge_conflict` / `integration_check_failed`）なら、その統合 WU は repair に依存する。
     let mut pending_integration: Option<String> = None;
@@ -306,6 +310,25 @@ pub fn rebuild_work_units_and_runs(
                 let Some(wu) = wu_rows.get_mut(work_unit_id) else {
                     continue;
                 };
+                if *to == WorkUnitStatus::Superseded
+                    && reason.starts_with("replan v")
+                    && plan_step > 0
+                    && let Some((_, _, prev)) = plans.get(plan_step - 1)
+                {
+                    let prev_view = task_core::internal_view(prev);
+                    let prev_keys: BTreeSet<&str> = prev_view
+                        .work_units
+                        .iter()
+                        .map(|w| w.key.as_str())
+                        .collect();
+                    let daemon_added = task_core::is_daemon_added_work_unit(prev, wu)
+                        || (task_core::is_phased_schema(&prev.schema)
+                            && wu.phase.is_some()
+                            && !prev_keys.contains(wu.key.as_str()));
+                    if is_blocked_daemon_repair(wu, daemon_added) {
+                        transitioned_blocked_repairs.insert(wu.key.clone());
+                    }
+                }
                 if let Some(missing) = reopen_missing {
                     let reopened = task_core::reopened_integration(wu, &missing);
                     wu.depends_on = reopened.depends_on;
@@ -466,11 +489,13 @@ pub fn rebuild_work_units_and_runs(
                         &mut wu_rows,
                         &introduced,
                         &overridden,
+                        &transitioned_blocked_repairs,
                         k,
                         prev,
                         plan_id,
                         plan,
                     );
+                    transitioned_blocked_repairs.clear();
                 }
             }
             // ADR-0079 D4 (4) / D15（Phase R1a）: kind task の unit の子 task（store が同じトランザクションで
@@ -550,10 +575,12 @@ pub fn rebuild_work_units_and_runs(
 ///   新しい版の spec に（`replan` と同じ）。
 /// - 既存の行の状態の遷移（superseded・ready / pending への戻し）は `ExecutionPlanned` の前に積まれた
 ///   `WorkUnitTransitioned` が既に運んでいるので、ここでは既存の行の状態を変えない。
+#[allow(clippy::too_many_arguments)]
 fn apply_replan_step(
     wu_rows: &mut BTreeMap<String, WorkUnitRow>,
     introduced: &BTreeMap<String, usize>,
     overridden: &BTreeSet<(String, String)>,
+    transitioned_blocked_repairs: &BTreeSet<String>,
     k: usize,
     prev: &ExecutionPlanSpec,
     new_plan_id: &str,
@@ -584,6 +611,13 @@ fn apply_replan_step(
         task_core::is_daemon_added_work_unit(prev, u)
             || (prev_phased && u.phase.is_some() && !prev_keys.contains(&u.key))
     };
+    let mut superseded_repair_keys = transitioned_blocked_repairs.clone();
+    superseded_repair_keys.extend(
+        wu_rows
+            .values()
+            .filter(|u| is_blocked_daemon_repair(u, daemon_added(u)))
+            .map(|u| u.key.clone()),
+    );
     let introduced_before = |id: &str| introduced.get(id).is_some_and(|v| *v < k);
     let done_keys: BTreeSet<String> = wu_rows
         .values()
@@ -598,6 +632,14 @@ fn apply_replan_step(
             continue;
         };
         if at > k {
+            continue;
+        }
+        // ADR-0134 D1: daemon repair rows are absent from the new plan's spec.
+        // Retire them before the spec lookup skips those rows. The transition event
+        // already supplies the status; live replan preserves their original plan_id.
+        if superseded_repair_keys.contains(&row.key) {
+            row.status = WorkUnitStatus::Superseded;
+            row.blocked_reason = None;
             continue;
         }
         let Some(new_spec) = spec_of.get(&row.key) else {
@@ -620,7 +662,10 @@ fn apply_replan_step(
         if row.kind == task_core::WorkUnitKind::Integrate {
             let mut deps = new_spec.depends_on.clone();
             for d in &row.depends_on {
-                if !deps.contains(d) && !prev_keys.contains(d) {
+                if !deps.contains(d)
+                    && !prev_keys.contains(d)
+                    && !superseded_repair_keys.contains(d)
+                {
                     deps.push(d.clone());
                 }
             }

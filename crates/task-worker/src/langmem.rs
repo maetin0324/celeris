@@ -81,7 +81,7 @@ pub fn extraction_instructions() -> &'static str {
 pub fn knowledge_fallback_instructions(candidates_rel: &str) -> String {
     let mut out = String::new();
     out.push_str(
-        "この run は**知識整理**（ADR-0047 D4）です。いつもの `langmem` の接続先（Qwen）に届かなかったので、\
+        "この run は**知識整理**（ADR-0047 D4）です。設定された `langmem` の接続先に届かなかったので、\
          あなたのハーネスで同じ抽出をします（ADR-0052 D2）。下の依頼文には、終わった仕事 1 件の\
          題名・目的・報告・コメント・関連する既存の知識ベースのページ・担当の手帳・既存の索引の題名が\
          すでに全部入っています。\n\n### 抽出の規則 (extraction rules)\n",

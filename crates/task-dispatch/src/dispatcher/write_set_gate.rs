@@ -19,6 +19,10 @@
 //! - **見送りの記録**: event は増やさず `tracing` の log（`write-set overlap; deferring the run`）に残す。
 //! - **公平性**: `RunKey` ごとに待機開始 tick と連続回数を持ち、連続 3 回以上見送られた ready task は
 //!   待機開始の古い順に候補の先頭へ移す。
+//! - **飢餓の防止**（2026-10-03-write-set-no-starvation）: 容量（`max_concurrency`・CoS 枠）が尽きて走査が
+//!   途中で切れた tick は、照合されなかった待機記録を「待ち続けた」として引き継ぐ（数え直さない）。連続
+//!   回数が閾値に届いた待機は自分の予約を「先取り」として持ち、自分より後から待ち始めた重なる候補を
+//!   止める（先に待った方が先に走る）。兄弟 WU の走査は待たされた WU を飛ばして後ろを試す。
 //! - **actual の併用**: 走行中の run の既知の actual はこの Phase では照合に使わない（expected だけ）。
 
 use super::*;
@@ -38,11 +42,27 @@ pub(super) struct WriteReservation {
 }
 
 /// 見送りの記録（`RunKey` ごと）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct WriteSetWait {
     pub(super) since_tick: u64,
     pub(super) last_tick: u64,
     pub(super) consecutive: u32,
+    /// 待機を作った順の通し番号（同じ `since_tick` の待機の先後）。
+    first_seq: u64,
+    /// 見送られた候補の予約。連続回数が閾値に届いたら、後から待ち始めた重なる候補への先取りになる。
+    reservation: WriteReservation,
+}
+
+impl WriteSetWait {
+    /// 先取りが効くか（連続 `WRITE_SET_STARVATION_TICKS` 回以上待った）。
+    fn claims(&self) -> bool {
+        self.consecutive >= WRITE_SET_STARVATION_TICKS
+    }
+}
+
+/// 待機の先後（待機開始の古い順、同じ tick なら先に待ち始めた順）。
+fn wait_order(wait: &WriteSetWait) -> (u64, u64) {
+    (wait.since_tick, wait.first_seq)
 }
 
 /// 2 つの予約が強く重なるか（同じ repo 鍵を共有し、prefix が等しいか segment 境界の祖先）。
@@ -101,6 +121,8 @@ impl Dispatcher {
     }
 
     /// 走っている run の予約のうち、`candidate` と強く重なる最初のもの（`RunKey` の順で決定的）。
+    /// 走っている run に重ならなくても、`candidate` より先に待ち始めて先取りを持つ待機と重なれば、その
+    /// 待機を返す（後から来た重なる候補が、長く待った run を追い越し続けない）。
     pub(super) fn write_set_blocker(
         &self,
         key: &RunKey,
@@ -116,33 +138,52 @@ impl Dispatcher {
         blockers.sort_by(|a, b| {
             (a.task.to_string(), &a.work_unit).cmp(&(b.task.to_string(), &b.work_unit))
         });
-        blockers.first().map(|k| (*k).clone())
+        if let Some(k) = blockers.first() {
+            return Some((*k).clone());
+        }
+        let own = self.write_set_waits.get(key).map(wait_order);
+        self.write_set_waits
+            .iter()
+            .filter(|(other, w)| *other != key && w.claims())
+            .map(|(other, w)| (wait_order(w), other, w))
+            .filter(|(order, _, _)| own.as_ref().is_none_or(|own| order < own))
+            .filter(|(_, other, w)| {
+                reservations_overlap(key.task, candidate, other.task, &w.reservation)
+            })
+            .min_by(|a, b| a.0.cmp(&b.0))
+            .map(|(_, other, _)| other.clone())
     }
 
     /// 見送りを記録して log に残す（状態遷移・attempts には触らない）。
-    pub(super) fn note_write_set_hold(&mut self, key: &RunKey, blocker: &RunKey) {
+    pub(super) fn note_write_set_hold(
+        &mut self,
+        key: &RunKey,
+        blocker: &RunKey,
+        reservation: &WriteReservation,
+    ) {
         let tick = self.ticks;
+        self.write_set_hold_seq += 1;
+        let fresh = WriteSetWait {
+            since_tick: tick,
+            last_tick: tick,
+            consecutive: 0,
+            first_seq: self.write_set_hold_seq,
+            reservation: reservation.clone(),
+        };
         let wait = self
             .write_set_waits
             .entry(key.clone())
-            .or_insert(WriteSetWait {
-                since_tick: tick,
-                last_tick: tick,
-                consecutive: 0,
-            });
+            .or_insert_with(|| fresh.clone());
         if wait.last_tick + 1 < tick {
-            // 直前の tick に見送られていない: 数え直す。
-            *wait = WriteSetWait {
-                since_tick: tick,
-                last_tick: tick,
-                consecutive: 0,
-            };
+            // 直前の tick に見送られていない（容量切れで照合されなかった tick は引き継ぎ済み）: 数え直す。
+            *wait = fresh;
         }
         if wait.consecutive == 0 || wait.last_tick != tick {
             wait.consecutive += 1;
         }
         wait.last_tick = tick;
-        let wait = *wait;
+        wait.reservation = reservation.clone();
+        let wait = wait.clone();
         tracing::info!(
             task_id = %key.task,
             work_unit = ?key.work_unit,
@@ -174,6 +215,20 @@ impl Dispatcher {
             .retain(|k, _| running.contains_key(k));
         let tick = self.ticks;
         self.write_set_waits.retain(|_, w| w.last_tick + 1 >= tick);
+    }
+
+    /// 容量が尽きて走査が途中で切れた tick の終わりに呼ぶ: この tick に照合されなかった待機を「待ち続けた」
+    /// として引き継ぐ（連続回数を 1 つ進め、次 tick の `prune_write_set_state` で捨てられないようにする）。
+    /// 容量切れのたびに数えが戻ると、先頭に移す公平性と先取りが永久に効かない
+    /// （2026-10-03-write-set-no-starvation）。
+    pub(super) fn carry_write_set_waits(&mut self) {
+        let tick = self.ticks;
+        for wait in self.write_set_waits.values_mut() {
+            if wait.last_tick + 1 == tick {
+                wait.consecutive += 1;
+                wait.last_tick = tick;
+            }
+        }
     }
 
     /// ADR-0130 D3 の公平性: 連続 `WRITE_SET_STARVATION_TICKS` 回以上見送られた ready task を、待機開始の

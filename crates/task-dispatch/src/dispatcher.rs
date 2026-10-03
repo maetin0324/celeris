@@ -1116,6 +1116,8 @@ pub struct Dispatcher {
     write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
     /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
     write_set_waits: HashMap<RunKey, write_set_gate::WriteSetWait>,
+    /// 待機を作った順の通し番号（同じ tick に待ち始めた待機の先後を決定的に決める。2026-10-03-write-set-no-starvation）。
+    write_set_hold_seq: u64,
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: std::collections::HashSet<TaskId>,
@@ -1370,6 +1372,7 @@ impl Dispatcher {
             just_aborted: std::collections::HashSet::new(),
             write_reservations: HashMap::new(),
             write_set_waits: HashMap::new(),
+            write_set_hold_seq: 0,
             unroutable: std::collections::HashSet::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
@@ -2049,6 +2052,8 @@ impl Dispatcher {
         self.cluster_waiting.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
+            // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
+            self.carry_write_set_waits();
             return Ok(0);
         }
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
@@ -2063,13 +2068,17 @@ impl Dispatcher {
         let mut dispatched = 0;
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。
         let mut full: std::collections::HashSet<ProviderId> = std::collections::HashSet::new();
+        // 容量が尽きて照合しなかった候補が残ったか（残れば write-set の待機の数えを引き継ぐ）。
+        let mut capacity_cut = false;
         for task in candidates {
             let load = self.run_load();
             if !load.any_slot() {
+                capacity_cut = true;
                 break;
             }
             // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
             if !load.admits(false) && !task_core::is_conversation(&task) {
+                capacity_cut = true;
                 continue;
             }
             if self.dispatch_one(task, None, &mut full, now)? {
@@ -2078,7 +2087,11 @@ impl Dispatcher {
         }
         // ADR-0074 D1.3 3.（Phase F2b）: 公平性。Ready の Task の 1 本目を先に起こし、残りの枠を
         // 「Running で、現在の工程に runnable な WU を持つ Task」の 2 本目以降に回す（作成順）。
-        dispatched += self.dispatch_parallel_work_units(&mut full, now)?;
+        let (parallel, parallel_cut) = self.dispatch_parallel_work_units(&mut full, now)?;
+        dispatched += parallel;
+        if capacity_cut || parallel_cut {
+            self.carry_write_set_waits();
+        }
         Ok(dispatched)
     }
 

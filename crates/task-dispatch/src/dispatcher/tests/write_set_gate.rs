@@ -129,7 +129,7 @@ async fn write_set_gate_serializes_strong_overlap_until_the_first_run_finishes()
         ready_untouched(&store, b.id);
     }
     assert_eq!(d.running.len(), 1);
-    let wait = d.write_set_waits[&RunKey {
+    let wait = &d.write_set_waits[&RunKey {
         task: b.id,
         work_unit: None,
     }];
@@ -231,4 +231,189 @@ fn write_set_gate_same_task_siblings_with_only_the_inherited_hint_do_not_block()
     assert!(!reservations_overlap(task, &inherited, task, &inherited));
     assert!(reservations_overlap(task, &inherited, task, &own));
     assert!(reservations_overlap(task, &inherited, other, &inherited));
+}
+
+// ---- 2026-10-03-write-set-no-starvation: 兄弟 WU の走査と容量切れの tick の公平性 ----
+
+/// run ごとに `release(run_id)` されるまで終わらないアダプタ（どの run を終わらせるかを試験が選ぶ）。
+struct KeyedHoldAdapter {
+    gates: StdMutex<HashMap<String, Arc<tokio::sync::Semaphore>>>,
+}
+
+impl KeyedHoldAdapter {
+    fn new() -> Arc<Self> {
+        Arc::new(KeyedHoldAdapter {
+            gates: StdMutex::new(HashMap::new()),
+        })
+    }
+
+    fn gate(&self, run_id: &str) -> Arc<tokio::sync::Semaphore> {
+        self.gates
+            .lock()
+            .unwrap()
+            .entry(run_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Semaphore::new(0)))
+            .clone()
+    }
+
+    fn release(&self, run_id: &str) {
+        self.gate(run_id).add_permits(1);
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for KeyedHoldAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        _req: RunRequest,
+        run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        if let Ok(permit) = self.gate(run_id).acquire().await {
+            permit.forget();
+        }
+        Ok(done_outcome())
+    }
+}
+
+fn hinted_leaf(key: &str, paths: &[&str]) -> serde_json::Value {
+    serde_json::json!({
+        "key": key,
+        "stage": "build",
+        "kind": "implement",
+        "title": format!("Leaf {key}"),
+        "objective": format!("Implement {key} thoroughly and completely"),
+        "depends_on": [],
+        "done_when": [format!("{key} is done")],
+        "checks": [{"cmd": "true", "expect_exit": 0}],
+        "expected_write_paths": paths,
+    })
+}
+
+/// 容量（`max_concurrency = 3`）が満ちた状態で、(1) write-set で待たされた WU `a` の後ろの非重複 WU `b` が同じ
+/// tick に走り、(2) 容量切れの tick に `a` の待機の数えが戻らず、(3) 毎 tick 後から来る優先度の高い重なる
+/// ready task に追い越されず、先行の run が終わった最初の tick に `a` が走る。時刻は dispatcher の tick だけ
+/// （試験が tick を回す。実時間の sleep・CPU 負荷なし）、run の終了は run ごとの semaphore で明示的に起こす。
+#[tokio::test]
+async fn write_set_gate_no_starvation() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let check = || Check::Command {
+        cmd: "true".into(),
+        expect_exit: 0,
+    };
+    let hinted = |paths: &[&str], priority: i64| {
+        let mut task = git_task(repo.path(), None, check());
+        task.priority = priority as _;
+        store.insert(&task).unwrap();
+        let paths: Vec<String> = paths.iter().map(|p| p.to_string()).collect();
+        store
+            .set_task_expected_write_paths(task.id, Some(&paths), "2026-10-03T00:00:00Z")
+            .unwrap();
+        task
+    };
+    // 先行の run（a・c と強く重なる）。優先度が高いので tick 1 に先に起きる。
+    let x = hinted(&["crates/core/"], 5);
+    // 並列 WU の task（seq は key 順）: k0 = a0（非重複）→ k1 = a（x と重なる）→ k2 = b（非重複）→
+    // k3 = c（x・a と重なる）。
+    let t = parallel_task(repo.path(), "true");
+    store.insert(&t).unwrap();
+    let plan = tree::v3_plan(
+        vec![tree::stage("build", false)],
+        vec![
+            hinted_leaf("k0", &["tests/"]),
+            hinted_leaf("k1", &["crates/core/a.rs"]),
+            hinted_leaf("k2", &["docs/"]),
+            hinted_leaf("k3", &["crates/core/"]),
+        ],
+    );
+    task_ops::execution::adopt_plan(
+        store.as_ref(),
+        t.id,
+        serde_json::from_str(&plan).unwrap(),
+        task_core::PlanOrigin::Fixture,
+        None,
+        tree::tree_limits(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("adopt plan");
+    let wu_key = |key: &str| RunKey {
+        task: t.id,
+        work_unit: Some(
+            tree::unit(&store.work_units_for(t.id).unwrap(), key)
+                .id
+                .clone(),
+        ),
+    };
+    let (a0, a, b, c) = (wu_key("k0"), wu_key("k1"), wu_key("k2"), wu_key("k3"));
+    let x_key = RunKey {
+        task: x.id,
+        work_unit: None,
+    };
+    let adapter = KeyedHoldAdapter::new();
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    d.config.execution.limits = tree::tree_limits();
+
+    // tick 1: x と a0 が起き、a は x に待たされる。a の後ろの非重複 b は同じ tick に走る（走査が a で止まらない）。
+    d.tick().unwrap();
+    assert!(d.running.contains_key(&x_key));
+    assert!(d.running.contains_key(&a0));
+    assert!(!d.running.contains_key(&a), "a overlaps x and waits");
+    assert!(
+        d.running.contains_key(&b),
+        "the disjoint sibling behind the held WU runs in the same tick"
+    );
+    assert!(!d.running.contains_key(&c));
+    assert_eq!(d.running.len(), 3, "max_concurrency is now full");
+    let first = d.write_set_waits[&a].clone();
+    assert_eq!(first.consecutive, 1);
+
+    // tick 2..=5: 容量は満ちたまま。毎 tick、優先度の高い重なる ready task が後から来る。容量切れの tick でも
+    // a の待機は数え直されず（since_tick を保ったまま）連続回数が積み上がる。
+    let mut newcomers = Vec::new();
+    for n in 2..=5u32 {
+        newcomers.push(hinted(&["crates/core/"], 9));
+        d.tick().unwrap();
+        assert!(!d.running.contains_key(&a));
+        let wait = &d.write_set_waits[&a];
+        assert_eq!(
+            wait.since_tick, first.since_tick,
+            "a capacity-full tick does not reset the wait"
+        );
+        assert_eq!(wait.consecutive, n);
+    }
+    assert!(
+        d.write_set_waits[&a].consecutive
+            >= super::super::write_set_gate::WRITE_SET_STARVATION_TICKS
+    );
+
+    // x が終わった最初の tick（tick 6）に、長く待った a が走る。後から来た重なる ready task は a の先取りに
+    // 止められ、c も a の後ろに並ぶ（先に待ち始めた a が先）。
+    let x_run = d.running[&x_key].run_id.clone();
+    adapter.release(&x_run);
+    (&mut d.running.get_mut(&x_key).expect("x in flight").handle)
+        .await
+        .expect("worker task panicked");
+    d.tick().unwrap();
+    assert!(!d.running.contains_key(&x_key));
+    assert!(
+        d.running.contains_key(&a),
+        "the starved WU runs within a bounded number of ticks"
+    );
+    assert!(!d.write_set_waits.contains_key(&a));
+    assert!(!d.running.contains_key(&c));
+    for y in &newcomers {
+        assert!(
+            !is_running(&d, y.id),
+            "a newer overlapping task does not overtake a"
+        );
+        ready_untouched(&store, y.id);
+    }
+    assert_eq!(d.ticks, 6, "a ran in tick 6 = (held at tick 1) + 5");
 }

@@ -1,0 +1,19 @@
+# ADR-0115 / ADR-0116: browser launcher の Unix socket（root が /etc/systemd/system に配置する system unit）。
+# daemon（host UID 1001 = rmaeda）だけが接続できるよう、socket の所有者を daemon の user にし mode 0600 とする。
+# daemon の user 名が違う host では SocketUser / SocketGroup を書き換える（手順書 docs/ops/browser-launcher-host-setup.md）。
+# launcher は accept 後に SO_PEERCRED で uid を再検査する（ファイル mode だけに頼らない）。
+[Unit]
+Description=Celeris browser launcher socket
+
+[Socket]
+ListenStream=/run/celeris-browser/launcher.sock
+SocketUser=rmaeda
+SocketGroup=rmaeda
+SocketMode=0600
+DirectoryMode=0755
+Accept=no
+Backlog=8
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

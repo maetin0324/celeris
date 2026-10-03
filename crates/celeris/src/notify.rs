@@ -1,13 +1,13 @@
-//! 人の判断が要るときだけ Discord に知らせる（ADR-0037。Phase 39）。
+//! Discord への送り出し。ADR-0133 D6 では受信箱の新着と通知の要約を別経路で送る。
+//! `schedule_routes` が現行の判定で、旧 `scan` / `schedule` は既存試験用に残す。
 //!
 //! ADR-0050: 通常仕事の完了・全体対話も通知する。未解決の待ちは再起動後も対象、
 //! 終端イベントの走査時刻はDBに永続化する。以下のPhase記録の起動時刻制限を更新した。
 //!
-//! ここには 2 つのことしか無い:
+//! 判定と送信を分ける:
 //!
-//! 1. **判定**（`scan` / `schedule`）— DB を読んで「人の手が要る」5 種の条件を**決定的に**見つけ、
-//!    `notifications` にまだ無い `(kind, key)` を pending として 1 件だけ作る。LLM は関与しない。
-//!    `tick_loop` の中から同期で呼ばれる（B1: チャネルに送らず、その場で store を見る）。
+//! 1. **判定**（`schedule_routes`）— 派生した受信箱項目と通知を読み、二経路の pending を作る。
+//!    LLM は関与せず、`tick_loop` の中から同期で呼ぶ。旧 `scan` / `schedule` は互換試験用。
 //! 2. **送信**（`spawn_send` / `post_webhook`）— pending を Discord の webhook へ POST する。
 //!    tick をブロックしないよう `tokio::spawn` で送り、**結果は次の tick で** `notification_mark` する
 //!    （送信結果は `mpsc` でループへ戻る。ADR-0022 D2 の `check` と同じ形）。
@@ -30,6 +30,7 @@
 //! 後にできたものだけを対象にする（backfill 禁止）。(3) 送信は 1 tick に最大 1 通、`bad_news` は
 //! 束ねる（`select_batch`）、429 は attempts に数えず `Retry-After` の間だけ待つ。
 
+use std::collections::BTreeMap;
 use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
@@ -68,7 +69,7 @@ pub const DEFAULT_RETRY_AFTER_SECS: u64 = 5;
 /// `bad_news` を束ねるときの接頭辞（`scan_bad_news` が単発送信用に付けたものを剥がして束ねる）。
 const BAD_NEWS_PREFIX: &str = "悪い知らせ: ";
 
-/// `[notify]`（ADR-0037 D2 / D3）。秘密の id と間隔とリンクの根だけを持つ。
+/// `[notify]`（ADR-0037 D2 / D3、ADR-0133 D6）。秘密の id と二経路の間隔を持つ。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct NotifyConfig {
@@ -81,6 +82,31 @@ pub struct NotifyConfig {
     /// 例: `"http://192.168.1.103:7700"`。無ければ文面にリンクを入れない。
     #[serde(default)]
     pub gui_base_url: Option<String>,
+    /// 新しい受信箱項目を同じ一通に束ねる猶予。
+    #[serde(default = "default_inbox_batch_secs")]
+    pub inbox_batch_secs: u64,
+    /// 未回答の項目を一度だけ再通知するまでの秒数。
+    #[serde(default = "default_inbox_reminder_secs")]
+    pub inbox_reminder_secs: u64,
+    /// 通知の要約間隔。ゼロなら外部へ送らない。
+    #[serde(default = "default_digest_interval_secs")]
+    pub digest_interval_secs: u64,
+    /// 要約に載せる種類の最大行数。
+    #[serde(default = "default_digest_max_lines")]
+    pub digest_max_lines: usize,
+}
+
+fn default_inbox_batch_secs() -> u64 {
+    60
+}
+fn default_inbox_reminder_secs() -> u64 {
+    86_400
+}
+fn default_digest_interval_secs() -> u64 {
+    3_600
+}
+fn default_digest_max_lines() -> usize {
+    10
 }
 
 fn default_webhook_secret() -> String {
@@ -97,6 +123,10 @@ impl Default for NotifyConfig {
             discord_webhook_secret: default_webhook_secret(),
             interval_secs: default_interval_secs(),
             gui_base_url: None,
+            inbox_batch_secs: default_inbox_batch_secs(),
+            inbox_reminder_secs: default_inbox_reminder_secs(),
+            digest_interval_secs: default_digest_interval_secs(),
+            digest_max_lines: default_digest_max_lines(),
         }
     }
 }
@@ -930,6 +960,210 @@ pub fn schedule(
     }
     store.notification_scan_mark(now)?;
     Ok(created)
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct InboxOutboundState {
+    /// A zero timestamp means the item has not yet been sent.
+    seen: BTreeMap<String, (i64, bool)>,
+    pending: Vec<String>,
+    first_pending_at: Option<i64>,
+}
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct DigestOutboundState {
+    last_at: i64,
+    counts: BTreeMap<String, u32>,
+}
+
+/// ADR-0133 D6: persist the two outbound cursors beside the feed cursors. The
+/// webhook transport still uses the existing notifications queue and retry path.
+/// All time decisions use `now`, so tests never need to sleep or contact Discord.
+pub fn schedule_routes(
+    store: &dyn TaskStore,
+    config: &NotifyConfig,
+    view: &task_ops::view::ViewContext,
+    now: OffsetDateTime,
+) -> Result<Vec<Notification>, StoreError> {
+    use task_core::feed::NoticeQuery;
+    let mut created = Vec::new();
+    let timestamp = now.unix_timestamp();
+    let inbox =
+        task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new(), None)
+            .map_err(|error| StoreError::Invalid(error.to_string()))?;
+    let mut state: InboxOutboundState = store
+        .feed_cursor_get("outbound_inbox")?
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default();
+    let current: BTreeMap<_, _> = inbox
+        .items
+        .iter()
+        .map(|item| (item.id.clone(), item))
+        .collect();
+    state.seen.retain(|id, _| current.contains_key(id));
+    state.pending.retain(|id| current.contains_key(id));
+    for item in &inbox.items {
+        match state.seen.get_mut(&item.id) {
+            None => {
+                state.seen.insert(item.id.clone(), (0, false));
+                state.pending.push(item.id.clone());
+            }
+            Some((sent_at, reminded))
+                if *sent_at > 0
+                    && !*reminded
+                    && timestamp.saturating_sub(*sent_at) >= config.inbox_reminder_secs as i64 =>
+            {
+                *reminded = true;
+                state.pending.push(item.id.clone());
+            }
+            _ => {}
+        }
+    }
+    if state.pending.is_empty() {
+        state.first_pending_at = None;
+    } else {
+        let first = *state.first_pending_at.get_or_insert(timestamp);
+        if timestamp.saturating_sub(first) >= config.inbox_batch_secs as i64 {
+            let ids = state.pending.clone();
+            let reminder = ids
+                .iter()
+                .all(|id| state.seen.get(id).is_some_and(|v| v.0 > 0));
+            let heading = if reminder {
+                "判断待ちの再通知"
+            } else {
+                "新しい判断待ち"
+            };
+            let lines: Vec<_> = ids
+                .iter()
+                .take(5)
+                .filter_map(|id| current.get(id))
+                .map(|item| format!("• {}", excerpt(&item.title, EXCERPT_CHARS)))
+                .collect();
+            let overflow = if ids.len() > 5 {
+                format!("\nほか {} 件", ids.len() - 5)
+            } else {
+                String::new()
+            };
+            let body = format!(
+                "{heading} {} 件\n{}{}{link}",
+                ids.len(),
+                lines.join("\n"),
+                overflow,
+                link = link(config.base_url(), "/inbox")
+            );
+            let key = if reminder {
+                format!("reminder:{}", ids[0])
+            } else {
+                format!("inbox:{}", ids[0])
+            };
+            if let Some(row) = store.notification_upsert_pending(
+                NotificationKind::InboxNew,
+                &key,
+                &body,
+                None,
+                now,
+            )? {
+                created.push(row);
+            }
+            for id in ids {
+                if let Some((sent_at, _)) = state.seen.get_mut(&id)
+                    && *sent_at == 0
+                {
+                    *sent_at = timestamp;
+                }
+            }
+            state.pending.clear();
+            state.first_pending_at = None;
+        }
+    }
+    store.feed_cursor_set(
+        "outbound_inbox",
+        &serde_json::to_string(&state).map_err(|error| StoreError::Invalid(error.to_string()))?,
+    )?;
+
+    if config.digest_interval_secs == 0 {
+        return Ok(created);
+    }
+    let mut digest: DigestOutboundState = store
+        .feed_cursor_get("outbound_digest")?
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_default();
+    if digest.last_at == 0 {
+        digest.last_at = timestamp;
+    } else if timestamp.saturating_sub(digest.last_at) >= config.digest_interval_secs as i64 {
+        let mut query = NoticeQuery {
+            unread_only: true,
+            limit: 500,
+            ..NoticeQuery::default()
+        };
+        let mut notices = Vec::new();
+        loop {
+            let page = store.notice_list(&query)?;
+            let count = page.items.len();
+            notices.extend(page.items);
+            if notices.len() >= page.total as usize || count == 0 {
+                break;
+            }
+            query.offset += count;
+        }
+        let mut next_counts = BTreeMap::new();
+        let mut changed: BTreeMap<&str, (u32, &str)> = BTreeMap::new();
+        for notice in &notices {
+            let key = notice.id.to_string();
+            next_counts.insert(key.clone(), notice.count);
+            if notice.count > digest.counts.get(&key).copied().unwrap_or(0) {
+                let entry = changed
+                    .entry(notice.kind.as_str())
+                    .or_insert((0, &notice.title));
+                entry.0 += notice.count - digest.counts.get(&key).copied().unwrap_or(0);
+            }
+        }
+        if !changed.is_empty() {
+            let mut lines: Vec<_> = changed
+                .iter()
+                .take(config.digest_max_lines)
+                .map(|(kind, (count, title))| {
+                    format!("• {kind}: {count} 件 — {}", excerpt(title, EXCERPT_CHARS))
+                })
+                .collect();
+            if changed.len() > lines.len() {
+                lines.push(format!("ほか {} 種", changed.len() - lines.len()));
+            }
+            let body = format!(
+                "通知の要約\n{}{}",
+                lines.join("\n"),
+                link(config.base_url(), "/notifications")
+            );
+            if let Some(row) = store.notification_upsert_pending(
+                NotificationKind::Digest,
+                &format!("digest:{timestamp}"),
+                &body,
+                None,
+                now,
+            )? {
+                created.push(row);
+            }
+        }
+        digest.counts = next_counts;
+        digest.last_at = timestamp;
+    }
+    store.feed_cursor_set(
+        "outbound_digest",
+        &serde_json::to_string(&digest).map_err(|error| StoreError::Invalid(error.to_string()))?,
+    )?;
+    Ok(created)
+}
+
+/// Only the two ADR-0133 outbound kinds may reach the webhook.
+pub fn select_routes_batch(pending: &[Notification]) -> Option<SendBatch> {
+    pending
+        .iter()
+        .find(|n| n.kind == NotificationKind::InboxNew)
+        .or_else(|| pending.iter().find(|n| n.kind == NotificationKind::Digest))
+        .map(|n| SendBatch {
+            ids: vec![n.id],
+            content: n.body.clone(),
+        })
 }
 
 /// 1 通に束ねた送信の材料。

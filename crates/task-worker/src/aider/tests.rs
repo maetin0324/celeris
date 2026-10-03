@@ -253,7 +253,7 @@ fn with_model_returns_a_new_adapter_carrying_the_model() {
     assert_eq!(with_model.id(), AiderAdapter::ID);
 }
 
-/// 実バイナリでの動作確認（ADR-0061, Phase 104。`docs/PROGRESS.md` Phase 104 参照）。`cargo test
+/// 実バイナリでの動作確認（ADR-0061, Phase 104。`agent-docs/PROGRESS.md` Phase 104 参照）。`cargo test
 /// --workspace` の既定では走らない（`aider` バイナリが要る。テストで外部ネットワークに出ない、
 /// という CLAUDE.md の方針どおり、接続先はこのテストが自分で起こすローカルの HTTP モックだけ）。
 /// `AIDER_TEST_BIN`（既定 `"aider"`）で使う実行ファイルを指定できる:
@@ -355,7 +355,6 @@ async fn real_aider_binary_end_to_end() {
             ("OPENAI_API_BASE".into(), format!("http://{addr}/v1")),
             ("OPENAI_API_KEY".into(), "dummy".into()),
         ],
-        env_remove: Vec::new(),
         container: None,
     };
     let adapter = AiderAdapter::new(config);

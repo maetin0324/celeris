@@ -1,4 +1,4 @@
-//! 認可の API（ADR-0033 D5。Phase 26。`docs/gui/api.md` §3.56〜3.60）。
+//! 認可の API（ADR-0033 D5。Phase 26。`docs/api/v1/gui-api.md` §3.56〜3.60）。
 //!
 //! - `GET /approvals?pending=&project=&node=` — 一覧（読み取り、通常の認証）。`pending` は三値:
 //!   `true` = 未決定だけ、`false` = 決定済みだけ、省略 = 全件（GUI からの依頼 R5。Phase 27）。

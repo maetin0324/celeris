@@ -1,4 +1,4 @@
-//! ADR-0131 D1: `cron_jobs` / `cron_job_runs`（migration 0039）の読み書き。
+//! ADR-0131 D1: `cron_jobs` / `cron_job_runs`（migration 0046）の読み書き。
 //!
 //! `TaskStore` の supertrait（`NotificationStore` 等と同じ形）なので、ディスパッチャの `Arc<dyn TaskStore>` から
 //! 使える。発火の規則（D2・D3）は持たず、行の読み書きだけを行う（規則は `task_ops::cron`）。

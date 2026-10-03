@@ -8,7 +8,7 @@ tasks: [01M3YF3NS2EGTZD2BBWNPG1K28]
   [docs/selfdeploy.md](../selfdeploy.md)（ここでは重複させず参照する）。
 - 実行者: 人。本番 host の操作（`~/.config/celeris` の編集、daemon の再起動・昇格）はここに書いた手順どおり
   人が行う。このリポジトリの run からは本番 DB・本番 `~/.config/celeris`・`~/.local/celeris` に書き込まない。
-- migration: `0039_cron_jobs.sql`（`cron_jobs` / `cron_job_runs` 2 表）、`SCHEMA_VERSION = 39`。
+- migration: `0046_cron_jobs.sql`（`cron_jobs` / `cron_job_runs` 2 表）、`SCHEMA_VERSION = 46`。
 
 ## 0. 前提
 

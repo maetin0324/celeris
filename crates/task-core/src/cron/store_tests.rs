@@ -1,4 +1,4 @@
-//! ADR-0131 D1: `cron_jobs` / `cron_job_runs` の store 試験と、既存 DB（版数 37）への migration 0039。
+//! ADR-0131 D1: `cron_jobs` / `cron_job_runs` の store 試験と、既存 DB（版数 37）への migration 0046。
 
 use rusqlite::{Connection, params};
 use time::OffsetDateTime;
@@ -285,7 +285,7 @@ fn cron_job_queued_run_is_closed_by_update() {
     );
 }
 
-/// 既存 DB（版数 37。cron の表も 0038 の列も無い）を開くと 0038・0039 が足され、既存の行は残る。
+/// 既存 DB（版数 37。cron の表も通知の表も無い）を開くと 0041・0046 が足され、既存の行は残る。
 #[test]
 fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     let dir = tempfile::tempdir().unwrap();
@@ -301,11 +301,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
             "DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
-             DROP INDEX idx_node_sessions_work_unit_active; \
-             ALTER TABLE node_sessions DROP COLUMN task_id; \
-             ALTER TABLE node_sessions DROP COLUMN work_unit_id; \
-             ALTER TABLE node_sessions DROP COLUMN provider; \
-             ALTER TABLE node_sessions DROP COLUMN cwd;",
+             DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor;",
         )
         .unwrap();
         conn.execute(
@@ -316,7 +312,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 39);
+    assert_eq!(SCHEMA_VERSION, 46);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

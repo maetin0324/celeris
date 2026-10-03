@@ -10,7 +10,7 @@ const SETUP_TIMEOUT: Duration = Duration::from_secs(1800);
 /// 候補の両方に同じ値を使う。
 #[derive(Clone, Default)]
 pub(super) struct RunAdapterPrep {
-    /// ADR-0075 D4 / G3-fix1: 外す env（継いだ sccache の族）と与える env（`CARGO_TARGET_DIR` など）。
+    /// ADR-0075 D4 / ADR-0129 (1): 与える env（`CARGO_TARGET_DIR` と `[scratch.cargo]`）。`remove` は常に空。
     /// `None` は `CARGO_TARGET_DIR` を与えない run（コンテナ・Remote・共有キャッシュ無効）。
     pub(super) env: Option<task_worker::scratch::CargoEnv>,
     /// ADR-0098 D6: 後続 task の宣言先。cargo の env の後、コンテナの前に適用する。
@@ -21,8 +21,8 @@ pub(super) struct RunAdapterPrep {
     pub(super) permission_mode: Option<String>,
 }
 
-/// ADR-0107（docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
-/// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 除去 → env 設定 →
+/// ADR-0107（agent-docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
+/// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 設定 →
 /// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
 /// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。
 /// 戻り値の `bool` は env（`CARGO_TARGET_DIR`）が実際に適用されたかどうか。
@@ -32,29 +32,14 @@ pub(super) fn prepare_run_adapter(
     task_id: TaskId,
 ) -> (Arc<dyn WorkerAdapter>, bool) {
     let (adapter, env_applied) = match &prep.env {
-        Some(env) => {
-            // ADR-0075 G3-fix1: 与えない sccache の族（daemon から継いだ `RUSTC_WRAPPER` / `SCCACHE_*`）を先に外す。
-            // `env_remove` を持たないアダプタには `RUSTC_WRAPPER` などを空の値で上書きして代える（cargo は空を未設定と扱う）。
-            let (adapter, set) = if env.remove.is_empty() {
-                (adapter, env.set.clone())
-            } else {
-                match adapter.with_env_removed(&env.remove) {
-                    Some(wrapped) => (wrapped, env.set.clone()),
-                    None => {
-                        tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env_removed; overriding RUSTC_WRAPPER with an empty value (ADR-0075 G3-fix1)");
-                        let set = env.set_with_empty_wrappers();
-                        (adapter, set)
-                    }
-                }
-            };
-            match adapter.with_env(&set) {
-                Some(wrapped) => (wrapped, true),
-                None => {
-                    tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
-                    (adapter, false)
-                }
+        // ADR-0129 (1): 与える env を重ねるだけ。host から継いだ env（`RUSTC_WRAPPER` / `SCCACHE_*` を含む）は外さない。
+        Some(env) => match adapter.with_env(&env.set) {
+            Some(wrapped) => (wrapped, true),
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR-0066 D1)");
+                (adapter, false)
             }
-        }
+        },
         None => (adapter, false),
     };
     let adapter = match &prep.followups_env {
@@ -457,8 +442,8 @@ pub(super) async fn run_worker(
         .and_then(|wt| wt.repos.first())
         .filter(|r| r.is_git() && container_plan.is_none() && remote.is_none())
         .cloned();
-    // ADR-0075 D4（Phase G2）: scratch なら env は `task_worker::scratch::cargo_env`（checks・`celerisctl scratch env` と
-    // 同じ関数。`CARGO_TARGET_DIR`・`[scratch.cargo]`・server が応答すれば sccache 系）。legacy は `CARGO_TARGET_DIR` だけ。
+    // ADR-0075 D4 / ADR-0129 (1): scratch なら env は `CARGO_TARGET_DIR` と `[scratch.cargo]`（checks と同じ組み方）。
+    // legacy は `CARGO_TARGET_DIR` だけ。sccache 系は Celeris が足しも外しもしない（host の cargo 設定に任せる）。
     let target: Option<(PathBuf, task_worker::scratch::CargoEnv)> = match (
         &cargo_target,
         repo_for_target,
@@ -478,24 +463,14 @@ pub(super) async fn run_worker(
             };
             let (settings, candidates) = (settings.clone(), candidates.clone());
             let key = cargo_target_work_unit.as_ref().map(|(_, k)| k.clone());
-            // 割り当てに失敗したら sccache は配線しない（継いだ族は外す。G3-fix1）。
             let fallback = (
                 settings.pool().target_dir(&owner),
-                task_worker::scratch::CargoEnv::from_set(task_worker::scratch::target_env(
-                    &settings.pool(),
-                    &owner,
-                )),
+                scratch_cargo_env(&settings, &owner),
             );
             match tokio::task::spawn_blocking(move || {
                 let target = allocate_scratch_target(&settings, &candidates, &owner, &repo, key);
-                let state =
-                    task_worker::scratch::resolve_sccache(&settings, task_worker::scratch::server_listening);
-                if let Some(reason) = state.reason() {
-                    tracing::debug!(owner = %owner, state = state.label(), reason, "scratch: sccache is not wired for this run (ADR-0075 D4)");
-                }
                 // adopt は owner のパスへ rename するので、`target` は env の `CARGO_TARGET_DIR` と同じ。
-                // G3-fix1: 与えない sccache の族は `remove`（継いだ値を外す）。
-                let env = task_worker::scratch::cargo_child_env_with(&settings, &owner, &state);
+                let env = scratch_cargo_env(&settings, &owner);
                 (target, env)
             })
             .await
@@ -725,4 +700,15 @@ pub(super) struct LeaseRenewal {
     pub(super) ttl: Duration,
     /// 延長の最小間隔（`lease_grace / 2`）。
     pub(super) every: Duration,
+}
+
+/// ADR-0129 (1): scratch の経路（run・daemon が走らせる検査）に与える env。`CARGO_TARGET_DIR` と
+/// `[scratch.cargo]`（`CARGO_INCREMENTAL` など）だけで、sccache 系は足さず、継いだ env も外さない（`remove` は空）。
+pub(super) fn scratch_cargo_env(
+    settings: &task_worker::scratch::ScratchSettings,
+    owner: &task_worker::scratch::Owner,
+) -> task_worker::scratch::CargoEnv {
+    let mut set = task_worker::scratch::target_env(&settings.pool(), owner);
+    set.extend(task_worker::scratch::cargo_tuning_env(&settings.cargo));
+    task_worker::scratch::CargoEnv::set_only(set)
 }

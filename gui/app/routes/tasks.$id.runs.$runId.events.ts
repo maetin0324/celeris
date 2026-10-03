@@ -5,7 +5,7 @@ import type { Route } from "./+types/tasks.$id.runs.$runId.events";
 
 /**
  * `/tasks/:id/runs/:runId/events`（resource route。コンポーネントは持たない）。
- * `GET /tasks/{id}/runs/{run_id}/events`（docs/gui/api.md §3.100）をそのまま返す。Console の `progress`
+ * `GET /tasks/{id}/runs/{run_id}/events`（docs/api/v1/gui-api.md §3.100）をそのまま返す。Console の `progress`
  * ブロック（`~/components/ConsoleBlockItem.tsx`）の「すべて見る」が `useFetcher().load()` から呼ぶ
  * （`~/routes/reports.$id.tsx` と同じ、開いたときだけ取りに行く作り。ADR-0048 D1「詳細は必要なときだけ」）。
  */

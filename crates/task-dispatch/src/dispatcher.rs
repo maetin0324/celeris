@@ -241,6 +241,10 @@ struct ScratchState {
     pinned_summary: Option<String>,
     /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
     ran_this_tick: bool,
+    /// ADR-0129 (4): 直近に seed の更新を確かめた時刻（`None` = 起動後まだ。昇格の後の起動で直ちに確かめる）。
+    seed_last_check: Option<Instant>,
+    /// seed の更新スレッドが動いている間は `true`。
+    seed_refreshing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
@@ -284,7 +288,15 @@ fn allocate_scratch_target(
         adopt: settings.adopt,
         max_distance: settings.adopt_max_distance,
     };
-    match task_worker::scratch::allocate(&pool, &req) {
+    // ADR-0129 (4): seed は `[scratch.cargo]` と worktree の rustc（rust-toolchain に従う）が一致するときだけ写す。
+    let rustc = || rustc_version(&repo.dir);
+    let seed = task_worker::scratch::SeedPolicy {
+        enabled: settings.seed_reflink,
+        cargo: Some(settings.cargo.clone()),
+        rustc: Some(&rustc),
+    };
+    let ops = task_worker::scratch::SeedCopyOps::real();
+    match task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops) {
         Ok(a) => {
             if let Some(from) = &a.adopted_from {
                 tracing::info!(owner = %owner, adopted_from = %from, target = %a.target_dir.display(), "scratch: adopted a warm target (ADR-0075 D3)");
@@ -297,6 +309,19 @@ fn allocate_scratch_target(
             pool.target_dir(owner)
         }
     }
+}
+
+/// `rustc -V`（`dir` で実行する。seed の manifest と比べる）。
+fn rustc_version(dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("rustc")
+        .arg("-V")
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// ADR-0041 D5: この celeris が**面倒を見てよいタスク**の述語。`None`（既定）は「全部」＝従来どおり。
@@ -545,6 +570,8 @@ pub struct KnowledgeRuntimeConfig {
     pub default_mounts: Vec<task_core::KnowledgeMount>,
     /// ADR-0052 D1（Phase 64）: `[knowledge.langmem].base_url`。知識整理タスクを dispatch する直前に
     /// `GET <base_url>/models` を当てる。`None` なら検査しない（＝従来どおり `langmem` で走らせる）。
+    /// ADR-0132 D4: 通常は celeris の llm-proxy を指す。検査するのは proxy の到達性で、proxy の先の
+    /// Qwen の生死ではない（Qwen が落ちても proxy が Claude / GPT の cheap に倒すので `langmem` のまま）。
     pub langmem_base_url: Option<String>,
     /// Phase 65b: `[knowledge.langmem].api_key_secret` から解決した平文のトークン（`[secrets] dir`
     /// が無い・見つからない等なら `None`）。到達性の probe が `Authorization: Bearer` に使う
@@ -1266,27 +1293,14 @@ impl Dispatcher {
                 None => HashMap::new(),
             };
         // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
+        // ADR-0129 (3): `[scratch] mount` が mount されていなければ従来の場所へ戻したことを出す。
+        if let Some(reason) = &config.scratch.dir_fallback_reason {
+            tracing::warn!(%reason, "scratch dir fell back to the previous location");
+        }
         if let Some(reason) = &config.scratch.disabled_reason {
             tracing::warn!(%reason, "scratch pool disabled");
         } else if config.scratch.enabled && config.shared_build_cache {
             tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
-            // ADR-0075 D4（Phase G2）: sccache を配線するか（run ごとにも確かめる。ここは起動ログだけ）。
-            let state = task_worker::scratch::resolve_sccache(
-                &config.scratch,
-                task_worker::scratch::server_listening,
-            );
-            match state.reason() {
-                None => tracing::info!(
-                    port = config.scratch.sccache.server_port,
-                    binary = %config.scratch.sccache.binary.display(),
-                    "sccache L1 wired into cargo runs (ADR-0075 D4)"
-                ),
-                Some(reason) => tracing::info!(
-                    state = state.label(),
-                    reason,
-                    "sccache L1 not wired; runs use plain cargo (ADR-0075 D4)"
-                ),
-            }
         }
         Self {
             store,
@@ -1734,6 +1748,8 @@ impl Dispatcher {
             if !self.scratch.ran_this_tick {
                 self.scratch_gc(false);
             }
+            // ADR-0129 (4)(5): seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）。
+            self.seed_housekeeping(Instant::now());
         } else {
             self.cleanup_work_unit_build_caches();
             self.scratch.view = self.config.shared_build_cache.then(|| {
@@ -1798,6 +1814,12 @@ impl Dispatcher {
         let dispatch_ms = lap(&mut at);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
+        // Use the same injected clock as the rest of dispatch; the feed never performs I/O outside the store.
+        if self.accepting_new_work
+            && let Ok(at) = OffsetDateTime::from_unix_timestamp(now)
+        {
+            self.sync_notice_feed(at);
+        }
         let idle_ms = lap(&mut at);
         self.publish_snapshot();
         if started.elapsed() >= SLOW_TICK {

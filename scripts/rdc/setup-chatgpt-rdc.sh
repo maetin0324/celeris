@@ -9,7 +9,7 @@
 #   TOKEN_FILE: `celerisctl mcp client add chatgpt-rdc --scope …` が出したトークンを保存した 600 のファイル。
 #               与えると専用ユーザーの ~/.config/celeris/mcp-token に 600 で置く（値は表示しない）。
 #
-# 作るもの（docs/mcp.md §8、ADR-0056 Phase 101 追記）:
+# 作るもの（docs/guides/mcp.md §8、ADR-0056 Phase 101 追記）:
 #   - ユーザー chatgpt-rdc（sudo 無し・補助グループ無し・ssh 鍵無し・celeris の DB や設定に触れない）
 #   - ~chatgpt-rdc/.local/bin/celerisctl   … 現行リリースの celerisctl のコピー（`mcp call` は DB を開かない）
 #   - ~chatgpt-rdc/.local/bin/celeris-chat … scripts/rdc/celeris-chat の写し（RDC から呼ぶ唯一の入口）

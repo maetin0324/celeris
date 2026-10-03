@@ -1,0 +1,523 @@
+# ADR-0040: 自己改善のためのデプロイ — リリース → 検証 → 昇格（ライブ引き継ぎ）
+
+- 日付: 2026-09-19
+- 状態: **Accepted**（人間の依頼「agent-platform の改善を taskd 上で動かせるようにしたい。自己コードベースを改善した後に、
+  既存の動いているコードから新しいコードがちゃんと正しく使えることを確認次第 migration するイメージで、安全に自己改善
+  できるデプロイ環境を整備してください」「ライブマイグレーションが出来るとなお良いです」）
+- 関連: SPEC §3.6（認可。危ない操作は人が握る）/ §5（成果物は `~/workspace/...`）、ADR-0013 D5（`SchemaTooNew`）、
+  ADR-0010（リース）、ADR-0017（reload）、ADR-0032 D2（ssh master は ControlPersist で taskd の外で生きる）、
+  ADR-0039（案件の作業場所）
+
+## 1. 文脈
+
+いま本番は `~/workspace/agent-platform` の `target/debug/taskd` を手で `kill` → `nohup` で起こしている。GUI も同じ手順。
+taskd 上の「人」に agent-platform 自身を改善させるには、(a) 本番が**作業中のチェックアウトに依存しない**こと、
+(b) 新しいコードが**本番のデータと設定で本当に動く**ことを昇格の前に機械的に確かめること、(c) 昇格が**動いている
+仕事を殺さず**、失敗したら戻せること、(d) 昇格そのものは**人が握る**こと、が要る。
+
+## 2. 決定
+
+### D1. リリースは不変のディレクトリ。本番は `~/taskd/current` が指すリリースから動く
+
+```
+~/taskd/releases/<sha12>/
+  manifest.json        # {sha, ref, built_at, schema_version, profile, gate: {…exit codes/durations}}
+  bin/taskd  bin/taskctl
+  gui/                 # build/ server.js package.json pnpm-lock.yaml pnpm-workspace.yaml node_modules(prod)
+  gate.json            # release.sh の結果（cargo test / clippy / build / pnpm typecheck / test / build）
+  verify.json          # verify.sh の結果（D3）。無ければ未検証
+~/taskd/current -> releases/<sha12>   # 昇格済み（symlink。人が読む用。systemd は unit 名で判る）
+~/taskd/previous -> releases/<sha12>  # 直前の昇格（rollback 先）
+~/taskd/backups/<ts>-pre-<sha12>.sqlite3   # 昇格直前の DB（`sqlite3 .backup`）
+~/taskd/staging/      # verify の作業場所（毎回作り直す。DB のスナップショット、staging 用トークン、ログ）
+```
+
+- ビルドは `git worktree add --detach` した**作業チェックアウトとは別の**ワークツリーで行い（`~/taskd/releases/.build/<sha12>`）、
+  `CARGO_TARGET_DIR=~/taskd/releases/.cargo-target`（共有。ビルドを速くする）。プロファイルは `release`。
+  ビルド後にワークツリーは消す。リリースは `current` / `previous` と、検証済みの新しい 3 件を残して消す。
+- **本番はもう `~/workspace/agent-platform/target` を使わない**。作業チェックアウトで何をしても本番は変わらない。
+
+### D2. 3 段のパイプライン（`scripts/selfdeploy/`。bash、`set -euo pipefail`、決定的、LLM 不在）
+
+| 段 | 何をする | 誰が実行できる |
+|---|---|---|
+| `release.sh <git-ref>` | ワークツリー → `cargo test --workspace` → `cargo clippy -D warnings` → `cargo build --release` → GUI `pnpm install --frozen-lockfile` → `typecheck` → `test` → `build` → `node_modules` を prod だけ入れ直す → `manifest.json` / `gate.json`。**どれか 1 つでも非 0 ならリリースを作らない**（`.build` に `gate.json` だけ残す） | 人、taskd の「人」（ワーカー）どちらでも。本番に触れない |
+| `verify.sh <sha12>` | D3。本番 DB のスナップショットに対して新リリースを **verify モード**で起こし、API と GUI を叩き、**旧バイナリとの N-1 互換**も確かめて `verify.json` を書く | 同上。本番に触れない（DB は `sqlite3 .backup` で読むだけ） |
+| `promote.sh <sha12>` | D4。`verify.json` が `ok` でなければ拒否（`--force` は無い）。DB をバックアップし、**ライブ引き継ぎ**（`verify.json.live_ok` が真）か **停止→起動**（偽）で切り替える。`current` / `previous` を更新 | **人だけ**（SPEC §3.6。認可の standing で機械に渡すのは今回やらない） |
+| `rollback.sh` | `previous` へ `promote`。スキーマが新しくなっていて旧バイナリが読めない（`SchemaTooNew`）ときは、`--restore-db` を付けたときだけ `backups/` から復元して停止→起動（復元は昇格以降の仕事を失う。人が選ぶ） | 人だけ |
+| `status.sh` | いまの `current` / `previous`、`daemon_instances`（D4）、リリース一覧と検証状態を JSON で | 誰でも |
+
+### D3. 検証（staging）は「本番のデータと設定」で、しかし何も動かさずに行う
+
+- `~/taskd/staging/` を作り直し、`sqlite3 ~/taskd/taskd.sqlite3 ".backup staging.sqlite3"`（WAL でも整合するコピー）。
+- 新リリースの `bin/taskd` を **`--mode verify`** と上書きフラグで起こす:
+  `taskd --config ~/taskd/taskd.toml --mode verify --db <staging.sqlite3> --listen 127.0.0.1:7711 --workspace-root <staging>/workspaces --token-file <staging>/api.token`。
+  設定は本番のものをそのまま読み（役割・分野・プロバイダ・クラスタ・秘密の**設定**が通るかを見るため）、**上書きは CLI だけ**。
+- **verify モード**（D4 の役割 `verify`）: マイグレーションは適用する（コピーに対して）。**dispatch しない、ワーカーを起こさない、
+  tick の裏方（通知・報告の圧縮・途中目標レビュー・クラスタ接続・アカウント確認）を動かさない、Discord に送らない**。
+  API は読み書きとも受ける（ここでの書き込みはコピーに対して）。`GET /health` に `mode` と `release` を載せる。
+- 検査（すべて決定的。結果は `verify.json` に個別に記録）:
+  1. 起動できて `health.schema_version` が新バイナリの `SCHEMA_VERSION` に等しい（マイグレーションが本番のデータで通った）。
+  2. **件数一致**: 本番 API（`127.0.0.1:7710`、読み取り）と staging API で `tasks`（`show_support=1`）/ `projects` / `milestones` /
+     `org` / `approvals(pending=false)` / `reports` / `messages` の件数と、各 `tasks` の `id,status` の集合が一致する。
+  3. 主要 GET が 200 かつ JSON として読める（`inbox`, `org/secretary/memory`, `notify`, `clusters`, `providers`, `roles`, `genres`）。
+  4. 新リリースの GUI を `TASKD_API_URL=http://127.0.0.1:7711 TASKD_GUI_BIND=127.0.0.1:7701`（loopback なのでパスワード無し）で起こし、
+     `/`, `/org`, `/projects`, `/projects/<最新の案件>`, `/approvals`, `/reports`, `/clusters` が 200。
+  5. **N-1 互換**: `current` の `bin/taskd`（旧）を、**新バイナリがマイグレーションした後の**同じスナップショットに対して
+     `--mode verify --listen 127.0.0.1:7712` で起こし、1〜3 と同じ検査をする。旧が `SchemaTooNew` で起動できない、
+     または検査に落ちるなら **`live_ok = false`**（ライブ引き継ぎ中は新旧が同じ DB を同時に使うため、旧が新スキーマを
+     読めないなら安全に引き継げない。停止→起動で昇格する）。`current` が無い（初回）なら `live_ok = false`。
+- staging のプロセスは検査の最後に必ず止める（`trap`）。`verify.json` の `ok` は 1〜4 の全部が真のとき。
+
+### D4. 昇格はライブ引き継ぎ（handoff）。taskd の「インスタンスの役割」を DB に持つ
+
+migration `0011_daemon_instances.sql`（`SCHEMA_VERSION = 11`）:
+
+```
+daemon_instances(instance_id TEXT PK, release TEXT NOT NULL, pid INTEGER NOT NULL, role TEXT NOT NULL
+  CHECK(role IN ('active','standby','draining','verify')), started_at TEXT NOT NULL, heartbeat_at TEXT NOT NULL,
+  handoff_requested_at TEXT NULL, drained_at TEXT NULL)
+```
+
+役割と規則（すべて tick の中で決定的に。LLM 不在）:
+
+- **`active`**: dispatch する。tick の裏方（通知・報告・途中目標レビュー・クラスタ・アカウント）を動かす。API を受ける。
+  **常に 1 つだけ**。
+- **`standby`**: 起動時に、`heartbeat_at` が新しい（`now - heartbeat_at < 3 × tick + lease_grace`）`active` があれば
+  standby になる。API は**起きてすぐ**受ける（同じポートに `SO_REUSEPORT` で bind。カーネルが振り分ける。読み書きは
+  同じ DB なので問題ない）。ただし**ディスパッチャの状態を要する管理 API**（`reload`、`check`、クラスタ接続、
+  アカウントのログイン中継、`notify/test`）は `503 {"detail":"standby"}` に `Retry-After: 2` を付けて返す
+  （窓は 1〜2 tick。GUI はその間だけ「切り替え中」）。`active` の行に `handoff_requested_at` を書く。
+- `active` は `handoff_requested_at` を見たら **`draining`** になる: **同じ tick で** API の listener を閉じ（受け付け済みの
+  要求は完了させる）、dispatch と裏方を止める。**自分が起こしたワーカー run とレビューはそのまま面倒を見続ける**
+  （リースの更新、終了の記録、`aggregate` / `child_failed` などの後処理）。手元の run が 0 になったら `drained_at` を
+  書いて **exit 0**。`[handoff] drain_timeout_secs`（既定 3600）を超えたら残りの run を abort し（リースが切れて
+  新しい active が拾う。従来の「リース切れ」と同じ経路）、exit 0。
+- `standby` は `active` の行が `draining` になった（または `heartbeat_at` が古い＝旧が死んだ）のを見たら **`active`** になる。
+  古い `active`/`draining` の行は、`drained_at` が付くか heartbeat が古くなったら消す。
+- **`verify`**: D3 のためのモード。dispatch も裏方も無し。`daemon_instances` に行は**書かない**（本番の表に触れない —
+  そもそも別 DB だが、規約として）。`--mode verify` のときだけ。
+- 起動時に自分と同じ `release` の `active` がいたら**何もせず exit 3**（同じ版を二重に起こさない）。
+- リースは従来どおり `renew_lease` で守られる。draining の run は新 active からは「リースが生きている running」に見えるので
+  二重 dispatch は起きない。`max_concurrency` は各インスタンスの手元の数で数える（ADR-0010 のまま）。引き継ぎ中は
+  合計が一時的に超えうる（上限は旧の残り run 数）。**採らない**: DB で合計を数える（今回のスコープ外。PROGRESS の提案へ）。
+- ssh master（ADR-0032 D2）は ControlPersist で taskd の外で生きる。新 active は起動時に `-O check` で拾う（従来どおり）。
+- GUI も同じ形: `server.js` の `listen` に `reusePort: true`（Node 24）。`GET /healthz` が `{release}` を返す。
+  新 GUI を起こして `/healthz` が新 `release` を返したら旧を止める（数百 ms の並走。セッションは秘密ファイルで共有済み）。
+
+systemd（user。linger 済み）: テンプレート unit `~/.config/systemd/user/taskd@.service` と `taskd-gui@.service`。
+`%i` = `sha12`。`ExecStart=%h/taskd/releases/%i/bin/taskd --config %h/taskd/taskd.toml`。`Restart=on-failure`
+（drain 後の exit 0 では再起動しない）。`promote.sh` は `systemctl --user start taskd@<new>` → `daemon_instances` で
+新が `active`・旧が `draining` になるまで待つ（上限 60 秒。ならなければ新を止めて**失敗**。旧はそのまま）→
+`enable taskd@<new>` / `disable taskd@<old>`（起動時に新だけが上がる）→ GUI を同様に → `current`/`previous` を更新。
+**旧の drain 完了は待たない**（数時間かかりうる。`status.sh` で見える）。
+
+停止→起動（`live_ok = false`、または旧が `daemon_instances` を知らない＝この ADR 以前の版。**初回の移行はこれ**）:
+`promote.sh` は旧 pid を**設定パスまで含めた完全一致**で見つけて `SIGTERM` → 終了を待つ（`kill_grace_secs` + 10 秒）→
+DB バックアップ → `start taskd@<new>` → `health` 200 と `schema_version` を 60 秒待つ → 失敗なら新を止めて旧の unit
+（あれば）を起こし、スキーマが進んでいたら**復元はせず**失敗を報告して人に任せる（D2 の `rollback.sh --restore-db`）。
+
+### D5. taskd 上の「人」に許すこと・許さないこと（自己改善の案件）
+
+- 案件「agent-platform の自己改善」の作業場所は `local: ~/workspace/agent-platform`（ADR-0039）。実装者は
+  **taskd が用意した worktree とブランチ（`taskd/<task-id>`）にコミットする**（ADR-0041 D1。自分でブランチを
+  切らない。`main` には直接コミットしない。作業ツリーはタスクごとに分かれていて本番にも人のチェックアウトにも
+  影響しないので、ここで壊しても本番は動き続ける）。
+- 実装者は `scripts/selfdeploy/release.sh <ブランチ>` と `verify.sh <sha12>` を**自分で実行してよい**（本番に触れない）。
+  結果の `gate.json` / `verify.json` を成果物（`artifacts/`）に写し、報告に「検証済み sha」を書く。
+- **`promote.sh` / `rollback.sh` / `systemctl` / `~/taskd/taskd.toml` の編集 / `~/taskd/*.sqlite3` への書き込み /
+  本番プロセスへの `kill` は禁止**。役割の指示文（`implementer`）に明記する。昇格は人が `status.sh` で `verify.json.ok` を
+  見て実行する。将来これを standing の認可で機械に渡すかは、実機で数回回してから決める（PROGRESS の提案へ）。
+
+### D6. API / GUI（後続 Phase。ここでは契約だけ）
+
+- `GET /releases` → `{current, previous, items: [{sha12, ref, built_at, schema_version, gate_ok, verify: {ok, live_ok, at}?, promoted_at?}]}`
+  （`~/taskd/releases/*/manifest.json` 等を読むだけ。管理系ではない）。`GET /health` に `release` / `mode` / `role` を追加。
+- `POST /releases/{sha12}/promote`（管理系）→ `promote.sh` を起動して 202。**GUI からの昇格は人が押す**（D5 と矛盾しない）。
+  GUI「リリース」画面（G14）: 一覧、検証状態、`current`、「昇格」ボタン（確認付き）、引き継ぎの進行（`daemon_instances`）。
+
+## 3. 採らない
+
+- Docker / 別ホストへのデプロイ。本番はこの LXC 1 台（SPEC「リモート実行は別プロジェクト」）。
+- ワーカー子プロセスの再親付け（fd の受け渡し）。drain で足りる。
+- 自然文の判断で昇格を決める。昇格は `verify.json.ok` と人。
+- DB の二重書き込み防止に分散ロック。役割は 1 行の表と heartbeat で足りる（同一ホスト・同一 SQLite）。
+
+## 4. 受け入れ条件
+
+**Phase 47（taskd 本体。先に）**: migration 0011 と役割（active / standby / draining / verify）、`--mode` / `--db` / `--listen` /
+`--workspace-root` / `--token-file` の上書き、`SO_REUSEPORT`、standby の 503、draining の drain と exit 0、drain timeout、
+同版二重起動の exit 3、`health` の `release` / `mode` / `role`。テスト: 1 つの SQLite に 2 つの `Dispatcher`/tick を起こし、
+(a) 新が standby → 旧が draining → 新が active になる、(b) draining 中の run は旧が完了させ新は二重 dispatch しない、
+(c) verify は dispatch しない、(d) 同版二重起動は exit 3、(e) 旧の heartbeat が止まれば新が active になる。
+`cargo test --workspace` / clippy。
+
+**Phase 46（配備の道具。Phase 47 の後）**: `scripts/selfdeploy/{release,verify,promote,rollback,status}.sh`、systemd の
+テンプレート unit、GUI の `reusePort` と `/healthz`、`docs/gui/` ではなく `docs/selfdeploy.md` に運用手順。テスト: bash の
+スクリプトは `bash -n` と shellcheck（あれば）、`release.sh` を実リポジトリで 1 回、`verify.sh` を本番 DB のコピーで 1 回
+（本番プロセスには触れない）。**実機の初回移行**（停止→起動で `taskd@<sha12>` と `taskd-gui@<sha12>` へ）は人（または
+この会話のエージェント）が `promote.sh` で行い、以後の昇格がライブになることを 2 回目の昇格で確かめる。
+
+**Phase 48 / G14（後続）**: D6 の API と GUI、案件「agent-platform の自己改善」の登録と `implementer` の指示文（D5）。
+
+## Phase 48 追記（2026-09-19。D6 からの逸脱だけ）
+
+実装で D6 の契約から変えたところ。設計（誰が昇格を決めるか、何に触れないか）は変えていない。
+
+1. **`GET /releases` の応答に `running` と `instances` を足した**。D6 は `{current, previous, items}` だけだが、
+   GUI「リリース」画面は「いま動いているのはどれか」「引き継ぎがどこまで進んだか」を出す必要がある
+   （D6 自身が G14 の要件に「引き継ぎの進行（`daemon_instances`）」と書いている）。`running` は
+   `GET /health` の `release` / `mode` / `role` と同じ値、`instances` は `daemon_instances` の行そのまま。
+   別エンドポイント（`GET /instances`。PROGRESS の P47-1）にはせず、1 回の読み直しで画面が作れる形にした。
+2. **`items[]` の `promoted_at` を出さない**。どのリリースがいつ昇格したかは `~/taskd/releases/<sha12>/` の
+   どのファイルにも書かれていない（`promote.sh` は `~/taskd/backups/promote-<ts>.log` にしか残さない）。
+   読むだけで作れないので落とした。代わりに **`is_current` / `is_previous`**（symlink から）と
+   **`promoting`**（`promote.lock` の pid が生きているか）を出す。
+3. **`items[]` に `problem`（文字列、省略可）を足した**。`manifest.json` / `gate.json` が壊れていても
+   一覧全体を落とさないため（そのリリースは `gate_ok = false` と `problem` を持つ）。
+4. **`[selfdeploy] releases_dir` を設定に足した**（既定 `releases`、設定ファイルのディレクトリ基準）。
+   D6 は「`~/taskd/releases/*/manifest.json` 等を読むだけ」としか書いておらず、パスの出どころが無かった。
+   `current` / `previous` の symlink は `releases_dir` の**親**にある（`sd_set_link` がそう張るため）。
+   本番の `~/taskd/taskd.toml` は書き換え不要（既定でそのまま当たる）。
+5. **`release.sh` が `scripts/selfdeploy/*.sh` をリリースに同梱する**（`<release>/scripts/`）。
+   `POST /releases/{sha12}/promote` が起こすのは**リリースの中の** `promote.sh` で、作業チェックアウトが
+   別のブランチにいても・無くても昇格できる。`lib.sh` は `dirname "${BASH_SOURCE[0]}"` で自分の隣を読み、
+   場所は全部 `TASKD_HOME` 基準なので、そのまま動く（`SD_REPO` を要るのは `release.sh` だけ）。
+   Phase 48 より前に作られたリリースには `scripts/` が無いので、その昇格は 409 になる（shell から行う）。
+6. **`GET /releases` は task-api → taskd をチャネルではなくトレイト（`task_api::ReleaseSource`）で越える**。
+   `reload` / `check` / `notify/test` は `AdminRequest` の非同期チャネルだが、こちらは同期のファイル読み取りで、
+   `standby` でも答えられる（ディスパッチャの状態を要しない）ため 503 にしたくない。実体
+   （`taskd::releases::FsReleases`）は taskd 側にあり、task-api はファイルの規約を知らないまま。
+7. **`POST /releases/{sha12}/promote` に `require_active` を付けない**。昇格を始めるのに
+   ディスパッチャは要らない（外部プロセスを起こすだけ）。むしろ `standby` からも押せる方がよい。
+
+## Phase 105 追記（2026-09-22）: `promote.sh` を celeris の cgroup の外で起こす（ADR-0060 D1 と同じ理由）
+
+### 本番で起きたこと（2026-09-22 21:55 UTC）
+
+人が GUI の「昇格」でリリース `4fff25348ed6` を昇格した。`start_promote`（当時）は `setsid` で
+`promote.sh` を起こし、`promote.sh` は 21:55:43 に `systemctl --user start celeris@4fff25348ed6`
+まで進んだ。新デーモンが `active` になった 1 秒後（21:55:44）に旧デーモン `celeris@c22d7dcfa445` が
+「`active` → `draining`」（在庫の run が無かったので即座に「drained; exiting 0」）。systemd は旧 unit
+の cgroup 全体を殺し、**`setsid` しただけで cgroup に残っていた `promote.sh` も一緒に死んだ**。
+結果、`promote.log` は `systemctl --user start` の行で途切れ、`current` symlink と GUI
+（`celeris-gui@`）は旧のまま、`promoted.json` 無し、`GET /releases` は
+`running=4fff…` / `current=c22d7…` のちぐはぐな状態で 1 時間半止まっていた。親が手で
+`promote.sh 4fff25348ed6` を再実行し、`promote.sh` の再開ロジック（「celeris already took over;
+resuming the incomplete GUI/link handoff」）で完了した。
+
+原因は ADR-0060 の ssh master とまったく同じ: **`setsid` は cgroup を抜けない**。D4 の drain
+（`celeris@<sha12>` unit が `KillMode=control-group`（既定）で止まる）は、`promote.sh` 自身が
+「動いている celeris を止める・引き継ぐ」ためにその celeris の子として起こされている限り、
+自分自身の drain に巻き込まれうる。
+
+### 決定（この ADR の D4/D6 の実装だけを変える。設計は変えていない）
+
+- `start_promote` は `promote.sh` を **`systemd-run --user --scope --quiet --unit
+  celeris-promote-<sha12>-<短い乱数> --description "celeris promote <sha12>" -- sh -c '<script> <sha12>'`**
+  で起こす（`setsid` の代わり）。`systemd-run` が無い／`XDG_RUNTIME_DIR` が無い環境（テスト、非
+  systemd）では従来どおり `setsid` にフォールバック（`auto`。判定は ADR-0060 D1 の
+  `resolve_master_launcher` と同じ規則）。`promote.lock` に書く pid は `--scope` が exec するので
+  そのまま `sh` の pid になり、`promoting_pid` の生存判定はそのまま使える。
+  判断（`resolve_detach_launcher`）と argv の組み立て（`wrap_command`）は
+  `crates/task-worker/src/detach.rs` に共通化し、ssh master（`cluster_login.rs`）と
+  `promote.sh`（`celeris::releases::start_promote`）の両方が使う（重複を避けるための共通化で、
+  設計上の新しい判断ではない）。
+- `GET /releases` の `items[]` に **`promote_stale`**（`promote.lock` の pid が死んでいるのに
+  `promoted.json` が無く、`promote.log` が `promote.sh` 成功時の一行まで進んでいない）と
+  **`promote_last_line`**（`promote.log` の最後の行）を足した。人が「昇格が途中で止まったまま」を
+  見分けるための材料。GUI の表示は次の GUI Phase に任せる（この Phase では API 契約だけ）。
+- **採らない**（変えていない）: celeris が自分で `promote.sh` の続きをやる（昇格の手順は script
+  1 か所のまま）。`celeris@.service` の `KillMode` 変更。
+
+詳細・受け入れ条件は `docs/PROGRESS.md` の Phase 105 節、実装は `crates/task-worker/src/detach.rs`、
+`crates/celeris/src/releases.rs::start_promote` / `start_promote_with_launcher` /
+`promote_exec_command`。
+
+## Phase 119 追記（2026-09-24）: drain 後にプロセスが終了しない障害の修正と、promote.sh の停止対象の特定
+
+### 本番で観測した事実（2026-09-24。再掲）
+
+ライブ切替で draining になった旧デーモンが「drained; exiting 0（ADR-0040 D4）」「celeris stopped,
+exit: Drained」まで journal に出した**後もプロセスが終了しない**（tick は止まっている = logically
+stopped だが pid は残り、`SIGTERM` も効かない）。過去 4 世代の `celeris@<sha>.service` が active
+running のまま溜まり、`promote.sh` の停止→起動が**最も古い無関係な pid**（/proc の argv 走査が
+最初に見つけたもの）に SIGTERM を送って 300 秒待ち、「old celeris is still serving after 300s」で
+失敗した。1 つの旧 unit の cgroup には `sleep 3600` が 3 つ（ワーカー run が起こしたシェルの子孫）、
+現行 unit には `[codex] <defunct>` が 1 つ残っていた。
+
+### D1: 原因の特定（推定。実機のスタックトレースは取れていない — 下記「未解決」参照）
+
+`crates/celeris/src/main.rs` は `#[tokio::main]`（既定 multi-thread runtime）を使っていた。この
+マクロが組む `Runtime` は `async fn main` が返った**後**に暗黙に drop され、`Runtime::drop` は
+**上限なしに**`spawn_blocking` のブロッキングスレッドプールが空になるまで待つ（`shutdown_timeout`
+を明示的に呼ばない限り）。tick ループはすでに `Ok(Exit::Drained)` を返し、`main.rs` が
+「celeris stopped, exit: Drained」まで確かにログを出しているので、**アプリケーションの終わり方
+自体は正しく完了していた**。残る説明は「`run()` が返った後、まだ完了していない `spawn_blocking`
+タスク（Phase 110a の背景チェックポイント/バックアップが busy_timeout の間ブロックしている、
+または本番が以前踏んだ NFS 越し loop デバイスの D 状態の fsync 等）を `Runtime::drop` が
+無期限に待ち続けていた」という仮説である。
+
+**「`SIGTERM` すら効かない」を説明する仕組み**: `tick_loop` は
+`tokio::signal::unix::signal(SignalKind::terminate())` で SIGTERM の**専用ハンドラ**を登録する。
+これは OS のデフォルトの「SIGTERM で終了する」という挙動を、**プロセスの生存期間全体にわたって**
+「シグナルをチャネルに転送するだけ」に置き換える。tick ループがとっくに終わり、誰もそのチャネルを
+読んでいない状態（＝まさに `Runtime::drop` が無期限に止まっている状況）で人が SIGTERM を送っても、
+もう「デフォルトの終了」は起きない（ハンドラは登録されたまま何もしない）。`SIGKILL` だけが効く
+状態になる。これは本番の「SIGTERM も効かない」という観測と正確に一致する。
+
+**未解決**: どの `spawn_blocking` 呼び出しが実際に詰まっていたかは、実機のプロセスのスタック
+（`/proc/<pid>/task/*/stack` や `py-spy`/`gdb` 相当）が無いと確定できない。このセッションでは
+本番プロセスに触れられない（CLAUDE.md の制約）ため、コードレビューで見つけた「無期限に待ちうる
+`spawn_blocking`」の候補（Phase 110a の `db_maintenance::RunningDbMaintenance::stop`— 内部の
+`tokio::time::timeout(5s, handle)` が、`[db] busy_timeout_ms`〈本番推奨 15000ms〉より短いため、
+チェックポイント/バックアップの真っ最中に drain が始まると 5 秒で諦めて `spawn_blocking` タスクを
+孤児のまま残す）を修正の根拠にした。原因を確定させずとも、**D1 の対処（下記）はこの種のあらゆる
+「止まらない背景タスク」を一律に無害化する**ので、実装としてはこれで十分と判断した。
+
+### D1 の対処: `Runtime::shutdown_timeout` + `std::process::exit`
+
+`crates/celeris/src/main.rs`: `#[tokio::main]` をやめ、`tokio::runtime::Builder::new_multi_thread()`
+で runtime を手で組む。`run()`（`celeris::run` を包む `run_and_report`）が返った後、
+`runtime.shutdown_timeout(Duration::from_secs(10))` を明示的に呼ぶ（`Runtime::drop` の無期限待ちとは
+違い、10 秒で必ず制御が戻る）。その後 `std::process::exit(code)` で**確実に**プロセスを終える
+（生き残ったブロッキングスレッドは OS がプロセスごと片付ける — `std::process::exit` は他のスレッドの
+完了を待たない）。10 秒の上限に達した場合は WARN ログを残す（原因の切り分け用）。
+
+テスト（`crates/celeris/src/main.rs::tests::shutdown_timeout_gives_up_within_its_bound_even_with_a_stuck_background_task`）:
+stop シグナルを見ない・600 秒眠り続ける `spawn_blocking` を持つ Runtime に対して
+`shutdown_timeout(3s)` を呼び、5 秒未満で制御が戻ることを確認する（実プロセスを終わらせる
+`std::process::exit` はテストプロセスごと終わってしまうので確認できないが、そこに至る前の
+`shutdown_timeout` が無期限に待たないことがこの Phase の core fix）。
+
+### D2: 正常終了でも孤児を残さない
+
+`crates/task-worker/src/process_group.rs`: `on_worker_finished`（run が自分から終わる経路:
+done/error/question/yield/budget）には `kill_tree` の呼び出しが 1 つも無かった。しかも
+`ProcessGroup` の RAII guard は、アダプタが `child.wait()` を終えた直後（`on_worker_finished` が
+呼ばれる**前**）にスコープを抜けて drop されるので、`on_worker_finished` 側に `kill_tree` を
+足しても手遅れ（登録は既に消えている）。ワーカー自身の直接の子は `child.wait()` で reap される
+（消える）が、その子が `&` で起こした孫（`sleep 3600` 等）はプロセスグループの長が死んでも生き残る。
+
+**最初の実装（撤回済み）**: `Drop for ProcessGroup` 自体に SIGTERM → grace 後 SIGKILL を持たせた
+（`kill_tree_with` と同じ `spawn_group_reaper` を共有）。`cargo test -p task-worker --lib` で
+`paperqa::` の 6 テストが断続的に失敗し（`literature search returned nothing`）、原因を追うと
+この実装がバグだと判明した: `ProcessGroup` の guard は、アダプタが `child.wait()` で子を reap し
+終えてから（`stderr_task.await`・`stdout_file.flush().await` 等、複数の `await` を挟んだ）関数が
+戻るときにようやく drop される。reap 済みで**空いた pid** は、高い並列度（`cargo test` は既定で
+論理コア数だけ並列に走る）で他の run が別のプロセスを spawn したときにすぐ再利用されうる。
+`Drop` が「登録されていた pgid」へ SIGTERM を送る時点にはその pid が**無関係な、別の run の
+まだ生きているプロセス**を指していることがあり、そのプロセスを誤って止めていた（テストでは
+python3 の acquire ランナーが道半ばで signal を受け、出力が揃わず「検索結果 0 件」に見えた）。
+`docs/DESIGN.md` 系の「決定的」原則には反しないが、**副作用の対象を取り違える**という意味で
+安全性のバグである。
+
+`baseline-check`（変更前の HEAD からの使い捨て worktree）で `cargo test -p task-worker --lib
+paperqa::` が 57/57 通ることを確認し、変更後の `Drop` 実装だけが原因であることを切り分けた。
+
+**採用した実装**: `Drop` は元の「登録を表から消すだけ」に戻し、代わりに
+`crate::subprocess::reap_after_terminal`（ほぼ全アダプタが共有する、リーダーの `child.wait()` を
+呼ぶ関数）の**リーダーが自分から終わった枝**で、`await` を一切挟まずに
+`process_group::sweep(pid, grace)`（新設。登録テーブルを経由せず、呼び出し元がその場で
+`child.id()` から取った新鮮な pid で `killpg` する）を呼ぶ。ここが `killpg` を送るすべての経路の
+中で最も新鮮なタイミングであり、pid 再利用の危険は abort 系の `kill_tree`/`kill_tree_with`
+（レジストリから引いた直後に送る）と同程度まで小さくなる。タイムアウト側（`kill_now`）は
+`send_signal_to_group` が既に `killpg`（グループ全体）を送っているので変更不要。
+
+ゾンビ（`[codex] <defunct>`）は `kill_on_drop(true)` の非同期 reap が shutdown に間に合わなかった
+場合に残る。`task_worker::process_group::reap_finished_children`（`waitpid(-1, WNOHANG)` を
+`ECHILD` まで繰り返す）を追加し、`main.rs::shutdown_and_exit` が **runtime が完全に止まった後**
+（tokio 自身の SIGCHLD 駆動の reap と競合しないタイミング）にだけ呼ぶ。
+
+テスト: `subprocess::a_normally_finished_run_reaps_a_background_grandchild`
+（`sh -c "sleep 300 & ...; echo done"` で正常終了させ、孫が `run_subprocess` の戻り後に片付くことを
+確認）、`process_group::sweep_signals_the_group_and_is_a_no_op_when_nothing_is_left`。
+`cargo test -p task-worker --lib`（517 passed）を `--test-threads=32` で 3 回繰り返し実行し、
+退行が無いことを確認した。
+
+### D3: `promote.sh` の停止対象
+
+`scripts/selfdeploy/lib.sh` に `sd_resolve_old_daemon_pid`（`current` の release が systemd 管理下で
+生きていれば、その unit の `MainPID` だけを対象にする。systemd がまだ知らない release〈初回の移行〉
+だけ `sd_find_old_celeris_pid`〈従来の `/proc` の `--config` 完全一致走査〉にフォールバックする）と
+`sd_list_stale_celeris_units`（昇格の対象 `current`/`new` 以外に active な `celeris@*` unit の一覧。
+D1/D2 で防ぐはずだが、念のための検出）を追加した。`promote.sh` は旧 pid の決定に
+`sd_resolve_old_daemon_pid` を使うよう変更し、昇格前に stale unit の一覧を出す（`--stop-stale` で
+SIGKILL。既定は一覧だけ）。`status.sh` にも `stale_instances`（`current`/`previous` 以外に active な
+`celeris@*` の sha12 と `MainPID`）を追加した。
+
+### D4: 監視
+
+`crates/celeris/src/instance.rs`: `Supervisor::step` は、`daemon_instances` の `drained_at` が
+付いた他インスタンスの行を**同じ tick で**削除する（ADR-0040 D4 の設計どおり。ここは変えていない）。
+削除の**直前**に `stale_but_alive_rows`（純粋関数。`rows` のうち `drained_at` が付いていて
+`pid_alive(pid)` が真の行）を見て、見つかれば WARN ログを残す
+（`"stale: a drained daemon instance's process is still alive"`）。`GET /health`/`GET /releases` の
+`instances`（`daemon_instances` をそのまま返す）は API 型を増やしていない — 既存の `pid`/`drained_at`
+フィールドで十分と判断した（行はこの tick の直後に消えるので API での可視性は一瞬に限られるが、
+journal の WARN と `status.sh` の `stale_instances`〈systemd を直接見るので削除タイミングに
+左右されない〉で実運用上は足りると判断した。未解決事項に記録）。
+
+### 未解決事項
+
+- 実機のプロセススタックが取れないため、D1 の根本原因（どの `spawn_blocking` が詰まっていたか）は
+  確定していない。D1 の対処（`shutdown_timeout` + `process::exit`）はこの種のあらゆる「止まらない
+  背景タスク」を無害化するので実害は無いはずだが、次に同じ事故が起きたら `/proc/<pid>/task/*/stack`
+  を取ってから殺すこと。
+- D4 は `daemon_instances` の削除タイミング（ADR-0040 D4 の「`drained_at` が付いたら即削除」）を
+  変えていないので、`GET /releases`/`GET /health` から「drain 後も生きているプロセス」を安定して
+  観測することはできない（その tick に限られる）。安定した API 可視性が要るなら、`drained_at` が
+  付いた行を一定期間（例: 削除猶予を pid の生存確認に紐付ける）残す設計変更が要る
+  — ADR-0040 D4 の記述自体を変える話なので、次の Phase で改めて判断すること。
+- `status.sh`/`promote.sh --stop-stale` は systemd（`systemctl --user`）に依存する。systemd が無い
+  環境（テスト・非 systemd）では `sd_list_stale_celeris_units` は空を返すだけで壊れない。
+- D2 の `sweep` は `subprocess::reap_after_terminal` を経由する全アダプタ（claude-code / codex /
+  aider / langmem / local_deep_research / paperqa / acp / 汎用 subprocess）の**正常終了**を一律に
+  カバーする（`acp.rs` も `force_kill` でない枝で `reap_after_terminal` を呼ぶ）。`acp.rs` が別途
+  持つ複数の `kill_now` 呼び出しは、`session/cancel` を伴うタイムアウト/中断の経路で、既に
+  `send_signal_to_group`（`killpg`）がグループ全体へ signal を送っているので対象外のままでよい。
+
+## 付記 2026-10-02: handoff と migration の認可（昇格していない release）
+
+### 起きたこと（2026-10-01。記録は `docs/progress/phase-R.md` の 23:1x〜23:56Z）
+
+web dogfood の worker run が `systemctl --user start celeris-web@bf54b41ad627` を実行し、unit の
+`Wants=celeris@%i.service` によって、検証も昇格もしていない `celeris@bf54b41ad627`
+（`releases/bf54b41ad627` は task の作業場所の staging 成果物への symlink）が起動した。その daemon は
+起動時に本番 DB を schema 34→36 に migrate し（18:32:38Z）、D4 の handoff を要求して本番
+`7fbfc347b240` から `active` を奪い、約 4.8 時間本番として dispatch した。D4 は「`release` が違えば
+引き継ぐ」だけで、**その release が昇格されたものか**を見ていなかった。migration は
+`build_dispatcher`（`SqliteStore::open_with`）で役割の判断より前に走っていた。
+
+### 規則
+
+`--mode verify` 以外の daemon は、次のいずれかが成り立つ場合**だけ**、DB を開いて migrate し、
+`daemon_instances` に行を書き、handoff を要求し、`active` になる:
+
+1. **昇格済み**: `<releases_dir の親>/current`（本番 `~/.local/celeris/current`）の symlink の
+   リンク先の最後の要素が、自分の `release`（`--release` > `CELERIS_RELEASE`）と一致する。
+   リンク先は `readlink` の文字列で比べ、`canonicalize` しない（`releases/<sha12>` 自体が symlink でも
+   名前で判る。事故の release も名前では `current` と一致しない）。
+2. **昇格中**: `<releases_dir>/<sha12>/promoting.json` があり、その JSON の `sha12` が自分の `release`
+   と一致し、`started_at`（RFC 3339 UTC）が現在から **900 秒以内**（固定の定数。設定にしない）。
+   中身は `{"sha12", "script": "promote.sh" | "rollback.sh" | "migrate-to-celeris.sh", "mode", "pid",
+   "started_at"}`。期限は、スクリプトが SIGKILL などで印を消せずに終わったとき、古い印が後の任意の
+   起動を認可し続けないためのもの。
+3. **旧版の GUI/API から昇格中**: `<releases_dir>/<release>/promote.lock` に書かれた pid が
+   `kill(pid, 0)` 相当で生きており、lock の最終更新時刻が現在から `PROMOTING_MAX_AGE_SECS`
+   （900 秒）以内である。読めない lock、無効な pid、死んだ pid、未来または 900 秒より古い
+   更新時刻は認可しない。pid の再利用だけで古い lock が認可になるのを避けるため、
+   **生存と時刻の両方**を要する。これは短期の互換経路であり、pid と mtime は強い本人確認ではない。
+
+どちらでもなければ **拒否**する。
+
+- **判定の位置**: `daemon::run` の中、`--mode` を見た直後で、`build_dispatcher`（＝ DB を開いて
+  migrate する所）・`install_worker_db_guard`・`start_instance` のどれよりも前。拒否するときは
+  **DB を一度も開かない**（読み取りもしない）。判定はファイルシステムだけを見る純粋寄りの関数
+  （`crates/celeris/src/instance.rs` に置く。LLM・DB・systemd に触れない）。
+- **拒否時の振る舞い**: standby で待つことは**しない**（待つには DB を開いて行を書く必要があり、
+  開けば migration が走る。待っている間に昇格の記録が変わることを期待する理由も無い）。
+  `tracing::error!` で理由（`release`、`current` のリンク先または「無い」、`promoting.json` と
+  `promote.lock` の不一致の理由）を出し、`Exit::NotPromoted` を返して **exit 4** で終わる
+  （0 = 正常・drain、1 = 失敗、
+  2 = 設定エラー / schema が新しすぎる、3 = 同じ release の二重起動、4 = 昇格の認可が無い）。
+- **unit**: `deploy/systemd/celeris@.service` に `RestartPreventExitStatus=4` を足す
+  （`Restart=on-failure` が exit 4 を 2 秒ごとに起こし直さない。unit は failed のまま残り、
+  `systemctl status` / `status.sh` で人に見える）。
+
+### 開発・テスト環境（判定をしない場合）
+
+次のどれかなら判定をせず、従来どおり動く（ログに `promotion gate: skipped (<理由>)` を info で出す）:
+
+- `release == "dev"`（`--release` も `CELERIS_RELEASE` も無い。作業チェックアウトから直接起こした場合）。
+- `<releases_dir>/<release>` が存在しない（ディレクトリも symlink も無い）。systemd の
+  `celeris@<sha12>` は `ExecStart` が `releases/%i/bin/celeris` なので、unit から起きた daemon は
+  必ず判定の対象になる。逆に `releases_dir` に無い名前（既存の試験の `"old"` / `"new"` /
+  `"verify-release"` など）は「管理されていない release」として扱う。
+  — 既存の `crates/celeris/tests/instance_handoff.rs` は `releases_dir` を書かず既定
+  （`~/.local/celeris/releases`、実 `$HOME`）を使うので、本番 host で走ると実物の `current` が見える。
+  「`current` が無ければ素通し」だけを条件にすると、この試験が本番 host で落ちる。
+  `<releases_dir>/<release>` の有無を条件にすることで、既存 e2e は**変更なしで**通る。
+- `releases_dir` 自体が無い場合も上に含まれる（`<releases_dir>/<release>` が無い）。
+
+新しい試験は一時ディレクトリに `releases/<sha12>/`・`current`・`promoting.json` を偽で作り、
+`[selfdeploy] releases_dir` をそこへ向ける（実 `$HOME`・実 systemd に触れない）。最低限:
+(a) `current` と一致しない release は exit 4 で、DB ファイルの `schema_version` が変わらず
+`daemon_instances` に行が無い、(b) `current` と一致する release は従来の handoff が通る、
+(c) 新しい `promoting.json` があれば live 引き継ぎが通り、900 秒より古い・`sha12` 違いの印は拒否、
+(d) `--mode verify` は印も `current` も無くても従来どおり動く、
+(e) 生きた pid と新しい mtime の `promote.lock` は旧 `promote.sh` による起動を認可し、
+死んだ pid・古い mtime・無効な lock は拒否する。
+
+### 各スクリプトの責務（印を書く・消す時機）
+
+通常の昇格では印を書くのも消すのも selfdeploy のスクリプトだけ（daemon は読むだけ。
+旧 CLI の bootstrap は下記の人の手順）。書き方は lib.sh に
+`sd_write_promoting <sha12> <script> <mode>`（一時ファイル → `mv` で原子的に置く）と
+`sd_clear_promoting <sha12>` を足して共有する。`--dry-run` では書かない。
+
+| スクリプト | 書く | 消す |
+|---|---|---|
+| `promote.sh` live | `promote_live` の `systemctl --user start celeris@<new>` の直前（`backup_db` の後） | `update_links`（`current` → new）の直後。失敗・途中終了でも EXIT トラップ（`record_promote_failure` と同じトラップ）で必ず消す |
+| `promote.sh` stop-start | `promote_stop_start` の pre-start hook の後、`systemctl --user start celeris@<new>` の直前 | 同上。`restore_old_daemon` が起こす旧 release は `current` のままなので印は要らない |
+| `rollback.sh` | `releases/<previous>/` に、`systemctl --user start celeris@<previous>` の直前（`current` はまだ旧） | `sd_set_link "$SD_CURRENT" "$PREV"` の直後と EXIT トラップ |
+| `migrate-to-celeris.sh` | 「4. 起こす」の `systemctl --user start celeris@<sha12>` の直前（このとき新しい `current` はまだ無い） | `sd_set_link "$SD_CURRENT" "$SHA12"` の直後と EXIT トラップ。旧 taskd へ戻す分岐（旧バイナリ）は判定を持たないので印は要らない |
+
+`release.sh` と `verify.sh` は印を書かない（verify の daemon は `--mode verify` で判定の外）。
+昇格が終われば `current` が新 release を指すので、その後の `Restart=on-failure` による再起動・
+host 再起動後の起動は規則 1 で通る。
+
+### 旧 `promote.sh` からの最初の昇格（bootstrap）
+
+`start_promote_with_launcher` は**現在稼働中の release** の `promote.sh` を選ぶ。
+本番 current `ea86af6307f8` の `promote.sh` は `promoting.json` を書かず、live と stop-start の
+どちらも `update_links` より前に `systemctl --user start celeris@<new>` を呼ぶ。
+このため規則 1・2 だけでは最初の昇格が exit 4 になる。一方、同版の `start_promote_with_launcher` は
+対象の `<releases_dir>/<sha12>/promote.lock` に昇格プロセスの pid を書くので、GUI/API 経由では
+規則 3 で新 daemon を認可する。
+
+旧版は昇格プロセスを背景で起こしてから shell が `$!` を lock に書く。順序に厳密な同期は無いが、
+旧 `promote.sh` は daemon 起動前に verify・unit・health・stale unit の確認と DB backup を行うため、
+通常は lock が先にできる。これらが極端に速い場合は lock 書き込み前に daemon の判定が走りうる。
+その場合は認可せず exit 4 で止め、lock ができたことを確認して再試行する。時間差を**保証**と
+みなさない。pid 再利用や時計のずれに対しても 900 秒の期限で残留 lock の効力を絞る。
+
+人が CLI から旧 `promote.sh` を**直接**実行すると `start_promote` を通らないので lock は無い。
+最初の昇格前に、検証済みの対象 `<releases_dir>/<sha12>/promoting.json`（既定
+`~/.local/celeris/releases/<sha12>/promoting.json`）を人が置く。中身は少なくとも
+`{"sha12":"<sha12>","started_at":"<現在の RFC 3339 UTC>"}` とし、`sha12` は対象 release と一致させる。
+例えば対象 SHA を確認した後、**本番 host で人が**次を実行する:
+
+```bash
+SHA12=0123456789ab  # 実際に検証した対象の12桁SHAへ置き換える
+REL="${CELERIS_STATE_DIR:-$HOME/.local/celeris}/releases/$SHA12"
+test -d "$REL" && test -f "$REL/verify.json" || exit 1
+tmp=$(mktemp "$REL/.promoting.XXXXXX") || exit 1
+trap 'rm -f "$REL/promoting.json" "$tmp"' EXIT
+printf '{"sha12":"%s","started_at":"%s"}\n' "$SHA12" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$tmp"
+mv "$tmp" "$REL/promoting.json"
+"${CELERIS_STATE_DIR:-$HOME/.local/celeris}/current/scripts/promote.sh" "$SHA12"
+```
+
+印は書いてから **900 秒**だけ有効で、期限を過ぎたら新しい時刻で置き直す。成否にかかわらず
+終了後は `promoting.json` を消す（上の EXIT trap）。中断で trap が動かなければ人が残留印を消し、
+`current`・`promote.log`・新旧 daemon の状態を確認してから再試行する。
+最初の昇格後は新 release の `promote.sh` が current 側のスクリプトになり、次回以降は
+daemon 起動前の `promoting.json`（規則 2）と更新後の `current`（規則 1）で足りる。
+
+### `celeris-web@.service`
+
+`Wants=celeris@%i.service` を外し、`After=network.target celeris@%i.service` の順序指定だけ残す
+（web は daemon を起動しない。daemon を起こすのは selfdeploy のスクリプトと人だけ）。本番の
+`~/.config/systemd/user/celeris-web@.service` は人が 2026-10-01 に同じ修正をした
+（backup `.bak-20261001a`）。この unit はこの ADR を書いた時点の main（`8dc45bd3`）には無く、
+web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くときも取り込むときも
+`Wants=celeris@` を持たない版にする。上の判定はこの unit の修正とは独立に効く（`Wants=` が戻っても、
+未昇格の release は exit 4 で止まる）。
+
+### 採らない・残ること
+
+- 印に署名や所有者の検査は付けない。`releases_dir` に書ける worker は印を偽造できる。これは事故
+  （unit の依存で意図せず起きる）を止める規則で、悪意ある worker への防御は worker から user systemd
+  bus と `releases_dir` を隠す別の対策（phase-R.md の再発防止候補）で行う。
+- 同じ release の二重起動（exit 3）は `Restart=on-failure` で再起動されうるが、この付記では変えない。

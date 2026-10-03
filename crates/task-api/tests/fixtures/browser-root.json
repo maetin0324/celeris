@@ -1,0 +1,17 @@
+{
+  "title": "browser capability（Phase 1〜4）",
+  "objective": "ADR-0078 / ADR-0080 の browser capability を Phase 1〜4 まで仕上げる。Phase 1（MVP、task 01M3MFS5T52FXA63W4V10XGC4S、main 09a6b0c）と Phase 2（task policy・手動登録の credential broker・人間承認、task 01M3MZKB3DFYJNBH015MJGQ0BT、main ce5d768）は完了して main に取り込み済みなので採用する。Phase 3（Browser Identity・live proxy・takeover）と Phase 4（isolated runtime・stronger injection・backend routing）を、それぞれ独立に受け入れる子 task として実装する。小タスクの依存・検査と人の決定点は /var/lib/celeris/workspaces/01M3MFS5T52FXA63W4V10XGC4S/wu/design-gap/artifacts/phases-and-decisions.md の表に従う。Phase 2 の決定（H1 手動登録から開始・H2 操作ごとの approve_once と短い lease・H3 認証 session の間は LLM の観測を止める・H6 Phase 2 は trusted local で隔離は Phase 4）は ADR-0080 に記録済み。",
+  "acceptance": [
+    {"type": "reviewer", "text": "Phase 3 と Phase 4 の子 task が done で、この root のブランチに取り込まれている（phase_integrated.merged に p3 / p4）"},
+    {"type": "reviewer", "text": "phases-and-decisions.md の P3-A〜C・P4-A〜C の各行の「単独の成果・検査」が満たされているか、満たせない行は理由と後続が明記されている"},
+    {"type": "reviewer", "text": "H4・H5・H7 の人の回答と ADR-0080 の決定に反する実装が無い"}
+  ],
+  "project_id": "01M2WTS3DKNZBSZ2JMVB4CZMBW",
+  "status": "draft",
+  "stages_hint": [
+    {"title": "Phase 1", "scope": "MVP（完了済み。01M3MFS5T52FXA63W4V10XGC4S を採用）"},
+    {"title": "Phase 2", "scope": "task policy・手動登録の credential broker・人間承認・durable wait（完了済み。01M3MZKB3DFYJNBH015MJGQ0BT を採用）"},
+    {"title": "Phase 3", "scope": "Browser Identity・live proxy・takeover（P3-A〜C）"},
+    {"title": "Phase 4", "scope": "isolated runtime・stronger injection・backend routing（P4-A〜C）"}
+  ]
+}

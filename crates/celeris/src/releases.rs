@@ -3,7 +3,7 @@
 //! ここにあるのは**ディレクトリに対する純粋な関数**だけで、判断（どれを昇格するか）は人が GUI か
 //! shell で行う（ADR-0040 D5）。LLM もワーカーも関与しない。
 //!
-//! 読むもの（`release.sh` / `verify.sh` / `promote.sh` が書いたもの。`docs/selfdeploy.md`）:
+//! 読むもの（`release.sh` / `verify.sh` / `promote.sh` が書いたもの。`docs/ops/selfdeploy.md`）:
 //!
 //! ```text
 //! <releases_dir>/<sha12>/manifest.json   {sha, sha12, ref, built_at, schema_version, ...}

@@ -1,4 +1,4 @@
-//! task-api の要求・応答の型（`docs/gui/api.md` §6.2）。task-core / task-ops の型はそのまま使う。
+//! task-api の要求・応答の型（`docs/api/v1/gui-api.md` §6.2）。task-core / task-ops の型はそのまま使う。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -35,7 +35,7 @@ pub struct DbInfo {
     pub journal_mode: String,
     pub busy_timeout_ms: u64,
     /// ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`"ext4"` 等）。
-    /// `GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
+    /// `GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
     /// **絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が
     /// 既に返している）。判定できなければ `null`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -304,6 +304,10 @@ pub struct ProviderCheckResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderView {
     #[serde(default)]
+    pub kind: task_core::ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<task_core::ResolvedLlmSource>,
+    #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]
     pub tier_models: task_core::model_routing::TierModels,
@@ -443,6 +447,10 @@ pub struct ReviewerConfigView {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderConfigView {
+    #[serde(default)]
+    pub kind: task_core::ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<task_core::ResolvedLlmSource>,
     #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]

@@ -4,7 +4,7 @@
 # 構成: ChatGPT → RDC device agent（専用 Linux ユーザー chatgpt-rdc、権限最小）→ この celeris-chat
 # → 127.0.0.1:18200/mcp（token）→ Celeris MCP。専用ユーザーのシェルからはこのスクリプトだけを
 # 呼ばせ、汎用 curl で HTTP API を直接叩かせない（MCP client の scope で許される操作だけに絞るため。
-# `docs/mcp.md` §8 参照）。中身は `celerisctl mcp call` をそのまま呼ぶだけの薄いラッパ（判断も検証も
+# `docs/guides/mcp.md` §8 参照）。中身は `celerisctl mcp call` をそのまま呼ぶだけの薄いラッパ（判断も検証も
 # 持たない）。
 #
 # 使い方: celeris-chat <TOOL> [JSON_ARGS]

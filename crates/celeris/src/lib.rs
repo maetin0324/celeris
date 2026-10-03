@@ -3,7 +3,6 @@
 //! エラーと終了条件の型・再公開）で、配線の本体は `daemon` の下にある（module map は `daemon.rs`）。
 
 mod accounts_admin;
-pub mod cache_server;
 mod cluster_admin;
 pub mod config;
 pub mod control_path;
@@ -130,6 +129,9 @@ pub enum Exit {
     Drained,
     /// ADR-0040 D4: 同じ `release` の `active` が既に動いていた。何もせず exit 3。
     DuplicateRelease,
+    /// ADR-0040 付記（2026-10-02）: `release` が昇格されていない（`current` と一致せず、新しい
+    /// `promoting.json` も無い）。DB を開かず（migration も handoff 要求もせず）exit 4。
+    NotPromoted,
 }
 
 #[cfg(test)]

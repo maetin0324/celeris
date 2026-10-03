@@ -28,7 +28,7 @@ function makeGit(options: { available?: boolean; existingShas?: Set<string>; anc
 it("requires completed rows to have a matching parity title and phase completion", () => {
   const root = mkdtempSync(path.join(tmpdir(), "web-parity-"));
   try {
-    mkdirSync(path.join(root, "docs/web"), { recursive: true });
+    mkdirSync(path.join(root, "agent-docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
     mkdirSync(path.join(root, "web/server"), { recursive: true });
@@ -40,7 +40,7 @@ it("requires completed rows to have a matching parity title and phase completion
         `| R${String(index + 1).padStart(2, "0")} | /route | 1 / gateway | \`parity: route ${index}\` | 未着手 |`,
     );
     writeFileSync(
-      path.join(root, "docs/web/feature-parity.md"),
+      path.join(root, "agent-docs/web/feature-parity.md"),
       `${routes.join("\n")}\n| X16 | 型 | 1 / gateway | \`parity-x: 型検査\` | 完了（abcdef0） |\n`,
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');
@@ -59,7 +59,7 @@ it("requires completed rows to have a matching parity title and phase completion
 it("rejects a completed commit that does not exist", () => {
   const root = mkdtempSync(path.join(tmpdir(), "web-parity-"));
   try {
-    mkdirSync(path.join(root, "docs/web"), { recursive: true });
+    mkdirSync(path.join(root, "agent-docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
     mkdirSync(path.join(root, "web/server"), { recursive: true });
@@ -71,7 +71,7 @@ it("rejects a completed commit that does not exist", () => {
         `| R${String(index + 1).padStart(2, "0")} | /route | 1 / gateway | \`parity: route ${index}\` | 未着手 |`,
     );
     writeFileSync(
-      path.join(root, "docs/web/feature-parity.md"),
+      path.join(root, "agent-docs/web/feature-parity.md"),
       `${routes.join("\n")}\n| X16 | 型 | 1 / gateway | \`parity-x: 型検査\` | 完了（1111111） |\n`,
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');
@@ -85,7 +85,7 @@ it("rejects a completed commit that does not exist", () => {
 it("rejects a completed commit that is not an ancestor of HEAD", () => {
   const root = mkdtempSync(path.join(tmpdir(), "web-parity-"));
   try {
-    mkdirSync(path.join(root, "docs/web"), { recursive: true });
+    mkdirSync(path.join(root, "agent-docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
     mkdirSync(path.join(root, "web/server"), { recursive: true });
@@ -97,7 +97,7 @@ it("rejects a completed commit that is not an ancestor of HEAD", () => {
         `| R${String(index + 1).padStart(2, "0")} | /route | 1 / gateway | \`parity: route ${index}\` | 未着手 |`,
     );
     writeFileSync(
-      path.join(root, "docs/web/feature-parity.md"),
+      path.join(root, "agent-docs/web/feature-parity.md"),
       `${routes.join("\n")}\n| X16 | 型 | 1 / gateway | \`parity-x: 型検査\` | 完了（2222222） |\n`,
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');
@@ -111,7 +111,7 @@ it("rejects a completed commit that is not an ancestor of HEAD", () => {
 it("accepts a completed commit that exists and is an ancestor of HEAD", () => {
   const root = mkdtempSync(path.join(tmpdir(), "web-parity-"));
   try {
-    mkdirSync(path.join(root, "docs/web"), { recursive: true });
+    mkdirSync(path.join(root, "agent-docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
     mkdirSync(path.join(root, "web/server"), { recursive: true });
@@ -123,7 +123,7 @@ it("accepts a completed commit that exists and is an ancestor of HEAD", () => {
         `| R${String(index + 1).padStart(2, "0")} | /route | 1 / gateway | \`parity: route ${index}\` | 未着手 |`,
     );
     writeFileSync(
-      path.join(root, "docs/web/feature-parity.md"),
+      path.join(root, "agent-docs/web/feature-parity.md"),
       `${routes.join("\n")}\n| X16 | 型 | 1 / gateway | \`parity-x: 型検査\` | 完了（3333333） |\n`,
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');
@@ -137,7 +137,7 @@ it("accepts a completed commit that exists and is an ancestor of HEAD", () => {
 it("fails with an explicit error when git cannot be run", () => {
   const root = mkdtempSync(path.join(tmpdir(), "web-parity-"));
   try {
-    mkdirSync(path.join(root, "docs/web"), { recursive: true });
+    mkdirSync(path.join(root, "agent-docs/web"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/parity"), { recursive: true });
     mkdirSync(path.join(root, "web/e2e/support"), { recursive: true });
     mkdirSync(path.join(root, "web/server"), { recursive: true });
@@ -149,7 +149,7 @@ it("fails with an explicit error when git cannot be run", () => {
         `| R${String(index + 1).padStart(2, "0")} | /route | 1 / gateway | \`parity: route ${index}\` | 未着手 |`,
     );
     writeFileSync(
-      path.join(root, "docs/web/feature-parity.md"),
+      path.join(root, "agent-docs/web/feature-parity.md"),
       `${routes.join("\n")}\n| X16 | 型 | 1 / gateway | \`parity-x: 型検査\` | 完了（4444444） |\n`,
     );
     writeFileSync(path.join(root, "web/e2e/parity/gateway.spec.ts"), 'test("parity-x: 型検査", () => {});');

@@ -5,6 +5,7 @@ export default [
   // 最初の画面は Console（ADR-0048 D4、GUI Phase G22）。受信箱は裏方の `/inbox` に残す。
   index("routes/home.tsx"),
   route("inbox", "routes/inbox.tsx"),
+  route("notifications", "routes/notifications.tsx"),
   route("healthz", "routes/healthz.ts"),
   route("login", "routes/login.tsx"),
   route("logout", "routes/logout.ts"),

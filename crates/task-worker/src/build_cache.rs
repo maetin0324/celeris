@@ -5,7 +5,7 @@
 //! 使う全タスクの worktree が同じ `CARGO_TARGET_DIR` を指すので、フルビルドのやり直しと大きな
 //! `target/` の複製が worktree ごとに起きなくなる（cargo 自身のディレクトリロックで並走は直列化される）。
 //!
-//! ここは純粋関数だけ（LLM も I/O も無い。DESIGN 原則 1）。実際に環境変数として渡すかどうかの判断
+//! ここは純粋関数だけ（LLM も I/O も無い。ADR-0001 D2 原則 1）。実際に環境変数として渡すかどうかの判断
 //! （コンテナ・Remote は対象外）は `task-dispatch` 側で行う。
 
 use std::path::{Path, PathBuf};

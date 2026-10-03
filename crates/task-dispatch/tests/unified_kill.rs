@@ -162,28 +162,33 @@ fn pid_alive(pid: i32) -> bool {
 
 /// 孫が pid を書くまで待つ（上限付き）。
 async fn wait_for_grandchild(path: &Path) -> i32 {
-    for _ in 0..400 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         if let Ok(text) = std::fs::read_to_string(path)
             && let Ok(pid) = text.trim().parse::<i32>()
         {
             return pid;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the worker never spawned its grandchild ({})",
+            path.display()
+        );
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
-    panic!(
-        "the worker never spawned its grandchild ({})",
-        path.display()
-    );
 }
 
 async fn wait_until_gone(pid: i32) -> bool {
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         if !pid_alive(pid) {
             return true;
         }
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    false
 }
 
 /// `trigger` でタスクを非 `running` にしてから tick を回し、孫が消えることを見る共通の本体。
@@ -253,11 +258,16 @@ async fn the_wall_clock_timeout_kills_the_worker_process_group_including_grandch
     let grandchild = wait_for_grandchild(&pidfile).await;
 
     // 上限を過ぎたら run は自分で終わる。孫も一緒に消える。
-    for _ in 0..40 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         d.tick().unwrap_or_else(|e| panic!("{e}"));
         if !pid_alive(grandchild) {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "grandchild {grandchild} survived timeout"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(

@@ -119,8 +119,9 @@ fn parse_scopes(raw: &[String]) -> Result<Vec<McpScope>, CliError> {
     }
     raw.iter()
         .map(|s| {
-            McpScope::parse(s.trim())
-                .ok_or_else(|| CliError::msg(format!("unknown scope {s:?} (see docs/mcp.md)")))
+            McpScope::parse(s.trim()).ok_or_else(|| {
+                CliError::msg(format!("unknown scope {s:?} (see docs/guides/mcp.md)"))
+            })
         })
         .collect()
 }

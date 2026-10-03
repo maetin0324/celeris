@@ -8,6 +8,25 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+### verify-record: guard-fix 統合後検査 — 2026-10-03
+
+ADR-0126 付記2の実装を統合後に再検証した。workspace 試験は指定の既知 flake
+`a_wait_parks_the_task_polls_and_resumes_as_a_continuation` を skip して実行したが、終了コード 101。
+失敗は範囲外の `tests/e2e/tests/worker_db_read_only.rs::a_codex_worker_run_cannot_write_the_daemon_db_but_can_read_it_with_celerisctl` のみで、
+worker の ReadOnly 実行中に `probe.txt` を作れず（`Read-only file system`）再試行後に失敗した。今回の guard 変更では修正しない。
+
+- 受け入れ条件0: `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation` → exit 101。
+  `instance_handoff` は 8 passed、`worker_db_guard_refuse` は 2 passed、`api_scenarios` は 12 passed。
+  全体の失敗は上記 `worker_db_read_only` の 1 test。
+- 受け入れ条件1: `cargo test -p task-dispatch --lib cluster_job_wait` → exit 0（5 passed、498 filtered out）。
+  この単独実行では flake を再現しなかった。
+- 受け入れ条件2: `cargo test -p celeris --lib worker_guard` → exit 0（4 passed）。
+  `cargo test -p celeris --test worker_db_guard_refuse` → exit 0（2 passed）。
+  `cargo test -p celeris --test instance_handoff` → exit 0（8 passed、1 件は 60.54 秒で pass）。
+  `cargo clippy --workspace -- -D warnings` → exit 0。
+- 未解決: workspace 並走時に `task-dispatch::cluster_job_wait` の `a_wait_parks_...` が tick_until の 60 秒保険で落ちる既知 flake は単独実行で pass。task-dispatch は本 task の範囲外のため変更しない。
+  提案: 別 task で出来事待ちを決定的にし、60 秒 timeout への依存を解消する。
+
 ## codex・opencode への skill の付属ファイルと段階的な読み込み
 
 - 実装・記録完了日: 2026-10-02。[ADR-0127](adr/0127-skills-native-delivery.md) は実装済みに更新。codex・acp では mount した skill を `.agents/skills/` に付属ファイルごと届け、`AGENTS.md`・前置きは一覧だけにした。実機の記録と再実行手順は [phase-skills-progressive.md](progress/phase-skills-progressive.md)。

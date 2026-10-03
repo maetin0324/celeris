@@ -550,9 +550,58 @@ swap_to_link() {
   [ -e "$old" ] || [ -L "$old" ] || return 0
   if [ -L "$old" ] && [ "$(readlink "$old")" = "$new" ]; then return 0; fi
   [ -e "$new" ] || [ -L "$new" ] || need "$new is missing; rerun delta"
+  [ "$DRY_RUN" = true ] || printf '%s\t%s\n' "$old" "$old.bak-migrate-$TS" >>"$REC/switched-items"
   run mv -T "$old" "$old.bak-migrate-$TS"
   run ln -s "$new" "$old"
-  [ "$DRY_RUN" = true ] || printf '%s\t%s\n' "$old" "$old.bak-migrate-$TS" >>"$REC/switched-items"
+}
+
+# switch 中だけ使う。EXIT と ERR の両方から呼ばれるので、先に trap を外す。
+switch_failed() {
+  local status="$1" old bak f sts restore_failed=0
+  trap - ERR EXIT
+  set +e
+  [ "$status" -ne 0 ] || status=1
+  sd_log "switch failed; restoring the pre-switch layout"
+  if [ -f "$REC/switched-items" ]; then
+    while IFS="$(printf '\t')" read -r old bak; do
+      [ -n "$old" ] || continue
+      if [ -e "$bak" ] || [ -L "$bak" ]; then
+        [ -L "$old" ] && rm -f "$old"
+        mv -T "$bak" "$old" || { sd_log "restore failed: $bak -> $old"; restore_failed=1; }
+      fi
+    done <"$REC/switched-items"
+  fi
+  if [ -f "$REC/switched-db" ]; then
+    while IFS="$(printf '\t')" read -r old bak; do
+      if [ -e "$bak" ]; then mv -T "$bak" "$old" || { sd_log "restore failed: $bak -> $old"; restore_failed=1; }; fi
+    done <"$REC/switched-db"
+  fi
+  if [ -f "$REC/switch-ts" ]; then
+    sts="$(cat "$REC/switch-ts")"
+    if [ -f "$SD_CONFIG.bak-migrate-$sts" ]; then cp -p "$SD_CONFIG.bak-migrate-$sts" "$SD_CONFIG" || { sd_log "restore failed: $SD_CONFIG"; restore_failed=1; }; fi
+    if [ -f "$REC/paths-env-absent" ]; then
+      rm -f "$PATHS_ENV" || { sd_log "restore failed: $PATHS_ENV"; restore_failed=1; }
+    elif [ -f "$PATHS_ENV.bak-migrate-$sts" ]; then
+      cp -p "$PATHS_ENV.bak-migrate-$sts" "$PATHS_ENV" || { sd_log "restore failed: $PATHS_ENV"; restore_failed=1; }
+    fi
+    if [ -d "$REC/units-before" ]; then
+      for f in "$UNIT_DIR"/celeris*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        rm -rf "$f" || { sd_log "restore failed: remove $f"; restore_failed=1; }
+      done
+      for f in "$REC/units-before"/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        cp -a "$f" "$UNIT_DIR/" || { sd_log "restore failed: $f"; restore_failed=1; }
+      done
+    fi
+  fi
+  if [ "$restore_failed" -eq 0 ]; then
+    rm -f "$REC/switched" "$REC/switch-ts" "$REC/switched-items" "$REC/switched-db" "$REC/paths-env-absent"
+    rm -rf "$REC/units-before"
+  else
+    sd_log "restore incomplete; switch records and backups retained for recovery"
+  fi
+  exit "$status"
 }
 
 stage_switch() {
@@ -574,6 +623,8 @@ stage_switch() {
     rm -f "$tmp"
   else
     : >"$REC/switched-items"
+    : >"$REC/switched-db"
+    rm -f "$REC/paths-env-absent"
     printf '%s\n' "$TS" >"$REC/switch-ts"
     # 旧 unit と drop-in を先に控える。後続の config/path 書換えが失敗しても
     # rollback が切替前の設定一式を復元できるよう、変更より前に完了させる。
@@ -583,10 +634,11 @@ stage_switch() {
       cp -a "$f" "$REC/units-before/"
     done
     cp -p "$SD_CONFIG" "$SD_CONFIG.bak-migrate-$TS"
+    if [ -f "$PATHS_ENV" ]; then cp -p "$PATHS_ENV" "$PATHS_ENV.bak-migrate-$TS"; else : >"$REC/paths-env-absent"; fi
+    trap 'switch_failed "$?"' ERR EXIT
     cat "$tmp" >"$SD_CONFIG"
     rm -f "$tmp"
     sd_log "rewrote $SD_CONFIG (backup: $SD_CONFIG.bak-migrate-$TS)"
-    if [ -f "$PATHS_ENV" ]; then cp -p "$PATHS_ENV" "$PATHS_ENV.bak-migrate-$TS"; else : >"$REC/paths-env-absent"; fi
     {
       printf '# ADR-0136: hot data roots (written by migrate-to-local.sh switch %s). No secrets here.\n' "$TS"
       printf 'CELERIS_STATE_DIR=%s\n' "$NEW_STATE"
@@ -602,8 +654,8 @@ stage_switch() {
   # 旧 DB family は退けるだけ（symlink にしない。誤って旧 path で開いても新 DB を壊さない）。
   for f in "$OLD_DB" "$OLD_DB-wal" "$OLD_DB-shm"; do
     [ -e "$f" ] || continue
-    run mv -T "$f" "$f.bak-migrate-$TS"
     [ "$DRY_RUN" = true ] || printf '%s\t%s\n' "$f" "$f.bak-migrate-$TS" >>"$REC/switched-db"
+    run mv -T "$f" "$f.bak-migrate-$TS"
   done
 
   if [ "$DRY_RUN" = true ]; then
@@ -613,6 +665,7 @@ stage_switch() {
       || sd_die "install-units.sh failed; run 'migrate-to-local.sh rollback'"
   fi
   mark switched
+  [ "$DRY_RUN" = true ] || trap - ERR EXIT
   sd_log "switch done; next: start"
 }
 

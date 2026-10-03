@@ -175,7 +175,7 @@ mig() {
     HOME="$d/home" PATH="$d/bin:$PATH" STUB_STATE="$d/stub-state" \
     MIGRATE_LOCAL_ROOT="$d/local" MIGRATE_OLD_VAR_DIR="$d/var-lib-celeris" \
     MIGRATE_MIN_FREE_GIB=0 MIGRATE_VERIFY_TIMEOUT=3 \
-    bash "$SCRIPT" "$@" >>"$d/run.log" 2>&1
+    bash "${MIGRATE_TEST_SCRIPT:-$SCRIPT}" "$@" >>"$d/run.log" 2>&1
 }
 
 # 全部（mtime・mode・中身・symlink の先）の写真。
@@ -291,6 +291,81 @@ else
 fi
 if mig "$D" rollback; then ok "drop-in rollback exits 0"; else ng "drop-in rollback failed"; tail -n 30 "$D/run.log" >&2; fi
 if diff -r "$WORK/dropin.before" "$DROPIN"; then ok "drop-in directory and contents restored"; else ng "drop-in differs after rollback"; fi
+
+# ---- 6. install-units.sh 失敗でも switch 前へ自動復元 ----------------------------
+
+E="$WORK/e"
+setup "$E"
+printf 'CELERIS_STATE_DIR=old-value\n' >"$E/home/.config/celeris/paths.env"
+E_DROPIN="$E/home/.config/systemd/user/celeris-web@$SHA.service.d"
+mkdir -p "$E_DROPIN"
+printf '[Service]\nEnvironment=BEFORE=1\n' >"$E_DROPIN/override.conf"
+cp -p "$E/home/.config/celeris/config.toml" "$WORK/e.config.before"
+cp -p "$E/home/.config/celeris/paths.env" "$WORK/e.paths.before"
+cp -a "$E_DROPIN" "$WORK/e.dropin.before"
+mkdir -p "$WORK/fail-script"
+cp "$SCRIPT" "$HERE/../lib.sh" "$WORK/fail-script/"
+cat >"$WORK/fail-script/install-units.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'changed\n' >"$SD_UNIT_DIR/celeris@.service"
+rm -rf "$SD_UNIT_DIR/celeris-web@aaaaaaaaaaaa.service.d"
+exit 1
+EOF
+if mig "$E" presync && mig "$E" stop && mig "$E" delta; then
+  :
+else
+  ng "switch-fail-install: setup failed"
+  tail -n 30 "$E/run.log" >&2
+fi
+if MIGRATE_TEST_SCRIPT="$WORK/fail-script/migrate-to-local.sh" mig "$E" switch; then
+  ng "switch-fail-install: switch unexpectedly succeeded"
+else
+  if cmp -s "$WORK/e.config.before" "$E/home/.config/celeris/config.toml" \
+    && cmp -s "$WORK/e.paths.before" "$E/home/.config/celeris/paths.env" \
+    && cmp -s "$WORK/e.dropin.before/override.conf" "$E_DROPIN/override.conf" \
+    && grep -q 'ExecStart=%h/.local/celeris' "$E/home/.config/systemd/user/celeris@.service" \
+    && [ ! -L "$E/home/.local/celeris/releases" ] \
+    && [ -f "$E/home/.local/celeris/releases/$SHA/bin/celerisctl" ] \
+    && [ ! -L "$E/var-lib-celeris/workspaces" ] \
+    && [ -f "$E/var-lib-celeris/workspaces/T1/repos/r/file.rs" ] \
+    && [ -f "$E/var-lib-celeris/celeris.sqlite3" ] \
+    && [ ! -e "$E/home/.local/celeris/migrate-to-local/switched" ] \
+    && [ ! -e "$E/home/.local/celeris/migrate-to-local/switched-items" ]; then
+    ok "switch-fail-install: config, paths.env, units, symlinks and DB restored"
+  else
+    ng "switch-fail-install: state was not restored"
+  fi
+fi
+
+# ---- 7. delta 後の新 tree 欠損による swap 失敗でも自動復元 -------------------------
+
+F="$WORK/f"
+setup "$F"
+cp -p "$F/home/.config/celeris/config.toml" "$WORK/f.config.before"
+if mig "$F" presync && mig "$F" stop && mig "$F" delta; then
+  :
+else
+  ng "switch-fail-swap: setup failed"
+  tail -n 30 "$F/run.log" >&2
+fi
+rm -rf "$F/local/celeris/state/tools"
+if mig "$F" switch; then
+  ng "switch-fail-swap: switch unexpectedly succeeded"
+else
+  if cmp -s "$WORK/f.config.before" "$F/home/.config/celeris/config.toml" \
+    && [ ! -e "$F/home/.config/celeris/paths.env" ] \
+    && [ ! -L "$F/home/.local/celeris/releases" ] \
+    && [ -f "$F/home/.local/celeris/releases/$SHA/bin/celerisctl" ] \
+    && [ ! -L "$F/home/.local/celeris/tools" ] \
+    && [ -x "$F/home/.local/celeris/tools/ldr/bin/ldr" ] \
+    && [ -f "$F/var-lib-celeris/celeris.sqlite3" ] \
+    && [ ! -e "$F/home/.local/celeris/migrate-to-local/switched" ] \
+    && [ ! -e "$F/home/.local/celeris/migrate-to-local/switched-items" ]; then
+    ok "switch-fail-swap: config, absent paths.env, symlinks and DB restored"
+  else
+    ng "switch-fail-swap: state was not restored"
+  fi
+fi
 
 if [ "$FAIL" -ne 0 ]; then
   echo "migrate_to_local_test: FAILED" >&2

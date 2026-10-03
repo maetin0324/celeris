@@ -766,7 +766,7 @@ fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
 }
 
 #[test]
-fn auto_resolve_code_conflict_falls_back_to_repair_without_touching_the_branch() {
+fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
     use task_core::DeliveryStore;
     let (store, dir, d) = auto_resolve_blocked(
         "src/lib.rs",
@@ -783,15 +783,37 @@ fn auto_resolve_code_conflict_falls_back_to_repair_without_touching_the_branch()
     let comments = auto_resolve_comments(&store, &d);
     assert_eq!(comments.len(), 1, "{comments:?}");
     assert!(comments[0].starts_with("[delivery-auto-resolve-fallback] 人の判断が必要"));
-    // 従来経路: merge_base の局所修復を作る。
-    let units = store.work_units_for(d.task_id).unwrap();
-    assert!(
-        units
-            .iter()
-            .any(|u| u.spec.title.starts_with("repair (merge_base):"))
-    );
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
     let still = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(still.state, State::Blocked);
+    assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
+    use task_core::NoticeStore;
+    let notices = store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.items.len(), 1);
+    let notice = &notices.items[0];
+    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
+    assert!(notice.summary.contains("src/lib.rs"));
+    assert!(notice.summary.contains("feature"));
+    assert!(notice.summary.contains("main"));
+    assert_eq!(
+        git_text(p, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .lines()
+            .filter(|l| l.starts_with("worktree "))
+            .count(),
+        1
+    );
+    advance(&store, &cfg, &still, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(
+        store
+            .notice_list(&task_core::NoticeQuery::default())
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -834,15 +856,61 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
             store.delivery_get(d.task_id).unwrap().unwrap().state,
             State::Blocked
         );
-        assert!(
-            store
-                .work_units_for(d.task_id)
-                .unwrap()
-                .iter()
-                .any(|u| u.spec.title.starts_with("repair (merge_base):")),
-            "disabled={disabled}"
-        );
+        if disabled {
+            assert!(
+                store
+                    .work_units_for(d.task_id)
+                    .unwrap()
+                    .iter()
+                    .any(|u| u.spec.title.starts_with("repair (merge_base):"))
+            );
+        } else {
+            use task_core::NoticeStore;
+            assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+            assert!(
+                store
+                    .delivery_get(d.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .detail
+                    .starts_with("[needs-human] 統合の依頼:")
+            );
+            let notices = store
+                .notice_list(&task_core::NoticeQuery::default())
+                .unwrap();
+            assert_eq!(notices.items.len(), 1);
+            assert!(notices.items[0].summary.contains("1 回"));
+        }
     }
+}
+
+#[test]
+fn auto_resolve_local_repair_limit_requests_integration() {
+    use task_core::{DeliveryStore, NoticeStore};
+    let (store, dir, d) = auto_resolve_blocked(
+        "src/lib.rs",
+        "fn f() -> u32 { 0 }\n",
+        "fn f() -> u32 { 1 }\n",
+        "fn f() -> u32 { 2 }\n",
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    cfg.delivery.auto_resolve.enabled = false;
+    cfg.execution.max_repairs = 0;
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    let still = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
+    let notices = store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.items.len(), 1);
+    assert!(notices.items[0].summary.contains("局所修復が上限"));
+    assert!(notices.items[0].summary.contains("全体 0/0 回"));
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    assert_eq!(
+        git_text(dir.path(), &["status", "--porcelain"]).unwrap(),
+        ""
+    );
 }
 
 #[test]

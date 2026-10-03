@@ -11,9 +11,10 @@
 use super::{MERGE_TIMEOUT, git_text, git_text_within, sha};
 use crate::config::Config;
 use std::path::{Path, PathBuf};
-use task_core::{Delivery, StoreError, TaskStore};
+use task_core::{Delivery, NoticeEvent, NoticeKind, NoticeTarget, StoreError, TaskStore};
 use task_dispatch::auto_resolve::{
-    ConflictKind, IntegrationRequest, Resolution, ResolutionAction, ResolveContext,
+    CommitIntent, ConflictKind, FileDiffStat, FileIntent, IntegrationRequest, Resolution,
+    ResolutionAction, ResolveContext, SideIntent,
 };
 use time::OffsetDateTime;
 
@@ -188,11 +189,10 @@ pub(super) fn requeue(
     Ok(())
 }
 
-/// 従来経路へ落とす分岐点。試行したものは comment に残して回数に数える。`true` を返したら呼び出し側は
-/// それ以上進めない（`NeedsHuman` と上限到達の統合の依頼は後続の葉がここで扱う）。今は常に `false`
-/// で、呼び出し側は従来どおり局所修復（上限なら `[needs-human]`）へ進む。
+/// 試行を記録し、人の判断が必要な場合は統合依頼を保存する。
 pub(super) fn fall_back(
     store: &dyn TaskStore,
+    config: &Config,
     d: &Delivery,
     fallback: &Fallback,
     now: OffsetDateTime,
@@ -205,7 +205,144 @@ pub(super) fn fall_back(
             now,
         )?;
     }
-    Ok(false)
+    match fallback {
+        Fallback::NeedsHuman { request } => {
+            record_request(store, d, request, now)?;
+            Ok(true)
+        }
+        Fallback::LimitReached { attempts } => {
+            let request =
+                limit_request(config, d, format!("main 追従の再試行上限 ({attempts} 回)"));
+            record_request(store, d, &request, now)?;
+            Ok(true)
+        }
+        _ => Ok(false),
+    }
+}
+
+/// 固定した両端の SHA が同じなら、再 tick でも同じ依頼になる。
+pub(super) fn record_request(
+    store: &dyn TaskStore,
+    d: &Delivery,
+    request: &IntegrationRequest,
+    now: OffsetDateTime,
+) -> Result<(), StoreError> {
+    let id = format!(
+        "{}:{}:{}:{}",
+        d.task_id, request.target_sha, request.source_sha, request.reason
+    );
+    let brief = format!("{} ({})", request.reason, request.conflict_files.join(", "));
+    let mut next = d.clone();
+    next.detail = format!("[needs-human] 統合の依頼: {brief}");
+    store.notice_record(&NoticeEvent {
+        source_key: format!("integration-request:{id}"),
+        kind: NoticeKind::Delivery,
+        group_key: format!("integration-request:{id}"),
+        title: "統合の依頼".into(),
+        summary: request.to_markdown(),
+        project_id: Some(d.project_id.to_string()),
+        task_id: Some(d.task_id.to_string()),
+        target: Some(NoticeTarget {
+            kind: "integration_request".into(),
+            id,
+        }),
+        links: Vec::new(),
+        at: now,
+    })?;
+    store.delivery_save(Some(d), &next)?;
+    Ok(())
+}
+
+/// 上限時は merge を試さず、既存の固定 SHA と git の履歴から依頼を作る。
+pub(super) fn limit_request(config: &Config, d: &Delivery, reason: String) -> IntegrationRequest {
+    let repo = &config.selfdeploy.repo;
+    let target_sha =
+        sha(repo, &format!("refs/heads/{}", d.default_branch)).unwrap_or_else(|_| d.base.clone());
+    let source_sha =
+        sha(repo, &format!("refs/heads/{}", d.branch)).unwrap_or_else(|_| d.head.clone());
+    let merge_base = git_text(repo, &["merge-base", &target_sha, &source_sha]).ok();
+    let changed = |head: &str| -> Vec<String> {
+        merge_base
+            .as_ref()
+            .and_then(|base| git_text(repo, &["diff", "--name-only", base, head]).ok())
+            .map(|paths| paths.lines().map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let target_paths = changed(&target_sha);
+    let source_paths = changed(&source_sha);
+    let conflict_files: Vec<_> = target_paths
+        .into_iter()
+        .filter(|path| source_paths.contains(path))
+        .collect();
+    let intent = conflict_files
+        .iter()
+        .map(|path| FileIntent {
+            path: path.clone(),
+            target: limit_side(
+                repo,
+                merge_base.as_deref(),
+                &d.default_branch,
+                &target_sha,
+                path,
+            ),
+            source: limit_side(repo, merge_base.as_deref(), &d.branch, &source_sha, path),
+        })
+        .collect();
+    let subject = |head: &str| {
+        git_text(repo, &["log", "-1", "--format=%s", head])
+            .unwrap_or_else(|_| "履歴を取得できません".into())
+    };
+    let recommendation = format!(
+        "両 SHA を確認し、再試行か統合停止を選ぶ。target: {}; source: {}; {}",
+        subject(&target_sha),
+        subject(&source_sha),
+        reason
+    );
+    IntegrationRequest {
+        target_branch: d.default_branch.clone(),
+        target_sha,
+        source_branch: d.branch.clone(),
+        source_sha,
+        merge_base,
+        conflict_files,
+        intent,
+        reason,
+        recommendation,
+        actions: Vec::new(),
+        candidate_sha: None,
+    }
+}
+
+fn limit_side(repo: &Path, base: Option<&str>, branch: &str, sha: &str, path: &str) -> SideIntent {
+    let subject = git_text(repo, &["log", "-1", "--format=%s", sha, "--", path]);
+    let commits = subject
+        .as_ref()
+        .ok()
+        .map(|subject| {
+            vec![CommitIntent {
+                sha: sha.into(),
+                subject: subject.clone(),
+            }]
+        })
+        .unwrap_or_default();
+    let diffstat = base
+        .and_then(|base| git_text(repo, &["diff", "--numstat", base, sha, "--", path]).ok())
+        .and_then(|stat| {
+            let mut fields = stat.lines().next()?.split('\t');
+            Some(FileDiffStat {
+                added: fields.next()?.parse().ok()?,
+                deleted: fields.next()?.parse().ok()?,
+            })
+        });
+    SideIntent {
+        branch: branch.into(),
+        path: path.into(),
+        commits,
+        diffstat,
+        unavailable: subject
+            .err()
+            .or_else(|| base.is_none().then(|| "merge base が取得できません".into())),
+    }
 }
 
 fn scratch_root(config: &Config) -> PathBuf {

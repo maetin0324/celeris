@@ -9,12 +9,23 @@ use std::collections::BTreeSet;
 use task_core::execution_plan::{PlanContext, PlanValidationError, validate_with};
 use task_core::{
     Event, ExecutionLimits, ExecutionPlanRow, ExecutionPlanSpec, PlanOrigin, PlanStatus, TaskId,
-    TaskStore, WorkUnitRow, WorkUnitStatus, new_id,
+    TaskStore, WorkUnitBlockedReason, WorkUnitRow, WorkUnitStatus, new_id,
 };
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::error::OpsError;
+
+/// ADR-0134 D1: a blocked daemon repair cannot be carried into a new plan.
+pub(crate) fn is_blocked_daemon_repair(row: &WorkUnitRow, daemon_added: bool) -> bool {
+    row.kind == task_core::WorkUnitKind::Repair
+        && row.status == WorkUnitStatus::Blocked
+        && matches!(
+            row.blocked_reason,
+            Some(WorkUnitBlockedReason::PlanIssue) | Some(WorkUnitBlockedReason::Limit)
+        )
+        && daemon_added
+}
 
 fn format_rfc3339(t: OffsetDateTime) -> Result<String, OpsError> {
     t.format(&Rfc3339)
@@ -416,6 +427,13 @@ pub fn replan(
         task_core::is_daemon_added_work_unit(&active.spec, u)
             || (v2 && u.phase.is_some() && !plan_keys.contains(u.key.as_str()))
     };
+    // ADR-0134 D1: replan の新しい版で superseded にする、止まった daemon の repair WU。
+    let blocked_daemon_repair = |u: &WorkUnitRow| is_blocked_daemon_repair(u, daemon_added(u));
+    let superseded_repair_keys: BTreeSet<String> = current
+        .iter()
+        .filter(|u| blocked_daemon_repair(u))
+        .map(|u| u.key.clone())
+        .collect();
     let done_work_units: Vec<(String, task_core::WorkUnitSpec)> = current
         .iter()
         .filter(|u| u.status == WorkUnitStatus::Done && !daemon_added(u))
@@ -485,7 +503,12 @@ pub fn replan(
         if u.kind == task_core::WorkUnitKind::Integrate {
             continue;
         }
-        if daemon_added(u) && u.phase.as_deref().is_some_and(|p| new_phases.contains(p)) {
+        // ADR-0134 D1: 止まった（blocked(plan_issue|limit)）daemon の repair WU は、段が新しい版に残っても
+        // 持ち越さない（そのままでは進めないという daemon 自身の判定。直す内容は planner が新しい葉で書く）。
+        if daemon_added(u)
+            && u.phase.as_deref().is_some_and(|p| new_phases.contains(p))
+            && !blocked_daemon_repair(u)
+        {
             continue;
         }
         if u.status != WorkUnitStatus::Done && !new_keys.contains(u.key.as_str()) {
@@ -652,9 +675,13 @@ pub fn replan(
                 Some(existing) => {
                     let mut row = existing.clone();
                     let mut deps = integ.depends_on.clone();
-                    // 統合の repair WU（daemon が足したもの）への依存は持ち越す。
+                    // 統合の repair WU（daemon が足したもの）への依存は持ち越す。ADR-0134 D1: この版で
+                    // superseded にした repair WU への依存は外す（待っても done にならない）。
                     for d in &existing.depends_on {
-                        if !deps.contains(d) && !plan_keys.contains(d.as_str()) {
+                        if !deps.contains(d)
+                            && !plan_keys.contains(d.as_str())
+                            && !superseded_repair_keys.contains(d)
+                        {
                             deps.push(d.clone());
                         }
                     }

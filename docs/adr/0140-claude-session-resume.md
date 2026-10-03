@@ -1,4 +1,4 @@
-# ADR-0124: Claude Code の continuation は同一 session を resume し、条件が崩れたら checkpoint で新 session に倒す
+# ADR-0140: Claude Code の continuation は同一 session を resume し、条件が崩れたら checkpoint で新 session に倒す
 
 ---
 tasks: [01M3Y2KXVXJ6CFH2XRS98W452J]
@@ -14,6 +14,7 @@ tasks: [01M3Y2KXVXJ6CFH2XRS98W452J]
   [ADR-0121](0121-root-delivery-without-assignee.md)（root delivery）
 - 番号: 着手時（2026-10-02、main `95595105`）に全 `refs/heads` と進行中 worktree の `docs/adr` を走査し最大は 0122。
   並行する Phase 4（routing）が最小の空き 0123 を取る見込みが高いため、衝突を避けて 0124 を使う（0116 は browser launcher 用に避ける）。
+  2026-10-03: main の 0124-atomic-direct-route と番号が重なったため、全 ref の `docs/adr` を走査し最小の空き 0140 へ振り直した（旧番号 0124）。
 
 ## 背景
 

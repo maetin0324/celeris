@@ -131,7 +131,7 @@ pub(super) fn attempt(
     config: &Config,
     d: &Delivery,
 ) -> Result<Outcome, StoreError> {
-    let settings = &config.delivery.auto_resolve;
+    let settings = &config.selfdeploy.delivery.auto_resolve;
     if !settings.enabled {
         return Ok(Outcome::Fallback(Fallback::Disabled));
     }

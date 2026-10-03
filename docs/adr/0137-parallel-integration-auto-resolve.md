@@ -39,6 +39,8 @@ ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに
 
 配送ではレビュー対象 SHA と main の SHA を固定して追従を試みる。main が進んだ場合は新しい SHA を取得して取り込み候補を作り直し、自動解消を適用したうえで gate を再実行する。追従中に main が再び進めば再試行するが、上限は設定で与え、既定は **3 回**とする。上限に達したら人へ回す。各試行の base・ours・theirs と実施した actions を残す。同一入力への再試行は同じ結果とし、無制限の retry や古い承認 SHA のままの配送はしない。
 
+設定ファイルでは従来どおり `[delivery.auto_resolve]` を使う。読み込み時に `[delivery]` を分離し、実行時の設定は `Config.selfdeploy.delivery` に保持して `Config` の公開欄を増やさない。
+
 ### D2. 共通の置き場所と呼び出し境界
 
 判定規則は `crates/task-dispatch/src/auto_resolve.rs` に置き、`classify`、`renumber`、`generated`、`records` の submodule に分ける。外側への結果は `Resolution = Resolved { actions } | NeedsHuman { IntegrationRequest }` とする。入力は固定した branch・SHA・merge base・衝突 path・設定であり、分類と推奨は決定論的に行う。`actions` は移動、参照更新、記録結合、生成コマンド実行と commit の対象を記録し、同一入力で再実行しても二重適用しない。判定 module と daemon・store に LLM 呼び出しを入れない。

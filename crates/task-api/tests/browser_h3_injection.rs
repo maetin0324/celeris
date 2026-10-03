@@ -938,6 +938,9 @@ async fn inner_h3_test() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn production_h3_injects_once_without_exposure() {
+    if !userns_available() {
+        return;
+    }
     for name in ["unshare", "ip", "openssl", "bwrap"] {
         tool(name);
     }

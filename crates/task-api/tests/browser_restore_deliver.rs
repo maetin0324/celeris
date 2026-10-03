@@ -115,7 +115,7 @@ fn now() -> u64 {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_enters_observation_stop_until_session_end() {
-    if skip() {
+    if skip() || !userns_available() {
         return;
     }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("loopback");

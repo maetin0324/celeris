@@ -849,3 +849,5 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 - NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。
 
 main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。
+
+main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。

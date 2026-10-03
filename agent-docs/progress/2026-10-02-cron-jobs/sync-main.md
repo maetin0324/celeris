@@ -6,11 +6,12 @@ updated: 2026-10-03
 ---
 # cron-jobs sync-main — main 取り込みと migration 0046 への振り直し
 
-merged-main: bbe4a09d3d525fb97c35076d0acd18e5f900eb1c
+merged-main: af71d4e9d0e2705e692d644564bcd676b83f0e3e
 
 final review の不合格（main を祖先に含まない・merge-tree で衝突・migration 番号が main の 0041 より小さい）を
 直すため、手元の main（fetch はしない）を `git merge --no-ff main` で task branch（base `4fb3c5e7bb96`）へ
-取り込んだ。
+取り込んだ。最初の取り込みは main `bbe4a09d`（衝突は下表）。作業中に main が `af71d4e9`（credentiald 試験の
+保存先修正 1 commit）へ進んだので、続けて 2 度目の `git merge --no-ff main` を行った（衝突なし）。
 
 ## 衝突ごとの解き方
 

@@ -30,13 +30,13 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(60);
 // ADR-0079 付記「R7-12」D4: WebSocket の frame は読み切ってから判定する（1 回の `recv` は header だけを返すことが
 // ある。高負荷時・並走時に `b'\x81~\x00\xdf'` だけを読んで assert に落ち、host は 60 秒待ってから失敗していた）。
 // probe の例外は `/session/probe.err` に書き、host はそれを見たら待たずにその内容で失敗する。
-// 接続〜CDP 応答までを 1 試行とし、EOF・拒否は期限（host の 60 秒より短い 55 秒）内で再試行する。
+// 接続〜CDP 応答までを 1 試行とし、EOF・拒否は期限（host の 120 秒より短い 90 秒）内で再試行する。
 const TCP_PROBE: &str = r#"import socket, time, sys, traceback
 from pathlib import Path
 def _report(t, v, tb):
     Path('/session/probe.err').write_text(''.join(traceback.format_exception(t, v, tb)))
 sys.excepthook = _report
-deadline = time.monotonic() + 55
+deadline = time.monotonic() + 90
 request = b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
 payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
 frame = bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload))
@@ -395,7 +395,7 @@ impl Agent {
     fn connect(path: &Path) -> Self {
         let mut stream = UnixStream::connect(path).expect("relay socket");
         stream
-            .set_read_timeout(Some(Duration::from_secs(30)))
+            .set_read_timeout(Some(Duration::from_secs(60)))
             .expect("timeout");
         write!(stream, "GET /{TOKEN} HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").expect("handshake");
         let mut response = Vec::new();
@@ -502,10 +502,11 @@ fn inner() {
     let mut supervisor =
         Supervisor::start(spec, SupervisorOptions::new(session.path().join("records")))
             .expect("supervisor");
-    let cdp = CdpController::new(
+    let mut cdp = CdpController::new(
         supervisor.cdp_write.take().expect("CDP write"),
         supervisor.cdp_read.take().expect("CDP read"),
     );
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let relay = SharedCdp::start(
         cdp,
         &session.path().join("cdp-relay.sock"),
@@ -515,7 +516,7 @@ fn inner() {
     .expect("relay");
     // 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が 10 秒を超えるので長めに待つ。
     // ADR-0079 付記「R7-12」D4: probe が例外で終わったら（`probe.err`）待たずにその内容で失敗する。
-    let until = Instant::now() + Duration::from_secs(60);
+    let until = Instant::now() + Duration::from_secs(120);
     while !session.path().join("tcp-probe.ok").exists() {
         if let Ok(err) = std::fs::read_to_string(session.path().join("probe.err")) {
             panic!("sandbox TCP probe failed:\n{err}");

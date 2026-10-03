@@ -182,7 +182,7 @@ fn delayed_cdp_page_target_response() {
         let _ = browser.write_all(&bytes);
     });
     let mut cdp = CdpController::new(write, read);
-    cdp.response_timeout_for_test(Duration::from_secs(30));
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let target = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("delayed page target");
@@ -349,7 +349,7 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
-    cdp.response_timeout_for_test(Duration::from_secs(30));
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let ready_deadline = Instant::now() + Duration::from_secs(60);
     let mut last_reply = String::from("no CDP response yet");
     loop {

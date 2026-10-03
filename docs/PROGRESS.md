@@ -2,6 +2,11 @@
 
 ## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
 
+- 2026-10-03（attempt 3）: review 指摘の `browser_runtime_isolated` の CDP 応答と `browser_runtime_supervisor` の SIGKILL 後消滅待ちを 30 → 60 秒へ。同型の CDP/socket/gate/fixture 終了待ちと埋め込み Python/shell も再走査し、出来事を主判定に 60 秒以上の保険へ揃えた。本番の既定値は変更せず、CDP は既存の試験用 feature を利用。クリック解放と fixture server 終了の失敗は無視せず検査する。
+- attempt 3 の検証: main `aed80844` を取り込み、通常有効な変更対象 36 ファイルを SIGSTOP 300 ms / SIGCONT 後 100 ms の下で各 3 回、計 108 実行が exit 0（最上位 libtest 集計は 170 passed/回）。主要 4 件、追加 CDP 2 件、今回指摘の runtime/supervisor を含む。全ファイル別の件数・方式・機械ログの所在は[一覧](testing/time-dependent-waits.md#第-3-走査後の全変更対象-stutter-記録)に追記。
+- 検証の限界: launcher 必須モードは host protocol v1 の session binding 欠如で exit 101。通常モードでの 3 回は ptrace 拒否・起動・消滅が通過し、admission 表だけ `SKIP: (not passed)`。手動 `sccache_webdav_e2e` は server 操作と環境変数変更がこの run で禁止されているため ignored のまま（0 passed）。この 2 点を検証成功とは数えない。本番 host は変更していない。
+- attempt 3 の指定ゲート: `cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` は exit 0（api_scenarios 11 passed）。初回 clippy の未使用 Result 指摘は fixture 終了結果の検査を追加して解消し、releases_api の stutter も 3 回取り直した。
+- attempt 3 の全体検証: `cargo test --workspace` は user namespace が使える権限付き環境で exit 0。ログは run の `workspace-final.log`。手動 ignored と launcher admission 表の環境制約は上記のとおり。
 - 2026-10-02: [時間依存待ち一覧](testing/time-dependent-waits.md)に `tests/e2e/tests` と `crates/*/tests` の候補 45 ファイル、対象ごとの原因と方式を記録した。
 - `daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`: 原因は worker の固定 6 秒と cooldown の短い 5 秒待ち。方式は release ファイルで worker を保持し、同時状態を観測後に解放する。保険超過時は `done` を返さない。
 - `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`: 原因は 180 task を固定 120 秒で判定したこと。方式は全件 `Done` の観測、進捗停止 60 秒、総保険 600 秒。lock 不在と daemon 生存の主張は維持。

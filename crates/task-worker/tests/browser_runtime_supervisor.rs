@@ -303,7 +303,7 @@ fn controller_main() {
     let (record_dir, session_dir) = dirs.split_once(':').unwrap();
     let record_dir = PathBuf::from(record_dir);
     if mode == "reap" {
-        let killed = reap_on_start(&record_dir, Duration::from_secs(30)).unwrap();
+        let killed = reap_on_start(&record_dir, Duration::from_secs(60)).unwrap();
         println!("CTRL REAPED {killed:?}");
         return;
     }
@@ -569,7 +569,7 @@ fn inner_supervisor_in_test_netns() {
     let held = open.load(Ordering::SeqCst);
     assert!(held >= 1 && closed.load(Ordering::SeqCst) < held);
     sigkill(&mut ca);
-    let left = wait_gone(&procs, Duration::from_secs(30));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(a) survived controller SIGKILL: {left:?}");
     let deadline = Instant::now() + Duration::from_secs(60);
     while closed.load(Ordering::SeqCst) < open.load(Ordering::SeqCst) {

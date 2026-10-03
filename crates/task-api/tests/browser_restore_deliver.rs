@@ -176,10 +176,12 @@ async fn restore_enters_observation_stop_until_session_end() {
     opts.live_key = Some((id.clone(), "r1".into()));
     let stop = Arc::clone(&opts.observation_stop);
     let mut sup = launch(session.path(), "live-s", opts);
-    let controller = Arc::new(std::sync::Mutex::new(CdpController::new(
+    let mut controller = CdpController::new(
         sup.cdp_write.take().expect("cdp write"),
         sup.cdp_read.take().expect("cdp read"),
-    )));
+    );
+    controller.response_timeout_for_test(std::time::Duration::from_secs(60));
+    let controller = Arc::new(std::sync::Mutex::new(controller));
     controller
         .lock()
         .expect("controller")

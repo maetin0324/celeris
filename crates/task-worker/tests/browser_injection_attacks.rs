@@ -773,6 +773,7 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let created = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("page target");

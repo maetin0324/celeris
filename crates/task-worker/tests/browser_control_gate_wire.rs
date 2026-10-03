@@ -100,7 +100,8 @@ impl Fixture {
                     if verb == "click"
                         && let Some(rx) = hold2.lock().unwrap().take()
                     {
-                        let _ = rx.recv_timeout(Duration::from_secs(30));
+                        rx.recv_timeout(Duration::from_secs(60))
+                            .expect("test releases the held click");
                     }
                     let stdout = r#"{"success":true,"data":{"ok":true}}"#;
                     // Publish the result atomically: the server polls for the file and

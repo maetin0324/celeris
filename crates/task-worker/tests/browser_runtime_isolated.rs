@@ -255,7 +255,7 @@ fn real_browser_in_runtime_facts_and_restore_refused_on_same_uid() {
         let _ = tx.send(buf);
     });
     let resp = rx
-        .recv_timeout(Duration::from_secs(30))
+        .recv_timeout(Duration::from_secs(60))
         .expect("CDP reply over pipe");
     let resp = String::from_utf8_lossy(&resp);
     assert!(

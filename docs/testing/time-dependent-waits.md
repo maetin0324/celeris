@@ -86,6 +86,24 @@ tasks: [01M3ZCXG7C34WZFJ46Q64XS8SZ]
 - `scratch-cache/tests/common/mod.rs`: server の port 受け取り 10 秒と応答読み 10 秒を 60 秒へ。
 - 残すもの: `browser_egress_relay.rs` の `fetch_marker` 3・5 秒は「届かない」ことの確認、`api_scenarios.rs` 725 の 2 秒は SSE 契約、`llm-proxy` の 900 ms 以上・4 秒未満は再走査の仕様、`unified_kill.rs` や `common/mod.rs` の `idle_timeout`・`busy_timeout` 等は設定値、`notify.rs` 1001 は値の比較。
 
+## 第 3 走査（2026-10-03、30 秒の待ちと埋め込み台本）
+
+前回の記録にあった「全て判定」は不正確だった。review が指摘した `browser_runtime_isolated` の CDP pipe 応答と `browser_runtime_supervisor` の SIGKILL 後の消滅は、30 秒のまま残っていた。今回、同型の待ちも含め次のように修正した。本番の timeout は変更していない。
+
+| 対象 | 観測する出来事と保険 |
+| --- | --- |
+| `task-worker/tests/browser_runtime_isolated.rs` | CDP pipe の応答受信を待つ。30 → 60 秒。応答 ID と HeadlessChrome の検査を維持 |
+| `task-worker/tests/browser_runtime_supervisor.rs` | controller SIGKILL 後の同一 PID/starttime の消滅、起動時 reap の完了。両方 30 → 60 秒。残存 0 と tunnel close を維持 |
+| `task-worker/tests/browser_cdp_sink.rs`, `browser_h3_wire.rs`, `browser_injection_wire.rs` | feature で限定した CDP 応答上限を 30 → 60 秒。getVersion ready 判定、origin/receipt 検査、遅延応答の回帰試験を維持 |
+| `task-worker/tests/browser_control_gate_wire.rs` | click 保持用 channel の解放を 60 秒待つ。timeout を捨てず失敗にし、解放されない click を成功させない |
+| `task-worker/tests/browser_shared_cdp.rs` | agent の WebSocket 応答読みを 30 → 60 秒。埋め込み Python の CDP probe は 55 → 90 秒、host の probe ファイル待ちは 120 秒。各接続の 2 秒は失敗条件ではなく、総保険内で再試行する単位 |
+| `task-worker/tests/browser_egress_relay.rs` | 埋め込み shell の proxy 応答読みを 8 → 60 秒。8 要求の総保険は 600 秒。`go` ファイルは固定 600 回から `until` と 300 秒の保険へ。200/403 の主張は維持 |
+| `task-worker/tests/browser_injection_attacks.rs`, `browser_restore_deliver.rs`, `browser_shared_cdp.rs`、`task-api/tests/browser_restore_deliver.rs` | 本番既定の CDP 5 秒を継承していた fixture の controller に、既存の試験用 feature で 60 秒の応答保険を設定。task-api は dev-dependency のみ feature を追加 |
+| `task-api/tests/browser_restore_live_session.rs` | 実 browser の CDP ready 応答を 30 → 60 秒。応答 ID と restore の拒否条件は不変 |
+| `celeris/tests/releases_api.rs` | fixture server の終了を 60 秒で待ち、timeout と JoinError を無視せず検査 |
+
+`from_secs` だけでなく埋め込み Python の `monotonic` / socket timeout と shell の `timeout` / `seq` も確認した。短い期限を残すのは、不在を確認する direct egress / fetch / SSE、実時間を要求する仕様検査、再試行間隔、または製品に渡す設定値。`ssh_localhost` の exec 上限は実 SSH コマンドの実行契約であり、状態出現待ちの helper ではない。
+
 ## SIGSTOP stutter 検証
 
 test process のみを `SIGSTOP` 300 ms / `SIGCONT` で 2〜3 回止め、再開後に完了を待った。CPU 負荷は生成していない。`api_scenarios` の次の 4 試験は各 3 回、計 12 回とも exit 0。機械ログは run の成果物ディレクトリにある `e2e-stutter.log`。daemon と worker を止める試験ではなく、test process の観測遅延に対する検証である。
@@ -107,6 +125,59 @@ API 系 fixture の `db.worker_read_only = false` は、この run の user name
 - `task-api --test standby`（3 件）: 3/3
 - `task-worker --test browser_egress_process`（6 件）: 3/3
 - `scratch-cache --test webdav`（3 件）: 3/3
+
+## 第 3 走査後の全変更対象 stutter 記録
+
+2026-10-03、main `aed80844` を取り込んだ tree で、変更した integration test ファイルを `cargo test --workspace --no-run --message-format=json` の出力に対応付けて列挙した。各 binary を `--nocapture --test-threads=1` で実行し、test process 本人だけに **SIGSTOP 300 ms / SIGCONT 後 100 ms** を終了まで繰り返した。process group は止めない（controller-kill 試験が自分で停止した子を、外部の SIGCONT で起こさないため）。`CARGO_BIN_EXE_*` は同じ target の build 済み binary を渡した。追加修正した 6 ファイルと、clippy 指摘に対応した `releases_api` は再ビルドして各 3 回を取り直した。
+
+通常有効な **36 ファイルを各 3 回、計 108 実行で exit 0**。libtest の最上位集計は 1 回あたり 170 passed（inner helper の入口を含む）。下表の件数は子 binary の集計を二重に加算しない。主要 4 件も `api_scenarios` 全 11 件の実行に含む。`browser_runtime_isolated` の ignored 3 件は独立した試験ではなく、通常の親試験が `--ignored --exact` で呼び出す helper である。
+
+ただし、次の 2 点を成功扱いしない。
+
+- `browser_launcher_ptrace`: `CELERIS_LAUNCHER_TESTS=require` での初回は exit 101。host の protocol v1 launcher に session binding が無く、admission 表の前提が揃わない。実 Chrome の ptrace と `/proc` の拒否はそこまでに通過していた。既存の通常モードで各 3 回実行し直すと、admission 表だけに `SKIP: (not passed)` を出し、今回の変更箇所である Chrome の出現・停止後の session 消滅まで通過した。本番 launcher の更新・再起動は行っていない。admission 表の必須モードでの検証は未完了。
+- `scratch-cache/sccache_webdav_e2e`: 元から手動専用の `#[ignore]`。3 回とも 0 passed / 1 ignored。sccache server の起動・停止と `SCCACHE_*` 等の差し替えを行う試験であり、この run の禁止事項に抵触するため `--ignored` で実行していない。全件を無条件に検証済みとはしない。
+
+機械ログ・再現台本は `/var/lib/celeris/workspaces/01M3ZCXG7C34WZFJ46Q64XS8SZ/artifacts/` の `stutter-all.py`、`test-binaries.jsonl`、`stutter3-all.log`、`stutter3-final.log`、`stutter3-final-summary.json`、各 `stutter3-<source>-<1..3>.log`。必須モードの失敗ログは `launcher-required-environment-failure.log` に保存した。最終 6 ファイルの再実行は `STUTTER_FILTER=browser_egress_relay,browser_injection_attacks,browser_restore_deliver,browser_shared_cdp,browser_launcher_ptrace STUTTER_LAUNCHER_MODE=optional python3 <上記ディレクトリ>/stutter-all.py`。`common/mod.rs` の変更は利用側の試験ファイルで検証している。
+
+| 試験ファイル（`tests/` 以下） | 1 回の件数 | stutter 結果 |
+| --- | --- | --- |
+| `crates/celeris-credentiald/tests/broker.rs` | 12 | 3/3 exit 0 |
+| `crates/celeris-credentiald/tests/injection_ipc.rs` | 15 | 3/3 exit 0 |
+| `crates/celeris/tests/browser_startup_reap.rs` | 1 | 3/3 exit 0 |
+| `crates/celeris/tests/instance_handoff.rs` | 8 | 3/3 exit 0 |
+| `crates/celeris/tests/releases_api.rs` | 8 | 3/3 exit 0 |
+| `crates/celerisctl/tests/worker_run_signal.rs` | 1 | 3/3 exit 0 |
+| `crates/scratch-cache/tests/sccache_webdav_e2e.rs` | 0 | 3 回とも ignored（未検証） |
+| `crates/scratch-cache/tests/webdav.rs` | 3 | 3/3 exit 0 |
+| `crates/task-api/tests/browser_e2e.rs` | 4 | 3/3 exit 0 |
+| `crates/task-api/tests/browser_h3_injection.rs` | 3 | 3/3 exit 0 |
+| `crates/task-api/tests/browser_restore_deliver.rs` | 1 | 3/3 exit 0 |
+| `crates/task-api/tests/browser_restore_live_session.rs` | 1 | 3/3 exit 0 |
+| `crates/task-api/tests/browser_waits.rs` | 6 | 3/3 exit 0 |
+| `crates/task-api/tests/console.rs` | 12 | 3/3 exit 0 |
+| `crates/task-api/tests/daemon_providers_config.rs` | 8 | 3/3 exit 0 |
+| `crates/task-api/tests/standby.rs` | 3 | 3/3 exit 0 |
+| `crates/task-api/tests/stream.rs` | 8 | 3/3 exit 0 |
+| `crates/task-dispatch/tests/unified_kill.rs` | 4 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_cdp_sink.rs` | 2 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_control_gate_wire.rs` | 5 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_egress_process.rs` | 6 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_egress_relay.rs` | 2 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_h3_wire.rs` | 2 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_injection_attacks.rs` | 2 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_injection_wire.rs` | 3 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_launcher_ptrace.rs` | 6 | 3/3 exit 0（admission 表のみ環境不足） |
+| `crates/task-worker/tests/browser_restore_deliver.rs` | 4 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_runtime_isolated.rs` | 6 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_runtime_supervisor.rs` | 4 | 3/3 exit 0 |
+| `crates/task-worker/tests/browser_shared_cdp.rs` | 2 | 3/3 exit 0 |
+| `crates/task-worker/tests/reap_finished_children.rs` | 1 | 3/3 exit 0 |
+| `tests/e2e/tests/account_pool_scenarios.rs` | 3 | 3/3 exit 0 |
+| `tests/e2e/tests/api_scenarios.rs` | 11 | 3/3 exit 0 |
+| `tests/e2e/tests/codex_account_pool_scenarios.rs` | 2 | 3/3 exit 0 |
+| `tests/e2e/tests/delegation_scenarios.rs` | 5 | 3/3 exit 0 |
+| `tests/e2e/tests/multi_account_scenarios.rs` | 3 | 3/3 exit 0 |
+| `tests/e2e/tests/provider_admin_scenarios.rs` | 3 | 3/3 exit 0 |
 
 ## 重複の扱い
 

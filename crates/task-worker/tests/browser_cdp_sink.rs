@@ -260,7 +260,7 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
-    cdp.response_timeout_for_test(Duration::from_secs(30));
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let ready_deadline = Instant::now() + Duration::from_secs(60);
     let mut last_reply = String::from("no CDP response yet");
     loop {

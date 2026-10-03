@@ -131,7 +131,11 @@ adapter = "fake"
             let _ = stop.send(());
         }
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            tokio::time::timeout(Duration::from_secs(60), handle)
+                .await
+                .expect("fixture server stopped")
+                .expect("fixture server task")
+                .expect("fixture server result");
         }
     }
 

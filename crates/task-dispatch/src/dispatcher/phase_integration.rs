@@ -33,10 +33,11 @@ impl Dispatcher {
     fn record_integration_request(
         &self,
         task: &Task,
+        integ: &task_core::WorkUnitRow,
         request: &crate::auto_resolve::IntegrationRequest,
     ) -> Result<(), DispatchError> {
         self.store
-            .integration_request_record(task.id, request, "phase:merge")?;
+            .integration_request_record(task.id, request, &format!("phase:{}", integ.key))?;
         Ok(())
     }
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
@@ -552,8 +553,8 @@ impl Dispatcher {
         };
         if let Some(conflict) = run.conflict.clone() {
             if let Some(request) = &conflict.request {
-                self.record_integration_request(&task, request)?;
-                return self.integration_needs_human(&task, &integ, &request.to_markdown());
+                self.record_integration_request(&task, &integ, request)?;
+                return self.block_for_integration_request(&task, &integ);
             }
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
         }
@@ -865,16 +866,35 @@ impl Dispatcher {
         integ: &task_core::WorkUnitRow,
         why: &str,
     ) -> Result<(), DispatchError> {
-        self.integration_failure(task, integ, why, false)
+        self.integration_failure(task, integ, why)
     }
 
-    fn integration_needs_human(
+    /// The request event is the sole inbox item. Keep the integration WU blocked until its answer.
+    fn block_for_integration_request(
         &mut self,
         task: &Task,
         integ: &task_core::WorkUnitRow,
-        why: &str,
     ) -> Result<(), DispatchError> {
-        self.integration_failure(task, integ, why, true)
+        let mut row = integ.clone();
+        row.clear_lease();
+        row.updated_at = rfc3339(OffsetDateTime::now_utc());
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Question);
+        self.store.work_unit_transition(
+            task.id,
+            row,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: integ.status,
+                to: task_core::WorkUnitStatus::Blocked,
+                reason: "integration_request".to_string(),
+                run_id: None,
+            },
+        )?;
+        self.store
+            .apply_transition_with_events(task.id, Trigger::WorkerQuestion, vec![])?;
+        Ok(())
     }
 
     fn integration_failure(
@@ -882,10 +902,9 @@ impl Dispatcher {
         task: &Task,
         integ: &task_core::WorkUnitRow,
         why: &str,
-        force_human: bool,
     ) -> Result<(), DispatchError> {
         let replans_so_far = self.counted_replans(task.id)?;
-        let can_replan = !force_human && replans_so_far < self.effective_max_replans(task.id)?;
+        let can_replan = replans_so_far < self.effective_max_replans(task.id)?;
         let mut row = integ.clone();
         row.clear_lease();
         row.updated_at = rfc3339(OffsetDateTime::now_utc());

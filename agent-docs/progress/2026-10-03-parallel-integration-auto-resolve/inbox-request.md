@@ -1,7 +1,7 @@
 ---
 title: 統合の依頼の受信箱投影: 横断試験・記録・全体検査
 tasks: [01M3ZCXNXTRTA9GNJ52Q36ZFCP]
-status: done
+status: needs-human
 updated: 2026-10-03
 ---
 
@@ -63,3 +63,27 @@ branch: `celeris-wu/01M412QGAJR1252XHBE1WT62CD/record`、HEAD `22c5cc8f`、基�
 - 1 の既存 notice を新しい受信箱へ移す（または古い依頼を「解決済み」として閉じる）ことを、小さな別 task にする。本番 DB の確認を含めて人が判断する。
 - 受信箱の `integration_request` 項目の実画面確認（GUI の表示と回答ボタン）を、daemon の workspace check か人の確認に入れる。
 - `gui/` の `gen:types` を、node_modules のある環境で一度実行し、差分ゼロを確かめる。
+
+## v4: 段の統合経路も一対一の受信箱項目にする
+
+最終レビューで、段の統合経路が `IntegrationRequested` に加えて `integration_needs_human` 経由の `QuestionRaised` / `WorkerQuestion` も記録し、同じ依頼を受信箱に二重表示する欠陥が見つかった。統合依頼への回答だけでは question 項目が残り、統合 WU も再開しなかった。
+
+修正を次のように分担した（fix-adr / fix-phase / fix-answer の各 WorkUnit）。
+
+- ADR D4 付記を更新し、段の統合依頼は `integration_request` 1 件だけを表示し、回答で統合 WU を再開する規則を明記。
+- 段の統合依頼の `origin` を固定値 `phase:merge` ではなく統合 WU の key に結び付け、通常の question/approval を追加しない。
+- 統合依頼への回答を受けた task-api が対応する統合 WU を再開する。
+- 回帰試験で段の統合経路の受信箱件数・回答後の項目消失と WU 再開を確認。
+
+### v4 の検査
+
+この close WorkUnit の HEAD `ed96f74c` で実行した。
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| 全体試験（e2e を除く） | `cargo test --workspace --exclude e2e` | **失敗**。`production_h3_injects_once_without_exposure` が `unshare: Operation not permitted` で失敗（sandbox の user namespace 制約）。他の指定検査は失敗後に実行していない。 |
+| e2e build | `cargo test -p e2e --no-run` | 未実行。全体試験の失敗で停止。 |
+| clippy | `cargo clippy --workspace -- -D warnings` | 未実行。全体試験の失敗で停止。 |
+| 文書検査 | `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`sh scripts/dev/progress-index.sh --check` | 未実行。全体試験の失敗で停止。 |
+
+全体検査の成功は確認できていない。sandbox 外の適切な検証環境で失敗試験を含む検査を再実行する必要がある。

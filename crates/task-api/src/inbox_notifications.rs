@@ -7,7 +7,10 @@ use axum::http::{HeaderValue, header};
 use axum::routing::{get, post};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{Event, Notice, NoticeId, NoticeKind, NoticeQuery, NoticeStore, TaskStore};
+use task_core::{
+    Event, Notice, NoticeId, NoticeKind, NoticeQuery, NoticeStore, Status, TaskStore,
+    WorkUnitBlockedReason, WorkUnitStatus,
+};
 use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind, KnowledgePending};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -405,20 +408,80 @@ async fn answer(
                         item_id == format!("integration_request-{safe_id}")
                     })
                     .ok_or_else(|| gone(&item_id))?;
-                let Event::IntegrationRequested { request, .. } = row.event else {
+                let Event::IntegrationRequested {
+                    request, origin, ..
+                } = row.event
+                else {
                     unreachable!("open request rows contain requests only")
                 };
                 let request_id = request.id_for(task_id);
+                let phase_unit = if let Some(key) = origin.strip_prefix("phase:") {
+                    let task = store
+                        .get(task_id)
+                        .map_err(store_problem)?
+                        .ok_or_else(|| gone(&item_id))?;
+                    let unit = store
+                        .work_units_for(task_id)
+                        .map_err(store_problem)?
+                        .into_iter()
+                        .find(|unit| {
+                            unit.key == key && unit.kind == task_core::WorkUnitKind::Integrate
+                        })
+                        .ok_or_else(|| gone(&item_id))?;
+                    if task.status != Status::Blocked
+                        || unit.status != WorkUnitStatus::Blocked
+                        || unit.blocked_reason != Some(WorkUnitBlockedReason::Question)
+                    {
+                        return Err(gone(&item_id));
+                    }
+                    Some(unit)
+                } else {
+                    None
+                };
                 store
                     .append_event(
                         task_id,
                         &Event::IntegrationAnswered {
                             request_id: request_id.clone(),
-                            answer,
-                            note,
+                            answer: answer.clone(),
+                            note: note.clone(),
                         },
                     )
                     .map_err(store_problem)?;
+                if let Some(mut unit) = phase_unit {
+                    if answer == "declined" {
+                        task_ops::gate::cancel(store, task_id, None)
+                            .map_err(|e| ops_problem(store, e, Some("cancel")))?;
+                    } else {
+                        let previous = unit.status;
+                        unit.status = WorkUnitStatus::Pending;
+                        unit.blocked_reason = None;
+                        unit.updated_at = time::OffsetDateTime::now_utc()
+                            .format(&Rfc3339)
+                            .map_err(|_| ApiProblem::internal("timestamp encoding failed"))?;
+                        store
+                            .work_unit_transition(
+                                task_id,
+                                unit.clone(),
+                                Event::WorkUnitTransitioned {
+                                    work_unit_id: unit.id,
+                                    key: unit.key,
+                                    from: previous,
+                                    to: WorkUnitStatus::Pending,
+                                    reason: "integration_answer".to_string(),
+                                    run_id: None,
+                                },
+                            )
+                            .map_err(store_problem)?;
+                        task_ops::gate::answer(
+                            store,
+                            task_id,
+                            note.unwrap_or_else(|| answer.clone()),
+                            Some(Status::Blocked),
+                        )
+                        .map_err(|e| ops_problem(store, e, Some("answer")))?;
+                    }
+                }
                 Ok(request_id)
             })
             .await?;

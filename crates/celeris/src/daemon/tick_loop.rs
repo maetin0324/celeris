@@ -181,7 +181,9 @@ pub(crate) async fn tick_loop(
             // ADR-0038 D1 の途中目標の判定 run（`milestone_review::schedule`）は ADR-0079 D13（Phase R5a）で廃止。
             // ADR-0047 D4 / B1（Phase 62）: 知識の自動メンテナンス。判断は決定的（ストアと KB のファイルを
             // 見るだけ）で、LLM が動くのは `langmem` アダプタが起こす python プロセスの中だけ。
-            // 1. まだ知識整理 run を持たない終端タスクから、1 tick に最大 1 件の支援タスクを作る。
+            // ADR-0131 付記 D10（Phase job-curation）: 終端タスクから知識整理 task は作らない（日次 job に
+            // 寄せた）。ここに残るのは移行中の run の後始末だけ:
+            // 1. 失敗した知識整理 run を一度だけ作り直す（`retry_failed`）。
             // 2. `knowledge_runs` が `scheduled` のまま終端になった run を見つけて KB へ適用する。
             {
                 let store = dispatcher.store();
@@ -212,28 +214,6 @@ pub(crate) async fn tick_loop(
                     now,
                 ) {
                     tracing::warn!(error = %e, "knowledge GC: tick failed; continuing dispatch");
-                }
-                match knowledge_maint::schedule(
-                    store.as_ref(),
-                    &config.knowledge.root,
-                    config.knowledge.langmem.enabled,
-                    notify_started_at,
-                    config.knowledge.langmem.max_related_pages,
-                    memory_dir.as_ref(),
-                    &config.role_specs(),
-                    &config.genre_specs(),
-                    now,
-                ) {
-                    Ok(created) if !created.is_empty() => {
-                        tracing::info!(
-                            count = created.len(),
-                            "knowledge: maintenance runs scheduled"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        tracing::warn!(error = %e, "knowledge: could not schedule the maintenance runs")
-                    }
                 }
                 // ADR-0052 D3（Phase 64）: 失敗した知識整理 run を**一度だけ**作り直す（`retried_at`）。
                 // 2 回目が Qwen で走るか cheap の汎用ハーネスで走るかは dispatch 時の到達性の検査が決める。

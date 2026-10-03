@@ -48,6 +48,8 @@ pub mod feed;
 pub mod harness;
 /// ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）。
 pub mod instance;
+/// 統合の依頼とその表示用の情報（ADR parallel integration D4）。
+pub mod integration_request;
 /// ADR-0043 D5（Phase 54）: 変更の取り込みの記録（`task_integrations`）。
 pub mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（front matter・索引・検索・マウント。純粋関数だけ）。

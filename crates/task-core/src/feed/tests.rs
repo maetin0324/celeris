@@ -304,11 +304,12 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     for reserved in crate::store::migrations::RESERVED_VERSIONS {
         assert!(!v.contains(reserved), "reserved {reserved} recorded");
     }
-    // 版数 37 の DB（main の本番の形）を開くと 0041 だけが当たる。
+    // 版数 37 の DB（main の本番の形）を開くと 0041 と 0047 が当たる。
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
             "DELETE FROM schema_migrations WHERE version > 37; \
+             DROP INDEX idx_events_integration_request; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor;",
         )
         .unwrap();

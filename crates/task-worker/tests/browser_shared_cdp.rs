@@ -30,47 +30,61 @@ const PREFLIGHT_TIMEOUT: Duration = Duration::from_secs(20);
 // ADR-0079 付記「R7-12」D4: WebSocket の frame は読み切ってから判定する（1 回の `recv` は header だけを返すことが
 // ある。高負荷時・並走時に `b'\x81~\x00\xdf'` だけを読んで assert に落ち、host は 60 秒待ってから失敗していた）。
 // probe の例外は `/session/probe.err` に書き、host はそれを見たら待たずにその内容で失敗する。
-const TCP_PROBE: &str = r#"import json, socket, time, sys, traceback
+// 接続〜CDP 応答までを 1 試行とし、EOF・拒否は期限（host の 60 秒より短い 55 秒）内で再試行する。
+const TCP_PROBE: &str = r#"import socket, time, sys, traceback
 from pathlib import Path
 def _report(t, v, tb):
     Path('/session/probe.err').write_text(''.join(traceback.format_exception(t, v, tb)))
 sys.excepthook = _report
-deadline = time.monotonic() + 60
-while True:
-    try:
-        sock = socket.create_connection(('127.0.0.1', 9223), timeout=2)
-        break
-    except OSError:
-        if time.monotonic() > deadline:
-            raise RuntimeError('CDP forwarding port unavailable')
-        time.sleep(.02)
-sock.settimeout(30)
-def recv_exact(n):
+deadline = time.monotonic() + 55
+request = b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n'
+payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
+frame = bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload))
+def recv_exact(sock, n):
     buf = b''
     while len(buf) < n:
+        if time.monotonic() >= deadline:
+            raise TimeoutError('CDP relay deadline exceeded after %r' % buf)
         chunk = sock.recv(n - len(buf))
         if not chunk:
-            raise RuntimeError('relay closed after %r' % buf)
+            raise ConnectionError('relay closed after %r' % buf)
         buf += chunk
     return buf
-sock.sendall(b'GET /aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n')
-head = b''
-while not head.endswith(b'\r\n\r\n'):
-    head += recv_exact(1)
-assert head.startswith(b'HTTP/1.1 101'), head
-payload = b'{"id":1,"method":"Target.getTargets","params":{}}'
-sock.sendall(bytes([0x81, 0x80 | len(payload), 1, 2, 3, 4]) + bytes(c ^ [1,2,3,4][i%4] for i,c in enumerate(payload)))
-header = recv_exact(2)
-assert header[0] == 0x81, header
-size = header[1] & 0x7f
-if size == 126:
-    size = int.from_bytes(recv_exact(2), 'big')
-elif size == 127:
-    size = int.from_bytes(recv_exact(8), 'big')
-frame = recv_exact(size)
-assert b'targetInfos' in frame, frame
-Path('/session/tcp-probe.ok').write_text('connected')
-time.sleep(90)
+last_error = None
+while True:
+    try:
+        with socket.create_connection(('127.0.0.1', 9223), timeout=2) as sock:
+            sock.settimeout(min(2, max(.1, deadline - time.monotonic())))
+            sock.sendall(request)
+            head = b''
+            while not head.endswith(b'\r\n\r\n'):
+                head += recv_exact(sock, 1)
+                if len(head) > 8192:
+                    raise ValueError('WebSocket upgrade header too large')
+            if not head.startswith(b'HTTP/1.1 101'):
+                raise ValueError('WebSocket upgrade rejected: ' + repr(head))
+            sock.sendall(frame)
+            header = recv_exact(sock, 2)
+            if header[0] != 0x81:
+                raise ValueError('unexpected WebSocket frame header: %r' % header)
+            size = header[1] & 0x7f
+            if size == 126:
+                size = int.from_bytes(recv_exact(sock, 2), 'big')
+            elif size == 127:
+                size = int.from_bytes(recv_exact(sock, 8), 'big')
+            if size > 65536:
+                raise ValueError('CDP response too large: %d' % size)
+            reply = recv_exact(sock, size)
+            if b'targetInfos' not in reply:
+                raise ValueError('CDP response without targetInfos: %r' % reply)
+            Path('/session/tcp-probe.ok').write_text('connected')
+            time.sleep(90)
+        break
+    except (OSError, ValueError) as error:
+        last_error = error
+        if time.monotonic() >= deadline:
+            raise RuntimeError('CDP forwarding unavailable') from last_error
+        time.sleep(.02)
 "#;
 
 struct FakeBroker;
@@ -477,6 +491,7 @@ fn inner() {
     let proxy =
         PathBuf::from(std::env::var("CARGO_BIN_EXE_celeris-browser-egress").expect("egress"));
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"), session_id: "shared-cdp".into(), session_dir: session.path().to_path_buf(),
         ro_dirs: vec![browser.parent().expect("browser parent").to_path_buf(), sandboxd.parent().expect("sandboxd parent").to_path_buf()],
         argv: vec![sandboxd.into_os_string(), OsString::from("--shared-cdp"), browser.into_os_string(),

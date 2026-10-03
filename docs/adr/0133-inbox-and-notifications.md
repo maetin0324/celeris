@@ -6,11 +6,17 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 - 日付: 2026-10-02
 - 状態: **実装済み**（inbox-model / notify-store / notify-feed / api / outbound / gui-compat / verify の全葉
   完了。web 葉は人の決定 `ui-overlap = c` により UI/UX task `01M3XTCNKMQBCHKSZ7Y1GF6ZM4` へ `superseded`）。
-  付記（verify 葉の検査結果）: 1) D4 の自動片付け規則（inbox-rules、task `01M3YF3NS2EGTZD2BBWNPG1K28`）は
-  main にもこの task のブランチにも未統合のため、`human_inbox` は規則なしの仮実装のまま（規則の重複実装は
-  していない）。2) D6 の `GET /api/v1/notify` への 4 設定値・経路別最終送信時刻の掲載は未実装（送り出し自体
-  の判定・束ねは実装・試験済み）。どちらも [phase-inbox-notifications.md](../progress/phase-inbox-notifications.md)
-  に詳細と追従提案を記録
+  付記（rules-wire / notify-status / sync-main 葉、2026-10-02）: 1) D4 の自動片付け規則（inbox-rules、task
+  `01M3YF3NS2EGTZD2BBWNPG1K28` の `788e5cc0`・`739cd209`）は `git cherry-pick -x` で内容を変えずに取り込み
+  （このブランチの `966dd2b1`・`559bb4ab`）、`human_inbox` の自動で閉じるに結合済み。規則の本体は
+  `task_ops::inbox` の `attention_suppression` だけで、この task は重複実装していない。試験:
+  `crates/task-api/tests/inbox_notifications.rs` の `auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision`
+  （置き換え済み failed 子・終端 task の attention が受信箱から消え、判断が要る failed は残り、`suppressed` に規則別件数）、
+  task-ops の `inbox_cleanup_*`。2) D6 の `GET /api/v1/notify` への 4 設定値（`inbox_batch_secs`・
+  `inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines`）と経路ごとの最終送信時刻は実装済み
+  （試験 `crates/task-api/tests/notify.rs` の `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
+  3) migration は最新 main の取り込み時に全 celeris/* を再走査し `0041_feed_notices.sql`（版数 41）へ振り直した（D3.2 の付記）。
+  詳細は [phase-inbox-notifications.md](../progress/phase-inbox-notifications.md)
 - 関連: ADR-0033（報告・認可）、ADR-0037 / ADR-0050（Discord 通知）、ADR-0067 D4（承認の材料）、
   ADR-0070 D1（失敗の分類）、ADR-0074 D2.4（途中確認）、ADR-0079 D7 / D8（決定の要求・計画の承認）、
   ADR-0080 D5（browser の待ち）、ADR-0081（web/ SPA）、ADR-0121 D3（配送の取りこぼし）、
@@ -164,7 +170,7 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 
 #### D3.2 保存（migration）
 
-migration `0040_feed_notices.sql`（全 celeris/* ブランチの `crates/task-core/migrations` を走査して 0038 まで
+migration `0041_feed_notices.sql`（下の付記で 0040 から振り直し。全 celeris/* ブランチの `crates/task-core/migrations` を走査して 0038 まで
 使用、0039 は ADR-0131 の cron-jobs が使う見込み。実装時に再走査し、使われていれば次の空き番号）:
 
 ```sql
@@ -192,14 +198,17 @@ CREATE TABLE feed_sources (               -- 冪等: 1 出来事は 1 回だけ�
 CREATE TABLE feed_cursor (name TEXT PRIMARY KEY, value TEXT NOT NULL);  -- 走査位置（events の seq 等）
 ```
 
-付記（notify-store 葉、2026-10-02）: 実装時の再走査で 0038（work_unit_sessions）・0039（cron_jobs・write_sets）が
-他ブランチで使用中だったので `0040_feed_notices.sql`（版数 40）にした。版数の飛びを許すため、
-`task_core::store::migrations::RESERVED_VERSIONS = [38, 39]` を置き、`migrate` は「記録の無い版数を順に当てる」
-（予約は飛ばし記録しない）形にした。記録が連続する DB では従来と同じ。統合で本物の 0038/0039 が入ったら
-予約から外せば、版数 40 の DB にも後から当たる。表には対象（`target_kind`・`target_id`）の列を足した。
-DB の版数は従来どおり `MAX(version)` で読む（`open_client` の古い・新しいの判定も同じ）。予約版数は記録されないので、
-試験で「版数 N の DB」を作るとき（`crates/celerisctl/tests/no_migrate.rs` の `db_at`、`SCHEMA_VERSION - 1` = 39 は予約）は
-`N` より大きい記録を消してから `INSERT OR IGNORE` で `N` を記録する。
+付記（notify-store 葉 → sync-main 葉で振り直し、2026-10-02）: 実装時の再走査で 0038（work_unit_sessions）・
+0039（cron_jobs・write_sets）が他ブランチで使用中だったので当初 `0040_feed_notices.sql` にしたが、最新 main の
+取り込み時（sync-main 葉）の再走査（`git for-each-ref refs/heads/celeris/` × `git ls-tree`）で 0040 も
+behind_targets が 4 ブランチで使用中と分かり、`git mv` で **`0041_feed_notices.sql`（版数 41）** に振り直した
+（main は 0037 まで）。版数の飛びを許すため、`task_core::store::migrations::RESERVED_VERSIONS = [38, 39, 40]` を置き、
+`migrate` は「記録の無い版数を順に当てる」（予約は飛ばし記録しない）形にした。記録が連続する DB では従来と同じ。
+統合で本物の 0038/0039/0040 が入ったら予約から外して `migration_sql` に足せば、版数 41 の DB にも後から当たる。
+表には対象（`target_kind`・`target_id`）の列を足した。DB の版数は従来どおり `MAX(version)` で読む（`open_client`
+の古い・新しいの判定も同じ）。予約版数は記録されないので、試験で「版数 N の DB」を作るとき
+（`crates/celerisctl/tests/no_migrate.rs` の `db_at`、`SCHEMA_VERSION - 1` = 40 は予約）は `N` より大きい記録を
+消してから `INSERT OR IGNORE` で `N` を記録する。
 
 `feed_sources` の挿入と束の `count` の加算は同じ transaction で行う（daemon の再起動・二重走査で数が
 増えない）。保持は既読から 30 日で削除（daemon の既存 GC の段で）。

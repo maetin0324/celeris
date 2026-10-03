@@ -34,6 +34,7 @@ digest_max_lines = 10
 2. 通常のリリース昇格手順で設定を読み直す。サービス再起動や本番設定の変更はこの文書では実行しない。
 3. GUI の「アカウント → API キー」で webhook secret の登録を確認する。
 4. `GET /api/v1/notify`（`celerisctl` の API 接続、または管理 GUI）で `configured` が有効であることと、秘密値が応答に含まれていないことを確認する。必要なら `POST /api/v1/notify/test` で test 送信を行い、Discord 側の受信を確認する。
-5. `[notify]` の数値は現在 `GET /api/v1/notify` の応答に含まれない。したがって設定ファイルの値を確認し、daemon が起動して `/notify` を返すことを確認する。設定値と経路別最終送信時刻を API で確認する機能は追従課題として未解決。
+
+`GET /api/v1/notify` は上記の `inbox_batch_secs`・`inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines` と、受信箱新着（`inbox_new_last_sent_at`）および要約（`digest_last_sent_at`）の最後の成功送信時刻を返す。該当経路の送信履歴が無い場合、時刻は `null` になる。
 
 通常のリリース・昇格手順は [selfdeploy runbook](../selfdeploy.md) を参照する。受信箱の項目は `/api/v1/inbox/items`、通知一覧と既読状態は `/api/v1/notifications` で確認できる。

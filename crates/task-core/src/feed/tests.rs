@@ -304,7 +304,7 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     for reserved in crate::store::migrations::RESERVED_VERSIONS {
         assert!(!v.contains(reserved), "reserved {reserved} recorded");
     }
-    // 版数 37 の DB（main の本番の形）を開くと 0040 だけが当たる。
+    // 版数 37 の DB（main の本番の形）を開くと 0041 だけが当たる。
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(

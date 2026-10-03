@@ -111,9 +111,8 @@ def single_line(text, max_chars=MAX_SUMMARY_CHARS):
 def build_chat_model(llm):
     """Build a LangChain chat model from `[knowledge.langmem]` (ADR-0047 D4).
 
-    `provider = "openai-compatible"` covers both hosted OpenAI-compatible
-    endpoints and the production local Qwen OpenAI-compatible endpoint
-    (`docs/knowledge.md` documents pointing `base_url` at it).
+    `provider = "openai-compatible"` uses the configured endpoint and model.
+    A proxy endpoint can resolve `celeris/<tier>` to an available LLM source.
     """
     provider = llm.get("provider") or "openai-compatible"
     model = llm.get("model")

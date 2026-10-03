@@ -246,6 +246,12 @@ pub trait NotificationStore: Send + Sync {
     /// 新しい順（`created_at` 降順、同値は id 降順）に最大 `limit` 件（GUI の「直近の送信」）。
     fn notification_recent(&self, limit: usize) -> Result<Vec<Notification>, StoreError>;
 
+    /// Latest successful outbound send for a kind (`ok = 1` and a non-null `sent_at`).
+    fn notification_last_sent_at(
+        &self,
+        kind: NotificationKind,
+    ) -> Result<Option<OffsetDateTime>, StoreError>;
+
     /// まだ決着していない行（`ok IS NULL`）を古い順に返す（次に送る対象）。
     fn notification_pending(&self) -> Result<Vec<Notification>, StoreError>;
 }
@@ -394,6 +400,18 @@ impl NotificationStore for SqliteStore {
             out.push(row??);
         }
         Ok(out)
+    }
+
+    fn notification_last_sent_at(
+        &self,
+        kind: NotificationKind,
+    ) -> Result<Option<OffsetDateTime>, StoreError> {
+        let conn = self.lock()?;
+        let raw: Option<String> = conn.query_row(
+            "SELECT sent_at FROM notifications WHERE kind = ?1 AND ok = 1 AND sent_at IS NOT NULL ORDER BY julianday(sent_at) DESC, id DESC LIMIT 1",
+            [kind.as_str()], |row| row.get(0),
+        ).optional()?;
+        raw.map(|value| parse_rfc3339(&value)).transpose()
     }
 
     fn notification_pending(&self) -> Result<Vec<Notification>, StoreError> {

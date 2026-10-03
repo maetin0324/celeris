@@ -280,3 +280,91 @@ async fn legacy_report_read_also_marks_its_notice_read() {
     let count = send(&app, get_admin("/api/v1/notifications/unread-count")).await;
     assert_eq!(count.json()["unread"], 0);
 }
+
+fn tree_child(parent: &task_core::Task, status: Status, unit_key: &str) -> task_core::Task {
+    let mut child = new_task(TaskKind::Execute, status);
+    child.parent_id = Some(parent.id);
+    child.tree = Some(task_core::TreeInfo {
+        root_id: parent.id,
+        depth: 2,
+        parent_unit: Some(task_core::ParentUnit {
+            task_id: parent.id,
+            plan_id: "plan".into(),
+            unit_key: unit_key.into(),
+            stage: "stage".into(),
+            attempt: 1,
+        }),
+        base_commit: None,
+    });
+    child
+}
+
+/// ADR-0133 D4: items that lost their meaning are closed by the ADR-0131 inbox-rules
+/// (`task_ops::inbox::attention_suppression`) and counted per rule in `suppressed`;
+/// a failed task that still needs a human decision stays.
+#[tokio::test]
+async fn auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision() {
+    let env = admin_env();
+    // R1: the parent finished through another child, so this failed child was replaced.
+    let done_parent = new_task(TaskKind::Execute, Status::Done);
+    let replaced = tree_child(&done_parent, Status::Failed, "replaced");
+    // R2: the ancestor was cancelled.
+    let cancelled_parent = new_task(TaskKind::Execute, Status::Cancelled);
+    let under_cancelled = tree_child(&cancelled_parent, Status::Failed, "withdrawn");
+    // R3: a terminal task with a stale delivery_skipped attention.
+    let skipped = Event::DeliverySkipped {
+        reason: task_core::DeliverySkipReason::DepartmentUnresolved,
+        detail: "needs attention".into(),
+        head: Some("abc123".into()),
+    };
+    let mut terminal_done = new_task(TaskKind::Execute, Status::Done);
+    terminal_done.project_id = Some(task_core::ProjectId::new());
+    // Still needs a human: the parent has not finished.
+    let open_parent = new_task(TaskKind::Execute, Status::Running);
+    let needs_decision = tree_child(&open_parent, Status::Failed, "open");
+    for t in [
+        &done_parent,
+        &replaced,
+        &cancelled_parent,
+        &under_cancelled,
+        &open_parent,
+        &needs_decision,
+    ] {
+        env.seed(t);
+    }
+    env.seed_with(&terminal_done, vec![skipped]);
+
+    let app = env.router();
+    let inbox = send(&app, get_admin("/api/v1/inbox/items")).await;
+    assert_eq!(inbox.status, 200, "{}", inbox.text());
+    let body = inbox.json();
+    let task_ids: Vec<String> = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|x| x["task"]["id"].as_str().map(str::to_owned))
+        .collect();
+    for gone in [&replaced, &under_cancelled, &terminal_done] {
+        assert!(
+            !task_ids.contains(&gone.id.to_string()),
+            "{} should be auto-closed: {body}",
+            gone.id
+        );
+    }
+    let kept = body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|x| x["task"]["id"] == needs_decision.id.to_string())
+        .unwrap_or_else(|| panic!("failed child of an open parent stays: {body}"));
+    assert_eq!(kept["kind"], "failed");
+    assert_eq!(
+        body["suppressed"],
+        json!({
+            "r1_parent_done": 1,
+            "r2_ancestor_cancelled": 1,
+            "r3_terminal_task": 1,
+        }),
+        "{body}"
+    );
+}

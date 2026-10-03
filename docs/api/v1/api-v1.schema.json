@@ -9437,7 +9437,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "description": "Populated by ADR-0131 inbox-rules when its counters are exposed.",
+          "description": "ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules\n(`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.",
           "type": "object"
         }
       },
@@ -9525,6 +9525,15 @@
             "$ref": "#/$defs/QuestionItem"
           },
           "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。",
+          "type": "object"
         }
       },
       "required": [
@@ -9532,6 +9541,7 @@
         "questions",
         "drafts",
         "attention",
+        "suppressed",
         "browser_waits",
         "decisions",
         "counts"
@@ -10700,6 +10710,9 @@
         "logged_in"
       ],
       "type": "object"
+    },
+    "LlmSourceRef": {
+      "type": "string"
     },
     "LlmSourceView": {
       "description": "`GET /llm/sources` の 1 供給元。",
@@ -12611,6 +12624,22 @@
           "description": "webhook の秘密が登録されていて、送れる状態か。",
           "type": "boolean"
         },
+        "digest_interval_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "digest_last_sent_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest_max_lines": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fingerprint": {
           "description": "登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。",
           "type": [
@@ -12624,6 +12653,24 @@
             "string",
             "null"
           ]
+        },
+        "inbox_batch_secs": {
+          "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inbox_new_last_sent_at": {
+          "description": "Last successful send for each outbound route; absent history is `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inbox_reminder_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "recent": {
           "description": "直近の送信（新しい順、最大 10 件）。",
@@ -12640,7 +12687,11 @@
       "required": [
         "configured",
         "secret_id",
-        "recent"
+        "recent",
+        "inbox_batch_secs",
+        "inbox_reminder_secs",
+        "digest_interval_secs",
+        "digest_max_lines"
       ],
       "type": "object"
     },
@@ -14739,6 +14790,20 @@
         "id": {
           "type": "string"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "model": {
           "description": "実効モデル（空なら `null`）。",
           "type": [
@@ -14777,6 +14842,12 @@
         "env_keys"
       ],
       "type": "object"
+    },
+    "ProviderKind": {
+      "enum": [
+        "adapter"
+      ],
+      "type": "string"
     },
     "ProviderLive": {
       "description": "プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。",
@@ -14832,6 +14903,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -14842,6 +14917,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、\nceleris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "実効モデル（空なら `None`）。",
@@ -15015,6 +15100,10 @@
             "null"
           ]
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -15025,6 +15114,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、\nまたは celeris を再起動した後は `null`（メモリだけに持つ観測値）。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "type": [
@@ -16462,6 +16561,21 @@
       },
       "required": [
         "updated"
+      ],
+      "type": "object"
+    },
+    "ResolvedLlmSource": {
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/SourceOrigin"
+        },
+        "source": {
+          "$ref": "#/$defs/LlmSourceRef"
+        }
+      },
+      "required": [
+        "source",
+        "origin"
       ],
       "type": "object"
     },
@@ -18376,6 +18490,13 @@
         "description"
       ],
       "type": "object"
+    },
+    "SourceOrigin": {
+      "enum": [
+        "explicit",
+        "derived"
+      ],
+      "type": "string"
     },
     "StageHint": {
       "additionalProperties": false,

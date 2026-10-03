@@ -47,7 +47,8 @@ pub(crate) fn deprecated(
 pub struct HumanInboxView {
     #[serde(flatten)]
     pub feed: HumanInbox,
-    /// Populated by ADR-0131 inbox-rules when its counters are exposed.
+    /// ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules
+    /// (`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.
     pub suppressed: std::collections::BTreeMap<String, u32>,
 }
 
@@ -97,6 +98,7 @@ async fn items(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiRes
         return Err(ApiProblem::bad_request(format!("unknown inbox kind: {k}")));
     }
     let mut feed = human_feed(&state).await?;
+    let suppressed = std::mem::take(&mut feed.suppressed);
     feed.items.retain(|x| {
         project.is_none_or(|p| x.project_id.as_deref() == Some(p))
             && kind.is_none_or(|k| x.kind.as_str() == k)
@@ -112,10 +114,7 @@ async fn items(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiRes
     }
     Ok(json_response(
         StatusCode::OK,
-        &HumanInboxView {
-            feed,
-            suppressed: std::collections::BTreeMap::new(),
-        },
+        &HumanInboxView { feed, suppressed },
     ))
 }
 

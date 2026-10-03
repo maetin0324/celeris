@@ -72,6 +72,7 @@ pub mod plan;
 pub mod profile;
 /// ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）の schema と検証。
 pub mod project_plan;
+pub mod provider_source;
 pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
@@ -145,6 +146,7 @@ pub use model::{
 pub mod pricing;
 pub mod routing;
 pub use pricing::{estimate_cost_usd, output_input_ratio};
+pub use provider_source::{LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----

@@ -78,6 +78,7 @@ fn spec(session: &Path, id: &str) -> RuntimeSpec {
     ];
     RuntimeSpec {
         bwrap,
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         session_id: id.into(),
         session_dir: session.join("runtime"),
         ro_dirs: vec![install],

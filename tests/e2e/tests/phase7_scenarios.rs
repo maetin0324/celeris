@@ -298,7 +298,7 @@ esac"#,
     env.replay_is_consistent();
 }
 
-/// 受け入れ 3: cancel は非終端のみ。先行の failed は後続へ推移的に伝播する。workspace 省略時は `<task_id>`。
+/// 受け入れ 3: cancel は非終端のみ（例外: ADR-0131 D7 で人は failed を cancel できる）。先行の failed は後続へ推移的に伝播する。workspace 省略時は `<task_id>`。
 #[test]
 fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
     let env = Env::new();
@@ -364,10 +364,11 @@ fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
     assert!(out.contains("Cancelled"), "{out}");
     assert_eq!(env.task(d).status, Status::Cancelled);
 
-    let (code, _, stderr) = env.celerisctl_raw(&["cancel", &a_str]);
-    assert_eq!(code, Some(1), "cancelling a failed task must exit 1");
+    // 終端（cancelled）の task の中止は拒否される。
+    let (code, _, stderr) = env.celerisctl_raw(&["cancel", &d.to_string()]);
+    assert_eq!(code, Some(1), "cancelling a cancelled task must exit 1");
     assert!(stderr.contains("cannot be cancelled"), "{stderr}");
-    assert_eq!(env.task(a).status, Status::Failed);
+    assert_eq!(env.task(d).status, Status::Cancelled);
 
     let (code, _, _) = env.celerisctl_raw(&[
         "add",
@@ -381,6 +382,17 @@ fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
         &a_str,
     ]);
     assert_eq!(code, Some(1), "depending on a failed task must be rejected");
+
+    // ADR-0131 D7: failed は人の Cancel に限り cancelled にできる（理由 cancel_failed、attempts は保つ）。
+    let attempts = env.task(a).attempts;
+    let out = env.celerisctl(&["cancel", &a_str]);
+    assert!(out.contains("Cancelled"), "{out}");
+    assert_eq!(env.task(a).status, Status::Cancelled);
+    assert_eq!(env.task(a).attempts, attempts);
+    assert_eq!(
+        env.transitions(a).last().map(String::as_str),
+        Some("Failed->Cancelled:cancel_failed")
+    );
     env.replay_is_consistent();
 }
 

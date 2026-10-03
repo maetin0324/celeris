@@ -1,6 +1,6 @@
 -- ADR-0133 D3.2: 通知（アプリ内の知らせ）。既読と束ねを持つ。
 -- `notifications`（migration 0008/0009/0019）は外部への送り出しの待ち行列のまま残し、ここでは触らない。
--- 0038 / 0039 は他の celeris/* ブランチ（work_unit_sessions・cron_jobs・write_sets）が使うので 0040。
+-- 0038 / 0039 / 0040 は他の celeris/* ブランチ（work_unit_sessions・cron_jobs・write_sets・behind_targets）が使うので 0041。
 CREATE TABLE IF NOT EXISTS feed_notices (
   id          TEXT PRIMARY KEY,          -- ULID
   kind        TEXT NOT NULL,

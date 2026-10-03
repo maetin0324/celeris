@@ -1,7 +1,7 @@
 # P5-01 遅延 gate（2026-10-01）
 
 ---
-tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS]
+tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS, 01M41RYPGEQQKT2KBPH1WYH0A6]
 ---
 
 ## 測定条件と判定
@@ -88,3 +88,58 @@ WEB_LATENCY_RESULTS="$ARTIFACTS/latency-results.jsonl" corepack pnpm@12.6.0 -C w
 ```
 
 この run ではネットワークからの pnpm 依存取得に失敗したため、既存のローカル `node_modules` を複製し、同じ Playwright 1.63.0 の `node_modules/.bin/playwright` で実測した。生値は run の `latency-results.jsonl`、集約値は `latency-results.json` に保存した。
+
+## 付記（2026-10-03）: 起動の完了を待ってから click を測る
+
+task 01M41RYPGEQQKT2KBPH1WYH0A6（WU spec-ready）、人の決定 b。`e2e/latency/transition.spec.ts`（S1 の各 goto の後）と `e2e/parity/latency-gate.spec.ts`（parity-x 7 経路の最初の goto の後）は、click の前に `e2e/latency/boot-idle.mjs` の `waitForBootIdle` で SPA 起動の完了を出来事で待つ。条件は「nav と `main h1` が出た後、2 frame + `requestIdleCallback` の 1 巡の間に long task（`PerformanceObserver('longtask')`）が 1 つも終わらない」。固定 sleep と networkidle（SSE が開いたまま、JSON は 5/10 s 遅らせる）は使わない。予算 300 ms、10 s−0 s 差 100 ms、Playwright の retries 0、click から URL・見出しまでの測り方は変えていない。
+
+理由: goto は `load` で返るが、その後も起動（session 確認 → shell と home の描画 → data の到着と再描画）の long task が main thread を塞ぎ、goto 直後の最初の click の locator 解決がそれを待つ。この時間は遷移ではなく起動の費用で、host の負荷で増える（前回 qa の commit-fast の切り分け）。
+
+### 変更前・変更後の計測（CPU throttle）
+
+host に負荷をかけず、CDP `Emulation.setCPUThrottlingRate`（1x・4x・6x）で renderer だけを遅くした。手順は 2 spec と同じ（parity 7 経路: goto `/` → 遅延 10 s → 順に click、S1 `/providers`: 遅延 0/5/10 s ごとに goto → nav を click）。変更前は取り込み直後の spec の手順（goto 直後に click）、変更後は `waitForBootIdle` の後に click。同じ build（HEAD `f2859a35`）で、回ごとに変更前・変更後を交互に 3 回。値は click から `main h1` が見えるまでの ms。
+
+| CPU | 経路 | 変更前 click→h1 ms（3 回） | 変更後 click→h1 ms（3 回） |
+|---|---|---|---|
+| 1x | `/inbox` | 86, 103, 99 | 43, 43, 43 |
+| 1x | `/tasks` | 41, 41, 41 | 30, 32, 30 |
+| 1x | `/projects` | 37, 37, 37 | 33, 32, 33 |
+| 1x | `/reports` | 28, 29, 29 | 29, 29, 30 |
+| 1x | `/org` | 33, 32, 32 | 32, 32, 32 |
+| 1x | `/knowledge` | 30, 29, 29 | 30, 29, 30 |
+| 1x | `/daemon` | 33, 33, 33 | 33, 33, 33 |
+| 1x | `/providers@0` | 61, 60, 75 | 71, 71, 71 |
+| 1x | `/providers@5000` | 68, 70, 68 | 70, 71, 70 |
+| 1x | `/providers@10000` | 73, 74, 73 | 70, 69, 69 |
+| 4x | `/inbox` | 234, 235, 229 | 78, 84, 80 |
+| 4x | `/tasks` | 36, 35, 34 | 34, 44, 35 |
+| 4x | `/projects` | 66, 66, 79 | 65, 81, 66 |
+| 4x | `/reports` | 60, 63, 62 | 53, 50, 65 |
+| 4x | `/org` | 48, 61, 63 | 49, 61, 49 |
+| 4x | `/knowledge` | 44, 44, 60 | 44, 48, 49 |
+| 4x | `/daemon` | 48, 45, 47 | 48, 49, 60 |
+| 4x | `/providers@0` | 86, 90, 88 | 78, 73, 75 |
+| 4x | `/providers@5000` | 71, 85, 81 | 84, 82, 110 |
+| 4x | `/providers@10000` | 79, 79, 78 | 76, 74, 73 |
+| 6x | `/inbox` | 363, 356, 333 | 106, 103, 100 |
+| 6x | `/tasks` | 96, 84, 82 | 109, 99, 104 |
+| 6x | `/projects` | 82, 77, 77 | 74, 80, 77 |
+| 6x | `/reports` | 84, 81, 56 | 83, 82, 87 |
+| 6x | `/org` | 60, 62, 66 | 52, 64, 63 |
+| 6x | `/knowledge` | 67, 52, 46 | 50, 47, 42 |
+| 6x | `/daemon` | 40, 53, 60 | 51, 60, 59 |
+| 6x | `/providers@0` | 104, 106, 121 | 98, 94, 93 |
+| 6x | `/providers@5000` | 72, 79, 77 | 82, 80, 80 |
+| 6x | `/providers@10000` | 76, 84, 91 | 77, 74, 79 |
+
+| CPU | 変更前 最大 / 300ms 超 | 変更後 最大 / 300ms 超 |
+|---|---|---|
+| 1x | 103 / 0/30 | 71 / 0/30 |
+| 4x | 235 / 0/30 | 110 / 0/30 |
+| 6x | 363 / 3/30 | 109 / 0/30 |
+
+変更後は 6x でも全経路が 110 ms 以下で、変更前に予算を超えていた goto 直後の `/inbox`（6x で 333〜363 ms）は 100〜106 ms になった。2 回目以降の click（`/tasks` 以降）は変更前後で同程度で、遷移そのものの費用は変わっていない。
+
+### e2e（retries 0、3 回続けて）
+
+`corepack pnpm@12.6.0 -C web e2e e2e/latency/transition.spec.ts e2e/parity/latency-gate.spec.ts --retries=0` を 3 回続けて実行し、3 回とも **33 passed / 0 failed**（各 2.9 m、load 1 分値 0.2〜0.7）。S1 の URL・見出しの最大は 82 / 87 / 87 ms。

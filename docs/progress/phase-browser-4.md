@@ -449,24 +449,27 @@ celeris が run の後に流した check（`CELERIS_LAUNCHER_TESTS=require cargo
 
 sandbox 実行（`browser_launcher_ptrace.rs::launcher_chrome_denies_daemon_uid_ptrace`）と host 実行の両方で、launcher 経由の別 UID runtime（Chrome）への daemon UID からの攻撃が拒否されることを実証した。
 
-| 観測 | sandbox | host（`launcher-host-run.log`） |
+| 観測 | sandbox | host（main `3527c8e3`・protocol v3、`/var/tmp/launcher-evidence-main.log`、1 回目の通常実行） |
 | --- | --- | --- |
 | 正の対照（同 UID 子への ptrace） | `PTRACE_ATTACH=0` `PTRACE_DETACH=0` | `PTRACE_ATTACH=0` `PTRACE_DETACH=0` |
 | `NS_GET_OWNER_UID` from daemon UID | `errno=Some(13)` | `errno=Some(13)` |
-| `verify_isolation` | `Ok (isolation_ok=true, CapEff=0, NoNewPrivs=true)` | 未到達（下記の前提チェックで panic） |
+| `verify_isolation` | `Ok (isolation_ok=true, CapEff=0, NoNewPrivs=true)` | `Ok (isolation_ok=true, CapEff=0, NoNewPrivs=true)` |
 | daemon UID からの `PTRACE_ATTACH` | `errno=Some(1)`（EPERM） | `errno=Some(1)`（EPERM） |
 | daemon UID からの `strace -p` | `Operation not permitted` | `Operation not permitted` |
-| `/proc/<pid>/environ`・`mem` | `errno=Some(13)`（EACCES） | 未取得（上記で停止） |
+| `/proc/<pid>/environ`・`mem` | `errno=Some(13)`（EACCES） | `errno=Some(13)`（EACCES） |
 
 許可/拒否の対応表は 2 系統ある:
 
 - **synthetic（構造体を直接組んだ模擬観測）— 実証済み**: `admission_table_on_synthetic_launcher_observation`（sandbox・host とも exit 0）で 5 通り（launcher-proof=allow、same-uid/non-isolated/no-proof/proof-invalid=deny）を両 admission（CredentialInjection・IdentityRestore）それぞれに通した。`task-core browser_isolation` と `celeris-credentiald` の単体・結合試験でも同じ 5 通りを各 admission 入口に直接通して確認済み。
-- **実 session（`ADMISSION[real-session]`、launcher の実観測を本番入口に通した表）— 未実証**: host で protocol v3 launcher（commit `702dc987` 系列を経た v3）に入れ替え、台本 `crates/task-worker/scripts/launcher-admission-evidence.sh` を worker 外の UID 1001 シェルで実行した結果は `EXIT: 101`（6 本中 5 passed・1 failed）。ptrace 拒否の実出力（上表）までは出たが、`ADMISSION[real-session]` の表を作る直前の前提チェック `launcher SO_PEERCRED uid Some(0) is not celeris-browser 995` で panic した。原因は launcher が systemd socket activation（`celeris-browser-launcher.socket`、`Accept=no`）で動き、listen socket を最初に作るのが systemd（root）であるため、試験が読む `SO_PEERCRED` が `celeris-browser`（995）ではなく `systemd`（uid 0）に見えること。sandbox でも同じ理由（userns 越し）で `peer_uid=Some(65534)` となり、どちらの環境でも前提が成立しない。後続 task で、launcher が accept 後に自分の pid/uid を `SCM_CREDENTIALS` 等で伝える仕組みを ADR-0116 に追記して実装し、host で再実行する必要がある。
+- **実 session（`ADMISSION[real-session]`、launcher の実観測を本番入口に通した表）— 実証済み（main `3527c8e3`・protocol v3）**: host の launcher を main `3527c8e3` に入れ替え、台本 `crates/task-worker/scripts/launcher-admission-evidence.sh` を worker 外の UID 1001 シェルで 1 回実行した結果は `EXIT: 0`（6 passed / 0 failed）。`launcher session proof: ... launcher_uid=995`。`ADMISSION[real-session]` は launcher-proof のみ両 admission allow、same-uid・non-isolated・no-proof・proof-invalid は deny。出所は `/var/tmp/launcher-evidence-main.log`（人の host 実行、リポジトリ外）。
+  - 身元確認の変更: 旧 `SO_PEERCRED`（socket 起動では systemd＝uid 0）から、応答に kernel が付ける `SCM_CREDENTIALS`（送り手 uid 995）へ替えた（[ADR-0116 付記 D-P](../adr/0116-browser-launcher-implementation.md)、main の protocol v3・commit `5ac36a7c`。launcher の binary・protocol は不変）。
+  - 由来の区別: `launcher-host-run-v2.log`（EXIT 0、6 passed、表も allow/deny の期待どおり）は、merge 前の branch 実装（protocol v4、launcher 側で SCM を付ける版）で取った log。merge `caf153c3` で main 版に揃えたため、**merge 後の実装の証跡ではない**。
+  - 未確認: `CELERIS_LAUNCHER_TESTS=require` での host の SIGSTOP stutter 3 回（[時間依存待ちの手順](../testing/time-dependent-waits.md)）、merge 後 HEAD（`browser_launcher_ptrace.rs` の待ち時間を 20・5・15 秒から 60 秒に延ばした差分のみ。台本は main と同一）の host 再取得。人が [`docs/ops/browser-launcher-admission-evidence-run.md`](../ops/browser-launcher-admission-evidence-run.md) の手順で行う。`artifacts/launcher-host-rerun.md` は v4 版の手順なので使わない。
 
 ### evidence・record-docs
 
-証跡一式（試験コマンド・exit code・ptrace 拒否の実出力・対応表・host log・本番昇格手順）は親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md` と `launcher-host-run.log` に記録した（本リポジトリ外の成果物ディレクトリ）。
+証跡一式（試験コマンド・exit code・ptrace 拒否の実出力・対応表・host log・本番昇格手順）は親 task 01M3VFQZ2TX3W0KTDQHKCAVJR6 の成果物 `prod-admission-release-evidence.md` に記録した（本リポジトリ外の成果物ディレクトリ）。生ログは `launcher-host-run-v2.log`（merge 前 v4）と `/var/tmp/launcher-evidence-main.log`（main `3527c8e3`、merge 後の系列）。
 
 - 全体検査（このブランチ HEAD）: `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` exit 0（6 passed、許可/拒否表は前提欠落で `SKIP:`）、`cargo test -p task-core browser_isolation` exit 0（31 passed）、`cargo test -p celeris-credentiald` exit 0（58 passed）、`cargo test -p task-worker --lib browser_launcher` exit 0（18 passed）、`cargo clippy --workspace -- -D warnings` exit 0。
 - H3・H4・H5・ADR-0080 H2（`approve_once`・短い lease）は維持（弱めていない。ADR-0138 本文で再確認）。
-- **本番昇格は実施していない**。昇格は人が selfdeploy 手順（`projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。残課題（`ADMISSION[real-session]` の実証）は後続 task に送る。
+- **本番昇格は実施していない**。昇格は人が selfdeploy 手順（`projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。残課題は上記の未確認（必須モードの host stutter 3 回と merge 後 HEAD の host 再取得）のみ。

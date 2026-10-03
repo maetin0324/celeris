@@ -999,7 +999,7 @@ Run #2 で main がさらに進んだ `33aca5a3`（アカウント/プロバイ�
 - 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test -p task-worker --lib browser_launcher` 20 passed、`--lib launcher_run` 16 passed、`--test browser_launcher_ptrace --test browser_prod_admission` 6 + 18 passed（sandbox）。
 - ついで: 取り込みで呼び出しを失って未使用になった `browser_injection_wire.rs` の `wait_cdp_ready` を削除（clippy の dead_code）。
 - ADR 番号: 取り込んだ本番 admission の ADR（旧 `0116-browser-prod-admission-confidential-release.md`）は main の ADR-0116（launcher 実装）と重なるため [ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) に振り直した（main と全 celeris/* ブランチの最大は 0137）。コード・試験・台本・unit の「ADR-0116 D-L」「ADR-0116 条件 1〜5」を ADR-0138 に、D2〜D7・付記 D-P は ADR-0116 のまま。条件 5(a) と未実証節の `SO_PEERCRED` の記述も D-P に合わせた。
-- 未解決: host での `ADMISSION[real-session]` の再取得は人が `docs/ops/browser-launcher-admission-evidence-run.md` の手順で行う（入れ替え → 台本 → main の版へ戻す）。
+- 2026-10-03 訂正: `ADMISSION[real-session]` は main `3527c8e3`（protocol v3）の launcher に対する host の 1 回の通常実行（`/var/tmp/launcher-evidence-main.log`、EXIT 0、6 passed）で実証済み。`launcher-host-run-v2.log`（EXIT 0）は merge 前の v4 実装の証跡で、merge 後の実装の証跡ではない。未確認: host の必須モード stutter 3 回、merge 後 HEAD（試験の待ち時間 20→60 秒のみ差分）の host 再取得。いずれも人が `docs/ops/browser-launcher-admission-evidence-run.md` の手順で行う。本番昇格は未実施（人が行う）。
 
 ## web release の依存欠落と web-follow の起動確認の修正（work unit `record`、HEAD `ab687209cb05`）
 

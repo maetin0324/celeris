@@ -1,5 +1,8 @@
 ---
+title: Phase 5 actual-record — actual write-set 記録（ADR-0130 D2 の実装上の明確化）
 tasks: [01M3YE0JTQEYBFDTV3HCHR4G9J]
+status: done
+updated: 2026-10-03
 ---
 # Phase 5 actual-record: actual write-set 記録（ADR-0130 D2 の実装上の明確化）
 

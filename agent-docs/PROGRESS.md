@@ -1,10 +1,6 @@
 > **このファイルへの追記は終了（ADR-0128）。** 新しい進捗は agent-docs/progress/YYYY-MM-DD-<slug>.md へ。現在地は sh scripts/dev/progress-index.sh。
 # PROGRESS — taskd
 
----
-tasks: [01M3XZ5PYSTTC6GXAH8TZVRHSA, 01M40FWV6Z6N4P5ESHZMK0KH2B]
----
-
 ## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
 
 - 2026-10-03（人の判断を反映・最新 main 取り込み）: main `f45f218e` を `git merge`。scratch-cache は main で撤去済みのため削除側、180 件待ちは main の deflake-lock `wait_for_progress` を採って重複を解消。launcher の host stutter 3/3（人の実行）と sccache_webdav_e2e の例外承認を[一覧](testing/time-dependent-waits.md#人の判断による例外の確定と最新-main-の取り込み2026-10-03)に記録。
@@ -109,66 +105,6 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 詳細な履歴と証跡は下記の分割ファイルを参照。既存の `docs/PROGRESS.md` 参照はこの目次を入口として維持する。
 
 ## 目次
-
-## Phase 1 — review 前の target 同期と merge candidate 固定（ADR-0118、2026-10-02）
-
-reviewer と deterministic checks の前に task worktree を target へ rebase し、reviewed SHA と merge candidate SHA を一致させて記録する。merge/delivery 時に target が進んでいれば再同期・再検査・再 review へ戻す。tree child は親ブランチへの再帰統合を保ち、candidate SHA を照合する。
-
-- 証拠: `cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。
-- `cargo test --workspace` は 2 回実行。いずれも task-crate tests を含む前半は成功したが、`celeris --test instance_handoff` が 5/8 で失敗し全体 exit 101。3 件はこの環境で user namespace 作成が `Operation not permitted`（ADR-0095 guard）、2 件は daemon dispatch/standby 待ちが成立しなかった。再実行でも再現したため、Phase 1 差分外の環境制約として変更せず。
-- 着手時の target: `git log -1 main` = `5f14fe7480f1512a0a62c35cf41c1fedb11a6944 integrate wu/merge-main (phase land)`。`git merge-tree --write-tree --name-only HEAD main` は tree `70360b86cb8d6add2d8493c7c8c6f15ad38aa2ab` を返し、`crates/task-dispatch/src/dispatcher/review_spawn.rs` の content conflict を 1 件検出。これは並行 review-decisions と同じ箇所で、衝突の自動解決は Phase 2。
-- 未解決: 衝突の自動解決は Phase 2。Phase 1 は衝突を検出して安全に止め、成果を保持する。
-
-### fix-sync-stop: review 前同期の停止が attempts を消費していた不具合の修正 — 2026-10-02（work unit `fix-sync-stop`）
-
-final review 差し戻し（criterion 4 fail）で指摘された不整合を修正した。`stop_review_for_target_sync`（`crates/task-dispatch/src/dispatcher/review_spawn.rs`）が同期の停止全般に `Trigger::ReviewFail` を使っており、`retry_or_fail` を通って attempts を 1 消費し Ready/Failed に落ちていた。これは ADR-0118 D4（stale はコードの不合格ではなく review の試行回数に数えない）に反し、root delivery の `[merge-base]` 局所修復経路と tree child の段階統合衝突経路を壊していた。
-
-- 衝突・dirty worktree・ref 不読は同期を省略し、成果を保った未同期 HEAD のまま従来どおり review に進む（attempts は変化しない）。
-- stale（同期中の target 再進行・delivery の base/head 不一致・検査後の reviewed snapshot 変化）は `ReviewTargetAdvanced` を event に残し、状態遷移を起こさず再 sync → 再 check →再 review のループに入る。上限超過時は Reviewing のまま止める（attempts を消費しない）。
-- `crates/celeris/src/delivery.rs`: 候補 SHA が NULL かつ main と分岐している行は rereview へ戻さず `[merge-base]`（局所修復）へ渡す。
-- 追加試験: `crates/celeris/src/delivery/tests.rs`、`crates/task-dispatch/src/dispatcher/review_spawn.rs` / `review_verdict.rs` に pre_review_sync 系の試験を追加。ADR-0118 に D2/D4/D6 の付記。
-
-### reland-main: 最新 main の取り込みと全検査の再実行 — 2026-10-02（work unit `reland-main`）
-
-fix-sync-stop の後、最新 main（`29e2d76875e0cb3ab21ea606b0014aab62413cd8`、confirm-release 統合・BenchFS 方向転換の記録を含む）をこの task ブランチへ merge した。`git merge-tree --write-tree --name-only HEAD main`（事前確認）は衝突ファイル名を 1 件も返さず（tree `abb8120a171f9edb22e63ff2c9fc6ed998c00bb1`）、実際の merge も衝突なし（`docs/progress/phase-R.md` に 1 行追加されるのみの自動 merge）。`git merge-base --is-ancestor <main-sha> HEAD` → exit 0。衝突マーカーは `git grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' .` → 該当なし。
-
-- `cargo fmt --all -- --check` → exit 0（差分なし）。
-- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
-- `cargo test --workspace` → exit 0（全 118 テストバイナリで `test result: ok`、`0 failed`）。
-- `cargo test --workspace pre_review_sync` → 1 passed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair`）、`cargo test --workspace reviewed_sha` → 3 passed（`delivery::tests::target_advanced_*`）。`cargo test -p task-dispatch` の `dispatcher::tests::target_sync::*` 8 件（pre_review_sync_dirty_keeps_attempts・pre_review_sync_conflict_keeps_attempts_and_branch・pre_review_sync_target_advanced_keeps_attempts・pre_review_sync_target_advanced_limit_halts_without_attempts 等）も exit 0。既知の flaky `task-worker` の `local_deep_research::tests::missing_celeris_result_line_is_retryable_error` を単独で再実行し 1 passed（workspace 全体実行でも今回は失敗なし）。
-- sandbox 内で userns 必須試験（`instance_handoff` 等）が完走できない場合があることは把握済みだが、今回の `cargo test --workspace` では該当失敗なし（daemon はこの制約の外で checks を実行するため、sandbox 制約を plan_issue の理由にはしない）。
-
-### land-main-2: 再進行した main（web GUI 統合）の取り込みと全検査の再実行 — 2026-10-02（work unit `land-main-2`）
-
-reland-main 後に main が web GUI（task 01M3QE4D330YESFT6FY8G50R12、ADR-0081 TanStack SPA + gateway、Phase 1〜6）の統合で `e730f0569db12f8dc1d46fde1932636f40db48a9` まで進み、integrate-verify の check `git merge-base --is-ancestor main HEAD` が落ちていた。着手時にコードの修正（c5e9498a・fix-sync-stop）は済んでおり `review_spawn.rs` に `Trigger::ReviewFail` は無いことを確認済み。`git merge-tree --write-tree --name-only HEAD main` の事前見積もりは `crates/task-worker/tests/browser_shared_cdp.rs` 1 件だけを衝突として返した（`docs/PROGRESS.md` は自動 merge）。
-
-- 実際の merge（commit `31dead31c5fb3f56e37d0644b1bd9339ef93657a`）も見積もりどおり衝突は `browser_shared_cdp.rs` のみ。両側とも R7-12 系の CDP probe EOF 無限待ち修正だったため、main 側（`ISOLATION`/`PREFLIGHT_TIMEOUT` 定数・`probe.err` への例外書き出し・`recv_exact` によるフレーム読み切り・`preflight()`）を基本に採用し、task 側にあって main に無かった「接続後の handshake / CDP 応答が一度失敗しても deadline まで接続からやり直す」期限付き再試行を `except OSError` の外側ループに戻す形で足した。Rust 側の外側タイムアウトは task 側の 75 秒（main は 60 秒）をそのまま残した。`docs/PROGRESS.md` は衝突なしで両節とも残っている。
-- `git grep -n '^<<<<<<<\|^=======$\|^>>>>>>>' .` → 該当なし。`git merge-base --is-ancestor main HEAD` → exit 0。
-- `cargo build -p task-worker --bins` → exit 0（browser_shared_cdp.rs のテストが前提とする `celeris-browser-sandboxd`/`celeris-browser-egress` bin を先に生成）。
-- `cargo test -p task-worker --test browser_shared_cdp --no-run` → exit 0（コンパイル確認）。
-- `cargo test -p task-worker --test browser_shared_cdp -- --nocapture` → exit 0（2 passed。sandbox では preflight が失敗して `SKIPPED (environment unavailable, not passed)` を出すだけで、panic はしない）。
-- `cargo fmt --all -- --check` → exit 0（差分なし）。
-- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
-- `cargo test --workspace` → exit 0（118 テストバイナリすべて `test result: ok`、FAILED・`error[` なし）。
-- `cargo test --workspace pre_review_sync` → 9 passed、0 failed（`delivery::tests::pre_review_sync_conflict_unsynced_candidate_goes_to_merge_base_repair` 1 件 + `dispatcher::tests::target_sync::pre_review_sync_*` / `target_sync_pre_review_sync_*` 8 件）。
-- `cargo test --workspace reviewed_sha` → 3 passed、0 failed（`delivery::tests::target_advanced_*_reviewed_sha`）。
-- Phase 1 のコード（review 前同期・stale 検出・同期停止が attempts を消費しない経路）は変更していない。既知の flaky（`local_deep_research` の Spawn NotFound、`browser_shared_cdp` の sandbox TCP probe）は今回の `cargo test --workspace` では再現しなかった。
-
-## Phase 2 — review 前同期の IntegrationRepair（ADR-0120、2026-10-02）
-
-review 前の target への rebase が衝突した場合、元の成果を保持する `integration-repair-<n>` WU を同じ task に追加する。WU が完了すると最新 target へ再同期し、checks と reviewer を新しい SHA でやり直す。2 回の上限、修復不能時の安全な rollback と未同期 HEAD での従来経路への復帰を実装した。`IntegrationRepairScheduled` / `Resolved` / `Exhausted` を task event に残し、`TaskDetail.integration_repair` と受信箱で通常の実装失敗と区別する。Phase 2 の衝突解消経路の実装完了日は 2026-10-02。
-
-- 最新 main の確認: `7f3482a3` と、その後に進んだ `39e22633` は `git merge-tree --write-tree --name-only HEAD main` で衝突なしを確認して取り込んだ。さらに進んだ `95595105` への見積もりでは `docs/PROGRESS.md` の content conflict だけを検出したため、Phase 1/2 の節と main の Browser capability Phase 1 追記を両方残して解消した。ADR-0120 の番号は main の `docs/adr/` に無く一意である。
-- 契約照合: ADR-0120 D5 の event 名・payload、API の `TaskDetail.integration_repair` 欄、`MAX_INTEGRATION_REPAIRS = 2`、rollback の clean/reflog/branch 条件を `task-core`・`task-ops`・`task-dispatch` と照合した。GUI の案内を `FailureBanner` より上に配置し、ADR の付記に実装済み範囲と残件を記した。
-- 検査: `cargo build -p task-worker --bins` → exit 0。`cargo fmt --all -- --check` は既存の `crates/task-api/tests/integration_repair.rs` の整形差分で初回 exit 1、`cargo fmt --all` 後の再検査は exit 0。`cargo clippy --workspace -- -D warnings` → exit 0（main 再取り込み後にも exit 0）。
-- `cargo test --workspace integration_repair` → exit 0、19 passed / 0 failed。dispatcher の起票・最新 target への再同期・2 回上限・rollback、event/API の射影を含む。`git diff --check` と ADR 番号・architecture-map・PROGRESS の受け入れ check → exit 0。
-- `cargo test --workspace` → exit 101。`celeris --test instance_handoff` の 8 件中 5 件が失敗した。3 件は worker db guard が user namespace を作れず `Operation not permitted`、2 件はその結果として dispatch/standby の待ち条件が成立しなかった。`unshare -U -r true` も `uid_map: Operation not permitted` で exit 1。この sandbox の制約として記録し、これを `plan_issue` の理由にしない。daemon の決定的 check は sandbox 外で実行される。
-- `cargo test --workspace --exclude celeris` → exit 101。`e2e --test account_pool_scenarios` の 3 件も daemon 起動時に同じ worker db guard の user namespace probe で停止した。これは上記の制約が `celeris` crate 固有ではないことを示す。
-- `cargo test --workspace --exclude celeris --exclude e2e` → exit 101。`task-api --test browser_h3_injection` の `production_h3_injects_once_without_exposure` が `unshare: Operation not permitted` で失敗した。いずれも IntegrationRepair の失敗ではなく、この sandbox の user namespace 制約による。
-- `cargo test --workspace --lib` → exit 101。`task-worker --lib` は 657 passed / 12 failed / 4 ignored。失敗は browser 実 runtime と `db_guard` の namespace を要する試験で、`Operation not permitted` を含む。IntegrationRepair に関係する `task-core`・`task-ops`・`task-dispatch`・`task-api` の lib 試験は別コマンドでも切り分ける。
-- `cargo test -p task-core -p task-ops -p task-dispatch -p task-api --lib` → exit 0、計 1,611 passed / 0 failed / 2 ignored（74 + 630 + 518 + 389）。
-- `95595105` 取り込み後に `cargo build -p task-worker --bins && cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。`cargo test --workspace integration_repair` → exit 0、19 passed / 0 failed。`git merge-base --is-ancestor main HEAD` → exit 0。
-- 未解決: ADR-0120 D5 の `WorkUnitView.integration_repair` / `ExecutionWorkUnitView.integration_repair` と GUI の WU 行の専用 badge は未実装。`task_core::integration_repair_snapshots` の event 投影までは実装済み。sandbox 外での `cargo test --workspace` exit 0 の確認も残る。本番への昇格はこの worktree の範囲外。
 
 - [Browser capability Phase 1](progress/phase-browser.md) — ADR-0078、既存 harness + agent-browser、管理者 grant・session・監査・dashboard 導線。最新 main 再統合後の gate 2026-09-28（Rust 2678 passed、GUI 1173 passed、mobile-audit 0 violations）。本番未昇格。2026-10-02 追記: `scripts/dev/stress-e2e-phase3.sh` で phase3_control の flaky 修正（`dafffeb1`）を負荷下 2 回（各 20 serial + 8 parallel）で検証、全 pass。fix-stress-build は人の介入を受け、共用 host の既定負荷を焼き 2 本・nice -n 19・300 秒・5 serial + 2 parallel に変更し、背景 cargo 負荷を opt-in 化。指定の `time sh scripts/dev/stress-e2e-phase3.sh` を既定値のまま 1 回実行し exit 0（serial 5/5、parallel 2、real 16.970s）。`scripts/dev/stress-e2e-phase3.sh` は 2026-10-02 に削除した（CPU を焼く負荷は共用 host を巻き込み再現も確率的なため。[docs/testing.md](testing.md)）。
 - [Browser capability Phase 2](progress/phase-browser-2.md) — ADR-0080、task policy からの制限生成・手動登録 credential broker（celeris-credentiald）・WAITING_FOR_AUTH/APPROVAL・Live View 本人限定。main a525af2 追従後の検査 2026-09-29（Rust 2865 passed、GUI 1213 passed）、検証 SHA `9737e9708124` の gate ok=true、verify ok=true / live_ok=false（旧版の SchemaTooNew）。本番未昇格。
@@ -560,43 +496,6 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --lib` → exit 0（合計 1335 passed / 0 failed）。
 - 追加の `cargo test -p task-core -p task-dispatch -p celeris --tests -- --skip instance_handoff` → exit 101（`--skip` は個別 test 名に対するフィルタのため binary を除外せず、上記 `instance_handoff` 5 件で失敗）。
 - `git merge-base --is-ancestor main HEAD` → exit 0。feature code は変更せず、検査記録のみ追記。
-
-## Phase 3 — Claude Code continuation metrics（ADR-0140、2026-10-02）
-
-`ExecutionMetrics` と `GET /metrics/execution` に worker run の fresh / resumed / unknown 別の run 数・総 wall time・入力 token・再探索重複、および WU 別値と fresh fallback 理由別件数を追加した。定義は [continuation-metrics.md](api/v1/continuation-metrics.md)。API schema は `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema::tests::committed_schema_matches_generated` で再生成する。GUI / web の `gen:types` はこの WorkUnit の対象外で未実施。検証: `cargo test -p task-core --lib` 638 passed、`cargo test -p task-api --lib` 75 passed / 2 ignored、schema 一致、`cargo clippy --workspace -- -D warnings` と `cargo fmt --all -- --check` exit 0。着手時の main `95ac1644` との merge-tree は `task-api/query.rs` など 8 ファイルで衝突を検出したが、この WorkUnit の変更ファイルとは重ならない。
-
-### Phase 3 session resume — workspace verification（2026-10-02、run `01M3Y90WZRZTGW8D3QZ1K3M0EE`、ADR `claude-session-resume`）
-
-実装参照を確認: [architecture-map](architecture-map.md) の継続 session / execute continuation / Claude Code adapter の行は `node_session.rs`、`sessions.rs` と `dispatcher/continuation_session.rs`、`claude_code.rs` と ADR-0140 を指す。`ExecutionMetrics` 実体は `crates/task-core/src/execution_metrics.rs`。
-
-- 衝突見積もり: `git merge-tree --write-tree --name-only HEAD main` → exit 1。worktree の `main` は `0d438ec19d9a474c5b82507cefd0d9e63846d0d6`、HEAD は `f4fd17d03444fb1822cfbdaa8140384ed416f885`（main は HEAD の祖先でない）。競合は `crates/task-api/src/query.rs`, `crates/task-api/src/query/tests.rs`, `crates/task-core/src/cluster_job/tests.rs`, `crates/task-core/src/store/migrations.rs`, `crates/task-core/src/store/tests.rs`, `crates/task-ops/src/delivery.rs`, `crates/task-ops/src/delivery/tests.rs`, `docs/PROGRESS.md`, `gui/app/routes/inbox.tsx`。最新 main の確認に使える remote/fetch はこの worktree に無いため、登録された `main` ref を対象にした。
-- `unshare -U -r true` → exit 1（`/proc/self/uid_map: Operation not permitted`）。
-- `cargo test --workspace` → exit 101。`instance_handoff` は 8 件中 3 passed / 5 failed（他のテスト binary はこの失敗までに完了）。失敗名: `starting_the_same_release_twice_exits_three`, `normal_mode_does_not_inject_the_smoke_builtins`, `verify_mode_never_dispatches_and_never_touches_daemon_instances`, `a_newer_release_takes_over_while_the_old_one_finishes_its_run`, `a_stale_heartbeat_promotes_the_standby`。前3件のうち namespace 拒否がログで明示された3件は user namespace 制限、後2件は handoff/standby 待ち失敗。
-- `cargo test -p celeris --test instance_handoff` 単独再実行 → exit 101、同じ5件が再現（namespace 拒否3件、handoff/standby 待ち2件）。
-- `cargo clippy --workspace -- -D warnings` → exit 0。
-- 前回 run の acceptance check `grep -q 'claude-session-resume' docs/PROGRESS.md` は、この節に当該識別子が無かったため exit 1 だった。今回の見出しに ADR slug を明記し、同じ check を再実行して通過を確認した。
-- コード変更なし。workspace test は環境制限により受け入れ条件未達として報告する。
-
-### Phase 3 session resume — instance handoff 待ち時間の安定化（2026-10-02、run `01M3YAZJHT6ERY2RNBFV3HGW5E`）
-
-前回の final review で sandbox 外の `cargo test --workspace` が高負荷により `instance_handoff` の10秒状態待ちを越えて失敗したため、3つの状態待ちを共通の60秒上限に延長した。条件成立時には直ちに抜ける。fake adapter のゲートも最大60秒（1200 × 0.05秒）にし、状態観測後に解放する。drain / idle の終了待ちも60秒に揃えた。理由は試験コードの定数コメントに記した。CPU を焼く負荷再現は行っていない。
-
-- この run の `cargo test -p celeris --test instance_handoff` → exit 101（3 passed / 5 failed、60.20秒）。3件は ADR-0095 worker db guard の user namespace `Operation not permitted`、残り2件は sandbox 上で handoff dispatch / standby 状態待ちが成立しなかった。sandbox は user namespace を拒否するため、試験は daemon を起動できず、待ち時間の大小にかかわらず実行確認には使えない。
-- instance_handoff を含む実行確認は sandbox 外で daemon が走る stage 統合の workspace check と final review の `cargo test --workspace` に委ねる。この sandbox 内の試験失敗は plan_issue としない。
-- `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` はこの run で確認する。変更範囲は `crates/celeris/tests/instance_handoff.rs` と本節のみ。
-
-## Atomic coding task の planner なし直行経路 — Phase 4 統合検証（2026-10-02）
-
-統合後 HEAD `dd4b5a6131b4` の `cargo build --workspace --bins` と `cargo clippy --workspace -- -D warnings` は exit 0。`cargo test --workspace` は exit 101（instance_handoff 8 件中 3 passed / 5 failed）で、`cargo test -p celeris --test instance_handoff` の単独再実行でも同じ5件が失敗した。3件は ADR-0095 worker db guard の user namespace probe が `Operation not permitted`、2件は handoff dispatch/standby 待機 assertion 失敗。結果、未解決事項、再確認提案は [Phase 4 検証記録](progress/phase-direct-route.md) を参照。実装箇所の案内として architecture map の direct route 行を実ファイル・関数名に更新した。
-
-## expected/actual write-set による並列制御と behind 指標（完了 2026-10-02、ADR-0130）
-
-Phase 5 の実装は完了。expected path hint の正規化、Git 差分からの actual write-set 記録、強く重なる同一 repo の run 待機、target からの behind commits/age の観測、長期 stale task の review 前 sync 優先、API/GUI 表示を接続した。実装箇所は [architecture map](architecture-map.md)、仕様は [ADR-0130](adr/0130-write-set-parallelism-and-behind.md)、検証の証拠・衝突見積もり・未解決事項は [Phase 5 検証記録](progress/phase-writeset.md) を参照。
-
-- 証拠: `cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は exit 0。
-- `cargo test --workspace` と全 binary を続行する `cargo test --workspace --no-fail-fast` はともに exit 101。no-fail-fast は24 targets の失敗を検出し、instance handoff / e2e の worker DB guard user namespace 拒否と browser runtime の `unshare: Operation not permitted` / `NoChildPid` を確認。task-core 657、task-dispatch 557、task-ops 398、task-api lib 76 の各試験は通過。失敗 target の全一覧と test ごとの結果は Phase 5 検証記録に記載。
-- 未解決事項: workspace test 全件の合格は sandbox 制約により未確認。最新 main との merge-tree は10ファイルの衝突を予測。
-- 提案: 統合時に衝突を解消し、通常権限の stage 統合または final review で workspace suite を再実行する。
 
 ### ADR 番号振り直し後の最終検証 — 2026-10-02（work unit `verify-land2`）
 
@@ -1545,28 +1444,9 @@ main（ffb87b0d を含む）を `--no-ff` で merge した。merge-tree に衝�
 `cargo test --workspace` → exit 0（全 test バイナリで 0 failed）、
 `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
 
-## review-sync main 取り込みの検証（2026-10-03）
-
-完了日: 2026-10-03。検証 HEAD は `f7b262c521fa6fc9a1ab2c9ee8bb3de867324f04`。`git merge-tree --write-tree HEAD main` は exit 1 で、main `c448d9c77d18eb54396907835efb91c5d0a985e8` との衝突 5 ファイルを検出した。指示に従い main は取り込まず、`docs/progress/review-sync-main.md` の `merged-main` は既に取り込み済みの `a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8` のままにした。
-
-| コマンド | テスト数・結果 | exit |
-|---|---:|---:|
-| `cargo clippy --workspace -- -D warnings` | 警告なし | 0 |
-| `cargo test -p task-core` | 688 passed | 0 |
-| `cargo test -p task-ops` | 451 passed、1 ignored（手動計測） | 0 |
-| `cargo test -p task-api`（run sandbox） | 123 passed、1 failed、2 ignored | 101 |
-| `cargo test -p task-api`（通常権限で再実行） | 439 passed、2 ignored | 0 |
-| `cargo test -p task-dispatch` | 578 passed | 0 |
-
-未解決事項: 新しい main との衝突は `crates/task-worker/src/claude_code/prompt.rs`、`docs/api/v1/api-v1.schema.json`、`docs/architecture-map.md`、`gui/app/celeris/types.ts`、`web/api/generated/schema.json`。run sandbox での task-api の失敗は browser H3 試験の `unshare: Operation not permitted` によるもので、同じコマンドは通常権限では exit 0 だった。検査ログは run の成果物ディレクトリに保存した。
-
 ## 知識整理 run の llm-proxy 401 の修正（ADR-0139）— 2026-10-03
 
 - 原因: 06:58:42〜07:00:49 に verify.sh の staging celeris（新旧 2 つ）が本番の config を読み、`[llm_proxy] listen = 127.0.0.1:18100` に `SO_REUSEPORT` で相乗りしていた（staging の乱数トークン）。langmem の接続の一部が verify 側に振られて 401 になった。失敗・成功の run の `langmem_input.json` の鍵は同じ値で、`celeris-api-token` と一致した（sha256 の先頭で照合）。worker 側の鍵の経路には問題が無かった。
 - 修正: verify は proxy を待ち受けない（D1）。proxy を指す langmem の鍵は `[api]` のトークン（D2）。鍵が渡らない・食い違う設定は `Config::load` で警告する（D3）。鍵は起動 env にも入れる（D4）。
 - 証拠: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p task-worker --lib langmem && cargo test -p celeris config` → exit 0（langmem 14 passed、celeris config 105 passed ほか）。`cargo test -p celeris --lib` → 242 passed。
 - 未解決: この release が `current` になるまで、verify.sh の N-1 は 18100 に bind しうる。その間の verify は知識整理 run と重ならない時間に回す。`[mcp]` の待ち受けも verify で同じ形で相乗りする可能性があり、未確認。
-
-## review-sync の main 再取り込み（2026-10-03）
-
-`c448d9c7` を no-ff merge し、上記の未解決だった 5 ファイルと文書移設による `PROGRESS.md` の衝突を解消した。生成 schema と GUI/web の型は再生成済み。経緯と検証結果は `docs/progress/review-sync-main.md` を参照する。

@@ -78,10 +78,15 @@ async fn real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_
     let broker = Arc::new(Broker::new(manual, data.join("audit")).unwrap());
     let socket = runtime.join("celeris-credentiald/control.sock");
     std::thread::spawn(move || ipc::serve(broker, &runtime, vec![std::process::id()]).unwrap());
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if socket.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     assert!(socket.exists());

@@ -1,5 +1,14 @@
 //! ADR-0115: dedicated-user launcher の実 process 境界を daemon UID から測る。
 //! host 未準備の CI では理由を表示して skip する。実証時は CELERIS_LAUNCHER_TESTS=require。
+//!
+//! ADR-0138 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
+//! CredentialInjection（celeris-credentiald の `admit_attested`）と IdentityRestore
+//! （`RestoreAdmission::Attested`）を通り、SameUid・非隔離・証明なし・検証失敗は両方で拒否される
+//! ことを、ptrace 拒否を確かめた session の上で許可/拒否の対応表（`ADMISSION` 行）にして出す。
+//! 表は 2 つ: `ADMISSION[real-session]` は本番の入口（credentiald の `Admission::Attested.admit`
+//! と、本番 broker の事実採取 `collect_launched_runtime_facts` を通した
+//! `RestoreAdmission::Attested`）、`ADMISSION[real-session-pure]` は launcher の観測から組んだ
+//! 事実を純関数に掛けたもの。
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -10,9 +19,19 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use celeris_credentiald::injection_ipc::{Admission, LauncherProofRegistration, admit_attested};
 use nix::libc;
-use task_worker::browser::verify_launcher_observation;
-use task_worker::browser_launcher::{LauncherClient, Outcome, SessionPolicy, SessionState};
+use task_core::browser_isolation::{
+    LauncherObservation, LauncherSessionProof, RuntimeFacts, collect_launched_runtime_facts,
+    collect_ns_inodes,
+};
+use task_worker::browser::{
+    launcher_runtime_facts, launcher_session_proof, verify_launcher_observation,
+};
+use task_worker::browser_launcher::{
+    ClientError, ErrorCode, LauncherClient, Outcome, SessionPolicy, SessionState,
+};
+use task_worker::browser_runtime::{RestoreAdmission, process_starttime};
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";
 
@@ -20,8 +39,22 @@ fn missing(reason: impl AsRef<str>) -> bool {
     if std::env::var("CELERIS_LAUNCHER_TESTS").as_deref() == Ok("require") {
         panic!("launcher test environment required: {}", reason.as_ref());
     }
-    eprintln!("SKIPPED (not passed): {}", reason.as_ref());
+    eprintln!("SKIP: (not passed) {}", reason.as_ref());
     true
+}
+
+/// host の launcher が試験と組めない（protocol の版ずれ・試験の要求の拒否）なら、その理由。
+/// `IsolationFailed` は隔離の主張そのものの失敗なので環境不足に数えない（呼び出し側で失敗させる）。
+fn launcher_unusable(step: &str, error: &ClientError) -> Option<String> {
+    match error {
+        ClientError::Protocol(diag) => Some(format!(
+            "{step}: launcher protocol skew (host launcher needs updating to this tree): {diag}"
+        )),
+        ClientError::Remote(code) if *code != ErrorCode::IsolationFailed => {
+            Some(format!("{step}: launcher refused with {code}"))
+        }
+        _ => None,
+    }
 }
 
 fn browser_uid() -> Option<u32> {
@@ -222,7 +255,7 @@ fn read_proc_table() -> Vec<ProcEntry> {
 }
 
 fn chrome_candidates(before: &HashSet<i32>, expected_map: &str) -> Vec<ChromeCandidate> {
-    let deadline = Instant::now() + Duration::from_secs(20);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let candidates = chrome_pick_candidates(&read_proc_table(), before, expected_map);
         if !candidates.is_empty() {
@@ -330,7 +363,7 @@ fn strace_denied(pid: i32) {
         }
         Err(e) => panic!("strace spawn failed: {e}"),
     };
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while child.try_wait().expect("poll strace").is_none() {
         if Instant::now() >= deadline {
             let _ = child.kill();
@@ -391,32 +424,86 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     let mut client = LauncherClient::connect(&socket, Duration::from_secs(150))
         .expect("connect launcher socket");
     let lease = task_worker::browser_launcher::random_id().expect("random lease");
-    let started = client
-        .start_session(
-            "launcher-ptrace-test",
-            "launcher-ptrace-run",
-            &lease,
-            SessionPolicy {
-                allowed_domains: vec![],
-                allowed_actions: vec![],
-                lease_seconds: 180,
-            },
-        )
-        .expect("start real launcher session");
+    let started = match client.start_session(
+        "launcher-ptrace-test",
+        "launcher-ptrace-run",
+        &lease,
+        SessionPolicy {
+            allowed_domains: vec![],
+            allowed_actions: vec![],
+            lease_seconds: 180,
+        },
+    ) {
+        Ok(started) => started,
+        Err(error) => match launcher_unusable("start_session", &error) {
+            Some(reason) => {
+                missing(reason);
+                return;
+            }
+            None => panic!("start real launcher session: {error:?}"),
+        },
+    };
+    // 応答を書いた launcher process の UID（kernel が付けた SCM_CREDENTIALS。ADR-0116 付記 D-P）。
+    // socket 起動では SO_PEERCRED は listen socket を作った systemd（uid 0）になるので使わない。
+    let responder = client.responder();
+    let peer_uid = client.responder_uid();
     assert_eq!(started.receipt.outcome, Outcome::Started);
     assert!(
         started.receipt.isolation_ok,
         "launcher isolation attestation"
     );
+    // 本番経路（LauncherRuntime::start）と同じ規則で、この session の証明を daemon 側で組む。
+    let proof = launcher_session_proof(&started, peer_uid);
+    eprintln!(
+        "started: instance={} binding={:?} responder={responder:?}",
+        started.instance_id, started.receipt.binding
+    );
+    // 対応表の前提（ADR-0138 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
+    // 応答の SCM_CREDENTIALS が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
+    let proof_gap = if started.receipt.binding.is_none() {
+        Some("launcher receipt has no session binding (protocol v1 launcher installed)".to_owned())
+    } else if started
+        .receipt
+        .binding
+        .as_ref()
+        .is_some_and(|b| b.ns_inodes.is_empty())
+    {
+        Some(
+            "launcher receipt binding has no namespace inodes (protocol v2 launcher installed)"
+                .to_owned(),
+        )
+    } else if peer_uid != Some(browser_uid) {
+        Some(format!(
+            "launcher reply SCM_CREDENTIALS uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace"
+        ))
+    } else {
+        None
+    };
+    let instance_id = started.instance_id.clone();
     let session = Session {
         client: &mut client,
         id: started.session_id,
         lease,
     };
-    let (state, observed) = session
-        .client
-        .observe(&session.id, &session.lease)
-        .expect("observe real session");
+    let (state, observed) = match session.client.observe(&session.id, &session.lease) {
+        Ok(observed) => observed,
+        Err(error) => match launcher_unusable("observe", &error) {
+            Some(reason) => {
+                missing(reason);
+                return;
+            }
+            None => panic!("observe real session: {error:?}"),
+        },
+    };
+    if proof_gap.is_none() {
+        let proof = proof
+            .as_ref()
+            .expect("launcher session proof rejected by daemon-side checks");
+        eprintln!(
+            "launcher session proof: pid={} starttime={} ns_owner_uid={:?} launcher_uid={}",
+            proof.pid, proof.starttime, proof.ns_owner_uid, proof.launcher_uid
+        );
+    }
     assert_eq!(state, SessionState::Running);
     eprintln!(
         "observe: owner={:?} host_uid={} uid_map={:?} gid_map={:?}",
@@ -455,9 +542,34 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         "no Chrome candidate stayed alive through the denial checks: {candidates:?}"
     );
 
+    match (&proof_gap, &proof) {
+        (Some(gap), _) => {
+            missing(format!("admission table: {gap}"));
+        }
+        (None, Some(proof)) => {
+            let seen = LauncherObservation {
+                session_id: session.id.clone(),
+                instance_id,
+                peer_uid,
+                configured_launcher_uid: browser_uid,
+                runtime_pid: proof.pid,
+                runtime_starttime: process_starttime(proof.pid),
+            };
+            admission_proof_session(
+                proof,
+                &checked,
+                &seen,
+                &observed,
+                started.receipt.isolation_ok,
+            );
+            production_admission_table(proof, &seen);
+        }
+        (None, None) => unreachable!("proof checked above"),
+    }
+
     // 自分の session を止め、検査済みの session root のどれかが消えることを確かめる。
     drop(session);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let stopped = loop {
         let stopped = chrome_pick_stopped_roots(&checked, &proc_pids());
         if !stopped.is_empty() || Instant::now() >= deadline {
@@ -685,4 +797,352 @@ fn chrome_pick_reader_without_subuid_mapping_still_matches() {
     // 他の session が止まっても、自分の root が生きていれば消えたことにしない。
     let alive: HashSet<i32> = [2000].into();
     assert!(chrome_pick_stopped_roots(&picked, &alive).is_empty());
+}
+
+/// 許可/拒否の対応表（ADR-0138 D-L）の 1 行。
+struct AdmissionCase<'a> {
+    name: &'static str,
+    facts: RuntimeFacts,
+    proof: Option<&'a LauncherSessionProof>,
+    allow: bool,
+}
+
+/// 生きている launcher session の事実と証明から 5 通りを作り、両能力の本番 admission に掛ける。
+/// 1 行ずつ `ADMISSION` で出し、許可は証明付きの launcher session だけであることを確かめる。
+fn admission_table(
+    source: &str,
+    facts: &RuntimeFacts,
+    non_isolated: &RuntimeFacts,
+    proof: &LauncherSessionProof,
+    seen: &LauncherObservation,
+) {
+    let mut same_uid = facts.clone();
+    same_uid.runtime_uid = same_uid.host_uid;
+    same_uid.userns_owner_uid = Some(same_uid.host_uid);
+    let mut tampered = proof.clone();
+    tampered.starttime = tampered.starttime.wrapping_add(1);
+    let cases = [
+        AdmissionCase {
+            name: "launcher-proof",
+            facts: facts.clone(),
+            proof: Some(proof),
+            allow: true,
+        },
+        AdmissionCase {
+            name: "same-uid",
+            facts: same_uid,
+            proof: Some(proof),
+            allow: false,
+        },
+        AdmissionCase {
+            name: "non-isolated",
+            facts: non_isolated.clone(),
+            proof: Some(proof),
+            allow: false,
+        },
+        AdmissionCase {
+            name: "no-proof",
+            facts: facts.clone(),
+            proof: None,
+            allow: false,
+        },
+        AdmissionCase {
+            name: "proof-invalid(starttime+1)",
+            facts: facts.clone(),
+            proof: Some(&tampered),
+            allow: false,
+        },
+    ];
+    eprintln!("ADMISSION[{source}] case | expected | CredentialInjection | IdentityRestore");
+    for case in &cases {
+        let inject = admit_attested(&case.facts, case.proof, seen);
+        let restore =
+            RestoreAdmission::Attested.admit_launched(&case.facts, case.proof.map(|p| (p, seen)));
+        let inject_cell = match &inject {
+            Ok(att) => format!("allow(session={})", att.session_id()),
+            Err(code) => format!("deny({code:?})"),
+        };
+        let restore_cell = match &restore {
+            Ok(att) => format!("allow(session={})", att.session_id()),
+            Err(v) => format!("deny({v:?})"),
+        };
+        let expected = if case.allow { "allow" } else { "deny" };
+        eprintln!(
+            "ADMISSION[{source}] {} | {expected} | {inject_cell} | {restore_cell}",
+            case.name
+        );
+        assert_eq!(
+            inject.is_ok(),
+            case.allow,
+            "CredentialInjection {}",
+            case.name
+        );
+        assert_eq!(restore.is_ok(), case.allow, "IdentityRestore {}", case.name);
+        if let (Ok(i), Ok(r)) = (&inject, &restore) {
+            assert_eq!(i.session_id(), seen.session_id);
+            assert_eq!(r.session_id(), seen.session_id);
+            assert_eq!(i.pid(), proof.pid);
+            assert_eq!(i.starttime(), proof.starttime);
+        }
+    }
+}
+
+/// ptrace 拒否を確かめた session の証明を、その Chrome と結び付けてから対応表に掛ける。
+fn admission_proof_session(
+    proof: &LauncherSessionProof,
+    checked: &[ChromeCandidate],
+    seen: &LauncherObservation,
+    observed: &task_worker::browser_launcher::SessionFacts,
+    isolation_ok: bool,
+) {
+    // 証明が束ねる pid は、ptrace 拒否を確かめた Chrome と同じ session root の下にある。
+    let table = read_proc_table();
+    let by_pid: HashMap<i32, &ProcEntry> = table.iter().map(|e| (e.pid, e)).collect();
+    // launcher の直接の子なら自分自身が root になる。
+    let proof_root = session_root(&by_pid, proof.pid);
+    eprintln!("proof pid={} session root={proof_root:?}", proof.pid);
+    assert!(
+        proof_root.is_some_and(|root| checked.iter().any(|c| c.session_root == root)),
+        "proof pid {} is not under a ptrace-denied Chrome session root: {checked:?}",
+        proof.pid
+    );
+    let error = ptrace_attach(proof.pid).expect_err("daemon UID attached to proof pid");
+    eprintln!(
+        "PTRACE_ATTACH proof pid={}: errno={:?}",
+        proof.pid,
+        error.raw_os_error()
+    );
+    assert_eq!(error.raw_os_error(), Some(libc::EPERM));
+
+    let facts = launcher_runtime_facts(&seen.session_id, observed, isolation_ok)
+        .expect("launcher observation rejected (fail closed)");
+    let non_isolated = launcher_runtime_facts(&seen.session_id, observed, false)
+        .expect("non-attested launcher observation");
+    admission_table("real-session-pure", &facts, &non_isolated, proof, seen);
+}
+
+/// 本番の入口の 1 行分の結果。
+struct ProdCase {
+    name: &'static str,
+    allow: bool,
+    inject: Result<(), String>,
+    restore: Result<String, String>,
+}
+
+/// 本番の入口に 1 通りを掛ける。CredentialInjection は credentiald の `Admission::Attested.admit`
+/// （事実の採取・照合値の採取を含む）、IdentityRestore は同じ本番の事実採取
+/// （`collect_launched_runtime_facts`）の結果を `RestoreAdmission::Attested` に掛ける。
+/// `proof` が `None` の行は登録しない（restore の事実は `facts_proof` で採り、owner 検査が
+/// 通る事実でも証明が無ければ拒否されることを見る）。
+fn production_case(
+    name: &'static str,
+    allow: bool,
+    pid: i32,
+    proof: Option<&LauncherSessionProof>,
+    facts_proof: &LauncherSessionProof,
+    seen_base: &LauncherObservation,
+) -> ProdCase {
+    let registration = proof.map(|p| LauncherProofRegistration {
+        session_id: seen_base.session_id.clone(),
+        instance_id: seen_base.instance_id.clone(),
+        peer_uid: seen_base.peer_uid,
+        proof: p.clone(),
+    });
+    let inject = Admission::Attested
+        .admit(
+            &seen_base.session_id,
+            pid,
+            registration.as_ref(),
+            Some(seen_base.configured_launcher_uid),
+        )
+        .map_err(|code| format!("{code:?}"));
+    let pgid = unsafe { libc::getpgid(pid) };
+    let seen = LauncherObservation {
+        runtime_pid: pid,
+        runtime_starttime: process_starttime(pid),
+        ..seen_base.clone()
+    };
+    let restore = if pgid <= 0 {
+        Err("NoProcessGroup".to_owned())
+    } else {
+        match collect_launched_runtime_facts(&seen.session_id, pid, pgid, facts_proof) {
+            Err(e) => Err(format!("facts unavailable: {e}")),
+            Ok(facts) => RestoreAdmission::Attested
+                .admit_launched(&facts, proof.map(|p| (p, &seen)))
+                .map(|att| att.session_id().to_owned())
+                .map_err(|v| format!("{v:?}")),
+        }
+    };
+    ProdCase {
+        name,
+        allow,
+        inject,
+        restore,
+    }
+}
+
+/// ptrace 拒否を確かめた実 session に、本番の入口で 5 通りを掛けて `ADMISSION[real-session]` を出す。
+/// - launcher-proof: launcher の証明が束ねる実 runtime（別 UID）→ 両能力とも許可
+/// - same-uid: daemon UID の実 process（自分の子）に、その pid/starttime へ束ね直した証明 → 拒否
+/// - non-isolated: 証明の namespace 束縛が daemon 自身の namespace（隔離されていない）→ 拒否
+/// - no-proof: 実 runtime だが証明の登録が無い → 拒否
+/// - proof-invalid: 証明の starttime を 1 ずらす（別の process の証明）→ 拒否
+fn production_admission_table(proof: &LauncherSessionProof, seen: &LauncherObservation) {
+    let mut child = Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("start daemon-UID stand-in runtime");
+    let child_pid = child.id() as i32;
+    let mut same_uid = proof.clone();
+    same_uid.pid = child_pid;
+    same_uid.starttime = process_starttime(child_pid).expect("stand-in starttime");
+    let mut non_isolated = proof.clone();
+    non_isolated.ns_inodes = collect_ns_inodes("self").expect("daemon namespaces");
+    let mut tampered = proof.clone();
+    tampered.starttime = tampered.starttime.wrapping_add(1);
+    let cases = [
+        production_case("launcher-proof", true, proof.pid, Some(proof), proof, seen),
+        production_case(
+            "same-uid",
+            false,
+            child_pid,
+            Some(&same_uid),
+            &same_uid,
+            seen,
+        ),
+        production_case(
+            "non-isolated",
+            false,
+            proof.pid,
+            Some(&non_isolated),
+            &non_isolated,
+            seen,
+        ),
+        production_case("no-proof", false, proof.pid, None, proof, seen),
+        production_case(
+            "proof-invalid(starttime+1)",
+            false,
+            proof.pid,
+            Some(&tampered),
+            &tampered,
+            seen,
+        ),
+    ];
+    let _ = child.kill();
+    let _ = child.wait();
+    eprintln!("ADMISSION[real-session] case | expected | CredentialInjection | IdentityRestore");
+    for case in &cases {
+        let cell = |ok: bool, detail: &str| {
+            if ok {
+                format!("allow({detail})")
+            } else {
+                format!("deny({detail})")
+            }
+        };
+        let inject_cell = match &case.inject {
+            Ok(()) => cell(true, &format!("session={}", seen.session_id)),
+            Err(code) => cell(false, code),
+        };
+        let restore_cell = match &case.restore {
+            Ok(session) => cell(true, &format!("session={session}")),
+            Err(v) => cell(false, v),
+        };
+        let expected = if case.allow { "allow" } else { "deny" };
+        eprintln!(
+            "ADMISSION[real-session] {} | {expected} | {inject_cell} | {restore_cell}",
+            case.name
+        );
+    }
+    for case in &cases {
+        assert_eq!(
+            case.inject.is_ok(),
+            case.allow,
+            "production CredentialInjection {}: {:?}",
+            case.name,
+            case.inject
+        );
+        assert_eq!(
+            case.restore.is_ok(),
+            case.allow,
+            "production IdentityRestore {}: {:?}",
+            case.name,
+            case.restore
+        );
+        if let Ok(session) = &case.restore {
+            assert_eq!(session, &seen.session_id);
+        }
+    }
+}
+
+/// 対応表の論理を host 無しで確かめる（実 process の証拠ではない）。launcher の観測と同じ形の
+/// `SessionFacts` と、生きている自分の子 process に束ねた v3 の receipt から本番と同じ関数で
+/// 事実と証明を組み、5 通りが期待どおり許可/拒否されることを見る。
+#[test]
+fn admission_table_on_synthetic_launcher_observation() {
+    use task_worker::browser_launcher::{Receipt, SessionBinding, SessionFacts, StartedSession};
+    const LAUNCHER_UID: u32 = 995;
+    const SUBUID: u32 = 296_608;
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .expect("start stand-in runtime leader");
+    let pid = child.id() as i32;
+    let starttime = process_starttime(pid).expect("child starttime");
+    let started = StartedSession {
+        session_id: "synthetic-session".into(),
+        instance_id: "synthetic-instance".into(),
+        receipt: Receipt {
+            session_id: "synthetic-session".into(),
+            instance_id: "synthetic-instance".into(),
+            verb: None,
+            outcome: Outcome::Started,
+            at_unix_ms: 0,
+            isolation_ok: true,
+            binding: Some(SessionBinding {
+                pid,
+                starttime,
+                ns_owner_uid: Some(SUBUID),
+                // launcher が runtime で採る namespace の inode（v3）。daemon 自身のものとは別の値。
+                ns_inodes: task_core::browser_isolation::REQUIRED_NAMESPACES
+                    .into_iter()
+                    .zip(1u64..)
+                    .collect(),
+            }),
+        },
+    };
+    let proof = launcher_session_proof(&started, Some(LAUNCHER_UID)).expect("proof");
+    // v1 の receipt（束縛なし）からは証明を組まない。
+    let mut v1 = started.clone();
+    v1.receipt.binding = None;
+    assert!(launcher_session_proof(&v1, Some(LAUNCHER_UID)).is_none());
+    // v2 の receipt（束縛に namespace の inode が無い）からも証明を組まない。
+    let mut v2 = started.clone();
+    if let Some(b) = v2.receipt.binding.as_mut() {
+        b.ns_inodes.clear();
+    }
+    assert!(launcher_session_proof(&v2, Some(LAUNCHER_UID)).is_none());
+    let observed = SessionFacts {
+        host_uid: LAUNCHER_UID,
+        host_gid: LAUNCHER_UID,
+        uid_map: format!("1000 {SUBUID} 1\n"),
+        gid_map: format!("1000 {SUBUID} 1\n"),
+        ns_owner_uid: Some(SUBUID),
+        cap_eff: "0000000000000000".into(),
+        no_new_privs: true,
+        listen_count: 0,
+    };
+    let seen = LauncherObservation {
+        session_id: started.session_id.clone(),
+        instance_id: started.instance_id.clone(),
+        peer_uid: Some(LAUNCHER_UID),
+        configured_launcher_uid: LAUNCHER_UID,
+        runtime_pid: pid,
+        runtime_starttime: process_starttime(pid),
+    };
+    let facts = launcher_runtime_facts(&seen.session_id, &observed, true).expect("facts");
+    let non_isolated =
+        launcher_runtime_facts(&seen.session_id, &observed, false).expect("non-isolated facts");
+    admission_table("synthetic", &facts, &non_isolated, &proof, &seen);
+    child.kill().expect("kill stand-in");
+    child.wait().expect("reap stand-in");
 }

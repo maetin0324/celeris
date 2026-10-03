@@ -20,6 +20,8 @@ auto_accept = false               # Phase 5 の受け入れ条件どおり、子
 
 [[providers]]
 id = "claude-code-local"
+kind = "adapter"
+llm_source = "claude_oauth"
 adapter = "claude-code"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 1

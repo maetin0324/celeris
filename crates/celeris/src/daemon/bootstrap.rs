@@ -93,16 +93,32 @@ pub(crate) fn hostname() -> String {
 
 /// ADR-0095 D5: worker の run（adapter・check）から DB のディレクトリを読み取り専用にするガードを
 /// プロセス全体に入れる。入れる前に namespace 付きのプロセスを 1 回起動して DB が書けないことを確かめ、
-/// 確かめられなければ**起動しない**（黙って保護なしで走らない）。`[db] worker_read_only = false` なら外す。
-/// `build_dispatcher`（テストから広く呼ばれる）ではなく `run` だけが呼ぶ。DB は `build_dispatcher` が
-/// 開いて作った後なので存在する。
+/// 確かめられなければ**起動しない**（黙って保護なしで走らない）。`build_dispatcher`（テストから広く
+/// 呼ばれる）ではなく `run` だけが呼ぶ。DB は `build_dispatcher` が開いて作った後なので存在する。
 ///
-/// ADR-0126 A: `worker_read_only = true` のときは、本番 config から守る対象 P を作り、worker run の印と
-/// 起動する daemon の path で判定する（[`worker_db_guard_action`]）。worker run の中で本番 DB・本番 token に
-/// 当たれば probe をせずに拒否する（probe の成否に関わらず起動しない。fail closed）。試験用の一時 DB を
-/// guard の効いた worker run の中で使うときだけ probe をせずに guard を外す（免除）。それ以外は probe する。
+/// ADR-0126 A: 本番 config から守る対象 P を作り、worker run の印と起動する daemon の path で判定する
+/// （[`worker_db_guard_decision`]・[`worker_db_guard_action`]）。worker run の中で本番 DB・本番 token に
+/// 当たれば probe をせずに拒否する（probe の成否に関わらず起動しない。fail closed）。本番に当たらない
+/// daemon は probe をせずに guard を外す（免除。付記2 の 2）。本番に当たる daemon は従来どおり probe する。
+///
+/// ADR-0126 付記2 の 1: `[db] worker_read_only = false`（opt-out）は worker run の**外でだけ**効く。
+/// 印がある中では opt-out でも本番一致を拒否する（[`worker_db_guard_opt_out_action`]）。
 pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError> {
+    let marker = task_worker::db_guard::detect_worker_run_marker();
     if !config.db.worker_read_only {
+        let action = if marker_present(&marker) {
+            worker_db_guard_opt_out_action(
+                &worker_db_guard_protected_set(passwd_home().as_deref()),
+                &worker_db_guard_daemon_paths(config),
+                &marker,
+            )
+        } else {
+            WorkerDbGuardAction::Exempt
+        };
+        if let WorkerDbGuardAction::Refuse(message) = action {
+            tracing::error!(db = %config.db.path.display(), "{message}");
+            return Err(DaemonError::DbGuard(message));
+        }
         tracing::warn!(
             db = %config.db.path.display(),
             "[db] worker_read_only = false: worker runs can write the database and reach the user systemd bus (ADR-0095 D5/D-a opt-out)"
@@ -113,11 +129,51 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
     let decision = worker_db_guard_decision(
         &worker_db_guard_protected_set(passwd_home().as_deref()),
         &worker_db_guard_daemon_paths(config),
-        &task_worker::db_guard::detect_worker_run_marker(),
+        &marker,
     );
-    let guard = enforce_worker_db_guard(config, &decision, probe_worker_db_guard)?;
+    let mut guard = enforce_worker_db_guard(config, &decision, probe_worker_db_guard)?;
+    if guard.is_none() && !marker_present(&marker) {
+        // 付記2 の 2: 本番に当たらない daemon は userns を要求しない。ただし worker run の外（印なし）で
+        // userns が使えるなら guard を入れる（失敗しても起動は止めない）。
+        guard = match probe_worker_db_guard(config) {
+            Ok(guard) => Some(guard),
+            Err(e) => {
+                tracing::warn!(error = %e, "worker db guard unavailable for a non-production daemon; running without it (ADR-0126 addendum 2)");
+                None
+            }
+        };
+    }
     task_worker::db_guard::install(guard);
     Ok(())
+}
+
+/// ADR-0126 付記2 の 1: `[db] worker_read_only = false` のときの動作（純関数。試験から userns なしで呼ぶ）。
+/// 印が無ければ opt-out が効く（`Exempt` = guard なし）。印がある中で本番に当たれば `Refuse`。P が
+/// 決まらない（本番 config が読めない）ときも、opt-out では probe で止める道が無いので `Refuse`（fail closed）。
+/// `Probe` は返さない。
+pub(crate) fn worker_db_guard_opt_out_action(
+    protected: &ProtectedSet,
+    daemon: &DaemonPaths,
+    marker: &WorkerRunMarker,
+) -> WorkerDbGuardAction {
+    if !marker_present(marker) {
+        return WorkerDbGuardAction::Exempt;
+    }
+    match worker_db_guard_action(&worker_db_guard_decision(protected, daemon, marker)) {
+        WorkerDbGuardAction::Exempt => WorkerDbGuardAction::Exempt,
+        refuse @ WorkerDbGuardAction::Refuse(_) => refuse,
+        WorkerDbGuardAction::Probe => {
+            WorkerDbGuardAction::Refuse(opt_out_unknown_message(protected))
+        }
+    }
+}
+
+fn opt_out_unknown_message(protected: &ProtectedSet) -> String {
+    format!(
+        "worker db guard: [db] worker_read_only = false inside a worker run, but whether this daemon uses \
+         the production DB/token cannot be determined ({}; ADR-0126 addendum 2)",
+        protected.unknown_reasons().join("; ")
+    )
 }
 
 /// ADR-0126 A2: 判定から決まる動作。
@@ -125,7 +181,8 @@ pub(crate) fn install_worker_db_guard(config: &Config) -> Result<(), DaemonError
 pub(crate) enum WorkerDbGuardAction {
     /// worker run の中で本番を使う daemon。probe せずにこの文言で起動を止める（token の値は含めない）。
     Refuse(String),
-    /// 試験用の一時 DB を guard の効いた worker run の中で使う。probe せず guard を入れない。
+    /// 本番 DB・本番 token に当たらない daemon（ADR-0126 付記2 の 2）、または worker run の外の opt-out。
+    /// probe せず guard を入れない。
     Exempt,
     /// 従来どおり userns の probe をしてから guard を入れる。
     Probe,
@@ -163,7 +220,7 @@ pub(crate) fn enforce_worker_db_guard(
         WorkerDbGuardAction::Exempt => {
             tracing::warn!(
                 db = %config.db.path.display(),
-                "test DB inside a guarded worker run; worker db guard not installed (ADR-0126)"
+                "the daemon does not use the production DB/token; worker db guard not installed (ADR-0126)"
             );
             Ok(None)
         }
@@ -178,7 +235,10 @@ pub(crate) fn enforce_worker_db_guard(
 
 /// ADR-0095 D5: namespace 付きのプロセスで DB が書けないことを確かめた guard を返す。
 fn probe_worker_db_guard(config: &Config) -> Result<DbGuard, DaemonError> {
-    let guard = DbGuard::new(&config.db.path).map_err(|e| DaemonError::DbGuard(e.to_string()))?;
+    let guard = DbGuard::new(&config.db.path)
+        .map_err(|e| DaemonError::DbGuard(e.to_string()))?
+        .with_releases_dir(config.selfdeploy.releases_dir.clone())
+        .with_hot_mount(config.storage.hot_mount.clone());
     task_worker::db_guard::probe(&guard).map_err(|e| {
         DaemonError::DbGuard(format!(
             "cannot make {} read-only for worker runs ({e}; ADR-0095). Worker runs must not be able to \
@@ -196,13 +256,9 @@ fn probe_worker_db_guard(config: &Config) -> Result<DbGuard, DaemonError> {
 }
 
 /// ADR-0126 A2: DB を開く（`build_dispatcher`）前の拒否。worker run の中で本番 DB・本番 token に当たる
-/// daemon は DB に触れる前に止める。DB がまだ無いときは判定関数が path を解けないので、印の path
-/// （読み取り専用。そこに試験用 DB は作れない）の配下かだけを見る。残りは DB を作った後の
-/// [`install_worker_db_guard`] が判定する。
+/// daemon は DB に触れる前に止める。付記2 の 1: `[db] worker_read_only = false` でも止める（opt-out は
+/// worker run の外でだけ効く）。残りは DB を作った後の [`install_worker_db_guard`] が判定する。
 pub(crate) fn refuse_production_db_in_worker_run(config: &Config) -> Result<(), DaemonError> {
-    if !config.db.worker_read_only {
-        return Ok(());
-    }
     let marker = task_worker::db_guard::detect_worker_run_marker();
     match worker_db_guard_precheck(passwd_home().as_deref(), config, &marker) {
         WorkerDbGuardAction::Refuse(message) => {
@@ -214,7 +270,11 @@ pub(crate) fn refuse_production_db_in_worker_run(config: &Config) -> Result<(), 
 }
 
 /// [`refuse_production_db_in_worker_run`] の判定部分（試験から userns なしで呼ぶ）。`Refuse` 以外は
-/// 「ここでは止めない」の意味しかない（`Probe` を返す）。
+/// 「ここでは止めない」の意味しかない（`Probe` を返す）。`worker_read_only` の値に関わらず判定する。
+///
+/// DB がまだ無いときは判定関数が DB の path を解けないので、(a) 印の path（読み取り専用。そこに試験用 DB
+/// は作れない）の配下か、(b) DB を置くディレクトリ（存在する祖先まで解く）と token を、DB の代わりに
+/// 本番と重ならない `/dev/null` を置いた [`worker_db_guard_decision`] で見る。
 pub(crate) fn worker_db_guard_precheck(
     home: Option<&Path>,
     config: &Config,
@@ -223,29 +283,48 @@ pub(crate) fn worker_db_guard_precheck(
     if !marker_present(marker) {
         return WorkerDbGuardAction::Probe;
     }
-    let daemon = worker_db_guard_daemon_paths(config);
-    if std::fs::symlink_metadata(&daemon.db).is_ok() {
-        let decision =
-            worker_db_guard_decision(&worker_db_guard_protected_set(home), &daemon, marker);
-        return match worker_db_guard_action(&decision) {
-            refuse @ WorkerDbGuardAction::Refuse(_) => refuse,
-            _ => WorkerDbGuardAction::Probe,
+    let mut daemon = worker_db_guard_daemon_paths(config);
+    if std::fs::symlink_metadata(&daemon.db).is_err() {
+        let resolved = ResolvedPath::resolve_lenient(&daemon.db);
+        if let WorkerRunMarker::ReadOnly(guarded) = marker {
+            let under = resolved
+                .as_ref()
+                .map(|db| db.path.starts_with(guarded))
+                // 解けない path は判定できないので止める（fail closed）。
+                .unwrap_or(true);
+            if under {
+                return WorkerDbGuardAction::Refuse(format!(
+                    "{PRODUCTION_IN_WORKER_RUN}: db {} is under the guarded directory {}",
+                    daemon.db.display(),
+                    guarded.display()
+                ));
+            }
+        }
+        let Some(dir) = resolved
+            .ok()
+            .and_then(|db| db.path.parent().map(Path::to_path_buf))
+        else {
+            return WorkerDbGuardAction::Refuse(format!(
+                "{PRODUCTION_IN_WORKER_RUN}: cannot resolve the daemon db {}",
+                daemon.db.display()
+            ));
+        };
+        daemon = DaemonPaths {
+            db: PathBuf::from("/dev/null"),
+            state_dir: Some(dir),
+            token_file: daemon.token_file,
         };
     }
-    if let WorkerRunMarker::ReadOnly(guarded) = marker {
-        let under = ResolvedPath::resolve_lenient(&daemon.db)
-            .map(|db| db.path.starts_with(guarded))
-            // 解けない path は判定できないので止める（fail closed）。
-            .unwrap_or(true);
-        if under {
-            return WorkerDbGuardAction::Refuse(format!(
-                "{PRODUCTION_IN_WORKER_RUN}: db {} is under the guarded directory {}",
-                daemon.db.display(),
-                guarded.display()
-            ));
+    let protected = worker_db_guard_protected_set(home);
+    let decision = worker_db_guard_decision(&protected, &daemon, marker);
+    match worker_db_guard_action(&decision) {
+        refuse @ WorkerDbGuardAction::Refuse(_) => refuse,
+        // opt-out では DB を作った後の probe で止める道が無いので、P が決まらなければここで止める。
+        _ if !config.db.worker_read_only && !protected.unknown_reasons().is_empty() => {
+            WorkerDbGuardAction::Refuse(opt_out_unknown_message(&protected))
         }
+        _ => WorkerDbGuardAction::Probe,
     }
-    WorkerDbGuardAction::Probe
 }
 
 fn marker_present(marker: &WorkerRunMarker) -> bool {
@@ -360,12 +439,25 @@ pub(crate) fn worker_db_guard_daemon_paths(config: &Config) -> DaemonPaths {
 }
 
 /// ADR-0126 A2/A3: `task_worker::db_guard` の判定関数に渡す（試験から userns なしで呼ぶ）。
+///
+/// 付記2 の 2: 判定関数が `RequireUserns` を返しても、P が決まっていて（`unknown` が空）印が読み取り専用で
+/// 裏付けられた場合でないなら（= 本番に当たらないことが確かめられた上で、印が無い・裏付けられないだけ）
+/// `Exempt` にする。本番に当たる daemon（`RefuseProduction`）と P が決まらないときは変えない。
 pub(crate) fn worker_db_guard_decision(
     protected: &ProtectedSet,
     daemon: &DaemonPaths,
     marker: &WorkerRunMarker,
 ) -> GuardDecision {
-    task_worker::db_guard::judge_worker_db_guard(protected, daemon, marker)
+    match task_worker::db_guard::judge_worker_db_guard(protected, daemon, marker) {
+        GuardDecision::RequireUserns { reason }
+            if protected.unknown_reasons().is_empty()
+                && !matches!(marker, WorkerRunMarker::ReadOnly(_)) =>
+        {
+            tracing::debug!(%reason, "worker db guard: not the production DB/token; exempt (ADR-0126 addendum 2)");
+            GuardDecision::Exempt
+        }
+        decision => decision,
+    }
 }
 
 #[cfg(test)]

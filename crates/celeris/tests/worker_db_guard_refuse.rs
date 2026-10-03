@@ -4,6 +4,9 @@
 //! 1. 本物の印がある（worker sandbox の中）→ db を印の path 配下にした config でそのまま確かめる。
 //! 2. 印が無い → 1 行理由を出して skip。ただし `CELERIS_USERNS_TESTS=1` なら `unshare -U -r -m` で
 //!    読み取り専用の印を作って同じことを確かめる（作れなければ fail）。
+//!
+//! ADR-0126 付記2 の 1: `[db] worker_read_only = false`（opt-out）の config でも同じく止まる
+//! （`worker_db_guard_refuse_with_opt_out`。skip の規則は同じ）。
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -13,14 +16,14 @@ use task_worker::db_guard::{
 };
 
 /// 試験用 config（偽のアダプタだけ。外部に出ない）。`db` は絶対 path で渡す。
-fn write_config(dir: &Path, db: &Path) -> PathBuf {
+/// `worker_read_only = false` は `[db]` テーブルの opt-out（ADR-0095 D5/D-a）。
+fn write_config_with(dir: &Path, db: &Path, worker_read_only: bool) -> PathBuf {
     std::fs::create_dir_all(dir.join("ws")).unwrap();
     let path = dir.join("config.toml");
     std::fs::write(
         &path,
         format!(
-            r#"db = "{}"
-workspace_root = "ws"
+            r#"workspace_root = "ws"
 tick_ms = 100
 
 [adapters.fake]
@@ -29,6 +32,10 @@ command = ["true"]
 [[providers]]
 id = "p1"
 adapter = "fake"
+
+[db]
+path = "{}"
+worker_read_only = {worker_read_only}
 "#,
             db.display()
         ),
@@ -73,15 +80,27 @@ fn celeris_args(config: &Path) -> Vec<String> {
 
 #[test]
 fn worker_db_guard_refuse_real_binary_inside_worker_run() {
+    run_refuse_case(true);
+}
+
+/// ADR-0126 付記2 の 1: `worker_read_only = false` の config・印 `ReadOnly`・印の配下の DB でも、
+/// celeris は非 0 で終わり DB を作らない（opt-out は worker run の外でだけ効く）。
+#[test]
+fn worker_db_guard_refuse_with_opt_out() {
+    run_refuse_case(false);
+}
+
+fn run_refuse_case(worker_read_only: bool) {
     match verify_worker_run_marker(std::env::var_os(WORKER_DB_GUARD_ENV)) {
-        WorkerRunMarker::ReadOnly(guarded) => inside_real_sandbox(&guarded),
+        WorkerRunMarker::ReadOnly(guarded) => inside_real_sandbox(&guarded, worker_read_only),
         other => {
             if std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1") {
-                inside_unshare();
+                inside_unshare(worker_read_only);
             } else {
                 eprintln!(
-                    "SKIPPED (worker_db_guard_refuse): no read-only {WORKER_DB_GUARD_ENV} marker ({other:?}); \
-                     run inside a worker sandbox or set CELERIS_USERNS_TESTS=1 (ADR-0126)"
+                    "SKIPPED (worker_db_guard_refuse, worker_read_only = {worker_read_only}): no read-only \
+                     {WORKER_DB_GUARD_ENV} marker ({other:?}); run inside a worker sandbox or set \
+                     CELERIS_USERNS_TESTS=1 (ADR-0126)"
                 );
             }
         }
@@ -89,14 +108,14 @@ fn worker_db_guard_refuse_real_binary_inside_worker_run() {
 }
 
 /// worker sandbox の中: 印（本番 DB の dir、読み取り専用）の配下を db にした daemon を起こす。
-fn inside_real_sandbox(guarded: &Path) {
+fn inside_real_sandbox(guarded: &Path, worker_read_only: bool) {
     let tmp = tempfile::tempdir().unwrap();
     // まだ無い DB（読み取り専用の dir には作れない）。
     let db = guarded.join(format!(
         "worker-db-guard-refuse-{}.sqlite3",
         std::process::id()
     ));
-    let config = write_config(tmp.path(), &db);
+    let config = write_config_with(tmp.path(), &db, worker_read_only);
     let out = Command::new(env!("CARGO_BIN_EXE_celeris"))
         .args(celeris_args(&config))
         .output()
@@ -106,7 +125,7 @@ fn inside_real_sandbox(guarded: &Path) {
     // 既にある本番 DB（DB を開く前に止まる。印の dir は読み取り専用なので書かれもしない）。
     let prod = guarded.join("celeris.sqlite3");
     if prod.exists() {
-        let config = write_config(tmp.path(), &prod);
+        let config = write_config_with(tmp.path(), &prod, worker_read_only);
         let out = Command::new(env!("CARGO_BIN_EXE_celeris"))
             .args(celeris_args(&config))
             .output()
@@ -117,7 +136,7 @@ fn inside_real_sandbox(guarded: &Path) {
 
 /// `CELERIS_USERNS_TESTS=1`: userns + mount ns で一時 dir を読み取り専用にした印を作り、その配下の DB で起こす。
 /// userns の中では元の mount の nosuid・nodev・noexec を外せない（locked）ので、付けて remount し直す。
-fn inside_unshare() {
+fn inside_unshare(worker_read_only: bool) {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path().canonicalize().unwrap();
     let guarded = root.join("guarded");
@@ -130,7 +149,7 @@ fn inside_unshare() {
         ("existing db under the marker", &existing, root.join("a")),
         ("new db under the marker", &missing, root.join("b")),
     ] {
-        let config = write_config(&dir, db);
+        let config = write_config_with(&dir, db, worker_read_only);
         let args = celeris_args(&config).join(" ");
         let script = format!(
             "set -e; mount --bind '{g}' '{g}'; mount -o remount,ro,bind '{g}' '{g}' 2>/dev/null \

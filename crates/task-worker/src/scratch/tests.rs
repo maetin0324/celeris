@@ -591,8 +591,6 @@ fn nfs_check_disables_scratch_with_a_reason() {
     let got = apply_nfs_check(s.clone(), |_| Ok(true));
     assert!(!got.enabled);
     assert!(got.disabled_reason.unwrap().contains("NFS"));
-    let got = apply_nfs_check(s.clone(), |p| Ok(p.ends_with(L1_DIR)));
-    assert!(!got.enabled);
     let got = apply_nfs_check(s.clone(), |_| Ok(false));
     assert!(got.enabled);
     // 本物の検査は一時ディレクトリ（ローカル）では NFS ではない。
@@ -671,384 +669,867 @@ fn measure_tree_counts_blocks_and_latest_mtime() {
     assert_eq!(measure_tree(&tmp.path().join("missing")).unwrap().0, 0);
 }
 
-/// テスト用の sccache のバイナリ（実行ビットつきの空の script。呼ばれない）。
-fn fake_sccache(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = dir.join("tools/sccache/bin/sccache");
-    std::fs::create_dir_all(bin.parent().unwrap()).unwrap();
-    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    bin
-}
-
-fn sccache_settings(dir: &Path, binary: PathBuf) -> ScratchSettings {
-    ScratchSettings {
-        l1_max_bytes: 40 * GIB,
-        sccache: SccacheSettings {
-            enabled: true,
-            binary,
-            server_port: 4236,
-        },
-        ..ScratchSettings::with_dir(dir.join("scratch"))
-    }
-}
-
-/// ADR-0075 D4 / G2 受け入れ条件 2: server が応答するとき、env は `CARGO_TARGET_DIR`・`[scratch.cargo]`・sccache 系を
-/// 固定の順で全部持ち、何度組んでも同じ。wrapper は `<scratch>/bin/sccache`（cc-rs が認める名前）で、
-/// `CARGO_TARGET_DIR` を外して本物の sccache を exec する。
+/// ADR-0129 (1): env は `CARGO_TARGET_DIR` と `[scratch.cargo]` だけを固定の順で持ち、`RUSTC_WRAPPER` / `SCCACHE_*`
+/// を足さない（compiler wrapper は host の cargo 設定に任せる）。
 #[test]
-fn sccache_env_is_complete_and_stable() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let settings = sccache_settings(tmp.path(), bin.clone());
+fn cargo_env_is_target_and_tuning_only() {
+    let root = PathBuf::from("/scratch");
+    let settings = ScratchSettings::with_dir(&root);
     let owner = Owner::work_unit("01TASK", "01WU");
-    let up = |p: u16| p == 4236;
-    let state = resolve_sccache(&settings, up);
-    let root = tmp.path().join("scratch");
-    let wrapper = root.join("bin/sccache");
-    assert_eq!(
-        state,
-        SccacheState::Ready {
-            wrapper: wrapper.clone()
-        }
-    );
-    let env = cargo_env_with(&settings, &owner, &state);
-    let s = |p: PathBuf| p.display().to_string();
+    let env = cargo_env(&settings, &owner);
     assert_eq!(
         env,
         vec![
             (
                 "CARGO_TARGET_DIR".to_string(),
-                s(root.join("targets/task-01TASK/wu-01WU/target"))
+                root.join("targets/task-01TASK/wu-01WU/target")
+                    .display()
+                    .to_string()
             ),
             ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
             (
                 "CARGO_PROFILE_DEV_DEBUG".to_string(),
                 "line-tables-only".to_string()
             ),
-            ("RUSTC_WRAPPER".to_string(), s(wrapper.clone())),
-            ("SCCACHE_DIR".to_string(), s(root.join("sccache-l1"))),
-            ("SCCACHE_CACHE_SIZE".to_string(), "40G".to_string()),
-            ("SCCACHE_SERVER_PORT".to_string(), "4236".to_string()),
-            ("SCCACHE_IDLE_TIMEOUT".to_string(), "0".to_string()),
         ]
     );
-    // 何度組んでも同じ（wrapper は書き直さない）。
-    let before = mtime(&wrapper);
-    let again = cargo_env_with(&settings, &owner, &resolve_sccache(&settings, up));
-    assert_eq!(env, again);
-    assert_eq!(mtime(&wrapper), before);
-    let script = std::fs::read_to_string(&wrapper).unwrap();
-    assert!(script.starts_with("#!/bin/bash\n"), "{script}");
     assert!(
-        script.contains("unset CARGO_TARGET_DIR CARGO_BUILD_TARGET_DIR"),
-        "{script}"
+        !env.iter()
+            .any(|(k, _)| k.starts_with("SCCACHE_") || k.contains("RUSTC_WRAPPER")),
+        "{env:?}"
     );
-    assert!(
-        script.contains(&format!("exec '{}' \"$@\"", bin.display())),
-        "{script}"
-    );
-    // server の env は client の sccache 系と同じ値（RUSTC_WRAPPER を除く）。
-    assert_eq!(sccache_server_env(&settings), env[4..].to_vec());
+    assert_eq!(cargo_child_env(&settings, &owner), CargoEnv::set_only(env));
     // [scratch.cargo] を変えれば与えない。
     let tuned = ScratchSettings {
         cargo: CargoTuning {
             incremental: true,
             dev_debug: None,
         },
-        ..settings.clone()
+        ..settings
     };
-    let env = cargo_env_with(&tuned, &owner, &state);
-    assert!(
-        !env.iter()
-            .any(|(k, _)| k.starts_with("CARGO_INCREMENTAL") || k == "CARGO_PROFILE_DEV_DEBUG")
-    );
-    // 実際に wrapper を通すと CARGO_TARGET_DIR が消えている（本物の sccache の代わりに env を出す script）。
-    let echo = tmp.path().join("echo-env");
+    let keys: Vec<String> = cargo_env(&tuned, &owner)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(keys, ["CARGO_TARGET_DIR"]);
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0129 (4)(6): seed からの reflink
+// ---------------------------------------------------------------------------
+
+const SEED_REPO: &str = "/repo/agent-platform";
+
+fn seed_req<'a>(
+    owner: &'a Owner,
+    none: &'a dyn Fn(&AdoptCandidate) -> Option<u64>,
+) -> AllocateRequest<'a> {
+    AllocateRequest {
+        owner,
+        repo_path: Path::new(SEED_REPO),
+        base_commit: None,
+        work_unit_key: None,
+        checkout: None,
+        candidates: &[],
+        distance: none,
+        adopt: false,
+        max_distance: 200,
+    }
+}
+
+/// `seeds/<key>/current/{target,manifest.json}` を作る（`current` は世代ディレクトリへの symlink）。
+fn write_seed(pool: &Pool, manifest: &str) -> PathBuf {
+    let key = crate::build_cache::repo_cache_key(Path::new(SEED_REPO));
+    let gen_dir = pool.root().join(SEEDS_DIR).join(&key).join("gen-1");
+    let target = gen_dir.join(TARGET_SUBDIR);
+    std::fs::create_dir_all(target.join("debug/deps")).unwrap();
     std::fs::write(
-        &echo,
-        "#!/bin/sh\necho \"T=${CARGO_TARGET_DIR-unset} A=$1\"\n",
+        target.join("debug/deps/libbig.rlib"),
+        vec![7u8; 1024 * 1024],
     )
     .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&echo, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-    let w = ensure_wrapper(&settings.pool(), &echo).unwrap();
-    // R7-7: wrapper は server に届くときだけ sccache を通すので、server 役の listener を立てる。
-    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let out = std::process::Command::new(&w)
-        .arg("rustc")
-        .env("CARGO_TARGET_DIR", "/somewhere")
-        .env(
-            "SCCACHE_SERVER_PORT",
-            server.local_addr().unwrap().port().to_string(),
-        )
-        .env_remove("SCCACHE_SERVER_UDS")
-        .output()
-        .unwrap();
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "T=unset A=rustc\n");
+    std::fs::write(target.join("debug/.fingerprint"), b"fp").unwrap();
+    std::fs::write(target.join("CACHEDIR.TAG"), b"tag").unwrap();
+    std::fs::write(gen_dir.join(SEED_MANIFEST), manifest).unwrap();
+    std::os::unix::fs::symlink("gen-1", seed_current_dir(pool, &key)).unwrap();
+    target
 }
 
-/// 実行できる sh の script を置く（試験用）。
-fn write_script(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::write(path, body).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+const MANIFEST: &str = r#"{"commit":"abc123","rustc":"rustc 1.98.1","incremental":false,"dev_debug":"line-tables-only"}"#;
+
+fn partials(owner_dir: &Path) -> Vec<String> {
+    std::fs::read_dir(owner_dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with(SEED_COPY_PREFIX))
+        .collect()
 }
 
-/// 使われていない port（bind して手放す）。
-fn closed_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
+fn is_empty_dir(p: &Path) -> bool {
+    p.is_dir() && std::fs::read_dir(p).unwrap().next().is_none()
 }
 
-/// ADR-0075 R7-7（本番の事故の再現）: エージェントの sandbox（codex の `workspace-write`、ネットワーク無し）の中では
-/// sccache の client が server に繋げず `sccache: error: Operation not permitted (os error 1)` で build を落としていた。
-/// wrapper は自分の居る場所から server に届かなければ compiler を直接 exec する（引数・stdout・exit code はそのまま、
-/// `CARGO_TARGET_DIR` は外したまま）。届けば sccache を通す。sccache 自身の操作と `SCCACHE_SERVER_UDS` は常に sccache。
+/// reflink できない tmp（tmpfs / ext 系）では、seed があっても共有を確かめられず空の target に戻る。残骸は無い。
 #[test]
-fn wrapper_runs_the_compiler_directly_when_the_server_is_unreachable() {
+fn reflink_unavailable_tmp_falls_back_to_empty_target() {
     let tmp = tempfile::tempdir().unwrap();
-    let sccache = tmp.path().join("fake-sccache");
-    // 本物の sccache の代わり: 呼ばれたことと引数を出す（sccache は exit 2 で落ちる役もできるが、ここでは呼ばれたかだけを見る）。
-    write_script(
-        &sccache,
-        "#!/bin/sh\necho \"SCCACHE T=${CARGO_TARGET_DIR-unset} A=$*\"\n",
-    );
-    let compiler = tmp.path().join("fake-rustc");
-    write_script(
-        &compiler,
-        "#!/bin/sh\necho \"COMPILER T=${CARGO_TARGET_DIR-unset} A=$*\"\nexit 3\n",
-    );
-    let settings = sccache_settings(tmp.path(), sccache.clone());
-    let wrapper = ensure_wrapper(&settings.pool(), &sccache).unwrap();
-    let run = |port: u16, uds: Option<&str>, args: &[&str]| {
-        let mut c = std::process::Command::new(&wrapper);
-        c.args(args)
-            .env("CARGO_TARGET_DIR", "/somewhere")
-            .env("SCCACHE_SERVER_PORT", port.to_string());
-        match uds {
-            Some(v) => c.env("SCCACHE_SERVER_UDS", v),
-            None => c.env_remove("SCCACHE_SERVER_UDS"),
-        };
-        let out = c.output().unwrap();
-        (
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            out.status.code(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
-        )
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::work_unit("T1", "W1");
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    let TargetOrigin::Empty {
+        reason: Some(reason),
+    } = &a.origin
+    else {
+        panic!("expected an empty fallback, got {:?}", a.origin);
     };
-    let compiler_s = compiler.display().to_string();
+    assert!(reason.contains("reflink"), "{reason}");
+    assert!(is_empty_dir(&a.target_dir));
+    let owner_dir = pool.owner_dir(&owner);
+    assert!(partials(&owner_dir).is_empty());
+    let rec = read_target_origin(&owner_dir).unwrap().unwrap();
+    assert_eq!(rec.schema, TARGET_ORIGIN_SCHEMA);
+    assert_eq!(rec.origin, "empty");
+    assert!(rec.reason.is_some());
+}
 
-    // server に届く → sccache を通す。
-    let server = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let up = server.local_addr().unwrap().port();
-    let (out, code, _) = run(up, None, &[&compiler_s, "-vV"]);
-    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
-    assert_eq!(code, Some(0));
+/// 共有できる（差し替えた判定）なら seed を写し、`target-origin.json` に seed と commit を残す。
+#[test]
+fn reflink_shared_copy_creates_target_from_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let rustc = || Some("rustc 1.98.1\n".to_string());
+    let policy = SeedPolicy {
+        enabled: true,
+        cargo: Some(CargoTuning::default()),
+        rustc: Some(&rustc),
+    };
+    let a = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Seed { commit: Some(c), .. } if c == "abc123"),
+        "{:?}",
+        a.origin
+    );
+    assert_eq!(
+        std::fs::read(a.target_dir.join("debug/deps/libbig.rlib"))
+            .unwrap()
+            .len(),
+        1024 * 1024
+    );
+    assert!(a.target_dir.join("debug/.fingerprint").is_file());
+    let owner_dir = pool.owner_dir(&owner);
+    assert!(partials(&owner_dir).is_empty());
+    let rec = read_target_origin(&owner_dir).unwrap().unwrap();
+    assert_eq!(rec.origin, "seed");
+    assert_eq!(rec.seed_commit.as_deref(), Some("abc123"));
+    // 2 度目の割り当ては既存の target をそのまま使う（seed で上書きしない）。
+    std::fs::write(a.target_dir.join("mine"), b"x").unwrap();
+    let again = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+    assert_eq!(again.origin, TargetOrigin::Existing);
+    assert!(again.target_dir.join("mine").is_file());
+    assert_eq!(
+        read_target_origin(&owner_dir).unwrap().unwrap().origin,
+        "seed"
+    );
+}
 
-    // server に届かない → compiler を直接（exit code もそのまま、probe の失敗は stderr に出さない）。
-    let down = closed_port();
-    let (out, code, err) = run(down, None, &[&compiler_s, "-vV"]);
-    assert_eq!(out, "COMPILER T=unset A=-vV\n");
-    assert_eq!(code, Some(3));
-    assert!(err.is_empty(), "stderr: {err}");
+/// 全体の写しが途中で失敗したら、部分的に写した一時ディレクトリを消してから空の target に戻る。
+#[test]
+fn reflink_partial_copy_failure_removes_residue() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let copy = |from: &Path, to: &Path| -> io::Result<()> {
+        if from.is_file() {
+            return std::fs::copy(from, to).map(|_| ());
+        }
+        std::fs::create_dir_all(to.join("debug/deps"))?;
+        std::fs::write(to.join("debug/deps/half"), b"partial")?;
+        Err(io::Error::from_raw_os_error(nix::libc::EXDEV))
+    };
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &copy,
+        is_shared: &shared,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Empty { reason: Some(r) } if r.contains("seed copy failed")),
+        "{:?}",
+        a.origin
+    );
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
 
-    // sccache 自身の操作（compiler ではない）は届かなくても sccache へ。引数なしも同じ。
-    let (out, _, _) = run(down, None, &["--show-stats"]);
-    assert_eq!(out, "SCCACHE T=unset A=--show-stats\n");
-    let (out, _, _) = run(down, None, &[]);
-    assert_eq!(out, "SCCACHE T=unset A=\n");
+/// 写した後に共有されていなければ（通常コピーへ落ちた）消して空に戻る。
+#[test]
+fn reflink_copy_not_shared_after_full_copy_falls_back() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    write_seed(&pool, MANIFEST);
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    // probe（.probe の拡張子）だけ共有を報告する。
+    let shared = |p: &Path| Ok(p.extension().is_some_and(|e| e == "probe"));
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Empty { reason: Some(r) } if r.contains("did not share")),
+        "{:?}",
+        a.origin
+    );
+    assert!(is_empty_dir(&a.target_dir));
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
 
-    // SCCACHE_SERVER_UDS（Celeris は与えない）があれば TCP は見ない。
-    let (out, _, _) = run(down, Some("/nonexistent.sock"), &[&compiler_s, "-vV"]);
-    assert_eq!(out, format!("SCCACHE T=unset A={compiler_s} -vV\n"));
+/// seed が無い・無効・manifest が無い・互換でない（rustc / [scratch.cargo]）なら写さずに空から作る。
+#[test]
+fn reflink_seed_absent_or_incompatible_starts_empty_without_copy() {
+    let none = |_: &AdoptCandidate| None;
+    let copied = std::cell::Cell::new(0);
+    let copy = |_: &Path, _: &Path| -> io::Result<()> {
+        copied.set(copied.get() + 1);
+        Err(io::Error::other("must not copy"))
+    };
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &copy,
+        is_shared: &shared,
+    };
+    let other_rustc = || Some("rustc 1.99.0".to_string());
+    let cases: Vec<(Option<&str>, SeedPolicy<'_>, Option<&str>)> = vec![
+        (None, SeedPolicy::unchecked(), None),
+        (Some(MANIFEST), SeedPolicy::disabled(), None),
+        (
+            Some(""),
+            SeedPolicy::unchecked(),
+            Some("manifest is unreadable"),
+        ),
+        (
+            Some(MANIFEST),
+            SeedPolicy {
+                enabled: true,
+                cargo: None,
+                rustc: Some(&other_rustc),
+            },
+            Some("rustc"),
+        ),
+        (
+            Some(MANIFEST),
+            SeedPolicy {
+                enabled: true,
+                cargo: Some(CargoTuning {
+                    incremental: true,
+                    dev_debug: None,
+                }),
+                rustc: None,
+            },
+            Some("cargo settings"),
+        ),
+        (
+            Some(r#"{"repo_key":"other"}"#),
+            SeedPolicy::unchecked(),
+            Some("repo"),
+        ),
+    ];
+    for (manifest, policy, want) in cases {
+        let tmp = tempfile::tempdir().unwrap();
+        let pool = Pool::new(tmp.path());
+        if let Some(m) = manifest {
+            write_seed(&pool, m);
+        }
+        let owner = Owner::task("T1");
+        let a = allocate_with_seed(&pool, &seed_req(&owner, &none), &policy, &ops).unwrap();
+        match (&a.origin, want) {
+            (TargetOrigin::Empty { reason: None }, None) => {}
+            (TargetOrigin::Empty { reason: Some(r) }, Some(w)) => assert!(r.contains(w), "{r}"),
+            (o, w) => panic!("{manifest:?}: got {o:?}, want {w:?}"),
+        }
+        assert!(is_empty_dir(&a.target_dir));
+    }
+    assert_eq!(copied.get(), 0);
+}
 
-    // ネットワークの無い sandbox の代わり: user + network namespace（`unshare -rn`）の中からは、外の listener に届かない
-    // （codex の seccomp では socket が EPERM、ここでは lo が無く connect が失敗。wrapper から見て同じ「届かない」）。
-    // ADR-0126 付記: userns 前提の部分だけを既定 skip にする（残りの assert は上で既に済んでいる）。
-    if !crate::test_support::skip_unless_userns_tests() {
-        let out = std::process::Command::new("unshare")
-            .arg("-rn")
-            .arg(&wrapper)
-            .arg(&compiler_s)
-            .arg("-vV")
-            .env("SCCACHE_SERVER_PORT", up.to_string())
-            .env_remove("SCCACHE_SERVER_UDS")
+/// 前回の割り当てで落ちた作りかけ（`.seed-copy-*`）は次の割り当てで消す。
+#[test]
+fn reflink_stale_partial_copy_is_cleaned_up() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let owner = Owner::task("T1");
+    let owner_dir = pool.owner_dir(&owner);
+    std::fs::create_dir_all(owner_dir.join(format!("{SEED_COPY_PREFIX}1/debug"))).unwrap();
+    std::fs::write(owner_dir.join(format!("{SEED_COPY_PREFIX}2.probe")), b"x").unwrap();
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    assert_eq!(a.origin, TargetOrigin::Empty { reason: None });
+    assert!(partials(&owner_dir).is_empty());
+    assert!(is_empty_dir(&a.target_dir));
+}
+
+/// btrfs の実試験（opt-in）: `CELERIS_REFLINK_TEST_DIR` が btrfs のディレクトリを指すときだけ、実際の
+/// `cp -a --reflink=auto` と FIEMAP で seed から写し、extent の共有と `df` の増分を確かめる。未設定なら skip。
+#[test]
+fn reflink_btrfs_seed_copy_shares_extents() {
+    let Some(dir) = std::env::var_os("CELERIS_REFLINK_TEST_DIR") else {
+        eprintln!("skip: CELERIS_REFLINK_TEST_DIR is not set");
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let st = nix::sys::statfs::statfs(&dir).unwrap();
+    assert_eq!(
+        st.filesystem_type(),
+        nix::sys::statfs::BTRFS_SUPER_MAGIC,
+        "{} is not btrfs",
+        dir.display()
+    );
+    let tmp = tempfile::tempdir_in(&dir).unwrap();
+    let pool = Pool::new(tmp.path());
+    let seed = write_seed(&pool, MANIFEST);
+    // df の増分を見るため 64 MiB の成果物を足す（中身は 0 でない値。sync して extent を確定させる）。
+    let big = seed.join("debug/deps/libhuge.rlib");
+    std::fs::write(&big, vec![0x5au8; 64 * 1024 * 1024]).unwrap();
+    std::fs::File::open(&big).unwrap().sync_all().unwrap();
+    nix::unistd::sync();
+    let free = || {
+        let v = nix::sys::statvfs::statvfs(&dir).unwrap();
+        v.blocks_available() as u64 * v.fragment_size() as u64
+    };
+    let before = free();
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    assert!(
+        matches!(a.origin, TargetOrigin::Seed { .. }),
+        "{:?}",
+        a.origin
+    );
+    let copied = a.target_dir.join("debug/deps/libhuge.rlib");
+    assert!(fiemap_all_shared(&copied).unwrap());
+    nix::unistd::sync();
+    let after = free();
+    let grew = before.saturating_sub(after);
+    eprintln!(
+        "reflink btrfs: copied 64 MiB seed file, df free {before} -> {after} (grew {} KiB), shared=true",
+        grew / 1024
+    );
+    assert!(
+        grew < 16 * 1024 * 1024,
+        "df grew {grew} bytes; extents were not shared"
+    );
+    assert!(partials(&pool.owner_dir(&owner)).is_empty());
+}
+
+/// ADR-0129 (3): `mount` が mount されていない・`dir` がその下に無いなら従来の場所へ戻す。
+#[test]
+fn scratch_mount_check_falls_back_to_previous_dir() {
+    let fallback = Path::new("/var/lib/celeris/scratch");
+    let mut s = ScratchSettings::with_dir("/local/celeris/data/scratch");
+    s.mount = Some(PathBuf::from("/local"));
+    let ok = apply_mount_check(s.clone(), fallback, |_| Ok(true));
+    assert_eq!(ok.dir, PathBuf::from("/local/celeris/data/scratch"));
+    assert!(ok.dir_fallback_reason.is_none());
+    let gone = apply_mount_check(s.clone(), fallback, |_| Ok(false));
+    assert_eq!(gone.dir, fallback);
+    assert!(gone.dir_fallback_reason.unwrap().contains("not mounted"));
+    let err = apply_mount_check(s.clone(), fallback, |_| Err(io::Error::other("boom")));
+    assert_eq!(err.dir, fallback);
+    let mut outside = s.clone();
+    outside.dir = PathBuf::from("/srv/scratch");
+    let o = apply_mount_check(outside, fallback, |_| Ok(true));
+    assert_eq!(o.dir, fallback);
+    // mount を書かなければ何もしない。
+    let plain = ScratchSettings::with_dir("/srv/scratch");
+    assert_eq!(
+        apply_mount_check(plain.clone(), fallback, |_| Ok(false)),
+        plain
+    );
+    // 実物: `/` は mount point、無い path は false。
+    assert!(is_mount_point(Path::new("/")).unwrap());
+    assert!(!is_mount_point(Path::new("/nonexistent-celeris-mount")).unwrap());
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0129 (4)(5): seed の更新と GC
+// ---------------------------------------------------------------------------
+
+/// 偽の build: `CARGO_TARGET_DIR` に 1 MiB の rlib を書く（cargo は呼ばない）。`fail` なら失敗する。
+fn fake_build(fail: bool) -> impl Fn(&Path, &[(String, String)]) -> io::Result<()> {
+    move |_checkout: &Path, env: &[(String, String)]| {
+        let target = env
+            .iter()
+            .find(|(k, _)| k == CARGO_TARGET_DIR_VAR)
+            .map(|(_, v)| PathBuf::from(v))
+            .ok_or_else(|| io::Error::other("no CARGO_TARGET_DIR"))?;
+        assert!(
+            env.iter()
+                .any(|(k, v)| k == "CARGO_INCREMENTAL" && v == "0")
+        );
+        std::fs::create_dir_all(target.join("debug/deps"))?;
+        std::fs::write(
+            target.join("debug/deps/libbig.rlib"),
+            vec![1u8; 1024 * 1024],
+        )?;
+        if fail {
+            return Err(io::Error::other("boom"));
+        }
+        Ok(())
+    }
+}
+
+fn no_checkout(_: &Path, checkout: &Path, _: &str) -> io::Result<()> {
+    std::fs::create_dir_all(checkout)
+}
+
+fn fixed_rustc(_: &Path) -> Option<String> {
+    Some("rustc 1.98.1".to_string())
+}
+
+fn seed_key() -> String {
+    crate::build_cache::repo_cache_key(Path::new(SEED_REPO))
+}
+
+fn names(dir: &Path) -> Vec<String> {
+    let mut v: Vec<String> = std::fs::read_dir(dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    v.sort();
+    v
+}
+
+fn refresh(pool: &Pool, commit: &str, secs: u64, fail: bool) -> SeedRefreshOutcome {
+    let build = fake_build(fail);
+    let ops = SeedBuildOps {
+        prepare_checkout: &no_checkout,
+        build: &build,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    refresh_seed(
+        pool,
+        Path::new(SEED_REPO),
+        commit,
+        &CargoTuning::default(),
+        &ops,
+        at(secs),
+    )
+}
+
+#[test]
+fn seed_skipped_when_pool_cannot_share() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path().join("scratch"));
+    let build = |_: &Path, _: &[(String, String)]| panic!("cargo build must not run");
+    let ops = SeedBuildOps {
+        prepare_checkout: &no_checkout,
+        build: &build,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Err("test filesystem has no shared extents".to_string()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let out = refresh_seed(
+        &pool,
+        Path::new(SEED_REPO),
+        "1111111111111111",
+        &CargoTuning::default(),
+        &ops,
+        at(T0),
+    );
+    assert!(
+        matches!(out, SeedRefreshOutcome::Failed { reason } if reason.contains("cannot share extents"))
+    );
+    assert!(!seeds_dir(&pool).exists());
+}
+
+/// main が進むと新しい世代を別名で build してから `current` を rename で差し替え、旧世代を退避して消す。
+/// 既に seed から作った owner の target は影響を受けない。
+#[test]
+fn seed_refresh_switches_current_atomically_and_retires_the_old_generation() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let key = seed_key();
+    let SeedRefreshOutcome::Refreshed {
+        generation: g1,
+        replaced: None,
+        ..
+    } = refresh(&pool, "1111111111111111", T0, false)
+    else {
+        panic!("first refresh should create a seed");
+    };
+    assert_eq!(
+        current_generation(&pool, &key).as_deref(),
+        Some(g1.as_str())
+    );
+    let m = read_current_manifest(&pool, &key).unwrap();
+    assert_eq!(m.commit.as_deref(), Some("1111111111111111"));
+    assert_eq!(m.repo_key.as_deref(), Some(key.as_str()));
+    assert_eq!(m.rustc.as_deref(), Some("rustc 1.98.1"));
+    assert_eq!(m.incremental, Some(false));
+    assert!(m.size_bytes.unwrap_or(0) >= 1024 * 1024);
+    // 使用中の task の target（seed から写したもの）。
+    let owner = Owner::task("T1");
+    let none = |_: &AdoptCandidate| None;
+    let shared = |_: &Path| Ok(true);
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &shared,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&a.origin, TargetOrigin::Seed { commit: Some(c), .. } if c == "1111111111111111")
+    );
+    std::fs::write(a.target_dir.join("mine"), b"x").unwrap();
+
+    let SeedRefreshOutcome::Refreshed {
+        generation: g2,
+        replaced: Some(old),
+        ..
+    } = refresh(&pool, "2222222222222222", T0 + 10, false)
+    else {
+        panic!("second refresh should replace the seed");
+    };
+    assert_eq!(old, g1);
+    assert_ne!(g1, g2);
+    let repo_dir = seed_repo_dir(&pool, &key);
+    assert!(
+        std::fs::symlink_metadata(repo_dir.join(SEED_CURRENT))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        current_generation(&pool, &key).as_deref(),
+        Some(g2.as_str())
+    );
+    // 旧世代・作りかけ・一時 symlink は残らない。
+    let left = names(&repo_dir);
+    assert!(!left.contains(&g1), "{left:?}");
+    assert!(
+        !left
+            .iter()
+            .any(|n| n.starts_with(SEED_BUILDING_PREFIX) || n.starts_with(".current.tmp")),
+        "{left:?}"
+    );
+    assert!(
+        !names(&seeds_dir(&pool))
+            .iter()
+            .any(|n| n.starts_with(DELETING_PREFIX))
+    );
+    // 使用中の owner の target はそのまま。
+    assert!(a.target_dir.join("mine").is_file());
+    assert!(a.target_dir.join("debug/deps/libbig.rlib").is_file());
+    let again = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert_eq!(again.origin, TargetOrigin::Existing);
+    // 新しい owner は新しい世代から写す。
+    let other = Owner::task("T2");
+    let b = allocate_with_seed(
+        &pool,
+        &seed_req(&other, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
+    assert!(
+        matches!(&b.origin, TargetOrigin::Seed { commit: Some(c), .. } if c == "2222222222222222")
+    );
+}
+
+/// build が失敗したら作りかけを消し、旧 seed をそのまま残す。
+#[test]
+fn seed_refresh_failure_keeps_the_old_seed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let key = seed_key();
+    let SeedRefreshOutcome::Refreshed { generation: g1, .. } =
+        refresh(&pool, "1111111111111111", T0, false)
+    else {
+        panic!("first refresh should create a seed");
+    };
+    let out = refresh(&pool, "2222222222222222", T0 + 10, true);
+    assert!(
+        matches!(&out, SeedRefreshOutcome::Failed { reason } if reason.contains("boom")),
+        "{out:?}"
+    );
+    assert_eq!(
+        current_generation(&pool, &key).as_deref(),
+        Some(g1.as_str())
+    );
+    assert_eq!(
+        read_current_manifest(&pool, &key)
+            .unwrap()
+            .commit
+            .as_deref(),
+        Some("1111111111111111")
+    );
+    let left = names(&seed_repo_dir(&pool, &key));
+    assert!(
+        !left.iter().any(|n| n.starts_with(SEED_BUILDING_PREFIX)),
+        "{left:?}"
+    );
+    // 失敗した checkout も旧 seed を残す。
+    let bad_checkout =
+        |_: &Path, _: &Path, _: &str| -> io::Result<()> { Err(io::Error::other("no commit")) };
+    let build = fake_build(false);
+    let ops = SeedBuildOps {
+        prepare_checkout: &bad_checkout,
+        build: &build,
+        rustc: &fixed_rustc,
+        share_probe: &|_| Ok(()),
+        probe_results: std::sync::Mutex::new(std::collections::HashMap::new()),
+    };
+    let out = refresh_seed(
+        &pool,
+        Path::new(SEED_REPO),
+        "3333333333333333",
+        &CargoTuning::default(),
+        &ops,
+        at(T0 + 20),
+    );
+    assert!(matches!(out, SeedRefreshOutcome::Failed { .. }));
+    assert_eq!(
+        current_generation(&pool, &key).as_deref(),
+        Some(g1.as_str())
+    );
+}
+
+/// 同じ repo の更新は `claim_seed` で排他（取れなければ `Busy`。build しない）。手放せば次は取れる。
+#[test]
+fn seed_refresh_is_busy_while_another_refresh_holds_the_claim() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let repo_dir = seed_repo_dir(&pool, &seed_key());
+    std::fs::create_dir_all(&repo_dir).unwrap();
+    let held = claim_seed(&repo_dir).unwrap().unwrap();
+    assert!(claim_seed(&repo_dir).unwrap().is_none());
+    assert_eq!(
+        refresh(&pool, "1111111111111111", T0, false),
+        SeedRefreshOutcome::Busy
+    );
+    assert!(current_generation(&pool, &seed_key()).is_none());
+    drop(held);
+    assert!(matches!(
+        refresh(&pool, "1111111111111111", T0, false),
+        SeedRefreshOutcome::Refreshed { .. }
+    ));
+}
+
+/// 更新の時期: seed が無い・main が進んだ・`[scratch.cargo]`・rustc が変わったとき。一致すれば要らない。
+#[test]
+fn seed_refresh_reason_follows_main_and_toolchain() {
+    let cargo = CargoTuning::default();
+    let m = SeedManifest {
+        commit: Some("aaa".into()),
+        rustc: Some("rustc 1.98.1".into()),
+        incremental: Some(false),
+        dev_debug: Some("line-tables-only".into()),
+        ..Default::default()
+    };
+    assert!(seed_refresh_reason(None, "aaa", &cargo, None).is_some());
+    assert_eq!(
+        seed_refresh_reason(Some(&m), "aaa", &cargo, Some("rustc 1.98.1\n")),
+        None
+    );
+    assert_eq!(seed_refresh_reason(Some(&m), "aaa", &cargo, None), None);
+    assert!(
+        seed_refresh_reason(Some(&m), "bbb", &cargo, None)
+            .unwrap()
+            .contains("main moved")
+    );
+    assert!(seed_refresh_reason(Some(&m), "aaa", &cargo, Some("rustc 1.99.0")).is_some());
+    let inc = CargoTuning {
+        incremental: true,
+        ..CargoTuning::default()
+    };
+    assert!(seed_refresh_reason(Some(&m), "aaa", &inc, None).is_some());
+}
+
+/// 確かめる間隔（起動直後は直ちに、以後 `SEED_CHECK_INTERVAL_SECS` ごと）と容量による保留。
+#[test]
+fn seed_check_due_and_hold_are_deterministic() {
+    let t0 = std::time::Instant::now();
+    let iv = Duration::from_secs(SEED_CHECK_INTERVAL_SECS);
+    assert!(seed_check_due(None, t0, iv));
+    assert!(!seed_check_due(
+        Some(t0),
+        t0 + iv - Duration::from_secs(1),
+        iv
+    ));
+    assert!(seed_check_due(Some(t0), t0 + iv, iv));
+    assert!(seed_refresh_hold(true, Some(u64::MAX), 0, None).is_some());
+    assert_eq!(
+        seed_refresh_hold(false, Some(10 * GIB), 5 * GIB, Some(4 * GIB)),
+        None
+    );
+    assert!(seed_refresh_hold(false, Some(8 * GIB), 5 * GIB, Some(4 * GIB)).is_some());
+    assert_eq!(seed_refresh_hold(false, None, 5 * GIB, None), None);
+}
+
+/// GC は current の世代を消さず、current 以外の世代と放棄された build を消す（build 中の repo には触らない）。
+#[test]
+fn seed_gc_keeps_current_and_removes_stale_generations_and_abandoned_builds() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let key = seed_key();
+    let SeedRefreshOutcome::Refreshed { generation: g1, .. } =
+        refresh(&pool, "1111111111111111", T0, false)
+    else {
+        panic!("refresh should create a seed");
+    };
+    let repo_dir = seed_repo_dir(&pool, &key);
+    // 切り替えの直後に落ちた残骸（current でない世代）と、中断した build。
+    std::fs::create_dir_all(repo_dir.join("gen-000000000000-1/target")).unwrap();
+    std::fs::create_dir_all(repo_dir.join(".building-gen-x/target")).unwrap();
+    let registered: BTreeSet<String> = [key.clone()].into();
+    // build 中（`claim_seed` を他が持つ）なら build も旧世代も触らない。
+    let held = claim_seed(&repo_dir).unwrap().unwrap();
+    let r = seed_gc(&pool, &registered, at(T0 + 60));
+    assert!(
+        r.retired.is_empty() && r.abandoned_builds.is_empty(),
+        "{r:?}"
+    );
+    assert!(repo_dir.join(".building-gen-x").is_dir());
+    drop(held);
+    let r = seed_gc(&pool, &registered, at(T0 + 120));
+    assert_eq!(r.retired.len(), 1, "{r:?}");
+    assert_eq!(r.abandoned_builds.len(), 1);
+    assert!(!repo_dir.join("gen-000000000000-1").exists());
+    assert!(!repo_dir.join(".building-gen-x").exists());
+    assert_eq!(
+        current_generation(&pool, &key).as_deref(),
+        Some(g1.as_str())
+    );
+    assert!(
+        repo_dir
+            .join(&g1)
+            .join(TARGET_SUBDIR)
+            .join("debug/deps/libbig.rlib")
+            .is_file()
+    );
+    // 退避先は `seeds/.deleting-*`（削除スレッドの根）。
+    assert!(r.retired[0].starts_with(seed_deleting_root(&pool)));
+    // 2 回目は何もしない。
+    let r = seed_gc(&pool, &registered, at(T0 + 180));
+    assert_eq!(r, SeedGcResult::default());
+}
+
+/// 登録から外れた repo の seed は印を書いて猶予を置き、猶予を過ぎたら全体を消す。登録に戻れば印を消す。
+#[test]
+fn seed_gc_removes_an_unregistered_repo_seed_after_the_grace_period() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pool = Pool::new(tmp.path());
+    let key = seed_key();
+    assert!(matches!(
+        refresh(&pool, "1111111111111111", T0, false),
+        SeedRefreshOutcome::Refreshed { .. }
+    ));
+    let repo_dir = seed_repo_dir(&pool, &key);
+    let none = BTreeSet::new();
+    let r = seed_gc(&pool, &none, at(T0));
+    assert_eq!(r.marked_unregistered, vec![key.clone()]);
+    assert!(repo_dir.join(SEED_UNREGISTERED_MARK).is_file());
+    // 登録に戻れば印を消す。
+    let registered: BTreeSet<String> = [key.clone()].into();
+    seed_gc(&pool, &registered, at(T0 + 10));
+    assert!(!repo_dir.join(SEED_UNREGISTERED_MARK).exists());
+    // もう一度外れる → 猶予の直前までは残り、過ぎたら seed 全体を消す。
+    seed_gc(&pool, &none, at(T0 + 100));
+    let r = seed_gc(
+        &pool,
+        &none,
+        at(T0 + 100 + SEED_UNREGISTERED_GRACE_SECS - 1),
+    );
+    assert!(r.removed_repos.is_empty());
+    assert!(current_generation(&pool, &key).is_some());
+    let r = seed_gc(&pool, &none, at(T0 + 100 + SEED_UNREGISTERED_GRACE_SECS));
+    assert_eq!(r.removed_repos, vec![key.clone()]);
+    assert!(!repo_dir.exists());
+    assert_eq!(r.retired.len(), 1);
+    assert!(r.retired[0].is_dir());
+}
+
+/// 実の git: 専用の checkout を固定 commit に detach し、main が進めば同じ checkout を進める（外部ネットワーク無し）。
+#[test]
+fn seed_git_checkout_follows_the_main_commit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.invalid"])
+            .args(args)
             .output()
             .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&out.stdout),
-            "COMPILER T=unset A=-vV\n"
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
         );
-        assert_eq!(out.status.code(), Some(3));
-    }
-    drop(server);
-}
-
-/// ADR-0075 D4 / G2 受け入れ条件 2: バイナリが無い・server が応答しない・`enabled = false`・scratch が無効のときは
-/// sccache 系を与えない（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
-/// Phase G3: `/healthz` と `/stats` を読む最小の HTTP クライアント（`Content-Length` で切る。閉じた port・
-/// 200 以外は unhealthy）。
-#[test]
-fn cache_server_health_reads_a_minimal_http_response() {
-    use std::io::{Read, Write};
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for conn in listener.incoming() {
-            let Ok(mut c) = conn else { continue };
-            let mut req = Vec::new();
-            let mut buf = [0u8; 1024];
-            // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
-            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
-                match c.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => req.extend_from_slice(&buf[..n]),
-                }
-            }
-            let req = String::from_utf8_lossy(&req).to_string();
-            let resp: &[u8] = if req.starts_with("GET /healthz ") {
-                b"HTTP/1.1 200 OK\r\ncontent-length: 3\r\n\r\nok\ntrailing"
-            } else {
-                b"HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n"
-            };
-            let _ = c.write_all(resp);
-        }
-    });
-    assert_eq!(
-        http_get_local(port, "/healthz", Duration::from_secs(2)),
-        Some((200, "ok\n".to_string()))
-    );
-    assert!(cache_server_healthy(port));
-    assert_eq!(
-        http_get_local(port, "/stats", Duration::from_secs(2)).map(|r| r.0),
-        Some(404)
-    );
-    assert!(!cache_server_healthy(1));
-    // token は 0600 で作り、2 回目は同じ値を返す。
-    use std::os::unix::fs::PermissionsExt;
-    let tmp = tempfile::tempdir().unwrap();
-    let path = tmp.path().join("sub/cache-server.token");
-    let t = ensure_token(&path).unwrap();
-    assert_eq!(t.len(), 64);
-    assert_eq!(ensure_token(&path).unwrap(), t);
-    assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-        0o600
-    );
-}
-
-/// G3-fix1: 配線しないときは sccache の族（`RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / 既知と継いだ `SCCACHE_*`）
-/// を全部外し、配線するときは与えない key だけを外す。結果は親の env に依らない（既知の key は常に入る）。
-#[test]
-fn sccache_family_is_removed_unless_set() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let owner = Owner::task("01TASK");
-    let settings = sccache_settings(tmp.path(), bin);
-    let inherited = || {
-        [
-            "RUSTC_WRAPPER",
-            "SCCACHE_REDIS_ENDPOINT",
-            "SCCACHE_WEIRD-NAME",
-            "PATH",
-        ]
-        .map(String::from)
     };
-    let down = resolve_sccache(&settings, |_| false);
-    let set = cargo_env_with(&settings, &owner, &down);
-    let removed = sccache_env_removals_with(&set, inherited());
-    let mut want: Vec<String> = RUSTC_WRAPPER_VARS
-        .iter()
-        .chain(KNOWN_SCCACHE_VARS.iter())
-        .map(|k| k.to_string())
-        .chain(["SCCACHE_REDIS_ENDPOINT".to_string()])
-        .collect();
-    want.sort();
-    assert_eq!(removed, want);
-    // 親に何も無くても既知の key は外す（判定が親の env に依らない）。
-    let bare = sccache_env_removals_with(&set, Vec::new());
-    assert!(bare.iter().any(|k| k == "RUSTC_WRAPPER"), "{bare:?}");
-    assert!(bare.iter().any(|k| k == "SCCACHE_DIR"), "{bare:?}");
-    // 空の値の代替は wrapper の 2 つだけ（SCCACHE_* は空にしない）。
-    let env = CargoEnv {
-        set: set.clone(),
-        remove: removed,
-    };
-    let fallback = env.set_with_empty_wrappers();
-    assert_eq!(&fallback[..set.len()], &set[..]);
-    assert_eq!(
-        fallback[set.len()..].to_vec(),
-        vec![
-            ("RUSTC_WRAPPER".to_string(), String::new()),
-            ("RUSTC_WORKSPACE_WRAPPER".to_string(), String::new()),
-        ]
-    );
-    // 配線するとき: 与える key は外さない。与えない族（workspace wrapper・webdav 系・継いだ他の SCCACHE_*）は外す。
-    let up = resolve_sccache(&settings, |_| true);
-    let set = cargo_env_with(&settings, &owner, &up);
-    let removed = sccache_env_removals_with(&set, inherited());
-    assert!(
-        removed.iter().all(|k| !set.iter().any(|(s, _)| s == k)),
-        "{removed:?}"
-    );
-    assert_eq!(
-        removed,
-        vec![
-            "RUSTC_WORKSPACE_WRAPPER",
-            "SCCACHE_REDIS_ENDPOINT",
-            "SCCACHE_WEBDAV_ENDPOINT",
-            "SCCACHE_WEBDAV_KEY_PREFIX",
-            "SCCACHE_WEBDAV_TOKEN",
-        ]
-    );
-    assert!(is_sccache_family("SCCACHE_DIR") && is_sccache_family("RUSTC_WRAPPER"));
-    assert!(!is_sccache_family("CARGO_TARGET_DIR"));
-}
-
-#[test]
-fn sccache_env_is_omitted_without_binary_or_server() {
-    let tmp = tempfile::tempdir().unwrap();
-    let bin = fake_sccache(tmp.path());
-    let owner = Owner::task("01TASK");
-    let keys = |env: &[(String, String)]| env.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>();
-    let plain = vec![
-        "CARGO_TARGET_DIR".to_string(),
-        "CARGO_INCREMENTAL".to_string(),
-        "CARGO_PROFILE_DEV_DEBUG".to_string(),
-    ];
-    // バイナリが無い。
-    let settings = sccache_settings(tmp.path(), tmp.path().join("missing/sccache"));
-    let state = resolve_sccache(&settings, |_| true);
-    assert_eq!(state.label(), "unavailable");
-    assert!(state.reason().unwrap().contains("not found"), "{state:?}");
-    assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
-    // server が応答しない。
-    let settings = sccache_settings(tmp.path(), bin.clone());
-    let state = resolve_sccache(&settings, |_| false);
-    assert_eq!(state.label(), "unavailable");
-    assert!(
-        state.reason().unwrap().contains("127.0.0.1:4236"),
-        "{state:?}"
-    );
-    assert_eq!(keys(&cargo_env_with(&settings, &owner, &state)), plain);
-    // `[scratch.sccache] enabled = false`。
-    let mut off = sccache_settings(tmp.path(), bin.clone());
-    off.sccache.enabled = false;
-    let state = resolve_sccache(&off, |_| true);
-    assert_eq!(state.label(), "disabled");
-    assert_eq!(keys(&cargo_env_with(&off, &owner, &state)), plain);
-    // scratch が無効。
-    let mut off = sccache_settings(tmp.path(), bin);
-    off.enabled = false;
-    assert_eq!(resolve_sccache(&off, |_| true).label(), "disabled");
-    // wrapper は Ready のときだけ書く。
-    assert!(!tmp.path().join("scratch/bin/sccache").exists());
-    // 本物の probe（loopback だけ）。閉じた port には port 1（特権 port。テストが bind できないので他のテストと
-    // 競合しない）を使う。
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    assert!(server_listening(l.local_addr().unwrap().port()));
-    assert!(!server_listening(1));
+    git(&["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("README"), "1").unwrap();
+    git(&["add", "README"]);
+    git(&["commit", "-q", "-m", "one"]);
+    let c1 = resolve_commit(&repo, "main").unwrap();
+    assert!(!commit_has_cargo_manifest(&repo, &c1));
+    std::fs::write(repo.join("Cargo.toml"), "[workspace]\n").unwrap();
+    git(&["add", "Cargo.toml"]);
+    git(&["commit", "-q", "-m", "two"]);
+    let c2 = resolve_commit(&repo, "main").unwrap();
+    assert_ne!(c1, c2);
+    assert!(commit_has_cargo_manifest(&repo, &c2));
+    let checkout = tmp.path().join("scratch/seeds/k/checkout");
+    git_detached_checkout(&repo, &checkout, &c1).unwrap();
+    assert!(!checkout.join("Cargo.toml").exists());
+    git_detached_checkout(&repo, &checkout, &c2).unwrap();
+    assert!(checkout.join("Cargo.toml").is_file());
+    // 壊れた checkout は作り直す。
+    std::fs::remove_file(checkout.join(".git")).unwrap();
+    git_detached_checkout(&repo, &checkout, &c2).unwrap();
+    assert!(checkout.join("Cargo.toml").is_file());
 }

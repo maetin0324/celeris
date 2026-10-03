@@ -236,7 +236,8 @@ pub(crate) async fn tick_loop(
                     }
                 }
                 // ADR-0052 D3（Phase 64）: 失敗した知識整理 run を**一度だけ**作り直す（`retried_at`）。
-                // 2 回目が Qwen で走るか cheap の汎用ハーネスで走るかは dispatch 時の到達性の検査が決める。
+                // 2 回目が `langmem`（proxy の `celeris/cheap`）で走るか cheap の汎用ハーネスで走るかは
+                // dispatch 時の接続先（proxy）の到達性の検査が決める（ADR-0132 D4）。
                 match knowledge_maint::retry_failed(
                     store.as_ref(),
                     &config.knowledge.root,

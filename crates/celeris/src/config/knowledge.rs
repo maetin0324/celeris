@@ -62,13 +62,18 @@ impl Default for KnowledgeConfig {
 
 /// `[knowledge.langmem]`（ADR-0047 D4）: 知識整理 run のトリガと LLM の接続先。
 ///
+/// ADR-0132 D4: LangMem は Qwen 専用ではない普通の道具。接続先は celeris の llm-proxy、モデルは
+/// 抽象名 `celeris/cheap` を既定の書き方とする（Qwen が生きていれば proxy が Qwen を選び、落ちていれば
+/// Claude / GPT の cheap に倒す。ADR-0132 D3）。dispatch 前の到達性 probe（ADR-0052 D1）はこの
+/// `base_url`（proxy）を検査し、proxy 自体に届かないときだけ cheap の汎用ハーネスへ倒す（ADR-0052 D2）。
+///
 /// ```toml
 /// [knowledge.langmem]
 /// enabled = true
 /// provider = "openai-compatible"   # "openai-compatible" | "anthropic"
-/// base_url = "http://bnode150:18000/v1"
-/// model = "qwen3.8-27b"
-/// api_key_secret = "langmem-openai-key"   # [secrets] の下の id。無ければ渡さない
+/// base_url = "http://127.0.0.1:18100/v1"   # celeris の llm-proxy
+/// model = "celeris/cheap"
+/// api_key_secret = "llm-proxy-token"   # [secrets] の下の id。proxy は bearer を要求する
 /// max_related_pages = 10
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

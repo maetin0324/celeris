@@ -339,6 +339,8 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
             let mut env_keys: Vec<String> = p.env.keys().cloned().collect();
             env_keys.sort();
             ProviderLive {
+                kind: config.provider_kind(&p.id).unwrap_or_default(),
+                llm_source: config.provider_llm_source(&p.id),
                 credential_refs: task_core::model_routing::credential_refs(&p.env_from_secrets),
                 tier_models: p.tier_models.clone(),
                 account_id: p.account_id.clone(),

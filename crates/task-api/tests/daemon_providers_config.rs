@@ -218,6 +218,30 @@ async fn providers_combine_config_snapshot_and_incremental_stats() {
 }
 
 #[tokio::test]
+async fn provider_kind_get_exposes_derived_source_in_provider_and_config_views() {
+    let env = TestEnv::new();
+    let app = env.router();
+    let providers = send(&app, get("/api/v1/providers")).await.json();
+    assert_eq!(providers["items"][0]["kind"], "adapter");
+    assert_eq!(
+        providers["items"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
+    );
+    let config = send(&app, get("/api/v1/config")).await.json();
+    assert_eq!(config["providers"][0]["kind"], "adapter");
+    assert_eq!(
+        config["providers"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
+    );
+    env.daemon_tx.send(Some(snapshot(1))).unwrap();
+    let live = send(&app, get("/api/v1/providers")).await.json();
+    assert_eq!(
+        live["items"][0]["llm_source"],
+        json!({"source":"claude_oauth","origin":"derived"})
+    );
+}
+
+#[tokio::test]
 async fn clusters_combine_config_and_snapshot() {
     let env = TestEnv::new();
     let app = env.router();

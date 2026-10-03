@@ -25,6 +25,8 @@ completed: 2026-10-03
 - `cargo test -p task-dispatch` → 594 passed / 0 failed（lib）、4 passed（integration）
 - `cargo clippy -p task-dispatch -- -D warnings` → exit 0（`--all-targets` でも exit 0）
 - `cargo fmt --all -- --check` → exit 0
+- `cargo test --workspace` → 3770 passed / 0 failed
+- `cargo clippy --workspace -- -D warnings` → exit 0
 
 ## 未解決事項
 - atomic task（`current_wu` が None）の continuation の resume は並行 WU atomic-resume の範囲。

@@ -7958,7 +7958,7 @@
           "type": "object"
         },
         {
-          "description": "ADR parallel integration D4: 統合の依頼。状態は変えない。\nserde の type は `integration_requested`（migration 0047 の部分 index と一致）。",
+          "description": "ADR parallel integration D4: 統合の依頼。状態は変えない。",
           "properties": {
             "origin": {
               "type": "string"
@@ -7979,7 +7979,7 @@
           "type": "object"
         },
         {
-          "description": "ADR parallel integration D4: 人が依頼に回答した監査事象。\nserde の type は `integration_answered`（migration 0047 の部分 index と一致）。",
+          "description": "ADR parallel integration D4: 人が依頼に回答した監査事象。",
           "properties": {
             "answer": {
               "type": "string"

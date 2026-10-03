@@ -2,7 +2,7 @@
 //! （`sh` スクリプト）で再現するもの。ネットワークに出ない。タスクは全て `celerisctl add` で作る。
 //!
 //! 1/2. `question` → `celerisctl answer` → 次 run の `context.answers` に回答が載り `done`（条件は `--check-cmd` / `--check-artifact`）
-//! 3.   `celerisctl cancel` は非終端のみ。先行タスクの `failed` が後続へ推移的に伝播する（`dependency_failed`）
+//! 3.   `celerisctl cancel` は非終端と `failed` を受け付ける（`failed` は attempts を保って `cancelled`、ADR-0131 D7）。先行タスクの `failed` が後続へ推移的に伝播する（`dependency_failed`）
 //! 4.   Human check は再レビューで新しい `Approval` 子を要求し、親の cancel で未決の `Approval` 子が `cancelled`
 //! 5.   `provider_failure` 付きの `error` は attempts を消費せず `requeue` され、cooldown 明けに `done`
 
@@ -300,7 +300,7 @@ esac"#,
 
 /// 受け入れ 3: cancel は非終端のみ（例外: ADR-0131 D7 で人は failed を cancel できる）。先行の failed は後続へ推移的に伝播する。workspace 省略時は `<task_id>`。
 #[test]
-fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
+fn cancel_accepts_failed_and_non_terminal_tasks_and_failures_cancel_dependents() {
     let env = Env::new();
     let script = env.write_script(
         r#"cat >/dev/null; echo '{"type":"done","summary":"claimed","evidence":[]}'"#,

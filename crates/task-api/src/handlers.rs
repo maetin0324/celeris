@@ -190,6 +190,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::execution::routes())
         // ADR-0079 D7（Phase R3a）: 決定の要求の一覧・回答・取り下げ・revise。実装は `crate::decisions`。
         .merge(crate::decisions::routes())
+        // ADR-0131 D5: 定期実行（cron job）の作成・一覧・更新・一時停止・手動実行・履歴。実装は `crate::cron_jobs`。
+        .merge(crate::cron_jobs::routes())
         .route("/api/v1/daemon", get(daemon))
         // ADR-0075 D6（Phase G1）: scratch pool の観測値（`celerisctl scratch status --json` と同じ schema）。
         .route("/api/v1/metrics/scratch", get(metrics_scratch))

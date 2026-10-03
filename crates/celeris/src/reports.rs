@@ -207,6 +207,14 @@ pub fn schedule_report_compaction(
             {
                 continue;
             }
+            // ADR-0131 付記 D10 (6): 日次整理の報告は 1 日 1 件で完結させ、報告のまとめに入れない。
+            if let Some(id) = report.task_id
+                && store
+                    .get(id)?
+                    .is_some_and(|t| task_ops::knowledge_curation::is_curation_task(&t))
+            {
+                continue;
+            }
             pending.push(report);
         }
         if pending.is_empty() {

@@ -35,6 +35,7 @@ ALLOWED_OVER_LAST="
 0138-browser-prod-admission-confidential-release.md
 0139-langmem-proxy-bearer-and-verify-proxy-bind.md
 0140-claude-session-resume.md
+0131-cron-jobs.md
 "
 
 NAMESPACES="main gui web"

@@ -1,6 +1,8 @@
 //! Production browser.rs H3 path with real isolated Chromium and controller CDP.
 //! The scripted LLM observes only the post-auth request. The only network
 //! namespace connection is a loopback HTTPS fixture; no external network exists.
+#[path = "../../task-worker/tests/userns_gate/mod.rs"]
+mod userns_gate;
 
 mod common;
 
@@ -938,7 +940,7 @@ async fn inner_h3_test() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn production_h3_injects_once_without_exposure() {
-    if !userns_available() {
+    if userns_gate::skip_unless_userns_tests() {
         return;
     }
     for name in ["unshare", "ip", "openssl", "bwrap"] {

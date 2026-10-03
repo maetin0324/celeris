@@ -433,16 +433,31 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
 
-### daily-curation / curation-job close: 日次知識整理 job の全体検査 — 2026-10-03
+### daily-curation / review 指摘修正（付記 D11）— 2026-10-03
 
-日次整理 job の実装・結合試験を含むこの worktree で全体検査を実施した。
+統合済み branch HEAD `1506c5e1afbe` で review 指摘 4 点の修正後検査を行った。ADR-0131 D11 に
+KB 操作の本文・hash 規則、人への候補を `curation-human` decision 1 件に束ねる規則、cron 作成・PATCH の
+mode 検証、worker の `curation.diff` と計画の path 集合照合を記録。seed/harness の指示にも本文・hash と
+diff の規則があり、実装側には mode 検証と diff 照合がある。
 
-- `cargo test --workspace` → 今回は `instance_handoff` の 8 件中 5 件が失敗し runner が終了、終了コード・最終サマリーを回収できなかった。
-  `tests/daily_curation.rs` は 2 passed、knowledge curation の unit 試験も通過した。前回の同じ検査では exit 101 で、
-  3 件が worker DB guard の probe における user namespace 作成 `Operation not permitted`、2 件が instance 起動・dispatch 前提の失敗だった。
-  時間依存の flaky ではなく実行環境の namespace 制約と見られる。今回も `instance_handoff` 失敗を観測したため再実行はせず、コードは変更していない。
-- 今回の `cargo clippy --workspace -- -D warnings` は未実行（test 失敗のため停止）。前回実行は exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test -p task-ops` → exit 0（427 passed）。
+- `cargo test -p celeris --lib` → exit 0（229 passed）。
+- `cargo test -p celeris --test daily_curation` → exit 0（3 passed）。
+- `cargo test --workspace knowledge_curation_job` → exit 0。該当する celeris lib 7 件と
+  `daily_curation` 結合試験 3 件が実行され、計 10 件 pass。
+- `cargo test --workspace --no-fail-fast` → exit 101、24 target failed。namespace 制約を直接出した試験:
+  `celeris::instance_handoff::{normal_mode_does_not_inject_the_smoke_builtins,verify_mode_never_dispatches_and_never_touches_daemon_instances}`、
+  `task_api::browser_h3_injection::production_h3_injects_once_without_exposure`、
+  `task_worker::{browser_cdp_sink::real_browser_injection_receipt_and_origin_guards,browser_egress_relay::fixture_reachable_only_through_per_connection_egress_proxy,browser_h3_wire::real_broker_browser_injection_receipt_and_origin_guards}`。
+  前二者の DB guard / `unshare` は `Operation not permitted`。browser runtime 起動系では
+  `task_api::browser_restore_deliver::restore_enters_observation_stop_until_session_end`、
+  `task_worker::browser_restore_deliver::{identity_restore_sameuid_rejected_in_production,live_session_delivers_restored_state_over_its_own_cdp_pipe,restored_session_refuses_agent_observation,supervisor_entry_delivers_restored_state_to_controller_cdp_under_harness_admission}`、
+  `task_worker::browser_runtime_isolated::{restart_reaps_recorded_runtime_and_ignores_stale_records,probe_inside_runtime_cannot_reach_host_sockets_or_network,real_browser_in_runtime_facts_and_restore_refused_on_same_uid,controller_kill_leaves_no_runtime_processes}` は `NoChildPid` または namespace 内起動不能。
+  同じ DB guard のため e2e の `account_pool_scenarios`、`api_scenarios`、`cluster_scenarios`、
+  `codex_account_pool_scenarios`、`delegation_scenarios`、`multi_account_scenarios`、`phase7_scenarios`、
+  `plan_scenarios`、`provider_admin_scenarios`、`scenarios`、`worker_db_read_only` 等も失敗した。
+  `starting_the_same_release_twice_exits_three` と stale heartbeat の instance handoff 失敗も観測。
 - 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
-  dry-run から apply への切り替えは人が判断・実施する。
-- 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
-  dry-run から apply への切り替えは人が判断・実施する。
+  本番有効化と `dry_run` から `apply` への切り替えは人が判断・実施する。

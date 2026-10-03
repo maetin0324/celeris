@@ -1,28 +1,28 @@
 {
-  "llm": "openai/qwen3.8-27b",
+  "llm": "openai/celeris/standard",
   "llm_config": {
     "model_list": [
       {
-        "model_name": "openai/qwen3.8-27b",
+        "model_name": "openai/celeris/standard",
         "litellm_params": {
-          "model": "openai/qwen3.8-27b",
-          "api_base": "http://127.0.0.1:18000/v1",
-          "api_key": "unused",
+          "model": "openai/celeris/standard",
+          "api_base": "http://127.0.0.1:18100/v1",
+          "api_key": "<API token from [api] token_file>",
           "timeout": 900,
           "num_retries": 3
         }
       }
     ]
   },
-  "summary_llm": "openai/qwen3.8-27b",
+  "summary_llm": "openai/celeris/standard",
   "summary_llm_config": {
     "model_list": [
       {
-        "model_name": "openai/qwen3.8-27b",
+        "model_name": "openai/celeris/standard",
         "litellm_params": {
-          "model": "openai/qwen3.8-27b",
-          "api_base": "http://127.0.0.1:18000/v1",
-          "api_key": "unused",
+          "model": "openai/celeris/standard",
+          "api_base": "http://127.0.0.1:18100/v1",
+          "api_key": "<API token from [api] token_file>",
           "timeout": 900,
           "num_retries": 3
         }
@@ -41,15 +41,15 @@
     "multimodal": false
   },
   "agent": {
-    "agent_llm": "openai/qwen3.8-27b",
+    "agent_llm": "openai/celeris/standard",
     "agent_llm_config": {
       "model_list": [
         {
-          "model_name": "openai/qwen3.8-27b",
+          "model_name": "openai/celeris/standard",
           "litellm_params": {
-            "model": "openai/qwen3.8-27b",
-            "api_base": "http://127.0.0.1:18000/v1",
-            "api_key": "unused",
+            "model": "openai/celeris/standard",
+            "api_base": "http://127.0.0.1:18100/v1",
+            "api_key": "<API token from [api] token_file>",
             "timeout": 900,
             "num_retries": 3
           }

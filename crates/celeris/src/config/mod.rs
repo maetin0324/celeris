@@ -404,6 +404,9 @@ impl Config {
 
         // 3. 検証。
         cfg.validate()?;
+        for code in cfg.provider_kind_warnings() {
+            tracing::warn!(warning = %code, "provider kind compatibility warning");
+        }
         // API を有効にするなら、トークンが読めることを起動時に確かめる（exit 2）。
         if cfg.api.listen.is_some() {
             cfg.api.read_token()?;
@@ -424,7 +427,7 @@ impl Config {
         self.knowledge.validate()?;
         self.execution.validate()?;
         self.containers.validate()?;
-        providers::validate_providers(&self.providers, self.accounts.as_ref())?;
+        providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;
         }

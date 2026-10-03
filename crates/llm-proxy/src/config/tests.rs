@@ -32,3 +32,22 @@ fn explicit_enabled_overrides_auto_detection() {
     });
     assert!(!cfg.effective_enabled());
 }
+
+#[test]
+fn cheap_only_default_and_legacy_qwen_config() {
+    assert_eq!(
+        ModelsConfig::default().qwen,
+        HashMap::from([(Tier::Cheap, "qwen3.8-27b".to_string())])
+    );
+    let legacy: LlmProxyConfig = serde_json::from_value(serde_json::json!({
+        "models": {
+            "qwen": {
+                "frontier": "qwen3.8-27b",
+                "standard": "qwen3.8-27b",
+                "cheap": "qwen3.8-27b"
+            }
+        }
+    }))
+    .expect("legacy config parses");
+    assert_eq!(legacy.models.qwen, ModelsConfig::default().qwen);
+}

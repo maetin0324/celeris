@@ -4,8 +4,8 @@
 //
 // D6 の記号: T=task detail+timeline、L=tasks/list・inbox・board、P=project 集計、N=reports・approvals・daemon/rest、
 // R=task の runs と run 群、E=task の execution。timeline は全 task.event で対象 task だけ stale にする。
-// 表に無い 12 種（browser_*, decision_*, child_*, work_unit_spec_overridden, unit_gate_overridden,
-// plan_approval_requested, stall_detected）の範囲は web ADR-W1 に記録。
+// 表に無い 13 種（browser_*, decision_*, child_*, work_unit_spec_overridden, unit_gate_overridden,
+// plan_approval_requested, stall_detected, delivery_skipped）の範囲は web ADR-W1 に記録。
 
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { EventRow } from "../generated/types";
@@ -140,6 +140,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   decision_withdrawn: { sets: ["T", "L", "N"] },
   plan_approval_requested: { sets: ["T", "L", "N", "E"] },
   stall_detected: { sets: ["T", "R", "L"] },
+  delivery_skipped: { sets: ["T", "L", "N"] },
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

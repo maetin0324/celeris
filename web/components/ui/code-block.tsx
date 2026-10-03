@@ -2,10 +2,7 @@ import { cva } from "class-variance-authority";
 import type { HTMLAttributes, ReactNode } from "react";
 import { cn } from "../../lib/utils";
 
-// text-code は color token（--color-code）と衝突するため、同じ 14px の text-label と行高 1.6 相当の leading-relaxed を使う（kbd.tsx と同じ）。
-const surface = "min-w-0 max-w-full rounded-sm bg-code p-3 font-mono leading-relaxed text-code-foreground";
-// tailwind-merge は text-label と text-code-foreground を同じ色の group と見なして片方を落とすため、cn の外で足す。
-const textSize = "text-label";
+const surface = "min-w-0 max-w-full rounded-sm bg-code p-3 font-mono text-label leading-relaxed text-code-foreground";
 
 type SurfaceProps = Omit<HTMLAttributes<HTMLDivElement>, "children"> & {
   /** scroll 領域の accessible name（例「stdout」「設定ファイル」）。keyboard で scroll するため必須。 */
@@ -23,7 +20,7 @@ export function CodeBlock({ label, wrap = false, className, children, ...props }
       // biome-ignore lint/a11y/noNoninteractiveTabindex: scroll 領域を keyboard で読めるようにする（WCAG 2.1.1）。
       tabIndex={0}
       data-wrap={wrap ? "true" : "false"}
-      className={`${cn(surface, "overflow-x-auto", className)} ${textSize}`}
+      className={cn(surface, "overflow-x-auto", className)}
       {...props}
     >
       <pre className={wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}>
@@ -59,7 +56,7 @@ export function LogSurface({
       // biome-ignore lint/a11y/noNoninteractiveTabindex: scroll 領域を keyboard で読めるようにする（WCAG 2.1.1）。
       tabIndex={0}
       data-wrap={wrap ? "true" : "false"}
-      className={`${cn(surface, "overflow-auto overscroll-contain", logHeight({ size: height }), className)} ${textSize}`}
+      className={cn(surface, "overflow-auto overscroll-contain", logHeight({ size: height }), className)}
       {...props}
     >
       <pre className={wrap ? "whitespace-pre-wrap break-words" : "whitespace-pre"}>{children}</pre>

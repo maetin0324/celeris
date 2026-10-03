@@ -7,6 +7,7 @@ import { NotificationsWatcher } from "../../features/reports/notifications-watch
 import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { Badge, type BadgeTone } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
+import { Icon } from "../ui/icon";
 import { navGroups, navItems } from "./nav-items";
 import { installScrollMemory } from "./scroll-memory";
 import { useShellServerState } from "./use-server-state";
@@ -82,11 +83,12 @@ export function Shell({ children }: { children: ReactNode }) {
         <button
           ref={menuButton}
           type="button"
-          className={`${buttonVariants({ variant: "secondary" })} ml-auto md:hidden`}
+          className={`${buttonVariants({ variant: "secondary", size: "sm" })} ml-auto md:hidden`}
           aria-expanded={menuOpen}
           aria-controls="shell-nav"
           onClick={() => setMenuOpen((open) => !open)}
         >
+          <Icon name="menu" size="sm" />
           メニュー
         </button>
         <nav
@@ -168,9 +170,11 @@ function NavBadge({ badge }: { badge: { view: NavBadgeView; tone: BadgeTone } | 
   if (!badge?.view) return null;
   // 件数が不明（?）のときは成功色や注意色にせず neutral にする（DESIGN.md「Badge」）。
   const tone = badge.view.text === "?" ? "neutral" : badge.tone;
+  // shrink-0 は子の span に付け、Slot の連結で Badge の class に足す。className で渡すと cn が
+  // tailwind-merge の初期化を起動直後の描画で走らせ、最初の遷移の click を待たせる（衝突する class は無い）。
   return (
-    <Badge data-badge tone={tone} role="img" aria-label={badge.view.label} className="shrink-0">
-      {badge.view.text}
+    <Badge asChild data-badge tone={tone} role="img" aria-label={badge.view.label}>
+      <span className="shrink-0">{badge.view.text}</span>
     </Badge>
   );
 }

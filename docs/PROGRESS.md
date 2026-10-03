@@ -865,6 +865,21 @@ main を `wu/verify` の作業ツリーへ2段階で merge した。まず他 WU
   - `tests/e2e` の負荷時 flaky（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も今回の `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない（`git diff` の変更範囲に `tests/e2e/` は含まれない）。
 - `deflake-lock`（work unit `deflake-lock`）で固定 120s `wait_until` を `wait_for_progress` の出来事待ちへ直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、上記 `cargo test --workspace` の中で `tests/api_scenarios.rs`（11 passed）の一部として `ok`。`database is locked` は出ず、180 件の task はすべて done に到達した（試験の主張どおり）。
 
+### verify: main の追加取り込み（33aca5a3）と再検証（Run #3、2026-10-03）
+
+Run #2 で main がさらに進んだ `33aca5a3`（アカウント/プロバイダー分離とモデル階層ルーティング関連。`config/*.example.toml`・`crates/celeris/src/config/*`・`crates/celeris/src/daemon/*`・`crates/llm-proxy/src/config.rs` などを含む。`docs/PROGRESS.md` には触れない）を merge し、コミット `bffc87b2`（`wu/verify: main (33aca5a3) を取り込み`）として取り込み済みだった。Run #3 ではこの状態を引き継ぎ、PROGRESS への記録が未了だった全体検証をやり直した。
+
+- `git status --short` → 変更なし（Run #2 終了時点で merge 済み・commit 済み）。
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `33aca5a3` が HEAD の祖先。`git fetch origin main` 後の `origin/main` と一致）。
+- 衝突マーカー確認: `grep -rn '^<<<<<<<\|^=======$\|^>>>>>>>' --include=*.rs --include=*.md --include=*.toml .`（`target` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、`Finished` のみ）。
+- `cargo test --workspace` → **exit 0**。120 試験バイナリすべて `test result: ok`、`passed` 合算 **3351**、`failed` **0**、`ignored` **12**（内訳は上の 14b052ea 検証時と同じ既存の意図的 ignore。main `33aca5a3` が追加した provider/config 周りの新規試験も含めすべて通過）。一発で通り、再実行は不要だった。
+  - sandbox の userns 制約で落ちる既知試験: 今回も発現せず、`CELERIS_ISOLATION_TESTS=skip` は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky 2 件（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない。
+  - 参考: Run #2 の途中経過では `cargo test --workspace` を3回走らせており、2回目（merge 直後、commit 前）に `task-worker` の `browser_restore_deliver.rs::live_session_delivers_restored_state_over_its_own_cdp_pipe` が1件だけ `StateRejected` で落ちた（共用 host の負荷に伴うタイミング依存の既知 flaky、`docs/testing.md` 方法3〈SIGSTOP stutter〉系統。本 work unit は `task-worker` の browser 配送コードを変更していない）。3回目の全体再実行では発現せず `ok`。Run #3 の今回の実行でも発現しなかった。
+- `deflake-lock` で直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、今回の `cargo test --workspace`（`tests/api_scenarios.rs`、11 passed の一部）でも `ok`。`database is locked` は出ず、全 task が done に到達した。
+
 #### ディスク使用量・ビルド時間の実測（参照）
 
 `experiment` work unit の `docs/progress/reflink-target-experiment.md` に記録済みの実測を要約する（本 work unit では再測定していない）。

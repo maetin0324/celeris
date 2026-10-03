@@ -1043,7 +1043,7 @@ impl Dispatcher {
                 tracing::warn!(%task_id, error = %e, "failed to record session usage");
             }
         }
-        // ADR-0124 D2: WU の継続 session を使った run は、その usage を `approx_tokens` に積む
+        // ADR-0140 D2: WU の継続 session を使った run は、その usage を `approx_tokens` に積む
         // （判断表 #10 の rollover の材料）。継続 session を持たない run（`runs.session_id` が無い）は何もしない。
         if let Ok(Some(row)) = self.store.run_index_get(&run_id)
             && row.session_id.is_some()

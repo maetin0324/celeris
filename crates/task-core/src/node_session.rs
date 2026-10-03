@@ -9,10 +9,10 @@
 //! - 「有効なセッション」は `retired_at IS NULL` の行が高々 1 件、という不変条件をアプリケーション側
 //!   （`task-dispatch`）が `node_session_retire` → `node_session_create` の順で呼ぶことで保つ。
 //!   ストア自身は複数の有効な行があっても壊れない（`node_session_active` は最新の 1 件を返す）。
-//! - ADR-0124 D2: execute continuation の WU 単位セッション（`kind = Continuation`）は key
+//! - ADR-0140 D2: execute continuation の WU 単位セッション（`kind = Continuation`）は key
 //!   `(task_id, work_unit_id, adapter, account_id)` で [`WorkUnitSession`] として読み書きする
 //!   （migration 0038 の列。`work_unit_session_*`）。取得は同じ adapter・account の行だけを返し、
-//!   別 account の session は返さない（account isolation、ADR-0124 D3）。
+//!   別 account の session は返さない（account isolation、ADR-0140 D3）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ pub enum SessionKind {
     Conversation,
     /// 部署の根ノード自身のレビュー・切り分け run（ADR-0051）。部署ごとに 1 本。
     Lead,
-    /// ADR-0124 D2: execute continuation の WU 単位セッション（`(task_id, work_unit_id)` ごとに 1 本）。
+    /// ADR-0140 D2: execute continuation の WU 単位セッション（`(task_id, work_unit_id)` ごとに 1 本）。
     /// [`WorkUnitSession`] と `work_unit_session_*` で扱う（`node_session_*` の key には `task_id` が無いので使わない）。
     Continuation,
 }
@@ -110,7 +110,7 @@ impl NodeSession {
     }
 }
 
-/// ADR-0124 D2: execute continuation の WU 単位セッション（`node_sessions` の `kind = 'continuation'` の行）。
+/// ADR-0140 D2: execute continuation の WU 単位セッション（`node_sessions` の `kind = 'continuation'` の行）。
 /// key は `(task_id, work_unit_id, adapter, account_id)`。`provider`・`cwd` は判断表 #7 / #8 で比べるための記録。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkUnitSession {
@@ -255,7 +255,7 @@ pub trait NodeSessionStore: Send + Sync {
         session_id: &str,
     ) -> Result<bool, StoreError>;
 
-    /// ADR-0124 D2: WU 単位セッションを作る。呼び出し側が先に
+    /// ADR-0140 D2: WU 単位セッションを作る。呼び出し側が先に
     /// [`NodeSessionStore::work_unit_session_retire`] で既存の現役行を引退させておくこと。
     fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError>;
     /// `(task_id, work_unit_id)` の現役セッションのうち、`adapter` と `account_id` が**一致する**ものだけを返す
@@ -936,7 +936,7 @@ mod tests {
         assert_eq!(SessionKind::parse("bogus"), None);
     }
 
-    // --- ADR-0124 D2: WU 単位の継続セッション（work_unit_session_*） ---
+    // --- ADR-0140 D2: WU 単位の継続セッション（work_unit_session_*） ---
 
     fn wu_session(
         task_id: TaskId,
@@ -1018,7 +1018,7 @@ mod tests {
         store
             .work_unit_session_create(&wu_session(task, Some("wu-a"), Some("acct-a"), "u1", now))
             .expect("create");
-        // 別 account の session は返さない（account isolation、ADR-0124 D3）。
+        // 別 account の session は返さない（account isolation、ADR-0140 D3）。
         assert_eq!(
             store
                 .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-b"))

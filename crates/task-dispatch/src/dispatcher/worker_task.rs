@@ -116,7 +116,7 @@ pub(super) async fn run_worker(
     // ADR-0072 D14（Phase E4b 項目3）: `extras` は後段で複数のフィールドが個別に消費されるので、
     // 使う値だけ先に取り出しておく。
     let planner_permission_mode = extras.planner_permission_mode.clone();
-    // ADR-0124 D2: WU の継続 session の key（sink が resume 拒否で retire する）。
+    // ADR-0140 D2: WU の継続 session の key（sink が resume 拒否で retire する）。
     let continuation_key = extras.continuation_session.clone();
     // ADR-0074「R7-11 実装時の明確化」: dispatcher が決めたこの run の実効の予算（planner の `[execution.planner]`、
     // WU の D18 など）をワーカーに渡す写しに戻す（DB の task は変えない）。
@@ -532,7 +532,7 @@ pub(super) async fn run_worker(
     // ADR-0054 D1（Phase 67）: `run_worker` を通る run で継続セッションを持てるのは CoS の対話 run
     // だけ（部門長のレビュー run は `review.rs` の別経路。`run_extras` の `is_cos_conversation` と同じ
     // 判定で `extras.session` が埋まるので、ここでは `req.context.session` の有無だけを見ればよい）。
-    // ADR-0124 D2: WU の継続 session（`continuation_key`）を持つ run は CoS の key を持たない。
+    // ADR-0140 D2: WU の継続 session（`continuation_key`）を持つ run は CoS の key を持たない。
     let session_key = (req.context.session.is_some() && continuation_key.is_none()).then(|| {
         (
             task_core::COS_ID.to_string(),

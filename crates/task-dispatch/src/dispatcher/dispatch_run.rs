@@ -651,7 +651,7 @@ impl Dispatcher {
         }
         // ADR-0072 D6/D9/D15（Phase E2）: 計画のある Task の WU の run。WU の行を `running` にし
         // （`runs`/`last_run_id` を更新）、`runs` 索引に 1 行作り、prompt に載せる文脈を組み立てる。
-        // ADR-0124 D1: WU の worker run は、continuation なら同じ Claude Code session を resume するか、
+        // ADR-0140 D1: WU の worker run は、continuation なら同じ Claude Code session を resume するか、
         // checkpoint 前置きの新しい session に倒すかをここで決める（planner run は判断表 #1 で常に fresh）。
         if let Some(wu) = &current_wu {
             let cwd = worktree

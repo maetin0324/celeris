@@ -86,7 +86,7 @@ pub(crate) const MIGRATION_0041: &str = include_str!("../../migrations/0041_feed
 /// review sync で空き番号 42 へ振り直した。列を足すだけで 0038〜0041 とは依存しない。
 pub(crate) const MIGRATION_0042: &str =
     include_str!("../../migrations/0042_review_target_sync.sql");
-/// ADR-0124 D2: `node_sessions` に execute continuation の WU 単位 session の列を足す。
+/// ADR-0140 D2: `node_sessions` に execute continuation の WU 単位 session の列を足す。
 /// ブランチでは 0038 だったが、main の 0038〜0040 は未使用のまま空いていなかったため
 /// （他の celeris/* ブランチが 0038〜0040 を使用中）、mig-renumber で 0043 へ振り直した。
 pub(crate) const MIGRATION_0043: &str =

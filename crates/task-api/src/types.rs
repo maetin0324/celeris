@@ -1996,7 +1996,7 @@ pub struct ExecutionMetricsGroup {
     pub max_turn_failures: u64,
     pub repairs: u64,
     pub replans: u64,
-    /// ADR-0124: fresh / resumed / 旧形式の worker run 別比較。
+    /// ADR-0140: fresh / resumed / 旧形式の worker run 別比較。
     #[serde(default)]
     pub continuation: task_core::ContinuationMetrics,
     /// WU id ごとの比較値。atomic run は `task:<task_id>` キー。

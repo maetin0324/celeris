@@ -3321,7 +3321,7 @@
           ]
         },
         "duplicate_reads": {
-          "description": "ADR-0124 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
           "format": "uint32",
           "minimum": 0,
           "type": [
@@ -3346,7 +3346,7 @@
           ]
         },
         "session_resumed": {
-          "description": "ADR-0124 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
           "type": [
             "boolean",
             "null"

@@ -54,7 +54,8 @@ mkdir -p "$DEST"
 # ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
 # are stopped and removed by a human following docs/ops/sccache-l1.md.
 # web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/web/parallel-operation.md）。
-for unit in celeris@.service celeris-gui@.service celeris-web@.service; do
+# ADR-0135 D3: LAN 中継の socket/service も置くだけ。既存の起動状態は変えない。
+for unit in celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service; do
   [ -f "$SRC/$unit" ] || sd_die "missing $SRC/$unit"
   if [ -f "$DEST/$unit" ] && ! cmp -s "$SRC/$unit" "$DEST/$unit"; then
     cp -p "$DEST/$unit" "$DEST/$unit.bak-$(sd_stamp)"

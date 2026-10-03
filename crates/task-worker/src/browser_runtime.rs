@@ -19,8 +19,9 @@ use crate::browser_relay::{self, CHANNEL_FD, CONNECT, GRANT, READY, REFUSE};
 
 use nix::libc;
 use task_core::browser_isolation::{
-    CdpEndpoint, IsolationAttestation, IsolationViolation, Namespace, RuntimeFacts, SESSION_ROOT,
-    StateRejected, verify_isolation,
+    CdpEndpoint, IsolationAttestation, IsolationViolation, LauncherObservation,
+    LauncherSessionProof, Namespace, RuntimeFacts, SESSION_ROOT, StateRejected, verify_isolation,
+    verify_launcher_session,
 };
 
 /// sandbox の中の UID/GID（host から見た UID は変わらない。ADR-0105）。
@@ -829,27 +830,58 @@ impl task_core::browser_isolation::LiveSessionEntry for LiveSession {
 /// identity 復元の隔離 admission（ADR-0114 D2）。production は [`RestoreAdmission::Attested`] だけ。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum RestoreAdmission {
-    /// `verify_isolation` の attestation を要求する。
+    /// `verify_isolation` の全条件に加え、launcher の session 証明（ADR-0138 D-L）を
+    /// `verify_launcher_session` で検証できたときだけ attestation を出す。証明が無い runtime
+    /// （daemon が直に起動した bwrap を含む）は owner 検査に通っても拒否する（fail closed）。
     #[default]
     Attested,
-    /// 試験専用: 違反が `SameUid` だけの実 runtime を通す（別 UID の無い host で成功経路を実証する）。
+    /// 試験専用: 同一 UID の実 runtime を通す（別 UID の無い host で成功経路を実証する）。
     #[cfg(feature = "same-uid-harness")]
     SameUidHarness,
 }
 
 impl RestoreAdmission {
+    /// launcher 証明なしで判定する。`Attested` は常に `LauncherProofMissing` を含めて拒否する。
     pub fn admit(
         self,
         facts: &RuntimeFacts,
     ) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
+        self.admit_launched(facts, None)
+    }
+
+    /// launcher の session 証明と daemon 自身の照合値を添えて判定する（ADR-0138 D-L）。
+    /// `Attested` は `verify_launcher_session` を通ったときだけ attestation を返す。
+    pub fn admit_launched(
+        self,
+        facts: &RuntimeFacts,
+        launcher: Option<(&LauncherSessionProof, &LauncherObservation)>,
+    ) -> Result<IsolationAttestation, Vec<IsolationViolation>> {
         match self {
-            Self::Attested => verify_isolation(facts),
+            Self::Attested => match launcher {
+                Some((proof, seen)) => verify_launcher_session(facts, Some(proof), seen)
+                    .map(|att| att.isolation_attestation().clone()),
+                None => {
+                    let mut v = verify_isolation(facts).err().unwrap_or_default();
+                    v.push(IsolationViolation::LauncherProofMissing);
+                    Err(v)
+                }
+            },
             #[cfg(feature = "same-uid-harness")]
             Self::SameUidHarness => match verify_isolation(facts) {
-                Err(v) if v == [IsolationViolation::SameUid] => {
-                    // 残りの検査は実の事実のまま。UID だけを別 UID として扱う。
+                Err(v)
+                    if v == [IsolationViolation::SameUid]
+                        || v == [
+                            IsolationViolation::SameUid,
+                            IsolationViolation::UsernsOwnedByDaemon,
+                        ] =>
+                {
+                    // 他の検査は実の事実のまま。同一 UID とその userns owner だけを
+                    // 試験用の別 UID として扱い、本番の Attested は変えない。
                     let mut f = facts.clone();
                     f.runtime_uid = f.host_uid.wrapping_add(100_000).max(1);
+                    if f.userns_owner_uid == Some(f.host_uid) {
+                        f.userns_owner_uid = Some(f.runtime_uid);
+                    }
                     verify_isolation(&f)
                 }
                 other => other,
@@ -1088,6 +1120,7 @@ pub fn collect_facts(session_id: &str, pid: i32, pgid: i32) -> Result<RuntimeFac
         session_id: session_id.to_owned(),
         host_uid: nix::unistd::getuid().as_raw(),
         runtime_uid,
+        userns_owner_uid: task_core::browser_isolation::collect_userns_owner_uid(pid),
         namespaces,
         root_readonly,
         writable_mounts,

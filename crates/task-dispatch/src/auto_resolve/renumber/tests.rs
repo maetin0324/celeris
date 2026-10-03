@@ -153,52 +153,166 @@ fn migration_same_number_on_two_branches_moves_only_source_file() {
     assert!(repo.join(".git/MERGE_HEAD").exists());
 }
 
+/// 取り込み側で file を足した commit の日付（fixture の source commit）。
+fn source_date(fx: &Fixture) -> String {
+    command(
+        fx.tmp.path(),
+        &["log", "-1", "--format=%cs", &fx.ctx.source_sha],
+    )
+}
+
 #[test]
-fn adr_same_number_renames_source_and_follows_links_and_title() {
+fn numbered_adr_duplicate_moves_source_file_to_dated_name() {
+    // main は agent-docs/adr に、取り込み側は旧 docs/adr に同じ番号を足した（同じ名前空間）。
     let fx = fixture(
         &[],
-        &[("docs/adr/0021-first.md", "# ADR-0021: first\n")],
+        &[("agent-docs/adr/0140-first.md", "# ADR-0140: first\n")],
         &[
-            ("docs/adr/0021-second.md", "# ADR-0021: second\n\n本文\n"),
+            ("docs/adr/0140-second.md", "# ADR-0140: second\n\n本文\n"),
             (
-                "docs/index.md",
-                "- [second](adr/0021-second.md)\n- 0021-second の補足\n",
+                "agent-docs/progress/2026-10-03-x.md",
+                "- [second](../adr/0140-second.md)\n- 0140-second の補足\n",
             ),
         ],
         false,
     );
     let repo = fx.tmp.path();
-    resolved(&fx);
-    assert_eq!(read(repo, "docs/adr/0021-first.md"), "# ADR-0021: first\n");
+    let date = source_date(&fx);
+    let moved = format!("agent-docs/adr/{date}-second.md");
+    let actions = resolved(&fx);
     assert_eq!(
-        read(repo, "docs/adr/0022-second.md"),
-        "# ADR-0022: second\n\n本文\n"
+        read(repo, "agent-docs/adr/0140-first.md"),
+        "# ADR-0140: first\n"
+    );
+    assert!(!repo.join("docs/adr/0140-second.md").exists());
+    assert_eq!(
+        read(repo, &moved),
+        format!("# ADR {date}-second: second\n\n本文\n")
     );
     assert_eq!(
-        read(repo, "docs/index.md"),
-        "- [second](adr/0022-second.md)\n- 0022-second の補足\n"
+        read(repo, "agent-docs/progress/2026-10-03-x.md"),
+        format!("- [second](../adr/{date}-second.md)\n- {date}-second の補足\n")
+    );
+    assert!(actions.iter().any(|a| a.detail.contains("git mv")));
+    // 番号は振り直さない: 0141 は作られない。
+    assert!(!repo.join("agent-docs/adr/0141-second.md").exists());
+    assert!(
+        classify::classify(repo, &fx.ctx.target_sha)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(resolved(&fx).is_empty());
+}
+
+#[test]
+fn numbered_adr_follow_only_touches_source_side_files() {
+    let fx = fixture(
+        &[("docs/index.md", "- index\n")],
+        &[
+            ("agent-docs/adr/0140-first.md", "# ADR-0140: first\n"),
+            ("docs/main-only.md", "0140-second は main 側の語\n"),
+        ],
+        &[("agent-docs/adr/0140-second.md", "# ADR-0140: second\n")],
+        false,
+    );
+    let repo = fx.tmp.path();
+    resolved(&fx);
+    assert_eq!(
+        read(repo, "docs/main-only.md"),
+        "0140-second は main 側の語\n"
     );
 }
 
 #[test]
-fn adr_add_add_conflict_keeps_target_version_and_adds_source_under_new_number() {
+fn adr_add_add_conflict_keeps_target_version_and_adds_source_under_dated_name() {
     let fx = fixture(
         &[],
-        &[("docs/adr/0021-plan.md", "# ADR-0021: target plan\n")],
-        &[("docs/adr/0021-plan.md", "# ADR-0021: source plan\n")],
+        &[("agent-docs/adr/0140-plan.md", "# ADR-0140: target plan\n")],
+        &[("agent-docs/adr/0140-plan.md", "# ADR-0140: source plan\n")],
         true,
     );
     let repo = fx.tmp.path();
+    let date = source_date(&fx);
     resolved(&fx);
     assert_eq!(unmerged(repo), "");
     assert_eq!(
-        read(repo, "docs/adr/0021-plan.md"),
-        "# ADR-0021: target plan\n"
+        read(repo, "agent-docs/adr/0140-plan.md"),
+        "# ADR-0140: target plan\n"
     );
     assert_eq!(
-        read(repo, "docs/adr/0022-plan.md"),
-        "# ADR-0022: source plan\n"
+        read(repo, &format!("agent-docs/adr/{date}-plan.md")),
+        format!("# ADR {date}-plan: source plan\n")
     );
+}
+
+#[test]
+fn dated_adr_conflict_goes_to_human() {
+    let fx = fixture(
+        &[],
+        &[("agent-docs/adr/2026-10-03-plan.md", "# target\n")],
+        &[("agent-docs/adr/2026-10-03-plan.md", "# source\n")],
+        true,
+    );
+    let Resolution::NeedsHuman { request } = resolve_all(fx.tmp.path(), &fx.ctx).unwrap() else {
+        panic!("dated ADR conflict must need human");
+    };
+    assert!(request.reason.contains("日付名"), "{}", request.reason);
+    assert_eq!(
+        request.conflict_files,
+        vec!["agent-docs/adr/2026-10-03-plan.md".to_string()]
+    );
+}
+
+#[test]
+fn main_migration_numbers_never_move() {
+    // main に入った 0039・0040 は本番 DB に適用済み。取り込み側の 0039 だけが動く。
+    let cron = format!("{MIG}/0039_cron_jobs.sql");
+    let feed = format!("{MIG}/0040_feed.sql");
+    let ws = format!("{MIG}/0039_write_sets.sql");
+    let fx = fixture(
+        &[(&format!("{MIG}/0038_prev.sql"), "select 0;\n")],
+        &[
+            (&cron, "create table cron;\n"),
+            (&feed, "create table feed;\n"),
+        ],
+        &[(&ws, "create table ws;\n")],
+        false,
+    );
+    let repo = fx.tmp.path();
+    resolved(&fx);
+    // main 側の migration は名前も内容も target のまま（追加以外の差分が無い）。
+    let changed = command(
+        repo,
+        &[
+            "diff",
+            "--cached",
+            "--name-status",
+            "--no-renames",
+            &fx.ctx.target_sha,
+            "--",
+            MIG,
+        ],
+    );
+    assert_eq!(changed, format!("A\t{MIG}/0041_write_sets.sql"));
+    for (path, body) in [
+        (&cron, "create table cron;\n"),
+        (&feed, "create table feed;\n"),
+    ] {
+        assert_eq!(read(repo, path), body);
+    }
+    // main 側 file を直接渡しても動かさない。
+    for path in [&cron, &feed] {
+        let item = ClassifiedPath {
+            path: path.clone(),
+            kind: ConflictKind::Migration,
+            duplicate_with: vec![],
+        };
+        assert_eq!(
+            resolve(repo, &fx.ctx, &item).unwrap(),
+            ResolveAttempt::Handled { actions: vec![] }
+        );
+    }
+    assert!(repo.join(&cron).exists() && repo.join(&feed).exists());
 }
 
 #[test]

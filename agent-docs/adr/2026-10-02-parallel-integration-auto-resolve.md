@@ -107,3 +107,15 @@ ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに
 定型の衝突は二つの取り込み経路で同じ規則により解消される。解消できないものは衝突中の worktree を残さず、必要な情報を伴う統合の依頼へ渡す。
 
 後続の実装は、(1) `auto_resolve` の分類・records・番号追従・生成物と一時 repo 試験、(2) `integration.rs` からの呼び出しと段 gate、(3) `delivery.rs` の追従・再 review、(4) `IntegrationRequest` の保存・受信箱・delivery detail を分けて進める。各経路は同じ分類表と依頼の型を使う。
+
+## 付記（agent-docs 配置への追従）
+
+2026-10-03。main が ADR-0128 で文書を `agent-docs/` へ移し、D5 で新しい ADR を `agent-docs/adr/YYYY-MM-DD-<slug>.md` と決めたため、`crates/task-dispatch/src/auto_resolve/{classify,renumber,records}.rs` の対象パスと ADR の扱いを次のように改める。D1a・D1b のうち、ここに書いたことはこの付記を優先する。
+
+1. **記録**: Record に分類するのは `agent-docs/progress/` 配下の `*.md`（`<task>/<wu-key>.md` の入れ子を含む）、凍結済みの `agent-docs/PROGRESS.md`、移行期間の旧 branch のための `docs/PROGRESS.md`・`docs/progress/**/*.md`。union 属性（`.gitattributes`）と records resolver は追記だけの記録にだけ使い、コード・生成物（`*.schema.json` など）・`.md` 以外の file には使わない。
+2. **ADR は番号を振り直さない**: `docs/adr/` と `agent-docs/adr/` を一つの名前空間として見る（`scripts/dev/check-adr-numbers.sh` と同じ）。取り込み側にだけある番号付き ADR（target に無い file）が、target の番号付き ADR と番号で重複する、または同じ名前で add/add 衝突するときは、取り込み側の file を `agent-docs/adr/<日付>-<slug>.md` へ `git mv` する（add/add では target 版を残し、取り込み側の内容を日付名で足す）。日付は取り込み側 branch（`merge-base..source`）でその file を足した最初の commit の committer 日付（`git log --diff-filter=A --format=%cs`）、slug は旧名の番号の後ろ。移した file の 1 行目の `ADR-NNNN` は `ADR <新 stem>` に直す。
+3. **参照の追従**: 旧 stem（`NNNN-<slug>`）への参照を新 stem へ置換するのは、取り込み側が `merge-base..source` で足した・変えた file に限る。main（target）にある file と main に入った ADR は動かさず、書き換えない。番号だけの参照（`ADR-NNNN`）は参照先を機械的に決められないので、移動を済ませた上で人に回す（D3）。
+4. **人に回す ADR の衝突**: 日付名 ADR 同士の衝突（同じ日付名の add/add・内容衝突、移動先の日付名が既にある）はコード衝突と同じく `NeedsHuman`。取り込み側同士の番号重複（どちらも target に無い）と、base から既にある ADR の内容衝突も人に回す。
+5. **migration は今のまま**: `crates/task-core/migrations/NNNN_*.sql` は D1b どおり空き番号へ振り直すが、動かすのは取り込み側の未取り込み file だけで、main に入った番号（本番 DB に適用済み）は決して変えない（人の方針）。
+
+試験（`cargo test -p task-dispatch --lib auto_resolve`）: `auto_resolve::records::tests::agent_docs_progress_nested_both_side_appends_are_joined`（agent-docs/progress の入れ子と agent-docs/PROGRESS.md の両側追記の結合）、`auto_resolve::renumber::tests::numbered_adr_duplicate_moves_source_file_to_dated_name`・`adr_add_add_conflict_keeps_target_version_and_adds_source_under_dated_name`・`numbered_adr_follow_only_touches_source_side_files`・`dated_adr_conflict_goes_to_human`（番号付き ADR の重複が日付名へ移る・日付名同士は人へ）、`auto_resolve::renumber::tests::main_migration_numbers_never_move`（main の migration 番号は動かない）、`auto_resolve::tests::path_classes_and_number_duplicates_are_distinct`（分類表）。

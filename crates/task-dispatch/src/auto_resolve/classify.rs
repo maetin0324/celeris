@@ -20,16 +20,23 @@ pub struct ClassifiedPath {
     pub duplicate_with: Vec<String>,
 }
 
-pub fn kind(path: &str) -> ConflictKind {
-    if path == "docs/PROGRESS.md"
+/// 番号付き ADR と日付名 ADR の置き場所。両方を同じ名前空間として見る（scripts/dev/check-adr-numbers.sh と同じ）。
+pub const ADR_DIRS: [&str; 2] = ["agent-docs/adr/", "docs/adr/"];
+
+/// 追記だけの記録: 凍結済みの PROGRESS.md と task ごとの進捗ファイル（入れ子を含む）。
+fn is_record(path: &str) -> bool {
+    path == "docs/PROGRESS.md"
         || path == "agent-docs/PROGRESS.md"
         || (path.starts_with("docs/progress/") || path.starts_with("agent-docs/progress/"))
             && path.ends_with(".md")
-    {
+}
+
+pub fn kind(path: &str) -> ConflictKind {
+    if is_record(path) {
         ConflictKind::Record
     } else if numbered(path, "crates/task-core/migrations/", '_', ".sql").is_some() {
         ConflictKind::Migration
-    } else if numbered(path, "docs/adr/", '-', ".md").is_some() {
+    } else if adr_number(path).is_some() || dated_adr(path) {
         ConflictKind::Adr
     } else if (path.starts_with("docs/protocol/") || path.starts_with("docs/api/v1/"))
         && path.ends_with(".schema.json")
@@ -38,6 +45,33 @@ pub fn kind(path: &str) -> ConflictKind {
     } else {
         ConflictKind::Code
     }
+}
+
+/// `agent-docs/adr/NNNN-*.md` か `docs/adr/NNNN-*.md` の番号。
+pub fn adr_number(path: &str) -> Option<String> {
+    ADR_DIRS
+        .iter()
+        .find_map(|dir| numbered(path, dir, '-', ".md"))
+}
+
+/// ADR-0128 D5 の日付名 `YYYY-MM-DD-<slug>.md`。
+pub fn dated_adr(path: &str) -> bool {
+    ADR_DIRS.iter().any(|dir| {
+        path.strip_prefix(dir).is_some_and(|name| {
+            let b = name.as_bytes();
+            !name.contains('/')
+                && name.ends_with(".md")
+                && b.len() > 14
+                && b[..10].iter().enumerate().all(|(i, c)| {
+                    if i == 4 || i == 7 {
+                        *c == b'-'
+                    } else {
+                        c.is_ascii_digit()
+                    }
+                })
+                && b[10] == b'-'
+        })
+    })
 }
 
 fn numbered(path: &str, dir: &str, delimiter: char, extension: &str) -> Option<String> {
@@ -82,7 +116,7 @@ pub fn classify(repo: &Path, target_sha: &str) -> Result<Vec<ClassifiedPath>, St
         {
             Some((ConflictKindKey::Migration, number))
         } else {
-            numbered(path, "docs/adr/", '-', ".md").map(|n| (ConflictKindKey::Adr, n))
+            adr_number(path).map(|n| (ConflictKindKey::Adr, n))
         };
         if let Some(key) = key {
             groups.entry(key).or_default().insert(path.to_string());

@@ -1,7 +1,10 @@
-//! ADR 2026-10-02-parallel-integration-auto-resolve D1b: migration・ADR の番号衝突を、取り込み側の file だけ空き番号へ振り直す。
+//! ADR 2026-10-02-parallel-integration-auto-resolve D1b・付記（agent-docs 配置への追従）:
+//! migration の番号衝突は取り込み側の file だけ空き番号へ振り直す。番号付き ADR の衝突は番号を
+//! 振り直さず、取り込み側の file を日付名 `agent-docs/adr/YYYY-MM-DD-<slug>.md`（ADR-0128 D5）へ移す。
 //! target（main）に既にある file は決して動かさない。参照は旧ファイル名・旧 stem だけを機械的に
 //! 置換し、番号だけの参照（`ADR-0039`、`RESERVED_VERSIONS` の `39` など）は人に回す。
 
+use super::classify::{adr_number, dated_adr};
 use super::{ClassifiedPath, ConflictKind, ResolutionAction, ResolveAttempt, ResolveContext, git};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -19,17 +22,13 @@ const MIGRATION: Scheme = Scheme {
     delimiter: '_',
     extension: ".sql",
 };
-const ADR: Scheme = Scheme {
-    dir: "docs/adr/",
-    delimiter: '-',
-    extension: ".md",
-};
+/// 日付名 ADR の置き場所（ADR-0128 D5）。
+const DATED_ADR_DIR: &str = "agent-docs/adr/";
 
 impl Scheme {
     fn for_kind(kind: ConflictKind) -> Option<Self> {
         match kind {
             ConflictKind::Migration => Some(MIGRATION),
-            ConflictKind::Adr => Some(ADR),
             _ => None,
         }
     }
@@ -94,6 +93,9 @@ pub fn resolve_with_refs(
     refs: &[String],
 ) -> Result<ResolveAttempt, String> {
     let not_handled = |reason: String| Ok(ResolveAttempt::NotHandled { reason });
+    if item.kind == ConflictKind::Adr {
+        return resolve_adr(repo, ctx, item);
+    }
     let Some(scheme) = Scheme::for_kind(item.kind) else {
         return not_handled("番号付き file ではない".into());
     };
@@ -225,7 +227,7 @@ pub fn resolve_with_refs(
         ));
     }
 
-    let leftovers = bare_number_refs(&added, path, old_stem, number, scheme);
+    let leftovers = bare_number_refs(&added, path, old_stem, number, true);
     if !leftovers.is_empty() {
         let done = actions
             .iter()
@@ -249,8 +251,221 @@ fn action(path: &str, kind: ConflictKind, detail: String) -> ResolutionAction {
 }
 
 fn stem(path: &str, scheme: Scheme) -> &str {
+    file_stem(path, scheme.extension)
+}
+
+fn file_stem<'a>(path: &'a str, extension: &str) -> &'a str {
     let name = path.rsplit('/').next().unwrap_or(path);
-    name.strip_suffix(scheme.extension).unwrap_or(name)
+    name.strip_suffix(extension).unwrap_or(name)
+}
+
+/// 番号付き ADR の衝突: 取り込み側だけにある file を、取り込み側でその file を足した commit の日付名へ移す。
+/// main（target）に入った ADR は動かさない。日付名同士の衝突はコード衝突と同じく人に回す。
+fn resolve_adr(
+    repo: &Path,
+    ctx: &ResolveContext,
+    item: &ClassifiedPath,
+) -> Result<ResolveAttempt, String> {
+    let not_handled = |reason: String| Ok(ResolveAttempt::NotHandled { reason });
+    let path = item.path.as_str();
+    if dated_adr(path) {
+        return not_handled("日付名 ADR の衝突（どちらの内容を採るかは人が決める）".into());
+    }
+    let Some(number) = adr_number(path) else {
+        return not_handled("番号付き ADR の名前ではない".into());
+    };
+    let unmerged = unmerged_paths(repo)?.contains(path);
+    let in_target = exists_at(repo, &ctx.target_sha, path);
+    let present = worktree_paths(repo)?;
+
+    if !unmerged {
+        if in_target || !present.contains(path) {
+            // target の ADR は動かさない。消えていれば既に移動済み。
+            return Ok(ResolveAttempt::Handled {
+                actions: Vec::new(),
+            });
+        }
+        let duplicates = present
+            .iter()
+            .filter(|p| *p != path && adr_number(p).as_deref() == Some(number.as_str()))
+            .collect::<Vec<_>>();
+        if duplicates.is_empty() {
+            return Ok(ResolveAttempt::Handled {
+                actions: Vec::new(),
+            });
+        }
+        if !duplicates
+            .iter()
+            .any(|p| exists_at(repo, &ctx.target_sha, p))
+        {
+            return not_handled(format!(
+                "取り込み側同士の ADR 番号重複でどちらを動かすか決まらない: {}",
+                duplicates
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    } else if !in_target {
+        return not_handled("target に無い番号付き ADR が衝突している".into());
+    }
+
+    let base = merge_base(repo, ctx)?;
+    if unmerged && exists_at(repo, &base, path) {
+        return not_handled("既存の ADR の内容衝突（番号は同じ file を指す）".into());
+    }
+    let old_stem = file_stem(path, ".md");
+    let added = added_lines(repo, &base, &ctx.source_sha)?;
+    if unmerged
+        && added
+            .iter()
+            .any(|(file, line)| file != path && contains_token(line, old_stem, is_name_char))
+    {
+        return not_handled(format!(
+            "両側が同じ名前 {old_stem} を追加し、取り込み側の参照先が曖昧"
+        ));
+    }
+    let Some(date) = added_date(repo, &base, &ctx.source_sha, path)? else {
+        return not_handled(format!(
+            "取り込み側で {path} を足した commit が見つからない"
+        ));
+    };
+    let slug = &old_stem[number.len() + 1..];
+    let new_path = format!("{DATED_ADR_DIR}{date}-{slug}.md");
+    if present.contains(&new_path) || exists_at(repo, &ctx.target_sha, &new_path) {
+        return not_handled(format!("日付名 {new_path} が既にある（日付名同士の衝突）"));
+    }
+
+    let mut actions = Vec::new();
+    if unmerged {
+        // 両側が同じ名前を追加した: target 版を残し、取り込み側（stage 3）を日付名へ。
+        let theirs = git_bytes(repo, &["show", &format!(":3:{path}")])?;
+        let full = repo.join(&new_path);
+        if let Some(parent) = full.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{new_path}: {e}"))?;
+        }
+        std::fs::write(&full, theirs).map_err(|e| format!("{new_path}: {e}"))?;
+        git(repo, &["checkout", "--ours", "--", path])?;
+        git(repo, &["add", "--", path, &new_path])?;
+        actions.push(action(
+            &new_path,
+            item.kind,
+            format!("取り込み側の {path} を {new_path} として追加（target 版は残す）"),
+        ));
+    } else {
+        if let Some(parent) = repo.join(&new_path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("{new_path}: {e}"))?;
+        }
+        git(repo, &["mv", "--", path, &new_path])?;
+        actions.push(action(
+            &new_path,
+            item.kind,
+            format!("git mv {path} {new_path}"),
+        ));
+    }
+
+    // 参照の追従は取り込み側が足した・変えた file に限る（main 側の file は旧 stem を知らない）。
+    let new_stem = file_stem(&new_path, ".md").to_string();
+    let unmerged_now = unmerged_paths(repo)?;
+    let mut followers = git(
+        repo,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            &base,
+            &ctx.source_sha,
+        ],
+    )?
+    .lines()
+    .filter(|l| !l.is_empty())
+    .map(|l| {
+        if l == path {
+            new_path.clone()
+        } else {
+            l.to_string()
+        }
+    })
+    .collect::<BTreeSet<_>>();
+    followers.insert(new_path.clone());
+    let old_title = format!("ADR-{number}");
+    let new_title = format!("ADR {new_stem}");
+    for file in followers {
+        if unmerged_now.contains(&file) {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(repo.join(&file)) else {
+            continue;
+        };
+        if bytes.contains(&0) {
+            continue;
+        }
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        let (mut updated, mut count) = if unmerged {
+            (text.clone(), 0)
+        } else {
+            replace_token(&text, old_stem, &new_stem, is_name_char)
+        };
+        if file == new_path {
+            // 動かした file 自身の題名（1 行目）の `ADR-NNNN` は自分を指す。
+            let (first, tail) = updated.split_once('\n').unwrap_or((&updated, ""));
+            let (title, n) = replace_token(first, &old_title, &new_title, is_name_char);
+            if n > 0 {
+                count += n;
+                updated = if updated.contains('\n') {
+                    format!("{title}\n{tail}")
+                } else {
+                    title
+                };
+            }
+        }
+        if count == 0 {
+            continue;
+        }
+        std::fs::write(repo.join(&file), &updated).map_err(|e| format!("{file}: {e}"))?;
+        git(repo, &["add", "--", &file])?;
+        actions.push(action(
+            &file,
+            item.kind,
+            format!("参照更新 {old_stem} → {new_stem}（{count} 箇所）"),
+        ));
+    }
+
+    let parsed = number.parse::<u32>().map_err(|e| format!("{path}: {e}"))?;
+    let leftovers = bare_number_refs(&added, path, old_stem, parsed, false);
+    if !leftovers.is_empty() {
+        let done = actions
+            .iter()
+            .map(|a| a.detail.as_str())
+            .collect::<Vec<_>>()
+            .join("; ");
+        return not_handled(format!(
+            "{done}。番号だけの参照 {number} は参照先を機械的に決められない: {}",
+            leftovers.join(" | ")
+        ));
+    }
+    Ok(ResolveAttempt::Handled { actions })
+}
+
+/// 取り込み側（`base..source`）で `path` を足した最初の commit の日付（`YYYY-MM-DD`）。
+fn added_date(repo: &Path, base: &str, source: &str, path: &str) -> Result<Option<String>, String> {
+    let range = format!("{base}..{source}");
+    let log = git(
+        repo,
+        &[
+            "log",
+            "--diff-filter=A",
+            "--no-renames",
+            "--format=%cs",
+            &range,
+            "--",
+            path,
+        ],
+    )?;
+    Ok(log.lines().rfind(|l| !l.is_empty()).map(str::to_string))
 }
 
 fn is_name_char(c: char) -> bool {
@@ -310,7 +525,7 @@ fn bare_number_refs(
     moved: &str,
     old_stem: &str,
     number: u32,
-    scheme: Scheme,
+    plain_in_rust: bool,
 ) -> Vec<String> {
     let padded = format!("{number:04}");
     let plain = number.to_string();
@@ -324,7 +539,7 @@ fn bare_number_refs(
         }
         let (stripped, _) = replace_token(line, old_stem, "", is_name_char);
         let padded_hit = contains_token(&stripped, &padded, is_digit);
-        let plain_hit = scheme.dir == MIGRATION.dir
+        let plain_hit = plain_in_rust
             && file.ends_with(".rs")
             && contains_token(&stripped, &plain, is_number_char);
         if padded_hit || plain_hit {

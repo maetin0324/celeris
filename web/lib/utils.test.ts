@@ -32,3 +32,15 @@ describe("cn", () => {
     );
   });
 });
+
+describe("cn の省略経路", () => {
+  it("出どころが文字列 1 つなら merge せずにそのまま返し、空は空文字", () => {
+    expect(cn("px-2 py-1", undefined, false)).toBe("px-2 py-1");
+    expect(cn(undefined, null, false)).toBe("");
+  });
+
+  it("文字列以外の入力 1 つや複数の入力は merge する", () => {
+    expect(cn(["px-2", "px-4"])).toBe("px-4");
+    expect(cn({ "px-2": true }, "px-4")).toBe("px-4");
+  });
+});

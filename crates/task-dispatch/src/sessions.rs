@@ -358,7 +358,8 @@ pub struct ContinuationFacts<'a> {
     pub rollover_tokens: u64,
 }
 
-/// ADR-0140 D1 の判断表を上から順に見る（純粋関数。LLM は使わない）。
+/// ADR-0140 D1 の判断表を上から順に見る（純粋関数。LLM は使わない）。#5（adapter）と #8 の container は
+/// #1 の直後に見る（session を作らない run を、WU の最初の run・continuation でない run より先に除く）。
 pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     use ContinuationFreshReason as R;
     let fresh = |reason: R| ContinuationDecision::Fresh {
@@ -370,6 +371,25 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
         return ContinuationDecision::Fresh {
             reason: R::RoleFresh,
             retire: false,
+        };
+    }
+    // #5・#8（container）: session を作れない・続けられない run は、WU の最初の run や continuation で
+    // ない run でも session を作らない（従来どおり `--no-session-persistence`）。container は config dir が
+    // read-only mount で session を残せない（ADR-0140 D3）。この WU の保存 session は使えないので引退させ、
+    // 別 WU の session には触れない。
+    let surface_fixed = if f.adapter != CONTINUATION_ADAPTER {
+        Some(R::AdapterUnsupported)
+    } else if f.container {
+        Some(R::SurfaceUnsupported)
+    } else {
+        None
+    };
+    if let Some(reason) = surface_fixed {
+        return ContinuationDecision::Fresh {
+            reason,
+            retire: f
+                .stored
+                .is_some_and(|s| s.work_unit_id.as_deref() == f.work_unit_id),
         };
     }
     // #2: 別 WU の session は引き継がない（触れもしない）。
@@ -396,14 +416,6 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     // #4
     if f.fresh_requested {
         return fresh(R::FreshRequested);
-    }
-    // #5
-    if f.adapter != CONTINUATION_ADAPTER {
-        return fresh(R::AdapterUnsupported);
-    }
-    // #8: container は保存 session の有無によらず resume できない。
-    if f.container {
-        return fresh(R::SurfaceUnsupported);
     }
     // #9: daemon の restart 後に行が無い等。
     let Some(stored) = f.stored else {

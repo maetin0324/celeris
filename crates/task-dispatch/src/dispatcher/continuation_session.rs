@@ -1,5 +1,5 @@
-//! ADR-0140 D1/D2: WU の execute continuation を同じ Claude Code session で resume するか、checkpoint
-//! 前置きの新しい session に倒すか（store の読み書きと記録。判断そのものは
+//! ADR-0140 D1/D2: WU（と atomic task。付記 session-container）の execute continuation を同じ Claude Code
+//! session で resume するか、checkpoint 前置きの新しい session に倒すか（store の読み書きと記録。判断そのものは
 //! `crate::sessions::decide_continuation`、純粋・テスト容易）。LLM は使わない。
 
 use super::*;
@@ -22,14 +22,16 @@ pub(super) struct ContinuationSurface<'a> {
 }
 
 impl Dispatcher {
-    /// ADR-0140 D1: WU の worker run の session を決める。`extras.session`（`--resume` / `--session-id`）と
+    /// ADR-0140 D1: WU の worker run の session を決める。`wu` が `None` なら計画の無い atomic task
+    /// （直行経路を含む）の worker run で、task 単位の 1 本（`node_sessions.work_unit_id IS NULL`）を使う
+    /// （付記 session-container）。`extras.session`（`--resume` / `--session-id`）と
     /// `extras.continuation_session`（sink が resume 拒否で retire する key）を書き、resume 拒否のやり直しでは
     /// `extras.continuation_override` に直近の checkpoint を入れる。判断は run の進行に 1 行残す。
     #[allow(clippy::too_many_arguments)]
     pub(super) fn resolve_continuation_session(
         &self,
         task: &Task,
-        wu: &task_core::WorkUnitRow,
+        wu: Option<&task_core::WorkUnitRow>,
         run_id: &str,
         role: ContinuationRole,
         adapter_id: &str,
@@ -38,7 +40,17 @@ impl Dispatcher {
         extras: &mut RunExtras,
     ) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
-        let runs = self.store.runs_for_work_unit(&wu.id)?;
+        let wu_id = wu.map(|w| w.id.as_str());
+        // atomic task は `runs` 索引の `work_unit_id = NULL` の worker run が続きの系列（planner・reviewer は除く）。
+        let runs = match wu {
+            Some(wu) => self.store.runs_for_work_unit(&wu.id)?,
+            None => self
+                .store
+                .runs_for_task(task.id)?
+                .into_iter()
+                .filter(|r| r.work_unit_id.is_none() && r.role == task_core::RunIndexRole::Worker)
+                .collect(),
+        };
         let previous = runs
             .iter()
             .filter(|r| r.run_id != run_id && r.status != task_core::RunIndexStatus::Running)
@@ -54,12 +66,10 @@ impl Dispatcher {
                     if *run_id == p.run_id && msg.starts_with(CONTINUATION_RESUME_REJECTED))
             })
         });
-        let stored = self
-            .store
-            .work_unit_session_current(task.id, Some(&wu.id))?;
+        let stored = self.store.work_unit_session_current(task.id, wu_id)?;
         let decision = crate::sessions::decide_continuation(&ContinuationFacts {
             role,
-            work_unit_id: Some(&wu.id),
+            work_unit_id: wu_id,
             previous_end,
             previous_resume_rejected,
             fresh_requested: !self.config.execution.continuation_session_resume,
@@ -88,8 +98,7 @@ impl Dispatcher {
             }
             ContinuationDecision::Fresh { reason, retire } => {
                 if retire {
-                    self.store
-                        .work_unit_session_retire(task.id, Some(&wu.id), now)?;
+                    self.store.work_unit_session_retire(task.id, wu_id, now)?;
                 }
                 if reason.starts_session() {
                     let session_id = crate::sessions::new_session_id(adapter_id);
@@ -97,7 +106,7 @@ impl Dispatcher {
                         .work_unit_session_create(&task_core::WorkUnitSession::new(
                             task.assignee.clone().unwrap_or_default(),
                             task.id,
-                            Some(wu.id.clone()),
+                            wu_id.map(str::to_string),
                             adapter_id,
                             account.map(str::to_string),
                             surface.provider.map(str::to_string),
@@ -116,7 +125,12 @@ impl Dispatcher {
                 if reason == ContinuationFreshReason::ResumeRejected
                     && extras.continuation_override.is_none()
                 {
-                    extras.continuation_override = latest_checkpoint_context(wu, &runs, run_id);
+                    let run_seq = match wu {
+                        Some(wu) => wu.runs + 1,
+                        None => runs.iter().map(|r| r.seq).max().unwrap_or(0) + 1,
+                    };
+                    extras.continuation_override =
+                        latest_checkpoint_context(run_seq, &runs, run_id);
                 }
                 format!(
                     "{CONTINUATION_SESSION_PREFIX} fresh (reason={})",
@@ -124,7 +138,10 @@ impl Dispatcher {
                 )
             }
         };
-        extras.continuation_session = extras.session.as_ref().map(|_| (task.id, wu.id.clone()));
+        extras.continuation_session = extras
+            .session
+            .as_ref()
+            .map(|_| (task.id, wu_id.map(str::to_string)));
         // 役割・アダプタの都合で判断の対象外（従来どおり）の run には記録を足さない。
         let quiet = matches!(
             decision,
@@ -175,7 +192,7 @@ fn previous_run_end(events: &[(u64, Event)], previous: &task_core::RunRow) -> ta
 
 /// resume 拒否のやり直しに載せる続きの文脈（checkpoint を持つ直近の run から）。
 fn latest_checkpoint_context(
-    wu: &task_core::WorkUnitRow,
+    run_seq: u32,
     runs: &[task_core::RunRow],
     run_id: &str,
 ) -> Option<task_worker::ContinuationContext> {
@@ -185,7 +202,7 @@ fn latest_checkpoint_context(
         .max_by_key(|r| r.seq)?;
     let checkpoint = serde_json::to_value(last.checkpoint.as_ref()?).ok()?;
     Some(task_worker::ContinuationContext {
-        run_seq: wu.runs + 1,
+        run_seq,
         previous_end: "resume_rejected".to_string(),
         checkpoint,
         prior_runs: runs

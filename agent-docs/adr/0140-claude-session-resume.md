@@ -159,3 +159,20 @@ run ごとに `RunMetrics`（`runs.metrics`）へ足し、Task 単位で `Execut
   無い・壊れている（偽アダプタが claude と同じく拒否の文言を返す）ときは `resume_rejected` で直近の checkpoint 前置きの
   新 session に 1 回だけやり直し、run は成功して `fresh_fallback_by_reason.resume_rejected = 1` に数える。celeris は
   jsonl を読まず・書き換えない。判断表・実装の変更は無し。
+
+## 付記（2026-10-03、session-container）
+
+- 判断表の見る順: #1（planner・reviewer は `role_fresh`）の直後に #5（adapter が `claude-code` 以外 →
+  `adapter_unsupported`）と #8 の container（→ `surface_unsupported`）を見る。従来は #2（`independent_wu`、WU の最初の
+  run）と #3（`not_continuation`）が先に返り、どちらも session を作る理由なので、container run に `--session-id` が渡り
+  `node_sessions` に行が作られていた（container の `CLAUDE_CONFIG_DIR` は read-only mount で session を残せない。D3 違反）。
+  この 2 つの理由は session を作らず、run は従来どおり `--no-session-persistence` で走る。保存 session がこの key の
+  ものなら引退させ、別 WU の session には触れない。cwd の変化による `surface_unsupported` は従来の位置のまま。
+- atomic task（計画の無い task。ADR-0124 の直行経路を含む）の worker run も同じ判断表で決める。session key は
+  task 単位の 1 本で、`node_sessions` の `work_unit_id IS NULL`（migration 0043 の規約。新しい migration は無し）。
+  続きの系列は `runs` 索引の `work_unit_id = NULL`・`role = worker` の行で、直前の run の終わり方・resume 拒否の印は
+  WU と同じく読む。同じ task・`claude-code`・同じ account/provider・cwd・container でない、なら `--resume`、崩れたら
+  直近の checkpoint 前置きの fresh。atomic run の `runs.session_id` に使った id を載せ、usage を `approx_tokens` に積む
+  （#10 の材料）。CoS の対話 run（ADR-0054 の `node_sessions` を使う）と planner run は対象外。
+- 試験: `session_resume_container_no_session`、`session_resume_reviewer_stays_fresh`、
+  `session_resume_atomic_task_reuses_session`（`dispatcher/tests/session_resume.rs`）。

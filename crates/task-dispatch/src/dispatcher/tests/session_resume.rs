@@ -111,6 +111,34 @@ impl WorkerAdapter for ClaudeScriptAdapter {
         sink: &dyn EventSink,
     ) -> Result<RunOutcome, AdapterError> {
         std::fs::create_dir_all(&req.artifacts_dir).ok();
+        if req.task.kind == TaskKind::Review {
+            self.seen
+                .lock()
+                .unwrap()
+                .push(("reviewer".to_string(), req.context.clone()));
+            let verdicts: Vec<serde_json::Value> = req
+                .context
+                .review
+                .as_ref()
+                .map(|r| r.criteria.clone())
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| serde_json::json!({"criterion": i, "pass": true, "reason": "ok"}))
+                .collect();
+            std::fs::write(
+                req.artifacts_dir.join("review.json"),
+                serde_json::json!({ "verdicts": verdicts }).to_string(),
+            )
+            .expect("write review.json");
+            return Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "reviewed".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            });
+        }
         if req.context.execution_planner.is_some() {
             self.seen
                 .lock()
@@ -174,20 +202,27 @@ impl WorkerAdapter for ClaudeScriptAdapter {
                 }
             }
             Hook::RewriteStored { adapter, account } => {
-                let wu = self
-                    .store
-                    .work_units_for(req.task.id)
-                    .unwrap()
-                    .into_iter()
-                    .find(|u| u.key == key)
-                    .expect("work unit of this run");
+                // atomic task（WU 無し）は task 単位の 1 本（`work_unit_id IS NULL`）。
+                let wu_id = (key != "atomic").then(|| {
+                    self.store
+                        .work_units_for(req.task.id)
+                        .unwrap()
+                        .into_iter()
+                        .find(|u| u.key == key)
+                        .expect("work unit of this run")
+                        .id
+                });
                 let current = self
                     .store
-                    .work_unit_session_current(req.task.id, Some(&wu.id))
+                    .work_unit_session_current(req.task.id, wu_id.as_deref())
                     .unwrap()
                     .expect("the dispatcher created a continuation session for this run");
                 self.store
-                    .work_unit_session_retire(req.task.id, Some(&wu.id), OffsetDateTime::now_utc())
+                    .work_unit_session_retire(
+                        req.task.id,
+                        wu_id.as_deref(),
+                        OffsetDateTime::now_utc(),
+                    )
                     .unwrap();
                 let rewritten = task_core::WorkUnitSession {
                     id: ulid::Ulid::new().to_string(),
@@ -563,6 +598,341 @@ async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
     assert!(!session_of(&b[0]).resume);
     assert_ne!(session_of(&b[0]).session_id, session_of(&a[0]).session_id);
     // planner の run には判断の行を足さない（WU の run の 3 本分だけ）。
+    assert_eq!(session_lines(&store, task_id).len(), 3);
+}
+
+/// 計画の無い atomic task（ADR-0140 付記 session-container）。gate を使わない既定の dispatcher では直行経路と
+/// 同じく `current_wu = None` の worker run になる。
+fn atomic_task(dir: &std::path::Path, store: &Arc<dyn TaskStore>) -> TaskId {
+    let task = new_task(
+        dir,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        5,
+    );
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    task_id
+}
+
+/// 付記 session-container: atomic task の予算切れ・yield の続きも、同じ task・`claude-code`・同じ
+/// account/provider・cwd なら task 単位の session（`work_unit_id IS NULL`）を `--resume` する。保存 session の
+/// account が違えば resume せず、checkpoint 前置きの新しい session（`account_changed`）に倒す。
+#[tokio::test]
+async fn session_resume_atomic_task_reuses_session() {
+    // 同じ条件: budget → yield → done の 3 run が同じ session id。
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_id = atomic_task(dir.path(), &store);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "atomic",
+            vec![(budget_exhausted(), Hook::None), (yielded(), Hook::None)],
+        )],
+    ));
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+    assert!(store.work_units_for(task_id).unwrap().is_empty());
+
+    let runs = adapter.runs_of("atomic");
+    assert_eq!(runs.len(), 3, "budget → yield → done");
+    let first = session_of(&runs[0]);
+    assert!(
+        !first.resume,
+        "the first run of an atomic task starts a session"
+    );
+    assert!(task_worker::provider::is_valid_uuid(&first.session_id));
+    assert_eq!(
+        session_argv(&runs[0]),
+        vec!["--session-id".to_string(), first.session_id.clone()]
+    );
+    for later in &runs[1..] {
+        let s = session_of(later);
+        assert!(s.resume, "atomic continuations resume the same session");
+        assert_eq!(s.session_id, first.session_id);
+        assert_eq!(
+            session_argv(later),
+            vec!["--resume".to_string(), first.session_id.clone()]
+        );
+        assert!(
+            later.continuation.is_some(),
+            "the checkpoint stays in the preamble"
+        );
+    }
+    let stored = store
+        .work_unit_session_current(task_id, None)
+        .unwrap()
+        .expect("the task-level session row (work_unit_id NULL)");
+    assert_eq!(stored.session_id, first.session_id);
+    assert!(stored.work_unit_id.is_none());
+    let lines = session_lines(&store, task_id);
+    assert_eq!(
+        lines,
+        vec![
+            "continuation session: fresh (reason=independent_wu)".to_string(),
+            format!(
+                "continuation session: resumed (session={})",
+                first.session_id
+            ),
+            format!(
+                "continuation session: resumed (session={})",
+                first.session_id
+            ),
+        ]
+    );
+    let index = store.runs_for_task(task_id).unwrap();
+    let workers: Vec<_> = index
+        .iter()
+        .filter(|r| r.role == task_core::RunIndexRole::Worker)
+        .collect();
+    assert_eq!(workers.len(), 3, "{index:?}");
+    assert!(
+        workers
+            .iter()
+            .all(|r| r.session_id.as_deref() == Some(first.session_id.as_str())),
+        "{index:?}"
+    );
+
+    // 別 account: 保存 session を別 account の行に置き換えると、続きは checkpoint 前置きの新しい session。
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_id = atomic_task(dir.path(), &store);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "atomic",
+            vec![(
+                yielded(),
+                Hook::RewriteStored {
+                    adapter: "claude-code",
+                    account: Some("acct-other"),
+                },
+            )],
+        )],
+    ));
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+    let runs = adapter.runs_of("atomic");
+    assert_eq!(runs.len(), 2);
+    let (s1, s2) = (session_of(&runs[0]), session_of(&runs[1]));
+    assert!(!s2.resume, "another account's session is never resumed");
+    assert_ne!(s2.session_id, s1.session_id);
+    assert!(
+        runs[1].continuation.is_some(),
+        "fallback carries the checkpoint"
+    );
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=account_changed)"),
+        "{lines:?}"
+    );
+    let current = store
+        .work_unit_session_current(task_id, None)
+        .unwrap()
+        .expect("a fresh task-level session replaces the other account's row");
+    assert_eq!(current.session_id, s2.session_id);
+}
+
+/// claude CLI の argv のうち session に関わる部分（`task_worker::claude_code` の組み立てと同じ規則:
+/// `context.session` が無ければ `--no-session-persistence`、あれば `--session-id` / `--resume`）。
+fn session_argv(ctx: &task_worker::RunContext) -> Vec<String> {
+    match ctx.session.as_ref() {
+        Some(s) if s.adapter == "claude-code" && s.resume => {
+            vec!["--resume".into(), s.session_id.clone()]
+        }
+        Some(s) if s.adapter == "claude-code" => vec!["--session-id".into(), s.session_id.clone()],
+        _ => vec!["--no-session-persistence".into()],
+    }
+}
+
+/// ADR-0140 D3: container run（ADR-0043 D3。`CLAUDE_CONFIG_DIR` は read-only mount）は、WU の最初の run
+/// でも予算切れの続きでも session を作らず resume もしない（`--no-session-persistence` のまま）。
+/// `node_sessions` に WU の continuation 行は増えない。runtime の検出は偽物（`info` を走らせない）で、
+/// podman / docker にもネットワークにも触らない。
+#[tokio::test]
+async fn session_resume_container_no_session() {
+    let root = tempfile::tempdir().unwrap();
+    let code = root.path().join("src").join("code");
+    std::fs::create_dir_all(code.join(".config/celeris")).unwrap();
+    std::fs::write(
+        code.join(".config/celeris/workspace.toml"),
+        b"[run]\nmode = \"container\"\n\n[container]\nimage = \"celeris-test:latest\"\n",
+    )
+    .unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let (project_id, repos) = project_with_repos(
+        &store,
+        &[("code", code.as_path(), task_core::RepoKind::Dir)],
+    );
+    let mut task = new_task(
+        &code,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        5,
+    );
+    task.project_id = Some(project_id);
+    task.repos = repos.iter().map(task_core::RepoRef::of).collect();
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_three_step_plan(&store, task_id);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "a",
+            vec![(budget_exhausted(), Hook::None), (yielded(), Hook::None)],
+        )],
+    ));
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    d.config.workspace_root = root.path().join("ws");
+    d.set_container_probe(task_worker::container::detect_with(
+        task_worker::RuntimePreference::Auto,
+        |_| Ok(()),
+    ));
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 3, "budget → yield → done");
+    assert!(adapter.runs_of("b").len() == 1 && adapter.runs_of("c").len() == 1);
+    for (key, ctx) in [("a", &a[0]), ("a", &a[1]), ("a", &a[2])]
+        .into_iter()
+        .chain(
+            adapter
+                .runs_of("b")
+                .iter()
+                .map(|c| ("b", c))
+                .collect::<Vec<_>>(),
+        )
+        .chain(
+            adapter
+                .runs_of("c")
+                .iter()
+                .map(|c| ("c", c))
+                .collect::<Vec<_>>(),
+        )
+    {
+        assert!(ctx.session.is_none(), "{key}: {:?}", ctx.session);
+        assert_eq!(session_argv(ctx), vec!["--no-session-persistence"], "{key}");
+    }
+    assert!(
+        a[1].continuation.is_some() && a[2].continuation.is_some(),
+        "continuations carry the checkpoint"
+    );
+    for unit in store.work_units_for(task_id).unwrap() {
+        assert!(
+            store
+                .work_unit_session_current(task_id, Some(&unit.id))
+                .unwrap()
+                .is_none(),
+            "no continuation session row for {}",
+            unit.key
+        );
+    }
+    assert!(
+        store
+            .runs_for_task(task_id)
+            .unwrap()
+            .iter()
+            .all(|r| r.session_id.is_none())
+    );
+    let lines = session_lines(&store, task_id);
+    assert_eq!(lines.len(), 5, "{lines:?}");
+    assert!(
+        lines
+            .iter()
+            .all(|l| l == "continuation session: fresh (reason=surface_unsupported)"),
+        "{lines:?}"
+    );
+}
+
+/// ADR-0140 D1 #1: reviewer・planner run は、WU の保存 session があっても常に fresh（`--resume` を渡さず、
+/// session も作らない）。WU の continuation 行を retire も作成もしない（reviewer の後も WU a の session は
+/// 現役のまま）。
+#[tokio::test]
+async fn session_resume_reviewer_stays_fresh() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = compound_task(dir.path());
+    task.acceptance.push(Criterion {
+        text: "レビューで確かめる".into(),
+        check: Check::Reviewer,
+    });
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    let plan = plan_json(vec![wu_spec("a", &[]), wu_spec("b", &["a"])]);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        vec![plan],
+        vec![("a", vec![(budget_exhausted(), Hook::None)])],
+    ));
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    d.config.execution.gate = task_core::GateMode::On;
+    d.config.execution.planner.adapter = "claude-code".to_string();
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let planners = adapter.runs_of("planner");
+    let reviewers = adapter.runs_of("reviewer");
+    assert!(!planners.is_empty());
+    assert!(
+        !reviewers.is_empty(),
+        "the reviewer criterion runs a reviewer"
+    );
+    for (role, ctx) in planners
+        .iter()
+        .map(|c| ("planner", c))
+        .chain(reviewers.iter().map(|c| ("reviewer", c)))
+    {
+        assert!(
+            ctx.session.is_none(),
+            "{role} stays fresh: {:?}",
+            ctx.session
+        );
+        assert_eq!(
+            session_argv(ctx),
+            vec!["--no-session-persistence"],
+            "{role}"
+        );
+    }
+    // WU a の session は reviewer の後も現役のまま（retire されず、別の行にも置き換わらない）。
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 2);
+    assert!(session_of(&a[1]).resume);
+    let units = store.work_units_for(task_id).unwrap();
+    for (key, ctx) in [("a", &a[0]), ("b", &adapter.runs_of("b")[0])] {
+        let unit = units.iter().find(|u| u.key == key).unwrap();
+        let current = store
+            .work_unit_session_current(task_id, Some(&unit.id))
+            .unwrap()
+            .expect("the work unit session is still current");
+        assert_eq!(current.session_id, session_of(ctx).session_id, "{key}");
+        assert!(current.retired_at.is_none(), "{key}");
+    }
+    // reviewer・planner の run は session を残さず、判断の行も足さない（WU の run の 3 本分だけ）。
+    for r in store.runs_for_task(task_id).unwrap() {
+        if matches!(
+            r.role,
+            task_core::RunIndexRole::Reviewer | task_core::RunIndexRole::Planner
+        ) {
+            assert!(r.session_id.is_none(), "{r:?}");
+        }
+    }
     assert_eq!(session_lines(&store, task_id).len(), 3);
 }
 

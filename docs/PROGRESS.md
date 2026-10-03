@@ -1079,3 +1079,39 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 - NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。
 
 main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。
+
+## main (aed80844) 取り込みと衝突解消（work unit `sync-main`）— 2026-10-03
+
+完了日 2026-10-03。前回 review 差し戻し時点の main `33aca5a3`（HEAD の祖先）から main `aed80844`
+（本番 admission ADR 番号振り直し 41366893・web release packaging 修正 aed80844 を含む）まで進んでいたため、
+`git merge main --no-ff` で取り込んだ。衝突は想定どおり 2 file:
+
+- `docs/PROGRESS.md`: HEAD 側（ADR-0129 sccache 撤去・reflink target の節）と main 側（launcher の
+  SCM_CREDENTIALS 対応・web release 依存欠落の事故記録・ADR-0135/ADR-0138）の両方を、見出しの前後関係を
+  保ったまま残した（衝突マーカーを除去するだけで内容の削除・改変はしていない）。
+- `scripts/selfdeploy/install-units.sh`: main が足した `celeris-web-lan.socket`/`celeris-web-lan.service`
+  と ADR-0135 D3 のコメントを採用しつつ、本ブランチの撤去（`celeris-sccache.service`・
+  `celeris-scratch-cache.service` を `for unit in ...` に含めない）を保った。結果の行は
+  `for unit in celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service; do`。
+
+`docs/architecture-map.md` は auto-merge のみ（2 行削除、main 側の反映）で衝突なし。他に壊れた file はない。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0。
+- `git merge-tree --write-tree main HEAD` → exit 0（衝突なしの tree を出力）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。全 12 本 ok
+  （`install-units.sh` を直接叩く試験は無いが、`promote_web_follows_release.sh`・`web_follow_health_gate.sh`
+  が web-lan 経路を通す。いずれも ok）。
+- `cargo test --workspace` → exit 0。3408 passed、0 failed（`database is locked` は出ず、`instance_handoff`・
+  browser launcher 系の既知 flaky も今回は発現しなかった）。
+
+### 未解決事項
+
+- 本番 host（`~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行、
+  `celeris-web-lan.*` の install）は引き続き人が `docs/ops/host-sccache-reflink-targets.md` と
+  「人が実行する手順」節の手順で行う。本 work unit は本番 host には触れていない。

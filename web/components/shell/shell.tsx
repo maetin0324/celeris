@@ -7,6 +7,7 @@ import { NotificationsWatcher } from "../../features/reports/notifications-watch
 import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { Badge, type BadgeTone } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
+import { Icon } from "../ui/icon";
 import { navGroups, navItems } from "./nav-items";
 import { installScrollMemory } from "./scroll-memory";
 import { useShellServerState } from "./use-server-state";
@@ -82,11 +83,12 @@ export function Shell({ children }: { children: ReactNode }) {
         <button
           ref={menuButton}
           type="button"
-          className={`${buttonVariants({ variant: "secondary" })} ml-auto md:hidden`}
+          className={`${buttonVariants({ variant: "secondary", size: "sm" })} ml-auto md:hidden`}
           aria-expanded={menuOpen}
           aria-controls="shell-nav"
           onClick={() => setMenuOpen((open) => !open)}
         >
+          <Icon name="menu" size="sm" />
           メニュー
         </button>
         <nav

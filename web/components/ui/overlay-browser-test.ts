@@ -20,7 +20,9 @@ export async function seriousViolations(page: Page) {
   });
 }
 
-export async function openOverlayFixture(): Promise<{ page: Page; close: () => Promise<void> }> {
+export async function openOverlayFixture(
+  fixturePath = "/components/ui/fixtures/overlay.html",
+): Promise<{ page: Page; close: () => Promise<void> }> {
   const server: ViteDevServer = await createServer({
     configFile: false,
     root: process.cwd(),
@@ -34,8 +36,8 @@ export async function openOverlayFixture(): Promise<{ page: Page; close: () => P
     if (!address || typeof address === "string") throw new Error("Vite の port を取得できません");
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${address.port}/components/ui/fixtures/overlay.html`);
-    await page.getByRole("button", { name: "詳細を開く" }).waitFor();
+    await page.goto(`http://127.0.0.1:${address.port}${fixturePath}`);
+    await page.getByRole("heading", { level: 1 }).waitFor();
     return {
       page,
       close: async () => {

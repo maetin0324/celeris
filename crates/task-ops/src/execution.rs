@@ -16,6 +16,17 @@ use time::format_description::well_known::Rfc3339;
 
 use crate::error::OpsError;
 
+/// ADR-0134 D1: a blocked daemon repair cannot be carried into a new plan.
+pub(crate) fn is_blocked_daemon_repair(row: &WorkUnitRow, daemon_added: bool) -> bool {
+    row.kind == task_core::WorkUnitKind::Repair
+        && row.status == WorkUnitStatus::Blocked
+        && matches!(
+            row.blocked_reason,
+            Some(WorkUnitBlockedReason::PlanIssue) | Some(WorkUnitBlockedReason::Limit)
+        )
+        && daemon_added
+}
+
 fn format_rfc3339(t: OffsetDateTime) -> Result<String, OpsError> {
     t.format(&Rfc3339)
         .map_err(|e| OpsError::Validation(format!("time formatting error: {e}")))
@@ -417,15 +428,7 @@ pub fn replan(
             || (v2 && u.phase.is_some() && !plan_keys.contains(u.key.as_str()))
     };
     // ADR-0134 D1: replan の新しい版で superseded にする、止まった daemon の repair WU。
-    let blocked_daemon_repair = |u: &WorkUnitRow| -> bool {
-        u.kind == task_core::WorkUnitKind::Repair
-            && u.status == WorkUnitStatus::Blocked
-            && matches!(
-                u.blocked_reason,
-                Some(WorkUnitBlockedReason::PlanIssue) | Some(WorkUnitBlockedReason::Limit)
-            )
-            && daemon_added(u)
-    };
+    let blocked_daemon_repair = |u: &WorkUnitRow| is_blocked_daemon_repair(u, daemon_added(u));
     let superseded_repair_keys: BTreeSet<String> = current
         .iter()
         .filter(|u| blocked_daemon_repair(u))

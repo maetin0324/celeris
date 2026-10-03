@@ -498,10 +498,12 @@ fn sync_onto_target_rebases_the_task_branch_onto_an_advanced_target() {
         target_sha,
         before_sha,
         head_sha,
+        method,
     } = outcome
     else {
         panic!("{outcome:?}");
     };
+    assert_eq!(method, SyncMethod::Rebase);
     assert_eq!(target_sha, target);
     assert_eq!(before_sha, before);
     assert_eq!(head_sha, head_of(&tree));
@@ -517,6 +519,179 @@ fn sync_onto_target_rebases_the_task_branch_onto_an_advanced_target() {
     );
     assert!(tree.join("task.txt").is_file() && tree.join("other.txt").is_file());
     assert_eq!(head_of(&repo), target, "target は動かさない");
+}
+
+/// ADR-0118 付記 2026-10-03: merge commit の無い直線 branch は従来どおり rebase で直線のまま同期する。
+#[test]
+fn sync_onto_target_linear_branch_still_rebases() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    commit_file(&tree, "a.txt", b"a\n", "task a");
+    commit_file(&tree, "b.txt", b"b\n", "task b");
+    let before = head_of(&tree);
+    commit_file(&repo, "other.txt", b"other\n", "other task landed");
+    let target = head_of(&repo);
+
+    let outcome = sync_onto_target(&tree, "main");
+    let SyncOutcome::Rebased {
+        target_sha,
+        before_sha,
+        head_sha,
+        method,
+    } = outcome
+    else {
+        panic!("{outcome:?}");
+    };
+    assert_eq!(method, SyncMethod::Rebase);
+    assert_eq!(
+        (target_sha.as_str(), before_sha.as_str()),
+        (target.as_str(), before.as_str())
+    );
+    assert_eq!(head_sha, head_of(&tree));
+    // rebase: HEAD の親を辿ると 2 commit で target に着き、merge commit は作らない。
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "HEAD~2"]).as_deref(),
+        Some(target.as_str())
+    );
+    let range = format!("{target}..HEAD");
+    assert_eq!(
+        git_line(&tree, &["rev-list", "--merges", "--count", &range]).as_deref(),
+        Some("0")
+    );
+    assert!(
+        !git_ok(&tree, &["merge-base", "--is-ancestor", &before, "HEAD"]),
+        "元の commit は書き換わる"
+    );
+    assert!(
+        tree.join("a.txt").is_file()
+            && tree.join("b.txt").is_file()
+            && tree.join("other.txt").is_file()
+    );
+}
+
+/// ADR-0118 付記 2026-10-03: merge commit を含む branch は target を merge して同期する。
+/// merge commit は残り、target は HEAD の祖先になり、merge commit で解いた衝突は再発しない
+/// （rebase だと task 側の README の commit が新しい target 上で再び衝突する）。
+#[test]
+fn sync_onto_target_keeps_merge_history() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    // task 側と main 側が同じ README を変え、task branch が main を merge して衝突を解く。
+    commit_file(&tree, "README.md", b"task side\n", "task");
+    commit_file(&repo, "README.md", b"main side\n", "main changed README");
+    let merged_main = head_of(&repo);
+    let merge = git(
+        &tree,
+        &["merge", "--no-ff", "--no-edit", "main"],
+        GIT_WRITE_TIMEOUT,
+    )
+    .unwrap_or_else(|| panic!("merge"));
+    assert!(!merge.ok, "README で衝突するはず");
+    std::fs::write(tree.join("README.md"), b"resolved\n").unwrap_or_else(|e| panic!("{e}"));
+    git_must(&tree, &["add", "-A"]);
+    git_must(&tree, &["commit", "-q", "--no-edit"]);
+    let resolution = head_of(&tree);
+    // WU の --no-ff merge も 1 つ重ねる。
+    git_must(&tree, &["checkout", "-q", "-b", "wu", "HEAD"]);
+    commit_file(&tree, "wu.txt", b"wu\n", "wu work");
+    git_must(&tree, &["checkout", "-q", "celeris/01TASK"]);
+    git_must(&tree, &["merge", "-q", "--no-ff", "--no-edit", "wu"]);
+    let before = head_of(&tree);
+    // その後に main が別ファイルで進む。
+    commit_file(&repo, "other.txt", b"other\n", "other task landed");
+    let target = head_of(&repo);
+
+    let outcome = sync_onto_target(&tree, "main");
+    let SyncOutcome::Rebased {
+        target_sha,
+        before_sha,
+        head_sha,
+        method,
+    } = outcome
+    else {
+        panic!("既に解いた衝突で止まってはいけない: {outcome:?}");
+    };
+    assert_eq!(method, SyncMethod::Merge);
+    assert_eq!(
+        (target_sha.as_str(), before_sha.as_str()),
+        (target.as_str(), before.as_str())
+    );
+    assert_eq!(head_sha, head_of(&tree));
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "refs/heads/celeris/01TASK"]).as_deref(),
+        Some(head_sha.as_str())
+    );
+    // 履歴を書き換えない: 元の HEAD・解決の merge commit・取り込んだ main がすべて祖先に残る。
+    for kept in [&before, &resolution, &merged_main, &target] {
+        assert!(
+            git_ok(&tree, &["merge-base", "--is-ancestor", kept, &head_sha]),
+            "{kept} が HEAD の祖先に残る"
+        );
+    }
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "HEAD^1"]).as_deref(),
+        Some(before.as_str()),
+        "同期は before の上の merge commit"
+    );
+    assert_eq!(
+        git_line(&tree, &["rev-parse", "HEAD^2"]).as_deref(),
+        Some(target.as_str())
+    );
+    let range = format!("{target}..HEAD");
+    assert_eq!(
+        git_line(&tree, &["rev-list", "--merges", "--count", &range]).as_deref(),
+        Some("3"),
+        "解決・WU・同期の 3 つの merge commit"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.join("README.md")).unwrap_or_default(),
+        "resolved\n"
+    );
+    assert!(tree.join("wu.txt").is_file() && tree.join("other.txt").is_file());
+    assert_eq!(is_dirty(&tree), Some(false));
+    assert_eq!(head_of(&repo), target, "target は動かさない");
+}
+
+/// ADR-0118 付記 2026-10-03: merge commit を含む branch の同期でも、本当の衝突は `merge --abort`
+/// して `Conflict` を返し、元の HEAD を残す。
+#[test]
+fn sync_onto_target_merge_conflict_restores_the_original_head() {
+    let root = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let repo = root.path().join("code");
+    init_repo(&repo);
+    let tree = root.path().join("ws/01TASK/repos/code");
+    add_worktree(&repo, &tree, "celeris/01TASK");
+    git_must(&tree, &["checkout", "-q", "-b", "wu", "HEAD"]);
+    commit_file(&tree, "README.md", b"wu side\n", "wu work");
+    git_must(&tree, &["checkout", "-q", "celeris/01TASK"]);
+    git_must(&tree, &["merge", "-q", "--no-ff", "--no-edit", "wu"]);
+    let before = head_of(&tree);
+    commit_file(&repo, "README.md", b"human side\n", "human");
+    let target = head_of(&repo);
+
+    assert_eq!(
+        sync_onto_target(&tree, "main"),
+        SyncOutcome::Conflict {
+            target_sha: target.clone(),
+            files: vec!["README.md".to_string()],
+        }
+    );
+    assert_eq!(head_of(&tree), before, "元の HEAD のまま");
+    assert_eq!(is_dirty(&tree), Some(false));
+    assert!(!git_ok(
+        &tree,
+        &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]
+    ));
+    assert_eq!(
+        std::fs::read_to_string(tree.join("README.md")).unwrap_or_default(),
+        "wu side\n"
+    );
 }
 
 /// ADR-0118 D2: target が既に HEAD の祖先なら rebase しない。

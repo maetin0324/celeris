@@ -76,3 +76,15 @@ rebase 衝突（`SyncOutcome::Conflict`）は `rebase --abort` 済みで成果�
 | `celeris` (`delivery.rs`) | root delivery 直前の target/候補照合と stale 時の再レビュー要求 |
 
 並列の review-decisions が触る `review.rs`、root delivery が触る `delivery.rs`、browser 系の行は各 WorkUnit の担当範囲で変更する。テストは一時 Git repo だけで、古い同一 base からの 2 task の無衝突同期（`pre_review_sync`）、三つの SHA と target 再進行時の再検査（`reviewed_sha`）、子→親統合、衝突時の abort/成果保持、dirty/remote 除外、上限到達を検証する。外部ネットワーク、実 claude、実 systemd は使わない。
+
+## 付記（2026-10-03）: merge commit を含む branch の同期
+
+D2 の同期は素の `git rebase <target>` だったため、compound・tree root の task branch にある WU/子の `--no-ff` merge や main の merge を直線化していた。merge commit の中で解いた衝突は直線化で失われ、target が進むたびに元の commit が再適用されて同じ衝突が再発し、IntegrationRepair に入っていた。
+
+**決定**: `task_ops::changes::sync_onto_target` は `target_sha..HEAD` に merge commit（親 2 つ以上、`git rev-list --merges`）があるとき、履歴を書き換えずに `git merge --no-ff --no-edit <target_sha>` で target を取り込む。衝突なら衝突ファイルを集めて `merge --abort` し、元の HEAD と clean な worktree に戻ったことを確かめて従来どおり `SyncOutcome::Conflict` を返す（戻せなければ `Failed`）。同期後の HEAD（同期の merge commit）を `head_sha` とし、これが reviewed SHA かつ merge candidate になる。`target_sha` はその祖先であることを同期の後で検査する。merge commit が無い直線 branch（葉だけの branch）は**従来どおり rebase** する。
+
+結果型は互換を保ち、`SyncOutcome::Rebased` に取り込み方 `method: SyncMethod`（`Rebase` / `Merge`）を足しただけである。`task-dispatch` の `review_spawn.rs` は `..` で受けるだけで、以降の候補記録・照合の扱いは変わらない。merge 中（`MERGE_HEAD` あり）の worktree は rebase 中と同じく `Failed` で触らない。`merge_into_default_branch`（ADR-0043 D5）は変えない。
+
+**`--rebase-merges` を選ばなかった理由**: `git rebase --rebase-merges` は merge commit を作り直すが、merge の中で手で解いた衝突解決は再適用されず、作り直しの merge で同じ衝突が再び起きる（解決を保つには `rerere` の記録に頼るしかなく、worktree ごとに rerere の状態がある保証は無い）。また書き換えで WU/子の統合 commit の SHA が変わり、ADR-0079 D5 の子→親統合や記録済み SHA との照合も崩れる。target を merge する方式は既存の commit をそのまま残し、解決済みの衝突を再び解かせない。直線 branch は rebase のままにして、葉の履歴は従来どおり直線に保つ。
+
+試験は `crates/task-ops/src/changes/tests.rs` の `sync_onto_target_keeps_merge_history`（main を merge して衝突を解き、WU の `--no-ff` merge も重ねた branch を target 前進後に同期し、merge commit が残り target が HEAD の祖先で、解決済みの README で Conflict にならない）、`sync_onto_target_linear_branch_still_rebases`、`sync_onto_target_merge_conflict_restores_the_original_head`。

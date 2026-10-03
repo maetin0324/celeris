@@ -382,6 +382,7 @@ impl Dispatcher {
                         target_sha,
                         before_sha,
                         head_sha,
+                        ..
                     } => (target_sha, before_sha, head_sha),
                     task_ops::changes::SyncOutcome::Conflict { target_sha, files } => {
                         let before_sha = crate::integration::rev_parse(&worktree.dir, "HEAD")

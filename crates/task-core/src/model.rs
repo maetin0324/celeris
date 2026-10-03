@@ -1441,11 +1441,13 @@ pub enum Event {
         head: Option<String>,
     },
     /// ADR parallel integration D4: 統合の依頼。状態は変えない。
+    /// serde の type は `integration_requested`（migration 0047 の部分 index と一致）。
     IntegrationRequested {
         request: Box<crate::integration_request::IntegrationRequest>,
         origin: String,
     },
     /// ADR parallel integration D4: 人が依頼に回答した監査事象。
+    /// serde の type は `integration_answered`（migration 0047 の部分 index と一致）。
     IntegrationAnswered {
         request_id: String,
         answer: String,

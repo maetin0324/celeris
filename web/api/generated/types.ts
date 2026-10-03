@@ -984,6 +984,91 @@ export type CriterionView = {
   "text": string;
 };
 
+export type CronCatchUp = "latest" | "skip";
+
+export type CronJobCreateBody = {
+  "catch_up"?: CronCatchUp;
+  "enabled"?: boolean;
+  "name": string;
+  "overlap"?: CronOverlap;
+  "schedule": string;
+  "template": CronTaskTemplate;
+  "timezone": string;
+};
+
+export type CronJobId = string;
+
+export type CronJobList = {
+  "items": Array<CronJobView>;
+};
+
+export type CronJobPatchBody = {
+  "catch_up"?: CronCatchUp | null;
+  "name"?: string | null;
+  "overlap"?: CronOverlap | null;
+  "schedule"?: string | null;
+  "template"?: CronTaskTemplate | null;
+  "timezone"?: string | null;
+};
+
+export type CronJobRun = {
+  "detail"?: string | null;
+  "id": CronJobRunId;
+  "job_id": CronJobId;
+  "outcome": CronRunOutcome;
+  "recorded_at": string;
+  "scheduled_for": string;
+  "task_id"?: TaskId | null;
+  "trigger": CronTrigger;
+};
+
+export type CronJobRunId = string;
+
+export type CronJobRunList = {
+  "items": Array<CronJobRun>;
+  "job_id": CronJobId;
+};
+
+export type CronJobView = {
+  "catch_up": CronCatchUp;
+  "created_at": string;
+  "enabled": boolean;
+  "id": CronJobId;
+  "last_run"?: CronJobRun | null;
+  "name": string;
+  "next_fire_at"?: string | null;
+  "overlap": CronOverlap;
+  "schedule": string;
+  "template": CronTaskTemplate;
+  "timezone": string;
+  "updated_at": string;
+};
+
+export type CronOverlap = "skip" | "queue";
+
+export type CronRunOutcome = "created" | "queued" | "skipped_overlap" | "skipped_missed" | "error";
+
+export type CronRunResult = {
+  "job_id": CronJobId;
+  "job_name": string;
+  "runs": Array<CronJobRun>;
+  "task_id"?: TaskId | null;
+};
+
+export type CronTaskTemplate = {
+  "acceptance"?: Array<unknown>;
+  "assignee"?: string | null;
+  "harness"?: string | null;
+  "lane"?: Tier | null;
+  "objective"?: string;
+  "priority"?: unknown;
+  "project"?: string | null;
+  "repos"?: Array<string>;
+  "title": string;
+};
+
+export type CronTrigger = "schedule" | "catch_up" | "manual";
+
 export type DaemonInstance = {
   "drained_at"?: string | null;
   "handoff_requested_at"?: string | null;

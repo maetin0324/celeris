@@ -47,6 +47,8 @@ export default [
   // `/plans/new`（`POST /plans` の画面）は ADR-0079 R5b-prep で撤去（`POST /plans` は R5a で 410。新しい仕事は
   // root task〈`/tasks/new`〉とその計画で表す）。
   route("daemon", "routes/daemon.tsx"),
+  route("cron", "routes/cron.tsx"),
+  route("cron/:id", "routes/cron.$id.tsx"),
   route("providers", "routes/providers.tsx"),
   route("accounts", "routes/accounts.tsx"),
   // MCP クライアントの直近の呼び出し（ADR-0056 D4、Phase 80）。「MCP クライアント」節のカードを

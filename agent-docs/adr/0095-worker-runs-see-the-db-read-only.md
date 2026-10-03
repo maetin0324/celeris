@@ -299,3 +299,7 @@ planner と worker の指示（`crates/task-worker/src/preamble.rs` の共通の
 - **HTTP API**・**`worker_read_only = false`**・**コンテナ以外での opt-out**: 従来どおり。
 - **codex 以外の adapter の承認**: D-b は codex だけ。claude-code・opencode などは自前の承認の仕組みを持ち、D-a と D-d に頼る。
 - いずれも worker が daemon と同じ uid であることが根で、完全に閉じるには worker の実行ユーザーの分離が要る。
+
+## 付記（2026-10-02）: 試験用一時 DB の daemon と userns 試験
+
+worker run の中で一時 DB・一時 config・本番 token 無しで起こす試験 daemon には userns を要求しない（本番 DB・本番 token なら従来どおり拒否）。userns の要る試験は `CELERIS_USERNS_TESTS=1` の opt-in。詳細は [ADR-0126](0126-test-daemons-without-userns.md)。

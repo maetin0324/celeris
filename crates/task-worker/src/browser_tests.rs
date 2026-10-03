@@ -637,6 +637,9 @@ impl WorkerAdapter for FailingHarness {
 
 #[tokio::test]
 async fn execution_fallback_uses_fresh_session_and_refuses_without_conformance() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let record = test_record(temp.path());
     let executable = substrate(temp.path());
@@ -1003,6 +1006,9 @@ async fn p4c_fallback_real_harness_scenario() {
 
 #[tokio::test]
 async fn specialist_wraps_existing_harness_and_runs_same_browser_task() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let record = test_record(temp.path());
     let executable = substrate(temp.path());
@@ -1234,6 +1240,9 @@ fn credential_request_origin_outside_effective_domain_is_denied() {
 
 #[tokio::test]
 async fn opencode_and_claude_share_supervised_browser_lifecycle_artifacts_and_cleanup() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     for (id, question) in [("acp", false), ("claude-code", true)] {
         let temp = tempfile::tempdir().unwrap();
         let executable = substrate(temp.path());
@@ -1338,6 +1347,9 @@ async fn unsupported_adapter_and_missing_administrator_grant_fail_before_harness
 
 #[tokio::test]
 async fn cleanup_failure_marks_browser_failed_instead_of_reporting_completion() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let executable = substrate(temp.path());
     let script = std::fs::read_to_string(&executable).unwrap().replace(
@@ -1400,6 +1412,9 @@ fn python_transport_security_regressions_are_part_of_workspace_gate() {
 
 #[tokio::test]
 async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
@@ -1488,6 +1503,9 @@ impl WorkerAdapter for HostileHarness {
 
 #[tokio::test]
 async fn actions_and_domains_outside_task_policy_are_stopped_before_the_substrate() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
@@ -1620,6 +1638,9 @@ async fn missing_egress_resolver_inner() {
 #[test]
 fn production_action_path_reaches_fixture_through_real_browser_and_egress() {
     if std::env::var("CELERIS_BROWSER_ACTION_INNER").is_ok() {
+        return;
+    }
+    if crate::test_support::skip_unless_userns_tests() {
         return;
     }
     let out = std::process::Command::new("/usr/bin/unshare")

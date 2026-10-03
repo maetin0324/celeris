@@ -1,5 +1,7 @@
 //! ADR-0115: dedicated-user launcher の実 process 境界を daemon UID から測る。
 //! host 未準備の CI では理由を表示して skip する。実証時は CELERIS_LAUNCHER_TESTS=require。
+//! 実 launcher（userns・subuid）を使う試験は既定で skip し、`CELERIS_USERNS_TESTS=1`
+//! または `CELERIS_LAUNCHER_TESTS=require` を与えた時だけ走る（ADR-0126 B）。合成 table の試験は既定で走る。
 //!
 //! ADR-0138 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
 //! CredentialInjection（celeris-credentiald の `admit_attested`）と IdentityRestore
@@ -32,6 +34,9 @@ use task_worker::browser_launcher::{
     ClientError, ErrorCode, LauncherClient, Outcome, SessionPolicy, SessionState,
 };
 use task_worker::browser_runtime::{RestoreAdmission, process_starttime};
+
+mod userns_gate;
+use userns_gate::skip_unless_userns_tests;
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";
 
@@ -395,6 +400,11 @@ impl Drop for Session<'_> {
 
 #[test]
 fn launcher_chrome_denies_daemon_uid_ptrace() {
+    if std::env::var("CELERIS_LAUNCHER_TESTS").as_deref() != Ok("require")
+        && skip_unless_userns_tests()
+    {
+        return;
+    }
     let Some(browser_uid) = browser_uid() else {
         missing("celeris-browser user is absent");
         return;

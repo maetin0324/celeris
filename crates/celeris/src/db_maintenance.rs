@@ -4,12 +4,16 @@
 //!   で開くので、`PRAGMA wal_checkpoint` は自動では走らない。ここが `checkpoint_interval_secs` ごとに
 //!   専用の接続で `PASSIVE` チェックポイントを打つ（fsync がリクエストや tick の中に落ちないように）。
 //! - **定期バックアップ（D3）**: `[db] backup_dir` があれば `backup_interval_secs` ごとに
-//!   `celeris-<unix_ts>.sqlite3` を rusqlite の backup API で書き、`backup_keep` 世代だけ残す。
+//!   `VACUUM INTO` で一貫した WAL スナップショットを作り、`backup_keep` 世代だけ残す。
 //!
 //! どちらも `tokio::spawn` の背景タスクで、専用の同期接続を `spawn_blocking` の中で開く（tick も
 //! API のリクエストも待たせない）。失敗は WARN で継続する（デーモンは止めない）。
 
 use std::path::{Path, PathBuf};
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::Duration;
 
 use time::OffsetDateTime;
@@ -23,10 +27,14 @@ pub struct RunningDbMaintenance {
     stop: tokio::sync::oneshot::Sender<()>,
     handle: tokio::task::JoinHandle<()>,
     name: &'static str,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 impl RunningDbMaintenance {
     pub async fn stop(self) {
+        if let Some(cancel) = &self.cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
         let _ = self.stop.send(());
         match tokio::time::timeout(Duration::from_secs(5), self.handle).await {
             Ok(Ok(())) => tracing::info!(task = self.name, "db maintenance task stopped"),
@@ -71,6 +79,7 @@ pub fn spawn_checkpoint_task(
         stop: stop_tx,
         handle,
         name: "checkpoint",
+        cancel: None,
     }
 }
 
@@ -101,8 +110,10 @@ fn wal_file_len(db_path: &Path) -> Option<u64> {
 enum BackupError {
     #[error("backup_dir {0} does not exist (create it first, e.g. with sudo)")]
     MissingDir(PathBuf),
-    #[error("store error: {0}")]
-    Store(#[from] task_core::StoreError),
+    #[error("backup interrupted")]
+    Cancelled,
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -117,6 +128,8 @@ pub fn spawn_backup_task(
     busy_timeout: Duration,
 ) -> RunningDbMaintenance {
     let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let worker_cancel = Arc::clone(&cancel);
     let handle = tokio::spawn(async move {
         let mut ticker = tokio::time::interval(backup_interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -126,9 +139,11 @@ pub fn spawn_backup_task(
                 _ = ticker.tick() => {
                     let src = db_path.clone();
                     let dir = backup_dir.clone();
-                    let result = tokio::task::spawn_blocking(move || backup_once(&src, &dir, keep, busy_timeout)).await;
+                    let cancelled = Arc::clone(&worker_cancel);
+                    let result = tokio::task::spawn_blocking(move || backup_once(&src, &dir, keep, busy_timeout, cancelled)).await;
                     match result {
                         Ok(Ok(dest)) => tracing::info!(backup = %dest.display(), "wrote a periodic db backup"),
+                        Ok(Err(_)) if worker_cancel.load(Ordering::Relaxed) => {}
                         Ok(Err(e)) => tracing::warn!(error = %e, "periodic db backup failed; will retry next interval"),
                         Err(e) => tracing::warn!(error = %e, "periodic db backup task panicked; will retry next interval"),
                     }
@@ -140,6 +155,7 @@ pub fn spawn_backup_task(
         stop: stop_tx,
         handle,
         name: "backup",
+        cancel: Some(cancel),
     }
 }
 
@@ -149,16 +165,94 @@ fn backup_once(
     backup_dir: &Path,
     keep: usize,
     busy_timeout: Duration,
+    cancel: Arc<AtomicBool>,
 ) -> Result<PathBuf, BackupError> {
     // D2 の relocate-db.sh と同じ規律: ディレクトリは作らない（人が sudo で作る前提）。
     if !backup_dir.is_dir() {
         return Err(BackupError::MissingDir(backup_dir.to_path_buf()));
     }
-    let ts = OffsetDateTime::now_utc().unix_timestamp();
+    cleanup_incomplete_backups(backup_dir)?;
+    let now = OffsetDateTime::now_utc();
+    let ts = now.unix_timestamp();
     let dest = backup_dir.join(format!("celeris-{ts}.sqlite3"));
-    task_core::backup_database(db_path, &dest, busy_timeout)?;
+    // Separate simultaneous daemon instances must never write the same staging database.
+    let partial = backup_dir.join(format!(
+        "celeris-{ts}-{}-{}.sqlite3.partial",
+        std::process::id(),
+        now.unix_timestamp_nanos()
+    ));
+    // The old incremental backup can restart on every write from another connection. VACUUM INTO
+    // holds one WAL read snapshot while writers continue, and its progress handler lets shutdown
+    // interrupt the copy. Only the atomic rename makes a backup visible to retention.
+    let result = (|| -> Result<(), BackupError> {
+        let conn = rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        conn.busy_timeout(busy_timeout)?;
+        let progress_cancel = Arc::clone(&cancel);
+        conn.progress_handler(1000, Some(move || progress_cancel.load(Ordering::Relaxed)));
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BackupError::Cancelled);
+        }
+        conn.execute("VACUUM INTO ?1", [partial.to_string_lossy().as_ref()])?;
+        if cancel.load(Ordering::Relaxed) {
+            return Err(BackupError::Cancelled);
+        }
+        std::fs::rename(&partial, &dest)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        remove_backup_files(&partial);
+    }
+    result?;
     prune_backups(backup_dir, keep)?;
     Ok(dest)
+}
+
+fn remove_backup_files(path: &Path) {
+    for suffix in ["", "-journal", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        let _ = std::fs::remove_file(PathBuf::from(name));
+    }
+}
+
+/// Remove interrupted staging files and legacy backup-API files with rollback journals.
+fn cleanup_incomplete_backups(dir: &Path) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        // A second daemon may be writing in the same directory. Stale files from a prior
+        // interval are old enough to distinguish from its active staging file.
+        let stale = path
+            .metadata()
+            .and_then(|m| m.modified())
+            .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+            .is_ok_and(|age| age >= Duration::from_secs(300));
+        if !stale {
+            continue;
+        }
+        if name.starts_with("celeris-") && name.ends_with(".sqlite3.partial") {
+            remove_backup_files(&path);
+        } else if name.starts_with("celeris-")
+            && ["-journal", "-wal", "-shm"]
+                .iter()
+                .any(|suffix| name.ends_with(&format!(".sqlite3.partial{suffix}")))
+        {
+            let base = name
+                .split_once(".sqlite3.partial")
+                .map(|(stem, _)| dir.join(format!("{stem}.sqlite3.partial")))
+                .expect("suffix checked above");
+            remove_backup_files(&base);
+        } else if name.starts_with("celeris-") && name.ends_with(".sqlite3-journal") {
+            let db = PathBuf::from(path.to_string_lossy().trim_end_matches("-journal"));
+            remove_backup_files(&db);
+        }
+    }
+    Ok(())
 }
 
 /// `backup_dir` の `celeris-*.sqlite3` を新しい順に見て、`keep` を超えた古い世代を消す。

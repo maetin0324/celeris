@@ -2,7 +2,7 @@ use crate::{
     Binding, Broker, CredentialPolicy, CredentialRef, Error, LeaseRequest, SecretEnvelope,
     injection_ipc::{
         Admission, AuthSectionRegistration, InjectCode, InjectionReply, InjectionService,
-        LiveRegistry, LiveSessionRegistration, PeerCred, SeqpacketSink,
+        LauncherProofRegistration, LiveRegistry, LiveSessionRegistration, PeerCred, SeqpacketSink,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,8 @@ pub enum ControlRequest {
     UnregisterLiveSession {
         session_id: String,
     },
+    // ADR-0138 D-L: the launcher session proof the daemon received for a live session.
+    AttachLauncherProof(LauncherProofRegistration),
     OpenAuthSection(AuthSectionRegistration),
     CloseAuthSection {
         session_id: String,
@@ -249,6 +251,9 @@ fn serve_one(
                 ControlRequest::UnregisterLiveSession { session_id } => Ok(registry
                     .unregister(&session_id)
                     .map_or_else(IpcReply::code, |_| IpcReply::ok())),
+                ControlRequest::AttachLauncherProof(l) => Ok(registry
+                    .attach_launcher_proof(l)
+                    .map_or_else(IpcReply::code, |_| IpcReply::ok())),
                 ControlRequest::OpenAuthSection(a) => Ok(registry
                     .open_section(a)
                     .map_or_else(IpcReply::code, |_| IpcReply::ok())),
@@ -328,7 +333,23 @@ fn serve_injection(mut stream: UnixStream, service: &InjectionService) {
     crate::injection_ipc::write_reply(&mut stream, &reply);
 }
 pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Result<(), Error> {
-    serve_with(broker, runtime, control_pids, Admission::Attested)
+    serve_attested(broker, runtime, control_pids, None)
+}
+/// Production serve: `Attested` checks launcher session proofs against `launcher_uid`
+/// (ADR-0138 D-L). Without a configured launcher UID no session is admitted.
+pub fn serve_attested(
+    broker: Arc<Broker>,
+    runtime: &Path,
+    control_pids: Vec<u32>,
+    launcher_uid: Option<u32>,
+) -> Result<(), Error> {
+    serve_inner(
+        broker,
+        runtime,
+        control_pids,
+        Admission::Attested,
+        launcher_uid,
+    )
 }
 /// [`serve`] with an explicit admission. Production (`main`) always uses `Attested`;
 /// other admissions exist only under the `same-uid-harness` test feature.
@@ -337,6 +358,15 @@ pub fn serve_with(
     runtime: &Path,
     control_pids: Vec<u32>,
     admission: Admission,
+) -> Result<(), Error> {
+    serve_inner(broker, runtime, control_pids, admission, None)
+}
+fn serve_inner(
+    broker: Arc<Broker>,
+    runtime: &Path,
+    control_pids: Vec<u32>,
+    admission: Admission,
+    launcher_uid: Option<u32>,
 ) -> Result<(), Error> {
     let control_pids: Vec<(u32, u64)> = control_pids
         .into_iter()
@@ -380,7 +410,8 @@ pub fn serve_with(
             serve_one(s, &b, &r, true, &control_pids)
         }
     });
-    let service = InjectionService::new(Arc::clone(&broker), Arc::clone(&registry), admission);
+    let service = InjectionService::new(Arc::clone(&broker), Arc::clone(&registry), admission)
+        .with_launcher_uid(launcher_uid);
     thread::spawn(move || {
         for s in injection.incoming().flatten() {
             serve_injection(s, &service)

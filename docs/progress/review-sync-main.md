@@ -55,3 +55,10 @@ task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り
 - `crates/task-core/src/cluster_job/tests.rs`・`crates/task-core/src/store/tests.rs` の `SCHEMA_VERSION` 直書きの検査（`assert_eq!(SCHEMA_VERSION, 42)` 等）をすべて 45 に直した。
 - `crates/task-core/src/feed/tests.rs` の飛び埋め試験のコメントを更新した（挙動は `RESERVED_VERSIONS` を動的に参照しているため変更不要）。
 - `UPDATE_SCHEMA=1 cargo test -p task-core` と `-p task-api` を実行したが、スキーマ生成物に差分は無かった（`git status --porcelain` が migration の rename と上記 5 ファイルの変更のみ）。
+
+## ADR 振り直し
+
+- `docs/adr/0124-claude-session-resume.md` を `docs/adr/0140-claude-session-resume.md` へ移した。`0124` は atomic direct route に残す。空き番号は `git for-each-ref refs/heads refs/remotes` で全ブランチを走査して docs/adr の番号を確認し、0139 が使用済み（ADR-0139）だったため 0140 を選んだ。
+- Claude Code の session resume・continuation・checkpoint に属する参照を内容で判断して修正した。`git show e9cfcb69 66ce1652` の旧表記を含む削除行を数えた結果、crates 45 件、docs 18 件、gui 4 件、web 4 件を振り直した。gui の 4 件は schema 生成コメントを手動更新（pnpm 11.27.0 の store DB が開けず生成不能）。web の schema/type は pnpm 12.6.0 で再生成した。
+- 残した ADR-0124 参照は direct route の説明である。`rg -o 'ADR-0124|0124-claude-session-resume'` の確認では crates 37 件、docs 21 件、gui 3 件、web 4 件が残る。これらの ADR-0124 は atomic direct route を指し、session resume 用の `0124-claude-session-resume` ファイル名参照は `docs/progress` と `docs/PROGRESS.md` の履歴記録に限る。
+- `web/api/generated/schema.json` は `docs/api/v1/api-v1.schema.json` からの再生成で一致させた。

@@ -130,6 +130,71 @@ fn path_classes_and_number_duplicates_are_distinct() {
     assert!(items.iter().all(|item| item.duplicate_with.len() == 1));
 }
 
+/// 付記（union の範囲）: task ごとの進捗ファイルは front matter（`status:` 等）が書き換わるので
+/// `.gitattributes` の `merge=union` を使わない。実リポジトリの `.gitattributes` を一時 repo に
+/// 写し、両側が同じ `status:` 行を別の値に変えても `git merge` が衝突して止まり（黙って片方の値が
+/// もう片方を消さない）、records resolver 経由で `Resolution::NeedsHuman` に回ることを確かめる。
+#[test]
+fn front_matter_status_conflict_requests_human_and_is_not_silently_merged() {
+    let attrs_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.gitattributes");
+    let attrs = fs::read_to_string(&attrs_path)
+        .unwrap_or_else(|e| panic!("read {}: {e}", attrs_path.display()));
+    assert!(
+        !attrs.contains("agent-docs/progress/"),
+        ".gitattributes must not set merge=union under agent-docs/progress/ \
+         (front matter is rewritten there, not append-only): {attrs}"
+    );
+
+    let tmp = new_repo();
+    let repo = tmp.path();
+    fs::write(repo.join(".gitattributes"), &attrs).unwrap();
+    let path = "agent-docs/progress/2026-10-03-example/leaf.md";
+    let body = "---\ntitle: 例\ntasks: [example]\nstatus: running\nupdated: 2026-10-03\n---\n\n# 例\n\n本文\n";
+    write(repo, path, body);
+    let base = commit(repo, "base (front matter)");
+    command(repo, &["branch", "source"]);
+    write(repo, path, &body.replace("status: running", "status: done"));
+    let target_sha = commit(repo, "target: status done");
+    command(repo, &["checkout", "-q", "source"]);
+    write(
+        repo,
+        path,
+        &body.replace("status: running", "status: blocked"),
+    );
+    let source_sha = commit(repo, "source: status blocked");
+    command(repo, &["checkout", "-q", "target"]);
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge", "--no-commit", "source"])
+        .output()
+        .unwrap();
+    assert!(
+        !status.status.success(),
+        "git merge must conflict on the shared status: line instead of silently merging"
+    );
+    assert!(
+        fs::read_to_string(repo.join(path))
+            .unwrap()
+            .contains("<<<<<<<"),
+        "expected conflict markers left in the working tree"
+    );
+
+    let ctx = ResolveContext {
+        target_branch: "target".into(),
+        target_sha,
+        source_branch: "source".into(),
+        source_sha,
+        merge_base: Some(base),
+        generated_command: None,
+    };
+    let Resolution::NeedsHuman { request } = resolve(repo, &ctx).unwrap() else {
+        panic!("front matter changed on both sides must need human");
+    };
+    assert_eq!(request.conflict_files, [path]);
+    assert!(request.reason.contains("記録の既存行が両側で変わった"));
+}
+
 #[test]
 fn active_merge_classifies_each_supported_conflict() {
     use ConflictKind::*;

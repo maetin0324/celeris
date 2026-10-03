@@ -1,11 +1,11 @@
 #!/bin/sh
-# ADR 2026-10-02-parallel-integration-auto-resolve records resolver の前提を確かめる: .gitattributes の
-# `agent-docs/PROGRESS.md merge=union` / `agent-docs/progress/*.md merge=union` /
-# `agent-docs/progress/**/*.md merge=union`（入れ子の <slug>/<unit>.md）が、共通の祖先から
-# 2 branch がそれぞれ末尾に別の節を追記しただけのときに、`git merge` を衝突なく終え
-# 両方の節を残すこと。`git merge-tree --write-tree` でも同じ結果になるかも確かめるが、
-# 効かなくても（merge-tree は attributes を同じようには扱わない実装上の罠があるため）
-# このスクリプト自体は失敗にせず、結果を出力に書くだけにする。
+# ADR agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md 付記（union の範囲）の前提を
+# 確かめる。.gitattributes の `merge=union` は凍結済みの `agent-docs/PROGRESS.md` と移行期間の旧
+# `docs/PROGRESS.md` の 2 行だけに限る（人の方針）。task ごとの進捗ファイル
+# `agent-docs/progress/**/*.md` は front matter（`status:` 等）を書き換えるので union を使わない:
+# 両側が front matter の同じ行を別の値へ変えたら `git merge` は衝突して止まり（黙って片方を残して
+# もう片方を消さない）、records resolver（crates/task-dispatch/src/auto_resolve/records.rs）が
+# 人の判断（NeedsHuman）へ回す。
 # 一時 git repo の中だけで完結し、外部ネットワーク・本番 repo には触れない。
 set -eu
 
@@ -26,11 +26,12 @@ attrs="$repo_root/.gitattributes"
 [ -f "$attrs" ] || fail "not found: $attrs"
 grep -q '^agent-docs/PROGRESS\.md merge=union$' "$attrs" \
   || fail "$attrs is missing 'agent-docs/PROGRESS.md merge=union'"
-grep -q '^agent-docs/progress/\*\.md merge=union$' "$attrs" \
-  || fail "$attrs is missing 'agent-docs/progress/*.md merge=union'"
-grep -q '^agent-docs/progress/\*\*/\*\.md merge=union$' "$attrs" \
-  || fail "$attrs is missing 'agent-docs/progress/**/*.md merge=union'"
-echo "OK: .gitattributes declares merge=union for agent-docs/PROGRESS.md and agent-docs/progress/ (nested included)"
+grep -q '^docs/PROGRESS\.md merge=union$' "$attrs" \
+  || fail "$attrs is missing 'docs/PROGRESS.md merge=union'"
+if grep -q 'agent-docs/progress/' "$attrs"; then
+  fail "$attrs must not set merge=union under agent-docs/progress/ (front matter is rewritten there, not append-only)"
+fi
+echo "OK: .gitattributes limits merge=union to agent-docs/PROGRESS.md and docs/PROGRESS.md"
 
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT INT TERM
@@ -52,10 +53,9 @@ if ! git init -q -b main >/dev/null 2>&1; then
 fi
 cp "$attrs" .gitattributes
 
-# check_union <relative-path> <label>
-# 共通の祖先に <relative-path> を作り、a-<label>/b-<label> の 2 branch がそれぞれ
-# 末尾に別の節を追記したあと main の代わりの a-<label> へ b-<label> を merge する。
-check_union() {
+# (a) 凍結された追記専用ファイルは、共通の祖先から両側がそれぞれ末尾に別の節を追記しただけなら
+# `git merge` を衝突なく終え、両方の節を残す。
+check_frozen_append() {
   rel_path=$1
   label=$2
   dir=$(dirname -- "$rel_path")
@@ -85,29 +85,49 @@ check_union() {
   grep -q "section B ($label)" "$rel_path" || fail "section B missing after git merge for $label"
   echo "OK: git merge kept both sections for $rel_path ($label)"
 
-  mt_out=$(git merge-tree --write-tree "a-$label" "b-$label" 2>"$root/mt-$label.err") && mt_status=0 || mt_status=$?
-  if [ "$mt_status" -eq 0 ]; then
-    tree=$(printf '%s\n' "$mt_out" | head -n1)
-    if git cat-file -e "$tree:$rel_path" 2>/dev/null; then
-      blob=$(git show "$tree:$rel_path")
-      if printf '%s' "$blob" | grep -q "section A ($label)" && printf '%s' "$blob" | grep -q "section B ($label)"; then
-        echo "INFO: git merge-tree --write-tree also kept both sections for $rel_path ($label)"
-      else
-        echo "INFO: git merge-tree --write-tree produced a tree for $rel_path ($label) without both sections; the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
-      fi
-    else
-      echo "INFO: git merge-tree --write-tree result has no $rel_path ($label); the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
-    fi
-  else
-    mt_err=$(tr '\n' ' ' < "$root/mt-$label.err")
-    echo "INFO: git merge-tree --write-tree reported a conflict for $rel_path ($label) even though .gitattributes requests merge=union ($mt_err); the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
-  fi
-
   git checkout -q main
 }
 
-check_union agent-docs/PROGRESS.md progress
-check_union agent-docs/progress/2026-10-03-example.md progress-dir
-check_union agent-docs/progress/2026-10-03-example/unit.md progress-nested
+check_frozen_append agent-docs/PROGRESS.md agent-docs-progress-md
+check_frozen_append docs/PROGRESS.md docs-progress-md
+
+# (b) task ごとの進捗ファイルは front matter の既存行を両側が別の値に変えると、union が効かないので
+# `git merge` が衝突して止まる（黙って片方を残してもう片方を消さない）。
+rel_path=agent-docs/progress/2026-10-03-example/leaf.md
+dir=$(dirname -- "$rel_path")
+mkdir -p "$dir"
+cat > "$rel_path" <<'EOF'
+---
+title: 例
+tasks: [example]
+status: running
+updated: 2026-10-03
+---
+
+# 例
+
+本文
+EOF
+git add .gitattributes "$rel_path"
+git commit -q -m "base (front-matter)"
+
+git checkout -q -b a-front-matter
+sed -i 's/^status: running$/status: done/' "$rel_path"
+git commit -q -am "a (front-matter): status done"
+
+git checkout -q main
+git checkout -q -b b-front-matter
+sed -i 's/^status: running$/status: blocked/' "$rel_path"
+git commit -q -am "b (front-matter): status blocked"
+
+git checkout -q a-front-matter
+if git merge -q --no-edit b-front-matter >"$root/merge-front-matter.log" 2>&1; then
+  fail "git merge for $rel_path must conflict (both sides changed the same status: line) but it exited 0: $(cat "$root/merge-front-matter.log")"
+fi
+grep -q '<<<<<<<' "$rel_path" || fail "expected conflict markers in $rel_path after git merge"
+git merge --abort
+git checkout -q main
+
+echo "OK: front matter conflict is not silently merged"
 
 echo "progress_union_merge: all checks passed"

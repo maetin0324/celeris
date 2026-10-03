@@ -23,6 +23,32 @@ use crate::error::OpsError;
 /// cron が作る task に付けるラベル（一覧で見分けるため）。
 pub const CRON_TASK_LABEL: &str = "cron";
 
+/// ADR-0131 付記 D10 (3): 雛形の `extra["mode"]` を発火時に task へ写したラベル。task の `Created` event に
+/// 入るので、後の job PATCH で既存 task の mode は変わらない（`Task.mode` とは別の値）。
+pub const MODE_DRY_RUN_LABEL: &str = "mode-dry-run";
+pub const MODE_APPLY_LABEL: &str = "mode-apply";
+
+/// 雛形の `extra["mode"]` を発火時のラベルに写す（`mode` が無い雛形は `None`）。
+pub fn template_mode_label(template: &CronTaskTemplate) -> Option<&'static str> {
+    let mode = template.extra.get("mode")?;
+    // validate_job が新規・更新時の値を検証する。古い保存済み job に不正値が残っていても、
+    // 誤って apply しないよう安全側の dry-run として扱う。
+    Some(if mode.as_str() == Some("apply") {
+        MODE_APPLY_LABEL
+    } else {
+        MODE_DRY_RUN_LABEL
+    })
+}
+
+/// cron 由来の task に発火時に固定された mode（`dry_run` | `apply`）。ラベルが無ければ `dry_run`。
+pub fn task_mode(task: &Task) -> &'static str {
+    if task.labels.iter().any(|l| l == MODE_APPLY_LABEL) {
+        "apply"
+    } else {
+        "dry_run"
+    }
+}
+
 /// 予定時刻からの遅れがこれ以内なら通常運転（`trigger = schedule`）とみなす（ADR-0131 D3「1 tick 以内」）。
 /// tick の既定間隔（数秒）に余裕を持たせた値。
 pub const DEFAULT_ON_TIME_GRACE: Duration = Duration::minutes(2);
@@ -99,6 +125,9 @@ pub fn template_to_spec(
     spec.project_id = project_id;
     spec.repos = template.repos.clone();
     spec.labels = vec![CRON_TASK_LABEL.to_string()];
+    if let Some(label) = template_mode_label(template) {
+        spec.labels.push(label.to_string());
+    }
     spec.status = Some(Status::Ready);
     Ok(spec)
 }
@@ -184,6 +213,13 @@ pub fn validate_job(
     job: &CronJob,
     now: OffsetDateTime,
 ) -> Result<(), OpsError> {
+    if let Some(mode) = job.template.extra.get("mode")
+        && !matches!(mode.as_str(), Some("dry_run" | "apply"))
+    {
+        return Err(OpsError::Validation(
+            "template extra.mode must be \"dry_run\" or \"apply\"".to_string(),
+        ));
+    }
     if job.name.trim().is_empty() {
         return Err(OpsError::Validation("name must not be blank".to_string()));
     }

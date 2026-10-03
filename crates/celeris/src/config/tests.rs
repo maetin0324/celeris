@@ -303,6 +303,7 @@ fn loads_example_config_and_resolves_relative_paths() {
             "coding",
             "conversation",
             "data-analysis",
+            "knowledge-curation",
             "literature",
             "plan",
             "web-research",

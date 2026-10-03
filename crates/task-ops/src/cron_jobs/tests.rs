@@ -423,6 +423,96 @@ fn create_and_update_validate_and_reschedule() {
 }
 
 #[test]
+fn cron_job_mode_create_accepts_supported_and_omitted_values_and_rejects_invalid_values() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let ctx = CronFireContext::default();
+    let now = t("2026-10-01T00:00:00Z");
+
+    for (name, mode) in [
+        ("mode-dry-run", Some(serde_json::json!("dry_run"))),
+        ("mode-apply", Some(serde_json::json!("apply"))),
+        ("mode-omitted", None),
+    ] {
+        let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+        new.name = name.to_string();
+        if let Some(mode) = mode {
+            new.template.extra.insert("mode".to_string(), mode);
+        }
+        create_job(&store, &ctx, new, now).expect("supported mode creates");
+    }
+
+    for (name, mode) in [
+        ("mode-unknown", serde_json::json!("surprise")),
+        ("mode-number", serde_json::json!(7)),
+        ("mode-null", serde_json::Value::Null),
+    ] {
+        let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+        new.name = name.to_string();
+        new.template.extra.insert("mode".to_string(), mode);
+        assert!(matches!(
+            create_job(&store, &ctx, new, now),
+            Err(OpsError::Validation(_))
+        ));
+    }
+}
+
+#[test]
+fn cron_job_mode_patch_rejects_invalid_values_and_accepts_supported_and_omitted_values() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let ctx = CronFireContext::default();
+    let now = t("2026-10-01T00:00:00Z");
+    let job = create_job(
+        &store,
+        &ctx,
+        new_job(CronOverlap::Skip, CronCatchUp::Latest),
+        now,
+    )
+    .expect("create");
+
+    for mode in [
+        serde_json::json!("unknown"),
+        serde_json::json!(3),
+        serde_json::Value::Null,
+    ] {
+        let mut changed = template();
+        changed.extra.insert("mode".to_string(), mode);
+        assert!(matches!(
+            update_job(
+                &store,
+                &ctx,
+                job.id,
+                CronJobPatch {
+                    template: Some(changed),
+                    ..CronJobPatch::default()
+                },
+                now
+            ),
+            Err(OpsError::Validation(_))
+        ));
+    }
+
+    for mode in [Some("dry_run"), Some("apply"), None] {
+        let mut changed = template();
+        if let Some(mode) = mode {
+            changed
+                .extra
+                .insert("mode".to_string(), serde_json::json!(mode));
+        }
+        update_job(
+            &store,
+            &ctx,
+            job.id,
+            CronJobPatch {
+                template: Some(changed),
+                ..CronJobPatch::default()
+            },
+            now,
+        )
+        .expect("supported mode updates");
+    }
+}
+
+#[test]
 fn disabled_job_is_not_fired_and_starts_without_next_time() {
     let store = SqliteStore::open_in_memory().expect("open store");
     let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
@@ -437,4 +527,40 @@ fn disabled_job_is_not_fired_and_starts_without_next_time() {
     assert_eq!(job.next_fire_at, None);
     assert!(tick(&store, "2026-10-09T03:00:00Z").is_empty());
     assert!(store.cron_job_runs(job.id, None).expect("runs").is_empty());
+}
+
+/// ADR-0131 付記 D10 (3): 雛形の `mode` は発火時に task のラベルへ写り、後の job の変更で変わらない。
+#[test]
+fn knowledge_curation_job_mode_is_snapshotted_at_fire_time() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let mut new = new_job(CronOverlap::Skip, CronCatchUp::Latest);
+    new.template
+        .extra
+        .insert("mode".to_string(), serde_json::json!("apply"));
+    let job = create_job(
+        &store,
+        &CronFireContext::default(),
+        new,
+        t("2026-10-01T00:00:00Z"),
+    )
+    .expect("create job");
+    let created = tick(&store, "2026-10-01T03:00:04Z");
+    assert_eq!(created.len(), 1);
+
+    // 発火後に job を dry_run へ戻しても、作った task の mode は apply のまま。
+    let mut changed = store.cron_job_get(job.id).expect("get").expect("job");
+    changed
+        .template
+        .extra
+        .insert("mode".to_string(), serde_json::json!("dry_run"));
+    assert!(store.cron_job_update(&changed).expect("update"));
+
+    let task = store.get(created[0]).expect("get").expect("task");
+    assert!(task.labels.contains(&MODE_APPLY_LABEL.to_string()));
+    assert_eq!(task_mode(&task), "apply");
+
+    finish(&store, created[0]);
+    let next = tick(&store, "2026-10-02T03:00:04Z");
+    let task = store.get(next[0]).expect("get").expect("task");
+    assert_eq!(task_mode(&task), "dry_run");
 }

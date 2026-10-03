@@ -3132,6 +3132,8 @@ data: {"reason":"cursor_too_old","cursor":20000}
 
 ### 5.1 受信箱（`task_ops::inbox::inbox(store, snapshot, ctx: &ViewContext, now, evidence)`）
 
+`GET /api/v1/inbox/items` の `kind: "integration_request"` は、未回答の統合依頼を `(task, target_sha, source_sha)` ごとに 1 件だけ返す。一般通知の `GET /api/v1/notifications` には載せない。管理者は `POST /api/v1/inbox/items/{id}/answer` に `{"option":"integrated"|"declined"|"retry", "note":"任意のメモ"}` を送る。回答は task の `IntegrationAnswered` 事象として追記され、その依頼は受信箱から消える。未知または回答済みの id は 404。
+
 `Inbox { approvals, questions, drafts, attention, browser_waits, decisions, counts }`。`evidence` は task-api が渡す関数で、`<ws>/runs/<run_id>/result.json` の `evidence[]` を読む（読めなければ `[]`）。
 
 | 区画 | 抽出 | 各項目の埋め方 | 並び |

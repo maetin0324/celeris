@@ -202,6 +202,13 @@ pub enum AttentionItem {
         head: Option<String>,
         at: String,
     },
+    /// ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。
+    IntegrationRequest {
+        task: TaskRef,
+        request_id: String,
+        request: Box<task_core::integration_request::IntegrationRequest>,
+        at: String,
+    },
 }
 
 /// `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
@@ -288,7 +295,8 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::PhaseCheckpoint { task, .. }
         | AttentionItem::PlanApproval { task, .. }
         | AttentionItem::DeliverySkipped { task, .. } => Some(task.id),
-        AttentionItem::ClusterUnavailable { .. } => None,
+        // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
+        AttentionItem::ClusterUnavailable { .. } | AttentionItem::IntegrationRequest { .. } => None,
     }
 }
 
@@ -301,6 +309,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::PhaseCheckpoint { at, .. } => at,
         AttentionItem::PlanApproval { at, .. } => at,
         AttentionItem::DeliverySkipped { at, .. } => at,
+        AttentionItem::IntegrationRequest { at, .. } => at,
     }
 }
 
@@ -932,6 +941,23 @@ fn build_attention(
             ),
             detail,
             head,
+            at: row.ts,
+        });
+    }
+
+    // store が (task, 両 head) の重複を畳み、回答済みを除いた行だけを返す。
+    for row in store.open_integration_requests()? {
+        let Some(task) = by_id.get(&row.task_id) else {
+            continue;
+        };
+        let Event::IntegrationRequested { request, .. } = row.event else {
+            continue;
+        };
+        let request_id = request.id_for(task.id);
+        items.push(AttentionItem::IntegrationRequest {
+            task: view::task_ref(task),
+            request_id,
+            request,
             at: row.ts,
         });
     }

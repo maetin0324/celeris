@@ -322,6 +322,10 @@ const notifyView = (over: Partial<NotifyView> = {}): NotifyView => ({
   secret_id: "discord-webhook",
   fingerprint: "3f9a1c02",
   recent: [notifyRecent()],
+  digest_interval_secs: 86400,
+  digest_max_lines: 20,
+  inbox_batch_secs: 60,
+  inbox_reminder_secs: 86400,
   ...over,
 });
 
@@ -346,6 +350,10 @@ describe("loadReports — GET /notify (ADR-0037 D4, docs/gui/api.md §3.64)", ()
         configured: false,
         secret_id: "discord-webhook",
         recent: [notifyRecent({ ok: false, error: "discord webhook is not configured" })],
+        digest_interval_secs: 86400,
+        digest_max_lines: 20,
+        inbox_batch_secs: 60,
+        inbox_reminder_secs: 86400,
       } satisfies NotifyView),
     );
 

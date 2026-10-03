@@ -173,5 +173,6 @@
         },
         "browser_waits": 0
     },
-    "browser_waits": []
+    "browser_waits": [],
+    "suppressed": {}
 }

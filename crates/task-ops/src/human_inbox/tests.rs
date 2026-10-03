@@ -279,6 +279,24 @@ fn fixture() -> Fixture {
             head: None,
             at: AT.to_string(),
         },
+        AttentionItem::IntegrationRequest {
+            task: tref.clone(),
+            request_id: format!("{}:aaa111:bbb222", task.id),
+            request: Box::new(task_core::integration_request::IntegrationRequest {
+                target_branch: "main".into(),
+                target_sha: "aaa111".into(),
+                source_branch: "feature".into(),
+                source_sha: "bbb222".into(),
+                merge_base: None,
+                conflict_files: vec!["src/lib.rs".into()],
+                intent: Vec::new(),
+                reason: "conflict".into(),
+                recommendation: "review".into(),
+                actions: Vec::new(),
+                candidate_sha: None,
+            }),
+            at: AT.to_string(),
+        },
     ];
     inbox
         .browser_waits
@@ -548,6 +566,85 @@ fn human_inbox_delivery_skipped_assign_or_skip() {
     let keys: Vec<&str> = d.options.iter().map(|o| o.key.as_str()).collect();
     assert_eq!(keys, ["assign", "skip"]);
     assert!(d.detail.as_deref().is_some_and(|s| s.contains("marker")));
+}
+
+#[test]
+fn human_inbox_integration_request_preserves_decision_material() {
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    let request = task_core::integration_request::IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: "aaa111".into(),
+        source_branch: "feature".into(),
+        source_sha: "bbb222".into(),
+        merge_base: Some("base".into()),
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: vec![task_core::integration_request::FileIntent {
+            path: "src/lib.rs".into(),
+            target: task_core::integration_request::SideIntent {
+                branch: "main".into(),
+                path: "src/lib.rs".into(),
+                commits: vec![task_core::integration_request::CommitIntent {
+                    sha: "aaa111".into(),
+                    subject: "keep target behavior".into(),
+                }],
+                diffstat: None,
+                unavailable: None,
+            },
+            source: task_core::integration_request::SideIntent {
+                branch: "feature".into(),
+                path: "src/lib.rs".into(),
+                commits: vec![task_core::integration_request::CommitIntent {
+                    sha: "bbb222".into(),
+                    subject: "add source behavior".into(),
+                }],
+                diffstat: None,
+                unavailable: None,
+            },
+        }],
+        reason: "content conflict".into(),
+        recommendation: "combine both".into(),
+        actions: Vec::new(),
+        candidate_sha: Some("ccc333".into()),
+    };
+    let mut inbox = empty_inbox();
+    inbox.attention.push(AttentionItem::IntegrationRequest {
+        task: view::task_ref(&task),
+        request_id: request.id_for(task.id),
+        request: Box::new(request),
+        at: AT.into(),
+    });
+    let by_id = [(task.id, task.clone())].into();
+    let out = from_inbox(&inbox, None, &by_id, now());
+    let item = one(&out, InboxKind::IntegrationRequest);
+    assert_eq!(
+        item.id,
+        format!("integration_request-{}-aaa111-bbb222", task.id)
+    );
+    assert_eq!(
+        item.options
+            .iter()
+            .map(|o| o.key.as_str())
+            .collect::<Vec<_>>(),
+        ["integrated", "declined", "retry"]
+    );
+    let detail = item.detail.as_deref().unwrap();
+    for expected in [
+        "main",
+        "feature",
+        "aaa111",
+        "bbb222",
+        "src/lib.rs",
+        "keep target behavior",
+        "add source behavior",
+        "combine both",
+        "ccc333",
+    ] {
+        assert!(detail.contains(expected), "missing {expected}");
+    }
+    assert_eq!(
+        item.answer.path,
+        format!("/api/v1/inbox/items/{}/answer", item.id)
+    );
 }
 
 #[test]

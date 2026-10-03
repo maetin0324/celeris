@@ -995,6 +995,71 @@ fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
     assert!(!store.events_for(task.id).expect("events").is_empty());
 }
 
+#[test]
+fn integration_request_is_one_attention_until_answered_even_for_done_task() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert");
+    let request = task_core::integration_request::IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: "target123".into(),
+        source_branch: "feature".into(),
+        source_sha: "source456".into(),
+        merge_base: Some("base".into()),
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: Vec::new(),
+        reason: "content conflict".into(),
+        recommendation: "keep both changes".into(),
+        actions: Vec::new(),
+        candidate_sha: Some("candidate789".into()),
+    };
+    assert!(
+        store
+            .integration_request_record(task.id, &request, "delivery")
+            .unwrap()
+    );
+    let attention = || {
+        inbox(
+            &store,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+            &no_evidence,
+        )
+        .expect("inbox")
+        .attention
+        .into_iter()
+        .filter(|item| matches!(item, AttentionItem::IntegrationRequest { .. }))
+        .collect::<Vec<_>>()
+    };
+    let one = attention();
+    assert_eq!(one.len(), 1);
+    assert!(
+        matches!(&one[0], AttentionItem::IntegrationRequest { request: shown, .. }
+        if shown.target_branch == "main" && shown.source_branch == "feature"
+            && shown.conflict_files == ["src/lib.rs"]
+            && shown.recommendation == "keep both changes"
+            && shown.candidate_sha.as_deref() == Some("candidate789"))
+    );
+    assert!(
+        !store
+            .integration_request_record(task.id, &request, "phase:merge")
+            .unwrap()
+    );
+    assert_eq!(attention().len(), 1);
+    store
+        .append_event(
+            task.id,
+            &Event::IntegrationAnswered {
+                request_id: request.id_for(task.id),
+                answer: "integrated".into(),
+                note: None,
+            },
+        )
+        .unwrap();
+    assert!(attention().is_empty());
+}
+
 fn tree_child(parent: &Task, status: Status, unit_key: &str, created_at: OffsetDateTime) -> Task {
     let mut child = sample_task(TaskKind::Execute, status);
     child.parent_id = Some(parent.id);

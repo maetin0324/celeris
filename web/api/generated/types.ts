@@ -284,6 +284,12 @@ export type AttentionItem = {
   "summary": string;
   "task": TaskRef;
   "type": "delivery_skipped";
+} | {
+  "at": string;
+  "request": IntegrationRequest;
+  "request_id": string;
+  "task": TaskRef;
+  "type": "integration_request";
 };
 
 export type AttestationClaims = {
@@ -696,6 +702,11 @@ export type CommentResult = {
   "transition"?: TransitionResult | null;
 };
 
+export type CommitIntent = {
+  "sha": string;
+  "subject": string;
+};
+
 export type Confidence = "high" | "medium" | "low";
 
 export type ConfigView = {
@@ -721,6 +732,8 @@ export type ConfigView = {
   "tick_ms": number;
   "workspace_root": string;
 };
+
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
 
 export type ConsoleBlock = {
   "at": string;
@@ -1562,6 +1575,15 @@ export type Event = {
   "reason": DeliverySkipReason;
   "type": "delivery_skipped";
 } | {
+  "origin": string;
+  "request": IntegrationRequest;
+  "type": "integration_requested";
+} | {
+  "answer": string;
+  "note"?: string | null;
+  "request_id": string;
+  "type": "integration_answered";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -1790,6 +1812,17 @@ export type FailureSummary = {
   "reason": string;
 };
 
+export type FileDiffStat = {
+  "added": number;
+  "deleted": number;
+};
+
+export type FileIntent = {
+  "path": string;
+  "source": SideIntent;
+  "target": SideIntent;
+};
+
 export type GateSignal = {
   "detail": string;
   "name": string;
@@ -1853,6 +1886,21 @@ export type HumanAttestation = {
   "signature": string;
 };
 
+export type HumanInboxCounts = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "total": number;
+};
+
+export type HumanInboxView = {
+  "counts": HumanInboxCounts;
+  "items": Array<InboxItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
 export type InFlight = {
   "kind": InFlightKind;
   "provider": string;
@@ -1871,6 +1919,37 @@ export type Inbox = {
   "decisions": Array<DecisionInboxItem>;
   "drafts": Array<DraftGroup>;
   "questions": Array<QuestionItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
+export type InboxAnswer = {
+  "body_schema": {
+  [key: string]: string;
+};
+  "method": string;
+  "native"?: InboxNativeOp | null;
+  "path": string;
+};
+
+export type InboxAnswerBody = {
+  "note"?: string | null;
+  "option": string;
+  "payload"?: unknown;
+};
+
+export type InboxAnswerResult = {
+  "item_id": string;
+  "removed": boolean;
+  "result": unknown;
+};
+
+export type InboxBlocking = {
+  "root"?: TaskRef | null;
+  "summary": string;
+  "tasks": Array<TaskRef>;
+  "units": Array<string>;
 };
 
 export type InboxCounts = {
@@ -1883,6 +1962,43 @@ export type InboxCounts = {
   "decisions": number;
   "drafts": number;
   "questions": number;
+};
+
+export type InboxItem = {
+  "age_secs": number;
+  "answer": InboxAnswer;
+  "blocked_by": Array<string>;
+  "blocking": InboxBlocking;
+  "created_at": string;
+  "detail"?: string | null;
+  "due_at"?: string | null;
+  "id": string;
+  "kind": InboxKind;
+  "links": Array<InboxLink>;
+  "options": Array<InboxOption>;
+  "project_id"?: string | null;
+  "recommended"?: string | null;
+  "task"?: TaskRef | null;
+  "title": string;
+};
+
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "integration_request" | "knowledge_review";
+
+export type InboxLink = {
+  "href": string;
+  "label": string;
+};
+
+export type InboxNativeOp = {
+  "method": string;
+  "path": string;
+};
+
+export type InboxOption = {
+  "effect": string;
+  "key": string;
+  "label": string;
+  "needs_note": boolean;
 };
 
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
@@ -1906,6 +2022,20 @@ export type IntegrateResult = {
 export type IntegrationId = string;
 
 export type IntegrationMethod = "merge" | "pr" | "discard";
+
+export type IntegrationRequest = {
+  "actions": Array<ResolutionAction>;
+  "candidate_sha"?: string | null;
+  "conflict_files": Array<string>;
+  "intent": Array<FileIntent>;
+  "merge_base"?: string | null;
+  "reason": string;
+  "recommendation": string;
+  "source_branch": string;
+  "source_sha": string;
+  "target_branch": string;
+  "target_sha": string;
+};
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
 
@@ -2338,7 +2468,52 @@ export type NodeSessionSummary = {
   "turns": number;
 };
 
-export type NotificationKind = "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+export type Notice = {
+  "count": number;
+  "first_at": string;
+  "group_key": string;
+  "id": NoticeId;
+  "kind": NoticeKind;
+  "last_at": string;
+  "links"?: Array<NoticeLink>;
+  "project_id"?: string | null;
+  "read_at"?: string | null;
+  "summary": string;
+  "target"?: NoticeTarget | null;
+  "task_id"?: string | null;
+  "title": string;
+};
+
+export type NoticeId = string;
+
+export type NoticeKind = "task_done" | "report" | "bad_news" | "secretary_reply" | "delivery" | "release" | "cron_run" | "auto_recovered" | "requeue_limit_near";
+
+export type NoticeLink = {
+  "href": string;
+  "label": string;
+};
+
+export type NoticeReadAllResult = {
+  "marked": number;
+};
+
+export type NoticeReadResult = {
+  "id": string;
+  "read_at": string;
+};
+
+export type NoticeTarget = {
+  "id": string;
+  "kind": string;
+};
+
+export type NotificationKind = "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+
+export type NotificationsView = {
+  "items": Array<Notice>;
+  "next_before"?: string | null;
+  "unread": number;
+};
 
 export type NotifyRecent = {
   "attempts": number;
@@ -2358,8 +2533,14 @@ export type NotifyTestResult = {
 
 export type NotifyView = {
   "configured": boolean;
+  "digest_interval_secs": number;
+  "digest_last_sent_at"?: string | null;
+  "digest_max_lines": number;
   "fingerprint"?: string | null;
   "gui_base_url"?: string | null;
+  "inbox_batch_secs": number;
+  "inbox_new_last_sent_at"?: string | null;
+  "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
 };
@@ -2907,6 +3088,12 @@ export type RateWindowView = {
   "utilization": number;
 };
 
+export type ReadAllBody = {
+  "before"?: string | null;
+  "kind"?: NoticeKind | null;
+  "project"?: string | null;
+};
+
 export type ReleaseChanges = {
   "base"?: string | null;
   "commit_count": number;
@@ -3133,6 +3320,12 @@ export type ReportsReadResult = {
   "updated": number;
 };
 
+export type ResolutionAction = {
+  "detail": string;
+  "kind": ConflictKind;
+  "path": string;
+};
+
 export type ResolvedLlmSource = {
   "origin": SourceOrigin;
   "source": LlmSourceRef;
@@ -3305,7 +3498,6 @@ export type RunSummary = {
   "work_unit"?: string | null;
 };
 
-/** 廃止（ADR-0129）: cache server stats。型は互換のため残す。 */
 export type ScratchCacheStats = {
   "flush_dropped": number;
   "flush_last_at"?: string | null;
@@ -3348,11 +3540,9 @@ export type ScratchCacheStats = {
   "started_at": string;
 };
 
-/** 廃止（ADR-0129）: Celeris cache server。常に null、型は互換のため残す。 */
 export type ScratchCacheView = {
   "endpoint": string;
   "reason"?: string | null;
-  /** 廃止。常に null（ADR-0129）。 */
   "sccache_mode"?: string | null;
   "state": string;
   "stats"?: ScratchCacheStats | null;
@@ -3396,7 +3586,6 @@ export type ScratchOwnerView = {
   "work_unit_key"?: string | null;
 };
 
-/** 廃止（ADR-0129）: sccache stats。型は互換のため残す。 */
 export type ScratchSccacheStats = {
   "cache_size_bytes"?: number | null;
   "compile_requests": number;
@@ -3406,7 +3595,6 @@ export type ScratchSccacheStats = {
   "rust_misses": number;
 };
 
-/** 廃止（ADR-0129）: sccache。常に null、型は互換のため残す。 */
 export type ScratchSccacheView = {
   "binary": string;
   "dir": string;
@@ -3468,6 +3656,14 @@ export type ShadowDecision = {
   "classifier": string;
   "confidence": number;
   "lane": Tier;
+};
+
+export type SideIntent = {
+  "branch": string;
+  "commits": Array<CommitIntent>;
+  "diffstat"?: FileDiffStat | null;
+  "path": string;
+  "unavailable"?: string | null;
 };
 
 export type SkillDetailView = {
@@ -3986,6 +4182,14 @@ export type UnitContext = {
 export type UnitDeclared = "leaf" | "task";
 
 export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
+
+export type UnreadCountView = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "events": number;
+  "unread": number;
+};
 
 export type Usage = {
   "cache_creation_tokens"?: number | null;

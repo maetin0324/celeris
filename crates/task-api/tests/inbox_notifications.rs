@@ -86,14 +86,14 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
     let request_id = request.id_for(task.id);
     assert!(
         env.store
-            .integration_request_record(task.id, &request, "phase:merge")
+            .integration_request_record(task.id, &request, "delivery")
             .unwrap()
     );
     // Re-recording the same target/source head (e.g. the next dispatcher tick seeing the
     // same unresolved conflict) must not duplicate the inbox item or the event.
     assert!(
         !env.store
-            .integration_request_record(task.id, &request, "phase:merge")
+            .integration_request_record(task.id, &request, "delivery")
             .unwrap()
     );
     let app = env.router();
@@ -179,7 +179,7 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
         let next_id = next.id_for(task.id);
         assert!(
             env.store
-                .integration_request_record(task.id, &next, "phase:merge")
+                .integration_request_record(task.id, &next, "delivery")
                 .unwrap()
         );
         let inbox = send(
@@ -208,6 +208,110 @@ async fn integration_request_answer_appends_event_and_removes_only_its_inbox_ite
                 if request_id == &next_id && answer == option && note.is_none()))
         );
     }
+}
+
+#[tokio::test]
+async fn phase_integration_request_answer_resumes_integration() {
+    let env = admin_env();
+    let task = new_task(TaskKind::Execute, Status::Blocked);
+    env.seed(&task);
+    let spec: task_core::WorkUnitSpec = serde_json::from_value(json!({
+        "key": "integrate-core", "kind": "integrate", "title": "Integrate core",
+        "objective": "Merge the core phase"
+    }))
+    .unwrap();
+    let mut unit = task_core::WorkUnitRow::new(
+        task_core::new_id(),
+        task.id.to_string(),
+        "plan-1".into(),
+        0,
+        spec,
+        task_core::WorkUnitStatus::Blocked,
+        OffsetDateTime::now_utc().to_string(),
+    );
+    unit.blocked_reason = Some(task_core::WorkUnitBlockedReason::Question);
+    env.store
+        .work_units_apply(task.id, vec![unit.clone()], vec![], vec![])
+        .unwrap();
+    let request = IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: "target-phase".into(),
+        source_branch: "phase-core".into(),
+        source_sha: "source-phase".into(),
+        merge_base: None,
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: vec![],
+        reason: "conflict".into(),
+        recommendation: "retry".into(),
+        actions: vec![],
+        candidate_sha: None,
+    };
+    env.store
+        .integration_request_record(task.id, &request, "phase:integrate-core")
+        .unwrap();
+    let app = env.router();
+    let inbox = send(&app, get_admin("/api/v1/inbox/items")).await;
+    assert_eq!(inbox.status, 200, "{}", inbox.text());
+    let items = inbox.json()["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["kind"], "integration_request");
+    let id = items[0]["id"].as_str().unwrap();
+    let answer = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/inbox/items/{id}/answer"),
+            &json!({"option":"retry", "note":"try again with the merged head"}),
+        ),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.json()["removed"], true);
+    let after = send(&app, get_admin("/api/v1/inbox/items")).await;
+    assert!(
+        after.json()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|item| item["id"] != id)
+    );
+    let resumed = env.store.work_units_for(task.id).unwrap();
+    assert_eq!(resumed[0].status, task_core::WorkUnitStatus::Pending);
+    assert_eq!(resumed[0].blocked_reason, None);
+    assert_ne!(env.status_of(task.id), Status::Blocked);
+
+    // A declined phase request takes the existing cancel path without resuming its WU.
+    let declined_task = new_task(TaskKind::Execute, Status::Blocked);
+    env.seed(&declined_task);
+    let mut declined_unit = unit;
+    declined_unit.id = task_core::new_id();
+    declined_unit.task_id = declined_task.id.to_string();
+    env.store
+        .work_units_apply(declined_task.id, vec![declined_unit], vec![], vec![])
+        .unwrap();
+    env.store
+        .integration_request_record(declined_task.id, &request, "phase:integrate-core")
+        .unwrap();
+    let inbox = send(
+        &app,
+        get_admin("/api/v1/inbox/items?kind=integration_request"),
+    )
+    .await;
+    let id = inbox.json()["items"][0]["id"].as_str().unwrap().to_owned();
+    let answer = send(
+        &app,
+        post_admin(
+            &format!("/api/v1/inbox/items/{id}/answer"),
+            &json!({"option":"declined"}),
+        ),
+    )
+    .await;
+    assert_eq!(answer.status, 200, "{}", answer.text());
+    assert_eq!(answer.json()["removed"], true);
+    assert_eq!(env.status_of(declined_task.id), Status::Cancelled);
+    assert_ne!(
+        env.store.work_units_for(declined_task.id).unwrap()[0].status,
+        task_core::WorkUnitStatus::Pending
+    );
 }
 
 #[tokio::test]

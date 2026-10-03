@@ -121,3 +121,22 @@ build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/t
 | `timeout 1800s cargo test -p task-worker --test browser_cdp_sink` | 101 | 1 passed、1 failed。実 browser 試験で unshare が Operation not permitted |
 | `cargo fmt --all -- --check` | 0 | 差分なし |
 | `cargo clippy -p task-worker --all-targets -- -D warnings` | 0 | 警告なし |
+
+## sync-main-2 merge-latest
+
+2026-10-03、main `40189604`（`163f41c0` を含む）を merge commit `0231b07e` で取り込んだ。13 件の衝突は次のように解消した。
+
+- `crates/task-dispatch/src/dispatcher/worker_task.rs`、`crates/task-worker/src/{adapter.rs,probe.rs,langmem_run.py}`、`scripts/selfdeploy/install-units.sh`: main の実装を基にし、移動後に必要な文書パスだけを保持した。`browser_launcher_ptrace.rs` と `browser_launcher/` は main と一致する。
+- main で撤去した `crates/scratch-cache/tests/sccache_webdav_e2e.rs`、`crates/task-worker/tests/scratch_sccache_e2e.rs` は削除した。
+- `docs/web/dogfood.md` は削除のまま。main の変更は `docs/web/parallel-operation.md` → `docs/ops/web-parallel-operation.md` と `docs/workspace.md` → `docs/guides/workspace.md` の移動先に反映し、旧パスは削除した。
+- `docs/architecture-map.md` は新パスの参照を保ちつつ、main の ADR-0132/0133/0134 の参照・受信箱の行を反映し、撤去された cache server の行を削除した。`docs/ops/nextest.md` は両側の趣旨を保持し、撤去済み sccache への参照を除いた。
+- `agent-docs/PROGRESS.md` は既存行を残し、main が旧 `docs/PROGRESS.md` に加えた節を末尾へ移した。旧 `docs/PROGRESS.md` と `docs/DESIGN.md` は復活していない。新しい節の task 別文書への移動は後続の `migrate-docs` で行う。
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `cargo fmt --all -- --check` | 0 | 差分なし |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 0 | 警告なし |
+| `cargo test -p task-worker --test browser_launcher_ptrace` | 101 | 5 passed、1 failed。`launcher_chrome_denies_daemon_uid_ptrace` は Chrome PID がこの run の `/proc` に現れず失敗。従前の `Protocol` エラーは出ていない |
+| `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace -- --exact --nocapture` | 101 | 単独再実行も同じ `/proc` の Chrome PID 不可視で失敗 |
+
+実 launcher 試験は run の PID namespace から host 側 Chrome を観測できない環境制約とみられる。host の設定・daemon・launcher は変更していない。ログはこの run の成果物ディレクトリに `browser_launcher_ptrace.log` と `browser_launcher_ptrace_exact.log` として残した。

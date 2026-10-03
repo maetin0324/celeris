@@ -124,7 +124,31 @@ struct Inner {
     connections: AtomicUsize,
     next_conn: AtomicU64,
     conns: Mutex<HashMap<u64, UnixStream>>,
+    /// 接続 thread が回収を終えて `connections` を減らしたとき（`conns` の lock の下で）知らせる。
+    conn_exit: Condvar,
     shutdown: AtomicBool,
+    #[cfg(test)]
+    test_hook: Option<TestHookFn>,
+}
+
+/// 試験専用の遅延フック（docs/testing.md）。競合の窓で止めて順序を決定的にする。
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum TestHook {
+    /// teardown が process を止めた後、記録を消す前。
+    TeardownBeforeRemove,
+    /// shutdown が接続 thread の終了を待ち始める直前。
+    ShutdownWaitConns,
+}
+
+#[cfg(test)]
+pub(super) type TestHookFn = Arc<dyn Fn(TestHook) + Send + Sync>;
+
+#[cfg(test)]
+fn test_hook(inner: &Inner, point: TestHook) {
+    if let Some(h) = &inner.test_hook {
+        h(point);
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -184,8 +208,18 @@ impl LauncherServer {
                 connections: AtomicUsize::new(0),
                 next_conn: AtomicU64::new(1),
                 conns: Mutex::new(HashMap::new()),
+                conn_exit: Condvar::new(),
                 shutdown: AtomicBool::new(false),
+                #[cfg(test)]
+                test_hook: None,
             }),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_test_hook(&mut self, hook: TestHookFn) {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.test_hook = Some(hook);
         }
     }
 
@@ -221,13 +255,28 @@ impl ServerHandle {
     }
 
     /// accept を止め、全接続を閉じ、全 session を回収する。
+    ///
+    /// 接続 thread は切断時に自分の session を引き取って teardown するので、その thread が
+    /// 全部終わる（記録の削除まで済む）のを待ってから戻る。待たないと、shutdown が戻った後に
+    /// 接続 thread が記録を消す・process を止めることになり、回収の取りこぼしに見える。
     pub fn shutdown(&mut self) {
         self.inner.shutdown.store(true, Ordering::SeqCst);
+        // 先に accept と lease timer を止める。以後は接続も増えず、`conns` に全接続が揃う。
+        for t in self.threads.drain(..) {
+            let _ = t.join();
+        }
         for (_, s) in lock(&self.inner.conns).drain() {
             let _ = s.shutdown(std::net::Shutdown::Both);
         }
-        for t in self.threads.drain(..) {
-            let _ = t.join();
+        #[cfg(test)]
+        test_hook(&self.inner, TestHook::ShutdownWaitConns);
+        {
+            let g = lock(&self.inner.conns);
+            let _g = self
+                .inner
+                .conn_exit
+                .wait_while(g, |_| self.inner.connections.load(Ordering::SeqCst) > 0)
+                .unwrap_or_else(|p| p.into_inner());
         }
         let all: Vec<_> = lock(&self.inner.state)
             .sessions
@@ -308,9 +357,12 @@ fn admit(inner: &Arc<Inner>, mut stream: UnixStream) {
         return;
     }
     let conn_id = inner.next_conn.fetch_add(1, Ordering::SeqCst);
-    if let Ok(c) = stream.try_clone() {
-        lock(&inner.conns).insert(conn_id, c);
-    }
+    // shutdown が閉じられない接続は受けない（終了待ちが idle まで延びるため）。
+    let Ok(c) = stream.try_clone() else {
+        inner.connections.fetch_sub(1, Ordering::SeqCst);
+        return;
+    };
+    lock(&inner.conns).insert(conn_id, c);
     let inner2 = inner.clone();
     let spawned = std::thread::Builder::new()
         .name(format!("celeris-launcher-conn-{conn_id}"))
@@ -323,7 +375,9 @@ fn admit(inner: &Arc<Inner>, mut stream: UnixStream) {
             serve_conn(&inner2, stream, &peer);
             lock(&inner2.conns).remove(&conn_id);
             close_conn_sessions(&inner2, conn_id);
+            let _g = lock(&inner2.conns);
             inner2.connections.fetch_sub(1, Ordering::SeqCst);
+            inner2.conn_exit.notify_all();
         });
     if spawned.is_err() {
         lock(&inner.conns).remove(&conn_id);
@@ -684,6 +738,8 @@ fn teardown(inner: &Arc<Inner>, entry: &Arc<Entry>) {
         |_| {},
     );
     stop_group(&entry.record, grace);
+    #[cfg(test)]
+    test_hook(inner, TestHook::TeardownBeforeRemove);
     if let Err(e) = inner.registry.remove(&entry.record.session_id) {
         tracing::warn!(error = %e, "browser launcher: failed to remove session record");
     }

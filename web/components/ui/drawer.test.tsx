@@ -61,6 +61,7 @@ describe("Drawer / SidePanel", () => {
       Number.parseFloat(await dialog.evaluate((element) => getComputedStyle(element).transitionDuration)),
     ).toBeLessThan(0.001);
     await dialog.getByRole("button", { name: "閉じる" }).click();
+    await dialog.waitFor({ state: "hidden" });
   });
 
   it("背景の重なりがあるナビより前面に閉じる操作を表示する", async () => {
@@ -80,12 +81,24 @@ describe("Drawer / SidePanel", () => {
       const close = dialog.getByRole("button", { name: "閉じる", exact: true });
       const bounds = await close.boundingBox();
       if (!bounds) throw new Error("閉じる操作が表示されていません");
-      expect(
-        await page.evaluate(({ x, y, width, height }) => {
-          const element = document.elementFromPoint(x + width / 2, y + height / 2);
-          return Boolean(element?.closest('[role="dialog"]'));
-        }, bounds),
-      ).toBe(true);
+      // 高負荷時は style の適用と layout が遅れるため、前面判定は確定するまで待つ（壊れていれば timeout で落ちる）。
+      const onTop = await page
+        .waitForFunction(
+          () => {
+            const button = document.querySelector('[role="dialog"] button[aria-label="閉じる"]');
+            if (!button) return false;
+            const { x, y, width, height } = button.getBoundingClientRect();
+            const element = document.elementFromPoint(x + width / 2, y + height / 2);
+            return Boolean(element?.closest('[role="dialog"]'));
+          },
+          undefined,
+          { timeout: 10_000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      expect(onTop).toBe(true);
       await close.click();
       await dialog.waitFor({ state: "hidden" });
     } finally {

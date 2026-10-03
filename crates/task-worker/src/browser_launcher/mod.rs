@@ -16,10 +16,10 @@ pub mod registry;
 pub mod server;
 pub mod userns;
 
-pub use client::{ClientError, LauncherClient, StartedSession};
+pub use client::{ClientError, LauncherClient, SenderCred, StartedSession};
 pub use protocol::{
-    ActionArgs, ErrorCode, Observation, Outcome, Receipt, Request, Response, SessionFacts,
-    SessionPolicy, SessionState, Verb,
+    ActionArgs, ErrorCode, Observation, Outcome, PROTOCOL_VERSION, Receipt, Request, Response,
+    SessionBinding, SessionFacts, SessionPolicy, SessionState, Verb,
 };
 pub use registry::{Registry, SessionRecord};
 pub use server::{

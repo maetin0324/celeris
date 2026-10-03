@@ -56,6 +56,10 @@ impl SessionBackend for FakeBackend {
             pid,
             pgid: pid,
             starttime,
+            runtime_pid: pid,
+            runtime_starttime: starttime,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
+                .map_err(|_| ErrorCode::LaunchFailed)?,
         })
     }
 }
@@ -427,4 +431,219 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
         socket: dir.path().join("launcher.sock"),
     });
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
+}
+
+// ---- ADR-0138 D-L: daemon 側で照合した launcher session 証明 ----
+
+/// 独自の process group の `sleep`（runtime の leader の代わり）。
+fn leader() -> (std::process::Child, i32, u64) {
+    use std::os::unix::process::CommandExt;
+    let child = std::process::Command::new("sleep")
+        .arg("600")
+        .process_group(0)
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn");
+    let pid = child.id() as i32;
+    let st = crate::browser_runtime::process_starttime(pid).expect("starttime");
+    (child, pid, st)
+}
+
+fn started(pid: i32, starttime: u64, owner: Option<u32>) -> StartedSession {
+    StartedSession {
+        session_id: "s1".into(),
+        instance_id: "inst-1".into(),
+        receipt: Receipt {
+            session_id: "s1".into(),
+            instance_id: "inst-1".into(),
+            verb: None,
+            outcome: Outcome::Started,
+            at_unix_ms: 1,
+            isolation_ok: true,
+            binding: Some(crate::browser_launcher::SessionBinding {
+                pid,
+                starttime,
+                ns_owner_uid: owner,
+                ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
+                    .expect("launcher-reported ns inodes"),
+            }),
+        },
+    }
+}
+
+fn reap(mut child: std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn launcher_proof_is_built_only_when_pid_starttime_and_owner_match() {
+    let daemon = DaemonIds::current();
+    let (child, pid, st) = leader();
+    let proof = launcher_session_proof(
+        &started(pid, st, Some(LAUNCHER_UID)),
+        Some(LAUNCHER_UID),
+        &daemon,
+    )
+    .expect("proof");
+    assert_eq!(
+        proof,
+        LauncherSessionProof {
+            session_id: "s1".into(),
+            instance_id: "inst-1".into(),
+            pid,
+            starttime: st,
+            ns_owner_uid: Some(LAUNCHER_UID),
+            launcher_uid: LAUNCHER_UID,
+            isolation_ok: true,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes("self").expect("ns inodes"),
+        }
+    );
+    reap(child);
+}
+
+#[test]
+fn launcher_proof_is_not_built_on_starttime_mismatch() {
+    let daemon = DaemonIds::current();
+    let (child, pid, st) = leader();
+    // PID 再利用・process 入替えの形: pid は生きているが starttime が束縛と違う。
+    let s = started(pid, st + 1, Some(LAUNCHER_UID));
+    assert_eq!(
+        launcher_session_proof(&s, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    reap(child);
+}
+
+#[test]
+fn launcher_proof_is_not_built_when_the_pid_is_gone() {
+    let daemon = DaemonIds::current();
+    let (child, pid, st) = leader();
+    reap(child);
+    let s = started(pid, st, Some(LAUNCHER_UID));
+    assert_eq!(
+        launcher_session_proof(&s, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // pid 0・1 は束縛として受けない。
+    let init = started(1, st, Some(LAUNCHER_UID));
+    assert_eq!(
+        launcher_session_proof(&init, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+}
+
+#[test]
+fn launcher_proof_is_not_built_when_owner_is_daemon_or_unknown() {
+    let daemon = DaemonIds::current();
+    let (child, pid, st) = leader();
+    let owned = started(pid, st, Some(daemon.uid));
+    assert_eq!(
+        launcher_session_proof(&owned, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    let unknown = started(pid, st, None);
+    assert_eq!(
+        launcher_session_proof(&unknown, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    reap(child);
+}
+
+#[test]
+fn launcher_proof_is_not_built_without_peer_uid_binding_or_isolation() {
+    let daemon = DaemonIds::current();
+    let (child, pid, st) = leader();
+    let good = started(pid, st, Some(LAUNCHER_UID));
+    assert!(launcher_session_proof(&good, Some(LAUNCHER_UID), &daemon).is_some());
+    // 応答の送り手（SCM_CREDENTIALS）が採れない。
+    assert_eq!(launcher_session_proof(&good, None, &daemon), None);
+    // v1 の launcher（束縛の無い receipt）。
+    let mut v1 = good.clone();
+    v1.receipt.binding = None;
+    assert_eq!(
+        launcher_session_proof(&v1, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // v2 の launcher（束縛に namespace の inode が無い）。
+    let mut v2 = good.clone();
+    if let Some(b) = v2.receipt.binding.as_mut() {
+        b.ns_inodes.clear();
+    }
+    assert_eq!(
+        launcher_session_proof(&v2, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // inode が 1 つ欠けた束縛。
+    let mut partial = good.clone();
+    if let Some(b) = partial.receipt.binding.as_mut() {
+        b.ns_inodes
+            .remove(&task_core::browser_isolation::Namespace::Net);
+    }
+    assert_eq!(
+        launcher_session_proof(&partial, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // launcher 自身の隔離検査が偽。
+    let mut bad = good.clone();
+    bad.receipt.isolation_ok = false;
+    assert_eq!(
+        launcher_session_proof(&bad, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    // receipt と応答の instance が食い違う。
+    let mut other = good.clone();
+    other.receipt.instance_id = "inst-2".into();
+    assert_eq!(
+        launcher_session_proof(&other, Some(LAUNCHER_UID), &daemon),
+        None
+    );
+    reap(child);
+}
+
+#[test]
+fn v1_receipt_without_binding_decodes_as_no_proof() {
+    let body = br#"{"type":"started","session_id":"s1","instance_id":"i1","receipt":{"session_id":"s1","instance_id":"i1","outcome":"started","at_unix_ms":1,"isolation_ok":true}}"#;
+    let resp: crate::browser_launcher::Response = serde_json::from_slice(body).expect("v1");
+    let crate::browser_launcher::Response::Started { receipt, .. } = resp else {
+        panic!("started");
+    };
+    assert_eq!(receipt.binding, None);
+}
+
+#[test]
+fn launcher_runtime_carries_the_launcher_binding_into_the_proof() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-p", policy()).expect("start");
+    let proof = runtime.session_proof().expect("proof").clone();
+    assert_eq!(proof.session_id, runtime.session_id);
+    assert_eq!(proof.instance_id, "inst-test");
+    assert_eq!(proof.ns_owner_uid, Some(LAUNCHER_UID));
+    // 偽 launcher は試験 process 自身なので応答の送り手（SCM_CREDENTIALS）は daemon の UID。
+    let daemon = DaemonIds::current();
+    assert_eq!(proof.launcher_uid, daemon.uid);
+    assert!(crate::browser_runtime::same_process_alive(
+        proof.pid,
+        proof.starttime
+    ));
+    // 証明を持つだけでは本番 admission は通らない（launcher UID が daemon UID）。
+    let facts = runtime_facts(&runtime.session_id, &daemon, &good_facts(), true).expect("facts");
+    let seen = task_core::browser_isolation::LauncherObservation {
+        session_id: runtime.session_id.clone(),
+        instance_id: proof.instance_id.clone(),
+        peer_uid: Some(daemon.uid),
+        configured_launcher_uid: daemon.uid,
+        runtime_pid: proof.pid,
+        runtime_starttime: Some(proof.starttime),
+    };
+    let err = task_core::browser_isolation::verify_launcher_session(&facts, Some(&proof), &seen)
+        .expect_err("privileged launcher uid");
+    assert!(err.contains(
+        &task_core::browser_isolation::IsolationViolation::LauncherProofInvalid {
+            defect: task_core::browser_isolation::LauncherProofDefect::LauncherUidPrivileged,
+        }
+    ));
+    drop(runtime);
+    assert_eq!(wait_stopped(&launcher.log), 1);
 }

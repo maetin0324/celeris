@@ -75,8 +75,7 @@ const SHARED_PROJECT_KEY: &str = "_shared";
 const MAX_SEARCH_QUERIES: usize = 4;
 /// LLM に立てさせる検索語の本数の上限（ADR-0035 D5: 「3〜6 本」）。
 const MAX_LLM_SEARCH_QUERIES: u32 = 6;
-/// 検索語を立てる `chat/completions` の `max_tokens`（ADR-0035 D5。実機で Qwen3 は
-/// 「考える」分を含めるとこれくらい必要）。
+/// 検索語を立てる `chat/completions` の `max_tokens`（ADR-0035 D5）。
 const QUERY_LLM_MAX_TOKENS: u32 = 2000;
 /// 検索語を立てる LLM に渡す案件の文脈の上限（字数）。
 const QUERY_CONTEXT_MAX_CHARS: usize = 2000;
@@ -116,7 +115,7 @@ pub struct AcquireConfig {
     /// LiteLLM の `provider/model` 形式の接頭辞（`openai/`）は落として渡す。
     #[serde(default)]
     pub query_model: Option<String>,
-    /// 検索語を立てる 1 回の `chat/completions` のタイムアウト（秒）。ローカル LLM は遅い。
+    /// 検索語を立てる 1 回の `chat/completions` のタイムアウト（秒）。
     #[serde(default = "default_query_timeout_secs")]
     pub query_timeout_secs: u64,
     /// OpenAlex の `filter=`。未指定ならランナーの既定
@@ -658,13 +657,15 @@ pub fn build_search_queries(objective: &str) -> Vec<String> {
 
 /// LiteLLM の `provider/model` 形式から供給者の接頭辞を落とす（ADR-0035 D5）。
 /// `chat/completions` を直接叩くときに必要なのは、その口が出しているモデル名
-/// （実機: settings の `llm` は `openai/qwen3.8-27b`、`/v1/models` は `qwen3.8-27b`）。
+/// （例: settings の `llm` が `openai/celeris/standard` なら要求モデルは `celeris/standard`）。
 /// 接頭辞と見なすのは小文字・数字・`_` だけの最初の 1 区画（`openai/` / `hosted_vllm/`）。
+/// ただし `celeris/<tier>` は proxy のモデル名そのものなので残す。
 fn strip_provider_prefix(model: &str) -> String {
     let model = model.trim();
     match model.split_once('/') {
         Some((prefix, rest))
-            if !rest.is_empty()
+            if prefix != "celeris"
+                && !rest.is_empty()
                 && !prefix.is_empty()
                 && prefix
                     .chars()

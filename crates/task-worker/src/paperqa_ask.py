@@ -55,7 +55,7 @@ INPUT (all paths absolute):
    "paper_directory": "<papers>/<project_id>",
    "index_directory": "<index>/<project_id>",
    "index_name": "<project_id>" | null,
-   "model": "qwen3.8-27b" | null,                # optional `settings.llm` override
+   "model": "openai/celeris/standard" | null,  # optional `settings.llm` override
    "targets": ["CHFS", "FINCHFS", ...],          # ADR-0063 Phase 109c A
    "aspects": ["server/client 配置", ...],
    "comparison_target": "BenchFS" | null,

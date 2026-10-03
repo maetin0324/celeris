@@ -33,6 +33,13 @@ fn the_fallback_preamble_reuses_the_python_runners_extraction_instructions() {
     assert!(preamble.contains("道具は使わない"));
 }
 
+#[test]
+fn provider_kind_langmem_fallback_describes_configured_endpoint() {
+    let preamble = knowledge_fallback_instructions("artifacts/knowledge-candidates.json");
+    assert!(preamble.contains("設定された `langmem` の接続先"));
+    assert!(!preamble.contains("Qwen"));
+}
+
 #[derive(Default)]
 struct RecordingSink {
     progress: Mutex<Vec<String>>,
@@ -156,6 +163,28 @@ async fn happy_path_writes_candidates_and_result_files() {
     )
     .unwrap();
     assert_eq!(seen_input["objective"], req.task.objective);
+}
+
+#[tokio::test]
+async fn provider_kind_langmem_passes_proxy_cheap_model_to_stub() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_langmem(dir.path(), &fake_extractor_script());
+    config.base_url = Some("http://127.0.0.1:18000/v1".to_string());
+    config.model = Some("celeris/cheap".to_string());
+    let adapter = LangMemAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-proxy", default_limits(), &sink)
+        .await
+        .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    let input: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join("runs/run-proxy/langmem_input.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(input["llm"]["model"], "celeris/cheap");
+    assert_eq!(input["llm"]["base_url"], "http://127.0.0.1:18000/v1");
 }
 
 /// `langmem` が import できない（venv 未セットアップ）は `retryable = false`（ADR-0047 D4）。

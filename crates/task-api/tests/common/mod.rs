@@ -785,3 +785,24 @@ pub async fn eventually(within: Duration, mut cond: impl FnMut() -> bool) -> boo
 pub fn progress(msg: &str) -> Event {
     Event::worker_progress("01J9ZX5T3K8Q7W6V5R4P3N2M1J", msg)
 }
+
+// ---- userns probe (ADR-0126 の流儀) ----
+
+/// unprivileged user namespace が使えるか実際に試す（`unshare -Ur true` の成否）。sandbox で
+/// userns が作れないときに偽を返す。`CELERIS_USERNS_TESTS=require` のときは偽を失敗として扱う
+/// （task-worker の `db_guard_tests::userns_available` と同じ型）。
+pub fn userns_available() -> bool {
+    let available = std::process::Command::new("unshare")
+        .args(["-Ur", "true"])
+        .output()
+        .is_ok_and(|out| out.status.success());
+    if !available {
+        assert_ne!(
+            std::env::var("CELERIS_USERNS_TESTS").as_deref(),
+            Ok("require"),
+            "user namespace is required for this test"
+        );
+        eprintln!("skip: unprivileged user namespace is unavailable");
+    }
+    available
+}

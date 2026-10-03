@@ -146,3 +146,11 @@ run ごとに `RunMetrics`（`runs.metrics`）へ足し、Task 単位で `Execut
 - `continuation_metrics` を名前に含むテスト: D4 の指標（run 数・wall time・入力 token・再探索重複・resume/fresh 内訳・fallback 理由）が
   出力されること。
 - テストは偽 adapter で行い、実 claude・外部ネットワーク・systemd を使わない。
+
+## 付記（2026-10-03、remote-resume）
+
+- D3 の remote worktree の可否は `session_resume_remote_*` 試験（`dispatcher/tests/session_resume.rs`）で固定した:
+  同じ account・同じ手元 cwd なら resume、別 account（`account_changed`）と resume 拒否（`resume_rejected`）は
+  checkpoint fallback で、他 account の session id を `--resume` に渡さない。判断表・実装の変更は無し。
+- 試験のために `Dispatcher::set_cluster_ssh_command_override`（remote の `SshSettings` の ssh/rsync を偽に差し替える
+  継ぎ目。本番は呼ばない）を足した。

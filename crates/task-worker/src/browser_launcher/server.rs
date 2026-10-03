@@ -131,7 +131,7 @@ struct Inner {
     test_hook: Option<TestHookFn>,
 }
 
-/// 試験専用の遅延フック（docs/testing.md）。競合の窓で止めて順序を決定的にする。
+/// 試験専用の遅延フック（agent-docs/guides/testing.md）。競合の窓で止めて順序を決定的にする。
 #[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum TestHook {

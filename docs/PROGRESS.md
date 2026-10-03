@@ -1322,3 +1322,48 @@ main 取り込みは衝突 2 file（事前の `git merge-tree` 見積もりで�
 - release/verify の検証済み SHA は前節の `8e42a33ca126`（verify ok=true、smoke done 6.3 秒）。
   今回は main 取り込み後の指定ゲートと tick 回帰試験を再検証したもので、統合後 SHA の release/verify は再実行していない。
   本番への昇格・設定変更は行っていない。
+
+## blocked repair WU による replan の繰り返しの修正
+
+完了日: 2026-10-02。ADR-0134 D1/D2 の実装に対し、dispatcher 再現試験
+`blocked_repair_replan_loop_runs_the_new_leaf_once` を追加した。一時 git repo で段 `core` の統合検査を落とし、
+daemon が作った `repair-core-1` が `blocked(plan_issue)` になる出来事を待つ。次の planner run が同じ段へ
+`e2e-cancel` を足し、葉の実行で不正な file を直してから再統合する。最後に repair WU は `superseded`、
+`e2e-cancel` と統合 WU は `done`、計画は v2 まで、planner run は 1 回だけであることを確かめる。
+偽 adapter と出来事待ちだけを使い、負荷を掛ける時間依存試験にはしない。
+
+- `cargo test -p task-dispatch --lib blocked_repair_replan_loop -- --nocapture` → exit 0（1 passed）。
+- `cargo test --workspace` → exit 0（通常権限で全 workspace・doctest が通過）。最初の sandbox 内実行は
+  exit 101 で `instance_handoff` 8 件中 5 件が失敗した。原因は worker DB guard の user namespace probe が
+  `Operation not permitted` となったこと。通常権限で同じコマンドを再実行すると、この 5 件も通過した。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。
+
+未解決: ADR-0134 D3 の WU 単位の取り下げ・再開 API は未実装。planner が代わりの葉を足さない
+場合は人による task 単位の replan が必要。また、この再現試験の追加確認で `replay` の既存の再構築処理が、
+superseded となった repair WU を統合 WU の依存に残し、repair WU の presence も一致しないことを検出した。
+通常の dispatch と本節の必須条件は通るが、replay のこの差異は別の修正が必要。
+
+### 人が task `01M3YF3NS2EGTZD2BBWNPG1K28` を再開する手順
+
+1. この修正を含む release を人が作成・検証し、本番 daemon を人が差し替える。旧 daemon のまま再開しない。
+   release/verify と daemon 差し替えは運用手順に従い、人が結果を確認する。
+2. task 詳細で一時停止中と最新の計画版・承認待ちの有無を確認する。管理 API の
+   `POST /api/v1/tasks/01M3YF3NS2EGTZD2BBWNPG1K28/resume`（空の本文）で一時停止を解除する。
+   計画の承認待ちなら、`e2e-cancel` が段 `core` にあることを確認してから、同 task の
+   `POST .../execution/plan-gate` に `{"action":"approve"}` を送る。既に計画が active で、
+   `repair-core-2` が blocked のままなら、`POST .../execution/decompose` に
+   `{"mode":"compound","note":"blocked repair を退役させ、e2e-cancel を走らせる"}` を送って
+   1 回の replan を依頼し、新計画を確認して承認する。
+3. `GET /api/v1/tasks/01M3YF3NS2EGTZD2BBWNPG1K28/task-tree` の該当節点で、
+   `repair-core-2` の `status` が `superseded`、`e2e-cancel` が `done`、`integrate-core`
+   が `done` になったことを確認する。task 詳細の run 履歴で `e2e-cancel` の worker run、
+   計画履歴で新しい版への更新を確認する。版と planner run がさらに繰り返し増える場合は
+   task を一時停止し、その run の結果と event を調べる。
+
+### main merge（browser 試験の起動競合修正の取り込み）
+
+main（ffb87b0d を含む）を `--no-ff` で merge した。merge-tree に衝突は無く、`docs/PROGRESS.md`
+だけが自動 merge された。`cargo test -p task-worker --test browser_h3_wire` → exit 0（2 passed）、
+`cargo test --workspace` → exit 0（全 test バイナリで 0 failed）、
+`cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。

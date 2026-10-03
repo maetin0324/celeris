@@ -426,3 +426,28 @@ crates の doc comment と生成 schema も ADR-0131 を参照しているため
 
 main 取り込み後に migration の番号を `0046_cron_jobs` とした。main の `0041_feed_notices` と、並行作業で
 確保済みの 0042〜0045 の後ろの空き番号を使う。
+
+## 付記（2026-10-04、日次整理の自動適用）
+
+人の決定（2026-10-04）: 知識ベースを git で管理し GitHub の private repository に push しておき、必要なら
+git から救出する方針で運用する。これに合わせ D5・付記 D11 の「`apply` ごとに人の承認を待つ」を次のように改める。
+
+1. **承認なしで適用する。** `mode = apply` では、daemon が再検証に通った計画を人の承認なしで適用する。
+   `curation-apply` / `approve-<hash>` の決定は出さない。安全網は KB の git 履歴と private remote である。
+2. **自動承認しないもの・適用しない場合は変えない。** 計画の `human_decisions` の束ね（`curation-human`）は従来どおり
+   自動承認せず、人の判断に残す。検証失敗、元ページの変更（変更前 hash の不一致）、計画 hash や入力 snapshot
+   （D12 追記）の不一致では適用しない。
+3. **1 commit にまとめる。** 適用の後、変更した path（`_curation/YYYY-MM-DD.md`・`index.json`・`README.md` を含む）を
+   `task_ops::knowledge::commit_curation` で 1 commit にする。題は日付と件数
+   （例『knowledge curation 2026-10-04: 統合 2・新規 1・削除 0・修正 3』）、本文に task id（`task: <id>`）。
+   作者は既存の `commit_paths` と同じ設定（KB の agent 作者）。`.gitignore` で除く派生物（`index.json`）は
+   commit に入らない。変更が無ければ commit を作らず HEAD を返す。
+4. **commit の後に push する。** `task_ops::knowledge::push_remote` が現在の branch を upstream の remote
+   （無ければ `origin`）へ `git push` する（force しない、非対話、時間の上限あり）。remote が無ければ push を省き、
+   その旨を記録する（`NoRemote`）。push の失敗（`Failed`）は apply を失敗にせず、報告と event に残す。手元の
+   commit は残り、次回の日次整理の push でまとめて送られる。push はネットワークに出るが LLM 呼び出しではない
+   （配送の `git push` と同じ扱い）。「LLM 呼び出しを daemon・store に入れない」は維持する。
+5. **救出。** 誤った適用は KB の git から戻す（`git revert <commit>`、または特定 path を
+   `git checkout <commit> -- <path>`）。手順は `docs/ops/cron-jobs.md` に書く。
+6. **変えないこと。** 1 回 40 件の上限と持ち越し規則（付記 D12）、計画の形と daemon の検証順、本番 KB は
+   worker が書かないこと。

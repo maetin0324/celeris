@@ -1652,6 +1652,11 @@ pub use skills::*;
 // ADR-0122 D1: repo に写した skill のディレクトリから `skills_put` で取り込む。
 mod skill_import;
 pub use skill_import::*;
+// ADR-0131 付記（2026-10-04）: 日次整理の適用後の commit と remote への push。
+mod curation_git;
+pub use curation_git::*;
 
+#[cfg(test)]
+mod curation_git_tests;
 #[cfg(test)]
 mod tests;

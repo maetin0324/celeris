@@ -882,3 +882,18 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。
 
 main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
+
+## 通知フィード同期の退行修正（release 3527c8e39ee2 の verify 失敗、2026-10-03）
+
+- 原因: 29d0ffc5 が tick ごとに `sync_notifications`（5982b3cb）を呼ぶ。その同期は events を全部読むまで回り、1 行ごとに
+  走査位置を書いていた（写し 172,994 行で 11.3 秒・書き込み 17 万回。NFS の staging では位置 2170 で止まり dispatch に戻らない）。
+  追いついた後も、tick ごとに報告・発言・delivery の全件に書き込みの transaction を開いていた（約 500 回/tick）。
+  詳細と決定は ADR-0133 付記「通知フィードの同期を差分にする」。
+- 修正: 走査位置（events id・報告/発言の created_at）からの差分だけを読み、events は 1 回 2048 行まで。記録済みは
+  読み取り接続で先に一括判定し、新しい出来事だけ書く。通知・delivery の読み取りは読み取り接続へ。
+- 回帰試験（件数で固定）: `task-ops notify_feed::tests::notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle`、
+  `task-api --test request_lock_counts`（300 task × events 1,800 / 21,300 行で inbox・notifications・org・tasks/{id} の
+  接続回数が同じ、書き込み接続の上限）、`task-dispatch tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events`。
+- 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、
+  `cargo test -p task-ops` 431 passed、`-p task-api` 432 passed、`-p task-core` 652 passed、`-p task-dispatch` 514 passed。
+- 未解決: 受信箱の構築は task ごとに events を読む既存の形のまま（読み取り接続で task 数に比例）。

@@ -239,6 +239,12 @@ impl ApiState {
         self.inner.stream_polls.load(Ordering::SeqCst)
     }
 
+    /// ADR-0133 付記: API の store が書き込み接続・読み取り接続を取った累計（回帰試験が
+    /// 「GET が書き込み接続を何回取るか」を処理件数で固定する）。
+    pub fn store_lock_counts(&self) -> task_core::LockCounts {
+        self.inner.store.lock_counts()
+    }
+
     /// 現在開いている SSE 接続の数。
     pub fn active_streams(&self) -> usize {
         self.inner.streams.load(Ordering::SeqCst)

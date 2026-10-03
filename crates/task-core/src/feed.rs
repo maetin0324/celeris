@@ -271,10 +271,20 @@ pub trait NoticeStore: Send + Sync {
     /// 既読が `before` より前の束（とその出来事の記録）を消し、消した束の数を返す（D3.2 の保持）。
     fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError>;
 
+    /// ADR-0133 付記: `keys` のうち既に `feed_sources` にある `source_key`。読み取り接続だけを使う
+    /// （同期は記録済みの出来事に書き込みの transaction を開かない）。
+    fn notice_sources_known(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashSet<String>, StoreError>;
+
     /// 走査位置（`feed_cursor`）。
     fn feed_cursor_get(&self, name: &str) -> Result<Option<String>, StoreError>;
     fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError>;
 }
+
+/// `notice_sources_known` の 1 文あたりの key 数。
+const KNOWN_CHUNK: usize = 400;
 
 const SELECT_NOTICE: &str = "SELECT id, kind, group_key, title, summary, project_id, task_id, \
      target_kind, target_id, links_json, count, first_at, last_at, read_at FROM feed_notices";
@@ -426,15 +436,16 @@ impl NoticeStore for SqliteStore {
     }
 
     fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError> {
-        let conn = self.lock()?;
-        let row = conn
-            .query_row(
-                &format!("{SELECT_NOTICE} WHERE id = ?1"),
-                params![id.to_string()],
-                row_to_notice,
-            )
-            .optional()?;
-        row.transpose()
+        self.with_read_conn(|conn| {
+            let row = conn
+                .query_row(
+                    &format!("{SELECT_NOTICE} WHERE id = ?1"),
+                    params![id.to_string()],
+                    row_to_notice,
+                )
+                .optional()?;
+            row.transpose()
+        })
     }
 
     fn notice_list(&self, query: &NoticeQuery) -> Result<NoticePage, StoreError> {
@@ -454,29 +465,30 @@ impl NoticeStore for SqliteStore {
             0 => NOTICE_PAGE_DEFAULT,
             n => n.min(NOTICE_PAGE_MAX),
         };
-        let conn = self.lock()?;
-        let total: i64 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM feed_notices{where_sql}"),
-            [],
-            |row| row.get(0),
-        )?;
-        let mut stmt = conn.prepare(&format!(
-            "{SELECT_NOTICE}{where_sql} ORDER BY last_at DESC, id DESC LIMIT ?1 OFFSET ?2"
-        ))?;
-        let rows = stmt.query_map(
-            params![
-                i64::try_from(limit).unwrap_or(i64::MAX),
-                i64::try_from(query.offset).unwrap_or(i64::MAX)
-            ],
-            row_to_notice,
-        )?;
-        let mut items = Vec::new();
-        for row in rows {
-            items.push(row??);
-        }
-        Ok(NoticePage {
-            items,
-            total: u64::try_from(total).unwrap_or(0),
+        self.with_read_conn(|conn| {
+            let total: i64 = conn.query_row(
+                &format!("SELECT COUNT(*) FROM feed_notices{where_sql}"),
+                [],
+                |row| row.get(0),
+            )?;
+            let mut stmt = conn.prepare(&format!(
+                "{SELECT_NOTICE}{where_sql} ORDER BY last_at DESC, id DESC LIMIT ?1 OFFSET ?2"
+            ))?;
+            let rows = stmt.query_map(
+                params![
+                    i64::try_from(limit).unwrap_or(i64::MAX),
+                    i64::try_from(query.offset).unwrap_or(i64::MAX)
+                ],
+                row_to_notice,
+            )?;
+            let mut items = Vec::new();
+            for row in rows {
+                items.push(row??);
+            }
+            Ok(NoticePage {
+                items,
+                total: u64::try_from(total).unwrap_or(0),
+            })
         })
     }
 
@@ -504,21 +516,22 @@ impl NoticeStore for SqliteStore {
     }
 
     fn notice_unread_count(&self) -> Result<NoticeUnreadCount, StoreError> {
-        let conn = self.lock()?;
-        let mut stmt = conn.prepare(
-            "SELECT kind, COUNT(*) FROM feed_notices WHERE read_at IS NULL GROUP BY kind",
-        )?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut out = NoticeUnreadCount::default();
-        for row in rows {
-            let (kind, n) = row?;
-            let n = u64::try_from(n).unwrap_or(0);
-            out.total += n;
-            out.by_kind.insert(kind, n);
-        }
-        Ok(out)
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT kind, COUNT(*) FROM feed_notices WHERE read_at IS NULL GROUP BY kind",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut out = NoticeUnreadCount::default();
+            for row in rows {
+                let (kind, n) = row?;
+                let n = u64::try_from(n).unwrap_or(0);
+                out.total += n;
+                out.by_kind.insert(kind, n);
+            }
+            Ok(out)
+        })
     }
 
     fn notice_prune_read(&self, before: OffsetDateTime) -> Result<u64, StoreError> {
@@ -539,15 +552,42 @@ impl NoticeStore for SqliteStore {
         Ok(n as u64)
     }
 
+    fn notice_sources_known(
+        &self,
+        keys: &[String],
+    ) -> Result<std::collections::HashSet<String>, StoreError> {
+        let mut known = std::collections::HashSet::new();
+        if keys.is_empty() {
+            return Ok(known);
+        }
+        self.with_read_conn(|conn| {
+            // 主キー（`source_key`）の索引で引く。変数の上限を超えないよう束ごとに 1 文。
+            for chunk in keys.chunks(KNOWN_CHUNK) {
+                let marks = vec!["?"; chunk.len()].join(", ");
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT source_key FROM feed_sources WHERE source_key IN ({marks})"
+                ))?;
+                let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                    row.get::<_, String>(0)
+                })?;
+                for row in rows {
+                    known.insert(row?);
+                }
+            }
+            Ok(known)
+        })
+    }
+
     fn feed_cursor_get(&self, name: &str) -> Result<Option<String>, StoreError> {
-        let conn = self.lock()?;
-        Ok(conn
-            .query_row(
-                "SELECT value FROM feed_cursor WHERE name = ?1",
-                params![name],
-                |row| row.get(0),
-            )
-            .optional()?)
+        self.with_read_conn(|conn| {
+            Ok(conn
+                .query_row(
+                    "SELECT value FROM feed_cursor WHERE name = ?1",
+                    params![name],
+                    |row| row.get(0),
+                )
+                .optional()?)
+        })
     }
 
     fn feed_cursor_set(&self, name: &str, value: &str) -> Result<(), StoreError> {

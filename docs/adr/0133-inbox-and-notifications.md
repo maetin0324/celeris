@@ -446,3 +446,34 @@ events と reports を読み、D1.5 の `classify` で `Notice` になるもの�
 - 自動で閉じる規則は ADR-0131 の 1 か所だけにあり、この ADR はそれを読むだけ。規則の変更が受信箱と通知の
   両方に同時に効く。
 - 未解決: `knowledge_review` を 1 項目に束ねる形が使いやすいかは日次整理 job を有効にした後に見直す。
+
+## 付記: 通知フィードの同期を差分にする（2026-10-03、release 3527c8e39ee2 の verify 退行）
+
+**状況**: main 3527c8e3 の release は verify で 2 回とも ok=false（GUI 無応答・503、煙試験の task が 61 秒
+ready のまま、staging の slow api request 31 件）。staging DB（本番の写し: task 697・events 172,994・
+level 0 の報告 257・発言 200・delivery 54）の `feed_cursor` は events 2170 で止まっていた。
+
+**原因**（測定。`crates/task-ops/tests/feed_measure.rs` を写しに対して実行、ローカルディスク）:
+- 29d0ffc5 が tick ごとに `sync_notifications`（5982b3cb）を呼ぶようにした。その同期は
+  1. events を**全部読み切るまで**回り、**1 行ごとに** `feed_cursor_set`（書き込み 1 回）していた。
+     初回は 172,994 回の書き込みで 11.3 秒。NFS の staging では数分たっても 2170 行で、tick が dispatch に戻らない。
+  2. 追いついた後も、tick ごとに報告（最大 1000 件）・発言（最大 10,000 件）・delivery の全件に
+     `notice_record`（`BEGIN IMMEDIATE` の書き込み transaction）を開き、記録済みなら捨てていた（写しで tick
+     ごとに約 500 回・100 ms。NFS ではその何十倍）。発言ごとに `delivery_get` も引いていた。
+- その間、同じ DB の書き込み lock を tick が取り続けるので、API（別接続）も待たされた。
+
+**決定**:
+- D-a 走査位置: events は `id`、報告・発言は `created_at`（`feed_cursor` の `reports`・`messages`）を持ち、
+  その後だけを読む。events は 1 回の同期で `EVENT_BUDGET`（2048 行）までに区切り、残りは次の tick が読む。
+  走査位置の書き込みは 1 回の同期で各 1 回だけ（記録は冪等なので、途中で落ちて読み直しても重複しない）。
+- D-b 記録済みかどうかは `NoticeStore::notice_sources_known`（読み取り接続、`feed_sources` の主キー）で一括して
+  先に確かめ、新しい出来事にだけ `notice_record` を呼ぶ。新しい出来事の無い tick は書き込み接続を取らない。
+- D-c 通知の読み取り（`notice_list`・`notice_get`・`notice_unread_count`・`feed_cursor_get`）と
+  `delivery_get`・`delivery_list` は読み取り接続（ADR-0064 D4）にする。受信箱の 1 回の構築で書き込み接続を
+  取る回数は 300 task で 79 → 4 回になった（failed の task ごとの `delivery_get`）。
+- D-d 回帰試験は時計ではなく件数で固定する: `SqliteStore::lock_counts`（書き込み・読み取り接続を取った回数）と
+  `FeedSyncStats`（読んだ行・`notice_record` の回数）。index の migration は足さない（報告・発言の表は小さく、
+  主な費用は書き込みの回数だったため）。
+
+**修正後の測定**（同じ写し）: 1 回目 133 ms（events 2048 行・記録 421 件）、追いつくまで 85 回、
+追いついた後は 1 ms・書き込み接続 0 回。記録の結果（`feed_sources` 502 件）は修正前と同じ。

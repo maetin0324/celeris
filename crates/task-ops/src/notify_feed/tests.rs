@@ -290,3 +290,119 @@ fn notify_feed_delivery_ready_and_release_creation() {
     assert!(found.contains(&NoticeKind::Delivery));
     assert!(found.contains(&NoticeKind::Release));
 }
+
+/// ADR-0133 付記: 同期は前回の位置より後だけを読み、新しい出来事が無ければ書き込み接続を取らない。
+/// 時計ではなく読んだ行（`FeedSyncStats`）と接続を取った回数（`lock_counts`）で固定する。
+#[test]
+fn notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle() {
+    use task_core::{
+        Message, MessageId, MessageRole, OrgKind, OrgNode, Report, ReportId, ReportKind,
+    };
+    let store = SqliteStore::open_in_memory().unwrap();
+    let now = OffsetDateTime::now_utc();
+    store
+        .org_upsert(&OrgNode {
+            profile: Default::default(),
+            id: "secretary".into(),
+            parent_id: None,
+            name: "秘書".into(),
+            kind: OrgKind::Secretary,
+            genre: None,
+            brief: String::new(),
+            position: 0,
+            created_at: now,
+            updated_at: now,
+        })
+        .unwrap();
+    let report = |i: i64| Report {
+        id: ReportId::new(),
+        project_id: None,
+        node_id: "secretary".into(),
+        task_id: None,
+        kind: ReportKind::Progress,
+        level: 0,
+        headline: format!("報告 {i}"),
+        body: String::new(),
+        sources: vec![],
+        read_at: None,
+        created_at: now - time::Duration::seconds(10_000 - i),
+    };
+    let message = |i: i64| Message {
+        id: MessageId::new(),
+        node_id: "secretary".into(),
+        project_id: None,
+        role: MessageRole::Node,
+        text: "返事".into(),
+        run_id: None,
+        task_id: None,
+        metadata: None,
+        created_at: now - time::Duration::seconds(10_000 - i),
+    };
+    for i in 0..600 {
+        store.report_append(&report(i)).unwrap();
+    }
+    for i in 0..300 {
+        store.message_append(&message(i)).unwrap();
+    }
+    // 根の完了 100 件（events は 1 件あたり 40 行の履歴 + 完了）。
+    for _ in 0..100 {
+        let mut history: Vec<Event> = (0..40)
+            .map(|_| Event::Transitioned {
+                from: Status::Ready,
+                to: Status::Ready,
+                reason: "history".into(),
+            })
+            .collect();
+        history.push(Event::Transitioned {
+            from: Status::Running,
+            to: Status::Done,
+            reason: "done".into(),
+        });
+        store.create_task(&task(Status::Done), history).unwrap();
+    }
+
+    // events の時刻は書き込んだ時点なので、その後の時刻で同期する。
+    let sync_at = OffsetDateTime::now_utc() + time::Duration::seconds(1);
+    let mut recorded = 0;
+    let mut rounds = 0;
+    let idle = loop {
+        rounds += 1;
+        assert!(rounds < 50, "sync never settled");
+        let before = store.lock_counts();
+        let stats = sync_notifications_counted(&store, sync_at).unwrap();
+        let locks = store.lock_counts().since(before);
+        assert!(stats.events_scanned <= EVENT_BUDGET as u64, "{stats:?}");
+        assert!(stats.reports_scanned <= SOURCE_PAGE as u64, "{stats:?}");
+        assert!(stats.messages_scanned <= SOURCE_PAGE as u64, "{stats:?}");
+        // 書き込みは記録 1 件ごとに 1 回と、位置の更新（events・報告・発言）だけ。
+        assert!(
+            locks.writer <= stats.record_calls + 3,
+            "{stats:?} {locks:?}"
+        );
+        recorded += stats.recorded;
+        if stats.record_calls == 0 && stats.events_scanned == 0 {
+            break (stats, locks);
+        }
+    };
+    // 取りこぼし無く全て数えた（報告 600・返事 300・根の完了 100）。
+    assert_eq!(recorded, 1000);
+    // 新しい出来事が無い同期は書き込み接続を一度も取らず、読むのは位置の行（閉区間の 1 件）だけ。
+    let (stats, locks) = idle;
+    assert_eq!(locks.writer, 0, "{stats:?} {locks:?}");
+    assert!(
+        stats.reports_scanned <= 1 && stats.messages_scanned <= 1,
+        "{stats:?}"
+    );
+    assert!(locks.reader <= 10, "{locks:?}");
+
+    // 1 件ずつ足すと、その分だけ読んで記録する。
+    store.report_append(&report(9_000)).unwrap();
+    store.message_append(&message(9_000)).unwrap();
+    let stats = sync_notifications_counted(&store, sync_at).unwrap();
+    assert_eq!(stats.record_calls, 2, "{stats:?}");
+    assert_eq!(stats.recorded, 2, "{stats:?}");
+    assert!(
+        stats.reports_scanned <= 2 && stats.messages_scanned <= 2,
+        "{stats:?}"
+    );
+}

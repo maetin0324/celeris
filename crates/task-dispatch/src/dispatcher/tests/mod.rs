@@ -3126,6 +3126,9 @@ mod write_set_record;
 mod browser_fallback;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;
+/// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
+/// （`src/dispatcher/tests/phase_effect_ab.rs`）。
+mod phase_effect_ab;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

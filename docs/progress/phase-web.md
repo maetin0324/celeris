@@ -254,3 +254,18 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 
 - 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck`・`pnpm lint`（既存の warning 4 件のみ）・`pnpm check:boundaries` は exit 0。
 - 未解決: 起動そのものの費用（features/console の `useKeyboardOffset`、home の描画）は残る。試験は遷移だけを測るようになったので、起動の重さは別の指標で見る必要がある。
+
+## S1 のリンクの無い経路の測り方の修正（2026-10-03、task 01M41RYPGEQQKT2KBPH1WYH0A6 WU detail-nav）
+
+- integrate-gate の full e2e（retries 0）が S1 `/tasks/$id` で落ちた。リンクの無い経路は計測区間に文書の読み込み（SPA の再起動）を入れていたため。
+- 直し方（`web/e2e/latency/` だけ、commit `a62ab6e5`）: リンクの無い経路は `in-app-routes.ts` の親画面を開き、起動完了の後に実リンクを click する。どの画面にも SPA のリンクが無い 4 件（`/org/cos`・`files`・`changes`・`/plans/new`）は pushState + popstate。予算 300 ms・差 100 ms・retries 0 は不変。詳細は [p5-01-latency.md の付記](../web/gates/p5-01-latency.md)。
+- 変更前（goto 計測）・変更後（click・popstate 計測）、CDP CPU throttle、各 108 計測、起点→h1 の最大 / 中央値 / 300 ms 超:
+
+| CPU | 変更前 | 変更後 |
+|---|---|---|
+| 1x | 122 / 45 / 0/108 | 80 / 69 / 0/108 |
+| 4x | 450 / 181 / 4/108 | 325 / 76 / 1/108 |
+| 6x | 462 / 292 / 48/108 | 426 / 95 / 2/108 |
+
+- 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck` と biome は exit 0。
+- 未解決: 4x・6x の変更後の超過 3 件は Playwright の click の actionability 待ちで、page 内の遷移は 176 ms 以下。

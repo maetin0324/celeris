@@ -4,7 +4,7 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 # provider と LLM source の分離・Qwen cheap 専用化の移行手順
 
 対象は 2026-10-02 の本番 `~/.config/celeris/config.toml`。実行者は人。以下は適用例であり、
-このタスクでは本番の設定・DB・daemon を変更しない。[ADR-0132](../adr/0132-provider-llm-source-split-and-cheap-qwen.md) D2・D7 に従う。
+このタスクでは本番の設定・DB・daemon を変更しない。[ADR-0132](../../agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md) D2・D7 に従う。
 
 ## 何を変えるか
 

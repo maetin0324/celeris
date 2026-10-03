@@ -140,3 +140,40 @@ build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/t
 | `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace -- --exact --nocapture` | 101 | 単独再実行も同じ `/proc` の Chrome PID 不可視で失敗 |
 
 実 launcher 試験は run の PID namespace から host 側 Chrome を観測できない環境制約とみられる。host の設定・daemon・launcher は変更していない。ログはこの run の成果物ディレクトリに `browser_launcher_ptrace.log` と `browser_launcher_ptrace_exact.log` として残した。
+
+## sync-main-2 migrate-docs
+
+2026-10-03（task 01M3Z8CXYG1J6BZCQ87YS3FC67、WorkUnit migrate-docs、土台 `67d4e807` = main `40189604` 取り込み後）。merge-latest で main から旧配置に入ったものを ADR-0128 D6 で新配置へ移した。コードの挙動は変えていない。
+
+- ADR: `docs/adr/` の 0129・0132・0133・0134・0135・0138 を `agent-docs/adr/` へ同名で `git mv`。`docs/adr/` には README.md だけが残る。
+  0128 超えの番号は振り直さず、`check-adr-numbers.sh` の `ALLOWED_OVER_LAST` に完全なファイル名で書いた（ADR-0128 末尾の付記 2026-10-03）。
+- 進捗: `docs/progress/` の 5 本を移した（`docs/progress/` には README.md だけが残る）: `phase-inbox-notifications.md` → `2026-10-02-inbox-notifications.md`（front matter を足した）、
+  `provider-llm-source-inventory.md` → `2026-10-02-provider-llm-source/inventory.md`、`reflink-target-experiment.md`・`sccache-sync-recheck.md`・`seed-refresh.md` → `2026-10-02-host-sccache-reflink/` の下。
+- `docs/testing/time-dependent-waits.md`（task 01M3ZCXG… の走査記録）は agent 側と分類し `2026-10-02-deterministic-time-waits/inventory.md` へ。`docs/ops/`・`docs/api/v1/` の新しい人向け 5 本はそのまま（tsv に human 行）。tsv の末尾に 17 行を足した。
+- `agent-docs/PROGRESS.md`: main が足した 816 行（途中の 2 か所と末尾 792 行）を task ごとの進捗ファイルへ移し、本文を merge-base `c4885655` の版に戻した（D6 の凍結）。移した先:
+  `2026-10-01-browser-prod-admission.md`（新）、`2026-10-02-deterministic-time-waits.md`（新）、`2026-10-02-host-sccache-reflink.md`（新）、`2026-10-02-provider-llm-source.md`（新）、
+  `2026-10-02-web-follow-health-gate.md`（新）、`2026-10-02-blocked-repair-replan-loop.md`（新）、既存の `2026-10-02-browser-launcher.md`・`2026-10-02-skills-native-delivery.md`・`2026-10-02-inbox-notifications.md` の末尾。
+  落としていないことの確認: main が足した空でない 661 行を 1 行ずつ `grep -qxF` で `agent-docs/progress/` の全ファイルに照合し、見つからない行 0。
+- 参照: 移した ADR・進捗・`docs/ops/*` の相対リンク、`scripts/host-sccache/*` のコメント（`agent-docs/adr/0129-…`）、`scripts/selfdeploy/install-units.sh` のコメント（`docs/ops/web-parallel-operation.md`）を新パスへ直した。
+  main に無い ADR-0136（`0136-local-hot-data-layout.md`）へのリンク 3 か所はリンクを外し「main 未取り込み」と書いた。移した本文中の当時のコマンド記録（`grep … docs/adr/0129-…` など）は記録なので変えていない。
+
+### build cache 判定（取り込み後）: 残っている
+
+ADR-0125 の状態待ち（`run_until_state`、`STATE_WAIT_GUARD` 60 秒、`crates/task-dispatch/src/dispatcher/tests/mod.rs:2643-2661`）は main で入ったが、sccache 系 helper と build_cache.rs の多くは tick 回数で止まる `run_until_idle(&mut d, 60)` の直後に `Status::Done` を assert したまま。
+
+- `crates/task-dispatch/src/dispatcher/tests/mod.rs:2990-2991`（`run_scratch_env`。`build_cache.rs:525` の `scratch_runs_get_target_and_cargo_tuning_but_no_sccache` が使う）— 残っている。
+- `crates/task-dispatch/src/dispatcher/tests/build_cache.rs`: 残っている — 24-25（`the_preamble_notes_the_shared_build_cache_when_enabled`）、54-55（`the_preamble_does_not_note_the_shared_build_cache_when_disabled`）、
+  96-98（`shared_build_cache_sets_cargo_target_dir_for_a_local_git_worktree_on_the_host`）、141-143（`shared_build_cache_disabled_does_not_set_cargo_target_dir`）、
+  733-734（`scratch_on_nfs_falls_back_to_build_cache_dir`）、822-823（`run_start_adopts_a_finished_target_that_predates_the_checkout`）。
+- 直っている: 269-273（`parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_when_done`）、396-400・489-493（`every_cargo_path_uses_the_scratch_target_dir`）、325・329 は `run_until_state` で状態待ち。
+
+### 文書検査（migrate-docs 後）
+
+| コマンド | exit | 結果 |
+|---|---:|---|
+| `sh scripts/dev/check-doc-links.sh` | 0 | `check-doc-links: ok`（移動前は 41 件の壊れた参照） |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | `check-doc-layout: ok` |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 | `check-adr-numbers: ok (122 files)`（移動前は 0128 超え 6 件で違反。一時ファイル `0139-x.md` を置くと exit 1 で違反を出すことも確かめ、消した） |
+| `sh scripts/dev/progress-index.sh --check` | 0 | `progress-index --check: ok` |
+
+未解決: Task の受け入れ条件 3（`celeris/01M3YBGM…` との merge-base からの差分が agent-docs と dispatcher/tests だけ）は、merge-latest で main を取り込んだ時点で 269 file の差分があり成り立たない（本 WU の前から）。条件の基点の見直しが要る。

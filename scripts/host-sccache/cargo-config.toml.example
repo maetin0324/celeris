@@ -1,4 +1,4 @@
-# ~/.cargo/config.toml に足す例（docs/adr/0129-host-sccache-reflink-targets.md §2）。
+# ~/.cargo/config.toml に足す例（agent-docs/adr/0129-host-sccache-reflink-targets.md §2）。
 #
 # Cargo は `[build] rustc-wrapper` の値で `~` を展開しない。rustc-wrapper.sh の絶対 path を
 # 書くこと。この例では ~/.local/bin に rustc-wrapper.sh を置いた前提（<user> を実際の

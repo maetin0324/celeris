@@ -37,4 +37,4 @@ digest_max_lines = 10
 
 `GET /api/v1/notify` は上記の `inbox_batch_secs`・`inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines` と、受信箱新着（`inbox_new_last_sent_at`）および要約（`digest_last_sent_at`）の最後の成功送信時刻を返す。該当経路の送信履歴が無い場合、時刻は `null` になる。
 
-通常のリリース・昇格手順は [selfdeploy runbook](../selfdeploy.md) を参照する。受信箱の項目は `/api/v1/inbox/items`、通知一覧と既読状態は `/api/v1/notifications` で確認できる。
+通常のリリース・昇格手順は [selfdeploy runbook](selfdeploy.md) を参照する。受信箱の項目は `/api/v1/inbox/items`、通知一覧と既読状態は `/api/v1/notifications` で確認できる。

@@ -16,7 +16,7 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
   `inbox_reminder_secs`・`digest_interval_secs`・`digest_max_lines`）と経路ごとの最終送信時刻は実装済み
   （試験 `crates/task-api/tests/notify.rs` の `get_notify_status_exposes_route_settings_and_last_successful_sends`）。
   3) migration は最新 main の取り込み時に全 celeris/* を再走査し `0041_feed_notices.sql`（版数 41）へ振り直した（D3.2 の付記）。
-  詳細は [phase-inbox-notifications.md](../progress/phase-inbox-notifications.md)
+  詳細は [phase-inbox-notifications.md](../progress/2026-10-02-inbox-notifications.md)
 - 関連: ADR-0033（報告・認可）、ADR-0037 / ADR-0050（Discord 通知）、ADR-0067 D4（承認の材料）、
   ADR-0070 D1（失敗の分類）、ADR-0074 D2.4（途中確認）、ADR-0079 D7 / D8（決定の要求・計画の承認）、
   ADR-0080 D5（browser の待ち）、ADR-0081（web/ SPA）、ADR-0121 D3（配送の取りこぼし）、

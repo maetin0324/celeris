@@ -50,7 +50,7 @@ tasks: [01M3VFQZ2TX3W0KTDQHKCAVJR6, 01M3WV4BFJ71J9ZWJ020MP2Z4K]
 
 synthetic（構造体を直接組んだ模擬観測）での 5 通り（launcher-proof=allow、same-uid/non-isolated/no-proof/proof-invalid=deny）は単体・結合試験で実証済みだが、**launcher の実観測を本番入口（両 `Attested`）に通した `ADMISSION[real-session]` の表は未実証**。host で protocol v3 launcher に入れ替えて試験台本（`launcher-admission-evidence.sh`）を実行すると、表を作る直前の前提チェック（当時の版では launcher 接続の `SO_PEERCRED` が設定上の launcher UID であること）で失敗した。原因は launcher が systemd の socket activation（`Accept=no`）で動き、listen socket を最初に作るのが systemd（root）であるため、接続の `SO_PEERCRED` が `celeris-browser` ではなく `systemd` に見えること。sandbox でも同様の理由（userns 越し）で前提が成立しない。この前提は task 01M3ZFJ2DZ5TZPAFKACX45JNF4 で応答の `SCM_CREDENTIALS` に置き換えた（下の付記と ADR-0116 launcher 実装の付記 D-P）。host で `ADMISSION[real-session]` を再取得する必要がある（手順 `docs/ops/browser-launcher-admission-evidence-run.md`）。それまでは D-L の owner 検査・証明必須化は synthetic と単体試験の間接証跡、ptrace 拒否そのものは実 process で確認済みという状態にとどまる。
 
-付記（2026-10-02、task 01M3ZFJ2DZ5TZPAFKACX45JNF4）: daemon 側の身元確認を応答の `SCM_CREDENTIALS` に替えた（[ADR-0116 launcher 実装の付記 D-P](0116-browser-launcher-implementation.md)）。launcher の binary・protocol は変えていない。`ADMISSION[real-session]` の再取得は人が [`docs/ops/browser-launcher-admission-evidence-run.md`](../ops/browser-launcher-admission-evidence-run.md) の手順で行う（未実施）。
+付記（2026-10-02、task 01M3ZFJ2DZ5TZPAFKACX45JNF4）: daemon 側の身元確認を応答の `SCM_CREDENTIALS` に替えた（[ADR-0116 launcher 実装の付記 D-P](0116-browser-launcher-implementation.md)）。launcher の binary・protocol は変えていない。`ADMISSION[real-session]` の再取得は人が [`docs/ops/browser-launcher-admission-evidence-run.md`](../../docs/ops/browser-launcher-admission-evidence-run.md) の手順で行う（未実施）。
 
 ## 維持する承認と観測の境界
 

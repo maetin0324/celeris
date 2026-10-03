@@ -4,8 +4,8 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 # ADR-0132: provider の LLM source と adapter を分け、Qwen は cheap に限る（ADR-0053 付記）
 
 - 日付: 2026-10-02
-- 状態: **実装済み**（2026-10-02。D1〜D7 を provider-split・proxy-cheap・config-docs・gui-ui・web-ui・knowledge-route・worker-tools の各 WorkUnit で実装し、`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace --no-run` / `cargo test -p llm-proxy` / `cargo test -p celeris config::` / `cargo test -p task-api --test providers_admin --test llm_sources` / `cargo test -p task-dispatch --lib` で確認した。詳細は [docs/PROGRESS.md](../PROGRESS.md) の節「provider の LLM source / adapter 分離と cheap 専用 Qwen」。人の方針: paperqa・langmem・local-deep-research は Qwen 専用でなくてよく、GPT 系へのデータ送信を許す。LLM source と adapter / harness を設定・API・GUI で区別し、既存設定を読めるようにする。Qwen3.8-27B は cheap lane だけで使う）
-- 関連: [ADR-0053](0053-llm-source-proxy.md) D1・D2（供給元の抽象と proxy）、[ADR-0052](0052-knowledge-run-fallback.md) D2（知識整理の汎用ハーネスへの fallback）、[棚卸し](../progress/provider-llm-source-inventory.md)
+- 状態: **実装済み**（2026-10-02。D1〜D7 を provider-split・proxy-cheap・config-docs・gui-ui・web-ui・knowledge-route・worker-tools の各 WorkUnit で実装し、`cargo fmt --all -- --check` / `cargo clippy --workspace -- -D warnings` / `cargo test --workspace --no-run` / `cargo test -p llm-proxy` / `cargo test -p celeris config::` / `cargo test -p task-api --test providers_admin --test llm_sources` / `cargo test -p task-dispatch --lib` で確認した。詳細は [進捗ファイル](../progress/2026-10-02-provider-llm-source.md) の節「provider の LLM source / adapter 分離と cheap 専用 Qwen」。人の方針: paperqa・langmem・local-deep-research は Qwen 専用でなくてよく、GPT 系へのデータ送信を許す。LLM source と adapter / harness を設定・API・GUI で区別し、既存設定を読めるようにする。Qwen3.8-27B は cheap lane だけで使う）
+- 関連: [ADR-0053](0053-llm-source-proxy.md) D1・D2（供給元の抽象と proxy）、[ADR-0052](0052-knowledge-run-fallback.md) D2（知識整理の汎用ハーネスへの fallback）、[棚卸し](../progress/2026-10-02-provider-llm-source/inventory.md)
 - 番号: 2026-10-02 に `main` と全 `celeris/*` ブランチの `docs/adr` を確認した。0131 は `celeris/01M3YF3NS2EGTZD2BBWNPG1K28` の cron jobs で使用済み、0132 は空き。
 
 ## 文脈
@@ -55,7 +55,7 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 
 ### D7. 移行と本番操作
 
-- [移行手順](../ops/provider-llm-source-migration.md) に、現行 config の控え、旧 ID と `providers.d` の対応、`models.qwen` の非 cheap キー削除、proxy 経由の `celeris/<tier>` への切替、Qwen 固定 opencode の cheap 制限、設定検証、画面と応答ヘッダの確認、戻し方を書く。新しい設定例は source と道具を分けて示す。旧 id の変更で履歴や cooldown の鍵が変わることも明記する。
+- [移行手順](../../docs/ops/provider-llm-source-migration.md) に、現行 config の控え、旧 ID と `providers.d` の対応、`models.qwen` の非 cheap キー削除、proxy 経由の `celeris/<tier>` への切替、Qwen 固定 opencode の cheap 制限、設定検証、画面と応答ヘッダの確認、戻し方を書く。新しい設定例は source と道具を分けて示す。旧 id の変更で履歴や cooldown の鍵が変わることも明記する。
 - 本番の `~/.config/celeris`、service、daemon、DB はこの仕事から変更しない。本番 config の適用と daemon 再起動、必要な TOTP 操作は人が手順に従って実行する。認証情報の値を手順・ログ・証跡に載せない。
 
 ## 検証条件

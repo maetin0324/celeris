@@ -6,8 +6,8 @@ tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]
 
 - 日付: 2026-10-02
 - 状態: Accepted（実装と host への適用は後続工程）
-- 関連: [ADR-0075](0075-tiered-build-cache.md) D1–D6、R7-7、R7-8、[ADR-0136](0136-local-hot-data-layout.md)
-- 実測: [target コピー後の Cargo fresh 判定実験](../progress/reflink-target-experiment.md)
+- 関連: [ADR-0075](0075-tiered-build-cache.md) D1–D6、R7-7、R7-8、ADR-0136（`0136-local-hot-data-layout.md`、main 未取り込み）
+- 実測: [target コピー後の Cargo fresh 判定実験](../progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md)
 
 ## 1. Celeris からの sccache 撤去と互換
 
@@ -25,7 +25,7 @@ server は Celeris の unit と依存関係を持たない user unit とし、`S
 
 ## 3. scratch の `/local` への移行
 
-`[scratch] dir` を設定可能なままにし、`/local` の btrfs mount と書き込み権限を人が確認した後に [ADR-0136](0136-local-hot-data-layout.md) の定める `/local/celeris/data/scratch` へ切り替える。`/local` がない環境の既定値は現行の scratch path のままとする。マウントが失われた場合に root filesystem 上へ同名ディレクトリを作らないよう、切替後は mount point と filesystem を起動時に検査する。`mount` 指定があり満たされないときは `dir` を従来の既定 scratch dir へ戻し、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。移行は daemon 停止中に既存の lease と target を保存して行い、切替後の owner path・lease・空き容量を確認してから再開する。Proxmox host の LVM-thin volume の作成、btrfs format、container への bind mount は人の作業であり、Celeris は実行しない。
+`[scratch] dir` を設定可能なままにし、`/local` の btrfs mount と書き込み権限を人が確認した後に ADR-0136（`0136-local-hot-data-layout.md`、main 未取り込み） の定める `/local/celeris/data/scratch` へ切り替える。`/local` がない環境の既定値は現行の scratch path のままとする。マウントが失われた場合に root filesystem 上へ同名ディレクトリを作らないよう、切替後は mount point と filesystem を起動時に検査する。`mount` 指定があり満たされないときは `dir` を従来の既定 scratch dir へ戻し、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。移行は daemon 停止中に既存の lease と target を保存して行い、切替後の owner path・lease・空き容量を確認してから再開する。Proxmox host の LVM-thin volume の作成、btrfs format、container への bind mount は人の作業であり、Celeris は実行しない。
 
 host 管理の sccache cache（`/local/sccache`、§2）は ADR-0136 が定める Celeris 管理 tree `/local/celeris/{data,state}` の外にあり、Celeris の GC・バックアップの対象ではない。unit の `SCCACHE_CACHE_SIZE` は ADR-0136 が切替直前に要求する `/local` の 30GiB 以上の空きに収まるよう人が設定する。
 
@@ -37,7 +37,7 @@ seed は repo key ごとに `<scratch>/seeds/<repo-key>/current/target` と mani
 
 新しい task または WU の空の owner には、互換な seed から `cp -a --reflink=auto` で target を一時ディレクトリへ写してから公開する。container の `/local` では `FICLONE` / `FICLONERANGE` が EPERM でも `copy_file_range(2)` が btrfs extent を共有するため、`--reflink=always` の成否を判定に使わない。`cp --reflink=auto` が通常コピーへ落ちた場合は一時ディレクトリを削除し、空の target から始める。共有の判定は実際のコピーについて `filefrag` の shared 表示、または十分大きい試験ファイルのコピー前後の `df` 増分で行い、判定できない場合も空から始める。`du` や `st_blocks` の合計は共有の証明にならない。既存 owner の target は seed で上書きしない。seed の compiler version、profile、Cargo 設定が違えばコピーせず空から始める。
 
-[実験](../progress/reflink-target-experiment.md)（Cargo/rustc 1.98.1、`CARGO_INCREMENTAL=0`）では 28 MiB の seed を ext 系 filesystem で実体コピーした。同じ source・別 target で `Compiling` は 0 行、0.03 秒、`df` は +27.6 MiB。source path も変えて `cp -a` で mtime を保持した場合も 0 行、0.03 秒、+27.6 MiB。source の mtime を更新すると path 依存の pdep と app の 2 crate が再ビルドされ、0.23 秒だった。最初の空 build は 5 crate、0.74 秒。同じ target の対照は 0 行、0.04 秒。したがって target と source の絶対 path が違うだけでは、この小さな例での依存再ビルドは確認されなかった。ただし実際の worktree の mtime が新しければ path 依存とその下流は再ビルドされる。`--remap-path-prefix` や target path の統一だけではこの dirty 判定を消せない。seed の効果は registry 依存の割合と worktree の mtime に制限される。
+[実験](../progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md)（Cargo/rustc 1.98.1、`CARGO_INCREMENTAL=0`）では 28 MiB の seed を ext 系 filesystem で実体コピーした。同じ source・別 target で `Compiling` は 0 行、0.03 秒、`df` は +27.6 MiB。source path も変えて `cp -a` で mtime を保持した場合も 0 行、0.03 秒、+27.6 MiB。source の mtime を更新すると path 依存の pdep と app の 2 crate が再ビルドされ、0.23 秒だった。最初の空 build は 5 crate、0.74 秒。同じ target の対照は 0 行、0.04 秒。したがって target と source の絶対 path が違うだけでは、この小さな例での依存再ビルドは確認されなかった。ただし実際の worktree の mtime が新しければ path 依存とその下流は再ビルドされる。`--remap-path-prefix` や target path の統一だけではこの dirty 判定を消せない。seed の効果は registry 依存の割合と worktree の mtime に制限される。
 
 上記実験は btrfs 上の extent 共有を測っていない。人の 2026-10-02 の別実測では、container の `/local` で 512 MiB を `copy_file_range` および GNU coreutils 9.5 の `cp -a --reflink=auto` で写すと、`df` 増分は 0 MiB、`filefrag` は shared を示した。この環境では `cp --reflink=always` は EPERM になる。実装後に同じ方法で end-to-end の共有を再確認する。
 

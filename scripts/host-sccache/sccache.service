@@ -1,6 +1,6 @@
 # host の cargo 用 sccache server の systemd --user unit の雛形。
 # Celeris の unit（旧 celeris-sccache.service）とは無関係で、依存関係も持たない
-# （docs/adr/0129-host-sccache-reflink-targets.md §2）。
+# （agent-docs/adr/0129-host-sccache-reflink-targets.md §2）。
 #
 # 置くだけでは有効化されない。人が ~/.config/systemd/user/sccache.service にコピーし、
 # SCCACHE_DIR・SCCACHE_CACHE_SIZE を環境に合わせて書き換えてから

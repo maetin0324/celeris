@@ -8,6 +8,42 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
 
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
 
+### verify-record: guard-fix 統合後の検証 — 2026-10-03
+
+ADR-0126 付記2（guard-fix-impl・repair-impl-1）統合後の HEAD（`e3d615d3`）で、指定の検査コマンドをすべて
+実行し直し、終了コードと件数を記録する。`crates/` は変更していない（本 WU は検証専用）。
+
+- 前提確認: `git diff 7c4772a9ebd9 HEAD -- crates/task-worker` は 0 行（本 branch は task-worker を変えていない）。
+- 受け入れ条件0: `cargo build --workspace --bins` → exit 0。続けて
+  `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation --skip launcher_chrome_denies_daemon_uid_ptrace`
+  → **exit 0**、3367 passed、0 failed（`grep -c FAILED` = 0）。skip した 2 本は本 task の範囲外（下記「未解決」参照）。
+- 受け入れ条件1: `cargo test -p task-dispatch --lib cluster_job_wait`（単独）→ exit 0、5 passed、498 filtered out。
+  `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` を含む全 5 本が単独では pass。
+- 受け入れ条件2:
+  - `cargo test -p celeris --lib worker_guard` → exit 0、4 passed
+    （`worker_guard_opt_out_refuses_production_inside_worker_run`・`worker_guard_exempt_test_db_without_marker`・
+    `worker_guard_probe_production_without_marker`・`worker_guard_opt_out_precheck_refuses_before_opening_db`）。
+  - `cargo test -p celeris --test worker_db_guard_refuse` → exit 0、2 passed
+    （`worker_db_guard_refuse_with_opt_out`・`worker_db_guard_refuse_real_binary_inside_worker_run`）。
+  - `cargo test -p celeris --test instance_handoff` → exit 0、8 passed（うち `a_stale_heartbeat_promotes_the_standby` が約60秒）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- 受け入れ条件3（この節）: 証跡を本節に記載。
+- 個別確認（参考）: `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace`
+  を単独実行すると FAILED（`start real launcher session: Protocol`、`crates/task-worker/tests/browser_launcher_ptrace.rs:405`）。
+  host の `/usr/local/libexec/celeris/celeris-browser-launcher`（タイムスタンプ 10/03 01:24、main の新 protocol）が
+  本 branch（main 未取り込み、`crates/task-worker` 差分なし＝上記前提確認）の launcher client と版ずれしている。
+- 未解決事項（本 task 範囲外、skip した 2 本）:
+  (a) `task-dispatch::cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は、
+      workspace 並走時に `tick_until` の 60 秒保険で落ちる負荷依存の flake（単独実行では上記のとおり pass）。
+      task-dispatch は本 task の対象パス（crates/celeris/src/daemon, crates/celeris/tests, docs/adr/0126-*）外。
+  (b) `task-worker::browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` は、host launcher の
+      protocol 入れ替え（main の新 protocol、10/03 01:24 更新）と本 branch（main 未取り込み）の launcher client との
+      版ずれが原因。本 branch では task-worker を変更していないため、この task の範囲では直らない。
+- 提案:
+  (a) 別 task で `tick_until` の 60 秒保険を試験の時計（注入した clock・tokio::time::pause 等）で置き換え、
+      workspace 並走時の flake を決定的にする。
+  (b) 別 task で本 branch に main を取り込み（merge）、launcher client の版ずれを解消してから同 test を再実行する。
+
 ## codex・opencode への skill の付属ファイルと段階的な読み込み
 
 - 実装・記録完了日: 2026-10-02。[ADR-0127](adr/0127-skills-native-delivery.md) は実装済みに更新。codex・acp では mount した skill を `.agents/skills/` に付属ファイルごと届け、`AGENTS.md`・前置きは一覧だけにした。実機の記録と再実行手順は [phase-skills-progressive.md](progress/phase-skills-progressive.md)。

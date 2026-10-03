@@ -95,11 +95,69 @@ evaluate 葉（2026-10-03）。'## 実測' の表のとおり Phase 1〜5 の「
 
 既存機構で**足りない点**（merge train でも解けないもの）: (a) `docs/PROGRESS.md`・ADR 番号・migration 番号のような**共有の連番・共有の節**で起きる意味的衝突。これは file の分割（task ごとの progress file、番号の予約）で減らす種類の問題で、取り込みの順序付けでは減らない。(b) 独立に起票された root を後から 1 つの親に束ねる操作（adopt）。(c) `merge_base` repair 上限到達後の人待ち 6 件の内訳が event に残らず、「衝突か、検査の不合格か」を今の DB から区別できない。ADR-0120 D5 の event（`integration_repair_*`）が本番に入れば区別できる。
 
+## 前後比較
+
+ab-harness（`crates/task-dispatch/src/dispatcher/tests/phase_effect_ab/`）の決定的な A/B 試験で、Phase 3〜5 が無い場合（導入前、off）とある場合（導入後、on）を同じ筋書きで動かして比べた。偽の adapter を使い、新しい session は 40000 token、resume は 4000 token と数える。wall time は SimClock の秒数。scenario は 3 つ: continuation（Phase 3 の session resume）、atomic_route（Phase 4 の直行経路）、review_sync（Phase 1/2 の review 前同期。Phase 5 の behind による優先はここの順序付けに効く）。
+
+実行した command（2026-10-03、この branch `2d20adf7` で実行。exit 0、4 passed / 0 failed）:
+
+```sh
+cargo test -p task-dispatch phase_effect_ab -- --nocapture
+# ab-metric continuation off runs=3 wall_secs=360 input_tokens=120000 fresh_sessions=3
+# ab-metric continuation on runs=3 wall_secs=280 input_tokens=48000 fresh_sessions=1
+# ab-metric atomic_route off runs=3 wall_secs=360 input_tokens=120000 fresh_sessions=3
+# ab-metric atomic_route on runs=2 wall_secs=240 input_tokens=80000 fresh_sessions=2
+# ab-metric review_sync off runs=4 wall_secs=420 input_tokens=160000 fresh_sessions=4
+# ab-metric review_sync on runs=3 wall_secs=330 input_tokens=120000 fresh_sessions=3
+```
+
+新 session 数は、コードを読み直す回数の代わりに使う。新しい session はそれまでの文脈を持たないので、作業場所を一から読み直す。
+
+| scenario | 指標 | 導入前 | 導入後 | 差 |
+|---|---|---|---|---|
+| continuation | run 数 | 3 | 3 | 0 |
+| continuation | wall time（秒） | 360 | 280 | −80（−22%） |
+| continuation | 入力 token | 120000 | 48000 | −72000（−60%） |
+| continuation | 新 session 数 | 3 | 1 | −2 |
+| atomic_route | run 数 | 3 | 2 | −1（planner run が無くなる） |
+| atomic_route | wall time（秒） | 360 | 240 | −120（−33%） |
+| atomic_route | 入力 token | 120000 | 80000 | −40000（−33%） |
+| atomic_route | 新 session 数 | 3 | 2 | −1 |
+| review_sync | run 数 | 4 | 3 | −1（古い base での review の後の repair と再 review が、review 前の同期 1 回に置き換わる） |
+| review_sync | wall time（秒） | 420 | 330 | −90（−21%） |
+| review_sync | 入力 token | 160000 | 120000 | −40000（−25%） |
+| review_sync | 新 session 数 | 4 | 3 | −1 |
+
+本番 DB で測った導入前の値（'## 実測'）と並べる。単位が違う（模擬は筋書き 1 本、本番は done の execute task 1 件あたり）ため、直接引き算はしない。
+
+| 指標 | 本番・導入前（358 task） | 模擬・導入前 → 導入後 | 本番・導入後 |
+|---|---|---|---|
+| task あたりの run 数 | 平均 4.39・中央値 1 | 3〜4 → 2〜3 | 未測定（本番 release に入っていない） |
+| task あたりの wall time | 平均 1941 秒・中央値 175 秒 | 360〜420 → 240〜330 秒 | 未測定 |
+| task あたりの入力 token（`input_tokens` の和） | 平均 4,269,905 | 120000〜160000 → 48000〜120000 | 未測定 |
+| 新 session 数（resume の割合） | resume 0 / 1435 run（全 run が新 session） | 3〜4 → 1〜3 | 未測定 |
+
+模擬の限界:
+
+- 値は偽の adapter による決まった数え方で、実際の LLM の token や wall time ではない。新 session と resume の token の比（40000 : 4000）は仮に置いた値で、実際の prompt cache の効き方は測っていない。
+- run 数・新 session 数の差は機構で決まる（planner を飛ばす、同じ session を resume する、repair の往復が減る）ので、本番でも差の向きは同じになると見込める。wall time と token の減る割合は、仮に置いた値の比をそのまま映しているだけで、本番の削減率の見積もりには使えない。
+- review_sync は統合（main への取り込み）を試験の中の `git merge --no-ff` で代用している。配送（delivery）の `merge_base` repair の経路と、root と main の間の統合失敗率（'## 評価' の 23%・11%）は模擬していない。merge train が要るかどうかの判断に効くのはこの失敗率で、模擬ではこの値が分からない。
+- Phase 5 の write-set による並列・抑制と、behind による優先は、筋書き 1 本の run 数には出ない（効くのは複数 task が同時に走るとき）。
+
+release 後の再計測の手順（人が実行する。読み取り専用）:
+
+1. Phase 1〜5 を含む release が本番の `current` になったことを確かめ、その日時を `T` とする: `readlink ~/.local/celeris/current` と、`git merge-base --is-ancestor 44bbad17 <release sha>`。
+2. `T` 以後の delivery が 30 件に届くまで待つ: `sqlite3 "$RO" "select count(*) from deliveries where json_extract(json,'$.pushed_at') >= 'T'"`（delivery の JSON に作成日時の欄は無いので、push 済みの数で数える。`task-core/src/delivery.rs` の `pushed_at`）。
+3. '## 実測' の「task あたり run 数・wall time・入力 token」と同じ SQL を流す。ただし `where` に `and r.started_at >= 'T'` を足し、導入前は `< 'T'` で区切る。
+4. 新 session 数と resume の割合を測る: `sqlite3 "$RO" "select count(*), sum(json_extract(usage_json,'$.session_resumed')=1), sum(json_extract(usage_json,'$.session_resumed')=0) from runs where adapter='claude-code' and started_at >= 'T'"`（`session_resumed` が無い run は数に入らない。`task-core/src/model.rs` の `Usage.session_resumed`）。
+5. 直行経路の割合を測る: `sqlite3 "$RO" "select count(*) from events where json_extract(json,'$.type')='execution_routed'"`。'## 結論' の閾値の SQL も同じ時点で流す。
+6. 結果をこの節に「本番・導入後」の列として書き足す。
+
 ## 結論
 
 **現時点では不要**。merge train / project-level integration branch は作らない。ADR も follow-up task も追加しない。
 
-理由: 実測で残っている統合失敗は root と main の間（delivery 56 件の 23% が `merge_base` repair、11% が repair 上限で人待ち、取り込み時 behind 中央値 3・最大 173）に集中しているが、その窓を閉じるために設計した Phase 1〜5（ADR-0118/0120/0130）は本番 release にまだ 1 件も入っておらず（'## 境界'）、「導入後」の数字が全て 0 件のままである。導入前の失敗を根拠に、同じ窓を狙う 2 つ目の仕組みを重ねる判断はできない。段の中の統合は既に merge 順次・再検査・自動修復の形で動いており（衝突 4.3%、検査不合格 22%、どちらも自動修復で done）、案件単位の integration branch は ADR-0079 の親ブランチで表現できる。
+理由: 実測で残っている統合失敗は root と main の間（delivery 56 件の 23% が `merge_base` repair、11% が repair 上限で人待ち、取り込み時 behind 中央値 3・最大 173）に集中しているが、その窓を閉じるために設計した Phase 1〜5（ADR-0118/0120/0130）は本番 release にまだ 1 件も入っておらず（'## 境界'）、「導入後」の数字が全て 0 件のままである。導入前の失敗を根拠に、同じ窓を狙う 2 つ目の仕組みを重ねる判断はできない。'## 前後比較' の模擬では、Phase 1〜5 で 3 つの scenario とも run 数・wall time・入力 token・新 session 数が同じか減った（例: review_sync は run 4 → 3）。ただし模擬は root と main の間の統合失敗率を測っていないので、この結論は変わらない。段の中の統合は既に merge 順次・再検査・自動修復の形で動いており（衝突 4.3%、検査不合格 22%、どちらも自動修復で done）、案件単位の integration branch は ADR-0079 の親ブランチで表現できる。
 
 判断を変える条件（再評価の閾値）。Phase 1〜5 を含む release が本番 `current` になった日以降の delivery を母数にし、**母数が 30 件に達した時点**（到着率 3 件/日なら約 10 日後）で次を同じ `$RO` から測り直す。1 つでも超えたら merge train を「必要」として再評価し、そのとき ADR と follow-up を作る。
 

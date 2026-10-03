@@ -286,23 +286,6 @@ fn grant(root: &tempfile::TempDir) -> String {
     reply.lease_id.expect("lease")
 }
 
-/// 高負荷時（workspace 全体の test と並走）は sandbox 内の browser 起動が CDP の
-/// 1 回の応答待ち（5 秒）を超える。最初の命令の前に browser が応答するまで待つ。
-/// 時間切れで遅れて届いた応答は id が合わないので read_response が捨てる。
-fn wait_cdp_ready(cdp: &mut CdpController) {
-    let deadline = Instant::now() + Duration::from_secs(60);
-    loop {
-        match cdp.controller_command("Browser.getVersion", json!({}), None) {
-            Ok(_) => return,
-            Err(e) => assert!(
-                Instant::now() < deadline,
-                "browser CDP did not become ready: {e:?}"
-            ),
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-}
-
 fn inner() {
     sh(&format!(
         "ip link set lo up && ip addr add {FIXTURE_IP}/32 dev lo"

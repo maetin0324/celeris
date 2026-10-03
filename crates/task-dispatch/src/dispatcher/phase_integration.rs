@@ -455,7 +455,7 @@ impl Dispatcher {
                 let mut run = IntegrationRun::default();
                 for (i, dir) in repos_for_merge.iter().enumerate() {
                     let out = crate::integration::integrate(dir, &items, &phase_for_merge)?;
-                    // ADR-0137: 自動解消の手順は `PhaseIntegrated.checks` に `auto_resolve` の行として残す
+                    // ADR 2026-10-02-parallel-integration-auto-resolve: 自動解消の手順は `PhaseIntegrated.checks` に `auto_resolve` の行として残す
                     // （event の形は変えない）。
                     run.checks.extend(out.actions.iter().map(|action| {
                         let summary = serde_json::to_string(action)

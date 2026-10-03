@@ -1,4 +1,4 @@
-//! `task-api`: celeris の HTTP API v1（`docs/gui/api.md`、ADR-0013 D2〜D4 / D8 / D11）。
+//! `task-api`: celeris の HTTP API v1（`docs/api/v1/gui-api.md`、ADR-0013 D2〜D4 / D8 / D11）。
 //!
 //! - `/api/v1` 配下の 26 エンドポイント。JSON で応答し、エラーは `application/problem+json`、通知は SSE。
 //! - ハンドラは協調判断をしない。読み取りはストアのクエリと `task-ops` のビュー、状態変更は `task-ops` 経由だけ。

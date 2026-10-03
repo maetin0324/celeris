@@ -15,7 +15,7 @@ const FAILURE_CLASS_LABEL: Record<"infra" | "work", string> = {
  * ADR-0070 D1/D2（Phase 116）: failed のタスク詳細に出す赤いバナー。「失敗: <分類> — <理由>」に、
  * 成果が main に取り込み済みなら一言添え、「やり直す」（常に。`retry`）「再レビュー」（`actions` に `rereview` が
  * あるときだけ）「取り下げ」（状態は変えず、対応不要と記録するコメントを残すだけ。ADR-0070 D2）を出す。
- * `docs/gui/help`（`/help`）の「失敗したタスクの直し方」と同じ言葉づかい。
+ * ヘルプ画面（`gui/app/routes/help.tsx`、`/help`）の「失敗したタスクの直し方」と同じ言葉づかい。
  */
 export function FailureBanner({
   taskId,

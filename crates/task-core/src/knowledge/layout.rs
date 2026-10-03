@@ -5,7 +5,7 @@
 //! （`path` / `scope` / `title` / `tags`）と、呼び出し側が集めた [`Layout`]（案件の slug の一覧・
 //! `environment/` の分類・既存のページの索引・今日の日付）だけ。
 //!
-//! 規則（`docs/knowledge.md` §2.1）:
+//! 規則（`docs/guides/knowledge.md` §2.1）:
 //!
 //! - `project:<x>` の `<x>` は**案件の slug**。案件 ID（ULID）が来たら slug に直す。どちらでも
 //!   なければ拒否する（案件を知らない `celerisctl` では「ULID でない正しい綴りの slug」だけ通す）

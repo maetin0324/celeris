@@ -132,7 +132,7 @@ pub struct EditResult {
 ///
 /// **`tier` / `adapter` / 予算は再解決しない**（ADR-0033 D2 の「タスク > 役割 > 担当 > 分野」は
 /// **作成時に 1 回**だけ効く）。`assignee` や `role` を変えても、既に焼き付いた `worker_hint` と
-/// `budget` はそのまま残る — 変えたければ同じ `PATCH` で明示的に書く（`docs/gui/api.md` §3.74）。
+/// `budget` はそのまま残る — 変えたければ同じ `PATCH` で明示的に書く（`docs/api/v1/gui-api.md` §3.74）。
 pub fn edit_task(
     store: &dyn TaskStore,
     id: TaskId,

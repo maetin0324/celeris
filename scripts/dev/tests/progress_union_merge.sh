@@ -1,6 +1,7 @@
 #!/bin/sh
-# ADR-0137 records resolver の前提を確かめる: .gitattributes の
-# `docs/PROGRESS.md merge=union` / `docs/progress/*.md merge=union` が、共通の祖先から
+# ADR 2026-10-02-parallel-integration-auto-resolve records resolver の前提を確かめる: .gitattributes の
+# `agent-docs/PROGRESS.md merge=union` / `agent-docs/progress/*.md merge=union` /
+# `agent-docs/progress/**/*.md merge=union`（入れ子の <slug>/<unit>.md）が、共通の祖先から
 # 2 branch がそれぞれ末尾に別の節を追記しただけのときに、`git merge` を衝突なく終え
 # 両方の節を残すこと。`git merge-tree --write-tree` でも同じ結果になるかも確かめるが、
 # 効かなくても（merge-tree は attributes を同じようには扱わない実装上の罠があるため）
@@ -23,11 +24,13 @@ repo_root=$(CDPATH='' cd -- "$script_dir/../../.." && pwd -P)
 
 attrs="$repo_root/.gitattributes"
 [ -f "$attrs" ] || fail "not found: $attrs"
-grep -q '^docs/PROGRESS\.md merge=union$' "$attrs" \
-  || fail "$attrs is missing 'docs/PROGRESS.md merge=union'"
-grep -q '^docs/progress/\*\.md merge=union$' "$attrs" \
-  || fail "$attrs is missing 'docs/progress/*.md merge=union'"
-echo "OK: .gitattributes declares merge=union for docs/PROGRESS.md and docs/progress/*.md"
+grep -q '^agent-docs/PROGRESS\.md merge=union$' "$attrs" \
+  || fail "$attrs is missing 'agent-docs/PROGRESS.md merge=union'"
+grep -q '^agent-docs/progress/\*\.md merge=union$' "$attrs" \
+  || fail "$attrs is missing 'agent-docs/progress/*.md merge=union'"
+grep -q '^agent-docs/progress/\*\*/\*\.md merge=union$' "$attrs" \
+  || fail "$attrs is missing 'agent-docs/progress/**/*.md merge=union'"
+echo "OK: .gitattributes declares merge=union for agent-docs/PROGRESS.md and agent-docs/progress/ (nested included)"
 
 root=$(mktemp -d)
 trap 'rm -rf "$root"' EXIT INT TERM
@@ -90,20 +93,21 @@ check_union() {
       if printf '%s' "$blob" | grep -q "section A ($label)" && printf '%s' "$blob" | grep -q "section B ($label)"; then
         echo "INFO: git merge-tree --write-tree also kept both sections for $rel_path ($label)"
       else
-        echo "INFO: git merge-tree --write-tree produced a tree for $rel_path ($label) without both sections; the records resolver (ADR-0137) must not rely on merge-tree alone for this path"
+        echo "INFO: git merge-tree --write-tree produced a tree for $rel_path ($label) without both sections; the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
       fi
     else
-      echo "INFO: git merge-tree --write-tree result has no $rel_path ($label); the records resolver (ADR-0137) must not rely on merge-tree alone for this path"
+      echo "INFO: git merge-tree --write-tree result has no $rel_path ($label); the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
     fi
   else
     mt_err=$(tr '\n' ' ' < "$root/mt-$label.err")
-    echo "INFO: git merge-tree --write-tree reported a conflict for $rel_path ($label) even though .gitattributes requests merge=union ($mt_err); the records resolver (ADR-0137) must not rely on merge-tree alone for this path"
+    echo "INFO: git merge-tree --write-tree reported a conflict for $rel_path ($label) even though .gitattributes requests merge=union ($mt_err); the records resolver (ADR 2026-10-02-parallel-integration-auto-resolve) must not rely on merge-tree alone for this path"
   fi
 
   git checkout -q main
 }
 
-check_union docs/PROGRESS.md progress
-check_union docs/progress/example.md progress-dir
+check_union agent-docs/PROGRESS.md progress
+check_union agent-docs/progress/2026-10-03-example.md progress-dir
+check_union agent-docs/progress/2026-10-03-example/unit.md progress-nested
 
 echo "progress_union_merge: all checks passed"

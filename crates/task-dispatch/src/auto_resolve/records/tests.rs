@@ -122,3 +122,70 @@ fn same_section_is_added_once() {
         Some(format!("# Record\n{section}"))
     );
 }
+
+#[test]
+fn agent_docs_progress_nested_both_side_appends_are_joined() {
+    // agent-docs/progress/<task>/<wu>.md（入れ子）と凍結済み agent-docs/PROGRESS.md を両側が書き足す。
+    let paths = [
+        "agent-docs/progress/2026-10-03-task/leaf.md",
+        "agent-docs/PROGRESS.md",
+    ];
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = tmp.path();
+    command(repo, &["init", "-q", "-b", "target"]);
+    command(repo, &["config", "user.email", "test@example.invalid"]);
+    command(repo, &["config", "user.name", "Test"]);
+    let write_all = |body: &str| {
+        for path in paths {
+            let full = repo.join(path);
+            fs::create_dir_all(full.parent().unwrap()).unwrap();
+            fs::write(full, body).unwrap();
+        }
+    };
+    let snapshot = |subject: &str| {
+        command(repo, &["add", "."]);
+        command(repo, &["commit", "-q", "-m", subject]);
+        command(repo, &["rev-parse", "HEAD"])
+    };
+    write_all("# 記録\n");
+    let base_sha = snapshot("base");
+    command(repo, &["branch", "source"]);
+    write_all("# 記録\n\n## main 側\n");
+    let target_sha = snapshot("target");
+    command(repo, &["checkout", "-q", "source"]);
+    write_all("# 記録\n\n## 取り込み側\n");
+    let source_sha = snapshot("source");
+    command(repo, &["checkout", "-q", "target"]);
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["merge", "--no-commit", "source"])
+        .output()
+        .unwrap();
+    assert!(!status.status.success(), "test setup needs a conflict");
+    let ctx = ResolveContext {
+        target_branch: "target".into(),
+        target_sha,
+        source_branch: "source".into(),
+        source_sha,
+        merge_base: Some(base_sha),
+        generated_command: None,
+    };
+    let super::super::Resolution::Resolved { actions } = super::super::resolve(repo, &ctx).unwrap()
+    else {
+        panic!("records under agent-docs must be resolved");
+    };
+    assert_eq!(actions.len(), 2);
+    assert!(actions.iter().all(|a| a.kind == ConflictKind::Record));
+    for path in paths {
+        assert_eq!(
+            fs::read_to_string(repo.join(path)).unwrap(),
+            // 同じ位置に両側が足した空行は一度だけ残る（same_section_is_added_once と同じ規則）。
+            "# 記録\n\n## main 側\n## 取り込み側\n"
+        );
+    }
+    assert_eq!(
+        command(repo, &["diff", "--name-only", "--diff-filter=U"]),
+        ""
+    );
+}

@@ -5,7 +5,7 @@
 pub mod accounts;
 /// ADR-0033 D5（Phase 26）: `Question` 終端から `approvals` に 1 件作る。
 pub(crate) mod approvals;
-/// ADR-0137: 並列取り込み時の決定的な分類と統合依頼。
+/// ADR 2026-10-02-parallel-integration-auto-resolve: 並列取り込み時の決定的な分類と統合依頼。
 pub mod auto_resolve;
 /// ADR-0089（Phase R6-5）: CoS の対話 run を `max_concurrency` とプールの `concurrency` から外す規則。
 pub mod capacity;

@@ -92,7 +92,14 @@ fn path_classes_and_number_duplicates_are_distinct() {
         classify::kind("crates/task-core/migrations/0039_jobs.sql"),
         Migration
     );
+    assert_eq!(classify::kind("agent-docs/progress/x/leaf.md"), Record);
+    assert_eq!(classify::kind("agent-docs/PROGRESS.md"), Record);
+    assert_eq!(classify::kind("agent-docs/progress/x/leaf.json"), Code);
     assert_eq!(classify::kind("docs/adr/0137-parallel.md"), Adr);
+    assert_eq!(classify::kind("agent-docs/adr/0137-parallel.md"), Adr);
+    assert_eq!(classify::kind("agent-docs/adr/2026-10-02-parallel.md"), Adr);
+    assert_eq!(classify::kind("agent-docs/adr/README.md"), Code);
+    assert_eq!(classify::kind("agent-docs/adr/sub/0137-x.md"), Code);
     assert_eq!(classify::kind("docs/protocol/task.schema.json"), Generated);
     assert_eq!(classify::kind("docs/api/v1/task.schema.json"), Generated);
     assert_eq!(classify::kind("src/main.rs"), Code);
@@ -111,7 +118,7 @@ fn path_classes_and_number_duplicates_are_distinct() {
         "select 2;\n",
     );
     write(repo, "docs/adr/0137-first.md", "# First\n");
-    write(repo, "docs/adr/0137-second.md", "# Second\n");
+    write(repo, "agent-docs/adr/0137-second.md", "# Second\n");
     commit(repo, "numbered additions");
     let items = classify::classify(repo, &target_sha).unwrap();
     assert_eq!(items.len(), 4);

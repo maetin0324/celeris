@@ -1,4 +1,4 @@
-//! 成果物のパス検査と sha256（ADR-0003 D5, DESIGN §4.4）。
+//! 成果物のパス検査と sha256（ADR-0003 D5）。
 
 use std::path::{Component, Path, PathBuf};
 

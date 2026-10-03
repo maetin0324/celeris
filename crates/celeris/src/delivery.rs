@@ -609,7 +609,7 @@ fn advance(
                     .and_then(|v| v["failed_step"].as_str());
                 if let Some(class) = classify_delivery_failure(old.state, &old.detail, failed_step)
                 {
-                    // ADR-0137 D2: merge_base 系は局所修復を作る前に定型衝突の自動解消を試す。
+                    // ADR 2026-10-02-parallel-integration-auto-resolve D2: merge_base 系は局所修復を作る前に定型衝突の自動解消を試す。
                     if class == RepairClass::MergeBase {
                         match auto_resolve::attempt(store, config, old)? {
                             auto_resolve::Outcome::Resolved {

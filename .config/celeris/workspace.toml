@@ -1,5 +1,5 @@
 # このリポジトリ（agent-platform / Celeris 本体）の作業場所の設定（ADR-0042 D2 / ADR-0043 D4）。
-# 書き方は docs/workspace.md。**書いてあることだけ**が使われる（言語やファイル構成からの推定はしない）。
+# 書き方は docs/guides/workspace.md。**書いてあることだけ**が使われる（言語やファイル構成からの推定はしない）。
 
 [workspace]
 name = "agent-platform"

@@ -1499,7 +1499,7 @@ async fn auto_resolve_code_conflict_creates_integration_notice() {
     assert!(notice.summary.contains("README.md"), "{}", notice.summary);
 }
 
-/// ADR-0137: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の
+/// ADR 2026-10-02-parallel-integration-auto-resolve: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の
 /// `auto_resolve` の行に残す。
 #[tokio::test]
 async fn auto_resolve_migration_renumber_is_recorded_in_phase_integrated() {

@@ -639,7 +639,7 @@ fn ready_notification_reports_push_failure_without_the_retry_marker() {
 }
 // ---- ADR-0051 Phase 106追記: ここまで ----
 
-// ---- ADR-0137 D1d・D2・D5: merge_base 系の失敗の自動解消。ここから ----
+// ---- ADR 2026-10-02-parallel-integration-auto-resolve D1d・D2・D5: merge_base 系の失敗の自動解消。ここから ----
 
 /// base に `file` を置き、main と feature がそれぞれ `main_text`・`feature_text` で書き換えた repo と、
 /// main が進んだので `merge_base` 失敗で止まった配送（承認済み・task は done）。

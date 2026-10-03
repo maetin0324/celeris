@@ -8,7 +8,7 @@ import type { Status, TaskSummary } from "~/celeris/types";
  * 優先度の対応（P0 = 30 / P1 = 20 / P2 = 10 / P3 = 0、丸めは `>= 30 → P0`…）は
  * celeris の `task_core::PRIORITY_LABELS` / `priority_label` と同じ規則。API は `priority_label` を
  * 返すので画面はラベルだけを扱えばよいが、**並べ替えのために整数が要る**ので写しを置く
- * （`docs/adr/0044-task-management.md` D3）。
+ * （`agent-docs/adr/0044-task-management.md` D3）。
  */
 
 /** ADR-0044 D3 の優先度ラベル（大きいほど先。P0 が最優先）。 */

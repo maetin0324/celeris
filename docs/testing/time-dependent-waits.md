@@ -18,7 +18,7 @@ tasks: [01M3ZCXG7C34WZFJ46Q64XS8SZ]
 | `crates/celerisctl/tests/worker_run_signal.rs` | 14, 20, 121, 139, 155, 163 | 今回修正: 出来事待ち・保険を再検討 |
 | `crates/llm-proxy/tests/proxy_integration.rs` | 1525, 1703, 1731, 1980, 2045, 2049（他の `from_secs(5)` 28 箇所は proxy の設定値） | 既存: 再走査待ちの下限・3 秒要件の上限を主張する仕様の時間検査。設定値は待ちではない |
 | `crates/scratch-cache/tests/common/mod.rs` | 72 | 既存: 出来事待ち、仕様の時間検査、または fixture 制御 |
-| `crates/scratch-cache/tests/sccache_webdav_e2e.rs` | 191, 193, 194 | 今回修正: 出来事待ち・保険を再検討 |
+| `crates/scratch-cache/tests/sccache_webdav_e2e.rs` | 191, 193, 194 | 外部 WebDAV server を要する `#[ignore]` の手動試験。通常有効な対象試験から除外（下記参照） |
 | `crates/scratch-cache/tests/webdav.rs` | 128, 130, 131, 186, 188, 189 | 今回修正: 出来事待ち・保険を再検討 |
 | `crates/task-api/tests/browser_e2e.rs` | 102, 108, 111 | 今回修正: 出来事待ち・保険を再検討 |
 | `crates/task-api/tests/browser_h3_injection.rs` | 109, 115, 118, 767, 770, 773 | 今回修正: 出来事待ち・保険を再検討 |
@@ -132,10 +132,10 @@ API 系 fixture の `db.worker_read_only = false` は、この run の user name
 
 通常有効な **36 ファイルを各 3 回、計 108 実行で exit 0**。libtest の最上位集計は 1 回あたり 170 passed（inner helper の入口を含む）。下表の件数は子 binary の集計を二重に加算しない。主要 4 件も `api_scenarios` 全 11 件の実行に含む。`browser_runtime_isolated` の ignored 3 件は独立した試験ではなく、通常の親試験が `--ignored --exact` で呼び出す helper である。
 
-ただし、次の 2 点を成功扱いしない。
+次の 2 点は通常有効な試験の stutter 結果と区別する。
 
-- `browser_launcher_ptrace`: `CELERIS_LAUNCHER_TESTS=require` での初回は exit 101。host の protocol v1 launcher に session binding が無く、admission 表の前提が揃わない。実 Chrome の ptrace と `/proc` の拒否はそこまでに通過していた。既存の通常モードで各 3 回実行し直すと、admission 表だけに `SKIP: (not passed)` を出し、今回の変更箇所である Chrome の出現・停止後の session 消滅まで通過した。本番 launcher の更新・再起動は行っていない。admission 表の必須モードでの検証は未完了。
-- `scratch-cache/sccache_webdav_e2e`: 元から手動専用の `#[ignore]`。3 回とも 0 passed / 1 ignored。sccache server の起動・停止と `SCCACHE_*` 等の差し替えを行う試験であり、この run の禁止事項に抵触するため `--ignored` で実行していない。全件を無条件に検証済みとはしない。
+- `browser_launcher_ptrace`: この run の sandbox は userns を作れないため、admission 表の real session を skip するのが想定どおり。以前の host protocol v1 launcher に対する `CELERIS_LAUNCHER_TESTS=require` は exit 101 だった。その後、人が host launcher を main `3527c8e3`（`PROTOCOL_VERSION=3`）へ更新し、host で必須モードを実行した。`/var/tmp/launcher-evidence-main.log` に 6 passed、EXIT 0、期待どおりの `ADMISSION[real-session]` 5 行が記録されている。sandbox での skip と host での必須モード成功を別々の証拠として扱う。
+- `scratch-cache/sccache_webdav_e2e`: 外部 WebDAV server を要する手動専用の `#[ignore]` なので、通常有効な対象試験から除外する。通常実行の 0 passed / 1 ignored は想定どおりで、stutter 成功には数えない。sccache を host 設定へ移す task `01M3YD2Z58` で cache server ごと撤去される見込みであり、この task で外部 server を起動して検証しない。
 
 機械ログ・再現台本は `/var/lib/celeris/workspaces/01M3ZCXG7C34WZFJ46Q64XS8SZ/artifacts/` の `stutter-all.py`、`test-binaries.jsonl`、`stutter3-all.log`、`stutter3-final.log`、`stutter3-final-summary.json`、各 `stutter3-<source>-<1..3>.log`。必須モードの失敗ログは `launcher-required-environment-failure.log` に保存した。最終 6 ファイルの再実行は `STUTTER_FILTER=browser_egress_relay,browser_injection_attacks,browser_restore_deliver,browser_shared_cdp,browser_launcher_ptrace STUTTER_LAUNCHER_MODE=optional python3 <上記ディレクトリ>/stutter-all.py`。`common/mod.rs` の変更は利用側の試験ファイルで検証している。
 
@@ -147,7 +147,6 @@ API 系 fixture の `db.worker_read_only = false` は、この run の user name
 | `crates/celeris/tests/instance_handoff.rs` | 8 | 3/3 exit 0 |
 | `crates/celeris/tests/releases_api.rs` | 8 | 3/3 exit 0 |
 | `crates/celerisctl/tests/worker_run_signal.rs` | 1 | 3/3 exit 0 |
-| `crates/scratch-cache/tests/sccache_webdav_e2e.rs` | 0 | 3 回とも ignored（未検証） |
 | `crates/scratch-cache/tests/webdav.rs` | 3 | 3/3 exit 0 |
 | `crates/task-api/tests/browser_e2e.rs` | 4 | 3/3 exit 0 |
 | `crates/task-api/tests/browser_h3_injection.rs` | 3 | 3/3 exit 0 |
@@ -166,7 +165,7 @@ API 系 fixture の `db.worker_read_only = false` は、この run の user name
 | `crates/task-worker/tests/browser_h3_wire.rs` | 2 | 3/3 exit 0 |
 | `crates/task-worker/tests/browser_injection_attacks.rs` | 2 | 3/3 exit 0 |
 | `crates/task-worker/tests/browser_injection_wire.rs` | 3 | 3/3 exit 0 |
-| `crates/task-worker/tests/browser_launcher_ptrace.rs` | 6 | 3/3 exit 0（admission 表のみ環境不足） |
+| `crates/task-worker/tests/browser_launcher_ptrace.rs` | 6 | sandbox: 3/3 exit 0（real session は userns 不可で skip）。host: `require` で 6 passed、admission 表 5 行、EXIT 0 |
 | `crates/task-worker/tests/browser_restore_deliver.rs` | 4 | 3/3 exit 0 |
 | `crates/task-worker/tests/browser_runtime_isolated.rs` | 6 | 3/3 exit 0 |
 | `crates/task-worker/tests/browser_runtime_supervisor.rs` | 4 | 3/3 exit 0 |
@@ -182,3 +181,13 @@ API 系 fixture の `db.worker_read_only = false` は、この run の user name
 ## 重複の扱い
 
 `celeris-wu/01M3Z08A0T81ZQ60XVR62XJMPD/e2e-stable` の f307d63b を `cherry-pick -x` で取り込んだ。`deflake-lock` ブランチはこの worktree で参照できず、同じ全件 Done 待ちには追加で進捗停止と総保険の方式を適用した。後から同ブランチが main に入る場合は同じ箇所の重複を確認する。2026-10-03 に main（33aca5a3）を取り込んだ時点でも `deflake-lock` の `wait_for_progress` は main に無く、重複の可能性は残る（同じ試験の末尾待ちを、こちらは 60 秒停止・600 秒総保険の方式で直している）。
+
+## 最終 tree の確認（2026-10-03）
+
+最新 main `3527c8e3` を rebase せず `git merge main` で取り込んだ。`git merge-base --is-ancestor main HEAD` は exit 0。merge 後に次のゲートを一続きで実行し、exit 0。ログは run の成果物ディレクトリの `final-gate-merged.log` に保存した。
+
+```sh
+cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings
+```
+
+`api_scenarios` は 11 passed / 0 failed。禁止された CPU 焼き負荷パターンを task 差分から探す受け入れコマンドも exit 0。上記の SIGSTOP stutter 各 3 回は merge 前の試験記録であり、この最終 tree では指定ゲートを再実行した。

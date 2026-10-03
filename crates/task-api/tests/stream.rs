@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::*;
 use task_api::StreamTuning;
-use task_core::{Event, Status, TaskKind, TaskStore};
+use task_core::{Event, NoticeEvent, NoticeKind, NoticeStore, Status, TaskKind, TaskStore};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -82,6 +82,38 @@ async fn hello_then_created_event_arrives_within_two_seconds() {
     assert_eq!(frame.data["seq"], 0);
     assert_eq!(frame.data["event"]["type"], "created");
     assert_eq!(frame.data["event"]["task"]["title"], "sse probe");
+    let hint = sse
+        .next_named("inbox_changed", TWO_SECONDS)
+        .await
+        .expect("inbox hint");
+    assert!(hint.data.is_object());
+}
+
+#[tokio::test]
+async fn notification_change_emits_a_reload_hint() {
+    let env = TestEnv::new();
+    let app = env.router();
+    let mut sse = open_stream(&app, get("/api/v1/stream")).await;
+    assert_eq!(sse.next_frame(TWO_SECONDS).await.unwrap().event, "hello");
+    env.store
+        .notice_record(&NoticeEvent {
+            source_key: "sse:notice".into(),
+            kind: NoticeKind::Report,
+            group_key: "report:sse".into(),
+            title: "report".into(),
+            summary: "report".into(),
+            project_id: None,
+            task_id: None,
+            target: None,
+            links: vec![],
+            at: OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+    let hint = sse
+        .next_named("notifications_changed", Duration::from_secs(7))
+        .await
+        .expect("notice hint");
+    assert!(hint.data.is_object());
 }
 
 #[tokio::test]

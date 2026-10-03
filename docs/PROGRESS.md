@@ -2,6 +2,8 @@
 
 ## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
 
+- 2026-10-03（最終 review 修正）: main `3527c8e3` 取り込み後の `notification_change_emits_a_reload_hint` に残った hello 2 秒・通知到着 7 秒を `EVENT_WAIT`（60 秒の保険）へ統一。通知到着・内容の主張は不変。修正後の stream 全 9 件を SIGSTOP stutter で各 3 回、全て exit 0。指定 build・api_scenarios・fmt・clippy の連続ゲートも exit 0。main は既に HEAD の祖先。詳細は[最終再検証](testing/time-dependent-waits.md#main-取り込み後の通知試験の修正再検証2026-10-03)。
+- launcher の現状: host は人が main `3527c8e3` / protocol v3 に更新済みで、必須モード 6 passed・real-session admission 5 行・EXIT 0 の通常実行 1 回をログで確認。run 内の必須モード stutter は権限付きでも SCM_CREDENTIALS UID が 65534 になる user namespace 制約で失敗し、host stutter 3 回は未確認。人の判断どおり sandbox の制約と host の証拠を区別する。手動 WebDAV 試験は対象外。host 設定変更・判定の緩和は行っていない。
 - 2026-10-03（attempt 3）: review 指摘の `browser_runtime_isolated` の CDP 応答と `browser_runtime_supervisor` の SIGKILL 後消滅待ちを 30 → 60 秒へ。同型の CDP/socket/gate/fixture 終了待ちと埋め込み Python/shell も再走査し、出来事を主判定に 60 秒以上の保険へ揃えた。本番の既定値は変更せず、CDP は既存の試験用 feature を利用。クリック解放と fixture server 終了の失敗は無視せず検査する。
 - attempt 3 の検証: main `aed80844` を取り込み、通常有効な変更対象 36 ファイルを SIGSTOP 300 ms / SIGCONT 後 100 ms の下で各 3 回、計 108 実行が exit 0（最上位 libtest 集計は 170 passed/回）。主要 4 件、追加 CDP 2 件、今回指摘の runtime/supervisor を含む。全ファイル別の件数・方式・機械ログの所在は[一覧](testing/time-dependent-waits.md#第-3-走査後の全変更対象-stutter-記録)に追記。
 - 検証の限界: launcher 必須モードは host protocol v1 の session binding 欠如で exit 101。通常モードでの 3 回は ptrace 拒否・起動・消滅が通過し、admission 表だけ `SKIP: (not passed)`。手動 `sccache_webdav_e2e` は server 操作と環境変数変更がこの run で禁止されているため ignored のまま（0 passed）。この 2 点を検証成功とは数えない。本番 host は変更していない。

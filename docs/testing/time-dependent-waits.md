@@ -29,7 +29,7 @@ tasks: [01M3ZCXG7C34WZFJ46Q64XS8SZ]
 | `crates/task-api/tests/common/mod.rs` | 679, 685, 696, 698, 734, 739, 742 | 既存: 出来事待ち、仕様の時間検査、または fixture 制御 |
 | `crates/task-api/tests/list_and_detail.rs` | 132 | 既存: 出来事待ち、仕様の時間検査、または fixture 制御 |
 | `crates/task-api/tests/standby.rs` | 71 | 既存: 出来事待ち、仕様の時間検査、または fixture 制御 |
-| `crates/task-api/tests/stream.rs` | 304, 358, 410, 416, 482, 485, 491, 521 | 今回修正: 出来事待ち・保険を再検討 |
+| `crates/task-api/tests/stream.rs` | 97, 113, 304, 358, 410, 416, 482, 485, 491, 521 | 今回修正: 出来事待ち・保険を再検討。main 取り込みで追加された通知試験の hello・通知到着も `EVENT_WAIT` へ |
 | `crates/task-dispatch/tests/unified_kill.rs` | 6, 27, 31, 165, 173, 177, 182, 187, 190, 261, 268, 271 | 今回修正: 出来事待ち・保険を再検討 |
 | `crates/task-worker/tests/browser_cdp_sink.rs` | 132, 135, 138, 292, 295, 315 | 今回修正: 出来事待ち・保険を再検討 |
 | `crates/task-worker/tests/browser_control_gate_wire.rs` | 103, 116, 182, 183, 185, 186, 239, 245 | 今回修正: 出来事待ち・保険を再検討 |
@@ -191,3 +191,21 @@ cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && carg
 ```
 
 `api_scenarios` は 11 passed / 0 failed。禁止された CPU 焼き負荷パターンを task 差分から探す受け入れコマンドも exit 0。上記の SIGSTOP stutter 各 3 回は merge 前の試験記録であり、この最終 tree では指定ゲートを再実行した。
+
+## main 取り込み後の通知試験の修正・再検証（2026-10-03）
+
+main `3527c8e3` を取り込んだ `d72d3490` の review で、追加された `notification_change_emits_a_reload_hint` に到着待ちの取りこぼしが見つかった。hello の `TWO_SECONDS` と `notifications_changed` の 7 秒を、共通の `EVENT_WAIT`（60 秒）へ揃えた。購読後の hello 到着、notice 保存後の通知到着を主判定とし、通知の JSON object 検査は維持する。2 秒配信契約を検査する別試験は変更していない。
+
+修正後に `cargo test -p task-api --test stream --no-run --message-format=json` でビルドし、**stream 全 9 件を SIGSTOP stutter 下で 3 回、全て 9 passed / 0 failed / 0 ignored、exit 0** と確認した。test process のみを SIGSTOP 300 ms / SIGCONT 後 100 ms で停止・再開し、停止回数は順に 21、21、22 回。新しい通知試験を全 3 回に含む。この記録が上表の merge 前の stream 8 件の記録を更新する。他の試験コードに今回の変更はない。
+
+launcher も同じ最終コードでビルドし、`CELERIS_LAUNCHER_TESTS=require` の stutter を権限付きで実行した。ただし権限付きでも Celeris run の user namespace は残り、launcher の `SCM_CREDENTIALS` が UID `65534`（期待は `995`）になる。5 passed / 1 failed、exit 101（検証台本は exit 1）で停止し、3 回成功とは数えない。実 Chrome の ptrace 拒否と session 回収は実行したが、real-session admission 表は未実行。判定を緩める変更や host のサービス・設定変更はしていない。
+
+人の 2026-10-03 の判断どおり、sandbox で admission 表を実行できないことは環境制約として扱う。host の `/var/tmp/launcher-evidence-main.log` は必須モード 6 passed・admission 5 行・EXIT 0 を確認済みだが、これは **1 回の通常実行**であり、host 必須モード stutter 3 回の証拠はまだない。host で追加採取する場合は、user namespace 外の同じ UID 1001 から次を実行する（既存 launcher を使う試験で、サービス変更は不要）。
+
+```sh
+python3 /var/lib/celeris/workspaces/01M3ZCXG7C34WZFJ46Q64XS8SZ/artifacts/review-stutter.py launcher host-launcher
+```
+
+台本は `require` を設定し、各回で exit 0・skip なし・`ADMISSION[real-session]` 5 行を必須にする。対象 binary はこの worktree の `cargo test -p task-worker --features attack-test-hooks --test browser_launcher_ptrace --no-run --message-format=json` の出力から取得している。ログは同成果物ディレクトリの `review-stream-stutter-{1,2,3}.log`、`review-stream-stutter-summary.json`、`review-launcher-stutter-1.log`、`review-launcher-stutter-summary.json`。上記の host 用コマンドは別名 `review-host-launcher-stutter-*` に保存し、run 内での失敗証跡を上書きしない。
+
+今回の修正後も指定ゲート `cargo build --workspace --bins && cargo test -p e2e --test api_scenarios && cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings` は連続実行で exit 0。出力の保存先は `review-final-gate.log`（コンパイル出力の一部は省略、終了結果は保存）。main は引き続き `3527c8e3` で HEAD の祖先であり、追加 merge は不要だった。

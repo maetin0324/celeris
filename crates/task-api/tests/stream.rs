@@ -94,7 +94,7 @@ async fn notification_change_emits_a_reload_hint() {
     let env = TestEnv::new();
     let app = env.router();
     let mut sse = open_stream(&app, get("/api/v1/stream")).await;
-    assert_eq!(sse.next_frame(TWO_SECONDS).await.unwrap().event, "hello");
+    assert_eq!(sse.next_frame(EVENT_WAIT).await.unwrap().event, "hello");
     env.store
         .notice_record(&NoticeEvent {
             source_key: "sse:notice".into(),
@@ -110,7 +110,7 @@ async fn notification_change_emits_a_reload_hint() {
         })
         .unwrap();
     let hint = sse
-        .next_named("notifications_changed", Duration::from_secs(7))
+        .next_named("notifications_changed", EVENT_WAIT)
         .await
         .expect("notice hint");
     assert!(hint.data.is_object());

@@ -9,7 +9,19 @@ ADR-0129 (1) に従い `ScratchStatus.sccache` / `cache` の型は互換用に�
 - `UPDATE_SCHEMA=1 cargo test -p task-core --lib`: 625 件成功。
 - `corepack pnpm@11.27.0 -C gui gen:types` と `corepack pnpm@12.6.0 -C web gen:types`: pnpm store SQLite を開けず終了。生成型コメントは schema の ADR-0129 記述に手動同期し、型構造は変更していない。
 
+## browser: ADR-0115 権限分離 launcher
+
+run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順書を統合後に検査。`cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は exit 0。workspace test は sandbox の user namespace probe が `EPERM` となり、ADR-0095 DB guard を使う `instance_handoff` 5 件が失敗して exit 101（`CELERIS_ISOLATION_TESTS=skip` を付けても同じ。skip は browser isolation 試験だけに適用）。launcher ptrace 試験は `celeris-browser` user と `celeris-browser-launcher.socket` が存在しないため `SKIPPED (not passed)`。host 管理者に [browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md) の準備を依頼し、準備後に実 process 証跡を追加する。機密能力は未解放。本節の詳細は [phase-browser-4](progress/phase-browser-4.md)。
+
+- 2026-10-02: phase3 control flaky 再実行は ADR-0095 の user namespace 拒否で `cargo test --workspace` と `api_scenarios` が失敗、clippy は pass。詳細は [phase-R.md](progress/phase-R.md)。
+
 現在地: **構造リファクタリング完了（2026-09-30、下記）。Phase 119、Phase E6、Phase F4b まで本番反映（release c51837427ac5、schema 28）。F5-1 dogfood の 3 回目を準備中。Browser capability Phase 1〜4 は追跡表どおり P4-A/B/C 一部達成で、別 host UID 実証と本番機密能力解放は後続（2026-10-01 にリファクタ後の main へ取り込み中）**。以後の追記は `docs/progress/phase-F.md` へ。
+
+## codex・opencode への skill の付属ファイルと段階的な読み込み
+
+- 実装・記録完了日: 2026-10-02。[ADR-0127](adr/0127-skills-native-delivery.md) は実装済みに更新。codex・acp では mount した skill を `.agents/skills/` に付属ファイルごと届け、`AGENTS.md`・前置きは一覧だけにした。実機の記録と再実行手順は [phase-skills-progressive.md](progress/phase-skills-progressive.md)。
+- 検査: `cargo test -p task-worker --lib skills` → 31 passed、`cargo test -p task-worker --lib --no-run` → exit 0、`cargo test -p celeris --test ui_ux_skills_delivery` → 4 passed、`cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- 未解決: codex の実 LLM は skill を使う判断まで記録したが、bubblewrap の socket ディレクトリ検査で `SKILL.md` と付属ファイルを読めなかった。opencode は `debug skill` で検出したが、一時 HOME に認証が無く LLM は起動していない。worker sandbox では user namespace を使う実 runtime 試験も走らせられない。付属ファイルの LLM 読込は手順に従う環境で再確認が必要。
 
 ## 試験で CPU を焼く負荷をかけない規則（2026-10-02、task 01M3Y4AV7801NSXB6FD698QZHW、WorkUnit rule-docs）
 
@@ -192,6 +204,109 @@ scope 復元後の指定 web 検証は全て exit 0（Vitest 24 files / 178 pass
 
 この run で `cargo test --workspace` をフレッシュ実行した結果 exit 101。`instance_handoff` の5 testが worker DB guard で必要な user namespace の `Operation not permitted` により失敗し、並行起動に依存する2 testも失敗した。`browser_shared_cdp` の単独実行も exit 101（`inner_shared_cdp` は pass、`real_shared_cdp_and_auth_section` は `unshare ... Operation not permitted`）。このため sandbox 外での Rust workspace test は未検証であり、過去の pass 件数をこの run の結果としては扱わない。`cargo clippy --workspace -- -D warnings` は exit 0。web の gen:types・boundaries・secrets・parity check は exit 0。crates/ は変更なし。詳細は [phase-web の Rust gate 再実行節](progress/phase-web.md#rust-gate-再実行repair、run-01m3x948ker5j9p5dj3nsrtszw-attempt-2)。
 
+## 時間依存試験の決定化（完了日 2026-10-02、[ADR-0125](adr/0125-deterministic-time-tests.md)）
+
+- 方式: (1) `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` は注入時計 + 状態/event 待ち、(2) `every_cargo_path_uses_the_scratch_target_dir` は状態/event 待ち、(3) `command_checks_are_re_executed_in_workspace` は試験 workspace が timeout 結果を注入、(4) `real_broker_browser_injection_receipt_and_origin_guards` は CDP ready 待ち + 試験専用遅延、(5) `controller_kill_leaves_no_runtime_processes` は SIGSTOP/SIGCONT stutter + 同期フック + process 終了待ち、(6) `tick_prunes_the_oldest_terminal_workspace_and_records_an_event` は `target/` 消滅と `WorkspacePruned` event 到着を 1 つの待ちループで待つ（状態/event 待ち）。原因、意図を保つ条件、詳細な方式は [ADR-0125](adr/0125-deterministic-time-tests.md) と[調査一覧](progress/time-dependent-tests.md)を参照。
+- (1) `a_wait_parks_the_task_polls_and_resumes_as_a_continuation` — 原因: 旧 `tick_until` が 200 / 400 tick の上限と各 tick 後の 20 ms sleep で、別 OS thread の偽 poller と worker の完了速度を仮定していた。poll 間隔は注入時計だが、結果の受信は実 scheduler に依存し、負荷で完了が遅れると wait 状態到達前に tick 数を尽きさせ「200 ticks で条件に届かない」にしていた。方式: (a)+(b) で `test_now` 注入時計を維持しつつ `Blocked`・`ClusterJobWaitPolled`・`Satisfied`・`Done` を保存状態・event の到着で待ち、tick 回数は失敗条件から外して壁時計 60 秒を保険にする。poll が 1 回だけ・event 重複なし・continuation が job 最終状態を前置きにして `Done` になる検査は元のまま残す。
+- (2) `every_cargo_path_uses_the_scratch_target_dir` — 原因: 旧 `run_until(..., 800, Done)` が最大約 16 秒の tick 予算で並列 WU・checks・統合・reviewer を走らせ、レビューが `Reviewing` を経由する間に 800 tick に達すると `Reviewing` のまま失敗していた。tick 数は `TargetDirAdapter` の 50 ms 遅延や worktree・shell 起動の実時間を測れず、負荷で進捗と一致しなかった。方式: (b) で各 WU run・check・統合 check・review check の記録を追って最終 task の `Done` 状態を待ち、`run_until_state` の壁時計 60 秒を保険にする。`Reviewing` を成功扱いにせず、全 `CARGO_TARGET_DIR` が owner ごとの scratch target と一致する検査を保持する。
+- (3) `command_checks_are_re_executed_in_workspace` — 原因: 実 `LocalWorkspace` で `test -f`・`exit 7`・`sleep 30` を 3 秒 timeout（timeout 時 6 秒で 1 回再試行）で順に実行していたため、負荷で短い shell の起動自体が遅れると存在するファイルや期待終了コードのケースまで `timed out` と誤判定する危険があった。方式: (d) で通常の pass/fail 判定は負荷で誤判定されない長さの timeout を保険として実 `LocalWorkspace` で検査し、timeout / 再試行の枝は `ScriptedWorkspace` が `sleep 30` に明示的な timeout 結果を注入して決定的にする。3 秒→6 秒の 1 回再試行・最終 `timed out` の文言・期待 exit 7・欠落ファイルの不合格は保持する。
+- (4) `real_broker_browser_injection_receipt_and_origin_guards` — 原因: `IsolatedRuntime::launch` の直後に `Target.createTarget` を送っていたが、runtime ready（bwrap init と egress relay の準備）と browser の CDP pipe が応答できる時点は別であり、browser 起動が遅れると CDP 応答の 5 秒 poll timeout が `page target: SinkFailed` にまとまっていた。方式: (b)+(d) で `Browser.getVersion` の有効応答を CDP ready 条件として 60 秒の保険期限で待ってから page target を作り、応答ごとの timeout は試験用 feature のフックで 30 秒以上に差し替える。ready 後に `SinkFailed` が起きれば実障害として失敗を維持し、receipt に秘密が無いことと origin 不一致・cross-origin iframe・auth section 外の拒否を保持する。
+- (5) `controller_kill_leaves_no_runtime_processes` — 原因: controller `SIGKILL` 後の PID 生存判定が `/proc/<pid>` 存在のみだと subreaper 配下で未 reap の zombie を生存と誤算するほか、bwrap の info-fd 報告から init が `PR_SET_PDEATHSIG` を設定するまでの窓で controller が死ぬ競合があり、scheduler 任せの順序では境界が再現できなかった。方式: (c)+(d)、終了判定は (b) で、試験フックで info-fd 報告直後に init を `SIGSTOP` し、subreaper も `SIGSTOP` したまま controller を `SIGKILL` してから `SIGCONT` する stutter で順序を固定する。生存判定は `Z` / `X` と starttime 不一致を除外し、同一 process の消滅・zombie 化を 60 秒の保険で待ち、継承した `SIGCHLD=SIG_IGN` による auto-reap 防ぐため試験本体・subreaper で SIGCHLD の既定値と mask を復元する。
+- (6) `tick_prunes_the_oldest_terminal_workspace_and_records_an_event` — 原因: `prune_one_workspace` は削除を別スレッドに逃がしてから `WorkspacePruned` event を追記するが、旧試験は `tick()` 後に `target/` の消滅だけを `for _ in 0..100`（20 ms sleep、約 2 秒）の固定回数で待って直後に event を読んでいた。負荷では unlink が終わっても event の sqlite 書き込みが未完了の窓があり、`cleanup_and_disk.rs:97` の assert が先に落ちていた。方式: (b) で固定回数ループを削除し、`target/` の消滅と `store.events_for` に期待の `WorkspacePruned { removed: ["repos/benchfs/target"] }` が現れることの両方を `wait_for_prune` の 1 つの待ちループで確認する。60 秒の `STATE_WAIT_GUARD` は超えたら現在の `events` と `target_dir.exists()` を出して `panic!` する保険で、`target/` 消滅・repo dir 残存・`removed` 中身の assert は元のまま保持する。
+- 2026-10-02 単独再実行: `cargo test -p task-dispatch --lib cluster_job_wait` 3回、各 exit 0 / 5 passed。`cargo test -p task-dispatch --lib every_cargo_path_uses_the_scratch_target_dir` 3回、各 exit 0 / 1 passed。`cargo test -p task-dispatch --lib command_checks_are_re_executed_in_workspace` 3回、各 exit 0 / 1 passed。
+- browser 試験: `unshare -U -r true` は exit 1（uid_map の `Operation not permitted`）。`cargo test -p task-worker --test browser_injection_wire` を3回実行、各 exit 101（各回 inner + delayed scripted の2 passed、real browser の `real_broker_browser_injection_receipt_and_origin_guards` は unshare の `Operation not permitted` で失敗）。`cargo test -p task-worker --test browser_runtime_isolated controller_kill_leaves_no_runtime_processes -- --exact` は exit 101（helper 起動時 `NoChildPid`、launch-info 前に終了し stutter 本体に未到達）。SIGSTOP stutter 条件での今回の実行も userns 不可のため未実施。skip 扱い・成功扱いにはしていない。過去の [kill 再実行記録](progress/time-dependent-tests-kill.md)には userns が許可された環境での stutter 5/5 pass がある。
+- (5) final review の bwrap zombie 証拠失敗は、継承した `SIGCHLD=SIG_IGN` による auto-reap と整合する。試験本体・subreaper で SIGCHLD の既定値と mask を復元し、reaper の停止と zombie の PPid も検証するよう修正した。[再現・修正記録](progress/time-dependent-tests-kill.md)。
+- `trap '' CHLD` 下の修正前バイナリは exit 101（親の `ECHILD`）。修正後の独立した zombie/reap 回帰試験、fmt、workspace clippy は exit 0。final review のコマンド列は dispatch 3 件と worker build まで通り、browser injection が userns 不許可で exit 101。実 runtime の反復は未確認。
+- 統合検査: `cargo test --workspace` は exit 101、停止した最初の target `celeris --test instance_handoff` は 8 件中 3 passed / 5 failed（worker DB guard の user namespace `Operation not permitted` が3件、handoff/standby 状態待ち失敗が2件: `a_newer_release_takes_over_while_the_old_one_finishes_its_run`、`a_stale_heartbeat_promotes_the_standby`）。残り3失敗名は `normal_mode_does_not_inject_the_smoke_builtins`、`verify_mode_never_dispatches_and_never_touches_daemon_instances`、`starting_the_same_release_twice_exits_three`。cargo は後続 target を実行せず workspace 全体の件数は未確定。`cargo clippy --workspace -- -D warnings` は exit 0（警告なし）。`crates/` に差分なし。
+- 未修正の同種試験: ファイル・試験名・待機の形は[調査一覧「その他の一覧」](progress/time-dependent-tests.md#その他の一覧)を参照。cluster wait の human/cancel/unknown-cluster/leaf wait、build cache の parallel target-dir、orphan takeover、tree approval/gate/replan、work-unit、browser startup reap、task-api stream / browser H3、credentiald injection IPC、process-group kill、browser egress、scratch-cache wait などを含む。
+- 未解決事項: user namespace を許可する環境で実 browser injection と controller kill を各3回再実行し、controller kill は今回未実施の SIGSTOP stutter 条件でも再確認する。workspace test は userns 制限下で失敗し、別途2件の handoff/standby 状態待ちも発生したため、許可環境で再実行して全 workspace 件数を記録する。この記録 unit（verify-record）自体はコード変更なし。ブランチ全体では `crates/task-dispatch/src/dispatcher/tests/cleanup_and_disk.rs`（(6) の修正、後述）を含め `crates/` の試験を変更している。
+
+### (6) `tick_prunes_the_oldest_terminal_workspace_and_records_an_event`（完了日 2026-10-02）
+
+- 原因・方式: [`docs/progress/time-dependent-tests.md`](progress/time-dependent-tests.md#tick_prunes_the_oldest_terminal_workspace_and_records_an_event) の該当節を参照。`for _ in 0..100` の固定回数ループ（約2秒）を削除し、`target/` の消滅と `store.events_for` の期待 `WorkspacePruned { removed: ["repos/benchfs/target"] }` 到着を 1 つの待ちループ（`wait_for_prune`）で待つ。保険の [`STATE_WAIT_GUARD`]（60 秒）を超えたら現在の `events` と `target_dir.exists()` を出して `panic!` する。`target/` 消滅・repo dir 残存・`removed` の中身の assert は元のまま。同 file の `workspace_prune_after_secs_zero_disables_pruning` の 50ms sleep は直さない（`workspace_prune_after_secs == 0` は削除スレッドを立てずに即 return するため、待っても届かない非同期処理が無い）。
+- 検証: `cargo test -p task-dispatch --lib cleanup_and_disk` を3回単独実行、各 exit 0 / 3 passed。`tick_prunes_the_oldest_terminal_workspace_and_records_an_event` 単体を SIGSTOP 2ms / SIGCONT 1ms の stutter 下で3回実行、3/3 `test result: ok`（stutter 無しの 0.03s に対し 0.07〜0.10s、崩れず通過）。`cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0。本体（`crates/task-dispatch/src/dispatcher/housekeeping.rs` の `prune_one_workspace` 等、非試験コード）は変更していない。
+
+### 人が実行する手順（userns が使える host で、最終コード向け）
+
+- 対象 SHA: main（`448891a2`）を取り込んだ merge commit `a46b7423`。この leaf（merge-main）の HEAD と、統合後の task branch の HEAD は crates/ の tree がこれと同じになる。確かめるコマンド: `git diff --stat a46b7423 <使う SHA> -- crates` の出力が空であること。この merge では `crates/task-worker/src/browser_runtime.rs` の init 待ちで衝突が出た。main の `NoChildPid(rt.failed_stderr())` を残し、このブランチの `test_hook::stop_init_after_info(rt.inner_pid)` は inner_pid が決まった直後に置いた。
+- 前回の人の実環境確認は `57576a5a`（SIGCHLD 継承の修正 `e64043be` と main merge の前）。最終コードでは人の手ではまだ確かめていない。
+- 前提: `unshare -U -r true` が exit 0。`CARGO_TARGET_DIR` はローカルを使う。CPU を焼く負荷はかけない。
+
+1. (4) browser injection を単独で 3 回実行する:
+   ```
+   for i in 1 2 3; do cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards; echo "exit=$?"; done
+   ```
+2. (5) controller kill を単独で 3 回実行する。試験は自分で subreaper と init を SIGSTOP し、controller の SIGKILL 後に SIGCONT する（[kill 記録](progress/time-dependent-tests-kill.md)の表、「修正後」行の stutter 条件）:
+   ```
+   for i in 1 2 3; do cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes; echo "exit=$?"; done
+   ```
+3. (5) を SIGCHLD 無視が継承される状態で 3 回実行する（final review で bwrap zombie の assert が落ちた条件）:
+   ```
+   for i in 1 2 3; do sh -c "trap '' CHLD; exec cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes"; echo "exit=$?"; done
+   ```
+4. 外からの SIGSTOP stutter（停止 2ms・再開 1ms、sleep だけで CPU は焼かない）の下で (4)(5) を各 3 回、(5) は SIGCHLD 無視の下でも 3 回実行する。(5) は `STUTTER_SCOPE=pid` で試験 process だけを止める。process group 全体を止めると外からの SIGCONT が、試験が止めた subreaper を起こしてしまい、試験の前提が壊れる。この worker で group 指定にすると bwrap の zombie assert が 6/6 落ちたが、これは試験側の不具合ではない。
+   ```
+   cargo test -p task-worker --test browser_injection_wire --no-run && cargo test -p task-worker --test browser_runtime_isolated --no-run
+   D=$CARGO_TARGET_DIR/debug   # 未設定なら target/debug
+   B4=$(ls -t $D/deps/browser_injection_wire-* | grep -v '\.d$' | head -1)
+   B5=$(ls -t $D/deps/browser_runtime_isolated-* | grep -v '\.d$' | head -1)
+   cat > /tmp/stutter.sh <<'EOF'
+   #!/bin/sh
+   # usage: [STUTTER_SCOPE=pid|group] [BIN_DIR=<target>/debug] stutter.sh <test-binary> <test-name>
+   d=${BIN_DIR:-/nonexistent}
+   # dash は名前に '-' を含む env を落とすので、(4) が実行時に読む CARGO_BIN_EXE_* は env(1) で渡す
+   setsid env "CARGO_BIN_EXE_celeris-browser-sandboxd=$d/celeris-browser-sandboxd" \
+     "CARGO_BIN_EXE_celeris-browser-egress=$d/celeris-browser-egress" \
+     "$1" --exact "$2" --test-threads=1 &
+   pid=$!
+   t=$pid; [ "${STUTTER_SCOPE:-pid}" = group ] && t=-$pid
+   while kill -0 "$pid" 2>/dev/null; do
+     kill -STOP -- "$t" 2>/dev/null; sleep 0.002
+     kill -CONT -- "$t" 2>/dev/null; sleep 0.001
+   done
+   wait "$pid"
+   EOF
+   chmod +x /tmp/stutter.sh
+   for i in 1 2 3; do BIN_DIR=$D STUTTER_SCOPE=group /tmp/stutter.sh $B4 real_broker_browser_injection_receipt_and_origin_guards; echo "exit=$?"; done
+   for i in 1 2 3; do STUTTER_SCOPE=pid /tmp/stutter.sh $B5 controller_kill_leaves_no_runtime_processes; echo "exit=$?"; done
+   for i in 1 2 3; do sh -c "trap '' CHLD; STUTTER_SCOPE=pid exec /tmp/stutter.sh $B5 controller_kill_leaves_no_runtime_processes"; echo "exit=$?"; done
+   ```
+5. 合格の見分け方:
+   - 各回 `exit=0` で、末尾が `test result: ok. 1 passed`（`FAILED` ではない）。
+   - (5) の出力に `runtime survived`、`bwrap must be an unreaped zombie`、`panicked` が無い。
+   - (4) の出力に `SinkFailed` と `panicked` が無い。
+   - `CELERIS_ISOLATION_TESTS=skip` を設定していないのに `SKIPPED` と出たら、環境の不備（bwrap や browser が無い）で、合格ではない。
+- 結果は `docs/progress/time-dependent-tests-injection.md` と `docs/progress/time-dependent-tests-kill.md` に追記する。
+- 2026-10-02 の merge-main worker で上の 1〜4 を `a46b7423` で実行した（この sandbox では `unshare -Ur true` が exit 0、load average 約 31）。結果:
+  - 手順 1〜3: 各 3/3 `test result: ok`。`SinkFailed`、`runtime survived`、`SKIPPED` は出なかった。
+  - 手順 4: (4) は pid 指定・group 指定とも 3/3 ok。(5) は pid 指定で 3/3 ok、SIGCHLD 無視下で 3/3 ok。
+  - 手順 4 の限界: 外からの stutter で実行時間はほとんど変わらなかった（(4) 0.43〜0.48s、(5) 0.08〜0.10s）。止められるのは試験 process とその process group だけで、自分で session を作る runtime の中までは届かないと見られる。競合点への負荷の再現は、試験の中にある stutter（(5)）と遅延（(4) `delayed_cdp_page_target_response`）が担う。
+  - これは人の host での確認の代わりではない。
+
+### 実環境での確認（2026-10-02、ADR-0079 D7 人の回答）
+
+人が上記の手順を userns の使える host（host `home-dev`）で実行した。`unshare -U -r true` は exit 0。load average 18.5（CPU を焼く負荷はかけていない）。task branch `57576a5a` を `/var/tmp` の worktree に取り出し、`CARGO_TARGET_DIR` はローカルを使用。
+
+- (4) `cargo test -p task-worker --test browser_injection_wire -- --exact real_broker_browser_injection_receipt_and_origin_guards` を3回単独実行: 3/3 `test result: ok`（1 passed、各回 0.45〜0.49s）。`SinkFailed`・`SKIPPED` の出力なし。
+- (5) `cargo test -p task-worker --test browser_runtime_isolated -- --exact controller_kill_leaves_no_runtime_processes` を3回単独実行: 3/3 `test result: ok`（1 passed、各回 0.08s、`helper_reaper` ok）。`runtime survived`・`SKIPPED` の出力なし。
+- SIGSTOP stutter の修正前後比較（コードを一時的に外して再現させる手順）は、今回この人の実行では行っていない。[`docs/progress/time-dependent-tests-kill.md`](progress/time-dependent-tests-kill.md) にある、userns が許可された環境での過去の stutter 5/5 pass の記録を採用する。
+
+未解決事項: 上記の (4)(5) は3回とも合格し、未解決の失敗はない。SIGSTOP stutter の修正前後比較（本来の手順3番目）は今回の人の実行では未実施（worker sandbox では userns が使えず自動実行できず、今回人が実行した際も改めてはやらず、過去の [kill 記録](progress/time-dependent-tests-kill.md)の stutter 5/5 pass を根拠として採用したため）。
+
+この記録は task branch `57576a5a`（SIGCHLD 継承の修正 `e64043be` と main merge の前）に対するもので、最終コードでの確認は下の「実環境での確認（最終コード）」に置き換わる。
+
+### 実環境での確認（最終コード、2026-10-02、ADR-0079 D7 real-env-2 人の回答）
+
+人が上記「人が実行する手順」の手順1〜4を、merge-main 完了後の最終 SHA `ab1914e629d9`（HEAD。`e64043be` の SIGCHLD 継承修正と main merge `a46b7423` を含む）で実行した。host `home-dev`、`unshare -U -r true` は exit 0、load average 14〜18（CPU を焼く負荷なし）。`ab1914e629d9` を `/var/tmp` の worktree に取り出し、`CARGO_TARGET_DIR` はローカル、`CELERIS_USERNS_TESTS=1` で実行した。`git diff --stat a46b7423 ab1914e629d9 -- crates` は空（crates の tree は `a46b7423` と同一）。
+
+- 手順1 (4) browser injection 単独 ×3: 3/3 `test result: ok`（各 0.43〜0.52s）。
+- 手順2 (5) controller kill 単独 ×3: 3/3 `test result: ok`（各 0.08s、`helper_reaper` 0.10s）。
+- 手順3 (5) を `trap '' CHLD` 下で ×3: 3/3 `test result: ok`。
+- 手順4 SIGSTOP stutter: (4) `STUTTER_SCOPE=group` ×3 で 3/3 ok（1.65s・1.73s・7.03s、stutter による遅延が効いている）。(5) `STUTTER_SCOPE=pid` ×3 で 3/3 ok。(5) SIGCHLD 無視 + pid stutter ×3 で 3/3 ok。
+- 全回（合計18回）で `SinkFailed`・`runtime survived`・`bwrap must be an unreaped zombie`・`panicked`・`SKIPPED` のいずれの出力もなかった。
+
+結果: 全件合格（推奨どおり）。未解決の失敗なし。最終コードでの (4)(5) の実環境確認・SIGSTOP stutter 条件（SIGCHLD 無視下を含む）は、ここで完了したものとして記録する。コードの変更はこの記録には含まれない。
+
 ## Web GUI dogfood（開始 2026-10-01、release bf54b41ad627）
 
 - 状態: 本番 daemon 向けの web gateway `127.0.0.1:7720` と LAN 入口 `192.168.1.103:7721` を起動。gui/ :7700 は継続稼働。PC 1440px・スマホ 390px の読み取り確認は合格。
@@ -351,9 +466,55 @@ main（`ea86af6307f87bf8bd3a9d2069ec45f75325fc68`）は HEAD (`14bf01edb90b42135
 - 2 回連続で単独実行し、どちらも同じ結果を再確認した。
 - 人の判断のとおり、環境（host 負荷）起因の flaky と確認できた。コード変更なし。
 
+## browser: ptrace 境界分離 launcher 実装・実 process 実証完了
+
+完了日 2026-10-02（task 01M3VFQK2ZSPJ89VDA1F4FMA2G、WorkUnit `real-evidence` / `close-out`）。
+
+- 成果: [ADR-0115](adr/0115-browser-ptrace-owner-ns-launcher.md) に沿って `celeris-browser-launcher` を実装し、人が host 準備手順（[browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md)）どおりに `celeris-browser` user・subuid/subgid・systemd socket/service を整えた環境で、launcher 経由の実 Chrome について daemon UID からの ptrace・`/proc` 読取り拒否を実証した。既存の daemon 所有 runtime（same-uid / subuid wrapper）経路は維持し、launcher 経由は設定（`[browser] runtime` / `launcher_socket`）で選択する。
+- 証拠（host の人の実行、詳細は [phase-browser-4.md](progress/phase-browser-4.md) の該当 run 記録）:
+  - `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → **exit 0（1 passed、0 failed、0.15 s）**。
+  - 正の対照: 同 UID 子プロセスへの `PTRACE_ATTACH=0`／`PTRACE_DETACH=0`（検査手段自体が機能することの確認）。
+  - launcher 観測・Chrome: `owner=Some(296608)`（Chrome userns owner、subuid）、`NS_GET_OWNER_UID(launcher)=Some(296608)`、daemon UID からの同 NS open は `errno=Some(13)`（EACCES）。
+  - `verify_isolation=Ok (launcher isolation_ok=true, CapEff=0000000000000000 NoNewPrivs=true)`。
+  - daemon UID 1001 の別プロセスからの攻撃: `PTRACE_ATTACH Chrome pid: errno=Some(1)`（EPERM）、`strace -p` は `exit=Some(1)`／`Operation not permitted`、`/proc/<pid>/environ`・`/proc/<pid>/mem` ともに `errno=Some(13)`（EACCES）。
+  - check runner（db_guard namespace、`/proc/self/uid_map`=`1001 1001 1`）からの再実証でも同じ構成で **exit 0（1 passed、0.14 s）**。namespace 越しに subuid が `4294967295` と写る分だけ試験側の map 判定を修正済み（launcher 側の不具合ではない）。
+  - 既存の daemon 所有 runtime 経路: `cargo test -p task-worker --test browser_runtime_isolated` → **exit 0（4 passed、1 ignored）**、壊れていない。
+  - `cargo test --workspace && cargo clippy --workspace -- -D warnings` → exit 0（close-out run、下記参照）。
+- 手順書・証跡リンク: host 準備は [docs/ops/browser-launcher-host-setup.md](ops/browser-launcher-host-setup.md)、試行錯誤と各 run の journal・eprintln 全文は [docs/progress/phase-browser-4.md](progress/phase-browser-4.md)（ADR-0115 launcher 節以降）。
+- 未解決事項:
+  - この host は LXC 内のため、試験 runner（UID 1001）の親 namespace map は初期 namespace の `0 0 4294967295` ではなく `0 100000 1001 / 1001 1001 1 / 1002 101002 64534 / 65536 165536 262144`。検証は db_guard namespace の外・この map のもとで行った。
+  - Chrome stderr の `category=other-startup-error`（journal に 4 行）の中身（無害な起動時警告か）は未確認。
+- 機密能力（`CredentialInjection`・`IdentityRestore`）はこの task では解放していない。解放は後続 task `01M3VFQZ2TX3W0KTDQHKCAVJR6` / `01M3WV4BFJ71J9ZWJ020MP2Z4K` で判断する。
+
+#### 統合検査 flaky の単独再実行（tick_prunes）
+
+- 対象: `dispatcher::tests::cleanup_and_disk::tick_prunes_the_oldest_terminal_workspace_and_records_an_event`。各回の直前に `/proc/loadavg` を読み、`cargo test -p task-dispatch --lib tick_prunes_the_oldest_terminal_workspace_and_records_an_event` を個別に foreground 実行した。
+- 1回目: loadavg `24.22 24.05 24.86 28/1583 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 2回目: loadavg `24.33 25.07 25.22 3/1496 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 3回目: loadavg `21.29 24.39 25.00 2/1427 3`、exit 0、`1 passed; 0 failed`（498 filtered out）。
+- 先行する `cargo test --workspace` は load 25 前後で同じ試験が失敗し、`498 passed; 1 failed` だった。人は環境（host 高負荷）起因の tick 依存 flaky と判断した。今回の3回はすべて pass。指示どおりコードは変更せず、修正は別 task `01M3Y4AV5Z` が担当する。
+
+### 最新 main（7f3482a3）取り込み — 2026-10-02（work unit `land-main`）
+
+`main` の `7f3482a3` を merge で取り込んだ（rebase なし）。衝突は 2 ファイル。
+- `crates/task-worker/tests/browser_shared_cdp.rs`: main 側 5eb666f6（R7-12）の `ISOLATION`・`PREFLIGHT_TIMEOUT`・`probe.err` の excepthook・WebSocket frame の読み切り（`recv_exact`）を土台にした。そこへこのブランチの 97eb5194（接続から CDP 応答までを 1 試行とし、期限 55 秒の中で再試行する）を載せた。`find_browser`・`preflight`・`run_bounded` と、launcher 用の `userns: UsernsMode::Unshare` は自動 merge でそのまま残っている。
+- `docs/PROGRESS.md`: main の R7-10・ADR-0117・repair 許可範囲の節を先に、この節を含む launcher 節を後に置き、どちらも残した。
+- 証拠: `cargo build -p task-worker --bins` exit 0。`cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` exit 0（3261 passed / 0 failed / 12 ignored）。`CELERIS_ISOLATION_TESTS=require cargo test -p task-worker --test browser_shared_cdp` を 3 回実行し、3 回とも exit 0（2 passed）。flaky は出なかった。launcher の実 host 試験は再実行していない（人の側で済み）。
+
+### main（764a737d）取り込み — 2026-10-02（work unit `land-main2`）
+
+`main` の `764a737d` を merge で取り込んだ（rebase なし）。衝突は 2 ファイル。
+- `crates/task-worker/src/browser_runtime.rs`: main 側 c11ffd35 の `RuntimeError::InitNotReady` と、`IsolatedRuntime::launch` で `--info-fd` の後に pid ns init の starttime を記録して `/proc/<pid>/wchan` が `do_wait` になるまで待ち、未完了なら本人確認のうえ init を SIGKILL する処理を残した。このブランチ側の `RelayNotReady(String)`・`NoChildPid(failed_stderr)` の診断、launcher 経路（`UsernsMode::Fd`、`/tmp/celeris-session` の bind、relay 診断、Chrome lifecycle 診断）もそのまま残した。
+- launcher 経路での init 待ち: launcher は bwrap の親として host の pid ns にいるので `--info-fd` の pid は host pid。init の userns は launcher（euid celeris-browser）が owner の userns の子孫なので、launcher は init の `/proc/<pid>/stat`・`wchan` を読め、SIGKILL も送れる。このため launcher 経路の扱いは変えていない（理由をコードのコメントにも書いた）。unit（`deploy/systemd/celeris-browser-launcher.service`）に `ProtectProc`・`PrivatePIDs` は無く、他 UID の `/proc` は見える。
+- `tests/browser_runtime_isolated.rs` の main 側変更は自動 merge で残り、launcher 用の `userns: UsernsMode::Unshare` も残っている。
+- `docs/PROGRESS.md`: main の verify-land2・land-final・reland-main・rerun-flaky などの節を先に、launcher 節を後に置き、どちらも残した。
+- 証拠: `cargo build -p task-worker --bins` exit 0。`cargo fmt --all -- --check` exit 0。`cargo clippy --workspace -- -D warnings` exit 0。`cargo test --workspace` exit 0（3279 passed / 0 failed / 12 ignored）。`cargo test -p task-worker --test browser_runtime_isolated` exit 0（5 passed、1 ignored）。flaky は出なかった。
+- **launcher の binary に効く変更あり**: `browser_runtime.rs` の launch（init 待ち）は launcher・sandboxd・egress の binary に入る。host の binary は 86ce1a88 のビルドのままなので、反映には人による入れ替えが要る。
+- main 取り込み後の launcher binary の実 host 再試験は未実施（任意で人が require 試験を再実行）。手順は `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture`（binary の入れ替えは `sudo /usr/local/sbin/celeris-browser-launcher-update`）。
+
 ### prompt-rule: planner の check 指針に重い負荷台本禁止を追記 — 2026-10-02
 
-`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。
+`crates/task-worker/src/claude_code/prompt.rs` の `PLANNER_CHECK_GUIDANCE`（check の書き方の箇条、1639〜1663 行）の末尾に次の 1 行を追加した: 「Do not run CPU-burning load scripts (busy loops, a CPU-burning load generator tool, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see docs/testing.md).」。同文字列を `crates/task-worker/src/claude_code/tests.rs` の `planner_prompt_has_the_check_writing_section` の needles 配列にも追加した。(注記: 本節の英文引用は負荷生成ツールの固有名を言い換えている。実コード中の文字列そのものはこのタスクの差分に含まれないため変更していない。)
 
 worker（非 planner）向け指示と `task-dispatch` の要否確認:
 - `git grep -n "check の書き方\|CHECK_GUIDANCE" crates/task-dispatch crates/task-worker` → `PLANNER_CHECK_GUIDANCE` 定数は `crates/task-worker/src/claude_code/prompt.rs` にのみ存在し、`task-dispatch` に check 作成の指針テキストは無い。
@@ -442,6 +603,81 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
 
+## provider / LLM source 分離の設定例（2026-10-02、config-docs）
+
+ADR-0132 D2・D7 に合わせ、設定例の provider ID を source 非依存の名前にし、
+PaperQA の設定 JSON を `config/paperqa.proxy.example.json` に改名した。
+PaperQA は `celeris/standard`、LDR・LangMem・opencode は `celeris/cheap` を参照する。
+Qwen の tier 写像は cheap のみ。人が実行する本番移行・確認・戻し方は
+`docs/ops/provider-llm-source-migration.md` に記した。
+
+`cargo test -p celeris --lib example` の既存 `loads_research_example_config` は
+`[adapters.paperqa].settings` の旧ローカルパスを文字列一致で固定しているため、
+設定例を `settings/proxy` にした後はそのアサーションだけ失敗する。
+設定の `Config::load` と `validate` は成功し、他の example 試験は成功した。
+この WorkUnit の指示に従って試験コードは変更していない。
+`celerisctl config to-harnesses --config <file>` による全 10 件の
+`config/celeris*.example.toml` の読み込みと設定検査は全件 exit 0。
+
+## provider の LLM source / adapter 分離と cheap 専用 Qwen — 全体検証（2026-10-02、verify）
+
+完了日 2026-10-02。ADR-0132（`docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md`）の D1〜D7
+（provider を LLM source と adapter / harness に分ける設定・API・schema、llm-proxy の Qwen tier 写像を
+cheap だけにする fallback、paperqa・langmem・ldr・opencode の Qwen 前提除去、gui/ と web/ の providers 画面、
+設定例と本番移行手順）の統合後 HEAD（`ecafb5a4` 「integrate wu/worker-tools (phase tools)」）に対して
+全体の fmt・clippy・ビルド・対象試験を実行した。ADR-0132 の状態欄を「実装済み」に更新した。実装そのものの
+修正はこの WorkUnit では行っていない（指示どおり）。
+
+- 証拠コマンドと結果:
+  - `cargo fmt --all -- --check` → exit 0（差分なし）。
+  - `cargo clippy --workspace -- -D warnings` → exit 0（warning ゼロ）。
+  - `cargo test --workspace --no-run` → exit 0（全クレート・全試験バイナリのビルドに成功。実行はしていない
+    — userns が要る browser 系試験が worker sandbox で落ちるため、全体の実行は daemon 側の workspace check
+    に任せる）。
+  - `cargo test -p llm-proxy` → exit 0。unit 39 passed、`tests/proxy_integration.rs` 27 passed、doctest 0
+    （cheap のみの Qwen 優先・`celeris/frontier`・`celeris/standard` が Qwen に倒れないこと・Qwen 生存時は
+    Qwen 優先・不達時は Claude/GPT cheap へ倒れることを固定する `cheap_only_*` 試験を含む）。
+  - `cargo test -p celeris config::` → exit 0、86 passed（設定の読み込み・検証・互換 provider 行・
+    knowledge fallback 設定を含む）。続けて `cargo test -p celeris --lib` 全体も exit 0、217 passed
+    （`config::tests::loads_research_example_config` を含め、settings/proxy 化後の設定例試験もすべて pass。
+    config-docs 段で期待パスの更新が済んでいるため、以前この節に記録していた既知の失敗は解消済み）。
+  - `cargo test -p task-api --test providers_admin` → exit 0、13 passed（`provider_kind_*` を含む provider
+    の kind・llm_source の作成・更新・互換検証）。
+  - `cargo test -p task-api --test llm_sources` → exit 0、3 passed（`GET /api/v1/llm/sources` の読者ビュー）。
+  - `cargo test -p task-dispatch --lib knowledge` → exit 0、9 passed（knowledge_fallback: cheap-only の
+    Qwen 生存時・不達時の両経路、langmem 到達可否、probe キャッシュを含む）。
+  - `cargo test -p task-dispatch --lib`（全体）→ exit 0、506 passed / 0 failed（最終レビュー受け入れ条件 0
+    の `cargo test -p task-dispatch --lib` に一致）。
+- 未解決事項:
+  - 本番の `~/.config/celeris/config.toml` の移行はこの WorkUnit では実行していない。人が
+    `docs/ops/provider-llm-source-migration.md` の手順（控え・ID 対応表・`models.qwen` の非 cheap キー削除・
+    `celeris/<tier>` への切替・opencode の cheap 制限・検証・画面確認・戻し方）に従って行う。
+  - browser 系など userns を要る試験（`crates/celeris/tests/browser_*` ほか）はこの worker sandbox では
+    実行できない。daemon 側の workspace check（本番相当の権限を持つ環境）の `cargo test --workspace` に
+    全体実行を委ねる。
+  - `cargo test --workspace` のフル実行はこの run では行っていない（上記の userns 制約のため、対象クレート・
+    対象試験に絞って実行した）。
+- 提案: 次に本番 config.toml を移行する際は、移行前後で `GET /api/v1/providers` と `GET /api/v1/llm/sources`
+  の応答を保存し比較すると、`kind` / `llm_source` の推定結果が意図どおりか目視確認しやすい。
+- ACP の Qwen 直指定（`OPENCODE_CONFIG` 無し・`openai_compatible` の Qwen source）も cheap だけに絞る修正（acp-cheap）。
+
+### land-main3: 最新 main の統合 — 2026-10-02
+
+main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持した。main の ADR-0122 完了・ui-ux 外部 skill の結合試験・planner 指針・最終検査記録に加え、browser launcher の実 process 証跡、tick_prunes の単独再実行、過去の land-main/land-main2 記録も残した。
+
+- main 由来の launcher 関連差分を確認: `crates/task-worker/src/browser_runtime.rs` は main 側の init 待ち変更を含み、launcher/sandboxd/egress の起動経路に効く。この変更は既に land-main2 の記録に記載済みで、host の binary 入れ替えと require 試験の再実行が必要。
+- `git merge-base --is-ancestor 0d438ec19d9a HEAD` → exit 0。`git merge-tree --write-tree main HEAD` → exit 0（tree `d7c0705a6e14f6dc89fbd842b679f4078c084bd5`）。main の ADR-0122 / ui-ux 記録と launcher 節は両方保持。
+- 最終検査: `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 101。`instance_handoff` 8件中3 passed / 5 failed。`cargo test -p celeris --test instance_handoff` 単独再実行も exit 101、同じ5件を再現。3件は ADR-0095 worker db guard の user namespace 作成が `Operation not permitted` で失敗。残り2件（新旧 daemon の dispatch/standby 引継ぎ）も同じ環境で失敗した。検査は pass 扱いにしない。
+- launcher binary に効く main 差分は `crates/task-worker/src/browser_runtime.rs` の init 起動待ち処理である。既存の記録どおり host の binary 入れ替えと require 試験の再実行が必要。
+
+### pick-chrome: 並走 session での launcher Chrome 特定 — 2026-10-02
+
+`browser_launcher_ptrace.rs` の Chrome 特定が並走 session で曖昧になって落ちていた件を、試験 file だけで直した。launcher は daemon から読める `/proc` に session の印を出さないため、launcher 子孫の新しい Chrome 候補を全部検査して 1 件以上を要求し、自分の session の停止で検査済みの session root が消えることを確かめる。選択は純粋な関数に分け、単体試験 `chrome_pick_*` 4 件を足した。詳細は `docs/progress/phase-browser-4.md`『並走 session での Chrome 特定』。
+
+- `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
+- `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+- `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
 ## ADR-0129 (1) sccache 撤去: 統合後の全体検証（work unit `verify`）
 
 完了日 2026-10-02。HEAD `273bf5f36153`（統合段 consumers → core → schema-docs がすべて終わった後）で
@@ -613,3 +849,52 @@ done の件数が増え続ける限りは待ち、`stall_limit`（60s）だけ�
 - `cargo test -p e2e --test api_scenarios writes_from_celerisctl_and_api` → exit 0、1 passed。
 - `cargo fmt --all -- --check` → exit 0（差分なし）。
 - `cargo clippy -p e2e --all-targets -- -D warnings` → exit 0（警告なし）。
+
+
+### verify: main の取り込み・全体検証（work unit `verify`、2026-10-02）
+
+main を `wu/verify` の作業ツリーへ2段階で merge した。まず他 WU（`ops-doc`）ブランチの先端 `e901c9388601`（main を取り込んだもの）を取り込み、`docs/PROGRESS.md` の衝突は冒頭の節（ADR-0129 sccache schema・browser launcher 権限分離の2節）を両方残し、文末付近の `### land-main3` / `### pick-chrome` が本節（`## sccache の host 設定化と reflink target`）の下に誤って連結されていたのを `## ADR-0122 完了（ui-ux 外部 skills）` 配下の `### land-main` の直後へ戻した（内容は変更していない、見出しの付け先だけ修正）。それ以外の衝突（`Cargo.lock`・`crates/celeris/*`・`crates/task-dispatch/*`・`crates/task-worker/*` など）は git の自動 merge で解決し、手動介入は無かった。続いてその後に main が進んだ `14b052eaacee`（ADR-0079 D7 continue note を child_objective/human_decisions へ届ける変更。`crates/task-dispatch/src/dispatcher/work_units.rs`・`crates/task-ops/src/phase_gate.rs`・`crates/task-ops/src/tree.rs`・試験・ADR 付記のみで `docs/PROGRESS.md` には触れない）を merge し、衝突なしで取り込んだ。
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `14b052eaacee` が HEAD の祖先）。
+- 衝突マーカー確認: `grep -rln '^<<<<<<<\|^=======$\|^>>>>>>>' .`（`.git/` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `cargo test --workspace`:
+  - 1 回目の完走 → **exit 0**。108 試験バイナリすべて `test result: ok`、`passed` 合算 **3326**（main `14b052eaacee` の `tree_decisions.rs` 新規試験 2 件を含む）、`failed` 0、`ignored` 12（内訳: `task-api` 2 件 `UPDATE_SCHEMA` 手動確認用、`task-ops` 4 件（`execution_metrics_comparison_tests` の手動計測・`profile_timeline_against_a_db_copy`）、`browser_runtime_isolated.rs` の helper process 3 件、`ssh_cluster_manual.rs` の実クラスタ要の 2 件、`task-worker` doctest 1 件。いずれも既存の意図的な ignore で、このタスクの変更とは無関係）。再実行なしで一発で通ったため、共用 host の負荷起因 flaky（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回は発現しなかった。
+  - sandbox の userns 制約で落ちる既知試験: 今回は発現せず、`CELERIS_ISOLATION_TESTS=skip` 等の opt-in は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も今回の `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない（`git diff` の変更範囲に `tests/e2e/` は含まれない）。
+- `deflake-lock`（work unit `deflake-lock`）で固定 120s `wait_until` を `wait_for_progress` の出来事待ちへ直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、上記 `cargo test --workspace` の中で `tests/api_scenarios.rs`（11 passed）の一部として `ok`。`database is locked` は出ず、180 件の task はすべて done に到達した（試験の主張どおり）。
+
+### verify: main の追加取り込み（33aca5a3）と再検証（Run #3、2026-10-03）
+
+Run #2 で main がさらに進んだ `33aca5a3`（アカウント/プロバイダー分離とモデル階層ルーティング関連。`config/*.example.toml`・`crates/celeris/src/config/*`・`crates/celeris/src/daemon/*`・`crates/llm-proxy/src/config.rs` などを含む。`docs/PROGRESS.md` には触れない）を merge し、コミット `bffc87b2`（`wu/verify: main (33aca5a3) を取り込み`）として取り込み済みだった。Run #3 ではこの状態を引き継ぎ、PROGRESS への記録が未了だった全体検証をやり直した。
+
+- `git status --short` → 変更なし（Run #2 終了時点で merge 済み・commit 済み）。
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `33aca5a3` が HEAD の祖先。`git fetch origin main` 後の `origin/main` と一致）。
+- 衝突マーカー確認: `grep -rn '^<<<<<<<\|^=======$\|^>>>>>>>' --include=*.rs --include=*.md --include=*.toml .`（`target` 除外）→ 該当なし。
+- `cargo fmt --all -- --check` → exit 0（差分なし）。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、`Finished` のみ）。
+- `cargo test --workspace` → **exit 0**。120 試験バイナリすべて `test result: ok`、`passed` 合算 **3351**、`failed` **0**、`ignored` **12**（内訳は上の 14b052ea 検証時と同じ既存の意図的 ignore。main `33aca5a3` が追加した provider/config 周りの新規試験も含めすべて通過）。一発で通り、再実行は不要だった。
+  - sandbox の userns 制約で落ちる既知試験: 今回も発現せず、`CELERIS_ISOLATION_TESTS=skip` は使わなかった。`crates/celeris/tests/instance_handoff.rs` は8件（`a_newer_release_takes_over_while_the_old_one_finishes_its_run`・`a_stale_heartbeat_promotes_the_standby` を含む）すべて `ok`。
+  - `tests/e2e` の負荷時 flaky 2 件（`writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked`・`daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded`）も `cargo test --workspace` の中で両方 `ok`。本 work unit は `tests/e2e` を変更していない。
+  - 参考: Run #2 の途中経過では `cargo test --workspace` を3回走らせており、2回目（merge 直後、commit 前）に `task-worker` の `browser_restore_deliver.rs::live_session_delivers_restored_state_over_its_own_cdp_pipe` が1件だけ `StateRejected` で落ちた（共用 host の負荷に伴うタイミング依存の既知 flaky、`docs/testing.md` 方法3〈SIGSTOP stutter〉系統。本 work unit は `task-worker` の browser 配送コードを変更していない）。3回目の全体再実行では発現せず `ok`。Run #3 の今回の実行でも発現しなかった。
+- `deflake-lock` で直した試験 `writes_from_celerisctl_and_api_while_celeris_ticks_fast_never_hit_database_is_locked` は、今回の `cargo test --workspace`（`tests/api_scenarios.rs`、11 passed の一部）でも `ok`。`database is locked` は出ず、全 task が done に到達した。
+
+#### ディスク使用量・ビルド時間の実測（参照）
+
+`experiment` work unit の `docs/progress/reflink-target-experiment.md` に記録済みの実測を要約する（本 work unit では再測定していない）。
+
+- seed から空で build: 5 crate を compile、0.74 秒。
+- seed を同じ source・別 target path へ `cp -a --reflink=auto` でコピーした直後の build: compile 0 件、0.03〜0.04 秒（`df` 増分 +27.6 MiB、コピー先 `du` 28 MiB — 当時の実験環境は ext 系で実体コピー。container の `/local`（btrfs）は `FICLONE`/`FICLONERANGE` が EPERM だが、`copy_file_range(2)` で extent 共有となり `df` 増分 0 MiB を人が別途実測済み、`docs/adr/0129-host-sccache-reflink-targets.md` 参照）。
+- 新規 checkout を模して mtime を更新した場合: `pdep`（path 依存）と `app` の 2 crate が再 compile、0.23 秒。registry 依存（itoa・libc・anyhow）は mtime 更新でも再ビルドされなかった。
+- 結論: seed からのコピーは target path・source path が変わっても mtime を保てば fresh 判定を保てるが、worktree の checkout で mtime が変わる経路（path 依存とその利用側）は再ビルドが残る。これは ADR-0129 付記と `reflink-target-experiment.md` の既存の結論のままで、今回の merge・検証で変化はない。
+
+#### 未解決事項
+
+- 本番の切り替え（host の `~/.cargo/config.toml`・sccache user unit・`/local` への scratch 移行）は人が `docs/ops/host-sccache-reflink-targets.md` の手順で実行する。本 work unit は本番 host には触れていない。
+- `/local`（btrfs）上での実際の reflink 共有（`copy_file_range` の extent 共有、`df`/`filefrag` での確認）は `CELERIS_REFLINK_TEST_DIR` を人がこの環境変数に `/local` 配下のパスを設定して実行する必要がある。このタスクの run 環境には書き込み可能な `/local` が無いため実行していない。
+- 共用 host の負荷起因の時間依存試験（`instance_handoff`・`cluster_job_wait`・`api_scenarios` 系）は今回発現しなかったが、既知の flaky として別タスク（時間依存試験の決定化）で追跡中。
+
+#### 提案
+
+- `docs/PROGRESS.md` の末尾追記方式（複数 work unit が同時に EOF へ `##`/`###` を足す）は、今回のように無関係な既存節（main 側の `land-main3`/`pick-chrome`）が別 work unit の新設 `##` 節の下に紛れ込む merge 結果を生みやすい。長期分岐タスクでは「新しい `##` 節は必ず対象の h2 の直後に挿入する」運用、または merge 後に見出しの親子関係をざっと確認する一手順を `docs/testing.md` か ADR に足すとよい。

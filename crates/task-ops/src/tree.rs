@@ -191,11 +191,13 @@ pub fn open_decision(
 }
 
 /// D4 (4) / D7: 子の `objective`（unit の `objective` の後に、祖先の path と回答済みの決定を固定の書式で）。
-/// `ancestors` は root が先頭・親が末尾。
+/// `ancestors` は root が先頭・親が末尾。`gate_notes` は同じ「人の決定」節に足す途中確認の continue のメモ
+/// （`crate::phase_gate::continue_note_lines`。ADR-0074 付記 2026-10-02）。
 pub fn child_objective(
     unit: &PlanUnitSpec,
     ancestors: &[Task],
     decisions: &[DecisionRow],
+    gate_notes: &[String],
 ) -> String {
     let mut out = unit.objective.trim_end().to_string();
     out.push_str("\n\n");
@@ -220,15 +222,17 @@ pub fn child_objective(
         unit.title,
         unit.key
     ));
-    if !decisions.is_empty() {
+    if !decisions.is_empty() || !gate_notes.is_empty() {
         out.push_str("\n\n");
         out.push_str(DECISIONS_HEADING);
         // ADR-0079 D7（Phase R3a）: leaf の前置きの「人の決定」節と同じ 1 行（`task_core::decision::answer_line`）。
-        for d in decisions {
-            if let Some(line) = task_core::decision::answer_line(&d.request) {
-                out.push('\n');
-                out.push_str(&line);
-            }
+        let lines = decisions
+            .iter()
+            .filter_map(|d| task_core::decision::answer_line(&d.request))
+            .chain(gate_notes.iter().cloned());
+        for line in lines {
+            out.push('\n');
+            out.push_str(&line);
         }
     }
     out
@@ -279,9 +283,16 @@ pub fn build_child_task(
         ));
     }
     let ancestors = ancestors_with_self(store, parent).map_err(ops)?;
+    // ADR-0074 付記（2026-10-02）: 前の段の途中確認で人が continue に付けたメモ（D7 の節に同じ形で足す）。
+    let gate_notes = crate::phase_gate::continue_note_lines(
+        &store.events_for(parent.id).map_err(|e| e.to_string())?,
+        &store.work_units_for(parent.id).map_err(|e| e.to_string())?,
+        plan_id,
+        Some(unit.stage.as_str()),
+    );
     let proposal = DelegateTask {
         title: unit.title.clone(),
-        objective: child_objective(unit, &ancestors, decisions),
+        objective: child_objective(unit, &ancestors, decisions, &gate_notes),
         acceptance: unit.acceptance.clone(),
         role: None,
         genre: unit.genre.clone().or_else(|| parent.genre.clone()),

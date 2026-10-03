@@ -569,6 +569,8 @@ pub struct KnowledgeRuntimeConfig {
     pub default_mounts: Vec<task_core::KnowledgeMount>,
     /// ADR-0052 D1（Phase 64）: `[knowledge.langmem].base_url`。知識整理タスクを dispatch する直前に
     /// `GET <base_url>/models` を当てる。`None` なら検査しない（＝従来どおり `langmem` で走らせる）。
+    /// ADR-0132 D4: 通常は celeris の llm-proxy を指す。検査するのは proxy の到達性で、proxy の先の
+    /// Qwen の生死ではない（Qwen が落ちても proxy が Claude / GPT の cheap に倒すので `langmem` のまま）。
     pub langmem_base_url: Option<String>,
     /// Phase 65b: `[knowledge.langmem].api_key_secret` から解決した平文のトークン（`[secrets] dir`
     /// が無い・見つからない等なら `None`）。到達性の probe が `Authorization: Bearer` に使う

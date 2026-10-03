@@ -1,0 +1,68 @@
+# Sanitized shape of the 2026-10-02 deployment. Paths and credentials are inert.
+db = "fixture.sqlite3"
+
+[accounts]
+claude_dir = "/fixture/claude-accounts"
+codex_dir = "/fixture/codex-accounts"
+
+[adapters.acp]
+env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }
+
+[adapters.local_deep_research.settings]
+"llm.model" = "celeris/cheap"
+
+[knowledge.langmem]
+model = "celeris/standard"
+
+[llm_proxy.sources.claude_oauth]
+accounts_dir = "/fixture/claude-accounts"
+enabled = false
+
+[llm_proxy.sources.codex_oauth]
+accounts_dir = "/fixture/codex-accounts"
+enabled = false
+
+[llm_proxy.models.qwen]
+frontier = "qwen3.8-27b"
+standard = "qwen3.8-27b"
+cheap = "qwen3.8-27b"
+
+[[llm_proxy.sources.openai_compatible]]
+id = "qwen"
+base_url = "http://127.0.0.1:9/v1"
+
+[[providers]]
+id = "opencode-qwen"
+adapter = "acp"
+tiers = ["frontier", "standard", "cheap"]
+model = "qwen-local/qwen3.8-27b"
+env = { OPENCODE_CONFIG = "/fixture/qwen.json", OPENAI_API_KEY = "fixture-secret-sentinel" }
+
+[[providers]]
+id = "ldr-qwen"
+adapter = "local-deep-research"
+model = "celeris/cheap"
+
+[[providers]]
+id = "paperqa-qwen"
+adapter = "paperqa"
+model = "openai/celeris/standard"
+
+[[providers]]
+id = "langmem-main"
+adapter = "langmem"
+tiers = ["standard", "cheap"]
+
+[[providers]]
+id = "claude-pool"
+adapter = "claude-code"
+account_pool = true
+
+[[providers]]
+id = "codex-pool"
+adapter = "codex"
+account_pool = true
+
+[[providers]]
+id = "unclassified-tool"
+adapter = "aider"

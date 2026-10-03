@@ -30,6 +30,10 @@ use tower::ServiceExt;
 pub const HOST: &str = "127.0.0.1:7710";
 pub const TOKEN: &str = "s3cret-token-value";
 
+/// 来るはずのフレーム・状態を待つ保険の上限（ADR-0125）。主判定は出来事の到着で、
+/// 負荷で遅れても落ちないよう長く取る。来ないことを確かめる短い待ちには使わない。
+pub const EVENT_WAIT: Duration = Duration::from_secs(60);
+
 pub struct EnvOptions {
     pub token: Option<String>,
     pub allowed_hosts: Vec<String>,

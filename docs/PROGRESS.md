@@ -11,6 +11,8 @@
 - `provider_admin_scenarios`: 原因は slow worker の固定 8 秒中に reload と dispatch が間に合う前提。方式は release ファイルで保持し、新 account への `WorkerStarted` を確認してから解放した。
 - credentiald/browser の fixture socket、`releases_api` のログ、`unified_kill` の孫 PID・消滅: 原因は固定 40〜400 回の poll 予算。方式は各出来事の観測を主判定にして 60 秒の保険へ変更した。
 - `crates/*/tests` のその他の fixture listen、process 終了、browser ready、WebDAV flush の短い deadline は状態を主判定に維持し、保険を 60 秒へ延長した。`browser_egress_process` の 8 秒など実時間の契約を検査する箇所はそのまま残した。
+- 2026-10-03（review 差し戻し後の第 2 走査）: `Duration` の字面 200 ms〜60 秒の 95 行を全て判定した。`task-api` の `console.rs`（SSE hello 500 ms・`console.block` 3 秒）、`daemon_providers_config.rs`（hello・`daemon` 2 秒）、`stream.rs`（2 秒契約の 1 試験以外の到着待ち）、`standby.rs`（5 秒）は原因が短い固定期限の到着待ちで、方式は到着を主判定に 60 秒の保険 `EVENT_WAIT` へ。`browser_runtime_supervisor`・`browser_runtime_isolated`・`browser_shared_cdp`・`browser_egress_process`・`scratch-cache` の 1〜20 秒の消滅・出現・読み待ちも 60 秒の保険へ。不在の確認と仕様の時間検査は残した。SIGSTOP stutter で 6 試験 file を各 3/3。
+- main（33aca5a3）を取り込み、main を HEAD の祖先にした。
 - 既存修正は e2e-stable の f307d63b を `cherry-pick -x` で取り込んだ。deflake-lock ブランチはこの worktree から参照できず、同じ全件 Done 待ちは追加の進捗停止・総保険で対応した。後からの main 取り込み時には重複を確認する。
 - 検証: `cargo build --workspace --bins` exit 0、`cargo test -p e2e --test api_scenarios` は 11 passed / exit 0。対象 4 試験は SIGSTOP/SIGCONT stutter 下で各 3/3 通過（詳細は一覧）。この run は user namespace probe が EPERM になるため、API fixture の worker DB guard のみ opt-out した。guard 専用試験は変更していない。
 

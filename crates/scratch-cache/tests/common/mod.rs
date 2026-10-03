@@ -69,7 +69,7 @@ pub fn start_on(store: TieredStore, token: Option<&str>, port: u16) -> Running {
             .unwrap();
         });
     });
-    let port = prx.recv_timeout(Duration::from_secs(10)).unwrap();
+    let port = prx.recv_timeout(Duration::from_secs(60)).unwrap();
     Running {
         port,
         stop: Some(stx),
@@ -86,7 +86,7 @@ pub struct Resp {
 /// 1 リクエスト（`Connection: close`）。
 pub fn request(port: u16, method: &str, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Resp {
     let mut s = TcpStream::connect(("127.0.0.1", port)).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(60))).unwrap();
     let mut req = format!(
         "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\nContent-Length: {}\r\n",
         body.len()

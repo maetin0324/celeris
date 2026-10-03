@@ -606,7 +606,7 @@ fn inner_supervisor_in_test_netns() {
     let mut cr = controller("reap", &rec_b, &base.path().join("unused"));
     let reaped = expect_line(&cr, "CTRL REAPED");
     assert!(cr.child.wait().unwrap().success());
-    let left = wait_gone(&procs, Duration::from_secs(5));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(b) survived restart reap: {left:?}");
     assert!(!path.exists(), "record must be removed by reap");
     eprintln!(
@@ -625,7 +625,7 @@ fn inner_supervisor_in_test_netns() {
     let stopped = expect_line(&cc, "CTRL STOPPED");
     assert_eq!(stopped, "left=[]");
     assert!(cc.child.wait().unwrap().success());
-    let left = wait_gone(&procs, Duration::from_secs(1));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(c) survived stop: {left:?}");
     assert!(!path.exists(), "record must be removed on stop");
     eprintln!("SUPERVISOR-EVIDENCE (c) ok: 0 of {} remain", procs.len());

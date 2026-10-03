@@ -12,6 +12,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+/// api.md §8.8 の「2 秒以内の配信」そのものを確かめる上限。契約の試験
+/// （`hello_then_created_event_arrives_within_two_seconds`）だけが使い、他の到着待ちは
+/// `EVENT_WAIT`（長い保険）で待つ（ADR-0125）。
 const TWO_SECONDS: Duration = Duration::from_secs(2);
 
 fn fast(env: &TestEnv) -> task_api::ApiState {
@@ -51,7 +54,7 @@ async fn hello_then_created_event_arrives_within_two_seconds() {
     );
 
     let hello = sse
-        .next_frame(Duration::from_millis(500))
+        .next_frame(TWO_SECONDS)
         .await
         .expect("hello is flushed immediately");
     assert_eq!(hello.event, "hello");
@@ -101,12 +104,12 @@ async fn last_event_id_resumes_without_gaps_or_duplicates() {
         get_with("/api/v1/stream", &[("last-event-id", &ids[1].to_string())]),
     )
     .await;
-    let hello = sse.next_frame(TWO_SECONDS).await.expect("hello");
+    let hello = sse.next_frame(EVENT_WAIT).await.expect("hello");
     assert_eq!(hello.data["cursor"], ids[1]);
     let mut received = Vec::new();
     for _ in 2..6 {
         received.push(
-            sse.next_named("task.event", TWO_SECONDS)
+            sse.next_named("task.event", EVENT_WAIT)
                 .await
                 .expect("backlog")
                 .id
@@ -119,7 +122,7 @@ async fn last_event_id_resumes_without_gaps_or_duplicates() {
         .append_event(task.id, &progress("live"))
         .expect("append");
     let live = sse
-        .next_named("task.event", TWO_SECONDS)
+        .next_named("task.event", EVENT_WAIT)
         .await
         .expect("live")
         .id
@@ -140,15 +143,15 @@ async fn last_event_id_resumes_without_gaps_or_duplicates() {
     )
     .await;
     assert_eq!(
-        resumed.next_frame(TWO_SECONDS).await.expect("hello").data["cursor"],
+        resumed.next_frame(EVENT_WAIT).await.expect("hello").data["cursor"],
         live
     );
     let first = resumed
-        .next_named("task.event", TWO_SECONDS)
+        .next_named("task.event", EVENT_WAIT)
         .await
         .expect("missed-1");
     let second = resumed
-        .next_named("task.event", TWO_SECONDS)
+        .next_named("task.event", EVENT_WAIT)
         .await
         .expect("missed-2");
     assert_eq!((first.id, second.id), (Some(live + 1), Some(live + 2)));
@@ -164,12 +167,12 @@ async fn last_event_id_resumes_without_gaps_or_duplicates() {
     // `?after_id=` でも再開でき、`Last-Event-ID` が優先される。
     let mut by_query = open_stream(&app, get(&format!("/api/v1/stream?after_id={}", ids[4]))).await;
     assert_eq!(
-        by_query.next_frame(TWO_SECONDS).await.expect("hello").data["cursor"],
+        by_query.next_frame(EVENT_WAIT).await.expect("hello").data["cursor"],
         ids[4]
     );
     assert_eq!(
         by_query
-            .next_named("task.event", TWO_SECONDS)
+            .next_named("task.event", EVENT_WAIT)
             .await
             .expect("event")
             .id,
@@ -185,7 +188,7 @@ async fn last_event_id_resumes_without_gaps_or_duplicates() {
     .await;
     assert_eq!(
         header_wins
-            .next_frame(TWO_SECONDS)
+            .next_frame(EVENT_WAIT)
             .await
             .expect("hello")
             .data["cursor"],
@@ -234,9 +237,9 @@ async fn cursors_far_behind_or_ahead_get_a_reset() {
         get_with("/api/v1/stream", &[("last-event-id", &base.to_string())]),
     )
     .await;
-    let hello = behind.next_frame(TWO_SECONDS).await.expect("hello");
+    let hello = behind.next_frame(EVENT_WAIT).await.expect("hello");
     assert_eq!(hello.data["cursor"], latest);
-    let reset = behind.next_frame(TWO_SECONDS).await.expect("reset");
+    let reset = behind.next_frame(EVENT_WAIT).await.expect("reset");
     assert_eq!(reset.event, "reset");
     assert_eq!(
         reset.data,
@@ -246,7 +249,7 @@ async fn cursors_far_behind_or_ahead_get_a_reset() {
         .append_event(task.id, &progress("after reset"))
         .expect("append");
     let next = behind
-        .next_named("task.event", TWO_SECONDS)
+        .next_named("task.event", EVENT_WAIT)
         .await
         .expect("event after reset");
     assert_eq!(
@@ -266,10 +269,10 @@ async fn cursors_far_behind_or_ahead_get_a_reset() {
     )
     .await;
     assert_eq!(
-        within.next_frame(TWO_SECONDS).await.expect("hello").data["cursor"],
+        within.next_frame(EVENT_WAIT).await.expect("hello").data["cursor"],
         within_id
     );
-    let first = within.next_frame(TWO_SECONDS).await.expect("event");
+    let first = within.next_frame(EVENT_WAIT).await.expect("event");
     assert_eq!(
         (first.event.as_str(), first.id),
         ("task.event", Some(within_id + 1))
@@ -285,10 +288,10 @@ async fn cursors_far_behind_or_ahead_get_a_reset() {
     )
     .await;
     assert_eq!(
-        ahead.next_frame(TWO_SECONDS).await.expect("hello").data["cursor"],
+        ahead.next_frame(EVENT_WAIT).await.expect("hello").data["cursor"],
         latest + 1
     );
-    let reset = ahead.next_frame(TWO_SECONDS).await.expect("reset");
+    let reset = ahead.next_frame(EVENT_WAIT).await.expect("reset");
     assert_eq!(
         reset.data,
         serde_json::json!({"reason": "cursor_ahead", "cursor": latest + 1})
@@ -304,7 +307,7 @@ async fn the_seventeenth_stream_is_rejected_with_503() {
     for _ in 0..task_api::MAX_STREAMS {
         let mut sse = open_stream(&app, get("/api/v1/stream")).await;
         assert_eq!(sse.status, 200);
-        assert!(sse.next_frame(TWO_SECONDS).await.is_some());
+        assert!(sse.next_frame(EVENT_WAIT).await.is_some());
         open.push(sse);
     }
     assert_eq!(state.active_streams(), 16);
@@ -328,7 +331,7 @@ async fn the_seventeenth_stream_is_rejected_with_503() {
     assert_eq!(rejected.into_body_json().await["code"], "too_many_streams");
 
     open.pop();
-    assert!(eventually(TWO_SECONDS, || state.active_streams() == 15).await);
+    assert!(eventually(EVENT_WAIT, || state.active_streams() == 15).await);
     let again = open_stream(&app, get("/api/v1/stream")).await;
     assert_eq!(again.status, 200);
 }
@@ -341,17 +344,17 @@ async fn disconnecting_stops_polling() {
     assert_eq!(state.stream_poll_count(), 0);
 
     let mut sse = open_stream(&app, get("/api/v1/stream")).await;
-    assert!(sse.next_frame(TWO_SECONDS).await.is_some());
+    assert!(sse.next_frame(EVENT_WAIT).await.is_some());
     let polls = state.stream_poll_count();
     assert!(
-        eventually(TWO_SECONDS, || state.stream_poll_count() >= polls + 5).await,
+        eventually(EVENT_WAIT, || state.stream_poll_count() >= polls + 5).await,
         "polling while subscribed"
     );
     assert_eq!(state.active_streams(), 1);
 
     drop(sse);
     assert!(
-        eventually(TWO_SECONDS, || state.active_streams() == 0).await,
+        eventually(EVENT_WAIT, || state.active_streams() == 0).await,
         "the stream slot is released"
     );
     let after_disconnect = state.stream_poll_count();
@@ -373,7 +376,7 @@ async fn heartbeat_and_task_filter() {
     let app = task_api::router(fast(&env));
 
     let mut sse = open_stream(&app, get(&format!("/api/v1/stream?task_id={}", a.id))).await;
-    let hello = sse.next_frame(TWO_SECONDS).await.expect("hello");
+    let hello = sse.next_frame(EVENT_WAIT).await.expect("hello");
     assert_eq!(
         hello.data["cursor"],
         env.store.latest_event_id().expect("latest"),
@@ -387,14 +390,14 @@ async fn heartbeat_and_task_filter() {
         .append_event(a.id, &progress("a"))
         .expect("append");
     let frame = sse
-        .next_named("task.event", TWO_SECONDS)
+        .next_named("task.event", EVENT_WAIT)
         .await
         .expect("a's event");
     assert_eq!(frame.data["task_id"], a.id.to_string());
     assert_eq!(frame.data["event"]["msg"], "a");
 
     let beat = sse
-        .next_named("heartbeat", TWO_SECONDS)
+        .next_named("heartbeat", EVENT_WAIT)
         .await
         .expect("heartbeat");
     assert!(beat.data["now"].is_string());
@@ -447,7 +450,7 @@ async fn serve_over_loopback_tcp_streams_events_and_closes_on_shutdown() {
         .await
         .expect("write");
     let mut buf = Vec::new();
-    assert!(read_until(&mut health, &mut buf, "\"api_version\":\"1\"", TWO_SECONDS).await);
+    assert!(read_until(&mut health, &mut buf, "\"api_version\":\"1\"", EVENT_WAIT).await);
     assert!(String::from_utf8_lossy(&buf).starts_with("HTTP/1.1 200"));
 
     let mut conn = tokio::net::TcpStream::connect(addr).await.expect("connect");
@@ -458,7 +461,7 @@ async fn serve_over_loopback_tcp_streams_events_and_closes_on_shutdown() {
     .expect("write");
     let mut buf = Vec::new();
     assert!(
-        read_until(&mut conn, &mut buf, "event: hello", TWO_SECONDS).await,
+        read_until(&mut conn, &mut buf, "event: hello", EVENT_WAIT).await,
         "{}",
         String::from_utf8_lossy(&buf)
     );
@@ -472,7 +475,7 @@ async fn serve_over_loopback_tcp_streams_events_and_closes_on_shutdown() {
             &mut conn,
             &mut buf,
             "\"type\":\"approval_requested\"",
-            TWO_SECONDS
+            EVENT_WAIT
         )
         .await
     );
@@ -488,12 +491,12 @@ async fn serve_over_loopback_tcp_streams_events_and_closes_on_shutdown() {
             Err(_) => panic!("the SSE connection was not closed on shutdown"),
         }
     }
-    let result = tokio::time::timeout(Duration::from_secs(5), server)
+    let result = tokio::time::timeout(EVENT_WAIT, server)
         .await
         .expect("server stops")
         .expect("join");
     assert!(result.is_ok(), "{result:?}");
-    assert!(eventually(TWO_SECONDS, || state.active_streams() == 0).await);
+    assert!(eventually(EVENT_WAIT, || state.active_streams() == 0).await);
 }
 
 #[tokio::test]
@@ -519,7 +522,7 @@ async fn serve_binds_the_configured_address_and_reports_bind_errors() {
 
     settings.listen = "127.0.0.1:0".parse().expect("addr");
     let stopped = tokio::time::timeout(
-        Duration::from_secs(5),
+        EVENT_WAIT,
         task_api::serve(settings.clone(), rx.clone(), async {}),
     )
     .await;

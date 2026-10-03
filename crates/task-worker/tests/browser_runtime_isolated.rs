@@ -176,7 +176,7 @@ echo END
         false,
     ))
     .unwrap();
-    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(20));
+    let out = wait_file(&session.path().join("probe.txt"), Duration::from_secs(60));
     eprintln!("{out}");
     for (k, v) in [
         ("broker", "no"),

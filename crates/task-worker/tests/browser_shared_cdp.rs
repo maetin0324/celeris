@@ -280,7 +280,7 @@ fn inner_preflight() {
     client.write_all(b"x").expect("loopback TCP write");
     let mut byte = [0];
     server
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .expect("timeout");
     server.read_exact(&mut byte).expect("loopback TCP read");
     assert!(

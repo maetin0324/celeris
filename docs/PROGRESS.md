@@ -1,7 +1,7 @@
 # PROGRESS — taskd
 
 ---
-tasks: [01M3XZ5PYSTTC6GXAH8TZVRHSA]
+tasks: [01M3XZ5PYSTTC6GXAH8TZVRHSA, 01M40FWV6Z6N4P5ESHZMK0KH2B]
 ---
 
 ## e2e・結合試験の時間依存待ち（ADR-0125、task 01M3ZCXG7C34WZFJ46Q64XS8SZ）
@@ -1544,3 +1544,18 @@ main（ffb87b0d を含む）を `--no-ff` で merge した。merge-tree に衝�
 だけが自動 merge された。`cargo test -p task-worker --test browser_h3_wire` → exit 0（2 passed）、
 `cargo test --workspace` → exit 0（全 test バイナリで 0 failed）、
 `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+
+## review-sync main 取り込みの検証（2026-10-03）
+
+完了日: 2026-10-03。検証 HEAD は `f7b262c521fa6fc9a1ab2c9ee8bb3de867324f04`。`git merge-tree --write-tree HEAD main` は exit 1 で、main `c448d9c77d18eb54396907835efb91c5d0a985e8` との衝突 5 ファイルを検出した。指示に従い main は取り込まず、`docs/progress/review-sync-main.md` の `merged-main` は既に取り込み済みの `a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8` のままにした。
+
+| コマンド | テスト数・結果 | exit |
+|---|---:|---:|
+| `cargo clippy --workspace -- -D warnings` | 警告なし | 0 |
+| `cargo test -p task-core` | 688 passed | 0 |
+| `cargo test -p task-ops` | 451 passed、1 ignored（手動計測） | 0 |
+| `cargo test -p task-api`（run sandbox） | 123 passed、1 failed、2 ignored | 101 |
+| `cargo test -p task-api`（通常権限で再実行） | 439 passed、2 ignored | 0 |
+| `cargo test -p task-dispatch` | 578 passed | 0 |
+
+未解決事項: 新しい main との衝突は `crates/task-worker/src/claude_code/prompt.rs`、`docs/api/v1/api-v1.schema.json`、`docs/architecture-map.md`、`gui/app/celeris/types.ts`、`web/api/generated/schema.json`。run sandbox での task-api の失敗は browser H3 試験の `unshare: Operation not permitted` によるもので、同じコマンドは通常権限では exit 0 だった。検査ログは run の成果物ディレクトリに保存した。

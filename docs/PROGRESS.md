@@ -470,3 +470,36 @@ diff の規則があり、実装側には mode 検証と diff 照合がある。
   `starting_the_same_release_twice_exits_three` と stale heartbeat の instance handoff 失敗も観測。
 - 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
   本番有効化と `dry_run` から `apply` への切り替えは人が判断・実施する。
+
+## 定期実行（cron job）基盤と知識・受信箱の日次整理（ops-verify）— 2026-10-03
+
+branch HEAD `bbffe97f32a2`（`integrate wu/curation-job` まで統合済み）で全体検査を行い、人の運用手順を
+`docs/ops/cron-jobs.md` に書いた。詳細（コマンドの全出力・flake の切り分け）は
+[docs/progress/phase-cron-jobs.md](progress/phase-cron-jobs.md)。
+
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0（47.9s）。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（18.3s、最終レビュー受け入れ条件 0 と同じ形）。
+- `CELERIS_ISOLATION_TESTS=skip cargo test --workspace --no-fail-fast` → exit 101、`-p task-dispatch --lib` の
+  1 target のみ failed（504 passed; 1 failed）。他 120 target（11 クレートの lib・結合試験・doctest）は
+  すべて pass。失敗は
+  `dispatcher::tests::review::overlapping_dispatchers_share_review_ownership_until_verdict_is_saved`
+  （panic: `Result::unwrap()` on `Err("WouldBlock")`）で、cron job の実装・試験には触れていない。
+  `--test-threads=1` の単体実行では exit 0（1 passed）で再現せず、フル並列実行下の SQLite ロック待ちの
+  flake と判断した（記憶「評価器は高負荷でタイミング依存テストが落ちる」と符合）。
+- この sandbox では `unshare`/userns が使え、`CELERIS_ISOLATION_TESTS=skip` に頼らず browser 隔離試験
+  （`browser_restore_deliver` / `browser_restore_live_session` / `browser_egress_relay` /
+  `browser_runtime_isolated` / `browser_h3_wire` / `browser_injection_*` 等）も全て実行されて pass した
+  （`SKIPPED` 出力 0 件）。落ちる環境では `CELERIS_ISOLATION_TESTS=skip` を使い、スキップした試験名を
+  記録する運用のまま変更していない。
+- cron job 関連試験は個別にも exit 0: `cargo test -p task-core cron`（18 passed）、
+  `cargo test -p task-ops cron_jobs`（13 passed）、`cargo test -p task-dispatch cron`（2 passed）、
+  `cargo test -p task-api --test cron_jobs`（7 passed）、`cargo test -p celerisctl --bin celerisctl cron`
+  （9 passed）。
+- `docs/ops/cron-jobs.md` に、本番 `config.toml` への `knowledge-curation` harness 追記・job の作成
+  （`celerisctl cron create`）・手動 dry-run の確認・定常運用への `resume`・dry-run 差分確認後の
+  `mode: dry_run → apply` 切り替え（`PATCH` で `template` を丸ごと置き換え）・一時停止/削除/トラブルシュートの
+  手順を書いた。本番 host の操作はこの run では行っていない（手順の記述のみ）。
+- 未解決事項: 上記 1 件の flake は cron job の実装と無関係だが、再現頻度を見て `try_lock` の待ち方を
+  見直す価値がある（本 WorkUnit の範囲外）。本番での実際の有効化・`apply` への切り替えは人が
+  `docs/ops/cron-jobs.md` の手順で行う。

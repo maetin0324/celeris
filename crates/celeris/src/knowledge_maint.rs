@@ -5,9 +5,10 @@
 //! 「知識整理 run を起こすか」「起きている run を KB へ適用するか」を**決定的に**判断するだけ。
 //! LLM が動くのは `langmem` アダプタ（`task-worker`）が起こす python プロセスの中だけ。
 //!
-//! - [`schedule`] — 終端になり報告ができたタスクのうち、まだ知識整理 run を持たないものを 1 tick に
-//!   1 件だけ選び、`knowledge` harness（adapter = `langmem`、tier = cheap）の支援タスクを作る
-//!   （`knowledge_runs` に `scheduled` の目印を残す）。
+//! 終端になったタスクから知識整理 task は作らない（ADR-0131 付記 D10: 知識整理は日次 job に寄せる）。
+//! 残るのは移行中の run の後始末だけ。
+//!
+//! - [`retry_failed`] — 失敗した知識整理 run を一度だけ作り直す（旧 `schedule` で起きた run のため）。
 //! - [`apply_finished`] — `knowledge_runs` が `scheduled` のまま、その run のタスクが終端になったものを
 //!   見つけ、`done` なら `artifacts/knowledge-candidates.json` を読んで
 //!   [`task_ops::knowledge::apply_candidates`] で KB へ適用し、`failed`/`cancelled` ならそのまま
@@ -16,10 +17,10 @@
 use std::path::Path;
 
 use task_core::knowledge::{self as kb, MaintenanceInput, RelatedPage};
-use task_core::report::{self, support_kind};
+use task_core::report;
 use task_core::{
-    Event, GenreSpec, KnowledgeRunState, ListFilter, ListOrder, RoleSpec, Status, StoreError, Task,
-    TaskId, TaskKind, TaskStore, Tier,
+    Event, GenreSpec, KnowledgeRunState, RoleSpec, Status, StoreError, Task, TaskId, TaskKind,
+    TaskStore, Tier,
 };
 use task_ops::add::{NewTaskSpec, PriorityInput};
 use task_worker::MemoryDir;
@@ -32,8 +33,6 @@ const LANGMEM_ADAPTER: &str = "langmem";
 const KNOWLEDGE_BUDGET_MAX_TURNS: u32 = 4;
 const KNOWLEDGE_BUDGET_MAX_WALL_SECS: u64 = 900;
 const KNOWLEDGE_BUDGET_MAX_RETRIES: u32 = 1;
-/// 終端タスクを探すときに見る件数の上限（`reports::OPEN_TASK_SCAN` と同じ考え方）。
-const TASK_SCAN_LIMIT: usize = 500;
 /// `knowledge_runs` の `scheduled` を探すときに見る件数の上限。
 const RUN_SCAN_LIMIT: usize = 500;
 /// 関連ページの本文抜粋の上限（字数）。
@@ -48,81 +47,13 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect::<String>().trim().to_string()
 }
 
-/// tick ごとに 1 回呼ぶ。`[knowledge.langmem] enabled = false` か KB が未初期化なら何もしない。
-/// 対象になり得るタスクを 1 件見つけたら、その 1 件の知識整理タスクを作って終わる
-/// （ADR-0047 §3 Phase 62「1 タスクにつき 1 回」「1 tick に最大 1 件」）。**LLM は呼ばない**。
-#[allow(clippy::too_many_arguments)]
-pub fn schedule(
-    store: &dyn TaskStore,
-    knowledge_root: &Path,
-    enabled: bool,
-    // backfill 禁止（ADR-0037 D5 と同じ規則。実機 2026-09-20: 有効にした瞬間に過去の終端タスク 49 件ぶんの
-    // 知識整理 run が起きるところだった）: この時刻より前に終端になったタスクは対象にしない。daemon の起動時刻を渡す。
-    not_before: OffsetDateTime,
-    max_related_pages: usize,
-    memory_dir: Option<&MemoryDir>,
-    roles: &[RoleSpec],
-    genres: &[GenreSpec],
-    now: OffsetDateTime,
-) -> Result<Vec<TaskId>, StoreError> {
-    if !enabled || !task_ops::knowledge::exists(knowledge_root) {
-        return Ok(Vec::new());
-    }
-    let filter = ListFilter {
-        statuses: vec![Status::Done, Status::Failed, Status::Cancelled],
-        ..ListFilter::default()
-    };
-    let page = store.list_page(&filter, ListOrder::UpdatedDesc, None, TASK_SCAN_LIMIT)?;
-    for task in page.items {
-        // 裏方（対話・計画・圧縮・承認・合成レビュー・途中目標レビュー・知識整理自身）は対象外。
-        if support_kind(&task).is_some() {
-            continue;
-        }
-        if task.updated_at < not_before {
-            continue;
-        }
-        // 検証の煙試験（ADR-0041 D5）も対象外（tick が動く通常運用では基本的に出てこないが、念のため）。
-        if task.role.as_deref() == Some(task_core::BUILTIN_SMOKE) {
-            continue;
-        }
-        if task.assignee.is_none() {
-            continue; // 担当ノードが無ければ知識整理タスクの担当も決められない。
-        }
-        if store.knowledge_run_exists(task.id)? {
-            continue;
-        }
-        if let Some(project_id) = task.project_id
-            && let Some(project) = store.project_get(project_id)?
-            && project.archived_at.is_some()
-        {
-            continue;
-        }
-        let Some(spec) =
-            build_run_spec(store, knowledge_root, &task, max_related_pages, memory_dir)?
-        else {
-            continue;
-        };
-        let run_task = match task_ops::add::create_support_task(store, spec, roles, genres, now) {
-            Ok(t) => t,
-            Err(e) => {
-                tracing::warn!(task_id = %task.id, error = %e, "knowledge: could not create the maintenance task");
-                continue;
-            }
-        };
-        store.knowledge_run_create(task.id, run_task.id, now)?;
-        tracing::info!(task_id = %task.id, run_task_id = %run_task.id, "knowledge: scheduled a maintenance run");
-        return Ok(vec![run_task.id]);
-    }
-    Ok(Vec::new())
-}
-
 /// ADR-0052 D3（Phase 64）: 失敗した知識整理 run を**一度だけ**作り直す。tick ごとに 1 回呼ぶ。
 ///
 /// `knowledge_runs.state = failed` で `retried_at` がまだ無い行を 1 tick に 1 件だけ拾い、同じ元タスクから
 /// 新しい run タスクを作って `retried_at` を書く（2 回目のやり直しは無い。人が
 /// `celerisctl knowledge rerun <task_id>` で `retried_at` を消したときだけまた 1 回だけ拾われる）。
 ///
-/// [`schedule`] と違って `not_before`（backfill 禁止）は見ない。やり直しの対象は「既に 1 回 run を
+/// `not_before`（backfill 禁止）は見ない。やり直しの対象は「既に 1 回 run を
 /// 起こした」タスクだけなので、起動より前に終端になっていた古い仕事を掘り起こすことにはならない
 /// （実機 2026-09-20/21 にトンネルが落ちて落ちた 4 件を、配備後に拾い直すための経路）。
 ///
@@ -171,8 +102,7 @@ pub fn retry_failed(
     Ok(Vec::new())
 }
 
-/// 元のタスク 1 件から知識整理 run の依頼（[`NewTaskSpec`]）を組む（[`schedule`] と [`retry_failed`] が
-/// 同じものを使う）。報告がまだ無い・担当がいないなら `None`。**決定的**（LLM は呼ばない）。
+/// 元のタスク 1 件から知識整理 run の依頼（[`NewTaskSpec`]）を組む（[`retry_failed`] が使う）。報告がまだ無い・担当がいないなら `None`。**決定的**（LLM は呼ばない）。
 fn build_run_spec(
     store: &dyn TaskStore,
     knowledge_root: &Path,

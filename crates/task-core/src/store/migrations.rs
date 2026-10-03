@@ -97,15 +97,19 @@ pub(crate) const MIGRATION_0044: &str = include_str!("../../migrations/0044_writ
 /// ブランチでは 0040 だったが、同じ理由で 0045 へ振り直した。
 pub(crate) const MIGRATION_0045: &str = include_str!("../../migrations/0045_behind_targets.sql");
 
-/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数。`migrate` は飛ばし、
+/// ADR-0131 D1: 定期実行（`cron_jobs`）と実行履歴（`cron_job_runs`）。
+/// （ブランチの 0039 を main の 0041 と並列開発 task の 0042〜0045 の後へ振り直し。）
+pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron_jobs.sql");
+
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
+/// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
-/// `migration_sql` に足す（記録が無いので後から当たる）。0038〜0040 は mig-renumber で
-/// 0043〜0045 へ振り直したので、このブランチでは空いたまま（他ブランチの別内容がまだ使用中）。
+/// `migration_sql` に足す（記録が無いので後から当たる）。
 pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 45;
+pub const SCHEMA_VERSION: u32 = 46;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -152,6 +156,7 @@ impl SqliteStore {
             43 => Ok(MIGRATION_0043),
             44 => Ok(MIGRATION_0044),
             45 => Ok(MIGRATION_0045),
+            46 => Ok(MIGRATION_0046),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

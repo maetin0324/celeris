@@ -370,7 +370,7 @@ fn a_satisfied_wait_resumes_the_task() {
 }
 
 /// ADR-0090 D2: migration 0034 は schema 33 の DB に `cluster_job_waits` を足し（既存の表・行には触れない）、
-/// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037 も続けて当たり、最新版になる）。
+/// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037・通知の 0041・cron の 0046 も続けて当たり、最新版になる）。
 #[test]
 fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     use crate::TaskStore;
@@ -401,13 +401,14 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE node_sessions DROP COLUMN provider; \
              ALTER TABLE node_sessions DROP COLUMN cwd; \
              DROP INDEX idx_events_delivery_skipped; \
+             DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 45);
+    assert_eq!(crate::SCHEMA_VERSION, 46);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

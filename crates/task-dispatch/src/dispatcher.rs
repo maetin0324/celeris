@@ -6,7 +6,8 @@
 //! 3. 自分が起動した run のうち、ストア上で既に `running` でない／run_id が変わったものを強制終了（cancel 等）
 //! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の
 //!    枠が無く見送ったもの）
-//! 5. `ready_tasks` を `priority DESC, created_at ASC` で取り、`ProviderPolicy` と並列度上限に従って dispatch
+//! 5. 有効な cron job の期限を評価し、通常の task として作る
+//! 6. `ready_tasks` を `priority DESC, created_at ASC` で取り、`ProviderPolicy` と並列度上限に従って dispatch
 //!
 //! Phase 5（ADR-0007）: `Reviewer` 条件を持つタスクのレビューは、`Standard` tier のプロバイダをここで選び
 //! （並列度の枠も実行中 run と共有する）、`review.rs` がアダプタ経由で別 run を起動する。`Plan` kind の
@@ -1827,6 +1828,29 @@ impl Dispatcher {
         let cluster_ms = lap(&mut at);
         run_cluster_hooks_off_async(|| self.refresh_cluster_tunnels());
         let tunnel_ms = lap(&mut at);
+        // ADR-0131 D4: dispatch の前に予定時刻を評価する。draining 中やディスク不足の
+        // インスタンスは新しい task を作らない。時刻はテストで差し替えられる時計を使う。
+        if self.accepting_new_work && self.disk_ready {
+            let ctx = task_ops::cron_jobs::CronFireContext {
+                roles: &self.config.roles,
+                genres: &self.config.genres,
+                ..Default::default()
+            };
+            for result in
+                task_ops::cron_jobs::fire_due_with(self.store.as_ref(), &ctx, self.now_utc())
+            {
+                match result {
+                    Ok(outcome) => tracing::info!(
+                        job_id = %outcome.job_id,
+                        job_name = %outcome.job_name,
+                        task_id = ?outcome.task_id,
+                        runs = ?outcome.runs,
+                        "cron job evaluated"
+                    ),
+                    Err(error) => tracing::warn!(error = %error, "cron job evaluation failed"),
+                }
+            }
+        }
         report.dispatched = if self.accepting_new_work && self.disk_ready {
             self.dispatch_ready()?
         } else {

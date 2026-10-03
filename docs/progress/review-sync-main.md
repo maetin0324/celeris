@@ -108,3 +108,36 @@ final review の差し戻し（criterion 7/9）を受けて、取り込んだ ma
 - 単体で 60 秒を超えた試験は無し（4 crate とも libtest の警告なし）。
 - 任意の参照: 統合後の `cargo test --workspace` は exit 0（126 試験バイナリすべて ok、5 分 35 秒）、`cargo clippy --workspace -- -D warnings` は exit 0。詳細は `agent-docs/progress/2026-10-03-review-sync-main/core-ops-dispatch-tests/ws-green.md`。
 - 本節の task-api 再実行のログは run の成果物 `task-api-recheck.log` にある。
+merged-main: 0a941d7d227138067f97515acdff2c6fd84677d7
+
+## main 再取り込み（merge-main）
+
+`git merge --no-ff main`（main `0a941d7d`、rebase なし）。衝突 5 件を両側保持で解いた。migration・ADR 番号は main と重ならなかったので振り直しはしていない（main の 0046_cron_jobs、ADR 0131-cron-jobs。branch の 0042〜0045、ADR 0140）。
+
+| ファイル | 解き方 |
+|---|---|
+| `crates/task-api/tests/browser_h3_injection.rs` | main 側の `userns_gate::skip_unless_userns_tests()`（ADR-0126 の opt-in gate）を採った。branch 側の `userns_available()` は捨てた |
+| `crates/task-core/src/cluster_job/tests.rs` | 試験本体は自動 merge で両側の DROP（deliveries・node_sessions の列、cron 表）が残った。`SCHEMA_VERSION` の期待値は main 側の 46 |
+| `crates/task-core/src/store/migrations.rs` | `MIGRATION_0042`〜`0045`（branch）と `MIGRATION_0046`（main）を番号順に登録。`migration_sql` の arm も 42〜46 の順。`RESERVED_VERSIONS` は `[38, 39, 40]`（0042〜0045 は実在するので外した）。`SCHEMA_VERSION` は 46 |
+| `crates/task-core/src/store/tests.rs` | 8 箇所の `SCHEMA_VERSION` 検査はすべて 46（main 側） |
+| `scripts/dev/check-adr-numbers.sh` | `ALLOWED_OVER_LAST` は両側の和（`0140-claude-session-resume.md` と `0131-cron-jobs.md`） |
+
+衝突以外で直したもの:
+
+- `crates/task-core/src/delivery.rs` の migration 0042 試験: 版数の検査を 45 → 46、記録される版数の列に 46 を足した。
+- `crates/task-core/src/cron/store_tests.rs` の「版数 37 の DB に戻す」試験: 巻き戻しが cron 表と feed 表だけだったため、0042〜0045 が足した列・表が残って `duplicate column name: target_sha` で落ちた。巻き戻しに 0042〜0045 の逆操作（deliveries の 3 列、node_sessions の 4 列と index、write_sets・behind・hints の表）を足した。
+
+### 検証
+
+| コマンド | 結果 | exit |
+|---|---|---:|
+| `git grep -n -E '^(<<<<<<<\|>>>>>>>) ' -- crates scripts docs gui web` | 一致なし | 1（マーカー無し） |
+| `ls crates/task-core/migrations \| cut -c1-4 \| sort \| uniq -d` | 出力なし（重複無し） | 0 |
+| `sh scripts/dev/check-adr-numbers.sh` | `check-adr-numbers: ok (131 files)` | 0 |
+| `cargo test -p task-core` | 706 passed / 0 failed | 0 |
+| `cargo test -p task-api` | 全 crate の unit・integration が ok。browser_h3 の userns 試験は gate で skip | 0 |
+| `cargo clippy --workspace -- -D warnings` | 警告なし | 0 |
+| `node web/scripts/gen-types.mjs --check` | 生成物の差分なし（web の `types.ts` と `schema.json` は merge 後の内容が古かったので再生成した） | 0 |
+| `node gui/scripts/gen-types.mjs --check` | 差分なし | 0 |
+
+`docs/api/v1/api-v1.schema.json` は `cargo test -p task-core` の schema 一致検査と `-p task-api` の検査が通ったので再生成していない。

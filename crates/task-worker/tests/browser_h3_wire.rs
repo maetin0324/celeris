@@ -1,6 +1,7 @@
 //! H3 wire: real broker, isolated Chromium and receipt-only CDP injection.
 //! The wrong administrator selector is refused before lease use; closing H3
 //! then prevents a retry until a fresh section is opened.
+mod userns_gate;
 use celeris_credentiald::injection_ipc::{
     Admission, AuthSectionRegistration, LiveSessionRegistration, process_start,
 };
@@ -541,6 +542,9 @@ fn inner() {
 
 #[test]
 fn real_broker_browser_injection_receipt_and_origin_guards() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for t in ["unshare", "ip", "openssl", "bwrap"] {
         tool(t);
     }

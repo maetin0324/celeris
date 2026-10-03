@@ -1,5 +1,6 @@
 //! A real bwrap/Chromium pipe shared with an agent-style WebSocket client.
 //! The fixture and DNS exist only in the test network namespace.
+mod userns_gate;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -688,7 +689,10 @@ fn inner() {
 
 #[test]
 fn real_shared_cdp_and_auth_section() {
-    // ADR-0079 付記「R7-12」D4: 環境が無ければ理由を出して飛ばす（`require` なら飛ばさず失敗する）。
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
+    // ADR-0126 B3 keeps the legacy skip override and treats the old require flag as opt-in.
     match std::env::var(ISOLATION).as_deref() {
         Ok("skip") => {
             eprintln!("SKIPPED (not passed): {ISOLATION}=skip");

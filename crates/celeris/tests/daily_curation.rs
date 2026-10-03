@@ -11,7 +11,9 @@ use task_core::{
     CronJobStore, CronOverlap, DecisionStatus, Event, KnowledgeRunStore, SqliteStore, Status, Task,
     TaskStore, Tier, Trigger, WorkspaceSpec,
 };
-use task_ops::knowledge_curation::{self as curation, Action, CurationPlan, KbAction};
+use task_ops::knowledge_curation::{
+    self as curation, Action, CurationPlan, HumanDecision, KbAction,
+};
 use task_ops::view::ViewContext;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
@@ -136,6 +138,10 @@ acceptance = [{{ type = "artifact_exists", name = "curation-plan.json" }}]
     }
 
     fn fake_worker_done(&self, task: &Task) {
+        self.fake_worker_done_with(task, Vec::new());
+    }
+
+    fn fake_worker_done_with(&self, task: &Task, human_decisions: Vec<HumanDecision>) {
         let artifacts = self.task_dir(task).join("artifacts");
         std::fs::create_dir_all(&artifacts).expect("artifacts");
         let plan = CurationPlan {
@@ -150,7 +156,7 @@ acceptance = [{{ type = "artifact_exists", name = "curation-plan.json" }}]
                 target_hash: Some(curation::content_hash(PAGE_A)),
             }],
             inbox: Vec::new(),
-            human_decisions: Vec::new(),
+            human_decisions,
         };
         std::fs::write(
             artifacts.join("curation-plan.json"),
@@ -371,4 +377,50 @@ fn knowledge_curation_job_approved_apply_and_terminal_task_maintenance() {
             .iter()
             .any(|t| t.title.starts_with("知識整理:"))
     );
+}
+
+#[test]
+fn knowledge_curation_job_dry_run_bundles_human_decisions_into_one_decision() {
+    let f = Fixture::new("dry_run");
+    let fire = task_ops::cron_jobs::fire_due(&f.store, at("2026-10-03T04:30:00Z"));
+    let task_id = fire[0].as_ref().unwrap().task_id.unwrap();
+    let task = f.store.get(task_id).unwrap().unwrap();
+    f.tick(at("2026-10-03T04:30:01Z"));
+    f.fake_worker_done_with(
+        &task,
+        vec![
+            HumanDecision {
+                subject: "user/goals.md".into(),
+                proposal: "古い目標の節を削除".into(),
+                reason: "人が書いたページ".into(),
+            },
+            HumanDecision {
+                subject: "user/profile.md".into(),
+                proposal: "所属の記述を書き換え".into(),
+                reason: "人が書いたページ".into(),
+            },
+        ],
+    );
+    assert_eq!(f.tick(at("2026-10-03T04:31:00Z")).reported, vec![task_id]);
+    f.tick(at("2026-10-03T04:32:00Z"));
+    let decisions = f.store.decisions_list(Some(task_id)).expect("decisions");
+    let human: Vec<_> = decisions
+        .iter()
+        .filter(|d| d.request.key == knowledge_curation::HUMAN_KEY)
+        .collect();
+    assert_eq!(human.len(), 1, "人への候補は 1 件の decision に束ねる");
+    assert_eq!(human[0].status, DecisionStatus::Open);
+    assert!(human[0].request.question.contains("user/goals.md"));
+    assert!(human[0].request.question.contains("user/profile.md"));
+    assert!(
+        !decisions
+            .iter()
+            .any(|d| d.request.key == knowledge_curation::APPROVAL_KEY),
+        "dry_run は承認を求めない"
+    );
+    assert_eq!(
+        std::fs::read_to_string(f.kb.join("projects/b.md")).unwrap(),
+        PAGE_B
+    );
+    assert_eq!(f.reports(&task).len(), 1);
 }

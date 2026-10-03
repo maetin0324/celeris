@@ -8,7 +8,12 @@
 //!   終端になった task の報告の抜粋）・`inputs/manifest.json`（発火時に固定した mode と job/run id）を書く。
 //! - **finish**: task が `done` になったら `artifacts/curation-plan.json` を
 //!   [`task_ops::knowledge_curation::validate_with_inbox`] で検証し、`daily-summary.md` を task の報告 1 件にする。
-//!   - `dry_run`: 本番 KB は書かない。`curation.diff` が無ければ [`task_ops::knowledge_curation::dry_run`] で作る。
+//!   - worker の `curation.diff` があれば [`task_ops::knowledge_curation::check_diff_matches`] で計画の path 集合と
+//!     照合し、不一致なら計画を拒否する（承認を求めない）。worker の差分は `curation.worker.diff` に移し、
+//!     `curation.diff` には daemon が [`task_ops::knowledge_curation::dry_run`] で作った正本を書く（D11 (4)）。
+//!   - 検証済み計画の `human_decisions` が 1 件以上なら、mode を問わず 1 件の決定（`curation-human`）に束ねる
+//!     （D11 (2)。回答で KB は変えない）。
+//!   - `dry_run`: 本番 KB は書かない。
 //!   - `apply`: 計画と差分のハッシュを報告に添え、人の決定（`curation-apply`）で同じハッシュの選択肢
 //!     （`approve-<hash>`）が選ばれた後にだけ、再検証して [`task_ops::knowledge_curation::apply`] を呼ぶ。
 //!     未承認・ハッシュ不一致・元ページの変更時は適用しない。
@@ -37,6 +42,15 @@ pub const APPROVAL_KEY: &str = "curation-apply";
 pub const APPROVE_PREFIX: &str = "approve-";
 /// 却下の選択肢。
 pub const REJECT_OPTION: &str = "reject";
+/// 人への候補（`human_decisions`）を束ねた決定の key（D11 (2)）。`curation-apply` の承認とは別。
+pub const HUMAN_KEY: &str = "curation-human";
+/// 人への候補の決定の選択肢（回答で KB は変えない）。
+pub const HUMAN_HOLD_OPTION: &str = "hold";
+pub const HUMAN_MANUAL_OPTION: &str = "manual";
+/// 人への候補の決定の問いに並べる件数の上限。
+const HUMAN_LIST_MAX: usize = 10;
+/// worker が書いた差分の退避先（daemon が `curation.diff` に正本を書く前に移す。D11 (4)）。
+pub const WORKER_DIFF: &str = "curation.worker.diff";
 /// 見る cron 履歴の件数（job ごと）。
 const RUN_SCAN_LIMIT: usize = 30;
 /// 状態ファイルに残す task の件数の上限（古い順に捨てる）。
@@ -520,7 +534,13 @@ fn artifacts_dir(task: &Task, workspace_root: &Path) -> Option<PathBuf> {
 }
 
 /// 計画を読み、本番 KB に対して検証し、差分（daemon が作る決定的な diff）とハッシュを求める。
-fn check_plan(knowledge_root: &Path, artifacts: &Path, entry: &Entry) -> Result<Checked, String> {
+/// `worker_diff` があれば、検証済み計画の path 集合と照合し、不一致なら拒否する（D11 (4)）。
+fn check_plan(
+    knowledge_root: &Path,
+    artifacts: &Path,
+    entry: &Entry,
+    worker_diff: Option<&str>,
+) -> Result<Checked, String> {
     let raw = std::fs::read_to_string(artifacts.join("curation-plan.json"))
         .map_err(|e| format!("curation-plan.json を読めない: {e}"))?;
     let plan: CurationPlan =
@@ -533,6 +553,9 @@ fn check_plan(knowledge_root: &Path, artifacts: &Path, entry: &Entry) -> Result<
     } else {
         return Err("入力に無い task への受信箱の提案がある".into());
     };
+    if let Some(worker_diff) = worker_diff {
+        curation::check_diff_matches(&validated, worker_diff)?;
+    }
     let diff = curation::dry_run(knowledge_root, &plan)?;
     let hash = approval_hash(&raw, &diff);
     Ok(Checked {
@@ -586,14 +609,18 @@ fn finish(
     let artifacts = artifacts_dir(task, workspace_root)
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
     let date = local_date(job, now);
-    let checked = check_plan(knowledge_root, &artifacts, entry);
+    // worker の差分は照合にだけ使い、curation.worker.diff へ移す。curation.diff は daemon の正本だけ。
+    let diff_path = artifacts.join("curation.diff");
+    let worker_diff = std::fs::read_to_string(&diff_path).ok();
+    let checked = check_plan(knowledge_root, &artifacts, entry, worker_diff.as_deref());
+    if worker_diff.is_some() {
+        std::fs::rename(&diff_path, artifacts.join(WORKER_DIFF))
+            .map_err(|e| format!("{WORKER_DIFF}: {e}"))?;
+    }
     let worker_summary = std::fs::read_to_string(artifacts.join("daily-summary.md")).ok();
     match &checked {
         Ok(c) => {
-            if !artifacts.join("curation.diff").exists() {
-                std::fs::write(artifacts.join("curation.diff"), &c.diff)
-                    .map_err(|e| format!("curation.diff: {e}"))?;
-            }
+            std::fs::write(&diff_path, &c.diff).map_err(|e| format!("curation.diff: {e}"))?;
             if entry.mode == "apply" {
                 entry.phase = Phase::AwaitingApproval;
                 entry.approval_hash = Some(c.hash.clone());
@@ -617,6 +644,12 @@ fn finish(
         && let Ok(c) = &checked
     {
         request_approval(store, task, &c.hash).map_err(|e| e.to_string())?;
+    }
+    if let Ok(c) = &checked
+        && !c.validated.human_decisions.is_empty()
+    {
+        request_human_decisions(store, task, &c.validated.human_decisions)
+            .map_err(|e| e.to_string())?;
     }
     Ok(())
 }
@@ -790,13 +823,10 @@ fn append_report(
 
 /// D10 (5): 人の承認の決定（同じハッシュの選択肢）を出す。同じ task に未回答があれば増やさない。
 fn request_approval(store: &dyn TaskStore, task: &Task, hash: &str) -> Result<(), StoreError> {
-    if open_or_answered(store, task)?.is_some() {
+    if open_or_answered(store, task, APPROVAL_KEY)?.is_some() {
         return Ok(());
     }
-    let path = task_ops::tree::decision_path(store, task).map_err(|e| match e {
-        task_ops::error::OpsError::Store(e) => e,
-        other => StoreError::Invalid(other.to_string()),
-    })?;
+    let path = decision_path(store, task)?;
     let approve = format!("{APPROVE_PREFIX}{hash}");
     let request = task_core::DecisionRequest {
         id: ulid::Ulid::new().to_string(),
@@ -842,15 +872,92 @@ fn request_approval(store: &dyn TaskStore, task: &Task, hash: &str) -> Result<()
     Ok(())
 }
 
+/// D11 (2): 検証済み計画の `human_decisions` を 1 件の決定（`curation-human`）に束ねて出す。mode を問わない。
+/// 同じ task に open・answered の決定があれば重ねない。回答で KB は変えない（記録のため）。
+fn request_human_decisions(
+    store: &dyn TaskStore,
+    task: &Task,
+    items: &[curation::HumanDecision],
+) -> Result<(), StoreError> {
+    if items.is_empty() || open_or_answered(store, task, HUMAN_KEY)?.is_some() {
+        return Ok(());
+    }
+    let path = decision_path(store, task)?;
+    let mut question = format!(
+        "日次整理が人の判断に回した候補が {} 件ある。KB は変えていない（回答でも変えない）。\n",
+        items.len()
+    );
+    for d in items.iter().take(HUMAN_LIST_MAX) {
+        question.push_str(&format!(
+            "- {}: {}\n",
+            d.subject,
+            truncate_chars(&d.proposal.replace('\n', " "), 120)
+        ));
+    }
+    if items.len() > HUMAN_LIST_MAX {
+        question.push_str(&format!("- ほか {} 件\n", items.len() - HUMAN_LIST_MAX));
+    }
+    question.push_str("詳しい理由は報告の「人が判断すべき残り」にある");
+    let request = task_core::DecisionRequest {
+        id: ulid::Ulid::new().to_string(),
+        key: HUMAN_KEY.to_string(),
+        kind: task_core::DecisionKind::Choice,
+        question,
+        options: vec![
+            task_core::DecisionOption {
+                key: HUMAN_HOLD_OPTION.to_string(),
+                label: "保留する（次回の日次整理で再び候補にしてよい）".to_string(),
+                consequence: None,
+            },
+            task_core::DecisionOption {
+                key: HUMAN_MANUAL_OPTION.to_string(),
+                label: "人が手で対応する".to_string(),
+                consequence: Some("Celeris は KB を変えない。人が KB を直接直す".to_string()),
+            },
+        ],
+        recommended: HUMAN_HOLD_OPTION.to_string(),
+        cost_of_reversal: task_core::CostOfReversal::Low,
+        cost_note: None,
+        needed_before: vec![task_core::decision::NEEDED_BEFORE_SELF.to_string()],
+        path,
+        raised_by: task_core::DecisionRaisedBy {
+            task_id: task.id,
+            run_id: None,
+            origin: task_core::DecisionOrigin::Daemon,
+        },
+        status: DecisionStatus::Open,
+        answer: None,
+        withdrawn_reason: None,
+    };
+    store.append_event(
+        task.id,
+        &Event::DecisionRequested {
+            decision: Box::new(request),
+        },
+    )?;
+    Ok(())
+}
+
+fn decision_path(
+    store: &dyn TaskStore,
+    task: &Task,
+) -> Result<Vec<task_core::DecisionPathEntry>, StoreError> {
+    task_ops::tree::decision_path(store, task).map_err(|e| match e {
+        task_ops::error::OpsError::Store(e) => e,
+        other => StoreError::Invalid(other.to_string()),
+    })
+}
+
 fn open_or_answered(
     store: &dyn TaskStore,
     task: &Task,
+    key: &str,
 ) -> Result<Option<task_core::DecisionRow>, StoreError> {
     let root = task_core::tree::root_id_of(task);
     Ok(store
         .decisions_list(Some(root))?
         .into_iter()
-        .filter(|d| d.task_id == task.id && d.key == APPROVAL_KEY)
+        .filter(|d| d.task_id == task.id && d.key == key)
         .find(|d| d.status != DecisionStatus::Withdrawn))
 }
 
@@ -864,7 +971,7 @@ fn check_approval(
     entry: &mut Entry,
     now: OffsetDateTime,
 ) -> Result<bool, String> {
-    let Some(row) = open_or_answered(store, task).map_err(|e| e.to_string())? else {
+    let Some(row) = open_or_answered(store, task, APPROVAL_KEY).map_err(|e| e.to_string())? else {
         return Ok(false);
     };
     if row.status != DecisionStatus::Answered {
@@ -890,7 +997,7 @@ fn check_approval(
     }
     let artifacts = artifacts_dir(task, workspace_root)
         .ok_or_else(|| "日次整理は local の作業場所だけを扱う".to_string())?;
-    let checked = match check_plan(knowledge_root, &artifacts, entry) {
+    let checked = match check_plan(knowledge_root, &artifacts, entry, None) {
         Ok(c) if c.hash == expected => c,
         Ok(c) => {
             entry.phase = Phase::Stale;

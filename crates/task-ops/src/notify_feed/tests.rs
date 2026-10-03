@@ -374,13 +374,14 @@ fn notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle() {
         assert!(stats.events_scanned <= EVENT_BUDGET as u64, "{stats:?}");
         assert!(stats.reports_scanned <= SOURCE_PAGE as u64, "{stats:?}");
         assert!(stats.messages_scanned <= SOURCE_PAGE as u64, "{stats:?}");
-        // 書き込みは記録 1 件ごとに 1 回と、位置の更新（events・報告・発言）だけ。
-        assert!(
-            locks.writer <= stats.record_calls + 3,
+        // 書き込みは記録と位置の更新をまとめた高々 1 回の transaction だけ。
+        assert!(locks.writer <= 1, "{stats:?} {locks:?}");
+        assert_eq!(
+            locks.writer, stats.write_transactions,
             "{stats:?} {locks:?}"
         );
         recorded += stats.recorded;
-        if stats.record_calls == 0 && stats.events_scanned == 0 {
+        if stats.submitted == 0 && stats.events_scanned == 0 {
             break (stats, locks);
         }
     };
@@ -399,7 +400,8 @@ fn notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle() {
     store.report_append(&report(9_000)).unwrap();
     store.message_append(&message(9_000)).unwrap();
     let stats = sync_notifications_counted(&store, sync_at).unwrap();
-    assert_eq!(stats.record_calls, 2, "{stats:?}");
+    assert_eq!(stats.submitted, 2, "{stats:?}");
+    assert_eq!(stats.write_transactions, 1, "{stats:?}");
     assert_eq!(stats.recorded, 2, "{stats:?}");
     assert!(
         stats.reports_scanned <= 2 && stats.messages_scanned <= 2,

@@ -252,6 +252,15 @@ pub trait NoticeStore: Send + Sync {
     /// あれば件数を増やし、無ければ新しい束を作る。`feed_sources` の挿入と件数の加算は同じ transaction。
     fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError>;
 
+    /// ADR-0133 付記: 複数の出来事の記録と走査位置（`feed_cursor`）の更新を 1 つの書き込み transaction で行う
+    /// （同期 1 回の書き込みを 1 回にする。NFS 上の DB では commit の回数がそのまま tick の時間になる）。
+    /// 各出来事の扱いは `notice_record` と同じ。戻り値は `events` と同じ順。
+    fn notice_record_batch(
+        &self,
+        events: &[NoticeEvent],
+        cursors: &[(&str, String)],
+    ) -> Result<Vec<NoticeRecordOutcome>, StoreError>;
+
     fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError>;
 
     fn notice_list(&self, query: &NoticeQuery) -> Result<NoticePage, StoreError>;
@@ -343,96 +352,129 @@ fn kinds_clause(kinds: &[NoticeKind]) -> Option<String> {
     Some(format!("kind IN ({})", list.join(", ")))
 }
 
+/// 1 件の記録（`notice_record` / `notice_record_batch` 共通。呼び出し側が transaction を持つ）。
+fn record_in_tx(
+    tx: &rusqlite::Transaction<'_>,
+    event: &NoticeEvent,
+) -> Result<NoticeRecordOutcome, StoreError> {
+    let existing: Option<String> = tx
+        .query_row(
+            "SELECT notice_id FROM feed_sources WHERE source_key = ?1",
+            params![event.source_key],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(raw) = existing {
+        let id = raw
+            .parse::<NoticeId>()
+            .map_err(|_| StoreError::Invalid(format!("invalid notice id: {raw}")))?;
+        return Ok(NoticeRecordOutcome::Duplicate(id));
+    }
+    let at = format_rfc3339(event.at)?;
+    let links_json = serde_json::to_string(&event.links)
+        .map_err(|e| StoreError::Invalid(format!("notice links: {e}")))?;
+    let (target_kind, target_id) = match &event.target {
+        Some(t) => (Some(t.kind.as_str()), Some(t.id.as_str())),
+        None => (None, None),
+    };
+    let open: Option<(String, i64)> = tx
+        .query_row(
+            "SELECT id, count FROM feed_notices WHERE group_key = ?1 AND read_at IS NULL",
+            params![event.group_key],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let outcome = match open {
+        Some((raw, count)) => {
+            let id = raw
+                .parse::<NoticeId>()
+                .map_err(|_| StoreError::Invalid(format!("invalid notice id: {raw}")))?;
+            let count = count.saturating_add(1);
+            let summary = bundled_summary(&event.summary, u32::try_from(count).unwrap_or(u32::MAX));
+            // 題名・対象は最新の 1 件。時刻が前後して届いても `last_at` は戻さない。
+            tx.execute(
+                "UPDATE feed_notices SET count = ?2, title = ?3, summary = ?4, \
+                 project_id = ?5, task_id = ?6, target_kind = ?7, target_id = ?8, \
+                 links_json = ?9, \
+                 last_at = CASE WHEN julianday(?10) > julianday(last_at) THEN ?10 ELSE last_at END \
+                 WHERE id = ?1",
+                params![
+                    raw,
+                    count,
+                    event.title,
+                    summary,
+                    event.project_id,
+                    event.task_id,
+                    target_kind,
+                    target_id,
+                    links_json,
+                    at
+                ],
+            )?;
+            NoticeRecordOutcome::Bundled(id)
+        }
+        None => {
+            let id = NoticeId::new();
+            tx.execute(
+                "INSERT INTO feed_notices (id, kind, group_key, title, summary, project_id, \
+                 task_id, target_kind, target_id, links_json, count, first_at, last_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)",
+                params![
+                    id.to_string(),
+                    event.kind.as_str(),
+                    event.group_key,
+                    event.title,
+                    event.summary,
+                    event.project_id,
+                    event.task_id,
+                    target_kind,
+                    target_id,
+                    links_json,
+                    at
+                ],
+            )?;
+            NoticeRecordOutcome::Created(id)
+        }
+    };
+    tx.execute(
+        "INSERT INTO feed_sources (source_key, notice_id, recorded_at) VALUES (?1, ?2, ?3)",
+        params![event.source_key, outcome.notice_id().to_string(), at],
+    )?;
+    Ok(outcome)
+}
+
 impl NoticeStore for SqliteStore {
     fn notice_record(&self, event: &NoticeEvent) -> Result<NoticeRecordOutcome, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let existing: Option<String> = tx
-            .query_row(
-                "SELECT notice_id FROM feed_sources WHERE source_key = ?1",
-                params![event.source_key],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(raw) = existing {
-            let id = raw
-                .parse::<NoticeId>()
-                .map_err(|_| StoreError::Invalid(format!("invalid notice id: {raw}")))?;
-            return Ok(NoticeRecordOutcome::Duplicate(id));
-        }
-        let at = format_rfc3339(event.at)?;
-        let links_json = serde_json::to_string(&event.links)
-            .map_err(|e| StoreError::Invalid(format!("notice links: {e}")))?;
-        let (target_kind, target_id) = match &event.target {
-            Some(t) => (Some(t.kind.as_str()), Some(t.id.as_str())),
-            None => (None, None),
-        };
-        let open: Option<(String, i64)> = tx
-            .query_row(
-                "SELECT id, count FROM feed_notices WHERE group_key = ?1 AND read_at IS NULL",
-                params![event.group_key],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let outcome = match open {
-            Some((raw, count)) => {
-                let id = raw
-                    .parse::<NoticeId>()
-                    .map_err(|_| StoreError::Invalid(format!("invalid notice id: {raw}")))?;
-                let count = count.saturating_add(1);
-                let summary =
-                    bundled_summary(&event.summary, u32::try_from(count).unwrap_or(u32::MAX));
-                // 題名・対象は最新の 1 件。時刻が前後して届いても `last_at` は戻さない。
-                tx.execute(
-                    "UPDATE feed_notices SET count = ?2, title = ?3, summary = ?4, \
-                     project_id = ?5, task_id = ?6, target_kind = ?7, target_id = ?8, \
-                     links_json = ?9, \
-                     last_at = CASE WHEN julianday(?10) > julianday(last_at) THEN ?10 ELSE last_at END \
-                     WHERE id = ?1",
-                    params![
-                        raw,
-                        count,
-                        event.title,
-                        summary,
-                        event.project_id,
-                        event.task_id,
-                        target_kind,
-                        target_id,
-                        links_json,
-                        at
-                    ],
-                )?;
-                NoticeRecordOutcome::Bundled(id)
-            }
-            None => {
-                let id = NoticeId::new();
-                tx.execute(
-                    "INSERT INTO feed_notices (id, kind, group_key, title, summary, project_id, \
-                     task_id, target_kind, target_id, links_json, count, first_at, last_at) \
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)",
-                    params![
-                        id.to_string(),
-                        event.kind.as_str(),
-                        event.group_key,
-                        event.title,
-                        event.summary,
-                        event.project_id,
-                        event.task_id,
-                        target_kind,
-                        target_id,
-                        links_json,
-                        at
-                    ],
-                )?;
-                NoticeRecordOutcome::Created(id)
-            }
-        };
-        tx.execute(
-            "INSERT INTO feed_sources (source_key, notice_id, recorded_at) VALUES (?1, ?2, ?3)",
-            params![event.source_key, outcome.notice_id().to_string(), at],
-        )?;
+        let outcome = record_in_tx(&tx, event)?;
         tx.commit()?;
         Ok(outcome)
+    }
+
+    fn notice_record_batch(
+        &self,
+        events: &[NoticeEvent],
+        cursors: &[(&str, String)],
+    ) -> Result<Vec<NoticeRecordOutcome>, StoreError> {
+        if events.is_empty() && cursors.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut outcomes = Vec::with_capacity(events.len());
+        for event in events {
+            outcomes.push(record_in_tx(&tx, event)?);
+        }
+        for (name, value) in cursors {
+            tx.execute(
+                "INSERT INTO feed_cursor (name, value) VALUES (?1, ?2) \
+                 ON CONFLICT(name) DO UPDATE SET value = excluded.value",
+                params![name, value],
+            )?;
+        }
+        tx.commit()?;
+        Ok(outcomes)
     }
 
     fn notice_get(&self, id: NoticeId) -> Result<Option<Notice>, StoreError> {

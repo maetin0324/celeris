@@ -890,10 +890,19 @@ main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest
   追いついた後も、tick ごとに報告・発言・delivery の全件に書き込みの transaction を開いていた（約 500 回/tick）。
   詳細と決定は ADR-0133 付記「通知フィードの同期を差分にする」。
 - 修正: 走査位置（events id・報告/発言の created_at）からの差分だけを読み、events は 1 回 2048 行まで。記録済みは
-  読み取り接続で先に一括判定し、新しい出来事だけ書く。通知・delivery の読み取りは読み取り接続へ。
+  読み取り接続で先に一括判定し、新しい出来事の記録と位置の更新を 1 つの transaction で書く（同期 1 回の書き込み高々 1 回、
+  何も無ければ 0 回）。通知・delivery の読み取りは読み取り接続へ。
+- 測定（staging の写し、`crates/task-ops/tests/feed_measure.rs`）: 修正前 初回 11.3 秒・以後 tick ごと約 500 回の書き込み →
+  修正後 初回 113 ms・書き込み 1 回、追いついた後 1〜2 ms・書き込み 0 回。記録結果（feed_sources 502 件）は同じ。
+  verify の起動と煙試験を写しで再現（artifacts の replay-verify.sh）: 修正後 smoke done 8.1 秒・slow api 0 件。
 - 回帰試験（件数で固定）: `task-ops notify_feed::tests::notify_feed_sync_reads_only_new_sources_and_writes_nothing_when_idle`、
   `task-api --test request_lock_counts`（300 task × events 1,800 / 21,300 行で inbox・notifications・org・tasks/{id} の
   接続回数が同じ、書き込み接続の上限）、`task-dispatch tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events`。
 - 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、
   `cargo test -p task-ops` 431 passed、`-p task-api` 432 passed、`-p task-core` 652 passed、`-p task-dispatch` 514 passed。
-- 未解決: 受信箱の構築は task ごとに events を読む既存の形のまま（読み取り接続で task 数に比例）。
+- 未解決: 受信箱の構築は task ごとに events を読む既存の形のまま（読み取り接続で task 数に比例）。本番 active の
+  tick loop は 30 秒ごとに `notify::schedule_routes` で受信箱を構築する（verify の退行とは別）。
+- 未実施: `scripts/selfdeploy/release.sh` / `verify.sh` は run の sandbox では `~/.local/celeris` が読み取り専用
+  （`.lock-release: Read-only file system`）で実行できない。人が host で
+  `scripts/selfdeploy/release.sh <この branch の HEAD>` → `scripts/selfdeploy/verify.sh <sha12>` を実行し、
+  `~/.local/celeris/releases/<sha12>/verify.json` の `ok` が true であることを確かめる（昇格はしない）。

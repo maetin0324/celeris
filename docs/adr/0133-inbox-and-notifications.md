@@ -465,15 +465,23 @@ level 0 の報告 257・発言 200・delivery 54）の `feed_cursor` は events 
 **決定**:
 - D-a 走査位置: events は `id`、報告・発言は `created_at`（`feed_cursor` の `reports`・`messages`）を持ち、
   その後だけを読む。events は 1 回の同期で `EVENT_BUDGET`（2048 行）までに区切り、残りは次の tick が読む。
-  走査位置の書き込みは 1 回の同期で各 1 回だけ（記録は冪等なので、途中で落ちて読み直しても重複しない）。
 - D-b 記録済みかどうかは `NoticeStore::notice_sources_known`（読み取り接続、`feed_sources` の主キー）で一括して
-  先に確かめ、新しい出来事にだけ `notice_record` を呼ぶ。新しい出来事の無い tick は書き込み接続を取らない。
+  先に確かめる。新しい出来事の記録と走査位置の更新は `notice_record_batch` で**1 つの書き込み transaction**に
+  まとめる（同期 1 回の書き込みは高々 1 回。新しい出来事も位置の前進も無い tick は書き込み接続を取らない）。
+  NFS 上の DB では commit の回数がそのまま tick の時間になる（staging は 1 commit 約 0.1 秒だった）ため。
 - D-c 通知の読み取り（`notice_list`・`notice_get`・`notice_unread_count`・`feed_cursor_get`）と
   `delivery_get`・`delivery_list` は読み取り接続（ADR-0064 D4）にする。受信箱の 1 回の構築で書き込み接続を
   取る回数は 300 task で 79 → 4 回になった（failed の task ごとの `delivery_get`）。
 - D-d 回帰試験は時計ではなく件数で固定する: `SqliteStore::lock_counts`（書き込み・読み取り接続を取った回数）と
-  `FeedSyncStats`（読んだ行・`notice_record` の回数）。index の migration は足さない（報告・発言の表は小さく、
-  主な費用は書き込みの回数だったため）。
+  `FeedSyncStats`（読んだ行・store に渡した出来事・書き込み transaction の数）。index の migration は足さない
+  （報告・発言の表は小さく、費用の大半は書き込みの回数だったため）。
 
-**修正後の測定**（同じ写し）: 1 回目 133 ms（events 2048 行・記録 421 件）、追いつくまで 85 回、
-追いついた後は 1 ms・書き込み接続 0 回。記録の結果（`feed_sources` 502 件）は修正前と同じ。
+**修正後の測定**（同じ写し）: 1 回目 113 ms（events 2048 行・記録 419 件・書き込み transaction 1 回）、
+追いつくまで 85 回（各回の書き込みは 1 回）、追いついた後は 1〜2 ms・書き込み接続 0 回。記録の結果
+（`feed_sources` 502 件）は修正前と同じ。verify と同じ起動（`--mode verify`、写しの DB、煙試験は verify.sh の
+smoke と同じ台本）を手元で再現し、修正後の debug build で煙試験 8.1 秒で done・slow api request 0 件。
+（ローカルディスクでは修正前の 3527c8e3 も 12.6 秒で通る。退行は commit が遅い NFS の staging でだけ表に出る。）
+
+**未解決**: 本番（active）の tick loop は 30 秒ごとに `notify::schedule_routes`（29d0ffc5）で受信箱全体を
+構築する。受信箱の構築は task ごとに events を読む既存の形（写しで 0.2〜0.6 秒）で、verify（`verify` 役は
+通知を回さない）の退行とは別。差分化するなら別の task にする。

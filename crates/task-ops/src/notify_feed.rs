@@ -126,9 +126,7 @@ pub fn record_observations(
             ),
         };
         if notice.at <= now {
-            let mut stats = FeedSyncStats::default();
-            record(store, &notice, &mut stats)?;
-            added += stats.recorded;
+            added += record(store, &notice)?;
         }
     }
     Ok(added)
@@ -188,8 +186,10 @@ pub struct FeedSyncStats {
     pub messages_scanned: u64,
     /// 読んだ delivery の行。
     pub deliveries_scanned: u64,
-    /// `notice_record` を呼んだ回数（書き込みの transaction の数）。記録済みの出来事には呼ばない。
-    pub record_calls: u64,
+    /// store に渡した出来事（記録済みと先に分かったものは渡さない）。
+    pub submitted: u64,
+    /// 書き込みの transaction の数（記録と走査位置の更新をまとめて高々 1）。
+    pub write_transactions: u64,
     /// 新しく数えた出来事。
     pub recorded: u64,
 }
@@ -206,7 +206,8 @@ const CURSOR_MESSAGES: &str = "messages";
 
 /// ADR-0133 付記: 差分同期の本体。走査位置は `feed_cursor`（events は `id`、報告・発言は
 /// `created_at`）に持ち、記録済みかどうかは読み取り接続で先に一括して確かめる。
-/// 書き込み（`notice_record`・走査位置の更新）は新しい出来事と位置が進んだときだけ。
+/// 書き込み（新しい出来事の記録と走査位置の更新）は最後に 1 つの transaction で行い、
+/// 何も無ければ書き込み接続を取らない。
 pub fn sync_notifications_counted<S>(
     store: &S,
     now: OffsetDateTime,
@@ -216,13 +217,35 @@ where
 {
     let mut stats = FeedSyncStats::default();
     let mut tasks = TaskCache::default();
-    sync_events(store, now, &mut tasks, &mut stats)?;
-    sync_reports(store, now, &mut stats)?;
+    let mut out = Pending::default();
+    sync_events(store, now, &mut tasks, &mut stats, &mut out)?;
+    sync_reports(store, now, &mut stats, &mut out)?;
     let deliveries = store.delivery_list()?;
     stats.deliveries_scanned = deliveries.len() as u64;
-    sync_messages(store, now, &deliveries, &mut stats)?;
-    sync_deliveries(store, now, &deliveries, &mut tasks, &mut stats)?;
+    sync_messages(store, now, &deliveries, &mut stats, &mut out)?;
+    sync_deliveries(store, now, &deliveries, &mut tasks, &mut out)?;
+    stats.submitted = out.notices.len() as u64;
+    if !out.notices.is_empty() || !out.cursors.is_empty() {
+        let cursors: Vec<(&str, String)> = out
+            .cursors
+            .iter()
+            .map(|(name, value)| (*name, value.clone()))
+            .collect();
+        let outcomes = store.notice_record_batch(&out.notices, &cursors)?;
+        stats.write_transactions = 1;
+        stats.recorded = outcomes
+            .iter()
+            .filter(|o| !matches!(o, NoticeRecordOutcome::Duplicate(_)))
+            .count() as u64;
+    }
     Ok(stats)
+}
+
+/// 同期 1 回で書くもの（最後に `notice_record_batch` でまとめて書く）。
+#[derive(Default)]
+struct Pending {
+    notices: Vec<NoticeEvent>,
+    cursors: Vec<(&'static str, String)>,
 }
 
 /// 同期 1 回の間だけ持つ task の写し（必要な task だけを 1 回ずつ読む）。
@@ -248,6 +271,7 @@ fn sync_events<S>(
     now: OffsetDateTime,
     tasks: &mut TaskCache,
     stats: &mut FeedSyncStats,
+    out: &mut Pending,
 ) -> Result<(), StoreError>
 where
     S: TaskStore + NoticeStore + ?Sized,
@@ -318,11 +342,11 @@ where
             }],
             at,
         );
-        record(store, &notice, stats)?;
+        out.notices.push(notice);
     }
-    // 位置は通知を記録した後に 1 回だけ進める（途中で落ちても記録は冪等なので読み直してよい）。
+    // 位置は記録と同じ transaction で進める。
     if cursor != start {
-        store.feed_cursor_set(CURSOR_EVENTS, &cursor.to_string())?;
+        out.cursors.push((CURSOR_EVENTS, cursor.to_string()));
     }
     Ok(())
 }
@@ -337,26 +361,27 @@ fn cursor_time(
 }
 
 fn set_cursor_time(
-    store: &(impl NoticeStore + ?Sized),
-    name: &str,
+    out: &mut Pending,
+    name: &'static str,
     previous: Option<OffsetDateTime>,
     next: Option<OffsetDateTime>,
 ) -> Result<(), StoreError> {
-    match next {
-        Some(next) if Some(next) != previous => {
-            let value = next
-                .format(&Rfc3339)
-                .map_err(|e| StoreError::Invalid(format!("feed cursor time: {e}")))?;
-            store.feed_cursor_set(name, &value)
-        }
-        _ => Ok(()),
+    if let Some(next) = next
+        && Some(next) != previous
+    {
+        let value = next
+            .format(&Rfc3339)
+            .map_err(|e| StoreError::Invalid(format!("feed cursor time: {e}")))?;
+        out.cursors.push((name, value));
     }
+    Ok(())
 }
 
 fn sync_reports<S>(
     store: &S,
     now: OffsetDateTime,
     stats: &mut FeedSyncStats,
+    out: &mut Pending,
 ) -> Result<(), StoreError>
 where
     S: ReportStore + NoticeStore + ?Sized,
@@ -402,9 +427,9 @@ where
             }],
             report.created_at,
         );
-        record(store, &notice, stats)?;
+        out.notices.push(notice);
     }
-    set_cursor_time(store, CURSOR_REPORTS, since, next)
+    set_cursor_time(out, CURSOR_REPORTS, since, next)
 }
 
 fn sync_messages<S>(
@@ -412,6 +437,7 @@ fn sync_messages<S>(
     now: OffsetDateTime,
     deliveries: &[task_core::Delivery],
     stats: &mut FeedSyncStats,
+    out: &mut Pending,
 ) -> Result<(), StoreError>
 where
     S: TaskStore + NoticeStore + ?Sized,
@@ -471,9 +497,9 @@ where
             Vec::new(),
             message.created_at,
         );
-        record(store, &notice, stats)?;
+        out.notices.push(notice);
     }
-    set_cursor_time(store, CURSOR_MESSAGES, since, next)
+    set_cursor_time(out, CURSOR_MESSAGES, since, next)
 }
 
 fn sync_deliveries<S>(
@@ -481,7 +507,7 @@ fn sync_deliveries<S>(
     now: OffsetDateTime,
     deliveries: &[task_core::Delivery],
     tasks: &mut TaskCache,
-    stats: &mut FeedSyncStats,
+    out: &mut Pending,
 ) -> Result<(), StoreError>
 where
     S: TaskStore + NoticeStore + ?Sized,
@@ -521,7 +547,7 @@ where
                     Vec::new(),
                     task.updated_at,
                 );
-                record(store, &notice, stats)?;
+                out.notices.push(notice);
             }
         }
         if !matches!(
@@ -557,7 +583,7 @@ where
             }],
             task.updated_at,
         );
-        record(store, &notice, stats)?;
+        out.notices.push(notice);
     }
     Ok(())
 }
@@ -569,17 +595,11 @@ fn delivery_key(delivery: &task_core::Delivery) -> String {
     )
 }
 
-fn record(
-    store: &(impl NoticeStore + ?Sized),
-    notice: &NoticeEvent,
-    stats: &mut FeedSyncStats,
-) -> Result<(), StoreError> {
-    stats.record_calls += 1;
-    stats.recorded += u64::from(!matches!(
+fn record(store: &(impl NoticeStore + ?Sized), notice: &NoticeEvent) -> Result<u64, StoreError> {
+    Ok(u64::from(!matches!(
         store.notice_record(notice)?,
         NoticeRecordOutcome::Duplicate(_)
-    ));
-    Ok(())
+    )))
 }
 
 #[cfg(test)]

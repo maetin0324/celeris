@@ -64,16 +64,13 @@ async fn measure(tasks: usize, events_per_task: usize) -> Vec<(String, LockCount
         let before = env.store.lock_counts();
         let stats = task_ops::notify_feed::sync_notifications_counted(&env.store, now).unwrap();
         let locks = env.store.lock_counts().since(before);
-        // tick 1 回分の同期は events を予算までしか読まず、書き込みは記録と位置の更新だけ。
+        // tick 1 回分の同期は events を予算までしか読まず、書き込みは記録と位置の更新をまとめた高々 1 回。
         assert!(
             stats.events_scanned <= task_ops::notify_feed::EVENT_BUDGET as u64,
             "{stats:?}"
         );
-        assert!(
-            locks.writer <= stats.record_calls + 3,
-            "{stats:?} {locks:?}"
-        );
-        if stats.events_scanned == 0 && stats.record_calls == 0 {
+        assert!(locks.writer <= 1, "{stats:?} {locks:?}");
+        if stats.events_scanned == 0 && stats.submitted == 0 {
             // 追いついた後の同期は書き込み接続を取らない。
             assert_eq!(locks.writer, 0, "{stats:?} {locks:?}");
             assert!(locks.reader <= 10, "{stats:?} {locks:?}");

@@ -1141,6 +1141,9 @@ pub struct Dispatcher {
     /// `control_master_alive_blocking`（`ssh -O check`）。テストは `set_cluster_liveness_probe` で
     /// 偽物に差し替え、実機の ssh 状態に依存しないようにする。
     cluster_liveness_probe: ClusterLivenessProbe,
+    /// 試験の継ぎ目: remote workspace の run と判定に渡す `SshSettings` の `ssh_command` /
+    /// `rsync_command` を差し替える（`set_cluster_ssh_command_override`）。`None`（既定）なら本物の ssh / rsync。
+    cluster_ssh_command_override: Option<Vec<String>>,
     /// tick の回数（スナップショット用）。
     ticks: u64,
     publisher: Option<SnapshotPublisher>,
@@ -1376,6 +1379,7 @@ impl Dispatcher {
             cluster_liveness_probe: Arc::new(|ssh_command: &[String], host: &str| {
                 control_master_alive_blocking(ssh_command, host)
             }),
+            cluster_ssh_command_override: None,
             ticks: 0,
             publisher: None,
             account_pool_providers,

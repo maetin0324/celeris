@@ -500,6 +500,28 @@ impl Dispatcher {
         self.cluster_liveness_probe = probe;
     }
 
+    /// 試験の継ぎ目: remote workspace の worker run・判定が使う ssh / rsync のコマンドを差し替える
+    /// （偽の `ssh_command` で、外部ネットワークに出ずに remote 経路を通す）。本番の配線は呼ばない。
+    pub fn set_cluster_ssh_command_override(&mut self, command: Vec<String>) {
+        self.cluster_ssh_command_override = Some(command);
+    }
+
+    /// `ClusterSpec::ssh_settings` に `set_cluster_ssh_command_override` の差し替えを当てたもの。
+    pub(super) fn remote_ssh_settings(
+        &self,
+        spec: &ClusterSpec,
+        remote_path: &std::path::Path,
+        task_id: task_core::TaskId,
+        mode: task_core::WorkspaceMode,
+    ) -> SshSettings {
+        let mut settings = spec.ssh_settings(remote_path, task_id, mode);
+        if let Some(command) = &self.cluster_ssh_command_override {
+            settings.ssh_command = command.clone();
+            settings.rsync_command = command.clone();
+        }
+        settings
+    }
+
     /// ADR-0062 A（Phase 107）: master 越しの実通信 probe を挿す（celeris 側の配線）。
     pub fn set_cluster_command_probe(&mut self, probe: ClusterCommandProbe) {
         self.cluster_command_probe = Some(probe);

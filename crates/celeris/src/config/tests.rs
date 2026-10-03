@@ -3413,3 +3413,56 @@ fn multi_account_example_mentions_account_pool_commented_out() {
     // 既存の受け入れ条件（Config::load が通る）はコメントアウトされているので変わらない。
     assert!(Config::load(path).is_ok());
 }
+
+#[test]
+fn delivery_auto_resolve_defaults_follow_adr_0137() {
+    let cfg: Config = toml::from_str("").unwrap();
+    let auto = &cfg.delivery.auto_resolve;
+    assert!(auto.enabled);
+    assert_eq!(auto.max_attempts, 3);
+    assert_eq!(
+        auto.generated.globs,
+        vec![
+            "docs/protocol/*.schema.json".to_string(),
+            "docs/api/v1/*.schema.json".to_string()
+        ]
+    );
+    let cmd = auto.generated.command().unwrap();
+    assert_eq!(&cmd[..4], ["env", "UPDATE_SCHEMA=1", "cargo", "test"]);
+    for krate in ["task-core", "task-worker", "task-api"] {
+        assert!(cmd.iter().any(|a| a == krate), "{krate}");
+    }
+    cfg.delivery.validate().unwrap();
+}
+
+#[test]
+fn delivery_auto_resolve_overrides_and_validation() {
+    let cfg: Config = toml::from_str(
+        "[delivery.auto_resolve]\nenabled = false\nmax_attempts = 5\n[delivery.auto_resolve.generated]\ncmd = []\n",
+    )
+    .unwrap();
+    let auto = &cfg.delivery.auto_resolve;
+    assert!(!auto.enabled);
+    assert_eq!(auto.max_attempts, 5);
+    assert_eq!(auto.generated.command(), None);
+    cfg.delivery.validate().unwrap();
+
+    let cfg: Config = toml::from_str(
+        "[delivery.auto_resolve.generated]\ncmd = [\"sh\", \"regen.sh\"]\nglobs = [\"docs/api/v1/*.schema.json\", \"docs/protocol/*.schema.json\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.delivery.auto_resolve.generated.command(),
+        Some(vec!["sh".to_string(), "regen.sh".to_string()])
+    );
+    cfg.delivery.validate().unwrap();
+
+    for bad in [
+        "[delivery.auto_resolve]\nmax_attempts = 0\n",
+        "[delivery.auto_resolve.generated]\nglobs = [\"docs/**/*.json\"]\n",
+    ] {
+        let cfg: Config = toml::from_str(bad).unwrap();
+        assert!(cfg.delivery.validate().is_err(), "{bad}");
+    }
+    assert!(toml::from_str::<Config>("[delivery.auto_resolve]\nunknown = 1\n").is_err());
+}

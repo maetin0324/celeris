@@ -609,6 +609,24 @@ fn advance(
                     .and_then(|v| v["failed_step"].as_str());
                 if let Some(class) = classify_delivery_failure(old.state, &old.detail, failed_step)
                 {
+                    // ADR-0137 D2: merge_base 系は局所修復を作る前に定型衝突の自動解消を試す。
+                    if class == RepairClass::MergeBase {
+                        match auto_resolve::attempt(store, config, old)? {
+                            auto_resolve::Outcome::Resolved {
+                                base,
+                                head,
+                                actions,
+                            } => {
+                                auto_resolve::requeue(store, old, base, head, &actions, now)?;
+                                return Ok(());
+                            }
+                            auto_resolve::Outcome::Fallback(fallback) => {
+                                if auto_resolve::fall_back(store, old, &fallback, now)? {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     if let Some(key) = make_repair(store, config, old, class, now)? {
                         store.comment_add(&task_core::TaskComment {
                             id: task_core::CommentId::new(), task_id: old.task_id,
@@ -740,6 +758,8 @@ fn start_prepare(store: &dyn TaskStore, config: &Config, old: &Delivery) -> Resu
     store.delivery_save(Some(old), &next)?;
     Ok(())
 }
+
+mod auto_resolve;
 
 #[cfg(test)]
 #[path = "delivery/tests.rs"]

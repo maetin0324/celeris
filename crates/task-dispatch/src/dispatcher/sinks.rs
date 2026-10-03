@@ -29,7 +29,7 @@ pub(super) struct StoreSink {
     pub(super) session_key: Option<(String, task_core::SessionKind, Option<ProjectId>)>,
     /// ADR-0140 D2: この run が WU の継続 session を使うなら `(task_id, work_unit_id)`。
     /// `session_resume_failed` がその session を retire し、拒否の印を run の進行に残す。
-    pub(super) continuation_key: Option<(TaskId, String)>,
+    pub(super) continuation_key: Option<(TaskId, Option<String>)>,
 }
 
 impl StoreSink {
@@ -386,7 +386,7 @@ impl EventSink for StoreSink {
         if let Some((task_id, work_unit_id)) = &self.continuation_key {
             if let Err(e) = self.store.work_unit_session_retire(
                 *task_id,
-                Some(work_unit_id),
+                work_unit_id.as_deref(),
                 OffsetDateTime::now_utc(),
             ) {
                 tracing::warn!(task_id = %self.task_id, error = %e, "failed to retire the continuation session after a rejected resume");

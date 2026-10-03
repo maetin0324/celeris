@@ -555,3 +555,72 @@ fn session_resume_fresh_session_never_resumes_another_accounts_session() {
         fresh(ContinuationFreshReason::AccountChanged, true)
     );
 }
+
+#[test]
+fn session_resume_container_and_adapter_are_decided_before_first_run_and_not_continuation() {
+    // #5・#8（container）は #1 の直後に見る。WU の最初の run・continuation でない run・別 WU の
+    // session があっても session を作らない理由になる（ADR-0140 D3）。
+    let own = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let other = wu_session("claude-code", Some("acct-1"), "wu-b");
+    let cases: [(&str, Option<RunEnd>, Option<&WorkUnitSession>, bool); 4] = [
+        // WU の最初の run（従来は IndependentWu で session を作っていた）。
+        ("first run", None, None, false),
+        // 別 WU の session がある（触れない）。
+        ("other wu", None, Some(&other), false),
+        // continuation でない（従来は NotContinuation で session を作っていた）。
+        (
+            "not continuation",
+            Some(RunEnd::Completed),
+            Some(&own),
+            true,
+        ),
+        // continuation。
+        (
+            "continuation",
+            Some(RunEnd::BudgetExhausted {
+                kind: BudgetKind::Turns,
+            }),
+            Some(&own),
+            true,
+        ),
+    ];
+    for (label, previous_end, stored, retire) in cases {
+        let container = ContinuationFacts {
+            previous_end,
+            container: true,
+            ..facts(stored)
+        };
+        let decision = decide_continuation(&container);
+        assert_eq!(
+            decision,
+            fresh(ContinuationFreshReason::SurfaceUnsupported, retire),
+            "container: {label}"
+        );
+        let codex = ContinuationFacts {
+            previous_end,
+            adapter: "codex",
+            ..facts(stored)
+        };
+        assert_eq!(
+            decide_continuation(&codex),
+            fresh(ContinuationFreshReason::AdapterUnsupported, retire),
+            "adapter: {label}"
+        );
+        // 役割（#1）はそれより先: container の reviewer も RoleFresh。
+        let reviewer = ContinuationFacts {
+            role: ContinuationRole::Reviewer,
+            ..container
+        };
+        assert_eq!(
+            decide_continuation(&reviewer),
+            fresh(ContinuationFreshReason::RoleFresh, false),
+            "reviewer: {label}"
+        );
+    }
+    for reason in [
+        ContinuationFreshReason::SurfaceUnsupported,
+        ContinuationFreshReason::AdapterUnsupported,
+    ] {
+        assert!(!reason.starts_session(), "{reason:?}");
+    }
+}

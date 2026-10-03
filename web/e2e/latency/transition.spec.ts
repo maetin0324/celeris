@@ -8,6 +8,7 @@ import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
 import { v3Screens } from "../support/screens";
+import { waitForBootIdle } from "./boot-idle.mjs";
 
 // baseline と同じくクリックを起点に URL、見出し、画面データ（現 Phase は準備中の枠）を別々に測る。
 for (const screen of v3Screens()) {
@@ -26,6 +27,8 @@ for (const screen of v3Screens()) {
         await page.goto(gateway.base);
         const nav = page.getByRole("navigation", { name: "主要" });
         await expect(nav).toBeAttached();
+        // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
+        await waitForBootIdle(page);
         const link = nav.getByRole("link", { name: screen.heading });
         const start = performance.now();
         if (await link.count()) await link.click();

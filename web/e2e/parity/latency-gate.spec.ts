@@ -8,6 +8,7 @@ import type { EventRow } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { keysForTaskEvent, projectFallbackKeys, resolveProjectId } from "../../api/realtime/invalidation-map";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
+import { waitForBootIdle } from "../latency/boot-idle.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
@@ -74,6 +75,8 @@ test("parity-x: 遅延 10 s で遷移が止まらない（baseline の 7 経路�
   const gateway = await h.start();
   try {
     await page.goto(`${gateway.base}/`);
+    // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
+    await waitForBootIdle(page);
     const paths = ["/inbox", "/tasks", "/projects", "/reports", "/org", "/knowledge", "/daemon"];
     const measurements: Array<{ path: string; url: number; heading: number }> = [];
     h.daemon.setDelay(10000);

@@ -477,3 +477,9 @@ sandbox 実行（`browser_launcher_ptrace.rs::launcher_chrome_denies_daemon_uid_
 - 全体検査（このブランチ HEAD）: `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` exit 0（6 passed、許可/拒否表は前提欠落で `SKIP:`）、`cargo test -p task-core browser_isolation` exit 0（31 passed）、`cargo test -p celeris-credentiald` exit 0（58 passed）、`cargo test -p task-worker --lib browser_launcher` exit 0（18 passed）、`cargo clippy --workspace -- -D warnings` exit 0。
 - H3・H4・H5・ADR-0080 H2（`approve_once`・短い lease）は維持（弱めていない。ADR-0138 本文で再確認）。
 - **本番昇格は実施していない**。昇格は人が selfdeploy 手順（`projects/agent-platform/selfdeploy-release-verify-procedure.md`）で行う。残課題は上記の未確認（必須モードの host stutter 3 回と merge 後 HEAD の host 再取得）のみ。
+
+### gate-final（2026-10-03、unit gate-final、HEAD `496178736516`）
+
+- `cargo test --workspace -- --skip a_wait_parks_the_task_polls_and_resumes_as_a_continuation` → exit 0、3472 passed / 0 failed / 13 ignored（browser の実 CDP 試験も含め SinkFailed は発生せず）。
+- `cargo test -p task-dispatch --lib cluster_job_wait`（skip した試験を単独実行） → exit 0、5 passed / 0 failed（`a_wait_parks_the_task_polls_and_resumes_as_a_continuation` も含む）。
+- `cargo clippy --workspace -- -D warnings` → exit 0、warning なし。

@@ -32,6 +32,15 @@ sed -n '/^\[\[harnesses\]\]$/,/^$/{/id = "knowledge-curation"/,/^$/p}' \
 # sed では書き換えない — config.toml は人が確かめて書く対象）
 ```
 
+追記後の該当ブロックは次の形になる（budget は 1 run の turn 上限。整理は 1 回 40 件まで扱うため 120 を既定とする）:
+
+```toml
+[[harnesses]]
+id = "knowledge-curation"
+# …description / tier / capabilities / instructions は config/celeris.example.toml のとおり
+budget = { max_turns = 120 }
+```
+
 追記後、設定の妥当性だけ手元で確かめる（本番には触れない）:
 
 ```bash
@@ -192,11 +201,30 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" show daily-curation   # next_fire_at
 以後は daemon の tick が schedule どおりに task を作る（LLM 呼び出しは daemon に無い。task は通常の
 routing・計画・review を通る）。履歴は `cron history` / GUI `/cron/daily-curation` でいつでも追える。
 
-## 6. `dry_run` から `apply` へ切り替える（本番 KB を書き換えさせる）
+## 6. `dry_run` から `apply` へ切り替える（自動適用・commit・push）
 
-複数回の dry-run 報告を見て、削除・統合の判断が妥当だと人が判断してから行う（ADR-0095 付記 D-d、
-人の決定が要る不可逆に近い操作）。`PATCH` の `template` は丸ごと置き換えなので、現在の雛形を取得して
-`mode` だけ書き換えて送り返す:
+人の決定（2026-10-04）: 日次整理の `apply` は、daemon が再検証に通った計画を **人の承認なしで** 本番 KB へ
+適用する（ADR-0131 の付記）。個別の人への判断（`human_decisions`、`curation-human`）は従来どおり人が答える。
+承認 decision（`curation-apply`）は出ない。安全網は git の履歴と KB の remote であり、戻し方は下の §6.3 に書く。
+
+### 6.1 apply の 1 run の流れ
+
+1. worker が計画と差分を作る（dry-run と同じ。本番 KB と `inputs/` は書かない）。
+2. daemon が task の終端後に計画を再検証する（`inputs/curation-inputs.json` の snapshot、本番 KB の hash、inbox の ID 集合）。
+   **検証失敗・元ページの変更・hash 不一致のときは適用しない**（run は失敗扱いで、理由は要約と event に残る）。
+3. 検証を通ったら daemon が本番 KB（`~/.local/share/celeris/knowledge`、branch `main`）へ決定的に適用する。
+   削除は archive せず実削除し、理由は `_curation/YYYY-MM-DD.md` と要約に残る。
+4. 変更した path（`_curation/YYYY-MM-DD.md`・`index.json`・README を含む）を **1 commit** にまとめる。
+   題は `日次整理 YYYY-MM-DD: 統合 n・新規 n・削除 n・修正 n 件`、本文に task id（`task: <task id>`）を残す。
+   作者は既存の `task_ops::knowledge::commit_paths` と同じ設定を使う。
+5. KB に remote（`origin`）があれば、その commit を `git push origin main` で送る。remote が無ければ push を省き、記録だけ残す。
+6. **push の失敗は apply を失敗にしない。** 失敗は報告と event に残り、次回の日次整理の push でまとめて送られる。
+
+### 6.2 切り替え
+
+`apply` にすると、以後の run は承認を待たずに 3〜5 を行う。複数回の dry-run 報告を見て、削除・統合の判断が
+妥当だと人が確かめてから切り替える（ADR-0095 付記 D-d。本番 KB を書き換える操作）。`PATCH` の `template` は丸ごと
+置き換えなので、現在の雛形を取得して `mode` だけ書き換えて送り返す:
 
 ```bash
 $CELERISCTL cron --config "$CELERIS_CONFIG" show daily-curation | python3 -c '
@@ -211,10 +239,62 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" update daily-curation --template "$(
 $CELERISCTL cron --config "$CELERIS_CONFIG" show daily-curation   # template.mode が "apply" になっていることを確認
 ```
 
-`apply` に切り替えた後の最初の run から、`curation-plan.json` が本番 KB（`~/.local/share/celeris/knowledge`）
-へ決定的に反映される（書き込みは daemon のコードが行い、LLM は計画を書くだけ。削除は archive せず実削除、
-理由は `knowledge/_curation/YYYY-MM-DD.md` と要約に残る）。切り替え後も最初の数回は `daily-summary.md` と
-`curation.diff` を必ず目視で確認する。おかしければ `dry_run` へ戻す（同じ手順で `mode` を書き戻す）。
+`apply` に切り替えた後の最初の run から、§6.1 の流れで本番 KB が書き換わり、commit と push まで行われる
+（書き込みは daemon のコードが行い、LLM は計画を書くだけ）。切り替え後も最初の数回は `daily-summary.md` と
+`curation.diff` を必ず目視で確認する。確認は次のとおり:
+
+```bash
+cd ~/.local/share/celeris/knowledge
+git log --oneline -5 -- _curation/          # 日次整理の commit が並んでいるか
+git show --stat <sha>                       # 変更 path と題（件数）、本文の task id を確かめる
+celerisctl knowledge get _curation/YYYY-MM-DD.md   # 削除・統合の理由が残っているか
+```
+
+おかしければ `dry_run` へ戻す（同じ手順で `mode` を書き戻す）。戻すだけでは既に入った変更は消えないので、
+変更を戻すなら §6.3 の手順で commit を取り消す。
+
+### 6.3 救出: 適用された変更を git から戻す
+
+適用の 1 commit は KB の git 履歴に残るので、いつでも戻せる。作業前に、日次整理の task が走っていないこと
+（`celerisctl task show <task_id>` が終端）を確かめ、KB の場所で行う（`~/.local/share/celeris/knowledge`、branch `main`）。
+
+```bash
+cd ~/.local/share/celeris/knowledge
+git log --format='%h %ad %s' --date=short -- _curation/   # 該当 commit を探す（題に日付と件数）
+git show --stat <sha>                                     # 何の path が変わったか確かめる（task id は本文）
+```
+
+**(a) 1 回の日次整理をまるごと戻す:**
+
+```bash
+git revert --no-edit <sha>      # 逆の commit を新しく作る（履歴は消さない）
+git push origin main            # remote が無い環境では省く
+```
+
+**(b) 特定 page だけ戻す**（統合・削除のうち 1 件だけ誤りだった場合）:
+
+```bash
+git checkout <sha>^ -- <path>   # <sha> の直前の内容を <path> に書き戻す（削除されていたページは復活する）
+git commit -m "KB 救出: <path> を <sha> の前へ戻す"
+git push origin main
+```
+
+戻した後の確認:
+
+```bash
+git show --stat HEAD                       # 戻した path だけが変わっていること
+celerisctl knowledge get <path>            # 本番 KB を読む CLI で、戻した本文が出ること
+```
+
+注意:
+- 削除された `_inbox/` 候補を戻すと、次の日次整理がもう一度その候補を扱う。不要なら該当の `_inbox/` 候補を
+  同じ手順で削除する commit を作る。
+- `git revert` は後の commit と同じ page に触れていると衝突する。衝突したら `git revert --abort` で戻し、
+  (b) の page 単位の手順で扱う。
+- 戻した後、次の日次整理は戻した状態を入力に読む。同じ誤りを再び計画させないため、`dry_run` へ戻してから
+  差分を確かめるのも手である。
+- 本番の daemon 昇格と `config.toml` の変更は、§0・§1 の手順どおり人が行う。この救出は KB の git 操作だけで、
+  daemon や DB には触れない。
 
 `apply` は人の承認を待たない（ADR-0131 付記 2026-10-04）。検証に通った計画は daemon がその場で再検証して
 適用し、変えた path（`_curation/YYYY-MM-DD.md`・`README.md` を含む。`index.json` は ignore）を KB の git に

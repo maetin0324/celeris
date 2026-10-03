@@ -1716,6 +1716,123 @@ fn latest_delivery_skipped_rows_uses_partial_index() {
     ));
 }
 
+fn sample_integration_request(
+    source_sha: &str,
+    target_sha: &str,
+) -> crate::integration_request::IntegrationRequest {
+    crate::integration_request::IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: target_sha.into(),
+        source_branch: "feature".into(),
+        source_sha: source_sha.into(),
+        merge_base: Some("base".into()),
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: Vec::new(),
+        reason: "conflict".into(),
+        recommendation: "review".into(),
+        actions: Vec::new(),
+        candidate_sha: None,
+    }
+}
+
+#[test]
+fn integration_requests_are_idempotent_and_answer_removes_only_matching_pair() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let a = sample_integration_request("source-a", "target-a");
+    let b = sample_integration_request("source-b", "target-a");
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "delivery")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .integration_request_record(task.id, &a, "phase:merge")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &b, "phase:merge")
+            .unwrap()
+    );
+    assert_eq!(store.open_integration_requests().unwrap().len(), 2);
+    assert_eq!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::IntegrationRequested { .. }))
+            .count(),
+        2
+    );
+
+    store
+        .append_event(
+            task.id,
+            &Event::IntegrationAnswered {
+                request_id: a.id_for(task.id),
+                answer: "integrated".into(),
+                note: Some("resolved".into()),
+            },
+        )
+        .unwrap();
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1);
+    assert!(
+        matches!(&open[0].event, Event::IntegrationRequested { request, .. }
+        if request.source_sha == "source-b")
+    );
+    // A new request after an answer is a new decision cycle for the same pair.
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "delivery")
+            .unwrap()
+    );
+    assert_eq!(store.open_integration_requests().unwrap().len(), 2);
+    let latest_seq = store
+        .append_event(
+            task.id,
+            &Event::IntegrationRequested {
+                request: Box::new(a.clone()),
+                origin: "legacy".into(),
+            },
+        )
+        .unwrap();
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().any(|row| row.seq == latest_seq));
+}
+
+#[test]
+fn integration_request_query_uses_partial_index() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    store
+        .integration_request_record(task.id, &sample_integration_request("s", "t"), "delivery")
+        .unwrap();
+    let plan_details = store
+        .with_read_conn(|conn| {
+            let sql = super::events::integration_request_rows_sql();
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let mut rows = stmt.query([])?;
+            let mut details = Vec::new();
+            while let Some(row) = rows.next()? {
+                details.push(row.get::<_, String>(3)?);
+            }
+            Ok(details)
+        })
+        .unwrap();
+    assert!(
+        plan_details.iter().any(|detail| detail
+            .contains("USING INDEX idx_events_integration_request")
+            || detail.contains("USING COVERING INDEX idx_events_integration_request")),
+        "query plan did not use idx_events_integration_request: {plan_details:?}"
+    );
+}
+
 #[test]
 fn events_since_orders_globally_and_respects_after_id_and_limit() {
     let store = SqliteStore::open_in_memory().unwrap();
@@ -2332,7 +2449,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -2875,7 +2992,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3366,7 +3483,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3432,7 +3549,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3525,7 +3642,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -3984,7 +4101,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4230,7 +4347,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4481,7 +4598,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 46);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();

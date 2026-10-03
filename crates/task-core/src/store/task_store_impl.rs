@@ -236,6 +236,19 @@ impl TaskStore for SqliteStore {
         self.latest_delivery_skipped_rows_impl()
     }
 
+    fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError> {
+        self.open_integration_requests_impl()
+    }
+
+    fn integration_request_record(
+        &self,
+        task_id: TaskId,
+        request: &crate::integration_request::IntegrationRequest,
+        origin: &str,
+    ) -> Result<bool, StoreError> {
+        self.integration_request_record_impl(task_id, request, origin)
+    }
+
     fn list_page(
         &self,
         filter: &ListFilter,

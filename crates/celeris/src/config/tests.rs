@@ -3415,6 +3415,59 @@ fn multi_account_example_mentions_account_pool_commented_out() {
     assert!(Config::load(path).is_ok());
 }
 
+#[test]
+fn delivery_auto_resolve_defaults_follow_the_parallel_integration_adr() {
+    let cfg: Config = toml::from_str("").unwrap();
+    let auto = &cfg.selfdeploy.delivery.auto_resolve;
+    assert!(auto.enabled);
+    assert_eq!(auto.max_attempts, 3);
+    assert_eq!(
+        auto.generated.globs,
+        vec![
+            "docs/protocol/*.schema.json".to_string(),
+            "docs/api/v1/*.schema.json".to_string()
+        ]
+    );
+    let cmd = auto.generated.command().unwrap();
+    assert_eq!(&cmd[..4], ["env", "UPDATE_SCHEMA=1", "cargo", "test"]);
+    for krate in ["task-core", "task-worker", "task-api"] {
+        assert!(cmd.iter().any(|a| a == krate), "{krate}");
+    }
+    cfg.selfdeploy.delivery.validate().unwrap();
+}
+
+#[test]
+fn delivery_auto_resolve_overrides_and_validation() {
+    let cfg = Config::parse_with_delivery(
+        "[delivery.auto_resolve]\nenabled = false\nmax_attempts = 5\n[delivery.auto_resolve.generated]\ncmd = []\n",
+    )
+    .unwrap();
+    let auto = &cfg.selfdeploy.delivery.auto_resolve;
+    assert!(!auto.enabled);
+    assert_eq!(auto.max_attempts, 5);
+    assert_eq!(auto.generated.command(), None);
+    cfg.selfdeploy.delivery.validate().unwrap();
+
+    let cfg = Config::parse_with_delivery(
+        "[delivery.auto_resolve.generated]\ncmd = [\"sh\", \"regen.sh\"]\nglobs = [\"docs/api/v1/*.schema.json\", \"docs/protocol/*.schema.json\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.selfdeploy.delivery.auto_resolve.generated.command(),
+        Some(vec!["sh".to_string(), "regen.sh".to_string()])
+    );
+    cfg.selfdeploy.delivery.validate().unwrap();
+
+    for bad in [
+        "[delivery.auto_resolve]\nmax_attempts = 0\n",
+        "[delivery.auto_resolve.generated]\nglobs = [\"docs/**/*.json\"]\n",
+    ] {
+        let cfg = Config::parse_with_delivery(bad).unwrap();
+        assert!(cfg.selfdeploy.delivery.validate().is_err(), "{bad}");
+    }
+    assert!(Config::parse_with_delivery("[delivery.auto_resolve]\nunknown = 1\n").is_err());
+}
+
 /// ADR-0136: hot な path は既存の key で `/local` 側に変えられ、書かなければ従来の home の既定のまま。
 /// `[storage]` を書かなければ mount 検査はしない。
 #[test]

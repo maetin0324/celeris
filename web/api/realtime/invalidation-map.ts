@@ -149,6 +149,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   integration_repair_resolved: { sets: TLE },
   integration_repair_exhausted: { sets: TLE },
   delivery_skipped: { sets: ["T", "L", "N"] },
+  integration_requested: { sets: ["L"] },
+  integration_answered: { sets: ["L"] },
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

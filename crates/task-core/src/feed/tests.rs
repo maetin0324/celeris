@@ -309,7 +309,8 @@ fn notification_feed_migration_skips_reserved_versions_and_fills_gaps() {
     {
         let conn = rusqlite::Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DELETE FROM schema_migrations WHERE version = 41; \
+            "DELETE FROM schema_migrations WHERE version = 41 OR version = 47; \
+             DROP INDEX idx_events_integration_request; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor;",
         )
         .unwrap();

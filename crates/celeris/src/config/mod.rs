@@ -25,6 +25,7 @@ mod cluster;
 mod cron;
 mod db;
 mod delegation;
+mod delivery;
 mod dispatch;
 mod execution;
 mod github;
@@ -45,6 +46,7 @@ pub use cluster::*;
 pub use cron::*;
 pub use db::*;
 pub use delegation::*;
+pub use delivery::{AutoResolveConfig, DeliveryConfig, GeneratedConfig};
 pub use dispatch::*;
 pub use execution::*;
 pub use github::*;
@@ -357,13 +359,27 @@ fn default_error_cooldown_secs() -> u64 {
 }
 
 impl Config {
+    /// `[delivery]` is a top-level TOML table, but its runtime settings live in an
+    /// existing sub-struct so adding them does not change `Config` struct literals.
+    fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
+        let mut table: toml::Table = toml::from_str(text)?;
+        let delivery = table
+            .remove("delivery")
+            .map(|value| value.try_into::<DeliveryConfig>())
+            .transpose()?
+            .unwrap_or_default();
+        let mut cfg: Config = toml::Value::Table(table).try_into()?;
+        cfg.selfdeploy.delivery = delivery;
+        Ok(cfg)
+    }
+
     /// ファイルから読み、相対パスを設定ファイルのディレクトリ基準で絶対化する。
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_path_buf(),
             source,
         })?;
-        let mut cfg: Config = toml::from_str(&text)?;
+        let mut cfg = Self::parse_with_delivery(&text)?;
         let deprecated = cfg.scratch.deprecated_sections();
         if !deprecated.is_empty() {
             tracing::warn!(sections = %deprecated.join(", "), "deprecated scratch cache settings are ignored");
@@ -436,6 +452,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.selfdeploy.validate()?;
+        self.selfdeploy.delivery.validate()?;
         self.browser.validate()?;
         if self.max_concurrency == 0 {
             return Err(ConfigError::Invalid("max_concurrency must be >= 1".into()));

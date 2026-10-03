@@ -7,7 +7,7 @@ use std::{
 
 use serde::Deserialize;
 
-use super::ConfigError;
+use super::{ConfigError, DeliveryConfig};
 
 /// `[handoff]`（ADR-0040 D4）: 昇格のライブ引き継ぎ。`active` が `draining` になったあと、手元の run が
 /// 終わるのをここまで待つ。超えたら残りを abort し（リースが切れて新しい active が従来の「リース切れ」の
@@ -50,6 +50,9 @@ fn default_drain_timeout_secs() -> u64 {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfdeployConfig {
+    /// Runtime settings parsed from the top-level `[delivery]` table by `Config::load`.
+    #[serde(skip)]
+    pub delivery: DeliveryConfig,
     /// ADR-0051: 自動取り込みを許可する自己改善案件。空なら無効。
     #[serde(default)]
     pub delivery_projects: Vec<String>,
@@ -81,6 +84,7 @@ pub struct SelfdeployConfig {
 impl Default for SelfdeployConfig {
     fn default() -> Self {
         Self {
+            delivery: DeliveryConfig::default(),
             releases_dir: default_releases_dir(),
             delivery_projects: Vec::new(),
             delivery_default_departments: BTreeMap::new(),

@@ -1,7 +1,7 @@
 # sccache / cache server は廃止（ADR-0129）
 
 sccache の差し込み（L1、`celeris-sccache.service`）と Celeris 自前の階層 cache server（L2、`celeris-scratch-cache.service`）は
-Celeris から撤去した。経緯と設計は [ADR-0129](../adr/0129-host-sccache-reflink-targets.md) を参照。compiler wrapper を使うかどうかは
+Celeris から撤去した。経緯と設計は [ADR-0129](../../agent-docs/adr/0129-host-sccache-reflink-targets.md) を参照。compiler wrapper を使うかどうかは
 host 管理者が `~/.cargo/config.toml` の `[build] rustc-wrapper` で決める（ADR-0129 §2）。Celeris は `RUSTC_WRAPPER` /
 `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を差し込みも除去もせず、host から継いだ値をそのまま run の子プロセスへ渡す。
 

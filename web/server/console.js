@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fail, parseUpstream, readTokenFile } from "./relay.js";
 
-// Console の block の SSE 中継（docs/web/implementation-plan.md P3-01、feature-parity R38）。
+// Console の block の SSE 中継（agent-docs/web/implementation-plan.md P3-01、feature-parity R38）。
 // - `/console/stream` → daemon の `/api/v1/console/stream`。`scope`・`since` だけを保ち、バイト列は加工しない。
 // - 未認証は auth.js が 401 にする（302 にしない）。切断で upstream を abort する。JSON 中継の timeout は掛けない。
 

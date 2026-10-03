@@ -1,4 +1,4 @@
-//! ADR-0137 D1d・D2・D5: `merge_base` 系の配送失敗で局所修復（LLM の repair unit）を作る前に、
+//! ADR 2026-10-02-parallel-integration-auto-resolve D1d・D2・D5: `merge_base` 系の配送失敗で局所修復（LLM の repair unit）を作る前に、
 //! scratch の worktree で既定ブランチの先端に task branch を merge し、定型の衝突を
 //! `task_dispatch::auto_resolve::resolve` で決定的に解く。本番の checkout（`[selfdeploy] repo` の
 //! 作業ツリー）は触らず、触るのは task branch の ref だけ。
@@ -48,7 +48,7 @@ pub(super) enum Fallback {
     LimitReached {
         attempts: u32,
     },
-    /// 衝突なしの main 追従。ADR-0137 D5 で再 review が要るので自動では配送しない。
+    /// 衝突なしの main 追従。ADR 2026-10-02-parallel-integration-auto-resolve D5 で再 review が要るので自動では配送しない。
     NoConflict,
     /// 解けたが、番号の振り直し・生成物の再生成を含む（D5 で再 review が要る）。
     NeedsReview {
@@ -393,7 +393,7 @@ fn unmerged(dir: &Path) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// ADR-0137 D5 で再 review 不要なのは追記だけの記録の結合だけ。
+/// ADR 2026-10-02-parallel-integration-auto-resolve D5 で再 review 不要なのは追記だけの記録の結合だけ。
 fn review_free(actions: &[ResolutionAction]) -> bool {
     !actions.is_empty() && actions.iter().all(|a| a.kind == ConflictKind::Record)
 }

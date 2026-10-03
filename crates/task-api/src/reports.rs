@@ -1,4 +1,4 @@
-//! 報告の API（ADR-0033 D3。Phase 25。`docs/gui/api.md` §3.30）。
+//! 報告の API（ADR-0033 D3。Phase 25。`docs/api/v1/gui-api.md` §3.30）。
 //!
 //! - `GET /reports` — 一覧（新しい順、絞り込みつき）。読み取りなので通常の認証だけ。
 //! - `GET /reports/{id}` — 1 件（`sources` の中身も展開する）。

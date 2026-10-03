@@ -1,4 +1,4 @@
-//! ADR-0137 D1b: migration・ADR の番号衝突を、取り込み側の file だけ空き番号へ振り直す。
+//! ADR 2026-10-02-parallel-integration-auto-resolve D1b: migration・ADR の番号衝突を、取り込み側の file だけ空き番号へ振り直す。
 //! target（main）に既にある file は決して動かさない。参照は旧ファイル名・旧 stem だけを機械的に
 //! 置換し、番号だけの参照（`ADR-0039`、`RESERVED_VERSIONS` の `39` など）は人に回す。
 

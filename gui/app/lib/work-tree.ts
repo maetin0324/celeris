@@ -3,7 +3,7 @@ import type { Graph, OrgNode, ProjectTaskView, TaskSummary } from "~/celeris/typ
 /**
  * 案件の「仕事の木」（SPEC §3.3、ADR-0033 D2）を、既存の DAG 描画部品（`~/lib/graph-layout.ts` の
  * `layoutGraph`）に渡せる `Graph` に写す純粋関数。DAG は既存どおり `parent_id` / `depends_on`
- * （`GET /projects/{id}` の `tasks` は `GET /graph` と同じ辺の作り方。docs/gui/api.md §3.47）。
+ * （`GET /projects/{id}` の `tasks` は `GET /graph` と同じ辺の作り方。docs/api/v1/gui-api.md §3.47）。
  * `role` フィールドには `assignee` の**組織ノードの名前**を入れる（celeris の役割ではなく表示用の流用。
  * `layoutGraph` は `role` をラベルの最終行にそのまま出すだけで、意味の解釈はしない）。
  *

@@ -1,7 +1,7 @@
 //! `celerisctl projects ls` / `celerisctl projects show <id>`（ADR-0054 D2。Phase 68）。
 //!
 //! `ls` / `show` は CoS の対話 run に許す**読み取りだけの道具**の一部
-//! （`docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
+//! （`agent-docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
 //! タスク・案件の一覧と詳細の read API」）。`ls`/`show`（`query.rs`）と同じ流儀（DB を開いて読むだけ、
 //! プレーンテキスト出力）。
 //!

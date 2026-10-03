@@ -1,4 +1,4 @@
-//! `[delivery]`（ADR-0137 D1c・D1d）: 配送の main 追従と定型衝突の自動解消。
+//! `[delivery]`（ADR 2026-10-02-parallel-integration-auto-resolve D1c・D1d）: 配送の main 追従と定型衝突の自動解消。
 
 use serde::Deserialize;
 use task_dispatch::auto_resolve::generated::DEFAULT_GLOBS;
@@ -13,7 +13,7 @@ pub struct DeliveryConfig {
     pub auto_resolve: AutoResolveConfig,
 }
 
-/// `[delivery.auto_resolve]`（ADR-0137 D1d）: `merge_base` 系の配送失敗で局所修復を作る前に、scratch の
+/// `[delivery.auto_resolve]`（ADR 2026-10-02-parallel-integration-auto-resolve D1d）: `merge_base` 系の配送失敗で局所修復を作る前に、scratch の
 /// worktree で既定ブランチを取り込み `task_dispatch::auto_resolve::resolve` を試す。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -27,7 +27,7 @@ pub struct AutoResolveConfig {
     pub generated: GeneratedConfig,
 }
 
-/// `[delivery.auto_resolve.generated]`（ADR-0137 D1c）: 生成物の衝突の再生成規則。
+/// `[delivery.auto_resolve.generated]`（ADR 2026-10-02-parallel-integration-auto-resolve D1c）: 生成物の衝突の再生成規則。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GeneratedConfig {

@@ -2,7 +2,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fail, parseUpstream, readTokenFile } from "./relay.js";
 
-// SSE の中継（docs/web/implementation-plan.md P1-09、feature-parity R37 の中継の部分）。
+// SSE の中継（agent-docs/web/implementation-plan.md P1-09、feature-parity R37 の中継の部分）。
 // - `/events` → daemon の `/api/v1/stream`。バイト列は加工しない。
 // - `Last-Event-ID`・`after_id` は event id（10 進の整数）、`task_id` は id の文字だけを受け、他の query は拒む。
 // - `text/event-stream`・`no-store`・`X-Accel-Buffering: no` で返し、ヘッダをすぐ送る。

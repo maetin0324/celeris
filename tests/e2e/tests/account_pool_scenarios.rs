@@ -5,7 +5,7 @@
 //! 1. 観測値の異なる 2 アカウントがあれば、スコアの高い方に run が割り当てられ、`WorkerStarted.account` と
 //!    ワーカーの `CLAUDE_SECURESTORAGE_CONFIG_DIR` が一致する
 //! 2. 片方が throttled で終わると、そのアカウントだけが cooldown になり、次の run はもう片方に行く。
-//!    プロバイダは cooldown にならない（`docs/gui/api.md` の cooldown 一覧が空のまま）
+//!    プロバイダは cooldown にならない（`docs/api/v1/gui-api.md` の cooldown 一覧が空のまま）
 //! 3. `rate_limit_event` が run の途中で `AccountBook` と `GET /accounts` に反映され、celeris を再起動しても残る
 //! 4. `POST /accounts` → `login` → `login/code` → `logged_in: true` がスタブの `claude auth login` で通る。
 //!    管理系はトークン無しで 401

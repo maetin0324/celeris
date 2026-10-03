@@ -11,7 +11,7 @@
 //! `harness`（`[[harnesses]]`・`[[roles]]`・`[[genres]]`）/ `org` / `delegation` / `dispatch`
 //! （`[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]`）/ `execution` / `cluster` /
 //! `workspace`（＋`[containers]`）/ `scratch` / `github` / `selfdeploy`（＋`[handoff]`）/
-//! `knowledge`（＋`[memory]`）。公開型はすべて `crate::config::*` から従来どおり引ける。
+//! `knowledge`（＋`[memory]`）/ `storage`（`[storage]`、ADR-0136）。公開型はすべて `crate::config::*` から従来どおり引ける。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -35,6 +35,7 @@ mod providers;
 mod proxy;
 mod scratch;
 mod selfdeploy;
+mod storage;
 mod workspace;
 
 pub use accounts::*;
@@ -53,6 +54,7 @@ pub use org::*;
 pub use providers::*;
 pub use scratch::*;
 pub use selfdeploy::*;
+pub use storage::*;
 pub use workspace::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -203,6 +205,9 @@ pub struct Config {
     /// ADR-0043 D3（Phase 56）: コンテナ実行（runtime・既定のイメージ・ビルドの置き場）。
     #[serde(default)]
     pub containers: ContainersConfig,
+    /// ADR-0136: `[storage]`。hot データの正本を置く mount（`/local`）の起動前検査。省略時は検査しない。
+    #[serde(default)]
+    pub storage: StorageConfig,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -416,6 +421,7 @@ impl Config {
         }
         cfg.knowledge.resolve_paths(&base);
         cfg.selfdeploy.resolve_paths(&base);
+        cfg.storage.resolve_paths();
         cfg.adapters.paperqa.resolve_paths(&base);
         providers::resolve_provider_settings(&mut cfg.providers, &base);
 
@@ -426,6 +432,10 @@ impl Config {
         cfg.validate()?;
         for code in cfg.provider_kind_warnings() {
             tracing::warn!(warning = %code, "provider kind compatibility warning");
+        }
+        // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
+        for warning in cfg.langmem_auth_warnings() {
+            tracing::warn!(%warning, "knowledge.langmem auth warning");
         }
         // API を有効にするなら、トークンが読めることを起動時に確かめる（exit 2）。
         if cfg.api.listen.is_some() {
@@ -448,6 +458,7 @@ impl Config {
         self.knowledge.validate()?;
         self.execution.validate()?;
         self.containers.validate()?;
+        self.storage.validate()?;
         providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;

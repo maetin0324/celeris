@@ -3,10 +3,10 @@
 //! 要求/応答へ双方向に写す。
 //!
 //! `auth.json` に `expires_at` 相当が無いため（ADR-0053 のフィクスチャどおり）、更新は**事後（401 を
-//! 受けてから）だけ**行う（`docs/llm-source.md` に明記。claude-oauth の事前更新とはこの点だけ違う）。
+//! 受けてから）だけ**行う（`docs/guides/llm-source.md` に明記。claude-oauth の事前更新とはこの点だけ違う）。
 //!
-//! **Phase 65b 追記**: 本番で `codex-oauth` 経由の要求が全て `400` で落ちていた（`docs/adr/0053-llm-source-proxy.md`
-//! の Phase 65b 追記、`docs/llm-source.md` §2 参照）。ChatGPT の Codex backend は Codex CLI
+//! **Phase 65b 追記**: 本番で `codex-oauth` 経由の要求が全て `400` で落ちていた（`agent-docs/adr/0053-llm-source-proxy.md`
+//! の Phase 65b 追記、`docs/guides/llm-source.md` §2 参照）。ChatGPT の Codex backend は Codex CLI
 //! （`codex-rs`）が送る形以外を拒否することがあるため、ここでは Codex CLI と同じ形で送る:
 //! `store: false`、`stream: true`（**非 stream の応答を受け付けないので、常に stream で要求し、
 //! クライアントが非 stream を求めたときはこの層で SSE を集約する**）、`instructions` は常に入れる

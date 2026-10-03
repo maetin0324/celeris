@@ -3,7 +3,7 @@ tasks: [01M3ZFJ2DZ5TZPAFKACX45JNF4]
 ---
 # launcher の実 session で本番 admission の表を取る手順（人が行う）
 
-Attested task（01M3WV4BFJ71J9ZWJ020MP2Z4K）の証跡 `ADMISSION[real-session]`（許可/拒否の対応表、[ADR-0138](../adr/0138-browser-prod-admission-confidential-release.md) D-L） を host で取り直す手順。daemon 側の launcher の身元確認は、`SO_PEERCRED`（socket 起動では systemd の uid 0 になる）から応答の `SCM_CREDENTIALS` に替えた（[ADR-0116 付記 D-P](../adr/0116-browser-launcher-implementation.md)）。
+Attested task（01M3WV4BFJ71J9ZWJ020MP2Z4K）の証跡 `ADMISSION[real-session]`（許可/拒否の対応表、[ADR-0138](../../agent-docs/adr/0138-browser-prod-admission-confidential-release.md) D-L） を host で取り直す手順。daemon 側の launcher の身元確認は、`SO_PEERCRED`（socket 起動では systemd の uid 0 になる）から応答の `SCM_CREDENTIALS` に替えた（[ADR-0116 付記 D-P](../../agent-docs/adr/0116-browser-launcher-implementation.md)）。
 
 **host の launcher は全 task の試験が共有している。** 入れ替えは証跡を取る間だけにし、終わったら必ず手順 5 で main の版に戻す。入れ替えている間、main の版を前提にした他 task の `browser_launcher_ptrace` 試験は `start real launcher session: Protocol` で落ちる。
 

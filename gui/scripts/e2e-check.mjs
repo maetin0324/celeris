@@ -255,7 +255,7 @@ async function main() {
   if (requireStaging && !guiUrlEnv) {
     console.error(
       "e2e-check: pnpm e2e:staging needs E2E_GUI_URL (and usually E2E_API_URL / E2E_TOKEN_FILE) pointing at " +
-        "an already-running staging GUI/celeris. verify.sh sets these; for a manual run see docs/selfdeploy.md.",
+        "an already-running staging GUI/celeris. verify.sh sets these; for a manual run see docs/ops/selfdeploy.md.",
     );
     process.exit(2);
   }

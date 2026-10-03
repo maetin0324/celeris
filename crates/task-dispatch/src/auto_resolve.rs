@@ -1,4 +1,4 @@
-//! ADR-0137: merge 中の衝突を分類し、定型 resolver に渡す。
+//! ADR 2026-10-02-parallel-integration-auto-resolve: merge 中の衝突を分類し、定型 resolver に渡す。
 //! 呼び出し側が `NeedsHuman` の後に merge を abort する。
 
 use serde::{Deserialize, Serialize};

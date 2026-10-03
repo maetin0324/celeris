@@ -1,4 +1,4 @@
-# web/ の pnpm 設定。gui/pnpm-workspace.yaml と同じ方針（docs/web/implementation-plan.md §1「依存の追加」）。
+# web/ の pnpm 設定。gui/pnpm-workspace.yaml と同じ方針（agent-docs/web/implementation-plan.md §1「依存の追加」）。
 # web/ は gui/ と独立した workspace と lockfile を持つ。
 packages:
   - "."

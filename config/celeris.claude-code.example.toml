@@ -1,5 +1,5 @@
 # Phase 4 ドッグフーディング用の設定例（ADR-0006）。相対パスはこのファイルのあるディレクトリ基準。
-# 使い方は docs/PROGRESS.md の Phase 4 節「人間による確認待ち」を参照。
+# 使い方は agent-docs/PROGRESS.md の Phase 4 節「人間による確認待ち」を参照。
 db = "../celeris-phase4-demo.sqlite3"
 workspace_root = "../workspaces"
 tick_ms = 2000

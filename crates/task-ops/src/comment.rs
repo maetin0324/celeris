@@ -11,7 +11,7 @@
 //! 走っている run を実際に殺すのは**ディスパッチャ**（`abort_stale_runs`: ストア上で `running` で
 //! なくなった run の `JoinHandle` を `abort()` する。tokio の `kill_on_drop` が**子プロセスに SIGKILL**
 //! を送る）。**cancel と同じ経路**で、ADR-0044 D2 の「SIGTERM → `kill_grace_secs`」には**まだなって
-//! いない**（cancel も昔から同じ。孫プロセスは残る。`docs/PROGRESS.md` の提案 P-53a）。
+//! いない**（cancel も昔から同じ。孫プロセスは残る。`agent-docs/progress/2026-10-02-docs-layout/refs-crates.md` の設計経緯）。
 //! 打ち切ったタスクは同じ tick では dispatch し直さない（同じ worktree に 2 つの書き手を入れないため）。
 //! ここは状態とコメントだけを決定的に書く。LLM は呼ばない（DESIGN 原則 1）。
 

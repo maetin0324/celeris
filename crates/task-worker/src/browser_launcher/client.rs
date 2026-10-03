@@ -27,8 +27,10 @@ pub enum ClientError {
     Io(#[from] std::io::Error),
     #[error("launcher closed the connection")]
     Closed,
-    #[error("launcher sent a malformed response")]
-    Protocol,
+    /// 応答が読めない・要求に合わない。中身は診断用（serde の失敗理由と生 JSON の先頭、または
+    /// 予期しない応答の種類）。launcher と daemon の protocol の版ずれもここに出る。
+    #[error("launcher sent a malformed response: {0}")]
+    Protocol(String),
     #[error("launcher refused: {0}")]
     Remote(ErrorCode),
 }
@@ -37,7 +39,7 @@ impl From<FrameError> for ClientError {
     fn from(e: FrameError) -> Self {
         match e {
             FrameError::Closed => ClientError::Closed,
-            FrameError::TooLarge(_) => ClientError::Protocol,
+            FrameError::TooLarge(n) => ClientError::Protocol(format!("frame too large: {n} bytes")),
             FrameError::Io(e) => ClientError::Io(e),
         }
     }
@@ -129,7 +131,9 @@ impl LauncherClient {
             Peeked::Data(seen) => self.note_responder(seen),
         }
         let body = read_frame(&mut self.stream, self.max_frame)?;
-        let resp: Response = serde_json::from_slice(&body).map_err(|_| ClientError::Protocol)?;
+        let resp: Response = serde_json::from_slice(&body).map_err(|e| {
+            ClientError::Protocol(format!("{e}; raw response: {}", raw_excerpt(&body)))
+        })?;
         match resp {
             Response::Error { code } => Err(ClientError::Remote(code)),
             other => Ok(other),
@@ -158,7 +162,7 @@ impl LauncherClient {
                 instance_id,
                 receipt,
             }),
-            _ => Err(ClientError::Protocol),
+            other => Err(unexpected("started", &other)),
         }
     }
 
@@ -179,7 +183,7 @@ impl LauncherClient {
                 receipt,
                 observation,
             } => Ok((receipt, observation)),
-            _ => Err(ClientError::Protocol),
+            other => Err(unexpected("action_result", &other)),
         }
     }
 
@@ -193,7 +197,7 @@ impl LauncherClient {
             lease_id: lease_id.into(),
         })? {
             Response::Observed { state, facts } => Ok((state, facts)),
-            _ => Err(ClientError::Protocol),
+            other => Err(unexpected("observed", &other)),
         }
     }
 
@@ -203,9 +207,31 @@ impl LauncherClient {
             lease_id: lease_id.into(),
         })? {
             Response::Stopped { receipt } => Ok(receipt),
-            _ => Err(ClientError::Protocol),
+            other => Err(unexpected("stopped", &other)),
         }
     }
+}
+
+/// 生の応答の先頭（診断用）。秘密は応答に載らない（session id・receipt・観測値のみ）。
+const RAW_EXCERPT_MAX: usize = 512;
+
+fn raw_excerpt(body: &[u8]) -> String {
+    let text = String::from_utf8_lossy(body);
+    match text.char_indices().nth(RAW_EXCERPT_MAX) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.into_owned(),
+    }
+}
+
+fn unexpected(want: &str, got: &Response) -> ClientError {
+    let got = match got {
+        Response::Started { .. } => "started",
+        Response::ActionResult { .. } => "action_result",
+        Response::Observed { .. } => "observed",
+        Response::Stopped { .. } => "stopped",
+        Response::Error { .. } => "error",
+    };
+    ClientError::Protocol(format!("expected a {want} response, got {got}"))
 }
 
 fn set_passcred(stream: &UnixStream) -> std::io::Result<()> {

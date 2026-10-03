@@ -157,26 +157,26 @@ fn migration_same_number_on_two_branches_moves_only_source_file() {
 fn adr_same_number_renames_source_and_follows_links_and_title() {
     let fx = fixture(
         &[],
-        &[("docs/adr/0137-first.md", "# ADR-0137: first\n")],
+        &[("docs/adr/0021-first.md", "# ADR-0021: first\n")],
         &[
-            ("docs/adr/0137-second.md", "# ADR-0137: second\n\n本文\n"),
+            ("docs/adr/0021-second.md", "# ADR-0021: second\n\n本文\n"),
             (
                 "docs/index.md",
-                "- [second](adr/0137-second.md)\n- 0137-second の補足\n",
+                "- [second](adr/0021-second.md)\n- 0021-second の補足\n",
             ),
         ],
         false,
     );
     let repo = fx.tmp.path();
     resolved(&fx);
-    assert_eq!(read(repo, "docs/adr/0137-first.md"), "# ADR-0137: first\n");
+    assert_eq!(read(repo, "docs/adr/0021-first.md"), "# ADR-0021: first\n");
     assert_eq!(
-        read(repo, "docs/adr/0138-second.md"),
-        "# ADR-0138: second\n\n本文\n"
+        read(repo, "docs/adr/0022-second.md"),
+        "# ADR-0022: second\n\n本文\n"
     );
     assert_eq!(
         read(repo, "docs/index.md"),
-        "- [second](adr/0138-second.md)\n- 0138-second の補足\n"
+        "- [second](adr/0022-second.md)\n- 0022-second の補足\n"
     );
 }
 
@@ -184,20 +184,20 @@ fn adr_same_number_renames_source_and_follows_links_and_title() {
 fn adr_add_add_conflict_keeps_target_version_and_adds_source_under_new_number() {
     let fx = fixture(
         &[],
-        &[("docs/adr/0137-plan.md", "# ADR-0137: target plan\n")],
-        &[("docs/adr/0137-plan.md", "# ADR-0137: source plan\n")],
+        &[("docs/adr/0021-plan.md", "# ADR-0021: target plan\n")],
+        &[("docs/adr/0021-plan.md", "# ADR-0021: source plan\n")],
         true,
     );
     let repo = fx.tmp.path();
     resolved(&fx);
     assert_eq!(unmerged(repo), "");
     assert_eq!(
-        read(repo, "docs/adr/0137-plan.md"),
-        "# ADR-0137: target plan\n"
+        read(repo, "docs/adr/0021-plan.md"),
+        "# ADR-0021: target plan\n"
     );
     assert_eq!(
-        read(repo, "docs/adr/0138-plan.md"),
-        "# ADR-0138: source plan\n"
+        read(repo, "docs/adr/0022-plan.md"),
+        "# ADR-0022: source plan\n"
     );
 }
 

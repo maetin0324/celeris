@@ -144,3 +144,16 @@ remote/shared workspace はローカル task branch を target へ rebase する
 - `TaskDetail.integration_repair` と受信箱の `AttentionItem::Failed.integration_repair` は実装済み。表示 object の `state`、`work_unit_id`、`attempt`、`max_attempts`、`target_ref`、`target_sha`、`before_sha`、`conflict_files`、`reason`、`rollback_to_sha`、`fallback` は実装と一致する。一方、D5 の `WorkUnitView.integration_repair` と `ExecutionWorkUnitView.integration_repair`、GUI の WU 行の専用 badge は未実装。`IntegrationRepairScheduled` から WU ごとの起票時 snapshot を組み立てる関数は `task_core::integration_repair_snapshots` として存在するが、API 応答にはまだ渡していない。D5 の未完了項目として追跡する。
 - rollback の現実の安全条件は `dispatcher/worker_finish.rs::rollback_integration_repair` に従う。task branch 上で、**rollback 判定時点で** `git status --porcelain` が空、`before_sha` がその branch の reflog にあり、必要な `rebase --abort` が成功した場合だけ `reset --hard before_sha` を行う。rebase 中に未コミットの変更が残る場合は、その変更を推測で捨てず `fallback = false` の手動確認に止める。成功時だけ `rollback_to_sha = before_sha` を記録する。
 - `limit_reached` は `work_unit_id = null`、`attempt = 2`、`fallback = true` で記録する。修復 WU の `plan_issue` / `failed` / 信頼できない結果は、`before_sha` の clean な復元に成功した場合だけ未同期 HEAD の review に戻す。abort 失敗または安全な復元ができない場合は review を進めない。これらは `integration_repair_exhausted` の `reason` と `fallback` で区別する。
+
+## 付記: fallback の解除（2026-10-03）
+
+**問題。** 従来は最新の `IntegrationRepairExhausted{fallback:true}` が立っている間、新しい `IntegrationRepairScheduled` が来るまで review 前同期をずっと省いた。同期を省くと `merge_candidate_sha` が記録されず、root delivery の `validate_candidate` は NULL 候補を拒む。merge-base 局所修復が main を取り込んでも再 review がまた同期を省くので、`MAX_TARGET_RESYNCS` の後に Blocked [needs-human] で止まった。
+
+**決定。** fallback は「打ち切った時点の branch のまま」の間だけ有効にする（`dispatcher/review_spawn.rs` の `fallback_head`）。
+
+- 比べる元の HEAD は events から取る: その repo の最新の IntegrationRepair 記録が `IntegrationRepairExhausted{fallback:true}` なら `rollback_to_sha`、無ければ `before_sha`。どちらも fallback で review した未同期 HEAD と同じ SHA である（`limit_reached` は abort 後の HEAD、修復 WU の打ち切りは `before_sha` のままか、そこへ rollback したときだけ `fallback = true`）。新しい event 欄・migration は足さない。
+- 今の HEAD がその SHA と同じで、かつ target（root は既定 branch、tree child は親 task branch）が HEAD の祖先でなければ、従来どおり同期を省く。
+- HEAD が違う、または target が HEAD の祖先になったら fallback を解く。`integration repair fallback released for <repo>: …` の `WorkerProgress` を残し、通常どおり `sync_onto_target` → `ReviewTargetSynced`（target / reviewed / merge candidate）と delivery 行の候補を記録する。target が既に祖先なら同期は `UpToDate` になり、その reviewed SHA が候補になる。同期が再び衝突すれば D1〜D4 に戻り、上限なら今の HEAD を `before_sha` とする新しい `limit_reached` の fallback になる。
+- 判定は毎回 events と git から作り、dispatcher の memory に持たない（daemon を再起動しても同じ判定）。成果は捨てず、attempts も消費しない（`Trigger::ReviewFail` は使わない）。tree child の親 branch 統合と root delivery/selfdeploy の意味は変えない。
+
+試験は `dispatcher/tests/target_sync.rs` の `integration_repair_fallback_keeps_skipping_while_branch_unchanged`（再起動した dispatcher でも省く）、`integration_repair_fallback_released_when_target_merged`、`integration_repair_fallback_released_when_head_moves`。

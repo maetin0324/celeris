@@ -34,6 +34,32 @@ fn pre_review_stale_state(events: &[Event]) -> (u32, Option<&Event>, bool) {
     (count, last, halted)
 }
 
+/// ADR-0120 付記（fallback の解除）: fallback を解いて同期へ戻ったことを示す `WorkerProgress` の接頭辞。
+pub(crate) const FALLBACK_RELEASED_PREFIX: &str = "integration repair fallback released for ";
+
+/// ADR-0120 付記（fallback の解除）: `repo_id` の最新の IntegrationRepair 記録が
+/// `IntegrationRepairExhausted{fallback:true}` なら、そのとき review した未同期 HEAD
+/// （rollback したならその SHA、しなければ `before_sha`）。新しい `IntegrationRepairScheduled` が
+/// 後にあれば `None`。
+fn fallback_head(events: &[(u64, Event)], repo_id: task_core::RepoId) -> Option<&str> {
+    events.iter().rev().find_map(|(_, e)| match e {
+        Event::IntegrationRepairExhausted {
+            repo_id: exhausted_repo,
+            fallback,
+            before_sha,
+            rollback_to_sha,
+            ..
+        } if *exhausted_repo == repo_id => {
+            Some(fallback.then(|| rollback_to_sha.as_deref().unwrap_or(before_sha.as_str())))
+        }
+        Event::IntegrationRepairScheduled {
+            repo_id: scheduled_repo,
+            ..
+        } if *scheduled_repo == repo_id => Some(None),
+        _ => None,
+    })?
+}
+
 struct ReviewSync {
     repo_id: task_core::RepoId,
     target_ref: String,
@@ -340,33 +366,43 @@ impl Dispatcher {
                 let Some(reference) = task.repos.iter().find(|r| r.name == repo.name) else {
                     continue;
                 };
-                // A failed repair deliberately reviews the restored, unsynced HEAD.
-                // Keep this decision across daemon restarts; a later scheduled repair
-                // supersedes the exhausted event.
-                let fallback = self
-                    .store
-                    .events_for(task_id)?
-                    .iter()
-                    .rev()
-                    .find_map(|(_, e)| match e {
-                        Event::IntegrationRepairExhausted {
-                            repo_id, fallback, ..
-                        } if *repo_id == reference.repo_id => Some(*fallback),
-                        Event::IntegrationRepairScheduled { repo_id, .. }
-                            if *repo_id == reference.repo_id =>
-                        {
-                            Some(false)
-                        }
-                        _ => None,
-                    })
-                    .unwrap_or(false);
-                if fallback {
-                    self.store.append_event(task_id, &Event::worker_progress(
-                        run_id.clone(), format!("review target sync skipped for {}: integration repair exhausted; reviewing the unsynced HEAD without a merge candidate", repo.name)
-                    ))?;
-                    continue;
-                }
                 let target_ref = self.review_target_ref(&task, reference.repo_id, &repo.source)?;
+                // A failed repair deliberately reviews the restored, unsynced HEAD.
+                // ADR-0120 付記（fallback の解除）: その HEAD のままで target を含まない間だけ同期を省く。
+                // branch が変われば（HEAD が動いた・target が祖先になった）通常の同期へ戻り、
+                // merge candidate を記録する。判定は events と git だけから毎回作る（daemon 再起動でも同じ）。
+                let events = self.store.events_for(task_id)?;
+                if let Some(fallback_head) = fallback_head(&events, reference.repo_id) {
+                    let head = crate::integration::rev_parse(&worktree.dir, "HEAD");
+                    let target_contained =
+                        crate::integration::rev_parse(&worktree.dir, &target_ref).is_some_and(
+                            |t| crate::integration::is_ancestor(&worktree.dir, &t, "HEAD"),
+                        );
+                    if head.as_deref() == Some(fallback_head) && !target_contained {
+                        self.store.append_event(task_id, &Event::worker_progress(
+                            run_id.clone(), format!("review target sync skipped for {}: integration repair exhausted; reviewing the unsynced HEAD without a merge candidate", repo.name)
+                        ))?;
+                        continue;
+                    }
+                    let why = if target_contained {
+                        format!("{target_ref} is an ancestor of HEAD")
+                    } else {
+                        format!(
+                            "HEAD moved from {fallback_head} to {}",
+                            head.as_deref().unwrap_or("?")
+                        )
+                    };
+                    self.store.append_event(
+                        task_id,
+                        &Event::worker_progress(
+                            run_id.clone(),
+                            format!(
+                                "{FALLBACK_RELEASED_PREFIX}{}: {why}; syncing before review",
+                                repo.name
+                            ),
+                        ),
+                    )?;
+                }
                 // ADR-0130 D4: sync の前に behind を測る（stale 優先の材料）。
                 self.observe_behind_target(task_id, reference.repo_id, &worktree.dir, &target_ref);
                 let pre_sync_head = crate::integration::rev_parse(&worktree.dir, "HEAD");

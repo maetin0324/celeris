@@ -69,7 +69,7 @@ cat > /tmp/daily-curation-template.json <<'JSON'
     {"type": "artifact_exists", "name": "daily-summary.md"},
     {"type": "command", "cmd": "celerisctl curation validate", "expect_exit": 0}
   ],
-  "objective": "知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10・D12）。本番 KB は書かず、作業場所の写しだけを編集する。_inbox の候補は古い順に 40 件まで扱い、残りは次回へ回す。出す前に celerisctl curation validate を走らせ exit 0 にする。"
+  "objective": "知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10・D12）。本番 KB は書かない。inputs/ は読み取り専用として扱い、編集・追加・削除しない。変更後の本文は curation-plan.json の content に書き、expected_hash / target_hash は未変更の inputs/kb から取得する。差分作成で編集が必要なら別の作業用コピーを使う。_inbox の候補は古い順に 40 件まで扱い、残りは次回へ回す。出す前に celerisctl curation validate を走らせ exit 0 にする。"
 }
 JSON
 sed -i "s/__PROJECT__/${PROJECT}/" /tmp/daily-curation-template.json

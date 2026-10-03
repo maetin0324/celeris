@@ -310,7 +310,8 @@ UNIQUE が防ぐ範囲に留める。
    ページと `user/` 配下の削除・大幅書き換えは適用せず、`human_decisions` へまとめる。
    `inbox` の提案は DB の状態を直接変えず、人が既読化・cancel 等を選ぶ材料に限る。
 5. **反映は承認した計画に限る。** `dry_run` は本番 KB を書かず、`curation.diff` と
-   `daily-summary.md` を出す。`apply` でも worker は写しだけを編集する。daemon は検証済み計画と
+   `daily-summary.md` を出す。`apply` でも worker は本番 KB と `inputs/` を変更せず、変更後の本文を計画の
+   `content` に書く（付記 D12）。差分作成で編集が必要なら別の作業用コピーを使う。daemon は検証済み計画と
    差分のハッシュを報告に添え、人が当該 task の decision でそのハッシュを明示して承認した後に
    だけ、同じ計画を再検証して本番 KB に決定的に適用する。未承認・ハッシュ不一致・元ページの
    変更時は適用せず、再度 dry-run を要する。承認は保留された `human_decisions` の個別案件を

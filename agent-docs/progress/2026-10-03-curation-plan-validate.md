@@ -92,3 +92,18 @@ ID 集合との検証条件がずれていた。
 - 実バイナリ `celerisctl curation validate` → 旧 worker 形式は `unknown field task_id` で exit 1、
   prepare 済み入力に対する最小計画は exit 0、KB 変更・inbox 変更は snapshot 不一致でそれぞれ exit 1。
   原票は成果物ディレクトリの `curation-validation-smoke.json`。
+
+## 再レビュー対応（attempt 3、2026-10-03）
+
+- `docs/ops/cron-jobs.md` §2 の `cron create` 用 objective に残っていた「写しだけを編集する」を修正。
+  `inputs/` は編集・追加・削除せず、変更後の本文は `content` に書き、ハッシュは未変更の `inputs/kb` から取得する。
+  差分作成に必要な編集は別の作業用コピーで行う。harness instructions・cron seed・§2.1 と指示を揃えた。
+- ADR-0131 D10 (5) の同じ旧指示も D12 の入力固定規則に合わせた。
+- 文書の雛形を JSON として抽出・解析し、objective の入力保全指示と acceptance の検証コマンドを確認した。
+  config は TOML として解析し、harness の指示との一致も確認（exit 0）。
+- `cargo test --workspace` → exit 0（3,622 passed / 0 failed / 13 ignored）。旧 worker 形式の拒否と最小計画の受理も pass。
+- `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+- `sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、
+  `git diff --check` → すべて exit 0。
+- 検査ログは成果物ディレクトリの `workspace-test-attempt3.log` と `workspace-clippy-attempt3.log`。
+  本番への昇格・設定更新・cron 雛形の PATCH は未実施。

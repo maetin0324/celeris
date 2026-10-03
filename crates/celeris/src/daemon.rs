@@ -5,7 +5,7 @@
 //! |---|---|
 //! | `secrets` | `[secrets]` の解決と env の合成（ADR-0030）、実効モデル |
 //! | `adapters` | `build_adapters`・`secret_usage`・`effective_models`・`provider_lives` |
-//! | `bootstrap` | DB の置き場所の検査、`build_dispatcher`（store を開き migrate する）、`seed_org_if_empty` |
+//! | `bootstrap` | DB の置き場所の検査、`build_dispatcher`（store を開き migrate する）、`seed_org_if_empty`・`seed_cron_if_empty` |
 //! | `clusters` | ssh master・liveness hook・tunnel の配線（ADR-0032 / ADR-0062） |
 //! | `api` | `config_view`・`api_settings`・`bind_reuseport`・`start_api` |
 //! | `services` | llm-proxy と MCP の組み立て・起動・停止 |

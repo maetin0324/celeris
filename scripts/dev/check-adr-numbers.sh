@@ -33,6 +33,7 @@ ALLOWED_OVER_LAST="
 0136-local-hot-data-layout.md
 0138-browser-prod-admission-confidential-release.md
 0139-langmem-proxy-bearer-and-verify-proxy-bind.md
+0131-cron-jobs.md
 "
 
 NAMESPACES="main gui web"

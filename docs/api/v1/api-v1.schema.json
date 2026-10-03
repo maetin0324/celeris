@@ -4677,6 +4677,411 @@
       ],
       "type": "object"
     },
+    "CronCatchUp": {
+      "description": "ADR-0131 D3: daemon 停止中に過ぎた予定時刻の扱い。",
+      "oneOf": [
+        {
+          "const": "latest",
+          "description": "過ぎた中で最新の 1 件だけ発火する（既定）。",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "過ぎた分は何も作らない。",
+          "type": "string"
+        }
+      ]
+    },
+    "CronJobCreateBody": {
+      "additionalProperties": false,
+      "description": "`POST /cron-jobs` の本文。",
+      "properties": {
+        "catch_up": {
+          "$ref": "#/$defs/CronCatchUp",
+          "default": "latest",
+          "description": "取りこぼした予定時刻の扱い（既定 `latest`）。"
+        },
+        "enabled": {
+          "default": true,
+          "description": "既定 `true`。`false` なら一時停止の状態で作る。",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "人が読む識別子（一意。ULID の形は不可）。",
+          "type": "string"
+        },
+        "overlap": {
+          "$ref": "#/$defs/CronOverlap",
+          "default": "skip",
+          "description": "前回の task が終わっていないときの扱い（既定 `skip`）。"
+        },
+        "schedule": {
+          "description": "5 欄の cron 式（`@daily` 等の別名も可）。",
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/CronTaskTemplate"
+        },
+        "timezone": {
+          "description": "IANA タイムゾーン名（例 `Asia/Tokyo`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "timezone",
+        "template"
+      ],
+      "type": "object"
+    },
+    "CronJobId": {
+      "description": "cron job 1 件の識別子（ULID）。",
+      "type": "string"
+    },
+    "CronJobList": {
+      "description": "`GET /cron-jobs` の応答。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CronJobView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CronJobPatchBody": {
+      "additionalProperties": false,
+      "description": "`PATCH /cron-jobs/{id}` の本文（書いた欄だけ変える。有効/無効は `pause` / `resume` で変える）。",
+      "properties": {
+        "catch_up": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronCatchUp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronOverlap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schedule": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronTaskTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "雛形は丸ごと置き換える。"
+        },
+        "timezone": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CronJobRun": {
+      "description": "`cron_job_runs` の 1 行。",
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/CronJobRunId"
+        },
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/CronRunOutcome"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "scheduled_for": {
+          "description": "発火の予定時刻（UTC）。手動実行は押した時刻。",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "$ref": "#/$defs/CronTrigger"
+        }
+      },
+      "required": [
+        "id",
+        "job_id",
+        "scheduled_for",
+        "trigger",
+        "outcome",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "CronJobRunId": {
+      "description": "実行履歴 1 行の識別子（ULID）。",
+      "type": "string"
+    },
+    "CronJobRunList": {
+      "description": "`GET /cron-jobs/{id}/runs` の応答（新しい順）。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CronJobRun"
+          },
+          "type": "array"
+        },
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        }
+      },
+      "required": [
+        "job_id",
+        "items"
+      ],
+      "type": "object"
+    },
+    "CronJobView": {
+      "description": "job 1 件と最後の履歴（一覧・詳細・作成・更新・一時停止・再開の応答）。",
+      "properties": {
+        "catch_up": {
+          "$ref": "#/$defs/CronCatchUp"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "last_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronJobRun"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "最後に記録した履歴（無ければ `null`）。"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_fire_at": {
+          "description": "UTC。`enabled = false` のとき `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlap": {
+          "$ref": "#/$defs/CronOverlap"
+        },
+        "schedule": {
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/CronTaskTemplate"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "schedule",
+        "timezone",
+        "overlap",
+        "catch_up",
+        "template",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "CronOverlap": {
+      "description": "ADR-0131 D2: 前回の task が終わっていないときの規則。",
+      "oneOf": [
+        {
+          "const": "skip",
+          "description": "作らずに `skipped_overlap` を記録する（既定）。",
+          "type": "string"
+        },
+        {
+          "const": "queue",
+          "description": "`queued` を高々 1 件溜め、前回が終端になった後に作る。",
+          "type": "string"
+        }
+      ]
+    },
+    "CronRunOutcome": {
+      "description": "ADR-0131 D1: 履歴 1 行の結果。",
+      "enum": [
+        "created",
+        "queued",
+        "skipped_overlap",
+        "skipped_missed",
+        "error"
+      ],
+      "type": "string"
+    },
+    "CronRunResult": {
+      "description": "`POST /cron-jobs/{id}/run` の応答。",
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "job_name": {
+          "type": "string"
+        },
+        "runs": {
+          "description": "この実行で書いた履歴（古い順。手動実行では 1 件）。",
+          "items": {
+            "$ref": "#/$defs/CronJobRun"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "作った task（`outcome = created` のときだけ）。"
+        }
+      },
+      "required": [
+        "job_id",
+        "job_name",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "CronTaskTemplate": {
+      "additionalProperties": true,
+      "description": "ADR-0131 D1: job が作る task の雛形（`cron_jobs.template_json`）。`acceptance` は `task_ops::add` の\n`CriterionSpec` と同じ JSON の形で持ち、検証と `NewTaskSpec` への変換は task-ops 側で行う\n（task-core は task-ops に依存しない）。`extra` は job 固有の値（日次整理の `mode` 等）。",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": true,
+          "type": "array"
+        },
+        "assignee": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "objective": {
+          "default": "",
+          "type": "string"
+        },
+        "priority": true,
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "`{date}` は発火時刻の job タイムゾーンでの `YYYY-MM-DD` に置き換わる（[`render_title`]）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "CronTrigger": {
+      "description": "ADR-0131 D1: 履歴 1 行の発火のきっかけ。",
+      "enum": [
+        "schedule",
+        "catch_up",
+        "manual"
+      ],
+      "type": "string"
+    },
     "DaemonInstance": {
       "description": "`daemon_instances` の 1 行。",
       "properties": {
@@ -22145,6 +22550,25 @@
     "console_instruct_accepted": {
       "$ref": "#/$defs/ConsoleInstructAccepted"
     },
+    "cron_job": {
+      "$ref": "#/$defs/CronJobView"
+    },
+    "cron_job_create": {
+      "$ref": "#/$defs/CronJobCreateBody",
+      "description": "ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。"
+    },
+    "cron_job_list": {
+      "$ref": "#/$defs/CronJobList"
+    },
+    "cron_job_patch": {
+      "$ref": "#/$defs/CronJobPatchBody"
+    },
+    "cron_job_run_list": {
+      "$ref": "#/$defs/CronJobRunList"
+    },
+    "cron_run_result": {
+      "$ref": "#/$defs/CronRunResult"
+    },
     "daemon": {
       "$ref": "#/$defs/DaemonView"
     },
@@ -22695,7 +23119,13 @@
     "decision_answer",
     "decision_withdraw",
     "decision_outcome",
-    "task_tree"
+    "task_tree",
+    "cron_job_create",
+    "cron_job_patch",
+    "cron_job",
+    "cron_job_list",
+    "cron_job_run_list",
+    "cron_run_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

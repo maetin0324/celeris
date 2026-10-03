@@ -26,6 +26,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | ワークスペース（案件×リポジトリ） | task-core::repos | `crates/task-core/src/repos.rs`, `crates/task-core/src/store/repos.rs` | [ADR-0043](../agent-docs/adr/0043-workspaces.md) |
 | モデル/供給層ルーティング・quota | task-core | `crates/task-core/src/{routing,model_routing,model_policy,quota}.rs` | [ADR-0069](../agent-docs/adr/0069-routing-four-layers.md) |
 | 知識ベースの置き場 | task-core::knowledge | `crates/task-core/src/knowledge.rs`（`knowledge/layout.rs`） | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
+| 定期実行（cron job）・受信箱の片付け規則・日次整理 | task-core::cron / task-ops / task-dispatch | `crates/task-core/src/cron.rs`（`cron/store.rs`、migration `0046_cron_jobs.sql`）, `crates/task-ops/src/{cron_jobs,knowledge_curation}.rs`, `crates/task-ops/src/inbox.rs`（attention）, `crates/task-dispatch/src/dispatcher.rs`（tick の cron 段）, `crates/celerisctl/src/commands/curation.rs`（`curation validate`） | [ADR-0131](../agent-docs/adr/0131-cron-jobs.md)（付記 D12: 計画の事前検証と `_inbox` 上限） |
 | クラスタ job の durable wait（PBS/Slurm の状態解釈） | task-core::cluster_job | `crates/task-core/src/cluster_job.rs`, `crates/task-core/migrations/0034_cluster_job_waits.sql`（schema 34）, `crates/task-core/src/store/{events,transition,task_store}.rs` | [ADR-0090](../agent-docs/adr/0090-durable-wait-for-cluster-jobs.md) |
 
 ## task-dispatch — Dispatcher（facade + 責務別子モジュール、LLM 呼び出しなし）
@@ -99,7 +100,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 設定（TOML → subsystem 別型・検証） | celeris::config | `crates/celeris/src/config/mod.rs`（module map はここの doc comment） | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) |
 | self-deploy（release/verify/handoff） | celeris | `crates/celeris/src/{instance.rs,releases.rs,config/selfdeploy.rs}` | [selfdeploy.md](ops/selfdeploy.md) |
 | 配送の main 追従と自動解消（`[delivery.auto_resolve]`、merge_base 失敗の前段） | celeris::delivery | `crates/celeris/src/delivery/auto_resolve.rs`、設定 `crates/celeris/src/config/delivery.rs` | [2026-10-02 並列取り込みの自動解消](../agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md) |
-| Knowledge GC・doc gardener | celeris | `crates/celeris/src/{knowledge_gc,knowledge_maint,doc_gardener}.rs` | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
+| Knowledge GC・doc gardener | celeris | `crates/celeris/src/{knowledge_gc,knowledge_maint,doc_gardener}.rs` | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md), [ADR-0131 D6](../agent-docs/adr/0131-cron-jobs.md)（日次整理との関係） |
 | cluster/accounts 管理の裏方 | celeris | `crates/celeris/src/{cluster_admin,accounts_admin}.rs` | [ADR-0017](../agent-docs/adr/0017-account-management-from-gui.md), [ADR-0018](../agent-docs/adr/0018-remote-clusters-over-ssh.md) |
 
 ## 周辺 crate と結合テスト

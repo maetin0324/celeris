@@ -1,7 +1,9 @@
 //! ADR-0105（P4-A）: 実 bubblewrap runtime を起動し、host 側で事実を採って検査する。
 //! 同一 host UID の決定（p4a-uid）で実行する。外部ネットワークには出ない（netns に経路が無い）。
-//! bwrap か browser が無い環境では失敗する（成功扱いにしない）。明示的に
-//! `CELERIS_ISOLATION_TESTS=skip` を与えた時だけ飛ばし、その旨を stderr に出す。
+//! bwrap か browser が無い環境では失敗する（成功扱いにしない）。既定では skip し、
+//! `CELERIS_USERNS_TESTS=1` を与えた時だけ走る（ADR-0126 B）。
+mod userns_gate;
+
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixListener;
@@ -16,13 +18,7 @@ use task_worker::browser_runtime::{
     record, same_process_alive, test_hook,
 };
 
-fn skip() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    false
-}
+use userns_gate::skip_unless_userns_tests as skip;
 
 fn bwrap() -> PathBuf {
     let p = PathBuf::from(std::env::var("CELERIS_TEST_BWRAP").unwrap_or("/usr/bin/bwrap".into()));

@@ -1,5 +1,8 @@
 ---
+title: Phase 5 検証記録 — expected/actual write-set と target behind 指標
 tasks: [01M3YE0JTQEYBFDTV3HCHR4G9J]
+status: done
+updated: 2026-10-03
 ---
 # Phase 5 検証記録 — expected/actual write-set と target behind 指標
 

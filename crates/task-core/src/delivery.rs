@@ -281,7 +281,9 @@ mod tests {
             .collect();
         assert_eq!(
             versions,
-            (1..=37).chain([41, 42, 43, 44, 45, 46]).collect::<Vec<u32>>()
+            (1..=37)
+                .chain([41, 42, 43, 44, 45, 46])
+                .collect::<Vec<u32>>()
         );
         let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();
         let names: Vec<String> = stmt

@@ -31,6 +31,12 @@ run `01M3X8SRB3X08AXW8WK5PY7P9N` で launcher 実装・設定・host unit/手順
   （`SCHEMA_VERSION = 41`、`RESERVED_VERSIONS = [38, 39, 40]`）。inbox-rules の「人は failed を cancel できる」に合わせ
   e2e `phase7_scenarios` の期待を更新。証拠: `cargo fmt --all -- --check` exit 0、
   `cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test --workspace` exit 0（**3,406 passed / 0 failed**）。
+- sync-main 再検査（2026-10-03）: 前回 check の `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation`
+  は 60 秒の状態待ちで失敗したが、単独再実行と今回の全体実行ではともに pass。sandbox 内の
+  `cargo test --workspace` は別の `instance_handoff` 5 件で exit 101（worker DB guard の user namespace probe が
+  `Operation not permitted`、残り 2 件は引継ぎ条件に達せず）。隔離外では `unshare -U -r true` exit 0、同じ
+  `cargo test --workspace` exit 0（**3,406 passed / 0 failed / 14 ignored**）。`cargo fmt --all -- --check` と
+  `cargo clippy --workspace --all-targets -- -D warnings` は exit 0。コード変更なし。詳細は進捗文書を参照。
 - 本番 host で人が確認・設定する手順は [docs/ops/inbox-notifications.md](ops/inbox-notifications.md)。
 
 ## codex・opencode への skill の付属ファイルと段階的な読み込み

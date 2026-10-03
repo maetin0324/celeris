@@ -69,6 +69,18 @@
   `cargo test --workspace` exit 0（**3,406 passed / 0 failed / 14 ignored**、`33aca5a3` 取り込み後の最終実行）。
   範囲外の flaky はこの実行では出なかった。
 
+## sync-main 再検査（2026-10-03）
+
+- 前回の `cargo test --workspace` check は task-dispatch の
+  `cluster_job_wait::a_wait_parks_the_task_polls_and_resumes_as_a_continuation` が 60 秒の状態待ちで exit 101。
+  同じ test を単独で再実行した結果は 1 passed / 0 failed。全体再実行でも同 test は pass した。
+- sandbox 内の全体再実行は `crates/celeris/tests/instance_handoff.rs` の 5 件で exit 101。
+  3 件は worker DB guard の user namespace probe が `Operation not permitted`、残る 2 件は引継ぎ条件に
+  達しなかった。sandbox 内の `unshare -U -r true` も exit 1、隔離外では exit 0。隔離外の
+  `cargo test --workspace` は exit 0（**3,406 passed / 0 failed / 14 ignored**、126 件の test result 行）。
+  `cargo fmt --all -- --check` と `cargo clippy --workspace --all-targets -- -D warnings` も exit 0。
+  この再検査ではコードを変更していない。
+
 ## 提案
 
 - 定期実行 task（`01M3YF3NS2EGTZD2BBWNPG1K28`）のブランチにも `phase7_scenarios.rs` の古い期待が残っているので、

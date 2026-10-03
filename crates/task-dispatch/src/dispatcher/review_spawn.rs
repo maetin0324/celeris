@@ -616,7 +616,7 @@ impl Dispatcher {
         let cluster = self.cluster_of(&task);
         let remote_settings = cluster
             .as_ref()
-            .map(|(spec, path, mode)| spec.ssh_settings(path, task.id, *mode));
+            .map(|(spec, path, mode)| self.remote_ssh_settings(spec, path, task.id, *mode));
         let cluster_id = cluster.as_ref().map(|(spec, ..)| spec.id.clone());
         let events = self.store.events_for(task_id)?;
         let produced = artifacts_for_run(&events, &run_id);

@@ -1071,6 +1071,18 @@ pub struct Dispatcher {
     /// （phase_effect_ab::review_sync の off）。
     #[cfg(test)]
     test_skip_pre_review_sync: bool,
+    /// 試験だけの切替: write-set gate（ADR-0130 D3）を切り、重なる run も同時に起こす
+    /// （phase_effect_ab::write_set の off）。
+    #[cfg(test)]
+    test_disable_write_set_gate: bool,
+    /// 試験だけの切替: review 前 sync の stale 優先（ADR-0130 D5）を切り、待ち行列を候補の順のまま渡す
+    /// （phase_effect_ab::stale_priority の off）。
+    #[cfg(test)]
+    test_disable_stale_priority: bool,
+    /// 試験だけの切替: review 前 sync の衝突を IntegrationRepair（ADR-0120）ではなく `ReviewFail` で返す
+    /// 旧経路を再現する（phase_effect_ab::review_sync の Phase 2 off）。
+    #[cfg(test)]
+    test_sync_conflict_as_review_fail: bool,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     reviewing: HashMap<TaskId, ReviewEntry>,
@@ -1354,6 +1366,12 @@ impl Dispatcher {
             test_policy_clock: None,
             #[cfg(test)]
             test_skip_pre_review_sync: false,
+            #[cfg(test)]
+            test_disable_write_set_gate: false,
+            #[cfg(test)]
+            test_disable_stale_priority: false,
+            #[cfg(test)]
+            test_sync_conflict_as_review_fail: false,
             running: HashMap::new(),
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),

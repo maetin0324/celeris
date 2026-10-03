@@ -428,6 +428,19 @@ impl Dispatcher {
                                         .into(),
                                 )
                             })?;
+                        #[cfg(test)]
+                        if self.test_sync_conflict_as_review_fail {
+                            // Phase 2 以前の旧経路: 衝突を review の不合格として worker に戻す（attempts を使う）。
+                            self.store.apply_transition(
+                                task_id,
+                                Trigger::ReviewFail,
+                                Some(Event::worker_progress(
+                                    run_id.clone(),
+                                    format!("review target sync conflict: {}", files.join(", ")),
+                                )),
+                            )?;
+                            return Ok(true);
+                        }
                         if self.try_integration_repair(
                             &task,
                             reference.repo_id,

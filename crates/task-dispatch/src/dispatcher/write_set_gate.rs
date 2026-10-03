@@ -120,6 +120,16 @@ impl Dispatcher {
         }))
     }
 
+    /// write-set gate を切っているか。本番では常に効かせる。試験だけが切れる
+    /// （`test_disable_write_set_gate`、phase_effect_ab::write_set の off）。
+    pub(super) fn write_set_gate_disabled(&self) -> bool {
+        #[cfg(test)]
+        if self.test_disable_write_set_gate {
+            return true;
+        }
+        false
+    }
+
     /// 走っている run の予約のうち、`candidate` と強く重なる最初のもの（`RunKey` の順で決定的）。
     /// 走っている run に重ならなくても、`candidate` より先に待ち始めて先取りを持つ待機と重なれば、その
     /// 待機を返す（後から来た重なる候補が、長く待った run を追い越し続けない）。

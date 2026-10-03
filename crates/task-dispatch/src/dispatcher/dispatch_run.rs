@@ -193,7 +193,7 @@ impl Dispatcher {
                 .filter(|w| w.phase.is_some())
                 .map(|w| w.id.clone()),
         };
-        let write_reservation = if is_planner_dispatch {
+        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
             None
         } else {
             self.write_reservation_for(&task, current_wu.as_ref())?

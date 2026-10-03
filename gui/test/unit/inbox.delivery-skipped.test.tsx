@@ -35,6 +35,7 @@ describe("delivery-skipped inbox attention", () => {
       ],
       browser_waits: [],
       decisions: [],
+      suppressed: {},
       counts: { approvals: 0, questions: 0, drafts: 0, attention: 1, browser_waits: 0, decisions: 0, by_status: {} },
     };
     const html = render(

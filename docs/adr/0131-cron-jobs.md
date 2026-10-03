@@ -272,3 +272,58 @@ UNIQUE が防ぐ範囲に留める。
 - 却下した案: dispatcher 外の別 thread の scheduler（tick と時計が二重になり試験が決定的でなくなる）、systemd
   timer + celerisctl（DB に job が無く API/GUI から見えない、本番 host の設定変更が要る）、failed 子の自動
   cancel（状態を書き換え、再開の道を断つ）。
+
+## 付記 D10（2026-10-03）日次整理 job の実装方針
+
+この付記は日次整理に関して D6 の「既存経路との関係」「run の入出力」「本番 KB への反映」と D8 の出力方法を
+具体化し、矛盾する箇所を上書きする。D1〜D9 の本文は変更しない。
+
+1. **task ごとの知識整理を止める。** 人の決定に従い、`crates/celeris/src/knowledge_maint.rs` の
+   `schedule` は呼ばず、終端 task ごとの「知識整理: …」支援 task を新たに作らない。既に作成された
+   `knowledge_runs` の `apply_finished` と `retry_failed` は残し、進行中の run と一度だけの再試行を
+   完了させる。`reports.rs` の「報告のまとめ」は従来どおり残す。これは D6 の「削減は範囲外」を
+   改める決定であり、日次整理は task ごとの候補抽出も引き受ける。
+2. **入力は daemon が決定的に準備する。** 日次整理 task の run ごとに、worker の作業場所の
+   `inputs/kb/` に本番 KB の読み取り用の写し、`inputs/inbox.json` に `build_attention` の表示項目と
+   `suppressed` の規則別件数、`inputs/reports.json` に前回の日次整理以降に終端になった task の
+   報告の抜粋を置く。報告は task id と終端時刻で重複なく並べ、前回の基準は同じ job の直前の
+   `created` run とし、初回は job 作成時刻からとする。日次整理 task 自身と報告のまとめなどの
+   支援 task は除外する。`inbox.json` には古い報告と R1〜R4 に当たらない `failed` を判断候補として
+   明示する。`inputs/` は run の入力であり、本番 KB の正本ではない。worker の出力は当該 task の
+   `artifacts/curation-plan.json`、`artifacts/curation.diff`、`artifacts/daily-summary.md` に置く。
+3. **mode は発火時に固定する。** `[[cron.seed.template]]` の `mode = "dry_run"` は
+   `CronTaskTemplate.extra["mode"]` に入る。cron 作成・更新時に `dry_run|apply` だけを受け、
+   省略時は `dry_run` とする。`template_to_spec` は `extra` を無視したままにせず、発火時の
+   `mode` と job/run id を cron 由来の task のイベントにスナップショットとして保存する。
+   daemon は保存された値を run の入力 manifest に書き、worker と終端処理はその値を読む。
+   後の job PATCH が既存 task の mode を変えない。`Task.mode`（prototype 等）とは別の値である。
+4. **版付きの計画を検証する。** `curation-plan.json` は `version: 1` と `kb`、`inbox`、
+   `human_decisions` を必須とする。`kb` の各件は `{path, action, target, reason}` で、
+   `action` は `merge|new|delete|keep|fix`、`target` は移動・統合先があるときだけ指定する。
+   `inbox` の各件は `{task_id, proposal, reason}`、`human_decisions` の各件は
+   `{subject, proposal, reason}`（`subject` は KB path または task id）とする。`target` が不要な
+   action では `null` とし、`merge` では統合先の KB path を必須とする。人への候補は報告中の
+   1 件の decision に束ねる。
+   `task_ops::knowledge_curation` は版・型、入力に存在する path/task id、重複操作、対象の
+   content hash、差分と計画の一致を適用前に検証する。KB 根の外、絶対 path、`..`、symlink 経由の
+   脱出、`_curation/` への worker 由来の書き込みは拒否する。frontmatter が `source: human` の
+   ページと `user/` 配下の削除・大幅書き換えは適用せず、`human_decisions` へまとめる。
+   `inbox` の提案は DB の状態を直接変えず、人が既読化・cancel 等を選ぶ材料に限る。
+5. **反映は承認した計画に限る。** `dry_run` は本番 KB を書かず、`curation.diff` と
+   `daily-summary.md` を出す。`apply` でも worker は写しだけを編集する。daemon は検証済み計画と
+   差分のハッシュを報告に添え、人が当該 task の decision でそのハッシュを明示して承認した後に
+   だけ、同じ計画を再検証して本番 KB に決定的に適用する。未承認・ハッシュ不一致・元ページの
+   変更時は適用せず、再度 dry-run を要する。承認は保留された `human_decisions` の個別案件を
+   自動承認しない。削除は archive せず、daemon が `_curation/YYYY-MM-DD.md` に path・理由を
+   記録する。反映後に `index.json` と KB の README を再生成する。本番で job の有効化・
+   `mode = apply` への変更は人の操作とする。
+6. **要約は task の報告 1 件に集約する。** `daily-summary.md` から統合・新規・削除・保留の件数、
+   D7 の `suppressed`、人に残る判断件数を短く示す。承認待ちの apply は実施済みと書かず提案数と
+   して示す。この task には「報告のまとめ」支援 task を作らず、日次整理専用の追加通知も作らない。
+   人が受け取るのは日次整理 task の既存の報告 1 件だけとする。
+7. **責務を分ける。** `task_ops::knowledge_curation` が版付き計画の型・検証・差分生成・
+   決定的適用を持つ。`crates/celeris/src/knowledge_curation.rs` が入力準備と終端時の検証・
+   承認待ち・適用・要約を扱う。`config` の `[[cron.seed]]` が初期 job を定義し、
+   `harness = "knowledge-curation"`、`lane = "cheap"`、`overlap = "skip"`、
+   `enabled = false`、`mode = "dry_run"` を初期値とする。試験は注入した時計と偽 worker を使い、
+   外部ネットワークへ出ない。

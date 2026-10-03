@@ -21,6 +21,8 @@ ADR-0126 B に基づき、実 user namespace または隔離 browser/runtime を
 
 この一覧以外にも ADR-0126 B1 に記載した `crates/task-api/tests/` の browser 統合試験、および実 namespace を作る unit 試験（worker DB guard、scratch、container、browser、task-dispatch の該当試験）がある。lib 内では main から来た `crates/task-worker/src/browser_launcher/userns.rs` の `real_namespace_when_host_is_ready`（実 `unshare(CLONE_NEWUSER)`）を `test_support::skip_unless_userns_tests` で gate した（`CELERIS_LAUNCHER_TESTS=require` も opt-in）。
 
+`tests/e2e/tests/worker_db_read_only.rs` は実 DB guard の読み取り専用 mount を作るため、親 run の worker marker の有無に関係なく既定 skip とする。`crates/task-worker/src/db_guard_tests.rs` の実 namespace 試験にも同じ gate を適用する。どちらも `CELERIS_USERNS_TESTS=1` で実行する。
+
 ## main から来て gate しない試験（userns 不要と確認）
 
 - `crates/task-worker/tests/browser_prod_admission.rs`: 合成の `RuntimeFacts`・証明で admission を判定するだけ。
@@ -35,4 +37,4 @@ ADR-0126 B に基づき、実 user namespace または隔離 browser/runtime を
 
 ## 既定で走る daemon 試験
 
-`crates/celeris/tests/instance_handoff.rs` と `crates/e2e/tests/api_scenarios.rs` は一時 DB・一時 config を使い、userns を要しないため opt-in 対象から除外する。
+`crates/celeris/tests/instance_handoff.rs` と `tests/e2e/tests/api_scenarios.rs` は一時 DB・一時 config を使い、userns を要しないため opt-in 対象から除外する。

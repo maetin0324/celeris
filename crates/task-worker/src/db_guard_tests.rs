@@ -293,6 +293,9 @@ fn host_config_read_only_failure_refuses_the_spawn() {
 
 #[test]
 fn the_db_and_its_wal_files_are_read_only_but_siblings_stay_writable() {
+    if !userns_available() {
+        return;
+    }
     let f = fixture();
     let g = guard(&f);
     let db = q(&f.db);
@@ -369,6 +372,9 @@ fn a_nested_user_namespace_cannot_undo_the_read_only_mount() {
 
 #[test]
 fn the_guarded_process_has_no_capabilities_and_keeps_its_uid() {
+    if !userns_available() {
+        return;
+    }
     let f = fixture();
     let g = guard(&f);
     let (ok, out) = run_guarded(
@@ -384,6 +390,9 @@ fn the_guarded_process_has_no_capabilities_and_keeps_its_uid() {
 
 #[test]
 fn probe_confirms_the_db_is_not_writable_inside() {
+    if !userns_available() {
+        return;
+    }
     let f = fixture();
     probe(&guard(&f)).unwrap();
 }
@@ -434,6 +443,9 @@ fn sync_ssh_shadow_copies_contents_and_drops_stale_files() {
 /// （`ssh -G` は設定を解釈して表示するだけで接続しない）。ssh が無いホストでは見ない。
 #[test]
 fn ssh_config_includes_still_parse_inside_the_namespace() {
+    if !userns_available() {
+        return;
+    }
     if !Path::new(SSH_CONFIG_D).is_dir() || Command::new("ssh").arg("-V").output().is_err() {
         eprintln!("skip: no ssh or no {SSH_CONFIG_D}");
         return;

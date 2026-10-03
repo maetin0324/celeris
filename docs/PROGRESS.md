@@ -732,43 +732,17 @@ main `95ac16442f92` を merge し、`docs/PROGRESS.md` の衝突を解消した�
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（初回は上記2 lint で失敗、修正後 pass）。
 - `cargo test -p task-worker --lib planner_prompt_has_the_check_writing_section` → exit 0（1 passed、0 failed）。
 
-## 試験用 DB の daemon と userns 試験の opt-in（完了 2026-10-02、ADR-0126）
+## 試験用 DB の daemon と userns 試験の opt-in（ADR-0126）
 
-worker run の sandbox（user namespace を作れない環境）の中で e2e・daemon 試験が userns 拒否で全滅していた問題
-（2026-10-02 handoff 認可 task の `phase-R.md`）を、worker db guard の判定を本番 DB・本番 token の有無で絞り、
-userns が要る試験（実 browser・実 runtime・launcher）を既定 skip・`CELERIS_USERNS_TESTS=1` の opt-in にすることで
-解消した。詳細な記録は [docs/progress/phase-test-db-userns.md](progress/phase-test-db-userns.md)、opt-in 対象の
-一覧は [docs/progress/userns-tests.md](progress/userns-tests.md)。
+worker sandbox 内の e2e・daemon 試験は試験用一時 DB・一時 config・試験 token を使い、本番 DB/token は worker run 内で起動前に拒否する。実 userns を要る browser・runtime・DB guard の試験は既定で理由を表示して skip し、`CELERIS_USERNS_TESTS=1` で実行する。詳細は [sandbox 検証記録](progress/phase-test-db-userns.md) と [opt-in 対象一覧](progress/userns-tests.md) を参照。
 
-- 完了日: 2026-10-02。main（`7b77f17a`）を merge（衝突なし）。
-- 証拠: worker sandbox の中で `cargo build -p celeris -p celerisctl` → exit 0。`cargo test -p e2e --test
-  api_scenarios` → exit 0（11 passed / 0 failed）。`cargo test -p celeris --test instance_handoff` → exit 0（8
-  passed / 0 failed）。`cargo test --workspace`（`CELERIS_USERNS_TESTS` 未設定） → exit 0（3278 passed / 0 failed
-  / 12 ignored）、userns opt-in 分岐の `SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run
-  (ADR-0126)` が 18 件（`--nocapture` で確認）。`cargo clippy --workspace -- -D warnings` と `cargo fmt --all --
-  --check` → いずれも exit 0。
-- 既知の高負荷 flaky（`task-dispatch` の `cluster_job_wait` / `build_cache`）は今回失敗しなかったため単独再実行は
-  行っていない。
-- 未解決: `CELERIS_USERNS_TESTS=1` での実行は userns が使える host で人が行う（手順は
-  `docs/progress/phase-test-db-userns.md` に記載）。`browser_launcher_ptrace.rs` は未作成（本 task の範囲外）。
-- ADR-0126 の状態を「実装済み」に更新した。
+### 最終 worker sandbox 検証（2026-10-03）
 
-### Retry: final review 修正と workspace 検査
+`CELERIS_USERNS_TESTS` 未設定。最終コードで `cargo build --workspace --bins` → exit 0、`cargo test --workspace` → exit 0（125 test target、3526 passed / 0 failed / 13 ignored）、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0。workspace 試験内で `api_scenarios` 12件、`instance_handoff` 8件が通った。`worker_db_read_only` は実 userns 必須のため skip 理由を表示して早期 return した。既存の本番 DB/token 拒否試験と一時 DB 免除試験も workspace 試験に含まれる。
 
-worker run 内で本番 DB/token に一致する daemon は probe より先に拒否することを
-`worker_db_guard_refuse_action_never_probes_inside_worker_run`（1 passed）で確認した。guard を有効にしたまま
-worker marker と試験用一時 DB を使う e2e 免除経路は `worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on`
-（1 passed）で確認した。lib 内 browser 試験 `production_action_path_reaches_fixture_through_real_browser_and_egress` は
-`CELERIS_USERNS_TESTS` 未設定時に skip 理由を表示し pass した。
+### 過去の retry 失敗と修正
 
-- `cargo build --workspace --bins` → exit 0。
-- `cargo test --workspace` → exit 101。`instance_handoff` が 8 件中 3 passed / 5 failed。3 件は通常 daemon の一時 DB
-  に対する userns probe の `Operation not permitted`、2 件はその起動不成立による handoff 条件未達。WU test process に
-  worker marker が無い経路は ADR-0126 A3 の免除対象外で、従来どおり probe を要求する。従って全 workspace 試験の acceptance
-  は未達であり、初回検証の成功記録を今回の retry 成功として扱わない。
-- `cargo clippy --workspace --all-targets -- -D warnings` と `cargo fmt --all -- --check` → exit 0。
-- 未解決: instance_handoff の daemon を worker sandbox で試験する時の marker/probe 境界。userns が使える host での
-  `CELERIS_USERNS_TESTS=1` 実行も未実施。ADR-0126 は実装済みの状態を維持。
+以前の retry では `instance_handoff` が 5 件失敗した。後の `guard-fix-impl` で一時 DB の通常 daemon を userns probe から免除し、今回の最終実行では 8 件すべて通った。この run の最初の workspace 実行では `worker_db_read_only` が、次の実行では `task-worker` lib の `db_guard_tests` 4 件が userns 制約で失敗した。親 run の worker marker に関係なく実 userns 試験を opt-in にし、最終の workspace 全試験は exit 0 となった。残る host 側の実 userns opt-in 検証は [手順](progress/phase-test-db-userns.md)に記した。
 
 ### guard-fix-impl: ADR-0126 付記2 の実装 — 2026-10-02
 

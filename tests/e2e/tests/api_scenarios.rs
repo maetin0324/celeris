@@ -464,7 +464,9 @@ fn worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on() {
     let log = daemon.log_text();
     if in_worker_run {
         assert!(
-            log.contains("the daemon does not use the production DB/token; worker db guard not installed"),
+            log.contains(
+                "the daemon does not use the production DB/token; worker db guard not installed"
+            ),
             "expected the ADR-0126 exemption line\n{log}"
         );
     } else {

@@ -21,8 +21,7 @@ async fn the_preamble_notes_the_shared_build_cache_when_enabled() {
     let adapter = Arc::new(WorkspaceNoteAdapter { seen: seen.clone() });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = true;
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let notes = seen.lock().unwrap().clone();
     assert_eq!(notes.len(), 1);
     let note = notes[0].as_deref().unwrap_or_default();
@@ -51,8 +50,7 @@ async fn the_preamble_does_not_note_the_shared_build_cache_when_disabled() {
     let adapter = Arc::new(WorkspaceNoteAdapter { seen: seen.clone() });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = false;
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let notes = seen.lock().unwrap().clone();
     assert_eq!(notes.len(), 1);
     let note = notes[0].as_deref().unwrap_or_default();
@@ -93,9 +91,7 @@ async fn shared_build_cache_sets_cargo_target_dir_for_a_local_git_worktree_on_th
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = true;
     d.config.build_cache_dir = cache_dir.path().to_path_buf();
-    run_until_idle(&mut d, 60).await;
-
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let expected =
@@ -138,9 +134,7 @@ async fn shared_build_cache_disabled_does_not_set_cargo_target_dir() {
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = false;
-    run_until_idle(&mut d, 60).await;
-
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert!(
@@ -266,7 +260,7 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
     let s = store.clone();
     let id = task.id;
     assert!(
-        run_until(&mut d, 800, || s
+        run_until_state(&mut d, || s
             .get(id)
             .ok()
             .flatten()
@@ -322,21 +316,19 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
 
     // done の WU の target は消える（rename は tick の中、中身の削除は別スレッド）。
     assert!(
-        run_until(&mut d, 200, || expected.values().all(|p| !p.exists())).await,
+        run_until_state(&mut d, || expected.values().all(|p| !p.exists())).await,
         "done の WU の target が残っている"
     );
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while std::fs::read_dir(&repo_target)
-        .map(|rd| {
-            rd.flatten()
-                .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
-        })
-        .unwrap_or(false)
-        && Instant::now() < deadline
-    {
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        d.tick().unwrap();
-    }
+    // 中身の削除（別スレッド）の完了を待つ。残っていれば下の assert が中身を示す。
+    run_until_state(&mut d, || {
+        !std::fs::read_dir(&repo_target)
+            .map(|rd| {
+                rd.flatten()
+                    .any(|e| e.file_name().to_string_lossy().starts_with(".deleting-"))
+            })
+            .unwrap_or(false)
+    })
+    .await;
     let left: Vec<String> = std::fs::read_dir(&repo_target)
         .map(|rd| {
             rd.flatten()
@@ -395,7 +387,7 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
     let s = store.clone();
     let id = task.id;
     assert!(
-        run_until(&mut d, 800, || s
+        run_until_state(&mut d, || s
             .get(id)
             .ok()
             .flatten()
@@ -485,8 +477,18 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
         None,
     );
     let settings = scratch_on(&mut d, scratch_dir.path());
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    let s = store.clone();
+    let id = task.id;
+    assert!(
+        run_until_state(&mut d, || s
+            .get(id)
+            .ok()
+            .flatten()
+            .is_some_and(|t| t.status == Status::Done))
+        .await,
+        "{:?}",
+        events_of(&store, task.id)
+    );
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());
@@ -507,219 +509,59 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
     );
 }
 
-/// ADR-0075 §5 G2 受け入れ条件 2: sccache が有効で server が応答するとき、Task 単位の run と reviewer の checks の
-/// env に `RUSTC_WRAPPER`（`<scratch>/bin/sccache`）・`SCCACHE_DIR`・`SCCACHE_CACHE_SIZE`・`SCCACHE_SERVER_PORT`・
-/// `CARGO_INCREMENTAL=0`・`CARGO_PROFILE_DEV_DEBUG=line-tables-only` が入り、`cargo_env`（= `celerisctl scratch env`）と
-/// 一致する。WU の run と checks・統合の検査は同じ `cargo_env` を通る（`every_cargo_path_uses_the_scratch_target_dir`）。
+/// ADR-0129 (1): scratch の run と reviewer の checks には `CARGO_TARGET_DIR` と `[scratch.cargo]`
+/// （`CARGO_INCREMENTAL=0`・`CARGO_PROFILE_DEV_DEBUG=line-tables-only`）だけを与える。Celeris は sccache 系
+/// （`RUSTC_WRAPPER` / `SCCACHE_*`）を足しも外しもしない: run の env に sccache の族は無く、何も外さず、checks の
+/// 子プロセスは親（daemon = この test の process）の sccache の族をそのまま持つ。
+/// `inherited_sccache_env_passes_through` がこのテストを `RUSTC_WRAPPER` などを持つ env で走らせ直す。
 #[tokio::test]
-async fn runs_get_sccache_env_when_the_server_is_up() {
-    let bin_dir = tempfile::tempdir().unwrap();
-    // 偽の server（接続を受けて閉じるだけ。tick ごとの probe で backlog を溢れさせない）。
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for conn in listener.incoming() {
-            drop(conn);
-        }
-    });
-    let sccache = task_worker::scratch::SccacheSettings {
-        enabled: true,
-        binary: fake_sccache_binary(bin_dir.path()),
-        server_port: port,
-    };
-    let (settings, owner, run_env, check) = run_with_sccache(sccache).await;
-    let wrapper = settings.pool().root().join("bin/sccache");
-    let expected = task_worker::scratch::cargo_env_with(
-        &settings,
-        &owner,
-        &task_worker::scratch::SccacheState::Ready {
-            wrapper: wrapper.clone(),
-        },
-    );
-    assert_eq!(task_worker::scratch::cargo_env(&settings, &owner), expected);
-    let got: Vec<(String, String)> = run_env
-        .iter()
-        .filter(|(k, _)| expected.iter().any(|(e, _)| e == k))
-        .cloned()
-        .collect();
-    assert_eq!(got, expected, "{run_env:?}");
-    for key in [
-        "RUSTC_WRAPPER",
-        "SCCACHE_DIR",
-        "SCCACHE_CACHE_SIZE",
-        "SCCACHE_SERVER_PORT",
-        "CARGO_INCREMENTAL",
-        "CARGO_PROFILE_DEV_DEBUG",
-    ] {
-        assert!(got.iter().any(|(k, _)| k == key), "{key} missing: {got:?}");
-    }
-    assert!(wrapper.is_file());
-    let line = check.lines().next().unwrap_or_default().to_string();
+async fn scratch_runs_get_target_and_cargo_tuning_but_no_sccache() {
+    let (settings, owner, run_env, check) = run_scratch_env().await;
+    let target = settings.pool().target_dir(&owner).display().to_string();
+    // cargo の env（先頭の 3 つ）の後は後続 task の宣言先（`CELERIS_*`、ADR-0098 D6）だけ。
     assert_eq!(
-        line,
+        run_env[..run_env.len().min(3)],
+        [
+            ("CARGO_TARGET_DIR".to_string(), target.clone()),
+            ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+            (
+                "CARGO_PROFILE_DEV_DEBUG".to_string(),
+                "line-tables-only".to_string()
+            ),
+        ]
+    );
+    assert!(
+        run_env[3..].iter().all(|(k, _)| k.starts_with("CELERIS_")),
+        "{run_env:?}"
+    );
+    let parent = |key: &str| std::env::var(key).unwrap_or_else(|_| "unset".to_string());
+    assert_eq!(
+        check.lines().next().unwrap_or_default(),
         format!(
-            "{}|{}|{port}|0|line-tables-only|{}",
-            wrapper.display(),
-            settings.pool().l1_dir().display(),
-            settings.pool().target_dir(&owner).display()
+            "{}|{}|{}|0|line-tables-only|{target}",
+            parent("RUSTC_WRAPPER"),
+            parent("SCCACHE_DIR"),
+            parent("SCCACHE_SERVER_PORT")
         ),
         "{check}"
     );
-}
-
-/// ADR-0075 §5 G2 受け入れ条件 2: server が応答しない・バイナリが無い・`enabled = false` なら sccache 系を与えず、
-/// run と checks は素の cargo（`CARGO_TARGET_DIR` と `[scratch.cargo]` は残る）。
-#[tokio::test]
-async fn runs_fall_back_to_plain_cargo_when_the_server_is_down() {
-    let bin_dir = tempfile::tempdir().unwrap();
-    // 閉じた port は 1（特権 port。並行するテストが bind して偶然応答することが無い）。
-    let closed = 1;
-    let bin = fake_sccache_binary(bin_dir.path());
-    let cases = [
-        task_worker::scratch::SccacheSettings {
-            enabled: true,
-            binary: bin.clone(),
-            server_port: closed,
-        },
-        task_worker::scratch::SccacheSettings {
-            enabled: true,
-            binary: bin_dir.path().join("missing"),
-            server_port: closed,
-        },
-        task_worker::scratch::SccacheSettings {
-            enabled: false,
-            binary: bin,
-            server_port: closed,
-        },
-    ];
-    for sccache in cases {
-        let (settings, owner, run_env, check) = run_with_sccache(sccache.clone()).await;
-        // G3-fix1: 与えないだけでなく、継いだ値を外す（呼び出し側の env に依らない）。
-        assert_sccache_family_removed(&run_env, &check);
-        let target = settings.pool().target_dir(&owner).display().to_string();
-        for (k, v) in [
-            ("CARGO_TARGET_DIR", target.as_str()),
-            ("CARGO_INCREMENTAL", "0"),
-            ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
-        ] {
-            assert!(
-                run_env.iter().any(|(a, b)| a == k && b == v),
-                "{k}: {run_env:?}"
-            );
-        }
-        assert_eq!(
-            check.lines().next().unwrap_or_default(),
-            format!("unset|unset|unset|0|line-tables-only|{target}"),
-            "{check}"
-        );
-    }
-}
-
-/// ADR-0075 §5 G3 受け入れ条件 5: sccache の server が webdav（cache server）で動いているのに cache server が
-/// `/healthz` に応答しなければ、run と checks に `RUSTC_WRAPPER` を与えず素の cargo で成功する（U5: sccache 0.18 は
-/// backend の応答を timeout なしで待つ）。cache server が応答すれば与える。sccache が disk で動いていれば cache server
-/// の有無に関係なく与える（G2 と同じ）。
-#[tokio::test]
-async fn cache_server_down_means_no_rustc_wrapper() {
-    let bin_dir = tempfile::tempdir().unwrap();
-    let sccache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let sccache_port = sccache_listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for conn in sccache_listener.incoming() {
-            drop(conn);
-        }
-    });
-    // 偽の cache server（`/healthz` に 200 を返す）。
-    let cache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let cache_port = cache_listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        use std::io::{Read, Write};
-        for conn in cache_listener.incoming() {
-            let Ok(mut c) = conn else { continue };
-            let mut req = Vec::new();
-            let mut buf = [0u8; 1024];
-            // 要求の終わり（空行）まで読み切ってから答える（高負荷で要求が分かれて届いても RST にしない）。
-            while !req.windows(4).any(|w| w == b"\r\n\r\n") {
-                match c.read(&mut buf) {
-                    Ok(0) | Err(_) => break,
-                    Ok(n) => req.extend_from_slice(&buf[..n]),
-                }
-            }
-            let _ = c.write_all(
-                b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nok\n",
-            );
-        }
-    });
-    let sccache = task_worker::scratch::SccacheSettings {
-        enabled: true,
-        binary: fake_sccache_binary(bin_dir.path()),
-        server_port: sccache_port,
-    };
-    let cache = |port| task_worker::scratch::CacheServerSettings {
-        enabled: true,
-        port,
-        token_file: bin_dir.path().join("token"),
-    };
-    // webdav + cache server が居ない（閉じた特権 port の 1）→ 素の cargo。
-    let (settings, owner, run_env, check) =
-        run_with_sccache_and_cache(sccache.clone(), Some(cache(1)), Some("webdav")).await;
-    // G3-fix1: 継いだ `RUSTC_WRAPPER` / `SCCACHE_*` も外す（呼び出し側の env に依らない）。
-    assert_sccache_family_removed(&run_env, &check);
-    let target = settings.pool().target_dir(&owner).display().to_string();
     assert_eq!(
-        check.lines().next().unwrap_or_default(),
-        format!("unset|unset|unset|0|line-tables-only|{target}"),
+        check.lines().nth(1).unwrap_or_default().trim(),
+        parent_sccache_family().trim(),
         "{check}"
     );
-    // webdav + cache server が応答 → 与える。
-    let (settings, _, run_env, check) =
-        run_with_sccache_and_cache(sccache.clone(), Some(cache(cache_port)), Some("webdav")).await;
-    assert_celeris_wrapper_only(&settings, &run_env, &check);
-    // disk（G2 の local disk）なら cache server が居なくても与える。
-    let (settings, _, run_env, check) =
-        run_with_sccache_and_cache(sccache, Some(cache(1)), Some("disk")).await;
-    assert_celeris_wrapper_only(&settings, &run_env, &check);
+    // scratch の下に sccache の wrapper（`<scratch>/bin/sccache`）を作らない。
+    assert!(!settings.pool().root().join("bin/sccache").exists());
 }
 
-/// G3-fix1: sccache を配線しない判定（server が応答しない・webdav で cache server が応答しない）と、配線する判定の
-/// 両方で、run と checks の env は親の env に依らない。`inherited_sccache_env_does_not_leak` がこのテストを
-/// `RUSTC_WRAPPER` などを持つ env で走らせ直す（self-dogfood で daemon の cargo の env を継いだ run の姿）。
-#[tokio::test]
-async fn sccache_family_is_deterministic_regardless_of_the_parent_env() {
-    let bin_dir = tempfile::tempdir().unwrap();
-    let sccache_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let sccache_port = sccache_listener.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for conn in sccache_listener.incoming() {
-            drop(conn);
-        }
-    });
-    let bin = fake_sccache_binary(bin_dir.path());
-    let settings = |port| task_worker::scratch::SccacheSettings {
-        enabled: true,
-        binary: bin.clone(),
-        server_port: port,
-    };
-    // server が居ない（閉じた特権 port の 1）→ 族を全部外す。
-    let (_, _, run_env, check) = run_with_sccache(settings(1)).await;
-    assert_sccache_family_removed(&run_env, &check);
-    // server が居る（disk）→ Celeris の wrapper だけ。
-    let (scratch, _, run_env, check) =
-        run_with_sccache_and_cache(settings(sccache_port), None, Some("disk")).await;
-    assert_celeris_wrapper_only(&scratch, &run_env, &check);
-}
-
-/// G3-fix1 の再現: `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を export した env（Celeris の run の中で
-/// `cargo test` した姿。production の dogfood 01M3JXB3 の sync-main）でこの test binary を走らせ直し、server が
-/// 落ちているときの 2 本と上のテストが通る。修正前は run の checks が継いだ `RUSTC_WRAPPER` を見て落ちた。
+/// ADR-0129 (1): `RUSTC_WRAPPER` / `RUSTC_WORKSPACE_WRAPPER` / `SCCACHE_*` を export した env（host の cargo 設定で
+/// sccache を使う daemon の姿）でこの test binary を走らせ直し、継いだ値が checks の子プロセスへそのまま渡り、
+/// run では外されないことを確かめる。
 #[test]
-fn inherited_sccache_env_does_not_leak() {
+fn inherited_sccache_env_passes_through() {
     let exe = std::env::current_exe().unwrap();
-    let tests = [
-        "dispatcher::tests::build_cache::sccache_family_is_deterministic_regardless_of_the_parent_env",
-        "dispatcher::tests::build_cache::runs_fall_back_to_plain_cargo_when_the_server_is_down",
-        "dispatcher::tests::build_cache::cache_server_down_means_no_rustc_wrapper",
-    ];
+    let tests =
+        ["dispatcher::tests::build_cache::scratch_runs_get_target_and_cargo_tuning_but_no_sccache"];
     let out = std::process::Command::new(exe)
         .args(tests)
         .arg("--exact")
@@ -727,7 +569,6 @@ fn inherited_sccache_env_does_not_leak() {
         .env("RUSTC_WORKSPACE_WRAPPER", "/inherited/bin/ws-wrapper")
         .env("SCCACHE_DIR", "/inherited/sccache")
         .env("SCCACHE_SERVER_PORT", "4226")
-        .env("SCCACHE_WEBDAV_ENDPOINT", "http://127.0.0.1:1")
         .env("SCCACHE_REDIS_ENDPOINT", "redis://127.0.0.1:1")
         .output()
         .unwrap();
@@ -810,9 +651,11 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     );
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
-    let notifications = store.notification_recent(10).unwrap();
-    assert_eq!(notifications.len(), 1, "{notifications:?}");
-    assert!(notifications[0].body.contains("ディスク不足 (infra)"));
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.total, 1, "{:?}", notices.items);
+    assert!(notices.items[0].title.contains("ディスク不足 (infra)"));
     // 空きが戻れば自動で解除して dispatch する。
     d.config.min_free_disk_mb = 0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -829,13 +672,15 @@ async fn low_disk_runs_emergency_gc_before_pausing_dispatch() {
     d.config.min_free_disk_mb = u64::MAX;
     d.tick().unwrap();
     assert!(settings.pool().target_dir(&live).exists());
-    let notifications = store.notification_recent(10).unwrap();
-    assert_eq!(notifications.len(), 1);
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.total, 1);
     assert!(
-        notifications[0].body.contains("scratch pool: pinned")
-            && notifications[0].body.contains("agent-live"),
+        notices.items[0].title.contains("scratch pool: pinned")
+            && notices.items[0].title.contains("agent-live"),
         "{}",
-        notifications[0].body
+        notices.items[0].title
     );
 }
 
@@ -879,8 +724,7 @@ async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
         d.config.shared_build_cache = true;
         d.config.build_cache_dir = cache_dir.path().to_path_buf();
         d.config.scratch = settings.clone();
-        run_until_idle(&mut d, 60).await;
-        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        run_until_task_terminal(&mut d, &store, task.id).await;
         let runs = captured.lock().unwrap().clone();
         let expected =
             task_worker::build_cache::cargo_target_dir_env(cache_dir.path(), repo_dir.path());
@@ -968,8 +812,7 @@ async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
         },
     )
     .unwrap();
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let owner = Owner::task(task.id.to_string());
     let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
         .unwrap()
@@ -977,4 +820,43 @@ async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
     assert_eq!(lease.adopted_from.as_deref(), Some("release-0123456789ab"));
     assert!(pool.target_dir(&owner).join("warm.rlib").exists());
     assert!(!pool.target_dir(&old).exists());
+}
+
+/// ADR-0129 (4)(5): dispatcher の seed の後始末は起動直後に 1 回、以後 `SEED_CHECK_INTERVAL_SECS` ごと（固定した
+/// `Instant` で駆動）。登録外の repo の seed には印を書き（猶予の間は current を残す）、current 以外の世代を退避する。
+#[tokio::test]
+async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() {
+    use task_worker::scratch as sc;
+    let root = tempfile::tempdir().unwrap();
+    let scratch_dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let captured: CapturedEnvs = Arc::new(StdMutex::new(Vec::new()));
+    let mut d = worktree_dispatcher(store, done_pool_adapter(&captured), root.path(), None);
+    let settings = scratch_on(&mut d, scratch_dir.path());
+    d.config.scratch.seed_reflink = true;
+    let pool = settings.pool();
+    let repo_dir = sc::seed_repo_dir(&pool, "gone-0000000000");
+    std::fs::create_dir_all(repo_dir.join("gen-a/target")).unwrap();
+    std::fs::create_dir_all(repo_dir.join("gen-b/target")).unwrap();
+    sc::switch_current(&repo_dir, "gen-b", std::time::SystemTime::now()).unwrap();
+    let t0 = Instant::now();
+    d.seed_housekeeping(t0);
+    assert!(!repo_dir.join("gen-a").exists());
+    assert!(repo_dir.join(sc::SEED_UNREGISTERED_MARK).is_file());
+    assert_eq!(
+        sc::current_generation(&pool, "gone-0000000000").as_deref(),
+        Some("gen-b")
+    );
+    // 間隔の前は何もしない。
+    std::fs::create_dir_all(repo_dir.join("gen-c/target")).unwrap();
+    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS - 1));
+    assert!(repo_dir.join("gen-c").is_dir());
+    d.seed_housekeeping(t0 + Duration::from_secs(sc::SEED_CHECK_INTERVAL_SECS));
+    assert!(!repo_dir.join("gen-c").exists());
+    assert!(repo_dir.join("gen-b/target").is_dir());
+    // seed_reflink = false なら触らない。
+    std::fs::create_dir_all(repo_dir.join("gen-d/target")).unwrap();
+    d.config.scratch.seed_reflink = false;
+    d.seed_housekeeping(t0 + Duration::from_secs(10 * sc::SEED_CHECK_INTERVAL_SECS));
+    assert!(repo_dir.join("gen-d").is_dir());
 }

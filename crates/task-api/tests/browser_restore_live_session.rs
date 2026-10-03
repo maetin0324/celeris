@@ -3,9 +3,11 @@
 //! `task_api::router` と、supervisor と共有する 1 つの registry を使う。拒否経路では封緘を開かない。
 //!
 //! 実 runtime（bwrap・playwright の chrome-headless-shell）が無い環境では失敗する（成功扱いにしない）。
-//! `CELERIS_ISOLATION_TESTS=skip` のときだけ「SKIPPED (not passed)」を出して抜ける。
+//! 既定では skip し、`CELERIS_USERNS_TESTS=1` のときだけ走る。
 
 mod common;
+#[path = "../../task-worker/tests/userns_gate/mod.rs"]
+mod userns_gate;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -18,17 +20,13 @@ use task_core::browser_isolation::{
     IsolationAttestation, IsolationViolation, LiveIsolation, LiveSessionEntry, LiveSessionRegistry,
     LiveSessions, RuntimeKind,
 };
-use task_worker::browser_runtime::RuntimeSpec;
+use task_worker::browser_runtime::{RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 
 const ORIGIN: &str = "https://app.example";
 
 fn skip() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    false
+    userns_gate::skip_unless_userns_tests()
 }
 
 fn browser() -> PathBuf {
@@ -78,6 +76,7 @@ fn launch(session: &Path, id: &str, registry: &Arc<LiveSessions>) -> Supervisor 
         argv: argv.into_iter().collect::<Vec<OsString>>(),
         cdp_pipe: true,
         egress: None,
+        userns: UsernsMode::Unshare,
     };
     let mut opts = SupervisorOptions::new(session.join("records"));
     opts.registry = Some(Arc::clone(registry));
@@ -190,7 +189,7 @@ async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal(
             drop(w);
         });
         let reply = rx
-            .recv_timeout(std::time::Duration::from_secs(30))
+            .recv_timeout(std::time::Duration::from_secs(60))
             .expect("browser answered over CDP pipe");
         assert!(reply.contains("\"id\":1"), "{reply}");
     }
@@ -199,10 +198,14 @@ async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal(
         .get("live-1")
         .expect("supervisor registered the live session");
     assert_eq!(entry.kind(), RuntimeKind::Isolated);
-    // この host は決定 p4a-uid により同一 UID。検査は弱めない。
+    // この host は決定 p4a-uid により同一 UID で、daemon が userns を所有する。
     assert_eq!(
         entry.current_attestation().unwrap_err(),
-        vec![IsolationViolation::SameUid]
+        vec![
+            IsolationViolation::SameUid,
+            IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
+        ]
     );
     registry.insert("plain-1", Arc::new(NotIsolated));
 

@@ -12,9 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
 use task_ops::daemon::{
-    SCRATCH_STATUS_SCHEMA, ScratchCacheStats, ScratchCacheView, ScratchGcRemovedView,
-    ScratchGcView, ScratchLegacyView, ScratchOwnerView, ScratchSccacheStats, ScratchSccacheView,
-    ScratchStatus,
+    SCRATCH_STATUS_SCHEMA, ScratchGcRemovedView, ScratchGcView, ScratchLegacyView,
+    ScratchOwnerView, ScratchStatus,
 };
 use task_worker::scratch::{
     self, AdoptCandidate, Class, DELETING_PREFIX, GcEntry, GcParams, GcPlan, Lease, Owner, Pool,
@@ -106,10 +105,11 @@ pub fn legacy_paths(build_cache_dir: &Path, releases_dir: Option<&Path>) -> Vec<
     out
 }
 
-/// 削除待ち（`.deleting-*`）を探す根（pool の `targets/` と legacy の親）。
+/// 削除待ち（`.deleting-*`）を探す根（pool の `targets/`、退避した seed の `seeds/`、legacy の親）。
 pub fn deleting_roots(pool: &Pool, legacy: &[PathBuf]) -> Vec<PathBuf> {
     let mut roots: BTreeSet<PathBuf> = BTreeSet::new();
     roots.insert(pool.targets_dir());
+    roots.insert(scratch::seed_deleting_root(pool));
     for p in legacy {
         if let Some(parent) = p.parent() {
             roots.insert(parent.to_path_buf());
@@ -625,6 +625,7 @@ pub fn build_status(
         owners,
         legacy,
         last_gc,
+        // ADR-0129 (1): sccache と cache server は Celeris の外（host の cargo 設定）。欄は常に `None`。
         sccache: None,
         cache: None,
     }
@@ -654,139 +655,6 @@ pub fn disabled_status(settings: &ScratchSettings, now: SystemTime) -> ScratchSt
         sccache: None,
         cache: None,
     }
-}
-
-// ---------------------------------------------------------------------------
-// sccache L1（ADR-0075 D4 / D6、Phase G2）
-// ---------------------------------------------------------------------------
-
-/// `ScratchStatus.sccache`（統計なし。統計は `query_sccache_stats` で足す）。
-pub fn sccache_view(
-    settings: &ScratchSettings,
-    state: &scratch::SccacheState,
-) -> ScratchSccacheView {
-    ScratchSccacheView {
-        state: state.label().to_string(),
-        reason: state.reason().map(str::to_string),
-        binary: settings.sccache.binary.display().to_string(),
-        port: settings.sccache.server_port,
-        dir: settings.pool().l1_dir().display().to_string(),
-        max_bytes: settings.l1_max_bytes,
-        stats: None,
-    }
-}
-
-/// `sccache --show-stats --stats-format=json`（0.18）の要約。`cache_hits.counts` は言語ごと（`Rust` / `C/C++` / …）。
-pub fn parse_sccache_stats(json: &str) -> Option<ScratchSccacheStats> {
-    let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    let stats = v.get("stats")?;
-    let counts = |key: &str| -> (u64, u64) {
-        let Some(map) = stats
-            .get(key)
-            .and_then(|c| c.get("counts"))
-            .and_then(|c| c.as_object())
-        else {
-            return (0, 0);
-        };
-        let total = map.values().filter_map(|n| n.as_u64()).sum();
-        let rust = map.get("Rust").and_then(|n| n.as_u64()).unwrap_or(0);
-        (total, rust)
-    };
-    let (hits, rust_hits) = counts("cache_hits");
-    let (misses, rust_misses) = counts("cache_misses");
-    Some(ScratchSccacheStats {
-        compile_requests: stats
-            .get("compile_requests")
-            .and_then(|n| n.as_u64())
-            .unwrap_or(0),
-        hits,
-        misses,
-        rust_hits,
-        rust_misses,
-        cache_size_bytes: v.get("cache_size").and_then(|n| n.as_u64()),
-    })
-}
-
-// ---------------------------------------------------------------------------
-// L2 の cache server（ADR-0075 D5 (b) / D6、Phase G3）
-// ---------------------------------------------------------------------------
-
-/// cache server の `/stats`（500 ms。応答が無い・読めなければ `None`）。
-pub fn query_cache_stats(settings: &ScratchSettings) -> Option<ScratchCacheStats> {
-    let (code, body) = scratch::http_get_local(
-        settings.cache_server.port,
-        "/stats",
-        std::time::Duration::from_millis(500),
-    )?;
-    if code != 200 {
-        return None;
-    }
-    serde_json::from_str(&body).ok()
-}
-
-/// `ScratchStatus.cache`。`fetch` なら `/stats` を問い合わせる（応答すれば `ready`）。
-pub fn cache_view(settings: &ScratchSettings, fetch: bool) -> ScratchCacheView {
-    let endpoint = scratch::cache_server_endpoint(settings);
-    let sccache_mode = scratch::read_sccache_mode(&settings.pool());
-    if !settings.enabled || !settings.cache_server.enabled {
-        return ScratchCacheView {
-            state: "disabled".to_string(),
-            reason: Some(if settings.enabled {
-                "[scratch.cache_server] enabled = false".to_string()
-            } else {
-                "scratch is disabled".to_string()
-            }),
-            endpoint,
-            sccache_mode,
-            stats: None,
-        };
-    }
-    let stats = if fetch {
-        query_cache_stats(settings)
-    } else {
-        None
-    };
-    let (state, reason) = match (&stats, fetch) {
-        (Some(_), _) => ("ready", None),
-        (None, true) => (
-            "unavailable",
-            Some(format!(
-                "no cache server on 127.0.0.1:{} (celeris-scratch-cache.service)",
-                settings.cache_server.port
-            )),
-        ),
-        (None, false) => ("unavailable", Some("not queried".to_string())),
-    };
-    ScratchCacheView {
-        state: state.to_string(),
-        reason,
-        endpoint,
-        sccache_mode,
-        stats,
-    }
-}
-
-/// server に統計を問い合わせる（`Ready` のときだけ。直前にもう一度 port を確かめる: sccache の client は server が
-/// 無いと起こしてしまうので、万一の起動に備えて server と同じ env も渡す）。
-pub fn query_sccache_stats(
-    settings: &ScratchSettings,
-    state: &scratch::SccacheState,
-) -> Option<ScratchSccacheStats> {
-    state.wrapper()?;
-    if !scratch::server_listening(settings.sccache.server_port) {
-        return None;
-    }
-    let out = std::process::Command::new(&settings.sccache.binary)
-        .args(["--show-stats", "--stats-format=json"])
-        .envs(scratch::sccache_server_env(settings))
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    parse_sccache_stats(&String::from_utf8_lossy(&out.stdout))
 }
 
 /// GC の 1 回を記録用の view にする。
@@ -888,6 +756,105 @@ pub fn pinned_summary(scan: &Scan, plan: &GcPlan) -> String {
             list.join(", ")
         }
     )
+}
+
+/// ADR-0129 (4)(5): seed の更新の 1 repo 分の結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeedStep {
+    /// main の commit が分からない（git が無い・branch が無い）。
+    NoCommit,
+    /// main の根に `Cargo.toml` が無い（cargo の repo ではない）。
+    NotCargo,
+    UpToDate,
+    /// 容量が足りないので保留した（旧 seed はそのまま）。
+    Held {
+        reason: String,
+    },
+    Done(scratch::SeedRefreshOutcome),
+}
+
+/// seed の更新の対象（登録された local の git repo と、その main の commit）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeedRepo {
+    pub path: PathBuf,
+    pub commit: Option<String>,
+    /// `commit` の根に `Cargo.toml` がある。
+    pub cargo: bool,
+}
+
+/// ADR-0129 (4)(5): repo ごとに、main が進んだ（または rustc・`[scratch.cargo]` が変わった・seed が無い）なら
+/// 容量を確かめて seed を作り直す。`hold` は今の seed の大きさを受けて保留の理由を返す。dispatcher の seed
+/// スレッドが呼ぶ（tick では呼ばない。build は長い）。**LLM は呼ばない**。
+pub fn refresh_seeds(
+    settings: &ScratchSettings,
+    repos: &[SeedRepo],
+    rustc: &dyn Fn(&Path) -> Option<String>,
+    hold: &dyn Fn(Option<u64>) -> Option<String>,
+    ops: &scratch::SeedBuildOps<'_>,
+    now: SystemTime,
+) -> Vec<(String, SeedStep)> {
+    let pool = settings.pool();
+    let mut out = Vec::new();
+    // build の前に pool で 1 回だけ probe する。不可ならどの repo の seed も作らない。
+    let share = ops.pool_can_share(&pool);
+    if let Err(reason) = &share {
+        tracing::warn!(pool = %pool.root().display(), %reason, "scratch: seed refresh disabled; pool cannot share extents");
+    }
+    for repo in repos {
+        let key = task_worker::build_cache::repo_cache_key(&repo.path);
+        let Some(commit) = repo.commit.as_deref() else {
+            out.push((key, SeedStep::NoCommit));
+            continue;
+        };
+        if !repo.cargo {
+            out.push((key, SeedStep::NotCargo));
+            continue;
+        }
+        if let Err(reason) = &share {
+            out.push((
+                key,
+                SeedStep::Held {
+                    reason: format!("pool cannot share extents: {reason}"),
+                },
+            ));
+            continue;
+        }
+        let manifest = scratch::read_current_manifest(&pool, &key);
+        let rustc_now = rustc(&repo.path);
+        let Some(why) = scratch::seed_refresh_reason(
+            manifest.as_ref(),
+            commit,
+            &settings.cargo,
+            rustc_now.as_deref(),
+        ) else {
+            out.push((key, SeedStep::UpToDate));
+            continue;
+        };
+        if let Some(reason) = hold(manifest.as_ref().and_then(|m| m.size_bytes)) {
+            tracing::warn!(repo_key = %key, %reason, "scratch: seed refresh held; the current seed is kept (ADR-0129 (5))");
+            out.push((key, SeedStep::Held { reason }));
+            continue;
+        }
+        tracing::info!(repo_key = %key, commit = %commit, why = %why, "scratch: refreshing the seed (ADR-0129 (4))");
+        let outcome = scratch::refresh_seed(&pool, &repo.path, commit, &settings.cargo, ops, now);
+        match &outcome {
+            scratch::SeedRefreshOutcome::Refreshed {
+                generation,
+                replaced,
+                ..
+            } => {
+                tracing::info!(repo_key = %key, generation = %generation, replaced = ?replaced, "scratch: seed switched")
+            }
+            scratch::SeedRefreshOutcome::Busy => {
+                tracing::debug!(repo_key = %key, "scratch: seed refresh already running")
+            }
+            scratch::SeedRefreshOutcome::Failed { reason } => {
+                tracing::warn!(repo_key = %key, %reason, "scratch: seed refresh failed; the current seed is kept")
+            }
+        }
+        out.push((key, SeedStep::Done(outcome)));
+    }
+    out
 }
 
 /// 測定の間隔の既定（テスト用に分けておく）。

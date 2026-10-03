@@ -14,6 +14,28 @@ use std::io::Write;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+/// ADR-0126 B2/B3 付記: lib 内（`src/` の `#[cfg(test)]`）の user namespace（unshare/`CLONE_NEWUSER`/
+/// 実 browser・runtime の sandbox 化）前提の試験を `tests/userns_gate/mod.rs` と同じ規則で既定 skip にする。
+/// 優先順位（上が強い）:
+/// 1. `CELERIS_ISOLATION_TESTS=skip` → skip。
+/// 2. `CELERIS_USERNS_TESTS=1`、または従来の `CELERIS_ISOLATION_TESTS=require` / `CELERIS_DB_GUARD_TESTS=require`
+///    → 走らせる（環境が無ければ skip ではなく、呼び出し側の assert/panic で fail させる）。
+/// 3. どれも無い → skip（既定）。
+pub(crate) fn skip_unless_userns_tests() -> bool {
+    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
+        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
+        return true;
+    }
+    if std::env::var("CELERIS_USERNS_TESTS").as_deref() == Ok("1")
+        || std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("require")
+        || std::env::var("CELERIS_DB_GUARD_TESTS").as_deref() == Ok("require")
+    {
+        return false;
+    }
+    eprintln!("SKIPPED (userns test, not passed): set CELERIS_USERNS_TESTS=1 to run (ADR-0126)");
+    true
+}
+
 /// `path` に `contents` を実行可能（0o755）として書き込む。書き込みは別プロセスで行う（上記コメント参照）。
 pub(crate) fn write_executable(path: &Path, contents: &str) {
     let mut child = Command::new("sh")

@@ -46,6 +46,7 @@ import { TONE_SOLID_BG, type Tone } from "~/components/ui/tone";
 import { shortId } from "~/lib/format";
 import {
   allAccountsCoolingDown,
+  CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE,
   cooldownRemainingLabel,
   cooldownUntilTitle,
   formatRemaining,
@@ -580,7 +581,7 @@ function LlmSourcesSection({
           {(llmSources.celeris_tiers ?? []).length > 0 && (
             <dl className="grid grid-cols-1 gap-x-4 gap-y-3 text-sm sm:grid-cols-3" data-testid="llm-tier-resolution">
               {(llmSources.celeris_tiers ?? []).map((t) => {
-                const reason = tierResolutionReason(t.resolves_to, llmSources.sources, nowSec);
+                const reason = tierResolutionReason(t.tier, t.resolves_to, llmSources.sources, nowSec);
                 return (
                   <DataItem key={t.tier} label={`celeris/${tierLabel(t.tier)}`}>
                     <span data-testid={`llm-tier-resolves-${t.tier}`}>{tierResolutionLabel(t.resolves_to)}</span>
@@ -604,9 +605,8 @@ function LlmSourcesSection({
                   data-testid="llm-claude-all-cooldown"
                 >
                   <p>
-                    復帰するまで <Mono className="text-xs">claude/&lt;tier&gt;</Mono> は使えません。無料の Qwen
-                    が届いていれば <Mono className="text-xs">celeris/&lt;tier&gt;</Mono> はそちらへ倒れます
-                    （届いていなければ Codex の GPT に倒れます）。
+                    復帰するまで <Mono className="text-xs">claude/&lt;tier&gt;</Mono> は使えません。
+                    {CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE}
                   </p>
                 </Alert>
               )
@@ -703,7 +703,7 @@ function LlmAccountRow({ account, nowSec }: { account: LlmSourceAccountView; now
 /**
  * 「MCP クライアント」節（ADR-0056 D4、GUI Phase 80）: `GET /mcp/clients` をそのまま表示する
  * （`LlmSourcesSection` と同じ作り。値の再計算はしない。判断＝認証・スコープ・流量制限は
- * `crates/celeris-mcp` の中で決まっている）。「接続のしかた」は `/help#mcp`（`docs/mcp.md` の要約）
+ * `crates/celeris-mcp` の中で決まっている）。「接続のしかた」は `/help#mcp`（`docs/guides/mcp.md` の要約）
  * へのリンクだけ持つ。
  */
 function McpClientsSection({
@@ -808,7 +808,7 @@ function McpClientCard({ client, fetchedAt }: { client: McpClient; fetchedAt: st
               <span className="text-fg-subtle">未使用</span>
             )}
           </DataItem>
-          {/* Phase 84: 接続 URL のヒント（`docs/mcp.md` §2 の既定値。トークンは絶対に出さない）。
+          {/* Phase 84: 接続 URL のヒント（`docs/guides/mcp.md` §2 の既定値。トークンは絶対に出さない）。
               コピーしてクライアント側の設定にそのまま貼れるように `CopyButton` を添える。 */}
           <DataItem label="接続 URL のヒント" wide>
             <span className="flex flex-wrap items-center gap-2" data-testid="mcp-client-url-hint">

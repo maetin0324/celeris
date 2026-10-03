@@ -8,9 +8,9 @@
 #     使う）を入れた venv があること（例 `~/.local/celeris/ldr/.venv`）。一発実行の CLI は無いので、`command` には
 #     その venv の python 実行ファイルそのものを指す（`crates/task-worker/src/local_deep_research_run.py`
 #     を celeris が `<python> <スクリプト> <入力 JSON>` の形で起動する。ADR-0029 D1）。
-#   - LLM はトンネル越しのローカル Qwen 等（OpenAI 互換エンドポイント）に向ける。`settings` の
+#   - LLM は celeris の OpenAI 互換 proxy に向ける。`settings` の
 #     `llm.provider`/`llm.openai_endpoint.url`/`llm.openai_endpoint.api_key`/`llm.model` で指定する
-#     （`api_key` は使われないダミーでよい）。
+#     （`api_key` は `[api] token_file` と同じ値が必要）。
 #   - 検索エンジン（`search.tool`）はホストの事情に強く左右される（実機確認: このホストでは一般的な
 #     Web エンジンが軒並み塞がれていた — mojeek は 403、SearXNG 経由の duckduckgo は CAPTCHA、brave は
 #     レート制限、qwant はアクセス拒否、google/wikipedia の web エンジンは 0 件。SearXNG 単体で
@@ -108,9 +108,9 @@ env = { RES_OPTIONS = "single-request" }
 
 [adapters.local_deep_research.settings]
 "llm.provider" = "openai_endpoint"
-# ADR-0053 D2（Phase 65）: celeris の LLM source プロキシに向ける（Qwen が落ちていれば celeris/cheap は
-# 自動で Claude/GPT のアカウントプールに倒れる）。`api_key` は**プロキシの Bearer**（`[api] token_file`
-# と同じ値。直接 Qwen を叩いていた頃の "unused" では通らない）。
+# ADR-0132 D4: celeris の LLM source プロキシに向ける。celeris/cheap は利用可能な Qwen を
+# 優先し、失敗時は Claude/GPT の cheap に倒れる。`api_key` は**プロキシの Bearer**（`[api] token_file`
+# と同じ値。ダミーの "unused" では通らない）。
 # ADR-0063 D4（Phase 109）: ここに書いた値は `ldr_input.json` には平文で書かれない
 # （`redact_secret_settings` が `api_key` で終わるキーを自動で検出し、`LDR_LLM_OPENAI_ENDPOINT_API_KEY`
 # という環境変数名に変換して子プロセスへ渡す。JSON にはその環境変数名へのプレースホルダだけが残る）。
@@ -145,8 +145,10 @@ min_domains = 2
 insufficient_is_error = false
 
 [[providers]]
-id = "ldr-qwen"
+id = "ldr"
+kind = "adapter"
 adapter = "local-deep-research"
+llm_source = "celeris"
 tiers = ["cheap"]
 concurrency = 1
 # 空でなければ `settings` の `llm.model` を上書きする（ADR-0029 D1）。空なら `[adapters.local_deep_research].settings` のまま。
@@ -155,6 +157,8 @@ model = "celeris/cheap"
 
 [[providers]]
 id = "local-fake"
+kind = "adapter"
+llm_source = "none"
 adapter = "fake"
 tiers = ["standard", "cheap"]
 concurrency = 2

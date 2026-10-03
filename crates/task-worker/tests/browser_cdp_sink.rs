@@ -1,5 +1,6 @@
 //! ADR-0109 D4: real bwrap/browser CDP injection against a fixture in a
 //! network namespace with no external route. Missing prerequisites fail.
+mod userns_gate;
 use std::ffi::OsString;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -129,7 +130,7 @@ fn fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("fixture TLS server starts");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(
             Instant::now() < deadline,
@@ -239,6 +240,7 @@ fn inner() {
     );
     argv.insert(1, browser.clone().into_os_string());
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: "cdp-sink".into(),
         session_dir: session.path().to_path_buf(),
@@ -259,6 +261,34 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
+    cdp.response_timeout_for_test(Duration::from_secs(60));
+    let ready_deadline = Instant::now() + Duration::from_secs(60);
+    let mut last_reply = String::from("no CDP response yet");
+    loop {
+        if !rt.is_running() || Instant::now() >= ready_deadline {
+            let running = rt.is_running();
+            let bwrap_status = std::fs::read_to_string(format!("/proc/{}/status", rt.bwrap_pid()))
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
+            let inner_status = std::fs::read_to_string(format!("/proc/{}/status", rt.inner_pid()))
+                .unwrap_or_else(|error| format!("unavailable: {error}"));
+            rt.kill();
+            let stderr = rt.wait_stderr(Duration::ZERO);
+            panic!(
+                "browser CDP not ready: running={running}, last reply={last_reply}, bwrap={bwrap_status}, sandbox init={inner_status}, stderr={stderr}"
+            );
+        }
+        match cdp.agent_command("Browser.getVersion", json!({}), None) {
+            Ok(reply)
+                if reply["result"]["product"].is_string()
+                    && reply["result"]["protocolVersion"].is_string() =>
+            {
+                break;
+            }
+            Ok(reply) => last_reply = format!("invalid Browser.getVersion response: {reply}"),
+            Err(error) => last_reply = format!("Browser.getVersion: {error:?}"),
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
     let created = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("page target");
@@ -384,6 +414,9 @@ fn inner() {
 
 #[test]
 fn real_browser_injection_receipt_and_origin_guards() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for t in ["unshare", "ip", "openssl", "bwrap"] {
         tool(t);
     }

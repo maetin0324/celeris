@@ -3,16 +3,16 @@ tasks: [01M3YF3NS2EGTZD2BBWNPG1K28]
 ---
 # 定期実行（cron job）基盤と daily-curation — 運用手順（人が実行する）
 
-- 対象: [ADR-0131](../adr/0131-cron-jobs.md)（汎用の定期実行基盤、最初の job = 知識ベースと受信箱の日次整理）。
+- 対象: [ADR-0131](../../agent-docs/adr/0131-cron-jobs.md)（汎用の定期実行基盤、最初の job = 知識ベースと受信箱の日次整理）。
   API の形は [docs/api/cron-jobs.md](../api/cron-jobs.md)。セルフデプロイの一般手順は
-  [docs/selfdeploy.md](../selfdeploy.md)（ここでは重複させず参照する）。
+  [docs/selfdeploy.md](selfdeploy.md)（ここでは重複させず参照する）。
 - 実行者: 人。本番 host の操作（`~/.config/celeris` の編集、daemon の再起動・昇格）はここに書いた手順どおり
   人が行う。このリポジトリの run からは本番 DB・本番 `~/.config/celeris`・`~/.local/celeris` に書き込まない。
-- migration: `0039_cron_jobs.sql`（`cron_jobs` / `cron_job_runs` 2 表）、`SCHEMA_VERSION = 39`。
+- migration: `0046_cron_jobs.sql`（`cron_jobs` / `cron_job_runs` 2 表）、`SCHEMA_VERSION = 46`。
 
 ## 0. 前提
 
-- `GET /health` の `schema_version` が 39 以上になる release を [selfdeploy.md](../selfdeploy.md) の
+- `GET /health` の `schema_version` が 39 以上になる release を [selfdeploy.md](selfdeploy.md) の
   `release.sh <ref>` → `verify.sh <sha12>` → `promote.sh <sha12>` で本番に昇格させてあること。
 - `config.toml` は selfdeploy のどのスクリプトも書き換えない（上記 doc §0）。この job を使うための
   2 つの設定（`[[harnesses]] knowledge-curation` と、使うなら `[[cron.seed]] daily-curation`）は

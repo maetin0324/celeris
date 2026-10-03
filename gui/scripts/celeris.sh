@@ -258,7 +258,7 @@ fixture_auth() {
   echo "  task: $ta (done)"
 }
 
-# clusters（docs/DESIGN.md §10 Phase G7、docs/adr/0018 [celeris]）: [[clusters]] を 2 つ持つ設定
+# clusters（docs/DESIGN.md §10 Phase G7、agent-docs/adr/0018 [celeris]）: [[clusters]] を 2 つ持つ設定
 # （`local` は `~/.ssh/config` の `celeris-localhost`（localhost への多重接続、connected: true）、
 # `offline` は到達しない host で connected: false）。`local` 向けのタスクは実際に push → run → 判定 → pull を
 # localhost 相手に行う（celeris 側の tests/e2e/tests/cluster_scenarios.rs と同じ流儀。外部ネットワークには出ない）。
@@ -267,8 +267,8 @@ fixture_clusters() {
   local name="clusters" dir; dir="$(run_dir "$name")"
   [ -x "$CELERIS_BIN" ] && [ -x "$CELERISCTL_BIN" ] || die "binaries not found; run 'scripts/celeris.sh build' first"
   alive "$name" && die "celeris '$name' is running; stop it first (scripts/celeris.sh stop $name)"
-  command -v ssh >/dev/null || die "ssh not found; the clusters fixture needs it (docs/adr/0018 [celeris])"
-  command -v rsync >/dev/null || die "rsync not found; the clusters fixture needs it (docs/adr/0018 [celeris])"
+  command -v ssh >/dev/null || die "ssh not found; the clusters fixture needs it (agent-docs/adr/0018 [celeris])"
+  command -v rsync >/dev/null || die "rsync not found; the clusters fixture needs it (agent-docs/adr/0018 [celeris])"
   ssh -o BatchMode=yes -O check celeris-localhost >/dev/null 2>&1 ||
     die "no ssh control master for 'celeris-localhost'; run 'ssh -MNf celeris-localhost' first (see ~/.ssh/config)"
   rm -rf "$dir"
@@ -296,7 +296,7 @@ fixture_clusters() {
   echo "  offline (unreachable): $to (ready; ClusterUnavailable)"
 }
 
-# delegation（docs/DESIGN.md §10 Phase G7、docs/adr/0016 [celeris]）: role=lead, aggregate=true の親が
+# delegation（docs/DESIGN.md §10 Phase G7、agent-docs/adr/0016 [celeris]）: role=lead, aggregate=true の親が
 # `delegate` で 2 件の role=implementer の子を作り、子が終端になった後の集約 run が artifacts/summary.md を書く。
 fixture_delegation() {
   local name="delegation" dir; dir="$(run_dir "$name")"

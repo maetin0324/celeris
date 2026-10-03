@@ -332,8 +332,11 @@ pub enum PhaseSettle {
 ///
 /// - 走っている WU（`running`。統合 WU を含む）があれば `Wait`（in-flight が 0 になってから決める）。
 /// - 現在の工程（有効で終端でない行のうち `seq` 最小の行の工程。`runnable_work_units` と同じ）で、
-///   question → 失敗（failed を先に、次に limit / plan_issue / dependency_failed）→ 起こせる WU →
+///   question → 起こせる WU → 失敗（failed を先に、次に limit / plan_issue / dependency_failed）→
 ///   統合の順に見る。人の入力（question）を先にするのは、replan で質問を捨てないため。
+/// - ADR-0134 D2: 同じ段に `Ready`/`NeedsContinuation` の非統合 WU があれば、止まった unit より先に
+///   `Advance` で走らせる（replan が足した葉が、daemon の止まった repair WU より先に走る）。それが尽きても
+///   失敗・止まった unit が残れば `Failure`。
 pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     let active: Vec<&WorkUnitRow> = units.iter().filter(|u| u.status.is_active()).collect();
     // ADR-0079 D5（Phase R1b）: kind task の unit の `running` は子 task が走っていることの写しで、この
@@ -370,6 +373,17 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     }) {
         return PhaseSettle::Question(q.id.clone());
     }
+    // ADR-0134 D2: 進められる葉が先（失敗した unit に依存する葉は pending / blocked(dependency_failed)
+    // なのでここに当たらず、失敗を飛ばして下流を走らせることは無い）。
+    if in_phase.iter().any(|u| {
+        u.kind != task_core::WorkUnitKind::Integrate
+            && matches!(
+                u.status,
+                WorkUnitStatus::Ready | WorkUnitStatus::NeedsContinuation
+            )
+    }) {
+        return PhaseSettle::Advance;
+    }
     if let Some(f) = in_phase
         .iter()
         .find(|u| u.status == WorkUnitStatus::Failed)
@@ -387,15 +401,6 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     {
         return PhaseSettle::Failure(f.id.clone());
     }
-    if in_phase.iter().any(|u| {
-        u.kind != task_core::WorkUnitKind::Integrate
-            && matches!(
-                u.status,
-                WorkUnitStatus::Ready | WorkUnitStatus::NeedsContinuation
-            )
-    }) {
-        return PhaseSettle::Advance;
-    }
     let phase_done = active
         .iter()
         .filter(|u| u.phase == phase && u.kind != task_core::WorkUnitKind::Integrate)
@@ -411,6 +416,54 @@ pub fn settle_phase(units: &[WorkUnitRow]) -> PhaseSettle {
     // ここに来るのは「pending だけが残り、依存も統合も進められない」一瞬の不整合だけ（通常の
     // 経路に戻して gate に任せる）。
     PhaseSettle::Advance
+}
+
+/// ADR-0134 D2: `settle_phase` が `Advance` を返したときに起こす WU（`task_core::runnable_work_units` の
+/// 段の内側の版）。現在の段の非統合・非 task の unit から、`needs_continuation` を先に、次に `ready` を
+/// `seq` 順で `limit - in_flight` 件まで返す。同じ段の `failed`・`blocked(limit|plan_issue|dependency_failed)`
+/// は待たない（`settle_phase` の D2 と同じ順序。待つと `Advance` なのに何も起こせず止まる）。
+/// `blocked(question)` があるときだけ、新しい（`ready` の）unit を起こさない（人の入力が最優先）。
+pub fn runnable_in_phase(units: &[WorkUnitRow], in_flight: usize, limit: usize) -> Vec<String> {
+    let slots = limit.saturating_sub(in_flight);
+    if slots == 0 {
+        return Vec::new();
+    }
+    let in_play: Vec<&WorkUnitRow> = units.iter().filter(|u| !u.status.is_terminal()).collect();
+    let Some(current) = in_play.iter().min_by_key(|u| u.seq) else {
+        return Vec::new();
+    };
+    let phase = current.phase.clone();
+    let in_phase: Vec<&WorkUnitRow> = in_play
+        .into_iter()
+        .filter(|u| u.phase == phase)
+        .filter(|u| {
+            u.kind != task_core::WorkUnitKind::Integrate && u.kind != task_core::WorkUnitKind::Task
+        })
+        .collect();
+    let question = in_phase.iter().any(|u| {
+        u.status == WorkUnitStatus::Blocked
+            && u.blocked_reason == Some(WorkUnitBlockedReason::Question)
+    });
+    let mut candidates: Vec<&WorkUnitRow> = in_phase
+        .iter()
+        .copied()
+        .filter(|u| u.status == WorkUnitStatus::NeedsContinuation)
+        .collect();
+    candidates.sort_by_key(|u| u.seq);
+    if !question {
+        let mut ready: Vec<&WorkUnitRow> = in_phase
+            .iter()
+            .copied()
+            .filter(|u| u.status == WorkUnitStatus::Ready)
+            .collect();
+        ready.sort_by_key(|u| u.seq);
+        candidates.extend(ready);
+    }
+    candidates
+        .into_iter()
+        .take(slots)
+        .map(|u| u.id.clone())
+        .collect()
 }
 
 /// D18: 人の回答（`Trigger::Answer`）で `blocked` の WU を再開する（窓は 0 に戻す。D18「回答の時点

@@ -1,5 +1,108 @@
 use super::*;
 
+#[test]
+fn notify_digest_tick_syncs_notice_feed_once() {
+    use task_core::feed::NoticeQuery;
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = new_task(std::path::Path::new("/tmp"), Check::Human, 0);
+    store.insert(&root).unwrap();
+    let at = OffsetDateTime::now_utc();
+    store
+        .append_event(
+            root.id,
+            &Event::Transitioned {
+                from: Status::Ready,
+                to: Status::Done,
+                reason: "done".into(),
+            },
+        )
+        .unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let d = dispatcher(store.clone(), adapter, 1);
+    d.sync_notice_feed(at + time::Duration::seconds(1));
+    d.sync_notice_feed(at + time::Duration::seconds(1));
+    let page = store.notice_list(&NoticeQuery::default()).unwrap();
+    assert_eq!(page.total, 1);
+    assert_eq!(page.items[0].count, 1);
+}
+
+/// ADR-0133 付記（release 3527c8e3 の verify 退行）: tick の通知同期は events を予算までしか読まず、
+/// 追いついた後の tick が書き込み接続を取る回数は events の量によらない。時計ではなく
+/// 走査位置と `lock_counts` で固定する。
+#[test]
+fn tick_feed_sync_is_bounded_and_idle_ticks_do_not_scale_with_events() {
+    fn idle_tick_writer_locks(events_per_task: usize) -> (u64, Vec<u64>) {
+        let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let store: Arc<dyn TaskStore> = sqlite.clone();
+        for _ in 0..50 {
+            let mut task = new_task(std::path::Path::new("/tmp"), Check::Human, 0);
+            task.status = Status::Done;
+            let history = (0..events_per_task)
+                .map(|_| Event::Transitioned {
+                    from: Status::Ready,
+                    to: Status::Ready,
+                    reason: "history".into(),
+                })
+                .collect();
+            sqlite.create_task(&task, history).unwrap();
+        }
+        let latest = store.latest_event_id().unwrap();
+        let adapter = Arc::new(InstantAdapter {
+            terminal: Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            delay: Duration::ZERO,
+        });
+        let mut d = dispatcher(store.clone(), adapter, 1);
+        // 注入した時計: 種の events より後の時刻で tick する（秒に丸めた `now` で取り残さない）。
+        let at = OffsetDateTime::now_utc().unix_timestamp() + 2;
+        d.set_now_unix_fn(Arc::new(move || at));
+        let cursor = |s: &SqliteStore| {
+            s.feed_cursor_get("events")
+                .unwrap()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(0)
+        };
+        d.tick().unwrap();
+        let first = cursor(&sqlite);
+        assert!(
+            first <= task_ops::notify_feed::EVENT_BUDGET as u64,
+            "one tick read {first} events"
+        );
+        let mut ticks = 1;
+        while cursor(&sqlite) < latest {
+            ticks += 1;
+            assert!(ticks < 100, "feed never caught up");
+            d.tick().unwrap();
+        }
+        let idle = (0..2)
+            .map(|_| {
+                let before = sqlite.lock_counts();
+                d.tick().unwrap();
+                sqlite.lock_counts().since(before).writer
+            })
+            .collect();
+        (latest, idle)
+    }
+    let (small_events, small) = idle_tick_writer_locks(4);
+    let (large_events, large) = idle_tick_writer_locks(400);
+    assert!(large_events >= 20_000, "{large_events}");
+    assert!(small_events < 1_000, "{small_events}");
+    assert_eq!(
+        small, large,
+        "idle tick writer locks must not depend on event volume"
+    );
+}
+
 /// Phase 45（実機バグ、2026-09-19）: `newly_failed_delegated_children` が「一度扱った失敗は数え直さない」
 /// （ADR-0021 D3）を判定するのに `events_for`（タスクごとのローカルな `seq`）で親と子を比較していたため、
 /// 子の方が親よりイベント数が多い（＝ `seq` が大きい）場合、子の失敗が毎回「新規」と誤判定され、親が
@@ -397,6 +500,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
         started_at: "2026-09-14T00:00:00Z".into(),
         tick_ms: 50,
         providers: vec![ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -481,6 +586,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     // reload でプロバイダ表を差し替えても、残った id の記録は保つ。消えた id の記録は落とす。
     d.set_snapshot_providers(vec![
         ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -496,6 +603,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
             account_pool: false,
         },
         ProviderLive {
+            kind: Default::default(),
+            llm_source: None,
             credential_refs: Default::default(),
             tier_models: Default::default(),
             account_id: None,
@@ -527,6 +636,8 @@ async fn tick_publishes_daemon_snapshot_to_watch() {
     );
 
     d.set_snapshot_providers(vec![ProviderLive {
+        kind: Default::default(),
+        llm_source: None,
         credential_refs: Default::default(),
         tier_models: Default::default(),
         account_id: None,

@@ -1,6 +1,155 @@
 use super::*;
 use task_core::TaskStore;
 
+fn populated_wal_db(path: &Path) {
+    let conn = rusqlite::Connection::open(path).unwrap();
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         CREATE TABLE pages(id INTEGER PRIMARY KEY, payload BLOB);
+         WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<256)
+         INSERT INTO pages SELECT x, zeroblob(4096) FROM n;",
+    )
+    .unwrap();
+}
+
+/// Measure the old 1-page stepping mechanism: each committed update resets its copied-page
+/// count. The production setting had 100 pages followed by a 250 ms gap for writers to do this.
+#[test]
+fn incremental_backup_progress_restarts_after_other_connection_writes() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.sqlite3");
+    populated_wal_db(&src);
+    let source = rusqlite::Connection::open(&src).unwrap();
+    let writer = rusqlite::Connection::open(&src).unwrap();
+    let mut destination = rusqlite::Connection::open(dir.path().join("old.sqlite3")).unwrap();
+    let backup = rusqlite::backup::Backup::new(&source, &mut destination).unwrap();
+    assert!(matches!(
+        backup.step(1).unwrap(),
+        rusqlite::backup::StepResult::More
+    ));
+    let first = backup.progress();
+    assert!(first.pagecount > 100);
+    let mut restarts = 0;
+    for _ in 1..=4 {
+        writer
+            .execute("UPDATE pages SET payload = randomblob(4096) WHERE id=1", [])
+            .unwrap();
+        assert!(matches!(
+            backup.step(1).unwrap(),
+            rusqlite::backup::StepResult::More
+        ));
+        let next = backup.progress();
+        if next.remaining >= first.remaining {
+            restarts += 1;
+        }
+    }
+    eprintln!(
+        "online backup measurement: pagecount={}, steps=5, restarts={restarts}",
+        first.pagecount
+    );
+    assert_eq!(
+        restarts, 4,
+        "each separate-connection write resets the copied pages"
+    );
+}
+
+/// The writer commits at a progress callback inside VACUUM, so the overlap is event-driven.
+#[test]
+fn vacuum_backup_finishes_with_a_concurrent_writer_and_integrity_ok() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.sqlite3");
+    let dest = dir.path().join("copy.sqlite3");
+    populated_wal_db(&src);
+    let (go_tx, go_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let writer_path = src.clone();
+    let writer = std::thread::spawn(move || {
+        let conn = rusqlite::Connection::open(writer_path).unwrap();
+        let mut commits = 0;
+        for _ in 0..4 {
+            if go_rx.recv().is_err() {
+                break;
+            }
+            conn.execute("UPDATE pages SET payload = randomblob(4096) WHERE id=1", [])
+                .unwrap();
+            commits += 1;
+            done_tx.send(()).unwrap();
+        }
+        commits
+    });
+    let reader =
+        rusqlite::Connection::open_with_flags(&src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut progress_calls = 0;
+    reader.progress_handler(
+        100,
+        Some(move || {
+            progress_calls += 1;
+            if progress_calls <= 4 {
+                go_tx.send(()).unwrap();
+                done_rx.recv_timeout(Duration::from_secs(10)).unwrap();
+            }
+            false
+        }),
+    );
+    reader
+        .execute("VACUUM INTO ?1", [dest.to_string_lossy().as_ref()])
+        .unwrap();
+    reader.progress_handler(0, None::<fn() -> bool>);
+    assert_eq!(writer.join().unwrap(), 4);
+    assert!(task_core::integrity_check(&dest).unwrap());
+}
+
+#[test]
+fn incomplete_backups_are_cleaned_and_cancel_does_not_publish() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.sqlite3");
+    populated_wal_db(&src);
+    let backups = dir.path().join("backups");
+    std::fs::create_dir(&backups).unwrap();
+    let old = backups.join("celeris-1.sqlite3");
+    std::fs::write(&old, b"incomplete").unwrap();
+    let journal = backups.join("celeris-1.sqlite3-journal");
+    std::fs::write(&journal, b"hot").unwrap();
+    let partial = backups.join("celeris-2.sqlite3.partial");
+    std::fs::write(&partial, b"incomplete").unwrap();
+    let old_time = std::time::SystemTime::now() - Duration::from_secs(600);
+    for path in [&old, &journal, &partial] {
+        std::fs::File::open(path)
+            .unwrap()
+            .set_modified(old_time)
+            .unwrap();
+    }
+    let cancelled = Arc::new(AtomicBool::new(true));
+    assert!(matches!(
+        backup_once(&src, &backups, 48, Duration::from_secs(2), cancelled),
+        Err(BackupError::Cancelled)
+    ));
+    assert!(!old.exists());
+    assert!(!partial.exists());
+    assert!(std::fs::read_dir(&backups).unwrap().next().is_none());
+}
+
+#[test]
+fn vacuum_progress_handler_interrupts_an_active_copy() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("source.sqlite3");
+    let partial = dir.path().join("celeris-1.sqlite3.partial");
+    populated_wal_db(&src);
+    let reader =
+        rusqlite::Connection::open_with_flags(&src, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    reader.progress_handler(1, Some(|| true));
+    let error = reader
+        .execute("VACUUM INTO ?1", [partial.to_string_lossy().as_ref()])
+        .unwrap_err();
+    assert!(
+        matches!(error, rusqlite::Error::SqliteFailure(e, _) if e.code == rusqlite::ErrorCode::OperationInterrupted)
+    );
+    remove_backup_files(&partial);
+    assert!(!partial.exists());
+}
+
 #[test]
 fn checkpoint_once_runs_on_a_fresh_wal_db_without_error() {
     let dir = tempfile::tempdir().unwrap();
@@ -25,8 +174,14 @@ fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
     // 3 回バックアップし、keep=2 なら最新 2 つだけ残る。
     let mut written = Vec::new();
     for i in 0..3 {
-        let dest = backup_once(&db_path, &backup_dir, 2, Duration::from_millis(2000))
-            .unwrap_or_else(|e| panic!("backup {i}: {e}"));
+        let dest = backup_once(
+            &db_path,
+            &backup_dir,
+            2,
+            Duration::from_millis(2000),
+            Arc::new(AtomicBool::new(false)),
+        )
+        .unwrap_or_else(|e| panic!("backup {i}: {e}"));
         written.push(dest);
         // ファイル名が unix 秒なので、同じ秒に 2 回書くと衝突する（テストのみの配慮）。
         std::thread::sleep(Duration::from_millis(1100));
@@ -46,6 +201,7 @@ fn backup_once_writes_a_restorable_copy_and_prune_keeps_only_the_newest() {
 
     // 残った最新のバックアップは復元して読める。
     let latest = written.last().unwrap();
+    assert!(task_core::integrity_check(latest).unwrap());
     let restored = task_core::SqliteStore::open(latest).unwrap();
     assert_eq!(restored.get(task.id).unwrap().map(|t| t.id), Some(task.id));
 }
@@ -56,7 +212,14 @@ fn backup_once_fails_clearly_when_the_backup_dir_is_missing() {
     let db_path = dir.path().join("celeris.sqlite3");
     drop(task_core::SqliteStore::open(&db_path).unwrap());
     let missing = dir.path().join("does-not-exist");
-    let err = backup_once(&db_path, &missing, 48, Duration::from_millis(2000)).unwrap_err();
+    let err = backup_once(
+        &db_path,
+        &missing,
+        48,
+        Duration::from_millis(2000),
+        Arc::new(AtomicBool::new(false)),
+    )
+    .unwrap_err();
     assert!(matches!(err, BackupError::MissingDir(_)), "{err}");
 }
 

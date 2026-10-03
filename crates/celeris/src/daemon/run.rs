@@ -9,7 +9,8 @@ use task_worker::FakeAdapter;
 
 use super::api::{RunningApi, start_api};
 use super::bootstrap::{
-    build_dispatcher, install_worker_db_guard, warn_if_db_on_network_filesystem,
+    build_dispatcher, install_worker_db_guard, refuse_production_db_in_worker_run,
+    warn_if_db_on_network_filesystem,
 };
 use super::clusters::{ClusterMasters, spawn_control_path_inspection, wire_cluster_liveness_hooks};
 use super::services::{
@@ -34,6 +35,12 @@ pub(crate) struct RoleState {
     pub(crate) mcp: Option<RunningMcp>,
 }
 
+/// ADR-0139 D1: この起動 mode で `[llm_proxy] listen` に bind するか。verify は本番の config を読むので
+/// `listen` も本番と同じになる。bind すると本番の proxy と接続を分け合い、staging のトークンで 401 を返す。
+pub(crate) fn serves_llm_proxy(mode: DaemonMode) -> bool {
+    mode != DaemonMode::Verify
+}
+
 /// デーモン本体。`[api]` があれば同じランタイムで HTTP API も動かし、tick ループの終了時に止める。
 /// ADR-0040 D4: 起動時に `daemon_instances` を見て役割を決める（同じ `release` の `active` がいれば
 /// 何もせず `Exit::DuplicateRelease`＝ exit 3）。
@@ -49,6 +56,42 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if verify {
         config.apply_verify_smoke();
     }
+    let identity = InstanceIdentity::new(opts.release.as_deref());
+    // ADR-0040 付記（2026-10-02）: 昇格の認可。`build_dispatcher`（DB を開いて migrate する）・
+    // `install_worker_db_guard`・`start_instance`（handoff 要求）より前に判定し、拒否なら DB を一度も
+    // 開かずに exit 4。`--mode verify` は判定の外。
+    if !verify {
+        let evidence =
+            instance::read_promotion_evidence(&config.selfdeploy.releases_dir, &identity.release);
+        match instance::decide_promotion(
+            &identity.release,
+            &evidence,
+            time::OffsetDateTime::now_utc(),
+        ) {
+            instance::PromotionGate::Skipped(reason) => {
+                tracing::info!(release = %identity.release, "promotion gate: skipped ({reason})");
+            }
+            instance::PromotionGate::Authorized(reason) => {
+                tracing::info!(release = %identity.release, "promotion gate: authorized ({reason})");
+            }
+            instance::PromotionGate::Rejected(reason) => {
+                tracing::error!(
+                    release = %identity.release,
+                    releases_dir = %config.selfdeploy.releases_dir.display(),
+                    "promotion gate: rejected ({reason}); not opening the DB (no migration, no handoff); \
+                     exiting 4 (ADR-0040 addendum 2026-10-02)"
+                );
+                return Ok(Exit::NotPromoted);
+            }
+        }
+    }
+    // ADR-0136: `[storage] hot_mount`（本番は `/local`）が mount されていなければ、DB を開く・dir を作る
+    // （`build_dispatcher`）より前に止める。rootfs に同名の dir を作って hot データを書き始めない。
+    config.check_hot_mount(
+        std::fs::read_to_string("/proc/self/mountinfo")
+            .ok()
+            .as_deref(),
+    )?;
     warn_if_db_on_network_filesystem(&config.db.path);
     // ADR-0047 D3 / D4（P-61-i、Phase 62）: 起動時に索引が無ければ作る（`_inbox` の変化を tick ごとに
     // 見る仕組みは無いが、知識整理 run が `apply_candidates` の後に必ず `reindex` するので、起動後は
@@ -56,8 +99,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     if !verify && task_ops::knowledge::exists(&config.knowledge.root) {
         let _ = task_ops::knowledge::ensure_index(&config.knowledge.root);
     }
-    let identity = InstanceIdentity::new(opts.release.as_deref());
     let cluster_masters: ClusterMasters = Arc::new(std::sync::Mutex::new(HashMap::new()));
+    // ADR-0126 A2: worker run の中で本番 DB・本番 token を使う daemon は DB を開く前に止める。
+    refuse_production_db_in_worker_run(&config)?;
     let mut dispatcher = build_dispatcher(&config, Arc::clone(&cluster_masters))?;
     // ADR-0095 D5: worker の run から DB を読み取り専用にする（verify も含む。効かないホストでは起動しない）。
     install_worker_db_guard(&config)?;
@@ -114,6 +158,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             sandboxd: bin_dir.join("celeris-browser-sandboxd"),
                             egress: bin_dir.join("celeris-browser-egress"),
                             live_sessions: Some(Arc::clone(&live_sessions)),
+                            // ADR-0116 D5: `[browser] runtime`（既定 `"daemon"`）。`Config::validate` が
+                            // `runtime = "launcher"` のとき `launcher_socket` の有無を既に確かめている。
+                            runtime: config.browser.runtime_kind(),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの
@@ -183,10 +230,12 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         }
         None => (None, None),
     };
-    // ADR-0053 D1（Phase 65）: `standby`/`verify` も起きてすぐプロキシを受ける（主 API と同じ理由）。
+    // ADR-0053 D1（Phase 65）: `standby` も起きてすぐプロキシを受ける（主 API と同じ理由）。
+    // ADR-0139 D1: `verify` は待ち受けない（本番の `listen` に `SO_REUSEPORT` で相乗りし、staging の
+    // トークンで本番の知識整理 run を 401 にしていた）。`GET /llm/sources` 用の state は上で作ってある。
     let llm_proxy = match llm_proxy_state {
-        Some(state) => Some(start_llm_proxy(&config, state).await?),
-        None => None,
+        Some(state) if serves_llm_proxy(opts.mode) => Some(start_llm_proxy(&config, state).await?),
+        _ => None,
     };
     // ADR-0056 D1（Phase 78）: `[mcp]` も同じ理由で `standby`/`verify` から受ける。
     let mcp_state = build_mcp_state(&config)?;

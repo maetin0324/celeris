@@ -1,4 +1,4 @@
-//! ADR-0131 D5: 定期実行（cron job）の API（`docs/celeris-api-v1.md` の「定期実行」）。
+//! ADR-0131 D5: 定期実行（cron job）の API（`docs/api/cron-jobs.md`）。
 //!
 //! - `GET /cron-jobs` — 一覧（`name` 昇順。各 job に最後の履歴 `last_run`）。
 //! - `POST /cron-jobs` — 作成 → 201 `CronJobView`（作成直後の `next_fire_at`）。`name` の重複は 409

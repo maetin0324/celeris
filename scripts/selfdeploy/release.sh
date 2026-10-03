@@ -26,6 +26,7 @@
 #     `releases/.pnpm-prod-cache/<key>/` で行い、リリースの `gui/node_modules` はそこへの相対 symlink にする。
 #
 # 本番には一切触れない（プロセスも DB も config も）。人でもワーカーでも実行してよい（D5）。
+# ADR-0126 B4: userns の要る試験は既定 skip だが、この gate は既定で `CELERIS_USERNS_TESTS=1` を立てて走らせる。
 set -euo pipefail
 
 SD_PROG=release
@@ -45,7 +46,7 @@ env:
   SD_AUDIT_TIMEOUT  既定 600（秒）。`pnpm-mobile-audit` / `pnpm-e2e-mock` それぞれの壁時計の上限
                     （Phase 89。ADR-0041 追記）。Playwright の Chromium 実行ファイルが
                     ~/.cache/ms-playwright に無いホストでは、この 2 ステップは待たずに
-                    「false — playwright browser not installed」で失敗する（`docs/selfdeploy.md` 参照）。
+                    「false — playwright browser not installed」で失敗する（`docs/ops/selfdeploy.md` 参照）。
   SD_GATE_FORCE_GUI  1 なら gui/ に変更が無くても GUI の検査の段を飛ばさない（Phase SD-1）
   SD_RELEASE_SCRATCH_OWNER  既定 release-build（全リリースで共有する scratch の owner。Phase SD-1）
   SD_RELEASE_TARGET_TTL     既定 172800（秒）。共有 target の lease の TTL（最後のリリースからこの間は P0）
@@ -81,7 +82,7 @@ SHA_FULL="$(sd_sha_full "$REF")"
 sd_mkdirs
 
 # Phase SD-1: ビルドは場所を固定した作業ツリー（`.build/tree`）で行う。`.build/<sha12>/` は gate が落ちたときの
-# gate.json とログの置き場（ただのディレクトリ。docs/selfdeploy.md §2）。
+# gate.json とログの置き場（ただのディレクトリ。docs/ops/selfdeploy.md §2）。
 BUILD="$SD_BUILD_TREE"
 FAILED_DIR="$SD_BUILD_ROOT/$SHA12"
 REL="$(sd_release_dir "$SHA12")"
@@ -187,6 +188,11 @@ export CARGO_INCREMENTAL=0
 # ADR-0079 付記「R7-12」D4: 環境に依存する browser テスト（実 bwrap / Chromium / netns）は、環境が無いと理由を出して
 # 飛ばす（worker の sandbox で無関係な task の受け入れ条件を落とさない）。release では飛ばさない（環境が無ければ失敗）。
 export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
+# ADR-0126 B4: userns の要る試験（実 browser/runtime/launcher、unshare/CLONE_NEWUSER）は既定で skip になった
+# （worker run の sandbox が userns を作れないため）。release gate は host（userns が使える）で走るので、既定で
+# 外したことで今まで release で守っていた退行の検出が消えないよう、ここで既定を 1 に戻す（環境が無ければ fail）。
+# userns が使えない host で release するなら人が CELERIS_USERNS_TESTS=0 を明示する（gate の記録に残る）。
+export CELERIS_USERNS_TESTS="${CELERIS_USERNS_TESTS:-1}"
 
 printf 'step:s exit:i secs:f log:s skipped:b reason:s\n' >"$GATE_TSV"
 GATE_OK=true
@@ -234,6 +240,12 @@ skip_step() {
 # 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
 # `steps[]`（exit ≠ 0 のまま）と `web`（`ok` / `failed_step` / `blocking: false`）に残し、落ちた段より後ろの
 # web/ の段は `skipped: true` にする。ビルドする sha に `web/` が無い・`SD_GATE_SKIP_WEB=1` なら全部 skipped。
+# 2026-10-02（task 01M3YT4PT3）: node_modules が入らない不具合そのものは bundle_web（web-bundle 段。node_modules の
+# 有無と `node -e 'import.meta.resolve(...); await import("./server/app.js")'` による import 解決）で直り、
+# node_modules が無い・import できないリリースは web.ok=false になって web-follow が切り替えない（ADR-0135）。
+# ただし NFS 上での web/app の展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応で残っている。
+# それを解決するまで既定を skip にするかは人の判断なので、既定は 1（skip）のまま変えない。web の段を走らせるとき
+# は SD_GATE_SKIP_WEB=0 を明示する。
 WEB_OK=true
 WEB_FAILED_STEP=""
 WEB_SKIP_REASON=""
@@ -293,7 +305,7 @@ web_pnpm_release() {
 }
 
 decide_web_skip() {
-  if [ "${SD_GATE_SKIP_WEB:-0}" = 1 ]; then
+  if [ "${SD_GATE_SKIP_WEB:-1}" = 1 ]; then
     WEB_SKIP_REASON="SD_GATE_SKIP_WEB=1"
   elif [ ! -f "$BUILD/web/package.json" ]; then
     WEB_SKIP_REASON="no web/ directory"
@@ -627,6 +639,16 @@ bundle_web() {
   fi
   if ! ( cd "$dir" && web_pnpm install --prod --offline --frozen-lockfile ) >>"$BUILD/.gate-web-bundle.log" 2>&1 8>&- 9>&-; then
     WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: offline prod install failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  # pnpm の終了コードだけでは実行可能な app を保証できない。server/index.js は
+  # import 時に listen するため、同じ依存を読む app.js を import して確認する。
+  if [ ! -d "$dir/node_modules/" ]; then
+    printf '%s\n' 'web-bundle: offline prod install did not create a resolvable node_modules directory' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: node_modules missing (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  if ! ( cd "$dir" && node --input-type=module -e 'import.meta.resolve("express"); await import("./server/app.js")' ) >>"$BUILD/.gate-web-bundle.log" 2>&1; then
+    printf '%s\n' 'web-bundle: server dependencies could not be imported without listening' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: server dependencies unresolved (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
   fi
   WEB_BUNDLE_JSON="{\"tarball\": $(sd_json_str "web/$name.tar.gz"), \"app\": \"web/app\"}"
   sd_log "web: bundle ready ($STAGE/web/$name.tar.gz, app at web/app)"

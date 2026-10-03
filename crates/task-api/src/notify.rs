@@ -1,4 +1,4 @@
-//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/gui/api.md` §3.33）。
+//! 通知の設定とテスト送信（ADR-0037 D4。Phase 39。`docs/api/v1/gui-api.md` §3.33）。
 //!
 //! - `GET /notify` — 設定済みか、直近の送信 10 件（読み取り）。
 //! - `POST /notify/test` — その場でテスト送信（**管理系**。トークン必須）。
@@ -40,6 +40,14 @@ pub struct NotifyView {
     pub gui_base_url: Option<String>,
     /// 直近の送信（新しい順、最大 10 件）。
     pub recent: Vec<NotifyRecent>,
+    /// `[notify]` outbound route configuration (ADR-0133 D6).
+    pub inbox_batch_secs: u64,
+    pub inbox_reminder_secs: u64,
+    pub digest_interval_secs: u64,
+    pub digest_max_lines: usize,
+    /// Last successful send for each outbound route; absent history is `null`.
+    pub inbox_new_last_sent_at: Option<String>,
+    pub digest_last_sent_at: Option<String>,
 }
 
 /// `GET /notify` の `recent[]` の 1 件（ADR-0037 D4）。
@@ -107,10 +115,23 @@ pub(crate) async fn view(State(state): State<ApiState>, RawQuery(raw): RawQuery)
     crate::handlers::no_query(&raw)?;
     let recent = state
         .blocking(move |store| {
-            store
+            let recent = store
                 .notification_recent(RECENT_LIMIT)
-                .map(|rows| rows.into_iter().map(NotifyRecent::from).collect::<Vec<_>>())
-                .map_err(store_problem)
+                .map_err(store_problem)?;
+            let inbox_new = store
+                .notification_last_sent_at(NotificationKind::InboxNew)
+                .map_err(store_problem)?;
+            let digest = store
+                .notification_last_sent_at(NotificationKind::Digest)
+                .map_err(store_problem)?;
+            Ok((
+                recent
+                    .into_iter()
+                    .map(NotifyRecent::from)
+                    .collect::<Vec<_>>(),
+                inbox_new.map(rfc3339),
+                digest.map(rfc3339),
+            ))
         })
         .await?;
     let fingerprint = webhook_fingerprint(&state);
@@ -121,7 +142,13 @@ pub(crate) async fn view(State(state): State<ApiState>, RawQuery(raw): RawQuery)
             secret_id: state.inner.notify_secret_id.clone(),
             fingerprint,
             gui_base_url: state.inner.notify_gui_base_url.clone(),
-            recent,
+            recent: recent.0,
+            inbox_batch_secs: state.inner.notify_inbox_batch_secs,
+            inbox_reminder_secs: state.inner.notify_inbox_reminder_secs,
+            digest_interval_secs: state.inner.notify_digest_interval_secs,
+            digest_max_lines: state.inner.notify_digest_max_lines,
+            inbox_new_last_sent_at: recent.1,
+            digest_last_sent_at: recent.2,
         },
     ))
 }

@@ -3,7 +3,7 @@ import { isSupportTask } from "~/lib/work-tree";
 
 /**
  * 組織の木（SPEC §3.2、ADR-0033 D1）を `parent_id` から組む純粋関数。API（`GET /org`）は木にしない
- * （docs/gui/api.md §3.42「木は GUI が parent_id で組む」）ので、ここで組み立てる。
+ * （docs/api/v1/gui-api.md §3.42「木は GUI が parent_id で組む」）ので、ここで組み立てる。
  * - 根の判定: `kind === "secretary"`、または `parent_id` が無いノード。
  * - 孤児（`parent_id` が指しているノードが無い）は根の下に出す（画面を壊さない。木を組めないことにはしない）。
  */

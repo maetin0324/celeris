@@ -6,10 +6,11 @@
 //!
 //! この host には別 UID が無いので、成功経路は `same-uid-harness` の試験 admission で実証する
 //! （本番の `Attested` は SameUid を拒否する。task-worker の `identity_restore_sameuid_rejected_in_production`）。
-//! 実 runtime が無い環境では失敗する。`CELERIS_ISOLATION_TESTS=skip` のときだけ
-//! 「SKIPPED (not passed)」を出して抜ける。
+//! 実 runtime が無い環境では失敗する。既定では skip し、`CELERIS_USERNS_TESTS=1` のときだけ走る。
 
 mod common;
+#[path = "../../task-worker/tests/userns_gate/mod.rs"]
+mod userns_gate;
 
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -25,16 +26,12 @@ use task_api::browser_identity::{IdentityRegisterInput, IdentityService};
 use task_core::browser_isolation::LiveSessions;
 use task_core::{RunIndexRole, RunIndexStatus, RunRow, Status, TaskKind, TaskStore};
 use task_worker::browser_cdp_sink::CdpController;
-use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec};
+use task_worker::browser_runtime::{RestoreAdmission, RuntimeSpec, UsernsMode};
 use task_worker::browser_supervisor::{Supervisor, SupervisorOptions};
 use time::OffsetDateTime;
 
 fn skip() -> bool {
-    if std::env::var("CELERIS_ISOLATION_TESTS").as_deref() == Ok("skip") {
-        eprintln!("SKIPPED (not passed): CELERIS_ISOLATION_TESTS=skip");
-        return true;
-    }
-    false
+    userns_gate::skip_unless_userns_tests()
 }
 
 fn browser() -> PathBuf {
@@ -83,6 +80,7 @@ fn launch(session: &Path, id: &str, opts: SupervisorOptions) -> Supervisor {
         argv: argv.into_iter().collect::<Vec<OsString>>(),
         cdp_pipe: true,
         egress: None,
+        userns: UsernsMode::Unshare,
     };
     Supervisor::start(spec, opts).expect("isolated runtime starts")
 }
@@ -175,10 +173,12 @@ async fn restore_enters_observation_stop_until_session_end() {
     opts.live_key = Some((id.clone(), "r1".into()));
     let stop = Arc::clone(&opts.observation_stop);
     let mut sup = launch(session.path(), "live-s", opts);
-    let controller = Arc::new(std::sync::Mutex::new(CdpController::new(
+    let mut controller = CdpController::new(
         sup.cdp_write.take().expect("cdp write"),
         sup.cdp_read.take().expect("cdp read"),
-    )));
+    );
+    controller.response_timeout_for_test(std::time::Duration::from_secs(60));
+    let controller = Arc::new(std::sync::Mutex::new(controller));
     controller
         .lock()
         .expect("controller")

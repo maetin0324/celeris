@@ -1,7 +1,7 @@
 //! プロンプトの前置きを 1 か所で組む（ADR-0033 D4 / D6 / D5、Phase 24 / 26）。
 //!
 //! 「人」らしさは**注入される記憶と brief** で作る（ADR-0033 D6）。ハーネスのプロセスは相変わらず
-//! ステートレスで、状態はファイルと DB にある（DESIGN 原則 2）。ここは純粋関数だけで、I/O も LLM も無い。
+//! ステートレスで、状態はファイルと DB にある（ADR-0001 D2 原則 2）。ここは純粋関数だけで、I/O も LLM も無い。
 //!
 //! 並び（ADR-0033 D4 / Phase 24 の指示。Phase 30 で 1 の直後に「仕事で使う道具」を追加。
 //! Phase 33 で 3 の直後に「あなたの直近の仕事」を追加。Phase 53 / ADR-0044 D2 で**先頭に**
@@ -718,11 +718,12 @@ pub struct RepoNote {
 /// `repos_note` の後ろに足す 1 行（ディスパッチャが `shared_build_cache` の設定を見て呼ぶかどうかを決める。
 /// ここは文面だけの純粋関数）。ADR-0075 D7（Phase G1）: target は Celeris が渡すローカルの scratch
 /// （owner ごと）になったので、文言を「自分で決めない・`/tmp` と worktree 直下に置かない」にした。
+/// ADR-0129 (1): sccache は Celeris から外し、compiler wrapper は host の cargo 設定に任せる。
 pub fn shared_build_cache_note() -> &'static str {
     "`target/` は Celeris が渡した `CARGO_TARGET_DIR`（ローカルの scratch）を使う。`CARGO_TARGET_DIR` を\
      自分で決めない。`/tmp` と worktree 直下に target を置かない。\n\
-     `RUSTC_WRAPPER`（sccache）・`SCCACHE_*`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` も Celeris が渡した値のまま使い、\
-     上書き・unset しない（sccache の server は起こさない・止めない）。\n"
+     `RUSTC_WRAPPER` 等のコンパイラ wrapper は host の cargo 設定に任せる（Celeris は設定しない）。\
+     `CARGO_TARGET_DIR`・`CARGO_INCREMENTAL`・`CARGO_PROFILE_DEV_DEBUG` は渡された値のまま使う。\n"
 }
 
 /// ADR-0043 D2 / D8: タスクが複数のリポジトリを持つときの「作業場所」の本文（純粋関数）。
@@ -957,7 +958,8 @@ pub(crate) fn deliverables_placement_note() -> String {
 pub(crate) fn production_host_note() -> String {
     "## 本番 host の操作 (production host changes)\n\
      本番 host の操作は人が実行する手順として書く（`systemctl --user`・`systemd-run`・\
-     `~/.config/systemd`・`~/.local/celeris/releases`・`~/.config/celeris` の変更、daemon の\
+     `~/.config/systemd`・`~/.local/celeris/releases`・`/local`・`/local/celeris/state/releases`・\
+     `~/.config/celeris` の変更、daemon の\
      再起動・差し替え、本番 DB への書き込みはしない）。必要なら、人が実行する手順（コマンドと\
      確認方法）を成果物に書き、計画では人の決定（decisions）または人の check を置く（ADR-0095 \
      付記 D-d）。\n\n"
@@ -1087,8 +1089,8 @@ fn actions_instructions() -> String {
      追跡ファイルには置きません（ADR-0067）。\n\
      `web/` や `docs/` だけを変える task の acceptance では `cargo test --workspace` を必須にせず、\
      `crates/` に差分が無いことの検査に置き換えてください（Cargo の workspace check は daemon 側で行います）。\
-     acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`docs/PROGRESS.md`、\
-     `docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10）。\
+     acceptance の範囲指定（差分範囲など）には、計画が要求する ADR や記録（`agent-docs/adr/`、\
+     `agent-docs/progress/`）の置き場所を最初から含めてください（ADR-0079 R7-10。置き場所は ADR-0128）。\
      調査系（`literature` / `web-research`）の `create_task` を書くときは、`objective` の 1 行目を \
      **`対象: <対象1> / <対象2> / …（観点: <観点1>、<観点2>、…）`** の明示形にしてください \
      （例: `対象: CHFS / FINCHFS / GekkoFS / UnifyFS / BeeOND（観点: server/client 配置、\

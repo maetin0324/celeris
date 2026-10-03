@@ -5,8 +5,9 @@
 # 置き場（ADR-0045 D2。XDG 流に設定と状態を分ける）:
 #   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml providers.d/ api.token
 #                                                 gui.password gui.session-secret secrets/
-#   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  状態: celeris.sqlite3 releases/ backups/ staging/
-#                                                 workspaces/ memory/ logs/ tools/ current previous
+#   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  hot state: releases/ staging/ tools/ current previous
+#   $CELERIS_BACKUPS_DIR（既定 $CELERIS_STATE_DIR/backups）新規 backup
+#   $CELERIS_LOGS_DIR（既定 $SD_BACKUPS）運用 log
 #
 # 触ってよい場所（ADR-0040 D1、安全規則）:
 #   $SD_RELEASES / $SD_STAGING / $SD_BACKUPS と、昇格のときだけ $SD_CURRENT / $SD_PREVIOUS の symlink。
@@ -43,7 +44,11 @@ SD_CARGO_TARGET="$SD_RELEASES/.cargo-target"
 # リリースの `gui/node_modules` はここへの相対 symlink（NFS 上で 4,000 余のファイルを毎回書かないため）。
 SD_PNPM_PROD_CACHE="$SD_RELEASES/.pnpm-prod-cache"
 SD_STAGING="$CELERIS_STATE_DIR/staging"
-SD_BACKUPS="$CELERIS_STATE_DIR/backups"
+SD_TOOLS="$CELERIS_STATE_DIR/tools"
+SD_BACKUPS="${CELERIS_BACKUPS_DIR:-$CELERIS_STATE_DIR/backups}"
+# Legacy deployments kept operational logs alongside backups. The explicit
+# logs path separates them while preserving that old default.
+SD_LOGS="${CELERIS_LOGS_DIR:-$SD_BACKUPS}"
 SD_CURRENT="$CELERIS_STATE_DIR/current"
 SD_PREVIOUS="$CELERIS_STATE_DIR/previous"
 # 設定ファイル。`CELERIS_CONFIG` が立っていればそれが勝つ（移行のあいだ `verify.sh` に

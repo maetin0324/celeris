@@ -10,7 +10,8 @@
 //! - 準備（直下の列挙・`statvfs`・uid/gid・cwd の絶対化・ssh 設定の写し）は fork の**前**に親で行い、子では
 //!   用意した C 文字列で `unshare` / `mount` / `chdir` を呼ぶだけ（割り当てをしない）。
 //! - 付記 D-a: user systemd bus を tmpfs / 空ファイルの bind で覆い、`$HOME` の `.config/systemd`・
-//!   `.local/celeris/releases`・`.config/celeris` を（存在すれば）読み取り専用にする（[`DbGuard::host_config_read_only_paths`]）。
+//!   `.local/celeris/releases`・`.config/celeris` と設定済み releases を読み取り専用にする
+//!   （[`DbGuard::host_config_read_only_paths`]）。
 //! - 準備に失敗したら、その spawn を失敗させる（黙って保護なしで起動しない）。
 
 use std::ffi::{CString, OsString};
@@ -50,8 +51,12 @@ pub struct DbGuard {
     family: Vec<OsString>,
     /// ssh 設定の写しを置く所（D4）。`None` なら写さない。
     ssh_shadow_root: Option<PathBuf>,
-    /// 付記 D-a の 3 の基準の `$HOME`（`new` で解決。`None` なら何もしない）。
+    /// 付記 D-a の 3 の基準の `$HOME`（`new` で解決。`None` なら home の固定 path を除外）。
     home: Option<PathBuf>,
+    /// `[selfdeploy].releases_dir`。設定された場合は存在と canonicalize を必須にする。
+    releases_dir: Option<PathBuf>,
+    /// `[storage].hot_mount`。mount root の直下の変更も抑止する。
+    hot_mount: Option<PathBuf>,
 }
 
 impl DbGuard {
@@ -85,6 +90,8 @@ impl DbGuard {
                 .filter(|h| !h.is_empty())
                 .map(PathBuf::from)
                 .filter(|h| h.is_absolute()),
+            releases_dir: None,
+            hot_mount: None,
         })
     }
 
@@ -94,17 +101,34 @@ impl DbGuard {
         self
     }
 
-    /// 付記 D-a の 3: `$HOME` 下の host の設定のうち、存在するもの（canonicalize 済み）。存在するかを
-    /// 確かめられない（`EACCES` など）ときは失敗にする（D5: 保護なしで起動しない）。
+    /// daemon が解決した `[selfdeploy].releases_dir` を追加する。
+    pub fn with_releases_dir(mut self, releases_dir: PathBuf) -> Self {
+        self.releases_dir = Some(releases_dir);
+        self
+    }
+
+    /// daemon が確認した `[storage].hot_mount` を追加する。
+    pub fn with_hot_mount(mut self, hot_mount: Option<PathBuf>) -> Self {
+        self.hot_mount = hot_mount;
+        self
+    }
+
+    /// 固定の home path のうち存在するものと、設定済み hot mount / releases の実体 path。
+    /// 存在確認や canonicalize に失敗したら保護なしで起動しない。
     pub fn host_config_read_only_paths(&self) -> io::Result<Vec<PathBuf>> {
-        let Some(home) = &self.home else {
-            return Ok(Vec::new());
-        };
         let mut out = Vec::new();
-        for rel in HOST_CONFIG_DIRS {
-            let path = home.join(rel);
-            if path.try_exists()? {
-                out.push(std::fs::canonicalize(&path)?);
+        if let Some(home) = &self.home {
+            for rel in HOST_CONFIG_DIRS {
+                let path = home.join(rel);
+                if path.try_exists()? {
+                    out.push(std::fs::canonicalize(&path)?);
+                }
+            }
+        }
+        for configured in [&self.hot_mount, &self.releases_dir].into_iter().flatten() {
+            let path = std::fs::canonicalize(configured)?;
+            if !out.contains(&path) {
+                out.push(path);
             }
         }
         Ok(out)

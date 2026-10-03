@@ -1148,6 +1148,48 @@ main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-late
 
 main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest`）。main はこの task の work unit `sync-latest` を既に `30e4a37d` で取り込み済みで、HEAD がその祖先だったため `git merge main` は fast-forward（新規 merge commit なし、`docs/PROGRESS.md` に衝突マーカーなし）。`git merge-base --is-ancestor 41366893 HEAD` は exit 0。
 
+## /local への hot データ移行（ADR-0136）
+
+- 完了日: 2026-10-03。task `01M3ZPGSEK4H50ZQ7XA01S8JNY` の verify WorkUnit。
+- main を最初に merge し、`crates/celeris/src/config/mod.rs`、launcher 身元確認関連の3ファイル、`scripts/selfdeploy/install-units.sh`、およびこの文書の衝突を統合した。main の SCM_CREDENTIALS 対応・web-LAN unit を維持し、/local 用 storage validation・launcher-skew 診断・hot root レンダリングも保持。
+- 検証の証拠と未解決事項を以下に記録する。人が行う本番切り替えは [移行手順書](ops/local-hot-data-migration.md) の手順であり、この WorkUnit は本番 host を変更しない。
+- 初回の `git merge main` で対象範囲の6ファイルに衝突が出た。config、launcher client/test、`install-units.sh` は両側の機能を保持して解消し、`docs/PROGRESS.md` は既存の節を併合した。
+- latest main (`3527c8e3`) を merge し、merge commit `6778b791` で確定した。`git merge-base --is-ancestor main HEAD` は exit 0。
+- 検証結果（2026-10-03）:
+  - `cargo fmt --all -- --check` → exit 0。
+  - `cargo clippy --workspace -- -D warnings` → exit 0。
+  - `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。hot-root unit・移行 script dry-run/rollback・release/verify/web-follow を含む全 suite が pass。
+  - `cargo test --workspace` → exit 101。`crates/celeris/tests/instance_handoff.rs` の5件が失敗。うち3件は db guard の user namespace probe が `Operation not permitted`。残り2件 `a_newer_release_takes_over_while_the_old_one_finishes_its_run` と `a_stale_heartbeat_promotes_the_standby` は引継ぎを観測できず timeout。
+  - `cargo test -p celeris --test instance_handoff` → exit 101。同じ5件を単独再実行でも再現: 3件 (`verify_mode_never_dispatches_and_never_touches_daemon_instances`, `normal_mode_does_not_inject_the_smoke_builtins`, `starting_the_same_release_twice_exits_three`) は db guard user namespace probe が `Operation not permitted`、2件 (`a_newer_release_takes_over_while_the_old_one_finishes_its_run`, `a_stale_heartbeat_promotes_the_standby`) は handoff/standby 観測 timeout。コード修正は行っていない。
+- 指定の差分範囲 check `test -z "$(git diff --name-only $(git merge-base HEAD main) | grep -vE '^(crates/|scripts/selfdeploy/|deploy/systemd/|config/|docs/|tests/e2e/tests/api_scenarios.rs)')"` → exit 1。許可外に gui/web と `tests/e2e/tests/phase7_scenarios.rs` があり、先行工程の差分をこの verify WorkUnit が安全に取り除けない。
+- 未解決事項: user namespace 制約が解消された環境で `instance_handoff` を再検証すること。2件の handoff timeout はこの sandbox で単体でも再現した環境要因として次の review で判定が必要。browser ptrace 実試験 `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace -- --nocapture` は exit 101（Chrome PID を20秒以内に確認できず、起動 launcher responder uid=65534）。人が host launcher を更新して同試験を再検証する必要がある。
+
+### verify WorkUnit（2026-10-03、main 3527c8e39ee2）
+
+- `git merge-base --is-ancestor 3527c8e39ee2c51b646e8aa6ddb61e63c55587c7 HEAD` → exit 0。作業ツリーの `gui/`・`web/`・`tests/e2e/tests/phase7_scenarios.rs` は同 main と一致する。過去の誤解決で欠けた main ファイルも復元した。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。migration dry-run/rollback を含む全 scripts/selfdeploy suite が pass。
+- `cargo test --workspace --no-fail-fast` → exit 101（25 test targets）。`instance_handoff` は user namespace probe の `Operation not permitted` 3件と引継ぎ観測 timeout 2件。`browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` は responder uid=65534、Chrome PID 未観測。これらは指定どおり sandbox 制約として扱い、修正していない。
+- 同 workspace 実行では e2e daemon 起動試験も worker db guard の user namespace `Operation not permitted` で失敗し、実 browser 試験の複数箇所が `unshare: Operation not permitted` で失敗した。sandbox 制約によるものとしてコード変更なし。負荷 flaky と判断できる単独失敗はこの実行で切り分けられなかった。
+- 範囲 check（`git diff --quiet 3527c8e39ee2c51b646e8aa6ddb61e63c55587c7 -- gui web tests/e2e/tests/phase7_scenarios.rs` と staged tree の同等 check）→ 作業ツリーは exit 0。範囲外の復元は main と一致させた。
+- 本番 host は変更していない。本番切り替えは [移行手順書](ops/local-hot-data-migration.md) に沿って人が実施する。
+
+### sync-close WorkUnit（2026-10-03、main ea2d9d3252816d01030143f631d3676d9f2d4c2c）
+
+- `main` を `--no-ff` で取り込んだ。`docs/PROGRESS.md` は両側の節を保持し、`install-units.sh` は /local の unit 描画と main の sccache unit 撤去を合わせた。`api_scenarios.rs` の重複した待機処理は main の進捗待ちを採用した。`docs/progress/local-hot-data-verify.md` の `merged-main` を取り込んだ完全 SHA に更新した。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。main で撤去された sccache unit を `install_units_hot_dir.sh` が期待しないよう修正した。drop-in ディレクトリを含む migration 試験も通過した。
+- `cargo test --workspace --no-fail-fast` → exit 101。ログの集計は 3418 passed / 53 failed / 13 ignored（helper の試験結果行を含む）、20 test targets が失敗。`instance_handoff` は 8 passed、`api_scenarios` は 11 passed。失敗は e2e daemon の db guard と実 browser / launcher の user namespace がこの sandbox で `Operation not permitted` になる既知の環境制約に集中した。範囲内の試験失敗は確認されなかった。負荷 flaky を理由とする変更はしていない。
+- `git diff --name-only ea2d9d3252816d01030143f631d3676d9f2d4c2c -- . ':(exclude)crates/**' ':(exclude)scripts/selfdeploy/**' ':(exclude)deploy/systemd/**' ':(exclude)config/**' ':(exclude)docs/**' ':(exclude)tests/e2e/tests/api_scenarios.rs'` → 出力なし。task が触らない path は merged-main と同一。本番 host への操作はしていない。
+### sync-final WorkUnit（2026-10-03、main 40189604024aebe248f603b61dcaffb6ee58dc78）
+
+- `git merge --no-ff main` で最新 main を取り込んだ。衝突した `docs/PROGRESS.md` は両側の記録を保持した。`docs/progress/local-hot-data-verify.md` の `merged-main` をこの完全 SHA に更新した。`git merge-base --is-ancestor main HEAD` → exit 0。範囲外パスを同 SHA と照合した `git diff --exit-code 40189604024aebe248f603b61dcaffb6ee58dc78 -- . ':(exclude)crates/**' ':(exclude)scripts/selfdeploy/**' ':(exclude)deploy/systemd/**' ':(exclude)config/**' ':(exclude)docs/**' ':(exclude)tests/e2e/tests/api_scenarios.rs'` → exit 0。
+- `cargo fmt --all -- --check` → exit 0。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `cargo test --workspace --no-fail-fast` → exit 101。ログの `test result` 126 行の合計は 3428 passed / 53 failed / 13 ignored（内部 helper の結果行も含む）。cargo は 20 test targets failed と報告。失敗はこの run sandbox で user namespace の生成が `Operation not permitted` となる worker DB guard・実 browser 試験、および launcher 実セッション試験に集中した。`instance_handoff` はこの実行では 8 passed。範囲内のコード変更を要する失敗は確認されなかった。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` と同じ各 script の個別実行 → 15 本すべて exit 0。`migrate_to_local_test.sh` も exit 0。switch の途中失敗時には `switch_failed` trap が自動で旧状態へ戻す。失敗注入 2 ケース（`install-units.sh` 失敗、delta 後の新 tree 欠損）で `config.toml`・`paths.env`・symlink・DB の復元を確認した。unit の drop-in ディレクトリも復元される。
+- 本番 host の操作はしていない。全試験と selfdeploy 試験のログはこの run の成果物ディレクトリに保存した。
+
 main ea2d9d32 取り込み、selfdeploy 試験全 pass（work unit `sync-ea2d`）。
 
 ## 通知フィード同期の退行修正（release 3527c8e39ee2 の verify 失敗、2026-10-03）
@@ -1370,6 +1412,13 @@ blocked daemon repair だったことを覚えておき、続く `ExecutionPlann
   ADR-0115/0116 の既知事項）。他の全テストバイナリは `test result: ok`。
   `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、再検証）。
 
+本 WorkUnit の再検証: main の `40189604024aebe248f603b61dcaffb6ee58dc78` を fast-forward で取り込み、
+replay 修正 `163f41c0` が HEAD の祖先であることを `git merge-base --is-ancestor 163f41c0 HEAD`
+（exit 0）で確認した。`cargo test -p task-ops replay_matches_live_after_blocked_repair_superseded`
+（exit 0、2 passed）、`cargo test -p task-dispatch --lib blocked_repair_replan_loop`
+（exit 0、1 passed）、`cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings`
+（exit 0）を実行した。replay 不整合は解消済みであり、task `01M3YF3NS2EGTZD2BBWNPG1K28` の再開手順は下記に記載している。
+
 ### 人が task `01M3YF3NS2EGTZD2BBWNPG1K28` を再開する手順
 
 1. この修正を含む release を人が作成・検証し、本番 daemon を人が差し替える。旧 daemon のまま再開しない。
@@ -1393,3 +1442,10 @@ main（ffb87b0d を含む）を `--no-ff` で merge した。merge-tree に衝�
 だけが自動 merge された。`cargo test -p task-worker --test browser_h3_wire` → exit 0（2 passed）、
 `cargo test --workspace` → exit 0（全 test バイナリで 0 failed）、
 `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+
+## 知識整理 run の llm-proxy 401 の修正（ADR-0139）— 2026-10-03
+
+- 原因: 06:58:42〜07:00:49 に verify.sh の staging celeris（新旧 2 つ）が本番の config を読み、`[llm_proxy] listen = 127.0.0.1:18100` に `SO_REUSEPORT` で相乗りしていた（staging の乱数トークン）。langmem の接続の一部が verify 側に振られて 401 になった。失敗・成功の run の `langmem_input.json` の鍵は同じ値で、`celeris-api-token` と一致した（sha256 の先頭で照合）。worker 側の鍵の経路には問題が無かった。
+- 修正: verify は proxy を待ち受けない（D1）。proxy を指す langmem の鍵は `[api]` のトークン（D2）。鍵が渡らない・食い違う設定は `Config::load` で警告する（D3）。鍵は起動 env にも入れる（D4）。
+- 証拠: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test -p task-worker --lib langmem && cargo test -p celeris config` → exit 0（langmem 14 passed、celeris config 105 passed ほか）。`cargo test -p celeris --lib` → 242 passed。
+- 未解決: この release が `current` になるまで、verify.sh の N-1 は 18100 に bind しうる。その間の verify は知識整理 run と重ならない時間に回す。`[mcp]` の待ち受けも verify で同じ形で相乗りする可能性があり、未確認。

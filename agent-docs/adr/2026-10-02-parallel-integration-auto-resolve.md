@@ -23,7 +23,9 @@ ADR-0128 D3 は task ごとの進捗ファイルを正とし、D6 は旧 `docs/P
 
 #### D1a. 追記だけの記録
 
-`docs/PROGRESS.md` と `docs/progress/*.md` には `.gitattributes` の `merge=union` を設定する。`git merge-tree` など attributes が効かない経路にも同じ規則を適用するため、共通の records resolver を持つ。base、ours、theirs の各行を比較し、両側とも base の全行を順序と内容を変えずに保持して末尾へ追記しただけなら、**base → ours の追記 → theirs の追記**の順に結合する。両側で同じ行を追記した場合も記録として各側の追記を保持する。既存行の変更・削除、途中への挿入、判定不能な rename は自動解消せず人に回す。`merge=union` の結果もこの条件を満たすか検証し、満たさなければ records resolver の判定を優先する。
+`.gitattributes` の `merge=union` は**凍結済みの `agent-docs/PROGRESS.md` と移行期間の旧 `docs/PROGRESS.md` の 2 行だけ**に設定する（人の方針）。task・WorkUnit ごとの進捗ファイル（`agent-docs/progress/*.md` と入れ子の `agent-docs/progress/<task>/<wu-key>.md`、移行期間の旧 `docs/progress/**/*.md`）には union を設定しない。これらは front matter（`status:`・`updated:` 等）を書き換えるファイルであり、既存行の変更も「末尾への追記」も区別せず行単位で無条件に結合する `merge=union` に任せると、両側が同じ front matter 行を別の値に変えても `git merge` は exit 0 で終わり、同じ key を 2 つ持つ front matter を黙って作ってしまう（records resolver にも `classify` にも衝突が一切見えない）。union を設定しない結果、これらのファイルは git の通常の 3-way merge に委ねる: 両側が base と異なる箇所に触れなければ無衝突で結合され、同じ箇所（front matter の同じ行を含む）を両側が変えれば `U` 状態の実衝突になる。
+
+衝突した記録ファイルは共通の records resolver（`crates/task-dispatch/src/auto_resolve/records.rs`）が判定する。base、ours、theirs の各行を比較し、両側とも base の全行を順序と内容を変えずに保持して末尾へ追記しただけなら、**base → ours の追記 → theirs の追記**の順に結合する。両側で同じ行を追記した場合も記録として各側の追記を保持する。既存行の変更・削除、途中への挿入、判定不能な rename は自動解消せず人に回す。`.gitattributes` で union を設定した 2 ファイルについても、union が生んだ結果がこの条件（base の全行が保持されている）を満たすか records resolver で検証し、満たさなければ resolver の判定を優先する。ただしこの 2 ファイルは追記専用の運用（ADR-0128 D3/D6）で既存行を変えない前提のため、通常は union の結果がそのまま条件を満たす。
 
 ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに書く。この規則は共有ファイルへの新規追記を勧めるものではなく、移行期間の旧 branch の取り込みを救う。ADR-0128 D6 の `git mv` による `agent-docs/PROGRESS.md` への rename は追跡し、旧 path から来た末尾追記だけを移動先へ結合する。`docs/progress/` に旧 branch が追加したファイルは D6 の land 手順で `agent-docs/progress/` へ移す。案内行など移行先で既存行が変わっていれば機械的な「追記だけ」とは扱わず人へ回す。移行期間が終われば旧 path への規則を撤去し、task ごとのファイルを使う。
 
@@ -132,10 +134,25 @@ ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに
 
 2026-10-03。main が ADR-0128 で文書を `agent-docs/` へ移し、D5 で新しい ADR を `agent-docs/adr/YYYY-MM-DD-<slug>.md` と決めたため、`crates/task-dispatch/src/auto_resolve/{classify,renumber,records}.rs` の対象パスと ADR の扱いを次のように改める。D1a・D1b のうち、ここに書いたことはこの付記を優先する。
 
-1. **記録**: Record に分類するのは `agent-docs/progress/` 配下の `*.md`（`<task>/<wu-key>.md` の入れ子を含む）、凍結済みの `agent-docs/PROGRESS.md`、移行期間の旧 branch のための `docs/PROGRESS.md`・`docs/progress/**/*.md`。union 属性（`.gitattributes`）と records resolver は追記だけの記録にだけ使い、コード・生成物（`*.schema.json` など）・`.md` 以外の file には使わない。
+1. **記録**: Record に分類するのは `agent-docs/progress/` 配下の `*.md`（`<task>/<wu-key>.md` の入れ子を含む）、凍結済みの `agent-docs/PROGRESS.md`、移行期間の旧 branch のための `docs/PROGRESS.md`・`docs/progress/**/*.md`。records resolver はこれら Record 分類すべてに使うが、`.gitattributes` の union 属性は凍結済みの `agent-docs/PROGRESS.md` と旧 `docs/PROGRESS.md` の 2 つだけに限る（下記「付記（union の範囲）」）。コード・生成物（`*.schema.json` など）・`.md` 以外の file には union も records resolver も使わない。
 2. **ADR は番号を振り直さない**: `docs/adr/` と `agent-docs/adr/` を一つの名前空間として見る（`scripts/dev/check-adr-numbers.sh` と同じ）。取り込み側にだけある番号付き ADR（target に無い file）が、target の番号付き ADR と番号で重複する、または同じ名前で add/add 衝突するときは、取り込み側の file を `agent-docs/adr/<日付>-<slug>.md` へ `git mv` する（add/add では target 版を残し、取り込み側の内容を日付名で足す）。日付は取り込み側 branch（`merge-base..source`）でその file を足した最初の commit の committer 日付（`git log --diff-filter=A --format=%cs`）、slug は旧名の番号の後ろ。移した file の 1 行目の `ADR-NNNN` は `ADR <新 stem>` に直す。
 3. **参照の追従**: 旧 stem（`NNNN-<slug>`）への参照を新 stem へ置換するのは、取り込み側が `merge-base..source` で足した・変えた file に限る。main（target）にある file と main に入った ADR は動かさず、書き換えない。番号だけの参照（`ADR-NNNN`）は参照先を機械的に決められないので、移動を済ませた上で人に回す（D3）。
 4. **人に回す ADR の衝突**: 日付名 ADR 同士の衝突（同じ日付名の add/add・内容衝突、移動先の日付名が既にある）はコード衝突と同じく `NeedsHuman`。取り込み側同士の番号重複（どちらも target に無い）と、base から既にある ADR の内容衝突も人に回す。
 5. **migration は今のまま**: `crates/task-core/migrations/NNNN_*.sql` は D1b どおり空き番号へ振り直すが、動かすのは取り込み側の未取り込み file だけで、main に入った番号（本番 DB に適用済み）は決して変えない（人の方針）。
 
 試験（`cargo test -p task-dispatch --lib auto_resolve`）: `auto_resolve::records::tests::agent_docs_progress_nested_both_side_appends_are_joined`（agent-docs/progress の入れ子と agent-docs/PROGRESS.md の両側追記の結合）、`auto_resolve::renumber::tests::numbered_adr_duplicate_moves_source_file_to_dated_name`・`adr_add_add_conflict_keeps_target_version_and_adds_source_under_dated_name`・`numbered_adr_follow_only_touches_source_side_files`・`dated_adr_conflict_goes_to_human`（番号付き ADR の重複が日付名へ移る・日付名同士は人へ）、`auto_resolve::renumber::tests::main_migration_numbers_never_move`（main の migration 番号は動かない）、`auto_resolve::tests::path_classes_and_number_duplicates_are_distinct`（分類表）。
+
+## 付記（union の範囲）
+
+2026-10-03。final review の差し戻し: `.gitattributes` が `agent-docs/progress/*.md` と `agent-docs/progress/**/*.md` にも `merge=union` を設定していたため、task ごとの進捗ファイルの front matter（`status:`・`updated:`）を両側が別の値に変えても `git merge` が exit 0 で終わり、同じ key を 2 つ持つ front matter を黙って作っていた。union は行単位で無条件に結合するため、「末尾への追記だけ」と「既存行の書き換え」を区別しない。D1a が約束した「union の結果が base 保持の条件を満たすか検証する」仕組みは、union 自体が git merge を衝突なしで終わらせてしまう経路には届かない（records resolver は `git diff --diff-filter=U` で見つかる衝突にしか呼ばれず、union が無衝突で解決した path はそもそも resolver に渡らない）。
+
+人の方針（「union は追記だけの記録ファイルに限る」）に従い、union の対象を次の 2 行だけにした。
+
+```
+agent-docs/PROGRESS.md merge=union
+docs/PROGRESS.md merge=union
+```
+
+task ごとの進捗ファイル（`agent-docs/progress/*.md` とその入れ子、旧 `docs/progress/**/*.md`）からは union 属性を外した。これらは git の通常の 3-way merge に委ねる: 両側が異なる箇所に触れれば無衝突で結合され、front matter を含む同じ行を両側が変えれば実衝突（`U` 状態）になり、classify が `ConflictKind::Record` として拾って records resolver に渡す。resolver は base の全行が保持された末尾追記だけを自動結合し、既存行の変更（front matter の書き換えを含む）は `NotHandled` として人へ回す（D3・D1a 既存のまま）。このため、同じ記録ファイルの front matter を両側が別の値に変えた場合、git merge の時点で止まるか、たとえ attributes が効かない経路（`git merge-tree` 等）を通っても resolver が base 保持条件で弾いて人へ回す。
+
+確認した試験: `scripts/dev/tests/progress_union_merge.sh`（引数なしで実行。(a) `agent-docs/PROGRESS.md`・`docs/PROGRESS.md` への両側追記は union で無衝突に両節を残す、(b) `agent-docs/progress/<slug>.md` の front matter を両側が別の値に変えると `git merge` が衝突で止まり、`OK: front matter conflict is not silently merged` を出す）と `auto_resolve::tests::front_matter_status_conflict_requests_human_and_is_not_silently_merged`（実リポジトリの `.gitattributes` を一時 repo に写し、front matter の衝突が `Resolution::NeedsHuman` に回ることを確かめる）。

@@ -1,3 +1,2 @@
 agent-docs/PROGRESS.md merge=union
-agent-docs/progress/*.md merge=union
-agent-docs/progress/**/*.md merge=union
+docs/PROGRESS.md merge=union

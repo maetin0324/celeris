@@ -1175,3 +1175,44 @@ commit `0b8a2256`（launcher の browser_isolation・credentiald injection_ipc�
 
 - 本番 host の手順は変わらず `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は
   本番 host には触れていない。
+
+## ADR-0136 /local 配置整合と main (3527c8e3) 取り込み（work unit `merge-main`）— 2026-10-03
+
+完了日 2026-10-03。final review 差し戻し 3 点（ADR-0136 の `/local/celeris/data/scratch` への整合、
+ADR-0129 §3 の mount 不在時の記述、ADR-0129 frontmatter の位置）は前段 `align-docs` 工程で直し済み。
+本 work unit は最新 main `3527c8e3`（受信箱/通知フィード統合 `inbox-and-notifications` 一式、
+ADR-0133 を含む）を `git merge main --no-ff` で取り込んだ。
+
+ADR-0136 整合 3 点（merge 後も残存を確認済み）:
+
+1. `docs/adr/0129-host-sccache-reflink-targets.md` §3・`docs/ops/host-sccache-reflink-targets.md` の
+   scratch path を `/local/celeris/data/scratch` に統一し、両文書から
+   [ADR-0136](adr/0136-local-hot-data-layout.md) へリンク。`crates/task-worker/src/scratch/tests.rs:1054`
+   付近の試験 path も同じ値に揃えた。旧 path `/local/celeris/scratch` は残っていない。
+2. ADR-0129 §3 の mount 不在時の記述を実装（`config/scratch.rs` の `apply_mount_check`）に合わせ、
+   「mount 指定があり満たされないときは従来の既定 scratch dir へ戻り、理由をログに出す。`/local` 上に
+   同名ディレクトリは作らない」とした。
+3. ADR-0129 frontmatter（`---` / `tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]` / `---`）をファイル 1〜3 行目に移動。
+
+main 取り込みは衝突 2 file（事前の `git merge-tree` 見積もりでは無衝突想定だったが、実際の merge では
+`docs/PROGRESS.md`・`scripts/selfdeploy/install-units.sh` 以外の crate 側ファイルは ort の自動 merge で
+解消、衝突マーカーが残った file はゼロ）:
+
+- `docs/PROGRESS.md`: 両ブランチの節をそのまま両方残した（本節もその後ろに追記）。
+- `scripts/selfdeploy/install-units.sh`: main 側に本 merge による変更はなく、web-lan unit を含み
+  sccache/scratch-cache unit を含まない既存の形のまま。
+
+### 証拠コマンドと結果
+
+- `git merge-base --is-ancestor main HEAD` → exit 0（main `3527c8e3` は HEAD の祖先）。
+- `git diff --quiet HEAD && git ls-files -u` → 差分なし・unmerged パスなし。
+- `grep -n '/local/celeris/scratch' docs/adr/0129-host-sccache-reflink-targets.md docs/ops/host-sccache-reflink-targets.md crates/task-worker/src/scratch/tests.rs` → 該当なし（exit 1）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0（警告なし）。
+- `cargo test -p task-worker scratch` → exit 0、33 passed、0 failed。
+- `cargo test -p task-dispatch --lib scratch` → exit 0、10 passed、0 failed。
+
+### 未解決事項
+
+- 本番 host の手順（`/local` への scratch 移行・sccache 設定）は変わらず
+  `docs/ops/host-sccache-reflink-targets.md` を参照。本 work unit は本番 host には触れていない。

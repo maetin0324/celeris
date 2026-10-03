@@ -595,7 +595,7 @@ pub fn actions(task: &Task) -> Vec<Action> {
     if task.status == Status::Blocked {
         out.push(Action::Answer);
     }
-    if !task.status.is_terminal() {
+    if !task.status.is_terminal() || task.status == Status::Failed {
         out.push(Action::Cancel);
     }
     if matches!(task.status, Status::Failed | Status::Cancelled) {

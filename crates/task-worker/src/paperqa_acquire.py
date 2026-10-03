@@ -33,7 +33,7 @@ Contract with the adapter (crates/task-worker/src/paperqa.rs):
 
 INPUT (all paths absolute):
   {"queries": ["asynchronous I/O runtime", ...],   # deterministic fallback
-   "query_llm": {"enabled": true, "model": "qwen3.8-27b",
+   "query_llm": {"enabled": true, "model": "celeris/standard",
                  "base_url": "http://127.0.0.1:18000/v1" | null,
                  "api_key": "unused" | null,
                  "timeout_secs": 300, "max_tokens": 2000,
@@ -379,7 +379,7 @@ def chat_completions_url(base_url):
 def message_text(body):
     """The assistant's text out of an OpenAI-compatible response body.
 
-    Reasoning models (the local Qwen) put their thinking in `reasoning` /
+    Some reasoning models put their thinking in `reasoning` /
     `reasoning_content` and may leave `content` empty when they run out of
     tokens; the thinking is used as a last resort so that a JSON object in
     it is still found."""
@@ -556,9 +556,6 @@ def plan_queries(payload, fetcher, progress):
         "temperature": 0.0,
         "max_tokens": int(config.get("max_tokens") or 2000),
         "stream": False,
-        # vLLM / Qwen3: without this the model spends the whole budget on its
-        # thinking and `content` comes back empty (verified 2026-09-18).
-        "chat_template_kwargs": {"enable_thinking": False},
     }
     headers = {"Authorization": "Bearer %s" % api_key}
     timeout = float(config.get("timeout_secs") or 300)
@@ -567,23 +564,13 @@ def plan_queries(payload, fetcher, progress):
     progress("asking %s for the search terms" % model)
     text = ""
     error = ""
-    for attempt in (1, 2):
-        try:
-            raw = fetcher.post("llm", url, body, timeout=timeout, headers=headers)
-            text = message_text(raw)
-            error = ""
-            break
-        except urllib.error.HTTPError as exc:
-            error = "HTTP %s from %s" % (exc.code, url)
-            # Not every OpenAI-compatible server knows `chat_template_kwargs`.
-            if attempt == 1 and "chat_template_kwargs" in body:
-                del body["chat_template_kwargs"]
-                progress("the endpoint rejected chat_template_kwargs; retrying without it")
-                continue
-            break
-        except Exception as exc:
-            error = "%s: %s" % (type(exc).__name__, exc)
-            break
+    try:
+        raw = fetcher.post("llm", url, body, timeout=timeout, headers=headers)
+        text = message_text(raw)
+    except urllib.error.HTTPError as exc:
+        error = "HTTP %s from %s" % (exc.code, url)
+    except Exception as exc:
+        error = "%s: %s" % (type(exc).__name__, exc)
 
     plan["raw"] = text[:4000]
     if error or not text:

@@ -11,6 +11,8 @@ codex_dir = "codex-accounts"
 
 [[providers]]
 id = "claude"
+kind = "adapter"
+llm_source = "claude_oauth"
 adapter = "claude-code"
 account_pool = true
 # account_id = "subscription-a" # optional; omitted means automatic pool selection
@@ -26,6 +28,8 @@ model_id = "claude-sonnet-5"
 
 [[providers]]
 id = "gpt"
+kind = "adapter"
+llm_source = "codex_oauth"
 adapter = "codex"
 account_pool = true
 [providers.tier_models.frontier]

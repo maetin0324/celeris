@@ -272,3 +272,69 @@ async fn get_notify_reports_not_configured_without_a_secret() {
     assert!(body.get("fingerprint").is_none() || body["fingerprint"].is_null());
     assert_eq!(body["recent"].as_array().map(Vec::len), Some(0));
 }
+
+#[tokio::test]
+async fn get_notify_status_exposes_route_settings_and_last_successful_sends() {
+    let options = EnvOptions {
+        notify_inbox_batch_secs: 17,
+        notify_inbox_reminder_secs: 1234,
+        notify_digest_interval_secs: 987,
+        notify_digest_max_lines: 6,
+        ..EnvOptions::default()
+    };
+    let env = TestEnv::with(options);
+    let sent_inbox = OffsetDateTime::parse(
+        "2026-10-02T10:11:12Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let sent_digest = OffsetDateTime::parse(
+        "2026-10-02T11:12:13Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    for (kind, key, at, result) in [
+        (
+            NotificationKind::InboxNew,
+            "inbox-status",
+            sent_inbox,
+            Some(true),
+        ),
+        (
+            NotificationKind::Digest,
+            "digest-status",
+            sent_digest,
+            Some(true),
+        ),
+        (
+            NotificationKind::InboxNew,
+            "failed-inbox-status",
+            sent_digest,
+            Some(false),
+        ),
+    ] {
+        let row = env
+            .store
+            .notification_upsert_pending(kind, key, "body", None, at)
+            .unwrap()
+            .unwrap();
+        env.store
+            .notification_mark(row.id, result, None, at)
+            .unwrap();
+    }
+    let resp = send(&env.router(), get("/api/v1/notify")).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["inbox_batch_secs"], 17);
+    assert_eq!(body["inbox_reminder_secs"], 1234);
+    assert_eq!(body["digest_interval_secs"], 987);
+    assert_eq!(body["digest_max_lines"], 6);
+    assert_eq!(body["inbox_new_last_sent_at"], "2026-10-02T10:11:12Z");
+    assert_eq!(body["digest_last_sent_at"], "2026-10-02T11:12:13Z");
+
+    let empty = TestEnv::with(EnvOptions::default());
+    let resp = send(&empty.router(), get("/api/v1/notify")).await;
+    let body = resp.json();
+    assert!(body["inbox_new_last_sent_at"].is_null());
+    assert!(body["digest_last_sent_at"].is_null());
+}

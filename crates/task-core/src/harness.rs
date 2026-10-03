@@ -221,7 +221,9 @@ pub fn builtin_harnesses() -> Vec<HarnessSpec> {
                 max_wall_secs: Some(900),
                 max_retries: Some(1),
             },
-            // ADR-0052 D2: Qwen（`langmem`）に届かなければ tier `cheap` の汎用ハーネスへ倒す。
+            // ADR-0052 D2 / ADR-0132 D4: `langmem` は proxy の `celeris/cheap` を使う道具。その接続先
+            // （proxy）に届かなければ tier `cheap` の汎用ハーネスへ倒す。proxy の先の Qwen が落ちただけなら
+            // proxy 内の fallback（ADR-0132 D3）が Claude / GPT の cheap へ倒すので、ここでは倒さない。
             fallback: Some(HarnessFallback::Tier(HarnessFallbackTier {
                 tier: Tier::Cheap,
             })),

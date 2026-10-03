@@ -704,10 +704,7 @@ async fn the_stream_emits_a_progress_block_and_then_the_finished_task_block() {
             .and_then(|v| v.to_str().ok()),
         Some("text/event-stream; charset=utf-8")
     );
-    let hello = sse
-        .next_frame(Duration::from_millis(500))
-        .await
-        .expect("hello");
+    let hello = sse.next_frame(EVENT_WAIT).await.expect("hello");
     assert_eq!(hello.event, "hello");
     assert_eq!(hello.data["scope"], "all");
     assert!(hello.data["cursor"].is_string());
@@ -725,7 +722,7 @@ async fn the_stream_emits_a_progress_block_and_then_the_finished_task_block() {
         )
         .expect("progress");
     let frame = sse
-        .next_named("console.block", Duration::from_secs(3))
+        .next_named("console.block", EVENT_WAIT)
         .await
         .expect("progress block");
     assert_eq!(frame.data["kind"], "progress");
@@ -748,7 +745,7 @@ async fn the_stream_emits_a_progress_block_and_then_the_finished_task_block() {
         .expect("transition");
     let frame = loop {
         let frame = sse
-            .next_named("console.block", Duration::from_secs(3))
+            .next_named("console.block", EVENT_WAIT)
             .await
             .expect("task block");
         if frame.data["kind"] == "task" {
@@ -773,9 +770,7 @@ async fn the_stream_grows_a_reply_block_for_a_conversation_run_then_settles_it()
 
     let mut sse = open_stream(&app, get("/api/v1/console/stream?scope=all")).await;
     assert_eq!(sse.status, 200);
-    sse.next_frame(Duration::from_millis(500))
-        .await
-        .expect("hello");
+    sse.next_frame(EVENT_WAIT).await.expect("hello");
 
     env.store
         .append_event(
@@ -788,7 +783,7 @@ async fn the_stream_grows_a_reply_block_for_a_conversation_run_then_settles_it()
         )
         .expect("progress");
     let frame = sse
-        .next_named("console.block", Duration::from_secs(3))
+        .next_named("console.block", EVENT_WAIT)
         .await
         .expect("reply block");
     assert_eq!(frame.data["kind"], "reply");
@@ -806,7 +801,7 @@ async fn the_stream_grows_a_reply_block_for_a_conversation_run_then_settles_it()
         )
         .expect("progress");
     let frame = sse
-        .next_named("console.block", Duration::from_secs(3))
+        .next_named("console.block", EVENT_WAIT)
         .await
         .expect("reply block 2");
     assert_eq!(frame.data["kind"], "reply");
@@ -831,7 +826,7 @@ async fn the_stream_grows_a_reply_block_for_a_conversation_run_then_settles_it()
     env.store.message_append(&reply).expect("reply");
     let frame = loop {
         let frame = sse
-            .next_named("console.block", Duration::from_secs(3))
+            .next_named("console.block", EVENT_WAIT)
             .await
             .expect("done reply block");
         if frame.data["kind"] == "reply" && frame.data["state"] == "done" {

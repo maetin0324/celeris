@@ -141,3 +141,80 @@ merged-main: 0a941d7d227138067f97515acdff2c6fd84677d7
 | `node gui/scripts/gen-types.mjs --check` | 差分なし | 0 |
 
 `docs/api/v1/api-v1.schema.json` は `cargo test -p task-core` の schema 一致検査と `-p task-api` の検査が通ったので再生成していない。
+
+## PROGRESS v2（replan v2 の受け入れ）
+
+unit `gui-web-record`（WU `progress-v2-record`）の記録。この節の作成時点の HEAD は `11c5c006`。
+
+### (1) main 祖先
+
+```sh
+git merge-base --is-ancestor 0a941d7d227138067f97515acdff2c6fd84677d7 HEAD
+```
+
+exit 0。上の `merged-main: 0a941d7d227138067f97515acdff2c6fd84677d7`（本節より前の、最後の `merged-main:` 行）は HEAD の祖先。
+
+### (2) 番号振り直し
+
+```sh
+ls crates/task-core/migrations | cut -c1-4 | sort | uniq -d
+sh scripts/dev/check-adr-numbers.sh
+```
+
+`uniq -d` は出力なし（exit 0、先頭 4 桁の重複なし）。`check-adr-numbers.sh` は `check-adr-numbers: ok (131 files)`（exit 0）。
+
+### (3) remote/restart 試験
+
+```sh
+cargo test -p task-dispatch session_resume
+```
+
+exit 0、`test result: ok. 23 passed; 0 failed`（`unified_kill` の 0 件を除く）。remote 3 件
+（`session_resume_remote_same_account_and_local_cwd_resumes`・`session_resume_remote_other_account_falls_back_to_checkpoint`・
+`session_resume_remote_rejected_resume_falls_back_to_checkpoint`）と restart 3 件
+（`session_resume_after_restart_kept_session_file_resumes_same_session`・
+`session_resume_after_restart_missing_session_file_falls_back_to_checkpoint`・
+`session_resume_after_restart_corrupt_session_file_falls_back_to_checkpoint`）を含む。詳細は
+`agent-docs/progress/2026-10-03-session-resume-tests/remote-resume.md`・`restart-resume.md`
+（ADR-0140 D3: remote worktree と daemon 再起動後の continuation、いずれも done）。
+
+### (4) 前後比較
+
+`docs/progress/merge-train-evaluation.md`（evaluate 葉）の結論: merge train / project-level
+integration branch は **現時点では不要**。本番の delivery 56 件のうち 23% が `merge_base` repair
+を要し 11% が repair 上限で人待ちになっているが、その窓を狙った Phase 1/2/5（ADR-0118・ADR-0120・
+ADR-0130）は本節作成時点でまだ本番 release に 1 件も入っていない（導入後の実測値はすべて 0 件）。
+段の中の統合（`integrate-<stage>`）は衝突 4.3%・検査不合格 22% のどちらも自動修復で done。再評価
+の閾値（`[needs-human]` 10% 超など 4 条件）は本番 release 反映後、delivery 30 件到達時点で見る。
+
+`agent-docs/progress/2026-10-03-phase-effect-ab.md`（ab-verify 葉）の決定的 A/B 試験
+（`cargo test -p task-dispatch --lib phase_effect_ab -- --nocapture`、exit 0、4 passed）:
+
+| scenario | run 数 | wall time（秒） | 入力 token | 新 session 数 |
+|---|---|---|---|---|
+| continuation（Phase 3 session resume） | 3 → 3 | 360 → 280 | 120000 → 48000 | 3 → 1 |
+| atomic_route（Phase 4 直行経路） | 3 → 2 | 360 → 240 | 120000 → 80000 | 3 → 2 |
+| review_sync（Phase 1/2 review 前同期） | 4 → 3 | 420 → 330 | 160000 → 120000 | 4 → 3 |
+
+いずれも導入後（on）で run 数・wall time・入力 token・新 session 数が同じか減った。値は偽アダプタ
+による決定的な勘定（新 session 40000 token・resume 4000 token）で、実 LLM の値ではない。model の
+A/B はこの模擬の範囲で、本番の統合失敗率（merge-train-evaluation.md の 23%・11%）は模擬していない
+ため、merge train の要否判断には実測側（'## 結論' の閾値）を使う。
+
+### (5) gui/web/clippy
+
+前の WU `gui-web-verify`（`agent-docs/progress/2026-10-03-review-sync-record/gui-web-verify.md`、
+HEAD `7b33c4185ed3` 時点、done）の記録を引用する。本 WU では gui/・web/・crates/ を変更していない。
+
+| コマンド | exit | 要点 |
+|---|---:|---|
+| `corepack pnpm@11.27.0 -C gui install --frozen-lockfile` | 0 | 340 packages |
+| `corepack pnpm@11.27.0 -C gui typecheck` | 0 | `react-router typegen && tsc -b`、エラーなし |
+| `corepack pnpm@11.27.0 -C gui test` | 0 | vitest 90 test files / 1287 tests すべて passed |
+| `corepack pnpm@12.6.0 -C web install --frozen-lockfile` | 0 | 200 packages |
+| `corepack pnpm@12.6.0 -C web typecheck` | 0 | `tsc -b`、エラーなし |
+| `corepack pnpm@12.6.0 -C web test` | 0 | vitest 26 files / 188 tests + node:test 42 tests、すべて passed |
+| `cargo clippy --workspace -- -D warnings` | 0 | warning 0 件 |
+
+`git diff --stat crates/` は空、`git status --short` も空（gui/・web/・docs/ のいずれにも
+main 取り込み由来の修正は不要だった）。

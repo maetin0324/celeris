@@ -111,3 +111,13 @@ main `5d6df9f3` を取り込んだ。衝突は `agent-docs/PROGRESS.md` の時�
 | `sh scripts/dev/progress-index.sh --check` | 0 |
 
 build cache 判定: **残っている**。`crates/task-dispatch/src/dispatcher/tests/mod.rs:3026` の sccache 系 helper は `run_until_idle(&mut d, 60).await`、同 `:3027` は直後に `Status::Done` を assert する。`crates/task-dispatch/src/dispatcher/tests/build_cache.rs:396-401` の `every_cargo_path_uses_the_scratch_target_dir` は `run_until_state` で `Done` を待つ形に直っている（同 `:489-494` の task 単位経路も同様）。
+
+## cdp-sink-wait（main ba8302c0 同期）
+
+`crates/task-worker/tests/browser_cdp_sink.rs` を `ba8302c0` の版に揃えた（60 秒応答 timeout、Browser.getVersion の期限付き再試行、fixture 起動待ち 60 秒）。試験は 2 件中 `inner_cdp_sink` が成功し、`real_browser_injection_receipt_and_origin_guards` は `unshare: unshare failed: Operation not permitted` で失敗（exit 101）。namespace 作成前の環境制約で止まるため、この run では受け入れ条件を満たさず plan_issue。
+
+| コマンド | exit | 要点 |
+|---|---:|---|
+| `timeout 1800s cargo test -p task-worker --test browser_cdp_sink` | 101 | 1 passed、1 failed。実 browser 試験で unshare が Operation not permitted |
+| `cargo fmt --all -- --check` | 0 | 差分なし |
+| `cargo clippy -p task-worker --all-targets -- -D warnings` | 0 | 警告なし |

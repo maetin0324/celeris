@@ -514,3 +514,256 @@ async fn session_resume_fresh_session_for_planner_and_independent_work_unit() {
     // planner の run には判断の行を足さない（WU の run の 3 本分だけ）。
     assert_eq!(session_lines(&store, task_id).len(), 3);
 }
+
+// ========== ADR-0140 D3: ssh remote workspace の continuation ==========
+// LLM（claude）は手元で動き、クラスタにはコマンドと同期だけを出す（ADR-0018/0019）。session jsonl も cwd も
+// 手元なので、remote workspace の WU でも同じ account・同じ手元 cwd なら resume する。ssh / rsync は偽の
+// コマンド（`true`）に差し替え、外部ネットワークには出ない。
+
+/// remote workspace（クラスタ `sirius`、写しは `workspace_root/<task_id>`）の three-step Task を作り、
+/// dispatcher にクラスタと偽の ssh を設定する。
+fn remote_three_step(
+    dir: &std::path::Path,
+    store: &Arc<dyn TaskStore>,
+    adapter: Arc<ClaudeScriptAdapter>,
+) -> (TaskId, Dispatcher) {
+    let mut task = new_task(
+        dir,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        5,
+    );
+    task.workspace = WorkspaceSpec::Remote {
+        cluster: "sirius".into(),
+        path: std::path::PathBuf::from("/work/x"),
+        mode: None,
+    };
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_three_step_plan(store, task_id);
+    let mut d = claude_dispatcher(store, adapter);
+    d.config.workspace_root = dir.to_path_buf();
+    d.config.clusters.insert(
+        "sirius".into(),
+        cluster_spec_with_auth("sirius", "sirius", "manual"),
+    );
+    d.set_cluster_liveness_probe(Arc::new(|_ssh_command: &[String], _host: &str| true));
+    d.set_cluster_ssh_command_override(vec!["true".to_string()]);
+    (task_id, d)
+}
+
+/// run が remote 経路（`push_remote_after_run`）を通ったことの印。
+fn remote_push_lines(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
+    store
+        .events_for(task_id)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, e)| {
+            matches!(e, Event::WorkerProgress { msg, .. }
+                if msg.starts_with("pushed the workspace to cluster sirius"))
+        })
+        .count()
+}
+
+fn current_session_of(
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+    key: &str,
+) -> task_core::WorkUnitSession {
+    let units = store.work_units_for(task_id).unwrap();
+    let wu = units.iter().find(|u| u.key == key).unwrap();
+    store
+        .work_unit_session_current(task_id, Some(&wu.id))
+        .unwrap()
+        .expect("a current continuation session")
+}
+
+/// 同じ account・同じ手元 cwd の remote WU の continuation（予算切れ → yield → done）は、同じ session id を
+/// `resume = true` で受け取る。session 行の cwd はクラスタの path ではなく手元の写し。
+#[tokio::test]
+async fn session_resume_remote_same_account_and_local_cwd_resumes() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "a",
+            vec![(budget_exhausted(), Hook::None), (yielded(), Hook::None)],
+        )],
+    ));
+    let (task_id, mut d) = remote_three_step(dir.path(), &store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(
+        store.get(task_id).unwrap().unwrap().status,
+        Status::Done,
+        "{:?}",
+        store.events_for(task_id).unwrap()
+    );
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 3, "budget → yield → done");
+    assert!(
+        remote_push_lines(&store, task_id) >= 3,
+        "every run went through the remote workspace"
+    );
+    let first = session_of(&a[0]);
+    assert!(!first.resume);
+    for later in &a[1..] {
+        let s = session_of(later);
+        assert!(s.resume, "a remote continuation resumes the same session");
+        assert_eq!(s.session_id, first.session_id);
+        assert!(later.continuation.is_some());
+    }
+    let lines = session_lines(&store, task_id);
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| **l
+                == format!(
+                    "continuation session: resumed (session={})",
+                    first.session_id
+                ))
+            .count(),
+        2,
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("surface_unsupported")),
+        "{lines:?}"
+    );
+    let stored = current_session_of(&store, task_id, "a");
+    assert_eq!(stored.session_id, first.session_id);
+    let cwd = stored.cwd.expect("the session row keeps the cwd");
+    assert!(
+        std::path::Path::new(&cwd).starts_with(dir.path()),
+        "the session cwd is the local copy, not the cluster path: {cwd}"
+    );
+    assert!(!cwd.starts_with("/work/x"), "{cwd}");
+}
+
+/// 保存 session の account が今回と違う（別 account に倒れた）remote WU の continuation は resume せず、
+/// checkpoint 前置きの新しい session にする。他 account の session id は `--resume` に渡らない。
+#[tokio::test]
+async fn session_resume_remote_other_account_falls_back_to_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "a",
+            vec![
+                (
+                    budget_exhausted(),
+                    Hook::RewriteStored {
+                        adapter: "claude-code",
+                        account: Some("acct-other"),
+                    },
+                ),
+                (yielded(), Hook::None),
+            ],
+        )],
+    ));
+    let (task_id, mut d) = remote_three_step(dir.path(), &store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 3, "budget → fresh fallback (yield) → resume");
+    assert!(remote_push_lines(&store, task_id) >= 3);
+    // a[0] の session は run の途中で別 account（acct-other）の行に書き換わった。
+    let other_account_session = session_of(&a[0]).session_id.clone();
+    let s2 = session_of(&a[1]);
+    assert!(!s2.resume, "another account's session is never resumed");
+    assert_ne!(s2.session_id, other_account_session);
+    let cont = a[1]
+        .continuation
+        .as_ref()
+        .expect("the fallback carries the checkpoint");
+    assert_eq!(cont.previous_end, "budget_exhausted");
+    // 次の continuation は fallback で作った（今回の account の）session を resume する。
+    let s3 = session_of(&a[2]);
+    assert!(s3.resume);
+    assert_eq!(s3.session_id, s2.session_id);
+    for ctx in &a {
+        let s = session_of(ctx);
+        assert!(
+            !(s.resume && s.session_id == other_account_session),
+            "the other account's session id must not reach --resume: {s:?}"
+        );
+    }
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=account_changed)"),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.contains(&format!("resumed (session={other_account_session})"))),
+        "{lines:?}"
+    );
+    let stored = current_session_of(&store, task_id, "a");
+    assert_eq!(stored.session_id, s2.session_id);
+    assert_eq!(stored.account_id, None, "the acct-other row was retired");
+}
+
+/// remote WU の continuation で resume が拒否された（session が無い。config dir の掃除・daemon restart 後など）
+/// ときは、その session を retire し、checkpoint 前置きの新しい session で 1 回やり直す（`resume_rejected`）。
+#[tokio::test]
+async fn session_resume_remote_rejected_resume_falls_back_to_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![(
+            "a",
+            vec![
+                (yielded(), Hook::None),
+                (
+                    Terminal::Error {
+                        message: "worker exited without a result message (exit=1)".into(),
+                        retryable: true,
+                    },
+                    Hook::RejectResume,
+                ),
+            ],
+        )],
+    ));
+    let (task_id, mut d) = remote_three_step(dir.path(), &store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 3, "yield → rejected resume → fresh retry");
+    assert!(remote_push_lines(&store, task_id) >= 3);
+    let (s1, s2, s3) = (session_of(&a[0]), session_of(&a[1]), session_of(&a[2]));
+    assert!(s2.resume && s2.session_id == s1.session_id);
+    assert!(!s3.resume, "the rejected session is not resumed again");
+    assert_ne!(s3.session_id, s1.session_id);
+    let cont = a[2]
+        .continuation
+        .as_ref()
+        .expect("the retry carries the latest checkpoint");
+    assert_eq!(cont.checkpoint["next_action"], "仕上げに入る");
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=resume_rejected)"),
+        "{lines:?}"
+    );
+    assert_eq!(
+        current_session_of(&store, task_id, "a").session_id,
+        s3.session_id
+    );
+}

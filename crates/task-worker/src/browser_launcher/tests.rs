@@ -54,6 +54,10 @@ impl SessionBackend for FakeBackend {
             pid,
             pgid: pid,
             starttime,
+            runtime_pid: pid,
+            runtime_starttime: starttime,
+            ns_inodes: task_core::browser_isolation::collect_ns_inodes(&pid.to_string())
+                .map_err(|_| ErrorCode::LaunchFailed)?,
         })
     }
 }
@@ -308,6 +312,16 @@ fn session_lifecycle_and_policy_recheck() {
     assert_eq!(s.instance_id, "inst-now");
     assert_eq!(records(&f.state_dir), 1);
     assert_eq!(f.handle.session_count(), 1);
+    // protocol v3: 束縛は検査した runtime process と、その 6 つの namespace の inode を載せる。
+    let binding = s.receipt.binding.clone().expect("v3 binding");
+    assert!(crate::browser_runtime::same_process_alive(
+        binding.pid,
+        binding.starttime
+    ));
+    assert_eq!(
+        binding.ns_inodes.keys().copied().collect::<Vec<_>>(),
+        task_core::browser_isolation::REQUIRED_NAMESPACES.to_vec()
+    );
 
     let (rcpt, obs) = c
         .action(
@@ -578,4 +592,95 @@ fn registry_rejects_path_like_session_ids_and_writes_private_files() {
         .permissions()
         .mode();
     assert_eq!(dmode & 0o777, 0o700);
+}
+
+/// ADR-0116 付記 D-P: socket 起動と同じ形（listen socket を作った process と応答する process が
+/// 別）で、client が見る launcher の身元は応答を書いた process（`SCM_CREDENTIALS`）であって、
+/// listen socket を作った process（`SO_PEERCRED`）ではないことを確かめる。本番の socket 起動では
+/// 前者が launcher（celeris-browser）、後者が systemd（root）。
+#[test]
+fn client_identifies_the_responding_process_not_the_listener_creator() {
+    use nix::libc;
+    use std::os::fd::AsRawFd;
+    use std::os::unix::net::UnixListener;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("launcher.sock");
+    // listen socket はこの process（systemd の役）が作る。
+    let listener = UnixListener::bind(&path).expect("bind");
+    let mut reply = Vec::new();
+    write_message(
+        &mut reply,
+        &Response::Observed {
+            state: SessionState::Running,
+            facts: SessionFacts::default(),
+        },
+        DEFAULT_MAX_FRAME,
+    )
+    .expect("encode reply");
+    let lfd = listener.as_raw_fd();
+    // 応答は fork した子（launcher の役）が accept して書く。子は async-signal-safe な syscall だけを使う。
+    // SAFETY: 子は accept/read/write/close/_exit だけを呼んで終わる。
+    let child = match unsafe { nix::unistd::fork() }.expect("fork") {
+        nix::unistd::ForkResult::Child => unsafe {
+            let c = libc::accept(lfd, std::ptr::null_mut(), std::ptr::null_mut());
+            if c >= 0 {
+                let mut buf = [0u8; 4096];
+                libc::read(c, buf.as_mut_ptr().cast(), buf.len());
+                libc::write(c, reply.as_ptr().cast(), reply.len());
+                libc::close(c);
+            }
+            libc::_exit(0)
+        },
+        nix::unistd::ForkResult::Parent { child } => child,
+    };
+    drop(listener);
+
+    let mut client = LauncherClient::connect(&path, Duration::from_secs(30)).expect("connect");
+    assert_eq!(client.responder(), None, "no response yet");
+    let resp = client
+        .request(&Request::Observe {
+            session_id: "s".into(),
+            lease_id: "l".into(),
+        })
+        .expect("request");
+    assert!(matches!(resp, Response::Observed { .. }));
+    let me = nix::unistd::getpid().as_raw();
+    // SO_PEERCRED は listen した process（この試験 process）を指す = 本番では systemd の uid 0。
+    let listener_cred = super::server::peer_cred(client.stream_for_test()).expect("peercred");
+    assert_eq!(
+        listener_cred.0, me,
+        "SO_PEERCRED names the listener creator"
+    );
+    // 身元は実際に応答を書いた子の資格情報（kernel が付けた値）。
+    let responder = client.responder().expect("SCM_CREDENTIALS on the reply");
+    assert_eq!(
+        responder.pid,
+        child.as_raw(),
+        "responder is the accepting child"
+    );
+    assert_ne!(responder.pid, me);
+    assert_eq!(responder.uid, uid());
+    assert_eq!(client.responder_uid(), Some(uid()));
+    nix::sys::wait::waitpid(child, None).expect("reap child");
+}
+
+/// 実 launcher（in-process の `LauncherServer`）の応答でも送り手が記録され、全応答で一致する。
+#[test]
+fn client_records_a_consistent_responder_across_requests() {
+    let fx = fixture();
+    let mut client = LauncherClient::connect(&fx.sock, Duration::from_secs(30)).expect("connect");
+    let lease = super::random_id().expect("lease");
+    let started = client
+        .start_session("t", "r", &lease, policy(60))
+        .expect("start");
+    let first = client.responder().expect("responder after start");
+    assert_eq!(first.uid, uid());
+    assert_eq!(first.pid, nix::unistd::getpid().as_raw());
+    client
+        .observe(&started.session_id, &lease)
+        .expect("observe");
+    assert_eq!(client.responder(), Some(first));
+    client.stop(&started.session_id, &lease).expect("stop");
+    assert_eq!(client.responder_uid(), Some(uid()));
 }

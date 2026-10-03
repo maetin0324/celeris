@@ -44,7 +44,7 @@ superseded にした行には今の削除と同じ扱いをする。`Event::Work
 
 - 理由: 新しい版で足した葉が、同じ段の止まった unit より先に走る。葉が done になれば D1 と合わせて段の統合へ進み、replan は起きない。葉が無ければ 4. で今と同じく `Failure` → replan になるので、止まった unit を放置することはない。
 - 失敗した unit に依存する葉は `blocked(dependency_failed)` か `pending` なので 3. に当たらず、失敗を飛ばして下流を走らせることは無い。
-- daemon に LLM 呼び出しは入れない。D1・D2 とも行の状態だけを見る決定的な規則で、replay（`task_ops::replay`）は同じ関数で同じ結果を出す。
+- daemon に LLM 呼び出しは入れない。D1・D2 とも行の状態だけを見る決定的な規則で、replay（`task_ops::replay`）は同じ関数で同じ結果を出す。D1 の判定は `task_ops::execution::is_blocked_daemon_repair` に切り出してあり、`replay::rebuild_work_units_and_runs` もこの関数を呼んで replan の畳み込みで同じ行を `superseded` にし、統合 WU の `depends_on` からも外す（試験 `replay_matches_live_after_blocked_repair_superseded`・`_limit`）。
 
 ## D3. WU 単位の取り下げ・再開 API は作らない
 

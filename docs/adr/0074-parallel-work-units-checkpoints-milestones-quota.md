@@ -1412,3 +1412,27 @@ repair は「失敗を直すことだけをせよ」とだけ言われ、失敗�
 - schema・migration・設定の変更は無い（`RepairScope` は objective の文字列を作るための引数だけで、保存しない）。
 - `context.paths` を書いていない計画では範囲が空になり、従来どおり（決定 2）。範囲外差分の check を書いていない計画も同じ。
 - repair が指示に従わず範囲外を変えた場合は、従来どおり範囲外差分の check（段階の統合の check / acceptance）が落として差し戻す。
+
+## 付記: 途中確認の continue のメモを続く段の WU と子 task に届ける（2026-10-02）
+
+### 発端
+
+`POST /tasks/{id}/execution/phase-gate` の `continue` に付けた人のメモ（`note`）は `Event::Answered{question:"途中確認: 工程『<phase>』の後"}`
+として残るだけで、続く段の leaf（WU）の前置きでは他の答えに紛れ、続く段の kind task の unit から作る子 task には届かなかった
+（子は親の events を読まない）。BenchFS S5 では人が子の objective を PATCH して補い、docs 再構成 task では continue の代わりに
+replan で返す回避をした。
+
+### 決定
+
+1. **届け方は ADR-0079 D7 の決定の回答と同じ**。leaf は `WorkUnitPromptContext.human_decisions`（前置きの「人の決定」節）、子 task は
+   生成時の `objective` 末尾の `## 人の決定（ADR-0079 D7）` 節（`task_ops::tree::child_objective`）。新しい節・欄・保存先は作らない。
+2. 行の形は D7 の回答行に揃える: `- 途中確認: 工程『<phase>』の後: 続ける — <note>`（`task_ops::phase_gate::continue_note_lines`）。
+3. 届け先は「その段より後の段」の unit だけ。段の順は同じ計画（`plan_id`）の unit の `seq` の最小値で決める。メモを付けた段が
+   今の計画に無い（replan で段が変わった）ときは届けない。メモの無い continue と replan のメモ（従来どおり planner の「人の指示」）は
+   何も足さない。
+4. 材料は親の events（`PhaseResume{Continue}` の `Transitioned` と同じトランザクションの `Answered`）と `work_units` だけ。
+   LLM は使わない。tree が無効でも leaf には届ける（途中確認は ADR-0074 の機能で tree に依存しない）。
+
+### 残したもの
+
+- schema・migration・API の変更は無い。既に作られた子には届けない（continue は次の段の子が作られる前にしか返せない）。

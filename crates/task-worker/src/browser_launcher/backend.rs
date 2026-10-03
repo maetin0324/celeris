@@ -355,10 +355,18 @@ impl SessionBackend for RuntimeBackend {
                 .first()
                 .ok_or(ErrorCode::LaunchFailed)?
                 .clone();
+            // receipt の束縛（protocol v3）: 検査した runtime process と、その namespace の inode。
+            let runtime_starttime =
+                crate::browser_runtime::process_starttime(pid).ok_or(ErrorCode::IsolationFailed)?;
+            let ns_inodes = task_core::browser_isolation::collect_ns_inodes(&pid.to_string())
+                .map_err(fail(sid, "namespace inodes", ErrorCode::IsolationFailed))?;
             Ok(Launched {
                 pid: leader.pid,
                 pgid: leader.pid,
                 starttime: leader.starttime,
+                runtime_pid: pid,
+                runtime_starttime,
+                ns_inodes,
                 session: Box::new(RuntimeSession {
                     sup,
                     _shared: shared,

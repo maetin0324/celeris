@@ -188,3 +188,40 @@ fn cron_template_must_be_json_object() {
     assert!(parse_object("[]").is_err());
     assert!(parse_object("not json").is_err());
 }
+
+/// 本番の `ApiConfig`（`http://<listen>/api/v1`）でも区切りの `/` を落とさない（2026-10-03、
+/// `/api/v1cron-jobs` へ送って 404 になっていた）。
+#[test]
+fn cron_request_keeps_the_api_v1_prefix_separator() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut bytes = Vec::new();
+        let mut buf = [0; 4096];
+        while !String::from_utf8_lossy(&bytes).contains("\r\n\r\n") {
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..n]);
+        }
+        stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 11\r\nconnection: close\r\n\r\n{\"ok\":true}").unwrap();
+        String::from_utf8_lossy(&bytes)
+            .lines()
+            .next()
+            .unwrap()
+            .to_string()
+    });
+    let api = ApiConfig {
+        base_url: format!("http://{addr}/api/v1"),
+        token: None,
+    };
+    let actual = request(&api, "GET", "/cron-jobs", None).unwrap();
+    assert_eq!(actual["ok"], true);
+    let first = server.join().unwrap();
+    assert!(
+        first.starts_with("GET /api/v1/cron-jobs HTTP/1.1"),
+        "{first}"
+    );
+}

@@ -180,9 +180,14 @@ fn request(
         .map(|v| serde_json::to_vec(&v).map_err(|e| CliError::msg(e.to_string())))
         .transpose()?
         .unwrap_or_default();
-    let base_path = base_path.trim_end_matches('/');
+    let base_path = base_path.trim_matches('/');
     let path = path.trim_start_matches('/');
-    write!(stream, "{method} /{base_path}{path} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n").map_err(|e| CliError::msg(e.to_string()))?;
+    let target = if base_path.is_empty() {
+        format!("/{path}")
+    } else {
+        format!("/{base_path}/{path}")
+    };
+    write!(stream, "{method} {target} HTTP/1.1\r\nHost: {authority}\r\nConnection: close\r\nAccept: application/json\r\n").map_err(|e| CliError::msg(e.to_string()))?;
     if !payload.is_empty() {
         write!(
             stream,

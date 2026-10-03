@@ -575,6 +575,13 @@ stage_switch() {
   else
     : >"$REC/switched-items"
     printf '%s\n' "$TS" >"$REC/switch-ts"
+    # 旧 unit と drop-in を先に控える。後続の config/path 書換えが失敗しても
+    # rollback が切替前の設定一式を復元できるよう、変更より前に完了させる。
+    mkdir -p "$REC/units-before"
+    for f in "$UNIT_DIR"/celeris*; do
+      [ -e "$f" ] || [ -L "$f" ] || continue
+      cp -a "$f" "$REC/units-before/"
+    done
     cp -p "$SD_CONFIG" "$SD_CONFIG.bak-migrate-$TS"
     cat "$tmp" >"$SD_CONFIG"
     rm -f "$tmp"
@@ -588,9 +595,6 @@ stage_switch() {
       printf 'CELERIS_CREDENTIALD_DATA_DIR=%s\n' "$NEW_STATE/credentiald"
     } >"$PATHS_ENV"
     sd_log "wrote $PATHS_ENV"
-    # 旧 unit を控える（rollback がそのまま戻す）。
-    mkdir -p "$REC/units-before"
-    for f in "$UNIT_DIR"/celeris*; do [ -e "$f" ] && cp -p "$f" "$REC/units-before/"; done
   fi
 
   for i in $STATE_ITEMS; do swap_to_link "$OLD_STATE/$i" "$NEW_STATE/$i"; done
@@ -725,8 +729,14 @@ stage_rollback() {
       run cp -p "$PATHS_ENV.bak-migrate-$sts" "$PATHS_ENV"
     fi
     if [ -d "$REC/units-before" ]; then
-      for f in "$UNIT_DIR"/celeris*; do [ -e "$f" ] && run rm -f "$f"; done
-      for f in "$REC/units-before"/*; do [ -e "$f" ] && run cp -p "$f" "$UNIT_DIR/"; done
+      for f in "$UNIT_DIR"/celeris*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        run rm -rf "$f"
+      done
+      for f in "$REC/units-before"/*; do
+        [ -e "$f" ] || [ -L "$f" ] || continue
+        run cp -a "$f" "$UNIT_DIR/"
+      done
     fi
   fi
   run systemctl --user daemon-reload

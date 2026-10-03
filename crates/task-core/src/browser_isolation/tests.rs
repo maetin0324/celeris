@@ -441,7 +441,7 @@ fn orphans_are_labelled_runtime_groups_without_live_session() {
     assert_eq!(orphan_groups(&procs, &live, &uids, 1000), vec![10]);
 }
 
-// ADR-0116 D-L: launcher session 証明。
+// ADR-0138 D-L: launcher session 証明。
 
 const LAUNCHER_UID: u32 = 1001;
 
@@ -637,7 +637,7 @@ fn isolation_not_ok_and_session_mismatch_are_rejected() {
     );
 }
 
-// ADR-0116 D-L / prod-facts: 別 UID の runtime は daemon UID から `/proc/<pid>/ns/*` を開けない
+// ADR-0138 D-L / prod-facts: 別 UID の runtime は daemon UID から `/proc/<pid>/ns/*` を開けない
 // （実 launcher の Chrome で EACCES を観測）。本番の事実は daemon が読める status・mountinfo と、
 // launcher の束縛（ns inode・owner・pid/starttime）から組む。
 

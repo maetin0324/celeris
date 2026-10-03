@@ -53,7 +53,7 @@ pub enum ControlRequest {
     UnregisterLiveSession {
         session_id: String,
     },
-    // ADR-0116 D-L: the launcher session proof the daemon received for a live session.
+    // ADR-0138 D-L: the launcher session proof the daemon received for a live session.
     AttachLauncherProof(LauncherProofRegistration),
     OpenAuthSection(AuthSectionRegistration),
     CloseAuthSection {
@@ -336,7 +336,7 @@ pub fn serve(broker: Arc<Broker>, runtime: &Path, control_pids: Vec<u32>) -> Res
     serve_attested(broker, runtime, control_pids, None)
 }
 /// Production serve: `Attested` checks launcher session proofs against `launcher_uid`
-/// (ADR-0116 D-L). Without a configured launcher UID no session is admitted.
+/// (ADR-0138 D-L). Without a configured launcher UID no session is admitted.
 pub fn serve_attested(
     broker: Arc<Broker>,
     runtime: &Path,

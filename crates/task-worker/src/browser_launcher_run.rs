@@ -48,7 +48,7 @@ pub(crate) struct LauncherRuntime {
     client: Mutex<LauncherClient>,
     session_id: String,
     lease_id: String,
-    /// daemon 側で照合できた launcher の session 証明（ADR-0116 D-L）。照合に失敗したら `None`。
+    /// daemon 側で照合できた launcher の session 証明（ADR-0138 D-L）。照合に失敗したら `None`。
     proof: Option<LauncherSessionProof>,
     stopped: std::sync::atomic::AtomicBool,
 }
@@ -177,7 +177,7 @@ fn live_starttime(pid: i32) -> Option<u64> {
 }
 
 /// launcher の `Started` 応答を daemon 自身の観測と照合し、通ったときだけ
-/// [`LauncherSessionProof`] を組む（ADR-0116 D-L、fail closed）。次のどれかなら `None`:
+/// [`LauncherSessionProof`] を組む（ADR-0138 D-L、fail closed）。次のどれかなら `None`:
 /// receipt に束縛が無い（v1 の launcher）・束縛に 6 つの namespace の inode が揃っていない
 /// （v2 の launcher）・receipt と応答の session / instance が食い違う・
 /// launcher の `isolation_ok` が偽・応答の送り手（`SCM_CREDENTIALS`、ADR-0116 付記 D-P）を採れない・pid の process が無い（zombie を含む）・

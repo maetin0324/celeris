@@ -128,7 +128,7 @@ pub enum Outcome {
 }
 
 /// launcher protocol の版。v2 で `start_session` の receipt に [`SessionBinding`] を足した
-/// （ADR-0116 D-L）。v3 で束縛の pid を launcher が隔離を検査した runtime process にし、その
+/// （ADR-0138 D-L）。v3 で束縛の pid を launcher が隔離を検査した runtime process にし、その
 /// namespace の inode（`ns_inodes`）を足した（daemon UID は別 UID の runtime の
 /// `/proc/<pid>/ns/*` を開けないため）。v1 の receipt（`binding` 無し）と v2 の束縛（`ns_inodes`
 /// 無し）は decode できるが、daemon は証明なしとして扱う。

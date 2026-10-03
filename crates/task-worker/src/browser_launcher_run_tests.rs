@@ -433,7 +433,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
 }
 
-// ---- ADR-0116 D-L: daemon 側で照合した launcher session 証明 ----
+// ---- ADR-0138 D-L: daemon 側で照合した launcher session 証明 ----
 
 /// 独自の process group の `sleep`（runtime の leader の代わり）。
 fn leader() -> (std::process::Child, i32, u64) {

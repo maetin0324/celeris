@@ -97,15 +97,15 @@ pub enum IsolationViolation {
     PrivilegesKept,
     InvalidSession,
     NoProcessGroup,
-    /// ADR-0116 D-L: launcher の session 証明が無い（daemon 起動の runtime を含む）。
+    /// ADR-0138 D-L: launcher の session 証明が無い（daemon 起動の runtime を含む）。
     LauncherProofMissing,
-    /// ADR-0116 D-L: 証明はあるが検証に失敗した（不一致・採取不能）。
+    /// ADR-0138 D-L: 証明はあるが検証に失敗した（不一致・採取不能）。
     LauncherProofInvalid {
         defect: LauncherProofDefect,
     },
 }
 
-/// launcher 証明の検証に失敗した理由（ADR-0116 D-L）。
+/// launcher 証明の検証に失敗した理由（ADR-0138 D-L）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LauncherProofDefect {
@@ -270,7 +270,7 @@ pub fn verify_isolation(
     }
 }
 
-/// ADR-0115 の launcher が `Response::Started` / `observe` で返す session 証明（ADR-0116 D-L）。
+/// ADR-0115 の launcher が `Response::Started` / `observe` で返す session 証明（ADR-0138 D-L）。
 /// daemon 側が `Receipt`・`SessionFacts`・`SessionRecord` の値から組み立てる。
 /// 持っているだけでは何も許さず、[`verify_launcher_session`] を通ったときだけ本番の
 /// [`LauncherAttestation`] になる。
@@ -314,7 +314,7 @@ pub struct LauncherObservation {
     pub runtime_starttime: Option<u64>,
 }
 
-/// 本番 admission の attestation（ADR-0116 条件 1・2・5）。隔離の検査と launcher 証明の検証の
+/// 本番 admission の attestation（ADR-0138 条件 1・2・5）。隔離の検査と launcher 証明の検証の
 /// 両方を通ったときだけ [`verify_launcher_session`] が作る。試験 harness からは作れない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LauncherAttestation {
@@ -398,7 +398,7 @@ fn launcher_proof_defects(
     d
 }
 
-/// 本番 admission の共通条件（ADR-0116 D-L）。[`verify_isolation`] の全条件に加えて launcher の
+/// 本番 admission の共通条件（ADR-0138 D-L）。[`verify_isolation`] の全条件に加えて launcher の
 /// session 証明を要求する。証明が無ければ `LauncherProofMissing`、検証に失敗すれば
 /// `LauncherProofInvalid` を返し、owner 検査が通っていても attestation を作らない。
 pub fn verify_launcher_session(
@@ -803,7 +803,7 @@ fn ns_link_inode(path: &str) -> std::io::Result<u64> {
 }
 
 /// `pid` の 6 つの namespace の inode。1 つでも読めなければ Err（欠けを埋めない）。
-/// launcher が自分の runtime に対して呼び、protocol v3 の束縛に載せる（ADR-0116 D-L）。
+/// launcher が自分の runtime に対して呼び、protocol v3 の束縛に載せる（ADR-0138 D-L）。
 pub fn collect_ns_inodes(pid: &str) -> std::io::Result<BTreeMap<Namespace, u64>> {
     FACT_NAMESPACES
         .into_iter()
@@ -926,7 +926,7 @@ pub fn collect_runtime_facts(
     ))
 }
 
-/// launcher 起動の runtime の事実を組む純関数（ADR-0116 D-L）。`status`・`mountinfo` は daemon が
+/// launcher 起動の runtime の事実を組む純関数（ADR-0138 D-L）。`status`・`mountinfo` は daemon が
 /// 自分で読んだ値、namespace の別は launcher の束縛の inode と daemon 自身の inode の比較、
 /// userns owner は launcher の束縛の値。束縛に inode が無い・daemon と同じ inode の namespace は
 /// 「別」に数えないので `MissingNamespace` で拒否される（安全値で埋めない）。
@@ -948,7 +948,7 @@ pub fn launched_runtime_facts(
     view.into_facts(session_id, host_uid, proof.ns_owner_uid, namespaces, pgid)
 }
 
-/// 本番 broker の事実採取（ADR-0116 D-L）。daemon UID で読める `/proc/<pid>/{status,mountinfo}` と
+/// 本番 broker の事実採取（ADR-0138 D-L）。daemon UID で読める `/proc/<pid>/{status,mountinfo}` と
 /// 自分の `/proc/self/ns/*` を読み、読めない namespace・owner は launcher の束縛から採る。
 /// どれかが読めなければ Err（呼び出し側は拒否する）。
 pub fn collect_launched_runtime_facts(

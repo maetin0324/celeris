@@ -124,7 +124,7 @@ ADR-0115 は「専用 host user `celeris-browser`（host UID/GID `B`）の proce
 
 - client は接続に `SO_PASSCRED` を立てる。受け手が `SO_PASSCRED` を持つ AF_UNIX socket では、送り手が明示しなくても kernel が送信の時点の送り手の `{pid, uid, gid}`（thread group の pid と送り手の cred）を各 skb に付ける。送り手が明示的に `SCM_CREDENTIALS` を付ける場合も、kernel は自分の pid・自分の real/effective/saved uid 以外を拒否する（`CAP_SYS_ADMIN`/`CAP_SETUID` が無い限り。launcher は `celeris-browser` で動き、どちらも持たない）。値は受け手の pid/user namespace に変換される。
 - client は応答を読む前に `recvmsg(MSG_PEEK)` で先頭の skb の資格情報を覗き、frame はこれまでどおり読む。AF_UNIX stream は資格情報の違う skb を 1 回の読みにまとめないので、先頭 skb の値はその応答を書いた process のもの。全応答で送り手が同じであることを要求し、資格情報の無い応答・送り手の違う応答が 1 度でもあれば以後 `None`（fail closed）。
-- `LauncherSessionProof.launcher_uid` と `LauncherObservation.peer_uid` / `LauncherProofRegistration.peer_uid`（欄の名前は互換のため据え置く）は、この送り手の UID を指す。`verify_launcher_session` の照合規則（送り手の UID = 証明の UID = 設定上の launcher UID、root・daemon UID ではない）は変えない。
+- `LauncherSessionProof.launcher_uid` と `LauncherObservation.peer_uid` / `LauncherProofRegistration.peer_uid`（欄の名前は互換のため据え置く）は、この送り手の UID を指す。`verify_launcher_session` の照合規則（[ADR-0138](0138-browser-prod-admission-confidential-release.md) D-L。送り手の UID = 証明の UID = 設定上の launcher UID、root・daemon UID ではない）は変えない。
 - launcher（server）側の検査は変えない。daemon は自分で `connect()` するので、launcher が accept した接続の `SO_PEERCRED` は daemon を正しく指す。protocol の版も変えない（launcher の binary は protocol v3 のままでよい）。
 
 偽装への強さ: 値は kernel が送り手の process から採るもので、自己申告ではない。応答を書けるのは daemon の接続の相手側 FD を持つ process だけで、それは systemd が listen socket を渡した launcher（`User=celeris-browser`）である。root の systemd 自身が応答を書けば uid 0 になり拒否される。

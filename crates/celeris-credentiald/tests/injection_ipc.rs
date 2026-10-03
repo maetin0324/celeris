@@ -559,7 +559,7 @@ fn credential_injection_sameuid_rejected_in_production() {
 
 #[test]
 fn credential_injection_requires_a_verified_launcher_proof_in_production() {
-    // ADR-0116 D-L: launcher UID を設定した本番 Attested でも、証明なし・検証失敗（SameUid の
+    // ADR-0138 D-L: launcher UID を設定した本番 Attested でも、証明なし・検証失敗（SameUid の
     // 子 process に結び付いた証明）はどちらも拒否し、provider を呼ばず lease を消費しない。
     let mut fx = Fx::attested(unsafe { libc::geteuid() } + 500);
     let lease = fx.grant("sess-1", "k1", 60);

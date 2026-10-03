@@ -1,5 +1,5 @@
 #!/bin/sh
-# ADR-0115 / ADR-0116 D-L: launcher の実 session で ptrace 拒否と本番 admission の許可/拒否表を
+# ADR-0115 / ADR-0138 D-L: launcher の実 session で ptrace 拒否と本番 admission の許可/拒否表を
 # host shell（daemon UID・run sandbox の外）で測り、出力全体を <out-file> に残す。
 #
 #   sh crates/task-worker/scripts/launcher-admission-evidence.sh <out-file>

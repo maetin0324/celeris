@@ -1,7 +1,7 @@
 //! ADR-0115: dedicated-user launcher の実 process 境界を daemon UID から測る。
 //! host 未準備の CI では理由を表示して skip する。実証時は CELERIS_LAUNCHER_TESTS=require。
 //!
-//! ADR-0116 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
+//! ADR-0138 D-L: 同じ session から daemon 側が組んだ `LauncherSessionProof` だけが本番の
 //! CredentialInjection（celeris-credentiald の `admit_attested`）と IdentityRestore
 //! （`RestoreAdmission::Attested`）を通り、SameUid・非隔離・証明なし・検証失敗は両方で拒否される
 //! ことを、ptrace 拒否を確かめた session の上で許可/拒否の対応表（`ADMISSION` 行）にして出す。
@@ -435,7 +435,7 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         "started: instance={} binding={:?} responder={responder:?}",
         started.instance_id, started.receipt.binding
     );
-    // 対応表の前提（ADR-0116 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
+    // 対応表の前提（ADR-0138 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
     // 応答の SCM_CREDENTIALS が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
     let proof_gap = if started.receipt.binding.is_none() {
         Some("launcher receipt has no session binding (protocol v1 launcher installed)".to_owned())
@@ -770,7 +770,7 @@ fn chrome_pick_reader_without_subuid_mapping_still_matches() {
     assert!(chrome_pick_stopped_roots(&picked, &alive).is_empty());
 }
 
-/// 許可/拒否の対応表（ADR-0116 D-L）の 1 行。
+/// 許可/拒否の対応表（ADR-0138 D-L）の 1 行。
 struct AdmissionCase<'a> {
     name: &'static str,
     facts: RuntimeFacts,

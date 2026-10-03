@@ -56,7 +56,7 @@ inline test の外出しと責務分割を完了した（worktree、main 未 mer
 
 ## 本番 admission の機密能力解放（2026-10-01、task 01M3VFQZ2TX3W0KTDQHKCAVJR6）
 
-[ADR-0116](adr/0116-browser-prod-admission-confidential-release.md) は提案であり、本番解放の決定ではない。中間成果として `verify_isolation` に user namespace owner 検査を追加し、owner 不明・daemon owner（`OwnerUnknown` / `UsernsOwnedByDaemon`）を拒否する。これは main の `Attested` より厳しい。境界試験は `prod_admission.rs`（6 passed）と `browser_prod_admission.rs`（9 passed）、全体 gate は `cargo test --workspace`（3055 passed / 0 failed / 11 ignored）と `cargo clippy --workspace -- -D warnings`（exit 0）。ただし launcher 経由の実 process ptrace 拒否は未実証で、**解放は未**。実証されるまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。
+[ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) は提案であり、本番解放の決定ではない。中間成果として `verify_isolation` に user namespace owner 検査を追加し、owner 不明・daemon owner（`OwnerUnknown` / `UsernsOwnedByDaemon`）を拒否する。これは main の `Attested` より厳しい。境界試験は `prod_admission.rs`（6 passed）と `browser_prod_admission.rs`（9 passed）、全体 gate は `cargo test --workspace`（3055 passed / 0 failed / 11 ignored）と `cargo clippy --workspace -- -D warnings`（exit 0）。ただし launcher 経由の実 process ptrace 拒否は未実証で、**解放は未**。実証されるまで `CredentialInjection`・`IdentityRestore` を許す本番 session は無い。
 
 - H3: 認証区間の LLM 観測停止を維持。
 - H4: task ACL・期限・失効時の再判定と認証区間中の Live View 停止を維持。
@@ -701,4 +701,5 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - 試験: `client_identifies_the_responding_process_not_the_listener_creator`（listen した process と応答する子 process を分け、`SO_PEERCRED` は前者・responder は後者を指す）、`client_records_a_consistent_responder_across_requests`。
 - 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test -p task-worker --lib browser_launcher` 20 passed、`--lib launcher_run` 16 passed、`--test browser_launcher_ptrace --test browser_prod_admission` 6 + 18 passed（sandbox）。
 - ついで: 取り込みで呼び出しを失って未使用になった `browser_injection_wire.rs` の `wait_cdp_ready` を削除（clippy の dead_code）。
+- ADR 番号: 取り込んだ本番 admission の ADR（旧 `0116-browser-prod-admission-confidential-release.md`）は main の ADR-0116（launcher 実装）と重なるため [ADR-0138](adr/0138-browser-prod-admission-confidential-release.md) に振り直した（main と全 celeris/* ブランチの最大は 0137）。コード・試験・台本・unit の「ADR-0116 D-L」「ADR-0116 条件 1〜5」を ADR-0138 に、D2〜D7・付記 D-P は ADR-0116 のまま。条件 5(a) と未実証節の `SO_PEERCRED` の記述も D-P に合わせた。
 - 未解決: host での `ADMISSION[real-session]` の再取得は人が `docs/ops/browser-launcher-admission-evidence-run.md` の手順で行う（入れ替え → 台本 → main の版へ戻す）。

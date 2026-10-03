@@ -23,6 +23,9 @@ describe("Badge", () => {
     expect(html).toContain("bg-neutral");
     expect(html).toContain("rounded-sm");
     expect(html).not.toContain("rounded-full");
+    expect(html).toContain("max-w-full");
+    expect(html).toContain("break-all");
+    expect(html).not.toContain("whitespace-nowrap");
   });
 
   it("className を足せて、asChild で子の要素を使う", () => {

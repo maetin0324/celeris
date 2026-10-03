@@ -9,6 +9,8 @@ describe("Kbd", () => {
     expect(markup).toContain("bg-code");
     expect(markup).toContain("border-border");
     expect(markup).toContain("font-mono");
+    expect(markup).toContain("text-code-foreground");
+    expect(markup).toMatch(/(?:^|\s)text-label(?:\s|")/);
     expect(markup).toContain('title="ショートカット"');
     expect(markup).toContain("Ctrl</kbd>");
   });

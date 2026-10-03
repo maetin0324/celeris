@@ -26,6 +26,9 @@ struct ClaudeScriptAdapter {
     script: StdMutex<HashMap<String, VecDeque<(Terminal, Hook)>>>,
     /// `(WU の key、planner なら "planner"、RunContext)`。
     seen: StdMutex<Vec<(String, task_worker::RunContext)>>,
+    /// claude の `CLAUDE_CONFIG_DIR` の代わり（`with_config_dir`）。あれば claude と同じく session の jsonl を
+    /// `<dir>/projects/<cwd を変換した名前>/<session_id>.jsonl` に書き、`--resume` では読む。
+    config_dir: Option<PathBuf>,
 }
 
 impl ClaudeScriptAdapter {
@@ -44,7 +47,44 @@ impl ClaudeScriptAdapter {
                     .collect(),
             ),
             seen: StdMutex::new(Vec::new()),
+            config_dir: None,
         }
+    }
+
+    fn with_config_dir(mut self, dir: &std::path::Path) -> Self {
+        self.config_dir = Some(dir.to_path_buf());
+        self
+    }
+
+    /// claude を真似た session の jsonl の扱い。新しい session なら 1 行目を書く。`--resume` なら読み、
+    /// 無い・1 行でも JSON でない（壊れている）なら claude の拒否の文言を返す（このとき run は失敗する）。
+    fn touch_session_file(&self, req: &RunRequest) -> Result<(), String> {
+        let (Some(dir), Some(session)) = (&self.config_dir, req.context.session.as_ref()) else {
+            return Ok(());
+        };
+        let path = session_jsonl(dir, req.cwd(), &session.session_id);
+        let rejected = || {
+            format!(
+                "No conversation found with session ID: {}",
+                session.session_id
+            )
+        };
+        let line = serde_json::json!({"type": "user", "sessionId": session.session_id});
+        if session.resume {
+            let body = std::fs::read_to_string(&path).map_err(|_| rejected())?;
+            let valid = !body.trim().is_empty()
+                && body
+                    .lines()
+                    .all(|l| serde_json::from_str::<serde_json::Value>(l).is_ok());
+            if !valid {
+                return Err(rejected());
+            }
+            std::fs::write(&path, format!("{body}{line}\n")).expect("append session jsonl");
+        } else {
+            std::fs::create_dir_all(path.parent().expect("projects dir")).expect("mkdir");
+            std::fs::write(&path, format!("{line}\n")).expect("write session jsonl");
+        }
+        Ok(())
     }
 
     fn runs_of(&self, key: &str) -> Vec<task_worker::RunContext> {
@@ -99,6 +139,17 @@ impl WorkerAdapter for ClaudeScriptAdapter {
             .lock()
             .unwrap()
             .push((key.clone(), req.context.clone()));
+        if let Err(message) = self.touch_session_file(&req) {
+            // claude の resume 拒否と同じ: 拒否を報告し、結果なしで終わる（台本は次の run に残す）。
+            sink.session_resume_failed(&message);
+            return Ok(RunOutcome {
+                terminal: Terminal::Error {
+                    message: "worker exited without a result message (exit=1)".into(),
+                    retryable: true,
+                },
+                exit_code: Some(1),
+            });
+        }
         let (terminal, hook) = self
             .script
             .lock()
@@ -765,5 +816,324 @@ async fn session_resume_remote_rejected_resume_falls_back_to_checkpoint() {
     assert_eq!(
         current_session_of(&store, task_id, "a").session_id,
         s3.session_id
+    );
+}
+
+// --- ADR-0140 D3: daemon の再起動（同じ DB で Dispatcher を作り直す）後の continuation ---
+
+/// claude の session の置き場所（ADR-0140 D3）: `<config>/projects/<cwd の英数字以外を '-' にした名前>/<id>.jsonl`。
+fn session_jsonl(config: &std::path::Path, cwd: &std::path::Path, session_id: &str) -> PathBuf {
+    let project: String = cwd
+        .to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    config
+        .join("projects")
+        .join(project)
+        .join(format!("{session_id}.jsonl"))
+}
+
+/// 再起動を挟む試験の dispatcher。時計は注入した試験用の時計（`test_now`）。
+fn restart_dispatcher(store: &Arc<dyn TaskStore>, adapter: Arc<ClaudeScriptAdapter>) -> Dispatcher {
+    let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 1, true, "claude-code");
+    d.config.execution.max_continuations_per_work_unit = 10;
+    d
+}
+
+/// 再起動前の daemon が残したもの（DB の path・Task・WU `a` の session 行・session の jsonl）。
+struct BeforeRestart {
+    db: PathBuf,
+    task_id: TaskId,
+    session: task_core::WorkUnitSession,
+    jsonl: PathBuf,
+}
+
+/// 1 つ目の daemon: file の SQLite で WU `a` の最初の run を走らせ（yield で止まる）、drain
+/// （`set_accepting_new_work(false)`、ADR-0040 D4）で手元の run を片付けてから Dispatcher・アダプタ・
+/// ストアを drop する。continuation はまだ dispatch しない（`a` は `needs_continuation`、`node_sessions` に行が残る）。
+async fn first_daemon_until_yield(
+    dir: &std::path::Path,
+    config: &std::path::Path,
+) -> BeforeRestart {
+    let state = dir.join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let db = state.join("celeris.db");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let task_id = three_step_task(dir, &store);
+    let adapter = Arc::new(
+        ClaudeScriptAdapter::new(
+            &store,
+            Vec::new(),
+            vec![("a", vec![(yielded(), Hook::None)])],
+        )
+        .with_config_dir(config),
+    );
+    let mut d = restart_dispatcher(&store, adapter.clone());
+    for _ in 0..50 {
+        d.tick().unwrap();
+        if !d.running.is_empty() {
+            break;
+        }
+    }
+    assert_eq!(d.running.len(), 1, "the first run of a was dispatched");
+    d.set_accepting_new_work(false);
+    for _ in 0..50 {
+        for entry in d.running.values_mut() {
+            if !entry.handle.is_finished() {
+                (&mut entry.handle).await.expect("worker task panicked");
+            }
+        }
+        d.tick().unwrap();
+        if d.in_flight() == 0 {
+            break;
+        }
+    }
+    assert_eq!(d.in_flight(), 0, "the draining daemon finished its run");
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 1, "no continuation before the restart");
+    let first = session_of(&a[0]).clone();
+    assert!(!first.resume);
+
+    let wu = store
+        .work_units_for(task_id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "a")
+        .unwrap();
+    assert_eq!(
+        wu.status,
+        task_core::WorkUnitStatus::NeedsContinuation,
+        "{wu:?}"
+    );
+    let session = current_session_of(&store, task_id, "a");
+    assert_eq!(session.session_id, first.session_id);
+    let cwd = session.cwd.clone().expect("the session row keeps the cwd");
+    let jsonl = session_jsonl(config, std::path::Path::new(&cwd), &first.session_id);
+    assert!(jsonl.is_file(), "claude wrote {}", jsonl.display());
+    drop(d);
+    drop(adapter);
+    drop(store);
+    BeforeRestart {
+        db,
+        task_id,
+        session,
+        jsonl,
+    }
+}
+
+/// 2 つ目の daemon: 同じ DB を開き直し、新しい Dispatcher で残りを最後まで走らせる。注入した時計は
+/// 停止していた間（1 時間）だけ進めておく。
+async fn second_daemon_to_idle(
+    before: &BeforeRestart,
+    config: &std::path::Path,
+) -> (Arc<dyn TaskStore>, Arc<ClaudeScriptAdapter>) {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&before.db).unwrap());
+    let adapter =
+        Arc::new(ClaudeScriptAdapter::new(&store, Vec::new(), Vec::new()).with_config_dir(config));
+    let mut d = restart_dispatcher(&store, adapter.clone());
+    if let Some(clock) = &d.test_now {
+        *clock.lock().unwrap() += Duration::from_secs(3600);
+    }
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    let task = store.get(before.task_id).unwrap().unwrap();
+    assert_eq!(
+        task.status,
+        Status::Done,
+        "{:?}",
+        store.events_for(before.task_id).unwrap()
+    );
+    (store, adapter)
+}
+
+/// ADR-0140 D4 の `fresh_fallback_by_reason`（`GET /tasks/{id}/execution` の continuation の欄）。
+fn fallback_reasons(
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+) -> std::collections::BTreeMap<String, u64> {
+    let task = store.get(task_id).unwrap().unwrap();
+    let events: Vec<Event> = store
+        .events_for(task_id)
+        .unwrap()
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    task_core::execution_metrics::summarize(&task, &events)
+        .continuation
+        .fresh_fallback_by_reason
+}
+
+/// 再起動後、session 行は残るが jsonl が無い・壊れているときの共通の確かめ: 保存 id の `--resume` は
+/// 1 回だけ試されて拒否され、retire のうえ直近の checkpoint を前置きにした新しい session でやり直し、
+/// その run は成功する（拒否された run は attempts に数えない）。
+fn assert_restart_fallback(
+    store: &Arc<dyn TaskStore>,
+    adapter: &ClaudeScriptAdapter,
+    before: &BeforeRestart,
+    config: &std::path::Path,
+) {
+    let task_id = before.task_id;
+    let stored_id = before.session.session_id.as_str();
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 2, "rejected resume → fresh retry");
+    let (s1, s2) = (session_of(&a[0]), session_of(&a[1]));
+    assert!(
+        s1.resume && s1.session_id == stored_id,
+        "the new daemon resumes the stored session from node_sessions first: {s1:?}"
+    );
+    assert!(!s2.resume, "the rejected session is not resumed again");
+    assert_ne!(s2.session_id, stored_id);
+    let cont = a[1]
+        .continuation
+        .as_ref()
+        .expect("the retry carries the checkpoint from before the restart");
+    assert_eq!(cont.checkpoint["next_action"], "仕上げに入る");
+
+    let lines = session_lines(store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| *l == format!("continuation session: resumed (session={stored_id})")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("continuation session resume rejected")),
+        "{lines:?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=resume_rejected)"),
+        "{lines:?}"
+    );
+    assert_eq!(
+        fallback_reasons(store, task_id).get("resume_rejected"),
+        Some(&1),
+        "the fallback is counted in the execution metrics"
+    );
+
+    let wu = store
+        .work_units_for(task_id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "a")
+        .unwrap();
+    let runs = store.runs_for_work_unit(&wu.id).unwrap();
+    let last = runs.iter().max_by_key(|r| r.seq).unwrap();
+    assert_eq!(
+        last.status,
+        task_core::RunIndexStatus::Completed,
+        "{runs:?}"
+    );
+    assert_eq!(last.session_id.as_deref(), Some(s2.session_id.as_str()));
+    assert_eq!(
+        runs.iter()
+            .filter(|r| r.status == task_core::RunIndexStatus::Failed
+                || r.status == task_core::RunIndexStatus::HarnessError)
+            .count(),
+        1,
+        "only the rejected resume failed: {runs:?}"
+    );
+
+    let current = current_session_of(store, task_id, "a");
+    assert_eq!(
+        current.session_id, s2.session_id,
+        "the stored row was retired"
+    );
+    assert_eq!(
+        current.cwd, before.session.cwd,
+        "same worktree after the restart"
+    );
+    let cwd = current.cwd.clone().unwrap();
+    assert!(
+        session_jsonl(config, std::path::Path::new(&cwd), &s2.session_id).is_file(),
+        "the fresh session has its own jsonl"
+    );
+}
+
+/// 再起動の間に config dir の jsonl が消えた（掃除等）: `node_sessions` の行だけが残った状態から、
+/// resume 拒否として検出して checkpoint fallback の新しい session に倒れる。panic・run 失敗にならない。
+#[tokio::test]
+async fn session_resume_after_restart_missing_session_file_falls_back_to_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude-config");
+    let before = first_daemon_until_yield(dir.path(), &config).await;
+    std::fs::remove_file(&before.jsonl).unwrap();
+
+    let (store, adapter) = second_daemon_to_idle(&before, &config).await;
+    assert_restart_fallback(&store, &adapter, &before, &config);
+    assert!(
+        !before.jsonl.exists(),
+        "celeris does not recreate the stored session's jsonl (ADR-0140 D3)"
+    );
+}
+
+/// 再起動の間に jsonl の中身が壊れた（途中で切れた・JSON でない行）: 同じく resume 拒否として
+/// checkpoint fallback に倒れ、壊れた file は celeris が読まず・書き換えない。
+#[tokio::test]
+async fn session_resume_after_restart_corrupt_session_file_falls_back_to_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude-config");
+    let before = first_daemon_until_yield(dir.path(), &config).await;
+    let corrupt = "{\"type\":\"user\",\"sessionId\":\n\u{0}\u{0}garbage";
+    std::fs::write(&before.jsonl, corrupt).unwrap();
+
+    let (store, adapter) = second_daemon_to_idle(&before, &config).await;
+    assert_restart_fallback(&store, &adapter, &before, &config);
+    assert_eq!(
+        std::fs::read_to_string(&before.jsonl).unwrap(),
+        corrupt,
+        "celeris neither reads nor rewrites the jsonl (ADR-0140 D3)"
+    );
+}
+
+/// 再起動の間も jsonl が残り、account・cwd が同じなら、新しい daemon は `node_sessions` の行から
+/// 同じ session id を `--resume` する（fallback しない）。
+#[tokio::test]
+async fn session_resume_after_restart_kept_session_file_resumes_same_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("claude-config");
+    let before = first_daemon_until_yield(dir.path(), &config).await;
+
+    let (store, adapter) = second_daemon_to_idle(&before, &config).await;
+    let task_id = before.task_id;
+    let stored_id = before.session.session_id.as_str();
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 1, "the continuation finished in one resumed run");
+    let s = session_of(&a[0]);
+    assert!(s.resume, "{s:?}");
+    assert_eq!(s.session_id, stored_id);
+    assert!(
+        a[0].continuation.is_some(),
+        "the checkpoint stays in the preamble"
+    );
+
+    let current = current_session_of(&store, task_id, "a");
+    assert_eq!(
+        current.id, before.session.id,
+        "the same row, not a new session"
+    );
+    assert_eq!(current.account_id, before.session.account_id);
+    assert_eq!(current.cwd, before.session.cwd);
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| *l == format!("continuation session: resumed (session={stored_id})")),
+        "{lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains("resume rejected")),
+        "{lines:?}"
+    );
+    assert!(fallback_reasons(&store, task_id).is_empty());
+    let body = std::fs::read_to_string(&before.jsonl).unwrap();
+    assert_eq!(
+        body.lines().count(),
+        2,
+        "claude appended to the same session"
     );
 }

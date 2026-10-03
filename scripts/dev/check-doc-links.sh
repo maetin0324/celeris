@@ -25,6 +25,7 @@ FOREIGN_DOCS="crates/task-api/src/docs.rs crates/task-api/tests/docs.rs crates/t
 crates/task-ops/src/docs/ crates/task-ops/src/docs_maintenance/ crates/celeris/src/doc_gardener/tests.rs
 crates/task-dispatch/src/undeclared_artifacts/tests.rs crates/task-worker/src/preamble/tests.rs
 crates/task-core/src/execution/tests.rs scripts/tests/test_source_size_report.py
+crates/task-api/src/cron_jobs.rs
 gui/app/lib/docs.ts gui/test/ gui/scripts/lib/celeris-fixture.mjs web/e2e/"
 
 # progress・ADR・report の本文の素のパスは履歴なので、(2) は次の形のファイルだけ見る。

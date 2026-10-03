@@ -361,3 +361,13 @@ D1〜D10 の本文は変更しない。
    `curation.worker.diff` に移し、daemon が検証済み計画から生成した差分で正本の
    `curation.diff` を上書きする。`curation-apply` の承認 hash はこの正本の差分から計算する。
    worker の `curation.diff` が無ければ照合を省略し、daemon が正本の差分を生成する。
+
+## 付記（main 取り込み 2026-10-03）
+
+main の ADR-0128 D6 に合わせ、本文を `agent-docs/adr/0131-cron-jobs.md` へ移した。番号は維持する。
+main の `agent-docs/adr/0133-inbox-and-notifications.md` がこの ADR を「ADR-0131 D7」として参照し、
+crates の doc comment と生成 schema も ADR-0131 を参照しているためである。全 ref の `git for-each-ref`
+と `git ls-tree` を走査し、0131 を別名の ADR に使う競合がないことを確認した。
+
+main 取り込み後に migration の番号を `0046_cron_jobs` とした。main の `0041_feed_notices` と、並行作業で
+確保済みの 0042〜0045 の後ろの空き番号を使う。

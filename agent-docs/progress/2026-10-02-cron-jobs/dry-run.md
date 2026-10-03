@@ -38,7 +38,7 @@ LLM 認証は `codex login status` で `Logged in using ChatGPT`、本番 KB の
 2. staging の job を `celerisctl cron --config <staging-config.toml> show daily-curation` で確認する。
    `template.extra.mode` が `dry_run`、`overlap` が `skip`、`harness` が `knowledge-curation`、
    `lane` が `cheap` であることを確認する。job が無ければ
-   [設定例](../../config/celeris.example.toml) の `[[cron.seed]]` を staging 用設定に入れ、空の
+   [設定例](../../../config/celeris.example.toml) の `[[cron.seed]]` を staging 用設定に入れ、空の
    cron job テーブルで起動する。
 3. `celerisctl cron --config <staging-config.toml> run daily-curation` を **1 回**実行する。
    `--dry-run` は現行 CLI に存在しない。応答の `task_id` を控える。staging DB には task と履歴が
@@ -52,5 +52,5 @@ LLM 認証は `codex login status` で `Logged in using ChatGPT`、本番 KB の
 5. staging と本番の KB の内容 hash を実行前後で比較し、本番 KB が変わっていないことを確認する。
    本番 DB の更新や job の `apply` への変更は、この dry-run の作業には含めない。
 
-参照: [ADR-0131 D10/D11](../adr/0131-cron-jobs.md) と
-[`celerisctl cron` 実装](../../crates/celerisctl/src/commands/cron.rs)。
+参照: [ADR-0131 D10/D11](../../adr/0131-cron-jobs.md) と
+[`celerisctl cron` 実装](../../../crates/celerisctl/src/commands/cron.rs)。

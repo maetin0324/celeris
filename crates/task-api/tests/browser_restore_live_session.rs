@@ -144,7 +144,7 @@ async fn expect_denied(
 
 #[tokio::test(flavor = "multi_thread")]
 async fn restore_http_binds_to_real_isolated_session_and_never_opens_on_refusal() {
-    if skip() {
+    if skip() || !userns_available() {
         return;
     }
     let env = admin_env();

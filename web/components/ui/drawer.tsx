@@ -1,6 +1,7 @@
 import { Dialog } from "radix-ui";
 import { type ReactElement, type ReactNode, useId } from "react";
 import { cn } from "../../lib/utils";
+import { Icon } from "./icon";
 
 export type DrawerProps = {
   /** Radix が閉じた後に focus を戻す操作。focus 可能な単一要素を渡す。 */
@@ -42,9 +43,7 @@ export function Drawer({ trigger, title, description, children, className, ...ro
               aria-label="閉じる"
               className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
-              <span aria-hidden="true" className="text-section">
-                ×
-              </span>
+              <Icon name="close" />
             </Dialog.Close>
           </div>
           <div className="mt-4 min-w-0 flex-1">{children}</div>

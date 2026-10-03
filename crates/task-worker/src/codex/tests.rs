@@ -66,6 +66,10 @@ fn stub_codex(dir: &std::path::Path, script: &str) -> CodexConfig {
     crate::test_support::write_executable(&path, &format!("#!/bin/sh\n{script}\n"));
     CodexConfig {
         command: path.to_string_lossy().into_owned(),
+        env: vec![(
+            "CODEX_HOME".into(),
+            dir.join("codex-home").to_string_lossy().into_owned(),
+        )],
         ..CodexConfig::default()
     }
 }
@@ -217,8 +221,32 @@ echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":
     }
 }
 
-/// ADR-0056 D3（Phase 79）: `context.skills` に乗った skill は、run 開始時に `AGENTS.md` の
-/// `<!-- celeris:skills:start -->` 〜 `end` の節として作業場所に書かれる。既存の内容は保つ。
+/// 付属ファイル（入れ子を含む）を持つ skill を KB 側に作る。本文には印の文字列を入れる。
+fn skills_fixture_kb(kb: &std::path::Path, name: &str) -> crate::protocol::SkillMount {
+    let skill_dir = kb.join(name);
+    std::fs::create_dir_all(skill_dir.join("rules/nested")).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        format!("---\nname: {name}\ndescription: d\n---\n\nBODY-MARKER レビューの手順\n"),
+    )
+    .unwrap();
+    std::fs::write(skill_dir.join("rules/x.md"), "rule x\n").unwrap();
+    std::fs::write(skill_dir.join("rules/nested/y.md"), "rule y\n").unwrap();
+    crate::protocol::SkillMount {
+        name: name.into(),
+        path: skill_dir.display().to_string(),
+        description: "d".into(),
+    }
+}
+
+const SKILLS_OK_SCRIPT: &str = r#"mkdir -p artifacts
+printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
+echo '{"type":"turn.completed"}'
+"#;
+
+/// ADR-0127 D1/D3（旧 ADR-0056 D3 の試験を更新）: `context.skills` に乗った skill は、run 開始時に
+/// `AGENTS.md` の `<!-- celeris:skills:start -->` 〜 `end` の節に名前・説明・パスの一覧として書かれる
+/// （本文と `### <name>` の見出しは埋め込まない）。既存の内容は保つ。
 #[tokio::test]
 async fn mounted_skills_are_written_into_agents_md() {
     let dir = tempfile::tempdir().unwrap();
@@ -228,27 +256,10 @@ async fn mounted_skills_are_written_into_agents_md() {
     )
     .unwrap();
     let kb = tempfile::tempdir().unwrap();
-    let skill_dir = kb.path().join("rust-review");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-    std::fs::write(
-        skill_dir.join("SKILL.md"),
-        "---\nname: rust-review\ndescription: d\n---\n\nレビューの手順\n",
-    )
-    .unwrap();
-    let config = stub_codex(
-        dir.path(),
-        r#"mkdir -p artifacts
-printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
-echo '{"type":"turn.completed"}'
-"#,
-    );
-    let adapter = CodexAdapter::new(config);
+    let mount = skills_fixture_kb(kb.path(), "rust-review");
+    let adapter = CodexAdapter::new(stub_codex(dir.path(), SKILLS_OK_SCRIPT));
     let mut req = sample_req(dir.path().to_path_buf());
-    req.context.skills = vec![crate::protocol::SkillMount {
-        name: "rust-review".into(),
-        path: skill_dir.display().to_string(),
-        description: "d".into(),
-    }];
+    req.context.skills = vec![mount];
     let sink = RecordingSink::default();
     adapter
         .run(req, "run-skills", default_limits(), &sink)
@@ -258,8 +269,77 @@ echo '{"type":"turn.completed"}'
     assert!(agents_md.contains("# Notes"), "{agents_md}");
     assert!(agents_md.contains("Build with cargo."), "{agents_md}");
     assert!(agents_md.contains("## Skills（celeris）"), "{agents_md}");
-    assert!(agents_md.contains("### rust-review"), "{agents_md}");
-    assert!(agents_md.contains("レビューの手順"), "{agents_md}");
+    assert!(
+        agents_md.contains("- `rust-review` — d（`.agents/skills/rust-review/SKILL.md`）"),
+        "{agents_md}"
+    );
+    assert!(!agents_md.contains("### rust-review"), "{agents_md}");
+    assert!(!agents_md.contains("BODY-MARKER"), "{agents_md}");
+}
+
+/// ADR-0127 D1/D2/D6: codex では skill のディレクトリが付属ファイルまで `.agents/skills/<name>/` に
+/// 丸写しされ、unmount（次の run で `skills` 空）で写しと `AGENTS.md` の節が消える。人が置いた
+/// `.agents/skills/<別名>/`・`.agents/` の他のファイル・`AGENTS.md` の区切りの外には触れない。
+#[tokio::test]
+async fn codex_skills_deliver_sibling_files_and_unmount_keeps_human_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("AGENTS.md"), "# Human notes\n").unwrap();
+    std::fs::create_dir_all(dir.path().join(".agents/skills/human-skill")).unwrap();
+    std::fs::write(
+        dir.path().join(".agents/skills/human-skill/SKILL.md"),
+        "human\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".agents/notes.txt"), "keep\n").unwrap();
+    let kb = tempfile::tempdir().unwrap();
+    let mount = skills_fixture_kb(kb.path(), "shadcn");
+    let adapter = CodexAdapter::new(stub_codex(dir.path(), SKILLS_OK_SCRIPT));
+
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.skills = vec![mount];
+    let sink = RecordingSink::default();
+    adapter
+        .run(req, "run-skills-1", default_limits(), &sink)
+        .await
+        .unwrap();
+    let copy = dir.path().join(".agents/skills/shadcn");
+    assert!(
+        std::fs::read_to_string(copy.join("SKILL.md"))
+            .unwrap()
+            .contains("BODY-MARKER")
+    );
+    assert_eq!(
+        std::fs::read_to_string(copy.join("rules/x.md")).unwrap(),
+        "rule x\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(copy.join("rules/nested/y.md")).unwrap(),
+        "rule y\n"
+    );
+    assert!(copy.join(".gitignore").is_file());
+    let agents_md = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert!(
+        agents_md.contains("`.agents/skills/shadcn/SKILL.md`"),
+        "{agents_md}"
+    );
+    assert!(!agents_md.contains("BODY-MARKER"), "{agents_md}");
+
+    let req = sample_req(dir.path().to_path_buf());
+    adapter
+        .run(req, "run-skills-2", default_limits(), &sink)
+        .await
+        .unwrap();
+    assert!(!copy.exists());
+    let agents_md = std::fs::read_to_string(dir.path().join("AGENTS.md")).unwrap();
+    assert_eq!(agents_md, "# Human notes\n");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".agents/skills/human-skill/SKILL.md")).unwrap(),
+        "human\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".agents/notes.txt")).unwrap(),
+        "keep\n"
+    );
 }
 
 #[tokio::test]
@@ -838,8 +918,10 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
         extra_args: vec!["--sandbox".into(), "read-only".into()],
         model: Some("gpt-5-codex".into()),
         reasoning_effort: None,
-        env: Vec::new(),
-        env_remove: Vec::new(),
+        env: vec![(
+            "CODEX_HOME".into(),
+            dir.path().join("codex-home").to_string_lossy().into_owned(),
+        )],
         container: None,
         resume_mode: CodexResumeMode::default(),
         resume_bypass: CodexResumeBypass::default(),
@@ -1007,51 +1089,7 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
         .unwrap();
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let seen = std::fs::read_to_string(&out_file).unwrap();
-    assert_eq!(seen, "new-account-dir");
-}
-/// ADR-0075 G3-fix1: `with_env_removed` は親から継いだ値（ここでは `HOME`）も設定の `env` の値も子から外し、
-/// その後の `with_env` で足した値は残る。`TieredAdapter` を通しても同じ。
-#[tokio::test]
-async fn with_env_removed_drops_inherited_and_configured_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let out_file = dir.path().join("env-seen.txt");
-    let mut config = CodexConfig {
-        command: {
-            let path = dir.path().join("codex_stub.sh");
-            crate::test_support::write_executable(
-                &path,
-                &format!(
-                    "#!/bin/sh\nmkdir -p artifacts\nprintf '%s' \"${{HOME-unset}}|${{FROM_CONFIG-unset}}|${{LATER-unset}}\" > {out}\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > artifacts/result.json\necho '{{\"type\":\"turn.completed\"}}'\n",
-                    out = out_file.display()
-                ),
-            );
-            path.to_string_lossy().into_owned()
-        },
-        ..CodexConfig::default()
-    };
-    config
-        .env
-        .push(("FROM_CONFIG".to_string(), "x".to_string()));
-    let tiered = crate::tiered::TieredAdapter {
-        base: Arc::new(CodexAdapter::new(config)),
-        account_id: None,
-        credential_error: None,
-        models: Default::default(),
-    };
-    let adapter = tiered
-        .with_env_removed(&["HOME".to_string(), "FROM_CONFIG".to_string()])
-        .expect("codex supports with_env_removed")
-        .with_env(&[("LATER".to_string(), "y".to_string())])
-        .expect("codex supports with_env");
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-env-removed", default_limits(), &sink)
-        .await
-        .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
-    let seen = std::fs::read_to_string(&out_file).unwrap();
-    assert_eq!(seen, "unset|unset|y");
+    assert_eq!(seen, dir.path().join("new-account-dir").to_string_lossy());
 }
 #[tokio::test]
 async fn tier_binding_reaches_cli_model_argument_and_preserves_account_env() {
@@ -1234,6 +1272,86 @@ fn captured_args(dir: &std::path::Path) -> Vec<String> {
         .filter(|s| !s.is_empty())
         .map(str::to_string)
         .collect()
+}
+
+/// ADR-0095 D-b: the same rules are present before both fresh and resumed codex processes start.
+#[tokio::test]
+async fn systemd_deny_rules_are_installed_for_fresh_and_resume() {
+    for resume in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_codex(
+            dir.path(),
+            r#"for a in "$@"; do printf '%s\0' "$a" >> args.log; done
+printf '%s' "$CODEX_HOME" > codex-home-seen
+test -f "$CODEX_HOME/rules/celeris-deny.rules" || exit 19
+mkdir -p artifacts
+printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
+printf '%s\n' '{"type":"turn.completed"}'"#,
+        );
+        config.extra_args = vec!["--approve-for-me".into()];
+        let mut req = sample_req(dir.path().to_path_buf());
+        if resume {
+            req.context.session = Some(crate::protocol::SessionHandle {
+                adapter: CodexAdapter::ID.into(),
+                session_id: "thread-systemd-deny".into(),
+                resume: true,
+            });
+        }
+        let rules_path = dir.path().join("codex-home/rules/celeris-deny.rules");
+        std::fs::create_dir_all(rules_path.parent().unwrap()).unwrap();
+        std::fs::write(&rules_path, "stale rules").unwrap();
+        let outcome = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-systemd-deny",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("codex-home-seen")).unwrap(),
+            dir.path().join("codex-home").to_string_lossy()
+        );
+        let args = captured_args(dir.path());
+        assert_eq!(args.contains(&"resume".to_string()), resume, "{args:?}");
+        if resume {
+            assert!(args.contains(&"approval_policy=\"never\"".to_string()));
+        } else {
+            assert!(args.contains(&"--approve-for-me".to_string()));
+        }
+        assert!(!args.contains(&"--ignore-rules".to_string()));
+        let rules = std::fs::read_to_string(rules_path).unwrap();
+        assert_eq!(rules, systemd_deny_rules());
+        for prefix in SYSTEMD_DENY_PREFIXES {
+            let pattern = serde_json::to_string(prefix).unwrap();
+            assert!(
+                rules.contains(&format!(
+                    "prefix_rule(pattern={pattern}, decision=\"forbidden\""
+                )),
+                "missing {pattern}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn systemd_deny_rejects_ignore_rules_before_spawning_codex() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_codex(dir.path(), "touch spawned");
+    config.extra_args = vec!["--ignore-rules".into()];
+    let err = CodexAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "run-systemd-deny",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("--ignore-rules"));
+    assert!(!dir.path().join("spawned").exists());
 }
 
 /// ADR-0054 D1（Phase 67）: `context.session` が無ければ Phase 66 までと同じ（resume の引数は付かない）。
@@ -1696,10 +1814,6 @@ async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
         &[
             ("CARGO_TARGET_DIR", target.display().to_string()),
             ("CARGO_INCREMENTAL", "0".to_string()),
-            (
-                "SCCACHE_DIR",
-                dir.path().join("scratch/l1").display().to_string(),
-            ),
         ],
     );
     let req = sample_req(dir.path().to_path_buf());
@@ -1713,7 +1827,7 @@ async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
     assert_eq!(
         add_dir_values(&args),
         [artifacts_dir.as_str(), target.to_str().unwrap()],
-        "only the last CARGO_TARGET_DIR is granted; SCCACHE_DIR is server-side: {args:?}"
+        "only the last CARGO_TARGET_DIR is granted: {args:?}"
     );
     assert!(
         target.is_dir(),
@@ -2020,10 +2134,9 @@ async fn phase_112_untranslatable_extra_args_without_bypass_skip_resume_and_run_
     );
 }
 
-/// D1: `resume_bypass = Dangerous` かつ untranslatable なフラグが残るときは、resume はそのまま
-/// 行われ、落とす代わりに `--dangerously-bypass-approvals-and-sandbox` を 1 回だけ足す。
+/// ADR-0095 D-b: `resume_bypass = Dangerous` でも未検証の bypass は使わず fresh に戻す。
 #[tokio::test]
-async fn phase_112_resume_bypass_dangerous_uses_the_bypass_flag_for_untranslatable_extra_args() {
+async fn systemd_deny_disables_dangerous_resume_bypass() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_codex(dir.path(), args_log_script());
     config.extra_args = vec!["--unknown-flag".into()];
@@ -2045,14 +2158,14 @@ async fn phase_112_resume_bypass_dangerous_uses_the_bypass_flag_for_untranslatab
         .await
         .unwrap();
     let args = captured_args(dir.path());
-    assert!(args.contains(&"resume".to_string()), "{args:?}");
+    assert!(!args.contains(&"resume".to_string()), "{args:?}");
     assert!(
-        args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
+        !args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
         "{args:?}"
     );
     assert!(
-        !args.contains(&"--unknown-flag".to_string()),
-        "the untranslatable flag itself must not reach `exec resume`: {args:?}"
+        args.contains(&"--unknown-flag".to_string()),
+        "the fresh run receives the operator flag: {args:?}"
     );
 }
 

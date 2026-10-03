@@ -116,7 +116,8 @@ pub struct PhaseGateRequest {
 /// - Task が `awaiting_human` でなければ `InvalidState`（API は 409）。
 /// - `replan` で `note` が空なら `Validation`（API は 422）。状態は変えない。
 /// - `continue` / `replan` の `note` は `Event::Answered{question:"途中確認: 工程『<phase>』の後", answer}`
-///   として同じトランザクションで残す（次の run のプロンプトの `answers` の節に出る）。
+///   として同じトランザクションで残す（次の run のプロンプトの `answers` の節に出る。`continue` のメモは
+///   [`continue_note_lines`] で続く工程の「人の決定」節にも入る）。
 /// - `withdraw` は既存の `Trigger::Cancel`（後片付けは ADR-0043 D2 の中止のまま）。
 pub fn phase_gate(
     store: &dyn TaskStore,
@@ -204,6 +205,62 @@ pub fn phase_replan_instruction(events: &[(u64, Event)]) -> Option<String> {
         }
         _ => None,
     })
+}
+
+/// 途中確認の continue のメモを D7 の「人の決定」行に揃えたときの、選択の表記。
+pub const CONTINUE_LABEL: &str = "続ける";
+
+/// ADR-0074 付記（2026-10-02）: 途中確認の `continue` に付いた人のメモを、`plan_id` の計画で `stage` の段に
+/// 届ける行（ADR-0079 D7 の回答行と同じ形 `- 途中確認: 工程『<phase>』の後: 続ける — <note>`。古い順）。
+///
+/// 届けるのはメモを付けた段より後の段だけ（段の順は同じ計画の unit の `seq` の最小値）。メモの段が今の計画に
+/// 無い・`stage` が `None`・メモの無い continue は何も返さない。
+pub fn continue_note_lines(
+    events: &[(u64, Event)],
+    units: &[task_core::WorkUnitRow],
+    plan_id: &str,
+    stage: Option<&str>,
+) -> Vec<String> {
+    let Some(stage) = stage else {
+        return Vec::new();
+    };
+    let order = |phase: &str| {
+        units
+            .iter()
+            .filter(|u| u.plan_id == plan_id && u.phase.as_deref() == Some(phase))
+            .map(|u| u.seq)
+            .min()
+    };
+    let Some(target) = order(stage) else {
+        return Vec::new();
+    };
+    let continue_reason = PhaseResumeMode::Continue.name();
+    let mut out = Vec::new();
+    for (idx, (_, e)) in events.iter().enumerate() {
+        if !matches!(e, Event::Transitioned { reason, .. } if reason == continue_reason) {
+            continue;
+        }
+        // 同じトランザクションの `Answered`（遷移の直前か直後。`phase_replan_instruction` と同じ）。
+        let lo = idx.saturating_sub(1);
+        let hi = (idx + 2).min(events.len());
+        let Some((phase, note)) = events[lo..hi].iter().find_map(|(_, e)| match e {
+            Event::Answered { question, answer } => question
+                .strip_prefix(PHASE_GATE_QUESTION_PREFIX)
+                .and_then(|rest| rest.strip_prefix('『'))
+                .and_then(|rest| rest.strip_suffix("』の後"))
+                .map(|phase| (phase, answer.trim())),
+            _ => None,
+        }) else {
+            continue;
+        };
+        if note.is_empty() || order(phase).is_none_or(|from| from >= target) {
+            continue;
+        }
+        out.push(format!(
+            "- {PHASE_GATE_QUESTION_PREFIX}『{phase}』の後: {CONTINUE_LABEL} — {note}"
+        ));
+    }
+    out
 }
 
 #[cfg(test)]

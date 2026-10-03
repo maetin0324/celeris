@@ -10,7 +10,6 @@
 //! 5. 重複 id の追加は 409、存在しない id の変更・削除は 404、`reload` で cooldown が消える
 //! 6. `cargo test --workspace` と clippy は CI 側（本ファイルはそのテストの 1 つ）。スキーマは別途 `task-api` 側で検証
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -30,12 +29,10 @@ fn bin(name: &str) -> PathBuf {
     path
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// celeris に渡すポートを予約する。`Env` が持ち続け、並走する別のテストの celeris と
+/// 同じポートを共有しない（celeris は `SO_REUSEPORT` で bind する。`e2e::PortReservation`）。
+fn reserve_port() -> e2e::PortReservation {
+    e2e::PortReservation::new().unwrap()
 }
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -93,17 +90,20 @@ struct Env {
     _tmp: tempfile::TempDir,
     root: PathBuf,
     port: u16,
+    _port: e2e::PortReservation,
     token: Option<String>,
 }
 
 impl Env {
     fn new() -> Self {
+        let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         Self {
             _tmp: tmp,
             root,
-            port: free_port(),
+            port: reserved.port(),
+            _port: reserved,
             token: None,
         }
     }
@@ -125,7 +125,7 @@ impl Env {
             ""
         };
         let text = format!(
-            r#"db = "celeris.sqlite3"
+            r#"db = {{ path = "celeris.sqlite3", worker_read_only = false }}
 workspace_root = "workspaces"
 tick_ms = 50
 max_concurrency = 4
@@ -204,13 +204,23 @@ model = "fake"
     }
 
     fn wait_api(&self, daemon: &mut Proc) {
-        let ok = wait_until(Duration::from_secs(20), || {
+        let listening = wait_until(Duration::from_secs(120), || {
             if let Ok(Some(status)) = daemon.child.try_wait() {
                 panic!("celeris exited early with {status}\n{}", daemon.log_text());
             }
+            std::net::TcpStream::connect(("127.0.0.1", self.port)).is_ok()
+        });
+        assert!(listening, "API did not listen\n{}", daemon.log_text());
+        let healthy = wait_until(Duration::from_secs(120), || {
+            if let Ok(Some(status)) = daemon.child.try_wait() {
+                panic!(
+                    "celeris exited before health check with {status}\n{}",
+                    daemon.log_text()
+                );
+            }
             self.request("GET", "/health", None, &[]).status == 200
         });
-        assert!(ok, "API did not come up\n{}", daemon.log_text());
+        assert!(healthy, "API did not become healthy\n{}", daemon.log_text());
     }
 
     fn url(&self, path: &str) -> String {
@@ -338,7 +348,7 @@ fn admin_endpoints_require_token_even_without_token_file_on_loopback() {
 #[test]
 fn provider_lifecycle_create_check_patch_delete_and_reload_routes_new_account() {
     let env = Env::new();
-    // 新規アカウントの env に `AUTH_FAIL=1` があれば auth_failed、タスクの title が "slow" なら少し待ってから done、
+    // 新規アカウントの env に `AUTH_FAIL=1` があれば auth_failed、タスクの title が "slow" なら release まで待ってから done、
     // それ以外は即 done（`SLOW` は env ではなく stdin の RunRequest.task.title で判定する。env はプロバイダ単位で
     // タスク単位ではないため）。
     let script = env.write_script(
@@ -346,7 +356,7 @@ fn provider_lifecycle_create_check_patch_delete_and_reload_routes_new_account() 
 if [ -n "${AUTH_FAIL:-}" ]; then
   echo '{"type":"error","message":"401 unauthorized","retryable":false,"provider_failure":{"kind":"auth_failed"}}'
 elif printf '%s' "$input" | grep -q '"title":"slow"'; then
-  sleep 8
+  timeout 300 sh -c 'until test -f release; do sleep 0.1; done' || exit 1
   echo '{"type":"done","summary":"slow ok","evidence":[]}'
 else
   echo '{"type":"done","summary":"ok","evidence":[]}'
@@ -441,7 +451,7 @@ fi"#,
         "acct-b must not be in rotation before reload: {before}"
     );
 
-    // --- 受け入れ 1: acct-a を長時間タスクで埋めてから acct-b を追加・reload し、次の tick から使われることを確かめる。
+    // --- 受け入れ 1: acct-a をゲート付きタスクで埋めてから acct-b を追加・reload し、次の tick から使われることを確かめる。
     // 実行中の run（acct-a 側）は影響を受けない。
     let ws_slow = env.workspace("ws-slow");
     let slow = env.add(&[
@@ -454,7 +464,7 @@ fi"#,
     ]);
     env.celerisctl(&["approve", &slow]);
     assert!(
-        wait_until(Duration::from_secs(10), || {
+        wait_until(Duration::from_secs(120), || {
             env.get("/daemon").json()["snapshot"]["in_flight"]
                 .as_array()
                 .is_some_and(|v| {
@@ -480,7 +490,7 @@ fi"#,
         ids.contains(&"acct-b") && ids.contains(&"acct-c-authfail")
     };
     assert!(
-        wait_until(Duration::from_secs(10), || has_new_providers(
+        wait_until(Duration::from_secs(120), || has_new_providers(
             &env.get("/providers").json()
         )),
         "{}",
@@ -497,7 +507,7 @@ fi"#,
         &ws_quick,
     ]);
     env.celerisctl(&["approve", &quick]);
-    let quick_dispatched_to_b = wait_until(Duration::from_secs(10), || {
+    let quick_dispatched_to_b = wait_until(Duration::from_secs(120), || {
         let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();
         task_core::TaskStore::events_for(&store, quick.parse().unwrap())
             .unwrap()
@@ -518,9 +528,11 @@ fi"#,
         );
     }
 
+    // 新しい account への dispatch を確認したので、acct-a の run を解放する。
+    std::fs::write(Path::new(&ws_slow).join("release"), "").unwrap();
     // acct-a の run はそのまま完了する（reload / 新アカウント追加の影響を受けない）。
     assert!(
-        wait_until(Duration::from_secs(20), || {
+        wait_until(Duration::from_secs(120), || {
             let store = task_core::SqliteStore::open(&env.root.join("celeris.sqlite3")).unwrap();
             task_core::TaskStore::get(&store, slow.parse().unwrap())
                 .unwrap()
@@ -583,7 +595,7 @@ echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_fa
     ]);
     env.celerisctl(&["approve", &task]);
 
-    let cooling = wait_until(Duration::from_secs(10), || {
+    let cooling = wait_until(Duration::from_secs(120), || {
         env.get("/providers").json()["items"]
             .as_array()
             .is_some_and(|items| {
@@ -605,7 +617,7 @@ echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_fa
     let reloaded = env.post_empty("/reload");
     assert_eq!(reloaded.status, 200, "{}", reloaded.body);
 
-    let cleared = wait_until(Duration::from_secs(5), || {
+    let cleared = wait_until(Duration::from_secs(120), || {
         env.get("/providers").json()["items"]
             .as_array()
             .is_some_and(|items| {

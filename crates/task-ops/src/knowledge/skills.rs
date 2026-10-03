@@ -46,10 +46,12 @@ fn skill_dir(root: &Path, name: &str) -> Result<PathBuf, SkillError> {
 }
 
 const SKILLS_ROOT_DIR: &str = "skills";
-const SKILL_FILE: &str = "SKILL.md";
+pub(super) const SKILL_FILE: &str = "SKILL.md";
 
-/// SKILL.md の frontmatter（`---\n...\n---\n`）から `key: value` の行を素直に読む（クォート無し、
-/// 1 行 1 鍵の最小 YAML もどき。KB の front matter とは別の形式なので `kb::front_matter` は使わない）。
+/// SKILL.md の frontmatter（`---\n...\n---\n`）から最上位の `key: value` を読む（KB の front matter
+/// とは別の形式なので `kb::front_matter` は使わない）。ADR-0122 D2: upstream の実形に合わせ、
+/// 字下げの無い行だけを最上位の鍵とし（`metadata:` の入れ子は値を持たない鍵として読む）、
+/// `>` / `|` のブロック値と字下げした継続行を連結し、対になった引用符を外す。原文は書き換えない。
 type SkillFrontmatter = (Vec<(String, String)>, usize, usize);
 
 fn skill_frontmatter(raw: &str) -> Option<SkillFrontmatter> {
@@ -61,14 +63,131 @@ fn skill_frontmatter(raw: &str) -> Option<SkillFrontmatter> {
     let after_open = after_open.strip_prefix('\n').unwrap_or(after_open);
     let close_rel = after_open.find("\n---")?;
     let body = &after_open[..close_rel];
-    let mut fields = Vec::new();
-    for line in body.lines() {
-        if let Some((k, v)) = line.split_once(':') {
-            fields.push((k.trim().to_string(), v.trim().to_string()));
-        }
-    }
     let open_len = raw_trimmed_start.len() - after_open.len();
-    Some((fields, open_len, open_len + close_rel))
+    Some((
+        parse_frontmatter_fields(body),
+        open_len,
+        open_len + close_rel,
+    ))
+}
+
+/// 最上位の鍵の行か（字下げ無し、`#` で始まらない、`key:` の形）。鍵と `:` の後ろを返す。
+fn top_level_key(line: &str) -> Option<(&str, &str)> {
+    if line.starts_with([' ', '\t']) || line.starts_with('#') || line.starts_with('-') {
+        return None;
+    }
+    let (k, v) = line.split_once(':')?;
+    let k = k.trim_end();
+    if k.is_empty() || k.contains(char::is_whitespace) {
+        return None;
+    }
+    // `key:value`（`:` の直後が空白でない）は YAML の鍵ではない。
+    if !(v.is_empty() || v.starts_with([' ', '\t'])) {
+        return None;
+    }
+    Some((k, v.trim()))
+}
+
+fn parse_frontmatter_fields(body: &str) -> Vec<(String, String)> {
+    let lines: Vec<&str> = body.lines().map(|l| l.trim_end_matches('\r')).collect();
+    let mut fields = Vec::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let Some((key, value)) = top_level_key(lines[i]) else {
+            i += 1;
+            continue;
+        };
+        i += 1;
+        let start = i;
+        while i < lines.len() && top_level_key(lines[i]).is_none() && !lines[i].starts_with('#') {
+            i += 1;
+        }
+        let continuation = &lines[start..i];
+        fields.push((key.to_string(), frontmatter_value(value, continuation)));
+    }
+    fields
+}
+
+/// 1 つの鍵の値を組む。`value` は `key:` の後ろ（trim 済み）、`continuation` は次の最上位の鍵までの行。
+fn frontmatter_value(value: &str, continuation: &[&str]) -> String {
+    let indicator = value.chars().next();
+    let is_block = matches!(indicator, Some('>' | '|'))
+        && value[1..]
+            .chars()
+            .all(|c| matches!(c, '-' | '+' | '0'..='9'));
+    if is_block {
+        let folded = indicator == Some('>');
+        let indent = continuation
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .map(|l| l.len() - l.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        let mut out = String::new();
+        let mut prev_blank = true;
+        for line in continuation {
+            if line.trim().is_empty() {
+                out.push('\n');
+                prev_blank = true;
+                continue;
+            }
+            let text = line.get(indent..).unwrap_or_else(|| line.trim_start());
+            if !out.is_empty() && !prev_blank {
+                out.push(if folded { ' ' } else { '\n' });
+            }
+            out.push_str(text);
+            prev_blank = false;
+        }
+        return out.trim().to_string();
+    }
+    let rest: Vec<&str> = continuation
+        .iter()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    // 値が空で入れ子の対応表（`metadata:` の下の `author: …`）・列（`- …`）なら値は持たない。
+    if value.is_empty()
+        && rest
+            .first()
+            .is_some_and(|l| l.starts_with('-') || top_level_key(l).is_some())
+    {
+        return String::new();
+    }
+    let mut joined = value.to_string();
+    for part in rest {
+        if !joined.is_empty() {
+            joined.push(' ');
+        }
+        joined.push_str(part);
+    }
+    unquote(&joined)
+}
+
+/// 前後の対になった `"…"` / `'…'` を外す（`\"` / `\\` / `''` の最小の解釈だけ）。
+fn unquote(value: &str) -> String {
+    let v = value.trim();
+    if v.len() >= 2 && v.starts_with('"') && v.ends_with('"') {
+        let inner = &v[1..v.len() - 1];
+        let mut out = String::with_capacity(inner.len());
+        let mut chars = inner.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                match chars.next() {
+                    Some('n') => out.push('\n'),
+                    Some('t') => out.push('\t'),
+                    Some(other) => out.push(other),
+                    None => out.push('\\'),
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        return out;
+    }
+    if v.len() >= 2 && v.starts_with('\'') && v.ends_with('\'') {
+        return v[1..v.len() - 1].replace("''", "'");
+    }
+    v.to_string()
 }
 
 fn frontmatter_field<'a>(fields: &'a [(String, String)], key: &str) -> Option<&'a str> {
@@ -107,7 +226,8 @@ fn prepare_skill_md(
         if !out.ends_with('\n') {
             out.push('\n');
         }
-        out.push_str(&format!("source: {source}\n"));
+        // `close` は閉じの `\n---` の `\n` を指すので、追記した行の後ろに空行を作らない。
+        out.push_str(&format!("source: {source}"));
         out.push_str(&skill_md[close..]);
         return Ok(out);
     }
@@ -175,6 +295,38 @@ pub fn skill_description(skill_md: &str) -> String {
     skill_frontmatter(skill_md)
         .and_then(|(fields, ..)| frontmatter_field(&fields, "description").map(str::to_string))
         .unwrap_or_default()
+}
+
+/// ADR-0122 D4: skill が届く run の種類。指定が無い場合と未知の値だけの場合は
+/// 従来どおり work に届ける。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillUse {
+    Work,
+    Review,
+}
+
+pub fn skill_applies_to(skill_md: &str, run: SkillUse) -> bool {
+    let uses = skill_frontmatter(skill_md)
+        .and_then(|(fields, ..)| frontmatter_field(&fields, "celeris-use").map(str::to_string));
+    let Some(uses) = uses else {
+        return run == SkillUse::Work;
+    };
+    let mut work = false;
+    let mut review = false;
+    for value in uses.split(',').map(str::trim) {
+        match value {
+            "work" => work = true,
+            "review" => review = true,
+            _ => {}
+        }
+    }
+    if !work && !review {
+        work = true;
+    }
+    match run {
+        SkillUse::Work => work,
+        SkillUse::Review => review,
+    }
 }
 
 /// ADR-0056 D2: `skills/` にある skill の一覧（`name` / frontmatter の `description`）。

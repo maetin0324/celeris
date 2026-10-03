@@ -159,7 +159,10 @@ git -C "$SD_REPO" worktree prune
 # `release-build`）。adopt の安全条件の checkout 時刻は `.build/tree/.git` の mtime。終了時は成功・失敗とも
 # **touch**（release しない。lib.sh の sd_scratch_lease の説明）。lease の TTL は `SD_RELEASE_TARGET_TTL`。
 # celerisctl が無い・scratch が無効なら従来どおり `$SD_RELEASES/.cargo-target`。
-if sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
+if [ "${SD_USE_CALLER_CARGO_TARGET:-0}" = 1 ] && [ -n "${CARGO_TARGET_DIR:-}" ]; then
+  SD_CARGO_TARGET="$CARGO_TARGET_DIR"
+  sd_log "using caller CARGO_TARGET_DIR: $SD_CARGO_TARGET"
+elif sd_scratch_lease "$SD_RELEASE_SCRATCH_OWNER" "$SHA_FULL" "$BUILD"; then
   trap 'rm -f "$GATE_TSV"; sd_scratch_touch' EXIT
 fi
 sd_log "CARGO_TARGET_DIR: $SD_CARGO_TARGET (owner ${SD_SCRATCH_OWNER:-<none: fallback>})"
@@ -181,6 +184,9 @@ export CARGO_TERM_COLOR=never
 # Phase SD-1: 共有 target の fingerprint を呼び出し元の env に左右させない（incremental は profile の一部で、
 # 切り替わると workspace のメンバーを全部作り直す）。`target/*/incremental/` も作らない（ADR-0075 G2 と同じ）。
 export CARGO_INCREMENTAL=0
+# ADR-0079 付記「R7-12」D4: 環境に依存する browser テスト（実 bwrap / Chromium / netns）は、環境が無いと理由を出して
+# 飛ばす（worker の sandbox で無関係な task の受け入れ条件を落とさない）。release では飛ばさない（環境が無ければ失敗）。
+export CELERIS_ISOLATION_TESTS="${CELERIS_ISOLATION_TESTS:-require}"
 
 printf 'step:s exit:i secs:f log:s skipped:b reason:s\n' >"$GATE_TSV"
 GATE_OK=true
@@ -220,6 +226,96 @@ skip_step() {
   if [ "$GATE_OK" != true ]; then return 0; fi
   sd_log "step $name: skipped — $reason"
   printf '%s\t0\t0\t\ttrue\t%s\n' "$name" "$(printf '%s' "$reason" | tr '\t\n' '  ')" >>"$GATE_TSV"
+}
+
+# ---- web/ の段（web ADR-W3 D3、P6-02）: 非 blocking ---------------------------------
+#
+# gui/ の gate の**後ろ**で web/（ADR-0081 の SPA + gateway）の install / typecheck / test / release を回す。
+# 落ちても `GATE_OK` は倒さない（リリースは作られ、昇格は gui/ だけのリリースとして進む）。結果は gate.json の
+# `steps[]`（exit ≠ 0 のまま）と `web`（`ok` / `failed_step` / `blocking: false`）に残し、落ちた段より後ろの
+# web/ の段は `skipped: true` にする。ビルドする sha に `web/` が無い・`SD_GATE_SKIP_WEB=1` なら全部 skipped。
+# 2026-10-02（task 01M3YT4PT3）: node_modules が入らない不具合そのものは bundle_web（web-bundle 段。node_modules の
+# 有無と `node -e 'import.meta.resolve(...); await import("./server/app.js")'` による import 解決）で直り、
+# node_modules が無い・import できないリリースは web.ok=false になって web-follow が切り替えない（ADR-0135）。
+# ただし NFS 上での web/app の展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応で残っている。
+# それを解決するまで既定を skip にするかは人の判断なので、既定は 1（skip）のまま変えない。web の段を走らせるとき
+# は SD_GATE_SKIP_WEB=0 を明示する。
+WEB_OK=true
+WEB_FAILED_STEP=""
+WEB_SKIP_REASON=""
+WEB_STEPS=""
+WEB_PNPM_VERSION=""
+WEB_BUNDLE_JSON="null"
+
+# `web_step <name> <workdir> -- <cmd...>` — run_step と同じ記録だが、失敗しても gate を倒さない。
+web_step() {
+  local name="$1" workdir="$2"
+  shift 2
+  [ "$1" = "--" ] && shift
+  local log="$BUILD/.gate-$name.log" start end secs rc
+  if [ "$GATE_OK" != true ]; then return 0; fi
+  WEB_STEPS="$WEB_STEPS $name"
+  if [ -n "$WEB_SKIP_REASON" ]; then
+    skip_step "$name" "$WEB_SKIP_REASON"
+    return 0
+  fi
+  if [ "$WEB_OK" != true ]; then
+    skip_step "$name" "web stage failed at $WEB_FAILED_STEP (non-blocking)"
+    return 0
+  fi
+  sd_log "step $name (non-blocking): $* (cwd $workdir)"
+  sd_scratch_touch
+  start="$(date +%s.%N)"
+  rc=0
+  ( cd "$workdir" && "$@" ) >"$log" 2>&1 8>&- 9>&- || rc=$?
+  end="$(date +%s.%N)"
+  secs="$(awk -v a="$start" -v b="$end" 'BEGIN { printf "%.3f", b - a }')"
+  printf '%s\t%s\t%s\t%s\tfalse\t\n' "$name" "$rc" "$secs" ".gate-$name.log" >>"$GATE_TSV"
+  if [ "$rc" -eq 0 ]; then
+    sd_log "step $name: exit 0 in ${secs}s"
+  else
+    sd_log "step $name: exit $rc in ${secs}s — see $log (non-blocking: the gui release still proceeds)"
+    tail -n 30 "$log" >&2 || true
+    WEB_OK=false
+    WEB_FAILED_STEP="$name"
+  fi
+}
+
+# web/ の pnpm は `corepack pnpm@<web/package.json の packageManager の版>` に固定する（host の pnpm と gui/ の版に依存しない）。
+# `SD_WEB_PNPM` で丸ごと差し替えられる（テストの偽 corepack もこれで入る）。
+web_pnpm() {
+  if [ -n "${SD_WEB_PNPM:-}" ]; then
+    # shellcheck disable=SC2086
+    $SD_WEB_PNPM "$@"
+  else
+    command -v corepack >/dev/null 2>&1 || { echo "corepack not found in PATH (web stage needs corepack pnpm@$WEB_PNPM_VERSION)" >&2; return 127; }
+    corepack "pnpm@$WEB_PNPM_VERSION" "$@"
+  fi
+}
+
+# `pnpm -C web release`（P6-01）: 配布物の名前にビルドする sha12 を入れる（`web/release/celeris-web-<ver>-<sha12>.tar.gz`）。
+web_pnpm_release() {
+  CELERIS_WEB_RELEASE="$SHA12" web_pnpm release
+}
+
+decide_web_skip() {
+  if [ "${SD_GATE_SKIP_WEB:-1}" = 1 ]; then
+    WEB_SKIP_REASON="SD_GATE_SKIP_WEB=1"
+  elif [ ! -f "$BUILD/web/package.json" ]; then
+    WEB_SKIP_REASON="no web/ directory"
+  else
+    WEB_PNPM_VERSION="$(sd_json_get "$BUILD/web/package.json" packageManager 2>/dev/null | sed -n 's/^pnpm@//p')"
+    [ -n "$WEB_PNPM_VERSION" ] || WEB_SKIP_REASON="web/package.json has no packageManager pnpm@<version>"
+  fi
+  [ -z "$WEB_SKIP_REASON" ] || sd_log "web steps: skipped — $WEB_SKIP_REASON"
+}
+
+web_json() {
+  local steps_json="" n
+  for n in $WEB_STEPS; do steps_json="$steps_json${steps_json:+, }$(sd_json_str "$n")"; done
+  printf '{"ok": %s, "blocking": false, "failed_step": %s, "skipped": %s, "reason": %s, "pnpm": %s, "steps": [%s], "bundle": %s}' \
+    "$WEB_OK" "$(sd_json_str "$WEB_FAILED_STEP")" "$([ -n "$WEB_SKIP_REASON" ] && echo true || echo false)" \
+    "$(sd_json_str "$WEB_SKIP_REASON")" "$(sd_json_str "${WEB_PNPM_VERSION:+pnpm@$WEB_PNPM_VERSION}")" "$steps_json" "$WEB_BUNDLE_JSON"
 }
 
 # Phase 89（ADR-0041 追記）: `pnpm-mobile-audit` / `pnpm-e2e-mock` の前置きチェック。
@@ -313,6 +409,7 @@ write_gate_json() {
     fi
     printf '  "cargo_test": %s,\n' "$(cargo_test_summary_json)"
     printf '  "bundle": %s,\n' "${BUNDLE_JSON:-null}"
+    printf '  "web": %s,\n' "$(web_json)"
     printf '  "steps": %s\n' "$steps"
     printf '}\n'
   } >"$dest"
@@ -421,6 +518,13 @@ run_step pnpm-build "$BUILD/gui" -- pnpm build
 gui_step pnpm-mobile-audit "$BUILD/gui" -- run_pnpm_mobile_audit
 gui_step pnpm-e2e-mock "$BUILD/gui" -- run_pnpm_e2e_mock
 
+# web ADR-W3 D3（P6-02）: web/ の段。gui/ の gate の後ろ、非 blocking（上の web_step）。
+decide_web_skip
+web_step web-pnpm-install "$BUILD/web" -- web_pnpm install --frozen-lockfile
+web_step web-pnpm-typecheck "$BUILD/web" -- web_pnpm typecheck
+web_step web-pnpm-test "$BUILD/web" -- web_pnpm test
+web_step web-pnpm-release "$BUILD/web" -- web_pnpm_release
+
 if [ "$GATE_OK" != true ]; then
   # 作業ツリーは次のリリースが作り直すので、記録は `.build/<sha12>/` に写して残す。
   mkdir -p "$FAILED_DIR"
@@ -512,6 +616,41 @@ install_gui_prod_deps "$STAGE/gui"
 GUI_DEPS_SECS="$(sd_secs_since "$GUI_DEPS_T0")"
 sd_log "gui: prod node_modules ready in ${GUI_DEPS_SECS}s (key $GUI_DEPS_KEY, reused=$GUI_DEPS_REUSED)"
 
+# ---- web/ の配布物（web ADR-W3 D3）: web の段が通ったときだけ。失敗は非 blocking（manifest / gate.json の `web` に残す） ----
+bundle_web() {
+  local tgz dir name
+  [ "$WEB_OK" = true ] && [ -z "$WEB_SKIP_REASON" ] || return 0
+  tgz="$(ls -1 "$BUILD/web/release/celeris-web-"*"-$SHA12.tar.gz" 2>/dev/null | head -n 1)"
+  [ -n "$tgz" ] && [ -f "$tgz" ] || { WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: no tarball under $BUILD/web/release for $SHA12 (non-blocking)"; return 0; }
+  name="$(basename "$tgz" .tar.gz)"
+  mkdir -p "$STAGE/web"
+  cp -p "$tgz" "$STAGE/web/$name.tar.gz"
+  dir="$STAGE/web/app"
+  rm -rf "$dir"
+  mkdir -p "$dir"
+  if ! tar -xzf "$tgz" -C "$dir" --strip-components=1 >"$BUILD/.gate-web-bundle.log" 2>&1; then
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: tar failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  if ! ( cd "$dir" && web_pnpm install --prod --offline --frozen-lockfile ) >>"$BUILD/.gate-web-bundle.log" 2>&1 8>&- 9>&-; then
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: offline prod install failed (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  # pnpm の終了コードだけでは実行可能な app を保証できない。server/index.js は
+  # import 時に listen するため、同じ依存を読む app.js を import して確認する。
+  if [ ! -d "$dir/node_modules/" ]; then
+    printf '%s\n' 'web-bundle: offline prod install did not create a resolvable node_modules directory' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: node_modules missing (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  if ! ( cd "$dir" && node --input-type=module -e 'import.meta.resolve("express"); await import("./server/app.js")' ) >>"$BUILD/.gate-web-bundle.log" 2>&1; then
+    printf '%s\n' 'web-bundle: server dependencies could not be imported without listening' >>"$BUILD/.gate-web-bundle.log"
+    WEB_OK=false; WEB_FAILED_STEP="web-bundle"; sd_log "web-bundle: server dependencies unresolved (non-blocking); see $BUILD/.gate-web-bundle.log"; return 0
+  fi
+  WEB_BUNDLE_JSON="{\"tarball\": $(sd_json_str "web/$name.tar.gz"), \"app\": \"web/app\"}"
+  sd_log "web: bundle ready ($STAGE/web/$name.tar.gz, app at web/app)"
+}
+WEB_BUNDLE_T0="$(sd_now)"
+bundle_web
+WEB_BUNDLE_SECS="$(sd_secs_since "$WEB_BUNDLE_T0")"
+
 SCHEMA_VERSION="$(sd_schema_version_of_tree "$BUILD")" \
   || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store/migrations.rs (or store/mod.rs, store.rs) at $SHA12"
 # `celeris` の版は Cargo.toml から読む（バイナリを起こさない。`--version` は無い）。
@@ -534,6 +673,7 @@ GUI_VERSION="$(sd_json_get "$STAGE/gui/package.json" version || true)"
   printf '  "gui_version": %s,\n' "$(sd_json_str "$GUI_VERSION")"
   printf '  "gui_prod_deps": {"cache_key": %s, "reused": %s, "created_by_sha12": %s},\n' \
     "$(sd_json_str "$GUI_DEPS_KEY")" "$GUI_DEPS_REUSED" "$(sd_json_str "$GUI_DEPS_CREATED_BY")"
+  printf '  "web": %s,\n' "$(web_json)"
   printf '  "gate_ok": true\n'
   printf '}\n'
 } >"$STAGE/manifest.json"
@@ -608,7 +748,7 @@ done
 [ -x "$STAGE/scripts/promote.sh" ] || sd_die "bundled scripts/promote.sh is missing or not executable"
 [ -f "$STAGE/scripts/lib.sh" ] || sd_die "bundled scripts/lib.sh is missing"
 
-BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"gui_prod_deps_secs\": $GUI_DEPS_SECS, \"gui_prod_deps_reused\": $GUI_DEPS_REUSED, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
+BUNDLE_JSON="{\"secs\": $(sd_secs_since "$BUNDLE_T0"), \"gui_prod_deps_secs\": $GUI_DEPS_SECS, \"gui_prod_deps_reused\": $GUI_DEPS_REUSED, \"web_bundle_secs\": $WEB_BUNDLE_SECS, \"release_total_secs\": $(sd_secs_since "$RELEASE_T0")}"
 write_gate_json "$STAGE/gate.json"
 # gate のログも残す（失敗の再現に要る）。
 mkdir -p "$STAGE/gate-logs"

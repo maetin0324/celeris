@@ -198,3 +198,15 @@ fn rank_relays_keeps_config_order_among_reachable_sources() {
         vec!["a", "c"]
     );
 }
+
+#[test]
+fn cheap_only_qwen_tier_selection_ignores_legacy_mappings() {
+    let models = HashMap::from([
+        (Tier::Frontier, "legacy-frontier".to_string()),
+        (Tier::Standard, "legacy-standard".to_string()),
+        (Tier::Cheap, "qwen3.8-27b".to_string()),
+    ]);
+    assert_eq!(qwen_tier_model(&models, Tier::Frontier), None);
+    assert_eq!(qwen_tier_model(&models, Tier::Standard), None);
+    assert_eq!(qwen_tier_model(&models, Tier::Cheap), Some("qwen3.8-27b"));
+}

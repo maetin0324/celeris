@@ -1943,6 +1943,78 @@
       ],
       "type": "object"
     },
+    "ReviewCheckResult": {
+      "description": "daemon が workspace で実行した決定的 check の結果。",
+      "properties": {
+        "cmd": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "criterion": {
+          "description": "acceptance のインデックス。暗黙の条件には無い。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": "string"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "reason": {
+          "description": "daemon 側で末尾 1000 文字に切り詰めた verdict の理由。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "pass",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ReviewDecision": {
+      "description": "人が選んだ決定と、その決定を出した task。",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "description": "選択肢の key。",
+          "type": "string"
+        },
+        "option_label": {
+          "description": "選択肢の表示名。",
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        }
+      },
+      "required": [
+        "task_id",
+        "key",
+        "question",
+        "option",
+        "option_label"
+      ],
+      "type": "object"
+    },
     "ReviewOutput": {
       "description": "`Review` run がワークスペース直下 `artifacts/review.json` に書く出力（ADR-0007 D1/D5）。",
       "properties": {
@@ -1984,12 +2056,33 @@
     "ReviewRequest": {
       "description": "`Reviewer` check のための `context.review`（ADR-0007 D5）。`RunRequest.task` は合成した `Review` kind の\nタスクで、対象タスクの `run` の `done` の内容と、判定すべき条件のインデックスを渡す。",
       "properties": {
+        "answers": {
+          "description": "対象 task と祖先への人の回答（ADR-0117 D1）。",
+          "items": {
+            "$ref": "#/$defs/Answer"
+          },
+          "type": "array"
+        },
+        "checks": {
+          "description": "同じ review で先に workspace で実行した決定的 check（ADR-0117 D2）。",
+          "items": {
+            "$ref": "#/$defs/ReviewCheckResult"
+          },
+          "type": "array"
+        },
         "criteria": {
           "description": "判定すべき `task.acceptance` のインデックス（`Check::Reviewer` の条件）。",
           "items": {
             "format": "uint",
             "minimum": 0,
             "type": "integer"
+          },
+          "type": "array"
+        },
+        "decisions": {
+          "description": "対象 task と祖先で回答済みの人の決定（ADR-0117 D1）。",
+          "items": {
+            "$ref": "#/$defs/ReviewDecision"
           },
           "type": "array"
         },
@@ -2316,7 +2409,7 @@
           "type": "array"
         },
         "skills": {
-          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。届け方はアダプタごと（`claude-code` は `.claude/skills/<name>/`\nへコピー、`codex` は `AGENTS.md` の節、`acp` は前置きに埋め込む）。研究系アダプタ\n（paperqa / local-deep-research / langmem）は無視する。空なら省略され、前置き・作業場所は\nPhase 78 までと 1 バイトも変わらない。",
+          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。ADR-0127: `claude-code` は `.claude/skills/<name>/`、\n`codex`・`acp` は `.agents/skills/<name>/` へ付属ファイルごとコピーする。後者の\n`AGENTS.md` 節・前置きには名前・説明・SKILL.md の相対パスだけを載せる。\n研究系アダプタ（paperqa / local-deep-research / langmem）は無視する。\n空ならコピーを掃除し、以前の `AGENTS.md` の celeris 節も取り除く。",
           "items": {
             "$ref": "#/$defs/SkillMount"
           },

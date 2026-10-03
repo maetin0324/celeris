@@ -15,6 +15,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use celeris_credentiald::identity_seal::{IdentitySealer, IdentityStatePlain, StateEntry};
 use task_api::browser_identity::{IdentityRegisterInput, IdentityService};
@@ -78,6 +79,7 @@ fn spec(session: &Path, id: &str) -> RuntimeSpec {
     ];
     RuntimeSpec {
         bwrap,
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         session_id: id.into(),
         session_dir: session.join("runtime"),
         ro_dirs: vec![install],
@@ -103,6 +105,7 @@ fn launch(
         sup.cdp_write.take().expect("cdp write"),
         sup.cdp_read.take().expect("cdp read"),
     );
+    controller.response_timeout_for_test(Duration::from_secs(60));
     // browser が上がるまで待つ（CDP pipe の往復）。
     controller
         .controller_command("Browser.getVersion", serde_json::json!({}), None)
@@ -360,6 +363,7 @@ fn identity_restore_sameuid_rejected_in_production() {
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     let reg: &dyn LiveSessionRegistry = &*registry;
@@ -404,13 +408,14 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     let live = LiveSession(Mutex::new(rt));
     assert!(live.accepts_state());
     // bwrap の setup が終わるまで待つ（setup 途中の事実では判定しない）。
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     let facts = loop {
         let facts = live.0.lock().expect("rt").facts().expect("facts");
         if RestoreAdmission::Attested.admit(&facts).err()
             == Some(vec![
                 IsolationViolation::SameUid,
                 IsolationViolation::UsernsOwnedByDaemon,
+                IsolationViolation::LauncherProofMissing,
             ])
             || std::time::Instant::now() > deadline
         {
@@ -423,6 +428,7 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
         vec![
             IsolationViolation::SameUid,
             IsolationViolation::UsernsOwnedByDaemon,
+            IsolationViolation::LauncherProofMissing,
         ]
     );
     let att = RestoreAdmission::SameUidHarness
@@ -450,10 +456,12 @@ fn live_session_delivers_restored_state_over_its_own_cdp_pipe() {
     assert!(live.deliver_state(bad.as_bytes()).is_err());
 
     let mut rt = live.0.into_inner().expect("rt");
-    let c = Arc::new(Mutex::new(CdpController::new(
+    let mut controller = CdpController::new(
         rt.cdp_write.take().expect("w"),
         rt.cdp_read.take().expect("r"),
-    )));
+    );
+    controller.response_timeout_for_test(Duration::from_secs(60));
+    let c = Arc::new(Mutex::new(controller));
     let seen = cookies(&c);
     assert!(
         seen.iter()

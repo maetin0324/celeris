@@ -657,7 +657,7 @@ async fn retry_run_escalates_mode_and_iterations_and_redacts_secrets() {
 /// 入力 JSON の組み立てを argv 経由で確認する: `query`/`mode`/`settings`（`model` が `llm.model` を
 /// 上書き）/`iterations`/`questions_per_iteration`/`report_path`（ADR-0029 D1）。
 #[tokio::test]
-async fn input_json_is_composed_exactly() {
+async fn provider_kind_ldr_passes_proxy_model_in_input_json() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_ldr(
         dir.path(),
@@ -673,7 +673,7 @@ async fn input_json_is_composed_exactly() {
         ("llm.model".to_string(), "should-be-overridden".to_string()),
         ("search.tool".to_string(), "searxng".to_string()),
     ];
-    config.model = Some("qwen3.8-27b".to_string());
+    config.model = Some("celeris/cheap".to_string());
     // このテストは入力 JSON の組み立てを見るだけで、証拠ゲート（ADR-0031 D2）とは無関係なので無効にする
     // （スタブの CELERIS_RESULT に counts が無い）。
     config.evidence = EvidenceThresholds {
@@ -703,7 +703,7 @@ async fn input_json_is_composed_exactly() {
     assert_eq!(seen["settings"]["llm.provider"], "openai_endpoint");
     assert_eq!(seen["settings"]["search.tool"], "searxng");
     // `model` が `settings` の `llm.model` を上書きする。
-    assert_eq!(seen["settings"]["llm.model"], "qwen3.8-27b");
+    assert_eq!(seen["settings"]["llm.model"], "celeris/cheap");
     assert!(
         seen["report_path"]
             .as_str()
@@ -2000,7 +2000,7 @@ with tempfile.TemporaryDirectory() as d:
     payload = {
         "query": "what is the capital of France?",
         "mode": "detailed",
-        "settings": {"llm.provider": "openai_endpoint", "llm.model": "qwen3.8-27b"},
+        "settings": {"llm.provider": "openai_endpoint", "llm.model": "celeris/cheap"},
         "iterations": 1,
         "questions_per_iteration": 1,
         "report_path": report_path,
@@ -2046,7 +2046,7 @@ print(json.dumps({
         values["overrides_passed_to_snapshot"],
         serde_json::json!({
             "llm.provider": "openai_endpoint",
-            "llm.model": "qwen3.8-27b",
+            "llm.model": "celeris/cheap",
             "search.iterations": 1,
             "search.questions_per_iteration": 1,
         })
@@ -2068,7 +2068,7 @@ print(json.dumps({
         values["settings_snapshot_value"],
         serde_json::json!({"snapshot": true, "from_overrides": {
             "llm.provider": "openai_endpoint",
-            "llm.model": "qwen3.8-27b",
+            "llm.model": "celeris/cheap",
             "search.iterations": 1,
             "search.questions_per_iteration": 1,
         }})

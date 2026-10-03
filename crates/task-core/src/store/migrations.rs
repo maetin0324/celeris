@@ -76,10 +76,20 @@ pub(crate) const MIGRATION_0035: &str =
 /// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
 pub(crate) const MIGRATION_0036: &str =
     include_str!("../../migrations/0036_browser_trusted_login.sql");
+/// ADR-0121 付記: `idx_events_delivery_skipped`（受信箱の delivery_skipped 走査を絞る部分 index）。
+pub(crate) const MIGRATION_0037: &str =
+    include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
+/// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor`（通知の既読と束ね）。
+pub(crate) const MIGRATION_0041: &str = include_str!("../../migrations/0041_feed_notices.sql");
+
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
+/// 0039 cron_jobs / write_sets、0040 behind_targets）。`migrate` は飛ばし、`schema_migrations` にも記録しない。統合で本物の
+/// migration が入ったら、ここから外して `migration_sql` に足す（記録が無いので後から当たる）。
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 36;
+pub const SCHEMA_VERSION: u32 = 41;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -120,6 +130,8 @@ impl SqliteStore {
             34 => Ok(MIGRATION_0034),
             35 => Ok(MIGRATION_0035),
             36 => Ok(MIGRATION_0036),
+            37 => Ok(MIGRATION_0037),
+            41 => Ok(MIGRATION_0041),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

@@ -48,6 +48,43 @@ pub struct ReviewRequest {
     pub evidence: Vec<Evidence>,
     /// 判定すべき `task.acceptance` のインデックス（`Check::Reviewer` の条件）。
     pub criteria: Vec<usize>,
+    /// 対象 task と祖先で回答済みの人の決定（ADR-0117 D1）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub decisions: Vec<ReviewDecision>,
+    /// 対象 task と祖先への人の回答（ADR-0117 D1）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub answers: Vec<Answer>,
+    /// 同じ review で先に workspace で実行した決定的 check（ADR-0117 D2）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<ReviewCheckResult>,
+}
+
+/// 人が選んだ決定と、その決定を出した task。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReviewDecision {
+    pub task_id: TaskId,
+    pub key: String,
+    pub question: String,
+    /// 選択肢の key。
+    pub option: String,
+    /// 選択肢の表示名。
+    pub option_label: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// daemon が workspace で実行した決定的 check の結果。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReviewCheckResult {
+    /// acceptance のインデックス。暗黙の条件には無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub criterion: Option<usize>,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cmd: Option<String>,
+    pub pass: bool,
+    /// daemon 側で末尾 1000 文字に切り詰めた verdict の理由。
+    pub reason: String,
 }
 
 /// 以前の `question` への人間の回答（`context.answers[]`。ADR-0010 D3, P-10）。
@@ -495,10 +532,11 @@ pub struct RunContext {
     /// ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の
     /// `skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。
     /// 見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く
-    /// （このフィールドには乗らない）。届け方はアダプタごと（`claude-code` は `.claude/skills/<name>/`
-    /// へコピー、`codex` は `AGENTS.md` の節、`acp` は前置きに埋め込む）。研究系アダプタ
-    /// （paperqa / local-deep-research / langmem）は無視する。空なら省略され、前置き・作業場所は
-    /// Phase 78 までと 1 バイトも変わらない。
+    /// （このフィールドには乗らない）。ADR-0127: `claude-code` は `.claude/skills/<name>/`、
+    /// `codex`・`acp` は `.agents/skills/<name>/` へ付属ファイルごとコピーする。後者の
+    /// `AGENTS.md` 節・前置きには名前・説明・SKILL.md の相対パスだけを載せる。
+    /// 研究系アダプタ（paperqa / local-deep-research / langmem）は無視する。
+    /// 空ならコピーを掃除し、以前の `AGENTS.md` の celeris 節も取り除く。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillMount>,
     // ---- ADR-0056 D3（Phase 79）: ここまで ----

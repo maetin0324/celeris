@@ -2,7 +2,7 @@
 //! DESIGN.md §4-§5.1 のスコープ。LLM呼び出し・サブプロセス起動は行わない（ADR-0001 D2）。
 
 pub mod delivery;
-pub use delivery::{Delivery, DeliveryState, DeliveryStore};
+pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
@@ -42,6 +42,8 @@ pub mod execution_gate;
 pub mod execution_metrics;
 /// ADR-0072（Phase E2）: ExecutionPlan / WorkUnit のデータモデルと決定的な scheduler の純粋な型と関数。
 pub mod execution_plan;
+/// ADR-0133 D3: 通知（アプリ内の知らせ。既読と束ね）。`notify`（外部への送り出し）とは別。
+pub mod feed;
 /// ADR-0046 D3（Phase 59）: ハーネス = 実行契約（`[[harnesses]]`。旧 `[[genres]]` + `[[roles]]`）。
 pub mod harness;
 /// ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）。
@@ -70,6 +72,7 @@ pub mod plan;
 pub mod profile;
 /// ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）の schema と検証。
 pub mod project_plan;
+pub mod provider_source;
 pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
@@ -143,11 +146,16 @@ pub use model::{
 pub mod pricing;
 pub mod routing;
 pub use pricing::{estimate_cost_usd, output_input_ratio};
+pub use provider_source::{LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
 pub use node_session::{NodeSession, NodeSessionStore, SessionKind};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
+pub use feed::{
+    Notice, NoticeEvent, NoticeId, NoticeKind, NoticeLink, NoticePage, NoticeQuery,
+    NoticeRecordOutcome, NoticeStore, NoticeTarget, NoticeUnreadCount,
+};
 pub use mcp::{
     McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,
     scopes_to_string,
@@ -184,9 +192,9 @@ pub use repos::{
 };
 pub use store::{
     ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
-    ListFilter, ListOrder, Page, ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION,
-    SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
-    event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
+    ListFilter, ListOrder, LockCounts, Page, ProjectPlanApply, ProjectPlanMilestoneChange,
+    SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption,
+    backup_database, event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
@@ -195,8 +203,8 @@ pub use execution::{
     CHECKPOINT_SCHEMA, Checkpoint, CheckpointArtifactRef, CheckpointContext, CheckpointDecision,
     CheckpointEnd, CheckpointFileChange, CheckpointKnownFailure, CheckpointSource,
     CheckpointTestRun, ContinueWhy, FailedCheck, HarnessErrorClass, MechanicalCheckpoint,
-    RepairClass, RepairDecision, RepoState, ReviewRepairHint, ReviewerRepairKind, RunEnd,
-    WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
+    RepairClass, RepairDecision, RepairScope, RepoState, ReviewRepairHint, ReviewerRepairKind,
+    RunEnd, WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
     classify_review_failure, looks_like_context_exceeded, merge_checkpoint,
     parse_worker_checkpoint, truncate_checkpoint,
 };

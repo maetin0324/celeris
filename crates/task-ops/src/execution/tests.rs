@@ -1257,3 +1257,357 @@ fn replan_adding_units_to_integrated_stages_reopens_their_integrations() {
     );
     replay_is_clean(&store);
 }
+
+/// ADR-0079 付記「R7-12」（本番 01M3WZ1GEPC670GED0TYAXSGDF の再現）: /3 の計画（design / impl / verify）がすべて done
+/// → 配送が main の移動で task を開き直し、配送の repair WU `repair-2`（`kind = repair`、`phase: None`、計画の spec に
+/// 無い。`crates/celeris/src/delivery.rs` と同じ行・event）を足して done → 再レビューの不合格 → planner の replan が
+/// repair-2 を書かない。修正前は「done work unit repair-2 must not change on replan」で毎回拒否された。
+/// 修正後は採用され、repair-2 の行は触れられずに残り（done、元の `plan_id` / `seq`）、replay も planner の行を同じに作る。
+/// 人の PUT（origin human）の replan も同じく通る。repair-2 を計画に書いた replan は検証の理由で拒む。
+#[test]
+fn replan_after_a_done_delivery_repair_unit_without_a_phase_is_adopted() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let limits = ExecutionLimits {
+        tree: task_core::TreeLimits {
+            enabled: true,
+            ..task_core::TreeLimits::default()
+        },
+        ..ExecutionLimits::default()
+    };
+    let leaf = |key: &str, stage: &str, deps: &[&str]| {
+        serde_json::json!({
+            "key": key,
+            "stage": stage,
+            "kind": "implement",
+            "title": format!("leaf {key}"),
+            "objective": format!("objective of leaf {key} that is distinct"),
+            "depends_on": deps,
+            "checks": [{"cmd": "true", "expect_exit": 0}],
+        })
+    };
+    let plan = |rationale: &str, units: Vec<serde_json::Value>| -> ExecutionPlanSpec {
+        serde_json::from_value(serde_json::json!({
+            "schema": task_core::EXECUTION_PLAN_SCHEMA_V3,
+            "rationale": rationale,
+            "stages": [
+                {"key": "design", "kind": "design", "title": "design"},
+                {"key": "impl", "kind": "implement", "title": "implement"},
+                {"key": "verify", "kind": "test", "title": "verify"},
+            ],
+            "units": units,
+        }))
+        .unwrap()
+    };
+    let v1_units = || {
+        vec![
+            leaf("adr", "design", &[]),
+            leaf("daemon-gate", "impl", &[]),
+            leaf("web-unit", "impl", &[]),
+            leaf("verify-all", "verify", &[]),
+        ]
+    };
+    let v1 = adopt_plan(
+        &store,
+        task.id,
+        plan("v1", v1_units()),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    for key in [
+        "adr",
+        "integrate-design",
+        "daemon-gate",
+        "web-unit",
+        "integrate-impl",
+        "verify-all",
+        "integrate-verify",
+    ] {
+        mark_done(&store, task.id, key);
+    }
+
+    // 配送の repair WU（delivery.rs の「計画がある」枝と同じ: active な計画の id、seq は続き、ready、
+    // `WorkUnitTransitioned{pending → ready, "delivery_repair"}`）。その後 done。
+    let units = store.work_units_for(task.id).unwrap();
+    let seq = units.iter().map(|u| u.seq).max().unwrap_or(0) + 1;
+    let mut repair_spec = wu("repair-2", &[]);
+    repair_spec.kind = WorkUnitKind::Repair;
+    repair_spec.title = "repair (other): 配送の局所修復".to_string();
+    repair_spec.budget = Some(task_core::WorkUnitBudget {
+        max_turns: Some(20),
+        max_wall_secs: Some(1800),
+    });
+    let repair = task_core::WorkUnitRow::new(
+        task_core::new_id(),
+        task.id.to_string(),
+        v1.id.clone(),
+        seq,
+        repair_spec,
+        WorkUnitStatus::Ready,
+        "2026-10-02T00:00:00Z".to_string(),
+    );
+    assert_eq!(repair.phase, None);
+    store
+        .work_units_apply(
+            task.id,
+            vec![repair.clone()],
+            vec![],
+            vec![Event::WorkUnitTransitioned {
+                work_unit_id: repair.id.clone(),
+                key: repair.key.clone(),
+                from: WorkUnitStatus::Pending,
+                to: WorkUnitStatus::Ready,
+                reason: "delivery_repair".into(),
+                run_id: None,
+            }],
+        )
+        .unwrap();
+    mark_done(&store, task.id, "repair-2");
+
+    // planner の replan（done の unit を書き写し、verify に flaky test を直す unit を足す。repair-2 は書かない）。
+    let mut v2_units = v1_units();
+    v2_units.push(leaf("fix-flake", "verify", &[]));
+    let (_, diff) = replan(
+        &store,
+        task.id,
+        plan("v2: fix the flaky browser test", v2_units.clone()),
+        "replan (planner run)".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .expect("the delivery repair unit must not block the planner's replan");
+    assert_eq!(diff.added, vec!["fix-flake"]);
+    assert!(diff.removed.is_empty(), "{diff:?}");
+    assert_eq!(diff.reopened_stages, vec!["verify"]);
+
+    let rows = store.work_units_for(task.id).unwrap();
+    let row = |key: &str| rows.iter().find(|u| u.key == key).unwrap().clone();
+    let kept = row("repair-2");
+    assert_eq!(kept.status, WorkUnitStatus::Done);
+    assert_eq!(kept.plan_id, v1.id, "the row is carried untouched");
+    assert_eq!(kept.seq, seq);
+    assert_eq!(kept.phase, None);
+    assert_eq!(row("fix-flake").status, WorkUnitStatus::Ready);
+    assert_eq!(row("integrate-verify").status, WorkUnitStatus::Pending);
+
+    // replay: planner の行・統合 WU・計画の版は stored と一致する。daemon の repair WU の行は spec を運ぶ event が無いので
+    // replay は作らない（従来からの既知の差。ADR-0079 R7-12「残したもの」）。差はそれだけで、replan はその行に触れない。
+    let check_replay = |store: &SqliteStore| {
+        let (wu_mm, run_mm, plan_mm, applied) =
+            crate::replay::check_and_apply_execution(store, false).unwrap();
+        assert!(
+            wu_mm
+                .iter()
+                .all(|m| m.key == "repair-2" && m.field == "presence"),
+            "{wu_mm:?}"
+        );
+        assert!(run_mm.is_empty(), "{run_mm:?}");
+        assert!(plan_mm.is_empty(), "{plan_mm:?}");
+        assert_eq!(applied, 0);
+    };
+    check_replay(&store);
+
+    // planner が repair-2 を計画に書いた（段階を付けて写した）replan は、done の行を ready に戻さず検証の理由で拒む。
+    let mut writes_it = v2_units.clone();
+    let mut copied = leaf("repair-2", "verify", &[]);
+    copied["kind"] = serde_json::json!("repair");
+    writes_it.push(copied);
+    let err = replan(
+        &store,
+        task.id,
+        plan("v3: copy the delivery repair", writes_it),
+        "replan (planner run)".to_string(),
+        PlanOrigin::Planner,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(&err, OpsError::Validation(m) if m.contains("repair-2") && m.contains("R7-12")),
+        "{err:?}"
+    );
+    assert_eq!(
+        store
+            .work_units_for(task.id)
+            .unwrap()
+            .iter()
+            .find(|u| u.key == "repair-2")
+            .unwrap()
+            .status,
+        WorkUnitStatus::Done
+    );
+
+    // 人の PUT（origin human）の replan も repair-2 を書かずに通る。
+    let mut v3_units = v2_units;
+    v3_units.push(leaf("note", "verify", &[]));
+    replan(
+        &store,
+        task.id,
+        plan("v3: human adds a note", v3_units),
+        "PUT /tasks/{id}/execution-plan".to_string(),
+        PlanOrigin::Human,
+        None,
+        limits,
+        OffsetDateTime::now_utc(),
+    )
+    .expect("a human replan omitting the delivery repair unit is adopted");
+    let rows = store.work_units_for(task.id).unwrap();
+    let kept = rows.iter().find(|u| u.key == "repair-2").unwrap();
+    assert_eq!(kept.status, WorkUnitStatus::Done);
+    assert_eq!(kept.plan_id, v1.id);
+    check_replay(&store);
+}
+
+/// ADR-0134 D1 の場面を作る: 段 `design` の `a` が done、統合 `integrate-design` が失敗して daemon が統合の
+/// repair WU `repair-design-1` を足し（統合 WU はそれに依存して pending）、repair WU は `status` /
+/// `blocked_reason` で止まっている。その後、planner が同じ段に同じ内容を直す葉 `a-fix` を足した replan を出す。
+fn replan_with_daemon_repair(
+    status: WorkUnitStatus,
+    blocked_reason: Option<task_core::WorkUnitBlockedReason>,
+) -> (SqliteStore, TaskId, ReplanDiff) {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task();
+    store.insert(&task).unwrap();
+    let v1 = adopt_plan(
+        &store,
+        task.id,
+        spec_v2_two_phases(),
+        PlanOrigin::Human,
+        None,
+        ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    mark_done(&store, task.id, "a");
+    let integ = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|u| u.key == "integrate-design")
+        .unwrap();
+    let mut repair_spec = wu("repair-design-1", &[]);
+    repair_spec.kind = WorkUnitKind::Repair;
+    repair_spec.phase = Some("design".to_string());
+    let mut repair = task_core::WorkUnitRow::new(
+        "wu-repair-design-1".to_string(),
+        task.id.to_string(),
+        v1.id.clone(),
+        integ.seq,
+        repair_spec,
+        status,
+        "2026-10-02T00:00:00Z".to_string(),
+    );
+    repair.blocked_reason = blocked_reason;
+    let mut pending_integ = integ.clone();
+    pending_integ.status = WorkUnitStatus::Pending;
+    pending_integ.depends_on.push("repair-design-1".to_string());
+    pending_integ
+        .spec
+        .depends_on
+        .push("repair-design-1".to_string());
+    store
+        .work_units_apply(task.id, vec![repair], vec![pending_integ], vec![])
+        .unwrap();
+
+    let mut new_spec = spec_v2_two_phases();
+    let mut fix = wu("a-fix", &["a"]);
+    fix.objective = "fix the e2e assertion the repair unit could not reach".to_string();
+    fix.phase = Some("design".to_string());
+    new_spec.work_units.insert(1, fix);
+    let (_, diff) = replan(
+        &store,
+        task.id,
+        new_spec,
+        "add a-fix for the out-of-scope file".to_string(),
+        PlanOrigin::Planner,
+        None,
+        ExecutionLimits::default(),
+        OffsetDateTime::now_utc(),
+    )
+    .expect("the replan adding a-fix is adopted");
+    (store, task.id, diff)
+}
+
+fn assert_blocked_repair_superseded(reason: task_core::WorkUnitBlockedReason) {
+    let (store, task_id, diff) = replan_with_daemon_repair(WorkUnitStatus::Blocked, Some(reason));
+    assert_eq!(diff.removed, vec!["repair-design-1".to_string()]);
+    assert_eq!(diff.added, vec!["a-fix".to_string()]);
+    let units = store.work_units_for(task_id).unwrap();
+    let get = |k: &str| units.iter().find(|u| u.key == k).unwrap();
+    let repair = get("repair-design-1");
+    assert_eq!(repair.status, WorkUnitStatus::Superseded);
+    assert_eq!(repair.blocked_reason, None);
+    // 新しい葉が先に走れる。統合 WU は残り、superseded の repair WU を待たない。
+    assert_eq!(get("a-fix").status, WorkUnitStatus::Ready);
+    let integ = get("integrate-design");
+    assert_eq!(integ.status, WorkUnitStatus::Pending);
+    assert!(
+        !integ.depends_on.iter().any(|d| d == "repair-design-1"),
+        "{:?}",
+        integ.depends_on
+    );
+    assert!(integ.depends_on.iter().any(|d| d == "a-fix"));
+    assert!(!integ.spec.depends_on.iter().any(|d| d == "repair-design-1"));
+    let events = store.events_for(task_id).unwrap();
+    assert!(events.iter().any(|(_, e)| matches!(
+        e,
+        Event::WorkUnitTransitioned { key, from, to, reason, .. }
+            if key == "repair-design-1"
+                && *from == WorkUnitStatus::Blocked
+                && *to == WorkUnitStatus::Superseded
+                && reason == "replan v2"
+    )));
+
+    // 葉が done になれば、段の統合 WU の依存はすべて done（再統合できる）。
+    mark_done(&store, task_id, "a-fix");
+    let units = store.work_units_for(task_id).unwrap();
+    let integ = units.iter().find(|u| u.key == "integrate-design").unwrap();
+    assert!(integ.depends_on.iter().all(|d| {
+        units
+            .iter()
+            .any(|u| &u.key == d && u.status == WorkUnitStatus::Done)
+    }));
+}
+
+/// ADR-0134 D1: daemon が足した repair WU が blocked(plan_issue) なら、段が新しい版に残っても superseded。
+#[test]
+fn blocked_repair_superseded_on_plan_issue() {
+    assert_blocked_repair_superseded(task_core::WorkUnitBlockedReason::PlanIssue);
+}
+
+/// ADR-0134 D1: blocked(limit) も同じ。
+#[test]
+fn blocked_repair_superseded_on_limit() {
+    assert_blocked_repair_superseded(task_core::WorkUnitBlockedReason::Limit);
+}
+
+/// ADR-0134 D1 の対照: ready・blocked(question)・failed の repair WU と統合 WU は今のまま持ち越す（F5-fix）。
+#[test]
+fn blocked_repair_superseded_not_for_live_repair_units() {
+    for (status, reason) in [
+        (WorkUnitStatus::Ready, None),
+        (
+            WorkUnitStatus::Blocked,
+            Some(task_core::WorkUnitBlockedReason::Question),
+        ),
+        (WorkUnitStatus::Failed, None),
+    ] {
+        let (store, task_id, diff) = replan_with_daemon_repair(status, reason);
+        assert!(diff.removed.is_empty(), "{status:?}: {:?}", diff.removed);
+        let units = store.work_units_for(task_id).unwrap();
+        let get = |k: &str| units.iter().find(|u| u.key == k).unwrap();
+        let repair = get("repair-design-1");
+        assert_eq!(repair.status, status);
+        assert_eq!(repair.blocked_reason, reason);
+        let integ = get("integrate-design");
+        assert_ne!(integ.status, WorkUnitStatus::Superseded);
+        assert!(integ.depends_on.iter().any(|d| d == "repair-design-1"));
+    }
+}

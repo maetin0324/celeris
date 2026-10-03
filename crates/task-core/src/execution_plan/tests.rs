@@ -2313,3 +2313,120 @@ fn v3_json_rejects_unknown_fields_and_parses_review() {
     v["stages"][0]["review"] = serde_json::json!("sometimes");
     assert!(serde_json::from_value::<ExecutionPlanSpec>(v).is_err());
 }
+
+/// ADR-0079 付記「R7-12」D1/D3（本番 01M3WZ1GEPC670GED0TYAXSGDF の再現）: /3 の計画がすべて done の後に配送が足した
+/// repair WU（`kind = repair`、`phase: None`、計画の spec に無い）が done。dispatcher と同じ順（`replan_done_work_units` →
+/// `carry_done_units_v3` → `validate_with` → `daemon_added_key_errors`）で、planner がその WU を書かない replan が通る。
+/// 書けば検証の理由（`DaemonAddedKeyReused`）で返す。planner が自分で書いた repair の unit は従来どおり planner の WU。
+#[test]
+fn replan_skips_a_done_delivery_repair_unit_without_a_phase() {
+    let stage = |key: &str| StageSpec {
+        key: key.into(),
+        kind: WorkUnitKind::Implement,
+        title: key.into(),
+        review: StageReview::None,
+    };
+    let active = ExecutionPlanSpec {
+        schema: EXECUTION_PLAN_SCHEMA_V3.into(),
+        rationale: "v1".into(),
+        stages: vec![stage("design"), stage("impl"), stage("verify")],
+        units: vec![
+            leaf("adr", "design"),
+            leaf("daemon-gate", "impl"),
+            leaf("verify-all", "verify"),
+        ],
+        ..plan(vec![])
+    };
+    let validated = validate_with(&active, tree_on(), &[], PlanContext::default()).expect("v1");
+    let mut rows = materialize_work_units(
+        "t",
+        "p1",
+        &validated.spec,
+        &validated.topological_order,
+        "2026-10-02T00:00:00Z",
+        &mut |w| format!("id-{}", w.key),
+    );
+    for r in rows.iter_mut() {
+        r.status = WorkUnitStatus::Done;
+    }
+    // 配送の repair WU（`crates/celeris/src/delivery.rs` と同じ形）。
+    let mut repair_spec = spec("repair-2", &[]);
+    repair_spec.kind = WorkUnitKind::Repair;
+    repair_spec.title = "repair (other): 配送の局所修復".into();
+    assert_eq!(repair_spec.phase, None);
+    let repair = WorkUnitRow::new(
+        "id-repair-2".into(),
+        "t".into(),
+        "p1".into(),
+        rows.len() as u32,
+        repair_spec,
+        WorkUnitStatus::Done,
+        "2026-10-02T01:00:00Z".into(),
+    );
+    rows.push(repair.clone());
+
+    assert!(is_daemon_added_work_unit(&validated.spec, &repair));
+    let done = replan_done_work_units(&validated.spec, &rows);
+    assert!(
+        done.iter().all(|(k, _)| k != "repair-2"),
+        "the delivery repair is not a planner-owned done unit: {done:?}"
+    );
+    let done_keys: BTreeSet<String> = done.iter().map(|(k, _)| k.clone()).collect();
+
+    // planner の replan: done の unit を省き、verify に flaky test を直す unit を足す（repair-2 は書かない）。
+    let mut new = ExecutionPlanSpec {
+        rationale: "v2: fix the flaky browser test".into(),
+        units: vec![leaf("fix-flake", "verify")],
+        ..active.clone()
+    };
+    carry_done_units_v3(&validated.spec, &mut new, &done_keys);
+    assert!(new.units.iter().all(|u| u.key != "repair-2"));
+    let v = validate_with(&new, tree_on(), &done, PlanContext::default())
+        .expect("a replan that omits the delivery repair unit is valid");
+    assert!(daemon_added_key_errors(&validated.spec, &v.spec, &rows).is_empty());
+
+    // 修正前の判定（`phase` を持つ行だけ）だったら repair-2 が done の不変条件に入り、どの計画も拒まれた。
+    let mut with_repair = done.clone();
+    with_repair.push(("repair-2".into(), repair.spec.clone()));
+    let errs = validate_with(&new, tree_on(), &with_repair, PlanContext::default())
+        .expect_err("the pre-R7-12 rule rejects every plan");
+    assert!(
+        errs.iter().any(|e| matches!(e,
+            PlanValidationError::DoneWorkUnitChanged { key } if key == "repair-2")),
+        "{errs:?}"
+    );
+
+    // planner が repair-2 を書き写したら（/3 は段階が要る）検証の理由で返す。
+    let mut copied = leaf("repair-2", "verify");
+    copied.kind = WorkUnitKind::Repair;
+    let mut writes_it = new.clone();
+    writes_it.units.push(copied);
+    let v2 = validate_with(&writes_it, tree_on(), &done, PlanContext::default())
+        .expect("structurally valid");
+    let errs = daemon_added_key_errors(&validated.spec, &v2.spec, &rows);
+    assert_eq!(
+        errs,
+        vec![PlanValidationError::DaemonAddedKeyReused {
+            key: "repair-2".into()
+        }]
+    );
+    assert!(errs[0].to_string().contains("R7-12"));
+
+    // planner / 人が計画に書いた repair の unit（spec に key がある）は daemon の WU ではない。
+    let mut planned_repair = leaf("repair-1", "verify");
+    planned_repair.kind = WorkUnitKind::Repair;
+    let mut active_with_planned = active.clone();
+    active_with_planned.units.push(planned_repair);
+    let mut planned_row = repair.clone();
+    planned_row.key = "repair-1".into();
+    planned_row.spec.key = "repair-1".into();
+    assert!(!is_daemon_added_work_unit(
+        &active_with_planned,
+        &planned_row
+    ));
+    // superseded の daemon の行の key は D3 の対象外（退役した key は R7-3 の検証が扱う）。
+    let mut retired = repair.clone();
+    retired.status = WorkUnitStatus::Superseded;
+    assert!(daemon_added_key_errors(&validated.spec, &v2.spec, &[retired]).is_empty());
+    assert!(DAEMON_ADDED_HINT.contains("配送"));
+}

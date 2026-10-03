@@ -54,6 +54,7 @@ usage: verify.sh [--dry-run] <sha12>
 
 env:
   SD_VERIFY_LOCK_WAIT  他の verify.sh を待つ上限（秒。既定 1800）。超えたら exit 75
+  SD_VERIFY_WEB_PROBE_PORT  web app の loopback 起動確認 port（既定 7728）
 
 exit:
   0   verify.json.ok == true
@@ -88,6 +89,7 @@ REL="$(sd_release_dir "$SHA12")"
 [ -r "$SD_DB" ] || sd_die "cannot read $SD_DB"
 [ "$(sd_json_get "$REL/gate.json" ok 2>/dev/null || echo false)" = true ] \
   || sd_die "gate.json of $SHA12 is not ok; refusing to verify"
+SD_VERIFY_WEB_PROBE_PORT="${SD_VERIFY_WEB_PROBE_PORT:-7728}"
 
 NEW_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)" \
   || sd_die "manifest.json has no schema_version"
@@ -812,6 +814,24 @@ else
   record 4b gui-e2e false "skipped (check 1 or 4 failed)"
 fi
 
+# Optional P6-02 staging hook. It runs while this verify owns the staging ports
+# and both the new celeris and gui are alive; the hook must only read the API.
+WEB_HOOK_OK=true
+if [ -n "${SD_VERIFY_WEB_HOOK:-}" ]; then
+  check_begin
+  WEB_HOOK_OK=false
+  if [ "$OK1" = true ] && [ "$OK4" = true ] && [ -x "$SD_VERIFY_WEB_HOOK" ]; then
+    if "$SD_VERIFY_WEB_HOOK" "$SHA12" "$REL" "$NEW_BASE" "$GUI_BASE" "$ST_TOKEN"; then
+      WEB_HOOK_OK=true
+      record 4c web-parity true "staging gateway and read-only parity e2e passed"
+    else
+      record 4c web-parity false "staging gateway or read-only parity e2e failed"
+    fi
+  else
+    record 4c web-parity false "staging unavailable or SD_VERIFY_WEB_HOOK is not executable"
+  fi
+fi
+
 # ---- 検査 5（裏で回っている N-1）と待ち合わせる（Phase SD-1） -----------------
 
 N1_RC=0
@@ -853,14 +873,27 @@ else
   record 6 smoke false "skipped (check 1 failed)"
 fi
 
+# ---- web app 起動確認（ADR-0135 D4、非 blocking）-----------------------------
+check_begin
+WEB_PROBE_PORT="$SD_VERIFY_WEB_PROBE_PORT"
+if [ "$(sd_json_get "$REL/gate.json" web.ok 2>/dev/null || echo false)" != true ]; then
+  record 4d web-app-start false "skipped (gate.json web.ok is not true)"
+elif [ ! -d "$REL/web/app" ]; then
+  record 4d web-app-start false "skipped (release has no web/app)"
+elif sd_web_app_probe "$REL/web/app" "$WEB_PROBE_PORT" "$SHA12"; then
+  record 4d web-app-start true "temporary loopback app returned /healthz 200 on port $WEB_PROBE_PORT"
+else
+  record 4d web-app-start false "temporary loopback app failed /healthz on port $WEB_PROBE_PORT (non-blocking)"
+fi
+
 # ---- verify.json ------------------------------------------------------------
 
 OK=false
-if [ "$OK1" = true ] && [ "$OK2" = true ] && [ "$OK3" = true ] && [ "$OK4" = true ] && [ "$OK4B" = true ] && [ "$OK6" = true ]; then
+if [ "$OK1" = true ] && [ "$OK2" = true ] && [ "$OK3" = true ] && [ "$OK4" = true ] && [ "$OK4B" = true ] && [ "$WEB_HOOK_OK" = true ] && [ "$OK6" = true ]; then
   OK=true
 fi
 
-# 検査の順は 1, 2, 3, 4, 4b, 5, 6（5 は裏で回し、4b の後で取り込む）。
+# 検査の順は 1, 2, 3, 4, 4b, 5, 6, 4d（4d は最後に実行し、blocking 集計から除外）。
 CHECKS_JSON="$(sd_tsv_to_json "$CHECKS_TSV")"
 TOTAL_SECS="$(sd_secs_since "$VERIFY_T0")"
 counts_or_null() { if sd_json_valid "$1"; then cat "$1"; else printf 'null'; fi; }

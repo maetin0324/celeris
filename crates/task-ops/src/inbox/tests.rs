@@ -964,3 +964,235 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
     let hidden = inbox(&store, Some(&connected_snapshot), &ctx, now, &no_evidence).expect("inbox");
     assert!(cluster_unavailable_find(&hidden.attention, "pegasus").is_none());
 }
+
+/// ADR-0131 D7 R3: done の古い snapshot は理由を問わず表示から外し、event は保持する。
+#[test]
+fn inbox_cleanup_terminal_delivery_skip_is_suppressed() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let mut task = sample_task(TaskKind::Execute, Status::Done);
+    task.project_id = Some(task_core::ProjectId::new());
+    store.insert(&task).expect("insert");
+    store
+        .append_event(
+            task.id,
+            &Event::DeliverySkipped {
+                reason: task_core::DeliverySkipReason::DepartmentUnresolved,
+                detail: "needs attention".into(),
+                head: Some("abc123".into()),
+            },
+        )
+        .expect("event");
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(result.attention.is_empty());
+    assert_eq!(result.suppressed.get("r3_terminal_task"), Some(&1));
+    assert!(!store.events_for(task.id).expect("events").is_empty());
+}
+
+fn tree_child(parent: &Task, status: Status, unit_key: &str, created_at: OffsetDateTime) -> Task {
+    let mut child = sample_task(TaskKind::Execute, status);
+    child.parent_id = Some(parent.id);
+    child.created_at = created_at;
+    child.updated_at = OffsetDateTime::now_utc();
+    child.tree = Some(task_core::TreeInfo {
+        root_id: parent.tree.as_ref().map_or(parent.id, |t| t.root_id),
+        depth: parent.tree.as_ref().map_or(2, |t| t.depth + 1),
+        parent_unit: Some(task_core::ParentUnit {
+            task_id: parent.id,
+            plan_id: "plan".into(),
+            unit_key: unit_key.into(),
+            stage: "stage".into(),
+            attempt: 1,
+        }),
+        base_commit: None,
+    });
+    child
+}
+
+#[test]
+fn inbox_cleanup_r1_parent_done_hides_replaced_failed_child() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let parent = sample_task(TaskKind::Execute, Status::Done);
+    let failed = tree_child(
+        &parent,
+        Status::Failed,
+        "original",
+        OffsetDateTime::now_utc(),
+    );
+    store.insert(&parent).expect("parent");
+    store.insert(&failed).expect("failed");
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(result.attention.is_empty());
+    assert_eq!(result.suppressed.get("r1_parent_done"), Some(&1));
+    assert_eq!(
+        attention_suppression(
+            &failed,
+            &HashMap::from([(parent.id, parent.clone()), (failed.id, failed.clone())])
+        ),
+        Some(SuppressRule::ParentDone)
+    );
+}
+
+#[test]
+fn inbox_cleanup_r2_cancelled_ancestor_hides_failed_descendant() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let root = sample_task(TaskKind::Execute, Status::Cancelled);
+    let middle = tree_child(&root, Status::Failed, "middle", OffsetDateTime::now_utc());
+    let failed = tree_child(&middle, Status::Failed, "leaf", OffsetDateTime::now_utc());
+    for task in [&root, &middle, &failed] {
+        store.insert(task).expect("insert");
+    }
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(result.attention.is_empty());
+    assert_eq!(result.suppressed.get("r2_ancestor_cancelled"), Some(&2));
+}
+
+#[test]
+fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let done = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&done).expect("insert");
+    let snapshot = DaemonSnapshot {
+        instance_id: "01J000000000000000000000AA".into(),
+        pid: 1,
+        hostname: "host".into(),
+        started_at: view::to_rfc3339(OffsetDateTime::now_utc()),
+        last_tick_at: view::to_rfc3339(OffsetDateTime::now_utc()),
+        ticks: 1,
+        tick_ms: 2000,
+        in_flight: vec![],
+        cooldowns: vec![],
+        awaiting_human: vec![],
+        awaiting_children: vec![],
+        unroutable: vec![done.id],
+        reports: None,
+        approvals_pending: 0,
+        decisions_open: 0,
+        clusters: vec![],
+        providers: vec![],
+        accounts_root: None,
+        accounts_roots: std::collections::HashMap::new(),
+        max_runs_per_account: None,
+        accounts: vec![],
+        containers: None,
+        scratch: None,
+    };
+    let result = inbox(
+        &store,
+        Some(&snapshot),
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert!(result.attention.is_empty());
+    assert_eq!(result.suppressed.get("r3_terminal_task"), Some(&1));
+}
+
+#[test]
+fn inbox_cleanup_r4_done_retry_hides_failed_same_unit_but_keeps_other_failures() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let parent = sample_task(TaskKind::Execute, Status::Running);
+    let base = OffsetDateTime::now_utc() - time::Duration::hours(1);
+    let failed = tree_child(&parent, Status::Failed, "unit", base);
+    let done = tree_child(
+        &parent,
+        Status::Done,
+        "unit",
+        base + time::Duration::seconds(1),
+    );
+    let unresolved = tree_child(&parent, Status::Failed, "other", base);
+    let older_done = tree_child(&parent, Status::Done, "later_failure", base);
+    let later_failure = tree_child(
+        &parent,
+        Status::Failed,
+        "later_failure",
+        base + time::Duration::seconds(2),
+    );
+    for task in [
+        &parent,
+        &failed,
+        &done,
+        &unresolved,
+        &older_done,
+        &later_failure,
+    ] {
+        store.insert(task).expect("insert");
+    }
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    assert_eq!(result.suppressed.get("r4_unit_retried_done"), Some(&1));
+    assert!(result.attention.iter().any(
+        |item| matches!(item, AttentionItem::Failed { task, .. } if task.id == unresolved.id)
+    ));
+    assert!(result.attention.iter().any(
+        |item| matches!(item, AttentionItem::Failed { task, .. } if task.id == later_failure.id)
+    ));
+    assert!(
+        !result
+            .attention
+            .iter()
+            .any(|item| matches!(item, AttentionItem::Failed { task, .. } if task.id == failed.id))
+    );
+    assert_eq!(result.counts.attention, 2);
+}
+
+#[test]
+fn inbox_cleanup_keeps_failed_that_still_needs_human_judgment() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let parent = sample_task(TaskKind::Execute, Status::Running);
+    let failed_child = tree_child(&parent, Status::Failed, "unit", OffsetDateTime::now_utc());
+    let failed_root = sample_task(TaskKind::Execute, Status::Failed);
+    for task in [&parent, &failed_child, &failed_root] {
+        store.insert(task).expect("insert");
+    }
+    let result = inbox(
+        &store,
+        None,
+        &view_ctx(),
+        OffsetDateTime::now_utc(),
+        &no_evidence,
+    )
+    .expect("inbox");
+    for kept in [&failed_child, &failed_root] {
+        assert!(
+            result.attention.iter().any(
+                |item| matches!(item, AttentionItem::Failed { task, .. } if task.id == kept.id)
+            )
+        );
+    }
+    assert!(result.suppressed.is_empty());
+    let by_id = HashMap::from([
+        (parent.id, parent.clone()),
+        (failed_child.id, failed_child.clone()),
+        (failed_root.id, failed_root.clone()),
+    ]);
+    assert_eq!(attention_suppression(&failed_child, &by_id), None);
+    assert_eq!(attention_suppression(&failed_root, &by_id), None);
+}

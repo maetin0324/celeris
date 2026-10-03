@@ -209,9 +209,15 @@ impl Dispatcher {
         // 前に検証の理由として planner に返す（再試行・`plan_invalid` の経路）。以前は段階の統合 WU の key の重なりが
         // 採用の中で sqlite の `UNIQUE constraint failed: work_units.task_id, key` に落ちていた（08:15Z）。
         let validation = match validation {
-            Ok(v) if active_plan.is_some() => {
+            Ok(v) if let Some(active) = active_plan.as_ref() => {
                 let rows = self.store.work_units_for(task_id)?;
-                let retired = task_core::execution_plan::retired_key_errors(&v.spec, &rows);
+                let mut retired = task_core::execution_plan::retired_key_errors(&v.spec, &rows);
+                // ADR-0079 付記「R7-12」D3: daemon の足した WU（配送 / 最終レビュー / 統合の repair WU）の key も同じく返す。
+                retired.extend(task_core::execution_plan::daemon_added_key_errors(
+                    &active.spec,
+                    &v.spec,
+                    &rows,
+                ));
                 if retired.is_empty() {
                     Ok(v)
                 } else {

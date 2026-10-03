@@ -79,7 +79,7 @@ fn synthetic_review_task_inherits_the_subjects_project_milestone_and_assignee() 
 
 async fn plain_review(
     task: &Task,
-    ws: &LocalWorkspace,
+    ws: &dyn Workspace,
     dir: &Path,
     produced: &[ArtifactRef],
     t: Duration,
@@ -97,12 +97,13 @@ async fn plain_review(
     .verdicts
 }
 
+/// ADR-0125 §3: 検査は workspace の中で再実行される（作業ディレクトリ・順序・期待 exit・欠落ファイルの不合格）。
+/// pass/fail の判定は短い timeout に晒さない（高負荷で sh の起動が遅れても誤って timed out にならない長さ）。
+/// timeout の枝（`timed out` の判定と 3s→6s の 1 回の再試行）は、timeout を明示的に返す `ScriptedWorkspace` と、
+/// 実 process の `sleep 30` に対する別の呼び出しで確かめる（どちらも負荷で遅れるほど timeout 側に倒れるだけ）。
 #[tokio::test]
 async fn command_checks_are_re_executed_in_workspace() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("present.txt"), "x").unwrap();
-    let ws = LocalWorkspace::new(dir.path());
-    let task = task_with(
+    let checks = || {
         vec![
             Check::Command {
                 cmd: "test -f present.txt".into(),
@@ -120,16 +121,65 @@ async fn command_checks_are_re_executed_in_workspace() {
                 cmd: "sleep 30".into(),
                 expect_exit: 0,
             },
-        ],
-        dir.path(),
+        ]
+    };
+
+    // (1) 実 `LocalWorkspace` で、timeout しない 3 件の pass/fail（timeout は壊れたときの保険の長さ）。
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("present.txt"), "x").unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let mut task = task_with(checks(), dir.path());
+    task.acceptance.truncate(3);
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(120)).await;
+    assert_eq!(
+        v.iter().map(|x| x.pass).collect::<Vec<_>>(),
+        vec![true, false, true]
     );
-    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_millis(300)).await;
+    assert!(v[1].reason.contains("absent.txt"), "{}", v[1].reason);
+    assert!(!v.iter().any(|x| x.reason.contains("timed out")), "{v:?}");
+    assert_eq!(v[1].criterion_idx, 1);
+
+    // (2) 同じ 4 件を、`sleep 30` だけ timeout を返す workspace で: 判定は timed out、再試行は 2 倍の 1 回だけ。
+    let scripted = ScriptedWorkspace::default();
+    scripted.push("test -f present.txt", exec_ok(0));
+    scripted.push("test -f absent.txt", exec_ok(1));
+    scripted.push("exit 7", exec_ok(7));
+    scripted.push("sleep 30", exec_timeout());
+    scripted.push("sleep 30", exec_timeout());
+    let task = task_with(checks(), dir.path());
+    let v = plain_review(&task, &scripted, dir.path(), &[], Duration::from_secs(3)).await;
     assert_eq!(
         v.iter().map(|x| x.pass).collect::<Vec<_>>(),
         vec![true, false, true, false]
     );
-    assert!(v[3].reason.contains("timed out"));
+    assert!(
+        v[3].reason.contains("timed out after 6s"),
+        "{}",
+        v[3].reason
+    );
     assert_eq!(v[1].criterion_idx, 1);
+    let calls = scripted.calls.lock().unwrap().clone();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(c, _)| c == "sleep 30")
+            .map(|(_, t)| *t)
+            .collect::<Vec<_>>(),
+        vec![Duration::from_secs(3), Duration::from_secs(6)],
+        "{calls:?}"
+    );
+
+    // (3) 実 process: workspace の中の `sleep 30` は短い timeout（1s→再試行 2s）で打ち切られ timed out になる。
+    let mut task = task_with(checks(), dir.path());
+    task.acceptance.drain(..3);
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(1)).await;
+    assert_eq!(v.len(), 1);
+    assert!(!v[0].pass);
+    assert!(
+        v[0].reason.contains("timed out after 2s"),
+        "{}",
+        v[0].reason
+    );
 }
 
 // ADR-0072 D14/D6・E4 (g): WU の決定的な checks の実行（review.rs の Command 実行を再利用）。
@@ -650,6 +700,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter,
         run_id: "rev-1".into(),
         limits: RunLimits {
@@ -759,6 +810,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
     let run = ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
         run_id: "rev-x".into(),
         limits: RunLimits {
@@ -1147,4 +1199,108 @@ async fn plan_kind_adds_implicit_plan_file_verdict() {
     );
     assert!(out.verdicts[1].reason.contains("2 tasks"));
     assert_eq!(out.plan.unwrap().tasks.len(), 2);
+}
+
+/// ADR-0117 D1/D2: reviewer の `RunRequest` に人の決定・回答と、先に workspace で実行した決定的 check の
+/// 結果が入り、review プロンプトの節にも出る。
+#[tokio::test]
+async fn review_passes_human_decisions_and_check_results_to_reviewer() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("ok.txt"), "x").unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let task = task_with(
+        vec![
+            Check::Command {
+                cmd: "test -f ok.txt".into(),
+                expect_exit: 0,
+            },
+            Check::Reviewer,
+        ],
+        dir.path(),
+    );
+    let adapter = Arc::new(StubReviewer {
+        review_json: Some(
+            r#"{"verdicts":[{"criterion":1,"pass":true,"reason":"scope follows the decision"}]}"#
+                .into(),
+        ),
+        terminal: Terminal::Done {
+            summary: "reviewed".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        seen: Mutex::new(vec![]),
+    });
+    let decision = task_worker::protocol::ReviewDecision {
+        task_id: task.id,
+        key: "adr-place".into(),
+        question: "ADR をどこに置くか".into(),
+        option: "a".into(),
+        option_label: "ADR は docs/adr に置く".into(),
+        note: Some("範囲を docs/adr まで広げる".into()),
+    };
+    let answer = task_worker::Answer {
+        question: "PROGRESS も更新するか".into(),
+        answer: "する".into(),
+    };
+    let out = review_task(
+        &task,
+        &ws,
+        dir.path(),
+        &dir.path().join("artifacts"),
+        &[],
+        Duration::from_secs(5),
+        ReviewExtras {
+            reviewer: Some(reviewer_run(adapter.clone())),
+            decisions: vec![decision.clone()],
+            answers: vec![answer.clone()],
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(out.all_pass(), "{:?}", out.verdicts);
+    let seen = adapter.seen.lock().unwrap();
+    assert_eq!(seen.len(), 1);
+    let req = &seen[0];
+    // worker run 用の `RunContext.answers` は使わない。
+    assert!(req.context.answers.is_empty());
+    let review = req.context.review.as_ref().unwrap();
+    assert_eq!(review.decisions, vec![decision]);
+    assert_eq!(review.answers, vec![answer]);
+    assert_eq!(review.checks.len(), 1);
+    let check = &review.checks[0];
+    assert_eq!(check.criterion, Some(0));
+    assert_eq!(check.kind, "command");
+    assert_eq!(check.cmd.as_deref(), Some("test -f ok.txt"));
+    assert!(check.pass);
+    let prompt =
+        task_worker::claude_code::build_prompt(&req.task, &req.context, "review", "artifacts");
+    assert!(prompt.contains("## Human decisions and answers (authoritative)"));
+    assert!(prompt.contains("ADR は docs/adr に置く"));
+    assert!(prompt.contains("範囲を docs/adr まで広げる"));
+    assert!(prompt.contains("PROGRESS も更新するか"));
+    assert!(prompt.contains("## Deterministic checks already executed by celeris"));
+    assert!(prompt.contains("test -f ok.txt"));
+}
+
+/// ADR-0117 D2: 暗黙の条件（`workspace.toml` の check）も kind と cmd 付きで渡り、理由は末尾 1000 文字に切る。
+#[test]
+fn deterministic_check_results_cover_implicit_checks_and_truncate_reasons() {
+    let dir = tempfile::tempdir().unwrap();
+    let task = task_with(vec![Check::Reviewer], dir.path());
+    let long = format!("{}END", "あ".repeat(2000));
+    let verdicts = vec![Verdict {
+        criterion_idx: 1,
+        pass: true,
+        reason: long,
+        repair_hint: None,
+    }];
+    let mut implicit = HashMap::new();
+    implicit.insert(1, ("repo_check", Some("cargo test".to_string())));
+    let out = deterministic_check_results(&task, &verdicts, &implicit);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].criterion, None);
+    assert_eq!(out[0].kind, "repo_check");
+    assert_eq!(out[0].cmd.as_deref(), Some("cargo test"));
+    assert_eq!(out[0].reason.chars().count(), 1000);
+    assert!(out[0].reason.ends_with("END"));
 }

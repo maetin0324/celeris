@@ -77,6 +77,8 @@ export type CommentId = string;
  * 人のコメントが何を起こしたか（ADR-0044 D2 の表）。
  */
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
+export type SourceOrigin = "explicit" | "derived";
+export type LlmSourceRef = string;
 /**
  * DESIGN §5.4 の `WorkerHint`。
  */
@@ -740,6 +742,12 @@ export type Event =
     }
   | {
       detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      type: "delivery_skipped";
+    }
+  | {
+      detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
        */
@@ -962,6 +970,22 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
+ * ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * 並びは判定の順（同時に複数あれば先のものを記録する）。
+ */
+export type DeliverySkipReason =
+  | "multiple_repos"
+  | "no_marker"
+  | "marker_repo_mismatch"
+  | "repo_row_missing"
+  | "repo_not_local"
+  | "repo_path_mismatch"
+  | "not_git"
+  | "no_branch"
+  | "branch_name_mismatch"
+  | "refs_unresolvable"
+  | "department_unresolved";
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -1045,6 +1069,18 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "plan_approval";
+    }
+  | {
+      at: string;
+      detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      /**
+       * 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+       */
+      summary: string;
+      task: TaskRef;
+      type: "delivery_skipped";
     };
 /**
  * ADR-0047 D1 / D4。
@@ -1937,12 +1973,12 @@ export interface NewBrowserWait {
   run_id: string;
   session_id: string;
   /**
-   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
-   */
-  /**
    * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
   ttl_secs?: number | null;
   work_unit_id?: string | null;
 }
@@ -2516,6 +2552,8 @@ export interface ProviderConfigView {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -2526,6 +2564,10 @@ export interface ProviderConfigView {
     standard?: ModelBinding;
   };
   tiers: Tier[];
+}
+export interface ResolvedLlmSource {
+  origin: SourceOrigin;
+  source: LlmSourceRef;
 }
 export interface ModelBinding {
   model_id?: string | null;
@@ -3164,11 +3206,13 @@ export interface ProviderLive {
    * 古いスナップショットには無いので既定 0）。
    */
   in_use_cos?: number;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `None`）。
    */
@@ -3207,8 +3251,7 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3256,7 +3299,7 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3271,7 +3314,7 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ * 廃止（ADR-0129）: Celeris の階層 cache server。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3297,8 +3340,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
- * 累計、容量は byte、時刻は RFC 3339。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `null`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3481,7 +3523,7 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ * 廃止（ADR-0129）: sccache L1。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3515,7 +3557,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ * 廃止（ADR-0129）: sccache stats。型だけ残す（値は常に `null`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -5189,6 +5231,11 @@ export interface ReplanDiff {
    * 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
    */
   removed: string[];
+  /**
+   * ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に
+   * 戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。
+   */
+  reopened_stages?: string[];
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の
@@ -6053,8 +6100,7 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: cache server は撤去済み。旧 client との互換のため型だけ残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6102,7 +6148,7 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `null`（ADR-0129）: sccache は Celeris の外。旧 client との互換のため型だけ残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -7298,6 +7344,8 @@ export interface ProviderConfigView1 {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -7344,11 +7392,13 @@ export interface ProviderView {
    * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   model?: string | null;
   stats: ProviderStats;
   tier_models?: {

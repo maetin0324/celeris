@@ -63,6 +63,9 @@ token_file = "api.token"
 [selfdeploy]
 releases_dir = "releases"
 repo = "repo"
+# ADR-0095 付記 D-c: テストは実行環境の `systemd-run`/`XDG_RUNTIME_DIR` の有無に関わらず、常に
+# `Inline` を使う（本物の user systemd bus には一切触れない）。
+detach = "inline"
 
 [[providers]]
 id = "p1"
@@ -128,7 +131,11 @@ adapter = "fake"
             let _ = stop.send(());
         }
         if let Some(handle) = self.handle.take() {
-            let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
+            tokio::time::timeout(Duration::from_secs(60), handle)
+                .await
+                .expect("fixture server stopped")
+                .expect("fixture server task")
+                .expect("fixture server result");
         }
     }
 
@@ -248,14 +255,17 @@ adapter = "fake"
 }
 
 fn wait_for(path: &Path, needle: &str) -> String {
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
+    loop {
         let text = std::fs::read_to_string(path).unwrap_or_default();
         if text.contains(needle) {
             return text;
         }
+        if std::time::Instant::now() >= deadline {
+            return text;
+        }
         std::thread::sleep(Duration::from_millis(50));
     }
-    std::fs::read_to_string(path).unwrap_or_default()
 }
 
 /// 空の `releases_dir` でも 200。`running` は `GET /health` と同じ値を持つ。
@@ -446,13 +456,6 @@ async fn promoting_is_409_when_unverified_already_current_or_already_promoting()
 /// `promote.lock` に pid が入り、一覧の `promoting` が真になる。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn promoting_a_verified_release_starts_the_bundled_script_and_returns_202() {
-    if should_skip_user_systemd_scope() {
-        eprintln!(
-            "user systemd bus is not reachable (systemd-run --user --scope failed); skipping"
-        );
-        return;
-    }
-
     let api = Api::start().await;
     api.release(
         "abcdef123456",
@@ -511,13 +514,6 @@ async fn promoting_a_verified_release_starts_the_bundled_script_and_returns_202(
 /// （昇格先に同梱されたスクリプトは使わない）。応答の `script_from` は `"current"`。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn promoting_prefers_the_promote_script_of_the_current_release() {
-    if should_skip_user_systemd_scope() {
-        eprintln!(
-            "user systemd bus is not reachable (systemd-run --user --scope failed); skipping"
-        );
-        return;
-    }
-
     let api = Api::start().await;
     api.release(
         "aaaaaaaaaaaa",
@@ -557,21 +553,6 @@ async fn promoting_prefers_the_promote_script_of_the_current_release() {
         "昇格先のスクリプトは走らない: {text:?}"
     );
     api.shutdown().await;
-}
-
-/// Skip only when the production auto launcher would select systemd-run but its user bus is unusable.
-fn should_skip_user_systemd_scope() -> bool {
-    let would_use_systemd_run =
-        task_worker::detach::systemd_run_on_path() && task_worker::detach::xdg_runtime_dir_is_set();
-    if !would_use_systemd_run {
-        return false;
-    }
-
-    std::process::Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "true"])
-        .status()
-        .map(|status| !status.success())
-        .unwrap_or(true)
 }
 
 /// ADR-0041 D3 / D4: `GET /releases` の `promoted_at` / `on_main` / `changes`。

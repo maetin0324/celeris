@@ -172,6 +172,10 @@ impl TaskStore for SqliteStore {
         self.event_rows_for_impl(task_id, after_seq, limit)
     }
 
+    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError> {
+        self.latest_delivery_skipped_rows_impl()
+    }
+
     fn list_page(
         &self,
         filter: &ListFilter,

@@ -851,15 +851,32 @@ pub fn classify_review_failure(failing: &[FailedCheck]) -> RepairDecision {
     RepairDecision::Repairable(first)
 }
 
+/// ADR-0074 付記（2026-10-02）: repair に渡す task / 段階の許可範囲。空なら `build_repair_objective`
+/// は `None` と同じ出力になる（呼び出し側が範囲を集められないときはそのまま空を渡せばよい）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RepairScope {
+    pub allowed_paths: Vec<String>,
+    pub scope_checks: Vec<String>,
+}
+
+impl RepairScope {
+    fn is_empty(&self) -> bool {
+        self.allowed_paths.is_empty() && self.scope_checks.is_empty()
+    }
+}
+
 /// D16: repair WU の objective（**最小の context**。元の実装の context は作り直さない）。決定的な
 /// 文字列合成のみ（I/O は無い）。`failing_details` は `Verdict.reason`（cmd / exit / stdout・stderr の
 /// tail をそのまま含む）を 1 件 1 行ずつ渡す。`diff_stat`（`git diff --stat` の要約）は任意。
+/// `scope`（ADR-0074 付記）が `Some` かつ空でなければ、許可範囲と範囲外差分の検査を objective に足す。
+/// `None` または空なら、従来の出力と 1 バイトも変わらない。
 pub fn build_repair_objective(
     class: RepairClass,
     failing_details: &[String],
     task_title: &str,
     task_objective: &str,
     diff_stat: Option<&str>,
+    scope: Option<&RepairScope>,
 ) -> String {
     let objective_preview: String = task_objective.chars().take(600).collect();
     let mut s = String::new();
@@ -877,6 +894,28 @@ pub fn build_repair_objective(
     ));
     if let Some(stat) = diff_stat {
         s.push_str(&format!("\n## git diff --stat\n{stat}\n"));
+    }
+    if let Some(scope) = scope
+        && !scope.is_empty()
+    {
+        if !scope.allowed_paths.is_empty() {
+            s.push_str("\n## 変更してよい範囲\n");
+            for p in &scope.allowed_paths {
+                s.push_str(&format!("- {p}\n"));
+            }
+        }
+        if !scope.scope_checks.is_empty() {
+            s.push_str("\n## 範囲外差分の検査\n");
+            for c in &scope.scope_checks {
+                s.push_str(&format!("- {c}\n"));
+            }
+            s.push_str("直した後にこれも実行して exit を確かめよ。\n");
+        }
+        s.push_str(
+            "\n失敗の原因が許可範囲の外にある（例: web/ だけの task での crates/ の flaky test・\
+環境依存のテスト）なら、範囲外のファイルを変えるな。result.json に \
+`{\"yield\":{\"plan_issue\":\"<何が範囲外のどこで落ちたか>\"}}` を書いて終えよ。\n",
+        );
     }
     s
 }

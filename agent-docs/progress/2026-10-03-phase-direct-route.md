@@ -1,6 +1,10 @@
-# Phase 4: atomic coding task の直行経路 — 統合検証
-
+---
+title: Phase 4 atomic coding task の直行経路 — 統合検証
 tasks: [01M3Y2KXY3R6YXD6DEDDNFG97T]
+status: done
+updated: 2026-10-03
+---
+# Phase 4: atomic coding task の直行経路 — 統合検証
 
 完了日: 2026-10-02
 

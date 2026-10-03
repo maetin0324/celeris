@@ -8,7 +8,7 @@ completed: 2026-10-03
 ---
 # phase_effect_ab: 評価文書への前後比較の記録（ab-record）
 
-docs/progress/merge-train-evaluation.md に '## 前後比較' 節を足した。3 scenario × 4 指標の導入前・導入後・差の表、本番 DB の導入前の値との並べ表、模擬の限界、release 後の再計測手順（30 delivery 後）を書いた。'## 結論'（不要）は変えず、比較を踏まえた一文を足した。crates/ は触っていない。
+agent-docs/progress/2026-10-03-merge-train-evaluation.md に '## 前後比較' 節を足した。3 scenario × 4 指標の導入前・導入後・差の表、本番 DB の導入前の値との並べ表、模擬の限界、release 後の再計測手順（30 delivery 後）を書いた。'## 結論'（不要）は変えず、比較を踏まえた一文を足した。crates/ は触っていない。
 
 ## 証拠
 

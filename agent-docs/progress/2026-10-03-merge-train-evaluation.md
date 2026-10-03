@@ -1,6 +1,10 @@
-# merge train / project-level integration branch の評価
-
+---
+title: merge train / project-level integration branch の評価
 tasks: [01M3Z6NZ0RBF4ZH2H2KC69QT9S]
+status: done
+updated: 2026-10-03
+---
+# merge train / project-level integration branch の評価
 
 測った日: 2026-10-03（UTC 04:5x 頃）。本番 DB と release 一覧は読み取りだけで見た。DB への書き込み・daemon の再起動・設定の変更はしていない。
 
@@ -13,8 +17,8 @@ Phase 1〜5 の導入時点。日時は git の commit 日時（UTC）。
 | 1 review 前の target 同期・merge candidate 固定 | ADR-0118（2026-10-02、`034d7e91` 2026-10-02 00:37:36） | docs/PROGRESS.md「Phase 1 …（ADR-0118、2026-10-02）」 | `a00c28b2` 2026-10-02 06:34:42 integrate wu/p1-sync (phase p1) | 入っていない |
 | 2 review 前同期の IntegrationRepair | ADR-0120（2026-10-02、`6719fc8e` 2026-10-02 06:49:46） | docs/PROGRESS.md「Phase 2 …（ADR-0120、2026-10-02）」 | `6a385df3` 2026-10-02 10:20:51 integrate wu/p2-repair (phase p2) | 入っていない |
 | 3 Claude session resume | ADR-0140 claude-session-resume（旧 ADR-0124）（2026-10-02、`ce2c836f` 2026-10-02 10:37:46） | docs/PROGRESS.md「Phase 3 …（ADR-0140、2026-10-02）」 | `86841071` 2026-10-02 13:33:34 integrate wu/p3-session (phase p34) | 入っていない |
-| 4 atomic direct route | ADR-0124 atomic-direct-route（2026-10-02、`b8c1c897` 2026-10-02 10:38:59） | docs/PROGRESS.md「… Phase 4 統合検証（2026-10-02）」、docs/progress/phase-direct-route.md | `db7abe3e` 2026-10-02 13:41:08 p4-fast（直行経路）を p3-session と統合 | 入っていない |
-| 5 write-set 並列制御・behind 指標 | ADR-0130（2026-10-02、`9868fec1` 2026-10-02 14:01:29） | docs/PROGRESS.md「…（完了 2026-10-02、ADR-0130）」、docs/progress/phase-writeset.md | `44bbad17` 2026-10-02 20:26:11 integrate wu/p5-writeset (phase p5) | 入っていない |
+| 4 atomic direct route | ADR-0124 atomic-direct-route（2026-10-02、`b8c1c897` 2026-10-02 10:38:59） | docs/PROGRESS.md「… Phase 4 統合検証（2026-10-02）」、agent-docs/progress/2026-10-03-phase-direct-route.md | `db7abe3e` 2026-10-02 13:41:08 p4-fast（直行経路）を p3-session と統合 | 入っていない |
+| 5 write-set 並列制御・behind 指標 | ADR-0130（2026-10-02、`9868fec1` 2026-10-02 14:01:29） | docs/PROGRESS.md「…（完了 2026-10-02、ADR-0130）」、agent-docs/progress/2026-10-03-phase-writeset.md | `44bbad17` 2026-10-02 20:26:11 integrate wu/p5-writeset (phase p5) | 入っていない |
 
 確かめ方:
 

@@ -1,5 +1,8 @@
 ---
+title: Phase 5 core-model — write-set hint の保存先（ADR-0130 D1 の実装上の差分）
 tasks: [01M3YE0JTQEYBFDTV3HCHR4G9J]
+status: done
+updated: 2026-10-03
 ---
 # Phase 5 core-model: write-set hint の保存先（ADR-0130 D1 の実装上の差分）
 

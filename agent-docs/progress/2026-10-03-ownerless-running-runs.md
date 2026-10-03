@@ -1,10 +1,11 @@
-# PROGRESS — 持ち主の居ない running の run 行の回収（ADR 2026-10-03-ownerless-running-runs）
-
 ---
+title: 持ち主の居ない running の run 行の回収（ADR 2026-10-03-ownerless-running-runs）
 tasks: [01M41M32MWB3AEQ0QP7C23Q3CN]
 status: done
-completed: 2026-10-03
+updated: 2026-10-03
 ---
+
+# PROGRESS — 持ち主の居ない running の run 行の回収（ADR 2026-10-03-ownerless-running-runs）
 
 正本: [ADR 2026-10-03 lease を持たない run の行を running のまま残さない](../adr/2026-10-03-ownerless-running-runs.md)。
 

@@ -4,7 +4,7 @@ tasks: [01M408E4BX8A3FNSBJTZ0CC67A, 01M40FWV6Z6N4P5ESHZMK0KH2B, 01M3XZ5PYSTTC6GX
 status: done
 updated: 2026-10-03
 ---
-（この文書は agent-docs/progress/ が正本。docs/progress/review-sync-main.md は done の子 task の受け入れ検査が読むパスを保つ相対 symlink）
+（この文書は agent-docs/progress/ が正本。）
 # review sync: main 取り込み
 
 merged-main: c448d9c77d18eb54396907835efb91c5d0a985e8
@@ -88,7 +88,7 @@ task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り
 
 `c448d9c77d18eb54396907835efb91c5d0a985e8` を `git merge --no-ff main` で取り込んだ。`agent-docs/PROGRESS.md`、`crates/task-worker/src/claude_code/prompt.rs`、`docs/architecture-map.md` の内容衝突は両側の追記を保持して解いた。schema の 3 生成物は `UPDATE_SCHEMA=1` の task-core・task-api 試験、GUI の `pnpm gen:types`、web の `gen-types.mjs` で作り直した。ブランチ由来の ADR は `agent-docs/adr/` に移し、migration 0042〜0045 と ADR 0140 の番号を保持した。
 
-`docs/progress/review-sync-main.md` は親 task の受け入れ条件が読むパスに残した。GUI の型検査では生成型の追加項目に合わせ、通知ラベルと fixture を更新した。`scripts/dev/check-architecture-map.py`、`scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`scripts/dev/check-doc-links.sh`、`cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings`、GUI の `pnpm typecheck` は成功した。
+親 task の受け入れ条件が参照する文書はこの正本へ移した。GUI の型検査では生成型の追加項目に合わせ、通知ラベルと fixture を更新した。`scripts/dev/check-architecture-map.py`、`scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`scripts/dev/check-doc-links.sh`、`cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings`、GUI の `pnpm typecheck` は成功した。
 
 web は再生成型に合わせて `execution_routed` の購読と `NewTaskBody` の参照を補い、`pnpm typecheck` と realtime 関連テスト 47 件が成功した。GUI の対象テストは 58 件成功した。
 
@@ -329,7 +329,7 @@ Phase 5 の実装は完了。expected path hint の正規化、Git 差分から�
 
 ## review-sync main 取り込みの検証（2026-10-03）
 
-完了日: 2026-10-03。検証 HEAD は `f7b262c521fa6fc9a1ab2c9ee8bb3de867324f04`。`git merge-tree --write-tree HEAD main` は exit 1 で、main `c448d9c77d18eb54396907835efb91c5d0a985e8` との衝突 5 ファイルを検出した。指示に従い main は取り込まず、`docs/progress/review-sync-main.md` の `merged-main` は既に取り込み済みの `a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8` のままにした。
+完了日: 2026-10-03。検証 HEAD は `f7b262c521fa6fc9a1ab2c9ee8bb3de867324f04`。`git merge-tree --write-tree HEAD main` は exit 1 で、main `c448d9c77d18eb54396907835efb91c5d0a985e8` との衝突 5 ファイルを検出した。指示に従い main は取り込まず、この文書の `merged-main` は既に取り込み済みの `a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8` のままにした。
 
 | コマンド | テスト数・結果 | exit |
 |---|---:|---:|
@@ -345,10 +345,16 @@ Phase 5 の実装は完了。expected path hint の正規化、Git 差分から�
 
 ## review-sync の main 再取り込み（2026-10-03）
 
-`c448d9c7` を no-ff merge し、上記の未解決だった 5 ファイルと文書移設による `PROGRESS.md` の衝突を解消した。生成 schema と GUI/web の型は再生成済み。経緯と検証結果は `docs/progress/review-sync-main.md` を参照する。
+`c448d9c7` を no-ff merge し、上記の未解決だった 5 ファイルと文書移設による `PROGRESS.md` の衝突を解消した。生成 schema と GUI/web の型は再生成済み。経緯と検証結果は `agent-docs/progress/2026-10-03-review-sync-main.md` を参照する。
 
 ## 最終 main 取り込み（2026-10-03）
 
 検証結果は [merge-main-2](2026-10-03-review-sync-fix/merge-main-2.md) を参照。
 
-merged-main: 8fb9b4ae1e825b5f577871d4b2fda825b16217e1
+merged-main: 90e3ca26ce1412e0cc2d4fcdc4613717df12973a
+
+## drop-symlink 修復（2026-10-03）
+
+`main` の `90e3ca26ce1412e0cc2d4fcdc4613717df12973a` を no-ff merge し、`docs/architecture-map.md` の両側の記述を保持した。旧 progress symlink を削除し、この記録内の参照を正本の場所へ直した。
+
+merged-main: 90e3ca26ce1412e0cc2d4fcdc4613717df12973a

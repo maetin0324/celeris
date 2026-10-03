@@ -83,6 +83,14 @@ ADR-0128 D3 に従い新しい進捗は task・WorkUnit ごとのファイルに
 
 依頼は ADR-0133 の **notice store** を通して保存・配信し、`target_kind = integration_request` と依頼 id を持つ専用種別として受信箱へ出す。ADR-0133 の既存の一般通知一覧には載せず、人の判断待ちの受信箱項目へ一対一で投影する。notice store に表示だけを正として任せず、依頼の未回答・回答済み状態を正として、回答時には受信箱から消す。既存の delivery detail には `[needs-human] 統合の依頼: <分類と対象の短い要約>` を記し、詳細の `IntegrationRequest` と証跡への参照を載せる。依頼の解決後に判断不要となった配送結果は ADR-0133 の `delivery` notice として出せるが、同じ依頼を受信箱と一般通知へ二重掲載しない。
 
+#### D4 付記: 受信箱への投影（実装対応）
+
+統合の依頼の保存・配信は、上記の notice store 案に代えて task の追記専用 `events` を正とする。配送と段の統合は `Event::IntegrationRequested`（type 名 `integration_requested`）を追記し、D4 の `IntegrationRequest` の全欄（`source_branch`、`source_sha`、`target_branch`、`target_sha`、`merge_base`、`conflict_files`、`intent`、`reason`、`recommendation`、`actions`、`candidate_sha`）と、発生元 `origin = delivery | phase:<integrate unit key>` を保存する。daemon と store に LLM 呼び出しは入れない。
+
+依頼 id は `<task>:<target_sha>:<source_sha>` とする。同じ task で同じ `source_sha`・`target_sha` の未回答依頼が既にあれば、新たな `IntegrationRequested` は追記せず、受信箱にも一件だけ出す。回答は `Event::IntegrationAnswered`（type 名 `integration_answered`）に依頼 id、`answer = integrated | declined | retry`、`note` を載せて追記する。回答済みの依頼は未回答の集合から外す。
+
+`task-ops` は未回答依頼を `AttentionItem` に一対一で投影し、`InboxKind::IntegrationRequest`（wire 名 `integration_request`）として `human_inbox` に出す。人の回答は既存の `POST /api/v1/inbox/items/{id}/answer` を通す。依頼の記録時に `notice_record` を呼ばないため、同じ依頼は ADR-0133 の一般通知一覧に載らない。未回答依頼の問い合わせには migration `0047` で `json_extract(json,'$.type') IN ('integration_requested', 'integration_answered')` の部分 index を追加し、`DeliverySkipped` の migration `0037` と同じ形で events 全体の走査を避ける。
+
 ### D5. 再 review と gate
 
 自動解消した merge は種類にかかわらず、解消 commit を含む**候補 SHA を固定して gate を再実行**する。gate 成功の記録は旧 SHA から流用しない。再 review の要否は次の通り。

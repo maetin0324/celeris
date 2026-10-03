@@ -1,5 +1,5 @@
 ---
-tasks: [01M408E4BX8A3FNSBJTZ0CC67A]
+tasks: [01M408E4BX8A3FNSBJTZ0CC67A, 01M40FWV6Z6N4P5ESHZMK0KH2B]
 ---
 # review sync: main 取り込み
 
@@ -62,3 +62,20 @@ task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り
 - Claude Code の session resume・continuation・checkpoint に属する参照を内容で判断して修正した。`git show e9cfcb69 66ce1652` の旧表記を含む削除行を数えた結果、crates 45 件、docs 18 件、gui 4 件、web 4 件を振り直した。gui の 4 件は schema 生成コメントを手動更新（pnpm 11.27.0 の store DB が開けず生成不能）。web の schema/type は pnpm 12.6.0 で再生成した。
 - 残した ADR-0124 参照は direct route の説明である。`rg -o 'ADR-0124|0124-claude-session-resume'` の確認では crates 37 件、docs 21 件、gui 3 件、web 4 件が残る。これらの ADR-0124 は atomic direct route を指し、session resume 用の `0124-claude-session-resume` ファイル名参照は `docs/progress` と `docs/PROGRESS.md` の履歴記録に限る。
 - `web/api/generated/schema.json` は `docs/api/v1/api-v1.schema.json` からの再生成で一致させた。
+
+## 検証結果
+
+完了日: 2026-10-03。検証した HEAD は `f7b262c521fa6fc9a1ab2c9ee8bb3de867324f04`。上記の `merged-main` は、この HEAD に取り込み済みの main `a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8` を示す。
+
+`git merge-tree --write-tree HEAD main` は exit 1。main `c448d9c77d18eb54396907835efb91c5d0a985e8` との衝突は `crates/task-worker/src/claude_code/prompt.rs`、`docs/api/v1/api-v1.schema.json`、`docs/architecture-map.md`、`gui/app/celeris/types.ts`、`web/api/generated/schema.json` の 5 ファイル。指示に従い main は取り込まず、`merged-main` 行は変更していない。
+
+| コマンド | 結果 | exit |
+|---|---:|---:|
+| `cargo clippy --workspace -- -D warnings` | 警告なし | 0 |
+| `cargo test -p task-core` | 688 passed | 0 |
+| `cargo test -p task-ops` | 451 passed、1 ignored（手動計測） | 0 |
+| `cargo test -p task-api`（run sandbox） | 123 passed、1 failed、2 ignored。browser H3 試験で userns の `unshare: Operation not permitted` | 101 |
+| `cargo test -p task-api`（通常権限で再実行） | 439 passed、2 ignored | 0 |
+| `cargo test -p task-dispatch` | 578 passed | 0 |
+
+未解決: 新しい main との 5 ファイルの衝突はこの WorkUnit では解いていない。run sandbox の userns 制約は task-api の通常権限での再実行では発生しなかった。ログは run の成果物ディレクトリに各コマンド別に保存した。

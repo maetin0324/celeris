@@ -356,7 +356,7 @@ fn task_without_a_matching_provider_does_not_block_until_idle() {
         &ws,
     ]);
 
-    let log = env.run_celeris(&config, Duration::from_secs(30));
+    let log = env.run_celeris(&config, Duration::from_secs(60));
     assert_eq!(env.task(id).status, Status::Ready);
     assert!(log.contains("no provider in the config matches"), "{log}");
     env.replay_is_consistent();

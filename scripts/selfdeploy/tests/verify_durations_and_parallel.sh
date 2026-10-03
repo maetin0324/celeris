@@ -144,7 +144,7 @@ import json, sys
 v = json.load(open(sys.argv[1], encoding="utf-8"))
 assert v["ok"] is True and v["live_ok"] is True, v
 ids = [c["id"] for c in v["checks"]]
-assert ids == ["1", "2", "3", "4", "4b", "5", "6"], ids
+assert ids == ["1", "2", "3", "4", "4b", "5", "6", "4d"], ids
 for c in v["checks"]:
     assert isinstance(c["secs"], (int, float)) and c["secs"] >= 0, c
 secs = {c["id"]: c["secs"] for c in v["checks"]}

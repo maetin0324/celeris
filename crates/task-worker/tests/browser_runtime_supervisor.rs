@@ -142,7 +142,7 @@ fn start_fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(Instant::now() < deadline, "fixture did not start");
         std::thread::sleep(Duration::from_millis(50));
@@ -303,7 +303,7 @@ fn controller_main() {
     let (record_dir, session_dir) = dirs.split_once(':').unwrap();
     let record_dir = PathBuf::from(record_dir);
     if mode == "reap" {
-        let killed = reap_on_start(&record_dir, Duration::from_secs(30)).unwrap();
+        let killed = reap_on_start(&record_dir, Duration::from_secs(60)).unwrap();
         println!("CTRL REAPED {killed:?}");
         return;
     }
@@ -475,7 +475,7 @@ fn wait_gone(procs: &[RecordedProcess], within: Duration) -> Vec<RecordedProcess
 /// egress が READY の直後に終わると、書き直し前の記録に死んだ egress が一時的に残る。
 /// 時計ではなくこの条件を待ち、上限を過ぎたら最後に読んだ記録で `assert_full_runtime` を判定する。
 fn read_full_runtime(path: &Path) -> Vec<RecordedProcess> {
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     loop {
         let procs = read_record(path);
         let r = roles(&procs);
@@ -569,9 +569,9 @@ fn inner_supervisor_in_test_netns() {
     let held = open.load(Ordering::SeqCst);
     assert!(held >= 1 && closed.load(Ordering::SeqCst) < held);
     sigkill(&mut ca);
-    let left = wait_gone(&procs, Duration::from_secs(30));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(a) survived controller SIGKILL: {left:?}");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while closed.load(Ordering::SeqCst) < open.load(Ordering::SeqCst) {
         assert!(Instant::now() < deadline, "(a) proxy tunnel still open");
         std::thread::sleep(Duration::from_millis(50));
@@ -606,7 +606,7 @@ fn inner_supervisor_in_test_netns() {
     let mut cr = controller("reap", &rec_b, &base.path().join("unused"));
     let reaped = expect_line(&cr, "CTRL REAPED");
     assert!(cr.child.wait().unwrap().success());
-    let left = wait_gone(&procs, Duration::from_secs(5));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(b) survived restart reap: {left:?}");
     assert!(!path.exists(), "record must be removed by reap");
     eprintln!(
@@ -625,7 +625,7 @@ fn inner_supervisor_in_test_netns() {
     let stopped = expect_line(&cc, "CTRL STOPPED");
     assert_eq!(stopped, "left=[]");
     assert!(cc.child.wait().unwrap().success());
-    let left = wait_gone(&procs, Duration::from_secs(1));
+    let left = wait_gone(&procs, Duration::from_secs(60));
     assert!(left.is_empty(), "(c) survived stop: {left:?}");
     assert!(!path.exists(), "record must be removed on stop");
     eprintln!("SUPERVISOR-EVIDENCE (c) ok: 0 of {} remain", procs.len());

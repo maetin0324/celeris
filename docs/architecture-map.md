@@ -18,7 +18,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | Task 型・状態機械 | task-core | `crates/task-core/src/{model,transition}.rs` | [ADR-0002](../agent-docs/adr/0002-state-machine.md) |
 | Event（追記専用） | task-core::store | `crates/task-core/src/store/events.rs` | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) |
 | SQLite 永続化（facade + 領域別 impl） | task-core::store | `crates/task-core/src/store/mod.rs`（module map はここの doc comment） | [ADR-0001](../agent-docs/adr/0001-scope-and-principles.md) |
-| 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](../agent-docs/adr/0072-task-execution-decomposition.md), [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| 実行計画（ExecutionPlan/WorkUnit/Run） | task-core::execution_plan | `crates/task-core/src/execution_plan.rs`（`execution_plan/{validation,scheduling}.rs`） | [ADR-0072](../agent-docs/adr/0072-task-execution-decomposition.md), [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0134](../agent-docs/adr/0134-blocked-repair-replan-loop.md) |
 | 再帰task木（leaf/子task, gate, 上限, 生存確認） | task-core::tree | `crates/task-core/src/tree.rs`（`tree/{gate,limits,approval,liveness}.rs`） | [ADR-0079](../agent-docs/adr/0079-recursive-task-decomposition.md) |
 | Browser capability の待ち状態 | task-core::browser_wait | `crates/task-core/src/browser_wait.rs`（`browser_wait/sql.rs`） | [ADR-0078](../agent-docs/adr/0078-browser-execution-capability.md), [ADR-0080](../agent-docs/adr/0080-browser-phase2-policy-broker-approval.md) |
 | Browser 制御・identity・live proxy の状態 | task-core | `crates/task-core/src/{browser_control,browser_identity,browser_live,browser_isolation}.rs` | [ADR-0099](../agent-docs/adr/0099-browser-phase3-control-lease.md), [ADR-0100](../agent-docs/adr/0100-browser-phase3-live-proxy-acl.md), [ADR-0101](../agent-docs/adr/0101-browser-phase3-identity-contract.md) |
@@ -33,7 +33,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | Dispatcher facade（tick・起動/停止順） | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher.rs`（module map はこの doc comment） | [ADR-0082](../agent-docs/adr/0082-dispatcher-module-split.md), [記録](../agent-docs/progress/phase-P0-dispatcher.md) |
-| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
+| WorkUnit の gate・準備・並列実行 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/work_units.rs` | [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md), [ADR-0134](../agent-docs/adr/0134-blocked-repair-replan-loop.md) |
 | Browser backend の適合判定・fallback 候補 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/{dispatch_run,worker_task}.rs` | [ADR-0106](../agent-docs/adr/0106-browser-phase4-conformance-dispatch.md), [ADR-0107](../agent-docs/adr/0107-browser-fallback-candidate-preparation.md) |
 | 木の子task の gate・一括作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/tree_units.rs` | [ADR-0079](../agent-docs/adr/0079-recursive-task-decomposition.md) |
 | 委譲/承認の子task 作成 | task-dispatch::dispatcher | `crates/task-dispatch/src/dispatcher/child_tasks.rs` | [ADR-0005](../agent-docs/adr/0005-phase3-dispatch-and-worker.md) |
@@ -76,6 +76,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | 再帰task木の操作（adopt/plan/view） | task-ops::tree | `crates/task-ops/src/tree{,_adopt,_plan,_view}.rs` | [ADR-0079](../agent-docs/adr/0079-recursive-task-decomposition.md) |
 | worker の run が宣言した後続 task（案件・repos の継承、`followups.json`） | task-ops::followup | `crates/task-ops/src/followup.rs`, `crates/task-dispatch/src/dispatcher/followups.rs` | [ADR-0098](../agent-docs/adr/0098-worker-created-tasks-inherit-the-origin-project.md) |
 | git 差分・変更取り込み判定 | task-ops::changes | `crates/task-ops/src/changes.rs` | [ADR-0043](../agent-docs/adr/0043-workspaces.md) |
+| 受信箱（人の判断）と通知（知らせ）の 2 系統・Discord 送り出し | task-ops::inbox, task-core::notify, celeris::notify | `crates/task-ops/src/inbox.rs`, `crates/task-core/src/notify.rs`, `crates/celeris/src/notify.rs` | [ADR-0133](../agent-docs/adr/0133-inbox-and-notifications.md), [ADR-0037](../agent-docs/adr/0037-discord-notifications.md) |
 | ドキュメント整備の自動化 | task-ops::docs_maintenance | `crates/task-ops/src/docs_maintenance.rs` | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 
 ## task-api — HTTP API（`/api/v1`）
@@ -98,17 +99,15 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | self-deploy（release/verify/handoff） | celeris | `crates/celeris/src/{instance.rs,releases.rs,config/selfdeploy.rs}` | [selfdeploy.md](ops/selfdeploy.md) |
 | Knowledge GC・doc gardener | celeris | `crates/celeris/src/{knowledge_gc,knowledge_maint,doc_gardener}.rs` | [ADR-0068](../agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md) |
 | cluster/accounts 管理の裏方 | celeris | `crates/celeris/src/{cluster_admin,accounts_admin}.rs` | [ADR-0017](../agent-docs/adr/0017-account-management-from-gui.md), [ADR-0018](../agent-docs/adr/0018-remote-clusters-over-ssh.md) |
-| 2 層ビルドキャッシュ（L2 cache server） | celeris::cache_server | `crates/celeris/src/cache_server.rs` | [ADR-0075](../agent-docs/adr/0075-tiered-build-cache.md) |
 
 ## 周辺 crate と結合テスト
 
 | subsystem | owner crate/module | entry point | ADR / 設計 |
 |---|---|---|---|
 | `celerisctl`（CLI。migration をしない `open_client`） | celerisctl::main | `crates/celerisctl/src/main.rs` | [ADR-0004](../agent-docs/adr/0004-taskctl-cli.md), [ADR-0095](../agent-docs/adr/0095-worker-runs-see-the-db-read-only.md) |
-| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](../agent-docs/adr/0053-llm-source-proxy.md) |
+| `llm-proxy`（ローカル LLM 供給プロキシ） | llm-proxy::server | `crates/llm-proxy/src/server.rs` | [ADR-0053](../agent-docs/adr/0053-llm-source-proxy.md), [ADR-0132](../agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md) |
 | `celeris-mcp`（外部エージェント向け MCP） | celeris-mcp::rpc | `crates/celeris-mcp/src/rpc.rs` | [ADR-0056](../agent-docs/adr/0056-mcp-server.md) |
 | `celeris-credentiald`（credential broker） | celeris-credentiald::lib | `crates/celeris-credentiald/src/lib.rs` | [ADR-0080](../agent-docs/adr/0080-browser-phase2-policy-broker-approval.md) |
-| `scratch-cache`（build cache L2 サーバー本体） | scratch-cache::server | `crates/scratch-cache/src/server.rs` | [ADR-0075](../agent-docs/adr/0075-tiered-build-cache.md) |
 | `tests/e2e`（daemon 起動を伴う結合テスト） | e2e | `tests/e2e/tests/scenarios.rs` | [ADR-0010](../agent-docs/adr/0010-phase7-hardening.md) |
 
 ## GUI（`gui/`、置き換え予定）と web/（新 SPA、設計段階）

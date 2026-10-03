@@ -15,6 +15,7 @@
 # reason docs/ops/dev-builds-local-target-dir.md: agent の開発ビルド規則と 2026-09-30 の経緯なので agent 側へ寄せる。
 # reason docs/ops/ui-ux-external-skills.md: 特定の導入作業を一度だけ行う手順なので agent 側の作業記録へ寄せる。
 # reason docs/testing.md: WU の check と agent 向けの試験規則なので agent 側へ寄せる。
+# reason docs/testing/time-dependent-waits.md: task 01M3ZCXG7C34WZFJ46Q64XS8SZ の走査記録（候補行・判定、front matter に tasks）なので、その task の進捗ファイルの下へ寄せる。
 # reason docs/ops/adr-0079-r5b-runbook.md: 人の確認で削除。ADR-0079 R5b の一度きりの作業手順であり、現行の運用文書ではない。
 # reason docs/ops/home-nfs-migration-2026-09-25.md: 人の確認で削除。2026-09-25 の一度きりの移行手順であり、現行の運用文書ではない。
 # reason docs/DESIGN.md: 人の確認で削除。現行の仕様の入口は docs/SPEC.md とし、CLAUDE.md の参照もそちらへ変える。
@@ -230,3 +231,21 @@ docs/progress/time-dependent-tests.md	agent-docs/progress/2026-10-02-time-depend
 docs/progress/time-dependent-tests-dispatch.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/dispatch.md	agent
 docs/progress/time-dependent-tests-injection.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/injection.md	agent
 docs/progress/time-dependent-tests-kill.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/kill.md	agent
+# 末尾の行は sync-main-2 の merge-latest（main 40189604）以降に main が旧配置へ足したもの。migrate-docs（task 01M3Z8CXYG1J6BZCQ87YS3FC67）が ADR-0128 D6 で移した。
+docs/adr/0129-host-sccache-reflink-targets.md	agent-docs/adr/0129-host-sccache-reflink-targets.md	agent
+docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md	agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md	agent
+docs/adr/0133-inbox-and-notifications.md	agent-docs/adr/0133-inbox-and-notifications.md	agent
+docs/adr/0134-blocked-repair-replan-loop.md	agent-docs/adr/0134-blocked-repair-replan-loop.md	agent
+docs/adr/0135-web-follow-health-gate.md	agent-docs/adr/0135-web-follow-health-gate.md	agent
+docs/adr/0138-browser-prod-admission-confidential-release.md	agent-docs/adr/0138-browser-prod-admission-confidential-release.md	agent
+docs/progress/phase-inbox-notifications.md	agent-docs/progress/2026-10-02-inbox-notifications.md	agent
+docs/progress/provider-llm-source-inventory.md	agent-docs/progress/2026-10-02-provider-llm-source/inventory.md	agent
+docs/progress/reflink-target-experiment.md	agent-docs/progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md	agent
+docs/progress/sccache-sync-recheck.md	agent-docs/progress/2026-10-02-host-sccache-reflink/sync-recheck.md	agent
+docs/progress/seed-refresh.md	agent-docs/progress/2026-10-02-host-sccache-reflink/seed-refresh.md	agent
+docs/testing/time-dependent-waits.md	agent-docs/progress/2026-10-02-deterministic-time-waits/inventory.md	agent
+docs/api/v1/inbox-notifications.md	docs/api/v1/inbox-notifications.md	human
+docs/ops/browser-launcher-admission-evidence-run.md	docs/ops/browser-launcher-admission-evidence-run.md	human
+docs/ops/host-sccache-reflink-targets.md	docs/ops/host-sccache-reflink-targets.md	human
+docs/ops/inbox-notifications.md	docs/ops/inbox-notifications.md	human
+docs/ops/provider-llm-source-migration.md	docs/ops/provider-llm-source-migration.md	human

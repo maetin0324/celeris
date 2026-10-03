@@ -53,6 +53,8 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
                 let mut env_keys: Vec<String> = p.env.keys().cloned().collect();
                 env_keys.sort();
                 ProviderConfigView {
+                    kind: config.provider_kind(&p.id).unwrap_or_default(),
+                    llm_source: config.provider_llm_source(&p.id),
                     credential_refs: task_core::model_routing::credential_refs(&p.env_from_secrets),
                     tier_models: p.tier_models.clone(),
                     account_id: p.account_id.clone(),
@@ -230,6 +232,13 @@ pub fn api_settings(
         instance_id,
         started_at,
         providers_dir: config.providers_dir.clone(),
+        openai_compatible_source_ids: config
+            .llm_proxy
+            .sources
+            .openai_compatible
+            .iter()
+            .map(|source| source.id.clone())
+            .collect(),
         admin_tx,
         accounts_roots: config
             .accounts
@@ -246,6 +255,10 @@ pub fn api_settings(
         memory_dir: config.memory.as_ref().map(|m| m.dir.clone()),
         notify_secret_id: config.notify.discord_webhook_secret.clone(),
         notify_gui_base_url: config.notify.base_url().map(str::to_string),
+        notify_inbox_batch_secs: config.notify.inbox_batch_secs,
+        notify_inbox_reminder_secs: config.notify.inbox_reminder_secs,
+        notify_digest_interval_secs: config.notify.digest_interval_secs,
+        notify_digest_max_lines: config.notify.digest_max_lines,
         // ADR-0040 D6（Phase 48）: `GET /releases` / `POST /releases/{sha12}/promote` が読む先。
         // task-api はファイルの規約を知らないので、読む係をここで渡す。
         releases: Some(Arc::new(crate::releases::FsReleases::new(

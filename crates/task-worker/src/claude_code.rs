@@ -40,8 +40,6 @@ pub struct ClaudeCodeConfig {
     pub model: Option<String>,
     /// 追加の環境変数（例: `CLAUDE_CONFIG_DIR`）。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
     /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
@@ -55,7 +53,6 @@ impl Default for ClaudeCodeConfig {
             permission_mode: "bypassPermissions".to_string(),
             model: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -102,12 +99,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(ClaudeCodeAdapter::new(config)))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
-    }
-
     /// ADR-0043 D3（Phase 56）: コンテナの中で `claude` を起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
@@ -429,8 +420,6 @@ async fn run_claude_code(
         command.arg("--allowedTools").arg(allowed);
     }
     command.args(&config.extra_args);
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     // F5-fix5: headless の run では background task を無効にする（Claude Code CLI 2.1.283 は
     // `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` が立っていると Bash / Agent の `run_in_background` を道具の
     // schema から外す）。background が無いぶん、foreground の Bash が run の壁時計まで待てるよう

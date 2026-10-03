@@ -922,7 +922,6 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
             "CODEX_HOME".into(),
             dir.path().join("codex-home").to_string_lossy().into_owned(),
         )],
-        env_remove: Vec::new(),
         container: None,
         resume_mode: CodexResumeMode::default(),
         resume_bypass: CodexResumeBypass::default(),
@@ -1091,54 +1090,6 @@ async fn with_env_overrides_a_same_name_key_already_in_config_env() {
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let seen = std::fs::read_to_string(&out_file).unwrap();
     assert_eq!(seen, dir.path().join("new-account-dir").to_string_lossy());
-}
-/// ADR-0075 G3-fix1: `with_env_removed` は親から継いだ値（ここでは `HOME`）も設定の `env` の値も子から外し、
-/// その後の `with_env` で足した値は残る。`TieredAdapter` を通しても同じ。
-#[tokio::test]
-async fn with_env_removed_drops_inherited_and_configured_keys() {
-    let dir = tempfile::tempdir().unwrap();
-    let out_file = dir.path().join("env-seen.txt");
-    let mut config = CodexConfig {
-        command: {
-            let path = dir.path().join("codex_stub.sh");
-            crate::test_support::write_executable(
-                &path,
-                &format!(
-                    "#!/bin/sh\nmkdir -p artifacts\nprintf '%s' \"${{HOME-unset}}|${{FROM_CONFIG-unset}}|${{LATER-unset}}\" > {out}\nprintf '%s' '{{\"summary\":\"ok\",\"evidence\":[]}}' > artifacts/result.json\necho '{{\"type\":\"turn.completed\"}}'\n",
-                    out = out_file.display()
-                ),
-            );
-            path.to_string_lossy().into_owned()
-        },
-        ..CodexConfig::default()
-    };
-    config.env.push((
-        "CODEX_HOME".into(),
-        dir.path().join("codex-home").to_string_lossy().into_owned(),
-    ));
-    config
-        .env
-        .push(("FROM_CONFIG".to_string(), "x".to_string()));
-    let tiered = crate::tiered::TieredAdapter {
-        base: Arc::new(CodexAdapter::new(config)),
-        account_id: None,
-        credential_error: None,
-        models: Default::default(),
-    };
-    let adapter = tiered
-        .with_env_removed(&["HOME".to_string(), "FROM_CONFIG".to_string()])
-        .expect("codex supports with_env_removed")
-        .with_env(&[("LATER".to_string(), "y".to_string())])
-        .expect("codex supports with_env");
-    let req = sample_req(dir.path().to_path_buf());
-    let sink = RecordingSink::default();
-    let outcome = adapter
-        .run(req, "run-env-removed", default_limits(), &sink)
-        .await
-        .unwrap();
-    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
-    let seen = std::fs::read_to_string(&out_file).unwrap();
-    assert_eq!(seen, "unset|unset|y");
 }
 #[tokio::test]
 async fn tier_binding_reaches_cli_model_argument_and_preserves_account_env() {
@@ -1863,10 +1814,6 @@ async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
         &[
             ("CARGO_TARGET_DIR", target.display().to_string()),
             ("CARGO_INCREMENTAL", "0".to_string()),
-            (
-                "SCCACHE_DIR",
-                dir.path().join("scratch/l1").display().to_string(),
-            ),
         ],
     );
     let req = sample_req(dir.path().to_path_buf());
@@ -1880,7 +1827,7 @@ async fn r7_8_fresh_workspace_write_run_adds_the_cargo_target_dir() {
     assert_eq!(
         add_dir_values(&args),
         [artifacts_dir.as_str(), target.to_str().unwrap()],
-        "only the last CARGO_TARGET_DIR is granted; SCCACHE_DIR is server-side: {args:?}"
+        "only the last CARGO_TARGET_DIR is granted: {args:?}"
     );
     assert!(
         target.is_dir(),

@@ -23,6 +23,16 @@ ALLOWED_DUPLICATES="
 # main の名前空間で番号付きの最後（これを超える番号は新設禁止）。
 LAST_NUMBERED=0128
 
+# ADR-0128 の取り込み前に main へ入っていた 0128 超えの番号（振り直さない。ADR-0128 D5 付記）。完全なファイル名で書く。
+ALLOWED_OVER_LAST="
+0129-host-sccache-reflink-targets.md
+0132-provider-llm-source-split-and-cheap-qwen.md
+0133-inbox-and-notifications.md
+0134-blocked-repair-replan-loop.md
+0135-web-follow-health-gate.md
+0138-browser-prod-admission-confidential-release.md
+"
+
 NAMESPACES="main gui web"
 TAB=$(printf '\t')
 
@@ -41,6 +51,13 @@ ns_of() {
         agent-docs/gui/adr/* | docs/gui/adr/*) echo gui ;;
         agent-docs/web/adr/* | docs/web/adr/*) echo web ;;
     esac
+}
+
+is_allowed_over_last() {
+    for a in $ALLOWED_OVER_LAST; do
+        [ "$a" = "$1" ] && return 0
+    done
+    return 1
 }
 
 is_allowed() {
@@ -99,7 +116,7 @@ EOF
                 continue
                 ;;
             num)
-                if [ "$ns" = main ] && [ "$key" -gt "$LAST_NUMBERED" ] 2>/dev/null; then
+                if [ "$ns" = main ] && [ "$key" -gt "$LAST_NUMBERED" ] 2>/dev/null && ! is_allowed_over_last "$name"; then
                     echo "$p:1: 番号 $key は $LAST_NUMBERED を超える（新しい ADR は YYYY-MM-DD-<slug>.md で書く）" >>"$out"
                 fi
                 ;;

@@ -79,6 +79,7 @@ fn facts(session_id: &str, _pid: i32) -> RuntimeFacts {
         session_id: session_id.into(),
         host_uid: 1000,
         runtime_uid: 1000,
+        userns_owner_uid: Some(1001),
         namespaces: BTreeSet::from([
             Namespace::User,
             Namespace::Pid,
@@ -115,6 +116,13 @@ impl Drop for Fx {
 
 impl Fx {
     fn new(admission: Admission) -> Self {
+        Self::serve(admission, None)
+    }
+    /// production の `serve_attested`（設定上の launcher UID 付き）で起動する。
+    fn attested(launcher_uid: u32) -> Self {
+        Self::serve(Admission::Attested, Some(launcher_uid))
+    }
+    fn serve(admission: Admission, launcher_uid: Option<u32>) -> Self {
         let root = tempfile::tempdir().expect("tempdir");
         for d in ["config", "data", "run"] {
             let p = root.path().join(d);
@@ -137,17 +145,27 @@ impl Fx {
         let broker = Arc::new(broker);
         let b = Arc::clone(&broker);
         let run = root.path().join("run");
-        thread::spawn(move || ipc::serve_with(b, &run, vec![std::process::id()], admission));
+        thread::spawn(move || match (admission, launcher_uid) {
+            (Admission::Attested, Some(uid)) => {
+                ipc::serve_attested(b, &run, vec![std::process::id()], Some(uid))
+            }
+            _ => ipc::serve_with(b, &run, vec![std::process::id()], admission),
+        });
         let fx = Self {
             root,
             broker,
             provider,
             runtime: Vec::new(),
         };
-        for _ in 0..200 {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
             if fx.sock("injection.sock").exists() && fx.sock("control.sock").exists() {
                 break;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for fixture readiness"
+            );
             thread::sleep(Duration::from_millis(10));
         }
         fx
@@ -202,15 +220,18 @@ impl Fx {
         let c = Command::new("sleep").arg("30").spawn().expect("sleep");
         let pid = c.id();
         self.runtime.push(c);
-        let mut start = None;
-        for _ in 0..100 {
-            start = process_start(pid);
-            if start.is_some() {
-                break;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let start = loop {
+            if let Some(start) = process_start(pid) {
+                break start;
             }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for fixture readiness"
+            );
             thread::sleep(Duration::from_millis(5));
-        }
-        (pid, start.expect("start"))
+        };
+        (pid, start)
     }
     fn control(&self, v: serde_json::Value) -> Option<String> {
         let reply = ipc::call(&self.sock("control.sock"), v.to_string().as_bytes()).expect("ctl");
@@ -542,6 +563,61 @@ fn credential_injection_sameuid_rejected_in_production() {
     );
     assert_eq!(fx.calls(), before);
     assert!(fx.journal().contains("\"admission\":\"attested\""));
+}
+
+#[test]
+fn credential_injection_requires_a_verified_launcher_proof_in_production() {
+    // ADR-0138 D-L: launcher UID を設定した本番 Attested でも、証明なし・検証失敗（SameUid の
+    // 子 process に結び付いた証明）はどちらも拒否し、provider を呼ばず lease を消費しない。
+    let mut fx = Fx::attested(unsafe { libc::geteuid() } + 500);
+    let lease = fx.grant("sess-1", "k1", 60);
+    let runtime_pid = fx.live("sess-1");
+    fx.open("sess-1", "auth-1", &lease);
+    let before = fx.calls();
+    // 1. 証明なし。
+    assert_eq!(
+        code(&fx, &request("sess-1", "auth-1", &lease)),
+        "isolation_required"
+    );
+    // 2. 証明の結び付け: 未登録 session・他 session の証明は拒否、1 回だけ受ける。
+    let attach = |session: &str, proof_session: &str| {
+        fx.control(serde_json::json!({
+            "op": "attach_launcher_proof",
+            "session_id": session,
+            "instance_id": "launcher-1",
+            "peer_uid": unsafe { libc::geteuid() } + 500,
+            "proof": {
+                "session_id": proof_session,
+                "instance_id": "launcher-1",
+                "pid": runtime_pid,
+                "starttime": process_start(runtime_pid).expect("runtime start"),
+                "ns_owner_uid": unsafe { libc::geteuid() } + 1,
+                "launcher_uid": unsafe { libc::geteuid() } + 500,
+                "isolation_ok": true,
+            },
+        }))
+    };
+    assert_eq!(
+        attach("sess-9", "sess-9").as_deref(),
+        Some("session_not_live")
+    );
+    assert_eq!(
+        attach("sess-1", "sess-2").as_deref(),
+        Some("invalid_request")
+    );
+    assert_eq!(attach("sess-1", "sess-1"), None);
+    assert_eq!(
+        attach("sess-1", "sess-1").as_deref(),
+        Some("invalid_request")
+    );
+    // 3. 証明はあるが runtime が SameUid・非隔離なので検証に失敗する。
+    assert_eq!(
+        code(&fx, &request("sess-1", "auth-1", &lease)),
+        "isolation_required"
+    );
+    assert_eq!(fx.calls(), before);
+    assert!(fx.journal().contains("\"admission\":\"attested\""));
+    assert!(!fx.journal().contains("\"decision_code\":\"injected\""));
 }
 
 #[test]

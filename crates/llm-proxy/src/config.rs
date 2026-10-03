@@ -200,7 +200,10 @@ pub struct ModelsConfig {
     pub claude: HashMap<Tier, String>,
     #[serde(default = "default_gpt_models")]
     pub gpt: HashMap<Tier, String>,
-    #[serde(default = "default_qwen_models")]
+    #[serde(
+        default = "default_qwen_models",
+        deserialize_with = "deserialize_cheap_qwen_models"
+    )]
     pub qwen: HashMap<Tier, String>,
 }
 
@@ -237,14 +240,25 @@ fn default_gpt_models() -> HashMap<Tier, String> {
     ])
 }
 
-/// ADR-0053 D1: Qwen は tier に関わらず `qwen3.8-27b`。
+/// ADR-0132 D3: Qwen の抽象 tier は cheap だけ。
 fn default_qwen_models() -> HashMap<Tier, String> {
-    let model = "qwen3.8-27b".to_string();
-    HashMap::from([
-        (Tier::Frontier, model.clone()),
-        (Tier::Standard, model.clone()),
-        (Tier::Cheap, model),
-    ])
+    HashMap::from([(Tier::Cheap, "qwen3.8-27b".to_string())])
+}
+
+fn deserialize_cheap_qwen_models<'de, D>(deserializer: D) -> Result<HashMap<Tier, String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let mut models = HashMap::<Tier, String>::deserialize(deserializer)?;
+    for tier in [Tier::Frontier, Tier::Standard] {
+        if models.remove(&tier).is_some() {
+            tracing::warn!(
+                ?tier,
+                "llm-proxy: ignoring legacy Qwen model outside cheap tier"
+            );
+        }
+    }
+    Ok(models)
 }
 
 #[cfg(test)]

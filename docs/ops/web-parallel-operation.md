@@ -1,7 +1,7 @@
 # web/ の並行運用: unit・selfdeploy の web 段・staging の確認手順と戻し方
 
 ---
-tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS, 01M3W79QE2ZD22YW7P499PZKPP, 01M3YBGM64RYPEY9NZANF79A0M]
+tasks: [01M3TG9K4VV5Z4GZ0WY4DCVBZS, 01M3W79QE2ZD22YW7P499PZKPP, 01M3YBGM64RYPEY9NZANF79A0M, 01M3YT4PT3EP8A38111BXH1DCF]
 ---
 
 gui/（`:7700`）と web/（ADR-0081 の SPA + gateway）を**同じ celeris に対して並行に**動かす。
@@ -13,13 +13,13 @@ gui/ の unit・配信・昇格は変えない。設計は [web ADR-W3](../../ag
 
 | もの | 場所 | 要点 |
 |---|---|---|
-| unit | `deploy/systemd/celeris-web@.service` | `%i` = release の sha12。`~/.local/celeris/releases/<sha12>/web/app/` から `node server/index.js`。bind の既定は `127.0.0.1:7720`、API は `127.0.0.1:7710`。上書きは `~/.config/celeris/web.env` |
-| install-units | `scripts/selfdeploy/install-units.sh` | `celeris-web@.service` も `~/.config/systemd/user/` に置く（置くだけ。enable は人） |
-| release の web 段 | `scripts/selfdeploy/release.sh` | gui/ の gate の後ろに `web-pnpm-install` → `web-pnpm-typecheck` → `web-pnpm-test` → `web-pnpm-release`。**非 blocking**。通れば release に `web/<tarball>` と展開済み `web/app/`（`pnpm install --prod --offline` 済み） |
-| gate.json / manifest.json | `releases/<sha12>/` | `web: {ok, blocking: false, failed_step, skipped, reason, pnpm, steps[], bundle}`。`ok` / `gate_ok` は gui/ の gate だけで決まる |
-| verify の検査 4c | `scripts/selfdeploy/verify.sh` | `SD_VERIFY_WEB_HOOK` を指定したときだけ web/ の読み取り parity を足す（§2） |
-| promote の追従 | `scripts/selfdeploy/web-follow.sh` | 昇格後、旧 release の web が動いていれば新 release の web へ移す（[selfdeploy.md §4e](selfdeploy.md#4e-web-の追従web-followsh)） |
-| 試験 | `scripts/selfdeploy/tests/release_web_stage_nonblocking.sh`、`promote_web_follows_release.sh` | 偽の corepack/pnpm・systemctl。本番・staging に触れない |
+| ADR | [web ADR-W3](../../agent-docs/web/adr/web-0003-parallel-operation.md) | H2（port）・H3（cookie）・H7（gate は gui/ のまま）・H10（staging は人） |
+| unit | `deploy/systemd/celeris-web@.service` | `%i` = release の sha12。`~/.local/celeris/releases/<sha12>/web/app/` から `node server/index.js`。bind の既定は `127.0.0.1:7720`。上書きは `~/.config/celeris/web.env` |
+| LAN 中継 | `deploy/systemd/celeris-web-lan.socket`・`celeris-web-lan.service` | 現行 host の `192.168.1.103:7721` を gateway の `127.0.0.1:7720` へ中継。別の host では socket の `ListenStream` を設置前に変更する。service の start limit と socket の trigger limit は無効 |
+| install-units | `scripts/selfdeploy/install-units.sh` | web gateway と LAN 中継の 3 unit を `~/.config/systemd/user/` に置いて daemon-reload する。enable・start はしない |
+| release の web 段 | `scripts/selfdeploy/release.sh` | gui/ の gate の後ろに `web-pnpm-install` → `web-pnpm-typecheck` → `web-pnpm-test` → `web-pnpm-release`。**非 blocking**。通れば release の `web/<tarball>` と展開済み `web/app/`（`pnpm install --prod --offline` 済み） |
+| gate.json / manifest.json | `releases/<sha12>/` | `web: {ok, blocking: false, failed_step, skipped, reason, pnpm, steps[], bundle}`。`ok` / `gate_ok` は従来どおり gui/ の gate だけ |
+| テスト | `scripts/selfdeploy/tests/release_web_stage_nonblocking.sh` | web 段が落ちても release が作られ `gate_ok: true`（偽の corepack/pnpm、本番・staging に触れない） |
 
 web/ の pnpm は `corepack pnpm@<web/package.json の packageManager>` で固定（host の pnpm や gui/ の版とは独立）。
 `SD_GATE_SKIP_WEB=1` で web 段を飛ばせる。`SD_WEB_PNPM` で呼び出しを差し替えられる（試験用）。
@@ -33,8 +33,8 @@ web/ の pnpm は `corepack pnpm@<web/package.json の packageManager>` で固�
   python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["web"])' ~/.local/celeris/releases/<sha12>/gate.json
   ls ~/.local/celeris/releases/<sha12>/web/app/server/index.js ~/.local/celeris/releases/<sha12>/web/app/node_modules >/dev/null && echo ok
   ```
-- unit を置く: `scripts/selfdeploy/install-units.sh`。
-- web/ 用の鍵と password（H3: gui/ のものを流用しない。unit はこの 2 つのファイルを読む）:
+- unit を置く（置くだけ。enable・start しない）: `scripts/selfdeploy/install-units.sh`。この操作は人が本番 host で行う。LAN 中継を使う host では、その前に socket の `ListenStream` が host の LAN address と一致するか確認する。
+- web/ 用の鍵と password（H3: gui/ のものを流用しない）:
   ```sh
   (umask 077; head -c 32 /dev/urandom | base64 >~/.config/celeris/web.session-secret)
   (umask 077; printf '%s\n' '<web 用の password>' >~/.config/celeris/web.password)

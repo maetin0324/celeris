@@ -173,3 +173,13 @@ CLAUDE.md の「最初に読むもの」にある参照は `docs/SPEC.md` へ変
 - 走っている branch は、旧 PROGRESS.md の末尾への追記・旧ディレクトリへの新設のどちらでも、移動後の main と衝突せずに取り込める。
 - 「現在地」は commit された 1 行ではなく生成になる。人が GitHub 上で一覧を見たいときは `progress-index.sh` の出力を使う。
 - 番号での短い呼び名（ADR-0xxx）は 0128 で止まる。以後は日付+slug で呼ぶ。
+
+## 付記（2026-10-03、sync-main-2 migrate-docs、task 01M3Z8CXYG1J6BZCQ87YS3FC67）: 取り込み前に main にあった 0128 超えの番号
+
+本 ADR が main に入る前に、main には 0129・0132〜0135・0138 の番号付き ADR が旧 `docs/adr/` に足されていた（本 ADR の D5 より前に書かれたもの）。
+D5 の「既存の重複は振り直さない」と同じ理由（参照・memory・KB・コードのコメントに番号が広く残っている）で、これらも振り直さない。
+
+- D6 に従い `agent-docs/adr/` へ同じファイル名で `git mv` し、`check-adr-numbers.sh` の `ALLOWED_OVER_LAST` に完全なファイル名で書く。
+  許可するのは「本 ADR の取り込み時に main に既にあった」ものだけ。
+- 以後に別 branch から入る 0128 超えの番号（例: 0136 local-hot-data-layout、0137）は D5 どおり新設禁止の違反として扱い、
+  land の task が日付+slug へ振り直すか、main に先にあったことを示して許可リストに足すかを決める（後者は人の確認を取る）。

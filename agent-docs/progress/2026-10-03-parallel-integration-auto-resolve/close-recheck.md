@@ -13,6 +13,7 @@ merged-main: 0225c752ef0cceca723694d17cbbbcda2ed780a7
 
 ## 取り込み
 
+- 差し戻し（merge_base）の再確認: 検査 `merged-main 祖先 && 親 branch celeris/01M3ZCXNXTRTA9GNJ52Q36ZFCP が HEAD の祖先` が exit 1 だった。親の先端 008954ce を `git merge --no-ff` で取り込んだ（merge commit 3bdf30d4）。木は変わらない（`git merge-tree` の結果木が HEAD と同一、`git diff --stat 662a06d8 HEAD` は空）。その後の検査は exit 0。
 - `git merge-base --is-ancestor main HEAD` → exit 0。main（`0225c752`）は HEAD（`f4b1d28d`）の祖先のため、`git merge --no-ff main` は不要だった。
 - `git merge-base --is-ancestor 0225c752 HEAD` と `git rev-parse main` → 同じ `0225c752ef0cceca723694d17cbbbcda2ed780a7`。
 - 取り込みによる衝突はない（取り込み対象が無い）。

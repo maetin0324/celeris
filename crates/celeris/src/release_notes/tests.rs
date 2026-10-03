@@ -98,20 +98,35 @@ fn delivery(task: &str, head: &str, base: Option<&str>) -> DeliveryHead {
 fn notes_group_a_merged_task_branch_and_list_the_rest() {
     let r = Repo::new();
     r.commit("README.md", "x\n", "init");
-    r.commit("config/celeris.example.toml", "[old]\nk = 1\n", "add config");
+    r.commit(
+        "config/celeris.example.toml",
+        "[old]\nk = 1\n",
+        "add config",
+    );
     let base = r.head();
     r.git(&["checkout", "-q", "-b", &format!("celeris/{T1}")]);
     r.commit("a.txt", "a\n", "task work 1");
     r.commit("b.txt", "b\n", "task work 2");
     r.git(&["checkout", "-q", "main"]);
-    r.git(&["merge", "--no-ff", "-q", "-m", &format!("Merge branch 'celeris/{T1}'"), &format!("celeris/{T1}")]);
+    r.git(&[
+        "merge",
+        "--no-ff",
+        "-q",
+        "-m",
+        &format!("Merge branch 'celeris/{T1}'"),
+        &format!("celeris/{T1}"),
+    ]);
     r.commit("direct.txt", "d\n", "direct fix");
     r.commit(
         "crates/task-core/migrations/0099_x.sql",
         "select 1;\n",
         "add migration",
     );
-    r.commit("agent-docs/adr/2026-10-04-x.md", "# X の決定\n\nbody\n", "add adr");
+    r.commit(
+        "agent-docs/adr/2026-10-04-x.md",
+        "# X の決定\n\nbody\n",
+        "add adr",
+    );
     let sha = r.commit(
         "config/celeris.example.toml",
         "[old]\nk = 1\n\n[new]\nkey = 2\n",
@@ -130,7 +145,11 @@ fn notes_group_a_merged_task_branch_and_list_the_rest() {
     assert_eq!(n.tasks[0].source, "branch");
     assert!(n.tasks[0].commits[0].subject.contains(T1));
     assert!(n.deliveries_known);
-    let direct: Vec<&str> = n.direct_commits.iter().map(|c| c.subject.as_str()).collect();
+    let direct: Vec<&str> = n
+        .direct_commits
+        .iter()
+        .map(|c| c.subject.as_str())
+        .collect();
     assert_eq!(direct, ["config", "add adr", "add migration", "direct fix"]);
     assert_eq!(n.migrations.len(), 1);
     assert_eq!(n.migrations[0].status, "added");
@@ -138,7 +157,10 @@ fn notes_group_a_merged_task_branch_and_list_the_rest() {
     assert_eq!(n.schema.changed, Some(true));
     assert_eq!(n.adrs.len(), 1);
     assert_eq!(n.adrs[0].title.as_deref(), Some("X の決定"));
-    let cfg = n.config_example.as_ref().unwrap_or_else(|| panic!("config"));
+    let cfg = n
+        .config_example
+        .as_ref()
+        .unwrap_or_else(|| panic!("config"));
     assert!(cfg.needs_review);
     assert!(cfg.added_lines.contains(&"key = 2".to_string()));
     assert_eq!(cfg.added_sections, ["[new]"]);
@@ -220,7 +242,11 @@ fn fast_forward_delivery_attributes_only_down_to_delivery_base() {
     let subjects: Vec<&str> = t.commits.iter().map(|c| c.subject.as_str()).collect();
     assert_eq!(subjects, ["t1 second", "t1 first"]);
     // old と init の側は帰属しない（直接の commit）。
-    let direct: Vec<&str> = n.direct_commits.iter().map(|c| c.subject.as_str()).collect();
+    let direct: Vec<&str> = n
+        .direct_commits
+        .iter()
+        .map(|c| c.subject.as_str())
+        .collect();
     assert_eq!(direct, ["older direct commit"]);
     assert_eq!(n.first_parent.len(), 4);
 }
@@ -247,14 +273,25 @@ fn task_info_picks_the_last_done_worker_outcome() {
 
 #[test]
 fn task_id_in_parses_branch_forms_and_rejects_non_ulids() {
-    assert_eq!(task_id_in(&format!("Merge branch 'celeris/{T1}'")), Some(T1.into()));
+    assert_eq!(
+        task_id_in(&format!("Merge branch 'celeris/{T1}'")),
+        Some(T1.into())
+    );
     assert_eq!(
         task_id_in(&format!("integrate celeris-wu/{T2}/drop-symlink")),
         Some(T2.into())
     );
     assert_eq!(task_id_in("celeris/not-a-ulid-at-all"), None);
-    assert_eq!(task_id_in("celeris/01JAAAAAAAAAAAAAAAAAAAAAAI"), None, "I は ULID に無い");
-    assert_eq!(task_id_in(&format!("celeris/{T1}X")), None, "26 文字で終わらない");
+    assert_eq!(
+        task_id_in("celeris/01JAAAAAAAAAAAAAAAAAAAAAAI"),
+        None,
+        "I は ULID に無い"
+    );
+    assert_eq!(
+        task_id_in(&format!("celeris/{T1}X")),
+        None,
+        "26 文字で終わらない"
+    );
     assert_eq!(task_id_in("integrate wu/foo"), None);
 }
 
@@ -422,7 +459,12 @@ fn aggregate_reports_incomplete_when_the_chain_cannot_be_followed() {
         "2026-10-03T00:00:00Z",
         10,
         None,
-        Some(notes(B, Some("eeeeeeeeeeee"), &["b2"], vec![task(T2, "two", &["b2"])])),
+        Some(notes(
+            B,
+            Some("eeeeeeeeeeee"),
+            &["b2"],
+            vec![task(T2, "two", &["b2"])],
+        )),
     );
     let all = vec![cur.clone(), b.clone()];
     let p = aggregate(Some(&cur), &b, &all);
@@ -445,7 +487,13 @@ fn aggregate_merges_child_tasks_once() {
         task_id: T2.into(),
         title: Some("child".into()),
     });
-    let a = meta(A, "2026-10-02T00:00:00Z", 10, None, Some(notes(A, Some(C), &["a1"], vec![parent])));
+    let a = meta(
+        A,
+        "2026-10-02T00:00:00Z",
+        10,
+        None,
+        Some(notes(A, Some(C), &["a1"], vec![parent])),
+    );
     // 次のリリースでは子が単独で出ている。
     let b = meta(
         B,
@@ -469,8 +517,11 @@ fn write_release(root: &Path, m: &ReleaseMeta, verify_live: Option<bool>) {
     std::fs::write(dir.join("manifest.json"), manifest.to_string())
         .unwrap_or_else(|e| panic!("write: {e}"));
     if let Some(l) = verify_live {
-        std::fs::write(dir.join("verify.json"), format!(r#"{{"ok":true,"live_ok":{l}}}"#))
-            .unwrap_or_else(|e| panic!("write: {e}"));
+        std::fs::write(
+            dir.join("verify.json"),
+            format!(r#"{{"ok":true,"live_ok":{l}}}"#),
+        )
+        .unwrap_or_else(|e| panic!("write: {e}"));
     }
     if let Some(n) = &m.notes {
         std::fs::write(
@@ -505,7 +556,8 @@ fn preview_from_dir_reads_release_dirs_and_the_current_symlink() {
     write_release(&root, &b, Some(true));
     // 壊れた notes.json は notes なしとして扱われ、落ちない。
     std::fs::create_dir_all(root.join("dddddddddddd")).unwrap_or_else(|e| panic!("mkdir: {e}"));
-    std::fs::write(root.join("dddddddddddd/notes.json"), "{ broken").unwrap_or_else(|e| panic!("w: {e}"));
+    std::fs::write(root.join("dddddddddddd/notes.json"), "{ broken")
+        .unwrap_or_else(|e| panic!("w: {e}"));
     std::fs::create_dir_all(root.join(".build")).unwrap_or_else(|e| panic!("mkdir: {e}"));
     std::os::unix::fs::symlink(format!("releases/{C}"), home.path().join("current"))
         .unwrap_or_else(|e| panic!("symlink: {e}"));

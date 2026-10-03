@@ -685,7 +685,12 @@ async fn promotion_preview_merges_releases_between_current_and_target() {
     );
     put_notes(
         &a,
-        &notes_json("aaaaaaaaaaaa", "cccccccccccc", &["aaaaaaaaaaaa"], &[(T1, "one", "aaaaaaaaaaaa")]),
+        &notes_json(
+            "aaaaaaaaaaaa",
+            "cccccccccccc",
+            &["aaaaaaaaaaaa"],
+            &[(T1, "one", "aaaaaaaaaaaa")],
+        ),
     );
     let b = api.release(
         "bbbbbbbbbbbb",
@@ -740,8 +745,17 @@ async fn promotion_preview_merges_releases_between_current_and_target() {
             .find(|i| i["sha12"] == sha)
             .unwrap_or_else(|| panic!("no {sha}: {body}"))
     };
-    assert_eq!(item("bbbbbbbbbbbb")["notes"]["tasks"][0]["task_id"], T2, "{body}");
-    assert_eq!(item("bbbbbbbbbbbb")["promotion"]["tasks"].as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        item("bbbbbbbbbbbb")["notes"]["tasks"][0]["task_id"],
+        T2,
+        "{body}"
+    );
+    assert_eq!(
+        item("bbbbbbbbbbbb")["promotion"]["tasks"]
+            .as_array()
+            .map(Vec::len),
+        Some(2)
+    );
     assert!(item("cccccccccccc")["notes"].is_null(), "{body}");
     assert!(item("cccccccccccc")["promotion"].is_null(), "{body}");
     api.shutdown().await;

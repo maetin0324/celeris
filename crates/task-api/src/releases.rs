@@ -184,7 +184,10 @@ pub(crate) async fn promotion_preview(
 
 /// `GET /deliveries`（読み取り。ADR 2026-10-04-release-notes）: 配送記録の task と commit の対応だけ。
 /// `release.sh` がリリースの説明（`notes.json`）で first-parent の commit を task に結ぶのに使う。
-pub(crate) async fn deliveries(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResult {
+pub(crate) async fn deliveries(
+    State(state): State<ApiState>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
     crate::handlers::no_query(&raw)?;
     let list = state
         .blocking(move |store| {

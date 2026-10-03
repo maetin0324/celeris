@@ -219,8 +219,7 @@ pub fn scan(root: &Path, repo: Option<&Path>) -> ReleasesFs {
             .find(|m| m.sha12 == name)
             .and_then(|m| m.notes.clone());
         if !item.is_current && item.notes.is_some() {
-            item.promotion =
-                crate::release_notes::preview_among(&metas, current.as_deref(), &name);
+            item.promotion = crate::release_notes::preview_among(&metas, current.as_deref(), &name);
         }
         items.push(item);
     }

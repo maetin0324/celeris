@@ -269,10 +269,14 @@ pub fn generate(input: &NotesInput<'_>, lookup: &dyn TaskLookup) -> Result<Relea
         }
     }
     for d in input.deliveries.unwrap_or_default() {
-        for s in [Some(&d.head), d.reviewed_sha.as_ref(), d.merge_candidate_sha.as_ref()]
-            .into_iter()
-            .flatten()
-            .filter(|s| !s.is_empty())
+        for s in [
+            Some(&d.head),
+            d.reviewed_sha.as_ref(),
+            d.merge_candidate_sha.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
         {
             let full = if s.len() == 40 {
                 Some(s.clone())
@@ -418,7 +422,16 @@ pub fn generate(input: &NotesInput<'_>, lookup: &dyn TaskLookup) -> Result<Relea
     let last_commit = |path: &str| -> Option<String> {
         git_text(
             repo,
-            &["log", "--first-parent", "-n", "1", "--format=%H", &range, "--", path],
+            &[
+                "log",
+                "--first-parent",
+                "-n",
+                "1",
+                "--format=%H",
+                &range,
+                "--",
+                path,
+            ],
         )
         .ok()
         .map(|s| s.trim().to_string())
@@ -456,7 +469,8 @@ pub fn generate(input: &NotesInput<'_>, lookup: &dyn TaskLookup) -> Result<Relea
                 });
             notes.adrs.push(file(title));
         } else if path == CONFIG_EXAMPLE {
-            let diff = git_text(repo, &["diff", &base, &sha, "--", CONFIG_EXAMPLE]).unwrap_or_default();
+            let diff =
+                git_text(repo, &["diff", &base, &sha, "--", CONFIG_EXAMPLE]).unwrap_or_default();
             let added: Vec<String> = diff
                 .lines()
                 .filter(|l| l.starts_with('+') && !l.starts_with("+++"))
@@ -534,7 +548,10 @@ fn push_common(
     configs: &[&ReleaseNoteConfig],
     skips: &[ReleaseNoteGateSkip],
 ) {
-    out.push_str(&format!("\n## task に属さない commit（{}）\n\n", direct.len()));
+    out.push_str(&format!(
+        "\n## task に属さない commit（{}）\n\n",
+        direct.len()
+    ));
     for c in direct {
         out.push_str(&format!("- `{}` {}\n", short(&c.sha), c.subject));
     }
@@ -549,7 +566,10 @@ fn push_common(
             "- {} `{}`{}\n",
             a.status,
             a.path,
-            a.title.as_ref().map(|t| format!(" — {t}")).unwrap_or_default()
+            a.title
+                .as_ref()
+                .map(|t| format!(" — {t}"))
+                .unwrap_or_default()
         ));
     }
     out.push_str("\n## config 例（config/celeris.example.toml）\n\n");
@@ -690,7 +710,11 @@ pub fn aggregate(
             complete = true;
             break;
         }
-        if let Some(i) = notes.first_parent.iter().position(|c| same_sha(c, &cur.sha)) {
+        if let Some(i) = notes
+            .first_parent
+            .iter()
+            .position(|c| same_sha(c, &cur.sha))
+        {
             segments.push((node, Some(i)));
             complete = true;
             break;
@@ -740,7 +764,9 @@ pub fn aggregate(
         };
         let fp_set: HashSet<&str> = fp.iter().map(String::as_str).collect();
         included.extend(fp.iter().cloned());
-        let keep = |sha: Option<&String>| cut.is_none() || sha.is_some_and(|s| fp_set.contains(s.as_str()));
+        let keep = |sha: Option<&String>| {
+            cut.is_none() || sha.is_some_and(|s| fp_set.contains(s.as_str()))
+        };
         let mut count = 0;
         for t in &n.tasks {
             if cut.is_some() && !t.commits.iter().any(|c| fp_set.contains(c.sha.as_str())) {
@@ -781,7 +807,11 @@ pub fn aggregate(
         for f in n.adrs.iter().filter(|f| keep(f.commit.as_ref())) {
             merge_file(&mut adrs, f);
         }
-        if let Some(c) = n.config_example.as_ref().filter(|c| keep(c.commit.as_ref())) {
+        if let Some(c) = n
+            .config_example
+            .as_ref()
+            .filter(|c| keep(c.commit.as_ref()))
+        {
             configs.push(c.clone());
         }
     }
@@ -841,7 +871,10 @@ pub fn aggregate(
         tasks,
         direct_commits: direct,
         migrations,
-        schema: schema(current.and_then(|c| c.schema_version), target.schema_version),
+        schema: schema(
+            current.and_then(|c| c.schema_version),
+            target.schema_version,
+        ),
         mode: target
             .live_ok
             .map(|ok| if ok { "live" } else { "stop-start" }.to_string()),

@@ -67,6 +67,7 @@ export const EVENT_KINDS = [
   "integration_repair_resolved",
   "integration_repair_exhausted",
   "delivery_skipped",
+  "knowledge_curation_applied",
   "integration_requested",
   "integration_answered",
 ] as const satisfies readonly EventKind[];

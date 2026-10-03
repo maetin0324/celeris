@@ -294,6 +294,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::PlanApprovalRequested { .. } => "plan_approval_requested",
         Event::StallDetected { .. } => "stall_detected",
         Event::DeliverySkipped { .. } => "delivery_skipped",
+        Event::KnowledgeCurationApplied { .. } => "knowledge_curation_applied",
         Event::IntegrationRequested { .. } => "integration_requested",
         Event::IntegrationAnswered { .. } => "integration_answered",
     }

@@ -1,5 +1,6 @@
-//! ADR-0131 付記 D10: 日次整理 job の入力準備・dry_run・承認後の apply・1 件の報告。
-//! KB は tempdir、store はメモリ上、時計は `now` 引数で注入する（実時間の sleep・network は使わない）。
+//! ADR-0131 付記 D10: 日次整理 job の入力準備・dry_run・apply（付記 2026-10-04: 承認なしで適用し
+//! KB に commit・push）・1 件の報告。KB は tempdir、KB の origin は tempdir の bare repo、store はメモリ上、
+//! 時計は `now` 引数で注入する（実時間の sleep・network は使わない）。
 
 use super::*;
 use task_core::NotificationStore;
@@ -180,20 +181,83 @@ impl Env {
         open_or_answered(&self.store, task, APPROVAL_KEY).expect("decisions")
     }
 
-    fn answer(&self, task: &Task, option: &str) {
-        let row = self.approval(task).expect("decision");
-        self.store
-            .append_event(
-                task.id,
-                &Event::DecisionAnswered {
-                    id: row.id,
-                    option: option.to_string(),
-                    note: None,
-                    by: "human".into(),
-                },
-            )
-            .expect("answer");
+    /// KB を git にし（最初の commit まで）、`remote` があれば `origin` にする。
+    fn git_init(&self, remote: Remote) {
+        let kb = self.kb.path();
+        git(kb, &["init", "-q", "-b", "main"]);
+        std::fs::write(kb.join(".gitignore"), "index.json\n").expect("gitignore");
+        git(kb, &["add", "-A"]);
+        git(kb, &["commit", "-q", "-m", "init"]);
+        let url = match remote {
+            Remote::None => return,
+            Remote::Bare => {
+                let bare = self.bare();
+                let out = std::process::Command::new("git")
+                    .args(["init", "-q", "--bare"])
+                    .arg(&bare)
+                    .output()
+                    .expect("git init --bare");
+                assert!(out.status.success(), "{out:?}");
+                bare
+            }
+            // 存在しない path の remote: push は必ず失敗する（network には出ない）。
+            Remote::Broken => self.state.path().join("missing/remote.git"),
+        };
+        git(kb, &["remote", "add", "origin", &url.to_string_lossy()]);
     }
+
+    fn bare(&self) -> PathBuf {
+        self.state.path().join("remote.git")
+    }
+
+    fn entry(&self, task: &Task) -> Entry {
+        load_state(&self.state.path().join("state.json")).tasks[&task.id.to_string()].clone()
+    }
+
+    fn applied_events(&self, task: &Task) -> Vec<Event> {
+        self.store
+            .events_for(task.id)
+            .expect("events")
+            .into_iter()
+            .map(|(_, e)| e)
+            .filter(|e| matches!(e, Event::KnowledgeCurationApplied { .. }))
+            .collect()
+    }
+
+    /// prepare → 偽 worker の done → 次の tick（apply なら承認なしで適用まで進む）。
+    fn run_to_done(&self, plan: &CurationPlan) -> (Task, OffsetDateTime, TickOutcome) {
+        let now = self.now(50);
+        let task = self.fire(now);
+        self.tick(now);
+        self.worker_done(&task, plan, None);
+        let at = now + time::Duration::hours(1);
+        let out = self.tick(at);
+        (task, at, out)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Remote {
+    None,
+    Bare,
+    Broken,
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
 }
 
 /// b を a に統合し、a を直す計画（ハッシュは本番 KB の今の内容）。
@@ -334,92 +398,217 @@ fn knowledge_curation_job_reports_exactly_one_summary_per_task() {
 }
 
 #[test]
-fn knowledge_curation_job_apply_waits_for_the_human_approval() {
+fn knowledge_curation_apply_commits_and_pushes_without_approval() {
     let env = setup("apply");
-    let now = env.now(50);
-    let task = env.fire(now);
+    env.git_init(Remote::Bare);
+    let (task, at, out) = env.run_to_done(&merge_plan(Vec::new()));
     assert_eq!(task_ops::cron_jobs::task_mode(&task), "apply");
-    env.tick(now);
-    let before = env.kb_snapshot();
-    env.worker_done(&task, &merge_plan(Vec::new()), None);
-
-    env.tick(now + time::Duration::hours(1));
-    assert_eq!(env.kb_snapshot(), before, "承認前は適用しない");
-    let row = env.approval(&task).expect("decision");
-    assert_eq!(row.status, DecisionStatus::Open);
-    let approve = row
-        .request
-        .options
-        .iter()
-        .find(|o| o.key.starts_with(APPROVE_PREFIX))
-        .map(|o| o.key.clone())
-        .expect("approve option");
-    assert!(env.reports(&task)[0].body.contains(&approve));
-    // 未回答のまま何度 tick しても適用しない。
-    for h in 2..=4 {
-        assert!(env.tick(now + time::Duration::hours(h)).applied.is_empty());
-    }
-    assert_eq!(env.kb_snapshot(), before);
-
-    env.answer(&task, &approve);
-    let out = env.tick(now + time::Duration::hours(5));
-    assert_eq!(out.applied, vec![task.id]);
+    assert_eq!(out.applied, vec![task.id], "承認を待たずに適用する");
+    assert!(
+        env.approval(&task).is_none(),
+        "curation-apply の決定は出さない"
+    );
     assert!(!env.kb.path().join("projects/b.md").exists());
     assert!(
         std::fs::read_to_string(env.kb.path().join("projects/a.md"))
             .expect("a")
             .contains("統合した記述")
     );
-    let date = local_date(&env.job, now + time::Duration::hours(5));
+    let date = local_date(&env.job, at);
     let log = std::fs::read_to_string(env.kb.path().join(format!("_curation/{date}.md")))
         .expect("curation log");
     assert!(log.contains("projects/b.md"));
-    assert_eq!(env.reports(&task).len(), 1, "反映しても報告は増やさない");
+
+    // 1 commit: 題に日付と件数、本文に task id。作業ツリーは綺麗（index.json は ignore）。
+    let kb = env.kb.path();
+    let head = git(kb, &["rev-parse", "HEAD"]);
+    assert_eq!(git(kb, &["rev-list", "--count", "HEAD"]), "2");
+    let subject = git(kb, &["log", "-1", "--format=%s"]);
+    assert!(subject.contains(&date), "{subject}");
+    assert!(subject.contains("統合 1"), "{subject}");
+    assert!(
+        git(kb, &["log", "-1", "--format=%b"]).contains(&format!("task: {}", task.id)),
+        "本文に task id"
+    );
+    let files = git(kb, &["show", "--name-only", "--format=", "HEAD"]);
+    for path in ["projects/a.md", "projects/b.md", "README.md"] {
+        assert!(files.lines().any(|l| l == path), "{path}: {files}");
+    }
+    assert!(files.contains(&format!("_curation/{date}.md")), "{files}");
+    assert_eq!(git(kb, &["status", "--porcelain"]), "");
+
+    // push: bare 側の main が手元の HEAD と一致する。
+    assert_eq!(git(&env.bare(), &["rev-parse", "refs/heads/main"]), head);
+    let entry = env.entry(&task);
+    assert_eq!(entry.phase, Phase::Applied);
+    assert_eq!(entry.commit_sha.as_deref(), Some(head.as_str()));
+    let events = env.applied_events(&task);
+    assert_eq!(events.len(), 1);
+    let Event::KnowledgeCurationApplied {
+        commit_sha,
+        push,
+        merged,
+        ..
+    } = &events[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "pushed");
+    assert_eq!(*merged, 1);
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1, "報告は 1 件");
+    assert!(reports[0].body.contains("反映した"), "{}", reports[0].body);
+    assert!(reports[0].body.contains(&head), "{}", reports[0].body);
+    assert!(reports[0].body.contains("push した"), "{}", reports[0].body);
+
+    // 以後の tick では何もしない。
+    assert!(env.tick(at + time::Duration::hours(1)).applied.is_empty());
+    assert_eq!(env.applied_events(&task).len(), 1);
 }
 
 #[test]
-fn knowledge_curation_job_apply_is_not_applied_when_rejected() {
+fn knowledge_curation_apply_without_remote_commits_and_records_no_remote() {
     let env = setup("apply");
-    let now = env.now(50);
-    let task = env.fire(now);
-    env.tick(now);
-    let before = env.kb_snapshot();
-    env.worker_done(&task, &merge_plan(Vec::new()), None);
-    env.tick(now + time::Duration::hours(1));
-    env.answer(&task, REJECT_OPTION);
-    assert!(env.tick(now + time::Duration::hours(2)).applied.is_empty());
-    assert_eq!(env.kb_snapshot(), before);
+    env.git_init(Remote::None);
+    let (task, _, out) = env.run_to_done(&merge_plan(Vec::new()));
+    assert_eq!(out.applied, vec![task.id]);
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(git(env.kb.path(), &["rev-list", "--count", "HEAD"]), "2");
+    let Event::KnowledgeCurationApplied {
+        commit_sha, push, ..
+    } = &env.applied_events(&task)[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "no_remote");
+    let body = &env.reports(&task)[0].body;
+    assert!(body.contains("remote 無し"), "{body}");
 }
 
 #[test]
-fn knowledge_curation_job_apply_is_not_applied_when_the_page_changed_after_the_report() {
+fn knowledge_curation_apply_push_failure_keeps_the_commit_and_does_not_fail_the_task() {
     let env = setup("apply");
+    env.git_init(Remote::Broken);
+    let (task, _, out) = env.run_to_done(&merge_plan(Vec::new()));
+    assert_eq!(
+        out.applied,
+        vec![task.id],
+        "push の失敗は apply を失敗にしない"
+    );
+    assert_eq!(
+        env.store.get(task.id).expect("get").expect("task").status,
+        Status::Done
+    );
+    assert!(!env.kb.path().join("projects/b.md").exists());
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(env.kb.path(), &["rev-list", "--count", "HEAD"]),
+        "2",
+        "commit は手元に残る"
+    );
+    let Event::KnowledgeCurationApplied {
+        commit_sha,
+        push,
+        push_detail,
+        ..
+    } = &env.applied_events(&task)[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "failed");
+    assert!(push_detail.is_some());
+    let entry = env.entry(&task);
+    assert_eq!(entry.phase, Phase::Applied);
+    let body = &env.reports(&task)[0].body;
+    assert!(body.contains("push に失敗"), "{body}");
+}
+
+#[test]
+fn knowledge_curation_apply_is_not_applied_when_the_page_changed() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
     let now = env.now(50);
     let task = env.fire(now);
     env.tick(now);
     env.worker_done(&task, &merge_plan(Vec::new()), None);
-    env.tick(now + time::Duration::hours(1));
-    let approve = env
-        .approval(&task)
-        .expect("decision")
-        .request
-        .options
-        .iter()
-        .find(|o| o.key.starts_with(APPROVE_PREFIX))
-        .map(|o| o.key.clone())
-        .expect("approve");
-    // 報告の後に人が元ページを直した。
+    // 写しを作った後に人が元ページを直した。
     std::fs::write(
         env.kb.path().join("projects/b.md"),
         "---\ntitle: B\n---\n人の加筆\n",
     )
     .expect("edit");
     let before = env.kb_snapshot();
-    env.answer(&task, &approve);
-    assert!(env.tick(now + time::Duration::hours(2)).applied.is_empty());
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    let out = env.tick(now + time::Duration::hours(1));
+    assert!(out.applied.is_empty());
     assert_eq!(env.kb_snapshot(), before, "元ページが変わったら適用しない");
-    let state = load_state(&env.state.path().join("state.json"));
-    assert_eq!(state.tasks[&task.id.to_string()].phase, Phase::Stale);
+    assert_eq!(
+        git(env.kb.path(), &["rev-parse", "HEAD"]),
+        head,
+        "commit しない"
+    );
+    assert!(env.applied_events(&task).is_empty());
+    assert!(env.approval(&task).is_none());
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1);
+    assert!(
+        reports[0].body.contains("検証できなかった"),
+        "{}",
+        reports[0].body
+    );
+}
+
+/// 旧方式で状態ファイルに `AwaitingApproval` が残る行を作る（報告時の hash を持つ）。
+fn legacy_awaiting(env: &Env, plan: &CurationPlan) -> (Task, OffsetDateTime) {
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(&task, plan, None);
+    let raw =
+        std::fs::read_to_string(env.artifacts(&task).join("curation-plan.json")).expect("plan");
+    let diff = curation::dry_run(env.kb.path(), plan).expect("dry_run");
+    let state_file = env.state.path().join("state.json");
+    let mut state = load_state(&state_file);
+    let entry = state.tasks.get_mut(&task.id.to_string()).expect("entry");
+    entry.phase = Phase::AwaitingApproval;
+    entry.approval_hash = Some(approval_hash(&raw, &diff));
+    save_state(&state_file, &state).expect("save");
+    (task, now)
+}
+
+#[test]
+fn knowledge_curation_legacy_awaiting_approval_is_applied_on_the_next_tick() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let (task, now) = legacy_awaiting(&env, &merge_plan(Vec::new()));
+    let out = env.tick(now + time::Duration::hours(1));
+    assert_eq!(out.applied, vec![task.id], "承認を待たずに適用する");
+    assert!(!env.kb.path().join("projects/b.md").exists());
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(git(&env.bare(), &["rev-parse", "refs/heads/main"]), head);
+    assert_eq!(env.entry(&task).phase, Phase::Applied);
+    assert_eq!(env.applied_events(&task).len(), 1);
+}
+
+#[test]
+fn knowledge_curation_legacy_awaiting_approval_becomes_stale_when_the_page_changed() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let (task, now) = legacy_awaiting(&env, &merge_plan(Vec::new()));
+    std::fs::write(
+        env.kb.path().join("projects/b.md"),
+        "---\ntitle: B\n---\n人の加筆\n",
+    )
+    .expect("edit");
+    let before = env.kb_snapshot();
+    assert!(env.tick(now + time::Duration::hours(1)).applied.is_empty());
+    assert_eq!(env.kb_snapshot(), before);
+    assert_eq!(env.entry(&task).phase, Phase::Stale);
+    assert!(env.applied_events(&task).is_empty());
+    assert!(env.tick(now + time::Duration::hours(2)).applied.is_empty());
 }
 
 #[test]
@@ -531,7 +720,7 @@ fn curation_human_decision_is_not_raised_without_candidates() {
 }
 
 #[test]
-fn curation_human_decision_apply_is_separate_from_the_approval() {
+fn curation_human_decision_apply_is_raised_and_not_auto_approved() {
     let env = setup("apply");
     let now = env.now(50);
     let task = env.fire(now);
@@ -540,8 +729,11 @@ fn curation_human_decision_apply_is_separate_from_the_approval() {
     plan.human_decisions = human_items(1);
     env.worker_done(&task, &plan, None);
     env.tick(now + time::Duration::hours(1));
-    assert_eq!(decisions(&env, &task, HUMAN_KEY).len(), 1);
-    assert_eq!(decisions(&env, &task, APPROVAL_KEY).len(), 1);
+    let human = decisions(&env, &task, HUMAN_KEY);
+    assert_eq!(human.len(), 1);
+    assert_eq!(human[0].status, DecisionStatus::Open, "自動承認しない");
+    assert!(decisions(&env, &task, APPROVAL_KEY).is_empty());
+    assert_eq!(env.entry(&task).phase, Phase::Applied);
 }
 
 #[test]
@@ -604,22 +796,25 @@ fn curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one() {
     let worker_diff = "--- a/inputs/kb/projects/b.md\n+++ /dev/null\n@@ -1 +0,0 @@\n--- a/inputs/kb/projects/a.md\n+++ b/inputs/kb/projects/a.md\n@@ -1 +1 @@\n";
     std::fs::write(env.artifacts(&task).join("curation.diff"), worker_diff).expect("diff");
     env.worker_done(&task, &plan, None);
+    // 適用で本番 KB が変わる前に正本を求めておく。
+    let canonical = curation::dry_run(env.kb.path(), &plan).expect("dry_run");
     env.tick(now + time::Duration::hours(1));
     let artifacts = env.artifacts(&task);
     assert_eq!(
         std::fs::read_to_string(artifacts.join(WORKER_DIFF)).expect("worker diff"),
         worker_diff
     );
-    let canonical = curation::dry_run(env.kb.path(), &plan).expect("dry_run");
     let written = std::fs::read_to_string(artifacts.join("curation.diff")).expect("diff");
     assert_eq!(written, canonical, "curation.diff は daemon の正本");
     let raw = std::fs::read_to_string(artifacts.join("curation-plan.json")).expect("plan");
-    let row = env.approval(&task).expect("approval");
-    let approve = format!("{APPROVE_PREFIX}{}", approval_hash(&raw, &canonical));
-    assert!(
-        row.request.options.iter().any(|o| o.key == approve),
-        "承認 hash は正本で取る"
+    let entry = env.entry(&task);
+    assert_eq!(
+        entry.approval_hash,
+        Some(approval_hash(&raw, &canonical)),
+        "hash は正本で取る"
     );
+    assert_eq!(entry.phase, Phase::Applied);
+    assert!(env.approval(&task).is_none());
 }
 
 #[test]

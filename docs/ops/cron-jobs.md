@@ -134,7 +134,7 @@ snapshot の生成・更新は daemon が行う。snapshot が無い旧 run は�
 `--snapshot <path>` で配置を明示できるが、worker が検証用 snapshot を作り直してはならない。
 
 snapshot の正本は worker が書けない daemon 状態にも保持し、daemon は提出された snapshot の差し替えを拒否する。
-オフライン CLI は本番 KB の実行中の変更までは検出しない。daemon は終了時・承認時に本番 KB の hash を再検証し、
+オフライン CLI は本番 KB の実行中の変更までは検出しない。daemon は終了時と適用の直前に本番 KB の hash を再検証し、
 変わっていれば適用せず、新しい入力でやり直す。
 
 worker は出す前に、人は dry-run の成果物を読むときに、daemon と同じ検証を手元で走らせられる（DB・ネットワークに触れない）:
@@ -215,6 +215,31 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" show daily-curation   # template.mod
 へ決定的に反映される（書き込みは daemon のコードが行い、LLM は計画を書くだけ。削除は archive せず実削除、
 理由は `knowledge/_curation/YYYY-MM-DD.md` と要約に残る）。切り替え後も最初の数回は `daily-summary.md` と
 `curation.diff` を必ず目視で確認する。おかしければ `dry_run` へ戻す（同じ手順で `mode` を書き戻す）。
+
+`apply` は人の承認を待たない（ADR-0131 付記 2026-10-04）。検証に通った計画は daemon がその場で再検証して
+適用し、変えた path（`_curation/YYYY-MM-DD.md`・`README.md` を含む。`index.json` は ignore）を KB の git に
+1 commit（題『knowledge curation <日付>: 統合 n・新規 n・削除 n・修正 n』、本文 `task: <id>`）にして、
+upstream の remote（無ければ `origin`）へ push する。結果は日次整理の報告の「KB の git」節と task の event
+`knowledge_curation_applied`（`commit_sha`・`push` = `pushed` / `no_remote` / `failed` / `skipped`）に残る。
+`human_decisions`（決定 `curation-human`）は従来どおり人が答える。元ページが変わっていた・検証に落ちた計画は
+適用しない。
+
+- remote 無し: 報告に「remote 無し」と出る。KB に private repository を足すには人が
+  `git -C ~/.local/share/celeris/knowledge remote add origin <url>` を行う（daemon の UID で非対話に push
+  できる認証が要る）。
+- push の失敗: apply は失敗にしない。commit は手元に残り、次回の日次整理の push でまとめて送られる。
+  手で送るなら `git -C ~/.local/share/celeris/knowledge push origin main`。
+
+誤った適用の救出（人が行う）:
+
+```bash
+KB=~/.local/share/celeris/knowledge
+git -C "$KB" log --oneline --grep '^knowledge curation' -n 5   # 報告の commit sha と照合する
+git -C "$KB" revert --no-edit <commit>                          # その日の適用を丸ごと戻す
+# 特定のページだけ戻す場合:
+git -C "$KB" checkout <commit>~1 -- projects/<page>.md && git -C "$KB" commit -m "restore <page>"
+git -C "$KB" push origin main
+```
 
 ## 7. 一時停止・削除・トラブルシュート
 

@@ -1524,6 +1524,25 @@ pub enum Event {
         #[serde(default)]
         head: Option<String>,
     },
+    /// ADR-0131 付記（2026-10-04）: 日次整理の計画を人の承認なしで本番 KB に適用し、変更を 1 commit にして
+    /// KB の remote へ push した（試みた）。状態は変えない監査イベント。`commit_sha` は commit できなかったとき
+    /// `None`（理由は `commit_error`）。`push` は `pushed`・`no_remote`・`failed`・`skipped`（commit できず
+    /// push を省いた）のどれか。push の失敗は apply を失敗にしない（次回の push でまとめて送る）。
+    KnowledgeCurationApplied {
+        /// 適用日（job の timezone の `YYYY-MM-DD`）。
+        date: String,
+        merged: u32,
+        new: u32,
+        deleted: u32,
+        fixed: u32,
+        #[serde(default)]
+        commit_sha: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit_error: Option<String>,
+        push: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        push_detail: Option<String>,
+    },
     /// ADR parallel integration D4: 統合の依頼。状態は変えない。
     // serde の type は `integration_requested`（migration 0047 の部分 index と一致）。
     IntegrationRequested {

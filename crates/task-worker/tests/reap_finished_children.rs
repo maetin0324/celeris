@@ -11,13 +11,18 @@ fn collects_an_unwaited_zombie() {
         .unwrap_or_else(|e| panic!("spawn: {e}"));
     let pid = child.id();
     // Do not call wait(): the child must remain a zombie for the reaper.
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if matches!(
             std::fs::read_to_string(format!("/proc/{pid}/stat")),
             Ok(s) if s.split(' ').nth(2) == Some("Z")
         ) {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "child {pid} did not become a zombie"
+        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     let reaped = reap_finished_children();

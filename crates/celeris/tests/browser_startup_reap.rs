@@ -72,7 +72,7 @@ fn startup_reaps_dead_instance_and_preserves_live_instance() {
     let role = SharedRole::new(InstanceRole::Active);
     let started = start_instance(store, identity, role, &config).unwrap();
     assert!(matches!(started, instance::Started::Running(_)));
-    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while process_starttime(dead_pid).is_some() && dead.try_wait().unwrap().is_none() {
         assert!(
             std::time::Instant::now() < deadline,

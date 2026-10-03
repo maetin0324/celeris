@@ -1,4 +1,4 @@
-//! API v1 の JSON Schema（`docs/gui/api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
+//! API v1 の JSON Schema（`docs/api/v1/gui-api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
 //! 生成物は `docs/api/v1/api-v1.schema.json` にコミットし、`committed_schema_matches_generated` で一致を確かめる
 //! （`UPDATE_SCHEMA=1 cargo test -p task-api` で再生成）。
 

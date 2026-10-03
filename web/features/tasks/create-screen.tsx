@@ -1,6 +1,6 @@
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, useRef, useState } from "react";
-import type { CriterionSpec, NewTaskSpec, Task } from "../../api/generated/types";
+import type { CriterionSpec, NewTaskBody, Task } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { ScreenFrame } from "../../components/shell/screen-frame";
@@ -44,7 +44,7 @@ export function TaskCreateScreen() {
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const id = "create-task";
-    const body: NewTaskSpec = { title, objective, acceptance: buildCriteria(rows) };
+    const body: NewTaskBody = { title, objective, acceptance: buildCriteria(rows) };
     const [outcome] = await sender.run([{ id, path: "/api/tasks", body }]);
     if (outcome?.ok) {
       const taskId = createdId(outcome.response);
@@ -155,7 +155,7 @@ export function PlanCreateScreen() {
     // Complexity Gate と planner に任せる（ここでは stages_hint を付けない）。goal をそのまま
     // objective と reviewer 条件にし、title は先頭 80 文字。
     const title = goal.trim().slice(0, 80) || goal;
-    const body: NewTaskSpec = {
+    const body: NewTaskBody = {
       title,
       objective: goal,
       acceptance: [{ type: "reviewer", text: goal }],

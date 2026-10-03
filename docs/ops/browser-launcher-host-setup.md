@@ -3,7 +3,7 @@ tasks: [01M3WW2RBB9QW9NPN862TZEK9P]
 ---
 # browser launcher の host 準備手順（root が行う）
 
-[ADR-0115](../adr/0115-browser-ptrace-owner-ns-launcher.md)「ホスト側の準備」と [ADR-0116](../adr/0116-browser-launcher-implementation.md) の launcher を host に置く手順。**すべて root（初期 user namespace）で人が行う。** エージェントと daemon は root 操作をしない。
+[ADR-0115](../../agent-docs/adr/0115-browser-ptrace-owner-ns-launcher.md)「ホスト側の準備」と [ADR-0116](../../agent-docs/adr/0116-browser-launcher-implementation.md) の launcher を host に置く手順。**すべて root（初期 user namespace）で人が行う。** エージェントと daemon は root 操作をしない。
 
 この手順を終えても機密能力（`CredentialInjection` / `IdentityRestore`）は解放しない。daemon の既定は `runtime = "daemon"` のまま変わらない。
 
@@ -213,7 +213,7 @@ CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test browser_launcher
 2. UID 1001 の別 process からの `PTRACE_ATTACH` / `strace -p` と `/proc/<pid>/environ`・`mem` の読取りが拒否される（正の対照も併記される）。
 3. `verify_isolation` が `Ok`。
 
-結果（コマンド・exit code・`uid_map`・owner）は `docs/progress/phase-browser-4.md` に記録する。既存経路の確認として `cargo test -p task-worker --test browser_runtime_isolated` も通ること。
+結果（コマンド・exit code・`uid_map`・owner）は `agent-docs/progress/phase-browser-4.md` に記録する。既存経路の確認として `cargo test -p task-worker --test browser_runtime_isolated` も通ること。
 
 ## 戻し方
 

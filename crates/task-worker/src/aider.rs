@@ -13,7 +13,7 @@
 //!
 //! トークン使用量は aider 自身が終了直前に stdout へ書く `Tokens: N sent, M received.` /
 //! `Cost: $X message, $Y session.` を最良努力で拾う（無ければ `None`。ADR-0061「取得可能な範囲」）。
-//! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`docs/PROGRESS.md`
+//! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`agent-docs/PROGRESS.md`
 //! Phase 104 参照）。`Cost:` 行があればそれをそのまま使い、無ければ `model` が分かるときだけ
 //! `task_core::estimate_cost_usd` の静的単価表で推定する（aider 自身の実測値を優先する）。
 

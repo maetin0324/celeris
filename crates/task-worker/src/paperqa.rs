@@ -1,4 +1,4 @@
-//! `paperqa` アダプタ（DESIGN §5.4, ADR-0027 D3、ADR-0035 で「取得」の段を追加、
+//! `paperqa` アダプタ（ADR-0027 D3、ADR-0035 で「取得」の段を追加、
 //! ADR-0063 Phase 109d C1/C2 で `pqa ask` CLI を PaperQA の Python API に置き換え）。
 //!
 //! PaperQA2 は celeris のワーカープロトコルもストリーム型の進捗形式も話さない、ただの調査エンジンで
@@ -340,7 +340,7 @@ pub fn build_question(task: &Task, context: &RunContext, artifacts: &str) -> Str
     // ADR-0063 Phase 109c A/C（縮小版。P-109c-1）: 目的文から対象が取れているとき、答えを
     // 「対象ごとの節 + 対象×観点の表」に構造化するよう指示する。対象ごとに `pqa ask` を複数回呼ぶ
     // （元の ADR C2）と PaperQA の Python API への切り替え（C1）は、実機で API 面を確認できず
-    // 既存テストへの影響も大きいため Phase 109c では見送った（未解決事項として PROGRESS.md に記載）。
+    // 既存テストへの影響も大きいため Phase 109c では見送った（未解決事項として agent-docs/PROGRESS.md に記載）。
     let targets = crate::research_targets::research_targets(&task.objective);
     if !targets.is_empty() {
         let aspects = crate::research_targets::research_aspects(&task.objective);

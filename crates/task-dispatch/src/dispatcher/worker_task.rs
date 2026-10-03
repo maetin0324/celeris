@@ -21,7 +21,7 @@ pub(super) struct RunAdapterPrep {
     pub(super) permission_mode: Option<String>,
 }
 
-/// ADR-0107（docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
+/// ADR-0107（agent-docs/adr/0107-browser-fallback-candidate-preparation.md）D1: 主 adapter と browser
 /// fallback 候補の run ごとの準備を 1 か所にまとめる。順序は ADR-0075 の env 設定 →
 /// コンテナ（ADR-0043 D3）→ planner の permission mode（ADR-0072 D14）。tier ごとのモデルは
 /// 各 adapter（`TieredAdapter`）が同じ `req.task.worker_hint.tier` から run 時に解決する。

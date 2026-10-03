@@ -3,7 +3,7 @@ tasks: [01M408E4BX8A3FNSBJTZ0CC67A, 01M40FWV6Z6N4P5ESHZMK0KH2B]
 ---
 # review sync: main 取り込み
 
-merged-main: a1a3f60f03a3bc2872400e7ff27e8ec09b0387d8
+merged-main: c448d9c77d18eb54396907835efb91c5d0a985e8
 
 task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り込んだ（rebase なし）。衝突した 16 ファイルは両側の変更を残して解いた。
 
@@ -79,3 +79,11 @@ task branch（`e269a8c4`）に `git merge --no-ff main` で上の main を取り
 | `cargo test -p task-dispatch` | 578 passed | 0 |
 
 未解決: 新しい main との 5 ファイルの衝突はこの WorkUnit では解いていない。run sandbox の userns 制約は task-api の通常権限での再実行では発生しなかった。ログは run の成果物ディレクトリに各コマンド別に保存した。
+
+## 最新 main の再取り込み（2026-10-03）
+
+`c448d9c77d18eb54396907835efb91c5d0a985e8` を `git merge --no-ff main` で取り込んだ。`agent-docs/PROGRESS.md`、`crates/task-worker/src/claude_code/prompt.rs`、`docs/architecture-map.md` の内容衝突は両側の追記を保持して解いた。schema の 3 生成物は `UPDATE_SCHEMA=1` の task-core・task-api 試験、GUI の `pnpm gen:types`、web の `gen-types.mjs` で作り直した。ブランチ由来の ADR は `agent-docs/adr/` に移し、migration 0042〜0045 と ADR 0140 の番号を保持した。
+
+`docs/progress/review-sync-main.md` は親 task の受け入れ条件が読むパスに残した。GUI の型検査では生成型の追加項目に合わせ、通知ラベルと fixture を更新した。`scripts/dev/check-architecture-map.py`、`scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`、`scripts/dev/check-doc-links.sh`、`cargo fmt --all -- --check`、`cargo clippy --workspace -- -D warnings`、GUI の `pnpm typecheck` は成功した。
+
+web は再生成型に合わせて `execution_routed` の購読と `NewTaskBody` の参照を補い、`pnpm typecheck` と realtime 関連テスト 47 件が成功した。GUI の対象テストは 58 件成功した。

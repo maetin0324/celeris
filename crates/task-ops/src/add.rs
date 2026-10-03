@@ -27,7 +27,7 @@ use time::OffsetDateTime;
 use crate::error::OpsError;
 
 /// 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
-/// `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。
+/// `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum CriterionSpec {
@@ -74,7 +74,7 @@ impl CriterionSpec {
     }
 }
 
-/// `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/gui/api.md` §3.4）。
+/// `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/api/v1/gui-api.md` §3.4）。
 /// 省略時の既定は `celerisctl add` と同じ。
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

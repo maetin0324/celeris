@@ -694,8 +694,8 @@ SD_SENSITIVE_PATTERNS=(
   "gui/CLAUDE.md"
   ".claude/"
   "config/"
-  "docs/adr/0040-"
-  "docs/adr/0041-"
+  "agent-docs/adr/0040-"
+  "agent-docs/adr/0041-"
 )
 
 # `sd_is_sensitive <repo-relative-path>` — 上のどれかに前方一致すれば 0。

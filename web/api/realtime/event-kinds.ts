@@ -41,6 +41,7 @@ export const EVENT_KINDS = [
   "work_unit_checks_failed",
   "work_unit_spec_overridden",
   "execution_gated",
+  "execution_routed",
   "execution_hint_set",
   "repair_scheduled",
   "quota_estimated",

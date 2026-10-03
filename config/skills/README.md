@@ -28,4 +28,4 @@ department's design generator) that loads one of these skills must follow this p
   the network is a proposal for the human to run, not something a test/build step performs.
 
 See each skill's own `SOURCE.md` for what, if anything, was changed from upstream, and
-`docs/progress/ui-ux-skills.md` for the vendoring and review history.
+`agent-docs/progress/ui-ux-skills.md` for the vendoring and review history.

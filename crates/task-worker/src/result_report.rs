@@ -7,7 +7,7 @@
 //! ```
 //!
 //! ここは**ファイルを読んで文字列を取り出すだけ**で、`ReportKind` への写し替え（固定表）は
-//! `task-dispatch` 側が行う。判断（この結果が提案に値するか）は celeris ではしない（DESIGN 原則 1）。
+//! `task-dispatch` 側が行う。判断（この結果が提案に値するか）は celeris ではしない（ADR-0001 D2 原則 1）。
 //! `memory`（ADR-0033 D6）と同じ流儀: 無い・JSON でない・形が違うときは `None`（run は失敗させない）。
 
 use std::path::Path;

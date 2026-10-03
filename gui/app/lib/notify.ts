@@ -12,6 +12,8 @@ export const NOTIFY_NOT_CONFIGURED_ERROR = "discord webhook is not configured";
 
 /** 知らせの種類（ADR-0037 D1、ADR-0053 D3）を SPEC の言葉で。 */
 export const NOTIFY_KIND_LABEL: Record<NotificationKind, string> = {
+  inbox_new: "受信箱に新しい項目が届いた",
+  digest: "通知のまとめが届いた",
   milestone_ready: "途中目標の仕事が終わった",
   approval_pending: "認可の要求が来た",
   question_blocked: "質問で止まっている",

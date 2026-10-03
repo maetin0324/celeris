@@ -1,4 +1,4 @@
-//! ワーカープロトコル v1 の型（DESIGN §5.3, ADR-0003 D2, `docs/protocol/worker-protocol.md`）。
+//! ワーカープロトコル v1 の型（ADR-0003 D2, `docs/protocol/worker-protocol.md`）。
 //! JSON Schema は `schemars` で生成し `docs/protocol/worker-protocol.schema.json` と
 //! テストで一致を検証する（ADR-0003 D6）。
 
@@ -245,7 +245,7 @@ pub struct ConversationTurn {
 /// `context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が
 /// 秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`
 /// が対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ
-/// （判定はディスパッチャが `task.conversation` と組織図から決定的に行う。DESIGN 原則 1）。
+/// （判定はディスパッチャが `task.conversation` と組織図から決定的に行う。ADR-0001 D2 原則 1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationAddressee {
@@ -254,7 +254,7 @@ pub enum ConversationAddressee {
 }
 
 /// ADR-0054 D2（Phase 68）: CoS の対話 run に許す**読み取りだけの道具**（`celerisctl` のサブコマンド。
-/// `docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
+/// `agent-docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
 /// タスク・案件の一覧と詳細の read API」）。CoS 以外の対話・作業 run には効かない（`ConversationAddressee`
 /// が `Secretary` のときだけ、各アダプタがこの一覧を自分のツール許可の書式に写す）。
 /// 書く操作（`add` / `plan` / `approve` / `cancel` 等）は含めない。
@@ -269,7 +269,7 @@ pub const CONVERSATION_READONLY_CELERISCTL: &[&str] = &[
 
 /// `context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに
 /// 「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。
-/// 生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。DESIGN 原則 1）。
+/// 生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。ADR-0001 D2 原則 1）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecentWork {
     pub task_id: TaskId,

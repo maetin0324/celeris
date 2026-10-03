@@ -27,7 +27,7 @@ import { Skeleton } from "./ui/skeleton";
 
 /**
  * Console（ADR-0048 D4、GUI Phase G22）。`/`（`scope=all` 既定、`?scope=` で `project:<id>` へ深リンクできる）
- * と `/org/:id`（`scope=node:<id>` 固定）が同じ部品を使う（`docs/adr/0048-console.md` D4 の「ノードの画面は
+ * と `/org/:id`（`scope=node:<id>` 固定）が同じ部品を使う（`agent-docs/adr/0048-console.md` D4 の「ノードの画面は
  * 同じ部品」）。初期表示は loader（`~/celeris/console.server.ts` の `loadConsole`）、以後は
  * `~/hooks/useConsoleStream.ts` が `console.block` を 1 件ずつ足す（D1「Console は…block ごとに積み増す」）。
  */

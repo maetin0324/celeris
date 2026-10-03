@@ -1413,6 +1413,13 @@ blocked daemon repair だったことを覚えておき、続く `ExecutionPlann
   ADR-0115/0116 の既知事項）。他の全テストバイナリは `test result: ok`。
   `cargo clippy --workspace -- -D warnings` → exit 0（警告なし、再検証）。
 
+本 WorkUnit の再検証: main の `40189604024aebe248f603b61dcaffb6ee58dc78` を fast-forward で取り込み、
+replay 修正 `163f41c0` が HEAD の祖先であることを `git merge-base --is-ancestor 163f41c0 HEAD`
+（exit 0）で確認した。`cargo test -p task-ops replay_matches_live_after_blocked_repair_superseded`
+（exit 0、2 passed）、`cargo test -p task-dispatch --lib blocked_repair_replan_loop`
+（exit 0、1 passed）、`cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings`
+（exit 0）を実行した。replay 不整合は解消済みであり、task `01M3YF3NS2EGTZD2BBWNPG1K28` の再開手順は下記に記載している。
+
 ### 人が task `01M3YF3NS2EGTZD2BBWNPG1K28` を再開する手順
 
 1. この修正を含む release を人が作成・検証し、本番 daemon を人が差し替える。旧 daemon のまま再開しない。

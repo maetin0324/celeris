@@ -19,7 +19,12 @@ function inline(source: string): ReactNode[] {
         ),
       );
     } else if (match[3]) output.push(<strong key={match.index}>{match[3]}</strong>);
-    else output.push(<code key={match.index}>{match[4]}</code>);
+    else
+      output.push(
+        <code key={match.index} className="rounded-sm bg-code px-1 font-mono text-code-foreground">
+          {match[4]}
+        </code>,
+      );
     cursor = match.index + match[0].length;
   }
   if (cursor < source.length) output.push(source.slice(cursor));

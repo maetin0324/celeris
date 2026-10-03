@@ -21,8 +21,7 @@ async fn the_preamble_notes_the_shared_build_cache_when_enabled() {
     let adapter = Arc::new(WorkspaceNoteAdapter { seen: seen.clone() });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = true;
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let notes = seen.lock().unwrap().clone();
     assert_eq!(notes.len(), 1);
     let note = notes[0].as_deref().unwrap_or_default();
@@ -51,8 +50,7 @@ async fn the_preamble_does_not_note_the_shared_build_cache_when_disabled() {
     let adapter = Arc::new(WorkspaceNoteAdapter { seen: seen.clone() });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = false;
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let notes = seen.lock().unwrap().clone();
     assert_eq!(notes.len(), 1);
     let note = notes[0].as_deref().unwrap_or_default();
@@ -93,9 +91,7 @@ async fn shared_build_cache_sets_cargo_target_dir_for_a_local_git_worktree_on_th
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = true;
     d.config.build_cache_dir = cache_dir.path().to_path_buf();
-    run_until_idle(&mut d, 60).await;
-
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let expected =
@@ -138,9 +134,7 @@ async fn shared_build_cache_disabled_does_not_set_cargo_target_dir() {
     });
     let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
     d.config.shared_build_cache = false;
-    run_until_idle(&mut d, 60).await;
-
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert!(
@@ -887,8 +881,7 @@ async fn scratch_on_nfs_falls_back_to_build_cache_dir() {
         d.config.shared_build_cache = true;
         d.config.build_cache_dir = cache_dir.path().to_path_buf();
         d.config.scratch = settings.clone();
-        run_until_idle(&mut d, 60).await;
-        assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+        run_until_task_terminal(&mut d, &store, task.id).await;
         let runs = captured.lock().unwrap().clone();
         let expected =
             task_worker::build_cache::cargo_target_dir_env(cache_dir.path(), repo_dir.path());
@@ -976,8 +969,7 @@ async fn run_start_adopts_a_finished_target_that_predates_the_checkout() {
         },
     )
     .unwrap();
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let owner = Owner::task(task.id.to_string());
     let lease = task_worker::scratch::read_lease(&pool.lease_path(&owner))
         .unwrap()

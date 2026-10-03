@@ -13,7 +13,7 @@ use crate::problem::ApiProblem;
 use crate::state::ApiState;
 use crate::types::LlmSourcesView;
 
-/// celeris が `llm_proxy::ProxyState` を包んで渡す（`docs/llm-source.md`）。
+/// celeris が `llm_proxy::ProxyState` を包んで渡す（`docs/guides/llm-source.md`）。
 #[async_trait::async_trait]
 pub trait LlmSourcesReader: Send + Sync + 'static {
     /// `now` は Unix 秒。

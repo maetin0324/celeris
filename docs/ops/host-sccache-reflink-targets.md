@@ -4,7 +4,7 @@
 tasks: [01M3YD2Z585N1YCBZK4AH8QXR0]
 ---
 
-この手順は本番 host の管理者が実行する。Celeris の run は Proxmox、container の mount、user unit、本番 config、daemon を変更しない。設計は [ADR-0129](../adr/0129-host-sccache-reflink-targets.md)、scratch の置き場は [ADR-0136](../adr/0136-local-hot-data-layout.md)、Cargo の実測は [実験記録](../progress/reflink-target-experiment.md)、リリースの切り替えは [selfdeploy](../selfdeploy.md) を参照する。以下の `CTID`、`pve/data`、容量、host の mount path は実機に合わせて置き換える。
+この手順は本番 host の管理者が実行する。Celeris の run は Proxmox、container の mount、user unit、本番 config、daemon を変更しない。設計は [ADR-0129](../../agent-docs/adr/0129-host-sccache-reflink-targets.md)、scratch の置き場は ADR-0136（`0136-local-hot-data-layout.md`、main 未取り込み）、Cargo の実測は [実験記録](../../agent-docs/progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md)、リリースの切り替えは [selfdeploy](selfdeploy.md) を参照する。以下の `CTID`、`pve/data`、容量、host の mount path は実機に合わせて置き換える。
 
 ## 1. Proxmox の btrfs volume を `/local` に見せる
 
@@ -67,9 +67,9 @@ rustc-wrapper = "/home/<user>/.local/bin/rustc-wrapper.sh"
 
 ## 3. Celeris の scratch と旧 cache を切り替える
 
-scratch の正本の置き場は [ADR-0136](../adr/0136-local-hot-data-layout.md) が `/local/celeris/data/scratch` と定める。
+scratch の正本の置き場は ADR-0136（`0136-local-hot-data-layout.md`、main 未取り込み） が `/local/celeris/data/scratch` と定める。
 
-最初に [selfdeploy の release と verify](../selfdeploy.md) を済ませ、新版を昇格できる状態にする。停止する前に進行中の run と release build がないこと、`~/.local/celeris/current/bin/celerisctl scratch status --json`、`du -sh /var/lib/celeris/scratch/{targets,cache-l1} 2>/dev/null`、`df -h /local` を記録する。既存の scratch 全体と config は戻すときまで保存する。
+最初に [selfdeploy の release と verify](selfdeploy.md) を済ませ、新版を昇格できる状態にする。停止する前に進行中の run と release build がないこと、`~/.local/celeris/current/bin/celerisctl scratch status --json`、`du -sh /var/lib/celeris/scratch/{targets,cache-l1} 2>/dev/null`、`df -h /local` を記録する。既存の scratch 全体と config は戻すときまで保存する。
 
 daemon を停止し、`/local` が mount されたことを再確認して `/local/celeris/data/scratch` を作る。`seed_reflink` は既定で false。§1 の共有確認が通った後、切り替え時に次のように **true を明示**する。有効でも Celeris は seed build 前に実際の pool 内でコピーと FIEMAP shared の probe を行い、共有できなければ seed を作らず空の target から build する。不可の理由は `scratch: seed refresh disabled; pool cannot share extents` ログで確認する。`mount` を指定すると `/local` が無い起動では従来の既定 scratch dir（本番では `/var/lib/celeris/scratch`）へ戻り、理由をログに出す（`/local` 上に同名ディレクトリは作らない）。`mount` を省略して `dir` だけを指定するとこの保護は働かない。
 
@@ -82,7 +82,7 @@ seed_reflink = true
 
 既存 target はどちらかを選ぶ。**捨てる場合**は旧 `/var/lib/celeris/scratch/targets` をしばらく保存し、新 pool にはコピーしない。新しい owner は seed ができるまで空から build される。**移す場合**は daemon と release build を止めた状態で、`rsync -a /var/lib/celeris/scratch/targets/ /local/celeris/data/scratch/targets/` とし、`lease.json` の mtime と owner の `target/` まで含めて移す。`rsync -a --dry-run --checksum /var/lib/celeris/scratch/targets/ /local/celeris/data/scratch/targets/` の出力が空であることを確認する。異なる filesystem 間なのでこの移行コピー自体は reflink ではない。旧 scratch はすぐ消さず、戻し先として残す。seed は `targets/` の外にあり、旧 target を手で seed として流用しない。
 
-新版の [selfdeploy 昇格手順](../selfdeploy.md) に従い daemon を差し替え、`celerisctl scratch status --json` と `findmnt -no FSTYPE,TARGET /local` で pool の使用と空き容量を確かめる。登録済みの local Cargo repo の seed は起動直後の housekeeping が main の commit から自動で初回作成する。`/local/celeris/data/scratch/seeds/<repo-key>/current/manifest.json` と `current/target/`、daemon の `scratch: seed switched` ログを確認する。main が進むか rustc・`[scratch.cargo]` が変わると更新され、容量不足なら旧 seed を保持して保留する。新しい task/WU の `targets/<owner>/target-origin.json` と `filefrag -v` で seed 由来と extent 共有を確認する。旧 owner は上書きされない。
+新版の [selfdeploy 昇格手順](selfdeploy.md) に従い daemon を差し替え、`celerisctl scratch status --json` と `findmnt -no FSTYPE,TARGET /local` で pool の使用と空き容量を確かめる。登録済みの local Cargo repo の seed は起動直後の housekeeping が main の commit から自動で初回作成する。`/local/celeris/data/scratch/seeds/<repo-key>/current/manifest.json` と `current/target/`、daemon の `scratch: seed switched` ログを確認する。main が進むか rustc・`[scratch.cargo]` が変わると更新され、容量不足なら旧 seed を保持して保留する。新しい task/WU の `targets/<owner>/target-origin.json` と `filefrag -v` で seed 由来と extent 共有を確認する。旧 owner は上書きされない。
 
 新版への昇格と scratch の切り替えを確認後、旧サービスを止めて無効化する:
 
@@ -102,8 +102,8 @@ systemctl --user is-active celeris-sccache.service celeris-scratch-cache.service
 
 問題が出たら新規 run と release build を止め、daemon を停止する。config の `[scratch] dir` を旧 `/var/lib/celeris/scratch` に戻し、`mount` を外す。旧 scratch を保存したままなら、その `targets/` と lease を再利用できる。新版のまま戻す場合も `seed_reflink = false` にすれば seed コピーを止め、空または既存 target で build できる。`celerisctl scratch status --json` と run の `CARGO_TARGET_DIR` が旧 pool を示すことを確認する。
 
-daemon の版も戻す必要があれば [selfdeploy の `rollback.sh`](../selfdeploy.md) を人が実行する。DB restore の要否は同手順の schema 検査で決める。旧版が Celeris 管理の cache server を必要とする場合だけ、保存した旧 unit と設定を復元して有効化し、`systemctl --user is-active` で確認する。host の `~/.cargo/config.toml` の `rustc-wrapper` と `sccache.service` は独立しており、個別に外せる。`/local` の LV と mount は scratch・sccache の参照が無くなったことを確認するまで消さない。
+daemon の版も戻す必要があれば [selfdeploy の `rollback.sh`](selfdeploy.md) を人が実行する。DB restore の要否は同手順の schema 検査で決める。旧版が Celeris 管理の cache server を必要とする場合だけ、保存した旧 unit と設定を復元して有効化し、`systemctl --user is-active` で確認する。host の `~/.cargo/config.toml` の `rustc-wrapper` と `sccache.service` は独立しており、個別に外せる。`/local` の LV と mount は scratch・sccache の参照が無くなったことを確認するまで消さない。
 
 ## 実測から見た期待値
 
-[実験記録](../progress/reflink-target-experiment.md)と[ADR-0129](../adr/0129-host-sccache-reflink-targets.md)では、28 MiB の seed を ext 系 filesystem 上で実体コピーしたとき、同じ source・別 target は `Compiling` 0 行、0.03 秒、`df` +27.6 MiB だった。別 source でも mtime を保てば 0 行、0.03 秒、+27.6 MiB。source の mtime を更新すると path 依存の 2 crate が再 build され 0.23 秒。空からの build は 5 crate、0.74 秒だった。これらは小さな Cargo workspace の結果であり、btrfs の節約量ではない。別途、人が container の `/local` で 512 MiB を `copy_file_range` / coreutils 9.5 の `cp -a --reflink=auto` で写したときは `df` 増分 0 MiB、`filefrag` は `shared` を示した。実際の worktree で path 依存 crate の mtime が新しければ再 build は残る。
+[実験記録](../../agent-docs/progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md)と[ADR-0129](../../agent-docs/adr/0129-host-sccache-reflink-targets.md)では、28 MiB の seed を ext 系 filesystem 上で実体コピーしたとき、同じ source・別 target は `Compiling` 0 行、0.03 秒、`df` +27.6 MiB だった。別 source でも mtime を保てば 0 行、0.03 秒、+27.6 MiB。source の mtime を更新すると path 依存の 2 crate が再 build され 0.23 秒。空からの build は 5 crate、0.74 秒だった。これらは小さな Cargo workspace の結果であり、btrfs の節約量ではない。別途、人が container の `/local` で 512 MiB を `copy_file_range` / coreutils 9.5 の `cp -a --reflink=auto` で写したときは `df` 増分 0 MiB、`filefrag` は `shared` を示した。実際の worktree で path 依存 crate の mtime が新しければ再 build は残る。

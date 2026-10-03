@@ -1104,7 +1104,7 @@ export type McpScope =
 export type MessageRole = "user" | "node";
 /**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
- * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。
+ * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
  */
 export type CriterionSpec =
   | {
@@ -1699,7 +1699,7 @@ export interface StandingRule {
  */
 export interface TransitionResult {
   /**
-   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。
+   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。
    */
   cascaded?: TaskRef[];
   from: Status;
@@ -5368,7 +5368,7 @@ export interface DbInfo {
   device?: string | null;
   /**
    * ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`"ext4"` 等）。
-   * `GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
+   * `GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
    * **絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が
    * 既に返している）。判定できなければ `null`。
    */
@@ -5753,7 +5753,7 @@ export interface KnowledgeCandidate {
    * ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
    * 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
    * `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
-   * `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
+   * `target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。
    */
   op?: string | null;
   /**
@@ -6252,7 +6252,7 @@ export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
 /**
- * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。
+ * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。
  */
 export interface NewPlanSpec {
   /**
@@ -6270,7 +6270,7 @@ export interface NewPlanSpec {
   workspace?: string | null;
 }
 /**
- * `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/gui/api.md` §3.4）。
+ * `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/api/v1/gui-api.md` §3.4）。
  * 省略時の既定は `celerisctl add` と同じ。
  */
 export interface NewTaskSpec {

@@ -772,7 +772,7 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
 /// の id）を外す。Crockford base32 の ULID は `F`・`M`・`T` を含みうるので、id の一部の `FMT` を
 /// `fmt` の語と誤読して、中身の不合格を format の repair に倒していた（nextest の gate で
 /// `rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_the_reviewer` が約 0.04 % で
-/// `Done` になった原因。docs/progress/phase-G.md「SD-2 追記」）。`L`・`I`・`O` は ULID に出ないので
+/// `Done` になった原因。agent-docs/progress/2026-10-02-docs-layout/refs-crates.md「SD-2 追記」）。`L`・`I`・`O` は ULID に出ないので
 /// `lint` / `clippy` / `format` は id から生じないが、同じ理由で一律に外す。
 fn classify_reviewer_reason(reason: &str) -> Option<RepairClass> {
     let r = without_ulid_tokens(reason).to_lowercase();

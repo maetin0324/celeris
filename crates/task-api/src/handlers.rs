@@ -1,4 +1,4 @@
-//! ルーティングとハンドラ（`docs/gui/api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
+//! ルーティングとハンドラ（`docs/api/v1/gui-api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
 
 use axum::Router;
 use axum::body::Body;

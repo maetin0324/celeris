@@ -5,7 +5,7 @@ import type { Route } from "./+types/reports.$id";
 
 /**
  * `/reports/:id`（resource route。コンポーネントは持たない）。`GET /reports/{id}` をそのまま返す
- * （docs/gui/api.md §3.51: `{report, sources_expanded[]}`）。`/reports` の行を展開したときと、
+ * （docs/api/v1/gui-api.md §3.51: `{report, sources_expanded[]}`）。`/reports` の行を展開したときと、
  * `sources_expanded` をさらに辿るとき（下の段の報告へ潜る）の両方で `useFetcher().load()` から呼ぶ
  * （ADR-0033 D3「圧縮の元を見に行ける」）。GUI 側では加工しない。
  */

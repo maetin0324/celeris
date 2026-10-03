@@ -102,7 +102,7 @@ pub trait RoutingPolicy: Send + Sync {
     fn decide(&self, signals: &RoutingSignals) -> RoutingDecision;
 }
 
-/// 元の依頼にある固定ルール（`docs/adr/0061-*.md` の分類表と対応）:
+/// 元の依頼にある固定ルール（`agent-docs/adr/0061-*.md` の分類表と対応）:
 /// - 明確で局所的な少数ファイル修正 → aider 系
 /// - isolated issue solving / shell 中心 → mini-swe-agent
 /// - 通常の実装・調査・テスト反復 → acp（Pi/OpenCode 等の汎用ハーネス）

@@ -30,7 +30,7 @@ test-parallel: cargo-nextest is not installed (\`cargo nextest --version\` faile
   install the pinned version once (needs the network):
     cargo install cargo-nextest --locked --version $pin
   see docs/ops/nextest.md. As a stop-gap the release gate can use plain \`cargo test --workspace\`
-  with SD_GATE_TEST_RUNNER=cargo-test (docs/selfdeploy.md §2).
+  with SD_GATE_TEST_RUNNER=cargo-test (docs/ops/selfdeploy.md §2).
 EOF
   exit 127
 fi

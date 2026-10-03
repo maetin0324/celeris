@@ -1,0 +1,35 @@
+{
+  "schema": "celeris.execution-plan/3",
+  "rationale": "既存の Phase0 / Phase1 の done の task を最初の段階に採用し、HUMAN GATE 1（framing）を決定の要求にする。以後の段階（実験計画 → 実装 → 実験 → 執筆）は framing の回答に依存する子 task（ADR-0079 §7 R5b 3.）。",
+  "stages": [
+    {"key": "inventory", "kind": "investigate", "title": "棚卸しと関連研究（Phase0 / Phase1 の採用）"},
+    {"key": "experiment-plan", "kind": "design", "title": "実験計画"},
+    {"key": "implementation", "kind": "implement", "title": "実装"},
+    {"key": "experiments", "kind": "implement", "title": "実験"},
+    {"key": "writing", "kind": "design", "title": "執筆"}
+  ],
+  "units": [
+    {"key": "phase0-inventory", "stage": "inventory", "kind": "task", "title": "Phase0: 既存BenchFS成果の棚卸し（採用）", "objective": "既存の done の task 01M35X86XT4T3CSNMB8RNQ9WG9 を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M35X86XT4T3CSNMB8RNQ9WG9"},
+    {"key": "phase0-topology", "stage": "inventory", "kind": "task", "title": "Phase0: Sirius 実機トポロジ監査と hardware upper bound（採用）", "objective": "既存の done の task 01M35X86XTHHN9C6XDAYD2FZ7T を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M35X86XTHHN9C6XDAYD2FZ7T"},
+    {"key": "phase0-validity", "stage": "inventory", "kind": "task", "title": "Phase0: Sirius ノード離脱の調査と validity policy（採用）", "objective": "既存の done の task 01M35X86XTEPXVZMBY7HSSEP7X を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M35X86XTEPXVZMBY7HSSEP7X"},
+    {"key": "phase1-related-work", "stage": "inventory", "kind": "task", "title": "Phase1: Related work 調査（採用）", "objective": "既存の done の task 01M37JKZ4Q97KYPY70WQ30DRMD を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M37JKZ4Q97KYPY70WQ30DRMD"},
+    {"key": "phase1-oss", "stage": "inventory", "kind": "task", "title": "Phase1: 比較対象 OSS の調査（採用）", "objective": "既存の done の task 01M3768090QQQMQEFK2JK6SCNB を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M3768090QQQMQEFK2JK6SCNB"},
+    {"key": "phase1-framing", "stage": "inventory", "kind": "task", "title": "Phase1: framing / contribution 候補（採用）", "objective": "既存の done の task 01M35X86XTK84F97QW0CN5PGMR（HUMAN GATE 1 の決定材料。知識ベース projects/benchfs/framing-candidates.md）を採用する。", "acceptance": [{"text": "採用した task が done", "check": {"type": "reviewer"}}], "adopt": "01M35X86XTK84F97QW0CN5PGMR"},
+    {"key": "bf-plan", "stage": "experiment-plan", "kind": "task", "title": "実験計画", "objective": "決定 framing で選ばれた案の RQ と contribution（最大 3 件）について、実験計画（workload・意味論・比較対象と推奨構成・CPU / 資源予算・計測点・反復回数・撤回 / 縮小の条件）を書く。framing-candidates.md の「全案に共通する比較・測定条件」と「数値の再現・監査入口」を前提にする。", "acceptance": [{"text": "実験計画が選んだ RQ の各 contribution に対応し、比較の公平条件と撤回条件がある", "check": {"type": "reviewer"}}]},
+    {"key": "bf-impl", "stage": "implementation", "kind": "task", "title": "実験に要る実装", "objective": "実験計画に要る BenchFS 側の実装（計測点・切替・配置制御など、計画が名指ししたもの）を行う。", "acceptance": [{"text": "実験計画が名指しした実装が入り、既存のテストが通る", "check": {"type": "reviewer"}}], "depends_on": ["bf-plan"]},
+    {"key": "bf-exp", "stage": "experiments", "kind": "task", "title": "実験", "objective": "Sirius で実験計画どおりに実験し、原票（生データ・条件・commit）を残す。", "acceptance": [{"text": "実験計画の各実験に原票と条件の記録がある。未実施の実験は理由が明記されている", "check": {"type": "reviewer"}}], "depends_on": ["bf-impl"]},
+    {"key": "bf-write", "stage": "writing", "kind": "task", "title": "執筆", "objective": "選んだ framing でフルペーパーの原稿を書く（原票と条件を出典付きで引く）。", "acceptance": [{"text": "原稿が RQ・contribution・評価・関連研究を持ち、数値が原票に辿れる", "check": {"type": "reviewer"}}], "depends_on": ["bf-exp"]}
+  ],
+  "decisions": [
+    {"key": "framing", "question": "HUMAN GATE 1: 論文の主案（framing）をどれにするか（projects/benchfs/framing-candidates.md）",
+     "options": [
+       {"key": "a", "label": "案 A: RPC とストレージをまたぐ非同期実行の因果分解", "consequence": "既存の切替実装と 4-way ablation を使える。後戻り: 中"},
+       {"key": "b", "label": "案 B: NUMA 局所性と計算資源予算から配置原則を示す", "consequence": "配置制御・コア会計・干渉測定が要る。後戻り: 高"},
+       {"key": "c", "label": "案 C: 意味論と資源境界を揃えた性能説明", "consequence": "OSS 導入・設定検証の比重が大きい。後戻り: 中〜高"},
+       {"key": "hold", "label": "保留（追加の証拠を先に集める）", "consequence": "後の段階は回答まで始まらない"}
+     ],
+     "recommended": "a", "cost_of_reversal": "medium",
+     "cost_note": "成果物は順位付けをしていない。推奨 a は表の後戻りコストが最小（中、否定されても分解結果を B / C で再利用できる）ことだけに基づく手順書の置き値。人は RQ・contribution・許容する追加実験を note に書く",
+     "needed_before": ["bf-plan", "bf-impl", "bf-exp", "bf-write"]}
+  ]
+}

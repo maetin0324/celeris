@@ -24,7 +24,7 @@ fn bwrap() -> PathBuf {
     let p = PathBuf::from(std::env::var("CELERIS_TEST_BWRAP").unwrap_or("/usr/bin/bwrap".into()));
     assert!(
         p.exists(),
-        "bwrap not found at {p:?}; see docs/ops/browser-isolated-runtime-subuid.md"
+        "bwrap not found at {p:?}; see agent-docs/ops/browser-isolated-runtime-subuid.md"
     );
     p
 }

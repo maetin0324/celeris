@@ -1,0 +1,18 @@
+{
+  "title": "BenchFS 国際会議フルペーパー化",
+  "objective": "BenchFS（Rust の ad hoc file system）を国際会議のフルペーパーにする。既存の Phase0（成果の棚卸し・Sirius の実機トポロジと hardware upper bound・ノード離脱の validity policy）と Phase1（related work・比較対象 OSS の調査・framing / contribution 候補）の done の task を採用し、HUMAN GATE 1（framing の選択。知識ベース projects/benchfs/framing-candidates.md の案 A / B / C）を決定の要求にする。選んだ framing に沿って、実験計画 → 実装 → 実験 → 執筆を子 task で進める。",
+  "acceptance": [
+    {"type": "reviewer", "text": "決定 framing の回答どおりの RQ と contribution（最大 3 件）で、実験計画・実装・実験・執筆の子 task が done になっている"},
+    {"type": "reviewer", "text": "論文の原稿が、実験の原票と条件（意味論・資源予算・比較対象の設定）を出典付きで引いている"}
+  ],
+  "project_id": "01M35WRV77A2JPYGERQGXF6V7K",
+  "status": "draft",
+  "stages_hint": [
+    {"title": "棚卸しと関連研究", "scope": "Phase0 / Phase1 の done の task を採用"},
+    {"title": "framing の選択", "scope": "HUMAN GATE 1（案 A / B / C / 保留）"},
+    {"title": "実験計画", "scope": "選んだ framing の RQ に対する実験計画"},
+    {"title": "実装", "scope": "計測点・配置制御など実験に要る実装"},
+    {"title": "実験", "scope": "Sirius での実験と原票"},
+    {"title": "執筆", "scope": "フルペーパーの原稿"}
+  ]
+}

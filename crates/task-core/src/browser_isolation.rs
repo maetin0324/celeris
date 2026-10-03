@@ -109,9 +109,9 @@ pub enum IsolationViolation {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LauncherProofDefect {
-    /// `SO_PEERCRED` を採れなかった。
+    /// launcher の応答の送り手（`SCM_CREDENTIALS`）を採れなかった。
     PeerUidUnavailable,
-    /// 証明の launcher UID が `SO_PEERCRED`・設定上の launcher UID と一致しない。
+    /// 証明の launcher UID が応答の送り手の UID・設定上の launcher UID と一致しない。
     LauncherUidMismatch,
     /// launcher UID が daemon の UID か root。
     LauncherUidPrivileged,
@@ -303,7 +303,8 @@ pub struct LauncherObservation {
     pub session_id: String,
     /// 対象 session を起動した launcher の instance id。
     pub instance_id: String,
-    /// launcher socket の `SO_PEERCRED` の UID。
+    /// launcher の応答を書いた process の UID（kernel が付けた `SCM_CREDENTIALS`。ADR-0116 付記 D-P）。
+    /// socket 起動では `SO_PEERCRED` が listen socket を作った systemd（uid 0）を指すので使わない。
     pub peer_uid: Option<u32>,
     /// 設定上の launcher UID。
     pub configured_launcher_uid: u32,

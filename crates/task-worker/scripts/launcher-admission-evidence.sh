@@ -7,7 +7,7 @@
 # <out-file> には `CELERIS_LAUNCHER_TESTS=require cargo test -p task-worker --test
 # browser_launcher_ptrace -- --nocapture` の stdout/stderr をそのまま書き、最後に
 # `EXIT: <code>` を 1 行足す。終了コードは cargo のもの。host の前提（v3 launcher・
-# celeris-browser の SO_PEERCRED・subuid）が欠ければ require なので失敗する。
+# launcher の応答の SCM_CREDENTIALS が celeris-browser・subuid）が欠ければ require なので失敗する。
 set -u
 
 if [ "$#" -ne 1 ] || [ -z "$1" ]; then

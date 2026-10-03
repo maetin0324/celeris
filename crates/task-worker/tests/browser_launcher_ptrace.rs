@@ -407,7 +407,6 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     let before = proc_pids();
     let mut client = LauncherClient::connect(&socket, Duration::from_secs(150))
         .expect("connect launcher socket");
-    let peer_uid = client.peer_uid();
     let lease = task_worker::browser_launcher::random_id().expect("random lease");
     let started = client
         .start_session(
@@ -421,6 +420,10 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
             },
         )
         .expect("start real launcher session");
+    // 応答を書いた launcher process の UID（kernel が付けた SCM_CREDENTIALS。ADR-0116 付記 D-P）。
+    // socket 起動では SO_PEERCRED は listen socket を作った systemd（uid 0）になるので使わない。
+    let responder = client.responder();
+    let peer_uid = client.responder_uid();
     assert_eq!(started.receipt.outcome, Outcome::Started);
     assert!(
         started.receipt.isolation_ok,
@@ -429,11 +432,11 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
     // 本番経路（LauncherRuntime::start）と同じ規則で、この session の証明を daemon 側で組む。
     let proof = launcher_session_proof(&started, peer_uid);
     eprintln!(
-        "started: instance={} binding={:?} peer_uid={peer_uid:?}",
+        "started: instance={} binding={:?} responder={responder:?}",
         started.instance_id, started.receipt.binding
     );
     // 対応表の前提（ADR-0116 D-L）: v3 の launcher が束縛（namespace の inode 込み）を返し、この userns から launcher の
-    // SO_PEERCRED が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
+    // 応答の SCM_CREDENTIALS が celeris-browser の UID に見えること。欠ければ表だけを skip（require なら失敗）。
     let proof_gap = if started.receipt.binding.is_none() {
         Some("launcher receipt has no session binding (protocol v1 launcher installed)".to_owned())
     } else if started
@@ -448,7 +451,7 @@ fn launcher_chrome_denies_daemon_uid_ptrace() {
         )
     } else if peer_uid != Some(browser_uid) {
         Some(format!(
-            "launcher SO_PEERCRED uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace"
+            "launcher reply SCM_CREDENTIALS uid {peer_uid:?} is not celeris-browser {browser_uid} in this user namespace"
         ))
     } else {
         None

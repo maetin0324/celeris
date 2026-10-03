@@ -29,7 +29,7 @@ tasks: [01M3VFQZ2TX3W0KTDQHKCAVJR6, 01M3WV4BFJ71J9ZWJ020MP2Z4K]
 
 - launcher は `Response::Started` と `observe` の応答に、`SessionRecord` から採った `pid`・`starttime` を含む証明を返す。daemon 側の型は `task_core::browser_isolation::LauncherSessionProof{session_id, instance_id, pid, starttime, ns_owner_uid, launcher_uid, isolation_ok}` とする（`browser_launcher::protocol::{Receipt, SessionFacts}` と `registry::SessionRecord` の値から組み立てる。今は `Receipt` に pid/starttime が無いので、protocol に足す）。
 - 検証（`verify_isolation` と同じ task-core の共通条件。broker と worker の両 admission が自分で呼ぶ）:
-  - 証明の `launcher_uid` が、接続時に `SO_PEERCRED` で得た launcher の UID と設定上の launcher UID の両方と等しい。daemon の `host_uid` や root ではない。
+  - 証明の `launcher_uid` が、launcher の応答に kernel が付けた `SCM_CREDENTIALS` の送り手 UID（[ADR-0116 launcher 実装の付記 D-P](0116-browser-launcher-implementation.md)。当初は `SO_PEERCRED` としたが socket 起動では systemd を指すため改めた）と設定上の launcher UID の両方と等しい。daemon の `host_uid` や root ではない。
   - `isolation_ok` が真で、`ns_owner_uid` が `Some` かつ daemon の `host_uid` と異なる。条件 2 で daemon 自身が採った owner UID とも一致する。
   - `pid` の `/proc/<pid>/stat` の starttime が証明の `starttime` と一致し、`RuntimeFacts` を採った process と同じである。PID 再利用・process 入替え・session 終了後は不一致として拒否する。
   - `session_id`・`instance_id` が admission の対象 session と一致する。他 session の証明を流用しない。
@@ -48,6 +48,8 @@ tasks: [01M3VFQZ2TX3W0KTDQHKCAVJR6, 01M3WV4BFJ71J9ZWJ020MP2Z4K]
 ### D-L 既知の未実証（実 session の許可/拒否表）
 
 synthetic（構造体を直接組んだ模擬観測）での 5 通り（launcher-proof=allow、same-uid/non-isolated/no-proof/proof-invalid=deny）は単体・結合試験で実証済みだが、**launcher の実観測を本番入口（両 `Attested`）に通した `ADMISSION[real-session]` の表は未実証**。host で protocol v3 launcher に入れ替えて試験台本（`launcher-admission-evidence.sh`）を実行すると、表を作る直前の前提チェック（launcher 接続の `SO_PEERCRED` が設定上の launcher UID であること）で失敗する。原因は launcher が systemd の socket activation（`Accept=no`）で動き、listen socket を最初に作るのが systemd（root）であるため、接続の `SO_PEERCRED` が `celeris-browser` ではなく `systemd` に見えること。sandbox でも同様の理由（userns 越し）で前提が成立しない。後続 task で、launcher が accept 後に自分の pid/uid を `SCM_CREDENTIALS` 等で client に伝える、または `systemctl show` の `MainPID` と突き合わせる仕組みを実装し、host で `ADMISSION[real-session]` を再取得する必要がある。それまでは D-L の owner 検査・証明必須化は synthetic と単体試験の間接証跡、ptrace 拒否そのものは実 process で確認済みという状態にとどまる。
+
+付記（2026-10-02、task 01M3ZFJ2DZ5TZPAFKACX45JNF4）: daemon 側の身元確認を応答の `SCM_CREDENTIALS` に替えた（[ADR-0116 launcher 実装の付記 D-P](0116-browser-launcher-implementation.md)）。launcher の binary・protocol は変えていない。`ADMISSION[real-session]` の再取得は人が [`docs/ops/browser-launcher-admission-evidence-run.md`](../ops/browser-launcher-admission-evidence-run.md) の手順で行う（未実施）。
 
 ## 維持する承認と観測の境界
 

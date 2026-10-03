@@ -49,7 +49,7 @@ fn proof() -> LauncherSessionProof {
     }
 }
 
-/// daemon 自身が採った照合値（`SO_PEERCRED`・設定・`/proc/<pid>/stat`）。
+/// daemon 自身が採った照合値（応答の `SCM_CREDENTIALS`・設定・`/proc/<pid>/stat`）。
 fn seen() -> LauncherObservation {
     LauncherObservation {
         session_id: "prod-s1".into(),

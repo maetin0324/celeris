@@ -194,7 +194,7 @@ pub struct AuthSectionRegistration {
 }
 
 /// ADR-0116 D-L: daemon が launcher から受け取った session 証明を、稼働中 session に結び付ける。
-/// `peer_uid` は daemon が launcher socket の `SO_PEERCRED` で得た UID（採れなければ `None`）、
+/// `peer_uid` は daemon が launcher の応答の `SCM_CREDENTIALS` で得た送り手の UID（採れなければ `None`、ADR-0116 付記 D-P）、
 /// `instance_id` は daemon が接続した launcher の instance。broker は証明をそのまま信じず、
 /// 本番 [`Admission::Attested`] の度に [`verify_launcher_session`] で実 process と照合する。
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

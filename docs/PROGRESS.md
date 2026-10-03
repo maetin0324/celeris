@@ -692,3 +692,13 @@ main `0d438ec19d9a` を merge し、`docs/PROGRESS.md` の両側の節を保持�
 - `cargo test -p task-worker --test browser_launcher_ptrace -- --nocapture` → exit 0（5 passed、実 launcher 試験も実行）。
 - `cargo clippy -p task-worker --all-targets -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
 - `crates/task-worker/src/` は不変（host の binary 入れ替え不要）。
+
+## launcher の身元確認を SCM_CREDENTIALS に（socket 起動対応）— 2026-10-03
+
+- 完了日: 2026-10-03（task 01M3ZFJ2DZ5TZPAFKACX45JNF4）。Attested task branch（celeris/01M3WV4BFJ71J9ZWJ020MP2Z4K）を取り込んだ上で修正。
+- 原因: launcher は systemd の socket 起動で、listen socket を作ったのが systemd（root）。`SO_PEERCRED` は listen 時の資格情報を返すので daemon からは uid 0 に見え、`ADMISSION[real-session]` の前提が成り立たなかった。
+- 方法: `LauncherClient` が `SO_PASSCRED` を立て、各応答に kernel が付ける `SCM_CREDENTIALS`（応答を書いた process の pid/uid/gid）を `MSG_PEEK` で読む。全応答で一致しなければ `None`（fail closed）。`LauncherRuntime::start` と `browser_launcher_ptrace.rs` はこの値を使う。launcher binary・protocol は不変。根拠は ADR-0116（launcher 実装）付記 D-P。
+- 試験: `client_identifies_the_responding_process_not_the_listener_creator`（listen した process と応答する子 process を分け、`SO_PEERCRED` は前者・responder は後者を指す）、`client_records_a_consistent_responder_across_requests`。
+- 証拠: `cargo fmt --all -- --check` exit 0、`cargo clippy --workspace --all-targets -- -D warnings` exit 0、`cargo test -p task-worker --lib browser_launcher` 20 passed、`--lib launcher_run` 16 passed、`--test browser_launcher_ptrace --test browser_prod_admission` 6 + 18 passed（sandbox）。
+- ついで: 取り込みで呼び出しを失って未使用になった `browser_injection_wire.rs` の `wait_cdp_ready` を削除（clippy の dead_code）。
+- 未解決: host での `ADMISSION[real-session]` の再取得は人が `docs/ops/browser-launcher-admission-evidence-run.md` の手順で行う（入れ替え → 台本 → main の版へ戻す）。

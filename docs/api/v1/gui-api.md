@@ -1898,8 +1898,8 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
 - **`changes`**: `release.sh` が**ビルド時に**書いた `<release>/changes.json` の要約。
   `sensitive` は `scripts/selfdeploy/lib.sh` の `SD_SENSITIVE_PATTERNS`（`scripts/selfdeploy/`、`deploy/`、
   `crates/celeris/src/instance.rs`、`crates/celeris/src/releases.rs`、`crates/task-api/src/releases.rs`、
-  `crates/task-core/migrations/`、`CLAUDE.md`、`gui/CLAUDE.md`、`.claude/`、`config/`、`docs/adr/0040-`、
-  `docs/adr/0041-`）に**前方一致**したファイル。**判定は `release.sh` の側で済んでいて、API も GUI も
+  `crates/task-core/migrations/`、`CLAUDE.md`、`gui/CLAUDE.md`、`.claude/`、`config/`、`agent-docs/adr/0040-`、
+  `agent-docs/adr/0041-`）に**前方一致**したファイル。**判定は `release.sh` の側で済んでいて、API も GUI も
   その結果を運ぶだけ**（パターンを 2 か所に置かない）。`changes.json` が無い古いリリースでは `null`。
 
 #### 3.67 `POST /releases/{sha12}/promote` → 202 `ReleasePromoteAccepted`（**管理系: `token_file` 未設定でも 401**）

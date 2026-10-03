@@ -19,9 +19,11 @@ CHECK=0
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 # 写し先ではファイル名が celeris-api-v1.md になる。正本と同じディレクトリへの相対リンクは写し先（gui/docs/）から正本の位置へ向け直す。
+# 正本（docs/api/v1/）から repo の根へ上がる `../../../` は、写し先（gui/docs/）では `../../` になる。
 UP="../.."
 sed -E -e 's#(^|[^-A-Za-z0-9_])gui-api\.md#\1celeris-api-v1.md#g' \
-  -e "s#\\]\\((overview\.md|api-v1\.schema\.json|event\.schema\.json)([#)])#](${UP}/docs/api/v1/\1\2#g" "$SRC" > "$tmp"
+  -e "s#\\]\\((overview\.md|api-v1\.schema\.json|event\.schema\.json)([#)])#](${UP}/docs/api/v1/\1\2#g" \
+  -e "s#\\]\\(\\.\\./\\.\\./\\.\\./#](${UP}/#g" "$SRC" > "$tmp"
 
 if cmp -s "$tmp" "$DST"; then
   echo "sync-gui-docs: up to date"

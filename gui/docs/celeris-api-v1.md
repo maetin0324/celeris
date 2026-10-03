@@ -1719,7 +1719,7 @@ SPEC §3.6「少しでも聞くべきだとエージェントが判断したら�
 
 ### 3.63 `POST /tasks/{id}/retry` → 201 `RetryResult`
 
-経緯は [ADR-0070](../../../agent-docs/adr/0070-task-failure-visibility-and-handoff-safe-runs.md) を参照。要求本文 `RetryBody` は省略可。
+経緯は [ADR-0070](../../agent-docs/adr/0070-task-failure-visibility-and-handoff-safe-runs.md) を参照。要求本文 `RetryBody` は省略可。
 `accept` の既定は `true`。`workspace` を指定すると複製先の作業場所を差し替える。
 `execution` は `"compound"` / `"atomic"` の明示指定で、対象外のタスクには 422 を返す。
 指定しなければ元の `execution_hint` を継ぎ、元の gate 判定は継がずに再判定する（§3.125.6）。
@@ -1898,8 +1898,8 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
 - **`changes`**: `release.sh` が**ビルド時に**書いた `<release>/changes.json` の要約。
   `sensitive` は `scripts/selfdeploy/lib.sh` の `SD_SENSITIVE_PATTERNS`（`scripts/selfdeploy/`、`deploy/`、
   `crates/celeris/src/instance.rs`、`crates/celeris/src/releases.rs`、`crates/task-api/src/releases.rs`、
-  `crates/task-core/migrations/`、`CLAUDE.md`、`gui/CLAUDE.md`、`.claude/`、`config/`、`docs/adr/0040-`、
-  `docs/adr/0041-`）に**前方一致**したファイル。**判定は `release.sh` の側で済んでいて、API も GUI も
+  `crates/task-core/migrations/`、`CLAUDE.md`、`gui/CLAUDE.md`、`.claude/`、`config/`、`agent-docs/adr/0040-`、
+  `agent-docs/adr/0041-`）に**前方一致**したファイル。**判定は `release.sh` の側で済んでいて、API も GUI も
   その結果を運ぶだけ**（パターンを 2 か所に置かない）。`changes.json` が無い古いリリースでは `null`。
 
 #### 3.67 `POST /releases/{sha12}/promote` → 202 `ReleasePromoteAccepted`（**管理系: `token_file` 未設定でも 401**）
@@ -2031,7 +2031,7 @@ stdout/err は `<release>/promote.log`）で起こし、`promote.lock` に pid �
 
 ### 3.74〜3.78 タスク管理: 編集・コメント・再開・タイムライン（ADR-0044 B1）
 
-`POST /tasks` と `PATCH /tasks/{id}` は次の項目も受け付ける（経緯は [ADR-0046](../../../agent-docs/adr/0046-organization-as-agent-profiles.md)）。
+`POST /tasks` と `PATCH /tasks/{id}` は次の項目も受け付ける（経緯は [ADR-0046](../../agent-docs/adr/0046-organization-as-agent-profiles.md)）。
 
 | 項目 | 型 | 意味 |
 |---|---|---|
@@ -2299,8 +2299,8 @@ celeris はここで **`git` と `gh` だけ**を、待ち時間の上限付き�
 
 ### 3.84〜3.91 案件の中止・一時停止・アーカイブと旧途中目標 API
 
-経緯は [ADR-0044](../../../agent-docs/adr/0044-task-management.md) と
-[ADR-0079](../../../agent-docs/adr/0079-recursive-task-decomposition.md) を参照。
+経緯は [ADR-0044](../../agent-docs/adr/0044-task-management.md) と
+[ADR-0079](../../agent-docs/adr/0079-recursive-task-decomposition.md) を参照。
 全 route が管理系で、トークンが無ければ 401。本文は空または `{}`、クエリは受け付けない。
 
 #### 3.84〜3.88 案件の操作

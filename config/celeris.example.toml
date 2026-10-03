@@ -357,6 +357,20 @@ input_artifacts = ["question"]
 output_artifacts = ["report.md: 出典付きの調査報告（これが答え）", "sources.json: 出典と引用の有無", "research.json: 検索の記録（クエリと件数）"]
 instructions = "あなたは Web 調査担当。論文化されていない実装・製品・仕様を一般 Web 検索で調べ、出典付きでまとめる。"
 
+# ADR-0131 D6 / 付記 D10: 知識ベースと受信箱の日次整理（下の `[[cron.seed]] daily-curation` の雛形が指す）。
+# 既存の `knowledge`（adapter `langmem`、task 単位の候補抽出）は KB 全体の統合・削除ができないので流用しない。
+# coding 系の汎用 adapter（adapter 省略）で、tier cheap。届かないときは cheap の汎用ハーネスに倒す。
+[[harnesses]]
+id = "knowledge-curation"
+description = "知識ベースの受信箱（_inbox）と重複・古い記述を整理し、受信箱の判断材料をまとめる（日次）"
+tier = "cheap"
+fallback = { tier = "cheap" }
+capabilities = ["KB ページの統合・新規・削除の振り分け", "重複ページの統合", "古い記述の修正・削除", "受信箱の片付けの提案"]
+input_artifacts = ["inputs/kb/（本番 KB の写し）", "inputs/inbox.json", "inputs/reports.json"]
+output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
+budget = { max_turns = 30 }
+instructions = "あなたは知識整理担当。本番 KB は書かず、inputs/kb/ の写しだけを編集し、計画・差分・要約の 3 ファイルを出す。"
+
 # 旧い形（Phase 58 まで）。`[[harnesses]]` を書くならこちらは**消すこと**（両方あると `[[harnesses]]` が勝つ）。
 # 互換のためだけに残してあり、`[[harnesses]]` が 1 つも無いときだけ読まれる（起動時に warn が 1 行出る）。
 #
@@ -512,3 +526,52 @@ max_context_chars = 24000
 # アカウントに `max_runs_per_account + 1` 本目まで載る）。その同時数の絶対上限。既定 2、0..=8。0 で例外を無効化。
 # [execution]
 # max_cos_runs = 2
+
+# ADR-0131 D6 / 付記 D10: 定期実行（cron job）の**種**。起動時に DB の `cron_jobs` が**空のときだけ**一度入れる
+# （org.toml と同じく DB が正。以後の変更は `celerisctl cron …` / `PATCH /api/v1/cron-jobs/{id}` で行い、
+# 設定を書き換えても既存の job は変わらない）。不正な種（式・タイムゾーン・mode・harness・雛形の誤り）は
+# 起動時の設定エラー。`enabled` の既定は false（有効にするのは人の `celerisctl cron resume`）。
+#
+# daily-curation: 知識ベースと受信箱の 1 日 1 回の整理。時刻とタイムゾーンは例なので環境に合わせて変える。
+# `mode = "dry_run"` は本番 KB を書き換えず、差分と要約だけを出す。`apply` への切り替えは本番 KB の
+# dry-run 差分を人が確かめた後に人が PATCH する（ADR-0095 付記 D-d）。
+[[cron.seed]]
+name = "daily-curation"
+enabled = false
+schedule = "30 4 * * *"
+timezone = "Asia/Tokyo"
+overlap = "skip"
+catch_up = "latest"
+
+[cron.seed.template]
+title = "日次整理: {date}"
+harness = "knowledge-curation"
+lane = "cheap"
+mode = "dry_run"                     # 'dry_run' | 'apply'
+# 対象の案件（ULID か題名）。投入時に存在しなければ起動時の設定エラーになるので、案件の登録後に書く。
+# project = "agent-platform"
+acceptance = [
+  { type = "artifact_exists", name = "curation-plan.json" },
+  { type = "artifact_exists", name = "curation.diff" },
+  { type = "artifact_exists", name = "daily-summary.md" },
+]
+objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB は書かず、作業場所の写しだけを編集する。
+
+入力: inputs/kb/（本番 KB の読み取り用の写し）、inputs/inbox.json（受信箱の表示項目と、決定論的規則で外した件数 suppressed）、
+inputs/reports.json（前回の整理以降に終わった task の報告の抜粋）。run の mode（dry_run|apply）は入力 manifest に書かれている。
+
+作業:
+1. inputs/kb/_inbox/ の各件を、既存ページへの統合（merge）・新規ページ（new）・削除（delete）に振り分け、_inbox を空にする。
+2. 同じ趣旨の重複ページを 1 本に寄せる（統合先を残し、他は削除）。
+3. 古い記述・誤った記述を直す（fix）か消す（delete）。archive はしない。消したものは計画に path と理由を残す。
+4. index.json と README の整合は daemon が反映後に再生成するので、手で揃えなくてよい。
+5. 人が書いたページ（user/ 配下、frontmatter が source: human のもの）は消さず大きく書き換えない。迷うものは human_decisions に入れる。
+6. 受信箱で判断が要る項目（古い報告を閉じてよいか、規則に当たらない failed を諦めてよいか）は inbox 節に提案と理由を書く。状態は変えない。
+
+出力（artifacts/ に 3 ファイル）:
+- curation-plan.json: version 1。kb（{path, action: merge|new|delete|keep|fix, target, reason}）、inbox（{task_id, proposal, reason}）、
+  human_decisions（{subject, proposal, reason}）。
+- curation.diff: 写しの before/after の unified diff。
+- daily-summary.md: 見出し「日次整理 YYYY-MM-DD（mode）」、KB の件数（統合・新規・削除・保留）、削除したページ、受信箱、人に決めてほしいこと。
+  1 節 10 行まで。人が数十秒で読める量にする。
+"""

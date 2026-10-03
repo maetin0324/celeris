@@ -34,8 +34,9 @@ final review の不合格（main を祖先に含まない・merge-tree で衝突
 - `crates/celeris/src/daemon/tick_loop.rs`: 自動 merge の結果 `notify_started_at` が未使用になった（このブランチで
   `knowledge_maint::schedule` の引数から外し、main で `notify::schedule` が `schedule_routes` に替わった）ので削除。
 - `docs/progress/phase-cron-jobs.md` の内容を `agent-docs/progress/2026-10-02-cron-jobs.md` に移し、旧 file は削除。
-  `docs/progress/cron-jobs-curation-dry-run.md` はこのブランチ（base `4fb3c5e7`）に存在しないため移動対象なし
-  （並行の dry-run 葉の成果。統合時に `agent-docs/progress/2026-10-02-cron-jobs/dry-run.md` へ寄せる）。
+  `docs/progress/cron-jobs-curation-dry-run.md` は base `4fb3c5e7` に無かった（dry-run 葉の成果は task branch
+  `a059b4dd` にだけあった）。再実行（attempt 2）で task branch `a059b4dd` を `merge --no-ff` で取り込み（衝突なし）、
+  `git mv` で `agent-docs/progress/2026-10-02-cron-jobs/dry-run.md` へ移した。旧パスは残していない。
 - `docs/ops/cron-jobs.md` の migration 名・版数を 0046 / 46 に。
 - schema: `cargo test -p task-api` が通ったので `UPDATE_SCHEMA=1` の再生成は不要（gui/web の生成物は main の版のまま）。
 - ADR-0131 本文の `0039_cron_jobs.sql` の記述と ADR の `agent-docs/adr` への移動は docs-move 葉の仕事なので触れていない。

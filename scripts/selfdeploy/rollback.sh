@@ -130,6 +130,18 @@ sd_log "restoring $SRC over $SD_DB (and dropping -wal / -shm)"
 cp -p "$SRC" "$SD_DB"
 rm -f "$SD_DB-wal" "$SD_DB-shm"
 
+# ADR-0040 付記 2026-10-02: `current` はまだ旧（$CUR）を指すので、start の直前に昇格中の印を置く
+# （無ければ celeris@$PREV は未昇格として exit 4 で止まる）。`current` を付け替えた直後と EXIT で消す。
+PROMOTING_WRITTEN=false
+clear_promoting_on_exit() {
+  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$PREV" || true; fi
+}
+trap clear_promoting_on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+sd_write_promoting "$PREV" rollback.sh restore-db
+PROMOTING_WRITTEN=true
+
 sd_log "systemctl --user start celeris@$PREV"
 systemctl --user start "celeris@$PREV" || sd_die "failed to start celeris@$PREV (the DB was restored from $SRC)"
 if ! sd_wait_http_200 "$SD_PROD_API/api/v1/health" 60; then
@@ -157,4 +169,6 @@ if [ -n "$CUR" ] && [ -d "$(sd_release_dir "$CUR")" ]; then
   sd_set_link "$SD_PREVIOUS" "$CUR"
 fi
 sd_set_link "$SD_CURRENT" "$PREV"
+sd_clear_promoting "$PREV"
+PROMOTING_WRITTEN=false
 sd_log "rolled back to $PREV with a restored DB. Lost: everything after $SRC was taken."

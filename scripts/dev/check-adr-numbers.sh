@@ -30,7 +30,9 @@ ALLOWED_OVER_LAST="
 0133-inbox-and-notifications.md
 0134-blocked-repair-replan-loop.md
 0135-web-follow-health-gate.md
+0136-local-hot-data-layout.md
 0138-browser-prod-admission-confidential-release.md
+0139-langmem-proxy-bearer-and-verify-proxy-bind.md
 "
 
 NAMESPACES="main gui web"

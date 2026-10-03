@@ -102,28 +102,48 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
 
 ### D6. 移行期間（旧 PROGRESS.md と走っている branch）
 
-一時 repo（git 2.48、merge-ort）で次を確かめたうえで決めた:
-(a) `docs/PROGRESS.md` を `git mv` して冒頭に数行足しても、旧 branch が旧パスの末尾に足した節は新しいパスへ衝突なく入る（rename の追従）。
+（2026-10-03 改訂、sync-main-3、task 01M40D0QW6HX3XEZK3GBCQV5ZM。旧版の「本文を変えなければ rename 追従で入る」方式を写し直し方式に替えた。経緯は下の「改訂の経緯」。）
+
+一時 repo（git 2.48、merge-ort）で次を確かめた:
+(a) `docs/PROGRESS.md` を `git mv` して冒頭に数行足すと、旧 branch が旧パスの末尾に足した節は新しいパスへ衝突なく入る（rename の追従）。
+ただしこれは移した側の本文が旧 branch の基点と十分に似ている間だけ成り立つ。
 (b) 旧パスに案内だけの別ファイルを置くと rename と見なされず、旧 branch の追記と内容衝突する。
 (c) ディレクトリを丸ごと移すと、旧 branch がそのディレクトリに新設したファイルは `CONFLICT (file location)` になる。
 旧ディレクトリに 1 ファイルでも残せば衝突せず、新設ファイルは旧ディレクトリに入る。
 
-- 旧 `docs/PROGRESS.md` は `git mv docs/PROGRESS.md agent-docs/PROGRESS.md` で移し、**旧パスには何も置かない**。
-  移した先の **1 行目より前に**だけ案内を足す（既存の行は変えない。冒頭の「現在地」行を書き換える旧 branch と隣り合わないように、
-  見出しより前に入れる）:
+- 旧 `docs/PROGRESS.md` は **凍結した履歴**として `agent-docs/PROGRESS.md` に置き、旧パスには何も置かない。新しい進捗は task ごとの進捗ファイル（D3）に書く。
+- main を取り込むたび（main にまだ `docs/PROGRESS.md` がある間）、`docs/PROGRESS.md` の modify/delete 衝突は
+  `sh scripts/dev/progress-transition.sh <main-ref>` で解く。台本は `<main-ref>:docs/PROGRESS.md` の**全文**を `agent-docs/PROGRESS.md` へ写し直し、
+  先頭に案内 1 行だけを足して、旧パスを消し、両パスを index に登録する（commit はしない。merge の途中で使う）。案内の行:
   `> **このファイルへの追記は終了（ADR-0128）。** 新しい進捗は agent-docs/progress/YYYY-MM-DD-<slug>.md へ。現在地は sh scripts/dev/progress-index.sh。`
-  land-verify が確かめる「旧 PROGRESS.md の移行案内」はこの移動後のファイルの案内を指す。
+  `<main-ref>` に旧ファイルが無ければ何も変えない。land-verify が確かめる「旧 PROGRESS.md の移行案内」はこの 1 行を指す。
+- 写し直したうえで、main が足した節のうち該当 task の進捗ファイルが `agent-docs/progress/` に無いものは、取り込んだ task が D3 の形
+  （`YYYY-MM-DD-<slug>.md`、WorkUnit は `YYYY-MM-DD-<slug>/<wu-key>.md`）へ移す。既にあるものには main 側の更新を足す。
+  `agent-docs/PROGRESS.md` 自体は写した全文のまま手で書き換えない（次の取り込みでまた全文で置き換わる）。
+- この方式は `sh scripts/dev/tests/progress_transition_merge.sh` で確かめる（一時 repo）: main が本文を組み替えて追記した状態で、
+  (1) 旧方式の branch が main を取り込むと modify/delete で止まり、台本で解くと未解決が残らず、写しが main の全文と一致し 1 行目が案内になる、
+  (2) その解決を main へ fast-forward した後、旧パスの末尾に追記した別 branch X が衝突なく入る、
+  (3) 旧方式の解決（基点の本文を移しただけ）のままだと同じ X の取り込みが衝突する、の 3 つ。
 - 旧 `docs/progress/` と `docs/adr/` は中身を移したあと、それぞれ `README.md`（「agent-docs/… へ移った。ここに新しいファイルを置かない」）を残す。
-  旧 branch が新設した進捗・ADR はそこに衝突なく入り、後で移す。
-- 移行期間は move-docs の merge から、「merge-base がその commit より前の `celeris/*` task branch が無くなる」まで。期間中は:
-  - `agent-docs/PROGRESS.md` と `agent-docs/progress/phase-F.md`（旧「以後の追記先」）の本文を書き換えない（rename の追従を壊さないため）。
-    リンク検査もこの 2 本を対象外にする（D7）。
-  - 旧 branch が取り込まれて、旧ディレクトリ（`docs/progress/`, `docs/adr/`）に入ったファイル、
-    `agent-docs/PROGRESS.md` の末尾に入った節は、land の task が D3 の進捗ファイル・`agent-docs/adr/` へ移す。
-    本 task の land-verify は、本 task の base 以降に main で足された分を同じ規則で移す。
-  - 期間が終わったら、旧ディレクトリの README を消し、`agent-docs/PROGRESS.md` のリンクを直し、リンク検査の対象外を外す（cleanup の後続）。
+  旧 branch・main が新設した進捗・ADR はそこに衝突なく入るので、取り込んだ task が新配置（`agent-docs/progress/` の D3 の形・`agent-docs/adr/`）へ移す。
+- 移行期間中は `agent-docs/PROGRESS.md` と `agent-docs/progress/phase-F.md`（旧「以後の追記先」）をリンク検査の対象外にする（D7）。
+  写し直しの台本と移行試験も旧パスを名指しするので対象外にする。
 - docs の配置を前提にする branch（CLAUDE.md の「最初に読むもの」が旧パスを指す）は、main を取り込めば新しい CLAUDE.md を読む。
   旧パスを読もうとして見つからない agent のために、`docs/README.md` の冒頭に agent 向けの入口（`agent-docs/README.md`）を書く。
+
+移行期間の終わり（人が旧ファイルを消す条件）:
+- 本 ADR の取り込み（`agent-docs/PROGRESS.md` が main に入る commit）以後、main に `docs/PROGRESS.md` が無く、
+  かつ merge-base がその commit より前の `celeris/*` task branch が無くなったら終わる（`git for-each-ref refs/heads/celeris/` と `git merge-base --is-ancestor` で確かめる）。
+- 終わったら人が（または人の確認を得た cleanup の task が）、旧 `docs/progress/README.md`・`docs/adr/README.md` を消し、
+  `agent-docs/PROGRESS.md` のリンクを新配置へ直し、リンク検査の対象外（`MIGRATION_EXCLUDE`）を空にし、`progress-transition.sh` と移行試験を消す。
+
+改訂の経緯:
+- 旧版の D6 は「`git mv` で移し、移した本文を変えなければ、旧 branch の追記は rename の追従で入る」を前提にしていた（上の (a)）。
+- 本 ADR が main に入る前に、main 側で `docs/PROGRESS.md` が組み替えられ（目次化・節の並べ替え・大量の追記）、本 branch の移した本文（基点の版）と
+  main の本文が大きく離れた。このため git は rename と見なさず、main の取り込みのたびに `docs/PROGRESS.md` が modify/delete で衝突した。
+  さらに、基点の本文を残して解くと main の追記が失われ、後から入る旧 branch の追記もまた衝突する（試験の (3)）。
+- そこで「移した本文を守る」のをやめ、取り込みのたびに main の全文で写し直す方式にした。写した後は本文が main と一致するので、
+  main へ取り込んだ後の旧 branch の追記は再び rename の追従で入る（試験の (2)）。
 
 ### D7. 検査の台本（仕様）
 
@@ -138,7 +158,7 @@ tasks: [01M3YBGM64RYPEY9NZANF79A0M]
     `web/**`・`gui/**` のソース（`node_modules`・生成物を除く）に出る `docs/…`・`agent-docs/…` のパスの実在を確かめる。
     `NNNN`・`<…>`・`*`・`{…}`・`$` を含む雛形、`scripts/dev/docs-layout.tsv`（旧パス列を持つ）と `scripts/dev/testdata/` は除外。
   - progress・ADR・report の本文に出る素のパス文字列は履歴なので見ない（Markdown リンクだけ見る）。
-    移行期間中の `agent-docs/PROGRESS.md`・`agent-docs/progress/phase-F.md` は対象外（台本内の 1 変数に列挙）。
+    移行期間中の `agent-docs/PROGRESS.md`・`agent-docs/progress/phase-F.md`、写し直しの台本 `scripts/dev/progress-transition.sh` と移行試験は対象外（台本内の 1 変数に列挙）。
   - 壊れた参照が 1 件でもあれば exit 1、無ければ exit 0。
 - `scripts/dev/check-adr-numbers.sh`
   - 対象: `agent-docs/adr/`、`agent-docs/gui/adr/`、`agent-docs/web/adr/`、および移行期間中は旧 `docs/adr/`・`docs/gui/adr/`・`docs/web/adr/`
@@ -181,5 +201,7 @@ D5 の「既存の重複は振り直さない」と同じ理由（参照・memor
 
 - D6 に従い `agent-docs/adr/` へ同じファイル名で `git mv` し、`check-adr-numbers.sh` の `ALLOWED_OVER_LAST` に完全なファイル名で書く。
   許可するのは「本 ADR の取り込み時に main に既にあった」ものだけ。
-- 以後に別 branch から入る 0128 超えの番号（例: 0136 local-hot-data-layout、0137）は D5 どおり新設禁止の違反として扱い、
+- 以後に別 branch から入る 0128 超えの番号（例: 0137）は D5 どおり新設禁止の違反として扱い、
   land の task が日付+slug へ振り直すか、main に先にあったことを示して許可リストに足すかを決める（後者は人の確認を取る）。
+- 追記（2026-10-03、sync-main-3）: `0136-local-hot-data-layout.md`（main a2124b5f）と `0139-langmem-proxy-bearer-and-verify-proxy-bind.md`（main 9fb850c6）は
+  本 ADR の取り込み前に main に入っており、crates のコード・コメントが番号で参照しているので、同じ理由で許可リストに足した。

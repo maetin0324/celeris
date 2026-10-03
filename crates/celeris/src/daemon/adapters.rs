@@ -189,10 +189,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     provider: llm.provider,
                     base_url: llm.base_url.clone(),
                     model: llm.model.clone(),
-                    api_key: llm
-                        .api_key_secret
-                        .as_deref()
-                        .and_then(|id| resolve_secret(secrets_dir, id)),
+                    // ADR-0139 D2: proxy を指すなら proxy が照合する `[api]` のトークン。
+                    api_key: config.langmem_api_key(),
                     env: merged_env_with_secrets(
                         &base.env,
                         &base.env_from_secrets,

@@ -34,6 +34,12 @@ pub(crate) struct RoleState {
     pub(crate) mcp: Option<RunningMcp>,
 }
 
+/// ADR-0139 D1: この起動 mode で `[llm_proxy] listen` に bind するか。verify は本番の config を読むので
+/// `listen` も本番と同じになる。bind すると本番の proxy と接続を分け合い、staging のトークンで 401 を返す。
+pub(crate) fn serves_llm_proxy(mode: DaemonMode) -> bool {
+    mode != DaemonMode::Verify
+}
+
 /// デーモン本体。`[api]` があれば同じランタイムで HTTP API も動かし、tick ループの終了時に止める。
 /// ADR-0040 D4: 起動時に `daemon_instances` を見て役割を決める（同じ `release` の `active` がいれば
 /// 何もせず `Exit::DuplicateRelease`＝ exit 3）。
@@ -78,6 +84,13 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
             }
         }
     }
+    // ADR-0136: `[storage] hot_mount`（本番は `/local`）が mount されていなければ、DB を開く・dir を作る
+    // （`build_dispatcher`）より前に止める。rootfs に同名の dir を作って hot データを書き始めない。
+    config.check_hot_mount(
+        std::fs::read_to_string("/proc/self/mountinfo")
+            .ok()
+            .as_deref(),
+    )?;
     warn_if_db_on_network_filesystem(&config.db.path);
     // ADR-0047 D3 / D4（P-61-i、Phase 62）: 起動時に索引が無ければ作る（`_inbox` の変化を tick ごとに
     // 見る仕組みは無いが、知識整理 run が `apply_candidates` の後に必ず `reindex` するので、起動後は
@@ -214,10 +227,12 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         }
         None => (None, None),
     };
-    // ADR-0053 D1（Phase 65）: `standby`/`verify` も起きてすぐプロキシを受ける（主 API と同じ理由）。
+    // ADR-0053 D1（Phase 65）: `standby` も起きてすぐプロキシを受ける（主 API と同じ理由）。
+    // ADR-0139 D1: `verify` は待ち受けない（本番の `listen` に `SO_REUSEPORT` で相乗りし、staging の
+    // トークンで本番の知識整理 run を 401 にしていた）。`GET /llm/sources` 用の state は上で作ってある。
     let llm_proxy = match llm_proxy_state {
-        Some(state) => Some(start_llm_proxy(&config, state).await?),
-        None => None,
+        Some(state) if serves_llm_proxy(opts.mode) => Some(start_llm_proxy(&config, state).await?),
+        _ => None,
     };
     // ADR-0056 D1（Phase 78）: `[mcp]` も同じ理由で `standby`/`verify` から受ける。
     let mcp_state = build_mcp_state(&config)?;

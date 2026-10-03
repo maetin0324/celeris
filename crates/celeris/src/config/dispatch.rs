@@ -159,19 +159,10 @@ impl Config {
                 default_mounts: self.knowledge.mounts().unwrap_or_default(),
                 // ADR-0052 D1（Phase 64）: dispatch の直前に `GET <base_url>/models` を当てる先。
                 langmem_base_url: self.knowledge.langmem.base_url.clone(),
-                // Phase 65b: probe の `Authorization: Bearer` に使う平文のトークン（`llm-proxy` の
-                // ように `/v1/models` が認証を要求する上流を `[knowledge.langmem].base_url` に
-                // 指したときのため）。`[secrets] dir` が無い・見つからないなら `None`（検査は従来どおり
-                // トークン無しで行い、401/403 は `Unknown` として扱われる）。**値はここにしか無い**
-                // （`build_adapters` の langmem アダプタと同じ解決。ログには出さない）。
-                langmem_api_key: self
-                    .knowledge
-                    .langmem
-                    .api_key_secret
-                    .as_deref()
-                    .and_then(|id| {
-                        crate::resolve_secret(self.secrets.as_ref().map(|s| s.dir.as_path()), id)
-                    }),
+                // Phase 65b / ADR-0139 D2: probe の `Authorization: Bearer` に使う平文のトークン。
+                // `build_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
+                // `[api]` のトークン）。**値はここにしか無い**（ログには出さない）。
+                langmem_api_key: self.langmem_api_key(),
                 // ADR-0052 D2: `knowledge` ハーネスの `fallback`（組み込みの既定は tier `cheap`）。
                 fallback_tier: self
                     .harness_registry()

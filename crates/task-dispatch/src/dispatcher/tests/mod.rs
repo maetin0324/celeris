@@ -1199,9 +1199,6 @@ async fn wait_for_approval_child(
 /// 走った run の env を記録し、`with_env` を実装するテスト用アダプタ（ADR-0024 D2）。
 type CapturedEnvs = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
 
-/// `PoolAdapter::with_env_removed` が外した key に付ける印（実アダプタの `Command::env_remove` の代わり）。
-const ENV_REMOVED: &str = "<env_remove>";
-
 #[derive(Clone)]
 struct PoolAdapter {
     terminal_or_throttled: Result<Terminal, Duration>,
@@ -1250,15 +1247,6 @@ impl WorkerAdapter for PoolAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut env = self.env.clone();
         env.extend(extra.iter().cloned());
-        Some(Arc::new(PoolAdapter {
-            env,
-            ..self.clone()
-        }))
-    }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.retain(|(k, _)| !keys.contains(k));
-        env.extend(keys.iter().map(|k| (k.clone(), ENV_REMOVED.to_string())));
         Some(Arc::new(PoolAdapter {
             env,
             ..self.clone()
@@ -2977,26 +2965,10 @@ fn no_deleting_left(dir: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// ADR-0075 §5 G2: Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の env
-/// （`RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`）を返す。
-async fn run_with_sccache(
-    sccache: task_worker::scratch::SccacheSettings,
-) -> (
-    task_worker::scratch::ScratchSettings,
-    task_worker::scratch::Owner,
-    Vec<(String, String)>,
-    String,
-) {
-    run_with_sccache_and_cache(sccache, None, None).await
-}
-
-/// `run_with_sccache` に Phase G3 の cache server の設定と、sccache の server が選んだ backend の記録
-/// （`<scratch>/bin/sccache-server.mode`）を足す。
-async fn run_with_sccache_and_cache(
-    sccache: task_worker::scratch::SccacheSettings,
-    cache_server: Option<task_worker::scratch::CacheServerSettings>,
-    mode: Option<&str>,
-) -> (
+/// ADR-0129 (1): scratch を有効にして Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の
+/// env を返す。checks の 1 行目は `RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`
+/// （未設定は `unset`）、2 行目は子プロセスの sccache の族の全部（`parent_sccache_family` と同じ形）。
+async fn run_scratch_env() -> (
     task_worker::scratch::ScratchSettings,
     task_worker::scratch::Owner,
     Vec<(String, String)>,
@@ -3012,7 +2984,6 @@ async fn run_with_sccache_and_cache(
     let task = git_task(
         repo_dir.path(),
         None,
-        // 1 行目: 値（未設定は `unset`。空の値と区別する）。2 行目: G3-fix1 の sccache の族の全部（辞書順、空白区切り）。
         Check::Command {
             cmd: format!(
                 "echo \"${{RUSTC_WRAPPER-unset}}|${{SCCACHE_DIR-unset}}|${{SCCACHE_SERVER_PORT-unset}}|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {log}; \
@@ -3031,13 +3002,6 @@ async fn run_with_sccache_and_cache(
         None,
     );
     scratch_on(&mut d, scratch_dir.path());
-    d.config.scratch.sccache = sccache;
-    if let Some(cs) = cache_server {
-        d.config.scratch.cache_server = cs;
-    }
-    if let Some(mode) = mode {
-        task_worker::scratch::write_sccache_mode(&d.config.scratch.pool(), mode).unwrap();
-    }
     let settings = d.config.scratch.clone();
     run_until_idle(&mut d, 60).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
@@ -3048,83 +3012,16 @@ async fn run_with_sccache_and_cache(
     (settings, owner, runs[0].clone(), check)
 }
 
-fn fake_sccache_binary(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = dir.join("sccache");
-    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    bin
-}
-
-/// G3-fix1: run（`PoolAdapter` が `with_env_removed` で受けた key）と checks（子プロセスの実 env）で、
-/// sccache の族が 1 つも残っていない。親（テストの process）が `RUSTC_WRAPPER` などを持っていても同じ。
-fn assert_sccache_family_removed(run_env: &[(String, String)], check: &str) {
-    let set: Vec<&(String, String)> = run_env
-        .iter()
-        .filter(|(k, v)| task_worker::scratch::is_sccache_family(k) && v != ENV_REMOVED)
+/// この process の env の sccache の族（`KEY=VALUE ` を辞書順に連ねたもの。checks の 2 行目と同じ形）。
+fn parent_sccache_family() -> String {
+    let mut family: Vec<String> = std::env::vars()
+        .filter(|(k, _)| {
+            k == "RUSTC_WRAPPER" || k == "RUSTC_WORKSPACE_WRAPPER" || k.starts_with("SCCACHE_")
+        })
+        .map(|(k, v)| format!("{k}={v}"))
         .collect();
-    assert!(set.is_empty(), "{set:?}: {run_env:?}");
-    for key in task_worker::scratch::RUSTC_WRAPPER_VARS
-        .iter()
-        .chain(task_worker::scratch::KNOWN_SCCACHE_VARS.iter())
-    {
-        assert!(
-            run_env.iter().any(|(k, v)| k == key && v == ENV_REMOVED),
-            "{key} was not removed: {run_env:?}"
-        );
-    }
-    assert_eq!(
-        check.lines().nth(1).unwrap_or_default().trim(),
-        "",
-        "{check}"
-    );
-}
-
-/// G3-fix1: 配線するとき、run と checks の `RUSTC_WRAPPER` は Celeris の `<scratch>/bin/sccache`（継いだ値ではない）で、
-/// 与えない族（`RUSTC_WORKSPACE_WRAPPER`・webdav 系・継いだ他の `SCCACHE_*`）は外れている。
-fn assert_celeris_wrapper_only(
-    settings: &task_worker::scratch::ScratchSettings,
-    run_env: &[(String, String)],
-    check: &str,
-) {
-    let wrapper = settings
-        .pool()
-        .root()
-        .join("bin/sccache")
-        .display()
-        .to_string();
-    assert!(
-        run_env
-            .iter()
-            .any(|(k, v)| k == "RUSTC_WRAPPER" && *v == wrapper),
-        "{run_env:?}"
-    );
-    assert!(
-        run_env
-            .iter()
-            .any(|(k, v)| k == "RUSTC_WORKSPACE_WRAPPER" && v == ENV_REMOVED),
-        "{run_env:?}"
-    );
-    let family = check.lines().nth(1).unwrap_or_default();
-    let keys: Vec<&str> = family
-        .split_whitespace()
-        .filter_map(|kv| kv.split_once('=').map(|(k, _)| k))
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            "RUSTC_WRAPPER",
-            "SCCACHE_CACHE_SIZE",
-            "SCCACHE_DIR",
-            "SCCACHE_IDLE_TIMEOUT",
-            "SCCACHE_SERVER_PORT"
-        ],
-        "{check}"
-    );
-    assert!(
-        family.contains(&format!("RUSTC_WRAPPER={wrapper} ")),
-        "{check}"
-    );
+    family.sort();
+    family.iter().map(|kv| format!("{kv} ")).collect()
 }
 
 mod build_cache;
@@ -3138,6 +3035,7 @@ mod review;
 mod routing_and_quota;
 mod target_sync;
 mod tick_and_dispatch;
+mod ui_ux_skills;
 mod work_units;
 
 /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。

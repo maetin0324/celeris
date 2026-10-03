@@ -337,21 +337,27 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
     }
 }
 
-/// ADR-0056 D3（Phase 79）: `context.skills` に乗った skill は、前置き（プロンプト文面）の末尾に
-/// `## Skills（celeris）` 節として直接埋め込まれる（acp にはファイルを自動で読む契約が無いため）。
-#[tokio::test]
-async fn mounted_skills_are_embedded_in_the_preamble() {
-    let dir = tempfile::tempdir().unwrap();
-    let kb = tempfile::tempdir().unwrap();
-    let skill_dir = kb.path().join("writing");
-    std::fs::create_dir_all(&skill_dir).unwrap();
+/// 付属ファイル（入れ子を含む）を持つ skill を KB 側に作る。本文には印の文字列を入れる。
+fn skills_fixture_kb(kb: &Path, name: &str) -> crate::protocol::SkillMount {
+    let skill_dir = kb.join(name);
+    std::fs::create_dir_all(skill_dir.join("references/deep")).unwrap();
     std::fs::write(
         skill_dir.join("SKILL.md"),
-        "---\nname: writing\ndescription: d\n---\n\n文章の書き方\n",
+        format!("---\nname: {name}\ndescription: d\n---\n\nBODY-MARKER 文章の書き方\n"),
     )
     .unwrap();
-    let config = stub_acp(
-        dir.path(),
+    std::fs::write(skill_dir.join("references/a.md"), "ref a\n").unwrap();
+    std::fs::write(skill_dir.join("references/deep/b.md"), "ref b\n").unwrap();
+    crate::protocol::SkillMount {
+        name: name.into(),
+        path: skill_dir.display().to_string(),
+        description: "d".into(),
+    }
+}
+
+fn skills_ok_acp(dir: &Path) -> AcpConfig {
+    stub_acp(
+        dir,
         &format!(
             r#"{HANDSHAKE}
 read -r _prompt
@@ -359,14 +365,20 @@ printf '%s' '{{"summary":"ok","evidence":[]}}' > artifacts/result.json
 printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
 "#
         ),
-    );
-    let adapter = AcpAdapter::new(config);
+    )
+}
+
+/// ADR-0127 D1/D3（旧 ADR-0056 D3 の試験を更新）: `context.skills` に乗った skill は、前置き（プロンプト
+/// 文面）の末尾に `## Skills（celeris）` 節として名前・説明・パスの一覧で載る（本文と `### <name>` の
+/// 見出しは埋め込まない）。
+#[tokio::test]
+async fn mounted_skills_are_listed_in_the_preamble() {
+    let dir = tempfile::tempdir().unwrap();
+    let kb = tempfile::tempdir().unwrap();
+    let mount = skills_fixture_kb(kb.path(), "writing");
+    let adapter = AcpAdapter::new(skills_ok_acp(dir.path()));
     let mut req = sample_req(dir.path().to_path_buf());
-    req.context.skills = vec![crate::protocol::SkillMount {
-        name: "writing".into(),
-        path: skill_dir.display().to_string(),
-        description: "d".into(),
-    }];
+    req.context.skills = vec![mount];
     let sink = RecordingSink::default();
     adapter
         .run(req, "run-skills", default_limits(), &sink)
@@ -374,8 +386,86 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         .unwrap();
     let prompt = std::fs::read_to_string(dir.path().join("runs/run-skills/prompt.txt")).unwrap();
     assert!(prompt.contains("## Skills（celeris）"), "{prompt}");
-    assert!(prompt.contains("### writing"), "{prompt}");
-    assert!(prompt.contains("文章の書き方"), "{prompt}");
+    assert!(
+        prompt.contains("- `writing` — d（`.agents/skills/writing/SKILL.md`）"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("### writing"), "{prompt}");
+    assert!(!prompt.contains("BODY-MARKER"), "{prompt}");
+}
+
+/// ADR-0127 D1/D2/D6: acp では skill のディレクトリが付属ファイルまで `.agents/skills/<name>/` に
+/// 丸写しされ、unmount（次の run で `skills` 空）で写しが消え前置きの節も無くなる。人が置いた
+/// `.agents/skills/<別名>/`・`.claude/skills/<別名>/`・`.agents/` の他のファイルには触れない。
+#[tokio::test]
+async fn acp_skills_deliver_sibling_files_and_unmount_keeps_human_files() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join(".agents/skills/human-skill")).unwrap();
+    std::fs::write(
+        dir.path().join(".agents/skills/human-skill/SKILL.md"),
+        "human\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(dir.path().join(".claude/skills/human-claude")).unwrap();
+    std::fs::write(
+        dir.path().join(".claude/skills/human-claude/SKILL.md"),
+        "human claude\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join(".agents/notes.txt"), "keep\n").unwrap();
+    let kb = tempfile::tempdir().unwrap();
+    let mount = skills_fixture_kb(kb.path(), "ui-ux-quality-gate");
+    let adapter = AcpAdapter::new(skills_ok_acp(dir.path()));
+
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.skills = vec![mount];
+    let sink = RecordingSink::default();
+    adapter
+        .run(req, "run-skills-1", default_limits(), &sink)
+        .await
+        .unwrap();
+    let copy = dir.path().join(".agents/skills/ui-ux-quality-gate");
+    assert!(
+        std::fs::read_to_string(copy.join("SKILL.md"))
+            .unwrap()
+            .contains("BODY-MARKER")
+    );
+    assert_eq!(
+        std::fs::read_to_string(copy.join("references/a.md")).unwrap(),
+        "ref a\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(copy.join("references/deep/b.md")).unwrap(),
+        "ref b\n"
+    );
+    assert!(copy.join(".gitignore").is_file());
+    let prompt = std::fs::read_to_string(dir.path().join("runs/run-skills-1/prompt.txt")).unwrap();
+    assert!(
+        prompt.contains("`.agents/skills/ui-ux-quality-gate/SKILL.md`"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("BODY-MARKER"), "{prompt}");
+
+    let req = sample_req(dir.path().to_path_buf());
+    adapter
+        .run(req, "run-skills-2", default_limits(), &sink)
+        .await
+        .unwrap();
+    assert!(!copy.exists());
+    let prompt = std::fs::read_to_string(dir.path().join("runs/run-skills-2/prompt.txt")).unwrap();
+    assert!(!prompt.contains("## Skills（celeris）"), "{prompt}");
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".agents/skills/human-skill/SKILL.md")).unwrap(),
+        "human\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".claude/skills/human-claude/SKILL.md")).unwrap(),
+        "human claude\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".agents/notes.txt")).unwrap(),
+        "keep\n"
+    );
 }
 
 /// ADR-0036 D1/D2: 共有 workspace のタスクは `.taskd/artifacts/<task_id>/result.json` を読む。
@@ -772,10 +862,10 @@ async fn agent_message_chunks_are_coalesced_into_few_progress_lines() {
 
 /// `model` を指定すると `session/set_config_option` が送られ、値がそのまま渡る。
 #[tokio::test]
-async fn model_option_is_set_when_configured_and_offered() {
+async fn provider_kind_acp_sends_proxy_cheap_model_to_stub() {
     let dir = tempfile::tempdir().unwrap();
     let config = AcpConfig {
-        model: Some("qwen-local/qwen3.8-27b".to_string()),
+        model: Some("celeris/cheap".to_string()),
         ..stub_acp(
             dir.path(),
             r#"
@@ -804,7 +894,7 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
     assert!(matches!(outcome.terminal, Terminal::Done { .. }));
     let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
     assert!(received.contains("session/set_config_option"), "{received}");
-    assert!(received.contains("qwen-local/qwen3.8-27b"), "{received}");
+    assert!(received.contains("celeris/cheap"), "{received}");
     assert!(received.contains("\"configId\":\"model\""), "{received}");
 }
 

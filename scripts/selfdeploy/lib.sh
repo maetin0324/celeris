@@ -5,8 +5,9 @@
 # 置き場（ADR-0045 D2。XDG 流に設定と状態を分ける）:
 #   $CELERIS_CONFIG_DIR（既定 ~/.config/celeris） 設定と秘密: config.toml org.toml providers.d/ api.token
 #                                                 gui.password gui.session-secret secrets/
-#   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  状態: celeris.sqlite3 releases/ backups/ staging/
-#                                                 workspaces/ memory/ logs/ tools/ current previous
+#   $CELERIS_STATE_DIR （既定 ~/.local/celeris）  hot state: releases/ staging/ tools/ current previous
+#   $CELERIS_BACKUPS_DIR（既定 $CELERIS_STATE_DIR/backups）新規 backup
+#   $CELERIS_LOGS_DIR（既定 $SD_BACKUPS）運用 log
 #
 # 触ってよい場所（ADR-0040 D1、安全規則）:
 #   $SD_RELEASES / $SD_STAGING / $SD_BACKUPS と、昇格のときだけ $SD_CURRENT / $SD_PREVIOUS の symlink。
@@ -43,7 +44,11 @@ SD_CARGO_TARGET="$SD_RELEASES/.cargo-target"
 # リリースの `gui/node_modules` はここへの相対 symlink（NFS 上で 4,000 余のファイルを毎回書かないため）。
 SD_PNPM_PROD_CACHE="$SD_RELEASES/.pnpm-prod-cache"
 SD_STAGING="$CELERIS_STATE_DIR/staging"
-SD_BACKUPS="$CELERIS_STATE_DIR/backups"
+SD_TOOLS="$CELERIS_STATE_DIR/tools"
+SD_BACKUPS="${CELERIS_BACKUPS_DIR:-$CELERIS_STATE_DIR/backups}"
+# Legacy deployments kept operational logs alongside backups. The explicit
+# logs path separates them while preserving that old default.
+SD_LOGS="${CELERIS_LOGS_DIR:-$SD_BACKUPS}"
 SD_CURRENT="$CELERIS_STATE_DIR/current"
 SD_PREVIOUS="$CELERIS_STATE_DIR/previous"
 # 設定ファイル。`CELERIS_CONFIG` が立っていればそれが勝つ（移行のあいだ `verify.sh` に
@@ -335,6 +340,75 @@ sd_wait_http_200() {
   return 1
 }
 
+# celeris-web@.service の Environment= と EnvironmentFile= に対応する値を読む。
+# web.env は KEY=VALUE のみを受け付け、シェルとして実行しない。
+sd_web_load_env() {
+  local file="${CELERIS_CONFIG_DIR}/web.env" line key value
+  export NODE_ENV=production
+  export CELERIS_WEB_BIND=127.0.0.1:7720
+  export CELERIS_API_URL=http://127.0.0.1:7710
+  export CELERIS_API_TOKEN_FILE="${CELERIS_CONFIG_DIR}/api.token"
+  export CELERIS_WEB_SESSION_SECRET_FILE="${CELERIS_CONFIG_DIR}/web.session-secret"
+  export CELERIS_WEB_PASSWORD_FILE="${CELERIS_CONFIG_DIR}/web.password"
+  [ -f "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case "$line" in ''|\#*|\;*) continue ;; esac
+    key="${line%%=*}"
+    [ "$key" != "$line" ] || continue
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z_0-9]*$ ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    if [[ "$value" == \"*\" || "$value" == \'*\' ]]; then value="${value:1:${#value}-2}"; fi
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done <"$file"
+}
+
+# /healthz は status と release の両方を見る。短い間隔で出来事を待ち、期限を越えたら失敗。
+sd_web_health_wait() {
+  local url="$1" sha="$2" timeout="${3:-30}" deadline code body
+  deadline=$((SECONDS + timeout))
+  while :; do
+    body="$(curl --noproxy '*' -sS --connect-timeout 1 --max-time 2 -o /dev/stdout -w '\n%{http_code}' "$url/healthz" 2>/dev/null)" || body=''
+    code="${body##*$'\n'}"
+    body="${body%$'\n'*}"
+    if [ "$code" = 200 ] && [ "$(printf '%s' "$body" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("release", ""))' 2>/dev/null)" = "$sha" ]; then
+      return 0
+    fi
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.2
+  done
+}
+
+# `sd_web_app_probe <app_dir> <port> <sha12>` — 一時起動して応答を確認する。
+# subshell の EXIT trap が成功・失敗・割込みのいずれでも起動した node を止める。
+sd_web_app_probe() (
+  local app_dir="$1" port="$2" sha="$3" pid='' log
+  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  [ -f "$app_dir/server/index.js" ] && [ -d "$app_dir/node_modules" ] || return 1
+  # 使用中の port の既存応答を誤って成功と判定しない。
+  python3 - "$port" <<'PY' || return 1
+import socket, sys
+with socket.socket() as sock:
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('127.0.0.1', int(sys.argv[1])))
+PY
+  log="$(mktemp)" || return 1
+  trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi; rm -f "$log"' EXIT
+  trap 'exit 1' INT TERM HUP
+  sd_web_load_env
+  export CELERIS_WEB_BIND="127.0.0.1:$port" CELERIS_WEB_RELEASE="$sha"
+  cd "$app_dir" || return 1
+  "${SD_WEB_NODE:-node}" server/index.js >"$log" 2>&1 &
+  pid=$!
+  if sd_web_health_wait "http://127.0.0.1:$port" "$sha" "${SD_WEB_PROBE_TIMEOUT:-30}"; then return 0; fi
+  sd_log "warning: web app probe failed for $sha: $(tail -n 5 "$log" | tr '\n' ' ')"
+  return 1
+)
+
 # ---- ポート ----------------------------------------------------------------
 
 # 誰かが LISTEN していれば 1（塞がっている）。
@@ -372,6 +446,42 @@ sd_set_link() {
   tmp="$link.tmp.$$"
   ln -sfn "releases/$sha" "$tmp"
   mv -T "$tmp" "$link"
+}
+
+# ---- 昇格中の印（ADR-0040 付記 2026-10-02「handoff と migration の認可」）--------
+#
+# `celeris@<sha12>` を start する**直前**に `releases/<sha12>/promoting.json` を置き、`current` を
+# 付け替えた直後（と EXIT トラップ）で消す。daemon は `current` か 900 秒以内のこの印が自分の
+# release と一致するときだけ DB を開いて migrate し、handoff を要求する（それ以外は exit 4）。
+# 印を書くのも消すのもこの 2 つだけ（daemon は読むだけ）。
+sd_promoting_path() { printf '%s/promoting.json' "$(sd_release_dir "$1")"; }
+
+# `sd_write_promoting <sha12> <script> <mode>` — 一時ファイル → mv で原子的に置く。
+sd_write_promoting() {
+  local sha="$1" script="$2" mode="$3" path tmp
+  path="$(sd_promoting_path "$sha")"
+  tmp="$path.tmp.$$"
+  {
+    printf '{\n'
+    printf '  "sha12": %s,\n' "$(sd_json_str "$sha")"
+    printf '  "script": %s,\n' "$(sd_json_str "$script")"
+    printf '  "mode": %s,\n' "$(sd_json_str "$mode")"
+    printf '  "pid": %s,\n' "$$"
+    printf '  "started_at": %s\n' "$(sd_json_str "$(sd_ts)")"
+    printf '}\n'
+  } >"$tmp"
+  mv -f "$tmp" "$path"
+  sd_log "promoting marker: $path (script=$script mode=$mode)"
+}
+
+# `sd_clear_promoting <sha12>` — 無くてもよい（EXIT トラップから何度呼ばれても害が無い）。
+sd_clear_promoting() {
+  local path
+  path="$(sd_promoting_path "$1")"
+  if [ -e "$path" ]; then
+    rm -f "$path"
+    sd_log "promoting marker removed: $path"
+  fi
 }
 
 # `pub const SCHEMA_VERSION: u32 = N;` を読む。ADR-0079 の分割で store.rs は

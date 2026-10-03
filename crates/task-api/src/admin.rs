@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{AccountAdapter, Tier};
+use task_core::{
+    AccountAdapter, LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin, Tier,
+};
 use tokio::sync::oneshot;
 
 use crate::types::ProviderConfigView;
@@ -208,6 +210,10 @@ pub enum CheckError {
 /// task-api は celeris に依存できない（循環依存になる）ので、独立に同じ形の型を持つ。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ProviderKind>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<LlmSourceRef>,
     #[serde(default)]
     pub tier_models: task_core::model_routing::TierModels,
     #[serde(default)]
@@ -250,6 +256,8 @@ impl ProviderConfigFile {
         let mut env_keys: Vec<String> = self.env.keys().cloned().collect();
         env_keys.sort();
         ProviderConfigView {
+            kind: self.kind.unwrap_or_default(),
+            llm_source: Some(self.resolved_llm_source()),
             credential_refs: task_core::model_routing::credential_refs(&self.env_from_secrets),
             tier_models: self.tier_models.clone(),
             account_id: self.account_id.clone(),
@@ -260,6 +268,35 @@ impl ProviderConfigFile {
             model: (!self.model.is_empty()).then(|| self.model.clone()),
             env_keys,
             account_pool: self.account_pool,
+        }
+    }
+
+    fn resolved_llm_source(&self) -> ResolvedLlmSource {
+        let derived = match self.adapter.as_str() {
+            "fake" => LlmSourceRef::None,
+            "claude-code" => LlmSourceRef::ClaudeOauth,
+            "codex" => LlmSourceRef::CodexOauth,
+            _ if matches!(
+                self.model.as_str(),
+                "celeris/frontier"
+                    | "celeris/standard"
+                    | "celeris/cheap"
+                    | "openai/celeris/frontier"
+                    | "openai/celeris/standard"
+                    | "openai/celeris/cheap"
+            ) =>
+            {
+                LlmSourceRef::Celeris
+            }
+            _ => LlmSourceRef::Unknown,
+        };
+        ResolvedLlmSource {
+            source: self.llm_source.clone().unwrap_or(derived),
+            origin: if self.llm_source.is_some() {
+                SourceOrigin::Explicit
+            } else {
+                SourceOrigin::Derived
+            },
         }
     }
 }
@@ -275,6 +312,10 @@ fn default_concurrency() -> usize {
 /// `POST /api/v1/providers` の本文。
 #[derive(Debug, Clone, Deserialize)]
 pub struct ProviderCreateBody {
+    #[serde(default)]
+    pub kind: Option<ProviderKind>,
+    #[serde(default)]
+    pub llm_source: Option<LlmSourceRef>,
     #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]
@@ -299,6 +340,8 @@ pub struct ProviderCreateBody {
 impl ProviderCreateBody {
     pub fn into_file(self) -> ProviderConfigFile {
         ProviderConfigFile {
+            kind: self.kind,
+            llm_source: self.llm_source,
             tier_models: self.tier_models,
             account_id: self.account_id.clone(),
             id: self.id,
@@ -325,6 +368,10 @@ impl ProviderCreateBody {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderPatchBody {
     #[serde(default)]
+    pub kind: Option<ProviderKind>,
+    #[serde(default)]
+    pub llm_source: Option<LlmSourceRef>,
+    #[serde(default)]
     pub credential_refs: Option<std::collections::HashMap<String, String>>,
     #[serde(default)]
     pub tier_models: Option<task_core::model_routing::TierModels>,
@@ -345,6 +392,12 @@ pub struct ProviderPatchBody {
 
 impl ProviderPatchBody {
     pub fn apply(&self, mut file: ProviderConfigFile) -> ProviderConfigFile {
+        if let Some(kind) = self.kind {
+            file.kind = Some(kind);
+        }
+        if let Some(source) = &self.llm_source {
+            file.llm_source = Some(source.clone());
+        }
         if let Some(refs) = &self.credential_refs {
             for key in task_core::model_routing::CREDENTIAL_KEYS {
                 file.env_from_secrets.remove(*key);

@@ -1412,7 +1412,10 @@ fn skills_context_resolves_mounted_skills_and_reports_missing_ones() {
     d.config.knowledge.root = kb.path().to_path_buf();
     write_kb_skill(kb.path(), "writing", "文章の書き方", "本文");
 
-    let (skills, missing) = d.skills_context(&["writing".to_string(), "ghost".to_string()]);
+    let (skills, missing) = d.skills_context(
+        &["writing".to_string(), "ghost".to_string()],
+        task_ops::knowledge::SkillUse::Work,
+    );
     assert_eq!(skills.len(), 1);
     assert_eq!(skills[0].name, "writing");
     assert_eq!(skills[0].description, "文章の書き方");

@@ -1,0 +1,12 @@
+# ~/.cargo/config.toml に足す例（docs/adr/0129-host-sccache-reflink-targets.md §2）。
+#
+# Cargo は `[build] rustc-wrapper` の値で `~` を展開しない。rustc-wrapper.sh の絶対 path を
+# 書くこと。この例では ~/.local/bin に rustc-wrapper.sh を置いた前提（<user> を実際の
+# ホームディレクトリに置き換える）。
+#
+# wrapper は sccache が無い、または server（scripts/host-sccache/sccache.service）に
+# 短い timeout で届かないときは素の rustc にそのまま戻るので、server が止まっていても
+# build は壊れない。
+
+[build]
+rustc-wrapper = "/home/<user>/.local/bin/rustc-wrapper.sh"

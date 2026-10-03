@@ -268,10 +268,10 @@ async fn answer_covers_blocked_not_blocked_and_blank() {
 }
 
 #[tokio::test]
-async fn cancel_of_terminal_tasks_is_invalid_and_non_terminal_is_cancelled() {
+async fn cancel_of_done_or_cancelled_is_invalid_and_failed_can_be_cancelled() {
     let env = admin_env();
     let app = env.router();
-    for status in [Status::Done, Status::Failed, Status::Cancelled] {
+    for status in [Status::Done, Status::Cancelled] {
         let task = new_task(TaskKind::Execute, status);
         env.seed(&task);
         let resp = send(
@@ -301,6 +301,16 @@ async fn cancel_of_terminal_tasks_is_invalid_and_non_terminal_is_cancelled() {
     .await;
     assert_eq!(resp.status, 200, "{}", resp.text());
     assert_eq!(resp.json()["to"], "cancelled");
+    let failed = new_task(TaskKind::Execute, Status::Failed);
+    env.seed(&failed);
+    let resp = send(
+        &app,
+        post_admin(&format!("/api/v1/tasks/{}/cancel", failed.id), &json!({})),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["reason"], "cancel_failed");
+    assert_eq!(env.status_of(failed.id), Status::Cancelled);
 }
 
 #[tokio::test]

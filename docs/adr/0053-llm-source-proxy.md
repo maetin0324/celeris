@@ -9,6 +9,7 @@
   できるように」。任意のハーネスが Claude / ChatGPT の枠を食うことは許容）
 - 関連: ADR-0049（供給元を固定しない。tier・残量で決定的に選ぶ）、ADR-0024 / 0025（アカウントプール。`claude-accounts/<id>/`、
   `codex-accounts/<id>/`）、ADR-0032（クラスタ接続。TOTP 中継、ssh master）、ADR-0047 D4 / ADR-0052（LangMem の接続先）
+- 付記: [ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md)（LLM source と adapter の区別、Qwen の cheap 専用化。該当する D1・D2 の記述より優先）
 
 ## 1. 決定
 

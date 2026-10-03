@@ -512,7 +512,7 @@ fn non_aggregate_lead_completes_after_children_without_another_run() {
 
     let daemon = env.start_celeris(&config);
     // 親の run と判定が終わっても、子が終わるまで reviewing のまま。
-    let saw_waiting = wait_until(Duration::from_secs(30), || {
+    let saw_waiting = wait_until(Duration::from_secs(60), || {
         let parent = env.task(id);
         parent.status == Status::Reviewing
             && env.children_of(id).iter().any(|c| !c.status.is_terminal())

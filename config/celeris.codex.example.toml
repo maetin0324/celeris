@@ -25,6 +25,8 @@ auto_accept = false
 
 [[providers]]
 id = "codex-local"
+kind = "adapter"
+llm_source = "codex_oauth"
 adapter = "codex"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 1

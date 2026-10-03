@@ -34,3 +34,15 @@ describe("ScreenFrame", () => {
     expect(html).not.toContain("準備中");
   });
 });
+
+describe("ScreenFrame の互換", () => {
+  it("slot を使わないときは h1 と中身が兄弟（従来の DOM）", () => {
+    const html = renderToStaticMarkup(
+      <ScreenFrame title="ホーム" route="/">
+        <p>本文</p>
+      </ScreenFrame>,
+    );
+    expect(html).toMatch(/^<div[^>]*data-screen="\/"><h1 [^>]*>ホーム<\/h1><p>本文<\/p><\/div>$/);
+    expect(html).not.toContain("page-header");
+  });
+});

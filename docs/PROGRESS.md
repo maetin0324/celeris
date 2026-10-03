@@ -458,6 +458,15 @@ diff の規則があり、実装側には mode 検証と diff 照合がある。
   同じ DB guard のため e2e の `account_pool_scenarios`、`api_scenarios`、`cluster_scenarios`、
   `codex_account_pool_scenarios`、`delegation_scenarios`、`multi_account_scenarios`、`phase7_scenarios`、
   `plan_scenarios`、`provider_admin_scenarios`、`scenarios`、`worker_db_read_only` 等も失敗した。
+
+### daily-curation / Keep の diff 照合修正 — 2026-10-03
+
+`check_diff_matches` の期待 path 集合から `Action::Keep` を除いた。Keep は本文を変えず worker diff に現れないためである。保護ページ等の人判断へ移した操作は `ValidatedPlan.kb` に追加されず、同じ照合集合にも入らない。回帰試験は Keep と merge/delete を含む計画で変更 path の照合を確認し、Keep の path だけを diff に含めた場合は余分として拒否する。
+
+- `cargo test -p task-ops knowledge_curation::tests::curation_diff_match` → exit 0（4 passed）。
+- `cargo test -p task-ops` → exit 0（428 passed）。
+- `cargo test --workspace knowledge_curation_job` → exit 0（celeris lib 7 passed）。
+- `cargo fmt --all -- --check && cargo clippy --workspace -- -D warnings` → exit 0。
   `starting_the_same_release_twice_exits_three` と stale heartbeat の instance handoff 失敗も観測。
 - 未解決事項: 本番 KB の写しへの LLM dry-run と本番での有効化は親の `dry-run` / `ops-verify` leaf が行う。
   本番有効化と `dry_run` から `apply` への切り替えは人が判断・実施する。

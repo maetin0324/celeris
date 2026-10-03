@@ -120,6 +120,35 @@ fn curation_diff_match_reports_missing_paths() {
 }
 
 #[test]
+fn curation_diff_match_ignores_keep_actions() {
+    let (_dir, root) = fixture();
+    let validated = validate(
+        &root,
+        &plan(vec![
+            item(&root, "user/profile.md", Action::Keep, None, None),
+            item(
+                &root,
+                "projects/demo/a.md",
+                Action::Merge,
+                Some("projects/demo/b.md"),
+                Some("# B\nmerged\n"),
+            ),
+            item(&root, "projects/demo/c.md", Action::Delete, None, None),
+        ]),
+    )
+    .unwrap();
+    assert!(validated.kb.iter().any(|item| item.action == Action::Keep));
+
+    let matching_diff = "--- a/projects/demo/a.md\n+++ /dev/null\n--- a/projects/demo/b.md\n+++ b/projects/demo/b.md\n--- a/projects/demo/c.md\n+++ /dev/null\n";
+    assert_eq!(check_diff_matches(&validated, matching_diff), Ok(()));
+
+    let keep_only_diff = "--- a/user/profile.md\n+++ b/user/profile.md\n";
+    let err = check_diff_matches(&validated, keep_only_diff).unwrap_err();
+    assert!(err.contains("不足: [projects/demo/a.md, projects/demo/b.md, projects/demo/c.md]"));
+    assert!(err.contains("余分: [user/profile.md]"));
+}
+
+#[test]
 fn dry_run_never_changes_the_kb_and_apply_handles_each_action() {
     let (_dir, root) = fixture();
     let plan = plan(vec![

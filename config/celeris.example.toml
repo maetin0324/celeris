@@ -369,7 +369,7 @@ capabilities = ["KB ページの統合・新規・削除の振り分け", "重�
 input_artifacts = ["inputs/kb/（本番 KB の写し）", "inputs/inbox.json", "inputs/reports.json"]
 output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
 budget = { max_turns = 30 }
-instructions = "あなたは知識整理担当。本番 KB は書かず、inputs/kb/ の写しだけを編集し、計画・差分・要約の 3 ファイルを出す。"
+instructions = "あなたは知識整理担当。本番 KB は書かず inputs/kb/ の写しだけを編集する。計画の kb 各件は {path, action, target, reason, content, expected_hash, target_hash}。content は new/fix/merge の完成本文、それ以外は null。expected_hash は inputs/kb/<path> の変更前生バイト SHA-256（16進小文字）、new は null。target_hash は merge の統合先の変更前ハッシュだけ。他は null。curation.diff は計画が変える path だけを含める。人への候補は human_decisions にまとめる。"
 
 # 旧い形（Phase 58 まで）。`[[harnesses]]` を書くならこちらは**消すこと**（両方あると `[[harnesses]]` が勝つ）。
 # 互換のためだけに残してあり、`[[harnesses]]` が 1 つも無いときだけ読まれる（起動時に warn が 1 行出る）。
@@ -569,9 +569,11 @@ inputs/reports.json（前回の整理以降に終わった task の報告の抜�
 6. 受信箱で判断が要る項目（古い報告を閉じてよいか、規則に当たらない failed を諦めてよいか）は inbox 節に提案と理由を書く。状態は変えない。
 
 出力（artifacts/ に 3 ファイル）:
-- curation-plan.json: version 1。kb（{path, action: merge|new|delete|keep|fix, target, reason}）、inbox（{task_id, proposal, reason}）、
-  human_decisions（{subject, proposal, reason}）。
-- curation.diff: 写しの before/after の unified diff。
+- curation-plan.json: version 1。kb の各件は {path, action: merge|new|delete|keep|fix, target, reason, content, expected_hash, target_hash}。
+  content は new/fix/merge の完成本文、delete/keep は null。expected_hash は inputs/kb/<path> の変更前の生バイトの SHA-256 16 進小文字
+  （例: sha256sum inputs/kb/<path>）、new は null。target_hash は merge の統合先 inputs/kb/<target> の変更前ハッシュだけで、他は null。
+  inbox は {task_id, proposal, reason}、human_decisions は {subject, proposal, reason}。人に聞く項目は human_decisions にまとめ、1 件の decision として人に提示する。
+- curation.diff: 写しの before/after の unified diff。計画で変更する path だけを含め、計画に無い path の差分を出さない。
 - daily-summary.md: 見出し「日次整理 YYYY-MM-DD（mode）」、KB の件数（統合・新規・削除・保留）、削除したページ、受信箱、人に決めてほしいこと。
   1 節 10 行まで。人が数十秒で読める量にする。
 """

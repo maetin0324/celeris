@@ -239,3 +239,25 @@ fn cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness() {
     assert_eq!(seed_cron_if_empty(&store, &cfg, now()).unwrap(), 0);
     assert_eq!(store.cron_job_list().unwrap().len(), 1);
 }
+
+#[test]
+fn seed_objective_describes_curation_content_hashes_and_diff_scope() {
+    let cfg = Config::load(example_path()).unwrap();
+    let [seed] = cfg.cron.seed.as_slice() else {
+        panic!("{:?}", cfg.cron.seed)
+    };
+    let objective = &seed.template.objective;
+    for word in [
+        "content",
+        "expected_hash",
+        "target_hash",
+        "sha256sum inputs/kb/<path>",
+        "new/fix/merge",
+        "delete/keep",
+        "curation.diff",
+        "変更する path だけ",
+        "1 件の decision",
+    ] {
+        assert!(objective.contains(word), "objective に {word} が無い");
+    }
+}

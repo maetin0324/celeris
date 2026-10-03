@@ -848,7 +848,12 @@ impl Dispatcher {
         let mut all_events = std::mem::take(events);
         all_events.extend(extra);
         if let Some(input) = integration {
-            let row = work_units.last().expect("repair row");
+            let Some(row) = work_units.last() else {
+                return Err(StoreError::Invalid(format!(
+                    "integration repair for task {task_id}: no repair work unit row"
+                ))
+                .into());
+            };
             if new_plan.is_some() {
                 all_events.push(Event::WorkUnitTransitioned {
                     work_unit_id: row.id.clone(),

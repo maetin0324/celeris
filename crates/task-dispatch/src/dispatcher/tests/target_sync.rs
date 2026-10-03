@@ -1106,3 +1106,175 @@ async fn behind_target_is_zero_after_pre_review_sync() {
     assert_eq!(snaps[0].target_sha.as_deref(), Some(target.as_str()));
     assert_eq!(snaps[0].head_sha.as_deref(), Some(reviewed.as_str()));
 }
+
+fn land_on_main(repo: &std::path::Path, reviewed: &str) {
+    // 配送（crates/celeris/src/delivery.rs）と同じく、main を reviewed SHA へ早送りする。
+    git_out(repo, &["merge", "--ff-only", "-q", reviewed]);
+}
+
+fn integration_repair_scheduled(events: &[Event]) -> usize {
+    events
+        .iter()
+        .filter(|e| matches!(e, Event::IntegrationRepairScheduled { .. }))
+        .count()
+}
+
+#[tokio::test]
+async fn target_sync_two_tasks_disjoint_both_land() {
+    let repo = tempfile::tempdir().unwrap();
+    let base = init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_a = reviewing_task(repo.path(), &store);
+    let task_b = reviewing_task(repo.path(), &store);
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    // A と B を同じ古い base から並列に切り、別々のファイルを変える。
+    let wt_a = d.local_worktree_for(&task_a).unwrap();
+    wt_a.ensure_blocking().unwrap();
+    let wt_b = d.local_worktree_for(&task_b).unwrap();
+    wt_b.ensure_blocking().unwrap();
+    assert_eq!(git_out(&wt_a.dir, &["merge-base", "HEAD", "main"]), base);
+    assert_eq!(git_out(&wt_b.dir, &["merge-base", "HEAD", "main"]), base);
+    let head_a = commit_file(&wt_a.dir, "a.txt", "a\n");
+    let before_b = commit_file(&wt_b.dir, "b.txt", "b\n");
+
+    // A が先に review を通って main へ入る（B はまだ作業中で review に来ていない）。
+    store.insert(&task_a).unwrap();
+    assert!(
+        d.spawn_review(task_a.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    assert_eq!(git_out(&wt_a.dir, &["rev-parse", "HEAD"]), head_a);
+    assert!(run_until_idle(&mut d, 100).await.idle);
+    assert_eq!(store.get(task_a.id).unwrap().unwrap().status, Status::Done);
+    land_on_main(repo.path(), &head_a);
+    let main_after_a = git_out(repo.path(), &["rev-parse", "main"]);
+    assert_eq!(main_after_a, head_a);
+
+    // B が review に来ると、前進した main へ同期されてから review される。
+    store.insert(&task_b).unwrap();
+    assert!(
+        d.spawn_review(task_b.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let reviewed_b = git_out(&wt_b.dir, &["rev-parse", "HEAD"]);
+    assert_ne!(reviewed_b, before_b);
+    assert!(git_ok(
+        &wt_b.dir,
+        &["merge-base", "--is-ancestor", &main_after_a, &reviewed_b]
+    ));
+    check_snapshot(&store, &task_b, &main_after_a, &reviewed_b);
+    assert!(run_until_idle(&mut d, 100).await.idle);
+    assert_eq!(store.get(task_b.id).unwrap().unwrap().status, Status::Done);
+    let events_b = events_of(&store, &task_b);
+    assert_eq!(integration_repair_scheduled(&events_b), 0);
+    assert!(store.work_units_for(task_b.id).unwrap().is_empty());
+    assert!(no_review_fail(&events_b));
+
+    // B の reviewed SHA は main の早送りで入る（merge candidate = reviewed）。両方の成果が main に残る。
+    land_on_main(repo.path(), &reviewed_b);
+    assert_eq!(git_out(repo.path(), &["rev-parse", "main"]), reviewed_b);
+    assert_eq!(git_out(repo.path(), &["show", "main:a.txt"]), "a");
+    assert_eq!(git_out(repo.path(), &["show", "main:b.txt"]), "b");
+}
+
+#[tokio::test]
+async fn target_sync_merge_history_keeps_resolutions() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = reviewing_task(repo.path(), &store);
+    store.insert(&task).unwrap();
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let wt = d.local_worktree_for(&task).unwrap();
+    wt.ensure_blocking().unwrap();
+
+    // compound / tree root の branch: WU（子）の branch を --no-ff で取り込み、衝突を手で解いた。
+    let wu_branch = format!("celeris-wu/{}/side", task.id);
+    git_out(&wt.dir, &["branch", &wu_branch, "HEAD"]);
+    commit_file(&wt.dir, "README.md", "task\n");
+    let wu_dir = ws.path().join("wu-side");
+    git_out(
+        &wt.dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            wu_dir.to_str().unwrap(),
+            &wu_branch,
+        ],
+    );
+    commit_file(&wu_dir, "README.md", "wu\n");
+    assert!(!git_ok(
+        &wt.dir,
+        &["merge", "--no-ff", "--no-edit", &wu_branch]
+    ));
+    std::fs::write(wt.dir.join("README.md"), "task\nwu\n").unwrap();
+    git_out(&wt.dir, &["add", "README.md"]);
+    git_out(
+        &wt.dir,
+        &["-c", "core.editor=true", "commit", "-q", "--no-edit"],
+    );
+    let merge_sha = git_out(&wt.dir, &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git_out(&wt.dir, &["rev-list", "--merges", "--count", "main..HEAD"]),
+        "1"
+    );
+    // 素の rebase（直線化）なら、解いたはずの README.md の衝突が再発する（試験の前提）。
+    let probe = ws.path().join("probe");
+    git_out(
+        &wt.dir,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            probe.to_str().unwrap(),
+            "HEAD",
+        ],
+    );
+
+    // main は別ファイルで進む。
+    let target = commit_file(repo.path(), "main.txt", "main\n");
+    assert!(!git_ok(&probe, &["rebase", &target]));
+    git_out(&probe, &["rebase", "--abort"]);
+
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let reviewed = git_out(&wt.dir, &["rev-parse", "HEAD"]);
+    assert_ne!(reviewed, merge_sha);
+    // 履歴を書き換えない: 手で解いた merge commit はそのまま祖先に残り、target も祖先。
+    assert!(git_ok(
+        &wt.dir,
+        &["merge-base", "--is-ancestor", &merge_sha, &reviewed]
+    ));
+    assert!(git_ok(
+        &wt.dir,
+        &["merge-base", "--is-ancestor", &target, &reviewed]
+    ));
+    assert_eq!(
+        std::fs::read_to_string(wt.dir.join("README.md")).unwrap(),
+        "task\nwu\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(wt.dir.join("main.txt")).unwrap(),
+        "main\n"
+    );
+    check_snapshot(&store, &task, &target, &reviewed);
+    let events = events_of(&store, &task);
+    assert_eq!(integration_repair_scheduled(&events), 0);
+    assert!(store.work_units_for(task.id).unwrap().is_empty());
+
+    assert!(run_until_idle(&mut d, 100).await.idle);
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    let events = events_of(&store, &task);
+    assert_eq!(integration_repair_scheduled(&events), 0);
+    assert!(no_review_fail(&events));
+    assert!(git_ok(
+        &wt.dir,
+        &["merge-base", "--is-ancestor", &merge_sha, "HEAD"]
+    ));
+}

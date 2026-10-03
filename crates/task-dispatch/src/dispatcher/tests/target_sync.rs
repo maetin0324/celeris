@@ -1278,3 +1278,165 @@ async fn target_sync_merge_history_keeps_resolutions() {
         &["merge-base", "--is-ancestor", &merge_sha, "HEAD"]
     ));
 }
+
+/// ADR-0120 付記（fallback の解除）: plan_issue で打ち切った fallback の後、root delivery の
+/// 再 review（`Trigger::Rereview`）で review 前同期へ入り直す。
+async fn fallback_then_rereview() -> (
+    tempfile::TempDir,
+    tempfile::TempDir,
+    Arc<dyn TaskStore>,
+    Task,
+    Dispatcher,
+    std::path::PathBuf,
+    String,
+    String,
+) {
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Yielded {
+            checkpoint: serde_json::json!({"plan_issue": "conflicting design"}),
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let (repo, ws, store, task, mut d, wt, before, target) = exhausted_fixture(adapter);
+    run_until_idle(&mut d, 100).await;
+    let events = events_of(&store, &task);
+    let exhausted = exhausted_for(
+        &events,
+        task_core::IntegrationRepairExhaustReason::PlanIssue,
+    );
+    assert!(
+        matches!(exhausted[..], [Event::IntegrationRepairExhausted { fallback: true, before_sha, .. }] if before_sha == &before)
+    );
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    store
+        .apply_transition(task.id, task_core::Trigger::Rereview, None)
+        .unwrap();
+    (repo, ws, store, task, d, wt, before, target)
+}
+
+fn synced_snapshots(events: &[Event]) -> Vec<(String, String, String, String)> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            Event::ReviewTargetSynced {
+                target_sha,
+                before_sha,
+                reviewed_sha,
+                merge_candidate_sha,
+                ..
+            } => Some((
+                target_sha.clone(),
+                before_sha.clone(),
+                reviewed_sha.clone(),
+                merge_candidate_sha.clone(),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn integration_repair_fallback_keeps_skipping_while_branch_unchanged() {
+    let (_repo, ws, store, task, d, wt, before, _) = fallback_then_rereview().await;
+    // Daemon restart: a fresh dispatcher decides from events and git only.
+    drop(d);
+    let mut d = worktree_dispatcher(store.clone(), done_adapter(), ws.path(), None);
+    let skipped = progress_with(&events_of(&store, &task), "integration repair exhausted");
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let events = events_of(&store, &task);
+    assert_eq!(
+        progress_with(&events, "integration repair exhausted"),
+        skipped + 1
+    );
+    assert_eq!(
+        progress_with(
+            &events,
+            crate::dispatcher::review_spawn::FALLBACK_RELEASED_PREFIX
+        ),
+        0
+    );
+    assert!(synced_snapshots(&events).is_empty());
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), before);
+    assert_eq!(integration_repair_scheduled(&events), 1);
+    assert!(no_review_fail(&events));
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+}
+
+#[tokio::test]
+async fn integration_repair_fallback_released_when_target_merged() {
+    let (_repo, _ws, store, task, mut d, wt, before, target) = fallback_then_rereview().await;
+    // merge-base 局所修復と同じく main を merge して target を祖先にする（衝突は main 側で解く）。
+    assert!(!git_ok(&wt, &["merge", "-q", "--no-edit", "main"]));
+    std::fs::write(wt.join("README.md"), "merged\n").unwrap();
+    git_out(&wt, &["add", "README.md"]);
+    git_out(&wt, &["commit", "-q", "--no-edit"]);
+    let merged = git_out(&wt, &["rev-parse", "HEAD"]);
+    assert_ne!(merged, before);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let events = events_of(&store, &task);
+    assert_eq!(
+        progress_with(
+            &events,
+            crate::dispatcher::review_spawn::FALLBACK_RELEASED_PREFIX
+        ),
+        1
+    );
+    assert_eq!(
+        synced_snapshots(&events),
+        vec![(
+            target.clone(),
+            merged.clone(),
+            merged.clone(),
+            merged.clone()
+        )]
+    );
+    assert_eq!(git_out(&wt, &["rev-parse", "HEAD"]), merged);
+    assert_eq!(integration_repair_scheduled(&events), 1);
+    assert!(no_review_fail(&events));
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+}
+
+#[tokio::test]
+async fn integration_repair_fallback_released_when_head_moves() {
+    let (_repo, _ws, store, task, mut d, wt, before, target) = fallback_then_rereview().await;
+    // 作業者が衝突する変更を取り下げて書き直した: HEAD が Exhausted の before_sha と違う。
+    git_out(&wt, &["reset", "-q", "--hard", "HEAD~1"]);
+    let moved = commit_file(&wt, "NOTES.md", "task\n");
+    assert_ne!(moved, before);
+    assert!(
+        d.spawn_review(task.id, "worker".into(), &ReviewSubject::default())
+            .unwrap()
+    );
+    let events = events_of(&store, &task);
+    assert_eq!(
+        progress_with(
+            &events,
+            crate::dispatcher::review_spawn::FALLBACK_RELEASED_PREFIX
+        ),
+        1
+    );
+    let reviewed = git_out(&wt, &["rev-parse", "HEAD"]);
+    assert_ne!(reviewed, moved);
+    assert!(git_ok(
+        &wt,
+        &["merge-base", "--is-ancestor", &target, "HEAD"]
+    ));
+    assert_eq!(
+        synced_snapshots(&events),
+        vec![(
+            target.clone(),
+            moved.clone(),
+            reviewed.clone(),
+            reviewed.clone()
+        )]
+    );
+    assert!(no_review_fail(&events));
+    assert_eq!(store.get(task.id).unwrap().unwrap().attempts, task.attempts);
+}

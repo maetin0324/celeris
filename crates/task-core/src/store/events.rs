@@ -1,4 +1,5 @@
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use std::collections::BTreeMap;
 use time::OffsetDateTime;
 
 use crate::execution_plan::{RunIndexRole, RunIndexStatus};
@@ -24,7 +25,117 @@ pub(super) fn latest_delivery_skipped_sql() -> String {
     )
 }
 
+/// migration 0047 と字句まで同じ式を使う。
+pub(super) const INTEGRATION_REQUEST_PREDICATE: &str =
+    "json_extract(json,'$.type') IN ('integration_requested', 'integration_answered')";
+
+pub(super) fn integration_request_rows_sql() -> String {
+    format!(
+        "SELECT id, task_id, seq, ts, json FROM events \
+         WHERE {INTEGRATION_REQUEST_PREDICATE} \
+         ORDER BY task_id, seq ASC"
+    )
+}
+
+fn integration_request_rows_for_task_sql() -> String {
+    format!(
+        "SELECT id, task_id, seq, ts, json FROM events \
+         WHERE {INTEGRATION_REQUEST_PREDICATE} AND task_id = ?1 \
+         ORDER BY task_id, seq ASC"
+    )
+}
+
+fn fold_open_integration_requests(rows: Vec<EventRow>) -> Vec<EventRow> {
+    let mut open = BTreeMap::<(TaskId, String), EventRow>::new();
+    for row in rows {
+        let key = match &row.event {
+            Event::IntegrationRequested { request, .. } => {
+                (row.task_id, request.id_for(row.task_id))
+            }
+            Event::IntegrationAnswered { request_id, .. } => {
+                open.remove(&(row.task_id, request_id.clone()));
+                continue;
+            }
+            _ => continue,
+        };
+        // If an older writer appended the same pair again, the latest request wins.
+        open.insert(key, row);
+    }
+    let mut rows: Vec<_> = open.into_values().collect();
+    rows.sort_by_key(|row| row.id);
+    rows
+}
+
 impl SqliteStore {
+    fn integration_request_rows_tx(
+        conn: &Connection,
+        task_id: Option<TaskId>,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        let sql = if task_id.is_some() {
+            integration_request_rows_for_task_sql()
+        } else {
+            integration_request_rows_sql()
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        let mut rows = if let Some(id) = task_id {
+            stmt.query(params![id.to_string()])?
+        } else {
+            stmt.query([])?
+        };
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let id: i64 = row.get(0)?;
+            let task_id: String = row.get(1)?;
+            let seq: i64 = row.get(2)?;
+            let ts: String = row.get(3)?;
+            let json: String = row.get(4)?;
+            out.push(EventRow {
+                id: id as u64,
+                task_id: Self::parse_id(&task_id)?,
+                seq: seq as u64,
+                ts,
+                event: serde_json::from_str(&json)?,
+            });
+        }
+        Ok(out)
+    }
+
+    pub(super) fn open_integration_requests_impl(&self) -> Result<Vec<EventRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            Ok(fold_open_integration_requests(
+                Self::integration_request_rows_tx(conn, None)?,
+            ))
+        })
+    }
+
+    pub(super) fn integration_request_record_impl(
+        &self,
+        task_id: TaskId,
+        request: &crate::integration_request::IntegrationRequest,
+        origin: &str,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let open =
+            fold_open_integration_requests(Self::integration_request_rows_tx(&tx, Some(task_id))?);
+        if open.iter().any(|row| {
+            matches!(&row.event, Event::IntegrationRequested { request: existing, .. }
+                if existing.source_sha == request.source_sha && existing.target_sha == request.target_sha)
+        }) {
+            return Ok(false);
+        }
+        Self::append_event_tx(
+            &tx,
+            task_id,
+            &Event::IntegrationRequested {
+                request: Box::new(request.clone()),
+                origin: origin.to_owned(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub(crate) fn append_event_tx(
         conn: &Connection,
         task_id: TaskId,

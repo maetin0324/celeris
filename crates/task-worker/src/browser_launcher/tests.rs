@@ -128,6 +128,33 @@ fn fixture_with(allowed: Vec<u32>, limits: LauncherLimits, backend: FakeBackend)
     }
 }
 
+fn fixture_hooked(hook: TestHookFn) -> Fixture {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("l.sock");
+    let state_dir = dir.path().join("state");
+    let registry = Registry::open(&state_dir, "inst-now").expect("registry");
+    let backend = Arc::new(ok_backend());
+    let mut server = LauncherServer::bind(
+        &sock,
+        ServerConfig {
+            allowed_uids: vec![uid()],
+            limits: LauncherLimits::default(),
+        },
+        backend.clone(),
+        registry,
+    )
+    .expect("bind");
+    server.set_test_hook(hook);
+    let handle = server.spawn().expect("spawn");
+    Fixture {
+        _dir: dir,
+        sock,
+        state_dir,
+        backend,
+        handle,
+    }
+}
+
 fn ok_backend() -> FakeBackend {
     FakeBackend {
         isolation_ok: true,
@@ -505,6 +532,64 @@ fn shutdown_reaps_all_sessions() {
     f.handle.shutdown();
     assert!(wait_dead(pid, st));
     assert_eq!(records(&f.state_dir), 0);
+}
+
+#[derive(Default)]
+struct ShutdownEvents {
+    teardown_entered: bool,
+    shutdown_waiting: bool,
+    shutdown_returned: bool,
+}
+
+/// 接続 thread の teardown（切断による回収）が記録を消す前に shutdown が走っても、shutdown が
+/// 戻った時点で記録が残らない。フックで接続 thread を「process は止めたが記録は消していない」所に
+/// 止め、その間に shutdown を呼ぶ。止めた thread は shutdown が接続の終了待ちに入るか戻るかの
+/// どちらかの出来事で放す（時間には頼らない）。
+#[test]
+fn shutdown_waits_for_inflight_connection_teardown() {
+    let ev = Arc::new((
+        Mutex::new(ShutdownEvents::default()),
+        std::sync::Condvar::new(),
+    ));
+    let ev2 = ev.clone();
+    let hook: TestHookFn = Arc::new(move |point| {
+        let (m, cv) = &*ev2;
+        let mut g = m.lock().expect("lock");
+        match point {
+            TestHook::TeardownBeforeRemove => {
+                g.teardown_entered = true;
+                cv.notify_all();
+                let _g = cv
+                    .wait_while(g, |e| !(e.shutdown_waiting || e.shutdown_returned))
+                    .expect("wait");
+            }
+            TestHook::ShutdownWaitConns => {
+                g.shutdown_waiting = true;
+                cv.notify_all();
+            }
+        }
+    });
+    let mut f = fixture_hooked(hook);
+    let mut c = connect(&f.sock);
+    c.start_session("t1", "r1", "lease1", policy(600))
+        .expect("start");
+    let (pid, st) = f.backend.launched.lock().expect("lock")[0];
+    // 切断 → 接続 thread が session を引き取って teardown し、記録を消す前で止まる。
+    drop(c);
+    {
+        let (m, cv) = &*ev;
+        let g = m.lock().expect("lock");
+        let _g = cv.wait_while(g, |e| !e.teardown_entered).expect("wait");
+    }
+    f.handle.shutdown();
+    let left = records(&f.state_dir);
+    {
+        let (m, cv) = &*ev;
+        m.lock().expect("lock").shutdown_returned = true;
+        cv.notify_all();
+    }
+    assert!(wait_dead(pid, st));
+    assert_eq!(left, 0, "shutdown returned while a session record remained");
 }
 
 // ---- registry ----

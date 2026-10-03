@@ -836,6 +836,17 @@ export type Event =
       type: "delivery_skipped";
     }
   | {
+      origin: string;
+      request: IntegrationRequest;
+      type: "integration_requested";
+    }
+  | {
+      answer: string;
+      note?: string | null;
+      request_id: string;
+      type: "integration_answered";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -1086,6 +1097,7 @@ export type DeliverySkipReason =
   | "branch_name_mismatch"
   | "refs_unresolvable"
   | "department_unresolved";
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
 /**
  * D5: `execution_plans.status`。
  */
@@ -1188,13 +1200,20 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "delivery_skipped";
+    }
+  | {
+      at: string;
+      request: IntegrationRequest;
+      request_id: string;
+      task: TaskRef;
+      type: "integration_request";
     };
 /**
  * ADR-0120 D5: 最後の integration repair の結末。
  */
 export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
 /**
- * D2: 受信箱の種類（D1 の 14 種）。宣言順が D2 の並びの固定順。
+ * D2: 受信箱の種類。宣言順が D2 の並びの固定順。
  */
 export type InboxKind =
   | "decision"
@@ -1210,6 +1229,7 @@ export type InboxKind =
   | "unroutable"
   | "cluster_login"
   | "delivery_skipped"
+  | "integration_request"
   | "knowledge_review";
 /**
  * ADR-0047 D1 / D4。
@@ -5282,6 +5302,44 @@ export interface ProjectPlanSpec {
   milestones: MilestoneSpec[];
   rationale: string;
   schema: string;
+}
+export interface IntegrationRequest {
+  actions: ResolutionAction[];
+  candidate_sha?: string | null;
+  conflict_files: string[];
+  intent: FileIntent[];
+  merge_base?: string | null;
+  reason: string;
+  recommendation: string;
+  source_branch: string;
+  source_sha: string;
+  target_branch: string;
+  target_sha: string;
+}
+export interface ResolutionAction {
+  detail: string;
+  kind: ConflictKind;
+  path: string;
+}
+export interface FileIntent {
+  path: string;
+  source: SideIntent;
+  target: SideIntent;
+}
+export interface SideIntent {
+  branch: string;
+  commits: CommitIntent[];
+  diffstat?: FileDiffStat | null;
+  path: string;
+  unavailable?: string | null;
+}
+export interface CommitIntent {
+  sha: string;
+  subject: string;
+}
+export interface FileDiffStat {
+  added: number;
+  deleted: number;
 }
 /**
  * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。

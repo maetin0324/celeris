@@ -740,6 +740,24 @@ fn advance(
                     .and_then(|v| v["failed_step"].as_str());
                 if let Some(class) = classify_delivery_failure(old.state, &old.detail, failed_step)
                 {
+                    // ADR 2026-10-02-parallel-integration-auto-resolve D2: merge_base 系は局所修復を作る前に定型衝突の自動解消を試す。
+                    if class == RepairClass::MergeBase {
+                        match auto_resolve::attempt(store, config, old)? {
+                            auto_resolve::Outcome::Resolved {
+                                base,
+                                head,
+                                actions,
+                            } => {
+                                auto_resolve::requeue(store, old, base, head, &actions, now)?;
+                                return Ok(());
+                            }
+                            auto_resolve::Outcome::Fallback(fallback) => {
+                                if auto_resolve::fall_back(store, config, old, &fallback, now)? {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     if let Some(key) = make_repair(store, config, old, class, now)? {
                         store.comment_add(&task_core::TaskComment {
                             id: task_core::CommentId::new(), task_id: old.task_id,
@@ -748,11 +766,31 @@ fn advance(
                             body: format!("{REPAIR} {key} class={}。対象ブランチと既定ブランチ、失敗した検査だけを渡して局所修復します。", class.bucket()),
                         }, None)?;
                     } else {
-                        d.detail = format!(
-                            "[needs-human] 配送の局所修復が上限に達しました: {}",
-                            class.bucket()
+                        let repairs = store.work_units_for(old.task_id)?;
+                        let total = repairs
+                            .iter()
+                            .filter(|u| u.kind == WorkUnitKind::Repair)
+                            .count();
+                        let same_class = repairs
+                            .iter()
+                            .filter(|u| {
+                                u.kind == WorkUnitKind::Repair
+                                    && u.spec
+                                        .title
+                                        .starts_with(&format!("repair ({}):", class.bucket()))
+                            })
+                            .count();
+                        let request = auto_resolve::limit_request(
+                            config,
+                            old,
+                            format!(
+                                "配送の局所修復が上限に達しました: {} (全体 {total}/{} 回、同分類 {same_class}/{} 回)",
+                                class.bucket(),
+                                config.execution.max_repairs,
+                                config.execution.max_repairs_per_class
+                            ),
                         );
-                        store.delivery_save(Some(old), &d)?;
+                        auto_resolve::record_request(store, old, &request)?;
                     }
                     return Ok(());
                 }
@@ -871,6 +909,8 @@ fn start_prepare(store: &dyn TaskStore, config: &Config, old: &Delivery) -> Resu
     store.delivery_save(Some(old), &next)?;
     Ok(())
 }
+
+mod auto_resolve;
 
 #[cfg(test)]
 #[path = "delivery/tests.rs"]

@@ -346,4 +346,9 @@ Phase 5 の実装は完了。expected path hint の正規化、Git 差分から�
 ## review-sync の main 再取り込み（2026-10-03）
 
 `c448d9c7` を no-ff merge し、上記の未解決だった 5 ファイルと文書移設による `PROGRESS.md` の衝突を解消した。生成 schema と GUI/web の型は再生成済み。経緯と検証結果は `docs/progress/review-sync-main.md` を参照する。
-```
+
+## 最終 main 取り込み（2026-10-03）
+
+検証結果は [merge-main-2](2026-10-03-review-sync-fix/merge-main-2.md) を参照。
+
+merged-main: 8fb9b4ae1e825b5f577871d4b2fda825b16217e1

@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 /// （初回に加えて 2 回 = 合計 3 attempt）。超えたら統合を諦めて理由を残す。
 const MAX_STALE_CANDIDATE_RETRIES: usize = 2;
 
+/// PhaseIntegrated check record for an auto-resolve action.
+const AUTO_RESOLVE_CHECK: &str = "auto_resolve";
+
 /// ADR-0118 D5: 子の候補が古くなって統合 WU・子の unit を戻すときの `WorkUnitTransitioned.reason`。
 pub(super) const MERGE_CANDIDATE_STALE_REASON: &str = "merge_candidate_stale";
 
@@ -37,6 +40,18 @@ fn repair_scope_from_units<'a>(
 }
 
 impl Dispatcher {
+    /// ADR parallel integration D4: 統合の依頼を追記事象として一件残す。同じ組の未回答依頼があれば追記しない
+    /// （再 tick で重ならない）。一般通知（notice）には書かない。受信箱の項目は事象から投影する。
+    fn record_integration_request(
+        &self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+        request: &crate::auto_resolve::IntegrationRequest,
+    ) -> Result<(), DispatchError> {
+        self.store
+            .integration_request_record(task.id, request, &format!("phase:{}", integ.key))?;
+        Ok(())
+    }
     /// ADR-0074 D1.7（Phase F2）: 走らせている spawn の無い `integrate-<phase>`（running）を pending に
     /// 戻す（次の tick で冪等な手順でやり直す）。
     pub(super) fn reconcile_integration(
@@ -509,6 +524,12 @@ impl Dispatcher {
                 let mut run = IntegrationRun::default();
                 for (i, (dir, repo_id, items)) in repo_items.iter().enumerate() {
                     let out = crate::integration::integrate(dir, items, &phase_for_merge)?;
+                    // Preserve auto-resolve actions alongside each reviewed candidate.
+                    run.checks.extend(out.actions.iter().map(|action| {
+                        let summary = serde_json::to_string(action)
+                            .unwrap_or_else(|_| format!("{action:?}"));
+                        (AUTO_RESOLVE_CHECK.to_string(), true, summary)
+                    }));
                     if i == 0 {
                         run.merged = out.merged.clone();
                         run.head = out.head.clone();
@@ -627,6 +648,10 @@ impl Dispatcher {
             }
         };
         if let Some(conflict) = run.conflict.clone() {
+            if let Some(request) = &conflict.request {
+                self.record_integration_request(&task, &integ, request)?;
+                return self.block_for_integration_request(&task, &integ);
+            }
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
         }
         if let Some((repo_id, stale)) = run.stale.clone() {
@@ -1064,6 +1089,34 @@ impl Dispatcher {
     /// 統合を諦める（merge の repair の上限・分類に当たらない検査の失敗・git の失敗）。統合 WU を
     /// failed にし、replan の余地があれば `Continue{replan}`（replan は統合 WU を pending に戻す）、
     /// 無ければ人に聞く（blocked。統合 WU は blocked(question) にして、回答で再開できるようにする）。
+    /// The request event is the sole inbox item. Keep the integration WU blocked until its answer.
+    fn block_for_integration_request(
+        &mut self,
+        task: &Task,
+        integ: &task_core::WorkUnitRow,
+    ) -> Result<(), DispatchError> {
+        let mut row = integ.clone();
+        row.clear_lease();
+        row.updated_at = rfc3339(OffsetDateTime::now_utc());
+        row.status = task_core::WorkUnitStatus::Blocked;
+        row.blocked_reason = Some(task_core::WorkUnitBlockedReason::Question);
+        self.store.work_unit_transition(
+            task.id,
+            row,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: integ.status,
+                to: task_core::WorkUnitStatus::Blocked,
+                reason: "integration_request".to_string(),
+                run_id: None,
+            },
+        )?;
+        self.store
+            .apply_transition_with_events(task.id, Trigger::WorkerQuestion, vec![])?;
+        Ok(())
+    }
+
     pub(super) fn integration_gives_up(
         &mut self,
         task: &Task,

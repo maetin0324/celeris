@@ -296,6 +296,12 @@ export type AttentionItem = {
   "summary": string;
   "task": TaskRef;
   "type": "delivery_skipped";
+} | {
+  "at": string;
+  "request": IntegrationRequest;
+  "request_id": string;
+  "task": TaskRef;
+  "type": "integration_request";
 };
 
 export type AttestationClaims = {
@@ -725,6 +731,11 @@ export type CommentResult = {
   "transition"?: TransitionResult | null;
 };
 
+export type CommitIntent = {
+  "sha": string;
+  "subject": string;
+};
+
 export type Confidence = "high" | "medium" | "low";
 
 export type ConfigView = {
@@ -750,6 +761,8 @@ export type ConfigView = {
   "tick_ms": number;
   "workspace_root": string;
 };
+
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
 
 export type ConsoleBlock = {
   "at": string;
@@ -1753,6 +1766,15 @@ export type Event = {
   "reason": DeliverySkipReason;
   "type": "delivery_skipped";
 } | {
+  "origin": string;
+  "request": IntegrationRequest;
+  "type": "integration_requested";
+} | {
+  "answer": string;
+  "note"?: string | null;
+  "request_id": string;
+  "type": "integration_answered";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -1995,6 +2017,17 @@ export type FailureSummary = {
   "reason": string;
 };
 
+export type FileDiffStat = {
+  "added": number;
+  "deleted": number;
+};
+
+export type FileIntent = {
+  "path": string;
+  "source": SideIntent;
+  "target": SideIntent;
+};
+
 export type GateSignal = {
   "detail": string;
   "name": string;
@@ -2154,7 +2187,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "knowledge_review";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "integration_request" | "knowledge_review";
 
 export type InboxLink = {
   "href": string;
@@ -2211,6 +2244,20 @@ export type IntegrationRepairView = {
   "target_ref"?: string | null;
   "target_sha": string;
   "work_unit_id"?: string | null;
+};
+
+export type IntegrationRequest = {
+  "actions": Array<ResolutionAction>;
+  "candidate_sha"?: string | null;
+  "conflict_files": Array<string>;
+  "intent": Array<FileIntent>;
+  "merge_base"?: string | null;
+  "reason": string;
+  "recommendation": string;
+  "source_branch": string;
+  "source_sha": string;
+  "target_branch": string;
+  "target_sha": string;
 };
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
@@ -3500,6 +3547,12 @@ export type ReportsReadResult = {
   "updated": number;
 };
 
+export type ResolutionAction = {
+  "detail": string;
+  "kind": ConflictKind;
+  "path": string;
+};
+
 export type ResolvedLlmSource = {
   "origin": SourceOrigin;
   "source": LlmSourceRef;
@@ -3847,6 +3900,14 @@ export type ShadowDecision = {
   "classifier": string;
   "confidence": number;
   "lane": Tier;
+};
+
+export type SideIntent = {
+  "branch": string;
+  "commits": Array<CommitIntent>;
+  "diffstat"?: FileDiffStat | null;
+  "path": string;
+  "unavailable"?: string | null;
 };
 
 export type SkillDetailView = {

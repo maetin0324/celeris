@@ -494,6 +494,15 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # push = true            # 既定
 # push_remote = "origin" # 既定
 
+# ADR 2026-10-02-parallel-integration-auto-resolve D1d: merge_base 系の配送失敗で局所修復を作る前に、scratch の worktree で既定ブランチを
+# 取り込み、定型の衝突（追記だけの進捗記録など）を決定的に解く。試行は配送ごとに max_attempts 回まで。
+# [delivery.auto_resolve]
+# enabled = true      # 既定
+# max_attempts = 3    # 既定
+# [delivery.auto_resolve.generated]
+# globs = ["docs/protocol/*.schema.json", "docs/api/v1/*.schema.json"]  # 既定（resolver の分類と同じ集合だけ）
+# cmd = ["env", "UPDATE_SCHEMA=1", "cargo", "test", "-p", "task-core", "-p", "task-worker", "-p", "task-api"]  # 既定。[] で無効
+
 # ADR-0136: hot データの正本を /local（ローカル btrfs）に置く。path は上の既存の key で変える（書かなければ
 # 従来の既定のまま）。/local へ移した本番の値:
 #   workspace_root = "/local/celeris/data/workspaces"

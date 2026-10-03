@@ -1349,6 +1349,9 @@ impl BrowserFixture {
         let config = env.write_config(&script, &api, "");
         let seed = env.add(&["--title", "fixture", "--check-cmd", "true"]);
         let template = env.task(seed);
+        let started_at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap();
         let make_running = |id: TaskId, run: &str| {
             let mut task = template.clone();
             task.id = id;
@@ -1369,11 +1372,27 @@ impl BrowserFixture {
                     checkpoint: None,
                     usage: None,
                     metrics: None,
-                    started_at: "2026-09-29T00:00:00Z".into(),
+                    started_at: started_at.clone(),
                     finished_at: None,
                 })
                 .unwrap();
         };
+        // この fixture の run は試験 process が「別の instance」として抱えている体にする。持ち主の居ない
+        // running の行は daemon が閉じる（ADR 2026-10-03-ownerless-running-runs D3）ので、生きた draining の
+        // 行を置く（heartbeat は未来 = 試験の間ずっと新しい）。
+        let now = time::OffsetDateTime::now_utc();
+        env.store
+            .instance_register(&task_core::DaemonInstance {
+                instance_id: "phase3-fixture-holder".into(),
+                release: "fixture".into(),
+                pid: std::process::id(),
+                role: task_core::InstanceRole::Draining,
+                started_at: now,
+                heartbeat_at: now + time::Duration::hours(1),
+                handoff_requested_at: None,
+                drained_at: None,
+            })
+            .unwrap();
         let task_a = TaskId::new();
         let task_b = TaskId::new();
         let run_a = "phase3-run-a".to_string();

@@ -68,8 +68,14 @@ impl Dispatcher {
     ///    （次のデーモンが孤児の回収でその内容から確定させる。ここで検査・レビューを spawn しても exit で
     ///    失われるため）。
     ///
-    /// レビュー・WU の検査・工程の統合は触らない（次のデーモンの `recover_reviews` と孤児の回収が拾う）。
-    /// DB に記録した run の数を返す。
+    /// 4. 手元のレビューも止める。Reviewer run を起こしていれば quota を閉じ、`WorkerFinished{role:
+    ///    reviewer, outcome: "interrupted: review interrupted (daemon shutdown …)", end: cancelled}` で
+    ///    `runs` 行を閉じる（Reviewer run は lease を持たないので、閉じないと次のデーモンの誰も閉じない）。
+    ///    Task は `reviewing` のまま（次のデーモンの `recover_reviews` がレビューをやり直す。Task ごとの
+    ///    レビューの flock は止めた task とこのプロセスの終わりで外れる）。
+    ///
+    /// WU の検査・工程の統合は触らない（次のデーモンの孤児の回収が拾う）。DB に記録した worker run の数と
+    /// 止めたレビューの数の和を返す。
     pub fn interrupt_runs_on_shutdown(&mut self) -> usize {
         if let Err(e) = self.drain_completions() {
             tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
@@ -104,6 +110,29 @@ impl Dispatcher {
                     tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the shutdown interrupt; the next daemon's orphan takeover will pick it up");
                 }
             }
+        }
+        let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
+        for (task_id, entry) in reviewing {
+            if let Some(review_run_id) = entry.review_run_id.clone() {
+                if let Some(provider) = entry.provider.clone() {
+                    self.release_quota_if_tracked(
+                        &review_run_id,
+                        entry.account.as_deref(),
+                        entry.account_adapter,
+                        &provider,
+                        task_id,
+                    );
+                }
+                self.close_aborted_run(
+                    task_id,
+                    &review_run_id,
+                    Some(RunRole::Reviewer),
+                    &format!("review interrupted ({SHUTDOWN_WHY})"),
+                );
+            }
+            tracing::warn!(%task_id, review_run_id = ?entry.review_run_id, "daemon shutdown: the review was stopped; the next daemon re-reviews the task");
+            self.stop_review(entry);
+            recorded += 1;
         }
         recorded
     }

@@ -484,6 +484,36 @@ export async function setupMockCeleris() {
       delegated: [],
       dependencies: [],
       dependents: [],
+      // agent-docs/adr/0130 D2/D4: 実 API（task-ops view.rs の TaskDetail）が常に返す欄。欠けると
+      // overview の WriteSetSection が 500 になった（gui-gate-regression/overview-500）。
+      expected_write_paths: ["gui/app/routes/"],
+      actual_run_write_sets: [
+        {
+          repo_id: "code",
+          owner_id: "01RUNAAAAAAAAAAAAAAAAAAAA",
+          base_sha: "a1b2c3d4e5f6a7b8",
+          head_sha: "b2c3d4e5f6a7b8c9",
+          paths: ["gui/app/routes/tasks.$id.tsx"],
+          status: "complete",
+          recorded_at: "2026-09-21T00:05:00Z",
+        },
+      ],
+      actual_work_unit_write_sets: [],
+      behind_target: {
+        behind_target_commits: 3,
+        behind_target_age_seconds: 5400,
+        behind_target_observed_at: "2026-09-21T00:06:00Z",
+        repos: [
+          {
+            repo_id: "code",
+            target_ref: "main",
+            behind_target_commits: 3,
+            behind_target_age_seconds: 5400,
+            behind_target_observed_at: "2026-09-21T00:06:00Z",
+          },
+        ],
+      },
+      integration_repair: null,
       priority_label: "P2",
       prior_review: [],
       // celeris ADR-0072 D19/D20（Phase E5）: run の end / WU の key（`runs 一覧`の 2 列）を機械検査対象にする。

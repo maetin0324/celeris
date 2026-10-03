@@ -813,3 +813,5 @@ exit 0（real 約4分28秒。各試験は個別実行では数秒〜20秒程度�
 ### 未解決事項（追加）
 
 - NFS 上の web/app 展開が 40〜60 分かかる問題は本 task のスコープ外のまま。`SD_GATE_SKIP_WEB` の既定を 0 に戻すのは、この問題が解決してから人が判断する。
+
+main 33aca5a35969 取り込み・selfdeploy 試験 exit 0（work unit `sync-latest`）。

@@ -40,6 +40,7 @@ updated: 2026-10-04
 | `cargo test --workspace` | exit 0、3851 passed / 0 failed / 13 ignored |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `cargo fmt --all -- --check` | exit 0（fmt 適用後） |
+| `bash scripts/dev/check-doc-links.sh` / `sh scripts/dev/progress-index.sh --check` | ok / exit 0 |
 | `cargo test -p celeris release_notes` | 12 passed |
 | `cargo test -p celeris --test releases_api` | 10 passed |
 | `sh scripts/selfdeploy/tests/release_notes_promote.sh` | exit 0、all ok |

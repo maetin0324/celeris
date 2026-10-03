@@ -123,7 +123,8 @@ fn notes_group_a_merged_task_branch_and_list_the_rest() {
         "add migration",
     );
     r.commit(
-        "agent-docs/adr/2026-10-04-x.md",
+        // 文書リンク検査に実在の ADR と見なされないよう分けて書く（一時 repo の中のファイル）。
+        concat!("agent-docs/", "adr/2026-10-04-x.md"),
         "# X の決定\n\nbody\n",
         "add adr",
     );

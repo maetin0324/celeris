@@ -285,12 +285,14 @@ pub struct Conflict {
     pub branch: String,
     /// 衝突したファイル（`git diff --name-only --diff-filter=U`）。
     pub files: Vec<String>,
+    pub request: Option<Box<crate::auto_resolve::IntegrationRequest>>,
 }
 
 /// [`integrate`] の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationOutcome {
     pub merged: Vec<Merged>,
+    pub actions: Vec<crate::auto_resolve::ResolutionAction>,
     /// 統合後の Task ブランチの HEAD。
     pub head: String,
     /// 衝突で止まったら `Some`（その WU より後は試していない）。
@@ -311,6 +313,7 @@ pub fn integrate(
         let _ = git(task_tree, &["merge", "--abort"]);
     }
     let mut merged = Vec::new();
+    let mut actions = Vec::new();
     for item in items {
         let Some(commit) = rev_parse(task_tree, &format!("refs/heads/{}", item.branch)) else {
             if item.optional {
@@ -330,6 +333,23 @@ pub fn integrate(
             });
             continue;
         }
+        let target_sha = rev_parse(task_tree, "HEAD").ok_or("no HEAD before merge")?;
+        let target_branch = git_ok(task_tree, &["branch", "--show-current"])?
+            .stdout
+            .trim()
+            .to_string();
+        let merge_base = git(task_tree, &["merge-base", &target_sha, &commit])?
+            .stdout
+            .trim()
+            .to_string();
+        let context = crate::auto_resolve::ResolveContext {
+            target_branch,
+            target_sha: target_sha.clone(),
+            source_branch: item.branch.clone(),
+            source_sha: commit.clone(),
+            merge_base: Some(merge_base),
+            generated_command: None,
+        };
         let out = git(
             task_tree,
             &[
@@ -341,14 +361,53 @@ pub fn integrate(
                 &item.branch,
             ],
         )?;
-        if out.ok {
-            merged.push(Merged {
-                key: item.key.clone(),
-                commit,
-                skipped: false,
-            });
-            continue;
+        if !out.ok && rev_parse(task_tree, "MERGE_HEAD").is_none() {
+            return Err(format!(
+                "git merge {} failed: {}",
+                item.branch,
+                out.stderr.trim()
+            ));
         }
+        // A successful git merge can still contain duplicate migration or ADR numbers.
+        let resolution = crate::auto_resolve::resolve(task_tree, &context);
+        let resolution = match resolution {
+            Ok(value) => value,
+            Err(error) => {
+                if out.ok {
+                    git_ok(task_tree, &["reset", "--hard", &target_sha])?;
+                } else {
+                    git_ok(task_tree, &["merge", "--abort"])?;
+                }
+                return Err(error);
+            }
+        };
+        let request = match resolution {
+            crate::auto_resolve::Resolution::NeedsHuman { request } => request,
+            crate::auto_resolve::Resolution::Resolved { actions: resolved } => {
+                let unresolved = git_ok(task_tree, &["diff", "--name-only", "--diff-filter=U"])?;
+                if !unresolved.stdout.trim().is_empty() {
+                    git_ok(task_tree, &["merge", "--abort"])?;
+                    return Err("auto resolver left unmerged paths".into());
+                }
+                if out.ok {
+                    if !resolved.is_empty() {
+                        git_ok(
+                            task_tree,
+                            &["commit", "--amend", "--no-edit", "--no-verify"],
+                        )?;
+                    }
+                } else {
+                    git_ok(task_tree, &["commit", "--no-edit", "--no-verify"])?;
+                }
+                actions.extend(resolved);
+                merged.push(Merged {
+                    key: item.key.clone(),
+                    commit,
+                    skipped: false,
+                });
+                continue;
+            }
+        };
         let files = git(task_tree, &["diff", "--name-only", "--diff-filter=U"])
             .map(|o| {
                 o.stdout
@@ -359,16 +418,22 @@ pub fn integrate(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let _ = git(task_tree, &["merge", "--abort"]);
+        if out.ok {
+            git_ok(task_tree, &["reset", "--hard", &target_sha])?;
+        } else {
+            git_ok(task_tree, &["merge", "--abort"])?;
+        }
         let head = rev_parse(task_tree, "HEAD")
             .ok_or_else(|| "no HEAD after merge --abort".to_string())?;
         return Ok(IntegrationOutcome {
             merged,
+            actions,
             head,
             conflict: Some(Conflict {
                 key: item.key.clone(),
                 branch: item.branch.clone(),
                 files,
+                request: Some(request),
             }),
         });
     }
@@ -376,6 +441,7 @@ pub fn integrate(
         .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?;
     Ok(IntegrationOutcome {
         merged,
+        actions,
         head,
         conflict: None,
     })

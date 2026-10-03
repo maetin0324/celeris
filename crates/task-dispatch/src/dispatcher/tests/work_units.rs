@@ -1457,9 +1457,9 @@ async fn phase_gate_replan_requires_a_note() {
 }
 
 /// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に
-/// 統合が続きから再開される（済んだ merge を飛ばす）。
+/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。
 #[tokio::test]
-async fn integration_conflict_creates_a_merge_repair_and_resumes() {
+async fn auto_resolve_code_conflict_creates_integration_notice() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -1475,80 +1475,75 @@ async fn integration_conflict_creates_a_merge_repair_and_resumes() {
     let adapter = Arc::new(
         ParallelWuAdapter::new(Duration::from_millis(50))
             .with_file("a", "README.md", "A\n")
-            .with_file("b", "README.md", "B\n")
-            // repair WU（Task の worktree で走る）: b のブランチを merge し、衝突だけを解消する。
-            .with_action("merge-build-b", |cwd| {
-                let refs = git_out(
-                    cwd,
-                    &[
-                        "for-each-ref",
-                        "--format=%(refname:short)",
-                        "refs/heads/celeris-wu/",
-                    ],
-                );
-                let branch = refs
-                    .lines()
-                    .find(|l| l.ends_with("/b"))
-                    .expect("b branch")
-                    .to_string();
-                let _ = git_ok(cwd, &["merge", "--no-ff", "--no-edit", &branch]);
-                std::fs::write(cwd.join("README.md"), "A\nB\n").unwrap();
-                git_out(cwd, &["add", "-A"]);
-                git_out(cwd, &["commit", "-q", "--no-edit"]);
-            }),
+            .with_file("b", "README.md", "B\n"),
     );
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
     run_until_idle(&mut d, 800).await;
     let stored = store.get(task.id).unwrap().unwrap();
-    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    assert_eq!(stored.status, Status::Blocked, "{stored:?}");
     let units = store.work_units_for(task.id).unwrap();
-    let repair = units
+    assert!(
+        !units
+            .iter()
+            .any(|u| u.kind == task_core::WorkUnitKind::Repair)
+    );
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    let notice = notices
+        .items
         .iter()
-        .find(|u| u.key == "merge-build-b")
-        .expect("merge repair work unit");
-    assert_eq!(repair.kind, task_core::WorkUnitKind::Repair);
-    assert_eq!(repair.status, task_core::WorkUnitStatus::Done);
-    assert!(repair.branch.is_none(), "repair は Task の worktree で走る");
-    let integ = units.iter().find(|u| u.key == "integrate-build").unwrap();
-    assert!(integ.depends_on.contains(&"merge-build-b".to_string()));
-    let events = events_of(&store, task.id);
-    assert!(events.iter().any(|e| matches!(
-        e,
-        Event::RepairScheduled { key, class, origin, .. }
-            if key == "merge-build-b"
-                && class == "merge_conflict"
-                && *origin == task_core::execution::RepairOrigin::Integration
-    )));
-    // 再開した統合は済んだ merge を飛ばす（a は 1 回目、b は repair が入れた）。
-    let integrated: Vec<&Vec<task_core::PhaseMerged>> = events
+        .find(|n| n.title.contains("統合の依頼"))
+        .expect("notice");
+    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
+    assert!(notice.summary.contains("README.md"), "{}", notice.summary);
+}
+
+/// ADR-0137: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の
+/// `auto_resolve` の行に残す。
+#[tokio::test]
+async fn auto_resolve_migration_renumber_is_recorded_in_phase_integrated() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(50))
+            .with_action("a", |cwd| {
+                let dir = cwd.join("crates/task-core/migrations");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("0042_alpha.sql"), "-- a\n").unwrap();
+            })
+            .with_action("b", |cwd| {
+                let dir = cwd.join("crates/task-core/migrations");
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("0042_beta.sql"), "-- b\n").unwrap();
+            }),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = store.events_for(task.id).unwrap();
+    let checks: Vec<&task_core::PhaseCheckResult> = events
         .iter()
-        .filter_map(|e| match e {
-            Event::PhaseIntegrated { merged, .. } => Some(merged),
+        .filter_map(|(_, e)| match e {
+            Event::PhaseIntegrated { checks, .. } => Some(checks),
             _ => None,
         })
+        .flatten()
         .collect();
-    assert_eq!(integrated.len(), 1);
     assert!(
-        integrated[0].iter().all(|m| m.skipped),
-        "{:?}",
-        integrated[0]
-    );
-    let task_branch = format!("celeris/{}", task.id);
-    assert_eq!(
-        git_out(repo.path(), &["show", &format!("{task_branch}:README.md")]),
-        "A\nB"
-    );
-    let merges = git_out(
-        repo.path(),
-        &["log", "--merges", "--format=%s", &task_branch],
-    );
-    assert_eq!(
-        merges
-            .lines()
-            .filter(|l| l.starts_with("integrate wu/a"))
-            .count(),
-        1,
-        "a の merge は 1 回だけ: {merges}"
+        checks
+            .iter()
+            .any(|c| c.cmd == "auto_resolve" && c.pass && c.summary.contains("_beta.sql")),
+        "{checks:?}"
     );
 }
 

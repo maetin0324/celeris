@@ -647,6 +647,8 @@ fn error_response_stays_remote_code_and_wrong_kind_is_named() {
         }
         other => panic!("expected Protocol, got {other:?}"),
     }
+}
+
 /// ADR-0116 付記 D-P: socket 起動と同じ形（listen socket を作った process と応答する process が
 /// 別）で、client が見る launcher の身元は応答を書いた process（`SCM_CREDENTIALS`）であって、
 /// listen socket を作った process（`SO_PEERCRED`）ではないことを確かめる。本番の socket 起動では

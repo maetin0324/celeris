@@ -898,11 +898,23 @@ main aed80844 取り込み、selfdeploy 試験全 pass（work unit `merge-latest
 - main を最初に merge し、`crates/celeris/src/config/mod.rs`、launcher 身元確認関連の3ファイル、`scripts/selfdeploy/install-units.sh`、およびこの文書の衝突を統合した。main の SCM_CREDENTIALS 対応・web-LAN unit を維持し、/local 用 storage validation・launcher-skew 診断・hot root レンダリングも保持。
 - 検証の証拠と未解決事項を以下に記録する。人が行う本番切り替えは [移行手順書](ops/local-hot-data-migration.md) の手順であり、この WorkUnit は本番 host を変更しない。
 - 初回の `git merge main` で対象範囲の6ファイルに衝突が出た。config、launcher client/test、`install-units.sh` は両側の機能を保持して解消し、`docs/PROGRESS.md` は既存の節を併合した。
-- latest main (`3527c8e3`) はこの WorkUnit の開始 HEAD (`1b7808d1`) より後に進んでいるため、開始時点の `main` merge は完了したが latest main の祖先化は未完了。同期段で最新 main を取り込む必要がある。
+- latest main (`3527c8e3`) を merge し、merge commit `6778b791` で確定した。`git merge-base --is-ancestor main HEAD` は exit 0。
 - 検証結果（2026-10-03）:
   - `cargo fmt --all -- --check` → exit 0。
   - `cargo clippy --workspace -- -D warnings` → exit 0。
   - `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。hot-root unit・移行 script dry-run/rollback・release/verify/web-follow を含む全 suite が pass。
   - `cargo test --workspace` → exit 101。`crates/celeris/tests/instance_handoff.rs` の5件が失敗。うち3件は db guard の user namespace probe が `Operation not permitted`。残り2件 `a_newer_release_takes_over_while_the_old_one_finishes_its_run` と `a_stale_heartbeat_promotes_the_standby` は引継ぎを観測できず timeout。
-  - `cargo test -p celeris --test instance_handoff` → exit 101。同じ5件を単独再実行でも再現。コード修正は行わず環境要因として残す。
-- 未解決事項: user namespace 制約が解消された環境で `instance_handoff` を再検証すること。host launcher が古い場合の更新要否も、browser ptrace 実試験の結果に応じて人が確認する。main の最新祖先化は同期 WorkUnit に委ねる。
+  - `cargo test -p celeris --test instance_handoff` → exit 101。同じ5件を単独再実行でも再現: 3件 (`verify_mode_never_dispatches_and_never_touches_daemon_instances`, `normal_mode_does_not_inject_the_smoke_builtins`, `starting_the_same_release_twice_exits_three`) は db guard user namespace probe が `Operation not permitted`、2件 (`a_newer_release_takes_over_while_the_old_one_finishes_its_run`, `a_stale_heartbeat_promotes_the_standby`) は handoff/standby 観測 timeout。コード修正は行っていない。
+- 指定の差分範囲 check `test -z "$(git diff --name-only $(git merge-base HEAD main) | grep -vE '^(crates/|scripts/selfdeploy/|deploy/systemd/|config/|docs/|tests/e2e/tests/api_scenarios.rs)')"` → exit 1。許可外に gui/web と `tests/e2e/tests/phase7_scenarios.rs` があり、先行工程の差分をこの verify WorkUnit が安全に取り除けない。
+- 未解決事項: user namespace 制約が解消された環境で `instance_handoff` を再検証すること。2件の handoff timeout はこの sandbox で単体でも再現した環境要因として次の review で判定が必要。browser ptrace 実試験 `cargo test -p task-worker --test browser_launcher_ptrace launcher_chrome_denies_daemon_uid_ptrace -- --nocapture` は exit 101（Chrome PID を20秒以内に確認できず、起動 launcher responder uid=65534）。人が host launcher を更新して同試験を再検証する必要がある。
+
+### verify WorkUnit（2026-10-03、main 3527c8e39ee2）
+
+- `git merge-base --is-ancestor 3527c8e39ee2c51b646e8aa6ddb61e63c55587c7 HEAD` → exit 0。作業ツリーの `gui/`・`web/`・`tests/e2e/tests/phase7_scenarios.rs` は同 main と一致する。過去の誤解決で欠けた main ファイルも復元した。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `for t in scripts/selfdeploy/tests/*.sh; do bash "$t" || exit 1; done` → exit 0。migration dry-run/rollback を含む全 scripts/selfdeploy suite が pass。
+- `cargo test --workspace --no-fail-fast` → exit 101（25 test targets）。`instance_handoff` は user namespace probe の `Operation not permitted` 3件と引継ぎ観測 timeout 2件。`browser_launcher_ptrace::launcher_chrome_denies_daemon_uid_ptrace` は responder uid=65534、Chrome PID 未観測。これらは指定どおり sandbox 制約として扱い、修正していない。
+- 同 workspace 実行では e2e daemon 起動試験も worker db guard の user namespace `Operation not permitted` で失敗し、実 browser 試験の複数箇所が `unshare: Operation not permitted` で失敗した。sandbox 制約によるものとしてコード変更なし。負荷 flaky と判断できる単独失敗はこの実行で切り分けられなかった。
+- 範囲 check（`git diff --quiet 3527c8e39ee2c51b646e8aa6ddb61e63c55587c7 -- gui web tests/e2e/tests/phase7_scenarios.rs` と staged tree の同等 check）→ 作業ツリーは exit 0。範囲外の復元は main と一致させた。
+- 本番 host は変更していない。本番切り替えは [移行手順書](ops/local-hot-data-migration.md) に沿って人が実施する。

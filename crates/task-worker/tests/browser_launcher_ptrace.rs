@@ -28,9 +28,9 @@ use task_core::browser_isolation::{
 use task_worker::browser::{
     launcher_runtime_facts, launcher_session_proof, verify_launcher_observation,
 };
-use task_worker::browser_launcher::{LauncherClient, Outcome, SessionPolicy, SessionState};
-use task_worker::browser::verify_launcher_observation;
-use task_worker::browser_launcher::{ClientError, ErrorCode};
+use task_worker::browser_launcher::{
+    ClientError, ErrorCode, LauncherClient, Outcome, SessionPolicy, SessionState,
+};
 use task_worker::browser_runtime::{RestoreAdmission, process_starttime};
 
 const DEFAULT_SOCKET: &str = "/run/celeris-browser/launcher.sock";

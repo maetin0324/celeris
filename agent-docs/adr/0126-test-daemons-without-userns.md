@@ -7,7 +7,7 @@ tasks: [01M3YB21F07GQKTRYPRVN184AR]
 - 状態: 実装済み。葉 guard-scope（A）・e2e-harness（A の試験側）・userns-optin（B）・gate-env（B の gate）・
   prompt-rule（C）を実装し、worker sandbox の中で `cargo test -p e2e --test api_scenarios`・
   `cargo test -p celeris --test instance_handoff`・`cargo test --workspace`・`cargo clippy --workspace -- -D warnings` を
-  実行して確認した（証拠: [docs/progress/phase-test-db-userns.md](../progress/phase-test-db-userns.md)）。
+  実行して確認した（証拠: [sandbox 検証記録](../progress/2026-10-02-test-db-userns.md)）。
 - 関連: [ADR-0095](0095-worker-runs-see-the-db-read-only.md) D1/D5（worker db guard、fail-closed）と付記 D-a〜D-d、
   ADR-0079 付記「R7-6」（daemon 起動時の guard）・「R7-12」D4（`CELERIS_ISOLATION_TESTS` と環境の preflight）、
   ADR-0045 D2（既定の設定 `~/.config/celeris/config.toml`）。DESIGN.md は変えない。

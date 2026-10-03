@@ -685,6 +685,47 @@ fn auto_resolve_comments(store: &task_core::SqliteStore, d: &Delivery) -> Vec<St
         .collect()
 }
 
+/// 未回答の統合の依頼（task の両端の head の組ごとに 1 件）の数。
+fn open_integration_count(store: &task_core::SqliteStore, task_id: TaskId) -> usize {
+    use task_core::TaskStore;
+    store
+        .open_integration_requests()
+        .unwrap()
+        .iter()
+        .filter(|row| row.task_id == task_id)
+        .count()
+}
+
+/// 未回答の統合の依頼を 1 件だけ読む（ADR parallel integration D4: 通知ではなく追記事象）。
+fn open_integration_request(
+    store: &task_core::SqliteStore,
+    task_id: TaskId,
+) -> task_core::integration_request::IntegrationRequest {
+    use task_core::TaskStore;
+    let rows = store.open_integration_requests().unwrap();
+    let rows: Vec<_> = rows.iter().filter(|row| row.task_id == task_id).collect();
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    match &rows[0].event {
+        task_core::Event::IntegrationRequested { request, .. } => (**request).clone(),
+        other => panic!("integration_requested を期待: {other:?}"),
+    }
+}
+
+/// 統合の依頼の notice が一般通知に載っていないこと。
+fn no_integration_notice(store: &task_core::SqliteStore) -> bool {
+    use task_core::NoticeStore;
+    store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap()
+        .items
+        .iter()
+        .all(|n| {
+            n.target
+                .as_ref()
+                .is_none_or(|t| t.kind != "integration_request")
+        })
+}
+
 fn no_notice(store: &task_core::SqliteStore) -> bool {
     use task_core::NoticeStore;
     store
@@ -787,16 +828,11 @@ fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
     let still = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(still.state, State::Blocked);
     assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
-    use task_core::NoticeStore;
-    let notices = store
-        .notice_list(&task_core::NoticeQuery::default())
-        .unwrap();
-    assert_eq!(notices.items.len(), 1);
-    let notice = &notices.items[0];
-    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
-    assert!(notice.summary.contains("src/lib.rs"));
-    assert!(notice.summary.contains("feature"));
-    assert!(notice.summary.contains("main"));
+    let request = open_integration_request(&store, d.task_id);
+    assert!(request.conflict_files.iter().any(|f| f == "src/lib.rs"));
+    assert_eq!(request.source_branch, "feature");
+    assert_eq!(request.target_branch, "main");
+    assert!(no_integration_notice(&store));
     assert_eq!(
         git_text(p, &["worktree", "list", "--porcelain"])
             .unwrap()
@@ -806,14 +842,9 @@ fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
         1
     );
     advance(&store, &cfg, &still, OffsetDateTime::now_utc()).unwrap();
-    assert_eq!(
-        store
-            .notice_list(&task_core::NoticeQuery::default())
-            .unwrap()
-            .items
-            .len(),
-        1
-    );
+    // 再 tick でも同じ両端の依頼は 1 件のまま。
+    assert_eq!(open_integration_count(&store, d.task_id), 1);
+    assert!(no_integration_notice(&store));
 }
 
 #[test]
@@ -865,7 +896,6 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
                     .any(|u| u.spec.title.starts_with("repair (merge_base):"))
             );
         } else {
-            use task_core::NoticeStore;
             assert!(store.work_units_for(d.task_id).unwrap().is_empty());
             assert!(
                 store
@@ -875,18 +905,16 @@ fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
                     .detail
                     .starts_with("[needs-human] 統合の依頼:")
             );
-            let notices = store
-                .notice_list(&task_core::NoticeQuery::default())
-                .unwrap();
-            assert_eq!(notices.items.len(), 1);
-            assert!(notices.items[0].summary.contains("1 回"));
+            let request = open_integration_request(&store, d.task_id);
+            assert!(request.reason.contains("1 回"));
+            assert!(no_integration_notice(&store));
         }
     }
 }
 
 #[test]
 fn auto_resolve_local_repair_limit_requests_integration() {
-    use task_core::{DeliveryStore, NoticeStore};
+    use task_core::DeliveryStore;
     let (store, dir, d) = auto_resolve_blocked(
         "src/lib.rs",
         "fn f() -> u32 { 0 }\n",
@@ -900,12 +928,11 @@ fn auto_resolve_local_repair_limit_requests_integration() {
     advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
     let still = store.delivery_get(d.task_id).unwrap().unwrap();
     assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
-    let notices = store
-        .notice_list(&task_core::NoticeQuery::default())
-        .unwrap();
-    assert_eq!(notices.items.len(), 1);
-    assert!(notices.items[0].summary.contains("局所修復が上限"));
-    assert!(notices.items[0].summary.contains("全体 0/0 回"));
+    let request = open_integration_request(&store, d.task_id);
+    assert!(request.reason.contains("局所修復が上限"));
+    assert!(request.reason.contains("全体 0/0 回"));
+    assert!(no_integration_notice(&store));
+    assert_eq!(open_integration_count(&store, d.task_id), 1);
     assert!(store.work_units_for(d.task_id).unwrap().is_empty());
     assert_eq!(
         git_text(dir.path(), &["status", "--porcelain"]).unwrap(),

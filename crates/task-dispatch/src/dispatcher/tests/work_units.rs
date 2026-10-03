@@ -1457,9 +1457,10 @@ async fn phase_gate_replan_requires_a_note() {
 }
 
 /// ADR-0074 §6 F2 (e): 衝突する 2 つの WU で `merge-<phase>-<key>` の repair WU ができ、done の後に
-/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。
+/// 内容衝突は人の受信箱へ統合の依頼を出し、修復 run を自動投入しない。統合の依頼は追記事象 1 件で
+/// 残り（ADR parallel integration D4）、一般通知には載らない。
 #[tokio::test]
-async fn auto_resolve_code_conflict_creates_integration_notice() {
+async fn auto_resolve_code_conflict_creates_integration_request_event() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -1487,16 +1488,28 @@ async fn auto_resolve_code_conflict_creates_integration_notice() {
             .iter()
             .any(|u| u.kind == task_core::WorkUnitKind::Repair)
     );
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1, "{open:?}");
+    let Event::IntegrationRequested { request, .. } = &open[0].event else {
+        panic!("integration_requested を期待: {:?}", open[0].event);
+    };
+    assert!(
+        request.conflict_files.iter().any(|f| f == "README.md"),
+        "{request:?}"
+    );
+    // 再 tick でも同じ両端の head の依頼は 1 件のまま。
+    run_until_idle(&mut d, 800).await;
+    assert_eq!(store.open_integration_requests().unwrap().len(), 1);
     let notices = store
         .notice_list(&task_core::feed::NoticeQuery::default())
         .unwrap();
-    let notice = notices
-        .items
-        .iter()
-        .find(|n| n.title.contains("統合の依頼"))
-        .expect("notice");
-    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
-    assert!(notice.summary.contains("README.md"), "{}", notice.summary);
+    assert!(
+        notices.items.iter().all(|n| n
+            .target
+            .as_ref()
+            .is_none_or(|t| t.kind != "integration_request")),
+        "統合の依頼は一般通知に載せない"
+    );
 }
 
 /// ADR 2026-10-02-parallel-integration-auto-resolve: 衝突しない merge でも migration の同番号を振り直し、手順を `PhaseIntegrated` の

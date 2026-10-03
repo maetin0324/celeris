@@ -638,3 +638,300 @@ fn ready_notification_reports_push_failure_without_the_retry_marker() {
     assert!(!messages[0].text.contains(PUSH_RETRIED_PREFIX));
 }
 // ---- ADR-0051 Phase 106追記: ここまで ----
+
+// ---- ADR-0137 D1d・D2・D5: merge_base 系の失敗の自動解消。ここから ----
+
+/// base に `file` を置き、main と feature がそれぞれ `main_text`・`feature_text` で書き換えた repo と、
+/// main が進んだので `merge_base` 失敗で止まった配送（承認済み・task は done）。
+fn auto_resolve_blocked(
+    file: &str,
+    base_text: &str,
+    main_text: &str,
+    feature_text: &str,
+) -> (task_core::SqliteStore, tempfile::TempDir, Delivery) {
+    use task_core::DeliveryStore;
+    let (store, mut d) = stored_delivery();
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path();
+    git_text(p, &["init", "-b", "main"]).unwrap();
+    git_text(p, &["config", "user.email", "test@example.invalid"]).unwrap();
+    git_text(p, &["config", "user.name", "test"]).unwrap();
+    let path = p.join(file);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, base_text).unwrap();
+    git_text(p, &["add", "."]).unwrap();
+    git_text(p, &["commit", "-m", "base"]).unwrap();
+    d.base = sha(p, "HEAD").unwrap();
+    git_text(p, &["checkout", "-b", "feature"]).unwrap();
+    fs::write(&path, feature_text).unwrap();
+    git_text(p, &["commit", "-am", "feature edit"]).unwrap();
+    d.head = sha(p, "HEAD").unwrap();
+    git_text(p, &["checkout", "main"]).unwrap();
+    fs::write(&path, main_text).unwrap();
+    git_text(p, &["commit", "--allow-empty", "-am", "main edit"]).unwrap();
+    d.state = State::Blocked;
+    d.detail = format!("{MERGE_BASE_FAILURE}対象コミットまたは既定ブランチが変わりました");
+    store.delivery_save(None, &d).unwrap();
+    (store, dir, d)
+}
+
+fn auto_resolve_comments(store: &task_core::SqliteStore, d: &Delivery) -> Vec<String> {
+    store
+        .comments_for(d.task_id)
+        .unwrap()
+        .into_iter()
+        .map(|c| c.body)
+        .filter(|b| b.starts_with("[delivery-auto-resolve"))
+        .collect()
+}
+
+fn no_notice(store: &task_core::SqliteStore) -> bool {
+    use task_core::NoticeStore;
+    store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap()
+        .items
+        .is_empty()
+}
+
+#[test]
+fn auto_resolve_progress_append_conflict_is_resolved_and_regated() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = auto_resolve_blocked(
+        "docs/PROGRESS.md",
+        "# PROGRESS\n- old\n",
+        "# PROGRESS\n- old\n- main entry\n",
+        "# PROGRESS\n- old\n- feature entry\n",
+    );
+    let p = dir.path();
+    let main_before = sha(p, "main").unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+
+    let requeued = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(requeued.state, State::MergeQueued);
+    assert_eq!(requeued.base, main_before);
+    assert_ne!(requeued.head, d.head);
+    assert_eq!(requeued.release, None);
+    // task branch は新しい候補へ早送りされ、main と旧 head の両方を含む。
+    assert_eq!(sha(p, "feature").unwrap(), requeued.head);
+    git_text(p, &["merge-base", "--is-ancestor", &d.head, &requeued.head]).unwrap();
+    git_text(
+        p,
+        &["merge-base", "--is-ancestor", &main_before, &requeued.head],
+    )
+    .unwrap();
+    assert_eq!(
+        git_text(p, &["show", &format!("{}:docs/PROGRESS.md", requeued.head)]).unwrap(),
+        "# PROGRESS\n- old\n- main entry\n- feature entry"
+    );
+    // 本番 checkout は動かさず、scratch の worktree も残さない。
+    assert_eq!(sha(p, "HEAD").unwrap(), main_before);
+    assert_eq!(
+        git_text(p, &["status", "--porcelain"]).unwrap(),
+        "",
+        "production checkout must stay clean"
+    );
+    assert_eq!(
+        git_text(p, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .lines()
+            .filter(|l| l.starts_with("worktree "))
+            .count(),
+        1
+    );
+    let comments = auto_resolve_comments(&store, &d);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert!(comments[0].starts_with("[delivery-auto-resolved] docs/PROGRESS.md (Record)"));
+    // 依頼も局所修復も作らない。
+    assert!(no_notice(&store));
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    assert_eq!(store.get(d.task_id).unwrap().unwrap().status, Status::Done);
+
+    // gate は新しい候補 SHA で start_prepare からやり直す（旧 release を流用しない）。
+    let script = cfg
+        .selfdeploy
+        .releases_dir
+        .parent()
+        .unwrap()
+        .join("current/scripts/prepare.sh");
+    fs::create_dir_all(script.parent().unwrap()).unwrap();
+    fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    advance(&store, &cfg, &requeued, OffsetDateTime::now_utc()).unwrap();
+    let preparing = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(preparing.state, State::Preparing);
+    assert_eq!(preparing.release.as_deref(), Some(&requeued.head[..12]));
+    assert_eq!(sha(p, "main").unwrap(), requeued.head);
+}
+
+#[test]
+fn auto_resolve_code_conflict_requests_integration_and_aborts_merge() {
+    use task_core::DeliveryStore;
+    let (store, dir, d) = auto_resolve_blocked(
+        "src/lib.rs",
+        "fn f() -> u32 { 0 }\n",
+        "fn f() -> u32 { 1 }\n",
+        "fn f() -> u32 { 2 }\n",
+    );
+    let p = dir.path();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(p, "feature").unwrap(), d.head);
+    assert_eq!(git_text(p, &["status", "--porcelain"]).unwrap(), "");
+    let comments = auto_resolve_comments(&store, &d);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert!(comments[0].starts_with("[delivery-auto-resolve-fallback] 人の判断が必要"));
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    let still = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert_eq!(still.state, State::Blocked);
+    assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
+    use task_core::NoticeStore;
+    let notices = store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.items.len(), 1);
+    let notice = &notices.items[0];
+    assert_eq!(notice.target.as_ref().unwrap().kind, "integration_request");
+    assert!(notice.summary.contains("src/lib.rs"));
+    assert!(notice.summary.contains("feature"));
+    assert!(notice.summary.contains("main"));
+    assert_eq!(
+        git_text(p, &["worktree", "list", "--porcelain"])
+            .unwrap()
+            .lines()
+            .filter(|l| l.starts_with("worktree "))
+            .count(),
+        1
+    );
+    advance(&store, &cfg, &still, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(
+        store
+            .notice_list(&task_core::NoticeQuery::default())
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn auto_resolve_stops_at_max_attempts_and_when_disabled() {
+    use task_core::DeliveryStore;
+    for disabled in [false, true] {
+        let (store, dir, d) = auto_resolve_blocked(
+            "docs/PROGRESS.md",
+            "# PROGRESS\n",
+            "# PROGRESS\n- main\n",
+            "# PROGRESS\n- feature\n",
+        );
+        let p = dir.path();
+        let tmp = tempfile::tempdir().unwrap();
+        let mut cfg = cfg_for(p, &tmp.path().join("releases"));
+        cfg.delivery.auto_resolve.max_attempts = 1;
+        cfg.delivery.auto_resolve.enabled = !disabled;
+        if !disabled {
+            // 前の試行が 1 回ある（上限 1 に到達）。
+            store
+                .comment_add(
+                    &task_core::TaskComment {
+                        id: task_core::CommentId::new(),
+                        task_id: d.task_id,
+                        author_kind: task_core::CommentAuthorKind::System,
+                        author: None,
+                        run_id: None,
+                        created_at: OffsetDateTime::now_utc(),
+                        body: "[delivery-auto-resolve-fallback] 衝突なしの main 追従".into(),
+                    },
+                    None,
+                )
+                .unwrap();
+        }
+        let before = auto_resolve_comments(&store, &d).len();
+        advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+        assert_eq!(sha(p, "feature").unwrap(), d.head, "disabled={disabled}");
+        assert_eq!(auto_resolve_comments(&store, &d).len(), before);
+        assert_eq!(
+            store.delivery_get(d.task_id).unwrap().unwrap().state,
+            State::Blocked
+        );
+        if disabled {
+            assert!(
+                store
+                    .work_units_for(d.task_id)
+                    .unwrap()
+                    .iter()
+                    .any(|u| u.spec.title.starts_with("repair (merge_base):"))
+            );
+        } else {
+            use task_core::NoticeStore;
+            assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+            assert!(
+                store
+                    .delivery_get(d.task_id)
+                    .unwrap()
+                    .unwrap()
+                    .detail
+                    .starts_with("[needs-human] 統合の依頼:")
+            );
+            let notices = store
+                .notice_list(&task_core::NoticeQuery::default())
+                .unwrap();
+            assert_eq!(notices.items.len(), 1);
+            assert!(notices.items[0].summary.contains("1 回"));
+        }
+    }
+}
+
+#[test]
+fn auto_resolve_local_repair_limit_requests_integration() {
+    use task_core::{DeliveryStore, NoticeStore};
+    let (store, dir, d) = auto_resolve_blocked(
+        "src/lib.rs",
+        "fn f() -> u32 { 0 }\n",
+        "fn f() -> u32 { 1 }\n",
+        "fn f() -> u32 { 2 }\n",
+    );
+    let tmp = tempfile::tempdir().unwrap();
+    let mut cfg = cfg_for(dir.path(), &tmp.path().join("releases"));
+    cfg.delivery.auto_resolve.enabled = false;
+    cfg.execution.max_repairs = 0;
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    let still = store.delivery_get(d.task_id).unwrap().unwrap();
+    assert!(still.detail.starts_with("[needs-human] 統合の依頼:"));
+    let notices = store
+        .notice_list(&task_core::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.items.len(), 1);
+    assert!(notices.items[0].summary.contains("局所修復が上限"));
+    assert!(notices.items[0].summary.contains("全体 0/0 回"));
+    assert!(store.work_units_for(d.task_id).unwrap().is_empty());
+    assert_eq!(
+        git_text(dir.path(), &["status", "--porcelain"]).unwrap(),
+        ""
+    );
+}
+
+#[test]
+fn auto_resolve_clean_main_follow_is_counted_and_left_to_the_legacy_path() {
+    let (store, dir, d) = auto_resolve_blocked(
+        "docs/PROGRESS.md",
+        "# PROGRESS\n",
+        "# PROGRESS\n",
+        "# PROGRESS\n- feature\n",
+    );
+    let p = dir.path();
+    // main の変更は別ファイル（衝突なし）。
+    fs::write(p.join("other"), "x").unwrap();
+    git_text(p, &["add", "."]).unwrap();
+    git_text(p, &["commit", "-m", "other"]).unwrap();
+    let tmp = tempfile::tempdir().unwrap();
+    let cfg = cfg_for(p, &tmp.path().join("releases"));
+    advance(&store, &cfg, &d, OffsetDateTime::now_utc()).unwrap();
+    assert_eq!(sha(p, "feature").unwrap(), d.head);
+    let comments = auto_resolve_comments(&store, &d);
+    assert_eq!(comments.len(), 1, "{comments:?}");
+    assert!(comments[0].contains("衝突なしの main 追従"));
+    assert!(no_notice(&store));
+}

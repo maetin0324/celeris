@@ -24,6 +24,7 @@ mod api;
 mod cluster;
 mod db;
 mod delegation;
+mod delivery;
 mod dispatch;
 mod execution;
 mod github;
@@ -42,6 +43,7 @@ pub use api::*;
 pub use cluster::*;
 pub use db::*;
 pub use delegation::*;
+pub use delivery::{AutoResolveConfig, DeliveryConfig, GeneratedConfig};
 pub use dispatch::*;
 pub use execution::*;
 pub use github::*;
@@ -189,6 +191,9 @@ pub struct Config {
     /// ADR-0040 D6（Phase 48）: リリースの置き場所（`GET /releases` と昇格が読む）。
     #[serde(default)]
     pub selfdeploy: SelfdeployConfig,
+    /// ADR-0137 D1d: `[delivery]`（`[delivery.auto_resolve]`）。配送の main 追従と定型衝突の自動解消。
+    #[serde(default)]
+    pub delivery: DeliveryConfig,
     /// ADR-0041 D1（Phase 49）: ローカルの作業場所を worktree にするときの設定。
     #[serde(default)]
     pub workspace: WorkspaceConfig,
@@ -420,6 +425,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.selfdeploy.validate()?;
+        self.delivery.validate()?;
         self.browser.validate()?;
         if self.max_concurrency == 0 {
             return Err(ConfigError::Invalid("max_concurrency must be >= 1".into()));

@@ -254,15 +254,17 @@ command = "~/.local/celeris/tools/langmem/.venv/bin/python"
 enabled = true
 provider = "openai-compatible"
 # ADR-0053 D2（Phase 65）: celeris の LLM source プロキシに向ける（`[llm_proxy]`。既定
-# 127.0.0.1:18100）。Qwen が落ちていれば celeris/cheap は自動で Claude/GPT のアカウントプールに倒れる
+# 127.0.0.1:18100）。celeris/cheap は利用可能な Qwen を優先し、届かなければ Claude/GPT に倒れる
 # （ADR-0052 のフォールバックはプロキシの中に吸収される）。
 base_url = "http://127.0.0.1:18100/v1"
 model = "celeris/cheap"
-# api_key_secret = "langmem-openai-key"   # 鍵を確認するエンドポイントのときだけ
+api_key_secret = "celeris-api-token"    # [api] token_file と同じ値を secrets に登録
 
 [[providers]]
 id = "langmem-main"
+kind = "adapter"
 adapter = "langmem"
+llm_source = "celeris"
 tiers = ["cheap"]
 concurrency = 1
 ```
@@ -270,12 +272,12 @@ concurrency = 1
 celeris を再起動（または `POST /reload` で読み直せない設定なので再起動）すれば、次の tick から
 知識整理 run が起き始める。
 
-## 7.1 Qwen が落ちているとき（ADR-0052。Phase 64）
+## 7.1 LangMem の接続先に届かないとき（ADR-0052、ADR-0132 D4）
 
-知識整理 run の LLM は pegasus のトンネル越しの Qwen で、**トンネルは人が GUI で TOTP を通さないと
-復帰しない**。Phase 63 までは落ちている間の run がそのまま `failed` になり、「1 タスクにつき 1 回」の
-規則で二度と起こされなかったので、その間に終わった仕事の知識は永久に取り込まれなかった
-（実機 2026-09-20〜21 に 4 件）。Phase 64 で次の 3 つが入った。
+Phase 64 では旧 Qwen トンネルが落ちたときの知識整理 run の取りこぼしを防ぐため、
+接続先の到達性検査、cheap 汎用ハーネスへの fallback、失敗 run の再試行を導入した。
+現在の推奨接続先は celeris proxy。個別の Qwen トンネルではなく proxy の到達性を検査し、
+proxy 内部で cheap の Qwen または Claude/GPT を選ぶ。
 
 ### (1) dispatch の直前に到達性を見る（D1）
 
@@ -283,7 +285,7 @@ celeris を再起動（または `POST /reload` で読み直せない設定な�
 **`GET <base_url>/models` を 3 秒**で当てる（`crates/task-worker/src/probe.rs`。**LLM は呼ばない**）。
 結果は `base_url` ごとに **60 秒キャッシュ**するので、tick ごとには叩かない。
 
-- 2xx → 従来どおり `langmem` アダプタ（Qwen）で走る
+- 2xx → `langmem` アダプタで走る（実際の source は proxy が選ぶ）
 - 接続不可・時間切れ・2xx 以外 → **(2) のフォールバック**へ。run の進行に
   `status`「langmem の接続先に届かない（<理由>）。cheap のハーネスに倒す（<adapter>）」が 1 行残る
 - `base_url` が無い・`https://`・書き方が壊れている → **検査しない**（従来どおり `langmem`）
@@ -297,7 +299,7 @@ Codex / ACP。枯渇・未ログインのプールは飛ばす）を決定的に
 - 前置き = `langmem_run.py` の `EXTRACTION_INSTRUCTIONS`（**同じ文面**を Rust 側が切り出して使う）
   ＋ 出力契約「`artifacts/knowledge-candidates.json` に `{"candidates": […]}` を書く。無ければ空配列。
   他のファイルは作らない。道具は使わない」
-- 依頼文（`maintenance_objective`）は Qwen に渡すものと**同じ**
+- 依頼文（`maintenance_objective`）は LangMem に渡すものと**同じ**
 - 予算は `max_turns = 8` / `max_wall_secs = 600`
 - tier `cheap` の汎用の供給元が 1 つも無ければ、従来どおり dispatch されずに `ready` のまま残る
   （供給が戻れば次の tick で拾われる）
@@ -308,7 +310,7 @@ Codex / ACP。枯渇・未ログインのプールは飛ばす）を決定的に
 ### (3) 失敗した run は一度だけやり直す（D3）
 
 `knowledge_runs.state = failed` で `retried_at` がまだ無い行は、次の tick で **1 回だけ**作り直される
-（`knowledge_maint::retry_failed`。1 tick に 1 件。`retried_at` を書く）。2 回目が Qwen で走るか
+（`knowledge_maint::retry_failed`。1 tick に 1 件。`retried_at` を書く）。2 回目が LangMem で走るか
 汎用ハーネスで走るかは (1) の検査が決める。2 回目も落ちたらそのまま `failed`（3 回目は無い）。
 
 ### 人が手で もう一度 やらせる

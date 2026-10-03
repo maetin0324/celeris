@@ -28,16 +28,32 @@ async fn disk_gate_notifies_once_and_recovers_without_a_run() {
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
-    let notifications = store.notification_recent(10).unwrap();
-    assert_eq!(notifications.len(), 1);
-    assert_eq!(notifications[0].kind, NotificationKind::BadNews);
-    assert!(notifications[0].body.contains("ディスク不足"));
+    let notices = store
+        .notice_list(&task_core::feed::NoticeQuery::default())
+        .unwrap();
+    assert_eq!(notices.total, 1);
+    assert_eq!(notices.items[0].kind, task_core::feed::NoticeKind::BadNews);
+    assert!(notices.items[0].title.contains("ディスク不足"));
     d.config.min_free_disk_mb = 0;
     assert_eq!(d.tick().unwrap().dispatched, 1);
     assert!(!d.disk_low);
     d.config.min_free_disk_mb = u64::MAX;
     assert!(!d.check_disk_space());
-    assert_eq!(store.notification_recent(10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .notice_list(&task_core::feed::NoticeQuery::default())
+            .unwrap()
+            .total,
+        1
+    );
+    assert_eq!(
+        store
+            .notice_list(&task_core::feed::NoticeQuery::default())
+            .unwrap()
+            .items[0]
+            .count,
+        2
+    );
 }
 
 // ---- ADR-0066 D2（Phase 110b）: 終端タスクの作業場所からビルド生成物を刈る ----

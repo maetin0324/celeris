@@ -502,7 +502,7 @@ while true; do sleep 0.1; done
 async fn ask_input_carries_settings_and_index_paths() {
     let dir = tempfile::tempdir().unwrap();
     let mut config = stub_pqa(dir.path(), &ask_stub_script("ok", ""));
-    config.settings = Some("/settings/qwen-local".to_string());
+    config.settings = Some("/settings/celeris-proxy".to_string());
     config.paper_directory = Some(PathBuf::from("/papers"));
     config.index_directory = Some(PathBuf::from("/index"));
     let adapter = PaperQaAdapter::new(config);
@@ -516,10 +516,10 @@ async fn ask_input_carries_settings_and_index_paths() {
 
     let input = read_ask_input(dir.path(), "run-5");
     assert_eq!(input["settings_dir"], "/settings", "{input}");
-    assert_eq!(input["settings_name"], "qwen-local", "{input}");
+    assert_eq!(input["settings_name"], "celeris-proxy", "{input}");
     // ADR-0063 Phase 109e: `settings_path`（直接読む絶対パス）も足される。
     assert_eq!(
-        input["settings_path"], "/settings/qwen-local.json",
+        input["settings_path"], "/settings/celeris-proxy.json",
         "{input}"
     );
     assert_eq!(
@@ -593,7 +593,7 @@ async fn ask_input_carries_model_only_when_set() {
 
     let dir2 = tempfile::tempdir().unwrap();
     let mut config_with = stub_pqa(dir2.path(), &ask_stub_script("ok", ""));
-    config_with.model = Some("qwen3.8-27b".to_string());
+    config_with.model = Some("openai/celeris/standard".to_string());
     let adapter2 = PaperQaAdapter::new(config_with);
     let req2 = sample_req(dir2.path().to_path_buf());
     let sink2 = RecordingSink::default();
@@ -603,7 +603,7 @@ async fn ask_input_carries_model_only_when_set() {
         .unwrap();
     assert_eq!(
         read_ask_input(dir2.path(), "run-7b")["model"],
-        "qwen3.8-27b"
+        "openai/celeris/standard"
     );
 }
 
@@ -2451,27 +2451,27 @@ fn runner_falls_back_to_the_abstract_and_finds_an_oa_pdf_via_unpaywall() {
 /// LiteLLM の `provider/model` の接頭辞だけを落とす（`chat/completions` に渡すのは口が出している名前）。
 #[test]
 fn strip_provider_prefix_drops_only_a_litellm_style_prefix() {
-    assert_eq!(strip_provider_prefix("openai/qwen3.8-27b"), "qwen3.8-27b");
-    assert_eq!(strip_provider_prefix("hosted_vllm/qwen3"), "qwen3");
-    assert_eq!(strip_provider_prefix(" openai/gpt-4o "), "gpt-4o");
-    assert_eq!(strip_provider_prefix("qwen3.8-27b"), "qwen3.8-27b");
-    // 接頭辞に見えないもの（大文字を含む組織名など）はそのまま残す。
     assert_eq!(
-        strip_provider_prefix("Qwen/Qwen3.8-27B-FP8"),
-        "Qwen/Qwen3.8-27B-FP8"
+        strip_provider_prefix("openai/celeris/standard"),
+        "celeris/standard"
     );
+    assert_eq!(strip_provider_prefix("hosted_vllm/model"), "model");
+    assert_eq!(strip_provider_prefix(" openai/gpt-4o "), "gpt-4o");
+    assert_eq!(strip_provider_prefix("celeris/cheap"), "celeris/cheap");
+    // 接頭辞に見えないもの（大文字を含む組織名など）はそのまま残す。
+    assert_eq!(strip_provider_prefix("Acme/Model-FP8"), "Acme/Model-FP8");
     assert_eq!(strip_provider_prefix("openai/"), "openai/");
 }
 
 /// 検索語を立てるモデルは `acquire.query_model` → `[[providers]] model` → settings の `llm` の順
 /// （PaperQA2 と同じ LLM 先。ADR-0035 D5）。
 #[tokio::test]
-async fn the_query_llm_model_falls_back_from_query_model_to_llm_to_the_settings_file() {
+async fn provider_kind_paperqa_query_model_uses_proxy_tier_from_settings() {
     let dir = tempfile::tempdir().unwrap();
-    let settings = dir.path().join("qwen-local");
+    let settings = dir.path().join("celeris-proxy");
     std::fs::write(
-        dir.path().join("qwen-local.json"),
-        r#"{"llm": "openai/qwen3.8-27b", "embedding": "sparse"}"#,
+        dir.path().join("celeris-proxy.json"),
+        r#"{"llm": "openai/celeris/standard", "embedding": "sparse"}"#,
     )
     .unwrap();
 
@@ -2482,13 +2482,19 @@ async fn the_query_llm_model_falls_back_from_query_model_to_llm_to_the_settings_
     // settings の `llm`（`.json` は付けずに渡す実機の仕様）。
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
-        Some("qwen3.8-27b")
+        Some("celeris/standard")
     );
     // `[[providers]] model`（`--llm`）が勝つ。
     config.model = Some("openai/other-model".to_string());
     assert_eq!(
         query_llm_model(&config).await.as_deref(),
         Some("other-model")
+    );
+    // proxy の抽象名を `[[providers]] model` に直書きしても tier を落とさない。
+    config.model = Some("celeris/cheap".to_string());
+    assert_eq!(
+        query_llm_model(&config).await.as_deref(),
+        Some("celeris/cheap")
     );
     // `acquire.query_model` が最も強い。
     config.acquire.query_model = Some("explicit-model".to_string());
@@ -2512,8 +2518,8 @@ async fn the_query_llm_model_falls_back_from_query_model_to_llm_to_the_settings_
 async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(
-        dir.path().join("qwen-local.json"),
-        r#"{"llm": "openai/qwen3.8-27b"}"#,
+        dir.path().join("celeris-proxy.json"),
+        r#"{"llm": "openai/celeris/standard"}"#,
     )
     .unwrap();
     let mut config = stub_pqa_with_acquire(
@@ -2521,7 +2527,12 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
         &ask_stub_script(STUB_ANSWER, ""),
         &acquire_stub_script(6, 3),
     );
-    config.settings = Some(dir.path().join("qwen-local").to_string_lossy().into_owned());
+    config.settings = Some(
+        dir.path()
+            .join("celeris-proxy")
+            .to_string_lossy()
+            .into_owned(),
+    );
     config.env = vec![
         (
             "OPENAI_BASE_URL".to_string(),
@@ -2550,7 +2561,7 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     let llm = &input["query_llm"];
     assert_eq!(llm["enabled"], true, "{input}");
     assert_eq!(
-        llm["model"], "qwen3.8-27b",
+        llm["model"], "celeris/standard",
         "settings の llm から供給者の接頭辞を落として渡す: {input}"
     );
     assert_eq!(llm["base_url"], "http://127.0.0.1:18000/v1");
@@ -2575,7 +2586,7 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
     // 進捗に「誰が検索語を立てるか」が出る。
     let progress = sink.progress.lock().unwrap().join("\n");
     assert!(
-        progress.contains("the search terms are written by qwen3.8-27b"),
+        progress.contains("the search terms are written by celeris/standard"),
         "{progress}"
     );
 
@@ -2585,7 +2596,12 @@ async fn the_acquire_input_carries_the_query_llm_and_the_request() {
         &ask_stub_script(STUB_ANSWER, ""),
         &acquire_stub_script(6, 3),
     );
-    off.settings = Some(dir.path().join("qwen-local").to_string_lossy().into_owned());
+    off.settings = Some(
+        dir.path()
+            .join("celeris-proxy")
+            .to_string_lossy()
+            .into_owned(),
+    );
     off.acquire.query_llm = false;
     let adapter = PaperQaAdapter::new(off);
     let sink = RecordingSink::default();
@@ -2725,7 +2741,7 @@ fn runner_uses_the_search_terms_the_llm_wrote() {
              {"text": "ad hoc file system HPC", "engines": ["arxiv", "openalex"], "arxiv_categories": ["cs.DC", "cs.OS"]},
              {"text": "asynchronous I/O runtime storage", "engines": ["openalex"], "arxiv_categories": []}
            ], "exclude_terms": ["Mobile Ad Hoc Network", "no"]}"#;
-    // 考える型のモデル（実機の Qwen3）を模して `<think>` と ``` で包む。
+    // 考える型のモデルを模して `<think>` と ``` で包む。
     let body = serde_json::json!({
         "choices": [{"message": {"content": format!("<think>I should answer with JSON.</think>\n```json\n{plan}\n```\n")}}]
     });
@@ -3004,6 +3020,53 @@ print(json.dumps(out, ensure_ascii=False))
     assert_eq!(v["prompt_has_objective"], true);
     assert_eq!(v["prompt_has_context"], true);
     assert_eq!(v["prompt_has_rules"], true);
+}
+
+#[test]
+fn provider_kind_paperqa_query_request_has_no_source_specific_options() {
+    if !python3_available() {
+        eprintln!("skipping: python3 not available");
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let script_path = dir.path().join("paperqa_acquire.py");
+    std::fs::write(&script_path, ACQUIRE_SCRIPT).unwrap();
+    let checker = r#"
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("acq", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+class FakeFetcher:
+    calls = []
+    def post(self, kind, url, body, **kwargs):
+        self.calls.append({"kind": kind, "url": url, "body": body})
+        return json.dumps({"choices": [{"message": {"content": "{}"}}]})
+fetcher = FakeFetcher()
+mod.plan_queries({"queries": ["systems"], "query_llm": {
+    "enabled": True, "model": "celeris/standard",
+    "base_url": "http://127.0.0.1:18000/v1"}}, fetcher, lambda _: None)
+print(json.dumps(fetcher.calls))
+"#;
+    let output = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(checker)
+        .arg(&script_path)
+        .output()
+        .expect("failed to run python3");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let calls: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(calls.as_array().unwrap().len(), 1);
+    assert_eq!(calls[0]["kind"], "llm");
+    assert_eq!(
+        calls[0]["url"],
+        "http://127.0.0.1:18000/v1/chat/completions"
+    );
+    assert_eq!(calls[0]["body"]["model"], "celeris/standard");
+    assert!(calls[0]["body"].get("chat_template_kwargs").is_none());
 }
 
 // ---------------------------------------------- paperqa_ask.py（python3、ネットワーク無し）
@@ -3523,7 +3586,7 @@ fn paperqa_ask_main_reads_the_settings_file_directly_when_it_exists() {
     let settings_path = settings_dir.join("celeris-proxy.json");
     std::fs::write(
         &settings_path,
-        r#"{"llm": "qwen3.8-27b", "marker": "from-disk"}"#,
+        r#"{"llm": "openai/celeris/standard", "marker": "from-disk"}"#,
     )
     .unwrap();
 
@@ -3642,7 +3705,7 @@ print(json.dumps(calls))
     assert_eq!(v["settings_marker_seen_by_ask"], "from-disk", "{v}");
     assert_eq!(
         v["validated_raw"],
-        serde_json::json!({"llm": "qwen3.8-27b", "marker": "from-disk"}),
+        serde_json::json!({"llm": "openai/celeris/standard", "marker": "from-disk"}),
         "{v}"
     );
 

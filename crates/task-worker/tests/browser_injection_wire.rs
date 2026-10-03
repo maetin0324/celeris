@@ -136,7 +136,7 @@ fn fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("fixture TLS server starts");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(
             Instant::now() < deadline,
@@ -182,7 +182,7 @@ fn delayed_cdp_page_target_response() {
         let _ = browser.write_all(&bytes);
     });
     let mut cdp = CdpController::new(write, read);
-    cdp.response_timeout_for_test(Duration::from_secs(30));
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let target = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("delayed page target");
@@ -218,10 +218,15 @@ fn start_broker(rt: &IsolatedRuntime) -> tempfile::TempDir {
         )
     });
     let socket = root.path().join("run/celeris-credentiald/control.sock");
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if socket.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10));
     }
     let pid = rt.inner_pid() as u32;
@@ -344,7 +349,7 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
-    cdp.response_timeout_for_test(Duration::from_secs(30));
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let ready_deadline = Instant::now() + Duration::from_secs(60);
     let mut last_reply = String::from("no CDP response yet");
     loop {

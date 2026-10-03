@@ -5,7 +5,7 @@
 //! [`verify_isolation`] からしか作れず、これだけが `Isolation::Isolated` を名乗れる
 //! （ADR-0101 D3: identity の復元は隔離下でのみ）。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use serde::{Deserialize, Serialize};
@@ -53,6 +53,9 @@ pub struct RuntimeFacts {
     pub host_uid: u32,
     /// sandbox の中の browser process の実 UID（host から見た値）。
     pub runtime_uid: u32,
+    /// runtime user namespace の owner UID（daemon と同じ親 namespace で解釈）。
+    #[serde(default)]
+    pub userns_owner_uid: Option<u32>,
     /// host と別であると確認できた namespace。
     pub namespaces: BTreeSet<Namespace>,
     pub root_readonly: bool,
@@ -73,17 +76,61 @@ pub struct RuntimeFacts {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum IsolationViolation {
     SameUid,
+    OwnerUnknown,
+    UsernsOwnedByDaemon,
     RootUid,
-    MissingNamespace { ns: Namespace },
+    MissingNamespace {
+        ns: Namespace,
+    },
     RootWritable,
-    WritableOutsideSession { path: String },
-    BrokerVisible { path: String },
-    HostIpcVisible { path: String },
+    WritableOutsideSession {
+        path: String,
+    },
+    BrokerVisible {
+        path: String,
+    },
+    HostIpcVisible {
+        path: String,
+    },
     CdpOnTcp,
     CdpOutsideControllerDir,
     PrivilegesKept,
     InvalidSession,
     NoProcessGroup,
+    /// ADR-0138 D-L: launcher の session 証明が無い（daemon 起動の runtime を含む）。
+    LauncherProofMissing,
+    /// ADR-0138 D-L: 証明はあるが検証に失敗した（不一致・採取不能）。
+    LauncherProofInvalid {
+        defect: LauncherProofDefect,
+    },
+}
+
+/// launcher 証明の検証に失敗した理由（ADR-0138 D-L）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LauncherProofDefect {
+    /// launcher の応答の送り手（`SCM_CREDENTIALS`）を採れなかった。
+    PeerUidUnavailable,
+    /// 証明の launcher UID が応答の送り手の UID・設定上の launcher UID と一致しない。
+    LauncherUidMismatch,
+    /// launcher UID が daemon の UID か root。
+    LauncherUidPrivileged,
+    /// `Receipt.isolation_ok` が偽。
+    IsolationNotOk,
+    /// 証明の owner UID が無い。
+    OwnerUnknown,
+    /// 証明の owner UID が daemon の UID。
+    OwnerIsDaemon,
+    /// 証明の owner UID が daemon 自身の採った owner UID と一致しない。
+    OwnerMismatch,
+    /// 証明の PID が `RuntimeFacts` を採った process ではない。
+    PidMismatch,
+    /// daemon が runtime の starttime を採れなかった（session 終了を含む）。
+    StarttimeUnavailable,
+    /// starttime が証明と一致しない（PID 再利用・process 入替え）。
+    StarttimeMismatch,
+    /// 証明の session・instance が admission の対象と一致しない。
+    SessionMismatch,
 }
 
 /// sandbox の中の固定の path。起動側はここにだけ session の書き込みを置く。
@@ -122,6 +169,7 @@ fn normal(path: &str) -> Option<&str> {
 pub struct IsolationAttestation {
     session_id: String,
     runtime_uid: u32,
+    userns_owner_uid: u32,
     pgid: i32,
 }
 
@@ -131,6 +179,9 @@ impl IsolationAttestation {
     }
     pub fn runtime_uid(&self) -> u32 {
         self.runtime_uid
+    }
+    pub fn userns_owner_uid(&self) -> u32 {
+        self.userns_owner_uid
     }
     pub fn pgid(&self) -> i32 {
         self.pgid
@@ -159,6 +210,11 @@ pub fn verify_isolation(
     }
     if facts.runtime_uid == facts.host_uid {
         v.push(IsolationViolation::SameUid);
+    }
+    match facts.userns_owner_uid {
+        None => v.push(IsolationViolation::OwnerUnknown),
+        Some(owner) if owner == facts.host_uid => v.push(IsolationViolation::UsernsOwnedByDaemon),
+        Some(_) => {}
     }
     for ns in REQUIRED_NAMESPACES {
         if !facts.namespaces.contains(&ns) {
@@ -202,14 +258,174 @@ pub fn verify_isolation(
     if facts.pgid <= 1 {
         v.push(IsolationViolation::NoProcessGroup);
     }
-    if v.is_empty() {
+    if let (true, Some(userns_owner_uid)) = (v.is_empty(), facts.userns_owner_uid) {
         Ok(IsolationAttestation {
             session_id: facts.session_id.clone(),
             runtime_uid: facts.runtime_uid,
+            userns_owner_uid,
             pgid: facts.pgid,
         })
     } else {
         Err(v)
+    }
+}
+
+/// ADR-0115 の launcher が `Response::Started` / `observe` で返す session 証明（ADR-0138 D-L）。
+/// daemon 側が `Receipt`・`SessionFacts`・`SessionRecord` の値から組み立てる。
+/// 持っているだけでは何も許さず、[`verify_launcher_session`] を通ったときだけ本番の
+/// [`LauncherAttestation`] になる。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LauncherSessionProof {
+    pub session_id: String,
+    pub instance_id: String,
+    /// launcher 内の `SessionRecord.pid`（runtime の leader）。
+    pub pid: i32,
+    /// launcher 内の `SessionRecord.starttime`。
+    pub starttime: u64,
+    /// launcher が採った `SessionFacts.ns_owner_uid`。
+    pub ns_owner_uid: Option<u32>,
+    /// 証明を発行した launcher の UID。
+    pub launcher_uid: u32,
+    /// `Receipt.isolation_ok`（launcher 自身の `verify_isolation` の結果）。
+    pub isolation_ok: bool,
+    /// launcher が runtime（`pid`）で採った namespace の inode（protocol v3 の束縛）。daemon UID は
+    /// 別 UID の runtime の `/proc/<pid>/ns/*` を開けない（EACCES）ので、namespace の別は
+    /// これと daemon 自身の inode を比べて決める。欠けた namespace は「別」と数えない。
+    #[serde(default)]
+    pub ns_inodes: BTreeMap<Namespace, u64>,
+}
+
+/// admission 側（daemon）が自分で観測・設定から得た照合値。採取できない値は `None` のまま渡す
+/// （安全な値に置き換えない。`None` は検証失敗になる）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LauncherObservation {
+    /// admission の対象 session。
+    pub session_id: String,
+    /// 対象 session を起動した launcher の instance id。
+    pub instance_id: String,
+    /// launcher の応答を書いた process の UID（kernel が付けた `SCM_CREDENTIALS`。ADR-0116 付記 D-P）。
+    /// socket 起動では `SO_PEERCRED` が listen socket を作った systemd（uid 0）を指すので使わない。
+    pub peer_uid: Option<u32>,
+    /// 設定上の launcher UID。
+    pub configured_launcher_uid: u32,
+    /// `RuntimeFacts` を採った process の PID。
+    pub runtime_pid: i32,
+    /// daemon が `/proc/<runtime_pid>/stat` から採った starttime。
+    pub runtime_starttime: Option<u64>,
+}
+
+/// 本番 admission の attestation（ADR-0138 条件 1・2・5）。隔離の検査と launcher 証明の検証の
+/// 両方を通ったときだけ [`verify_launcher_session`] が作る。試験 harness からは作れない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LauncherAttestation {
+    isolation: IsolationAttestation,
+    instance_id: String,
+    pid: i32,
+    starttime: u64,
+    launcher_uid: u32,
+}
+
+impl LauncherAttestation {
+    pub fn isolation_attestation(&self) -> &IsolationAttestation {
+        &self.isolation
+    }
+    pub fn session_id(&self) -> &str {
+        self.isolation.session_id()
+    }
+    pub fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
+    pub fn pid(&self) -> i32 {
+        self.pid
+    }
+    pub fn starttime(&self) -> u64 {
+        self.starttime
+    }
+    pub fn launcher_uid(&self) -> u32 {
+        self.launcher_uid
+    }
+    pub fn isolation(&self) -> Isolation {
+        self.isolation.isolation()
+    }
+}
+
+/// 証明の各条件を検査する。不一致は全部返す。
+fn launcher_proof_defects(
+    facts: &RuntimeFacts,
+    proof: &LauncherSessionProof,
+    seen: &LauncherObservation,
+) -> Vec<LauncherProofDefect> {
+    use LauncherProofDefect as D;
+    let mut d = Vec::new();
+    match seen.peer_uid {
+        None => d.push(D::PeerUidUnavailable),
+        Some(peer) if peer != proof.launcher_uid || peer != seen.configured_launcher_uid => {
+            d.push(D::LauncherUidMismatch)
+        }
+        Some(_) => {}
+    }
+    if proof.launcher_uid == 0
+        || proof.launcher_uid == facts.host_uid
+        || seen.configured_launcher_uid == 0
+        || seen.configured_launcher_uid == facts.host_uid
+    {
+        d.push(D::LauncherUidPrivileged);
+    }
+    if !proof.isolation_ok {
+        d.push(D::IsolationNotOk);
+    }
+    match proof.ns_owner_uid {
+        None => d.push(D::OwnerUnknown),
+        Some(owner) if owner == facts.host_uid => d.push(D::OwnerIsDaemon),
+        Some(owner) if facts.userns_owner_uid != Some(owner) => d.push(D::OwnerMismatch),
+        Some(_) => {}
+    }
+    if proof.pid <= 1 || proof.pid != seen.runtime_pid {
+        d.push(D::PidMismatch);
+    }
+    match seen.runtime_starttime {
+        None => d.push(D::StarttimeUnavailable),
+        Some(t) if t != proof.starttime => d.push(D::StarttimeMismatch),
+        Some(_) => {}
+    }
+    if proof.session_id != seen.session_id
+        || proof.session_id != facts.session_id
+        || proof.instance_id != seen.instance_id
+        || proof.instance_id.is_empty()
+    {
+        d.push(D::SessionMismatch);
+    }
+    d
+}
+
+/// 本番 admission の共通条件（ADR-0138 D-L）。[`verify_isolation`] の全条件に加えて launcher の
+/// session 証明を要求する。証明が無ければ `LauncherProofMissing`、検証に失敗すれば
+/// `LauncherProofInvalid` を返し、owner 検査が通っていても attestation を作らない。
+pub fn verify_launcher_session(
+    facts: &RuntimeFacts,
+    proof: Option<&LauncherSessionProof>,
+    seen: &LauncherObservation,
+) -> Result<LauncherAttestation, Vec<IsolationViolation>> {
+    let isolation = verify_isolation(facts);
+    let mut v = isolation.as_ref().err().cloned().unwrap_or_default();
+    let Some(proof) = proof else {
+        v.push(IsolationViolation::LauncherProofMissing);
+        return Err(v);
+    };
+    v.extend(
+        launcher_proof_defects(facts, proof, seen)
+            .into_iter()
+            .map(|defect| IsolationViolation::LauncherProofInvalid { defect }),
+    );
+    match isolation {
+        Ok(isolation) if v.is_empty() => Ok(LauncherAttestation {
+            isolation,
+            instance_id: proof.instance_id.clone(),
+            pid: proof.pid,
+            starttime: proof.starttime,
+            launcher_uid: proof.launcher_uid,
+        }),
+        _ => Err(v),
     }
 }
 
@@ -560,68 +776,193 @@ fn proc_real_uid(status: &str) -> Option<u32> {
         .ok()
 }
 
+/// runtime の user namespace FD から owner UID を採る。取得不能なら不明として拒否させる。
+pub fn collect_userns_owner_uid(pid: i32) -> Option<u32> {
+    use std::os::fd::AsRawFd;
+
+    // linux/nsfs.h: NS_GET_OWNER_UID = _IO(NSIO, 0x4), NSIO = 0xb7.
+    const NS_GET_OWNER_UID: std::ffi::c_ulong = 0xb704;
+    unsafe extern "C" {
+        fn ioctl(fd: std::ffi::c_int, request: std::ffi::c_ulong, ...) -> std::ffi::c_int;
+    }
+    let ns = std::fs::File::open(format!("/proc/{pid}/ns/user")).ok()?;
+    let mut owner: u32 = 0;
+    // SAFETY: ns is an open namespace FD, and owner points to a writable uid_t.
+    let result = unsafe { ioctl(ns.as_raw_fd(), NS_GET_OWNER_UID, &mut owner) };
+    (result == 0).then_some(owner)
+}
+
+/// `/proc/<pid>/ns/<name>` の link（`user:[4026531837]`）から inode を採る。
+fn ns_link_inode(path: &str) -> std::io::Result<u64> {
+    let link = std::fs::read_link(path)?;
+    link.to_str()
+        .and_then(|l| l.rsplit_once(":["))
+        .and_then(|(_, rest)| rest.strip_suffix(']'))
+        .and_then(|n| n.parse().ok())
+        .ok_or_else(|| std::io::Error::other(format!("unexpected ns link: {path}")))
+}
+
+/// `pid` の 6 つの namespace の inode。1 つでも読めなければ Err（欠けを埋めない）。
+/// launcher が自分の runtime に対して呼び、protocol v3 の束縛に載せる（ADR-0138 D-L）。
+pub fn collect_ns_inodes(pid: &str) -> std::io::Result<BTreeMap<Namespace, u64>> {
+    FACT_NAMESPACES
+        .into_iter()
+        .map(|(ns, name)| Ok((ns, ns_link_inode(&format!("/proc/{pid}/ns/{name}"))?)))
+        .collect()
+}
+
+/// daemon UID でも読める `/proc/<pid>` の項目（`status` と `mountinfo`）から採った事実。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcView {
+    pub runtime_uid: u32,
+    pub no_new_privs: bool,
+    pub capabilities_dropped: bool,
+    pub root_readonly: bool,
+    pub writable_mounts: Vec<String>,
+    pub visible_paths: Vec<String>,
+}
+
+impl ProcView {
+    /// `status` と `mountinfo` の本文から組む。読み取りは呼び出し側（Err はそこで返す）。
+    /// 解釈できない値は隔離を否定する側（uid 0・書込み可）に倒す。
+    pub fn parse(status: &str, mountinfo: &str) -> Self {
+        let runtime_uid = proc_real_uid(status).unwrap_or(0);
+        let no_new_privs = proc_status_field(status, "NoNewPrivs").as_deref() == Some("1");
+        let zero =
+            |k: &str| proc_status_field(status, k).is_some_and(|v| v.chars().all(|c| c == '0'));
+        let capabilities_dropped = zero("CapEff") && zero("CapPrm");
+        let mut root_readonly = false;
+        let mut writable_mounts = Vec::new();
+        let mut visible_paths = Vec::new();
+        for line in mountinfo.lines() {
+            let Some((pre, post)) = line.split_once(" - ") else {
+                continue;
+            };
+            let f: Vec<&str> = pre.split_whitespace().collect();
+            let fstype = post.split_whitespace().next().unwrap_or("");
+            let (Some(mp), Some(opts)) = (f.get(4), f.get(5)) else {
+                continue;
+            };
+            let ro = opts.split(',').any(|o| o == "ro");
+            visible_paths.push((*mp).to_owned());
+            if *mp == "/" {
+                root_readonly = ro;
+            }
+            let pseudo = fstype == "proc" || *mp == "/dev" || mp.starts_with("/dev/");
+            if !ro && !pseudo {
+                writable_mounts.push((*mp).to_owned());
+            }
+        }
+        Self {
+            runtime_uid,
+            no_new_privs,
+            capabilities_dropped,
+            root_readonly,
+            writable_mounts,
+            visible_paths,
+        }
+    }
+
+    fn read(pid: i32) -> std::io::Result<Self> {
+        let status = std::fs::read_to_string(format!("/proc/{pid}/status"))?;
+        let mountinfo = std::fs::read_to_string(format!("/proc/{pid}/mountinfo"))?;
+        Ok(Self::parse(&status, &mountinfo))
+    }
+
+    fn into_facts(
+        self,
+        session_id: &str,
+        host_uid: u32,
+        userns_owner_uid: Option<u32>,
+        namespaces: BTreeSet<Namespace>,
+        pgid: i32,
+    ) -> RuntimeFacts {
+        RuntimeFacts {
+            session_id: session_id.to_owned(),
+            host_uid,
+            runtime_uid: self.runtime_uid,
+            userns_owner_uid,
+            namespaces,
+            root_readonly: self.root_readonly,
+            writable_mounts: self.writable_mounts,
+            visible_paths: self.visible_paths,
+            cdp: CdpEndpoint::Pipe,
+            no_new_privs: self.no_new_privs,
+            capabilities_dropped: self.capabilities_dropped,
+            pgid,
+        }
+    }
+}
+
+fn host_uid() -> std::io::Result<u32> {
+    let host_status = std::fs::read_to_string("/proc/self/status")?;
+    proc_real_uid(&host_status).ok_or_else(|| std::io::Error::other("host uid unavailable"))
+}
+
 /// `/proc/<pid>` から runtime の事実を採る（呼び出し側 process を host とみなす）。
 /// 読めない値は隔離を否定する側（uid 0・namespace 無し・書込み可）に倒す。
+/// `/proc/<pid>/ns/*` を開くので、別 UID の runtime（launcher 起動）には daemon UID から使えない
+/// （EACCES）。本番の broker は [`collect_launched_runtime_facts`] を使う。
 pub fn collect_runtime_facts(
     session_id: &str,
     pid: i32,
     pgid: i32,
 ) -> std::io::Result<RuntimeFacts> {
-    use std::io::BufRead;
-    let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
     let mut namespaces = BTreeSet::new();
     for (ns, name) in FACT_NAMESPACES {
         let mine = std::fs::read_link(format!("/proc/self/ns/{name}"))?;
-        let theirs = std::fs::read_link(proc_dir.join("ns").join(name))?;
+        let theirs = std::fs::read_link(format!("/proc/{pid}/ns/{name}"))?;
         if mine != theirs {
             namespaces.insert(ns);
         }
     }
-    let host_status = std::fs::read_to_string("/proc/self/status")?;
-    let host_uid =
-        proc_real_uid(&host_status).ok_or_else(|| std::io::Error::other("host uid unavailable"))?;
-    let status = std::fs::read_to_string(proc_dir.join("status"))?;
-    let runtime_uid = proc_real_uid(&status).unwrap_or(0);
-    let no_new_privs = proc_status_field(&status, "NoNewPrivs").as_deref() == Some("1");
-    let zero = |k: &str| proc_status_field(&status, k).is_some_and(|v| v.chars().all(|c| c == '0'));
-    let capabilities_dropped = zero("CapEff") && zero("CapPrm");
-    let mut root_readonly = false;
-    let mut writable_mounts = Vec::new();
-    let mut visible_paths = Vec::new();
-    let mountinfo = std::fs::File::open(proc_dir.join("mountinfo"))?;
-    for line in std::io::BufReader::new(mountinfo).lines() {
-        let line = line?;
-        let Some((pre, post)) = line.split_once(" - ") else {
-            continue;
-        };
-        let f: Vec<&str> = pre.split_whitespace().collect();
-        let fstype = post.split_whitespace().next().unwrap_or("");
-        let (Some(mp), Some(opts)) = (f.get(4), f.get(5)) else {
-            continue;
-        };
-        let ro = opts.split(',').any(|o| o == "ro");
-        visible_paths.push((*mp).to_owned());
-        if *mp == "/" {
-            root_readonly = ro;
-        }
-        let pseudo = fstype == "proc" || *mp == "/dev" || mp.starts_with("/dev/");
-        if !ro && !pseudo {
-            writable_mounts.push((*mp).to_owned());
-        }
-    }
-    Ok(RuntimeFacts {
-        session_id: session_id.to_owned(),
+    let host_uid = host_uid()?;
+    Ok(ProcView::read(pid)?.into_facts(
+        session_id,
         host_uid,
-        runtime_uid,
+        collect_userns_owner_uid(pid),
         namespaces,
-        root_readonly,
-        writable_mounts,
-        visible_paths,
-        cdp: CdpEndpoint::Pipe,
-        no_new_privs,
-        capabilities_dropped,
         pgid,
-    })
+    ))
+}
+
+/// launcher 起動の runtime の事実を組む純関数（ADR-0138 D-L）。`status`・`mountinfo` は daemon が
+/// 自分で読んだ値、namespace の別は launcher の束縛の inode と daemon 自身の inode の比較、
+/// userns owner は launcher の束縛の値。束縛に inode が無い・daemon と同じ inode の namespace は
+/// 「別」に数えないので `MissingNamespace` で拒否される（安全値で埋めない）。
+pub fn launched_runtime_facts(
+    session_id: &str,
+    pgid: i32,
+    host_uid: u32,
+    own_ns: &BTreeMap<Namespace, u64>,
+    view: ProcView,
+    proof: &LauncherSessionProof,
+) -> RuntimeFacts {
+    let namespaces = REQUIRED_NAMESPACES
+        .into_iter()
+        .filter(|ns| match (own_ns.get(ns), proof.ns_inodes.get(ns)) {
+            (Some(mine), Some(theirs)) => mine != theirs,
+            _ => false,
+        })
+        .collect();
+    view.into_facts(session_id, host_uid, proof.ns_owner_uid, namespaces, pgid)
+}
+
+/// 本番 broker の事実採取（ADR-0138 D-L）。daemon UID で読める `/proc/<pid>/{status,mountinfo}` と
+/// 自分の `/proc/self/ns/*` を読み、読めない namespace・owner は launcher の束縛から採る。
+/// どれかが読めなければ Err（呼び出し側は拒否する）。
+pub fn collect_launched_runtime_facts(
+    session_id: &str,
+    pid: i32,
+    pgid: i32,
+    proof: &LauncherSessionProof,
+) -> std::io::Result<RuntimeFacts> {
+    let own_ns = collect_ns_inodes("self")?;
+    let host_uid = host_uid()?;
+    let view = ProcView::read(pid)?;
+    Ok(launched_runtime_facts(
+        session_id, pgid, host_uid, &own_ns, view, proof,
+    ))
 }
 
 #[cfg(test)]

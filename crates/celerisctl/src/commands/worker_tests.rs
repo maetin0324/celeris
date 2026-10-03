@@ -118,6 +118,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         org_include: None,
         org: vec![],
         delegation: Default::default(),
+        delivery: Default::default(),
         reports: Default::default(),
         notify: Default::default(),
         accounts: None,

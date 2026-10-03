@@ -107,3 +107,26 @@ ID 集合との検証条件がずれていた。
   `git diff --check` → すべて exit 0。
 - 検査ログは成果物ディレクトリの `workspace-test-attempt3.log` と `workspace-clippy-attempt3.log`。
   本番への昇格・設定更新・cron 雛形の PATCH は未実施。
+
+## 配送検証の修復（2026-10-03）
+
+- `0a941d7d` の prepare は `e2e::api_scenarios` の
+  `worker_guard_exempt_daemon_starts_on_a_test_db_with_the_guard_on` 1 件で失敗した
+  （nextest: 3,620 passed / 1 failed / 12 skipped）。
+- 配送は `CELERIS_USERNS_TESTS=1` で guard の probe 経路を実行する。試験用 HOME に既定の
+  releases ディレクトリがなく、設定済みパスの canonicalize が `No such file or directory` になっていた。
+  通常の worker run では免除経路に進むため、この不足を検出しなかった。
+- `tests/e2e/tests/api_scenarios.rs` の fixture 内に `releases/` を作り、試験用 config の
+  `[selfdeploy].releases_dir` に指定した。本番の guard の検証条件は変更していない。
+- 修正前にビルドした試験を、worker 印を外し `CELERIS_USERNS_TESTS=1` にした条件で実行し、
+  配送と同じエラーを再現（exit 101）。修正後は同じ条件で 1 passed（exit 0）。
+  証拠は成果物ディレクトリの `delivery-repair-before.log` / `delivery-repair-after.log`。
+- `cargo test --workspace` → exit 0（3,622 passed / 0 failed / 13 ignored）。
+  `cargo clippy --workspace -- -D warnings` → exit 0（警告なし）。
+  証拠は `delivery-repair-workspace-test.log` / `delivery-repair-clippy.log`。
+- 配送と同じ試験台本をこの worktree で実行:
+  `env -u CELERIS_WORKER_DB_GUARD CELERIS_USERNS_TESTS=1 bash scripts/dev/test-parallel.sh`
+  → exit 0。nextest の Summary 行は 3,621 passed / 0 failed / 12 skipped、doctest も exit 0
+  （1 ignored）。証拠は `delivery-repair-nextest.log`。
+- `cargo fmt --all -- --check`、文書リンク・文書配置・`git diff --check` → すべて exit 0。
+- 本番サービスの変更、リリース準備・昇格、cron 雛形の PATCH は実行していない。

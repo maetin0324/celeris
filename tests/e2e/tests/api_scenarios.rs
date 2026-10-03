@@ -152,7 +152,9 @@ impl Env {
         let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
-        for name in ["home", "config-home", "state", "cache"] {
+        // The guard canonicalizes the configured releases directory before probing userns.
+        // Keep it inside the fixture, and create it even when the worker-run exemption applies.
+        for name in ["home", "config-home", "state", "cache", "releases"] {
             std::fs::create_dir(root.join(name)).unwrap();
         }
         let db = root.join("celeris.sqlite3");
@@ -197,6 +199,9 @@ retry_backoff_base_secs = 0
 
 [db]
 path = "celeris.sqlite3"
+
+[selfdeploy]
+releases_dir = "releases"
 
 {api_section}
 [adapters.fake]

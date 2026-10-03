@@ -1,4 +1,4 @@
-//! DESIGN §6 Phase 9 の受け入れ 4〜8（ADR-0013、`docs/gui/api.md`）のうち、実バイナリ `celeris`（`[api]` 有効）/ `celerisctl` と
+//! DESIGN §6 Phase 9 の受け入れ 4〜8（ADR-0013、`docs/api/v1/gui-api.md`）のうち、実バイナリ `celeris`（`[api]` 有効）/ `celerisctl` と
 //! fake ワーカー（`sh` スクリプト）と `curl` で再現するもの。接続先は 127.0.0.1 だけで、外部ネットワークに出ない。
 //!
 //! 4. `[api]` が無ければリッスンしない。有効なら `/health` が `api_version` と `schema_version` を返す
@@ -47,7 +47,7 @@ fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
     cond()
 }
 
-/// 固定の wall-clock 期限ではなく、`count()` が増え続ける間だけ待つ出来事待ち（docs/testing.md 方法 2）。
+/// 固定の wall-clock 期限ではなく、`count()` が増え続ける間だけ待つ出来事待ち（agent-docs/guides/testing.md 方法 2）。
 /// `target` に達し次第 true を返す。`stall_limit` の間進捗が無ければ打ち切り、`overall_limit` は安全弁。
 fn wait_for_progress(
     overall_limit: Duration,
@@ -816,7 +816,7 @@ fn daemon_view_shows_in_flight_runs_and_cooldowns_and_throttle_is_recorded() {
 if [ -f throttle-me ]; then
   echo '{"type":"error","message":"429 rate limited","retryable":true,"provider_failure":{"kind":"throttled","retry_after_secs":30}}'
 else
-  # 壁時計の sleep ではなく、試験が cooldown と in_flight を確かめ終えて release を置くまで待つ（docs/testing.md）。
+  # 壁時計の sleep ではなく、試験が cooldown と in_flight を確かめ終えて release を置くまで待つ（agent-docs/guides/testing.md）。
   # 上限は試験が途中で落ちたときの保険。release が無ければ done を返さない。
   timeout 300 sh -c 'until test -f release; do sleep 0.1; done' || exit 1
   echo '{"type":"done","summary":"slow ok","evidence":[]}'

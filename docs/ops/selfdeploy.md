@@ -190,7 +190,7 @@ scripts/selfdeploy/release.sh celeris/01M2XXX # 自己改善の案件の実装�
 {"base": "70e3175eeb20",
  "at": "2026-09-19T13:00:00Z",
  "commits": [{"sha": "…40 桁…", "subject": "phase 50 / G15: …"}],
- "files": ["scripts/selfdeploy/verify.sh", "docs/PROGRESS.md"],
+ "files": ["scripts/selfdeploy/verify.sh", "agent-docs/PROGRESS.md"],
  "sensitive": ["scripts/selfdeploy/verify.sh"]}
 ```
 

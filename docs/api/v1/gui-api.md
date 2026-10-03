@@ -13,7 +13,7 @@
   — **追加のみ。v1 のまま**。エンドポイント 99〜100: `GET /mcp/clients` / `GET /mcp/calls?client=`
   （§3.110〜3.111。MCP クライアント表と呼び出しログの観測。トークンの値は出ない）。MCP サーバー本体
   （`POST /mcp`。JSON-RPC 2.0 + MCP Streamable HTTP）は `[mcp] listen` の既定 `127.0.0.1:18200` の
-  別ポートで、この `/api/v1` 契約には含まれない（`docs/mcp.md` 参照）。DB のスキーマ版数は **24**
+  別ポートで、この `/api/v1` 契約には含まれない（`docs/guides/mcp.md` 参照）。DB のスキーマ版数は **24**
   （migration 0024: `mcp_clients` / `mcp_calls`）。`Message.metadata` に `author`（`mcp:<client_id>`。
   MCP の `console_instruct` が付ける）、`Profile`/`EffectiveProfile` に `skills_mounts`（ADR-0056 D3
   のデータモデルのみ。届け方は Phase 79）が増えた。`GET /console` の `human` ブロックに `author` が
@@ -28,7 +28,7 @@
   v1 のまま**。エンドポイント 97: `GET /llm/sources`（§3.108。供給元ごとの到達性・アカウントの残量・
   cooldown・直近 1 時間の要求/token 数。読み取りだが認証は必要。`[llm_proxy]` が無効なら 409
   `llm_proxy_unavailable`）。GUI の表示は Phase 66。プロキシ自体（`POST /v1/chat/completions` 等）は
-  `127.0.0.1:18100` の別ポートで、この `/api/v1` 契約には含まれない（`docs/llm-source.md` 参照）。
+  `127.0.0.1:18100` の別ポートで、この `/api/v1` 契約には含まれない（`docs/guides/llm-source.md` 参照）。
   DB のスキーマ版数は **22**（migration 0022: `llm_proxy_requests`。プロキシの要求記録。本文は書かない）。
 - 改訂: 2026-09-21 バグ報告の対応（昇格の成否が画面に出なかった）— **追加のみ。v1 のまま**。
   `GET /releases` の `items[]` に `promote_failed`（`promote_failed.json`。直近の昇格の試みが
@@ -105,7 +105,7 @@
   1 つずつ増え、`reviewer` が `{adapter: "fake", tier: "standard"}` になる（`Config::apply_verify_smoke`。
   設定ファイルに同じ id があっても上書きする）。`mode = "normal"`（本番）の応答は 1 バイトも変わらない。
   `POST /tasks` はそのプロセスで `{"genre":"smoke","role":"smoke"}` を受け付け、verify の celeris はその
-  タスク**だけ**を dispatch する（§3.1、`docs/selfdeploy.md` の検査 6）
+  タスク**だけ**を dispatch する（§3.1、`docs/ops/selfdeploy.md` の検査 6）
 - 改訂: 2026-09-19 Phase 50（ADR-0041 D3/D4）— `GET /releases` の `items[]` に `promoted_at` / `on_main` /
   `changes`、`POST /releases/{sha12}/promote` の応答に `script_from` を追加（追加のみ。v1 のまま）。
   昇格に使う `promote.sh` は**いま動いている版のもの**に変わった（§3.67）
@@ -1822,8 +1822,8 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
 ### 3.66〜3.67 リリース（自己改善のデプロイ）（ADR-0040 D6）
 
 `scripts/selfdeploy/release.sh` が作った**不変のリリース**（`~/.local/celeris/releases/<sha12>/`）を一覧し、
-検証済みのものへ**人が**昇格する。設計は `docs/adr/0040-self-improvement-deploy.md`、運用は
-`docs/selfdeploy.md`。読む先は `[selfdeploy] releases_dir`（既定 `releases`。設定ファイルのディレクトリ基準）。
+検証済みのものへ**人が**昇格する。設計は `agent-docs/adr/0040-self-improvement-deploy.md`、運用は
+`docs/ops/selfdeploy.md`。読む先は `[selfdeploy] releases_dir`（既定 `releases`。設定ファイルのディレクトリ基準）。
 
 | | |
 |---|---|
@@ -2931,7 +2931,7 @@ root の /3 の計画が人の承認を待っている Task（`blocked` で直�
 
 #### 3.125.13 決定の要求（ADR-0079 D7）
 
-人への決定の要求（`DecisionRequest`。計画の `decisions`・worker の `result.json` の `decisions`・daemon の `leaf_too_large` / `limit` / `plan_invalid`）の一覧と回答。`[execution.tree] enabled = false`（既定）では決定が作られないので、一覧は空（404 ではない）、回答は 404 になる。効き目（選択肢 → 効き目の表）は ADR-0079 付記「R3a 実装時の逸脱・明確化」。MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/mcp.md`）。
+人への決定の要求（`DecisionRequest`。計画の `decisions`・worker の `result.json` の `decisions`・daemon の `leaf_too_large` / `limit` / `plan_invalid`）の一覧と回答。`[execution.tree] enabled = false`（既定）では決定が作られないので、一覧は空（404 ではない）、回答は 404 になる。効き目（選択肢 → 効き目の表）は ADR-0079 付記「R3a 実装時の逸脱・明確化」。MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/guides/mcp.md`）。
 
 ##### `GET /decisions?open=&root_id=` → 200 `DecisionList`
 

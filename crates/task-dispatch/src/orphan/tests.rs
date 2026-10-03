@@ -89,3 +89,38 @@ fn proc_pid_alive_sees_this_process_and_not_an_unused_pid() {
     // pid_max（既定 4194304）を超える pid は存在しない。
     assert!(!proc_pid_alive(u32::MAX - 1));
 }
+
+/// 持ち主の居ない run: 他に生きているインスタンスが無ければすぐ閉じ、居れば期限（`started_at + ttl`）まで待つ。
+#[test]
+fn an_ownerless_run_is_closed_at_once_without_live_holders_and_otherwise_after_its_deadline() {
+    let ttl = Duration::from_secs(65);
+    assert_eq!(
+        ownerless_run_decision(true, at(0), ttl, at(1)),
+        OwnerlessRun::Close {
+            why: OWNERLESS_GONE_WHY
+        }
+    );
+    // 期限前でも、持ち主が居なければ閉じる（起動直後の照合）。
+    assert_eq!(
+        ownerless_run_decision(true, at(100), ttl, at(0)),
+        OwnerlessRun::Close {
+            why: OWNERLESS_GONE_WHY
+        }
+    );
+    assert_eq!(
+        ownerless_run_decision(false, at(0), ttl, at(64)),
+        OwnerlessRun::Keep
+    );
+    assert_eq!(
+        ownerless_run_decision(false, at(0), ttl, at(65)),
+        OwnerlessRun::Close {
+            why: OWNERLESS_DEADLINE_WHY
+        }
+    );
+    assert_eq!(
+        ownerless_run_decision(false, at(0), ttl, at(1000)),
+        OwnerlessRun::Close {
+            why: OWNERLESS_DEADLINE_WHY
+        }
+    );
+}

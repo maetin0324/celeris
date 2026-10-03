@@ -8,11 +8,11 @@
 use super::*;
 use crate::orphan::{ORPHAN_TAKEOVER_REASON, OrphanTakeover};
 
-const SELF_ID: &str = "01NEWDAEMON0000000000000000";
+pub(super) const SELF_ID: &str = "01NEWDAEMON0000000000000000";
 /// 本番の result.json（SIGTERM で止められた claude-code の run）そのまま。
 const SIGTERM_RESULT: &str = r#"{"type":"error","message":"worker exited without a result message (exit=143)","retryable":true}"#;
 
-fn instance(id: &str, role: InstanceRole, pid: u32) -> DaemonInstance {
+pub(super) fn instance(id: &str, role: InstanceRole, pid: u32) -> DaemonInstance {
     let now = OffsetDateTime::now_utc();
     DaemonInstance {
         instance_id: id.into(),
@@ -27,7 +27,10 @@ fn instance(id: &str, role: InstanceRole, pid: u32) -> DaemonInstance {
 }
 
 /// 新しい active（自分の行を登録し、孤児の回収を有効にした dispatcher）。
-fn new_active(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>) -> Dispatcher {
+pub(super) fn new_active(
+    store: &Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+) -> Dispatcher {
     store
         .instance_register(&instance(SELF_ID, InstanceRole::Active, std::process::id()))
         .unwrap();
@@ -43,7 +46,7 @@ fn new_active(store: &Arc<dyn TaskStore>, adapter: Arc<dyn WorkerAdapter>) -> Di
 /// 旧デーモンが run を走らせている最中の DB（Task は Running、lease はまだ 14 分残っている、
 /// `WorkerStarted` と `runs` の行あり、`worker_finished` 無し）。`result` があれば
 /// `runs/<run_id>/result.json` に書く。`plan` なら v1 の計画の WU `a` の run にする。
-fn running_orphan(
+pub(super) fn running_orphan(
     store: &Arc<dyn TaskStore>,
     dir: &std::path::Path,
     result: Option<&str>,
@@ -181,7 +184,7 @@ fn took_over(store: &Arc<dyn TaskStore>, id: TaskId, run_id: &str) -> bool {
 
 /// 本番と同じ形なので、ここで作るアダプタは再 dispatch された run を長く走らせる（テストの
 /// 観察の邪魔をしない）。
-fn slow_adapter() -> Arc<dyn WorkerAdapter> {
+pub(super) fn slow_adapter() -> Arc<dyn WorkerAdapter> {
     Arc::new(InstantAdapter {
         terminal: Terminal::Done {
             summary: "s".into(),

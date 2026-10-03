@@ -48,6 +48,7 @@ tasks: [01M3QEQPP31ZB29RH6YGFGTAPF]
 | scratch/disk guard の後片付け | task-dispatch | `crates/task-dispatch/src/{dispatcher/housekeeping.rs,scratch_gc.rs}` | [ADR-0075](../agent-docs/adr/0075-tiered-build-cache.md) |
 | 工程統合・途中報告 | task-dispatch | `crates/task-dispatch/src/{dispatcher/phase_integration.rs,checkpoint.rs,reports.rs}` | [ADR-0074](../agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md) |
 | 並列取り込みの自動解消（記録・番号・生成物の分類と resolver、統合の依頼の型） | task-dispatch::auto_resolve | `crates/task-dispatch/src/auto_resolve.rs`（`auto_resolve/{classify,records,renumber,generated}.rs`）、段の統合は `crates/task-dispatch/src/integration.rs` | [2026-10-02 並列取り込みの自動解消](../agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md) |
+| 持ち主の居ない `running` の `runs` 行と手元のレビューの取りこぼしの回収 | task-dispatch::dispatcher | `crates/task-dispatch/src/{dispatcher/ownerless_runs.rs,orphan.rs}`（判定の規則は orphan.rs の ownerless_run_decision） | [2026-10-03 lease を持たない run の行](../agent-docs/adr/2026-10-03-ownerless-running-runs.md) |
 | 孤児run の回収・承認・policy | task-dispatch | `crates/task-dispatch/src/{orphan,approvals,policy,sessions,undeclared_artifacts}.rs` | [ADR-0005](../agent-docs/adr/0005-phase3-dispatch-and-worker.md) |
 
 ## task-worker — worker プロトコルと adapter（1 run = 1 プロセス起動）

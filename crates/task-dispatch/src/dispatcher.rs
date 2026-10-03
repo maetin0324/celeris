@@ -105,6 +105,8 @@ mod dispatch_run;
 mod followups;
 mod housekeeping;
 mod leases;
+/// 持ち主の居ない `running` の `runs` 行の照合（lease を持たない reviewer run 等）。
+mod ownerless_runs;
 mod phase_integration;
 mod planner_flow;
 mod provider_select;
@@ -1068,6 +1070,12 @@ pub struct Dispatcher {
     /// ADR-0079 付記「R6-1」D4: 最後に終端の task の `runs` 索引の `running` の行を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
     runs_reconciled_at: Option<OffsetDateTime>,
+    /// 最後に持ち主の居ない `running` の `runs` 行を照合した時刻（active かつ孤児の回収が有効になって
+    /// 最初の tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。`ownerless_runs.rs`）。
+    ownerless_reconciled_at: Option<OffsetDateTime>,
+    /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
+    /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
+    lost_review_watch: std::collections::HashSet<TaskId>,
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
@@ -1320,6 +1328,8 @@ impl Dispatcher {
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
             runs_reconciled_at: None,
+            ownerless_reconciled_at: None,
+            lost_review_watch: std::collections::HashSet::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scratch: ScratchState::default(),
@@ -1740,6 +1750,11 @@ impl Dispatcher {
         self.abort_stale_runs()?;
         // ADR-0079 付記「R6-1」D4: 終端の task の `running` のままの `runs` 行を閉じる（起動時と定期）。
         self.reconcile_terminal_runs();
+        // 手元のレビューの取りこぼし（判定の完了が届かないまま終わった・期限を越えた）を閉じる（毎 tick。
+        // draining 中も: 残ったままだと `in_flight` が 0 にならず drain が終わらない）。
+        self.reap_lost_reviews();
+        // lease を持たず、どのインスタンスも抱えていない `running` の `runs` 行を閉じる（起動時と定期）。
+        self.reconcile_ownerless_runs();
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
         // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。

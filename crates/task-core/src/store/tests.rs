@@ -5058,6 +5058,67 @@ fn run_index_round_trips_start_and_finish() {
     );
 }
 
+/// `runs_running` は `running` の行だけを `started_at` 昇順で返す（閉じた行は含めない）。
+#[test]
+fn runs_running_lists_only_running_rows_oldest_first() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let row = |run_id: &str, role: RunIndexRole, started_at: &str| RunRow {
+        run_id: run_id.into(),
+        task_id: task.id.to_string(),
+        work_unit_id: None,
+        role,
+        seq: 1,
+        status: RunIndexStatus::Running,
+        adapter: None,
+        model: None,
+        account: None,
+        session_id: None,
+        checkpoint: None,
+        usage: None,
+        metrics: None,
+        started_at: started_at.into(),
+        finished_at: None,
+    };
+    assert!(store.runs_running().unwrap().is_empty());
+    store
+        .run_index_start(row("late", RunIndexRole::Reviewer, "2026-09-24T00:10:00Z"))
+        .unwrap();
+    store
+        .run_index_start(row("early", RunIndexRole::Worker, "2026-09-24T00:00:00Z"))
+        .unwrap();
+    store
+        .run_index_start(row("closed", RunIndexRole::Worker, "2026-09-24T00:05:00Z"))
+        .unwrap();
+    let finished = OffsetDateTime::parse("2026-09-24T00:06:00Z", &Rfc3339).unwrap();
+    assert!(
+        store
+            .run_index_finish(
+                "closed",
+                RunIndexStatus::Completed,
+                None,
+                None,
+                None,
+                finished
+            )
+            .unwrap()
+    );
+    let running: Vec<(String, RunIndexRole)> = store
+        .runs_running()
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.run_id, r.role))
+        .collect();
+    assert_eq!(
+        running,
+        vec![
+            ("early".to_string(), RunIndexRole::Worker),
+            ("late".to_string(), RunIndexRole::Reviewer),
+        ]
+    );
+}
+
 /// Phase F5-fix3: `WorkerFinished` を書いたら、まだ `running` の `runs` 行は同じトランザクションで
 /// 終端になる（`end` から。無ければ `harness_error`）。既に閉じた行（`run_index_finish`）は変えない。
 #[test]

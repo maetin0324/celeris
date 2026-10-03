@@ -1790,6 +1790,12 @@ impl Dispatcher {
         let dispatch_ms = lap(&mut at);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
+        // Use the same injected clock as the rest of dispatch; the feed never performs I/O outside the store.
+        if self.accepting_new_work
+            && let Ok(at) = OffsetDateTime::from_unix_timestamp(now)
+        {
+            self.sync_notice_feed(at);
+        }
         let idle_ms = lap(&mut at);
         self.publish_snapshot();
         if started.elapsed() >= SLOW_TICK {

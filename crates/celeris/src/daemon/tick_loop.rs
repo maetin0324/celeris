@@ -51,7 +51,6 @@ pub(crate) async fn tick_loop(
     let mut notify_in_flight: HashSet<task_core::NotificationId> = HashSet::new();
     let mut notify_pending: Vec<task_core::Notification> = Vec::new();
     let mut notify_last: Option<std::time::Instant> = None;
-    // ADR-0037 D5（Phase 40 / 実機 2026-09-18）: backfill 禁止の基準になる celeris の起動時刻。
     let notify_started_at = OffsetDateTime::now_utc();
     // ADR-0037 D5: 429 が返っている間は次の送信を控える（`Retry-After` 秒）。
     let mut notify_blocked_until: Option<std::time::Instant> = None;
@@ -303,7 +302,14 @@ pub(crate) async fn tick_loop(
                         .unwrap_or(true);
                 if due {
                     notify_last = Some(std::time::Instant::now());
-                    match notify::schedule(store.as_ref(), &config.notify, notify_started_at, now) {
+                    let view = task_ops::view::ViewContext {
+                        workspace_root: config.workspace_root.clone(),
+                        retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
+                        retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
+                        max_requeues: config.max_requeues,
+                        clusters: config.cluster_view_infos(),
+                    };
+                    match notify::schedule_routes(store.as_ref(), &config.notify, &view, now) {
                         Ok(created) if !created.is_empty() => {
                             tracing::info!(count = created.len(), "notify: new notifications");
                         }
@@ -314,6 +320,25 @@ pub(crate) async fn tick_loop(
                     }
                     match store.notification_pending() {
                         Ok(pending) => {
+                            // Old notice-side rows may remain from before the two-route switch.
+                            // The feed is authoritative; retire these without sending them
+                            // individually. Keep human-side legacy rows for migration.
+                            let legacy: Vec<_> = pending
+                                .iter()
+                                .filter(|n| {
+                                    matches!(
+                                        n.kind,
+                                        task_core::NotificationKind::MilestoneReady
+                                            | task_core::NotificationKind::BadNews
+                                            | task_core::NotificationKind::SecretaryReply
+                                            | task_core::NotificationKind::TaskReady
+                                    )
+                                })
+                                .cloned()
+                                .collect();
+                            if let Err(e) = notify::discard_pending(store.as_ref(), &legacy, now) {
+                                tracing::warn!(error = %e, "notify: could not retire legacy rows");
+                            }
                             let url = notify::webhook_url(
                                 notify_secrets_dir.as_deref(),
                                 &config.notify.discord_webhook_secret,
@@ -325,7 +350,7 @@ pub(crate) async fn tick_loop(
                                         .filter(|n| !notify_in_flight.contains(&n.id))
                                         .cloned()
                                         .collect();
-                                    if let Some(batch) = notify::select_batch(&available) {
+                                    if let Some(batch) = notify::select_routes_batch(&available) {
                                         for id in &batch.ids {
                                             notify_in_flight.insert(*id);
                                         }

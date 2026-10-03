@@ -335,9 +335,13 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         fs::create_dir(&p).expect("parent")
     }
     let binary = std::env::var("CARGO_BIN_EXE_celeris-credentiald").expect("binary path");
+    // The child must only see this test's temporary HOME/XDG paths. A worker
+    // sandbox exports CELERIS_CREDENTIALD_DATA_DIR (the production data dir) and
+    // other CELERIS_*/XDG_* values; inheriting them sends vault/audit elsewhere.
     let child = Command::new(binary)
         .arg("serve")
         .arg(std::process::id().to_string())
+        .env_clear()
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
         .env_remove("CELERIS_CREDENTIALD_DATA_DIR")
@@ -365,7 +369,7 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         0o600
     );
     let init = ipc::call(&control, br#"{"op":"initialize_key"}"#).expect("init");
-    assert!(init.success);
+    assert!(init.success, "initialize_key failed: code={:?}", init.code);
     let f = Fixture::new();
     let reference = f.reference.clone();
     let policy = f.policy.clone();
@@ -411,6 +415,8 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         .arg("-c")
         .arg("import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.stdin.buffer.read()); s.shutdown(socket.SHUT_WR); sys.stdout.buffer.write(s.makefile('rb').read())")
         .arg(&resolve)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -449,6 +455,8 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     let mut command = Command::new(binary);
     command
         .arg("bridge")
+        .env_clear()
+        .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

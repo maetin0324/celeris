@@ -41,6 +41,7 @@ tasks: [01M3Z08A0T81ZQ60XVR62XJMPD]
 | 7 | verify | `migrate-to-local.sh verify`（常に read-only、dry-run と同じ） | 稼働中 | §3 の確認 |
 
 停止〜再開（3〜6）は差分コピーと DB 切替だけなので、presync・gc を先に流しておけば実データ量に対して短時間で終わる。
+`switch` が途中で失敗した場合は、config・paths.env・symlink・旧 DB・unit（drop-in を含む）を控えから自動で戻し、非ゼロで終了する。切替記録も消すため、原因を直して `switch` を再実行できる。
 
 ## 3. 確認方法
 

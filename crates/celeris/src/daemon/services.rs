@@ -110,7 +110,7 @@ pub(crate) async fn start_mcp(
 /// しない。`GET /llm/sources`（主 API）とプロキシ自身の両方がこの同じ `Arc` を使うため、`run()` が
 /// 主 API の起動より前に 1 度だけ呼ぶ）。アカウントプール（cooldown・観測値）はディスパッチャの帳簿を
 /// **そのまま共有する**（`crates/task-dispatch/src/dispatcher.rs` の `account_book`。別の写しを作らない）。
-/// Bearer は `[api] token_file` と同じ（`docs/llm-source.md`）。
+/// Bearer は `[api] token_file` と同じ（`docs/guides/llm-source.md`）。
 pub(crate) fn build_llm_proxy_state(
     config: &Config,
     dispatcher: &Dispatcher,

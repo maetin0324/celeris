@@ -7,7 +7,7 @@
 
 import type { McpClient, McpScope } from "~/celeris/types";
 
-/** `docs/mcp.md` §4 の表と同じ並び（`celerisctl mcp client add` の既定に出てくる順）。 */
+/** `docs/guides/mcp.md` §4 の表と同じ並び（`celerisctl mcp client add` の既定に出てくる順）。 */
 const SCOPE_ORDER: readonly McpScope[] = [
   "knowledge:read",
   "knowledge:propose",
@@ -22,7 +22,7 @@ const SCOPE_ORDER: readonly McpScope[] = [
   "skills:write",
 ];
 
-/** チップの並び（`docs/mcp.md` §4 の並び順に揃え、重複は落とす）。未知の値は末尾にアルファベット順で足す。 */
+/** チップの並び（`docs/guides/mcp.md` §4 の並び順に揃え、重複は落とす）。未知の値は末尾にアルファベット順で足す。 */
 export function sortMcpScopes(scopes: readonly McpScope[] | null | undefined): McpScope[] {
   const unique = Array.from(new Set(scopes ?? []));
   const known = SCOPE_ORDER.filter((s) => unique.includes(s));
@@ -52,7 +52,7 @@ export function mcpScopeLabel(scope: McpScope): string {
 /**
  * 認証の種類（ADR-0056 D1）: `token_hash` が有れば `auth = "token"` の口で発行したトークン付きの客、
  * 無ければ `--no-token`（`auth = "none"` の口に `client = "<id>"` で固定する専用）。
- * 状態バッジは 1 語（`docs/adr/0055-mobile-ux.md` D1-3。`gui/scripts/mobile-audit.mjs` が機械検査する）。
+ * 状態バッジは 1 語（`agent-docs/adr/0055-mobile-ux.md` D1-3。`gui/scripts/mobile-audit.mjs` が機械検査する）。
  */
 export function mcpAuthKindWord(client: Pick<McpClient, "token_hash">): "token" | "none" {
   return client.token_hash ? "token" : "none";
@@ -64,7 +64,7 @@ export function mcpClientStatusWord(client: Pick<McpClient, "revoked_at">): "rev
 }
 
 /**
- * 接続 URL のヒント（`docs/mcp.md` §2 の既定値。ADR-0056 D1 の 2 つの口 — `auth = "token"` の
+ * 接続 URL のヒント（`docs/guides/mcp.md` §2 の既定値。ADR-0056 D1 の 2 つの口 — `auth = "token"` の
  * 既定 `127.0.0.1:18200`、`auth = "none"`（loopback 限定トンネル専用）の既定 `127.0.0.1:18201`）。
  * **トークンの値は一切含まない**（`token_hash` はそもそも値そのものを持たない）。実際の `listen` は
  * デプロイごとの設定（`[mcp]`）で変わりうるので、あくまで「よくある既定」のヒント（Phase 84、

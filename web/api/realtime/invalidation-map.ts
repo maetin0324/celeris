@@ -106,6 +106,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   execution_planned: { sets: TLE },
   work_unit_transitioned: { sets: TLE },
   execution_gated: { sets: TLE },
+  execution_routed: { sets: ["T", "E"] },
   execution_hint_set: { sets: TLE },
   repair_scheduled: { sets: TLE },
   quota_estimated: { sets: ["T", "R", "E", "accounts", "providers", "metrics", "P"] },

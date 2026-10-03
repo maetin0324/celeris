@@ -166,7 +166,7 @@ export function OverviewTab({
         <TaskEditSection key={task.updated_at} detail={detail} org={org} milestones={milestones} genres={genres} />
       )}
 
-      {/* docs/adr/0130 D1/D2/D4: expected/actual write-set と target からの behind commits・age。 */}
+      {/* agent-docs/adr/0130 D1/D2/D4: expected/actual write-set と target からの behind commits・age。 */}
       <WriteSetSection detail={detail} />
 
       <section data-testid="relations-section">

@@ -1,4 +1,4 @@
-//! 全要求に掛ける共通の検査と応答ヘッダ（`docs/gui/api.md` §1.2〜§1.5）。
+//! 全要求に掛ける共通の検査と応答ヘッダ（`docs/api/v1/gui-api.md` §1.2〜§1.5）。
 //!
 //! 順序: Host 検査 → `OPTIONS` は 405 → Bearer 認証（`/health` を除く）→ `POST` の Origin / Content-Type / 本文サイズ。
 //! 応答には `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Request-Id` を付け、ハンドラが返した

@@ -1,4 +1,4 @@
-//! プロバイダ別の run 集計（`docs/gui/api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
+//! プロバイダ別の run 集計（`docs/api/v1/gui-api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
 //!
 //! 最初の `GET /providers` で `events_since(0, 5000)` を繰り返して全イベントを 1 回走査し、以後は同じ要求の時点で
 //! 前回の続きから増分だけを読む。
@@ -190,7 +190,7 @@ fn format_day(day: Date) -> String {
     )
 }
 
-/// ADR-0024/0025: `WorkerStarted.account` と対応する `WorkerFinished` から集計する（`docs/gui/api.md` §3.29 の
+/// ADR-0024/0025: `WorkerStarted.account` と対応する `WorkerFinished` から集計する（`docs/api/v1/gui-api.md` §3.29 の
 /// `stats`）。`StatsState` とは別のカーソルを持つ（アカウント別の集計は `GET /accounts` からしか使わないため）。
 /// キーは `"<adapter>:<account id>"`（同じ id でもアダプタが違えば別のアカウントとして集計する。ADR-0025 D1）。
 #[derive(Debug, Default)]

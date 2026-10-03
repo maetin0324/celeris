@@ -72,9 +72,9 @@ export interface WorkspacePlace {
 
 /**
  * `Task.workspace`（`WorkspaceSpec::Local{path}` / `Remote{cluster, path}`）を「置き場所」の表示に変える。
- * - Local: `workspace_dir`（celeris が絶対化した値、docs/gui/api.md §3.5）をそのまま出す。無ければ生の `path`。
+ * - Local: `workspace_dir`（celeris が絶対化した値、docs/api/v1/gui-api.md §3.5）をそのまま出す。無ければ生の `path`。
  * - Remote: コードが実際にあるのはクラスタ側（`task.workspace.path`）。`workspace_dir` は手元の写しでしかない
- *   ので `text` には使わない（docs/gui/api.md §3.5「Remote{cluster, path} では手元の写し…クラスタ側のパスは
+ *   ので `text` には使わない（docs/api/v1/gui-api.md §3.5「Remote{cluster, path} では手元の写し…クラスタ側のパスは
  *   task.workspace.path」）。ローカルのパスではないのでリンクにはしないが、ADR-0039 D3 どおり「手元の写し」
  *   として案内文には出す（実機の事故 2026-09-18: ワーカーが `ssh` でリモートの作業ツリーへ直接書いた）。
  */
@@ -99,7 +99,7 @@ export function isSourcesArtifact(name: string): boolean {
   return name === SOURCES_JSON_NAME;
 }
 
-/** `sources.json` の 1 件（docs/adr/0031-web-research-evidence-gate.md「`[{url, title, engine?, cited: bool}]`」）。 */
+/** `sources.json` の 1 件（agent-docs/adr/0031-web-research-evidence-gate.md「`[{url, title, engine?, cited: bool}]`」）。 */
 export interface SourceLink {
   url: string;
   title: string;

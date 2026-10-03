@@ -1,4 +1,4 @@
-//! 汎用 ACP（Agent Client Protocol）ワーカーアダプタ（DESIGN §5.4 提案 P-63, ADR-0026）。
+//! 汎用 ACP（Agent Client Protocol）ワーカーアダプタ（提案 P-63, ADR-0026）。
 //!
 //! ACP はここでは「運搬・観測・生存管理」だけを担う（ADR-0026 D1）。エージェントの最終回答は成功判定に
 //! 使わない。終端は `claude-code`/`codex` と同じく `artifacts/result.json`（ADR-0006 D3）から合成し、
@@ -833,7 +833,7 @@ async fn run_acp(
     // 一律で拒否する方が安全という判断（`choose_permission_option` の `Deny` 経路をそのまま使う。
     // `reject_always` → `reject_once` → 選択肢の最初、の優先順は変えない）。読み取りだけの道具
     // （`celerisctl knowledge search|get` 等）は、モデルが許可要求を経ない組み込みの読み取りで
-    // 済ませられる範囲でしか使えない（ACP エージェント実装依存。`docs/adr/0054-*.md` の「Phase 68
+    // 済ませられる範囲でしか使えない（ACP エージェント実装依存。`agent-docs/adr/0054-*.md` の「Phase 68
     // 追記」に明記）。
     let config = &if req.context.conversation_addressee
         == Some(crate::protocol::ConversationAddressee::Secretary)

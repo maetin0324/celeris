@@ -1,4 +1,4 @@
-//! ADR-0079 D7（Phase R3a）: 人への決定の要求（`docs/celeris-api-v1.md` の「決定の要求」）。
+//! ADR-0079 D7（Phase R3a）: 人への決定の要求（`docs/api/v1/gui-api.md` の「決定の要求」）。
 //!
 //! - `GET /decisions?open=&root_id=` — 一覧（読み取り、通常の認証）。`open=true` は未回答だけ、`false` は
 //!   回答済み・取り下げ済みだけ、省略は全件。`root_id` で 1 つの木に絞る。

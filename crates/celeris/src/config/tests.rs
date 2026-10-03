@@ -3555,3 +3555,122 @@ fn hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem() {
     ));
     assert!(!is_mount_point("garbage\n", Path::new("/local")));
 }
+
+/// ADR-0139 の試験用: proxy を有効にし、`[api]` のトークンと `[secrets]` の鍵を置いた設定。
+fn langmem_proxy_config(dir: &Path, base_url: &str, secret: Option<&str>) -> Config {
+    let secrets_dir = dir.join("secrets");
+    std::fs::create_dir_all(&secrets_dir).unwrap();
+    let token_file = dir.join("api.token");
+    std::fs::write(&token_file, "proxy-token\n").unwrap();
+    let secret_line = match secret {
+        Some(value) => {
+            std::fs::write(secrets_dir.join("celeris-api-token"), format!("{value}\n")).unwrap();
+            "api_key_secret = \"celeris-api-token\"".to_string()
+        }
+        None => String::new(),
+    };
+    let text = format!(
+        r#"
+[api]
+token_file = "{token}"
+
+[secrets]
+dir = "{secrets}"
+
+[llm_proxy]
+enabled = true
+listen = "127.0.0.1:18100"
+
+[knowledge.langmem]
+enabled = true
+provider = "openai-compatible"
+base_url = "{base_url}"
+model = "celeris/cheap"
+{secret_line}
+
+[[providers]]
+id = "langmem-main"
+adapter = "langmem"
+tiers = ["cheap", "standard"]
+"#,
+        token = token_file.display(),
+        secrets = secrets_dir.display(),
+    );
+    toml::from_str(&text).unwrap()
+}
+
+/// ADR-0139 D2: `base_url` が同じ celeris の llm-proxy を指すなら、langmem（アダプタと probe）の鍵は
+/// proxy が照合する `[api]` のトークン。`api_key_secret` が無い・違う値でも bearer は必ず渡る。
+#[test]
+fn langmem_api_key_config_uses_the_api_token_when_targeting_llm_proxy() {
+    for (secret, warns) in [
+        (Some("proxy-token"), false),
+        (Some("other-value"), true),
+        (None, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", secret);
+        assert!(cfg.langmem_targets_llm_proxy());
+        assert_eq!(
+            cfg.langmem_api_key().as_deref(),
+            Some("proxy-token"),
+            "{secret:?}"
+        );
+        assert_eq!(
+            cfg.dispatch_config().knowledge.langmem_api_key.as_deref(),
+            Some("proxy-token")
+        );
+        let warnings = cfg.langmem_auth_warnings();
+        assert_eq!(!warnings.is_empty(), warns, "{secret:?}: {warnings:?}");
+        // 警告に鍵の値を載せない。
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.contains("proxy-token") && !w.contains("other-value"))
+        );
+    }
+    // localhost 表記も同じ proxy。
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = langmem_proxy_config(dir.path(), "http://localhost:18100/v1", None);
+    assert_eq!(cfg.langmem_api_key().as_deref(), Some("proxy-token"));
+}
+
+/// ADR-0139 D2/D3: proxy 以外を指すときは `api_key_secret` の値。解決できなければ起動時に警告する。
+#[test]
+fn langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18000/v1", Some("sk-direct"));
+    assert!(!cfg.langmem_targets_llm_proxy());
+    assert_eq!(cfg.langmem_api_key().as_deref(), Some("sk-direct"));
+    assert!(cfg.langmem_auth_warnings().is_empty());
+
+    std::fs::remove_file(dir.path().join("secrets/celeris-api-token")).unwrap();
+    assert!(cfg.langmem_api_key().is_none());
+    let warnings = cfg.langmem_auth_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("cannot be resolved"), "{warnings:?}");
+}
+
+/// ADR-0139 D3: proxy を指しているのに `[api]` のトークンも `api_key_secret` も読めなければ、
+/// run を起こす前（設定の読み込み時）に警告する。無効な `[knowledge.langmem]` は何も言わない。
+#[test]
+fn langmem_auth_warnings_config_reports_a_missing_proxy_bearer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", None);
+    std::fs::remove_file(dir.path().join("api.token")).unwrap();
+    assert!(cfg.langmem_api_key().is_none());
+    let warnings = cfg.langmem_auth_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("401"), "{warnings:?}");
+
+    cfg.knowledge.langmem.enabled = false;
+    assert!(cfg.langmem_auth_warnings().is_empty());
+}
+
+/// ADR-0139 D1: verify（本番の config を読む staging）は `[llm_proxy] listen` に bind しない。
+#[test]
+fn verify_mode_config_does_not_serve_the_llm_proxy() {
+    use task_core::DaemonMode;
+    assert!(crate::daemon::run::serves_llm_proxy(DaemonMode::Normal));
+    assert!(!crate::daemon::run::serves_llm_proxy(DaemonMode::Verify));
+}

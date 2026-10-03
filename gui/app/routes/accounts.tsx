@@ -703,7 +703,7 @@ function LlmAccountRow({ account, nowSec }: { account: LlmSourceAccountView; now
 /**
  * 「MCP クライアント」節（ADR-0056 D4、GUI Phase 80）: `GET /mcp/clients` をそのまま表示する
  * （`LlmSourcesSection` と同じ作り。値の再計算はしない。判断＝認証・スコープ・流量制限は
- * `crates/celeris-mcp` の中で決まっている）。「接続のしかた」は `/help#mcp`（`docs/mcp.md` の要約）
+ * `crates/celeris-mcp` の中で決まっている）。「接続のしかた」は `/help#mcp`（`docs/guides/mcp.md` の要約）
  * へのリンクだけ持つ。
  */
 function McpClientsSection({
@@ -808,7 +808,7 @@ function McpClientCard({ client, fetchedAt }: { client: McpClient; fetchedAt: st
               <span className="text-fg-subtle">未使用</span>
             )}
           </DataItem>
-          {/* Phase 84: 接続 URL のヒント（`docs/mcp.md` §2 の既定値。トークンは絶対に出さない）。
+          {/* Phase 84: 接続 URL のヒント（`docs/guides/mcp.md` §2 の既定値。トークンは絶対に出さない）。
               コピーしてクライアント側の設定にそのまま貼れるように `CopyButton` を添える。 */}
           <DataItem label="接続 URL のヒント" wide>
             <span className="flex flex-wrap items-center gap-2" data-testid="mcp-client-url-hint">

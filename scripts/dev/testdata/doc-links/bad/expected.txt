@@ -1,0 +1,6 @@
+CLAUDE.md:2: docs/MISSING.md
+crates/x/src/lib.rs:1: ../../../docs/api.json
+docs/SPEC.md:3: guides/nope.md#x
+docs/SPEC.md:4: ../agent-docs/gone/
+gui/app/p.ts:1: docs/nope.md
+scripts/x.sh:1: agent-docs/progress/phase-x.md

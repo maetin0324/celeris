@@ -113,7 +113,7 @@ render_unit() {
 
 # ADR-0129 (1): sccache/cache-server units are no longer deployed. Existing host units
 # are stopped and removed by a human following docs/ops/sccache-l1.md.
-# web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/web/parallel-operation.md）。
+# web ADR-W3 D1（P6-02）: celeris-web@.service（web/ の gateway、gui/ と並行）も置くだけ。有効化は人（docs/ops/web-parallel-operation.md）。
 UNITS="celeris@.service celeris-gui@.service celeris-web@.service celeris-web-lan.socket celeris-web-lan.service"
 if [ -n "$HOT_ROOT" ]; then
   UNITS="$UNITS celeris-credentiald@.service"
@@ -176,4 +176,4 @@ fi
 
 systemctl --user daemon-reload
 sd_log "systemctl --user daemon-reload done"
-sd_log "next: scripts/selfdeploy/promote.sh <sha12> (a human runs this; see docs/selfdeploy.md)"
+sd_log "next: scripts/selfdeploy/promote.sh <sha12> (a human runs this; see docs/ops/selfdeploy.md)"

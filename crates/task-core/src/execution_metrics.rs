@@ -3,7 +3,7 @@
 //! 純粋なデータ定義と純粋関数だけを置く（I/O・LLM 呼び出しはしない。ADR-0001 D2）。`summarize` は
 //! `Task` と、そのタスクの `events`（古い順）だけから決定的に `ExecutionMetrics` を組み立てる。
 //!
-//! **ADR からの逸脱（`docs/adr/0072-task-execution-decomposition.md` の「Phase E5 実装時の
+//! **ADR からの逸脱（`agent-docs/adr/0072-task-execution-decomposition.md` の「Phase E5 実装時の
 //! 逸脱・明確化」参照）**: `wall_ms`（D19「最初の dispatch から終端まで」）は、`Event` 自体が
 //! タイムスタンプを持たない（`EventRow.ts` は store 層にしかない）ため、`Task.created_at` →
 //! `Task.updated_at`（タスクが終端になったときの最後の書き込み）で近似する。`summarize` の

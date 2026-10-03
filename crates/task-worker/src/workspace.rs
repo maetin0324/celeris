@@ -1,4 +1,4 @@
-//! `Workspace`（DESIGN §5.8）。本プロジェクトは `LocalWorkspace` のみ実装し、
+//! `Workspace`（作業場所。docs/SPEC.md §3.7）。本プロジェクトは `LocalWorkspace` のみ実装し、
 //! `RemoteWorkspace` は接続層プロジェクトが実装するまで骨組みのみ（ADR-0005 D3）。
 //!
 //! 1 インスタンス = 1 タスクの作業ディレクトリ。ディスパッチャが run ごとに
@@ -40,7 +40,7 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-/// DESIGN §5.8 の trait。
+/// 作業場所の trait（docs/SPEC.md §3.7）。
 #[async_trait]
 pub trait Workspace: Send + Sync {
     /// 作業ディレクトリと成果物ディレクトリ（ADR-0036: `artifacts/` または

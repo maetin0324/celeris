@@ -47,7 +47,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
 }
 
 // ---------------------------------------------------------------------------
-// 応答の型（`docs/gui/api.md` §3.98〜3.102）
+// 応答の型（`docs/api/v1/gui-api.md` §3.98〜3.102）
 // ---------------------------------------------------------------------------
 
 /// ツリーの 1 件（`GET /knowledge/tree`）。
@@ -193,7 +193,7 @@ pub struct KnowledgeCandidate {
     /// ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
     /// 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
     /// `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
-    /// `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
+    /// `target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
 }

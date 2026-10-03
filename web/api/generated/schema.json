@@ -4700,7 +4700,7 @@
       "type": "object"
     },
     "CriterionSpec": {
-      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。",
+      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -5135,7 +5135,7 @@
           ]
         },
         "filesystem": {
-          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
+          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
           "type": [
             "string",
             "null"
@@ -10866,7 +10866,7 @@
           "type": "string"
         },
         "op": {
-          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/knowledge.md` 参照）。",
+          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。",
           "type": [
             "string",
             "null"
@@ -12705,7 +12705,7 @@
     },
     "NewPlanSpec": {
       "additionalProperties": false,
-      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。",
+      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。",
       "properties": {
         "goal": {
           "description": "大目標。1行目の先頭80文字が `title` になる。",
@@ -16174,7 +16174,7 @@
         },
         "method": {
           "$ref": "#/$defs/QuotaMethod",
-          "description": "**ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
+          "description": "**ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
         },
         "resets_at": {
           "format": "int64",
@@ -21572,7 +21572,7 @@
       "properties": {
         "cascaded": {
           "default": [],
-          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。",
+          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。",
           "items": {
             "$ref": "#/$defs/TaskRef"
           },

@@ -39,6 +39,7 @@ optional dependencies installed.
 """
 
 import json
+import os
 import sys
 
 MAX_SUMMARY_CHARS = 1500
@@ -117,7 +118,9 @@ def build_chat_model(llm):
     provider = llm.get("provider") or "openai-compatible"
     model = llm.get("model")
     base_url = llm.get("base_url")
-    api_key = llm.get("api_key") or "not-needed"
+    # ADR-0139 D4: celeris puts the same key into the env; use it if the JSON lacks one.
+    env_key = os.environ.get("ANTHROPIC_API_KEY" if provider == "anthropic" else "OPENAI_API_KEY")
+    api_key = llm.get("api_key") or env_key or "not-needed"
     if provider == "anthropic":
         from langchain_anthropic import ChatAnthropic
 

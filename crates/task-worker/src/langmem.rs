@@ -186,6 +186,18 @@ impl WorkerAdapter for LangMemAdapter {
     }
 }
 
+/// ADR-0139 D4: ランナーの起動 env に入れる鍵（`provider` に応じた 1 つの変数）。鍵が無ければ空。
+pub(crate) fn api_key_env(config: &LangMemConfig) -> Vec<(String, String)> {
+    let Some(key) = config.api_key.as_ref().filter(|k| !k.is_empty()) else {
+        return Vec::new();
+    };
+    let var = match config.provider {
+        LangMemProvider::OpenaiCompatible => "OPENAI_API_KEY",
+        LangMemProvider::Anthropic => "ANTHROPIC_API_KEY",
+    };
+    vec![(var.to_string(), key.clone())]
+}
+
 async fn run_langmem(
     config: &LangMemConfig,
     req: &RunRequest,
@@ -238,6 +250,9 @@ async fn run_langmem(
         .arg(&script_path)
         .arg(&input_path)
         .envs(config.env.iter().cloned())
+        // ADR-0139 D4: 鍵は env にも入れる。provider 行・`[adapters.langmem].env` の古い値より後に
+        // 置くので、それらが勝たない。
+        .envs(api_key_env(config))
         .current_dir(req.cwd())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

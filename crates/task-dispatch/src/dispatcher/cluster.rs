@@ -103,7 +103,7 @@ pub type TunnelProbe = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 ///
 /// **listener の有無と target の健康は別の観測**（Phase 85 の本旨）: listener が有るのに target が
 /// 不健全（先方が落ちている）なら `-O forward` は再発行しない（listener は既に有るので無意味な上、
-/// 本番でこれが毎 tick 起きて tick が 6 秒に伸びた。`docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
+/// 本番でこれが毎 tick 起きて tick が 6 秒に伸びた。`agent-docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
 pub type TunnelListenerProbe = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// ADR-0053 Phase 84b: クラスタの ssh master の多重接続の有無を調べるフック。引数は

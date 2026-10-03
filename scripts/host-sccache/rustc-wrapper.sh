@@ -1,6 +1,6 @@
 #!/bin/sh
 # host の ~/.cargo/config.toml ([build] rustc-wrapper) から呼ばれる POSIX sh 台本。
-# ADR-0075 R7-7 の挙動を host 側へ移したもの（docs/adr/0129-host-sccache-reflink-targets.md §2）。
+# ADR-0075 R7-7 の挙動を host 側へ移したもの（agent-docs/adr/0129-host-sccache-reflink-targets.md §2）。
 #
 # cargo の rustc-wrapper 規約: $1 が実際の rustc、残り($2..)が rustc への引数。
 # sccache が見つからない、または server に短い timeout で届かないときは、sccache を経由せず

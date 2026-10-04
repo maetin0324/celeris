@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 import { daemonBadges, inboxItemsBadge } from "../../api/queries/badges";
-import { inboxItemsQuery } from "../../api/queries/inbox-notifications";
+import { inboxItemsQuery, unreadCountQuery } from "../../api/queries/inbox-notifications";
 import {
   DAEMON_INTERVAL_MS,
   daemonRestQuery,
@@ -51,6 +51,14 @@ export function useShellServerState(authenticated: boolean) {
     refetchIntervalInBackground: false,
   });
 
+  // 通知の未読数（nav の badge とブラウザ通知の根拠）。notifications_changed で取り直し、15 s の poll は補完。
+  const notifications = useQuery({
+    ...unreadCountQuery,
+    enabled: authenticated,
+    refetchInterval: pollInterval(INBOX_INTERVAL_MS, active),
+    refetchIntervalInBackground: false,
+  });
+
   // 断 → 復旧の遷移で、表示中（active）の query だけ取り直す。
   const wasDown = useRef(false);
   const down = health.isError;
@@ -67,6 +75,7 @@ export function useShellServerState(authenticated: boolean) {
     down,
     inboxBadge: inbox.data ?? null,
     approvalsBadge: daemon.data?.approvalsPending ?? null,
-    reportsLive: daemon.data?.reports ?? null,
+    notificationsBadge: notifications.data?.unread ?? null,
+    notificationsUnread: notifications.data ?? null,
   };
 }

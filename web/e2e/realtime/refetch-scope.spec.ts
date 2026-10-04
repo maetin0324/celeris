@@ -32,7 +32,13 @@ for (const screen of v3Screens()) {
           .filter(
             (route) =>
               route.startsWith("/api/v1/") &&
-              !["/api/v1/stream", "/api/v1/health", "/api/v1/inbox/items", "/api/v1/daemon"].includes(route),
+              ![
+                "/api/v1/stream",
+                "/api/v1/health",
+                "/api/v1/inbox/items",
+                "/api/v1/notifications/unread-count",
+                "/api/v1/daemon",
+              ].includes(route),
           ),
       );
       const screenBefore = Object.fromEntries([...screenPaths].map((route) => [route, count(route)]));

@@ -18,7 +18,16 @@ enum Hook {
         adapter: &'static str,
         account: Option<&'static str>,
     },
+    /// 走っている run に人がコメントする（API と同じ `post_human_comment`）。run は返らず、dispatcher が
+    /// 割り込みで止めるまで待つ。`drop_session` なら先に session の jsonl を消す（claude が session を
+    /// 書き終える前に止められた再現。`with_config_dir` が要る）。
+    CommentInterrupt {
+        drop_session: bool,
+    },
 }
+
+/// [`Hook::CommentInterrupt`] が書く人のコメント。
+const INTERRUPT_BODY: &str = "方針を変えたい。先に設計を書いて";
 
 struct ClaudeScriptAdapter {
     store: Arc<dyn TaskStore>,
@@ -231,6 +240,23 @@ impl WorkerAdapter for ClaudeScriptAdapter {
                     ..current
                 };
                 self.store.work_unit_session_create(&rewritten).unwrap();
+            }
+            Hook::CommentInterrupt { drop_session } => {
+                if drop_session {
+                    let dir = self.config_dir.as_ref().expect("with_config_dir");
+                    let session = req.context.session.as_ref().expect("a session handle");
+                    std::fs::remove_file(session_jsonl(dir, req.cwd(), &session.session_id))
+                        .expect("remove session jsonl");
+                }
+                task_ops::comment::post_human_comment(
+                    self.store.as_ref(),
+                    req.task.id,
+                    INTERRUPT_BODY.into(),
+                    OffsetDateTime::now_utc(),
+                )
+                .expect("post the interrupting comment");
+                // 割り込みで止められる（JoinHandle の abort）まで返らない。
+                std::future::pending::<()>().await;
             }
         }
         if matches!(terminal, Terminal::Done { .. }) {
@@ -1505,5 +1531,243 @@ async fn session_resume_after_restart_kept_session_file_resumes_same_session() {
         body.lines().count(),
         2,
         "claude appended to the same session"
+    );
+}
+
+// ---- 付記（2026-10-04、comment-resume）: 人のコメントで止めた run の続きも同じ session を resume する ----
+
+/// 割り込み用の台本の 1 行（terminal は使われない。run は割り込みで止まる）。
+fn comment_interrupt(drop_session: bool) -> (Terminal, Hook) {
+    (
+        Terminal::Done {
+            summary: "unused".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        Hook::CommentInterrupt { drop_session },
+    )
+}
+
+/// 付記 comment-resume: atomic task の run が人のコメントで止まったら、次の run は同じ session id を
+/// `--resume` で受け取り（reason=resumed）、コメント本文がその run の入力（前置きの先頭の割り込み）に載る。
+/// 修正前は判断表 #3 で `fresh (reason=not_continuation)` だった。
+#[tokio::test]
+async fn session_resume_comment_interrupt_resumes_same_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_id = atomic_task(dir.path(), &store);
+    let adapter = Arc::new(
+        ClaudeScriptAdapter::new(
+            &store,
+            Vec::new(),
+            vec![(
+                "atomic",
+                vec![(yielded(), Hook::None), comment_interrupt(false)],
+            )],
+        )
+        .with_config_dir(config.path()),
+    );
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let runs = adapter.runs_of("atomic");
+    assert_eq!(runs.len(), 3, "yield → comment interrupt → done");
+    let first = session_of(&runs[0]);
+    assert!(!first.resume);
+    let interrupted = session_of(&runs[1]);
+    assert!(interrupted.resume && interrupted.session_id == first.session_id);
+    assert!(runs[1].interrupt.is_none());
+    let after = session_of(&runs[2]);
+    assert!(after.resume, "the run after a comment interrupt resumes");
+    assert_eq!(after.session_id, first.session_id);
+    assert_eq!(
+        session_argv(&runs[2]),
+        vec!["--resume".to_string(), first.session_id.clone()]
+    );
+    assert_eq!(
+        runs[2].interrupt.as_deref(),
+        Some(INTERRUPT_BODY),
+        "the comment is the next input of the resumed session"
+    );
+    let prompt = task_worker::claude_code::build_prompt(
+        &store.get(task_id).unwrap().unwrap(),
+        &runs[2],
+        "run",
+        "artifacts",
+    );
+    assert!(
+        prompt.contains(&format!("**人からの割り込み**: {INTERRUPT_BODY}")),
+        "{prompt}"
+    );
+    let events = store.events_for(task_id).unwrap();
+    assert!(
+        events.iter().any(|(_, e)| matches!(e, Event::WorkerFinished { outcome, .. } if outcome == "interrupted: comment")),
+        "{events:?}"
+    );
+    let lines = session_lines(&store, task_id);
+    assert_eq!(
+        lines,
+        vec![
+            "continuation session: fresh (reason=independent_wu)".to_string(),
+            format!(
+                "continuation session: resumed (session={})",
+                first.session_id
+            ),
+            format!(
+                "continuation session: resumed (session={})",
+                first.session_id
+            ),
+        ],
+        "a comment interrupt is no longer not_continuation"
+    );
+}
+
+/// 付記 comment-resume: WU の run がコメントで止まった（工程の lease。run は abort で閉じられる）ときも、
+/// その WU の次の run は同じ session を resume し、コメント本文を受け取る。
+#[tokio::test]
+async fn session_resume_comment_interrupt_resumes_work_unit_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_id = three_step_task(dir.path(), &store);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![("a", vec![comment_interrupt(false)])],
+    ));
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 2, "comment interrupt → done");
+    let (s1, s2) = (session_of(&a[0]), session_of(&a[1]));
+    assert!(!s1.resume);
+    assert!(s2.resume, "the work unit run after a comment resumes");
+    assert_eq!(s2.session_id, s1.session_id);
+    assert_eq!(a[1].interrupt.as_deref(), Some(INTERRUPT_BODY));
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| *l == format!("continuation session: resumed (session={})", s1.session_id)),
+        "{lines:?}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=not_continuation)"),
+        "{lines:?}"
+    );
+}
+
+/// 付記 comment-resume: コメントで止めたとき claude の session（jsonl）がまだ無い・壊れているなら、resume は
+/// 拒否され、その session を retire して checkpoint 前置きの新しい session に倒れる（reason=resume_rejected）。
+/// コメント本文はやり直しの run にも載る。
+#[tokio::test]
+async fn session_resume_comment_interrupt_missing_session_falls_back_to_checkpoint() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task_id = atomic_task(dir.path(), &store);
+    let adapter = Arc::new(
+        ClaudeScriptAdapter::new(
+            &store,
+            Vec::new(),
+            vec![(
+                "atomic",
+                vec![(yielded(), Hook::None), comment_interrupt(true)],
+            )],
+        )
+        .with_config_dir(config.path()),
+    );
+    let mut d = claude_dispatcher(&store, adapter.clone());
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let runs = adapter.runs_of("atomic");
+    assert_eq!(
+        runs.len(),
+        4,
+        "yield → comment interrupt → rejected resume → fresh retry"
+    );
+    let first = session_of(&runs[0]);
+    let rejected = session_of(&runs[2]);
+    assert!(rejected.resume && rejected.session_id == first.session_id);
+    let retry = session_of(&runs[3]);
+    assert!(!retry.resume, "a missing session is not resumed again");
+    assert_ne!(retry.session_id, first.session_id);
+    let cont = runs[3]
+        .continuation
+        .as_ref()
+        .expect("the fallback carries the latest checkpoint");
+    assert_eq!(cont.checkpoint["next_action"], "仕上げに入る");
+    assert_eq!(
+        runs[3].interrupt.as_deref(),
+        Some(INTERRUPT_BODY),
+        "the comment still reaches the fallback run"
+    );
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l == "continuation session: fresh (reason=resume_rejected)"),
+        "{lines:?}"
+    );
+    let current = store
+        .work_unit_session_current(task_id, None)
+        .unwrap()
+        .expect("the fallback session row");
+    assert_eq!(current.session_id, retry.session_id);
+}
+
+/// 付記 comment-resume: 段のある計画（v2、工程の lease）の WU の run は lease を持たないので、割り込みの
+/// `WorkerFinished` は `abort_stale_runs` の `interrupted: aborted …` になる。直前の遷移がコメントの割り込みなら
+/// その WU の次の run も同じ session を resume し、コメント本文を受け取る。
+#[tokio::test]
+async fn session_resume_comment_interrupt_resumes_phase_work_unit_session() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "true");
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+    adopt_v2_plan(&store, task_id, &["core"], vec![v2_wu("a", "core", &[])]);
+    let adapter = Arc::new(ClaudeScriptAdapter::new(
+        &store,
+        Vec::new(),
+        vec![("a", vec![comment_interrupt(false)])],
+    ));
+    let mut d = dispatcher_with_adapter_id(store.clone(), adapter.clone(), 2, false, "claude-code");
+    d.config.workspace_root = root.path().to_path_buf();
+    d.config.execution.max_parallel_work_units = 2;
+    d.config.execution.max_continuations_per_work_unit = 10;
+    let report = run_until_idle(&mut d, 700).await;
+    assert!(report.idle, "{report:?}");
+    assert_eq!(store.get(task_id).unwrap().unwrap().status, Status::Done);
+
+    let a = adapter.runs_of("a");
+    assert_eq!(a.len(), 2, "comment interrupt → done");
+    let (s1, s2) = (session_of(&a[0]), session_of(&a[1]));
+    assert!(!s1.resume);
+    assert!(s2.resume, "the phase work unit run after a comment resumes");
+    assert_eq!(s2.session_id, s1.session_id);
+    assert_eq!(a[1].interrupt.as_deref(), Some(INTERRUPT_BODY));
+    let events = store.events_for(task_id).unwrap();
+    assert!(
+        events.iter().any(|(_, e)| matches!(e, Event::WorkerFinished { outcome, .. } if outcome.starts_with("interrupted: aborted"))),
+        "{events:?}"
+    );
+    let lines = session_lines(&store, task_id);
+    assert!(
+        lines
+            .iter()
+            .any(|l| *l == format!("continuation session: resumed (session={})", s1.session_id)),
+        "{lines:?}"
     );
 }

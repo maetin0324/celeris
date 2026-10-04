@@ -66,12 +66,15 @@ impl Dispatcher {
                     if *run_id == p.run_id && msg.starts_with(CONTINUATION_RESUME_REJECTED))
             })
         });
+        let previous_comment_interrupt =
+            previous.is_some_and(|p| interrupted_by_comment(&events, &p.run_id));
         let stored = self.store.work_unit_session_current(task.id, wu_id)?;
         let decision = crate::sessions::decide_continuation(&ContinuationFacts {
             role,
             work_unit_id: wu_id,
             previous_end,
             previous_resume_rejected,
+            previous_comment_interrupt,
             fresh_requested: !self.config.execution.continuation_session_resume,
             adapter: adapter_id,
             account,
@@ -163,6 +166,72 @@ impl Dispatcher {
         }
         Ok(())
     }
+}
+
+/// ADR-0140 付記（2026-10-04、comment-resume）: `run_id` の run が人のコメントの割り込み（ADR-0044 D2）で
+/// 止まったか。印は 2 通り: atomic task の run は `post_human_comment` が `WorkerFinished{outcome:
+/// "interrupted: comment"}` を直接積む。工程の lease の下の WU の run は lease を持たないので、割り込み
+/// （`Transitioned{reason: "comment", to: ready}`）の後に `abort_stale_runs` が `interrupted: aborted …` で閉じる。
+/// 後者は、その `WorkerFinished` の直前の `Transitioned` がコメントの割り込みであることで見分ける
+/// （cancel・lease 回収・shutdown は別の理由の遷移か `interrupted: <別の理由>` なので当たらない）。
+fn interrupted_by_comment(events: &[(u64, Event)], run_id: &str) -> bool {
+    let Some(idx) = events
+        .iter()
+        .rposition(|(_, e)| matches!(e, Event::WorkerFinished { run_id: r, .. } if r == run_id))
+    else {
+        return false;
+    };
+    let Event::WorkerFinished { outcome, .. } = &events[idx].1 else {
+        return false;
+    };
+    if outcome == task_ops::comment::INTERRUPTED_OUTCOME {
+        return true;
+    }
+    if !outcome.starts_with(task_ops::comment::INTERRUPTED_OUTCOME_PREFIX) {
+        return false;
+    }
+    events[..idx]
+        .iter()
+        .rev()
+        .find_map(|(_, e)| match e {
+            Event::Transitioned { reason, to, .. } => {
+                Some(reason == "comment" && *to == Status::Ready)
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+/// ADR-0140 付記（2026-10-04、comment-resume）: resume を拒否された run（[`CONTINUATION_RESUME_REJECTED`] の
+/// 進行を持つ）の `WorkerFinished` を除いた events。claude は resume の拒否で前置きを読まずに終わるので、
+/// その run は人のコメントの割り込みを「受け取った」ことにならない（`interrupting_comment` の消化の印から外す）。
+/// 拒否された run が無ければ写しを作らない。
+pub(super) fn without_resume_rejected_finishes(
+    events: &[(u64, Event)],
+) -> std::borrow::Cow<'_, [(u64, Event)]> {
+    let rejected: std::collections::HashSet<&str> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::WorkerProgress { run_id, msg, .. }
+                if msg.starts_with(CONTINUATION_RESUME_REJECTED) =>
+            {
+                Some(run_id.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    if rejected.is_empty() {
+        return std::borrow::Cow::Borrowed(events);
+    }
+    std::borrow::Cow::Owned(
+        events
+            .iter()
+            .filter(|(_, e)| {
+                !matches!(e, Event::WorkerFinished { run_id, .. } if rejected.contains(run_id.as_str()))
+            })
+            .cloned()
+            .collect(),
+    )
 }
 
 /// 直前の run の終わり方。`WorkerFinished.end` を正とし、無ければ `runs` 索引の状態から読む

@@ -283,8 +283,13 @@ impl Dispatcher {
         // ADR-0044 D2（Phase 53）: コメントの糸（最新 20 件、古い順）と、直前の run を止めた人のコメント。
         // どちらも決定的に引くだけ（LLM は関与しない）。
         let all_comments = self.store.comments_for(task.id)?;
-        let interrupt =
-            task_ops::comment::interrupting_comment(&events, &all_comments).map(|c| c.body.clone());
+        // ADR-0140 付記 comment-resume: resume を拒否された run は前置きを受け取っていないので、割り込みの
+        // 消化に数えない（session が無くて checkpoint の fresh に倒れた run にもコメントを載せる）。
+        let interrupt = task_ops::comment::interrupting_comment(
+            &super::continuation_session::without_resume_rejected_finishes(&events),
+            &all_comments,
+        )
+        .map(|c| c.body.clone());
         let comments: Vec<CommentContext> = all_comments
             .iter()
             .skip(

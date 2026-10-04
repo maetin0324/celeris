@@ -319,6 +319,7 @@ fn facts<'a>(stored: Option<&'a WorkUnitSession>) -> ContinuationFacts<'a> {
             kind: BudgetKind::Turns,
         }),
         previous_resume_rejected: false,
+        previous_comment_interrupt: false,
         fresh_requested: false,
         adapter: "claude-code",
         account: Some("acct-1"),
@@ -497,6 +498,107 @@ fn session_resume_session_reuse_fresh_request_rollover_and_surface_fall_back() {
         decide_continuation(&completed),
         fresh(ContinuationFreshReason::NotContinuation, true)
     );
+}
+
+/// 付記 comment-resume: 人のコメントで止めた run（`WorkerFinished` は `interrupted: comment`。`end` は
+/// `Cancelled` か無し）の次は resume する。印が無ければ従来どおり `not_continuation`（修正前の振る舞い）。
+/// 判断表のほかの行（account 変更・session 欠落・rollover・container・cwd・planner）はそのまま効く。
+#[test]
+fn session_resume_comment_interrupt_is_continuable() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    for end in [RunEnd::Cancelled, RunEnd::Failed { retryable: true }] {
+        let before = ContinuationFacts {
+            previous_end: Some(end),
+            ..facts(Some(&s))
+        };
+        assert_eq!(
+            decide_continuation(&before),
+            fresh(ContinuationFreshReason::NotContinuation, true),
+            "{end:?}"
+        );
+        let comment = ContinuationFacts {
+            previous_comment_interrupt: true,
+            ..before
+        };
+        assert_eq!(
+            decide_continuation(&comment),
+            ContinuationDecision::Resume,
+            "{end:?}"
+        );
+        let cases = [
+            (
+                ContinuationFacts {
+                    account: Some("acct-2"),
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::AccountChanged, true),
+            ),
+            (
+                ContinuationFacts {
+                    stored: None,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SessionMissing, false),
+            ),
+            (
+                ContinuationFacts {
+                    previous_resume_rejected: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::ResumeRejected, true),
+            ),
+            (
+                ContinuationFacts {
+                    container: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SurfaceUnsupported, true),
+            ),
+            (
+                ContinuationFacts {
+                    cwd: Some("/elsewhere"),
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SurfaceUnsupported, true),
+            ),
+            (
+                ContinuationFacts {
+                    fresh_requested: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::FreshRequested, true),
+            ),
+            (
+                ContinuationFacts {
+                    role: ContinuationRole::Planner,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::RoleFresh, false),
+            ),
+        ];
+        for (f, want) in cases {
+            assert_eq!(decide_continuation(&f), want, "{end:?}");
+        }
+        let big = WorkUnitSession {
+            approx_tokens: 400_000,
+            ..s.clone()
+        };
+        assert_eq!(
+            decide_continuation(&ContinuationFacts {
+                stored: Some(&big),
+                ..comment
+            }),
+            fresh(ContinuationFreshReason::ContextRollover, true)
+        );
+        let codex = wu_session("codex", Some("acct-1"), "wu-a");
+        assert_eq!(
+            decide_continuation(&ContinuationFacts {
+                stored: Some(&codex),
+                ..comment
+            }),
+            fresh(ContinuationFreshReason::AdapterChanged, true)
+        );
+    }
 }
 
 #[test]

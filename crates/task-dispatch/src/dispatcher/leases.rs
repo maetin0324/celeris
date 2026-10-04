@@ -535,8 +535,10 @@ impl Dispatcher {
                 // ADR-0074 D1.6/D1.7（Phase F2）: v2 の WU の run を止めたなら、WU を `running` の
                 // まま残さない（割り込み・lease 喪失なら checkpoint の有無で needs_continuation /
                 // ready に戻す。Cancel は `cancel_open_work_units` が cancelled にする）。
-                if key.work_unit.is_some()
-                    && let Some(t) = &current
+                // ADR-0140 付記 comment-resume: 段の無い計画（v1）の WU の run も同じ（`RunKey.work_unit` は
+                // 持たないが、`last_run_id` がこの run の `running` の WU を戻す。無ければ何もしない）。これが
+                // 無いとコメントの割り込みの後、WU が `running` のまま残り task が再 dispatch されない。
+                if let Some(t) = &current
                     && !t.status.is_terminal()
                     && let Err(e) = self.reconcile_work_unit_run(id, &entry.run_id, "aborted")
                 {

@@ -344,6 +344,9 @@ pub struct ContinuationFacts<'a> {
     pub previous_end: Option<RunEnd>,
     /// 直前の run が保存 session の resume を拒否された（`EventSink::session_resume_failed`）。
     pub previous_resume_rejected: bool,
+    /// 直前の run が人のコメントの割り込み（ADR-0044 D2）で止まった。ADR-0140 付記（2026-10-04、
+    /// comment-resume）: 予算切れ・yield と同じく continuable として扱う（`previous_end` は `Cancelled` 等）。
+    pub previous_comment_interrupt: bool,
     /// 設定（`[sessions] continuation_resume = false`）で明示的に fresh context を求められた。
     pub fresh_requested: bool,
     pub adapter: &'a str,
@@ -409,8 +412,12 @@ pub fn decide_continuation(f: &ContinuationFacts<'_>) -> ContinuationDecision {
     if f.previous_resume_rejected {
         return fresh(R::ResumeRejected);
     }
-    // #3: 直前が予算切れ・yield・wait 明けでなければ continuation ではない。
-    if !(previous_end.is_continuable() || previous_end == RunEnd::Waiting) {
+    // #3: 直前が予算切れ・yield・wait 明け・人のコメントの割り込み（付記 comment-resume）でなければ
+    // continuation ではない。
+    if !(previous_end.is_continuable()
+        || previous_end == RunEnd::Waiting
+        || f.previous_comment_interrupt)
+    {
         return fresh(R::NotContinuation);
     }
     // #4

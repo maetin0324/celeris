@@ -176,3 +176,36 @@ run ごとに `RunMetrics`（`runs.metrics`）へ足し、Task 単位で `Execut
   （#10 の材料）。CoS の対話 run（ADR-0054 の `node_sessions` を使う）と planner run は対象外。
 - 試験: `session_resume_container_no_session`、`session_resume_reviewer_stays_fresh`、
   `session_resume_atomic_task_reuses_session`（`dispatcher/tests/session_resume.rs`）。
+
+## 付記（2026-10-04、comment-resume）
+
+人の要望（2026-10-04）: コメントで止めた run の続きも同じ session を resume する。本番 `1ba0cd48` では、走っている run に
+人がコメントすると run は `interrupted: comment` で終わり、次の run は判断表 #3 で `fresh (reason=not_continuation)` に
+なっていた（task 01M3XSD0AYXTK2E7SC0JMX9M02 の run 01M42CD139F0NAGBJ5EF0FEXJP → 01M42CD7GMR46VQ4MYSJKYSMSK）。
+
+- **判断表 #3 の改訂**: 直前の run が人のコメントの割り込み（ADR-0044 D2）で止まったなら continuable に含める
+  （予算切れ・yield・wait 明けと同列）。#3 を抜けた後の行はそのまま効く: `fresh_requested`（#4）、adapter・account/provider
+  の変更（#6・#7）、container・cwd の違い（#8）、session 欠落（#9）、context rollover（#10）、planner/reviewer（#1）。
+  すべて通れば **resume**（記録値 `resumed`）。`ContinuationFacts.previous_comment_interrupt` で渡す（純粋関数のまま）。
+- **割り込みの見分け方**（dispatcher が events から決定的に読む。LLM は使わない）:
+  - atomic task・段の無い計画（v1）の run: `post_human_comment` が lease の run に積む
+    `WorkerFinished{outcome: "interrupted: comment"}`（`end` は無し）。
+  - 段のある計画（v2、工程の lease）の WU の run: lease を持たないので、割り込みの `Transitioned{reason: "comment",
+    to: ready}` の後に `abort_stale_runs` が `interrupted: aborted …`（`end: Cancelled`）で閉じる。その `WorkerFinished` の
+    直前の `Transitioned` がコメントの割り込みであることで見分ける。cancel・lease 回収・shutdown は別の理由なので当たらない。
+- **コメント本文は resume した session への次の入力**: resume の run の prompt（`--resume <id>` に渡す本文）の前置きの
+  先頭に、従来どおり「人からの割り込み」（`RunContext.interrupt`）として載る。新しい経路は作らない。
+- **session が書き終わっていない場合**: claude が session の jsonl を書く前に止められた（無い・壊れている）なら、resume は
+  claude に拒否され、既存の `resume_rejected` 経路（session を retire し、直近の checkpoint 前置きの新 session で 1 回だけ
+  やり直す。attempts に数えない）で fresh + checkpoint に倒れる。celeris は jsonl を読まない（D3 のまま）。
+  resume を拒否された run は前置きを読まずに終わるので、割り込みの消化に数えない（`interrupting_comment` に渡す events から
+  その run の `WorkerFinished` を除く）。やり直しの run にもコメント本文が載る。保存 session の行が無ければ #9 の
+  `session_missing` で fresh。
+- **付随の修正**: 段の無い計画（v1）の WU の run は `RunKey.work_unit` を持たないため、割り込みで止めた後に WU が
+  `running` のまま残り、task が再 dispatch されなかった。`abort_stale_runs` は WU の有無に関わらず
+  `reconcile_work_unit_run`（その run を `last_run_id` に持つ `running` の WU だけを戻す。無ければ何もしない）を呼ぶ。
+- **試験**（偽アダプタ、外部ネットワーク・CPU 負荷なし）: `sessions::tests::session_resume_comment_interrupt_is_continuable`
+  （印が無ければ `not_continuation` = 修正前、印があれば resume、ほかの行は従来どおり）、
+  `dispatcher/tests/session_resume.rs` の `session_resume_comment_interrupt_resumes_same_session`（atomic）、
+  `…_resumes_work_unit_session`（v1 WU）、`…_resumes_phase_work_unit_session`（v2 WU）、
+  `…_missing_session_falls_back_to_checkpoint`（jsonl を消してから割り込み → `resume_rejected` → checkpoint 前置きの fresh）。

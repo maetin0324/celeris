@@ -1,0 +1,42 @@
+---
+title: admin 画面群（組織・知識・help・login・accounts・providers・clusters・daemon・releases）の visual QA
+tasks: [01M44C029SCGEZHEK57WEK3QNB]
+status: running
+updated: 2026-10-04
+---
+
+# admin 画面群の visual QA
+
+build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web screenshots` で撮影した pre screenshot（`qa-qa-admin-pre`: 32 画面 × 360/390/412/1440、`qa-qa-admin-pre-states`: 8 状態 × 代表画面 × 4 幅）を元に、ui-ux-quality-gate skill の観点（generic AI dashboard 化・Celeris 固有の情報構造・long text/長 ID/0 件/多数/loading/error/stale/403・keyboard/focus/contrast・touch target）で対象 9 画面（組織・知識・help・login・accounts・providers・clusters・daemon・releases）を確認した。既存の build 段 4 葉（org・knowledge-help・ops-config・ops-runtime）の自己レビューと `docs/frontend/UX_AUDIT.md`・`agent-docs/progress/2026-10-04-web-admin-screens.md` の残課題を踏まえ、未解決または新たに確認できた指摘だけを挙げる。
+
+## critique
+
+1. **[knowledge-help] `/knowledge/skills` — h1・タブ・本文が英語のまま**（重大度: 高）
+   `web/features/knowledge/skills-screen.tsx` の `ScreenFrame` の title が `"skills"`、`/knowledge` のサブナビのタブも「候補」「skills」と後者だけ英語、本文も「skill 一覧」「skill 一覧から skill を選んでください。」。360px・1440px とも再現（`qa-qa-admin-pre/_knowledge_skills-{360,1440}.png`）。他の全画面が日本語の h1・ラベルで統一されている中、この画面だけ主見出しが英単語になっており、Celeris の運用語彙ではなく生の実装語がそのまま画面の顔になっている（典型的な generic AI dashboard）。`web/e2e/parity/knowledge.spec.ts:136` は h1 の `level` だけを見ており文言を固定していないため、h1 を含む日本語化はこの WU の範囲内で可能。
+
+2. **[ops-runtime] `/daemon` — h1・nav ラベル・本文が英語の実装語のまま**（重大度: 高。h1 と nav ラベルは構造的制約あり）
+   `web/features/ops/daemon-screen.tsx:171` の `ScreenFrame` title が `"daemon"`。本文も「dispatcher の状態はまだありません。」「保存された event から状態を再計算し、保存値との差を確認します。」「replay を実行」「最終 poll」と英語の実装語が日本語文に混在する（`qa-qa-admin-pre/_daemon-{360,1440}.png`）。nav の該当項目（`web/components/shell/nav-items.ts:17`）も `label: "daemon"` のみ英語（他 16 項目は日本語）。ただし h1 の文言は `web/e2e/parity/ops.spec.ts:130` が `getByRole("heading", { level: 1, name: "daemon" })` で固定しており、h1 自体の日本語化には parity spec の変更が要る（この WU の許可範囲外 `web/e2e/parity/` に抵触）。nav ラベルも `web/components/shell/` は対象外ディレクトリ。本文中の「dispatcher」「event」「replay」「poll」の訳語化は `daemon-screen.tsx` 側だけで直せる範囲。
+
+3. **[ops-runtime] `/releases` 360px — 昇格前に確認すべき「問題・直近の失敗」列が初期表示で見えない**（重大度: 高。安全に関わる）
+   一覧表の列は「版・状態」「操作」「ビルド」「昇格」「変更」「問題・直近の失敗」の順。360px では最初の 2 列しか画面に入らず、残りは表の枠内だけで横スクロールする作りだが、視覚的なスクロール手がかり（影・矢印等）が無い（`qa-qa-admin-pre/_releases-360.png`）。昇格・巻き戻しは本番 daemon を切り替える後戻りしにくい操作であり、判断材料のうち最もリスクに関わる「問題・直近の失敗」列が初期表示から隠れているのに気づきにくい。ConfirmDialog の確認文には対象・影響・戻し方が入るため実害は限定的だが、一覧段階での事前把握ができない。
+
+4. **[ops-runtime] `/clusters` 360px — 最重要の「失敗理由」列が同様に隠れる／`host` ラベルが英語**（重大度: 中〜高）
+   クラスタ一覧表は「クラスタ」「接続」「最終確認」「最後の切断」「失敗理由」の 5 列。360px では「失」の 1 文字で切れ、表はここでも手がかり無しに局所スクロールする（`qa-qa-admin-pre/_clusters-360.png`）。カードの DataList ラベル `host` も英語のまま（`認証`・`使用中`は日本語）。
+
+5. **[ops-config] `/providers` — 実装語を含む長文説明と英語の form ラベルが前面に出る**（重大度: 中〜高）
+   見出し「adapter / harness の実行枠」の下の説明文は「道具（claude-code・codex・acp・paperqa・langmem・ldr など）…」「celeris/<tier> は実行時に proxy が供給元を選ぶ抽象モデルです。」と実装者向けの語彙が並ぶ。card 内の form ラベルも `concurrency`・`model`・`tiers`・`frontier`/`standard`/`cheap` が無訳のまま（`qa-qa-admin-pre/_providers-{360,1440}.png`）。`agent-docs/progress/2026-10-04-web-admin-screens/ops-config.md` の providers 節でも同種の課題（StatusBadge の設定語彙）が「提案」止まりで残っており、1440px では説明文＋英語ラベルの form が画面の大半を占め、運用者が最初に読みたい「使えるかどうか」より前に長文が来る。
+
+6. **[org] `/org` 360〜412px — 「担当を追加」form が選んだ担当の詳細より前に来る**（重大度: 中）
+   `web/features/org/org-screen.tsx:334-359` は `lg:grid-cols-5` の 2 カラムで、木→`CreateForm`→詳細の順に DOM が並ぶ。lg（1024px）未満では 1 カラムになるため、木でノードを選んでも「担当を追加」form を経てからでないと選択した担当の詳細（`担当の詳細` section）に到達できない。`agent-docs/progress/2026-10-04-web-admin-screens/org.md` のtree-detail 葉自身も「提案」としてこの点を認識済みだが未着手（デフォルト fixture が取得失敗のため screenshot では未確認、ソース読解で確認）。
+
+7. **[knowledge-help] `/knowledge`・`/knowledge/inbox` — 本文 Markdown の見出しと Section の title が重複表示されうる**（重大度: 中）
+   `web/features/knowledge/knowledge-screen.tsx:272-293`（`Candidate`）と同 239 行目（ページ本文）は `Section title={...}` の直後に `<Markdown source={...}/>` をそのまま描画する。fixture の候補本文が `# New knowledge` で始まるため、h2「New knowledge」の直後に本文側の見出し「New knowledge」がもう一度表示される（`qa-qa-admin-pre/_knowledge_inbox-{360,1440}.png`）。これは fixture 固有の偶然ではなく、本番の knowledge ページ・候補が `# <title>` で始まる markdown であれば一般的に起きる構造上の重複。`web/e2e/parity/knowledge.spec.ts:53` は h2「New knowledge」の存在だけを見ており、本文側の重複見出しを抑止する変更（leading heading の除去等）はこの WU の範囲内で可能。
+
+8. **[ops-config] `/accounts` — `adapter`・`secret` など一部ラベルが英語のまま**（重大度: 中）
+   一覧 card の DataList ラベル `adapter`、下段の節見出し `secret` が英語（`状態`・`認証情報`・`最終確認`等は日本語）。`qa-qa-admin-pre/_accounts-{360,1440}.png` で確認。/providers・/daemon・/clusters と合わせ、ops 系画面全体で英語の実装語と日本語の運用語彙が無秩序に混在しており、一貫した訳語表が無いまま個別に直されてきたことがうかがえる。
+
+9. **[knowledge-help] `/knowledge` 1440px（未選択時）— 本文枠の過剰な空白が残る**（重大度: 低〜中）
+   検索結果 1 件に対し右側の本文枠は「検索結果から知識を選んでください。」のみで、画面幅の約 2/3 が空白のまま（`qa-qa-admin-pre/_knowledge-1440.png`）。`docs/frontend/UX_AUDIT.md:144` が before 版で指摘した「過剰余白」と同じ症状で、knowledge 葉の変更は選択後の表示（出典・scope・更新日の追加）に留まり、未選択時の初期レイアウトは直っていない。
+
+10. **[help-login] `/login` — 失敗後の「次にどこへ戻るか」が画面に出ない**（重大度: 低）
+    `docs/frontend/UX_AUDIT.md:30` が指摘した「戻り先 `next` を画面に示さない」は help-login 葉の変更後も残る（`qa-qa-admin-pre/_login-{360,1440}.png` は初期状態のみで確認、`web/routes/login.tsx` のソース上も `next` の表示が無いことを確認）。help-login 葉の対応範囲は失敗理由の alert と focus 復帰までで、this は対象外のまま。

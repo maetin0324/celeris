@@ -1118,9 +1118,9 @@ pub struct Dispatcher {
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
-    /// ADR-0079 付記「R6-1」D4: 最後に終端の task の `runs` 索引の `running` の行を照合した時刻（起動後の最初の
+    /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
-    runs_reconciled_at: Option<OffsetDateTime>,
+    terminal_records_reconciled_at: Option<OffsetDateTime>,
     /// 最後に持ち主の居ない `running` の `runs` 行を照合した時刻（active かつ孤児の回収が有効になって
     /// 最初の tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。`ownerless_runs.rs`）。
     ownerless_reconciled_at: Option<OffsetDateTime>,
@@ -1400,7 +1400,7 @@ impl Dispatcher {
             run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
-            runs_reconciled_at: None,
+            terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
             disk_low: false,
@@ -1835,8 +1835,8 @@ impl Dispatcher {
         self.reconcile_parallel_tasks()?;
         let reclaim_ms = lap(&mut at);
         self.abort_stale_runs()?;
-        // ADR-0079 付記「R6-1」D4: 終端の task の `running` のままの `runs` 行を閉じる（起動時と定期）。
-        self.reconcile_terminal_runs();
+        // ADR-0079 付記「R6-1」D4: 終端の task の未完了 run と統合依頼を閉じる（起動時と定期）。
+        self.reconcile_terminal_records();
         // 手元のレビューの取りこぼし（判定の完了が届かないまま終わった・期限を越えた）を閉じる（毎 tick。
         // draining 中も: 残ったままだと `in_flight` が 0 にならず drain が終わらない）。
         self.reap_lost_reviews();

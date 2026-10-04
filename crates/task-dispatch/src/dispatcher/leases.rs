@@ -486,14 +486,15 @@ impl Dispatcher {
     /// 閉じる（`TaskStore::close_runs_of_terminal_tasks`。`WorkerFinished{end: Cancelled}` を積む）。起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。閉じた行は 1 行ずつ 1 回だけログに残す（閉じた行は二度と
     /// 見つからない）。終端への遷移は store が同じトランザクションで閉じるので、見つかるのは R6-1 より前の行だけ。
-    pub(super) fn reconcile_terminal_runs(&mut self) {
+    /// 同じ周期で終端 task の未回答統合依頼も `task_terminal` で閉じる。
+    pub(super) fn reconcile_terminal_records(&mut self) {
         let now = self.now_utc();
-        if let Some(last) = self.runs_reconciled_at
+        if let Some(last) = self.terminal_records_reconciled_at
             && (now - last).whole_seconds() < RUNS_RECONCILE_INTERVAL_SECS
         {
             return;
         }
-        self.runs_reconciled_at = Some(now);
+        self.terminal_records_reconciled_at = Some(now);
         match self.store.close_runs_of_terminal_tasks() {
             Ok(closed) => {
                 for (task_id, run_id) in closed {
@@ -502,6 +503,16 @@ impl Dispatcher {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "failed to close the runs index rows of terminal tasks");
+            }
+        }
+        match self.store.close_integration_requests_of_terminal_tasks() {
+            Ok(closed) => {
+                for (task_id, request_id) in closed {
+                    tracing::info!(%task_id, %request_id, "closed an integration request left open on a terminal task");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to close integration requests of terminal tasks")
             }
         }
     }

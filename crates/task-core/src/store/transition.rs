@@ -161,6 +161,8 @@ impl SqliteStore {
         // 閉じる（本番: 失敗した task 01M3PBAVFAYPDWMQMDBXPTE2V8 の reviewer run が `running` のまま残った）。
         if !view.status.is_terminal() && outcome.next.is_terminal() {
             Self::close_open_runs_tx(tx, task_id, outcome.next)?;
+            // 終端 task に人の判断待ちを残さない。統合成功とは区別して task_terminal で閉じる。
+            Self::close_open_integration_requests_tx(tx, task_id)?;
         }
 
         Self::cascade_after_transition_tx(tx, &task, view.status, outcome.next)?;

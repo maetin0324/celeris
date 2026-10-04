@@ -269,6 +269,12 @@ impl TaskStore for SqliteStore {
         self.integration_requests_close_impl(task_id, origin, answer, note)
     }
 
+    fn close_integration_requests_of_terminal_tasks(
+        &self,
+    ) -> Result<Vec<(TaskId, String)>, StoreError> {
+        self.close_integration_requests_of_terminal_tasks_impl()
+    }
+
     fn list_page(
         &self,
         filter: &ListFilter,

@@ -258,6 +258,12 @@ pub trait TaskStore:
         note: Option<&str>,
     ) -> Result<Vec<String>, StoreError>;
 
+    /// 終端 task の未回答統合依頼を `task_terminal` で閉じる（旧版の取り残しの回収）。
+    /// events は追記のみ。未回答の確認・終端判定・追記は同じトランザクションで、再実行は冪等。
+    fn close_integration_requests_of_terminal_tasks(
+        &self,
+    ) -> Result<Vec<(TaskId, String)>, StoreError>;
+
     /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
     /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。
     fn list_page(

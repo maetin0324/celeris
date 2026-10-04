@@ -42,7 +42,7 @@ completed: 2026-10-04
 | e2e: parity/latency-gate・shell・reports・notifications、shell/*（修正後） | 27 passed / 1 skipped |
 | e2e: parity/notifications・reports、a11y（最終） | 40 passed / 1 skipped |
 | `corepack pnpm@12.6.0 -C web mobile-audit` | 31 path × 4 幅 ok |
-| screenshots `after-notifications` | 32 画面 × 4 幅 = 128 枚（run の artifacts） |
+| screenshots `after-notifications` | 124 枚（台帳 32 行のうち撮れる 31 画面 × 4 幅）（run の artifacts） |
 
 ## 未解決事項
 

@@ -192,6 +192,14 @@ pub trait EventSink: Send + Sync {
     }
     /// パス検査と sha256 計算済みの成果物（`crate::artifact::resolve` を通したもの）。
     fn artifact(&self, artifact: &ArtifactRef);
+    /// Adapter-observed completed context compaction / rollover, never inferred from model prose.
+    fn context_compacted(&self) {
+        self.progress_with(
+            "context compacted",
+            &ProgressFields::of(task_core::ProgressKind::Status)
+                .with_tool(task_core::tree::CONTEXT_COMPACTION_TOOL),
+        );
+    }
     /// ワーカーの stdout から 1 行読むたびにアダプタが呼ぶ生存通知。ディスパッチャはこれでリースを延長する
     /// （ADR-0010 D7, P-7）。既定は何もしない。
     fn heartbeat(&self) {}

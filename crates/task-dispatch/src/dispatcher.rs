@@ -98,6 +98,7 @@ use crate::policy::{
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+mod auto_leaf;
 /// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
 mod behind_target;
 mod child_tasks;
@@ -944,6 +945,7 @@ enum WuDispatchGate {
 /// run 開始時に決める、ワーカーに渡す追加の文脈（ADR-0016 D1 / D3, ADR-0027 D1）。
 #[derive(Debug, Default)]
 struct RunExtras {
+    auto_leaf: Option<auto_leaf::AutoLeafWatch>,
     role: Option<RoleContext>,
     children: Vec<ChildSummary>,
     /// ADR-0027 D1: 委譲できる run（`build_execute_prompt` を使う run）にだけ非空。

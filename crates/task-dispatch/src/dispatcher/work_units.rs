@@ -1226,7 +1226,18 @@ impl Dispatcher {
         extras: &mut RunExtras,
         lease_taken: bool,
     ) -> Result<(), DispatchError> {
-        let is_continuation = wu.status == task_core::WorkUnitStatus::NeedsContinuation;
+        let tree = self.config.execution.limits.tree;
+        if tree.enabled && tree.auto_leaf {
+            let events = self.store.events_for(task_id)?;
+            if let Some(counts) = auto_leaf::counts(&events, wu, run_id, None) {
+                extras.auto_leaf = Some(auto_leaf::AutoLeafWatch::new(
+                    counts.compactions,
+                    tree.auto_leaf_max_compactions,
+                ));
+            }
+        }
+        let is_continuation = wu.status == task_core::WorkUnitStatus::NeedsContinuation
+            || (extras.auto_leaf.is_some() && wu.continuations > 0);
         if is_continuation {
             extras.continuation_override = self.work_unit_continuation_context(wu);
         }

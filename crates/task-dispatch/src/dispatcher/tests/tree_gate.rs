@@ -459,6 +459,7 @@ async fn leaf_too_large_at_max_depth_raises_decision() {
     let adapter = Arc::new(TreeAdapter::new(vec![plan], Duration::ZERO));
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.max_depth = 1;
+    d.config.execution.limits.tree.auto_leaf = false;
     let reasons = run_until_quiet_approving(&mut d, &store, root_id, 400).await;
     assert_eq!(reasons, vec!["decisions:leaf_too_large:big".to_string()]);
     let units = store.work_units_for(root_id).unwrap();
@@ -805,4 +806,380 @@ async fn tree_replan_limit_raises_a_decision_instead_of_a_planner_run() {
     assert!(stored.lease.is_none());
     let child = child_task(&store, root_id, "c");
     assert_eq!(child.status, Status::Running, "the child keeps running");
+}
+
+#[derive(Clone, Copy)]
+enum AutoLeafStep {
+    Done(u32),
+    CompactAndWait(u32),
+    Continue(task_core::BudgetKind, u32),
+    Rollover(task_core::BudgetKind),
+}
+
+struct AutoLeafAdapter {
+    tree: TreeAdapter,
+    steps: StdMutex<std::collections::VecDeque<AutoLeafStep>>,
+    resumed: StdMutex<Vec<bool>>,
+}
+
+impl AutoLeafAdapter {
+    fn new(steps: Vec<AutoLeafStep>) -> Self {
+        Self {
+            tree: TreeAdapter::new(
+                vec![v3_plan(
+                    vec![stage("s1", false)],
+                    vec![
+                        with_features(leaf("big", "s1", &[]), broad()),
+                        leaf("sibling", "s1", &[]),
+                    ],
+                )],
+                Duration::ZERO,
+            ),
+            steps: StdMutex::new(steps.into()),
+            resumed: StdMutex::new(vec![]),
+        }
+    }
+}
+
+#[async_trait]
+impl WorkerAdapter for AutoLeafAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        run_id: &str,
+        limits: RunLimits,
+        sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        if req
+            .context
+            .work_unit
+            .as_ref()
+            .is_none_or(|wu| wu.key != "big")
+        {
+            return self.tree.run(req, run_id, limits, sink).await;
+        }
+        self.resumed
+            .lock()
+            .unwrap()
+            .push(req.context.continuation.is_some());
+        let step = self
+            .steps
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or(AutoLeafStep::Done(0));
+        let n = match step {
+            AutoLeafStep::Done(n)
+            | AutoLeafStep::CompactAndWait(n)
+            | AutoLeafStep::Continue(_, n) => n,
+            AutoLeafStep::Rollover(_) => 0,
+        };
+        sink.progress("implementation checkpoint reached");
+        for _ in 0..n {
+            sink.context_compacted();
+        }
+        let terminal = match step {
+            AutoLeafStep::Done(_) => Terminal::Done {
+                summary: "ok".into(),
+                evidence: vec![],
+                usage: None,
+            },
+            AutoLeafStep::CompactAndWait(_) => std::future::pending().await,
+            AutoLeafStep::Rollover(kind) => {
+                sink.progress_with(
+                    "context rollover",
+                    &task_core::ProgressFields::of(task_core::ProgressKind::Status)
+                        .with_tool(task_core::tree::CONTEXT_ROLLOVER_TOOL),
+                );
+                Terminal::BudgetExhausted {
+                    kind,
+                    message: "fixture after rollover".into(),
+                    usage: None,
+                }
+            }
+            AutoLeafStep::Continue(kind, _) => Terminal::BudgetExhausted {
+                kind,
+                message: "fixture budget".into(),
+                usage: None,
+            },
+        };
+        Ok(RunOutcome {
+            terminal,
+            exit_code: Some(0),
+        })
+    }
+}
+
+#[tokio::test]
+async fn auto_leaf_at_depth_limit_executes_without_a_decision() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = gate_root(dir.path());
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(AutoLeafAdapter::new(vec![AutoLeafStep::Done(0)]));
+    let mut d = tree_dispatcher(&store, adapter);
+    d.config.execution.limits.tree.max_depth = 1;
+    let approvals = run_until_quiet_approving(&mut d, &store, root.id, 400).await;
+    assert!(approvals.is_empty());
+    let units = store.work_units_for(root.id).unwrap();
+    assert_eq!(unit(&units, "big").status, task_core::WorkUnitStatus::Done);
+    assert_eq!(unit(&units, "big").runs, 1);
+    assert!(open_decisions(&store, root.id).is_empty());
+    assert!(store.children(root.id).unwrap().is_empty());
+    assert!(store.events_for(root.id).unwrap().iter().any(|(_, e)| matches!(e,
+        Event::UnitGateOverridden { action: task_core::UnitGateAction::AutoLeaf, reason, .. } if reason.contains("compound") && reason.contains("max_depth 1"))));
+    assert_replay_is_clean(&store);
+}
+
+#[tokio::test]
+async fn auto_leaf_counts_below_or_equal_threshold_do_not_request_decisions() {
+    for n in [0, 1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = gate_root(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        // Stream + context exhaustion in the same run must not count twice.
+        let mut steps = vec![AutoLeafStep::Continue(task_core::BudgetKind::Context, 1); n];
+        steps.push(AutoLeafStep::Done(0));
+        let mut d = tree_dispatcher(&store, Arc::new(AutoLeafAdapter::new(steps)));
+        d.config.execution.limits.tree.max_depth = 1;
+        run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+        assert!(open_decisions(&store, root.id).is_empty(), "n={n}");
+        assert_eq!(
+            unit(&store.work_units_for(root.id).unwrap(), "big").status,
+            task_core::WorkUnitStatus::Done
+        );
+        assert_replay_is_clean(&store);
+    }
+}
+
+#[tokio::test]
+async fn auto_leaf_excess_compaction_interrupts_live_run_and_resume_resets_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let root = gate_root(dir.path());
+    store.create_task(&root, vec![]).unwrap();
+    let adapter = Arc::new(AutoLeafAdapter::new(vec![
+        AutoLeafStep::CompactAndWait(3),
+        AutoLeafStep::Done(2),
+    ]));
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    d.config.execution.limits.tree.max_depth = 1;
+    run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+    let units = store.work_units_for(root.id).unwrap();
+    assert_eq!(
+        unit(&units, "big").blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::Decision)
+    );
+    assert_eq!(
+        unit(&units, "sibling").status,
+        task_core::WorkUnitStatus::Done
+    );
+    let decision = store.decisions_list(Some(root.id)).unwrap().pop().unwrap();
+    assert!(
+        decision.request.question.contains("rollover 3 回"),
+        "{}",
+        decision.request.question
+    );
+    assert!(
+        decision
+            .request
+            .question
+            .contains("implementation checkpoint reached")
+    );
+    assert_eq!(
+        decision.request.path.last().unwrap().unit.as_deref(),
+        Some("big")
+    );
+    assert_eq!(decision.kind, task_core::DecisionKind::LeafTooLarge);
+    assert_eq!(unit(&units, "big").runs, 1);
+    let inbox = task_ops::human_inbox::human_inbox(
+        store.as_ref(),
+        None,
+        &task_ops::view::ViewContext {
+            workspace_root: dir.path().to_path_buf(),
+            retry_backoff_base: Duration::ZERO,
+            retry_backoff_max: Duration::ZERO,
+            max_requeues: 5,
+            clusters: Default::default(),
+        },
+        OffsetDateTime::now_utc(),
+        &|_, _| vec![],
+        None,
+    )
+    .unwrap();
+    let item = inbox
+        .items
+        .iter()
+        .find(|item| item.kind == task_ops::human_inbox::InboxKind::Decision)
+        .expect("human decision in inbox");
+    assert!(
+        item.title.contains("rollover 3 回")
+            || item
+                .detail
+                .as_deref()
+                .is_some_and(|s| s.contains("rollover 3 回"))
+    );
+    assert_eq!(item.options.len(), 3);
+    assert_replay_is_clean(&store);
+    task_ops::decision::answer(
+        store.as_ref(),
+        &decision.id,
+        Some("run-as-leaf"),
+        None,
+        "human",
+        OffsetDateTime::now_utc(),
+    )
+    .unwrap();
+    // Recreate dispatcher: counters and reset are persisted, not local to a process.
+    drop(d);
+    let mut d = tree_dispatcher(&store, adapter.clone());
+    d.config.execution.limits.tree.max_depth = 1;
+    run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+    assert!(
+        store
+            .decisions_list(Some(root.id))
+            .unwrap()
+            .iter()
+            .all(|d| d.status != task_core::DecisionStatus::Open)
+    );
+    assert_eq!(
+        unit(&store.work_units_for(root.id).unwrap(), "big").status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert_eq!(*adapter.resumed.lock().unwrap(), vec![false, true]);
+    assert_replay_is_clean(&store);
+}
+
+#[tokio::test]
+async fn auto_leaf_context_rollover_and_continuation_each_raise_a_decision() {
+    for context in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = gate_root(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        let kind = if context {
+            task_core::BudgetKind::Context
+        } else {
+            task_core::BudgetKind::Turns
+        };
+        let adapter = Arc::new(AutoLeafAdapter::new(vec![
+            AutoLeafStep::Continue(kind, 0);
+            3
+        ]));
+        let mut d = tree_dispatcher(&store, adapter);
+        d.config.execution.limits.tree.max_depth = 1;
+        if context {
+            d.config.execution.limits.tree.auto_leaf_max_continuations = 10;
+        }
+        run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+        let units = store.work_units_for(root.id).unwrap();
+        assert_eq!(unit(&units, "big").runs, 3);
+        assert_eq!(
+            unit(&units, "big").blocked_reason,
+            Some(task_core::WorkUnitBlockedReason::Decision)
+        );
+        let decisions = store.decisions_list(Some(root.id)).unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0].request.question.contains(if context {
+                "rollover 3 回"
+            } else {
+                "continuation 3 回"
+            }),
+            "{}",
+            decisions[0].request.question
+        );
+        assert_replay_is_clean(&store);
+    }
+}
+
+#[tokio::test]
+async fn auto_leaf_zero_limit_decisions_support_replan_and_withdraw() {
+    for option in ["replan", "withdraw"] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = gate_root(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        let mut d = tree_dispatcher(
+            &store,
+            Arc::new(AutoLeafAdapter::new(vec![AutoLeafStep::CompactAndWait(1)])),
+        );
+        d.config.execution.limits.tree.max_depth = 1;
+        d.config.execution.limits.tree.auto_leaf_max_compactions = 0;
+        // Even with automatic continuation disabled, excessive live compaction
+        // must produce a decision and a checkpoint, not a retryable error.
+        d.config.execution.continuation = false;
+        run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+        let decisions = store.decisions_list(Some(root.id)).unwrap();
+        assert_eq!(decisions.len(), 1);
+        assert!(
+            decisions[0]
+                .request
+                .question
+                .contains("rollover 1 回（上限 0）")
+        );
+        let answered = task_ops::decision::answer(
+            store.as_ref(),
+            &decisions[0].id,
+            Some(option),
+            None,
+            "human",
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+        if option == "replan" {
+            assert!(answered.replan_requested);
+        } else {
+            assert_eq!(answered.cancelled, vec!["big"]);
+            assert_eq!(
+                unit(&store.work_units_for(root.id).unwrap(), "big").status,
+                task_core::WorkUnitStatus::Cancelled
+            );
+        }
+        assert_replay_is_clean(&store);
+    }
+}
+
+#[tokio::test]
+async fn auto_leaf_repeated_session_rollovers_and_new_context_exhaustion_are_counted() {
+    for terminal in [task_core::BudgetKind::Turns, task_core::BudgetKind::Context] {
+        let dir = tempfile::tempdir().unwrap();
+        let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+        let root = gate_root(dir.path());
+        store.create_task(&root, vec![]).unwrap();
+        let mut d = tree_dispatcher(
+            &store,
+            Arc::new(AutoLeafAdapter::new(vec![
+                AutoLeafStep::Rollover(terminal);
+                3
+            ])),
+        );
+        d.config.execution.limits.tree.max_depth = 1;
+        d.config.execution.limits.tree.auto_leaf_max_continuations = 10;
+        run_until_quiet_approving(&mut d, &store, root.id, 500).await;
+        let decisions = store.decisions_list(Some(root.id)).unwrap();
+        assert_eq!(decisions.len(), 1);
+        let (runs, count) = if terminal == task_core::BudgetKind::Context {
+            (2, 4)
+        } else {
+            (3, 3)
+        };
+        assert_eq!(
+            unit(&store.work_units_for(root.id).unwrap(), "big").runs,
+            runs
+        );
+        assert!(
+            decisions[0]
+                .request
+                .question
+                .contains(&format!("rollover {count} 回")),
+            "{}",
+            decisions[0].request.question
+        );
+        assert_replay_is_clean(&store);
+    }
 }

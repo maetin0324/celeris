@@ -2004,3 +2004,40 @@ web の木の replan 24 回のうち 9 回が計画・check・条件の質に起
 - task 01M3WZ1GEPC670GED0TYAXSGDF の救済は運用（昇格後に open な `plan_invalid` の決定 01M3XDDVB8GBMA9KNF7TTGZ7X6 に `replan` で答える）。
 - replay は配送 / レビューの repair WU の行そのものを events から作らない（spec を運ぶ event が無い。従来からの既知の差）。R7-12 は
   その行に replan が触れないことだけを保証する。
+
+## 付記（2026-10-04、深さ上限の compound leaf の自動実行と警戒）
+
+人の決定「自動で 1 run でやるようにしていい。compaction が多すぎたら警戒する感じで」を適用する。
+深さ上限で出た `leaf_too_large` 54 件がすべて `run-as-leaf` と回答されたため、同じ判断待ちを既定から外す。
+
+- `[execution.tree] auto_leaf = true` を既定とする。gate が compound（`compound/long-and-broad` を含む）でも
+  `depth >= max_depth` なら leaf のまま通常の 1 run を始める。計画に紐づく `UnitGateOverridden` の
+  `action = auto_leaf` と `reason` に compound 判定・深さ上限・leaf のまま実行した理由を残す。
+  計画の leaf 宣言と gate 判定の記録は残り、採用時の決定・その決定に起因する計画承認は発行しない。
+  子 task を作れる深さの昇格、明示 kind task、他の計画承認・木全体の上限は変えない。
+- その自動 leaf の実測だけを監視する。既定は `auto_leaf_max_compactions = 2`、
+  `auto_leaf_max_continuations = 2`。**上限と同数までは続行し、3 回目で止める**。
+  通常の圧縮や一時的な予算切れを 1〜2 回許容し、長い循環を早期に人へ返す控えめな値である。
+  0 は最初の 1 回で止める意味。自動 leaf では従来の continuation / no-progress 回数による自動 replan を
+  この警戒に置き換える。実際の失敗・worker の `plan_issue` は従来の扱いを保つ。
+- Claude Code の stream-json `system/compact_boundary`（`compact_metadata.trigger` は auto / manual）を
+  完了した compaction 1 回と数える。開始中の `status: compacting` とモデルの本文は数えない。
+  adapter は `EventSink::context_compacted` を報告し、既存 `WorkerProgress` に
+  `kind=status, tool=context_compaction` として保存する。印が取れない場合は context rollover と
+  `BudgetExhausted { kind: context }` を代用する。同じ run の stream の印と context 終端を重複計数せず、
+  既に数えた context 終端・圧縮の後の session 作り直しも重ねない。session rollover は
+  `tool=context_rollover` と区別して保存し、その後の新しい context の消費を隠さない。
+- compaction は実行中に閾値を超えた時点で adapter の実行を中断し、通常の yield 終了経路で機械的な
+  checkpoint を採る。continuation は yield / budget 終端を受けた時に数え、次の run を始める前に止める。
+  回数は WU id とその run のイベントに限定し、兄弟・planner・reviewer の回数を混ぜない。再起動でも復元する。
+- 停止はその WU の `blocked(decision)`。既存の `kind=leaf_too_large`、
+  `key=auto_leaf_budget:<work_unit_id>:<run_id>` を使い、受信箱の決定として「続ける（run-as-leaf）・
+  replan で小さな leaf に分ける・取り下げる」を出す。理由には両方の回数と設定値、直近の進捗、
+  root から leaf までの path を載せる。通知だけで済ませず、回答・取り下げを既存の決定 API で処理する。
+  「続ける」は checkpoint / 利用可能な session を引き継ぎ、回答以降の回数を新たに数える。
+  過去のイベント・累計は消さない。同じ超過で直ちに再停止しない。
+- `auto_leaf = false` は採用時に従来の `leaf_too_large` 判断待ちへ戻す。既に発行済みの決定に
+  自動回答はしない。設定変更は通常の設定読み込み時に反映する。本番操作はこの変更に含めない。
+
+dispatcher / store に LLM 呼び出しは加えない。試験は fake adapter と一時 store で行い、外部ネットワークや
+CPU 焼き負荷を使わずに、即時の stream 通知・終端・未完了 future で境界と中断を再現する。

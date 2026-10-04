@@ -266,9 +266,9 @@ fn unit_gate_table() {
         assert_eq!(g.action, Some(UnitGateAction::Promoted), "depth {depth}");
         assert!(g.reason.contains("promoted"), "{}", g.reason);
     }
-    // 3. leaf + compound、子 task を持てない深さ（親 3 = max_depth）→ 決定の要求。
+    // 3. leaf + compound、子 task を持てない深さ（親 3 = max_depth）→ 自動実行。
     let g = gate_of(&parent, 3, &leaf_spec("a", "s1", true), &[]);
-    assert_eq!(g.action, Some(UnitGateAction::Decision));
+    assert_eq!(g.action, Some(UnitGateAction::AutoLeaf));
     assert_eq!((g.depth, g.threshold), (4, 11));
     assert!(g.reason.contains("max_depth 3"), "{}", g.reason);
 
@@ -396,13 +396,14 @@ fn promoted_and_demoted_units_keep_their_work_and_validate() {
     let report = apply_unit_gates(&ctx, &p, &skip);
     assert_eq!(report.gates.len(), 2);
     assert!(!report.spec.units[0].is_task());
-    // 深さ 3 の計画の compound な leaf は上げずに決定の要求へ。
+    // 深さ 3 の計画の compound な leaf は自動実行し、採用時の決定を出さない。
     let ctx3 = UnitGateContext {
         parent_depth: 3,
         ..ctx
     };
     let report = apply_unit_gates(&ctx3, &p, &Default::default());
-    assert_eq!(report.leaf_too_large, vec!["a".to_string()]);
+    assert!(report.leaf_too_large.is_empty());
+    assert_eq!(report.gates[0].action, Some(UnitGateAction::AutoLeaf));
     assert!(!report.spec.units[0].is_task(), "not forced into a task");
 }
 

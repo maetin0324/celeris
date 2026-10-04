@@ -105,3 +105,14 @@ git diff --name-only 06a389b4 HEAD | grep -v -E '^(web/features/(ops|org|knowled
 両コマンドとも出力 0 行（`grep` は一致なしの exit 1）。対して同じ範囲式で `git diff --name-only ac78fad613ad 06a389b4` を調べると範囲外は 48 file。これらは merge commit の main 側の親 `864f5d29` 由来で、Rust の `crates/`、API 文書・設定、GUI/API 生成物、ADR 検査スクリプト、web の共通 e2e 高速化・realtime/parity 基盤（`web/package.json`・Playwright 設定を含む）に分類される。範囲外の一覧は merge 差分にのみ現れ、前後の WU 固有区間には現れない。
 
 人の回答（accept-scope）: **a — main 由来の差分を除いて条件 3 を満たしたとみなす**。このタスク自身の両区間で範囲外 0 件を確認したため、main 取り込みは revert せず、コード変更も行わない。
+
+## main 取り込みを revert しない判断
+
+人の回答（scope-fix）: **revert しない**。main 取り込み 06a389b4（864f5d29 の取り込み）は残し、revert commit は作らない。コード（web/・crates/）は変更しない。
+
+- 新しい条件 3 の式（task 自身の commit だけを見る）: `git log --format= --name-only ac78fad613ad..HEAD --not main | sort -u | grep -v '^$' | grep -v -E '^(web/features/(ops|org|knowledge|help)/|web/routes/(accounts|clusters|daemon|providers|releases|help|login|org\.|knowledge\.)|web/e2e/parity/(ops|org|knowledge|help)\.spec\.ts$|web/e2e/admin/|agent-docs/progress/|agent-docs/adr/|agent-docs/web/feature-parity\.md$)'` → 出力 0 行（範囲外 0 件）。同じ区間で `crates/` に触れた file は 0 件（`git log ac78fad613ad..HEAD --not main -- crates/`）。
+- 旧い式 `git diff --name-only ac78fad613ad HEAD` は 89 file、うち範囲外 48 file、`crates/` 差分 23 file。これは main 取り込み 06a389b4 で入った差分で、task の commit は含まない。旧い式は main 取り込みを残す限り満たせない。
+- task の受け入れ条件は人の決定でも書き換わらない。final review が旧い式で元の条件を再評価すると落ちうる。完了の扱いは人の決定に従う。
+- 検査: 文書検査 3 本（`sh scripts/dev/check-doc-links.sh`・`sh scripts/dev/check-adr-numbers.sh`・`sh scripts/dev/progress-index.sh --check`）は各 exit 0。管理画面 file 全体の生の色・任意値 grep は 0 件（exit 1 = 一致なし）。web の build 後の検査と full e2e は前回の review（同じ HEAD 2a773b01、記録上の結果は上の節と同じ）で exit 0 を確認済み。このコードは変えていない。
+
+提案（上位 task へ）: 上位 task の受け入れ・範囲 check は、固定 sha 基点の `git diff --name-only <base> HEAD` ではなく、`git log --format= --name-only <base>..HEAD --not main` の式で書く。main を取り込んだ後も task 自身の変更だけを見られる。main 取り込みを戻す必要が出た場合は、revert の revert か main の再 merge で 864f5d29 の変更を戻す（人が決める）。

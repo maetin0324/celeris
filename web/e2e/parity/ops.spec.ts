@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
@@ -32,11 +32,19 @@ test.describe("P4-16 releases", () => {
       body: JSON.stringify(body),
     });
 
+  // 昇格・巻き戻しは確認表示を挟む。一覧のボタンで開き、確認表示の同じ名前のボタンで確定する。
+  const confirmPromote = async (page: Page, name: string) => {
+    await page.getByRole("button", { name, exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("本番の daemon");
+    await dialog.getByRole("button", { name, exact: true }).click();
+  };
+
   test("parity: /releases 昇格と失敗表示 保留は成功と出さず、結果で成功になる", async ({ page }) => {
     await control({ mode: "succeed", pendingMs: 2500 });
     await page.goto(`${gateway.base}/releases`);
     await expect(page.getByRole("heading", { level: 1, name: "リリース" })).toBeVisible();
-    await page.getByRole("button", { name: "bbbbbbbbbbbb を昇格" }).click();
+    await confirmPromote(page, "bbbbbbbbbbbb を昇格する");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await expect(page.getByTestId("promote-succeeded")).toHaveCount(0);
     await expect(page.getByTestId("promote-succeeded")).toBeVisible({ timeout: 15_000 });
@@ -47,7 +55,7 @@ test.describe("P4-16 releases", () => {
   test("parity: /releases 昇格と失敗表示 失敗を表示する", async ({ page }) => {
     await control({ mode: "fail", pendingMs: 1000 });
     await page.goto(`${gateway.base}/releases`);
-    await page.getByRole("button", { name: "aaaaaaaaaaaa を昇格" }).click();
+    await confirmPromote(page, "aaaaaaaaaaaa に巻き戻す");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await expect(page.getByTestId("promote-failed")).toContainText("exit 1", { timeout: 15_000 });
     await expect(page.getByTestId("promote-succeeded")).toHaveCount(0);
@@ -58,7 +66,7 @@ test.describe("P4-16 releases", () => {
     await control({ mode: "succeed", pendingMs: 4000 });
     const first = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
     await page.goto(`${first.base}/releases`);
-    await page.getByRole("button", { name: "aaaaaaaaaaaa を昇格" }).click();
+    await confirmPromote(page, "aaaaaaaaaaaa に巻き戻す");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await first.close();
     await expect(page.getByTestId("promote-pending")).toContainText("再接続", { timeout: 10_000 });
@@ -242,9 +250,9 @@ test.describe("P4-13..15 accounts/clusters", () => {
     await expect(again.getByText("接続中")).toBeVisible();
     await again.getByLabel("作業ディレクトリ").fill("/work/me");
     await again.getByRole("button", { name: "作業ディレクトリを保存" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toBeVisible();
+    await expect(again.getByText("/work/me（db）")).toBeVisible();
     await again.getByRole("button", { name: "上書きを消す" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toHaveCount(0);
+    await expect(again.getByText("/work/me（db）")).toHaveCount(0);
     expect(seen.some((r) => r.path === "/api/v1/clusters/pegasus/settings" && r.method === "PUT")).toBe(true);
   });
 });

@@ -2,13 +2,22 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { expect, test } from "@playwright/test";
+import { expect, type Locator, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
-import { createFakeDaemon } from "../support/fake-daemon.mjs";
+import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
 import { v3Screens } from "../support/screens";
 import { waitForBootIdle } from "./boot-idle.mjs";
+import { inAppRoutes } from "./in-app-routes";
+
+// click の actionability（visible・stable・hit test）は計測区間の前に trial で確かめ、区間では
+// force の click（mouse の move・down・up）だけを打つ。負荷下では actionability の rAF 待ちと往復が
+// click 1 回に 150〜300ms かかり、click イベントの前に予算を使い切っていた（ADR-0081 付記）。
+async function armClick(link: Locator): Promise<() => Promise<void>> {
+  await link.click({ trial: true });
+  return () => link.click({ force: true });
+}
 
 // baseline と同じくクリックを起点に URL、見出し、画面データ（現 Phase は準備中の枠）を別々に測る。
 for (const screen of v3Screens()) {
@@ -17,22 +26,41 @@ for (const screen of v3Screens()) {
     const dir = mkdtempSync(path.join(tmpdir(), "celeris-v3-latency-"));
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-    const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+    const entry = inAppRoutes[screen.fixture];
+    const daemon = createFakeDaemon({ token: FIXTURE_TOKEN, fixtures: { ...defaultFixtures, ...entry?.fixtures } });
     const daemonUrl = await daemon.start();
     const gateway = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
     try {
       const measures: Array<{ delay: number; url: number; heading: number; data: number }> = [];
       for (const delay of [0, 5000, 10000]) {
-        daemon.setDelay(delay);
-        await page.goto(gateway.base);
-        const nav = page.getByRole("navigation", { name: "主要" });
-        await expect(nav).toBeAttached();
-        // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
-        await waitForBootIdle(page);
-        const link = nav.getByRole("link", { name: screen.heading });
+        // 計測区間は click（またはアプリ内の popstate）から。文書の読み込み・起動は区間の外で済ませる
+        // （ADR-0081 付記、人の決定 b。nav にリンクの無い経路は in-app-routes.ts の親画面から）。
+        let navigate: () => Promise<void>;
+        if (entry) {
+          // 親画面のリンクは data で描かれるので、親は遅延 0 で開き、リンクが出てから遅延を戻す。
+          daemon.setDelay(0);
+          await page.goto(`${gateway.base}${entry.parent}`);
+          const link = page.locator(`main a[href="${screen.fixture}"]`).first();
+          await expect(link).toBeVisible();
+          await waitForBootIdle(page);
+          daemon.setDelay(delay);
+          navigate = await armClick(link);
+        } else {
+          daemon.setDelay(delay);
+          await page.goto(gateway.base);
+          // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
+          await waitForBootIdle(page);
+          const link = page.getByRole("navigation", { name: "主要" }).getByRole("link", { name: screen.heading });
+          if (await link.count()) navigate = await armClick(link);
+          else
+            navigate = () =>
+              page.evaluate((to) => {
+                history.pushState({}, "", to);
+                dispatchEvent(new PopStateEvent("popstate", { state: history.state }));
+              }, screen.fixture);
+        }
         const start = performance.now();
-        if (await link.count()) await link.click();
-        else await page.goto(`${gateway.base}${screen.fixture}`, { waitUntil: "commit" });
+        await navigate();
         await expect(page).toHaveURL(`${gateway.base}${screen.fixture}`);
         const url = performance.now() - start;
         const headingNode = page.getByRole("heading", { level: 1, name: screen.heading });

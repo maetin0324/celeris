@@ -45,28 +45,37 @@ test.afterAll(async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// 報告は本文を読むだけの互換の画面（web ADR 2026-10-04 D4）。既読・通知試験は通知（/notifications）へ寄せた。
 test("parity: /reports 絞り込み・既読・通知試験・展開", async ({ page }) => {
   await page.goto(`${gateway.base}/reports`);
+  await expect(page.getByRole("heading", { level: 1, name: "報告" })).toBeVisible();
   await expect(page.getByText("実行結果")).toBeVisible();
-  await page.getByLabel("表示").selectOption("all");
   await page.getByLabel("段").selectOption("1");
-  await expect(page).toHaveURL(/filter=all/);
   await expect(page).toHaveURL(/level=1/);
   await page.getByRole("button", { name: "展開" }).click();
   await expect(page.getByText("元の報告").last()).toBeVisible();
   expect(daemon.requests.some((request) => request.path === "/api/v1/reports/R1")).toBe(true);
-  await page.getByRole("button", { name: "既読にする", exact: true }).click();
-  await expect(page.getByText("操作が完了しました").first()).toBeVisible();
-  await expect(page.getByText("元の報告").last()).toBeVisible();
+  // 報告の画面では既読にしない（旧 POST /reports/read を呼ぶ操作が無い）。
+  await expect(page.getByRole("button", { name: /既読にする/ })).toHaveCount(0);
+  await page.getByRole("link", { name: "通知で報告の知らせを見る" }).click();
+  await expect(page).toHaveURL(/\/notifications\?kind=report/);
+  await expect(page.getByRole("heading", { level: 1, name: "通知" })).toBeVisible();
+  await page.getByRole("button", { name: "「日次の報告」を既読にする" }).click();
+  await expect(page.getByRole("button", { name: "「日次の報告」を既読にする" })).toHaveCount(0);
   await page.getByRole("button", { name: "通知を試す" }).click();
   await expect
     .poll(() => daemon.requests.some((request) => request.path === "/api/v1/notify/test" && request.method === "POST"))
     .toBe(true);
+  expect(daemon.requests.some((request) => request.path === "/api/v1/reports/read")).toBe(false);
 });
 
 test("parity: /reports/:id 展開の取得", async ({ page }) => {
   await page.goto(`${gateway.base}/reports`);
   await page.getByRole("button", { name: "展開" }).click();
+  await expect(page.getByText("出典の本文")).toBeVisible();
+  // 通知の行き先（/reports?report=<id>）は、その報告を開いた状態で出す。
+  await page.goto(`${gateway.base}/reports?report=R1`);
+  await expect(page.getByRole("button", { name: "閉じる" })).toBeVisible();
   await expect(page.getByText("出典の本文")).toBeVisible();
 });
 
@@ -83,8 +92,9 @@ test("/reports fixture screenshots", async ({ page }) => {
   }
 });
 
+// ブラウザ通知は通知の未読（GET /notifications/unread-count の events）の増加で 1 回だけ出す。
 test("parity-x: 通知 1 回だけ・生 snapshot で消えない", async ({ page, context }) => {
-  const live = { notify_now: true, unread_bad_news: 1, unread_secretary: 2 };
+  const unread = { unread: 2, events: 3, by_kind: { bad_news: 1, report: 1 } };
   await context.addInitScript(() => {
     (window as Window & { __notifications?: string[] }).__notifications = [];
     Object.defineProperty(window, "Notification", {
@@ -97,49 +107,33 @@ test("parity-x: 通知 1 回だけ・生 snapshot で消えない", async ({ pag
       },
     });
   });
-  await page.route("**/api/daemon", async (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ ...(defaultFixtures["/api/v1/daemon"] as object), reports: live }),
-    }),
-  );
-  await page.route("**/api/reports/notified", async (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({ last_notified_at: "2026-09-30T00:00:00Z" }),
-    }),
-  );
+  const fulfillUnread = async (route: import("@playwright/test").Route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(unread) });
+  await page.route("**/api/notifications/unread-count", fulfillUnread);
   await page.goto(`${gateway.base}/reports`);
   await expect
     .poll(() => page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length))
     .toBe(1);
+  expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.[0])).toBe(
+    "celeris: 通知: 悪い知らせ 1 件 / 未読の通知 2 件",
+  );
   const second = await context.newPage();
   try {
-    await second.route("**/api/daemon", async (route) =>
-      route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify({ ...(defaultFixtures["/api/v1/daemon"] as object), reports: live }),
-      }),
-    );
+    await second.route("**/api/notifications/unread-count", fulfillUnread);
     await second.goto(`${gateway.base}/reports`);
-    await expect(second.getByLabel("未読の報告 2 件")).toBeVisible();
+    await expect(second.getByLabel("未読の通知 2 件")).toBeVisible();
     await page.waitForTimeout(500);
     expect(
       await second.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length),
     ).toBe(0);
     daemon.sendEvent("daemon", { snapshot: { reports: null } });
-    await expect(page.getByLabel("未読の報告 2 件")).toBeVisible();
+    await expect(page.getByLabel("未読の通知 2 件")).toBeVisible();
     expect(await page.evaluate(() => (window as Window & { __notifications?: string[] }).__notifications?.length)).toBe(
       1,
     );
     expect(
       await page.evaluate(() =>
-        Object.keys(localStorage).every(
-          (key) => key !== "celeris-web-reports-notification-key" || !localStorage.getItem(key)?.includes("実行結果"),
-        ),
+        Object.keys(localStorage).every((key) => !localStorage.getItem(key)?.includes("日次の報告")),
       ),
     ).toBe(true);
   } finally {

@@ -7,18 +7,19 @@ import { TaskChangesPanel } from "../changes/changes-view";
 import { TaskFilesPanel } from "../files/task-files-view";
 import { DecisionPanel } from "./decision-panel";
 import { ExecutionPanel } from "./execution-panel";
-import { OverviewView } from "./overview-view";
+import { OverviewView, TaskDetailHeader } from "./overview-view";
 import { taskDetailQuery, taskTimelineQuery } from "./task-detail-query";
 import { TASK_DETAIL_TABS, type TaskDetailTab } from "./task-detail-tabs";
 import { TimelineView } from "./timeline-view";
 
 // /tasks/:id の枠（P3-08、R23）。見出しと tab は取得を待たずに出し、中身だけが FetchFrame で待つ（S1）。
-// tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。
+// header（状態・現在の run・次の操作）は tab に関係なく h1 の下に出す。tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。
 // changes・files・artifacts（P3-13）は /tasks/:id/changes・/tasks/:id/files・/artifacts と同じ部品を置く。
 export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDetailTab }) {
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
-      <nav aria-label="タスクの表示" className="min-w-0 overflow-x-auto border-b border-neutral-300">
+      <TaskDetailHeader taskId={taskId} />
+      <nav aria-label="タスクの表示" className="min-w-0 overflow-x-auto border-b border-border">
         <ul className="flex gap-1">
           {TASK_DETAIL_TABS.map((item) => (
             <li key={item.key}>
@@ -28,8 +29,10 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
                 search={{ tab: item.key === "overview" ? undefined : item.key }}
                 aria-current={item.key === tab ? "page" : undefined}
                 data-tab={item.key}
-                className={`inline-flex min-h-11 items-center px-3 text-sm ${
-                  item.key === tab ? "border-b-2 border-neutral-900 font-semibold" : "text-neutral-600"
+                className={`inline-flex min-h-11 items-center px-3 text-label ${
+                  item.key === tab
+                    ? "border-b-2 border-primary font-semibold text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
                 }`}
               >
                 {item.label}

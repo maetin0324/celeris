@@ -76,25 +76,26 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
   const transitions = (["approve", "reject", "cancel", "retry", "reopen"] as const).filter(has);
   return (
     <section
+      id="decision-panel"
       aria-labelledby="decision-panel-title"
       data-testid="decision-panel"
-      className="min-w-0 space-y-3 rounded border border-neutral-300 p-3"
+      className="min-w-0 scroll-mt-4 space-y-3 rounded-lg border border-border bg-surface p-4"
     >
-      <h2 id="decision-panel-title" className="text-base font-semibold">
+      <h2 id="decision-panel-title" className="text-section font-semibold text-foreground">
         判断
       </h2>
-      <p className="text-sm">
+      <p className="text-label">
         状態 <span data-testid="decision-status">{detail.task.status}</span>
       </p>
       {detail.latest_question && has("answer") ? (
-        <p className="break-words text-sm">質問: {detail.latest_question}</p>
+        <p className="break-words text-label">質問: {detail.latest_question}</p>
       ) : null}
       <ActionResultView result={result} fieldId={fieldId} />
       {(has("approve") || has("reject")) && (
-        <label className="block">
+        <label className="block text-label">
           理由・note（任意）
           <textarea
-            className="block min-h-11 w-full rounded border p-2"
+            className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
             value={note}
             onChange={(event) => setNote(event.target.value)}
             aria-describedby={described}
@@ -103,10 +104,10 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
       )}
       {has("answer") && (
         <div className="space-y-2">
-          <label className="block">
+          <label className="block text-label">
             回答
             <textarea
-              className="block min-h-11 w-full rounded border p-2"
+              className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
               aria-describedby={described}
@@ -130,18 +131,18 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         <details className="min-w-0">
           <summary className="inline-flex min-h-11 cursor-pointer items-center">編集</summary>
           <div className="space-y-2">
-            <label className="block">
+            <label className="block text-label">
               題
               <input
-                className="block min-h-11 w-full rounded border p-2"
+                className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
               />
             </label>
-            <label className="block">
+            <label className="block text-label">
               目的
               <textarea
-                className="block min-h-11 w-full rounded border p-2"
+                className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
                 value={objective}
                 onChange={(event) => setObjective(event.target.value)}
               />
@@ -153,10 +154,10 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         </details>
       )}
       <div className="space-y-2">
-        <label className="block">
+        <label className="block text-label">
           コメント
           <textarea
-            className="block min-h-11 w-full rounded border p-2"
+            className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
             value={comment}
             onChange={(event) => setComment(event.target.value)}
           />

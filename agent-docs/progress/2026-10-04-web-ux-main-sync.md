@@ -34,3 +34,16 @@ merge 後の木（`f24bbed8`）で実行。web/ の修正は不要だった。
 - `check:boundaries`・`check:parity`・`check:secrets` → いずれも exit 0
 - doc 検査 4 本（check-doc-links・check-adr-numbers・progress-index --check・check-doc-layout）→ exit 0
 - `git diff --quiet c1b24fb6fa8c -- crates/ gui/` → exit 0（main と同じ）
+
+## web 検査（e2e・mobile-audit）
+
+2026-10-04、WU e2e-verify。merge 後の木（`3c46976d`、merge commit `6f7c4c3b`、取り込んだ main は `6f7c4c3b^2` = `c1b24fb6`）で実行。
+
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile && corepack pnpm@12.6.0 -C web build` → exit 0
+- `corepack pnpm@12.6.0 -C web e2e --grep-invert 'S1 /'` → exit 0
+  - e2e: 174 passed, 8 skipped, 0 failed（retries 0、15.3 分）
+  - skip 8 件は環境変数が無いときに飛ぶ既存の試験（`WEB_SHOTS_OUT` の fixture screenshot 5 件、`WEB_E2E_REAL_BASE_URL` の staging 3 件）で、今回足した skip は無い
+- `corepack pnpm@12.6.0 -C web mobile-audit` → exit 0（`mobile-audit: 30 path(s) x 4 widths ok`）
+- `typecheck` exit 0 / `lint` exit 0（biome: 既存の warning 4・info 1）/ `test` exit 0（42 files・269 tests passed）
+- 直したこと: 無い（web/ の修正は不要だった。main の受信箱・通知 API と foundation の見た目はそのまま両立している）
+- S1（latency/transition.spec.ts）はこの取り込み確認の段だけ外した。visual-qa・最終の受け入れでは起動完了待ち・retries 0 で流す。

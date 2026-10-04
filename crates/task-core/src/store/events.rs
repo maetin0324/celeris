@@ -25,7 +25,7 @@ pub(super) fn latest_delivery_skipped_sql() -> String {
     )
 }
 
-use crate::integration_request::{SUPERSEDED_ANSWER, TASK_TERMINAL_ANSWER};
+use crate::integration_request::{DELIVERY_ORIGIN, SUPERSEDED_ANSWER, TASK_TERMINAL_ANSWER};
 
 /// migration 0047 と字句まで同じ式を使う。
 pub(super) const INTEGRATION_REQUEST_PREDICATE: &str =
@@ -250,7 +250,8 @@ impl SqliteStore {
         Ok(())
     }
 
-    /// 終端遷移と同じトランザクションで、origin を問わず未回答依頼だけを閉じる。
+    /// 終端遷移と同じトランザクションで、配送（origin `delivery`）以外の未回答依頼だけを閉じる。
+    /// 配送の依頼は done の task の上で人の判断を待つ正当な依頼なので残す。
     pub(super) fn close_open_integration_requests_tx(
         conn: &Connection,
         task_id: TaskId,
@@ -258,7 +259,9 @@ impl SqliteStore {
         for row in
             fold_open_integration_requests(Self::integration_request_rows_tx(conn, Some(task_id))?)
         {
-            if let Event::IntegrationRequested { request, .. } = row.event {
+            if let Event::IntegrationRequested { request, origin } = row.event
+                && origin != DELIVERY_ORIGIN
+            {
                 Self::close_terminal_integration_request_tx(
                     conn,
                     task_id,
@@ -283,7 +286,10 @@ impl SqliteStore {
                 params![row.task_id.to_string()],
                 |r| r.get(0),
             )?;
-            if terminal && let Event::IntegrationRequested { request, .. } = row.event {
+            if terminal
+                && let Event::IntegrationRequested { request, origin } = row.event
+                && origin != DELIVERY_ORIGIN
+            {
                 let request_id = request.id_for(row.task_id);
                 Self::close_terminal_integration_request_tx(&tx, row.task_id, request_id.clone())?;
                 closed.push((row.task_id, request_id));

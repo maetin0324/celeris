@@ -5975,7 +5975,7 @@ fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes()
 }
 
 #[test]
-fn terminal_transitions_close_all_open_integration_requests_by_appending_answers() {
+fn terminal_transitions_close_non_delivery_integration_requests_by_appending_answers() {
     use crate::integration_request::TASK_TERMINAL_ANSWER;
     for (initial, trigger, terminal) in [
         (Status::Reviewing, Trigger::ReviewPass, Status::Done),
@@ -6028,12 +6028,18 @@ fn terminal_transitions_close_all_open_integration_requests_by_appending_answers
             })
             .collect::<Vec<_>>();
         closed.sort();
-        let mut expected = vec![a.id_for(task.id), b.id_for(task.id)];
-        expected.sort();
-        assert_eq!(closed, expected);
-        let open = store.open_integration_requests().unwrap();
-        assert_eq!(open.len(), 1);
-        assert_eq!(open[0].task_id, live.id);
+        // 配送（delivery）の依頼は done の後に人の判断を待つ正当な依頼なので残る。
+        assert_eq!(closed, vec![a.id_for(task.id)]);
+        let mut open = store
+            .open_integration_requests()
+            .unwrap()
+            .into_iter()
+            .map(|row| row.task_id)
+            .collect::<Vec<_>>();
+        open.sort();
+        let mut expected_open = vec![task.id, live.id];
+        expected_open.sort();
+        assert_eq!(open, expected_open);
         assert!(
             store
                 .close_integration_requests_of_terminal_tasks()

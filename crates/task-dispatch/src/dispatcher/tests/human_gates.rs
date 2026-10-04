@@ -452,7 +452,7 @@ async fn approval_facts_count_only_units_that_will_create_children() {
     assert_eq!(facts.child_task_units, 1, "c1 only: {facts:?}");
 }
 
-/// 旧版で残った依頼は最初の tick が追記だけで閉じる。再起動・定期回収とも冪等。
+/// 旧版で残った段の依頼は最初の tick が追記だけで閉じる。配送の依頼は残す。再起動・定期回収とも冪等。
 #[tokio::test]
 async fn startup_closes_only_terminal_tasks_integration_requests_once() {
     use task_core::integration_request::{IntegrationRequest, TASK_TERMINAL_ANSWER};
@@ -516,17 +516,22 @@ async fn startup_closes_only_terminal_tasks_integration_requests_once() {
                     )
                 })
                 .count();
-            assert_eq!(answers, if status.is_terminal() { 3 } else { 0 });
+            // 段の依頼 2 件だけ。配送の依頼は配送が自分で閉じるので残す。
+            assert_eq!(answers, if status.is_terminal() { 2 } else { 0 });
         }
         let open = store.open_integration_requests().unwrap();
-        assert_eq!(open.len(), 6);
+        // 非終端 2 task × 3 件 + 終端 3 task の配送依頼 × 1 件。
+        assert_eq!(open.len(), 9);
         assert!(open.iter().all(|row| {
-            !store
+            let terminal = store
                 .get(row.task_id)
                 .unwrap()
                 .unwrap()
                 .status
-                .is_terminal()
+                .is_terminal();
+            !terminal
+                || matches!(&row.event,
+                    Event::IntegrationRequested { origin, .. } if origin == "delivery")
         }));
     }
 }

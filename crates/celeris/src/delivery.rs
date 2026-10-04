@@ -574,7 +574,7 @@ fn advance(
                     // 統合済み。受信箱から消す（回答の記録だけで、配送の再試行は起こさない）。
                     store.integration_requests_close(
                         d.task_id,
-                        "delivery",
+                        task_core::integration_request::DELIVERY_ORIGIN,
                         task_core::integration_request::INTEGRATED_ANSWER,
                         Some(&format!(
                             "統合済み: {} が {} を取り込んだ",

@@ -12,7 +12,9 @@ mode = "host"
 [commands]
 # 実装者とレビュー担当が使う検査コマンド（CLAUDE.md の「各Phase完了時に必ず」と同じ 2 本）。
 # タスクに `acceptance` の検査コマンドが明示されていればそちらが勝つ。
-check = ["cargo test --workspace", "cargo clippy --workspace -- -D warnings"]
+# 試験は release gate（release.sh の cargo-test 段）と同じ nextest 経由（`cargo nextest run --workspace` +
+# `cargo test --doc --workspace`。範囲は `cargo test --workspace` と同じで、直列が要る試験は .config/nextest.toml の test-group）。
+check = ["bash scripts/dev/test-parallel.sh", "cargo clippy --workspace -- -D warnings"]
 
 [outputs]
 # 文書ページの根。図・表・原稿のような「コード以外の成果物」はリポジトリのルート基準（既定）。

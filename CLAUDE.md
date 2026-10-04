@@ -12,7 +12,7 @@
 - cargo / nextest はローカル LVM の target-dir を使う（`.cargo/config.toml` を `scripts/dev/worktree-target-dir.sh` が生成。PreToolUse hook が自動で書く。NFS の worktree に `target/` を作らない）
 - 設計判断をしたら `agent-docs/adr/YYYY-MM-DD-<slug>.md`（日付+slug。番号は 0128 で止めた。ADR-0128 D5）を追加してから実装する
 - 各Phase完了時に必ず:
-  - `cargo test --workspace` と `cargo clippy --workspace -- -D warnings` を実行し、出力の要点を報告に含める
+  - `bash scripts/dev/test-parallel.sh`（nextest。`cargo test --workspace` と同じ範囲で、release gate と同じ）と `cargo clippy --workspace -- -D warnings` を実行し、出力の要点を報告に含める
   - task の進捗ファイル `agent-docs/progress/YYYY-MM-DD-<slug>.md` を更新（front matter と完了日、証拠コマンドと結果、未解決事項、提案。並列 WorkUnit は `agent-docs/progress/YYYY-MM-DD-<slug>/<wu-key>.md`。ADR-0128 D3）。共有の索引・`agent-docs/PROGRESS.md` には追記しない
   - `git add -A && git commit -m "phase N: <summary>"`
 - 仕様・設計の変更の提案は task の進捗ファイルの「提案」節に書く（ADR-0128 D3）

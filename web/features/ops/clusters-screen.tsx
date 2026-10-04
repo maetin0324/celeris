@@ -84,12 +84,14 @@ function StatusTable({
             <TableRow key={item.id} data-testid={`cluster-row-${item.id}`}>
               <TableCell className="font-medium break-all">{item.id}</TableCell>
               <TableCell>
-                <Badge tone={state.tone}>{state.label}</Badge>
+                <Badge tone={state.tone} className="whitespace-nowrap">
+                  {state.label}
+                </Badge>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap">
                 <Time value={new Date(checkedAt).toISOString()} />
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap">
                 <Time value={lost} />
               </TableCell>
               <TableCell className="min-w-48 break-words">

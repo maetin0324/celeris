@@ -44,6 +44,9 @@ completed: 2026-10-04
 | `corepack pnpm@12.6.0 -C web mobile-audit` | 31 path × 4 幅 ok |
 | screenshots `after-notifications` | 124 枚（台帳 32 行のうち撮れる 31 画面 × 4 幅）（run の artifacts） |
 | check 再実行（install・typecheck・lint・test・check:parity）: server/spa-routes.test.mjs の画面数を /notifications 追加に合わせ 32+404 へ | exit 0（vitest 289 passed、node --test 42 passed） |
+| 再試行 v4（2026-10-04、コード変更なし）: install・typecheck・lint・test・check:parity・check:boundaries・build・check:secrets | 全て exit 0（vitest 46 files / 289 passed） |
+| 再試行 v4: e2e parity/notifications・reports・help・shell・latency-gate、shell/*、realtime/refetch-scope、a11y | exit 0、91 passed / 1 skipped |
+| 再試行 v4: mobile-audit・screenshots after-notifications | 31 path × 4 幅 ok、124 枚 |
 
 ## 未解決事項
 

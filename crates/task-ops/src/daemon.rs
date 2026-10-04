@@ -1,4 +1,4 @@
-//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/gui/api.md` §3.20 / §6.2）。
+//! デーモンのメモリ上のスナップショット（ADR-0013 D4, `docs/api/v1/gui-api.md` §3.20 / §6.2）。
 //!
 //! ディスパッチャ（task-dispatch）が tick の最後に作って `tokio::sync::watch` に送り、API（task-api）が読む。両者が依存する
 //! この crate に型を置く（task-api は task-dispatch に依存しない）。真実ではなく観測値で、DB には書かず `replay` の対象外。
@@ -106,16 +106,18 @@ pub struct ScratchStatus {
     pub legacy: Vec<ScratchLegacyView>,
     /// 直近の GC（rename したものがあった回）。
     pub last_gc: Option<ScratchGcView>,
-    /// ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+    /// 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+    /// 互換のため残す。
     #[serde(default)]
     pub sccache: Option<ScratchSccacheView>,
-    /// ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-    /// スナップショットには無い。
+    /// 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+    /// ため残す。
     #[serde(default)]
     pub cache: Option<ScratchCacheView>,
 }
 
-/// ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+/// 廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。
+/// `ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchCacheView {
     /// `ready`（`/healthz` が応答）| `disabled`（`[scratch.cache_server] enabled = false`）| `unavailable`（応答なし）。
@@ -134,8 +136,7 @@ pub struct ScratchCacheView {
 /// `ScratchCacheStats.schema` の値。
 pub const SCRATCH_CACHE_STATS_SCHEMA: &str = "celeris.scratch-cache-stats/1";
 
-/// ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
-/// 累計、容量は byte、時刻は RFC 3339。
+/// 廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchCacheStats {
     /// 常に `celeris.scratch-cache-stats/1`。
@@ -196,7 +197,8 @@ pub struct ScratchCacheStats {
     pub flush_mbps: u64,
 }
 
-/// ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+/// 廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client
+/// 向けの schema 互換のため型だけ残す（値は常に `None`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchSccacheView {
     /// `ready`（run に `RUSTC_WRAPPER` を与える）| `disabled`（設定で無効）| `unavailable`（バイナリか server が無い）。
@@ -216,7 +218,7 @@ pub struct ScratchSccacheView {
     pub stats: Option<ScratchSccacheStats>,
 }
 
-/// `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+/// 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ScratchSccacheStats {
     pub compile_requests: u64,
@@ -397,6 +399,10 @@ pub struct CooldownView {
 /// プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderLive {
+    #[serde(default)]
+    pub kind: task_core::ProviderKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_source: Option<task_core::ResolvedLlmSource>,
     #[serde(default)]
     pub credential_refs: std::collections::HashMap<String, String>,
     #[serde(default)]

@@ -6,7 +6,7 @@
 //!
 //! `resources/list` は**列挙できるもの**（知識の索引・組織・skills）だけを出す。タスク・案件は
 //! 件数が大きく汎用の列挙に意味が無いため、`tasks_list` / `projects_list` で id を知ってから
-//! `resources/read` で読む（Phase 78 の簡略化。`docs/mcp.md` に明記）。
+//! `resources/read` で読む（Phase 78 の簡略化。`docs/guides/mcp.md` に明記）。
 
 use std::sync::Arc;
 

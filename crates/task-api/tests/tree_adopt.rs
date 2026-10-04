@@ -560,16 +560,12 @@ async fn adopt_endpoint_requires_the_tree_and_a_v3_plan() {
     assert_problem(&resp, 422, "adopt_no_tree_plan");
 }
 
-/// `docs/ops/adr-0079-r5b-runbook.md` の `cat > <name> <<'EOF'` … `EOF` の中身。
+/// 旧 R5b runbook（ADR-0128 で削除）の `cat > <name> <<'EOF'` … `EOF` の中身を
+/// `tests/fixtures/<name>` として切り出したもの。
 fn runbook_json(name: &str) -> Value {
-    let text = include_str!("../../../docs/ops/adr-0079-r5b-runbook.md");
-    let start = format!("cat > {name} <<'EOF'\n");
-    let from = text
-        .find(&start)
-        .unwrap_or_else(|| panic!("{name} is not in the runbook"))
-        + start.len();
-    let to = from + text[from..].find("\nEOF\n").expect("EOF");
-    serde_json::from_str(&text[from..to]).unwrap_or_else(|e| panic!("{name}: {e}"))
+    let path = format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"));
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{path}: {e}"));
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
 fn fixed_task(env: &TestEnv, id: &str, project: ProjectId, status: Status, parent: Option<TaskId>) {
@@ -588,7 +584,7 @@ fn fixed_project(env: &TestEnv, id: &str, title: &str) -> ProjectId {
     p.id
 }
 
-/// R5b の手順書（`docs/ops/adr-0079-r5b-runbook.md`）の JSON がそのまま通る: browser と BenchFS の root task の
+/// R5b の手順書（`tests/fixtures/*.json`、旧 ADR-0079 runbook から切り出し）の JSON がそのまま通る: browser と BenchFS の root task の
 /// `POST /tasks`、/3 の計画の `PUT`（本番と同じ id・状態の task を採用: Phase 1 = done、Phase 2 = failed、BenchFS の
 /// Phase0 / Phase1 の 6 件 = done で `parent_id` は `kind = plan` の task）。すべて採用され、決定は browser 3 件・
 /// BenchFS 1 件、承認（PlanGate）を挟まず root は draft のまま。

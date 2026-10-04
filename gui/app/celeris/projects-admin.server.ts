@@ -15,7 +15,7 @@ import type {
 /**
  * 「案件」画面（`/projects`, `/projects/:id`）からの中継（ADR-0033 D2、docs/celeris-api-v1.md §3.46〜3.49）。
  * `POST /projects`（案件の作成）は Phase 27（M-4）で**管理系**になった（`token_file` 未設定でも 401。
- * v1 の破壊的変更、docs/gui/api.md 冒頭の変更点一覧）。Phase 55（ADR-0044 D6）で
+ * v1 の破壊的変更、docs/api/v1/gui-api.md 冒頭の変更点一覧）。Phase 55（ADR-0044 D6）で
  * `PATCH /projects/{id}` / `POST /projects/{id}/milestones` / `PATCH /milestones/{id}` も管理系になり、
  * 中止・一時停止・アーカイブ（§3.84〜3.91）も最初から管理系。`GET /projects` だけが通常の要求。
  * celeris ADR-0079 D13（Phase R5a）: 案件計画（`POST /projects/{id}/plan`・`…/project-plan/{version}/decide`）と

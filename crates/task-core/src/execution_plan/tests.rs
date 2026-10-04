@@ -1319,6 +1319,7 @@ fn v3_errors(spec: &ExecutionPlanSpec) -> Vec<PlanValidationError> {
 
 fn leaf(key: &str, stage: &str) -> PlanUnitSpec {
     PlanUnitSpec {
+        expected_write_paths: None,
         key: key.into(),
         stage: stage.into(),
         kind: WorkUnitKind::Implement,
@@ -1357,6 +1358,33 @@ fn task_unit(key: &str, stage: &str) -> PlanUnitSpec {
             check: crate::model::Check::Reviewer,
         }],
         ..leaf(key, stage)
+    }
+}
+
+#[test]
+fn plan_v3_accepts_expected_write_paths_and_rejects_invalid_format() {
+    let mut plan = v3_fixture();
+    plan.units[0].expected_write_paths = Some(vec!["src/".into(), "tests/a.rs".into()]);
+    let validated = validate(&plan, tree_on(), &[]).unwrap();
+    assert_eq!(
+        validated.spec.units[0].expected_write_paths,
+        Some(vec!["src".into(), "tests/a.rs".into()])
+    );
+    let value = serde_json::to_value(&plan).unwrap();
+    let decoded: ExecutionPlanSpec = serde_json::from_value(value).unwrap();
+    assert_eq!(
+        decoded.units[0].expected_write_paths,
+        plan.units[0].expected_write_paths
+    );
+
+    for invalid in ["", "/src", "src//x", "src/../x", "./src"] {
+        plan.units[0].expected_write_paths = Some(vec![invalid.into()]);
+        assert!(
+            v3_errors(&plan)
+                .iter()
+                .any(|error| matches!(error, PlanValidationError::InvalidWritePaths { .. })),
+            "{invalid:?}"
+        );
     }
 }
 

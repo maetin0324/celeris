@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
-use task_core::{AccountAdapter, Tier};
+use task_core::{
+    AccountAdapter, LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin, Tier,
+};
 use task_dispatch::ProviderSpec;
 
 use super::{AccountsConfig, Config, ConfigError};
@@ -12,6 +14,12 @@ use super::{AccountsConfig, Config, ConfigError};
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderConfig {
+    /// Omitted by legacy rows; all current executable rows are adapters.
+    #[serde(default)]
+    pub kind: Option<ProviderKind>,
+    /// The source used by this adapter. Omission preserves legacy inference.
+    #[serde(default)]
+    pub llm_source: Option<LlmSourceRef>,
     #[serde(default)]
     pub tier_models: task_core::model_routing::TierModels,
     #[serde(default)]
@@ -119,12 +127,165 @@ impl Config {
             .map(|p| ProviderSpec {
                 id: p.id.clone(),
                 adapter: p.adapter.clone(),
-                tiers: p.tiers.clone(),
+                tiers: if self.is_qwen_acp(p) {
+                    vec![Tier::Cheap]
+                } else {
+                    p.tiers.clone()
+                },
                 concurrency: p.concurrency,
                 model: p.model.clone(),
             })
             .collect()
     }
+
+    /// The source and whether it was written explicitly or inferred from a legacy row.
+    pub fn provider_llm_source(&self, id: &str) -> Option<ResolvedLlmSource> {
+        let p = self.providers.iter().find(|p| p.id == id)?;
+        Some(ResolvedLlmSource {
+            source: p
+                .llm_source
+                .clone()
+                .unwrap_or_else(|| self.derive_llm_source(p)),
+            origin: if p.llm_source.is_some() {
+                SourceOrigin::Explicit
+            } else {
+                SourceOrigin::Derived
+            },
+        })
+    }
+
+    pub fn provider_kind(&self, id: &str) -> Option<ProviderKind> {
+        self.providers
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.kind.unwrap_or_default())
+    }
+
+    fn effective_model<'a>(&'a self, p: &'a ProviderConfig) -> Option<&'a str> {
+        if !p.model.is_empty() {
+            return Some(&p.model);
+        }
+        match p.adapter.as_str() {
+            "claude-code" => self.adapters.claude_code.model.as_deref(),
+            "codex" => self.adapters.codex.model.as_deref(),
+            "aider" => self.adapters.aider.model.as_deref(),
+            "local-deep-research" => self
+                .adapters
+                .local_deep_research
+                .settings
+                .get("llm.model")
+                .map(String::as_str),
+            "langmem" => self.knowledge.langmem.model.as_deref(),
+            _ => None,
+        }
+    }
+
+    fn effective_env<'a>(&'a self, p: &'a ProviderConfig, key: &str) -> Option<&'a str> {
+        p.env
+            .get(key)
+            .map(String::as_str)
+            .or_else(|| match p.adapter.as_str() {
+                "acp" => self.adapters.acp.env.get(key).map(String::as_str),
+                "paperqa" => self.adapters.paperqa.env.get(key).map(String::as_str),
+                "local-deep-research" => self
+                    .adapters
+                    .local_deep_research
+                    .env
+                    .get(key)
+                    .map(String::as_str),
+                "langmem" => self.adapters.langmem.env.get(key).map(String::as_str),
+                "aider" => self.adapters.aider.env.get(key).map(String::as_str),
+                _ => None,
+            })
+    }
+
+    fn derive_llm_source(&self, p: &ProviderConfig) -> LlmSourceRef {
+        match p.adapter.as_str() {
+            "fake" => return LlmSourceRef::None,
+            "claude-code" => return LlmSourceRef::ClaudeOauth,
+            "codex" => return LlmSourceRef::CodexOauth,
+            _ => {}
+        }
+        let model = self.effective_model(p).unwrap_or_default();
+        if is_celeris_model(model) || self.model_from_env_is_celeris(p) {
+            return LlmSourceRef::Celeris;
+        }
+        if p.adapter == "acp"
+            && p.id.ends_with("-qwen")
+            && self.effective_env(p, "OPENCODE_CONFIG").is_some()
+            && is_qwen_model(model)
+        {
+            return LlmSourceRef::OpenaiCompatible("qwen".into());
+        }
+        LlmSourceRef::Unknown
+    }
+
+    fn model_from_env_is_celeris(&self, p: &ProviderConfig) -> bool {
+        ["OPENAI_MODEL", "LITELLM_MODEL", "MODEL"]
+            .into_iter()
+            .any(|key| self.effective_env(p, key).is_some_and(is_celeris_model))
+    }
+
+    fn is_qwen_acp(&self, p: &ProviderConfig) -> bool {
+        if p.adapter != "acp" {
+            return false;
+        }
+        let model = self.effective_model(p).unwrap_or_default();
+        // A proxy model takes precedence over a legacy opencode configuration path.
+        if matches!(&p.llm_source, Some(LlmSourceRef::Celeris))
+            || is_celeris_model(model)
+            || self.model_from_env_is_celeris(p)
+        {
+            return false;
+        }
+        is_qwen_model(model)
+            || matches!(&p.llm_source, Some(LlmSourceRef::OpenaiCompatible(id)) if id.to_ascii_lowercase().starts_with("qwen"))
+    }
+
+    /// Diagnostic codes are stable and contain no environment or credential values.
+    pub fn provider_kind_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        for p in &self.providers {
+            if p.id.ends_with("-qwen") {
+                warnings.push(
+                    "deprecated_qwen_provider_id: preserve the id until a coordinated migration"
+                        .into(),
+                );
+            }
+            if is_qwen_model(self.effective_model(p).unwrap_or_default()) {
+                warnings.push(
+                    "direct_qwen_model: use a celeris/<tier> proxy model when migrating".into(),
+                );
+            }
+            if self
+                .provider_llm_source(&p.id)
+                .is_some_and(|r| r.source == LlmSourceRef::Unknown)
+            {
+                warnings.push("unknown_llm_source: set llm_source explicitly".into());
+            }
+            if self.is_qwen_acp(p) && p.tiers.iter().any(|t| *t != Tier::Cheap) {
+                warnings.push("qwen_fixed_acp_noncheap_tier: use a separate proxy-backed ACP row for frontier/standard".into());
+            }
+        }
+        warnings
+    }
+}
+
+fn is_celeris_model(model: &str) -> bool {
+    matches!(
+        model,
+        "celeris/frontier"
+            | "celeris/standard"
+            | "celeris/cheap"
+            | "openai/celeris/frontier"
+            | "openai/celeris/standard"
+            | "openai/celeris/cheap"
+    )
+}
+
+fn is_qwen_model(model: &str) -> bool {
+    let lower = model.to_ascii_lowercase();
+    lower.starts_with("qwen") || lower.contains("/qwen")
 }
 
 /// ADR-0027 D3: 行ごとの `settings` の上書きも `[adapters.paperqa]` と同じ基準（設定ファイルのディレクトリ）で絶対化する。
@@ -139,10 +300,9 @@ pub(super) fn resolve_provider_settings(providers: &mut [ProviderConfig], base: 
 }
 
 /// `[[providers]]` の検証。`account_pool = true` の行は `[accounts]` の根ディレクトリも見る。
-pub(super) fn validate_providers(
-    providers: &[ProviderConfig],
-    accounts: Option<&AccountsConfig>,
-) -> Result<(), ConfigError> {
+pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
+    let providers = &cfg.providers;
+    let accounts: Option<&AccountsConfig> = cfg.accounts.as_ref();
     if providers.is_empty() {
         return Err(ConfigError::Invalid(
             "at least one [[providers]] entry is required".into(),
@@ -150,6 +310,45 @@ pub(super) fn validate_providers(
     }
     let mut seen_ids = std::collections::HashSet::new();
     for p in providers {
+        if let Some(source) = &p.llm_source {
+            let inferred = cfg.derive_llm_source(p);
+            let incompatible = match source {
+                LlmSourceRef::ClaudeOauth => {
+                    p.adapter != "claude-code"
+                        || is_celeris_model(cfg.effective_model(p).unwrap_or_default())
+                }
+                LlmSourceRef::CodexOauth => {
+                    p.adapter != "codex"
+                        || is_celeris_model(cfg.effective_model(p).unwrap_or_default())
+                }
+                LlmSourceRef::None => !matches!(p.adapter.as_str(), "fake" | "browser-specialist"),
+                LlmSourceRef::Celeris => inferred != LlmSourceRef::Celeris,
+                LlmSourceRef::OpenaiCompatible(_) => {
+                    matches!(p.adapter.as_str(), "fake" | "claude-code" | "codex")
+                        || (inferred != LlmSourceRef::Unknown && inferred != *source)
+                }
+                LlmSourceRef::Unknown => true,
+            };
+            if incompatible {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: llm_source conflicts with adapter or model",
+                    p.id
+                )));
+            }
+            if let LlmSourceRef::OpenaiCompatible(id) = source
+                && !cfg
+                    .llm_proxy
+                    .sources
+                    .openai_compatible
+                    .iter()
+                    .any(|s| s.id == *id)
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: llm_source references an unknown openai_compatible source",
+                    p.id
+                )));
+            }
+        }
         if p.account_id.is_some() && !p.account_pool {
             return Err(ConfigError::Invalid(format!(
                 "provider {}: account_id requires account_pool",

@@ -5,6 +5,7 @@ export default [
   // 最初の画面は Console（ADR-0048 D4、GUI Phase G22）。受信箱は裏方の `/inbox` に残す。
   index("routes/home.tsx"),
   route("inbox", "routes/inbox.tsx"),
+  route("notifications", "routes/notifications.tsx"),
   route("healthz", "routes/healthz.ts"),
   route("login", "routes/login.tsx"),
   route("logout", "routes/logout.ts"),
@@ -43,9 +44,13 @@ export default [
   // run の全行（ADR-0048 D1、GUI Phase G22）。Console の progress ブロックの「すべて見る」が
   // 開いたときだけ取りに行く（`tasks/:id/runs/:runId` の兄弟の resource route）
   route("tasks/:id/runs/:runId/events", "routes/tasks.$id.runs.$runId.events.ts"),
+  // 統合 WU の検査の出力の末尾（2026-10-04 統合の検査の進み具合）。WU の行で開いたときだけ取りに行く resource route
+  route("tasks/:id/work-units/:wuId/check-log", "routes/tasks.$id.work-units.$wuId.check-log.ts"),
   // `/plans/new`（`POST /plans` の画面）は ADR-0079 R5b-prep で撤去（`POST /plans` は R5a で 410。新しい仕事は
   // root task〈`/tasks/new`〉とその計画で表す）。
   route("daemon", "routes/daemon.tsx"),
+  route("cron", "routes/cron.tsx"),
+  route("cron/:id", "routes/cron.$id.tsx"),
   route("providers", "routes/providers.tsx"),
   route("accounts", "routes/accounts.tsx"),
   // MCP クライアントの直近の呼び出し（ADR-0056 D4、Phase 80）。「MCP クライアント」節のカードを

@@ -1,5 +1,5 @@
-//! task-worker: ワーカープロトコル（DESIGN §5.3, ADR-0003）、アダプタ（§5.4）、
-//! ワークスペース（§5.8）。ディスパッチ判断はここに書かない（それは task-dispatch）。
+//! task-worker: ワーカープロトコル（ADR-0003）、アダプタ、
+//! ワークスペース。ディスパッチ判断はここに書かない（それは task-dispatch）。
 
 pub mod acp;
 pub mod adapter;
@@ -11,6 +11,7 @@ pub mod browser_action;
 pub mod browser_cdp_sink;
 pub mod browser_credential;
 pub mod browser_egress;
+pub mod browser_launcher;
 pub mod browser_live;
 pub mod browser_policy;
 pub mod browser_relay;

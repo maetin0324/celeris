@@ -3,7 +3,7 @@
 tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 ---
 
-`web/` を変える agent と人が守る規則。値と見た目の正本は [DESIGN.md](DESIGN.md)、画面台帳と現状は [UX_AUDIT.md](UX_AUDIT.md)、技術の枠は [ADR-0081](../adr/0081-web-spa-frontend.md) と [web-0004](../web/adr/web-0004-design-system.md)。本書は「何を破ったら差し戻すか」と「何で確かめるか」だけを書く。規則に合わない値が要る場合は、画面で迂回せず DESIGN.md の token へ理由と利用箇所を加える提案をする。
+`web/` を変える agent と人が守る規則。値と見た目の正本は [DESIGN.md](DESIGN.md)、画面台帳と現状は [UX_AUDIT.md](UX_AUDIT.md)、技術の枠は [ADR-0081](../../agent-docs/adr/0081-web-spa-frontend.md) と [web-0004](../../agent-docs/web/adr/web-0004-design-system.md)。本書は「何を破ったら差し戻すか」と「何で確かめるか」だけを書く。規則に合わない値が要る場合は、画面で迂回せず DESIGN.md の token へ理由と利用箇所を加える提案をする。
 
 ## 規則
 

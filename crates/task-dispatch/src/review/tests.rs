@@ -79,7 +79,7 @@ fn synthetic_review_task_inherits_the_subjects_project_milestone_and_assignee() 
 
 async fn plain_review(
     task: &Task,
-    ws: &LocalWorkspace,
+    ws: &dyn Workspace,
     dir: &Path,
     produced: &[ArtifactRef],
     t: Duration,
@@ -97,12 +97,13 @@ async fn plain_review(
     .verdicts
 }
 
+/// ADR-0125 §3: 検査は workspace の中で再実行される（作業ディレクトリ・順序・期待 exit・欠落ファイルの不合格）。
+/// pass/fail の判定は短い timeout に晒さない（高負荷で sh の起動が遅れても誤って timed out にならない長さ）。
+/// timeout の枝（`timed out` の判定と 3s→6s の 1 回の再試行）は、timeout を明示的に返す `ScriptedWorkspace` と、
+/// 実 process の `sleep 30` に対する別の呼び出しで確かめる（どちらも負荷で遅れるほど timeout 側に倒れるだけ）。
 #[tokio::test]
 async fn command_checks_are_re_executed_in_workspace() {
-    let dir = tempfile::tempdir().unwrap();
-    std::fs::write(dir.path().join("present.txt"), "x").unwrap();
-    let ws = LocalWorkspace::new(dir.path());
-    let task = task_with(
+    let checks = || {
         vec![
             Check::Command {
                 cmd: "test -f present.txt".into(),
@@ -120,16 +121,65 @@ async fn command_checks_are_re_executed_in_workspace() {
                 cmd: "sleep 30".into(),
                 expect_exit: 0,
             },
-        ],
-        dir.path(),
+        ]
+    };
+
+    // (1) 実 `LocalWorkspace` で、timeout しない 3 件の pass/fail（timeout は壊れたときの保険の長さ）。
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("present.txt"), "x").unwrap();
+    let ws = LocalWorkspace::new(dir.path());
+    let mut task = task_with(checks(), dir.path());
+    task.acceptance.truncate(3);
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(120)).await;
+    assert_eq!(
+        v.iter().map(|x| x.pass).collect::<Vec<_>>(),
+        vec![true, false, true]
     );
-    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_millis(300)).await;
+    assert!(v[1].reason.contains("absent.txt"), "{}", v[1].reason);
+    assert!(!v.iter().any(|x| x.reason.contains("timed out")), "{v:?}");
+    assert_eq!(v[1].criterion_idx, 1);
+
+    // (2) 同じ 4 件を、`sleep 30` だけ timeout を返す workspace で: 判定は timed out、再試行は 2 倍の 1 回だけ。
+    let scripted = ScriptedWorkspace::default();
+    scripted.push("test -f present.txt", exec_ok(0));
+    scripted.push("test -f absent.txt", exec_ok(1));
+    scripted.push("exit 7", exec_ok(7));
+    scripted.push("sleep 30", exec_timeout());
+    scripted.push("sleep 30", exec_timeout());
+    let task = task_with(checks(), dir.path());
+    let v = plain_review(&task, &scripted, dir.path(), &[], Duration::from_secs(3)).await;
     assert_eq!(
         v.iter().map(|x| x.pass).collect::<Vec<_>>(),
         vec![true, false, true, false]
     );
-    assert!(v[3].reason.contains("timed out"));
+    assert!(
+        v[3].reason.contains("timed out after 6s"),
+        "{}",
+        v[3].reason
+    );
     assert_eq!(v[1].criterion_idx, 1);
+    let calls = scripted.calls.lock().unwrap().clone();
+    assert_eq!(
+        calls
+            .iter()
+            .filter(|(c, _)| c == "sleep 30")
+            .map(|(_, t)| *t)
+            .collect::<Vec<_>>(),
+        vec![Duration::from_secs(3), Duration::from_secs(6)],
+        "{calls:?}"
+    );
+
+    // (3) 実 process: workspace の中の `sleep 30` は短い timeout（1s→再試行 2s）で打ち切られ timed out になる。
+    let mut task = task_with(checks(), dir.path());
+    task.acceptance.drain(..3);
+    let v = plain_review(&task, &ws, dir.path(), &[], Duration::from_secs(1)).await;
+    assert_eq!(v.len(), 1);
+    assert!(!v[0].pass);
+    assert!(
+        v[0].reason.contains("timed out after 2s"),
+        "{}",
+        v[0].reason
+    );
 }
 
 // ADR-0072 D14/D6・E4 (g): WU の決定的な checks の実行（review.rs の Command 実行を再利用）。
@@ -650,6 +700,7 @@ fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter,
         run_id: "rev-1".into(),
         limits: RunLimits {
@@ -759,6 +810,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
     let run = ReviewerRun {
         node: None,
         profile: None,
+        skills: Vec::new(),
         adapter: Arc::new(ThrottledReviewer),
         run_id: "rev-x".into(),
         limits: RunLimits {

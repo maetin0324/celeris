@@ -283,8 +283,13 @@ impl Dispatcher {
         // ADR-0044 D2（Phase 53）: コメントの糸（最新 20 件、古い順）と、直前の run を止めた人のコメント。
         // どちらも決定的に引くだけ（LLM は関与しない）。
         let all_comments = self.store.comments_for(task.id)?;
-        let interrupt =
-            task_ops::comment::interrupting_comment(&events, &all_comments).map(|c| c.body.clone());
+        // ADR-0140 付記 comment-resume: resume を拒否された run は前置きを受け取っていないので、割り込みの
+        // 消化に数えない（session が無くて checkpoint の fresh に倒れた run にもコメントを載せる）。
+        let interrupt = task_ops::comment::interrupting_comment(
+            &super::continuation_session::without_resume_rejected_finishes(&events),
+            &all_comments,
+        )
+        .map(|c| c.body.clone());
         let comments: Vec<CommentContext> = all_comments
             .iter()
             .skip(
@@ -308,7 +313,8 @@ impl Dispatcher {
         let profile_skills_mounts: Vec<String> = assigned
             .map(|n| task_core::resolve_profile(&org, &n.id).skills_mounts)
             .unwrap_or_default();
-        let (skills, missing_skills) = self.skills_context(&profile_skills_mounts);
+        let (skills, missing_skills) =
+            self.skills_context(&profile_skills_mounts, task_ops::knowledge::SkillUse::Work);
         // ADR-0048 D3（Phase 60b）: CoS の対話 run にだけ、進行中の案件とその途中目標を渡す
         // （`actions` の `create_task.project` を選ぶ材料。決定的にストアを
         // 読むだけ。CoS 以外の run・継続中の run（ADR-0054 D1: 差分に「新しい案件」が乗る）では常に空）。
@@ -358,6 +364,9 @@ impl Dispatcher {
             // ここ（`run_extras`）の返り値を上書きする（ここでは常に `None`）。
             work_unit: None,
             continuation_override: None,
+            // ADR-0140 D2・付記 session-container: WU と atomic task の worker run だけ `dispatch_ready` が
+            // `resolve_continuation_session` で書く。
+            continuation_session: None,
             // ADR-0072 D13/D14（Phase E3）: planner run かどうかも `dispatch_ready` が判断し、
             // ここの返り値を上書きする（ここでは常に `None`）。
             execution_planner: None,
@@ -368,6 +377,7 @@ impl Dispatcher {
             cargo_target_work_unit: None,
             // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ `dispatch_ready` が上書きする。
             decision_requests: false,
+            direct_route: None,
             // ADR-0074「R7-11」: 呼び出し元（`dispatch_ready_task`）が spawn の直前に実効の予算を入れる。
             budget: None,
         })
@@ -727,6 +737,7 @@ impl Dispatcher {
     pub(super) fn skills_context(
         &self,
         mounts: &[String],
+        run: task_ops::knowledge::SkillUse,
     ) -> (Vec<task_worker::protocol::SkillMount>, Vec<String>) {
         let root = &self.config.knowledge.root;
         let mut skills = Vec::new();
@@ -734,6 +745,9 @@ impl Dispatcher {
         for name in mounts {
             match task_ops::knowledge::skills_get(root, name) {
                 Some(detail) => {
+                    if !task_ops::knowledge::skill_applies_to(&detail.skill_md, run) {
+                        continue;
+                    }
                     let description = task_ops::knowledge::skill_description(&detail.skill_md);
                     let path = root
                         .join(task_core::knowledge::SKILLS_DIR)

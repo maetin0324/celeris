@@ -1,4 +1,12 @@
-import type { DaemonInstance, ReleaseCommit, ReleaseItem, ReleaseRunning, Releases } from "~/celeris/types";
+import type {
+  DaemonInstance,
+  ReleaseCommit,
+  ReleaseItem,
+  ReleaseNotes,
+  ReleasePromotionPreview,
+  ReleaseRunning,
+  Releases,
+} from "~/celeris/types";
 import type { IconName } from "~/components/ui/Icon";
 import type { Tone } from "~/components/ui/tone";
 import { instanceRoleLabel, sensitiveChangesLabel, staleChangesLabel } from "~/lib/labels";
@@ -367,4 +375,100 @@ export function promoteFlashState(
   if (item.promoting) return "in_progress";
   if (item.promote_failed) return "hidden";
   return "started";
+}
+
+// ---- リリースの説明（ADR 2026-10-04-release-notes）-------------------------
+
+/** schema と task 一覧で使う最小の形（`ReleaseNoteSchema` / `ReleaseNoteSchema1` の共通部分）。 */
+interface SchemaLike {
+  from?: number | null;
+  to?: number | null;
+  changed?: boolean | null;
+}
+
+/** 「schema 41 → 42（DB 移行あり）」/「schema 42（変化なし）」/ 分からなければ `null`。 */
+export function releaseSchemaText(schema: SchemaLike | null | undefined): string | null {
+  if (!schema) return null;
+  const { from, to, changed } = schema;
+  if (from == null && to == null) return null;
+  if (changed === true) return `schema ${from ?? "?"} → ${to ?? "?"}（DB 移行あり）`;
+  if (changed === false) return `schema ${to ?? from}（変化なし）`;
+  return `schema ${from ?? "?"} → ${to ?? "?"}（変化の有無は不明）`;
+}
+
+/** task の見出し: 題が無ければ最初の commit の題、それも無ければ task id。 */
+export function releaseNoteTaskTitle(task: {
+  title?: string | null;
+  task_id: string;
+  commits?: { subject: string }[];
+}): string {
+  const title = task.title?.trim();
+  if (title) return title;
+  const subject = task.commits?.[0]?.subject?.trim();
+  return subject || task.task_id;
+}
+
+/** `/tasks/{id}` への相対パス。 */
+export function releaseNoteTaskHref(taskId: string): string {
+  return `/tasks/${encodeURIComponent(taskId)}`;
+}
+
+/** ADR / migration の 1 行（`path` と、あれば題）。 */
+export function releaseNoteFileText(file: { path: string; title?: string | null }): string {
+  return file.title ? `${file.path} — ${file.title}` : file.path;
+}
+
+/** gate で飛ばした段の 1 行。 */
+export function releaseGateSkipText(skip: { step: string; reason: string }): string {
+  return `${skip.step}（${skip.reason}）`;
+}
+
+/** 説明に載せる中身が 1 つも無いか。 */
+export function releaseNotesEmpty(notes: ReleaseNotes | ReleasePromotionPreview): boolean {
+  return (
+    (notes.tasks?.length ?? 0) === 0 &&
+    (notes.direct_commits?.length ?? 0) === 0 &&
+    (notes.migrations?.length ?? 0) === 0 &&
+    (notes.adrs?.length ?? 0) === 0 &&
+    (notes.gate_skips?.length ?? 0) === 0 &&
+    !("config_example" in notes && notes.config_example)
+  );
+}
+
+/** 本番の config を人が見直す必要があるか（`needs_review`）。 */
+export function configNeedsReview(configs: { needs_review: boolean }[]): boolean {
+  return configs.some((c) => c.needs_review);
+}
+
+/** 「このリリースの内容」の見出し脇の一言。notes が無ければ `null`。 */
+export function releaseNotesSummaryText(notes: ReleaseNotes | null | undefined): string | null {
+  if (!notes) return null;
+  const tasks = notes.tasks?.length ?? 0;
+  const commits = notes.direct_commits?.length ?? 0;
+  return `task ${tasks} 件 / 直接の commit ${commits} 件`;
+}
+
+export const RELEASE_NOTES_MISSING_TEXT = "説明なし（この仕組みより前のリリース）";
+
+/** 昇格の切替方法（`mode`）の表示語。 */
+export function promotionModeLabel(mode: string | null | undefined): string {
+  if (mode === "live") return "live（止めずに引き継ぎ）";
+  if (mode === "stop-start") return "停止 → 起動";
+  return "未検証";
+}
+
+/** 昇格の要約の見出し脇の一言。 */
+export function promotionSummaryText(p: ReleasePromotionPreview): string {
+  return `リリース ${p.releases.length} 件 / task ${p.tasks.length} 件`;
+}
+
+/** 昇格の要約を辿り切れなかったときの警告文（辿れていれば `null`）。 */
+export function promotionIncompleteText(p: Pick<ReleasePromotionPreview, "complete" | "problem">): string | null {
+  if (p.complete) return null;
+  return `途中のリリースを辿り切れませんでした。一覧は一部だけです${p.problem ? `: ${p.problem}` : ""}`;
+}
+
+/** 昇格の「リリース」行: `sha12 (task N 件)`。 */
+export function promotionReleaseText(r: { sha12: string; task_count: number }): string {
+  return `${r.sha12}（task ${r.task_count} 件）`;
 }

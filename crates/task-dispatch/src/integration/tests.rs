@@ -213,6 +213,82 @@ fn status_clean(dir: &Path) -> bool {
     sh(dir, &["status", "--porcelain"]).is_empty()
 }
 
+#[test]
+fn auto_resolve_progress_appends_keep_both_sections() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    std::fs::create_dir_all(task_tree.join("docs")).unwrap();
+    std::fs::write(task_tree.join("docs/PROGRESS.md"), "# Progress\n").unwrap();
+    std::fs::write(
+        task_tree.join(".gitattributes"),
+        "docs/PROGRESS.md merge=union\n",
+    )
+    .unwrap();
+    commit_all(&task_tree, "base progress").unwrap();
+    let mut items = Vec::new();
+    for (key, section) in [("a", "## A\n"), ("b", "## B\n")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        std::fs::write(
+            wt.dir.join("docs/PROGRESS.md"),
+            format!("# Progress\n{section}"),
+        )
+        .unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    assert!(out.conflict.is_none());
+    let progress = std::fs::read_to_string(task_tree.join("docs/PROGRESS.md")).unwrap();
+    assert!(
+        progress.contains("## A\n") && progress.contains("## B\n"),
+        "{progress}"
+    );
+}
+
+#[test]
+fn auto_resolve_migration_duplicate_is_renumbered_without_touching_target() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    let mut items = Vec::new();
+    for (key, name) in [("a", "alpha"), ("b", "beta")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        let dir = wt.dir.join("crates/task-core/migrations");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("0042_{name}.sql")), format!("-- {name}\n")).unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    assert!(out.conflict.is_none(), "{:?}", out.conflict);
+    let dir = task_tree.join("crates/task-core/migrations");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("0042_alpha.sql")).unwrap(),
+        "-- alpha\n"
+    );
+    assert!(out.actions.iter().any(|a| a.path.ends_with("_beta.sql")));
+    assert_eq!(std::fs::read_dir(dir).unwrap().count(), 2);
+}
+
+#[test]
+fn auto_resolve_code_conflict_returns_request_and_cleans_merge() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, task_dir, task_tree) = setup(root.path());
+    let mut items = Vec::new();
+    for (key, text) in [("a", "line1\nA\nline3\n"), ("b", "line1\nB\nline3\n")] {
+        let wt = make_wu(&repo, &task_dir, &task_tree, key, "HEAD");
+        std::fs::write(wt.dir.join("shared.txt"), text).unwrap();
+        commit_all(&wt.dir, key).unwrap();
+        items.push(MergeItem::work_unit(key, wu_branch("T1", key)));
+    }
+    let out = integrate(&task_tree, &items, "build").unwrap();
+    let request = out.conflict.unwrap().request.unwrap();
+    assert_eq!(request.conflict_files, ["shared.txt"]);
+    assert_eq!(request.source_branch, wu_branch("T1", "b"));
+    assert!(request.to_markdown().contains("統合の依頼"));
+    assert!(rev_parse(&task_tree, "MERGE_HEAD").is_none());
+    assert!(status_clean(&task_tree));
+}
+
 fn dep_row(key: &str, kind: task_core::WorkUnitKind) -> task_core::WorkUnitRow {
     let spec = task_core::WorkUnitSpec {
         key: key.to_string(),
@@ -355,7 +431,9 @@ fn child_task_branches_are_optional_and_idempotent() {
         vec![Merged {
             key: "c".into(),
             commit: child_head.clone(),
-            skipped: false
+            skipped: false,
+            target_sha: None,
+            parent_head: None,
         }]
     );
     assert!(task_tree.join("c.txt").is_file());
@@ -392,4 +470,152 @@ fn child_task_branches_are_optional_and_idempotent() {
     );
     let err = dependency_base(&repo, "T1", &dep, "celeris/missing", "celeris/").unwrap_err();
     assert!(err.contains("child task unit"), "{err}");
+}
+
+/// 子の worktree（親ブランチの HEAD から切る）を作る。
+fn make_child(root: &Path, repo: &Path, task_tree: &Path, id: &str) -> PathBuf {
+    let child_dir = root.join("ws").join(id).join("tree");
+    let child = LocalWorktree {
+        repo: repo.to_path_buf(),
+        task_dir: root.join("ws").join(id),
+        dir: child_dir.clone(),
+        branch: format!("celeris/{id}"),
+        base: BaseRef {
+            kind: BaseKind::Parent,
+            sha: rev_parse(task_tree, "HEAD").unwrap(),
+        },
+    };
+    child.ensure_blocking().unwrap();
+    child_dir
+}
+
+/// ADR-0118 D5: 子のブランチが review 後に動いた（HEAD ≠ merge candidate）なら merge せずに止める。
+#[test]
+fn merge_candidate_mismatch_stops_without_merging() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    let child_dir = make_child(root.path(), &repo, &task_tree, "C1");
+    let reviewed = commit_file(&child_dir, "c.txt");
+    let target = rev_parse(&task_tree, "HEAD").unwrap();
+    // review の後に子のブランチへ commit が足された。
+    let moved = commit_file(&child_dir, "late.txt");
+    let before = rev_parse(&task_tree, "HEAD").unwrap();
+    let items = vec![
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: target.clone(),
+            merge_candidate_sha: reviewed.clone(),
+        })),
+    ];
+    let out = integrate(&task_tree, &items, "s1").unwrap();
+    assert!(out.conflict.is_none());
+    assert!(out.merged.is_empty());
+    assert_eq!(
+        out.stale,
+        Some(StaleCandidate {
+            key: "c".into(),
+            branch: "celeris/C1".into(),
+            merge_candidate_sha: reviewed,
+            head_sha: moved,
+            target_sha: target,
+        })
+    );
+    assert_eq!(out.head, before);
+    assert_eq!(rev_parse(&task_tree, "HEAD").unwrap(), before);
+    assert!(!task_tree.join("c.txt").exists());
+}
+
+/// ADR-0118 D5 / ADR-0079 D6: 親ブランチが子の review 後に進んだだけなら従来どおり merge し、
+/// 記録の target SHA と merge 直前の親 HEAD を返す。記録の無い子は照合しない（移行前）。
+#[test]
+fn merge_candidate_match_merges_after_parent_advanced_and_records_parent_head() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    let child_dir = make_child(root.path(), &repo, &task_tree, "C1");
+    let reviewed = commit_file(&child_dir, "c.txt");
+    let target = rev_parse(&task_tree, "HEAD").unwrap();
+    // 子の review の後に親ブランチが進んだ（同じ段階の別の merge など）。
+    let parent_head = commit_file(&task_tree, "p.txt");
+    let legacy_dir = make_child(root.path(), &repo, &task_tree, "C2");
+    let legacy = commit_file(&legacy_dir, "legacy.txt");
+    let items = vec![
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: target.clone(),
+            merge_candidate_sha: reviewed.clone(),
+        })),
+        MergeItem::child_task("legacy", "celeris/C2"),
+    ];
+    let out = integrate(&task_tree, &items, "s1").unwrap();
+    assert!(out.conflict.is_none());
+    assert!(out.stale.is_none());
+    assert_eq!(out.merged.len(), 2);
+    assert_eq!(out.merged[0].commit, reviewed);
+    assert_eq!(out.merged[0].target_sha.as_deref(), Some(target.as_str()));
+    assert_eq!(
+        out.merged[0].parent_head.as_deref(),
+        Some(parent_head.as_str())
+    );
+    assert_eq!(out.merged[1].commit, legacy);
+    assert_eq!(out.merged[1].target_sha, None);
+    assert_eq!(out.merged[1].parent_head, None);
+    assert!(task_tree.join("c.txt").is_file());
+    assert!(task_tree.join("legacy.txt").is_file());
+    assert!(is_ancestor(&task_tree, &parent_head, "HEAD"));
+}
+
+#[test]
+fn candidate_check_precedes_record_auto_resolve_and_keeps_both_records() {
+    let root = tempfile::tempdir().unwrap();
+    let (repo, _task_dir, task_tree) = setup(root.path());
+    std::fs::create_dir_all(task_tree.join("docs")).unwrap();
+    std::fs::write(task_tree.join("docs/PROGRESS.md"), "# Progress\n").unwrap();
+    commit_all(&task_tree, "base progress").unwrap();
+    let child = make_child(root.path(), &repo, &task_tree, "C1");
+    let reviewed_target = rev_parse(&task_tree, "HEAD").unwrap();
+    std::fs::write(child.join("docs/PROGRESS.md"), "# Progress\n## Child\n").unwrap();
+    commit_all(&child, "child progress").unwrap();
+    let reviewed_child = rev_parse(&child, "HEAD").unwrap();
+    std::fs::write(child.join("later.txt"), "later\n").unwrap();
+    commit_all(&child, "late edit").unwrap();
+    let current_child = rev_parse(&child, "HEAD").unwrap();
+    std::fs::write(
+        task_tree.join("docs/PROGRESS.md"),
+        "# Progress\n## Parent\n",
+    )
+    .unwrap();
+    commit_all(&task_tree, "parent progress").unwrap();
+    let parent_head = rev_parse(&task_tree, "HEAD").unwrap();
+
+    let stale_item =
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: reviewed_target.clone(),
+            merge_candidate_sha: reviewed_child,
+        }));
+    let stale = integrate(&task_tree, &[stale_item], "verify").unwrap();
+    assert!(stale.stale.is_some());
+    assert!(stale.actions.is_empty());
+    assert_eq!(rev_parse(&task_tree, "HEAD").unwrap(), parent_head);
+
+    let fresh_item =
+        MergeItem::child_task("c", "celeris/C1").with_candidate(Some(MergeCandidate {
+            target_sha: reviewed_target.clone(),
+            merge_candidate_sha: current_child.clone(),
+        }));
+    let merged = integrate(&task_tree, &[fresh_item], "verify").unwrap();
+    assert!(merged.stale.is_none());
+    assert!(merged.conflict.is_none());
+    assert!(
+        merged
+            .actions
+            .iter()
+            .any(|action| action.path == "docs/PROGRESS.md")
+    );
+    assert_eq!(merged.merged[0].commit, current_child);
+    assert_eq!(
+        merged.merged[0].target_sha.as_deref(),
+        Some(reviewed_target.as_str())
+    );
+    assert_eq!(
+        merged.merged[0].parent_head.as_deref(),
+        Some(parent_head.as_str())
+    );
 }

@@ -185,7 +185,7 @@ export function buildProfileInput(form: FormData): Profile {
 /**
  * 編集フォーム（既存の値をフィールドに事前入力してある前提）。`genre` は空の選択肢（`""`）を選べば
  * 明示的に `null`（分野なし）を送り、それ以外は選んだ値を送る（3.44 の `Option<Option<String>>`。
- * `docs/gui/api.md` §3.44）。
+ * `docs/api/v1/gui-api.md` §3.44）。
  *
  * **フォームに出ていない項目は本文に入れない**（3.44 は「書いた項目だけ」を変える）。名前・種類・一言の
  * フォームと profile のフォームは別々に送れるので、片方を送ったときにもう片方を書き換えてしまわないため

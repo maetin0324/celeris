@@ -77,6 +77,8 @@ export type CommentId = string;
  * 人のコメントが何を起こしたか（ADR-0044 D2 の表）。
  */
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
+export type SourceOrigin = "explicit" | "derived";
+export type LlmSourceRef = string;
 /**
  * DESIGN §5.4 の `WorkerHint`。
  */
@@ -256,6 +258,30 @@ export type ReportId = string;
  * 報告の種類（ADR-0033 D3）。
  */
 export type ReportKind = "progress" | "result" | "bad_news" | "proposal" | "question";
+/**
+ * ADR-0131 D3: daemon 停止中に過ぎた予定時刻の扱い。
+ */
+export type CronCatchUp = "latest" | "skip";
+/**
+ * cron job 1 件の識別子（ULID）。
+ */
+export type CronJobId = string;
+/**
+ * 実行履歴 1 行の識別子（ULID）。
+ */
+export type CronJobRunId = string;
+/**
+ * ADR-0131 D1: 履歴 1 行の結果。
+ */
+export type CronRunOutcome = "created" | "queued" | "skipped_overlap" | "skipped_missed" | "error";
+/**
+ * ADR-0131 D1: 履歴 1 行の発火のきっかけ。
+ */
+export type CronTrigger = "schedule" | "catch_up" | "manual";
+/**
+ * ADR-0131 D2: 前回の task が終わっていないときの規則。
+ */
+export type CronOverlap = "skip" | "queue";
 export type InFlightKind = "worker" | "reviewer";
 /**
  * D7: 後戻りの大きさ。
@@ -284,6 +310,55 @@ export type DecisionEffect = "resume" | "raise_once" | "replan" | "atomic" | "wi
  * `JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。
  */
 export type Event =
+  | {
+      attempt: number;
+      before_sha: string;
+      merge_candidate_sha: string;
+      repo_id: RepoId;
+      review_run: string;
+      reviewed_sha: string;
+      target_ref: string;
+      target_sha: string;
+      type: "review_target_synced";
+    }
+  | {
+      attempt: number;
+      repo_id: RepoId;
+      review_run: string;
+      reviewed_sha: string;
+      target_sha: string;
+      type: "review_target_advanced";
+    }
+  | {
+      attempt: number;
+      before_sha: string;
+      conflict_files: string[];
+      key: string;
+      repo_id: RepoId;
+      target_ref: string;
+      target_sha: string;
+      type: "integration_repair_scheduled";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      repo_id: RepoId;
+      reviewed_sha: string;
+      target_sha: string;
+      type: "integration_repair_resolved";
+      work_unit_id: string;
+    }
+  | {
+      attempt: number;
+      before_sha: string;
+      fallback: boolean;
+      reason: IntegrationRepairExhaustReason;
+      repo_id: RepoId;
+      rollback_to_sha?: string | null;
+      target_sha: string;
+      type: "integration_repair_exhausted";
+      work_unit_id?: string | null;
+    }
   | {
       browser: BrowserRun;
       type: "browser_updated";
@@ -556,6 +631,10 @@ export type Event =
       type: "execution_gated";
     }
   | {
+      decision: RouteDecision;
+      type: "execution_routed";
+    }
+  | {
       mode: ExecutionMode;
       note?: string | null;
       /**
@@ -628,6 +707,40 @@ export type Event =
       merged: PhaseMerged[];
       phase: string;
       type: "phase_integrated";
+      work_unit_id: string;
+    }
+  | {
+      cmd: string;
+      index: number;
+      key: string;
+      log_path: string;
+      started_at: string;
+      total: number;
+      type: "integration_check_started";
+      work_unit_id: string;
+    }
+  | {
+      cmd: string;
+      duration_ms: number;
+      exit?: number | null;
+      index: number;
+      key: string;
+      pass: boolean;
+      timed_out?: boolean;
+      total: number;
+      type: "integration_check_finished";
+      work_unit_id: string;
+    }
+  | {
+      branch: string;
+      child_task: TaskId;
+      head_sha: string;
+      key: string;
+      merge_candidate_sha: string;
+      phase: string;
+      repo_id: RepoId;
+      target_sha: string;
+      type: "merge_candidate_stale";
       work_unit_id: string;
     }
   | {
@@ -740,6 +853,38 @@ export type Event =
     }
   | {
       detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      type: "delivery_skipped";
+    }
+  | {
+      commit_error?: string | null;
+      commit_sha?: string | null;
+      /**
+       * 適用日（job の timezone の `YYYY-MM-DD`）。
+       */
+      date: string;
+      deleted: number;
+      fixed: number;
+      merged: number;
+      new: number;
+      push: string;
+      push_detail?: string | null;
+      type: "knowledge_curation_applied";
+    }
+  | {
+      origin: string;
+      request: IntegrationRequest;
+      type: "integration_requested";
+    }
+  | {
+      answer: string;
+      note?: string | null;
+      request_id: string;
+      type: "integration_answered";
+    }
+  | {
+      detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
        */
@@ -755,6 +900,17 @@ export type Event =
       task_id: TaskId;
       type: "stall_detected";
     };
+/**
+ * ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。
+ */
+export type IntegrationRepairExhaustReason =
+  | "limit_reached"
+  | "plan_issue"
+  | "work_unit_failed"
+  | "budget_exhausted"
+  | "result_untrusted"
+  | "abort_failed"
+  | "worktree_unavailable";
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
@@ -817,6 +973,7 @@ export type GateSource = "policy" | "human" | "hint";
  * 各軸の段階（小さな順序尺度）。
  */
 export type Level = "low" | "medium" | "high";
+export type Route = "direct" | "planned";
 /**
  * DESIGN §5.8 の境界。`Remote{cluster, path}` は `[[clusters]] id` と**クラスタ側の**作業ディレクトリ（ADR-0018、Phase 12）。
  * celeris はその写しを `workspace_root/<task_id>` に持ち、コマンドはクラスタで実行する。
@@ -962,6 +1119,23 @@ export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
  */
 export type UnitDeclared = "leaf" | "task";
 /**
+ * ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。
+ * 並びは判定の順（同時に複数あれば先のものを記録する）。
+ */
+export type DeliverySkipReason =
+  | "multiple_repos"
+  | "no_marker"
+  | "marker_repo_mismatch"
+  | "repo_row_missing"
+  | "repo_not_local"
+  | "repo_path_mismatch"
+  | "not_git"
+  | "no_branch"
+  | "branch_name_mismatch"
+  | "refs_unresolvable"
+  | "department_unresolved";
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
+/**
  * D5: `execution_plans.status`。
  */
 export type PlanStatus = "active" | "superseded" | "completed" | "abandoned";
@@ -985,6 +1159,12 @@ export type AttentionItem =
        * 配送済み（`deliveries` に `release` が付いた記録がある）なら sha12。
        */
       delivered_release?: string | null;
+      /**
+       * ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況（履歴が無ければ省略）。
+       * `reason`/`class` は実装失敗（レビュー不合格・ワーカーの明示的な error）の分類であり、これは
+       * 別物（`exhausted` でも task を直接 `failed` にはしない）。
+       */
+      integration_repair?: IntegrationRepairView | null;
       reason: string;
       task: TaskRef;
       type: "failed";
@@ -1045,7 +1225,49 @@ export type AttentionItem =
       summary: string;
       task: TaskRef;
       type: "plan_approval";
+    }
+  | {
+      at: string;
+      detail: string;
+      head?: string | null;
+      reason: DeliverySkipReason;
+      /**
+       * 「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。
+       */
+      summary: string;
+      task: TaskRef;
+      type: "delivery_skipped";
+    }
+  | {
+      at: string;
+      request: IntegrationRequest;
+      request_id: string;
+      task: TaskRef;
+      type: "integration_request";
     };
+/**
+ * ADR-0120 D5: 最後の integration repair の結末。
+ */
+export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+/**
+ * D2: 受信箱の種類。宣言順が D2 の並びの固定順。
+ */
+export type InboxKind =
+  | "decision"
+  | "plan_gate"
+  | "phase_gate"
+  | "authorization"
+  | "browser_wait"
+  | "question"
+  | "acceptance_check"
+  | "draft_accept"
+  | "project_plan"
+  | "failed"
+  | "unroutable"
+  | "cluster_login"
+  | "delivery_skipped"
+  | "integration_request"
+  | "knowledge_review";
 /**
  * ADR-0047 D1 / D4。
  */
@@ -1068,7 +1290,7 @@ export type McpScope =
 export type MessageRole = "user" | "node";
 /**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
- * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。
+ * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
  */
 export type CriterionSpec =
   | {
@@ -1107,9 +1329,28 @@ export type TaskMode = "prototype" | "production" | "research";
  */
 export type PriorityInput = ("P0" | "P1" | "P2" | "P3") | number;
 /**
+ * 通知（束）の id（ULID）。
+ */
+export type NoticeId = string;
+/**
+ * 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。
+ */
+export type NoticeKind =
+  | "task_done"
+  | "report"
+  | "bad_news"
+  | "secretary_reply"
+  | "delivery"
+  | "release"
+  | "cron_run"
+  | "auto_recovered"
+  | "requeue_limit_near";
+/**
  * 判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。
  */
 export type NotificationKind =
+  | "inbox_new"
+  | "digest"
   | "milestone_ready"
   | "approval_pending"
   | "question_blocked"
@@ -1325,12 +1566,19 @@ export interface ApiV1Schema {
   console_hello: ConsoleHello;
   console_instruct: InstructBody;
   console_instruct_accepted: ConsoleInstructAccepted;
+  cron_job: CronJobView;
+  cron_job_create: CronJobCreateBody;
+  cron_job_list: CronJobList;
+  cron_job_patch: CronJobPatchBody;
+  cron_job_run_list: CronJobRunList;
+  cron_run_result: CronRunResult;
   daemon: DaemonView;
   decision: DecisionBody;
   decision_answer: DecisionAnswerBody;
   decision_list: DecisionList;
   decision_outcome: DecisionOutcome;
   decision_withdraw: DecisionWithdrawBody;
+  delivery_list: DeliveryList;
   doc_page: DocPage;
   doc_page_put: DocPagePutBody;
   doc_page_result: DocPageResult;
@@ -1345,6 +1593,10 @@ export interface ApiV1Schema {
   graph: Graph;
   health: Health;
   inbox: Inbox;
+  inbox_answer: InboxAnswerBody;
+  inbox_answer_result: InboxAnswerResult;
+  inbox_item: InboxItem;
+  inbox_items: HumanInboxView;
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
   knowledge_accept: KnowledgeAcceptBody;
@@ -1368,7 +1620,12 @@ export interface ApiV1Schema {
   milestone_lifecycle: MilestoneLifecycle;
   milestone_patch: MilestonePatchBody;
   new_plan: NewPlanSpec;
-  new_task: NewTaskSpec;
+  new_task: NewTaskBody;
+  notification_read: NoticeReadResult;
+  notifications: NotificationsView;
+  notifications_read_all: NoticeReadAllResult;
+  notifications_read_all_body: ReadAllBody;
+  notifications_unread_count: UnreadCountView;
   notify: NotifyView;
   notify_test: NotifyTestResult;
   org_create: OrgCreateBody;
@@ -1392,6 +1649,7 @@ export interface ApiV1Schema {
   provider_config: ProviderConfigView1;
   providers: Providers;
   release_promote: ReleasePromoteAccepted;
+  release_promotion_preview: ReleasePromotionPreview;
   releases: Releases;
   reload: ReloadResult;
   reopen: ReopenBody;
@@ -1422,7 +1680,7 @@ export interface ApiV1Schema {
   stream_reset: StreamReset;
   task: Task;
   task_detail: TaskDetail;
-  task_edit: TaskEdit;
+  task_edit: TaskPatchBody;
   task_edit_result: EditResult;
   task_execution: TaskExecutionView;
   task_list: TaskList;
@@ -1435,6 +1693,7 @@ export interface ApiV1Schema {
   tree_adopt: AdoptRequest;
   tree_adopt_result: AdoptionOutcome;
   tree_file: TreeFileView;
+  work_unit_check_log: WorkUnitCheckLog;
 }
 /**
  * 1 アカウント（`GET /accounts` の要素、`POST /accounts` の応答）。
@@ -1663,7 +1922,7 @@ export interface StandingRule {
  */
 export interface TransitionResult {
   /**
-   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。
+   * この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。
    */
   cascaded?: TaskRef[];
   from: Status;
@@ -1937,12 +2196,12 @@ export interface NewBrowserWait {
   run_id: string;
   session_id: string;
   /**
-   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
-   */
-  /**
    * ADR-0110 D2: 承認要求の時点で固定した管理者のログイン URL・selector（credential 使用の承認だけ）。
    */
   trusted_login?: TrustedLogin | null;
+  /**
+   * 待つ秒数。省略・上限超えは reason ごとの上限に丸める。
+   */
   ttl_secs?: number | null;
   work_unit_id?: string | null;
 }
@@ -2033,6 +2292,7 @@ export interface Delivery {
   department: string;
   detail: string;
   head: string;
+  merge_candidate_sha?: string | null;
   notification?: MessageId | null;
   prepare_pid?: number | null;
   project_id: ProjectId;
@@ -2050,7 +2310,12 @@ export interface Delivery {
   repo: string;
   repo_id: RepoId;
   review_run: string;
+  reviewed_sha?: string | null;
   state: DeliveryState;
+  /**
+   * Target ref read for this review attempt. NULL means no candidate was checked.
+   */
+  target_sha?: string | null;
   task_id: TaskId;
   worker_run: string;
 }
@@ -2516,6 +2781,8 @@ export interface ProviderConfigView {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -2526,6 +2793,10 @@ export interface ProviderConfigView {
     standard?: ModelBinding;
   };
   tiers: Tier[];
+}
+export interface ResolvedLlmSource {
+  origin: SourceOrigin;
+  source: LlmSourceRef;
 }
 export interface ModelBinding {
   model_id?: string | null;
@@ -2831,6 +3102,137 @@ export interface ConsoleInstructAccepted {
    * タスクの一意識別子（ULID）。DESIGN §4.1。
    */
   task_id: string;
+}
+/**
+ * job 1 件と最後の履歴（一覧・詳細・作成・更新・一時停止・再開の応答）。
+ */
+export interface CronJobView {
+  catch_up: CronCatchUp;
+  created_at: string;
+  enabled: boolean;
+  id: CronJobId;
+  /**
+   * 最後に記録した履歴（無ければ `null`）。
+   */
+  last_run?: CronJobRun | null;
+  name: string;
+  /**
+   * UTC。`enabled = false` のとき `None`。
+   */
+  next_fire_at?: string | null;
+  overlap: CronOverlap;
+  schedule: string;
+  template: CronTaskTemplate;
+  timezone: string;
+  updated_at: string;
+}
+/**
+ * `cron_job_runs` の 1 行。
+ */
+export interface CronJobRun {
+  detail?: string | null;
+  id: CronJobRunId;
+  job_id: CronJobId;
+  outcome: CronRunOutcome;
+  recorded_at: string;
+  /**
+   * 発火の予定時刻（UTC）。手動実行は押した時刻。
+   */
+  scheduled_for: string;
+  task_id?: TaskId | null;
+  trigger: CronTrigger;
+}
+/**
+ * ADR-0131 D1: job が作る task の雛形（`cron_jobs.template_json`）。`acceptance` は `task_ops::add` の
+ * `CriterionSpec` と同じ JSON の形で持ち、検証と `NewTaskSpec` への変換は task-ops 側で行う
+ * （task-core は task-ops に依存しない）。`extra` は job 固有の値（日次整理の `mode` 等）。
+ */
+export interface CronTaskTemplate {
+  acceptance?: unknown[];
+  assignee?: string | null;
+  harness?: string | null;
+  lane?: Tier | null;
+  objective?: string;
+  priority?: unknown;
+  project?: string | null;
+  repos?: string[];
+  /**
+   * `{date}` は発火時刻の job タイムゾーンでの `YYYY-MM-DD` に置き換わる（[`render_title`]）。
+   */
+  title: string;
+  [k: string]: unknown;
+}
+/**
+ * ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。
+ */
+export interface CronJobCreateBody {
+  /**
+   * 取りこぼした予定時刻の扱い（既定 `latest`）。
+   */
+  catch_up?: "latest" | "skip";
+  /**
+   * 既定 `true`。`false` なら一時停止の状態で作る。
+   */
+  enabled?: boolean;
+  /**
+   * 人が読む識別子（一意。ULID の形は不可）。
+   */
+  name: string;
+  /**
+   * 前回の task が終わっていないときの扱い（既定 `skip`）。
+   */
+  overlap?: "skip" | "queue";
+  /**
+   * 5 欄の cron 式（`@daily` 等の別名も可）。
+   */
+  schedule: string;
+  template: CronTaskTemplate;
+  /**
+   * IANA タイムゾーン名（例 `Asia/Tokyo`）。
+   */
+  timezone: string;
+}
+/**
+ * `GET /cron-jobs` の応答。
+ */
+export interface CronJobList {
+  items: CronJobView[];
+}
+/**
+ * `PATCH /cron-jobs/{id}` の本文（書いた欄だけ変える。有効/無効は `pause` / `resume` で変える）。
+ */
+export interface CronJobPatchBody {
+  catch_up?: CronCatchUp | null;
+  name?: string | null;
+  overlap?: CronOverlap | null;
+  schedule?: string | null;
+  /**
+   * 雛形は丸ごと置き換える。
+   */
+  template?: CronTaskTemplate | null;
+  timezone?: string | null;
+}
+/**
+ * `GET /cron-jobs/{id}/runs` の応答（新しい順）。
+ */
+export interface CronJobRunList {
+  items: CronJobRun[];
+  job_id: CronJobId;
+}
+/**
+ * `POST /cron-jobs/{id}/run` の応答。
+ */
+export interface CronRunResult {
+  job_id: CronJobId;
+  job_name: string;
+  /**
+   * この実行で書いた履歴（古い順。手動実行では 1 件）。
+   */
+  runs: CronJobRun[];
+  /**
+   * 作った task（`outcome = created` のときだけ）。
+   */
+  task_id?: TaskId | null;
 }
 /**
  * `GET /daemon`。
@@ -3164,11 +3566,13 @@ export interface ProviderLive {
    * 古いスナップショットには無いので既定 0）。
    */
   in_use_cos?: number;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、
    * celeris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `None`）。
    */
@@ -3207,8 +3611,8 @@ export interface ReportsLive {
  */
 export interface ScratchStatus {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -3256,7 +3660,8 @@ export interface ScratchStatus {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -3271,7 +3676,8 @@ export interface ScratchStatus {
   total_max_bytes: number;
 }
 /**
- * ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。
+ * 廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。
+ * `ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheView {
   /**
@@ -3297,8 +3703,7 @@ export interface ScratchCacheView {
   stats?: ScratchCacheStats | null;
 }
 /**
- * ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の
- * 累計、容量は byte、時刻は RFC 3339。
+ * 廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。
  */
 export interface ScratchCacheStats {
   /**
@@ -3481,7 +3886,8 @@ export interface ScratchOwnerView {
   work_unit_key?: string | null;
 }
 /**
- * ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。
+ * 廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client
+ * 向けの schema 互換のため型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheView {
   /**
@@ -3515,7 +3921,7 @@ export interface ScratchSccacheView {
   stats?: ScratchSccacheStats | null;
 }
 /**
- * `sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。
+ * 廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。
  */
 export interface ScratchSccacheStats {
   /**
@@ -3677,6 +4083,38 @@ export interface DecisionOutcome {
  */
 export interface DecisionWithdrawBody {
   reason?: string | null;
+}
+/**
+ * `GET /deliveries` の応答（配送記録の読み取り。`release.sh` が notes の task 判別に使う）。
+ */
+export interface DeliveryList {
+  items: DeliveryHead[];
+}
+/**
+ * `DeliveryList.items[]` の 1 件（`task_core::Delivery` の、commit と task を結ぶ欄だけ）。
+ */
+export interface DeliveryHead {
+  /**
+   * 配送したときの取り込み先の先端（この task の区間はここで終わる）。
+   */
+  base?: string | null;
+  branch: string;
+  /**
+   * 配送した branch の先端。
+   */
+  head: string;
+  merge_candidate_sha?: string | null;
+  /**
+   * 配送が作った release の sha12。
+   */
+  release?: string | null;
+  repo: string;
+  reviewed_sha?: string | null;
+  /**
+   * `DeliveryState` の code。
+   */
+  state: string;
+  task_id: string;
 }
 /**
  * `GET /projects/{id}/docs/page`。
@@ -4092,6 +4530,10 @@ export interface TaskRouting {
    */
   pause_after_source?: "human" | "agent";
   /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。
+   */
+  route?: RouteDecision | null;
+  /**
    * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{"title": "Phase 1", "scope": "…"}]`）。/3 の planner
    * run の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の
    * `create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。
@@ -4160,6 +4602,19 @@ export interface TaskFeatureHints {
   reversibility?: Level | null;
   tool_intensity?: Level | null;
   verifiability?: Level | null;
+}
+export interface RouteDecision {
+  gate_rule_id: string;
+  overrode_gate: boolean;
+  policy_version: string;
+  reasons: RouteReason[];
+  route: Route;
+  shadow: boolean;
+}
+export interface RouteReason {
+  detail: string;
+  ok: boolean;
+  rule_id: string;
 }
 /**
  * ADR-0079 D12（Phase R2b）: 人が名指しした段階（`Task.routing.stages_hint`）。planner への入力で、
@@ -4269,8 +4724,18 @@ export interface Usage {
    * `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
    */
   cost_usd?: number | null;
+  /**
+   * ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+   * の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
+   */
+  duplicate_reads?: number | null;
   input_tokens?: number | null;
   output_tokens?: number | null;
+  /**
+   * ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+   * 拒否されなかった）。session を扱わない adapter は `None`。
+   */
+  session_resumed?: boolean | null;
 }
 /**
  * ADR-0069 D5: `Event::RoutingDecided` の中身。
@@ -4591,6 +5056,10 @@ export interface PlanUnitSpec {
   depends_on?: string[];
   done_when?: string[];
   /**
+   * Optional repository-relative prefixes inherited by child tasks or leaf WUs.
+   */
+  expected_write_paths?: string[] | null;
+  /**
    * ADR-0069 D3: `TaskFeatureHints` の上書きヒント。
    */
   features?: {
@@ -4717,7 +5186,7 @@ export interface QuotaWindowUse {
   after?: number | null;
   before?: number | null;
   /**
-   * **ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
+   * **ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
    * D4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により
    * 決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。
    * `Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。
@@ -4748,9 +5217,17 @@ export interface PhaseMerged {
   commit: string;
   key: string;
   /**
+   * ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。
+   */
+  parent_head?: string | null;
+  /**
    * 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
    */
   skipped?: boolean;
+  /**
+   * ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。
+   */
+  target_sha?: string | null;
 }
 /**
  * D2.3: 途中報告そのもの（`Event::PhaseReported.report` と `artifacts/phase-reports/<n>-<phase>.md`
@@ -4898,6 +5375,44 @@ export interface ProjectPlanSpec {
   rationale: string;
   schema: string;
 }
+export interface IntegrationRequest {
+  actions: ResolutionAction[];
+  candidate_sha?: string | null;
+  conflict_files: string[];
+  intent: FileIntent[];
+  merge_base?: string | null;
+  reason: string;
+  recommendation: string;
+  source_branch: string;
+  source_sha: string;
+  target_branch: string;
+  target_sha: string;
+}
+export interface ResolutionAction {
+  detail: string;
+  kind: ConflictKind;
+  path: string;
+}
+export interface FileIntent {
+  path: string;
+  source: SideIntent;
+  target: SideIntent;
+}
+export interface SideIntent {
+  branch: string;
+  commits: CommitIntent[];
+  diffstat?: FileDiffStat | null;
+  path: string;
+  unavailable?: string | null;
+}
+export interface CommitIntent {
+  sha: string;
+  subject: string;
+}
+export interface FileDiffStat {
+  added: number;
+  deleted: number;
+}
 /**
  * ADR-0072「Phase F6 実装時の決定」: `POST /tasks/{id}/execution/decompose` の要求本文と応答。
  */
@@ -4935,6 +5450,13 @@ export interface ExecutionMetricsSummary {
    * `[llm_proxy]` が無効なら空。
    */
   accounts_now?: AccountNowView[];
+  continuation?: ContinuationMetrics;
+  /**
+   * WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+   */
+  continuation_by_work_unit?: {
+    [k: string]: ContinuationMetrics1;
+  };
   group_by: string;
   groups: ExecutionMetricsGroup[];
   since?: string | null;
@@ -4956,6 +5478,55 @@ export interface AccountNowView {
   source: string;
 }
 /**
+ * `session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。
+ */
+export interface ContinuationMetrics {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals1 {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * 同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。
+ */
+export interface ContinuationRunTotals2 {
+  duplicate_reads: number;
+  input_tokens: number;
+  runs: number;
+  wall_ms: number;
+}
+/**
+ * `session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。
+ */
+export interface ContinuationMetrics1 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
  * `GET /metrics/execution` の 1 グループ（`group_by` の値ごと）。
  */
 export interface ExecutionMetricsGroup {
@@ -4963,6 +5534,13 @@ export interface ExecutionMetricsGroup {
    * `done / (done + failed)`（両方 0 なら `None`。D19 の「compound の完走率」）。
    */
   completion_rate?: number | null;
+  continuation?: ContinuationMetrics2;
+  /**
+   * WU id ごとの比較値。atomic run は `task:<task_id>` キー。
+   */
+  continuation_by_work_unit?: {
+    [k: string]: ContinuationMetrics1;
+  };
   continuations: number;
   /**
    * D4.3: このグループの全タスクで定価 USD が完全だったか（単価不明のモデルを使った run が
@@ -4995,6 +5573,17 @@ export interface ExecutionMetricsGroup {
    */
   rollup?: RollupMetrics | null;
   tasks: number;
+}
+/**
+ * ADR-0140: fresh / resumed / 旧形式の worker run 別比較。
+ */
+export interface ContinuationMetrics2 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
 }
 /**
  * D4.3: アカウント × 窓の合計（`ExecutionMetrics.quota` / WU ごとの quota に使う集計行）。
@@ -5189,6 +5778,11 @@ export interface ReplanDiff {
    * 新しい版に無くなった未完了の WorkUnit（`superseded` にする）。
    */
   removed: string[];
+  /**
+   * ADR-0079 付記「R7-9」D2: 統合済み（done）だった段階のうち、この版で unit が増えたので統合 WU を `pending` に
+   * 戻した段階の key。`ExecutionPlanned.reason` にも `stage_reopened: …` として残す。
+   */
+  reopened_stages?: string[];
 }
 /**
  * ADR-0072 D17（Phase E4）: `execution_plans` の 1 版（`GET /tasks/{id}/execution-plan` の
@@ -5321,7 +5915,7 @@ export interface DbInfo {
   device?: string | null;
   /**
    * ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`"ext4"` 等）。
-   * `GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
+   * `GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の
    * **絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が
    * 既に返している）。判定できなければ `null`。
    */
@@ -5346,6 +5940,12 @@ export interface Inbox {
   decisions: DecisionInboxItem[];
   drafts: DraftGroup[];
   questions: QuestionItem[];
+  /**
+   * ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。
+   */
+  suppressed: {
+    [k: string]: number;
+  };
 }
 export interface ApprovalItem {
   approval: TaskRef;
@@ -5460,6 +6060,28 @@ export interface ApprovalDecisionView {
   by: string;
   note?: string | null;
   ts: string;
+}
+/**
+ * ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`
+ * が共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる
+ * （`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`
+ * のときだけ値を持つ。
+ */
+export interface IntegrationRepairView {
+  attempt: number;
+  before_sha?: string | null;
+  conflict_files?: string[];
+  fallback?: boolean | null;
+  /**
+   * `task_ops::delivery::MAX_INTEGRATION_REPAIRS`。
+   */
+  max_attempts: number;
+  reason?: IntegrationRepairExhaustReason | null;
+  rollback_to_sha?: string | null;
+  state: IntegrationRepairState;
+  target_ref?: string | null;
+  target_sha: string;
+  work_unit_id?: string | null;
 }
 /**
  * `AttentionItem::PlanApproval.stages[]`（計画の見取り図の 1 段階）。
@@ -5639,6 +6261,116 @@ export interface AnswerNote {
   answer: string;
   question: string;
 }
+export interface InboxAnswerBody {
+  note?: string | null;
+  option: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+}
+export interface InboxAnswerResult {
+  item_id: string;
+  removed: boolean;
+  result: unknown;
+}
+/**
+ * ADR-0133 D2: 受信箱項目の共通形。
+ */
+export interface InboxItem {
+  age_secs: number;
+  answer: InboxAnswer;
+  blocked_by: string[];
+  blocking: InboxBlocking;
+  created_at: string;
+  detail?: string | null;
+  due_at?: string | null;
+  /**
+   * 決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。
+   */
+  id: string;
+  kind: InboxKind;
+  links: InboxLink[];
+  options: InboxOption[];
+  project_id?: string | null;
+  recommended?: string | null;
+  task?: TaskRef | null;
+  /**
+   * 何を決めるか（1 行）。
+   */
+  title: string;
+}
+/**
+ * D2 `answer`: 答え方の操作（新 API の answer と委ね先）。
+ */
+export interface InboxAnswer {
+  body_schema: {
+    [k: string]: string;
+  };
+  method: string;
+  native?: InboxNativeOp | null;
+  path: string;
+}
+/**
+ * D2 `answer.native`: 委ね先の既存 endpoint。
+ */
+export interface InboxNativeOp {
+  method: string;
+  path: string;
+}
+/**
+ * D2 `blocking`: 止めている範囲。
+ */
+export interface InboxBlocking {
+  root?: TaskRef | null;
+  summary: string;
+  tasks: TaskRef[];
+  units: string[];
+}
+/**
+ * D2 `links[]`: 判断材料への API path。
+ */
+export interface InboxLink {
+  href: string;
+  label: string;
+}
+/**
+ * D2 `options[]`: 選択肢 1 件。
+ */
+export interface InboxOption {
+  /**
+   * 選んだら何が起きるかの 1 行。
+   */
+  effect: string;
+  key: string;
+  label: string;
+  /**
+   * `true` なら note 必須（replan・質問への回答など）。
+   */
+  needs_note: boolean;
+}
+/**
+ * ADR-0133 D5: human decisions and informational notices.
+ */
+export interface HumanInboxView {
+  counts: HumanInboxCounts;
+  items: InboxItem[];
+  /**
+   * ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules
+   * (`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.
+   */
+  suppressed: {
+    [k: string]: number;
+  };
+}
+/**
+ * D5 `GET /inbox/items` の `counts`。
+ */
+export interface HumanInboxCounts {
+  by_kind: {
+    [k: string]: number;
+  };
+  total: number;
+}
 /**
  * `POST /tasks/{id}/changes/{repo}/integrate` の要求本文（**管理系。人だけ**。ADR-0043 D5）。
  */
@@ -5706,7 +6438,7 @@ export interface KnowledgeCandidate {
    * ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。
    * 取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を
    * `_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は
-   * `target` の末尾に節として足す（`docs/knowledge.md` 参照）。
+   * `target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。
    */
   op?: string | null;
   /**
@@ -6053,8 +6785,8 @@ export interface MessagePostBody {
  */
 export interface ScratchStatus1 {
   /**
-   * ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の
-   * スナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の
+   * ため残す。
    */
   cache?: ScratchCacheView | null;
   /**
@@ -6102,7 +6834,8 @@ export interface ScratchStatus1 {
    */
   pressure: string;
   /**
-   * ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。
+   * 廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との
+   * 互換のため残す。
    */
   sccache?: ScratchSccacheView | null;
   /**
@@ -6206,7 +6939,7 @@ export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
 /**
- * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。
+ * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。
  */
 export interface NewPlanSpec {
   /**
@@ -6224,10 +6957,9 @@ export interface NewPlanSpec {
   workspace?: string | null;
 }
 /**
- * `celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/gui/api.md` §3.4）。
- * 省略時の既定は `celerisctl add` と同じ。
+ * POST /tasks accepts the task specification and an optional write path hint.
  */
-export interface NewTaskSpec {
+export interface NewTaskBody {
   acceptance: CriterionSpec[];
   /**
    * 省略時は役割の既定 → 指定なし。
@@ -6257,6 +6989,7 @@ export interface NewTaskSpec {
    * gate をバイパスする）。`Agent`（CoS）が書いたときはヒント（signal `H`）として扱う。
    */
   execution?: ExecutionMode | null;
+  expected_write_paths?: string[] | null;
   /**
    * ADR-0069 D3（Phase 114）: lane policy の `TaskFeatures` の明示の上書き（書いた軸だけが勝つ）。
    */
@@ -6350,6 +7083,75 @@ export interface NewTaskSpec {
    */
   workspace_mode?: WorkspaceMode | null;
 }
+export interface NoticeReadResult {
+  id: string;
+  read_at: string;
+}
+export interface NotificationsView {
+  items: Notice[];
+  next_before?: string | null;
+  unread: number;
+}
+/**
+ * 通知の束（`feed_notices` の 1 行）。
+ */
+export interface Notice {
+  /**
+   * 束ねた出来事の件数。
+   */
+  count: number;
+  first_at: string;
+  /**
+   * 束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。
+   */
+  group_key: string;
+  id: NoticeId;
+  kind: NoticeKind;
+  last_at: string;
+  links?: NoticeLink[];
+  project_id?: string | null;
+  read_at?: string | null;
+  /**
+   * 最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。
+   */
+  summary: string;
+  target?: NoticeTarget | null;
+  task_id?: string | null;
+  /**
+   * 最新の 1 件の題名。
+   */
+  title: string;
+}
+/**
+ * 通知に付けるリンク（GUI / web が開く先）。
+ */
+export interface NoticeLink {
+  href: string;
+  label: string;
+}
+/**
+ * 通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の
+ * 短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。
+ */
+export interface NoticeTarget {
+  id: string;
+  kind: string;
+}
+export interface NoticeReadAllResult {
+  marked: number;
+}
+export interface ReadAllBody {
+  before?: string | null;
+  kind?: NoticeKind | null;
+  project?: string | null;
+}
+export interface UnreadCountView {
+  by_kind: {
+    [k: string]: number;
+  };
+  events: number;
+  unread: number;
+}
 /**
  * Phase 39（ADR-0037 D4）: 通知（Discord）。`GET /notify` と `POST /notify/test` の応答。
  */
@@ -6358,6 +7160,9 @@ export interface NotifyView {
    * webhook の秘密が登録されていて、送れる状態か。
    */
   configured: boolean;
+  digest_interval_secs: number;
+  digest_last_sent_at?: string | null;
+  digest_max_lines: number;
   /**
    * 登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。
    */
@@ -6366,6 +7171,15 @@ export interface NotifyView {
    * `[notify] gui_base_url`（文面のリンクの根）。
    */
   gui_base_url?: string | null;
+  /**
+   * `[notify]` outbound route configuration (ADR-0133 D6).
+   */
+  inbox_batch_secs: number;
+  /**
+   * Last successful send for each outbound route; absent history is `null`.
+   */
+  inbox_new_last_sent_at?: string | null;
+  inbox_reminder_secs: number;
   /**
    * 直近の送信（新しい順、最大 10 件）。
    */
@@ -7298,6 +8112,8 @@ export interface ProviderConfigView1 {
    */
   env_keys: string[];
   id: string;
+  kind?: "adapter";
+  llm_source?: ResolvedLlmSource | null;
   /**
    * 実効モデル（空なら `null`）。
    */
@@ -7344,11 +8160,13 @@ export interface ProviderView {
    * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
+  kind?: "adapter";
   /**
    * ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、
    * または celeris を再起動した後は `null`（メモリだけに持つ観測値）。
    */
   last_check?: ProviderCheckView | null;
+  llm_source?: ResolvedLlmSource | null;
   model?: string | null;
   stats: ProviderStats;
   tier_models?: {
@@ -7410,6 +8228,171 @@ export interface ReleasePromoteAccepted {
    * RFC 3339。
    */
   started_at: string;
+}
+/**
+ * 昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの
+ * （`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。
+ */
+export interface ReleasePromotionPreview {
+  adrs: ReleaseNoteFile[];
+  /**
+   * `current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。
+   */
+  complete: boolean;
+  /**
+   * 含まれるリリースの `config_example` の変更（新しい順）。
+   */
+  config_examples: ReleaseNoteConfig[];
+  direct_commits: ReleaseNoteCommit[];
+  /**
+   * いまの `current`（無ければ `null`）。
+   */
+  from?: string | null;
+  /**
+   * 対象リリースの gate で飛ばした段。
+   */
+  gate_skips: ReleaseNoteGateSkip[];
+  migrations: ReleaseNoteFile[];
+  /**
+   * `"live"`（対象の `verify.json` の `live_ok` が真）/ `"stop-start"`（偽）/ `null`（未検証）。
+   */
+  mode?: string | null;
+  /**
+   * 辿り切れなかった理由など（無ければ `null`）。
+   */
+  problem?: string | null;
+  /**
+   * 含まれるリリース（新しい順。対象が先頭）。
+   */
+  releases: ReleasePromotionRelease[];
+  schema: ReleaseNoteSchema;
+  /**
+   * 同じ task は 1 回（新しい順）。
+   */
+  tasks: ReleaseNoteTask[];
+  /**
+   * 対象リリースの sha12。
+   */
+  to: string;
+}
+/**
+ * 範囲で足された・変わったファイル（migration・ADR）。
+ */
+export interface ReleaseNoteFile {
+  /**
+   * 範囲の中でこのファイルに最後に触れた first-parent の commit（昇格の要約の切り出しに使う）。
+   */
+  commit?: string | null;
+  path: string;
+  /**
+   * `"added"` / `"modified"` / `"deleted"`（`git diff --name-status` の A / M / D。R は added 扱い）。
+   */
+  status: string;
+  /**
+   * ADR の 1 行目の `# ` 題（migration では `null`）。
+   */
+  title?: string | null;
+}
+/**
+ * `config/celeris.example.toml` の変更。
+ */
+export interface ReleaseNoteConfig {
+  /**
+   * 足された（コメントでも空でもない）行。人が本番 config に足すかを判断する材料（最大 40 行）。
+   */
+  added_lines?: string[];
+  /**
+   * 足された節見出し（`[section]`）。
+   */
+  added_sections?: string[];
+  commit?: string | null;
+  /**
+   * `added_lines` が 1 行以上ある（人が本番 config を見直す必要がある）。
+   */
+  needs_review: boolean;
+  path: string;
+  status: string;
+}
+/**
+ * commit の 1 件（完全な sha と題）。
+ */
+export interface ReleaseNoteCommit {
+  sha: string;
+  subject: string;
+}
+/**
+ * gate で飛ばした段。
+ */
+export interface ReleaseNoteGateSkip {
+  reason: string;
+  step: string;
+}
+/**
+ * `ReleasePromotionPreview.releases[]` の 1 件。
+ */
+export interface ReleasePromotionRelease {
+  built_at?: string | null;
+  sha12: string;
+  /**
+   * この昇格で入る task の数（この release の notes にあったもののうち、`current` に入っていないもの）。
+   */
+  task_count: number;
+}
+/**
+ * schema_version の変化。
+ */
+export interface ReleaseNoteSchema {
+  /**
+   * `from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。
+   * どちらかが分からなければ `null`。
+   */
+  changed?: boolean | null;
+  /**
+   * 起点（`current`）の schema_version。分からなければ `null`。
+   */
+  from?: number | null;
+  /**
+   * このリリースの schema_version。
+   */
+  to?: number | null;
+}
+/**
+ * `ReleaseNotes.tasks[]` の 1 件。
+ */
+export interface ReleaseNoteTask {
+  /**
+   * 同じリリースに入った子 task（親がこの一覧に居るものは親の下にまとめる）。
+   */
+  children?: ReleaseNoteChild[];
+  /**
+   * この task に属する commit（新しい順。first-parent に無い配送 head は 1 件だけ）。
+   */
+  commits?: ReleaseNoteCommit[];
+  /**
+   * どこから task だと分かったか: `"delivery"`（配送記録の head）/ `"branch"`（`celeris/<id>` の
+   * branch 名・merge commit の題）。
+   */
+  source: string;
+  /**
+   * task の status（取れたときだけ）。
+   */
+  status?: string | null;
+  /**
+   * 最後に `done` で終わった worker run の `outcome_text`（完了時の要約。最大 600 文字）。
+   */
+  summary?: string | null;
+  task_id: string;
+  /**
+   * `GET /tasks/{id}` の題。取れなければ `null`（GUI は commit 題を出す）。
+   */
+  title?: string | null;
+}
+/**
+ * `ReleaseNoteTask.children[]` の 1 件。
+ */
+export interface ReleaseNoteChild {
+  task_id: string;
+  title?: string | null;
 }
 /**
  * Phase 48（ADR-0040 D6）: リリース。`GET /releases` と `POST /releases/{sha12}/promote` の応答。
@@ -7474,6 +8457,11 @@ export interface ReleaseItem {
   is_current: boolean;
   is_previous: boolean;
   /**
+   * ADR 2026-10-04-release-notes: `notes.json`（このリリースに何が入ったか。task 単位）。
+   * この仕組みより前のリリースには無いので `null`。
+   */
+  notes?: ReleaseNotes | null;
+  /**
    * ADR-0041 D3: この sha が `[selfdeploy] repo` の `main` の**祖先**か
    * （`git merge-base --is-ancestor <sha> main`）。`false` なら本番のコードが `main` に
    * 戻っていない。リポジトリが無い・git が動かない・その sha を知らないときは `null`。
@@ -7512,6 +8500,11 @@ export interface ReleaseItem {
    * `promote.lock` に書かれた pid がまだ生きている（昇格が走っている最中）。
    */
   promoting: boolean;
+  /**
+   * ADR 2026-10-04-release-notes: いまの `current` からこのリリースへ昇格したら入るもの
+   * （`GET /releases/{sha12}/promotion-preview` と同じ）。`current` 自身・notes の無いリリースは `null`。
+   */
+  promotion?: ReleasePromotionPreview1 | null;
   /**
    * `manifest.json` の `ref`（`release.sh` に渡した git ref）。読めなければ `null`。
    */
@@ -7598,6 +8591,87 @@ export interface ReleaseGateStep {
   step: string;
 }
 /**
+ * `<release>/notes.json`（`release.sh` が `celerisctl release notes` で書く）。`base..sha` の
+ * first-parent の範囲を Celeris の task 単位にまとめた「このリリースに何が入ったか」。
+ * **決定的**に作る（git と配送記録と `GET /tasks/{id}` だけ。LLM は使わない）。
+ */
+export interface ReleaseNotes {
+  /**
+   * `agent-docs/adr/` と `docs/adr/` で足された・変わった ADR。
+   */
+  adrs?: ReleaseNoteFile[];
+  /**
+   * 範囲の起点（ビルド時の `current` の完全な sha）。`current` が無い・repo が知らないときは `null`
+   * （そのときは `sha` だけを見た空の説明になる）。
+   */
+  base?: string | null;
+  /**
+   * `config/celeris.example.toml` の変更（変わっていなければ `null`）。
+   */
+  config_example?: ReleaseNoteConfig | null;
+  /**
+   * task の配送記録（`GET /deliveries`）を読めたか。偽なら task の判別は branch 名だけ。
+   */
+  deliveries_known?: boolean;
+  /**
+   * どの task にも属さない first-parent の commit（新しい順）。
+   */
+  direct_commits?: ReleaseNoteCommit[];
+  /**
+   * `base..sha` の first-parent の sha（新しい順、最大 [`RELEASE_NOTES_FIRST_PARENT_LIMIT`] 件）。
+   * 昇格の要約が「`current` より後ろの部分」だけを切り出すのに使う。
+   */
+  first_parent?: string[];
+  /**
+   * gate で飛ばした段（`gate.json` の `skipped: true`）。
+   */
+  gate_skips?: ReleaseNoteGateSkip[];
+  /**
+   * RFC 3339。
+   */
+  generated_at: string;
+  /**
+   * `crates/task-core/migrations/` に足された（または変わった）ファイル。
+   */
+  migrations?: ReleaseNoteFile[];
+  schema: ReleaseNoteSchema1;
+  /**
+   * このリリースの完全な sha。
+   */
+  sha: string;
+  sha12: string;
+  /**
+   * task 単位の一覧（新しい順）。同じ task は 1 回。
+   */
+  tasks?: ReleaseNoteTask[];
+  /**
+   * `first_parent` を上限で切った。
+   */
+  truncated?: boolean;
+  /**
+   * 形式の版（いまは 1）。
+   */
+  version: number;
+}
+/**
+ * schema_version の変化。
+ */
+export interface ReleaseNoteSchema1 {
+  /**
+   * `from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。
+   * どちらかが分からなければ `null`。
+   */
+  changed?: boolean | null;
+  /**
+   * 起点（`current`）の schema_version。分からなければ `null`。
+   */
+  from?: number | null;
+  /**
+   * このリリースの schema_version。
+   */
+  to?: number | null;
+}
+/**
  * `<release>/promote_failed.json` の中身（`promote.sh` が非 0 で終わったときだけ書く）。
  */
 export interface ReleasePromoteFailure {
@@ -7609,6 +8683,52 @@ export interface ReleasePromoteFailure {
    * RFC 3339。
    */
   failed_at: string;
+}
+/**
+ * 昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの
+ * （`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。
+ */
+export interface ReleasePromotionPreview1 {
+  adrs: ReleaseNoteFile[];
+  /**
+   * `current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。
+   */
+  complete: boolean;
+  /**
+   * 含まれるリリースの `config_example` の変更（新しい順）。
+   */
+  config_examples: ReleaseNoteConfig[];
+  direct_commits: ReleaseNoteCommit[];
+  /**
+   * いまの `current`（無ければ `null`）。
+   */
+  from?: string | null;
+  /**
+   * 対象リリースの gate で飛ばした段。
+   */
+  gate_skips: ReleaseNoteGateSkip[];
+  migrations: ReleaseNoteFile[];
+  /**
+   * `"live"`（対象の `verify.json` の `live_ok` が真）/ `"stop-start"`（偽）/ `null`（未検証）。
+   */
+  mode?: string | null;
+  /**
+   * 辿り切れなかった理由など（無ければ `null`）。
+   */
+  problem?: string | null;
+  /**
+   * 含まれるリリース（新しい順。対象が先頭）。
+   */
+  releases: ReleasePromotionRelease[];
+  schema: ReleaseNoteSchema;
+  /**
+   * 同じ task は 1 回（新しい順）。
+   */
+  tasks: ReleaseNoteTask[];
+  /**
+   * 対象リリースの sha12。
+   */
+  to: string;
 }
 /**
  * `verify.json` の要約（ADR-0040 D3）。
@@ -8044,8 +9164,17 @@ export interface StreamReset {
  */
 export interface TaskDetail {
   actions: Action[];
+  /**
+   * Committed diffs for this task's runs, with snapshot status and Git SHAs.
+   */
+  actual_run_write_sets: ActualWriteSetView[];
+  /**
+   * Cumulative committed diffs for completed work units.
+   */
+  actual_work_unit_write_sets: ActualWriteSetView[];
   answers: AnswerNote[];
   approvals: ApprovalLink[];
+  behind_target: BehindTarget;
   children: TaskRef[];
   /**
    * ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
@@ -8069,6 +9198,10 @@ export interface TaskDetail {
    */
   execution?: ExecutionView | null;
   /**
+   * ADR-0130: effective task hint, including inheritance from a parent unit.
+   */
+  expected_write_paths?: string[] | null;
+  /**
    * ADR-0070 D1（Phase 116）: `task.status == Failed` のときだけ `Some`（分類・理由・配送済みの release）。
    * GUI のタスク詳細の赤いバナーの材料。
    */
@@ -8077,6 +9210,12 @@ export interface TaskDetail {
    * ADR-0027 D1: `Task.genre`（`role` と同じ理由で最上位にも出す）。
    */
   genre?: string | null;
+  /**
+   * ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では
+   * 省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を
+   * 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
+   */
+  integration_repair?: IntegrationRepairView | null;
   /**
    * ADR-0079 D13（Phase R5a）: 案件の root task か（`task_core::is_root_task`）。
    */
@@ -8109,11 +9248,48 @@ export interface TaskDetail {
    */
   worktree?: WorktreeView | null;
 }
+export interface ActualWriteSetView {
+  base_sha?: string | null;
+  head_sha?: string | null;
+  owner_id: string;
+  paths: string[];
+  reason?: string | null;
+  recorded_at: string;
+  repo_id: string;
+  status: string;
+}
 export interface ApprovalLink {
   approval: TaskRef;
   attempt?: number | null;
   criterion_idx?: number | null;
   decided?: ApprovalDecisionView | null;
+}
+/**
+ * Last observed target snapshot; reading the detail does not run Git.
+ */
+export interface BehindTarget {
+  behind_target_age_seconds?: number | null;
+  behind_target_commits?: number | null;
+  behind_target_observed_at?: string | null;
+  repos?: BehindTargetRepo[];
+}
+/**
+ * Per-repo value with the age computed at `now`.
+ */
+export interface BehindTargetRepo {
+  /**
+   * `null` = 未観測・計測不可。behind 0 なら 0。
+   */
+  behind_target_age_seconds?: number | null;
+  /**
+   * `null` = 計測不可（0 にしない）。
+   */
+  behind_target_commits?: number | null;
+  behind_target_observed_at: string;
+  head_sha?: string | null;
+  repo_id: string;
+  target_ref: string;
+  target_sha?: string | null;
 }
 /**
  * ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
@@ -8192,6 +9368,11 @@ export interface ExecutionView {
    * ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。
    */
   plan_approval?: PlanApprovalView | null;
+  /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+   * には無い）。
+   */
+  route?: RouteDecision | null;
 }
 /**
  * ADR-0079 D5（Phase R1b）: 親が待っている子 task 1 件（`ExecutionPhase::AwaitingChildren` の理由）。
@@ -8216,11 +9397,24 @@ export interface AwaitedChildView {
  */
 export interface ExecutionMetrics {
   /**
+   * ADR-0130 D4: 正の behind を最初に観測してからの秒数（behind 0 なら 0）。
+   */
+  behind_target_age_seconds?: number | null;
+  /**
+   * ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。
+   */
+  behind_target_commits?: number | null;
+  /**
+   * ADR-0130 D4: 上の 2 欄を観測した UTC 時刻（最後の snapshot。読取時に Git を測り直さない）。
+   */
+  behind_target_observed_at?: string | null;
+  /**
    * D7: 予算切れの種類ごとの run 数（`"turns"` / `"wall_clock"` / `"context"`）。
    */
   budget_exhausted_by_kind?: {
     [k: string]: number;
   };
+  continuation?: ContinuationMetrics3;
   /**
    * D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。
    */
@@ -8315,6 +9509,17 @@ export interface ExecutionMetrics {
   work_units_total: number;
 }
 /**
+ * ADR-0140: worker run の fresh / resumed / 旧形式の比較値。
+ */
+export interface ContinuationMetrics3 {
+  fresh?: ContinuationRunTotals;
+  fresh_fallback_by_reason?: {
+    [k: string]: number;
+  };
+  resumed?: ContinuationRunTotals1;
+  unknown?: ContinuationRunTotals2;
+}
+/**
  * ADR-0074 D2.3/D2.4（Phase F3 途中確認）: 途中確認で止まっている Task の途中報告（Execution 節と
  * GUI の 3 つのボタンの材料）。
  */
@@ -8378,12 +9583,21 @@ export interface ExecutionWorkUnitView {
    */
   branch?: string | null;
   /**
+   * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
+   * 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+   */
+  check_progress?: IntegrationCheckProgress | null;
+  /**
    * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
    */
   child_task_id?: string | null;
   continuations: number;
   created_at: string;
   depends_on: string[];
+  /**
+   * Explicit unit hint, or the inherited task hint.
+   */
+  expected_write_paths?: string[] | null;
   harness?: string | null;
   /**
    * ADR-0074 D1.2: `WorkUnitCommitted` の commit。
@@ -8423,6 +9637,43 @@ export interface ExecutionWorkUnitView {
   status: WorkUnitStatus;
   title: string;
   updated_at: string;
+}
+/**
+ * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+ */
+export interface IntegrationCheckProgress {
+  /**
+   * 実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は
+   * `GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。
+   */
+  current?: IntegrationCheckRunning | null;
+  /**
+   * 済んだ検査（`index` 順）。
+   */
+  finished: IntegrationCheckDone[];
+  /**
+   * その試行の検査の数。
+   */
+  total: number;
+}
+/**
+ * 実行中の統合の検査 1 件。
+ */
+export interface IntegrationCheckRunning {
+  cmd: string;
+  index: number;
+  started_at: string;
+}
+/**
+ * 済んだ統合の検査 1 件。
+ */
+export interface IntegrationCheckDone {
+  cmd: string;
+  duration_ms: number;
+  exit?: number | null;
+  index: number;
+  pass: boolean;
+  timed_out: boolean;
 }
 /**
  * ADR-0079 D8（Phase R3b）: 承認を待っている root の計画（Execution 節と GUI の 3 つのボタンの材料）。
@@ -8488,7 +9739,7 @@ export interface WorktreeView {
 /**
  * ADR-0044 D1: `PATCH /tasks/{id}` の本文と応答。
  */
-export interface TaskEdit {
+export interface TaskPatchBody {
   /**
    * 差し替え（部分更新はしない）。1 件以上。
    */
@@ -8510,6 +9761,7 @@ export interface TaskEdit {
    * 楽観的排他（現在の `status` と違えば 409）。
    */
   expected_status?: Status | null;
+  expected_write_paths?: string[] | null;
   /**
    * ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。
    * `null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。
@@ -8614,6 +9866,11 @@ export interface TaskExecutionView {
    * ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。
    */
   plan_approval?: PlanApprovalView | null;
+  /**
+   * ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+   * には無い）。
+   */
+  route?: RouteDecision | null;
   /**
    * checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。
    */
@@ -9187,4 +10444,34 @@ export interface TreeFileView {
    * 512 KiB を超えたので `text` を返していない。
    */
   too_large: boolean;
+}
+/**
+ * 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。
+ */
+export interface WorkUnitCheckLog {
+  cmd: string;
+  duration_ms?: number | null;
+  exit?: number | null;
+  index: number;
+  key: string;
+  pass?: boolean | null;
+  /**
+   * 対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。
+   */
+  running: boolean;
+  /**
+   * ログファイルの大きさ（バイト。まだ無ければ 0）。
+   */
+  size: number;
+  started_at: string;
+  /**
+   * ログの末尾（既定 16 KiB・上限 64 KiB。UTF-8 の境界で切り、壊れたバイトは置き換える）。
+   */
+  tail: string;
+  total: number;
+  /**
+   * `tail` がファイルの先頭から始まっていない（前を切った）。
+   */
+  truncated: boolean;
+  work_unit_id: string;
 }

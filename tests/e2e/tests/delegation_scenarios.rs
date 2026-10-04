@@ -10,7 +10,6 @@
 //! 5. `celerisctl show --json` と `GET /api/v1/tasks/{id}` に `role` と `delegated` が出る。
 //! 6. `celerisctl replay` の差分ゼロ。
 
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -31,12 +30,10 @@ fn bin(name: &str) -> PathBuf {
     path
 }
 
-fn free_port() -> u16 {
-    TcpListener::bind("127.0.0.1:0")
-        .unwrap()
-        .local_addr()
-        .unwrap()
-        .port()
+/// celeris に渡すポートを予約する。`Env` が持ち続け、並走する別のテストの celeris と
+/// 同じポートを共有しない（celeris は `SO_REUSEPORT` で bind する。`e2e::PortReservation`）。
+fn reserve_port() -> e2e::PortReservation {
+    e2e::PortReservation::new().unwrap()
 }
 
 fn wait_until(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -74,12 +71,14 @@ struct Env {
     db: PathBuf,
     store: Arc<SqliteStore>,
     port: u16,
+    _port: e2e::PortReservation,
 }
 
 const LEAD_INSTRUCTIONS: &str = "You are the lead: split the work and delegate implementation";
 
 impl Env {
     fn new() -> Self {
+        let reserved = reserve_port();
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let db = root.join("celeris.sqlite3");
@@ -89,7 +88,8 @@ impl Env {
             root,
             db,
             store,
-            port: free_port(),
+            port: reserved.port(),
+            _port: reserved,
         }
     }
 
@@ -512,7 +512,7 @@ fn non_aggregate_lead_completes_after_children_without_another_run() {
 
     let daemon = env.start_celeris(&config);
     // 親の run と判定が終わっても、子が終わるまで reviewing のまま。
-    let saw_waiting = wait_until(Duration::from_secs(30), || {
+    let saw_waiting = wait_until(Duration::from_secs(60), || {
         let parent = env.task(id);
         parent.status == Status::Reviewing
             && env.children_of(id).iter().any(|c| !c.status.is_terminal())

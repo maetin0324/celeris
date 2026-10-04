@@ -170,11 +170,16 @@ async fn the_wrapper_only_adds_dash_f_when_the_users_ssh_config_exists() {
     settings.ssh_command = vec![fake_ssh.to_string_lossy().into_owned()];
     let ws = SshWorkspace::new(&mirror, settings);
     let path = ws.write_remote_exec_helper().await.expect("write helper");
+    // Tokio のファイル書き込みと並行テストの exec が競合しないよう、
+    // 生成した内容を別プロセスで書いた実行ファイルから確認する。
+    let wrapper = dir.path().join("remote-exec-test");
+    let script = tokio::fs::read_to_string(&path).await.unwrap();
+    crate::test_support::write_executable(&wrapper, &script);
 
     // `$HOME/.ssh/config` が無ければ `-F` を付けない。
     let home_without = dir.path().join("home-without");
     tokio::fs::create_dir_all(&home_without).await.unwrap();
-    let status = tokio::process::Command::new(&path)
+    let status = tokio::process::Command::new(&wrapper)
         .arg("true")
         .env("HOME", &home_without)
         .status()
@@ -192,7 +197,7 @@ async fn the_wrapper_only_adds_dash_f_when_the_users_ssh_config_exists() {
     tokio::fs::write(home_with.join(".ssh").join("config"), "Host pegasus\n")
         .await
         .unwrap();
-    let status = tokio::process::Command::new(&path)
+    let status = tokio::process::Command::new(&wrapper)
         .arg("true")
         .env("HOME", &home_with)
         .status()

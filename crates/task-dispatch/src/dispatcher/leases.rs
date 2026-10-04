@@ -68,8 +68,14 @@ impl Dispatcher {
     ///    （次のデーモンが孤児の回収でその内容から確定させる。ここで検査・レビューを spawn しても exit で
     ///    失われるため）。
     ///
-    /// レビュー・WU の検査・工程の統合は触らない（次のデーモンの `recover_reviews` と孤児の回収が拾う）。
-    /// DB に記録した run の数を返す。
+    /// 4. 手元のレビューも止める。Reviewer run を起こしていれば quota を閉じ、`WorkerFinished{role:
+    ///    reviewer, outcome: "interrupted: review interrupted (daemon shutdown …)", end: cancelled}` で
+    ///    `runs` 行を閉じる（Reviewer run は lease を持たないので、閉じないと次のデーモンの誰も閉じない）。
+    ///    Task は `reviewing` のまま（次のデーモンの `recover_reviews` がレビューをやり直す。Task ごとの
+    ///    レビューの flock は止めた task とこのプロセスの終わりで外れる）。
+    ///
+    /// WU の検査・工程の統合は触らない（次のデーモンの孤児の回収が拾う）。DB に記録した worker run の数と
+    /// 止めたレビューの数の和を返す。
     pub fn interrupt_runs_on_shutdown(&mut self) -> usize {
         if let Err(e) = self.drain_completions() {
             tracing::warn!(error = %e, "failed to record the completions received before the shutdown");
@@ -104,6 +110,29 @@ impl Dispatcher {
                     tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the shutdown interrupt; the next daemon's orphan takeover will pick it up");
                 }
             }
+        }
+        let reviewing: Vec<(TaskId, ReviewEntry)> = self.reviewing.drain().collect();
+        for (task_id, entry) in reviewing {
+            if let Some(review_run_id) = entry.review_run_id.clone() {
+                if let Some(provider) = entry.provider.clone() {
+                    self.release_quota_if_tracked(
+                        &review_run_id,
+                        entry.account.as_deref(),
+                        entry.account_adapter,
+                        &provider,
+                        task_id,
+                    );
+                }
+                self.close_aborted_run(
+                    task_id,
+                    &review_run_id,
+                    Some(RunRole::Reviewer),
+                    &format!("review interrupted ({SHUTDOWN_WHY})"),
+                );
+            }
+            tracing::warn!(%task_id, review_run_id = ?entry.review_run_id, "daemon shutdown: the review was stopped; the next daemon re-reviews the task");
+            self.stop_review(entry);
+            recorded += 1;
         }
         recorded
     }
@@ -506,8 +535,10 @@ impl Dispatcher {
                 // ADR-0074 D1.6/D1.7（Phase F2）: v2 の WU の run を止めたなら、WU を `running` の
                 // まま残さない（割り込み・lease 喪失なら checkpoint の有無で needs_continuation /
                 // ready に戻す。Cancel は `cancel_open_work_units` が cancelled にする）。
-                if key.work_unit.is_some()
-                    && let Some(t) = &current
+                // ADR-0140 付記 comment-resume: 段の無い計画（v1）の WU の run も同じ（`RunKey.work_unit` は
+                // 持たないが、`last_run_id` がこの run の `running` の WU を戻す。無ければ何もしない）。これが
+                // 無いとコメントの割り込みの後、WU が `running` のまま残り task が再 dispatch されない。
+                if let Some(t) = &current
                     && !t.status.is_terminal()
                     && let Err(e) = self.reconcile_work_unit_run(id, &entry.run_id, "aborted")
                 {
@@ -590,16 +621,17 @@ impl Dispatcher {
         // 承認待ちの記録は、まだ reviewing のタスクだけに保つ（cancel 等で抜けたものをスナップショットに残さない。ADR-0013 D4）。
         self.awaiting_human
             .retain(|id| reviewing_tasks.iter().any(|t| t.id == *id));
-        for task in reviewing_tasks {
-            if self.reviewing.contains_key(&task.id)
-                || self.awaiting_children.contains_key(&task.id)
-            {
-                continue;
-            }
-            // ADR-0041 D5: 面倒を見ないタスクのレビューは拾わない（verify は他人のタスクを判定しない）。
-            if !self.is_eligible(&task) {
-                continue;
-            }
+        // ADR-0041 D5: 面倒を見ないタスクのレビューは拾わない（verify は他人のタスクを判定しない）。
+        let candidates: Vec<Task> = reviewing_tasks
+            .into_iter()
+            .filter(|task| {
+                !self.reviewing.contains_key(&task.id)
+                    && !self.awaiting_children.contains_key(&task.id)
+                    && self.is_eligible(task)
+            })
+            .collect();
+        // ADR-0130 D5: 長く stale な task から review 前 sync に渡す。
+        for task in self.order_review_sync_queue(candidates)? {
             let events = self.store.events_for(task.id)?;
             let run_id = last_run_id(&events).unwrap_or_default();
             // 前 tick で見送った場合はメモリ上の done 内容、再起動後は runs/<run_id>/result.json から復元。
@@ -610,9 +642,11 @@ impl Dispatcher {
                     .map(|dir| subject_from_run_dir(&dir, &run_id))
                     .unwrap_or_default(),
             };
-            if !self.spawn_review(task.id, run_id, &subject)? {
+            let started = self.spawn_review(task.id, run_id, &subject)?;
+            if !started {
                 self.pending_subjects.insert(task.id, subject);
             }
+            self.note_review_sync_offer(task.id, started);
         }
         Ok(())
     }

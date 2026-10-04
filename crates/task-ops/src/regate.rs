@@ -120,6 +120,9 @@ pub fn set_execution_mode(
     let previous_decision = if has_plan {
         None
     } else {
+        // ADR-0124 D2: 経路の判定（routing.route）は gate の判定と同じ寿命。人が経路を明示
+        // したら消し、次の dispatch で gate → evaluate の順に記録し直す。
+        routing.route = None;
         routing.execution.take()
     };
     routing.execution_hint = Some(ExecutionHintSpec {

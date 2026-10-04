@@ -1,6 +1,154 @@
 use super::*;
 
 #[test]
+fn provider_kind_legacy_production_inference_warnings_and_cheap_tier() {
+    use task_core::{LlmSourceRef as Source, SourceOrigin, Tier};
+    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, fixture).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    for (id, expected) in [
+        ("opencode-qwen", Source::OpenaiCompatible("qwen".into())),
+        ("ldr-qwen", Source::Celeris),
+        ("paperqa-qwen", Source::Celeris),
+        ("langmem-main", Source::Celeris),
+        ("claude-pool", Source::ClaudeOauth),
+        ("codex-pool", Source::CodexOauth),
+        ("unclassified-tool", Source::Unknown),
+    ] {
+        let resolved = cfg.provider_llm_source(id).unwrap();
+        assert_eq!(resolved.source, expected, "{id}");
+        assert_eq!(resolved.origin, SourceOrigin::Derived, "{id}");
+        assert_eq!(
+            cfg.provider_kind(id),
+            Some(task_core::ProviderKind::Adapter)
+        );
+    }
+    assert_eq!(
+        cfg.provider_specs()
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers,
+        vec![Tier::Cheap]
+    );
+    assert_eq!(
+        cfg.providers
+            .iter()
+            .find(|p| p.id == "opencode-qwen")
+            .unwrap()
+            .tiers
+            .len(),
+        3
+    );
+    let warnings = cfg.provider_kind_warnings();
+    for code in [
+        "deprecated_qwen_provider_id",
+        "direct_qwen_model",
+        "unknown_llm_source",
+        "qwen_fixed_acp_noncheap_tier",
+    ] {
+        assert!(
+            warnings.iter().any(|warning| warning.starts_with(code)),
+            "{code}"
+        );
+    }
+    assert!(!warnings.join(" ").contains("fixture-secret-sentinel"));
+    assert!(!warnings.join(" ").contains("/fixture/qwen.json"));
+}
+
+#[test]
+fn provider_kind_explicit_source_rejects_adapter_model_and_missing_reference() {
+    let head = "[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n";
+    for row in [
+        "id = \"bad\"\nadapter = \"fake\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nllm_source = \"codex_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"celeris\"",
+        "id = \"bad\"\nadapter = \"claude-code\"\nmodel = \"celeris/cheap\"\nllm_source = \"claude_oauth\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"unknown\"",
+        "id = \"bad\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:missing\"",
+    ] {
+        let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\n{row}\n")).unwrap();
+        assert!(
+            matches!(cfg.validate(), Err(ConfigError::Invalid(_))),
+            "{row}"
+        );
+    }
+    let cfg: Config = toml::from_str(&format!("{head}\n[[providers]]\nid = \"ok\"\nadapter = \"acp\"\nkind = \"adapter\"\nllm_source = \"openai_compatible:qwen\"\n")).unwrap();
+    cfg.validate().unwrap();
+    let resolved = cfg.provider_llm_source("ok").unwrap();
+    assert_eq!(resolved.origin, task_core::SourceOrigin::Explicit);
+    assert_eq!(
+        cfg.provider_kind("ok"),
+        Some(task_core::ProviderKind::Adapter)
+    );
+    assert_eq!(
+        serde_json::to_string(&resolved.source).unwrap(),
+        "\"openai_compatible:qwen\""
+    );
+}
+
+#[test]
+fn provider_kind_qwen_id_without_model_does_not_guess_source() {
+    let cfg: Config = toml::from_str("[[providers]]\nid = \"opencode-qwen\"\nadapter = \"acp\"\nenv = { OPENCODE_CONFIG = \"/fixture/private.json\" }\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(
+        cfg.provider_llm_source("opencode-qwen").unwrap().source,
+        task_core::LlmSourceRef::Unknown
+    );
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("unknown_llm_source"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_without_opencode_config_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"direct\"\nadapter = \"acp\"\nmodel = \"qwen3\"\n")
+            .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_source_reference_is_cheap_only() {
+    use task_core::Tier;
+    let cfg: Config = toml::from_str("[[llm_proxy.sources.openai_compatible]]\nid = \"qwen\"\nbase_url = \"http://127.0.0.1:9/v1\"\n[[providers]]\nid = \"source\"\nadapter = \"acp\"\nllm_source = \"openai_compatible:qwen\"\n").unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers, vec![Tier::Cheap]);
+    assert!(
+        cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
+fn provider_kind_qwen_direct_acp_proxy_model_keeps_all_tiers() {
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"proxy\"\nadapter = \"acp\"\nmodel = \"celeris/cheap\"\nenv = { OPENCODE_CONFIG = \"/fixture/old-qwen.json\" }\n",
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    assert_eq!(cfg.provider_specs()[0].tiers.len(), 3);
+    assert!(
+        !cfg.provider_kind_warnings()
+            .iter()
+            .any(|warning| warning.starts_with("qwen_fixed_acp_noncheap_tier"))
+    );
+}
+
+#[test]
 fn browser_settings_default_to_unconfigured_and_site_policy_validates() {
     let cfg: Config = toml::from_str("").unwrap();
     assert!(cfg.browser.egress.resolver.is_none());
@@ -35,6 +183,49 @@ password_selector = "input:not(.x)"
         toml::from_str::<Config>("[browser.egress]\nresolver = \"127.0.0.1\"\nbogus = 1\n")
             .is_err()
     );
+}
+
+/// ADR-0116 D5: `[browser] runtime`。既定は `"daemon"`、`"launcher"` は `launcher_socket` 必須、
+/// 未知の値と socket 欠落は設定検証で error。
+#[test]
+fn browser_runtime_defaults_to_daemon() {
+    let cfg: Config = toml::from_str("").unwrap();
+    assert_eq!(cfg.browser.runtime, "daemon");
+    assert!(cfg.browser.launcher_socket.is_none());
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Daemon
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_with_socket_validates() {
+    let cfg: Config = toml::from_str(
+        "[browser]\nruntime = \"launcher\"\nlauncher_socket = \"/run/celeris/browser-launcher.sock\"\n",
+    )
+    .unwrap();
+    assert!(cfg.browser.validate().is_ok());
+    assert_eq!(
+        cfg.browser.runtime_kind(),
+        task_worker::browser::BrowserRuntimeKind::Launcher {
+            socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
+        }
+    );
+}
+
+#[test]
+fn browser_runtime_launcher_without_socket_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"launcher\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("launcher_socket"));
+}
+
+#[test]
+fn browser_runtime_unknown_value_is_rejected() {
+    let cfg: Config = toml::from_str("[browser]\nruntime = \"bogus\"\n").unwrap();
+    let err = cfg.browser.validate().unwrap_err();
+    assert!(err.to_string().contains("runtime"));
 }
 use task_core::{AccountAdapter, DelegationLimits, OrgKind, Tier, WorkerHint};
 
@@ -303,6 +494,7 @@ fn loads_example_config_and_resolves_relative_paths() {
             "coding",
             "conversation",
             "data-analysis",
+            "knowledge-curation",
             "literature",
             "plan",
             "web-research",
@@ -1358,7 +1550,7 @@ fn loads_research_example_config() {
     // `.json` を付けずに渡す（実機の仕様）。
     assert_eq!(
         cfg.adapters.paperqa.settings.as_deref(),
-        Some("/home/u/celeris/paperqa/settings/qwen-local")
+        Some("/home/u/celeris/paperqa/settings/proxy")
     );
     assert_eq!(
         cfg.adapters.paperqa.paper_directory.as_deref(),
@@ -1622,9 +1814,7 @@ tiers = ["cheap"]
     );
 }
 
-/// ADR-0075 D4（Phase G2）: `[scratch.cargo]` の既定は `CARGO_INCREMENTAL=0` と `line-tables-only`、
-/// `[scratch.sccache]` の既定は有効・port 4236・`$CELERIS_STATE_DIR/tools/sccache/bin/sccache`。節を書かなくても
-/// 動き（D7 の N-1 の規則）、書けば上書きでき、未知のキーは拒否する。
+/// `[scratch.cargo]` は従来どおり有効。廃止された cache 設定は worker に渡さない。
 #[test]
 fn scratch_cargo_defaults_disable_incremental() {
     let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
@@ -1636,120 +1826,44 @@ fn scratch_cargo_defaults_disable_incremental() {
             dev_debug: Some("line-tables-only".to_string()),
         }
     );
-    assert!(s.sccache.enabled);
-    assert_eq!(s.sccache.server_port, 4236);
-    assert!(
-        s.sccache.binary.ends_with("tools/sccache/bin/sccache"),
-        "{}",
-        s.sccache.binary.display()
-    );
-    let owner = task_worker::scratch::Owner::task("01T");
-    let env = task_worker::scratch::cargo_env_with(
-        &s,
-        &owner,
-        &task_worker::scratch::SccacheState::Disabled {
-            reason: String::new(),
-        },
-    );
-    assert!(env.contains(&("CARGO_INCREMENTAL".to_string(), "0".to_string())));
-    assert!(env.contains(&(
-        "CARGO_PROFILE_DEV_DEBUG".to_string(),
-        "line-tables-only".to_string()
-    )));
     let cfg: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.sccache]\nenabled = false\nport = 4300\nbinary = \"/opt/sccache\"\n[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n",
-        )
-        .unwrap();
-    let s = cfg.scratch_settings_unchecked();
-    assert!(!s.sccache.enabled);
-    assert_eq!(s.sccache.server_port, 4300);
-    assert_eq!(s.sccache.binary, PathBuf::from("/opt/sccache"));
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.cargo]\nincremental = true\ndev_debug = \"\"\n",
+    )
+    .unwrap();
     assert_eq!(
-        s.cargo,
+        cfg.scratch_settings_unchecked().cargo,
         task_worker::scratch::CargoTuning {
             incremental: true,
             dev_debug: None,
         }
     );
-    for bad in [
-        "[scratch.sccache]\nbogus = 1\n",
-        "[scratch.cargo]\nbogus = 1\n",
-    ] {
-        assert!(
-            toml::from_str::<Config>(&format!(
-                "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{bad}"
-            ))
-            .is_err(),
-            "{bad}"
-        );
-    }
+    assert!(toml::from_str::<Config>("[scratch.cargo]\nbogus = 1\n").is_err());
 }
 
-/// ADR-0075 D5 (b)（Phase G3）: `[scratch.l2]` / `[scratch.cache_server]` は書かなくても既定で動く（D7 の N-1 の
-/// 規則）。L2 の既定は `$CELERIS_STATE_DIR/cache/sccache-l2`（NFS）、25 MB/s、300 GB。cache server は 4237、token は
-/// `<scratch>/cache-server.token`、L1 は `<scratch>/cache-l1`。書けば上書きでき、未知のキーは拒否する。
+/// 旧節は未知の項目を含んでも読めるが、検出して警告でき、値は実行設定へ届かない。
 #[test]
-fn scratch_l2_defaults_work_without_the_section() {
-    let cfg: Config = toml::from_str(
-        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\ndir = \"/srv/scratch\"\n",
+fn legacy_scratch_cache_sections_are_ignored_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.sccache]\nenabled = true\nport = 4300\nbogus = 1\n[scratch.cache_server]\nenabled = true\nport = 4299\n[scratch.l2]\nenabled = true\ndir = \"/nfs/l2\"\n",
     )
     .unwrap();
-    let s = cfg.scratch_settings_unchecked();
-    assert!(s.l2.enabled);
+    let cfg = Config::load(&path).unwrap();
+    assert_eq!(
+        cfg.scratch.deprecated_sections(),
+        ["scratch.sccache", "scratch.l2", "scratch.cache_server"]
+    );
+    let settings = cfg.scratch_settings_unchecked();
+    let env = task_worker::scratch::cargo_env(&settings, &task_worker::scratch::Owner::task("01T"));
     assert!(
-        s.l2.dir.ends_with("cache/sccache-l2"),
-        "{}",
-        s.l2.dir.display()
+        env.iter()
+            .all(|(k, _)| !k.starts_with("SCCACHE_") && k != "RUSTC_WRAPPER"),
+        "{env:?}"
     );
-    assert_eq!(s.l2.max_bytes, 300 * task_worker::scratch::GIB);
-    assert_eq!(
-        (
-            s.l2.flush_mbps,
-            s.l2.flush_queue_max_mb,
-            s.l2.get_timeout_ms
-        ),
-        (25, 4096, 500)
-    );
-    assert!(s.cache_server.enabled);
-    assert_eq!(s.cache_server.port, 4237);
-    assert_eq!(
-        s.cache_server.token_file,
-        PathBuf::from("/srv/scratch/cache-server.token")
-    );
-    let store = crate::cache_server::store_config(&s);
-    assert_eq!(store.l1_dir, PathBuf::from("/srv/scratch/cache-l1"));
-    assert_eq!(store.l2_dir.as_deref(), Some(s.l2.dir.as_path()));
-    assert_eq!(store.flush_bytes_per_sec, 25_000_000);
-    assert_eq!(store.l1_max_bytes, 40 * task_worker::scratch::GIB);
-    assert_eq!(store.l2_get_timeout, Duration::from_millis(500));
-
-    let cfg: Config = toml::from_str(
-            "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch.l2]\nenabled = false\ndir = \"/nfs/l2\"\nmax_gb = 10\nflush_mbps = 0\n[scratch.cache_server]\nport = 4299\ntoken_file = \"/etc/t\"\n",
-        )
-        .unwrap();
-    let s = cfg.scratch_settings_unchecked();
-    assert!(!s.l2.enabled);
-    assert_eq!(s.l2.dir, PathBuf::from("/nfs/l2"));
-    assert_eq!(s.cache_server.port, 4299);
-    assert_eq!(s.cache_server.token_file, PathBuf::from("/etc/t"));
-    let store = crate::cache_server::store_config(&s);
-    assert_eq!(
-        store.l2_dir, None,
-        "L2 disabled means an L1-only cache server"
-    );
-    assert_eq!(store.flush_bytes_per_sec, 0);
-    for bad in [
-        "[scratch.l2]\nbogus = 1\n",
-        "[scratch.cache_server]\nbogus = 1\n",
-    ] {
-        assert!(
-            toml::from_str::<Config>(&format!(
-                "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{bad}"
-            ))
-            .is_err(),
-            "{bad}"
-        );
-    }
+    let clean: Config = toml::from_str("").unwrap();
+    assert!(clean.scratch.deprecated_sections().is_empty());
 }
 
 /// ADR-0075 D7: `[scratch] dir` の既定は `build_cache_dir` の親の `scratch/`。
@@ -1763,7 +1877,6 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     assert!(s.enabled);
     assert_eq!(s.dir, PathBuf::from("/var/lib/celeris/scratch"));
     assert_eq!(s.targets_max_bytes, 100 * task_worker::scratch::GIB);
-    assert_eq!(s.l1_max_bytes, 40 * task_worker::scratch::GIB);
     assert_eq!(s.total_max_bytes, 150 * task_worker::scratch::GIB);
     assert_eq!((s.high_watermark, s.low_watermark), (0.90, 0.70));
     assert_eq!(s.external_lease_ttl_secs, 21_600);
@@ -1792,6 +1905,30 @@ fn scratch_defaults_follow_the_build_cache_parent() {
     ))
     .unwrap();
     assert!(cfg.dispatch_config().scratch.enabled);
+}
+
+/// ADR-0129 (3)(4): `[scratch] mount` が mount されていなければ `dir` を既定の場所へ戻す。`seed_reflink` の既定は false。
+#[test]
+fn scratch_mount_falls_back_to_default_dir_and_seed_reflink_defaults_off() {
+    let tmp = tempfile::tempdir().unwrap();
+    let not_mounted = tmp.path().join("local");
+    std::fs::create_dir_all(&not_mounted).unwrap();
+    let cfg: Config = toml::from_str(&format!(
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nmount = \"{m}\"\ndir = \"{m}/celeris/scratch\"\n",
+        m = not_mounted.display()
+    ))
+    .unwrap();
+    let unchecked = cfg.scratch_settings_unchecked();
+    assert!(!unchecked.seed_reflink);
+    assert_eq!(unchecked.mount.as_deref(), Some(not_mounted.as_path()));
+    let s = cfg.scratch_settings();
+    assert_eq!(s.dir, cfg.default_scratch_dir());
+    assert!(s.dir_fallback_reason.unwrap().contains("not mounted"));
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n[scratch]\nseed_reflink = true\n",
+    )
+    .unwrap();
+    assert!(cfg.scratch_settings_unchecked().seed_reflink);
 }
 
 /// ADR-0075 D7: `[scratch] enabled = false` で F5-fix の挙動に戻す（dispatcher は build_cache_dir を使う）。
@@ -2538,7 +2675,7 @@ fn ensure_accounts_dir_creates_the_directories_with_0700() {
 
 // ---- ADR-0037: [notify] ----
 
-/// `[notify]` は書かなくてよく（既定値が入る）、書けば 3 つのキーだけを受ける。
+/// `[notify]` は書かなくても既定値が入り、D6 の送り出し間隔を設定できる。
 #[test]
 fn notify_defaults_are_used_when_the_section_is_absent() {
     let cfg: Config = toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
@@ -2555,6 +2692,16 @@ fn notify_defaults_are_used_when_the_section_is_absent() {
     assert_eq!(cfg.notify.discord_webhook_secret, "hook");
     assert_eq!(cfg.notify.interval_secs, 60);
     assert_eq!(cfg.notify.base_url(), Some("http://192.168.1.103:7700"));
+
+    let cfg: Config = toml::from_str(
+        "[notify]\ninbox_batch_secs = 15\ninbox_reminder_secs = 7200\n\
+         digest_interval_secs = 1800\ndigest_max_lines = 5\n",
+    )
+    .unwrap();
+    assert_eq!(cfg.notify.inbox_batch_secs, 15);
+    assert_eq!(cfg.notify.inbox_reminder_secs, 7200);
+    assert_eq!(cfg.notify.digest_interval_secs, 1800);
+    assert_eq!(cfg.notify.digest_max_lines, 5);
 
     // 未知キーは拒否。
     assert!(toml::from_str::<Config>("[notify]\nbogus = 1\n").is_err());
@@ -3266,4 +3413,318 @@ fn multi_account_example_mentions_account_pool_commented_out() {
     assert!(text.contains("# account_pool = true"));
     // 既存の受け入れ条件（Config::load が通る）はコメントアウトされているので変わらない。
     assert!(Config::load(path).is_ok());
+}
+
+#[test]
+fn delivery_auto_resolve_defaults_follow_the_parallel_integration_adr() {
+    let cfg: Config = toml::from_str("").unwrap();
+    let auto = &cfg.selfdeploy.delivery.auto_resolve;
+    assert!(auto.enabled);
+    assert_eq!(auto.max_attempts, 3);
+    assert_eq!(
+        auto.generated.globs,
+        vec![
+            "docs/protocol/*.schema.json".to_string(),
+            "docs/api/v1/*.schema.json".to_string()
+        ]
+    );
+    let cmd = auto.generated.command().unwrap();
+    assert_eq!(&cmd[..4], ["env", "UPDATE_SCHEMA=1", "cargo", "test"]);
+    for krate in ["task-core", "task-worker", "task-api"] {
+        assert!(cmd.iter().any(|a| a == krate), "{krate}");
+    }
+    cfg.selfdeploy.delivery.validate().unwrap();
+}
+
+#[test]
+fn delivery_auto_resolve_overrides_and_validation() {
+    let cfg = Config::parse_with_delivery(
+        "[delivery.auto_resolve]\nenabled = false\nmax_attempts = 5\n[delivery.auto_resolve.generated]\ncmd = []\n",
+    )
+    .unwrap();
+    let auto = &cfg.selfdeploy.delivery.auto_resolve;
+    assert!(!auto.enabled);
+    assert_eq!(auto.max_attempts, 5);
+    assert_eq!(auto.generated.command(), None);
+    cfg.selfdeploy.delivery.validate().unwrap();
+
+    let cfg = Config::parse_with_delivery(
+        "[delivery.auto_resolve.generated]\ncmd = [\"sh\", \"regen.sh\"]\nglobs = [\"docs/api/v1/*.schema.json\", \"docs/protocol/*.schema.json\"]\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.selfdeploy.delivery.auto_resolve.generated.command(),
+        Some(vec!["sh".to_string(), "regen.sh".to_string()])
+    );
+    cfg.selfdeploy.delivery.validate().unwrap();
+
+    for bad in [
+        "[delivery.auto_resolve]\nmax_attempts = 0\n",
+        "[delivery.auto_resolve.generated]\nglobs = [\"docs/**/*.json\"]\n",
+    ] {
+        let cfg = Config::parse_with_delivery(bad).unwrap();
+        assert!(cfg.selfdeploy.delivery.validate().is_err(), "{bad}");
+    }
+    assert!(Config::parse_with_delivery("[delivery.auto_resolve]\nunknown = 1\n").is_err());
+}
+
+/// ADR-0136: hot な path は既存の key で `/local` 側に変えられ、書かなければ従来の home の既定のまま。
+/// `[storage]` を書かなければ mount 検査はしない。
+#[test]
+fn hot_paths_follow_the_adr_0136_keys_and_default_to_the_previous_locations() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[[providers]]\nid = \"x\"\nadapter = \"fake\"\n").unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let home = task_core::home_dir().expect("HOME in tests");
+    let state = home.join(".local/celeris");
+    let defaults: Vec<(&str, PathBuf)> = vec![
+        ("[db].path", state.clone()),
+        ("workspace_root", state.join("workspaces")),
+        ("[workspace].build_cache_dir", state.join("build-cache")),
+        ("[scratch].dir", state.join("scratch")),
+        ("[containers].build_dir", state.join("containers")),
+        ("[selfdeploy].releases_dir", state.join("releases")),
+    ];
+    assert_eq!(cfg.hot_paths(), defaults);
+    assert_eq!(cfg.db.path, state.join("celeris.sqlite3"));
+    assert_eq!(cfg.storage, StorageConfig::default());
+    assert!(cfg.check_hot_mount(None).is_ok(), "no [storage]: no check");
+
+    std::fs::write(
+        &path,
+        r#"
+workspace_root = "/local/celeris/data/workspaces"
+[db]
+path = "/local/celeris/data/db/celeris.sqlite3"
+backup_dir = "/local/celeris/state/backups"
+[workspace]
+build_cache_dir = "/local/celeris/data/build-cache"
+[scratch]
+dir = "/local/celeris/data/scratch"
+[containers]
+build_dir = "/local/celeris/data/containers"
+[memory]
+dir = "/local/celeris/data/memory"
+[selfdeploy]
+releases_dir = "/local/celeris/state/releases"
+[storage]
+hot_mount = "/local"
+[[providers]]
+id = "x"
+adapter = "fake"
+"#,
+    )
+    .unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let local = PathBuf::from("/local/celeris");
+    assert_eq!(
+        cfg.hot_paths(),
+        vec![
+            ("[db].path", local.join("data/db")),
+            ("workspace_root", local.join("data/workspaces")),
+            (
+                "[workspace].build_cache_dir",
+                local.join("data/build-cache")
+            ),
+            ("[scratch].dir", local.join("data/scratch")),
+            ("[containers].build_dir", local.join("data/containers")),
+            ("[selfdeploy].releases_dir", local.join("state/releases")),
+            ("[memory].dir", local.join("data/memory")),
+            ("[db].backup_dir", local.join("state/backups")),
+        ]
+    );
+    assert_eq!(cfg.storage.hot_mount.as_deref(), Some(Path::new("/local")));
+    assert_eq!(
+        cfg.dispatch_config().memory_dir.as_deref(),
+        Some(local.join("data/memory").as_path())
+    );
+
+    // 相対 path・`/` は拒否、知らない key も拒否。
+    assert!(
+        toml::from_str::<Config>("[storage]\nhot_mount = \"local\"\n")
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    assert!(
+        toml::from_str::<Config>("[storage]\nhot_mount = \"/\"\n")
+            .unwrap()
+            .validate()
+            .is_err()
+    );
+    assert!(toml::from_str::<Config>("[storage]\nbogus = 1\n").is_err());
+}
+
+/// ADR-0136: `[storage] hot_mount` が mount point そのものでなければ（rootfs 上の同名 dir・mountinfo が
+/// 読めない）理由を出して止め、dir は作らない。注入した mountinfo と tempdir で決定的に確かめる。
+#[test]
+fn hot_mount_check_refuses_a_plain_directory_on_the_root_filesystem() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mount = tmp.path().join("local");
+    let workspaces = mount.join("celeris/data/workspaces");
+    let mut cfg: Config = toml::from_str("").unwrap();
+    cfg.storage.hot_mount = Some(mount.clone());
+    cfg.workspace_root = workspaces.clone();
+    cfg.memory = Some(MemoryConfig {
+        dir: mount.join("celeris/data/memory"),
+    });
+    cfg.storage.validate().unwrap();
+
+    let root_only = "25 1 0:24 / / rw,relatime shared:1 - ext4 /dev/mapper/root rw\n";
+    let err = cfg
+        .check_hot_mount(Some(root_only))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("not a mount point"), "{err}");
+    assert!(
+        err.contains(&format!("workspace_root = {}", workspaces.display())),
+        "{err}"
+    );
+    assert!(err.contains("[memory].dir"), "{err}");
+    // 検査は何も作らない（rootfs に同名 dir を作らない）。
+    assert!(!mount.exists());
+
+    // 子の mount（`<mount>/sub`）や前方一致する別名（`<mount>2`）では足りない。
+    let near = format!(
+        "{root_only}30 25 0:60 / {m}/sub rw - btrfs /dev/sdb rw\n31 25 0:61 / {m}2 rw - btrfs /dev/sdc rw\n",
+        m = mount.display()
+    );
+    assert!(cfg.check_hot_mount(Some(&near)).is_err());
+
+    let err = cfg.check_hot_mount(None).unwrap_err().to_string();
+    assert!(err.contains("cannot read /proc/self/mountinfo"), "{err}");
+
+    let mounted = format!(
+        "{root_only}40 25 0:70 / {} rw,relatime shared:9 - btrfs /dev/mapper/pve-local rw,compress=zstd:1\n",
+        mount.display()
+    );
+    assert!(cfg.check_hot_mount(Some(&mounted)).is_ok());
+    assert!(!mount.exists());
+
+    // mountinfo の 8 進 escape（空白 = `\040`）を戻して比べる。
+    assert!(is_mount_point(
+        "50 25 0:80 / /mnt/hot\\040data rw - btrfs /dev/sdd rw\n",
+        Path::new("/mnt/hot data")
+    ));
+    assert!(!is_mount_point("garbage\n", Path::new("/local")));
+}
+
+/// ADR-0139 の試験用: proxy を有効にし、`[api]` のトークンと `[secrets]` の鍵を置いた設定。
+fn langmem_proxy_config(dir: &Path, base_url: &str, secret: Option<&str>) -> Config {
+    let secrets_dir = dir.join("secrets");
+    std::fs::create_dir_all(&secrets_dir).unwrap();
+    let token_file = dir.join("api.token");
+    std::fs::write(&token_file, "proxy-token\n").unwrap();
+    let secret_line = match secret {
+        Some(value) => {
+            std::fs::write(secrets_dir.join("celeris-api-token"), format!("{value}\n")).unwrap();
+            "api_key_secret = \"celeris-api-token\"".to_string()
+        }
+        None => String::new(),
+    };
+    let text = format!(
+        r#"
+[api]
+token_file = "{token}"
+
+[secrets]
+dir = "{secrets}"
+
+[llm_proxy]
+enabled = true
+listen = "127.0.0.1:18100"
+
+[knowledge.langmem]
+enabled = true
+provider = "openai-compatible"
+base_url = "{base_url}"
+model = "celeris/cheap"
+{secret_line}
+
+[[providers]]
+id = "langmem-main"
+adapter = "langmem"
+tiers = ["cheap", "standard"]
+"#,
+        token = token_file.display(),
+        secrets = secrets_dir.display(),
+    );
+    toml::from_str(&text).unwrap()
+}
+
+/// ADR-0139 D2: `base_url` が同じ celeris の llm-proxy を指すなら、langmem（アダプタと probe）の鍵は
+/// proxy が照合する `[api]` のトークン。`api_key_secret` が無い・違う値でも bearer は必ず渡る。
+#[test]
+fn langmem_api_key_config_uses_the_api_token_when_targeting_llm_proxy() {
+    for (secret, warns) in [
+        (Some("proxy-token"), false),
+        (Some("other-value"), true),
+        (None, false),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", secret);
+        assert!(cfg.langmem_targets_llm_proxy());
+        assert_eq!(
+            cfg.langmem_api_key().as_deref(),
+            Some("proxy-token"),
+            "{secret:?}"
+        );
+        assert_eq!(
+            cfg.dispatch_config().knowledge.langmem_api_key.as_deref(),
+            Some("proxy-token")
+        );
+        let warnings = cfg.langmem_auth_warnings();
+        assert_eq!(!warnings.is_empty(), warns, "{secret:?}: {warnings:?}");
+        // 警告に鍵の値を載せない。
+        assert!(
+            warnings
+                .iter()
+                .all(|w| !w.contains("proxy-token") && !w.contains("other-value"))
+        );
+    }
+    // localhost 表記も同じ proxy。
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = langmem_proxy_config(dir.path(), "http://localhost:18100/v1", None);
+    assert_eq!(cfg.langmem_api_key().as_deref(), Some("proxy-token"));
+}
+
+/// ADR-0139 D2/D3: proxy 以外を指すときは `api_key_secret` の値。解決できなければ起動時に警告する。
+#[test]
+fn langmem_api_key_config_uses_the_secret_for_other_endpoints_and_warns_if_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18000/v1", Some("sk-direct"));
+    assert!(!cfg.langmem_targets_llm_proxy());
+    assert_eq!(cfg.langmem_api_key().as_deref(), Some("sk-direct"));
+    assert!(cfg.langmem_auth_warnings().is_empty());
+
+    std::fs::remove_file(dir.path().join("secrets/celeris-api-token")).unwrap();
+    assert!(cfg.langmem_api_key().is_none());
+    let warnings = cfg.langmem_auth_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("cannot be resolved"), "{warnings:?}");
+}
+
+/// ADR-0139 D3: proxy を指しているのに `[api]` のトークンも `api_key_secret` も読めなければ、
+/// run を起こす前（設定の読み込み時）に警告する。無効な `[knowledge.langmem]` は何も言わない。
+#[test]
+fn langmem_auth_warnings_config_reports_a_missing_proxy_bearer() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut cfg = langmem_proxy_config(dir.path(), "http://127.0.0.1:18100/v1", None);
+    std::fs::remove_file(dir.path().join("api.token")).unwrap();
+    assert!(cfg.langmem_api_key().is_none());
+    let warnings = cfg.langmem_auth_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("401"), "{warnings:?}");
+
+    cfg.knowledge.langmem.enabled = false;
+    assert!(cfg.langmem_auth_warnings().is_empty());
+}
+
+/// ADR-0139 D1: verify（本番の config を読む staging）は `[llm_proxy] listen` に bind しない。
+#[test]
+fn verify_mode_config_does_not_serve_the_llm_proxy() {
+    use task_core::DaemonMode;
+    assert!(crate::daemon::run::serves_llm_proxy(DaemonMode::Normal));
+    assert!(!crate::daemon::run::serves_llm_proxy(DaemonMode::Verify));
 }

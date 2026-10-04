@@ -24,6 +24,7 @@ const emptyInbox: Inbox = {
   attention: [],
   browser_waits: [],
   decisions: [],
+  suppressed: {},
   counts: { approvals: 0, questions: 0, drafts: 0, attention: 0, browser_waits: 0, decisions: 0, by_status: {} },
 };
 

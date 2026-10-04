@@ -383,7 +383,15 @@ sd_log "old current=${OLD_SHA:-<none>}"
 
 # **先に**設定を書き換えてみる（知らないパスがあればここで止まる。まだ何も動かしていない）。
 NEW_CONFIG_TEXT="$(mktemp)"
-trap 'rm -f "$NEW_CONFIG_TEXT"' EXIT
+# ADR-0040 付記 2026-10-02: 「4. 起こす」の直前に置く昇格中の印も、途中終了ならここで消す。
+PROMOTING_WRITTEN=false
+on_exit() {
+  rm -f "$NEW_CONFIG_TEXT"
+  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 rewrite_config "$OLD_CONFIG" >"$NEW_CONFIG_TEXT" \
   || sd_die "the config still mentions paths this script does not know (see above); nothing was moved"
 sd_log "config rewrite ok ($(wc -l <"$NEW_CONFIG_TEXT") lines)"
@@ -505,6 +513,9 @@ sd_log "install-units.sh --remove-old"
 
 # ---- 4. 起こす -------------------------------------------------------------
 
+# 新しい `current` はまだ無い。印が無ければ celeris@$SHA12 は未昇格として exit 4 で止まる。
+sd_write_promoting "$SHA12" migrate-to-celeris.sh migrate
+PROMOTING_WRITTEN=true
 sd_log "systemctl --user start celeris@$SHA12"
 systemctl --user start "celeris@$SHA12" || sd_die "failed to start celeris@$SHA12 (see journalctl --user -u celeris@$SHA12)"
 sd_wait_http_200 "$SD_PROD_API/api/v1/health" 90 \
@@ -539,6 +550,8 @@ if [ -n "$OLD_SHA" ] && [ -d "$STATE/releases/$OLD_SHA" ]; then
 fi
 sd_set_link "$SD_CURRENT" "$SHA12"
 sd_log "current  -> releases/$SHA12"
+sd_clear_promoting "$SHA12"
+PROMOTING_WRITTEN=false
 
 {
   printf '{\n'

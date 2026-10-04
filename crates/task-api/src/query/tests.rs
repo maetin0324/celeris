@@ -121,6 +121,26 @@ fn tree_event_types_match_their_serde_names() {
                 detail: "cmd=\"false\" exit=Some(1) expected=0".into(),
             }],
         },
+        Event::IntegrationCheckStarted {
+            work_unit_id: "w".into(),
+            key: "integrate-p1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo test".into(),
+            log_path: "/ws/t/integration-checks/integrate-p1/1-0.log".into(),
+            started_at: "2026-10-04T00:00:00Z".into(),
+        },
+        Event::IntegrationCheckFinished {
+            work_unit_id: "w".into(),
+            key: "integrate-p1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo test".into(),
+            pass: true,
+            exit: Some(0),
+            timed_out: false,
+            duration_ms: 12,
+        },
         Event::StallDetected {
             task_id: child,
             detail: "x".into(),
@@ -193,5 +213,76 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 49);
+    assert_eq!(EVENT_TYPES.len(), 59);
+}
+
+#[test]
+fn review_target_event_types_match_their_serde_names() {
+    let repo_id = task_core::RepoId::new();
+    let events = [
+        Event::ReviewTargetSynced {
+            review_run: "review-1".into(),
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            reviewed_sha: "reviewed".into(),
+            merge_candidate_sha: "reviewed".into(),
+            attempt: 1,
+        },
+        Event::ReviewTargetAdvanced {
+            review_run: "review-1".into(),
+            repo_id,
+            reviewed_sha: "reviewed".into(),
+            target_sha: "advanced".into(),
+            attempt: 1,
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name));
+    }
+}
+
+/// ADR-0120 D5: IntegrationRepair の Event の `type` 名が serde の名前・`event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn integration_repair_event_types_match_their_serde_names() {
+    let repo_id = task_core::RepoId::new();
+    let events = [
+        Event::IntegrationRepairScheduled {
+            work_unit_id: "wu-1".into(),
+            key: "integration-repair-1".into(),
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            conflict_files: vec!["src/a.rs".into()],
+            attempt: 1,
+        },
+        Event::IntegrationRepairResolved {
+            work_unit_id: "wu-1".into(),
+            repo_id,
+            target_sha: "target2".into(),
+            reviewed_sha: "reviewed".into(),
+            attempt: 1,
+        },
+        Event::IntegrationRepairExhausted {
+            work_unit_id: None,
+            repo_id,
+            target_sha: "target".into(),
+            before_sha: "before".into(),
+            attempt: 3,
+            reason: task_core::IntegrationRepairExhaustReason::LimitReached,
+            rollback_to_sha: None,
+            fallback: true,
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name));
+    }
 }

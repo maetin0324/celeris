@@ -96,8 +96,8 @@ fi
   || sd_die "parent directory $NEW_REAL_PARENT_CHECK does not exist; create it first (e.g. sudo install -d -o \$(whoami) -g \$(whoami) -m 0750 $NEW_REAL_PARENT_CHECK)"
 
 TS="$(sd_stamp)"
-mkdir -p "$SD_BACKUPS"
-SD_LOG_FILE="$SD_BACKUPS/relocate-db-$TS.log"
+mkdir -p "$SD_LOGS"
+SD_LOG_FILE="$SD_LOGS/relocate-db-$TS.log"
 
 sd_log "relocate-db: $OLD -> $NEW (dry_run=$DRY_RUN)"
 

@@ -1,0 +1,29 @@
+# host の cargo 用 sccache server の systemd --user unit の雛形。
+# Celeris の unit（旧 celeris-sccache.service）とは無関係で、依存関係も持たない
+# （agent-docs/adr/0129-host-sccache-reflink-targets.md §2）。
+#
+# 置くだけでは有効化されない。人が ~/.config/systemd/user/sccache.service にコピーし、
+# SCCACHE_DIR・SCCACHE_CACHE_SIZE を環境に合わせて書き換えてから
+# `systemctl --user daemon-reload && systemctl --user enable --now sccache.service` する
+# （手順は人向け運用文書 docs/ops/ 側に書く。この WorkUnit では実行しない）。
+#
+# SCCACHE_DIR は /local（btrfs の host 管理領域）の下に置く。/local が無い環境では
+# 別のローカル保存先に変えるか、このユニットを導入しない（wrapper は server に届かなければ
+# 素の rustc に戻るので、server が無くても build は壊れない）。
+
+[Unit]
+Description=sccache compilation cache server (host cargo config, independent of Celeris)
+Documentation=https://github.com/mozilla/sccache
+
+[Service]
+Type=simple
+Environment=SCCACHE_DIR=/local/sccache
+Environment=SCCACHE_CACHE_SIZE=20G
+Environment=SCCACHE_SERVER_PORT=4226
+Environment=SCCACHE_IDLE_TIMEOUT=0
+ExecStart=%h/.local/bin/sccache --start-server
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

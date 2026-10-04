@@ -50,6 +50,8 @@ pub struct ReviewSubject {
 pub struct ReviewerRun {
     pub node: Option<task_worker::NodeContext>,
     pub profile: Option<task_core::EffectiveProfile>,
+    /// Skills mounted by the subject task's assignee for review (ADR-0122 D4).
+    pub skills: Vec<task_worker::protocol::SkillMount>,
     pub adapter: Arc<dyn WorkerAdapter>,
     pub run_id: String,
     pub limits: RunLimits,
@@ -110,6 +112,18 @@ pub struct ReviewOutcome {
     pub provider_failure: Option<ReviewerProviderFailure>,
     /// Reviewer run を起動した場合の、その run 自身の結果（ADR-0014 D1。ディスパッチャが `WorkerFinished{role: reviewer}` にする）。
     pub reviewer_run: Option<ReviewerRunRecord>,
+    /// ADR-0118 D4 付記: 検査中に HEAD か target が review 前同期の snapshot から動いた。判定は無効で、
+    /// ディスパッチャは attempts を消費せず再 sync → 再 check → 再 review に回す（上限は D4）。
+    pub target_stale: Option<TargetStale>,
+}
+
+/// ADR-0118 D4 付記: 検査後に review snapshot が変わったリポジトリ（`ReviewTargetAdvanced` に残す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TargetStale {
+    pub repo_id: task_core::RepoId,
+    pub reviewed_sha: String,
+    pub target_sha: String,
+    pub reason: String,
 }
 
 /// Reviewer run 自身の終わり方（ADR-0014 D1）。
@@ -458,26 +472,44 @@ async fn exec_check_once(
     expect_exit: i32,
     timeout: Duration,
     label: &str,
-) -> (bool, String) {
+) -> CheckOutcome {
     match workspace.exec(cmd, timeout).await {
-        Err(e) => (false, format!("exec failed: {e}")),
-        Ok(r) if r.timed_out => (
-            false,
-            format!("command timed out after {}s: {cmd}", timeout.as_secs()),
-        ),
+        Err(e) => CheckOutcome {
+            pass: false,
+            reason: format!("exec failed: {e}"),
+            exit: None,
+            timed_out: false,
+        },
+        Ok(r) if r.timed_out => CheckOutcome {
+            pass: false,
+            reason: format!("command timed out after {}s: {cmd}", timeout.as_secs()),
+            exit: None,
+            timed_out: true,
+        },
         Ok(r) => {
             let pass = r.exit == Some(expect_exit);
-            (
+            CheckOutcome {
                 pass,
-                format!(
+                reason: format!(
                     "{label}cmd={cmd:?} exit={:?} expected={expect_exit} stdout_tail={:?} stderr_tail={:?}",
                     r.exit,
                     tail(&r.stdout_tail, REASON_TAIL),
                     tail(&r.stderr_tail, REASON_TAIL)
                 ),
-            )
+                exit: r.exit,
+                timed_out: false,
+            }
         }
     }
+}
+
+/// 決定的な検査 1 件の結果（判定と判定文に、最後に走らせたコマンドの exit・timeout を添える）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CheckOutcome {
+    pub pass: bool,
+    pub reason: String,
+    pub exit: Option<i32>,
+    pub timed_out: bool,
 }
 
 /// ADR-0074 D6.1/D6.2（Phase F1）: 決定的な検査を実行し、2 種類の技術的な不合格を daemon が
@@ -498,11 +530,23 @@ async fn exec_check_with_repair_retries(
     timeout: Duration,
     label: &str,
 ) -> (bool, String) {
-    let (pass, reason) = exec_check_once(workspace, cmd, expect_exit, timeout, label).await;
-    if pass {
-        return (pass, reason);
+    let o = exec_check_outcome(workspace, cmd, expect_exit, timeout, label).await;
+    (o.pass, o.reason)
+}
+
+/// [`exec_check_with_repair_retries`] と同じ判定（再実行・merge-base の修復を含む）で、exit・timeout も返す。
+pub(crate) async fn exec_check_outcome(
+    workspace: &dyn Workspace,
+    cmd: &str,
+    expect_exit: i32,
+    timeout: Duration,
+    label: &str,
+) -> CheckOutcome {
+    let first = exec_check_once(workspace, cmd, expect_exit, timeout, label).await;
+    if first.pass {
+        return first;
     }
-    if reason.starts_with("command timed out after") {
+    if first.reason.starts_with("command timed out after") {
         let doubled_secs = timeout
             .as_secs()
             .saturating_mul(2)
@@ -517,7 +561,7 @@ async fn exec_check_with_repair_retries(
             )
             .await;
         }
-        return (pass, reason);
+        return first;
     }
     if let Some(ancestor_ref) = merge_base_ancestor_ref(cmd) {
         let merge_cmd = format!("git merge --no-edit {ancestor_ref}");
@@ -532,7 +576,7 @@ async fn exec_check_with_repair_retries(
         // （repair WU に任せる。ここでは設計判断をしない）。
         let _ = workspace.exec("git merge --abort", timeout).await;
     }
-    (pass, reason)
+    first
 }
 
 pub const SUMMARY_FILE_NAME: &str = "summary.md";
@@ -769,6 +813,7 @@ pub async fn review_task(
         plan: plan_output,
         provider_failure,
         reviewer_run,
+        target_stale: None,
     }
 }
 
@@ -958,6 +1003,7 @@ async fn run_reviewer_inner(
         context: RunContext {
             node: run.node.clone(),
             profile: run.profile.clone(),
+            skills: run.skills.clone(),
             prior_review: vec![],
             inputs: produced.to_vec(),
             // ADR-0117 D1: `RunContext.answers` は worker run 用。人の回答は `ReviewRequest.answers` に載せる。

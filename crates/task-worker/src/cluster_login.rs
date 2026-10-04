@@ -38,7 +38,7 @@ const CHECK_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// プロセスグループごと SIGKILL していた。celeris の通常の終了（`SIGTERM` → `tick_loop` が
 /// `Ok(Exit::..)` を返す → `main()` から戻る）でもこの構造体はスタック巻き戻しで drop されるため、
 /// **celeris を再起動するたびに、繋がっていたはずの master まで道連れに殺していた**（本番の観測、
-/// `docs/PROGRESS.md` P-100-1）。今は**Drop で殺さない**（`child` は `kill_on_drop(false)` で spawn
+/// `agent-docs/PROGRESS.md` P-100-1）。今は**Drop で殺さない**（`child` は `kill_on_drop(false)` で spawn
 /// してあるので、ただ drop してもプロセスは生きたまま。reap は tokio のオーファンキューが後で行う）。
 /// 明示的な切断（`DELETE /clusters/{id}/connect`）だけが [`ClusterMaster::kill`] を呼ぶ。
 pub struct ClusterMaster {

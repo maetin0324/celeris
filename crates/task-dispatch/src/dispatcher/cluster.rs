@@ -103,7 +103,7 @@ pub type TunnelProbe = Arc<dyn Fn(&str) -> Result<(), String> + Send + Sync>;
 ///
 /// **listener の有無と target の健康は別の観測**（Phase 85 の本旨）: listener が有るのに target が
 /// 不健全（先方が落ちている）なら `-O forward` は再発行しない（listener は既に有るので無意味な上、
-/// 本番でこれが毎 tick 起きて tick が 6 秒に伸びた。`docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
+/// 本番でこれが毎 tick 起きて tick が 6 秒に伸びた。`agent-docs/adr/0053-llm-source-proxy.md`「Phase 85 追記」）。
 pub type TunnelListenerProbe = Arc<dyn Fn(&str) -> bool + Send + Sync>;
 
 /// ADR-0053 Phase 84b: クラスタの ssh master の多重接続の有無を調べるフック。引数は
@@ -498,6 +498,28 @@ impl Dispatcher {
     /// 状態に依存しないよう、必ずこれで偽物に差し替える。
     pub fn set_cluster_liveness_probe(&mut self, probe: ClusterLivenessProbe) {
         self.cluster_liveness_probe = probe;
+    }
+
+    /// 試験の継ぎ目: remote workspace の worker run・判定が使う ssh / rsync のコマンドを差し替える
+    /// （偽の `ssh_command` で、外部ネットワークに出ずに remote 経路を通す）。本番の配線は呼ばない。
+    pub fn set_cluster_ssh_command_override(&mut self, command: Vec<String>) {
+        self.cluster_ssh_command_override = Some(command);
+    }
+
+    /// `ClusterSpec::ssh_settings` に `set_cluster_ssh_command_override` の差し替えを当てたもの。
+    pub(super) fn remote_ssh_settings(
+        &self,
+        spec: &ClusterSpec,
+        remote_path: &std::path::Path,
+        task_id: task_core::TaskId,
+        mode: task_core::WorkspaceMode,
+    ) -> SshSettings {
+        let mut settings = spec.ssh_settings(remote_path, task_id, mode);
+        if let Some(command) = &self.cluster_ssh_command_override {
+            settings.ssh_command = command.clone();
+            settings.rsync_command = command.clone();
+        }
+        settings
     }
 
     /// ADR-0062 A（Phase 107）: master 越しの実通信 probe を挿す（celeris 側の配線）。

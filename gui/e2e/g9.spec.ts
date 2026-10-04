@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "./test";
 
-// docs/adr/0025-codex-accounts-in-the-pool.md（celeris 側）D5/D6、gui/docs/adr/0012 D3 の拡張。
+// agent-docs/adr/0025-codex-accounts-in-the-pool.md（celeris 側）D5/D6、gui/docs/adr/0012 D3 の拡張。
 // codex アカウント（デバイス認証: URL + user_code をこの画面に出すだけで、コードは画面に貼り戻さない）を、
 // e2e/g8.spec.ts と同じ `scripts/celeris.sh fixture accounts`（claude-code / codex 両方のスタブを持つ）に対して確認する。
 //

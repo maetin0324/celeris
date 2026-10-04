@@ -64,7 +64,7 @@ dir = "../memory"
 # ADR-0043 D2）。消えるのは**中止**（`POST /tasks/{id}/cancel`）のときだけで、worktree と `git branch -D`。
 # リポジトリの `location` に `"mode": "shared"` と書けば worktree を切らず、実体へのリンクにする。
 # リポジトリの中の設定（`[commands] setup` / `check`、`[outputs]`、`[run] mode`）は
-# `<repo>/.config/celeris/workspace.toml`（ADR-0043 D4。`docs/workspace.md`）。
+# `<repo>/.config/celeris/workspace.toml`（ADR-0043 D4。`docs/guides/workspace.md`）。
 # 接頭辞の既定は **`celeris/`**（ADR-0042 D3。Phase 49 は `celeris/` だった。クラスタ側〈ADR-0019 の
 # `[[clusters]] sync = "worktree"`〉は `celeris/` のまま）。
 [workspace]
@@ -75,6 +75,10 @@ dir = "../memory"
 # `CARGO_TARGET_DIR=<build_cache_dir>/cargo/<repo-key>` を与える。既定で有効。
 # shared_build_cache = true
 # build_cache_dir = "~/.local/celeris/build-cache"
+
+# ADR-0129: seed は既定で無効。/local の btrfs へ移行し、共有 probe を確認してから有効にする。
+# [scratch]
+# seed_reflink = false
 
 # ADR-0066 D2（Phase 110b）: 終端（done/failed/cancelled）になってからこの秒数経った作業場所から、
 # ビルド生成物（`target/`、`node_modules/` 等）だけを刈る（ソースツリーと `artifacts/` は残す）。
@@ -152,22 +156,20 @@ dir = "../memory"
 # celeris 本体（tick・ディスパッチャ・ストア）はいつ起こすか・どう適用するかを決定的に決めるだけ。
 #
 #   enabled            — true にすると tick が知識整理 run を起こすようになる。
-#   provider            — "openai-compatible"（既定。ローカルの Qwen OpenAI 互換エンドポイントもこちら）
+#   provider            — "openai-compatible"（既定。celeris proxy もこちら）
 #                          | "anthropic"。
-#   base_url            — "openai-compatible" のときの接続先（例: 本番の Qwen トンネル
-#                          "http://127.0.0.1:18000/v1"）。
-#   model               — 例 "qwen3.8-27b"。
-#   api_key_secret      — `[secrets] dir` の下の id。省略すると渡さない（ローカルの OpenAI 互換
-#                          エンドポイントは鍵を確認しないことが多い）。
+#   base_url            — "openai-compatible" のときの接続先（例: celeris proxy
+#                          "http://127.0.0.1:18100/v1"）。
+#   model               — 例 "celeris/cheap"。
+#   api_key_secret      — `[secrets] dir` の下の id。proxy では `[api] token_file` と同じ秘密を指定する。
 #   max_related_pages   — 依頼文に入れる関連ページの上限（既定 10）。
 #
 # ADR-0052 D1（Phase 64）: 知識整理タスクを起こす直前に `GET <base_url>/models` を 3 秒で当て、届かなければ
 # 下の `[[harnesses]] id = "knowledge"` の `fallback` に従って tier cheap の汎用ハーネスに倒す（60 秒キャッシュ）。
 [knowledge.langmem]
 # enabled = false
-# ADR-0053 D2（Phase 65）: [llm_proxy] を有効にしたら、直接 Qwen を指すのではなくプロキシに向ける
-# （Qwen が落ちていれば celeris/cheap が自動で Claude/GPT のアカウントプールに倒れる。ADR-0052 の
-# フォールバックはプロキシの中に吸収される）。
+# ADR-0132 D4: 接続先は proxy とし、モデルは celeris/cheap にする。
+# cheap では利用可能な Qwen を優先し、到達不能なら Claude/GPT に倒れる。
 # provider = "openai-compatible"
 # base_url = "http://127.0.0.1:18100/v1"
 # model = "celeris/cheap"
@@ -181,13 +183,13 @@ dir = "../memory"
 # config/celeris.multi-account.example.toml を参照）を使って、opencode・PaperQA・Local Deep
 # Research・LangMem のような「adapter を選ばない」ハーネスから Claude / GPT / Qwen を
 # OpenAI 互換 API 越しに使えるようにする。ハーネス側は `celeris/<tier>`（供給元はプロキシが選ぶ）、
-# `claude/<tier>` / `gpt/<tier>` / `qwen/<tier>`（供給元を固定）、または `<source>:<具体モデル名>`
+# `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`（供給元を固定。Qwen は cheap のみ）、または `<source>:<具体モデル名>`
 # （素通り。例 `claude:claude-sonnet-5`）のどれかをモデル名に書く。
 # ---------------------------------------------------------------------------
 [llm_proxy]
 # enabled = true                 # 省略時は「どれかの source が設定されていれば有効」
 # listen = "127.0.0.1:18100"     # 既定。loopback のみ。認証は [api] の token_file と同じ
-# prefer_free = true             # celeris/<tier> は到達可能な無料の openai_compatible を最優先
+# prefer_free = true             # celeris/cheap は到達可能な無料の openai_compatible を最優先
 # max_concurrent_per_account = 4
 # cooldown_fallback_secs = 300
 
@@ -204,7 +206,7 @@ dir = "../memory"
 # id = "qwen"
 # base_url = "http://127.0.0.1:18000/v1"
 
-# tier → 供給元ごとの実モデル ID。既定値は `docs/llm-source.md` に注記した通り**未確認**
+# tier → 供給元ごとの実モデル ID。既定値は `docs/guides/llm-source.md` に注記した通り**未確認**
 # （celeris.model-tiers.example.toml と同じ注意）。運用前に必ず確認・上書きする。
 # [llm_proxy.models.claude]
 # frontier = "claude-opus-4-5"
@@ -218,9 +220,7 @@ dir = "../memory"
 # standard = "gpt-5.6-terra"
 # cheap = "gpt-5.5"
 # [llm_proxy.models.qwen]
-# frontier = "qwen3.8-27b"
-# standard = "qwen3.8-27b"
-# cheap = "qwen3.8-27b"
+# cheap = "qwen3.8-27b"       # Qwen は cheap だけ
 
 # ---------------------------------------------------------------------------
 # ADR-0054 D1（Phase 67）: ノードごとの継続セッション（`node_sessions`）。CoS の対話は全体で 1 本、
@@ -231,6 +231,9 @@ dir = "../memory"
 # そのセッションの累計トークン（run の usage の合計）がこれを超えたら、次の run は新しいセッションから
 # 始める（前置きに「前セッションの要約」を乗せる）。既定 400_000。
 rollover_tokens = 400_000
+# ADR-0124 D1: WU の execute continuation（予算切れ・yield の続き）を、同じ Task・WU・claude-code・
+# account/provider なら同じ session で `--resume` する。false なら毎回 checkpoint 前置きの新しい session。
+continuation_resume = true
 
 # Check::Reviewer の判定 run に使う adapter / tier（ADR-0010 D9）。adapter 省略時は tier だけで選ぶ。
 [reviewer]
@@ -253,7 +256,7 @@ genre = "conversation"
 # ADR-0049: 汎用ハーネスでは adapter を省略して Claude Code / Codex / ACP から自動選択する。
 # 明示するとそのアダプタに固定する。PaperQA / LDR / LangMem は専用なので明示が必要。
 # プール同士は adapter をまたいで残量を比較し、利用不能なら非プールの供給元へ進む。
-# 既存設定の移行・残量取得は docs/providers.md を参照。
+# 既存設定の移行・残量取得は docs/guides/providers.md を参照。
 # ハーネス = 実行契約（ADR-0046 D3）。**今までの `[[genres]]`（能力・入出力の契約・対話用か）と
 # `[[roles]]`（adapter・tier・指示文・予算）を 1 つにしたもの**。
 #
@@ -289,9 +292,9 @@ instructions = """あなたは人の Chief of Staff。案件を受け取り、�
 担当（誰がやるか）は celeris が決めるので、あなたが名指しで人を選ぶ必要はない。"""
 
 # ADR-0052 D2（Phase 64）: 知識整理（ADR-0047 D4）。組み込みのままで動くので普段は書かなくてよい。
-# `fallback` は「専用アダプタ（`langmem` = Qwen）に届かないとき、どの tier の汎用ハーネスに倒すか」。
+# `fallback` は「専用アダプタ（`langmem` の接続先）に届かないとき、どの tier の汎用ハーネスに倒すか」。
 # 組み込みの既定は `{ tier = "cheap" }`。ここで書き換えられ、`fallback = false` で倒さなくなる
-# （＝ Qwen が落ちている間の知識整理 run は Phase 63 までと同じく失敗する）。
+# （＝ 接続先に届かない間の知識整理 run は失敗する）。
 # [[harnesses]]
 # id = "knowledge"
 # adapter = "langmem"
@@ -356,6 +359,53 @@ capabilities = ["一般 Web 検索", "複数ページの読解", "出典付き�
 input_artifacts = ["question"]
 output_artifacts = ["report.md: 出典付きの調査報告（これが答え）", "sources.json: 出典と引用の有無", "research.json: 検索の記録（クエリと件数）"]
 instructions = "あなたは Web 調査担当。論文化されていない実装・製品・仕様を一般 Web 検索で調べ、出典付きでまとめる。"
+
+# ADR-0131 D6 / 付記 D10: 知識ベースと受信箱の日次整理（下の `[[cron.seed]] daily-curation` の雛形が指す）。
+# 既存の `knowledge`（adapter `langmem`、task 単位の候補抽出）は KB 全体の統合・削除ができないので流用しない。
+# coding 系の汎用 adapter（adapter 省略）で、tier cheap。届かないときは cheap の汎用ハーネスに倒す。
+[[harnesses]]
+id = "knowledge-curation"
+description = "知識ベースの受信箱（_inbox）と重複・古い記述を整理し、受信箱の判断材料をまとめる（日次）"
+tier = "cheap"
+fallback = { tier = "cheap" }
+capabilities = ["KB ページの統合・新規・削除の振り分け", "重複ページの統合", "古い記述の修正・削除", "受信箱の片付けの提案"]
+input_artifacts = ["inputs/kb/（本番 KB の読み取り用の写し）", "inputs/inbox.json", "inputs/reports.json", "inputs/curation-inputs.json（daemon の検証用 snapshot）"]
+output_artifacts = ["curation-plan.json", "curation.diff", "daily-summary.md"]
+budget = { max_turns = 120 }
+instructions = """あなたは知識整理担当。本番 KB と inputs/ は変更しない。変更後の本文は計画の content に書く。計画は artifacts/curation-plan.json に書き、
+出す前に必ず `celerisctl curation validate` を走らせて exit 0 にする（daemon と同じ検証。非 0 なら stderr の理由を直して再実行。
+受け入れ条件も同じコマンドで判定する。cwd が repos/<name> でも作業場所を上に探す。見つからなければ
+`celerisctl curation validate <作業場所>/artifacts/curation-plan.json <作業場所>/inputs/kb`）。
+
+inputs/kb・inputs/inbox.json・inputs/curation-inputs.json は prepare 時の入力として保存し、編集・追加・削除しない。
+CLI は daemon が用意した curation-inputs.json と入力を照合する。snapshot が無い古い run は新しい日次整理 run でやり直す。
+ハッシュは未変更の inputs/kb から取る。差分作成のために編集する場合は別の作業用コピーを使う。
+
+curation-plan.json の形（ADR-0131 付記 D10 (4)・D11 (1)・D12）。最上位は version・kb・inbox・human_decisions の 4 欄**だけ**。
+task_id・date・mode・operations・manual_review・attention などの欄を足すと「unknown field」で計画全体が拒否される:
+{"version": 1,
+ "kb": [{"path": "_inbox/20261003T123737Z-candidate.md", "action": "merge",
+         "target": "projects/agent-platform/replan-add-leaf-stage-mechanics.md", "reason": "同じ規則の追記",
+         "content": "<統合先の完成した本文>", "expected_hash": "<sha256sum inputs/kb/_inbox/...candidate.md>",
+         "target_hash": "<sha256sum inputs/kb/projects/agent-platform/replan-add-leaf-stage-mechanics.md>"},
+        {"path": "_inbox/20261003T131027Z-candidate.md", "action": "delete", "target": null,
+         "reason": "上と同内容。統合先 projects/agent-platform/replan-add-leaf-stage-mechanics.md に反映済み",
+         "content": null, "expected_hash": "<sha256>", "target_hash": null}],
+ "inbox": [{"task_id": "<inputs/inbox.json の candidates[].task_id か attention[].task.id>", "proposal": "cancel", "reason": "同題の重複 task"}],
+ "human_decisions": [{"subject": "user/preferences.md", "proposal": "fix", "reason": "人のページ。文言の更新を提案"}]}
+何も変えないときの最小の計画: {"version":1,"kb":[],"inbox":[],"human_decisions":[]}
+
+kb 各件は 7 欄 {path, action, target, reason, content, expected_hash, target_hash} をすべて書く（不要な欄は null）。
+action は merge|new|delete|keep|fix。path は inputs/kb/ からの相対で .md、_inbox/ の候補も 1 件 1 操作。
+content は new/fix は path の新しい本文、merge は target の完成した本文、delete/keep は null。
+expected_hash は inputs/kb/<path> の変更前の生バイトの SHA-256 16 進小文字（sha256sum）、new だけ null。
+target_hash は merge の inputs/kb/<target> の変更前ハッシュ、他は null。
+merge の target は 1 計画で 1 回しか使えない。同じ統合先に複数の候補があれば 1 件を merge にし、残りは delete にして理由に統合先を書く。
+候補を新規ページにするときは new（新 path、content あり）と、候補の delete の 2 件に分ける。
+inbox の task_id は inputs/inbox.json にある id だけ（無い id は拒否）。inbox.json に候補が無ければ inbox は []。
+_inbox/ の候補は 1 回の run で 40 件まで（ADR-0131 付記 D12。keep も数える）。`ls inputs/kb/_inbox | sort | head -n 40` の古い順に
+扱い、残りは計画に載せず触らない（次回へ回す）。daily-summary.md に処理件数と残り件数を書く。
+curation.diff は計画が変える path だけを含める。人への候補は human_decisions にまとめる。"""
 
 # 旧い形（Phase 58 まで）。`[[harnesses]]` を書くならこちらは**消すこと**（両方あると `[[harnesses]]` が勝つ）。
 # 互換のためだけに残してあり、`[[harnesses]]` が 1 つも無いときだけ読まれる（起動時に warn が 1 行出る）。
@@ -423,7 +473,7 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # [handoff]
 # drain_timeout_secs = 3600          # 既定 3600（1 時間）
 
-# 自己改善のデプロイ（ADR-0040 D6 / ADR-0041 D3、Phase 48/50。docs/selfdeploy.md）。
+# 自己改善のデプロイ（ADR-0040 D6 / ADR-0041 D3、Phase 48/50。docs/ops/selfdeploy.md）。
 # `scripts/selfdeploy/release.sh` が作るリリースの置き場所。`GET /releases` はここの
 # `manifest.json` / `gate.json` / `verify.json` / `changes.json` / `promoted.json` を読むだけ、
 # `POST /releases/{sha12}/promote`（管理系）は **`<current>/scripts/promote.sh`** を detached で
@@ -444,7 +494,30 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # push = true            # 既定
 # push_remote = "origin" # 既定
 
-# HTTP API（ADR-0013、docs/gui/api.md）。listen を書いたときだけ celeris のプロセス内で動く（既定は無効）。celeris-gui はこれを使う。
+# ADR 2026-10-02-parallel-integration-auto-resolve D1d: merge_base 系の配送失敗で局所修復を作る前に、scratch の worktree で既定ブランチを
+# 取り込み、定型の衝突（追記だけの進捗記録など）を決定的に解く。試行は配送ごとに max_attempts 回まで。
+# [delivery.auto_resolve]
+# enabled = true      # 既定
+# max_attempts = 3    # 既定
+# [delivery.auto_resolve.generated]
+# globs = ["docs/protocol/*.schema.json", "docs/api/v1/*.schema.json"]  # 既定（resolver の分類と同じ集合だけ）
+# cmd = ["env", "UPDATE_SCHEMA=1", "cargo", "test", "-p", "task-core", "-p", "task-worker", "-p", "task-api"]  # 既定。[] で無効
+
+# ADR-0136: hot データの正本を /local（ローカル btrfs）に置く。path は上の既存の key で変える（書かなければ
+# 従来の既定のまま）。/local へ移した本番の値:
+#   workspace_root = "/local/celeris/data/workspaces"
+#   [db] path = "/local/celeris/data/db/celeris.sqlite3"   backup_dir = "/local/celeris/state/backups"
+#   [workspace] build_cache_dir = "/local/celeris/data/build-cache"   [scratch] dir = "/local/celeris/data/scratch"
+#   [containers] build_dir = "/local/celeris/data/containers"   [memory] dir = "/local/celeris/data/memory"
+#   [selfdeploy] releases_dir = "/local/celeris/state/releases"
+# `[knowledge] root`・`[accounts]`・この設定ファイル自体は home に残す。credentiald の vault・audit は
+# 環境変数 CELERIS_CREDENTIALD_DATA_DIR（既定 ~/.local/celeris/credentiald）。
+# `[storage] hot_mount` を書くと、その path が mount point でない（rootfs 上の同名 dir・未 mount）とき
+# daemon は DB を開く・dir を作る前に理由を出して止まる。書かなければ検査しない（既定）。
+# [storage]
+# hot_mount = "/local"
+
+# HTTP API（ADR-0013、docs/api/v1/gui-api.md）。listen を書いたときだけ celeris のプロセス内で動く（既定は無効）。celeris-gui はこれを使う。
 # loopback 以外で listen するなら token_file が必須（中身 1 行が Bearer トークン。読めない・空なら起動時に exit 2）。
 # [api]
 # listen = "127.0.0.1:7710"
@@ -459,7 +532,7 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # `genre = "smoke"` のタスク**だけ**を dispatch するので、本番のデータのコピーに対して煙試験を 1 件流しても
 # 他のタスクは 1 つも動かない。**この設定ファイルに `smoke` という id の役割・分野・プロバイダを書いても
 # verify では上書きされる**（煙試験で本物の LLM を呼ぶ経路を作らせないため）。通常運転（`--mode normal`）は
-# 何も足さない。詳しくは docs/selfdeploy.md の「検査 6: 煙試験」。
+# 何も足さない。詳しくは docs/ops/selfdeploy.md の「検査 6: 煙試験」。
 [adapters.fake]
 # command = ["sh", "-c", "cat >/dev/null; echo '{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[]}'"]
 
@@ -474,7 +547,9 @@ interval_secs = 30                                # 判定と送信の間隔（�
 # プロバイダ表。上から順に優先（StaticPolicy）。Phase 3 では adapter = "fake" のみ使える。
 [[providers]]
 id = "fake-local"
+kind = "adapter"
 adapter = "fake"
+llm_source = "none"
 tiers = ["frontier", "standard", "cheap"]
 concurrency = 2
 model = "fake"
@@ -483,7 +558,9 @@ model = "fake"
 # `[knowledge.langmem]` を有効にしたうえで、このコメントを外す。
 # [[providers]]
 # id = "langmem-main"
+# kind = "adapter"
 # adapter = "langmem"
+# llm_source = "celeris"
 # tiers = ["cheap"]
 # concurrency = 1
 
@@ -512,3 +589,62 @@ max_context_chars = 24000
 # アカウントに `max_runs_per_account + 1` 本目まで載る）。その同時数の絶対上限。既定 2、0..=8。0 で例外を無効化。
 # [execution]
 # max_cos_runs = 2
+
+# ADR-0131 D6 / 付記 D10: 定期実行（cron job）の**種**。起動時に DB の `cron_jobs` が**空のときだけ**一度入れる
+# （org.toml と同じく DB が正。以後の変更は `celerisctl cron …` / `PATCH /api/v1/cron-jobs/{id}` で行い、
+# 設定を書き換えても既存の job は変わらない）。不正な種（式・タイムゾーン・mode・harness・雛形の誤り）は
+# 起動時の設定エラー。`enabled` の既定は false（有効にするのは人の `celerisctl cron resume`）。
+#
+# daily-curation: 知識ベースと受信箱の 1 日 1 回の整理。時刻とタイムゾーンは例なので環境に合わせて変える。
+# `mode = "dry_run"` は本番 KB を書き換えず、差分と要約だけを出す。`apply` への切り替えは本番 KB の
+# dry-run 差分を人が確かめた後に人が PATCH する（ADR-0095 付記 D-d）。
+[[cron.seed]]
+name = "daily-curation"
+enabled = false
+schedule = "30 4 * * *"
+timezone = "Asia/Tokyo"
+overlap = "skip"
+catch_up = "latest"
+
+[cron.seed.template]
+title = "日次整理: {date}"
+harness = "knowledge-curation"
+lane = "cheap"
+mode = "dry_run"                     # 'dry_run' | 'apply'
+# 対象の案件（ULID か題名）。投入時に存在しなければ起動時の設定エラーになるので、案件の登録後に書く。
+# project = "agent-platform"
+acceptance = [
+  { type = "artifact_exists", name = "curation-plan.json" },
+  { type = "artifact_exists", name = "curation.diff" },
+  { type = "artifact_exists", name = "daily-summary.md" },
+  # ADR-0131 付記 D12: 計画の形を daemon と同じ検証で決定的に判定する（cwd は作業場所の repos/<name>。
+  # 上へ artifacts/curation-plan.json と inputs/kb を探す）。daemon の PATH の celerisctl がこの release 以降であること。
+  { type = "command", cmd = "celerisctl curation validate", expect_exit = 0 },
+]
+objective = """知識ベースと受信箱の日次整理（ADR-0131 D6・付記 D10）。本番 KB と inputs/ は変更しない。変更後の本文は計画の content に書く。
+
+inputs/ は編集・追加・削除しない。検証用 inputs/curation-inputs.json は daemon が作る（worker が作り直さない）。
+入力: inputs/kb/（本番 KB の読み取り用の写し）、inputs/inbox.json（受信箱の表示項目と、決定論的規則で外した件数 suppressed）、
+inputs/reports.json（前回の整理以降に終わった task の報告の抜粋）。run の mode（dry_run|apply）は入力 manifest に書かれている。
+
+作業:
+1. inputs/kb/_inbox/ の候補を古い順（`ls inputs/kb/_inbox | sort`）に **40 件まで**取り、既存ページへの統合（merge）・新規ページ（new）・
+   削除（delete）に振り分ける（ADR-0131 付記 D12）。残りは計画に載せず触らない（次回へ回す）。
+2. 同じ趣旨の重複ページを 1 本に寄せる（統合先を残し、他は削除）。
+3. 古い記述・誤った記述を直す（fix）か消す（delete）。archive はしない。消したものは計画に path と理由を残す。
+4. index.json と README の整合は daemon が反映後に再生成するので、手で揃えなくてよい。
+5. 人が書いたページ（user/ 配下、frontmatter が source: human のもの）は消さず大きく書き換えない。迷うものは human_decisions に入れる。
+6. 受信箱で判断が要る項目（古い報告を閉じてよいか、規則に当たらない failed を諦めてよいか）は inbox 節に提案と理由を書く。状態は変えない。
+
+出力（artifacts/ に 3 ファイル）:
+- curation-plan.json: 最上位は {version: 1, kb: [], inbox: [], human_decisions: []} の 4 欄だけ（他の欄は unknown field で拒否）。
+  kb の各件は {path, action: merge|new|delete|keep|fix, target, reason, content, expected_hash, target_hash} の 7 欄。
+  content は new/fix/merge の完成本文、delete/keep は null。expected_hash は inputs/kb/<path> の変更前の生バイトの SHA-256 16 進小文字
+  （例: sha256sum inputs/kb/<path>）、new は null。target_hash は merge の統合先 inputs/kb/<target> の変更前ハッシュだけで、他は null。
+  inbox は {task_id, proposal, reason}、human_decisions は {subject, proposal, reason}。人に聞く項目は human_decisions にまとめ、1 件の decision として人に提示する。
+- curation.diff: 写しの before/after の unified diff。計画で変更する path だけを含め、計画に無い path の差分を出さない。
+- daily-summary.md: 見出し「日次整理 YYYY-MM-DD（mode）」、KB の件数（統合・新規・削除・保留と _inbox の処理 n / 残り m）、削除したページ、
+  受信箱、人に決めてほしいこと。1 節 10 行まで。人が数十秒で読める量にする。
+
+出す前に `celerisctl curation validate` を走らせ exit 0 にする（daemon と同じ検証・同じ文言。受け入れ条件も同じコマンド）。
+"""

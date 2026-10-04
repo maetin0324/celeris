@@ -1,4 +1,4 @@
-//! 表示用のビュー型とその組み立て（ADR-0013 D7 / D12、`docs/gui/api.md` §3.3 / §3.5 / §5.2〜§5.4 / §6.2）。
+//! 表示用のビュー型とその組み立て（ADR-0013 D7 / D12、`docs/api/v1/gui-api.md` §3.3 / §3.5 / §5.2〜§5.4 / §6.2）。
 //!
 //! `celerisctl show --json`、API の `GET /tasks` / `GET /tasks/{id}` / `GET /tasks/{id}/runs` が同じ関数を使う。GUI は結果を表示するだけで
 //! 再計算しない。I/O はストアの読み取りだけで、ファイル（`runs/<run_id>/` の存在確認など）は呼び出し側（task-api）が埋める。
@@ -126,6 +126,14 @@ pub struct TaskList {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TaskDetail {
     pub task: Task,
+    /// ADR-0130: effective task hint, including inheritance from a parent unit.
+    pub expected_write_paths: Option<Vec<String>>,
+    /// Committed diffs for this task's runs, with snapshot status and Git SHAs.
+    pub actual_run_write_sets: Vec<ActualWriteSetView>,
+    /// Cumulative committed diffs for completed work units.
+    pub actual_work_unit_write_sets: Vec<ActualWriteSetView>,
+    /// Last observed target snapshot; reading the detail does not run Git.
+    pub behind_target: task_core::behind_target::BehindTarget,
     /// 手元の作業ディレクトリ（絶対パス）。`WorkspaceSpec::Remote` では写し `workspace_root/<task_id>`（run のログはここ。ADR-0018 D1）。
     pub workspace_dir: Option<String>,
     /// ADR-0018: `WorkspaceSpec::Remote` のクラスタ（`[[clusters]] id`）。ローカルのタスクは `null`。
@@ -170,6 +178,84 @@ pub struct TaskDetail {
     /// 「クラスタ job を待っています: 42634 (R) 42635 (Q) …」の材料。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster_job_wait: Option<ClusterJobWaitView>,
+    /// ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では
+    /// 省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を
+    /// 解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_repair: Option<IntegrationRepairView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct ActualWriteSetView {
+    pub owner_id: String,
+    pub repo_id: String,
+    pub base_sha: Option<String>,
+    pub head_sha: Option<String>,
+    pub paths: Vec<String>,
+    pub status: String,
+    pub reason: Option<String>,
+    pub recorded_at: String,
+}
+
+impl From<task_core::write_set::WriteSetRecord> for ActualWriteSetView {
+    fn from(record: task_core::write_set::WriteSetRecord) -> Self {
+        Self {
+            owner_id: record.owner_id,
+            repo_id: record.repo_id.to_string(),
+            base_sha: record.base_sha,
+            head_sha: record.head_sha,
+            paths: record.paths,
+            status: record.status.as_str().to_string(),
+            reason: record.reason,
+            recorded_at: record.recorded_at,
+        }
+    }
+}
+
+/// ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`
+/// が共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる
+/// （`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`
+/// のときだけ値を持つ。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationRepairView {
+    pub state: task_core::IntegrationRepairState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+    pub attempt: u32,
+    /// `task_ops::delivery::MAX_INTEGRATION_REPAIRS`。
+    pub max_attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_ref: Option<String>,
+    pub target_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflict_files: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<task_core::IntegrationRepairExhaustReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollback_to_sha: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<bool>,
+}
+
+/// ADR-0120 D5: `events`（古い順）から [`IntegrationRepairView`] を組み立てる。履歴が無ければ `None`。
+pub(crate) fn integration_repair_view(events: &[(u64, Event)]) -> Option<IntegrationRepairView> {
+    let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
+    let status = task_core::integration_repair_status(&event_list)?;
+    Some(IntegrationRepairView {
+        state: status.state,
+        work_unit_id: status.work_unit_id,
+        attempt: status.attempt,
+        max_attempts: crate::delivery::MAX_INTEGRATION_REPAIRS,
+        target_ref: status.target_ref,
+        target_sha: status.target_sha,
+        before_sha: status.before_sha,
+        conflict_files: status.conflict_files,
+        reason: status.reason,
+        rollback_to_sha: status.rollback_to_sha,
+        fallback: status.fallback,
+    })
 }
 
 /// ADR-0090 D5: 待っているクラスタ job（`cluster_job_waits` の `waiting` の行）。
@@ -300,6 +386,10 @@ pub struct ExecutionView {
     /// D13: Complexity Gate の判定（gate が判定していない Task には無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate: Option<task_core::ExecutionGateDecision>,
+    /// ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task
+    /// には無い）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<task_core::RouteDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<ExecutionPhase>,
     /// 計画が無い Task（D20:「直接実行」の 1 行）は `None`。
@@ -341,6 +431,8 @@ pub struct ExecutionPlanOverview {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct ExecutionWorkUnitView {
     pub id: String,
+    /// Explicit unit hint, or the inherited task hint.
+    pub expected_write_paths: Option<Vec<String>>,
     pub key: String,
     pub seq: u32,
     pub kind: task_core::WorkUnitKind,
@@ -388,6 +480,113 @@ pub struct ExecutionWorkUnitView {
     /// ADR-0074 D1.5: 今この WU を実行している run（同時に走っている run を GUI に出す）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_run_id: Option<String>,
+    /// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
+    /// 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_progress: Option<IntegrationCheckProgress>,
+}
+
+/// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckProgress {
+    /// その試行の検査の数。
+    pub total: u32,
+    /// 実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は
+    /// `GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<IntegrationCheckRunning>,
+    /// 済んだ検査（`index` 順）。
+    pub finished: Vec<IntegrationCheckDone>,
+}
+
+/// 実行中の統合の検査 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckRunning {
+    pub index: u32,
+    pub cmd: String,
+    pub started_at: String,
+}
+
+/// 済んだ統合の検査 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckDone {
+    pub index: u32,
+    pub cmd: String,
+    pub pass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    pub timed_out: bool,
+    pub duration_ms: u64,
+}
+
+/// D4: events（seq 順）から WU の最後の統合の試行の検査を組み立てる。`running` はその WU が running か。
+pub fn integration_check_progress<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    work_unit_id: &str,
+    running: bool,
+) -> Option<IntegrationCheckProgress> {
+    let mut progress: Option<IntegrationCheckProgress> = None;
+    for e in events {
+        match e {
+            Event::IntegrationCheckStarted {
+                work_unit_id: wu,
+                index,
+                total,
+                cmd,
+                started_at,
+                ..
+            } if wu == work_unit_id => {
+                let p = match (&mut progress, *index) {
+                    (Some(p), i) if i != 0 => p,
+                    _ => progress.insert(IntegrationCheckProgress {
+                        total: *total,
+                        current: None,
+                        finished: Vec::new(),
+                    }),
+                };
+                p.total = *total;
+                p.current = Some(IntegrationCheckRunning {
+                    index: *index,
+                    cmd: cmd.clone(),
+                    started_at: started_at.clone(),
+                });
+            }
+            Event::IntegrationCheckFinished {
+                work_unit_id: wu,
+                index,
+                cmd,
+                pass,
+                exit,
+                timed_out,
+                duration_ms,
+                ..
+            } if wu == work_unit_id => {
+                let Some(p) = progress.as_mut() else {
+                    continue;
+                };
+                if p.current.as_ref().is_some_and(|c| c.index == *index) {
+                    p.current = None;
+                }
+                p.finished.retain(|f| f.index != *index);
+                p.finished.push(IntegrationCheckDone {
+                    index: *index,
+                    cmd: cmd.clone(),
+                    pass: *pass,
+                    exit: *exit,
+                    timed_out: *timed_out,
+                    duration_ms: *duration_ms,
+                });
+            }
+            _ => {}
+        }
+    }
+    if let Some(p) = progress.as_mut() {
+        if !running {
+            p.current = None;
+        }
+        p.finished.sort_by_key(|f| f.index);
+    }
+    progress
 }
 
 /// D17(f): `execution_plans` の 1 版（監査用）。
@@ -581,7 +780,7 @@ pub fn task_ref(task: &Task) -> TaskRef {
     }
 }
 
-/// `docs/gui/api.md` §5.4: 今この状態で許される操作。
+/// `docs/api/v1/gui-api.md` §5.4: 今この状態で許される操作。
 pub fn actions(task: &Task) -> Vec<Action> {
     let mut out = Vec::new();
     if task.status == Status::Draft
@@ -595,7 +794,7 @@ pub fn actions(task: &Task) -> Vec<Action> {
     if task.status == Status::Blocked {
         out.push(Action::Answer);
     }
-    if !task.status.is_terminal() {
+    if !task.status.is_terminal() || task.status == Status::Failed {
         out.push(Action::Cancel);
     }
     if matches!(task.status, Status::Failed | Status::Cancelled) {
@@ -667,7 +866,7 @@ fn lease_expires_at_str(task: &Task) -> Option<String> {
     task.lease.as_ref().map(|l| to_rfc3339(l.expires_at))
 }
 
-/// `docs/gui/api.md` §5.3: `ready && attempts > 0` のときの `updated_at + retry_backoff(...)`。
+/// `docs/api/v1/gui-api.md` §5.3: `ready && attempts > 0` のときの `updated_at + retry_backoff(...)`。
 /// `base == 0`、または結果が過去なら `None`。
 fn backoff_until_str(task: &Task, ctx: &ViewContext, now: OffsetDateTime) -> Option<String> {
     if task.status != Status::Ready || task.attempts == 0 {
@@ -742,7 +941,7 @@ pub(crate) fn build_task_summary(
     }
 }
 
-/// `outcome` 文字列を `RunOutcomeKind` に分類する（`docs/gui/api.md` §5.2）。`outcome_text` は
+/// `outcome` 文字列を `RunOutcomeKind` に分類する（`docs/api/v1/gui-api.md` §5.2）。`outcome_text` は
 /// 接頭辞を除いた残りの文字列（`lease_expired` は完全一致で残りが無いので `None`。`error` は元の
 /// 文字列全体を `outcome_text` に入れる。GUI が生の理由を表示できるようにするための判断）。
 ///
@@ -781,7 +980,7 @@ fn classify_outcome(
     }
 }
 
-/// `docs/gui/api.md` §5.2: そのタスクのイベント（`event_rows_for`）から run の要約を組み立てる。
+/// `docs/api/v1/gui-api.md` §5.2: そのタスクのイベント（`event_rows_for`）から run の要約を組み立てる。
 pub fn runs(rows: &[EventRow]) -> Vec<RunSummary> {
     let mut order: Vec<String> = Vec::new();
     let mut by_run: HashMap<String, RunSummary> = HashMap::new();
@@ -892,7 +1091,7 @@ pub fn run_work_unit_keys(
         .collect())
 }
 
-/// `docs/gui/api.md` §5.3。
+/// `docs/api/v1/gui-api.md` §5.3。
 pub fn timers(task: &Task, rows: &[EventRow], ctx: &ViewContext, now: OffsetDateTime) -> Timers {
     let events = seq_pairs(rows);
     Timers {
@@ -905,7 +1104,7 @@ pub fn timers(task: &Task, rows: &[EventRow], ctx: &ViewContext, now: OffsetDate
     }
 }
 
-/// `docs/gui/api.md` §3.3。
+/// `docs/api/v1/gui-api.md` §3.3。
 pub fn task_summary(
     store: &dyn TaskStore,
     task: &Task,
@@ -925,7 +1124,7 @@ pub fn task_summary(
     ))
 }
 
-/// `docs/gui/api.md` §3.3: `list_page` の結果を `TaskSummary` に写し、`counts_by_status` を付ける。
+/// `docs/api/v1/gui-api.md` §3.3: `list_page` の結果を `TaskSummary` に写し、`counts_by_status` を付ける。
 pub fn task_list(
     store: &dyn TaskStore,
     filter: &ListFilter,
@@ -964,7 +1163,7 @@ pub fn task_list(
     })
 }
 
-/// `docs/gui/api.md` §3.5。
+/// `docs/api/v1/gui-api.md` §3.5。
 pub fn task_detail(
     store: &dyn TaskStore,
     id: TaskId,
@@ -1128,7 +1327,7 @@ pub fn task_detail(
 
     let task_actions = actions_with_events(&task, &events);
     let failure = task_failure(&task, &events, store)?;
-    let execution = build_execution_view(store, &task, &events)?;
+    let execution = build_execution_view(store, &task, &events, now)?;
     let worker_run_hint = if task.status.is_terminal() {
         None
     } else {
@@ -1157,11 +1356,37 @@ pub fn task_detail(
     let is_root_task = task_core::is_root_task(&task);
     let paused_by = paused_by(store, &task)?;
     let cluster_job_wait = active_cluster_job_wait(store, task.id)?;
+    let integration_repair = integration_repair_view(&events);
+    let expected_write_paths = store.effective_task_write_paths(id)?;
+    let mut actual_run_write_sets = Vec::new();
+    for run in store.runs_for_task(id)? {
+        actual_run_write_sets.extend(
+            store
+                .run_write_sets(&run.run_id)?
+                .into_iter()
+                .map(ActualWriteSetView::from),
+        );
+    }
+    let mut actual_work_unit_write_sets = Vec::new();
+    for unit in store.work_units_for(id)? {
+        actual_work_unit_write_sets.extend(
+            store
+                .work_unit_write_sets(&unit.id)?
+                .into_iter()
+                .map(ActualWriteSetView::from),
+        );
+    }
+    let behind_target = crate::behind_target::behind_target_of(store, id, now)?;
 
     Ok(TaskDetail {
+        expected_write_paths,
+        actual_run_write_sets,
+        actual_work_unit_write_sets,
+        behind_target,
         is_root_task,
         paused_by,
         cluster_job_wait,
+        integration_repair,
         task,
         priority_label,
         workspace_dir,
@@ -1246,7 +1471,7 @@ pub fn execution_phase_of(
     task: &Task,
     events: &[(u64, Event)],
 ) -> Result<Option<ExecutionPhase>, OpsError> {
-    Ok(build_execution_view(store, task, events)?.and_then(|v| v.phase))
+    Ok(build_execution_view(store, task, events, OffsetDateTime::now_utc())?.and_then(|v| v.phase))
 }
 
 /// ADR-0072 D19/D20（Phase E5）: Execution 節の組み立て。events に E-phase 由来の活動が 1 件も
@@ -1255,6 +1480,7 @@ fn build_execution_view(
     store: &dyn TaskStore,
     task: &Task,
     events: &[(u64, Event)],
+    now: OffsetDateTime,
 ) -> Result<Option<ExecutionView>, OpsError> {
     let has_activity = events.iter().any(|(_, e)| {
         matches!(
@@ -1270,6 +1496,8 @@ fn build_execution_view(
                 | Event::PhaseReported { .. }
                 // ADR-0079 D8（Phase R3b）: root の計画の承認待ち
                 | Event::PlanApprovalRequested { .. }
+                // ADR-0124: 直行経路の判定
+                | Event::ExecutionRouted { .. }
         )
     });
     if !has_activity {
@@ -1277,8 +1505,12 @@ fn build_execution_view(
     }
 
     let event_list: Vec<Event> = events.iter().map(|(_, e)| e.clone()).collect();
-    let metrics = task_core::summarize_execution_metrics(task, &event_list);
+    // ADR-0130 D4: behind は store の最後の snapshot（読取時に Git を測り直さない）。
+    let metrics = task_core::summarize_execution_metrics(task, &event_list).with_behind_target(
+        &crate::behind_target::behind_target_of(store, task.id, now)?,
+    );
     let gate = task.routing.as_ref().and_then(|r| r.execution.clone());
+    let route = task.routing.as_ref().and_then(|r| r.route.clone());
 
     let all_units = store.work_units_for(task.id)?;
     let active_units: Vec<&task_core::WorkUnitRow> =
@@ -1314,6 +1546,7 @@ fn build_execution_view(
             });
             work_units.push(ExecutionWorkUnitView {
                 id: u.id.clone(),
+                expected_write_paths: store.work_unit_expected_write_paths(&u.id)?,
                 key: u.key.clone(),
                 seq: u.seq,
                 kind: u.kind,
@@ -1342,6 +1575,11 @@ fn build_execution_view(
                 } else {
                     None
                 },
+                check_progress: integration_check_progress(
+                    &event_list,
+                    &u.id,
+                    u.status == task_core::WorkUnitStatus::Running,
+                ),
             });
         }
         work_units.sort_by_key(|w| w.seq);
@@ -1460,6 +1698,7 @@ fn build_execution_view(
     }
     Ok(Some(ExecutionView {
         gate,
+        route,
         phase,
         plan,
         metrics,

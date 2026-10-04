@@ -34,3 +34,7 @@ config/secrets/
 # scripts/dev/worktree-target-dir.sh が worktree ごとに生成する（ローカル target-dir）
 /.cargo/config.toml
 !.claude/settings.json
+
+# Celeris の run 作業場所が書く中間物（ログ・result.json 等）。repository の成果物ではない
+# （commit e49b57cb で artifacts/review.json を誤って追跡した事故の再発防止）。
+/artifacts/

@@ -1,4 +1,4 @@
-//! 汎用 ACP（Agent Client Protocol）ワーカーアダプタ（DESIGN §5.4 提案 P-63, ADR-0026）。
+//! 汎用 ACP（Agent Client Protocol）ワーカーアダプタ（提案 P-63, ADR-0026）。
 //!
 //! ACP はここでは「運搬・観測・生存管理」だけを担う（ADR-0026 D1）。エージェントの最終回答は成功判定に
 //! 使わない。終端は `claude-code`/`codex` と同じく `artifacts/result.json`（ADR-0006 D3）から合成し、
@@ -67,8 +67,6 @@ pub struct AcpConfig {
     pub args: Vec<String>,
     /// 追加の環境変数。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// `session/request_permission` への即答（既定 `Allow`）。
     pub permission: AcpPermission,
     /// `session/set_config_option` で設定するモデル（空/`None` なら送らない）。
@@ -87,7 +85,6 @@ impl Default for AcpConfig {
             command: "opencode".to_string(),
             args: vec!["acp".to_string()],
             env: Vec::new(),
-            env_remove: Vec::new(),
             permission: AcpPermission::Allow,
             model: None,
             model_option_id: "model".to_string(),
@@ -133,12 +130,6 @@ impl WorkerAdapter for AcpAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(AcpAdapter::new(config)))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
-        Some(Arc::new(AcpAdapter::new(config)))
-    }
-
     /// ADR-0043 D3（Phase 56）: コンテナの中で ACP エージェントを起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
@@ -363,7 +354,7 @@ fn choose_permission_option(
     None
 }
 
-/// エージェントの本文はトークン単位の細切れで届く（実機の opencode + Qwen3.8-27B では 1 タスクで 259 件・
+/// エージェントの本文はトークン単位の細切れで届く（実機の opencode では 1 タスクで 259 件・
 /// 平均 9 文字だった）。そのまま `progress` にすると `WorkerProgress` イベントが膨れるので、改行が来るか
 /// 一定量たまるまで溜めてから出す。`heartbeat()` は溜めずに毎行呼ぶので、無出力タイムアウトの判定は変わらない。
 struct ChunkBuffer {
@@ -549,7 +540,8 @@ async fn wait_for_initialize_response(
 enum WaitOutcome {
     Response(serde_json::Value),
     Eof,
-    TimedOut(Terminal),
+    /// `Usage` が大きいので箱に入れる（clippy `large_enum_variant`）。
+    TimedOut(Box<Terminal>),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -571,19 +563,19 @@ async fn wait_for_response(
         if wall_elapsed >= limits.wall_clock {
             // ADR-0072 D7/§6 (i)（Phase E1）: acp には turn の上限が無いので、wall-clock の打ち切り
             // が continuation の唯一の入口になる（`Terminal::BudgetExhausted{kind: WallClock}`）。
-            return Ok(WaitOutcome::TimedOut(Terminal::BudgetExhausted {
+            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::BudgetExhausted {
                 kind: task_core::BudgetKind::WallClock,
                 message: "wall clock exceeded".into(),
                 usage: None,
-            }));
+            })));
         }
         let idle_elapsed = last_activity.elapsed();
         if idle_elapsed >= limits.idle_timeout {
             // ADR-0072 D7: idle timeout は E1 では harness_error に分類変更しない（§7 U7）。
-            return Ok(WaitOutcome::TimedOut(Terminal::Error {
+            return Ok(WaitOutcome::TimedOut(Box::new(Terminal::Error {
                 message: "idle timeout".into(),
                 retryable: true,
-            }));
+            })));
         }
         let wait = (limits.wall_clock - wall_elapsed).min(limits.idle_timeout - idle_elapsed);
         let pumped = match tokio::time::timeout(
@@ -841,7 +833,7 @@ async fn run_acp(
     // 一律で拒否する方が安全という判断（`choose_permission_option` の `Deny` 経路をそのまま使う。
     // `reject_always` → `reject_once` → 選択肢の最初、の優先順は変えない）。読み取りだけの道具
     // （`celerisctl knowledge search|get` 等）は、モデルが許可要求を経ない組み込みの読み取りで
-    // 済ませられる範囲でしか使えない（ACP エージェント実装依存。`docs/adr/0054-*.md` の「Phase 68
+    // 済ませられる範囲でしか使えない（ACP エージェント実装依存。`agent-docs/adr/0054-*.md` の「Phase 68
     // 追記」に明記）。
     let config = &if req.context.conversation_addressee
         == Some(crate::protocol::ConversationAddressee::Secretary)
@@ -876,15 +868,17 @@ async fn run_acp(
     clear_delegate_file(&req.artifacts_dir).await;
 
     let mut prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
-    // ADR-0056 D3（Phase 79）: mount された skills を前置きに直接埋め込む（acp にはファイルを自動で
-    // 読む契約が無いため。`skills` が空なら 1 バイトも変わらない）。
+    // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（opencode が
+    // ネイティブに読む。他の ACP エージェントは前置きの一覧から読む）、前置きには名前・説明・パスの
+    // 一覧だけを足す（本文は埋め込まない。`skills` が空なら前置きは 1 バイトも変わらない）。
+    if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
+        warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
+    }
     prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 
     let mut command = Command::new(&config.command);
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .args(&config.args)
         .envs(config.env.iter().cloned())
@@ -1093,7 +1087,7 @@ async fn run_acp(
             .await);
         }
         Ok(WaitOutcome::TimedOut(terminal)) => {
-            let message = match &terminal {
+            let message = match terminal.as_ref() {
                 Terminal::Error { message, .. } => message.clone(),
                 _ => format!("timeout waiting for {new_session_method}"),
             };
@@ -1252,7 +1246,7 @@ async fn run_acp(
                             &artifacts_rel,
                             &stderr_log_path,
                             sink,
-                            RawOutcome::TimedOut(terminal),
+                            RawOutcome::TimedOut(*terminal),
                             run_id,
                         )
                         .await;
@@ -1320,7 +1314,7 @@ async fn run_acp(
     chunks.flush(sink);
 
     let outcome = match prompt_wait {
-        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(terminal),
+        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(*terminal),
         WaitOutcome::Eof => RawOutcome::Eof {
             context: "session/prompt",
         },

@@ -1,4 +1,4 @@
-//! 報告の API（ADR-0033 D3。Phase 25。`docs/gui/api.md` §3.30）。
+//! 報告の API（ADR-0033 D3。Phase 25。`docs/api/v1/gui-api.md` §3.30）。
 //!
 //! - `GET /reports` — 一覧（新しい順、絞り込みつき）。読み取りなので通常の認証だけ。
 //! - `GET /reports/{id}` — 1 件（`sources` の中身も展開する）。
@@ -15,7 +15,7 @@ use axum::http::{HeaderMap, StatusCode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::report::{self, Report, ReportFilter, ReportId, ReportStore, ReportsLive};
-use task_core::{ProjectId, SqliteStore};
+use task_core::{NoticeQuery, NoticeStore, ProjectId, SqliteStore};
 use time::OffsetDateTime;
 
 use crate::handlers::{ApiResult, json_response, read_json, rfc3339};
@@ -174,9 +174,45 @@ pub(crate) async fn mark_read(
     }
     let updated = state
         .blocking(move |store| {
-            store
+            let updated = store
                 .report_mark_read(&ids, OffsetDateTime::now_utc())
-                .map_err(store_problem)
+                .map_err(store_problem)?;
+            // The old reports/read entry point also acknowledges corresponding feed rows.
+            // A bundle is acknowledged when its latest report is among the requested ids.
+            let wanted: std::collections::HashSet<String> =
+                ids.iter().map(ToString::to_string).collect();
+            let mut offset = 0;
+            let mut notice_ids = Vec::new();
+            loop {
+                let page = store
+                    .notice_list(&NoticeQuery {
+                        unread_only: true,
+                        limit: 500,
+                        offset,
+                        ..NoticeQuery::default()
+                    })
+                    .map_err(store_problem)?;
+                let count = page.items.len();
+                for notice in page.items {
+                    if notice
+                        .target
+                        .as_ref()
+                        .is_some_and(|t| t.kind == "report" && wanted.contains(&t.id))
+                    {
+                        notice_ids.push(notice.id);
+                    }
+                }
+                if count < 500 {
+                    break;
+                }
+                offset += count;
+            }
+            for id in notice_ids {
+                store
+                    .notice_mark_read(id, OffsetDateTime::now_utc())
+                    .map_err(store_problem)?;
+            }
+            Ok(updated)
         })
         .await?;
     tracing::info!(
@@ -185,9 +221,9 @@ pub(crate) async fn mark_read(
         updated,
         "admin: reports marked as read"
     );
-    Ok(json_response(
-        StatusCode::OK,
-        &ReportsReadResult { updated },
+    Ok(crate::inbox_notifications::deprecated(
+        json_response(StatusCode::OK, &ReportsReadResult { updated }),
+        "</api/v1/notifications/read-all>; rel=\"successor-version\"",
     ))
 }
 
@@ -208,11 +244,14 @@ pub(crate) async fn notified(
         op = "reports_notified",
         "admin: notification time advanced"
     );
-    Ok(json_response(
-        StatusCode::OK,
-        &ReportsNotifiedResult {
-            last_notified_at: rfc3339(now),
-        },
+    Ok(crate::inbox_notifications::deprecated(
+        json_response(
+            StatusCode::OK,
+            &ReportsNotifiedResult {
+                last_notified_at: rfc3339(now),
+            },
+        ),
+        "</api/v1/notifications>; rel=\"successor-version\"",
     ))
 }
 

@@ -8,7 +8,7 @@ use std::{
 };
 use task_core::{
     Delivery, DeliveryState as State, Event, Message, MessageId, MessageRole, RepairClass, Status,
-    StoreError, TaskStore, WorkUnitKind, WorkUnitStatus,
+    StoreError, TaskStore, Trigger, WorkUnitKind, WorkUnitStatus,
 };
 use task_ops::changes::{git, git_with_env};
 use time::OffsetDateTime;
@@ -176,9 +176,135 @@ pub fn tick(store: &dyn TaskStore, config: &Config, now: OffsetDateTime) -> Resu
     Ok(())
 }
 
+/// ADR-0118 D4: merge 直前に、記録した target と検査済みの merge candidate を照合した結果。
+#[derive(Debug, PartialEq, Eq)]
+enum Candidate {
+    Fresh,
+    /// 既定ブランチが進んだ、または候補が検査済み SHA と違う。ff を試みず再 sync→再 check→再 review。
+    Stale {
+        target: String,
+        reason: String,
+    },
+}
+
+fn check_candidate(repo: &Path, d: &Delivery) -> Result<Candidate, String> {
+    let target = sha(repo, &format!("refs/heads/{}", d.default_branch))?;
+    let head = sha(repo, &format!("refs/heads/{}", d.branch))?;
+    let reason = match (&d.target_sha, &d.reviewed_sha, &d.merge_candidate_sha) {
+        (Some(target_sha), Some(reviewed), Some(candidate)) => {
+            if target != *target_sha {
+                format!(
+                    "既定ブランチ {} が検査時の {target_sha} から {target} へ進みました",
+                    d.default_branch
+                )
+            } else if candidate != reviewed || head != *candidate || d.head != *candidate {
+                format!(
+                    "ブランチ {} の HEAD {head} が検査済みの候補 {candidate}（reviewed {reviewed}）と一致しません",
+                    d.branch
+                )
+            } else {
+                return Ok(Candidate::Fresh);
+            }
+        }
+        // 旧行や未同期の行の NULL は「検査済み」とみなさない。
+        _ => {
+            // ADR-0118 D6 付記: review 前同期を諦めた行（衝突など）で既定ブランチが HEAD の祖先でなければ、
+            // 再レビューしても同じ衝突に戻るだけ。従来どおり merge_reviewed の [merge-base] 失敗
+            // （局所修復）に任せる。
+            if git_text(repo, &["merge-base", "--is-ancestor", &target, &head]).is_err() {
+                return Ok(Candidate::Fresh);
+            }
+            "検査済みの merge candidate が記録されていません".into()
+        }
+    };
+    Ok(Candidate::Stale { target, reason })
+}
+
+/// ADR-0118 D4: stale な合格を取り込まず、task を再レビュー（同期→checks→reviewer）へ戻す。
+/// 自動の再試行は [`task_ops::delivery::MAX_TARGET_RESYNCS`] 回まで。超えたら人に見える状態で止める。
+/// stale はコードの不合格ではないので review の試行回数・ReviewRepair・配送の局所修復に数えない。
+fn request_rereview(
+    store: &dyn TaskStore,
+    old: &Delivery,
+    target: &str,
+    reason: &str,
+) -> Result<(), StoreError> {
+    let events: Vec<Event> = store
+        .events_for(old.task_id)?
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    let restale = task_ops::delivery::target_restale_count(&events, old.repo_id);
+    let reviewed = old.reviewed_sha.clone().unwrap_or_default();
+    let advanced = Event::ReviewTargetAdvanced {
+        review_run: old.review_run.clone(),
+        repo_id: old.repo_id,
+        reviewed_sha: reviewed.clone(),
+        target_sha: target.into(),
+        attempt: restale + 1,
+    };
+    let mut d = old.clone();
+    d.decision = None;
+    d.target_sha = None;
+    d.reviewed_sha = None;
+    d.merge_candidate_sha = None;
+    if restale >= task_ops::delivery::MAX_TARGET_RESYNCS {
+        d.state = State::Blocked;
+        d.detail = format!(
+            "[needs-human] target 再進行による自動の再レビューが上限（{} 回）に達したため取り込みを止めました: {reason}（検査済み {reviewed}、現在の {} {target}）。再レビューで再開してください",
+            task_ops::delivery::MAX_TARGET_RESYNCS,
+            old.default_branch
+        );
+        if store.delivery_save(Some(old), &d)? {
+            store.append_event(old.task_id, &advanced)?;
+        }
+        return Ok(());
+    }
+    d.state = State::Reviewing;
+    d.detail = format!(
+        "target 再進行: {reason}。最新の {} へ再同期し、検査とレビューをやり直します",
+        old.default_branch
+    );
+    if !store.delivery_save(Some(old), &d)? {
+        return Ok(());
+    }
+    // 遷移と再進行の記録は同じ transaction（`target_restale_count` が自動の再開を見分ける）。
+    if let Err(e) =
+        store.apply_transition_with_events(old.task_id, Trigger::Rereview, vec![advanced.clone()])
+    {
+        let mut blocked = d.clone();
+        blocked.state = State::Blocked;
+        blocked.detail =
+            format!("[needs-human] target 再進行後の再レビューを開始できません: {reason}: {e}");
+        if store.delivery_save(Some(&d), &blocked)? {
+            store.append_event(old.task_id, &advanced)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_candidate(repo: &Path, d: &Delivery) -> Result<(), String> {
+    // ADR-0118 D6 付記: 同期を諦めた（候補の無い）行は、まず従来の merge-base の照合で理由を出す。
+    if d.merge_candidate_sha.is_none()
+        && let Err(stderr) = git_text(repo, &["merge-base", "--is-ancestor", &d.base, &d.head])
+    {
+        return Err(format!(
+            "git merge-base --is-ancestor {} {} failed; stderr: {stderr}",
+            d.base, d.head
+        ));
+    }
+    // ADR-0118 D4: 取り込むのは reviewer と checks が見た merge candidate だけ。
+    if d.merge_candidate_sha.as_deref() != Some(d.head.as_str())
+        || d.reviewed_sha.as_deref() != Some(d.head.as_str())
+    {
+        return Err(
+            "検査済みの merge candidate と取り込み対象が一致しません。再レビューが必要です".into(),
+        );
+    }
+    let target = sha(repo, &format!("refs/heads/{}", d.default_branch))?;
     if sha(repo, &format!("refs/heads/{}", d.branch))? != d.head
-        || sha(repo, &format!("refs/heads/{}", d.default_branch))? != d.base
+        || target != d.base
+        || d.target_sha.as_deref() != Some(target.as_str())
     {
         return Err(
             "対象コミットまたは既定ブランチが変わりました。更新して再レビューが必要です".into(),
@@ -432,6 +558,11 @@ fn advance(
             }
         }
         State::MergeQueued => {
+            // ADR-0118 D4: target 再進行・候補の不一致は ff-only を試みずに再レビューへ戻す。
+            // ref を読めない失敗は従来どおり merge_reviewed の失敗（局所修復の対象）に任せる。
+            if let Ok(Candidate::Stale { target, reason }) = check_candidate(repo, old) {
+                return request_rereview(store, old, &target, &reason);
+            }
             d.state = State::Merging;
             if !store.delivery_save(Some(old), &d)? {
                 return Ok(());
@@ -439,6 +570,17 @@ fn advance(
             let claimed = d.clone();
             match merge_reviewed(repo, &d) {
                 Ok(()) => {
+                    // ADR parallel integration D4 付記: main が head を含んだので、この配送の未回答の統合依頼は
+                    // 統合済み。受信箱から消す（回答の記録だけで、配送の再試行は起こさない）。
+                    store.integration_requests_close(
+                        d.task_id,
+                        "delivery",
+                        task_core::integration_request::INTEGRATED_ANSWER,
+                        Some(&format!(
+                            "統合済み: {} が {} を取り込んだ",
+                            d.default_branch, d.head
+                        )),
+                    )?;
                     d.state = State::Preparing;
                     d.release = Some(d.head[..12].into());
                     d.detail =
@@ -609,6 +751,24 @@ fn advance(
                     .and_then(|v| v["failed_step"].as_str());
                 if let Some(class) = classify_delivery_failure(old.state, &old.detail, failed_step)
                 {
+                    // ADR 2026-10-02-parallel-integration-auto-resolve D2: merge_base 系は局所修復を作る前に定型衝突の自動解消を試す。
+                    if class == RepairClass::MergeBase {
+                        match auto_resolve::attempt(store, config, old)? {
+                            auto_resolve::Outcome::Resolved {
+                                base,
+                                head,
+                                actions,
+                            } => {
+                                auto_resolve::requeue(store, old, base, head, &actions, now)?;
+                                return Ok(());
+                            }
+                            auto_resolve::Outcome::Fallback(fallback) => {
+                                if auto_resolve::fall_back(store, config, old, &fallback, now)? {
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
                     if let Some(key) = make_repair(store, config, old, class, now)? {
                         store.comment_add(&task_core::TaskComment {
                             id: task_core::CommentId::new(), task_id: old.task_id,
@@ -617,11 +777,31 @@ fn advance(
                             body: format!("{REPAIR} {key} class={}。対象ブランチと既定ブランチ、失敗した検査だけを渡して局所修復します。", class.bucket()),
                         }, None)?;
                     } else {
-                        d.detail = format!(
-                            "[needs-human] 配送の局所修復が上限に達しました: {}",
-                            class.bucket()
+                        let repairs = store.work_units_for(old.task_id)?;
+                        let total = repairs
+                            .iter()
+                            .filter(|u| u.kind == WorkUnitKind::Repair)
+                            .count();
+                        let same_class = repairs
+                            .iter()
+                            .filter(|u| {
+                                u.kind == WorkUnitKind::Repair
+                                    && u.spec
+                                        .title
+                                        .starts_with(&format!("repair ({}):", class.bucket()))
+                            })
+                            .count();
+                        let request = auto_resolve::limit_request(
+                            config,
+                            old,
+                            format!(
+                                "配送の局所修復が上限に達しました: {} (全体 {total}/{} 回、同分類 {same_class}/{} 回)",
+                                class.bucket(),
+                                config.execution.max_repairs,
+                                config.execution.max_repairs_per_class
+                            ),
                         );
-                        store.delivery_save(Some(old), &d)?;
+                        auto_resolve::record_request(store, old, &request)?;
                     }
                     return Ok(());
                 }
@@ -740,6 +920,8 @@ fn start_prepare(store: &dyn TaskStore, config: &Config, old: &Delivery) -> Resu
     store.delivery_save(Some(old), &next)?;
     Ok(())
 }
+
+mod auto_resolve;
 
 #[cfg(test)]
 #[path = "delivery/tests.rs"]

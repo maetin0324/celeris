@@ -9,11 +9,16 @@
 //! - 「有効なセッション」は `retired_at IS NULL` の行が高々 1 件、という不変条件をアプリケーション側
 //!   （`task-dispatch`）が `node_session_retire` → `node_session_create` の順で呼ぶことで保つ。
 //!   ストア自身は複数の有効な行があっても壊れない（`node_session_active` は最新の 1 件を返す）。
+//! - ADR-0140 D2: execute continuation の WU 単位セッション（`kind = Continuation`）は key
+//!   `(task_id, work_unit_id, adapter, account_id)` で [`WorkUnitSession`] として読み書きする
+//!   （migration 0038 の列。`work_unit_session_*`）。取得は同じ adapter・account の行だけを返し、
+//!   別 account の session は返さない（account isolation、ADR-0140 D3）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+use crate::model::TaskId;
 use crate::org::ProjectId;
 use crate::store::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
@@ -25,6 +30,9 @@ pub enum SessionKind {
     Conversation,
     /// 部署の根ノード自身のレビュー・切り分け run（ADR-0051）。部署ごとに 1 本。
     Lead,
+    /// ADR-0140 D2: execute continuation の WU 単位セッション（`(task_id, work_unit_id)` ごとに 1 本）。
+    /// [`WorkUnitSession`] と `work_unit_session_*` で扱う（`node_session_*` の key には `task_id` が無いので使わない）。
+    Continuation,
 }
 
 impl SessionKind {
@@ -32,6 +40,7 @@ impl SessionKind {
         match self {
             SessionKind::Conversation => "conversation",
             SessionKind::Lead => "lead",
+            SessionKind::Continuation => "continuation",
         }
     }
 
@@ -39,6 +48,7 @@ impl SessionKind {
         match s {
             "conversation" => Some(SessionKind::Conversation),
             "lead" => Some(SessionKind::Lead),
+            "continuation" => Some(SessionKind::Continuation),
             _ => None,
         }
     }
@@ -90,6 +100,73 @@ impl NodeSession {
             project_id,
             adapter: adapter.into(),
             account_id,
+            session_id: session_id.into(),
+            turns: 0,
+            approx_tokens: 0,
+            created_at: now,
+            last_used_at: now,
+            retired_at: None,
+        }
+    }
+}
+
+/// ADR-0140 D2: execute continuation の WU 単位セッション（`node_sessions` の `kind = 'continuation'` の行）。
+/// key は `(task_id, work_unit_id, adapter, account_id)`。`provider`・`cwd` は判断表 #7 / #8 で比べるための記録。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkUnitSession {
+    pub id: String,
+    /// run の担当ノード（課）。
+    pub node_id: String,
+    pub task_id: TaskId,
+    /// WU の key。atomic な Task（WU を持たない）は `None` を「Task 全体で 1 本」として扱う。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_unit_id: Option<String>,
+    pub adapter: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    /// claude-code の `--session-id` / `--resume` に渡す UUID（celeris が発行する）。
+    pub session_id: String,
+    pub turns: i64,
+    pub approx_tokens: i64,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    #[schemars(with = "String")]
+    pub last_used_at: OffsetDateTime,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(with = "crate::node_session::opt_rfc3339")]
+    #[schemars(with = "Option<String>")]
+    pub retired_at: Option<OffsetDateTime>,
+}
+
+impl WorkUnitSession {
+    /// 新しいセッションの行（`work_unit_session_create` に渡す前の組み立て）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        node_id: impl Into<String>,
+        task_id: TaskId,
+        work_unit_id: Option<String>,
+        adapter: impl Into<String>,
+        account_id: Option<String>,
+        provider: Option<String>,
+        cwd: Option<String>,
+        session_id: impl Into<String>,
+        now: OffsetDateTime,
+    ) -> Self {
+        Self {
+            id: ulid::Ulid::new().to_string(),
+            node_id: node_id.into(),
+            task_id,
+            work_unit_id,
+            adapter: adapter.into(),
+            account_id,
+            provider,
+            cwd,
             session_id: session_id.into(),
             turns: 0,
             approx_tokens: 0,
@@ -177,6 +254,106 @@ pub trait NodeSessionStore: Send + Sync {
         project_id: Option<ProjectId>,
         session_id: &str,
     ) -> Result<bool, StoreError>;
+
+    /// ADR-0140 D2: WU 単位セッションを作る。呼び出し側が先に
+    /// [`NodeSessionStore::work_unit_session_retire`] で既存の現役行を引退させておくこと。
+    fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError>;
+    /// `(task_id, work_unit_id)` の現役セッションのうち、`adapter` と `account_id` が**一致する**ものだけを返す
+    /// （resume に使ってよい行。別 adapter・別 account の行は返さない）。複数あれば `last_used_at` が最新の 1 件。
+    fn work_unit_session_active(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        adapter: &str,
+        account_id: Option<&str>,
+    ) -> Result<Option<WorkUnitSession>, StoreError>;
+    /// `(task_id, work_unit_id)` の現役セッションを adapter・account を問わず返す（最新の 1 件）。
+    /// resume には使わない: dispatcher が判断表 #6 / #7（`adapter_changed` / `account_changed`）を
+    /// 判定して retire するためだけに使う。
+    fn work_unit_session_current(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+    ) -> Result<Option<WorkUnitSession>, StoreError>;
+    /// `(task_id, work_unit_id)` の現役セッションを（adapter・account を問わず）すべて `retired_at = now` にする。
+    /// 1 件でも引退させたら `true`。
+    fn work_unit_session_retire(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError>;
+    /// run を 1 回終えるたびに呼ぶ: key（adapter・account を含む）が一致する現役行の
+    /// `turns += 1`、`approx_tokens += add_tokens`、`last_used_at = now`。無ければ `false`。
+    fn work_unit_session_touch(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        adapter: &str,
+        account_id: Option<&str>,
+        add_tokens: i64,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError>;
+}
+
+const SELECT_WORK_UNIT_SESSION: &str = "SELECT id, node_id, task_id, work_unit_id, adapter, \
+     account_id, provider, cwd, session_id, turns, approx_tokens, created_at, last_used_at, \
+     retired_at FROM node_sessions";
+
+fn row_to_work_unit_session(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<Result<WorkUnitSession, StoreError>> {
+    let id: String = row.get(0)?;
+    let node_id: String = row.get(1)?;
+    let task_id: Option<String> = row.get(2)?;
+    let work_unit_id: Option<String> = row.get(3)?;
+    let adapter: String = row.get(4)?;
+    let account_id: Option<String> = row.get(5)?;
+    let provider: Option<String> = row.get(6)?;
+    let cwd: Option<String> = row.get(7)?;
+    let session_id: String = row.get(8)?;
+    let turns: i64 = row.get(9)?;
+    let approx_tokens: i64 = row.get(10)?;
+    let created_at: String = row.get(11)?;
+    let last_used_at: String = row.get(12)?;
+    let retired_at: Option<String> = row.get(13)?;
+
+    let task_id = match task_id.as_deref().map(str::parse::<TaskId>) {
+        Some(Ok(t)) => t,
+        _ => {
+            return Ok(Err(StoreError::Invalid(format!(
+                "invalid node_sessions.task_id for continuation {id}: {task_id:?}"
+            ))));
+        }
+    };
+    let created_at = match parse_rfc3339(&created_at) {
+        Ok(t) => t,
+        Err(e) => return Ok(Err(e)),
+    };
+    let last_used_at = match parse_rfc3339(&last_used_at) {
+        Ok(t) => t,
+        Err(e) => return Ok(Err(e)),
+    };
+    let retired_at = match retired_at.map(|s| parse_rfc3339(&s)).transpose() {
+        Ok(t) => t,
+        Err(e) => return Ok(Err(e)),
+    };
+    Ok(Ok(WorkUnitSession {
+        id,
+        node_id,
+        task_id,
+        work_unit_id,
+        adapter,
+        account_id,
+        provider,
+        cwd,
+        session_id,
+        turns,
+        approx_tokens,
+        created_at,
+        last_used_at,
+        retired_at,
+    }))
 }
 
 const SELECT_NODE_SESSION: &str = "SELECT id, node_id, kind, project_id, adapter, account_id, \
@@ -355,6 +532,138 @@ impl NodeSessionStore for SqliteStore {
                 kind.as_str(),
                 project_id.map(|p| p.to_string()),
                 session_id
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn work_unit_session_create(&self, session: &WorkUnitSession) -> Result<(), StoreError> {
+        let created_at = format_rfc3339(session.created_at)?;
+        let last_used_at = format_rfc3339(session.last_used_at)?;
+        let conn = self.lock()?;
+        conn.execute(
+            "INSERT INTO node_sessions (id, node_id, kind, project_id, adapter, account_id, \
+             session_id, turns, approx_tokens, created_at, last_used_at, retired_at, \
+             task_id, work_unit_id, provider, cwd) \
+             VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, ?12, ?13, ?14)",
+            rusqlite::params![
+                session.id,
+                session.node_id,
+                SessionKind::Continuation.as_str(),
+                session.adapter,
+                session.account_id,
+                session.session_id,
+                session.turns,
+                session.approx_tokens,
+                created_at,
+                last_used_at,
+                session.task_id.to_string(),
+                session.work_unit_id,
+                session.provider,
+                session.cwd,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn work_unit_session_active(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        adapter: &str,
+        account_id: Option<&str>,
+    ) -> Result<Option<WorkUnitSession>, StoreError> {
+        let conn = self.lock()?;
+        let sql = format!(
+            "{SELECT_WORK_UNIT_SESSION} WHERE kind = ?1 AND task_id = ?2 AND work_unit_id IS ?3 \
+             AND adapter = ?4 AND account_id IS ?5 AND retired_at IS NULL \
+             ORDER BY last_used_at DESC, id DESC LIMIT 1"
+        );
+        let row = conn
+            .query_row(
+                &sql,
+                rusqlite::params![
+                    SessionKind::Continuation.as_str(),
+                    task_id.to_string(),
+                    work_unit_id,
+                    adapter,
+                    account_id,
+                ],
+                row_to_work_unit_session,
+            )
+            .optional()?;
+        row.transpose()
+    }
+
+    fn work_unit_session_current(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+    ) -> Result<Option<WorkUnitSession>, StoreError> {
+        let conn = self.lock()?;
+        let sql = format!(
+            "{SELECT_WORK_UNIT_SESSION} WHERE kind = ?1 AND task_id = ?2 AND work_unit_id IS ?3 \
+             AND retired_at IS NULL ORDER BY last_used_at DESC, id DESC LIMIT 1"
+        );
+        let row = conn
+            .query_row(
+                &sql,
+                rusqlite::params![
+                    SessionKind::Continuation.as_str(),
+                    task_id.to_string(),
+                    work_unit_id,
+                ],
+                row_to_work_unit_session,
+            )
+            .optional()?;
+        row.transpose()
+    }
+
+    fn work_unit_session_retire(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let ts = format_rfc3339(now)?;
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE node_sessions SET retired_at = ?4 \
+             WHERE kind = ?1 AND task_id = ?2 AND work_unit_id IS ?3 AND retired_at IS NULL",
+            rusqlite::params![
+                SessionKind::Continuation.as_str(),
+                task_id.to_string(),
+                work_unit_id,
+                ts
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    fn work_unit_session_touch(
+        &self,
+        task_id: TaskId,
+        work_unit_id: Option<&str>,
+        adapter: &str,
+        account_id: Option<&str>,
+        add_tokens: i64,
+        now: OffsetDateTime,
+    ) -> Result<bool, StoreError> {
+        let ts = format_rfc3339(now)?;
+        let conn = self.lock()?;
+        let changed = conn.execute(
+            "UPDATE node_sessions SET turns = turns + 1, approx_tokens = approx_tokens + ?6, \
+             last_used_at = ?7 \
+             WHERE kind = ?1 AND task_id = ?2 AND work_unit_id IS ?3 AND adapter = ?4 \
+             AND account_id IS ?5 AND retired_at IS NULL",
+            rusqlite::params![
+                SessionKind::Continuation.as_str(),
+                task_id.to_string(),
+                work_unit_id,
+                adapter,
+                account_id,
+                add_tokens,
+                ts,
             ],
         )?;
         Ok(changed > 0)
@@ -617,9 +926,273 @@ mod tests {
 
     #[test]
     fn kind_as_str_and_parse_round_trip() {
-        for kind in [SessionKind::Conversation, SessionKind::Lead] {
+        for kind in [
+            SessionKind::Conversation,
+            SessionKind::Lead,
+            SessionKind::Continuation,
+        ] {
             assert_eq!(SessionKind::parse(kind.as_str()), Some(kind));
         }
         assert_eq!(SessionKind::parse("bogus"), None);
+    }
+
+    // --- ADR-0140 D2: WU 単位の継続セッション（work_unit_session_*） ---
+
+    fn wu_session(
+        task_id: TaskId,
+        wu: Option<&str>,
+        account: Option<&str>,
+        session_id: &str,
+        now: OffsetDateTime,
+    ) -> WorkUnitSession {
+        WorkUnitSession::new(
+            "software-engineering",
+            task_id,
+            wu.map(str::to_string),
+            "claude-code",
+            account.map(str::to_string),
+            Some("anthropic".to_string()),
+            Some("/ws/wu/session-key".to_string()),
+            session_id,
+            now,
+        )
+    }
+
+    #[test]
+    fn work_unit_session_create_then_active_round_trips() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let task = TaskId::new();
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        let created = wu_session(task, Some("wu-a"), Some("acct-a"), "uuid-1", now);
+        store.work_unit_session_create(&created).expect("create");
+        let active = store
+            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .expect("active")
+            .expect("some");
+        assert_eq!(active.id, created.id);
+        assert_eq!(active.task_id, task);
+        assert_eq!(active.work_unit_id.as_deref(), Some("wu-a"));
+        assert_eq!(active.session_id, "uuid-1");
+        assert_eq!(active.provider.as_deref(), Some("anthropic"));
+        assert_eq!(active.cwd.as_deref(), Some("/ws/wu/session-key"));
+        assert_eq!(active.turns, 0);
+        assert!(active.retired_at.is_none());
+
+        // touch は key が一致する行だけを進める。
+        assert!(
+            store
+                .work_unit_session_touch(
+                    task,
+                    Some("wu-a"),
+                    "claude-code",
+                    Some("acct-a"),
+                    500,
+                    now + time::Duration::seconds(3),
+                )
+                .expect("touch")
+        );
+        assert!(
+            !store
+                .work_unit_session_touch(task, Some("wu-a"), "claude-code", Some("acct-b"), 9, now)
+                .expect("touch other account")
+        );
+        let active = store
+            .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+            .expect("active")
+            .expect("some");
+        assert_eq!(active.turns, 1);
+        assert_eq!(active.approx_tokens, 500);
+    }
+
+    #[test]
+    fn work_unit_session_other_account_or_adapter_is_not_returned() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let task = TaskId::new();
+        store
+            .work_unit_session_create(&wu_session(task, Some("wu-a"), Some("acct-a"), "u1", now))
+            .expect("create");
+        // 別 account の session は返さない（account isolation、ADR-0140 D3）。
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-b"))
+                .expect("active"),
+            None
+        );
+        // account 無し（None）とも一致しない。
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", None)
+                .expect("active"),
+            None
+        );
+        // 別 adapter とも一致しない。
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "codex", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        // current は判定用に adapter・account を問わず返す（dispatcher が account_changed を見て retire する）。
+        let current = store
+            .work_unit_session_current(task, Some("wu-a"))
+            .expect("current")
+            .expect("some");
+        assert_eq!(current.account_id.as_deref(), Some("acct-a"));
+    }
+
+    #[test]
+    fn work_unit_session_is_not_returned_after_retire() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let task = TaskId::new();
+        store
+            .work_unit_session_create(&wu_session(task, Some("wu-a"), Some("acct-a"), "u1", now))
+            .expect("create");
+        assert!(
+            store
+                .work_unit_session_retire(task, Some("wu-a"), now + time::Duration::seconds(1))
+                .expect("retire")
+        );
+        assert!(
+            !store
+                .work_unit_session_retire(task, Some("wu-a"), now + time::Duration::seconds(2))
+                .expect("retire again")
+        );
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        assert_eq!(
+            store
+                .work_unit_session_current(task, Some("wu-a"))
+                .expect("current"),
+            None
+        );
+        assert!(
+            !store
+                .work_unit_session_touch(task, Some("wu-a"), "claude-code", Some("acct-a"), 1, now)
+                .expect("touch")
+        );
+        // retire → create で新しい session が現役になる。
+        store
+            .work_unit_session_create(&wu_session(
+                task,
+                Some("wu-a"),
+                Some("acct-a"),
+                "u2",
+                now + time::Duration::seconds(3),
+            ))
+            .expect("create 2");
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+                .expect("active")
+                .expect("some")
+                .session_id,
+            "u2"
+        );
+    }
+
+    #[test]
+    fn work_unit_session_other_work_unit_or_task_is_not_returned() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let task = TaskId::new();
+        let other_task = TaskId::new();
+        store
+            .work_unit_session_create(&wu_session(task, Some("wu-a"), Some("acct-a"), "u1", now))
+            .expect("create");
+        // 別 WU（独立 WU）は他 WU の session を引き継がない。
+        assert_eq!(
+            store
+                .work_unit_session_active(task, Some("wu-b"), "claude-code", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        // atomic（work_unit_id = None）とも混ざらない。
+        assert_eq!(
+            store
+                .work_unit_session_active(task, None, "claude-code", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        // 別 Task の同名 WU とも混ざらない。
+        assert_eq!(
+            store
+                .work_unit_session_active(other_task, Some("wu-a"), "claude-code", Some("acct-a"))
+                .expect("active"),
+            None
+        );
+        // 別 WU の retire はこの WU の session に触れない。
+        assert!(
+            !store
+                .work_unit_session_retire(task, Some("wu-b"), now)
+                .expect("retire other")
+        );
+        assert!(
+            store
+                .work_unit_session_active(task, Some("wu-a"), "claude-code", Some("acct-a"))
+                .expect("active")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn work_unit_session_atomic_task_and_node_sessions_are_independent() {
+        let store = store();
+        let now = OffsetDateTime::now_utc();
+        let task = TaskId::new();
+        // atomic な Task: work_unit_id = None が「Task 全体で 1 本」。
+        store
+            .work_unit_session_create(&wu_session(task, None, Some("acct-a"), "atomic", now))
+            .expect("create");
+        assert_eq!(
+            store
+                .work_unit_session_active(task, None, "claude-code", Some("acct-a"))
+                .expect("active")
+                .expect("some")
+                .session_id,
+            "atomic"
+        );
+        // 既存の Lead session（ADR-0054）は continuation 行と混ざらない。
+        store
+            .node_session_create(&NodeSession::new(
+                "software-engineering",
+                SessionKind::Lead,
+                None,
+                "claude-code",
+                Some("acct-a".to_string()),
+                "lead-sess",
+                now,
+            ))
+            .expect("create lead");
+        assert_eq!(
+            store
+                .node_session_active("software-engineering", SessionKind::Lead, None)
+                .expect("lead")
+                .expect("some")
+                .session_id,
+            "lead-sess"
+        );
+        assert!(
+            store
+                .work_unit_session_retire(task, None, now)
+                .expect("retire")
+        );
+        assert!(
+            store
+                .node_session_active("software-engineering", SessionKind::Lead, None)
+                .expect("lead")
+                .is_some()
+        );
     }
 }

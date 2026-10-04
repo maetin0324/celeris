@@ -534,7 +534,7 @@ fn build_repair_objective_with_scope_adds_allowed_range_and_out_of_scope_check_s
     let scope = RepairScope {
         allowed_paths: vec![
             "web/".to_string(),
-            "docs/adr/0099-root-delivery.md".to_string(),
+            "agent-docs/adr/0099-root-delivery.md".to_string(),
         ],
         scope_checks: vec!["git diff --name-only <base> -- ':!web'".to_string()],
     };
@@ -548,7 +548,7 @@ fn build_repair_objective_with_scope_adds_allowed_range_and_out_of_scope_check_s
     );
     assert!(obj.contains("## 変更してよい範囲"));
     assert!(obj.contains("- web/"));
-    assert!(obj.contains("- docs/adr/0099-root-delivery.md"));
+    assert!(obj.contains("- agent-docs/adr/0099-root-delivery.md"));
     assert!(obj.contains("## 範囲外差分の検査"));
     assert!(obj.contains("- git diff --name-only <base> -- ':!web'"));
     assert!(obj.contains("plan_issue"));
@@ -581,4 +581,244 @@ fn committed_schema_matches_generated() {
         committed, generated,
         "schema drift: run `UPDATE_SCHEMA=1 cargo test -p task-core`"
     );
+}
+
+// ---- ADR-0120: IntegrationRepair ----
+
+#[test]
+fn integration_repair_class_bucket_title_and_key_round_trip() {
+    assert_eq!(
+        RepairClass::IntegrationConflict.bucket(),
+        "integration_repair"
+    );
+    assert_eq!(RepairClass::IntegrationConflict.budget(), (30, 1800));
+    assert_eq!(integration_repair_key(1), "integration-repair-1");
+    assert!(is_integration_repair_unit(
+        crate::WorkUnitKind::Repair,
+        INTEGRATION_REPAIR_TITLE
+    ));
+    // 通常の ReviewRepair・repair 以外の kind は数えない。
+    assert!(!is_integration_repair_unit(
+        crate::WorkUnitKind::Repair,
+        "repair (merge_conflict): merge"
+    ));
+    assert!(!is_integration_repair_unit(
+        crate::WorkUnitKind::Implement,
+        INTEGRATION_REPAIR_TITLE
+    ));
+    let units = [
+        (crate::WorkUnitKind::Implement, "main"),
+        (crate::WorkUnitKind::Repair, INTEGRATION_REPAIR_TITLE),
+        (crate::WorkUnitKind::Repair, "repair (lint): clippy"),
+        (crate::WorkUnitKind::Repair, INTEGRATION_REPAIR_TITLE),
+    ];
+    assert_eq!(count_integration_repairs(units), 2);
+}
+
+#[test]
+fn integration_repair_objective_names_target_before_and_conflicts() {
+    let files = vec![
+        "src/b.rs".to_string(),
+        "src/a.rs".to_string(),
+        "src/b.rs".to_string(),
+        " ".to_string(),
+    ];
+    let o = build_integration_repair_objective(
+        "refs/heads/main",
+        "tsha",
+        "bsha",
+        &files,
+        "title",
+        &"x".repeat(1000),
+        None,
+    );
+    assert!(o.contains("`git rebase tsha`"));
+    assert!(o.contains("- target_ref: refs/heads/main\n- target_sha: tsha"));
+    assert!(o.contains("- before_sha: bsha"));
+    assert!(o.contains("## 衝突したファイル\n- src/a.rs\n- src/b.rs\n\n"));
+    assert!(o.contains("`git merge-base --is-ancestor tsha HEAD`"));
+    assert!(o.contains("plan_issue"));
+    assert!(!o.contains("## 変更してよい範囲"));
+    assert!(!o.contains(&"x".repeat(601)));
+    // 決定的（同じ入力は同じ出力）。
+    let again = build_integration_repair_objective(
+        "refs/heads/main",
+        "tsha",
+        "bsha",
+        &files,
+        "title",
+        &"x".repeat(1000),
+        Some(&RepairScope::default()),
+    );
+    assert_eq!(o, again);
+    let scope = RepairScope {
+        allowed_paths: vec!["crates/task-core/".into()],
+        scope_checks: vec!["git diff --name-only".into()],
+    };
+    let scoped = build_integration_repair_objective(
+        "refs/heads/main",
+        "tsha",
+        "bsha",
+        &files,
+        "title",
+        "obj",
+        Some(&scope),
+    );
+    assert!(scoped.contains("## 変更してよい範囲\n- crates/task-core/\n"));
+    assert!(scoped.contains("## 範囲外差分の検査\n- git diff --name-only\n"));
+}
+
+#[test]
+fn integration_repair_exhaust_reason_serde_names_are_fixed() {
+    for (r, name) in [
+        (
+            IntegrationRepairExhaustReason::LimitReached,
+            "limit_reached",
+        ),
+        (IntegrationRepairExhaustReason::PlanIssue, "plan_issue"),
+        (
+            IntegrationRepairExhaustReason::WorkUnitFailed,
+            "work_unit_failed",
+        ),
+        (
+            IntegrationRepairExhaustReason::BudgetExhausted,
+            "budget_exhausted",
+        ),
+        (
+            IntegrationRepairExhaustReason::ResultUntrusted,
+            "result_untrusted",
+        ),
+        (IntegrationRepairExhaustReason::AbortFailed, "abort_failed"),
+        (
+            IntegrationRepairExhaustReason::WorktreeUnavailable,
+            "worktree_unavailable",
+        ),
+    ] {
+        assert_eq!(r.as_str(), name);
+        assert_eq!(serde_json::to_value(r).unwrap(), serde_json::json!(name));
+    }
+}
+
+fn scheduled(repo_id: crate::RepoId, wu: &str, attempt: u32, target: &str) -> crate::Event {
+    crate::Event::IntegrationRepairScheduled {
+        work_unit_id: wu.into(),
+        key: integration_repair_key(attempt),
+        repo_id,
+        target_ref: "refs/heads/main".into(),
+        target_sha: target.into(),
+        before_sha: format!("before-{attempt}"),
+        conflict_files: vec!["src/a.rs".into()],
+        attempt,
+    }
+}
+
+#[test]
+fn integration_repair_events_serde_round_trip_and_type_names() {
+    let repo_id = crate::RepoId::new();
+    let events = [
+        (
+            scheduled(repo_id, "wu-1", 1, "t1"),
+            "integration_repair_scheduled",
+        ),
+        (
+            crate::Event::IntegrationRepairResolved {
+                work_unit_id: "wu-1".into(),
+                repo_id,
+                target_sha: "t2".into(),
+                reviewed_sha: "r".into(),
+                attempt: 1,
+            },
+            "integration_repair_resolved",
+        ),
+        (
+            crate::Event::IntegrationRepairExhausted {
+                work_unit_id: None,
+                repo_id,
+                target_sha: "t".into(),
+                before_sha: "b".into(),
+                attempt: 3,
+                reason: IntegrationRepairExhaustReason::LimitReached,
+                rollback_to_sha: None,
+                fallback: true,
+            },
+            "integration_repair_exhausted",
+        ),
+    ];
+    for (e, name) in events {
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], serde_json::json!(name));
+        let back: crate::Event = serde_json::from_value(v).unwrap();
+        assert_eq!(back, e);
+    }
+    // 省略可能な欄は None なら出さない。
+    let v = serde_json::to_value(crate::Event::IntegrationRepairExhausted {
+        work_unit_id: None,
+        repo_id,
+        target_sha: "t".into(),
+        before_sha: "b".into(),
+        attempt: 1,
+        reason: IntegrationRepairExhaustReason::AbortFailed,
+        rollback_to_sha: None,
+        fallback: false,
+    })
+    .unwrap();
+    assert!(v.get("work_unit_id").is_none());
+    assert!(v.get("rollback_to_sha").is_none());
+    assert_eq!(v["reason"], serde_json::json!("abort_failed"));
+}
+
+#[test]
+fn integration_repair_status_projects_last_event_with_its_scheduled_snapshot() {
+    let repo_id = crate::RepoId::new();
+    assert_eq!(integration_repair_status(&[]), None);
+
+    let mut events = vec![scheduled(repo_id, "wu-1", 1, "t1")];
+    let s = integration_repair_status(&events).unwrap();
+    assert_eq!(s.state, IntegrationRepairState::Scheduled);
+    assert_eq!(s.attempt, 1);
+    assert_eq!(s.target_sha, "t1");
+    assert_eq!(s.reason, None);
+    assert_eq!(s.fallback, None);
+
+    // resolved は再同期時の target_sha を返し、target_ref・before_sha は scheduled から引く。
+    events.push(crate::Event::IntegrationRepairResolved {
+        work_unit_id: "wu-1".into(),
+        repo_id,
+        target_sha: "t1b".into(),
+        reviewed_sha: "r".into(),
+        attempt: 1,
+    });
+    let s = integration_repair_status(&events).unwrap();
+    assert_eq!(s.state, IntegrationRepairState::Resolved);
+    assert_eq!(s.target_sha, "t1b");
+    assert_eq!(s.target_ref.as_deref(), Some("refs/heads/main"));
+    assert_eq!(s.before_sha.as_deref(), Some("before-1"));
+    assert_eq!(s.conflict_files, vec!["src/a.rs".to_string()]);
+
+    events.push(scheduled(repo_id, "wu-2", 2, "t2"));
+    events.push(crate::Event::IntegrationRepairExhausted {
+        work_unit_id: Some("wu-2".into()),
+        repo_id,
+        target_sha: "t2".into(),
+        before_sha: "before-2".into(),
+        attempt: 2,
+        reason: IntegrationRepairExhaustReason::WorkUnitFailed,
+        rollback_to_sha: Some("before-2".into()),
+        fallback: true,
+    });
+    let s = integration_repair_status(&events).unwrap();
+    assert_eq!(s.state, IntegrationRepairState::Exhausted);
+    assert_eq!(s.work_unit_id.as_deref(), Some("wu-2"));
+    assert_eq!(
+        s.reason,
+        Some(IntegrationRepairExhaustReason::WorkUnitFailed)
+    );
+    assert_eq!(s.rollback_to_sha.as_deref(), Some("before-2"));
+    assert_eq!(s.fallback, Some(true));
+    assert_eq!(s.target_ref.as_deref(), Some("refs/heads/main"));
+
+    let snaps = integration_repair_snapshots(&events);
+    assert_eq!(snaps.len(), 2);
+    assert_eq!(snaps["wu-1"].target_sha, "t1");
+    assert_eq!(snaps["wu-2"].before_sha, "before-2");
 }

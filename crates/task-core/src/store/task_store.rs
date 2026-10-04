@@ -15,6 +15,7 @@ use crate::org::{
 };
 use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
+use crate::write_set::WriteSetRecord;
 
 use super::query::{ListFilter, ListOrder, Page};
 use super::{
@@ -28,12 +29,14 @@ use super::{
 /// ADR-0033 D5（Phase 26）: 認可（`approvals` / `standing_rules`）も同じ形で `crate::approval::ApprovalStore`
 /// にある。
 /// ADR-0037 D1（Phase 39）: 通知の台帳（`notifications`）も同じ形で `crate::notify::NotificationStore` にある。
+/// ADR-0133 D6: dispatcher と daemon が同じ通知 feed を読むため `NoticeStore` も supertrait にする。
 pub trait TaskStore:
     Send
     + Sync
     + crate::report::ReportStore
     + crate::approval::ApprovalStore
     + crate::notify::NotificationStore
+    + crate::feed::NoticeStore
     + crate::knowledge_run::KnowledgeRunStore
     + crate::delivery::DeliveryStore
     + crate::node_session::NodeSessionStore
@@ -41,7 +44,43 @@ pub trait TaskStore:
     + crate::mcp::McpCallStore
     + crate::browser_wait::BrowserWaitStore
     + crate::cluster_job::ClusterJobWaitStore
+    + crate::cron::CronJobStore
 {
+    /// ADR-0130 D2: store an immutable per-run Git diff snapshot.
+    fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// Final cumulative snapshot from the WU base commit to its committed head.
+    fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError>;
+    fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError>;
+    /// ADR-0130 D4: store one behind measurement; `behind_target_since` follows
+    /// [`crate::behind_target::next_behind_since`] in the same transaction.
+    fn record_behind_target(
+        &self,
+        obs: &crate::behind_target::BehindTargetObservation,
+    ) -> Result<crate::behind_target::BehindTargetSnapshot, StoreError>;
+    fn behind_targets(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<crate::behind_target::BehindTargetSnapshot>, StoreError>;
+    /// ADR-0130 D1: explicit task hint (`None` / empty clears it).
+    fn set_task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+        paths: Option<&[String]>,
+        now: &str,
+    ) -> Result<(), StoreError>;
+    fn task_expected_write_paths(&self, task_id: TaskId)
+    -> Result<Option<Vec<String>>, StoreError>;
+    /// Own hint, else the parent unit's (child tasks).
+    fn effective_task_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError>;
+    /// The /3 plan unit's hint, else the task's effective hint.
+    fn work_unit_expected_write_paths(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError>;
     fn insert(&self, task: &Task) -> Result<(), StoreError>;
     fn get(&self, id: TaskId) -> Result<Option<Task>, StoreError>;
     fn list(&self, filter: Option<Status>) -> Result<Vec<Task>, StoreError>;
@@ -189,6 +228,35 @@ pub trait TaskStore:
         after_seq: Option<u64>,
         limit: usize,
     ) -> Result<Vec<EventRow>, StoreError>;
+    /// ADR-0121 D3: 各タスクの最新 `delivery_skipped` イベントだけを返す。
+    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError>;
+    /// 未回答の統合依頼を、一組の task と両側の head につき一件返す。
+    fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError>;
+    /// 同じ組の未回答依頼があれば追記しない。追記したときだけ true。同じ `origin` の別の組の未回答依頼は
+    /// この依頼に置き換わったものとして `IntegrationAnswered { answer: "superseded" }` で閉じる。
+    fn integration_request_record(
+        &self,
+        task_id: TaskId,
+        request: &crate::integration_request::IntegrationRequest,
+        origin: &str,
+    ) -> Result<bool, StoreError>;
+    /// 依頼 `request_id` が未回答なら `IntegrationAnswered` を追記して閉じる（追記したときだけ true。
+    /// 回答済み・未知の id には何もしない）。配送・段の統合が「統合済み」を記録する経路と、人の回答の両方が使う。
+    fn integration_request_answer(
+        &self,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<bool, StoreError>;
+    /// `origin`（`delivery` / `phase:<key>`）の未回答依頼を全て `answer` で閉じる。閉じた依頼 id を返す。
+    fn integration_requests_close(
+        &self,
+        task_id: TaskId,
+        origin: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<Vec<String>, StoreError>;
 
     /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
     /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。
@@ -687,6 +755,9 @@ pub trait TaskStore:
     /// 終端への遷移は同じトランザクションで閉じるので、ここで見つかるのは R6-1 より前に残った行だけ。閉じた
     /// `(task, run_id)` を返す（dispatcher の起動時と定期の照合が 1 行ずつログに残す）。
     fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError>;
+    /// `runs` 索引で `status = 'running'` の行すべて（`started_at` 昇順。読むだけ）。dispatcher の
+    /// 持ち主の居ない run の照合（lease を持たない reviewer run 等の取り残し）が使う。
+    fn runs_running(&self) -> Result<Vec<RunRow>, StoreError>;
 
     /// `updated_at >= since` のタスク別実行集計を派生索引から 1 回の SQL で読む。
     ///

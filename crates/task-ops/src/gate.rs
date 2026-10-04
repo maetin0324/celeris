@@ -13,7 +13,7 @@ use crate::derive::latest_question;
 use crate::error::OpsError;
 use crate::view::{TaskRef, task_ref};
 
-/// `events_since` を読むときの「大きめの limit」（`docs/gui/api.md` §5.7）。伝播は同一トランザクション
+/// `events_since` を読むときの「大きめの limit」（`docs/api/v1/gui-api.md` §5.7）。伝播は同一トランザクション
 /// 内で完結するので、通常はこの上限にかからない。
 const CASCADE_EVENTS_LIMIT: usize = 100_000;
 
@@ -24,14 +24,14 @@ pub struct TransitionResult {
     pub from: Status,
     pub to: Status,
     pub reason: String,
-    /// この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。
+    /// この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。
     #[serde(default)]
     pub cascaded: Vec<TaskRef>,
 }
 
 /// `since_id`（遷移前の `latest_event_id()`）より後に追記されたイベントのうち、`subject` 以外の
 /// タスクに付いた `Transitioned{to: Cancelled, reason: "cancel" | "dependency_failed" | "parent_cancelled"}` を
-/// `TaskRef` にして返す（`docs/gui/api.md` §5.7）。
+/// `TaskRef` にして返す（`docs/api/v1/gui-api.md` §5.7）。
 fn collect_cascaded(
     store: &dyn TaskStore,
     subject: TaskId,
@@ -253,6 +253,10 @@ pub fn answer(
     }
     let question = latest_question(&events);
     let from = task.status;
+    // ADR parallel integration D4 付記: 段の統合依頼で blocked(question) になった統合 WU を、受信箱の
+    // 専用経路でなく汎用の回答で再開したときも、その依頼は回答済み（受信箱から消す）。遷移が WU の
+    // blocked を解く前に対象を決める。再開後の統合が衝突なしで通っても dispatcher は閉じた依頼に重ねない。
+    close_phase_integration_requests(store, id, &answer)?;
     let since_id = store.latest_event_id()?;
     let outcome = store.apply_transition(
         id,
@@ -276,6 +280,28 @@ pub fn answer(
     })
 }
 
+/// 汎用の回答で再開される統合 WU（`blocked(question)` の `Integrate`）が出した未回答の統合依頼を
+/// `answered` で閉じる。依頼の無い task では何もしない。
+fn close_phase_integration_requests(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    answer: &str,
+) -> Result<(), OpsError> {
+    let blocked_integrations: Vec<String> = store
+        .work_units_for(task_id)?
+        .into_iter()
+        .filter(|unit| {
+            unit.kind == task_core::WorkUnitKind::Integrate
+                && unit.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+        })
+        .map(|unit| format!("phase:{}", unit.key))
+        .collect();
+    for origin in blocked_integrations {
+        store.integration_requests_close(task_id, &origin, "answered", Some(answer))?;
+    }
+    Ok(())
+}
+
 /// `task_id` に紐づく未決の `approvals` を、渡された `answer` で `once` に決定する。
 /// `task_ops::approval::decide` は呼ばない（そちらは決定のたびに `gate::answer` を呼び直すため、
 /// ここから呼ぶと循環する。ストアへの書き込みだけをここで完結させる）。
@@ -292,8 +318,8 @@ pub(crate) fn settle_pending_approvals(
     Ok(())
 }
 
-/// 非終端（`draft/ready/running/blocked/reviewing`）のタスクだけを `Trigger::Cancel` で
-/// `cancelled` にする。終端はエラーにし、状態は変えない（ADR-0010 D1, P-4）。子・後続への
+/// 非終端と `failed` のタスクを `Trigger::Cancel` で `cancelled` にする。
+/// `done` / `cancelled` はエラーにする（ADR-0131 D7）。子・後続への
 /// 取り消し伝播は `TaskStore::apply_transition` がストア側の同一トランザクションで行う。
 pub fn cancel(
     store: &dyn TaskStore,
@@ -303,7 +329,7 @@ pub fn cancel(
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     check_expected(task.status, expected)?;
 
-    if task.status.is_terminal() {
+    if matches!(task.status, Status::Done | Status::Cancelled) {
         return Err(OpsError::InvalidState {
             id,
             context: format!("status={:?}", task.status),

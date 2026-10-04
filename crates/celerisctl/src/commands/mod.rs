@@ -7,6 +7,10 @@ pub mod build_cache;
 pub mod cancel;
 /// ADR-0046 D3（Phase 59）: `celerisctl config to-harnesses`。
 pub mod config;
+/// ADR-0131 D5: HTTP API based cron job operations.
+pub mod cron;
+/// ADR-0131 付記 D12: `celerisctl curation validate`（日次整理の計画を daemon と同じ規則で点検する。DB もネットワークも使わない）。
+pub mod curation;
 /// ADR-0064 D2/D3（Phase 110a）: `celerisctl db backup|integrity-check`。DB を通常の経路では開かない。
 pub mod db;
 /// ADR-0072 D14（Phase E2）: `celerisctl execution plan set|show`。
@@ -25,6 +29,7 @@ pub mod plan_lint;
 /// ADR-0054 D2（Phase 68）: `celerisctl projects ls|show`（CoS の対話 run に許す読み取りの道具）。
 pub mod projects;
 pub mod query;
+pub mod release;
 pub mod replay;
 /// ADR-0051 / ADR-0054 Phase 113 D3: `celerisctl rereview <task_id>`。既存成果を再判定する
 /// （新しい実装 run は起こさない）。
@@ -37,6 +42,8 @@ pub mod retry;
 pub mod routing;
 /// ADR-0075（Phase G1）: `celerisctl scratch status|gc|lease|touch|release|env`。
 pub mod scratch;
+/// ADR-0122 D1: `celerisctl skills import <dir>`（repo の skill を KB へ。DB を開かない）。
+pub mod skills;
 pub mod worker;
 /// ADR-0066 D2（Phase 110b）: `celerisctl workspace prune`。
 pub mod workspace;

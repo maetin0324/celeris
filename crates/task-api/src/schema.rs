@@ -1,10 +1,9 @@
-//! API v1 の JSON Schema（`docs/gui/api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
+//! API v1 の JSON Schema（`docs/api/v1/gui-api.md` §7、ADR-0013 D8）。ルートは `ApiV1Schema`（1 フィールド = 1 公開型）。
 //! 生成物は `docs/api/v1/api-v1.schema.json` にコミットし、`committed_schema_matches_generated` で一致を確かめる
 //! （`UPDATE_SCHEMA=1 cargo test -p task-api` で再生成）。
 
 use schemars::JsonSchema;
 use task_core::{EventRow, Task};
-use task_ops::add::NewTaskSpec;
 use task_ops::daemon::DaemonSnapshot;
 use task_ops::gate::TransitionResult;
 use task_ops::graph::Graph;
@@ -44,14 +43,26 @@ pub struct ApiV1Schema {
     pub health: Health,
     pub problem: Problem,
     pub inbox: Inbox,
+    /// ADR-0133 D5: human decisions and informational notices.
+    pub inbox_items: crate::inbox_notifications::HumanInboxView,
+    pub inbox_item: task_ops::human_inbox::InboxItem,
+    pub inbox_answer: crate::inbox_notifications::InboxAnswerBody,
+    pub inbox_answer_result: crate::inbox_notifications::InboxAnswerResult,
+    pub notifications: crate::inbox_notifications::NotificationsView,
+    pub notifications_unread_count: crate::inbox_notifications::UnreadCountView,
+    pub notification_read: crate::inbox_notifications::NoticeReadResult,
+    pub notifications_read_all: crate::inbox_notifications::NoticeReadAllResult,
+    pub notifications_read_all_body: crate::inbox_notifications::ReadAllBody,
     pub task_list: TaskList,
     pub task: Task,
     pub task_detail: TaskDetail,
     pub events_page: EventsPage,
     pub run_list: RunList,
+    /// 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。
+    pub work_unit_check_log: crate::types::WorkUnitCheckLog,
     pub artifact_list: ArtifactList,
     pub graph: Graph,
-    pub new_task: NewTaskSpec,
+    pub new_task: crate::handlers::tasks::NewTaskBody,
     pub new_plan: NewPlanSpec,
     pub decision: DecisionBody,
     pub answer: AnswerBody,
@@ -135,6 +146,9 @@ pub struct ApiV1Schema {
     /// Phase 48（ADR-0040 D6）: リリース。`GET /releases` と `POST /releases/{sha12}/promote` の応答。
     pub releases: Releases,
     pub release_promote: ReleasePromoteAccepted,
+    /// ADR 2026-10-04-release-notes: `GET /releases/{sha12}/promotion-preview` と `GET /deliveries`。
+    pub release_promotion_preview: crate::types::ReleasePromotionPreview,
+    pub delivery_list: crate::types::DeliveryList,
     /// Phase 52（ADR-0043 D1 / D6）: 案件のリポジトリと、タスクの作業ツリーの閲覧。
     pub repo_list: crate::types::RepoList,
     pub repo_create: crate::types::RepoCreateBody,
@@ -143,7 +157,7 @@ pub struct ApiV1Schema {
     pub tree_file: crate::types::TreeFileView,
     // ---- ADR-0044 B1（Phase 53）: 編集・コメント・再開・タイムライン ----
     /// ADR-0044 D1: `PATCH /tasks/{id}` の本文と応答。
-    pub task_edit: task_ops::edit::TaskEdit,
+    pub task_edit: crate::handlers::task_actions::TaskPatchBody,
     pub task_edit_result: task_ops::edit::EditResult,
     /// ADR-0044 D2: コメント（`GET`/`POST /tasks/{id}/comments`）と再開（`POST /tasks/{id}/reopen`）。
     pub comment: CommentBody,
@@ -242,6 +256,13 @@ pub struct ApiV1Schema {
     pub decision_outcome: task_ops::decision::DecisionOutcome,
     /// ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。
     pub task_tree: task_ops::tree_view::TaskTreeView,
+    /// ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。
+    pub cron_job_create: crate::cron_jobs::CronJobCreateBody,
+    pub cron_job_patch: crate::cron_jobs::CronJobPatchBody,
+    pub cron_job: crate::cron_jobs::CronJobView,
+    pub cron_job_list: crate::cron_jobs::CronJobList,
+    pub cron_job_run_list: crate::cron_jobs::CronJobRunList,
+    pub cron_run_result: crate::cron_jobs::CronRunResult,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

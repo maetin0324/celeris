@@ -1,4 +1,4 @@
-//! `claude-code` アダプタ（DESIGN §5.4, ADR-0003 D7, ADR-0006）。
+//! `claude-code` アダプタ（ADR-0003 D7, ADR-0006）。
 //!
 //! `claude` CLI は celeris 独自のワーカープロトコルを話さない。`--output-format stream-json` が吐く
 //! Claude Code 自身のイベント（`system`/`assistant`/`user`/`result`）を読み、結果ファイル規約
@@ -40,8 +40,6 @@ pub struct ClaudeCodeConfig {
     pub model: Option<String>,
     /// 追加の環境変数（例: `CLAUDE_CONFIG_DIR`）。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
     /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
@@ -55,7 +53,6 @@ impl Default for ClaudeCodeConfig {
             permission_mode: "bypassPermissions".to_string(),
             model: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -102,12 +99,6 @@ impl WorkerAdapter for ClaudeCodeAdapter {
         config.env.extend(extra.iter().cloned());
         Some(Arc::new(ClaudeCodeAdapter::new(config)))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
-        Some(Arc::new(ClaudeCodeAdapter::new(config)))
-    }
-
     /// ADR-0043 D3（Phase 56）: コンテナの中で `claude` を起こす複製。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
@@ -240,6 +231,116 @@ impl BackgroundTasks {
             .filter(|(id, _)| !self.finished.contains(id))
             .map(|(_, d)| d.clone())
             .collect()
+    }
+}
+
+/// ADR-0140 D4: run 内の再探索の観測（`tool_use` の `name`/`input` から決定的に数える）。
+/// `Read` は正規化した path、`Grep`/`Glob` は pattern + path を key にし、同じ key の 2 回目以降を
+/// `duplicate_reads` とする。key（path・pattern）は数えるためだけに持ち、外へは件数しか出さない。
+#[derive(Debug, Default)]
+struct ExplorationTracker {
+    /// path を相対にする基点（run の cwd = worktree）。`None` なら正規化だけする。
+    root: Option<std::path::PathBuf>,
+    /// この run が `--resume` で既存 session を続けたか（resume 拒否が分かったら呼び出し元が落とす）。
+    session_resumed: bool,
+    seen: std::collections::BTreeSet<String>,
+    duplicates: u32,
+}
+
+impl ExplorationTracker {
+    fn new(root: Option<&Path>, session_resumed: bool) -> Self {
+        Self {
+            root: root.map(normalize_path),
+            session_resumed,
+            ..Self::default()
+        }
+    }
+
+    fn observe_tool_use(&mut self, name: &str, input: Option<&serde_json::Value>) {
+        let field = |key: &str| {
+            input
+                .and_then(|i| i.get(key))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+        };
+        let key = match name {
+            "Read" => {
+                let path = field("file_path");
+                if path.is_empty() {
+                    return;
+                }
+                format!("read\0{}", self.relative(path))
+            }
+            "Grep" | "Glob" => {
+                let pattern = field("pattern");
+                if pattern.is_empty() {
+                    return;
+                }
+                let path = field("path");
+                let path = if path.is_empty() {
+                    String::new()
+                } else {
+                    self.relative(path)
+                };
+                format!("{}\0{pattern}\0{path}", name.to_ascii_lowercase())
+            }
+            _ => return,
+        };
+        if !self.seen.insert(key) {
+            self.duplicates = self.duplicates.saturating_add(1);
+        }
+    }
+
+    fn relative(&self, path: &str) -> String {
+        let path = Path::new(path);
+        let absolute = match &self.root {
+            Some(root) if path.is_relative() => root.join(path),
+            _ => path.to_path_buf(),
+        };
+        let normalized = normalize_path(&absolute);
+        match &self.root {
+            Some(root) => normalized
+                .strip_prefix(root)
+                .unwrap_or(&normalized)
+                .to_string_lossy()
+                .into_owned(),
+            None => normalized.to_string_lossy().into_owned(),
+        }
+    }
+
+    /// `result.usage` に件数と resume の印を載せる。
+    fn annotate(&self, usage: &mut Usage) {
+        usage.duplicate_reads = Some(self.duplicates);
+        usage.session_resumed = Some(self.session_resumed);
+    }
+}
+
+/// 字面だけの正規化（`.` を落とし `..` を畳む。symlink は辿らない＝ファイルシステムに触れない）。
+fn normalize_path(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// `Terminal` が運ぶ usage（無い variant・`None` なら `None`）。
+fn terminal_usage_mut(terminal: &mut Terminal) -> Option<&mut Usage> {
+    match terminal {
+        Terminal::Done { usage, .. }
+        | Terminal::Yielded { usage, .. }
+        | Terminal::BudgetExhausted { usage, .. }
+        | Terminal::Waiting { usage, .. } => usage.as_mut(),
+        _ => None,
     }
 }
 
@@ -429,8 +530,6 @@ async fn run_claude_code(
         command.arg("--allowedTools").arg(allowed);
     }
     command.args(&config.extra_args);
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     // F5-fix5: headless の run では background task を無効にする（Claude Code CLI 2.1.283 は
     // `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` が立っていると Bash / Agent の `run_in_background` を道具の
     // schema から外す）。background が無いぶん、foreground の Bash が run の壁時計まで待てるよう
@@ -505,6 +604,7 @@ async fn run_claude_code(
     let mut last_activity = Instant::now();
     let mut last_result: Option<ResultMeta> = None;
     let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::new(Some(req.cwd()), is_resuming);
     let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
 
@@ -561,7 +661,13 @@ async fn run_claude_code(
                 let text = String::from_utf8_lossy(&bytes);
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    handle_line(trimmed, sink, &mut last_result, &mut background);
+                    handle_line(
+                        trimmed,
+                        sink,
+                        &mut last_result,
+                        &mut background,
+                        &mut exploration,
+                    );
                 }
             }
         }
@@ -700,6 +806,10 @@ async fn run_claude_code(
                     || crate::provider::looks_like_resume_rejection(result_text)
                 {
                     sink.session_resume_failed(&tail);
+                    // ADR-0140 D4: 拒否された resume は「resume した run」に数えない。
+                    if let Some(usage) = terminal_usage_mut(&mut outcome.0) {
+                        usage.session_resumed = Some(false);
+                    }
                 }
             }
             outcome
@@ -757,6 +867,7 @@ fn handle_line(
     sink: &dyn EventSink,
     last_result: &mut Option<ResultMeta>,
     background: &mut BackgroundTasks,
+    exploration: &mut ExplorationTracker,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -813,6 +924,7 @@ fn handle_line(
                             flush(&mut texts, sink);
                             let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                             let input = item.get("input");
+                            exploration.observe_tool_use(name, input);
                             let shown = input
                                 .map(|v| truncate(&v.to_string(), 200))
                                 .unwrap_or_default();
@@ -863,7 +975,7 @@ fn handle_line(
             // ADR-0061（Phase 104）: claude-code CLI の `result.usage` は Anthropic API と同じ形
             // （`cache_creation_input_tokens` / `cache_read_input_tokens` を含む）。`cost_usd` はここでは
             // 計算しない（model 文字列は呼び出し元でしか分からない。`terminal_from_result` が埋める）。
-            let usage = value.get("usage").map(|u| Usage {
+            let mut usage = value.get("usage").map(|u| Usage {
                 input_tokens: u.get("input_tokens").and_then(|v| v.as_u64()),
                 output_tokens: u.get("output_tokens").and_then(|v| v.as_u64()),
                 cache_read_tokens: u.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
@@ -871,7 +983,13 @@ fn handle_line(
                     .get("cache_creation_input_tokens")
                     .and_then(|v| v.as_u64()),
                 cost_usd: None,
+                duplicate_reads: None,
+                session_resumed: None,
             });
+            // ADR-0140 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
+            if let Some(usage) = usage.as_mut() {
+                exploration.annotate(usage);
+            }
             let result = value
                 .get("result")
                 .and_then(|r| r.as_str())

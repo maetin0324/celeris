@@ -1,4 +1,4 @@
-//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/gui/api.md` §3.54/§3.55）。
+//! リリースの一覧と昇格（ADR-0040 D6。Phase 48。`docs/api/v1/gui-api.md` §3.54/§3.55）。
 //!
 //! - `GET /releases` — 読み取り（トークン不要）。`[selfdeploy] releases_dir` の下と、
 //!   `[selfdeploy] repo`（作業チェックアウト。`on_main` のためだけ）を**読むだけ**。
@@ -22,7 +22,10 @@ use crate::handlers::{ApiResult, json_response};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, store_problem};
 use crate::state::ApiState;
-use crate::types::{ReleaseItem, ReleasePromoteAccepted, ReleaseRunning, Releases};
+use crate::types::{
+    DeliveryHead, DeliveryList, ReleaseItem, ReleasePromoteAccepted, ReleasePromotionPreview,
+    ReleaseRunning, Releases,
+};
 
 /// `releases_dir` を読んだ結果（`running` と `instances` はハンドラが足す）。
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -56,6 +59,11 @@ pub trait ReleaseSource: Send + Sync + 'static {
     /// 既定は [`ReleaseSource::list`] と同じ。
     fn list_for_timeline(&self) -> ReleasesFs {
         self.list()
+    }
+    /// ADR 2026-10-04-release-notes: いまの `current` から `sha12` へ昇格したら入るものの要約。
+    /// その sha12 のリリースが無いときは `None`（→ 404）。既定は `None`（notes を読まない実装・テスト用）。
+    fn promotion_preview(&self, _sha12: &str) -> Option<ReleasePromotionPreview> {
+        None
     }
     /// `<releases_dir>/<sha12>/scripts/promote.sh <sha12>` を detached で起こす。
     fn promote(&self, sha12: &str) -> Result<ReleasePromoteAccepted, ReleasePromoteError>;
@@ -154,10 +162,69 @@ pub(crate) async fn promote(
     }
 }
 
+/// `GET /releases/{sha12}/promotion-preview`（読み取り。ADR 2026-10-04-release-notes）。
+pub(crate) async fn promotion_preview(
+    State(state): State<ApiState>,
+    crate::handlers::Params(sha12): crate::handlers::Params<String>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    crate::handlers::no_query(&raw)?;
+    let Some(source) = state.inner.releases.clone() else {
+        return Err(ApiProblem::release_not_found(&sha12));
+    };
+    let requested = sha12.clone();
+    let preview = tokio::task::spawn_blocking(move || source.promotion_preview(&requested))
+        .await
+        .map_err(|e| ApiProblem::internal(format!("reading the releases directory failed: {e}")))?;
+    match preview {
+        Some(p) => Ok(json_response(StatusCode::OK, &p)),
+        None => Err(ApiProblem::release_not_found(&sha12)),
+    }
+}
+
+/// `GET /deliveries`（読み取り。ADR 2026-10-04-release-notes）: 配送記録の task と commit の対応だけ。
+/// `release.sh` がリリースの説明（`notes.json`）で first-parent の commit を task に結ぶのに使う。
+pub(crate) async fn deliveries(
+    State(state): State<ApiState>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    crate::handlers::no_query(&raw)?;
+    let list = state
+        .blocking(move |store| {
+            use task_core::DeliveryStore;
+            store.delivery_list().map_err(store_problem)
+        })
+        .await?;
+    let mut items: Vec<DeliveryHead> = list
+        .into_iter()
+        .map(|d| DeliveryHead {
+            task_id: d.task_id.to_string(),
+            repo: d.repo,
+            branch: d.branch,
+            base: Some(d.base).filter(|b| !b.is_empty()),
+            head: d.head,
+            reviewed_sha: d.reviewed_sha,
+            merge_candidate_sha: d.merge_candidate_sha,
+            state: serde_json::to_value(d.state)
+                .ok()
+                .and_then(|v| v.as_str().map(str::to_string))
+                .unwrap_or_default(),
+            release: d.release,
+        })
+        .collect();
+    items.sort_by(|a, b| a.task_id.cmp(&b.task_id));
+    Ok(json_response(StatusCode::OK, &DeliveryList { items }))
+}
+
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/api/v1/releases", get(list))
+        .route(
+            "/api/v1/releases/{sha12}/promotion-preview",
+            get(promotion_preview),
+        )
+        .route("/api/v1/deliveries", get(deliveries))
         .route("/api/v1/releases/{sha12}/promote", post(promote))
 }
 

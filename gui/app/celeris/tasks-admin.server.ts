@@ -16,14 +16,14 @@ import type {
   DecomposeRequest,
   DecomposeResult,
   EditResult,
-  NewTaskSpec,
+  NewTaskBody,
   PhaseGateAction,
   PhaseGateRequest,
   PriorityInput,
   ReopenBody,
   Status,
   TaskCategory,
-  TaskEdit,
+  TaskPatchBody,
   Tier,
   TransitionResult,
 } from "./types";
@@ -37,7 +37,7 @@ import type {
  * 組織と同じく DB が正なので `POST /reload` は呼ばない。
  */
 
-/** `TaskEdit` のうち、`null` を送ると「消す」になる項目（Rust の `Option<Option<T>>`）。 */
+/** `TaskPatchBody` のうち、`null` を送ると「消す」になる項目（Rust の `Option<Option<T>>`）。 */
 const NULLABLE_FIELDS = ["assignee", "role", "adapter", "milestone_id", "harness"] as const;
 
 /** 数値の項目（空欄・非数値は送らない = 変えない）。 */
@@ -59,8 +59,8 @@ const ARRAY_FIELDS = ["labels", "depends_on"] as const;
 const WORDS_FIELDS = ["skills"] as const;
 
 /**
- * 編集フォーム（`/tasks/:id` の「概要」タブ）とボードの行内編集の両方から `TaskEdit` を組み立てる
- * （ADR-0044 D1）。**フォームに現れた項目だけ**を本文に入れる（`TaskEdit` は「省略 = 変えない」）ので、
+ * 編集フォーム（`/tasks/:id` の「概要」タブ）とボードの行内編集の両方から `TaskPatchBody` を組み立てる
+ * （ADR-0044 D1）。**フォームに現れた項目だけ**を本文に入れる（`TaskPatchBody` は「省略 = 変えない」）ので、
  * ボードのように 1 項目だけ送るフォームもそのまま使える。
  *
  * - `assignee` / `role` / `adapter` / `milestone_id` / `harness`（ADR-0046 D3）は空文字を `null`
@@ -70,8 +70,8 @@ const WORDS_FIELDS = ["skills"] as const;
  * - `mode`（ADR-0046 D4）は常に値を持つ選択肢なので、`title` 等と同じ「そのまま送る」項目
  * - `priority` は `"P1"` のラベルのまま送る（celeris が `PriorityInput` として受ける。ADR-0044 D3）
  */
-export function buildTaskEdit(form: FormData): TaskEdit {
-  const edit: TaskEdit = {};
+export function buildTaskEdit(form: FormData): TaskPatchBody {
+  const edit: TaskPatchBody = {};
   for (const name of STRING_FIELDS) {
     if (!form.has(name)) continue;
     const v = formString(form, name);
@@ -113,10 +113,10 @@ export function buildTaskEdit(form: FormData): TaskEdit {
  * 受け入れ条件は 1 行の自由記述を `human` の条件 1 件として送る（celeris は 1 件以上を要求する）。
  * 空欄は本文に入れない（celeris の既定に任せる。`tasks.new.tsx` の `buildNewTaskSpec` と同じ考え方）。
  */
-export function buildProjectTaskSpec(form: FormData, projectId: string): NewTaskSpec {
+export function buildProjectTaskSpec(form: FormData, projectId: string): NewTaskBody {
   const acceptanceText = formString(form, "acceptance");
   const acceptance: CriterionSpec[] = acceptanceText ? [{ type: "human", text: acceptanceText }] : [];
-  const spec: NewTaskSpec = {
+  const spec: NewTaskBody = {
     title: (form.get("title") as string | null) ?? "",
     objective: (form.get("objective") as string | null) ?? "",
     acceptance,
@@ -147,7 +147,7 @@ export function buildProjectTaskSpec(form: FormData, projectId: string): NewTask
 export async function editTask(
   client: CelerisClient,
   taskId: string,
-  edit: TaskEdit,
+  edit: TaskPatchBody,
   signal?: AbortSignal,
 ): Promise<TaskEditOutcome> {
   try {

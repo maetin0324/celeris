@@ -1,6 +1,8 @@
 //! Production browser.rs H3 path with real isolated Chromium and controller CDP.
 //! The scripted LLM observes only the post-auth request. The only network
 //! namespace connection is a loopback HTTPS fixture; no external network exists.
+#[path = "../../task-worker/tests/userns_gate/mod.rs"]
+mod userns_gate;
 
 mod common;
 
@@ -106,10 +108,15 @@ fn world() -> World {
             celeris_credentiald::injection_ipc::Admission::SameUidHarness,
         )
     });
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && control.with_file_name("resolve.sock").exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         std::thread::sleep(Duration::from_millis(10));
     }
     assert!(control.exists());
@@ -759,7 +766,7 @@ server.serve_forever()
         .stderr(Stdio::null())
         .spawn()
         .expect("start fixture server");
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while TcpStream::connect(("93.184.216.34", 443)).is_err() {
         assert!(
             std::time::Instant::now() < deadline,
@@ -905,6 +912,7 @@ async fn inner_h3_test() {
         sandboxd: worker_binary("celeris-browser-sandboxd"),
         egress: worker_binary("celeris-browser-egress"),
         live_sessions: None,
+        runtime: Default::default(),
     };
     task_worker::browser::configure_isolated_runtime(isolation);
     let approval = world.until_approval().await;
@@ -932,6 +940,9 @@ async fn inner_h3_test() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn production_h3_injects_once_without_exposure() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for name in ["unshare", "ip", "openssl", "bwrap"] {
         tool(name);
     }

@@ -333,10 +333,11 @@ async fn get_task_execution(
                 }
                 None => None,
             };
-            let (gate, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
+            let (gate, route, phase, metrics, phase_checkpoint, awaiting_children, plan_approval) =
                 match detail.execution {
                     Some(e) => (
                         e.gate,
+                        e.route,
                         e.phase,
                         e.metrics,
                         e.phase_checkpoint,
@@ -346,7 +347,16 @@ async fn get_task_execution(
                     None => (
                         None,
                         None,
-                        task_core::summarize_execution_metrics(&task, &[]),
+                        None,
+                        // ADR-0130 D4: Execution 節の無い task でも behind の最後の snapshot は出す。
+                        task_core::summarize_execution_metrics(&task, &[]).with_behind_target(
+                            &task_ops::behind_target::behind_target_of(
+                                store,
+                                task_id,
+                                time::OffsetDateTime::now_utc(),
+                            )
+                            .map_err(|e| ops_problem(store, e, Some("task_execution_get")))?,
+                        ),
                         None,
                         Vec::new(),
                         None,
@@ -354,6 +364,7 @@ async fn get_task_execution(
                 };
             Ok(TaskExecutionView {
                 gate,
+                route,
                 phase,
                 plan,
                 runs: detail.runs,

@@ -1,7 +1,7 @@
 ---
 title: task 詳細（/tasks/$id）の観測性 header・木・token 化
 tasks: [01M437RJFEAEF8JET7NHF01HBM]
-status: running
+status: done
 updated: 2026-10-04
 ---
 # task 詳細（/tasks/$id）の観測性 header・木・token 化
@@ -112,3 +112,30 @@ after は `artifacts/shots/task-detail-mobile-{summary,decision,tree}-{360,390,4
 - Drawer に **「区画として常に出す（desktop は inline・mobile は Drawer）」** の variant があると、今の
   「inline は md:contents、mobile は trigger」という二重の置き方を画面ごとに書かずに済む。
 - 判断を待つ task ではスマホの既定区画を「判断」にする案（今は「概要」で、header の link から移る）。人の判断を仰ぎたい。
+
+## 全体検査（WorkUnit detail-verify、2026-10-04）
+
+build 段（header-tree・mobile・integrate-build）の成果に対する最終検査。実装の追加はしていない。
+
+### 検査結果
+
+- `corepack pnpm@12.6.0 -C web typecheck` → exit 0
+- `corepack pnpm@12.6.0 -C web lint` → exit 0（既存 warning 4・info 1 は styles.css の `!important`。今回の差分（web/features/tasks の 10 file）の外）
+- `corepack pnpm@12.6.0 -C web test` → exit 0（vitest 42 files / 270 tests passed、node --test 42 pass）
+- `corepack pnpm@12.6.0 -C web build` → exit 0（dist/index.html 生成）
+- `corepack pnpm@12.6.0 -C web e2e --grep-invert 'S1 /'` → exit 0（176 passed、8 skipped（real-staging-readonly の 3・fixture screenshots の 5）、15.2 分。`e2e/parity/task-detail.spec.ts` の 7 件を含む全 parity・mobile-gate・realtime・shell が通った）
+- `corepack pnpm@12.6.0 -C web mobile-audit` → `mobile-audit: 30 path(s) x 4 widths ok`（360/390/412/1440）
+- 生の色 grep（所有 file 10 件: task-detail-view.tsx, overview-view.tsx, execution-panel.tsx, decision-panel.tsx, integration-repair-panel.tsx, integration-repair.ts, timeline-view.tsx, task-detail-tabs.ts, task-detail-tabs.test.ts, task-detail-query.ts）→ 0 件
+- 任意値 `-[...]` grep（同じ所有 file）→ 0 件
+- 差分範囲: `git diff --name-only 171c8e02 -- . ':!web/features/tasks' ':!web/features/runs' ':!web/features/console' ':!web/features/changes' ':!web/features/files' ':!web/features/artifacts' ':!web/routes/tasks.*' ':!web/routes/graph.tsx' ':!web/routes/artifacts.tsx' ':!web/e2e/parity/tasks.spec.ts' ':!web/e2e/parity/task-detail.spec.ts' ':!web/e2e/parity/runs-files.spec.ts' ':!web/e2e/parity/console.spec.ts' ':!agent-docs/progress/' ':!agent-docs/adr/'` → 出力なし（exit 0）
+- `git diff --quiet 171c8e02 -- crates/ web/components/ web/styles.css web/e2e/support/` → exit 0（変更なし）
+- 実際に変更した file（`git diff --name-only 171c8e02`）は所有範囲の 11 件（進捗ファイル 1 + spec 1 + features/tasks 9）のみ
+- 文書検査: `sh scripts/dev/check-doc-links.sh` → ok、`sh scripts/dev/check-adr-numbers.sh` → ok（137 files）、`sh scripts/dev/progress-index.sh --check` → ok
+
+### 未解決事項
+
+- なし（所有範囲内の失敗は無かった）。build 段の未解決事項（tab ラベルの折返しは mobile で解消済み、`decision-status` の生の語は parity 試験の制約で意図通り）は上の節のとおり。
+
+### 要望（検証から）
+
+- build 段の要望（ShortId/CopyableId・TreeList・text-code 命名衝突・SegmentedControl/Tabs・Drawer の「常に区画」variant・判断待ちの既定区画）に変更なし。重複を避けるためここでは繰り返さない。

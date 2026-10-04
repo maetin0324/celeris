@@ -10,7 +10,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
 
-const input = "box-border min-h-11 w-full max-w-full rounded border border-neutral-400 bg-white p-2";
+const input = "box-border min-h-11 w-full max-w-full rounded-md border bg-surface p-2 text-foreground";
 const docsBase = (id: string) => `/api/projects/${encodeURIComponent(id)}/docs`;
 const docsUrl = (id: string, path?: string, q?: string, edit?: boolean) => {
   const params = new URLSearchParams();

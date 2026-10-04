@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { ProjectDetail, ProjectRepo, WorkspaceSpec } from "../../api/generated/types";
 import { projectKeys } from "../../api/queries/keys";
 import {
@@ -7,13 +7,14 @@ import {
   type ActionTarget,
   useActionResult,
 } from "../../components/actions/use-action-result";
-import { ProjectSection } from "./project-detail-view";
+import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
+import { StatusBadge } from "../../components/ui/status-badge";
+import { MilestoneBadge, ProjectSection } from "./project-detail-view";
+import { inputClass } from "./project-list-screen";
 
 // R10 /projects/:id の操作（P4-03〜P4-05）。どれも celeris の応答をそのまま出し、GUI 側で検証しない。
 // 計画・途中目標の intent は web ADR-W2 の後継 API に写す（410 の入口は呼ばない）。
-
-const inputClass = "min-h-11 w-full min-w-0 rounded border px-2";
-const buttonClass = "min-h-11 rounded border px-3";
 
 const enc = encodeURIComponent;
 
@@ -31,42 +32,46 @@ function Results({ results, ids }: { results: Record<string, ActionResult>; ids:
   );
 }
 
+/** 破壊的操作の確認（ConfirmDialog）。対象・結果・戻し方・確認先を書いてから送る。 */
 function ConfirmButton({
   label,
-  question,
+  title,
+  target,
+  consequence,
+  reversibility,
+  followUp,
+  confirmLabel,
   disabled,
   onConfirm,
 }: {
   label: string;
-  question: string;
+  title: string;
+  target: string;
+  consequence: string;
+  reversibility: string;
+  followUp: string;
+  confirmLabel: string;
   disabled: boolean;
-  onConfirm: () => void;
+  onConfirm: () => Promise<unknown>;
 }) {
-  const ref = useRef<HTMLDialogElement>(null);
   return (
-    <>
-      <button type="button" className={buttonClass} disabled={disabled} onClick={() => ref.current?.showModal()}>
-        {label}
-      </button>
-      <dialog ref={ref} aria-label={label} className="max-w-[90vw] rounded border p-4">
-        <p>{question}</p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={buttonClass}
-            onClick={() => {
-              ref.current?.close();
-              onConfirm();
-            }}
-          >
-            {label}する
-          </button>
-          <button type="button" className={buttonClass} onClick={() => ref.current?.close()}>
-            やめる
-          </button>
-        </div>
-      </dialog>
-    </>
+    <ConfirmDialog
+      trigger={
+        <Button variant="secondary" disabled={disabled}>
+          {label}
+        </Button>
+      }
+      title={title}
+      target={target}
+      consequence={consequence}
+      reversibility={reversibility}
+      followUp={followUp}
+      confirmLabel={confirmLabel}
+      cancelLabel="やめる"
+      onConfirm={async () => {
+        await onConfirm();
+      }}
+    />
   );
 }
 
@@ -90,6 +95,7 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
   const [taskObjective, setTaskObjective] = useState("");
   const act = (target: ActionTarget) => void run([target]);
   const lifecycle = (name: string) => act({ id: `project_${name}`, path: `${base}/${name}`, body: {} });
+  const confirmLifecycle = (name: string) => run([{ id: `project_${name}`, path: `${base}/${name}`, body: {} }]);
   return (
     <ProjectSection title="案件の操作" testId="project-ops">
       <form
@@ -99,20 +105,20 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
           act({ id: "project_edit", method: "PATCH", path: base, body: { title, request } });
         }}
       >
-        <label className="block">
+        <label className="block text-label font-medium">
           案件名
           <input className={inputClass} value={title} onChange={(e) => setTitle(e.target.value)} />
         </label>
-        <label className="block">
+        <label className="block text-label font-medium">
           依頼文
           <textarea className={inputClass} value={request} onChange={(e) => setRequest(e.target.value)} />
         </label>
-        <button type="submit" className={buttonClass} disabled={pending}>
+        <Button type="submit" variant="primary" disabled={pending}>
           名前と依頼を保存
-        </button>
+        </Button>
       </form>
       <div className="flex flex-wrap items-end gap-2">
-        <label>
+        <label className="text-label font-medium">
           状態
           <select className={inputClass} value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="proposed">提案</option>
@@ -120,47 +126,56 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
             <option value="done">完了</option>
           </select>
         </label>
-        <button
-          type="button"
-          className={buttonClass}
+        <Button
+          variant="secondary"
           disabled={pending}
           onClick={() => act({ id: "project_status", method: "PATCH", path: base, body: { status } })}
         >
           状態を変える
-        </button>
+        </Button>
       </div>
       <div className="flex flex-wrap gap-2">
         {project.status === "paused" ? (
-          <button type="button" className={buttonClass} disabled={pending} onClick={() => lifecycle("resume")}>
+          <Button variant="secondary" disabled={pending} onClick={() => lifecycle("resume")}>
             再開
-          </button>
+          </Button>
         ) : (
-          <button type="button" className={buttonClass} disabled={pending} onClick={() => lifecycle("pause")}>
+          <Button variant="secondary" disabled={pending} onClick={() => lifecycle("pause")}>
             一時停止
-          </button>
+          </Button>
         )}
         <ConfirmButton
           label="中止"
-          question="この案件を中止します。動いている仕事も止まります。"
+          title="案件を中止しますか"
+          target={project.title}
+          consequence="案件を中止し、動いている仕事と途中目標も止めます。"
+          reversibility="中止した仕事は戻りません。続けるには新しい仕事を足します。"
+          followUp="この画面の状態と仕事の木"
+          confirmLabel="案件を中止する"
           disabled={pending}
-          onConfirm={() => lifecycle("cancel")}
+          onConfirm={() => confirmLifecycle("cancel")}
         />
         {project.archived_at ? (
-          <button type="button" className={buttonClass} disabled={pending} onClick={() => lifecycle("unarchive")}>
+          <Button variant="secondary" disabled={pending} onClick={() => lifecycle("unarchive")}>
             アーカイブから戻す
-          </button>
+          </Button>
         ) : (
           <ConfirmButton
             label="アーカイブ"
-            question="この案件をアーカイブします。一覧の既定の表示から外れます。"
+            title="案件をアーカイブしますか"
+            target={project.title}
+            consequence="案件の一覧の既定の表示から外します。"
+            reversibility="この画面の「アーカイブから戻す」で戻せます。"
+            followUp="案件の一覧の「アーカイブした案件も出す」"
+            confirmLabel="案件をアーカイブする"
             disabled={pending}
-            onConfirm={() => lifecycle("archive")}
+            onConfirm={() => confirmLifecycle("archive")}
           />
         )}
       </div>
       <fieldset className="space-y-2">
-        <legend>作業場所</legend>
-        <label className="block">
+        <legend className="text-label font-medium">作業場所</legend>
+        <label className="block text-label font-medium">
           種類
           <select className={inputClass} value={wsKind} onChange={(e) => setWsKind(e.target.value)}>
             <option value="local">手元</option>
@@ -168,19 +183,18 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
           </select>
         </label>
         {wsKind === "remote" && (
-          <label className="block">
+          <label className="block text-label font-medium">
             クラスタ
             <input className={inputClass} value={wsCluster} onChange={(e) => setWsCluster(e.target.value)} />
           </label>
         )}
-        <label className="block">
+        <label className="block text-label font-medium">
           作業場所の path
           <input className={inputClass} value={wsPath} onChange={(e) => setWsPath(e.target.value)} />
         </label>
         <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            className={buttonClass}
+          <Button
+            variant="secondary"
             disabled={pending}
             onClick={() =>
               act({
@@ -192,17 +206,16 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
             }
           >
             作業場所を保存
-          </button>
-          <button
-            type="button"
-            className={buttonClass}
+          </Button>
+          <Button
+            variant="secondary"
             disabled={pending}
             onClick={() =>
               act({ id: "project_workspace_clear", method: "PATCH", path: base, body: { workspace: null } })
             }
           >
             作業場所を消す
-          </button>
+          </Button>
         </div>
       </fieldset>
       <form
@@ -216,17 +229,17 @@ export function ProjectOps({ detail }: { detail: ProjectDetail }) {
           });
         }}
       >
-        <label className="block">
+        <label className="block text-label font-medium">
           仕事の題
           <input className={inputClass} value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} />
         </label>
-        <label className="block">
+        <label className="block text-label font-medium">
           仕事の目的
           <textarea className={inputClass} value={taskObjective} onChange={(e) => setTaskObjective(e.target.value)} />
         </label>
-        <button type="submit" className={buttonClass} disabled={pending}>
+        <Button type="submit" variant="primary" disabled={pending}>
           仕事を足す
-        </button>
+        </Button>
       </form>
       <Results
         results={results}
@@ -278,17 +291,17 @@ export function PlanOps({ detail }: { detail: ProjectDetail }) {
           });
         }}
       >
-        <label className="block">
+        <label className="block text-label font-medium">
           計画の目標
           <input className={inputClass} value={goal} onChange={(e) => setGoal(e.target.value)} />
         </label>
-        <label className="block">
+        <label className="block text-label font-medium">
           段階（1 行に 1 つ、任意）
           <textarea className={inputClass} value={stages} onChange={(e) => setStages(e.target.value)} />
         </label>
-        <button type="submit" className={buttonClass} disabled={busy}>
+        <Button type="submit" variant="primary" disabled={busy}>
           計画を立てる
-        </button>
+        </Button>
       </form>
       <form
         className="flex flex-wrap items-end gap-2"
@@ -307,13 +320,13 @@ export function PlanOps({ detail }: { detail: ProjectDetail }) {
           });
         }}
       >
-        <label className="min-w-0 flex-1">
+        <label className="min-w-0 flex-1 text-label font-medium">
           途中目標
           <input className={inputClass} value={milestone} onChange={(e) => setMilestone(e.target.value)} />
         </label>
-        <button type="submit" className={buttonClass} disabled={busy}>
+        <Button type="submit" variant="primary" disabled={busy}>
           途中目標を足す
-        </button>
+        </Button>
       </form>
       <Results results={results} ids={ids} />
       {roots.length > 0 && (
@@ -328,48 +341,73 @@ export function PlanOps({ detail }: { detail: ProjectDetail }) {
               "milestone_cancel",
             ].map((intent) => `${intent}:${task.id}`);
             return (
-              <li key={task.id} className="min-w-0 space-y-1 rounded border p-2" data-root-task={task.id}>
+              <li
+                key={task.id}
+                className="min-w-0 space-y-2 rounded-md border border-border p-3"
+                data-root-task={task.id}
+              >
                 <p className="break-words">
-                  {task.title} <span className="text-sm">{task.status}</span>
+                  {task.title} <StatusBadge status={task.status} />
                 </p>
                 <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    className={buttonClass}
+                  <Button
+                    variant="secondary"
                     disabled={busy}
                     onClick={() => gate(task.id, "plan-gate", "approve", "project_plan_decide")}
                   >
                     計画を承認
-                  </button>
-                  <button
-                    type="button"
-                    className={buttonClass}
+                  </Button>
+                  <Button
+                    variant="secondary"
                     disabled={busy}
                     onClick={() => gate(task.id, "phase-gate", "continue", "milestone_decide")}
                   >
                     段階を通す
-                  </button>
-                  <button
-                    type="button"
-                    className={buttonClass}
+                  </Button>
+                  <ConfirmButton
+                    label="段階を取り下げる"
+                    title="段階を取り下げますか"
+                    target={task.title}
+                    consequence="この途中目標の段階を取り下げ、仕事を止めます。"
+                    reversibility="取り下げは戻りません。もう一度計画を立て直します。"
+                    followUp="この画面の仕事の木と受信箱"
+                    confirmLabel="段階を取り下げる"
                     disabled={busy}
-                    onClick={() => gate(task.id, "phase-gate", "withdraw", "milestone_status")}
-                  >
-                    段階を取り下げる
-                  </button>
-                  {(["pause", "resume", "cancel"] as const).map((k) => (
-                    <button
+                    onConfirm={() =>
+                      run([
+                        {
+                          id: `milestone_status:${task.id}`,
+                          path: `/api/tasks/${enc(task.id)}/execution/phase-gate`,
+                          body: { action: "withdraw" },
+                        },
+                      ])
+                    }
+                  />
+                  {(["pause", "resume"] as const).map((k) => (
+                    <Button
                       key={k}
-                      type="button"
-                      className={buttonClass}
+                      variant="secondary"
                       disabled={busy}
                       onClick={() =>
                         act({ id: `milestone_${k}:${task.id}`, path: `/api/tasks/${enc(task.id)}/${k}`, body: {} })
                       }
                     >
-                      {k === "pause" ? "止める" : k === "resume" ? "再開" : "取り消す"}
-                    </button>
+                      {k === "pause" ? "止める" : "再開"}
+                    </Button>
                   ))}
+                  <ConfirmButton
+                    label="取り消す"
+                    title="途中目標の仕事を取り消しますか"
+                    target={task.title}
+                    consequence="この仕事と子の仕事を取り消します。"
+                    reversibility="取り消しは戻りません。続けるには新しい仕事を足します。"
+                    followUp="この画面の仕事の木"
+                    confirmLabel="仕事を取り消す"
+                    disabled={busy}
+                    onConfirm={() =>
+                      run([{ id: `milestone_cancel:${task.id}`, path: `/api/tasks/${enc(task.id)}/cancel`, body: {} }])
+                    }
+                  />
                 </div>
                 <Results results={results} ids={rowIds} />
               </li>
@@ -383,7 +421,7 @@ export function PlanOps({ detail }: { detail: ProjectDetail }) {
           <ul className="space-y-1">
             {detail.milestones.map((m) => (
               <li key={m.id} className="break-words">
-                {m.seq}. {m.title} <span className="text-sm">{m.status}</span>
+                {m.seq}. {m.title} <MilestoneBadge status={m.status} />
               </li>
             ))}
           </ul>
@@ -399,23 +437,23 @@ function RepoRow({ repo, projectId }: { repo: ProjectRepo; projectId: string }) 
   const [branch, setBranch] = useState(repo.default_branch ?? "");
   const path = `/api/repos/${enc(repo.id)}`;
   return (
-    <li className="min-w-0 space-y-1 rounded border p-2" data-repo={repo.id}>
+    <li className="min-w-0 space-y-2 rounded-md border border-border p-3" data-repo={repo.id}>
       <p className="break-words">
         {repo.name}
-        {repo.is_primary ? "（主）" : ""} <span className="text-sm">{repo.location.path ?? ""}</span>
+        {repo.is_primary ? "（主）" : ""}{" "}
+        <span className="text-label text-muted-foreground">{repo.location.path ?? ""}</span>
       </p>
       <div className="flex flex-wrap items-end gap-2">
-        <label className="min-w-0">
+        <label className="min-w-0 text-label font-medium">
           名前 {repo.id}
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="min-w-0">
+        <label className="min-w-0 text-label font-medium">
           既定ブランチ {repo.id}
           <input className={inputClass} value={branch} onChange={(e) => setBranch(e.target.value)} />
         </label>
-        <button
-          type="button"
-          className={buttonClass}
+        <Button
+          variant="secondary"
           disabled={pending}
           onClick={() =>
             void run([
@@ -429,22 +467,26 @@ function RepoRow({ repo, projectId }: { repo: ProjectRepo; projectId: string }) 
           }
         >
           保存
-        </button>
+        </Button>
         {!repo.is_primary && (
-          <button
-            type="button"
-            className={buttonClass}
+          <Button
+            variant="secondary"
             disabled={pending}
             onClick={() => void run([{ id: "repo_primary", method: "PATCH", path, body: { is_primary: true } }])}
           >
             主にする
-          </button>
+          </Button>
         )}
         <ConfirmButton
           label="削除"
-          question={`リポジトリ ${repo.name} を案件から外します。`}
+          title="リポジトリを案件から外しますか"
+          target={repo.name}
+          consequence="このリポジトリを案件から外します。リポジトリの中身は消しません。"
+          reversibility="「リポジトリを足す」で同じ path を足し直せます。"
+          followUp="この画面のリポジトリの一覧"
+          confirmLabel={`${repo.name} を外す`}
           disabled={pending}
-          onConfirm={() => void run([{ id: "repo_delete", method: "DELETE", path }])}
+          onConfirm={() => run([{ id: "repo_delete", method: "DELETE", path }])}
         />
       </div>
       <Results results={results} ids={["repo_patch", "repo_primary", "repo_delete"]} />
@@ -483,17 +525,17 @@ export function RepoOps({ detail }: { detail: ProjectDetail }) {
           ]);
         }}
       >
-        <label className="min-w-0">
+        <label className="min-w-0 text-label font-medium">
           リポジトリ名
           <input className={inputClass} value={name} onChange={(e) => setName(e.target.value)} />
         </label>
-        <label className="min-w-0">
+        <label className="min-w-0 text-label font-medium">
           リポジトリの path
           <input className={inputClass} value={location} onChange={(e) => setLocation(e.target.value)} />
         </label>
-        <button type="submit" className={buttonClass} disabled={pending}>
+        <Button type="submit" variant="primary" disabled={pending}>
           リポジトリを足す
-        </button>
+        </Button>
       </form>
       <Results results={results} ids={["repo_create"]} />
     </ProjectSection>

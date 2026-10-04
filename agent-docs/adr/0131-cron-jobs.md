@@ -490,3 +490,11 @@ decision（copy / refire / fix-gate）を出し、人が毎回 `copy` と答え�
    満たす features でも atomic）と `task-dispatch::dispatcher::tests::planning_and_gate::
    knowledge_curation_cron_task_skips_the_gate_and_runs_atomic`（偽アダプタで実際に 1 run だけが起き、
    planner run が無く、`Event::ExecutionGated{rule_id: "atomic/knowledge-curation"}` が残ることを確認）。
+
+## 付記（2026-10-04、保護の印を分ける）
+
+D10 の「frontmatter が `source: human` のページの保護」は、ADR-0047 付記（2026-10-04、sources の human を分ける）で
+意味を絞った。validator（`task_ops::knowledge_curation::human_page` → `task_core::knowledge::protected_page`）が守るのは
+`user/` 配下・`human:authored`・`author: human`・移行前の未判別の `human`（単数形 `source: human` を含む）だけで、
+`human:instruction`（人の指示由来）だけのページは通常どおり統合・削除・修正される。計画の本文が『人が書いた』印を
+付け外しするときも `human_decisions` に回す（理由の接頭辞「人が書いた印の付け外し:」）。

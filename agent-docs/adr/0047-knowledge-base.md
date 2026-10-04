@@ -264,3 +264,45 @@ XDG_DATA_HOME）。`[knowledge] root` / `CELERIS_KNOWLEDGE_ROOT` / `--root` で�
   `project:<slug>` の一覧を載せる（呼ぶたびに組む）。`inputSchema` に `path` と `op` を足した。
 - **採らない**: 既存の誤った置き場を daemon が自動で動かすこと（KB は人の物。今回の整理は人の指示で一度だけ行い、
   KB の git に 1 件 1 コミットで残した）。人の直接の編集（`PUT /knowledge/page`・エディタ）へのガード。
+
+## 付記（2026-10-04、sources の human を『人が書いた』と『人の指示由来』に分ける）
+
+背景: D1 の `sources` の `human` には 2 つの意味が混ざっていた。人が書いた・直接編集したページの印と、task の
+knowledge run（`apply_candidates`・`celerisctl knowledge record`・MCP `knowledge_propose`）が「人の指示・発言に
+由来する事実」に付けた印である。日次整理・全体整理の validator（ADR-0131 D10、`task_ops::knowledge_curation`）は
+前者の意味で読み、`human` の付いたページの削除・統合・大幅書き換えを `human_decisions` に回すので、run が書いた
+ページまで保護されて整理が止まっていた（2026-10-04、`_inbox/` の 8 件を手で直した。既存ページにも 19 件）。
+
+### 決定
+
+- **H1 印は 3 つ**（正本は `task_core::knowledge` の `SOURCE_HUMAN_*` と判定関数）:
+  - `human:authored`（`sources` の要素）または front matter の `author: human` — **人が書いた・人が直接編集した**ページ。
+    人の GUI 編集（`PUT /knowledge/page`）か人の直接の git 編集で付く。保護の対象。
+  - `human:instruction`（`sources` の要素。同じ `sources` に `task:<id>` を添える）— **人の指示・発言に由来する事実**。
+    run が書く。**保護しない**（事実の正しさは通常の整理で扱う）。
+  - `human`（単独。旧形）と単数形 `source: human` — **未判別**。H4 の移行で判別できなかったものだけが残る。
+    安全側に倒して保護する（人が書いたかもしれないものを自動で消さない）。新しくは書かない。
+- **H2 run は `human:authored` と `human` を書けない**: 候補を書く経路（`apply_candidates_in`・`record_in`）は
+  `kb::normalize_agent_sources` で出典を正す。`human` と `human:authored` は `human:instruction` に置き換え、
+  `human:instruction` があれば `task:<id>` を添える（task id が分かる経路のみ）。ただし対象の既存ページが既に同じ
+  印を持つとき（整理で出典を保つ `update`/`merge`）はそのまま残す — 印を落とすと保護が外れるため。抽出の依頼文
+  （`maintenance_objective`・`langmem_run.py`・GC の依頼文）も新しい印を指示する。
+- **H3 validator の保護**（`human_page`）は `user/` 配下・`human:authored`・`author: human`・未判別の旧形だけ。
+  `human:instruction` だけのページは通常の整理対象。さらに、計画の `fix`/`merge`/`new` の本文が『人が書いた』印を
+  付け外しする（保護されていないページに印を足す、保護されたページから印を落とす）ときも `human_decisions` に回す
+  （run が保護を作ったり外したりしない）。
+- **H4 移行**: `celerisctl knowledge migrate-human-sources [--apply] [--json]`（既定は dry-run。実体は
+  `task_ops::knowledge::migrate_human_sources`）。KB の git 履歴（`git log -- <path>`）の各 commit を分類する:
+  - 人の編集: author が `Celeris (human)` で、件名が取り込み（`…を取り込む`）・雛形（`知識ベースを作る`・`雛形を追加`）・
+    捨てる（`…を捨てる`）でないもの（`PUT /knowledge/page` の commit）、または author が Celeris 以外（人の直接 git）。
+  - run の書き込み: author が `Celeris (knowledge)`、または `Celeris (human)` の取り込み commit（中身は run の候補）。
+  - 雛形: `init` の commit（中身は人が埋める前提の空欄で、`human` は init が付けたもの。どちらとも言えない）。
+
+  人の編集が 1 つでもあれば `human:authored` に、run の書き込みだけ（雛形も無い）なら `human:instruction` に
+  （`task:<id>` が無ければ commit 件名の task id を添える）、それ以外（雛形がある・履歴が無い・単数形 `source: human`
+  を `human:instruction` にしたい）は**保護のまま残して一覧に出す**。`--apply` は書き換えを 1 commit
+  （author `Celeris (knowledge)`）にまとめ、索引を作り直す。本番 KB には人の承認で 1 回だけ流す（手順は
+  `docs/ops/knowledge-human-sources-migration.md`）。
+- **採らない**: front matter に `author` 欄を構造として足すこと（`FrontMatter` と API schema を変えずに済むよう、
+  判定は生の front matter の行を見る。移行が書くのは `sources` の `human:authored`）。未判別を自動で `instruction`
+  に倒すこと。

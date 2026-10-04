@@ -343,3 +343,70 @@ fn maintenance_objective_includes_every_section() {
     assert!(!minimal.contains("---- 報告"), "{minimal}");
     assert!(!minimal.contains("---- コメント"), "{minimal}");
 }
+
+/// ADR-0047 付記（2026-10-04）H1〜H3: 人の印の判定・run の出典の正し方・`sources` 行だけの書き換え。
+#[test]
+fn human_marks_protect_only_authored_and_legacy_and_user_pages() {
+    let authored = "---\ntitle: a\nsources: [\"human:authored\", \"url:x\"]\n---\n\nbody\n";
+    let author_key = "---\ntitle: a\nauthor: human\n---\n\nbody\n";
+    let legacy = "---\ntitle: a\nsources:\n  - human\n---\n\nbody\n";
+    let singular = "---\ntitle: a\nsource: human\n---\n\nbody\n";
+    let instruction =
+        "---\ntitle: a\nsources: [\"human:instruction\", \"task:01J1\"]\n---\n\nbody\n";
+    assert!(protected_page("projects/x/a.md", authored));
+    assert!(protected_page("projects/x/a.md", author_key));
+    assert!(protected_page("projects/x/a.md", legacy));
+    assert!(protected_page("projects/x/a.md", singular));
+    assert!(!protected_page("projects/x/a.md", instruction));
+    assert!(protected_page("user/a.md", instruction));
+    // 本文に書かれた `author: human` は印ではない。
+    assert!(!protected_page(
+        "projects/x/a.md",
+        "---\ntitle: a\n---\n\nauthor: human\n"
+    ));
+}
+
+#[test]
+fn normalize_agent_sources_turns_human_marks_into_instruction() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        normalize_agent_sources(
+            &s(&["human", "human:authored", " url:x "]),
+            &[],
+            Some("01J1")
+        ),
+        s(&["human:instruction", "url:x", "task:01J1"])
+    );
+    // 既存ページが同じ印を持つなら保つ（出典を保つ update で保護を落とさない）。
+    assert_eq!(
+        normalize_agent_sources(
+            &s(&["human:authored", "task:01J1"]),
+            &s(&["human:authored"]),
+            Some("01J2")
+        ),
+        s(&["human:authored", "task:01J1"])
+    );
+    // 人の印が無ければ task を足さない。
+    assert_eq!(
+        normalize_agent_sources(&s(&["url:x"]), &[], Some("01J1")),
+        s(&["url:x"])
+    );
+}
+
+#[test]
+fn replace_sources_rewrites_only_the_sources_lines() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let block =
+        "---\ntitle: a\nsources:\n  - human\n  - \"url:x\"\ntags: [t]\nextra: keep\n---\n\nbody\n";
+    let out = replace_sources(block, &s(&["human:instruction", "url:x"])).expect("rewrite");
+    assert_eq!(
+        out,
+        "---\ntitle: a\nsources: [\"human:instruction\", \"url:x\"]\ntags: [t]\nextra: keep\n---\n\nbody\n"
+    );
+    let none = "---\ntitle: a\n---\n\nbody\n";
+    assert_eq!(
+        replace_sources(none, &s(&["human:authored"])).expect("add"),
+        "---\ntitle: a\nsources: [\"human:authored\"]\n---\n\nbody\n"
+    );
+    assert_eq!(replace_sources("body only\n", &s(&["x"])), None);
+}

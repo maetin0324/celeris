@@ -206,7 +206,7 @@ fn seed_files() -> Vec<(String, String)> {
                 tags: tags.iter().map(|t| (*t).to_string()).collect(),
                 // Phase K-1: `projects/README.md` は置き場の説明なので scope を持たない（空で渡す）。
                 scope: Some(scope.to_string()).filter(|s| !s.is_empty()),
-                sources: vec!["human".to_string()],
+                sources: vec![kb::SOURCE_HUMAN_AUTHORED.to_string()],
                 created: Some(today.clone()),
                 updated: Some(today.clone()),
                 confidence: Some(Confidence::Medium),
@@ -299,7 +299,7 @@ fn cluster_page(today: &str, id: &str) -> String {
             title: Some(format!("{id} の使い方")),
             tags: vec!["environment".into(), "cluster".into(), id.to_string()],
             scope: Some("environment".into()),
-            sources: vec!["human".into()],
+            sources: vec![kb::SOURCE_HUMAN_AUTHORED.into()],
             created: Some(today.to_string()),
             updated: Some(today.to_string()),
             confidence: Some(Confidence::Low),
@@ -340,7 +340,7 @@ fn readme() -> String {
          title: pegasus の使い方\n\
          tags: [hpc, cluster, pegasus]\n\
          scope: environment\n\
-         sources: [human, \"task:01J…\"]\n\
+         sources: [\"human:authored\", \"task:01J…\"]\n\
          created: 2026-09-20\n\
          updated: 2026-09-20\n\
          confidence: high\n\
@@ -350,7 +350,9 @@ fn readme() -> String {
          `<slug>` は案件の slug（`GET /projects` の `slug`）。**案件 ID を置き場に使わない**。\n\
          `environment/` と `projects/` の直下には README 以外を置かない。同じ scope に同じ題名の\n\
          ページがあれば、新しいページは作らずそのページへの追記・統合の候補になる（Phase K-1）。\n\
-         `sources` は `task:<id>` / `message:<id>` / `human` / `url:<…>`。\n\n\
+         `sources` は `task:<id>` / `message:<id>` / `human:authored` / `human:instruction` / `url:<…>`。\n\
+         `human:authored`（または `author: human`）は人が書いたページの印で、日次整理は自動で消さない。\n\
+         `human:instruction` は人の指示・発言に由来する事実の印で、通常の整理の対象（ADR-0047 付記 2026-10-04）。\n\n\
          ## 道具\n\n\
          ```\n\
          celerisctl knowledge search <語> [--scope …] [--limit N] [--json]\n\
@@ -770,7 +772,9 @@ pub enum RecordError {
     NoTitle,
     #[error("scope must not be blank (user | environment | project:<slug> | experience)")]
     NoScope,
-    #[error("at least one --source is required (task:<id> / message:<id> / human / url:<…>)")]
+    #[error(
+        "at least one --source is required (task:<id> / message:<id> / human:instruction / url:<…>)"
+    )]
     NoSources,
     #[error("body must not be blank")]
     NoBody,
@@ -897,6 +901,11 @@ pub fn record_in(
         layout,
     )?;
     let target = placement.path.clone();
+    // ADR-0047 付記 H2: `record` は run（celerisctl・MCP）が書く。人が書いた印は作れない。
+    let existing_sources = read_page(root, &target)
+        .map(|raw| kb::front_matter(&raw).0.sources)
+        .unwrap_or_default();
+    let sources = kb::normalize_agent_sources(&sources, &existing_sources, None);
     let op = root.join(&target).exists().then(|| {
         if request.op == Some(kb::CandidateOp::Merge) {
             kb::CandidateOp::Merge
@@ -1494,6 +1503,12 @@ pub fn apply_candidates_in(
         };
         let mut placed = candidate.clone();
         placed.path = placement.path.clone();
+        // ADR-0047 付記 H2: run の候補は人が書いた印を作れない（`human:instruction` に正し、task を添える）。
+        let existing_sources = read_page(root, &placement.path)
+            .map(|raw| kb::front_matter(&raw).0.sources)
+            .unwrap_or_default();
+        placed.sources =
+            kb::normalize_agent_sources(&candidate.sources, &existing_sources, Some(task_id));
         placed.scope = placement.scope.clone().unwrap_or_default();
         if candidate.op == kb::CandidateOp::Create
             && (placement.redirect.is_some() || root.join(&placement.path).exists())
@@ -1645,6 +1660,10 @@ fn write_inbox_candidate(
     )
     .map(|_| path)
 }
+
+// ADR-0047 付記（2026-10-04）H4: 旧形の `sources: human` の移行。
+mod human_sources;
+pub use human_sources::*;
 
 // Skill の永続化はページ・候補管理と独立して変更できる。
 mod skills;

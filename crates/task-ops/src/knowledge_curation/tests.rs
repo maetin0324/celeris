@@ -383,3 +383,115 @@ fn known_task_ids_from_inbox_json_collects_candidates_and_attention() {
             .contains("inbox.json を読めない")
     );
 }
+
+/// ADR-0047 付記（2026-10-04）H3: 保護は『人が書いた』印（`human:authored`・`author: human`）・未判別の旧形
+/// `human`・`user/` 配下だけ。`human:instruction`（人の指示由来）だけのページは通常どおり整理される。
+#[test]
+fn only_authored_marks_and_user_pages_are_protected() {
+    let (_dir, root) = fixture();
+    let pages = [
+        (
+            "projects/demo/a.md",
+            "---\nsources: [\"human:authored\"]\n---\n# A\nold\n",
+        ),
+        ("projects/demo/b.md", "---\nauthor: human\n---\n# B\nold\n"),
+        (
+            "projects/demo/c.md",
+            "---\nsources: [\"task:01M3RM9HP2P6MABRNSB1N1CEHJ\", human]\n---\n# C\nold\n",
+        ),
+        (
+            "projects/demo/d.md",
+            "---\nsources: [\"task:01M3RM9HP2P6MABRNSB1N1CEHJ\", \"human:instruction\"]\n---\n# D\nold\n",
+        ),
+    ];
+    for (path, raw) in pages {
+        std::fs::write(root.join(path), raw).unwrap();
+    }
+    let plan = plan(vec![
+        item(&root, "projects/demo/a.md", Action::Delete, None, None),
+        item(&root, "projects/demo/b.md", Action::Delete, None, None),
+        item(&root, "projects/demo/c.md", Action::Delete, None, None),
+        item(&root, "projects/demo/d.md", Action::Delete, None, None),
+        item(&root, "user/profile.md", Action::Delete, None, None),
+    ]);
+    let validated = validate(&root, &plan).unwrap();
+    let protected: Vec<&str> = validated
+        .human_decisions
+        .iter()
+        .map(|d| d.subject.as_str())
+        .collect();
+    assert_eq!(
+        protected,
+        vec![
+            "projects/demo/a.md",
+            "projects/demo/b.md",
+            "projects/demo/c.md",
+            "user/profile.md"
+        ]
+    );
+    assert_eq!(validated.kb.len(), 1);
+    assert_eq!(validated.kb[0].path, "projects/demo/d.md");
+    let outcome = apply(&root, &plan, "2026-10-04").unwrap();
+    assert_eq!(outcome.deleted, 1);
+    assert_eq!(outcome.skipped_human, 4);
+    assert!(!root.join("projects/demo/d.md").exists());
+    for kept in [
+        "projects/demo/a.md",
+        "projects/demo/b.md",
+        "projects/demo/c.md",
+        "user/profile.md",
+    ] {
+        assert!(root.join(kept).exists(), "{kept}");
+    }
+}
+
+/// ADR-0047 付記 H3: 整理の計画は『人が書いた』印を付け外しできない（新しいページに印を付ける・
+/// 保護されたページから印を落とす小さな fix は `human_decisions` へ）。`human:instruction` の付け外しは通る。
+#[test]
+fn curation_cannot_add_or_drop_the_authored_mark() {
+    let (_dir, root) = fixture();
+    std::fs::write(
+        root.join("projects/demo/a.md"),
+        "---\nsources: [\"human:authored\"]\n---\n# A\nold\nline2\nline3\n",
+    )
+    .unwrap();
+    let plan = plan(vec![
+        item(
+            &root,
+            "projects/demo/new.md",
+            Action::New,
+            None,
+            Some("---\nsources: [\"human:authored\"]\n---\n# N\n"),
+        ),
+        item(
+            &root,
+            "projects/demo/a.md",
+            Action::Fix,
+            None,
+            Some("---\nsources: [\"task:01J1\"]\n---\n# A\nold\nline2\nline3\n"),
+        ),
+        item(
+            &root,
+            "projects/demo/b.md",
+            Action::Fix,
+            None,
+            Some("---\nsources: [\"human:instruction\", \"task:01J1\"]\n---\n# B\nold\n"),
+        ),
+    ]);
+    let validated = validate(&root, &plan).unwrap();
+    let subjects: Vec<&str> = validated
+        .human_decisions
+        .iter()
+        .map(|d| d.subject.as_str())
+        .collect();
+    assert_eq!(subjects, vec!["projects/demo/new.md", "projects/demo/a.md"]);
+    assert!(
+        validated
+            .human_decisions
+            .iter()
+            .any(|d| d.reason.starts_with("人が書いた印の付け外し")),
+        "{validated:?}"
+    );
+    assert_eq!(validated.kb.len(), 1);
+    assert_eq!(validated.kb[0].path, "projects/demo/b.md");
+}

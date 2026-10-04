@@ -63,3 +63,33 @@ WU の artifacts（リポジトリ外）: `/local/celeris/data/workspaces/01M43X
 - スマホは表を縦に積むだけにせず、対象名 → 状態 → 補助情報の行に組み替えた。
 - 状態は色と文字の両方（「登録済み」「配送 N 課」「配送なし」「失敗」）。読み込み・失敗は既存の FetchFrame。
 - 残る点: 確定前に何が入るかは dialog の文で示すだけで、本文の差分（既存ページとの比較）は出していない（API に既存ページ本文との差分が無い）。
+
+## help・login（WU help-login, 2026-10-04 完了）
+
+### 変更点
+
+- `web/features/help/help-screen.tsx`: 本文を `max-w-prose-ja`（token `--container-prose-ja`）に収め、6 節を `Section` primitive（h2）＋区切り線にした。「画面ごとの説明」「状態」「失敗したタスクの直し方」に h3 を置き h1→h2→h3 の順にした。状態は `DataList`。h1・節の id・目次の `aria-label`・URL アンカーは不変。
+- `web/routes/login.tsx`: `Button`（primary）で送信、送信中は disabled＋「ログイン中…」＋form の `aria-busy`。失敗理由（401・その他 status・接続不可）を `role=alert` で示し、password 欄に `aria-invalid`・`aria-describedby` を付けて focus を戻し選択する。`type="password"`・`autocomplete="current-password"`（利用者名欄は無い）。生の色 3 件（`border-neutral-400`・`text-red-700`・`bg-neutral-900`）を token（`border-input`・`bg-danger text-danger-foreground`・Button）に置換。入力欄の枠は `--color-input` のまま。
+- `web/e2e/admin/login.spec.ts`（新規）: label で欄を引ける・password 型・送信中表示（`page.route` で応答を出来事として止める）・失敗時の alert と focus・接続不可時の理由と focus。
+- `web/e2e/parity/help.spec.ts`: 見出し段が飛ばない・h3 がある・1440px で本文節幅 ≤720px の検査を追加。
+
+### 検査結果
+
+- `corepack pnpm@12.6.0 -C web typecheck && … lint && … test` → exit 0（lint は既存 warning 4 件のみ、server node --test 42 pass）。
+- `corepack pnpm@12.6.0 -C web check:boundaries` → exit 0。
+- build 後 `e2e e2e/parity/knowledge.spec.ts e2e/parity/help.spec.ts e2e/parity/gateway-auth.spec.ts e2e/admin/login.spec.ts` → 12 passed / 1 skipped（knowledge の screenshot 試験）、help の追加試験も pass。
+- 生の色・任意値 grep（help・help.tsx・login.tsx）→ 0 件。
+
+### screenshot
+
+- WU artifacts の `after-help-login/`（`_help-*.png`・`_login-*.png` を 360/390/412/1440。リポジトリ外）。
+
+### 要望（fixture）
+
+- screenshots.mjs の `/login` は初期状態だけで、失敗 alert・送信中の状態を撮れない（操作が要る）。`/login?error=1` の fixture を screens.ts に足してほしい（gateway が no-JS 失敗時に付ける `error` を再現）。
+
+### ui-ux-quality-gate 自己レビュー（Light gate）
+
+- help は docs 面: 目次→節→小見出しで拾い読みでき、行長は日本語 40em。枠の入れ子を避け区切り線で分けた。
+- login は単一 task: 失敗は理由と次の手（再入力・時間をおく・gateway 起動確認）を示し、focus を直す欄へ戻す。値（token・password）は画面に出さない。
+- 360px でもボタンはキーボード表示中に見える（gateway-auth parity-x pass）。

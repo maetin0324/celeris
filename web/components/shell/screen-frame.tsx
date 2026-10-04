@@ -18,12 +18,13 @@ export type ScreenFrameProps = {
 };
 
 // 画面の見出しと枠（P2-02）。h1 は tabIndex=-1 で、遷移後の focus 先になる（S4）。
+// focus 枠は focus-visible のときだけ出す。pointer で遷移した後の script focus には枠を出さず、keyboard の遷移では出す。
 // page header は パンくず → 見出し・説明 → 主操作 の順で、DOM 順と見た目の順を揃える（DESIGN.md「原則」）。
 export function ScreenFrame({ title, route, children, breadcrumb, description, actions }: ScreenFrameProps) {
   const heading = (
     <h1
       tabIndex={-1}
-      className="break-words text-title font-semibold text-foreground focus:outline-none md:text-title-wide"
+      className="break-words text-title font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring md:text-title-wide"
     >
       {title}
     </h1>

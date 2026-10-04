@@ -44,3 +44,16 @@ export function parentPath(path: string | undefined): string | undefined {
   parts.pop();
   return parts.length ? parts.join("/") : undefined;
 }
+
+/** byte 数を読める単位にする。原数は title 属性で示す。 */
+export function formatBytes(size: number): string {
+  if (size < 1024) return `${size} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = size / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}

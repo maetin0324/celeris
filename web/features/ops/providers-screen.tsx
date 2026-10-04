@@ -8,6 +8,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatAbsolute } from "../../lib/time";
@@ -305,24 +306,27 @@ function ProviderCard({
           >
             接続を確認
           </Button>
-          <Button
-            variant="destructive"
-            disabled={disabled}
-            aria-describedby={deniedId}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `実行枠 ${item.id} を削除しますか。この枠に割り当てる run は止まり、設定は元に戻せません（同じ id で追加し直す必要があります）。`,
-                )
-              )
-                void sender.run([
-                  { id: `delete:${item.id}`, path: base, method: "DELETE" },
-                  { id: "reload", path: "/api/reload", body: {} },
-                ]);
+          <ConfirmDialog
+            trigger={
+              <Button variant="destructive" disabled={disabled} aria-describedby={deniedId}>
+                削除
+              </Button>
+            }
+            title="実行枠を削除しますか"
+            target={item.id}
+            consequence="この枠に割り当てる run は止まり、設定の再読み込み後は新しい run に使われません。"
+            reversibility="設定は元に戻せません。同じ ID で追加し直す必要があります。"
+            followUp="実行枠の一覧と再読み込み結果で確認できます。"
+            confirmLabel={`${item.id} を削除`}
+            onConfirm={async () => {
+              const results = await sender.run([
+                { id: `delete:${item.id}`, path: base, method: "DELETE" },
+                { id: "reload", path: "/api/reload", body: {} },
+              ]);
+              const failed = results.find((result) => !result.ok);
+              if (failed) throw new Error(failed.message);
             }}
-          >
-            削除
-          </Button>
+          />
         </div>
       </form>
       {sender.results[`patch:${item.id}`]?.ok && <ActionResultView result={sender.results[`patch:${item.id}`]} />}

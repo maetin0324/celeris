@@ -1,7 +1,8 @@
 ---
 title: 管理画面群（org・knowledge・accounts・providers・clusters・daemon・releases・help・login）の統合検証
 tasks: [01M440S16A0E49172DK6ST4QPK]
-status: running
+status: done
+completed: 2026-10-04
 updated: 2026-10-04
 ---
 
@@ -30,7 +31,7 @@ admin-gates 葉（2026-10-04）。すべて `corepack pnpm@12.6.0 -C web <script
 （`web/features/{ops,org,knowledge,help}`、`web/routes/{accounts,clusters,daemon,providers,releases,help,login}.tsx`、
 `web/routes/org.*.tsx`、`web/routes/knowledge.*.tsx`）に当てた: 一致 0 件（grep exit 1）。
 
-差分範囲: `git diff --name-only ac78fad613ad HEAD` は許可範囲（管理画面の features・routes・parity spec・`web/e2e/admin/`・`agent-docs/`）の外に 0 件。`crates/` は無差分。
+差分範囲: admin-gates 当時は `git diff --name-only ac78fad613ad HEAD` が許可範囲の外に 0 件だった。後続の `merge main`（06a389b4）で `crates/` を含む main の差分が親 branch に入ったため、この旧基点による最終チェックは 0 件にならない。admin-record の作業基点 `06a389b4` からの差分に `crates/` は無い。
 
 ### 直したもの
 
@@ -41,6 +42,53 @@ admin-gates 葉（2026-10-04）。すべて `corepack pnpm@12.6.0 -C web <script
 
 - `web/styles.css` 174〜177 行の `!important` 4 件が biome の warning として残る（exit 0 なので gate は通る）。styles は範囲外のため直していない。
 
-## 未解決
+## admin-record: 横断の一貫性
 
-- screenshot after-admin・横断の一貫性検査・feature-parity の更新は後続の admin-record 葉が行う。
+管理画面は Celeris の運用者が設定と稼働状態を確認し、必要な変更を安全に確定する workbench として見た。入口は管理 nav、最初の判断は対象と現在状態の確認、成功は変更結果を対象の一覧や状態欄で読めること。スマホでは状態と操作を先に読み、詳しい診断は後に続く構造を基準にした。
+
+| 観点 | 所見 |
+| --- | --- |
+| 表の列順 | 対象を先頭、状態を近く、最終確認・問題を後ろに置く構造で揃っている。リリースは危険操作を対象の隣に置く。幅 360 では表の一部を局所スクロールし、同じ対象の操作 card を下に出す。 |
+| 状態表示 | `StatusBadge` は昇格の実行中・完了・失敗に使い、account・provider・cluster・skill の固有状態は意味色と日本語ラベルの `Badge` に写している。色だけに依存しない。 |
+| 破壊的操作 | 組織・アカウント・実行枠・secret の削除を共通 `ConfirmDialog` に統一した（50d5f354）。対象、影響、戻し方、結果の確認先を出し、初期 focus は「戻る」。失敗は dialog に残す。skill の削除・外す操作、release の昇格も同じ確認を通る。 |
+| form | 可視 label、項目別 error、送信中の無効化、保存ボタンを確認した。org の編集・作成は空の必須欄で保存を無効にし、API の失敗を操作の近くに出す。 |
+| モバイル | 360/390/412 の screenshot と `mobile-audit` で横溢れと target を確認。login・help は主要操作と見出しが先に見える。 |
+
+`agent-docs/web/feature-parity.md` の管理画面 R04・R06・R07・R14〜R16・R29〜R31・R33・R34・R36 の状態欄を 50d5f354 に更新した。route 行は 42 のまま。
+
+### screenshot
+
+- before: `/local/celeris/data/workspaces/01M440S16A0E49172DK6ST4QPK/wu/admin-record/artifacts/before-admin`
+- after: `/local/celeris/data/workspaces/01M440S16A0E49172DK6ST4QPK/wu/admin-record/artifacts/after-admin`
+- `corepack pnpm@12.6.0 -C web build` の後に撮影。台本は 32 画面 × 360/390/412/1440。fixture 名の重複があるため保存ファイルは各 124 枚。対象の org・knowledge・accounts・providers・clusters・daemon・releases・help・login は各 4 幅で存在する。
+
+### 未解決・要望（範囲外）
+
+- 既定 screenshot fixture の `/org` は 4 幅とも取得失敗と再試行を写す。org の正常な木・詳細・削除・skill 操作は `web/e2e/admin/org.spec.ts` の専用 fixture で検証した。`web/e2e/support/screens.ts` と fixture gateway はこの葉の許可範囲外。台帳の既定 fixture に組織データと effective profile を加えてほしい。
+- `/daemon` の既定 fixture は dispatcher の状態と版が無い。実際の稼働・停止・更新時刻の表示を比較できる fixture を加えてほしい。`/clusters` と `/providers` の表は狭幅で局所スクロールするため、列が多いデータの視覚比較には複数行の fixture が要る。
+- `web/styles.css` の既存 `!important` 4 件は lint warning のまま。変更範囲外であり、exit 0 を妨げない。
+- 最終受け入れ条件の旧基点 `ac78fad613ad` による範囲 check は、先行 `merge main` が取り込んだ `crates/` などを数えるため失敗する。この葉は `crates/` に触れていない。WU 基点 `06a389b4` からの範囲 check でこの葉の責任範囲を確認する。
+
+### 提案
+
+- provider 冒頭の実装語を含む長い説明を短い判断文へ詰め、adapter / harness・tier の詳細は各実行枠の設定欄へ置く。小幅では説明が操作より上に長く続く。
+- screenshot 台本に画面の取得完了待ちを加え、既定 fixture での成功・失敗を明示して保存する。画像枚数だけでは正常な操作状態を証明できない。
+
+### 最終検査
+
+admin-record の変更後に再実行した。すべて `corepack pnpm@12.6.0 -C web <script>` を使用し、`build` の後に走らせた。
+
+| 検査 | 結果 |
+| --- | --- |
+| `build` | exit 0（bundle 500 kB 超の警告） |
+| `typecheck` | exit 0 |
+| `lint` | exit 0（既存 `styles.css` の warning 4 件） |
+| `test` | exit 0（vitest 49 files / 315 tests、node:test 42 pass） |
+| `check:parity`・`check:boundaries`・`check:secrets` | 各 exit 0 |
+| `mobile-audit` | exit 0（31 path × 4 幅） |
+| `e2e --retries=0`（full） | exit 0（118 passed / 8 skipped / 0 failed、2.3 分） |
+| `check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check` | 各 exit 0 |
+| 管理画面全体の生の色・任意値 grep | 0 件 |
+| feature-parity route 行 | 42 行（変更なし） |
+
+full e2e の初回は配布物試験 1 件だけ失敗した。作業中に `.pnpm-store/v11` を消したことが原因で、store を復元して full e2e を通し直した。再実行では配布物の offline install を含め全件が通った。

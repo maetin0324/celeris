@@ -156,24 +156,25 @@ function SecretItem({
         >
           {replacing ? "置き換えをやめる" : "置き換え"}
         </Button>
-        <Button
-          variant="destructive"
-          disabled={disabled}
-          aria-describedby={deniedId}
-          onClick={() => {
-            // parity e2e（ops.spec.ts）が native の確認で進めるため window.confirm のまま、影響と戻し方を書く。
-            if (
-              window.confirm(
-                `secret ${item.id} を削除しますか。影響する設定: ${secretUsageText(item)}。次の run からこの値は使えません。値は元に戻せず、もう一度入力し直す必要があります。`,
-              )
-            )
-              void run([
-                { id: `del:${item.id}`, path: `/api/secrets/${encodeURIComponent(item.id)}`, method: "DELETE" },
-              ]);
+        <ConfirmDialog
+          trigger={
+            <Button variant="destructive" disabled={disabled} aria-describedby={deniedId}>
+              secret を削除
+            </Button>
+          }
+          title="secret を削除しますか"
+          target={`secret ${item.id}`}
+          consequence={`影響する設定: ${secretUsageText(item)}。次の run からこの値は使えません。`}
+          reversibility="値は元に戻せません。必要ならもう一度入力してください。"
+          followUp="secret の一覧で保存の有無を確認できます。"
+          confirmLabel={`${item.id} を削除`}
+          onConfirm={async () => {
+            const [result] = await run([
+              { id: `del:${item.id}`, path: `/api/secrets/${encodeURIComponent(item.id)}`, method: "DELETE" },
+            ]);
+            if (result && !result.ok) throw new Error(result.message);
           }}
-        >
-          secret を削除
-        </Button>
+        />
       </div>
       {replacing && <ReplaceForm item={item} run={run} disabled={disabled} deniedId={deniedId} />}
       {put?.ok && <ActionResultView result={put} />}

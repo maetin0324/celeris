@@ -134,15 +134,12 @@ test.describe("ops-config", () => {
       .toBe(before + 1);
     expect(await page.content()).not.toContain(SECRET_VALUE);
     // 削除: 確認文に影響と戻せないことを書く。
-    let message = "";
-    page.once("dialog", (d) => {
-      message = d.message();
-      void d.accept();
-    });
     await item.getByRole("button", { name: "secret を削除" }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: "secret を削除しますか" });
+    await expect(deleteDialog).toContainText("影響する設定");
+    await expect(deleteDialog).toContainText("元に戻せません");
+    await deleteDialog.getByRole("button", { name: "CFG_KEY を削除" }).click();
     await expect(page.getByRole("listitem", { name: "secret CFG_KEY" })).toHaveCount(0);
-    expect(message).toContain("影響する設定");
-    expect(message).toContain("元に戻せず");
   });
 
   test("secret: 403 で保存・置き換え・削除を止め、理由を出す", async ({ page }) => {

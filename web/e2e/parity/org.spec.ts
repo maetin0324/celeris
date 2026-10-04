@@ -110,8 +110,10 @@ test("parity: /org 木・選択・作成・変更・削除・skill", async ({ pa
     .toBeGreaterThan(beforeSkillChange.skills);
   expect(daemon.requests.filter((request) => request.path === "/api/v1/tasks").length).toBe(beforeSkillChange.tasks);
   await page.getByRole("button", { name: "部 · 運用部" }).click();
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("region", { name: "担当の編集" }).getByRole("button", { name: "削除" }).click();
+  const deleteDialog = page.getByRole("alertdialog", { name: "担当を削除しますか" });
+  await expect(deleteDialog).toContainText("対象: 運用部");
+  await deleteDialog.getByRole("button", { name: "運用部 を削除" }).click();
   await expect
     .poll(() => actions.some((item) => item.method === "DELETE" && item.url.endsWith("/api/org/ops")))
     .toBe(true);

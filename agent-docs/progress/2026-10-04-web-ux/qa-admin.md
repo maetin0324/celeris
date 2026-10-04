@@ -81,5 +81,5 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 
 確認（2026-10-04、この WU branch）:
 - offline install は依存 tarball のローカル store 不足で停止したため、同じ lockfile の既存依存から実行ファイルを参照した。`tsc -b`・`biome check .`・`vitest run`・`vite build` は exit 0（347 tests、lint warning 5 件は既存箇所）。
-- `WEB_E2E_SCOPE=functional playwright test e2e/admin/ops-runtime.spec.ts e2e/parity/ops.spec.ts` は 19 passed。`mobile-audit --only` は `/clusters`・`/daemon`・`/releases` の各 4 幅で exit 0。
+- `corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-runtime.spec.ts && corepack pnpm@12.6.0 -C web e2e e2e/parity/ops.spec.ts` は exit 0（11 + 8 passed）。前回の check 失敗は worktree の `node_modules` にある `@playwright/test/index.mjs` が `index.d.ts` を指す壊れたリンクに起因し、同じ lockfile の依存を worktree 内へ復元して解消した。`mobile-audit --only` は `/clusters`・`/daemon`・`/releases` の各 4 幅で exit 0。
 - この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は後続の post-record 葉で行う。

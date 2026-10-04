@@ -119,22 +119,24 @@ function BoardRow({ task, filterKey }: { task: TaskSummary; filterKey: ReturnTyp
           >
             {task.title}
           </Link>
+          <StatusBadge status={task.status} className="mt-1 sm:hidden" />
           <p className="break-words text-muted-foreground md:hidden">
             {task.priority_label} · {task.tier} · 担当 {task.assignee || "なし"}
           </p>
         </TableCell>
-        <TableCell>
-          <StatusBadge status={task.status} />
+        <TableCell className="hidden whitespace-nowrap sm:table-cell">
+          <StatusBadge status={task.status} className="whitespace-nowrap" />
         </TableCell>
-        <TableCell className={cn(wideCell, "tabular-nums")}>{task.priority_label}</TableCell>
-        <TableCell className={wideCell}>{task.tier}</TableCell>
+        <TableCell className={cn(wideCell, "whitespace-nowrap tabular-nums")}>{task.priority_label}</TableCell>
+        <TableCell className={cn(wideCell, "whitespace-nowrap")}>{task.tier}</TableCell>
         <TableCell className={cn(wideCell, "break-words")}>{task.assignee || "なし"}</TableCell>
         <TableCell className={cn(wideCell, "break-words")}>{task.category}</TableCell>
-        <TableCell className="text-right">
+        <TableCell className="whitespace-nowrap text-right">
           {editable && (
             <Button
               type="button"
               variant="secondary"
+              className="whitespace-nowrap"
               aria-expanded={open}
               aria-controls={open ? formId : undefined}
               aria-label={`${task.title} を編集`}
@@ -285,7 +287,7 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
               <input
                 name="show_support"
                 type="checkbox"
-                className="size-5 accent-primary"
+                className="size-11 accent-primary"
                 defaultChecked={filter.show_support}
               />
               裏方も表示
@@ -311,8 +313,8 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
                   >
                     <TableHeader>
                       <TableRow className="hover:bg-transparent">
-                        <TableHead className="w-full">タスク</TableHead>
-                        <TableHead>状態</TableHead>
+                        <TableHead>タスク</TableHead>
+                        <TableHead className="hidden sm:table-cell">状態</TableHead>
                         <TableHead className={wideCell}>優先度</TableHead>
                         <TableHead className={wideCell}>レベル</TableHead>
                         <TableHead className={wideCell}>担当</TableHead>

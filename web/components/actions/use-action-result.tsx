@@ -67,7 +67,11 @@ export function useActionResult(key: QueryKey) {
 export function ActionResultView({ result, fieldId }: { result?: ActionResult; fieldId?: string }) {
   if (!result) return null;
   return (
-    <p id={fieldId} role={result.ok ? "status" : "alert"} className={result.ok ? "text-green-800" : "text-red-800"}>
+    <p
+      id={fieldId}
+      role={result.ok ? "status" : "alert"}
+      className={result.ok ? "text-success-foreground" : "text-danger-foreground"}
+    >
       {result.message}
     </p>
   );

@@ -211,13 +211,16 @@ routing・計画・review を通る）。履歴は `cron history` / GUI `/cron/d
 
 1. worker が計画と差分を作る（dry-run と同じ。本番 KB と `inputs/` は書かない）。
 2. daemon が task の終端後に計画を再検証する（`inputs/curation-inputs.json` の snapshot、本番 KB の hash、inbox の ID 集合）。
-   **検証失敗・元ページの変更・hash 不一致のときは適用しない**（run は失敗扱いで、理由は要約と event に残る）。
+   **検証失敗・元ページの変更・hash 不一致のときは適用しない。** task は `Done` のまま、報告に「反映していない」と理由を残し、状態は `Reported`（通常の終端処理）または `Stale`（適用直前の再検証失敗）になる。
 3. 検証を通ったら daemon が本番 KB（`~/.local/share/celeris/knowledge`、branch `main`）へ決定的に適用する。
    削除は archive せず実削除し、理由は `_curation/YYYY-MM-DD.md` と要約に残る。
-4. 変更した path（`_curation/YYYY-MM-DD.md`・`index.json`・README を含む）を **1 commit** にまとめる。
-   題は `日次整理 YYYY-MM-DD: 統合 n・新規 n・削除 n・修正 n 件`、本文に task id（`task: <task id>`）を残す。
-   作者は既存の `task_ops::knowledge::commit_paths` と同じ設定を使う。
-5. KB に remote（`origin`）があれば、その commit を `git push origin main` で送る。remote が無ければ push を省き、記録だけ残す。
+4. 変更した path（`_curation/YYYY-MM-DD.md`・`README.md` を含む）を **1 commit** にまとめる。題は
+   `knowledge curation <YYYY-MM-DD>: 統合 n・新規 n・削除 n・修正 n`、本文に task id（`task: <task id>`）を残す。
+   `index.json` は `.gitignore` で除かれた再生成可能な派生物なので commit しない。作者は既存の
+   `task_ops::knowledge::commit_paths` と同じ設定を使う。
+5. KB の現在 branch の upstream があればその remote へ、無ければ `origin` へ push する。remote が無ければ push を省き、記録だけ残す。
+   結果は報告と `knowledge_curation_applied` event に記録し、event の `push` は `pushed` / `no_remote` /
+   `failed` / `skipped` のいずれかになる。
 6. **push の失敗は apply を失敗にしない。** 失敗は報告と event に残り、次回の日次整理の push でまとめて送られる。
 
 ### 6.2 切り替え
@@ -245,7 +248,7 @@ $CELERISCTL cron --config "$CELERIS_CONFIG" show daily-curation   # template.mod
 
 ```bash
 cd ~/.local/share/celeris/knowledge
-git log --oneline -5 -- _curation/          # 日次整理の commit が並んでいるか
+git log --grep '^knowledge curation' --oneline -5   # 日次整理の commit を探す
 git show --stat <sha>                       # 変更 path と題（件数）、本文の task id を確かめる
 celerisctl knowledge get _curation/YYYY-MM-DD.md   # 削除・統合の理由が残っているか
 ```
@@ -260,7 +263,7 @@ celerisctl knowledge get _curation/YYYY-MM-DD.md   # 削除・統合の理由が
 
 ```bash
 cd ~/.local/share/celeris/knowledge
-git log --format='%h %ad %s' --date=short -- _curation/   # 該当 commit を探す（題に日付と件数）
+git log --format='%h %ad %s' --date=short --grep '^knowledge curation'   # 該当 commit を探す
 git show --stat <sha>                                     # 何の path が変わったか確かめる（task id は本文）
 ```
 
@@ -296,30 +299,10 @@ celerisctl knowledge get <path>            # 本番 KB を読む CLI で、戻�
 - 本番の daemon 昇格と `config.toml` の変更は、§0・§1 の手順どおり人が行う。この救出は KB の git 操作だけで、
   daemon や DB には触れない。
 
-`apply` は人の承認を待たない（ADR-0131 付記 2026-10-04）。検証に通った計画は daemon がその場で再検証して
-適用し、変えた path（`_curation/YYYY-MM-DD.md`・`README.md` を含む。`index.json` は ignore）を KB の git に
-1 commit（題『knowledge curation <日付>: 統合 n・新規 n・削除 n・修正 n』、本文 `task: <id>`）にして、
-upstream の remote（無ければ `origin`）へ push する。結果は日次整理の報告の「KB の git」節と task の event
-`knowledge_curation_applied`（`commit_sha`・`push` = `pushed` / `no_remote` / `failed` / `skipped`）に残る。
-`human_decisions`（決定 `curation-human`）は従来どおり人が答える。元ページが変わっていた・検証に落ちた計画は
-適用しない。
-
-- remote 無し: 報告に「remote 無し」と出る。KB に private repository を足すには人が
-  `git -C ~/.local/share/celeris/knowledge remote add origin <url>` を行う（daemon の UID で非対話に push
-  できる認証が要る）。
-- push の失敗: apply は失敗にしない。commit は手元に残り、次回の日次整理の push でまとめて送られる。
-  手で送るなら `git -C ~/.local/share/celeris/knowledge push origin main`。
-
-誤った適用の救出（人が行う）:
-
-```bash
-KB=~/.local/share/celeris/knowledge
-git -C "$KB" log --oneline --grep '^knowledge curation' -n 5   # 報告の commit sha と照合する
-git -C "$KB" revert --no-edit <commit>                          # その日の適用を丸ごと戻す
-# 特定のページだけ戻す場合:
-git -C "$KB" checkout <commit>~1 -- projects/<page>.md && git -C "$KB" commit -m "restore <page>"
-git -C "$KB" push origin main
-```
+remote が無い場合は、報告に「remote 無し」と記録される。private repository を設定するには人が
+`git -C ~/.local/share/celeris/knowledge remote add origin <url>` を行う（daemon の UID で非対話に push
+できる認証が必要）。push に失敗しても apply は失敗せず、commit は手元に残る。次回の日次整理でまとめて push
+されるが、手動で送る場合は `git -C ~/.local/share/celeris/knowledge push origin main` を実行する。
 
 ## 7. 一時停止・削除・トラブルシュート
 

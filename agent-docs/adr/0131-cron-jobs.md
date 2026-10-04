@@ -437,6 +437,7 @@ git から救出する方針で運用する。これに合わせ D5・付記 D11
 2. **自動承認しないもの・適用しない場合は変えない。** 計画の `human_decisions` の束ね（`curation-human`）は従来どおり
    自動承認せず、人の判断に残す。検証失敗、元ページの変更（変更前 hash の不一致）、計画 hash や入力 snapshot
    （D12 追記）の不一致では適用しない。
+   旧方式で `AwaitingApproval` のまま残った計画も、次の tick で再検証に通れば承認なしで適用する。
 3. **1 commit にまとめる。** 適用の後、変更した path（`_curation/YYYY-MM-DD.md`・`index.json`・`README.md` を含む）を
    `task_ops::knowledge::commit_curation` で 1 commit にする。題は日付と件数
    （例『knowledge curation 2026-10-04: 統合 2・新規 1・削除 0・修正 3』）、本文に task id（`task: <id>`）。

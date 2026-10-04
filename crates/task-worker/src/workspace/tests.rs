@@ -157,6 +157,49 @@ async fn exec_captures_exit_code_and_stream_tails() {
     assert!(!result.timed_out);
 }
 
+/// 2026-10-04 統合の検査の進み具合 D2: `with_output_log` は stdout と stderr をファイルへも書き、2 回目は追記する。
+#[tokio::test]
+async fn exec_tees_output_into_the_output_log() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let log = dir.path().join("logs/nested/check.log");
+    let ws = LocalWorkspace::new(dir.path()).with_output_log(&log);
+    let result = ws
+        .exec(
+            "echo out-line; echo err-line 1>&2; exit 2",
+            Duration::from_secs(5),
+        )
+        .await
+        .expect("exec");
+    assert_eq!(result.exit, Some(2));
+    assert!(result.stdout_tail.contains("out-line"));
+    ws.exec("echo second-run", Duration::from_secs(5))
+        .await
+        .expect("exec");
+    let text = std::fs::read_to_string(&log).expect("log");
+    assert!(text.contains("out-line"), "{text}");
+    assert!(text.contains("err-line"), "{text}");
+    assert!(text.contains("second-run"), "{text}");
+}
+
+/// D2: 上限を超えた分は書かず、切り詰めた旨を 1 行だけ残す。
+#[test]
+fn output_log_stops_at_the_cap_with_one_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("cap.log");
+    let mut log = OutputLog::open(&path).expect("open");
+    log.written = OUTPUT_LOG_CAP_BYTES - 3;
+    log.write(b"abcdef");
+    log.write(b"ghij");
+    let text = std::fs::read_to_string(&path).expect("log");
+    assert!(
+        text.starts_with("abc\n[celeris: output truncated"),
+        "{text}"
+    );
+    assert!(!text.contains("def"));
+    assert!(!text.contains("ghij"));
+    assert_eq!(text.matches("truncated").count(), 1);
+}
+
 #[tokio::test]
 async fn exec_times_out_and_kills_process_group() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -1,0 +1,61 @@
+{
+  "task_id": "01M410H0JEGNR6A6T1ZP7FDTE0",
+  "date": "2026-10-03",
+  "mode": "dry_run",
+  "source": "inputs/kb copy only; production KB untouched",
+  "inputs": {
+    "inbox_attention": 2,
+    "inbox_candidates": 2,
+    "reports": 0,
+    "kb_inbox_markdown_candidates": 283
+  },
+  "attention": [
+    {
+      "task_id": "01M4090A0BVNTP1XB67F2GEYQW",
+      "title": "知識整理: ADR: 並列取り込みの自動解消と『統合の依頼』",
+      "status": "failed",
+      "reason": "retryable=true; langmem runner exit=1",
+      "recommendation": "人が同一タイトルの重複task状況を確認し、片方をretry/cancelする。KB根拠がないため自動で閉じない。"
+    },
+    {
+      "task_id": "01M408QDYH8RB2XF09T2EQJZ7T",
+      "title": "知識整理: ADR: 並列取り込みの自動解消と『統合の依頼』",
+      "status": "failed",
+      "reason": "retryable=true; langmem runner exit=1",
+      "recommendation": "上記と同じ。2件は同一タイトルだが task id が異なる。"
+    }
+  ],
+  "operations": [
+    {
+      "action": "merge",
+      "sources": [
+        "20261003T123737Z-candidate.md",
+        "20261003T131027Z-candidate.md",
+        "20261003T132958Z-candidate.md"
+      ],
+      "target": "projects/agent-platform/replan-stage-saving-repair-leaf.md",
+      "reason": "同じ段に修正葉を追加し depends_on で順序づけるという同一ルール。3候補は1件へ集約する。"
+    },
+    {
+      "action": "merge",
+      "sources": [
+        "20261003T130228Z-celeris-planner-turn-rejected-rejected.md",
+        "20261003T131028Z-planner-run-turn-rejected.md",
+        "20261003T133001Z-planner-run-turn-rejected.md"
+      ],
+      "target": "projects/agent-platform/planner-turn-exhaustion-rejected.md",
+      "reason": "turn 枯渇で rejected になった完成済み計画を変動事実だけ確認し再提出する同一知識。3件を1件へ集約。"
+    }
+  ],
+  "manual_review": [
+    {
+      "source": "20261003T121753Z-credentiald-broker-worker-sandbox-task-branch-ma.md",
+      "why": "main未取り込みという時点依存の主張。main取り込み状態を再確認するまで保留。"
+    },
+    {
+      "source": "20261003T095807Z-job-cron-cheap-lane-dry-run-task-task.md",
+      "why": "本タスクの運用設計に関する候補。ADR-0131と既存の人の決定を照合し、KB更新の必要性を判断する。"
+    }
+  ],
+  "scope_note": "All operations are proposed only. No copied KB files or inbox entries were edited."
+}

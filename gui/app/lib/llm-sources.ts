@@ -21,7 +21,7 @@ export function sourceLabel(id: string): string {
 /**
  * 状態バッジの一語（ADR-0055 D2 D1-3: 空白なし、12 字以内）。
  * `openai-compatible` は probe した到達性（`reachable`）、oauth のプールは `enabled` だけを見る
- * （到達性ではなくアカウントの残量で見る供給元なので、`reachable` は元から無い。`docs/gui/api.md` §3.108）。
+ * （到達性ではなくアカウントの残量で見る供給元なので、`reachable` は元から無い。`docs/api/v1/gui-api.md` §3.108）。
  */
 export function sourceStatusWord(source: Pick<LlmSourceView, "enabled" | "reachable">): string {
   if (!source.enabled) return "disabled";
@@ -45,13 +45,16 @@ export function tierResolutionLabel(resolvesTo: string | null | undefined): stri
 /**
  * `celeris/<tier>` が今の供給元に解決した理由の一語（ADR-0055 ラウンド 11、`/accounts` の
  * 「LLM source」節）。**celeris の選択スコアを GUI 側で再計算しない**（gui/CLAUDE.md の禁止事項）:
- * ADR-0053 D1 が文書化した規則（(a) 到達可能な無料源を最優先 → (b) アカウントプールの残量）を、
- * `GET /llm/sources` が既に返している値（`kind`・`enabled`・`reachable`・`accounts[].cooldown_until`）
- * だけを読んで説明する。
+ * ADR-0053 D1 と ADR-0132 D3 が文書化した規則（cheap でだけ (a) 到達可能な無料源（Qwen 等）を優先 →
+ * (b) アカウントプールの残量。frontier / standard は Qwen を候補にしない）を、`GET /llm/sources` が
+ * 既に返している値（`kind`・`enabled`・`reachable`・`accounts[].cooldown_until`）だけを読んで説明する。
  * - 解決先が無ければ `"no-source"`。
- * - 解決先が `openai-compatible`（無料中継。Qwen 等）なら `"free-first"`（D1(a) どおり最優先で選ばれた）。
- * - 解決先が oauth プールで、`openai-compatible` の供給元が設定されていて `reachable === false` なら
- *   `"unreachable"`（無料源が落ちているのでアカウントに倒れた）。
+ * - cheap で解決先が `openai-compatible`（無料中継。Qwen 等）なら `"free-first"`（cheap の優先どおり）。
+ *   frontier / standard で `openai-compatible` に解決したと報告されたら、それは規則の外なので
+ *   `"unknown"` にする（Qwen 優先とは書かない）。
+ * - cheap で解決先が oauth プールで、`openai-compatible` の供給元が設定されていて `reachable === false`
+ *   なら `"unreachable"`（Qwen が落ちているので Claude / GPT の cheap に倒れた）。frontier / standard
+ *   はそもそも Qwen を候補にしないので、Qwen の到達性を理由にしない。
  * - 解決先が oauth プールで、そのプール内に cooldown 中のアカウントが 1 つでもあれば `"cooldown"`
  *   （どのアカウントが実際に選ばれたかは celeris だけが知っている。「このプールに cooldown 中の
  *   アカウントがいる」という既存の事実を示すだけで、選択の順位までは再現しない）。
@@ -60,6 +63,7 @@ export function tierResolutionLabel(resolvesTo: string | null | undefined): stri
 export type TierResolutionReason = "free-first" | "cooldown" | "unreachable" | "no-source" | "unknown";
 
 export function tierResolutionReason(
+  tier: string,
   resolvesTo: string | null | undefined,
   sources: readonly Pick<LlmSourceView, "id" | "kind" | "enabled" | "reachable" | "accounts">[],
   nowSec: number,
@@ -67,20 +71,113 @@ export function tierResolutionReason(
   if (!resolvesTo) return "no-source";
   const resolved = sources.find((s) => s.id === resolvesTo);
   if (!resolved) return "unknown";
-  if (resolved.kind === "openai-compatible") return "free-first";
-  const freeSource = sources.find((s) => s.kind === "openai-compatible");
-  if (freeSource?.enabled && freeSource.reachable === false) return "unreachable";
+  const cheap = tier === "cheap";
+  if (resolved.kind === "openai-compatible") return cheap ? "free-first" : "unknown";
+  if (cheap) {
+    const freeSource = sources.find((s) => s.kind === "openai-compatible");
+    if (freeSource?.enabled && freeSource.reachable === false) return "unreachable";
+  }
   if (resolved.accounts.some((a) => isAccountCoolingDown(a, nowSec))) return "cooldown";
   return "unknown";
 }
 
 const TIER_RESOLUTION_REASON_LABEL: Record<TierResolutionReason, string> = {
-  "free-first": "無料の Qwen が使えるため優先しています",
+  "free-first": "cheap では無料の Qwen が使えるため優先しています",
   cooldown: "一部アカウントが cooldown 中です",
-  unreachable: "Qwen が届かないため Claude / GPT に倒れています",
+  unreachable: "cheap の Qwen が届かないため Claude / GPT の cheap に倒れています",
   "no-source": "使える供給元がありません",
   unknown: "通常のアカウント選択です",
 };
+
+/**
+ * Claude のアカウントが全員 cooldown 中のときの倒れ先の説明（ADR-0132 D3）。Qwen へ倒れるのは
+ * `celeris/cheap` だけで、`celeris/frontier`・`celeris/standard` は Codex の GPT にだけ倒れる。
+ */
+export const CLAUDE_ALL_COOLDOWN_FALLBACK_NOTE =
+  "celeris/frontier と celeris/standard は Codex の GPT に倒れます。Qwen を使うのは celeris/cheap だけで、" +
+  "Qwen が届いていれば Qwen に、届いていなければ Codex の GPT の cheap に倒れます。";
+
+/**
+ * `/llm/sources` の `kind`（`claude-oauth` / `codex-oauth` / `openai-compatible`）を、providers 画面の
+ * 「LLM source」節の種類の一語にする（未知の値はそのまま）。
+ */
+export function sourceKindLabel(kind: string): string {
+  const known: Record<string, string> = {
+    "claude-oauth": "Claude OAuth",
+    "codex-oauth": "Codex OAuth",
+    "openai-compatible": "OpenAI 互換",
+  };
+  return known[kind] ?? kind;
+}
+
+/**
+ * LLM source が今どの `celeris/<tier>` の解決先になっているか（`celeris_tiers[].resolves_to` を
+ * 引き当てるだけ。順は celeris が返した順のまま）。
+ */
+export function tiersResolvingTo(
+  sourceId: string,
+  celerisTiers: readonly { tier: string; resolves_to?: string | null }[] | null | undefined,
+): string[] {
+  return (celerisTiers ?? []).filter((t) => t.resolves_to === sourceId).map((t) => t.tier);
+}
+
+/**
+ * `openai-compatible`（Qwen 等）の供給元に添える注記（ADR-0132 D3）。oauth のプールには何も付けない。
+ */
+export function sourceTierScopeNote(kind: string): string | null {
+  return kind === "openai-compatible" ? "celeris/cheap にだけ使われます（frontier / standard には使いません）" : null;
+}
+
+/**
+ * provider（adapter / harness の実行枠）の `llm_source` 参照（ADR-0132 D1・D6。`claude_oauth` /
+ * `codex_oauth` / `openai_compatible:<id>` / `celeris` / `none` / `unknown`）を表示用にする。
+ * - `celeris` は proxy の `celeris/<tier>` で、**実行時に proxy が供給元を選ぶ**（固定の Qwen ではない）。
+ * - `openai_compatible:<id>` だけが特定の OpenAI 互換源（Qwen 等）に直結する。
+ * - 参照が無い（古い celeris）・`unknown` は「不明」と出し、Qwen と決めつけない。
+ * `sourceId` は `GET /llm/sources` の `sources[].id` の形（突き合わせ用。無ければ `null`）。
+ */
+export interface ProviderLlmSourceDisplay {
+  label: string;
+  note: string | null;
+  origin: "explicit" | "derived" | null;
+  sourceId: string | null;
+}
+
+export function providerLlmSourceDisplay(
+  ref: { source: string; origin: "explicit" | "derived" } | null | undefined,
+): ProviderLlmSourceDisplay {
+  if (!ref) return { label: "不明", note: "この celeris は llm_source を返していません", origin: null, sourceId: null };
+  const origin = ref.origin;
+  const source = ref.source;
+  if (source === "celeris") {
+    return {
+      label: "celeris/<tier>（proxy）",
+      note: "実行時に proxy が tier ごとに供給元を選びます（Qwen を使うのは cheap だけ）",
+      origin,
+      sourceId: null,
+    };
+  }
+  if (source === "claude_oauth") return { label: "Claude OAuth", note: null, origin, sourceId: "claude-oauth" };
+  if (source === "codex_oauth") return { label: "Codex OAuth", note: null, origin, sourceId: "codex-oauth" };
+  if (source === "none") return { label: "なし", note: "LLM を使わない実行枠です", origin, sourceId: null };
+  if (source.startsWith("openai_compatible:")) {
+    const id = source.slice("openai_compatible:".length);
+    return {
+      label: `OpenAI 互換: ${id}`,
+      note: "この供給元に直結します（Qwen 直結の実行枠は cheap だけ）",
+      origin,
+      sourceId: `openai-compatible:${id}`,
+    };
+  }
+  return { label: "不明", note: "設定から供給元を推定できません", origin, sourceId: null };
+}
+
+/** `ResolvedLlmSource.origin` を一語に（明示は設定の `llm_source`、導出は旧設定からの推定）。 */
+export function llmSourceOriginLabel(origin: "explicit" | "derived" | null): string {
+  if (origin === "explicit") return "設定で明示";
+  if (origin === "derived") return "旧設定から推定";
+  return "";
+}
 
 /** `tierResolutionReason` を一行の日本語にする。 */
 export function tierResolutionReasonLabel(reason: TierResolutionReason): string {

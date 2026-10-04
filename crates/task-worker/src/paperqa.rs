@@ -1,4 +1,4 @@
-//! `paperqa` アダプタ（DESIGN §5.4, ADR-0027 D3、ADR-0035 で「取得」の段を追加、
+//! `paperqa` アダプタ（ADR-0027 D3、ADR-0035 で「取得」の段を追加、
 //! ADR-0063 Phase 109d C1/C2 で `pqa ask` CLI を PaperQA の Python API に置き換え）。
 //!
 //! PaperQA2 は celeris のワーカープロトコルもストリーム型の進捗形式も話さない、ただの調査エンジンで
@@ -75,8 +75,7 @@ const SHARED_PROJECT_KEY: &str = "_shared";
 const MAX_SEARCH_QUERIES: usize = 4;
 /// LLM に立てさせる検索語の本数の上限（ADR-0035 D5: 「3〜6 本」）。
 const MAX_LLM_SEARCH_QUERIES: u32 = 6;
-/// 検索語を立てる `chat/completions` の `max_tokens`（ADR-0035 D5。実機で Qwen3 は
-/// 「考える」分を含めるとこれくらい必要）。
+/// 検索語を立てる `chat/completions` の `max_tokens`（ADR-0035 D5）。
 const QUERY_LLM_MAX_TOKENS: u32 = 2000;
 /// 検索語を立てる LLM に渡す案件の文脈の上限（字数）。
 const QUERY_CONTEXT_MAX_CHARS: usize = 2000;
@@ -116,7 +115,7 @@ pub struct AcquireConfig {
     /// LiteLLM の `provider/model` 形式の接頭辞（`openai/`）は落として渡す。
     #[serde(default)]
     pub query_model: Option<String>,
-    /// 検索語を立てる 1 回の `chat/completions` のタイムアウト（秒）。ローカル LLM は遅い。
+    /// 検索語を立てる 1 回の `chat/completions` のタイムアウト（秒）。
     #[serde(default = "default_query_timeout_secs")]
     pub query_timeout_secs: u64,
     /// OpenAlex の `filter=`。未指定ならランナーの既定
@@ -341,7 +340,7 @@ pub fn build_question(task: &Task, context: &RunContext, artifacts: &str) -> Str
     // ADR-0063 Phase 109c A/C（縮小版。P-109c-1）: 目的文から対象が取れているとき、答えを
     // 「対象ごとの節 + 対象×観点の表」に構造化するよう指示する。対象ごとに `pqa ask` を複数回呼ぶ
     // （元の ADR C2）と PaperQA の Python API への切り替え（C1）は、実機で API 面を確認できず
-    // 既存テストへの影響も大きいため Phase 109c では見送った（未解決事項として PROGRESS.md に記載）。
+    // 既存テストへの影響も大きいため Phase 109c では見送った（未解決事項として agent-docs/PROGRESS.md に記載）。
     let targets = crate::research_targets::research_targets(&task.objective);
     if !targets.is_empty() {
         let aspects = crate::research_targets::research_aspects(&task.objective);
@@ -658,13 +657,15 @@ pub fn build_search_queries(objective: &str) -> Vec<String> {
 
 /// LiteLLM の `provider/model` 形式から供給者の接頭辞を落とす（ADR-0035 D5）。
 /// `chat/completions` を直接叩くときに必要なのは、その口が出しているモデル名
-/// （実機: settings の `llm` は `openai/qwen3.8-27b`、`/v1/models` は `qwen3.8-27b`）。
+/// （例: settings の `llm` が `openai/celeris/standard` なら要求モデルは `celeris/standard`）。
 /// 接頭辞と見なすのは小文字・数字・`_` だけの最初の 1 区画（`openai/` / `hosted_vllm/`）。
+/// ただし `celeris/<tier>` は proxy のモデル名そのものなので残す。
 fn strip_provider_prefix(model: &str) -> String {
     let model = model.trim();
     match model.split_once('/') {
         Some((prefix, rest))
-            if !rest.is_empty()
+            if prefix != "celeris"
+                && !rest.is_empty()
                 && !prefix.is_empty()
                 && prefix
                     .chars()

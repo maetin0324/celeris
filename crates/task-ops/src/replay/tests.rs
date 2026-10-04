@@ -1198,6 +1198,162 @@ fn replay_rebuilds_units_dropped_or_rewritten_by_a_phased_replan() {
     assert_eq!(restored.len(), stored.len());
 }
 
+fn assert_replay_matches_live_after_blocked_repair_superseded(reason: WorkUnitBlockedReason) {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let task = sample_task(Status::Running);
+    store.insert(&task).expect("insert");
+    let now = OffsetDateTime::now_utc();
+    let phase = task_core::PhaseSpec {
+        key: "design".to_string(),
+        kind: task_core::WorkUnitKind::Design,
+        title: "design".to_string(),
+    };
+    let in_phase = |key: &str, deps: &[&str]| {
+        let mut w = wu_spec(key, deps);
+        w.phase = Some("design".to_string());
+        w
+    };
+    let spec = |units| ExecutionPlanSpec {
+        stages: Vec::new(),
+        units: Vec::new(),
+        decisions: Vec::new(),
+        schema: task_core::EXECUTION_PLAN_SCHEMA_V2.to_string(),
+        rationale: "blocked repair replay fixture".to_string(),
+        work_units: units,
+        phases: vec![phase.clone()],
+        children: Vec::new(),
+    };
+    let mut repair_spec = in_phase("repair-design-1", &[]);
+    repair_spec.kind = task_core::WorkUnitKind::Repair;
+    crate::execution::adopt_plan(
+        &store,
+        task.id,
+        spec(vec![in_phase("a", &[]), repair_spec]),
+        task_core::PlanOrigin::Human,
+        None,
+        ExecutionLimits::default(),
+        now,
+    )
+    .expect("adopt");
+    // The first replan removes the repair from the plan spec. Reintroducing
+    // its row as blocked exercises the daemon-added classification for v3
+    // while keeping every row reconstructible from the event stream.
+    crate::execution::replan(
+        &store,
+        task.id,
+        spec(vec![in_phase("a", &[])]),
+        "remove old repair".to_string(),
+        task_core::PlanOrigin::Planner,
+        None,
+        ExecutionLimits::default(),
+        now,
+    )
+    .expect("first replan");
+    let units = store.work_units_for(task.id).expect("units");
+    let repair = units
+        .iter()
+        .find(|u| u.key == "repair-design-1")
+        .expect("repair");
+    let mut blocked = repair.clone();
+    blocked.status = WorkUnitStatus::Blocked;
+    blocked.blocked_reason = Some(reason);
+    store
+        .work_unit_transition(
+            task.id,
+            blocked,
+            Event::WorkUnitTransitioned {
+                work_unit_id: repair.id.clone(),
+                key: repair.key.clone(),
+                from: WorkUnitStatus::Superseded,
+                to: WorkUnitStatus::Blocked,
+                reason: reason.as_str().to_string(),
+                run_id: None,
+            },
+        )
+        .expect("block repair");
+    let integ = units
+        .iter()
+        .find(|u| u.key == "integrate-design")
+        .expect("integration");
+    let mut pending = integ.clone();
+    pending.status = WorkUnitStatus::Pending;
+    pending.depends_on.push("repair-design-1".to_string());
+    pending.spec.depends_on.push("repair-design-1".to_string());
+    store
+        .work_unit_transition(
+            task.id,
+            pending,
+            Event::WorkUnitTransitioned {
+                work_unit_id: integ.id.clone(),
+                key: integ.key.clone(),
+                from: integ.status,
+                to: WorkUnitStatus::Pending,
+                reason: "merge_conflict".to_string(),
+                run_id: None,
+            },
+        )
+        .expect("integration waits for repair");
+    store
+        .append_event(
+            task.id,
+            &Event::RepairScheduled {
+                work_unit_id: repair.id.clone(),
+                key: repair.key.clone(),
+                class: "merge_base".to_string(),
+                origin: task_core::execution::RepairOrigin::Integration,
+            },
+        )
+        .expect("repair scheduled");
+    crate::execution::replan(
+        &store,
+        task.id,
+        spec(vec![in_phase("a", &[]), in_phase("a-fix", &["a"])]),
+        "replace blocked repair".to_string(),
+        task_core::PlanOrigin::Planner,
+        None,
+        ExecutionLimits::default(),
+        now,
+    )
+    .expect("second replan");
+    let stored = store.work_units_for(task.id).expect("stored units");
+    let events = store
+        .event_rows_for(task.id, None, usize::MAX)
+        .expect("events");
+    let (rebuilt, _) = rebuild_work_units_and_runs(task.id, &events);
+    assert!(events.iter().any(|er| matches!(
+        &er.event,
+        Event::WorkUnitTransitioned { key, from, to, reason, .. }
+            if key == "repair-design-1"
+                && *from == WorkUnitStatus::Blocked
+                && *to == WorkUnitStatus::Superseded
+                && reason == "replan v3"
+    )));
+    let (mismatches, _) = diff_execution(task.id, &rebuilt, &stored, &[], &[]);
+    assert!(mismatches.is_empty(), "{mismatches:?}");
+    let repair = rebuilt
+        .iter()
+        .find(|u| u.key == "repair-design-1")
+        .expect("rebuilt repair");
+    assert_eq!(repair.status, WorkUnitStatus::Superseded);
+    assert_eq!(repair.blocked_reason, None);
+    let integ = rebuilt
+        .iter()
+        .find(|u| u.key == "integrate-design")
+        .expect("rebuilt integration");
+    assert!(!integ.depends_on.iter().any(|d| d == "repair-design-1"));
+    assert!(!integ.spec.depends_on.iter().any(|d| d == "repair-design-1"));
+}
+
+#[test]
+fn replay_matches_live_after_blocked_repair_superseded() {
+    assert_replay_matches_live_after_blocked_repair_superseded(WorkUnitBlockedReason::PlanIssue);
+}
+
+#[test]
+fn replay_matches_live_after_blocked_repair_superseded_limit() {
+    assert_replay_matches_live_after_blocked_repair_superseded(WorkUnitBlockedReason::Limit);
+}
+
 /// (3) 計画の無い Task（暗黙の WorkUnit）では `work_units` は空、`runs` は worker/reviewer
 /// 双方を含む全 run 分になる。
 #[test]

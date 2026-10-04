@@ -1,17 +1,25 @@
 import { useEffect, useId, useState } from "react";
-import { data, type FetcherWithComponents, isRouteErrorResponse, useFetcher, useRevalidator } from "react-router";
+import { data, type FetcherWithComponents, isRouteErrorResponse, Link, useFetcher, useRevalidator } from "react-router";
 import type { ReleasePromoteOutcome } from "~/celeris/action-types";
 import { type CelerisClient, getCelerisClient } from "~/celeris/client.server";
 import { type CelerisRouteErrorData, celerisErrorResponse } from "~/celeris/errors";
 import { promoteRelease, readReleaseSha12 } from "~/celeris/releases-admin.server";
-import type { ReleaseItem, Releases } from "~/celeris/types";
+import type {
+  ReleaseItem,
+  ReleaseNoteCommit,
+  ReleaseNoteConfig,
+  ReleaseNoteFile,
+  ReleaseNoteGateSkip,
+  ReleaseNoteTask,
+  Releases,
+} from "~/celeris/types";
 import { ReleasePromoteFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
-import { hintClass, inputClass, labelClass } from "~/components/ui/form";
+import { hintClass, inputClass, labelClass, touchLinkClass } from "~/components/ui/form";
 import { Icon } from "~/components/ui/Icon";
 import { Alert, DataItem, EmptyState, Mono, PageHeader, SectionTitle } from "~/components/ui/misc";
 import { instanceRoleLabel } from "~/lib/labels";
@@ -19,6 +27,7 @@ import { isTransientStatus } from "~/lib/recovery";
 import {
   changesSummaryText,
   commitShort,
+  configNeedsReview,
   handoffInFlight,
   handoffProgressText,
   notOnMainText,
@@ -28,11 +37,23 @@ import {
   promoteFailedText,
   promoteFlashState,
   promoteNeedsTypedSha,
+  promotionIncompleteText,
+  promotionModeLabel,
+  promotionReleaseText,
+  promotionSummaryText,
+  RELEASE_NOTES_MISSING_TEXT,
   releaseGateBadgeLabel,
   releaseGateLabel,
+  releaseGateSkipText,
   releaseGateStepRows,
   releaseModeWord,
+  releaseNoteFileText,
+  releaseNotesEmpty,
+  releaseNotesSummaryText,
+  releaseNoteTaskHref,
+  releaseNoteTaskTitle,
   releasePositionLabel,
+  releaseSchemaText,
   releaseSubtitle,
   releaseVerifyBadgeLabel,
   releaseVerifyCheckGroups,
@@ -213,6 +234,258 @@ export default function ReleasesPage({ loaderData }: Route.ComponentProps) {
         )}
       </section>
     </div>
+  );
+}
+
+// ---- リリースの説明（ADR 2026-10-04-release-notes）-------------------------
+
+function NoteTaskList({ tasks }: { tasks: ReleaseNoteTask[] }) {
+  return (
+    <ul className="space-y-2 text-sm" data-testid="release-note-tasks">
+      {tasks.map((task) => (
+        <li key={task.task_id} data-testid="release-note-task" className="min-w-0">
+          <div className="flex flex-wrap items-center gap-x-2">
+            <span className="break-all font-medium">{releaseNoteTaskTitle(task)}</span>
+            <Link
+              to={releaseNoteTaskHref(task.task_id)}
+              className={`${touchLinkClass} underline underline-offset-2`}
+              data-testid="release-note-task-link"
+            >
+              <Mono className="text-xs break-all">{task.task_id}</Mono>
+            </Link>
+          </div>
+          {task.summary && (
+            <p className="break-words text-xs text-fg-muted" data-testid="release-note-task-summary">
+              {task.summary}
+            </p>
+          )}
+          {task.children && task.children.length > 0 && (
+            <ul className="ml-3 mt-1 space-y-0.5 border-l border-border pl-3" data-testid="release-note-children">
+              {task.children.map((child) => (
+                <li key={child.task_id} className="flex flex-wrap items-center gap-x-2 text-xs text-fg-muted">
+                  <span className="break-all">{child.title?.trim() || child.task_id}</span>
+                  <Link
+                    to={releaseNoteTaskHref(child.task_id)}
+                    className={`${touchLinkClass} underline underline-offset-2`}
+                  >
+                    <Mono className="text-xs break-all">{child.task_id}</Mono>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NoteCommitList({ commits }: { commits: ReleaseNoteCommit[] }) {
+  return (
+    <ul className="space-y-1 text-sm" data-testid="release-note-commits">
+      {commits.map((commit) => (
+        <li key={commit.sha} className="flex gap-2">
+          <Mono className="shrink-0 text-xs text-fg-subtle">{commitShort(commit)}</Mono>
+          <span className="break-all">{commit.subject}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NoteFileList({ files, testid }: { files: ReleaseNoteFile[]; testid: string }) {
+  return (
+    <ul className="space-y-0.5 text-xs" data-testid={testid}>
+      {files.map((file) => (
+        <li key={file.path} className="break-all">
+          <Mono className="text-xs break-all">{releaseNoteFileText(file)}</Mono>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function NoteConfigAlert({ configs }: { configs: ReleaseNoteConfig[] }) {
+  if (configs.length === 0) return null;
+  const review = configNeedsReview(configs);
+  return (
+    <Alert
+      tone={review ? "warning" : "info"}
+      title={review ? "本番の config を確認してください" : "config/celeris.example.toml が変わります"}
+      data-testid="release-note-config"
+      data-needs-review={review ? "true" : "false"}
+    >
+      {configs.map((c) => (
+        <div key={`${c.path}-${c.commit ?? ""}`} className="space-y-1">
+          <p className="break-all text-xs">
+            <Mono className="text-xs break-all">{c.path}</Mono>（{c.status}）
+          </p>
+          {c.added_sections && c.added_sections.length > 0 && (
+            <p className="break-all text-xs">節: {c.added_sections.join(", ")}</p>
+          )}
+          {c.added_lines && c.added_lines.length > 0 && (
+            <pre className="max-w-full whitespace-pre-wrap break-all rounded bg-surface-2 p-2 font-mono text-xs">
+              {c.added_lines.join("\n")}
+            </pre>
+          )}
+        </div>
+      ))}
+    </Alert>
+  );
+}
+
+function NoteGateSkips({ skips }: { skips: ReleaseNoteGateSkip[] }) {
+  if (skips.length === 0) return null;
+  return (
+    <div data-testid="release-note-gate-skips">
+      <p className="text-xs text-fg-subtle">gate で飛ばした段</p>
+      <ul className="space-y-0.5 text-xs">
+        {skips.map((skip) => (
+          <li key={skip.step} className="break-all">
+            {releaseGateSkipText(skip)}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function ReleaseNotesSection({ item }: { item: ReleaseItem }) {
+  const notes = item.notes;
+  if (!notes) {
+    return (
+      <p className={hintClass} data-testid="release-notes-missing">
+        {RELEASE_NOTES_MISSING_TEXT}
+      </p>
+    );
+  }
+  const schema = releaseSchemaText(notes.schema);
+  const tasks = notes.tasks ?? [];
+  const commits = notes.direct_commits ?? [];
+  const migrations = notes.migrations ?? [];
+  const adrs = notes.adrs ?? [];
+  const skips = notes.gate_skips ?? [];
+  return (
+    <details className="rounded-lg border border-border bg-surface-2/40" data-testid="release-notes">
+      <summary className="min-h-11 cursor-pointer list-none px-3 py-2 text-sm text-fg-muted hover:text-fg">
+        <Icon name="list" className="mr-1.5 inline size-4" />
+        このリリースの内容
+        <span className="ml-2 text-fg-subtle" data-testid="release-notes-summary">
+          {releaseNotesSummaryText(notes)}
+        </span>
+      </summary>
+      <div className="space-y-3 px-3 pb-3">
+        {schema && (
+          <p
+            className={`text-sm ${notes.schema.changed ? "font-medium text-warning-soft-fg" : "text-fg-muted"}`}
+            data-testid="release-note-schema"
+          >
+            {schema}
+          </p>
+        )}
+        {releaseNotesEmpty(notes) && <p className={hintClass}>このリリースで増えた変更はありません。</p>}
+        {tasks.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">task</p>
+            <NoteTaskList tasks={tasks} />
+          </div>
+        )}
+        {commits.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">task に属さない commit</p>
+            <NoteCommitList commits={commits} />
+          </div>
+        )}
+        {migrations.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">migration</p>
+            <NoteFileList files={migrations} testid="release-note-migrations" />
+          </div>
+        )}
+        {adrs.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">ADR</p>
+            <NoteFileList files={adrs} testid="release-note-adrs" />
+          </div>
+        )}
+        {notes.config_example && <NoteConfigAlert configs={[notes.config_example]} />}
+        <NoteGateSkips skips={skips} />
+      </div>
+    </details>
+  );
+}
+
+function ReleasePromotionSection({ item }: { item: ReleaseItem }) {
+  const p = item.promotion;
+  if (!p || item.is_current) return null;
+  const schema = releaseSchemaText(p.schema);
+  const incomplete = promotionIncompleteText(p);
+  return (
+    <details className="rounded-lg border border-primary-border bg-primary-soft/30" data-testid="release-promotion">
+      <summary className="min-h-11 cursor-pointer list-none px-3 py-2 text-sm text-fg-muted hover:text-fg">
+        <Icon name="rotate" className="mr-1.5 inline size-4" />
+        昇格したら入るもの
+        <span className="ml-2 text-fg-subtle" data-testid="release-promotion-summary">
+          {promotionSummaryText(p)}
+        </span>
+      </summary>
+      <div className="space-y-3 px-3 pb-3">
+        {incomplete && (
+          <Alert tone="warning" title="一覧が不完全です" data-testid="release-promotion-incomplete">
+            <p className="break-all">{incomplete}</p>
+          </Alert>
+        )}
+        <p className="text-sm" data-testid="release-promotion-mode">
+          切替方法: {promotionModeLabel(p.mode)}
+        </p>
+        {schema && (
+          <p
+            className={`text-sm ${p.schema.changed ? "font-medium text-warning-soft-fg" : "text-fg-muted"}`}
+            data-testid="release-promotion-schema"
+          >
+            {schema}
+          </p>
+        )}
+        <NoteConfigAlert configs={p.config_examples} />
+        {p.releases.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">含まれるリリース</p>
+            <ul className="space-y-0.5 text-xs" data-testid="release-promotion-releases">
+              {p.releases.map((r) => (
+                <li key={r.sha12} className="break-all">
+                  <Mono className="text-xs break-all">{promotionReleaseText(r)}</Mono>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {p.tasks.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">task</p>
+            <NoteTaskList tasks={p.tasks} />
+          </div>
+        )}
+        {p.direct_commits.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">task に属さない commit</p>
+            <NoteCommitList commits={p.direct_commits} />
+          </div>
+        )}
+        {p.migrations.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">migration</p>
+            <NoteFileList files={p.migrations} testid="release-promotion-migrations" />
+          </div>
+        )}
+        {p.adrs.length > 0 && (
+          <div>
+            <p className="text-xs text-fg-subtle">ADR</p>
+            <NoteFileList files={p.adrs} testid="release-promotion-adrs" />
+          </div>
+        )}
+        <NoteGateSkips skips={p.gate_skips} />
+      </div>
+    </details>
   );
 }
 
@@ -445,6 +718,8 @@ function ReleaseCard({ item }: { item: ReleaseItem }) {
           </details>
         )}
 
+        <ReleaseNotesSection item={item} />
+
         {notOnMain && (
           <Alert tone="warning" title="main に戻っていません" data-testid="release-not-on-main">
             <p className="break-all">
@@ -534,6 +809,8 @@ function ReleaseCard({ item }: { item: ReleaseItem }) {
         )}
 
         <ReleasePromoteFlash outcome={fetcher.data} state={promoteFlashState(item)} />
+
+        <ReleasePromotionSection item={item} />
 
         {canPromote ? (
           <details className="group">

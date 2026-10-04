@@ -335,11 +335,16 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         fs::create_dir(&p).expect("parent")
     }
     let binary = std::env::var("CARGO_BIN_EXE_celeris-credentiald").expect("binary path");
+    // The child must only see this test's temporary HOME/XDG paths. A worker
+    // sandbox exports CELERIS_CREDENTIALD_DATA_DIR (the production data dir) and
+    // other CELERIS_*/XDG_* values; inheriting them sends vault/audit elsewhere.
     let child = Command::new(binary)
         .arg("serve")
         .arg(std::process::id().to_string())
+        .env_clear()
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
+        .env_remove("CELERIS_CREDENTIALD_DATA_DIR")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
@@ -347,10 +352,15 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     let _child = ChildGuard(child);
     let control = runtime.join("celeris-credentiald/control.sock");
     let resolve = runtime.join("celeris-credentiald/resolve.sock");
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && resolve.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10))
     }
     assert!(control.exists());
@@ -359,7 +369,7 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         0o600
     );
     let init = ipc::call(&control, br#"{"op":"initialize_key"}"#).expect("init");
-    assert!(init.success);
+    assert!(init.success, "initialize_key failed: code={:?}", init.code);
     let f = Fixture::new();
     let reference = f.reference.clone();
     let policy = f.policy.clone();
@@ -405,6 +415,8 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
         .arg("-c")
         .arg("import socket,sys; s=socket.socket(socket.AF_UNIX); s.connect(sys.argv[1]); s.sendall(sys.stdin.buffer.read()); s.shutdown(socket.SHUT_WR); sys.stdout.buffer.write(s.makefile('rb').read())")
         .arg(&resolve)
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -443,6 +455,8 @@ fn daemon_rejects_worker_secret_retrieval_even_with_valid_lease() {
     let mut command = Command::new(binary);
     command
         .arg("bridge")
+        .env_clear()
+        .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -588,20 +602,25 @@ fn invalid_control_process_id_is_rejected() {
         .arg("1")
         .env("HOME", &home)
         .env("XDG_RUNTIME_DIR", &runtime)
+        .env_remove("CELERIS_CREDENTIALD_DATA_DIR")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
         .expect("spawn");
     let control = runtime.join("celeris-credentiald/control.sock");
     let resolve = runtime.join("celeris-credentiald/resolve.sock");
-    for _ in 0..100 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if control.exists() && resolve.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10))
     }
     assert!(control.exists() && resolve.exists());
-    thread::sleep(Duration::from_millis(20));
     let reply = ipc::call(&control, br#"{"op":"initialize_key"}"#).expect("response");
     assert!(!reply.success);
     assert_eq!(reply.code.as_deref(), Some("permission_denied"));

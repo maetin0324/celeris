@@ -13,10 +13,9 @@ import { RouteRecovery } from "~/components/RouteRecovery";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";
 import { ArtifactRow } from "~/components/task-detail/ArtifactRow";
 import { FailureBanner } from "~/components/task-detail/FailureBanner";
-import { OverviewTab } from "~/components/task-detail/OverviewTab";
+import { TaskExecutionRoute } from "~/components/task-detail/TaskExecutionRoute";
 import { TaskTabSkeleton } from "~/components/task-detail/TaskTabSkeleton";
 import { TaskTabs } from "~/components/task-detail/TaskTabs";
-import { TimelineTab } from "~/components/task-detail/TimelineTab";
 import { Badge, GenreLabel, KindBadge, RoleLabel, StatusBadge } from "~/components/ui/badge";
 import { buttonClass } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
@@ -56,7 +55,23 @@ const TaskFiles = lazy(() => import("~/components/task-files").then((m) => ({ de
 // 開いたとき・止まっているときだけ要るので初回の JS に載せない（task 系ルートの初回 JS は予算まで 3KB しか無い）。
 const TaskTreeTab = lazy(() => import("~/components/TaskTreeTab").then((m) => ({ default: m.TaskTreeTab })));
 
+// ADR-0055 性能予算: 「概要」「経過」タブの本体も選んだときだけ取りに行く（b742ec75 で概要に write-set の欄など
+// が増え、task 系ルートの初回 JS が予算 532KB を超えたため。どのタブも自分の本体だけを初回に載せる）。
+const OverviewTab = lazy(() =>
+  import("~/components/task-detail/OverviewTab").then((m) => ({ default: m.OverviewTab })),
+);
+
+const TimelineTab = lazy(() =>
+  import("~/components/task-detail/TimelineTab").then((m) => ({ default: m.TimelineTab })),
+);
+
 const TaskHoldBanner = lazy(() => import("~/components/TaskHoldBanner").then((m) => ({ default: m.TaskHoldBanner })));
+
+// celeris ADR-0120 D5（ADR-0055 性能予算）: integration repair の欄は repair が有るタスクでしか出ないので
+// 初回の JS に載せない（b742ec75 で静的 import にしたら task 系ルートの初回 JS が予算 532KB を超えた）。
+const IntegrationRepairPanel = lazy(() =>
+  import("~/components/IntegrationRepairPanel").then((m) => ({ default: m.IntegrationRepairPanel })),
+);
 
 export function meta(_: Route.MetaArgs) {
   return [{ title: "タスク詳細 - Celeris" }];
@@ -231,6 +246,7 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
               </div>
               {/* celeris ADR-0069 D5: なぜこの担当・harness・lane・model か。閉じた状態は 1 行。 */}
               <TaskRoutingPanel view={routing} />
+              <TaskExecutionRoute execution={detail.execution} />
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
                 {detail.cluster && (
                   <p data-testid="task-cluster">
@@ -296,6 +312,14 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
         </div>
       </section>
 
+      {/* celeris ADR-0120 D5: target drift に伴う integration repair。実装失敗の FailureBanner
+          より上に、別の欄・色・ラベルで表示する。null / 欠落なら何も出さない。 */}
+      {detail.integration_repair && (
+        <Suspense fallback={null}>
+          <IntegrationRepairPanel repair={detail.integration_repair} />
+        </Suspense>
+      )}
+
       {/* ADR-0070 D1/D2（Phase 116）: failed のタスクは、原因の分類と「やり直す」「再レビュー」
           「取り下げ」をどのタブからでも見える位置に出す（受け入れ条件 D6(e)）。 */}
       {detail.failure && (
@@ -346,22 +370,24 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
       ) : (
         <>
           {tab === "overview" && (
-            <OverviewTab
-              browserRuns={browserRuns}
-              liveViews={liveViews}
-              detail={detail}
-              artifactCount={artifacts.items.length}
-              org={org}
-              milestones={milestones}
-              genres={genres}
-              fetcher={fetcher}
-              submitting={submitting}
-              retryFetcher={retryFetcher}
-              retrying={retrying}
-              fetchedAt={fetchedAt}
-              humanReview={humanReview}
-              browserOwner={browserOwner}
-            />
+            <Suspense fallback={<TaskTabSkeleton />}>
+              <OverviewTab
+                browserRuns={browserRuns}
+                liveViews={liveViews}
+                detail={detail}
+                artifactCount={artifacts.items.length}
+                org={org}
+                milestones={milestones}
+                genres={genres}
+                fetcher={fetcher}
+                submitting={submitting}
+                retryFetcher={retryFetcher}
+                retrying={retrying}
+                fetchedAt={fetchedAt}
+                humanReview={humanReview}
+                browserOwner={browserOwner}
+              />
+            </Suspense>
           )}
 
           {tab === "tree" && (
@@ -378,14 +404,16 @@ export default function TaskDetailPage({ loaderData }: Route.ComponentProps) {
           )}
 
           {tab === "timeline" && (
-            <TimelineTab
-              taskId={task.id}
-              detail={detail}
-              timeline={timeline}
-              comments={comments}
-              events={events}
-              fetchedAt={fetchedAt}
-            />
+            <Suspense fallback={<TaskTabSkeleton />}>
+              <TimelineTab
+                taskId={task.id}
+                detail={detail}
+                timeline={timeline}
+                comments={comments}
+                events={events}
+                fetchedAt={fetchedAt}
+              />
+            </Suspense>
           )}
 
           {tab === "changes" && (

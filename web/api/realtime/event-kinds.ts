@@ -41,6 +41,7 @@ export const EVENT_KINDS = [
   "work_unit_checks_failed",
   "work_unit_spec_overridden",
   "execution_gated",
+  "execution_routed",
   "execution_hint_set",
   "repair_scheduled",
   "quota_estimated",
@@ -59,6 +60,18 @@ export const EVENT_KINDS = [
   "decision_withdrawn",
   "plan_approval_requested",
   "stall_detected",
+  "review_target_synced",
+  "review_target_advanced",
+  "merge_candidate_stale",
+  "integration_repair_scheduled",
+  "integration_repair_resolved",
+  "integration_repair_exhausted",
+  "delivery_skipped",
+  "knowledge_curation_applied",
+  "integration_requested",
+  "integration_answered",
+  "integration_check_started",
+  "integration_check_finished",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

@@ -97,13 +97,14 @@ use crate::repos::{RepoError, RepoKind};
 use crate::transition::{InvalidTransition, Trigger};
 
 mod approvals;
+mod behind_targets;
 mod cluster;
 mod events;
 mod execution;
 mod instances;
 mod integrations;
 mod messages;
-mod migrations;
+pub(crate) mod migrations;
 mod org;
 mod projects;
 mod query;
@@ -112,6 +113,7 @@ mod task_store;
 mod task_store_impl;
 mod tasks;
 mod transition;
+mod write_sets;
 
 pub use migrations::SCHEMA_VERSION;
 #[cfg(test)]
@@ -417,6 +419,34 @@ pub struct SqliteStore {
     conn: Mutex<Connection>,
     /// ADR-0064 D4: ファイル DB のときだけ `Some`（インメモリでは接続間の状態共有ができないため）。
     read_pool: Option<ReadPool>,
+    /// ADR-0133 付記: 書き込み接続と読み取り接続を取った回数（回帰試験が処理件数で固定する）。
+    counters: LockCounters,
+}
+
+/// ADR-0133 付記: `SqliteStore` が接続を取った回数。試験は時計ではなくこの差分で
+/// 「tick・API が書き込み接続を何回取るか」を固定する。
+#[derive(Debug, Default)]
+struct LockCounters {
+    writer: std::sync::atomic::AtomicU64,
+    reader: std::sync::atomic::AtomicU64,
+}
+
+/// `SqliteStore::lock_counts` の値。`writer` は書き込み接続（`Mutex`）を取った回数、
+/// `reader` は読み取り接続（プール、無ければ書き込み接続へのフォールバック）を使った回数。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct LockCounts {
+    pub writer: u64,
+    pub reader: u64,
+}
+
+impl LockCounts {
+    /// `earlier` からの増分。
+    pub fn since(self, earlier: LockCounts) -> LockCounts {
+        LockCounts {
+            writer: self.writer.saturating_sub(earlier.writer),
+            reader: self.reader.saturating_sub(earlier.reader),
+        }
+    }
 }
 
 /// ADR-0064 D4: 読み取り専用（`query_only=ON`）の小さな接続プール。書き込み接続（`conn`）の
@@ -697,6 +727,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             read_pool,
+            counters: LockCounters::default(),
         })
     }
 
@@ -732,6 +763,7 @@ impl SqliteStore {
         Ok(Self {
             conn: Mutex::new(conn),
             read_pool,
+            counters: LockCounters::default(),
         })
     }
 
@@ -764,6 +796,9 @@ impl SqliteStore {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, StoreError>,
     ) -> Result<T, StoreError> {
+        self.counters
+            .reader
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         match &self.read_pool {
             Some(pool) => {
                 let conn = pool.checkout()?;
@@ -772,7 +807,7 @@ impl SqliteStore {
                 result
             }
             None => {
-                let conn = self.lock()?;
+                let conn = self.conn.lock().map_err(|_| StoreError::Poisoned)?;
                 f(&conn)
             }
         }
@@ -798,7 +833,7 @@ impl SqliteStore {
             )?;
         }
 
-        let mut current: u32 = if migrations_table_existed {
+        let current: u32 = if migrations_table_existed {
             let v: i64 = conn.query_row(
                 "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
                 [],
@@ -820,10 +855,20 @@ impl SqliteStore {
             // 既存 DB（Phase 1〜8 で作られた、schema_migrations の無い DB）は版数 1 が
             // 適用済みとみなす。0001_init.sql は再実行しない。
             Self::mark_migration_applied(conn, 1)?;
-            current = 1;
         }
 
-        for version in (current + 1)..=SCHEMA_VERSION {
+        // ADR-0133 D3.2: 版数は記録の有無で決める（`RESERVED_VERSIONS` の飛びを後から埋められるように）。
+        // 記録が連続していれば従来の `(current + 1)..=SCHEMA_VERSION` と同じ。
+        let applied: std::collections::HashSet<u32> = {
+            let mut stmt = conn.prepare("SELECT version FROM schema_migrations")?;
+            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
+            rows.map(|r| r.map(|v| v as u32))
+                .collect::<Result<_, _>>()?
+        };
+        for version in 1..=SCHEMA_VERSION {
+            if applied.contains(&version) || migrations::RESERVED_VERSIONS.contains(&version) {
+                continue;
+            }
             Self::apply_migration_version(conn, version)?;
         }
 
@@ -842,7 +887,24 @@ impl SqliteStore {
     /// ADR-0033 D3/D5: `report.rs`・`approval.rs`（`reports`・`approvals`・`standing_rules` 表の SQL）
     /// も同じ接続を使うので crate 内に公開する。
     pub(crate) fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>, StoreError> {
+        self.counters
+            .writer
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.conn.lock().map_err(|_| StoreError::Poisoned)
+    }
+
+    /// ADR-0133 付記: これまでに書き込み接続・読み取り接続を取った回数（試験用の観測値）。
+    pub fn lock_counts(&self) -> LockCounts {
+        LockCounts {
+            writer: self
+                .counters
+                .writer
+                .load(std::sync::atomic::Ordering::Relaxed),
+            reader: self
+                .counters
+                .reader
+                .load(std::sync::atomic::Ordering::Relaxed),
+        }
     }
 
     /// 非終端（`done` / `failed` / `cancelled` 以外）の task を選ぶ SQL 断片（領域ファイル共通）。

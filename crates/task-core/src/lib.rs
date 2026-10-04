@@ -2,7 +2,7 @@
 //! DESIGN.md §4-§5.1 のスコープ。LLM呼び出し・サブプロセス起動は行わない（ADR-0001 D2）。
 
 pub mod delivery;
-pub use delivery::{Delivery, DeliveryState, DeliveryStore};
+pub use delivery::{Delivery, DeliverySkipReason, DeliveryState, DeliveryStore};
 pub mod accounts;
 pub mod approval;
 pub mod browser;
@@ -28,12 +28,18 @@ pub use browser::{
     EffectiveBrowserPolicy,
 };
 pub mod artifacts;
+/// ADR-0130 D4: task branch の target からの behind commits / age（snapshot と純粋規則）。
+pub mod behind_target;
 /// ADR-0044 D2（Phase 53）: タスク単位のコメント。
 pub mod comment;
 pub mod console_action;
+// ADR-0131 D1〜D3: 定期実行（cron job）の型と発火時刻の純関数。
+pub mod cron;
 /// ADR-0079 D7（Phase R1a）: 人への決定の要求の型と検証（純粋）。
 pub mod decision;
 pub mod delegate;
+/// ADR-0124: atomic coding task の決定的な直行経路判定。
+pub mod direct_route;
 /// ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation の純粋な型と関数。
 pub mod execution;
 /// ADR-0072 D13（Phase E3）: Complexity Gate（atomic/compound の決定的な判定）の純粋な型と関数。
@@ -42,10 +48,14 @@ pub mod execution_gate;
 pub mod execution_metrics;
 /// ADR-0072（Phase E2）: ExecutionPlan / WorkUnit のデータモデルと決定的な scheduler の純粋な型と関数。
 pub mod execution_plan;
+/// ADR-0133 D3: 通知（アプリ内の知らせ。既読と束ね）。`notify`（外部への送り出し）とは別。
+pub mod feed;
 /// ADR-0046 D3（Phase 59）: ハーネス = 実行契約（`[[harnesses]]`。旧 `[[genres]]` + `[[roles]]`）。
 pub mod harness;
 /// ADR-0040 D4（Phase 47）: celeris のインスタンスの役割（`daemon_instances`）。
 pub mod instance;
+/// 統合の依頼とその表示用の情報（ADR parallel integration D4）。
+pub mod integration_request;
 /// ADR-0043 D5（Phase 54）: 変更の取り込みの記録（`task_integrations`）。
 pub mod integrations;
 /// ADR-0047（Phase 61）: 知識ベース（front matter・索引・検索・マウント。純粋関数だけ）。
@@ -70,6 +80,7 @@ pub mod plan;
 pub mod profile;
 /// ADR-0074 D3.3（Phase F4a）: 案件レベルの計画（マイルストーン Task の DAG）の schema と検証。
 pub mod project_plan;
+pub mod provider_source;
 pub mod quota;
 pub mod report;
 /// ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ（`project_repos`）とタスクの `repos`。
@@ -82,6 +93,7 @@ pub mod tree;
 pub mod tree_metrics;
 /// ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml`。
 pub mod workspace_config;
+pub mod write_set;
 
 pub use accounts::{AccountAdapter, RateLimitObservation, RateWindow};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
@@ -93,6 +105,11 @@ pub use comment::{
     CommentAuthorKind, CommentId, MAX_COMMENT_CHARS, PREAMBLE_COMMENTS, TaskComment,
 };
 pub use console_action::ConsoleAction;
+pub use cron::{
+    CronCatchUp, CronError, CronJob, CronJobId, CronJobRun, CronJobRunId, CronJobRunUpdate,
+    CronJobStore, CronOverlap, CronRunOutcome, CronSchedule, CronTaskTemplate, CronTrigger, CronTz,
+    DueFires,
+};
 pub use delegate::{
     DelegateDep, DelegateError, DelegateTask, DelegationLimits, OnChildFailure, WorkspaceContext,
     materialize_delegated, materialize_delegated_logging, validate_each,
@@ -143,11 +160,16 @@ pub use model::{
 pub mod pricing;
 pub mod routing;
 pub use pricing::{estimate_cost_usd, output_input_ratio};
+pub use provider_source::{LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};
 // ---- ADR-0043 D1 / D2（Phase 52）: 案件のリポジトリ ----
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
-pub use node_session::{NodeSession, NodeSessionStore, SessionKind};
+pub use node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
+pub use feed::{
+    Notice, NoticeEvent, NoticeId, NoticeKind, NoticeLink, NoticePage, NoticeQuery,
+    NoticeRecordOutcome, NoticeStore, NoticeTarget, NoticeUnreadCount,
+};
 pub use mcp::{
     McpCall, McpCallStore, McpClient, McpClientStore, McpScope, scopes_from_string,
     scopes_to_string,
@@ -184,9 +206,9 @@ pub use repos::{
 };
 pub use store::{
     ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
-    ListFilter, ListOrder, Page, ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION,
-    SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
-    event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
+    ListFilter, ListOrder, LockCounts, Page, ProjectPlanApply, ProjectPlanMilestoneChange,
+    SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption,
+    backup_database, event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
@@ -194,11 +216,15 @@ pub use execution::{
     BudgetKind, CHECKPOINT_MAX_BYTES, CHECKPOINT_MAX_ITEMS, CHECKPOINT_MAX_STRING_CHARS,
     CHECKPOINT_SCHEMA, Checkpoint, CheckpointArtifactRef, CheckpointContext, CheckpointDecision,
     CheckpointEnd, CheckpointFileChange, CheckpointKnownFailure, CheckpointSource,
-    CheckpointTestRun, ContinueWhy, FailedCheck, HarnessErrorClass, MechanicalCheckpoint,
-    RepairClass, RepairDecision, RepairScope, RepoState, ReviewRepairHint, ReviewerRepairKind,
-    RunEnd, WorkerCheckpointInput, build_repair_objective, checkpoint_shows_progress,
-    classify_review_failure, looks_like_context_exceeded, merge_checkpoint,
-    parse_worker_checkpoint, truncate_checkpoint,
+    CheckpointTestRun, ContinueWhy, FailedCheck, HarnessErrorClass, INTEGRATION_REPAIR_BUCKET,
+    INTEGRATION_REPAIR_TITLE, IntegrationRepairExhaustReason, IntegrationRepairSnapshot,
+    IntegrationRepairState, IntegrationRepairStatus, MechanicalCheckpoint, RepairClass,
+    RepairDecision, RepairScope, RepoState, ReviewRepairHint, ReviewerRepairKind, RunEnd,
+    WorkerCheckpointInput, build_integration_repair_objective, build_repair_objective,
+    checkpoint_shows_progress, classify_review_failure, count_integration_repairs,
+    integration_repair_key, integration_repair_snapshots, integration_repair_status,
+    is_integration_repair_unit, looks_like_context_exceeded, merge_checkpoint,
+    normalize_conflict_files, parse_worker_checkpoint, truncate_checkpoint,
 };
 pub use execution_plan::{
     CHILD_DEP_PREFIX, EXECUTION_PLAN_SCHEMA, EXECUTION_PLAN_SCHEMA_V2, ExecutionChildSpec,
@@ -233,6 +259,10 @@ pub use tree::{
 };
 pub use tree_metrics::{DepthRollup, RollupMetrics, RollupNodeFacts, SubtreeMetrics};
 // ---- ADR-0072 D13（Phase E3）: Complexity Gate ----
+pub use direct_route::{
+    DIRECT_ROUTE_POLICY_VERSION, DirectRouteInputs, Route, RouteDecision, RouteReason,
+    evaluate as evaluate_direct_route,
+};
 pub use execution_gate::{
     EXECUTION_GATE_POLICY_VERSION, EXECUTION_GATE_SCORE_THRESHOLD, ExecutionGateDecision,
     ExecutionGateInputs, ExecutionHintSpec, ExecutionMode, GateMode, GateSignal, GateSource,
@@ -241,7 +271,8 @@ pub use execution_gate::{
 };
 // ---- ADR-0072 D19（Phase E5）: Task 単位の実行メトリクス ----
 pub use execution_metrics::{
-    ExecutionMetrics, group_quota_by_work_unit, summarize as summarize_execution_metrics,
+    ContinuationMetrics, ContinuationRunTotals, ExecutionMetrics, group_quota_by_work_unit,
+    summarize as summarize_execution_metrics, summarize_continuation_runs,
 };
 // ---- ADR-0074 D4（Phase F3 quota）: quota 消費の推定 ----
 pub use quota::{

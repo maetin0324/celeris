@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import type { TaskDetail } from "../../api/generated/types";
+import { IntegrationRepairPanel } from "./integration-repair-panel";
 
 // /tasks/:id の概要（P3-08、表示のみ）。操作（判断・実行・routing）は P3-09 / P3-10 で足す。
 // 枠の中で折り返し・スクロールして、ページ全体の横溢れを出さない（S3）。
@@ -68,6 +69,8 @@ export function OverviewView({ detail }: { detail: TaskDetail }) {
           </p>
         </section>
       ) : null}
+
+      <IntegrationRepairPanel view={detail.integration_repair} />
 
       {detail.latest_question ? (
         <section className="min-w-0 rounded border border-amber-300 bg-amber-50 p-3">

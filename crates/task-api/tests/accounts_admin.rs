@@ -362,6 +362,8 @@ async fn list_accounts_merges_filesystem_snapshot_and_stats() {
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     cost_usd: None,
+                    duplicate_reads: None,
+                    session_resumed: None,
                 }),
                 role: None,
                 metrics: None,

@@ -435,7 +435,7 @@ fn result_json_instructions(artifacts: &str) -> String {
 /// ADR-0072 D10（Phase E1）: 予算の予告と rolling checkpoint の指示。coding 系の execute run
 /// （対話は除く。D10）にだけ足す。claude-code は `--max-turns` で turn の上限を実際に強制するが、
 /// codex/acp/aider は強制しない（目安として出す。§7 U1 と同じ「分類できなければ安全側」の考え方）。
-/// **決定的**（壁時計の現在時刻は埋め込まない。DESIGN 原則 1 / 同じ入力から同じプロンプトを保つため。
+/// **決定的**（壁時計の現在時刻は埋め込まない。ADR-0001 D2 原則 1 / 同じ入力から同じプロンプトを保つため。
 /// 「開始時刻」は `WorkerStarted` イベントに残るので、ここに書かなくても run の記録からは追える）。
 fn budget_preamble(task: &Task, artifacts: &str) -> String {
     format!(
@@ -577,6 +577,8 @@ fn build_execute_prompt(
         }
         out.push('\n');
     }
+    // ADR-0124 D4: 直行経路の run だけ。`context.direct_route` が無い run は 1 バイトも増えない。
+    out.push_str(&direct_route_section(context));
     out.push_str(&prior_review_section(context));
     out.push_str(&answers_section(context));
     out.push_str(&children_section(context, artifacts));
@@ -605,6 +607,31 @@ fn build_execute_prompt(
     out
 }
 
+/// ADR-0124 D4: planner を挟まない直行経路の節（文面はここ 1 箇所。codex・acp・aider も
+/// `build_prompt` を共有するので同じ節が出る）。`context.direct_route` が `None` なら空文字列。
+pub(crate) fn direct_route_section(context: &RunContext) -> String {
+    let Some(route) = &context.direct_route else {
+        return String::new();
+    };
+    let mut out = String::from(
+        "## 直行経路（planner なし）\n\
+         この task は決定的な条件で分解不要と判定され、planner を挟まずこの 1 run で実装する。\n\
+         - 調査 → 編集 → テスト → 局所修正を、この run の中で完結させる。\n\
+         - 上の acceptance の command check を自分で実行し、落ちたら同じ run の中で直して再実行する。\n\
+         - run が終わると celeris が同じ command check を決定的に再実行し、その後に最終レビューが入る。\n\
+         - 範囲が想定より大きいと分かったら、無理に広げず result.json の summary にそう書く\n  \
+         （分解は人が decompose で指示する。委譲の書式は従来どおり使える）。\n",
+    );
+    if !route.reasons.is_empty() {
+        out.push_str(&format!("判定の根拠（{}）:\n", route.policy_version));
+        for reason in &route.reasons {
+            out.push_str(&format!("- {reason}\n"));
+        }
+    }
+    out.push('\n');
+    out
+}
+
 /// `Plan` kind 用プロンプト（DESIGN §5.6, ADR-0007 D7）。目標を独立に検証可能な受け入れ条件を持つ
 /// 子タスク群に分解させ、`artifacts/plan.json` に `PlanOutput` を書かせる。
 fn build_plan_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
@@ -612,9 +639,9 @@ fn build_plan_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts:
     out.push_str(
         "## Instructions\n\
          Decompose this goal into a set of child tasks, each with an independently verifiable \
-         acceptance criterion or criteria (DESIGN §5.6: \"目標を、独立に検証可能な受け入れ条件を持つ \
+         acceptance criterion or criteria (ADR-0007: \"目標を、独立に検証可能な受け入れ条件を持つ \
          子タスク群に分解せよ\"). Prefer 3 to 6 child tasks when the size of the goal makes that \
-         reasonable (DESIGN §6 Phase 5 acceptance criteria); use fewer or more only if the goal \
+         reasonable (ADR-0007 acceptance criteria); use fewer or more only if the goal \
          clearly requires it.\n\n",
     );
     out.push_str(&format!(
@@ -639,7 +666,7 @@ fn build_plan_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts:
          include an `artifact_exists` or `knowledge_page` check pointing at the human-readable material \
          (ADR-0067: it must live in registered artifacts or the knowledge base, not in the target \
          repository's tracked files, so a human can see it from the GUI). `kind:\"plan\"` children are \
-         only allowed while the total decomposition depth stays within {} (DESIGN §5.6 \"分解の深さは \
+         only allowed while the total decomposition depth stays within {} (ADR-0007 \"分解の深さは \
          上限 3\"; this plan itself already counts toward that limit). Any `command` check will later be \
          re-run for real inside the child task's own working directory by an independent reviewer, so \
          do not fabricate a command whose result you have not actually observed.\n\n",
@@ -1501,7 +1528,7 @@ pub(super) fn harness_artifacts_section_for_review(context: &RunContext) -> Stri
     out
 }
 
-/// `Review` kind 用プロンプト（DESIGN §5.7, ADR-0007 D5/D7）。対象タスクの成果物を読み取り専用で
+/// `Review` kind 用プロンプト（ADR-0007 D5/D7）。対象タスクの成果物を読み取り専用で
 /// 検証し `artifacts/review.json` に判定を書かせる。
 fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
     let mut out = prompt_header(task, context, run_id, artifacts);
@@ -1638,7 +1665,12 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
 /// 誤って落ちた形を 1 規則 1 文で並べる（/1・/2・/3 の planner に共通。上限の節の直後）。
 pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `checks` and command acceptance)\n\
      - A \"no out-of-scope diff\" check must exclude the paths the unit is allowed to write as records: \
-     `docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write.\n\
+     `agent-docs/progress/`, `agent-docs/adr/`, and every path this plan itself says the unit may write.\n\
+     - Records follow ADR-0128: a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers); progress \
+     goes to the task's own file `agent-docs/progress/YYYY-MM-DD-<slug>.md`, and parallel units of one stage write \
+     `agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).\n\
+     - A land, close-out or final verify leaf's checks must include `sh scripts/dev/check-doc-links.sh`, \
+     `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`.\n\
      - Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test` unless the package \
      script accepts them (`pnpm -C web test scripts/ e2e/support/` handed directories to `node --test` and \
      failed).\n\
@@ -1655,17 +1687,24 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      passes) in the unit's objective so the unit writes the script to accept that form (a check passed a URL to \
      a script that took `[LAN_IP] [PORT]` and failed on every run although the work was done).\n\
      - Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.\n\
+     - Do not put tests that need a user namespace (real browser/runtime/launcher, unshare/CLONE_NEWUSER/newuidmap) \
+     in WU checks: the worker sandbox cannot create one. They skip unless CELERIS_USERNS_TESTS=1; if they must run, \
+     run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.\n\
      - An out-of-scope diff check is compared with sibling units during stage integration, so exclude every \
      unit's allowed paths in that stage, not only this unit's paths.\n\
      - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\
      - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
      check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \
      leave Cargo checks to the daemon's workspace check.\n\
-     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\n";
+     - Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.\n\
+     - Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or \
+     acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, \
+     SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).\n\n";
 /// ADR-0095 付記 D-d: 本番 host の操作は人が実行する手順として書く（planner 指示。worker 前置きの
 /// `production_host_note` と対になる — 計画段階でも最初から試みさせない）。
 pub const PRODUCTION_HOST_PLANNER_GUIDANCE: &str = "### 本番 host の操作 (production host changes)\n\
      本番 host の操作は人が実行する手順として書く: `systemctl --user` / `systemd-run` / `~/.config/systemd` / \
-     `~/.local/celeris/releases` / `~/.config/celeris` を変更する WorkUnit を計画しない。本番の daemon の \
+     `~/.local/celeris/releases` / `/local` / `/local/celeris/state/releases` / `~/.config/celeris` を変更する \
+     WorkUnit を計画しない。本番の daemon の \
      再起動・差し替えが要るときは、人が実行する手順（コマンドと確認方法）を成果物に書く WorkUnit を置き、\
      実行そのものは `decisions` か `needs_decisions` の人の check に回す（ADR-0095 付記 D-d）。\n\n";

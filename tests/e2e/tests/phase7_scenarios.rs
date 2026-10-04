@@ -2,7 +2,7 @@
 //! （`sh` スクリプト）で再現するもの。ネットワークに出ない。タスクは全て `celerisctl add` で作る。
 //!
 //! 1/2. `question` → `celerisctl answer` → 次 run の `context.answers` に回答が載り `done`（条件は `--check-cmd` / `--check-artifact`）
-//! 3.   `celerisctl cancel` は非終端のみ。先行タスクの `failed` が後続へ推移的に伝播する（`dependency_failed`）
+//! 3.   `celerisctl cancel` は非終端と `failed` を受け付ける（`failed` は attempts を保って `cancelled`、ADR-0131 D7）。先行タスクの `failed` が後続へ推移的に伝播する（`dependency_failed`）
 //! 4.   Human check は再レビューで新しい `Approval` 子を要求し、親の cancel で未決の `Approval` 子が `cancelled`
 //! 5.   `provider_failure` 付きの `error` は attempts を消費せず `requeue` され、cooldown 明けに `done`
 
@@ -298,9 +298,9 @@ esac"#,
     env.replay_is_consistent();
 }
 
-/// 受け入れ 3: cancel は非終端のみ。先行の failed は後続へ推移的に伝播する。workspace 省略時は `<task_id>`。
+/// 受け入れ 3: cancel は非終端のみ（例外: ADR-0131 D7 で人は failed を cancel できる）。先行の failed は後続へ推移的に伝播する。workspace 省略時は `<task_id>`。
 #[test]
-fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
+fn cancel_accepts_failed_and_non_terminal_tasks_and_failures_cancel_dependents() {
     let env = Env::new();
     let script = env.write_script(
         r#"cat >/dev/null; echo '{"type":"done","summary":"claimed","evidence":[]}'"#,
@@ -364,10 +364,11 @@ fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
     assert!(out.contains("Cancelled"), "{out}");
     assert_eq!(env.task(d).status, Status::Cancelled);
 
-    let (code, _, stderr) = env.celerisctl_raw(&["cancel", &a_str]);
-    assert_eq!(code, Some(1), "cancelling a failed task must exit 1");
+    // 終端（cancelled）の task の中止は拒否される。
+    let (code, _, stderr) = env.celerisctl_raw(&["cancel", &d.to_string()]);
+    assert_eq!(code, Some(1), "cancelling a cancelled task must exit 1");
     assert!(stderr.contains("cannot be cancelled"), "{stderr}");
-    assert_eq!(env.task(a).status, Status::Failed);
+    assert_eq!(env.task(d).status, Status::Cancelled);
 
     let (code, _, _) = env.celerisctl_raw(&[
         "add",
@@ -381,6 +382,17 @@ fn cancel_is_limited_to_non_terminal_tasks_and_failures_cancel_dependents() {
         &a_str,
     ]);
     assert_eq!(code, Some(1), "depending on a failed task must be rejected");
+
+    // ADR-0131 D7: failed は人の Cancel に限り cancelled にできる（理由 cancel_failed、attempts は保つ）。
+    let attempts = env.task(a).attempts;
+    let out = env.celerisctl(&["cancel", &a_str]);
+    assert!(out.contains("Cancelled"), "{out}");
+    assert_eq!(env.task(a).status, Status::Cancelled);
+    assert_eq!(env.task(a).attempts, attempts);
+    assert_eq!(
+        env.transitions(a).last().map(String::as_str),
+        Some("Failed->Cancelled:cancel_failed")
+    );
     env.replay_is_consistent();
 }
 

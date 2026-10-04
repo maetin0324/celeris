@@ -7,6 +7,8 @@ use std::net::{Shutdown, TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, ExitCode};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use nix::libc;
 use task_worker::browser_relay::{
@@ -16,6 +18,44 @@ use task_worker::browser_shared_cdp::RELAY_PORT;
 
 /// listen 失敗・channel 不正（browser を起動しない）。
 const EXIT_SETUP: u8 = 70;
+
+// Chromium diagnostics may contain URLs, profile contents or credentials.
+// Only fixed categories cross the launcher journal boundary.
+fn chrome_stderr_category(line: &str) -> Option<&'static str> {
+    if line.contains("ProcessSingleton") || line.contains("profile is in use") {
+        Some("profile-lock")
+    } else if line.contains("Permission denied") || line.contains("Operation not permitted") {
+        Some("permission-denied")
+    } else if line.contains("ERROR:") || line.contains("FATAL:") {
+        Some("other-startup-error")
+    } else {
+        None
+    }
+}
+
+fn report_chrome_stderr(mut stderr: impl Read) {
+    let mut chunk = [0u8; 2048];
+    let mut line = Vec::new();
+    let mut reported = 0;
+    while let Ok(n) = stderr.read(&mut chunk) {
+        if n == 0 {
+            break;
+        }
+        for &byte in &chunk[..n] {
+            if byte == b'\n' {
+                if reported < 4
+                    && let Some(category) = chrome_stderr_category(&String::from_utf8_lossy(&line))
+                {
+                    eprintln!("sandboxd: Chrome stderr category={category}");
+                    reported += 1;
+                }
+                line.clear();
+            } else if line.len() < 2048 {
+                line.push(byte);
+            }
+        }
+    }
+}
 
 fn pump(mut from: impl Read, mut to: impl Write) {
     let mut buf = [0u8; 16384];
@@ -48,15 +88,21 @@ fn relay(tcp: TcpStream, unix: UnixStream) {
 fn main() -> ExitCode {
     // channel を検査し、子に継承させない。
     // SAFETY: fd 6 に対する fcntl だけ。
-    if check_channel(CHANNEL_FD).is_err()
-        || unsafe { libc::fcntl(CHANNEL_FD, libc::F_SETFD, libc::FD_CLOEXEC) } < 0
-    {
-        eprintln!("sandboxd: relay channel missing");
+    if let Err(e) = check_channel(CHANNEL_FD) {
+        eprintln!("sandboxd: relay channel invalid: {e}");
+        return ExitCode::from(EXIT_SETUP);
+    }
+    if unsafe { libc::fcntl(CHANNEL_FD, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        eprintln!(
+            "sandboxd: relay channel cloexec: {}",
+            std::io::Error::last_os_error()
+        );
         return ExitCode::from(EXIT_SETUP);
     }
     let argv: Vec<_> = std::env::args_os().skip(1).collect();
     let (chrome, action) = if argv.first().is_some_and(|a| a == "--shared-cdp") {
         if argv.len() < 3 {
+            eprintln!("sandboxd: shared CDP arguments missing");
             return ExitCode::from(EXIT_SETUP);
         }
         (Some(argv[1].clone()), &argv[2..])
@@ -64,18 +110,27 @@ fn main() -> ExitCode {
         (None, argv.as_slice())
     };
     let Some((program, args)) = action.split_first() else {
+        eprintln!("sandboxd: action arguments missing");
         return ExitCode::from(EXIT_SETUP);
     };
-    let Ok(listener) = TcpListener::bind(("127.0.0.1", LISTEN_PORT)) else {
-        eprintln!("sandboxd: listen failed");
-        return ExitCode::from(EXIT_SETUP);
+    let listener = match TcpListener::bind(("127.0.0.1", LISTEN_PORT)) {
+        Ok(listener) => listener,
+        Err(e) => {
+            eprintln!("sandboxd: proxy listen: {e}");
+            return ExitCode::from(EXIT_SETUP);
+        }
     };
-    if send(CHANNEL_FD, READY, None).is_err() {
+    if let Err(e) = send(CHANNEL_FD, READY, None) {
+        eprintln!("sandboxd: send ready: {e}");
         return ExitCode::from(EXIT_SETUP);
     }
     if let Some(chrome) = chrome {
-        let Ok(cdp_listener) = TcpListener::bind(("127.0.0.1", RELAY_PORT)) else {
-            return ExitCode::from(EXIT_SETUP);
+        let cdp_listener = match TcpListener::bind(("127.0.0.1", RELAY_PORT)) {
+            Ok(listener) => listener,
+            Err(e) => {
+                eprintln!("sandboxd: CDP listen: {e}");
+                return ExitCode::from(EXIT_SETUP);
+            }
         };
         std::thread::spawn(move || {
             for connection in cdp_listener.incoming() {
@@ -105,6 +160,7 @@ fn main() -> ExitCode {
         #[cfg(feature = "h3-e2e-insecure-cert")]
         command.arg("--ignore-certificate-errors");
         command.arg("about:blank");
+        command.stderr(std::process::Stdio::piped());
         // SAFETY: fcntl is async-signal-safe and only changes inherited CDP fds.
         unsafe {
             command.pre_exec(|| {
@@ -116,31 +172,69 @@ fn main() -> ExitCode {
                 Ok(())
             });
         }
-        let Ok(mut browser) = command.spawn() else {
-            return ExitCode::from(EXIT_SETUP);
+        let mut browser = match command.spawn() {
+            Ok(browser) => browser,
+            Err(e) => {
+                eprintln!("sandboxd: Chrome spawn: {e}");
+                return ExitCode::from(EXIT_SETUP);
+            }
         };
+        // Only a PID and the fixed CDP transport reach the launcher journal.
+        eprintln!(
+            "sandboxd: Chrome started pid={} flags=remote-debugging-pipe",
+            browser.id()
+        );
+        let (diagnostics_done, diagnostics_rx) = mpsc::channel();
+        if let Some(stderr) = browser.stderr.take() {
+            std::thread::spawn(move || {
+                report_chrome_stderr(stderr);
+                let _ = diagnostics_done.send(());
+            });
+        }
         std::thread::spawn(move || {
-            let _ = browser.wait();
+            match browser.wait() {
+                Ok(status) => {
+                    // Give the bounded diagnostic reader time to drain an
+                    // immediately exiting browser before sandboxd exits.
+                    let _ = diagnostics_rx.recv_timeout(Duration::from_millis(200));
+                    eprintln!(
+                        "sandboxd: Chrome exited code={:?} signal={:?}",
+                        status.code(),
+                        std::os::unix::process::ExitStatusExt::signal(&status)
+                    );
+                }
+                Err(e) => eprintln!("sandboxd: Chrome wait failed errno={:?}", e.raw_os_error()),
+            }
             std::process::exit(i32::from(EXIT_SETUP));
         });
         // The action process must never inherit Chromium's pipe endpoints.
         for fd in [3, 4] {
             // SAFETY: these are the inherited CDP fds, held by sandboxd.
             if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                eprintln!(
+                    "sandboxd: CDP pipe cloexec: {}",
+                    std::io::Error::last_os_error()
+                );
                 return ExitCode::from(EXIT_SETUP);
             }
         }
     }
-    let mut child = match Command::new(program).args(args).spawn() {
+    let mut child = match Command::new(program)
+        .args(args)
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    {
         Ok(c) => c,
-        Err(_) => {
-            eprintln!("sandboxd: child spawn failed");
+        Err(e) => {
+            eprintln!("sandboxd: action spawn: {e}");
             return ExitCode::from(EXIT_SETUP);
         }
     };
     // 子が終われば runtime も終わる（sandboxd は pid namespace の 1 番なので残りは消える）。
     std::thread::spawn(move || {
-        let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(1);
+        let status = child.wait();
+        eprintln!("sandboxd: action exited: {status:?}");
+        let code = status.ok().and_then(|s| s.code()).unwrap_or(1);
         std::process::exit(code);
     });
     for tcp in listener.incoming() {
@@ -160,4 +254,22 @@ fn main() -> ExitCode {
     }
     // channel が閉じた = controller が居ない。出口の無い browser を残さない。
     ExitCode::from(EXIT_SETUP)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::chrome_stderr_category;
+
+    #[test]
+    fn chrome_diagnostics_expose_only_fixed_categories() {
+        assert_eq!(
+            chrome_stderr_category("Failed to create a ProcessSingleton for /secret/profile"),
+            Some("profile-lock")
+        );
+        assert_eq!(
+            chrome_stderr_category("/secret/path: Permission denied"),
+            Some("permission-denied")
+        );
+        assert_eq!(chrome_stderr_category("https://secret.example"), None);
+    }
 }

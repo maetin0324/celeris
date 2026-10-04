@@ -74,6 +74,49 @@ pub fn holder_gone(
     })
 }
 
+/// lease を持たない `running` の `runs` 行（reviewer run 等）を閉じる理由（`WorkerFinished` の
+/// `interrupted: <why>`）。持ち主のデーモンが 1 つも生きていないとき。
+pub const OWNERLESS_GONE_WHY: &str = "orphan_takeover: no live daemon instance holds this run";
+/// 同上。他の生きているインスタンスはあるが、run の期限（`started_at + ttl`）を過ぎたとき。
+pub const OWNERLESS_DEADLINE_WHY: &str =
+    "orphan_takeover: the run outlived its deadline without a lease";
+
+/// 持ち主の居ない `running` の `runs` 行の扱い（[`ownerless_run_decision`]）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerlessRun {
+    /// まだ閉じない（他の生きているインスタンスが面倒を見ているかもしれない）。
+    Keep,
+    /// `WorkerFinished{end: cancelled, outcome: "interrupted: <why>"}` で閉じる。
+    Close { why: &'static str },
+}
+
+/// このインスタンスが抱えておらず、task / WU の lease も持たない `running` の `runs` 行を閉じるか。
+/// 呼び出し側が「手元に無い」「lease を持たない」「task が終端でない」を確かめた後に使う。
+///
+/// - run を抱えうる他のインスタンスが 1 つも生きていない（`holders_gone`、[`holder_gone`]）→ すぐ閉じる
+///   （結果を記録できる者はもう居ない）。
+/// - 他に生きているインスタンスがある（例: ライブ切替で draining の旧デーモンがまだ自分のレビューを
+///   面倒見ている）→ `started_at + ttl` を過ぎるまでは閉じない。過ぎたら閉じる（その run の時間の上限を
+///   越えて生きている run は無い）。
+pub fn ownerless_run_decision(
+    holders_gone: bool,
+    started_at: OffsetDateTime,
+    ttl: Duration,
+    now: OffsetDateTime,
+) -> OwnerlessRun {
+    if holders_gone {
+        return OwnerlessRun::Close {
+            why: OWNERLESS_GONE_WHY,
+        };
+    }
+    if now >= started_at + ttl {
+        return OwnerlessRun::Close {
+            why: OWNERLESS_DEADLINE_WHY,
+        };
+    }
+    OwnerlessRun::Keep
+}
+
 /// 同一ホストの pid の生死（`/proc/<pid>`）。判定できない環境・pid 0 は `true`（生きている＝横取り
 /// しない、保守的な側）。`celeris::instance::pid_alive` と同じ規則。
 pub fn proc_pid_alive(pid: u32) -> bool {

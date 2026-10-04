@@ -167,6 +167,22 @@ impl SqliteStore {
         })
     }
 
+    pub(in crate::store) fn runs_running_impl(&self) -> Result<Vec<RunRow>, StoreError> {
+        self.with_read_conn(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT run_id, task_id, work_unit_id, role, seq, status, adapter, model, \
+                 account, session_id, checkpoint_json, usage_json, metrics_json, started_at, \
+                 finished_at FROM runs WHERE status = 'running' ORDER BY started_at ASC",
+            )?;
+            let rows = stmt.query_map([], Self::row_to_run)?;
+            let mut out = Vec::new();
+            for row in rows {
+                out.push(row??);
+            }
+            Ok(out)
+        })
+    }
+
     pub(in crate::store) fn close_runs_of_terminal_tasks_impl(
         &self,
     ) -> Result<Vec<(TaskId, String)>, StoreError> {

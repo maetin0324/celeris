@@ -535,3 +535,73 @@ async fn sha256_current_changes_when_the_artifact_is_modified() {
     assert_eq!(list["items"][0]["sha256_matches"], false);
     assert_eq!(list["items"][0]["sha256_current"], sha256(b"{\"ns\":2}"));
 }
+
+/// 2026-10-04 統合の検査の進み具合 D3: 統合 WU の実行中の検査のログの末尾を API で読める（path は event から引く）。
+#[tokio::test]
+async fn work_unit_check_log_returns_the_tail_of_the_running_check() {
+    let env = TestEnv::new();
+    let task = new_task(TaskKind::Execute, Status::Running);
+    env.seed(&task);
+    let log = env
+        .workspace(&task)
+        .join("integration-checks/integrate-p1/1-1.log");
+    let mut body = "x".repeat(20_000);
+    body.push_str("\nrunning: test foo ... ok\n");
+    write(&log, body.as_bytes());
+    env.store
+        .append_event(
+            task.id,
+            &Event::IntegrationCheckStarted {
+                work_unit_id: "wu-int".into(),
+                key: "integrate-p1".into(),
+                index: 1,
+                total: 3,
+                cmd: "cargo test --workspace".into(),
+                log_path: log.display().to_string(),
+                started_at: "2026-10-04T02:09:00Z".into(),
+            },
+        )
+        .expect("append");
+    let app = env.router();
+    let resp = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/work-units/wu-int/check-log?bytes=64",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let v = resp.json();
+    assert_eq!(v["cmd"], "cargo test --workspace");
+    assert_eq!(v["index"], 1);
+    assert_eq!(v["total"], 3);
+    assert_eq!(v["running"], true);
+    assert_eq!(v["truncated"], true);
+    assert_eq!(v["size"], body.len());
+    let tail = v["tail"].as_str().unwrap_or_default();
+    assert!(tail.ends_with("running: test foo ... ok\n"), "{tail}");
+    assert!(tail.len() <= 64);
+    // 既定は 16 KiB で頭打ち。
+    let default = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/work-units/wu-int/check-log",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(
+        default.json()["tail"].as_str().unwrap_or_default().len(),
+        16 * 1024
+    );
+    let missing = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/work-units/nope/check-log",
+            task.id
+        )),
+    )
+    .await;
+    assert_problem(&missing, 404, "file_not_found");
+}

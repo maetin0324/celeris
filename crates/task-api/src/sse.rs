@@ -1,4 +1,4 @@
-//! SSE `GET /stream`（`docs/gui/api.md` §4）。
+//! SSE `GET /stream`（`docs/api/v1/gui-api.md` §4）。
 //!
 //! 接続ごとに購読ループを 1 つ動かす（購読者が 0 ならポーリングも無い）。ループは `events_since(cursor, 1000)` を
 //! `poll_interval` ごとに呼んで `task.event` を送り、`watch` の変化で `daemon`、`heartbeat_interval` ごとに `heartbeat` を送る。
@@ -13,7 +13,7 @@ use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderName, HeaderValue, header};
 use axum::response::Response;
 use serde::Serialize;
-use task_core::{TaskId, TaskStore};
+use task_core::{Notice, NoticeQuery, NoticeStore, TaskId, TaskStore};
 use task_ops::daemon::DaemonSnapshot;
 use tokio::sync::{mpsc, watch};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -74,7 +74,20 @@ pub(crate) async fn stream(
             return Err(ApiProblem::internal("stream buffer is unavailable"));
         }
     }
-    tokio::spawn(run(state, slot, tx, cursor, task_filter, daemon));
+    let notice_baseline = if task_filter.is_none() {
+        notice_signature(&state).await.ok()
+    } else {
+        None
+    };
+    tokio::spawn(run(
+        state,
+        slot,
+        tx,
+        cursor,
+        task_filter,
+        daemon,
+        notice_baseline,
+    ));
 
     let body = futures_util::stream::unfold(rx, |mut rx| async move {
         rx.recv()
@@ -126,6 +139,7 @@ async fn run(
     mut cursor: u64,
     task_filter: Option<TaskId>,
     mut daemon: watch::Receiver<Option<DaemonSnapshot>>,
+    mut last_notice: Option<(u64, u64, Option<Notice>)>,
 ) {
     let tuning = state.tuning;
     let mut shutdown = state.inner.shutdown.subscribe();
@@ -136,6 +150,11 @@ async fn run(
         tuning.heartbeat_interval,
     );
     heartbeat.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let mut notice_poll = tokio::time::interval_at(
+        Instant::now() + std::time::Duration::from_secs(5),
+        std::time::Duration::from_secs(5),
+    );
+    notice_poll.set_missed_tick_behavior(MissedTickBehavior::Delay);
     let mut daemon_open = true;
 
     loop {
@@ -160,6 +179,9 @@ async fn run(
                 send(&state, &tx, frame("heartbeat", None, &beat)).await
             }
             _ = poll.tick() => poll_events(&state, &tx, &mut cursor, task_filter).await,
+            _ = notice_poll.tick(), if task_filter.is_none() => {
+                poll_notice_changes(&state, &tx, &mut last_notice).await
+            }
         };
         if !keep_going {
             break;
@@ -195,19 +217,73 @@ async fn poll_events(
             }
         };
         let caught_up = rows.len() < STREAM_BATCH;
+        let mut inbox_changed = false;
         for row in rows {
             let id = row.id;
-            if task_filter.is_none_or(|t| t == row.task_id)
-                && !send(state, tx, frame("task.event", Some(id), &row)).await
-            {
-                return false;
+            if task_filter.is_none_or(|t| t == row.task_id) {
+                inbox_changed = true;
+                if !send(state, tx, frame("task.event", Some(id), &row)).await {
+                    return false;
+                }
             }
             *cursor = id;
+        }
+        if inbox_changed
+            && !send(
+                state,
+                tx,
+                frame("inbox_changed", None, &serde_json::json!({})),
+            )
+            .await
+        {
+            return false;
         }
         if caught_up {
             return true;
         }
     }
+}
+
+/// The feed store is updated independently of task events (reports and scheduled jobs).
+/// A compact signature lets clients reload the list without putting notices in SSE frames.
+async fn poll_notice_changes(
+    state: &ApiState,
+    tx: &mpsc::Sender<Bytes>,
+    previous: &mut Option<(u64, u64, Option<Notice>)>,
+) -> bool {
+    let snapshot = notice_signature(state).await;
+    match snapshot {
+        Ok(snapshot) => {
+            let changed = previous.as_ref().is_none_or(|old| old != &snapshot);
+            *previous = Some(snapshot);
+            !changed
+                || send(
+                    state,
+                    tx,
+                    frame("notifications_changed", None, &serde_json::json!({})),
+                )
+                .await
+        }
+        Err(problem) => {
+            tracing::warn!(code = problem.code(), "SSE notice poll failed; retrying");
+            true
+        }
+    }
+}
+
+async fn notice_signature(state: &ApiState) -> Result<(u64, u64, Option<Notice>), ApiProblem> {
+    state
+        .blocking(|store| {
+            let page = store
+                .notice_list(&NoticeQuery {
+                    limit: 1,
+                    ..NoticeQuery::default()
+                })
+                .map_err(store_problem)?;
+            let unread = store.notice_unread_count().map_err(store_problem)?.total;
+            Ok((page.total, unread, page.items.into_iter().next()))
+        })
+        .await
 }
 
 /// 1 フレームを送る。送信路が閉じているか停止中なら `false`。

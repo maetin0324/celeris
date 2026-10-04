@@ -8,7 +8,7 @@ use crate::files::{self, FileRequest, FileTarget, RunFile};
 use crate::problem::{ApiProblem, store_problem};
 use crate::query::{QueryParams, event_type_name, parse_task_id};
 use crate::state::ApiState;
-use crate::types::{ArtifactList, EventsPage, RunList};
+use crate::types::{ArtifactList, EventsPage, RunList, WorkUnitCheckLog};
 
 use super::{ApiResult, Params, json_response, no_query};
 
@@ -295,4 +295,194 @@ pub(super) async fn artifact_body(
         })
         .await?;
     files::respond_file(target, &request).await
+}
+
+// ---- 2026-10-04 統合の検査の進み具合 D3: GET /tasks/{id}/work-units/{wu_id}/check-log ----
+
+/// 既定で返すログの末尾の大きさ。
+const CHECK_LOG_DEFAULT_BYTES: u64 = 16 * 1024;
+/// 返すログの末尾の上限（`bytes` はここで頭打ち）。
+const CHECK_LOG_MAX_BYTES: u64 = 64 * 1024;
+
+pub(super) async fn work_unit_check_log(
+    State(state): State<ApiState>,
+    Params((id, wu_id)): Params<(String, String)>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    let query = QueryParams::parse(raw.as_deref(), &["index", "bytes"])?;
+    let id = parse_task_id(&id)?;
+    let index = query
+        .u64("index")?
+        .map(|i| {
+            u32::try_from(i)
+                .map_err(|_| ApiProblem::bad_request("query parameter `index` is too large"))
+        })
+        .transpose()?;
+    let bytes = query
+        .u64("bytes")?
+        .unwrap_or(CHECK_LOG_DEFAULT_BYTES)
+        .clamp(1, CHECK_LOG_MAX_BYTES);
+    let log = state
+        .blocking(move |store| {
+            load_task(store, id)?;
+            let events = store.events_for(id).map_err(store_problem)?;
+            check_log_of(&events, &wu_id, index, bytes)
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &log))
+}
+
+/// events（seq 順）から WU の検査の開始を引き、その `log_path` の末尾を読む。path は event から引き、要求からは取らない。
+fn check_log_of(
+    events: &[(u64, task_core::Event)],
+    wu_id: &str,
+    index: Option<u32>,
+    bytes: u64,
+) -> Result<WorkUnitCheckLog, ApiProblem> {
+    use task_core::Event;
+    let started = events.iter().rposition(|(_, e)| {
+        matches!(e, Event::IntegrationCheckStarted { work_unit_id, index: i, .. }
+            if work_unit_id == wu_id && index.is_none_or(|want| want == *i))
+    });
+    let Some(pos) = started else {
+        return Err(ApiProblem::file_not_found(format!(
+            "work unit {wu_id} has no integration check{}",
+            index
+                .map(|i| format!(" with index {i}"))
+                .unwrap_or_default()
+        )));
+    };
+    let Event::IntegrationCheckStarted {
+        work_unit_id,
+        key,
+        index,
+        total,
+        cmd,
+        log_path,
+        started_at,
+    } = &events[pos].1
+    else {
+        return Err(ApiProblem::not_found());
+    };
+    let finished = events[pos + 1..].iter().find_map(|(_, e)| match e {
+        Event::IntegrationCheckFinished {
+            work_unit_id: w,
+            index: i,
+            pass,
+            exit,
+            duration_ms,
+            ..
+        } if w == work_unit_id && i == index => Some((*pass, *exit, *duration_ms)),
+        _ => None,
+    });
+    let (size, truncated, tail) = read_log_tail(std::path::Path::new(log_path), bytes)
+        .map_err(|e| ApiProblem::file_not_found(format!("cannot read the check log: {e}")))?;
+    Ok(WorkUnitCheckLog {
+        work_unit_id: work_unit_id.clone(),
+        key: key.clone(),
+        index: *index,
+        total: *total,
+        cmd: cmd.clone(),
+        started_at: started_at.clone(),
+        running: finished.is_none(),
+        pass: finished.map(|f| f.0),
+        exit: finished.and_then(|f| f.1),
+        duration_ms: finished.map(|f| f.2),
+        size,
+        truncated,
+        tail,
+    })
+}
+
+/// ファイルの末尾 `bytes` を読む（無ければ空）。前を切ったときは UTF-8 の途中のバイトを捨てる。
+fn read_log_tail(path: &std::path::Path, bytes: u64) -> std::io::Result<(u64, bool, String)> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Ok((0, false, String::new()));
+        }
+        Err(e) => return Err(e),
+    };
+    let size = file.metadata()?.len();
+    let start = size.saturating_sub(bytes);
+    file.seek(SeekFrom::Start(start))?;
+    let mut buf = Vec::new();
+    file.take(bytes).read_to_end(&mut buf)?;
+    let mut skip = 0;
+    if start > 0 {
+        while skip < buf.len() && skip < 3 && (buf[skip] & 0b1100_0000) == 0b1000_0000 {
+            skip += 1;
+        }
+    }
+    Ok((
+        size,
+        start > 0,
+        String::from_utf8_lossy(&buf[skip..]).into_owned(),
+    ))
+}
+
+#[cfg(test)]
+mod check_log_tests {
+    use super::*;
+    use task_core::Event;
+
+    fn started(wu: &str, index: u32, path: &std::path::Path) -> Event {
+        Event::IntegrationCheckStarted {
+            work_unit_id: wu.into(),
+            key: "integrate-p1".into(),
+            index,
+            total: 2,
+            cmd: format!("check-{index}"),
+            log_path: path.display().to_string(),
+            started_at: "2026-10-04T02:09:00Z".into(),
+        }
+    }
+
+    #[test]
+    fn the_latest_started_check_is_running_until_its_finish_and_the_tail_is_utf8_safe() {
+        let dir = tempfile::tempdir().unwrap();
+        let p0 = dir.path().join("0.log");
+        let p1 = dir.path().join("1.log");
+        std::fs::write(&p0, "done-output\n").unwrap();
+        // 「あ」は 3 バイト。末尾 4 バイトだと先頭が途中のバイトになる。
+        std::fs::write(&p1, "xxあい").unwrap();
+        let mut events = vec![
+            (1, started("w", 0, &p0)),
+            (
+                2,
+                Event::IntegrationCheckFinished {
+                    work_unit_id: "w".into(),
+                    key: "integrate-p1".into(),
+                    index: 0,
+                    total: 2,
+                    cmd: "check-0".into(),
+                    pass: false,
+                    exit: Some(3),
+                    timed_out: false,
+                    duration_ms: 42,
+                },
+            ),
+            (3, started("w", 1, &p1)),
+        ];
+        let running = check_log_of(&events, "w", None, 4).unwrap();
+        assert_eq!(running.index, 1);
+        assert!(running.running);
+        assert!(running.truncated);
+        assert_eq!(running.tail, "い");
+        assert_eq!(running.size, 8);
+        let first = check_log_of(&events, "w", Some(0), 1024).unwrap();
+        assert!(!first.running);
+        assert_eq!(
+            (first.pass, first.exit, first.duration_ms),
+            (Some(false), Some(3), Some(42))
+        );
+        assert_eq!(first.tail, "done-output\n");
+        assert!(!first.truncated);
+        // まだファイルが無い（出力がまだ無い）検査は空の末尾。
+        events.push((4, started("w", 0, &dir.path().join("missing.log"))));
+        let empty = check_log_of(&events, "w", None, 1024).unwrap();
+        assert_eq!((empty.size, empty.tail.as_str()), (0, ""));
+        assert!(check_log_of(&events, "other", None, 1024).is_err());
+    }
 }

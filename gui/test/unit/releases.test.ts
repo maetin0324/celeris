@@ -6,6 +6,7 @@ import { instanceRoleLabel } from "~/lib/labels";
 import {
   changesSummaryText,
   commitShort,
+  configNeedsReview,
   handoffInFlight,
   handoffProgressText,
   hasSensitiveChanges,
@@ -16,11 +17,20 @@ import {
   promoteFailedText,
   promoteFlashState,
   promoteNeedsTypedSha,
+  promotionIncompleteText,
+  promotionModeLabel,
+  promotionReleaseText,
   releaseGateBadgeLabel,
   releaseGateLabel,
+  releaseGateSkipText,
   releaseGateStepRows,
   releaseModeWord,
+  releaseNoteFileText,
+  releaseNotesEmpty,
+  releaseNoteTaskHref,
+  releaseNoteTaskTitle,
   releasePositionLabel,
+  releaseSchemaText,
   releaseSubtitle,
   releaseVerifyBadgeLabel,
   releaseVerifyCheckGroups,
@@ -41,6 +51,7 @@ import {
   releaseChanges,
   releaseGateSteps,
   releaseItem,
+  releaseNotes,
   releaseVerifyChecks,
 } from "../mock-celeris/fixtures";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
@@ -546,5 +557,47 @@ describe("promoteRelease（POST /releases/{sha12}/promote。管理系）", () =>
     expect(outcome.ok).toBe(false);
     if (outcome.ok) throw new Error("unreachable");
     expect(outcome.error.code).toBe("unauthorized");
+  });
+});
+
+describe("リリースの説明の整形", () => {
+  it("schema の行", () => {
+    expect(releaseSchemaText({ from: 41, to: 42, changed: true })).toBe("schema 41 → 42（DB 移行あり）");
+    expect(releaseSchemaText({ from: 42, to: 42, changed: false })).toBe("schema 42（変化なし）");
+    expect(releaseSchemaText({ from: null, to: null })).toBeNull();
+    expect(releaseSchemaText(null)).toBeNull();
+  });
+
+  it("task の見出しは title → 最初の commit 題 → id の順", () => {
+    expect(releaseNoteTaskTitle({ task_id: "T1", title: "題" })).toBe("題");
+    expect(releaseNoteTaskTitle({ task_id: "T1", title: null, commits: [{ subject: "fix" }] })).toBe("fix");
+    expect(releaseNoteTaskTitle({ task_id: "T1", title: " " })).toBe("T1");
+    expect(releaseNoteTaskHref("T1")).toBe("/tasks/T1");
+  });
+
+  it("ファイル・gate skip・config の文言", () => {
+    expect(releaseNoteFileText({ path: "a.md", title: "題" })).toBe("a.md — 題");
+    expect(releaseNoteFileText({ path: "a.sql" })).toBe("a.sql");
+    expect(releaseGateSkipText({ step: "web", reason: "SD_GATE_SKIP_WEB=1" })).toBe("web（SD_GATE_SKIP_WEB=1）");
+    expect(configNeedsReview([{ needs_review: false }, { needs_review: true }])).toBe(true);
+    expect(configNeedsReview([])).toBe(false);
+  });
+
+  it("notes の空判定", () => {
+    expect(releaseNotesEmpty(releaseNotes())).toBe(false);
+    expect(
+      releaseNotesEmpty(
+        releaseNotes({ tasks: [], direct_commits: [], migrations: [], adrs: [], config_example: null, gate_skips: [] }),
+      ),
+    ).toBe(true);
+  });
+
+  it("昇格の要約の文言", () => {
+    expect(promotionModeLabel("live")).toContain("live");
+    expect(promotionModeLabel("stop-start")).toBe("停止 → 起動");
+    expect(promotionModeLabel(null)).toBe("未検証");
+    expect(promotionIncompleteText({ complete: true })).toBeNull();
+    expect(promotionIncompleteText({ complete: false, problem: "x" })).toContain("x");
+    expect(promotionReleaseText({ sha12: "abc", task_count: 3 })).toBe("abc（task 3 件）");
   });
 });

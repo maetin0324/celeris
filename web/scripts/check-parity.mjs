@@ -33,7 +33,7 @@ function checkCommitAncestry(doneRows, root, runGit, errors) {
 }
 
 export function checkParity(root = defaultRoot, requirePhase = null, runGit = runGitCommand) {
-  const matrix = readFileSync(path.join(root, "docs/web/feature-parity.md"), "utf8");
+  const matrix = readFileSync(path.join(root, "agent-docs/web/feature-parity.md"), "utf8");
   const specDir = path.join(root, "web/e2e/parity");
   const specs = readdirSync(specDir)
     .filter((name) => name.endsWith(".spec.ts"))

@@ -364,9 +364,9 @@ fn cancels_running_task_acquired_via_lease() {
 }
 
 #[test]
-fn cancel_on_terminal_task_errors_and_leaves_status_unchanged() {
+fn cancel_on_done_or_cancelled_task_errors_and_leaves_status_unchanged() {
     let store = SqliteStore::open_in_memory().expect("open store");
-    for status in [Status::Done, Status::Failed, Status::Cancelled] {
+    for status in [Status::Done, Status::Cancelled] {
         let task = sample_task(TaskKind::Execute, status);
         store.insert(&task).expect("insert");
 
@@ -376,6 +376,28 @@ fn cancel_on_terminal_task_errors_and_leaves_status_unchanged() {
         let fetched = store.get(task.id).expect("get").expect("some");
         assert_eq!(fetched.status, status);
     }
+}
+
+#[test]
+fn inbox_cleanup_cancel_failed_is_available_to_human() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let parent = sample_task(TaskKind::Execute, Status::Blocked);
+    store.insert(&parent).expect("parent");
+    let mut task = sample_task(TaskKind::Execute, Status::Failed);
+    task.parent_id = Some(parent.id);
+    assert!(crate::view::actions(&task).contains(&crate::view::Action::Cancel));
+    store.insert(&task).expect("insert");
+    let result = cancel(&store, task.id, Some(Status::Failed)).expect("cancel failed");
+    assert_eq!(result.to, Status::Cancelled);
+    assert_eq!(result.reason, "cancel_failed");
+    assert_eq!(
+        store
+            .get(parent.id)
+            .expect("get parent")
+            .expect("parent")
+            .status,
+        Status::Blocked
+    );
 }
 
 #[test]
@@ -410,7 +432,7 @@ fn cancel_with_mismatched_expected_returns_conflict_without_transitioning() {
     );
 }
 
-// ---- cascaded (docs/gui/api.md §5.7) ----
+// ---- cascaded (docs/api/v1/gui-api.md §5.7) ----
 
 #[test]
 fn reject_approval_cascades_cancel_to_its_own_children() {

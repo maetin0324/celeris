@@ -80,7 +80,7 @@ import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/org";
 
 /**
- * `/org`（組織の木、SPEC §3.2、ADR-0033 D1、docs/gui/api.md §3.42〜3.45）。
+ * `/org`（組織の木、SPEC §3.2、ADR-0033 D1、docs/api/v1/gui-api.md §3.42〜3.45）。
  * `GET /org` は木にしない（API は position 順の平らな配列）ので、`parent_id` から GUI 側で組む
  * （`~/lib/org-tree.ts`）。「抱えている仕事の数」は `GET /tasks`（`TaskSummary.assignee`、Phase 27 で追加。
  * celeris-requests.md R3 が解決済み）を 1 回呼んで数える（`app/routes/tasks.new.tsx` と同じ `limit=500` の

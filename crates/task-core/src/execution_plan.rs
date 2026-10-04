@@ -269,6 +269,9 @@ impl UnitContext {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanUnitSpec {
+    /// Optional repository-relative prefixes inherited by child tasks or leaf WUs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_write_paths: Option<Vec<String>>,
     /// `[a-z0-9-]{1,32}`。計画の中で一意。
     pub key: String,
     /// `stages` の key。

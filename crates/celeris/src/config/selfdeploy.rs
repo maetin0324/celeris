@@ -1,10 +1,13 @@
 //! `[handoff]`（ADR-0040 D4）と `[selfdeploy]`（ADR-0040 D6 / ADR-0045 D2）: 昇格とリリースの置き場。
 
-use std::path::{Path, PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use serde::Deserialize;
 
-use super::ConfigError;
+use super::{ConfigError, DeliveryConfig};
 
 /// `[handoff]`（ADR-0040 D4）: 昇格のライブ引き継ぎ。`active` が `draining` になったあと、手元の run が
 /// 終わるのをここまで待つ。超えたら残りを abort し（リースが切れて新しい active が従来の「リース切れ」の
@@ -47,9 +50,15 @@ fn default_drain_timeout_secs() -> u64 {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SelfdeployConfig {
+    /// Runtime settings parsed from the top-level `[delivery]` table by `Config::load`.
+    #[serde(skip)]
+    pub delivery: DeliveryConfig,
     /// ADR-0051: 自動取り込みを許可する自己改善案件。空なら無効。
     #[serde(default)]
     pub delivery_projects: Vec<String>,
+    /// ADR-0121 D1: project ID to fallback department ID.
+    #[serde(default)]
+    pub delivery_default_departments: BTreeMap<String, String>,
     #[serde(default = "default_releases_dir")]
     pub releases_dir: PathBuf,
     /// ADR-0041 D3: **作業チェックアウト**の場所（`~/workspace/agent-platform`）。
@@ -75,8 +84,10 @@ pub struct SelfdeployConfig {
 impl Default for SelfdeployConfig {
     fn default() -> Self {
         Self {
+            delivery: DeliveryConfig::default(),
             releases_dir: default_releases_dir(),
             delivery_projects: Vec::new(),
+            delivery_default_departments: BTreeMap::new(),
             repo: default_selfdeploy_repo(),
             push: default_selfdeploy_push(),
             push_remote: default_selfdeploy_push_remote(),
@@ -125,6 +136,15 @@ impl SelfdeployConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if self
+            .delivery_default_departments
+            .keys()
+            .any(|id| id.parse::<task_core::ProjectId>().is_err())
+        {
+            return Err(ConfigError::Invalid(
+                "delivery_default_departments keys must be project IDs".into(),
+            ));
+        }
         if !self.delivery_projects.is_empty()
             && (self
                 .delivery_projects

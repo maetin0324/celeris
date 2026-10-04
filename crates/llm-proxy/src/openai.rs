@@ -1,6 +1,6 @@
 //! OpenAI 互換の要求/応答の型（`POST /v1/chat/completions`、`GET /v1/models`。ADR-0053 D1）。
 //!
-//! マルチモーダル（画像等）は扱わない（テキストのみ。ADR-0053 の受け入れ条件に無い。`docs/llm-source.md` に明記）。
+//! マルチモーダル（画像等）は扱わない（テキストのみ。ADR-0053 の受け入れ条件に無い。`docs/guides/llm-source.md` に明記）。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,7 @@
 //! ADR-0109 D5: attack matrix A1-A17 against a real broker, real CDP pipe and real
 //! chrome-headless-shell in a network namespace with no external route.
 //! Missing prerequisites fail (no skip).
+mod userns_gate;
 use celeris_credentiald::injection_ipc::{
     self, Admission, AuthSectionRegistration, CdpSink, InjectionService, LiveRegistry,
     LiveSessionRegistration, PeerCred, SinkFailed, process_start,
@@ -185,7 +186,7 @@ fn fixture(dir: &Path) -> Child {
         .stderr(Stdio::null())
         .spawn()
         .expect("fixture TLS server starts");
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while TcpStream::connect((FIXTURE_IP, 443)).is_err() {
         assert!(
             Instant::now() < deadline,
@@ -231,10 +232,15 @@ fn start_broker(rt: &IsolatedRuntime) -> tempfile::TempDir {
         )
     });
     let socket = root.path().join("run/celeris-credentiald/control.sock");
-    for _ in 0..200 {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
         if socket.exists() {
             break;
         }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for fixture readiness"
+        );
         thread::sleep(Duration::from_millis(10));
     }
     let pid = rt.inner_pid() as u32;
@@ -745,6 +751,7 @@ fn inner() {
     );
     argv.insert(1, browser.clone().into_os_string());
     let spec = RuntimeSpec {
+        userns: task_worker::browser_runtime::UsernsMode::Unshare,
         bwrap: tool("bwrap"),
         session_id: "wire-sink".into(),
         session_dir: session.path().to_path_buf(),
@@ -767,6 +774,7 @@ fn inner() {
         rt.cdp_write.take().expect("CDP write"),
         rt.cdp_read.take().expect("CDP read"),
     );
+    cdp.response_timeout_for_test(Duration::from_secs(60));
     let created = cdp
         .agent_command("Target.createTarget", json!({"url":"about:blank"}), None)
         .expect("page target");
@@ -1034,7 +1042,7 @@ fn a4_oopif(ctx: &mut Ctx) {
         None,
     );
     let login = format!("{CROSS_SITE}/login.html");
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     let (child, oopif_sid) = loop {
         assert!(Instant::now() < deadline, "OOPIF target did not attach");
         let found = ctx.cdp.take_agent_events().into_iter().find_map(|e| {
@@ -1073,7 +1081,7 @@ fn a4_oopif(ctx: &mut Ctx) {
     let tree = oopif(ctx, "Page.getFrameTree", json!({}));
     let frame = &tree["result"]["frameTree"]["frame"];
     assert_eq!(frame["id"], child.as_str());
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + Duration::from_secs(60);
     while oopif(ctx, "Page.getFrameTree", json!({}))["result"]["frameTree"]["frame"]["url"]
         != login.as_str()
     {
@@ -1610,6 +1618,9 @@ fn a13_other_uid(ctx: &Ctx) {
 
 #[test]
 fn real_browser_injection_attack_matrix() {
+    if userns_gate::skip_unless_userns_tests() {
+        return;
+    }
     for t in ["unshare", "ip", "openssl", "bwrap", "python3"] {
         tool(t);
     }

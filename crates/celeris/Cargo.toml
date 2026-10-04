@@ -19,9 +19,8 @@ task-ops = { path = "../task-ops" }
 task-api = { path = "../task-api" }
 llm-proxy = { path = "../llm-proxy" }
 celeris-mcp = { path = "../celeris-mcp" }
-scratch-cache = { path = "../scratch-cache" }
 async-trait = "0.1"
-time = { version = "0.3", features = ["formatting"] }
+time = { version = "0.3", features = ["formatting", "parsing"] }
 ulid = "1"
 # ADR-0040 D4（Phase 47）: API の listener を `SO_REUSEPORT` で bind する（新旧が同じポートに並ぶ）。
 socket2 = { version = "0.5", features = ["all"] }
@@ -35,9 +34,9 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "charset", "http2"] }
 serde_json = "1"
 # ADR-0064 D5（Phase 110a）: 背景チェックポイント（`db_maintenance.rs`）専用の接続を開くのに使う。
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 
 [dev-dependencies]
 serde_json = "1"
 tempfile = "3"
-time = { version = "0.3", features = ["serde", "formatting"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }

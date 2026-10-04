@@ -7,6 +7,8 @@ import type {
   ExecutionPlanVersionSummary,
   ExecutionView,
   ExecutionWorkUnitView,
+  IntegrationCheckDone,
+  IntegrationCheckProgress,
   PhaseCheckpointView,
   PhaseGateAction,
   QuotaUse,
@@ -187,6 +189,41 @@ export function workUnitGroups(plan: ExecutionPlanOverview): WorkUnitGroup[] {
   const rest = sorted.filter((w) => !w.phase || !known.has(w.phase));
   if (rest.length > 0) groups.push({ key: "", label: "工程なし", units: rest });
   return groups;
+}
+
+// ---------------------------------------------------------------------------
+// 2026-10-04 統合の検査の進み具合 D4: 統合 WU は run を持たないので、celeris が events から組み立てた
+// `check_progress`（現在の検査・済んだ検査）を 1 行と一覧にする。
+// ---------------------------------------------------------------------------
+
+/** 所要時間（ミリ秒）を「850ms」「12.3s」「4m05s」「1h02m」にする。 */
+export function formatDurationMs(ms: number): string {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))}ms`;
+  const secs = ms / 1000;
+  if (secs < 60) return `${secs.toFixed(1)}s`;
+  const total = Math.floor(secs);
+  if (total < 3600) return `${Math.floor(total / 60)}m${String(total % 60).padStart(2, "0")}s`;
+  return `${Math.floor(total / 3600)}h${String(Math.floor((total % 3600) / 60)).padStart(2, "0")}m`;
+}
+
+/**
+ * 統合の検査の 1 行。実行中なら「検査 2/5 実行中: <cmd>（済 1・不合格 0）」、終わっていれば
+ * 「検査 5/5 済（不合格 1）」。`check_progress` が無ければ `null`。
+ */
+export function checkProgressLine(progress: IntegrationCheckProgress | null | undefined): string | null {
+  if (!progress) return null;
+  const failed = progress.finished.filter((f) => !f.pass).length;
+  if (progress.current) {
+    return `検査 ${progress.current.index + 1}/${progress.total} 実行中: ${progress.current.cmd}（済 ${progress.finished.length}・不合格 ${failed}）`;
+  }
+  return `検査 ${progress.finished.length}/${progress.total} 済（不合格 ${failed}）`;
+}
+
+/** 済んだ検査 1 件の結果の文言（「通過 exit 0・12.3s」「不合格 exit 3・850ms」「timeout・30m00s」）。 */
+export function checkDoneLabel(done: IntegrationCheckDone): string {
+  const verdict = done.pass ? "通過" : "不合格";
+  const exit = done.timed_out ? "timeout" : done.exit == null ? "exit なし" : `exit ${done.exit}`;
+  return `${verdict} ${exit}・${formatDurationMs(done.duration_ms)}`;
 }
 
 /** 今走っている WU の run（`running_run_id` を持つ WU、seq 順）。 */

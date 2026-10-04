@@ -7,7 +7,7 @@ fn fixture() -> (tempfile::TempDir, PathBuf) {
         ("docs/a.md", "# Repeated\n[missing](missing.md)\n"),
         ("docs/b.md", "# Repeated\n"),
         ("docs/unknown.md", "# Undecided\n"),
-        ("docs/adr/1.md", "# Decision\n"),
+        ("agent-docs/adr/1.md", "# Decision\n"),
         ("docs/old.md", "# Old\nstatus: superseded\n"),
         ("AGENTS.md", "# Instructions\n"),
     ] {

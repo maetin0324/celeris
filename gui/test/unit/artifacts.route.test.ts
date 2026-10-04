@@ -61,6 +61,10 @@ const taskDetail = (over: Partial<TaskDetail> = {}): TaskDetail => ({
   actions: [],
   worker_run_hint: null,
   delegated: [],
+  // docs/adr/0130 D2/D4 で `TaskDetail` に増えた必須項目。
+  actual_run_write_sets: [],
+  actual_work_unit_write_sets: [],
+  behind_target: {},
   ...over,
 });
 

@@ -103,10 +103,22 @@ fn dispatcher_with_test_clock(
     max_concurrency: usize,
     use_test_clock: bool,
 ) -> Dispatcher {
+    dispatcher_with_adapter_id(store, adapter, max_concurrency, use_test_clock, "instant")
+}
+
+/// `dispatcher_with_test_clock` と同じだが、provider `p1` のアダプタ id を選べる
+/// （ADR-0140: continuation の resume は `claude-code` だけが対象）。
+fn dispatcher_with_adapter_id(
+    store: Arc<dyn TaskStore>,
+    adapter: Arc<dyn WorkerAdapter>,
+    max_concurrency: usize,
+    use_test_clock: bool,
+    adapter_id: &str,
+) -> Dispatcher {
     let mut policy = StaticPolicy::new(
         vec![ProviderSpec {
             id: "p1".into(),
-            adapter: "instant".into(),
+            adapter: adapter_id.into(),
             tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
             concurrency: max_concurrency,
             model: "m".into(),
@@ -216,6 +228,31 @@ pub(super) async fn run_until_idle(d: &mut Dispatcher, max_ticks: usize) -> Tick
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     last
+}
+
+pub(super) async fn run_until_task_terminal(
+    d: &mut Dispatcher,
+    store: &Arc<dyn TaskStore>,
+    task_id: TaskId,
+) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let mut last = TickReport::default();
+    loop {
+        let task = store.get(task_id).unwrap().expect("task exists");
+        if task.status.is_terminal() {
+            assert_eq!(task.status, Status::Done, "{task:?}");
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let runs = store.runs_for_task(task_id).unwrap();
+            panic!(
+                "task did not reach Done before 30s: status={:?}, runs={runs:?}, last_tick={last:?}",
+                task.status
+            );
+        }
+        last = d.tick().unwrap();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 /// ADR-0036: 自分の `artifacts_dir` に結果ファイルと成果物を書き、少し待ってから読み直して
@@ -362,6 +399,8 @@ impl WorkerAdapter for ReviewerUsageAdapter {
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     cost_usd: Some(0.03),
+                    duplicate_reads: None,
+                    session_resumed: None,
                 })
             }
             _ => {
@@ -1185,9 +1224,6 @@ async fn wait_for_approval_child(
 /// 走った run の env を記録し、`with_env` を実装するテスト用アダプタ（ADR-0024 D2）。
 type CapturedEnvs = Arc<StdMutex<Vec<Vec<(String, String)>>>>;
 
-/// `PoolAdapter::with_env_removed` が外した key に付ける印（実アダプタの `Command::env_remove` の代わり）。
-const ENV_REMOVED: &str = "<env_remove>";
-
 #[derive(Clone)]
 struct PoolAdapter {
     terminal_or_throttled: Result<Terminal, Duration>,
@@ -1236,15 +1272,6 @@ impl WorkerAdapter for PoolAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut env = self.env.clone();
         env.extend(extra.iter().cloned());
-        Some(Arc::new(PoolAdapter {
-            env,
-            ..self.clone()
-        }))
-    }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut env = self.env.clone();
-        env.retain(|(k, _)| !keys.contains(k));
-        env.extend(keys.iter().map(|k| (k.clone(), ENV_REMOVED.to_string())));
         Some(Arc::new(PoolAdapter {
             env,
             ..self.clone()
@@ -2652,6 +2679,26 @@ async fn run_until(d: &mut Dispatcher, max_ticks: usize, mut done: impl FnMut() 
     false
 }
 
+/// ADR-0125 (b): 状態待ちの保険。tick の回数ではなく壁時計で打ち切る（負荷で遅れても成立条件にしない）。
+pub(super) const STATE_WAIT_GUARD: Duration = Duration::from_secs(60);
+
+/// ADR-0125 (b): `done` が真になるまで tick を駆動する。判定は store の状態・event（`done`）だけで、tick の回数は
+/// 失敗条件にしない。[`STATE_WAIT_GUARD`] を過ぎたら `false`（壊れたときに止まる保険）。tick の間の短い sleep は
+/// worker・検査の task への譲りで、成立条件ではない。
+pub(super) async fn run_until_state(d: &mut Dispatcher, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + STATE_WAIT_GUARD;
+    loop {
+        d.tick().unwrap();
+        if done() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 fn wu_status(
     store: &Arc<dyn TaskStore>,
     id: TaskId,
@@ -2850,6 +2897,8 @@ fn gate_done_terminal() -> Terminal {
             cache_read_tokens: Some(1_531_392),
             cache_creation_tokens: Some(0),
             cost_usd: None,
+            duplicate_reads: None,
+            session_resumed: None,
         }),
     }
 }
@@ -2941,26 +2990,10 @@ fn no_deleting_left(dir: &Path) -> bool {
         .unwrap_or(true)
 }
 
-/// ADR-0075 §5 G2: Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の env
-/// （`RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`）を返す。
-async fn run_with_sccache(
-    sccache: task_worker::scratch::SccacheSettings,
-) -> (
-    task_worker::scratch::ScratchSettings,
-    task_worker::scratch::Owner,
-    Vec<(String, String)>,
-    String,
-) {
-    run_with_sccache_and_cache(sccache, None, None).await
-}
-
-/// `run_with_sccache` に Phase G3 の cache server の設定と、sccache の server が選んだ backend の記録
-/// （`<scratch>/bin/sccache-server.mode`）を足す。
-async fn run_with_sccache_and_cache(
-    sccache: task_worker::scratch::SccacheSettings,
-    cache_server: Option<task_worker::scratch::CacheServerSettings>,
-    mode: Option<&str>,
-) -> (
+/// ADR-0129 (1): scratch を有効にして Task 単位の run（`task-<id>`）を 1 回走らせ、run の env と reviewer の checks の
+/// env を返す。checks の 1 行目は `RUSTC_WRAPPER|SCCACHE_DIR|SCCACHE_SERVER_PORT|CARGO_INCREMENTAL|CARGO_PROFILE_DEV_DEBUG|CARGO_TARGET_DIR`
+/// （未設定は `unset`）、2 行目は子プロセスの sccache の族の全部（`parent_sccache_family` と同じ形）。
+async fn run_scratch_env() -> (
     task_worker::scratch::ScratchSettings,
     task_worker::scratch::Owner,
     Vec<(String, String)>,
@@ -2976,7 +3009,6 @@ async fn run_with_sccache_and_cache(
     let task = git_task(
         repo_dir.path(),
         None,
-        // 1 行目: 値（未設定は `unset`。空の値と区別する）。2 行目: G3-fix1 の sccache の族の全部（辞書順、空白区切り）。
         Check::Command {
             cmd: format!(
                 "echo \"${{RUSTC_WRAPPER-unset}}|${{SCCACHE_DIR-unset}}|${{SCCACHE_SERVER_PORT-unset}}|$CARGO_INCREMENTAL|$CARGO_PROFILE_DEV_DEBUG|$CARGO_TARGET_DIR\" >> {log}; \
@@ -2995,16 +3027,8 @@ async fn run_with_sccache_and_cache(
         None,
     );
     scratch_on(&mut d, scratch_dir.path());
-    d.config.scratch.sccache = sccache;
-    if let Some(cs) = cache_server {
-        d.config.scratch.cache_server = cs;
-    }
-    if let Some(mode) = mode {
-        task_worker::scratch::write_sccache_mode(&d.config.scratch.pool(), mode).unwrap();
-    }
     let settings = d.config.scratch.clone();
-    run_until_idle(&mut d, 60).await;
-    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    run_until_task_terminal(&mut d, &store, task.id).await;
     let runs = captured.lock().unwrap().clone();
     assert_eq!(runs.len(), 1, "{runs:?}");
     let owner = task_worker::scratch::Owner::task(task.id.to_string());
@@ -3012,99 +3036,40 @@ async fn run_with_sccache_and_cache(
     (settings, owner, runs[0].clone(), check)
 }
 
-fn fake_sccache_binary(dir: &Path) -> PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-    let bin = dir.join("sccache");
-    std::fs::write(&bin, "#!/bin/sh\nexit 0\n").unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
-    bin
-}
-
-/// G3-fix1: run（`PoolAdapter` が `with_env_removed` で受けた key）と checks（子プロセスの実 env）で、
-/// sccache の族が 1 つも残っていない。親（テストの process）が `RUSTC_WRAPPER` などを持っていても同じ。
-fn assert_sccache_family_removed(run_env: &[(String, String)], check: &str) {
-    let set: Vec<&(String, String)> = run_env
-        .iter()
-        .filter(|(k, v)| task_worker::scratch::is_sccache_family(k) && v != ENV_REMOVED)
+/// この process の env の sccache の族（`KEY=VALUE ` を辞書順に連ねたもの。checks の 2 行目と同じ形）。
+fn parent_sccache_family() -> String {
+    let mut family: Vec<String> = std::env::vars()
+        .filter(|(k, _)| {
+            k == "RUSTC_WRAPPER" || k == "RUSTC_WORKSPACE_WRAPPER" || k.starts_with("SCCACHE_")
+        })
+        .map(|(k, v)| format!("{k}={v}"))
         .collect();
-    assert!(set.is_empty(), "{set:?}: {run_env:?}");
-    for key in task_worker::scratch::RUSTC_WRAPPER_VARS
-        .iter()
-        .chain(task_worker::scratch::KNOWN_SCCACHE_VARS.iter())
-    {
-        assert!(
-            run_env.iter().any(|(k, v)| k == key && v == ENV_REMOVED),
-            "{key} was not removed: {run_env:?}"
-        );
-    }
-    assert_eq!(
-        check.lines().nth(1).unwrap_or_default().trim(),
-        "",
-        "{check}"
-    );
-}
-
-/// G3-fix1: 配線するとき、run と checks の `RUSTC_WRAPPER` は Celeris の `<scratch>/bin/sccache`（継いだ値ではない）で、
-/// 与えない族（`RUSTC_WORKSPACE_WRAPPER`・webdav 系・継いだ他の `SCCACHE_*`）は外れている。
-fn assert_celeris_wrapper_only(
-    settings: &task_worker::scratch::ScratchSettings,
-    run_env: &[(String, String)],
-    check: &str,
-) {
-    let wrapper = settings
-        .pool()
-        .root()
-        .join("bin/sccache")
-        .display()
-        .to_string();
-    assert!(
-        run_env
-            .iter()
-            .any(|(k, v)| k == "RUSTC_WRAPPER" && *v == wrapper),
-        "{run_env:?}"
-    );
-    assert!(
-        run_env
-            .iter()
-            .any(|(k, v)| k == "RUSTC_WORKSPACE_WRAPPER" && v == ENV_REMOVED),
-        "{run_env:?}"
-    );
-    let family = check.lines().nth(1).unwrap_or_default();
-    let keys: Vec<&str> = family
-        .split_whitespace()
-        .filter_map(|kv| kv.split_once('=').map(|(k, _)| k))
-        .collect();
-    assert_eq!(
-        keys,
-        [
-            "RUSTC_WRAPPER",
-            "SCCACHE_CACHE_SIZE",
-            "SCCACHE_DIR",
-            "SCCACHE_IDLE_TIMEOUT",
-            "SCCACHE_SERVER_PORT"
-        ],
-        "{check}"
-    );
-    assert!(
-        family.contains(&format!("RUSTC_WRAPPER={wrapper} ")),
-        "{check}"
-    );
+    family.sort();
+    family.iter().map(|kv| format!("{kv} ")).collect()
 }
 
 mod build_cache;
 mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;
+mod cron_jobs;
 mod git_workspace;
+mod integration_check_progress;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;
 mod routing_and_quota;
+mod target_sync;
 mod tick_and_dispatch;
+mod ui_ux_skills;
 mod work_units;
 
 /// Phase F5-fix6: 再起動直後の孤児 run の回収（`src/dispatcher/tests/orphan_takeover.rs`）。
 mod orphan_takeover;
+
+/// 持ち主の居ない `running` の `runs` 行（lease を持たない reviewer run 等）の取り残しと照合
+/// （`src/dispatcher/tests/ownerless_runs.rs`）。
+mod ownerless_runs;
 
 /// Phase F5-fix7: 依存 WU のブランチが無いときの基点と、準備の失敗で黙って止まらないこと
 /// （`src/dispatcher/tests/work_unit_dependency_base.rs`）。
@@ -3161,5 +3126,20 @@ mod planner_budget;
 /// ADR-0079 付記 R7-9: 統合済みの段階に unit が増えたら段階の統合をやり直す（replan・修正前の行の reopen）
 /// （`src/dispatcher/tests/stage_reopen.rs`）。
 mod stage_reopen;
+/// ADR-0130 D2: 実装 run・WU の actual write-set の記録（`src/dispatcher/tests/write_set_record.rs`）。
+mod write_set_record;
 
 mod browser_fallback;
+/// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
+mod direct_route;
+/// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
+/// （`src/dispatcher/tests/phase_effect_ab.rs`）。
+mod phase_effect_ab;
+/// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
+/// （`src/dispatcher/tests/session_resume.rs`）。
+mod session_resume;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先（`src/dispatcher/tests/stale_priority.rs`）。
+mod stale_priority;
+/// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
+/// （`src/dispatcher/tests/write_set_gate.rs`）。
+mod write_set_gate;

@@ -26,7 +26,7 @@ pub const DEFAULT_ASPECTS: &[&str] = &[
 /// 観点の候補として許す最大文字数。Phase 109f: 仕様上の目安は「10 文字を超える文」だが、実際に
 /// 観点として通したい複合語（例: `deployment model` 16 文字、`server/core利用` 13 文字）がこれを
 /// 超えるため、値そのものは緩めている（丸ごと混入したプロセの文を弾くのが目的で、複合語の観点を
-/// 落とさないことを優先。`docs/adr/0063-research-tasks-resilience.md` Phase 109f 追記参照）。
+/// 落とさないことを優先。`agent-docs/adr/0063-research-tasks-resilience.md` Phase 109f 追記参照）。
 const MAX_ASPECT_CANDIDATE_CHARS: usize = 24;
 
 /// 観点として使えない語（人による付記や日付そのものを指す語。実際の事故: 「## 方針（人の指定、

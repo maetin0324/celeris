@@ -10,6 +10,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { Button, buttonClassName } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList, type DataListItem } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -245,16 +246,25 @@ function NodeForm({ node, items }: { node: OrgNode; items: OrgNode[] }) {
           保存
         </Button>
         {node.kind !== "secretary" && (
-          <Button
-            variant="destructive"
-            disabled={sender.pending}
-            onClick={() => {
-              if (window.confirm(`${node.name} を削除しますか？`))
-                void sender.run([{ id: "delete", method: "DELETE", path: `/api/org/${encodeURIComponent(node.id)}` }]);
+          <ConfirmDialog
+            trigger={
+              <Button variant="destructive" disabled={sender.pending}>
+                削除
+              </Button>
+            }
+            title="担当を削除しますか"
+            target={node.name}
+            consequence="この担当の登録が使えなくなります。削除後は組織の木を再取得して確認します。"
+            reversibility="削除は元に戻せません。必要なら担当を作り直してください。"
+            followUp="組織の木と担当の詳細で確認できます。"
+            confirmLabel={`${node.name} を削除`}
+            onConfirm={async () => {
+              const [result] = await sender.run([
+                { id: "delete", method: "DELETE", path: `/api/org/${encodeURIComponent(node.id)}` },
+              ]);
+              if (result && !result.ok) throw new Error(result.message);
             }}
-          >
-            削除
-          </Button>
+          />
         )}
       </div>
       <ActionResultView result={sender.results.patch} />

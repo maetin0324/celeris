@@ -66,7 +66,7 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
       title={<span className="break-all">{repo.repo}</span>}
       aria-label={`リポジトリ ${repo.repo}`}
       data-repo={repo.repo}
-      className="rounded-lg border border-border bg-surface p-4"
+      className="rounded-lg border border-border bg-surface p-3 md:p-4"
     >
       <DataList
         items={[
@@ -141,12 +141,12 @@ function ChangedFiles({
   onSelect: (path: string) => void;
 }) {
   return (
-    <Table data-testid="changed-files" className="table-fixed">
+    <Table data-testid="changed-files">
       <TableHeader>
         <TableRow>
-          <TableHead className="w-24">状態</TableHead>
+          <TableHead className="w-px">状態</TableHead>
           <TableHead>ファイル</TableHead>
-          <TableHead className="w-20 text-right">行</TableHead>
+          <TableHead className="w-px text-right">行</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -155,8 +155,8 @@ function ChangedFiles({
           const pressed = selected === file.path;
           return (
             <TableRow key={file.path} data-state={pressed ? "checked" : undefined}>
-              <TableCell>
-                <Badge tone={status.tone} title={`status ${file.status}`}>
+              <TableCell className="whitespace-nowrap">
+                <Badge tone={status.tone} title={`status ${file.status}`} className="break-normal whitespace-nowrap">
                   {status.label}
                 </Badge>
               </TableCell>
@@ -167,13 +167,12 @@ function ChangedFiles({
                   title={file.path}
                   aria-pressed={pressed}
                   onClick={() => onSelect(file.path)}
-                  className="inline-flex min-h-11 w-full min-w-0 items-center gap-1 break-all text-left font-mono text-label text-primary underline underline-offset-2"
+                  className="inline-flex min-h-11 min-w-0 items-center break-all text-left font-mono text-label text-primary underline underline-offset-2"
                 >
-                  <span className="min-w-0">{file.path}</span>
-                  <Icon name={pressed ? "chevron-up" : "chevron-down"} size="sm" className="shrink-0" />
+                  {file.path}
                 </button>
               </TableCell>
-              <TableCell className="text-right font-mono tabular-nums">
+              <TableCell className="whitespace-nowrap text-right font-mono tabular-nums">
                 {file.binary ? (
                   <span className="text-muted-foreground">binary</span>
                 ) : (
@@ -230,18 +229,21 @@ function DiffPane({ taskId, repo, path }: { taskId: string; repo: string; path: 
                   <span className="text-danger-foreground">− 削除</span>
                 </p>
                 <CodeBlock label={`差分 ${path}`} data-testid="change-diff-body" className="max-h-96 overflow-y-auto">
-                  {diffLines(diff.data.diff).map((line, index) => (
-                    <span
-                      // 行は位置で一意。差分の原文は並べ替わらない。
-                      // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の行が繰り返し現れる。
-                      key={index}
-                      data-line={line.kind}
-                      className={`block w-max min-w-full px-1 ${lineClass[line.kind]}`}
-                    >
-                      {line.text === "" ? " " : line.text}
-                      {"\n"}
-                    </span>
-                  ))}
+                  {/* 行の背景を最長の行の幅まで伸ばすため、行を w-max の grid に並べる。 */}
+                  <span className="grid w-max min-w-full">
+                    {diffLines(diff.data.diff).map((line, index) => (
+                      <span
+                        // 行は位置で一意。差分の原文は並べ替わらない。
+                        // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の行が繰り返し現れる。
+                        key={index}
+                        data-line={line.kind}
+                        className={`block px-1 ${lineClass[line.kind]}`}
+                      >
+                        {line.text === "" ? " " : line.text}
+                        {"\n"}
+                      </span>
+                    ))}
+                  </span>
                 </CodeBlock>
               </>
             )}

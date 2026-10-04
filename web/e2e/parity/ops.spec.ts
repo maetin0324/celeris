@@ -242,9 +242,9 @@ test.describe("P4-13..15 accounts/clusters", () => {
     await expect(again.getByText("接続中")).toBeVisible();
     await again.getByLabel("作業ディレクトリ").fill("/work/me");
     await again.getByRole("button", { name: "作業ディレクトリを保存" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toBeVisible();
+    await expect(again.getByText("/work/me（db）")).toBeVisible();
     await again.getByRole("button", { name: "上書きを消す" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toHaveCount(0);
+    await expect(again.getByText("/work/me（db）")).toHaveCount(0);
     expect(seen.some((r) => r.path === "/api/v1/clusters/pegasus/settings" && r.method === "PUT")).toBe(true);
   });
 });

@@ -40,3 +40,20 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 
 10. **[help-login] `/login` — 失敗後の「次にどこへ戻るか」が画面に出ない**（重大度: 低）
     `docs/frontend/UX_AUDIT.md:30` が指摘した「戻り先 `next` を画面に示さない」は help-login 葉の変更後も残る（`qa-qa-admin-pre/_login-{360,1440}.png` は初期状態のみで確認、`web/routes/login.tsx` のソース上も `next` の表示が無いことを確認）。help-login 葉の対応範囲は失敗理由の alert と focus 復帰までで、this は対象外のまま。
+
+## 修正
+
+### ops-config（accounts・providers）
+
+対象: `web/features/ops/{providers-screen.tsx,providers-form.ts,accounts-screen.tsx,secrets-section.tsx,mcp-clients.tsx}`、unit 期待の更新（`providers-screen.test.tsx`）、`web/e2e/admin/ops-config.spec.ts` の label 1 か所。parity spec が見る accessible name（`adapter`・`concurrency`・`新規 id`・`secret id`・`secret 値`・`secret を保存`・listitem 名・h1）と本文 `concurrency N` は語として残し、日本語を主にして設定語を括弧で添える形にした。
+
+- 5. [修正: `/providers` の節見出しを「adapter / harness の実行枠（n）」→「実行枠（n）」、説明は「使えるか・休止中か・失敗しているか」を確かめる 1 文に縮め、道具（adapter / harness）・受ける段（tiers）・LLM source・celeris/&lt;tier&gt; の説明は開閉式の「用語の説明」（`<details>`、summary は min-h-11）へ下げた。form ラベルを「同時実行数（concurrency）」「モデル（model）」「受ける段（tiers）」「道具（adapter）」「新規の同時実行数（concurrency）」「新規のモデル（model）」に、tier の checkbox を「frontier（最上位）」「standard（標準）」「cheap（安価）」に、表の列「tiers」→「受ける段」、要約行を「設定: codex・concurrency 4・段 …・モデル …」「道具の種類: …」に、検証文言を「同時実行数は 0 以上の整数…」に替えた]
+- 5. [残課題: StatusBadge の設定語彙（`agent-docs/progress/2026-10-04-web-admin-screens/ops-config.md` の提案）と見出し「LLM source」は accounts と providers 共通の定義語として残した。`concurrency N` の本文は parity（`web/e2e/parity/ops.spec.ts:148` の `/concurrency 4/`）が見るため英語の設定語を残す]
+- 8. [修正: `/accounts` の card の DataList ラベル `adapter`→「道具」、追加 form の select を「道具（adapter）」、secret 節の h2 を「秘密の値（secret）」、MCP クライアント card の `scopes`→「権限の範囲」に替えた]
+- 8. [残課題: 「secret id」「secret 値」「secret を保存」「secret を削除」や listitem 名「secret &lt;id&gt;」は parity が accessible name で固定しているため英語の `secret` を残す。ops 系画面全体の訳語表（daemon・clusters 側を含む）は fix-ops-runtime 葉と post-record で揃える]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` → exit 0（vitest 57 files・347 tests、node 42 tests）
+- `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-config.spec.ts e2e/parity/ops.spec.ts` → 14 passed
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/ops web/routes/accounts.tsx web/routes/providers.tsx web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+- `mobile-audit` は exit 1 だが違反は `/projects/P1`・`/tasks/T1`・`/tasks/T1/changes`（範囲外、未命名 textarea 等）のみで、`/accounts`・`/providers` は違反なし

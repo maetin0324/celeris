@@ -20,7 +20,7 @@ research の arch-adr を作成。親 task は `01M44H0SRV70E32AQ6C5N37MSK`、�
 | phase2 / p2-state-cost | 未着手 | source 状態・effective cost・予約・選択 |
 | phase3 / p3-context-esc | 未着手 | task context・軌跡 escalation・feature/reward |
 | phase45 / p4-shadow-eval | 未着手 | 上限付き shadow・offline dataset/replay/指標 |
-| phase45 / p5-estimator | 未着手 | 汎用 sidecar adapter と shadow 比較、本番切替なし |
+| phase45 / p5-estimator | 未着手・[needs-human] | adapter-plus-routellm: 汎用 adapter、実 RouteLLM の起動停止手順・実 shadow 評価 report。weights 利用条件の回答待ち、本番切替なし |
 | phase45 / close | 未着手 | 全 Phase の回帰と移行手順の整合確認 |
 
 ## 設計で固定した境界
@@ -29,7 +29,17 @@ research の arch-adr を作成。親 task は `01M44H0SRV70E32AQ6C5N37MSK`、�
 - kernel は `task-core` の純粋型・関数。dispatcher は lane/run/provider、proxy は同じ lane 内の request/source/model を決める。QualityEstimator は助言のみで、外部 estimator は非同期の shadow 専用。
 - cash、subscription の shadow price、self-host の resource pressure/機会費用、推定/実測/unknown を区別する。hard constraints と品質下限は score より優先する。
 - 再利用方式は upstream 調査と同じく (c) 8 項目、(b) 評価指標の数式、(a) Phase 5 の estimator sidecar。pin・配布条件・notice・追従負担を ADR §8 に記録した。weights/dataset の未確認 license をコードの license で代用しない。
-- 回答済みの `shadow-exec=opt-in-capped` と `estimator-scope=sidecar-adapter` を採用。追加の人の決定を要求しない。実行 shadow は既定 off、対象・日次上限・再起動後の予約を検証する。
+- 回答済みの `shadow-exec=opt-in-capped` と `estimator-scope=adapter-plus-routellm` を採用。実行 shadow は既定 off、対象・日次上限・再起動後の予約を検証する。Phase 5 は偽 sidecar 試験だけでは完了せず、実 RouteLLM の起動停止・上限付き shadow 評価を必須にする。
+
+## Phase 5 の前提と受け入れ条件
+
+**[needs-human] `routellm-weights-use`、needed_before: `p5-estimator`。** upstream-oss §5 で `routellm/bert_gpt4_augmented` の weights license 宣言を確認できていないため、人が根拠を確認してローカル shadow 評価を認めるか、確認まで Phase 5 を保留するかの回答を待つ。回答済みの `adapter-plus-routellm` の範囲を変更する決定ではない。回答までは weights を取得・使用しない。今回の ADR 作成と Phase 1〜4 は進められる。
+
+ADR §7.3 / §10 の Phase 5 で、次を必須の成果と検査契約にした（実装・実評価は後続 Phase の仕事）。
+
+- `docs/ops/model-routing-migration.md`: RouteLLM/wrapper/weights の pin、license/notice と承認根拠、Python・torch 等の lock、CPU/GPU 要件、起動・ready・推論・停止・PID/port/資源解放を確認する手順。
+- `docs/reports/model-routing-routellm-shadow.md`: 許可済み dataset と上限、実 classifier の成功応答、消費・失敗・coverage・校正・overhead・primary 不変の評価 report。
+- `routing_routellm_runbook_pins_dependencies_and_license`、`routing_routellm_real_sidecar_start_stop`、`routing_routellm_real_shadow_within_caps`: 通常 CI の偽 sidecar 試験に追加する必須検査。未提供・skip・全件失敗は Phase 5 未完了。品質向上は必須にせず、本番切替はしない。
 
 ## cheap-local-first との関係
 

@@ -5,7 +5,7 @@ tasks: [01M44MBCP98FNEEMEXG5CQRQQA, 01M44H0SRV70E32AQ6C5N37MSK]
 
 - 日付: 2026-10-04
 - 状態: **設計を記録、実装は未着手**。research 段の人レビューへ渡す architecture ADR。以下の型・設定・API・試験名は、既存と明記したもの以外は実装予定である。
-- 回答済みの決定: **shadow-exec = opt-in-capped**（実呼出しは既定 off、対象と一日上限を設定）。**estimator-scope = sidecar-adapter**（Phase 5 は汎用 sidecar estimator adapter と RouteLLM 等の shadow 評価まで。本番切り替えを含めない）。追加の人の決定待ちはない。
+- 回答済みの決定: **shadow-exec = opt-in-capped**（実呼出しは既定 off、対象と一日上限を設定）。**estimator-scope = adapter-plus-routellm**（Phase 5 は汎用 sidecar estimator adapter に加え、RouteLLM 型 classifier を実 sidecar として動かす起動・停止手順、license・依存・CPU/GPU 要件の記録、上限付き shadow 評価まで。本番切り替えを含めない）。weights の利用条件は **[needs-human] `routellm-weights-use`**（§7.3、Phase 5 前）として分離し、この回答済みの範囲を縮小しない。
 - 根拠: [棚卸し](../progress/2026-10-04-multi-objective-routing/inventory.md)、[upstream-oss 調査](../progress/2026-10-04-multi-objective-routing/upstream-oss.md)、[進捗](../progress/2026-10-04-multi-objective-routing.md)。調査原本は `celeris-wu/01M44H0SRV70E32AQ6C5N37MSK/{inventory,upstream-oss}` の同名ファイル。着手 HEAD `aa44fe420e25` には両方を含む。
 - 拡張元: [ADR-0069](0069-routing-four-layers.md) の Model / Review 層、[ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md) の adapter/source 分離と cheap Qwen 制限。Ownership / Harness を選び直す機能ではない。
 
@@ -189,7 +189,7 @@ shadow は要求のコピーだけを評価キューへ送る。primary と shad
 
 評価は acceptance 成功率・失敗 criterion、cash/effective cost 別集計、p50/p95 latency、retry/escalation、quota exhaustion、制約違反 0、source 比率、unknown/timeout/drop 率を必須とする。APGR、目標品質到達時の strong 呼出し率、非減少 cost-quality 凸包の AIQ、IBC は **比較可能な paired outcome がある場合だけ**算出する。API 呼出しだけの latency と task 完了時間、予測品質指数と実際の合否を別列にする。分母ゼロ/弱モデルより低い品質/非正の追加 cost は未定義として理由を返す。異なる指標を単一の改善率に混ぜない。
 
-mode=enforce の対象拡大は自動で行わない。検証条件は同一 fixture で決定一致、hard constraint 違反 0、legacy primary 変更 0、shadow 上限超過 0。実データの性能優位はこの ADR で断定せず、sample size・信頼区間・欠測率と policy 版を人に渡す。Phase 5 完了条件も外部 estimator の優越ではなく、接続可否と不足条件を再現可能な証拠で判定できることである。
+mode=enforce の対象拡大は自動で行わない。検証条件は同一 fixture で決定一致、hard constraint 違反 0、legacy primary 変更 0、shadow 上限超過 0。実データの性能優位はこの ADR で断定せず、sample size・信頼区間・欠測率と policy 版を人に渡す。Phase 5 は実 RouteLLM sidecar の起動・停止と上限付き shadow 評価を再現可能な証拠で確認する。品質向上は合格の必須条件にしないが、実 sidecar 未実行を接続可否の報告だけで完了にはしない。
 
 ### 7.3 汎用 sidecar adapter
 
@@ -197,7 +197,11 @@ mode=enforce の対象拡大は自動で行わない。検証条件は同一 fix
 
 HTTP `POST /estimate` version 1 の request は `request_id, context_features, candidates[{model_profile_id}], optional_prompt`。response は同じ request_id と `estimator_id/version, estimates[{model_profile_id,index?,confidence?,reasons}], dependencies`。未知/重複 ID、版不一致、値域外、NaN、サイズ超過、timeout は拒否して heuristic 比較へ戻す。prompt が必要でも send_prompt=false なら `prompt_required` として評価不能を記録する。privacy と locality は sidecar への送信と sidecar の外部依存の両方に適用する。
 
-RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter の裏の wrapper が対応する **2 model ID の相対推定**として返す。別 pair/未評価モデルへ汎化せず、Celeris の品質尺度へ校正できない場合は index=None として raw pair score を評価 metadata にだけ残す。`bert` が外部 embeddings 不要の第一候補。ただし weights の利用条件確認は未完了なので自動取得・同梱しない。`mf/sw_ranking` は外部 embeddings を要し、send_prompt と外部送信の明示許可が無ければ拒否する。CI は偽 sidecar だけで合格可能とする。実 RouteLLM の接続評価は人が用意した sidecar で opt-in の shadow のみ行い、未提供なら「protocol 検証済み、実 weights 評価は未実施」と明記する。
+RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter の裏の wrapper が対応する **2 model ID の相対推定**として返す。別 pair/未評価モデルへ汎化せず、Celeris の品質尺度へ校正できない場合は index=None として raw pair score を評価 metadata にだけ残す。`bert` が外部 embeddings 不要の第一候補。`mf/sw_ranking` は外部 embeddings を要し、send_prompt と外部送信の明示許可が無ければ拒否する。
+
+回答済みの `adapter-plus-routellm` に従い、Phase 5 は汎用 adapter とともに **実 RouteLLM を呼ぶ wrapper、再現できる起動・停止手順、実 sidecar の上限付き shadow 評価 report** を成果に含める。wrapper は `/estimate` を実装し、classifier の score だけを取り出す。strong/weak の生成 API は呼ばない。通常 CI はネットワーク不要の偽 sidecar で protocol と異常系を検証するが、その合格だけでは Phase 5 完了にならない。実評価は明示 opt-in の別検査とし、未実行・skip・全件失敗は未完了にする。
+
+**[needs-human] `routellm-weights-use`（needed_before: p5-estimator）:** [upstream-oss §5](../progress/2026-10-04-multi-objective-routing/upstream-oss.md) では第一候補 `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`）の license 宣言を確認できていない。人が利用条件の根拠を確認して当該 weights のローカル shadow 評価を認めるか、確認まで Phase 5 を保留するかを決める。コードの Apache-2.0 から weights の許諾を推定しない。回答までは weights を取得・使用せず、Phase 5 の必須評価を免除しない。この前提待ちは本 ADR 作成や Phase 1〜4 の完了を妨げない。承認後も weights は利用者が取得する手順とし、自動取得・同梱・再配布はしない。承認記録と確認した条件・対象 revision を手順と report に残す。
 
 ## 8. upstream の (a)/(b)/(c) 採否と追従
 
@@ -221,7 +225,7 @@ RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter 
 - SR `04be09cdfed2`、RouteLLM `0b64fdafe049`、plano `72002a62d90a`、AutoMix `531af3ee3c4e` のコードは Apache-2.0（調査した取り込み対象に NOTICE なし）。RouterBench `cc67d1008bd8` は MIT。LiteLLM `1d52985d0310` は enterprise 以外 MIT、`enterprise/` とそこへの symlink は独自商用条件で取り込み対象外。一次資料は各 pin の [SR LICENSE](https://github.com/vllm-project/semantic-router/blob/04be09cdfed2/LICENSE)、[RouteLLM LICENSE](https://github.com/lm-sys/RouteLLM/blob/0b64fdafe049/LICENSE)、[plano LICENSE](https://github.com/katanemo/plano/blob/72002a62d90a/LICENSE)、[AutoMix LICENSE](https://github.com/automix-llm/automix/blob/531af3ee3c4e/LICENSE)、[RouterBench LICENSE](https://github.com/withmartian/routerbench/blob/cc67d1008bd8/LICENSE)、[LiteLLM LICENSE](https://github.com/BerriAI/litellm/blob/1d52985d0310/LICENSE)。
 - (c) の独立実装には上流コード/data をコピーしない。(b) は数式の意味を独立した Rust 実装にし、関数 doc comment に原典 URL・pin・式・相違を残す。逐語移植が必要になった場合は同じ変更で repo 根の `THIRD_PARTY_NOTICES.md` と `third-party-licenses/` に copyright/許諾文、Apache LICENSE と変更表示を加える。NOTICE のある別 revision を採るならその notice も保持する。Celeris 自身の LICENSE 未設定を第三者表示省略の根拠にしない。
 - Arch-Router-1.5B の [weights LICENSE](https://huggingface.co/katanemo/Arch-Router-1.5B/blob/5b156890a91b/LICENSE) は Katanemo Community License（Apache ではない）。配布時の契約書・定型 notice・Built with DigitalOcean 表示等の条件があるため、今回の依存から外す。plano 本体の既定も Plano-Orchestrator に変わっている。
-- RouteLLM の HF weights と RouterBench dataset は調査で license 宣言を確認できていない（HF revisions は調査 §5）。コードの Apache/MIT を weights/dataset に転用しない。別 process でユーザー管理の sidecar を呼ぶ範囲に留め、weights を自動取得・再配布しない。sidecar のコードや image を将来同梱するならその配布物の notice も必要であり、「別 process だから免除」とは扱わない。
+- RouteLLM の HF weights と RouterBench dataset は調査で license 宣言を確認できていない（HF revisions は調査 §5）。コードの Apache/MIT を weights/dataset に転用しない。§7.3 の [needs-human] が解消した後に別 process の実 RouteLLM sidecar で shadow 評価する。weights を自動取得・再配布せず、未確認を理由に Phase 5 の必須評価を任意化しない。sidecar のコードや image を将来同梱するならその配布物の notice も必要であり、「別 process だから免除」とは扱わない。
 - 観測された直近 90 日の commit は SR 978、plano 35、LiteLLM 13,309。全体を fork/組み込みすると追従コストが高い。RouteLLM/AutoMix/RouterBench は調査時点で 2024 年以来 commit が無く、pin しても Python/torch/transformers の保守負担は残る。したがって全面置換を採らず、**(c) 8 項目、(b) 評価指標、(a) Phase 5 estimator** という調査の結論に従う。
 
 ## 9. 設定・API の互換と rollout
@@ -305,11 +309,18 @@ RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter 
 
 指標の出典と実装方式、notice の要否を同じ変更のレビューで確認する。fake 上流と固定 dataset を必須検証とし、実モデルを呼ぶ評価は人の設定した対象と上限の範囲だけで行う。
 
-### Phase 5 — p5-estimator: 汎用 sidecar と接続可否の shadow 検証
+### Phase 5 — p5-estimator: 汎用 adapter と実 RouteLLM sidecar の shadow 評価
 
-**範囲/crate:** `task-core`（descriptor/estimate DTO と値検証）、`llm-proxy`（非同期 sidecar client と cached estimate）、`celeris`（config/評価キュー配線）、`task-ops` / `celerisctl`（比較 report）、`task-api`（estimator metadata）。dispatcher から HTTP を呼ばない。RouteLLM 専用コード/torch を Rust kernel に入れない。外部 estimator の本番選択、自動学習、weight 配布は範囲外。
+**範囲/crate:** `task-core`（descriptor/estimate DTO と値検証）、`llm-proxy`（非同期 sidecar client と cached estimate）、`celeris`（config/評価キュー配線）、`task-ops` / `celerisctl`（比較 report）、`task-api`（estimator metadata）。加えて `scripts/model-routing/` に RouteLLM 用 Python wrapper と依存 lock・実 sidecar 検査を置く（Phase 5 で新設する予定の配置）。dispatcher から HTTP を呼ばない。RouteLLM 専用コード/torch を Rust kernel に入れない。外部 estimator の本番選択、自動学習、weight 配布は範囲外。
 
-**設定 migration/API/UI:** §7.3 の optional sidecar 設定を追加、未設定は heuristic、shadow_only=false は拒否。Phase 4 event/log を再利用し DB migration は原則不要。API に estimator id/version、依存、失敗/未評価理由を optional 追加。GUI/web は primary=heuristic と比較 estimator の差・timeout・prompt_required を表示し、本番切替 UI を作らない。手順に RouteLLM pin、利用者側 sidecar、weights 未確認、embeddings 外部送信の条件を残す。
+**設定 migration/API/UI:** §7.3 の optional sidecar 設定を追加、未設定は heuristic、shadow_only=false は拒否。Phase 4 event/log を再利用し DB migration は原則不要。API に estimator id/version、依存、失敗/未評価理由を optional 追加。GUI/web は primary=heuristic と比較 estimator の差・timeout・prompt_required を表示し、本番切替 UI を作らない。`docs/ops/model-routing-migration.md` に RouteLLM sidecar の専用節を追加する。次を再現可能なコマンドと期待結果で記載する。
+
+- RouteLLM commit `0b64fdafe049`（実装時に full SHA を記録）、wrapper revision、weights/tokenizer の repository・revision・checksum、code/weights/依存それぞれの license と notice、§7.3 の承認記録。weights の手動取得と既存ローカル cache の指定を分ける。
+- Python・torch・transformers・litellm とその他依存の解決済み版・lock・構築方法。CPU の thread/RAM と、GPU を選ぶ場合の GPU/VRAM・CUDA/driver の要件、試した機材と peak RAM/VRAM を記録する。未検証の CPU/GPU 構成を動作保証にしない。採用した少なくとも 1 構成で実測する。
+- 専用環境、loopback endpoint、weights のローカルパス、対象 pair を指定した起動、ready 確認、実 `/estimate` 要求、終了 signal、PID 終了・port 閉鎖・資源解放の確認、停止時の heuristic 継続確認。中断時も自分が起動した sidecar だけを回収する。既存本番 service は変更せず、本番 host での操作が必要なら人が実行する手順にする。
+- opt-in、対象 allowlist、prompt の利用許可、日次 request/token/effective-cost 上限、timeout/concurrency、停止して既定 off に戻す方法。sidecar 推論も上限予約・resource pressure 計上の対象に含め、未計測の資源費をゼロとしない。実評価は固定した許可済み dataset を使い、推論時の model download・外部 embeddings・生成 API 呼出しがないことを確認する。
+
+実評価 report の配置は `docs/reports/model-routing-routellm-shadow.md`（Phase 5 で作成）とする。dataset の manifest/hash・件数・pair・policy/estimator/依存/weights 版・CPU/GPU 構成・上限と実消費・成功/失敗/timeout/drop 件数・coverage・raw score/校正状態・heuristic との差・推論 overhead・制約違反数・起動停止検査の証拠を記録する。未観測の paired outcome は unknown とし、実合否の改善を捏造しない。
 
 | 試験名（crate） | 合格条件 |
 | --- | --- |
@@ -318,8 +329,11 @@ RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter 
 | `routing_sidecar_privacy_and_dependencies_gate_prompt`（celeris/llm-proxy） | prompt は既定未送信。network/needs_prompt/外部 embeddings の許可不一致を検知し送信 0 |
 | `routing_routellm_pair_adapter_preserves_unknown_models`（task-ops/llm-proxy fixture） | strong/weak の raw score を他モデルの品質へ転用せず、未校正は unknown。pin した descriptor と pair を report に保存 |
 | `routing_estimator_shadow_report_records_coverage_and_limits`（task-ops/task-api） | coverage、失敗/timeout、推定 overhead、primary との差と比較不能理由を出す。GUI/web `routing_estimator_shadow` fixture でも primary と混同しない |
+| `routing_routellm_runbook_pins_dependencies_and_license`（文書・依存 lock 検査） | 手順の pin/lock と実行 manifest が一致し、Python/torch/transformers/litellm・CPU/GPU 要件・license/notice・weights 承認根拠・起動/停止コマンドと期待結果が揃う。参照先不明や未承認を合格にしない |
+| `routing_routellm_real_sidecar_start_stop`（scripts/model-routing、実 sidecar opt-in 検査） | 記載した手順で pin 済み実 RouteLLM と実 weights をロードし、ready→有限な pair score の応答→停止を確認。PID 終了・port 閉鎖・資源解放と停止後の heuristic 継続を検証する。stub や skip では合格しない |
+| `routing_routellm_real_shadow_within_caps`（scripts/model-routing、実 sidecar opt-in 検査） | 許可済み固定 dataset の全対象 N 件（N >= 1、実行前に件数と上限を固定）を処理し、実 classifier の成功応答が 1 件以上ある。上限超過・hard constraint 違反・primary 決定変更・外部 embeddings/生成 API 呼出しは各 0。全対象の completed/failed/dropped と消費を突き合わせ、上限での送信停止を確認し report に残す |
 
-完了証拠は偽 sidecar での protocol/制約/劣化時の試験と、RouteLLM 等を差し込める範囲・校正/weights/network の不足条件を記した比較 report。実 sidecar を提供された場合は同じ dataset で上限付き shadow の結果を加える。未提供時は接続実証済みとは書かない。品質向上が見えなくても結果を隠さず、**本番への切り替えは行わない**。
+完了には、通常 CI の偽 sidecar 試験、起動停止・依存・license を含む手順、**実 RouteLLM sidecar の起動停止検査と上限付き shadow 評価 report の全て**を要する。実検査は通常 CI と分けて明示実行し、実行コマンド・exit・実測結果・原票への参照を report に残す。weights の承認待ち、実 sidecar 未提供、全件失敗、実検査 skip のいずれかが残る場合は Phase 5 未完了（必要なら [needs-human]）として引き継ぎ、偽 sidecar の合格で置き換えない。品質向上が見えなくても結果を隠さず、**本番への切り替えは行わない**。
 
 ### 全 Phase 共通の完了検査
 

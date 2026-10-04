@@ -83,3 +83,20 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 - offline install は依存 tarball のローカル store 不足で停止したため、同じ lockfile の既存依存から実行ファイルを参照した。`tsc -b`・`biome check .`・`vitest run`・`vite build` は exit 0（347 tests、lint warning 5 件は既存箇所）。
 - `corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-runtime.spec.ts && corepack pnpm@12.6.0 -C web e2e e2e/parity/ops.spec.ts` は exit 0（11 + 8 passed）。前回の check 失敗は worktree の `node_modules` にある `@playwright/test/index.mjs` が `index.d.ts` を指す壊れたリンクに起因し、同じ lockfile の依存を worktree 内へ復元して解消した。`mobile-audit --only` は `/clusters`・`/daemon`・`/releases` の各 4 幅で exit 0。
 - この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は後続の post-record 葉で行う。
+
+### knowledge-help（知識・help・login）
+
+対象: `web/features/knowledge/{knowledge-screen.tsx,skills-screen.tsx}`、`web/routes/login.tsx`、unit `web/features/knowledge/knowledge-screen.test.ts`（新規）、`web/e2e/admin/login.spec.ts`（1 件追加）。`help-screen.tsx` と `web/routes/{knowledge.*,help}.tsx` は該当する指摘が無く変更なし。URL・parity が見る accessible name（「編集」「保存」「作成」「削除」「skill「demo」を削除」「New knowledge」の h2 など）は変えていない。critique の [knowledge-help] / [help-login] タグは 1・7・9・10。
+
+- 1. [修正: `/knowledge/skills` の h1 を「skills」→「手順書（skills）」、`/knowledge` のタブを「手順書（skills）」、操作 nav の名前を「手順書の操作」、節見出しを「手順書の一覧」「手順書の作成」、表の名前・0 件文・削除 dialog の題と対象を「手順書」に替えた。h1 の下に「手順書は組織の画面で課に付けるとその課の作業場所に配られる」と、組織と課の関係を 1 文で示した]
+- 1. [残課題: `web/e2e/support/screens.ts` が h1 名を `skills`（部分一致）で引くため、h1 から英語の `skills` は外せない（括弧の補足として残した）。削除の確定ボタン「skill「demo」を削除」は parity が固定するので英語のまま]
+- 7. [修正: 本文 Markdown の先頭の見出し（front matter の後の `#`〜`######`）が Section の title と同じなら外して描画する `withoutLeadingTitle` を足し、`/knowledge` のページ本文と `/knowledge/inbox` の候補本文に使った。見出しを外して空になる本文は「本文は見出しだけです。」と書く。unit 3 件で固定]
+- 9. [修正: `/knowledge` は未選択のとき右の空の本文枠を出さず、検索結果を全幅で並べ、見出しの下に「タイトルを選ぶと本文と出典を開きます。」を置いた。同じ症状の `/knowledge/skills` 未選択時も一覧を全幅にした。選択後は従来どおり 2:3 の 2 カラム]
+- 10. [修正: `/login` の h1 の下に戻り先を示す（`next` があれば「ログイン後に <path> へ戻ります。」、無いか不正なら「ログイン後はホームを開きます。」）。失敗後も残る。form は従来どおり JS 無しの POST で、daemon には触れない。`web/e2e/admin/login.spec.ts` に 1 件追加]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` → exit 0。`typecheck` / `lint`（warning 5 件は既存の states.spec.ts・styles.css）/ `test`（vitest 350 tests、node 42 tests）/ `check:boundaries` / `build` → exit 0
+- `corepack pnpm@12.6.0 -C web e2e e2e/admin/login.spec.ts e2e/parity/knowledge.spec.ts e2e/parity/help.spec.ts` → 10 passed・1 skipped（WEB_SHOTS_OUT 無しの screenshot）
+- `corepack pnpm@12.6.0 -C web e2e:all e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts -g "knowledge|login|help"` → 10 passed。`mobile-audit --only` を `/knowledge`・`/knowledge/inbox`・`/knowledge/skills`・`/help`・`/login` に当てて各 exit 0
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/{knowledge,help,org,ops} web/routes/{knowledge.*,help.tsx,login.tsx} web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+- この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は post-record 葉で行う。

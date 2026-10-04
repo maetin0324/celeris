@@ -16,7 +16,7 @@ export function richFixtures(): Record<string, unknown>;
 export function richFiles(): Record<string, { body: string; type?: string }>;
 export function inboxItemsFixture(): import("../../api/generated/types").InboxItem[];
 export function noticesFixture(): import("../../api/generated/types").Notice[];
-export function createFakeDaemon(options?: {
+export type FakeDaemonOptions = {
   host?: string;
   port?: number;
   delayMs?: number;
@@ -24,7 +24,13 @@ export function createFakeDaemon(options?: {
   token?: string | null;
   files?: Record<string, { body: string | (() => string); type?: string; disposition?: string }>;
   profile?: "default" | "rich";
-}): {
+  fault?: { status: number; paths?: string[] } | null;
+  hold?: { paths?: string[] } | null;
+  streamStatus?: number;
+  inboxItems?: import("../../api/generated/types").InboxItem[] | null;
+  notices?: import("../../api/generated/types").Notice[] | null;
+};
+export function createFakeDaemon(options?: FakeDaemonOptions): {
   requests: FakeDaemonRequest[];
   sendEvent(event: string, data?: unknown): void;
   inbox: {
@@ -38,6 +44,10 @@ export function createFakeDaemon(options?: {
   setStreamStatus(value: number): void;
   sendConsoleBlock(block: unknown): void;
   dropConsoleClients(): void;
+  setFault(rule: { status: number; paths?: string[] } | null): void;
+  releaseHeld(): void;
+  readonly heldCount: number;
+  dropStreamClients(): void;
   setPostDelay(ms: number): void;
   readonly consoleClients: number;
   readonly streamClients: number;

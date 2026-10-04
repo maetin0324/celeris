@@ -132,6 +132,16 @@
 }
 
 @layer base {
+  /* 素の `border` の既定色（shadcn 標準と同じ）。Tailwind v4 の既定は currentColor なので、
+     これが無いと色を指定しない `rounded border` が本文色に近い黒の枠になる（DESIGN.md: 区切りは #D3DCE2）。 */
+  *,
+  ::before,
+  ::after,
+  ::backdrop,
+  ::file-selector-button {
+    border-color: var(--color-border);
+  }
+
   /* shell の menu 等の重なりを root 内に閉じ、body 直下の Radix Portal を覆わせない。 */
   #root {
     isolation: isolate;

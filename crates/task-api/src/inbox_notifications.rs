@@ -439,12 +439,7 @@ async fn answer(
                     None
                 };
                 if !store
-                    .integration_request_answer(
-                        task_id,
-                        &request_id,
-                        &answer,
-                        note.as_deref(),
-                    )
+                    .integration_request_answer(task_id, &request_id, &answer, note.as_deref())
                     .map_err(store_problem)?
                 {
                     return Err(gone(&item_id));

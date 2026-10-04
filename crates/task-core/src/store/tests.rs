@@ -5942,7 +5942,11 @@ fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes()
             _ => None,
         })
         .collect();
-    assert_eq!(open, vec!["source-d", "source-c"], "b は c に置き換わり、別 origin の other は残る");
+    assert_eq!(
+        open,
+        vec!["source-d", "source-c"],
+        "b は c に置き換わり、別 origin の other は残る"
+    );
     let events = store.events_for(task.id).unwrap();
     assert!(
         events.iter().any(|(_, event)| matches!(event,

@@ -1376,7 +1376,11 @@ fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
             .integration_request_record(task.id, &new, "delivery")
             .unwrap()
     );
-    assert_eq!(attention_ids(), vec![new.id_for(task.id)], "古い依頼が残っている");
+    assert_eq!(
+        attention_ids(),
+        vec![new.id_for(task.id)],
+        "古い依頼が残っている"
+    );
     let human = human_ids();
     assert_eq!(human.len(), 1);
     assert!(human[0].ends_with("-t4-s4"), "{human:?}");

@@ -58,3 +58,11 @@ updated: 2026-10-04
 ### 提案
 
 - 旧 release で記録された残留依頼を昇格直後に一掃したければ、daemon 起動時に「統合 WU が done の `phase:` 依頼」を `integrated` で閉じる一回限りの整理を足せる。今回は人が一度答えれば済むので入れていない。
+
+## delivery-repair（2026-10-04）
+
+- 原因: リリース準備の gate `cargo fmt --all -- --check` が exit 1（b012e132 の試験 5 ファイルに rustfmt 未適用の長い assert / 式）。挙動の問題ではない。
+- 対処: `cargo fmt --all` のみ（5 ファイル、整形差分だけ）。
+- `cargo fmt --all -- --check` → exit 0。
+- `cargo clippy --workspace -- -D warnings` → exit 0。
+- `cargo test --workspace` → exit 0。passed 3865, failed 0。

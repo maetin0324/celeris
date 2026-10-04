@@ -692,7 +692,11 @@ async fn phase_integration_request_of_a_finished_unit_is_answered_without_resumi
     )
     .await;
     assert!(after.json()["items"].as_array().unwrap().is_empty());
-    assert_eq!(env.status_of(task.id), Status::Done, "done の task は cancel されない");
+    assert_eq!(
+        env.status_of(task.id),
+        Status::Done,
+        "done の task は cancel されない"
+    );
     assert_eq!(
         env.store.work_units_for(task.id).unwrap()[0].status,
         task_core::WorkUnitStatus::Done

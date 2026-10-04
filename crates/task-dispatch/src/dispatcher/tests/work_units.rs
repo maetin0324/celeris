@@ -3204,7 +3204,12 @@ fn human_git(dir: &std::path::Path, args: &[&str]) -> bool {
     std::process::Command::new("git")
         .arg("-C")
         .arg(dir)
-        .args(["-c", "user.name=human", "-c", "user.email=human@example.com"])
+        .args([
+            "-c",
+            "user.name=human",
+            "-c",
+            "user.email=human@example.com",
+        ])
         .args(args)
         .output()
         .map(|o| o.status.success())
@@ -3283,15 +3288,26 @@ async fn an_integration_request_leaves_the_inbox_once_the_human_merged_and_answe
     let task_branch = format!("celeris/{}", task.id);
     let tree = worktree_of(repo.path(), &task_branch);
     assert!(
-        !human_git(&tree, &["merge", "--no-ff", "--no-edit", &request.source_branch]),
+        !human_git(
+            &tree,
+            &["merge", "--no-ff", "--no-edit", &request.source_branch]
+        ),
         "手の merge も同じ衝突で止まる"
     );
     std::fs::write(tree.join("README.md"), "A\nB\n").unwrap();
     assert!(human_git(&tree, &["add", "README.md"]));
-    assert!(human_git(&tree, &["commit", "--no-verify", "-m", "人が統合した"]));
+    assert!(human_git(
+        &tree,
+        &["commit", "--no-verify", "-m", "人が統合した"]
+    ));
     assert!(git_ok(
         repo.path(),
-        &["merge-base", "--is-ancestor", &request.source_sha, &task_branch]
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &request.source_sha,
+            &task_branch
+        ]
     ));
 
     // 汎用の回答で再開する（本番で起きた経路）。
@@ -3388,7 +3404,10 @@ async fn a_clean_integration_closes_the_open_request_of_its_origin_as_integrated
     let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
     run_until_idle(&mut d, 800).await;
     assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
-    assert!(open_requests_of(&store, task.id).is_empty(), "統合済みの依頼が残っている");
+    assert!(
+        open_requests_of(&store, task.id).is_empty(),
+        "統合済みの依頼が残っている"
+    );
     assert_eq!(inbox_integration_requests(&store, task.id), 0);
     let request_id = stale.id_for(task.id);
     assert!(events_of(&store, task.id).iter().any(|e| matches!(e,

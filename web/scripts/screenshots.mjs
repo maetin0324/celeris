@@ -77,4 +77,6 @@ try {
 } finally {
   await browser.close();
 }
-process.stdout.write(`screenshots: ${screenshotCount} image(s)${withStates ? ` across ${states.length} states` : ` from ${selected.length} screen(s)`} -> ${out}\n`);
+process.stdout.write(
+  `screenshots: ${screenshotCount} image(s)${withStates ? ` across ${states.length} states` : ` from ${selected.length} screen(s)`} -> ${out}\n`,
+);

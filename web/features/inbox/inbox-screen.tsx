@@ -28,6 +28,9 @@ import {
 
 export type InboxSearch = { project?: string; kind?: InboxKind };
 
+// スマホでも押せるよう、行内のリンクも 44px の高さを持たせる（mobile-audit）。
+const linkClass = "inline-flex min-h-11 min-w-11 items-center underline break-words";
+
 const fieldClass =
   "block min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
@@ -40,7 +43,7 @@ function InternalLink({ href, children, className }: { href: string; children: R
     void router.navigate({ href });
   }
   return (
-    <a href={href} onClick={onClick} className={className ?? "underline break-words"}>
+    <a href={href} onClick={onClick} className={className ?? linkClass}>
       {children}
     </a>
   );
@@ -106,9 +109,9 @@ function Due({ dueAt }: { dueAt?: string | null }) {
 
 function Meta({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-wrap gap-x-1">
+    <div className="flex min-w-0 flex-wrap items-center gap-x-1">
       <dt className="text-muted-foreground">{label}:</dt>
-      <dd className="min-w-0 break-words">{children}</dd>
+      <dd className="flex min-w-0 flex-wrap items-center break-words">{children}</dd>
     </div>
   );
 }
@@ -119,15 +122,15 @@ function Blocking({ item, titles }: { item: InboxItem; titles: Map<string, strin
   return (
     <>
       <Meta label="止めている範囲">
-        <span className="inline-flex flex-wrap gap-x-2">
+        <span className="inline-flex flex-wrap items-center gap-x-2">
           {blocking.summary ? <span>{blocking.summary}</span> : null}
           {blocking.root ? (
-            <Link className="underline" to="/tasks/$id" params={{ id: blocking.root.id }}>
+            <Link className={linkClass} to="/tasks/$id" params={{ id: blocking.root.id }}>
               {blocking.root.title}
             </Link>
           ) : null}
           {tasks.map((task) => (
-            <Link key={task.id} className="underline" to="/tasks/$id" params={{ id: task.id }}>
+            <Link key={task.id} className={linkClass} to="/tasks/$id" params={{ id: task.id }}>
               {task.title}
             </Link>
           ))}
@@ -139,10 +142,10 @@ function Blocking({ item, titles }: { item: InboxItem; titles: Map<string, strin
       </Meta>
       {item.blocked_by.length > 0 ? (
         <Meta label="先に答える項目">
-          <span className="inline-flex flex-wrap gap-x-2">
+          <span className="inline-flex flex-wrap items-center gap-x-2">
             {item.blocked_by.map((id) =>
               titles.has(id) ? (
-                <a key={id} className="underline" href={`#item-${encodeURIComponent(id)}`}>
+                <a key={id} className={linkClass} href={`#item-${encodeURIComponent(id)}`}>
                   {titles.get(id)}
                 </a>
               ) : (
@@ -201,11 +204,12 @@ function AnswerForm({ item, sender }: { item: InboxItem; sender: Sender }) {
   if (failure?.native) return <NativeGuide item={item} message={failure.message} />;
   return (
     <div className="flex min-w-0 flex-col gap-2">
-      <label htmlFor={noteId} className="text-label font-medium">
+      <label id={`${noteId}-label`} htmlFor={noteId} className="text-label font-medium">
         理由・note{noteRequired.length > 0 ? `（${noteRequired.join("・")}は必須）` : "（任意）"}
       </label>
       <textarea
         id={noteId}
+        aria-labelledby={`${noteId}-label`}
         className={`${fieldClass} min-h-11`}
         rows={2}
         value={note}
@@ -308,7 +312,7 @@ function InboxRow({
           <Blocking item={item} titles={titles} />
           {item.project_id ? (
             <Meta label="案件">
-              <Link className="underline" to="/projects/$id" params={{ id: item.project_id }}>
+              <Link className={linkClass} to="/projects/$id" params={{ id: item.project_id }}>
                 {projectTitle ?? item.project_id}
               </Link>
             </Meta>
@@ -320,7 +324,7 @@ function InboxRow({
           </Meta>
           {item.links.length > 0 ? (
             <Meta label="関連">
-              <span className="inline-flex flex-wrap gap-x-2">
+              <span className="inline-flex flex-wrap items-center gap-x-2">
                 {item.links.map((link) =>
                   link.href.startsWith("/") && !link.href.startsWith("//") ? (
                     <InternalLink key={link.href} href={link.href}>

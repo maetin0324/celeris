@@ -102,11 +102,12 @@ function Rules() {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label htmlFor={`${id}-rule`} className="text-label font-medium">
+            <label id={`${id}-rule-label`} htmlFor={`${id}-rule`} className="text-label font-medium">
               規則文
             </label>
             <textarea
               id={`${id}-rule`}
+              aria-labelledby={`${id}-rule-label`}
               className={fieldClass}
               value={rule}
               onChange={(event) => setRule(event.target.value)}
@@ -164,7 +165,7 @@ export function ApprovalsScreen() {
                 >
                   <span className="shrink-0 sm:w-24">
                     <Badge tone={item.decision === "denied" ? "danger" : "success"}>
-                      {decisionLabels[item.decision ?? ""] ?? item.decision}
+                      {decisionLabels[item.decision ?? ""] ?? item.decision ?? "記録なし"}
                     </Badge>
                   </span>
                   <div className="min-w-0 flex-1 text-label">

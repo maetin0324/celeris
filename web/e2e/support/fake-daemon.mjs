@@ -93,6 +93,266 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// Screenshot and mobile-audit data. The normal profile stays intentionally small:
+// parity tests supply their own exact rows and counts.
+const richPath =
+  "src/very-long-workspace-name/feature-with-a-long-description/components/task-detail/overview-panel.tsx";
+const richNow = "2026-10-04T09:00:00Z";
+
+export function richFixtures() {
+  const summary = (id, title, extra = {}) => ({
+    ...fixtureFor(schema.$defs.TaskSummary),
+    id,
+    title,
+    status: "ready",
+    kind: "execute",
+    tier: "standard",
+    category: "feature",
+    priority_label: "normal",
+    created_at: richNow,
+    updated_at: richNow,
+    ...extra,
+  });
+  const title = "複数の画面にまたがる長いタスク名と依存関係を確認する作業 ".repeat(4).trim();
+  const tasks = [
+    summary("T1", title, { children: 2, project_id: "P1" }),
+    summary("T2", "子タスク: 画面の状態を調べる", { parent_id: "T1", depends_on: ["T1"], project_id: "P1" }),
+    summary("T3", "子タスク: 検証結果をまとめる", { parent_id: "T1", depends_on: ["T2"], project_id: "P1" }),
+    ...Array.from({ length: 21 }, (_, i) =>
+      summary(`T${i + 4}`, `一覧の追加タスク ${i + 4}: 表示密度を確かめる`, { project_id: "P1" }),
+    ),
+  ];
+  const detail = fixtureFor(schema.$defs.TaskDetail);
+  detail.task = {
+    ...detail.task,
+    id: "T1",
+    title,
+    objective: "長い目的文を複数行で表示し、親子関係・依存関係・作業ツリーと成果物を確認する。\n".repeat(6).trim(),
+    status: "ready",
+    created_at: richNow,
+    updated_at: richNow,
+    project_id: "P1",
+  };
+  detail.workspace_dir = `/workspace/${richPath}`;
+  detail.children = tasks.slice(1, 3).map(({ id, title, kind, status }) => ({ id, title, kind, status, actions: [] }));
+  detail.dependents = [detail.children[0]];
+  detail.runs = [
+    {
+      ...fixtureFor(schema.$defs.RunSummary),
+      run_id: "R1",
+      role: "worker",
+      adapter: "codex",
+      model: "standard",
+      started_at: richNow,
+      finished_at: richNow,
+    },
+  ];
+  const changes = fixtureFor(schema.$defs.ChangesView);
+  changes.task_id = "T1";
+  changes.gh = true;
+  changes.merge_method = "squash";
+  changes.repos = [
+    {
+      ...fixtureFor(schema.$defs.RepoChangesView),
+      repo: "web",
+      branch: "celeris/T1",
+      default_branch: "main",
+      ahead: 2,
+      files: Array.from({ length: 15 }, (_, i) => ({
+        path: i ? `${richPath.replace("overview-panel", `panel-${i}`)}` : richPath,
+        status: "M",
+        additions: i + 2,
+        deletions: 1,
+      })),
+      stat: { files: 15, additions: 135, deletions: 15 },
+      dirty: false,
+      missing: false,
+      origin: false,
+    },
+  ];
+  const project = {
+    ...fixtureFor(schema.$defs.Project),
+    id: "P1",
+    title: "画面品質の確認",
+    request: "一覧と成果物を確認する",
+    status: "active",
+    created_at: richNow,
+    updated_at: richNow,
+  };
+  const artifact = (idx) => ({
+    idx,
+    run_id: "R1",
+    ts: richNow,
+    exists: true,
+    forbidden: false,
+    size: 128 + idx,
+    artifact: {
+      kind: "file",
+      name: `report-${idx}.md`,
+      path: `reports/${richPath}/report-${idx}.md`,
+      sha256: "0".repeat(64),
+    },
+  });
+  const progressLine = (seq, kind, text, tool) => ({ seq, at: richNow, kind, text, ...(tool ? { tool } : {}) });
+  return {
+    "/api/v1/tasks": {
+      items: tasks,
+      total: tasks.length,
+      next_cursor: null,
+      counts_by_status: { ready: tasks.length },
+    },
+    "/api/v1/graph": {
+      nodes: tasks.slice(0, 8).map(({ id, title, kind, status, parent_id }) => ({
+        id,
+        title,
+        kind,
+        status,
+        ...(parent_id ? { parent_id } : {}),
+      })),
+      edges: [
+        { from: "T1", to: "T2", kind: "depends_on" },
+        { from: "T2", to: "T3", kind: "depends_on" },
+      ],
+    },
+    "/api/v1/tasks/T1": detail,
+    "/api/v1/tasks/T1/timeline": {
+      task_id: "T1",
+      items: [{ kind: "delegation", at: richNow, run_id: "R1", tasks: detail.children }],
+    },
+    "/api/v1/tasks/T1/changes": changes,
+    "/api/v1/tasks/T1/changes/web/diff": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? richPath,
+      diff: `--- a/${richPath}\n+++ b/${richPath}\n@@ -1,2 +1,3 @@\n-old text\n+${"長い差分の行".repeat(50)}\n context\n`,
+      truncated: false,
+    }),
+    "/api/v1/tasks/T1/tree": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? "",
+      repos: [{ name: "web", kind: "git", dir: `/workspace/${richPath}` }],
+      entries: [
+        { kind: "dir", name: "src", path: "src" },
+        ...Array.from({ length: 12 }, (_, i) => ({
+          kind: "file",
+          name: `long-file-${i}.tsx`,
+          path: `${richPath}/long-file-${i}.tsx`,
+          size: 120 + i,
+        })),
+      ],
+    }),
+    "/api/v1/tasks/T1/tree/file": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? richPath,
+      size: 64,
+      binary: false,
+      too_large: false,
+      text: "長いファイルの本文\n".repeat(12),
+    }),
+    "/api/v1/tasks/T1/artifacts": { task_id: "T1", items: Array.from({ length: 12 }, (_, i) => artifact(i)) },
+    "/api/v1/projects": { items: [project] },
+    "/api/v1/projects/P1": {
+      project,
+      milestones: [],
+      tasks: [
+        {
+          ...fixtureFor(schema.$defs.ProjectTaskView),
+          id: "T1",
+          title,
+          status: "ready",
+          depends_on: [],
+          conversation: false,
+        },
+      ],
+    },
+    "/api/v1/console": {
+      items: [
+        {
+          kind: "human",
+          at: richNow,
+          cursor: "c1",
+          message_id: "M1",
+          node_id: "cos",
+          text: "画面群の長文・多数行・長い path を確認してください。",
+        },
+        {
+          kind: "reply",
+          at: richNow,
+          cursor: "c2",
+          message_id: "M2",
+          node_id: "cos",
+          text: "確認を始めます。",
+          state: "done",
+          steps: [
+            { kind: "tool_use", tool: "read_file", text: `Read ${richPath}` },
+            { kind: "tool_result", tool: "read_file", text: "12 行を読みました" },
+          ],
+        },
+        {
+          kind: "progress",
+          at: richNow,
+          cursor: "c3",
+          title: "画面を検証する",
+          tier: "standard",
+          progress: {
+            task_id: "T1",
+            run_id: "R1",
+            count: 8,
+            tool_count: 2,
+            started_at: richNow,
+            updated_at: richNow,
+            first: [progressLine(1, "tool_use", `Read ${richPath}`, "read_file")],
+            last: [progressLine(8, "tool_result", "表示を確認しました", "read_file")],
+          },
+        },
+      ],
+      next_cursor: null,
+    },
+  };
+}
+
+export function richFiles() {
+  return {
+    "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+      body: `${[
+        { type: "user", message: { role: "user", content: [{ type: "text", text: "画面を確認してください" }] } },
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "確認を始めます" },
+              { type: "tool_use", id: "tool-1", name: "read_file", input: { path: richPath } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-1", content: "12 行を読みました" }],
+          },
+        },
+        ...Array.from({ length: 24 }, (_, i) => ({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `検証ログ ${i + 1}: ${"長い行".repeat(12)}` }],
+          },
+        })),
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
+      type: "text/plain; charset=utf-8",
+    },
+    ...Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `/api/v1/tasks/T1/artifacts/${i}`,
+        { body: `# report-${i}\n\n画面の検証結果\n`, type: "text/markdown" },
+      ]),
+    ),
+  };
+}
+
 // P4-10/P4-11: knowledge domain fixtures. Keep this block together for parallel merge.
 export const knowledgeFixtures = {
   "/api/v1/knowledge/tree": {
@@ -361,15 +621,18 @@ export function createFakeDaemon({
   host = "127.0.0.1",
   port = 0,
   delayMs = 0,
-  fixtures = defaultFixtures,
+  fixtures = {},
   token = null,
   files = {},
+  profile = "default",
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
-  fixtures = { ...knowledgeFixtures, ...fixtures };
+  if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
+  fixtures = { ...knowledgeFixtures, ...defaultFixtures, ...(profile === "rich" ? richFixtures() : {}), ...fixtures };
+  files = { ...(profile === "rich" ? richFiles() : {}), ...files };
   const requests = [];
   const clients = new Set();
   const consoleClients = new Set();

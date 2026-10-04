@@ -14,7 +14,9 @@ mod inputs;
 pub use inputs::{InputSnapshot, SNAPSHOT_FILE, verify_inputs};
 
 /// 日次整理の harness id（`[[cron.seed.template]] harness`。cron 由来の task の `genre` になる）。
-pub const CURATION_HARNESS: &str = "knowledge-curation";
+/// 正本は `task_core::cron::KNOWLEDGE_CURATION_HARNESS`（task-core の Complexity Gate も同じ値で
+/// 判別する。ADR-0131 付記 2026-10-04）。
+pub use task_core::cron::KNOWLEDGE_CURATION_HARNESS as CURATION_HARNESS;
 
 /// ADR-0131 付記 D12: 1 回の日次整理 run が扱う `_inbox/` 候補の上限。残りは次回へ持ち越す。
 pub const MAX_INBOX_CANDIDATES_PER_RUN: usize = 40;

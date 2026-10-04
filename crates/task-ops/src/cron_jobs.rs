@@ -20,8 +20,9 @@ use time::{Duration, OffsetDateTime};
 use crate::add::{CriterionSpec, NewTaskSpec, PriorityInput, build_task_with_roles};
 use crate::error::OpsError;
 
-/// cron が作る task に付けるラベル（一覧で見分けるため）。
-pub const CRON_TASK_LABEL: &str = "cron";
+/// cron が作る task に付けるラベル（一覧で見分けるため）。正本は `task_core::cron::CRON_TASK_LABEL`
+/// （task-core の Complexity Gate も同じ値で判別する。ADR-0131 付記 2026-10-04）。
+pub use task_core::cron::CRON_TASK_LABEL;
 
 /// ADR-0131 付記 D10 (3): 雛形の `extra["mode"]` を発火時に task へ写したラベル。task の `Created` event に
 /// 入るので、後の job PATCH で既存 task の mode は変わらない（`Task.mode` とは別の値）。

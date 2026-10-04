@@ -53,12 +53,13 @@ pub struct DecomposeResult {
     pub previous_decision: Option<task_core::ExecutionGateDecision>,
 }
 
-/// gate の対象外なら理由を返す（`execution_gate::out_of_scope_rule` と同じ 6 条件）。
+/// gate の対象外なら理由を返す（`execution_gate::out_of_scope_rule` と同じ 7 条件。ADR-0131 付記
+/// 2026-10-04 で knowledge-curation の cron task を追加）。
 fn out_of_scope_reason(task: &Task) -> Option<String> {
     task_core::execution_gate::out_of_scope_rule(task).map(|_| {
         "this task is out of scope of the Complexity Gate (not kind=execute, a conversation, a \
-         support task, a task without routing, a fixed-pipeline harness or a shared workspace); it \
-         always runs atomic"
+         support task, a task without routing, a fixed-pipeline harness, a shared workspace, or a \
+         knowledge-curation cron task); it always runs atomic"
             .to_string()
     })
 }

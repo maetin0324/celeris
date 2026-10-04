@@ -504,6 +504,48 @@ fn out_of_scope_tasks_are_always_atomic() {
     assert_eq!(d.rule_id, "atomic/out-of-scope");
 }
 
+/// ADR-0131 付記（2026-10-04、Complexity Gate 例外）: cron が作った knowledge-curation task
+/// （harness = genre `knowledge-curation` かつ label `cron`）は、objective がどれだけ長くても
+/// 強制規則・規則表のスコアを評価する前に atomic が決まる。rule_id は専用の
+/// `atomic/knowledge-curation`（event から理由が読める）。
+#[test]
+fn knowledge_curation_cron_tasks_are_always_atomic() {
+    let mut curation = base_task();
+    curation.genre = Some(crate::cron::KNOWLEDGE_CURATION_HARNESS.to_string());
+    curation.labels = vec![crate::cron::CRON_TASK_LABEL.to_string()];
+    assert_eq!(
+        out_of_scope_rule(&curation),
+        Some("atomic/knowledge-curation")
+    );
+
+    // genre だけ・label だけでは当たらない（両方そろって初めて判別する。`is_curation_task` と同じ条件）。
+    let mut genre_only = base_task();
+    genre_only.genre = Some(crate::cron::KNOWLEDGE_CURATION_HARNESS.to_string());
+    assert_eq!(out_of_scope_rule(&genre_only), None);
+
+    let mut label_only = base_task();
+    label_only.labels = vec![crate::cron::CRON_TASK_LABEL.to_string()];
+    assert_eq!(out_of_scope_rule(&label_only), None);
+
+    // 2000 文字を超える長い objective（S5 の強制シグナル）と cross_cutting=high/expected_length=high
+    // （強制規則 compound/long-and-broad）を両方乗せても、cron の knowledge-curation task は常に atomic。
+    curation.objective = "x".repeat(3000);
+    let d = decide(
+        &curation,
+        &features(|f| {
+            f.expected_length = Level::High;
+            f.cross_cutting = Level::High;
+        }),
+        None,
+        false,
+        ExecutionGateInputs::default(),
+        false,
+    );
+    assert_eq!(d.mode, ExecutionMode::Atomic);
+    assert_eq!(d.rule_id, "atomic/knowledge-curation");
+    assert_eq!(d.source, GateSource::Policy);
+}
+
 #[test]
 fn human_explicit_beats_the_rule_table_and_the_hint() {
     let mut task = base_task();

@@ -1649,7 +1649,8 @@ impl Dispatcher {
     /// `Event::ExecutionGated` と `Task.routing.execution` を同じトランザクションで書く。
     /// `gate = "off"` なら何もしない。対象外の大半（対話・support-task・kind != Execute・`routing`
     /// 無し）は呼び出し側で既に除いてある（D13「いつ」節）ので、ここでは残りの対象外
-    /// （固定パイプラインの harness・`workspace_mode = Shared`）を `execution_gate::decide` の中で
+    /// （固定パイプラインの harness・`workspace_mode = Shared`・ADR-0131 付記 2026-10-04 の
+    /// knowledge-curation の cron task）を `execution_gate::decide` の中で
     /// 判定する。すでに判定済みの Task（`routing.execution` が `Some`）には触らない。
     ///
     /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（`tree.parent_unit` を持つ。深さ ≥ 2）は、閾値を深さで

@@ -7,6 +7,14 @@ export type GraphLayout = {
   edges: Array<{ from: string; to: string; x1: number; y1: number; x2: number; y2: number }>;
 };
 
+// 節点の寸法（px）。graph-view の節点の箱と辺の端点が同じ値を使う。
+// 高さは id・title・状態 badge の 3 行に、幅は 1 列に title の先頭を読める分に合わせる。
+export const NODE_WIDTH = 208;
+export const NODE_HEIGHT = 96;
+const MARGIN = 24;
+const COLUMN_GAP = 48;
+const ROW_GAP = 16;
+
 // The daemon owns graph membership. This is only a bounded, deterministic display layout.
 export function layoutGraph(graph: Graph): GraphLayout {
   const byId = new Map(graph.nodes.map((node) => [node.id, node]));
@@ -44,7 +52,13 @@ export function layoutGraph(graph: Graph): GraphLayout {
     ids.map((id, index) => {
       const node = byId.get(id);
       if (!node) throw new Error(`missing graph node: ${id}`);
-      return { id, title: node.title, status: node.status, x: 24 + level * 248, y: 24 + index * 104 };
+      return {
+        id,
+        title: node.title,
+        status: node.status,
+        x: MARGIN + level * (NODE_WIDTH + COLUMN_GAP),
+        y: MARGIN + index * (NODE_HEIGHT + ROW_GAP),
+      };
     }),
   );
   const positions = new Map(positioned.map((node) => [node.id, node]));
@@ -52,12 +66,21 @@ export function layoutGraph(graph: Graph): GraphLayout {
     const from = positions.get(edge.from);
     const to = positions.get(edge.to);
     return from && to
-      ? [{ from: edge.from, to: edge.to, x1: from.x + 200, y1: from.y + 36, x2: to.x, y2: to.y + 36 }]
+      ? [
+          {
+            from: edge.from,
+            to: edge.to,
+            x1: from.x + NODE_WIDTH,
+            y1: from.y + NODE_HEIGHT / 2,
+            x2: to.x,
+            y2: to.y + NODE_HEIGHT / 2,
+          },
+        ]
       : [];
   });
   return {
-    width: Math.max(248, ...positioned.map((node) => node.x + 224)),
-    height: Math.max(160, ...positioned.map((node) => node.y + 96)),
+    width: Math.max(NODE_WIDTH + 2 * MARGIN, ...positioned.map((node) => node.x + NODE_WIDTH + MARGIN)),
+    height: Math.max(NODE_HEIGHT + 2 * MARGIN, ...positioned.map((node) => node.y + NODE_HEIGHT + MARGIN)),
     nodes: positioned,
     edges,
   };

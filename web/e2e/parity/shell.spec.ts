@@ -86,9 +86,12 @@ test("parity-x: daemon 停止中のバナーと復旧", async ({ page }) => {
     await daemon.start();
     await expect(banner).toHaveCount(0, { timeout: 20_000 });
     await expect
-      .poll(() => daemon.requests.filter((r) => r.path === "/api/v1/inbox" || r.path === "/api/v1/daemon").length, {
-        timeout: 5_000,
-      })
+      .poll(
+        () => daemon.requests.filter((r) => r.path === "/api/v1/inbox/items" || r.path === "/api/v1/daemon").length,
+        {
+          timeout: 5_000,
+        },
+      )
       .toBeGreaterThanOrEqual(2);
   } finally {
     await local.close();
@@ -182,7 +185,7 @@ test.describe("P5-02 全画面 storage gate", () => {
           if (body.length > 20) expect(all, screen.path).not.toContain(body);
         }
       }
-      await expect.poll(() => daemon.requests.some((r) => r.path === "/api/v1/inbox")).toBe(true);
+      await expect.poll(() => daemon.requests.some((r) => r.path === "/api/v1/inbox/items")).toBe(true);
     });
   });
 });

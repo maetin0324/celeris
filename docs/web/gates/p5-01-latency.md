@@ -167,3 +167,25 @@ S1 は nav にリンクの無い経路（`/org/cos`、`/projects/P1` 以下 3 �
 ### e2e（retries 0、3 回続けて）
 
 `corepack pnpm@12.6.0 -C web e2e latency/transition.spec.ts parity/latency-gate.spec.ts --retries=0` を 3 回続けて実行し、3 回とも **33 passed / 0 failed**（exit 0、各 2.4 m、開始時の load 1 分値 24.9 / 7.8 / 18.5）。S1 の URL・見出しの最大は 82 / 92 ms。
+
+## 付記（2026-10-04）: リンクの無い経路の click も actionability を区間の外へ
+
+リンクの無い経路を親画面の click で測るよう直した後も、celeris の check（2 spec を retries 0 で 3 回）で S1 `/knowledge/inbox`・`/knowledge/skills`（親 `/knowledge` の click）と `/reports`（nav の click）が URL @0 で 309〜342 ms になり落ちた。page 内の時刻（click イベント・pushState・h1）を取ると、click イベントから pushState までは 1〜80 ms で、残りは Playwright の `click()` の actionability 待ち（stable の 2 frame・hit test の往復）だった。負荷下ではこの待ちが 150〜320 ms になり、`toHaveURL` の polling 間隔と重なって予算を超える。
+
+- 直し方（`web/e2e/latency/transition.spec.ts` だけ、commit `7fc1d0ef`）: 計測区間の前に `click({ trial: true })` で actionability を確かめ、区間では `click({ force: true })`（mouse の move・down・up）だけを打つ。nav のリンクと親画面のリンクの両方。
+- 変えないもの: 予算 300 ms、10 s−0 s 差 100 ms、retries 0、click から URL・見出しまでの測り方（`toHaveURL` → h1 の `toBeVisible`）。
+
+### 変更前・変更後の計測（CPU throttle、click で測るリンクの無い経路 8 件 × 遅延 3 × 3 回 = 72 計測）
+
+台本は spec-ready の `throttle-measure.mjs` を流用し、mode `armed` を足した（WU artifacts の `throttle-measure-armed.mjs`・`throttle-armed.jsonl`、計測時の host の load 1 分値は 28.9）。pushState + popstate の 4 件（36 計測）は変更の対象外で、6x でも最大 115 ms。
+
+| CPU | click 計測（actionability 込み）起点→h1 最大 / 中央値 / 300ms 超 | armed click（actionability は区間の前）最大 / 中央値 / 300ms 超 | click() そのものの最大 ms（前 → 後） |
+|---|---|---|---|
+| 1x | 80 / 70 / 0/72 | 51 / 37 / 0/72 | 41 → 11 |
+| 4x | 325 / 83 / 1/72 | 91 / 46 / 0/72 | 318 → 34 |
+| 6x | 426 / 101 / 2/72 | 108 / 58 / 0/72 | 299 → 42 |
+
+### e2e（retries 0、3 回続けて）
+
+celeris の check と同じ `corepack pnpm@12.6.0 -C web build` の後に `corepack pnpm@12.6.0 -C web e2e e2e/latency/transition.spec.ts e2e/parity/latency-gate.spec.ts --retries=0` を 3 回続けて実行し、3 回とも **33 passed / 0 failed**（exit 0、各 2.4〜2.5 m）。S1 の 270 計測で URL 中央値 13 / 最大 177 ms、見出し中央値 25 / 最大 230 ms、10 s−0 s 差（見出し）の最大 41 ms。
+

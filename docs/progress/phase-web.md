@@ -269,3 +269,12 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 
 - 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck` と biome は exit 0。
 - 未解決: 4x・6x の変更後の超過 3 件は Playwright の click の actionability 待ちで、page 内の遷移は 176 ms 以下。
+- 追補（2026-10-04）: celeris の check（2 spec × 3 回、retries 0）で S1 `/knowledge/inbox`・`/knowledge/skills`・`/reports` が URL @0 で 309〜342 ms になり落ちた。リンクの無い経路の click でも、時間の大半は Playwright の click の actionability 待ちだった。`transition.spec.ts` は計測区間の前に `click({ trial: true })` で確かめ、区間では `click({ force: true })` だけを打つ（commit `7fc1d0ef`）。click で測る 8 件、CDP CPU throttle、各 72 計測、起点→h1 の最大 / 中央値 / 300 ms 超:
+
+| CPU | 変更前（actionability 込み） | 変更後（actionability は区間の前） |
+|---|---|---|
+| 1x | 80 / 70 / 0/72 | 51 / 37 / 0/72 |
+| 4x | 325 / 83 / 1/72 | 91 / 46 / 0/72 |
+| 6x | 426 / 101 / 2/72 | 108 / 58 / 0/72 |
+
+- 証拠: build の後に 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。S1 の最大は URL 177 / 見出し 230 ms。`pnpm typecheck` と `pnpm lint`（既存の warning 4 件のみ）は exit 0。

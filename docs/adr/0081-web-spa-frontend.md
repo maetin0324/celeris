@@ -217,3 +217,7 @@ D7 の遷移予算（click から URL・見出しまで 300 ms）を確かめる
 ### 付記の追補（2026-10-03）: リンクの無い経路
 
 S1 の nav にリンクの無い経路も、計測区間に文書の読み込み（page.goto）を入れない。親画面（その URL への実リンクを持つ画面）を開き、起動の完了を待ってから、そのリンクを click して測る。親と遷移先の対応は `web/e2e/latency/in-app-routes.ts` の表に持つ。どの画面にも SPA のリンクが無い経路は、起動の完了の後に `history.pushState` と `popstate` でアプリ内遷移させる。予算・差・retries・URL と見出しまでの測り方は上の付記と同じ。計測値は docs/web/gates/p5-01-latency.md の付記にある。
+
+### 付記の追補（2026-10-04）: click の actionability は計測区間の外
+
+S1 は、nav のリンクもリンクの無い経路の親画面のリンクも、計測区間の前に `click({ trial: true })` で actionability（visible・stable・hit test）を確かめ、区間では `click({ force: true })` だけを打つ。負荷下では actionability 待ちが click 1 回に 150〜320 ms かかり、click イベントの前に予算を使い切っていたため（遷移そのものは click イベントから pushState まで 1〜80 ms）。起点は click、終点は URL と見出しで、予算・差・retries は変えない。計測値は docs/web/gates/p5-01-latency.md の付記（2026-10-04）にある。

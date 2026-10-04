@@ -11,7 +11,7 @@ export async function startFixtureGateway() {
   const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-audit-"));
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN, profile: "rich" });
   const daemonUrl = await daemon.start();
   const server = createApp({ log: () => {}, daemonUrl, daemonTokenFile: tokenFile }).listen(0, "127.0.0.1");
   await new Promise((resolve, reject) => {

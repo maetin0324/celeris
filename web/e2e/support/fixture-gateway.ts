@@ -10,7 +10,7 @@ export async function startFixtureGateway() {
   const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-a11y-"));
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN, profile: "rich" });
   const gateway = await startGateway({ daemonUrl: await daemon.start(), daemonTokenFile: tokenFile });
   return {
     base: gateway.base,

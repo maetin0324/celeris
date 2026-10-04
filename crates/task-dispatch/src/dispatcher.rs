@@ -830,9 +830,19 @@ struct IntegrationEntry {
 /// が spawn した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining の
 /// インスタンスが検査の途中で exit して完了を失わないため）、lease の照合では「生きている run」と
 /// みなす。
+///
+/// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になったら検査を止めて手を離す
+/// （`hand_off_checks_in_hand`）ので、WU・検査の数・run の終端（`Done`）・quota の持ち主も持つ。
 struct CheckingEntry {
     task_id: TaskId,
     handle: JoinHandle<()>,
+    work_unit_id: String,
+    key: String,
+    checks: usize,
+    terminal: Terminal,
+    account: Option<String>,
+    account_adapter: Option<AccountAdapter>,
+    provider: ProviderId,
 }
 
 /// ADR-0074 D1.4: 工程の統合（spawn した git 操作と検査）の結果。
@@ -1555,6 +1565,9 @@ impl Dispatcher {
     /// 「手元が 0」と判断して exit し、検査の完了（`Completion::WorkUnitChecks`）ごと失う。
     /// 本番（dogfood 4 回目の `gate` WU）では、その run は `running` のまま検査前に延ばした lease
     /// （`review_timeout × (2n+1) + lease_grace`）が切れるまで放置され、`lease expired` で requeue された。
+    ///
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の instance は検査を始めず、手元の検査も最初の tick で
+    /// 手放す（`hand_off_checks_in_hand`）ので、draining 中の `checking` は空になり、drain は run の終わりで完了する。
     pub fn in_flight(&self) -> usize {
         self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
     }
@@ -1780,6 +1793,8 @@ impl Dispatcher {
             d
         };
         let (finished, reviewed) = self.drain_completions()?;
+        // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining なら手元の WU の検査を止めて手を離す。
+        self.hand_off_checks_in_hand()?;
         let drain_ms = lap(&mut at);
         report.finished = finished;
         report.reviewed = reviewed;
@@ -1813,6 +1828,9 @@ impl Dispatcher {
             Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
         }
         report.reclaimed = self.reclaim_expired_leases()?;
+        // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う
+        // （照合より前。照合が「持ち主の居ない run」として requeue しないように）。
+        self.take_over_handed_off_checks()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
         let reclaim_ms = lap(&mut at);

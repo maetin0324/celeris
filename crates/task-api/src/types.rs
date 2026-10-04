@@ -259,7 +259,8 @@ pub struct RunList {
 }
 
 /// 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log` の応答。その WU の最後の
-/// `IntegrationCheckStarted`（`index` 指定ならその index の最後のもの）のログの末尾。
+/// `IntegrationCheckStarted`（`index` 指定ならその index の最後のもの）のログの末尾。葉の WU では受け入れ検査の
+/// `WorkUnitCheckStarted` を同じく読む（2026-10-04 WU 検査の引き継ぎ D3）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkUnitCheckLog {
     pub work_unit_id: String,
@@ -268,7 +269,8 @@ pub struct WorkUnitCheckLog {
     pub total: u32,
     pub cmd: String,
     pub started_at: String,
-    /// 対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。
+    /// 対応する `IntegrationCheckFinished` / `WorkUnitCheckFinished` がまだ無い（実行中、または daemon の停止で
+    /// 打ち切られた）。
     pub running: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pass: Option<bool>,

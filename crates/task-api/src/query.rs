@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 59] = [
+pub(crate) const EVENT_TYPES: [&str; 62] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -204,6 +204,10 @@ pub(crate) const EVENT_TYPES: [&str; 59] = [
     // 2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件の開始・終了。
     "integration_check_started",
     "integration_check_finished",
+    // 2026-10-04 WU 検査の引き継ぎ: 葉の WU の受け入れ検査 1 件の開始・終了と、draining の旧 instance の手放し。
+    "work_unit_check_started",
+    "work_unit_check_finished",
+    "work_unit_checks_handed_off",
     // ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定。
     "execution_gated",
     // ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形を人が後から決めた。
@@ -285,6 +289,9 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::MergeCandidateStale { .. } => "merge_candidate_stale",
         Event::IntegrationCheckStarted { .. } => "integration_check_started",
         Event::IntegrationCheckFinished { .. } => "integration_check_finished",
+        Event::WorkUnitCheckStarted { .. } => "work_unit_check_started",
+        Event::WorkUnitCheckFinished { .. } => "work_unit_check_finished",
+        Event::WorkUnitChecksHandedOff { .. } => "work_unit_checks_handed_off",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
         Event::ProjectPlanProposed { .. } => "project_plan_proposed",
         Event::ProjectPlanDecided { .. } => "project_plan_decided",

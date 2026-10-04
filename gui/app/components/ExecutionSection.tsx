@@ -326,6 +326,7 @@ const CHECK_LOG_POLL_MS = 5000;
  * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の検査（現在の検査と済んだ検査）。統合は run を持たないので、
  * run のログの代わりに celeris の `check_progress` を出し、開いたときだけ出力の末尾
  * （`GET /tasks/{id}/work-units/{wu_id}/check-log`）を取りに行く。実行中は開いている間だけ数秒おきに読み直す。
+ * 葉の WU の受け入れ検査（worker run の後に daemon が流す。2026-10-04 WU 検査の引き継ぎ D3）も同じ形で出す。
  */
 function WorkUnitCheckProgress({
   progress,

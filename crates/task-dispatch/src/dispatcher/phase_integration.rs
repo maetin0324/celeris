@@ -41,11 +41,17 @@ fn repair_scope_from_units<'a>(
 
 /// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログを置く Task の作業ディレクトリ直下のディレクトリ。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所（`<task_dir>/work-unit-checks/<wu_key>`）。
+pub(crate) const WORK_UNIT_CHECK_LOG_DIR: &str = "work-unit-checks";
 
 /// 統合の検査を event とログに残すための、その統合 WU の識別とログの置き場所。
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査にも使う（`run_id` が `Some` なら
+/// `WorkUnitCheckStarted` / `WorkUnitCheckFinished` を、`None`〈統合〉なら `IntegrationCheck*` を残す）。
 pub(crate) struct ObservedIntegration {
     pub work_unit_id: String,
     pub key: String,
+    /// 検査を起こした worker run（葉の WU の受け入れ検査のときだけ）。
+    pub run_id: Option<String>,
     /// `<task_dir>/integration-checks/<wu_key>`。検査 1 件ごとに `<started_ms>-<index>.log` を作る。
     pub log_dir: PathBuf,
 }
@@ -67,14 +73,26 @@ pub(crate) async fn run_integration_checks(
     for (i, c) in checks.iter().enumerate() {
         let index = u32::try_from(i).unwrap_or(u32::MAX);
         let log_path = observed.log_dir.join(format!("{attempt_ms}-{index}.log"));
-        let started = Event::IntegrationCheckStarted {
-            work_unit_id: observed.work_unit_id.clone(),
-            key: observed.key.clone(),
-            index,
-            total,
-            cmd: c.cmd.clone(),
-            log_path: log_path.display().to_string(),
-            started_at: rfc3339(OffsetDateTime::now_utc()),
+        let started = match &observed.run_id {
+            Some(run_id) => Event::WorkUnitCheckStarted {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                run_id: run_id.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                log_path: log_path.display().to_string(),
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+            },
+            None => Event::IntegrationCheckStarted {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                log_path: log_path.display().to_string(),
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+            },
         };
         if let Err(e) = store.append_event(task_id, &started) {
             tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check start");
@@ -89,16 +107,31 @@ pub(crate) async fn run_integration_checks(
             "",
         )
         .await;
-        let finished = Event::IntegrationCheckFinished {
-            work_unit_id: observed.work_unit_id.clone(),
-            key: observed.key.clone(),
-            index,
-            total,
-            cmd: c.cmd.clone(),
-            pass: outcome.pass,
-            exit: outcome.exit,
-            timed_out: outcome.timed_out,
-            duration_ms: u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX),
+        let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let finished = match &observed.run_id {
+            Some(run_id) => Event::WorkUnitCheckFinished {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                run_id: run_id.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                pass: outcome.pass,
+                exit: outcome.exit,
+                timed_out: outcome.timed_out,
+                duration_ms,
+            },
+            None => Event::IntegrationCheckFinished {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                pass: outcome.pass,
+                exit: outcome.exit,
+                timed_out: outcome.timed_out,
+                duration_ms,
+            },
         };
         if let Err(e) = store.append_event(task_id, &finished) {
             tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check finish");
@@ -591,6 +624,7 @@ impl Dispatcher {
         let observed = ObservedIntegration {
             work_unit_id: integ.id.clone(),
             key: integ.key.clone(),
+            run_id: None,
             log_dir: ws.task_dir.join(INTEGRATION_CHECK_LOG_DIR).join(&integ.key),
         };
         let handle = tokio::spawn(async move {

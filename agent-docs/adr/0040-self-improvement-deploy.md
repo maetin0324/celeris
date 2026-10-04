@@ -521,3 +521,46 @@ web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くと
   （unit の依存で意図せず起きる）を止める規則で、悪意ある worker への防御は worker から user systemd
   bus と `releases_dir` を隠す別の対策（phase-R.md の再発防止候補）で行う。
 - 同じ release の二重起動（exit 3）は `Restart=on-failure` で再起動されうるが、この付記では変えない。
+
+## 付記 2026-10-04: draining の旧 instance は run の終わりで手を離す（WU 検査の引き継ぎ）
+
+### 起きたこと
+
+- 2026-10-04 18:12 UTC に `08c66fa6a54b` → `864f5d29b07c` をライブ昇格した。旧 daemon（pid 2303147）は draining になり、
+  task `01M440S16A0E49172DK6ST4QPK` の worker run `01M440WBF9D82CAX1WT8H3SB05` を抱えていた。run の worker は
+  18:15:26 に終わったが、旧 daemon はそのまま同じ WU の受け入れ検査（旧版の遅い web e2e、20 分以上）を流し続け、
+  `runs.status` は running のまま drain が終わらなかった。04:07 の昇格の後も、旧 daemon が run の終わりから統合と
+  `cargo test` まで進め、新版の統合検査 event が出なかった。
+- Phase F5-fix2 は「検査の途中で exit すると完了を失う」ため `checking`・`integrating` を `in_flight` に数えていた。
+  そのため drain は run の後の処理（旧版のコードで流れる検査・統合）が終わるまで延び、新版の改良が効かなかった。
+- WU の受け入れ検査（`spawn_work_unit_checks`）は worker run の外で daemon が流すので、run のログにも events にも
+  何も出ず、GUI では止まって見えた。
+
+### 決定
+
+- D1: draining の旧 instance は、抱えている worker run のプロセスが終わったら、その結果を store に残した時点で手を
+  離す。WU に受け入れ検査がある `Done` の run は、検査を始めずに `runs/<run_id>/result.json`（無ければ `Done` の内容で
+  書く）を残し、WU の lease をその run のまま検査の分（`review_timeout × (2n+1) + lease_grace`）延ばし、追記の event
+  `WorkUnitChecksHandedOff { work_unit_id, key, run_id }` を残す。WU は `running` のまま。draining になった時点で
+  手元にある検査（`checking`）も同じく止めて（tokio task の abort。子 process は `kill_on_drop`）印を残す。段の最後の
+  WU が済んでも統合は始めない。review は従来どおり始めない（`spawn_review` の判定）。次の dispatch も始めない。
+- D2: 新しい active instance は毎 tick、lease の照合（ADR-0074 D1.7）より前に、`WorkUnitChecksHandedOff` があり WU が
+  まだその run で `running`・手元に無い run を、既存の `finalise_from_result_json`（Phase F5-fix2）で確定し直す。
+  検査はそこで新版のコードで走り、完了の記録（`WorkerFinished`・`runs` の終端・WU done/retry）は 1 回だけ。
+  検査の途中で新 instance が止まっても印と WU は残るので、次の active がやり直す（検査は冪等）。統合は、段の WU が全部
+  済んで何も走っていない Task が照合で ready に戻り、新しい active の dispatch が始める（再起動時と同じ経路）。
+- D3: WU の受け入れ検査も統合の検査と同じく、検査 1 件ごとに `WorkUnitCheckStarted` / `WorkUnitCheckFinished`
+  （`IntegrationCheck*` と同じ欄に `run_id` を足す）を残し、出力を `<task_dir>/work-unit-checks/<wu_key>/` へ逐次書く。
+  task 詳細の WU の行の `check_progress` と `GET /tasks/{id}/work-units/{wu_id}/check-log` は両方の event を読む。
+  GUI は既存の WU の行の表示（統合で入れたもの）をそのまま使う。
+- `in_flight` は run（worker・reviewer）のプロセスと、draining になる前に始まっていた統合だけを数える。手元の検査は
+  draining の最初の tick で手放すので、drain は run の終わりで完了する。
+
+### 採らない・残ること
+
+- draining になる前に始まっていた段の統合は止めない（git の merge の途中で止めると作業ツリーが半端に残り、新しい
+  active の統合と競合する）。終わるまで `in_flight` に数える。統合の検査に長いものがあると drain はその分延びる。
+- 手放した run の quota の記録（アカウントの割り当て）は旧 instance が解放する。新 instance の確定ではアカウントは
+  `None` として扱う（`WorkerStarted` の provider は events から引く）。
+- 止めた検査の孫 process は `kill_on_drop` が直接の子にしか効かないので残りうる（drain timeout の `abort_all_runs` と
+  同じ制約）。

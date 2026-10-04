@@ -1413,6 +1413,41 @@ pub enum Event {
         timed_out: bool,
         duration_ms: u64,
     },
+    /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`spec.checks`）が検査 1 件を始めた。形は
+    /// `IntegrationCheckStarted` と同じで、検査を起こした worker run の `run_id` を足す。状態は変えない。
+    WorkUnitCheckStarted {
+        work_unit_id: String,
+        key: String,
+        run_id: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        log_path: String,
+        started_at: String,
+    },
+    /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査 1 件が終わった（`IntegrationCheckFinished` と同じ形）。
+    WorkUnitCheckFinished {
+        work_unit_id: String,
+        key: String,
+        run_id: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        pass: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        #[serde(default)]
+        timed_out: bool,
+        duration_ms: u64,
+    },
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance で worker run が終わり、受け入れ
+    /// 検査を始めずに手を離した。WU は `running`・lease はその run のまま残り、結果は `runs/<run_id>/result.json`
+    /// にある。新しい active instance がこれを見て result.json から確定し直す（検査はそこで走る）。状態は変えない。
+    WorkUnitChecksHandedOff {
+        work_unit_id: String,
+        key: String,
+        run_id: String,
+    },
     /// ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った
     /// （review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。
     MergeCandidateStale {

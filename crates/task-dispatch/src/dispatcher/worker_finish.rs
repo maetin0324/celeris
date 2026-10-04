@@ -267,6 +267,20 @@ impl Dispatcher {
             && !(task_core::is_integration_repair_unit(wu.kind, &wu.spec.title)
                 && !self.integration_repair_result_trusted(&task, wu)?)
         {
+            // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance は run の終わりで手を離す。
+            if !self.accepting_new_work
+                && self.hand_off_work_unit_checks(
+                    &task,
+                    wu,
+                    &run_id,
+                    account.as_deref(),
+                    account_adapter,
+                    &provider,
+                    &result,
+                )?
+            {
+                return Ok(());
+            }
             return self.spawn_work_unit_checks(
                 task_id,
                 run_id,
@@ -1383,7 +1397,11 @@ impl Dispatcher {
                 self.store.append_event(task_id, ev)?;
             }
             tracing::info!(%task_id, %run_id, settle = ?settle, outcome = %outcome_str, "work unit finished (task stays running)");
-            if let crate::execution_scheduler::PhaseSettle::Integrate(id) = settle {
+            // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance は統合を始めない。段の WU が
+            // 全部済んだ Task は lease の照合（ADR-0074 D1.7）で ready に戻り、新しい active の dispatch が統合を始める。
+            if let crate::execution_scheduler::PhaseSettle::Integrate(id) = settle
+                && self.accepting_new_work
+            {
                 self.start_integration(&task, id)?;
             }
             return Ok(());

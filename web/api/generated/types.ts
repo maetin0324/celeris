@@ -1719,6 +1719,33 @@ export type Event = {
   "type": "integration_check_finished";
   "work_unit_id": string;
 } | {
+  "cmd": string;
+  "index": number;
+  "key": string;
+  "log_path": string;
+  "run_id": string;
+  "started_at": string;
+  "total": number;
+  "type": "work_unit_check_started";
+  "work_unit_id": string;
+} | {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass": boolean;
+  "run_id": string;
+  "timed_out"?: boolean;
+  "total": number;
+  "type": "work_unit_check_finished";
+  "work_unit_id": string;
+} | {
+  "key": string;
+  "run_id": string;
+  "type": "work_unit_checks_handed_off";
+  "work_unit_id": string;
+} | {
   "branch": string;
   "child_task": TaskId;
   "head_sha": string;

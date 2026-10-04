@@ -126,6 +126,7 @@ async fn a_running_integration_check_has_a_started_event_and_a_readable_partial_
     let observed = super::super::phase_integration::ObservedIntegration {
         work_unit_id: "wu-int".into(),
         key: "integrate-p1".into(),
+        run_id: None,
         log_dir: ws_dir
             .path()
             .join("integration-checks")

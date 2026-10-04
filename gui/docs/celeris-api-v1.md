@@ -454,7 +454,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 168 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | Live View の event を追記する（daemon bearer） | `EventResponse` | store `browser_live_append` |
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
-| 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress） | `WorkUnitCheckLog` | events + ファイル |
+| 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -683,7 +683,8 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
   ADR 2026-10-04-integration-check-progress D4）。`total`（検査の数）・`current`（実行中の検査 `{index, cmd, started_at}`。
   WU が `running` で終了の event がまだ無いときだけ）・`finished[]`（`{index, cmd, pass, exit?, timed_out, duration_ms}`）。
   events の `integration_check_started` / `integration_check_finished` から組み立てる。統合の検査を始めていなければ省略。
-  出力の末尾は §3.126.19 で読む。
+  出力の末尾は §3.126.19 で読む。葉の WU では、worker run の後に daemon が流す受け入れ検査（`spec.checks`）の最後の
+  試行を同じ形で出す（events の `work_unit_check_started` / `work_unit_check_finished`。ADR-0040 付記 2026-10-04 D3）。
 - `timers.now` は応答時刻。クライアントは `lease_expires_at - now` 等をこの `now` 基準で計算する（時計ずれ対策）。
 - `runs[].files` は task-api が `<workspace_dir>/runs/<run_id>/` を `stat` して埋める（task-ops は `null`）。
 - `actions` は今この状態で許される操作（§5.4）。GUI はボタンの表示にこれを使い、押した結果の 409 も正常系として扱う。
@@ -3158,7 +3159,14 @@ assertion で owner session を確認し、worker の route は daemon bearer �
 timeout の再実行・merge-base の修復を含む）が残り、stdout と stderr は出た順に
 `<task_dir>/integration-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる（1 件 8 MiB で切り、その旨を 1 行残す）。
 
-この route は `{wu_id}` の最後の `integration_check_started`（`index` 指定ならその index の最後のもの）のログの末尾を返す。
+葉の WU の受け入れ検査（`spec.checks`）も worker の run の外で daemon が流す（ADR-0040 付記 2026-10-04 D3）。同じ形の
+event `work_unit_check_started` / `work_unit_check_finished`（上の欄に、検査を起こした worker run の `run_id` を足したもの）
+が残り、出力は `<task_dir>/work-unit-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる。live 引き継ぎで draining
+になった旧 instance は検査を始めず（途中の検査は止め）、event `work_unit_checks_handed_off`（`work_unit_id`・`key`・
+`run_id`）を残す。新しい active instance が `runs/<run_id>/result.json` から確定し直して検査を始める（状態は変えない event）。
+
+この route は `{wu_id}` の最後の `integration_check_started` または `work_unit_check_started`（`index` 指定ならその index の
+最後のもの）のログの末尾を返す。
 path は event の `log_path` から引き、要求からは受け取らない。
 
 - クエリ: `index`（任意。検査の番号）、`bytes`（任意。既定 16384、1〜65536 に丸める）。

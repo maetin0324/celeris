@@ -340,19 +340,21 @@ fn check_log_of(
     bytes: u64,
 ) -> Result<WorkUnitCheckLog, ApiProblem> {
     use task_core::Event;
+    // 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`WorkUnitCheckStarted`）も同じく読む。
     let started = events.iter().rposition(|(_, e)| {
         matches!(e, Event::IntegrationCheckStarted { work_unit_id, index: i, .. }
+            | Event::WorkUnitCheckStarted { work_unit_id, index: i, .. }
             if work_unit_id == wu_id && index.is_none_or(|want| want == *i))
     });
     let Some(pos) = started else {
         return Err(ApiProblem::file_not_found(format!(
-            "work unit {wu_id} has no integration check{}",
+            "work unit {wu_id} has no check{}",
             index
                 .map(|i| format!(" with index {i}"))
                 .unwrap_or_default()
         )));
     };
-    let Event::IntegrationCheckStarted {
+    let (Event::IntegrationCheckStarted {
         work_unit_id,
         key,
         index,
@@ -360,12 +362,30 @@ fn check_log_of(
         cmd,
         log_path,
         started_at,
-    } = &events[pos].1
+    }
+    | Event::WorkUnitCheckStarted {
+        work_unit_id,
+        key,
+        index,
+        total,
+        cmd,
+        log_path,
+        started_at,
+        ..
+    }) = &events[pos].1
     else {
         return Err(ApiProblem::not_found());
     };
     let finished = events[pos + 1..].iter().find_map(|(_, e)| match e {
         Event::IntegrationCheckFinished {
+            work_unit_id: w,
+            index: i,
+            pass,
+            exit,
+            duration_ms,
+            ..
+        }
+        | Event::WorkUnitCheckFinished {
             work_unit_id: w,
             index: i,
             pass,

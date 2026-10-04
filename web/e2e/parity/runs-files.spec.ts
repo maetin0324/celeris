@@ -167,6 +167,106 @@ test.describe("P3-11", () => {
     }
   });
 
+  test("parity: 360px で深い階層・長い file 名の file 一覧・本文・成果物一覧が溢れない", async ({ page }) => {
+    const deepDirName = `${"deeply-nested-directory-segment-".repeat(3)}end`;
+    const deepDirPath = `src/${deepDirName}`;
+    const deepFileName = `${"another-rather-long-file-name-segment-".repeat(3)}file.log`;
+    const deepFilePath = `${deepDirPath}/${deepFileName}`;
+    const deepLine = `${"z".repeat(5000)}\n`;
+    const artifactName = `${"very-long-report-file-name-segment-".repeat(3)}summary.md`;
+    const artifactPath = `ops/${"nested-artifact-directory-".repeat(3)}reports/${artifactName}`;
+    const tree360 = (url: URL) => {
+      const p = url.searchParams.get("path") ?? "";
+      if (p.includes("..")) return undefined;
+      if (p === "src")
+        return {
+          repo: "code",
+          path: "src",
+          repos: [{ name: "code", kind: "git", dir: "/w/code" }],
+          entries: [{ kind: "dir", name: deepDirName, path: deepDirPath }],
+        };
+      if (p === deepDirPath)
+        return {
+          repo: "code",
+          path: deepDirPath,
+          repos: [{ name: "code", kind: "git", dir: "/w/code" }],
+          entries: [{ kind: "file", name: deepFileName, path: deepFilePath, size: deepLine.length }],
+        };
+      return {
+        repo: "code",
+        path: "",
+        repos: [{ name: "code", kind: "git", dir: "/w/code" }],
+        entries: [{ kind: "dir", name: "src", path: "src" }],
+      };
+    };
+    const file360 = (url: URL) => {
+      const p = url.searchParams.get("path") ?? "";
+      if (p === deepFilePath)
+        return { repo: "code", path: p, size: deepLine.length, binary: false, too_large: false, text: deepLine };
+      return undefined;
+    };
+    const h = await harness(
+      {
+        "/api/v1/tasks/T1/tree": tree360,
+        "/api/v1/tasks/T1/tree/file": file360,
+        "/api/v1/projects": { items: [{ id: "P1", request: "案件1", created_at: "2026-09-30T00:00:00Z" }] },
+        "/api/v1/projects/P1": { project: { id: "P1" }, milestones: [], tasks: [{ id: "T1", title: "成果物の題" }] },
+        "/api/v1/tasks/T1/artifacts": {
+          items: [
+            {
+              idx: 0,
+              run_id: "R1",
+              ts: "2026-09-30T00:00:00Z",
+              exists: true,
+              forbidden: false,
+              size: 10,
+              artifact: { kind: "file", name: artifactName, path: artifactPath, sha256: "0" },
+            },
+          ],
+        },
+      },
+      { "/api/v1/tasks/T1/artifacts/0": { body: "# 長い path の報告\n", type: "text/markdown" } },
+    );
+    const overflow = () =>
+      page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    try {
+      await page.setViewportSize({ width: 360, height: 800 });
+
+      // file 一覧: 深い階層へたどり、長いディレクトリ名・長い file 名でも 360px で溢れない。省略した全文は title に。
+      await page.goto(`${h.gateway.base}/tasks/T1/files`);
+      await expect(page.getByRole("heading", { level: 1, name: "作業ツリーと成果物 T1" })).toBeVisible();
+      await page.locator("[data-entry='src']").click();
+      const dirEntry = page.locator(`[data-entry='${deepDirPath}']`);
+      await expect(dirEntry).toHaveAttribute("title", deepDirPath);
+      expect(await overflow()).toBe(0);
+      await dirEntry.click();
+      const fileEntry = page.locator(`[data-entry='${deepFilePath}']`);
+      await expect(fileEntry).toHaveAttribute("title", deepFilePath);
+      expect(await overflow()).toBe(0);
+
+      // file 本文: 深い path の見出しと長い行が 360px で溢れない。全文は title に。
+      await fileEntry.click();
+      const body = page.getByTestId("files-body");
+      await expect(body).toContainText("zzzz");
+      await expect(body.locator("h2")).toHaveAttribute("title", deepFilePath);
+      expect(await overflow()).toBe(0);
+
+      // 成果物一覧: 長い path でも 360px で溢れない。全文は title に。
+      await page.goto(`${h.gateway.base}/artifacts`);
+      await page.getByLabel("案件").selectOption("P1");
+      await page.getByRole("button", { name: "絞り込む" }).click();
+      await expect(page).toHaveURL(/project=P1/);
+      const list = page.getByTestId("artifacts-list");
+      await expect(list.locator(`[data-artifact='T1/0'] [title='${artifactPath}']`)).toHaveAttribute(
+        "title",
+        artifactPath,
+      );
+      expect(await overflow()).toBe(0);
+    } finally {
+      await h.close();
+    }
+  });
+
   test("parity: /artifacts 絞り込みと開く", async ({ page }) => {
     const artifact = (idx: number, name: string) => ({
       idx,

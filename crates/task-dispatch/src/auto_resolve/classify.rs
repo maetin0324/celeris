@@ -40,8 +40,12 @@ pub fn kind(path: &str) -> ConflictKind {
     }
 }
 
-/// `agent-docs/adr/NNNN-*.md` か `docs/adr/NNNN-*.md` の番号。
+/// `agent-docs/adr/NNNN-*.md` か `docs/adr/NNNN-*.md` の番号。日付名 `YYYY-MM-DD-<slug>.md`（ADR-0128 D5）は
+/// 番号を持たない（先頭 4 桁の年を番号と見なさない。2026-10-04 本番の誤検出の原因）。
 pub fn adr_number(path: &str) -> Option<String> {
+    if dated_adr(path) {
+        return None;
+    }
     ADR_DIRS
         .iter()
         .find_map(|dir| numbered(path, dir, '-', ".md"))

@@ -1035,10 +1035,39 @@ fn integration_repair_fallback_delivers() {
         .join("current/scripts/prepare.sh");
     fs::create_dir_all(script.parent().unwrap()).unwrap();
     fs::write(&script, "#!/bin/sh\nexit 0\n").unwrap();
+    // ADR parallel integration D4 付記: この配送の未回答の統合依頼（上限時などに出たもの）は、main が head を
+    // 取り込んだ時点で統合済みとして閉じる。
+    {
+        use task_core::TaskStore;
+        let request = task_core::integration_request::IntegrationRequest {
+            target_branch: synced.default_branch.clone(),
+            target_sha: diverged.clone(),
+            source_branch: synced.branch.clone(),
+            source_sha: repaired.clone(),
+            merge_base: None,
+            conflict_files: vec!["feature".into()],
+            intent: Vec::new(),
+            reason: "局所修復の上限".into(),
+            recommendation: "最新 SHA を確認する".into(),
+            actions: Vec::new(),
+            candidate_sha: None,
+        };
+        assert!(
+            store
+                .integration_request_record(d.task_id, &request, "delivery")
+                .unwrap()
+        );
+        assert_eq!(open_integration_count(&store, d.task_id), 1);
+    }
     advance(&store, &cfg, &synced, OffsetDateTime::now_utc()).unwrap();
     let delivered = store.delivery_get(d.task_id).unwrap().unwrap();
     assert_eq!(delivered.state, State::Preparing, "{}", delivered.detail);
     assert_eq!(sha(p, "main").unwrap(), repaired);
+    assert_eq!(
+        open_integration_count(&store, d.task_id),
+        0,
+        "main が取り込んだ後も配送の統合依頼が受信箱に残る"
+    );
     assert_eq!(delivered.release.as_deref(), Some(&repaired[..12]));
     // 自動の再レビューの上限に触れず、review の不合格も試行回数の消費も無い。
     assert!(

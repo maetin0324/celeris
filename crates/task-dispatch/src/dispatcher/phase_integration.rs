@@ -649,10 +649,25 @@ impl Dispatcher {
         };
         if let Some(conflict) = run.conflict.clone() {
             if let Some(request) = &conflict.request {
+                // 同じ origin の古い組の依頼は store が `superseded` で閉じる（D4 付記）。
                 self.record_integration_request(&task, &integ, request)?;
                 return self.block_for_integration_request(&task, &integ);
             }
             return self.schedule_merge_repair(&task, &integ, &units, &conflict);
+        }
+        // D4 付記: merge が衝突なしで通った（人が手で統合した後の再実行で source が既に祖先、または merge
+        // 成功）ので、この統合 WU が出した未回答の依頼は統合済み。検査の成否にかかわらず受信箱から消す。
+        let closed = self.store.integration_requests_close(
+            task_id,
+            &format!("phase:{}", integ.key),
+            task_core::integration_request::INTEGRATED_ANSWER,
+            Some(&format!(
+                "統合済み: {} の統合が衝突なしで通った（HEAD {}）",
+                integ.key, run.head
+            )),
+        )?;
+        if !closed.is_empty() {
+            tracing::info!(%task_id, work_unit = %integ.key, requests = ?closed, "integration requests closed as integrated");
         }
         if let Some((repo_id, stale)) = run.stale.clone() {
             return self.requeue_stale_merge_candidate(&task, &integ, &units, repo_id, &stale);

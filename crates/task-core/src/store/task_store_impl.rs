@@ -249,6 +249,26 @@ impl TaskStore for SqliteStore {
         self.integration_request_record_impl(task_id, request, origin)
     }
 
+    fn integration_request_answer(
+        &self,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.integration_request_answer_impl(task_id, request_id, answer, note)
+    }
+
+    fn integration_requests_close(
+        &self,
+        task_id: TaskId,
+        origin: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<Vec<String>, StoreError> {
+        self.integration_requests_close_impl(task_id, origin, answer, note)
+    }
+
     fn list_page(
         &self,
         filter: &ListFilter,

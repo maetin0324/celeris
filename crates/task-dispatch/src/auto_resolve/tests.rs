@@ -247,3 +247,111 @@ fn commit_empty_target(repo: &Path) -> String {
     );
     command(repo, &["rev-parse", "HEAD"])
 }
+
+/// 日付名 ADR（ADR-0128 D5）は番号を持たない。両側がそれぞれ別の日付名 ADR を足しただけの、衝突しない
+/// merge で統合の依頼を出してはならない（2026-10-04 本番の誤検出: `2026-…` の先頭 4 桁を番号 2026 と
+/// 誤認して 4 本の日付 ADR を「日付名 ADR の衝突」にした）。
+#[test]
+fn dated_adrs_added_on_both_sides_without_conflict_request_nothing() {
+    let tmp = new_repo();
+    let repo = tmp.path();
+    write(repo, "README.md", "base\n");
+    commit(repo, "base");
+    write(
+        repo,
+        "agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md",
+        "# ADR 2026-10-02-parallel-integration-auto-resolve\n",
+    );
+    write(
+        repo,
+        "agent-docs/adr/2026-10-03-ownerless-running-runs.md",
+        "# ADR 2026-10-03-ownerless-running-runs\n",
+    );
+    let target_sha = commit(repo, "target: two dated adrs");
+    command(repo, &["checkout", "-q", "-b", "source", "HEAD~1"]);
+    write(
+        repo,
+        "agent-docs/adr/2026-10-04-release-notes.md",
+        "# ADR 2026-10-04-release-notes\n",
+    );
+    let source_sha = commit(repo, "source: another dated adr");
+    command(repo, &["checkout", "-q", "target"]);
+    let merge_base = command(repo, &["merge-base", "target", "source"]);
+    command(repo, &["merge", "--no-ff", "--no-edit", "source"]);
+    let ctx = ResolveContext {
+        target_branch: "target".into(),
+        target_sha,
+        source_branch: "source".into(),
+        source_sha,
+        merge_base: Some(merge_base),
+        generated_command: None,
+    };
+    let resolution = resolve(repo, &ctx).unwrap();
+    assert_eq!(
+        resolution,
+        Resolution::Resolved {
+            actions: Vec::new()
+        },
+        "衝突の無い日付名 ADR の取り込みで依頼を出した"
+    );
+    assert!(classify::adr_number("agent-docs/adr/2026-10-04-release-notes.md").is_none());
+    assert!(classify::adr_number("docs/adr/2026-10-04-release-notes.md").is_none());
+    assert_eq!(
+        classify::adr_number("agent-docs/adr/0137-parallel.md").as_deref(),
+        Some("0137")
+    );
+}
+
+/// merge base が target 先端（source が target を含む、fast-forward できる取り込み）: 取り込み側が
+/// 日付名 ADR を足し、target にも日付名 ADR がある場合（本番 01M420EMSFS1VP5RWF2FGCV6XR の integrate-close
+/// の形）でも、依頼を出さず `Resolved` になる。
+#[test]
+fn fast_forward_source_with_dated_adrs_requests_nothing() {
+    let tmp = new_repo();
+    let repo = tmp.path();
+    write(repo, "README.md", "base\n");
+    write(
+        repo,
+        "agent-docs/adr/2026-10-02-parallel-integration-auto-resolve.md",
+        "# ADR 2026-10-02-parallel-integration-auto-resolve\n",
+    );
+    write(
+        repo,
+        "agent-docs/adr/2026-10-03-ownerless-running-runs.md",
+        "# ADR 2026-10-03-ownerless-running-runs\n",
+    );
+    write(
+        repo,
+        "agent-docs/adr/2026-10-03-write-set-no-starvation.md",
+        "# ADR 2026-10-03-write-set-no-starvation\n",
+    );
+    let target_sha = commit(repo, "target: dated adrs from main");
+    command(repo, &["checkout", "-q", "-b", "source"]);
+    write(
+        repo,
+        "agent-docs/adr/2026-10-04-release-notes.md",
+        "# ADR 2026-10-04-release-notes\n",
+    );
+    write(repo, "crates/celeris/src/release_notes.rs", "// notes\n");
+    let source_sha = commit(repo, "source: release notes");
+    command(repo, &["checkout", "-q", "target"]);
+    let merge_base = command(repo, &["merge-base", "target", "source"]);
+    assert_eq!(merge_base, target_sha, "merge base は target 先端");
+    command(repo, &["merge", "--no-ff", "--no-edit", "source"]);
+    let ctx = ResolveContext {
+        target_branch: "target".into(),
+        target_sha,
+        source_branch: "source".into(),
+        source_sha,
+        merge_base: Some(merge_base),
+        generated_command: None,
+    };
+    let resolution = resolve(repo, &ctx).unwrap();
+    assert_eq!(
+        resolution,
+        Resolution::Resolved {
+            actions: Vec::new()
+        },
+        "merge base が target 先端の取り込みで依頼を出した"
+    );
+}

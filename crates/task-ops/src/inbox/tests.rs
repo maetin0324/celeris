@@ -1264,3 +1264,128 @@ fn inbox_cleanup_keeps_failed_that_still_needs_human_judgment() {
     assert_eq!(attention_suppression(&failed_child, &by_id), None);
     assert_eq!(attention_suppression(&failed_root, &by_id), None);
 }
+
+/// ADR parallel integration D4 付記（2026-10-04 本番の残留の修正）: 回答済み・統合済み（統合側が
+/// `integrated` で閉じた）・新しい依頼に置き換わった統合依頼は、受信箱の attention と `human_inbox` から消える。
+#[test]
+fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let task = sample_task(TaskKind::Execute, Status::Done);
+    store.insert(&task).expect("insert");
+    let request = |source: &str, target: &str| task_core::integration_request::IntegrationRequest {
+        target_branch: "celeris/task".into(),
+        target_sha: target.into(),
+        source_branch: "celeris/child".into(),
+        source_sha: source.into(),
+        merge_base: Some(target.into()),
+        conflict_files: vec!["docs/ops/cron-jobs.md".into()],
+        intent: Vec::new(),
+        reason: "content conflict".into(),
+        recommendation: "pick one".into(),
+        actions: Vec::new(),
+        candidate_sha: None,
+    };
+    let attention_ids = || {
+        inbox(
+            &store,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+            &no_evidence,
+        )
+        .expect("inbox")
+        .attention
+        .into_iter()
+        .filter_map(|item| match item {
+            AttentionItem::IntegrationRequest { request_id, .. } => Some(request_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+    };
+    let human_ids = || {
+        crate::human_inbox::human_inbox(
+            &store,
+            None,
+            &view_ctx(),
+            OffsetDateTime::now_utc(),
+            &no_evidence,
+            None,
+        )
+        .expect("human inbox")
+        .items
+        .into_iter()
+        .filter(|item| item.kind == crate::human_inbox::InboxKind::IntegrationRequest)
+        .map(|item| item.id)
+        .collect::<Vec<_>>()
+    };
+
+    // 回答済み（人の回答・汎用の回答のどちらも IntegrationAnswered で記録される）。
+    let answered = request("s1", "t1");
+    assert!(
+        store
+            .integration_request_record(task.id, &answered, "phase:integrate-impl")
+            .unwrap()
+    );
+    assert_eq!(attention_ids(), vec![answered.id_for(task.id)]);
+    assert_eq!(human_ids().len(), 1);
+    assert!(
+        store
+            .integration_request_answer(
+                task.id,
+                &answered.id_for(task.id),
+                "answered",
+                Some("Fable が統合した")
+            )
+            .unwrap()
+    );
+    assert!(attention_ids().is_empty(), "回答済みの依頼が残っている");
+    assert!(human_ids().is_empty());
+
+    // 統合済み（target が source を祖先に含むようになったので統合側が閉じる）。
+    let integrated = request("s2", "t2");
+    assert!(
+        store
+            .integration_request_record(task.id, &integrated, "phase:integrate-close")
+            .unwrap()
+    );
+    assert_eq!(attention_ids(), vec![integrated.id_for(task.id)]);
+    assert_eq!(
+        store
+            .integration_requests_close(
+                task.id,
+                "phase:integrate-close",
+                task_core::integration_request::INTEGRATED_ANSWER,
+                Some("統合済み: HEAD が source を含む"),
+            )
+            .unwrap(),
+        vec![integrated.id_for(task.id)]
+    );
+    assert!(attention_ids().is_empty(), "統合済みの依頼が残っている");
+    assert!(human_ids().is_empty());
+
+    // 置き換え（同じ発生元で両端の head が動いた新しい依頼）。
+    let old = request("s3", "t3");
+    let new = request("s4", "t4");
+    assert!(
+        store
+            .integration_request_record(task.id, &old, "delivery")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &new, "delivery")
+            .unwrap()
+    );
+    assert_eq!(attention_ids(), vec![new.id_for(task.id)], "古い依頼が残っている");
+    let human = human_ids();
+    assert_eq!(human.len(), 1);
+    assert!(human[0].ends_with("-t4-s4"), "{human:?}");
+    // 別の発生元（段の統合）の依頼は配送の新しい依頼で置き換わらない。
+    let phase = request("s5", "t5");
+    assert!(
+        store
+            .integration_request_record(task.id, &phase, "phase:integrate-close")
+            .unwrap()
+    );
+    assert_eq!(attention_ids().len(), 2);
+}

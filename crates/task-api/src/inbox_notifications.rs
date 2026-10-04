@@ -415,39 +415,40 @@ async fn answer(
                     unreachable!("open request rows contain requests only")
                 };
                 let request_id = request.id_for(task_id);
+                // D4 付記（2026-10-04）: 統合 WU がこの依頼で止まっている（task blocked・WU blocked(question)）
+                // ときだけ再開・cancel まで行う。既に別の経路（汎用の回答・replan）で再開・完了した WU の
+                // 依頼は、回答の記録だけ行って受信箱から消す（410 にして残り続けさせない）。
                 let phase_unit = if let Some(key) = origin.strip_prefix("phase:") {
                     let task = store
                         .get(task_id)
                         .map_err(store_problem)?
                         .ok_or_else(|| gone(&item_id))?;
-                    let unit = store
+                    store
                         .work_units_for(task_id)
                         .map_err(store_problem)?
                         .into_iter()
                         .find(|unit| {
                             unit.key == key && unit.kind == task_core::WorkUnitKind::Integrate
                         })
-                        .ok_or_else(|| gone(&item_id))?;
-                    if task.status != Status::Blocked
-                        || unit.status != WorkUnitStatus::Blocked
-                        || unit.blocked_reason != Some(WorkUnitBlockedReason::Question)
-                    {
-                        return Err(gone(&item_id));
-                    }
-                    Some(unit)
+                        .filter(|unit| {
+                            task.status == Status::Blocked
+                                && unit.status == WorkUnitStatus::Blocked
+                                && unit.blocked_reason == Some(WorkUnitBlockedReason::Question)
+                        })
                 } else {
                     None
                 };
-                store
-                    .append_event(
+                if !store
+                    .integration_request_answer(
                         task_id,
-                        &Event::IntegrationAnswered {
-                            request_id: request_id.clone(),
-                            answer: answer.clone(),
-                            note: note.clone(),
-                        },
+                        &request_id,
+                        &answer,
+                        note.as_deref(),
                     )
-                    .map_err(store_problem)?;
+                    .map_err(store_problem)?
+                {
+                    return Err(gone(&item_id));
+                }
                 if let Some(mut unit) = phase_unit {
                     if answer == "declined" {
                         task_ops::gate::cancel(store, task_id, None)

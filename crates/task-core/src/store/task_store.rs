@@ -232,13 +232,31 @@ pub trait TaskStore:
     fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError>;
     /// 未回答の統合依頼を、一組の task と両側の head につき一件返す。
     fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError>;
-    /// 同じ組の未回答依頼があれば追記しない。追記したときだけ true。
+    /// 同じ組の未回答依頼があれば追記しない。追記したときだけ true。同じ `origin` の別の組の未回答依頼は
+    /// この依頼に置き換わったものとして `IntegrationAnswered { answer: "superseded" }` で閉じる。
     fn integration_request_record(
         &self,
         task_id: TaskId,
         request: &crate::integration_request::IntegrationRequest,
         origin: &str,
     ) -> Result<bool, StoreError>;
+    /// 依頼 `request_id` が未回答なら `IntegrationAnswered` を追記して閉じる（追記したときだけ true。
+    /// 回答済み・未知の id には何もしない）。配送・段の統合が「統合済み」を記録する経路と、人の回答の両方が使う。
+    fn integration_request_answer(
+        &self,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<bool, StoreError>;
+    /// `origin`（`delivery` / `phase:<key>`）の未回答依頼を全て `answer` で閉じる。閉じた依頼 id を返す。
+    fn integration_requests_close(
+        &self,
+        task_id: TaskId,
+        origin: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<Vec<String>, StoreError>;
 
     /// ADR-0013 D10: `filter` に一致する `tasks` を `order` で keyset ページングして返す。`cursor` は
     /// 前回の `Page::next_cursor`（不透明な文字列）。不正な `cursor` は `StoreError::Invalid`。

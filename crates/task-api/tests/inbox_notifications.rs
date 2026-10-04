@@ -618,3 +618,91 @@ async fn auto_close_drops_meaningless_items_and_keeps_failed_needing_a_decision(
         "{body}"
     );
 }
+
+/// ADR parallel integration D4 付記（2026-10-04）: 統合 WU が既に再開・完了している段の依頼（人が汎用の
+/// 回答で再開した後に残ったもの）も、受信箱から答えれば回答が記録されて消える。WU の遷移も cancel も
+/// 起こさない。
+#[tokio::test]
+async fn phase_integration_request_of_a_finished_unit_is_answered_without_resuming() {
+    let env = admin_env();
+    let task = new_task(TaskKind::Execute, Status::Done);
+    env.seed(&task);
+    let spec: task_core::WorkUnitSpec = serde_json::from_value(json!({
+        "key": "integrate-impl", "kind": "integrate", "title": "Integrate impl",
+        "objective": "Merge the impl phase"
+    }))
+    .unwrap();
+    let unit = task_core::WorkUnitRow::new(
+        task_core::new_id(),
+        task.id.to_string(),
+        "plan-1".into(),
+        0,
+        spec,
+        task_core::WorkUnitStatus::Done,
+        OffsetDateTime::now_utc().to_string(),
+    );
+    env.store
+        .work_units_apply(task.id, vec![unit], vec![], vec![])
+        .unwrap();
+    let request = IntegrationRequest {
+        target_branch: "celeris/task".into(),
+        target_sha: "f865063c".into(),
+        source_branch: "celeris-wu/task/ops-docs".into(),
+        source_sha: "7fbc8de6".into(),
+        merge_base: Some("b742ec75".into()),
+        conflict_files: vec!["docs/ops/cron-jobs.md".into()],
+        intent: vec![],
+        reason: "docs/ops/cron-jobs.md: コードの内容衝突".into(),
+        recommendation: "両側の意図を比較する".into(),
+        actions: vec![],
+        candidate_sha: None,
+    };
+    env.store
+        .integration_request_record(task.id, &request, "phase:integrate-impl")
+        .unwrap();
+    let app = env.router();
+    let inbox = send(
+        &app,
+        get_admin("/api/v1/inbox/items?kind=integration_request"),
+    )
+    .await;
+    let items = inbox.json()["items"].as_array().unwrap().clone();
+    assert_eq!(items.len(), 1, "{items:?}");
+    let id = items[0]["id"].as_str().unwrap().to_owned();
+    for option in ["declined", "integrated"] {
+        let answer = send(
+            &app,
+            post_admin(
+                &format!("/api/v1/inbox/items/{id}/answer"),
+                &json!({"option":option, "note":"手で統合済み"}),
+            ),
+        )
+        .await;
+        if option == "integrated" {
+            // 2 回目: 1 回目で消えているので 404。
+            assert_eq!(answer.status, 404, "{}", answer.text());
+            continue;
+        }
+        assert_eq!(answer.status, 200, "{}", answer.text());
+        assert_eq!(answer.json()["removed"], true);
+    }
+    let after = send(
+        &app,
+        get_admin("/api/v1/inbox/items?kind=integration_request"),
+    )
+    .await;
+    assert!(after.json()["items"].as_array().unwrap().is_empty());
+    assert_eq!(env.status_of(task.id), Status::Done, "done の task は cancel されない");
+    assert_eq!(
+        env.store.work_units_for(task.id).unwrap()[0].status,
+        task_core::WorkUnitStatus::Done
+    );
+    let answered = env
+        .store
+        .events_for(task.id)
+        .unwrap()
+        .into_iter()
+        .filter(|(_, e)| matches!(e, task_core::Event::IntegrationAnswered { .. }))
+        .count();
+    assert_eq!(answered, 1);
+}

@@ -570,6 +570,17 @@ fn advance(
             let claimed = d.clone();
             match merge_reviewed(repo, &d) {
                 Ok(()) => {
+                    // ADR parallel integration D4 付記: main が head を含んだので、この配送の未回答の統合依頼は
+                    // 統合済み。受信箱から消す（回答の記録だけで、配送の再試行は起こさない）。
+                    store.integration_requests_close(
+                        d.task_id,
+                        "delivery",
+                        task_core::integration_request::INTEGRATED_ANSWER,
+                        Some(&format!(
+                            "統合済み: {} が {} を取り込んだ",
+                            d.default_branch, d.head
+                        )),
+                    )?;
                     d.state = State::Preparing;
                     d.release = Some(d.head[..12].into());
                     d.detail =

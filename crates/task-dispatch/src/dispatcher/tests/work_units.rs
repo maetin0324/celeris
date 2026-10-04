@@ -3184,3 +3184,216 @@ async fn integration_check_failure_without_replans_asks_with_the_failed_checks()
         .expect("the question is in the inbox");
     assert_eq!(item.question, question);
 }
+
+/// `branch` を checkout している worktree（`git worktree list --porcelain`）。
+fn worktree_of(repo: &std::path::Path, branch: &str) -> PathBuf {
+    let out = git_out(repo, &["worktree", "list", "--porcelain"]);
+    let wanted = format!("branch refs/heads/{branch}");
+    let mut current: Option<PathBuf> = None;
+    for line in out.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current = Some(PathBuf::from(path));
+        } else if line == wanted {
+            return current.expect("worktree path precedes its branch");
+        }
+    }
+    panic!("no worktree checks out {branch}:\n{out}");
+}
+
+fn human_git(dir: &std::path::Path, args: &[&str]) -> bool {
+    std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=human", "-c", "user.email=human@example.com"])
+        .args(args)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+fn open_requests_of(store: &Arc<dyn TaskStore>, task_id: TaskId) -> Vec<task_core::EventRow> {
+    store
+        .open_integration_requests()
+        .unwrap()
+        .into_iter()
+        .filter(|row| row.task_id == task_id)
+        .collect()
+}
+
+fn inbox_integration_requests(store: &Arc<dyn TaskStore>, task_id: TaskId) -> usize {
+    let ctx = task_ops::view::ViewContext {
+        workspace_root: PathBuf::from("/nonexistent"),
+        retry_backoff_base: Duration::ZERO,
+        retry_backoff_max: Duration::ZERO,
+        max_requeues: 5,
+        clusters: Default::default(),
+    };
+    task_ops::human_inbox::human_inbox(
+        store.as_ref(),
+        None,
+        &ctx,
+        OffsetDateTime::now_utc(),
+        &|_, _| Vec::new(),
+        None,
+    )
+    .unwrap()
+    .items
+    .iter()
+    .filter(|item| {
+        item.kind == task_ops::human_inbox::InboxKind::IntegrationRequest
+            && item.task.as_ref().is_some_and(|t| t.id == task_id)
+    })
+    .count()
+}
+
+/// ADR parallel integration D4 付記（2026-10-04 本番 01M420EMSFS1VP5RWF2FGCV6XR の残留の再現）: 統合の依頼の後、
+/// 人が task branch の worktree で手で統合し、受信箱の専用経路でなく汎用の回答（`POST /tasks/{id}/answer`
+/// 相当）で再開した。依頼は回答で閉じて受信箱から消え、再実行の統合は済んだ merge を飛ばして完了する。
+#[tokio::test]
+async fn an_integration_request_leaves_the_inbox_once_the_human_merged_and_answered() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "grep -q A README.md && grep -q B README.md");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(50))
+            .with_file("a", "README.md", "A\n")
+            .with_file("b", "README.md", "B\n"),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Blocked);
+    let open = open_requests_of(&store, task.id);
+    assert_eq!(open.len(), 1, "{open:?}");
+    let Event::IntegrationRequested { request, origin } = &open[0].event else {
+        panic!("integration_requested を期待: {:?}", open[0].event);
+    };
+    assert_eq!(origin, "phase:integrate-build");
+    assert_eq!(inbox_integration_requests(&store, task.id), 1);
+
+    // 人が task branch の worktree で手で統合する（衝突した README.md は両方を残す）。
+    let task_branch = format!("celeris/{}", task.id);
+    let tree = worktree_of(repo.path(), &task_branch);
+    assert!(
+        !human_git(&tree, &["merge", "--no-ff", "--no-edit", &request.source_branch]),
+        "手の merge も同じ衝突で止まる"
+    );
+    std::fs::write(tree.join("README.md"), "A\nB\n").unwrap();
+    assert!(human_git(&tree, &["add", "README.md"]));
+    assert!(human_git(&tree, &["commit", "--no-verify", "-m", "人が統合した"]));
+    assert!(git_ok(
+        repo.path(),
+        &["merge-base", "--is-ancestor", &request.source_sha, &task_branch]
+    ));
+
+    // 汎用の回答で再開する（本番で起きた経路）。
+    task_ops::gate::answer(
+        store.as_ref(),
+        task.id,
+        "Fable が統合した: 衝突は README.md だけ".into(),
+        Some(Status::Blocked),
+    )
+    .unwrap();
+    assert!(
+        open_requests_of(&store, task.id).is_empty(),
+        "回答した依頼が未回答のまま残っている"
+    );
+    assert_eq!(inbox_integration_requests(&store, task.id), 0);
+    let request_id = request.id_for(task.id);
+    assert!(events_of(&store, task.id).iter().any(|e| matches!(e,
+        Event::IntegrationAnswered { request_id: id, answer, note }
+            if *id == request_id && answer == "answered"
+                && note.as_deref().is_some_and(|n| n.starts_with("Fable が統合した")))));
+
+    // 再実行の統合は済んだ merge を飛ばして進み、依頼は増えない。
+    run_until_idle(&mut d, 800).await;
+    let stored = store.get(task.id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    assert!(open_requests_of(&store, task.id).is_empty());
+    assert_eq!(inbox_integration_requests(&store, task.id), 0);
+    let units = store.work_units_for(task.id).unwrap();
+    let integ = units
+        .iter()
+        .find(|u| u.kind == task_core::WorkUnitKind::Integrate)
+        .expect("integration WU");
+    assert_eq!(integ.status, task_core::WorkUnitStatus::Done);
+    assert_eq!(
+        events_of(&store, task.id)
+            .iter()
+            .filter(|e| matches!(e, Event::IntegrationRequested { .. }))
+            .count(),
+        1,
+        "再実行で同じ依頼を出し直さない"
+    );
+}
+
+/// ADR parallel integration D4 付記: 統合 WU が衝突なしで通ったら（source が target の祖先になった）、
+/// その WU の発生元の未回答依頼は dispatcher が `integrated` で閉じる。人の回答を経ない再開（replan で
+/// 開き直した段・再起動の照合）で残る依頼の保険。
+#[tokio::test]
+async fn a_clean_integration_closes_the_open_request_of_its_origin_as_integrated() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = parallel_task(repo.path(), "test -f a.txt && test -f b.txt");
+    store.insert(&task).unwrap();
+    adopt_v2_plan(
+        &store,
+        task.id,
+        &["build"],
+        vec![v2_wu("a", "build", &[]), v2_wu("b", "build", &[])],
+    );
+    let stale = task_core::integration_request::IntegrationRequest {
+        target_branch: format!("celeris/{}", task.id),
+        target_sha: "0000000000000000000000000000000000000001".into(),
+        source_branch: format!("celeris-wu/{}/b", task.id),
+        source_sha: "0000000000000000000000000000000000000002".into(),
+        merge_base: Some("0000000000000000000000000000000000000001".into()),
+        conflict_files: vec!["README.md".into()],
+        intent: Vec::new(),
+        reason: "コードの内容衝突".into(),
+        recommendation: "両側の意図を比較する".into(),
+        actions: Vec::new(),
+        candidate_sha: None,
+    };
+    assert!(
+        store
+            .integration_request_record(task.id, &stale, "phase:integrate-build")
+            .unwrap()
+    );
+    let unrelated = task_core::integration_request::IntegrationRequest {
+        target_branch: "main".into(),
+        ..stale.clone()
+    };
+    assert!(
+        store
+            .integration_request_record(task.id, &unrelated, "delivery")
+            .is_ok_and(|recorded| !recorded),
+        "同じ両端の組は発生元が違っても一件のまま"
+    );
+    let adapter = Arc::new(
+        ParallelWuAdapter::new(Duration::from_millis(10))
+            .with_file("a", "a.txt", "a")
+            .with_file("b", "b.txt", "b"),
+    );
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    assert!(open_requests_of(&store, task.id).is_empty(), "統合済みの依頼が残っている");
+    assert_eq!(inbox_integration_requests(&store, task.id), 0);
+    let request_id = stale.id_for(task.id);
+    assert!(events_of(&store, task.id).iter().any(|e| matches!(e,
+        Event::IntegrationAnswered { request_id: id, answer, note }
+            if *id == request_id
+                && answer == task_core::integration_request::INTEGRATED_ANSWER
+                && note.as_deref().is_some_and(|n| n.contains("integrate-build")))));
+}

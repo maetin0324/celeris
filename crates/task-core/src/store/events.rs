@@ -25,6 +25,8 @@ pub(super) fn latest_delivery_skipped_sql() -> String {
     )
 }
 
+use crate::integration_request::SUPERSEDED_ANSWER;
+
 /// migration 0047 と字句まで同じ式を使う。
 pub(super) const INTEGRATION_REQUEST_PREDICATE: &str =
     "json_extract(json,'$.type') IN ('integration_requested', 'integration_answered')";
@@ -124,6 +126,29 @@ impl SqliteStore {
         }) {
             return Ok(false);
         }
+        // 同じ発生元の古い組（両端の head が動いた後の依頼）はこの依頼に置き換わった。受信箱に二つ出さない。
+        let new_id = request.id_for(task_id);
+        for row in &open {
+            let Event::IntegrationRequested {
+                request: existing,
+                origin: existing_origin,
+            } = &row.event
+            else {
+                continue;
+            };
+            if existing_origin != origin {
+                continue;
+            }
+            Self::append_event_tx(
+                &tx,
+                task_id,
+                &Event::IntegrationAnswered {
+                    request_id: existing.id_for(task_id),
+                    answer: SUPERSEDED_ANSWER.to_owned(),
+                    note: Some(format!("新しい依頼 {new_id} に置き換わった")),
+                },
+            )?;
+        }
         Self::append_event_tx(
             &tx,
             task_id,
@@ -134,6 +159,78 @@ impl SqliteStore {
         )?;
         tx.commit()?;
         Ok(true)
+    }
+
+    pub(super) fn integration_request_answer_impl(
+        &self,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let open =
+            fold_open_integration_requests(Self::integration_request_rows_tx(&tx, Some(task_id))?);
+        let is_open = open.iter().any(|row| {
+            matches!(&row.event, Event::IntegrationRequested { request, .. }
+                if request.id_for(task_id) == request_id)
+        });
+        if !is_open {
+            return Ok(false);
+        }
+        Self::append_event_tx(
+            &tx,
+            task_id,
+            &Event::IntegrationAnswered {
+                request_id: request_id.to_owned(),
+                answer: answer.to_owned(),
+                note: note.map(str::to_owned),
+            },
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub(super) fn integration_requests_close_impl(
+        &self,
+        task_id: TaskId,
+        origin: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<Vec<String>, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let open =
+            fold_open_integration_requests(Self::integration_request_rows_tx(&tx, Some(task_id))?);
+        let mut closed = Vec::new();
+        for row in &open {
+            let Event::IntegrationRequested {
+                request,
+                origin: existing_origin,
+            } = &row.event
+            else {
+                continue;
+            };
+            if existing_origin != origin {
+                continue;
+            }
+            let request_id = request.id_for(task_id);
+            Self::append_event_tx(
+                &tx,
+                task_id,
+                &Event::IntegrationAnswered {
+                    request_id: request_id.clone(),
+                    answer: answer.to_owned(),
+                    note: note.map(str::to_owned),
+                },
+            )?;
+            closed.push(request_id);
+        }
+        if !closed.is_empty() {
+            tx.commit()?;
+        }
+        Ok(closed)
     }
 
     pub(crate) fn append_event_tx(

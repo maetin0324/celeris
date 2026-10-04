@@ -3,6 +3,13 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// 新しい依頼に置き換わった古い依頼を閉じる `IntegrationAnswered.answer`（人の回答 `integrated` /
+/// `declined` / `retry` と区別する。同じ発生元で両端の head が動いた依頼が記録されたとき）。
+pub const SUPERSEDED_ANSWER: &str = "superseded";
+/// 統合側（段の統合・配送）が、target が source を祖先に含むようになった（統合済み）ことを記録して閉じる answer。
+/// 人が受信箱で「統合した」と答えたときの値と同じ。
+pub const INTEGRATED_ANSWER: &str = "integrated";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ConflictKind {
     Record,

@@ -253,6 +253,10 @@ pub fn answer(
     }
     let question = latest_question(&events);
     let from = task.status;
+    // ADR parallel integration D4 付記: 段の統合依頼で blocked(question) になった統合 WU を、受信箱の
+    // 専用経路でなく汎用の回答で再開したときも、その依頼は回答済み（受信箱から消す）。遷移が WU の
+    // blocked を解く前に対象を決める。再開後の統合が衝突なしで通っても dispatcher は閉じた依頼に重ねない。
+    close_phase_integration_requests(store, id, &answer)?;
     let since_id = store.latest_event_id()?;
     let outcome = store.apply_transition(
         id,
@@ -274,6 +278,28 @@ pub fn answer(
         reason: outcome.reason.to_string(),
         cascaded,
     })
+}
+
+/// 汎用の回答で再開される統合 WU（`blocked(question)` の `Integrate`）が出した未回答の統合依頼を
+/// `answered` で閉じる。依頼の無い task では何もしない。
+fn close_phase_integration_requests(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    answer: &str,
+) -> Result<(), OpsError> {
+    let blocked_integrations: Vec<String> = store
+        .work_units_for(task_id)?
+        .into_iter()
+        .filter(|unit| {
+            unit.kind == task_core::WorkUnitKind::Integrate
+                && unit.blocked_reason == Some(task_core::WorkUnitBlockedReason::Question)
+        })
+        .map(|unit| format!("phase:{}", unit.key))
+        .collect();
+    for origin in blocked_integrations {
+        store.integration_requests_close(task_id, &origin, "answered", Some(answer))?;
+    }
+    Ok(())
 }
 
 /// `task_id` に紐づく未決の `approvals` を、渡された `answer` で `once` に決定する。

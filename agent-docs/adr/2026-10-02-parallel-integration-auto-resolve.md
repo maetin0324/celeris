@@ -156,3 +156,23 @@ docs/PROGRESS.md merge=union
 task ごとの進捗ファイル（`agent-docs/progress/*.md` とその入れ子、旧 `docs/progress/**/*.md`）からは union 属性を外した。これらは git の通常の 3-way merge に委ねる: 両側が異なる箇所に触れれば無衝突で結合され、front matter を含む同じ行を両側が変えれば実衝突（`U` 状態）になり、classify が `ConflictKind::Record` として拾って records resolver に渡す。resolver は base の全行が保持された末尾追記だけを自動結合し、既存行の変更（front matter の書き換えを含む）は `NotHandled` として人へ回す（D3・D1a 既存のまま）。このため、同じ記録ファイルの front matter を両側が別の値に変えた場合、git merge の時点で止まるか、たとえ attributes が効かない経路（`git merge-tree` 等）を通っても resolver が base 保持条件で弾いて人へ回す。
 
 確認した試験: `scripts/dev/tests/progress_union_merge.sh`（引数なしで実行。(a) `agent-docs/PROGRESS.md`・`docs/PROGRESS.md` への両側追記は union で無衝突に両節を残す、(b) `agent-docs/progress/<slug>.md` の front matter を両側が別の値に変えると `git merge` が衝突で止まり、`OK: front matter conflict is not silently merged` を出す）と `auto_resolve::tests::front_matter_status_conflict_requests_human_and_is_not_silently_merged`（実リポジトリの `.gitattributes` を一時 repo に写し、front matter の衝突が `Resolution::NeedsHuman` に回ることを確かめる）。
+
+## 付記（2026-10-04、日付名 ADR の誤検出と回答済み依頼の残留）
+
+2026-10-04 の本番（release d9cf53ab、task `01M420EMSFS1VP5RWF2FGCV6XR`）で見つかった 2 つの不具合に対する修正。D1b・D4 付記のうち、ここに書いたことはこの付記を優先する。
+
+1. **日付名 ADR は番号を持たない。** `classify::adr_number` が `agent-docs/adr/2026-10-04-release-notes.md` の先頭 4 桁（年）を ADR 番号 `2026` と読み、同じ年の日付名 ADR 4 本を「同じ番号の別 file」のグループにしていた。取り込み側がその年の日付名 ADR を 1 本でも足す・変えると、グループ全体が `ConflictKind::Adr` として `renumber::resolve_adr` に渡り、日付名は振り直せないので「日付名 ADR の衝突」の `NeedsHuman` になっていた（merge base が target 先端で `git merge` が衝突なしで通る取り込みでも）。`adr_number` は `dated_adr` に当たる path に `None` を返す。日付名同士の衝突の判定（付記 4）は、`git diff --diff-filter=U` に出た実衝突だけが対象になる。merge base が target 先端の取り込みは結果の tree が取り込み側の tree そのものなので、日付名 ADR では依頼が出ない。migration と番号付き ADR の重複は従来どおり走査する（取り込み側が自分の branch で main の番号と重複させていれば振り直す）。
+2. **依頼の終了は記録側が追記する。** 未回答の集合から外す `IntegrationAnswered` は受信箱の answer API だけが追記していたため、(a) 人が `POST /tasks/{id}/answer`（汎用の回答）で統合 WU を再開した、(b) 人が手で統合して再実行の統合が衝突なしで通った、(c) 両端の head が動いて同じ統合 WU が新しい依頼を出した、のどの場合も古い依頼が受信箱に残り続けた。`TaskStore` に `integration_request_answer`（id 指定・未回答のときだけ追記）と `integration_requests_close`（`origin` の未回答を全て閉じる）を足し、次の経路が決定的に閉じる。LLM は使わない。
+
+   | 経路 | 閉じる依頼 | `answer` / `note` |
+   |---|---|---|
+   | `integration_request_record`（新しい組の依頼を追記するとき） | 同じ `origin` の古い組の未回答依頼 | `superseded` / 新しい依頼 id |
+   | 段の統合 `on_integration_finished`（merge が衝突なしで通った。検査の成否は問わない） | `origin = phase:<その統合 WU の key>` の未回答依頼 | `integrated` / 統合 WU の key と HEAD |
+   | 配送 `merge_reviewed` の成功（main が head を取り込んだ） | `origin = delivery` の未回答依頼 | `integrated` / 既定 branch と head |
+   | `task_ops::gate::answer`（汎用の回答で task を再開するとき） | `blocked(question)` の統合 WU の `origin = phase:<key>` の未回答依頼 | `answered` / 回答文 |
+
+   受信箱の answer API（`integrated` / `declined` / `retry`）は `integration_request_answer` を使い、段の依頼では統合 WU がその依頼で止まっている（task `blocked`・WU `blocked(question)`）ときだけ再開・cancel まで行う。既に汎用の回答や replan で再開・完了した WU の依頼には回答の記録だけ行って受信箱から消す（従来は 410 を返して依頼が残り続けた）。閉じる操作は未回答のときだけ追記するので、同じ依頼に回答が重なることはない。受信箱（`task-ops`）は git を持たないので「target が source を祖先に含む」判定を自分では行わず、統合側の記録を正とする。
+
+試験（一時 git repo・一時 DB、外部に出ない）: `auto_resolve::tests::dated_adrs_added_on_both_sides_without_conflict_request_nothing`・`fast_forward_source_with_dated_adrs_requests_nothing`（修正前は本番と同じ 4 本の日付 ADR を理由に `NeedsHuman` を返して落ちることを確認済み）、`store::tests::integration_requests_close_once_and_newer_request_of_same_origin_supersedes`、`inbox::tests::answered_integrated_and_superseded_integration_requests_leave_the_inbox`、`dispatcher::tests::work_units::an_integration_request_leaves_the_inbox_once_the_human_merged_and_answered`（依頼 → 人が worktree で手で merge → 汎用の回答 → 再実行の統合が済んだ merge を飛ばして done）、`a_clean_integration_closes_the_open_request_of_its_origin_as_integrated`、`delivery::tests::integration_repair_fallback_delivers`（main の取り込み後に配送の依頼が消える）、`task-api` `phase_integration_request_of_a_finished_unit_is_answered_without_resuming`（完了済み WU の依頼に受信箱から答えると記録だけされて消える）。
+
+本番の残留 1 件（request id `01M420EMSFS1VP5RWF2FGCV6XR:f865063c…:7fbc8de6…`）は過去の events なので、この修正は遡って閉じない。修正を含む release に昇格した後、人が受信箱から「統合した」と答えれば `IntegrationAnswered` が追記されて消える（統合 WU は既に done なので再開は起きない）。

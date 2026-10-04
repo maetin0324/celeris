@@ -5880,3 +5880,92 @@ fn execution_plan_replan_supersedes_the_old_version_and_activates_the_new_one() 
         .unwrap_err();
     assert!(matches!(err, StoreError::InUse { .. }));
 }
+
+/// ADR parallel integration D4 付記（2026-10-04）: 依頼は `integration_request_answer` で一度だけ閉じ、
+/// 同じ発生元の新しい組の依頼は古い依頼を `superseded` で閉じ、`integration_requests_close` は発生元ごとに
+/// 未回答を全て閉じる。
+#[test]
+fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes() {
+    use crate::integration_request::{INTEGRATED_ANSWER, SUPERSEDED_ANSWER};
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let a = sample_integration_request("source-a", "target-a");
+    let a_id = a.id_for(task.id);
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "phase:integrate-close")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, Some("統合済み"))
+            .unwrap()
+    );
+    assert!(
+        !store
+            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, None)
+            .unwrap(),
+        "回答済みの依頼には重ねて追記しない"
+    );
+    assert!(
+        !store
+            .integration_request_answer(task.id, "unknown", INTEGRATED_ANSWER, None)
+            .unwrap()
+    );
+    assert!(store.open_integration_requests().unwrap().is_empty());
+
+    let b = sample_integration_request("source-b", "target-b");
+    let c = sample_integration_request("source-c", "target-c");
+    let other = sample_integration_request("source-d", "target-d");
+    assert!(
+        store
+            .integration_request_record(task.id, &b, "phase:integrate-close")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &other, "delivery")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &c, "phase:integrate-close")
+            .unwrap()
+    );
+    let open: Vec<String> = store
+        .open_integration_requests()
+        .unwrap()
+        .iter()
+        .filter_map(|row| match &row.event {
+            Event::IntegrationRequested { request, .. } => Some(request.source_sha.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(open, vec!["source-d", "source-c"], "b は c に置き換わり、別 origin の other は残る");
+    let events = store.events_for(task.id).unwrap();
+    assert!(
+        events.iter().any(|(_, event)| matches!(event,
+            Event::IntegrationAnswered { request_id, answer, note }
+                if *request_id == b.id_for(task.id) && answer == SUPERSEDED_ANSWER
+                    && note.as_deref().is_some_and(|n| n.contains(&c.id_for(task.id))))),
+        "{events:?}"
+    );
+
+    let closed = store
+        .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, Some("main took it"))
+        .unwrap();
+    assert_eq!(closed, vec![other.id_for(task.id)]);
+    assert!(
+        store
+            .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, None)
+            .unwrap()
+            .is_empty()
+    );
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1);
+    assert!(
+        matches!(&open[0].event, Event::IntegrationRequested { request, .. }
+        if request.source_sha == "source-c")
+    );
+}

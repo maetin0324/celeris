@@ -8,6 +8,10 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 let server: http.Server;
 let base: string;
 

@@ -1,45 +1,45 @@
 import { useEffect } from "react";
-import { apiMutate } from "../../api/client";
-import type { ReportsLive } from "../../api/generated/types";
-import { notificationBody, notificationKey } from "./notification-rule";
+import type { UnreadCountView } from "../../api/generated/types";
+import { notificationBody, shouldNotify } from "./notification-rule";
 
-// origin ごとの保存領域には件数の鍵だけを残す。報告本文は保存しない。
-const storageKey = "celeris-web-reports-notification-key";
-let fallbackKey: string | null = null;
+// origin ごとの保存領域には出来事の数だけを残す。通知の本文は保存しない。
+const storageKey = "celeris-web-notifications-seen-events";
+let fallbackSeen: number | null = null;
 
-function getKey(): string | null {
+function getSeen(): number | null {
   try {
-    return localStorage.getItem(storageKey);
+    const value = localStorage.getItem(storageKey);
+    return value === null ? fallbackSeen : Number(value);
   } catch {
-    return fallbackKey;
+    return fallbackSeen;
   }
 }
-function setKey(key: string): void {
-  fallbackKey = key;
+function setSeen(value: number): void {
+  fallbackSeen = value;
   try {
-    localStorage.setItem(storageKey, key);
+    localStorage.setItem(storageKey, String(value));
   } catch {
     /* storage が使えない場合はタブ内だけで重複排除 */
   }
 }
 
-export function NotificationsWatcher({ reportsLive }: { reportsLive: ReportsLive | null }) {
-  const key = notificationKey(reportsLive);
+/** 通知の未読（unread-count）の出来事が増えたらブラウザ通知を 1 回出す。タブ間は Web Locks で直列化する。 */
+export function NotificationsWatcher({ unread }: { unread: UnreadCountView | null }) {
+  const events = unread?.events ?? null;
   useEffect(() => {
-    if (!reportsLive || !key || typeof Notification === "undefined" || Notification.permission !== "granted") return;
-    const notify = async () => {
-      if (getKey() === key || Notification.permission !== "granted") return;
-      setKey(key);
-      new Notification("celeris: 報告", { body: notificationBody(reportsLive) });
-      try {
-        await apiMutate("POST", "/api/reports/notified");
-      } catch {
-        /* 通知は既に表示済み。再表示しない */
+    if (!unread || events === null) return;
+    const check = async () => {
+      const seen = getSeen();
+      if (!shouldNotify(unread, seen)) {
+        if (seen === null || events < seen) setSeen(events);
+        return;
       }
+      setSeen(events);
+      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
+      new Notification("celeris: 通知", { body: notificationBody(unread) });
     };
-    // Web Locks で同一 origin のタブ間の確認・書き込みを直列化する。
-    if (navigator.locks) void navigator.locks.request(storageKey, notify);
-    else void notify();
-  }, [key, reportsLive]);
+    if (navigator.locks) void navigator.locks.request(storageKey, check);
+    else void check();
+  }, [events, unread]);
   return null;
 }

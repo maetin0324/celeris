@@ -40,7 +40,13 @@ test("parity: /help 6 節とアンカー", async ({ page }) => {
   expect(
     daemon.requests.filter(
       (request) =>
-        !["/api/v1/health", "/api/v1/daemon", "/api/v1/inbox/items", "/api/v1/stream"].includes(request.path),
+        ![
+          "/api/v1/health",
+          "/api/v1/daemon",
+          "/api/v1/inbox/items",
+          "/api/v1/notifications/unread-count",
+          "/api/v1/stream",
+        ].includes(request.path),
     ),
   ).toEqual([]);
 });

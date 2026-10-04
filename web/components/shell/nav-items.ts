@@ -3,10 +3,10 @@
 export const navItems = [
   { to: "/", label: "ホーム", group: "work" },
   { to: "/inbox", label: "受信箱", group: "work" },
+  { to: "/notifications", label: "通知", group: "work" },
   { to: "/tasks", label: "タスク", group: "work" },
   { to: "/projects", label: "案件", group: "work" },
   { to: "/board", label: "ボード", group: "work" },
-  { to: "/reports", label: "報告", group: "work" },
   { to: "/approvals", label: "承認", group: "work" },
   { to: "/artifacts", label: "成果物", group: "work" },
   { to: "/graph", label: "依存グラフ", group: "work" },

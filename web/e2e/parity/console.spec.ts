@@ -13,6 +13,10 @@ import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { NodeEventSource } from "../support/node-event-source";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 // Console（P3-01・P3-02）。実 gateway と偽 daemon（loopback の空き port）。外部ネットワークには出ない。
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-console-"));
 const tokenFile = path.join(dir, "token");

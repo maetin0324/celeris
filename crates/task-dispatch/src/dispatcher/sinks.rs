@@ -5,6 +5,7 @@ use super::*;
 
 /// run 途中のイベントをストアに追記するシンク。ワーカーの出力（heartbeat）があればリースを延長する（ADR-0010 D7）。
 pub(super) struct StoreSink {
+    pub(super) auto_leaf: Option<auto_leaf::AutoLeafWatch>,
     pub(super) store: Arc<dyn TaskStore>,
     pub(super) task_id: TaskId,
     pub(super) run_id: String,
@@ -264,11 +265,17 @@ impl EventSink for StoreSink {
     }
 
     /// ADR-0048 D2（Phase 60a）: 構造化した進行をそのまま `Event::WorkerProgress` に残す
-    /// （判断はしない。アダプタが決めた `kind` / `tool` / `summary` / `detail` を写すだけ）。
+    /// （`kind` / `tool` / `summary` / `detail` を写す）。自動 leaf の構造化 compaction 印だけは監視を起こす。
     fn progress_with(&self, msg: &str, fields: &task_core::ProgressFields) {
         let ev = Event::worker_progress_with(self.run_id.clone(), msg, fields.clone());
         if let Err(e) = self.store.append_event(self.task_id, &ev) {
             tracing::warn!(task_id = %self.task_id, error = %e, "failed to record progress");
+        }
+        if fields.kind == Some(task_core::ProgressKind::Status)
+            && fields.tool.as_deref() == Some(task_core::tree::CONTEXT_COMPACTION_TOOL)
+            && let Some(watch) = &self.auto_leaf
+        {
+            watch.compacted();
         }
     }
 

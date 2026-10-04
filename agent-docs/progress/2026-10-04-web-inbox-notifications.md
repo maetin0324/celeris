@@ -3,6 +3,7 @@ title: 主画面 2 — 受信箱（判断を返す）と通知（既読・束ね
 tasks: [01M43690B86J9GHP87CARYM8RS]
 status: done
 completed: 2026-10-04
+updated: 2026-10-04
 ---
 
 # 主画面 2: 受信箱と通知の 2 入口・home・projects・board

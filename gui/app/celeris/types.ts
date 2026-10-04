@@ -1113,7 +1113,7 @@ export type PausePolicy =
 /**
  * D4 (3): unit の gate が planner の宣言と食い違ったときに daemon が取った行動。
  */
-export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
+export type UnitGateAction = "promoted" | "auto_leaf" | "decision" | "kept_task" | "demoted";
 /**
  * D4 (3): planner が unit に宣言した種類（`Event::UnitGateOverridden.declared`）。
  */

@@ -2,11 +2,15 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import type http from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
 
 // P4-16 /releases。
 test.describe("P4-16 releases", () => {
@@ -32,11 +36,19 @@ test.describe("P4-16 releases", () => {
       body: JSON.stringify(body),
     });
 
+  // 昇格・巻き戻しは確認表示を挟む。一覧のボタンで開き、確認表示の同じ名前のボタンで確定する。
+  const confirmPromote = async (page: Page, name: string) => {
+    await page.getByRole("button", { name, exact: true }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("本番の daemon");
+    await dialog.getByRole("button", { name, exact: true }).click();
+  };
+
   test("parity: /releases 昇格と失敗表示 保留は成功と出さず、結果で成功になる", async ({ page }) => {
     await control({ mode: "succeed", pendingMs: 2500 });
     await page.goto(`${gateway.base}/releases`);
     await expect(page.getByRole("heading", { level: 1, name: "リリース" })).toBeVisible();
-    await page.getByRole("button", { name: "bbbbbbbbbbbb を昇格" }).click();
+    await confirmPromote(page, "bbbbbbbbbbbb を昇格する");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await expect(page.getByTestId("promote-succeeded")).toHaveCount(0);
     await expect(page.getByTestId("promote-succeeded")).toBeVisible({ timeout: 15_000 });
@@ -47,7 +59,7 @@ test.describe("P4-16 releases", () => {
   test("parity: /releases 昇格と失敗表示 失敗を表示する", async ({ page }) => {
     await control({ mode: "fail", pendingMs: 1000 });
     await page.goto(`${gateway.base}/releases`);
-    await page.getByRole("button", { name: "aaaaaaaaaaaa を昇格" }).click();
+    await confirmPromote(page, "aaaaaaaaaaaa に巻き戻す");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await expect(page.getByTestId("promote-failed")).toContainText("exit 1", { timeout: 15_000 });
     await expect(page.getByTestId("promote-succeeded")).toHaveCount(0);
@@ -58,7 +70,7 @@ test.describe("P4-16 releases", () => {
     await control({ mode: "succeed", pendingMs: 4000 });
     const first = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
     await page.goto(`${first.base}/releases`);
-    await page.getByRole("button", { name: "aaaaaaaaaaaa を昇格" }).click();
+    await confirmPromote(page, "aaaaaaaaaaaa に巻き戻す");
     await expect(page.getByTestId("promote-pending")).toBeVisible();
     await first.close();
     await expect(page.getByTestId("promote-pending")).toContainText("再接続", { timeout: 10_000 });
@@ -123,7 +135,6 @@ test.describe("P4-12 daemon/providers", () => {
   });
 
   test("parity: /providers 追加・変更・削除・確認", async ({ page }) => {
-    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(`${base}/providers`);
     await expect(page.getByRole("heading", { level: 1, name: "プロバイダ" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "claude-main" })).toBeVisible();
@@ -138,8 +149,12 @@ test.describe("P4-12 daemon/providers", () => {
     await card.getByRole("button", { name: "接続を確認" }).click();
     await expect(card.getByText("確認結果: ok")).toBeVisible();
     await card.getByRole("button", { name: "削除" }).click();
+    await page
+      .getByRole("alertdialog", { name: "実行枠を削除しますか" })
+      .getByRole("button", { name: "codex-2 を削除" })
+      .click();
     await expect(page.getByRole("heading", { name: "codex-2" })).toHaveCount(0);
-    expect(seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
+    await expect.poll(() => seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -174,7 +189,6 @@ test.describe("P4-13..15 accounts/clusters", () => {
   });
 
   test("parity: /accounts 追加・ログイン・secret・削除", async ({ page }) => {
-    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(`${base}/accounts`);
     await expect(page.getByRole("heading", { level: 1, name: "アカウント" })).toBeVisible();
     await page.getByLabel("アカウント id").fill("sub");
@@ -211,8 +225,16 @@ test.describe("P4-13..15 accounts/clusters", () => {
       .getByRole("listitem", { name: "secret OPENAI_KEY" })
       .getByRole("button", { name: "secret を削除" })
       .click();
+    await page
+      .getByRole("alertdialog", { name: "secret を削除しますか" })
+      .getByRole("button", { name: "OPENAI_KEY を削除" })
+      .click();
     await expect(page.getByRole("listitem", { name: "secret OPENAI_KEY" })).toHaveCount(0);
     await card.getByRole("button", { name: "削除" }).click();
+    await page
+      .getByRole("alertdialog", { name: "アカウントを削除しますか" })
+      .getByRole("button", { name: "sub を削除" })
+      .click();
     await expect(page.getByRole("listitem", { name: "アカウント sub" })).toHaveCount(0);
     expect(seen.some((r) => r.path.startsWith("/api/v1/accounts/sub/login/code") && r.method === "POST")).toBe(true);
   });
@@ -242,9 +264,9 @@ test.describe("P4-13..15 accounts/clusters", () => {
     await expect(again.getByText("接続中")).toBeVisible();
     await again.getByLabel("作業ディレクトリ").fill("/work/me");
     await again.getByRole("button", { name: "作業ディレクトリを保存" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toBeVisible();
+    await expect(again.getByText("/work/me（db）")).toBeVisible();
     await again.getByRole("button", { name: "上書きを消す" }).click();
-    await expect(again.getByText(/作業ディレクトリ \/work\/me/)).toHaveCount(0);
+    await expect(again.getByText("/work/me（db）")).toHaveCount(0);
     expect(seen.some((r) => r.path === "/api/v1/clusters/pegasus/settings" && r.method === "PUT")).toBe(true);
   });
 });

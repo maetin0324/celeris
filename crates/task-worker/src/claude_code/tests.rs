@@ -3886,3 +3886,28 @@ fn direct_route_prompt_absent_leaves_the_prompt_unchanged() {
     assert_eq!(with.replacen(&section, "", 1), without);
     assert!(super::prompt::direct_route_section(&RunContext::default()).is_empty());
 }
+
+#[test]
+fn compact_boundaries_report_completed_compactions_only() {
+    let sink = RecordingSink::default();
+    let mut result = None;
+    let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::default();
+    for line in [
+        r#"{"type":"system","subtype":"status","status":"compacting"}"#,
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"auto-compact compaction"}]}}"#,
+        r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"auto"}}"#,
+        r#"{"type":"system","subtype":"compact_boundary","compact_metadata":{"trigger":"manual"}}"#,
+    ] {
+        handle_line(line, &sink, &mut result, &mut background, &mut exploration);
+    }
+    let fields = sink.structured.lock().unwrap();
+    assert_eq!(
+        fields
+            .iter()
+            .filter(|(_, f)| f.kind == Some(task_core::ProgressKind::Status)
+                && f.tool.as_deref() == Some(task_core::tree::CONTEXT_COMPACTION_TOOL))
+            .count(),
+        2
+    );
+}

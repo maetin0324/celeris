@@ -4591,7 +4591,7 @@ export type UnitContext = {
 
 export type UnitDeclared = "leaf" | "task";
 
-export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
+export type UnitGateAction = "promoted" | "auto_leaf" | "decision" | "kept_task" | "demoted";
 
 export type UnreadCountView = {
   "by_kind": {

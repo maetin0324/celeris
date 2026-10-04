@@ -1699,6 +1699,26 @@ export type Event = {
   "type": "phase_integrated";
   "work_unit_id": string;
 } | {
+  "cmd": string;
+  "index": number;
+  "key": string;
+  "log_path": string;
+  "started_at": string;
+  "total": number;
+  "type": "integration_check_started";
+  "work_unit_id": string;
+} | {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass": boolean;
+  "timed_out"?: boolean;
+  "total": number;
+  "type": "integration_check_finished";
+  "work_unit_id": string;
+} | {
   "branch": string;
   "child_task": TaskId;
   "head_sha": string;
@@ -2005,6 +2025,7 @@ export type ExecutionWorkUnitView = {
   "assignee"?: string | null;
   "blocked_reason"?: WorkUnitBlockedReason | null;
   "branch"?: string | null;
+  "check_progress"?: IntegrationCheckProgress | null;
   "child_task_id"?: string | null;
   "continuations": number;
   "created_at": string;
@@ -2249,6 +2270,27 @@ export type IntegrateBody = {
 export type IntegrateResult = {
   "child_task_id"?: string | null;
   "integration": TaskIntegration;
+};
+
+export type IntegrationCheckDone = {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "pass": boolean;
+  "timed_out": boolean;
+};
+
+export type IntegrationCheckProgress = {
+  "current"?: IntegrationCheckRunning | null;
+  "finished": Array<IntegrationCheckDone>;
+  "total": number;
+};
+
+export type IntegrationCheckRunning = {
+  "cmd": string;
+  "index": number;
+  "started_at": string;
 };
 
 export type IntegrationId = string;
@@ -4587,6 +4629,22 @@ export type WorkUnitBudget = {
 export type WorkUnitCheck = {
   "cmd": string;
   "expect_exit"?: number;
+};
+
+export type WorkUnitCheckLog = {
+  "cmd": string;
+  "duration_ms"?: number | null;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass"?: boolean | null;
+  "running": boolean;
+  "size": number;
+  "started_at": string;
+  "tail": string;
+  "total": number;
+  "truncated": boolean;
+  "work_unit_id": string;
 };
 
 export type WorkUnitContext = {

@@ -1386,6 +1386,33 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checks: Vec<PhaseCheckResult>,
     },
+    /// 2026-10-04 統合の検査の進み具合 D1: 段の統合が検査 1 件を始めた。`index` は 0 始まり、`total` はその統合の
+    /// 検査の数。`log_path` はその検査の stdout/stderr を逐次書くファイル（daemon の host の絶対パス）。
+    /// 状態は変えない（`replay` は無視する）。
+    IntegrationCheckStarted {
+        work_unit_id: String,
+        key: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        log_path: String,
+        started_at: String,
+    },
+    /// 2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件が終わった。`exit` は signal・timeout・起動失敗で
+    /// `None`。`duration_ms` は再実行（timeout の 2 倍・merge-base の修復）を含む所要時間。状態は変えない。
+    IntegrationCheckFinished {
+        work_unit_id: String,
+        key: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        pass: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        #[serde(default)]
+        timed_out: bool,
+        duration_ms: u64,
+    },
     /// ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った
     /// （review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。
     MergeCandidateStale {

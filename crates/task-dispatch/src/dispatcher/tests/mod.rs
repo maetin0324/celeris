@@ -3054,6 +3054,7 @@ mod cluster_tunnel;
 mod conversation_cos;
 mod cron_jobs;
 mod git_workspace;
+mod integration_check_progress;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;

@@ -258,6 +258,32 @@ pub struct RunList {
     pub runs: Vec<RunSummary>,
 }
 
+/// 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log` の応答。その WU の最後の
+/// `IntegrationCheckStarted`（`index` 指定ならその index の最後のもの）のログの末尾。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WorkUnitCheckLog {
+    pub work_unit_id: String,
+    pub key: String,
+    pub index: u32,
+    pub total: u32,
+    pub cmd: String,
+    pub started_at: String,
+    /// 対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。
+    pub running: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pass: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// ログファイルの大きさ（バイト。まだ無ければ 0）。
+    pub size: u64,
+    /// `tail` がファイルの先頭から始まっていない（前を切った）。
+    pub truncated: bool,
+    /// ログの末尾（既定 16 KiB・上限 64 KiB。UTF-8 の境界で切り、壊れたバイトは置き換える）。
+    pub tail: String,
+}
+
 /// `GET /tasks/{id}/artifacts`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ArtifactList {

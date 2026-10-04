@@ -44,6 +44,8 @@ export default [
   // run の全行（ADR-0048 D1、GUI Phase G22）。Console の progress ブロックの「すべて見る」が
   // 開いたときだけ取りに行く（`tasks/:id/runs/:runId` の兄弟の resource route）
   route("tasks/:id/runs/:runId/events", "routes/tasks.$id.runs.$runId.events.ts"),
+  // 統合 WU の検査の出力の末尾（2026-10-04 統合の検査の進み具合）。WU の行で開いたときだけ取りに行く resource route
+  route("tasks/:id/work-units/:wuId/check-log", "routes/tasks.$id.work-units.$wuId.check-log.ts"),
   // `/plans/new`（`POST /plans` の画面）は ADR-0079 R5b-prep で撤去（`POST /plans` は R5a で 410。新しい仕事は
   // root task〈`/tasks/new`〉とその計画で表す）。
   route("daemon", "routes/daemon.tsx"),

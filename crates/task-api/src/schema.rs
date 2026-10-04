@@ -58,6 +58,8 @@ pub struct ApiV1Schema {
     pub task_detail: TaskDetail,
     pub events_page: EventsPage,
     pub run_list: RunList,
+    /// 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。
+    pub work_unit_check_log: crate::types::WorkUnitCheckLog,
     pub artifact_list: ArtifactList,
     pub graph: Graph,
     pub new_task: crate::handlers::tasks::NewTaskBody,

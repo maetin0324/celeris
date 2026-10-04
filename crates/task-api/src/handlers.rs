@@ -54,7 +54,7 @@ use task_actions::{
 };
 use task_io::{
     artifact_body, artifact_list, events, run_prompt, run_request, run_result, run_stderr,
-    run_stdout, task_events, task_runs,
+    run_stdout, task_events, task_runs, work_unit_check_log,
 };
 use tasks::{create_task, list_tasks, task_detail};
 
@@ -83,6 +83,10 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/tasks/{id}/runs/{run_id}/stdout", get(run_stdout))
         .route("/api/v1/tasks/{id}/runs/{run_id}/stderr", get(run_stderr))
         .route("/api/v1/tasks/{id}/runs/{run_id}/result", get(run_result))
+        .route(
+            "/api/v1/tasks/{id}/work-units/{wu_id}/check-log",
+            get(work_unit_check_log),
+        )
         .route("/api/v1/tasks/{id}/artifacts", get(artifact_list))
         .route("/api/v1/tasks/{id}/artifacts/{idx}", get(artifact_body))
         .route("/api/v1/tasks/{id}/approve", post(approve))

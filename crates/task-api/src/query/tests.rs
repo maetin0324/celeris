@@ -121,6 +121,26 @@ fn tree_event_types_match_their_serde_names() {
                 detail: "cmd=\"false\" exit=Some(1) expected=0".into(),
             }],
         },
+        Event::IntegrationCheckStarted {
+            work_unit_id: "w".into(),
+            key: "integrate-p1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo test".into(),
+            log_path: "/ws/t/integration-checks/integrate-p1/1-0.log".into(),
+            started_at: "2026-10-04T00:00:00Z".into(),
+        },
+        Event::IntegrationCheckFinished {
+            work_unit_id: "w".into(),
+            key: "integrate-p1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo test".into(),
+            pass: true,
+            exit: Some(0),
+            timed_out: false,
+            duration_ms: 12,
+        },
         Event::StallDetected {
             task_id: child,
             detail: "x".into(),
@@ -193,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 57);
+    assert_eq!(EVENT_TYPES.len(), 59);
 }
 
 #[test]

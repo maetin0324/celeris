@@ -2707,6 +2707,109 @@
           "type": "object"
         },
         {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合が検査 1 件を始めた。`index` は 0 始まり、`total` はその統合の\n検査の数。`log_path` はその検査の stdout/stderr を逐次書くファイル（daemon の host の絶対パス）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "log_path": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_started",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "log_path",
+            "started_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件が終わった。`exit` は signal・timeout・起動失敗で\n`None`。`duration_ms` は再実行（timeout の 2 倍・merge-base の修復）を含む所要時間。状態は変えない。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "exit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "pass": {
+              "type": "boolean"
+            },
+            "timed_out": {
+              "default": false,
+              "type": "boolean"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_finished",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "pass",
+            "duration_ms"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った\n（review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。",
           "properties": {
             "branch": {

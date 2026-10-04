@@ -698,7 +698,22 @@ export async function setupMockCeleris() {
               seq: 4,
               kind: "integrate",
               title: "工程 調査と実装 の統合",
-              status: "pending",
+              // 2026-10-04 統合の検査の進み具合: 統合は run を持たないので、検査の進み具合と出力の末尾を WU の行に出す。
+              status: "running",
+              check_progress: {
+                total: 3,
+                current: { index: 1, cmd: "cargo test --workspace", started_at: "2026-09-21T00:30:00Z" },
+                finished: [
+                  {
+                    index: 0,
+                    cmd: "cargo build --workspace",
+                    pass: true,
+                    exit: 0,
+                    timed_out: false,
+                    duration_ms: 95_400,
+                  },
+                ],
+              },
               phase: "build",
               depends_on: ["survey", "build", "repair-1", "api"],
               runs: 0,
@@ -772,6 +787,20 @@ export async function setupMockCeleris() {
     }),
   );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/events`, (_req, res) => sendJson(res, 200, { has_more: false, items: [] }));
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/work-units/01WUINTEGRATEBUILDAAAAAAA/check-log`, (_req, res) =>
+    sendJson(res, 200, {
+      work_unit_id: "01WUINTEGRATEBUILDAAAAAAA",
+      key: "integrate-build",
+      index: 1,
+      total: 3,
+      cmd: "cargo test --workspace",
+      started_at: "2026-09-21T00:30:00Z",
+      running: true,
+      size: 52_000,
+      truncated: true,
+      tail: "test dispatcher::tests::work_units::three_work_units_run_in_order ... ok\ntest result: ok. 412 passed\n",
+    }),
+  );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/artifacts`, (_req, res) => sendJson(res, 200, { items: [] }));
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/tree`, (_req, res) => sendJson(res, 200, fx.treeView()));
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/changes`, (_req, res) =>

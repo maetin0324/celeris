@@ -480,6 +480,113 @@ pub struct ExecutionWorkUnitView {
     /// ADR-0074 D1.5: 今この WU を実行している run（同時に走っている run を GUI に出す）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub running_run_id: Option<String>,
+    /// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
+    /// 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check_progress: Option<IntegrationCheckProgress>,
+}
+
+/// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckProgress {
+    /// その試行の検査の数。
+    pub total: u32,
+    /// 実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は
+    /// `GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current: Option<IntegrationCheckRunning>,
+    /// 済んだ検査（`index` 順）。
+    pub finished: Vec<IntegrationCheckDone>,
+}
+
+/// 実行中の統合の検査 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckRunning {
+    pub index: u32,
+    pub cmd: String,
+    pub started_at: String,
+}
+
+/// 済んだ統合の検査 1 件。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct IntegrationCheckDone {
+    pub index: u32,
+    pub cmd: String,
+    pub pass: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit: Option<i32>,
+    pub timed_out: bool,
+    pub duration_ms: u64,
+}
+
+/// D4: events（seq 順）から WU の最後の統合の試行の検査を組み立てる。`running` はその WU が running か。
+pub fn integration_check_progress<'a>(
+    events: impl IntoIterator<Item = &'a Event>,
+    work_unit_id: &str,
+    running: bool,
+) -> Option<IntegrationCheckProgress> {
+    let mut progress: Option<IntegrationCheckProgress> = None;
+    for e in events {
+        match e {
+            Event::IntegrationCheckStarted {
+                work_unit_id: wu,
+                index,
+                total,
+                cmd,
+                started_at,
+                ..
+            } if wu == work_unit_id => {
+                let p = match (&mut progress, *index) {
+                    (Some(p), i) if i != 0 => p,
+                    _ => progress.insert(IntegrationCheckProgress {
+                        total: *total,
+                        current: None,
+                        finished: Vec::new(),
+                    }),
+                };
+                p.total = *total;
+                p.current = Some(IntegrationCheckRunning {
+                    index: *index,
+                    cmd: cmd.clone(),
+                    started_at: started_at.clone(),
+                });
+            }
+            Event::IntegrationCheckFinished {
+                work_unit_id: wu,
+                index,
+                cmd,
+                pass,
+                exit,
+                timed_out,
+                duration_ms,
+                ..
+            } if wu == work_unit_id => {
+                let Some(p) = progress.as_mut() else {
+                    continue;
+                };
+                if p.current.as_ref().is_some_and(|c| c.index == *index) {
+                    p.current = None;
+                }
+                p.finished.retain(|f| f.index != *index);
+                p.finished.push(IntegrationCheckDone {
+                    index: *index,
+                    cmd: cmd.clone(),
+                    pass: *pass,
+                    exit: *exit,
+                    timed_out: *timed_out,
+                    duration_ms: *duration_ms,
+                });
+            }
+            _ => {}
+        }
+    }
+    if let Some(p) = progress.as_mut() {
+        if !running {
+            p.current = None;
+        }
+        p.finished.sort_by_key(|f| f.index);
+    }
+    progress
 }
 
 /// D17(f): `execution_plans` の 1 版（監査用）。
@@ -1468,6 +1575,11 @@ fn build_execution_view(
                 } else {
                     None
                 },
+                check_progress: integration_check_progress(
+                    &event_list,
+                    &u.id,
+                    u.status == task_core::WorkUnitStatus::Running,
+                ),
             });
         }
         work_units.sort_by_key(|w| w.seq);

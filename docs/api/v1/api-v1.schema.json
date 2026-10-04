@@ -8540,6 +8540,109 @@
           "type": "object"
         },
         {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合が検査 1 件を始めた。`index` は 0 始まり、`total` はその統合の\n検査の数。`log_path` はその検査の stdout/stderr を逐次書くファイル（daemon の host の絶対パス）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "log_path": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_started",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "log_path",
+            "started_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件が終わった。`exit` は signal・timeout・起動失敗で\n`None`。`duration_ms` は再実行（timeout の 2 倍・merge-base の修復）を含む所要時間。状態は変えない。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "exit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "pass": {
+              "type": "boolean"
+            },
+            "timed_out": {
+              "default": false,
+              "type": "boolean"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_finished",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "pass",
+            "duration_ms"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った\n（review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。",
           "properties": {
             "branch": {
@@ -10233,6 +10336,17 @@
             "null"
           ]
         },
+        "check_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationCheckProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ\n検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。"
+        },
         "child_task_id": {
           "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
@@ -11316,6 +11430,101 @@
       },
       "required": [
         "integration"
+      ],
+      "type": "object"
+    },
+    "IntegrationCheckDone": {
+      "description": "済んだ統合の検査 1 件。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "index",
+        "cmd",
+        "pass",
+        "timed_out",
+        "duration_ms"
+      ],
+      "type": "object"
+    },
+    "IntegrationCheckProgress": {
+      "description": "2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。",
+      "properties": {
+        "current": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationCheckRunning"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は\n`GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。"
+        },
+        "finished": {
+          "description": "済んだ検査（`index` 順）。",
+          "items": {
+            "$ref": "#/$defs/IntegrationCheckDone"
+          },
+          "type": "array"
+        },
+        "total": {
+          "description": "その試行の検査の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "finished"
+      ],
+      "type": "object"
+    },
+    "IntegrationCheckRunning": {
+      "description": "実行中の統合の検査 1 件。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "cmd",
+        "started_at"
       ],
       "type": "object"
     },
@@ -23574,6 +23783,85 @@
       ],
       "type": "object"
     },
+    "WorkUnitCheckLog": {
+      "description": "2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log` の応答。その WU の最後の\n`IntegrationCheckStarted`（`index` 指定ならその index の最後のもの）のログの末尾。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "pass": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "running": {
+          "description": "対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。",
+          "type": "boolean"
+        },
+        "size": {
+          "description": "ログファイルの大きさ（バイト。まだ無ければ 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "tail": {
+          "description": "ログの末尾（既定 16 KiB・上限 64 KiB。UTF-8 の境界で切り、壊れたバイトは置き換える）。",
+          "type": "string"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "`tail` がファイルの先頭から始まっていない（前を切った）。",
+          "type": "boolean"
+        },
+        "work_unit_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_unit_id",
+        "key",
+        "index",
+        "total",
+        "cmd",
+        "started_at",
+        "running",
+        "size",
+        "truncated",
+        "tail"
+      ],
+      "type": "object"
+    },
     "WorkUnitContext": {
       "additionalProperties": false,
       "description": "D14: WU が読むべき context のヒント。",
@@ -24543,6 +24831,10 @@
     },
     "tree_file": {
       "$ref": "#/$defs/TreeFileView"
+    },
+    "work_unit_check_log": {
+      "$ref": "#/$defs/WorkUnitCheckLog",
+      "description": "2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。"
     }
   },
   "required": [
@@ -24563,6 +24855,7 @@
     "task_detail",
     "events_page",
     "run_list",
+    "work_unit_check_log",
     "artifact_list",
     "graph",
     "new_task",

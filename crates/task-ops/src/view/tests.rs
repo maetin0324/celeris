@@ -1504,3 +1504,60 @@ fn execution_phase_reviewing_is_always_verifying() {
     let task = sample_task(TaskKind::Execute, Status::Reviewing);
     assert_eq!(execution_phase(&task, &[]), Some(ExecutionPhase::Verifying));
 }
+
+fn check_started(wu: &str, index: u32, total: u32, cmd: &str) -> Event {
+    Event::IntegrationCheckStarted {
+        work_unit_id: wu.into(),
+        key: "integrate-p1".into(),
+        index,
+        total,
+        cmd: cmd.into(),
+        log_path: format!("/ws/integration-checks/integrate-p1/1-{index}.log"),
+        started_at: "2026-10-04T02:09:00Z".into(),
+    }
+}
+
+fn check_finished(wu: &str, index: u32, total: u32, cmd: &str, exit: i32) -> Event {
+    Event::IntegrationCheckFinished {
+        work_unit_id: wu.into(),
+        key: "integrate-p1".into(),
+        index,
+        total,
+        cmd: cmd.into(),
+        pass: exit == 0,
+        exit: Some(exit),
+        timed_out: false,
+        duration_ms: 1500,
+    }
+}
+
+/// 2026-10-04 統合の検査の進み具合 D4: 最後の試行（index 0 の開始から後）だけを見て、実行中の検査と済んだ検査を出す。
+#[test]
+fn integration_check_progress_shows_the_current_check_of_the_last_attempt() {
+    let events = [
+        // 前の試行（失敗して repair に回った）。
+        check_started("w", 0, 2, "build"),
+        check_finished("w", 0, 2, "build", 1),
+        // 別の WU は混ざらない。
+        check_started("other", 0, 1, "x"),
+        // 今の試行: 1 件目が通り、2 件目が実行中。
+        check_started("w", 0, 3, "build"),
+        check_finished("w", 0, 3, "build", 0),
+        check_started("w", 1, 3, "cargo test --workspace"),
+    ];
+    let p = integration_check_progress(&events, "w", true).expect("progress");
+    assert_eq!(p.total, 3);
+    let current = p.current.expect("current");
+    assert_eq!(
+        (current.index, current.cmd.as_str()),
+        (1, "cargo test --workspace")
+    );
+    assert_eq!(p.finished.len(), 1);
+    assert!(p.finished[0].pass);
+    assert_eq!(p.finished[0].exit, Some(0));
+    assert_eq!(p.finished[0].duration_ms, 1500);
+    // WU が running でなければ（daemon が落ちて検査が打ち切られた等）現在の検査は出さない。
+    let stopped = integration_check_progress(&events, "w", false).expect("progress");
+    assert!(stopped.current.is_none());
+    assert!(integration_check_progress(&events, "none", true).is_none());
+}

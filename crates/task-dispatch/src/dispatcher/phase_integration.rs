@@ -39,6 +39,75 @@ fn repair_scope_from_units<'a>(
     }
 }
 
+/// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログを置く Task の作業ディレクトリ直下のディレクトリ。
+pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
+
+/// 統合の検査を event とログに残すための、その統合 WU の識別とログの置き場所。
+pub(crate) struct ObservedIntegration {
+    pub work_unit_id: String,
+    pub key: String,
+    /// `<task_dir>/integration-checks/<wu_key>`。検査 1 件ごとに `<started_ms>-<index>.log` を作る。
+    pub log_dir: PathBuf,
+}
+
+/// 2026-10-04 統合の検査の進み具合 D1/D2: 統合の検査を順に走らせ、1 件ごとに `IntegrationCheckStarted` /
+/// `IntegrationCheckFinished` を追記し、出力をログファイルへ逐次書く。判定は `run_work_unit_checks` と同じ
+/// （再実行・merge-base の修復を含む）。event を書けなくても検査は続ける（見るための記録で、判定には使わない）。
+pub(crate) async fn run_integration_checks(
+    store: &dyn task_core::TaskStore,
+    task_id: TaskId,
+    observed: &ObservedIntegration,
+    ws: &task_worker::LocalWorkspace,
+    checks: &[task_core::WorkUnitCheck],
+    command_timeout: Duration,
+) -> Vec<(bool, String)> {
+    let total = u32::try_from(checks.len()).unwrap_or(u32::MAX);
+    let attempt_ms = OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000;
+    let mut out = Vec::with_capacity(checks.len());
+    for (i, c) in checks.iter().enumerate() {
+        let index = u32::try_from(i).unwrap_or(u32::MAX);
+        let log_path = observed.log_dir.join(format!("{attempt_ms}-{index}.log"));
+        let started = Event::IntegrationCheckStarted {
+            work_unit_id: observed.work_unit_id.clone(),
+            key: observed.key.clone(),
+            index,
+            total,
+            cmd: c.cmd.clone(),
+            log_path: log_path.display().to_string(),
+            started_at: rfc3339(OffsetDateTime::now_utc()),
+        };
+        if let Err(e) = store.append_event(task_id, &started) {
+            tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check start");
+        }
+        let clock = std::time::Instant::now();
+        let check_ws = ws.clone().with_output_log(&log_path);
+        let outcome = crate::review::exec_check_outcome(
+            &check_ws,
+            &c.cmd,
+            c.expect_exit,
+            command_timeout,
+            "",
+        )
+        .await;
+        let finished = Event::IntegrationCheckFinished {
+            work_unit_id: observed.work_unit_id.clone(),
+            key: observed.key.clone(),
+            index,
+            total,
+            cmd: c.cmd.clone(),
+            pass: outcome.pass,
+            exit: outcome.exit,
+            timed_out: outcome.timed_out,
+            duration_ms: u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX),
+        };
+        if let Err(e) = store.append_event(task_id, &finished) {
+            tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check finish");
+        }
+        out.push((outcome.pass, outcome.reason));
+    }
+    out
+}
+
 impl Dispatcher {
     /// ADR parallel integration D4: 統合の依頼を追記事象として一件残す。同じ組の未回答依頼があれば追記しない
     /// （再 tick で重ならない）。一般通知（notice）には書かない。受信箱の項目は事象から投影する。
@@ -518,6 +587,12 @@ impl Dispatcher {
         let task_id = task.id;
         let work_unit_id = integ.id.clone();
         let wu_id_for_entry = integ.id.clone();
+        let store = self.store.clone();
+        let observed = ObservedIntegration {
+            work_unit_id: integ.id.clone(),
+            key: integ.key.clone(),
+            log_dir: ws.task_dir.join(INTEGRATION_CHECK_LOG_DIR).join(&integ.key),
+        };
         let handle = tokio::spawn(async move {
             let phase_for_merge = phase.clone();
             let merged = tokio::task::spawn_blocking(move || -> Result<IntegrationRun, String> {
@@ -582,7 +657,15 @@ impl Dispatcher {
                         _ => task_worker::LocalWorkspace::new(&task_dir),
                     }
                     .with_cargo_env(check_env);
-                    let results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
+                    let results = run_integration_checks(
+                        store.as_ref(),
+                        task_id,
+                        &observed,
+                        &ws,
+                        &checks,
+                        timeout,
+                    )
+                    .await;
                     run.checks = checks
                         .iter()
                         .zip(results)

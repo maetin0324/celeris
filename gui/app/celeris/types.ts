@@ -710,6 +710,28 @@ export type Event =
       work_unit_id: string;
     }
   | {
+      cmd: string;
+      index: number;
+      key: string;
+      log_path: string;
+      started_at: string;
+      total: number;
+      type: "integration_check_started";
+      work_unit_id: string;
+    }
+  | {
+      cmd: string;
+      duration_ms: number;
+      exit?: number | null;
+      index: number;
+      key: string;
+      pass: boolean;
+      timed_out?: boolean;
+      total: number;
+      type: "integration_check_finished";
+      work_unit_id: string;
+    }
+  | {
       branch: string;
       child_task: TaskId;
       head_sha: string;
@@ -1671,6 +1693,7 @@ export interface ApiV1Schema {
   tree_adopt: AdoptRequest;
   tree_adopt_result: AdoptionOutcome;
   tree_file: TreeFileView;
+  work_unit_check_log: WorkUnitCheckLog;
 }
 /**
  * 1 アカウント（`GET /accounts` の要素、`POST /accounts` の応答）。
@@ -9560,6 +9583,11 @@ export interface ExecutionWorkUnitView {
    */
   branch?: string | null;
   /**
+   * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
+   * 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+   */
+  check_progress?: IntegrationCheckProgress | null;
+  /**
    * ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。
    */
   child_task_id?: string | null;
@@ -9609,6 +9637,43 @@ export interface ExecutionWorkUnitView {
   status: WorkUnitStatus;
   title: string;
   updated_at: string;
+}
+/**
+ * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+ */
+export interface IntegrationCheckProgress {
+  /**
+   * 実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は
+   * `GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。
+   */
+  current?: IntegrationCheckRunning | null;
+  /**
+   * 済んだ検査（`index` 順）。
+   */
+  finished: IntegrationCheckDone[];
+  /**
+   * その試行の検査の数。
+   */
+  total: number;
+}
+/**
+ * 実行中の統合の検査 1 件。
+ */
+export interface IntegrationCheckRunning {
+  cmd: string;
+  index: number;
+  started_at: string;
+}
+/**
+ * 済んだ統合の検査 1 件。
+ */
+export interface IntegrationCheckDone {
+  cmd: string;
+  duration_ms: number;
+  exit?: number | null;
+  index: number;
+  pass: boolean;
+  timed_out: boolean;
 }
 /**
  * ADR-0079 D8（Phase R3b）: 承認を待っている root の計画（Execution 節と GUI の 3 つのボタンの材料）。
@@ -10379,4 +10444,34 @@ export interface TreeFileView {
    * 512 KiB を超えたので `text` を返していない。
    */
   too_large: boolean;
+}
+/**
+ * 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。
+ */
+export interface WorkUnitCheckLog {
+  cmd: string;
+  duration_ms?: number | null;
+  exit?: number | null;
+  index: number;
+  key: string;
+  pass?: boolean | null;
+  /**
+   * 対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。
+   */
+  running: boolean;
+  /**
+   * ログファイルの大きさ（バイト。まだ無ければ 0）。
+   */
+  size: number;
+  started_at: string;
+  /**
+   * ログの末尾（既定 16 KiB・上限 64 KiB。UTF-8 の境界で切り、壊れたバイトは置き換える）。
+   */
+  tail: string;
+  total: number;
+  /**
+   * `tail` がファイルの先頭から始まっていない（前を切った）。
+   */
+  truncated: boolean;
+  work_unit_id: string;
 }

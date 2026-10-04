@@ -1,6 +1,14 @@
+import { useEffect, useState } from "react";
 import { Link, useFetcher } from "react-router";
 import type { TaskPhaseGateOutcome } from "~/celeris/action-types";
-import type { ExecutionView, ExecutionWorkUnitView, PhaseCheckpointView, PhaseGateAction } from "~/celeris/types";
+import type {
+  ExecutionView,
+  ExecutionWorkUnitView,
+  IntegrationCheckProgress,
+  PhaseCheckpointView,
+  PhaseGateAction,
+  WorkUnitCheckLog,
+} from "~/celeris/types";
 import { FieldErrors, TaskPhaseGateFlash } from "~/components/Flash";
 import { Badge, RoleLabel } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -8,6 +16,8 @@ import { Card, CardBody, CardHeader } from "~/components/ui/card";
 import { hintClass, tableClass, tdClass, textareaClass, thClass, theadClass } from "~/components/ui/form";
 import { Mono } from "~/components/ui/misc";
 import {
+  checkDoneLabel,
+  checkProgressLine,
   checkpointSummary as checkpointSummaryLine,
   costReferenceLabel,
   currentWorkUnit,
@@ -298,6 +308,7 @@ function WorkUnitRow({
             </pre>
           )}
         </details>
+        {wu.check_progress && <WorkUnitCheckProgress progress={wu.check_progress} taskId={taskId} wuId={wu.id} />}
         {wu.last_reason && (
           <p className="mt-1 break-words text-sm text-fg-muted lg:text-xs" data-testid="work-unit-last-reason">
             {wu.last_reason}
@@ -305,6 +316,90 @@ function WorkUnitRow({
         )}
       </td>
     </tr>
+  );
+}
+
+/** 実行中の検査の出力の末尾を読み直す間隔。 */
+const CHECK_LOG_POLL_MS = 5000;
+
+/**
+ * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の検査（現在の検査と済んだ検査）。統合は run を持たないので、
+ * run のログの代わりに celeris の `check_progress` を出し、開いたときだけ出力の末尾
+ * （`GET /tasks/{id}/work-units/{wu_id}/check-log`）を取りに行く。実行中は開いている間だけ数秒おきに読み直す。
+ */
+function WorkUnitCheckProgress({
+  progress,
+  taskId,
+  wuId,
+}: {
+  progress: IntegrationCheckProgress;
+  taskId?: string;
+  wuId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const logFetcher = useFetcher<WorkUnitCheckLog>();
+  const running = progress.current != null;
+  const logUrl = taskId ? `/tasks/${taskId}/work-units/${encodeURIComponent(wuId)}/check-log` : null;
+  const { load } = logFetcher;
+  // 実行中は今の検査の番号を指して読む（検査が進めば URL が変わり、読み直す）。終わっていれば最後の検査。
+  const currentIndex = progress.current?.index;
+  const target = logUrl && currentIndex != null ? `${logUrl}?index=${currentIndex}` : logUrl;
+  // 開いたら読む。実行中なら開いている間だけ間隔を置いて読み直す。
+  useEffect(() => {
+    if (!open || !target) return;
+    load(target);
+    if (!running) return;
+    const timer = setInterval(() => load(target), CHECK_LOG_POLL_MS);
+    return () => clearInterval(timer);
+  }, [open, target, running, load]);
+  const log = logFetcher.data;
+  return (
+    <div className="mt-1 space-y-1 text-sm lg:text-xs" data-testid="work-unit-check-progress">
+      <p className={cn("break-words", running ? "text-fg" : "text-fg-muted")} data-testid="work-unit-check-line">
+        {running && (
+          <Badge tone="info" dot className="mr-1.5">
+            検査中
+          </Badge>
+        )}
+        {checkProgressLine(progress)}
+      </p>
+      {progress.finished.length > 0 && (
+        <ul className="space-y-0.5 text-fg-muted" data-testid="work-unit-check-finished">
+          {progress.finished.map((f) => (
+            <li key={f.index} className="break-words">
+              <span className={f.pass ? "text-success" : "text-danger"}>{checkDoneLabel(f)}</span> <Mono>{f.cmd}</Mono>
+            </li>
+          ))}
+        </ul>
+      )}
+      {logUrl && (
+        <details
+          data-testid="work-unit-check-log"
+          onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+        >
+          <summary className="inline-flex min-h-11 cursor-pointer select-none items-center text-primary lg:min-h-0">
+            {running ? "実行中の検査の出力の末尾" : "最後の検査の出力の末尾"}
+          </summary>
+          {log ? (
+            <div className="mt-1">
+              <p className={hintClass}>
+                {`検査 ${log.index + 1}/${log.total}`} <Mono>{log.cmd}</Mono>
+                {log.running ? "（実行中）" : log.exit != null ? `（exit ${log.exit}）` : ""}
+                {log.truncated ? `・末尾のみ（全 ${log.size} バイト）` : ""}
+              </p>
+              <pre
+                className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md bg-surface-2 p-2 font-mono text-[0.7rem]"
+                data-testid="work-unit-check-log-tail"
+              >
+                {log.tail || "（まだ出力はありません）"}
+              </pre>
+            </div>
+          ) : (
+            <p className={hintClass}>{logFetcher.state === "idle" ? "" : "読み込み中…"}</p>
+          )}
+        </details>
+      )}
+    </div>
   );
 }
 

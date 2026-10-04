@@ -275,12 +275,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（176 = 表 170 + browser 制御 6）
+## 2. エンドポイント一覧（177 = 表 171 + browser 制御 6）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
 応答型は `docs/api/v1/api-v1.schema.json` の `$defs` の名前（`{…}` は名前の無い JSON の形）。ステータスを書いていない行は 200。
-#175〜176 は 2026-10-04 に足した（browser 制御の 6 本が #169〜174）。browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser-capability.md`。
+#175〜177 は 2026-10-04 に足した（browser 制御の 6 本が #169〜174）。browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser-capability.md`。
 
 | # | メソッド | パス | 目的 | 応答型 | 出所 |
 |---|---|---|---|---|---|
@@ -454,6 +454,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 168 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | Live View の event を追記する（daemon bearer） | `EventResponse` | store `browser_live_append` |
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
+| 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress） | `WorkUnitCheckLog` | events + ファイル |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -678,6 +679,11 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 - `failure` は `status == failed` のときだけ値を持つ（分類・理由。ADR-0070 D1）。`execution` は gate・計画・WorkUnit の活動が
   あるときだけ出る（無ければ省略。ADR-0072 D20）。`is_root_task` / `paused_by`（一時停止で dispatch を止めている task。
   無ければ省略）は ADR-0079 D13、`cluster_job_wait`（待っているクラスタ job。無ければ省略）は ADR-0090 D5。
+- `execution.plan.work_units[].check_progress` は統合 WU（`integrate-<phase>`）の最後の試行の検査（2026-10-04、
+  ADR 2026-10-04-integration-check-progress D4）。`total`（検査の数）・`current`（実行中の検査 `{index, cmd, started_at}`。
+  WU が `running` で終了の event がまだ無いときだけ）・`finished[]`（`{index, cmd, pass, exit?, timed_out, duration_ms}`）。
+  events の `integration_check_started` / `integration_check_finished` から組み立てる。統合の検査を始めていなければ省略。
+  出力の末尾は §3.126.19 で読む。
 - `timers.now` は応答時刻。クライアントは `lease_expires_at - now` 等をこの `now` 基準で計算する（時計ずれ対策）。
 - `runs[].files` は task-api が `<workspace_dir>/runs/<run_id>/` を `stat` して埋める（task-ops は `null`）。
 - `actions` は今この状態で許される操作（§5.4）。GUI はボタンの表示にこれを使い、押した結果の 409 も正常系として扱う。
@@ -3143,6 +3149,23 @@ assertion で owner session を確認し、worker の route は daemon bearer �
 | `POST /tasks/{id}/browser/control/{run}/{session}/auth-section` | 200 `ControlStatus` | worker が `{active?: boolean}` で認証区間を始める・終える。既定 `true` |
 
 署名や bearer が使えない構成は 403、状態や版の競合は 409、本文の不正は 422 を返す。
+
+#### 3.126.19 `GET /tasks/{id}/work-units/{wu_id}/check-log` → 200 `WorkUnitCheckLog`
+
+段の統合（統合 WU）は worker の run を持たず、daemon が merge の後に検査（unit の checks と workspace.toml の check）を
+流す。検査 1 件ごとに event `integration_check_started`（`work_unit_id`・`key`・`index`（0 始まり）・`total`・`cmd`・
+`log_path`・`started_at`）と `integration_check_finished`（`pass`・`exit`・`timed_out`・`duration_ms`。所要時間は
+timeout の再実行・merge-base の修復を含む）が残り、stdout と stderr は出た順に
+`<task_dir>/integration-checks/<wu_key>/<started_ms>-<index>.log` へ逐次書かれる（1 件 8 MiB で切り、その旨を 1 行残す）。
+
+この route は `{wu_id}` の最後の `integration_check_started`（`index` 指定ならその index の最後のもの）のログの末尾を返す。
+path は event の `log_path` から引き、要求からは受け取らない。
+
+- クエリ: `index`（任意。検査の番号）、`bytes`（任意。既定 16384、1〜65536 に丸める）。
+- 応答: `work_unit_id`・`key`・`index`・`total`・`cmd`・`started_at`・`running`（終了の event がまだ無い）・`pass?`・
+  `exit?`・`duration_ms?`・`size`（ログの大きさ。まだ無ければ 0）・`truncated`（前を切った）・`tail`（UTF-8 の境界で切る）。
+- その WU に検査の開始が無ければ 404 `file_not_found`、不明な task は 404 `task_not_found`。
+- GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
 
 
 ## 4. SSE `GET /stream`

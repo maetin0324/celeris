@@ -22,7 +22,8 @@ export function ArtifactsScreen({ project }: { project?: string }) {
           <select
             name="project"
             defaultValue={project ?? ""}
-            key={project}
+            // 案件一覧が届いたら選び直す（届く前の仮の option が消えて選択が外れるのを防ぐ）。
+            key={`${project ?? ""}:${projects.data ? "loaded" : "pending"}`}
             className="min-h-11 min-w-0 max-w-full rounded-md border border-input bg-background px-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
           >
             <option value="">案件を選ぶ</option>

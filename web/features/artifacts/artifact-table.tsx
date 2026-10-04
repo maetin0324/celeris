@@ -36,23 +36,35 @@ export function ArtifactTable({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((row) => (
-          <ArtifactRowView key={`${row.taskId}/${row.view.idx}`} row={row} showTask={showTask} />
+        {rows.map((row, i) => (
+          <ArtifactRowView
+            key={`${row.taskId}/${row.view.idx}`}
+            row={row}
+            taskSpan={showTask ? taskSpan(rows, i) : undefined}
+          />
         ))}
       </TableBody>
     </Table>
   );
 }
 
-function ArtifactRowView({ row, showTask }: { row: ArtifactTableRow; showTask: boolean }) {
+/** 同じタスクの行が続くとき、タスクの欄は先頭の行だけに置いて縦に結ぶ。続きの行は 0。 */
+function taskSpan(rows: readonly ArtifactTableRow[], i: number): number {
+  if (i > 0 && rows[i - 1]?.taskId === rows[i]?.taskId) return 0;
+  let span = 1;
+  while (rows[i + span]?.taskId === rows[i]?.taskId) span += 1;
+  return span;
+}
+
+function ArtifactRowView({ row, taskSpan: span }: { row: ArtifactTableRow; taskSpan?: number }) {
   const { view, taskId, taskTitle } = row;
   const size = view.size != null ? formatBytes(view.size) : "—";
   const recorded = formatAbsolute(view.ts);
   const readable = view.exists && !view.forbidden;
   return (
     <TableRow data-artifact={row.marker}>
-      {showTask ? (
-        <TableCell className="min-w-0 break-words">
+      {span ? (
+        <TableCell rowSpan={span} className="min-w-0 break-words">
           <Link
             to="/tasks/$id"
             params={{ id: taskId }}

@@ -1,7 +1,7 @@
 ---
 title: web UI/UX task に main を取り込む（no-ff merge と文書の衝突）
 tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
-status: running
+status: done
 updated: 2026-10-04
 ---
 
@@ -23,3 +23,14 @@ updated: 2026-10-04
 ## 未解決
 
 - 生成型（`web/api/generated`）と web の静的・単体検査・build は後続の web-verify で確かめる。
+
+## web 検査（2026-10-04、WU web-verify）
+
+merge 後の木（`f24bbed8`）で実行。web/ の修正は不要だった。
+
+- `corepack pnpm@12.6.0 -C web install --frozen-lockfile` → exit 0
+- `corepack pnpm@12.6.0 -C web gen:types` → exit 0、`web/api/generated` の差分ゼロ（main の `docs/api/v1/api-v1.schema.json` と一致）
+- `typecheck` exit 0 / `lint` exit 0（biome: 既存の warning 4・info 1）/ `test` exit 0（42 files・269 tests passed）/ `build` exit 0
+- `check:boundaries`・`check:parity`・`check:secrets` → いずれも exit 0
+- doc 検査 4 本（check-doc-links・check-adr-numbers・progress-index --check・check-doc-layout）→ exit 0
+- `git diff --quiet c1b24fb6fa8c -- crates/ gui/` → exit 0（main と同じ）

@@ -25,7 +25,6 @@ export function Shell({ children }: { children: ReactNode }) {
   const server = useShellServerState(true);
   const badges: Record<string, { view: NavBadgeView; tone: BadgeTone }> = {
     "/inbox": { view: badgeView(server.inboxBadge, "受信箱"), tone: "warning" },
-    "/approvals": { view: badgeView(server.approvalsBadge, "承認待ち"), tone: "warning" },
     "/notifications": { view: badgeView(server.notificationsBadge, "未読の通知"), tone: "info" },
   };
 

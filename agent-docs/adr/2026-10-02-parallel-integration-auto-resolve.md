@@ -176,3 +176,13 @@ task ごとの進捗ファイル（`agent-docs/progress/*.md` とその入れ子
 試験（一時 git repo・一時 DB、外部に出ない）: `auto_resolve::tests::dated_adrs_added_on_both_sides_without_conflict_request_nothing`・`fast_forward_source_with_dated_adrs_requests_nothing`（修正前は本番と同じ 4 本の日付 ADR を理由に `NeedsHuman` を返して落ちることを確認済み）、`store::tests::integration_requests_close_once_and_newer_request_of_same_origin_supersedes`、`inbox::tests::answered_integrated_and_superseded_integration_requests_leave_the_inbox`、`dispatcher::tests::work_units::an_integration_request_leaves_the_inbox_once_the_human_merged_and_answered`（依頼 → 人が worktree で手で merge → 汎用の回答 → 再実行の統合が済んだ merge を飛ばして done）、`a_clean_integration_closes_the_open_request_of_its_origin_as_integrated`、`delivery::tests::integration_repair_fallback_delivers`（main の取り込み後に配送の依頼が消える）、`task-api` `phase_integration_request_of_a_finished_unit_is_answered_without_resuming`（完了済み WU の依頼に受信箱から答えると記録だけされて消える）。
 
 本番の残留 1 件（request id `01M420EMSFS1VP5RWF2FGCV6XR:f865063c…:7fbc8de6…`）は過去の events なので、この修正は遡って閉じない。修正を含む release に昇格した後、人が受信箱から「統合した」と答えれば `IntegrationAnswered` が追記されて消える（統合 WU は既に done なので再開は起きない）。
+
+## 付記（2026-10-04、許可済み・両側既存の ADR 番号重複）
+
+2026-10-04 の本番（release c1b24fb6、task `01M42XH8AAW5RQRRJT43FFP8YP`）で、wu/merge-docs（8ac0cb3e）を古い target（f157bc6e、0078 を持たない）へ取り込む統合が、`agent-docs/adr/0078-browser-execution-capability.md` と `0078-ssh-master-persist-independent-of-daemon.md` を「取り込み側同士の ADR 番号重複でどちらを動かすか決まらない」として統合依頼にした。この 2 本は main で既に並ぶ許可済みの重複（ADR-0128 D5）で、`git merge --no-ff` は衝突なしで通る。原因は classify が「target との差分に 1 本でも入る同番号グループ」を全て重複として拾い、許可リストを知らなかったこと。
+
+1. **許可リストの正本は `scripts/dev/adr-allowed-duplicates.txt` の 1 か所。** 1 行に完全なファイル名 1 つ、`#` から行末は注釈。`scripts/dev/check-adr-numbers.sh` は埋め込みの `ALLOWED_DUPLICATES` をやめてこの file を読み（無ければ exit 2）、resolver（`auto_resolve::classify::allowed_adr_duplicates`）は統合中の作業ツリーの同じ file を読む（無ければ許可なし）。`ALLOWED_OVER_LAST`（0128 超えの許可）は resolver が使わないので script に残す。
+2. **新しく生じた重複だけを扱う。** classify は同番号のグループを、(a) 全員が target の tree に既にある（ADR は `docs/adr/` と `agent-docs/adr/` を 1 つの名前空間として名前で見る。旧配置から移しただけの file も既にある扱い）、(b) ADR で全員の名前が許可リストにあり互いに異なる（script と同じ規則）、のどちらかなら拾わない。それ以外は従来どおり振り直し（migration）・日付名への移動（ADR）・人への依頼に回す。
+3. **`resolve_adr` は target にある ADR と許可リストの ADR を動かさない。** 許可済みの組に取り込み側が 3 本目を足したときは、その 3 本目だけが日付名へ移る。
+
+試験（一時 git repo、外部に出ない）: `auto_resolve::tests::allowed_adr_duplicate_brought_in_by_source_requests_nothing`（本番の形）・`duplicate_already_on_both_sides_requests_nothing`（修正前は 2 本とも classify が重複として拾って失敗することを確認済み）、`new_duplicates_are_still_renamed_or_requested`、`repository_allowlist_is_the_single_source`。

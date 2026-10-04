@@ -4,7 +4,9 @@
 //! target（main）に既にある file は決して動かさない。参照は旧ファイル名・旧 stem だけを機械的に
 //! 置換し、番号だけの参照（`ADR-0039`、`RESERVED_VERSIONS` の `39` など）は人に回す。
 
-use super::classify::{adr_number, dated_adr};
+use super::classify::{
+    adr_file_name, adr_number, allowed_adr_duplicates, dated_adr, in_tree, tree_paths,
+};
 use super::{ClassifiedPath, ConflictKind, ResolutionAction, ResolveAttempt, ResolveContext, git};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -279,8 +281,14 @@ fn resolve_adr(
     let present = worktree_paths(repo)?;
 
     if !unmerged {
-        if in_target || !present.contains(path) {
-            // target の ADR は動かさない。消えていれば既に移動済み。
+        // 動かさない ADR: target に既にある（旧 docs/adr/ から移しただけのものを含む）か、許可リストにある。
+        let target_tree = tree_paths(repo, &ctx.target_sha)?;
+        let allowed = allowed_adr_duplicates(repo);
+        let anchored = |p: &str| {
+            in_tree(&target_tree, p) || adr_file_name(p).is_some_and(|name| allowed.contains(name))
+        };
+        if anchored(path) || !present.contains(path) {
+            // target・許可リストの ADR は動かさない。消えていれば既に移動済み。
             return Ok(ResolveAttempt::Handled {
                 actions: Vec::new(),
             });
@@ -294,10 +302,7 @@ fn resolve_adr(
                 actions: Vec::new(),
             });
         }
-        if !duplicates
-            .iter()
-            .any(|p| exists_at(repo, &ctx.target_sha, p))
-        {
+        if !duplicates.iter().any(|p| anchored(p)) {
             return not_handled(format!(
                 "取り込み側同士の ADR 番号重複でどちらを動かすか決まらない: {}",
                 duplicates

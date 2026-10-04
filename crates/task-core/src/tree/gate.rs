@@ -256,6 +256,15 @@ pub fn unit_gate(
                         Some(UnitGateAction::Promoted),
                         format!("{gate_note}; promoted to a child task"),
                     )
+                } else if ctx.limits.auto_leaf {
+                    (
+                        UnitDeclared::Leaf,
+                        Some(UnitGateAction::AutoLeaf),
+                        format!(
+                            "{gate_note}; gate is compound but depth {} reached max_depth {}: executing as leaf automatically",
+                            ctx.parent_depth, ctx.limits.max_depth
+                        ),
+                    )
                 } else {
                     (
                         UnitDeclared::Leaf,
@@ -444,7 +453,7 @@ pub fn apply_unit_gates(
                 out.units[i] = demote_to_leaf(unit, stage_kind);
             }
             Some(UnitGateAction::Decision) => leaf_too_large.push(unit.key.clone()),
-            Some(UnitGateAction::KeptTask) | None => {}
+            Some(UnitGateAction::KeptTask | UnitGateAction::AutoLeaf) | None => {}
         }
         gates.push(gate);
     }

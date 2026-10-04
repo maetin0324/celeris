@@ -334,6 +334,7 @@ impl Dispatcher {
             Vec::new()
         };
         Ok(RunExtras {
+            auto_leaf: None,
             role,
             children,
             available_genres,

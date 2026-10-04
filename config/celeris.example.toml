@@ -436,6 +436,9 @@ on_child_failure = "retry_then_ask"
 # 再帰的な task 分解（ADR-0079 D3）の上限。すべて任意で、書かなければ下の既定値（R6-2 の値）。木の節点では
 # [delegation] の max_tree_depth / max_tree_runs ではなくこちらが効く。節点ごとの replan の上限は [execution] max_replans（既定 5）。
 # [execution.tree]
+# auto_leaf = true               # 深さ上限の compound leaf を判断待ちにせず 1 run で開始（false は従来の leaf_too_large）
+# auto_leaf_max_compactions = 2  # この回数を超えたら人の決定待ち（0 は最初の 1 回）。回答後は再計数
+# auto_leaf_max_continuations = 2 # 同上。compaction が取れない adapter は context rollover を代用
 # enabled = false             # true で celeris.execution-plan/3（kind task の unit = 子 task）を有効にする
 # max_depth = 3               # task の層数（root 1 / 子 2 / 孫 3）
 # max_units_per_stage = 6     # 1 段階の生きた unit（leaf + kind task。replan で持ち越す done の unit・adopt・celeris が足す統合・repair は数えない。R7-3）

@@ -768,3 +768,13 @@ echo '{"type":"done","summary":"ok","evidence":[]}'
 
 （`claude-code` アダプタでの kind 別プロンプトは §9 と同じ「翻訳層」であり、`task-worker::claude_code::
 build_prompt` が `task.kind` で分岐する。ADR-0007 D7）
+
+### Adapter の context compaction 観測（ADR-0079 2026-10-04 付記）
+
+`EventSink::context_compacted()` は完了した圧縮・context rollover 1 回を報告する adapter 内部の口。
+既存 progress の `kind: "status"`, `tool: "context_compaction"` として記録する。
+Claude Code は stream-json の `type: "system", subtype: "compact_boundary"` を使い、
+`status: "compacting"`（開始中）やモデルの本文の「compaction」は数えない。
+深さ上限の自動 leaf は回数超過で adapter を中断し checkpoint を保存して人の決定を待つ。
+この印が取れない adapter は `BudgetExhausted { kind: context }` と session rollover で代用する。
+session rollover は dispatcher が `kind: "status", tool: "context_rollover"` で記録する。これは前の run の context を閉じた印なので、新しい run の context 消費と区別して数える。

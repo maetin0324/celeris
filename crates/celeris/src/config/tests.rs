@@ -3327,6 +3327,16 @@ fn execution_tree_defaults_and_validation() {
     assert_eq!(limits.tree, task_core::TreeLimits::default());
     assert!(!limits.tree.enabled);
     assert_eq!(limits.tree.max_depth, 3);
+    assert!(limits.tree.auto_leaf);
+    assert_eq!(limits.tree.auto_leaf_max_compactions, 2);
+    assert_eq!(limits.tree.auto_leaf_max_continuations, 2);
+    let custom: Config = toml::from_str(&format!("{base}[execution.tree]\nauto_leaf = false\nauto_leaf_max_compactions = 0\nauto_leaf_max_continuations = 4\n")).unwrap();
+    custom.validate().unwrap();
+    let custom = custom.dispatch_config().execution.limits.tree;
+    assert!(!custom.auto_leaf);
+    assert_eq!(custom.auto_leaf_max_compactions, 0);
+    assert_eq!(custom.auto_leaf_max_continuations, 4);
+
     // /1・/2 の上限は変わらない。
     assert_eq!(limits, task_core::ExecutionLimits::default());
 

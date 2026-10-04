@@ -464,6 +464,9 @@ fn read_credential_request(
 /// are browser audit sources. Do not let page-driven comments/delegation publish data.
 struct BrowserSink<'a>(&'a dyn EventSink);
 impl EventSink for BrowserSink<'_> {
+    fn context_compacted(&self) {
+        self.0.context_compacted();
+    }
     fn browser_wait_open(
         &self,
         request: &task_core::browser_wait::NewBrowserWait,

@@ -10,15 +10,10 @@
 # 違反は「ファイル:1: 内容」で標準出力に出し、1 件でもあれば exit 1。
 set -u
 
-# 既存の重複（振り直さない。ADR-0128 D5）。完全なファイル名で書く。
-ALLOWED_DUPLICATES="
-0078-browser-execution-capability.md
-0078-ssh-master-persist-independent-of-daemon.md
-0116-browser-launcher-implementation.md
-0116-browser-prod-admission-confidential-release.md
-0124-atomic-direct-route.md
-0124-claude-session-resume.md
-"
+# 既存の重複（振り直さない。ADR-0128 D5）の正本は scripts/dev/adr-allowed-duplicates.txt（統合の resolver も
+# 同じ file を読む）。ROOT へ移った後に読む（load_allowed_duplicates）。
+ALLOWED_LIST_FILE=scripts/dev/adr-allowed-duplicates.txt
+ALLOWED_DUPLICATES=""
 
 # main の名前空間で番号付きの最後（これを超える番号は新設禁止）。
 LAST_NUMBERED=0128
@@ -255,6 +250,12 @@ ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
     exit 2
 }
 cd "$ROOT" || exit 2
+
+if [ ! -f "$ALLOWED_LIST_FILE" ]; then
+    echo "check-adr-numbers: $ALLOWED_LIST_FILE が無い" >&2
+    exit 2
+fi
+ALLOWED_DUPLICATES=$(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$ALLOWED_LIST_FILE" | grep -v '^$')
 
 case "${1:-}" in
     "")

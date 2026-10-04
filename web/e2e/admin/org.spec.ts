@@ -6,6 +6,9 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
+// beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
+test.describe.configure({ mode: "default" });
+
 // /org と /org/cos を 360px で開き、横 scroll が出ないこと（ページ全体が clientWidth に収まること）を見る。
 // 長い名前・ID・深い木を置き、折り返しと字下げの上限が効いているかを確かめる。
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-admin-org-"));

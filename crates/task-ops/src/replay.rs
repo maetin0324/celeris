@@ -350,7 +350,7 @@ pub fn rebuild_work_units_and_runs(
                         "dependency_failed" => Some(WorkUnitBlockedReason::DependencyFailed),
                         "limit" => Some(WorkUnitBlockedReason::Limit),
                         // ADR-0079 Phase R2a: 木の上限・子 task にできない leaf の決定の要求を待つ。
-                        "decision" => Some(WorkUnitBlockedReason::Decision),
+                        "decision" | "auto_leaf_budget" => Some(WorkUnitBlockedReason::Decision),
                         // ADR-0079 Phase R2b: 子の基盤の失敗が自動の作り直しでも続いた（障害通知済み）。
                         "child_infra_failed" => Some(WorkUnitBlockedReason::Infra),
                         // ADR-0090 D2: unit の run がクラスタ job を待つ（v1 の上限切れは人への質問）。
@@ -385,7 +385,7 @@ pub fn rebuild_work_units_and_runs(
                             }
                         }
                     }
-                    "continue" => wu.continuations += 1,
+                    "continue" | "auto_leaf_budget" => wu.continuations += 1,
                     "retry" => wu.retries += 1,
                     "completed" => {
                         if let Some(rid) = run_id {

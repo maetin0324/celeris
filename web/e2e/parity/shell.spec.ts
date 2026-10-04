@@ -8,6 +8,10 @@ import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { screens } from "../support/screens";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 // shell の parity（P2-02）。gateway は空き port の loopback で、daemon には接続しない。
 let gateway: Awaited<ReturnType<typeof startGateway>>;
 

@@ -1,0 +1,10 @@
+# 振り直さない既存の ADR 番号重複（ADR-0128 D5）。完全なファイル名を 1 行に 1 つ書く。'#' から行末は注釈。
+# この file が正本: scripts/dev/check-adr-numbers.sh と、統合の番号重複 resolver
+# （crates/task-dispatch/src/auto_resolve/classify.rs の allowed_adr_duplicates）の両方がここを読む。
+# 同じ番号の file が全てここに載っていれば重複とみなさない。
+0078-browser-execution-capability.md
+0078-ssh-master-persist-independent-of-daemon.md
+0116-browser-launcher-implementation.md
+0116-browser-prod-admission-confidential-release.md
+0124-atomic-direct-route.md
+0124-claude-session-resume.md

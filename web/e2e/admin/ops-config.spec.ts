@@ -6,6 +6,9 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
+// beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
+test.describe.configure({ mode: "default" });
+
 // 設定系 ops（/providers・/accounts の secret・MCP）: 状態を文字で読めること、secret の値が DOM に出ないこと、
 // form の label・項目の error・失敗時の focus、403 で操作を止めて理由を出すこと。
 // 403 は fixture に経路が無いので、browser の要求を page.route で 403 にする（fixture は変えない）。

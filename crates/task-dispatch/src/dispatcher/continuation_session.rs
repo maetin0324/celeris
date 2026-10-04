@@ -103,6 +103,21 @@ impl Dispatcher {
                 if retire {
                     self.store.work_unit_session_retire(task.id, wu_id, now)?;
                 }
+                // A token-based rollover is the fallback for adapters without stream
+                // compaction. Context exhaustion / an observed boundary already counted
+                // the old context; do not count its replacement a second time.
+                if reason == ContinuationFreshReason::ContextRollover
+                    && !matches!(previous_end, Some(task_core::RunEnd::BudgetExhausted { kind: task_core::BudgetKind::Context }))
+                    && !previous.is_some_and(|p| events.iter().any(|(_, e)| matches!(e,
+                        Event::WorkerProgress { run_id, kind: Some(task_core::ProgressKind::Status), tool: Some(tool), .. }
+                        if run_id == &p.run_id && tool == task_core::tree::CONTEXT_COMPACTION_TOOL)))
+                {
+                    self.store.append_event(task.id, &Event::worker_progress_with(
+                        run_id, "context rollover",
+                        task_core::ProgressFields::of(task_core::ProgressKind::Status)
+                            .with_tool(task_core::tree::CONTEXT_ROLLOVER_TOOL),
+                    ))?;
+                }
                 if reason.starts_session() {
                     let session_id = crate::sessions::new_session_id(adapter_id);
                     self.store

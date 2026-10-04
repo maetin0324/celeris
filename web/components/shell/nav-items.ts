@@ -12,6 +12,7 @@ export const navItems = [
   { to: "/graph", label: "依存グラフ", group: "work" },
   { to: "/org", label: "組織", group: "admin" },
   { to: "/knowledge", label: "知識", group: "admin" },
+  { to: "/reports", label: "報告", group: "admin" },
   { to: "/daemon", label: "daemon", group: "admin" },
   { to: "/providers", label: "プロバイダ", group: "admin" },
   { to: "/accounts", label: "アカウント", group: "admin" },

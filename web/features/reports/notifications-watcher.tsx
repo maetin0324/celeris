@@ -28,6 +28,8 @@ export function NotificationsWatcher({ unread }: { unread: UnreadCountView | nul
   const events = unread?.events ?? null;
   useEffect(() => {
     if (!unread || events === null) return;
+    // 許可が無ければ何も保存しない（storage gate: 表示の好み以外の key を作らない）。
+    if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
     const check = async () => {
       const seen = getSeen();
       if (!shouldNotify(unread, seen)) {
@@ -35,7 +37,6 @@ export function NotificationsWatcher({ unread }: { unread: UnreadCountView | nul
         return;
       }
       setSeen(events);
-      if (typeof Notification === "undefined" || Notification.permission !== "granted") return;
       new Notification("celeris: 通知", { body: notificationBody(unread) });
     };
     if (navigator.locks) void navigator.locks.request(storageKey, check);

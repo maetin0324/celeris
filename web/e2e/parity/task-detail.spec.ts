@@ -566,5 +566,15 @@ test("parity: /tasks/:id header（状態・現在の run・次の操作）と木
 
     // 長い ID は省略（全文は title）、長い題は折り返し。360px で横に溢れない。
     expect(await overflow(page)).toBe(0);
+
+    // 記録用の screenshot（TASK_DETAIL_SHOT_DIR を渡したときだけ）。スマホ 3 幅とデスクトップ幅。
+    const shotDir = process.env.TASK_DETAIL_SHOT_DIR;
+    if (shotDir) {
+      for (const width of [360, 390, 412, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        expect(await overflow(page)).toBe(0);
+        await page.screenshot({ path: path.join(shotDir, `task-detail-after-${width}.png`), fullPage: true });
+      }
+    }
   });
 });

@@ -23,7 +23,11 @@ const textLink = "break-words text-primary underline underline-offset-2";
 /** 長い ID を等幅で 1 行に省略する。全文は title 属性（hover・長押し）と読み上げで読める。 */
 export function ShortId({ id }: { id: string }) {
   return (
-    <code title={id} data-slot="short-id" className="inline-block max-w-full truncate align-bottom font-mono text-code">
+    <code
+      title={id}
+      data-slot="short-id"
+      className="inline-block max-w-full truncate align-bottom font-mono text-label"
+    >
       {id}
     </code>
   );
@@ -68,7 +72,10 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
   const steps = availableNextSteps(detail.data.actions);
   return (
     <section aria-label="タスクの現在" data-testid="task-header" className={card}>
-      <p className="break-words text-body font-semibold text-foreground">{task.title}</p>
+      {/* 長い題は 3 行で省略し、全文は title 属性と下の概要で読める。 */}
+      <p title={task.title} className="line-clamp-3 break-words text-body font-semibold text-foreground">
+        {task.title}
+      </p>
       <dl className="mt-3 flex min-w-0 flex-col gap-3 text-label md:flex-row md:flex-wrap md:gap-x-8">
         <div className="flex min-w-0 flex-col gap-1" data-testid="task-header-status">
           <dt className="font-medium text-muted-foreground">状態</dt>
@@ -266,7 +273,9 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
     <li className="min-w-0" data-testid="tree-self">
       <div className={nodeRow}>
         <span className={kindLabel}>{task.parent_id ? "この子 task" : "この task"}</span>
-        <span className="min-w-0 break-words font-medium text-foreground">{task.title}</span>
+        <span title={task.title} className="line-clamp-2 min-w-0 break-words font-medium text-foreground">
+          {task.title}
+        </span>
         <StatusBadge status={task.status} />
       </div>
       <ul className={branch} aria-label="この task の中">

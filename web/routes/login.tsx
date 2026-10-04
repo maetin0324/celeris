@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
+import { Button } from "../components/ui/button";
 import { clearProtectedCaches, safeNextPath } from "../lib/session";
 
 type LoginSearch = { next?: string; error?: string };
@@ -19,6 +20,18 @@ function LoginPage() {
   const next = safeNextPath(search.next);
   const [error, setError] = useState(search.error ? "パスワードが違います" : "");
   const [busy, setBusy] = useState(false);
+  const passwordRef = useRef<HTMLInputElement>(null);
+
+  // 失敗したら理由を alert で読み上げ、直すべき欄（唯一の入力欄）へ focus を戻して打ち直せるようにする。
+  function fail(message: string) {
+    setError(message);
+    setBusy(false);
+    const input = passwordRef.current;
+    if (input) {
+      input.focus();
+      input.select();
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -37,43 +50,55 @@ function LoginPage() {
         window.location.assign(safeNextPath(body.next));
         return;
       }
-      setError(response.status === 401 ? "パスワードが違います" : `ログインできません（${response.status}）`);
+      fail(
+        response.status === 401
+          ? "パスワードが違います"
+          : `ログインできません（${response.status}）。時間をおいて再度お試しください`,
+      );
     } catch {
-      setError("gateway に接続できません");
+      fail("gateway に接続できません。gateway が起動しているか確かめてください");
     }
-    setBusy(false);
   }
 
   return (
     <main className="mx-auto flex w-full max-w-sm flex-col gap-4 p-6">
-      <h1 className="text-xl font-semibold">Celeris にログイン</h1>
-      <form method="post" action="/login" onSubmit={submit} className="flex flex-col gap-3">
+      <h1 className="text-title font-semibold text-foreground">Celeris にログイン</h1>
+      <form
+        method="post"
+        action="/login"
+        onSubmit={submit}
+        aria-busy={busy}
+        className="flex flex-col gap-3 rounded-lg border border-border bg-surface p-4"
+      >
         <input type="hidden" name="next" value={next} />
-        <label htmlFor="password" className="text-sm font-medium">
+        <label htmlFor="password" className="text-label font-medium text-foreground">
           パスワード
         </label>
         <input
+          ref={passwordRef}
           id="password"
           name="password"
           type="password"
           autoComplete="current-password"
           required
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? "login-error" : undefined}
           // biome-ignore lint/a11y/noAutofocus: login 画面の唯一の入力欄
           autoFocus
-          className="min-h-11 w-full rounded border border-neutral-400 px-3 text-base"
+          className="min-h-11 w-full rounded-md border border-input bg-surface px-3 text-body text-foreground"
         />
         {error ? (
-          <p role="alert" className="text-sm text-red-700">
+          <p
+            id="login-error"
+            role="alert"
+            className="rounded-md border border-border bg-danger px-3 py-2 text-label text-danger-foreground"
+          >
             {error}
           </p>
         ) : null}
-        <button
-          type="submit"
-          disabled={busy}
-          className="min-h-11 w-full rounded bg-neutral-900 px-4 text-base font-medium text-white disabled:opacity-60"
-        >
-          ログイン
-        </button>
+        <Button type="submit" variant="primary" disabled={busy} className="w-full">
+          {busy ? "ログイン中…" : "ログイン"}
+        </Button>
       </form>
     </main>
   );

@@ -121,3 +121,14 @@ test("parity: 通知 360px で横に溢れない", async ({ page }) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
+
+test("parity: / home の受信箱・通知の入口と件数", async ({ page }) => {
+  await page.goto(`${gateway.base}/`);
+  const entries = page.getByRole("navigation", { name: "受信箱と通知" });
+  // 件数は shell の常駐 query の cache を読むだけなので、取得が済むと出る。
+  await expect(entries.getByRole("link", { name: /^通知/ })).toContainText("未読 3 件");
+  await expect(entries.getByRole("link", { name: /^受信箱/ })).toContainText(/判断待ち \d+ 件/);
+  await entries.getByRole("link", { name: /^通知/ }).click();
+  await expect(page).toHaveURL(/\/notifications$/);
+  await expect(page.getByRole("heading", { level: 1, name: "通知" })).toBeVisible();
+});

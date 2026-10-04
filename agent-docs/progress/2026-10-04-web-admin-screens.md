@@ -92,3 +92,16 @@ admin-record の変更後に再実行した。すべて `corepack pnpm@12.6.0 -C
 | feature-parity route 行 | 42 行（変更なし） |
 
 full e2e の初回は配布物試験 1 件だけ失敗した。作業中に `.pnpm-store/v11` を消したことが原因で、store を復元して full e2e を通し直した。再実行では配布物の offline install を含め全件が通った。
+
+## 範囲 check と main 取り込み
+
+merge `06a389b4f0103375712b13ac997ac12777caaec0` は main `864f5d29b07c558b22b9c7ac403fd8a80ccd83bf` を取り込んだ。merge の第 1 親は `8c937a020d0d5b5944f7ee8df0c5526b999276d7`。次の二つの WU 固有区間を受け入れ条件 3 の許可範囲正規表現で絞り、どちらも範囲外 0 件だった。
+
+```sh
+git diff --name-only ac78fad613ad 06a389b4^1 | grep -v -E '^(web/features/(ops|org|knowledge|help)/|web/routes/(accounts|clusters|daemon|providers|releases|help|login|org\.|knowledge\.)|web/e2e/parity/(ops|org|knowledge|help)\.spec\.ts$|web/e2e/admin/|agent-docs/progress/|agent-docs/adr/|agent-docs/web/feature-parity\.md$)'
+git diff --name-only 06a389b4 HEAD | grep -v -E '^(web/features/(ops|org|knowledge|help)/|web/routes/(accounts|clusters|daemon|providers|releases|help|login|org\.|knowledge\.)|web/e2e/parity/(ops|org|knowledge|help)\.spec\.ts$|web/e2e/admin/|agent-docs/progress/|agent-docs/adr/|agent-docs/web/feature-parity\.md$)'
+```
+
+両コマンドとも出力 0 行（`grep` は一致なしの exit 1）。対して同じ範囲式で `git diff --name-only ac78fad613ad 06a389b4` を調べると範囲外は 48 file。これらは merge commit の main 側の親 `864f5d29` 由来で、Rust の `crates/`、API 文書・設定、GUI/API 生成物、ADR 検査スクリプト、web の共通 e2e 高速化・realtime/parity 基盤（`web/package.json`・Playwright 設定を含む）に分類される。範囲外の一覧は merge 差分にのみ現れ、前後の WU 固有区間には現れない。
+
+人の回答（accept-scope）: **a — main 由来の差分を除いて条件 3 を満たしたとみなす**。このタスク自身の両区間で範囲外 0 件を確認したため、main 取り込みは revert せず、コード変更も行わない。

@@ -28,7 +28,7 @@ export const statusTone: Readonly<Record<CelerisStatus, BadgeTone>> = {
   continued: "info",
 };
 
-// 可視ラベル。色だけで意味を伝えないため、badge には必ずこの文字列（未知なら原文）を出す。
+// 可視ラベル。色だけで意味を伝えないため、badge には必ずこの文字列（未知なら「未確認」）を出す。
 export const statusLabel: Readonly<Record<CelerisStatus, string>> = {
   draft: "下書き",
   ready: "実行待ち",
@@ -53,22 +53,26 @@ function isKnownStatus(status: string): status is CelerisStatus {
   return Object.hasOwn(statusTone, status);
 }
 
-/** 状態語を tone と可視ラベルへ写す。未知の状態は neutral で原文をそのまま返す。 */
+/** 未知の状態の可視ラベル（DESIGN.md「状態色と contrast 比」: 未知値は neutral「未確認」）。 */
+export const unknownStatusLabel = "未確認";
+
+/** 状態語を tone と可視ラベルへ写す。未知の状態は neutral「未確認」を返す（原文は StatusBadge が属性に残す）。 */
 export function statusView(status: string): { tone: BadgeTone; label: string } {
   if (isKnownStatus(status)) return { tone: statusTone[status], label: statusLabel[status] };
-  return { tone: "neutral", label: status };
+  return { tone: "neutral", label: unknownStatusLabel };
 }
 
 export function StatusBadge({ status, className }: { status: string; className?: string }) {
   const { tone, label } = statusView(status);
   return (
-    <Badge tone={tone} data-status={status} className={className}>
+    <Badge tone={tone} data-status={status} title={status} className={className}>
       {tone === "running" ? (
-        // 実行中の印。形（切れ目のある輪）と文字で認識でき、reduced-motion では回転を止める。
+        // 実行中の印。静止した形（切れ目のある輪）と「実行中」の文字で認識させ、動かさない
+        // （DESIGN.md §Badge「running は静止 icon と文字で」・§Reduced motion「常時点滅する running を使わない」）。
         <span
           aria-hidden="true"
           data-slot="status-mark"
-          className="size-2 shrink-0 rounded-full border-2 border-current border-t-transparent motion-safe:animate-spin"
+          className="size-2 shrink-0 rounded-full border-2 border-current border-t-transparent"
         />
       ) : null}
       {label}

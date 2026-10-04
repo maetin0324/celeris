@@ -16,8 +16,13 @@ import { ConfirmDialog } from "../confirm-dialog";
 import { DataList } from "../data-list";
 import { Drawer } from "../drawer";
 import { Icon, IconOnlyButton } from "../icon";
+import { Input } from "../input";
 import { Kbd } from "../kbd";
+import { Notice } from "../notice";
 import { Panel, Section } from "../panel";
+import { ScrollTabs } from "../scroll-tabs";
+import { Select } from "../select";
+import { ShortId } from "../short-id";
 import { StatusBadge, statusLabel } from "../status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../table";
 
@@ -190,6 +195,39 @@ function App() {
           入力欄（色を指定しない）
           <input data-testid="plain-input" className="rounded border bg-white p-2" defaultValue="枠の色" />
         </label>
+      </Gallery>
+
+      <Gallery title="Notice と入力">
+        <Notice tone="danger" title="保存できませんでした" action={<Button size="sm">再試行</Button>}>
+          接続を確かめてから、もう一度保存してください。
+        </Notice>
+        <Notice title="下書きのままです">公開するまで他の人には見えません。</Notice>
+        <label htmlFor="g-name" className="flex max-w-sm flex-col gap-1 text-body">
+          名前
+          <Input id="g-name" placeholder="例: Pluvio 調査" />
+        </label>
+        <label htmlFor="g-state" className="flex max-w-sm flex-col gap-1 text-body">
+          状態
+          <Select id="g-state" defaultValue="running">
+            <option value="running">実行中</option>
+            <option value="done">完了</option>
+          </Select>
+        </label>
+        <label htmlFor="g-disabled" className="flex max-w-sm flex-col gap-1 text-body">
+          無効
+          <Input id="g-disabled" disabled defaultValue="変更できません" />
+        </label>
+        <ShortId value="01M44C5GXRV021GW7QDHTNC054" label="タスク ID" />
+      </Gallery>
+
+      <Gallery title="ScrollTabs">
+        <ScrollTabs aria-label="タブの例" className="flex gap-2">
+          {["概要", "変更", "ファイル", "成果物", "実行", "ログ", "決定", "履歴", "設定"].map((name) => (
+            <Button key={name} variant="ghost" className="shrink-0">
+              {name}
+            </Button>
+          ))}
+        </ScrollTabs>
       </Gallery>
 
       <Gallery title="ConfirmDialog と Drawer">

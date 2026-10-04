@@ -70,6 +70,8 @@ export const EVENT_KINDS = [
   "knowledge_curation_applied",
   "integration_requested",
   "integration_answered",
+  "integration_check_started",
+  "integration_check_finished",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

@@ -367,7 +367,8 @@ function WorkUnitCheckProgress({
         <ul className="space-y-0.5 text-fg-muted" data-testid="work-unit-check-finished">
           {progress.finished.map((f) => (
             <li key={f.index} className="break-words">
-              <span className={f.pass ? "text-success" : "text-danger"}>{checkDoneLabel(f)}</span> <Mono>{f.cmd}</Mono>
+              <span className={f.pass ? "text-success-soft-fg" : "text-danger-soft-fg"}>{checkDoneLabel(f)}</span>{" "}
+              <Mono>{f.cmd}</Mono>
             </li>
           ))}
         </ul>

@@ -153,6 +153,9 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   knowledge_curation_applied: { sets: ["T", "N"] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
+  // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
+  integration_check_started: { sets: ["T", "E"] },
+  integration_check_finished: { sets: ["T", "E"] },
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

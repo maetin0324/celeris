@@ -45,6 +45,20 @@ updated: 2026-10-04
 | 2 | `cargo clippy --workspace -- -D warnings`（`--all-targets` も） | exit 0 |
 | 2 | `cargo fmt --all -- --check`、`scripts/sync-gui-docs.sh --check`、`check-adr-numbers`・`check-doc-links`・`check-doc-layout` | すべて exit 0 |
 
+### 再試行（2026-10-04、attempt 2: review の差し戻し 2 件）
+
+- 済んだ検査の「通過/不合格」の文字色を `text-success`（light で白地 3.30:1）から `text-success-soft-fg` /
+  `text-danger-soft-fg` に変えた（`gui/app/components/ExecutionSection.tsx`）。mobile-audit の contrast 違反の元。
+- `web/api/realtime/event-kinds.ts` の `EVENT_KINDS` と `invalidation-map.ts` の `EVENT_INVALIDATION` に
+  `integration_check_started` / `integration_check_finished`（sets T・E）を足した。web の型検査が直った。
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| 1 GUI | `corepack pnpm@11.27.0 -C gui typecheck` / `test` / `build` / `mobile-audit` | exit 0 / 1301 passed / exit 0 / routes=28 violations=0 |
+| web | `corepack pnpm@12.6.0 -C web typecheck`、`vitest run api/realtime` | exit 0 / 56 passed |
+| 2 | `bash scripts/dev/test-parallel.sh` | exit 0、3876 passed・12 skipped |
+| 2 | `cargo clippy --workspace -- -D warnings` | exit 0 |
+
 ### 未解決事項
 
 - 本番で効くのは昇格後。昇格前に始まった統合の検査は event もログも出ない。

@@ -55,6 +55,11 @@ const progress = (): ConsoleBlock => ({
   },
 });
 
+const withFirstLine = (block: ConsoleBlock, text: string): ConsoleBlock =>
+  block.kind === "progress"
+    ? { ...block, progress: { ...block.progress, first: [{ seq: 1, at: "2026-01-01T00:00:00Z", text }] } }
+    : block;
+
 const runEvents = (url: URL) => {
   const after = Number(url.searchParams.get("after_seq") ?? 0);
   const limit = Number(url.searchParams.get("limit") ?? 200);
@@ -228,4 +233,102 @@ test("parity: /org/:id Console の送信と宛先", async ({ page }) => {
     scope: "node:designer",
   });
   expect(requests("/api/v1/console/stream").at(-1)?.query).toContain("scope=node%3Adesigner");
+});
+
+test("parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げない", async ({ page }) => {
+  // run 画面の本文（stdout.jsonl）と Console の run events の両方に 2000 文字以上の 1 行を返す。
+  // この test 専用の偽 daemon を立て、他の test の fixture には触れない。
+  const long = "x".repeat(2400);
+  const line = (text: string) =>
+    JSON.stringify({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+  const toolResult = JSON.stringify({
+    type: "user",
+    message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: long }] },
+  });
+  const own = createFakeDaemon({
+    token: FIXTURE_TOKEN,
+    fixtures: {
+      "/api/v1/tasks/T1/runs/R1/events": () => ({
+        has_more: false,
+        items: [
+          { id: 1, seq: 1, task_id: "T1", ts: "2026-01-01T00:00:00Z", event: { type: "worker_progress", msg: long } },
+        ],
+      }),
+    },
+    files: {
+      "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+        body: `${line(long)}\n${toolResult}\n${long}\n`,
+        type: "text/plain; charset=utf-8",
+      },
+    },
+  });
+  const [s, url] = await listen(createApp({ daemonUrl: await own.start(), daemonTokenFile: tokenFile, log: () => {} }));
+  try {
+    await page.setViewportSize({ width: 360, height: 740 });
+    await page.goto(`${url}/tasks/T1/runs/R1`);
+    await expect(page.getByRole("heading", { level: 1, name: "run ログ T1 / R1" })).toBeVisible();
+    await expect(page.getByTestId("run-log-line-count")).toHaveAttribute("data-count", "3");
+    const fits = () => page.evaluate(() => document.documentElement.scrollWidth);
+    expect(await fits()).toBeLessThanOrEqual(360);
+    // 折り返しを切っても、横 scroll は面の内側だけ。
+    const wrapToggle = page.getByRole("button", { name: "長い行を折り返す" });
+    await wrapToggle.click();
+    await expect(wrapToggle).toHaveAttribute("aria-pressed", "false");
+    for (const summary of await page.locator("[data-testid=run-log] summary").all()) await summary.click();
+    expect(await fits()).toBeLessThanOrEqual(360);
+    // 原文（LogSurface）でも同じ。
+    await page.getByRole("button", { name: /原文/ }).click();
+    await expect(page.getByRole("region", { name: "run ログ本文（原文）" })).toBeVisible();
+    expect(await fits()).toBeLessThanOrEqual(360);
+  } finally {
+    s.closeAllConnections();
+    await new Promise<void>((resolve) => s.close(() => resolve()));
+    await own.close();
+  }
+});
+
+test("parity: / Console 360px で長い 1 行がページを広げず、種類が文字で分かる", async ({ page }) => {
+  const long = "y".repeat(2400);
+  initial = [human("l1", long), reply("l2", `前置き\n\`\`\`\n${long}\n\`\`\``), withFirstLine(progress(), long)];
+  await page.setViewportSize({ width: 360, height: 740 });
+  await page.goto(`${base}/`);
+  const conversation = page.getByRole("list", { name: "Console の会話" });
+  await expect(conversation.getByText("あなた", { exact: true })).toBeVisible();
+  await expect(conversation.getByText("返事", { exact: true })).toBeVisible();
+  await expect(conversation.getByText("run の作業", { exact: true })).toBeVisible();
+  // 返事の ``` は等幅の code 面（CodeBlock）で出す。
+  await expect(page.getByRole("region", { name: "返事の code" })).toBeVisible();
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth);
+  expect(await fits()).toBeLessThanOrEqual(360);
+  // progress を開くと先頭・末尾の行は LogSurface、全行も LogSurface。
+  await page.getByRole("button", { name: /作業/ }).click();
+  await expect(page.getByRole("region", { name: "run の先頭と末尾の行" })).toBeVisible();
+  await page.getByRole("button", { name: /すべて見る/ }).click();
+  await expect(page.getByRole("region", { name: "run の全行" })).toContainText("line-5");
+  expect(await fits()).toBeLessThanOrEqual(360);
+});
+
+test("parity: / Console 追記の追従と『最新へ』", async ({ page }) => {
+  initial = Array.from({ length: 30 }, (_, i) => human(`f${i}`, `発言 ${i}`));
+  await page.goto(`${base}/`);
+  await expect(page.getByText("発言 29")).toBeVisible();
+  await expect.poll(() => daemon.consoleClients).toBeGreaterThan(0);
+  const gap = () => page.evaluate(() => document.documentElement.scrollHeight - window.scrollY - window.innerHeight);
+  // 開いた直後は末尾にいる。
+  await expect.poll(gap).toBeLessThanOrEqual(24);
+  // 上へ離れている間は追記で動かさず、「最新へ」を出す。
+  await page.evaluate(() => window.scrollTo(0, 0));
+  // scroll の event が届いてから追記する（2 frame 待つ）。
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  daemon.sendConsoleBlock(reply("f30", "追記 1"));
+  const latest = page.getByRole("button", { name: "最新へ" });
+  await expect(latest).toBeVisible();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await latest.click();
+  await expect.poll(gap).toBeLessThanOrEqual(24);
+  await expect(latest).toBeHidden();
+  // 末尾にいれば追記に合わせて末尾へ送る。
+  daemon.sendConsoleBlock(reply("f31", "追記 2\n".repeat(20)));
+  await expect(page.getByText("追記 2").first()).toBeVisible();
+  await expect.poll(gap).toBeLessThanOrEqual(24);
 });

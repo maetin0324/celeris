@@ -6,9 +6,18 @@ export const Route = createFileRoute("/board")({
     Object.fromEntries(
       Object.entries(search).filter(
         ([key, value]) =>
-          ["project", "q", "label", "category", "tier", "priority", "assignee", "milestone", "show_support"].includes(
-            key,
-          ) &&
+          [
+            "project",
+            "q",
+            "label",
+            "category",
+            "tier",
+            "priority",
+            "assignee",
+            "milestone",
+            "show_support",
+            "column",
+          ].includes(key) &&
           (typeof value === "string" || typeof value === "number"),
       ),
     ),

@@ -100,3 +100,23 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 - `corepack pnpm@12.6.0 -C web e2e:all e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts -g "knowledge|login|help"` → 10 passed。`mobile-audit --only` を `/knowledge`・`/knowledge/inbox`・`/knowledge/skills`・`/help`・`/login` に当てて各 exit 0
 - FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/{knowledge,help,org,ops} web/routes/{knowledge.*,help.tsx,login.tsx} web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
 - この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は post-record 葉で行う。
+
+## gate 結果
+
+4 つの修正葉を統合した worktree で、指定順の最初の offline install を実行した。依存キャッシュが欠け、`web/node_modules` も無いため、後続の検査には進めなかった。検査を通過したとは扱わない。
+
+| 検査 | 結果 |
+| --- | --- |
+| `install --offline --frozen-lockfile` | exit 1。worktree の store に `react-remove-scroll@2.7.2` の tarball が無い（`ERR_PNPM_NO_OFFLINE_TARBALL`） |
+| `install --offline --frozen-lockfile --store-dir /local/.pnpm-store`（ローカル store の切り分け） | exit 1。共有 store に `@tailwindcss/vite@4.3.3` の tarball が無い（同じエラー） |
+| `build` | 未実施（offline install 失敗、`web/node_modules` 無し） |
+| `typecheck` | 未実施（同上） |
+| `lint` | 未実施（同上） |
+| `test`（vitest + node:test） | 未実施（同上。test 数は未計測） |
+| `check:parity` | 未実施（同上） |
+| `check:boundaries` | 未実施（同上） |
+| `check:secrets` | 未実施（同上） |
+| `mobile-audit` | 未実施（同上） |
+| `e2e`（functional scope） | 未実施（同上。件数は未計測） |
+
+原因は UI ソースではなくローカル依存 store の欠落。担当範囲の画面ファイルを変更しても修復できず、offline 指定を外して取得することはこの検査条件と異なる。依存 tarball をローカル store に揃えてから同じ順序で再実行する必要がある。詳細ログはこの WU の `artifacts/install.log` と `artifacts/install-local-store.log` に保存した。

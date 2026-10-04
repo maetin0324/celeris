@@ -7,6 +7,10 @@ import { checkSecrets, FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 // gateway の中継（P1-07〜P1-09）。偽 daemon と gateway は loopback の空き port。dist/ は webServer の build が作る。
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-relay-"));
 const tokenFile = path.join(dir, "token");

@@ -2,6 +2,9 @@ import { expect, type Page, test } from "@playwright/test";
 import type { ClusterView, DaemonSnapshot, DaemonView, ReleaseItem, Releases } from "../../api/generated/types";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
+// beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
+test.describe.configure({ mode: "default" });
+
 // 実行系 ops（/clusters・/daemon）の状態表。状態と失敗理由が文字で読めること、403 で操作が無効になり理由が出ること、
 // 360px で横に溢れないことを確かめる。fixture に無い状態は page.route で応答を差し替える。
 let base = "";

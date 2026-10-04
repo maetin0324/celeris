@@ -2998,6 +2998,15 @@ root の /3 の計画が人の承認を待っている Task（`blocked` で直�
 
 人への決定の要求（`DecisionRequest`。計画の `decisions`・worker の `result.json` の `decisions`・daemon の `leaf_too_large` / `limit` / `plan_invalid`）の一覧と回答。`[execution.tree] enabled = false`（既定）では決定が作られないので、一覧は空（404 ではない）、回答は 404 になる。効き目（選択肢 → 効き目の表）は ADR-0079 付記「R3a 実装時の逸脱・明確化」。MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/guides/mcp.md`）。
 
+深さ上限の compound leaf は `[execution.tree] auto_leaf=true`（既定）なら決定を出さず実行する。
+計画に紐づく `UnitGateOverridden.action=auto_leaf` と `reason` に理由が残る。実測の compaction / context rollover または
+continuation が各設定閾値（既定はともに 2、超過は 3 回目）を超えると、既存 `kind=leaf_too_large` の決定を
+`key=auto_leaf_budget:<work_unit_id>:<run_id>` で発行する。`question` に回数・閾値・直近の進捗、`path` に leaf の位置、
+`needed_before` に停止対象の leaf key が入る。受信箱の決定として回答待ちになる。
+選択肢は `run-as-leaf`（続ける。回答以降を再計数して checkpoint/session を引き継ぐ）、`replan`、`withdraw`。
+`auto_leaf=false` は実行前の従来の判断待ちを使う。新しい決定 kind は追加していない。
+
+
 ##### `GET /decisions?open=&root_id=` → 200 `DecisionList`
 
 `items[]` は `DecisionView`（`decision`: `DecisionRequest`、`task_id` = 決定を出した節点、`root_id`、`created_at`、`answered_at?`、`effect?` = 回答済みならその効き目 `DecisionEffect`: `resume` / `raise_once` / `replan` / `atomic` / `withdraw`）。`created_at` 昇順。`open=true` は未回答だけ、`false` は回答済み・取り下げ済みだけ、省略は全件。`root_id` で 1 つの木（root task の id）に絞る。不正な `open` / `root_id` は 400。

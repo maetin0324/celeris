@@ -14,6 +14,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { formatAbsolute } from "../../lib/time";
@@ -160,17 +161,23 @@ export function AccountCard({
         >
           ログイン開始
         </Button>
-        <Button
-          variant="destructive"
-          disabled={disabled}
-          aria-describedby={deniedId}
-          onClick={() => {
-            if (window.confirm(`アカウント ${item.id} の登録を削除しますか。元に戻せません。`))
-              void sender.run([{ id: `delete:${key}`, path: `${base}${q}`, method: "DELETE" }]);
+        <ConfirmDialog
+          trigger={
+            <Button variant="destructive" disabled={disabled} aria-describedby={deniedId}>
+              削除
+            </Button>
+          }
+          title="アカウントを削除しますか"
+          target={item.id}
+          consequence="このアカウントの登録を削除し、以後の run で選べなくなります。"
+          reversibility="削除は元に戻せません。必要ならアカウントを追加し直してください。"
+          followUp="アカウント一覧で削除結果を確認できます。"
+          confirmLabel={`${item.id} を削除`}
+          onConfirm={async () => {
+            const [result] = await sender.run([{ id: `delete:${key}`, path: `${base}${q}`, method: "DELETE" }]);
+            if (result && !result.ok) throw new Error(result.message);
           }}
-        >
-          削除
-        </Button>
+        />
       </div>
       <ActionResultView result={check} />
       {checked && (

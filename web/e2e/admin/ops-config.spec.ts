@@ -6,6 +6,9 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
+// beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
+test.describe.configure({ mode: "default" });
+
 // 設定系 ops（/providers・/accounts の secret・MCP）: 状態を文字で読めること、secret の値が DOM に出ないこと、
 // form の label・項目の error・失敗時の focus、403 で操作を止めて理由を出すこと。
 // 403 は fixture に経路が無いので、browser の要求を page.route で 403 にする（fixture は変えない）。
@@ -131,15 +134,12 @@ test.describe("ops-config", () => {
       .toBe(before + 1);
     expect(await page.content()).not.toContain(SECRET_VALUE);
     // 削除: 確認文に影響と戻せないことを書く。
-    let message = "";
-    page.once("dialog", (d) => {
-      message = d.message();
-      void d.accept();
-    });
     await item.getByRole("button", { name: "secret を削除" }).click();
+    const deleteDialog = page.getByRole("alertdialog", { name: "secret を削除しますか" });
+    await expect(deleteDialog).toContainText("影響する設定");
+    await expect(deleteDialog).toContainText("元に戻せません");
+    await deleteDialog.getByRole("button", { name: "CFG_KEY を削除" }).click();
     await expect(page.getByRole("listitem", { name: "secret CFG_KEY" })).toHaveCount(0);
-    expect(message).toContain("影響する設定");
-    expect(message).toContain("元に戻せず");
   });
 
   test("secret: 403 で保存・置き換え・削除を止め、理由を出す", async ({ page }) => {

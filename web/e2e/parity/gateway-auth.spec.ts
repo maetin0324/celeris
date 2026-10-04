@@ -5,6 +5,10 @@ import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { createApp } from "../../server/app.js";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 // gateway の認証（P1-05 / P1-06）。gateway は空き port の loopback で、パスワードのファイルを与えて認証を有効にする。
 const PASSWORD = "e2e-password";
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-auth-"));

@@ -546,6 +546,7 @@ pub(super) async fn run_worker(
     let roles_for_followups = roles.clone();
     let genres_for_followups = genres.clone();
     let sink = StoreSink {
+        auto_leaf: extras.auto_leaf,
         store,
         task_id,
         run_id: run_id.to_string(),
@@ -573,15 +574,48 @@ pub(super) async fn run_worker(
             "browser capability currently requires a local host run".into(),
         ))
     } else {
-        task_worker::browser::run_with_candidates(
+        let run = task_worker::browser::run_with_candidates(
             adapter,
             browser_candidates,
             req,
             run_id,
             limits,
             &sink,
-        )
-        .await
+        );
+        if let Some(watch) = &sink.auto_leaf {
+            let stopped = || {
+                Ok(RunOutcome {
+                    terminal: Terminal::Yielded {
+                        checkpoint: serde_json::Value::Null,
+                        usage: None,
+                    },
+                    exit_code: None,
+                })
+            };
+            // Keep the future (and its process-group registration) alive until the
+            // shared stop path signals descendants and containers. Drop alone only
+            // kills the direct child. Finish then saves a mechanical checkpoint.
+            tokio::pin!(run);
+            let outcome = if watch.exceeded() {
+                stopped()
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = watch.wake.notified() => {
+                        let container_stop = container_plan.as_ref().map(|p|
+                            Arc::new(task_worker::ContainerStop::of(p)) as Arc<dyn task_worker::ContainerStopper>);
+                        if task_worker::kill_tree_with(run_id, limits.kill_grace, container_stop) {
+                            tokio::time::sleep(limits.kill_grace).await;
+                        }
+                        stopped()
+                    },
+                    outcome = &mut run => outcome,
+                }
+            };
+            if watch.exceeded() { stopped() } else { outcome }
+        } else {
+            run.await
+        }
     };
     // ADR-0079 R5b-fix2: remote workspace は run が終わるたびに（成否に関わらず）手元の写しをクラスタへ
     // push する（review と次の run の prepare〈`--delete` 付きの pull〉の前）。push が落ちたら印が残り、

@@ -594,6 +594,7 @@ async fn withdraw_cancels_the_held_units() {
     let adapter = Arc::new(DecisionAdapter::new(vec![plan]));
     let mut d = tree_dispatcher(&store, adapter);
     d.config.execution.limits.tree.max_depth = 1;
+    d.config.execution.limits.tree.auto_leaf = false;
     quiet_then_approve(&mut d, &store, root_id, 800).await;
     let dec = decision(&store, root_id, "leaf_too_large:big");
     let outcome = answer(&store, &dec.id, Some("withdraw"), None);

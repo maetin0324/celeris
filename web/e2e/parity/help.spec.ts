@@ -6,6 +6,10 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 const dir = mkdtempSync(path.join(tmpdir(), "celeris-help-"));
 const tokenFile = path.join(dir, "token");
 writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);

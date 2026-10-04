@@ -8,6 +8,10 @@ import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
+// file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
+// この file の試験は 1 worker で順に流す（file どうしは並列）。
+test.describe.configure({ mode: "default" });
+
 // P4-16 /releases。
 test.describe("P4-16 releases", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "celeris-releases-"));
@@ -131,7 +135,6 @@ test.describe("P4-12 daemon/providers", () => {
   });
 
   test("parity: /providers 追加・変更・削除・確認", async ({ page }) => {
-    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(`${base}/providers`);
     await expect(page.getByRole("heading", { level: 1, name: "プロバイダ" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "claude-main" })).toBeVisible();
@@ -146,8 +149,12 @@ test.describe("P4-12 daemon/providers", () => {
     await card.getByRole("button", { name: "接続を確認" }).click();
     await expect(card.getByText("確認結果: ok")).toBeVisible();
     await card.getByRole("button", { name: "削除" }).click();
+    await page
+      .getByRole("alertdialog", { name: "実行枠を削除しますか" })
+      .getByRole("button", { name: "codex-2 を削除" })
+      .click();
     await expect(page.getByRole("heading", { name: "codex-2" })).toHaveCount(0);
-    expect(seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
+    await expect.poll(() => seen.filter((r) => r.path === "/api/v1/reload").length).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -182,7 +189,6 @@ test.describe("P4-13..15 accounts/clusters", () => {
   });
 
   test("parity: /accounts 追加・ログイン・secret・削除", async ({ page }) => {
-    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(`${base}/accounts`);
     await expect(page.getByRole("heading", { level: 1, name: "アカウント" })).toBeVisible();
     await page.getByLabel("アカウント id").fill("sub");
@@ -219,8 +225,16 @@ test.describe("P4-13..15 accounts/clusters", () => {
       .getByRole("listitem", { name: "secret OPENAI_KEY" })
       .getByRole("button", { name: "secret を削除" })
       .click();
+    await page
+      .getByRole("alertdialog", { name: "secret を削除しますか" })
+      .getByRole("button", { name: "OPENAI_KEY を削除" })
+      .click();
     await expect(page.getByRole("listitem", { name: "secret OPENAI_KEY" })).toHaveCount(0);
     await card.getByRole("button", { name: "削除" }).click();
+    await page
+      .getByRole("alertdialog", { name: "アカウントを削除しますか" })
+      .getByRole("button", { name: "sub を削除" })
+      .click();
     await expect(page.getByRole("listitem", { name: "アカウント sub" })).toHaveCount(0);
     expect(seen.some((r) => r.path.startsWith("/api/v1/accounts/sub/login/code") && r.method === "POST")).toBe(true);
   });

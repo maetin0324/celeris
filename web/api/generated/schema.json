@@ -23572,6 +23572,11 @@
           "type": "string"
         },
         {
+          "const": "auto_leaf",
+          "description": "compound だが深さ上限なので leaf のまま実行し、実行中の回数を監視する。",
+          "type": "string"
+        },
+        {
           "const": "decision",
           "description": "leaf と宣言されたが compound、子 task を持てない深さ → 決定の要求（`leaf_too_large`）。",
           "type": "string"

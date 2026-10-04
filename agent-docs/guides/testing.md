@@ -51,6 +51,10 @@ async fn timeout_fires_after_deadline() {
 - 例: `crates/task-dispatch/src/dispatcher/tests/mod.rs` の `liveness_round` は probe が `probe_inflight` を
   外すまで呼び続け、結果を読み切ってから判定する。ほかに `crates/scratch-cache/src/tests.rs` の `wait_until`、
   `crates/task-dispatch/tests/unified_kill.rs` の `wait_until_gone`。
+- 例（web e2e、「何も起きないこと」の確認）: `web/e2e/realtime/refetch-scope.spec.ts` は page の時計を
+  Playwright の clock に差し替えて止め、`web/e2e/support/realtime-probe.ts`（試験側の EventSource・fetch の
+  観測点）で「app が SSE を処理し終えた件数」を待ってから `clock.runFor` で束ね窓と poll を進める。最後に
+  取り直しを起こす目印の event を流し、観測が空振りしていないことも確かめる。
 
 ## 方法 3: 対象 process への SIGSTOP/SIGCONT（stutter）
 
@@ -84,3 +88,8 @@ done
 
 - check に重い負荷の台本（CPU 焼き、`stress-ng`、並走 cargo）を置かない。
 - 高負荷の host で落ちた試験は、単独で再実行して結果を記録し、必要なら上の方法で決定的な回帰試験を足す。
+- web の e2e は機能（`pnpm -C web e2e`）と非機能（`pnpm -C web e2e:nfr`: 全画面の axe・latency・
+  refetch-scope の掃引）に分かれている（`web/playwright.config.ts` の project）。WU の check は対象画面の
+  functional spec を指定して流し（例: `pnpm -C web build && pnpm -C web e2e parity/inbox.spec.ts`）、
+  nfr と `e2e:all` は visual-qa・最終の受け入れ・release gate の段で流す。webServer は dist/ が無いか
+  古いときだけ build するので、check で先に build しても二重には build しない。

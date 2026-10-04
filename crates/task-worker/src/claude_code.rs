@@ -1008,7 +1008,14 @@ fn handle_line(
             });
         }
         // F5-fix5: background task の開始・終わり（`result` の後に届く kill の通知も含めて追う）。
-        "system" => background.observe(&value),
+        "system" => {
+            // compact_boundary is emitted after manual and automatic compaction.
+            // Do not count compacting/start status or model text a second time.
+            if value.get("subtype").and_then(|v| v.as_str()) == Some("compact_boundary") {
+                sink.context_compacted();
+            }
+            background.observe(&value);
+        }
         _ => {}
     }
 }

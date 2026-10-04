@@ -587,11 +587,26 @@ impl Dispatcher {
                 effective_end,
                 task_core::RunEnd::HarnessError { .. } | task_core::RunEnd::Cancelled
             );
+            let tree = self.config.execution.limits.tree;
+            let auto_counts = if tree.enabled && tree.auto_leaf {
+                auto_leaf::counts(
+                    &self.store.events_for(task_id)?,
+                    wu,
+                    &run_id,
+                    Some(effective_end),
+                )
+            } else {
+                None
+            };
+            let auto_exceeded = auto_counts
+                .as_ref()
+                .is_some_and(|counts| counts.exceeded(tree));
             let mut checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut prev_checkpoint_opt: Option<task_core::Checkpoint> = None;
             let mut no_progress_before = 0u32;
             // ADR-0090 D1: クラスタ job の wait も checkpoint を残す（`[execution] continuation` に依らない）。
-            if (effective_end.is_continuable() && self.config.execution.continuation)
+            if (effective_end.is_continuable()
+                && (self.config.execution.continuation || auto_exceeded))
                 || effective_end == task_core::RunEnd::Waiting
             {
                 let events_so_far = self.store.events_for(task_id)?;
@@ -657,7 +672,10 @@ impl Dispatcher {
             }
             checkpoint_for_index = checkpoint_opt.clone();
 
-            if effective_end.is_continuable() && !self.config.execution.continuation {
+            if effective_end.is_continuable()
+                && !self.config.execution.continuation
+                && !auto_exceeded
+            {
                 // ADR-0072 §6 (f): `[execution] continuation = false` なら従来どおり
                 // `WorkerError{retryable:true}` に戻す（WU の状態は変えない）。
                 trigger = Trigger::WorkerError { retryable: true };
@@ -667,12 +685,22 @@ impl Dispatcher {
                 );
             } else {
                 let units = self.store.work_units_for(task_id)?;
+                // The measured auto-leaf guard replaces the generic continuation /
+                // no-progress replan caps for this leaf. Failures and plan_issue remain unchanged.
                 let limits = crate::execution_scheduler::WuLimits {
-                    max_continuations: self.config.execution.max_continuations_per_work_unit,
-                    no_progress_limit: self.config.execution.no_progress_limit,
+                    max_continuations: if auto_counts.is_some() {
+                        u32::MAX
+                    } else {
+                        self.config.execution.max_continuations_per_work_unit
+                    },
+                    no_progress_limit: if auto_counts.is_some() {
+                        u32::MAX
+                    } else {
+                        self.config.execution.no_progress_limit
+                    },
                     max_retries: task.budget.max_retries,
                 };
-                let decision = crate::execution_scheduler::decide(
+                let mut decision = crate::execution_scheduler::decide(
                     effective_end,
                     &run_id,
                     wu,
@@ -684,6 +712,36 @@ impl Dispatcher {
                     },
                     limits,
                 );
+                if let Some(counts) = auto_counts.filter(|counts| counts.exceeded(tree))
+                    && decision.reason == "continue"
+                {
+                    let request = self.auto_leaf_decision(
+                        &task,
+                        wu,
+                        &run_id,
+                        &counts,
+                        checkpoint_opt.as_ref(),
+                    )?;
+                    outcome_str = format!("decision: {}", request.question);
+                    decision.updated.status = task_core::WorkUnitStatus::Blocked;
+                    decision.updated.blocked_reason =
+                        Some(task_core::WorkUnitBlockedReason::Decision);
+                    decision.reason = "auto_leaf_budget";
+                    decision.trigger = Trigger::Continue {
+                        why: task_core::ContinueWhy::Advance,
+                    };
+                    decision.plan_complete = false;
+                    decision.newly_ready.clear();
+                    decision.newly_blocked.clear();
+                    worker_decisions = Some(WorkerDecisions {
+                        events: vec![Event::DecisionRequested {
+                            decision: Box::new(request),
+                        }],
+                        held_rows: vec![],
+                        self_hold: true,
+                        count: 1,
+                    });
+                }
                 if !reset_only {
                     trigger = decision.trigger;
                     match decision.reason {

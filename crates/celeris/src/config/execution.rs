@@ -65,6 +65,12 @@ pub struct ExecutionTreeTomlConfig {
     pub enabled: bool,
     #[serde(default = "default_tree_max_depth")]
     pub max_depth: u32,
+    #[serde(default = "default_tree_auto_leaf")]
+    pub auto_leaf: bool,
+    #[serde(default = "default_tree_auto_leaf_max_compactions")]
+    pub auto_leaf_max_compactions: u32,
+    #[serde(default = "default_tree_auto_leaf_max_continuations")]
+    pub auto_leaf_max_continuations: u32,
     #[serde(default = "default_tree_max_units_per_stage")]
     pub max_units_per_stage: usize,
     #[serde(default = "default_tree_max_stages")]
@@ -105,6 +111,9 @@ impl Default for ExecutionTreeTomlConfig {
         Self {
             enabled: false,
             max_depth: default_tree_max_depth(),
+            auto_leaf: default_tree_auto_leaf(),
+            auto_leaf_max_compactions: default_tree_auto_leaf_max_compactions(),
+            auto_leaf_max_continuations: default_tree_auto_leaf_max_continuations(),
             max_units_per_stage: default_tree_max_units_per_stage(),
             max_stages: default_tree_max_stages(),
             max_child_tasks_per_plan: default_tree_max_child_tasks_per_plan(),
@@ -128,6 +137,9 @@ impl ExecutionTreeTomlConfig {
         task_core::TreeLimits {
             enabled: self.enabled,
             max_depth: self.max_depth,
+            auto_leaf: self.auto_leaf,
+            auto_leaf_max_compactions: self.auto_leaf_max_compactions,
+            auto_leaf_max_continuations: self.auto_leaf_max_continuations,
             max_units_per_stage: self.max_units_per_stage,
             max_stages: self.max_stages,
             max_child_tasks_per_plan: self.max_child_tasks_per_plan,
@@ -403,4 +415,14 @@ impl ExecutionTomlConfig {
         }
         Ok(())
     }
+}
+
+fn default_tree_auto_leaf() -> bool {
+    task_core::TreeLimits::default().auto_leaf
+}
+fn default_tree_auto_leaf_max_compactions() -> u32 {
+    task_core::TreeLimits::default().auto_leaf_max_compactions
+}
+fn default_tree_auto_leaf_max_continuations() -> u32 {
+    task_core::TreeLimits::default().auto_leaf_max_continuations
 }

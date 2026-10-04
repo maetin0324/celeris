@@ -355,3 +355,193 @@ fn fast_forward_source_with_dated_adrs_requests_nothing() {
         "merge base が target 先端の取り込みで依頼を出した"
     );
 }
+
+/// 許可リストの正本（scripts/dev/check-adr-numbers.sh も同じ file を読む）を一時 repo に写す。
+const ALLOWED_LIST: &str = "# 既存の重複\n0078-browser-execution-capability.md\n0078-ssh-master-persist-independent-of-daemon.md\n";
+
+/// `base` → target（`target_files`）と source（`source_edit`）に分け、source を `--no-ff` で衝突なしに merge する。
+fn merge_clean(
+    base: &[(&str, &str)],
+    target_files: &[(&str, &str)],
+    source_edit: impl FnOnce(&Path),
+) -> (tempfile::TempDir, ResolveContext) {
+    let tmp = new_repo();
+    let repo = tmp.path();
+    write(repo, "README.md", "base\n");
+    for (path, body) in base {
+        write(repo, path, body);
+    }
+    commit(repo, "base");
+    command(repo, &["branch", "source"]);
+    for (path, body) in target_files {
+        write(repo, path, body);
+    }
+    let target_sha = if target_files.is_empty() {
+        commit_empty_target(repo)
+    } else {
+        commit(repo, "target")
+    };
+    command(repo, &["checkout", "-q", "source"]);
+    source_edit(repo);
+    command(repo, &["add", "-A"]);
+    command(repo, &["commit", "-q", "-m", "source"]);
+    let source_sha = command(repo, &["rev-parse", "HEAD"]);
+    command(repo, &["checkout", "-q", "target"]);
+    let merge_base = command(repo, &["merge-base", "target", "source"]);
+    command(repo, &["merge", "--no-ff", "--no-edit", "source"]);
+    let ctx = ResolveContext {
+        target_branch: "target".into(),
+        target_sha,
+        source_branch: "source".into(),
+        source_sha,
+        merge_base: Some(merge_base),
+        generated_command: None,
+    };
+    (tmp, ctx)
+}
+
+/// 2026-10-04 本番（release c1b24fb6、task 01M42XH8AAW5RQRRJT43FFP8YP）の形: target は古く 0078 を持たず、
+/// 取り込み側が許可リストにある 0078 の 2 本（main で既に並んでいる）を持ち込む。merge は衝突なしで通る。
+/// 許可済みの重複なので依頼を出さず、どちらも動かさない。
+#[test]
+fn allowed_adr_duplicate_brought_in_by_source_requests_nothing() {
+    let (tmp, ctx) = merge_clean(&[], &[], |repo| {
+        write(repo, "scripts/dev/adr-allowed-duplicates.txt", ALLOWED_LIST);
+        write(
+            repo,
+            "agent-docs/adr/0078-browser-execution-capability.md",
+            "# ADR-0078: browser\n",
+        );
+        write(
+            repo,
+            "agent-docs/adr/0078-ssh-master-persist-independent-of-daemon.md",
+            "# ADR-0078: ssh master\n",
+        );
+    });
+    let repo = tmp.path();
+    assert!(
+        classify::classify(repo, &ctx.target_sha)
+            .unwrap()
+            .is_empty(),
+        "許可済みの重複を番号重複として拾った"
+    );
+    assert_eq!(
+        resolve(repo, &ctx).unwrap(),
+        Resolution::Resolved {
+            actions: Vec::new()
+        },
+        "許可済みの ADR 番号重複で依頼を出した"
+    );
+    assert!(
+        repo.join("agent-docs/adr/0078-browser-execution-capability.md")
+            .exists()
+    );
+    assert!(
+        repo.join("agent-docs/adr/0078-ssh-master-persist-independent-of-daemon.md")
+            .exists()
+    );
+}
+
+/// 両側に既にある重複（許可リストに無い）: target にも source にも同じ 2 本があり、取り込み側は旧
+/// `docs/adr/` から `agent-docs/adr/` へ移した（ADR-0128 の配置換え）・本文を変えただけ。新しく生じた
+/// 重複ではないので依頼を出さない。
+#[test]
+fn duplicate_already_on_both_sides_requests_nothing() {
+    let (tmp, ctx) = merge_clean(
+        &[
+            ("docs/adr/0090-alpha.md", "# ADR-0090: alpha\n"),
+            ("docs/adr/0090-beta.md", "# ADR-0090: beta\n"),
+            ("crates/task-core/migrations/0010_a.sql", "select 1;\n"),
+            ("crates/task-core/migrations/0010_b.sql", "select 2;\n"),
+        ],
+        &[("src/lib.rs", "// target\n")],
+        |repo| {
+            fs::create_dir_all(repo.join("agent-docs")).unwrap();
+            command(repo, &["mv", "docs/adr", "agent-docs/adr"]);
+            write(
+                repo,
+                "agent-docs/adr/0090-alpha.md",
+                "# ADR-0090: alpha\n\n追記\n",
+            );
+            write(
+                repo,
+                "crates/task-core/migrations/0010_b.sql",
+                "select 22;\n",
+            );
+        },
+    );
+    let repo = tmp.path();
+    assert!(
+        classify::classify(repo, &ctx.target_sha)
+            .unwrap()
+            .is_empty(),
+        "両側に既にある重複を拾った"
+    );
+    assert_eq!(
+        resolve(repo, &ctx).unwrap(),
+        Resolution::Resolved {
+            actions: Vec::new()
+        },
+        "両側に既にある重複で依頼を出した"
+    );
+    assert!(repo.join("agent-docs/adr/0090-alpha.md").exists());
+    assert!(repo.join("agent-docs/adr/0090-beta.md").exists());
+}
+
+/// 新しく生じた重複は従来どおり: 許可済みの組に取り込み側が 3 本目の 0078 を足したら日付名へ移し、
+/// 取り込み側同士が許可リストに無い同じ番号を足したら人に回す。
+#[test]
+fn new_duplicates_are_still_renamed_or_requested() {
+    let allowed = [
+        ("scripts/dev/adr-allowed-duplicates.txt", ALLOWED_LIST),
+        (
+            "agent-docs/adr/0078-browser-execution-capability.md",
+            "# ADR-0078: browser\n",
+        ),
+        (
+            "agent-docs/adr/0078-ssh-master-persist-independent-of-daemon.md",
+            "# ADR-0078: ssh master\n",
+        ),
+    ];
+    let (tmp, ctx) = merge_clean(&allowed, &[("src/lib.rs", "// target\n")], |repo| {
+        write(repo, "agent-docs/adr/0078-third.md", "# ADR-0078: third\n");
+    });
+    let repo = tmp.path();
+    let Resolution::Resolved { actions } = resolve(repo, &ctx).unwrap() else {
+        panic!("新しい 3 本目の 0078 を振り直さなかった");
+    };
+    assert!(actions.iter().any(|a| a.detail.contains("git mv")));
+    assert!(!repo.join("agent-docs/adr/0078-third.md").exists());
+    assert!(
+        repo.join("agent-docs/adr/0078-browser-execution-capability.md")
+            .exists()
+    );
+    assert!(
+        repo.join("agent-docs/adr/0078-ssh-master-persist-independent-of-daemon.md")
+            .exists()
+    );
+
+    let (tmp, ctx) = merge_clean(&allowed, &[("src/lib.rs", "// target\n")], |repo| {
+        write(repo, "agent-docs/adr/0091-one.md", "# ADR-0091: one\n");
+        write(repo, "agent-docs/adr/0091-two.md", "# ADR-0091: two\n");
+    });
+    let Resolution::NeedsHuman { request } = resolve(tmp.path(), &ctx).unwrap() else {
+        panic!("取り込み側同士の新しい重複を依頼にしなかった");
+    };
+    assert!(request.reason.contains("0091"), "{}", request.reason);
+}
+
+/// resolver と check-adr-numbers.sh は同じ正本を読む: repo の許可リストに本番の 0078 の組が載っている。
+#[test]
+fn repository_allowlist_is_the_single_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let allowed = classify::allowed_adr_duplicates(&root);
+    let pair = [
+        "agent-docs/adr/0078-browser-execution-capability.md".to_string(),
+        "docs/adr/0078-ssh-master-persist-independent-of-daemon.md".to_string(),
+    ];
+    assert!(classify::allowed_adr_group(&allowed, &pair), "{allowed:?}");
+    let script = fs::read_to_string(root.join("scripts/dev/check-adr-numbers.sh")).unwrap();
+    assert!(script.contains(classify::ALLOWED_ADR_DUPLICATES_FILE));
+    assert!(!script.contains("0078-browser-execution-capability.md"));
+}

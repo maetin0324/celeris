@@ -191,6 +191,12 @@ pub struct TreeLimits {
     pub enabled: bool,
     /// task の層数（1..=3、既定 3。U-R1）。
     pub max_depth: u32,
+    /// 深さ上限の compound leaf を判断待ちにせず実行する（既定 true）。
+    pub auto_leaf: bool,
+    /// 自動 leaf の回答以降に許容する compaction / context rollover（既定 2）。
+    pub auto_leaf_max_compactions: u32,
+    /// 自動 leaf の回答以降に許容する continuation（既定 2）。
+    pub auto_leaf_max_continuations: u32,
     /// 1 段階の unit 数（leaf + task。統合 WU と repair は数えない。既定 6）。
     pub max_units_per_stage: usize,
     /// 1 計画の段階の数（既定 5 = ADR-0074 の `max_phases`）。
@@ -229,6 +235,9 @@ impl Default for TreeLimits {
         TreeLimits {
             enabled: false,
             max_depth: DEFAULT_MAX_DEPTH,
+            auto_leaf: true,
+            auto_leaf_max_compactions: 2,
+            auto_leaf_max_continuations: 2,
             max_units_per_stage: 6,
             max_stages: 5,
             max_child_tasks_per_plan: 6,
@@ -253,6 +262,9 @@ impl TreeLimits {
         TreeLimits {
             enabled: true,
             max_depth: u32::MAX,
+            auto_leaf: true,
+            auto_leaf_max_compactions: u32::MAX,
+            auto_leaf_max_continuations: u32::MAX,
             max_units_per_stage: usize::MAX,
             max_stages: usize::MAX,
             max_child_tasks_per_plan: usize::MAX,
@@ -284,6 +296,8 @@ pub enum UnitDeclared {
 pub enum UnitGateAction {
     /// leaf と宣言されたが compound、子 task を持てる深さ → task に上げた。
     Promoted,
+    /// compound だが深さ上限なので leaf のまま実行し、実行中の回数を監視する。
+    AutoLeaf,
     /// leaf と宣言されたが compound、子 task を持てない深さ → 決定の要求（`leaf_too_large`）。
     Decision,
     /// task と宣言され atomic だが、構造上の理由があるので task のまま。R6-2 からは出さない（kind task の
@@ -310,3 +324,9 @@ mod r3b_tests;
 #[cfg(test)]
 #[path = "tree/tests.rs"]
 mod tests;
+
+/// Structured adapter status marker. Model text mentioning compaction is not a signal.
+pub const CONTEXT_COMPACTION_TOOL: &str = "context_compaction";
+
+/// Dispatcher-observed session rollover (distinct from an in-run adapter compaction).
+pub const CONTEXT_ROLLOVER_TOOL: &str = "context_rollover";

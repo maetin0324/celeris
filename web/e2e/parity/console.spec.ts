@@ -281,3 +281,56 @@ test("parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げ�
     await own.close();
   }
 });
+
+test("parity: / Console 360px で長い 1 行がページを広げず、種類が文字で分かる", async ({ page }) => {
+  const long = "y".repeat(2400);
+  initial = [
+    human("l1", long),
+    reply("l2", `前置き\n\`\`\`\n${long}\n\`\`\``),
+    {
+      ...progress(),
+      progress: { ...progress().progress, first: [{ seq: 1, at: "2026-01-01T00:00:00Z", text: long }] },
+    },
+  ];
+  await page.setViewportSize({ width: 360, height: 740 });
+  await page.goto(`${base}/`);
+  const conversation = page.getByRole("list", { name: "Console の会話" });
+  await expect(conversation.getByText("あなた", { exact: true })).toBeVisible();
+  await expect(conversation.getByText("返事", { exact: true })).toBeVisible();
+  await expect(conversation.getByText("作業中の run", { exact: true })).toBeVisible();
+  // 返事の ``` は等幅の code 面（CodeBlock）で出す。
+  await expect(page.getByRole("region", { name: "返事の code" })).toBeVisible();
+  const fits = () => page.evaluate(() => document.documentElement.scrollWidth);
+  expect(await fits()).toBeLessThanOrEqual(360);
+  // progress を開くと先頭・末尾の行は LogSurface、全行も LogSurface。
+  await page.getByRole("button", { name: /作業/ }).click();
+  await expect(page.getByRole("region", { name: "run の先頭と末尾の行" })).toBeVisible();
+  await page.getByRole("button", { name: /すべて見る/ }).click();
+  await expect(page.getByRole("region", { name: "run の全行" })).toContainText("line-5");
+  expect(await fits()).toBeLessThanOrEqual(360);
+});
+
+test("parity: / Console 追記の追従と『最新へ』", async ({ page }) => {
+  initial = Array.from({ length: 30 }, (_, i) => human(`f${i}`, `発言 ${i}`));
+  await page.goto(`${base}/`);
+  await expect(page.getByText("発言 29")).toBeVisible();
+  await expect.poll(() => daemon.consoleClients).toBeGreaterThan(0);
+  const gap = () => page.evaluate(() => document.documentElement.scrollHeight - window.scrollY - window.innerHeight);
+  // 開いた直後は末尾にいる。
+  await expect.poll(gap).toBeLessThanOrEqual(24);
+  // 上へ離れている間は追記で動かさず、「最新へ」を出す。
+  await page.evaluate(() => window.scrollTo(0, 0));
+  // scroll の event が届いてから追記する（2 frame 待つ）。
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  daemon.sendConsoleBlock(reply("f30", "追記 1"));
+  const latest = page.getByRole("button", { name: "最新へ" });
+  await expect(latest).toBeVisible();
+  expect(await page.evaluate(() => window.scrollY)).toBe(0);
+  await latest.click();
+  await expect.poll(gap).toBeLessThanOrEqual(24);
+  await expect(latest).toBeHidden();
+  // 末尾にいれば追記に合わせて末尾へ送る。
+  daemon.sendConsoleBlock(reply("f31", "追記 2\n".repeat(20)));
+  await expect(page.getByText("追記 2").first()).toBeVisible();
+  await expect.poll(gap).toBeLessThanOrEqual(24);
+});

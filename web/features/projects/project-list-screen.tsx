@@ -37,7 +37,7 @@ export const projectStatusTone: Record<ProjectStatus, BadgeTone> = {
 
 export function ProjectStatusBadge({ status }: { status: ProjectStatus }) {
   return (
-    <Badge tone={projectStatusTone[status]} data-status={status}>
+    <Badge tone={projectStatusTone[status]} data-status={status} className="whitespace-nowrap break-normal">
       {projectStatusLabels[status] ?? status}
     </Badge>
   );
@@ -152,7 +152,7 @@ function ProjectTable({ projects }: { projects: readonly Project[] }) {
                   {project.title}
                 </Link>
               </TableCell>
-              <TableCell>
+              <TableCell className="whitespace-nowrap">
                 <div className="flex flex-col gap-1">
                   <ProjectStatusBadge status={project.status} />
                   {project.archived_at ? <span className="text-muted-foreground">アーカイブ済み</span> : null}

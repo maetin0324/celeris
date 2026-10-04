@@ -66,7 +66,7 @@ const milestoneTones: Record<MilestoneStatus, BadgeTone> = {
 
 export function MilestoneBadge({ status }: { status: MilestoneStatus }) {
   return (
-    <Badge tone={milestoneTones[status] ?? "neutral"} data-status={status}>
+    <Badge tone={milestoneTones[status] ?? "neutral"} data-status={status} className="whitespace-nowrap break-normal">
       途中目標: {milestoneLabels[status] ?? status}
     </Badge>
   );
@@ -164,7 +164,6 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
       tabIndex={0}
       className="max-w-full overflow-auto rounded-md border border-border"
       data-testid="project-tree-frame"
-      style={{ maxHeight: "70vh" }}
     >
       <Table wrapperClassName="overflow-x-visible">
         <TableHeader>

@@ -1,5 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
-import type { ClusterView, DaemonSnapshot, DaemonView } from "../../api/generated/types";
+import type { ClusterView, DaemonSnapshot, DaemonView, ReleaseItem, Releases } from "../../api/generated/types";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
 // 実行系 ops（/clusters・/daemon）の状態表。状態と失敗理由が文字で読めること、403 で操作が無効になり理由が出ること、
@@ -154,6 +154,125 @@ test.describe("daemon", () => {
     await routeDaemon(page, 5_000);
     await page.goto(`${base}/daemon`);
     await expect(page.getByTestId("daemon-liveness")).toBeVisible();
+    expect(await overflow(page)).toBe(0);
+  });
+});
+
+const release = (over: Partial<ReleaseItem>): ReleaseItem => ({
+  sha12: "000000000000",
+  gate_ok: true,
+  is_current: false,
+  is_previous: false,
+  promoting: false,
+  built_at: "2026-10-03T00:00:00Z",
+  ref: "main",
+  ...over,
+});
+
+const releases: Releases = {
+  current: "cccccccccccc",
+  previous: "dddddddddddd",
+  running: { release: "cccccccccccc", role: "active", instance_id: "I1" },
+  instances: [],
+  items: [
+    release({ sha12: "eeeeeeeeeeee", ref: "refs/heads/a-very-long-branch-name-for-the-release-under-test" }),
+    release({ sha12: "cccccccccccc", is_current: true, promoted_at: "2026-10-02T00:00:00Z" }),
+    release({
+      sha12: "dddddddddddd",
+      is_previous: true,
+      promoted_at: "2026-10-01T00:00:00Z",
+      promote_failed: { failed_at: "2026-10-01T12:00:00Z", error: "promote.sh が exit 1 で終わりました" },
+    }),
+  ],
+};
+
+async function routeReleases(page: Page) {
+  await page.route("**/api/releases", (route) =>
+    route.request().method() === "GET" ? route.fulfill({ json: releases }) : route.fallback(),
+  );
+}
+
+test.describe("releases", () => {
+  test("昇格の確認表示に対象版・現在版・影響が出て、確定ボタンに動詞と対象が入る", async ({ page }) => {
+    await routeReleases(page);
+    await page.goto(`${base}/releases`);
+    await expect(page.getByRole("heading", { level: 1, name: "リリース" })).toBeVisible();
+    const table = page.getByRole("region", { name: "リリースの一覧" });
+    await expect(table.getByTestId("release-cccccccccccc")).toContainText("稼働中の版です");
+    await expect(table.getByTestId("release-dddddddddddd")).toContainText("promote.sh が exit 1 で終わりました");
+    await expect(table.getByRole("button", { name: "cccccccccccc を昇格する" })).toBeDisabled();
+
+    await table.getByRole("button", { name: "eeeeeeeeeeee を昇格する" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("対象版 eeeeeeeeeeee");
+    await expect(dialog).toContainText("現在版 cccccccccccc");
+    await expect(dialog).toContainText("影響: 本番の daemon が eeeeeeeeeeee に引き継がれ");
+    await expect(dialog.getByRole("button", { name: "eeeeeeeeeeee を昇格する", exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "戻る" }).click();
+    await expect(dialog).toHaveCount(0);
+
+    await table.getByRole("button", { name: "dddddddddddd に巻き戻す" }).click();
+    await expect(dialog).toContainText("前の版 dddddddddddd に巻き戻しますか");
+    await expect(dialog).toContainText("現在版 cccccccccccc");
+    await expect(dialog.getByRole("button", { name: "dddddddddddd に巻き戻す", exact: true })).toBeVisible();
+  });
+
+  test("昇格の結果を StatusBadge と文字で出す（進行中→失敗）", async ({ page }) => {
+    let promoted = false;
+    await page.route("**/api/releases", (route) => {
+      if (!promoted) return route.fulfill({ json: releases });
+      const failed: Releases = {
+        ...releases,
+        items: releases.items.map((item) =>
+          item.sha12 === "eeeeeeeeeeee"
+            ? { ...item, promote_failed: { failed_at: "2999-01-01T00:00:00Z", error: "gate が落ちました" } }
+            : item,
+        ),
+      };
+      return route.fulfill({ json: failed });
+    });
+    await page.route("**/api/releases/*/promote", (route) => {
+      promoted = true;
+      return route.fulfill({
+        status: 202,
+        json: { sha12: "eeeeeeeeeeee", log: "l", started_at: "2026-10-04T00:00:00Z", script_from: "current" },
+      });
+    });
+    await page.goto(`${base}/releases`);
+    await page.getByRole("button", { name: "eeeeeeeeeeee を昇格する" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "eeeeeeeeeeee を昇格する", exact: true }).click();
+    const failed = page.getByTestId("promote-failed");
+    await expect(failed).toContainText("失敗", { timeout: 15_000 });
+    await expect(failed).toContainText("eeeeeeeeeeee の昇格に失敗しました: gate が落ちました");
+  });
+
+  test("403 で昇格・巻き戻しを無効にし、理由を出す", async ({ page }) => {
+    await routeReleases(page);
+    await page.route("**/api/releases/*/promote", (route) =>
+      route.fulfill({ status: 403, json: { error: "release の昇格は許可されていません" } }),
+    );
+    await page.goto(`${base}/releases`);
+    await page.getByRole("button", { name: "eeeeeeeeeeee を昇格する" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "eeeeeeeeeeee を昇格する", exact: true }).click();
+    const alert = page.getByTestId("releases-denied");
+    await expect(alert).toContainText("権限がありません（403）");
+    await expect(alert).toContainText("release の昇格は許可されていません");
+    await expect(page.getByRole("button", { name: "eeeeeeeeeeee を昇格する" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "dddddddddddd に巻き戻す" })).toBeDisabled();
+  });
+
+  test("360px で横に溢れず、確認表示も幅に収まる", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await routeReleases(page);
+    await page.goto(`${base}/releases`);
+    await expect(page.getByTestId("release-eeeeeeeeeeee")).toBeVisible();
+    expect(await overflow(page)).toBe(0);
+    await page.getByRole("button", { name: "eeeeeeeeeeee を昇格する" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("現在版 cccccccccccc");
+    const box = await dialog.boundingBox();
+    expect(box && box.x >= 0 && box.x + box.width <= 360).toBe(true);
+    await expect(dialog.getByRole("button", { name: "eeeeeeeeeeee を昇格する", exact: true })).toBeInViewport();
     expect(await overflow(page)).toBe(0);
   });
 });

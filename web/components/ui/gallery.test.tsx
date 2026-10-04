@@ -16,6 +16,8 @@ const sections = [
   "Icon",
   "状態表示",
   "素の border",
+  "Notice と入力",
+  "ScrollTabs",
   "ConfirmDialog と Drawer",
 ];
 const states = [

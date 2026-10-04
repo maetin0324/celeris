@@ -68,6 +68,15 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div data-shell className="flex min-h-dvh flex-col bg-background text-foreground md:flex-row">
+      {/* skip link。Tab の最初の行き先で、focus したときだけ画面の上に出る（隠れている間も 44px の大きさは保つ）。
+          JS を使わない素の fragment link で、押すと main（tabIndex=-1）へ focus が移る。 */}
+      <a
+        href="#main"
+        data-skip-link
+        className="absolute top-2 left-4 z-20 inline-flex min-h-11 -translate-y-24 items-center rounded-md border border-border bg-surface px-4 text-body font-medium text-primary shadow-popover focus:translate-y-0"
+      >
+        本文へ移動
+      </a>
       <NotificationsWatcher unread={server.notificationsUnread} />
       <header className="relative flex flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-1 md:sticky md:top-0 md:h-dvh md:w-nav md:shrink-0 md:flex-col md:flex-nowrap md:items-stretch md:gap-3 md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-4">
         <Link
@@ -140,7 +149,7 @@ export function Shell({ children }: { children: ReactNode }) {
             celeris に接続できません。復旧すると自動で再取得します。
           </p>
         )}
-        <main id="main" className="min-w-0 flex-1 p-4 md:p-6">
+        <main id="main" tabIndex={-1} className="min-w-0 flex-1 p-4 focus:outline-none md:p-6">
           {children}
         </main>
         <aside data-console-slot aria-label="Console" className="border-t border-border" />

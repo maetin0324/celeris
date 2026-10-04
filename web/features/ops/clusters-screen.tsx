@@ -105,6 +105,41 @@ function StatusTable({
   );
 }
 
+function MobileStatusList({
+  items,
+  awaiting,
+  checkedAt,
+}: {
+  items: ClusterView[];
+  awaiting: Set<string>;
+  checkedAt: number;
+}) {
+  return (
+    <ul className="space-y-3 sm:hidden" aria-label="クラスタの状態">
+      {items.map((item) => {
+        const state = clusterConnection(item, awaiting.has(item.id));
+        const failure = clusterFailure(item);
+        const lost = item.stats?.last_24h.last_lost_at ?? item.stats?.since_start?.last_lost_at;
+        return (
+          <li key={item.id} className="min-w-0 space-y-2 rounded-lg border border-border bg-surface p-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <strong className="min-w-0 break-all">{item.id}</strong>
+              <Badge tone={state.tone}>{state.label}</Badge>
+            </div>
+            <p className="break-words">
+              <span className="text-muted-foreground">失敗理由: </span>
+              {failure ?? "なし"}
+            </p>
+            <p className="text-label text-muted-foreground">
+              最終確認: <Time value={new Date(checkedAt).toISOString()} /> ／ 最後の切断: <Time value={lost} />
+            </p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function ClusterCard({
   item,
   sender,
@@ -133,7 +168,7 @@ function ClusterCard({
       </div>
       <DataList
         items={[
-          { label: "host", value: <span className="break-all">{item.host}</span> },
+          { label: "接続先", value: <span className="break-all">{item.host}</span> },
           { label: "認証", value: item.auth ?? "manual" },
           {
             label: "使用中",
@@ -293,7 +328,10 @@ export function ClustersScreen() {
                   <p className="text-label text-muted-foreground">
                     最終確認はこの画面が状態を取得した時刻です。失敗理由は最後の切断の原因と転送のエラーです。
                   </p>
-                  <StatusTable items={items} awaiting={awaiting} checkedAt={query.dataUpdatedAt} />
+                  <MobileStatusList items={items} awaiting={awaiting} checkedAt={query.dataUpdatedAt} />
+                  <div className="hidden sm:block">
+                    <StatusTable items={items} awaiting={awaiting} checkedAt={query.dataUpdatedAt} />
+                  </div>
                 </>
               )}
             </section>

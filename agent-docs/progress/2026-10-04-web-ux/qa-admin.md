@@ -69,3 +69,17 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 - `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` / `check:boundaries` → exit 0（vitest 347 tests、lint warning 5 件は既存の states.spec.ts・styles.css）
 - `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/org.spec.ts e2e/parity/org.spec.ts` → 10 passed・1 skipped（WEB_SHOTS_OUT 無しの screenshot）
 - FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/org web/routes/org.* web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+
+### ops-runtime（clusters・daemon・releases）
+
+対象: `web/features/ops/clusters-screen.tsx`・`daemon-screen.tsx`・`releases-screen.tsx` と `web/e2e/admin/ops-runtime.spec.ts`。PC の表、昇格の確認ダイアログ、parity が見る h1・操作名・URL は維持した。
+
+- 2. [修正: `/daemon` の本文を運用者の語彙に整理した。「dispatcher の状態」→「実行管理の状態」、「event」→「履歴」、「poll」→「取得」、「tick」→「動作確認」。照合操作の見出し・説明・件数も日本語を主表示にした。parity が固定する操作の accessible name「replay を実行」と照合件数の英語表記は補助表示として残した]
+- 2. [残課題: h1「daemon」は parity が固定し、nav の「daemon」はこの葉の対象外であるため残る。h1 と nav を揃えるには parity と shell を含む別の変更が必要]
+- 3. [修正: `/releases` はスマホ幅で版・状態の直後に「問題・直近の失敗」を表示する縦の一覧に切り替えた。昇格・巻き戻しボタンはその判断材料の直後に置き、PC の表と確認ダイアログは維持した。360px の対象 e2e で問題欄と操作を確認した]
+- 4. [修正: `/clusters` はスマホ幅で接続状態と失敗理由を各クラスタの先頭に示す縦の一覧に切り替えた。最終確認と最後の切断も同じ項目内に示し、PC の表は維持した。操作カードの `host` ラベルは「接続先」にした]
+
+確認（2026-10-04、この WU branch）:
+- offline install は依存 tarball のローカル store 不足で停止したため、同じ lockfile の既存依存から実行ファイルを参照した。`tsc -b`・`biome check .`・`vitest run`・`vite build` は exit 0（347 tests、lint warning 5 件は既存箇所）。
+- `WEB_E2E_SCOPE=functional playwright test e2e/admin/ops-runtime.spec.ts e2e/parity/ops.spec.ts` は 19 passed。`mobile-audit --only` は `/clusters`・`/daemon`・`/releases` の各 4 幅で exit 0。
+- この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は後続の post-record 葉で行う。

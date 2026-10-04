@@ -4,7 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
-import { buttonClassName } from "../../components/ui/button";
+import { Button, buttonClassName } from "../../components/ui/button";
+import { StatusBadge } from "../../components/ui/status-badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
 import { type TaskListFilters, taskListPath, taskListQuery } from "./task-list-query";
 
@@ -15,7 +17,8 @@ const ORDERS = [
   ["created_desc", "作成が新しい順"],
 ] as const;
 
-const inputClass = "min-h-11 rounded border border-neutral-400 px-3 text-base";
+const inputClass =
+  "min-h-11 min-w-0 rounded-md border border-input bg-surface px-3 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 // 絞り込みの組合せを 1 つの文字列にする。extra（続き）はこの文字列と紐づく。
 function filterKey(filters: TaskListFilters): string {
@@ -105,14 +108,17 @@ export function TasksListScreen({
   }
 
   return (
-    <div data-screen="/tasks" className="flex flex-col gap-4">
-      <h1 tabIndex={-1} className="text-xl font-semibold break-words focus:outline-none">
+    <div data-screen="/tasks" className="flex min-w-0 flex-col gap-4">
+      <h1
+        tabIndex={-1}
+        className="break-words text-xl font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+      >
         タスク
       </h1>
 
       <form
         ref={formRef}
-        className="flex flex-wrap items-center gap-3"
+        className="flex min-w-0 flex-wrap items-center gap-3"
         onSubmit={applyFilters}
         data-testid="tasks-filter"
       >
@@ -124,7 +130,7 @@ export function TasksListScreen({
             aria-labelledby="tasks-q"
             defaultValue={q ?? ""}
             placeholder="タイトル・id"
-            className={`${inputClass} w-44`}
+            className={`${inputClass} w-44 max-w-full`}
           />
         </label>
         <label className="flex items-center gap-2 text-sm">
@@ -141,14 +147,14 @@ export function TasksListScreen({
           {STATUSES.map((s) => (
             <label
               key={s}
-              className={`${buttonClassName} relative min-h-12 cursor-pointer focus-within:ring-2 focus-within:ring-blue-600 ${status.includes(s) ? "bg-neutral-200 font-semibold" : ""}`}
+              className={`${buttonClassName} relative cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${status.includes(s) ? "bg-accent font-semibold" : ""}`}
             >
               <input
                 type="checkbox"
                 name="status"
                 value={s}
                 defaultChecked={status.includes(s)}
-                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
               />{" "}
               {s}
             </label>
@@ -169,9 +175,7 @@ export function TasksListScreen({
             ))}
           </select>
         </label>
-        <button type="submit" className={buttonClassName}>
-          絞り込み
-        </button>
+        <Button type="submit">絞り込み</Button>
       </form>
 
       <FetchFrame query={base}>{merged ? <TaskTable items={merged.items} total={merged.total} /> : null}</FetchFrame>
@@ -179,15 +183,9 @@ export function TasksListScreen({
 
       {merged && nextCursor !== null ? (
         <div className="flex justify-center">
-          <button
-            type="button"
-            className={buttonClassName}
-            data-testid="tasks-load-more"
-            onClick={() => void loadMore()}
-            disabled={loadingMore}
-          >
+          <Button type="button" data-testid="tasks-load-more" onClick={() => void loadMore()} disabled={loadingMore}>
             {loadingMore ? "読み込み中…" : "さらに読む"}
-          </button>
+          </Button>
         </div>
       ) : null}
     </div>
@@ -196,57 +194,81 @@ export function TasksListScreen({
 
 function TaskTable({ items, total }: { items: TaskSummary[]; total: number }) {
   return (
-    <div className="rounded border border-neutral-300">
-      <p className="border-b border-neutral-200 px-3 py-2 text-sm" data-testid="tasks-total">
+    <section aria-label="タスク一覧" className="min-w-0 border-y border-border bg-surface">
+      <p className="border-b border-border px-3 py-2 text-label text-muted-foreground" data-testid="tasks-total">
         {total} 件
       </p>
-      <div className="max-h-96 overflow-auto" data-testid="tasks-scroll">
-        <table className="w-full min-w-112 border-collapse text-sm">
-          <thead className="sticky top-0 bg-neutral-50 text-left">
-            <tr>
-              <th scope="col" className="px-3 py-2">
-                タイトル
-              </th>
-              <th scope="col" className="px-3 py-2">
-                状態
-              </th>
-              <th scope="col" className="px-3 py-2">
-                種別
-              </th>
-              <th scope="col" className="px-3 py-2">
-                担当
-              </th>
-              <th scope="col" className="px-3 py-2">
-                更新
-              </th>
-            </tr>
-          </thead>
-          <tbody>
+      <div className="max-h-96 min-w-0 overflow-y-auto" data-testid="tasks-scroll">
+        <Table className="block w-full sm:table sm:table-fixed" wrapperClassName="overflow-x-hidden">
+          <TableHeader className="hidden sm:table-header-group">
+            <TableRow>
+              <TableHead className="w-1/3">タスク</TableHead>
+              <TableHead>状態</TableHead>
+              <TableHead>担当</TableHead>
+              <TableHead>現在の run</TableHead>
+              <TableHead>更新</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody className="block sm:table-row-group">
             {items.map((item) => (
-              <tr key={item.id} className="border-t border-neutral-200" data-task-id={item.id}>
-                <td className="max-w-56 px-3 py-2">
-                  <Link to="/tasks/$id" params={{ id: item.id }} className="break-words underline underline-offset-2">
-                    {item.title}
+              <TableRow
+                key={item.id}
+                className="flex min-w-0 flex-wrap border-b border-border px-3 py-1 sm:table-row sm:border-0 sm:px-0 sm:py-0"
+                data-task-id={item.id}
+              >
+                <TableCell className="w-full min-w-0 px-0 py-0 sm:w-auto sm:px-2 sm:py-1">
+                  <Link
+                    to="/tasks/$id"
+                    params={{ id: item.id }}
+                    className="flex min-h-11 min-w-0 flex-col justify-center text-foreground underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                  >
+                    <span className="block max-w-full truncate font-medium" title={item.title}>
+                      {item.title}
+                    </span>
+                    <span className="block max-w-full truncate text-label text-muted-foreground" title={item.id}>
+                      {item.id}
+                    </span>
                   </Link>
-                </td>
-                <td className="px-3 py-2" data-status={item.status}>
-                  {item.status}
-                </td>
-                <td className="px-3 py-2">{item.kind}</td>
-                <td className="px-3 py-2">{item.assignee ?? "-"}</td>
-                <td className="px-3 py-2 text-xs text-neutral-500" title={item.updated_at}>
-                  {item.updated_at}
-                </td>
-              </tr>
+                </TableCell>
+                <TableCell
+                  className="flex w-1/2 min-w-0 items-center gap-1 px-0 py-1 sm:table-cell sm:w-auto sm:px-2"
+                  data-status={item.status}
+                >
+                  <span className="sr-only sm:hidden">状態 </span>
+                  <StatusBadge status={item.status} />
+                </TableCell>
+                <TableCell className="flex w-1/2 min-w-0 items-center gap-1 px-0 py-1 sm:table-cell sm:w-auto sm:px-2">
+                  <span className="shrink-0 text-label text-muted-foreground sm:hidden">担当</span>
+                  <span className="min-w-0 truncate" title={item.assignee ?? "担当なし"}>
+                    {item.assignee ?? "—"}
+                  </span>
+                </TableCell>
+                <TableCell
+                  className="flex w-1/2 min-w-0 items-center gap-1 px-0 py-1 text-label text-muted-foreground sm:table-cell sm:w-auto sm:px-2"
+                  title="一覧 API に現在の run 情報はありません"
+                >
+                  <span className="shrink-0 sm:hidden">run</span>
+                  <span>情報なし</span>
+                </TableCell>
+                <TableCell
+                  className="flex w-1/2 min-w-0 items-center gap-1 px-0 py-1 text-label text-muted-foreground sm:table-cell sm:w-auto sm:px-2"
+                  title={item.updated_at}
+                >
+                  <span className="shrink-0 sm:hidden">更新</span>
+                  <time dateTime={item.updated_at} className="min-w-0 truncate">
+                    {new Date(item.updated_at).toLocaleString("ja-JP", { dateStyle: "short", timeStyle: "short" })}
+                  </time>
+                </TableCell>
+              </TableRow>
             ))}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
         {items.length === 0 ? (
-          <p className="p-6 text-center text-sm text-neutral-500" role="status">
+          <p className="p-6 text-center text-label text-muted-foreground" role="status">
             条件に一致するタスクがありません
           </p>
         ) : null}
       </div>
-    </div>
+    </section>
   );
 }

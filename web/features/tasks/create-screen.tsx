@@ -5,16 +5,26 @@ import { taskKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
+import { Panel } from "../../components/ui/panel";
 
-const control = "min-h-11 w-full rounded border border-neutral-400 bg-white p-2";
+// 入力欄の枠は --color-input（区切りの border より濃い 3:1 以上の境界）。
+const control =
+  "min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+const fieldLabel = "block text-label font-medium text-foreground";
+const fieldHint = "mt-1 text-label text-muted-foreground";
 type CriterionType = "command" | "artifact_exists" | "reviewer" | "human";
 type Row = { id: number; type: CriterionType; value: string };
-const criterionTypes: { type: CriterionType; label: string }[] = [
-  { type: "command", label: "command" },
-  { type: "artifact_exists", label: "artifact_exists" },
-  { type: "reviewer", label: "reviewer" },
-  { type: "human", label: "human" },
+// option の値と文字は API の型名のまま（parity e2e が selectOption で選ぶ）。説明は入力欄の下に出す。
+const criterionTypes: { type: CriterionType; label: string; hint: string }[] = [
+  { type: "command", label: "command", hint: "コマンド。終了コード 0 で合格（例: cargo test）" },
+  { type: "artifact_exists", label: "artifact_exists", hint: "run が残すべき成果物の名前" },
+  { type: "reviewer", label: "reviewer", hint: "レビュアーが確かめる内容" },
+  { type: "human", label: "human", hint: "人が確かめる内容" },
 ];
+
+function criterionHint(type: CriterionType): string {
+  return criterionTypes.find((item) => item.type === type)?.hint ?? "";
+}
 
 export function buildCriteria(rows: readonly Row[]): CriterionSpec[] {
   return rows.flatMap(({ type, value }): CriterionSpec[] => {
@@ -53,91 +63,126 @@ export function TaskCreateScreen() {
   }
   return (
     <ScreenFrame title="タスクの作成" route="/tasks/new">
-      <form onSubmit={submit} className="max-w-3xl space-y-5" data-testid="new-task-form">
-        <div>
-          <label htmlFor="task-title" className="block font-medium">
-            名前
-          </label>
-          <input
-            id="task-title"
-            className={control}
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            aria-describedby={result?.status === 422 ? errorId : undefined}
-          />
-          {result?.status === 422 && <ActionResultView result={result} fieldId={errorId} />}
-        </div>
-        <div>
-          <label htmlFor="task-objective" className="block font-medium">
-            目的
-          </label>
-          <textarea
-            id="task-objective"
-            aria-label="目的"
-            className={control}
-            rows={4}
-            value={objective}
-            onChange={(event) => setObjective(event.target.value)}
-            aria-describedby={result?.status === 422 ? errorId : undefined}
-          />
-        </div>
-        <fieldset className="space-y-3">
-          <legend className="font-medium">受け入れ条件</legend>
-          {rows.map((row, index) => (
-            <div key={row.id} className="space-y-2 rounded border p-3" data-testid="criterion-row">
-              <label htmlFor={`criterion-type-${row.id}`} className="block">
-                条件 {index + 1} の種類
-              </label>
-              <select
-                id={`criterion-type-${row.id}`}
-                className={control}
-                value={row.type}
-                onChange={(event) =>
-                  setRows((current) =>
-                    current.map((item) =>
-                      item.id === row.id ? { ...item, type: event.target.value as CriterionType } : item,
-                    ),
-                  )
-                }
-              >
-                {criterionTypes.map((item) => (
-                  <option key={item.type} value={item.type}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-              <label htmlFor={`criterion-value-${row.id}`} className="block">
-                条件 {index + 1} の内容
+      <form onSubmit={submit} className="flex max-w-form min-w-0 flex-col gap-4" data-testid="new-task-form">
+        <Panel title="内容">
+          <div className="flex flex-col gap-4">
+            <div>
+              <label htmlFor="task-title" className={fieldLabel}>
+                名前
               </label>
               <input
-                id={`criterion-value-${row.id}`}
-                className={control}
-                value={row.value}
-                onChange={(event) =>
-                  setRows((current) =>
-                    current.map((item) => (item.id === row.id ? { ...item, value: event.target.value } : item)),
-                  )
-                }
+                id="task-title"
+                className={`${control} mt-1`}
+                value={title}
+                onChange={(event) => setTitle(event.target.value)}
+                aria-describedby={result?.status === 422 ? errorId : undefined}
+                aria-invalid={result?.status === 422 ? true : undefined}
               />
-              <Button
-                data-testid="remove-criterion"
-                onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}
+              {result?.status === 422 && (
+                <div className="mt-1 text-label">
+                  <ActionResultView result={result} fieldId={errorId} />
+                </div>
+              )}
+            </div>
+            <div>
+              <label htmlFor="task-objective" className={fieldLabel}>
+                目的
+              </label>
+              <textarea
+                id="task-objective"
+                aria-label="目的"
+                className={`${control} mt-1 text-body`}
+                rows={4}
+                value={objective}
+                onChange={(event) => setObjective(event.target.value)}
+                aria-describedby={result?.status === 422 ? errorId : undefined}
+              />
+            </div>
+          </div>
+        </Panel>
+        <Panel title="受け入れ条件">
+          <fieldset className="flex min-w-0 flex-col gap-3">
+            <legend className="sr-only">受け入れ条件</legend>
+            <p className={fieldHint}>空の内容の条件は送りません。条件が 0 件でも作成できます。</p>
+            {rows.map((row, index) => (
+              <div
+                key={row.id}
+                className="min-w-0 rounded-md border border-border bg-surface p-3"
+                data-testid="criterion-row"
               >
-                条件を削除
+                <div className="flex min-w-0 flex-col gap-3 md:flex-row md:items-start">
+                  <div className="md:w-48 md:shrink-0">
+                    <label htmlFor={`criterion-type-${row.id}`} className={fieldLabel}>
+                      条件 {index + 1} の種類
+                    </label>
+                    <select
+                      id={`criterion-type-${row.id}`}
+                      className={`${control} mt-1 font-mono`}
+                      value={row.type}
+                      onChange={(event) =>
+                        setRows((current) =>
+                          current.map((item) =>
+                            item.id === row.id ? { ...item, type: event.target.value as CriterionType } : item,
+                          ),
+                        )
+                      }
+                    >
+                      {criterionTypes.map((item) => (
+                        <option key={item.type} value={item.type}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <label htmlFor={`criterion-value-${row.id}`} className={fieldLabel}>
+                      条件 {index + 1} の内容
+                    </label>
+                    <input
+                      id={`criterion-value-${row.id}`}
+                      className={`${control} mt-1 ${row.type === "command" || row.type === "artifact_exists" ? "font-mono" : ""}`}
+                      value={row.value}
+                      aria-describedby={`criterion-hint-${row.id}`}
+                      onChange={(event) =>
+                        setRows((current) =>
+                          current.map((item) => (item.id === row.id ? { ...item, value: event.target.value } : item)),
+                        )
+                      }
+                    />
+                    <p id={`criterion-hint-${row.id}`} className={fieldHint}>
+                      {criterionHint(row.type)}
+                    </p>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="self-end md:mt-6 md:self-start"
+                    data-testid="remove-criterion"
+                    onClick={() => setRows((current) => current.filter((item) => item.id !== row.id))}
+                  >
+                    条件を削除
+                  </Button>
+                </div>
+              </div>
+            ))}
+            <div>
+              <Button
+                data-testid="add-criterion"
+                onClick={() => setRows((current) => [...current, { id: nextRow.current++, type: "human", value: "" }])}
+              >
+                条件を追加
               </Button>
             </div>
-          ))}
-          <Button
-            data-testid="add-criterion"
-            onClick={() => setRows((current) => [...current, { id: nextRow.current++, type: "human", value: "" }])}
-          >
-            条件を追加
-          </Button>
-        </fieldset>
-        <Button type="submit" disabled={sender.pending}>
-          タスクを作成
-        </Button>
-        {result?.status !== 422 && <ActionResultView result={result} />}
+          </fieldset>
+        </Panel>
+        <div className="flex flex-col gap-2">
+          <div>
+            <Button type="submit" variant="primary" disabled={sender.pending}>
+              タスクを作成
+            </Button>
+          </div>
+          {result?.status !== 422 && <ActionResultView result={result} />}
+        </div>
       </form>
     </ScreenFrame>
   );
@@ -168,15 +213,15 @@ export function PlanCreateScreen() {
   }
   return (
     <ScreenFrame title="計画の作成" route="/plans/new">
-      <form onSubmit={submit} className="max-w-3xl space-y-5" data-testid="new-plan-form">
+      <form onSubmit={submit} className="flex max-w-form min-w-0 flex-col gap-4" data-testid="new-plan-form">
         <div>
-          <label htmlFor="plan-goal" className="block font-medium">
+          <label htmlFor="plan-goal" className={fieldLabel}>
             目標
           </label>
           <textarea
             id="plan-goal"
             aria-label="目標"
-            className={control}
+            className={`${control} mt-1`}
             rows={5}
             value={goal}
             onChange={(event) => setGoal(event.target.value)}
@@ -184,9 +229,11 @@ export function PlanCreateScreen() {
           />
           {result?.status === 422 && <ActionResultView result={result} fieldId="plan-create-error" />}
         </div>
-        <Button type="submit" disabled={sender.pending}>
-          計画を作成
-        </Button>
+        <div>
+          <Button type="submit" variant="primary" disabled={sender.pending}>
+            計画を作成
+          </Button>
+        </div>
         {result?.status !== 422 && <ActionResultView result={result} />}
       </form>
     </ScreenFrame>

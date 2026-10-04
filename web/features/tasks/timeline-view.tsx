@@ -1,4 +1,5 @@
 import type { Timeline, TimelineItem } from "../../api/generated/types";
+import { Badge } from "../../components/ui/badge";
 import { formatAbsolute } from "../../lib/time";
 
 // /tasks/:id の timeline（P3-08、表示のみ）。`GET /tasks/:id/timeline` を時刻の順に 1 本で出す。
@@ -8,7 +9,7 @@ export function TimelineView({ timeline }: { timeline: Timeline }) {
   const items = timeline.items;
   if (items.length === 0) {
     return (
-      <p className="text-sm text-neutral-500" role="status" data-testid="timeline-empty">
+      <p className="text-label text-muted-foreground" role="status" data-testid="timeline-empty">
         まだ何も起きていません。
       </p>
     );
@@ -38,12 +39,12 @@ function itemKey(item: TimelineItem, index: number): string {
 function TimelineRow({ item }: { item: TimelineItem }) {
   const text = itemText(item);
   return (
-    <li className="min-w-0 rounded border border-neutral-200 p-2" data-testid={`timeline-${item.kind}`}>
-      <p className="text-xs text-neutral-500">
+    <li className="min-w-0 rounded-md border border-border bg-surface p-3" data-testid={`timeline-${item.kind}`}>
+      <p className="flex flex-wrap items-center gap-2 text-label text-muted-foreground">
         <time dateTime={item.at}>{formatAbsolute(item.at)}</time>
-        <span className="ml-2 rounded bg-neutral-100 px-1.5 py-0.5">{item.kind}</span>
+        <Badge tone="neutral">{item.kind}</Badge>
       </p>
-      <p className="mt-1 text-sm whitespace-pre-wrap break-words">{text}</p>
+      <p className="mt-1 whitespace-pre-wrap break-words text-label text-foreground">{text}</p>
     </li>
   );
 }

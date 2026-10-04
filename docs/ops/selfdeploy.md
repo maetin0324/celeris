@@ -31,6 +31,7 @@ release.sh <ref>  →  verify.sh <sha12>  →  promote.sh <sha12>        （戻�
   previous -> releases/<sha12>    直前の版（rollback 先）
   releases/<sha12>/     bin/{celeris,celerisctl}  gui/  manifest.json  gate.json  verify.json
                         changes.json      この版で何が変わるか（ADR-0041 D4。§2）
+                        notes.json / notes.md  この版に何が入ったか（task 単位。ADR 2026-10-04-release-notes。§4d）
                         promoted.json     昇格の記録 {promoted_at, mode, from}（ADR-0041 D3。§4。成功したときだけ）
                         promote_failed.json  直近の昇格が失敗した記録 {failed_at, error}（§4。失敗したときだけ。
                                           次の昇格の試みが始まると消える）
@@ -538,6 +539,21 @@ systemctl --user is-active celeris@<current の sha12>.service             # web
 
 `/` が 404 のままなら、その release の gateway が dotfiles の修正（`sendFile` に `root` を渡す。付記 (B)）を含んでいない。
 修正を含む release を作って昇格させるまでは、一時回避の override.conf を戻して使う。
+
+## 4d. リリースの説明と昇格の要約（ADR 2026-10-04-release-notes）
+
+`release.sh` は `<release>/notes.json`（機械可読）と `notes.md`（人が読む版）を `celerisctl release notes` で書く。
+`base..sha` の first-parent を、配送記録（`GET /deliveries`）と `celeris/<ULID>` の branch 名で Celeris の task
+ごとにまとめ、task に属さない直接の commit・DB migration と schema_version の変化・ADR・
+`config/celeris.example.toml` の変更（本番 config に足すものがないか人が見る）・gate で飛ばした段を載せる。
+決定的で、LLM は使わない。**生成が失敗してもリリースは作られる**（警告だけ。`notes.json` が無いリリースは説明なし）。
+
+昇格の前には「`current` から対象までに入る全リリース」の要約を見る: GUI「リリース」画面の各行、
+`GET /api/v1/releases/{sha12}/promotion-preview`、`celerisctl release preview <sha12>`（`promote.sh` がログにも出す）。
+同じ task は 1 回、schema は `current` と対象の値、方式（`live` / `stop-start`）は対象の `verify.json` から出る。
+`complete: false` のときは `current` まで notes で辿れていない（理由が `problem` に出る）。
+注意: `POST /promote` は `current` に同梱の `promote.sh` を走らせるので、ログ出力と `promoted.json` への
+「含まれるリリース・task」の記録は、この機能を含む版が `current` になった後の昇格から効く。
 
 ## 5. 戻す（`rollback.sh`。人だけ）
 

@@ -33,7 +33,9 @@ function BehindRow({ label, value }: { label: string; value: BehindTarget | Behi
   );
 }
 
-function WriteSetList({ title, items }: { title: string; items: ActualWriteSetView[] }) {
+function WriteSetList({ title, items: given }: { title: string; items: ActualWriteSetView[] | null | undefined }) {
+  // ADR-0130 より前の celeris・偽 celeris は欄ごと省略しうる（欠落で SSR が 500 になった。gui-gate-regression）。
+  const items = given ?? [];
   return (
     <div data-testid="actual-write-set-group">
       <p className="text-sm font-semibold uppercase tracking-wide text-fg-subtle lg:text-xs">{title}</p>
@@ -58,7 +60,7 @@ function WriteSetList({ title, items }: { title: string; items: ActualWriteSetVi
                 <span className="text-fg-subtle">{item.recorded_at}</span>
               </p>
               {item.reason && <p className="mt-1 text-fg-muted">{item.reason}</p>}
-              {item.paths.length > 0 && (
+              {(item.paths?.length ?? 0) > 0 && (
                 <ul className="mt-1.5 flex flex-wrap gap-1.5">
                   {item.paths.map((path) => (
                     <li key={path}>
@@ -83,7 +85,8 @@ function WriteSetList({ title, items }: { title: string; items: ActualWriteSetVi
  */
 export function WriteSetSection({ detail }: { detail: TaskDetail }) {
   const expected = detail.expected_write_paths ?? [];
-  const behind = detail.behind_target;
+  // 実 API は常に返すが、古い celeris・偽 celeris では欠落・null がありうる。
+  const behind = detail.behind_target ?? null;
   const repos = behind?.repos ?? [];
 
   return (

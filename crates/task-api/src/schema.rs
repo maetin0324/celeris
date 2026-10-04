@@ -144,6 +144,9 @@ pub struct ApiV1Schema {
     /// Phase 48（ADR-0040 D6）: リリース。`GET /releases` と `POST /releases/{sha12}/promote` の応答。
     pub releases: Releases,
     pub release_promote: ReleasePromoteAccepted,
+    /// ADR 2026-10-04-release-notes: `GET /releases/{sha12}/promotion-preview` と `GET /deliveries`。
+    pub release_promotion_preview: crate::types::ReleasePromotionPreview,
+    pub delivery_list: crate::types::DeliveryList,
     /// Phase 52（ADR-0043 D1 / D6）: 案件のリポジトリと、タスクの作業ツリーの閲覧。
     pub repo_list: crate::types::RepoList,
     pub repo_create: crate::types::RepoCreateBody,

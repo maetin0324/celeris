@@ -30,7 +30,7 @@ run ログ・Console は pre の #1〜#6 に新規指摘がなかったが、[�
 
 - `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`、`build`、`typecheck`、`lint`、`test`、`check:boundaries`、`check:parity`、`check:secrets` は exit 0。lint は既存の警告 5 件。
 - 指定の `e2e/a11y`、`e2e/states`、task / task detail / runs-files の parity e2e は 55 件通過。期待された失敗の表示 1 件を含み、h1・accessible name・URL の既存契約が保たれている。
-- ops 対象 9 route の mobile-audit は 360 / 390 / 412 / 1440px で通過。全画面 mobile-audit は `/projects/P1` の無名 textarea 2 箇所により exit 1。この画面は本 QA の許可範囲外。
+- ops 対象 9 route の mobile-audit は 360 / 390 / 412 / 1440px で通過。全画面 mobile-audit は `/projects/P1` の textarea 2 箇所を「無名」と誤判定して exit 1。Playwright の `getByRole("textbox", { name })` では「依頼文」「仕事の目的」「段階」を取得できる。監査スクリプトの名前判定は `input.labels` だけを読み、`textarea.labels` を読まない。この画面と監査スクリプトは本 QA の編集範囲外。
 - crates/、`web/api/generated/`、`web/server/`、DB schema、parity e2e に task 起点からの変更はない。
 
 ## 残課題
@@ -38,4 +38,4 @@ run ログ・Console は pre の #1〜#6 に新規指摘がなかったが、[�
 - #4 の作成フォームの条件種類は、見える選択肢に日本語を併記できる。操作を妨げる重大問題ではなく、次の画面改善で扱う。
 - screenshot script は API 応答や 1 秒後の loading / error 表示を待たない。post でも一部は空の skeleton を撮っている。代表画面以外の `/tasks/new`・changes・files・artifacts は基本状態の 4 幅だけで、8 状態の全組合せは撮れていない。状態の挙動は functional e2e とコードで補った。
 - 成果物の初期表示は全案件横断の最新順ではなく、最も最近更新された案件の中の成果物。changes の範囲外ファイルは API の判定値が無いため、表示されたファイルと対象ブランチを人が確認する。いずれも API 変更を伴う別件。
-- 全画面 mobile-audit の `/projects/P1` 失敗は重大な見落としではあるが、今回の ops 画面群の範囲外。全画面 gate を通すには projects 画面で textarea に名前を付ける修正が必要。
+- 全画面 mobile-audit の `/projects/P1` 失敗は監査側の false positive。監査スクリプトが `textarea.labels` を読むよう直すか、ops の受け入れ check を対象 9 route に絞る計画修正が必要。既存の textarea にアクセシブルな名前はある。

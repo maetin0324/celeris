@@ -26,11 +26,14 @@ task 一覧・graph・作成・task 詳細・changes・files・run ログ・Cons
 
 run ログ・Console は pre の #1〜#6 に新規指摘がなかったが、[修正記録](qa-ops/fix-runs-console.md) の R1〜R8 として取得失敗の再試行、終了状態と追跡の同期、loading 表示、長いログの「最新へ」、進捗の再試行を直した。stale では取得済みの内容を保持し、接続状態を shell で伝える。files は長い path と空・失敗の既存導線を維持した。
 
+全画面監査の再実行に必要なため、mobile-audit の名前判定も修正した。label と関連付いた textarea / select を無名と判定しないための修正で、画面の表示や操作は変えていない。
+
 ## 検証
 
 - `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`、`build`、`typecheck`、`lint`、`test`、`check:boundaries`、`check:parity`、`check:secrets` は exit 0。lint は既存の警告 5 件。
 - 指定の `e2e/a11y`、`e2e/states`、task / task detail / runs-files の parity e2e は 55 件通過。期待された失敗の表示 1 件を含み、h1・accessible name・URL の既存契約が保たれている。
-- ops 対象 9 route の mobile-audit は 360 / 390 / 412 / 1440px で通過。全画面 mobile-audit は `/projects/P1` の textarea 2 箇所を「無名」と誤判定して exit 1。Playwright の `getByRole("textbox", { name })` では「依頼文」「仕事の目的」「段階」を取得できる。監査スクリプトの名前判定は `input.labels` だけを読み、`textarea.labels` を読まない。この画面と監査スクリプトは本 QA の編集範囲外。
+- functional e2e 全体は 166 件通過、8 件 skip。初回は release 試験が worktree 内の pnpm store 参照先不足で失敗したため、既存の `/local/.pnpm-store` への一時リンクを置いて再実行した。配布物の offline install を含め exit 0。検査後にリンクを除去した。
+- ops 対象 9 route の mobile-audit は 360 / 390 / 412 / 1440px で通過。全画面の初回監査は `/projects/P1` の textarea 2 箇所を「無名」と誤判定した。Playwright の `getByRole("textbox", { name })` では「依頼文」「仕事の目的」「段階」を取得でき、画面側の label は有効。監査スクリプトが `input.labels` だけを読んでいたため、textarea と select の関連付けられた label も読むよう修正した。全 31 経路 × 4 幅の再監査は exit 0。
 - crates/、`web/api/generated/`、`web/server/`、DB schema、parity e2e に task 起点からの変更はない。
 
 ## 残課題
@@ -38,4 +41,3 @@ run ログ・Console は pre の #1〜#6 に新規指摘がなかったが、[�
 - #4 の作成フォームの条件種類は、見える選択肢に日本語を併記できる。操作を妨げる重大問題ではなく、次の画面改善で扱う。
 - screenshot script は API 応答や 1 秒後の loading / error 表示を待たない。post でも一部は空の skeleton を撮っている。代表画面以外の `/tasks/new`・changes・files・artifacts は基本状態の 4 幅だけで、8 状態の全組合せは撮れていない。状態の挙動は functional e2e とコードで補った。
 - 成果物の初期表示は全案件横断の最新順ではなく、最も最近更新された案件の中の成果物。changes の範囲外ファイルは API の判定値が無いため、表示されたファイルと対象ブランチを人が確認する。いずれも API 変更を伴う別件。
-- 全画面 mobile-audit の `/projects/P1` 失敗は監査側の false positive。監査スクリプトが `textarea.labels` を読むよう直すか、ops の受け入れ check を対象 9 route に絞る計画修正が必要。既存の textarea にアクセシブルな名前はある。

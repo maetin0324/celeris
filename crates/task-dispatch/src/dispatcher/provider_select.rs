@@ -1,6 +1,13 @@
 //! provider / account の選択と cooldown 判定（ADR-0012、ADR-0013、ADR-0024、ADR-0049）。ADR-0082 の L1。
 
 use super::*;
+use task_core::model_routing::{
+    ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection,
+    ProviderSelectionReason,
+};
+
+/// 選んだ (アダプタ, 設定行, プールのアカウント)。プールを使わない行ならアカウントは `None`。
+pub(super) type ProviderPick = (AdapterId, ProviderId, Option<(AccountAdapter, String)>);
 
 /// `ProviderThrottled.reason` に書く供給側失敗の種別（ADR-0013 D9）。供給側失敗でなければ `None`。
 pub(super) fn provider_failure_reason(e: &AdapterError) -> Option<&'static str> {
@@ -104,7 +111,6 @@ impl Dispatcher {
     /// `crate::sessions::decide_sticky` でそのセッションの `(adapter, account_id)` に留まれるかを試す
     /// （`sticky_provider`）。留まれれば ADR-0049 のランキングを走らせない（毎 run アカウントを
     /// 付け替えてセッションを退役させ続ける事故の修正）。留まれなければ、これまでどおり下のランキングへ。
-    #[allow(clippy::type_complexity)]
     pub(super) fn select_provider(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -112,15 +118,21 @@ impl Dispatcher {
         task_id: TaskId,
         full: &mut std::collections::HashSet<ProviderId>,
         sticky_session: Option<&NodeSession>,
-    ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
-        self.select_provider_for(hint, now, task_id, full, sticky_session, false)
+    ) -> Option<ProviderPick> {
+        self.select_provider_for(hint, now, task_id, full, sticky_session, false, false)
+            .0
     }
 
     /// `select_provider` に ADR-0089（Phase R6-5）の `cos` を足したもの。`cos = true`（CoS の対話 run）
     /// なら、プールのプロバイダの `concurrency` を見ず（`crate::capacity::provider_full`）、アカウントは
     /// 上限 +1 で走っている run の最も少ないものを選ぶ。この tick の満杯集合 `full` は非 CoS の判定
     /// なので、CoS は共有せず自分だけの集合で選ぶ（CoS の選択も `full` を汚さない）。
-    #[allow(clippy::type_complexity)]
+    ///
+    /// ADR-0132 付記 L2/L3: `prefer_local = true`（worker run の `dispatch_run` だけ）で lane が cheap、
+    /// CoS でなく、ローカルの行（`set_local_providers`）があれば、順位付けの前にローカルの行を設定順に
+    /// 見る（hint に合い・cooldown でなく・空きがあり・health が落ちていなければ選ぶ）。見送ったローカルの
+    /// 行は順位付けの fallback からも外す。付記 L8: 戻り値の第 2 要素が選択の理由と見た候補の記録。
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn select_provider_for(
         &mut self,
         hint: &task_core::WorkerHint,
@@ -129,29 +141,117 @@ impl Dispatcher {
         full: &mut std::collections::HashSet<ProviderId>,
         sticky_session: Option<&NodeSession>,
         cos: bool,
-    ) -> Option<(AdapterId, ProviderId, Option<(AccountAdapter, String)>)> {
+        prefer_local: bool,
+    ) -> (Option<ProviderPick>, ProviderSelection) {
         let mut cos_full = std::collections::HashSet::new();
         let full = if cos { &mut cos_full } else { full };
         if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos) {
-            return Some(sticky);
+            return (
+                Some(sticky),
+                ProviderSelection {
+                    reason: ProviderSelectionReason::Sticky,
+                    candidates: Vec::new(),
+                },
+            );
         }
         // 候補を列挙するための除外はこの選択だけ。満杯の集合へ候補自体を混ぜない。
         let mut visited = full.clone();
+        let mut candidates: Vec<ProviderCandidate> = Vec::new();
+        let mut local_full = false;
+        let mut local_down = false;
+        if prefer_local && !cos && hint.tier == Tier::Cheap && !self.local_providers.is_empty() {
+            let cooling: std::collections::HashSet<ProviderId> = self
+                .policy
+                .cooldowns(now)
+                .into_iter()
+                .map(|c| c.provider)
+                .collect();
+            let locals = self.local_providers.clone();
+            for spec in &locals {
+                let id = &spec.provider;
+                let candidate = |outcome, detail| ProviderCandidate {
+                    provider: id.clone(),
+                    kind: ProviderCandidateKind::Local,
+                    outcome,
+                    detail,
+                };
+                let adapter = self.policy.adapter_of(id);
+                if !self.policy.offers(id, hint)
+                    || self.account_pool_providers.contains(id)
+                    || adapter.is_none()
+                {
+                    candidates.push(candidate(ProviderCandidateOutcome::Unsupported, None));
+                    continue;
+                }
+                if cooling.contains(id) {
+                    local_down = true;
+                    visited.insert(id.clone());
+                    candidates.push(candidate(ProviderCandidateOutcome::Cooldown, None));
+                    continue;
+                }
+                if full.contains(id) || self.provider_full(id, cos) {
+                    local_full = true;
+                    full.insert(id.clone());
+                    visited.insert(id.clone());
+                    candidates.push(candidate(ProviderCandidateOutcome::Full, None));
+                    continue;
+                }
+                if let Err(reason) = self.local_provider_health(&spec.health, now) {
+                    local_down = true;
+                    visited.insert(id.clone());
+                    candidates.push(candidate(ProviderCandidateOutcome::Down, Some(reason)));
+                    continue;
+                }
+                let Some(adapter) = adapter else {
+                    continue;
+                };
+                candidates.push(candidate(ProviderCandidateOutcome::Selected, None));
+                self.warned_unroutable.remove(&task_id);
+                return (
+                    Some((adapter, id.clone(), None)),
+                    ProviderSelection {
+                        reason: ProviderSelectionReason::LocalPreferred,
+                        candidates,
+                    },
+                );
+            }
+        }
         let mut best_pool = None;
+        let mut best_pool_index = None;
         let mut best_score = f64::NEG_INFINITY;
         let mut fallback = None;
+        let mut fallback_index = None;
         for _ in 0..64 {
             match self.policy.select(hint, now, &visited) {
                 Selection::Picked { adapter, provider } => {
                     if !visited.insert(provider.clone()) {
                         break;
                     }
+                    let is_pool = self.account_pool_providers.contains(&provider);
+                    let kind = if is_pool {
+                        ProviderCandidateKind::Pool
+                    } else if self.local_providers.iter().any(|l| l.provider == provider) {
+                        ProviderCandidateKind::Local
+                    } else {
+                        ProviderCandidateKind::Other
+                    };
+                    let mut record = |outcome| {
+                        candidates.push(ProviderCandidate {
+                            provider: provider.clone(),
+                            kind,
+                            outcome,
+                            detail: None,
+                        });
+                        candidates.len() - 1
+                    };
                     if self.provider_full(&provider, cos) {
+                        record(ProviderCandidateOutcome::Full);
                         full.insert(provider);
                         continue;
                     }
-                    if self.account_pool_providers.contains(&provider) {
+                    if is_pool {
                         let Some(account_adapter) = AccountAdapter::parse(&adapter) else {
+                            record(ProviderCandidateOutcome::NoAccount);
                             full.insert(provider);
                             continue;
                         };
@@ -163,17 +263,24 @@ impl Dispatcher {
                         let Some(account_id) =
                             self.pick_account(account_adapter, requested_account.as_deref(), cos)
                         else {
+                            record(ProviderCandidateOutcome::NoAccount);
                             full.insert(provider);
                             continue;
                         };
+                        let index = record(ProviderCandidateOutcome::Available);
                         let score = self.account_score(account_adapter, &account_id);
                         if score > best_score {
                             best_score = score;
+                            best_pool_index = Some(index);
                             best_pool =
                                 Some((adapter, provider, Some((account_adapter, account_id))));
                         }
-                    } else if fallback.is_none() {
-                        fallback = Some((adapter, provider, None));
+                    } else {
+                        let index = record(ProviderCandidateOutcome::Available);
+                        if fallback.is_none() {
+                            fallback_index = Some(index);
+                            fallback = Some((adapter, provider, None));
+                        }
                     }
                 }
                 Selection::Busy => break,
@@ -188,11 +295,27 @@ impl Dispatcher {
                 }
             }
         }
-        let selected = best_pool.or(fallback);
+        let (selected, selected_index, pool_selected) = match best_pool {
+            Some(pool) => (Some(pool), best_pool_index, true),
+            None => (fallback, fallback_index, false),
+        };
+        if let Some(c) = selected_index.and_then(|i| candidates.get_mut(i)) {
+            c.outcome = ProviderCandidateOutcome::Selected;
+        }
         if selected.is_some() {
             self.warned_unroutable.remove(&task_id);
         }
-        selected
+        // ADR-0132 付記 L3: 前段で見送ったローカルの行が理由の先に立つ（満杯 > 不通・cooldown）。
+        let reason = if local_full {
+            ProviderSelectionReason::LocalFull
+        } else if local_down {
+            ProviderSelectionReason::LocalDown
+        } else if pool_selected {
+            ProviderSelectionReason::Pool
+        } else {
+            ProviderSelectionReason::Fallback
+        };
+        (selected, ProviderSelection { reason, candidates })
     }
 
     /// ADR-0054 Phase 67c: `sticky_session` があれば、`crate::sessions::decide_sticky` にかけて

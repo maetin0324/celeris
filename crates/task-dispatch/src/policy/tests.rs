@@ -348,3 +348,26 @@ fn default_select_is_derived_from_pick() {
         Selection::Busy
     );
 }
+
+/// ADR-0132 付記 L2 (a): `offers` は hint（tier・adapter の固定・専用アダプタの除外）だけを見て、
+/// cooldown は見ない。`adapter_of` は設定行のアダプタ名を返す。
+#[test]
+fn static_policy_offers_matches_hint_without_cooldown() {
+    let mut policy = StaticPolicy::new(
+        vec![
+            spec("qwen", "acp", &[Tier::Cheap], 1),
+            spec("research", "paperqa", &[Tier::Cheap], 1),
+        ],
+        Duration::from_secs(60),
+    );
+    assert!(policy.offers("qwen", &hint(Tier::Cheap, None)));
+    assert!(policy.offers("qwen", &hint(Tier::Cheap, Some("acp"))));
+    assert!(!policy.offers("qwen", &hint(Tier::Standard, None)));
+    assert!(!policy.offers("qwen", &hint(Tier::Cheap, Some("claude-code"))));
+    assert!(!policy.offers("research", &hint(Tier::Cheap, None)));
+    assert!(!policy.offers("missing", &hint(Tier::Cheap, None)));
+    policy.report("qwen".into(), &ProviderOutcome::AuthFailed);
+    assert!(policy.offers("qwen", &hint(Tier::Cheap, None)));
+    assert_eq!(policy.adapter_of("qwen").as_deref(), Some("acp"));
+    assert_eq!(policy.adapter_of("missing"), None);
+}

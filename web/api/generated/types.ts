@@ -2476,6 +2476,7 @@ export type LaneResolution = {
   "model_id"?: string;
   "provider"?: string | null;
   "reasoning_effort"?: string | null;
+  "selection"?: ProviderSelection | null;
 };
 
 export type Lease = {
@@ -3257,6 +3258,17 @@ export type ProposedMilestone = {
   "task_id": TaskId;
 };
 
+export type ProviderCandidate = {
+  "detail"?: string | null;
+  "kind": ProviderCandidateKind;
+  "outcome": ProviderCandidateOutcome;
+  "provider": string;
+};
+
+export type ProviderCandidateKind = "local" | "pool" | "other";
+
+export type ProviderCandidateOutcome = "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
+
 export type ProviderCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
@@ -3317,6 +3329,13 @@ export type ProviderLive = {
 };
   "tiers": Array<Tier>;
 };
+
+export type ProviderSelection = {
+  "candidates"?: Array<ProviderCandidate>;
+  "reason": ProviderSelectionReason;
+};
+
+export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
 
 export type ProviderStats = {
   "by_day": Array<DailyUsage>;

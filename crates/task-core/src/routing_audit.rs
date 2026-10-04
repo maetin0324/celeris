@@ -196,6 +196,7 @@ mod tests {
                 account: None,
                 model_id: "model-std".into(),
                 reasoning_effort: Some("medium".into()),
+                selection: None,
             },
             quota_reason: None,
             work_unit_id: None,

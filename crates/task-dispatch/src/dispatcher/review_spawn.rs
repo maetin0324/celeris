@@ -1155,6 +1155,8 @@ impl Dispatcher {
                 account: account.clone(),
                 model_id: review_model_id,
                 reasoning_effort: review_reasoning_effort,
+                // ADR-0132 付記 L8: reviewer run の記録には選択の理由を付けない。
+                selection: None,
             },
             quota_reason: None,
             work_unit_id: None,

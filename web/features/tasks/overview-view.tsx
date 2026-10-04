@@ -95,7 +95,7 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
                   to="/tasks/$id/runs/$runId"
                   params={{ id: task.id, runId: run.run_id }}
                   aria-label={`run ${run.run_id} を開く`}
-                  className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                  className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                 >
                   <ShortId id={run.run_id} />
                 </Link>
@@ -222,7 +222,7 @@ export function OverviewView({ detail, section }: { detail: TaskDetail; section?
                   <Link
                     to="/tasks/$id/runs/$runId"
                     params={{ id: task.id, runId: run.run_id }}
-                    className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                    className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                   >
                     <ShortId id={run.run_id} />
                   </Link>
@@ -360,7 +360,7 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
                 to="/tasks/$id"
                 params={{ id: task.parent_id }}
                 aria-label={`親 task ${task.parent_id} を開く`}
-                className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
               >
                 <ShortId id={task.parent_id} />
               </Link>
@@ -383,7 +383,7 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       to="/tasks/$id"
       params={{ id: unit.child_task_id }}
       aria-label={`WU ${unit.key} の子 task ${unit.child_task_id} を開く`}
-      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+      className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
     >
       <ShortId id={unit.child_task_id} />
     </Link>
@@ -393,7 +393,7 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       to="/tasks/$id/runs/$runId"
       params={{ id: taskId, runId }}
       aria-label={`WU ${unit.key} の run ${runId} を開く`}
-      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+      className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
     >
       <ShortId id={runId} />
     </Link>

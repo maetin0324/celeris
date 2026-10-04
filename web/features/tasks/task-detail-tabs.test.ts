@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { taskKeys } from "../../api/queries/keys";
 import { taskDetailPath, taskDetailQueryKey, taskTimelinePath, taskTimelineQueryKey } from "./task-detail-query";
-import { parseTaskDetailTab, TASK_DETAIL_TABS } from "./task-detail-tabs";
+import {
+  MOBILE_SECTIONS,
+  mobileSectionClass,
+  parseTaskDetailTab,
+  sectionForHash,
+  TASK_DETAIL_TABS,
+} from "./task-detail-tabs";
 
 describe("task detail tabs", () => {
   it("parses known tabs and falls back to overview", () => {
@@ -22,5 +28,19 @@ describe("task detail queries", () => {
     expect(taskTimelineQueryKey("T1").slice(0, 3)).toEqual(taskKeys.timelines("T1"));
     expect(taskDetailPath("T 1")).toBe("/api/tasks/T%201");
     expect(taskTimelinePath("T1")).toBe("/api/tasks/T1/timeline");
+  });
+});
+
+describe("task detail mobile sections", () => {
+  it("opens the section that holds the hash target and keeps desktop layout", () => {
+    expect(MOBILE_SECTIONS.map((section) => section.key)).toEqual(["summary", "decision", "execution", "tree"]);
+    expect(sectionForHash("#decision-panel")).toBe("decision");
+    expect(sectionForHash("execution-panel")).toBe("execution");
+    expect(sectionForHash("integration-repair")).toBe("tree");
+    expect(sectionForHash("")).toBeNull();
+    expect(sectionForHash(undefined)).toBeNull();
+    expect(mobileSectionClass("tree", "tree")).toContain("md:contents");
+    expect(mobileSectionClass("tree", "summary")).toBe("hidden md:contents");
+    expect(mobileSectionClass("tree", undefined)).not.toContain("hidden");
   });
 });

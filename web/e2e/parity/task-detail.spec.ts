@@ -538,12 +538,15 @@ test("parity: /tasks/:id header（状態・現在の run・次の操作）と木
     );
     await expect(next.getByRole("link", { name: "再試行できます" })).toBeVisible();
 
-    // 判断 panel の button 名は変えていない。
+    // 判断 panel の button 名は変えていない。スマホ幅では「次の操作」の link が判断の区画を開く。
+    await next.getByRole("link", { name: "承認を待っています" }).click();
+    await expect(page.locator("[data-section='decision']")).toHaveAttribute("aria-pressed", "true");
     const decision = page.getByTestId("decision-panel");
     for (const name of ["承認", "却下", "やり直す", "コメント"])
       await expect(decision.getByRole("button", { name, exact: true })).toBeVisible();
 
-    // 木: 親 task → この task → 段 → WU、WU に紐づく integration repair、子 task。
+    // 木: 親 task → この task → 段 → WU、WU に紐づく integration repair、子 task。スマホ幅では木の区画で見る。
+    await page.locator("[data-section='tree']").click();
     const tree = page.getByTestId("task-tree");
     await expect(tree.getByTestId("tree-parent").getByRole("link", { name: /^親 task P-9+ を開く$/ })).toBeVisible();
     await expect(tree.getByTestId("tree-self").first()).toContainText("実行中");
@@ -554,7 +557,12 @@ test("parity: /tasks/:id header（状態・現在の run・次の操作）と木
     const wu = tree.locator("[data-key='header-tree']");
     await expect(wu).toContainText("WU header-tree の題");
     await expect(wu.locator("[data-status='running']")).toBeVisible();
-    await expect(wu.getByRole("link", { name: "WU header-tree の run R-wu を開く" })).toBeVisible();
+    // スマホ幅では WU の key・run は Drawer（木の詳細）で開く。
+    await wu.getByRole("button", { name: "WU header-tree の詳細" }).click();
+    const wuDrawer = page.getByRole("dialog", { name: "WU WU header-tree の題" });
+    await expect(wuDrawer.getByRole("link", { name: "WU header-tree の run R-wu を開く" })).toBeVisible();
+    await wuDrawer.getByRole("button", { name: "閉じる" }).click();
+    await expect(wuDrawer).toHaveCount(0);
     const repair = tree.locator("[data-key='merge'] [data-testid='tree-integration-repair']");
     await expect(repair).toHaveAttribute("data-state", "scheduled");
     await expect(repair).toContainText("main から取り込み");
@@ -575,6 +583,118 @@ test("parity: /tasks/:id header（状態・現在の run・次の操作）と木
         expect(await overflow(page)).toBe(0);
         await page.screenshot({ path: path.join(shotDir, `task-detail-after-${width}.png`), fullPage: true });
       }
+    }
+  });
+});
+
+// スマホ幅（360〜412）の区画切り替えと Drawer（2026-10-04 screens-ops mobile）。長い ID・題の fixture で、
+// どの区画でも横 scroll が出ないこと、長い ID は省略・長い題は折り返し/省略して title 属性で全文が読めること、
+// 操作が 44×44 以上であることを見る。desktop（1440）は切り替えを出さず全区画を並べたまま。
+test("parity: /tasks/:id スマホ幅の区画 tab と Drawer、長い ID・題、desktop の配置", async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await withDetail(observedFixtures(), async (base) => {
+    await page.goto(`${base}/tasks/T1`);
+    await expect(page.getByRole("heading", { level: 1, name: "タスクの詳細 T1" })).toBeVisible();
+    await expect(page.locator("[data-tab='overview']")).toHaveAttribute("aria-current", "page");
+    const sections = page.getByTestId("mobile-sections");
+    await expect(sections).toBeVisible();
+    const tapSize = async (locator: import("@playwright/test").Locator) => {
+      const box = await locator.boundingBox();
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+    };
+
+    // 長い題: header は省略（全文は title 属性）、長い ID は 1 行で省略（全文は title 属性）。
+    const headerTitle = page.getByTestId("task-header").locator("p[title]").first();
+    await expect(headerTitle).toHaveAttribute("title", longTitle);
+    expect(await headerTitle.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    const runId = page.getByTestId("task-header-run").locator("[data-slot='short-id']");
+    await expect(runId).toHaveAttribute("title", `R-${"7".repeat(60)}`);
+    expect(await runId.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);
+
+    for (const width of [360, 390, 412]) {
+      await page.setViewportSize({ width, height: 800 });
+      // 上の 5 tab は 1 行で、溢れは nav の中だけで scroll する。
+      const tabBox = await page.locator("[data-tab='files']").boundingBox();
+      expect(tabBox?.height ?? 0).toBeLessThan(60);
+      const visible: [string, string, string][] = [
+        ["summary", "task-overview", "task-tree"],
+        ["decision", "decision-panel", "execution-panel"],
+        ["execution", "execution-panel", "decision-panel"],
+        ["tree", "task-tree", "decision-panel"],
+      ];
+      for (const [section, shown, hidden] of visible) {
+        const button = sections.locator(`[data-section='${section}']`);
+        await button.click();
+        await expect(button).toHaveAttribute("aria-pressed", "true");
+        await tapSize(button);
+        await expect(page.getByTestId(shown)).toBeVisible();
+        await expect(page.getByTestId(hidden)).toBeHidden();
+        expect(await overflow(page)).toBe(0);
+      }
+    }
+
+    // 木の詳細と integration repair は Drawer で開く。Drawer の中でも横に溢れない。
+    await page.setViewportSize({ width: 360, height: 800 });
+    const tree = page.getByTestId("task-tree");
+    await expect(tree.getByTestId("tree-self").locator("[title]").first()).toHaveAttribute("title", longTitle);
+    await expect(page.locator("#integration-repair")).toBeHidden();
+    const repairButton = tree
+      .getByTestId("tree-integration-repair")
+      .getByRole("button", { name: "integration repair" });
+    await tapSize(repairButton);
+    await repairButton.click();
+    const repairDrawer = page.getByRole("dialog");
+    await expect(repairDrawer.getByTestId("integration-repair")).toHaveAttribute("data-state", "scheduled");
+    await expect(repairDrawer).toContainText("a".repeat(40));
+    expect(await overflow(page)).toBe(0);
+    await page.keyboard.press("Escape");
+    await expect(repairDrawer).toHaveCount(0);
+    await expect(repairButton).toBeFocused();
+
+    const detailButton = tree.locator("[data-key='merge']").getByRole("button", { name: "WU merge の詳細" });
+    await tapSize(detailButton);
+    await detailButton.click();
+    const wuDrawer = page.getByRole("dialog", { name: "WU WU merge の題" });
+    await expect(wuDrawer).toContainText(`WU-merge-${"x".repeat(40)}`);
+    expect(await overflow(page)).toBe(0);
+    await page.keyboard.press("Escape");
+
+    // header の「途中確認」の link は実行の区画を開く。
+    await page.getByRole("link", { name: "途中確認の決定を待っています" }).click();
+    await expect(sections.locator("[data-section='execution']")).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("execution-panel")).toBeVisible();
+
+    // desktop（1440）: 区画の切り替えは出さず、判断・実行・概要・木・integration repair を並べる。WU の run は行に出る。
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(sections).toBeHidden();
+    for (const id of ["decision-panel", "execution-panel", "task-overview", "task-tree"])
+      await expect(page.getByTestId(id)).toBeVisible();
+    await expect(page.locator("#integration-repair")).toBeVisible();
+    await expect(
+      tree.locator("[data-key='header-tree']").getByRole("link", { name: "WU header-tree の run R-wu を開く" }),
+    ).toBeVisible();
+    await expect(tree.getByRole("button", { name: "WU header-tree の詳細" })).toBeHidden();
+    expect(await overflow(page)).toBe(0);
+
+    // 記録用の screenshot（TASK_DETAIL_SHOT_DIR を渡したときだけ）。スマホ 3 幅は区画ごと、desktop は全体。
+    const shotDir = process.env.TASK_DETAIL_SHOT_DIR;
+    if (shotDir) {
+      for (const width of [360, 390, 412]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const section of ["summary", "decision", "tree"]) {
+          await sections.locator(`[data-section='${section}']`).click();
+          await page.screenshot({
+            path: path.join(shotDir, `task-detail-mobile-${section}-${width}.png`),
+            fullPage: true,
+          });
+        }
+      }
+      await tree.locator("[data-key='merge']").getByRole("button", { name: "WU merge の詳細" }).click();
+      await page.screenshot({ path: path.join(shotDir, "task-detail-mobile-drawer-412.png") });
+      await page.keyboard.press("Escape");
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.screenshot({ path: path.join(shotDir, "task-detail-mobile-after-1440.png"), fullPage: true });
     }
   });
 });

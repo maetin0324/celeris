@@ -5,28 +5,31 @@ import type { Action, RunSummary, TaskDetail, TaskExecutionView, WorkUnitView } 
 import { Badge } from "../../components/ui/badge";
 import { buttonVariants } from "../../components/ui/button";
 import { DataList, type DataListItem } from "../../components/ui/data-list";
+import { Drawer } from "../../components/ui/drawer";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { executionQuery } from "./execution-panel";
 import { integrationRepairDisplay, integrationRepairTone } from "./integration-repair";
 import { IntegrationRepairPanel } from "./integration-repair-panel";
 import { taskDetailQuery } from "./task-detail-query";
+import { type MobileSection, mobileSectionClass } from "./task-detail-tabs";
 
 // /tasks/:id の概要（P3-08）と観測性の header・木（2026-10-04 screens-ops）。
 // 長時間の task で「いまどうなっているか・次に何をするか」を header で一目に、親子 task・段・WU・
 // main から取り込んだ integration repair を 1 本の木で示す。長い ID は等幅で省略し title 属性で全文を残す。
 // 枠の中で折り返し・省略して、ページ全体の横溢れを出さない（S3）。
+// スマホ幅では区画（概要・木）を切り替え、WU の詳細と integration repair は Drawer で開く（desktop は inline）。
 
 const card = "min-w-0 rounded-lg border border-border bg-surface p-4";
 const heading = "text-section font-semibold text-foreground";
 const textLink = "break-words text-primary underline underline-offset-2";
 
 /** 長い ID を等幅で 1 行に省略する。全文は title 属性（hover・長押し）と読み上げで読める。 */
-export function ShortId({ id }: { id: string }) {
+export function ShortId({ id, className = "" }: { id: string; className?: string }) {
   return (
     <code
       title={id}
       data-slot="short-id"
-      className="inline-block max-w-full truncate align-bottom font-mono text-label"
+      className={`inline-block max-w-full truncate align-bottom font-mono text-label ${className}`}
     >
       {id}
     </code>
@@ -132,7 +135,8 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
   );
 }
 
-export function OverviewView({ detail }: { detail: TaskDetail }) {
+/** section を渡すとスマホ幅でその区画だけを出す（desktop は全部）。渡さなければ全部を出す。 */
+export function OverviewView({ detail, section }: { detail: TaskDetail; section?: MobileSection }) {
   const task = detail.task;
   const facts: DataListItem[] = [
     { label: "状態", value: <span data-status={task.status}>{task.status}</span> },
@@ -148,81 +152,90 @@ export function OverviewView({ detail }: { detail: TaskDetail }) {
     { label: "更新", value: task.updated_at },
   );
   return (
-    <div className="flex flex-col gap-4" data-testid="task-overview">
-      <section className={card}>
-        <h2 className={`${heading} break-words`}>{task.title}</h2>
-        <DataList className="mt-2" items={facts} />
-      </section>
-
-      {task.objective ? (
+    <div className="flex min-w-0 flex-col gap-4" data-testid="task-overview">
+      <div className={mobileSectionClass("summary", section)}>
         <section className={card}>
-          <h2 className={heading}>目的</h2>
-          <p className="mt-1 whitespace-pre-wrap break-words text-label">{task.objective}</p>
+          <h2 className={`${heading} break-words`}>{task.title}</h2>
+          <DataList className="mt-2" items={facts} />
         </section>
-      ) : null}
 
-      {detail.failure ? (
-        <section
-          className="min-w-0 rounded-lg border border-destructive bg-danger p-4 text-danger-foreground"
-          role="alert"
-        >
-          <h2 className="text-section font-semibold">失敗</h2>
-          <p className="mt-1 break-words text-label">
-            {detail.failure.class}: {detail.failure.reason}
-          </p>
-        </section>
-      ) : null}
+        {task.objective ? (
+          <section className={card}>
+            <h2 className={heading}>目的</h2>
+            <p className="mt-1 whitespace-pre-wrap break-words text-label">{task.objective}</p>
+          </section>
+        ) : null}
 
-      {detail.latest_question ? (
-        <section className="min-w-0 rounded-lg border border-border bg-warning p-4 text-warning-foreground">
-          <h2 className="text-section font-semibold">質問待ち</h2>
-          <p className="mt-1 whitespace-pre-wrap break-words text-label">{detail.latest_question}</p>
-        </section>
-      ) : null}
+        {detail.failure ? (
+          <section
+            className="min-w-0 rounded-lg border border-destructive bg-danger p-4 text-danger-foreground"
+            role="alert"
+          >
+            <h2 className="text-section font-semibold">失敗</h2>
+            <p className="mt-1 break-words text-label">
+              {detail.failure.class}: {detail.failure.reason}
+            </p>
+          </section>
+        ) : null}
 
-      <TaskTree detail={detail} />
+        {detail.latest_question ? (
+          <section className="min-w-0 rounded-lg border border-border bg-warning p-4 text-warning-foreground">
+            <h2 className="text-section font-semibold">質問待ち</h2>
+            <p className="mt-1 whitespace-pre-wrap break-words text-label">{detail.latest_question}</p>
+          </section>
+        ) : null}
+      </div>
 
-      <IntegrationRepairPanel view={detail.integration_repair} anchorId="integration-repair" />
+      <div className={mobileSectionClass("tree", section)} id="task-tree">
+        <TaskTree detail={detail} />
+      </div>
 
-      <RelatedTasks title="依存" items={detail.dependencies} />
-      <RelatedTasks title="依存元" items={detail.dependents} />
+      {/* スマホ幅では木の行から Drawer で開く（同じ id を 2 つ作らないよう inline は desktop だけ）。 */}
+      <div className="hidden md:contents">
+        <IntegrationRepairPanel view={detail.integration_repair} anchorId="integration-repair" />
+      </div>
 
-      {detail.criteria.length > 0 ? (
-        <section className={card}>
-          <h2 className={heading}>受け入れ条件（{detail.criteria.length}）</h2>
-          <ul className="mt-2 flex flex-col gap-2">
-            {detail.criteria.map((criterion) => (
-              <li key={criterion.idx} className="min-w-0 text-label">
-                <span className="font-medium">{criterion.idx}: </span>
-                <span className="break-words">{criterion.text}</span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+      <div className={mobileSectionClass("summary", section)}>
+        <RelatedTasks title="依存" items={detail.dependencies} />
+        <RelatedTasks title="依存元" items={detail.dependents} />
 
-      {detail.runs.length > 0 ? (
-        <section className={card}>
-          <h2 className={heading}>run（{detail.runs.length}）</h2>
-          <ul className="mt-2 flex flex-col gap-1">
-            {detail.runs.map((run) => (
-              <li key={run.run_id} className="flex min-w-0 flex-wrap items-center gap-x-2 text-label">
-                <Link
-                  to="/tasks/$id/runs/$runId"
-                  params={{ id: task.id, runId: run.run_id }}
-                  className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
-                >
-                  <ShortId id={run.run_id} />
-                </Link>
-                <StatusBadge status={runStatus(run)} />
-                <span className="min-w-0 break-words text-muted-foreground">
-                  {run.adapter} / {run.model}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
+        {detail.criteria.length > 0 ? (
+          <section className={card}>
+            <h2 className={heading}>受け入れ条件（{detail.criteria.length}）</h2>
+            <ul className="mt-2 flex flex-col gap-2">
+              {detail.criteria.map((criterion) => (
+                <li key={criterion.idx} className="min-w-0 text-label">
+                  <span className="font-medium">{criterion.idx}: </span>
+                  <span className="break-words">{criterion.text}</span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+
+        {detail.runs.length > 0 ? (
+          <section className={card}>
+            <h2 className={heading}>run（{detail.runs.length}）</h2>
+            <ul className="mt-2 flex flex-col gap-1">
+              {detail.runs.map((run) => (
+                <li key={run.run_id} className="flex min-w-0 flex-wrap items-center gap-x-2 text-label">
+                  <Link
+                    to="/tasks/$id/runs/$runId"
+                    params={{ id: task.id, runId: run.run_id }}
+                    className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                  >
+                    <ShortId id={run.run_id} />
+                  </Link>
+                  <StatusBadge status={runStatus(run)} />
+                  <span className="min-w-0 break-words text-muted-foreground">
+                    {run.adapter} / {run.model}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -262,9 +275,20 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
   const repairNode = repairDisplay ? (
     <li className={nodeRow} data-testid="tree-integration-repair" data-state={repairDisplay.state}>
       <span className={kindLabel}>main から取り込み</span>
-      <a href="#integration-repair" className={textLink}>
+      <a href="#integration-repair" className={`hidden md:inline ${textLink}`}>
         integration repair
       </a>
+      <Drawer
+        title={repairDisplay.heading}
+        description="main から取り込んだときの修復の状況"
+        trigger={
+          <button type="button" className={`inline-flex min-h-11 items-center md:hidden ${textLink}`}>
+            integration repair
+          </button>
+        }
+      >
+        <IntegrationRepairPanel view={repair} />
+      </Drawer>
       <Badge tone={integrationRepairTone(repairDisplay.tone)}>{repairDisplay.stateLabel}</Badge>
     </li>
   ) : null;
@@ -353,33 +377,63 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
 
 function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: WorkUnitView; repairNode: ReactNode }) {
   const runId = unit.running_run_id ?? unit.last_run_id ?? null;
+  const title = unit.spec.title || unit.key;
+  const childLink = unit.child_task_id ? (
+    <Link
+      to="/tasks/$id"
+      params={{ id: unit.child_task_id }}
+      aria-label={`WU ${unit.key} の子 task ${unit.child_task_id} を開く`}
+      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+    >
+      <ShortId id={unit.child_task_id} />
+    </Link>
+  ) : null;
+  const runLink = runId ? (
+    <Link
+      to="/tasks/$id/runs/$runId"
+      params={{ id: taskId, runId }}
+      aria-label={`WU ${unit.key} の run ${runId} を開く`}
+      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+    >
+      <ShortId id={runId} />
+    </Link>
+  ) : null;
   return (
     <li className="min-w-0" data-testid="tree-work-unit" data-key={unit.key}>
       <div className={nodeRow}>
         <span className={kindLabel}>WU</span>
-        <span className="min-w-0 break-words font-medium text-foreground">{unit.spec.title || unit.key}</span>
+        <span className="min-w-0 break-words font-medium text-foreground">{title}</span>
         <StatusBadge status={unit.status} />
-        <ShortId id={unit.key} />
-        {unit.child_task_id ? (
-          <Link
-            to="/tasks/$id"
-            params={{ id: unit.child_task_id }}
-            aria-label={`WU ${unit.key} の子 task ${unit.child_task_id} を開く`}
-            className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
-          >
-            <ShortId id={unit.child_task_id} />
-          </Link>
-        ) : null}
-        {runId ? (
-          <Link
-            to="/tasks/$id/runs/$runId"
-            params={{ id: taskId, runId }}
-            aria-label={`WU ${unit.key} の run ${runId} を開く`}
-            className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
-          >
-            <ShortId id={runId} />
-          </Link>
-        ) : null}
+        {/* スマホ幅では key・子 task・run を Drawer に移し、行は題と状態だけにする。 */}
+        <span className="hidden min-w-0 max-w-full flex-wrap items-center gap-x-2 md:inline-flex">
+          <ShortId id={unit.key} />
+          {childLink}
+          {runLink}
+        </span>
+        <Drawer
+          title={`WU ${title}`}
+          description="WU の key・子 task・run"
+          trigger={
+            <button
+              type="button"
+              aria-label={`WU ${unit.key} の詳細`}
+              className={`${buttonVariants({ variant: "ghost", size: "sm" })} md:hidden`}
+            >
+              詳細
+            </button>
+          }
+        >
+          <DataList
+            items={[
+              { label: "状態", value: <StatusBadge status={unit.status} /> },
+              { label: "key", value: <span className="break-all font-mono">{unit.key}</span> },
+              { label: "段", value: <span className="break-all">{unit.phase ?? unit.spec.phase ?? "なし"}</span> },
+              { label: "ID", value: <span className="break-all font-mono">{unit.id}</span> },
+              { label: "子 task", value: childLink ?? <span className="text-muted-foreground">なし</span> },
+              { label: "run", value: runLink ?? <span className="text-muted-foreground">まだありません</span> },
+            ]}
+          />
+        </Drawer>
       </div>
       {repairNode ? <ul className={branch}>{repairNode}</ul> : null}
     </li>

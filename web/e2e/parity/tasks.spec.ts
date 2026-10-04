@@ -96,6 +96,35 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
   }
 });
 
+test("parity: /tasks の長い名前と ID は全文を保持し、360px で横に溢れない", async ({ page }) => {
+  const id = `T${"1234567890".repeat(5)}`;
+  const title = "非常に長いタスク名と作業内容".repeat(6);
+  const h = harness({
+    "/api/v1/tasks": { items: [task(id, title)], total: 1, next_cursor: null, counts_by_status: { ready: 1 } },
+  });
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/tasks`);
+    const row = page.locator("[data-task-id]");
+    await expect(row).toBeVisible();
+    await expect(row.locator(`[title="${title}"]`)).toBeVisible();
+    await expect(row.locator(`[title="${id}"]`)).toBeVisible();
+    await expect(row.getByText("情報なし")).toBeVisible();
+    expect(await row.locator(`[title="${title}"]`).evaluate((el) => getComputedStyle(el).textOverflow)).toBe(
+      "ellipsis",
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
+      0,
+    );
+    expect(await page.locator("[data-testid='tasks-scroll']").evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(
+      0,
+    );
+  } finally {
+    await h.close(gateway);
+  }
+});
+
 test("parity: /graph root・depth", async ({ page }) => {
   const calls: string[] = [];
   const graph = {

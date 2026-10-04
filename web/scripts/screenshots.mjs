@@ -43,7 +43,6 @@ try {
               });
               screenshotCount += 1;
             } finally {
-              if (state.key === "loading") gateway.daemon.releaseHeld();
               await page.close();
             }
           }

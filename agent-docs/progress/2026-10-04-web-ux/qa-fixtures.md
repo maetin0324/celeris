@@ -71,4 +71,4 @@ rich データを使う 360/390/412/1440px の監査で、`/tasks`・`/graph`・
 - `corepack pnpm@12.6.0 -C web e2e e2e/states/`: 31 件（`long-text /inbox` は期待どおりの失敗）、exit 0
 - `corepack pnpm@12.6.0 -C web e2e`: 158 passed・8 skipped、exit 0
 - `typecheck`・`lint`・`test`・`check:boundaries`・`check:parity`: すべて exit 0
-- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: cache に `statuses@2.0.2` が無く失敗。依存未導入のため screenshot 実行は未確認
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: `ERR_PNPM_NO_OFFLINE_TARBALL`。`@radix-ui/react-accessible-icon@1.1.15` の tarball が local store に無い。指定により network install は行わないため、screenshot の実撮影は未確認

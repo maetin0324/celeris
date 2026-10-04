@@ -106,9 +106,105 @@ test.describe("width: 360", () => {
     await expectNoHorizontalScroll(page);
   });
 
+  test("/org/secretary が横 scroll なく読める", async ({ page }) => {
+    await page.goto(`${gateway.base}/org/secretary`);
+    await expect(page).toHaveURL(/\/org\/cos$/);
+    await expect(page.getByRole("heading", { level: 1, name: "組織の人 cos" })).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+
+  test("/org の skill 欄と確認ダイアログが横 scroll なく読める", async ({ page }) => {
+    await page.goto(`${gateway.base}/org?selected=ui-ux`);
+    await page.getByRole("button", { name: "frontend-design を外す" }).click();
+    await expect(page.getByRole("alertdialog")).toBeVisible();
+    await expectNoHorizontalScroll(page);
+  });
+
   test("/org/cos が横 scroll なく読める", async ({ page }) => {
     await page.goto(`${gateway.base}/org/cos`);
     await expect(page.getByRole("heading", { level: 1, name: "組織の人 cos" })).toBeVisible();
     await expectNoHorizontalScroll(page);
+  });
+});
+
+type Mutation = { method: string; url: string };
+async function routeMutations(page: import("@playwright/test").Page, status: number, body: unknown = {}) {
+  const calls: Mutation[] = [];
+  await page.route("**/api/org/**", async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") return route.continue();
+    calls.push({ method: request.method(), url: request.url() });
+    await route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  });
+  return calls;
+}
+
+test.describe("skill の操作", () => {
+  test("外す前に確認ダイアログが影響（届かなくなる担当）を示し、戻ると送らない", async ({ page }) => {
+    const calls = await routeMutations(page, 200);
+    await page.goto(`${gateway.base}/org?selected=ui-ux`);
+    const skills = page.getByRole("region", { name: "担当の skill" });
+    await expect(skills.getByText("CoS から継承")).toBeVisible();
+    await skills.getByRole("button", { name: "frontend-design を外す" }).click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toContainText("UI/UX、とても長い名前の課");
+    await expect(dialog).toContainText("さらに下の課 の worker に frontend-design が届かなくなります");
+    await expect(dialog).toContainText("元に戻す方法");
+    await dialog.getByRole("button", { name: "戻る" }).click();
+    await expect(dialog).toBeHidden();
+    expect(calls).toEqual([]);
+
+    await skills.getByRole("button", { name: "frontend-design を外す" }).click();
+    await dialog.getByRole("button", { name: "frontend-design を外す" }).click();
+    await expect(dialog).toBeHidden();
+    expect(calls.map((call) => call.method)).toEqual(["DELETE"]);
+    expect(calls[0]?.url).toMatch(/\/api\/org\/ui-ux\/skills\/frontend-design$/);
+    await expect(skills.getByRole("status")).toHaveText("frontend-design を外しました。");
+    await expect(skills.getByRole("list", { name: "mount された skill" })).toBeFocused();
+  });
+
+  test("未選択と失敗の error は select と aria-describedby で結ばれ、focus が欄へ移る", async ({ page }) => {
+    const calls = await routeMutations(page, 422, { detail: "この skill は mount できません" });
+    await page.goto(`${gateway.base}/org?selected=eng`);
+    const skills = page.getByRole("region", { name: "担当の skill" });
+    const select = skills.getByLabel("mount する skill");
+    await skills.getByRole("button", { name: "mount", exact: true }).click();
+    await expect(select).toBeFocused();
+    await expect(select).toHaveAttribute("aria-invalid", "true");
+    await expect(select).toHaveAccessibleDescription(/mount する skill を選んでください。/);
+    expect(calls).toEqual([]);
+
+    await select.selectOption("review");
+    await expect(select).not.toHaveAttribute("aria-invalid", "true");
+    await skills.getByRole("button", { name: "mount", exact: true }).click();
+    await expect(select).toHaveAccessibleDescription(/この skill は mount できません/);
+    await expect(select).toBeFocused();
+    expect(calls.map((call) => call.method)).toEqual(["POST"]);
+    // 入力欄の枠は --color-input のまま。
+    const border = await select.evaluate((element) => ({
+      actual: getComputedStyle(element).borderTopColor,
+      input: (() => {
+        const probe = document.createElement("div");
+        probe.style.color = "var(--color-input)";
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      })(),
+    }));
+    expect(border.actual).toBe(border.input);
+  });
+
+  test("403 では操作を無効にし、理由を出す", async ({ page }) => {
+    await routeMutations(page, 403, { detail: "forbidden" });
+    await page.goto(`${gateway.base}/org?selected=eng`);
+    const skills = page.getByRole("region", { name: "担当の skill" });
+    await skills.getByLabel("mount する skill").selectOption("review");
+    await skills.getByRole("button", { name: "mount", exact: true }).click();
+    const reason = skills.getByRole("alert");
+    await expect(reason).toContainText("権限がありません（403）");
+    await expect(reason).toBeFocused();
+    await expect(skills.getByRole("button", { name: "mount", exact: true })).toBeDisabled();
+    await expect(skills.getByLabel("mount する skill")).toBeDisabled();
   });
 });

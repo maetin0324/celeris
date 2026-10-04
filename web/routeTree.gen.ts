@@ -20,6 +20,7 @@ import { Route as GraphRouteImport } from './routes/graph'
 import { Route as HelpRouteImport } from './routes/help'
 import { Route as InboxRouteImport } from './routes/inbox'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
@@ -94,6 +95,11 @@ const InboxRoute = InboxRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProvidersRoute = ProvidersRouteImport.update({
@@ -210,6 +216,7 @@ export interface FileRoutesByFullPath {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -243,6 +250,7 @@ export interface FileRoutesByTo {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -277,6 +285,7 @@ export interface FileRoutesById {
   '/help': typeof HelpRoute
   '/inbox': typeof InboxRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
@@ -312,6 +321,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
+    | '/notifications'
     | '/providers'
     | '/releases'
     | '/reports'
@@ -345,6 +355,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
+    | '/notifications'
     | '/providers'
     | '/releases'
     | '/reports'
@@ -378,6 +389,7 @@ export interface FileRouteTypes {
     | '/help'
     | '/inbox'
     | '/login'
+    | '/notifications'
     | '/providers'
     | '/releases'
     | '/reports'
@@ -412,6 +424,7 @@ export interface RootRouteChildren {
   HelpRoute: typeof HelpRoute
   InboxRoute: typeof InboxRoute
   LoginRoute: typeof LoginRoute
+  NotificationsRoute: typeof NotificationsRoute
   ProvidersRoute: typeof ProvidersRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
@@ -511,6 +524,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/providers': {
@@ -668,6 +688,7 @@ const rootRouteChildren: RootRouteChildren = {
   HelpRoute: HelpRoute,
   InboxRoute: InboxRoute,
   LoginRoute: LoginRoute,
+  NotificationsRoute: NotificationsRoute,
   ProvidersRoute: ProvidersRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,

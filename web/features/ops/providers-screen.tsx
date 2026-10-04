@@ -481,7 +481,7 @@ export function ProvidersSections({
       <section className="min-w-0 space-y-3" aria-label="プロバイダ一覧">
         <h2 className={sectionTitleClass}>実行枠（{count}）</h2>
         <p className="text-label text-muted-foreground">
-          run を動かす道具ごとの枠です。表の「状態」で、使えるか・休止中か・失敗しているかを確かめます。
+          作業を実行する道具ごとの枠です。表の「状態」で、使えるか・休止中か・失敗しているかを確かめます。
         </p>
         <details className="min-w-0 text-label text-muted-foreground">
           <summary className="inline-flex min-h-11 cursor-pointer items-center text-foreground">用語の説明</summary>

@@ -1,12 +1,18 @@
 // バッジは画面と同じ key の query に select を掛けて読む（ADR-0081 D5）。バッジ専用の key や cache を作らない。
 
-import type { DaemonSnapshot, Inbox, InboxCounts, ReportsLive } from "../generated/types";
-import { daemonKeys, inboxKeys } from "./keys";
+import type { DaemonSnapshot, HumanInboxView, ReportsLive, UnreadCountView } from "../generated/types";
+import { daemonKeys, inboxKeys, notificationKeys } from "./keys";
 
-/** inbox の件数バッジ。画面の inbox 一覧（filter 無し）と同じ key。 */
-export const inboxCountsBadge = {
-  queryKey: inboxKeys.list(),
-  select: (inbox: Inbox): InboxCounts => inbox.counts,
+/** 受信箱の件数バッジ。`GET /inbox/items`（filter 無し）の `counts.total`。受信箱画面の一覧と同じ key。 */
+export const inboxItemsBadge = {
+  queryKey: inboxKeys.itemList(),
+  select: (view: HumanInboxView): number => view.counts.total,
+} as const;
+
+/** 通知の未読数バッジ。`GET /notifications/unread-count` の未読の束数（束内の出来事の和ではない）。 */
+export const notificationsUnreadBadge = {
+  queryKey: notificationKeys.unreadCount(),
+  select: (view: UnreadCountView): number => view.unread,
 } as const;
 
 /** 報告・認可のバッジ。REST の daemon query（daemon/rest）と同じ key。SSE の daemon/stream は根拠にしない。 */
@@ -17,13 +23,6 @@ export const daemonBadges = {
     reports: daemon.reports ?? null,
   }),
 } as const;
-
-/** 受信箱ナビのバッジ用の合計。 */
-export function inboxTotal(counts: InboxCounts): number {
-  return (
-    counts.approvals + counts.attention + counts.browser_waits + counts.decisions + counts.drafts + counts.questions
-  );
-}
 
 export type BadgeView = { text: string; label: string } | null;
 

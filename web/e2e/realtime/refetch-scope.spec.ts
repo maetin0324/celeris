@@ -20,11 +20,11 @@ for (const screen of v3Screens()) {
       await page.goto(`${gateway.base}${screen.fixture}`);
       await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
       await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);
-      // The Phase 2 shell owns an active inbox query on both routes. Task lists are
+      // The shell owns an active inbox query (GET /inbox/items, ADR-0133) on every route. Task lists are
       // still placeholders, so counting /tasks alone would make this gate vacuous.
       const count = (route: string) => daemon.requests.filter((request) => request.path === route).length;
-      await expect.poll(() => count("/api/v1/inbox")).toBeGreaterThan(0);
-      const inboxBefore = count("/api/v1/inbox");
+      await expect.poll(() => count("/api/v1/inbox/items")).toBeGreaterThan(0);
+      const inboxBefore = count("/api/v1/inbox/items");
       const tasksBefore = count("/api/v1/tasks");
       const screenPaths = new Set(
         daemon.requests
@@ -32,7 +32,7 @@ for (const screen of v3Screens()) {
           .filter(
             (route) =>
               route.startsWith("/api/v1/") &&
-              !["/api/v1/stream", "/api/v1/health", "/api/v1/inbox", "/api/v1/daemon"].includes(route),
+              !["/api/v1/stream", "/api/v1/health", "/api/v1/inbox/items", "/api/v1/daemon"].includes(route),
           ),
       );
       const screenBefore = Object.fromEntries([...screenPaths].map((route) => [route, count(route)]));
@@ -50,7 +50,7 @@ for (const screen of v3Screens()) {
       }
       // One or two inbox refreshes may be its 15 s fallback poll. SSE must not
       // turn the 2 s daemon ticks or unrelated progress events into refetches.
-      expect(count("/api/v1/inbox") - inboxBefore).toBeLessThanOrEqual(2);
+      expect(count("/api/v1/inbox/items") - inboxBefore).toBeLessThanOrEqual(2);
       expect(count("/api/v1/tasks") - tasksBefore).toBe(0);
       const screenRefetches = Object.fromEntries(
         [...screenPaths].map((route) => [route, count(route) - screenBefore[route]]),
@@ -60,7 +60,7 @@ for (const screen of v3Screens()) {
         path: screen.path,
         fixture: screen.fixture,
         unrelatedRefetches: screenRefetches,
-        inboxPolls: count("/api/v1/inbox") - inboxBefore,
+        inboxPolls: count("/api/v1/inbox/items") - inboxBefore,
         healthPolls: count("/api/v1/health"),
         daemonRestPolls: count("/api/v1/daemon"),
       });

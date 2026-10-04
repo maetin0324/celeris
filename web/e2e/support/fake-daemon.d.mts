@@ -12,6 +12,8 @@ export type FakeDaemonRequest = {
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
 export const defaultFixtures: Record<string, unknown>;
+export function inboxItemsFixture(): import("../../api/generated/types").InboxItem[];
+export function noticesFixture(): import("../../api/generated/types").Notice[];
 export function createFakeDaemon(options?: {
   host?: string;
   port?: number;
@@ -22,6 +24,13 @@ export function createFakeDaemon(options?: {
 }): {
   requests: FakeDaemonRequest[];
   sendEvent(event: string, data?: unknown): void;
+  inbox: {
+    items: import("../../api/generated/types").InboxItem[];
+    notices: import("../../api/generated/types").Notice[];
+    answers: Array<{ id: string; option?: string; note?: string; payload?: unknown }>;
+  };
+  setInboxItems(items: import("../../api/generated/types").InboxItem[]): void;
+  setNotices(notices: import("../../api/generated/types").Notice[]): void;
   setDelay(value: number): void;
   setStreamStatus(value: number): void;
   sendConsoleBlock(block: unknown): void;

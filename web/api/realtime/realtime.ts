@@ -5,7 +5,8 @@ import { recordHello } from "../../lib/time";
 import { daemonKeys } from "../queries/keys";
 import type { ConnectionStore } from "./connection-state";
 import { connectionStore } from "./connection-state";
-import type { Frame } from "./frames";
+import type { Frame, SignalFrame } from "./frames";
+import { SIGNAL_INVALIDATION } from "./invalidation-map";
 import { createInvalidator, type Invalidator } from "./invalidator";
 import { bindResume } from "./resume";
 import { createTransport, type Transport, type TransportOptions } from "./transport";
@@ -16,6 +17,8 @@ export type RealtimeOptions = {
   /** task.event と reset の反映（invalidate）。P2-05 の invalidation が渡される。 */
   onTaskEvent?: (frame: Extract<Frame, { type: "task.event" }>) => void;
   onReset?: (frame: Extract<Frame, { type: "reset" }>) => void;
+  /** inbox_changed・notifications_changed の反映。既定は SIGNAL_INVALIDATION の key を束ねて invalidate。 */
+  onSignal?: (frame: SignalFrame) => void;
   onResumed?: () => void;
 } & Pick<TransportOptions, "createEventSource" | "probe" | "url" | "backoffBaseMs" | "backoffMaxMs">;
 
@@ -26,7 +29,7 @@ export type RealtimeOptions = {
 export function applyFrame(
   queryClient: QueryClient,
   frame: Frame,
-  options: Pick<RealtimeOptions, "onTaskEvent" | "onReset">,
+  options: Pick<RealtimeOptions, "onTaskEvent" | "onReset" | "onSignal">,
 ) {
   switch (frame.type) {
     case "hello":
@@ -44,6 +47,10 @@ export function applyFrame(
     case "reset":
       options.onReset?.(frame);
       return;
+    case "inbox_changed":
+    case "notifications_changed":
+      options.onSignal?.(frame);
+      return;
   }
 }
 
@@ -54,6 +61,7 @@ export function createRealtime(options: RealtimeOptions): Realtime {
   const invalidator = createInvalidator(options.queryClient);
   const onTaskEvent = options.onTaskEvent ?? ((f) => invalidator.onTaskEvent(f.data));
   const onReset = options.onReset ?? (() => invalidator.onReset());
+  const onSignal = options.onSignal ?? ((f: SignalFrame) => invalidator.enqueue(SIGNAL_INVALIDATION[f.type]));
   const transport = createTransport({
     store,
     url: options.url,
@@ -61,7 +69,7 @@ export function createRealtime(options: RealtimeOptions): Realtime {
     probe: options.probe,
     backoffBaseMs: options.backoffBaseMs,
     backoffMaxMs: options.backoffMaxMs,
-    onFrame: (frame) => applyFrame(options.queryClient, frame, { onTaskEvent, onReset }),
+    onFrame: (frame) => applyFrame(options.queryClient, frame, { onTaskEvent, onReset, onSignal }),
     onResume: () => {
       invalidator.onResume();
       options.onResumed?.();

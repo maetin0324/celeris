@@ -114,13 +114,13 @@ test("parity-x: SSE イベントごとの再取得本数と H1 project fallback"
       [4, "unknown", "transitioned"],
     ] as const;
     for (const [id, taskId, type] of samples) {
-      const before = [count("/api/v1/tasks"), count("/api/v1/inbox"), count("/api/v1/daemon")];
+      const before = [count("/api/v1/tasks"), count("/api/v1/inbox/items"), count("/api/v1/daemon")];
       h.daemon.sendEvent("task.event", row(id, taskId, type));
       await page.waitForTimeout(700); // 250 ms coalescing window plus transport/render time.
       events.push({
         event: `${taskId}:${type}`,
         tasks: count("/api/v1/tasks") - before[0],
-        inbox: count("/api/v1/inbox") - before[1],
+        inbox: count("/api/v1/inbox/items") - before[1],
         daemon: count("/api/v1/daemon") - before[2],
       });
     }

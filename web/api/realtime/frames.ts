@@ -8,9 +8,22 @@ export type Frame =
   | { type: "heartbeat" }
   | { type: "task.event"; data: EventRow }
   | { type: "daemon"; data: DaemonSnapshot }
-  | { type: "reset"; data: StreamReset };
+  | { type: "reset"; data: StreamReset }
+  | { type: "inbox_changed" }
+  | { type: "notifications_changed" };
 
-export const FRAME_TYPES = ["hello", "heartbeat", "task.event", "daemon", "reset"] as const;
+/** 中身を持たない軽い合図（ADR-0133 D5）。受信箱・通知の key を取り直すきっかけだけ。 */
+export type SignalFrame = Extract<Frame, { type: "inbox_changed" | "notifications_changed" }>;
+
+export const FRAME_TYPES = [
+  "hello",
+  "heartbeat",
+  "task.event",
+  "daemon",
+  "reset",
+  "inbox_changed",
+  "notifications_changed",
+] as const;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
@@ -23,6 +36,8 @@ function isCursor(v: unknown): v is number {
 /** SSE の event 名と data 文字列から Frame を作る。検証に通らなければ null。 */
 export function parseFrame(name: string, raw: string): Frame | null {
   if (name === "heartbeat") return { type: "heartbeat" };
+  // 合図の data は `{}`。中身は読まない（将来の欄が増えても捨てない）。
+  if (name === "inbox_changed" || name === "notifications_changed") return { type: name };
   let json: unknown;
   try {
     json = JSON.parse(raw);

@@ -1,13 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
-import { daemonBadges, inboxCountsBadge, inboxTotal } from "../../api/queries/badges";
+import { daemonBadges, inboxItemsBadge } from "../../api/queries/badges";
+import { inboxItemsQuery } from "../../api/queries/inbox-notifications";
 import {
   DAEMON_INTERVAL_MS,
   daemonRestQuery,
   HEALTH_INTERVAL_MS,
   healthQuery,
   INBOX_INTERVAL_MS,
-  inboxQuery,
   pollInterval,
 } from "../../api/queries/server-state";
 
@@ -44,8 +44,8 @@ export function useShellServerState(authenticated: boolean) {
     refetchIntervalInBackground: false,
   });
   const inbox = useQuery({
-    ...inboxCountsBadge,
-    queryFn: inboxQuery.queryFn,
+    ...inboxItemsQuery(),
+    ...inboxItemsBadge,
     enabled: authenticated,
     refetchInterval: pollInterval(INBOX_INTERVAL_MS, active),
     refetchIntervalInBackground: false,
@@ -65,7 +65,7 @@ export function useShellServerState(authenticated: boolean) {
 
   return {
     down,
-    inboxBadge: inbox.data === undefined ? null : inboxTotal(inbox.data),
+    inboxBadge: inbox.data ?? null,
     approvalsBadge: daemon.data?.approvalsPending ?? null,
     reportsLive: daemon.data?.reports ?? null,
   };

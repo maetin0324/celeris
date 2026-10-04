@@ -40,3 +40,63 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 
 10. **[help-login] `/login` — 失敗後の「次にどこへ戻るか」が画面に出ない**（重大度: 低）
     `docs/frontend/UX_AUDIT.md:30` が指摘した「戻り先 `next` を画面に示さない」は help-login 葉の変更後も残る（`qa-qa-admin-pre/_login-{360,1440}.png` は初期状態のみで確認、`web/routes/login.tsx` のソース上も `next` の表示が無いことを確認）。help-login 葉の対応範囲は失敗理由の alert と focus 復帰までで、this は対象外のまま。
+
+## 修正
+
+### ops-config（accounts・providers）
+
+対象: `web/features/ops/{providers-screen.tsx,providers-form.ts,accounts-screen.tsx,secrets-section.tsx,mcp-clients.tsx}`、unit 期待の更新（`providers-screen.test.tsx`）、`web/e2e/admin/ops-config.spec.ts` の label 1 か所。parity spec が見る accessible name（`adapter`・`concurrency`・`新規 id`・`secret id`・`secret 値`・`secret を保存`・listitem 名・h1）と本文 `concurrency N` は語として残し、日本語を主にして設定語を括弧で添える形にした。
+
+- 5. [修正: `/providers` の節見出しを「adapter / harness の実行枠（n）」→「実行枠（n）」、説明は「使えるか・休止中か・失敗しているか」を確かめる 1 文に縮め、主文に残っていた `run` も「作業」に替えた。道具（adapter / harness）・受ける段（tiers）・LLM source・celeris/&lt;tier&gt; の説明は開閉式の「用語の説明」（`<details>`、summary は min-h-11）へ下げた。form ラベルを「同時実行数（concurrency）」「モデル（model）」「受ける段（tiers）」「道具（adapter）」「新規の同時実行数（concurrency）」「新規のモデル（model）」に、tier の checkbox を「frontier（最上位）」「standard（標準）」「cheap（安価）」に、表の列「tiers」→「受ける段」、要約行を「設定: codex・concurrency 4・段 …・モデル …」「道具の種類: …」に、検証文言を「同時実行数は 0 以上の整数…」に替えた]
+- 5. [残課題: StatusBadge の設定語彙（`agent-docs/progress/2026-10-04-web-admin-screens/ops-config.md` の提案）と見出し「LLM source」は accounts と providers 共通の定義語として残した。`concurrency N` の本文は parity（`web/e2e/parity/ops.spec.ts:148` の `/concurrency 4/`）が見るため英語の設定語を残す]
+- 8. [修正: `/accounts` の card の DataList ラベル `adapter`→「道具」、追加 form の select を「道具（adapter）」、secret 節の h2 を「秘密の値（secret）」、MCP クライアント card の `scopes`→「権限の範囲」に替えた]
+- 8. [残課題: 「secret id」「secret 値」「secret を保存」「secret を削除」や listitem 名「secret &lt;id&gt;」は parity が accessible name で固定しているため英語の `secret` を残す。ops 系画面全体の訳語表（daemon・clusters 側を含む）は fix-ops-runtime 葉と post-record で揃える]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` → exit 0（vitest 57 files・347 tests、node 42 tests）
+- `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-config.spec.ts e2e/parity/ops.spec.ts` → 14 passed
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/ops web/routes/accounts.tsx web/routes/providers.tsx web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+- `mobile-audit` は exit 1 だが違反は `/projects/P1`・`/tasks/T1`・`/tasks/T1/changes`（範囲外、未命名 textarea 等）のみで、`/accounts`・`/providers` は違反なし
+
+### org
+
+対象: `web/features/org/org-screen.tsx`（並べ替えのみ）、`web/e2e/admin/org.spec.ts`（順序と 1440px の配置の確認を追加）。`org-skills.tsx`・`org-tree.ts`・`web/routes/org.*` は [org] 指摘の対象外で変更なし。h1「組織」・region 名「担当の追加」「担当の詳細」「担当の編集」・URL は変えていない。critique の [org] タグは 6 のみ。
+
+- 6. [修正: `/org` の DOM 順を 木 → 担当の詳細 → 担当を追加 に変えた。lg 未満の 1 カラムでは、木で選んだ担当の詳細が木の直後に来て「担当を追加」form は最後に回る。lg 以上は `lg:flow-root` の中で木と追加を `lg:float-left lg:w-2/5`（追加は `lg:clear-left`）、詳細を `lg:float-right lg:w-3/5` に置き、従来どおり木・追加が左、詳細が右に並ぶ。grid の `row-span` だと詳細の高さが木と追加の 2 行に割り振られて木の下に隙間ができ、`grid-rows-[...]` は任意値になるため float を選んだ。DOM 順と見た目の順は全幅で一致する（order での並べ替えはしていない）]
+- 6. [残課題: 木が長い（担当が多い）とき、スマホ幅で選んだ後に詳細まで scroll が要るのは変わらない。選択後に詳細の見出しへ focus・scroll を移すかは、木を keyboard で続けて辿る操作と衝突するため post-record の再 critique で判断する]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` / `check:boundaries` → exit 0（vitest 347 tests、lint warning 5 件は既存の states.spec.ts・styles.css）
+- `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/org.spec.ts e2e/parity/org.spec.ts` → 10 passed・1 skipped（WEB_SHOTS_OUT 無しの screenshot）
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/org web/routes/org.* web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+
+### ops-runtime（clusters・daemon・releases）
+
+対象: `web/features/ops/clusters-screen.tsx`・`daemon-screen.tsx`・`releases-screen.tsx` と `web/e2e/admin/ops-runtime.spec.ts`。PC の表、昇格の確認ダイアログ、parity が見る h1・操作名・URL は維持した。
+
+- 2. [修正: `/daemon` の本文を運用者の語彙に整理した。「dispatcher の状態」→「実行管理の状態」、「event」→「履歴」、「poll」→「取得」、「tick」→「動作確認」。照合操作の見出し・説明・件数も日本語を主表示にした。parity が固定する操作の accessible name「replay を実行」と照合件数の英語表記は補助表示として残した]
+- 2. [残課題: h1「daemon」は parity が固定し、nav の「daemon」はこの葉の対象外であるため残る。h1 と nav を揃えるには parity と shell を含む別の変更が必要]
+- 3. [修正: `/releases` はスマホ幅で版・状態の直後に「問題・直近の失敗」を表示する縦の一覧に切り替えた。昇格・巻き戻しボタンはその判断材料の直後に置き、PC の表と確認ダイアログは維持した。360px の対象 e2e で問題欄と操作を確認した]
+- 4. [修正: `/clusters` はスマホ幅で接続状態と失敗理由を各クラスタの先頭に示す縦の一覧に切り替えた。最終確認と最後の切断も同じ項目内に示し、PC の表は維持した。操作カードの `host` ラベルは「接続先」にした]
+
+確認（2026-10-04、この WU branch）:
+- offline install は依存 tarball のローカル store 不足で停止したため、同じ lockfile の既存依存から実行ファイルを参照した。`tsc -b`・`biome check .`・`vitest run`・`vite build` は exit 0（347 tests、lint warning 5 件は既存箇所）。
+- `corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-runtime.spec.ts && corepack pnpm@12.6.0 -C web e2e e2e/parity/ops.spec.ts` は exit 0（11 + 8 passed）。前回の check 失敗は worktree の `node_modules` にある `@playwright/test/index.mjs` が `index.d.ts` を指す壊れたリンクに起因し、同じ lockfile の依存を worktree 内へ復元して解消した。`mobile-audit --only` は `/clusters`・`/daemon`・`/releases` の各 4 幅で exit 0。
+- この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は後続の post-record 葉で行う。
+
+### knowledge-help（知識・help・login）
+
+対象: `web/features/knowledge/{knowledge-screen.tsx,skills-screen.tsx}`、`web/routes/login.tsx`、unit `web/features/knowledge/knowledge-screen.test.ts`（新規）、`web/e2e/admin/login.spec.ts`（1 件追加）。`help-screen.tsx` と `web/routes/{knowledge.*,help}.tsx` は該当する指摘が無く変更なし。URL・parity が見る accessible name（「編集」「保存」「作成」「削除」「skill「demo」を削除」「New knowledge」の h2 など）は変えていない。critique の [knowledge-help] / [help-login] タグは 1・7・9・10。
+
+- 1. [修正: `/knowledge/skills` の h1 を「skills」→「手順書（skills）」、`/knowledge` のタブを「手順書（skills）」、操作 nav の名前を「手順書の操作」、節見出しを「手順書の一覧」「手順書の作成」、表の名前・0 件文・削除 dialog の題と対象を「手順書」に替えた。h1 の下に「手順書は組織の画面で課に付けるとその課の作業場所に配られる」と、組織と課の関係を 1 文で示した]
+- 1. [残課題: `web/e2e/support/screens.ts` が h1 名を `skills`（部分一致）で引くため、h1 から英語の `skills` は外せない（括弧の補足として残した）。削除の確定ボタン「skill「demo」を削除」は parity が固定するので英語のまま]
+- 7. [修正: 本文 Markdown の先頭の見出し（front matter の後の `#`〜`######`）が Section の title と同じなら外して描画する `withoutLeadingTitle` を足し、`/knowledge` のページ本文と `/knowledge/inbox` の候補本文に使った。見出しを外して空になる本文は「本文は見出しだけです。」と書く。unit 3 件で固定]
+- 9. [修正: `/knowledge` は未選択のとき右の空の本文枠を出さず、検索結果を全幅で並べ、見出しの下に「タイトルを選ぶと本文と出典を開きます。」を置いた。同じ症状の `/knowledge/skills` 未選択時も一覧を全幅にした。選択後は従来どおり 2:3 の 2 カラム]
+- 10. [修正: `/login` の h1 の下に戻り先を示す（`next` があれば「ログイン後に <path> へ戻ります。」、無いか不正なら「ログイン後はホームを開きます。」）。失敗後も残る。form は従来どおり JS 無しの POST で、daemon には触れない。`web/e2e/admin/login.spec.ts` に 1 件追加]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` → exit 0。`typecheck` / `lint`（warning 5 件は既存の states.spec.ts・styles.css）/ `test`（vitest 350 tests、node 42 tests）/ `check:boundaries` / `build` → exit 0
+- `corepack pnpm@12.6.0 -C web e2e e2e/admin/login.spec.ts e2e/parity/knowledge.spec.ts e2e/parity/help.spec.ts` → 10 passed・1 skipped（WEB_SHOTS_OUT 無しの screenshot）
+- `corepack pnpm@12.6.0 -C web e2e:all e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts -g "knowledge|login|help"` → 10 passed。`mobile-audit --only` を `/knowledge`・`/knowledge/inbox`・`/knowledge/skills`・`/help`・`/login` に当てて各 exit 0
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/{knowledge,help,org,ops} web/routes/{knowledge.*,help.tsx,login.tsx} web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
+- この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は post-record 葉で行う。

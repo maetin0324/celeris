@@ -16,7 +16,7 @@ production_lines = 2000
 inline_test_lines = 300
 
 # task-api's wire types are one flat, cohesive bag of request/response structs
-# (docs/gui/api.md §6.2) that also has to double as the schemars source for
+# (docs/api/v1/gui-api.md §6.2) that also has to double as the schemars source for
 # docs/api/v1/*.schema.json. Splitting it by endpoint would scatter the single
 # source of truth for the API surface without reducing what an agent touching
 # one endpoint's types has to read (schemars needs every type in scope for

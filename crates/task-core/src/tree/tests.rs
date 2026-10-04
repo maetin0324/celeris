@@ -624,6 +624,8 @@ fn run(task: TaskId, role: RunIndexRole, tokens: (u64, u64), cost: Option<f64>) 
             cache_read_tokens: Some(999),
             cache_creation_tokens: None,
             cost_usd: cost,
+            duplicate_reads: None,
+            session_resumed: None,
         }),
         metrics: None,
         started_at: String::new(),

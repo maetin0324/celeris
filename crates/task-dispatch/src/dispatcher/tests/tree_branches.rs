@@ -933,3 +933,122 @@ async fn an_adopt_unit_waiting_for_its_task_never_spawns_a_new_child() {
         Status::Draft
     );
 }
+
+/// ADR-0118 D5: 子 c の review が通った後（親への統合の前）に子のブランチへ commit が足されると、統合は
+/// 子のブランチ HEAD と記録済みの merge candidate の違いを見つけ、無言で merge せずに `MergeCandidateStale`
+/// を残して子を再 sync → 再 check → 再 review に戻す。再レビューが新しい HEAD を candidate に固定した後で
+/// 統合が続きから再開し、`PhaseIntegrated.merged` に candidate の target SHA と merge 直前の親 HEAD が残る。
+#[tokio::test]
+async fn merge_candidate_moved_child_branch_is_rereviewed_before_integration() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut root = git_root(repo.path());
+    // 登録済みのリポジトリ（RepoId）が無いと review は candidate を記録しない（移行前の扱い）。
+    let (project, repos) = project_with_repos(&store, &[("code", repo.path(), RepoKind::Git)]);
+    root.project_id = Some(project);
+    root.repos = repos.iter().map(RepoRef::of).collect();
+    let root_id = root.id;
+    store.create_task(&root, vec![]).unwrap();
+    let plan = v3_plan(
+        vec![stage("s1")],
+        vec![
+            leaf("a", "s1", &[]),
+            task_unit("c", "s1", &[], "test -f c.txt"),
+        ],
+    );
+    let adapter = Arc::new(GitTreeAdapter::new(vec![plan]));
+    let mut d = git_tree_dispatcher(&store, adapter.clone(), ws.path());
+    let child_done = run_until(&mut d, 1500, || {
+        store
+            .work_units_for(root_id)
+            .unwrap()
+            .iter()
+            .find(|u| u.key == "c")
+            .and_then(|u| u.child_task_id.as_deref())
+            .and_then(|id| id.parse::<TaskId>().ok())
+            .and_then(|id| store.get(id).unwrap())
+            .is_some_and(|child| child.status == Status::Done)
+    })
+    .await;
+    assert!(child_done);
+    let child = child_of(&store, root_id, "c");
+    let child_branch = format!("celeris/{}", child.id);
+    let reviewed = branch_head(repo.path(), &child_branch);
+    // review の後で子のブランチが動いた。
+    let child_dir = adapter.cwd_of("c");
+    std::fs::write(child_dir.join("late.txt"), "late\n").unwrap();
+    git_out(&child_dir, &["add", "late.txt"]);
+    git_out(&child_dir, &["commit", "-q", "-m", "late"]);
+    let moved = branch_head(repo.path(), &child_branch);
+    assert_ne!(reviewed, moved);
+
+    let report = run_until_idle(&mut d, 1500).await;
+    assert!(report.idle, "{report:?}");
+    let events = store.events_for(root_id).unwrap();
+    assert_eq!(
+        store.get(root_id).unwrap().unwrap().status,
+        Status::Done,
+        "{events:?}"
+    );
+    let stale: Vec<_> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::MergeCandidateStale {
+                key,
+                child_task,
+                merge_candidate_sha,
+                head_sha,
+                ..
+            } => Some((
+                key.clone(),
+                *child_task,
+                merge_candidate_sha.clone(),
+                head_sha.clone(),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        stale,
+        vec![("c".to_string(), child.id, reviewed.clone(), moved.clone())]
+    );
+    // 子は再レビューされ、新しい HEAD（late.txt を含む）が merge candidate になった。
+    let child_events = store.events_for(child.id).unwrap();
+    let candidates: Vec<String> = child_events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::ReviewTargetSynced {
+                merge_candidate_sha,
+                ..
+            } => Some(merge_candidate_sha.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(candidates.len(), 2, "{child_events:?}");
+    assert_eq!(candidates[0], reviewed);
+    let final_candidate = candidates[1].clone();
+    // 再 sync は子を親ブランチ（a の merge で進んだ）の上へ rebase し直すので、late.txt を含む新しい SHA。
+    assert_ne!(final_candidate, moved);
+    assert!(branch_has(repo.path(), &final_candidate, "late.txt"));
+    assert!(branch_has(repo.path(), &final_candidate, "a.txt"));
+    assert_eq!(store.get(child.id).unwrap().unwrap().status, Status::Done);
+    // 統合は再レビュー後の candidate を merge し、target と merge 直前の親 HEAD を残した。
+    let merged = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::PhaseIntegrated { phase, merged, .. } if phase == "s1" => Some(merged.clone()),
+            _ => None,
+        })
+        .next_back()
+        .expect("s1 integrated");
+    let c = merged.iter().find(|m| m.key == "c").expect("c merged");
+    assert_eq!(c.commit, final_candidate);
+    assert!(c.target_sha.is_some(), "{c:?}");
+    assert!(!c.skipped && c.parent_head.is_some(), "{c:?}");
+    let root_branch = format!("celeris/{root_id}");
+    assert!(branch_has(repo.path(), &root_branch, "late.txt"));
+    assert!(branch_has(repo.path(), &root_branch, "c.txt"));
+    assert_replay_is_clean(&store);
+}

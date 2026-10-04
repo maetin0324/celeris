@@ -683,7 +683,7 @@ impl QuotaActivity {
 /// D4.2 手順 3 の較正材料: `(source, window)` ごとの直近 `measured` の `(used_pct, weighted_tokens)`
 /// の組（最大 `task_core::quota::CALIBRATION_MAX_SAMPLES` 件のリングバッファ）。
 ///
-/// **ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
+/// **ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:
 /// D4.2 は「同じ source の直近 14 日の `measured` run（最大 20 件）」と書いているが、events を
 /// 横断して探す store 側の問い合わせは今回作らず、dispatcher プロセスの寿命の間だけ持つ
 /// in-memory のリングバッファ（件数の上限だけを守る。日数の上限は無い）にした。再起動すれば

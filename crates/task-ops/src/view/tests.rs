@@ -185,6 +185,8 @@ fn runs_include_reviewer_runs_with_role() {
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
                 cost_usd: None,
+                duplicate_reads: None,
+                session_resumed: None,
             }),
             role: Some(RunRole::Reviewer),
             metrics: None,
@@ -1194,6 +1196,79 @@ fn task_detail_execution_is_none_for_a_task_with_no_execution_activity() {
     assert!(detail.execution.is_none());
 }
 
+#[test]
+fn task_detail_write_set_and_behind_show_durable_snapshots() {
+    use task_core::execution_plan::{RunIndexRole, RunIndexStatus, RunRow};
+    use task_core::repos::RepoId;
+    use task_core::write_set::{WriteSetRecord, WriteSetStatus};
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(TaskKind::Execute, Status::Ready);
+    store.insert(&task).unwrap();
+    store
+        .set_task_expected_write_paths(task.id, Some(&["src/".into()]), "2026-10-02T00:00:00Z")
+        .unwrap();
+    let repo_id = RepoId::new();
+    store
+        .run_index_start(RunRow {
+            run_id: "run-1".into(),
+            task_id: task.id.to_string(),
+            work_unit_id: None,
+            role: RunIndexRole::Worker,
+            seq: 1,
+            status: RunIndexStatus::Completed,
+            adapter: None,
+            model: None,
+            account: None,
+            session_id: None,
+            checkpoint: None,
+            usage: None,
+            metrics: None,
+            started_at: "2026-10-02T00:00:00Z".into(),
+            finished_at: Some("2026-10-02T00:01:00Z".into()),
+        })
+        .unwrap();
+    store
+        .record_run_write_set(&WriteSetRecord {
+            owner_id: "run-1".into(),
+            task_id: task.id,
+            work_unit_id: None,
+            repo_id,
+            base_sha: Some("base".into()),
+            head_sha: Some("head".into()),
+            paths: vec!["src/main.rs".into()],
+            status: WriteSetStatus::Complete,
+            reason: None,
+            recorded_at: "2026-10-02T00:01:00Z".into(),
+        })
+        .unwrap();
+    store
+        .record_behind_target(&task_core::behind_target::BehindTargetObservation {
+            task_id: task.id,
+            repo_id,
+            target_ref: "refs/heads/main".into(),
+            target_sha: Some("target".into()),
+            head_sha: Some("head".into()),
+            commits: Some(2),
+            observed_at: "2026-10-02T00:00:00Z".into(),
+        })
+        .unwrap();
+    let now = OffsetDateTime::parse(
+        "2026-10-02T01:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let detail = task_detail(&store, task.id, &view_ctx(), now).unwrap();
+    assert_eq!(detail.expected_write_paths, Some(vec!["src".into()]));
+    assert_eq!(detail.actual_run_write_sets[0].paths, ["src/main.rs"]);
+    assert_eq!(detail.actual_run_write_sets[0].status, "complete");
+    assert_eq!(detail.behind_target.behind_target_commits, Some(2));
+    assert_eq!(detail.behind_target.behind_target_age_seconds, Some(3600));
+    assert_eq!(
+        detail.behind_target.repos[0].target_sha.as_deref(),
+        Some("target")
+    );
+}
+
 /// gate が atomic と判定しただけ（計画なし）の Task は Execution 節が出るが `plan` は無い
 /// （D20 の「直接実行」の 1 行に対応する材料）。
 #[test]
@@ -1234,6 +1309,101 @@ fn task_detail_execution_shows_gate_only_when_there_is_no_plan() {
     assert!(execution.plan.is_none());
     // 走っている WU が無い（そもそも計画が無い）ので phase は導出しない。
     assert!(execution.phase.is_none());
+    // ADR-0124: この Task はまだ経路を評価していない（`routing.route` も `ExecutionRouted` も無い）。
+    assert!(execution.route.is_none());
+}
+
+/// ADR-0124: `routing.route` と `Event::ExecutionRouted` が揃っている Task は `TaskDetail.execution.route`
+/// にそのまま出る。
+#[test]
+fn task_detail_execution_direct_route_is_reported_when_the_event_is_present() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let mut task = sample_task(TaskKind::Execute, Status::Running);
+    let decision = task_core::RouteDecision {
+        route: task_core::Route::Direct,
+        reasons: vec![task_core::RouteReason {
+            rule_id: "direct/single-repo".to_string(),
+            ok: true,
+            detail: "repos=1, multi_environment=false".to_string(),
+        }],
+        gate_rule_id: "atomic/score".to_string(),
+        overrode_gate: false,
+        shadow: false,
+        policy_version: task_core::DIRECT_ROUTE_POLICY_VERSION.to_string(),
+    };
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Atomic,
+            source: task_core::GateSource::Policy,
+            score: 1,
+            threshold: 5,
+            rule_id: "atomic/score".to_string(),
+            signals: vec![],
+            policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
+            shadow: false,
+            depth: None,
+        }),
+        route: Some(decision.clone()),
+        ..task_core::TaskRouting::default()
+    });
+    store.insert(&task).expect("insert");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionGated {
+                decision: Box::new(task.routing.as_ref().unwrap().execution.clone().unwrap()),
+            },
+        )
+        .expect("append gate");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionRouted {
+                decision: Box::new(decision.clone()),
+            },
+        )
+        .expect("append route");
+
+    let ctx = view_ctx();
+    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let execution = detail.execution.expect("execution present");
+    assert_eq!(execution.route, Some(decision));
+}
+
+/// ADR-0124: `Event::ExecutionRouted` が無い（評価していない）Task でも、gate の活動があれば
+/// Execution 節は出るが `route` は `None`（直行の判定を記録していないことが見える）。
+#[test]
+fn task_detail_execution_direct_route_is_absent_without_the_event() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let mut task = sample_task(TaskKind::Execute, Status::Running);
+    task.routing = Some(task_core::TaskRouting {
+        execution: Some(task_core::ExecutionGateDecision {
+            mode: task_core::ExecutionMode::Compound,
+            source: task_core::GateSource::Policy,
+            score: 9,
+            threshold: 5,
+            rule_id: "compound/score".to_string(),
+            signals: vec![],
+            policy_version: task_core::EXECUTION_GATE_POLICY_VERSION.to_string(),
+            shadow: false,
+            depth: None,
+        }),
+        ..task_core::TaskRouting::default()
+    });
+    store.insert(&task).expect("insert");
+    store
+        .append_event(
+            task.id,
+            &Event::ExecutionGated {
+                decision: Box::new(task.routing.as_ref().unwrap().execution.clone().unwrap()),
+            },
+        )
+        .expect("append gate");
+
+    let ctx = view_ctx();
+    let detail = task_detail(&store, task.id, &ctx, OffsetDateTime::now_utc()).expect("detail");
+    let execution = detail.execution.expect("execution present");
+    assert!(execution.route.is_none());
 }
 
 /// 計画のある Task: WU の表・現在の段階（`running` かつ WU が `running` なら `executing`）・
@@ -1333,4 +1503,61 @@ fn task_detail_execution_reports_replan_version_history() {
 fn execution_phase_reviewing_is_always_verifying() {
     let task = sample_task(TaskKind::Execute, Status::Reviewing);
     assert_eq!(execution_phase(&task, &[]), Some(ExecutionPhase::Verifying));
+}
+
+fn check_started(wu: &str, index: u32, total: u32, cmd: &str) -> Event {
+    Event::IntegrationCheckStarted {
+        work_unit_id: wu.into(),
+        key: "integrate-p1".into(),
+        index,
+        total,
+        cmd: cmd.into(),
+        log_path: format!("/ws/integration-checks/integrate-p1/1-{index}.log"),
+        started_at: "2026-10-04T02:09:00Z".into(),
+    }
+}
+
+fn check_finished(wu: &str, index: u32, total: u32, cmd: &str, exit: i32) -> Event {
+    Event::IntegrationCheckFinished {
+        work_unit_id: wu.into(),
+        key: "integrate-p1".into(),
+        index,
+        total,
+        cmd: cmd.into(),
+        pass: exit == 0,
+        exit: Some(exit),
+        timed_out: false,
+        duration_ms: 1500,
+    }
+}
+
+/// 2026-10-04 統合の検査の進み具合 D4: 最後の試行（index 0 の開始から後）だけを見て、実行中の検査と済んだ検査を出す。
+#[test]
+fn integration_check_progress_shows_the_current_check_of_the_last_attempt() {
+    let events = [
+        // 前の試行（失敗して repair に回った）。
+        check_started("w", 0, 2, "build"),
+        check_finished("w", 0, 2, "build", 1),
+        // 別の WU は混ざらない。
+        check_started("other", 0, 1, "x"),
+        // 今の試行: 1 件目が通り、2 件目が実行中。
+        check_started("w", 0, 3, "build"),
+        check_finished("w", 0, 3, "build", 0),
+        check_started("w", 1, 3, "cargo test --workspace"),
+    ];
+    let p = integration_check_progress(&events, "w", true).expect("progress");
+    assert_eq!(p.total, 3);
+    let current = p.current.expect("current");
+    assert_eq!(
+        (current.index, current.cmd.as_str()),
+        (1, "cargo test --workspace")
+    );
+    assert_eq!(p.finished.len(), 1);
+    assert!(p.finished[0].pass);
+    assert_eq!(p.finished[0].exit, Some(0));
+    assert_eq!(p.finished[0].duration_ms, 1500);
+    // WU が running でなければ（daemon が落ちて検査が打ち切られた等）現在の検査は出さない。
+    let stopped = integration_check_progress(&events, "w", false).expect("progress");
+    assert!(stopped.current.is_none());
+    assert!(integration_check_progress(&events, "none", true).is_none());
 }

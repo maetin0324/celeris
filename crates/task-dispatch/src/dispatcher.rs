@@ -6,7 +6,8 @@
 //! 3. 自分が起動した run のうち、ストア上で既に `running` でない／run_id が変わったものを強制終了（cancel 等）
 //! 4. `reviewing` なのに判定中でないタスクのレビューを開始（再起動後の復旧、または前 tick で `Reviewer` run の
 //!    枠が無く見送ったもの）
-//! 5. `ready_tasks` を `priority DESC, created_at ASC` で取り、`ProviderPolicy` と並列度上限に従って dispatch
+//! 5. 有効な cron job の期限を評価し、通常の task として作る
+//! 6. `ready_tasks` を `priority DESC, created_at ASC` で取り、`ProviderPolicy` と並列度上限に従って dispatch
 //!
 //! Phase 5（ADR-0007）: `Reviewer` 条件を持つタスクのレビューは、`Standard` tier のプロバイダをここで選び
 //! （並列度の枠も実行中 run と共有する）、`review.rs` がアダプタ経由で別 run を起動する。`Plan` kind の
@@ -97,13 +98,18 @@ use crate::policy::{
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+/// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
+mod behind_target;
 mod child_tasks;
 mod cluster;
+mod continuation_session;
 mod dispatch_run;
 /// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。
 mod followups;
 mod housekeeping;
 mod leases;
+/// 持ち主の居ない `running` の `runs` 行の照合（lease を持たない reviewer run 等）。
+mod ownerless_runs;
 mod phase_integration;
 mod planner_flow;
 mod provider_select;
@@ -113,6 +119,8 @@ mod review_verdict;
 mod run_context;
 mod sinks;
 mod snapshot;
+/// ADR-0130 D5: review 前 sync の待ち行列の stale 優先。
+mod stale_priority;
 mod tree_units;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
@@ -122,6 +130,9 @@ use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
 mod worker_finish;
 mod worker_task;
 mod workspaces;
+mod write_set_gate;
+/// ADR-0130 D2: run / WU の actual write-set の採取と保存。
+mod write_set_record;
 
 pub use cluster::{
     ClusterCommandProbe, ClusterConnector, ClusterForwardSpec, ClusterLivenessProbe,
@@ -240,6 +251,10 @@ struct ScratchState {
     pinned_summary: Option<String>,
     /// この tick で緊急 GC を回した（通常の `scratch_gc` phase を重ねない）。
     ran_this_tick: bool,
+    /// ADR-0129 (4): 直近に seed の更新を確かめた時刻（`None` = 起動後まだ。昇格の後の起動で直ちに確かめる）。
+    seed_last_check: Option<Instant>,
+    /// seed の更新スレッドが動いている間は `true`。
+    seed_refreshing: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// ADR-0075 D3: run の `CARGO_TARGET_DIR` をどこから取るか（`run_worker` に渡す）。
@@ -283,7 +298,15 @@ fn allocate_scratch_target(
         adopt: settings.adopt,
         max_distance: settings.adopt_max_distance,
     };
-    match task_worker::scratch::allocate(&pool, &req) {
+    // ADR-0129 (4): seed は `[scratch.cargo]` と worktree の rustc（rust-toolchain に従う）が一致するときだけ写す。
+    let rustc = || rustc_version(&repo.dir);
+    let seed = task_worker::scratch::SeedPolicy {
+        enabled: settings.seed_reflink,
+        cargo: Some(settings.cargo.clone()),
+        rustc: Some(&rustc),
+    };
+    let ops = task_worker::scratch::SeedCopyOps::real();
+    match task_worker::scratch::allocate_with_seed(&pool, &req, &seed, &ops) {
         Ok(a) => {
             if let Some(from) = &a.adopted_from {
                 tracing::info!(owner = %owner, adopted_from = %from, target = %a.target_dir.display(), "scratch: adopted a warm target (ADR-0075 D3)");
@@ -296,6 +319,19 @@ fn allocate_scratch_target(
             pool.target_dir(owner)
         }
     }
+}
+
+/// `rustc -V`（`dir` で実行する。seed の manifest と比べる）。
+fn rustc_version(dir: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new("rustc")
+        .arg("-V")
+        .current_dir(dir)
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// ADR-0041 D5: この celeris が**面倒を見てよいタスク**の述語。`None`（既定）は「全部」＝従来どおり。
@@ -510,6 +546,9 @@ pub struct ExecutionConfig {
     /// ADR-0089（Phase R6-5）: `[execution] max_cos_runs`（既定 2）。`max_concurrency` とプールの
     /// `concurrency` から外す CoS の対話 run の同時数の絶対上限。`0` で例外を無効にする。
     pub max_cos_runs: usize,
+    /// ADR-0140 D1 #4: `[sessions] continuation_resume`（既定 `true`）。`false` なら WU の continuation を
+    /// 同じ Claude Code session で resume せず、常に checkpoint 前置きの fresh にする（`fresh_requested`）。
+    pub continuation_session_resume: bool,
 }
 
 /// ADR-0074 §4: `max_parallel_work_units` の上限。
@@ -531,6 +570,7 @@ impl Default for ExecutionConfig {
             max_parallel_work_units: 3,
             limits: task_core::ExecutionLimits::default(),
             max_cos_runs: crate::capacity::DEFAULT_MAX_COS_RUNS,
+            continuation_session_resume: true,
         }
     }
 }
@@ -544,6 +584,8 @@ pub struct KnowledgeRuntimeConfig {
     pub default_mounts: Vec<task_core::KnowledgeMount>,
     /// ADR-0052 D1（Phase 64）: `[knowledge.langmem].base_url`。知識整理タスクを dispatch する直前に
     /// `GET <base_url>/models` を当てる。`None` なら検査しない（＝従来どおり `langmem` で走らせる）。
+    /// ADR-0132 D4: 通常は celeris の llm-proxy を指す。検査するのは proxy の到達性で、proxy の先の
+    /// Qwen の生死ではない（Qwen が落ちても proxy が Claude / GPT の cheap に倒すので `langmem` のまま）。
     pub langmem_base_url: Option<String>,
     /// Phase 65b: `[knowledge.langmem].api_key_secret` から解決した平文のトークン（`[secrets] dir`
     /// が無い・見つからない等なら `None`）。到達性の probe が `Authorization: Bearer` に使う
@@ -798,6 +840,8 @@ struct IntegrationRun {
     merged: Vec<crate::integration::Merged>,
     head: String,
     conflict: Option<crate::integration::Conflict>,
+    /// ADR-0118 D5: 子の merge candidate の照合で止まった（そのリポジトリの id と照合の結果）。
+    stale: Option<(task_core::RepoId, crate::integration::StaleCandidate)>,
     /// `(cmd, pass, summary)`。
     checks: Vec<(String, bool, String)>,
 }
@@ -963,6 +1007,10 @@ struct RunExtras {
     /// ADR-0072 D9（Phase E2）: この run が WU の continuation なら、events からではなく
     /// `runs` 索引から組み立てた続きの文脈（`run_worker` は events から求める代わりにこれを使う）。
     continuation_override: Option<task_worker::ContinuationContext>,
+    /// ADR-0140 D2: この run が WU の継続 session（`kind = continuation`）を使うなら `(task_id, work_unit_id)`。
+    /// atomic task の task 単位の session なら `work_unit_id` は `None`（付記 session-container）。
+    /// `run_worker` が sink に渡し、resume 拒否でその session を retire する（CoS の `session_key` とは別）。
+    continuation_session: Option<(TaskId, Option<String>)>,
     /// ADR-0072 D13/D14（Phase E3）: task-local な planner run にだけ `Some`
     /// （`RunContext.execution_planner` にそのまま乗る）。
     execution_planner: Option<task_worker::protocol::ExecutionPlannerContext>,
@@ -981,6 +1029,8 @@ struct RunExtras {
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,
+    /// ADR-0124 D3/D4: 直行経路（`route = direct`・shadow でない）の implementation run だけ `Some`。
+    direct_route: Option<task_worker::protocol::DirectRouteContext>,
     /// ADR-0074「R7-11 実装時の明確化」: この run の実効の予算（planner なら `[execution.planner]`、WU なら D18、
     /// 知識整理のフォールバックなら ADR-0052 の値、それ以外は task の予算）。`run_worker` は DB から読み直した
     /// 写しの `budget` をこれで置き換える（`max_turns` が `RunRequest.task.budget` → `--max-turns` に届くように）。
@@ -1019,6 +1069,22 @@ pub struct Dispatcher {
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     #[cfg(test)]
     test_policy_clock: Option<Arc<StdMutex<Instant>>>,
+    /// 試験だけの切替: review 前の target 同期（ADR-0118）を飛ばし、旧経路（未同期の HEAD を review）を再現する
+    /// （phase_effect_ab::review_sync の off）。
+    #[cfg(test)]
+    test_skip_pre_review_sync: bool,
+    /// 試験だけの切替: write-set gate（ADR-0130 D3）を切り、重なる run も同時に起こす
+    /// （phase_effect_ab::write_set の off）。
+    #[cfg(test)]
+    test_disable_write_set_gate: bool,
+    /// 試験だけの切替: review 前 sync の stale 優先（ADR-0130 D5）を切り、待ち行列を候補の順のまま渡す
+    /// （phase_effect_ab::stale_priority の off）。
+    #[cfg(test)]
+    test_disable_stale_priority: bool,
+    /// 試験だけの切替: review 前 sync の衝突を IntegrationRepair（ADR-0120）ではなく `ReviewFail` で返す
+    /// 旧経路を再現する（phase_effect_ab::review_sync の Phase 2 off）。
+    #[cfg(test)]
+    test_sync_conflict_as_review_fail: bool,
     /// ADR-0074 D1.5（Phase F2）: 鍵は (task, WU)。Task 単位の問いは `running_for_task`。
     running: HashMap<RunKey, RunEntry>,
     reviewing: HashMap<TaskId, ReviewEntry>,
@@ -1032,6 +1098,9 @@ pub struct Dispatcher {
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
+    /// ADR-0130 D2: run（id）ごとの actual write-set の採取場所と開始 HEAD。dispatch で入れ、worker の
+    /// 終了処理で取り出す。プロセス内メモリのみ（再起動後に終わった run は `unavailable` として残す）。
+    run_write_bases: HashMap<String, Vec<write_set_record::RunWriteBase>>,
     /// ADR-0079 D10（Phase R3b）: 理由なく止まっている（`LivenessClass::Unexplained`）と最初に見た木の節点と、その時の
     /// 節点の最後の event の seq（seq が変われば数え直す）。プロセス内メモリのみ（再起動で数え直す = 安全側）。
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
@@ -1040,6 +1109,12 @@ pub struct Dispatcher {
     /// ADR-0079 付記「R6-1」D4: 最後に終端の task の `runs` 索引の `running` の行を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
     runs_reconciled_at: Option<OffsetDateTime>,
+    /// 最後に持ち主の居ない `running` の `runs` 行を照合した時刻（active かつ孤児の回収が有効になって
+    /// 最初の tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。`ownerless_runs.rs`）。
+    ownerless_reconciled_at: Option<OffsetDateTime>,
+    /// 手元のレビューのうち、前の tick で「tokio task は終わっているのに判定の完了が届いていない」と見た
+    /// task（`ownerless_runs.rs` の `reap_lost_reviews`。2 tick 続けて見えたら取りこぼしと判定する）。
+    lost_review_watch: std::collections::HashSet<TaskId>,
     disk_low: bool,
     /// ADR-0074 F5-fix: 終端の WU の target を消す別スレッドが動いている間は `true`（重ねて起こさない）。
     removing_build_caches: Arc<std::sync::atomic::AtomicBool>,
@@ -1057,11 +1132,21 @@ pub struct Dispatcher {
     /// 打ち切りは `handle.abort()`（= 子プロセスへの SIGKILL）で、**孫プロセスは即死しない**ので、
     /// 同じ tick で同じ worktree に次の run を入れると 2 つの書き手が重なる（Phase 53 の監査で発見）。
     just_aborted: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D3: 走っている run の expected write-set の予約（run を起こした時点の hint）。
+    write_reservations: HashMap<RunKey, write_set_gate::WriteReservation>,
+    /// ADR-0130 D3: write-set の重なりで見送った候補の待機記録（公平性）。
+    write_set_waits: HashMap<RunKey, write_set_gate::WriteSetWait>,
+    /// 待機を作った順の通し番号（同じ tick に待ち始めた待機の先後を決定的に決める。2026-10-03-write-set-no-starvation）。
+    write_set_hold_seq: u64,
     /// ADR-0018 D2（監査 4-1）: この tick でクラスタの多重接続が無い／cooldown 中のため待っている ready タスク。「人のログイン待ち」で
     /// 経路なし（`unroutable`）とは別物。`is_idle` の待ち対象から外すだけで、スナップショットには出さない（受信箱の (d) が知らせる）。
     cluster_waiting: std::collections::HashSet<TaskId>,
     /// 人間の承認待ちで延期中の reviewing タスク（`is_idle` 判定用。ADR-0010 D8）。
     awaiting_human: std::collections::HashSet<TaskId>,
+    /// ADR-0130 D5: review 前 sync を待つ reviewing task（待機開始順と、選ばれなかった連続 tick 数）。
+    review_sync_queue: HashMap<TaskId, stale_priority::ReviewSyncWait>,
+    /// ADR-0130 D5: 次の待機開始順。
+    review_sync_seq: u64,
     /// ADR-0016 D2 / M5: レビューは全 pass だが、委譲した子が終端になるのを待っている reviewing タスク。
     /// 値はその run の id と、Plan kind なら検証済みの plan（子が終わってから `complete_plan` する）。
     awaiting_children: HashMap<TaskId, AwaitingChildren>,
@@ -1084,6 +1169,9 @@ pub struct Dispatcher {
     /// `control_master_alive_blocking`（`ssh -O check`）。テストは `set_cluster_liveness_probe` で
     /// 偽物に差し替え、実機の ssh 状態に依存しないようにする。
     cluster_liveness_probe: ClusterLivenessProbe,
+    /// 試験の継ぎ目: remote workspace の run と判定に渡す `SshSettings` の `ssh_command` /
+    /// `rsync_command` を差し替える（`set_cluster_ssh_command_override`）。`None`（既定）なら本物の ssh / rsync。
+    cluster_ssh_command_override: Option<Vec<String>>,
     /// tick の回数（スナップショット用）。
     ticks: u64,
     publisher: Option<SnapshotPublisher>,
@@ -1265,27 +1353,14 @@ impl Dispatcher {
                 None => HashMap::new(),
             };
         // ADR-0075 D1: scratch を NFS 上で無効化したときは起動ログに理由を出す（従来の build_cache_dir に戻る）。
+        // ADR-0129 (3): `[scratch] mount` が mount されていなければ従来の場所へ戻したことを出す。
+        if let Some(reason) = &config.scratch.dir_fallback_reason {
+            tracing::warn!(%reason, "scratch dir fell back to the previous location");
+        }
         if let Some(reason) = &config.scratch.disabled_reason {
             tracing::warn!(%reason, "scratch pool disabled");
         } else if config.scratch.enabled && config.shared_build_cache {
             tracing::info!(dir = %config.scratch.dir.display(), "scratch pool enabled (ADR-0075)");
-            // ADR-0075 D4（Phase G2）: sccache を配線するか（run ごとにも確かめる。ここは起動ログだけ）。
-            let state = task_worker::scratch::resolve_sccache(
-                &config.scratch,
-                task_worker::scratch::server_listening,
-            );
-            match state.reason() {
-                None => tracing::info!(
-                    port = config.scratch.sccache.server_port,
-                    binary = %config.scratch.sccache.binary.display(),
-                    "sccache L1 wired into cargo runs (ADR-0075 D4)"
-                ),
-                Some(reason) => tracing::info!(
-                    state = state.label(),
-                    reason,
-                    "sccache L1 not wired; runs use plain cargo (ADR-0075 D4)"
-                ),
-            }
         }
         Self {
             store,
@@ -1297,14 +1372,25 @@ impl Dispatcher {
             test_now: None,
             #[cfg(test)]
             test_policy_clock: None,
+            #[cfg(test)]
+            test_skip_pre_review_sync: false,
+            #[cfg(test)]
+            test_disable_write_set_gate: false,
+            #[cfg(test)]
+            test_disable_stale_priority: false,
+            #[cfg(test)]
+            test_sync_conflict_as_review_fail: false,
             running: HashMap::new(),
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
             wu_prepare_failures: HashMap::new(),
+            run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
             runs_reconciled_at: None,
+            ownerless_reconciled_at: None,
+            lost_review_watch: std::collections::HashSet::new(),
             disk_low: false,
             removing_build_caches: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             scratch: ScratchState::default(),
@@ -1312,9 +1398,14 @@ impl Dispatcher {
             warned_unroutable: std::collections::HashSet::new(),
             warned_cluster_tool: std::collections::HashSet::new(),
             just_aborted: std::collections::HashSet::new(),
+            write_reservations: HashMap::new(),
+            write_set_waits: HashMap::new(),
+            write_set_hold_seq: 0,
             unroutable: std::collections::HashSet::new(),
             cluster_waiting: std::collections::HashSet::new(),
             awaiting_human: std::collections::HashSet::new(),
+            review_sync_queue: HashMap::new(),
+            review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
             checking: HashMap::new(),
@@ -1327,6 +1418,7 @@ impl Dispatcher {
             cluster_liveness_probe: Arc::new(|ssh_command: &[String], host: &str| {
                 control_master_alive_blocking(ssh_command, host)
             }),
+            cluster_ssh_command_override: None,
             ticks: 0,
             publisher: None,
             account_pool_providers,
@@ -1725,6 +1817,11 @@ impl Dispatcher {
         self.abort_stale_runs()?;
         // ADR-0079 付記「R6-1」D4: 終端の task の `running` のままの `runs` 行を閉じる（起動時と定期）。
         self.reconcile_terminal_runs();
+        // 手元のレビューの取りこぼし（判定の完了が届かないまま終わった・期限を越えた）を閉じる（毎 tick。
+        // draining 中も: 残ったままだと `in_flight` が 0 にならず drain が終わらない）。
+        self.reap_lost_reviews();
+        // lease を持たず、どのインスタンスも抱えていない `running` の `runs` 行を閉じる（起動時と定期）。
+        self.reconcile_ownerless_runs();
         // ADR-0043 D2: **中止**されたタスクの worktree とブランチを消す（終端〈done / failed〉では消さない）。
         self.cleanup_cancelled_worktrees()?;
         // ADR-0075 D2（Phase G1）: scratch pool の semantic GC（`scratch_gc` phase。rename まで、削除と測定は別スレッド）。
@@ -1733,6 +1830,8 @@ impl Dispatcher {
             if !self.scratch.ran_this_tick {
                 self.scratch_gc(false);
             }
+            // ADR-0129 (4)(5): seed の GC（rename まで）と、main が進んだときの seed の更新（別スレッド）。
+            self.seed_housekeeping(Instant::now());
         } else {
             self.cleanup_work_unit_build_caches();
             self.scratch.view = self.config.shared_build_cache.then(|| {
@@ -1766,6 +1865,29 @@ impl Dispatcher {
         let cluster_ms = lap(&mut at);
         run_cluster_hooks_off_async(|| self.refresh_cluster_tunnels());
         let tunnel_ms = lap(&mut at);
+        // ADR-0131 D4: dispatch の前に予定時刻を評価する。draining 中やディスク不足の
+        // インスタンスは新しい task を作らない。時刻はテストで差し替えられる時計を使う。
+        if self.accepting_new_work && self.disk_ready {
+            let ctx = task_ops::cron_jobs::CronFireContext {
+                roles: &self.config.roles,
+                genres: &self.config.genres,
+                ..Default::default()
+            };
+            for result in
+                task_ops::cron_jobs::fire_due_with(self.store.as_ref(), &ctx, self.now_utc())
+            {
+                match result {
+                    Ok(outcome) => tracing::info!(
+                        job_id = %outcome.job_id,
+                        job_name = %outcome.job_name,
+                        task_id = ?outcome.task_id,
+                        runs = ?outcome.runs,
+                        "cron job evaluated"
+                    ),
+                    Err(error) => tracing::warn!(error = %error, "cron job evaluation failed"),
+                }
+            }
+        }
         report.dispatched = if self.accepting_new_work && self.disk_ready {
             self.dispatch_ready()?
         } else {
@@ -1774,6 +1896,12 @@ impl Dispatcher {
         let dispatch_ms = lap(&mut at);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
+        // Use the same injected clock as the rest of dispatch; the feed never performs I/O outside the store.
+        if self.accepting_new_work
+            && let Ok(at) = OffsetDateTime::from_unix_timestamp(now)
+        {
+            self.sync_notice_feed(at);
+        }
         let idle_ms = lap(&mut at);
         self.publish_snapshot();
         if started.elapsed() >= SLOW_TICK {
@@ -1957,6 +2085,8 @@ impl Dispatcher {
         self.cluster_waiting.clear();
         // ADR-0089（Phase R6-5）: 非 CoS の枠が埋まっていても、CoS の対話 run の枠が空いていれば走査する。
         if !self.run_load().any_slot() {
+            // 容量切れで照合しなかった tick: write-set の待機の数えを戻さない（2026-10-03-write-set-no-starvation）。
+            self.carry_write_set_waits();
             return Ok(0);
         }
         // 上位から見て見送りが続いても後続を試せるよう、窓は広めに取る。
@@ -1964,17 +2094,24 @@ impl Dispatcher {
         let ready_started = Instant::now();
         let candidates = self.store.ready_tasks(window)?;
         log_slow_step("ready_tasks", ready_started);
+        // ADR-0130 D3: 終わった run の予約を捨て、長く待たされた候補を先に照合する。
+        self.prune_write_set_state();
+        let candidates = self.order_write_set_starved_first(candidates);
         let now = self.monotonic_now();
         let mut dispatched = 0;
         // この tick で並列度の上限に達していると分かったプロバイダ（tick 内では空きが増えないので共有する）。
         let mut full: std::collections::HashSet<ProviderId> = std::collections::HashSet::new();
+        // 容量が尽きて照合しなかった候補が残ったか（残れば write-set の待機の数えを引き継ぐ）。
+        let mut capacity_cut = false;
         for task in candidates {
             let load = self.run_load();
             if !load.any_slot() {
+                capacity_cut = true;
                 break;
             }
             // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
             if !load.admits(false) && !task_core::is_conversation(&task) {
+                capacity_cut = true;
                 continue;
             }
             if self.dispatch_one(task, None, &mut full, now)? {
@@ -1983,7 +2120,11 @@ impl Dispatcher {
         }
         // ADR-0074 D1.3 3.（Phase F2b）: 公平性。Ready の Task の 1 本目を先に起こし、残りの枠を
         // 「Running で、現在の工程に runnable な WU を持つ Task」の 2 本目以降に回す（作成順）。
-        dispatched += self.dispatch_parallel_work_units(&mut full, now)?;
+        let (parallel, parallel_cut) = self.dispatch_parallel_work_units(&mut full, now)?;
+        dispatched += parallel;
+        if capacity_cut || parallel_cut {
+            self.carry_write_set_waits();
+        }
         Ok(dispatched)
     }
 

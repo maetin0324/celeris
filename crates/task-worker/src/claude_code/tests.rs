@@ -600,8 +600,15 @@ fn stream_json_maps_to_structured_progress() {
     let sink = RecordingSink::default();
     let mut last_result = None;
     let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::default();
     for line in text.lines() {
-        handle_line(line, &sink, &mut last_result, &mut background);
+        handle_line(
+            line,
+            &sink,
+            &mut last_result,
+            &mut background,
+            &mut exploration,
+        );
     }
     let items = sink
         .structured
@@ -806,6 +813,8 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
                     cache_read_tokens: None,
                     cache_creation_tokens: None,
                     cost_usd: None,
+                    duplicate_reads: Some(0),
+                    session_resumed: Some(false),
                 })
             );
         }
@@ -3470,7 +3479,11 @@ fn planner_prompt_has_the_check_writing_section() {
     let task = crate::protocol::tests::sample_task();
     let needles = [
         "### check の書き方",
-        "`docs/PROGRESS.md`, `docs/progress/`, and every path this plan itself says the unit may write",
+        "`agent-docs/progress/`, `agent-docs/adr/`, and every path this plan itself says the unit may write",
+        // ADR-0128 D3・D5・D7: 記録の置き場所と land 系 check の 3 本。
+        "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",
+        "`agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).",
+        "`sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` and `sh scripts/dev/progress-index.sh --check`",
         "Do not pass extra positional arguments to `pnpm -C <dir> test` or `cargo test`",
         "corepack pnpm@<version from package.json packageManager> -C <dir>",
         "Compare against `$(git merge-base HEAD main)`",
@@ -3480,10 +3493,12 @@ fn planner_prompt_has_the_check_writing_section() {
         "or the task's directory (where `artifacts/` is) when the task has no git worktree",
         "write the exact invocation (the arguments the check passes) in the unit's objective",
         "Checks run with `/bin/sh` (dash), so do not use bash-only syntax such as `${s:0:12}`, `[[ ]]`, or arrays.",
+        "run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.",
         "exclude every unit's allowed paths in that stage, not only this unit's paths",
         "Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.",
         "replace mandatory `cargo test --workspace` with a check that `crates/` has no diff",
         "Include the planned ADR and recording locations from the start in acceptance criteria and diff-check path scopes.",
+        "Do not run CPU-burning load scripts (busy loops, stress-ng, parallel cargo load) in checks or acceptance; reproduce timing bugs deterministically (paused or injected clock, event waits, SIGSTOP/SIGCONT, test-only delay hooks; see agent-docs/guides/testing.md).",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3541,6 +3556,8 @@ fn planner_prompt_declares_production_host_changes_as_a_human_procedure() {
         "systemd-run",
         "~/.config/celeris",
         "~/.local/celeris/releases",
+        "`/local`",
+        "/local/celeris/state/releases",
     ];
     let v2 = crate::protocol::ExecutionPlannerContext {
         gate_rule_id: "human/explicit".to_string(),
@@ -3635,4 +3652,237 @@ fn replan_prompt_allows_rewriting_only_the_checks_of_done_units() {
             assert!(prompt.contains(needle), "{name}: missing {needle:?}");
         }
     }
+}
+
+/// ADR-0140 D4: stream-json の行を `handle_line` に通し、最後の `result` の usage に載る
+/// `duplicate_reads` を返す。
+fn duplicate_reads_after(root: &Path, resumed: bool, lines: &[String]) -> Option<Usage> {
+    let sink = RecordingSink::default();
+    let mut last_result = None;
+    let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::new(Some(root), resumed);
+    for line in lines {
+        handle_line(
+            line,
+            &sink,
+            &mut last_result,
+            &mut background,
+            &mut exploration,
+        );
+    }
+    last_result.and_then(|meta| meta.usage)
+}
+
+fn tool_use_line(name: &str, input: serde_json::Value) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": name, "input": input}]}
+    })
+    .to_string()
+}
+
+fn result_line() -> String {
+    r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":1,"output_tokens":2}}"#
+        .to_string()
+}
+
+/// ADR-0140 D4: 同じ path の 2 回目の `Read` は 1 件の重複（絶対 path と cwd 相対・`./`・`..` を
+/// 同じ正規化 path として数える）。
+#[test]
+fn duplicate_read_same_path_twice_counts_one() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/lib.rs"}),
+        ),
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "./src/../src/lib.rs"}),
+        ),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, false, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(1));
+    assert_eq!(usage.session_resumed, Some(false));
+    assert_eq!(usage.input_tokens, Some(1));
+}
+
+/// ADR-0140 D4: 別 path の `Read`、別 path の同じ pattern の `Grep`、`Glob`・他の道具は重複にしない。
+#[test]
+fn duplicate_read_distinct_paths_count_zero() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/lib.rs"}),
+        ),
+        tool_use_line(
+            "Read",
+            serde_json::json!({"file_path": "/work/repo/src/main.rs"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "fn main", "path": "src"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "fn main", "path": "tests"}),
+        ),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Bash", serde_json::json!({"command": "cat src/lib.rs"})),
+        tool_use_line("Bash", serde_json::json!({"command": "cat src/lib.rs"})),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, false, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(0));
+}
+
+/// ADR-0140 D4: `Grep`/`Glob` は pattern + path が同じなら重複（path の書き方の違いは正規化する）。
+#[test]
+fn duplicate_read_counts_repeated_grep_and_glob() {
+    let root = Path::new("/work/repo");
+    let lines = vec![
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "Usage", "path": "crates"}),
+        ),
+        tool_use_line(
+            "Grep",
+            serde_json::json!({"pattern": "Usage", "path": "/work/repo/crates"}),
+        ),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Glob", serde_json::json!({"pattern": "**/*.rs"})),
+        tool_use_line("Read", serde_json::json!({"file_path": "crates"})),
+        result_line(),
+    ];
+    let usage = duplicate_reads_after(root, true, &lines).expect("usage");
+    assert_eq!(usage.duplicate_reads, Some(2));
+    assert_eq!(usage.session_resumed, Some(true));
+}
+
+/// ADR-0140 D4: `--resume` で起動した run は終了結果の usage に `session_resumed = true` が載り、
+/// stream の再 Read も数えられる（スタブの claude。外部ネットワーク・実 claude は使わない）。
+#[tokio::test]
+async fn duplicate_read_and_resume_mark_reach_the_terminal_usage() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"mkdir -p artifacts
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read","input":{"file_path":"src/lib.rs"}}]}}'
+printf '%s' '{"summary":"continued","evidence":[]}' > artifacts/result.json
+echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":10,"output_tokens":20}}'
+"#,
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: ClaudeCodeAdapter::ID.to_string(),
+        session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        resume: true,
+    });
+    let outcome = adapter
+        .run(
+            req,
+            "run-resume",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { usage, .. } => {
+            let usage = usage.expect("usage");
+            assert_eq!(usage.session_resumed, Some(true));
+            assert_eq!(usage.duplicate_reads, Some(1));
+        }
+        other => panic!("expected done, got {other:?}"),
+    }
+}
+
+/// ADR-0140 D4: resume を頼んでも拒否された run（`error_during_execution` + 拒否の文言）は
+/// `session_resumed = false`（resume した run に数えない）。
+#[tokio::test]
+async fn duplicate_read_rejected_resume_is_not_marked_resumed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_claude(
+        dir.path(),
+        r#"echo 'No conversation found with session ID: 550e8400-e29b-41d4-a716-446655440000' >&2
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"usage":{"input_tokens":1,"output_tokens":0}}'
+"#,
+    );
+    let adapter = ClaudeCodeAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: ClaudeCodeAdapter::ID.to_string(),
+        session_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+        resume: true,
+    });
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-rejected", default_limits(), &sink)
+        .await;
+    let usage = match outcome {
+        Ok(RunOutcome { mut terminal, .. }) => terminal_usage_mut(&mut terminal).copied(),
+        Err(_) => None,
+    };
+    if let Some(usage) = usage {
+        assert_eq!(usage.session_resumed, Some(false));
+    }
+    let result_json =
+        std::fs::read_to_string(dir.path().join("runs/run-rejected/result.json")).unwrap();
+    assert!(
+        !result_json.contains("\"session_resumed\":true"),
+        "{result_json}"
+    );
+}
+
+/// ADR-0124 D4: 直行経路の run だけ `## Acceptance criteria` の直後に「直行経路（planner なし）」の節が出る。
+#[test]
+fn direct_route_prompt_has_the_section_after_the_acceptance_criteria() {
+    let task = crate::protocol::tests::sample_task();
+    let context = RunContext {
+        direct_route: Some(crate::protocol::DirectRouteContext {
+            policy_version: "direct-route/1".into(),
+            overrode_gate: true,
+            reasons: vec!["direct/single-repo: repos=1, multi_environment=false".into()],
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-direct", "artifacts");
+    let section = prompt
+        .find("## 直行経路（planner なし）")
+        .expect("direct route section");
+    let acceptance = prompt.find("## Acceptance criteria").expect("acceptance");
+    let instructions = prompt.find("## Instructions").expect("instructions");
+    assert!(acceptance < section && section < instructions, "{prompt}");
+    assert!(
+        prompt.contains("調査 → 編集 → テスト → 局所修正を、この run の中で完結させる。"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("落ちたら同じ run の中で直して再実行する"));
+    assert!(prompt.contains("判定の根拠（direct-route/1）:"));
+    assert!(prompt.contains("- direct/single-repo: repos=1, multi_environment=false"));
+}
+
+/// ADR-0124 D4: `direct_route` が無い run のプロンプトは 1 バイトも変わらない（節を除けば同一）。
+#[test]
+fn direct_route_prompt_absent_leaves_the_prompt_unchanged() {
+    let task = crate::protocol::tests::sample_task();
+    let without = build_prompt(&task, &RunContext::default(), "run-x", "artifacts");
+    assert!(!without.contains("直行経路"));
+    let context = RunContext {
+        direct_route: Some(crate::protocol::DirectRouteContext {
+            policy_version: "direct-route/1".into(),
+            ..Default::default()
+        }),
+        ..RunContext::default()
+    };
+    let with = build_prompt(&task, &context, "run-x", "artifacts");
+    let section = super::prompt::direct_route_section(&context);
+    assert!(!section.is_empty());
+    assert!(!section.contains("判定の根拠"), "{section}");
+    assert_eq!(with.replacen(&section, "", 1), without);
+    assert!(super::prompt::direct_route_section(&RunContext::default()).is_empty());
 }

@@ -11,7 +11,7 @@
 //! `harness`（`[[harnesses]]`・`[[roles]]`・`[[genres]]`）/ `org` / `delegation` / `dispatch`
 //! （`[reviewer]`・`[review]`・`[dispatch]`・`[plan]`・`[sessions]`）/ `execution` / `cluster` /
 //! `workspace`（＋`[containers]`）/ `scratch` / `github` / `selfdeploy`（＋`[handoff]`）/
-//! `knowledge`（＋`[memory]`）。公開型はすべて `crate::config::*` から従来どおり引ける。
+//! `knowledge`（＋`[memory]`）/ `storage`（`[storage]`、ADR-0136）。公開型はすべて `crate::config::*` から従来どおり引ける。
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -22,8 +22,10 @@ mod accounts;
 mod adapters;
 mod api;
 mod cluster;
+mod cron;
 mod db;
 mod delegation;
+mod delivery;
 mod dispatch;
 mod execution;
 mod github;
@@ -34,14 +36,17 @@ mod providers;
 mod proxy;
 mod scratch;
 mod selfdeploy;
+mod storage;
 mod workspace;
 
 pub use accounts::*;
 pub use adapters::*;
 pub use api::*;
 pub use cluster::*;
+pub use cron::*;
 pub use db::*;
 pub use delegation::*;
+pub use delivery::{AutoResolveConfig, DeliveryConfig, GeneratedConfig};
 pub use dispatch::*;
 pub use execution::*;
 pub use github::*;
@@ -51,6 +56,7 @@ pub use org::*;
 pub use providers::*;
 pub use scratch::*;
 pub use selfdeploy::*;
+pub use storage::*;
 pub use workspace::*;
 
 #[derive(Debug, thiserror::Error)]
@@ -201,6 +207,13 @@ pub struct Config {
     /// ADR-0043 D3（Phase 56）: コンテナ実行（runtime・既定のイメージ・ビルドの置き場）。
     #[serde(default)]
     pub containers: ContainersConfig,
+    /// ADR-0131 D6 / 付記 D10: `[[cron.seed]]`。空の `cron_jobs` に起動時に一度だけ入れる定期実行の種
+    /// （以後は DB が正。設定は再読込しない）。
+    #[serde(default)]
+    pub cron: CronConfig,
+    /// ADR-0136: `[storage]`。hot データの正本を置く mount（`/local`）の起動前検査。省略時は検査しない。
+    #[serde(default)]
+    pub storage: StorageConfig,
     // ---- ADR-0047（Phase 61）: 知識ベース。ここから ----
     /// ADR-0047 D1: `[knowledge]`。正本の置き場と、実効 profile が何も言わないときの既定のマウント。
     #[serde(default)]
@@ -230,11 +243,65 @@ pub struct Config {
     pub source_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+/// ADR-0116 D5: `[browser]`。`runtime` で isolated browser の runtime を誰が持つかを切り替える。
+/// - `"daemon"`（既定）— 従来どおり daemon が bwrap / sandboxd / Chrome を持つ（same-uid / subuid）。
+/// - `"launcher"` — 専用 host user の launcher（ADR-0115）に `launcher_socket` 経由で頼む。
+///   `launcher_socket` が無ければ設定読込みで error（fail closed。daemon 経路への黙った fallback はしない）。
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserRuntimeConfig {
     #[serde(default)]
     pub egress: BrowserEgressConfig,
+    #[serde(default = "default_browser_runtime")]
+    pub runtime: String,
+    #[serde(default)]
+    pub launcher_socket: Option<PathBuf>,
+}
+
+impl Default for BrowserRuntimeConfig {
+    fn default() -> Self {
+        Self {
+            egress: BrowserEgressConfig::default(),
+            runtime: default_browser_runtime(),
+            launcher_socket: None,
+        }
+    }
+}
+
+fn default_browser_runtime() -> String {
+    "daemon".to_string()
+}
+
+impl BrowserRuntimeConfig {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        match self.runtime.as_str() {
+            "daemon" => Ok(()),
+            "launcher" => {
+                if self.launcher_socket.is_none() {
+                    Err(ConfigError::Invalid(
+                        "[browser] launcher_socket is required when runtime = \"launcher\" (ADR-0116 D5)"
+                            .into(),
+                    ))
+                } else {
+                    Ok(())
+                }
+            }
+            other => Err(ConfigError::Invalid(format!(
+                "[browser] runtime must be one of [\"daemon\", \"launcher\"] (got {other:?})"
+            ))),
+        }
+    }
+
+    /// ADR-0116 D5: `validate` を通した後にだけ呼ぶ想定（`runtime = "launcher"` なら
+    /// `launcher_socket` が `Some` であることを前提にする）。
+    pub fn runtime_kind(&self) -> task_worker::browser::BrowserRuntimeKind {
+        match self.runtime.as_str() {
+            "launcher" => task_worker::browser::BrowserRuntimeKind::Launcher {
+                socket: self.launcher_socket.clone().unwrap_or_default(),
+            },
+            _ => task_worker::browser::BrowserRuntimeKind::Daemon,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -292,13 +359,31 @@ fn default_error_cooldown_secs() -> u64 {
 }
 
 impl Config {
+    /// `[delivery]` is a top-level TOML table, but its runtime settings live in an
+    /// existing sub-struct so adding them does not change `Config` struct literals.
+    fn parse_with_delivery(text: &str) -> Result<Self, ConfigError> {
+        let mut table: toml::Table = toml::from_str(text)?;
+        let delivery = table
+            .remove("delivery")
+            .map(|value| value.try_into::<DeliveryConfig>())
+            .transpose()?
+            .unwrap_or_default();
+        let mut cfg: Config = toml::Value::Table(table).try_into()?;
+        cfg.selfdeploy.delivery = delivery;
+        Ok(cfg)
+    }
+
     /// ファイルから読み、相対パスを設定ファイルのディレクトリ基準で絶対化する。
     pub fn load(path: &Path) -> Result<Self, ConfigError> {
         let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
             path: path.to_path_buf(),
             source,
         })?;
-        let mut cfg: Config = toml::from_str(&text)?;
+        let mut cfg = Self::parse_with_delivery(&text)?;
+        let deprecated = cfg.scratch.deprecated_sections();
+        if !deprecated.is_empty() {
+            tracing::warn!(sections = %deprecated.join(", "), "deprecated scratch cache settings are ignored");
+        }
         let base = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -342,6 +427,7 @@ impl Config {
         }
         cfg.knowledge.resolve_paths(&base);
         cfg.selfdeploy.resolve_paths(&base);
+        cfg.storage.resolve_paths();
         cfg.adapters.paperqa.resolve_paths(&base);
         providers::resolve_provider_settings(&mut cfg.providers, &base);
 
@@ -350,6 +436,13 @@ impl Config {
 
         // 3. 検証。
         cfg.validate()?;
+        for code in cfg.provider_kind_warnings() {
+            tracing::warn!(warning = %code, "provider kind compatibility warning");
+        }
+        // ADR-0139 D3: 知識整理 run が bearer を持たずに起きる設定を、run の前に知らせる。
+        for warning in cfg.langmem_auth_warnings() {
+            tracing::warn!(%warning, "knowledge.langmem auth warning");
+        }
         // API を有効にするなら、トークンが読めることを起動時に確かめる（exit 2）。
         if cfg.api.listen.is_some() {
             cfg.api.read_token()?;
@@ -359,6 +452,8 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.selfdeploy.validate()?;
+        self.selfdeploy.delivery.validate()?;
+        self.browser.validate()?;
         if self.max_concurrency == 0 {
             return Err(ConfigError::Invalid("max_concurrency must be >= 1".into()));
         }
@@ -369,7 +464,8 @@ impl Config {
         self.knowledge.validate()?;
         self.execution.validate()?;
         self.containers.validate()?;
-        providers::validate_providers(&self.providers, self.accounts.as_ref())?;
+        self.storage.validate()?;
+        providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;
         }
@@ -382,6 +478,8 @@ impl Config {
         let genre_ids = harness::validate_genres(&self.genres, &role_ids)?;
         harness::validate_conversation(self.conversation.as_ref(), &genre_ids)?;
         self.validate_org_seed(&genre_ids)?;
+        self.cron
+            .validate(&task_core::known_harness_ids(&self.genre_specs()))?;
         self.delegation.validate()?;
         // Phase 7 監査: cooldown 0 だと供給側失敗の requeue が毎 tick の再 dispatch になる。
         if self.error_cooldown_secs == 0 {

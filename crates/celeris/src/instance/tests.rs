@@ -408,3 +408,287 @@ fn a_missing_row_is_registered_again_and_deregister_removes_it() {
     only.deregister();
     assert!(store.instance_list().expect("list").is_empty());
 }
+
+// ADR-0040 付記（2026-10-02）: 昇格の認可の判定。
+
+fn evidence(current: Option<&str>, promoting: Option<(&str, i64)>) -> PromotionEvidence {
+    PromotionEvidence {
+        release_managed: true,
+        current_target: current.map(std::path::PathBuf::from),
+        promoting: promoting.map(|(sha12, started)| {
+            Ok(PromotingMarker {
+                sha12: sha12.into(),
+                started_at: at(started)
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .expect("fmt"),
+            })
+        }),
+        promote_lock: None,
+    }
+}
+
+#[test]
+fn dev_and_unmanaged_releases_skip_the_promotion_gate() {
+    let ev = evidence(Some("releases/other"), None);
+    assert!(matches!(
+        decide_promotion(DEV_RELEASE, &ev, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+    let unmanaged = PromotionEvidence {
+        release_managed: false,
+        ..ev
+    };
+    assert!(matches!(
+        decide_promotion("abc", &unmanaged, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+}
+
+#[test]
+fn current_pointing_at_the_release_authorizes_by_name() {
+    let ev = evidence(Some("releases/abc"), None);
+    assert!(matches!(
+        decide_promotion("abc", &ev, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    // 名前の比較は最後の要素だけ（`abcd` は `abc` ではない）。
+    let ev = evidence(Some("releases/abcd"), None);
+    assert!(matches!(
+        decide_promotion("abc", &ev, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+}
+
+#[test]
+fn a_fresh_matching_marker_authorizes_and_stale_or_foreign_ones_do_not() {
+    let fresh = evidence(Some("releases/old"), Some(("abc", -10)));
+    assert!(matches!(
+        decide_promotion("abc", &fresh, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let edge = evidence(None, Some(("abc", -PROMOTING_MAX_AGE_SECS)));
+    assert!(matches!(
+        decide_promotion("abc", &edge, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let stale = evidence(
+        Some("releases/old"),
+        Some(("abc", -PROMOTING_MAX_AGE_SECS - 1)),
+    );
+    assert!(matches!(
+        decide_promotion("abc", &stale, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let future = evidence(None, Some(("abc", PROMOTING_MAX_AGE_SECS + 1)));
+    assert!(matches!(
+        decide_promotion("abc", &future, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let foreign = evidence(Some("releases/old"), Some(("xyz", -10)));
+    assert!(matches!(
+        decide_promotion("abc", &foreign, at(0)),
+        PromotionGate::Rejected(_)
+    ));
+    let broken = PromotionEvidence {
+        promoting: Some(Err("bad json".into())),
+        ..evidence(None, None)
+    };
+    match decide_promotion("abc", &broken, at(0)) {
+        PromotionGate::Rejected(reason) => assert!(reason.contains("bad json"), "{reason}"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn read_promotion_evidence_reads_current_and_the_marker() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let releases = dir.path().join("releases");
+    std::fs::create_dir_all(releases.join("abc")).expect("mkdir");
+    std::os::unix::fs::symlink("releases/abc", dir.path().join("current")).expect("symlink");
+    std::fs::write(
+        releases.join("abc").join(PROMOTING_FILE),
+        r#"{"sha12":"abc","script":"promote.sh","mode":"live","pid":1,"started_at":"2026-10-02T00:00:00Z"}"#,
+    )
+    .expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(ev.release_managed);
+    assert_eq!(
+        ev.current_target.as_deref(),
+        Some(std::path::Path::new("releases/abc"))
+    );
+    assert_eq!(
+        ev.promoting,
+        Some(Ok(PromotingMarker {
+            sha12: "abc".into(),
+            started_at: "2026-10-02T00:00:00Z".into()
+        }))
+    );
+    assert_eq!(ev.promote_lock, None);
+    // 管理外の名前は印を読まない。
+    let other = read_promotion_evidence(&releases, "zzz");
+    assert!(!other.release_managed);
+    assert_eq!(other.promoting, None);
+    assert_eq!(other.promote_lock, None);
+}
+
+// ADR-0040 付記の規則 3: 旧版の GUI/API が書いた `promote.lock`。
+
+fn lock_evidence(pid: u32, alive: bool, modified: i64) -> PromotionEvidence {
+    PromotionEvidence {
+        promote_lock: Some(Ok(PromoteLockFact {
+            pid,
+            alive,
+            modified: at(modified),
+        })),
+        ..evidence(Some("releases/old"), None)
+    }
+}
+
+fn rejected_reason(gate: PromotionGate) -> String {
+    match gate {
+        PromotionGate::Rejected(reason) => reason,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn a_live_pid_and_a_fresh_promote_lock_authorize_the_old_promote_script() {
+    let fresh = lock_evidence(4242, true, -10);
+    assert!(matches!(
+        decide_promotion("abc", &fresh, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let edge = lock_evidence(4242, true, -PROMOTING_MAX_AGE_SECS);
+    assert!(matches!(
+        decide_promotion("abc", &edge, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    // dev・管理外は lock があっても素通しのまま。
+    assert!(matches!(
+        decide_promotion(DEV_RELEASE, &fresh, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+    let unmanaged = PromotionEvidence {
+        release_managed: false,
+        ..fresh
+    };
+    assert!(matches!(
+        decide_promotion("abc", &unmanaged, at(0)),
+        PromotionGate::Skipped(_)
+    ));
+}
+
+#[test]
+fn a_dead_pid_or_pid_zero_in_promote_lock_is_rejected() {
+    let dead = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, false, -10),
+        at(0),
+    ));
+    assert!(dead.contains("pid 4242 is not running"), "{dead}");
+    // pid 0 は `alive` が true でも（`pid_alive(0)` は true を返す）認可しない。
+    let zero = rejected_reason(decide_promotion("abc", &lock_evidence(0, true, -10), at(0)));
+    assert!(zero.contains("invalid pid 0"), "{zero}");
+}
+
+#[test]
+fn a_stale_or_future_promote_lock_is_rejected_even_with_a_live_pid() {
+    let stale = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, true, -PROMOTING_MAX_AGE_SECS - 1),
+        at(0),
+    ));
+    assert!(stale.contains(PROMOTE_LOCK_FILE), "{stale}");
+    let future = rejected_reason(decide_promotion(
+        "abc",
+        &lock_evidence(4242, true, PROMOTING_MAX_AGE_SECS + 1),
+        at(0),
+    ));
+    assert!(future.contains("limit 900s"), "{future}");
+}
+
+#[test]
+fn an_unreadable_promote_lock_is_rejected_with_its_reason() {
+    let broken = PromotionEvidence {
+        promote_lock: Some(Err("not a pid `x`".into())),
+        ..evidence(Some("releases/old"), None)
+    };
+    let reason = rejected_reason(decide_promotion("abc", &broken, at(0)));
+    assert!(reason.contains("not a pid `x`"), "{reason}");
+    // lock が無ければ理由に「無い」と出る（規則 1・2 の理由も残る）。
+    let none = rejected_reason(decide_promotion("abc", &evidence(None, None), at(0)));
+    assert!(none.contains("no promote.lock"), "{none}");
+    assert!(none.contains("no promoting.json"), "{none}");
+}
+
+#[test]
+fn rules_one_and_two_still_win_over_a_bad_promote_lock() {
+    let current = PromotionEvidence {
+        promote_lock: Some(Ok(PromoteLockFact {
+            pid: 4242,
+            alive: false,
+            modified: at(-10_000),
+        })),
+        ..evidence(Some("releases/abc"), None)
+    };
+    assert!(matches!(
+        decide_promotion("abc", &current, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+    let marker = PromotionEvidence {
+        promote_lock: Some(Err("bad".into())),
+        ..evidence(None, Some(("abc", -10)))
+    };
+    assert!(matches!(
+        decide_promotion("abc", &marker, at(0)),
+        PromotionGate::Authorized(_)
+    ));
+}
+
+#[test]
+fn read_promotion_evidence_reads_promote_lock_pid_liveness_and_mtime() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let releases = dir.path().join("releases");
+    let rel = releases.join("abc");
+    std::fs::create_dir_all(&rel).expect("mkdir");
+    let lock = rel.join(PROMOTE_LOCK_FILE);
+    // 自分自身の pid は生きている。前後の空白は許す。
+    let me = std::process::id();
+    std::fs::write(&lock, format!(" {me}\n")).expect("write");
+    let before = OffsetDateTime::now_utc() - time::Duration::seconds(5);
+    let ev = read_promotion_evidence(&releases, "abc");
+    let fact = ev.promote_lock.clone().expect("some").expect("ok");
+    assert_eq!(fact.pid, me);
+    assert!(fact.alive);
+    assert!(fact.modified >= before, "{:?}", fact.modified);
+    assert!(matches!(
+        decide_promotion("abc", &ev, OffsetDateTime::now_utc()),
+        PromotionGate::Authorized(_)
+    ));
+    // 古い mtime は拒否。
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    std::fs::File::options()
+        .write(true)
+        .open(&lock)
+        .expect("open")
+        .set_modified(old)
+        .expect("set mtime");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(matches!(
+        decide_promotion("abc", &ev, OffsetDateTime::now_utc()),
+        PromotionGate::Rejected(_)
+    ));
+    // pid でない中身は読めない lock。
+    std::fs::write(&lock, "not-a-pid").expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    assert!(
+        matches!(ev.promote_lock, Some(Err(_))),
+        "{:?}",
+        ev.promote_lock
+    );
+    // pid 0 は生死を判定せず false。
+    std::fs::write(&lock, "0").expect("write");
+    let ev = read_promotion_evidence(&releases, "abc");
+    let fact = ev.promote_lock.clone().expect("some").expect("ok");
+    assert_eq!((fact.pid, fact.alive), (0, false));
+}

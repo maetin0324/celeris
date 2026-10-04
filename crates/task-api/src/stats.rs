@@ -1,4 +1,4 @@
-//! プロバイダ別の run 集計（`docs/gui/api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
+//! プロバイダ別の run 集計（`docs/api/v1/gui-api.md` §5.8）。task-api のメモリ内の観測値で、真実ではない（再起動で再計算）。
 //!
 //! 最初の `GET /providers` で `events_since(0, 5000)` を繰り返して全イベントを 1 回走査し、以後は同じ要求の時点で
 //! 前回の続きから増分だけを読む。
@@ -190,7 +190,7 @@ fn format_day(day: Date) -> String {
     )
 }
 
-/// ADR-0024/0025: `WorkerStarted.account` と対応する `WorkerFinished` から集計する（`docs/gui/api.md` §3.29 の
+/// ADR-0024/0025: `WorkerStarted.account` と対応する `WorkerFinished` から集計する（`docs/api/v1/gui-api.md` §3.29 の
 /// `stats`）。`StatsState` とは別のカーソルを持つ（アカウント別の集計は `GET /accounts` からしか使わないため）。
 /// キーは `"<adapter>:<account id>"`（同じ id でもアダプタが違えば別のアカウントとして集計する。ADR-0025 D1）。
 #[derive(Debug, Default)]
@@ -310,6 +310,8 @@ struct ExecutionGroupAcc {
     max_turn_failures: u64,
     repairs: u64,
     replans: u64,
+    continuation: task_core::ContinuationMetrics,
+    continuation_by_work_unit: BTreeMap<String, task_core::ContinuationMetrics>,
     /// ADR-0074 D4.3（Phase F3 quota）: このグループの各タスクの `ExecutionMetrics.quota` を集めた
     /// もの（まだ (source, account, window) ごとに合計していない。`execution_metrics_from_groups`
     /// で `task_core::merge_quota_use` に通す）。
@@ -391,7 +393,12 @@ pub(crate) fn execution_metrics_summary(
             .and_then(|r| r.execution.as_ref())
             .map(|d| d.mode.as_str().to_string())
             .unwrap_or_else(|| "none".to_string());
-        let needs_events = (group_by == "lane" && row.has_execution_events)
+        let runs = if row.runs_count > 0 {
+            store.runs_for_task(row.task_id)?
+        } else {
+            Vec::new()
+        };
+        let needs_events = !runs.is_empty() || (group_by == "lane" && row.has_execution_events)
             || row.has_budget_events
             || row.has_transition_metrics
             // ADR-0074 D4.3（Phase F3 quota）: quota/cost_usd_complete は summarize_execution_metrics
@@ -480,6 +487,21 @@ pub(crate) fn execution_metrics_summary(
                 .map_or(row.repairs, |(m, _)| m.repairs_total),
         );
         acc.replans += u64::from(fallback.as_ref().map_or(row.replans, |(m, _)| m.replans));
+        let (continuation, by_wu) = task_core::summarize_continuation_runs(&event_list, &runs);
+        if runs.is_empty() {
+            if let Some((metrics, _)) = &fallback {
+                acc.continuation.absorb(&metrics.continuation);
+            }
+        } else {
+            acc.continuation.absorb(&continuation);
+        }
+        for (wu, values) in by_wu {
+            let key = wu.unwrap_or_else(|| format!("task:{}", row.task_id));
+            acc.continuation_by_work_unit
+                .entry(key)
+                .or_default()
+                .absorb(&values);
+        }
         // ADR-0074 D4.3（Phase F3 quota）: fallback（events を読んだ）タスクだけが quota /
         // cost_usd_complete を持つ（索引には無い）。
         if let Some((m, _)) = &fallback {
@@ -548,6 +570,20 @@ pub(crate) fn execution_metrics_summary_from_events(
         acc.max_turn_failures += u64::from(metrics.max_turn_failures);
         acc.repairs += u64::from(metrics.repairs_total);
         acc.replans += u64::from(metrics.replans);
+        let runs = store.runs_for_task(task.id)?;
+        let (continuation, by_wu) = task_core::summarize_continuation_runs(&event_list, &runs);
+        if runs.is_empty() {
+            acc.continuation.absorb(&metrics.continuation);
+        } else {
+            acc.continuation.absorb(&continuation);
+        }
+        for (wu, values) in by_wu {
+            let key = wu.unwrap_or_else(|| format!("task:{}", task.id));
+            acc.continuation_by_work_unit
+                .entry(key)
+                .or_default()
+                .absorb(&values);
+        }
         acc.quota_rows.extend(metrics.quota.iter().cloned());
         acc.cost_usd_complete = acc.cost_usd_complete && metrics.cost_usd_complete;
         if group_by == "depth" {
@@ -572,6 +608,8 @@ fn execution_metrics_from_groups(
     total_tasks: u64,
     groups: BTreeMap<String, ExecutionGroupAcc>,
 ) -> ExecutionMetricsSummary {
+    let mut all_continuation = task_core::ContinuationMetrics::default();
+    let mut all_by_wu: BTreeMap<String, task_core::ContinuationMetrics> = BTreeMap::new();
     let groups = groups
         .into_iter()
         .map(|(key, acc)| {
@@ -580,6 +618,10 @@ fn execution_metrics_from_groups(
             } else {
                 None
             };
+            all_continuation.absorb(&acc.continuation);
+            for (wu, values) in &acc.continuation_by_work_unit {
+                all_by_wu.entry(wu.clone()).or_default().absorb(values);
+            }
             ExecutionMetricsGroup {
                 key,
                 tasks: acc.tasks,
@@ -591,6 +633,8 @@ fn execution_metrics_from_groups(
                 max_turn_failures: acc.max_turn_failures,
                 repairs: acc.repairs,
                 replans: acc.replans,
+                continuation: acc.continuation,
+                continuation_by_work_unit: acc.continuation_by_work_unit,
                 // ADR-0074 D4.3（Phase F3 quota）: グループ内の各タスクの quota を
                 // (source, account, window) ごとに合計する。
                 quota: task_core::merge_quota_use(acc.quota_rows),
@@ -605,6 +649,8 @@ fn execution_metrics_from_groups(
         since: since.map(|t| t.format(&Rfc3339).unwrap_or_default()),
         total_tasks,
         groups,
+        continuation: all_continuation,
+        continuation_by_work_unit: all_by_wu,
         // `GET /metrics/execution` の呼び出し元（`task-api/src/execution.rs`）が
         // `accounts_now`（`LlmSourcesReader` から）を埋める。ここでは常に空。
         accounts_now: Vec::new(),

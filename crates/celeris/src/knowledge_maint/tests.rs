@@ -2,8 +2,8 @@ use super::*;
 use task_core::org::{OrgKind, OrgNode};
 use task_core::report::{Report, ReportId, ReportKind, ReportStore};
 use task_core::{
-    Budget, KnowledgeRunStore, Project, ProjectId, ProjectStatus, SqliteStore,
-    TaskId as CoreTaskId, Tier, WorkerHint, WorkspaceSpec,
+    Budget, KnowledgeRunStore, ListFilter, ListOrder, Project, ProjectId, ProjectStatus,
+    SqliteStore, TaskId as CoreTaskId, Tier, WorkerHint, WorkspaceSpec,
 };
 
 fn store_with_node() -> SqliteStore {
@@ -130,225 +130,67 @@ fn kb_dir() -> (tempfile::TempDir, std::path::PathBuf) {
     (dir, root)
 }
 
-/// backfill 禁止: `not_before` より前に終端になったタスクからは作らない（実機 2026-09-20）。
+/// 終端になったタスク（完了・失敗・中止・会話・アーカイブ案件の仕事）から知識整理 task を作らない。
+/// 知識整理は日次 job に寄せた（ADR-0131 付記 D10）ので、この経路には作る関数が無い。
+/// `retry_failed` と `apply_finished` も、知識整理 run の無い状態では何も作らないことを確かめる。
 #[test]
-fn tasks_finished_before_the_daemon_started_are_not_backfilled() {
+fn terminal_tasks_do_not_get_a_knowledge_task_any_more() {
     let store = store_with_node();
     let (_dir, root) = kb_dir();
-    let task = terminal_task(Status::Done, Some("coding"), None, None, false);
-    store.insert(&task).expect("insert");
-    add_report(&store, &task);
-    let now = OffsetDateTime::now_utc();
-    let later = task.updated_at + time::Duration::hours(1);
-    let created = schedule(&store, &root, true, later, 10, None, &[], &[], now).expect("schedule");
-    assert!(created.is_empty(), "古い終端タスクは対象外");
-    let created = schedule(
-        &store,
-        &root,
-        true,
-        task.updated_at,
-        10,
-        None,
-        &[],
-        &[],
-        now,
-    )
-    .expect("schedule");
-    assert_eq!(created.len(), 1, "起動後に終端になったものは対象");
-}
-
-/// ADR-0047 D4: 終端タスク（担当あり・報告あり）から知識整理タスクを 1 件作り、
-/// `knowledge_runs` に `scheduled` を残す。2 回目は同じタスクからは作らない。
-#[test]
-fn schedule_creates_one_maintenance_task_and_is_idempotent() {
-    let store = store_with_node();
-    let (_dir, root) = kb_dir();
-    let task = terminal_task(Status::Done, Some("coding"), None, None, false);
-    store.insert(&task).expect("insert");
-    add_report(&store, &task);
-
-    let now = OffsetDateTime::now_utc();
-    let created = schedule(
-        &store,
-        &root,
-        true,
-        OffsetDateTime::UNIX_EPOCH,
-        10,
-        None,
-        &[],
-        &[],
-        now,
-    )
-    .expect("schedule");
-    assert_eq!(created.len(), 1);
-    let run_task = store.get(created[0]).expect("get").expect("some");
-    assert_eq!(run_task.role.as_deref(), Some(report::KNOWLEDGE_ROLE));
-    assert_eq!(
-        run_task.worker_hint.adapter.as_deref(),
-        Some(LANGMEM_ADAPTER)
-    );
-    assert_eq!(run_task.worker_hint.tier, Tier::Cheap);
-    assert_eq!(run_task.assignee.as_deref(), Some("coding"));
-    assert!(
-        run_task.objective.contains(&task.id.to_string()),
-        "{}",
-        run_task.objective
-    );
-    assert!(
-        run_task.objective.contains("pjsub の投げ方を確認した"),
-        "{}",
-        run_task.objective
-    );
-    assert_eq!(
-        task_core::report::support_kind(&run_task),
-        Some("knowledge")
-    );
-
-    let run = store
-        .knowledge_run_get(task.id)
-        .expect("get run")
-        .expect("some");
-    assert_eq!(run.run_task_id, created[0]);
-    assert_eq!(run.state, KnowledgeRunState::Scheduled);
-
-    // 2 回目は同じタスクからはもう作らない（既に `knowledge_runs` がある）。
-    assert!(
-        schedule(
-            &store,
-            &root,
-            true,
-            OffsetDateTime::UNIX_EPOCH,
-            10,
-            None,
-            &[],
-            &[],
-            now
-        )
-        .expect("schedule again")
-        .is_empty()
-    );
-}
-
-/// `enabled = false` / KB 未初期化なら何もしない。
-#[test]
-fn schedule_noops_when_disabled_or_the_kb_is_missing() {
-    let store = store_with_node();
-    let (_dir, root) = kb_dir();
-    let task = terminal_task(Status::Done, Some("coding"), None, None, false);
-    store.insert(&task).expect("insert");
-    add_report(&store, &task);
-    let now = OffsetDateTime::now_utc();
-    assert!(
-        schedule(
-            &store,
-            &root,
-            false,
-            OffsetDateTime::UNIX_EPOCH,
-            10,
-            None,
-            &[],
-            &[],
-            now
-        )
-        .expect("schedule")
-        .is_empty(),
-        "enabled = false"
-    );
-    let missing_root = root.join("does-not-exist");
-    assert!(
-        schedule(
-            &store,
-            &missing_root,
-            true,
-            OffsetDateTime::UNIX_EPOCH,
-            10,
-            None,
-            &[],
-            &[],
-            now
-        )
-        .expect("schedule")
-        .is_empty(),
-        "KB 未初期化"
-    );
-}
-
-/// 裏方（対話・圧縮）・担当なし・案件アーカイブ済みは対象外。
-#[test]
-fn schedule_skips_support_tasks_unassigned_tasks_and_archived_projects() {
-    let store = store_with_node();
-    let (_dir, root) = kb_dir();
-    let now = OffsetDateTime::now_utc();
-
-    let conversation = terminal_task(Status::Done, Some("coding"), None, None, true);
-    store.insert(&conversation).expect("insert");
-    add_report(&store, &conversation);
-
-    let compaction = terminal_task(
-        Status::Done,
-        Some("coding"),
-        Some(task_core::COMPACTION_ROLE),
-        None,
-        false,
-    );
-    store.insert(&compaction).expect("insert");
-    add_report(&store, &compaction);
-
-    let unassigned = terminal_task(Status::Done, None, None, None, false);
-    store.insert(&unassigned).expect("insert");
-    add_report(&store, &unassigned);
-
+    let workspace_root = tempfile::tempdir().expect("workspace");
     let archived_project = seed_project(&store, true);
-    let archived = terminal_task(
-        Status::Done,
-        Some("coding"),
-        None,
-        Some(archived_project),
-        false,
-    );
-    store.insert(&archived).expect("insert");
-    add_report(&store, &archived);
-
-    assert!(
-        schedule(
-            &store,
-            &root,
-            true,
-            OffsetDateTime::UNIX_EPOCH,
-            10,
+    let tasks = [
+        terminal_task(Status::Done, Some("coding"), None, None, false),
+        terminal_task(Status::Failed, Some("coding"), None, None, false),
+        terminal_task(Status::Cancelled, Some("coding"), None, None, false),
+        terminal_task(Status::Done, Some("coding"), None, None, true),
+        terminal_task(
+            Status::Done,
+            Some("coding"),
             None,
-            &[],
-            &[],
-            now
-        )
-        .expect("schedule")
-        .is_empty()
-    );
-}
+            Some(archived_project),
+            false,
+        ),
+    ];
+    for task in &tasks {
+        store.insert(task).expect("insert");
+        add_report(&store, task);
+    }
+    let before = store
+        .list_page(&ListFilter::default(), ListOrder::UpdatedDesc, None, 100)
+        .expect("list")
+        .items
+        .len();
 
-/// 報告がまだ無い終端タスクは（極短い間だけ）対象外。
-#[test]
-fn schedule_skips_a_terminal_task_without_a_report_yet() {
-    let store = store_with_node();
-    let (_dir, root) = kb_dir();
-    let task = terminal_task(Status::Done, Some("coding"), None, None, false);
-    store.insert(&task).expect("insert");
     let now = OffsetDateTime::now_utc();
-    assert!(
-        schedule(
-            &store,
-            &root,
-            true,
-            OffsetDateTime::UNIX_EPOCH,
-            10,
-            None,
-            &[],
-            &[],
-            now
-        )
-        .expect("schedule")
-        .is_empty()
+    assert_eq!(
+        retry_failed(&store, &root, true, 10, None, &[], &[], now)
+            .expect("retry")
+            .len(),
+        0
     );
+    assert_eq!(
+        apply_finished(&store, &root, workspace_root.path(), now).expect("apply"),
+        0
+    );
+
+    let after = store
+        .list_page(&ListFilter::default(), ListOrder::UpdatedDesc, None, 100)
+        .expect("list")
+        .items;
+    assert_eq!(after.len(), before, "知識整理 task は増えない");
+    assert!(
+        after
+            .iter()
+            .all(|t| t.role.as_deref() != Some(report::KNOWLEDGE_ROLE)),
+        "知識整理の支援 task は 1 件も無い"
+    );
+    for task in &tasks {
+        assert!(
+            store.knowledge_run_get(task.id).expect("get").is_none(),
+            "終端 task に knowledge_runs の行は付かない"
+        );
+    }
 }
 
 /// ADR-0047 D4: `done` の知識整理 run は `artifacts/knowledge-candidates.json` を読んで適用し、

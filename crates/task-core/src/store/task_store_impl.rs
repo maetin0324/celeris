@@ -17,6 +17,7 @@ use crate::org::{
 };
 use crate::repos::{ProjectRepo, RepoId};
 use crate::transition::{Outcome, Trigger};
+use crate::write_set::WriteSetRecord;
 
 use super::{
     ClusterConnectionRecord, ClusterSettings, EventRow, ExecutionMetricsTaskRow, ListFilter,
@@ -25,6 +26,65 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn record_behind_target(
+        &self,
+        obs: &crate::behind_target::BehindTargetObservation,
+    ) -> Result<crate::behind_target::BehindTargetSnapshot, StoreError> {
+        SqliteStore::record_behind_target(self, obs)
+    }
+
+    fn behind_targets(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<crate::behind_target::BehindTargetSnapshot>, StoreError> {
+        SqliteStore::behind_targets(self, task_id)
+    }
+
+    fn record_run_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        SqliteStore::record_run_write_set(self, record)
+    }
+
+    fn run_write_sets(&self, run_id: &str) -> Result<Vec<WriteSetRecord>, StoreError> {
+        SqliteStore::run_write_sets(self, run_id)
+    }
+
+    fn record_work_unit_write_set(&self, record: &WriteSetRecord) -> Result<(), StoreError> {
+        SqliteStore::record_work_unit_write_set(self, record)
+    }
+
+    fn work_unit_write_sets(&self, work_unit_id: &str) -> Result<Vec<WriteSetRecord>, StoreError> {
+        SqliteStore::work_unit_write_sets(self, work_unit_id)
+    }
+
+    fn set_task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+        paths: Option<&[String]>,
+        now: &str,
+    ) -> Result<(), StoreError> {
+        SqliteStore::set_task_expected_write_paths(self, task_id, paths, now)
+    }
+
+    fn task_expected_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        SqliteStore::task_expected_write_paths(self, task_id)
+    }
+
+    fn effective_task_write_paths(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        SqliteStore::effective_task_write_paths(self, task_id)
+    }
+
+    fn work_unit_expected_write_paths(
+        &self,
+        work_unit_id: &str,
+    ) -> Result<Option<Vec<String>>, StoreError> {
+        SqliteStore::work_unit_expected_write_paths(self, work_unit_id)
+    }
     fn insert(&self, task: &Task) -> Result<(), StoreError> {
         self.insert_impl(task)
     }
@@ -170,6 +230,43 @@ impl TaskStore for SqliteStore {
         limit: usize,
     ) -> Result<Vec<EventRow>, StoreError> {
         self.event_rows_for_impl(task_id, after_seq, limit)
+    }
+
+    fn latest_delivery_skipped_rows(&self) -> Result<Vec<EventRow>, StoreError> {
+        self.latest_delivery_skipped_rows_impl()
+    }
+
+    fn open_integration_requests(&self) -> Result<Vec<EventRow>, StoreError> {
+        self.open_integration_requests_impl()
+    }
+
+    fn integration_request_record(
+        &self,
+        task_id: TaskId,
+        request: &crate::integration_request::IntegrationRequest,
+        origin: &str,
+    ) -> Result<bool, StoreError> {
+        self.integration_request_record_impl(task_id, request, origin)
+    }
+
+    fn integration_request_answer(
+        &self,
+        task_id: TaskId,
+        request_id: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<bool, StoreError> {
+        self.integration_request_answer_impl(task_id, request_id, answer, note)
+    }
+
+    fn integration_requests_close(
+        &self,
+        task_id: TaskId,
+        origin: &str,
+        answer: &str,
+        note: Option<&str>,
+    ) -> Result<Vec<String>, StoreError> {
+        self.integration_requests_close_impl(task_id, origin, answer, note)
     }
 
     fn list_page(
@@ -712,6 +809,10 @@ impl TaskStore for SqliteStore {
 
     fn close_runs_of_terminal_tasks(&self) -> Result<Vec<(TaskId, String)>, StoreError> {
         self.close_runs_of_terminal_tasks_impl()
+    }
+
+    fn runs_running(&self) -> Result<Vec<RunRow>, StoreError> {
+        self.runs_running_impl()
     }
 
     fn runs_for_work_unit(&self, work_unit_id: &str) -> Result<Vec<RunRow>, StoreError> {

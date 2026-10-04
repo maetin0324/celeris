@@ -1,11 +1,12 @@
 [Unit]
 # celeris-web（ADR-0096 D1/D2、ADR-0081）。`%i` は リリースの sha12。gui/ と並行に動かす web/ の gateway。
 # `~/.local/celeris/releases/<sha12>/web/app/`（release.sh の web 段が展開して prod install 済み）から動く。
-# インストール: scripts/selfdeploy/install-units.sh（置くだけ。有効化は人: docs/web/parallel-operation.md）。
-# promote.sh はこの unit を起こさない（H7: 昇格は gui/ だけ）。
+# インストール: scripts/selfdeploy/install-units.sh（置くだけ。有効化は人: docs/ops/web-parallel-operation.md）。
+# promote.sh は昇格の後、旧 release の celeris-web@ が active のときだけ、新 release の web.ok=true を確かめて
+# この unit を新 sha で起こし旧を止める（scripts/selfdeploy/web-follow.sh。ADR-0081 / web ADR-W3 付記 2026-10-02）。
+# celeris@ を Wants にしない（web の起動で daemon の handoff を起こさない）。After= は順序だけ。
 Description=celeris-web (release %i)
 After=network.target celeris@%i.service
-Wants=celeris@%i.service
 
 [Service]
 Type=simple
@@ -13,7 +14,7 @@ WorkingDirectory=%h/.local/celeris/releases/%i/web/app
 Environment=PATH=%h/.local/bin:/usr/lib/node_modules/corepack/shims:/usr/local/bin:/usr/bin:/bin
 Environment=NODE_ENV=production
 # 既定は loopback の開発・検査用（H2: 本番の port は決めていない）。本番向けの bind・Host・鍵の場所は
-# ~/.config/celeris/web.env で上書きする（例は docs/web/parallel-operation.md）。
+# ~/.config/celeris/web.env で上書きする（例は docs/ops/web-parallel-operation.md）。
 Environment=CELERIS_WEB_BIND=127.0.0.1:7720
 Environment=CELERIS_API_URL=http://127.0.0.1:7710
 Environment=CELERIS_API_TOKEN_FILE=%h/.config/celeris/api.token

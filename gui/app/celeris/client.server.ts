@@ -135,7 +135,7 @@ export class CelerisClient {
       },
       this.#timeoutMs,
     );
-    // ADR-0054 D1（Phase 67）: `POST /console/new-conversation`（docs/gui/api.md §3.109）は 204・本文なし
+    // ADR-0054 D1（Phase 67）: `POST /console/new-conversation`（docs/api/v1/gui-api.md §3.109）は 204・本文なし
     // で返る（`delete()` の同じ扱いと同じ理由。空文字列を `res.json()` すると例外になる）。
     if (res.status === 204) return {} as T;
     return (await res.json()) as T;
@@ -193,7 +193,7 @@ export class CelerisClient {
   }
 
   /**
-   * `GET /console/stream`（SSE、ADR-0048 D1、docs/gui/api.md §3.99）。`stream()` と同じ作り
+   * `GET /console/stream`（SSE、ADR-0048 D1、docs/api/v1/gui-api.md §3.99）。`stream()` と同じ作り
    * （応答をそのまま返す・タイムアウトは掛けない・切断は signal で行う）だが、`Last-Event-ID` は使わず
    * `since` クエリで再開する（celeris 側が `id:` を付けないため）。
    */

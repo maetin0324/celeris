@@ -8,9 +8,12 @@ import type {
   QuotaUse,
 } from "~/celeris/types";
 import {
+  checkDoneLabel,
+  checkProgressLine,
   costReferenceLabel,
   currentWorkUnit,
   directExecutionSummary,
+  formatDurationMs,
   gateModeLabel,
   isRepairWorkUnit,
   PHASE_GATE_ACTION_LABEL,
@@ -386,6 +389,41 @@ describe("途中確認（celeris ADR-0074 D2.3/D2.4、Phase F3）", () => {
     );
     expect(phaseCheckpointAttentionText({ ...base, phases_total: 0, next_phase: null })).toBe(
       "工程「設計」まで進みました。確認を待っています。次: 最終レビュー",
+    );
+  });
+});
+
+// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の検査の 1 行と済んだ検査の文言。
+describe("integration check progress", () => {
+  it("formats durations", () => {
+    expect(formatDurationMs(850)).toBe("850ms");
+    expect(formatDurationMs(12_340)).toBe("12.3s");
+    expect(formatDurationMs(245_000)).toBe("4m05s");
+    expect(formatDurationMs(3_720_000)).toBe("1h02m");
+  });
+
+  it("shows the running check with counts, or the finished summary", () => {
+    expect(checkProgressLine(null)).toBeNull();
+    const finished = [
+      { index: 0, cmd: "cargo build", pass: true, exit: 0, timed_out: false, duration_ms: 12_340 },
+      { index: 1, cmd: "pnpm e2e", pass: false, exit: 3, timed_out: false, duration_ms: 850 },
+    ];
+    expect(
+      checkProgressLine({
+        total: 4,
+        current: { index: 2, cmd: "cargo test --workspace", started_at: "2026-10-04T02:09:00Z" },
+        finished,
+      }),
+    ).toBe("検査 3/4 実行中: cargo test --workspace（済 2・不合格 1）");
+    expect(checkProgressLine({ total: 2, finished })).toBe("検査 2/2 済（不合格 1）");
+  });
+
+  it("labels a finished check with verdict, exit and duration", () => {
+    expect(checkDoneLabel({ index: 0, cmd: "x", pass: true, exit: 0, timed_out: false, duration_ms: 12_340 })).toBe(
+      "通過 exit 0・12.3s",
+    );
+    expect(checkDoneLabel({ index: 0, cmd: "x", pass: false, timed_out: true, duration_ms: 1_800_000 })).toBe(
+      "不合格 timeout・30m00s",
     );
   });
 });

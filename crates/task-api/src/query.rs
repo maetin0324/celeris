@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 49] = [
+pub(crate) const EVENT_TYPES: [&str; 59] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -165,6 +165,12 @@ pub(crate) const EVENT_TYPES: [&str; 49] = [
     "artifact_produced",
     "worker_finished",
     "review_verdict",
+    "review_target_synced",
+    "review_target_advanced",
+    // ADR-0120 D5: review 前同期の衝突の IntegrationRepair（起票・解消・打ち切り）。
+    "integration_repair_scheduled",
+    "integration_repair_resolved",
+    "integration_repair_exhausted",
     "approval_requested",
     "approval_decided",
     // Phase F7: 認可元のタスクが終端になり、未決の認可の要求を celeris が取り下げた。
@@ -195,6 +201,9 @@ pub(crate) const EVENT_TYPES: [&str; 49] = [
     // ADR-0079 R5b-fix1: 人の replan が done の WorkUnit の spec を上書きした。
     "work_unit_spec_overridden",
     "work_unit_checks_failed",
+    // 2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件の開始・終了。
+    "integration_check_started",
+    "integration_check_finished",
     // ADR-0072 D5/D13（Phase E3）: Complexity Gate の判定。
     "execution_gated",
     // ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形を人が後から決めた。
@@ -220,6 +229,10 @@ pub(crate) const EVENT_TYPES: [&str; 49] = [
     "decision_withdrawn",
     "plan_approval_requested",
     "stall_detected",
+    // ADR-0121 D3: root の取り込みを開始できなかった理由。
+    "delivery_skipped",
+    "integration_requested",
+    "integration_answered",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -237,6 +250,11 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ArtifactProduced { .. } => "artifact_produced",
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",
+        Event::ReviewTargetSynced { .. } => "review_target_synced",
+        Event::ReviewTargetAdvanced { .. } => "review_target_advanced",
+        Event::IntegrationRepairScheduled { .. } => "integration_repair_scheduled",
+        Event::IntegrationRepairResolved { .. } => "integration_repair_resolved",
+        Event::IntegrationRepairExhausted { .. } => "integration_repair_exhausted",
         Event::ApprovalRequested => "approval_requested",
         Event::ApprovalDecided { .. } => "approval_decided",
         Event::ApprovalsWithdrawn { .. } => "approvals_withdrawn",
@@ -258,11 +276,15 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkUnitSpecOverridden { .. } => "work_unit_spec_overridden",
         Event::WorkUnitChecksFailed { .. } => "work_unit_checks_failed",
         Event::ExecutionGated { .. } => "execution_gated",
+        Event::ExecutionRouted { .. } => "execution_routed",
         Event::ExecutionHintSet { .. } => "execution_hint_set",
         Event::RepairScheduled { .. } => "repair_scheduled",
         Event::QuotaEstimated { .. } => "quota_estimated",
         Event::WorkUnitCommitted { .. } => "work_unit_committed",
         Event::PhaseIntegrated { .. } => "phase_integrated",
+        Event::MergeCandidateStale { .. } => "merge_candidate_stale",
+        Event::IntegrationCheckStarted { .. } => "integration_check_started",
+        Event::IntegrationCheckFinished { .. } => "integration_check_finished",
         Event::WorkUnitsSerialized { .. } => "work_units_serialized",
         Event::ProjectPlanProposed { .. } => "project_plan_proposed",
         Event::ProjectPlanDecided { .. } => "project_plan_decided",
@@ -276,6 +298,10 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::DecisionWithdrawn { .. } => "decision_withdrawn",
         Event::PlanApprovalRequested { .. } => "plan_approval_requested",
         Event::StallDetected { .. } => "stall_detected",
+        Event::DeliverySkipped { .. } => "delivery_skipped",
+        Event::KnowledgeCurationApplied { .. } => "knowledge_curation_applied",
+        Event::IntegrationRequested { .. } => "integration_requested",
+        Event::IntegrationAnswered { .. } => "integration_answered",
     }
 }
 

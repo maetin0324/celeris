@@ -2,7 +2,189 @@
 
 use super::*;
 
+fn repair_git(dir: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Only move a repair branch when its original commit is in that branch's reflog and
+/// there is no uncommitted work to discard. A failed abort/reset is a manual stop.
+fn rollback_integration_repair(dir: &Path, branch: &str, before: &str) -> bool {
+    let Some(current_branch) = repair_git(dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+    else {
+        return false;
+    };
+    if current_branch != branch
+        || repair_git(dir, &["status", "--porcelain"]).as_deref() != Some("")
+    {
+        return false;
+    }
+    let Some(log) = repair_git(dir, &["reflog", "show", "--format=%H", branch]) else {
+        return false;
+    };
+    if !log.lines().any(|sha| sha == before) {
+        return false;
+    }
+    let in_rebase = ["rebase-merge", "rebase-apply"].iter().any(|name| {
+        repair_git(dir, &["rev-parse", "--git-path", name])
+            .is_some_and(|path| Path::new(&path).exists())
+    });
+    if in_rebase && repair_git(dir, &["rebase", "--abort"]).is_none() {
+        return false;
+    }
+    repair_git(dir, &["reset", "--hard", before]).is_some()
+        && repair_git(dir, &["rev-parse", "HEAD"]).as_deref() == Some(before)
+        && repair_git(dir, &["status", "--porcelain"]).as_deref() == Some("")
+}
+
 impl Dispatcher {
+    pub(super) fn integration_repair_exhaustion(
+        &self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+        reason: task_core::IntegrationRepairExhaustReason,
+    ) -> Result<(bool, Option<Event>), DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        if let Some(Event::IntegrationRepairExhausted { fallback, .. }) = events.iter().rev().map(|(_, e)| e).find(|e| {
+            matches!(e, Event::IntegrationRepairExhausted { work_unit_id: Some(id), .. } if id == &wu.id)
+        }) {
+            return Ok((*fallback, None));
+        }
+        let Some((repo_id, target_sha, before_sha, attempt)) =
+            events.iter().rev().find_map(|(_, e)| {
+                if let Event::IntegrationRepairScheduled {
+                    work_unit_id,
+                    repo_id,
+                    target_sha,
+                    before_sha,
+                    attempt,
+                    ..
+                } = e
+                    && work_unit_id == &wu.id
+                {
+                    Some((*repo_id, target_sha.clone(), before_sha.clone(), *attempt))
+                } else {
+                    None
+                }
+            })
+        else {
+            return Err(
+                StoreError::Invalid("integration repair has no scheduled event".into()).into(),
+            );
+        };
+        let repo_name = task
+            .repos
+            .iter()
+            .find(|r| r.repo_id == repo_id)
+            .map(|r| r.name.as_str());
+        let worktree = self.task_workspaces_for(task).and_then(|ws| {
+            ws.repos
+                .into_iter()
+                .find(|r| Some(r.name.as_str()) == repo_name)
+                .and_then(|r| r.worktree)
+        });
+        let mut rollback_to_sha = None;
+        let fallback = if let Some(wt) = worktree.filter(|w| w.dir.is_dir()) {
+            let head = repair_git(&wt.dir, &["rev-parse", "HEAD"]);
+            let on_task_branch =
+                repair_git(&wt.dir, &["symbolic-ref", "--quiet", "--short", "HEAD"]).as_deref()
+                    == Some(wt.branch.as_str());
+            let rebase_in_progress = ["rebase-merge", "rebase-apply"].iter().any(|part| {
+                repair_git(&wt.dir, &["rev-parse", "--git-path", part])
+                    .is_some_and(|path| Path::new(&path).exists())
+            });
+            if head.as_deref() == Some(before_sha.as_str())
+                && on_task_branch
+                && !rebase_in_progress
+                && repair_git(&wt.dir, &["status", "--porcelain"]).as_deref() == Some("")
+            {
+                true
+            } else if rollback_integration_repair(&wt.dir, &wt.branch, &before_sha) {
+                rollback_to_sha = Some(before_sha.clone());
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        Ok((
+            fallback,
+            Some(Event::IntegrationRepairExhausted {
+                work_unit_id: Some(wu.id.clone()),
+                repo_id,
+                target_sha,
+                before_sha,
+                attempt,
+                reason,
+                rollback_to_sha,
+                fallback,
+            }),
+        ))
+    }
+
+    fn integration_repair_result_trusted(
+        &self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+    ) -> Result<bool, DispatchError> {
+        let events = self.store.events_for(task.id)?;
+        let Some((repo_id, before, target)) = events.iter().rev().find_map(|(_, e)| {
+            if let Event::IntegrationRepairScheduled {
+                work_unit_id,
+                repo_id,
+                before_sha,
+                target_sha,
+                ..
+            } = e
+                && work_unit_id == &wu.id
+            {
+                Some((*repo_id, before_sha.as_str(), target_sha.as_str()))
+            } else {
+                None
+            }
+        }) else {
+            return Ok(false);
+        };
+        let Some(name) = task
+            .repos
+            .iter()
+            .find(|r| r.repo_id == repo_id)
+            .map(|r| r.name.as_str())
+        else {
+            return Ok(false);
+        };
+        let Some(wt) = self.task_workspaces_for(task).and_then(|ws| {
+            ws.repos
+                .into_iter()
+                .find(|r| r.name == name)
+                .and_then(|r| r.worktree)
+        }) else {
+            return Ok(false);
+        };
+        let clean = repair_git(&wt.dir, &["status", "--porcelain"]).as_deref() == Some("");
+        let on_task_branch = repair_git(&wt.dir, &["symbolic-ref", "--quiet", "--short", "HEAD"])
+            .as_deref()
+            == Some(wt.branch.as_str());
+        let in_rebase = ["rebase-merge", "rebase-apply"].iter().any(|part| {
+            repair_git(&wt.dir, &["rev-parse", "--git-path", part])
+                .is_some_and(|p| Path::new(&p).exists())
+        });
+        let preserves_before =
+            repair_git(&wt.dir, &["merge-base", "--is-ancestor", before, "HEAD"]).is_some();
+        let rebased_onto_target =
+            repair_git(&wt.dir, &["merge-base", "--is-ancestor", target, "HEAD"]).is_some();
+        Ok(clean && on_task_branch && !in_rebase && (preserves_before || rebased_onto_target))
+    }
+
     pub(super) fn on_worker_finished(
         &mut self,
         task_id: TaskId,
@@ -82,6 +264,8 @@ impl Dispatcher {
                     ..
                 })
             )
+            && !(task_core::is_integration_repair_unit(wu.kind, &wu.spec.title)
+                && !self.integration_repair_result_trusted(&task, wu)?)
         {
             return self.spawn_work_unit_checks(
                 task_id,
@@ -387,6 +571,7 @@ impl Dispatcher {
             &'static str,
             Vec<task_core::WorkUnitRow>,
         )> = None;
+        let mut integration_exhausted_event: Option<Event> = None;
         // ADR-0079 D7（Phase R3a）: worker が `result.json` の `decisions` で出した決定の要求（記録と止める unit）。
         let mut worker_decisions: Option<WorkerDecisions> = None;
         // ADR-0090 D2: この WU の run が unit を `blocked(cluster_jobs)` にした。
@@ -559,7 +744,46 @@ impl Dispatcher {
                     // する代わりに replan の planner run を起こす（`ContinueWhy::Replan`）。
                     // D12「失敗にしないもの」: 進捗なし・継続の上限到達は元々失敗にしない。
                     // D12 3.: WU failed は「replan できない」ときだけ failed にする。
-                    if matches!(decision.reason, "failed" | "limit" | "plan_issue") {
+                    if task_core::is_integration_repair_unit(wu.kind, &wu.spec.title)
+                        && (matches!(decision.reason, "failed" | "limit" | "plan_issue")
+                            || (decision.reason == "completed"
+                                && !self.integration_repair_result_trusted(&task, wu)?))
+                    {
+                        let reason = match decision.reason {
+                            "plan_issue" => task_core::IntegrationRepairExhaustReason::PlanIssue,
+                            "failed" => task_core::IntegrationRepairExhaustReason::WorkUnitFailed,
+                            "completed" => {
+                                task_core::IntegrationRepairExhaustReason::ResultUntrusted
+                            }
+                            _ if matches!(
+                                effective_end,
+                                task_core::RunEnd::BudgetExhausted { .. }
+                            ) =>
+                            {
+                                task_core::IntegrationRepairExhaustReason::BudgetExhausted
+                            }
+                            _ => task_core::IntegrationRepairExhaustReason::WorkUnitFailed,
+                        };
+                        let (fallback, event) =
+                            self.integration_repair_exhaustion(&task, wu, reason)?;
+                        integration_exhausted_event = event;
+                        trigger = if fallback {
+                            Trigger::WorkerDone
+                        } else {
+                            Trigger::WorkerQuestion
+                        };
+                        outcome_str = if fallback {
+                            format!(
+                                "integration repair {} exhausted; review unsynced HEAD",
+                                wu.key
+                            )
+                        } else {
+                            format!(
+                                "question: integration repair {} needs manual inspection",
+                                wu.key
+                            )
+                        };
+                    } else if matches!(decision.reason, "failed" | "limit" | "plan_issue") {
                         let replans_so_far = self.counted_replans(task_id)?;
                         if replans_so_far < self.effective_max_replans(task_id)? {
                             let why = match decision.reason {
@@ -819,6 +1043,27 @@ impl Dispatcher {
                 tracing::warn!(%task_id, error = %e, "failed to record session usage");
             }
         }
+        // ADR-0140 D2: WU（と atomic task。付記 session-container）の継続 session を使った run は、その usage を `approx_tokens` に積む
+        // （判断表 #10 の rollover の材料）。継続 session を持たない run（`runs.session_id` が無い）は何もしない。
+        if let Ok(Some(row)) = self.store.run_index_get(&run_id)
+            && row.session_id.is_some()
+            && let Some(adapter) = row.adapter.as_deref()
+        {
+            let tokens = usage
+                .as_ref()
+                .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
+                .unwrap_or(0);
+            if let Err(e) = self.store.work_unit_session_touch(
+                task_id,
+                row.work_unit_id.as_deref(),
+                adapter,
+                row.account.as_deref(),
+                tokens as i64,
+                OffsetDateTime::now_utc(),
+            ) {
+                tracing::warn!(%task_id, error = %e, "failed to record continuation session usage");
+            }
+        }
         // ADR-0033 D4: 部をまたぐ委譲の質問は、run の自己申告の終わり方より優先する（子は作られていない）。
         // Phase 27: 人に見せる質問は 1 件の部またぎにつき 1 つ（`approvals` の行の単位）。
         let mut questions: Vec<String> = Vec::new();
@@ -862,11 +1107,14 @@ impl Dispatcher {
         // 別のトランザクションでも監査上の実害は無い。再起動時の照合は `work_units.status` を正とする）。
         // ADR-0074 D1.2（Phase F2b）: v2 の WU が done になったら、WU の作業ツリーで commit する。
         let mut committed_event: Option<Event> = None;
+        // ADR-0130 D2: actual write-set を採る WU の行（自動 commit 後）と、done になったか。
+        let mut write_set_wu: Option<(task_core::WorkUnitRow, bool)> = None;
         if let Some((updated_wu, reason, side_effect_rows)) = wu_update.take() {
             let mut updated_wu = updated_wu;
             if updated_wu.phase.is_some() && reason == "completed" {
                 committed_event = self.commit_work_unit(&task, &mut updated_wu)?;
             }
+            write_set_wu = Some((updated_wu.clone(), reason == "completed"));
             let from = current_wu
                 .as_ref()
                 .map(|w| w.status)
@@ -908,6 +1156,15 @@ impl Dispatcher {
                     tracing::warn!(%task_id, %run_id, work_unit = %row.key, error = %e, "failed to record a dependent work unit transition");
                 }
             }
+        }
+        // ADR-0130 D2: WU の自動 commit の後に、この run（と done になった WU）の確定差分を残す。
+        // git が読めなくても `unavailable` を残すだけで、run の遷移は変えない。
+        {
+            let (wu_row, wu_completed) = match &write_set_wu {
+                Some((row, completed)) => (Some(row), *completed),
+                None => (current_wu.as_ref(), false),
+            };
+            self.record_run_write_sets(&task, &run_id, wu_row, wu_completed);
         }
         // ADR-0079 D7（Phase R3a）: worker の決定の要求（`DecisionRequested`、path 付き）と、それが指した他の unit の
         // `blocked(decision)` を 1 トランザクションで残す（工程の判定〈下の `settle_phase`〉より前）。
@@ -979,6 +1236,9 @@ impl Dispatcher {
             end: run_end,
         };
         let mut events = vec![finished];
+        if let Some(event) = integration_exhausted_event {
+            events.push(event);
+        }
         // ADR-0079 付記 R7-5 D1: WU の checks の不合格（どの check が・どこで・どう落ちたか）を同じトランザクションで残す。
         if let (Some(f), Some(wu)) = (&check_failure, &current_wu) {
             events.push(f.event(&run_id, wu));

@@ -99,6 +99,17 @@ export type AccountView = {
 
 export type Action = "approve" | "reject" | "answer" | "cancel" | "retry" | "edit" | "reopen" | "rereview" | "phase_gate" | "plan_gate";
 
+export type ActualWriteSetView = {
+  "base_sha"?: string | null;
+  "head_sha"?: string | null;
+  "owner_id": string;
+  "paths": Array<string>;
+  "reason"?: string | null;
+  "recorded_at": string;
+  "repo_id": string;
+  "status": string;
+};
+
 export type AdoptRequest = {
   "stage": string;
   "task_id": TaskId;
@@ -236,6 +247,7 @@ export type AttentionItem = {
   "at": string;
   "class": FailureClass;
   "delivered_release"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "reason": string;
   "task": TaskRef;
   "type": "failed";
@@ -276,6 +288,20 @@ export type AttentionItem = {
   "summary": string;
   "task": TaskRef;
   "type": "plan_approval";
+} | {
+  "at": string;
+  "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "summary": string;
+  "task": TaskRef;
+  "type": "delivery_skipped";
+} | {
+  "at": string;
+  "request": IntegrationRequest;
+  "request_id": string;
+  "task": TaskRef;
+  "type": "integration_request";
 };
 
 export type AttestationClaims = {
@@ -295,6 +321,23 @@ export type AwaitedChildView = {
   "task_id"?: TaskId | null;
   "title": string;
   "unit_key": string;
+};
+
+export type BehindTarget = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at"?: string | null;
+  "repos"?: Array<BehindTargetRepo>;
+};
+
+export type BehindTargetRepo = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at": string;
+  "head_sha"?: string | null;
+  "repo_id": string;
+  "target_ref": string;
+  "target_sha"?: string | null;
 };
 
 export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
@@ -688,6 +731,11 @@ export type CommentResult = {
   "transition"?: TransitionResult | null;
 };
 
+export type CommitIntent = {
+  "sha": string;
+  "subject": string;
+};
+
 export type Confidence = "high" | "medium" | "low";
 
 export type ConfigView = {
@@ -713,6 +761,8 @@ export type ConfigView = {
   "tick_ms": number;
   "workspace_root": string;
 };
+
+export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
 
 export type ConsoleBlock = {
   "at": string;
@@ -870,6 +920,22 @@ export type ContainersLive = {
   "runtime"?: string | null;
 };
 
+export type ContinuationMetrics = {
+  "fresh"?: ContinuationRunTotals;
+  "fresh_fallback_by_reason"?: {
+  [key: string]: number;
+};
+  "resumed"?: ContinuationRunTotals;
+  "unknown"?: ContinuationRunTotals;
+};
+
+export type ContinuationRunTotals = {
+  "duplicate_reads": number;
+  "input_tokens": number;
+  "runs": number;
+  "wall_ms": number;
+};
+
 export type CooldownView = {
   "provider": string;
   "reason": string;
@@ -930,6 +996,91 @@ export type CriterionView = {
   "latest_verdict"?: VerdictView | null;
   "text": string;
 };
+
+export type CronCatchUp = "latest" | "skip";
+
+export type CronJobCreateBody = {
+  "catch_up"?: CronCatchUp;
+  "enabled"?: boolean;
+  "name": string;
+  "overlap"?: CronOverlap;
+  "schedule": string;
+  "template": CronTaskTemplate;
+  "timezone": string;
+};
+
+export type CronJobId = string;
+
+export type CronJobList = {
+  "items": Array<CronJobView>;
+};
+
+export type CronJobPatchBody = {
+  "catch_up"?: CronCatchUp | null;
+  "name"?: string | null;
+  "overlap"?: CronOverlap | null;
+  "schedule"?: string | null;
+  "template"?: CronTaskTemplate | null;
+  "timezone"?: string | null;
+};
+
+export type CronJobRun = {
+  "detail"?: string | null;
+  "id": CronJobRunId;
+  "job_id": CronJobId;
+  "outcome": CronRunOutcome;
+  "recorded_at": string;
+  "scheduled_for": string;
+  "task_id"?: TaskId | null;
+  "trigger": CronTrigger;
+};
+
+export type CronJobRunId = string;
+
+export type CronJobRunList = {
+  "items": Array<CronJobRun>;
+  "job_id": CronJobId;
+};
+
+export type CronJobView = {
+  "catch_up": CronCatchUp;
+  "created_at": string;
+  "enabled": boolean;
+  "id": CronJobId;
+  "last_run"?: CronJobRun | null;
+  "name": string;
+  "next_fire_at"?: string | null;
+  "overlap": CronOverlap;
+  "schedule": string;
+  "template": CronTaskTemplate;
+  "timezone": string;
+  "updated_at": string;
+};
+
+export type CronOverlap = "skip" | "queue";
+
+export type CronRunOutcome = "created" | "queued" | "skipped_overlap" | "skipped_missed" | "error";
+
+export type CronRunResult = {
+  "job_id": CronJobId;
+  "job_name": string;
+  "runs": Array<CronJobRun>;
+  "task_id"?: TaskId | null;
+};
+
+export type CronTaskTemplate = {
+  "acceptance"?: Array<unknown>;
+  "assignee"?: string | null;
+  "harness"?: string | null;
+  "lane"?: Tier | null;
+  "objective"?: string;
+  "priority"?: unknown;
+  "project"?: string | null;
+  "repos"?: Array<string>;
+  "title": string;
+};
+
+export type CronTrigger = "schedule" | "catch_up" | "manual";
 
 export type DaemonInstance = {
   "drained_at"?: string | null;
@@ -1140,6 +1291,7 @@ export type Delivery = {
   "department": string;
   "detail": string;
   "head": string;
+  "merge_candidate_sha"?: string | null;
   "notification"?: MessageId | null;
   "prepare_pid"?: number | null;
   "project_id": ProjectId;
@@ -1149,10 +1301,30 @@ export type Delivery = {
   "repo": string;
   "repo_id": RepoId;
   "review_run": string;
+  "reviewed_sha"?: string | null;
   "state": DeliveryState;
+  "target_sha"?: string | null;
   "task_id": TaskId;
   "worker_run": string;
 };
+
+export type DeliveryHead = {
+  "base"?: string | null;
+  "branch": string;
+  "head": string;
+  "merge_candidate_sha"?: string | null;
+  "release"?: string | null;
+  "repo": string;
+  "reviewed_sha"?: string | null;
+  "state": string;
+  "task_id": string;
+};
+
+export type DeliveryList = {
+  "items": Array<DeliveryHead>;
+};
+
+export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_mismatch" | "repo_row_missing" | "repo_not_local" | "repo_path_mismatch" | "not_git" | "no_branch" | "branch_name_mismatch" | "refs_unresolvable" | "department_unresolved";
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
@@ -1264,6 +1436,50 @@ export type EffectiveProfile = {
 };
 
 export type Event = {
+  "attempt": number;
+  "before_sha": string;
+  "merge_candidate_sha": string;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_ref": string;
+  "target_sha": string;
+  "type": "review_target_synced";
+} | {
+  "attempt": number;
+  "repo_id": RepoId;
+  "review_run": string;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "review_target_advanced";
+} | {
+  "attempt": number;
+  "before_sha": string;
+  "conflict_files": Array<string>;
+  "key": string;
+  "repo_id": RepoId;
+  "target_ref": string;
+  "target_sha": string;
+  "type": "integration_repair_scheduled";
+  "work_unit_id": string;
+} | {
+  "attempt": number;
+  "repo_id": RepoId;
+  "reviewed_sha": string;
+  "target_sha": string;
+  "type": "integration_repair_resolved";
+  "work_unit_id": string;
+} | {
+  "attempt": number;
+  "before_sha": string;
+  "fallback": boolean;
+  "reason": IntegrationRepairExhaustReason;
+  "repo_id": RepoId;
+  "rollback_to_sha"?: string | null;
+  "target_sha": string;
+  "type": "integration_repair_exhausted";
+  "work_unit_id"?: string | null;
+} | {
   "browser": BrowserRun;
   "type": "browser_updated";
 } | {
@@ -1440,6 +1656,9 @@ export type Event = {
   "decision": ExecutionGateDecision;
   "type": "execution_gated";
 } | {
+  "decision": RouteDecision;
+  "type": "execution_routed";
+} | {
   "mode": ExecutionMode;
   "note"?: string | null;
   "previous"?: ExecutionHintSpec | null;
@@ -1478,6 +1697,37 @@ export type Event = {
   "merged": Array<PhaseMerged>;
   "phase": string;
   "type": "phase_integrated";
+  "work_unit_id": string;
+} | {
+  "cmd": string;
+  "index": number;
+  "key": string;
+  "log_path": string;
+  "started_at": string;
+  "total": number;
+  "type": "integration_check_started";
+  "work_unit_id": string;
+} | {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass": boolean;
+  "timed_out"?: boolean;
+  "total": number;
+  "type": "integration_check_finished";
+  "work_unit_id": string;
+} | {
+  "branch": string;
+  "child_task": TaskId;
+  "head_sha": string;
+  "key": string;
+  "merge_candidate_sha": string;
+  "phase": string;
+  "repo_id": RepoId;
+  "target_sha": string;
+  "type": "merge_candidate_stale";
   "work_unit_id": string;
 } | {
   "plan_id": string;
@@ -1548,6 +1798,31 @@ export type Event = {
   "type": "plan_approval_requested";
 } | {
   "detail": string;
+  "head"?: string | null;
+  "reason": DeliverySkipReason;
+  "type": "delivery_skipped";
+} | {
+  "commit_error"?: string | null;
+  "commit_sha"?: string | null;
+  "date": string;
+  "deleted": number;
+  "fixed": number;
+  "merged": number;
+  "new": number;
+  "push": string;
+  "push_detail"?: string | null;
+  "type": "knowledge_curation_applied";
+} | {
+  "origin": string;
+  "request": IntegrationRequest;
+  "type": "integration_requested";
+} | {
+  "answer": string;
+  "note"?: string | null;
+  "request_id": string;
+  "type": "integration_answered";
+} | {
+  "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
   "since"?: string;
@@ -1604,9 +1879,13 @@ export type ExecutionHintSpec = {
 };
 
 export type ExecutionMetrics = {
+  "behind_target_age_seconds"?: number | null;
+  "behind_target_commits"?: number | null;
+  "behind_target_observed_at"?: string | null;
   "budget_exhausted_by_kind"?: {
   [key: string]: number;
 };
+  "continuation"?: ContinuationMetrics;
   "continuations": number;
   "cost_usd"?: number | null;
   "cost_usd_complete"?: boolean;
@@ -1637,6 +1916,10 @@ export type ExecutionMetrics = {
 
 export type ExecutionMetricsGroup = {
   "completion_rate"?: number | null;
+  "continuation"?: ContinuationMetrics;
+  "continuation_by_work_unit"?: {
+  [key: string]: ContinuationMetrics;
+};
   "continuations": number;
   "cost_usd_complete"?: boolean;
   "done": number;
@@ -1653,6 +1936,10 @@ export type ExecutionMetricsGroup = {
 
 export type ExecutionMetricsSummary = {
   "accounts_now"?: Array<AccountNowView>;
+  "continuation"?: ContinuationMetrics;
+  "continuation_by_work_unit"?: {
+  [key: string]: ContinuationMetrics;
+};
   "group_by": string;
   "groups": Array<ExecutionMetricsGroup>;
   "since"?: string | null;
@@ -1731,16 +2018,19 @@ export type ExecutionView = {
   "phase_checkpoint"?: PhaseCheckpointView | null;
   "plan"?: ExecutionPlanOverview | null;
   "plan_approval"?: PlanApprovalView | null;
+  "route"?: RouteDecision | null;
 };
 
 export type ExecutionWorkUnitView = {
   "assignee"?: string | null;
   "blocked_reason"?: WorkUnitBlockedReason | null;
   "branch"?: string | null;
+  "check_progress"?: IntegrationCheckProgress | null;
   "child_task_id"?: string | null;
   "continuations": number;
   "created_at": string;
   "depends_on": Array<string>;
+  "expected_write_paths"?: Array<string> | null;
   "harness"?: string | null;
   "head_commit"?: string | null;
   "id": string;
@@ -1773,6 +2063,17 @@ export type FailureSummary = {
   "class": FailureClass;
   "delivered_release"?: string | null;
   "reason": string;
+};
+
+export type FileDiffStat = {
+  "added": number;
+  "deleted": number;
+};
+
+export type FileIntent = {
+  "path": string;
+  "source": SideIntent;
+  "target": SideIntent;
 };
 
 export type GateSignal = {
@@ -1838,6 +2139,21 @@ export type HumanAttestation = {
   "signature": string;
 };
 
+export type HumanInboxCounts = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "total": number;
+};
+
+export type HumanInboxView = {
+  "counts": HumanInboxCounts;
+  "items": Array<InboxItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
 export type InFlight = {
   "kind": InFlightKind;
   "provider": string;
@@ -1856,6 +2172,37 @@ export type Inbox = {
   "decisions": Array<DecisionInboxItem>;
   "drafts": Array<DraftGroup>;
   "questions": Array<QuestionItem>;
+  "suppressed": {
+  [key: string]: number;
+};
+};
+
+export type InboxAnswer = {
+  "body_schema": {
+  [key: string]: string;
+};
+  "method": string;
+  "native"?: InboxNativeOp | null;
+  "path": string;
+};
+
+export type InboxAnswerBody = {
+  "note"?: string | null;
+  "option": string;
+  "payload"?: unknown;
+};
+
+export type InboxAnswerResult = {
+  "item_id": string;
+  "removed": boolean;
+  "result": unknown;
+};
+
+export type InboxBlocking = {
+  "root"?: TaskRef | null;
+  "summary": string;
+  "tasks": Array<TaskRef>;
+  "units": Array<string>;
 };
 
 export type InboxCounts = {
@@ -1868,6 +2215,43 @@ export type InboxCounts = {
   "decisions": number;
   "drafts": number;
   "questions": number;
+};
+
+export type InboxItem = {
+  "age_secs": number;
+  "answer": InboxAnswer;
+  "blocked_by": Array<string>;
+  "blocking": InboxBlocking;
+  "created_at": string;
+  "detail"?: string | null;
+  "due_at"?: string | null;
+  "id": string;
+  "kind": InboxKind;
+  "links": Array<InboxLink>;
+  "options": Array<InboxOption>;
+  "project_id"?: string | null;
+  "recommended"?: string | null;
+  "task"?: TaskRef | null;
+  "title": string;
+};
+
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "integration_request" | "knowledge_review";
+
+export type InboxLink = {
+  "href": string;
+  "label": string;
+};
+
+export type InboxNativeOp = {
+  "method": string;
+  "path": string;
+};
+
+export type InboxOption = {
+  "effect": string;
+  "key": string;
+  "label": string;
+  "needs_note": boolean;
 };
 
 export type InstanceRole = "active" | "standby" | "draining" | "verify";
@@ -1888,9 +2272,62 @@ export type IntegrateResult = {
   "integration": TaskIntegration;
 };
 
+export type IntegrationCheckDone = {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "pass": boolean;
+  "timed_out": boolean;
+};
+
+export type IntegrationCheckProgress = {
+  "current"?: IntegrationCheckRunning | null;
+  "finished": Array<IntegrationCheckDone>;
+  "total": number;
+};
+
+export type IntegrationCheckRunning = {
+  "cmd": string;
+  "index": number;
+  "started_at": string;
+};
+
 export type IntegrationId = string;
 
 export type IntegrationMethod = "merge" | "pr" | "discard";
+
+export type IntegrationRepairExhaustReason = "limit_reached" | "plan_issue" | "work_unit_failed" | "budget_exhausted" | "result_untrusted" | "abort_failed" | "worktree_unavailable";
+
+export type IntegrationRepairState = "scheduled" | "resolved" | "exhausted";
+
+export type IntegrationRepairView = {
+  "attempt": number;
+  "before_sha"?: string | null;
+  "conflict_files"?: Array<string>;
+  "fallback"?: boolean | null;
+  "max_attempts": number;
+  "reason"?: IntegrationRepairExhaustReason | null;
+  "rollback_to_sha"?: string | null;
+  "state": IntegrationRepairState;
+  "target_ref"?: string | null;
+  "target_sha": string;
+  "work_unit_id"?: string | null;
+};
+
+export type IntegrationRequest = {
+  "actions": Array<ResolutionAction>;
+  "candidate_sha"?: string | null;
+  "conflict_files": Array<string>;
+  "intent": Array<FileIntent>;
+  "merge_base"?: string | null;
+  "reason": string;
+  "recommendation": string;
+  "source_branch": string;
+  "source_sha": string;
+  "target_branch": string;
+  "target_sha": string;
+};
 
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
 
@@ -2035,6 +2472,8 @@ export type LlmSourceAccountView = {
   "remaining_long"?: number | null;
   "remaining_short"?: number | null;
 };
+
+export type LlmSourceRef = string;
 
 export type LlmSourceView = {
   "accounts": Array<LlmSourceAccountView>;
@@ -2280,7 +2719,7 @@ export type NewPlanSpec = {
   "workspace"?: string | null;
 };
 
-export type NewTaskSpec = {
+export type NewTaskBody = {
   "acceptance": Array<CriterionSpec>;
   "adapter"?: string | null;
   "aggregate"?: boolean;
@@ -2289,6 +2728,7 @@ export type NewTaskSpec = {
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;
   "execution"?: ExecutionMode | null;
+  "expected_write_paths"?: Array<string> | null;
   "features"?: TaskFeatureHints | null;
   "genre"?: string | null;
   "kind"?: TaskKind;
@@ -2321,7 +2761,52 @@ export type NodeSessionSummary = {
   "turns": number;
 };
 
-export type NotificationKind = "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+export type Notice = {
+  "count": number;
+  "first_at": string;
+  "group_key": string;
+  "id": NoticeId;
+  "kind": NoticeKind;
+  "last_at": string;
+  "links"?: Array<NoticeLink>;
+  "project_id"?: string | null;
+  "read_at"?: string | null;
+  "summary": string;
+  "target"?: NoticeTarget | null;
+  "task_id"?: string | null;
+  "title": string;
+};
+
+export type NoticeId = string;
+
+export type NoticeKind = "task_done" | "report" | "bad_news" | "secretary_reply" | "delivery" | "release" | "cron_run" | "auto_recovered" | "requeue_limit_near";
+
+export type NoticeLink = {
+  "href": string;
+  "label": string;
+};
+
+export type NoticeReadAllResult = {
+  "marked": number;
+};
+
+export type NoticeReadResult = {
+  "id": string;
+  "read_at": string;
+};
+
+export type NoticeTarget = {
+  "id": string;
+  "kind": string;
+};
+
+export type NotificationKind = "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+
+export type NotificationsView = {
+  "items": Array<Notice>;
+  "next_before"?: string | null;
+  "unread": number;
+};
 
 export type NotifyRecent = {
   "attempts": number;
@@ -2341,8 +2826,14 @@ export type NotifyTestResult = {
 
 export type NotifyView = {
   "configured": boolean;
+  "digest_interval_secs": number;
+  "digest_last_sent_at"?: string | null;
+  "digest_max_lines": number;
   "fingerprint"?: string | null;
   "gui_base_url"?: string | null;
+  "inbox_batch_secs": number;
+  "inbox_new_last_sent_at"?: string | null;
+  "inbox_reminder_secs": number;
   "recent": Array<NotifyRecent>;
   "secret_id": string;
 };
@@ -2445,7 +2936,9 @@ export type PhaseGateRequest = {
 export type PhaseMerged = {
   "commit": string;
   "key": string;
+  "parent_head"?: string | null;
   "skipped"?: boolean;
+  "target_sha"?: string | null;
 };
 
 export type PhaseReport = {
@@ -2529,6 +3022,7 @@ export type PlanUnitSpec = {
   "decisions"?: Array<DecisionSpec>;
   "depends_on"?: Array<string>;
   "done_when"?: Array<string>;
+  "expected_write_paths"?: Array<string> | null;
   "features"?: unknown;
   "gate"?: ExecutionMode | null;
   "genre"?: string | null;
@@ -2760,6 +3254,8 @@ export type ProviderConfigView = {
 };
   "env_keys": Array<string>;
   "id": string;
+  "kind"?: ProviderKind;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2768,6 +3264,8 @@ export type ProviderConfigView = {
 };
   "tiers": Array<Tier>;
 };
+
+export type ProviderKind = "adapter";
 
 export type ProviderLive = {
   "account_id"?: string | null;
@@ -2781,7 +3279,9 @@ export type ProviderLive = {
   "id": string;
   "in_use": number;
   "in_use_cos"?: number;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "tier_models"?: {
   "cheap"?: ModelBinding;
@@ -2816,7 +3316,9 @@ export type ProviderView = {
   "id": string;
   "in_use"?: number | null;
   "in_use_cos"?: number | null;
+  "kind"?: ProviderKind;
   "last_check"?: ProviderCheckView | null;
+  "llm_source"?: ResolvedLlmSource | null;
   "model"?: string | null;
   "stats": ProviderStats;
   "tier_models"?: {
@@ -2882,6 +3384,12 @@ export type RateWindowView = {
   "utilization": number;
 };
 
+export type ReadAllBody = {
+  "before"?: string | null;
+  "kind"?: NoticeKind | null;
+  "project"?: string | null;
+};
+
 export type ReleaseChanges = {
   "base"?: string | null;
   "commit_count": number;
@@ -2915,6 +3423,7 @@ export type ReleaseItem = {
   "gate_ok": boolean;
   "is_current": boolean;
   "is_previous": boolean;
+  "notes"?: ReleaseNotes | null;
   "on_main"?: boolean | null;
   "problem"?: string | null;
   "promote_failed"?: ReleasePromoteFailure | null;
@@ -2922,10 +3431,76 @@ export type ReleaseItem = {
   "promote_stale"?: boolean;
   "promoted_at"?: string | null;
   "promoting": boolean;
+  "promotion"?: ReleasePromotionPreview | null;
   "ref"?: string | null;
   "schema_version"?: number | null;
   "sha12": string;
   "verify"?: ReleaseVerify | null;
+};
+
+export type ReleaseNoteChild = {
+  "task_id": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNoteCommit = {
+  "sha": string;
+  "subject": string;
+};
+
+export type ReleaseNoteConfig = {
+  "added_lines"?: Array<string>;
+  "added_sections"?: Array<string>;
+  "commit"?: string | null;
+  "needs_review": boolean;
+  "path": string;
+  "status": string;
+};
+
+export type ReleaseNoteFile = {
+  "commit"?: string | null;
+  "path": string;
+  "status": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNoteGateSkip = {
+  "reason": string;
+  "step": string;
+};
+
+export type ReleaseNoteSchema = {
+  "changed"?: boolean | null;
+  "from"?: number | null;
+  "to"?: number | null;
+};
+
+export type ReleaseNoteTask = {
+  "children"?: Array<ReleaseNoteChild>;
+  "commits"?: Array<ReleaseNoteCommit>;
+  "source": string;
+  "status"?: string | null;
+  "summary"?: string | null;
+  "task_id": string;
+  "title"?: string | null;
+};
+
+export type ReleaseNotes = {
+  "adrs"?: Array<ReleaseNoteFile>;
+  "base"?: string | null;
+  "config_example"?: ReleaseNoteConfig | null;
+  "deliveries_known"?: boolean;
+  "direct_commits"?: Array<ReleaseNoteCommit>;
+  "first_parent"?: Array<string>;
+  "gate_skips"?: Array<ReleaseNoteGateSkip>;
+  "generated_at": string;
+  "migrations"?: Array<ReleaseNoteFile>;
+  "schema": ReleaseNoteSchema;
+  "sha": string;
+  "sha12": string;
+  "tasks"?: Array<ReleaseNoteTask>;
+  "truncated"?: boolean;
+  "version": number;
 };
 
 export type ReleasePromoteAccepted = {
@@ -2938,6 +3513,28 @@ export type ReleasePromoteAccepted = {
 export type ReleasePromoteFailure = {
   "error": string;
   "failed_at": string;
+};
+
+export type ReleasePromotionPreview = {
+  "adrs": Array<ReleaseNoteFile>;
+  "complete": boolean;
+  "config_examples": Array<ReleaseNoteConfig>;
+  "direct_commits": Array<ReleaseNoteCommit>;
+  "from"?: string | null;
+  "gate_skips": Array<ReleaseNoteGateSkip>;
+  "migrations": Array<ReleaseNoteFile>;
+  "mode"?: string | null;
+  "problem"?: string | null;
+  "releases": Array<ReleasePromotionRelease>;
+  "schema": ReleaseNoteSchema;
+  "tasks": Array<ReleaseNoteTask>;
+  "to": string;
+};
+
+export type ReleasePromotionRelease = {
+  "built_at"?: string | null;
+  "sha12": string;
+  "task_count": number;
 };
 
 export type ReleaseRunning = {
@@ -3108,6 +3705,17 @@ export type ReportsReadResult = {
   "updated": number;
 };
 
+export type ResolutionAction = {
+  "detail": string;
+  "kind": ConflictKind;
+  "path": string;
+};
+
+export type ResolvedLlmSource = {
+  "origin": SourceOrigin;
+  "source": LlmSourceRef;
+};
+
 export type RetryBody = {
   "accept"?: boolean;
   "execution"?: ExecutionMode | null;
@@ -3174,6 +3782,23 @@ export type RollupMetrics = {
   "tasks": number;
   "tokens": number;
   "wall_ms"?: number | null;
+};
+
+export type Route = "direct" | "planned";
+
+export type RouteDecision = {
+  "gate_rule_id": string;
+  "overrode_gate": boolean;
+  "policy_version": string;
+  "reasons": Array<RouteReason>;
+  "route": Route;
+  "shadow": boolean;
+};
+
+export type RouteReason = {
+  "detail": string;
+  "ok": boolean;
+  "rule_id": string;
 };
 
 export type RoutingAudit = {
@@ -3435,6 +4060,14 @@ export type ShadowDecision = {
   "lane": Tier;
 };
 
+export type SideIntent = {
+  "branch": string;
+  "commits": Array<CommitIntent>;
+  "diffstat"?: FileDiffStat | null;
+  "path": string;
+  "unavailable"?: string | null;
+};
+
 export type SkillDetailView = {
   "files"?: Array<string>;
   "mounted_by"?: Array<string>;
@@ -3469,6 +4102,8 @@ export type SkillSummaryView = {
   "name": string;
   "updated"?: string | null;
 };
+
+export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
   "scope"?: string;
@@ -3568,8 +4203,11 @@ export type TaskComment = {
 
 export type TaskDetail = {
   "actions": Array<Action>;
+  "actual_run_write_sets": Array<ActualWriteSetView>;
+  "actual_work_unit_write_sets": Array<ActualWriteSetView>;
   "answers": Array<AnswerNote>;
   "approvals": Array<ApprovalLink>;
+  "behind_target": BehindTarget;
   "children": Array<TaskRef>;
   "cluster"?: string | null;
   "cluster_job_wait"?: ClusterJobWaitView | null;
@@ -3578,8 +4216,10 @@ export type TaskDetail = {
   "dependencies": Array<TaskRef>;
   "dependents": Array<TaskRef>;
   "execution"?: ExecutionView | null;
+  "expected_write_paths"?: Array<string> | null;
   "failure"?: FailureSummary | null;
   "genre"?: string | null;
+  "integration_repair"?: IntegrationRepairView | null;
   "is_root_task"?: boolean;
   "latest_question"?: string | null;
   "paused_by"?: TaskId | null;
@@ -3594,32 +4234,6 @@ export type TaskDetail = {
   "worktree"?: WorktreeView | null;
 };
 
-export type TaskEdit = {
-  "acceptance"?: Array<CriterionSpec> | null;
-  "adapter"?: string | null;
-  "assignee"?: string | null;
-  "category"?: TaskCategory | null;
-  "depends_on"?: Array<TaskId> | null;
-  "expected_status"?: Status | null;
-  "harness"?: string | null;
-  "labels"?: Array<string> | null;
-  "max_retries"?: number | null;
-  "max_turns"?: number | null;
-  "max_wall_secs"?: number | null;
-  "milestone_id"?: MilestoneId | null;
-  "mode"?: TaskMode | null;
-  "objective"?: string | null;
-  "pause_after"?: PausePolicy | null;
-  "priority"?: PriorityInput | null;
-  "project_id"?: ProjectId | null;
-  "repos"?: Array<string> | null;
-  "role"?: string | null;
-  "skills"?: Array<string> | null;
-  "tier"?: Tier | null;
-  "title"?: string | null;
-  "workspace"?: WorkspaceSpec | null;
-};
-
 export type TaskExecutionView = {
   "awaiting_children"?: Array<AwaitedChildView>;
   "gate"?: ExecutionGateDecision | null;
@@ -3628,6 +4242,7 @@ export type TaskExecutionView = {
   "phase_checkpoint"?: PhaseCheckpointView | null;
   "plan"?: ExecutionPlanView | null;
   "plan_approval"?: PlanApprovalView | null;
+  "route"?: RouteDecision | null;
   "runs": Array<RunSummary>;
 };
 
@@ -3685,6 +4300,33 @@ export type TaskList = {
 
 export type TaskMode = "prototype" | "production" | "research";
 
+export type TaskPatchBody = {
+  "acceptance"?: Array<CriterionSpec> | null;
+  "adapter"?: string | null;
+  "assignee"?: string | null;
+  "category"?: TaskCategory | null;
+  "depends_on"?: Array<TaskId> | null;
+  "expected_status"?: Status | null;
+  "expected_write_paths"?: Array<string> | null;
+  "harness"?: string | null;
+  "labels"?: Array<string> | null;
+  "max_retries"?: number | null;
+  "max_turns"?: number | null;
+  "max_wall_secs"?: number | null;
+  "milestone_id"?: MilestoneId | null;
+  "mode"?: TaskMode | null;
+  "objective"?: string | null;
+  "pause_after"?: PausePolicy | null;
+  "priority"?: PriorityInput | null;
+  "project_id"?: ProjectId | null;
+  "repos"?: Array<string> | null;
+  "role"?: string | null;
+  "skills"?: Array<string> | null;
+  "tier"?: Tier | null;
+  "title"?: string | null;
+  "workspace"?: WorkspaceSpec | null;
+};
+
 export type TaskPauseResult = {
   "paused_at"?: string | null;
   "subtree"?: Array<TaskRef>;
@@ -3707,6 +4349,7 @@ export type TaskRouting = {
   "features"?: TaskFeatureHints | null;
   "pause_after"?: PausePolicy;
   "pause_after_source"?: PauseSource;
+  "route"?: RouteDecision | null;
   "stages_hint"?: Array<StageHint>;
   "tier_source"?: TierSource;
 };
@@ -3950,12 +4593,22 @@ export type UnitDeclared = "leaf" | "task";
 
 export type UnitGateAction = "promoted" | "decision" | "kept_task" | "demoted";
 
+export type UnreadCountView = {
+  "by_kind": {
+  [key: string]: number;
+};
+  "events": number;
+  "unread": number;
+};
+
 export type Usage = {
   "cache_creation_tokens"?: number | null;
   "cache_read_tokens"?: number | null;
   "cost_usd"?: number | null;
+  "duplicate_reads"?: number | null;
   "input_tokens"?: number | null;
   "output_tokens"?: number | null;
+  "session_resumed"?: boolean | null;
 };
 
 export type VerdictView = {
@@ -3976,6 +4629,22 @@ export type WorkUnitBudget = {
 export type WorkUnitCheck = {
   "cmd": string;
   "expect_exit"?: number;
+};
+
+export type WorkUnitCheckLog = {
+  "cmd": string;
+  "duration_ms"?: number | null;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass"?: boolean | null;
+  "running": boolean;
+  "size": number;
+  "started_at": string;
+  "tail": string;
+  "total": number;
+  "truncated": boolean;
+  "work_unit_id": string;
 };
 
 export type WorkUnitContext = {

@@ -1,4 +1,4 @@
-//! ルーティングとハンドラ（`docs/gui/api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
+//! ルーティングとハンドラ（`docs/api/v1/gui-api.md` §2〜§3）。HTTP の写像だけを行い、判断は task-ops / ストアに任せる。
 
 use axum::Router;
 use axum::body::Body;
@@ -27,9 +27,9 @@ mod projects;
 mod providers;
 mod secrets;
 mod system;
-mod task_actions;
+pub(crate) mod task_actions;
 mod task_io;
-mod tasks;
+pub(crate) mod tasks;
 
 use accounts::{
     accounts, cancel_account_login, check_account, create_account, delete_account,
@@ -54,7 +54,7 @@ use task_actions::{
 };
 use task_io::{
     artifact_body, artifact_list, events, run_prompt, run_request, run_result, run_stderr,
-    run_stdout, task_events, task_runs,
+    run_stdout, task_events, task_runs, work_unit_check_log,
 };
 use tasks::{create_task, list_tasks, task_detail};
 
@@ -66,6 +66,7 @@ pub(crate) fn router(state: ApiState) -> Router {
     Router::new()
         .route("/api/v1/health", get(health))
         .route("/api/v1/inbox", get(inbox))
+        .merge(crate::inbox_notifications::routes())
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
         .route("/api/v1/tasks/{id}", get(task_detail).patch(patch_task))
         // ADR-0044 D2（Phase 53）: タスク単位のコメントと再開。
@@ -82,6 +83,10 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/tasks/{id}/runs/{run_id}/stdout", get(run_stdout))
         .route("/api/v1/tasks/{id}/runs/{run_id}/stderr", get(run_stderr))
         .route("/api/v1/tasks/{id}/runs/{run_id}/result", get(run_result))
+        .route(
+            "/api/v1/tasks/{id}/work-units/{wu_id}/check-log",
+            get(work_unit_check_log),
+        )
         .route("/api/v1/tasks/{id}/artifacts", get(artifact_list))
         .route("/api/v1/tasks/{id}/artifacts/{idx}", get(artifact_body))
         .route("/api/v1/tasks/{id}/approve", post(approve))
@@ -189,6 +194,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::execution::routes())
         // ADR-0079 D7（Phase R3a）: 決定の要求の一覧・回答・取り下げ・revise。実装は `crate::decisions`。
         .merge(crate::decisions::routes())
+        // ADR-0131 D5: 定期実行（cron job）の作成・一覧・更新・一時停止・手動実行・履歴。実装は `crate::cron_jobs`。
+        .merge(crate::cron_jobs::routes())
         .route("/api/v1/daemon", get(daemon))
         // ADR-0075 D6（Phase G1）: scratch pool の観測値（`celerisctl scratch status --json` と同じ schema）。
         .route("/api/v1/metrics/scratch", get(metrics_scratch))

@@ -114,7 +114,7 @@ import type { Route } from "./+types/projects.$id";
 
 /**
  * `/projects/:id`（案件の詳細・途中目標・仕事の木・報告・成果物、SPEC §3.3・§3.5・§3.7、ADR-0033 D2/D3、
- * docs/gui/api.md §3.47〜3.51、Phase G13c）。
+ * docs/api/v1/gui-api.md §3.47〜3.51、Phase G13c）。
  * 「仕事の木」は `GET /projects/{id}` の `tasks`（`ProjectTaskView`、`parent_id` / `depends_on` は既存の DAG
  * と同じ辺の作り方）を `/graph` と同じ `layoutGraph`（`~/components/WorkTree.tsx`）で描く。
  * 各ノードには `assignee` の組織ノードの名前を出す（`GET /org` と突き合わせる。組織のノード名を出すだけで、

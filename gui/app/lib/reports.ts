@@ -11,7 +11,7 @@ import { secondsBetween, splitDuration } from "~/lib/time-delta";
 export type ReportsUnreadFilter = "unread" | "all";
 
 /**
- * `GET /reports` のクエリを組む（docs/gui/api.md §3.50）。**`kind` はここに含めない**:
+ * `GET /reports` のクエリを組む（docs/api/v1/gui-api.md §3.50）。**`kind` はここに含めない**:
  * celeris の `GET /reports` は `project` / `node` / `level` / `unread` / `limit` しか受け付けず、
  * 「知らないクエリキーは 400」（§3.50）なので、kind の絞り込みは GUI 側で（`filterReportsByKind`）行う。
  * `level` を省略すると「秘書レベルの未読」（既定）にならないため、URL に `level` が無いときは `0` を送る

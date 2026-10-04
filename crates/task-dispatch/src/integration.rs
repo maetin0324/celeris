@@ -246,6 +246,16 @@ pub struct MergeItem {
     /// 子 task のブランチは子の repos（親の部分集合）にだけあるので `true`。WU のブランチは `false`
     /// （無ければ `Err`。従来どおり）。
     pub optional: bool,
+    /// ADR-0118 D5: 子 task の review が記録した merge candidate（このリポジトリの分）。記録の無い
+    /// 移行前の子と WU のブランチは `None`（照合しない。従来どおり）。
+    pub candidate: Option<MergeCandidate>,
+}
+
+/// ADR-0118 D5: 子 task の最新の review attempt が固定した `(target_sha, merge_candidate_sha)`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MergeCandidate {
+    pub target_sha: String,
+    pub merge_candidate_sha: String,
 }
 
 impl MergeItem {
@@ -255,6 +265,7 @@ impl MergeItem {
             key: key.into(),
             branch: branch.into(),
             optional: false,
+            candidate: None,
         }
     }
 
@@ -264,7 +275,14 @@ impl MergeItem {
             key: key.into(),
             branch: branch.into(),
             optional: true,
+            candidate: None,
         }
+    }
+
+    /// ADR-0118 D5: merge の直前に照合する merge candidate を付ける。
+    pub fn with_candidate(mut self, candidate: Option<MergeCandidate>) -> Self {
+        self.candidate = candidate;
+        self
     }
 }
 
@@ -276,6 +294,21 @@ pub struct Merged {
     pub commit: String,
     /// 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
     pub skipped: bool,
+    /// ADR-0118 D5: 照合した candidate の review 時の target SHA（candidate の無い item は `None`）。
+    pub target_sha: Option<String>,
+    /// ADR-0118 D5: candidate を merge する直前の Task ブランチの HEAD（candidate の無い item・飛ばした item は `None`）。
+    pub parent_head: Option<String>,
+}
+
+/// ADR-0118 D5: 子のブランチ HEAD が記録済みの merge candidate と違った（review 後に動いた）。
+/// merge していない（Task ブランチはこの item の前のまま）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaleCandidate {
+    pub key: String,
+    pub branch: String,
+    pub merge_candidate_sha: String,
+    pub head_sha: String,
+    pub target_sha: String,
 }
 
 /// 衝突（`merge --abort` 済み）。
@@ -285,16 +318,20 @@ pub struct Conflict {
     pub branch: String,
     /// 衝突したファイル（`git diff --name-only --diff-filter=U`）。
     pub files: Vec<String>,
+    pub request: Option<Box<crate::auto_resolve::IntegrationRequest>>,
 }
 
 /// [`integrate`] の結果。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IntegrationOutcome {
     pub merged: Vec<Merged>,
+    pub actions: Vec<crate::auto_resolve::ResolutionAction>,
     /// 統合後の Task ブランチの HEAD。
     pub head: String,
     /// 衝突で止まったら `Some`（その WU より後は試していない）。
     pub conflict: Option<Conflict>,
+    /// ADR-0118 D5: candidate の照合で止まったら `Some`（その item より後は試していない）。
+    pub stale: Option<StaleCandidate>,
 }
 
 /// ADR-0074 D1.4 1〜3: Task の worktree（`task_tree`）で、葉の WU のブランチを順に merge する。
@@ -302,6 +339,8 @@ pub struct IntegrationOutcome {
 /// - `MERGE_HEAD` が残っていれば `merge --abort` してから始める（途中で止まったやり直し）。
 /// - 既に入っている WU（`merge-base --is-ancestor <branch> HEAD`）は飛ばす（冪等）。
 /// - 衝突したら `merge --abort` して止める（`conflict` に入れて返す。Task ブランチは衝突の前のまま）。
+/// - ADR-0118 D5: candidate の付いた item は、ブランチ HEAD が `merge_candidate_sha` と違えば merge せず
+///   `stale` に入れて止める。親ブランチが review 後に進んだだけなら照合は通り、従来どおり merge する。
 pub fn integrate(
     task_tree: &Path,
     items: &[MergeItem],
@@ -311,6 +350,7 @@ pub fn integrate(
         let _ = git(task_tree, &["merge", "--abort"]);
     }
     let mut merged = Vec::new();
+    let mut actions = Vec::new();
     for item in items {
         let Some(commit) = rev_parse(task_tree, &format!("refs/heads/{}", item.branch)) else {
             if item.optional {
@@ -327,9 +367,54 @@ pub fn integrate(
                 key: item.key.clone(),
                 commit,
                 skipped: true,
+                target_sha: item.candidate.as_ref().map(|c| c.target_sha.clone()),
+                parent_head: None,
             });
             continue;
         }
+        if let Some(candidate) = &item.candidate
+            && candidate.merge_candidate_sha != commit
+        {
+            let head = rev_parse(task_tree, "HEAD")
+                .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?;
+            return Ok(IntegrationOutcome {
+                merged,
+                actions,
+                head,
+                conflict: None,
+                stale: Some(StaleCandidate {
+                    key: item.key.clone(),
+                    branch: item.branch.clone(),
+                    merge_candidate_sha: candidate.merge_candidate_sha.clone(),
+                    head_sha: commit,
+                    target_sha: candidate.target_sha.clone(),
+                }),
+            });
+        }
+        let parent_head = match &item.candidate {
+            Some(_) => Some(
+                rev_parse(task_tree, "HEAD")
+                    .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?,
+            ),
+            None => None,
+        };
+        let target_sha = rev_parse(task_tree, "HEAD").ok_or("no HEAD before merge")?;
+        let target_branch = git_ok(task_tree, &["branch", "--show-current"])?
+            .stdout
+            .trim()
+            .to_string();
+        let merge_base = git(task_tree, &["merge-base", &target_sha, &commit])?
+            .stdout
+            .trim()
+            .to_string();
+        let context = crate::auto_resolve::ResolveContext {
+            target_branch,
+            target_sha: target_sha.clone(),
+            source_branch: item.branch.clone(),
+            source_sha: commit.clone(),
+            merge_base: Some(merge_base),
+            generated_command: None,
+        };
         let out = git(
             task_tree,
             &[
@@ -341,14 +426,55 @@ pub fn integrate(
                 &item.branch,
             ],
         )?;
-        if out.ok {
-            merged.push(Merged {
-                key: item.key.clone(),
-                commit,
-                skipped: false,
-            });
-            continue;
+        if !out.ok && rev_parse(task_tree, "MERGE_HEAD").is_none() {
+            return Err(format!(
+                "git merge {} failed: {}",
+                item.branch,
+                out.stderr.trim()
+            ));
         }
+        // A successful git merge can still contain duplicate migration or ADR numbers.
+        let resolution = crate::auto_resolve::resolve(task_tree, &context);
+        let resolution = match resolution {
+            Ok(value) => value,
+            Err(error) => {
+                if out.ok {
+                    git_ok(task_tree, &["reset", "--hard", &target_sha])?;
+                } else {
+                    git_ok(task_tree, &["merge", "--abort"])?;
+                }
+                return Err(error);
+            }
+        };
+        let request = match resolution {
+            crate::auto_resolve::Resolution::NeedsHuman { request } => request,
+            crate::auto_resolve::Resolution::Resolved { actions: resolved } => {
+                let unresolved = git_ok(task_tree, &["diff", "--name-only", "--diff-filter=U"])?;
+                if !unresolved.stdout.trim().is_empty() {
+                    git_ok(task_tree, &["merge", "--abort"])?;
+                    return Err("auto resolver left unmerged paths".into());
+                }
+                if out.ok {
+                    if !resolved.is_empty() {
+                        git_ok(
+                            task_tree,
+                            &["commit", "--amend", "--no-edit", "--no-verify"],
+                        )?;
+                    }
+                } else {
+                    git_ok(task_tree, &["commit", "--no-edit", "--no-verify"])?;
+                }
+                actions.extend(resolved);
+                merged.push(Merged {
+                    key: item.key.clone(),
+                    commit,
+                    skipped: false,
+                    target_sha: item.candidate.as_ref().map(|c| c.target_sha.clone()),
+                    parent_head: parent_head.clone(),
+                });
+                continue;
+            }
+        };
         let files = git(task_tree, &["diff", "--name-only", "--diff-filter=U"])
             .map(|o| {
                 o.stdout
@@ -359,25 +485,34 @@ pub fn integrate(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let _ = git(task_tree, &["merge", "--abort"]);
+        if out.ok {
+            git_ok(task_tree, &["reset", "--hard", &target_sha])?;
+        } else {
+            git_ok(task_tree, &["merge", "--abort"])?;
+        }
         let head = rev_parse(task_tree, "HEAD")
             .ok_or_else(|| "no HEAD after merge --abort".to_string())?;
         return Ok(IntegrationOutcome {
             merged,
+            actions,
             head,
             conflict: Some(Conflict {
                 key: item.key.clone(),
                 branch: item.branch.clone(),
                 files,
+                request: Some(request),
             }),
+            stale: None,
         });
     }
     let head = rev_parse(task_tree, "HEAD")
         .ok_or_else(|| format!("no HEAD in {}", task_tree.display()))?;
     Ok(IntegrationOutcome {
         merged,
+        actions,
         head,
         conflict: None,
+        stale: None,
     })
 }
 

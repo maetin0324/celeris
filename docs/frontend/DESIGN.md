@@ -5,7 +5,7 @@ tasks: [01M3XTCNKMQBCHKSZ7Y1GF6ZM4]
 
 対象は `web/`。案件・タスク・実行を追い、人の判断から結果確認までを支える運用画面の規則を定める。本書は実装先の仕様であり、導入済み・表示検証済みを意味しない。dark mode は末尾の提案に留める。
 
-根拠は [UX_AUDIT.md](UX_AUDIT.md) の「cosmetic と IA/component 層の切り分け」「4 群の割り当て」「quality gate critique」、[現行 styles.css](../../web/styles.css)、[共通 components](../../web/components/)、[ADR-0081](../adr/0081-web-spa-frontend.md)。frontend-design・web-design・shadcn・ui-ux-quality-gate の指針を Celeris の判断・復旧・日本語表示に適用する。
+根拠は [UX_AUDIT.md](UX_AUDIT.md) の「cosmetic と IA/component 層の切り分け」「4 群の割り当て」「quality gate critique」、[現行 styles.css](../../web/styles.css)、[共通 components](../../web/components/)、[ADR-0081](../../agent-docs/adr/0081-web-spa-frontend.md)。frontend-design・web-design・shadcn・ui-ux-quality-gate の指針を Celeris の判断・復旧・日本語表示に適用する。
 
 ## 原則（避けるもの・戻らないもの）
 

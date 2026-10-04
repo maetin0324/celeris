@@ -292,3 +292,437 @@ fn a_poolless_session_sticks_without_an_account_check() {
         StickyDecision::Stick
     );
 }
+
+// ---- ADR-0140 D1: `decide_continuation`（execute continuation の同一 session resume と fallback） ----
+
+const UUID: &str = "550e8400-e29b-41d4-a716-446655440000";
+
+fn wu_session(adapter: &str, account: Option<&str>, wu: &str) -> WorkUnitSession {
+    WorkUnitSession::new(
+        "software-engineering",
+        task_core::TaskId::new(),
+        Some(wu.to_string()),
+        adapter,
+        account.map(str::to_string),
+        Some("p1".to_string()),
+        Some("/wu/a/repos/r".to_string()),
+        UUID,
+        OffsetDateTime::now_utc(),
+    )
+}
+
+fn facts<'a>(stored: Option<&'a WorkUnitSession>) -> ContinuationFacts<'a> {
+    ContinuationFacts {
+        role: ContinuationRole::Worker,
+        work_unit_id: Some("wu-a"),
+        previous_end: Some(RunEnd::BudgetExhausted {
+            kind: BudgetKind::Turns,
+        }),
+        previous_resume_rejected: false,
+        previous_comment_interrupt: false,
+        fresh_requested: false,
+        adapter: "claude-code",
+        account: Some("acct-1"),
+        provider: Some("p1"),
+        cwd: Some("/wu/a/repos/r"),
+        container: false,
+        stored,
+        rollover_tokens: 400_000,
+    }
+}
+
+fn fresh(reason: ContinuationFreshReason, retire: bool) -> ContinuationDecision {
+    ContinuationDecision::Fresh { reason, retire }
+}
+
+#[test]
+fn session_resume_session_reuse_same_wu_budget_or_yield_resumes() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    for end in [
+        RunEnd::BudgetExhausted {
+            kind: BudgetKind::Turns,
+        },
+        RunEnd::BudgetExhausted {
+            kind: BudgetKind::WallClock,
+        },
+        RunEnd::Yielded,
+        RunEnd::Waiting,
+    ] {
+        let f = ContinuationFacts {
+            previous_end: Some(end),
+            ..facts(Some(&s))
+        };
+        assert_eq!(
+            decide_continuation(&f),
+            ContinuationDecision::Resume,
+            "{end:?}"
+        );
+    }
+}
+
+#[test]
+fn session_resume_session_reuse_account_or_provider_change_falls_back() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let other_account = ContinuationFacts {
+        account: Some("acct-2"),
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&other_account),
+        fresh(ContinuationFreshReason::AccountChanged, true)
+    );
+    let other_provider = ContinuationFacts {
+        provider: Some("p2"),
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&other_provider),
+        fresh(ContinuationFreshReason::AccountChanged, true)
+    );
+    assert!(ContinuationFreshReason::AccountChanged.starts_session());
+}
+
+#[test]
+fn session_resume_session_reuse_adapter_change_falls_back() {
+    // 保存 session が別アダプタ（codex）で作られていた。
+    let s = wu_session("codex", Some("acct-1"), "wu-a");
+    assert_eq!(
+        decide_continuation(&facts(Some(&s))),
+        fresh(ContinuationFreshReason::AdapterChanged, true)
+    );
+    // 今回のアダプタが claude-code 以外（resume の対象外。session も作らない）。
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let codex = ContinuationFacts {
+        adapter: "codex",
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&codex),
+        fresh(ContinuationFreshReason::AdapterUnsupported, true)
+    );
+    assert!(!ContinuationFreshReason::AdapterUnsupported.starts_session());
+}
+
+#[test]
+fn session_resume_session_reuse_rejected_resume_falls_back_to_checkpoint() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let rejected = ContinuationFacts {
+        previous_end: Some(RunEnd::Failed { retryable: true }),
+        previous_resume_rejected: true,
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&rejected),
+        fresh(ContinuationFreshReason::ResumeRejected, true)
+    );
+    // retire 済み（行が無い）でも理由は resume_rejected のまま。
+    let rejected_retired = ContinuationFacts {
+        stored: None,
+        ..rejected
+    };
+    assert_eq!(
+        decide_continuation(&rejected_retired),
+        fresh(ContinuationFreshReason::ResumeRejected, false)
+    );
+}
+
+#[test]
+fn session_resume_session_reuse_missing_or_broken_session_falls_back() {
+    // daemon の restart 後に行が無い。
+    assert_eq!(
+        decide_continuation(&facts(None)),
+        fresh(ContinuationFreshReason::SessionMissing, false)
+    );
+    // UUID でない id。
+    let broken = WorkUnitSession {
+        session_id: "01M323X6TJQSFEP0MKXABWVY78".into(),
+        ..wu_session("claude-code", Some("acct-1"), "wu-a")
+    };
+    assert_eq!(
+        decide_continuation(&facts(Some(&broken))),
+        fresh(ContinuationFreshReason::SessionMissing, true)
+    );
+}
+
+#[test]
+fn session_resume_session_reuse_fresh_request_rollover_and_surface_fall_back() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let requested = ContinuationFacts {
+        fresh_requested: true,
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&requested),
+        fresh(ContinuationFreshReason::FreshRequested, true)
+    );
+    let context = ContinuationFacts {
+        previous_end: Some(RunEnd::BudgetExhausted {
+            kind: BudgetKind::Context,
+        }),
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&context),
+        fresh(ContinuationFreshReason::ContextRollover, true)
+    );
+    let big = WorkUnitSession {
+        approx_tokens: 400_000,
+        ..s.clone()
+    };
+    assert_eq!(
+        decide_continuation(&facts(Some(&big))),
+        fresh(ContinuationFreshReason::ContextRollover, true)
+    );
+    let container = ContinuationFacts {
+        container: true,
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&container),
+        fresh(ContinuationFreshReason::SurfaceUnsupported, true)
+    );
+    let moved = ContinuationFacts {
+        cwd: Some("/elsewhere"),
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&moved),
+        fresh(ContinuationFreshReason::SurfaceUnsupported, true)
+    );
+    // review fail 後の再作業など、直前が continuable でない。
+    let completed = ContinuationFacts {
+        previous_end: Some(RunEnd::Completed),
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&completed),
+        fresh(ContinuationFreshReason::NotContinuation, true)
+    );
+}
+
+/// 付記 comment-resume: 人のコメントで止めた run（`WorkerFinished` は `interrupted: comment`。`end` は
+/// `Cancelled` か無し）の次は resume する。印が無ければ従来どおり `not_continuation`（修正前の振る舞い）。
+/// 判断表のほかの行（account 変更・session 欠落・rollover・container・cwd・planner）はそのまま効く。
+#[test]
+fn session_resume_comment_interrupt_is_continuable() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    for end in [RunEnd::Cancelled, RunEnd::Failed { retryable: true }] {
+        let before = ContinuationFacts {
+            previous_end: Some(end),
+            ..facts(Some(&s))
+        };
+        assert_eq!(
+            decide_continuation(&before),
+            fresh(ContinuationFreshReason::NotContinuation, true),
+            "{end:?}"
+        );
+        let comment = ContinuationFacts {
+            previous_comment_interrupt: true,
+            ..before
+        };
+        assert_eq!(
+            decide_continuation(&comment),
+            ContinuationDecision::Resume,
+            "{end:?}"
+        );
+        let cases = [
+            (
+                ContinuationFacts {
+                    account: Some("acct-2"),
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::AccountChanged, true),
+            ),
+            (
+                ContinuationFacts {
+                    stored: None,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SessionMissing, false),
+            ),
+            (
+                ContinuationFacts {
+                    previous_resume_rejected: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::ResumeRejected, true),
+            ),
+            (
+                ContinuationFacts {
+                    container: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SurfaceUnsupported, true),
+            ),
+            (
+                ContinuationFacts {
+                    cwd: Some("/elsewhere"),
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::SurfaceUnsupported, true),
+            ),
+            (
+                ContinuationFacts {
+                    fresh_requested: true,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::FreshRequested, true),
+            ),
+            (
+                ContinuationFacts {
+                    role: ContinuationRole::Planner,
+                    ..comment
+                },
+                fresh(ContinuationFreshReason::RoleFresh, false),
+            ),
+        ];
+        for (f, want) in cases {
+            assert_eq!(decide_continuation(&f), want, "{end:?}");
+        }
+        let big = WorkUnitSession {
+            approx_tokens: 400_000,
+            ..s.clone()
+        };
+        assert_eq!(
+            decide_continuation(&ContinuationFacts {
+                stored: Some(&big),
+                ..comment
+            }),
+            fresh(ContinuationFreshReason::ContextRollover, true)
+        );
+        let codex = wu_session("codex", Some("acct-1"), "wu-a");
+        assert_eq!(
+            decide_continuation(&ContinuationFacts {
+                stored: Some(&codex),
+                ..comment
+            }),
+            fresh(ContinuationFreshReason::AdapterChanged, true)
+        );
+    }
+}
+
+#[test]
+fn session_resume_fresh_session_for_planner_and_reviewer() {
+    let s = wu_session("claude-code", Some("acct-1"), "wu-a");
+    for role in [ContinuationRole::Planner, ContinuationRole::Reviewer] {
+        let f = ContinuationFacts {
+            role,
+            ..facts(Some(&s))
+        };
+        // WU の継続 session には触れない（retire もしない）、session も作らない。
+        assert_eq!(
+            decide_continuation(&f),
+            fresh(ContinuationFreshReason::RoleFresh, false),
+            "{role:?}"
+        );
+    }
+    assert!(!ContinuationFreshReason::RoleFresh.starts_session());
+}
+
+#[test]
+fn session_resume_fresh_session_for_an_independent_work_unit() {
+    // 別 WU の session は引き継がず、触れもしない。
+    let other = wu_session("claude-code", Some("acct-1"), "wu-b");
+    assert_eq!(
+        decide_continuation(&facts(Some(&other))),
+        fresh(ContinuationFreshReason::IndependentWu, false)
+    );
+    // WU の最初の run（直前の run が無い）。次の continuation に備えて session を作る。
+    let first = ContinuationFacts {
+        previous_end: None,
+        ..facts(None)
+    };
+    assert_eq!(
+        decide_continuation(&first),
+        fresh(ContinuationFreshReason::IndependentWu, false)
+    );
+    assert!(ContinuationFreshReason::IndependentWu.starts_session());
+}
+
+#[test]
+fn session_resume_fresh_session_never_resumes_another_accounts_session() {
+    let s = wu_session("claude-code", Some("acct-other"), "wu-a");
+    let f = ContinuationFacts {
+        account: Some("acct-1"),
+        ..facts(Some(&s))
+    };
+    assert_ne!(decide_continuation(&f), ContinuationDecision::Resume);
+    // プールを使わない（account 無し）run も、account 付きの session を resume しない。
+    let none = ContinuationFacts {
+        account: None,
+        ..facts(Some(&s))
+    };
+    assert_eq!(
+        decide_continuation(&none),
+        fresh(ContinuationFreshReason::AccountChanged, true)
+    );
+}
+
+#[test]
+fn session_resume_container_and_adapter_are_decided_before_first_run_and_not_continuation() {
+    // #5・#8（container）は #1 の直後に見る。WU の最初の run・continuation でない run・別 WU の
+    // session があっても session を作らない理由になる（ADR-0140 D3）。
+    let own = wu_session("claude-code", Some("acct-1"), "wu-a");
+    let other = wu_session("claude-code", Some("acct-1"), "wu-b");
+    let cases: [(&str, Option<RunEnd>, Option<&WorkUnitSession>, bool); 4] = [
+        // WU の最初の run（従来は IndependentWu で session を作っていた）。
+        ("first run", None, None, false),
+        // 別 WU の session がある（触れない）。
+        ("other wu", None, Some(&other), false),
+        // continuation でない（従来は NotContinuation で session を作っていた）。
+        (
+            "not continuation",
+            Some(RunEnd::Completed),
+            Some(&own),
+            true,
+        ),
+        // continuation。
+        (
+            "continuation",
+            Some(RunEnd::BudgetExhausted {
+                kind: BudgetKind::Turns,
+            }),
+            Some(&own),
+            true,
+        ),
+    ];
+    for (label, previous_end, stored, retire) in cases {
+        let container = ContinuationFacts {
+            previous_end,
+            container: true,
+            ..facts(stored)
+        };
+        let decision = decide_continuation(&container);
+        assert_eq!(
+            decision,
+            fresh(ContinuationFreshReason::SurfaceUnsupported, retire),
+            "container: {label}"
+        );
+        let codex = ContinuationFacts {
+            previous_end,
+            adapter: "codex",
+            ..facts(stored)
+        };
+        assert_eq!(
+            decide_continuation(&codex),
+            fresh(ContinuationFreshReason::AdapterUnsupported, retire),
+            "adapter: {label}"
+        );
+        // 役割（#1）はそれより先: container の reviewer も RoleFresh。
+        let reviewer = ContinuationFacts {
+            role: ContinuationRole::Reviewer,
+            ..container
+        };
+        assert_eq!(
+            decide_continuation(&reviewer),
+            fresh(ContinuationFreshReason::RoleFresh, false),
+            "reviewer: {label}"
+        );
+    }
+    for reason in [
+        ContinuationFreshReason::SurfaceUnsupported,
+        ContinuationFreshReason::AdapterUnsupported,
+    ] {
+        assert!(!reason.starts_session(), "{reason:?}");
+    }
+}

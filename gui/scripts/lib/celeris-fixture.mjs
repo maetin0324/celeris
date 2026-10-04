@@ -484,6 +484,36 @@ export async function setupMockCeleris() {
       delegated: [],
       dependencies: [],
       dependents: [],
+      // agent-docs/adr/0130 D2/D4: 実 API（task-ops view.rs の TaskDetail）が常に返す欄。欠けると
+      // overview の WriteSetSection が 500 になった（gui-gate-regression/overview-500）。
+      expected_write_paths: ["gui/app/routes/"],
+      actual_run_write_sets: [
+        {
+          repo_id: "code",
+          owner_id: "01RUNAAAAAAAAAAAAAAAAAAAA",
+          base_sha: "a1b2c3d4e5f6a7b8",
+          head_sha: "b2c3d4e5f6a7b8c9",
+          paths: ["gui/app/routes/tasks.$id.tsx"],
+          status: "complete",
+          recorded_at: "2026-09-21T00:05:00Z",
+        },
+      ],
+      actual_work_unit_write_sets: [],
+      behind_target: {
+        behind_target_commits: 3,
+        behind_target_age_seconds: 5400,
+        behind_target_observed_at: "2026-09-21T00:06:00Z",
+        repos: [
+          {
+            repo_id: "code",
+            target_ref: "main",
+            behind_target_commits: 3,
+            behind_target_age_seconds: 5400,
+            behind_target_observed_at: "2026-09-21T00:06:00Z",
+          },
+        ],
+      },
+      integration_repair: null,
       priority_label: "P2",
       prior_review: [],
       // celeris ADR-0072 D19/D20（Phase E5）: run の end / WU の key（`runs 一覧`の 2 列）を機械検査対象にする。
@@ -668,7 +698,22 @@ export async function setupMockCeleris() {
               seq: 4,
               kind: "integrate",
               title: "工程 調査と実装 の統合",
-              status: "pending",
+              // 2026-10-04 統合の検査の進み具合: 統合は run を持たないので、検査の進み具合と出力の末尾を WU の行に出す。
+              status: "running",
+              check_progress: {
+                total: 3,
+                current: { index: 1, cmd: "cargo test --workspace", started_at: "2026-09-21T00:30:00Z" },
+                finished: [
+                  {
+                    index: 0,
+                    cmd: "cargo build --workspace",
+                    pass: true,
+                    exit: 0,
+                    timed_out: false,
+                    duration_ms: 95_400,
+                  },
+                ],
+              },
               phase: "build",
               depends_on: ["survey", "build", "repair-1", "api"],
               runs: 0,
@@ -742,6 +787,20 @@ export async function setupMockCeleris() {
     }),
   );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/events`, (_req, res) => sendJson(res, 200, { has_more: false, items: [] }));
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/work-units/01WUINTEGRATEBUILDAAAAAAA/check-log`, (_req, res) =>
+    sendJson(res, 200, {
+      work_unit_id: "01WUINTEGRATEBUILDAAAAAAA",
+      key: "integrate-build",
+      index: 1,
+      total: 3,
+      cmd: "cargo test --workspace",
+      started_at: "2026-09-21T00:30:00Z",
+      running: true,
+      size: 52_000,
+      truncated: true,
+      tail: "test dispatcher::tests::work_units::three_work_units_run_in_order ... ok\ntest result: ok. 412 passed\n",
+    }),
+  );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/artifacts`, (_req, res) => sendJson(res, 200, { items: [] }));
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/tree`, (_req, res) => sendJson(res, 200, fx.treeView()));
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/changes`, (_req, res) =>

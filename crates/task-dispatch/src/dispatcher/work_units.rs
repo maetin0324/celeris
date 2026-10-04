@@ -513,7 +513,7 @@ impl Dispatcher {
                     return Ok(WuDispatchGate::Skip);
                 };
                 let mode = self.parallel_mode(&task)?;
-                let ids = task_core::runnable_work_units(&units, 0, mode.limit);
+                let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, mode.limit);
                 Ok(ids
                     .first()
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
@@ -1261,7 +1261,8 @@ impl Dispatcher {
             adapter: Some(adapter_id.to_string()),
             model: Some(model.to_string()),
             account: account.map(str::to_string),
-            session_id: None,
+            // ADR-0140 D2: この run が使う継続 session の id（resume でも新規でも）。
+            session_id: extras.session.as_ref().map(|s| s.session_id.clone()),
             checkpoint: None,
             usage: None,
             metrics: None,
@@ -1339,9 +1340,17 @@ impl Dispatcher {
             }
             _ => Vec::new(),
         };
+        let events = self.store.events_for(task_id)?;
+        // ADR-0074 付記（2026-10-02）: 前の段の途中確認で人が continue に付けたメモ（同じ「人の決定」節。tree に依らない）。
+        let mut human_decisions = human_decisions;
+        human_decisions.extend(task_ops::phase_gate::continue_note_lines(
+            &events,
+            units,
+            &wu.plan_id,
+            wu.phase.as_deref(),
+        ));
         // ADR-0079 付記 R7-5 D3: 直前の run が done を返したのに checks が落ちていれば、その記録を次の run に渡す。
-        let previous_check_failures =
-            previous_check_failure_lines(&self.store.events_for(task_id)?, &wu.id, run_id);
+        let previous_check_failures = previous_check_failure_lines(&events, &wu.id, run_id);
         Ok(task_worker::protocol::WorkUnitPromptContext {
             key: wu.key.clone(),
             title: wu.spec.title.clone(),
@@ -1464,7 +1473,8 @@ impl Dispatcher {
                 decision: Box::new(decision),
             },
         ) {
-            Ok(updated) => Ok(updated),
+            // ADR-0124 D2: gate の判定を書いた直後、同じ dispatch で 1 回だけ経路を決めて記録する。
+            Ok(updated) => Ok(self.execution_route_if_needed(updated)),
             Err(e) => {
                 tracing::warn!(task_id = %task.id, error = %e, "failed to record the execution gate decision; continuing without it");
                 Ok(task)
@@ -1472,16 +1482,115 @@ impl Dispatcher {
         }
     }
 
+    /// ADR-0124 D2: gate の判定を持ち、経路をまだ決めていない・計画を持たない Task に
+    /// `task_core::direct_route::evaluate` を当て、`Event::ExecutionRouted` と `Task.routing.route` を
+    /// 同じ `update_task` で書く。入力は store と担当の実効 profile から決定的に計算する（LLM なし）。
+    /// 記録に失敗しても dispatch は止めない（経路が無い Task は従来どおり gate の判定に従う）。
+    fn execution_route_if_needed(&self, task: Task) -> Task {
+        let Some(routing) = task.routing.clone() else {
+            return task;
+        };
+        let Some(gate) = routing.execution.as_ref() else {
+            return task;
+        };
+        if routing.route.is_some() {
+            return task;
+        }
+        let inputs = match self.direct_route_inputs(&task) {
+            Ok(inputs) => inputs,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to compute the direct route inputs; leaving the route unrecorded");
+                return task;
+            }
+        };
+        match self.store.execution_plan_active(task.id) {
+            Ok(None) => {}
+            Ok(Some(_)) => return task,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to read the active plan; leaving the route unrecorded");
+                return task;
+            }
+        }
+        let decision = task_core::evaluate_direct_route(&task, gate, inputs);
+        let mut fresh = task.clone();
+        let mut new_routing = routing;
+        new_routing.route = Some(decision.clone());
+        fresh.routing = Some(new_routing);
+        fresh.updated_at = OffsetDateTime::now_utc();
+        match self.store.update_task(
+            &fresh,
+            Event::ExecutionRouted {
+                decision: Box::new(decision),
+            },
+        ) {
+            Ok(updated) => updated,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "failed to record the execution route; continuing without it");
+                task
+            }
+        }
+    }
+
+    /// ADR-0124 D1: `DirectRouteInputs` を store と組織から決定的に計算する。
+    /// - `coding_harness`: 担当の実効 profile（Task の genre の上書き込み）の既定ハーネスが `coding`。
+    ///   組織が無い・担当が無いなら `false`。
+    /// - `cross_department`: Task が担当の profile に無い genre・skill を要する、またはこの Task に
+    ///   部をまたぐ認可（`cross-department: …` の承認）が記録されている。
+    /// - `pending_approval`: この Task に未決の承認がある。
+    fn direct_route_inputs(
+        &self,
+        task: &Task,
+    ) -> Result<task_core::DirectRouteInputs, DispatchError> {
+        let org = self.store.org_list()?;
+        let profile = task
+            .assignee
+            .as_deref()
+            .filter(|_| !org.is_empty())
+            .map(|a| task_core::profile::resolve(&org, a));
+        let coding_harness = profile.as_ref().is_some_and(|p| {
+            p.clone().with_task(task).harness_default.as_deref() == Some("coding")
+        });
+        let foreign_genre = profile.as_ref().is_some_and(|p| {
+            task.genre.as_deref().is_some_and(|g| {
+                !g.is_empty()
+                    && !p.harnesses_allowed.is_empty()
+                    && !p.harnesses_allowed.iter().any(|h| h == g)
+            })
+        });
+        let foreign_skill = profile
+            .as_ref()
+            .is_some_and(|p| task.skills.iter().any(|s| !p.skills.contains(s)));
+        let approvals: Vec<task_core::Approval> = self
+            .store
+            .approval_list(None, None, None)?
+            .into_iter()
+            .filter(|a| a.task_id == Some(task.id))
+            .collect();
+        let crossing_recorded = approvals
+            .iter()
+            .any(|a| task_ops::conversation::cross_department_key(&a.question).is_some());
+        let pending_approval = approvals.iter().any(|a| a.is_pending());
+        Ok(task_core::DirectRouteInputs {
+            coding_harness,
+            cross_department: foreign_genre || foreign_skill || crossing_recorded,
+            pending_approval,
+        })
+    }
+
     /// ADR-0074 D1.3 3.（Phase F2b）: 並列 WU の 2 本目以降。このインスタンスが既に run を持っている
     /// （＝工程の lease の持ち主の）Task だけを対象にする（引き継ぎ中の別インスタンスの Task には
     /// 手を出さない。持ち主のいない Task は再起動の照合〈D1.7〉が Ready に戻す）。
+    ///
+    /// 戻り値は（起こした run の数, `max_concurrency` が尽きて走査を途中で切ったか）。
+    /// 2026-10-03-write-set-no-starvation: 起こせなかった WU（write-set の重なりで待たされた等）は飛ばして
+    /// 後ろの WU を試す（同じ tick に同じ WU を二度試さない）。
     pub(super) fn dispatch_parallel_work_units(
         &mut self,
         full: &mut std::collections::HashSet<ProviderId>,
         now: Instant,
-    ) -> Result<usize, DispatchError> {
+    ) -> Result<(usize, bool), DispatchError> {
         if self.workers_in_flight() >= self.config.max_concurrency {
-            return Ok(0);
+            return Ok((0, true));
         }
         let mut dispatched = 0;
         let window = self.ready_window();
@@ -1499,9 +1608,10 @@ impl Dispatcher {
                 continue;
             }
             let mode = self.parallel_mode(&task)?;
+            let mut tried: std::collections::HashSet<String> = std::collections::HashSet::new();
             loop {
                 if self.workers_in_flight() >= self.config.max_concurrency {
-                    return Ok(dispatched);
+                    return Ok((dispatched, true));
                 }
                 let units = self.store.work_units_for(task.id)?;
                 let in_flight = units
@@ -1511,20 +1621,25 @@ impl Dispatcher {
                             && u.kind != task_core::WorkUnitKind::Integrate
                     })
                     .count();
-                let ids = task_core::runnable_work_units(&units, in_flight, mode.limit);
+                if in_flight >= mode.limit {
+                    break;
+                }
+                // 並列上限で切らずに候補を全部並べ、この tick にまだ試していない最初の WU を選ぶ。
+                let ids = crate::execution_scheduler::runnable_in_phase(&units, 0, usize::MAX);
                 let Some(wu) = ids
-                    .first()
+                    .iter()
+                    .find(|id| !tried.contains(*id))
                     .and_then(|id| units.into_iter().find(|u| &u.id == id))
                 else {
                     break;
                 };
-                if !self.dispatch_one(task.clone(), Some(wu), full, now)? {
-                    break;
+                tried.insert(wu.id.clone());
+                if self.dispatch_one(task.clone(), Some(wu), full, now)? {
+                    dispatched += 1;
                 }
-                dispatched += 1;
             }
         }
-        Ok(dispatched)
+        Ok((dispatched, false))
     }
 
     /// ADR-0072 D21（Phase E3）: WU の run の lane。`decide_lane` と同じ天井（担当ノードの実効

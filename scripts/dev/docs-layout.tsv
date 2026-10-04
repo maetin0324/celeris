@@ -1,0 +1,251 @@
+# Format: old path<TAB>proposed new path<TAB>human|agent|delete; paths are repository-relative; delete uses - as the new path; proposals do not move files.
+# human = current reader-facing specification/guide/operation; agent = decision/progress/work record or agent-only rule; delete = obsolete or duplicate, with the reason recorded below.
+# Roots follow ADR-0128: docs/ = minimal current human documentation, agent-docs/ = agent records and work rules. Unchanged paths are listed with old = new.
+# reason docs/gui/bootstrap/CLAUDE.md: docs/gui/bootstrap/CLAUDE.md:1-4 は初期配布用の作業規則だが、実際の作業規則は gui/CLAUDE.md:1-5 に配置済みで、同じ役割の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/GOAL_TEMPLATE.md: docs/gui/bootstrap/README.md:16 のコピー用テンプレートで、現行の同名成果は gui/docs/GOAL_TEMPLATE.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/PROGRESS.md: docs/gui/bootstrap/PROGRESS.md:6-16 は G0〜G5 を全て未着手とするが、現行の進捗は gui/docs/PROGRESS.md:1 以下に記録済み。 人の確認で削除。
+# reason docs/gui/bootstrap/README.md: docs/gui/bootstrap/README.md:3,23 は run-gphases.sh による gui/ 作成と git init を指示するが、gui/package.json:1-16 と gui/README.md:1-5 の現行 gui/ は既に追跡・実装済みで、scripts/ に run-gphases.sh は無い。 人の確認で削除。
+# reason docs/gui/bootstrap/agents/auditor.md: docs/gui/bootstrap/README.md:19 の初期コピー元で、現行の agent 定義は gui/.claude/agents/auditor.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/gui/bootstrap/agents/implementer.md: docs/gui/bootstrap/README.md:18 の初期コピー元で、現行の agent 定義は gui/.claude/agents/implementer.md:1 に配置済み。初期配布元の重複。 人の確認で削除。
+# reason docs/web/dogfood.md: 人の確認で削除。起動・確認手順と H6/H9 の未決定・問題記録が混在する一度きりの作業文書で、現行の運用文書は docs/web/parallel-operation.md にある。
+# reason docs/browser-live-relay.md: Phase 2 の再実行手順と過去の証跡が中心なので agent の報告へ寄せる。
+# reason docs/gui/DESIGN-GUI.md: Phase 8/9 当時の前提・G フェーズの設計経緯なので agent の設計記録へ寄せる。
+# reason docs/gui/model-routing/*.png: 日付付きの実装報告だけが参照する検証画像なので報告と同じ agent 側へ寄せる。
+# reason docs/ops/browser-isolated-runtime-subuid.md: 一度きりの実証手順と進捗への追記指示なので agent 側へ寄せる。
+# reason docs/ops/dev-builds-local-target-dir.md: agent の開発ビルド規則と 2026-09-30 の経緯なので agent 側へ寄せる。
+# reason docs/ops/ui-ux-external-skills.md: 特定の導入作業を一度だけ行う手順なので agent 側の作業記録へ寄せる。
+# reason docs/testing.md: WU の check と agent 向けの試験規則なので agent 側へ寄せる。
+# reason docs/testing/time-dependent-waits.md: task 01M3ZCXG7C34WZFJ46Q64XS8SZ の走査記録（候補行・判定、front matter に tasks）なので、その task の進捗ファイルの下へ寄せる。
+# reason docs/ops/adr-0079-r5b-runbook.md: 人の確認で削除。ADR-0079 R5b の一度きりの作業手順であり、現行の運用文書ではない。
+# reason docs/ops/home-nfs-migration-2026-09-25.md: 人の確認で削除。2026-09-25 の一度きりの移行手順であり、現行の運用文書ではない。
+# reason docs/DESIGN.md: 人の確認で削除。現行の仕様の入口は docs/SPEC.md とし、CLAUDE.md の参照もそちらへ変える。
+# reason docs/execution-architecture-2026-09-24.md: cleanup-reports で削除。ADR-0072 前の現状調査で、Task:run 1:1・dispatcher.rs の行番号が今の実装と食い違う（最後の commit a42f9a54）。
+# reason docs/execution-decomposition-report-2026-09-25.md: cleanup-reports で削除。E6 時点の分析で、挙げた問題は Phase F で実装済み、gate 提案は ADR-0079 で置き換わった（最後の commit a42f9a54）。
+# reason docs/execution-parallel-report-2026-09-28.md: cleanup-reports で削除。案件計画（ADR-0074 D3）は ADR-0079 で廃止され、決定は ADR-0074 本文にある（最後の commit a42f9a54）。
+# reason docs/notes/build-cache-tiering-input-2026-09-28.md: cleanup-reports で削除。ADR-0075 の入力メモで、方針は ADR-0075 と実装に入り、現状の記述（sccache 未導入など）は食い違う（最後の commit a42f9a54）。
+# reason docs/celeris-api-v1.md: cleanup-api で中身を docs/api/v1/gui-api.md §3.125 へ統合した。docs/api/v1/overview.md は gui/docs/celeris-api-v1.md（変更禁止）の参照を保つ転送ページ。
+# 末尾の 9 行は task の base（0d438ec1）以降に main が旧配置へ足したもの。land-verify が ADR-0128 D6 で移した。
+docs/DESIGN.md	-	delete
+docs/GOAL_TEMPLATE.md	agent-docs/GOAL_TEMPLATE.md	agent
+docs/PROGRESS.md	agent-docs/PROGRESS.md	agent
+docs/SPEC.md	docs/SPEC.md	human
+docs/adr/0001-scope-and-principles.md	agent-docs/adr/0001-scope-and-principles.md	agent
+docs/adr/0002-state-machine.md	agent-docs/adr/0002-state-machine.md	agent
+docs/adr/0003-worker-protocol.md	agent-docs/adr/0003-worker-protocol.md	agent
+docs/adr/0004-taskctl-cli.md	agent-docs/adr/0004-taskctl-cli.md	agent
+docs/adr/0005-phase3-dispatch-and-worker.md	agent-docs/adr/0005-phase3-dispatch-and-worker.md	agent
+docs/adr/0006-phase4-claude-code-adapter.md	agent-docs/adr/0006-phase4-claude-code-adapter.md	agent
+docs/adr/0007-phase5-planner-and-reviewer.md	agent-docs/adr/0007-phase5-planner-and-reviewer.md	agent
+docs/adr/0008-phase6-approval-gate-and-codex-adapter.md	agent-docs/adr/0008-phase6-approval-gate-and-codex-adapter.md	agent
+docs/adr/0009-proposal-adoption-and-phase-closure.md	agent-docs/adr/0009-proposal-adoption-and-phase-closure.md	agent
+docs/adr/0010-phase7-hardening.md	agent-docs/adr/0010-phase7-hardening.md	agent
+docs/adr/0011-requeue-limit.md	agent-docs/adr/0011-requeue-limit.md	agent
+docs/adr/0012-multi-account-and-worker-run.md	agent-docs/adr/0012-multi-account-and-worker-run.md	agent
+docs/adr/0013-taskd-api-and-gui-foundations.md	agent-docs/adr/0013-taskd-api-and-gui-foundations.md	agent
+docs/adr/0014-reviewer-run-events-objective-search-create-validation.md	agent-docs/adr/0014-reviewer-run-events-objective-search-create-validation.md	agent
+docs/adr/0015-observability-and-taskref-actions.md	agent-docs/adr/0015-observability-and-taskref-actions.md	agent
+docs/adr/0016-roles-and-delegation.md	agent-docs/adr/0016-roles-and-delegation.md	agent
+docs/adr/0017-account-management-from-gui.md	agent-docs/adr/0017-account-management-from-gui.md	agent
+docs/adr/0018-remote-clusters-over-ssh.md	agent-docs/adr/0018-remote-clusters-over-ssh.md	agent
+docs/adr/0019-worktree-sync-for-large-repositories.md	agent-docs/adr/0019-worktree-sync-for-large-repositories.md	agent
+docs/adr/0020-single-repository-with-the-gui.md	agent-docs/adr/0020-single-repository-with-the-gui.md	agent
+docs/adr/0021-parent-retries-when-a-delegated-child-fails.md	agent-docs/adr/0021-parent-retries-when-a-delegated-child-fails.md	agent
+docs/adr/0022-provider-check-results-and-no-directory-watching.md	agent-docs/adr/0022-provider-check-results-and-no-directory-watching.md	agent
+docs/adr/0023-liveness-interval-run-request-and-awaiting-children.md	agent-docs/adr/0023-liveness-interval-run-request-and-awaiting-children.md	agent
+docs/adr/0024-claude-account-pool-and-budget-balancing.md	agent-docs/adr/0024-claude-account-pool-and-budget-balancing.md	agent
+docs/adr/0025-codex-accounts-in-the-pool.md	agent-docs/adr/0025-codex-accounts-in-the-pool.md	agent
+docs/adr/0026-acp-worker-adapter.md	agent-docs/adr/0026-acp-worker-adapter.md	agent
+docs/adr/0027-task-genres-and-research-harness.md	agent-docs/adr/0027-task-genres-and-research-harness.md	agent
+docs/adr/0028-genre-manifest.md	agent-docs/adr/0028-genre-manifest.md	agent
+docs/adr/0029-web-research-harness.md	agent-docs/adr/0029-web-research-harness.md	agent
+docs/adr/0030-api-keys-from-the-gui.md	agent-docs/adr/0030-api-keys-from-the-gui.md	agent
+docs/adr/0031-web-research-evidence-gate.md	agent-docs/adr/0031-web-research-evidence-gate.md	agent
+docs/adr/0032-cluster-connect-from-the-gui.md	agent-docs/adr/0032-cluster-connect-from-the-gui.md	agent
+docs/adr/0033-organization-projects-and-reports.md	agent-docs/adr/0033-organization-projects-and-reports.md	agent
+docs/adr/0034-report-generation-and-compaction.md	agent-docs/adr/0034-report-generation-and-compaction.md	agent
+docs/adr/0035-literature-acquisition.md	agent-docs/adr/0035-literature-acquisition.md	agent
+docs/adr/0036-per-task-artifacts.md	agent-docs/adr/0036-per-task-artifacts.md	agent
+docs/adr/0037-discord-notifications.md	agent-docs/adr/0037-discord-notifications.md	agent
+docs/adr/0038-milestone-review-dialogue.md	agent-docs/adr/0038-milestone-review-dialogue.md	agent
+docs/adr/0039-project-workspace.md	agent-docs/adr/0039-project-workspace.md	agent
+docs/adr/0040-self-improvement-deploy.md	agent-docs/adr/0040-self-improvement-deploy.md	agent
+docs/adr/0041-self-improvement-loop-hardening.md	agent-docs/adr/0041-self-improvement-loop-hardening.md	agent
+docs/adr/0042-celeris-naming-and-layout.md	agent-docs/adr/0042-celeris-naming-and-layout.md	agent
+docs/adr/0043-workspaces.md	agent-docs/adr/0043-workspaces.md	agent
+docs/adr/0044-task-management.md	agent-docs/adr/0044-task-management.md	agent
+docs/adr/0045-rename-to-celeris.md	agent-docs/adr/0045-rename-to-celeris.md	agent
+docs/adr/0046-organization-as-agent-profiles.md	agent-docs/adr/0046-organization-as-agent-profiles.md	agent
+docs/adr/0047-knowledge-base.md	agent-docs/adr/0047-knowledge-base.md	agent
+docs/adr/0048-console.md	agent-docs/adr/0048-console.md	agent
+docs/adr/0049-portable-providers-and-codex-usage.md	agent-docs/adr/0049-portable-providers-and-codex-usage.md	agent
+docs/adr/0050-request-completion-and-notifications.md	agent-docs/adr/0050-request-completion-and-notifications.md	agent
+docs/adr/0051-supervised-delivery.md	agent-docs/adr/0051-supervised-delivery.md	agent
+docs/adr/0052-knowledge-run-fallback.md	agent-docs/adr/0052-knowledge-run-fallback.md	agent
+docs/adr/0053-llm-source-proxy.md	agent-docs/adr/0053-llm-source-proxy.md	agent
+docs/adr/0054-stateful-sessions-and-streaming-chat.md	agent-docs/adr/0054-stateful-sessions-and-streaming-chat.md	agent
+docs/adr/0055-mobile-ux.md	agent-docs/adr/0055-mobile-ux.md	agent
+docs/adr/0056-mcp-server.md	agent-docs/adr/0056-mcp-server.md	agent
+docs/adr/0057-console-composer-layout-level.md	agent-docs/adr/0057-console-composer-layout-level.md	agent
+docs/adr/0058-release-verify-breakdown.md	agent-docs/adr/0058-release-verify-breakdown.md	agent
+docs/adr/0059-command-only-remote-workspace.md	agent-docs/adr/0059-command-only-remote-workspace.md	agent
+docs/adr/0060-ssh-master-outside-the-daemon-cgroup.md	agent-docs/adr/0060-ssh-master-outside-the-daemon-cgroup.md	agent
+docs/adr/0061-coding-harness-routing-foundation.md	agent-docs/adr/0061-coding-harness-routing-foundation.md	agent
+docs/adr/0062-ssh-master-keepalive-and-cluster-tool-routing.md	agent-docs/adr/0062-ssh-master-keepalive-and-cluster-tool-routing.md	agent
+docs/adr/0063-research-tasks-resilience.md	agent-docs/adr/0063-research-tasks-resilience.md	agent
+docs/adr/0064-db-local-disk-and-store-resilience.md	agent-docs/adr/0064-db-local-disk-and-store-resilience.md	agent
+docs/adr/0066-worker-build-cache-and-tunnel-probe-backoff.md	agent-docs/adr/0066-worker-build-cache-and-tunnel-probe-backoff.md	agent
+docs/adr/0067-human-deliverables-policy-and-approval-visibility.md	agent-docs/adr/0067-human-deliverables-policy-and-approval-visibility.md	agent
+docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md	agent-docs/adr/0068-knowledge-gc-and-repository-docs-maintenance.md	agent
+docs/adr/0069-routing-four-layers.md	agent-docs/adr/0069-routing-four-layers.md	agent
+docs/adr/0070-task-failure-visibility-and-handoff-safe-runs.md	agent-docs/adr/0070-task-failure-visibility-and-handoff-safe-runs.md	agent
+docs/adr/0071-gui-resume-recovery.md	agent-docs/adr/0071-gui-resume-recovery.md	agent
+docs/adr/0072-task-execution-decomposition.md	agent-docs/adr/0072-task-execution-decomposition.md	agent
+docs/adr/0073-ui-ux-section.md	agent-docs/adr/0073-ui-ux-section.md	agent
+docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md	agent-docs/adr/0074-parallel-work-units-checkpoints-milestones-quota.md	agent
+docs/adr/0075-tiered-build-cache.md	agent-docs/adr/0075-tiered-build-cache.md	agent
+docs/adr/0076-planner-reviewer-quota-roles.md	agent-docs/adr/0076-planner-reviewer-quota-roles.md	agent
+docs/adr/0077-milestone-in-progress-auto-reach.md	agent-docs/adr/0077-milestone-in-progress-auto-reach.md	agent
+docs/adr/0078-browser-execution-capability.md	agent-docs/adr/0078-browser-execution-capability.md	agent
+docs/adr/0078-ssh-master-persist-independent-of-daemon.md	agent-docs/adr/0078-ssh-master-persist-independent-of-daemon.md	agent
+docs/adr/0079-recursive-task-decomposition.md	agent-docs/adr/0079-recursive-task-decomposition.md	agent
+docs/adr/0080-browser-phase2-policy-broker-approval.md	agent-docs/adr/0080-browser-phase2-policy-broker-approval.md	agent
+docs/adr/0081-web-spa-frontend.md	agent-docs/adr/0081-web-spa-frontend.md	agent
+docs/adr/0082-dispatcher-module-split.md	agent-docs/adr/0082-dispatcher-module-split.md	agent
+docs/adr/0083-source-size-guardrail.md	agent-docs/adr/0083-source-size-guardrail.md	agent
+docs/adr/0089-cos-runs-bypass-concurrency.md	agent-docs/adr/0089-cos-runs-bypass-concurrency.md	agent
+docs/adr/0090-durable-wait-for-cluster-jobs.md	agent-docs/adr/0090-durable-wait-for-cluster-jobs.md	agent
+docs/adr/0095-worker-runs-see-the-db-read-only.md	agent-docs/adr/0095-worker-runs-see-the-db-read-only.md	agent
+docs/adr/0098-worker-created-tasks-inherit-the-origin-project.md	agent-docs/adr/0098-worker-created-tasks-inherit-the-origin-project.md	agent
+docs/adr/0099-browser-phase3-control-lease.md	agent-docs/adr/0099-browser-phase3-control-lease.md	agent
+docs/adr/0100-browser-phase3-live-proxy-acl.md	agent-docs/adr/0100-browser-phase3-live-proxy-acl.md	agent
+docs/adr/0101-browser-phase3-identity-contract.md	agent-docs/adr/0101-browser-phase3-identity-contract.md	agent
+docs/adr/0102-browser-phase4-isolation-injection-routing.md	agent-docs/adr/0102-browser-phase4-isolation-injection-routing.md	agent
+docs/adr/0103-browser-phase4-runtime-selection.md	agent-docs/adr/0103-browser-phase4-runtime-selection.md	agent
+docs/adr/0104-browser-egress-transport.md	agent-docs/adr/0104-browser-egress-transport.md	agent
+docs/adr/0105-browser-p4a-same-uid-bwrap-runtime.md	agent-docs/adr/0105-browser-p4a-same-uid-bwrap-runtime.md	agent
+docs/adr/0106-browser-phase4-conformance-dispatch.md	agent-docs/adr/0106-browser-phase4-conformance-dispatch.md	agent
+docs/adr/0107-browser-fallback-candidate-preparation.md	agent-docs/adr/0107-browser-fallback-candidate-preparation.md	agent
+docs/adr/0108-browser-p4a-relay-supervisor-launch-restore.md	agent-docs/adr/0108-browser-p4a-relay-supervisor-launch-restore.md	agent
+docs/adr/0109-browser-p4b-injection-ipc-cdp-sink.md	agent-docs/adr/0109-browser-p4b-injection-ipc-cdp-sink.md	agent
+docs/adr/0110-browser-p4b-h3-shared-cdp-trusted-selector.md	agent-docs/adr/0110-browser-p4b-h3-shared-cdp-trusted-selector.md	agent
+docs/adr/0111-browser-p4b-redisplay-guard-wiring.md	agent-docs/adr/0111-browser-p4b-redisplay-guard-wiring.md	agent
+docs/adr/0112-browser-p4b-conformance-evidence-unlock.md	agent-docs/adr/0112-browser-p4b-conformance-evidence-unlock.md	agent
+docs/adr/0113-browser-p3c-control-gate-action-server.md	agent-docs/adr/0113-browser-p3c-control-gate-action-server.md	agent
+docs/adr/0114-browser-p4a-restore-deliver-state.md	agent-docs/adr/0114-browser-p4a-restore-deliver-state.md	agent
+docs/adr/0115-browser-ptrace-owner-ns-launcher.md	agent-docs/adr/0115-browser-ptrace-owner-ns-launcher.md	agent
+docs/adr/0117-review-human-decisions-and-check-results.md	agent-docs/adr/0117-review-human-decisions-and-check-results.md	agent
+docs/adr/0121-root-delivery-without-assignee.md	agent-docs/adr/0121-root-delivery-without-assignee.md	agent
+docs/adr/0122-ui-ux-external-skills.md	agent-docs/adr/0122-ui-ux-external-skills.md	agent
+docs/adr/0128-docs-layout.md	agent-docs/adr/0128-docs-layout.md	agent
+docs/api/v1/api-v1.schema.json	docs/api/v1/api-v1.schema.json	human
+docs/api/v1/event.schema.json	docs/api/v1/event.schema.json	human
+docs/architecture-map.md	docs/architecture-map.md	human
+docs/browser-capability.md	docs/guides/browser-capability.md	human
+docs/browser-credentiald.md	docs/guides/browser-credentiald.md	human
+docs/browser-live-relay.md	agent-docs/reports/browser-live-relay.md	agent
+docs/celeris-api-v1.md	docs/api/v1/overview.md	human
+docs/execution-architecture-2026-09-24.md	-	delete
+docs/execution-decomposition-report-2026-09-25.md	-	delete
+docs/execution-parallel-report-2026-09-28.md	-	delete
+docs/gui/DESIGN-GUI.md	agent-docs/gui/design.md	agent
+docs/gui/adr/0001-architecture-boundary.md	agent-docs/gui/adr/0001-architecture-boundary.md	agent
+docs/gui/adr/0002-frontend-stack.md	agent-docs/gui/adr/0002-frontend-stack.md	agent
+docs/gui/api.md	docs/api/v1/gui-api.md	human
+docs/gui/bootstrap/CLAUDE.md	-	delete
+docs/gui/bootstrap/GOAL_TEMPLATE.md	-	delete
+docs/gui/bootstrap/PROGRESS.md	-	delete
+docs/gui/bootstrap/README.md	-	delete
+docs/gui/bootstrap/agents/auditor.md	-	delete
+docs/gui/bootstrap/agents/implementer.md	-	delete
+docs/gui/celeris-proposals.md	agent-docs/gui/celeris-proposals.md	agent
+docs/gui/model-routing/accounts-1440.png	agent-docs/gui/model-routing/accounts-1440.png	agent
+docs/gui/model-routing/accounts-360.png	agent-docs/gui/model-routing/accounts-360.png	agent
+docs/gui/model-routing/accounts-393.png	agent-docs/gui/model-routing/accounts-393.png	agent
+docs/gui/model-routing/accounts-412.png	agent-docs/gui/model-routing/accounts-412.png	agent
+docs/gui/model-routing/providers-1440.png	agent-docs/gui/model-routing/providers-1440.png	agent
+docs/gui/model-routing/providers-360.png	agent-docs/gui/model-routing/providers-360.png	agent
+docs/gui/model-routing/providers-393.png	agent-docs/gui/model-routing/providers-393.png	agent
+docs/gui/model-routing/providers-412.png	agent-docs/gui/model-routing/providers-412.png	agent
+docs/knowledge.md	docs/guides/knowledge.md	human
+docs/llm-source.md	docs/guides/llm-source.md	human
+docs/mcp.md	docs/guides/mcp.md	human
+docs/model-routing-2026-09-20.md	agent-docs/reports/model-routing-2026-09-20.md	agent
+docs/notes/build-cache-tiering-input-2026-09-28.md	-	delete
+docs/ops/adr-0079-r5b-runbook.md	-	delete
+docs/ops/browser-isolated-runtime-subuid.md	agent-docs/ops/browser-isolated-runtime-subuid.md	agent
+docs/ops/dev-builds-local-target-dir.md	agent-docs/ops/dev-builds-local-target-dir.md	agent
+docs/ops/home-nfs-migration-2026-09-25.md	-	delete
+docs/ops/nextest.md	docs/ops/nextest.md	human
+docs/ops/sccache-l1.md	docs/ops/sccache-l1.md	human
+docs/ops/ui-ux-external-skills.md	agent-docs/ops/ui-ux-external-skills.md	agent
+docs/progress/browser-followups.md	agent-docs/progress/browser-followups.md	agent
+docs/progress/phase-001-050.md	agent-docs/progress/phase-001-050.md	agent
+docs/progress/phase-051-100.md	agent-docs/progress/phase-051-100.md	agent
+docs/progress/phase-101-150.md	agent-docs/progress/phase-101-150.md	agent
+docs/progress/phase-E.md	agent-docs/progress/phase-E.md	agent
+docs/progress/phase-F.md	agent-docs/progress/phase-F.md	agent
+docs/progress/phase-G.md	agent-docs/progress/phase-G.md	agent
+docs/progress/phase-K.md	agent-docs/progress/phase-K.md	agent
+docs/progress/phase-P0-dispatcher.md	agent-docs/progress/phase-P0-dispatcher.md	agent
+docs/progress/phase-R.md	agent-docs/progress/phase-R.md	agent
+docs/progress/phase-browser-2.md	agent-docs/progress/phase-browser-2.md	agent
+docs/progress/phase-browser-3.md	agent-docs/progress/phase-browser-3.md	agent
+docs/progress/phase-browser-4.md	agent-docs/progress/phase-browser-4.md	agent
+docs/progress/phase-browser-acceptance.md	agent-docs/progress/phase-browser-acceptance.md	agent
+docs/progress/phase-browser-main-merge.md	agent-docs/progress/phase-browser-main-merge.md	agent
+docs/progress/phase-browser.md	agent-docs/progress/phase-browser.md	agent
+docs/progress/phase-guardrail.md	agent-docs/progress/phase-guardrail.md	agent
+docs/progress/phase-structure-refactor.md	agent-docs/progress/phase-structure-refactor.md	agent
+docs/progress/phase-web.md	agent-docs/progress/phase-web.md	agent
+docs/progress/ui-ux-skills.md	agent-docs/progress/ui-ux-skills.md	agent
+docs/protocol/checkpoint.schema.json	docs/protocol/checkpoint.schema.json	human
+docs/protocol/decision.schema.json	docs/protocol/decision.schema.json	human
+docs/protocol/execution-plan-delta.schema.json	docs/protocol/execution-plan-delta.schema.json	human
+docs/protocol/execution-plan.schema.json	docs/protocol/execution-plan.schema.json	human
+docs/protocol/plan-output.schema.json	docs/protocol/plan-output.schema.json	human
+docs/protocol/project-plan-delta.schema.json	docs/protocol/project-plan-delta.schema.json	human
+docs/protocol/project-plan.schema.json	docs/protocol/project-plan.schema.json	human
+docs/protocol/worker-protocol.md	docs/protocol/worker-protocol.md	human
+docs/protocol/worker-protocol.schema.json	docs/protocol/worker-protocol.schema.json	human
+docs/providers.md	docs/guides/providers.md	human
+docs/repository-documentation-maintenance.md	docs/guides/repository-documentation-maintenance.md	human
+docs/selfdeploy.md	docs/ops/selfdeploy.md	human
+docs/testing.md	agent-docs/guides/testing.md	agent
+docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md	agent-docs/web/adr/web-0001-sse-invalidate-unlisted-kinds.md	agent
+docs/web/adr/web-0002-project-plan-milestone-successors.md	agent-docs/web/adr/web-0002-project-plan-milestone-successors.md	agent
+docs/web/adr/web-0003-parallel-operation.md	agent-docs/web/adr/web-0003-parallel-operation.md	agent
+docs/web/dogfood.md	-	delete
+docs/web/feature-parity.md	agent-docs/web/feature-parity.md	agent
+docs/web/gates/p5-01-latency.md	agent-docs/web/gates/p5-01-latency.md	agent
+docs/web/gates/p5-02-security.md	agent-docs/web/gates/p5-02-security.md	agent
+docs/web/gates/p5-03-mobile-a11y.md	agent-docs/web/gates/p5-03-mobile-a11y.md	agent
+docs/web/implementation-plan.md	agent-docs/web/implementation-plan.md	agent
+docs/web/parallel-operation.md	docs/ops/web-parallel-operation.md	human
+docs/workspace.md	docs/guides/workspace.md	human
+docs/adr/0116-browser-launcher-implementation.md	agent-docs/adr/0116-browser-launcher-implementation.md	agent
+docs/adr/0125-deterministic-time-tests.md	agent-docs/adr/0125-deterministic-time-tests.md	agent
+docs/adr/0127-skills-native-delivery.md	agent-docs/adr/0127-skills-native-delivery.md	agent
+docs/ops/browser-launcher-host-setup.md	docs/ops/browser-launcher-host-setup.md	human
+docs/progress/phase-skills-progressive.md	agent-docs/progress/2026-10-02-skills-native-delivery.md	agent
+docs/progress/time-dependent-tests.md	agent-docs/progress/2026-10-02-time-dependent-tests.md	agent
+docs/progress/time-dependent-tests-dispatch.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/dispatch.md	agent
+docs/progress/time-dependent-tests-injection.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/injection.md	agent
+docs/progress/time-dependent-tests-kill.md	agent-docs/progress/2026-10-02-time-dependent-tests-fix/kill.md	agent
+# 末尾の行は sync-main-2 の merge-latest（main 40189604）以降に main が旧配置へ足したもの。migrate-docs（task 01M3Z8CXYG1J6BZCQ87YS3FC67）が ADR-0128 D6 で移した。
+docs/adr/0129-host-sccache-reflink-targets.md	agent-docs/adr/0129-host-sccache-reflink-targets.md	agent
+docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md	agent-docs/adr/0132-provider-llm-source-split-and-cheap-qwen.md	agent
+docs/adr/0133-inbox-and-notifications.md	agent-docs/adr/0133-inbox-and-notifications.md	agent
+docs/adr/0134-blocked-repair-replan-loop.md	agent-docs/adr/0134-blocked-repair-replan-loop.md	agent
+docs/adr/0135-web-follow-health-gate.md	agent-docs/adr/0135-web-follow-health-gate.md	agent
+docs/adr/0138-browser-prod-admission-confidential-release.md	agent-docs/adr/0138-browser-prod-admission-confidential-release.md	agent
+docs/progress/phase-inbox-notifications.md	agent-docs/progress/2026-10-02-inbox-notifications.md	agent
+docs/progress/provider-llm-source-inventory.md	agent-docs/progress/2026-10-02-provider-llm-source/inventory.md	agent
+docs/progress/reflink-target-experiment.md	agent-docs/progress/2026-10-02-host-sccache-reflink/reflink-target-experiment.md	agent
+docs/progress/sccache-sync-recheck.md	agent-docs/progress/2026-10-02-host-sccache-reflink/sync-recheck.md	agent
+docs/progress/seed-refresh.md	agent-docs/progress/2026-10-02-host-sccache-reflink/seed-refresh.md	agent
+docs/testing/time-dependent-waits.md	agent-docs/progress/2026-10-02-deterministic-time-waits/inventory.md	agent
+docs/api/v1/inbox-notifications.md	docs/api/v1/inbox-notifications.md	human
+docs/ops/browser-launcher-admission-evidence-run.md	docs/ops/browser-launcher-admission-evidence-run.md	human
+docs/ops/host-sccache-reflink-targets.md	docs/ops/host-sccache-reflink-targets.md	human
+docs/ops/inbox-notifications.md	docs/ops/inbox-notifications.md	human
+docs/ops/provider-llm-source-migration.md	docs/ops/provider-llm-source-migration.md	human

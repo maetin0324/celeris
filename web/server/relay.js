@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import express from "express";
 
-// JSON API の中継（docs/web/implementation-plan.md P1-07、feature-parity X5）。
+// JSON API の中継（agent-docs/web/implementation-plan.md P1-07、feature-parity X5）。
 // - same-origin の `/api/*` を daemon の `/api/v1/*` へ送る。upstream は起動設定の origin に固定し、要求から
 //   URL・host を決めない。path は segment ごとに検査し、`..`・区切り文字の符号化・制御文字を拒む。
 // - daemon の token はファイルから読み、gateway → daemon の Authorization にだけ付ける。ブラウザの Authorization・

@@ -1,4 +1,4 @@
-//! `local-deep-research` アダプタ（DESIGN §5.4, ADR-0029 D1）。
+//! `local-deep-research` アダプタ（ADR-0029 D1）。
 //!
 //! Local Deep Research（LDR）は `paperqa`（ADR-0027 D3）と同じ「調査エンジンを包む」形。LDR には
 //! 一発実行の CLI が無く（`ldr-web`/`ldr-mcp` は常駐プロセス）、プログラム的な API

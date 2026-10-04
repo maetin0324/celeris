@@ -661,7 +661,7 @@
       "type": "object"
     },
     "ConversationAddressee": {
-      "description": "`context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が\n秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`\nが対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ\n（判定はディスパッチャが `task.conversation` と組織図から決定的に行う。DESIGN 原則 1）。",
+      "description": "`context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が\n秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`\nが対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ\n（判定はディスパッチャが `task.conversation` と組織図から決定的に行う。ADR-0001 D2 原則 1）。",
       "enum": [
         "secretary",
         "other"
@@ -784,6 +784,30 @@
         "title",
         "objective",
         "acceptance"
+      ],
+      "type": "object"
+    },
+    "DirectRouteContext": {
+      "description": "`context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。",
+      "properties": {
+        "overrode_gate": {
+          "description": "gate の compound/score を直行で上書きしたなら `true`。",
+          "type": "boolean"
+        },
+        "policy_version": {
+          "description": "判定の規則の版（`direct-route/1` 等）。",
+          "type": "string"
+        },
+        "reasons": {
+          "description": "満たした条件を `\"<rule_id>: <detail>\"` の形で 1 行ずつ。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "policy_version"
       ],
       "type": "object"
     },
@@ -1878,7 +1902,7 @@
       ]
     },
     "RecentWork": {
-      "description": "`context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに\n「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。\n生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。DESIGN 原則 1）。",
+      "description": "`context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに\n「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。\n生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。ADR-0001 D2 原則 1）。",
       "properties": {
         "artifacts": {
           "description": "この仕事が残した成果物の名前（パスは含まない）。",
@@ -2154,6 +2178,66 @@
       ],
       "type": "object"
     },
+    "Route": {
+      "enum": [
+        "direct",
+        "planned"
+      ],
+      "type": "string"
+    },
+    "RouteDecision": {
+      "properties": {
+        "gate_rule_id": {
+          "type": "string"
+        },
+        "overrode_gate": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/RouteReason"
+          },
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "shadow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "gate_rule_id",
+        "overrode_gate",
+        "shadow",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "RouteReason": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rule_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "ok",
+        "detail"
+      ],
+      "type": "object"
+    },
     "RunContext": {
       "description": "`run.context`。未知フィールドは無視する（前方互換）。",
       "properties": {
@@ -2257,6 +2341,17 @@
         "decision_requests": {
           "description": "ADR-0079 D7（Phase R3a）: 木の節点（`[execution.tree] enabled` の子 task・/3 の root）の worker の run だけ\n`true`。前置きに「`result.json` の `decisions` で人への決定の要求を出せる」節が出る。`false` なら\nプロンプトは変わらない。",
           "type": "boolean"
+        },
+        "direct_route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectRouteContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124 D4: planner を挟まない直行経路（`route = direct`・shadow でない）の implementation run\nだけ `Some`。`build_execute_prompt` が「直行経路（planner なし）」の節を出す。`None` の run の\nプロンプトは 1 バイトも変わらない。"
         },
         "execution_planner": {
           "anyOf": [
@@ -2409,7 +2504,7 @@
           "type": "array"
         },
         "skills": {
-          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。届け方はアダプタごと（`claude-code` は `.claude/skills/<name>/`\nへコピー、`codex` は `AGENTS.md` の節、`acp` は前置きに埋め込む）。研究系アダプタ\n（paperqa / local-deep-research / langmem）は無視する。空なら省略され、前置き・作業場所は\nPhase 78 までと 1 バイトも変わらない。",
+          "description": "ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の\n`skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。\n見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く\n（このフィールドには乗らない）。ADR-0127: `claude-code` は `.claude/skills/<name>/`、\n`codex`・`acp` は `.agents/skills/<name>/` へ付属ファイルごとコピーする。後者の\n`AGENTS.md` 節・前置きには名前・説明・SKILL.md の相対パスだけを載せる。\n研究系アダプタ（paperqa / local-deep-research / langmem）は無視する。\n空ならコピーを掃除し、以前の `AGENTS.md` の celeris 節も取り除く。",
           "items": {
             "$ref": "#/$defs/SkillMount"
           },
@@ -2958,6 +3053,17 @@
           "$ref": "#/$defs/PauseSource",
           "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
         },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
+        },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",
           "items": {
@@ -3214,6 +3320,15 @@
             "null"
           ]
         },
+        "duplicate_reads": {
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "input_tokens": {
           "format": "uint64",
           "minimum": 0,
@@ -3227,6 +3342,13 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "session_resumed": {
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "type": [
+            "boolean",
             "null"
           ]
         }

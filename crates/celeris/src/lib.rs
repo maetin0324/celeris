@@ -3,7 +3,6 @@
 //! エラーと終了条件の型・再公開）で、配線の本体は `daemon` の下にある（module map は `daemon.rs`）。
 
 mod accounts_admin;
-pub mod cache_server;
 mod cluster_admin;
 pub mod config;
 pub mod control_path;
@@ -14,12 +13,14 @@ pub mod delivery;
 pub mod doc_gardener;
 /// ADR-0040 D4（Phase 47）: インスタンスの役割（active / standby / draining / verify）とライブ引き継ぎ。
 pub mod instance;
-pub mod knowledge_gc;
 /// ADR-0047 D4（Phase 62）: 知識の自動メンテナンス（決定的なトリガと適用。LLM は `langmem` アダプタの中）。
+pub mod knowledge_curation;
+pub mod knowledge_gc;
 pub mod knowledge_maint;
 /// ADR-0037（Phase 39）: 人の判断が要るときだけ Discord に知らせる（判定は決定的、送信は spawn）。
 pub mod notify;
 /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む／`promote.sh` を起こす。
+pub mod release_notes;
 pub mod releases;
 /// ADR-0033 D3（Phase 25）: 報告の圧縮（まとめの run を起こす決定的な判断）。
 pub mod reports;
@@ -35,7 +36,7 @@ use time::OffsetDateTime;
 pub use config::{Config, ConfigError, Overrides};
 pub use daemon::adapters::{build_adapters, effective_models, provider_lives, secret_usage};
 pub use daemon::api::{api_settings, bind_reuseport, config_view};
-pub use daemon::bootstrap::{build_dispatcher, seed_org_if_empty};
+pub use daemon::bootstrap::{build_dispatcher, seed_cron_if_empty, seed_org_if_empty};
 pub use daemon::clusters::{ClusterMasters, wire_cluster_liveness_hooks};
 pub use daemon::run::run;
 pub use instance::InstanceIdentity;
@@ -129,6 +130,9 @@ pub enum Exit {
     Drained,
     /// ADR-0040 D4: 同じ `release` の `active` が既に動いていた。何もせず exit 3。
     DuplicateRelease,
+    /// ADR-0040 付記（2026-10-02）: `release` が昇格されていない（`current` と一致せず、新しい
+    /// `promoting.json` も無い）。DB を開かず（migration も handoff 要求もせず）exit 4。
+    NotPromoted,
 }
 
 #[cfg(test)]

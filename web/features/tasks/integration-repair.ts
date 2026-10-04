@@ -1,4 +1,5 @@
 import type { AttentionItem, IntegrationRepairExhaustReason, IntegrationRepairView } from "../../api/generated/types";
+import type { BadgeTone } from "../../components/ui/badge";
 
 // ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の表示文。実装失敗（failure・Failed の
 // reason/class）とは別物なので、見出し・ラベル・色を分ける。null/欠落なら何も出さない。
@@ -40,6 +41,17 @@ const tones: Record<IntegrationRepairView["state"], IntegrationRepairTone> = {
   resolved: "success",
   exhausted: "warning",
 };
+
+// 木の行の Badge の色。修復中は running、解消は success、打ち切りは warning（実装失敗の danger は使わない）。
+const badgeTones: Record<IntegrationRepairTone, BadgeTone> = {
+  info: "running",
+  success: "success",
+  warning: "warning",
+};
+
+export function integrationRepairTone(tone: IntegrationRepairTone): BadgeTone {
+  return badgeTones[tone];
+}
 
 /** 表示しないときは null。 */
 export function integrationRepairDisplay(

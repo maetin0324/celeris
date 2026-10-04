@@ -530,3 +530,18 @@ fn new_duplicates_are_still_renamed_or_requested() {
     };
     assert!(request.reason.contains("0091"), "{}", request.reason);
 }
+
+/// resolver と check-adr-numbers.sh は同じ正本を読む: repo の許可リストに本番の 0078 の組が載っている。
+#[test]
+fn repository_allowlist_is_the_single_source() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let allowed = classify::allowed_adr_duplicates(&root);
+    let pair = [
+        "agent-docs/adr/0078-browser-execution-capability.md".to_string(),
+        "docs/adr/0078-ssh-master-persist-independent-of-daemon.md".to_string(),
+    ];
+    assert!(classify::allowed_adr_group(&allowed, &pair), "{allowed:?}");
+    let script = fs::read_to_string(root.join("scripts/dev/check-adr-numbers.sh")).unwrap();
+    assert!(script.contains(classify::ALLOWED_ADR_DUPLICATES_FILE));
+    assert!(!script.contains("0078-browser-execution-capability.md"));
+}

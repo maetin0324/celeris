@@ -16,6 +16,58 @@ pub struct ClassifiedPath {
 /// 番号付き ADR と日付名 ADR の置き場所。両方を同じ名前空間として見る（scripts/dev/check-adr-numbers.sh と同じ）。
 pub const ADR_DIRS: [&str; 2] = ["agent-docs/adr/", "docs/adr/"];
 
+/// 振り直さない既存の ADR 番号重複の正本（ADR-0128 D5）。`scripts/dev/check-adr-numbers.sh` も同じ file を読む。
+pub const ALLOWED_ADR_DUPLICATES_FILE: &str = "scripts/dev/adr-allowed-duplicates.txt";
+
+/// 統合中の作業ツリーにある許可リストのファイル名（`#` から行末は注釈）。file が無ければ空。
+pub fn allowed_adr_duplicates(repo: &Path) -> BTreeSet<String> {
+    std::fs::read_to_string(repo.join(ALLOWED_ADR_DUPLICATES_FILE))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// ADR のディレクトリ（`ADR_DIRS`）直下の file 名。
+pub fn adr_file_name(path: &str) -> Option<&str> {
+    ADR_DIRS
+        .iter()
+        .find_map(|dir| path.strip_prefix(dir))
+        .filter(|name| !name.contains('/'))
+}
+
+/// 同じ番号の ADR が全て許可リストにあり、名前が互いに異なる（check-adr-numbers.sh と同じ規則）。
+pub fn allowed_adr_group<'a>(
+    allowed: &BTreeSet<String>,
+    paths: impl IntoIterator<Item = &'a String>,
+) -> bool {
+    let mut names = BTreeSet::new();
+    paths.into_iter().all(|path| {
+        adr_file_name(path).is_some_and(|name| allowed.contains(name) && names.insert(name))
+    })
+}
+
+/// `tree`（`git ls-tree -r --name-only` の path 集合）に既にある file か。ADR は新旧のディレクトリを 1 つの
+/// 名前空間として見る（`docs/adr/` から `agent-docs/adr/` へ移しただけの file は既にある扱い）。
+pub fn in_tree(tree: &BTreeSet<String>, path: &str) -> bool {
+    tree.contains(path)
+        || adr_file_name(path).is_some_and(|name| {
+            ADR_DIRS
+                .iter()
+                .any(|dir| tree.contains(&format!("{dir}{name}")))
+        })
+}
+
+/// `rev` の tree にある path の集合。
+pub fn tree_paths(repo: &Path, rev: &str) -> Result<BTreeSet<String>, String> {
+    Ok(git(repo, &["ls-tree", "-r", "--name-only", "-z", rev])?
+        .split('\0')
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect())
+}
+
 /// 追記だけの記録: 凍結済みの PROGRESS.md と task ごとの進捗ファイル（入れ子を含む）。
 fn is_record(path: &str) -> bool {
     path == "docs/PROGRESS.md"
@@ -119,15 +171,17 @@ pub fn classify(repo: &Path, target_sha: &str) -> Result<Vec<ClassifiedPath>, St
             groups.entry(key).or_default().insert(path.to_string());
         }
     }
-    // 既に target にあった重複は今回の取り込みの問題ではない。
-    let changed = git(repo, &["diff", "--name-only", target_sha, "--"])?
-        .lines()
-        .map(str::to_string)
-        .collect::<BTreeSet<_>>();
-    for members in groups
-        .values()
-        .filter(|members| members.len() > 1 && !members.is_disjoint(&changed))
-    {
+    // 新しく生じた重複だけを扱う。全員が target に既にある重複（両側に既にある重複）と、許可リストにある
+    // ADR の重複（ADR-0128 D5）は今回の取り込みの問題ではない。
+    let target_tree = tree_paths(repo, target_sha)?;
+    let allowed = allowed_adr_duplicates(repo);
+    for ((group_kind, _), members) in &groups {
+        if members.len() < 2
+            || members.iter().all(|path| in_tree(&target_tree, path))
+            || (*group_kind == ConflictKindKey::Adr && allowed_adr_group(&allowed, members))
+        {
+            continue;
+        }
         for path in members {
             let others = members
                 .iter()

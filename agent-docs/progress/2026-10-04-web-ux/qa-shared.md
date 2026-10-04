@@ -74,6 +74,38 @@ transition・animation duration が 1ms 以下、既定では 50ms を超える�
   統合後の検査で確かめる。
 - skip link の行き先は main。Chromium 以外の focus-visible の heuristic（Safari の script focus）は未確認。
 
+## 追加部品（WorkUnit primitives）
+
+差分基点は 4842d3ac。web/components/ui に 5 部品と同名の unit test（vitest、environment node）を足した。features/ は触らず、
+画面への適用は画面側 task が行う。既存部品の props・見た目は変えていない（gallery fixture に節を足しただけ）。
+
+| 部品 | API | 判断 |
+|---|---|---|
+| notice.tsx `Notice` | `tone?: "danger" \| "warning"`（既定 warning）・`title?`・`action?`・children が本文。`noticeRole` を export | danger は `role="alert"`、warning は `role="status"`（DESIGN.md「新しい失敗は alert」）。icon（装飾）と見出しの文字で色以外にも意味を出す。狭い幅では操作が折り返して下に回る |
+| input.tsx `Input`・`fieldClassName` | `ComponentProps<"input">`（type 既定 text） | 枠 `border-input`（--color-input、白地 3.80:1・地 3.53:1 で 3:1 を満たす）・`focus-visible:outline-2 outline-ring`・`min-h-11`（44px）。`focus:outline-none` は併記しない。`aria-invalid` で枠を destructive に |
+| select.tsx `Select` | `ComponentProps<"select">` | Radix の Select ではなく native を包む（スマホの OS の選択 UI と keyboard 操作をそのまま使え、依存も増えない）。class は Input と共通 |
+| short-id.tsx `ShortId`・`shortId`・`copyText` | `value`・`label?`（既定「ID」）・`length?`（既定 8）・`copyable?`（既定 true） | 等幅・`truncate`。title に全文。code に aria-label は付けられないので、見た目の省略形は aria-hidden、読み上げは sr-only の「label 全文」。コピーは 44px の button（accessible name「label をコピー」）で、結果は `role="status"` に「コピーしました／コピーできません」。clipboard が無い・拒否は false を返し失敗を出す |
+| scroll-tabs.tsx `ScrollTabs`・`edgeFade` | div の属性（className は scroll する内側へ）・`surface?: "background" \| "surface"`（fade の色） | 続きがある側の端だけ fade を出す。出し分けは純関数 `edgeFade`（端から 1px 以内は端、RTL の負の scrollLeft も扱う）。scroll と ResizeObserver で更新。fade は aria-hidden・pointer-events-none、`motion-reduce:transition-none`（styles.css の reduced motion 規則と二重に止める）。tab の意味（tablist／nav）と roving は children 側 |
+
+生の色・任意値 class は足していない（FRONTEND_CONTRACT.md §66 の grep を 5 部品に当てて 0 件）。新しい token・@custom-variant は不要だった。
+
+### 証拠（primitives）
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` exit 0
+- `pnpm -C web typecheck` exit 0 / `lint` exit 0（warning 4 は既存）/ `test` exit 0（vitest 57 files・347 tests、新規 5 files）
+- `pnpm -C web build` exit 0 → `mobile-audit` → `mobile-audit: 31 path(s) x 4 widths ok`
+- `check:boundaries`・`check:parity` exit 0
+- gallery fixture（components/ui/gallery.test.tsx）: 新しい 2 節を含め axe serious/critical 0。screenshot は run の
+  artifacts の screenshots/primitives（360/390/412/1440 × 既定・confirm・drawer）
+
+### 残課題（primitives）
+
+- 画面への適用（features/ の独自の入力欄 class・ErrorNotice 以外の帯・ID の切り出し・横 scroll tab）は画面側 task。
+- ScrollTabs の中に tablist を置く画面では、矢印キーの roving と選択 tab の scrollIntoView を画面側で持つ。
+  部品に入れるかは適用 2 画面目で判断する。
+- ShortId のコピーは secure context（https・localhost）でのみ動く。LAN の http で開くと「コピーできません」になる。
+- fade の実際の見え方（scroll 位置での出し分け）は unit では純関数までしか見ていない。e2e は画面適用時に足す。
+
 ## 提案
 
 - FRONTEND_CONTRACT.md に「`focus:outline-none` と `focus-visible:outline-*` を同じ要素に併記しない

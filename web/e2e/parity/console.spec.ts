@@ -55,6 +55,11 @@ const progress = (): ConsoleBlock => ({
   },
 });
 
+const withFirstLine = (block: ConsoleBlock, text: string): ConsoleBlock =>
+  block.kind === "progress"
+    ? { ...block, progress: { ...block.progress, first: [{ seq: 1, at: "2026-01-01T00:00:00Z", text }] } }
+    : block;
+
 const runEvents = (url: URL) => {
   const after = Number(url.searchParams.get("after_seq") ?? 0);
   const limit = Number(url.searchParams.get("limit") ?? 200);
@@ -284,20 +289,13 @@ test("parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げ�
 
 test("parity: / Console 360px で長い 1 行がページを広げず、種類が文字で分かる", async ({ page }) => {
   const long = "y".repeat(2400);
-  initial = [
-    human("l1", long),
-    reply("l2", `前置き\n\`\`\`\n${long}\n\`\`\``),
-    {
-      ...progress(),
-      progress: { ...progress().progress, first: [{ seq: 1, at: "2026-01-01T00:00:00Z", text: long }] },
-    },
-  ];
+  initial = [human("l1", long), reply("l2", `前置き\n\`\`\`\n${long}\n\`\`\``), withFirstLine(progress(), long)];
   await page.setViewportSize({ width: 360, height: 740 });
   await page.goto(`${base}/`);
   const conversation = page.getByRole("list", { name: "Console の会話" });
   await expect(conversation.getByText("あなた", { exact: true })).toBeVisible();
   await expect(conversation.getByText("返事", { exact: true })).toBeVisible();
-  await expect(conversation.getByText("作業中の run", { exact: true })).toBeVisible();
+  await expect(conversation.getByText("run の作業", { exact: true })).toBeVisible();
   // 返事の ``` は等幅の code 面（CodeBlock）で出す。
   await expect(page.getByRole("region", { name: "返事の code" })).toBeVisible();
   const fits = () => page.evaluate(() => document.documentElement.scrollWidth);

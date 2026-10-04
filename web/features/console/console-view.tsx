@@ -23,7 +23,7 @@ import { draftStore, expansionStore } from "./store";
 import { useConsole, useNewConversation, useSendInstruct } from "./use-console";
 
 // Console の画面（P3-02）。`/` と `/org/:id` が同じ部品を使う。scope は `all` / `node:<id>` / `project:<id>`。
-// 会話は block ごとに種類の文字 label（あなた・返事・作業中の run・質問 …）を出し、色だけで区別しない。
+// 会話は block ごとに種類の文字 label（あなた・返事・run の作業・質問 …）を出し、色だけで区別しない。
 // tool の出力・progress の行・本文中の ``` の囲みは CodeBlock/LogSurface（等幅・折り返し）で出し、
 // 長い 1 行でもページを広げない。ページ（window）の scroll は、末尾にいるときだけ追記に合わせて末尾へ送り、
 // 離れていれば送信欄の上に「最新へ」を出す。

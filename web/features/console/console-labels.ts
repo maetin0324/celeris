@@ -13,7 +13,7 @@ export function blockKindLabel(block: ConsoleBlock): { label: string; tone: Badg
         ? { label: "返事（生成中）", tone: "running" }
         : { label: "返事", tone: "info" };
     case "progress":
-      return { label: "作業中の run", tone: "running" };
+      return { label: "run の作業", tone: "running" };
     case "task":
       return { label: "タスク", tone: "neutral" };
     case "question":

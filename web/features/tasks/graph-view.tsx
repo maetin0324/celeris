@@ -67,16 +67,22 @@ export function GraphScreen({ root, depth }: { root?: string; depth?: number }) 
         className="flex flex-wrap items-end gap-3"
       >
         <label className="flex min-w-0 flex-col gap-1 text-label font-medium text-foreground">
-          root
-          <input name="root" defaultValue={root ?? ""} className={`${control} w-56 max-w-full font-mono`} />
+          起点の task id（root）
+          <input
+            name="root"
+            aria-label="root"
+            defaultValue={root ?? ""}
+            className={`${control} w-56 max-w-full font-mono`}
+          />
         </label>
         <label className="flex flex-col gap-1 text-label font-medium text-foreground">
-          depth
+          深さ（depth）
           <input
             name="depth"
             type="number"
             min="0"
             inputMode="numeric"
+            aria-label="depth"
             defaultValue={depth ?? ""}
             className={`${control} w-24 tabular-nums`}
           />

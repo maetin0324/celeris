@@ -103,6 +103,10 @@ test.describe("width: 360", () => {
     await expect(settings).toBeVisible();
     await expect(page.getByRole("region", { name: "配下の担当の一覧" })).toBeVisible();
     await expectNoHorizontalScroll(page);
+    // 1 カラムでは選んだ担当の詳細が「担当を追加」より上に来る（DOM 順も同じ）。
+    const detailBox = await page.getByRole("region", { name: "担当の詳細" }).boundingBox();
+    const createBox = await page.getByRole("region", { name: "担当の追加" }).boundingBox();
+    expect(detailBox && createBox && detailBox.y < createBox.y).toBe(true);
 
     await page.goto(`${gateway.base}/org?selected=${longId}`);
     await expect(page.getByRole("heading", { level: 3, name: /とても長い名前の課/ })).toBeVisible();
@@ -209,5 +213,21 @@ test.describe("skill の操作", () => {
     await expect(reason).toBeFocused();
     await expect(skills.getByRole("button", { name: "mount", exact: true })).toBeDisabled();
     await expect(skills.getByLabel("mount する skill")).toBeDisabled();
+  });
+});
+
+test.describe("width: 1440", () => {
+  test.use({ viewport: { width: 1440, height: 900 } });
+
+  test("/org は木と追加が左、担当の詳細が右に並ぶ", async ({ page }) => {
+    await page.goto(`${gateway.base}/org?selected=ui-ux`);
+    const tree = await page.getByRole("heading", { level: 2, name: "組織の木" }).boundingBox();
+    const detail = await page.getByRole("region", { name: "担当の詳細" }).boundingBox();
+    const create = await page.getByRole("region", { name: "担当の追加" }).boundingBox();
+    if (!tree || !detail || !create) throw new Error("org の領域が描画されていない");
+    expect(detail.x).toBeGreaterThan(create.x + create.width - 1);
+    expect(Math.abs(detail.y - tree.y)).toBeLessThan(80);
+    expect(create.y).toBeLessThan(detail.y + detail.height);
+    await expectNoHorizontalScroll(page);
   });
 });

@@ -331,8 +331,10 @@ export function OrgScreen() {
     <ScreenFrame title="組織" route="/org">
       <FetchFrame query={query}>
         {query.data && (
-          <div className="grid gap-4 lg:grid-cols-5">
-            <div className="min-w-0 space-y-4 lg:col-span-2">
+          // DOM 順は 木 → 担当の詳細 → 担当を追加。lg 未満の 1 カラムでは選んだ担当の詳細が木の直後に来る。
+          // lg 以上は float で 木・追加 を左（2/5）、詳細を右（3/5）に置く（grid だと詳細の高さが木と追加の行に割られて隙間が出る）。
+          <div className="lg:flow-root">
+            <div className="min-w-0 lg:float-left lg:w-2/5 lg:pr-4">
               <Section
                 title="組織の木"
                 description={`${query.data.items.length} 件。選ぶと担当の詳細に設定の現在値が出ます。`}
@@ -344,10 +346,9 @@ export function OrgScreen() {
                   onSelect={(id) => void navigate({ to: "/org", search: { ...search, selected: id } })}
                 />
               </Section>
-              <CreateForm items={query.data.items} selected={search.selected} />
             </div>
             <section
-              className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4 lg:col-span-3"
+              className="mt-4 min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4 lg:float-right lg:mt-0 lg:w-3/5"
               aria-label="担当の詳細"
             >
               <h2 className="text-section font-semibold text-foreground">担当の詳細</h2>
@@ -357,6 +358,9 @@ export function OrgScreen() {
                 <p className="text-label text-muted-foreground">木から担当を選んでください。</p>
               )}
             </section>
+            <div className="mt-4 min-w-0 lg:float-left lg:clear-left lg:w-2/5 lg:pr-4">
+              <CreateForm items={query.data.items} selected={search.selected} />
+            </div>
           </div>
         )}
       </FetchFrame>

@@ -57,3 +57,15 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 - `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/ops-config.spec.ts e2e/parity/ops.spec.ts` → 14 passed
 - FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/ops web/routes/accounts.tsx web/routes/providers.tsx web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
 - `mobile-audit` は exit 1 だが違反は `/projects/P1`・`/tasks/T1`・`/tasks/T1/changes`（範囲外、未命名 textarea 等）のみで、`/accounts`・`/providers` は違反なし
+
+### org
+
+対象: `web/features/org/org-screen.tsx`（並べ替えのみ）、`web/e2e/admin/org.spec.ts`（順序と 1440px の配置の確認を追加）。`org-skills.tsx`・`org-tree.ts`・`web/routes/org.*` は [org] 指摘の対象外で変更なし。h1「組織」・region 名「担当の追加」「担当の詳細」「担当の編集」・URL は変えていない。critique の [org] タグは 6 のみ。
+
+- 6. [修正: `/org` の DOM 順を 木 → 担当の詳細 → 担当を追加 に変えた。lg 未満の 1 カラムでは、木で選んだ担当の詳細が木の直後に来て「担当を追加」form は最後に回る。lg 以上は `lg:flow-root` の中で木と追加を `lg:float-left lg:w-2/5`（追加は `lg:clear-left`）、詳細を `lg:float-right lg:w-3/5` に置き、従来どおり木・追加が左、詳細が右に並ぶ。grid の `row-span` だと詳細の高さが木と追加の 2 行に割り振られて木の下に隙間ができ、`grid-rows-[...]` は任意値になるため float を選んだ。DOM 順と見た目の順は全幅で一致する（order での並べ替えはしていない）]
+- 6. [残課題: 木が長い（担当が多い）とき、スマホ幅で選んだ後に詳細まで scroll が要るのは変わらない。選択後に詳細の見出しへ focus・scroll を移すかは、木を keyboard で続けて辿る操作と衝突するため post-record の再 critique で判断する]
+
+確認（2026-10-04、この WU branch）:
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` / `check:boundaries` → exit 0（vitest 347 tests、lint warning 5 件は既存の states.spec.ts・styles.css）
+- `corepack pnpm@12.6.0 -C web build` → exit 0、`corepack pnpm@12.6.0 -C web e2e e2e/admin/org.spec.ts e2e/parity/org.spec.ts` → 10 passed・1 skipped（WEB_SHOTS_OUT 無しの screenshot）
+- FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/org web/routes/org.* web/e2e/admin`（`*.test.*` 除く）に当てて 0 件

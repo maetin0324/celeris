@@ -7,7 +7,7 @@ import { cn } from "../../lib/utils";
 // 14px・weight 500・左右 8px 上下 4px・角丸 4px・影なし。pill button に見せないので rounded-full にしない。
 // 色の正本は styles.css の @theme の状態色の組（背景 / 前景）で、ここでは名前だけを参照する。
 export const badgeVariants = cva(
-  "inline-flex w-fit max-w-full items-center gap-1 break-all whitespace-normal rounded-sm px-2 py-1 font-medium",
+  "inline-flex w-fit max-w-full items-center gap-1 break-all whitespace-normal rounded-sm px-2 py-1 text-label font-medium",
   {
     variants: {
       tone: {
@@ -22,10 +22,6 @@ export const badgeVariants = cva(
     defaultVariants: { tone: "neutral" },
   },
 );
-
-// tailwind-merge は Celeris の文字 token（text-label）を色の class と同じ組と見なし、後の text-*-foreground で
-// 消してしまう。lib/utils の cn() を直すまで、文字の大きさは cn() を通さずに足す。
-const badgeTextSize = "text-label";
 
 export type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>["tone"]>;
 
@@ -42,7 +38,7 @@ export function Badge({
     <Comp
       data-slot="badge"
       data-tone={tone ?? "neutral"}
-      className={`${cn(badgeVariants({ tone }), className)} ${badgeTextSize}`}
+      className={cn(badgeVariants({ tone }), className)}
       {...props}
     />
   );

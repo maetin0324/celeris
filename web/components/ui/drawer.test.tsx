@@ -61,6 +61,49 @@ describe("Drawer / SidePanel", () => {
       Number.parseFloat(await dialog.evaluate((element) => getComputedStyle(element).transitionDuration)),
     ).toBeLessThan(0.001);
     await dialog.getByRole("button", { name: "閉じる" }).click();
+    await dialog.waitFor({ state: "hidden" });
+  });
+
+  it("背景の重なりがあるナビより前面に閉じる操作を表示する", async () => {
+    const { page } = fixture;
+    await page.setViewportSize({ width: 360, height: 700 });
+    await page.evaluate(() => {
+      const nav = document.createElement("div");
+      nav.id = "stack-probe";
+      nav.className = "fixed top-0 right-0 z-10 bg-accent p-4 pointer-events-auto";
+      nav.textContent = "背景のナビゲーション";
+      document.getElementById("root")?.append(nav);
+    });
+    try {
+      await page.getByRole("button", { name: "詳細を開く" }).click();
+      const dialog = page.getByRole("dialog", { name: "タスクの詳細" });
+      await dialog.waitFor();
+      const close = dialog.getByRole("button", { name: "閉じる", exact: true });
+      const bounds = await close.boundingBox();
+      if (!bounds) throw new Error("閉じる操作が表示されていません");
+      // 高負荷時は style の適用と layout が遅れるため、前面判定は確定するまで待つ（壊れていれば timeout で落ちる）。
+      const onTop = await page
+        .waitForFunction(
+          () => {
+            const button = document.querySelector('[role="dialog"] button[aria-label="閉じる"]');
+            if (!button) return false;
+            const { x, y, width, height } = button.getBoundingClientRect();
+            const element = document.elementFromPoint(x + width / 2, y + height / 2);
+            return Boolean(element?.closest('[role="dialog"]'));
+          },
+          undefined,
+          { timeout: 10_000 },
+        )
+        .then(
+          () => true,
+          () => false,
+        );
+      expect(onTop).toBe(true);
+      await close.click();
+      await dialog.waitFor({ state: "hidden" });
+    } finally {
+      await page.evaluate(() => document.getElementById("stack-probe")?.remove());
+    }
   });
 
   it("各幅の開閉前後を表示確認用に記録できる", async () => {

@@ -39,14 +39,17 @@ describe("statusTone / statusLabel", () => {
     expect(statusView("needs_continuation")).toEqual({ tone: "warning", label: "続きが必要" });
   });
 
-  it("未知の状態は neutral で原文をそのまま出す", () => {
-    expect(statusView("mystery_state")).toEqual({ tone: "neutral", label: "mystery_state" });
+  it("未知の状態は neutral「未確認」で出し、原文は data-status と title に残す", () => {
+    expect(statusView("未知の値")).toEqual({ tone: "neutral", label: "未確認" });
+    expect(statusView("mystery_state")).toEqual({ tone: "neutral", label: "未確認" });
     // Object の prototype の名前も未知の状態として扱う
-    expect(statusView("toString")).toEqual({ tone: "neutral", label: "toString" });
-    const html = renderToStaticMarkup(<StatusBadge status="mystery_state" />);
+    expect(statusView("toString")).toEqual({ tone: "neutral", label: "未確認" });
+    const html = renderToStaticMarkup(<StatusBadge status="未知の値" />);
     expect(html).toContain('data-tone="neutral"');
-    expect(html).toContain('data-status="mystery_state"');
-    expect(html).toContain(">mystery_state</span>");
+    expect(html).toContain('data-status="未知の値"');
+    expect(html).toContain('title="未知の値"');
+    expect(html).toContain(">未確認</span>");
+    expect(html).not.toContain(">未知の値</span>");
   });
 });
 
@@ -58,14 +61,22 @@ describe("StatusBadge", () => {
     expect(html).toContain("失敗");
   });
 
-  it("running は動きの印を出し、reduced-motion では止める", () => {
+  it("running は静止した印と「実行中」の文字で出し、動かさない", () => {
     const html = renderToStaticMarkup(<StatusBadge status="running" />);
     expect(html).toContain('data-tone="running"');
     expect(html).toContain('data-slot="status-mark"');
     expect(html).toContain('aria-hidden="true"');
-    expect(html).toContain("motion-safe:animate-spin");
-    expect(html).not.toMatch(/(^|\s)animate-spin/);
     expect(html).toContain("実行中");
+    const mark = html.match(/<span[^>]*data-slot="status-mark"[^>]*>/)?.[0] ?? "";
+    expect(mark).not.toBe("");
+    const markClass = mark.match(/class="([^"]*)"/)?.[1] ?? "";
+    expect(markClass).not.toBe("");
+    expect(markClass).not.toMatch(/animate/);
+  });
+
+  it("既知の状態の title は原文を持つ", () => {
+    const html = renderToStaticMarkup(<StatusBadge status="running" />);
+    expect(html).toContain('title="running"');
   });
 
   it("running 以外には印を出さない", () => {

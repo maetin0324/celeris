@@ -17,12 +17,14 @@ import {
   daemonKeys,
   inboxKeys,
   metricKeys,
+  notificationKeys,
   projectKeys,
   providerKeys,
   reportKeys,
   taskKeys,
 } from "../queries/keys";
 import type { EventKind } from "./event-kinds";
+import type { SignalFrame } from "./frames";
 
 export type { EventKind } from "./event-kinds";
 
@@ -156,6 +158,15 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
   integration_check_started: { sets: ["T", "E"] },
   integration_check_finished: { sets: ["T", "E"] },
+};
+
+/**
+ * SSE の軽い合図（ADR-0133 D5）→ invalidate する key。受信箱は旧 `GET /inbox` と `/inbox/items` を含む
+ * `['inbox']` 全体、通知は一覧と未読数を含む `['notifications']` 全体。互いの key には触れない。
+ */
+export const SIGNAL_INVALIDATION: Readonly<Record<SignalFrame["type"], readonly QueryKey[]>> = {
+  inbox_changed: [inboxKeys.all],
+  notifications_changed: [notificationKeys.all],
 };
 
 function runScoped(taskId: string, event: EventRow["event"]): QueryKey[] {

@@ -14,6 +14,7 @@ export const STALE_TIME_DEFAULTS: readonly (readonly [QueryKey, number])[] = [
   [["projects"], 10_000],
   [["projects", "docs"], 60_000],
   [["inbox"], 5_000],
+  [["notifications"], 5_000],
   [["board"], 5_000],
   [["reports"], 5_000],
   [["approvals"], 5_000],

@@ -146,33 +146,30 @@ export function NotificationsScreen() {
     <ScreenFrame
       title="通知"
       route="/notifications"
-      description={
-        <>
-          判断の要らない知らせを束ねて並べます。判断が要るものは{" "}
-          <Link className="underline" to="/inbox">
-            受信箱
-          </Link>{" "}
-          にあります。
-        </>
-      }
+      description="判断の要らない知らせを束ねて並べます。判断が要るものは受信箱にあります。"
       actions={
-        <ConfirmDialog
-          trigger={
-            <Button variant="secondary" disabled={!unreadTotal}>
-              すべて既読にする
-            </Button>
-          }
-          title="通知をまとめて既読にする"
-          target={scope ? `${scope}の未読の通知` : "すべての未読の通知"}
-          consequence="未読の束が既読になり、nav の未読数から外れます。通知そのものは消えません。"
-          reversibility="未読には戻せません。既読の束は「全部」の表示で読み返せます。"
-          followUp="この一覧の「全部」の表示と nav の未読数で確かめられます。"
-          confirmLabel="既読にする"
-          onConfirm={async () => {
-            await markAllNotificationsRead({ kind: search.kind ?? null, project: search.project ?? null });
-            await queryClient.invalidateQueries({ queryKey: notificationReadInvalidates[0] });
-          }}
-        />
+        <>
+          <Link className="inline-flex min-h-11 items-center underline" to="/inbox">
+            受信箱を開く
+          </Link>
+          <ConfirmDialog
+            trigger={
+              <Button variant="secondary" disabled={!unreadTotal}>
+                すべて既読にする
+              </Button>
+            }
+            title="通知をまとめて既読にする"
+            target={scope ? `${scope}の未読の通知` : "すべての未読の通知"}
+            consequence="未読の束が既読になり、nav の未読数から外れます。通知そのものは消えません。"
+            reversibility="未読には戻せません。既読の束は「全部」の表示で読み返せます。"
+            followUp="この一覧の「全部」の表示と nav の未読数で確かめられます。"
+            confirmLabel="既読にする"
+            onConfirm={async () => {
+              await markAllNotificationsRead({ kind: search.kind ?? null, project: search.project ?? null });
+              await queryClient.invalidateQueries({ queryKey: notificationReadInvalidates[0] });
+            }}
+          />
+        </>
       }
     >
       <form

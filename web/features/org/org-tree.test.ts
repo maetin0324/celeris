@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OrgNode } from "../../api/generated/types";
-import { buildOrgTree, flattenOrgTree, orgSettingState } from "./org-tree";
+import { buildOrgTree, flattenOrgTree, orgSettingState, skillRemovalImpact } from "./org-tree";
 
 const at = "2026-10-04T00:00:00Z";
 const node = (id: string, parent_id?: string, extra: Partial<OrgNode> = {}): OrgNode => ({
@@ -39,5 +39,26 @@ describe("orgSettingState", () => {
   it("空の profile は親があれば inherited、根なら default", () => {
     expect(orgSettingState(node("ui", "eng", { profile: { skills: [], run: null, model: {} } }))).toBe("inherited");
     expect(orgSettingState(node("cos"))).toBe("default");
+  });
+});
+
+describe("skillRemovalImpact", () => {
+  const mounts = (...skills: string[]) => ({ profile: { skills_mounts: skills } });
+  const items = [
+    node("cos"),
+    node("eng", "cos", mounts("review")),
+    node("ui", "eng"),
+    node("hpc", "eng", mounts("review")),
+    node("deep", "hpc"),
+  ];
+  it("自分と、自分で mount していない配下に届かなくなる", () => {
+    const eng = items[1] as OrgNode;
+    expect(skillRemovalImpact(items, eng, "review").affected.map((item) => item.id)).toEqual(["eng", "ui"]);
+  });
+  it("上位も mount していれば届き続ける", () => {
+    const hpc = items[3] as OrgNode;
+    const impact = skillRemovalImpact(items, hpc, "review");
+    expect(impact.affected).toEqual([]);
+    expect(impact.stillFrom?.id).toBe("eng");
   });
 });

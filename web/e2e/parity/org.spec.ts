@@ -88,6 +88,7 @@ test("parity: /org 木・選択・作成・変更・削除・skill", async ({ pa
     tasks: daemon.requests.filter((request) => request.path === "/api/v1/tasks").length,
   };
   await page.getByRole("button", { name: "外す" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "review を外す" }).click();
   await expect
     .poll(() => actions.some((item) => item.method === "DELETE" && item.url.endsWith("/api/org/cos/skills/review")))
     .toBe(true);

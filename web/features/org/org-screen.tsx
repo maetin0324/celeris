@@ -176,7 +176,7 @@ function NodeDetail({ node, list }: { node: OrgNode; list: OrgList }) {
       <Section level={4} title="配下の担当">
         <ChildrenTable node={node} items={list.items} profiles={profiles} />
       </Section>
-      <OrgSkills node={node} profile={profile} />
+      <OrgSkills node={node} items={list.items} profile={profile} />
       <NodeForm node={node} items={list.items} />
     </div>
   );

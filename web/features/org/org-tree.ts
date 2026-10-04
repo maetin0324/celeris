@@ -50,3 +50,42 @@ export function orgSettingState(node: OrgNode): OrgSettingState {
   if (hasValue) return "own";
   return node.parent_id ? "inherited" : "default";
 }
+
+const ownsSkill = (node: OrgNode, skill: string) => node.profile?.skills_mounts?.includes(skill) ?? false;
+
+/** skill を mount している最も近い上位の担当（自分は含めない）。 */
+export function skillSource(items: readonly OrgNode[], node: OrgNode, skill: string): OrgNode | undefined {
+  const byId = new Map(items.map((item) => [item.id, item]));
+  const seen = new Set([node.id]);
+  let parent = node.parent_id ? byId.get(node.parent_id) : undefined;
+  while (parent && !seen.has(parent.id)) {
+    if (ownsSkill(parent, skill)) return parent;
+    seen.add(parent.id);
+    parent = parent.parent_id ? byId.get(parent.parent_id) : undefined;
+  }
+  return undefined;
+}
+
+export type SkillRemovalImpact = {
+  /** 外すと skill が届かなくなる担当（自分と、自分で mount していない配下）。 */
+  affected: OrgNode[];
+  /** 上位も mount しているなら、その担当。外しても worker には届き続ける。 */
+  stillFrom?: OrgNode;
+};
+
+/** node から skill を外したときに、どの担当の worker に届かなくなるか。 */
+export function skillRemovalImpact(items: readonly OrgNode[], node: OrgNode, skill: string): SkillRemovalImpact {
+  const stillFrom = skillSource(items, node, skill);
+  if (stillFrom) return { affected: [], stillFrom };
+  const affected: OrgNode[] = [];
+  const visit = (current: OrgNode) => {
+    affected.push(current);
+    for (const child of items) {
+      if (child.parent_id !== current.id || child.id === current.id || affected.includes(child)) continue;
+      // 配下が自分でも mount していれば、その枝には届き続ける。
+      if (!ownsSkill(child, skill)) visit(child);
+    }
+  };
+  visit(node);
+  return { affected };
+}

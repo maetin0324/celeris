@@ -34,6 +34,7 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
         { label: `task ${taskId}`, link: { to: "/tasks/$id", params: { id: taskId } } },
         { label: `run ${runId}` },
       ]}
+      description="run の状態と出力。末尾にいる間は追記に合わせて送ります。"
       actions={
         <>
           <Button size="sm" aria-pressed={wrap} onClick={() => setWrap((v) => !v)}>

@@ -866,6 +866,8 @@ async fn the_timeline_lists_the_releases_that_contain_this_tasks_commits() {
             verify: None,
             promoted_at: None,
             on_main: None,
+            notes: None,
+            promotion: None,
             changes: Some(task_api::types::ReleaseChanges {
                 base: None,
                 stale: false,

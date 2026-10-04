@@ -8,6 +8,7 @@ publish = false
 path = "src/lib.rs"
 
 [dependencies]
+socket2 = { version = "0.5", features = ["all"] }
 
 [dev-dependencies]
 task-core = { path = "../../crates/task-core" }

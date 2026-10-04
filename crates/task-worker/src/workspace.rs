@@ -1,4 +1,4 @@
-//! `Workspace`（DESIGN §5.8）。本プロジェクトは `LocalWorkspace` のみ実装し、
+//! `Workspace`（作業場所。docs/SPEC.md §3.7）。本プロジェクトは `LocalWorkspace` のみ実装し、
 //! `RemoteWorkspace` は接続層プロジェクトが実装するまで骨組みのみ（ADR-0005 D3）。
 //!
 //! 1 インスタンス = 1 タスクの作業ディレクトリ。ディスパッチャが run ごとに
@@ -40,7 +40,7 @@ pub struct ExecResult {
     pub timed_out: bool,
 }
 
-/// DESIGN §5.8 の trait。
+/// 作業場所の trait（docs/SPEC.md §3.7）。
 #[async_trait]
 pub trait Workspace: Send + Sync {
     /// 作業ディレクトリと成果物ディレクトリ（ADR-0036: `artifacts/` または
@@ -66,9 +66,79 @@ pub struct LocalWorkspace {
     container: Option<crate::container::SharedPlan>,
     /// ADR-0074 F5-fix: `exec`（判定コマンド）に足す環境変数（`CARGO_TARGET_DIR` など）。空なら従来どおり。
     env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: `exec` の子プロセスから外す環境変数（親から継いだ `RUSTC_WRAPPER` / `SCCACHE_*` など。
-    /// `env` より先に `Command::env_remove` する）。
-    env_remove: Vec<String>,
+    /// 2026-10-04 統合の検査の進み具合 D2: `Some` なら `exec` の stdout/stderr を出た順にこのファイルへ逐次追記する
+    /// （[`OUTPUT_LOG_CAP_BYTES`] まで）。`None` は従来どおり（末尾だけを返す）。
+    output_log: Option<PathBuf>,
+}
+
+/// 2026-10-04 統合の検査の進み具合 D2: `with_output_log` のファイル 1 件の上限。超えたら以降は書かず、その旨を 1 行残す。
+pub const OUTPUT_LOG_CAP_BYTES: u64 = 8 * 1024 * 1024;
+
+/// `with_output_log` のファイルへ追記する口（上限を数える）。stdout と stderr の読み手が共有する。
+struct OutputLog {
+    file: std::fs::File,
+    written: u64,
+    truncated: bool,
+}
+
+impl OutputLog {
+    fn open(path: &Path) -> std::io::Result<Self> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+        let written = file.metadata().map(|m| m.len()).unwrap_or(0);
+        Ok(Self {
+            file,
+            written,
+            truncated: false,
+        })
+    }
+
+    fn write(&mut self, chunk: &[u8]) {
+        use std::io::Write;
+        if self.truncated {
+            return;
+        }
+        let room = OUTPUT_LOG_CAP_BYTES.saturating_sub(self.written);
+        if (chunk.len() as u64) <= room {
+            if self.file.write_all(chunk).is_ok() {
+                self.written += chunk.len() as u64;
+            }
+            return;
+        }
+        let head = &chunk[..room as usize];
+        let _ = self.file.write_all(head);
+        let _ = self.file.write_all(
+            format!("\n[celeris: output truncated at {OUTPUT_LOG_CAP_BYTES} bytes]\n").as_bytes(),
+        );
+        self.written += room;
+        self.truncated = true;
+    }
+}
+
+/// 子の出力を読み切りながら、`log` があればそこへも逐次書く。
+async fn read_teed<R: tokio::io::AsyncRead + Unpin>(
+    mut reader: R,
+    log: Option<&std::sync::Mutex<OutputLog>>,
+) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let n = tokio::io::AsyncReadExt::read(&mut reader, &mut chunk).await?;
+        if n == 0 {
+            return Ok(buf);
+        }
+        if let Some(log) = log
+            && let Ok(mut log) = log.lock()
+        {
+            log.write(&chunk[..n]);
+        }
+        buf.extend_from_slice(&chunk[..n]);
+    }
 }
 
 impl LocalWorkspace {
@@ -79,8 +149,14 @@ impl LocalWorkspace {
             work_dir: None,
             container: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
+            output_log: None,
         }
+    }
+
+    /// 2026-10-04 統合の検査の進み具合 D2: `exec` の出力をこのファイルにも逐次追記する（親ディレクトリは作る）。
+    pub fn with_output_log(mut self, path: impl Into<PathBuf>) -> Self {
+        self.output_log = Some(path.into());
+        self
     }
 
     /// ADR-0074 F5-fix: 判定コマンドに環境変数を足す（WU の run と同じ `CARGO_TARGET_DIR` で検査するため）。
@@ -89,15 +165,9 @@ impl LocalWorkspace {
         self
     }
 
-    /// ADR-0075 G3-fix1: 判定コマンドの子プロセスから外す環境変数。
-    pub fn with_env_removed(mut self, keys: Vec<String>) -> Self {
-        self.env_remove = keys;
-        self
-    }
-
-    /// ADR-0075 G3-fix1: run と同じ `CargoEnv`（`set` を重ね、`remove` を外す）。
+    /// run と同じ `CargoEnv`（`set` を重ねる。ADR-0129 (1): 継いだ env は外さない）。
     pub fn with_cargo_env(self, env: crate::scratch::CargoEnv) -> Self {
-        self.with_env(env.set).with_env_removed(env.remove)
+        self.with_env(env.set)
     }
 
     /// ADR-0041 D1: `runs/` `inputs/` `artifacts/` は `dir`、コマンドは `work_dir`（worktree）で動かす。
@@ -172,9 +242,6 @@ impl Workspace for LocalWorkspace {
         command.arg("-c").arg(cmd);
         // ADR-0019 D1 6. / ADR-0041 D1: 判定コマンドは worktree の中で実行する。
         command.current_dir(self.work_dir());
-        for key in &self.env_remove {
-            command.env_remove(key);
-        }
         command.envs(self.env.iter().cloned());
         // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
         let mut command = crate::db_guard::launch(command, self.container.as_deref());
@@ -195,16 +262,19 @@ impl Workspace for LocalWorkspace {
             WorkspaceError::Io(std::io::Error::other("child stderr not captured"))
         })?;
 
-        let read_stdout = async {
-            let mut buf = Vec::new();
-            tokio::io::AsyncReadExt::read_to_end(&mut stdout, &mut buf).await?;
-            Ok::<Vec<u8>, std::io::Error>(buf)
+        // 開けなければログ無しで続ける（判定は従来どおり。ログは見るためだけのもの）。
+        let log = match &self.output_log {
+            Some(path) => match OutputLog::open(path) {
+                Ok(log) => Some(std::sync::Mutex::new(log)),
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "cannot open the exec output log");
+                    None
+                }
+            },
+            None => None,
         };
-        let read_stderr = async {
-            let mut buf = Vec::new();
-            tokio::io::AsyncReadExt::read_to_end(&mut stderr, &mut buf).await?;
-            Ok::<Vec<u8>, std::io::Error>(buf)
-        };
+        let read_stdout = read_teed(&mut stdout, log.as_ref());
+        let read_stderr = read_teed(&mut stderr, log.as_ref());
 
         let wait_fut = child.wait();
         let combined = async {

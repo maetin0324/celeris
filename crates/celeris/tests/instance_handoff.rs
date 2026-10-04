@@ -15,6 +15,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+// Instance startup and handoff can exceed 10 seconds on a busy host; keep
+// state waits generous while allowing the condition to end each wait early.
+// main（ADR-0125）の長い保険 120 秒に揃える。
+const STATE_WAIT: Duration = Duration::from_secs(120);
+
 use celeris::{Config, Exit, RunOptions};
 use task_core::{
     Budget, Check, Criterion, Event, InstanceRole, SqliteStore, Status, Task, TaskId, TaskKind,
@@ -85,7 +90,7 @@ adapter = "fake"
             &config_path,
             format!(
                 r#"
-db = "celeris.sqlite3"
+db = {{ path = "celeris.sqlite3", worker_read_only = false }}
 workspace_root = "ws"
 tick_ms = 100
 max_concurrency = 2
@@ -236,14 +241,14 @@ fn role_of(store: &SqliteStore, release: &str) -> Option<InstanceRole> {
 /// (b) draining の手元の run は旧が完了させ、新は二重に dispatch しない。旧は exit 0（`Exit::Drained`）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_newer_release_takes_over_while_the_old_one_finishes_its_run() {
-    // 旧の run は「新が active になったのを試験が見る」まで終わらない（ゲートのファイルを待つ。最大 30 秒）。
+    // 旧の run は「新が active になったのを試験が見る」まで終わらない（ゲートのファイルを待つ）。
     // 固定の `sleep 2` だと、負荷下で新の起動（`build_dispatcher`）が 2 秒を超えたとき、新が active になる前に
     // run が終わって新が idle で即座に抜け（`until_idle`）、行が消えて「新が active にならない」で落ちた
     // （R7-6 の調査: 新の build_dispatcher 2.8 秒の回で、ADR-0095 のガードの有無に関係なく再現）。
     let gate_dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let gate = gate_dir.path().join("release-the-run");
     let gated_fake = format!(
-        r#"cat >/dev/null; i=0; while [ ! -e {gate} ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i+1)); done; printf "{{\"type\":\"done\",\"summary\":\"fake\",\"evidence\":[]}}\n""#,
+        r#"cat >/dev/null; timeout 300 sh -c "until test -e {gate}; do sleep 0.05; done" || exit 1; printf "{{\"type\":\"done\",\"summary\":\"fake\",\"evidence\":[]}}\n""#,
         gate = gate.display()
     );
     let env = Env::with_body(&format!(
@@ -260,9 +265,9 @@ adapter = "fake"
     let store = env.store();
 
     // 旧（release = "old"）を起こす。ready なタスクを 1 件 dispatch する。
-    let old = tokio::spawn(celeris::run(env.config(), options("old", 400, false)));
+    let old = tokio::spawn(celeris::run(env.config(), options("old", 4000, false)));
     assert!(
-        wait_until(Duration::from_secs(10), || {
+        wait_until(STATE_WAIT, || {
             store.get(task_id).ok().flatten().map(|t| t.status) == Some(Status::Running)
         })
         .await,
@@ -276,17 +281,17 @@ adapter = "fake"
         .unwrap_or_else(|| panic!("running task must hold a lease"));
 
     // 新（release = "new"）を起こす。idle になったら自分で止まる。
-    let new = tokio::spawn(celeris::run(env.config(), options("new", 400, true)));
+    let new = tokio::spawn(celeris::run(env.config(), options("new", 4000, true)));
 
     // (a) 新は standby → 旧が draining → 新が active。
     assert!(
-        wait_until(Duration::from_secs(10), || role_of(&store, "old")
+        wait_until(STATE_WAIT, || role_of(&store, "old")
             == Some(InstanceRole::Draining))
         .await,
         "旧が draining にならない"
     );
     assert!(
-        wait_until(Duration::from_secs(10), || role_of(&store, "new")
+        wait_until(STATE_WAIT, || role_of(&store, "new")
             == Some(InstanceRole::Active))
         .await,
         "新が active にならない"
@@ -295,14 +300,14 @@ adapter = "fake"
     std::fs::write(&gate, "").unwrap_or_else(|e| panic!("gate: {e}"));
 
     // (b) 旧は手元の run を最後まで面倒を見て、drained_at を書いて exit 0 する。
-    let old_exit = tokio::time::timeout(Duration::from_secs(30), old)
+    let old_exit = tokio::time::timeout(STATE_WAIT, old)
         .await
         .unwrap_or_else(|_| panic!("旧インスタンスが drain で終わらない"))
         .unwrap_or_else(|e| panic!("join: {e}"))
         .unwrap_or_else(|e| panic!("run: {e}"));
     assert_eq!(old_exit, Exit::Drained);
 
-    let new_exit = tokio::time::timeout(Duration::from_secs(30), new)
+    let new_exit = tokio::time::timeout(STATE_WAIT, new)
         .await
         .unwrap_or_else(|_| panic!("新インスタンスが idle で終わらない"))
         .unwrap_or_else(|e| panic!("join: {e}"))

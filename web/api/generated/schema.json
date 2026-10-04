@@ -526,6 +526,54 @@
         }
       ]
     },
+    "ActualWriteSetView": {
+      "properties": {
+        "base_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "head_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "paths": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "repo_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner_id",
+        "repo_id",
+        "paths",
+        "status",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
     "AdoptRequest": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/tree/adopt` の本文。",
@@ -1149,6 +1197,17 @@
                 "null"
               ]
             },
+            "integration_repair": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/IntegrationRepairView"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況（履歴が無ければ省略）。\n`reason`/`class` は実装失敗（レビュー不合格・ワーカーの明示的な error）の分類であり、これは\n別物（`exhausted` でも task を直接 `failed` にはしない）。"
+            },
             "reason": {
               "type": "string"
             },
@@ -1371,6 +1430,75 @@
             "at"
           ],
           "type": "object"
+        },
+        {
+          "description": "ADR-0121 D3: 完了した root の成果を main へ取り込み始められなかった（`Event::DeliverySkipped` の写し。\n正本は event）。同じ head の delivery が後で作られたら出さない。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "summary": {
+              "description": "「完了したが main への取り込みを開始できなかった」と理由の人が読む 1 行。",
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "reason",
+            "summary",
+            "detail",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR D4: 未回答の統合依頼。正本は IntegrationRequested / IntegrationAnswered。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/IntegrationRequest"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "integration_request",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "request_id",
+            "request",
+            "at"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1460,6 +1588,90 @@
       "required": [
         "unit_key",
         "title"
+      ],
+      "type": "object"
+    },
+    "BehindTarget": {
+      "description": "Task value: the repo with the largest behind commits (ADR-0130 D4), plus all repos.",
+      "properties": {
+        "behind_target_age_seconds": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_commits": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_observed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "items": {
+            "$ref": "#/$defs/BehindTargetRepo"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "BehindTargetRepo": {
+      "description": "Per-repo value with the age computed at `now`.",
+      "properties": {
+        "behind_target_age_seconds": {
+          "description": "`null` = 未観測・計測不可。behind 0 なら 0。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_commits": {
+          "description": "`null` = 計測不可（0 にしない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_observed_at": {
+          "type": "string"
+        },
+        "head_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_id": {
+          "type": "string"
+        },
+        "target_ref": {
+          "type": "string"
+        },
+        "target_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repo_id",
+        "target_ref",
+        "behind_target_observed_at"
       ],
       "type": "object"
     },
@@ -3362,6 +3574,21 @@
       ],
       "type": "object"
     },
+    "CommitIntent": {
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "subject"
+      ],
+      "type": "object"
+    },
     "Confidence": {
       "description": "ADR-0047 D1 / D4。",
       "enum": [
@@ -3504,6 +3731,16 @@
         "api"
       ],
       "type": "object"
+    },
+    "ConflictKind": {
+      "enum": [
+        "Record",
+        "Migration",
+        "Adr",
+        "Generated",
+        "Code"
+      ],
+      "type": "string"
     },
     "ConsoleBlock": {
       "description": "Console の 1 ブロック（ADR-0048 D1 の 8 種 + 予約の `knowledge`）。\n`at` は RFC 3339、`cursor` はそのブロックの位置（`since` にそのまま渡せる）。",
@@ -4304,6 +4541,80 @@
       ],
       "type": "object"
     },
+    "ContinuationMetrics": {
+      "description": "`session_resumed` が無い旧 run は unknown。fresh の理由は dispatch の判断記録から読む。",
+      "properties": {
+        "fresh": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        },
+        "fresh_fallback_by_reason": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "default": {},
+          "type": "object"
+        },
+        "resumed": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        },
+        "unknown": {
+          "$ref": "#/$defs/ContinuationRunTotals",
+          "default": {
+            "duplicate_reads": 0,
+            "input_tokens": 0,
+            "runs": 0,
+            "wall_ms": 0
+          }
+        }
+      },
+      "type": "object"
+    },
+    "ContinuationRunTotals": {
+      "description": "同じ定義で fresh / resumed / 導入前（unknown）の run を比較する値。",
+      "properties": {
+        "duplicate_reads": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "runs",
+        "wall_ms",
+        "input_tokens",
+        "duplicate_reads"
+      ],
+      "type": "object"
+    },
     "CooldownView": {
       "description": "`task_dispatch::policy::Cooldown`（`Instant`）を壁時計に直したもの。",
       "properties": {
@@ -4443,7 +4754,7 @@
       "type": "object"
     },
     "CriterionSpec": {
-      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/gui/api.md` §3.4）。",
+      "description": "受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/\n`--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。",
       "oneOf": [
         {
           "additionalProperties": false,
@@ -4582,6 +4893,411 @@
         "check"
       ],
       "type": "object"
+    },
+    "CronCatchUp": {
+      "description": "ADR-0131 D3: daemon 停止中に過ぎた予定時刻の扱い。",
+      "oneOf": [
+        {
+          "const": "latest",
+          "description": "過ぎた中で最新の 1 件だけ発火する（既定）。",
+          "type": "string"
+        },
+        {
+          "const": "skip",
+          "description": "過ぎた分は何も作らない。",
+          "type": "string"
+        }
+      ]
+    },
+    "CronJobCreateBody": {
+      "additionalProperties": false,
+      "description": "`POST /cron-jobs` の本文。",
+      "properties": {
+        "catch_up": {
+          "$ref": "#/$defs/CronCatchUp",
+          "default": "latest",
+          "description": "取りこぼした予定時刻の扱い（既定 `latest`）。"
+        },
+        "enabled": {
+          "default": true,
+          "description": "既定 `true`。`false` なら一時停止の状態で作る。",
+          "type": "boolean"
+        },
+        "name": {
+          "description": "人が読む識別子（一意。ULID の形は不可）。",
+          "type": "string"
+        },
+        "overlap": {
+          "$ref": "#/$defs/CronOverlap",
+          "default": "skip",
+          "description": "前回の task が終わっていないときの扱い（既定 `skip`）。"
+        },
+        "schedule": {
+          "description": "5 欄の cron 式（`@daily` 等の別名も可）。",
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/CronTaskTemplate"
+        },
+        "timezone": {
+          "description": "IANA タイムゾーン名（例 `Asia/Tokyo`）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "schedule",
+        "timezone",
+        "template"
+      ],
+      "type": "object"
+    },
+    "CronJobId": {
+      "description": "cron job 1 件の識別子（ULID）。",
+      "type": "string"
+    },
+    "CronJobList": {
+      "description": "`GET /cron-jobs` の応答。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CronJobView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CronJobPatchBody": {
+      "additionalProperties": false,
+      "description": "`PATCH /cron-jobs/{id}` の本文（書いた欄だけ変える。有効/無効は `pause` / `resume` で変える）。",
+      "properties": {
+        "catch_up": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronCatchUp"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlap": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronOverlap"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "schedule": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronTaskTemplate"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "雛形は丸ごと置き換える。"
+        },
+        "timezone": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CronJobRun": {
+      "description": "`cron_job_runs` の 1 行。",
+      "properties": {
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "$ref": "#/$defs/CronJobRunId"
+        },
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/CronRunOutcome"
+        },
+        "recorded_at": {
+          "type": "string"
+        },
+        "scheduled_for": {
+          "description": "発火の予定時刻（UTC）。手動実行は押した時刻。",
+          "type": "string"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "trigger": {
+          "$ref": "#/$defs/CronTrigger"
+        }
+      },
+      "required": [
+        "id",
+        "job_id",
+        "scheduled_for",
+        "trigger",
+        "outcome",
+        "recorded_at"
+      ],
+      "type": "object"
+    },
+    "CronJobRunId": {
+      "description": "実行履歴 1 行の識別子（ULID）。",
+      "type": "string"
+    },
+    "CronJobRunList": {
+      "description": "`GET /cron-jobs/{id}/runs` の応答（新しい順）。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CronJobRun"
+          },
+          "type": "array"
+        },
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        }
+      },
+      "required": [
+        "job_id",
+        "items"
+      ],
+      "type": "object"
+    },
+    "CronJobView": {
+      "description": "job 1 件と最後の履歴（一覧・詳細・作成・更新・一時停止・再開の応答）。",
+      "properties": {
+        "catch_up": {
+          "$ref": "#/$defs/CronCatchUp"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "last_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CronJobRun"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "最後に記録した履歴（無ければ `null`）。"
+        },
+        "name": {
+          "type": "string"
+        },
+        "next_fire_at": {
+          "description": "UTC。`enabled = false` のとき `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "overlap": {
+          "$ref": "#/$defs/CronOverlap"
+        },
+        "schedule": {
+          "type": "string"
+        },
+        "template": {
+          "$ref": "#/$defs/CronTaskTemplate"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "enabled",
+        "schedule",
+        "timezone",
+        "overlap",
+        "catch_up",
+        "template",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "CronOverlap": {
+      "description": "ADR-0131 D2: 前回の task が終わっていないときの規則。",
+      "oneOf": [
+        {
+          "const": "skip",
+          "description": "作らずに `skipped_overlap` を記録する（既定）。",
+          "type": "string"
+        },
+        {
+          "const": "queue",
+          "description": "`queued` を高々 1 件溜め、前回が終端になった後に作る。",
+          "type": "string"
+        }
+      ]
+    },
+    "CronRunOutcome": {
+      "description": "ADR-0131 D1: 履歴 1 行の結果。",
+      "enum": [
+        "created",
+        "queued",
+        "skipped_overlap",
+        "skipped_missed",
+        "error"
+      ],
+      "type": "string"
+    },
+    "CronRunResult": {
+      "description": "`POST /cron-jobs/{id}/run` の応答。",
+      "properties": {
+        "job_id": {
+          "$ref": "#/$defs/CronJobId"
+        },
+        "job_name": {
+          "type": "string"
+        },
+        "runs": {
+          "description": "この実行で書いた履歴（古い順。手動実行では 1 件）。",
+          "items": {
+            "$ref": "#/$defs/CronJobRun"
+          },
+          "type": "array"
+        },
+        "task_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "作った task（`outcome = created` のときだけ）。"
+        }
+      },
+      "required": [
+        "job_id",
+        "job_name",
+        "runs"
+      ],
+      "type": "object"
+    },
+    "CronTaskTemplate": {
+      "additionalProperties": true,
+      "description": "ADR-0131 D1: job が作る task の雛形（`cron_jobs.template_json`）。`acceptance` は `task_ops::add` の\n`CriterionSpec` と同じ JSON の形で持ち、検証と `NewTaskSpec` への変換は task-ops 側で行う\n（task-core は task-ops に依存しない）。`extra` は job 固有の値（日次整理の `mode` 等）。",
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": true,
+          "type": "array"
+        },
+        "assignee": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "objective": {
+          "default": "",
+          "type": "string"
+        },
+        "priority": true,
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repos": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "description": "`{date}` は発火時刻の job タイムゾーンでの `YYYY-MM-DD` に置き換わる（[`render_title`]）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "type": "object"
+    },
+    "CronTrigger": {
+      "description": "ADR-0131 D1: 履歴 1 行の発火のきっかけ。",
+      "enum": [
+        "schedule",
+        "catch_up",
+        "manual"
+      ],
+      "type": "string"
     },
     "DaemonInstance": {
       "description": "`daemon_instances` の 1 行。",
@@ -4878,7 +5594,7 @@
           ]
         },
         "filesystem": {
-          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/gui/api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
+          "description": "ADR-0064 D1: `/proc/self/mountinfo` から引けたファイルシステム種別（`\"ext4\"` 等）。\n`GET /health` は無認証（`docs/api/v1/gui-api.md` §1.1 / auth_and_guards.rs のテスト）なので、DB の\n**絶対パス自体はここに出さない**（それは認証済みの `GET /api/v1/config` の `config.db` が\n既に返している）。判定できなければ `null`。",
           "type": [
             "string",
             "null"
@@ -5636,6 +6352,12 @@
         "head": {
           "type": "string"
         },
+        "merge_candidate_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "notification": {
           "anyOf": [
             {
@@ -5686,8 +6408,21 @@
         "review_run": {
           "type": "string"
         },
+        "reviewed_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "state": {
           "$ref": "#/$defs/DeliveryState"
+        },
+        "target_sha": {
+          "description": "Target ref read for this review attempt. NULL means no candidate was checked.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "task_id": {
           "$ref": "#/$defs/TaskId"
@@ -5713,6 +6448,98 @@
         "detail"
       ],
       "type": "object"
+    },
+    "DeliveryHead": {
+      "description": "`DeliveryList.items[]` の 1 件（`task_core::Delivery` の、commit と task を結ぶ欄だけ）。",
+      "properties": {
+        "base": {
+          "default": null,
+          "description": "配送したときの取り込み先の先端（この task の区間はここで終わる）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": "string"
+        },
+        "head": {
+          "description": "配送した branch の先端。",
+          "type": "string"
+        },
+        "merge_candidate_sha": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "release": {
+          "default": null,
+          "description": "配送が作った release の sha12。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo": {
+          "type": "string"
+        },
+        "reviewed_sha": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "description": "`DeliveryState` の code。",
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "repo",
+        "branch",
+        "head",
+        "state"
+      ],
+      "type": "object"
+    },
+    "DeliveryList": {
+      "description": "`GET /deliveries` の応答（配送記録の読み取り。`release.sh` が notes の task 判別に使う）。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/DeliveryHead"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "DeliverySkipReason": {
+      "description": "ADR-0121 D2: 対象案件の root で delivery を作れなかった理由（`Event::DeliverySkipped.reason`）。\n並びは判定の順（同時に複数あれば先のものを記録する）。",
+      "enum": [
+        "multiple_repos",
+        "no_marker",
+        "marker_repo_mismatch",
+        "repo_row_missing",
+        "repo_not_local",
+        "repo_path_mismatch",
+        "not_git",
+        "no_branch",
+        "branch_name_mismatch",
+        "refs_unresolvable",
+        "department_unresolved"
+      ],
+      "type": "string"
     },
     "DeliveryState": {
       "enum": [
@@ -6258,6 +7085,224 @@
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "ADR-0118 D3: immutable snapshot of one repository's review attempt.",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "merge_candidate_sha": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_ref": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_target_synced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "target_ref",
+            "target_sha",
+            "before_sha",
+            "reviewed_sha",
+            "merge_candidate_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0118 D4: a previously reviewed target advanced before integration.",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "review_run": {
+              "type": "string"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "review_target_advanced",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "review_run",
+            "repo_id",
+            "reviewed_sha",
+            "target_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・\n`ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号\n（1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "conflict_files": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "key": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "target_ref": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_scheduled",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "repo_id",
+            "target_ref",
+            "target_sha",
+            "before_sha",
+            "conflict_files",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0120 D5: 修復 WU の完了後、最新 target への再同期が成功した（`target_sha` は再同期時の\nSHA）。checks/reviewer の合格は意味しない。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "reviewed_sha": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_resolved",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "repo_id",
+            "target_sha",
+            "reviewed_sha",
+            "attempt"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0120 D4/D5: IntegrationRepair を打ち切った（1 回につき 1 件）。`rollback_to_sha` は安全な\nrollback が完了したときだけ `before_sha`。`fallback` は未同期 HEAD で review へ進めるときだけ\n`true`。状態・attempts は変えない。",
+          "properties": {
+            "attempt": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "before_sha": {
+              "type": "string"
+            },
+            "fallback": {
+              "type": "boolean"
+            },
+            "reason": {
+              "$ref": "#/$defs/IntegrationRepairExhaustReason"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "rollback_to_sha": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_repair_exhausted",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "repo_id",
+            "target_sha",
+            "before_sha",
+            "attempt",
+            "reason",
+            "fallback"
+          ],
+          "type": "object"
+        },
         {
           "description": "Credential-free mapping between one isolated browser session and a worker execution.",
           "properties": {
@@ -7247,6 +8292,23 @@
           "type": "object"
         },
         {
+          "description": "ADR-0124: 経路選択の監査記録。状態は変えない。",
+          "properties": {
+            "decision": {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            "type": {
+              "const": "execution_routed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から\n決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。\n同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、\n`Task.routing.execution`（前の gate の判定）を消す（次の dispatch で gate が `human/explicit` として\n判定し直し、新しい `ExecutionGated` を残す）。`replan = true` は計画を既に持つ Task への\ncompound の依頼（次の dispatch で replan の planner run になる。ADR-0072 D17 5.）。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "mode": {
@@ -7474,6 +8536,158 @@
             "work_unit_id",
             "merged",
             "head"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合が検査 1 件を始めた。`index` は 0 始まり、`total` はその統合の\n検査の数。`log_path` はその検査の stdout/stderr を逐次書くファイル（daemon の host の絶対パス）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "log_path": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_started",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "log_path",
+            "started_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件が終わった。`exit` は signal・timeout・起動失敗で\n`None`。`duration_ms` は再実行（timeout の 2 倍・merge-base の修復）を含む所要時間。状態は変えない。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "exit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "pass": {
+              "type": "boolean"
+            },
+            "timed_out": {
+              "default": false,
+              "type": "boolean"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "integration_check_finished",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "index",
+            "total",
+            "cmd",
+            "pass",
+            "duration_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った\n（review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。",
+          "properties": {
+            "branch": {
+              "type": "string"
+            },
+            "child_task": {
+              "$ref": "#/$defs/TaskId"
+            },
+            "head_sha": {
+              "type": "string"
+            },
+            "key": {
+              "type": "string"
+            },
+            "merge_candidate_sha": {
+              "type": "string"
+            },
+            "phase": {
+              "type": "string"
+            },
+            "repo_id": {
+              "$ref": "#/$defs/RepoId"
+            },
+            "target_sha": {
+              "type": "string"
+            },
+            "type": {
+              "const": "merge_candidate_stale",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "phase",
+            "work_unit_id",
+            "key",
+            "child_task",
+            "repo_id",
+            "branch",
+            "merge_candidate_sha",
+            "head_sha",
+            "target_sha"
           ],
           "type": "object"
         },
@@ -7848,6 +9062,148 @@
           "type": "object"
         },
         {
+          "description": "ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない\n監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。",
+          "properties": {
+            "detail": {
+              "type": "string"
+            },
+            "head": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/DeliverySkipReason"
+            },
+            "type": {
+              "const": "delivery_skipped",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "reason",
+            "detail"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0131 付記（2026-10-04）: 日次整理の計画を人の承認なしで本番 KB に適用し、変更を 1 commit にして\nKB の remote へ push した（試みた）。状態は変えない監査イベント。`commit_sha` は commit できなかったとき\n`None`（理由は `commit_error`）。`push` は `pushed`・`no_remote`・`failed`・`skipped`（commit できず\npush を省いた）のどれか。push の失敗は apply を失敗にしない（次回の push でまとめて送る）。",
+          "properties": {
+            "commit_error": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "commit_sha": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "date": {
+              "description": "適用日（job の timezone の `YYYY-MM-DD`）。",
+              "type": "string"
+            },
+            "deleted": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "fixed": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "merged": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "new": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "push": {
+              "type": "string"
+            },
+            "push_detail": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "knowledge_curation_applied",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "date",
+            "merged",
+            "new",
+            "deleted",
+            "fixed",
+            "push"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR parallel integration D4: 統合の依頼。状態は変えない。",
+          "properties": {
+            "origin": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/IntegrationRequest"
+            },
+            "type": {
+              "const": "integration_requested",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request",
+            "origin"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR parallel integration D4: 人が依頼に回答した監査事象。",
+          "properties": {
+            "answer": {
+              "type": "string"
+            },
+            "note": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "integration_answered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "answer"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -8105,6 +9461,31 @@
     "ExecutionMetrics": {
       "description": "D19: Task 単位の実行メトリクス（`GET /tasks/{id}/execution` と `GET /metrics/execution` の材料）。",
       "properties": {
+        "behind_target_age_seconds": {
+          "description": "ADR-0130 D4: 正の behind を最初に観測してからの秒数（behind 0 なら 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_commits": {
+          "description": "ADR-0130 D4: target にだけある commit 数（repo の最大）。未観測・計測不可は無い（0 にしない）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "behind_target_observed_at": {
+          "description": "ADR-0130 D4: 上の 2 欄を観測した UTC 時刻（最後の snapshot。読取時に Git を測り直さない）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "budget_exhausted_by_kind": {
           "additionalProperties": {
             "format": "uint32",
@@ -8114,6 +9495,31 @@
           "default": {},
           "description": "D7: 予算切れの種類ごとの run 数（`\"turns\"` / `\"wall_clock\"` / `\"context\"`）。",
           "type": "object"
+        },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "ADR-0140: worker run の fresh / resumed / 旧形式の比較値。"
         },
         "continuations": {
           "description": "D11: continuation（予算切れ・yield の続き）の回数（`Trigger::Continue{why: Continue}`）。",
@@ -8295,6 +9701,39 @@
             "null"
           ]
         },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "ADR-0140: fresh / resumed / 旧形式の worker run 別比較。"
+        },
+        "continuation_by_work_unit": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContinuationMetrics"
+          },
+          "default": {},
+          "description": "WU id ごとの比較値。atomic run は `task:<task_id>` キー。",
+          "type": "object"
+        },
         "continuations": {
           "format": "uint64",
           "minimum": 0,
@@ -8388,6 +9827,39 @@
             "$ref": "#/$defs/AccountNowView"
           },
           "type": "array"
+        },
+        "continuation": {
+          "$ref": "#/$defs/ContinuationMetrics",
+          "default": {
+            "fresh": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "fresh_fallback_by_reason": {},
+            "resumed": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            },
+            "unknown": {
+              "duplicate_reads": 0,
+              "input_tokens": 0,
+              "runs": 0,
+              "wall_ms": 0
+            }
+          },
+          "description": "全グループの worker run 比較値。"
+        },
+        "continuation_by_work_unit": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ContinuationMetrics"
+          },
+          "default": {},
+          "description": "WU id ごとの比較値。atomic run は `task:<task_id>` キー。",
+          "type": "object"
         },
         "group_by": {
           "type": "string"
@@ -8819,6 +10291,17 @@
             }
           ],
           "description": "ADR-0079 D8（Phase R3b）: `awaiting_plan_approval` のときだけ。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
         }
       },
       "required": [
@@ -8853,6 +10336,17 @@
             "null"
           ]
         },
+        "check_progress": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationCheckProgress"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ\n検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。"
+        },
         "child_task_id": {
           "description": "ADR-0079 D4 (4)（Phase R1b）: kind task の unit の子 task（作られていれば）。",
           "type": [
@@ -8873,6 +10367,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "expected_write_paths": {
+          "description": "Explicit unit hint, or the inherited task hint.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "harness": {
           "type": [
@@ -9043,6 +10547,44 @@
       "required": [
         "class",
         "reason"
+      ],
+      "type": "object"
+    },
+    "FileDiffStat": {
+      "properties": {
+        "added": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deleted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "added",
+        "deleted"
+      ],
+      "type": "object"
+    },
+    "FileIntent": {
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/SideIntent"
+        },
+        "target": {
+          "$ref": "#/$defs/SideIntent"
+        }
+      },
+      "required": [
+        "path",
+        "target",
+        "source"
       ],
       "type": "object"
     },
@@ -9312,6 +10854,57 @@
       ],
       "type": "object"
     },
+    "HumanInboxCounts": {
+      "description": "D5 `GET /inbox/items` の `counts`。",
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "by_kind"
+      ],
+      "type": "object"
+    },
+    "HumanInboxView": {
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/HumanInboxCounts"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/InboxItem"
+          },
+          "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0133 D4: attention items auto-closed by the ADR-0131 inbox-rules\n(`task_ops::inbox::attention_suppression`), counted per rule. Not narrowed by `project`/`kind`.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "items",
+        "counts",
+        "suppressed"
+      ],
+      "type": "object"
+    },
     "InFlight": {
       "description": "実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。",
       "properties": {
@@ -9389,6 +10982,15 @@
             "$ref": "#/$defs/QuestionItem"
           },
           "type": "array"
+        },
+        "suppressed": {
+          "additionalProperties": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "description": "ADR-0131 D7: 表示から外した attention の件数（規則別）。events は保持する。",
+          "type": "object"
         }
       },
       "required": [
@@ -9396,9 +10998,118 @@
         "questions",
         "drafts",
         "attention",
+        "suppressed",
         "browser_waits",
         "decisions",
         "counts"
+      ],
+      "type": "object"
+    },
+    "InboxAnswer": {
+      "description": "D2 `answer`: 答え方の操作（新 API の answer と委ね先）。",
+      "properties": {
+        "body_schema": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "method": {
+          "type": "string"
+        },
+        "native": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InboxNativeOp"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path",
+        "body_schema"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerBody": {
+      "additionalProperties": false,
+      "properties": {
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "option": {
+          "type": "string"
+        },
+        "payload": {
+          "default": null
+        }
+      },
+      "required": [
+        "option"
+      ],
+      "type": "object"
+    },
+    "InboxAnswerResult": {
+      "properties": {
+        "item_id": {
+          "type": "string"
+        },
+        "removed": {
+          "type": "boolean"
+        },
+        "result": true
+      },
+      "required": [
+        "removed",
+        "item_id",
+        "result"
+      ],
+      "type": "object"
+    },
+    "InboxBlocking": {
+      "description": "D2 `blocking`: 止めている範囲。",
+      "properties": {
+        "root": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tasks": {
+          "items": {
+            "$ref": "#/$defs/TaskRef"
+          },
+          "type": "array"
+        },
+        "units": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tasks",
+        "units",
+        "summary"
       ],
       "type": "object"
     },
@@ -9454,6 +11165,180 @@
         "browser_waits",
         "decisions",
         "by_status"
+      ],
+      "type": "object"
+    },
+    "InboxItem": {
+      "description": "ADR-0133 D2: 受信箱項目の共通形。",
+      "properties": {
+        "age_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "answer": {
+          "$ref": "#/$defs/InboxAnswer"
+        },
+        "blocked_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocking": {
+          "$ref": "#/$defs/InboxBlocking"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "due_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "決定的な id `<kind>-<元の id>`（URL にそのまま使える文字だけ）。",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/InboxKind"
+        },
+        "links": {
+          "items": {
+            "$ref": "#/$defs/InboxLink"
+          },
+          "type": "array"
+        },
+        "options": {
+          "items": {
+            "$ref": "#/$defs/InboxOption"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "何を決めるか（1 行）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "options",
+        "blocking",
+        "blocked_by",
+        "answer",
+        "created_at",
+        "age_secs",
+        "links"
+      ],
+      "type": "object"
+    },
+    "InboxKind": {
+      "description": "D2: 受信箱の種類。宣言順が D2 の並びの固定順。",
+      "enum": [
+        "decision",
+        "plan_gate",
+        "phase_gate",
+        "authorization",
+        "browser_wait",
+        "question",
+        "acceptance_check",
+        "draft_accept",
+        "project_plan",
+        "failed",
+        "unroutable",
+        "cluster_login",
+        "delivery_skipped",
+        "integration_request",
+        "knowledge_review"
+      ],
+      "type": "string"
+    },
+    "InboxLink": {
+      "description": "D2 `links[]`: 判断材料への API path。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "InboxNativeOp": {
+      "description": "D2 `answer.native`: 委ね先の既存 endpoint。",
+      "properties": {
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "InboxOption": {
+      "description": "D2 `options[]`: 選択肢 1 件。",
+      "properties": {
+        "effect": {
+          "description": "選んだら何が起きるかの 1 行。",
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "needs_note": {
+          "description": "`true` なら note 必須（replan・質問への回答など）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "needs_note",
+        "effect"
       ],
       "type": "object"
     },
@@ -9548,6 +11433,101 @@
       ],
       "type": "object"
     },
+    "IntegrationCheckDone": {
+      "description": "済んだ統合の検査 1 件。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pass": {
+          "type": "boolean"
+        },
+        "timed_out": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "index",
+        "cmd",
+        "pass",
+        "timed_out",
+        "duration_ms"
+      ],
+      "type": "object"
+    },
+    "IntegrationCheckProgress": {
+      "description": "2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。",
+      "properties": {
+        "current": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationCheckRunning"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "実行中の検査（WU が running で、最後の開始に対応する終了がまだ無いときだけ）。出力の末尾は\n`GET /tasks/{id}/work-units/{wu_id}/check-log` で読む。"
+        },
+        "finished": {
+          "description": "済んだ検査（`index` 順）。",
+          "items": {
+            "$ref": "#/$defs/IntegrationCheckDone"
+          },
+          "type": "array"
+        },
+        "total": {
+          "description": "その試行の検査の数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "total",
+        "finished"
+      ],
+      "type": "object"
+    },
+    "IntegrationCheckRunning": {
+      "description": "実行中の統合の検査 1 件。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "index",
+        "cmd",
+        "started_at"
+      ],
+      "type": "object"
+    },
     "IntegrationId": {
       "description": "取り込みの記録の一意識別子（ULID）。",
       "type": "string"
@@ -9571,6 +11551,194 @@
           "type": "string"
         }
       ]
+    },
+    "IntegrationRepairExhaustReason": {
+      "description": "ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。",
+      "oneOf": [
+        {
+          "const": "limit_reached",
+          "description": "D4.1: 起票しようとした時点で上限（`MAX_INTEGRATION_REPAIRS`）に達していた。",
+          "type": "string"
+        },
+        {
+          "const": "plan_issue",
+          "description": "D4.2: 修復 WU が `plan_issue` で終えた。",
+          "type": "string"
+        },
+        {
+          "const": "work_unit_failed",
+          "description": "D4.3: 修復 WU が `failed` になった。",
+          "type": "string"
+        },
+        {
+          "const": "budget_exhausted",
+          "description": "D4.3: 修復 WU が `budget_exhausted` のまま再開できない。",
+          "type": "string"
+        },
+        {
+          "const": "result_untrusted",
+          "description": "D4.4: 成果の保持が確認できない（祖先関係・dirty・rebase 進行中）。",
+          "type": "string"
+        },
+        {
+          "const": "abort_failed",
+          "description": "D4.5: 衝突時の `rebase --abort` が失敗した。",
+          "type": "string"
+        },
+        {
+          "const": "worktree_unavailable",
+          "description": "D4.5: worktree が消えた、remote/shared workspace に変わった。",
+          "type": "string"
+        }
+      ]
+    },
+    "IntegrationRepairState": {
+      "description": "ADR-0120 D5: 最後の integration repair の結末。",
+      "enum": [
+        "scheduled",
+        "resolved",
+        "exhausted"
+      ],
+      "type": "string"
+    },
+    "IntegrationRepairView": {
+      "description": "ADR-0120 D5: `TaskDetail.integration_repair` / 受信箱 `AttentionItem::Failed.integration_repair`\nが共有する形。最後の integration repair event と対応する scheduled event から決定的に組み立てる\n（`task_core::integration_repair_status`）。`reason` / `rollback_to_sha` / `fallback` は `exhausted`\nのときだけ値を持つ。",
+      "properties": {
+        "attempt": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "before_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conflict_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fallback": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_attempts": {
+          "description": "`task_ops::delivery::MAX_INTEGRATION_REPAIRS`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationRepairExhaustReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rollback_to_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/IntegrationRepairState"
+        },
+        "target_ref": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "target_sha": {
+          "type": "string"
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "state",
+        "attempt",
+        "max_attempts",
+        "target_sha"
+      ],
+      "type": "object"
+    },
+    "IntegrationRequest": {
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/ResolutionAction"
+          },
+          "type": "array"
+        },
+        "candidate_sha": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "conflict_files": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "intent": {
+          "items": {
+            "$ref": "#/$defs/FileIntent"
+          },
+          "type": "array"
+        },
+        "merge_base": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        },
+        "source_branch": {
+          "type": "string"
+        },
+        "source_sha": {
+          "type": "string"
+        },
+        "target_branch": {
+          "type": "string"
+        },
+        "target_sha": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "target_branch",
+        "target_sha",
+        "source_branch",
+        "source_sha",
+        "conflict_files",
+        "intent",
+        "reason",
+        "recommendation",
+        "actions"
+      ],
+      "type": "object"
     },
     "IntegrationState": {
       "description": "取り込みの行方（ADR-0043 D5）。",
@@ -9658,7 +11826,7 @@
           "type": "string"
         },
         "op": {
-          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/knowledge.md` 参照）。",
+          "description": "ADR-0047 D4（Phase 62）: `create` / `update` / `merge` / `retire`、Phase K-1 の `append`。\n取り込み先がまだ無い `record` の候補には無い（`null`）。`retire` の accept は `target` を\n`_retired/` へ動かし、`merge` の accept は `target` を必ず上書きし、`append` の accept は\n`target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。",
           "type": [
             "string",
             "null"
@@ -10283,6 +12451,9 @@
         "logged_in"
       ],
       "type": "object"
+    },
+    "LlmSourceRef": {
+      "type": "string"
     },
     "LlmSourceView": {
       "description": "`GET /llm/sources` の 1 供給元。",
@@ -11494,7 +13665,7 @@
     },
     "NewPlanSpec": {
       "additionalProperties": false,
-      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/gui/api.md` §3.14）。",
+      "description": "`celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。",
       "properties": {
         "goal": {
           "description": "大目標。1行目の先頭80文字が `title` になる。",
@@ -11540,9 +13711,9 @@
       ],
       "type": "object"
     },
-    "NewTaskSpec": {
+    "NewTaskBody": {
       "additionalProperties": false,
-      "description": "`celerisctl add` から組み立てる新規タスクの指定。API の `POST /tasks` の本文でもある（`docs/gui/api.md` §3.4）。\n省略時の既定は `celerisctl add` と同じ。",
+      "description": "POST /tasks accepts the task specification and an optional write path hint.",
       "properties": {
         "acceptance": {
           "items": {
@@ -11609,6 +13780,16 @@
           ],
           "default": null,
           "description": "ADR-0072 D13（Phase E3）: Complexity Gate の人の明示（`provenance.origin == Human` のときだけ\ngate をバイパスする）。`Agent`（CoS）が書いたときはヒント（signal `H`）として扱う。"
+        },
+        "expected_write_paths": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "features": {
           "anyOf": [
@@ -11854,9 +14035,179 @@
       ],
       "type": "object"
     },
+    "Notice": {
+      "description": "通知の束（`feed_notices` の 1 行）。",
+      "properties": {
+        "count": {
+          "description": "束ねた出来事の件数。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "first_at": {
+          "type": "string"
+        },
+        "group_key": {
+          "description": "束ね key（`<kind>:<範囲>`。ADR-0133 D3.3）。",
+          "type": "string"
+        },
+        "id": {
+          "$ref": "#/$defs/NoticeId"
+        },
+        "kind": {
+          "$ref": "#/$defs/NoticeKind"
+        },
+        "last_at": {
+          "type": "string"
+        },
+        "links": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/NoticeLink"
+          },
+          "type": "array"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "read_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "description": "最新の 1 件の要約（`count > 1` なら末尾に「ほか n−1 件」）。",
+          "type": "string"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeTarget"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "最新の 1 件の題名。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "group_key",
+        "title",
+        "summary",
+        "count",
+        "first_at",
+        "last_at"
+      ],
+      "type": "object"
+    },
+    "NoticeId": {
+      "description": "通知（束）の id（ULID）。",
+      "type": "string"
+    },
+    "NoticeKind": {
+      "description": "通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。",
+      "enum": [
+        "task_done",
+        "report",
+        "bad_news",
+        "secretary_reply",
+        "delivery",
+        "release",
+        "cron_run",
+        "auto_recovered",
+        "requeue_limit_near"
+      ],
+      "type": "string"
+    },
+    "NoticeLink": {
+      "description": "通知に付けるリンク（GUI / web が開く先）。",
+      "properties": {
+        "href": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "href"
+      ],
+      "type": "object"
+    },
+    "NoticeReadAllResult": {
+      "properties": {
+        "marked": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "marked"
+      ],
+      "type": "object"
+    },
+    "NoticeReadResult": {
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "read_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "read_at"
+      ],
+      "type": "object"
+    },
+    "NoticeTarget": {
+      "description": "通知の対象（最新の 1 件）。`kind` は `task` / `report` / `release` / `delivery` / `cron_job` 等の\n短い名前で、`id` はその領域の id（文字列のまま。領域の型には依存しない）。",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id"
+      ],
+      "type": "object"
+    },
     "NotificationKind": {
       "description": "判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。",
       "oneOf": [
+        {
+          "const": "inbox_new",
+          "description": "ADR-0133 D6: new human decisions, batched into one webhook message.",
+          "type": "string"
+        },
+        {
+          "const": "digest",
+          "description": "ADR-0133 D6: periodic summary of non-actionable notices.",
+          "type": "string"
+        },
         {
           "const": "milestone_ready",
           "description": "途中目標に属する仕事がすべて終端になった（達成の判定と次の Go を人に求める）。`key` = 途中目標 id。",
@@ -11913,6 +14264,32 @@
           "type": "string"
         }
       ]
+    },
+    "NotificationsView": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/Notice"
+          },
+          "type": "array"
+        },
+        "next_before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "items",
+        "unread"
+      ],
+      "type": "object"
     },
     "NotifyRecent": {
       "description": "`GET /notify` の `recent[]` の 1 件（ADR-0037 D4）。",
@@ -11998,6 +14375,22 @@
           "description": "webhook の秘密が登録されていて、送れる状態か。",
           "type": "boolean"
         },
+        "digest_interval_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "digest_last_sent_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "digest_max_lines": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
         "fingerprint": {
           "description": "登録済みのときだけ。値の sha256 の先頭 8 桁（値は復元できない）。",
           "type": [
@@ -12011,6 +14404,24 @@
             "string",
             "null"
           ]
+        },
+        "inbox_batch_secs": {
+          "description": "`[notify]` outbound route configuration (ADR-0133 D6).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "inbox_new_last_sent_at": {
+          "description": "Last successful send for each outbound route; absent history is `null`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "inbox_reminder_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "recent": {
           "description": "直近の送信（新しい順、最大 10 件）。",
@@ -12027,7 +14438,11 @@
       "required": [
         "configured",
         "secret_id",
-        "recent"
+        "recent",
+        "inbox_batch_secs",
+        "inbox_reminder_secs",
+        "digest_interval_secs",
+        "digest_max_lines"
       ],
       "type": "object"
     },
@@ -12512,9 +14927,23 @@
         "key": {
           "type": "string"
         },
+        "parent_head": {
+          "description": "ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "skipped": {
           "description": "既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。",
           "type": "boolean"
+        },
+        "target_sha": {
+          "description": "ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -12980,6 +15409,16 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "expected_write_paths": {
+          "description": "Optional repository-relative prefixes inherited by child tasks or leaf WUs.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "features": {
           "description": "ADR-0069 D3: `TaskFeatureHints` の上書きヒント。"
@@ -14126,6 +16565,20 @@
         "id": {
           "type": "string"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "model": {
           "description": "実効モデル（空なら `null`）。",
           "type": [
@@ -14164,6 +16617,12 @@
         "env_keys"
       ],
       "type": "object"
+    },
+    "ProviderKind": {
+      "enum": [
+        "adapter"
+      ],
+      "type": "string"
     },
     "ProviderLive": {
       "description": "プロバイダ（`[[providers]]` の行。認証アカウントは別参照）の稼働状況。`env` の値は含めない。",
@@ -14219,6 +16678,10 @@
           "minimum": 0,
           "type": "integer"
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -14229,6 +16692,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の疎通確認（`POST /providers/{id}/check`）の結果。**メモリだけに持つ観測値**で、\nceleris を再起動すると消える（イベントにも DB にも残さない）。一度も確認していなければ `None`。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "description": "実効モデル（空なら `None`）。",
@@ -14402,6 +16875,10 @@
             "null"
           ]
         },
+        "kind": {
+          "$ref": "#/$defs/ProviderKind",
+          "default": "adapter"
+        },
         "last_check": {
           "anyOf": [
             {
@@ -14412,6 +16889,16 @@
             }
           ],
           "description": "ADR-0022 D2: 直近の `POST /providers/{id}/check` の結果（`{at, result}`）。まだ確認していない、\nまたは celeris を再起動した後は `null`（メモリだけに持つ観測値）。"
+        },
+        "llm_source": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResolvedLlmSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "model": {
           "type": [
@@ -14647,7 +17134,7 @@
         },
         "method": {
           "$ref": "#/$defs/QuotaMethod",
-          "description": "**ADR からの逸脱**（`docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
+          "description": "**ADR からの逸脱**（`agent-docs/adr/0074-...md` の「Phase F3（quota）実装時の逸脱・明確化」参照）:\nD4.3 の JSON 例は窓ごとの `method` を書いていないが、5 時間 / 7 日で窓リセットの有無により\n決め方が食い違いうる（例: 7 日枠だけ `resets_at` を跨ぐ）ため、窓ごとにも残す。\n`Event::QuotaEstimated.method` はこれらのうち最も確からしいものを 1 つに畳み込んだ値。"
         },
         "resets_at": {
           "format": "int64",
@@ -14708,6 +17195,34 @@
         "utilization",
         "resets_at"
       ],
+      "type": "object"
+    },
+    "ReadAllBody": {
+      "additionalProperties": false,
+      "properties": {
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/NoticeKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ReleaseChanges": {
@@ -14869,6 +17384,17 @@
         "is_previous": {
           "type": "boolean"
         },
+        "notes": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseNotes"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-04-release-notes: `notes.json`（このリリースに何が入ったか。task 単位）。\nこの仕組みより前のリリースには無いので `null`。"
+        },
         "on_main": {
           "description": "ADR-0041 D3: この sha が `[selfdeploy] repo` の `main` の**祖先**か\n（`git merge-base --is-ancestor <sha> main`）。`false` なら本番のコードが `main` に\n戻っていない。リポジトリが無い・git が動かない・その sha を知らないときは `null`。",
           "type": [
@@ -14917,6 +17443,17 @@
           "description": "`promote.lock` に書かれた pid がまだ生きている（昇格が走っている最中）。",
           "type": "boolean"
         },
+        "promotion": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleasePromotionPreview"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-04-release-notes: いまの `current` からこのリリースへ昇格したら入るもの\n（`GET /releases/{sha12}/promotion-preview` と同じ）。`current` 自身・notes の無いリリースは `null`。"
+        },
         "ref": {
           "description": "`manifest.json` の `ref`（`release.sh` に渡した git ref）。読めなければ `null`。",
           "type": [
@@ -14955,6 +17492,332 @@
         "is_current",
         "is_previous",
         "promoting"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteChild": {
+      "description": "`ReleaseNoteTask.children[]` の 1 件。",
+      "properties": {
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteCommit": {
+      "description": "commit の 1 件（完全な sha と題）。",
+      "properties": {
+        "sha": {
+          "type": "string"
+        },
+        "subject": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "sha",
+        "subject"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteConfig": {
+      "description": "`config/celeris.example.toml` の変更。",
+      "properties": {
+        "added_lines": {
+          "default": [],
+          "description": "足された（コメントでも空でもない）行。人が本番 config に足すかを判断する材料（最大 40 行）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "added_sections": {
+          "default": [],
+          "description": "足された節見出し（`[section]`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "commit": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "needs_review": {
+          "description": "`added_lines` が 1 行以上ある（人が本番 config を見直す必要がある）。",
+          "type": "boolean"
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "status",
+        "needs_review"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteFile": {
+      "description": "範囲で足された・変わったファイル（migration・ADR）。",
+      "properties": {
+        "commit": {
+          "default": null,
+          "description": "範囲の中でこのファイルに最後に触れた first-parent の commit（昇格の要約の切り出しに使う）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`\"added\"` / `\"modified\"` / `\"deleted\"`（`git diff --name-status` の A / M / D。R は added 扱い）。",
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "ADR の 1 行目の `# ` 題（migration では `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "status"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteGateSkip": {
+      "description": "gate で飛ばした段。",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "step": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "step",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ReleaseNoteSchema": {
+      "description": "schema_version の変化。",
+      "properties": {
+        "changed": {
+          "description": "`from != to`（DB の移行が入る。旧 daemon が新 schema を読めなければ停止→起動になる）。\nどちらかが分からなければ `null`。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "from": {
+          "description": "起点（`current`）の schema_version。分からなければ `null`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "to": {
+          "description": "このリリースの schema_version。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ReleaseNoteTask": {
+      "description": "`ReleaseNotes.tasks[]` の 1 件。",
+      "properties": {
+        "children": {
+          "default": [],
+          "description": "同じリリースに入った子 task（親がこの一覧に居るものは親の下にまとめる）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteChild"
+          },
+          "type": "array"
+        },
+        "commits": {
+          "default": [],
+          "description": "この task に属する commit（新しい順。first-parent に無い配送 head は 1 件だけ）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "どこから task だと分かったか: `\"delivery\"`（配送記録の head）/ `\"branch\"`（`celeris/<id>` の\nbranch 名・merge commit の題）。",
+          "type": "string"
+        },
+        "status": {
+          "default": null,
+          "description": "task の status（取れたときだけ）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "default": null,
+          "description": "最後に `done` で終わった worker run の `outcome_text`（完了時の要約。最大 600 文字）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "default": null,
+          "description": "`GET /tasks/{id}` の題。取れなければ `null`（GUI は commit 題を出す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "source"
+      ],
+      "type": "object"
+    },
+    "ReleaseNotes": {
+      "description": "`<release>/notes.json`（`release.sh` が `celerisctl release notes` で書く）。`base..sha` の\nfirst-parent の範囲を Celeris の task 単位にまとめた「このリリースに何が入ったか」。\n**決定的**に作る（git と配送記録と `GET /tasks/{id}` だけ。LLM は使わない）。",
+      "properties": {
+        "adrs": {
+          "default": [],
+          "description": "`agent-docs/adr/` と `docs/adr/` で足された・変わった ADR。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "base": {
+          "description": "範囲の起点（ビルド時の `current` の完全な sha）。`current` が無い・repo が知らないときは `null`\n（そのときは `sha` だけを見た空の説明になる）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "config_example": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReleaseNoteConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "`config/celeris.example.toml` の変更（変わっていなければ `null`）。"
+        },
+        "deliveries_known": {
+          "default": false,
+          "description": "task の配送記録（`GET /deliveries`）を読めたか。偽なら task の判別は branch 名だけ。",
+          "type": "boolean"
+        },
+        "direct_commits": {
+          "default": [],
+          "description": "どの task にも属さない first-parent の commit（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "first_parent": {
+          "default": [],
+          "description": "`base..sha` の first-parent の sha（新しい順、最大 [`RELEASE_NOTES_FIRST_PARENT_LIMIT`] 件）。\n昇格の要約が「`current` より後ろの部分」だけを切り出すのに使う。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "gate_skips": {
+          "default": [],
+          "description": "gate で飛ばした段（`gate.json` の `skipped: true`）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteGateSkip"
+          },
+          "type": "array"
+        },
+        "generated_at": {
+          "description": "RFC 3339。",
+          "type": "string"
+        },
+        "migrations": {
+          "default": [],
+          "description": "`crates/task-core/migrations/` に足された（または変わった）ファイル。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ReleaseNoteSchema"
+        },
+        "sha": {
+          "description": "このリリースの完全な sha。",
+          "type": "string"
+        },
+        "sha12": {
+          "type": "string"
+        },
+        "tasks": {
+          "default": [],
+          "description": "task 単位の一覧（新しい順）。同じ task は 1 回。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteTask"
+          },
+          "type": "array"
+        },
+        "truncated": {
+          "default": false,
+          "description": "`first_parent` を上限で切った。",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "形式の版（いまは 1）。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "version",
+        "sha",
+        "sha12",
+        "generated_at",
+        "schema"
       ],
       "type": "object"
     },
@@ -15000,6 +17863,129 @@
       "required": [
         "failed_at",
         "error"
+      ],
+      "type": "object"
+    },
+    "ReleasePromotionPreview": {
+      "description": "昇格の要約: `current` から対象リリースまでに入る**全リリース**の説明を 1 つにまとめたもの\n（`GET /releases/{sha12}/promotion-preview` と `GET /releases` の `items[].promotion`）。",
+      "properties": {
+        "adrs": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "complete": {
+          "description": "`current` から対象までを notes で辿り切れた（偽なら一覧は対象側の notes にある分だけ）。",
+          "type": "boolean"
+        },
+        "config_examples": {
+          "description": "含まれるリリースの `config_example` の変更（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteConfig"
+          },
+          "type": "array"
+        },
+        "direct_commits": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteCommit"
+          },
+          "type": "array"
+        },
+        "from": {
+          "description": "いまの `current`（無ければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gate_skips": {
+          "description": "対象リリースの gate で飛ばした段。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteGateSkip"
+          },
+          "type": "array"
+        },
+        "migrations": {
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteFile"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "description": "`\"live\"`（対象の `verify.json` の `live_ok` が真）/ `\"stop-start\"`（偽）/ `null`（未検証）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "problem": {
+          "default": null,
+          "description": "辿り切れなかった理由など（無ければ `null`）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "releases": {
+          "description": "含まれるリリース（新しい順。対象が先頭）。",
+          "items": {
+            "$ref": "#/$defs/ReleasePromotionRelease"
+          },
+          "type": "array"
+        },
+        "schema": {
+          "$ref": "#/$defs/ReleaseNoteSchema",
+          "description": "`from` は `current` の、`to` は対象の schema_version。"
+        },
+        "tasks": {
+          "description": "同じ task は 1 回（新しい順）。",
+          "items": {
+            "$ref": "#/$defs/ReleaseNoteTask"
+          },
+          "type": "array"
+        },
+        "to": {
+          "description": "対象リリースの sha12。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "to",
+        "complete",
+        "releases",
+        "tasks",
+        "direct_commits",
+        "migrations",
+        "schema",
+        "adrs",
+        "config_examples",
+        "gate_skips"
+      ],
+      "type": "object"
+    },
+    "ReleasePromotionRelease": {
+      "description": "`ReleasePromotionPreview.releases[]` の 1 件。",
+      "properties": {
+        "built_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha12": {
+          "type": "string"
+        },
+        "task_count": {
+          "description": "この昇格で入る task の数（この release の notes にあったもののうち、`current` に入っていないもの）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "sha12",
+        "task_count"
       ],
       "type": "object"
     },
@@ -15824,6 +18810,40 @@
       ],
       "type": "object"
     },
+    "ResolutionAction": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ConflictKind"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "detail"
+      ],
+      "type": "object"
+    },
+    "ResolvedLlmSource": {
+      "properties": {
+        "origin": {
+          "$ref": "#/$defs/SourceOrigin"
+        },
+        "source": {
+          "$ref": "#/$defs/LlmSourceRef"
+        }
+      },
+      "required": [
+        "source",
+        "origin"
+      ],
+      "type": "object"
+    },
     "RetryBody": {
       "additionalProperties": false,
       "description": "`POST /tasks/{id}/retry`（Phase 31）の本文。`accept: true` なら新しいタスクは `draft` を経ず `ready` で始まる。\nADR-0062 Phase 108 追記: `workspace`（省略可）を与えると、複製先の作業場所をそれに差し替える\n（検証は `PATCH /tasks/{id}` の `workspace` と同じ）。省略時は従来どおり元のタスクの `workspace` を複製する。",
@@ -16171,6 +19191,66 @@
         "child_tasks_total",
         "child_tasks_done",
         "open_decisions"
+      ],
+      "type": "object"
+    },
+    "Route": {
+      "enum": [
+        "direct",
+        "planned"
+      ],
+      "type": "string"
+    },
+    "RouteDecision": {
+      "properties": {
+        "gate_rule_id": {
+          "type": "string"
+        },
+        "overrode_gate": {
+          "type": "boolean"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/RouteReason"
+          },
+          "type": "array"
+        },
+        "route": {
+          "$ref": "#/$defs/Route"
+        },
+        "shadow": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "route",
+        "reasons",
+        "gate_rule_id",
+        "overrode_gate",
+        "shadow",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "RouteReason": {
+      "properties": {
+        "detail": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "rule_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule_id",
+        "ok",
+        "detail"
       ],
       "type": "object"
     },
@@ -16743,7 +19823,7 @@
       "type": "object"
     },
     "ScratchCacheStats": {
-      "description": "ADR-0075 D6（Phase G3）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。数は cache server の起動以降の\n累計、容量は byte、時刻は RFC 3339。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`（`celeris.scratch-cache-stats/1`）。型だけ残す（値は常に `None`）。",
       "properties": {
         "flush_dropped": {
           "description": "待ち行列の上限で「L2 に書かない」で落とした数。",
@@ -16996,7 +20076,7 @@
       "type": "object"
     },
     "ScratchCacheView": {
-      "description": "ADR-0075 D5 (b) / D6（Phase G3）: sccache の webdav backend に対する Celeris の階層 cache server。",
+      "description": "廃止（ADR-0129）: Celeris の階層 cache server（sccache の webdav backend 向け）は撤去した。\n`ScratchStatus.cache` が旧 client 向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "endpoint": {
           "description": "`http://127.0.0.1:<port>`（`SCCACHE_WEBDAV_ENDPOINT`）。",
@@ -17220,7 +20300,7 @@
       "type": "object"
     },
     "ScratchSccacheStats": {
-      "description": "`sccache --show-stats --stats-format=json` の要約（server の起動以降の累計）。",
+      "description": "廃止（ADR-0129）: cache server の `/stats`。型だけ残す（値は常に `None`）。",
       "properties": {
         "cache_size_bytes": {
           "description": "L1 の使用量（byte。読めなければ `None`）。",
@@ -17268,7 +20348,7 @@
       "type": "object"
     },
     "ScratchSccacheView": {
-      "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1（`<scratch>/sccache-l1`）。",
+      "description": "廃止（ADR-0129）: sccache L1（`<scratch>/sccache-l1`）の配線は撤去した。`ScratchStatus.sccache` が旧 client\n向けの schema 互換のため型だけ残す（値は常に `None`）。",
       "properties": {
         "binary": {
           "description": "本物の sccache（`[scratch.sccache] binary`）。",
@@ -17336,7 +20416,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D5 (b) / D6（Phase G3）: L2 の cache server（`celeris cache-server`）の状態と `/stats`。G2 以前の\nスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: cache server（`celeris cache-server`）を撤去した。型は旧 client との互換の\nため残す。"
         },
         "dir": {
           "description": "`[scratch] dir`。",
@@ -17432,7 +20512,7 @@
             }
           ],
           "default": null,
-          "description": "ADR-0075 D4 / D6（Phase G2）: sccache L1 の配線の状態。G1 のスナップショットには無い。"
+          "description": "廃止。常に `None`（ADR-0129）: sccache は Celeris の外（host の cargo 設定）になった。型は旧 client との\n互換のため残す。"
         },
         "schema": {
           "description": "常に `celeris.scratch-status/1`。",
@@ -17595,6 +20675,44 @@
       ],
       "type": "object"
     },
+    "SideIntent": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "commits": {
+          "items": {
+            "$ref": "#/$defs/CommitIntent"
+          },
+          "type": "array"
+        },
+        "diffstat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FileDiffStat"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "path": {
+          "type": "string"
+        },
+        "unavailable": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "branch",
+        "path",
+        "commits"
+      ],
+      "type": "object"
+    },
     "SkillDetailView": {
       "description": "`GET /skills/{name}`。",
       "properties": {
@@ -17735,6 +20853,13 @@
         "description"
       ],
       "type": "object"
+    },
+    "SourceOrigin": {
+      "enum": [
+        "explicit",
+        "derived"
+      ],
+      "type": "string"
     },
     "StageHint": {
       "additionalProperties": false,
@@ -18206,6 +21331,20 @@
           },
           "type": "array"
         },
+        "actual_run_write_sets": {
+          "description": "Committed diffs for this task's runs, with snapshot status and Git SHAs.",
+          "items": {
+            "$ref": "#/$defs/ActualWriteSetView"
+          },
+          "type": "array"
+        },
+        "actual_work_unit_write_sets": {
+          "description": "Cumulative committed diffs for completed work units.",
+          "items": {
+            "$ref": "#/$defs/ActualWriteSetView"
+          },
+          "type": "array"
+        },
         "answers": {
           "items": {
             "$ref": "#/$defs/AnswerNote"
@@ -18217,6 +21356,10 @@
             "$ref": "#/$defs/ApprovalLink"
           },
           "type": "array"
+        },
+        "behind_target": {
+          "$ref": "#/$defs/BehindTarget",
+          "description": "Last observed target snapshot; reading the detail does not run Git."
         },
         "children": {
           "items": {
@@ -18278,6 +21421,16 @@
           ],
           "description": "ADR-0072 D20（Phase E5）: Execution 節。events に E-phase 由来の活動（gate の判定・計画・\ncheckpoint・WorkUnit の遷移）が 1 件も無ければ `None`（D23: 既存の古いタスクの詳細を壊さない）。"
         },
+        "expected_write_paths": {
+          "description": "ADR-0130: effective task hint, including inheritance from a parent unit.",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
         "failure": {
           "anyOf": [
             {
@@ -18295,6 +21448,17 @@
             "string",
             "null"
           ]
+        },
+        "integration_repair": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/IntegrationRepairView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0120 D5: review 前同期の衝突解消（IntegrationRepair）の現在の状況。履歴が無い task では\n省略する。`failure`（実装失敗・レビュー不合格）とは別の欄: review を妨げず成果を保って衝突を\n解消する試みであり、`exhausted` でも task を直接 `failed` にはしない（従来経路へ落ちるだけ）。"
         },
         "is_root_task": {
           "default": false,
@@ -18374,6 +21538,9 @@
       },
       "required": [
         "task",
+        "actual_run_write_sets",
+        "actual_work_unit_write_sets",
+        "behind_target",
         "priority_label",
         "delegated",
         "timers",
@@ -18387,225 +21554,6 @@
         "children",
         "actions"
       ],
-      "type": "object"
-    },
-    "TaskEdit": {
-      "additionalProperties": false,
-      "description": "`PATCH /tasks/{id}` の本文（ADR-0044 D1）。**書いた項目だけ**が変わる。\n`Option<Option<T>>` の項目は「省略 = 変えない / `null` = 消す / 値 = その値にする」。",
-      "properties": {
-        "acceptance": {
-          "description": "差し替え（部分更新はしない）。1 件以上。",
-          "items": {
-            "$ref": "#/$defs/CriterionSpec"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "adapter": {
-          "description": "`worker_hint.adapter`（`null` で外す）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "assignee": {
-          "description": "組織のノード（`null` で外す）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "category": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskCategory"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "depends_on": {
-          "description": "差し替え。存在しない・`failed`/`cancelled`・自分自身はエラー。",
-          "items": {
-            "$ref": "#/$defs/TaskId"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "expected_status": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Status"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "楽観的排他（現在の `status` と違えば 409）。"
-        },
-        "harness": {
-          "description": "ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。\n`null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "labels": {
-          "description": "ADR-0044 D3: 差し替え（小文字 `[a-z0-9-]`、最大 8 個）。",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "max_retries": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_turns": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "max_wall_secs": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "milestone_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/MilestoneId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "途中目標（`null` で外す）。そのタスクの案件のものであること。"
-        },
-        "mode": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskMode"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0046 D4（Phase 59）: 進め方（`prototype` / `production` / `research`）。"
-        },
-        "objective": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "pause_after": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PausePolicy"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。\n次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される\n（PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。"
-        },
-        "priority": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/PriorityInput"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0044 D3: `\"P1\"` でも `20` でもよい。"
-        },
-        "project_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ProjectId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・\n`draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。\n既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。"
-        },
-        "repos": {
-          "description": "ADR-0043 D2（Phase 52 / A1）: このタスクが使う案件のリポジトリを**名前で**差し替える\n（`project_repos.name`。空配列で「リポジトリを使わない」）。名前は `POST /tasks` と同じ規則で\n**そのタスクの案件の中**から解決する（知らない名前・リモートと他の混在は 422、案件に属さない\nタスクで空でない `repos` を書くのも 422）。走っている run には効かず、次の run の worktree から。",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "role": {
-          "description": "役割名（`null` で外す）。",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "skills": {
-          "description": "ADR-0046 D2（Phase 59）: 必要な能力タグの差し替え（小文字 `[a-z0-9._-]`、最大 12 個）。",
-          "items": {
-            "type": "string"
-          },
-          "type": [
-            "array",
-            "null"
-          ]
-        },
-        "tier": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Tier"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0033 D2 の最上位「タスク」の tier 指定（`worker_hint.tier`）。"
-        },
-        "title": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "workspace": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/WorkspaceSpec"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "ADR-0062 Phase 108 追記: 作業場所の差し替え。検証は `POST /tasks` と同じ規則\n（`Remote.cluster` が設定に存在すること — API 層〈`validated_workspace`〉で見る、\n`Remote` かつ明示の担当が `cluster:<id>` を持たなければ 422、`Local.path` は空でないこと）。\n**この項目だけは `draft`/`ready`/`blocked`/`failed` でも受け付ける**（他の項目は従来どおり\n終端〈`done`/`failed`/`cancelled`〉で 409。`running`/`reviewing` への `workspace` 編集は 409）。\n`blocked`（B1 の unroutable）だったタスクは、この編集または `assignee` の変更で経路が通れば\nその場で `ready` に戻す（下記 `edit_task` を見よ）。"
-        }
-      },
       "type": "object"
     },
     "TaskExecutionView": {
@@ -18674,6 +21622,17 @@
             }
           ],
           "description": "ADR-0079 D8（Phase R3b）: `phase = awaiting_plan_approval` のときだけ。承認を待つ計画と理由。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定（評価していない Task\nには無い）。"
         },
         "runs": {
           "description": "checkpoint はそれぞれの `RunSummary` からは見えない（run 詳細ルートで見る。D20）。",
@@ -18983,6 +21942,235 @@
         }
       ]
     },
+    "TaskPatchBody": {
+      "additionalProperties": false,
+      "description": "PATCH /tasks/{id}: omitted hint leaves it unchanged; null or [] clears it.",
+      "properties": {
+        "acceptance": {
+          "description": "差し替え（部分更新はしない）。1 件以上。",
+          "items": {
+            "$ref": "#/$defs/CriterionSpec"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "adapter": {
+          "description": "`worker_hint.adapter`（`null` で外す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "assignee": {
+          "description": "組織のノード（`null` で外す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "category": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskCategory"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "depends_on": {
+          "description": "差し替え。存在しない・`failed`/`cancelled`・自分自身はエラー。",
+          "items": {
+            "$ref": "#/$defs/TaskId"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "expected_status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Status"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "楽観的排他（現在の `status` と違えば 409）。"
+        },
+        "expected_write_paths": {
+          "default": null,
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "harness": {
+          "description": "ADR-0046 D3（Phase 59）: ハーネス（`tasks.genre` 列をそのまま harness id として使う）。\n`null` で外す。`genres`（= ハーネスのレジストリの射影）が空でなければ知らない id は 422。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "labels": {
+          "description": "ADR-0044 D3: 差し替え（小文字 `[a-z0-9-]`、最大 8 個）。",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "max_retries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_turns": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_wall_secs": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "milestone_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MilestoneId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "途中目標（`null` で外す）。そのタスクの案件のものであること。"
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0046 D4（Phase 59）: 進め方（`prototype` / `production` / `research`）。"
+        },
+        "objective": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pause_after": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PausePolicy"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0074 D2.1（Phase F3 途中確認）: 工程の後で止まるか（`none`/`each_phase`/`after`）。\n次に計画が採用（新規・replan）されたときに `Event::PausePointsResolved` へ解決される\n（PATCH 自体は解決を起こさない。走っている計画の停止点はそのまま）。"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PriorityInput"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0044 D3: `\"P1\"` でも `20` でもよい。"
+        },
+        "project_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProjectId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0098 D7（Phase R7-10）: 案件を持たない task に案件を付ける。受け付けるのは、案件が無く・親が無く・\n`draft`/`ready` で・まだ一度も run していない（lease 無し、`attempts == 0`、`WorkerStarted` 無し）task だけ。\n既に案件を持つ task の変更は 422。同じ PATCH に `repos` が無ければ案件の primary を付ける（リモートなら 422）。"
+        },
+        "repos": {
+          "description": "ADR-0043 D2（Phase 52 / A1）: このタスクが使う案件のリポジトリを**名前で**差し替える\n（`project_repos.name`。空配列で「リポジトリを使わない」）。名前は `POST /tasks` と同じ規則で\n**そのタスクの案件の中**から解決する（知らない名前・リモートと他の混在は 422、案件に属さない\nタスクで空でない `repos` を書くのも 422）。走っている run には効かず、次の run の worktree から。",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "role": {
+          "description": "役割名（`null` で外す）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skills": {
+          "description": "ADR-0046 D2（Phase 59）: 必要な能力タグの差し替え（小文字 `[a-z0-9._-]`、最大 12 個）。",
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0033 D2 の最上位「タスク」の tier 指定（`worker_hint.tier`）。"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "workspace": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WorkspaceSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0062 Phase 108 追記: 作業場所の差し替え。検証は `POST /tasks` と同じ規則\n（`Remote.cluster` が設定に存在すること — API 層〈`validated_workspace`〉で見る、\n`Remote` かつ明示の担当が `cluster:<id>` を持たなければ 422、`Local.path` は空でないこと）。\n**この項目だけは `draft`/`ready`/`blocked`/`failed` でも受け付ける**（他の項目は従来どおり\n終端〈`done`/`failed`/`cancelled`〉で 409。`running`/`reviewing` への `workspace` 編集は 409）。\n`blocked`（B1 の unroutable）だったタスクは、この編集または `assignee` の変更で経路が通れば\nその場で `ready` に戻す（下記 `edit_task` を見よ）。"
+        }
+      },
+      "type": "object"
+    },
     "TaskPauseResult": {
       "description": "`POST /tasks/{id}/pause|resume` の結果（API がそのまま返す）。",
       "properties": {
@@ -19096,6 +22284,17 @@
         "pause_after_source": {
           "$ref": "#/$defs/PauseSource",
           "description": "D2.1: `pause_after` を誰が書いたか（`Event::PausePointsResolved.source` の元）。既定は\n人（`Human`）。CoS の `create_task.pause_after` を採ったときだけ `Agent` になる。"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RouteDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。"
         },
         "stages_hint": {
           "description": "ADR-0079 D12（Phase R2b）: 人が名指しした段階（`[{\"title\": \"Phase 1\", \"scope\": \"…\"}]`）。/3 の planner\nrun の入力（構造の強制ではない）。`pause_after` と同じ理由でここに置く。書く入口（CoS の\n`create_task.stages_hint`）は R5a。空なら出力しない（既存の JSON は 1 バイトも変わらない）。",
@@ -19861,7 +23060,7 @@
       "properties": {
         "cascaded": {
           "default": [],
-          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/gui/api.md` §5.7）。",
+          "description": "この遷移の伝播で `cancelled` になった、対象タスク以外のタスク（`docs/api/v1/gui-api.md` §5.7）。",
           "items": {
             "$ref": "#/$defs/TaskRef"
           },
@@ -20389,6 +23588,34 @@
         }
       ]
     },
+    "UnreadCountView": {
+      "properties": {
+        "by_kind": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        },
+        "events": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unread": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "unread",
+        "events",
+        "by_kind"
+      ],
+      "type": "object"
+    },
     "Usage": {
       "description": "DESIGN §5.3 の `usage`。取れない項目は省略可。\n\nADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /\n`cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。\n`Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。",
       "properties": {
@@ -20418,6 +23645,15 @@
             "null"
           ]
         },
+        "duplicate_reads": {
+          "description": "ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path\nの 2 回目以降の回数）。tool_use を観測できない adapter は `None`。",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "input_tokens": {
           "format": "uint64",
           "minimum": 0,
@@ -20431,6 +23667,13 @@
           "minimum": 0,
           "type": [
             "integer",
+            "null"
+          ]
+        },
+        "session_resumed": {
+          "description": "ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、\n拒否されなかった）。session を扱わない adapter は `None`。",
+          "type": [
+            "boolean",
             "null"
           ]
         }
@@ -20537,6 +23780,85 @@
       },
       "required": [
         "cmd"
+      ],
+      "type": "object"
+    },
+    "WorkUnitCheckLog": {
+      "description": "2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log` の応答。その WU の最後の\n`IntegrationCheckStarted`（`index` 指定ならその index の最後のもの）のログの末尾。",
+      "properties": {
+        "cmd": {
+          "type": "string"
+        },
+        "duration_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "exit": {
+          "format": "int32",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "index": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "pass": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "running": {
+          "description": "対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。",
+          "type": "boolean"
+        },
+        "size": {
+          "description": "ログファイルの大きさ（バイト。まだ無ければ 0）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "started_at": {
+          "type": "string"
+        },
+        "tail": {
+          "description": "ログの末尾（既定 16 KiB・上限 64 KiB。UTF-8 の境界で切り、壊れたバイトは置き換える）。",
+          "type": "string"
+        },
+        "total": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "truncated": {
+          "description": "`tail` がファイルの先頭から始まっていない（前を切った）。",
+          "type": "boolean"
+        },
+        "work_unit_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "work_unit_id",
+        "key",
+        "index",
+        "total",
+        "cmd",
+        "started_at",
+        "running",
+        "size",
+        "truncated",
+        "tail"
       ],
       "type": "object"
     },
@@ -21092,6 +24414,25 @@
     "console_instruct_accepted": {
       "$ref": "#/$defs/ConsoleInstructAccepted"
     },
+    "cron_job": {
+      "$ref": "#/$defs/CronJobView"
+    },
+    "cron_job_create": {
+      "$ref": "#/$defs/CronJobCreateBody",
+      "description": "ADR-0131 D5: 定期実行（cron job）。作成・更新の本文、job（一覧・詳細）、履歴、手動実行の応答。"
+    },
+    "cron_job_list": {
+      "$ref": "#/$defs/CronJobList"
+    },
+    "cron_job_patch": {
+      "$ref": "#/$defs/CronJobPatchBody"
+    },
+    "cron_job_run_list": {
+      "$ref": "#/$defs/CronJobRunList"
+    },
+    "cron_run_result": {
+      "$ref": "#/$defs/CronRunResult"
+    },
     "daemon": {
       "$ref": "#/$defs/DaemonView"
     },
@@ -21110,6 +24451,9 @@
     },
     "decision_withdraw": {
       "$ref": "#/$defs/DecisionWithdrawBody"
+    },
+    "delivery_list": {
+      "$ref": "#/$defs/DeliveryList"
     },
     "doc_page": {
       "$ref": "#/$defs/DocPage"
@@ -21155,6 +24499,19 @@
     },
     "inbox": {
       "$ref": "#/$defs/Inbox"
+    },
+    "inbox_answer": {
+      "$ref": "#/$defs/InboxAnswerBody"
+    },
+    "inbox_answer_result": {
+      "$ref": "#/$defs/InboxAnswerResult"
+    },
+    "inbox_item": {
+      "$ref": "#/$defs/InboxItem"
+    },
+    "inbox_items": {
+      "$ref": "#/$defs/HumanInboxView",
+      "description": "ADR-0133 D5: human decisions and informational notices."
     },
     "integrate": {
       "$ref": "#/$defs/IntegrateBody"
@@ -21233,7 +24590,22 @@
       "$ref": "#/$defs/NewPlanSpec"
     },
     "new_task": {
-      "$ref": "#/$defs/NewTaskSpec"
+      "$ref": "#/$defs/NewTaskBody"
+    },
+    "notification_read": {
+      "$ref": "#/$defs/NoticeReadResult"
+    },
+    "notifications": {
+      "$ref": "#/$defs/NotificationsView"
+    },
+    "notifications_read_all": {
+      "$ref": "#/$defs/NoticeReadAllResult"
+    },
+    "notifications_read_all_body": {
+      "$ref": "#/$defs/ReadAllBody"
+    },
+    "notifications_unread_count": {
+      "$ref": "#/$defs/UnreadCountView"
     },
     "notify": {
       "$ref": "#/$defs/NotifyView",
@@ -21312,6 +24684,10 @@
     },
     "release_promote": {
       "$ref": "#/$defs/ReleasePromoteAccepted"
+    },
+    "release_promotion_preview": {
+      "$ref": "#/$defs/ReleasePromotionPreview",
+      "description": "ADR 2026-10-04-release-notes: `GET /releases/{sha12}/promotion-preview` と `GET /deliveries`。"
     },
     "releases": {
       "$ref": "#/$defs/Releases",
@@ -21411,7 +24787,7 @@
       "$ref": "#/$defs/TaskDetail"
     },
     "task_edit": {
-      "$ref": "#/$defs/TaskEdit",
+      "$ref": "#/$defs/TaskPatchBody",
       "description": "ADR-0044 D1: `PATCH /tasks/{id}` の本文と応答。"
     },
     "task_edit_result": {
@@ -21455,17 +24831,31 @@
     },
     "tree_file": {
       "$ref": "#/$defs/TreeFileView"
+    },
+    "work_unit_check_log": {
+      "$ref": "#/$defs/WorkUnitCheckLog",
+      "description": "2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。"
     }
   },
   "required": [
     "health",
     "problem",
     "inbox",
+    "inbox_items",
+    "inbox_item",
+    "inbox_answer",
+    "inbox_answer_result",
+    "notifications",
+    "notifications_unread_count",
+    "notification_read",
+    "notifications_read_all",
+    "notifications_read_all_body",
     "task_list",
     "task",
     "task_detail",
     "events_page",
     "run_list",
+    "work_unit_check_log",
     "artifact_list",
     "graph",
     "new_task",
@@ -21531,6 +24921,8 @@
     "notify_test",
     "releases",
     "release_promote",
+    "release_promotion_preview",
+    "delivery_list",
     "repo_list",
     "repo_create",
     "repo_patch",
@@ -21605,7 +24997,13 @@
     "decision_answer",
     "decision_withdraw",
     "decision_outcome",
-    "task_tree"
+    "task_tree",
+    "cron_job_create",
+    "cron_job_patch",
+    "cron_job",
+    "cron_job_list",
+    "cron_job_run_list",
+    "cron_run_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

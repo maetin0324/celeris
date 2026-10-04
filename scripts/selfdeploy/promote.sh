@@ -5,7 +5,7 @@
 #     - ライブ引き継ぎ（verify.json.live_ok が真で、いま動いている celeris の /health が `role` を持つ）
 #     - 停止 → 起動（live_ok が偽、または /health に `role` が無い＝この ADR 以前の版）
 #   のどちらかで切り替え、`current` / `previous` を更新する。すべて
-#   $CELERIS_STATE_DIR/backups/promote-<ts>.log に残る。
+#   $SD_LOGS/promote-<ts>.log に残る。
 set -euo pipefail
 
 SD_PROG=promote
@@ -56,8 +56,8 @@ done
 
 sd_require_json_tool
 TS="$(sd_stamp)"
-mkdir -p "$SD_BACKUPS"
-SD_LOG_FILE="$SD_BACKUPS/promote-$TS.log"
+mkdir -p "$SD_BACKUPS" "$SD_LOGS"
+SD_LOG_FILE="$SD_LOGS/promote-$TS.log"
 sd_log "promote $SHA12 (log: $SD_LOG_FILE)"
 
 REL="$(sd_release_dir "$SHA12")"
@@ -67,8 +67,13 @@ REL="$(sd_release_dir "$SHA12")"
 # 途中終了した場合も含めて EXIT トラップで拾う）。`promoted.json`（成功）と対になる印で、
 # `GET /releases` の `items[].promote_failed` に写り、GUI が赤いバナーで出す。
 # 次の昇格の試みが始まるとき（celeris 側の `start_promote`）に消される — 古い失敗を引きずらない。
+#
+# ADR-0040 付記 2026-10-02: start の直前に置く昇格中の印（`$REL/promoting.json`）も、成功・失敗の
+# どちらでもここで消す（`update_links` の直後に消し損ねた場合、`sd_die` / `set -e` / シグナルでの途中終了）。
+PROMOTING_WRITTEN=false
 record_promote_failure() {
   local ec=$?
+  if [ "$PROMOTING_WRITTEN" = true ]; then sd_clear_promoting "$SHA12" || true; fi
   [ "$ec" -eq 0 ] && return
   [ -d "$REL" ] || return
   {
@@ -79,6 +84,8 @@ record_promote_failure() {
   } >"$REL/promote_failed.json" 2>/dev/null || true
 }
 trap record_promote_failure EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 [ -d "$REL" ] || sd_die "no such release: $REL"
 [ -x "$REL/bin/celeris" ] || sd_die "missing $REL/bin/celeris"
@@ -90,6 +97,22 @@ LIVE_OK="$(sd_json_get "$REL/verify.json" live_ok 2>/dev/null || echo false)"
 WANT_SCHEMA="$(sd_json_get "$REL/manifest.json" schema_version)"
 OLD="$(sd_current_sha)"
 sd_log "release=$SHA12 schema_version=$WANT_SCHEMA verify.live_ok=$LIVE_OK current=${OLD:-<none>}"
+
+# ---- 昇格の要約（ADR 2026-10-04-release-notes）------------------------------
+#
+# `current` から $SHA12 までに入る task・migration・schema を、**`current` を切り替える前に**ログへ出す。
+# 道具が無い・失敗したら警告だけで続ける（昇格を止めない）。JSON は promoted.json の `included` に使う。
+PREVIEW_JSON="$(mktemp "${TMPDIR:-/tmp}/promote-preview.XXXXXX")" || PREVIEW_JSON=""
+PREVIEW_OK=false
+PREVIEW_TXT=""
+if [ -x "$REL/bin/celerisctl" ] && [ -n "$PREVIEW_JSON" ] \
+  && PREVIEW_TXT="$("$REL/bin/celerisctl" release preview "$SHA12" --releases-dir "$SD_RELEASES" 2>/dev/null)" \
+  && "$REL/bin/celerisctl" release preview "$SHA12" --releases-dir "$SD_RELEASES" --json >"$PREVIEW_JSON" 2>/dev/null; then
+  PREVIEW_OK=true
+  printf '%s\n' "$PREVIEW_TXT" | while IFS= read -r line; do sd_log "preview: $line"; done
+else
+  sd_log "warning: promotion preview is not available (celerisctl release preview failed or is missing); continuing"
+fi
 
 # ---- systemd の unit があるか ----------------------------------------------
 
@@ -217,12 +240,22 @@ update_links() {
   fi
   sd_set_link "$SD_CURRENT" "$SHA12"
   sd_log "current  -> releases/$SHA12"
+  # `current` が新を指したので、以後の起動は印なしで認可される（ADR-0040 付記 規則 1）。
+  sd_clear_promoting "$SHA12"
+  PROMOTING_WRITTEN=false
+}
+
+# `celeris@$SHA12` を start する直前に呼ぶ（ADR-0040 付記: 未昇格の release は handoff も migrate もしない）。
+mark_promoting() {
+  sd_write_promoting "$SHA12" promote.sh "$MODE"
+  PROMOTING_WRITTEN=true
 }
 
 # ---- ライブ引き継ぎ --------------------------------------------------------
 
 promote_live() {
   backup_db
+  mark_promoting
   sd_log "systemctl --user start celeris@$SHA12"
   systemctl --user start "celeris@$SHA12" || sd_die "failed to start celeris@$SHA12"
   if ! poll_release "$SD_PROD_API/api/v1/health" release "$SHA12" role active 60; then
@@ -316,6 +349,7 @@ promote_stop_start() {
     sd_log "pre-start hook ok"
   fi
 
+  mark_promoting
   sd_log "systemctl --user start celeris@$SHA12"
   if ! systemctl --user start "celeris@$SHA12"; then
     sd_log "start celeris@$SHA12 failed"
@@ -385,23 +419,51 @@ case "$MODE" in
   stop-start) promote_stop_start ;;
 esac
 
+# ---- web/ の追従（ADR-0081 / web ADR-W3 付記 2026-10-02 (C)）----------------
+#
+# celeris と gui の切替が済んだ後に、旧 release の celeris-web@ が動いていれば新 release へ移す。
+# web-follow.sh は常に exit 0 の設計だが、万一失敗しても警告だけにして昇格は失敗にしない。
+# celeris@ の unit には触れない（web は daemon の handoff を起こさない）。
+WEB_FOLLOW="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/web-follow.sh"
+if [ -x "$WEB_FOLLOW" ]; then
+  "$WEB_FOLLOW" "$SHA12" "$OLD" 2>&1 | tee -a "$SD_LOG_FILE" >&2 \
+    || sd_log "warning: web-follow.sh $SHA12 ${OLD:-<none>} failed (promotion is not affected)"
+else
+  sd_log "warning: $WEB_FOLLOW not found; web was not moved to $SHA12"
+fi
+
 # ---- promoted.json（ADR-0041 D3）------------------------------------------
 #
 # 「このリリースが、いつ、どの版から、どうやって昇格したか」を**リリースの中に**残す。
 # `GET /releases` の `promoted_at` はこれを読むだけ（Phase 48 の逸脱 2「どこにも書かれていない」の解消）。
 # **git リポジトリには触れない**（人のチェックアウトを機械が fast-forward しない。ADR-0041 D3）。
 # `main` に反映されているかは `GET /releases` の `on_main` が読み取りで見せる。
+# preview の JSON から `{"releases": [...], "tasks": [{task_id,title}], "complete": bool}`。無ければ null。
+promoted_included_json() {
+  if [ "$PREVIEW_OK" != true ] || ! command -v python3 >/dev/null 2>&1; then printf 'null'; return 0; fi
+  python3 - "$PREVIEW_JSON" <<'PY' 2>/dev/null || printf 'null'
+import json, sys
+p = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps({
+    "releases": [r["sha12"] for r in p.get("releases", [])],
+    "tasks": [{"task_id": t["task_id"], "title": t.get("title")} for t in p.get("tasks", [])],
+    "complete": bool(p.get("complete")),
+}, ensure_ascii=False))
+PY
+}
 {
   printf '{\n'
   printf '  "promoted_at": %s,\n' "$(sd_json_str "$(sd_ts)")"
   printf '  "mode": %s,\n' "$(sd_json_str "$MODE")"
   if [ -n "$OLD" ]; then
-    printf '  "from": %s\n' "$(sd_json_str "$OLD")"
+    printf '  "from": %s,\n' "$(sd_json_str "$OLD")"
   else
-    printf '  "from": null\n'
+    printf '  "from": null,\n'
   fi
+  printf '  "included": %s\n' "$(promoted_included_json)"
   printf '}\n'
 } >"$REL/promoted.json"
+rm -f "$PREVIEW_JSON" 2>/dev/null || true
 sd_log "promoted.json: $REL/promoted.json (mode=$MODE from=${OLD:-<none>})"
 
 sd_log "promoted $SHA12 (mode=$MODE). backup: $BACKUP"

@@ -10,6 +10,7 @@ pub mod actions;
 pub mod add;
 pub mod approval;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の inbox と照合。
+pub mod behind_target;
 pub mod browser;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）の足回り。
 pub mod changes;
@@ -17,6 +18,7 @@ pub mod comment;
 /// ADR-0048 D1/D2（Phase 60a）: Console の一本の流れを組み立てる決定的な部品。
 pub mod console;
 pub mod conversation;
+pub mod cron_jobs;
 pub mod daemon;
 pub mod decision;
 pub mod delegate;
@@ -32,15 +34,19 @@ pub mod execution;
 pub mod followup;
 pub mod gate;
 pub mod graph;
+pub mod human_inbox;
 pub mod inbox;
 /// ADR-0047（Phase 61）: 知識ベース（`~/.local/share/celeris/knowledge` の Markdown が正本。git・索引・検索・`_inbox`）。
 pub mod knowledge;
+/// ADR-0131 D10: 日次の知識整理計画を検証し、差分と反映を決定的に作る。
+pub mod knowledge_curation;
 /// ADR-0044 D6（Phase 55）: 案件・途中目標の中止・一時停止・アーカイブ。
 pub mod lifecycle;
 /// ADR-0046 D5（Phase 59）: 担当の決定的な選び方（capability matching）。
 pub mod matching;
 pub mod memory;
 pub mod milestone_review;
+pub mod notify_feed;
 /// ADR-0074 D2（Phase F3 途中確認）: 工程の後の途中確認（`awaiting_human`）の判定と人の操作。
 pub mod phase_gate;
 pub mod plan;

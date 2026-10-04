@@ -18,6 +18,8 @@ fn weighted_tokens_applies_the_formula() {
         cache_read_tokens: Some(1000),
         cache_creation_tokens: Some(40),
         cost_usd: None,
+        duplicate_reads: None,
+        session_resumed: None,
     };
     // 100 + 0.1*1000 + 1.25*40 + 5*10 = 100 + 100 + 50 + 50 = 300
     let w = weighted_tokens(&usage, 5.0);

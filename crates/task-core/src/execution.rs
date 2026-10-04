@@ -604,6 +604,9 @@ pub enum RepairClass {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合で WU のブランチの merge が衝突した（repair WU
     /// `merge-<phase>-<key>` が Task の worktree で merge し、衝突だけを解消する）。
     MergeConflict,
+    /// ADR-0120 D2: review 前の target 同期（rebase）が衝突した。repair WU
+    /// `integration-repair-<n>` が成果を保ったまま rebase を完了させる。
+    IntegrationConflict,
 }
 
 impl RepairClass {
@@ -618,6 +621,7 @@ impl RepairClass {
             RepairClass::MergeBase => "merge_base",
             RepairClass::ReviewTimeout => "review_timeout",
             RepairClass::MergeConflict => "merge_conflict",
+            RepairClass::IntegrationConflict => INTEGRATION_REPAIR_BUCKET,
         }
     }
 
@@ -626,9 +630,10 @@ impl RepairClass {
         match self {
             RepairClass::Format => (12, 600),
             RepairClass::Lint => (20, 1200),
-            RepairClass::TestSmall | RepairClass::MergeBase | RepairClass::MergeConflict => {
-                (30, 1800)
-            }
+            RepairClass::TestSmall
+            | RepairClass::MergeBase
+            | RepairClass::MergeConflict
+            | RepairClass::IntegrationConflict => (30, 1800),
             RepairClass::ReviewerLocal(kind) => match kind {
                 ReviewerRepairKind::Format => (12, 600),
                 ReviewerRepairKind::Lint => (20, 1200),
@@ -772,7 +777,7 @@ fn classify_command(cmd: &str, reason: &str) -> Option<RepairClass> {
 /// の id）を外す。Crockford base32 の ULID は `F`・`M`・`T` を含みうるので、id の一部の `FMT` を
 /// `fmt` の語と誤読して、中身の不合格を format の repair に倒していた（nextest の gate で
 /// `rereview_from_failed_reuses_the_approved_human_child_and_only_reruns_the_reviewer` が約 0.04 % で
-/// `Done` になった原因。docs/progress/phase-G.md「SD-2 追記」）。`L`・`I`・`O` は ULID に出ないので
+/// `Done` になった原因。agent-docs/progress/2026-10-02-docs-layout/refs-crates.md「SD-2 追記」）。`L`・`I`・`O` は ULID に出ないので
 /// `lint` / `clippy` / `format` は id から生じないが、同じ理由で一律に外す。
 fn classify_reviewer_reason(reason: &str) -> Option<RepairClass> {
     let r = without_ulid_tokens(reason).to_lowercase();
@@ -917,6 +922,315 @@ pub fn build_repair_objective(
 `{\"yield\":{\"plan_issue\":\"<何が範囲外のどこで落ちたか>\"}}` を書いて終えよ。\n",
         );
     }
+    s
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0120: review 前同期の衝突を成果保持型 IntegrationRepair で解消する
+// ---------------------------------------------------------------------------
+
+/// ADR-0120 D2/D4: integration repair WU の bucket（`RepairClass::IntegrationConflict.bucket()`、
+/// `RepairScheduled.class`、`WorkUnitTransitioned.reason`）。
+pub const INTEGRATION_REPAIR_BUCKET: &str = "integration_repair";
+/// ADR-0120 D2: integration repair WU の title（`repair (<bucket>): …` の字句規則で bucket を読み戻せる）。
+pub const INTEGRATION_REPAIR_TITLE: &str = "repair (integration_repair): target 同期の衝突解消";
+
+/// ADR-0120 D2: `n` 件目（1 始まり）の integration repair WU の key（`integration-repair-<n>`）。
+pub fn integration_repair_key(n: u32) -> String {
+    format!("integration-repair-{n}")
+}
+
+/// ADR-0120 D4: その WU が integration repair か（`kind = repair` かつ title の bucket が
+/// `integration_repair`）。回数はこれに当たる work_units の行数で数える（専用の欄を足さない）。
+pub fn is_integration_repair_unit(kind: crate::WorkUnitKind, title: &str) -> bool {
+    kind == crate::WorkUnitKind::Repair
+        && title
+            .strip_prefix("repair (")
+            .and_then(|rest| rest.split(')').next())
+            == Some(INTEGRATION_REPAIR_BUCKET)
+}
+
+/// ADR-0120 D4: task の work_units（`(kind, title)` の列）のうち integration repair の数。
+/// 人の `Rereview`・`Reopen` でも数え直さない（task の寿命で数える）。
+pub fn count_integration_repairs<'a>(
+    units: impl IntoIterator<Item = (crate::WorkUnitKind, &'a str)>,
+) -> u32 {
+    let n = units
+        .into_iter()
+        .filter(|(kind, title)| is_integration_repair_unit(*kind, title))
+        .count();
+    u32::try_from(n).unwrap_or(u32::MAX)
+}
+
+/// ADR-0120 D5: `conflict_files` の正規化（空行を除き、重複を除いてパス順に並べる）。
+pub fn normalize_conflict_files(files: &[String]) -> Vec<String> {
+    let set: std::collections::BTreeSet<&str> = files
+        .iter()
+        .map(|f| f.trim())
+        .filter(|f| !f.is_empty())
+        .collect();
+    set.into_iter().map(str::to_string).collect()
+}
+
+/// ADR-0120 D4/D5: `Event::IntegrationRepairExhausted.reason`（固定値）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationRepairExhaustReason {
+    /// D4.1: 起票しようとした時点で上限（`MAX_INTEGRATION_REPAIRS`）に達していた。
+    LimitReached,
+    /// D4.2: 修復 WU が `plan_issue` で終えた。
+    PlanIssue,
+    /// D4.3: 修復 WU が `failed` になった。
+    WorkUnitFailed,
+    /// D4.3: 修復 WU が `budget_exhausted` のまま再開できない。
+    BudgetExhausted,
+    /// D4.4: 成果の保持が確認できない（祖先関係・dirty・rebase 進行中）。
+    ResultUntrusted,
+    /// D4.5: 衝突時の `rebase --abort` が失敗した。
+    AbortFailed,
+    /// D4.5: worktree が消えた、remote/shared workspace に変わった。
+    WorktreeUnavailable,
+}
+
+impl IntegrationRepairExhaustReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LimitReached => "limit_reached",
+            Self::PlanIssue => "plan_issue",
+            Self::WorkUnitFailed => "work_unit_failed",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::ResultUntrusted => "result_untrusted",
+            Self::AbortFailed => "abort_failed",
+            Self::WorktreeUnavailable => "worktree_unavailable",
+        }
+    }
+}
+
+/// ADR-0120 D5: 最後の integration repair の結末。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum IntegrationRepairState {
+    Scheduled,
+    Resolved,
+    Exhausted,
+}
+
+/// ADR-0120 D5: events から組み立てた task の integration repair の現在の状況（`TaskDetail` の
+/// 投影の材料。`max_attempts` は呼び出し側が `MAX_INTEGRATION_REPAIRS` を足す）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationRepairStatus {
+    pub state: IntegrationRepairState,
+    pub work_unit_id: Option<String>,
+    pub attempt: u32,
+    pub repo_id: crate::RepoId,
+    /// 対応する scheduled event の値（scheduled の無い exhausted では `None`）。
+    pub target_ref: Option<String>,
+    /// resolved は再同期時、それ以外は最後の event の値。
+    pub target_sha: String,
+    pub before_sha: Option<String>,
+    pub conflict_files: Vec<String>,
+    pub reason: Option<IntegrationRepairExhaustReason>,
+    pub rollback_to_sha: Option<String>,
+    pub fallback: Option<bool>,
+}
+
+/// ADR-0120 D5: 起票時の snapshot（WU 応答の `integration_repair` 欄の材料）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IntegrationRepairSnapshot {
+    pub repo_id: crate::RepoId,
+    pub target_ref: String,
+    pub target_sha: String,
+    pub before_sha: String,
+    pub conflict_files: Vec<String>,
+    pub attempt: u32,
+}
+
+/// ADR-0120 D5: `work_unit_id` ごとの起票時 snapshot（`IntegrationRepairScheduled` だけから読む。
+/// WU の kind・title から推測しない）。
+pub fn integration_repair_snapshots(
+    events: &[crate::Event],
+) -> std::collections::BTreeMap<String, IntegrationRepairSnapshot> {
+    let mut out = std::collections::BTreeMap::new();
+    for e in events {
+        if let crate::Event::IntegrationRepairScheduled {
+            work_unit_id,
+            repo_id,
+            target_ref,
+            target_sha,
+            before_sha,
+            conflict_files,
+            attempt,
+            ..
+        } = e
+        {
+            out.insert(
+                work_unit_id.clone(),
+                IntegrationRepairSnapshot {
+                    repo_id: *repo_id,
+                    target_ref: target_ref.clone(),
+                    target_sha: target_sha.clone(),
+                    before_sha: before_sha.clone(),
+                    conflict_files: conflict_files.clone(),
+                    attempt: *attempt,
+                },
+            );
+        }
+    }
+    out
+}
+
+/// ADR-0120 D5: 最後の integration repair event と、対応する scheduled event から現在の状況を
+/// 決定的に組み立てる（`events` は古い順）。履歴が無ければ `None`。
+pub fn integration_repair_status(events: &[crate::Event]) -> Option<IntegrationRepairStatus> {
+    let snapshots = integration_repair_snapshots(events);
+    let last = events.iter().rev().find(|e| {
+        matches!(
+            e,
+            crate::Event::IntegrationRepairScheduled { .. }
+                | crate::Event::IntegrationRepairResolved { .. }
+                | crate::Event::IntegrationRepairExhausted { .. }
+        )
+    })?;
+    let snap = |wu: Option<&String>| wu.and_then(|id| snapshots.get(id));
+    let status = match last {
+        crate::Event::IntegrationRepairScheduled {
+            work_unit_id,
+            repo_id,
+            target_ref,
+            target_sha,
+            before_sha,
+            conflict_files,
+            attempt,
+            ..
+        } => IntegrationRepairStatus {
+            state: IntegrationRepairState::Scheduled,
+            work_unit_id: Some(work_unit_id.clone()),
+            attempt: *attempt,
+            repo_id: *repo_id,
+            target_ref: Some(target_ref.clone()),
+            target_sha: target_sha.clone(),
+            before_sha: Some(before_sha.clone()),
+            conflict_files: conflict_files.clone(),
+            reason: None,
+            rollback_to_sha: None,
+            fallback: None,
+        },
+        crate::Event::IntegrationRepairResolved {
+            work_unit_id,
+            repo_id,
+            target_sha,
+            attempt,
+            ..
+        } => {
+            let s = snap(Some(work_unit_id));
+            IntegrationRepairStatus {
+                state: IntegrationRepairState::Resolved,
+                work_unit_id: Some(work_unit_id.clone()),
+                attempt: *attempt,
+                repo_id: *repo_id,
+                target_ref: s.map(|s| s.target_ref.clone()),
+                target_sha: target_sha.clone(),
+                before_sha: s.map(|s| s.before_sha.clone()),
+                conflict_files: s.map(|s| s.conflict_files.clone()).unwrap_or_default(),
+                reason: None,
+                rollback_to_sha: None,
+                fallback: None,
+            }
+        }
+        crate::Event::IntegrationRepairExhausted {
+            work_unit_id,
+            repo_id,
+            target_sha,
+            before_sha,
+            attempt,
+            reason,
+            rollback_to_sha,
+            fallback,
+        } => {
+            let s = snap(work_unit_id.as_ref());
+            IntegrationRepairStatus {
+                state: IntegrationRepairState::Exhausted,
+                work_unit_id: work_unit_id.clone(),
+                attempt: *attempt,
+                repo_id: *repo_id,
+                target_ref: s.map(|s| s.target_ref.clone()),
+                target_sha: target_sha.clone(),
+                before_sha: Some(before_sha.clone()),
+                conflict_files: s.map(|s| s.conflict_files.clone()).unwrap_or_default(),
+                reason: Some(*reason),
+                rollback_to_sha: rollback_to_sha.clone(),
+                fallback: Some(*fallback),
+            }
+        }
+        _ => return None,
+    };
+    Some(status)
+}
+
+/// ADR-0120 D2: integration repair WU の objective（決定的な文字列合成のみ。I/O は無い）。
+/// `build_repair_objective` は再利用しない（検査の失敗ではなく、入力も違うため）。
+/// `scope` が `Some` かつ空でなければ、`build_repair_objective` と同じ文面で許可範囲と範囲外の
+/// 扱いを足す。
+pub fn build_integration_repair_objective(
+    target_ref: &str,
+    target_sha: &str,
+    before_sha: &str,
+    conflict_files: &[String],
+    task_title: &str,
+    task_objective: &str,
+    scope: Option<&RepairScope>,
+) -> String {
+    let objective_preview: String = task_objective.chars().take(600).collect();
+    let mut s = String::new();
+    s.push_str(&format!(
+        "review 前の target 同期が衝突した。task の成果を保ったまま、`git rebase {target_sha}` を\
+完了させよ。衝突の解消以外の変更をするな。\n\n"
+    ));
+    s.push_str(&format!(
+        "## 分類\n{INTEGRATION_REPAIR_BUCKET}\n\n## 同期先\n- target_ref: {target_ref}\n- target_sha: {target_sha}\n\n"
+    ));
+    s.push_str(&format!(
+        "## 衝突前の HEAD\n- before_sha: {before_sha}\n\
+`git reset --hard`・`git checkout -- .`・`push --force` で成果を捨てるな。やり直すときは \
+`git rebase --abort` で before_sha に戻れ。\n\n"
+    ));
+    s.push_str("## 衝突したファイル\n");
+    for f in normalize_conflict_files(conflict_files) {
+        s.push_str(&format!("- {f}\n"));
+    }
+    s.push_str(&format!(
+        "\n## 解消の方針\n\
+- 両側の意図を残せ。target 側の変更を消すな。\n\
+- 解消後に `git rebase --continue` で rebase を完了せよ。\n\
+- 次の検査を自分で実行して exit 0 を確かめよ:\n\
+  - `git merge-base --is-ancestor {target_sha} HEAD`\n\
+  - `test -z \"$(git status --porcelain)\"`\n"
+    ));
+    s.push_str(&format!(
+        "\n## 対象タスク（参考。全文ではない）\n- title: {task_title}\n- objective（先頭 600 文字）: {objective_preview}\n"
+    ));
+    if let Some(scope) = scope
+        && !scope.is_empty()
+    {
+        if !scope.allowed_paths.is_empty() {
+            s.push_str("\n## 変更してよい範囲\n");
+            for p in &scope.allowed_paths {
+                s.push_str(&format!("- {p}\n"));
+            }
+        }
+        if !scope.scope_checks.is_empty() {
+            s.push_str("\n## 範囲外差分の検査\n");
+            for c in &scope.scope_checks {
+                s.push_str(&format!("- {c}\n"));
+            }
+            s.push_str("解消した後にこれも実行して exit を確かめよ。\n");
+        }
+    }
+    s.push_str(
+        "\n解消できない（両側の意図が矛盾する・設計判断が要る・許可範囲の外の衝突）なら、\
+`git rebase --abort` で before_sha に戻してから、result.json に \
+`{\"yield\":{\"plan_issue\":\"<どのファイルで何が矛盾したか>\"}}` を書いて終えよ。\n",
+    );
     s
 }
 

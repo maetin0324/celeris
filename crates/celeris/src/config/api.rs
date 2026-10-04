@@ -31,7 +31,7 @@ pub struct ApiConfig {
 }
 
 impl ApiConfig {
-    /// `token_file` の内容（前後の空白を除く）。読めない・空なら設定エラー。トークンの値はエラー文にもログにも出さない（`docs/gui/api.md` §1.1）。
+    /// `token_file` の内容（前後の空白を除く）。読めない・空なら設定エラー。トークンの値はエラー文にもログにも出さない（`docs/api/v1/gui-api.md` §1.1）。
     pub fn read_token(&self) -> Result<Option<String>, ConfigError> {
         let Some(path) = &self.token_file else {
             return Ok(None);

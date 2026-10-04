@@ -16,18 +16,27 @@ use super::{Config, ConfigError, ProviderConfig};
 pub struct SessionsConfig {
     #[serde(default = "default_rollover_tokens")]
     pub rollover_tokens: u64,
+    /// ADR-0140 D1 #4: WU の execute continuation（予算切れ・yield の続き）を同じ Claude Code session で
+    /// resume するか（既定 `true`）。`false` なら毎回 checkpoint 前置きの新しい session（導入前の挙動）。
+    #[serde(default = "default_continuation_resume")]
+    pub continuation_resume: bool,
 }
 
 impl Default for SessionsConfig {
     fn default() -> Self {
         Self {
             rollover_tokens: default_rollover_tokens(),
+            continuation_resume: default_continuation_resume(),
         }
     }
 }
 
 fn default_rollover_tokens() -> u64 {
     400_000
+}
+
+fn default_continuation_resume() -> bool {
+    true
 }
 
 /// `[reviewer]`（ADR-0010 D9, P-30）: `Check::Reviewer` の判定 run に使う adapter / tier。
@@ -115,6 +124,7 @@ impl Config {
             delivery: task_ops::delivery::DeliveryPolicy {
                 projects: self.selfdeploy.delivery_projects.clone(),
                 repo: self.selfdeploy.repo.clone(),
+                default_departments: self.selfdeploy.delivery_default_departments.clone(),
             },
             max_concurrency: self.max_concurrency,
             lease_grace: Duration::from_secs(self.lease_grace_secs),
@@ -158,19 +168,10 @@ impl Config {
                 default_mounts: self.knowledge.mounts().unwrap_or_default(),
                 // ADR-0052 D1（Phase 64）: dispatch の直前に `GET <base_url>/models` を当てる先。
                 langmem_base_url: self.knowledge.langmem.base_url.clone(),
-                // Phase 65b: probe の `Authorization: Bearer` に使う平文のトークン（`llm-proxy` の
-                // ように `/v1/models` が認証を要求する上流を `[knowledge.langmem].base_url` に
-                // 指したときのため）。`[secrets] dir` が無い・見つからないなら `None`（検査は従来どおり
-                // トークン無しで行い、401/403 は `Unknown` として扱われる）。**値はここにしか無い**
-                // （`build_adapters` の langmem アダプタと同じ解決。ログには出さない）。
-                langmem_api_key: self
-                    .knowledge
-                    .langmem
-                    .api_key_secret
-                    .as_deref()
-                    .and_then(|id| {
-                        crate::resolve_secret(self.secrets.as_ref().map(|s| s.dir.as_path()), id)
-                    }),
+                // Phase 65b / ADR-0139 D2: probe の `Authorization: Bearer` に使う平文のトークン。
+                // `build_adapters` の langmem アダプタと同じ `Config::langmem_api_key`（proxy を指すなら
+                // `[api]` のトークン）。**値はここにしか無い**（ログには出さない）。
+                langmem_api_key: self.langmem_api_key(),
                 // ADR-0052 D2: `knowledge` ハーネスの `fallback`（組み込みの既定は tier `cheap`）。
                 fallback_tier: self
                     .harness_registry()
@@ -219,6 +220,7 @@ impl Config {
                 parallel: self.execution.parallel,
                 max_parallel_work_units: self.execution.max_parallel_work_units,
                 max_cos_runs: self.execution.max_cos_runs,
+                continuation_session_resume: self.sessions.continuation_resume,
                 // Phase F5-fix3: config.toml に欄は無い（ADR-0072 D18 / ADR-0074 §4 の既定のまま）。
                 // ADR-0079 D3（Phase R1a）: `[execution.tree]` は plan/3 の検証だけに効く。
                 limits: task_core::ExecutionLimits {

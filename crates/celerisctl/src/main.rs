@@ -17,6 +17,8 @@ use commands::browser::{self as browser_cmd, BrowserCommand};
 use commands::build_cache::{self, BuildCacheCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
+use commands::cron::{self as cron_cmd, CronCommand};
+use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
 use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
@@ -27,11 +29,13 @@ use commands::plan::{self, PlanArgs};
 use commands::plan_lint;
 use commands::projects::{self, ProjectsCommand};
 use commands::query::{self, LogArgs, LsArgs, ShowArgs};
+use commands::release::{self as release_cmd, ReleaseCommand};
 use commands::replay::{self, ReplayArgs};
 use commands::rereview::{self, RereviewArgs};
 use commands::retry::{self, RetryArgs};
 use commands::routing::{self as routing_cmd, RoutingCommand};
 use commands::scratch::{self as scratch_cmd, ScratchCommand};
+use commands::skills::{self as skills_cmd, SkillsCommand};
 use commands::worker::{self, WorkerCommand};
 use commands::workspace::{self, WorkspaceCommand};
 use error::CliError;
@@ -54,6 +58,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// ADR 2026-10-04-release-notes: `notes`（リリースの説明を書く）/ `preview`（昇格の要約）。DB は開かない。
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
     /// ADR-0075（Phase G1）: scratch pool（`status [--json]` / `gc [--dry-run]` / 外部 lease の `lease` / `touch` /
     /// `release` / `env`）。`lease` 系は DB を開かない。`status` / `gc` は DB があれば読む（daemon と同じ分類）。
     Scratch {
@@ -103,6 +112,11 @@ enum Command {
         #[command(subcommand)]
         command: KnowledgeCommand,
     },
+    /// ADR-0122 D1: repo に写した skill を KB へ取り込む（`skills import <dir>`）。**DB を開かない**。
+    Skills {
+        #[command(subcommand)]
+        command: SkillsCommand,
+    },
     /// ADR-0056 D1（Phase 78）: MCP クライアントの発行・一覧・失効（`client`）、stdio 橋（`stdio`）。
     /// `stdio` 以外は DB を直接開く。
     Mcp {
@@ -118,6 +132,19 @@ enum Command {
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
+    },
+    /// ADR-0131 D5: cron jobs through the daemon API.
+    Cron {
+        #[command(subcommand)]
+        command: CronCommand,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
+    /// ADR-0131 付記 D12: 日次知識整理の `curation-plan.json` を daemon と同じ規則で点検する
+    /// （`curation validate`）。DB を開かず、ネットワークも使わない。
+    Curation {
+        #[command(subcommand)]
+        command: CurationCommand,
     },
     /// ADR-0069 Phase 118 D3: `routing show`。tier → 実行モデル/effort の表。DB には触らない。
     Routing {
@@ -212,9 +239,12 @@ fn followups_target(cli_db: Option<&Path>) -> Option<PathBuf> {
 fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<ExitCode, CliError> {
     match command {
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
+        Command::Cron { .. } => unreachable!("handled before store open"),
+        Command::Curation { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
+        Command::Release { .. } => unreachable!("handled before store open"),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),
@@ -239,6 +269,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         // `main` が先に処理する（DB を開かない場合があるため）。
         Command::Knowledge { .. } => unreachable!("handled before the store is opened"),
         Command::Mcp { .. } => unreachable!("handled before the store is opened"),
+        Command::Skills { .. } => unreachable!("handled before the store is opened"),
         Command::Db { .. } => unreachable!("handled before the store is opened"),
         Command::Worker { command } => match command {
             WorkerCommand::Run(args) => worker::run_run(store, args),
@@ -252,6 +283,15 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Scratch { command } = cli.command {
         return match scratch_cmd::run(cli.db, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Release { command } = cli.command {
+        return match release_cmd::run(command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");
@@ -292,6 +332,25 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Cron { command, config } = cli.command {
+        return match cron_cmd::run(config, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // ADR-0131 付記 D12: `curation validate` はファイルだけを読む（DB を開かない）。
+    if let Command::Curation { command } = cli.command {
+        return match curation_cmd::run(command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
                 ExitCode::FAILURE
             }
         };
@@ -341,6 +400,16 @@ fn main() -> ExitCode {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    // ADR-0122 D1: `skills import` も KB だけを読み書きする（DB を開かない）。
+    if let Command::Skills { command } = cli.command {
+        return match skills_cmd::run(command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
                 ExitCode::FAILURE
             }
         };

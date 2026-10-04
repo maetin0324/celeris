@@ -1,4 +1,4 @@
-//! ワーカープロトコル v1 の型（DESIGN §5.3, ADR-0003 D2, `docs/protocol/worker-protocol.md`）。
+//! ワーカープロトコル v1 の型（ADR-0003 D2, `docs/protocol/worker-protocol.md`）。
 //! JSON Schema は `schemars` で生成し `docs/protocol/worker-protocol.schema.json` と
 //! テストで一致を検証する（ADR-0003 D6）。
 
@@ -245,7 +245,7 @@ pub struct ConversationTurn {
 /// `context.conversation_addressee`（ADR-0033 D4 / Phase 28）: この run が対話用タスクなら、相手が
 /// 秘書かそれ以外かを表す。対話でない run では `None`。この値そのものは判断せず、`preamble::render`
 /// が対話専用の指示文（作業を始めない・委譲不可）を出し分けるためだけに使う純粋なデータ
-/// （判定はディスパッチャが `task.conversation` と組織図から決定的に行う。DESIGN 原則 1）。
+/// （判定はディスパッチャが `task.conversation` と組織図から決定的に行う。ADR-0001 D2 原則 1）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationAddressee {
@@ -254,7 +254,7 @@ pub enum ConversationAddressee {
 }
 
 /// ADR-0054 D2（Phase 68）: CoS の対話 run に許す**読み取りだけの道具**（`celerisctl` のサブコマンド。
-/// `docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
+/// `agent-docs/adr/0054-stateful-sessions-and-streaming-chat.md` D2: 「celerisctl knowledge search|get、
 /// タスク・案件の一覧と詳細の read API」）。CoS 以外の対話・作業 run には効かない（`ConversationAddressee`
 /// が `Secretary` のときだけ、各アダプタがこの一覧を自分のツール許可の書式に写す）。
 /// 書く操作（`add` / `plan` / `approve` / `cancel` 等）は含めない。
@@ -269,7 +269,7 @@ pub const CONVERSATION_READONLY_CELERISCTL: &[&str] = &[
 
 /// `context.recent_work[]`（ADR-0033 D4 / Phase 33: 実機の事故 — 担当が自分の直近の仕事を知らずに
 /// 「対象タスク ID が必要です」と聞き返した — の再発防止）。対話 run にだけ、その担当の直近の仕事を渡す。
-/// 生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。DESIGN 原則 1）。
+/// 生成は決定的（ストアのタスクとイベントから組む。LLM は使わない。ADR-0001 D2 原則 1）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RecentWork {
     pub task_id: TaskId,
@@ -532,10 +532,11 @@ pub struct RunContext {
     /// ADR-0056 D3: 担当ノードの実効 profile が継いだ `skills_mounts`（Phase 78）のうち、KB の
     /// `skills/<name>/` に実在するものだけ（本文は含まない。`path` の `SKILL.md` をアダプタが読む）。
     /// 見つからない名前は run を落とさず、ディスパッチャが `status` の進行イベントを 1 行出して省く
-    /// （このフィールドには乗らない）。届け方はアダプタごと（`claude-code` は `.claude/skills/<name>/`
-    /// へコピー、`codex` は `AGENTS.md` の節、`acp` は前置きに埋め込む）。研究系アダプタ
-    /// （paperqa / local-deep-research / langmem）は無視する。空なら省略され、前置き・作業場所は
-    /// Phase 78 までと 1 バイトも変わらない。
+    /// （このフィールドには乗らない）。ADR-0127: `claude-code` は `.claude/skills/<name>/`、
+    /// `codex`・`acp` は `.agents/skills/<name>/` へ付属ファイルごとコピーする。後者の
+    /// `AGENTS.md` 節・前置きには名前・説明・SKILL.md の相対パスだけを載せる。
+    /// 研究系アダプタ（paperqa / local-deep-research / langmem）は無視する。
+    /// 空ならコピーを掃除し、以前の `AGENTS.md` の celeris 節も取り除く。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<SkillMount>,
     // ---- ADR-0056 D3（Phase 79）: ここまで ----
@@ -566,6 +567,24 @@ pub struct RunContext {
     /// プロンプトは変わらない。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub decision_requests: bool,
+    /// ADR-0124 D4: planner を挟まない直行経路（`route = direct`・shadow でない）の implementation run
+    /// だけ `Some`。`build_execute_prompt` が「直行経路（planner なし）」の節を出す。`None` の run の
+    /// プロンプトは 1 バイトも変わらない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_route: Option<DirectRouteContext>,
+}
+
+/// `context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DirectRouteContext {
+    /// 判定の規則の版（`direct-route/1` 等）。
+    pub policy_version: String,
+    /// gate の compound/score を直行で上書きしたなら `true`。
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub overrode_gate: bool,
+    /// 満たした条件を `"<rule_id>: <detail>"` の形で 1 行ずつ。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasons: Vec<String>,
 }
 
 /// `context.execution_planner`（ADR-0072 D13/D14。Phase E3）: 計画を作らせる run に渡す、

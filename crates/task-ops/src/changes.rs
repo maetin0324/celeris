@@ -5,6 +5,8 @@
 //! - [`changes`] — リポジトリ 1 つ分の差分の要約（base / head / ahead / ファイル一覧 / 汚れ）
 //! - [`file_diff`] — 1 ファイルの unified diff（200 KiB で切る）
 //! - [`merge_into_default_branch`] — 一時 worktree で rebase → default_branch を fast-forward
+//! - [`sync_onto_target`] — review 前に task の worktree を最新の target へ同期する（ADR-0118 D2。
+//!   直線 branch は rebase、merge commit を含む branch は target を merge）
 //! - [`discard`] / [`remove_worktree_and_branch`] — worktree とブランチを消す
 //! - [`push_branch`] / [`gh_*`] — `origin` へ push して `gh` で PR を作る・見る・merge する
 //!
@@ -13,6 +15,7 @@
 //!
 //! **押すのは人だけ**（SPEC §3.6 / ADR-0043 D5）。ワーカーのプロトコルにはこの経路を出さない。
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -70,10 +73,15 @@ impl CmdOutput {
 
 /// 起動して、`timeout` を過ぎたら殺す。パイプは別スレッドで読み切る（詰まらせない）。
 /// 起動そのものに失敗したら `None`（`git` / `gh` が無い）。
+///
+/// 子は自分のプロセスグループに入れ、時間切れでは**グループごと**殺す。子だけを殺すと、
+/// 孫（`git` の `ssh`、`sh -c` の中のコマンド）がパイプを握ったまま残り、読み切りの join が
+/// 孫の終わりまで待って上限が効かない。
 fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+        .stderr(Stdio::piped())
+        .process_group(0);
     let mut child = cmd.spawn().ok()?;
     let out_pipe = child.stdout.take();
     let err_pipe = child.stderr.take();
@@ -88,6 +96,7 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
             Ok(None) => {
                 if Instant::now() >= deadline {
                     timed_out = true;
+                    kill_group(child.id());
                     let _ = child.kill();
                     break child.wait().ok();
                 }
@@ -105,6 +114,18 @@ fn run(mut cmd: Command, timeout: Duration) -> Option<CmdOutput> {
         stderr,
         timed_out,
     })
+}
+
+/// `process_group(0)` で起こした子のグループ（pgid = 子の pid）へ SIGKILL を送る。
+/// task-ops は signal の crate を持たないので `kill(1)` に頼る。失敗しても呼び出し側が
+/// `child.kill()` で子だけは殺す。
+fn kill_group(pid: u32) {
+    let _ = Command::new("kill")
+        .args(["-KILL", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 fn read_all(pipe: Option<impl std::io::Read>) -> String {
@@ -168,6 +189,106 @@ fn git_line(dir: &Path, args: &[&str]) -> Option<String> {
     }
     let line = out.stdout.trim().to_string();
     if line.is_empty() { None } else { Some(line) }
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0130 D2: run / WU の actual write-set（確定差分）の採取
+
+/// `base..HEAD` の確定差分（コミット済みの path だけ）。`dirty` は未コミットの編集・追跡外の
+/// ファイルがあったか（あれば記録は `incomplete`。未コミットの path は `paths` に入れない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedWriteSet {
+    pub base_sha: String,
+    pub head_sha: String,
+    pub paths: Vec<String>,
+    pub dirty: bool,
+}
+
+/// run 開始時の HEAD（ADR-0130 D2: 開始前に固定する）。worktree があればその HEAD、無ければ
+/// （これから `worktree add` する）ブランチの先端、ブランチも無ければ切り出す base。
+pub fn run_start_head(
+    dir: &Path,
+    repo: &Path,
+    branch: &str,
+    fallback_base: &str,
+) -> Option<String> {
+    if dir.join(".git").exists() {
+        return git_line(dir, &["rev-parse", "--verify", "HEAD^{commit}"]);
+    }
+    git_line(
+        repo,
+        &[
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}^{{commit}}"),
+        ],
+    )
+    .or_else(|| {
+        git_line(
+            repo,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{fallback_base}^{{commit}}"),
+            ],
+        )
+    })
+}
+
+/// `git diff --name-only -z --no-renames <base>..HEAD` を `dir` で取る（ADR-0130 D2）。
+/// rename は旧名・新名を両方数え、ソート・重複排除する。git が起きない・SHA が読めない・
+/// path が UTF-8 でないときは `Err`（呼び出し側は `unavailable` として残し、run は落とさない）。
+pub fn committed_write_set(dir: &Path, base: &str) -> Result<CommittedWriteSet, String> {
+    let resolve = |rev: &str| {
+        let out = git(
+            dir,
+            &["rev-parse", "--verify", &format!("{rev}^{{commit}}")],
+            GIT_TIMEOUT,
+        )
+        .ok_or_else(|| "git did not start".to_string())?;
+        if !out.ok {
+            return Err(format!("cannot resolve {rev}: {}", out.why()));
+        }
+        Ok(out.stdout.trim().to_string())
+    };
+    let base_sha = resolve(base)?;
+    let head_sha = resolve("HEAD")?;
+    let range = format!("{base_sha}..{head_sha}");
+    let out = git(
+        dir,
+        &["diff", "--name-only", "-z", "--no-renames", &range],
+        GIT_TIMEOUT,
+    )
+    .ok_or_else(|| "git did not start".to_string())?;
+    if !out.ok {
+        return Err(format!("git diff {range}: {}", out.why()));
+    }
+    let mut paths = parse_name_only_z(&out.stdout)?;
+    paths.sort();
+    paths.dedup();
+    let dirty = is_dirty(dir).ok_or_else(|| "git status failed".to_string())?;
+    Ok(CommittedWriteSet {
+        base_sha,
+        head_sha,
+        paths,
+        dirty,
+    })
+}
+
+/// `--name-only -z` の出力（NUL 区切り）を path の並びにする。UTF-8 でない path（読み込みで
+/// U+FFFD に置き換わったもの）があれば `Err`（実績を偽らない）。
+pub fn parse_name_only_z(text: &str) -> Result<Vec<String>, String> {
+    text.split('\0')
+        .filter(|p| !p.is_empty())
+        .map(|p| {
+            if p.contains('\u{FFFD}') {
+                Err(format!("non UTF-8 path: {p}"))
+            } else {
+                Ok(p.to_string())
+            }
+        })
+        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -710,44 +831,10 @@ fn rebase_and_advance(
     default_sha: &str,
     checked_out: bool,
 ) -> MergeOutcome {
-    let rebase = git(temp_dir, &["rebase", default_sha], GIT_WRITE_TIMEOUT);
-    match rebase {
-        Some(o) if o.ok => {}
-        Some(o) => {
-            let files = git(
-                temp_dir,
-                &["diff", "--name-only", "--diff-filter=U"],
-                GIT_TIMEOUT,
-            )
-            .filter(|o| o.ok)
-            .map(|o| {
-                o.stdout
-                    .lines()
-                    .map(str::trim)
-                    .filter(|l| !l.is_empty())
-                    .map(str::to_string)
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-            let _ = git(temp_dir, &["rebase", "--abort"], GIT_WRITE_TIMEOUT);
-            if files.is_empty() && !o.stdout.contains("CONFLICT") && !o.stderr.contains("CONFLICT")
-            {
-                return MergeOutcome::Failed {
-                    detail: format!("rebase に失敗しました: {}", o.why()),
-                };
-            }
-            return MergeOutcome::Conflict { files };
-        }
-        None => {
-            return MergeOutcome::Failed {
-                detail: "git を起動できませんでした".to_string(),
-            };
-        }
-    }
-    let Some(new_sha) = git_line(temp_dir, &["rev-parse", "HEAD"]) else {
-        return MergeOutcome::Failed {
-            detail: "rebase の結果を読めませんでした".to_string(),
-        };
+    let new_sha = match rebase_onto(temp_dir, default_sha) {
+        RebaseStep::Done { head_sha } => head_sha,
+        RebaseStep::Conflict { files, .. } => return MergeOutcome::Conflict { files },
+        RebaseStep::Failed { detail, .. } => return MergeOutcome::Failed { detail },
     };
     if checked_out {
         // 人の作業ツリーが default_branch を出していて綺麗なので、そのまま早送りする。
@@ -782,6 +869,286 @@ fn rebase_and_advance(
                 detail: "git を起動できませんでした".to_string(),
             },
         }
+    }
+}
+
+/// [`rebase_onto`] の結果。取り込み先 ref の早送り・worktree の削除・push は含まない。
+enum RebaseStep {
+    /// rebase が済んだ。`head_sha` は rebase 後の `HEAD`。
+    Done { head_sha: String },
+    /// 衝突した。`rebase --abort` を試み、戻せたかを `aborted` に持つ。
+    Conflict { files: Vec<String>, aborted: bool },
+    /// 衝突以外で失敗した（`aborted` は `rebase --abort` が通ったか、rebase が始まらなかったか）。
+    Failed { detail: String, aborted: bool },
+}
+
+/// `dir`（clean な worktree）で `git rebase <onto>` を行い、衝突なら衝突ファイルを集めて
+/// `rebase --abort` する（ADR-0043 D5 の `merge` と ADR-0118 D2 の同期で共有する）。
+fn rebase_onto(dir: &Path, onto: &str) -> RebaseStep {
+    match git(dir, &["rebase", onto], GIT_WRITE_TIMEOUT) {
+        Some(o) if o.ok => {}
+        Some(o) => {
+            let files = git(
+                dir,
+                &["diff", "--name-only", "--diff-filter=U"],
+                GIT_TIMEOUT,
+            )
+            .filter(|o| o.ok)
+            .map(|o| {
+                o.stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+            let aborted = git(dir, &["rebase", "--abort"], GIT_WRITE_TIMEOUT).is_some_and(|a| a.ok);
+            if files.is_empty() && !o.stdout.contains("CONFLICT") && !o.stderr.contains("CONFLICT")
+            {
+                return RebaseStep::Failed {
+                    detail: format!("rebase に失敗しました: {}", o.why()),
+                    aborted,
+                };
+            }
+            return RebaseStep::Conflict { files, aborted };
+        }
+        None => {
+            return RebaseStep::Failed {
+                detail: "git を起動できませんでした".to_string(),
+                aborted: true,
+            };
+        }
+    }
+    match git_line(dir, &["rev-parse", "HEAD"]) {
+        Some(head_sha) => RebaseStep::Done { head_sha },
+        None => RebaseStep::Failed {
+            detail: "rebase の結果を読めませんでした".to_string(),
+            aborted: true,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// review 前の target 同期（ADR-0118 D2）
+// ---------------------------------------------------------------------------
+
+/// [`sync_onto_target`] の結果（ADR-0118 D2）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SyncOutcome {
+    /// `target_sha` は既に `HEAD` の祖先（または同一）。rebase していない。
+    UpToDate {
+        target_sha: String,
+        head_sha: String,
+    },
+    /// `before_sha` に `target_sha` を取り込み、`head_sha` になった（`target_sha` は `head_sha` の
+    /// 祖先）。`method` が取り込み方（直線 branch は rebase、merge commit を含む branch は merge）。
+    Rebased {
+        target_sha: String,
+        before_sha: String,
+        head_sha: String,
+        method: SyncMethod,
+    },
+    /// rebase（または merge）が衝突した。`rebase --abort`（`merge --abort`）済みで、ブランチと
+    /// worktree は元の `HEAD` のまま。
+    Conflict {
+        target_sha: String,
+        files: Vec<String>,
+    },
+    /// 未コミットの変更がある。何も触っていない（stash・reset もしない）。
+    Dirty,
+    /// git が失敗した・前提が満たされない（`detail` に理由）。
+    Failed { detail: String },
+}
+
+/// [`SyncOutcome::Rebased`] の取り込み方（ADR-0118 付記 2026-10-03）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncMethod {
+    /// `git rebase <target>`（`target..HEAD` に merge commit が無い直線 branch）。
+    Rebase,
+    /// `git merge --no-ff --no-edit <target>`（`target..HEAD` に merge commit がある branch。
+    /// 履歴を書き換えず、merge commit で解いた衝突をそのまま保つ）。
+    Merge,
+}
+
+/// ADR-0118 D2: task の worktree（ブランチを出している clean な worktree）に `target_ref` の
+/// 現在の commit を取り込む。取り込み先 ref の早送り・worktree の削除・push はしない。
+///
+/// - 未コミットの変更があれば `Dirty`（触らない）
+/// - rebase・merge が進行中・detached HEAD・`target_ref` が読めなければ `Failed`（触らない）
+/// - `target_ref` が既に `HEAD` の祖先なら `UpToDate`
+/// - `target..HEAD` に merge commit（親 2 つ以上）があれば `merge --no-ff` で取り込み、
+///   無ければ（直線 branch）従来どおり rebase する（ADR-0118 付記 2026-10-03）
+/// - 衝突したら `rebase --abort`（`merge --abort`）して `Conflict`（元の `HEAD` を残す。戻せなければ `Failed`）
+/// - 済んだら `HEAD` がブランチを指し、clean であることを確かめて `Rebased`
+pub fn sync_onto_target(worktree: &Path, target_ref: &str) -> SyncOutcome {
+    match is_dirty(worktree) {
+        Some(false) => {}
+        Some(true) => return SyncOutcome::Dirty,
+        None => {
+            return SyncOutcome::Failed {
+                detail: "作業ツリーの状態を読めませんでした".to_string(),
+            };
+        }
+    }
+    for marker in ["rebase-merge", "rebase-apply", "MERGE_HEAD"] {
+        let in_progress = git_line(worktree, &["rev-parse", "--git-path", marker])
+            .map(|p| {
+                let p = PathBuf::from(p);
+                if p.is_absolute() { p } else { worktree.join(p) }
+            })
+            .is_some_and(|p| p.exists());
+        if in_progress {
+            return SyncOutcome::Failed {
+                detail: format!("rebase か merge が進行中です（{marker}）"),
+            };
+        }
+    }
+    let Some(branch_ref) = git_line(worktree, &["symbolic-ref", "-q", "HEAD"]) else {
+        return SyncOutcome::Failed {
+            detail: "ブランチを出していません（detached HEAD）".to_string(),
+        };
+    };
+    let target_rev = format!("{target_ref}^{{commit}}");
+    let Some(target_sha) = git_line(worktree, &["rev-parse", "--verify", "--quiet", &target_rev])
+    else {
+        return SyncOutcome::Failed {
+            detail: format!("{target_ref} を読めませんでした"),
+        };
+    };
+    let Some(before_sha) = git_line(worktree, &["rev-parse", "HEAD"]) else {
+        return SyncOutcome::Failed {
+            detail: "HEAD を読めませんでした".to_string(),
+        };
+    };
+    if git_ok(
+        worktree,
+        &["merge-base", "--is-ancestor", &target_sha, &before_sha],
+    ) {
+        return SyncOutcome::UpToDate {
+            target_sha,
+            head_sha: before_sha,
+        };
+    }
+
+    // 付記 2026-10-03: merge commit を含む branch を rebase すると直線化され、merge commit で
+    // 解いた衝突が target が進むたびに再発する。その branch は履歴を書き換えずに merge する。
+    let range = format!("{target_sha}..{before_sha}");
+    let method = match git_line(worktree, &["rev-list", "--merges", "--count", &range]) {
+        Some(n) if n == "0" => SyncMethod::Rebase,
+        Some(_) => SyncMethod::Merge,
+        None => {
+            return SyncOutcome::Failed {
+                detail: format!("{range} の merge commit を数えられませんでした"),
+            };
+        }
+    };
+    let (verb, step) = match method {
+        SyncMethod::Rebase => ("rebase", rebase_onto(worktree, &target_sha)),
+        SyncMethod::Merge => ("merge", merge_from(worktree, &target_sha)),
+    };
+    let head_sha = match step {
+        RebaseStep::Done { head_sha } => head_sha,
+        RebaseStep::Conflict { files, aborted } => {
+            let restored = aborted
+                && git_line(worktree, &["rev-parse", "HEAD"]).as_deref() == Some(&before_sha)
+                && is_dirty(worktree) == Some(false);
+            if !restored {
+                return SyncOutcome::Failed {
+                    detail: format!(
+                        "{verb} が衝突し、元の HEAD {before_sha} に戻せませんでした（手で確かめてください）"
+                    ),
+                };
+            }
+            return SyncOutcome::Conflict { target_sha, files };
+        }
+        RebaseStep::Failed { detail, aborted } => {
+            if aborted {
+                return SyncOutcome::Failed { detail };
+            }
+            return SyncOutcome::Failed {
+                detail: format!("{detail}（{verb} --abort も失敗しました。手で確かめてください）"),
+            };
+        }
+    };
+    let branch_sha = git_line(worktree, &["rev-parse", "--verify", "--quiet", &branch_ref]);
+    if branch_sha.as_deref() != Some(head_sha.as_str()) {
+        return SyncOutcome::Failed {
+            detail: format!("{verb} 後の HEAD {head_sha} と {branch_ref} が一致しません"),
+        };
+    }
+    if !git_ok(
+        worktree,
+        &["merge-base", "--is-ancestor", &target_sha, &head_sha],
+    ) {
+        return SyncOutcome::Failed {
+            detail: format!("{verb} 後の HEAD {head_sha} が {target_sha} を含みません"),
+        };
+    }
+    if is_dirty(worktree) != Some(false) {
+        return SyncOutcome::Failed {
+            detail: format!("{verb} 後の作業ツリーが clean ではありません"),
+        };
+    }
+    SyncOutcome::Rebased {
+        target_sha,
+        before_sha,
+        head_sha,
+        method,
+    }
+}
+
+/// `dir`（clean な worktree）で `git merge --no-ff --no-edit <target>` を行い、衝突なら衝突
+/// ファイルを集めて `merge --abort` する（ADR-0118 付記 2026-10-03。結果の形は [`rebase_onto`] と同じ）。
+fn merge_from(dir: &Path, target: &str) -> RebaseStep {
+    match git(
+        dir,
+        &["merge", "--no-ff", "--no-edit", target],
+        GIT_WRITE_TIMEOUT,
+    ) {
+        Some(o) if o.ok => {}
+        Some(o) => {
+            let files = git(
+                dir,
+                &["diff", "--name-only", "--diff-filter=U"],
+                GIT_TIMEOUT,
+            )
+            .filter(|o| o.ok)
+            .map(|o| {
+                o.stdout
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+            // merge が始まっていなければ MERGE_HEAD が無く abort は失敗するが、HEAD は動いていない。
+            let started = git_ok(dir, &["rev-parse", "--verify", "--quiet", "MERGE_HEAD"]);
+            let aborted = !started
+                || git(dir, &["merge", "--abort"], GIT_WRITE_TIMEOUT).is_some_and(|a| a.ok);
+            if files.is_empty() && !o.stdout.contains("CONFLICT") && !o.stderr.contains("CONFLICT")
+            {
+                return RebaseStep::Failed {
+                    detail: format!("merge に失敗しました: {}", o.why()),
+                    aborted,
+                };
+            }
+            return RebaseStep::Conflict { files, aborted };
+        }
+        None => {
+            return RebaseStep::Failed {
+                detail: "git を起動できませんでした".to_string(),
+                aborted: true,
+            };
+        }
+    }
+    match git_line(dir, &["rev-parse", "HEAD"]) {
+        Some(head_sha) => RebaseStep::Done { head_sha },
+        None => RebaseStep::Failed {
+            detail: "merge の結果を読めませんでした".to_string(),
+            aborted: true,
+        },
     }
 }
 

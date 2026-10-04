@@ -1,0 +1,897 @@
+//! ADR-0131 付記 D10: 日次整理 job の入力準備・dry_run・apply（付記 2026-10-04: 承認なしで適用し
+//! KB に commit・push）・1 件の報告。KB は tempdir、KB の origin は tempdir の bare repo、store はメモリ上、
+//! 時計は `now` 引数で注入する（実時間の sleep・network は使わない）。
+
+use super::*;
+use task_core::NotificationStore;
+use task_core::org::{OrgKind, OrgNode};
+use task_core::report::ReportStore;
+use task_core::{CronCatchUp, CronOverlap, CronTaskTemplate, SqliteStore, Tier, Trigger};
+use task_ops::cron_jobs::{CronFireContext, NewCronJob};
+use task_ops::knowledge_curation::{InboxProposal, KbAction};
+
+struct Env {
+    store: SqliteStore,
+    kb: tempfile::TempDir,
+    ws: tempfile::TempDir,
+    state: tempfile::TempDir,
+    job: CronJob,
+    /// job を作った時刻（注入した時計の起点）。
+    t0: OffsetDateTime,
+}
+
+const PAGE_A: &str = "---\ntitle: A\n---\n古い記述\n";
+const PAGE_B: &str = "---\ntitle: B\n---\nA と同じ趣旨\n";
+
+fn view(ws: &Path) -> ViewContext {
+    ViewContext {
+        workspace_root: ws.to_path_buf(),
+        retry_backoff_base: std::time::Duration::from_secs(1),
+        retry_backoff_max: std::time::Duration::from_secs(1),
+        max_requeues: 3,
+        clusters: Default::default(),
+    }
+}
+
+fn setup(mode: &str) -> Env {
+    let store = SqliteStore::open_in_memory().expect("open");
+    // 時計: 実時間の 2 日前に job を作り、以後は `t0` からの相対で進める（store が自分で付ける
+    // `updated_at` は実時間なので、それより後の時刻で tick する）。
+    let t0 = OffsetDateTime::now_utc() - time::Duration::days(2);
+    store
+        .org_upsert(&OrgNode {
+            profile: Default::default(),
+            id: "coding".into(),
+            parent_id: None,
+            name: "coding".into(),
+            kind: OrgKind::Secretary,
+            genre: None,
+            brief: String::new(),
+            position: 0,
+            created_at: t0,
+            updated_at: t0,
+        })
+        .expect("org");
+    let kb = tempfile::tempdir().expect("kb");
+    std::fs::write(kb.path().join("README.md"), "# KB\n").expect("readme");
+    std::fs::create_dir_all(kb.path().join("projects")).expect("dir");
+    std::fs::write(kb.path().join("projects/a.md"), PAGE_A).expect("a");
+    std::fs::write(kb.path().join("projects/b.md"), PAGE_B).expect("b");
+    let mut extra = BTreeMap::new();
+    extra.insert("mode".to_string(), serde_json::json!(mode));
+    let job = task_ops::cron_jobs::create_job(
+        &store,
+        &CronFireContext::default(),
+        NewCronJob {
+            name: "daily-curation".into(),
+            schedule: "30 4 * * *".into(),
+            timezone: "UTC".into(),
+            overlap: CronOverlap::Skip,
+            catch_up: CronCatchUp::Latest,
+            enabled: true,
+            template: CronTaskTemplate {
+                title: "日次整理: {date}".into(),
+                objective: "KB と受信箱を整理する".into(),
+                acceptance: vec![
+                    serde_json::json!({"type": "artifact_exists", "name": "curation-plan.json"}),
+                ],
+                harness: Some(curation::CURATION_HARNESS.into()),
+                lane: Some(Tier::Cheap),
+                assignee: Some("coding".into()),
+                extra,
+                ..CronTaskTemplate::default()
+            },
+        },
+        t0,
+    )
+    .expect("job");
+    Env {
+        store,
+        kb,
+        ws: tempfile::tempdir().expect("ws"),
+        state: tempfile::tempdir().expect("state"),
+        job,
+        t0,
+    }
+}
+
+impl Env {
+    fn now(&self, hours: i64) -> OffsetDateTime {
+        self.t0 + time::Duration::hours(hours)
+    }
+
+    fn tick(&self, now: OffsetDateTime) -> TickOutcome {
+        tick(
+            &self.store,
+            self.kb.path(),
+            self.ws.path(),
+            &self.state.path().join("state.json"),
+            &view(self.ws.path()),
+            now,
+        )
+        .expect("tick")
+    }
+
+    /// cron を発火させて日次整理 task を 1 件作る。
+    fn fire(&self, now: OffsetDateTime) -> Task {
+        let ids: Vec<TaskId> = task_ops::cron_jobs::fire_due(&self.store, now)
+            .into_iter()
+            .map(|r| r.expect("fire"))
+            .filter_map(|o| o.task_id)
+            .collect();
+        assert_eq!(ids.len(), 1, "one task per fire");
+        self.store.get(ids[0]).expect("get").expect("task")
+    }
+
+    fn dir(&self, task: &Task) -> PathBuf {
+        workspace_dir(task, self.ws.path()).expect("local")
+    }
+
+    fn artifacts(&self, task: &Task) -> PathBuf {
+        let dir = artifacts_dir(task, self.ws.path()).expect("local");
+        std::fs::create_dir_all(&dir).expect("artifacts");
+        dir
+    }
+
+    /// 偽 worker: 写しを見て計画を書き、task を done にする。
+    fn worker_done(&self, task: &Task, plan: &CurationPlan, summary: Option<&str>) {
+        let dir = self.artifacts(task);
+        std::fs::write(
+            dir.join("curation-plan.json"),
+            serde_json::to_string_pretty(plan).expect("plan"),
+        )
+        .expect("write plan");
+        if let Some(s) = summary {
+            std::fs::write(dir.join("daily-summary.md"), s).expect("summary");
+        }
+        for trigger in [Trigger::Dispatch, Trigger::WorkerDone, Trigger::ReviewPass] {
+            self.store
+                .apply_transition(task.id, trigger, None)
+                .expect("transition");
+        }
+    }
+
+    fn kb_snapshot(&self) -> BTreeMap<String, String> {
+        fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+            for e in std::fs::read_dir(dir).expect("read_dir").flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(root, &p, out);
+                } else {
+                    let rel = p.strip_prefix(root).expect("rel").display().to_string();
+                    out.insert(rel, std::fs::read_to_string(&p).unwrap_or_default());
+                }
+            }
+        }
+        let mut out = BTreeMap::new();
+        walk(self.kb.path(), self.kb.path(), &mut out);
+        out
+    }
+
+    fn reports(&self, task: &Task) -> Vec<Report> {
+        self.store
+            .report_list(&task_core::ReportFilter {
+                task_id: Some(task.id),
+                ..Default::default()
+            })
+            .expect("reports")
+    }
+
+    fn approval(&self, task: &Task) -> Option<task_core::DecisionRow> {
+        open_or_answered(&self.store, task, APPROVAL_KEY).expect("decisions")
+    }
+
+    /// KB を git にし（最初の commit まで）、`remote` があれば `origin` にする。
+    fn git_init(&self, remote: Remote) {
+        let kb = self.kb.path();
+        git(kb, &["init", "-q", "-b", "main"]);
+        std::fs::write(kb.join(".gitignore"), "index.json\n").expect("gitignore");
+        git(kb, &["add", "-A"]);
+        git(kb, &["commit", "-q", "-m", "init"]);
+        let url = match remote {
+            Remote::None => return,
+            Remote::Bare => {
+                let bare = self.bare();
+                let out = std::process::Command::new("git")
+                    .args(["init", "-q", "--bare"])
+                    .arg(&bare)
+                    .output()
+                    .expect("git init --bare");
+                assert!(out.status.success(), "{out:?}");
+                bare
+            }
+            // 存在しない path の remote: push は必ず失敗する（network には出ない）。
+            Remote::Broken => self.state.path().join("missing/remote.git"),
+        };
+        git(kb, &["remote", "add", "origin", &url.to_string_lossy()]);
+    }
+
+    fn bare(&self) -> PathBuf {
+        self.state.path().join("remote.git")
+    }
+
+    fn entry(&self, task: &Task) -> Entry {
+        load_state(&self.state.path().join("state.json")).tasks[&task.id.to_string()].clone()
+    }
+
+    fn applied_events(&self, task: &Task) -> Vec<Event> {
+        self.store
+            .events_for(task.id)
+            .expect("events")
+            .into_iter()
+            .map(|(_, e)| e)
+            .filter(|e| matches!(e, Event::KnowledgeCurationApplied { .. }))
+            .collect()
+    }
+
+    /// prepare → 偽 worker の done → 次の tick（apply なら承認なしで適用まで進む）。
+    fn run_to_done(&self, plan: &CurationPlan) -> (Task, OffsetDateTime, TickOutcome) {
+        let now = self.now(50);
+        let task = self.fire(now);
+        self.tick(now);
+        self.worker_done(&task, plan, None);
+        let at = now + time::Duration::hours(1);
+        let out = self.tick(at);
+        (task, at, out)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Remote {
+    None,
+    Bare,
+    Broken,
+}
+
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=test",
+            "-c",
+            "user.email=test@example.invalid",
+        ])
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .expect("git");
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// b を a に統合し、a を直す計画（ハッシュは本番 KB の今の内容）。
+fn merge_plan(inbox: Vec<InboxProposal>) -> CurationPlan {
+    CurationPlan {
+        version: 1,
+        kb: vec![KbAction {
+            path: "projects/b.md".into(),
+            action: Action::Merge,
+            target: Some("projects/a.md".into()),
+            reason: "a と同じ趣旨".into(),
+            content: Some("---\ntitle: A\n---\n統合した記述\n".into()),
+            expected_hash: Some(curation::content_hash(PAGE_B)),
+            target_hash: Some(curation::content_hash(PAGE_A)),
+        }],
+        inbox,
+        human_decisions: Vec::new(),
+    }
+}
+
+#[test]
+fn knowledge_curation_job_prepares_inputs_before_the_run() {
+    let env = setup("dry_run");
+    // 前回の基準（job 作成時刻）より後に終端になった普通の task。報告の抜粋に入る。
+    let spec: task_ops::add::NewTaskSpec = serde_json::from_value(serde_json::json!({
+        "title": "普通の仕事", "objective": "実装する", "acceptance": [], "assignee": "coding"
+    }))
+    .expect("spec");
+    let other =
+        task_ops::add::create_support_task(&env.store, spec, &[], &[], env.t0).expect("other");
+    for trigger in [Trigger::Dispatch, Trigger::WorkerError { retryable: false }] {
+        env.store
+            .apply_transition(other.id, trigger, None)
+            .expect("transition");
+    }
+    let now = env.now(50);
+    let task = env.fire(now);
+    let out = env.tick(now);
+    assert_eq!(out.prepared, vec![task.id]);
+
+    let inputs = env.dir(&task).join("inputs");
+    assert_eq!(
+        std::fs::read_to_string(inputs.join("kb/projects/a.md")).expect("copy"),
+        PAGE_A
+    );
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(inputs.join("manifest.json")).expect("m"))
+            .expect("json");
+    assert_eq!(manifest["mode"], "dry_run");
+    assert_eq!(manifest["job_id"], env.job.id.to_string());
+    let inbox: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(inputs.join("inbox.json")).expect("i"))
+            .expect("json");
+    assert!(inbox["suppressed"].is_object());
+    assert!(inbox["attention"].is_array());
+    let candidates = inbox["candidates"].as_array().expect("candidates");
+    assert!(
+        candidates
+            .iter()
+            .any(|c| c["task_id"] == other.id.to_string() && c["kind"] == "failed"),
+        "{inbox}"
+    );
+    let reports: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(inputs.join("reports.json")).expect("r"))
+            .expect("json");
+    let ids: Vec<&str> = reports["reports"]
+        .as_array()
+        .expect("reports")
+        .iter()
+        .filter_map(|r| r["task_id"].as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec![other.id.to_string().as_str()],
+        "日次整理 task 自身は入らない"
+    );
+
+    // 2 回目の tick では作り直さない。
+    assert!(
+        env.tick(now + time::Duration::minutes(1))
+            .prepared
+            .is_empty()
+    );
+}
+
+#[test]
+fn knowledge_curation_job_dry_run_leaves_the_kb_unchanged_and_writes_the_diff() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    env.worker_done(&task, &merge_plan(Vec::new()), None);
+    let task = env.store.get(task.id).expect("get").expect("task");
+    assert_eq!(task.status, Status::Done);
+
+    let out = env.tick(now + time::Duration::hours(1));
+    assert_eq!(out.reported, vec![task.id]);
+    assert!(out.applied.is_empty());
+    assert_eq!(env.kb_snapshot(), before, "dry_run は本番 KB を書かない");
+    let diff = std::fs::read_to_string(env.artifacts(&task).join("curation.diff")).expect("diff");
+    assert!(diff.contains("--- a/projects/b.md"), "{diff}");
+    assert!(env.approval(&task).is_none(), "dry_run は承認を求めない");
+    let summary =
+        std::fs::read_to_string(env.artifacts(&task).join("daily-summary.md")).expect("summary");
+    assert!(summary.contains("統合 1"), "{summary}");
+    assert!(summary.contains("`projects/b.md`"), "{summary}");
+    assert!(summary.contains("## 人が判断すべき残り"), "{summary}");
+}
+
+#[test]
+fn knowledge_curation_job_reports_exactly_one_summary_per_task() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(
+        &task,
+        &merge_plan(Vec::new()),
+        Some("# 日次整理（担当）\n\n- 統合 1\n"),
+    );
+    for h in 1..=3 {
+        env.tick(now + time::Duration::hours(h));
+    }
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1, "報告は 1 件だけ");
+    assert!(reports[0].headline.starts_with("日次整理"));
+    assert!(reports[0].body.contains("担当の要約"));
+    // 報告のまとめの対象にもならない（`reports::schedule_report_compaction` が飛ばす）。
+    assert!(curation::is_curation_task(&task));
+    // 日次整理専用の通知は作らない。
+    assert!(
+        env.store
+            .notification_pending()
+            .expect("notifications")
+            .is_empty()
+    );
+}
+
+#[test]
+fn knowledge_curation_apply_commits_and_pushes_without_approval() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let (task, at, out) = env.run_to_done(&merge_plan(Vec::new()));
+    assert_eq!(task_ops::cron_jobs::task_mode(&task), "apply");
+    assert_eq!(out.applied, vec![task.id], "承認を待たずに適用する");
+    assert!(
+        env.approval(&task).is_none(),
+        "curation-apply の決定は出さない"
+    );
+    assert!(!env.kb.path().join("projects/b.md").exists());
+    assert!(
+        std::fs::read_to_string(env.kb.path().join("projects/a.md"))
+            .expect("a")
+            .contains("統合した記述")
+    );
+    let date = local_date(&env.job, at);
+    let log = std::fs::read_to_string(env.kb.path().join(format!("_curation/{date}.md")))
+        .expect("curation log");
+    assert!(log.contains("projects/b.md"));
+
+    // 1 commit: 題に日付と件数、本文に task id。作業ツリーは綺麗（index.json は ignore）。
+    let kb = env.kb.path();
+    let head = git(kb, &["rev-parse", "HEAD"]);
+    assert_eq!(git(kb, &["rev-list", "--count", "HEAD"]), "2");
+    let subject = git(kb, &["log", "-1", "--format=%s"]);
+    assert!(subject.contains(&date), "{subject}");
+    assert!(subject.contains("統合 1"), "{subject}");
+    assert!(
+        git(kb, &["log", "-1", "--format=%b"]).contains(&format!("task: {}", task.id)),
+        "本文に task id"
+    );
+    let files = git(kb, &["show", "--name-only", "--format=", "HEAD"]);
+    for path in ["projects/a.md", "projects/b.md", "README.md"] {
+        assert!(files.lines().any(|l| l == path), "{path}: {files}");
+    }
+    assert!(files.contains(&format!("_curation/{date}.md")), "{files}");
+    assert_eq!(git(kb, &["status", "--porcelain"]), "");
+
+    // push: bare 側の main が手元の HEAD と一致する。
+    assert_eq!(git(&env.bare(), &["rev-parse", "refs/heads/main"]), head);
+    let entry = env.entry(&task);
+    assert_eq!(entry.phase, Phase::Applied);
+    assert_eq!(entry.commit_sha.as_deref(), Some(head.as_str()));
+    let events = env.applied_events(&task);
+    assert_eq!(events.len(), 1);
+    let Event::KnowledgeCurationApplied {
+        commit_sha,
+        push,
+        merged,
+        ..
+    } = &events[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "pushed");
+    assert_eq!(*merged, 1);
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1, "報告は 1 件");
+    assert!(reports[0].body.contains("反映した"), "{}", reports[0].body);
+    assert!(reports[0].body.contains(&head), "{}", reports[0].body);
+    assert!(reports[0].body.contains("push した"), "{}", reports[0].body);
+
+    // 以後の tick では何もしない。
+    assert!(env.tick(at + time::Duration::hours(1)).applied.is_empty());
+    assert_eq!(env.applied_events(&task).len(), 1);
+}
+
+#[test]
+fn knowledge_curation_apply_without_remote_commits_and_records_no_remote() {
+    let env = setup("apply");
+    env.git_init(Remote::None);
+    let (task, _, out) = env.run_to_done(&merge_plan(Vec::new()));
+    assert_eq!(out.applied, vec![task.id]);
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(git(env.kb.path(), &["rev-list", "--count", "HEAD"]), "2");
+    let Event::KnowledgeCurationApplied {
+        commit_sha, push, ..
+    } = &env.applied_events(&task)[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "no_remote");
+    let body = &env.reports(&task)[0].body;
+    assert!(body.contains("remote 無し"), "{body}");
+}
+
+#[test]
+fn knowledge_curation_apply_push_failure_keeps_the_commit_and_does_not_fail_the_task() {
+    let env = setup("apply");
+    env.git_init(Remote::Broken);
+    let (task, _, out) = env.run_to_done(&merge_plan(Vec::new()));
+    assert_eq!(
+        out.applied,
+        vec![task.id],
+        "push の失敗は apply を失敗にしない"
+    );
+    assert_eq!(
+        env.store.get(task.id).expect("get").expect("task").status,
+        Status::Done
+    );
+    assert!(!env.kb.path().join("projects/b.md").exists());
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(
+        git(env.kb.path(), &["rev-list", "--count", "HEAD"]),
+        "2",
+        "commit は手元に残る"
+    );
+    let Event::KnowledgeCurationApplied {
+        commit_sha,
+        push,
+        push_detail,
+        ..
+    } = &env.applied_events(&task)[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(commit_sha.as_deref(), Some(head.as_str()));
+    assert_eq!(push, "failed");
+    assert!(push_detail.is_some());
+    let entry = env.entry(&task);
+    assert_eq!(entry.phase, Phase::Applied);
+    let body = &env.reports(&task)[0].body;
+    assert!(body.contains("push に失敗"), "{body}");
+}
+
+#[test]
+fn knowledge_curation_apply_is_not_applied_when_the_page_changed() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(&task, &merge_plan(Vec::new()), None);
+    // 写しを作った後に人が元ページを直した。
+    std::fs::write(
+        env.kb.path().join("projects/b.md"),
+        "---\ntitle: B\n---\n人の加筆\n",
+    )
+    .expect("edit");
+    let before = env.kb_snapshot();
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    let out = env.tick(now + time::Duration::hours(1));
+    assert!(out.applied.is_empty());
+    assert_eq!(env.kb_snapshot(), before, "元ページが変わったら適用しない");
+    assert_eq!(
+        git(env.kb.path(), &["rev-parse", "HEAD"]),
+        head,
+        "commit しない"
+    );
+    assert!(env.applied_events(&task).is_empty());
+    assert!(env.approval(&task).is_none());
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1);
+    assert!(
+        reports[0].body.contains("検証できなかった"),
+        "{}",
+        reports[0].body
+    );
+}
+
+/// 旧方式で状態ファイルに `AwaitingApproval` が残る行を作る（報告時の hash を持つ）。
+fn legacy_awaiting(env: &Env, plan: &CurationPlan) -> (Task, OffsetDateTime) {
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(&task, plan, None);
+    let raw =
+        std::fs::read_to_string(env.artifacts(&task).join("curation-plan.json")).expect("plan");
+    let diff = curation::dry_run(env.kb.path(), plan).expect("dry_run");
+    let state_file = env.state.path().join("state.json");
+    let mut state = load_state(&state_file);
+    let entry = state.tasks.get_mut(&task.id.to_string()).expect("entry");
+    entry.phase = Phase::AwaitingApproval;
+    entry.approval_hash = Some(approval_hash(&raw, &diff));
+    save_state(&state_file, &state).expect("save");
+    (task, now)
+}
+
+#[test]
+fn knowledge_curation_legacy_awaiting_approval_is_applied_on_the_next_tick() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let (task, now) = legacy_awaiting(&env, &merge_plan(Vec::new()));
+    let out = env.tick(now + time::Duration::hours(1));
+    assert_eq!(out.applied, vec![task.id], "承認を待たずに適用する");
+    assert!(!env.kb.path().join("projects/b.md").exists());
+    let head = git(env.kb.path(), &["rev-parse", "HEAD"]);
+    assert_eq!(git(&env.bare(), &["rev-parse", "refs/heads/main"]), head);
+    assert_eq!(env.entry(&task).phase, Phase::Applied);
+    assert_eq!(env.applied_events(&task).len(), 1);
+}
+
+#[test]
+fn knowledge_curation_legacy_awaiting_approval_becomes_stale_when_the_page_changed() {
+    let env = setup("apply");
+    env.git_init(Remote::Bare);
+    let (task, now) = legacy_awaiting(&env, &merge_plan(Vec::new()));
+    std::fs::write(
+        env.kb.path().join("projects/b.md"),
+        "---\ntitle: B\n---\n人の加筆\n",
+    )
+    .expect("edit");
+    let before = env.kb_snapshot();
+    assert!(env.tick(now + time::Duration::hours(1)).applied.is_empty());
+    assert_eq!(env.kb_snapshot(), before);
+    assert_eq!(env.entry(&task).phase, Phase::Stale);
+    assert!(env.applied_events(&task).is_empty());
+    assert!(env.tick(now + time::Duration::hours(2)).applied.is_empty());
+}
+
+#[test]
+fn knowledge_curation_job_rejects_inbox_proposals_outside_the_inputs() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    let stranger = TaskId::new().to_string();
+    env.worker_done(
+        &task,
+        &merge_plan(vec![InboxProposal {
+            task_id: stranger,
+            proposal: "cancel".into(),
+            reason: "古い".into(),
+        }]),
+        None,
+    );
+    env.tick(now + time::Duration::hours(1));
+    assert_eq!(env.kb_snapshot(), before);
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1);
+    assert!(
+        reports[0].body.contains("検証できなかった"),
+        "{}",
+        reports[0].body
+    );
+}
+
+fn decisions(env: &Env, task: &Task, key: &str) -> Vec<task_core::DecisionRow> {
+    env.store
+        .decisions_list(Some(task.id))
+        .expect("decisions")
+        .into_iter()
+        .filter(|d| d.request.key == key)
+        .collect()
+}
+
+fn human_items(n: usize) -> Vec<task_ops::knowledge_curation::HumanDecision> {
+    (0..n)
+        .map(|i| task_ops::knowledge_curation::HumanDecision {
+            subject: format!("user/page-{i:02}.md"),
+            proposal: format!("提案 {i:02}"),
+            reason: "人が書いたページ".into(),
+        })
+        .collect()
+}
+
+#[test]
+fn curation_human_decision_dry_run_raises_exactly_one_decision() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(12);
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    env.tick(now + time::Duration::hours(2));
+    assert_eq!(env.kb_snapshot(), before, "dry_run は KB を変えない");
+    let rows = decisions(&env, &task, HUMAN_KEY);
+    assert_eq!(rows.len(), 1, "人への候補は 1 件の decision に束ねる");
+    let q = &rows[0].request.question;
+    assert!(q.contains("user/page-00.md: 提案 00"), "{q}");
+    assert!(q.contains("user/page-09.md"), "{q}");
+    assert!(!q.contains("user/page-10.md"), "最大 10 件: {q}");
+    assert!(q.contains("ほか 2 件"), "{q}");
+    let options: Vec<_> = rows[0]
+        .request
+        .options
+        .iter()
+        .map(|o| o.key.as_str())
+        .collect();
+    assert_eq!(options, vec![HUMAN_HOLD_OPTION, HUMAN_MANUAL_OPTION]);
+    assert!(
+        decisions(&env, &task, APPROVAL_KEY).is_empty(),
+        "dry_run は承認を求めない"
+    );
+
+    // 回答しても KB は変えず、決定も重ねない。
+    env.store
+        .append_event(
+            task.id,
+            &Event::DecisionAnswered {
+                id: rows[0].id.clone(),
+                option: HUMAN_MANUAL_OPTION.into(),
+                note: None,
+                by: "human".into(),
+            },
+        )
+        .expect("answer");
+    env.tick(now + time::Duration::hours(3));
+    assert_eq!(env.kb_snapshot(), before);
+    assert_eq!(decisions(&env, &task, HUMAN_KEY).len(), 1);
+}
+
+#[test]
+fn curation_human_decision_is_not_raised_without_candidates() {
+    let env = setup("dry_run");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    env.worker_done(&task, &merge_plan(Vec::new()), None);
+    env.tick(now + time::Duration::hours(1));
+    assert!(decisions(&env, &task, HUMAN_KEY).is_empty());
+    assert_eq!(env.reports(&task).len(), 1);
+}
+
+#[test]
+fn curation_human_decision_apply_is_raised_and_not_auto_approved() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(1);
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    let human = decisions(&env, &task, HUMAN_KEY);
+    assert_eq!(human.len(), 1);
+    assert_eq!(human[0].status, DecisionStatus::Open, "自動承認しない");
+    assert!(decisions(&env, &task, APPROVAL_KEY).is_empty());
+    assert_eq!(env.entry(&task).phase, Phase::Applied);
+}
+
+#[test]
+fn curation_diff_mismatch_rejects_the_plan_without_approval() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let before = env.kb_snapshot();
+    let mut plan = merge_plan(Vec::new());
+    plan.human_decisions = human_items(1);
+    // 計画は b→a の統合だが、worker の差分は別のページを指す。
+    let worker_diff = "--- a/inputs/kb/projects/other.md\n+++ /dev/null\n@@ -1 +0,0 @@\n";
+    std::fs::write(env.artifacts(&task).join("curation.diff"), worker_diff).expect("diff");
+    env.worker_done(&task, &plan, None);
+    env.tick(now + time::Duration::hours(1));
+    assert_eq!(env.kb_snapshot(), before);
+    assert!(
+        decisions(&env, &task, APPROVAL_KEY).is_empty(),
+        "不一致なら承認を求めない"
+    );
+    assert!(
+        decisions(&env, &task, HUMAN_KEY).is_empty(),
+        "拒否した計画の候補は出さない"
+    );
+    let state = load_state(&env.state.path().join("state.json"));
+    let entry = &state.tasks[&task.id.to_string()];
+    assert_eq!(entry.phase, Phase::Reported);
+    assert!(entry.approval_hash.is_none());
+    let detail = entry.detail.as_deref().unwrap_or_default();
+    assert!(
+        detail.contains("一致しません") && detail.contains("projects/other.md"),
+        "{detail}"
+    );
+    let artifacts = env.artifacts(&task);
+    assert_eq!(
+        std::fs::read_to_string(artifacts.join(WORKER_DIFF)).expect("worker diff"),
+        worker_diff
+    );
+    assert!(
+        !artifacts.join("curation.diff").exists(),
+        "拒否した計画の正本は書かない"
+    );
+    let reports = env.reports(&task);
+    assert_eq!(reports.len(), 1);
+    assert!(
+        reports[0].body.contains("検証できなかった"),
+        "{}",
+        reports[0].body
+    );
+}
+
+#[test]
+fn curation_diff_match_moves_the_worker_diff_and_writes_the_canonical_one() {
+    let env = setup("apply");
+    let now = env.now(50);
+    let task = env.fire(now);
+    env.tick(now);
+    let plan = merge_plan(Vec::new());
+    let worker_diff = "--- a/inputs/kb/projects/b.md\n+++ /dev/null\n@@ -1 +0,0 @@\n--- a/inputs/kb/projects/a.md\n+++ b/inputs/kb/projects/a.md\n@@ -1 +1 @@\n";
+    std::fs::write(env.artifacts(&task).join("curation.diff"), worker_diff).expect("diff");
+    env.worker_done(&task, &plan, None);
+    // 適用で本番 KB が変わる前に正本を求めておく。
+    let canonical = curation::dry_run(env.kb.path(), &plan).expect("dry_run");
+    env.tick(now + time::Duration::hours(1));
+    let artifacts = env.artifacts(&task);
+    assert_eq!(
+        std::fs::read_to_string(artifacts.join(WORKER_DIFF)).expect("worker diff"),
+        worker_diff
+    );
+    let written = std::fs::read_to_string(artifacts.join("curation.diff")).expect("diff");
+    assert_eq!(written, canonical, "curation.diff は daemon の正本");
+    let raw = std::fs::read_to_string(artifacts.join("curation-plan.json")).expect("plan");
+    let entry = env.entry(&task);
+    assert_eq!(
+        entry.approval_hash,
+        Some(approval_hash(&raw, &canonical)),
+        "hash は正本で取る"
+    );
+    assert_eq!(entry.phase, Phase::Applied);
+    assert!(env.approval(&task).is_none());
+}
+
+#[test]
+fn knowledge_curation_job_rejects_changed_inputs_and_replaced_snapshot() {
+    for change in [
+        "kb",
+        "inbox",
+        "snapshot",
+        "missing_snapshot",
+        "legacy_state",
+    ] {
+        let env = setup("apply");
+        let now = env.now(50);
+        let task = env.fire(now);
+        env.tick(now);
+        let inputs = env.dir(&task).join("inputs");
+        let mut plan = merge_plan(Vec::new());
+        match change {
+            "kb" => {
+                std::fs::write(inputs.join("kb/projects/b.md"), "changed").unwrap();
+                plan.kb[0].expected_hash = Some(curation::content_hash("changed"));
+            }
+            "inbox" => {
+                std::fs::write(
+                    inputs.join("inbox.json"),
+                    r#"{"candidates":[{"task_id":"forged"}]}"#,
+                )
+                .unwrap();
+                plan.inbox.push(InboxProposal {
+                    task_id: "forged".into(),
+                    proposal: "cancel".into(),
+                    reason: "古い".into(),
+                });
+            }
+            "snapshot" => {
+                // 写しと検証用 snapshot の両方を書き換えても、daemon の状態には一致しない。
+                std::fs::write(inputs.join("kb/projects/unrelated.md"), "added").unwrap();
+                let forged = curation::InputSnapshot::capture(
+                    &inputs.join("kb"),
+                    &inputs.join("inbox.json"),
+                )
+                .unwrap();
+                std::fs::write(
+                    inputs.join(curation::SNAPSHOT_FILE),
+                    serde_json::to_vec(&forged).unwrap(),
+                )
+                .unwrap();
+            }
+            "missing_snapshot" => {
+                std::fs::remove_file(inputs.join(curation::SNAPSHOT_FILE)).unwrap()
+            }
+            "legacy_state" => {
+                let state_file = env.state.path().join("state.json");
+                let mut state = load_state(&state_file);
+                state
+                    .tasks
+                    .get_mut(&task.id.to_string())
+                    .unwrap()
+                    .input_snapshot = None;
+                save_state(&state_file, &state).unwrap();
+            }
+            _ => unreachable!(),
+        }
+        let before = env.kb_snapshot();
+        env.worker_done(&task, &plan, None);
+        env.tick(now + time::Duration::hours(1));
+        assert_eq!(env.kb_snapshot(), before, "{change}");
+        assert!(env.approval(&task).is_none(), "{change}");
+        let reports = env.reports(&task);
+        assert_eq!(reports.len(), 1);
+        assert!(
+            reports[0].body.contains("検証できなかった"),
+            "{change}: {}",
+            reports[0].body
+        );
+        let state = load_state(&env.state.path().join("state.json"));
+        let detail = state.tasks[&task.id.to_string()].detail.as_deref().unwrap();
+        assert!(detail.contains("snapshot"), "{change}: {detail}");
+    }
+}

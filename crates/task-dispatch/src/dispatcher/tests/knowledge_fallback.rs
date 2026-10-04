@@ -3,7 +3,7 @@ use super::*;
 use crate::policy::{ProviderSpec, StaticPolicy};
 use async_trait::async_trait;
 use std::sync::Mutex as SyncMutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// 知識整理 run を受ける「汎用」アダプタ（開発用の `fake` と同じ id）。走ったら
 /// `artifacts/knowledge-candidates.json` を書いて `done` になる。
@@ -45,6 +45,9 @@ impl WorkerAdapter for CandidatesAdapter {
         })
     }
 }
+
+/// ADR-0132 D4: `[knowledge.langmem].model` の既定の書き方（proxy の抽象モデル）。
+const LANGMEM_MODEL: &str = "celeris/cheap";
 
 fn knowledge_task(dir: &std::path::Path) -> Task {
     let now = OffsetDateTime::now_utc();
@@ -96,27 +99,37 @@ fn knowledge_task(dir: &std::path::Path) -> Task {
 
 /// `langmem`（専用）と `fake`（汎用）の 2 つの供給元を持つディスパッチャ。
 /// `generic` が false なら汎用の供給元を置かない（ADR-0052 D2「候補が無ければ従来どおり失敗」）。
+/// ADR-0132 D4: `langmem` は proxy の `celeris/cheap` を使う道具なので、行の id にもモデルにも
+/// Qwen を書かない。
 fn knowledge_dispatcher(
     store: Arc<dyn TaskStore>,
     seen: Arc<SyncMutex<Vec<RunRequest>>>,
     fallback_tier: Option<Tier>,
     generic: bool,
 ) -> Dispatcher {
+    let langmem: Arc<dyn WorkerAdapter> = Arc::new(CandidatesAdapter {
+        id: "langmem",
+        seen: seen.clone(),
+    });
+    knowledge_dispatcher_with(store, seen, langmem, fallback_tier, generic)
+}
+
+fn knowledge_dispatcher_with(
+    store: Arc<dyn TaskStore>,
+    seen: Arc<SyncMutex<Vec<RunRequest>>>,
+    langmem: Arc<dyn WorkerAdapter>,
+    fallback_tier: Option<Tier>,
+    generic: bool,
+) -> Dispatcher {
     let mut providers = vec![ProviderSpec {
-        id: "qwen".into(),
+        id: "langmem".into(),
         adapter: "langmem".into(),
         tiers: vec![Tier::Cheap],
         concurrency: 1,
-        model: "qwen".into(),
+        model: LANGMEM_MODEL.into(),
     }];
     let mut adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>> = HashMap::new();
-    adapters.insert(
-        "qwen".into(),
-        Arc::new(CandidatesAdapter {
-            id: "langmem",
-            seen: seen.clone(),
-        }),
-    );
+    adapters.insert("langmem".into(), langmem);
     if generic {
         providers.push(ProviderSpec {
             id: "cheap-generic".into(),
@@ -394,4 +407,168 @@ async fn other_tasks_never_trigger_the_probe() {
     run_until_idle(&mut d, 100).await;
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(started_adapter(&store, task.id).as_deref(), Some("fake"));
+}
+
+/// ADR-0132 D3 / D4 の試験用の偽 proxy（外部ネットワークに出ない）。`GET /v1/models` は proxy 自身が
+/// 生きていれば 200（＝先の Qwen の生死に依らない）。`celeris/cheap` は Qwen が生きていれば Qwen、
+/// 落ちていれば Claude の cheap へ倒す。cheap 以外の tier は決して Qwen に向けない。
+struct FakeProxy {
+    up: AtomicBool,
+    qwen_alive: AtomicBool,
+    routed: SyncMutex<Vec<(String, &'static str)>>,
+}
+
+impl FakeProxy {
+    fn new(up: bool, qwen_alive: bool) -> Arc<Self> {
+        Arc::new(Self {
+            up: AtomicBool::new(up),
+            qwen_alive: AtomicBool::new(qwen_alive),
+            routed: SyncMutex::new(Vec::new()),
+        })
+    }
+
+    fn models(&self) -> Reachability {
+        if self.up.load(Ordering::SeqCst) {
+            Reachability::Ok
+        } else {
+            Reachability::Unreachable {
+                reason: "接続できない: Connection refused".into(),
+            }
+        }
+    }
+
+    fn complete(&self, model: &str) -> &'static str {
+        let upstream = match model {
+            "celeris/cheap" if self.qwen_alive.load(Ordering::SeqCst) => "qwen",
+            "celeris/cheap" => "claude-cheap",
+            _ => "claude-standard",
+        };
+        if let Ok(mut routed) = self.routed.lock() {
+            routed.push((model.to_string(), upstream));
+        }
+        upstream
+    }
+
+    fn routed(&self) -> Vec<(String, &'static str)> {
+        self.routed.lock().map(|r| r.clone()).unwrap_or_default()
+    }
+}
+
+/// proxy の `celeris/cheap` を呼んでから候補を書く `langmem`（実物の `LangMemConfig.model` と同じく
+/// モデル名は設定の抽象名）。
+struct ProxyLangMemAdapter {
+    proxy: Arc<FakeProxy>,
+    inner: CandidatesAdapter,
+}
+
+#[async_trait]
+impl WorkerAdapter for ProxyLangMemAdapter {
+    fn id(&self) -> &str {
+        self.inner.id()
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        run_id: &str,
+        limits: RunLimits,
+        sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        self.proxy.complete(LANGMEM_MODEL);
+        self.inner.run(req, run_id, limits, sink).await
+    }
+}
+
+fn proxy_dispatcher(
+    store: Arc<dyn TaskStore>,
+    seen: Arc<SyncMutex<Vec<RunRequest>>>,
+    proxy: Arc<FakeProxy>,
+) -> Dispatcher {
+    let langmem: Arc<dyn WorkerAdapter> = Arc::new(ProxyLangMemAdapter {
+        proxy: proxy.clone(),
+        inner: CandidatesAdapter {
+            id: "langmem",
+            seen: seen.clone(),
+        },
+    });
+    let mut d = knowledge_dispatcher_with(store, seen, langmem, Some(Tier::Cheap), true);
+    d.set_knowledge_probe(Arc::new(move |_, _| proxy.models()));
+    d
+}
+
+fn fell_back(store: &Arc<dyn TaskStore>, task_id: TaskId) -> bool {
+    store
+        .events_for(task_id)
+        .expect("events")
+        .iter()
+        .any(|(_, e)| matches!(e, Event::WorkerProgress { msg, .. } if msg.contains("倒す")))
+}
+
+/// ADR-0132 D4: Qwen が生きていれば、知識整理 run は `langmem` のまま proxy の `celeris/cheap` を
+/// 呼び、proxy が Qwen を選ぶ（汎用ハーネスへは倒さない）。
+#[tokio::test]
+async fn cheap_only_knowledge_run_reaches_qwen_through_the_proxy_while_qwen_is_alive() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let task = knowledge_task(dir.path());
+    store.insert(&task).expect("insert");
+    let seen = Arc::new(SyncMutex::new(Vec::new()));
+    let proxy = FakeProxy::new(true, true);
+    let mut d = proxy_dispatcher(store.clone(), seen.clone(), proxy.clone());
+    run_until_idle(&mut d, 100).await;
+
+    assert_eq!(started_adapter(&store, task.id).as_deref(), Some("langmem"));
+    assert!(!fell_back(&store, task.id));
+    assert_eq!(
+        proxy.routed(),
+        vec![("celeris/cheap".to_string(), "qwen")],
+        "cheap の抽象モデルで Qwen に届く"
+    );
+    assert_eq!(seen.lock().expect("seen")[0].task.budget.max_turns, 4);
+}
+
+/// ADR-0132 D3 / D4: Qwen が落ちても proxy に届く限り `langmem` は Qwen 必須ではないので倒さず、
+/// proxy の中で `celeris/cheap` が Claude の cheap に倒れる（知識整理は止まらない）。
+#[tokio::test]
+async fn cheap_only_knowledge_run_stays_on_langmem_and_the_proxy_falls_back_when_qwen_is_down() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let task = knowledge_task(dir.path());
+    store.insert(&task).expect("insert");
+    let seen = Arc::new(SyncMutex::new(Vec::new()));
+    let proxy = FakeProxy::new(true, false);
+    let mut d = proxy_dispatcher(store.clone(), seen.clone(), proxy.clone());
+    run_until_idle(&mut d, 100).await;
+
+    assert_eq!(
+        started_adapter(&store, task.id).as_deref(),
+        Some("langmem"),
+        "Qwen の停止は汎用ハーネスへ倒す理由にならない"
+    );
+    assert!(!fell_back(&store, task.id));
+    assert_eq!(
+        proxy.routed(),
+        vec![("celeris/cheap".to_string(), "claude-cheap")]
+    );
+    assert_eq!(seen.lock().expect("seen").len(), 1);
+}
+
+/// ADR-0052 D2 / ADR-0132 D4: proxy そのものに届かないときだけ、cheap の汎用ハーネスへ倒す
+/// （proxy は呼ばれない）。
+#[tokio::test]
+async fn cheap_only_unreachable_proxy_falls_back_to_the_cheap_generic_harness() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let task = knowledge_task(dir.path());
+    store.insert(&task).expect("insert");
+    let seen = Arc::new(SyncMutex::new(Vec::new()));
+    let proxy = FakeProxy::new(false, true);
+    let mut d = proxy_dispatcher(store.clone(), seen.clone(), proxy.clone());
+    run_until_idle(&mut d, 100).await;
+
+    assert_eq!(started_adapter(&store, task.id).as_deref(), Some("fake"));
+    assert!(fell_back(&store, task.id));
+    assert!(proxy.routed().is_empty(), "langmem は走らない");
+    let requests = seen.lock().expect("seen");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].task.worker_hint.tier, Tier::Cheap);
 }

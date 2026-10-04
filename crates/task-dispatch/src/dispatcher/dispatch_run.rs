@@ -108,8 +108,17 @@ impl Dispatcher {
         // ADR-0079 D4 (1)（Phase R2a）: 木の子 task の compound は `[execution] gate` に関わらず採用する
         // （root が compound で分けると決めた木を途中で 1 run に潰さない）。root は従来どおり（U-R5）。
         let tree_child_compound = decision_is_compound && task_core::tree::is_tree_child(&task);
+        // ADR-0124 D3: 直行経路（`route = direct`・shadow でない）と記録した Task は planner を挟まず、
+        // 計画の無い 1 本の implementation run で走る（その後は従来の review 前同期 → command checks →
+        // reviewer）。`replan_dispatch` は計画を持つ Task だけなので触らない。
+        let direct_route = task
+            .routing
+            .as_ref()
+            .and_then(|r| r.route.as_ref())
+            .filter(|r| r.route == task_core::Route::Direct && !r.shadow);
         let is_planner_dispatch = replan_dispatch
             || (current_wu.is_none()
+                && direct_route.is_none()
                 && decision_is_compound
                 && (self.config.execution.gate == task_core::GateMode::On
                     || shadow_human_explicit_compound
@@ -174,6 +183,26 @@ impl Dispatcher {
                 return Ok(false);
             }
             self.infra_backoff.remove(&task.id);
+        }
+        // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
+        // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
+        let run_key = RunKey {
+            task: task.id,
+            work_unit: current_wu
+                .as_ref()
+                .filter(|w| w.phase.is_some())
+                .map(|w| w.id.clone()),
+        };
+        let write_reservation = if is_planner_dispatch || self.write_set_gate_disabled() {
+            None
+        } else {
+            self.write_reservation_for(&task, current_wu.as_ref())?
+        };
+        if let Some(reservation) = &write_reservation
+            && let Some(blocker) = self.write_set_blocker(&run_key, reservation)
+        {
+            self.note_write_set_hold(&run_key, &blocker, reservation);
+            return Ok(false);
         }
         // ADR-0018: リモート実行のタスクは、クラスタの設定・cooldown・並列度・多重接続を先に確かめる。
         // ADR-0062 B1（Phase 107）: `cluster_of` が `None` の理由を分ける。(a) 設定に無いクラスタ
@@ -495,31 +524,6 @@ impl Dispatcher {
             },
         )?;
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
-        // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
-        // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
-        // planner run はこの少し上で、それぞれ自分で `run_index_start` を呼ぶ）。
-        if current_wu.is_none() && !is_planner_dispatch {
-            let seq = current_run_seq(&self.store.events_for(task.id)?) + 1;
-            if let Err(e) = self.store.run_index_start(task_core::RunRow {
-                run_id: run_id.clone(),
-                task_id: task.id.to_string(),
-                work_unit_id: None,
-                role: task_core::RunIndexRole::Worker,
-                seq,
-                status: task_core::RunIndexStatus::Running,
-                adapter: Some(adapter_id.clone()),
-                model: Some(model.clone()),
-                account: account.clone(),
-                session_id: None,
-                checkpoint: None,
-                usage: None,
-                metrics: None,
-                started_at: rfc3339(OffsetDateTime::now_utc()),
-                finished_at: None,
-            }) {
-                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the (implicit work unit) worker run start in the runs index");
-            }
-        }
         // ADR-0069 D5: この run の routing の監査記録（担当・harness・lane・model・features・規則）。
         if let Some(mut decision) = lane_decision {
             if task_core::model_policy::lane_rank(task.worker_hint.tier)
@@ -594,7 +598,7 @@ impl Dispatcher {
         tracing::info!(task_id = %task.id, %run_id, adapter = %adapter_id, provider = %provider_id, account = account.as_deref(), "dispatching");
         let remote = cluster
             .as_ref()
-            .map(|(spec, path, mode)| spec.ssh_settings(path, task.id, *mode));
+            .map(|(spec, path, mode)| self.remote_ssh_settings(spec, path, task.id, *mode));
         // ADR-0043 D3（Phase 56）: ホストか、コンテナか、runtime が無くて `blocked` か。
         let container =
             self.container_decision(&task, worktree.as_ref(), &adapter_id, remote.is_some());
@@ -622,6 +626,72 @@ impl Dispatcher {
         }
         // ADR-0072 D6/D9/D15（Phase E2）: 計画のある Task の WU の run。WU の行を `running` にし
         // （`runs`/`last_run_id` を更新）、`runs` 索引に 1 行作り、prompt に載せる文脈を組み立てる。
+        // ADR-0140 D1: WU の worker run は、continuation なら同じ Claude Code session を resume するか、
+        // checkpoint 前置きの新しい session に倒すかをここで決める（planner run は判断表 #1 で常に fresh）。
+        // 付記 session-container: 計画の無い atomic task（直行経路を含む）の worker run も同じ判断表で、
+        // task 単位の 1 本（`work_unit_id IS NULL`）を resume するか checkpoint 前置きの fresh に倒す。
+        // CoS の対話 run（`extras.session` が `run_extras` で埋まる）と planner run は対象外。
+        let atomic_worker =
+            current_wu.is_none() && !is_planner_dispatch && extras.session.is_none();
+        if current_wu.is_some() || atomic_worker {
+            let cwd = worktree
+                .as_ref()
+                .and_then(|w| w.cwd())
+                .unwrap_or(dir.as_path())
+                .to_string_lossy()
+                .into_owned();
+            let surface = continuation_session::ContinuationSurface {
+                provider: Some(provider_id.as_str()),
+                cwd: Some(cwd.as_str()),
+                container: matches!(container, ContainerDecision::Container(_)),
+            };
+            let role = if is_planner_dispatch {
+                crate::sessions::ContinuationRole::Planner
+            } else {
+                crate::sessions::ContinuationRole::Worker
+            };
+            if let Err(e) = self.resolve_continuation_session(
+                &task,
+                current_wu.as_ref(),
+                &run_id,
+                role,
+                &adapter_id,
+                account.as_deref(),
+                &surface,
+                &mut extras,
+            ) {
+                let work_unit = current_wu.as_ref().map(|wu| wu.key.as_str());
+                tracing::warn!(task_id = %task.id, work_unit, error = %e, "failed to resolve the continuation session; running with a fresh context");
+                extras.session = None;
+                extras.continuation_session = None;
+            }
+        }
+        // ADR-0072 D5（E2b の指摘）: 計画の無い Task（暗黙の WorkUnit）の worker run も `runs`
+        // 索引に書く（(g)「全タスクの run について書く」。WU の run は `start_work_unit_run`、
+        // planner run はこの少し下で、それぞれ自分で `run_index_start` を呼ぶ）。付記 session-container: 続きの
+        // session を決めた後に書き、この run が使う session の id を載せる（usage の積み上げの key）。
+        if current_wu.is_none() && !is_planner_dispatch {
+            let seq = current_run_seq(&self.store.events_for(task.id)?) + 1;
+            if let Err(e) = self.store.run_index_start(task_core::RunRow {
+                run_id: run_id.clone(),
+                task_id: task.id.to_string(),
+                work_unit_id: None,
+                role: task_core::RunIndexRole::Worker,
+                seq,
+                status: task_core::RunIndexStatus::Running,
+                adapter: Some(adapter_id.clone()),
+                model: Some(model.clone()),
+                account: account.clone(),
+                session_id: extras.session.as_ref().map(|s| s.session_id.clone()),
+                checkpoint: None,
+                usage: None,
+                metrics: None,
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+                finished_at: None,
+            }) {
+                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to record the (implicit work unit) worker run start in the runs index");
+            }
+        }
         if let Some(wu) = &current_wu
             && let Err(e) = self.start_work_unit_run(
                 task.id,
@@ -649,6 +719,10 @@ impl Dispatcher {
             extras.available_genres = Vec::new();
         }
         // ADR-0079 D7（Phase R3a）: 木の節点の worker の run は `result.json` の `decisions` で決定の要求を出せる。
+        // ADR-0124 D4: 直行経路の implementation run にだけ worker への節を渡す。
+        if current_wu.is_none() && !is_planner_dispatch {
+            extras.direct_route = direct_route.map(direct_route_context);
+        }
         extras.decision_requests = !is_planner_dispatch
             && self.config.execution.limits.tree.enabled
             && self.is_tree_node(&task).unwrap_or(false);
@@ -741,6 +815,10 @@ impl Dispatcher {
         // ADR-0074「R7-11 実装時の明確化」: 上で書いた予算（planner / WU / 知識整理のフォールバック）は手元の写しにしか
         // 無い。`run_worker` は DB から task を読み直すので、実効の予算を必ず渡す（`wall` だけでなく `max_turns` も効かせる）。
         extras.budget = Some(task.budget);
+        // ADR-0130 D2: 実装 run の開始 HEAD を worker を起こす前に固定する（planner run は書かない）。
+        if !is_planner_dispatch {
+            self.capture_run_write_bases(&task, &run_id, worktree.as_ref());
+        }
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,
@@ -756,11 +834,13 @@ impl Dispatcher {
             extras,
             container,
         );
+        let key = RunKey {
+            task: task.id,
+            work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
+        };
+        self.reserve_write_set(key.clone(), write_reservation);
         self.running.insert(
-            RunKey {
-                task: task.id,
-                work_unit: v2_wu.as_ref().map(|w| w.id.clone()),
-            },
+            key,
             RunEntry {
                 run_id,
                 provider: provider_id,
@@ -1216,5 +1296,21 @@ impl Dispatcher {
             .0
             .commands
             .check
+    }
+}
+
+/// ADR-0124 D4: `RouteDecision` を worker に渡す要約（満たした条件の行）にする。
+fn direct_route_context(
+    decision: &task_core::RouteDecision,
+) -> task_worker::protocol::DirectRouteContext {
+    task_worker::protocol::DirectRouteContext {
+        policy_version: decision.policy_version.clone(),
+        overrode_gate: decision.overrode_gate,
+        reasons: decision
+            .reasons
+            .iter()
+            .filter(|r| r.ok)
+            .map(|r| format!("{}: {}", r.rule_id, r.detail))
+            .collect(),
     }
 }

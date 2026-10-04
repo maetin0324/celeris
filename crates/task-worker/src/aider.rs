@@ -13,7 +13,7 @@
 //!
 //! トークン使用量は aider 自身が終了直前に stdout へ書く `Tokens: N sent, M received.` /
 //! `Cost: $X message, $Y session.` を最良努力で拾う（無ければ `None`。ADR-0061「取得可能な範囲」）。
-//! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`docs/PROGRESS.md`
+//! 実機（`aider-chat` 0.86.2、モック OpenAI 互換エンドポイント）で書式を確認済み（`agent-docs/PROGRESS.md`
 //! Phase 104 参照）。`Cost:` 行があればそれをそのまま使い、無ければ `model` が分かるときだけ
 //! `task_core::estimate_cost_usd` の静的単価表で推定する（aider 自身の実測値を優先する）。
 
@@ -49,8 +49,6 @@ pub struct AiderConfig {
     pub model: Option<String>,
     /// 追加の環境変数（`OPENAI_API_KEY` 等）。
     pub env: Vec<(String, String)>,
-    /// ADR-0075 G3-fix1: 子プロセスから外す環境変数（`with_env_removed`。`env` より先に `env_remove` する）。
-    pub env_remove: Vec<String>,
     /// ADR-0043 D3（Phase 56）: `Some` なら `aider` をコンテナの中で起こす（`container::wrap`）。
     pub container: Option<crate::container::SharedPlan>,
 }
@@ -62,7 +60,6 @@ impl Default for AiderConfig {
             extra_args: Vec::new(),
             model: None,
             env: Vec::new(),
-            env_remove: Vec::new(),
             container: None,
         }
     }
@@ -106,12 +103,6 @@ impl WorkerAdapter for AiderAdapter {
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         let mut config = self.config.clone();
         config.env.extend(extra.iter().cloned());
-        Some(Arc::new(Self::new(config)))
-    }
-
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut config = self.config.clone();
-        crate::adapter::remove_env_keys(&mut config.env, &mut config.env_remove, keys);
         Some(Arc::new(Self::new(config)))
     }
 
@@ -189,8 +180,6 @@ async fn run_aider(
     let message_path = run_dir.join("aider-message.txt");
     tokio::fs::write(&message_path, &prompt).await?;
     command.arg("--message-file").arg(&message_path);
-    // ADR-0075 G3-fix1: 継いだ値を外してから重ねる（コンテナ実行では `container::wrap` が無視する）。
-    crate::adapter::apply_env_removal(&mut command, &config.env_remove);
     command
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
@@ -416,6 +405,8 @@ fn parse_aider_usage(stdout: &str) -> Option<Usage> {
         cache_read_tokens: None,
         cache_creation_tokens: None,
         cost_usd: session_cost,
+        duplicate_reads: None,
+        session_resumed: None,
     })
 }
 

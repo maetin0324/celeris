@@ -76,10 +76,43 @@ pub(crate) const MIGRATION_0035: &str =
 /// browser Phase 4: trusted login（ブランチの 0035 を振り直し）。
 pub(crate) const MIGRATION_0036: &str =
     include_str!("../../migrations/0036_browser_trusted_login.sql");
+/// ADR-0121 付記: `idx_events_delivery_skipped`（受信箱の delivery_skipped 走査を絞る部分 index）。
+pub(crate) const MIGRATION_0037: &str =
+    include_str!("../../migrations/0037_events_delivery_skipped_index.sql");
+/// ADR-0133 D3.2: `feed_notices` / `feed_sources` / `feed_cursor`（通知の既読と束ね）。
+pub(crate) const MIGRATION_0041: &str = include_str!("../../migrations/0041_feed_notices.sql");
+/// ADR-0118 D3: delivery の検査対象と merge candidate を記録する。
+/// ブランチでは 0037 だったが、main の `0037_events_delivery_skipped_index`（本番適用済み）と重複したので
+/// review sync で空き番号 42 へ振り直した。列を足すだけで 0038〜0041 とは依存しない。
+pub(crate) const MIGRATION_0042: &str =
+    include_str!("../../migrations/0042_review_target_sync.sql");
+/// ADR-0140 D2: `node_sessions` に execute continuation の WU 単位 session の列を足す。
+/// ブランチでは 0038 だったが、main の 0038〜0040 は未使用のまま空いていなかったため
+/// （他の celeris/* ブランチが 0038〜0040 を使用中）、mig-renumber で 0043 へ振り直した。
+pub(crate) const MIGRATION_0043: &str =
+    include_str!("../../migrations/0043_work_unit_sessions.sql");
+/// ブランチでは 0039 だったが、同じ理由で 0044 へ振り直した。
+pub(crate) const MIGRATION_0044: &str = include_str!("../../migrations/0044_write_sets.sql");
+/// ADR-0130 D4: task branch の target からの behind snapshot。
+/// ブランチでは 0040 だったが、同じ理由で 0045 へ振り直した。
+pub(crate) const MIGRATION_0045: &str = include_str!("../../migrations/0045_behind_targets.sql");
+
+/// ADR-0131 D1: 定期実行（`cron_jobs`）と実行履歴（`cron_job_runs`）。
+/// （ブランチの 0039 を main の 0041 と並列開発 task の 0042〜0045 の後へ振り直し。）
+pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron_jobs.sql");
+/// ADR parallel integration D4: 受信箱の統合依頼 event を絞る index。
+pub(crate) const MIGRATION_0047: &str =
+    include_str!("../../migrations/0047_events_integration_request_index.sql");
+
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
+/// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
+/// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
+/// `migration_sql` に足す（記録が無いので後から当たる）。
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 36;
+pub const SCHEMA_VERSION: u32 = 47;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -120,6 +153,14 @@ impl SqliteStore {
             34 => Ok(MIGRATION_0034),
             35 => Ok(MIGRATION_0035),
             36 => Ok(MIGRATION_0036),
+            37 => Ok(MIGRATION_0037),
+            41 => Ok(MIGRATION_0041),
+            42 => Ok(MIGRATION_0042),
+            43 => Ok(MIGRATION_0043),
+            44 => Ok(MIGRATION_0044),
+            45 => Ok(MIGRATION_0045),
+            46 => Ok(MIGRATION_0046),
+            47 => Ok(MIGRATION_0047),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

@@ -784,11 +784,11 @@ fn ready_tasks_excludes_approval_kind() {
     assert_eq!(ready[0].id, exec.id);
 }
 
-/// ADR-0010 D1（P-4）: 終端タスクへの Cancel は無効で、状態もイベントも変わらない。
+/// ADR-0131 D7: done/cancelled への Cancel は無効。failed は人が諦める操作として許す。
 #[test]
 fn cancel_is_invalid_for_terminal_tasks() {
     let store = SqliteStore::open_in_memory().unwrap();
-    for status in [Status::Done, Status::Failed, Status::Cancelled] {
+    for status in [Status::Done, Status::Cancelled] {
         let t = sample_task(status);
         store.insert(&t).unwrap();
         assert!(matches!(
@@ -798,6 +798,26 @@ fn cancel_is_invalid_for_terminal_tasks() {
         assert_eq!(store.get(t.id).unwrap().unwrap().status, status);
         assert!(store.events_for(t.id).unwrap().is_empty());
     }
+}
+
+#[test]
+fn inbox_cleanup_cancel_failed_preserves_attempts_and_records_reason() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut task = sample_task(Status::Failed);
+    task.attempts = 3;
+    store.insert(&task).unwrap();
+    let outcome = store
+        .apply_transition(task.id, Trigger::Cancel, None)
+        .unwrap();
+    assert_eq!(outcome.next, Status::Cancelled);
+    assert_eq!(outcome.attempts, 3);
+    assert_eq!(outcome.reason, "cancel_failed");
+    let updated = store.get(task.id).unwrap().unwrap();
+    assert_eq!(updated.status, Status::Cancelled);
+    assert_eq!(updated.attempts, 3);
+    assert!(store.events_for(task.id).unwrap().iter().any(|(_, event)| matches!(event,
+        Event::Transitioned { from: Status::Failed, to: Status::Cancelled, reason } if reason == "cancel_failed"
+    )));
 }
 
 /// ADR-0010 D2: Approval が cancel された場合も（reject と同じく）終端でない直接の子が cancelled になる。
@@ -1606,6 +1626,214 @@ fn event_rows_for_returns_one_tasks_rows_with_ids_after_seq() {
 }
 
 #[test]
+fn latest_delivery_skipped_rows_returns_latest_per_task_only() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = sample_task(Status::Draft);
+    let b = sample_task(Status::Draft);
+    store.insert(&a).unwrap();
+    store.insert(&b).unwrap();
+    let skipped = |detail: &str| Event::DeliverySkipped {
+        reason: crate::DeliverySkipReason::NoMarker,
+        detail: detail.to_string(),
+        head: None,
+    };
+    store.append_event(a.id, &skipped("old")).unwrap();
+    store.append_event(a.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(b.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(a.id, &skipped("latest")).unwrap();
+    store.append_event(b.id, &skipped("other task")).unwrap();
+
+    let rows = store.latest_delivery_skipped_rows().unwrap();
+    assert_eq!(rows.len(), 2);
+    let by_task = rows
+        .into_iter()
+        .map(|row| (row.task_id, row))
+        .collect::<HashMap<_, _>>();
+    assert!(matches!(
+        &by_task[&a.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "latest"
+    ));
+    assert!(matches!(
+        &by_task[&b.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "other task"
+    ));
+}
+
+/// ADR-0121 付記: inbox の `latest_delivery_skipped_rows` は events 全件の full scan をせず、
+/// migration 0037 の部分 index `idx_events_delivery_skipped` を使う（問い合わせと試験で同じ SQL
+/// 文字列 `events::latest_delivery_skipped_sql()` を使うので、式がずれて index を落とすことはない）。
+#[test]
+fn latest_delivery_skipped_rows_uses_partial_index() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let a = sample_task(Status::Draft);
+    let b = sample_task(Status::Draft);
+    store.insert(&a).unwrap();
+    store.insert(&b).unwrap();
+    let skipped = |detail: &str| Event::DeliverySkipped {
+        reason: crate::DeliverySkipReason::NoMarker,
+        detail: detail.to_string(),
+        head: None,
+    };
+    store.append_event(a.id, &skipped("old")).unwrap();
+    store.append_event(a.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(b.id, &Event::ApprovalRequested).unwrap();
+    store.append_event(a.id, &skipped("latest")).unwrap();
+    store.append_event(b.id, &skipped("other task")).unwrap();
+
+    let plan_details = store
+        .with_read_conn(|conn| {
+            let sql = super::events::latest_delivery_skipped_sql();
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let mut rows = stmt.query([])?;
+            let mut details = Vec::new();
+            while let Some(row) = rows.next()? {
+                details.push(row.get::<_, String>(3)?);
+            }
+            Ok(details)
+        })
+        .unwrap();
+    assert!(
+        plan_details.iter().any(|detail| {
+            detail.contains("USING INDEX idx_events_delivery_skipped")
+                || detail.contains("USING COVERING INDEX idx_events_delivery_skipped")
+        }),
+        "query plan did not use idx_events_delivery_skipped: {plan_details:?}"
+    );
+
+    let rows = store.latest_delivery_skipped_rows().unwrap();
+    assert_eq!(rows.len(), 2);
+    let by_task = rows
+        .into_iter()
+        .map(|row| (row.task_id, row))
+        .collect::<HashMap<_, _>>();
+    assert!(matches!(
+        &by_task[&a.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "latest"
+    ));
+    assert!(matches!(
+        &by_task[&b.id].event,
+        Event::DeliverySkipped { detail, .. } if detail == "other task"
+    ));
+}
+
+fn sample_integration_request(
+    source_sha: &str,
+    target_sha: &str,
+) -> crate::integration_request::IntegrationRequest {
+    crate::integration_request::IntegrationRequest {
+        target_branch: "main".into(),
+        target_sha: target_sha.into(),
+        source_branch: "feature".into(),
+        source_sha: source_sha.into(),
+        merge_base: Some("base".into()),
+        conflict_files: vec!["src/lib.rs".into()],
+        intent: Vec::new(),
+        reason: "conflict".into(),
+        recommendation: "review".into(),
+        actions: Vec::new(),
+        candidate_sha: None,
+    }
+}
+
+#[test]
+fn integration_requests_are_idempotent_and_answer_removes_only_matching_pair() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let a = sample_integration_request("source-a", "target-a");
+    let b = sample_integration_request("source-b", "target-a");
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "delivery")
+            .unwrap()
+    );
+    assert!(
+        !store
+            .integration_request_record(task.id, &a, "phase:merge")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &b, "phase:merge")
+            .unwrap()
+    );
+    assert_eq!(store.open_integration_requests().unwrap().len(), 2);
+    assert_eq!(
+        store
+            .events_for(task.id)
+            .unwrap()
+            .iter()
+            .filter(|(_, event)| matches!(event, Event::IntegrationRequested { .. }))
+            .count(),
+        2
+    );
+
+    store
+        .append_event(
+            task.id,
+            &Event::IntegrationAnswered {
+                request_id: a.id_for(task.id),
+                answer: "integrated".into(),
+                note: Some("resolved".into()),
+            },
+        )
+        .unwrap();
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1);
+    assert!(
+        matches!(&open[0].event, Event::IntegrationRequested { request, .. }
+        if request.source_sha == "source-b")
+    );
+    // A new request after an answer is a new decision cycle for the same pair.
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "delivery")
+            .unwrap()
+    );
+    assert_eq!(store.open_integration_requests().unwrap().len(), 2);
+    let latest_seq = store
+        .append_event(
+            task.id,
+            &Event::IntegrationRequested {
+                request: Box::new(a.clone()),
+                origin: "legacy".into(),
+            },
+        )
+        .unwrap();
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().any(|row| row.seq == latest_seq));
+}
+
+#[test]
+fn integration_request_query_uses_partial_index() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    store
+        .integration_request_record(task.id, &sample_integration_request("s", "t"), "delivery")
+        .unwrap();
+    let plan_details = store
+        .with_read_conn(|conn| {
+            let sql = super::events::integration_request_rows_sql();
+            let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let mut rows = stmt.query([])?;
+            let mut details = Vec::new();
+            while let Some(row) = rows.next()? {
+                details.push(row.get::<_, String>(3)?);
+            }
+            Ok(details)
+        })
+        .unwrap();
+    assert!(
+        plan_details.iter().any(|detail| detail
+            .contains("USING INDEX idx_events_integration_request")
+            || detail.contains("USING COVERING INDEX idx_events_integration_request")),
+        "query plan did not use idx_events_integration_request: {plan_details:?}"
+    );
+}
+
+#[test]
 fn events_since_orders_globally_and_respects_after_id_and_limit() {
     let store = SqliteStore::open_in_memory().unwrap();
     let a = sample_task(Status::Draft);
@@ -2221,7 +2449,7 @@ fn migration_0008_adds_the_notifications_table_to_a_schema_7_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
     let now = OffsetDateTime::from_unix_timestamp(1_760_000_000).unwrap();
     assert!(
         store
@@ -2764,7 +2992,7 @@ fn migration_0010_adds_the_projects_workspace_column_to_a_schema_9_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
     // 導入前の案件は「作業場所なし」= 従来どおり。
     assert_eq!(store.project_get(legacy).unwrap().unwrap().workspace, None);
     let spec = WorkspaceSpec::Local {
@@ -3255,7 +3483,7 @@ fn migration_0015_adds_the_lifecycle_columns_to_a_schema_14_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let project = store.project_get(project_id).unwrap().expect("project");
     assert_eq!(project.status, ProjectStatus::Active);
@@ -3321,7 +3549,7 @@ fn migration_0017_adds_message_metadata_and_console_action_runs_to_a_schema_16_d
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     // 導入前の行は `metadata = None` として読める。
     let messages = store.message_list("secretary", None, 10).unwrap();
@@ -3414,7 +3642,7 @@ fn migration_0013_adds_task_comments_and_the_label_columns_to_a_schema_11_db() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
     {
         let conn = store.lock().unwrap();
         let (labels, category): (String, String) = conn
@@ -3873,7 +4101,7 @@ fn migration_0026_adds_the_execution_tables_to_a_schema_25_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     // 新しい表が使える（round trip）。
     let task = sample_task(Status::Draft);
@@ -4119,7 +4347,7 @@ fn migration_31_adds_tree_columns_without_rewriting_rows() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let conn = Connection::open(&path).unwrap();
     // 既存の task の行は 1 バイトも変わらず、`root_id` は NULL のまま（埋め戻さない）。
@@ -4370,7 +4598,7 @@ fn migration_27_adds_work_unit_lease_columns() {
 
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 36);
+    assert_eq!(SCHEMA_VERSION, 47);
 
     let conn = Connection::open(&path).unwrap();
     let mut columns: Vec<String> = Vec::new();
@@ -4827,6 +5055,67 @@ fn run_index_round_trips_start_and_finish() {
                 finished
             )
             .unwrap()
+    );
+}
+
+/// `runs_running` は `running` の行だけを `started_at` 昇順で返す（閉じた行は含めない）。
+#[test]
+fn runs_running_lists_only_running_rows_oldest_first() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let row = |run_id: &str, role: RunIndexRole, started_at: &str| RunRow {
+        run_id: run_id.into(),
+        task_id: task.id.to_string(),
+        work_unit_id: None,
+        role,
+        seq: 1,
+        status: RunIndexStatus::Running,
+        adapter: None,
+        model: None,
+        account: None,
+        session_id: None,
+        checkpoint: None,
+        usage: None,
+        metrics: None,
+        started_at: started_at.into(),
+        finished_at: None,
+    };
+    assert!(store.runs_running().unwrap().is_empty());
+    store
+        .run_index_start(row("late", RunIndexRole::Reviewer, "2026-09-24T00:10:00Z"))
+        .unwrap();
+    store
+        .run_index_start(row("early", RunIndexRole::Worker, "2026-09-24T00:00:00Z"))
+        .unwrap();
+    store
+        .run_index_start(row("closed", RunIndexRole::Worker, "2026-09-24T00:05:00Z"))
+        .unwrap();
+    let finished = OffsetDateTime::parse("2026-09-24T00:06:00Z", &Rfc3339).unwrap();
+    assert!(
+        store
+            .run_index_finish(
+                "closed",
+                RunIndexStatus::Completed,
+                None,
+                None,
+                None,
+                finished
+            )
+            .unwrap()
+    );
+    let running: Vec<(String, RunIndexRole)> = store
+        .runs_running()
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.run_id, r.role))
+        .collect();
+    assert_eq!(
+        running,
+        vec![
+            ("early".to_string(), RunIndexRole::Worker),
+            ("late".to_string(), RunIndexRole::Reviewer),
+        ]
     );
 }
 
@@ -5590,4 +5879,97 @@ fn execution_plan_replan_supersedes_the_old_version_and_activates_the_new_one() 
         )
         .unwrap_err();
     assert!(matches!(err, StoreError::InUse { .. }));
+}
+
+/// ADR parallel integration D4 付記（2026-10-04）: 依頼は `integration_request_answer` で一度だけ閉じ、
+/// 同じ発生元の新しい組の依頼は古い依頼を `superseded` で閉じ、`integration_requests_close` は発生元ごとに
+/// 未回答を全て閉じる。
+#[test]
+fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes() {
+    use crate::integration_request::{INTEGRATED_ANSWER, SUPERSEDED_ANSWER};
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Draft);
+    store.insert(&task).unwrap();
+    let a = sample_integration_request("source-a", "target-a");
+    let a_id = a.id_for(task.id);
+    assert!(
+        store
+            .integration_request_record(task.id, &a, "phase:integrate-close")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, Some("統合済み"))
+            .unwrap()
+    );
+    assert!(
+        !store
+            .integration_request_answer(task.id, &a_id, INTEGRATED_ANSWER, None)
+            .unwrap(),
+        "回答済みの依頼には重ねて追記しない"
+    );
+    assert!(
+        !store
+            .integration_request_answer(task.id, "unknown", INTEGRATED_ANSWER, None)
+            .unwrap()
+    );
+    assert!(store.open_integration_requests().unwrap().is_empty());
+
+    let b = sample_integration_request("source-b", "target-b");
+    let c = sample_integration_request("source-c", "target-c");
+    let other = sample_integration_request("source-d", "target-d");
+    assert!(
+        store
+            .integration_request_record(task.id, &b, "phase:integrate-close")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &other, "delivery")
+            .unwrap()
+    );
+    assert!(
+        store
+            .integration_request_record(task.id, &c, "phase:integrate-close")
+            .unwrap()
+    );
+    let open: Vec<String> = store
+        .open_integration_requests()
+        .unwrap()
+        .iter()
+        .filter_map(|row| match &row.event {
+            Event::IntegrationRequested { request, .. } => Some(request.source_sha.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        open,
+        vec!["source-d", "source-c"],
+        "b は c に置き換わり、別 origin の other は残る"
+    );
+    let events = store.events_for(task.id).unwrap();
+    assert!(
+        events.iter().any(|(_, event)| matches!(event,
+            Event::IntegrationAnswered { request_id, answer, note }
+                if *request_id == b.id_for(task.id) && answer == SUPERSEDED_ANSWER
+                    && note.as_deref().is_some_and(|n| n.contains(&c.id_for(task.id))))),
+        "{events:?}"
+    );
+
+    let closed = store
+        .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, Some("main took it"))
+        .unwrap();
+    assert_eq!(closed, vec![other.id_for(task.id)]);
+    assert!(
+        store
+            .integration_requests_close(task.id, "delivery", INTEGRATED_ANSWER, None)
+            .unwrap()
+            .is_empty()
+    );
+    let open = store.open_integration_requests().unwrap();
+    assert_eq!(open.len(), 1);
+    assert!(
+        matches!(&open[0].event, Event::IntegrationRequested { request, .. }
+        if request.source_sha == "source-c")
+    );
 }

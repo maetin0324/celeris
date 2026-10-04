@@ -10,7 +10,8 @@
 //! - 準備（直下の列挙・`statvfs`・uid/gid・cwd の絶対化・ssh 設定の写し）は fork の**前**に親で行い、子では
 //!   用意した C 文字列で `unshare` / `mount` / `chdir` を呼ぶだけ（割り当てをしない）。
 //! - 付記 D-a: user systemd bus を tmpfs / 空ファイルの bind で覆い、`$HOME` の `.config/systemd`・
-//!   `.local/celeris/releases`・`.config/celeris` を（存在すれば）読み取り専用にする（[`DbGuard::host_config_read_only_paths`]）。
+//!   `.local/celeris/releases`・`.config/celeris` と設定済み releases を読み取り専用にする
+//!   （[`DbGuard::host_config_read_only_paths`]）。
 //! - 準備に失敗したら、その spawn を失敗させる（黙って保護なしで起動しない）。
 
 use std::ffi::{CString, OsString};
@@ -50,8 +51,12 @@ pub struct DbGuard {
     family: Vec<OsString>,
     /// ssh 設定の写しを置く所（D4）。`None` なら写さない。
     ssh_shadow_root: Option<PathBuf>,
-    /// 付記 D-a の 3 の基準の `$HOME`（`new` で解決。`None` なら何もしない）。
+    /// 付記 D-a の 3 の基準の `$HOME`（`new` で解決。`None` なら home の固定 path を除外）。
     home: Option<PathBuf>,
+    /// `[selfdeploy].releases_dir`。設定された場合は存在と canonicalize を必須にする。
+    releases_dir: Option<PathBuf>,
+    /// `[storage].hot_mount`。mount root の直下の変更も抑止する。
+    hot_mount: Option<PathBuf>,
 }
 
 impl DbGuard {
@@ -85,6 +90,8 @@ impl DbGuard {
                 .filter(|h| !h.is_empty())
                 .map(PathBuf::from)
                 .filter(|h| h.is_absolute()),
+            releases_dir: None,
+            hot_mount: None,
         })
     }
 
@@ -94,17 +101,34 @@ impl DbGuard {
         self
     }
 
-    /// 付記 D-a の 3: `$HOME` 下の host の設定のうち、存在するもの（canonicalize 済み）。存在するかを
-    /// 確かめられない（`EACCES` など）ときは失敗にする（D5: 保護なしで起動しない）。
+    /// daemon が解決した `[selfdeploy].releases_dir` を追加する。
+    pub fn with_releases_dir(mut self, releases_dir: PathBuf) -> Self {
+        self.releases_dir = Some(releases_dir);
+        self
+    }
+
+    /// daemon が確認した `[storage].hot_mount` を追加する。
+    pub fn with_hot_mount(mut self, hot_mount: Option<PathBuf>) -> Self {
+        self.hot_mount = hot_mount;
+        self
+    }
+
+    /// 固定の home path のうち存在するものと、設定済み hot mount / releases の実体 path。
+    /// 存在確認や canonicalize に失敗したら保護なしで起動しない。
     pub fn host_config_read_only_paths(&self) -> io::Result<Vec<PathBuf>> {
-        let Some(home) = &self.home else {
-            return Ok(Vec::new());
-        };
         let mut out = Vec::new();
-        for rel in HOST_CONFIG_DIRS {
-            let path = home.join(rel);
-            if path.try_exists()? {
-                out.push(std::fs::canonicalize(&path)?);
+        if let Some(home) = &self.home {
+            for rel in HOST_CONFIG_DIRS {
+                let path = home.join(rel);
+                if path.try_exists()? {
+                    out.push(std::fs::canonicalize(&path)?);
+                }
+            }
+        }
+        for configured in [&self.hot_mount, &self.releases_dir].into_iter().flatten() {
+            let path = std::fs::canonicalize(configured)?;
+            if !out.contains(&path) {
+                out.push(path);
             }
         }
         Ok(out)
@@ -471,6 +495,8 @@ pub fn apply(command: &mut tokio::process::Command, guard: &DbGuard) {
         );
         return;
     }
+    // ADR-0126 A1-1: worker run の印（守る DB のディレクトリの path だけ）。
+    command.env(WORKER_DB_GUARD_ENV, &guard.dir);
     let cwd = command.as_std().get_current_dir().map(Path::to_path_buf);
     match guard.plan(cwd.as_deref(), runtime_dir(command.as_std())) {
         Ok(plan) => {
@@ -497,6 +523,8 @@ pub fn apply(command: &mut tokio::process::Command, guard: &DbGuard) {
 pub fn apply_std(command: &mut std::process::Command, guard: &DbGuard) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
     let plan = guard.plan(command.get_current_dir(), runtime_dir(command))?;
+    // ADR-0126 A1-1: [`apply`] と同じ印。
+    command.env(WORKER_DB_GUARD_ENV, &guard.dir);
     // SAFETY: `apply` と同じ。
     unsafe {
         command.pre_exec(move || plan.enter());
@@ -576,6 +604,424 @@ fn launch_with(
         apply(&mut command, guard);
     }
     command
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0126 A: 守る対象（本番 DB・本番 token）と worker run の印で、試験 daemon に userns を求めるかを決める。
+// ---------------------------------------------------------------------------
+
+/// ADR-0126 A1-1: worker run の印。本番 daemon の [`apply`] / [`apply_std`] が子の環境に
+/// `<正規化した守る DB のディレクトリ>` を入れる（path だけ。token の値は入れない）。
+pub const WORKER_DB_GUARD_ENV: &str = "CELERIS_WORKER_DB_GUARD";
+
+/// ADR-0126 A2: worker run の中で本番を使う daemon を拒否するときに足す文言。
+pub const PRODUCTION_IN_WORKER_RUN: &str =
+    "worker db guard: this daemon uses the production DB/token inside a worker run (ADR-0126)";
+
+/// canonicalize した path と、存在すれば `(st_dev, st_ino)`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedPath {
+    pub path: PathBuf,
+    /// 存在しない path（末尾が未作成）なら `None`。
+    pub id: Option<(u64, u64)>,
+}
+
+impl ResolvedPath {
+    /// 存在する path だけを受ける（symlink・相対 path・`..` を解き、inode を控える）。
+    pub fn resolve(path: &Path) -> io::Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        let canonical = std::fs::canonicalize(path)?;
+        let meta = std::fs::metadata(&canonical)?;
+        Ok(Self {
+            path: canonical,
+            id: Some((meta.dev(), meta.ino())),
+        })
+    }
+
+    /// 末尾がまだ無い path も受ける（存在する最も近い祖先を canonicalize し、残りの名前を足す）。
+    /// 宙吊りの symlink・末尾が `..` の path は解けないので失敗にする。
+    pub fn resolve_lenient(path: &Path) -> io::Result<Self> {
+        match Self::resolve(path) {
+            Ok(r) => Ok(r),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if std::fs::symlink_metadata(path).is_ok() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{} is a dangling symlink", path.display()),
+                    ));
+                }
+                let name = path.file_name().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("{} has no file name", path.display()),
+                    )
+                })?;
+                let parent = match path.parent() {
+                    Some(p) if !p.as_os_str().is_empty() => Self::resolve_lenient(p)?.path,
+                    Some(_) => std::env::current_dir()?,
+                    None => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidInput,
+                            format!("{} has no parent", path.display()),
+                        ));
+                    }
+                };
+                Ok(Self {
+                    path: parent.join(name),
+                    id: None,
+                })
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn same(&self, other: &ResolvedPath) -> bool {
+        self.path == other.path || (self.id.is_some() && self.id == other.id)
+    }
+
+    /// 同じか、どちらかがもう一方の中（component 単位の前方一致）か、同じ inode。
+    fn overlaps(&self, other: &ResolvedPath) -> bool {
+        self.same(other) || self.path.starts_with(&other.path) || other.path.starts_with(&self.path)
+    }
+}
+
+/// ADR-0126 A1: 本番の守る対象の集合 P。決められない部分があれば `unknown` に理由を積み、免除しない（fail closed）。
+/// token の内容は保持するが `Debug` には出さない。
+#[derive(Default)]
+pub struct ProtectedSet {
+    db_files: Vec<ResolvedPath>,
+    /// 本番 DB のディレクトリ・`state_dir`・印の path。
+    dirs: Vec<ResolvedPath>,
+    token_files: Vec<ResolvedPath>,
+    tokens: Vec<zeroize::Zeroizing<Vec<u8>>>,
+    /// 本番 token が P にあるのに内容を読めなかった。
+    token_unreadable: bool,
+    unknown: Vec<String>,
+}
+
+impl std::fmt::Debug for ProtectedSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProtectedSet")
+            .field("db_files", &self.db_files)
+            .field("dirs", &self.dirs)
+            .field("token_files", &self.token_files)
+            .field("tokens", &format_args!("<{} redacted>", self.tokens.len()))
+            .field("token_unreadable", &self.token_unreadable)
+            .field("unknown", &self.unknown)
+            .finish()
+    }
+}
+
+impl ProtectedSet {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 本番 config の `[db] path`。DB ファイルとそのディレクトリを P に入れる。
+    pub fn add_db_file(&mut self, db: &Path) {
+        match ResolvedPath::resolve_lenient(db) {
+            Ok(r) => {
+                if let Some(parent) = r.path.parent() {
+                    self.add_dir(parent);
+                }
+                self.db_files.push(r);
+            }
+            Err(e) => self.mark_unknown(format!("production db {}: {e}", db.display())),
+        }
+    }
+
+    /// 本番 config の `state_dir`（と印の path）。
+    pub fn add_dir(&mut self, dir: &Path) {
+        match ResolvedPath::resolve_lenient(dir) {
+            Ok(r) => {
+                if !self.dirs.contains(&r) {
+                    self.dirs.push(r);
+                }
+            }
+            Err(e) => self.mark_unknown(format!("production dir {}: {e}", dir.display())),
+        }
+    }
+
+    /// 本番 config の `[api] token_file`。path と内容を P に入れる（無ければ path だけ）。
+    pub fn add_token_file(&mut self, token_file: &Path) {
+        match ResolvedPath::resolve_lenient(token_file) {
+            Ok(r) => self.token_files.push(r),
+            Err(e) => {
+                self.mark_unknown(format!(
+                    "production token file {}: {e}",
+                    token_file.display()
+                ));
+                return;
+            }
+        }
+        match std::fs::read(token_file) {
+            Ok(content) => self.tokens.push(zeroize::Zeroizing::new(content)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => self.token_unreadable = true,
+        }
+    }
+
+    /// P を決められない（本番 config が読めない・parse できない、など）。
+    pub fn mark_unknown(&mut self, reason: impl Into<String>) {
+        self.unknown.push(reason.into());
+    }
+
+    /// 決められなかった理由（空なら P は決まっている）。
+    pub fn unknown_reasons(&self) -> &[String] {
+        &self.unknown
+    }
+
+    fn token_matches(&self, content: &[u8]) -> bool {
+        // 全部と比べる（早く抜けない）。
+        self.tokens
+            .iter()
+            .fold(false, |hit, t| constant_time_eq(t, content) | hit)
+    }
+}
+
+/// token の比較。前後の空白（末尾の改行）を除き、長さが違っても全バイトを見る。
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    let a = a.trim_ascii();
+    let b = b.trim_ascii();
+    let n = a.len().max(b.len());
+    let mut diff = (a.len() ^ b.len()) as u64;
+    for i in 0..n {
+        let x = a.get(i).copied().unwrap_or(0);
+        let y = b.get(i).copied().unwrap_or(0);
+        diff |= u64::from(x ^ y);
+    }
+    std::hint::black_box(diff) == 0
+}
+
+/// 起動しようとしている daemon の path（その config から。相対 path・symlink のままでよい）。
+#[derive(Debug, Clone)]
+pub struct DaemonPaths {
+    pub db: PathBuf,
+    pub state_dir: Option<PathBuf>,
+    pub token_file: Option<PathBuf>,
+}
+
+/// ADR-0126 A3-2: worker run の印（`CELERIS_WORKER_DB_GUARD`）の状態。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WorkerRunMarker {
+    /// 印が無い（worker run の外）。
+    Absent,
+    /// 印はあるが、その path が読み取り専用であることを kernel で裏付けられない（偽の印・guard の外）。
+    Unverified { value: PathBuf, reason: String },
+    /// 印の path（canonicalize 済み）が今の mount namespace で読み取り専用。
+    ReadOnly(PathBuf),
+}
+
+impl WorkerRunMarker {
+    fn present(&self) -> bool {
+        !matches!(self, WorkerRunMarker::Absent)
+    }
+}
+
+/// ADR-0126 A3-2: 環境の `CELERIS_WORKER_DB_GUARD` を読み、[`verify_worker_run_marker`] で裏付ける。
+pub fn detect_worker_run_marker() -> WorkerRunMarker {
+    verify_worker_run_marker(std::env::var_os(WORKER_DB_GUARD_ENV))
+}
+
+/// 印の値が、絶対 path で、`statvfs` が `ST_RDONLY` を返し、かつそこへの書き込み試行が `EROFS` で
+/// 失敗するときだけ [`WorkerRunMarker::ReadOnly`]。どれかを確かめられなければ `Unverified`。
+pub fn verify_worker_run_marker(value: Option<OsString>) -> WorkerRunMarker {
+    let Some(value) = value.filter(|v| !v.is_empty()) else {
+        return WorkerRunMarker::Absent;
+    };
+    let value = PathBuf::from(value);
+    let unverified = |reason: String| WorkerRunMarker::Unverified {
+        value: value.clone(),
+        reason,
+    };
+    if !value.is_absolute() {
+        return unverified("not an absolute path".into());
+    }
+    let canonical = match std::fs::canonicalize(&value) {
+        Ok(p) => p,
+        Err(e) => return unverified(format!("canonicalize: {e}")),
+    };
+    match nix::sys::statvfs::statvfs(&canonical) {
+        Ok(st) if st.flags().contains(nix::sys::statvfs::FsFlags::ST_RDONLY) => {}
+        Ok(_) => return unverified("statvfs does not report ST_RDONLY".into()),
+        Err(e) => return unverified(format!("statvfs: {e}")),
+    }
+    let probe = canonical.join(format!(
+        ".celeris-db-guard-probe-{}-{}",
+        std::process::id(),
+        TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe)
+    {
+        Err(e) if e.raw_os_error() == Some(libc::EROFS) => WorkerRunMarker::ReadOnly(canonical),
+        Err(e) => unverified(format!("write attempt did not fail with EROFS: {e}")),
+        Ok(_) => {
+            let _ = std::fs::remove_file(&probe);
+            unverified("write attempt succeeded".into())
+        }
+    }
+}
+
+/// ADR-0126 A2/A3 の判定結果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GuardDecision {
+    /// A3: 試験用の一時 DB を guard の効いた worker run の中で使う。probe をせず guard を入れない。
+    Exempt,
+    /// A2: 本番を使う daemon。従来どおり probe 必須（worker run の中なら [`PRODUCTION_IN_WORKER_RUN`] で失敗）。
+    RefuseProduction {
+        reason: String,
+        inside_worker_run: bool,
+    },
+    /// 免除の条件を満たさない（worker run の外・印が裏付けられない・P を決められない）。従来どおり probe。
+    RequireUserns { reason: String },
+}
+
+impl GuardDecision {
+    /// probe が失敗したときに足す文言（本番を worker run の中で使うときだけ）。
+    pub fn refusal_message(&self) -> Option<&'static str> {
+        match self {
+            GuardDecision::RefuseProduction {
+                inside_worker_run: true,
+                ..
+            } => Some(PRODUCTION_IN_WORKER_RUN),
+            _ => None,
+        }
+    }
+}
+
+/// ADR-0126 A2/A3: userns・実 mount に依らない判定。拒否（A2）を先に見て、どれか 1 つに当たれば
+/// `RefuseProduction`。拒否に当たらず、印が読み取り専用で裏付けられ、P が決まっているときだけ `Exempt`。
+/// 判定できないときは免除しない（fail closed）。token の値はどこにも出さない。
+pub fn judge_worker_db_guard(
+    protected: &ProtectedSet,
+    daemon: &DaemonPaths,
+    marker: &WorkerRunMarker,
+) -> GuardDecision {
+    let inside_worker_run = marker.present();
+    let refuse = |reason: String| GuardDecision::RefuseProduction {
+        reason,
+        inside_worker_run,
+    };
+    // A3-3: 印の path も P に入れて A2 を当てる。
+    let mut dirs = protected.dirs.clone();
+    let mut unknown = protected.unknown.clone();
+    if let WorkerRunMarker::ReadOnly(path) = marker {
+        match ResolvedPath::resolve(path) {
+            Ok(r) => dirs.push(r),
+            Err(e) => unknown.push(format!("marker {}: {e}", path.display())),
+        }
+    }
+
+    let db = match ResolvedPath::resolve(&daemon.db) {
+        Ok(r) => r,
+        Err(e) => {
+            return refuse(format!(
+                "cannot resolve the daemon db {}: {e}",
+                daemon.db.display()
+            ));
+        }
+    };
+    if let Some(p) = protected.db_files.iter().find(|p| db.same(p)) {
+        return refuse(format!(
+            "db {} is the production db {}",
+            db.path.display(),
+            p.path.display()
+        ));
+    }
+    let mut daemon_dirs = Vec::new();
+    match db.path.parent().map(ResolvedPath::resolve) {
+        Some(Ok(r)) => daemon_dirs.push(r),
+        Some(Err(e)) => return refuse(format!("cannot resolve the daemon db directory: {e}")),
+        None => return refuse(format!("db {} has no parent directory", db.path.display())),
+    }
+    if let Some(state_dir) = &daemon.state_dir {
+        match ResolvedPath::resolve_lenient(state_dir) {
+            Ok(r) => daemon_dirs.push(r),
+            Err(e) => {
+                return refuse(format!(
+                    "cannot resolve the daemon state_dir {}: {e}",
+                    state_dir.display()
+                ));
+            }
+        }
+    }
+    for d in &daemon_dirs {
+        if let Some(p) = dirs.iter().find(|p| d.overlaps(p)) {
+            return refuse(format!(
+                "{} overlaps the production directory {}",
+                d.path.display(),
+                p.path.display()
+            ));
+        }
+    }
+    if let Some(token_file) = &daemon.token_file {
+        let t = match ResolvedPath::resolve_lenient(token_file) {
+            Ok(r) => r,
+            Err(e) => {
+                return refuse(format!(
+                    "cannot resolve the daemon token_file {}: {e}",
+                    token_file.display()
+                ));
+            }
+        };
+        if protected.token_files.iter().any(|p| t.same(p)) {
+            return refuse(format!(
+                "token_file {} is the production token file",
+                t.path.display()
+            ));
+        }
+        if protected.token_unreadable {
+            return refuse(
+                "the production token is unreadable and the daemon has a token_file".into(),
+            );
+        }
+        match std::fs::read(&t.path) {
+            Ok(content) => {
+                let content = zeroize::Zeroizing::new(content);
+                if protected.token_matches(&content) {
+                    return refuse(format!(
+                        "token_file {} holds the production token",
+                        t.path.display()
+                    ));
+                }
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return refuse(format!(
+                    "cannot read the daemon token_file {}: {e}",
+                    t.path.display()
+                ));
+            }
+        }
+    }
+
+    match marker {
+        WorkerRunMarker::Absent => GuardDecision::RequireUserns {
+            reason: format!("{WORKER_DB_GUARD_ENV} is not set (outside a worker run)"),
+        },
+        WorkerRunMarker::Unverified { value, reason } => GuardDecision::RequireUserns {
+            reason: format!(
+                "{WORKER_DB_GUARD_ENV}={} is not verified read-only: {reason}",
+                value.display()
+            ),
+        },
+        WorkerRunMarker::ReadOnly(_) if !unknown.is_empty() => GuardDecision::RequireUserns {
+            reason: format!("the protected set is unknown: {}", unknown.join("; ")),
+        },
+        WorkerRunMarker::ReadOnly(_) => GuardDecision::Exempt,
+    }
+}
+
+/// ADR-0126 A1-2: 本番 config の既定の場所。`$HOME` ではなく `getpwuid(getuid())` の home を基準にする
+/// （試験が `$HOME` を書き換える）。
+pub fn production_config_path() -> Option<PathBuf> {
+    nix::unistd::User::from_uid(nix::unistd::getuid())
+        .ok()
+        .flatten()
+        .map(|u| u.dir.join(".config/celeris/config.toml"))
 }
 
 #[cfg(test)]

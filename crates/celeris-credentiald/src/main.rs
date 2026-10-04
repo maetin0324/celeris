@@ -32,6 +32,21 @@ fn home() -> Result<PathBuf, Error> {
         .map(PathBuf::from)
         .ok_or(Error::Invalid)
 }
+/// ADR-0136: vault・audit の置き場。`CELERIS_CREDENTIALD_DATA_DIR`（絶対 path のみ）を書けばそれ、
+/// 無ければ従来の `$HOME/.local/celeris/credentiald`。鍵（`~/.config/celeris/credentiald`）は動かさない。
+fn data_dir(home: &Path, configured: Option<std::ffi::OsString>) -> Result<PathBuf, Error> {
+    match configured.filter(|v| !v.is_empty()) {
+        Some(dir) => {
+            let dir = PathBuf::from(dir);
+            if dir.is_absolute() {
+                Ok(dir)
+            } else {
+                Err(Error::Invalid)
+            }
+        }
+        None => Ok(home.join(".local/celeris/credentiald")),
+    }
+}
 fn runtime() -> Result<PathBuf, Error> {
     std::env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
@@ -46,7 +61,7 @@ fn run() -> Result<(), Error> {
             }
             let h = home()?;
             let config = h.join(".config/celeris/credentiald");
-            let data = h.join(".local/celeris/credentiald");
+            let data = data_dir(&h, std::env::var_os("CELERIS_CREDENTIALD_DATA_DIR"))?;
             private_dir(&config)?;
             private_dir(&data)?;
             let provider = ManualProvider::open(config.join("keys"), data.join("vault"))?;
@@ -55,19 +70,29 @@ fn run() -> Result<(), Error> {
         Some("serve") => {
             let h = home()?;
             let config = h.join(".config/celeris/credentiald");
-            let data = h.join(".local/celeris/credentiald");
+            let data = data_dir(&h, std::env::var_os("CELERIS_CREDENTIALD_DATA_DIR"))?;
             private_dir(&config)?;
             private_dir(&data)?;
             let provider = ManualProvider::open(config.join("keys"), data.join("vault"))?;
             let broker = Arc::new(Broker::new(provider, data.join("audit"))?);
             let mut allowed = Vec::new();
+            // ADR-0138 D-L: the launcher UID that production `Attested` admission checks
+            // proofs against. Without it no session is admitted for injection.
+            let mut launcher_uid = None;
             for arg in args {
+                if let Some(uid) = arg.strip_prefix("--launcher-uid=") {
+                    if launcher_uid.is_some() {
+                        return Err(Error::Invalid);
+                    }
+                    launcher_uid = Some(uid.parse::<u32>().map_err(|_| Error::Invalid)?);
+                    continue;
+                }
                 allowed.push(arg.parse::<u32>().map_err(|_| Error::Invalid)?)
             }
             if allowed.is_empty() {
                 return Err(Error::Invalid);
             }
-            ipc::serve(broker, &runtime()?, allowed)
+            ipc::serve_attested(broker, &runtime()?, allowed, launcher_uid)
         }
         Some("bridge") => {
             if args.next().is_some() {
@@ -117,5 +142,31 @@ fn main() {
         // Fixed error codes only: no request, path or secret is reflected.
         eprintln!("{}", e.code());
         std::process::exit(1)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn data_dir_defaults_to_the_home_path_and_follows_the_env_override() {
+        let home = Path::new("/home/u");
+        assert_eq!(
+            data_dir(home, None).expect("default"),
+            PathBuf::from("/home/u/.local/celeris/credentiald")
+        );
+        assert_eq!(
+            data_dir(home, Some("".into())).expect("empty means unset"),
+            PathBuf::from("/home/u/.local/celeris/credentiald")
+        );
+        assert_eq!(
+            data_dir(home, Some("/local/celeris/state/credentiald".into())).expect("override"),
+            PathBuf::from("/local/celeris/state/credentiald")
+        );
+        assert!(matches!(
+            data_dir(home, Some("relative/credentiald".into())),
+            Err(Error::Invalid)
+        ));
     }
 }

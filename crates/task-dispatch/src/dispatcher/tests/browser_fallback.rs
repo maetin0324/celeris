@@ -8,7 +8,6 @@ use super::*;
 struct PrepRecorder {
     id: &'static str,
     env: Vec<(String, String)>,
-    removed: Vec<String>,
     mode: Option<String>,
     model: Option<String>,
     seen: Arc<StdMutex<Vec<PrepSeen>>>,
@@ -17,7 +16,6 @@ struct PrepRecorder {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct PrepSeen {
     env: Vec<(String, String)>,
-    removed: Vec<String>,
     mode: Option<String>,
     model: Option<String>,
     tier: Tier,
@@ -37,7 +35,6 @@ impl WorkerAdapter for PrepRecorder {
     ) -> Result<RunOutcome, AdapterError> {
         self.seen.lock().unwrap().push(PrepSeen {
             env: self.env.clone(),
-            removed: self.removed.clone(),
             mode: self.mode.clone(),
             model: self.model.clone(),
             tier: req.task.worker_hint.tier,
@@ -71,14 +68,6 @@ impl WorkerAdapter for PrepRecorder {
             ..self.clone()
         }))
     }
-    fn with_env_removed(&self, keys: &[String]) -> Option<Arc<dyn WorkerAdapter>> {
-        let mut removed = self.removed.clone();
-        removed.extend(keys.iter().cloned());
-        Some(Arc::new(Self {
-            removed,
-            ..self.clone()
-        }))
-    }
 }
 
 struct PrepNullSink;
@@ -101,7 +90,6 @@ fn prep_tiered(id: &'static str, seen: &Arc<StdMutex<Vec<PrepSeen>>>) -> Arc<dyn
         base: Arc::new(PrepRecorder {
             id,
             env: Vec::new(),
-            removed: Vec::new(),
             mode: None,
             model: None,
             seen: Arc::clone(seen),
@@ -388,6 +376,7 @@ async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session
     }
     task_worker::browser::configure_isolated_runtime(task_worker::browser::IsolatedBrowserConfig {
         live_sessions: None,
+        runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
         record_dir: std::env::temp_dir().join(format!(
             "celeris-browser-dispatch-unit-{}",
@@ -505,7 +494,7 @@ fn dispatch_browser_fallback_credential_use_never_replays() {
     );
 }
 
-/// ADR-0107 D1: 候補は主 adapter と同じ除去 env・`CARGO_TARGET_DIR`・scratch env を受ける。
+/// ADR-0107 D1: 候補は主 adapter と同じ `CARGO_TARGET_DIR`・scratch env を受ける。ADR-0129 (1): env は外さない。
 #[tokio::test]
 async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() {
     let prep = RunAdapterPrep {
@@ -517,7 +506,6 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
                 ),
                 ("CARGO_INCREMENTAL".into(), "0".into()),
             ],
-            remove: vec!["RUSTC_WRAPPER".into(), "SCCACHE_DIR".into()],
         }),
         followups_env: None,
         container: None,
@@ -527,10 +515,6 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
     assert!(primary_env && candidate_env);
     assert_eq!(seen.len(), 2);
     assert_eq!(seen[0], seen[1]);
-    assert_eq!(
-        seen[1].removed,
-        vec!["RUSTC_WRAPPER".to_string(), "SCCACHE_DIR".to_string()]
-    );
     assert!(seen[1].env.contains(&(
         task_worker::build_cache::CARGO_TARGET_DIR_VAR.to_string(),
         "/scratch/targets/task-x/target".to_string()
@@ -553,7 +537,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permiss
     assert_eq!(seen[1].model.as_deref(), Some("frontier-id"));
     assert_eq!(seen[1].mode.as_deref(), Some("plan"));
     assert_eq!(seen[1].tier, Tier::Frontier);
-    assert!(seen[1].removed.is_empty() && seen[1].env.is_empty());
+    assert!(seen[1].env.is_empty());
 }
 
 /// ADR-0107 D1: 準備が無い run（env・コンテナ・permission mode 無し）は包まずに素通しする。

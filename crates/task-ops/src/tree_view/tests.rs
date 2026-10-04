@@ -114,6 +114,8 @@ fn run(store: &SqliteStore, t: &Task, id: &str, role: RunIndexRole, cost: Option
                 cache_read_tokens: None,
                 cache_creation_tokens: None,
                 cost_usd: cost,
+                duplicate_reads: None,
+                session_resumed: None,
             }),
             metrics: None,
             started_at: "2026-09-29T10:00:00Z".into(),

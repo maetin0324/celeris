@@ -34,9 +34,9 @@ import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/reports";
 
 /**
- * `/reports`（報告の流れ、SPEC §3.5・§4 の 4、ADR-0033 D3、ADR-0034、docs/gui/api.md §3.50〜3.53）。
+ * `/reports`（報告の流れ、SPEC §3.5・§4 の 4、ADR-0033 D3、ADR-0034、docs/api/v1/gui-api.md §3.50〜3.53）。
  * 既定は秘書レベル（`level=0`）の未読を新しい順に、1 件 1 行で流し見できる密度で出す
- * （`GET /reports` 自体が新しい順を返す。docs/gui/api.md §3.50「新しい順（created_at 降順）」）。
+ * （`GET /reports` 自体が新しい順を返す。docs/api/v1/gui-api.md §3.50「新しい順（created_at 降順）」）。
  * `kind` の絞り込みは celeris 側 API に無いので GUI 側だけで行う（`~/lib/reports.ts` のコメント参照）。
  * 案件名・担当ノード名は `GET /projects` / `GET /org` から解決する（celeris 側に判断値を作らせない）。
  *

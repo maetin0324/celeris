@@ -72,6 +72,7 @@ fn state_rx(
         instance_id: "01J00000000000000000000000".into(),
         started_at: "2026-09-14T00:00:00Z".into(),
         providers_dir: None,
+        openai_compatible_source_ids: Default::default(),
         admin_tx: None,
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: 0,
@@ -80,6 +81,10 @@ fn state_rx(
         memory_dir: None,
         notify_secret_id: task_core::DEFAULT_WEBHOOK_SECRET_ID.to_string(),
         notify_gui_base_url: None,
+        notify_inbox_batch_secs: 60,
+        notify_inbox_reminder_secs: 86_400,
+        notify_digest_interval_secs: 3_600,
+        notify_digest_max_lines: 10,
         releases: None,
         release: "dev".to_string(),
         mode: task_core::DaemonMode::Normal,
@@ -174,15 +179,8 @@ async fn metrics_scratch_matches_the_status_schema() {
             }],
             reclaimed_bytes: 3 << 30,
         }),
-        sccache: Some(task_ops::daemon::ScratchSccacheView {
-            state: "ready".into(),
-            reason: None,
-            binary: "/home/u/.local/celeris/tools/sccache/bin/sccache".into(),
-            port: 4236,
-            dir: "/var/lib/celeris/scratch/sccache-l1".into(),
-            max_bytes: 40 << 30,
-            stats: None,
-        }),
+        // ADR-0129 (1): sccache と cache server は Celeris の外。欄は型を残すが常に `None`。
+        sccache: None,
         cache: None,
     };
     let mut snapshot: task_ops::daemon::DaemonSnapshot = serde_json::from_value(serde_json::json!({
@@ -215,6 +213,9 @@ async fn metrics_scratch_matches_the_status_schema() {
     keys.sort();
     assert_eq!(keys, schema_keys);
     assert_eq!(json["schema"], "celeris.scratch-status/1");
+    // ADR-0129 (1): sccache と cache server は Celeris の外。欄は null で出る。
+    assert!(json["sccache"].is_null());
+    assert!(json["cache"].is_null());
 }
 
 /// この単体テストだけで使う管理系トークン。
@@ -227,6 +228,98 @@ fn replay_request() -> Request<Body> {
         .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
         .body(Body::from("{}"))
         .unwrap_or_else(|e| panic!("{e}"))
+}
+
+#[tokio::test]
+async fn write_set_can_be_created_updated_and_read_through_task_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = router(state(dir.path()));
+    let request = |method: axum::http::Method, uri: &str, body: serde_json::Value| {
+        Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("host", "127.0.0.1:7710")
+            .header("content-type", "application/json")
+            .header("authorization", format!("Bearer {REPLAY_TEST_TOKEN}"))
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let response = app.clone().oneshot(request(axum::http::Method::POST, "/api/v1/tasks", serde_json::json!({
+        "title":"write-set test", "objective":"check API", "acceptance":[{"type":"reviewer","text":"done"}],
+        "expected_write_paths":["src/", "src"]
+    }))).await.unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let task: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    let id = task["id"].as_str().unwrap();
+    let uri = format!("/api/v1/tasks/{id}");
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["expected_write_paths"], serde_json::json!(["src"]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::PATCH,
+            &uri,
+            serde_json::json!({
+                "expected_write_paths":["docs/"]
+            }),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(detail["expected_write_paths"], serde_json::json!(["docs"]));
+    let response = app
+        .clone()
+        .oneshot(request(
+            axum::http::Method::PATCH,
+            &uri,
+            serde_json::json!({
+                "expected_write_paths": null
+            }),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    assert_eq!(response.status(), StatusCode::OK);
+    let response = app
+        .oneshot(request(
+            axum::http::Method::GET,
+            &uri,
+            serde_json::json!({}),
+        ))
+        .await
+        .unwrap_or_else(|e| match e {});
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let detail: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+    assert!(detail["expected_write_paths"].is_null());
 }
 
 /// ADR-0044 §5 Phase 53 追記（Phase 55）: トークンが無ければ 401。

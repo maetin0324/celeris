@@ -587,6 +587,9 @@ pub struct TaskRouting {
     /// gate が判定した Task にだけ `Some`（`gate = "off"` の Task・E3 より前のタスクには無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<crate::execution_gate::ExecutionGateDecision>,
+    /// ADR-0124: planner を省く直行経路か、既存の経路を維持するかの判定。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route: Option<crate::direct_route::RouteDecision>,
     /// ADR-0074 D2.1（Phase F3 途中確認）: `NewTaskSpec.pause_after` / `PATCH` /
     /// `PUT /tasks/{id}/execution/pause-after` / CoS の `create_task.pause_after` の現在値。
     /// **Task 専用の欄をわざわざ増やさず、ここに置く**（`TaskRouting` は既に「あとから足された
@@ -747,6 +750,14 @@ pub struct Usage {
     /// `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+    /// の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duplicate_reads: Option<u32>,
+    /// ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+    /// 拒否されなかった）。session を扱わない adapter は `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_resumed: Option<bool>,
 }
 
 /// ADR-0061（Phase 104）: `Event::WorkerFinished` に添える run 単位のメトリクス。
@@ -941,6 +952,62 @@ pub struct FailedWorkUnitCheck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// ADR-0118 D3: immutable snapshot of one repository's review attempt.
+    ReviewTargetSynced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        target_ref: String,
+        target_sha: String,
+        before_sha: String,
+        reviewed_sha: String,
+        merge_candidate_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0118 D4: a previously reviewed target advanced before integration.
+    ReviewTargetAdvanced {
+        review_run: String,
+        repo_id: crate::RepoId,
+        reviewed_sha: String,
+        target_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0120 D5: review 前同期の衝突に対し IntegrationRepair WU を起票した（WU の追加・
+    /// `ReviewRepair` 遷移と同じ transaction で 1 回）。`attempt` は integration_repair WU の通し番号
+    /// （1 始まり）。`conflict_files` は重複を除きパス順。状態・attempts は変えない。
+    IntegrationRepairScheduled {
+        work_unit_id: String,
+        key: String,
+        repo_id: crate::RepoId,
+        target_ref: String,
+        target_sha: String,
+        before_sha: String,
+        conflict_files: Vec<String>,
+        attempt: u32,
+    },
+    /// ADR-0120 D5: 修復 WU の完了後、最新 target への再同期が成功した（`target_sha` は再同期時の
+    /// SHA）。checks/reviewer の合格は意味しない。状態・attempts は変えない。
+    IntegrationRepairResolved {
+        work_unit_id: String,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        reviewed_sha: String,
+        attempt: u32,
+    },
+    /// ADR-0120 D4/D5: IntegrationRepair を打ち切った（1 回につき 1 件）。`rollback_to_sha` は安全な
+    /// rollback が完了したときだけ `before_sha`。`fallback` は未同期 HEAD で review へ進めるときだけ
+    /// `true`。状態・attempts は変えない。
+    IntegrationRepairExhausted {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        work_unit_id: Option<String>,
+        repo_id: crate::RepoId,
+        target_sha: String,
+        before_sha: String,
+        attempt: u32,
+        reason: crate::execution::IntegrationRepairExhaustReason,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rollback_to_sha: Option<String>,
+        fallback: bool,
+    },
     /// Credential-free mapping between one isolated browser session and a worker execution.
     BrowserUpdated {
         browser: crate::BrowserRun,
@@ -1231,6 +1298,10 @@ pub enum Event {
     ExecutionGated {
         decision: Box<crate::execution_gate::ExecutionGateDecision>,
     },
+    /// ADR-0124: 経路選択の監査記録。状態は変えない。
+    ExecutionRouted {
+        decision: Box<crate::direct_route::RouteDecision>,
+    },
     /// ADR-0072「Phase F6 実装時の決定」: 起票済みの Task の実行の形（atomic / compound）を人が後から
     /// 決めた（`POST /tasks/{id}/execution/decompose`、MCP `task_decompose`、retry の `execution`）。
     /// 同じトランザクションで `Task.routing.execution_hint = {mode, explicit: true}` を書き、
@@ -1314,6 +1385,46 @@ pub enum Event {
         head: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         checks: Vec<PhaseCheckResult>,
+    },
+    /// 2026-10-04 統合の検査の進み具合 D1: 段の統合が検査 1 件を始めた。`index` は 0 始まり、`total` はその統合の
+    /// 検査の数。`log_path` はその検査の stdout/stderr を逐次書くファイル（daemon の host の絶対パス）。
+    /// 状態は変えない（`replay` は無視する）。
+    IntegrationCheckStarted {
+        work_unit_id: String,
+        key: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        log_path: String,
+        started_at: String,
+    },
+    /// 2026-10-04 統合の検査の進み具合 D1: 段の統合の検査 1 件が終わった。`exit` は signal・timeout・起動失敗で
+    /// `None`。`duration_ms` は再実行（timeout の 2 倍・merge-base の修復）を含む所要時間。状態は変えない。
+    IntegrationCheckFinished {
+        work_unit_id: String,
+        key: String,
+        index: u32,
+        total: u32,
+        cmd: String,
+        pass: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exit: Option<i32>,
+        #[serde(default)]
+        timed_out: bool,
+        duration_ms: u64,
+    },
+    /// ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った
+    /// （review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。
+    MergeCandidateStale {
+        phase: String,
+        work_unit_id: String,
+        key: String,
+        child_task: TaskId,
+        repo_id: crate::RepoId,
+        branch: String,
+        merge_candidate_sha: String,
+        head_sha: String,
+        target_sha: String,
     },
     /// ADR-0074 D1.2（Phase F2b）: v2 の計画だが並列 1 に倒した（remote / 書き込み可能な `dir` の
     /// repo / `Shared`）。計画ごとに 1 回だけ残す。状態は変えない。
@@ -1432,6 +1543,47 @@ pub enum Event {
         plan_id: String,
         reasons: Vec<String>,
     },
+    /// ADR-0121 D3: 対象案件の root で delivery（main への取り込み）を開始できなかった。状態は変えない
+    /// 監査イベント。(task, reason, head) ごとに高々 1 件（`head = null` は未解決の head）。
+    DeliverySkipped {
+        reason: crate::DeliverySkipReason,
+        detail: String,
+        #[serde(default)]
+        head: Option<String>,
+    },
+    /// ADR-0131 付記（2026-10-04）: 日次整理の計画を人の承認なしで本番 KB に適用し、変更を 1 commit にして
+    /// KB の remote へ push した（試みた）。状態は変えない監査イベント。`commit_sha` は commit できなかったとき
+    /// `None`（理由は `commit_error`）。`push` は `pushed`・`no_remote`・`failed`・`skipped`（commit できず
+    /// push を省いた）のどれか。push の失敗は apply を失敗にしない（次回の push でまとめて送る）。
+    KnowledgeCurationApplied {
+        /// 適用日（job の timezone の `YYYY-MM-DD`）。
+        date: String,
+        merged: u32,
+        new: u32,
+        deleted: u32,
+        fixed: u32,
+        #[serde(default)]
+        commit_sha: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        commit_error: Option<String>,
+        push: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        push_detail: Option<String>,
+    },
+    /// ADR parallel integration D4: 統合の依頼。状態は変えない。
+    // serde の type は `integration_requested`（migration 0047 の部分 index と一致）。
+    IntegrationRequested {
+        request: Box<crate::integration_request::IntegrationRequest>,
+        origin: String,
+    },
+    /// ADR parallel integration D4: 人が依頼に回答した監査事象。
+    // serde の type は `integration_answered`（migration 0047 の部分 index と一致）。
+    IntegrationAnswered {
+        request_id: String,
+        answer: String,
+        #[serde(default)]
+        note: Option<String>,
+    },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
     /// 1 回だけ）。
@@ -1467,6 +1619,12 @@ pub struct PhaseMerged {
     /// 既に Task ブランチに入っていたので飛ばした（冪等なやり直し）。
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub skipped: bool,
+    /// ADR-0118 D5: 照合した子の review 時の target（親ブランチ）の SHA（記録の無い子・WU は `None`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_sha: Option<String>,
+    /// ADR-0118 D5: 子の merge candidate を merge したときの親ブランチの HEAD（merge の直前）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_head: Option<String>,
 }
 
 /// `Event::PhaseIntegrated.checks[]`（ADR-0074 D1.4 の 4）。

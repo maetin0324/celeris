@@ -2,6 +2,15 @@
 
 use super::*;
 
+struct IntegrationRepairInput<'a> {
+    repo_id: task_core::RepoId,
+    target_ref: &'a str,
+    target_sha: &'a str,
+    before_sha: &'a str,
+    conflict_files: Vec<String>,
+    attempt: u32,
+}
+
 impl Dispatcher {
     pub(super) fn on_review_finished(
         &mut self,
@@ -10,6 +19,31 @@ impl Dispatcher {
         mut outcome: ReviewOutcome,
     ) -> Result<(), DispatchError> {
         let entry = self.reviewing.remove(&task_id);
+        // 用意した Reviewer run（`spawn_review` が `WorkerStarted{role: reviewer}`・`runs` 行・quota を
+        // 起こした）を、決定的な検査が落ちた等で起動しなかった。ここで閉じないと `runs` 行は Task が
+        // 終端になるまで `running` のまま残る（Reviewer run は lease を持たない）。判定の扱いは変えない。
+        if let Some(e) = entry.as_ref()
+            && let Some(provisioned) = e.review_run_id.clone()
+            && outcome.reviewer_run.as_ref().map(|r| r.run_id.as_str())
+                != Some(provisioned.as_str())
+        {
+            if let Some(provider) = e.provider.clone() {
+                let (account, account_adapter) = (e.account.clone(), e.account_adapter);
+                self.release_quota_if_tracked(
+                    &provisioned,
+                    account.as_deref(),
+                    account_adapter,
+                    &provider,
+                    task_id,
+                );
+            }
+            self.close_aborted_run(
+                task_id,
+                &provisioned,
+                Some(RunRole::Reviewer),
+                "reviewer run not started (the review ended before launching it)",
+            );
+        }
         // ADR-0014 D1: Reviewer run の終わりを WorkerFinished{role: reviewer} として残す（判定の適用・延期・破棄のどれでも）。
         let completed_review_run = outcome.reviewer_run.as_ref().map(|r| r.run_id.clone());
         // ADR-0061（Phase 104）: `retries` は Reviewer run には無い概念（対象タスクの `attempts` とは別軸）
@@ -93,6 +127,37 @@ impl Dispatcher {
                 worker_finished_usage(&reviewer_finished),
                 review_metrics,
             );
+            return Ok(());
+        }
+        // ADR-0118 D4 付記: 検査中に review snapshot が変わった判定は適用しない（stale は不合格ではない）。
+        // attempts を消費せず reviewing のまま、次の tick の review 入口で再 sync → 再 check → 再 review。
+        if let Some(stale) = outcome.target_stale.take() {
+            let review_run = completed_review_run
+                .clone()
+                .unwrap_or_else(|| run_id.clone());
+            self.defer_stale_review(
+                task_id,
+                &run_id,
+                &review_run,
+                stale.repo_id,
+                &stale.reviewed_sha,
+                &stale.target_sha,
+                &stale.reason,
+            )?;
+            set_worker_finished_end(&mut reviewer_finished, task_core::RunEnd::Cancelled);
+            for ev in reviewer_finished.iter().chain(reviewer_quota.iter()) {
+                self.store.append_event(task_id, ev)?;
+            }
+            finish_reviewer_run_index(
+                self.store.as_ref(),
+                &completed_review_run,
+                task_core::RunIndexStatus::Cancelled,
+                worker_finished_usage(&reviewer_finished),
+                review_metrics,
+            );
+            if let Some(entry) = entry {
+                self.pending_subjects.insert(task_id, entry.subject);
+            }
             return Ok(());
         }
         let mut throttled_events = Vec::new();
@@ -506,7 +571,10 @@ impl Dispatcher {
         let units = self.store.work_units_for(task_id)?;
         let repairs: Vec<&task_core::WorkUnitRow> = units
             .iter()
-            .filter(|u| u.kind == task_core::WorkUnitKind::Repair)
+            .filter(|u| {
+                u.kind == task_core::WorkUnitKind::Repair
+                    && !task_core::is_integration_repair_unit(u.kind, &u.spec.title)
+            })
             .collect();
         if repairs.len() as u32 >= self.config.execution.max_repairs {
             return Ok(None);
@@ -531,31 +599,7 @@ impl Dispatcher {
         let diff_stat = crate::checkpoint::gather_repo_facts(cwd, branch)
             .0
             .map(|r| r.diff_stat);
-        let mut allowed_paths = std::collections::BTreeSet::new();
-        let mut scope_checks = std::collections::BTreeSet::new();
-        for unit in &units {
-            allowed_paths.extend(unit.spec.context.paths.iter().cloned());
-            scope_checks.extend(
-                unit.spec
-                    .checks
-                    .iter()
-                    .filter(|check| check.cmd.contains("git diff"))
-                    .map(|check| check.cmd.clone()),
-            );
-        }
-        scope_checks.extend(task.acceptance.iter().filter_map(|criterion| {
-            if let task_core::Check::Command { cmd, .. } = &criterion.check
-                && cmd.contains("git diff")
-            {
-                Some(cmd.clone())
-            } else {
-                None
-            }
-        }));
-        let scope = task_core::RepairScope {
-            allowed_paths: allowed_paths.into_iter().collect(),
-            scope_checks: scope_checks.into_iter().collect(),
-        };
+        let scope = Self::review_repair_scope(task, &units);
         let objective = task_core::build_repair_objective(
             class,
             &failing_details,
@@ -583,6 +627,131 @@ impl Dispatcher {
             outputs: vec![],
             phase: None,
         };
+        self.apply_review_repair(task, &units, spec, "review_repair", None, events)
+            .map(Some)
+    }
+
+    fn review_repair_scope(
+        task: &Task,
+        units: &[task_core::WorkUnitRow],
+    ) -> task_core::RepairScope {
+        let mut allowed_paths = std::collections::BTreeSet::new();
+        let mut scope_checks = std::collections::BTreeSet::new();
+        for unit in units {
+            allowed_paths.extend(unit.spec.context.paths.iter().cloned());
+            scope_checks.extend(
+                unit.spec
+                    .checks
+                    .iter()
+                    .filter(|check| check.cmd.contains("git diff"))
+                    .map(|check| check.cmd.clone()),
+            );
+        }
+        scope_checks.extend(task.acceptance.iter().filter_map(|criterion| {
+            if let task_core::Check::Command { cmd, .. } = &criterion.check
+                && cmd.contains("git diff")
+            {
+                Some(cmd.clone())
+            } else {
+                None
+            }
+        }));
+        task_core::RepairScope {
+            allowed_paths: allowed_paths.into_iter().collect(),
+            scope_checks: scope_checks.into_iter().collect(),
+        }
+    }
+
+    /// Returns false only when the lifetime limit has been reached.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn try_integration_repair(
+        &self,
+        task: &Task,
+        repo_id: task_core::RepoId,
+        target_ref: &str,
+        target_sha: &str,
+        before_sha: &str,
+        files: &[String],
+    ) -> Result<bool, DispatchError> {
+        let units = self.store.work_units_for(task.id)?;
+        let prior = task_core::count_integration_repairs(
+            units.iter().map(|u| (u.kind, u.spec.title.as_str())),
+        );
+        if prior >= task_ops::delivery::MAX_INTEGRATION_REPAIRS {
+            return Ok(false);
+        }
+        let attempt = prior + 1;
+        let class = task_core::RepairClass::IntegrationConflict;
+        let (max_turns, max_wall_secs) = class.budget();
+        let conflict_files = task_core::normalize_conflict_files(files);
+        let scope = Self::review_repair_scope(task, &units);
+        let spec = task_core::WorkUnitSpec {
+            key: task_core::integration_repair_key(attempt),
+            kind: task_core::WorkUnitKind::Repair,
+            title: task_core::INTEGRATION_REPAIR_TITLE.to_string(),
+            objective: task_core::build_integration_repair_objective(
+                target_ref,
+                target_sha,
+                before_sha,
+                &conflict_files,
+                &task.title,
+                &task.objective,
+                Some(&scope),
+            ),
+            depends_on: vec![],
+            done_when: vec![],
+            checks: vec![
+                task_core::WorkUnitCheck {
+                    cmd: format!("git merge-base --is-ancestor {target_sha} HEAD"),
+                    expect_exit: 0,
+                },
+                task_core::WorkUnitCheck {
+                    cmd: "test -z \"$(git status --porcelain)\"".to_string(),
+                    expect_exit: 0,
+                },
+            ],
+            context: Default::default(),
+            harness: None,
+            features: None,
+            budget: Some(task_core::WorkUnitBudget {
+                max_turns: Some(max_turns),
+                max_wall_secs: Some(max_wall_secs),
+            }),
+            outputs: vec![],
+            phase: None,
+        };
+        self.apply_review_repair(
+            task,
+            &units,
+            spec,
+            "integration_repair",
+            Some(IntegrationRepairInput {
+                repo_id,
+                target_ref,
+                target_sha,
+                before_sha,
+                conflict_files,
+                attempt,
+            }),
+            &mut Vec::new(),
+        )?;
+        Ok(true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn apply_review_repair(
+        &self,
+        task: &Task,
+        units: &[task_core::WorkUnitRow],
+        spec: task_core::WorkUnitSpec,
+        reason: &str,
+        integration: Option<IntegrationRepairInput<'_>>,
+        events: &mut Vec<Event>,
+    ) -> Result<task_core::Outcome, DispatchError> {
+        let task_id = task.id;
+        let bucket = Self::repair_bucket_of_title(&spec.title)
+            .unwrap_or("unknown")
+            .to_string();
 
         let now = rfc3339(OffsetDateTime::now_utc());
         let active_plan = self.store.execution_plan_active(task_id)?;
@@ -604,7 +773,7 @@ impl Dispatcher {
                     key: row.key.clone(),
                     from: task_core::WorkUnitStatus::Pending,
                     to: task_core::WorkUnitStatus::Ready,
-                    reason: "review_repair".to_string(),
+                    reason: reason.to_string(),
                     run_id: None,
                 };
                 // ADR-0074 D6.2（Phase F1）: この repair WU の class を events に残す
@@ -613,7 +782,7 @@ impl Dispatcher {
                 let scheduled = Event::RepairScheduled {
                     work_unit_id: row.id.clone(),
                     key: row.key.clone(),
-                    class: class.bucket().to_string(),
+                    class: bucket.clone(),
                     origin: task_core::execution::RepairOrigin::Review,
                 };
                 (None, vec![row], vec![ev, scheduled])
@@ -659,7 +828,11 @@ impl Dispatcher {
                     units: Vec::new(),
                     decisions: Vec::new(),
                     schema: task_core::EXECUTION_PLAN_SCHEMA.to_string(),
-                    rationale: "reviewer repair: 暗黙の WorkUnit を実体化".to_string(),
+                    rationale: if integration.is_some() {
+                        "integration repair: 暗黙の WorkUnit を実体化".to_string()
+                    } else {
+                        "reviewer repair: 暗黙の WorkUnit を実体化".to_string()
+                    },
                     work_units: vec![main_spec, spec],
                     phases: Vec::new(),
                     children: Vec::new(),
@@ -680,13 +853,13 @@ impl Dispatcher {
                     version: 1,
                     origin: task_core::PlanOrigin::Repair,
                     supersedes: None,
-                    reason: Some("review_repair".to_string()),
+                    reason: Some(reason.to_string()),
                     plan: Box::new(plan_spec),
                 };
                 let scheduled = Event::RepairScheduled {
                     work_unit_id: repair_row.id.clone(),
                     key: repair_row.key.clone(),
-                    class: class.bucket().to_string(),
+                    class: bucket.clone(),
                     origin: task_core::execution::RepairOrigin::Review,
                 };
                 (
@@ -699,11 +872,39 @@ impl Dispatcher {
 
         let mut all_events = std::mem::take(events);
         all_events.extend(extra);
+        if let Some(input) = integration {
+            let Some(row) = work_units.last() else {
+                return Err(StoreError::Invalid(format!(
+                    "integration repair for task {task_id}: no repair work unit row"
+                ))
+                .into());
+            };
+            if new_plan.is_some() {
+                all_events.push(Event::WorkUnitTransitioned {
+                    work_unit_id: row.id.clone(),
+                    key: row.key.clone(),
+                    from: task_core::WorkUnitStatus::Pending,
+                    to: task_core::WorkUnitStatus::Ready,
+                    reason: reason.to_string(),
+                    run_id: None,
+                });
+            }
+            all_events.push(Event::IntegrationRepairScheduled {
+                work_unit_id: row.id.clone(),
+                key: row.key.clone(),
+                repo_id: input.repo_id,
+                target_ref: input.target_ref.to_string(),
+                target_sha: input.target_sha.to_string(),
+                before_sha: input.before_sha.to_string(),
+                conflict_files: input.conflict_files,
+                attempt: input.attempt,
+            });
+        }
         match self
             .store
             .review_repair_apply(task_id, all_events, new_plan, work_units)
         {
-            Ok(outcome) => Ok(Some(outcome)),
+            Ok(outcome) => Ok(outcome),
             Err(e) => Err(e.into()),
         }
     }

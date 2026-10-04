@@ -15,6 +15,8 @@ serde_json = "1"
 schemars = "1"
 # ADR-0043 D4（Phase 52）: リポジトリの中の設定 `.config/celeris/workspace.toml` を読む。
 toml = "0.9"
+# ADR-0131 D1: cron job の IANA タイムゾーン計算（host の /usr/share/zoneinfo を読む）。
+jiff = { version = "0.2.35", default-features = false, features = ["std", "tz-system", "tzdb-zoneinfo"] }
 
 [dev-dependencies]
 tempfile = "3"

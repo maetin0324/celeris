@@ -6,7 +6,7 @@ import { getCelerisClient } from "~/celeris/client.server";
 import { celerisErrorResponse } from "~/celeris/errors";
 import { formString } from "~/celeris/forms";
 import { createTask } from "~/celeris/route-actions.server";
-import type { ConfigView, CriterionSpec, NewTaskSpec, TaskList } from "~/celeris/types";
+import type { ConfigView, CriterionSpec, NewTaskBody, TaskList } from "~/celeris/types";
 import { ErrorFlash, FieldErrors } from "~/components/Flash";
 import { StatusBadge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
@@ -26,19 +26,19 @@ import { cn } from "~/lib/utils";
 import type { Route } from "./+types/tasks.new";
 
 /**
- * `/tasks/new`（タスク作成、docs/DESIGN.md §4.4）。フォームは `NewTaskSpec` と 1:1。
+ * `/tasks/new`（タスク作成、docs/DESIGN.md §4.4）。フォームは `NewTaskBody` と 1:1。
  * 検証は celeris（task-ops）が行い、422 の `errors[]` をそのままフィールドの下に出す
  * （docs/celeris-api-v1.md §1.5, §3.4）。GUI 側の検証はしない。
  */
 
-const KIND_OPTIONS: { value: NonNullable<NewTaskSpec["kind"]>; label: string }[] = [
+const KIND_OPTIONS: { value: NonNullable<NewTaskBody["kind"]>; label: string }[] = [
   { value: "execute", label: "execute" },
   { value: "approval", label: "approval" },
   { value: "review", label: "review" },
   { value: "plan", label: "plan" },
 ];
 
-const TIER_OPTIONS: { value: NonNullable<NewTaskSpec["tier"]>; label: string }[] = [
+const TIER_OPTIONS: { value: NonNullable<NewTaskBody["tier"]>; label: string }[] = [
   { value: "standard", label: "standard" },
   { value: "frontier", label: "frontier" },
   { value: "cheap", label: "cheap" },
@@ -144,22 +144,22 @@ export function buildDependsOn(form: FormData): string[] {
 }
 
 /**
- * フォーム全体を `NewTaskSpec` にする（純関数、テスト可能）。空の欄は本文から省く
+ * フォーム全体を `NewTaskBody` にする（純関数、テスト可能）。空の欄は本文から省く
  * （celeris の既定を使う。docs/celeris-api-v1.md §3.4）。`title` / `objective` は空でも必須フィールドとして送り、
  * celeris の 422 文言をそのまま出す（`required` 属性は付けない）。
  */
-export function buildNewTaskSpec(form: FormData): NewTaskSpec {
-  const spec: NewTaskSpec = {
+export function buildNewTaskSpec(form: FormData): NewTaskBody {
+  const spec: NewTaskBody = {
     title: rawString(form, "title"),
     objective: rawString(form, "objective"),
     acceptance: buildCriteria(form),
   };
 
   const kind = formString(form, "kind");
-  if (kind) spec.kind = kind as NewTaskSpec["kind"];
+  if (kind) spec.kind = kind as NewTaskBody["kind"];
 
   const tier = formString(form, "tier");
-  if (tier) spec.tier = tier as NewTaskSpec["tier"];
+  if (tier) spec.tier = tier as NewTaskBody["tier"];
 
   const adapter = formString(form, "adapter");
   if (adapter) spec.adapter = adapter;
@@ -250,7 +250,7 @@ export default function NewTaskPage({ loaderData }: Route.ComponentProps) {
       <PageHeader
         icon="plus"
         title="タスク作成"
-        description="NewTaskSpec を celeris にそのまま送信します。入力の検証は celeris 側で行われます。"
+        description="NewTaskBody を celeris にそのまま送信します。入力の検証は celeris 側で行われます。"
       />
       <ErrorFlash error={error} />
 

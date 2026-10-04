@@ -370,7 +370,7 @@ fn a_satisfied_wait_resumes_the_task() {
 }
 
 /// ADR-0090 D2: migration 0034 は schema 33 の DB に `cluster_job_waits` を足し（既存の表・行には触れない）、
-/// 版数は 34 になる（その後の browser の 0035/0036 も続けて当たり、最新版になる）。
+/// 版数は 34 になる（その後の browser の 0035/0036・delivery_skipped index の 0037・通知の 0041・cron の 0046 も続けて当たり、最新版になる）。
 #[test]
 fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     use crate::TaskStore;
@@ -385,17 +385,31 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
         // schema 33 の DB に戻す（34 以降の表・列を落とし、版数 34 以降の記録を消す）。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE cluster_job_waits; \
+            "DROP TABLE task_behind_targets; \
+             DROP TABLE run_write_sets; DROP TABLE work_unit_write_sets; \
+             DROP TABLE task_write_hints; \
+             DROP TABLE cluster_job_waits; \
              DROP TABLE browser_live_events; DROP TABLE browser_control_state; \
              DROP TABLE browser_control_actions; DROP TABLE browser_identities; \
              ALTER TABLE browser_waits DROP COLUMN trusted_login_json; \
+             ALTER TABLE deliveries DROP COLUMN target_sha; \
+             ALTER TABLE deliveries DROP COLUMN reviewed_sha; \
+             ALTER TABLE deliveries DROP COLUMN merge_candidate_sha; \
+             DROP INDEX idx_node_sessions_work_unit_active; \
+             ALTER TABLE node_sessions DROP COLUMN task_id; \
+             ALTER TABLE node_sessions DROP COLUMN work_unit_id; \
+             ALTER TABLE node_sessions DROP COLUMN provider; \
+             ALTER TABLE node_sessions DROP COLUMN cwd; \
+             DROP INDEX idx_events_delivery_skipped; \
+             DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
+             DROP INDEX idx_events_integration_request; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 36);
+    assert_eq!(crate::SCHEMA_VERSION, 47);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

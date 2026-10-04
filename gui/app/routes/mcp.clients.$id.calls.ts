@@ -5,7 +5,7 @@ import type { Route } from "./+types/mcp.clients.$id.calls";
 
 /**
  * `/mcp/clients/:id/calls`（resource route。コンポーネントは持たない）。`GET /mcp/calls?client=<id>`
- * （ADR-0056 D4、docs/gui/api.md §3.110〜3.111）をそのまま返す。`/accounts` の「MCP クライアント」節
+ * （ADR-0056 D4、docs/api/v1/gui-api.md §3.110〜3.111）をそのまま返す。`/accounts` の「MCP クライアント」節
  * （ADR-0056 D4、GUI Phase 80）が、客のカードを開いたときだけ `useFetcher().load()` から呼ぶ
  * （`~/routes/tasks.$id.runs.$runId.events.ts` の「すべて見る」と同じ、開いたときだけ取りに行く作り）。
  */

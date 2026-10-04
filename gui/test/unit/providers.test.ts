@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import type { Providers } from "~/celeris/types";
 import { ADAPTER_OPTIONS, loadProviders } from "~/routes/providers";
-import { type MockCeleris, sendJson, startMockCeleris } from "../mock-celeris/server";
+import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
 let client: CelerisClient;
@@ -95,6 +95,36 @@ describe("loadProviders", () => {
     expect(result.fetchedAt).toBe(new Date(fetchedAtMs).toISOString());
     expect(fetchedAtMs).toBeGreaterThanOrEqual(before);
     expect(fetchedAtMs).toBeLessThanOrEqual(after);
+  });
+
+  it("also loads GET /llm/sources for the separate LLM source section (ADR-0132 D6)", async () => {
+    const llm = { celeris_tiers: [], sources: [] };
+    mock.on("GET", "/api/v1/providers", (_req, res) => {
+      sendJson(res, 200, providersView);
+    });
+    mock.on("GET", "/api/v1/llm/sources", (_req, res) => {
+      sendJson(res, 200, llm);
+    });
+
+    const result = await loadProviders(client, new Request("http://gui.invalid/providers"));
+
+    expect(result.llmSources).toEqual(llm);
+    expect(result.llmSourcesUnavailable).toBe(false);
+  });
+
+  it("keeps the provider list when GET /llm/sources fails", async () => {
+    mock.on("GET", "/api/v1/providers", (_req, res) => {
+      sendJson(res, 200, providersView);
+    });
+    mock.on("GET", "/api/v1/llm/sources", (_req, res) => {
+      sendProblem(res, { status: 409, code: "llm_proxy_unavailable", detail: "[llm_proxy] is not configured" });
+    });
+
+    const result = await loadProviders(client, new Request("http://gui.invalid/providers"));
+
+    expect(result.providers).toEqual(providersView);
+    expect(result.llmSources).toBeNull();
+    expect(result.llmSourcesUnavailable).toBe(true);
   });
 
   it("rejects when celeris is not reachable (loader converts this to a Response)", async () => {

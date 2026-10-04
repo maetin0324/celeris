@@ -206,6 +206,8 @@ impl Config {
 
         self.providers.retain(|p| p.id != SMOKE_ID);
         self.providers.push(ProviderConfig {
+            kind: None,
+            llm_source: None,
             tier_models: Default::default(),
             account_id: None,
             id: SMOKE_ID.to_string(),

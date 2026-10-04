@@ -186,6 +186,10 @@ function App() {
         <div data-testid="plain-border" className="rounded border p-3 text-body">
           色を指定しない border は --color-border（#D3DCE2）で描く。
         </div>
+        <label className="mt-3 flex max-w-sm flex-col gap-1 text-body">
+          入力欄（色を指定しない）
+          <input data-testid="plain-input" className="rounded border bg-white p-2" defaultValue="枠の色" />
+        </label>
       </Gallery>
 
       <Gallery title="ConfirmDialog と Drawer">

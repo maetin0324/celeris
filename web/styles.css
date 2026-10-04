@@ -142,6 +142,14 @@
     border-color: var(--color-border);
   }
 
+  /* 入力欄の枠は境界（3:1 以上・WCAG 1.4.11）の色。区切りの #D3DCE2 は入力欄には薄すぎるので上の既定を上書きする。
+     utility の border-color は @layer utilities が勝つので、個別の指定は従来どおり効く。 */
+  input,
+  textarea,
+  select {
+    border-color: var(--color-input);
+  }
+
   /* shell の menu 等の重なりを root 内に閉じ、body 直下の Radix Portal を覆わせない。 */
   #root {
     isolation: isolate;

@@ -55,6 +55,20 @@ describe("gallery fixture", () => {
     expect(color).toBe("rgb(211, 220, 226)");
   });
 
+  it("色を指定しない入力欄の枠は --color-input（白地で 3:1 以上）で描く", async () => {
+    const color = await fixture.page
+      .getByTestId("plain-input")
+      .evaluate((element) => getComputedStyle(element).borderTopColor);
+    expect(color).toBe("rgb(117, 133, 147)");
+    // 白地（bg-white）に対する相対輝度のコントラスト比（WCAG 2.x の式）。
+    const [r, g, b] = (color.match(/\d+/g) ?? []).map((channel) => {
+      const c = Number(channel) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    const luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    expect((1 + 0.05) / (luminance + 0.05)).toBeGreaterThanOrEqual(3);
+  });
+
   it("既定・confirm・drawer の 3 状態で axe の serious/critical が 0", async () => {
     const { page } = fixture;
     const origin = new URL(page.url()).origin;

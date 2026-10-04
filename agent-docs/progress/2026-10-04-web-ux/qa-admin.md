@@ -103,11 +103,11 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 
 ## gate 結果
 
-4 つの修正葉を統合した worktree で、指定順の最初の offline install を実行した。依存キャッシュが欠け、`web/node_modules` も無いため、後続の検査には進めなかった。検査を通過したとは扱わない。
+4 つの修正葉を統合した worktree で指定順の検査を再実行した。2026-10-04 の再試行でも offline install が依存キャッシュ不足で exit 1 になった。前回 run 後に Celeris が実行した同じ check は `check:secrets` まで進んだが、最後の全画面 `mobile-audit` が exit 1 だった。監査だけを独立して再実行して違反箇所を特定した。検査全体を通過したとは扱わない。
 
 | 検査 | 結果 |
 | --- | --- |
-| `install --offline --frozen-lockfile` | exit 1。worktree の store に `react-remove-scroll@2.7.2` の tarball が無い（`ERR_PNPM_NO_OFFLINE_TARBALL`） |
+| `install --offline --frozen-lockfile` | exit 1。初回は `react-remove-scroll@2.7.2`、再試行は `qs@6.16.0` の tarball が worktree の store に無い（`ERR_PNPM_NO_OFFLINE_TARBALL`） |
 | `install --offline --frozen-lockfile --store-dir /local/.pnpm-store`（ローカル store の切り分け） | exit 1。共有 store に `@tailwindcss/vite@4.3.3` の tarball が無い（同じエラー） |
 | `build` | 未実施（offline install 失敗、`web/node_modules` 無し） |
 | `typecheck` | 未実施（同上） |
@@ -116,7 +116,9 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 | `check:parity` | 未実施（同上） |
 | `check:boundaries` | 未実施（同上） |
 | `check:secrets` | 未実施（同上） |
-| `mobile-audit` | 未実施（同上） |
+| `mobile-audit` | 単独実行で exit 1。違反 21 件は `/projects/P1`・`/tasks/T1`・`/tasks/T1/changes` のみ。admin 対象 9 画面は 0 件 |
 | `e2e`（functional scope） | 未実施（同上。件数は未計測） |
 
-原因は UI ソースではなくローカル依存 store の欠落。担当範囲の画面ファイルを変更しても修復できず、offline 指定を外して取得することはこの検査条件と異なる。依存 tarball をローカル store に揃えてから同じ順序で再実行する必要がある。詳細ログはこの WU の `artifacts/install.log` と `artifacts/install-local-store.log` に保存した。
+offline install の停止原因はローカル依存 store の欠落。担当範囲の画面ファイルを変更しても修復できず、offline 指定を外して取得することはこの検査条件と異なる。依存 tarball をローカル store に揃える必要がある。
+
+さらに `mobile-audit` は `web/e2e/support/screens.ts` の全 fixture を固定で走査するため、admin 対象外の `/projects`・`/tasks` の違反でも全体 check が落ちる。`web/scripts/mobile-audit.mjs:65` は `<input>` の `labels` だけを読み、親 `<label>` で名前が付いた `<textarea>` を未命名と誤判定する。`/tasks/T1` の `integration repair` リンクは 17×44px で、これは実際の小さいタップ領域である。修正には `web/scripts/mobile-audit.mjs` と `web/features/tasks/overview-view.tsx` の変更が必要だが、両方ともこの葉の許可範囲外。詳細ログは WU artifacts の `install.log`・`install-local-store.log`・`mobile-audit.log` にある。最終受け入れ条件も全画面の監査なので、計画には監査コードの誤判定と task 画面のタップ領域を先に直せる担当範囲が必要である。

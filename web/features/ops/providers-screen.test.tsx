@@ -2,13 +2,16 @@ import type { ReactElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { LlmSourcesView, ProviderView } from "../../api/generated/types";
+import { mcpClientState } from "./mcp-clients";
+import { checkResultLabel, deniedMessage, providerState, validateProviderForm } from "./providers-form";
 import {
   celerisModelsFor,
   providerLlmSourceDisplay,
   sourceTierScopeNote,
   tiersResolvingTo,
 } from "./providers-llm-source";
-import { LlmSourceList, ProviderSummary, ProvidersSections } from "./providers-screen";
+import { LlmSourceList, ProviderStatusTable, ProviderSummary, ProvidersSections } from "./providers-screen";
+import { secretRows, secretUsageText } from "./secrets-section";
 
 const html = (el: ReactElement) => renderToStaticMarkup(el);
 const stats = {
@@ -117,10 +120,66 @@ describe("providers 画面: LLM source と adapter/harness の区別（ADR-0132 
   it("LLM source 節は種類と解決先を示し、Qwen は cheap だけと書く", () => {
     const out = html(<LlmSourceList data={sources} />);
     expect(out).toContain("claude-oauth</span>（Claude OAuth）");
+    expect(out).toContain(">到達可</span>");
     expect(out).toContain("解決先: celeris/frontier, celeris/standard");
     expect(out).toContain("解決先: celeris/cheap");
     expect(tiersResolvingTo("openai-compatible:qwen", sources.celeris_tiers)).toEqual(["celeris/cheap"]);
     expect(sourceTierScopeNote("claude-oauth")).toBeNull();
     expect(sourceTierScopeNote("openai-compatible")).toContain("celeris/cheap にだけ");
+  });
+});
+
+describe("providers 画面: 状態を文字で読ませる・form の検査・secret の値を出さない", () => {
+  it("状態の写像は失敗→休止→利用制限→確認済み→未確認の順で、必ず文字を持つ", () => {
+    expect(providerState({ last_check: { at: "t", result: "auth_failed" } }).label).toBe("認証失敗");
+    expect(providerState({ last_check: { at: "t", result: "spawn_failed" } }).tone).toBe("danger");
+    expect(
+      providerState({ cooldown: { provider: "p", reason: "rate limit", until: "u" }, last_check: null }).label,
+    ).toBe("休止中");
+    expect(providerState({ last_check: { at: "t", result: "throttled" } }).label).toBe("利用制限中");
+    expect(providerState({ last_check: { at: "t", result: "ok" } }).label).toBe("接続確認済み");
+    expect(providerState({}).label).toBe("未確認");
+    expect(checkResultLabel("ok")).toBe("正常");
+  });
+
+  it("状態の表は実行枠ごとに状態の文字の badge を出す", () => {
+    const out = html(
+      <ProviderStatusTable
+        items={[
+          provider({ id: "a", last_check: { at: "2026-09-30T00:00:00Z", result: "auth_failed" } }),
+          provider({ id: "b" }),
+        ]}
+      />,
+    );
+    expect(out).toContain('aria-label="実行枠の状態"');
+    expect(out).toContain('data-state="認証失敗"');
+    expect(out).toContain(">認証失敗</span>");
+    expect(out).toContain(">未確認</span>");
+  });
+
+  it("form の検査は項目ごとの文言を返す", () => {
+    expect(validateProviderForm({ id: " ", concurrency: "" }, "create")).toEqual({ id: "id を入力してください。" });
+    expect(validateProviderForm({ concurrency: "-1" }, "patch").concurrency).toContain("0 以上の整数");
+    expect(validateProviderForm({ concurrency: "3" }, "patch")).toEqual({});
+    expect(deniedMessage("削除")).toContain("この操作を行う権限がありません");
+  });
+
+  it("secret は値を出さず、更新日時と使っている所だけを出す", () => {
+    const rows = secretRows({
+      id: "OPENAI_KEY",
+      fingerprint: "fp-16",
+      updated_at: "2026-09-30T00:00:00Z",
+      used_by: [{ scope: "provider", name: "codex-main", env: "OPENAI_API_KEY" }],
+    });
+    const text = JSON.stringify(rows);
+    expect(text).toContain("表示しません");
+    expect(text).not.toContain("fp-16");
+    expect(secretUsageText({ used_by: [] })).toBe("参照している設定はありません");
+    expect(text).toContain("provider codex-main（OPENAI_API_KEY）");
+  });
+
+  it("MCP client の状態は失効を先に見る", () => {
+    expect(mcpClientState({ revoked_at: "2026-09-30T00:00:00Z" }).label).toBe("失効");
+    expect(mcpClientState({ revoked_at: null }).label).toBe("有効");
   });
 });

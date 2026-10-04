@@ -3,6 +3,7 @@
 export const screens = [
   { path: "/", fixture: "/", heading: "ホーム", v3: true },
   { path: "/inbox", fixture: "/inbox", heading: "受信箱", v3: true },
+  { path: "/notifications", fixture: "/notifications", heading: "通知", v3: true },
   { path: "/login", fixture: "/login", heading: "Celeris にログイン" },
   { path: "/org", fixture: "/org", heading: "組織", v3: true },
   { path: "/org/secretary", fixture: "/org/cos", heading: "組織の人 cos", v3: true },

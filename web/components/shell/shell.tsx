@@ -25,8 +25,7 @@ export function Shell({ children }: { children: ReactNode }) {
   const server = useShellServerState(true);
   const badges: Record<string, { view: NavBadgeView; tone: BadgeTone }> = {
     "/inbox": { view: badgeView(server.inboxBadge, "受信箱"), tone: "warning" },
-    "/approvals": { view: badgeView(server.approvalsBadge, "承認待ち"), tone: "warning" },
-    "/reports": { view: badgeView(server.reportsLive?.unread_secretary, "未読の報告"), tone: "info" },
+    "/notifications": { view: badgeView(server.notificationsBadge, "未読の通知"), tone: "info" },
   };
 
   useRealtimeSubscription();
@@ -69,7 +68,7 @@ export function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div data-shell className="flex min-h-dvh flex-col bg-background text-foreground md:flex-row">
-      <NotificationsWatcher reportsLive={server.reportsLive} />
+      <NotificationsWatcher unread={server.notificationsUnread} />
       <header className="relative flex flex-wrap items-center gap-2 border-b border-border bg-background px-4 py-1 md:sticky md:top-0 md:h-dvh md:w-nav md:shrink-0 md:flex-col md:flex-nowrap md:items-stretch md:gap-3 md:overflow-y-auto md:border-r md:border-b-0 md:px-3 md:py-4">
         <Link
           to="/"

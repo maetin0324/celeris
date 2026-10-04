@@ -140,6 +140,221 @@ export const knowledgeFixtures = {
   },
 };
 
+// ADR-0133: 受信箱（GET /inbox/items・answer）と通知（GET /notifications・unread-count・read・read-all）。
+// 状態を持ち、答えた項目は消え、既読は残る。変わったら SSE の合図（inbox_changed・notifications_changed）を送る。
+// `fixtures` に同じ path があればそちらを返す（試験ごとの上書き）。並列の merge のためこの塊はまとめておく。
+const inboxTask = (id, title, status = "blocked") => ({ id, title, kind: "execute", status, actions: [] });
+const inboxOption = (key, label, effect, needs_note = false) => ({ key, label, effect, needs_note });
+const inboxAnswer = (id) => ({
+  method: "POST",
+  path: `/api/v1/inbox/items/${id}/answer`,
+  body_schema: { option: "string", note: "string?" },
+});
+
+export function inboxItemsFixture() {
+  const item = (id, kind, title, extra) => ({
+    id,
+    kind,
+    title,
+    detail: null,
+    options: [],
+    recommended: null,
+    due_at: null,
+    blocking: { tasks: [], units: [], summary: "" },
+    blocked_by: [],
+    answer: inboxAnswer(id),
+    created_at: "2026-10-01T09:00:00Z",
+    age_secs: 3600,
+    links: [],
+    project_id: null,
+    task: null,
+    ...extra,
+  });
+  return [
+    item("decision:D1", "decision", "認証方式を決める", {
+      detail: "gateway の session と daemon token のどちらで web を守るか。",
+      options: [
+        inboxOption("session", "gateway の session", "web は gateway の cookie だけで入る"),
+        inboxOption("token", "daemon token", "web が token を持つ"),
+      ],
+      recommended: "session",
+      due_at: "2026-10-05T09:00:00Z",
+      blocking: { tasks: [inboxTask("T1", "web の認証")], units: ["auth"], summary: "葉 auth を止めている" },
+      project_id: "P1",
+      task: inboxTask("T1", "web の認証"),
+      links: [{ label: "タスク", href: "/tasks/T1" }],
+    }),
+    item("plan_gate:T2", "plan_gate", "計画を承認する: 受信箱の画面", {
+      options: [
+        inboxOption("approve", "承認する", "計画どおりに葉を走らせる"),
+        inboxOption("replan", "計画をやり直す", "planner に差し戻す", true),
+        inboxOption("withdraw", "取り下げる", "task を止める", true),
+      ],
+      recommended: "approve",
+      blocked_by: ["decision:D1"],
+      blocking: { tasks: [inboxTask("T2", "受信箱の画面")], units: [], summary: "task 全体を止めている" },
+      project_id: "P1",
+      task: inboxTask("T2", "受信箱の画面"),
+      age_secs: 7200,
+    }),
+    item("failed:T3", "failed", "失敗: nightly の検査", {
+      detail: "cargo test が 2 件落ちた。",
+      options: [
+        inboxOption("retry", "やり直す", "同じ内容で複製して走らせる"),
+        inboxOption("reopen", "再開する", "同じ worktree で続ける"),
+        inboxOption("cancel", "取り消す", "この task を終える", true),
+      ],
+      recommended: "retry",
+      blocking: { tasks: [inboxTask("T3", "nightly の検査", "failed")], units: [], summary: "親 task を止めている" },
+      task: inboxTask("T3", "nightly の検査", "failed"),
+      age_secs: 86400,
+    }),
+    item("authorization:A1", "authorization", "認可: cluster-hpc への依頼", {
+      detail: "software-engineering が cluster-hpc に job の投入を頼む。",
+      options: [
+        inboxOption("approve", "認可する", "今回だけ許す"),
+        inboxOption("approve_always", "今後ずっと認可する", "同じ依頼を以後は自動で許す"),
+        inboxOption("deny", "断る", "依頼を取り下げる", true),
+      ],
+      recommended: "approve",
+      blocking: { tasks: [inboxTask("T4", "ベンチを流す")], units: [], summary: "1 task を止めている" },
+      task: inboxTask("T4", "ベンチを流す"),
+      age_secs: 600,
+    }),
+    item("knowledge_review:K1", "knowledge_review", "知識の候補を確かめる: New knowledge", {
+      options: [inboxOption("accept", "採用する", "正本に入れる"), inboxOption("reject", "捨てる", "候補を消す")],
+      links: [{ label: "知識の候補", href: "/knowledge/inbox" }],
+      age_secs: 120,
+    }),
+  ];
+}
+
+export function noticesFixture() {
+  const notice = (id, kind, title, summary, count, last_at, extra) => ({
+    id,
+    kind,
+    group_key: `${kind}:${id}`,
+    title,
+    summary,
+    count,
+    first_at: "2026-10-01T00:00:00Z",
+    last_at,
+    read_at: null,
+    links: [],
+    project_id: null,
+    target: null,
+    task_id: null,
+    ...extra,
+  });
+  return [
+    notice("N1", "task_done", "3 件の task が完了", "web の認証ほか 2 件", 3, "2026-10-03T12:00:00Z", {
+      project_id: "P1",
+      links: [{ label: "タスク", href: "/tasks/T1" }],
+    }),
+    notice("N2", "report", "日次の報告", "受信箱 5 件・失敗 1 件", 1, "2026-10-03T09:00:00Z"),
+    notice("N3", "bad_news", "nightly の検査が失敗", "cargo test が 2 件落ちた", 2, "2026-10-02T21:00:00Z", {
+      task_id: "T3",
+      target: { kind: "task", id: "T3" },
+    }),
+    notice("N4", "release", "release aaaaaaaaaaaa を昇格", "本番へ反映済み", 1, "2026-10-01T18:00:00Z", {
+      read_at: "2026-10-01T19:00:00Z",
+    }),
+  ];
+}
+
+const FAKE_NOW = "2026-10-04T00:00:00Z";
+
+/** 受信箱・通知の要求を処理する。扱わない path なら false。 */
+function handleInboxNotifications(state, req, res, url, body, sendEvent) {
+  const json = (status, value) => {
+    res.writeHead(status, { "content-type": "application/json" });
+    res.end(JSON.stringify(value));
+  };
+  const parts = url.pathname
+    .replace(/^\/api\/v1\//, "")
+    .split("/")
+    .map(decodeURIComponent);
+  if (parts[0] === "inbox" && parts[1] === "items") {
+    if (parts.length === 2 && req.method === "GET") {
+      const kind = url.searchParams.get("kind");
+      const project = url.searchParams.get("project");
+      const items = state.items.filter(
+        (item) => (!kind || item.kind === kind) && (!project || item.project_id === project),
+      );
+      const by_kind = {};
+      for (const item of items) by_kind[item.kind] = (by_kind[item.kind] ?? 0) + 1;
+      return json(200, { items, counts: { total: items.length, by_kind }, suppressed: {} });
+    }
+    const item = state.items.find((row) => row.id === parts[2]);
+    if (parts.length === 3 && req.method === "GET") return item ? json(200, item) : json(404, { error: "not_found" });
+    if (parts.length === 4 && parts[3] === "answer" && req.method === "POST") {
+      if (!item) return json(404, { error: "not_found" });
+      const option = item.options.find((row) => row.key === body?.option);
+      if (!option) return json(422, { error: "invalid_option" });
+      if (option.needs_note && !(typeof body.note === "string" && body.note.trim()))
+        return json(422, { error: "note_required" });
+      state.items = state.items.filter((row) => row !== item);
+      state.answers.push({ id: item.id, ...body });
+      sendEvent("inbox_changed", {});
+      return json(200, { item_id: item.id, removed: true, result: { option: option.key } });
+    }
+    return json(405, { error: "method_not_allowed" });
+  }
+  if (parts[0] === "notifications") {
+    const unreadOf = (rows) => rows.filter((row) => !row.read_at);
+    if (parts.length === 1 && req.method === "GET") {
+      const kind = url.searchParams.get("kind");
+      const project = url.searchParams.get("project");
+      const before = url.searchParams.get("before");
+      const limit = Number(url.searchParams.get("limit") ?? 50);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 500) return json(400, { error: "invalid_limit" });
+      const rows = state.notices
+        .filter(
+          (row) =>
+            (url.searchParams.get("unread") !== "true" || !row.read_at) &&
+            (!kind || row.kind === kind) &&
+            (!project || row.project_id === project) &&
+            (!before || row.last_at < before),
+        )
+        .sort((a, b) => b.last_at.localeCompare(a.last_at));
+      const items = rows.slice(0, limit);
+      return json(200, {
+        items,
+        unread: unreadOf(state.notices).length,
+        next_before: rows.length > limit ? items.at(-1).last_at : null,
+      });
+    }
+    if (parts[1] === "unread-count" && parts.length === 2 && req.method === "GET") {
+      const unread = unreadOf(state.notices);
+      const by_kind = {};
+      for (const row of unread) by_kind[row.kind] = (by_kind[row.kind] ?? 0) + 1;
+      return json(200, { unread: unread.length, events: unread.reduce((n, row) => n + row.count, 0), by_kind });
+    }
+    if (parts[1] === "read-all" && parts.length === 2 && req.method === "POST") {
+      const marked = unreadOf(state.notices).filter(
+        (row) =>
+          (!body?.kind || row.kind === body.kind) &&
+          (!body?.project || row.project_id === body.project) &&
+          (!body?.before || row.last_at < body.before),
+      );
+      for (const row of marked) row.read_at = FAKE_NOW;
+      if (marked.length) sendEvent("notifications_changed", {});
+      return json(200, { marked: marked.length });
+    }
+    if (parts.length === 3 && parts[2] === "read" && req.method === "POST") {
+      const row = state.notices.find((notice) => notice.id === parts[1]);
+      if (!row) return json(404, { error: "not_found" });
+      if (!row.read_at) {
+        row.read_at = FAKE_NOW;
+        sendEvent("notifications_changed", {});
+      }
+      return json(200, { id: row.id, read_at: row.read_at });
+    }
+    return json(405, { error: "method_not_allowed" });
+  }
+  return false;
+}
+
 // files は daemon の path（`/api/v1/tasks/...`）→ `{ body, type?, disposition? }`。
 // token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
 export function createFakeDaemon({
@@ -162,6 +377,7 @@ export function createFakeDaemon({
   let postDelay = 0;
   let streamStatus = 200;
   let timer;
+  const inbox = { items: inboxItemsFixture(), notices: noticesFixture(), answers: [] };
   const server = http.createServer((req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
     const record = {
@@ -558,6 +774,28 @@ export function createFakeDaemon({
       });
       return;
     }
+    if (
+      (pathname.startsWith("/api/v1/inbox/items") || /^\/api\/v1\/notifications(\/|$)/.test(pathname)) &&
+      !Object.hasOwn(fixtures, pathname)
+    ) {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        record.body = Buffer.concat(chunks).toString("utf8");
+        let body = {};
+        try {
+          body = record.body ? JSON.parse(record.body) : {};
+        } catch {
+          body = null;
+        }
+        if (body === null) {
+          res.writeHead(400, { "content-type": "application/json" });
+          return res.end(JSON.stringify({ error: "invalid_json" }));
+        }
+        handleInboxNotifications(inbox, req, res, new URL(req.url ?? "/", "http://x"), body, sendEvent);
+      });
+      return;
+    }
     const file = files[pathname];
     if (file) {
       // run のファイル・成果物（P1-08）。単一の `bytes=a-b` の Range だけを扱う。
@@ -623,6 +861,16 @@ export function createFakeDaemon({
   return {
     requests,
     sendEvent,
+    // 受信箱・通知の状態（ADR-0133）。試験が項目を差し替えたら合図を送る。
+    inbox,
+    setInboxItems(items) {
+      inbox.items = items;
+      sendEvent("inbox_changed", {});
+    },
+    setNotices(notices) {
+      inbox.notices = notices;
+      sendEvent("notifications_changed", {});
+    },
     // `/api/v1/stream` の応答を 200 以外（503 など）にする（P1-09）。
     setStreamStatus(value) {
       streamStatus = value;

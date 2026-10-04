@@ -62,6 +62,12 @@ test("parity: /projects 一覧・作成・422 表示", async ({ page }) => {
   try {
     await page.goto(`${gateway.base}/projects`);
     await expect(page.locator("[data-project-id='P1']")).toBeVisible();
+    // 一覧は card ではなく table（状態・途中目標・判断待ち・最終更新）。判断待ちは受信箱の項目の project_id から数える。
+    const table = page.getByRole("table");
+    for (const name of ["案件", "状態", "途中目標", "判断待ち", "最終更新"]) {
+      await expect(table.getByRole("columnheader", { name, exact: true })).toBeVisible();
+    }
+    await expect(page.locator("[data-project-id='P1'] [data-testid='project-pending']")).toHaveText("2 件");
     await expect(page.locator("[data-project-id='P9']")).toHaveCount(0);
     await page.getByRole("checkbox", { name: "アーカイブした案件も出す" }).click();
     await expect(page.locator("[data-project-id='P9']")).toContainText("アーカイブ済み");
@@ -140,11 +146,22 @@ test("parity: /projects/:id 表示・計画 DAG・仕事の木・成果物", asy
       history.pushState({}, "", "/projects");
       dispatchEvent(new PopStateEvent("popstate"));
     });
-    await page.locator("[data-project-id='P1'] a").click();
+    await page.locator("[data-project-id='P1']").getByRole("link", { name: "一件目" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "案件の詳細 P1" })).toBeVisible();
     await expect(page.getByTestId("project-overview")).toContainText("/work/p1");
     await expect(page.locator("[data-dag-node]")).toHaveCount(6);
     await expect(page.locator("[data-tree-task='T9']")).toBeVisible();
+    // 案件 → 途中目標 → task の木: 根の仕事は計画の節点の途中目標の下、子は字下げの深さを持つ。
+    const milestone = page.locator("[data-milestone='M0']");
+    await expect(milestone.getByRole("columnheader").first()).toContainText("途中目標 1: 途中目標 a");
+    await expect(milestone.locator("[data-tree-task='T1']")).toHaveAttribute("data-depth", "0");
+    await expect(milestone.locator("[data-tree-task='T9']")).toHaveAttribute("data-depth", "8");
+    await expect(milestone.locator("[data-tree-task='T2'] [data-status='ready']")).toHaveText("実行待ち");
+    // 判断待ちのある task は受信箱へ link する（偽 daemon の受信箱は T1・T2 を止めている）。
+    await expect(milestone.locator("[data-tree-task='T1']").getByTestId("tree-task-pending")).toHaveAttribute(
+      "href",
+      "/inbox",
+    );
     // DAG と木は枠の中でスクロールし、ページは横に溢れない。
     for (const id of ["project-dag-frame", "project-tree-frame"]) {
       const frame = page.getByTestId(id);
@@ -264,16 +281,23 @@ test("parity: /projects/:id 案件の操作", async ({ page }) => {
     await expect.poll(() => last(sent)).toMatchObject({ method: "PATCH", body: { status: "done" } });
     await ops.getByRole("button", { name: "一時停止" }).click();
     await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/pause");
-    // 中止とアーカイブは確認のダイアログを通す。やめれば送らない。
+    // 中止とアーカイブは確認のダイアログ（ConfirmDialog）を通す。やめれば送らない。
     const before = sent.length;
     await ops.getByRole("button", { name: "中止", exact: true }).click();
-    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "やめる" }).click();
+    const cancelDialog = page.getByRole("alertdialog", { name: "案件を中止しますか" });
+    await expect(cancelDialog).toContainText("対象: 一件目");
+    await cancelDialog.getByRole("button", { name: "やめる" }).click();
+    await expect(cancelDialog).toHaveCount(0);
     expect(sent.length).toBe(before);
     await ops.getByRole("button", { name: "中止", exact: true }).click();
-    await page.getByRole("dialog", { name: "中止" }).getByRole("button", { name: "中止する" }).click();
+    await cancelDialog.getByRole("button", { name: "案件を中止する" }).click();
     await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/cancel");
+    await expect(cancelDialog).toHaveCount(0);
     await ops.getByRole("button", { name: "アーカイブ", exact: true }).click();
-    await page.getByRole("dialog", { name: "アーカイブ" }).getByRole("button", { name: "アーカイブする" }).click();
+    await page
+      .getByRole("alertdialog", { name: "案件をアーカイブしますか" })
+      .getByRole("button", { name: "案件をアーカイブする" })
+      .click();
     await expect.poll(() => last(sent)?.path).toBe("/api/projects/P1/archive");
     await ops.getByLabel("作業場所の path").fill("/work/new");
     await ops.getByRole("button", { name: "作業場所を保存" }).click();
@@ -319,16 +343,28 @@ test("parity: /projects/:id 計画と途中目標", async ({ page }) => {
     await expect
       .poll(() => last(sent))
       .toMatchObject({ path: "/api/tasks/T1/execution/phase-gate", body: { action: "continue" } });
+    // 取り下げと取り消しは確認を通す。
     await row.getByRole("button", { name: "段階を取り下げる" }).click();
+    await page
+      .getByRole("alertdialog", { name: "段階を取り下げますか" })
+      .getByRole("button", { name: "段階を取り下げる" })
+      .click();
     await expect.poll(() => last(sent)).toMatchObject({ body: { action: "withdraw" } });
     for (const [label, action] of [
       ["止める", "pause"],
       ["再開", "resume"],
-      ["取り消す", "cancel"],
     ] as const) {
       await row.getByRole("button", { name: label, exact: true }).click();
       await expect.poll(() => last(sent)?.path).toBe(`/api/tasks/T1/${action}`);
     }
+    const beforeCancel = sent.length;
+    await row.getByRole("button", { name: "取り消す", exact: true }).click();
+    const cancelMilestone = page.getByRole("alertdialog", { name: "途中目標の仕事を取り消しますか" });
+    await cancelMilestone.getByRole("button", { name: "やめる" }).click();
+    expect(sent.length).toBe(beforeCancel);
+    await row.getByRole("button", { name: "取り消す", exact: true }).click();
+    await cancelMilestone.getByRole("button", { name: "仕事を取り消す" }).click();
+    await expect.poll(() => last(sent)?.path).toBe("/api/tasks/T1/cancel");
     // project_plan_proposed / decided でその project の detail を取り直す。
     await expect.poll(() => h.daemon.streamClients).toBeGreaterThan(0);
     for (const [i, kind] of (["project_plan_proposed", "project_plan_decided"] as const).entries()) {
@@ -373,7 +409,10 @@ test("parity: /projects/:id 全 intent・計画・木", async ({ page }) => {
       .poll(() => last(sent))
       .toMatchObject({ method: "PATCH", path: "/api/repos/R2", body: { is_primary: true } });
     await r2.getByRole("button", { name: "削除", exact: true }).click();
-    await page.getByRole("dialog", { name: "削除" }).getByRole("button", { name: "削除する" }).click();
+    await page
+      .getByRole("alertdialog", { name: "リポジトリを案件から外しますか" })
+      .getByRole("button", { name: "sub-repo を外す" })
+      .click();
     await expect.poll(() => last(sent)).toMatchObject({ method: "DELETE", path: "/api/repos/R2" });
     // 案件・計画の intent も同じ画面にあり、計画の DAG と仕事の木も出ている。
     await expect(page.getByTestId("project-ops")).toBeVisible();
@@ -542,15 +581,36 @@ test.describe("P4-07 board", () => {
       await page.goto(`${gateway.base}/board?project=P1`);
       await expect(page.locator("[data-board-column]")).toHaveCount(6);
       await expect(page.locator("[data-task-id]")).toHaveCount(6);
-      expect(await page.getByTestId("board-scroll-frame").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      // card wall でなく 1 行 1 task の表。スマホ幅でも表もページも横に溢れない（web ADR D5）。
+      await expect(page.getByRole("table")).toHaveCount(1);
+      expect(
+        await page.getByTestId("board-table").evaluate((el) => {
+          const frame = el.parentElement;
+          return !!frame && frame.scrollWidth <= frame.clientWidth;
+        }),
+      ).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      // 状態の絞り込みは URL に残り、件数つきで表の上にある。
+      await page
+        .getByRole("navigation", { name: "状態で絞り込む" })
+        .getByRole("link", { name: /停止中/ })
+        .click();
+      await expect(page).toHaveURL(/project=P1.*column=blocked/);
+      await expect(page.locator("[data-task-id]")).toHaveCount(1);
+      await page
+        .getByRole("navigation", { name: "状態で絞り込む" })
+        .getByRole("link", { name: /すべて/ })
+        .click();
+      await expect(page.locator("[data-task-id]")).toHaveCount(6);
       await page.getByLabel("検索").fill("カード");
       await page.getByRole("button", { name: "絞り込む" }).click();
       await expect(page).toHaveURL(/project=P1.*q=/);
       expect(calls.some((q) => q.includes("project=P1") && q.includes("q="))).toBe(true);
-      await page.locator("[data-task-id='T1']").getByLabel("優先度").selectOption("P0");
-      await page.locator("[data-task-id='T1'] button").click();
-      await expect(page.locator("[data-task-id='T1'] [role=status]")).toBeVisible();
+      await page.locator("[data-task-id='T1']").getByRole("button", { name: "カード 1 を編集" }).click();
+      const edit = page.getByRole("form", { name: "カード 1 を編集" });
+      await edit.getByLabel("優先度").selectOption("P0");
+      await edit.getByRole("button", { name: "保存" }).click();
+      await expect(page.locator("[data-task-edit='T1'] [role=status]")).toBeVisible();
       expect(editBody).toMatchObject({ priority: "P0", expected_status: "ready" });
       await page.goBack();
       await expect(page).toHaveURL(/project=P1/);

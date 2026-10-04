@@ -20,6 +20,7 @@ export const daemonRestQuery = {
   queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<DaemonSnapshot>("/api/daemon", signal),
 } as const;
 
+/** 旧 `GET /inbox`（ADR-0133 D5 で Deprecation 付きの互換）。nav の件数は inbox-notifications.ts の `/inbox/items`。 */
 export const inboxQuery = {
   queryKey: inboxKeys.list(),
   queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<Inbox>("/api/inbox", signal),

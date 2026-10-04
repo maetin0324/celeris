@@ -193,7 +193,7 @@ function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; send
                 </Link>
                 <ConfirmDialog
                   trigger={
-                    <Button variant="destructive" disabled={sender.pending}>
+                    <Button variant="secondary" disabled={sender.pending}>
                       削除
                     </Button>
                   }

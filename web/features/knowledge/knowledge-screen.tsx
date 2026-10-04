@@ -278,7 +278,7 @@ function Candidate({ item, sender }: { item: KnowledgeCandidate; sender: Sender 
               { label: "scope", value: <Scope scope={item.scope} /> },
               { label: "更新日", value: <Updated value={item.created} /> },
               {
-                label: "取り込み先",
+                label: "提案された取り込み先",
                 value: (
                   <span className="break-all">
                     {item.target}

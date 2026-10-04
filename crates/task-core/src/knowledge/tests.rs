@@ -410,3 +410,35 @@ fn replace_sources_rewrites_only_the_sources_lines() {
     );
     assert_eq!(replace_sources("body only\n", &s(&["x"])), None);
 }
+
+/// ADR-0047 付記 H1: 人の GUI 編集は『人が書いた』印を付ける（旧形 `human` は置き換え、`user/` と既存の印は触らない）。
+#[test]
+fn mark_human_authored_adds_the_authored_mark_for_gui_edits() {
+    let instruction = "---\ntitle: t\nsources: [task:01X, human:instruction]\n---\n\n本文\n";
+    let marked = mark_human_authored("projects/a.md", instruction);
+    assert_eq!(
+        marked,
+        "---\ntitle: t\nsources: [\"task:01X\", \"human:instruction\", \"human:authored\"]\n---\n\n本文\n"
+    );
+    assert!(protected_page("projects/a.md", &marked));
+    // 同じ入力には同じ出力（再保存は unchanged のまま）、二度付けしない。
+    assert_eq!(mark_human_authored("projects/a.md", &marked), marked);
+
+    let legacy = "---\ntitle: t\nsources: [human]\n---\n\n本文\n";
+    assert_eq!(
+        mark_human_authored("projects/a.md", legacy),
+        "---\ntitle: t\nsources: [\"human:authored\"]\n---\n\n本文\n"
+    );
+
+    let bare = "# メモ\n";
+    let marked = mark_human_authored("projects/b.md", bare);
+    assert_eq!(
+        marked,
+        "---\nsources: [\"human:authored\"]\n---\n\n# メモ\n"
+    );
+    assert!(human_authored(&marked));
+
+    let author = "---\ntitle: t\nauthor: human\n---\n\n本文\n";
+    assert_eq!(mark_human_authored("projects/c.md", author), author);
+    assert_eq!(mark_human_authored("user/notes.md", bare), bare);
+}

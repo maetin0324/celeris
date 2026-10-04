@@ -456,9 +456,11 @@ async fn put_page(
                 .filter(|m| !m.is_empty())
                 .map(str::to_string)
                 .unwrap_or_else(|| format!("knowledge: {path}"));
+            // ADR-0047 付記 H1: 人の編集は『人が書いた』印を付けて保存する（整理が保護する）。
+            let body = kb::mark_human_authored(&path, &request.body);
             let edit = PageEdit {
                 path,
-                body: Some(request.body.clone()),
+                body: Some(body),
                 etag: request.etag.clone().filter(|e| !e.trim().is_empty()),
                 message,
                 author: (

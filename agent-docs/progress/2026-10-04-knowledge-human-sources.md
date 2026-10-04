@@ -53,11 +53,39 @@ updated: 2026-10-04
 ### 未解決事項
 
 - 本番 KB への移行は未実施（人の承認で 1 回。手順書の通り。この版が current になってから `celerisctl` に入る）。
-- 判別できない 3 件（`environment/clusters/{fern03,sirius}.md`・`experience/README.md`）は人が GUI で印を決めるまで保護のまま。
+- 判別できない 3 件（`environment/clusters/{fern03,sirius}.md`・`experience/README.md`）は人が印を決めるまで保護のまま（手順書 7）。
 - 「Phase K-1 整理」の `Celeris (human)` commit は人の編集として数えた（API の人の編集と区別できないため保護側）。
 - task-api の `KnowledgePage.sources` の doc comment（schema に流れる）は旧表記のまま。schema と gui/web 型の再生成を避けた。
 
 ### 提案
 
-- `PUT /knowledge/page` で人が保存したページに `human:authored` を自動で足す（今は人が書かない限り印が付かない。
-  新しく人が書いたページが保護されるには印が要る）。schema の変更は無い。
+- （attempt 2 で実装済み）`PUT /knowledge/page` で人が保存したページに `human:authored` を自動で足す。
+
+## Phase 1 attempt 2（完了 2026-10-04、review 差し戻しの修正）
+
+差し戻し: ADR H1 の「`human:authored` は人の GUI 編集（`PUT /knowledge/page`）で付く」が未実装で、移行の後に人が
+GUI で直したページ（例: `human:instruction` だけのページ）が保護されなかった。
+
+### やったこと
+
+- task-core `knowledge::mark_human_authored(path, raw)`: 印が無ければ `sources` に `human:authored` を足す（旧形
+  `human` は置き換え、`human:instruction`・`task:<id>` は残す）。front matter が無ければ `sources` だけの front matter
+  を先頭に足す。`user/` 配下・既に印のあるページ・BOM/CRLF の front matter は原文のまま。冪等。
+- task-api `put_page` が保存する本文にこれを通す（author `Celeris (human)` は従来どおり）。schema の変更は無い。
+- ADR-0047 付記 H1 に PUT の振る舞いと「GUI で印を外しても次の保存で付く。外すのは直接の git 編集」を明記。
+  手順書 7 を合わせた（GUI 保存 = authored、instruction にするのは直接 git）。
+
+### 証拠
+
+- `task-api knowledge::a_gui_edit_marks_the_page_as_human_authored`（一時 KB。新規ページ・`human:instruction` だけの
+  ページを PUT すると `human:authored` が付き `protected_page` が真、同じ本文の再保存は `unchanged`）、
+  `task-core knowledge::tests::mark_human_authored_adds_the_authored_mark_for_gui_edits`。既存
+  `a_page_is_rendered_with_its_front_matter_history_and_etag` は PUT の旧形 `human` が `human:authored` になる期待に更新。
+  `cargo nextest run -p task-api --test knowledge` → 8 passed。`cargo nextest run -p task-core -p task-ops -p celerisctl human` → 64 passed。
+
+- 受け入れ 3（attempt 2）: `bash scripts/dev/test-parallel.sh` → exit 0、`3905 tests run: 3905 passed (1 slow), 12 skipped`。
+  `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all -- --check` → exit 0。
+
+### 未解決事項
+
+- 本番 KB への移行と昇格は未実施（attempt 1 と同じ。人の承認で 1 回）。

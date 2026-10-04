@@ -277,7 +277,11 @@ knowledge run（`apply_candidates`・`celerisctl knowledge record`・MCP `knowle
 
 - **H1 印は 3 つ**（正本は `task_core::knowledge` の `SOURCE_HUMAN_*` と判定関数）:
   - `human:authored`（`sources` の要素）または front matter の `author: human` — **人が書いた・人が直接編集した**ページ。
-    人の GUI 編集（`PUT /knowledge/page`）か人の直接の git 編集で付く。保護の対象。
+    人の GUI 編集（`PUT /knowledge/page`）か人の直接の git 編集で付く。保護の対象。`PUT` は保存する本文に
+    `kb::mark_human_authored` を通す: 印が無ければ `sources` に `human:authored` を足し（旧形 `human` は置き換え、
+    `human:instruction` と `task:<id>` は残す）、front matter が無ければ `sources` だけの front matter を先頭に足す。
+    `user/` 配下（パスで守られる）と既に印のあるページは原文のまま。同じ本文の再保存は `unchanged` のまま。
+    GUI で印を外しても次の保存でまた付く（人が直したページは人が書いたページ）。保護を外すのは直接の git 編集で行う。
   - `human:instruction`（`sources` の要素。同じ `sources` に `task:<id>` を添える）— **人の指示・発言に由来する事実**。
     run が書く。**保護しない**（事実の正しさは通常の整理で扱う）。
   - `human`（単独。旧形）と単数形 `source: human` — **未判別**。H4 の移行で判別できなかったものだけが残る。

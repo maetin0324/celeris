@@ -72,6 +72,32 @@ pub fn protected_page(path: &str, raw: &str) -> bool {
     path.starts_with("user/") || human_authored(raw) || legacy_human(raw)
 }
 
+/// ADR-0047 付記 H1: 人の GUI 編集（`PUT /knowledge/page`）が書く原文に『人が書いた』印を付ける。
+///
+/// - `user/` 配下はパスで守られるので触らない。既に `human:authored`・`author: human` があればそのまま
+/// - front matter があれば `sources` の旧形 `human`（未判別）を `human:authored` に置き換え、無ければ足す
+/// - front matter が無ければ `sources: [human:authored]` だけの front matter を先頭に足す
+/// - front matter が LF の `---` で始まらない（BOM・CRLF）ときは原文のまま（`replace_sources` が扱えない）
+///
+/// 同じ入力には同じ出力を返す（同じ本文の再保存は `unchanged` のまま）。
+pub fn mark_human_authored(path: &str, raw: &str) -> String {
+    if path.starts_with("user/") || human_authored(raw) {
+        return raw.to_string();
+    }
+    if !raw.starts_with("---\n") && !raw.starts_with('\u{feff}') && !raw.starts_with("---\r\n") {
+        let sources = yaml_list(&[SOURCE_HUMAN_AUTHORED.to_string()]);
+        return format!("---\nsources: [{sources}]\n---\n\n{raw}");
+    }
+    let mut sources: Vec<String> = front_matter(raw)
+        .0
+        .sources
+        .into_iter()
+        .filter(|s| s != SOURCE_HUMAN_LEGACY)
+        .collect();
+    sources.push(SOURCE_HUMAN_AUTHORED.to_string());
+    replace_sources(raw, &sources).unwrap_or_else(|| raw.to_string())
+}
+
 /// ADR-0047 付記 H2: run（知識整理 run・`record`・GC）が書く候補の出典を正す。
 ///
 /// - `human` と `human:authored` は `human:instruction` に置き換える（run は人が書いた印を作れない）。

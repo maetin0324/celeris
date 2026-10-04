@@ -36,8 +36,10 @@ tasks: [01M44BFF0EDZZQ4MAPQZB1GARV]
 5. 確認: もう一度 dry-run して、「判別できない」の節だけが残り、他の 2 節が 0 件であること。
    `git -C ~/.local/share/celeris/knowledge show --stat HEAD` で `sources` 行だけが変わっていること。
 6. KB に remote があれば `git -C ~/.local/share/celeris/knowledge push`（日次整理の自動適用も次の commit で push する）。
-7. 「判別できない」に残ったページは、人が GUI の KB 編集で `human:authored` か `human:instruction` に直す
-   （直すまでは日次整理の自動の削除・統合から守られ、`human_decisions` に回る）。
+7. 「判別できない」に残ったページは人が印を決める（決めるまでは日次整理の自動の削除・統合から守られ、
+   `human_decisions` に回る）。人が書いたページなら GUI の KB 編集で保存するだけでよい（`PUT /knowledge/page` は
+   旧形 `human` を `human:authored` に置き換える）。人の指示由来なら KB を直接 git で編集して `human:instruction`
+   と `task:<id>` に直す（GUI で保存すると `human:authored` が付くため）。
 
 戻すとき: `git -C ~/.local/share/celeris/knowledge revert <sha>`（索引は `celerisctl knowledge reindex`）。
 

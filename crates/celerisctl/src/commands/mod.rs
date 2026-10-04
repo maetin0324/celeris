@@ -29,6 +29,7 @@ pub mod plan_lint;
 /// ADR-0054 D2（Phase 68）: `celerisctl projects ls|show`（CoS の対話 run に許す読み取りの道具）。
 pub mod projects;
 pub mod query;
+pub mod release;
 pub mod replay;
 /// ADR-0051 / ADR-0054 Phase 113 D3: `celerisctl rereview <task_id>`。既存成果を再判定する
 /// （新しい実装 run は起こさない）。

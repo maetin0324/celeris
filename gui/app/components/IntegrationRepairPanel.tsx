@@ -37,8 +37,8 @@ export function integrationRepairTone(view: IntegrationRepairView): Tone {
   return STATE_TONE[view.state];
 }
 
-function short(sha: string): string {
-  return sha.slice(0, 12);
+function short(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 12) : "不明";
 }
 
 /** パネルに出す行（見出し・ラベルは除く）。`null` / 欠落なら呼ばない（`IntegrationRepairPanel` が何も出さない）。 */

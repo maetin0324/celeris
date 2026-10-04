@@ -3,6 +3,10 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-04（ADR 2026-10-04-release-notes）— **追加のみ。v1 のまま**。エンドポイント 175〜176:
+  `GET /releases/{sha12}/promotion-preview`・`GET /deliveries`（§3.67a / §3.67b）。`GET /releases` の
+  `items[]` に `notes`（そのリリースの説明。`notes.json`）と `promotion`（`current` から昇格したら入るものの
+  要約）が増えた（§3.66）。スキーマ・DB マイグレーションの変更は無い。
 - 改訂: 2026-09-21 Phase 82（ADR-0056 D3 続き、skills を GUI から見る・作る・mount する）
   — **追加のみ。v1 のまま**。エンドポイント 101〜106: `GET /skills`・`GET /skills/{name}`・
   `PUT /skills/{name}`・`DELETE /skills/{name}`・`POST /org/{id}/skills`・
@@ -271,12 +275,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（174 = 表 168 + browser 制御 6）
+## 2. エンドポイント一覧（176 = 表 170 + browser 制御 6）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
 応答型は `docs/api/v1/api-v1.schema.json` の `$defs` の名前（`{…}` は名前の無い JSON の形）。ステータスを書いていない行は 200。
-browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser-capability.md`。
+#175〜176 は 2026-10-04 に足した（browser 制御の 6 本が #169〜174）。browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser-capability.md`。
 
 | # | メソッド | パス | 目的 | 応答型 | 出所 |
 |---|---|---|---|---|---|
@@ -448,6 +452,8 @@ browser 系（#151〜174）の流れは §3.118〜3.124 と `docs/guides/browser
 | 166 | POST | `/tasks/{id}/browser/live/{run}/{session}/check` | 閲覧許可を確かめる | `CheckResponse` | `crate::browser_live` |
 | 167 | POST | `/tasks/{id}/browser/live/{run}/{session}/read` | Live View の event を読む | `ReadResponse` | store `browser_live_after` |
 | 168 | POST | `/tasks/{id}/browser/live/{run}/{session}/events` | Live View の event を追記する（daemon bearer） | `EventResponse` | store `browser_live_append` |
+| 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
+| 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -1868,6 +1874,8 @@ webhook の URL は**秘密**で、`[secrets]`（§3.36〜3.38 / ADR-0030）に 
         "sensitive": ["scripts/selfdeploy/verify.sh"],   // 安全に関わる変更。空なら普通のリリース
         "commits": [{ "sha": "…40 桁…", "subject": "phase 50: …" }]   // 新しい順、最大 50 件
       },
+      "notes": null,                  // <release>/notes.json（そのリリースの説明。ReleaseNotes）。無い・壊れていれば null
+      "promotion": null,              // current から昇格したら入るものの要約（ReleasePromotionPreview。§3.67a）。current 自身と notes の無いリリースは null
       "is_current": false,
       "is_previous": false,
       "promoting": false,             // promote.lock の pid がまだ生きている
@@ -1939,6 +1947,57 @@ stdout/err は `<release>/promote.log`）で起こし、`promote.lock` に pid �
   `GET /releases` の `items[].promote_failed` はこれを写す（§3.66）。次の昇格の試みが始まる
   （この API が呼ばれる）と、そのリリースの `promote_failed.json` は消える — 古い失敗が残り続けない。
   GUI は `promoting` が偽で `promote_failed` が非 `null` のときだけ赤いバナーを出す。
+
+#### 3.67a `GET /releases/{sha12}/promotion-preview` → 200 `ReleasePromotionPreview`（読み取り）
+
+ADR 2026-10-04-release-notes。`current` から `{sha12}` へ昇格したら**何が入るか**を、間にある全リリースの
+`notes.json` を 1 つにまとめて返す（`GET /releases` の `items[].promotion` と同じ値）。クエリは受け付けない。
+`releases_dir` に `{sha12}` が無い（`[selfdeploy]` が無い構成を含む）と 404 `release_not_found`。
+
+```jsonc
+{
+  "from": "cccccccccccc",        // いまの current（無ければ null）
+  "to": "bbbbbbbbbbbb",
+  "complete": true,              // current まで notes で辿り切れた。false なら対象側の notes にある分だけ
+  "problem": null,               // 辿れなかった理由（notes.json が無い・base が current に着かない 等）
+  "releases": [{ "sha12": "bbbbbbbbbbbb", "built_at": "…", "task_count": 1 }],   // 新しい順、対象が先頭
+  "tasks": [{ "task_id": "01J…", "title": "…", "summary": "…", "status": "done",
+              "source": "delivery",                 // delivery | branch
+              "commits": [{ "sha": "…", "subject": "…" }],
+              "children": [{ "task_id": "01J…", "title": "…" }] }],   // 同じ task は 1 回
+  "direct_commits": [{ "sha": "…", "subject": "…" }],   // task に属さない first-parent の commit
+  "migrations": [{ "path": "crates/task-core/migrations/0099_x.sql", "status": "added", "commit": "…", "title": null }],
+  "schema": { "from": 10, "to": 11, "changed": true },  // from = current、to = 対象の schema_version
+  "mode": "stop-start",          // live（対象の verify.json の live_ok が真）| stop-start（偽）| null（未検証）
+  "adrs": [{ "path": "agent-docs/adr/….md", "status": "added", "commit": "…", "title": "# の題" }],
+  "config_examples": [{ "path": "config/celeris.example.toml", "status": "modified", "commit": "…",
+                        "added_lines": ["key = 2"], "added_sections": ["[new]"], "needs_review": true }],
+  "gate_skips": [{ "step": "e2e", "reason": "no display" }]   // 対象の gate で飛ばした段
+}
+```
+
+- 決定的（git と JSON だけ。LLM は関与しない）。`notes.json` が壊れていても落ちず、そのリリースは
+  notes 無しとして扱い `complete: false` + `problem` になる。
+- `config_examples[].needs_review` が真なら、本番 config に足す設定がないか人が見る。
+- `notes` 自体（`items[].notes`）の形は `ReleaseNotes`（`version`・`sha`・`sha12`・`base`・`first_parent`・
+  `tasks`・`direct_commits`・`migrations`・`schema`・`adrs`・`config_example`・`gate_skips` ほか）。型は
+  `docs/api/v1/api-v1.schema.json` の `$defs`。
+
+#### 3.67b `GET /deliveries` → 200 `DeliveryList`（読み取り）
+
+配送記録（`deliveries` 表）の task と commit の対応だけ。`release.sh` がリリースの説明で first-parent の
+commit を task に結ぶのに使う。クエリは受け付けない。`items[]` は `task_id` 昇順。
+
+```jsonc
+{ "items": [{ "task_id": "01J…", "repo": "…", "branch": "celeris/01J…",
+              "base": "…40 桁…",          // 配送時の取り込み先の先端。task の区間はここで終わる。無ければ null
+              "head": "…40 桁…",          // 配送した branch の先端
+              "reviewed_sha": null, "merge_candidate_sha": null,
+              "state": "ready",           // DeliveryState の code
+              "release": null }] }        // 配送が作った release の sha12
+```
+
+配送は task ごとに最新の 1 件だけが残る（同じ task の古い配送は上書きされる）。
 
 ### 3.68〜3.71 案件のリポジトリ（ADR-0043 D1。**変更系は管理系**）
 

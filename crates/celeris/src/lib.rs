@@ -20,6 +20,7 @@ pub mod knowledge_maint;
 /// ADR-0037（Phase 39）: 人の判断が要るときだけ Discord に知らせる（判定は決定的、送信は spawn）。
 pub mod notify;
 /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む／`promote.sh` を起こす。
+pub mod release_notes;
 pub mod releases;
 /// ADR-0033 D3（Phase 25）: 報告の圧縮（まとめの run を起こす決定的な判断）。
 pub mod reports;

@@ -31,7 +31,9 @@ import type {
   ReleaseChanges,
   ReleaseGate,
   ReleaseItem,
+  ReleaseNotes,
   ReleasePromoteAccepted,
+  ReleasePromotionPreview,
   Releases,
   ReleaseVerifyCheck,
   RepoChangesView,
@@ -208,6 +210,75 @@ export function releaseChanges(overrides: Partial<ReleaseChanges> = {}): Release
   };
 }
 
+/** `ReleaseItem.notes`（ADR 2026-10-04-release-notes）。task・直接 commit・migration・ADR・config・gate skip を全部含む。 */
+export function releaseNotes(overrides: Partial<ReleaseNotes> = {}): ReleaseNotes {
+  return {
+    version: 1,
+    sha: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    sha12: "bbbbbbbbbbbb",
+    base: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    generated_at: "2026-09-19T08:00:00Z",
+    schema: { from: 11, to: 12, changed: true },
+    tasks: [
+      {
+        task_id: "01MOCKTASK00000000000000A1",
+        title: "リリースの説明を画面に出す",
+        source: "delivery",
+        summary: "notes.json を読んで GUI に出しました。",
+        commits: [{ sha: "3333333333333333333333333333333333333333", subject: "gui: release notes" }],
+        children: [{ task_id: "01MOCKTASK00000000000000A2", title: "型の再生成" }],
+      },
+      {
+        task_id: "01MOCKTASK00000000000000B1",
+        title: null,
+        source: "branch",
+        commits: [
+          { sha: "4444444444444444444444444444444444444444", subject: "fix: 題が取れない task は commit 題を出す" },
+        ],
+      },
+    ],
+    direct_commits: [{ sha: "5555555555555555555555555555555555555555", subject: "docs: 手で直した commit" }],
+    migrations: [{ path: "crates/task-core/migrations/0012_release_notes.sql", status: "added" }],
+    adrs: [
+      {
+        path: "agent-docs/adr/2026-10-04-release-notes-with-a-very-long-path-that-must-wrap-on-mobile.md",
+        status: "added",
+        title: "ADR: リリースの説明",
+      },
+    ],
+    config_example: {
+      path: "config/celeris.example.toml",
+      status: "modified",
+      needs_review: true,
+      added_sections: ["[releases]"],
+      added_lines: ["notes_enabled = true"],
+    },
+    gate_skips: [{ step: "web-build", reason: "SD_GATE_SKIP_WEB=1" }],
+    ...overrides,
+  };
+}
+
+/** `ReleaseItem.promotion`（現行から対象まで）。 */
+export function releasePromotion(overrides: Partial<ReleasePromotionPreview> = {}): ReleasePromotionPreview {
+  const notes = releaseNotes();
+  return {
+    from: "aaaaaaaaaaaa",
+    to: "bbbbbbbbbbbb",
+    complete: true,
+    problem: null,
+    mode: "stop-start",
+    releases: [{ sha12: "bbbbbbbbbbbb", built_at: "2026-09-19T08:00:00Z", task_count: 2 }],
+    tasks: notes.tasks ?? [],
+    direct_commits: notes.direct_commits ?? [],
+    migrations: notes.migrations ?? [],
+    schema: { from: 11, to: 12, changed: true },
+    adrs: notes.adrs ?? [],
+    config_examples: notes.config_example ? [notes.config_example] : [],
+    gate_skips: notes.gate_skips ?? [],
+    ...overrides,
+  };
+}
+
 /** `GET /releases` の既定応答（current が 1 つ、引き継ぎは走っていない）。 */
 export const defaultReleases: Releases = {
   current: "aaaaaaaaaaaa",
@@ -230,6 +301,8 @@ export const defaultReleases: Releases = {
       verify: null,
       on_main: false,
       changes: releaseChanges(),
+      notes: releaseNotes(),
+      promotion: releasePromotion(),
     }),
     releaseItem({ is_current: true, promoted_at: "2026-09-19T02:00:00Z" }),
     // Phase 86（ADR-0055 ラウンド 11）: mobile-audit / e2e:mock がスマホの新しい状態
@@ -243,6 +316,23 @@ export const defaultReleases: Releases = {
       built_at: "2026-09-18T00:00:00Z",
       gate: undefined,
       verify: { ok: true, live_ok: false, at: "2026-09-18T01:00:00Z" },
+      notes: releaseNotes({
+        sha12: "cccccccccccc",
+        tasks: [],
+        direct_commits: [],
+        migrations: [],
+        adrs: [],
+        config_example: null,
+        gate_skips: [],
+        schema: { from: 11, to: 11, changed: false },
+      }),
+      promotion: releasePromotion({
+        to: "cccccccccccc",
+        mode: "live",
+        complete: false,
+        problem: "途中の notes.json がありません",
+        schema: { from: 11, to: 11, changed: false },
+      }),
     }),
     // `dddddddddddd` は検査の内訳・gate の内訳の**失敗**表示を監査対象にする（検査 6 が失敗、
     // gate は cargo-test で止まる）。

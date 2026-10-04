@@ -29,6 +29,7 @@ use commands::plan::{self, PlanArgs};
 use commands::plan_lint;
 use commands::projects::{self, ProjectsCommand};
 use commands::query::{self, LogArgs, LsArgs, ShowArgs};
+use commands::release::{self as release_cmd, ReleaseCommand};
 use commands::replay::{self, ReplayArgs};
 use commands::rereview::{self, RereviewArgs};
 use commands::retry::{self, RetryArgs};
@@ -57,6 +58,11 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// ADR 2026-10-04-release-notes: `notes`（リリースの説明を書く）/ `preview`（昇格の要約）。DB は開かない。
+    Release {
+        #[command(subcommand)]
+        command: ReleaseCommand,
+    },
     /// ADR-0075（Phase G1）: scratch pool（`status [--json]` / `gc [--dry-run]` / 外部 lease の `lease` / `touch` /
     /// `release` / `env`）。`lease` 系は DB を開かない。`status` / `gc` は DB があれば読む（daemon と同じ分類）。
     Scratch {
@@ -238,6 +244,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
+        Command::Release { .. } => unreachable!("handled before store open"),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),
@@ -276,6 +283,15 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     if let Command::Scratch { command } = cli.command {
         return match scratch_cmd::run(cli.db, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Release { command } = cli.command {
+        return match release_cmd::run(command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");

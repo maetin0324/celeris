@@ -1,7 +1,7 @@
 ---
 title: Web UI 状態確認用 fixture
 tasks: [01M44C029SCGEZHEK57WEK3QNB]
-status: running
+status: done
 updated: 2026-10-04
 ---
 
@@ -45,6 +45,20 @@ rich データを使う 360/390/412/1440px の監査で、`/tasks`・`/graph`・
 
 偽 daemon に足した制御: `fault`・`hold`・`streamStatus`・`inboxItems`・`notices` の option と、`setFault()`・`releaseHeld()`・`heldCount`・`dropStreamClients()`。既定の option では挙動は変わらない。試験用 gateway（`web/e2e/support/fixture-gateway.ts`）は option を受けて偽 daemon を返す。
 
+状態 screenshot は `corepack pnpm@12.6.0 -C web screenshots --states --out <dir>` で撮る。`screenshots.mjs` は `states.ts` の状態と代表画面を使い、各代表画面を 360/390/412/1440px で撮影する。loading は撮影後に `releaseHeld()` で応答を解放する。出力名は `<state>-<path>-<width>.png`（path は通常撮影と同じ置換規則）。stdout に生成した PNG の総数を出す。通常撮影（`--states` なし）の `<path>-<width>.png` は従来どおり。
+
+| 状態 | 代表画面数 | PNG 枚数 | 名前の対応例 |
+| --- | ---: | ---: | --- |
+| `long-text` | 3 | 12 | `long-text-inbox-360.png` ↔ `inbox-360.png` |
+| `long-id` | 3 | 12 | `long-id-tasks-360.png` ↔ `tasks-360.png` |
+| `empty` | 4 | 16 | `empty-graph-360.png` ↔ `graph-360.png` |
+| `many` | 3 | 12 | `many-notifications-360.png` ↔ `notifications-360.png` |
+| `loading` | 4 | 16 | `loading-providers-360.png` ↔ `providers-360.png` |
+| `error` | 4 | 16 | `error-providers-360.png` ↔ `providers-360.png` |
+| `stale` | 4 | 16 | `stale-tasks_T1_runs_R1-360.png` ↔ `tasks_T1_runs_R1-360.png` |
+| `forbidden` | 4 | 16 | `forbidden-providers-360.png` ↔ `providers-360.png` |
+| **合計** | **29** | **116** |  |
+
 ### 画面が状態を描けない所見
 
 - `long-text /inbox`: 受信箱の項目の題名 link が `inline-flex` の中で `break-words` のため、区切りの無い長い語が折り返さず 360px で文書幅が 417px になる（横 scroll）。画面コード（`web/features/inbox`）の変更が要るので、この WorkUnit では直さず、`states.spec.ts` に期待どおり失敗する試験（`test.fail`）として残した。直ると試験が「予想外の成功」で落ちるので、そのとき `findings` から外す。
@@ -57,3 +71,4 @@ rich データを使う 360/390/412/1440px の監査で、`/tasks`・`/graph`・
 - `corepack pnpm@12.6.0 -C web e2e e2e/states/`: 31 件（`long-text /inbox` は期待どおりの失敗）、exit 0
 - `corepack pnpm@12.6.0 -C web e2e`: 158 passed・8 skipped、exit 0
 - `typecheck`・`lint`・`test`・`check:boundaries`・`check:parity`: すべて exit 0
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: cache に `statuses@2.0.2` が無く失敗。依存未導入のため screenshot 実行は未確認

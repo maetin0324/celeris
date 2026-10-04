@@ -440,3 +440,131 @@ test("parity: /tasks/:id/changes 差分・取り込み・merge", async ({ page }
     await expect.poll(count).toBeGreaterThan(scoped);
   });
 });
+
+// 観測性の header と木（2026-10-04 screens-ops）。長い ID・題を持つ fixture で、状態・現在の run・次の操作、
+// 親 task・段・WU・子 task・main から取り込んだ integration repair の行を確かめ、360px で横に溢れないことを見る。
+const longId = `T1-${"0123456789".repeat(6)}`;
+const longTitle = `長い題の task ${"とても長い説明".repeat(20)}`;
+
+function observedFixtures() {
+  const run = fixtureFor(schema.$defs.RunSummary) as Record<string, unknown>;
+  const unit = (seq: number, key: string, phase: string, status: string, extra: Record<string, unknown> = {}) => ({
+    ...(fixtureFor(schema.$defs.WorkUnitView) as Record<string, unknown>),
+    id: `WU-${key}-${"x".repeat(40)}`,
+    key,
+    seq,
+    phase,
+    status,
+    spec: {
+      ...(fixtureFor(schema.$defs.WorkUnitSpec) as Record<string, unknown>),
+      key,
+      title: `WU ${key} の題`,
+      phase,
+    },
+    ...extra,
+  });
+  const plan = fixtureFor(schema.$defs.ExecutionPlanView) as Record<string, unknown>;
+  const execution = fixtureFor(schema.$defs.TaskExecutionView) as Record<string, unknown>;
+  const value = detail() as Record<string, unknown> & { task: Record<string, unknown> };
+  value.task = { ...value.task, status: "running", parent_id: `P-${"9".repeat(60)}`, title: longTitle };
+  Object.assign(value, {
+    actions: ["approve", "reject", "retry", "phase_gate"],
+    runs: [
+      {
+        ...run,
+        run_id: "R-old",
+        started_at: "2026-10-01T00:00:00Z",
+        finished_at: "2026-10-01T01:00:00Z",
+        outcome: "done",
+      },
+      { ...run, run_id: `R-${"7".repeat(60)}`, started_at: "2026-10-02T00:00:00Z", finished_at: null, end: null },
+    ],
+    children: [{ id: longId, title: "子の題", kind: "execute", status: "blocked", actions: [] }],
+    integration_repair: {
+      state: "scheduled",
+      attempt: 1,
+      max_attempts: 2,
+      target_ref: "main",
+      target_sha: "a".repeat(40),
+      work_unit_id: `WU-merge-${"x".repeat(40)}`,
+    },
+  });
+  return {
+    "/api/v1/tasks/T1": value,
+    "/api/v1/tasks/T1/execution": {
+      ...execution,
+      phase: "executing",
+      plan: {
+        ...plan,
+        version: 2,
+        plan: {
+          ...(plan.plan as Record<string, unknown>),
+          stages: [
+            { key: "build", title: "作る", kind: "implement" },
+            { key: "verify", title: "確かめる", kind: "test" },
+          ],
+        },
+        work_units: [
+          unit(1, "header-tree", "build", "running", { running_run_id: "R-wu" }),
+          unit(2, "merge", "build", "done"),
+          unit(3, "detail-verify", "verify", "pending"),
+        ],
+      },
+    },
+  };
+}
+
+test("parity: /tasks/:id header（状態・現在の run・次の操作）と木（親子 task・段・WU・integration repair）", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await withDetail(observedFixtures(), async (base) => {
+    await page.goto(`${base}/tasks/T1`);
+    await expect(page.getByRole("heading", { level: 1, name: "タスクの詳細 T1" })).toBeVisible();
+
+    // header: 状態は StatusBadge、現在の run は終わっていない run、次の操作は今できる判断だけ。
+    const header = page.getByTestId("task-header");
+    await expect(header.getByTestId("task-header-status").locator("[data-status='running']")).toHaveText("実行中");
+    const runLink = header.getByRole("link", { name: `run R-${"7".repeat(60)} を開く` });
+    await expect(runLink).toHaveAttribute("href", `/tasks/T1/runs/R-${"7".repeat(60)}`);
+    await expect(header.locator("[data-slot='short-id']").first()).toHaveAttribute("title", `R-${"7".repeat(60)}`);
+    await expect(header.getByTestId("task-header-run").locator("[data-status='running']")).toBeVisible();
+    const next = header.getByTestId("task-header-next");
+    await expect(next.locator("[data-action]")).toHaveCount(3);
+    await expect(next.getByRole("link", { name: "承認を待っています" })).toHaveAttribute("href", /#decision-panel$/);
+    await expect(next.getByRole("link", { name: "途中確認の決定を待っています" })).toHaveAttribute(
+      "href",
+      /#execution-panel$/,
+    );
+    await expect(next.getByRole("link", { name: "再試行できます" })).toBeVisible();
+
+    // 判断 panel の button 名は変えていない。
+    const decision = page.getByTestId("decision-panel");
+    for (const name of ["承認", "却下", "やり直す", "コメント"])
+      await expect(decision.getByRole("button", { name, exact: true })).toBeVisible();
+
+    // 木: 親 task → この task → 段 → WU、WU に紐づく integration repair、子 task。
+    const tree = page.getByTestId("task-tree");
+    await expect(tree.getByTestId("tree-parent").getByRole("link", { name: /^親 task P-9+ を開く$/ })).toBeVisible();
+    await expect(tree.getByTestId("tree-self").first()).toContainText("実行中");
+    await expect(tree.getByTestId("tree-stage")).toHaveCount(2);
+    await expect(tree.locator("[data-stage='build']")).toContainText("作る");
+    await expect(tree.locator("[data-stage='build'] [data-testid='tree-work-unit']")).toHaveCount(2);
+    await expect(tree.locator("[data-stage='verify'] [data-testid='tree-work-unit']")).toHaveCount(1);
+    const wu = tree.locator("[data-key='header-tree']");
+    await expect(wu).toContainText("WU header-tree の題");
+    await expect(wu.locator("[data-status='running']")).toBeVisible();
+    await expect(wu.getByRole("link", { name: "WU header-tree の run R-wu を開く" })).toBeVisible();
+    const repair = tree.locator("[data-key='merge'] [data-testid='tree-integration-repair']");
+    await expect(repair).toHaveAttribute("data-state", "scheduled");
+    await expect(repair).toContainText("main から取り込み");
+    await expect(repair).toContainText("修復中（scheduled）");
+    const child = tree.getByTestId("tree-child");
+    await expect(child).toContainText("子の題");
+    await expect(child.locator("[data-status='blocked']")).toBeVisible();
+    await expect(child.locator("[data-slot='short-id']")).toHaveAttribute("title", longId);
+
+    // 長い ID は省略（全文は title）、長い題は折り返し。360px で横に溢れない。
+    expect(await overflow(page)).toBe(0);
+  });
+});

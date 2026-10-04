@@ -136,6 +136,7 @@ export function ExecutionPanel({ detail }: { detail: TaskDetail }) {
           <label className="block text-label">
             途中確認の note（任意）
             <textarea
+              aria-label="途中確認の note（任意）"
               className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
               value={gateNote}
               onChange={(event) => setGateNote(event.target.value)}

@@ -164,6 +164,51 @@ test("parity: /graph root・depth", async ({ page }) => {
   }
 });
 
+test("parity: /graph は 360px で区画内だけ横スクロールする", async ({ page }) => {
+  const title = "依存関係を調べる長いタスク名".repeat(5);
+  const h = harness({
+    "/api/v1/graph": {
+      nodes: [
+        { id: "T1", title, kind: "execute", status: "ready" },
+        { id: "T2", title: "後続", kind: "execute", status: "running" },
+      ],
+      edges: [{ from: "T1", to: "T2", kind: "depends_on" }],
+    },
+  });
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/graph`);
+    await expect(page.getByRole("heading", { level: 1, name: "依存グラフ" })).toBeVisible();
+    await expect(page.locator("[data-graph-node]")).toHaveCount(2);
+    await expect(page.locator(`[data-graph-node='T1'] [title='${title}']`)).toBeVisible();
+    const canvas = page.locator("[data-testid='graph-canvas']");
+    expect(await canvas.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /tasks/new は 360px で入力欄を横に溢れさせない", async ({ page }) => {
+  const h = harness({});
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/tasks/new`);
+    await expect(page.getByRole("heading", { level: 1, name: "タスクの作成" })).toBeVisible();
+    await page.getByRole("button", { name: "条件を追加" }).click();
+    await expect(page.locator("[data-testid='criterion-row']")).toHaveCount(2);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
+  } finally {
+    await h.close(gateway);
+  }
+});
+
 test("parity: /tasks/new 作成・条件 4 型・422", async ({ page }) => {
   const h = harness({});
   const gateway = await h.start();

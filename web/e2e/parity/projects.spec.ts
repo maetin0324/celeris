@@ -542,15 +542,36 @@ test.describe("P4-07 board", () => {
       await page.goto(`${gateway.base}/board?project=P1`);
       await expect(page.locator("[data-board-column]")).toHaveCount(6);
       await expect(page.locator("[data-task-id]")).toHaveCount(6);
-      expect(await page.getByTestId("board-scroll-frame").evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+      // card wall でなく 1 行 1 task の表。スマホ幅でも表もページも横に溢れない（web ADR D5）。
+      await expect(page.getByRole("table")).toHaveCount(1);
+      expect(
+        await page.getByTestId("board-table").evaluate((el) => {
+          const frame = el.parentElement;
+          return !!frame && frame.scrollWidth <= frame.clientWidth;
+        }),
+      ).toBe(true);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      // 状態の絞り込みは URL に残り、件数つきで表の上にある。
+      await page
+        .getByRole("navigation", { name: "状態で絞り込む" })
+        .getByRole("link", { name: /停止中/ })
+        .click();
+      await expect(page).toHaveURL(/project=P1.*column=blocked/);
+      await expect(page.locator("[data-task-id]")).toHaveCount(1);
+      await page
+        .getByRole("navigation", { name: "状態で絞り込む" })
+        .getByRole("link", { name: /すべて/ })
+        .click();
+      await expect(page.locator("[data-task-id]")).toHaveCount(6);
       await page.getByLabel("検索").fill("カード");
       await page.getByRole("button", { name: "絞り込む" }).click();
       await expect(page).toHaveURL(/project=P1.*q=/);
       expect(calls.some((q) => q.includes("project=P1") && q.includes("q="))).toBe(true);
-      await page.locator("[data-task-id='T1']").getByLabel("優先度").selectOption("P0");
-      await page.locator("[data-task-id='T1'] button").click();
-      await expect(page.locator("[data-task-id='T1'] [role=status]")).toBeVisible();
+      await page.locator("[data-task-id='T1']").getByRole("button", { name: "カード 1 を編集" }).click();
+      const edit = page.getByRole("form", { name: "カード 1 を編集" });
+      await edit.getByLabel("優先度").selectOption("P0");
+      await edit.getByRole("button", { name: "保存" }).click();
+      await expect(page.locator("[data-task-edit='T1'] [role=status]")).toBeVisible();
       expect(editBody).toMatchObject({ priority: "P0", expected_status: "ready" });
       await page.goBack();
       await expect(page).toHaveURL(/project=P1/);

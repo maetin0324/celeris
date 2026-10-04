@@ -7,6 +7,18 @@ export const boardColumns = [
   { id: "failed", title: "失敗", statuses: ["failed"] },
   { id: "cancelled", title: "中止", statuses: ["cancelled"] },
 ] as const;
+export type BoardColumnId = (typeof boardColumns)[number]["id"];
+/** daemon へ渡す絞り込み。show_support と column は表示だけの絞り込みで、daemon には渡さない。 */
+export const boardQueryFields = [
+  "project",
+  "q",
+  "label",
+  "category",
+  "tier",
+  "priority",
+  "assignee",
+  "milestone",
+] as const;
 export type BoardFilters = {
   project?: string;
   q?: string;
@@ -17,7 +29,11 @@ export type BoardFilters = {
   assignee?: string;
   milestone?: string;
   show_support?: boolean;
+  column?: BoardColumnId;
 };
+function columnFromSearch(value: string | null): BoardColumnId | undefined {
+  return boardColumns.find((column) => column.id === value)?.id;
+}
 export function boardFilterFromSearch(search: URLSearchParams): BoardFilters {
   return {
     project: search.get("project") || undefined,
@@ -29,12 +45,25 @@ export function boardFilterFromSearch(search: URLSearchParams): BoardFilters {
     assignee: search.get("assignee") || undefined,
     milestone: search.get("milestone") || undefined,
     show_support: search.get("show_support") === "1",
+    column: columnFromSearch(search.get("column")),
   };
+}
+/** 絞り込みを /board の URL に戻す。状態の切り替えは他の絞り込みを保ったまま column だけを替える。 */
+export function boardHref(filters: BoardFilters): string {
+  const params = new URLSearchParams();
+  for (const key of boardQueryFields) {
+    const value = filters[key]?.trim();
+    if (value) params.set(key, value);
+  }
+  if (filters.show_support) params.set("show_support", "1");
+  if (filters.column) params.set("column", filters.column);
+  return `/board${params.size ? `?${params}` : ""}`;
 }
 export function boardTasksPath(filters: BoardFilters): string {
   const params = new URLSearchParams();
-  for (const key of ["project", "q", "label", "category", "tier", "priority", "assignee", "milestone"] as const) {
-    if (filters[key]) params.set(key, filters[key]);
+  for (const key of boardQueryFields) {
+    const value = filters[key];
+    if (value) params.set(key, value);
   }
   params.set("limit", "200");
   params.set("order", "created_desc");

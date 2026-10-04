@@ -625,6 +625,14 @@ export function createFakeDaemon({
   token = null,
   files = {},
   profile = "default",
+  // 状態の変種（web/e2e/support/states.ts）。fault は path の前置きに一致する要求を status で返し、
+  // hold は一致する要求を releaseHeld() まで保留する（読み込み中を時計でなく出来事で解く）。
+  // streamStatus は `/api/v1/stream` を最初から 200 以外にする（再接続も失敗する）。
+  fault = null,
+  hold = null,
+  streamStatus: initialStreamStatus = 200,
+  inboxItems = null,
+  notices = null,
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
@@ -638,10 +646,30 @@ export function createFakeDaemon({
   const consoleClients = new Set();
   let delay = delayMs;
   let postDelay = 0;
-  let streamStatus = 200;
+  let streamStatus = initialStreamStatus;
   let timer;
-  const inbox = { items: inboxItemsFixture(), notices: noticesFixture(), answers: [] };
+  let faultRule = fault;
+  let holdRule = hold;
+  const held = [];
+  const inbox = {
+    items: inboxItems ?? inboxItemsFixture(),
+    notices: notices ?? noticesFixture(),
+    answers: [],
+  };
+  const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream", "/api/v1/console/stream"]);
+  const matches = (rule, pathname) =>
+    rule !== null &&
+    !streamPaths.has(pathname) &&
+    (rule.paths ?? ["/api/v1"]).some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
   const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
+    if (matches(holdRule, pathname)) {
+      held.push(() => handle(req, res));
+      return;
+    }
+    handle(req, res);
+  });
+  const handle = (req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
     const record = {
       path: pathname,
@@ -663,6 +691,11 @@ export function createFakeDaemon({
     if (token !== null && req.headers.authorization !== `Bearer ${token}`) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (matches(faultRule, pathname)) {
+      res.writeHead(faultRule.status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: faultRule.status === 403 ? "forbidden" : "unavailable" }));
       return;
     }
     if (pathname === "/api/v1/stream" && streamStatus !== 200) {
@@ -1116,7 +1149,7 @@ export function createFakeDaemon({
     };
     if (delay) setTimeout(respond, delay);
     else respond();
-  });
+  };
   const sendEvent = (event, data = {}) => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const client of clients) client.write(frame);
@@ -1146,6 +1179,20 @@ export function createFakeDaemon({
     dropConsoleClients() {
       for (const client of consoleClients) client.destroy();
     },
+    // 状態の変種: 失敗の規則を替える・保留を解く・SSE の接続を切る。
+    setFault(rule) {
+      faultRule = rule;
+    },
+    releaseHeld() {
+      holdRule = null;
+      for (const run of held.splice(0)) run();
+    },
+    get heldCount() {
+      return held.length;
+    },
+    dropStreamClients() {
+      for (const client of clients) client.destroy();
+    },
     setPostDelay(value) {
       postDelay = value;
     },
@@ -1169,6 +1216,7 @@ export function createFakeDaemon({
     },
     async close() {
       clearInterval(timer);
+      for (const run of held.splice(0)) run();
       for (const client of [...clients, ...consoleClients]) client.destroy();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     },

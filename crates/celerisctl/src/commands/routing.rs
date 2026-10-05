@@ -18,7 +18,10 @@ use std::process::ExitCode;
 use celeris::config::Config;
 use clap::Subcommand;
 use task_core::Tier;
-use task_ops::routing_replay::{self, BenchmarkBaselineV1, DatasetV1, ExportOptions, ReportV1};
+use task_ops::routing_replay::{
+    self, BenchmarkBaselineV1, DatasetV1, EstimatorComparisonInputV1, EstimatorComparisonV1,
+    ExportOptions, ReportV1,
+};
 
 use crate::error::CliError;
 use crate::outln;
@@ -73,15 +76,19 @@ pub enum EvalPolicy {
     Heuristic,
     /// 記録された decision shadow の判断。
     Shadow,
+    /// estimator shadow の比較（`estimator_comparison`。候補 policy ではなく、pin した
+    /// descriptor/pair と dataset の estimator shadow の比較欄を載せる）。
+    Estimator,
 }
 
 impl EvalPolicy {
-    /// report v1 の `policies` の key。
-    fn report_key(self) -> &'static str {
+    /// report v1 の `policies` の key。`estimator` は `policies` に入らない。
+    fn report_key(self) -> Option<&'static str> {
         match self {
-            EvalPolicy::Legacy => "legacy",
-            EvalPolicy::Heuristic => "heuristic",
-            EvalPolicy::Shadow => "shadow_recorded",
+            EvalPolicy::Legacy => Some("legacy"),
+            EvalPolicy::Heuristic => Some("heuristic"),
+            EvalPolicy::Shadow => Some("shadow_recorded"),
+            EvalPolicy::Estimator => None,
         }
     }
 }
@@ -103,6 +110,13 @@ pub struct RoutingEvaluateArgs {
     /// 人が読む Markdown の書き先（任意）。
     #[arg(long)]
     pub markdown: Option<PathBuf>,
+    /// pin した estimator の記述 JSON（`--policy estimator` が必要）。descriptor と任意の
+    /// RouteLLM pair（strong/weak・calibration_version）。dataset の estimator shadow と照合する。
+    #[arg(long)]
+    pub estimator: Option<PathBuf>,
+    /// pin した RouteLLM pair の記述 JSON（`--estimator` と併用。`--policy estimator` が必要）。
+    #[arg(long)]
+    pub pair: Option<PathBuf>,
 }
 
 const DATASET_FILE: &str = "dataset.jsonl";
@@ -198,8 +212,46 @@ fn load_dataset(dir: &Path) -> Result<DatasetV1, CliError> {
     Ok(DatasetV1 { manifest, rows })
 }
 
-/// evaluate の本体（DB は開かない）。
+/// `--estimator` / `--pair` の pin 読み込み（`--policy estimator` が無いと拒否）。
+fn estimator_input(
+    args: &RoutingEvaluateArgs,
+) -> Result<Option<EstimatorComparisonInputV1>, CliError> {
+    if args.estimator.is_none() && args.pair.is_none() {
+        return Ok(None);
+    }
+    if !args.policy.contains(&EvalPolicy::Estimator) {
+        return Err(CliError::msg(
+            "routing evaluate: --estimator/--pair require --policy estimator",
+        ));
+    }
+    let descriptor = match &args.estimator {
+        Some(path) => {
+            let json = read_file(path)?;
+            serde_json::from_str(&json)
+                .map_err(|e| CliError::msg(format!("estimator {}: {e}", path.display())))?
+        }
+        None => {
+            return Err(CliError::msg(
+                "routing evaluate: --pair requires --estimator (a pinned descriptor)",
+            ));
+        }
+    };
+    let pair = match &args.pair {
+        Some(path) => {
+            let json = read_file(path)?;
+            Some(
+                serde_json::from_str(&json)
+                    .map_err(|e| CliError::msg(format!("pair {}: {e}", path.display())))?,
+            )
+        }
+        None => None,
+    };
+    Ok(Some(EstimatorComparisonInputV1 { descriptor, pair }))
+}
+
+/// evaluate の本体（DB は開かない、HTTP も呼ばない）。
 fn run_evaluate(args: &RoutingEvaluateArgs) -> Result<ReportV1, CliError> {
+    let estimator = estimator_input(args)?;
     let dataset = load_dataset(&args.dataset)?;
     let baseline: Option<BenchmarkBaselineV1> = args
         .baseline
@@ -209,10 +261,17 @@ fn run_evaluate(args: &RoutingEvaluateArgs) -> Result<ReportV1, CliError> {
                 .map_err(|e| CliError::msg(format!("baseline {}: {e}", path.display())))
         })
         .transpose()?;
-    let mut report = routing_replay::evaluate(&dataset, baseline)
-        .map_err(|e| CliError::msg(format!("routing evaluate: {e}")))?;
+    let mut report =
+        routing_replay::evaluate_with_estimator(&dataset, baseline, None, estimator.as_ref())
+            .map_err(|e| CliError::msg(format!("routing evaluate: {e}")))?;
+    if args.policy.contains(&EvalPolicy::Estimator) && report.estimator_comparison.is_none() {
+        return Err(CliError::msg(
+            "routing evaluate: --policy estimator found no estimator shadow in the dataset \
+             and no pinned estimator was supplied (--estimator)",
+        ));
+    }
     if !args.policy.is_empty() {
-        let keep: Vec<&str> = args.policy.iter().map(|p| p.report_key()).collect();
+        let keep: Vec<&str> = args.policy.iter().filter_map(|p| p.report_key()).collect();
         report.policies.retain(|k, _| keep.contains(&k.as_str()));
     }
     let json = report
@@ -279,6 +338,9 @@ pub fn render_report_markdown(report: &ReportV1) -> String {
     for (k, v) in &report.paired_metrics {
         out.push_str(&format!("- {k}: {v}\n"));
     }
+    if let Some(est) = &report.estimator_comparison {
+        out.push_str(&render_estimator_comparison_markdown(est));
+    }
     out.push_str("\n## External benchmark baseline\n\n");
     match &report.external_benchmark_baseline {
         None => out.push_str("(none)\n"),
@@ -292,6 +354,84 @@ pub fn render_report_markdown(report: &ReportV1) -> String {
                     opt_f64(m.cost_usd)
                 ));
             }
+        }
+    }
+    out
+}
+
+/// estimator shadow 比較の人向け Markdown（JSON の `estimator_comparison` と同じ値だけを並べる）。
+pub fn render_estimator_comparison_markdown(est: &EstimatorComparisonV1) -> String {
+    let mut out = String::new();
+    out.push_str("## Estimator shadow comparison\n\n");
+    let descriptor = est
+        .descriptor
+        .as_ref()
+        .map(|d| {
+            format!(
+                "{} @ {} (protocol v{})",
+                d.estimator_id, d.version, d.protocol_version
+            )
+        })
+        .unwrap_or_else(|| "(not pinned)".to_string());
+    let pair = match &est.pair {
+        Some(p) => format!(
+            "{}: strong={} weak={}{}",
+            p.router,
+            p.strong_model,
+            p.weak_model,
+            p.calibration_version
+                .as_ref()
+                .map(|v| format!(" calibration={v}"))
+                .unwrap_or_default()
+        ),
+        None => "(not pinned)".to_string(),
+    };
+    out.push_str(&format!("- descriptor: {descriptor}\n"));
+    out.push_str(&format!("- pair: {pair}\n"));
+    out.push_str(&format!("- calibrated: {}\n", est.calibrated));
+    out.push_str(&format!(
+        "- observed estimator versions: {}\n",
+        if est.observed_estimator_versions.is_empty() {
+            "(none)".to_string()
+        } else {
+            est.observed_estimator_versions.join(", ")
+        }
+    ));
+    out.push_str(&format!(
+        "- target decisions: {}\n- evaluated: {}\n- coverage: {}\n",
+        est.target_decisions, est.evaluated, est.coverage
+    ));
+    out.push_str(&format!(
+        "- completed: {}\n- failed: {}\n- timeout: {}\n- dropped: {}\n- prompt_required: {}\n",
+        est.completed, est.failed, est.timeout, est.dropped, est.prompt_required
+    ));
+    out.push_str(&format!(
+        "- overhead ms: mean={} p50={} p95={}\n",
+        opt_f64(est.overhead_ms_mean),
+        opt_u64(est.overhead_ms_p50),
+        opt_u64(est.overhead_ms_p95)
+    ));
+    out.push_str(&format!(
+        "- vs heuristic primary: same={} differs={} heuristic unavailable={}\n",
+        est.same_as_heuristic, est.differs_from_heuristic, est.heuristic_unavailable
+    ));
+    out.push_str(&format!(
+        "- same as observed primary: {}\n",
+        est.same_as_primary
+    ));
+    out.push_str(&format!(
+        "- quality observed: {} unknown: {} acceptance success: {}\n",
+        est.quality_observed,
+        est.quality_unknown,
+        opt_f64(est.acceptance_success_rate)
+    ));
+    out.push_str(&format!("\nUnknown: {}\n", est.unknown_reason));
+    if est.incomparable_reasons.is_empty() {
+        out.push_str("\nIncomparable: (none)\n");
+    } else {
+        out.push_str("\nIncomparable reasons\n\n| reason | count |\n| --- | --- |\n");
+        for (reason, count) in &est.incomparable_reasons {
+            out.push_str(&format!("| {reason} | {count} |\n"));
         }
     }
     out

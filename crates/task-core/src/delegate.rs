@@ -25,6 +25,11 @@ pub enum DelegateDep {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DelegateTask {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::model::TaskRequirements::is_empty"
+    )]
+    pub requirements: crate::model::TaskRequirements,
     pub title: String,
     pub objective: String,
     /// 1 件以上。
@@ -530,6 +535,7 @@ pub fn materialize_delegated_logging(
             budget.max_turns = defaults.max_turns;
             budget.max_wall_secs = defaults.max_wall_secs;
             Task {
+                requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,
                 id: ids[&i],

@@ -14,6 +14,7 @@ fn now() -> OffsetDateTime {
 
 fn base_spec(title: &str) -> crate::add::NewTaskSpec {
     crate::add::NewTaskSpec {
+        requirements: Default::default(),
         mode: Default::default(),
         skills: Vec::new(),
         repos: Vec::new(),
@@ -82,6 +83,7 @@ fn make_failed(store: &SqliteStore, title: &str) -> Task {
 fn raw_task(status: Status, depends_on: Vec<TaskId>, conversation: Option<MessageId>) -> Task {
     let t = now();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

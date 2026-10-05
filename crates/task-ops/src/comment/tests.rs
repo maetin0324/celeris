@@ -7,6 +7,7 @@ use task_core::{
 fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

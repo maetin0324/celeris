@@ -38,6 +38,7 @@ fn store_with_org() -> Arc<dyn TaskStore> {
 fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

@@ -782,6 +782,7 @@ async fn planner_children_become_delegated_child_tasks() {
             a
         }],
         children: vec![task_core::ExecutionChildSpec {
+            requirements: Default::default(),
             key: "lit".into(),
             title: "関連研究の調査".into(),
             objective: "別の deliverable として調べる".into(),

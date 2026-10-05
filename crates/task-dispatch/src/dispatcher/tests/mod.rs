@@ -41,6 +41,7 @@ impl WorkerAdapter for InstantAdapter {
 fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -1116,6 +1117,7 @@ impl WorkerAdapter for DelegatingAdapter {
 
 fn proposal(title: &str, deps: Vec<task_core::DelegateDep>) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: title.into(),
         objective: format!("do {title}"),
         acceptance: vec![Criterion {
@@ -1509,6 +1511,7 @@ fn assigned_task(workspace_root: &std::path::Path, name: &str, assignee: &str) -
 
 fn delegate_to(assignee: &str) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: "任せたい仕事".into(),
         objective: "やっておいて".into(),
         // ADR-0067 D2: `human` チェックには artifacts か知識ベースの参照が要る。

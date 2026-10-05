@@ -172,6 +172,7 @@ fn is_milestones_plan_task_needs_the_kind_and_the_label() {
     };
     let now = time::OffsetDateTime::now_utc();
     let base = Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

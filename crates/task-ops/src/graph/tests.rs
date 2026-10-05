@@ -5,6 +5,7 @@ use time::OffsetDateTime;
 fn sample_task(kind: TaskKind, status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

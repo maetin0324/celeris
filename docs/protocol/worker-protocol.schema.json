@@ -128,7 +128,7 @@
           ]
         },
         "allowed_domains": {
-          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "description": "Allowed origins. Legacy host patterns read as HTTPS on port 443 only.",
           "items": {
             "type": "string"
           },
@@ -202,6 +202,21 @@
         "policy_id",
         "revision",
         "hash"
+      ],
+      "type": "object"
+    },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
       ],
       "type": "object"
     },
@@ -746,6 +761,9 @@
         },
         "objective": {
           "type": "string"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
         },
         "role": {
           "description": "役割名（任意。`[[roles]]` にあれば既定と指示文が効く）。",
@@ -2784,6 +2802,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
+        },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
           "type": [
@@ -2997,6 +3019,22 @@
           "type": "string"
         }
       ]
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "TaskRouting": {
       "description": "ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。",

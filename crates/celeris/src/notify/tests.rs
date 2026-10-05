@@ -86,6 +86,7 @@ fn notify_digest_phase_checkpoint_is_batched_as_inbox_new() {
     fn task(title: &str) -> Task {
         let now = OffsetDateTime::now_utc();
         Task {
+            requirements: Default::default(),
             tree: None,
             paused_at: None,
             routing: None,

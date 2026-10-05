@@ -127,6 +127,12 @@ fn world(site: Value) -> World {
     std::fs::write(fixture.join("site.json"), site.to_string()).unwrap();
     let mut task = new_task(TaskKind::Execute, Status::Ready);
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec![
+            "https://login.example.com".into(),
+            "https://sso.example.com".into(),
+        ],
+    });
     env.seed(&task);
     env.store
         .browser_task_policy_set(task.id, &task_policy())

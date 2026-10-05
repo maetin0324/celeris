@@ -1703,7 +1703,7 @@
           ]
         },
         "allowed_domains": {
-          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "description": "Allowed origins. Legacy host patterns read as HTTPS on port 443 only.",
           "items": {
             "type": "string"
           },
@@ -1869,6 +1869,21 @@
       "required": [
         "wait",
         "created"
+      ],
+      "type": "object"
+    },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
       ],
       "type": "object"
     },
@@ -9505,6 +9520,9 @@
         "objective": {
           "type": "string"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
+        },
         "skills": {
           "default": [],
           "items": {
@@ -14078,6 +14096,11 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "default": {},
+          "description": "Browser origins requested by this task; required with the browser-enabled skill."
+        },
         "role": {
           "default": null,
           "description": "ADR-0016 D1: 役割名（自由記述）。`[[roles]]` にあれば省略値の既定と run 時の指示文が効く。",
@@ -15622,6 +15645,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Browser origins for a child task. An inherited browser skill still needs an explicit set."
         },
         "skills": {
           "items": {
@@ -21457,6 +21484,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
+        },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
           "type": [
@@ -22488,6 +22519,22 @@
         "status",
         "actions"
       ],
+      "type": "object"
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "TaskRouting": {

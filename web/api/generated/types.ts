@@ -386,6 +386,10 @@ export type BrowserRequestResult = {
   "wait": BrowserWait;
 };
 
+export type BrowserRequirements = {
+  "allowed_domains": Array<string>;
+};
+
 export type BrowserRevokeBody = {
   "attestation": HumanAttestation;
   "expected_version": number;
@@ -1884,6 +1888,7 @@ export type ExecutionChildSpec = {
   "genre"?: string | null;
   "key": string;
   "objective": string;
+  "requirements"?: TaskRequirements;
   "skills"?: Array<string>;
   "title": string;
 };
@@ -2772,6 +2777,7 @@ export type NewTaskBody = {
   "priority"?: PriorityInput | null;
   "project_id"?: ProjectId | null;
   "repos"?: Array<string>;
+  "requirements"?: TaskRequirements;
   "role"?: string | null;
   "skills"?: Array<string>;
   "stages_hint"?: Array<StageHint>;
@@ -3061,6 +3067,7 @@ export type PlanUnitSpec = {
   "objective": string;
   "outputs"?: Array<string>;
   "repos"?: Array<string>;
+  "requirements"?: TaskRequirements;
   "skills"?: Array<string>;
   "stage": string;
   "title": string;
@@ -4224,6 +4231,7 @@ export type Task = {
   "priority": number;
   "project_id"?: ProjectId | null;
   "repos"?: Array<RepoRef>;
+  "requirements"?: TaskRequirements;
   "role"?: string | null;
   "routing"?: TaskRouting | null;
   "skills"?: Array<string>;
@@ -4385,6 +4393,10 @@ export type TaskRef = {
   "kind": TaskKind;
   "status": Status;
   "title": string;
+};
+
+export type TaskRequirements = {
+  "browser"?: BrowserRequirements | null;
 };
 
 export type TaskRouting = {

@@ -251,7 +251,7 @@ fn with_task_overrides_harness_tier_and_skills() {
 fn browser_grant_is_inherited_but_task_skills_cannot_create_it() {
     let mut org = tree();
     let grant = crate::BrowserCapability {
-        allowed_domains: vec!["example.com".into()],
+        allowed_domains: vec!["https://example.com".into()],
         live_view_url: Some("https://browser.example.com/live".into()),
         allowed_actions: None,
         credential_policy_ids: vec![],
@@ -261,6 +261,9 @@ fn browser_grant_is_inherited_but_task_skills_cannot_create_it() {
     assert_eq!(effective.browser, Some(grant));
     let mut task = sample_task();
     task.skills = vec![crate::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(crate::model::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     assert_eq!(
         effective.clone().with_task(&task).browser,
         effective.browser
@@ -285,6 +288,7 @@ fn sample_task() -> crate::model::Task {
     use crate::model::{Budget, Status, TaskKind, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     crate::model::Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

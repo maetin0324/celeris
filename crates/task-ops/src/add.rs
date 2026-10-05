@@ -79,6 +79,9 @@ impl CriterionSpec {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewTaskSpec {
+    /// Browser origins requested by this task; required with the browser-enabled skill.
+    #[serde(default)]
+    pub requirements: task_core::TaskRequirements,
     pub title: String,
     pub objective: String,
     pub acceptance: Vec<CriterionSpec>,
@@ -644,6 +647,9 @@ fn build_task(
     let labels = task_core::normalize_labels(&spec.labels).map_err(OpsError::Validation)?;
     // ADR-0046 D2: 必要な能力タグ（綴りの規則は `labels` と同じ扱いで、違反は 422）。
     let skills = task_core::normalize_skills(&spec.skills).map_err(OpsError::Validation)?;
+    let parent = spec.parent.map(|id| store.get(id)).transpose()?.flatten();
+    task_core::browser::validate_task_requirements(&skills, &spec.requirements, parent.as_ref())
+        .map_err(OpsError::Validation)?;
     // Request tags cannot grant browser access: only an administrator's resolved profile can.
     let browser_requested = task_core::browser::requests_browser(&skills);
     let browser_adapter = if browser_requested {
@@ -811,6 +817,7 @@ fn build_task(
         route: None,
     };
     let task = Task {
+        requirements: spec.requirements,
         tree: None,
         paused_at: None,
         routing: Some(routing),

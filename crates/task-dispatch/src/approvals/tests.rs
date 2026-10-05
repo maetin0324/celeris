@@ -25,6 +25,7 @@ fn node(id: &str, parent: Option<&str>, kind: OK) -> OrgNode {
 fn task(assignee: Option<&str>, project: Option<ProjectId>) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

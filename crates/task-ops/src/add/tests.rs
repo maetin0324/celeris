@@ -7,16 +7,25 @@ fn browser_task_routes_to_opencode_and_can_switch_to_claude() {
     for (explicit, expected) in [(None, "acp"), (Some("claude-code"), "claude-code")] {
         let mut spec = base_spec();
         spec.skills = vec!["browser-enabled".into()];
+        spec.requirements.browser = Some(task_core::BrowserRequirements {
+            allowed_domains: vec!["https://example.com".into()],
+        });
         spec.adapter = explicit.map(str::to_owned);
         let task = create_task(&store, spec, now()).unwrap();
         assert_eq!(task.worker_hint.adapter.as_deref(), Some(expected));
     }
     let mut spec = base_spec();
     spec.skills = vec!["browser-enabled".into()];
+    spec.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     spec.adapter = Some("codex".into());
     assert!(create_task(&store, spec, now()).is_err());
     let mut spec = base_spec();
     spec.skills = vec!["browser-enabled".into()];
+    spec.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     spec.cluster = Some("pegasus".into());
     assert!(create_task(&store, spec, now()).is_err());
 }
@@ -26,6 +35,9 @@ fn explicit_assignee_cannot_gain_browser_access_from_task_skill() {
     let store = org_store();
     let mut spec = base_spec();
     spec.skills = vec!["browser-enabled".into()];
+    spec.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     spec.assignee = Some("research-survey".into());
     let error = create_task(&store, spec, now()).unwrap_err();
     assert!(
@@ -36,6 +48,7 @@ fn explicit_assignee_cannot_gain_browser_access_from_task_skill() {
 
 fn base_spec() -> NewTaskSpec {
     NewTaskSpec {
+        requirements: Default::default(),
         mode: Default::default(),
         skills: Vec::new(),
         repos: Vec::new(),

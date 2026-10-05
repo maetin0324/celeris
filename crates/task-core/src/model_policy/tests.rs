@@ -24,6 +24,7 @@ fn f(
 pub(crate) fn task(objective: &str, acceptance: Vec<Criterion>) -> Task {
     let now = time::OffsetDateTime::UNIX_EPOCH;
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         id: TaskId::new(),

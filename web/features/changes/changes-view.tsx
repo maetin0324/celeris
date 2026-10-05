@@ -14,10 +14,10 @@ import { Icon } from "../../components/ui/icon";
 import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { taskChangeDiffQuery, taskChangesQuery, taskRepoChangesPath } from "./changes-query";
-import { type DiffLineKind, diffLines, fileStatusView, integrationTone } from "./diff-lines";
+import { type DiffLineKind, diffLines, fileStatusView, integrationLabel, integrationTone } from "./diff-lines";
 
 // /tasks/:id/changes（P3-13、R25）。変更の一覧・差分と取り込み（integrate、pr_merge）。
-// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state をそのまま出す。
+// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state で表示を分ける。
 // 差分は CodeBlock の内側でだけ横に scroll し、画面は横に溢れさせない。path は折り返し、全文を title に持つ。
 export function TaskChangesScreen({ taskId }: { taskId: string }) {
   return (
@@ -61,6 +61,7 @@ export function TaskChangesPanel({ taskId }: { taskId: string }) {
 function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: RepoChangesView; mergeMethod: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const integration = repo.integration;
+  const changedLines = repo.stat.additions + repo.stat.deletions;
   return (
     <Section
       title={<span className="break-all">{repo.repo}</span>}
@@ -68,6 +69,12 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
       data-repo={repo.repo}
       className="rounded-lg border border-border bg-surface p-3 md:p-4"
     >
+      <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 text-label" role="status">
+        <Badge tone={repo.missing ? "danger" : repo.dirty ? "warning" : "neutral"}>{repo.files.length} ファイル</Badge>
+        <span className="font-mono tabular-nums text-success-foreground">+{repo.stat.additions} 行</span>
+        <span className="font-mono tabular-nums text-danger-foreground">−{repo.stat.deletions} 行</span>
+        {changedLines > 0 ? <span className="text-muted-foreground">計 {changedLines} 行の変更</span> : null}
+      </div>
       <DataList
         items={[
           {
@@ -94,9 +101,10 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
                   label: "取り込み",
                   value: (
                     <span data-testid="integration-state" className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Badge tone={integrationTone(integration.state)}>
+                      <Badge tone={integrationTone(integration.state)}>{integrationLabel(integration.state)}</Badge>
+                      <span className="text-label text-muted-foreground">
                         {integration.method} / {integration.state}
-                      </Badge>
+                      </span>
                       {integration.pr_url ? (
                         <a
                           href={integration.pr_url}
@@ -279,6 +287,9 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
   return (
     <fieldset className="mt-4 min-w-0 space-y-3">
       <legend className="w-full border-t border-border pt-4 text-body font-semibold text-foreground">取り込み</legend>
+      <p className="text-label text-muted-foreground">
+        取り込む前に、上のファイルと対象ブランチを確認してください。範囲外の変更かどうかは、この一覧では判定できません。
+      </p>
       <label className="flex flex-col gap-1 text-label font-medium text-foreground">
         取り込みの方法
         <select
@@ -293,7 +304,13 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
       </label>
       <label className="flex flex-col gap-1 text-label font-medium text-foreground">
         取り込みの note（任意）
-        <textarea className={fieldClass} rows={2} value={note} onChange={(event) => setNote(event.target.value)} />
+        <textarea
+          aria-label="取り込みの note（任意）"
+          className={fieldClass}
+          rows={2}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
       </label>
       {method === "discard" ? (
         <label className="flex min-h-11 items-center gap-2 text-label text-danger-foreground">
@@ -334,7 +351,8 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
           className="flex min-w-0 flex-wrap items-center gap-2 break-all text-label"
         >
           結果:
-          <Badge tone={integrationTone(outcome.integration.state)}>{outcome.integration.state}</Badge>
+          <Badge tone={integrationTone(outcome.integration.state)}>{integrationLabel(outcome.integration.state)}</Badge>
+          <span className="text-muted-foreground">{outcome.integration.state}</span>
           {outcome.integration.detail ? <span>{outcome.integration.detail}</span> : null}
           {outcome.child_task_id ? (
             <span>

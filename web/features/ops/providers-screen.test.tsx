@@ -79,9 +79,9 @@ describe("providers 画面: LLM source と adapter/harness の区別（ADR-0132 
       />,
     );
     expect(out).toContain("<h2");
-    expect(out).toContain("adapter / harness の実行枠（1）");
+    expect(out).toContain("実行枠（1）</h2>");
     expect(out).toContain(">LLM source</h2>");
-    expect(out.indexOf("adapter / harness の実行枠")).toBeLessThan(out.indexOf(">LLM source</h2>"));
+    expect(out.indexOf("実行枠（1）")).toBeLessThan(out.indexOf(">LLM source</h2>"));
     expect(out).toContain("paperqa（文献調査の道具）");
     expect(out).toContain("celeris/cheap にだけ使われ");
   });

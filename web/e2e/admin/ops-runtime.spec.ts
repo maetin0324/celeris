@@ -114,7 +114,9 @@ test.describe("clusters", () => {
     await page.setViewportSize({ width: 360, height: 800 });
     await routeClusters(page);
     await page.goto(`${base}/clusters`);
-    await expect(page.getByText("切断: keepalive timeout")).toBeVisible();
+    const status = page.getByRole("list", { name: "クラスタの状態" });
+    await expect(status.getByText("切断: keepalive timeout", { exact: false })).toBeVisible();
+    await expect(status.getByText("失敗理由:")).toHaveCount(2);
     expect(await overflow(page)).toBe(0);
   });
 });
@@ -126,7 +128,7 @@ test.describe("daemon", () => {
     await expect(page.getByRole("heading", { level: 1, name: "daemon" })).toBeVisible();
     await expect(page.getByTestId("daemon-liveness")).toContainText("稼働中");
     const list = page.getByRole("region", { name: "状態" });
-    await expect(list.getByText("最終 poll")).toBeVisible();
+    await expect(list.getByText("最終取得")).toBeVisible();
     await expect(list.getByText("10 秒ごとに自動で取り直します", { exact: false })).toBeVisible();
     await expect(list.getByText(/^[0-9a-f]{12}（active）$/)).toBeVisible();
     await expect(list.getByText("celeris-host (pid 4242)")).toBeVisible();
@@ -137,7 +139,7 @@ test.describe("daemon", () => {
     await page.goto(`${base}/daemon`);
     const live = page.getByTestId("daemon-liveness");
     await expect(live).toContainText("応答なし");
-    await expect(live).toContainText("最後の tick から 1 分以上たっています");
+    await expect(live).toContainText("最後の動作確認から 1 分以上たっています");
   });
 
   test("403 で replay と版の読み取りが止まり、理由を出す", async ({ page }) => {
@@ -268,7 +270,9 @@ test.describe("releases", () => {
     await page.setViewportSize({ width: 360, height: 800 });
     await routeReleases(page);
     await page.goto(`${base}/releases`);
-    await expect(page.getByTestId("release-eeeeeeeeeeee")).toBeVisible();
+    const release = page.getByTestId("mobile-release-eeeeeeeeeeee");
+    await expect(release).toBeVisible();
+    await expect(release.getByText("問題・直近の失敗")).toBeVisible();
     expect(await overflow(page)).toBe(0);
     await page.getByRole("button", { name: "eeeeeeeeeeee を昇格する" }).click();
     const dialog = page.getByRole("alertdialog");

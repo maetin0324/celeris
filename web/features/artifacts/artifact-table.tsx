@@ -10,6 +10,7 @@ import { formatBytes } from "../files/task-files-query";
 // 成果物の一覧（/artifacts と /tasks/:id?tab=artifacts で共有）。本文は ArtifactPreview（H8: Markdown 以外は download）。
 // 360px でも読めるよう、大きさ・記録日時は md 以上でだけ列にし、狭い幅では成果物の欄の下に小さく出す。
 // 長い path は折り返し、全文は title 属性に置く。
+// タスクの列も md 以上だけ。狭い幅では列を 1 本にし、タスクの題名を成果物の欄の上に積む（題名は 2 行で省略、全文は title）。
 export type ArtifactTableRow = {
   taskId: string;
   /** 指定した行の一覧はタスクの列を持つ（/artifacts）。1 task の一覧では省く。 */
@@ -29,7 +30,7 @@ export function ArtifactTable({
     <Table aria-label={label} className="table-fixed" {...props}>
       <TableHeader>
         <TableRow>
-          {showTask ? <TableHead className="w-1/3">タスク</TableHead> : null}
+          {showTask ? <TableHead className="hidden w-1/3 md:table-cell">タスク</TableHead> : null}
           <TableHead>成果物</TableHead>
           <TableHead className="hidden w-24 text-right md:table-cell">大きさ</TableHead>
           <TableHead className="hidden w-48 md:table-cell">記録</TableHead>
@@ -40,6 +41,7 @@ export function ArtifactTable({
           <ArtifactRowView
             key={`${row.taskId}/${row.view.idx}`}
             row={row}
+            showTask={showTask}
             taskSpan={showTask ? taskSpan(rows, i) : undefined}
           />
         ))}
@@ -56,7 +58,15 @@ function taskSpan(rows: readonly ArtifactTableRow[], i: number): number {
   return span;
 }
 
-function ArtifactRowView({ row, taskSpan: span }: { row: ArtifactTableRow; taskSpan?: number }) {
+function ArtifactRowView({
+  row,
+  showTask,
+  taskSpan: span,
+}: {
+  row: ArtifactTableRow;
+  showTask: boolean;
+  taskSpan?: number;
+}) {
   const { view, taskId, taskTitle } = row;
   const size = view.size != null ? formatBytes(view.size) : "—";
   const recorded = formatAbsolute(view.ts);
@@ -64,19 +74,17 @@ function ArtifactRowView({ row, taskSpan: span }: { row: ArtifactTableRow; taskS
   return (
     <TableRow data-artifact={row.marker}>
       {span ? (
-        <TableCell rowSpan={span} className="min-w-0 break-words">
-          <Link
-            to="/tasks/$id"
-            params={{ id: taskId }}
-            title={taskId}
-            className="inline-flex min-h-11 items-center text-foreground underline"
-          >
-            {taskTitle || taskId}
-          </Link>
+        <TableCell rowSpan={span} className="hidden min-w-0 break-words md:table-cell">
+          <TaskLink taskId={taskId} taskTitle={taskTitle} />
         </TableCell>
       ) : null}
       <TableCell className="min-w-0">
         <div className="flex min-w-0 flex-col gap-1">
+          {showTask && span ? (
+            <div className="md:hidden">
+              <TaskLink taskId={taskId} taskTitle={taskTitle} />
+            </div>
+          ) : null}
           {readable ? (
             <ArtifactPreview taskId={taskId} idx={view.idx} name={view.artifact.name} />
           ) : (
@@ -105,5 +113,21 @@ function ArtifactRowView({ row, taskSpan: span }: { row: ArtifactTableRow; taskS
         <time dateTime={view.ts}>{recorded}</time>
       </TableCell>
     </TableRow>
+  );
+}
+
+/** タスクの題名。2 行を超える分は省略し、全文と id は title 属性で出す。 */
+function TaskLink({ taskId, taskTitle }: { taskId: string; taskTitle?: string }) {
+  const text = taskTitle || taskId;
+  return (
+    <Link
+      to="/tasks/$id"
+      params={{ id: taskId }}
+      title={taskTitle ? `${taskTitle}（${taskId}）` : taskId}
+      className="inline-flex min-h-11 min-w-0 items-center text-foreground underline"
+      data-testid="artifact-task-title"
+    >
+      <span className="line-clamp-2 break-words">{text}</span>
+    </Link>
   );
 }

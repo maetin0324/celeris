@@ -661,3 +661,19 @@ inputs/reports.json（前回の整理以降に終わった task の報告の抜�
 
 出す前に `celerisctl curation validate` を走らせ exit 0 にする（daemon と同じ検証・同じ文言。受け入れ条件も同じコマンド）。
 """
+
+# CoS チャット（agent-docs/adr/2026-10-05-cos-chat-home.md D4）。値は既定値。
+# 添付は `<db のディレクトリ>/chat/attachments/<id>/blob` に置く（DB と一緒に backup する）。
+# daemon は 1 時間ごとに、未送信の upload（orphan_ttl_hours 経過）、最後の参照が外れて
+# unreferenced_retention_days 経過した blob、期限切れの upload 予約、run 終端後 stream_retention_days
+# を過ぎた chat_events の text/tool 詳細を片付ける（LLM は使わない）。
+[cos]
+stream_retention_days = 30
+
+[cos.attachments]
+max_file_bytes = 26214400           # 1 ファイル 25 MiB（upload の body limit もこれに合わせる）
+max_message_bytes = 104857600       # 1 メッセージ合計 100 MiB
+max_files_per_message = 10
+max_storage_bytes = 10737418240     # インスタンス全体 10 GiB（同時 upload の予約分を含む）
+orphan_ttl_hours = 24
+unreferenced_retention_days = 30

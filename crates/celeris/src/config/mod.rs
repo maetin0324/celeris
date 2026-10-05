@@ -22,6 +22,7 @@ mod accounts;
 mod adapters;
 mod api;
 mod cluster;
+mod cos;
 mod cron;
 mod db;
 mod delegation;
@@ -43,6 +44,7 @@ pub use accounts::*;
 pub use adapters::*;
 pub use api::*;
 pub use cluster::*;
+pub use cos::*;
 pub use cron::*;
 pub use db::*;
 pub use delegation::*;
@@ -211,6 +213,9 @@ pub struct Config {
     /// （以後は DB が正。設定は再読込しない）。
     #[serde(default)]
     pub cron: CronConfig,
+    /// ADR 2026-10-05-cos-chat-home D4: `[cos]`（`stream_retention_days`）と `[cos.attachments]`（添付の上限・GC）。
+    #[serde(default)]
+    pub cos: CosConfig,
     /// ADR-0136: `[storage]`。hot データの正本を置く mount（`/local`）の起動前検査。省略時は検査しない。
     #[serde(default)]
     pub storage: StorageConfig,
@@ -465,6 +470,7 @@ impl Config {
         self.execution.validate()?;
         self.containers.validate()?;
         self.storage.validate()?;
+        self.cos.validate()?;
         providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;

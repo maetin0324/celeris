@@ -469,15 +469,22 @@ export type CancelBody = {
 };
 
 export type CandidateTrace = {
+  "cash_usd"?: number | null;
+  "config_order"?: number | null;
   "cost_usd"?: number | null;
   "deployment_id": string;
+  "effective_usd"?: number | null;
   "eligible_provider_ids": Array<string>;
+  "excluded_reason"?: ExcludedReason | null;
   "excluded_reasons": Array<string>;
   "latency_ms"?: number | null;
   "model_profile_id": string;
   "pressure"?: number | null;
   "quality"?: QualityEstimate | null;
+  "resource_usd"?: number | null;
   "score"?: number | null;
+  "score_breakdown"?: ScoreTrace | null;
+  "shadow_usd"?: number | null;
 };
 
 export type CatalogCapabilitiesView = {
@@ -1935,6 +1942,37 @@ export type EvidenceView = {
   "stdout_tail"?: string | null;
 };
 
+export type ExcludedReason = {
+  "kind": "constraint";
+  "name": string;
+} | {
+  "kind": "quota_exhausted";
+} | {
+  "kind": "cooldown";
+} | {
+  "kind": "concurrency";
+} | {
+  "kind": "rate_limit";
+} | {
+  "kind": "health_down";
+} | {
+  "kind": "circuit_open";
+} | {
+  "kind": "disabled";
+} | {
+  "field": string;
+  "kind": "unknown_required";
+} | {
+  "kind": "quality_invalid";
+} | {
+  "kind": "quality_below_min";
+} | {
+  "kind": "invalid_estimate";
+} | {
+  "code": string;
+  "kind": "other";
+};
+
 export type ExecutionChildSpec = {
   "acceptance": Array<Criterion>;
   "depends_on"?: Array<string>;
@@ -2559,10 +2597,46 @@ export type LlmSourceAccountView = {
   "remaining_short"?: number | null;
 };
 
+export type LlmSourceBilledCostView = {
+  "cash_usd"?: number | null;
+};
+
+export type LlmSourceCostView = {
+  "assumptions"?: Array<string>;
+  "billed": LlmSourceBilledCostView;
+  "effective_usd"?: number | null;
+  "opportunity": LlmSourceOpportunityCostView;
+};
+
+export type LlmSourceFreshnessView = {
+  "age_secs"?: number | null;
+  "expires_at"?: string | null;
+  "observed_at"?: string | null;
+  "stale": boolean;
+};
+
+export type LlmSourceOpportunityCostView = {
+  "resource_usd"?: number | null;
+  "shadow_usd"?: number | null;
+};
+
 export type LlmSourceRef = string;
+
+export type LlmSourceStateView = {
+  "cost"?: LlmSourceCostView | null;
+  "deployment_id": string;
+  "freshness": LlmSourceFreshnessView;
+  "latency_ms"?: number | null;
+  "pressure"?: number | null;
+  "quota_remaining"?: number | null;
+  "quota_reset_at"?: string | null;
+  "reachability": string;
+  "unknown"?: Array<string>;
+};
 
 export type LlmSourceView = {
   "accounts": Array<LlmSourceAccountView>;
+  "deployments"?: Array<LlmSourceStateView>;
   "enabled": boolean;
   "id": string;
   "kind": string;
@@ -3831,6 +3905,21 @@ export type ReportsReadResult = {
   "updated": number;
 };
 
+export type RequestLogLink = {
+  "account"?: string | null;
+  "model"?: string | null;
+  "snapshot_id"?: string | null;
+  "source_id"?: string | null;
+};
+
+export type RequestRoutingAudit = {
+  "decision_id": string;
+  "incomplete_reason"?: string | null;
+  "log"?: RequestLogLink | null;
+  "request_id"?: string | null;
+  "trace": RoutingTraceV1;
+};
+
 export type ResolutionAction = {
   "detail": string;
   "kind": ConflictKind;
@@ -3927,32 +4016,6 @@ export type RouteReason = {
   "rule_id": string;
 };
 
-export type RoutingAudit = {
-  "account"?: string | null;
-  "adapter"?: string | null;
-  "cost_usd"?: number | null;
-  "escalation"?: string | null;
-  "features"?: TaskFeatures | null;
-  "harness"?: string | null;
-  "input_tokens"?: number | null;
-  "lane"?: Tier | null;
-  "model"?: string | null;
-  "optimizer"?: RoutingTraceV1 | null;
-  "org_node"?: string | null;
-  "outcome"?: string | null;
-  "output_tokens"?: number | null;
-  "policy_version"?: string | null;
-  "provider"?: string | null;
-  "reasoning_effort"?: string | null;
-  "reasons"?: Array<string>;
-  "retries"?: number | null;
-  "review"?: ReviewResult | null;
-  "rule_id"?: string | null;
-  "run_id": string;
-  "task_id": TaskId;
-  "wall_ms"?: number | null;
-};
-
 export type RoutingCatalogView = {
   "catalog_version": string;
   "deployments": Array<CatalogDeploymentView>;
@@ -3990,6 +4053,7 @@ export type RoutingRecord = {
 };
 
 export type RoutingTraceV1 = {
+  "account_id"?: string | null;
   "candidates": Array<CandidateTrace>;
   "catalog_version": string;
   "decision_id": string;
@@ -3997,6 +4061,7 @@ export type RoutingTraceV1 = {
   "fallback_order": Array<string>;
   "feature_version": string;
   "mode": RoutingMode;
+  "model"?: string | null;
   "observed_at"?: string | null;
   "parent_decision_id"?: string | null;
   "policy_version": string;
@@ -4007,6 +4072,7 @@ export type RoutingTraceV1 = {
   "selected"?: string | null;
   "selected_lane"?: Tier | null;
   "snapshot_id": string;
+  "source_id"?: string | null;
   "stage": string;
   "task_id"?: string | null;
   "work_unit_id"?: string | null;
@@ -4056,6 +4122,35 @@ export type RunOutcomeKind = "done" | "question" | "error" | "requeue" | "lease_
 
 export type RunRole = "worker" | "reviewer" | "planner";
 
+export type RunRoutingAudit = {
+  "account"?: string | null;
+  "adapter"?: string | null;
+  "audit_incomplete"?: boolean | null;
+  "cost_usd"?: number | null;
+  "escalation"?: string | null;
+  "features"?: TaskFeatures | null;
+  "harness"?: string | null;
+  "incomplete_reasons"?: Array<string>;
+  "input_tokens"?: number | null;
+  "lane"?: Tier | null;
+  "model"?: string | null;
+  "optimizer"?: RoutingTraceV1 | null;
+  "org_node"?: string | null;
+  "outcome"?: string | null;
+  "output_tokens"?: number | null;
+  "policy_version"?: string | null;
+  "provider"?: string | null;
+  "reasoning_effort"?: string | null;
+  "reasons"?: Array<string>;
+  "requests"?: Array<RequestRoutingAudit> | null;
+  "retries"?: number | null;
+  "review"?: ReviewResult | null;
+  "rule_id"?: string | null;
+  "run_id": string;
+  "task_id": TaskId;
+  "wall_ms"?: number | null;
+};
+
 export type RunSummary = {
   "account"?: string | null;
   "adapter": string;
@@ -4075,6 +4170,19 @@ export type RunSummary = {
   "usage"?: Usage | null;
   "verdicts": number;
   "work_unit"?: string | null;
+};
+
+export type ScoreTrace = {
+  "c": number;
+  "l": number;
+  "p": number;
+  "q": number;
+  "score": number;
+  "unknown"?: Array<string>;
+  "wc": number;
+  "wl": number;
+  "wp": number;
+  "wq": number;
 };
 
 export type ScratchCacheStats = {
@@ -4534,8 +4642,9 @@ export type TaskRouting = {
 export type TaskRoutingView = {
   "assignee"?: string | null;
   "routing"?: TaskRouting | null;
-  "runs": Array<RoutingAudit>;
+  "runs": Array<RunRoutingAudit>;
   "task_id": TaskId;
+  "unbound_requests"?: Array<RequestRoutingAudit>;
 };
 
 export type TaskSummary = {

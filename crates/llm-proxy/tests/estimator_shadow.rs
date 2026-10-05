@@ -387,6 +387,8 @@ async fn routing_sidecar_cannot_override_constraints_or_primary() {
     );
     assert_eq!(choice.eligible_model_ids, vec!["model-a", "model-b"]);
     assert_eq!(choice.chosen.as_ref(), Some(&candidates[1]));
+    // 記録に残す名前は wire model ではなく model profile id。
+    assert_eq!(choice.chosen_model_profile_id.as_deref(), Some("model-b"));
 
     // 3) proxy: estimator 無しと有りで primary が一致し、primary は sidecar の完了を待たない。
     let legacy = spawn_proxy(config.clone(), None).await;

@@ -99,6 +99,9 @@ pub enum EstimatorSubmit {
 pub struct KernelChoice {
     /// estimator が選んだ候補（hard constraint を通った中から）。
     pub chosen: Option<ShadowCandidate>,
+    /// `chosen` の model profile id（catalog の deployment から引く）。記録はこの名前で残し、
+    /// dispatch の候補・`primary_model`（profile id）と同じ名前空間で比べられるようにする。
+    pub chosen_model_profile_id: Option<String>,
     /// hard constraint を通った候補の model profile id（sidecar に送る id）。
     pub eligible_model_ids: Vec<String>,
 }
@@ -147,6 +150,7 @@ pub fn kernel_choice(
     let Ok(result) = optimize(&policy, context, &kernel, estimator) else {
         return KernelChoice {
             chosen: None,
+            chosen_model_profile_id: None,
             eligible_model_ids: Vec::new(),
         };
     };
@@ -160,14 +164,13 @@ pub fn kernel_choice(
             eligible_model_ids.push(trace.model_profile_id.clone());
         }
     }
-    let chosen = result.ranked.first().and_then(|top| {
-        mapped
-            .iter()
-            .find(|(_, _, d)| d.id == top.deployment_id)
-            .map(|(c, _, _)| (*c).clone())
-    });
+    let top = result
+        .ranked
+        .first()
+        .and_then(|top| mapped.iter().find(|(_, _, d)| d.id == top.deployment_id));
     KernelChoice {
-        chosen,
+        chosen: top.map(|(c, _, _)| (*c).clone()),
+        chosen_model_profile_id: top.map(|(_, _, d)| d.model_profile_id.clone()),
         eligible_model_ids,
     }
 }
@@ -395,7 +398,8 @@ impl EstimatorShadow {
                         heuristic.chosen.as_ref().unwrap_or(&input.primary)
                     ),
                 ));
-                r.candidate_model = choice.chosen.as_ref().map(|c| c.model.clone());
+                // 上流の wire model 名ではなく model profile id で残す（sidecar が採点した名前と同じ）。
+                r.candidate_model = choice.chosen_model_profile_id.clone();
                 r.candidate_source = choice.chosen.map(|c| c.source);
                 r
             }

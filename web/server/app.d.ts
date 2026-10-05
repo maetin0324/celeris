@@ -16,6 +16,9 @@ export function createApp(options?: {
   daemonUrl?: string;
   daemonTokenFile?: string;
   relayTimeoutMs?: number;
+  liveUpstream?: string;
+  attestationKeyFile?: string;
+  ownerSocket?: string;
   log?: (entry: { path: string; status: number; ms: number }) => void;
   registerRoutes?: (app: Express) => void;
 }): Express;

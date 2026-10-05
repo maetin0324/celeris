@@ -13,6 +13,8 @@ export function createAuth(options?: {
   enabled: boolean;
   register(app: Express): void;
   authenticated(req: Request): boolean;
+  sessionKey(req: Request): string | null;
+  onLogout(listener: (sessionKey: string | null) => void): void;
   issue(): string;
   isValid(token: unknown): boolean;
   verifyPassword(candidate: unknown): boolean;

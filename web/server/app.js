@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createBrowserLive } from "./browser-live.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
@@ -71,10 +72,21 @@ export function createApp({
   daemonUrl,
   daemonTokenFile,
   relayTimeoutMs,
+  liveUpstream = process.env.CELERIS_WEB_LIVE_VIEW_UPSTREAM,
+  attestationKeyFile = process.env.CELERIS_WEB_ATTESTATION_KEY_FILE,
+  ownerSocket = process.env.CELERIS_WEB_OWNER_SOCKET,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
+  const browser = createBrowserLive({
+    auth,
+    daemonUrl,
+    daemonTokenFile,
+    liveUpstream,
+    attestationKeyFile,
+    ownerSocket,
+  });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
   // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。
   const relays = daemonUrl
@@ -140,6 +152,13 @@ export function createApp({
     }),
   );
   auth.register(app);
+  browser.register(app);
+  app.locals.browserLive = browser;
+  app.locals.browserLiveUpgrade = (req, socket, head) => {
+    const host = hostName(req.headers.host);
+    if (!host || !allowed.has(host)) return socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    browser.upgrade(req, socket, head).catch(() => socket.destroy());
+  };
   registerRoutes(app);
   for (const relay of relays) relay.register(app);
   app.use((req, res, next) => {
@@ -166,6 +185,8 @@ export function createApp({
   });
   app.use((error, _req, res, _next) => {
     if (res.headersSent) return;
+    if (_req.originalUrl?.startsWith("/browser/") && error?.type === "entity.too.large")
+      return res.status(413).json({ code: "payload_too_large" });
     res
       .status(error.status === 404 ? 404 : 500)
       .type("text/plain")

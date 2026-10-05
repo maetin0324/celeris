@@ -1,7 +1,8 @@
 ---
 title: admin 画面群（組織・知識・help・login・accounts・providers・clusters・daemon・releases）の visual QA
 tasks: [01M44C029SCGEZHEK57WEK3QNB]
-status: running
+status: done
+completed: 2026-10-04
 updated: 2026-10-04
 ---
 
@@ -100,3 +101,90 @@ build 済み web/（基点 7eab1be6a4e3）を `corepack pnpm@12.6.0 -C web scree
 - `corepack pnpm@12.6.0 -C web e2e:all e2e/a11y/axe.spec.ts e2e/parity/mobile-gate.spec.ts -g "knowledge|login|help"` → 10 passed。`mobile-audit --only` を `/knowledge`・`/knowledge/inbox`・`/knowledge/skills`・`/help`・`/login` に当てて各 exit 0
 - FRONTEND_CONTRACT §66 の生の色・任意値 grep を `web/features/{knowledge,help,org,ops} web/routes/{knowledge.*,help.tsx,login.tsx} web/e2e/admin`（`*.test.*` 除く）に当てて 0 件
 - この葉では指示に従い screenshot を撮らない。post screenshot と再 critique は post-record 葉で行う。
+
+## gate 結果
+
+4 つの修正葉を統合した worktree で再検査した。offline store の不足は、ホストに既存のローカル pnpm store の内容をこの worktree の store に統合して解消した。ネットワーク取得はしていない。続けて、指定の install → build → typecheck → lint → test → check:parity → check:boundaries → check:secrets → mobile-audit → e2e の順に実行した。
+
+| 検査 | exit | 要点 |
+| --- | ---: | --- |
+| `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` | 0 | lockfile 固定・offline のまま完了 |
+| `corepack pnpm@12.6.0 -C web build` | 0 | Vite build 完了 |
+| `corepack pnpm@12.6.0 -C web typecheck` | 0 | TypeScript project build 完了 |
+| `corepack pnpm@12.6.0 -C web lint` | 0 | 5 warnings（既存の states.spec.ts・styles.css）、error なし |
+| `corepack pnpm@12.6.0 -C web test` | 0 | Vitest 58 files・350 tests、node:test 42 tests |
+| `corepack pnpm@12.6.0 -C web check:parity` | 0 | parity static check 完了 |
+| `corepack pnpm@12.6.0 -C web check:boundaries` | 0 | import 境界 check 完了 |
+| `corepack pnpm@12.6.0 -C web check:secrets` | 0 | build・HTML・API・error・log に token なし |
+| `corepack pnpm@12.6.0 -C web mobile-audit` | 0 | 31 経路 × 360/390/412/1440 px、違反 0 |
+| `corepack pnpm@12.6.0 -C web e2e` | 0 | functional 166 passed・8 skipped |
+
+対象外の 2 file を修正した理由は、受け入れ条件が admin 9 画面だけでなく全画面の mobile-audit を要求するためである。`web/scripts/mobile-audit.mjs` は input に加え textarea/select の関連付けられた `labels` を読むようにし、親 label 付き textarea の未命名という誤判定を解消した。`web/features/tasks/overview-view.tsx` は短 ID と integration repair のリンクに `min-w-11` / `min-h-11` を与え、実際に 17×44px だったタップ領域を 44×44px 以上にした。`/projects/P1` と `/tasks/T1/changes` の残りは同じ label 判定が原因で、画面側の変更は不要だった。
+
+
+## 再critique（post）
+
+post-record（実行日 2026-10-05 UTC、検証対象 `5c9a7f555f11`）。front matter の completed・updated は指定された工程日 2026-10-04 とした。この葉では画面・fixture・parity のコードを変更していない。
+
+ui-ux-quality-gate の project cognition と web-design の構造・状態・操作順を基準に再評価した。完成済みの管理・運用画面で、利用者は担当の設定と運用状態を確認する人。入口は管理ナビ、最初の判断は「どの担当・接続・版を調べるか」、成功は対象の状態・失敗理由を読んで操作と結果を追えること。スマホでは対象 → 状態・根拠 → 操作を優先し、失敗時は再取得または権限の案内から復帰する。基盤は既存の Celeris token と共通部品を維持。巨大 hero や統計カードの反復はなく、組織の継承、手順書の配布先、稼働版と昇格判断という固有の情報構造を保っている。
+
+### 撮影と比較の所在
+
+- pre の実体: `/local/celeris/data/workspaces/01M44FP86J0JAAKENF8SGBZ36B/repos/artifacts/qa-qa-admin-pre/` と同階層の `qa-qa-admin-pre-states/`。
+- post の成果物ルート（以下 `ART`）: `/local/celeris/data/workspaces/01M44FP86J0JAAKENF8SGBZ36B/wu/post-record/artifacts`。作業場所の指定を優先した。`$(git rev-parse --show-toplevel)/../artifacts` はこの配置では `wu/post-record/repos/artifacts` を指すため使用していない。
+- 通常: `ART/qa-qa-admin-post/`、124 PNG（31 unique fixture × 4 幅）。script の表示は 32 台帳行 × 4 = 128 回だが、`/org/cos` を共有する行は同名へ上書きされる。pre も実ファイルは 124 枚。
+- 状態別: `ART/qa-qa-admin-post-states/`、116 PNG（8 状態の計 29 経路 × 4 幅）。pre も 116 枚。
+- 補足: `ART/qa-qa-admin-post-supplement/`、24 PNG。既存 admin spec の正常な組織 fixture、下方の設定欄、login の失敗後、503 確定後を撮影した。再現スクリプトは `ART/supplement.mjs` と `ART/error-state.mjs`、実測は `ART/supplement-checks.json`。
+- すべて 360 / 390 / 412 / 1440 CSS px、viewport 高さ 800、ローカル Chromium・偽 daemon・loopback gateway。外部ネットワークは使っていない。通常 script は描画完了を待たず撮るので、通常画像と操作後の補足画像は同一状態と見なさない。
+
+以下の `pre/`・`post/` は上記の通常撮影ディレクトリ、`補足/` は post-supplement を指す。`{360,1440}` 等は各幅の実ファイル名に展開する表記。
+
+| 指摘 | 再判定と画像で確認した結果 | pre → post の screenshot |
+| --- | --- | --- |
+| 1 | **[修正済み]** 英語単独の主見出し・一覧見出しを「手順書（skills）」「手順書の一覧」に変更。組織の課へ付けると作業場所へ配られる関係が読める。括弧の skills は台帳互換の補足として残る。 | `pre/_knowledge_skills-{360,1440}.png` → `post/_knowledge_skills-{360,1440}.png`。タブは `pre/_knowledge-390.png` → `post/_knowledge-390.png`。 |
+| 2 | **[修正済み] 本文**は「実行管理」「保存履歴の照合」「最終取得」となり、何を確かめる操作か読める。**[未解決・理由] h1・nav の daemon** は parity 固定と shell が範囲外のため残る。全体を日本語化済みとは判定しない。 | `pre/_daemon-{360,1440}.png` → `post/_daemon-{360,1440}.png`。post の版「取得中」は撮影時点の過渡状態であり、取得結果の退行とは断定しない。 |
+| 3 | **[修正済み]** 360・390px の右に隠れた問題欄が、版・状態の直後、昇格ボタンの前に移った。412px も同じ順。1440px は比較用の表を維持。fixture の問題は「なし」であり、長い失敗文までこの通常画像で検証したわけではない。 | `pre/_releases-{360,390,1440}.png` → `post/_releases-{360,390,1440}.png`、追加確認 `post/_releases-412.png`。 |
+| 4 | **[修正済み]** 360px の切れた失敗理由列を縦の要約に変更し、接続状態・失敗理由・最終確認を同じ対象内に表示。host は「接続先」になった。1440px は表を維持。 | `pre/_clusters-{360,412,1440}.png` → `post/_clusters-{360,412,1440}.png`。 |
+| 5 | **[修正済み] 主説明・フォームラベル**は短い運用文と「同時実行数」「モデル」「受ける段」に整理され、長い道具の説明は「用語の説明」へ折り畳まれた。設定カードに残る LLM source / llm_source 等の診断語と常設編集欄の密度は残課題。 | `pre/_providers-{360,1440}.png` → `post/_providers-{360,1440}.png`。下方の設定全体は `補足/providers-form-390.png`。 |
+| 6 | **[修正済み] 表示順**は正常系の補足で 木 → 担当の詳細 → 担当を追加、PC は木・追加が左、詳細が右。親部・継承元・配下の課も読める。**[未解決・理由] 通常 pre/post の正常系比較**は両方が取得失敗のため不可能。pre のソース読解と既存修正記録、post の配置実測を根拠とし、同条件の画像比較に成功したとは扱わない。 | `pre/_org-360.png` → `post/_org-360.png`（両方 error）。正常系は `補足/org-selected-{360,390,412,1440}.png`・`補足/org-detail-360.png`。 |
+| 7 | **[修正済み]** 候補の「New knowledge」が二重に出る状態を解消。見出しのみの本文はその旨を短く表示し、取り込み先と採用・却下に進める。ページ本文側の共通処理は先行葉の unit で確認済みで、今回の画像比較は候補画面を根拠とする。 | `pre/_knowledge_inbox-{360,1440}.png` → `post/_knowledge_inbox-{360,1440}.png`。追加確認 `post/_knowledge_inbox-412.png`。 |
+| 8 | **[修正済み] 指摘したラベル・節見出し**は adapter →「道具」、secret →「秘密の値（secret）」。状態を読んでから操作へ進む構造と秘密値の非表示は保たれる。**[未解決・理由] secret の操作名**は parity が固定するため残り、説明文にも form 等が残る。 | `pre/_accounts-{360,1440}.png` → `post/_accounts-{360,1440}.png`。下部は `補足/accounts-secret-412.png`。 |
+| 9 | **[修正済み]** 未選択時の空の本文枠が消え、検索結果の一覧と選択案内に幅を使う。1 件しかないため下の空間は残るが、内容の無い詳細パネルを主表示にしなくなった。 | `pre/_knowledge-{390,1440}.png` → `post/_knowledge-{390,1440}.png`。同様の手順書一覧は指摘 1 の画像。 |
+| 10 | **[修正済み]** 初期状態で「ログイン後はホームを開きます」と表示。補足では next を含む戻り先が失敗後も残り、理由の alert とパスワード欄の focus が同時に見える。 | `pre/_login-{360,412}.png` → `post/_login-{360,412}.png`。失敗後は `補足/login-next-error-{360,390,412,1440}.png`（pre の失敗後画像は無し）。 |
+
+help は今回の修正対象指摘がなく、`pre/_help-390.png` と `post/_help-390.png` で目次の折り返しと本文の順を比較し、`post/_help-1440.png` で読み幅を確認した。新たな装飾カードの反復はない。組織の人は `post/_org_cos-390.png` で会話・入力を確認したが、宛先の人名化は共通 Console と表示契約の課題として残る。
+
+### 状態・accessibility・互換性
+
+- `loading-_providers-360.png`（pre-states → post-states）は shell と Skeleton を維持。5 秒後の遅延案内までをこの画像の根拠にはしない。
+- `error-_providers-390.png`（pre-states → post-states）は両方まだ Skeleton。`screenshots.mjs` が `page.goto` 直後に撮るため、ファイル名だけでは 503 の表示を証明できない。補足 `providers-error-ready-{360,390,412,1440}.png` は「再試行」の出現を待ち、取得不能の対象・影響・次の操作、focus 輪郭が見えることを確認した。
+- `stale-_providers-412.png`（pre-states → post-states）は「再接続中」を示しながら既存一覧を残す。初期接続失敗の fixture なので、接続済みから切断した後の最終取得時刻や操作制限を証明するものではない。
+- `forbidden-_providers-1440.png`（pre-states → post-states）は権限が無い対象、管理者への確認案内、「一覧へ戻る」を表示し、編集フォームは出ない。
+- long-text / long-id / empty / many は撮影済みだが `web/e2e/support/states.ts` に admin 経路がない。admin 全画面の 8 状態を検証済みとはしない。組織の長い名称・ID は補足の既存 admin fixture で確認した。
+- touch target と横溢れは前節の post-gates（31 経路 × 4 幅、違反 0）を根拠とする。この葉は正常な組織の補足で axe critical / serious 0 を各 4 幅で再確認。login 失敗後の focus 復帰も 4 幅で実測した。画像で focus の輪郭・入力境界・文字の状態ラベルを確認したが、静止画像だけで全 keyboard 操作や全状態の contrast を保証しない。
+- parity 4 spec を期待変更なしで実行し、**15 passed / 2 skipped、exit 0**。skip は `WEB_SHOTS_OUT` 未指定時の org/help の撮影専用ケースで、機能の失敗ではない。固定された h1、accessible name、URL（組織の旧 URL 転送、選択 query、help アンカー、設定操作）を維持している。指摘 1 の skills の h1 は先行修正で `skills` → `手順書（skills）` に変わっており、parity は文言を固定していないため通る。「全 h1 文字列が pre と同一」という意味ではない。
+
+この葉での実行（すべて exit 0。install は先行 gate のローカル store を作業ツリーへ複製後、reused 278・downloaded 0 で成功）:
+
+```sh
+corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile
+corepack pnpm@12.6.0 -C web build
+ART=/local/celeris/data/workspaces/01M44FP86J0JAAKENF8SGBZ36B/wu/post-record/artifacts
+corepack pnpm@12.6.0 -C web screenshots --out "$ART/qa-qa-admin-post"
+corepack pnpm@12.6.0 -C web screenshots --out "$ART/qa-qa-admin-post-states" --states
+corepack pnpm@12.6.0 -C web e2e e2e/parity/org.spec.ts e2e/parity/knowledge.spec.ts e2e/parity/help.spec.ts e2e/parity/ops.spec.ts
+node "$ART/supplement.mjs"
+node "$ART/error-state.mjs"
+```
+
+ログは `ART/build.log`・`screenshots.log`・`screenshots-states.log`・`parity.log`・`supplement.log`・`error-state.log`。build は既存の chunk size warning のみ。今回の追跡差分は本記録だけで、API 型・gateway・crates・DB schema・parity の期待を変更していない。
+
+## 残課題
+
+1. **admin の状態カバレッジと撮影待機（共通 QA）**: `web/e2e/support/states.ts` は admin では providers の loading/error/stale/forbidden のみ。全 admin の長文・長 ID・0 件・多数を追加し、`web/scripts/screenshots.mjs` で非 loading 状態の成立を待つ必要がある。通常 `/org` の fixture も取得失敗なので、今回の補足と同等の正常系を共通 fixture に反映する必要がある。これらはこの葉のコード変更範囲外。
+2. **共通 shell・表示契約の日本語化（指摘 2、1・8 の互換性部分）**: daemon の h1/nav、secret の accessible name、skill 削除名、skills の台帳名は parity・shell・画面台帳と合わせて変更する必要がある。本タスクでは期待を書き換えないため残した。共通 StatusBadge の設定語彙も今回の画面修正だけでは統一できない。
+3. **診断語と常設フォームの密度（指摘 5・8 の残り）**: providers の `LLM source`・`llm_source`、accounts の `run`・`form` 等はまだ見える。画面の主ラベルは改善したが、用語の整理は完了していない。設定欄・新規追加欄の折り畳みは別の画面変更として keyboard 順と一緒に検証する必要があり、コードを変えない post-record では扱わない。
+4. **多数の担当を選んだ後の移動（指摘 6）**: 詳細は追加より先になったが、長い木の下まで scroll が必要。keyboard で木を辿る操作を邪魔する自動 focus 移動は今回追加していない。多数 fixture と、利用者が選べる「選択した担当へ」等の導線を別途評価する必要がある。
+5. **UX_AUDIT の範囲外の導線**: `/org/cos` の宛先は ID のままで、人名・役割を示すには共通 Console と h1 契約の見直しが要る。help の状況別検索、知識候補件数・既存本文との比較も今回の 10 指摘の修正では解消していない。API/schema 変更が必須との根拠は今回得ていないため、必要性を断定せず次の調査項目とする。
+
+この記録の done は、critique → 画面修正 → post の再評価を一往復完了し、検証できない範囲と未解決事項を明示したことを表す。全画面・全状態の visual QA 完了や、本番への反映を意味しない。

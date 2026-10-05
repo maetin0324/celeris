@@ -13,6 +13,8 @@ export async function startGateway(options: Parameters<typeof createApp>[0] = {}
   return {
     base: `http://127.0.0.1:${address.port}`,
     port: address.port,
+    // browser の live proxy（WS upgrade）を付ける試験（browser-gateway.ts）が使う。
+    server,
     close: () =>
       new Promise<void>((resolve) => {
         server.close(() => resolve());

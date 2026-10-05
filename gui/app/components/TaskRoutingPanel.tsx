@@ -1,4 +1,4 @@
-import type { TaskRoutingView } from "~/celeris/types";
+import type { RoutingShadowAudit, TaskRoutingView } from "~/celeris/types";
 import { RequestAudit } from "~/components/RoutingSourceState";
 import { Mono } from "~/components/ui/misc";
 import { shortId } from "~/lib/format";
@@ -114,6 +114,18 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
             </dd>
           </dl>
         )}
+        {run && (run.routing_shadow ?? []).length > 0 && (
+          <section
+            aria-label="shadow routing"
+            data-testid="task-routing-shadow"
+            className="space-y-2 border-t border-border pt-3"
+          >
+            <h3 className="font-medium text-fg">shadow（primary とは別の評価）</h3>
+            {(run.routing_shadow ?? []).map((shadow) => (
+              <ShadowAudit key={shadow.shadow_id} shadow={shadow} />
+            ))}
+          </section>
+        )}
         {run && (run.reasons ?? []).length > 0 && (
           <div>
             <p className={dtClass}>理由</p>
@@ -178,5 +190,48 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
         )}
       </div>
     </details>
+  );
+}
+
+const known = (value: string | number | null | undefined) => (value == null || value === "" ? "不明" : String(value));
+
+function ShadowAudit({ shadow }: { shadow: RoutingShadowAudit }) {
+  const reservation = shadow.reservation;
+  const status = { completed: "完了", failed: "失敗", dropped: "見送り" }[shadow.status];
+  return (
+    <dl
+      className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded border border-border p-2 text-sm"
+      data-testid={`routing-shadow-${shadow.kind}`}
+    >
+      <dt>種類・状態</dt>
+      <dd>
+        {shadow.kind === "decision" ? "判断のみ" : "実行"} · {status}
+      </dd>
+      <dt>理由</dt>
+      <dd>{known(shadow.reason)}</dd>
+      <dt>候補</dt>
+      <dd className="break-all">
+        source {known(shadow.candidate_source)} / model {known(shadow.candidate_model)}
+      </dd>
+      <dt>primary との差</dt>
+      <dd>{shadow.differs_from_primary == null ? "不明" : shadow.differs_from_primary ? "異なる" : "同じ"}</dd>
+      <dt>実行 tokens</dt>
+      <dd>
+        入力 {known(shadow.input_tokens)} / 出力 {known(shadow.output_tokens)}
+      </dd>
+      <dt>上限消費</dt>
+      <dd data-testid="routing-shadow-consumption">
+        {reservation ? (
+          <>
+            UTC {reservation.utc_day} · {reservation.state} · 予約 {reservation.reserved_tokens.toLocaleString("en-US")}{" "}
+            tokens / {formatCostUsd(reservation.reserved_effective_usd)} effective · 確定{" "}
+            {reservation.charged_tokens.toLocaleString("en-US")} tokens /{" "}
+            {formatCostUsd(reservation.charged_effective_usd)} effective
+          </>
+        ) : (
+          "不明"
+        )}
+      </dd>
+    </dl>
   );
 }

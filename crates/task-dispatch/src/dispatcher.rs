@@ -119,6 +119,7 @@ mod review_spawn;
 mod review_verdict;
 mod routing_context;
 mod routing_enforce;
+mod routing_shadow;
 mod run_context;
 mod sinks;
 mod snapshot;
@@ -147,6 +148,10 @@ pub use provider_select::provider_failure_outcome;
 pub use routing_enforce::{
     DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
     enforce_quota_verdict, source_state_for_provider, source_state_from_account,
+};
+pub use routing_shadow::{
+    DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
+    DecisionShadowComparison,
 };
 pub use snapshot::SnapshotPublisher;
 

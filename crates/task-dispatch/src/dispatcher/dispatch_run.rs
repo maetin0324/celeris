@@ -518,6 +518,18 @@ impl Dispatcher {
                 routing_reason,
             );
         };
+        // 多目的 routing Phase 4: mode=shadow だけ、primary（legacy）を決めた直後の同じ候補行・source 状態で
+        // 候補 policy の判断を純粋に計算する（run の登録より前。追加の呼出し・状態の書換えはしない）。
+        let decision_shadow = self.shadow_active().then(|| {
+            self.decision_shadow_round(
+                &task.worker_hint,
+                cos,
+                &provider_id,
+                selected_account.as_ref(),
+                &provider_selection,
+                now,
+            )
+        });
         // A legacy provider has no tier mapping: keep its historical behavior.
         if adapter
             .model_for_tier(task.worker_hint.tier)
@@ -662,6 +674,23 @@ impl Dispatcher {
                     record: Box::new(record),
                 },
             )?;
+            // Phase 4 decision shadow: primary と別欄の記録 1 件（primary の選択・結果は変えない）。
+            if let (Some(round), Some(decision_id)) = (&decision_shadow, &routing_decision_id) {
+                let shadow = Self::decision_shadow_record(
+                    round,
+                    decision_id,
+                    &run_id,
+                    &provider_id,
+                    &model,
+                    task.worker_hint.tier,
+                );
+                self.store.append_event(
+                    task.id,
+                    &Event::RoutingShadowRecorded {
+                        record: Box::new(shadow),
+                    },
+                )?;
+            }
         }
         if matches!(adapter_id.as_str(), "claude-code" | "codex") {
             self.store.append_event(task.id, &Event::worker_progress(&run_id,

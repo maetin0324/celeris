@@ -209,6 +209,26 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
             )
         })
     };
+    // ADR 2026-10-05-cos-chat-home D4: 添付の GC・upload 予約の期限回収・chat_events の retention。
+    // DB を書くので verify（データのコピーの検証）では起こさず、standby の間は pass を飛ばす。
+    let chat_gc = (!verify).then(|| {
+        crate::chat_gc::spawn_chat_gc_task(
+            crate::chat_gc::ChatGcSettings {
+                db_path: config.db.path.clone(),
+                data_dir: config::CosConfig::attachment_data_dir(&config.db.path),
+                limits: config.chat_attachment_limits(),
+                stream_retention: config.cos.stream_retention(),
+                busy_timeout: config.db.busy_timeout(),
+            },
+            crate::chat_gc::CHAT_GC_INTERVAL,
+            Arc::new(time::OffsetDateTime::now_utc),
+            // ADR-0040 D4: standby は DB を片付けない。active になった後の pass から回す。
+            {
+                let role = role.clone();
+                Arc::new(move || role.get() == InstanceRole::Active)
+            },
+        )
+    });
     // ADR-0053 D1/D4（Phase 65）: 主 API（`GET /llm/sources`）とプロキシ自身が同じ `Arc` を使う。
     let llm_proxy_state = build_llm_proxy_state(&config, &dispatcher, role.clone())?;
     let (api, admin_rx) = match config.api.listen {
@@ -281,6 +301,9 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // ADR-0064 D3/D5: 背景チェックポイント・定期バックアップは draining でも動き続けてよい
     // （DB への書き込みではなく、既存の WAL をさばく／バックアップするだけ）ので、プロセスが本当に
     // 終わるここで初めて止める。
+    if let Some(t) = chat_gc {
+        t.stop().await;
+    }
     if let Some(t) = db_checkpoint {
         t.stop().await;
     }

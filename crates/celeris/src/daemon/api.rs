@@ -321,6 +321,15 @@ pub fn bind_reuseport(addr: SocketAddr) -> std::io::Result<tokio::net::TcpListen
     tokio::net::TcpListener::from_std(std::net::TcpListener::from(socket))
 }
 
+/// ADR 2026-10-05-cos-chat-home D4: 添付は `<data_dir>/chat/attachments`（data dir = DB の置き場）。
+/// `[cos.attachments]` の上限は upload の body limit（middleware）と store の検査の両方に効く。
+pub(crate) fn with_chat_wiring(state: ApiState, config: &Config) -> ApiState {
+    state.with_chat_attachments(
+        crate::config::CosConfig::attachment_data_dir(&config.db.path),
+        config.chat_attachment_limits(),
+    )
+}
+
 /// ADR-0013 D3 / D4: ディスパッチャにスナップショットの送り口を付け、API 専用の DB 接続を開いて bind する。
 /// 開けない・bind できないときは起動を失敗させる（黙って API 無しで動かない）。
 /// ADR-0040 D3 / D4: `admin = false`（verify モード）では管理系の委譲チャネルを作らない（tick ループが
@@ -448,6 +457,7 @@ pub(crate) async fn start_api(
         None => state,
     };
     let state = state.with_live_sessions(live_sessions);
+    let state = with_chat_wiring(state, config);
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
         addr: listen,
         source,
@@ -460,3 +470,7 @@ pub(crate) async fn start_api(
     }));
     Ok((RunningApi { stop, handle }, admin_rx))
 }
+
+#[cfg(test)]
+#[path = "api_chat_tests.rs"]
+mod chat_tests;

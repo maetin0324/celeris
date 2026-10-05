@@ -59,7 +59,29 @@ export function validSegment(part) {
 }
 
 function redact(text, token) {
-  return token ? text.split(token).join("[redacted]") : text;
+  const clean = token ? text.split(token).join("[redacted]") : text;
+  if (!clean.includes("live_view_url")) return clean;
+  try {
+    return JSON.stringify(redactLiveUrls(JSON.parse(clean)));
+  } catch {
+    return clean.replace(/"live_view_url"\s*:\s*"(?:[^"\\]|\\.)*"/g, '"live_view_url":null');
+  }
+}
+
+function redactLiveUrls(value) {
+  if (Array.isArray(value)) return value.map(redactLiveUrls);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, item]) => [key, key === "live_view_url" ? null : redactLiveUrls(item)]),
+  );
+}
+
+function browserRouteRequired(path, method) {
+  if (/^\/api\/v1\/browser\/identities(?:\/|$)/.test(path)) return true;
+  if (!/^\/api\/v1\/tasks\/[^/]+\/browser(?:\/|$)/.test(path)) return false;
+  if (/\/browser\/live(?:\/|$)/.test(path)) return true;
+  if (/\/browser\/control(?:\/|$)/.test(path)) return true;
+  return method !== "GET";
 }
 
 export function fail(res, status, code) {
@@ -78,6 +100,7 @@ export function createRelay({ upstream, tokenFile, timeoutMs = DEFAULT_RELAY_TIM
     const rawPath = (queryIndex < 0 ? req.originalUrl : req.originalUrl.slice(0, queryIndex)).slice("/api".length);
     const target = upstreamPath(rawPath);
     if (!target) return fail(res, 400, "invalid_path");
+    if (browserRouteRequired(target, req.method)) return fail(res, 403, "browser_route_required");
     const url = new URL(`${target}${queryIndex < 0 ? "" : req.originalUrl.slice(queryIndex)}`, origin);
     if (url.origin !== origin || !url.pathname.startsWith("/api/v1/")) return fail(res, 400, "invalid_path");
 

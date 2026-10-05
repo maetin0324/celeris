@@ -127,6 +127,35 @@ harness が合わないため。
 
 ## D2. web gateway の live proxy と browser の人向け経路
 
+### D2.0 人が web から変える browser 設定（2026-10-06 追記）
+
+本番 org は DB を正とし、管理画面で browser-execution node の profile を読み書きする。対象は
+`browser.allowed_domains`（許可 origin）、`harnesses.allowed/default`、`budget`、
+`browser.credential_policy_ids`、credential と identity の対応を含む browser 関連設定である。
+管理画面は `PATCH /api/v1/org/browser-execution`（または同等の browser 専用管理 API）を使い、
+変更前後の値、actor、時刻を events に残す。機密値そのものは event に保存しない。
+管理権限と CSRF を確認し、profile の置換前に scheme（外向きは HTTPS、loopback の開発用 HTTP のみ例外）、
+host、port、wildcard の範囲を検証する。`*` 全体、public suffix を覆う wildcard、URL の userinfo・path・query・fragment、
+不正 scheme は拒否する。検証失敗時は DB と event を変更しない。
+初期値は loopback だけとし、業務 host は人が web から追加する。既存の `allowed_domains` が host 表現なら、
+origin の scheme/port 制限を表せる形式へ移行してから画面を公開する。host だけへの丸めで許可を広げない。
+
+task の browser requirements に task ごとの `allowed_domains` を必須で加える。browser-enabled task の作成時に
+これが欠落・空なら **拒否する**。org grant 全体への暗黙の拡張はしない。CoS の起票、planner の execution plan の
+子 task、`create_task` のいずれも、必要な最小 origin だけを spec に渡す。子 task の集合は親の集合の部分集合に限る。
+実効許可は task の集合と browser-execution grant の集合の交差であり、grant 外は policy broker と egress の
+両方で拒否する。wildcard の包含関係は origin の scheme・host・port を含めて判定し、交差を単なる文字列一致に
+しない。task 作成後の grant 縮小は既存 task にも即時適用する。
+
+CoS と planner の prompt・skill に次を明記する: 「browser task の `requirements.browser.allowed_domains` には、
+作業に必要な最小の origin のみを書き、親の範囲を超えない。例: 社内請求画面だけを使うなら
+`["https://billing.example.com"]` とし、`["*.example.com"]` や grant 全体をコピーしない」。
+試験は交差、grant 外拒否（broker と egress）、親子包含、web での編集と不正 scheme/wildcard 拒否、
+actor 付き event、欠落・空の task 作成拒否を決定的に確かめる。
+
+この追記は既存の host 形式の grant と task policy の実装変更を要する。旧形式のままで広い許可を与える
+運用は開始しない。org-node・web-ui・close で実装と試験を突き合わせる。
+
 旧 GUI の `browser-owner.server.ts`・`browser-attestation.server.ts`・`browser-live*.server.ts`・
 `browser-control.server.ts`・`browser-waits.server.ts` を `web/server/browser/` に移す。
 置き場所は express の app に、`/api` relay より前に mount する。言語は既存の `web/server` に合わせて JS（ESM、`.d.ts` 付き）。
@@ -137,7 +166,8 @@ web の cookie（`__celeris_web_session`）には利用者の識別が無いの�
 
 - `POST /browser/owner-session` は 12 hex・一回限り・5 分期限の challenge を出す。
   - 本人は `celerisctl browser owner-session approve <challenge>` で確定する。
-  - 受けるのは web gateway 専用の Unix socket（`CELERIS_WEB_OWNER_SOCKET`。runtime dir 0700・socket 0600・peer UID 検証）。
+  - 受けるのは web gateway 専用の Unix socket（`CELERIS_WEB_OWNER_SOCKET`。所有者の runtime dir 0700・socket 0600）。
+    Node の socket API は peer UID を取得できないため、同一 UID の process は区別できない。GUI と同じ制約として記録する。
   - grant は gateway のメモリだけに置く。cookie の期限を超えない。logout・再登録・再起動で失効する。
 - `celerisctl` は socket の path を引数で受ける。web と GUI の並行運用中は、どちらの gateway の challenge かを
   path で区別する。CLI の変更が要る場合は葉 gateway の範囲に含める。

@@ -1,4 +1,4 @@
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fail, parseUpstream, readTokenFile } from "./relay.js";
 
@@ -11,6 +11,8 @@ import { fail, parseUpstream, readTokenFile } from "./relay.js";
 
 const eventId = /^\d{1,20}$/;
 const taskId = /^[A-Za-z0-9_-]{1,128}$/;
+const liveUrl = /"live_view_url"\s*:\s*"(?:[^"\\]|\\.)*"/g;
+const redactLiveUrl = (value) => value.replace(liveUrl, '"live_view_url":null');
 
 // query と `Last-Event-ID` を検査して daemon への query とヘッダの値にする。受けられなければ null。
 export function streamParams(search, lastEventId) {
@@ -67,7 +69,7 @@ export function createEvents({ upstream, tokenFile, fetchImpl = fetch }) {
       if (status !== 200) {
         const text = await upstreamResponse.text().catch(() => "");
         res.status(status).type(upstreamResponse.headers.get("content-type") ?? "text/plain");
-        return res.send(token ? text.split(token).join("[redacted]") : text);
+        return res.send(redactLiveUrl(token ? text.split(token).join("[redacted]") : text));
       }
       // Express の res.set は Content-Type に charset を足すので、node の setHeader で付ける。
       res.statusCode = 200;
@@ -79,7 +81,26 @@ export function createEvents({ upstream, tokenFile, fetchImpl = fetch }) {
       res.flushHeaders();
       if (!upstreamResponse.body) return res.end();
       try {
-        await pipeline(Readable.fromWeb(upstreamResponse.body), res);
+        const decoder = new TextDecoder();
+        const redactLiveUrls = new Transform({
+          transform(chunk, _encoding, callback) {
+            this.pending = (this.pending ?? "") + decoder.decode(chunk, { stream: true });
+            const last = this.pending.lastIndexOf("\n");
+            if (last >= 0) {
+              const complete = this.pending.slice(0, last + 1);
+              this.pending = this.pending.slice(last + 1);
+              this.push(redactLiveUrl(complete));
+            }
+            if (this.pending.length > 1024 * 1024) return callback(new Error("event too large"));
+            callback();
+          },
+          flush(callback) {
+            this.pending = (this.pending ?? "") + decoder.decode();
+            if (this.pending) this.push(redactLiveUrl(this.pending));
+            callback();
+          },
+        });
+        await pipeline(Readable.fromWeb(upstreamResponse.body), redactLiveUrls, res);
       } catch {
         controller.abort();
         if (!res.destroyed) res.destroy();

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { createApp } from "./app.js";
-import { dispositionFor, filePath, fileQuery } from "./files.js";
+import { dispositionFor, filenameOf, filePath, fileQuery, viewCspFor, viewDisposition, viewTypeFor } from "./files.js";
 
 // 偽 daemon と gateway は loopback の空き port。token は fixture で、どの出力にも出てはいけない。
 const TOKEN = "fixture-daemon-token-3f9c2a71";
@@ -39,6 +39,15 @@ const daemon = http.createServer((req, res) => {
       "set-cookie": "daemon=1",
     });
     return res.end("<script>alert(1)</script>");
+  }
+  // 実 daemon と同じく、表に無い拡張子（html・svg・pdf）は octet-stream と inline の filename で返す。
+  const octet = { 3: "report.html", 4: "paper.pdf", 5: "figure.svg" }[url.pathname.split("/").at(-1)];
+  if (url.pathname.startsWith("/api/v1/tasks/T1/artifacts/") && octet) {
+    res.writeHead(200, {
+      "content-type": "application/octet-stream",
+      "content-disposition": `${url.searchParams.has("download") ? "attachment" : "inline"}; filename="${octet}"; filename*=UTF-8''${octet}`,
+    });
+    return res.end(`<script>parent.document.title='ran'</script>${url.search}`);
   }
   if (url.pathname === "/api/v1/tasks/T1/artifacts/2") {
     res.writeHead(200, { "content-type": "image/svg+xml" });
@@ -129,6 +138,39 @@ test("dispositionFor forces attachment for active content only", () => {
   assert.equal(dispositionFor("application/json", "inline"), "inline");
 });
 
+test("fileQuery accepts view=1 but not together with download", () => {
+  assert.equal(String(fileQuery("view=1")), "view=1");
+  assert.equal(String(fileQuery("offset=0&length=10&view=1")), "offset=0&length=10&view=1");
+  for (const bad of ["view=0", "view=1&download=1", "view=1&view=1"]) assert.equal(fileQuery(bad), null, bad);
+});
+
+test("view helpers fill html/svg/pdf types by name and keep sandbox except for pdf", () => {
+  const daemon = (name) => `inline; filename="${name}"; filename*=UTF-8''${encodeURIComponent(name)}`;
+  assert.equal(filenameOf(daemon("報告.html")), "報告.html");
+  assert.equal(filenameOf('attachment; filename="a.pdf"'), "a.pdf");
+  assert.equal(filenameOf(null), "");
+  assert.equal(viewTypeFor("application/octet-stream", daemon("a.HTML")), "text/html; charset=utf-8");
+  assert.equal(viewTypeFor("application/octet-stream", daemon("a.htm")), "text/html; charset=utf-8");
+  assert.equal(viewTypeFor("application/octet-stream", daemon("a.svg")), "image/svg+xml");
+  assert.equal(viewTypeFor(null, daemon("a.pdf")), "application/pdf");
+  assert.equal(viewTypeFor("application/octet-stream", daemon("a.zip")), "application/octet-stream");
+  // daemon が種類を決めた応答は拡張子で上書きしない（text/plain の .html 名でも HTML にしない）。
+  assert.equal(viewTypeFor("text/plain; charset=utf-8", daemon("a.html")), "text/plain; charset=utf-8");
+  assert.equal(viewDisposition(daemon("a.html")), daemon("a.html"));
+  assert.equal(viewDisposition('attachment; filename="a.svg"'), 'inline; filename="a.svg"');
+  assert.equal(viewDisposition(null), "inline");
+  for (const type of ["text/html; charset=utf-8", "image/svg+xml", "text/plain", "application/xml"]) {
+    const csp = viewCspFor(type);
+    assert.match(csp, /^sandbox;/, type);
+    assert.doesNotMatch(csp, /allow-scripts|allow-same-origin|script-src/, type);
+    assert.match(csp, /frame-ancestors 'self'/, type);
+  }
+  const pdf = viewCspFor("application/pdf");
+  assert.doesNotMatch(pdf, /sandbox|script-src|unsafe/);
+  assert.match(pdf, /^default-src 'none';/);
+  assert.match(pdf, /frame-ancestors 'self'/);
+});
+
 test("run file relays offset/length/download and allowlisted headers with nosniff", async () => {
   const res = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl?offset=10&length=5&download=1`, {
     headers: { Authorization: "Bearer browser", Cookie: "a=b" },
@@ -171,6 +213,59 @@ test("HTML and SVG artifacts are downloaded, never rendered same-origin", async 
   const svg = await fetch(`${base}/files/tasks/T1/artifacts/2`);
   assert.equal(svg.headers.get("content-disposition"), "attachment");
   await svg.text();
+});
+
+test("view=1 shows HTML/SVG inline only under CSP sandbox, never forwarding view to the daemon", async () => {
+  for (const [idx, type] of [
+    [3, "text/html; charset=utf-8"],
+    [5, "image/svg+xml"],
+  ]) {
+    const res = await fetch(`${base}/files/tasks/T1/artifacts/${idx}?view=1`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), type);
+    assert.match(res.headers.get("content-disposition") ?? "", /^inline; filename="(report\.html|figure\.svg)"/);
+    assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+    const csp = res.headers.get("content-security-policy") ?? "";
+    assert.match(csp, /^sandbox; default-src 'none';/);
+    assert.doesNotMatch(csp, /allow-scripts|allow-same-origin|script-src/);
+    assert.match(csp, /frame-ancestors 'self'$/);
+    assert.equal(res.headers.get("x-frame-options"), "SAMEORIGIN");
+    // daemon には view を送らない（daemon の query は offset・length・download だけ）。
+    assert.equal(await res.text(), "<script>parent.document.title='ran'</script>");
+    assert.equal(new URL(seen.at(-1).url, "http://x").search, "");
+  }
+  // daemon が text/html と言った応答も、view=1 なら sandbox 付きの inline。
+  const declared = await fetch(`${base}/files/tasks/T1/artifacts/1?view=1`);
+  assert.equal(declared.headers.get("content-disposition"), 'inline; filename="report.html"');
+  assert.match(declared.headers.get("content-security-policy") ?? "", /^sandbox;/);
+  assert.equal(declared.headers.get("set-cookie"), null);
+  await declared.text();
+});
+
+test("view=1 PDF is inline application/pdf with default-src 'none' and self-only framing", async () => {
+  const res = await fetch(`${base}/files/tasks/T1/artifacts/4?view=1`);
+  assert.equal(res.headers.get("content-type"), "application/pdf");
+  assert.match(res.headers.get("content-disposition") ?? "", /^inline; filename="paper\.pdf"/);
+  assert.equal(res.headers.get("x-content-type-options"), "nosniff");
+  assert.equal(
+    res.headers.get("content-security-policy"),
+    "default-src 'none'; object-src 'self'; form-action 'none'; base-uri 'none'; frame-ancestors 'self'",
+  );
+  await res.text();
+});
+
+test("without view, HTML/SVG/PDF named octet-stream stay octet-stream under frame-ancestors 'none'", async () => {
+  for (const idx of [3, 4, 5]) {
+    const res = await fetch(`${base}/files/tasks/T1/artifacts/${idx}?download=1`);
+    assert.equal(res.headers.get("content-type"), "application/octet-stream");
+    assert.match(res.headers.get("content-disposition") ?? "", /^attachment;/);
+    assert.equal(res.headers.get("content-security-policy"), "sandbox; default-src 'none'; frame-ancestors 'none'");
+    assert.equal(res.headers.get("x-frame-options"), "DENY");
+    await res.text();
+  }
+  const bad = await fetch(`${base}/files/tasks/T1/artifacts/3?view=1&download=1`);
+  assert.equal(bad.status, 400);
+  await bad.text();
 });
 
 test("invalid name, idx and query are rejected before reaching the daemon", async () => {

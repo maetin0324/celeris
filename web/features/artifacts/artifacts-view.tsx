@@ -6,7 +6,7 @@ import { ArtifactTable } from "./artifact-table";
 import { artifactsQuery, projectsQuery } from "./artifacts-query";
 
 // /artifacts（P3-11、R20）。絞り込みは GET の form（?project=）。本文は受信箱（P3-03）と同じ ArtifactPreview で開く。
-// HTML は同一オリジンで描画・実行しない（H8）: ArtifactPreview は Markdown 以外を download リンクにする。
+// HTML・SVG は同一オリジンで実行しない（H8）: ArtifactPreview は gateway の view=1（CSP sandbox）を sandbox iframe・img で読む。
 export function ArtifactsScreen({ project }: { project?: string }) {
   const projects = useQuery(projectsQuery());
   const recentProject = projects.data?.items.reduce<(typeof projects.data.items)[number] | undefined>(

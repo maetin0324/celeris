@@ -372,7 +372,10 @@ test("parity: /tasks/:id 5 tab と全 intent・409", async ({ page }) => {
       expect(await overflow(page)).toBe(0);
     }
     await page.goto(`${base}/tasks/T1?tab=changes`);
-    await expect(page.getByTestId("task-changes")).toContainText("src/long.ts");
+    // 変更ファイルはファイル名を先に、dir を下に分けて出す（fix-r6 narrow）。全文 path は button の名前に持つ。
+    await expect(
+      page.getByTestId("task-changes").getByRole("button", { name: "src/long.ts", exact: true }),
+    ).toBeVisible();
   });
 });
 

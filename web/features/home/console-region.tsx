@@ -8,8 +8,12 @@ import { Icon } from "../../components/ui/icon";
 // 枠の中は末尾にいる間だけ追記に合わせて末尾へ送り、離れて読んでいる間は動かさずに「最新へ」を出す。末尾は
 // ConsoleView の下の余白（fixed の送信欄の逃げ）のうち送信欄に隠れる分までとし、最後の block を送信欄のすぐ上に置く。
 
-/** 枠の最低の高さ（px）。これより低い viewport ではページ側の scroll に任せる。 */
-const MIN_HEIGHT = 160;
+/**
+ * 枠の中で会話が見える最低の高さ（px）。枠の上端に留めた宛先の行と、枠の下に重なる fixed の送信欄の高さは別に足す。
+ * これより低い viewport ではページ側の scroll に任せる。以前は枠の高さ全体を 160px にしていたので、stale の黄帯が出た
+ * 360 では宛先の行と送信欄に食われて会話が約 40px しか見えなかった（fix-r6 narrow）。
+ */
+const MIN_VISIBLE = 160;
 /** 末尾とみなす距離（px）。 */
 const NEAR_BOTTOM = 48;
 /** 最後の block・「最新へ」と送信欄の間に残す隙間（px）。 */
@@ -20,11 +24,43 @@ function composerOf(el: HTMLElement): Element | null {
 }
 
 // 末尾へ送ったときに見せなくてよい下の余白の量。ConsoleView の padding-bottom のうち、送信欄に隠れず空白に見える分。
+// 重なる量は「ページを末尾まで scroll したときの枠の下端」から測る（送信欄の高さ − 枠の下の余白）。枠の今の位置から
+// 測ると、最低の高さを保って枠が viewport の下へはみ出す低い viewport で余白を全部見せてしまった（fix-r6 narrow）。
 function slack(el: HTMLElement, content: Element): number {
   const pad = Number.parseFloat(getComputedStyle(content).paddingBottom) || 0;
   const composer = composerOf(el);
-  const overlap = composer ? Math.max(0, el.getBoundingClientRect().bottom - composer.getBoundingClientRect().top) : 0;
+  const overlap = composer ? Math.max(0, composer.getBoundingClientRect().height - belowOf(el)) : 0;
   return Math.max(0, pad - overlap - GAP);
+}
+
+// 枠の下端から viewport の下端までに残る量（main の下の余白と、main の後ろに続く列の分）。
+function belowOf(el: HTMLElement): number {
+  const main = el.closest("main");
+  if (!main) return 0;
+  let below = Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
+  const column = main.parentElement;
+  if (column) below += Math.max(0, column.getBoundingClientRect().bottom - main.getBoundingClientRect().bottom);
+  return below;
+}
+
+// 末尾への追従後、宛先行の下で見出しが途中から始まる block を飛ばす。
+// 枠内を手で読んでいる間には呼ばず、追記・初回表示・「最新へ」の時だけ揃える。
+function alignVisibleBlock(el: HTMLElement) {
+  const toolbar = el.querySelector("[data-console-toolbar]");
+  const blocks = Array.from(el.querySelectorAll<HTMLElement>('ol[aria-label="Console の会話"] > li'));
+  if (!toolbar || blocks.length === 0) return;
+  const edge = toolbar.getBoundingClientRect().bottom;
+  const clipped = blocks.find((block) => {
+    const box = block.getBoundingClientRect();
+    return box.top < edge - 1 && box.bottom > edge + 1;
+  });
+  if (!clipped) return;
+  const next = blocks[blocks.indexOf(clipped) + 1];
+  // 最後の block 自体が長いときは末尾と送信欄の距離を優先する。
+  // その block を先頭へ戻すと、新しい返事の末尾が何百 px も上へ離れてしまう。
+  if (!next) return;
+  const start = next.getBoundingClientRect().top;
+  el.scrollTop += start - edge;
 }
 
 export function ConsoleRegion({ children }: { children: ReactNode }) {
@@ -39,22 +75,33 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
     const main = el.closest("main");
     const fitHeight = () => {
       const top = el.getBoundingClientRect().top + window.scrollY;
-      let below = 0;
-      if (main) {
-        below += Number.parseFloat(getComputedStyle(main).paddingBottom) || 0;
-        const column = main.parentElement;
-        if (column) below += Math.max(0, column.getBoundingClientRect().bottom - main.getBoundingClientRect().bottom);
-      }
-      const height = Math.max(MIN_HEIGHT, Math.floor(window.innerHeight - top - below));
+      const below = belowOf(el);
+      const toolbar = el.querySelector("[data-console-toolbar]");
+      const composer = composerOf(el);
+      const covered =
+        (toolbar ? toolbar.getBoundingClientRect().height : 0) +
+        (composer ? composer.getBoundingClientRect().height : 0);
+      const height = Math.max(MIN_VISIBLE + covered, Math.floor(window.innerHeight - top - below));
       if (el.style.height !== `${height}px`) el.style.height = `${height}px`;
     };
     fitHeight();
     const observer = new ResizeObserver(fitHeight);
     if (el.parentElement) observer.observe(el.parentElement);
     if (main?.parentElement) observer.observe(main.parentElement);
+    // 宛先の行・送信欄は読み込みや失敗の文で高さが変わる。後から現れることもあるので枠の子の変化も見る。
+    const watchCovered = () => {
+      for (const node of [el.querySelector("[data-console-toolbar]"), composerOf(el)]) if (node) observer.observe(node);
+    };
+    watchCovered();
+    const mutations = new MutationObserver(() => {
+      watchCovered();
+      fitHeight();
+    });
+    mutations.observe(el, { childList: true, subtree: true });
     window.addEventListener("resize", fitHeight);
     return () => {
       observer.disconnect();
+      mutations.disconnect();
       window.removeEventListener("resize", fitHeight);
     };
   }, []);
@@ -72,8 +119,10 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
       const height = content.getBoundingClientRect().height;
       const grew = height > lastHeight;
       lastHeight = height;
-      if (atBottom.current) el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
-      else if (grew) setAway(true);
+      if (atBottom.current) {
+        el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
+        alignVisibleBlock(el);
+      } else if (grew) setAway(true);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const observer = new ResizeObserver(follow);
@@ -100,6 +149,7 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
     atBottom.current = true;
     setAway(false);
     el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
+    alignVisibleBlock(el);
   }
 
   return (

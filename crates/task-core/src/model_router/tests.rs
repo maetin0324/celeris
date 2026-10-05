@@ -286,9 +286,18 @@ fn routing_old_events_deserialize_without_optimizer() {
         record: Box::new(record),
     };
     let new: Event = serde_json::from_value(serde_json::to_value(new).unwrap()).unwrap();
-    assert_eq!(
-        crate::routing_audit::routing_audit(&task, &[old]),
-        crate::routing_audit::routing_audit(&task, &[new])
-    );
+    let old_audit = crate::routing_audit::routing_audit(&task, &[old]);
+    let new_audit = crate::routing_audit::routing_audit(&task, &[new]);
+    // optimizer trace は ADR §9 のとおり task routing の optional trace。旧 event は None、
+    // 新 event は Some(trace) を投影する。それ以外の欄は旧新で等しいことを確かめる。
+    assert!(old_audit.iter().all(|a| a.optimizer.is_none()));
+    assert!(new_audit.iter().all(|a| a.optimizer.is_some()));
+    let strip = |mut audits: Vec<crate::routing_audit::RoutingAudit>| {
+        for a in &mut audits {
+            a.optimizer = None;
+        }
+        audits
+    };
+    assert_eq!(strip(old_audit), strip(new_audit));
     assert!(json.to_string().contains("routing_decided"));
 }

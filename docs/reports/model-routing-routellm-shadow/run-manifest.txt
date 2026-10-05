@@ -1,0 +1,50 @@
+# 実 RouteLLM sidecar の start-stop と上限付き shadow の原票（人の手順、内部 shadow 評価に限る）
+# 実行者: Fable（人の側の手順、承認者 rmaeda）。実行日: 2026-10-05（UTC）。host: Celeris 本番 host（本番 daemon・DB・~/.config/celeris には触れていない）
+# weights は再配布・公開しない。この dir に weights・venv は無い（hash と freeze だけ）。
+
+worktree-head-at-run: 5c9930b0c5182b94d8216b19bd0004f096c4c116
+machine: AMD Ryzen Threadripper PRO 3945WX 12-Cores, 24 CPU(s), RAM 110 GiB, GPU 不使用（torch CPU wheel）
+OMP_NUM_THREADS: 4
+python: 3.11.15（uv が取得した cpython、venv=/local/celeris/data/scratch/routellm/venv、repo・release・~/.config/celeris の外）
+torch: 2.3.1+cpu（https://download.pytorch.org/whl/cpu の wheel、sha256 a272defe305dbd944aa28a91cc3db0f0149495b3ebec2e39723a7224fa05dc57 を index の値と照合）
+transformers: 4.41.2
+litellm: 1.60.0
+routellm: 0.2.0 @ git+https://github.com/lm-sys/RouteLLM.git@0b64fdafe049e596a3f5657c219329f24af24198
+numpy: 1.26.4
+venv-freeze: venv-freeze.txt（uv pip freeze、71 行、sha256 41f559bd31280944abd921706f177e1718cc395a995f885d7031c7f71e4f8f2b）
+
+weights-repository: routellm/bert_gpt4_augmented
+weights-revision: 86237e3df400762178ea98379477b8296e66d5e4（HfApi().model_info の sha、snapshot_download(revision=<この sha>)）
+weights-dir: /local/celeris/data/scratch/routellm/weights/bert_gpt4_augmented
+weights-files: weights-files.sha256（各 file の sha256。model.safetensors・tokenizer.json・sentencepiece.bpe.model は HF の LFS oid と一致、LICENSE・config.json・special_tokens_map.json・tokenizer_config.json は git blob id と一致）
+weights-sha256: 6ec0b06c8af3c1b11aaefccb55f51f01ab531f80e276a7ad283607eec279cae5（runbook §10.1 の式）
+tokenizer-files: sentencepiece.bpe.model special_tokens_map.json tokenizer.json tokenizer_config.json（checkpoint 内に有り）
+tokenizer-sha256: 06112d98f5dd4e57a3aa9ee546d938a7c671b99ae5e25eaa9ef6b411ce15b492（上の 4 file を LC_ALL=C sort して sha256sum | sha256sum）
+model-architecture: config.json は xlm-roberta（XLMRobertaForSequenceClassification 系、model.safetensors 1112208084 bytes）
+
+取得範囲: snapshot_download の allow_patterns で推論に要る file だけ取得（config.json model.safetensors tokenizer.json tokenizer_config.json special_tokens_map.json sentencepiece.bpe.model LICENSE）。
+  学習状態（optimizer.pt 2.2 GB、rng_state.pth、scheduler.pt、trainer_state.json、training_args.bin）と .gitattributes は取得していない。
+  huggingface_hub 0.23.4 が local_dir に書く .huggingface/（download 時刻入りの metadata）は checksum の前に weights-dir の外へ移した（式の除外 ./.cache/* と同じ趣旨、再計算で同じ値になるように）。
+license の観測（2026-10-05）: HF の model 情報に cardData なし・license tag なし（調査 §5 と同じ）。ただし repo には LICENSE file（Apache License 2.0 の本文、git blob f49a4e16e68b128803cc2dcea614603632b04eac）がある。
+  人の決定（内部 shadow 評価に限る、再配布・公開なし）はそのまま。外部発表前の license 再判断の材料として記録する。
+
+strong/weak のラベル: CELERIS_ROUTELLM_STRONG=legacy:claude:opus CELERIS_ROUTELLM_WEAK=legacy:qwen:qwen3.8-27b
+  （weak は runbook §2 の例の profile id。strong は本番 config を読まずに付けたラベル。BERTRouter の win-rate は prompt だけで決まり、ラベルに依らない）
+
+dataset: dataset/（合成の /estimate v1 要求 30 件、人が作った試験用 prompt。easy 10・medium 10・hard 10、context_features.synthetic_category。本番の prompt・利用者の入力は含まない）
+  dataset.sha256 は各 file の sha256。real-sidecar-results.json の sha256 は送信 body（json.dumps 後）の値で、file の hash とは別。
+  real-sidecar-results.json に prompt 本文は入っていない（script の仕様どおり hash だけ）。
+
+commands（cwd = この worktree、PATH 先頭に venv/bin、共通 env: CELERIS_ROUTELLM_REAL=1 CELERIS_ROUTELLM_WEIGHTS_DIR=<weights-dir> OMP_NUM_THREADS=4 と上の STRONG/WEAK）:
+  /usr/bin/time -v sh scripts/model-routing/real-sidecar-check.sh start-stop                         → exit 0（start-stop.log）
+  /usr/bin/time -v sh scripts/model-routing/real-sidecar-check.sh shadow --dataset <scratch>/dataset --max-requests 50 --out docs/reports/model-routing-routellm-shadow
+                                                                                                 → exit 0（shadow.log、real-sidecar-results.json）
+  上限: --max-requests 50（dataset 30 件 ≤ 50）。外部呼び出し: 0（sidecar は HF_HUB_OFFLINE=1、loopback のみ）。
+
+結果の要点（転記は close worker が行う）:
+  start-stop: ready・finite pair score 1・stop 後 port 閉鎖・sidecar exit 0。wall 15.01 s、Maximum resident set size 2643756 kB
+  shadow: dataset 30 / completed 30 / failed 0 / dropped 0、wall 5.94 s、Maximum resident set size 2623488 kB
+  shadow の /estimate 応答時間（client 側 ms、30 件）: mean 44.62、p50 31.57、p95 42.93、max 426.33（初回）
+  raw_pair_win_rate の平均（未校正）: easy 0.4003（0.1581–0.5551）、medium 0.4543（0.2632–0.6671）、hard 0.4731（0.2907–0.6525）
+  この script の shadow は sidecar 単体の評価。Celeris の routing 監査・evaluate --policy estimator（coverage・
+  estimator_version_mismatch・hard constraint 違反・primary 変更数）は本番 config を opt-in しないと出ないため未実行（§10.7 は人の別判断）。

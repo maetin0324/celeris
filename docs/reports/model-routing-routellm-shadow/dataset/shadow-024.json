@@ -1,0 +1,1 @@
+{"request_id": "shadow-024", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Implement a lock-free single-producer single-consumer ring buffer in Rust with correct memory orderings, and justify each ordering."}

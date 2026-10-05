@@ -1,0 +1,1 @@
+{"request_id": "shadow-015", "context_features": {"synthetic_category": "medium"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Write a shell one-liner that counts lines in all .rs files under a directory."}

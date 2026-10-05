@@ -1,0 +1,1 @@
+{"request_id": "shadow-026", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Explain the CAP theorem's implications for a geo-replicated task queue and propose a design that guarantees exactly-once task completion semantics."}

@@ -1,0 +1,1 @@
+{"request_id": "shadow-028", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Refactor a 2000-line Rust module with circular dependencies between scheduler and store into layered crates; describe the migration steps that keep tests green."}

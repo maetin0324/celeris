@@ -526,12 +526,12 @@ Celeris は weights を自動取得・同梱・再配布しない。**実行者�
 routellm-commit: 0b64fdafe049e596a3f5657c219329f24af24198
 wrapper-revision: d5225fc41210a829ea05cf9a8bdacc692f51f254
 weights-repository: routellm/bert_gpt4_augmented
-weights-revision: 未記入
-weights-sha256: 未記入
+weights-revision: 86237e3df400762178ea98379477b8296e66d5e4
+weights-sha256: 6ec0b06c8af3c1b11aaefccb55f51f01ab531f80e276a7ad283607eec279cae5
 tokenizer-repository: routellm/bert_gpt4_augmented
-tokenizer-revision: 未記入
-tokenizer-sha256: 未記入
-routellm-weights-use: pending
+tokenizer-revision: 86237e3df400762178ea98379477b8296e66d5e4（checkpoint 内に tokenizer.json・tokenizer_config.json・special_tokens_map.json・sentencepiece.bpe.model あり）
+tokenizer-sha256: 06112d98f5dd4e57a3aa9ee546d938a7c671b99ae5e25eaa9ef6b411ce15b492（上の 4 file を LC_ALL=C sort して sha256sum | sha256sum）
+routellm-weights-use: approved
 ```
 
 - `routellm-commit` は RouteLLM の full SHA（ADR の `0b64fdafe049`）。`requirements.lock` の
@@ -549,23 +549,30 @@ routellm-weights-use: pending
 | --- | --- | --- |
 | RouteLLM code（`0b64fdafe049`） | Apache-2.0（[LICENSE](https://github.com/lm-sys/RouteLLM/blob/0b64fdafe049/LICENSE)） | 取り込み対象に NOTICE なし。Celeris は同梱せず pip で取得 |
 | Celeris wrapper（`routellm_sidecar.py`） | Celeris のリポジトリと同じ | RouteLLM のコードを複写していない（import のみ） |
-| weights / tokenizer（`routellm/bert_gpt4_augmented`） | **未確認**（HF の `cardData.license` も `license:` tag も無い。調査 §5） | コードの Apache-2.0 から推定しない。§10.3 の承認まで取得・使用しない |
+| weights / tokenizer（`routellm/bert_gpt4_augmented`） | model card に宣言なし（HF の `cardData.license` も `license:` tag も無い。調査 §5）。2026-10-05 の取得時、repo に Apache License 2.0 本文の `LICENSE` file（git blob `f49a4e16e68b`）を観測 | コードの Apache-2.0 から推定しない。§10.3 の人の決定どおり内部 shadow 評価に限る（再配布・公開なし、外部発表前に人が再判断） |
 | torch / transformers / litellm | BSD-3-Clause / Apache-2.0 / MIT（enterprise を除く） | 専用 venv に入れるだけで再配布しない。将来 image に同梱するなら各配布物の notice を付ける |
 
 ### 10.3 承認記録（ADR §7.3 `routellm-weights-use`）
 
-- 状態: `routellm-weights-use` は **pending**（2026-10-05 時点。§10.1 の block が正）。値は `approved` か
-  `pending` だけ。
+- 状態: `routellm-weights-use` は **approved**（2026-10-05、内部 shadow 評価に限る。§10.1 の block が正）。値は
+  `approved` か `pending` だけ。
 - `pending` の間は weights を取得せず、実 sidecar の起動（§10.6）と実 shadow 評価をしない。偽 classifier
   （`--fake-classifier`）の合格は実測の代わりにならない。
 - 承認したら人が次を記録する: 承認日・承認者・確認した利用条件の根拠（URL と確認日）・対象 revision・checksum。
   block の `routellm-weights-use: approved` と `weights-*`/`tokenizer-*` を埋め、この下に追記する。
 
 ```text
-approval-date: 未記入
-approver: 未記入
-terms-evidence: 未記入
+approval-date: 2026-10-05
+approver: rmaeda（人の決定、内部 shadow 評価に限る）
+terms-evidence: https://huggingface.co/routellm/bert_gpt4_augmented （2026-10-05 確認: model card に license 宣言なし・cardData なし・license tag なし。repo には Apache-2.0 本文の LICENSE file あり。内部 shadow 評価に限り使用、再配布・公開しない、外部発表前に人が再判断）
 ```
+
+- 人の決定（2026-10-05、`routellm-weights-use`）: `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`、HF に
+  license 宣言なし）は**内部の shadow 評価に限り**使ってよい。再配布・公開はしない。外部発表の前に人が license を
+  再判断する。実 sidecar の start-stop と上限付き shadow は人（Fable）が本番 host で §10.4〜§10.7 と
+  `scripts/model-routing/real-sidecar-check.sh` に沿って実行し、原票を `docs/reports/model-routing-routellm-shadow/` に置く。
+  上の block は、実行時に取得した weights の full revision・checksum と承認者・根拠を記入した時点で `approved` にする
+  （それまでは `pending`。`check-runbook.sh` は `approved` に full SHA と checksum を要求する）。
 
 ### 10.4 依存の pin と構築
 
@@ -596,10 +603,13 @@ exit 0。構築はネットワークを使うので人が行う（Celeris の ru
 
 ### 10.5 CPU / GPU 要件
 
-- **検証済み構成はまだ無い**（承認待ちのため実測していない）。下は目安で、動作保証ではない。
-  未検証の CPU/GPU 構成を保証しない。
-- CPU: x86_64 Linux、torch の CPU wheel。BERT-base 相当（約 1.1 億 parameter、fp32 で weights 約 0.45 GB）を
-  1 process に読む。thread 数は `OMP_NUM_THREADS` で絞る（例: 4）。peak RAM は未計測。
+- **検証済み構成（2026-10-05、CPU のみ）**: AMD Ryzen Threadripper PRO 3945WX（12 core / 24 thread）、RAM 110 GiB、
+  GPU 不使用。Python 3.11.15、torch 2.3.1+cpu、transformers 4.41.2、`OMP_NUM_THREADS=4`。peak RSS（`/usr/bin/time -v`
+  の Maximum resident set size）は start-stop 約 2.6 GB（2643756 kB）、30 件 shadow 約 2.6 GB（2623488 kB）。
+  原票は `docs/reports/model-routing-routellm-shadow/`（`run-manifest.txt`）。未検証の CPU/GPU 構成を保証しない。
+- CPU: x86_64 Linux、torch の CPU wheel。`routellm/bert_gpt4_augmented`（revision `86237e3df400`）の checkpoint は
+  BERT-base ではなく XLM-RoBERTa の sequence classification（`model.safetensors` 約 1.1 GB）で、1 process に読む。
+  当初の目安（BERT-base 相当・weights 約 0.45 GB）は誤り。thread 数は `OMP_NUM_THREADS` で絞る（例: 4）。
 - GPU（任意）: torch 2.3.1 の CUDA 12.1 か 11.8 の wheel と、それに合う NVIDIA driver。VRAM は未計測。
 - 最初の実測で、試した機材（CPU 型番・コア数・RAM、GPU 型番・VRAM・CUDA/driver）と peak RAM/VRAM
   （例: `/usr/bin/time -v` の Maximum resident set size、`nvidia-smi --query-gpu=memory.used --format=csv`）を

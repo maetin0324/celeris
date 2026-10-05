@@ -526,12 +526,12 @@ Celeris は weights を自動取得・同梱・再配布しない。**実行者�
 routellm-commit: 0b64fdafe049e596a3f5657c219329f24af24198
 wrapper-revision: d5225fc41210a829ea05cf9a8bdacc692f51f254
 weights-repository: routellm/bert_gpt4_augmented
-weights-revision: 未記入
-weights-sha256: 未記入
+weights-revision: 86237e3df400762178ea98379477b8296e66d5e4
+weights-sha256: 6ec0b06c8af3c1b11aaefccb55f51f01ab531f80e276a7ad283607eec279cae5
 tokenizer-repository: routellm/bert_gpt4_augmented
-tokenizer-revision: 未記入
-tokenizer-sha256: 未記入
-routellm-weights-use: pending
+tokenizer-revision: 86237e3df400762178ea98379477b8296e66d5e4（checkpoint 内に tokenizer.json・tokenizer_config.json・special_tokens_map.json・sentencepiece.bpe.model あり）
+tokenizer-sha256: 06112d98f5dd4e57a3aa9ee546d938a7c671b99ae5e25eaa9ef6b411ce15b492（上の 4 file を LC_ALL=C sort して sha256sum | sha256sum）
+routellm-weights-use: approved
 ```
 
 - `routellm-commit` は RouteLLM の full SHA（ADR の `0b64fdafe049`）。`requirements.lock` の
@@ -562,9 +562,9 @@ routellm-weights-use: pending
   block の `routellm-weights-use: approved` と `weights-*`/`tokenizer-*` を埋め、この下に追記する。
 
 ```text
-approval-date: 未記入
-approver: 未記入
-terms-evidence: 未記入
+approval-date: 2026-10-05
+approver: rmaeda（人の決定、内部 shadow 評価に限る）
+terms-evidence: https://huggingface.co/routellm/bert_gpt4_augmented （2026-10-05 確認: model card に license 宣言なし・cardData なし・license tag なし。repo には Apache-2.0 本文の LICENSE file あり。内部 shadow 評価に限り使用、再配布・公開しない、外部発表前に人が再判断）
 ```
 
 - 人の決定（2026-10-05、`routellm-weights-use`）: `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`、HF に

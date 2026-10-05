@@ -7506,6 +7506,228 @@
       ],
       "type": "object"
     },
+    "EstimatorComparison": {
+      "description": "estimator の選択と比較相手の関係。",
+      "oneOf": [
+        {
+          "enum": [
+            "same",
+            "differs"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "no_candidate",
+          "description": "estimator 側で選べる候補が無かった。",
+          "type": "string"
+        }
+      ]
+    },
+    "EstimatorDependencyAudit": {
+      "description": "descriptor の依存。記録から分かる値だけ `Some`（未記録は推定しない）。",
+      "properties": {
+        "external_embeddings": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "needs_network": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "needs_prompt": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "not_allowed": {
+          "description": "宣言された依存が daemon の許可（network allowlist・privacy）に合わず送らなかった。",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "EstimatorShadowAudit": {
+      "description": "`RoutingShadowAudit.estimator`（`kind = estimator` のときだけ）。",
+      "properties": {
+        "dependencies": {
+          "$ref": "#/$defs/EstimatorDependencyAudit"
+        },
+        "estimator_id": {
+          "description": "`policy_version` が `estimator:<id>/<version>` のときの id と version。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimator_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "$ref": "#/$defs/EstimatorShadowOutcome"
+        },
+        "overhead_ms": {
+          "description": "推論 overhead（sidecar 往復 ms）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShadowReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "unavailable_reason": {
+          "description": "評価不能の理由語（allowlist のみ。自由文は出さない）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "vs_heuristic": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimatorComparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "estimator の選択と、同じ候補集合での heuristic 首位の差。completed のみ。"
+        },
+        "vs_primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimatorComparison"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "estimator の選択と heuristic primary（実際の primary 決定）の差。completed のみ。"
+        }
+      },
+      "required": [
+        "dependencies",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "EstimatorShadowOutcome": {
+      "description": "estimator shadow 1 件の結果。primary の成否とは別。",
+      "oneOf": [
+        {
+          "enum": [
+            "completed",
+            "failed",
+            "timeout",
+            "dropped"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "prompt_required",
+          "description": "sidecar が prompt を要したが `send_prompt=false`（または prompt allowlist 外）で評価不能。",
+          "type": "string"
+        }
+      ]
+    },
+    "EstimatorShadowSummary": {
+      "description": "task の estimator shadow の要約（run を跨いで数える）。対象が 0 件なら作らない。",
+      "properties": {
+        "completed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "coverage": {
+          "description": "completed / targets。",
+          "format": "double",
+          "type": "number"
+        },
+        "differs_from_heuristic": {
+          "description": "completed のうち heuristic 首位と選択が違った件数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "differs_from_primary": {
+          "description": "completed のうち heuristic primary と選択が違った件数。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "dropped": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "estimators": {
+          "description": "記録に現れた estimator（`<id>/<version>`、重複なし・昇順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "failed": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mean_overhead_ms": {
+          "description": "overhead の記録がある件の平均（ms）。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "prompt_required": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "targets": {
+          "description": "estimator shadow の記録数（評価の対象）。",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "timeout": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "targets",
+        "completed",
+        "failed",
+        "timeout",
+        "dropped",
+        "prompt_required",
+        "coverage",
+        "differs_from_primary",
+        "differs_from_heuristic",
+        "estimators"
+      ],
+      "type": "object"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
@@ -21259,6 +21481,17 @@
             "null"
           ]
         },
+        "estimator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimatorShadowAudit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 5: `kind = estimator` のときだけ。estimator の id/version・依存・評価不能理由・\nheuristic primary との差（primary の outcome・attempts とは別）。"
+        },
         "input_tokens": {
           "format": "uint64",
           "minimum": 0,
@@ -24732,6 +24965,17 @@
             "null"
           ]
         },
+        "estimator_shadow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EstimatorShadowSummary"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 5: run を跨いだ estimator shadow（`routing_shadow[].estimator`）の coverage・失敗/timeout・\nprompt_required・heuristic primary との差・推論 overhead。primary の outcome とは別。無ければ省く。"
+        },
         "routing": {
           "anyOf": [
             {
@@ -24744,7 +24988,7 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
-          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。\nPhase 4 の `routing_shadow` は primary の結果から独立した optional の配列。",
+          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。\nPhase 4 の `routing_shadow` は primary の結果から独立した optional の配列。Phase 5 の estimator\nshadow は各要素の `estimator`（id/version・依存・評価不能理由・heuristic primary との差）。",
           "items": {
             "$ref": "#/$defs/RunRoutingAudit"
           },

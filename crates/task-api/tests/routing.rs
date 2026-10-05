@@ -161,6 +161,153 @@ async fn routing_shadow_audit_keeps_primary_outcome_separate() {
     assert_eq!(stored.attempts, task.attempts);
 }
 
+/// Phase 5: estimator shadow は `routing_shadow[].estimator` と task の `estimator_shadow` 要約に出る。
+/// coverage・失敗/timeout/dropped/prompt_required・推論 overhead・heuristic primary との差を返し、
+/// primary の outcome・attempts・review は変えない。自由文の detail は写さない。
+#[tokio::test]
+async fn routing_estimator_shadow_report_records_coverage_and_limits() {
+    let env = env_with_token();
+    let task = new_task(TaskKind::Execute, Status::Done);
+    env.seed(&task);
+    let id = task.id;
+    let mut primary = serde_json::to_value(routing_decided("run-1", None)).unwrap();
+    primary["record"]["optimizer"] = trace_json("decision-1", "dispatch", Some("run-1"), None);
+    for event in [
+        serde_json::from_value(primary).unwrap(),
+        Event::WorkerFinished {
+            run_id: "run-1".into(),
+            outcome: "done: ok".into(),
+            usage: None,
+            role: None,
+            metrics: None,
+            end: None,
+        },
+        serde_json::from_value(json!({
+            "type": "routing_outcome_recorded", "outcome_id": "out-1",
+            "decision_id": "decision-1", "run_id": "run-1",
+            "evaluation_version": "routing-outcome/1", "acceptance_passed": true,
+            "review_passed": true, "reward": 1.0
+        }))
+        .unwrap(),
+    ] {
+        env.store.append_event(id, &event).unwrap();
+    }
+    let est = |shadow_id: &str, extra: serde_json::Value| {
+        let mut v = json!({ "type": "routing_shadow_recorded", "shadow_id": shadow_id,
+            "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "estimator",
+            "policy_version": "estimator:routellm-bert/0.2.2" });
+        for (k, x) in extra.as_object().unwrap() {
+            v[k] = x.clone();
+        }
+        v
+    };
+    for shadow in [
+        // Phase 4 の decision shadow は estimator 欄を持たない。
+        json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-decision",
+            "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "decision",
+            "status": "completed", "policy_version": "p4", "candidate_model": "candidate" }),
+        est(
+            "est-same",
+            json!({ "status": "completed", "latency_ms": 10,
+            "detail": "same_as_primary;heuristic:same_as_primary", "candidate_model": "model-std" }),
+        ),
+        est(
+            "est-diff",
+            json!({ "status": "completed", "latency_ms": 30,
+            "detail": "differs_from_primary;heuristic:differs_from_primary",
+            "candidate_model": "model-cheap" }),
+        ),
+        est(
+            "est-timeout",
+            json!({ "status": "failed", "reason": "timeout",
+            "detail": "timeout", "latency_ms": 200 }),
+        ),
+        est(
+            "est-prompt",
+            json!({ "status": "dropped", "reason": "privacy",
+            "detail": "prompt_required", "latency_ms": 2 }),
+        ),
+        est(
+            "est-deps",
+            json!({ "status": "dropped", "reason": "privacy",
+            "detail": "dependencies_not_allowed" }),
+        ),
+        est(
+            "est-upstream",
+            json!({ "status": "failed", "reason": "upstream_error",
+            "detail": "secret free text http://x", "policy_version": "estimator-bad" }),
+        ),
+        est(
+            "est-busy",
+            json!({ "status": "dropped", "reason": "concurrency_limit",
+            "detail": "circuit_open" }),
+        ),
+    ] {
+        env.store
+            .append_event(id, &serde_json::from_value(shadow).unwrap())
+            .unwrap();
+    }
+    let resp = send(
+        &env.router(),
+        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin()),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    let run = &body["runs"][0];
+    // primary は変わらない。
+    assert_eq!(run["model"], "model-std");
+    assert_eq!(run["routing_outcome"]["review_passed"], true);
+    let shadows = run["routing_shadow"].as_array().unwrap();
+    assert_eq!(shadows.len(), 8);
+    assert!(shadows[0].get("estimator").is_none());
+    let e = |i: usize| &shadows[i]["estimator"];
+    assert_eq!(e(1)["estimator_id"], "routellm-bert");
+    assert_eq!(e(1)["estimator_version"], "0.2.2");
+    assert_eq!(e(1)["outcome"], "completed");
+    assert_eq!(e(1)["vs_primary"], "same");
+    assert_eq!(e(1)["vs_heuristic"], "same");
+    assert_eq!(e(1)["overhead_ms"], 10);
+    assert_eq!(shadows[1]["differs_from_primary"], false);
+    assert_eq!(e(2)["vs_primary"], "differs");
+    assert_eq!(e(2)["vs_heuristic"], "differs");
+    assert_eq!(shadows[2]["differs_from_primary"], true);
+    assert_eq!(e(3)["outcome"], "timeout");
+    assert_eq!(e(3)["unavailable_reason"], "timeout");
+    assert!(e(3).get("vs_primary").is_none());
+    assert_eq!(e(4)["outcome"], "prompt_required");
+    assert_eq!(e(4)["reason"], "privacy");
+    assert_eq!(e(4)["dependencies"]["needs_prompt"], true);
+    assert_eq!(e(5)["outcome"], "dropped");
+    assert_eq!(e(5)["dependencies"]["not_allowed"], true);
+    // 記録に無い依存は推定しない。
+    assert!(e(5)["dependencies"].get("needs_network").is_none());
+    assert!(e(5)["dependencies"].get("external_embeddings").is_none());
+    assert_eq!(e(6)["outcome"], "failed");
+    assert!(e(6).get("unavailable_reason").is_none());
+    assert!(e(6).get("estimator_id").is_none());
+    assert!(!resp.text().contains("secret free text"));
+    assert_eq!(e(7)["outcome"], "dropped");
+    assert_eq!(e(7)["unavailable_reason"], "circuit_open");
+
+    let summary = &body["estimator_shadow"];
+    assert_eq!(summary["targets"], 7);
+    assert_eq!(summary["completed"], 2);
+    assert_eq!(summary["failed"], 1);
+    assert_eq!(summary["timeout"], 1);
+    assert_eq!(summary["dropped"], 2);
+    assert_eq!(summary["prompt_required"], 1);
+    assert_eq!(summary["coverage"], 2.0 / 7.0);
+    assert_eq!(summary["differs_from_primary"], 1);
+    assert_eq!(summary["differs_from_heuristic"], 1);
+    assert_eq!(summary["mean_overhead_ms"], 242.0 / 4.0);
+    assert_eq!(summary["estimators"], json!(["routellm-bert/0.2.2"]));
+
+    let stored = env.store.get(id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done);
+    assert_eq!(stored.attempts, task.attempts);
+}
+
 /// run の監査（lane・model・規則・features・メトリクス・レビュー）と、捨てた担当が返る。
 #[tokio::test]
 async fn routing_returns_per_run_audit_and_dropped_assignee() {

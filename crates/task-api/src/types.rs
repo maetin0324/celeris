@@ -128,11 +128,16 @@ pub struct TaskRoutingView {
     /// run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
     /// 要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・
     /// `routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。
-    /// Phase 4 の `routing_shadow` は primary の結果から独立した optional の配列。
+    /// Phase 4 の `routing_shadow` は primary の結果から独立した optional の配列。Phase 5 の estimator
+    /// shadow は各要素の `estimator`（id/version・依存・評価不能理由・heuristic primary との差）。
     pub runs: Vec<task_ops::routing_audit::RunRoutingAudit>,
     /// Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unbound_requests: Vec<task_ops::routing_audit::RequestRoutingAudit>,
+    /// Phase 5: run を跨いだ estimator shadow（`routing_shadow[].estimator`）の coverage・失敗/timeout・
+    /// prompt_required・heuristic primary との差・推論 overhead。primary の outcome とは別。無ければ省く。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimator_shadow: Option<task_ops::routing_audit::EstimatorShadowSummary>,
 }
 
 /// タイムラインの 1 件（ADR-0044 D5）。`at` は RFC 3339。

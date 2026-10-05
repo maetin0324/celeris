@@ -213,7 +213,7 @@ export function ProjectsListScreen({ archived }: { archived: boolean }) {
         <label className="flex min-h-11 w-fit items-center gap-2 text-label" data-testid="projects-filter">
           <input
             type="checkbox"
-            className="size-5 accent-primary"
+            className="h-11 w-11 accent-primary"
             checked={archived}
             onChange={(event) =>
               void navigate({ to: "/projects", search: event.target.checked ? { archived: true } : {} })

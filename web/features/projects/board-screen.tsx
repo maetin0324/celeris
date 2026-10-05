@@ -309,7 +309,7 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
               <input
                 name="show_support"
                 type="checkbox"
-                className="size-5 accent-primary"
+                className="size-11 accent-primary"
                 defaultChecked={filter.show_support}
               />
               裏方も表示

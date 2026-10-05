@@ -1086,6 +1086,7 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
 export type TierSource = "human" | "system" | "hint" | "default";
+export type RoutingMode = "legacy" | "shadow" | "enforce";
 /**
  * ADR-0132 付記 L8: 候補の種類。
  */
@@ -1466,6 +1467,8 @@ export type InstanceRole = "active" | "standby" | "draining" | "verify";
  * **`container` は ADR-0043 A3 の工事**（この Phase では読むだけで、実行には使わない）。
  */
 export type RepoRun = "auto" | "host" | "container";
+export type Billing = "subscription" | "metered_api" | "self_hosted";
+export type Objective = "quality_first" | "balanced" | "resource_first";
 /**
  * ADR-0072 D20（Phase E5）: タスクの状態バッジの横に出す、今どの段階かの導出値（D6 の R3 の代替。
  * 状態機械そのものには足さない）。`Task.status` から次のとおり決める（[`build_execution_view`] 参照）:
@@ -1707,6 +1710,7 @@ export interface ApiV1Schema {
   reports_read_result: ReportsReadResult;
   retry: RetryBody;
   retry_result: RetryResult;
+  routing_catalog: RoutingCatalogView;
   run_list: RunList;
   secret_put: SecretPutResult;
   secrets: SecretList;
@@ -4790,6 +4794,10 @@ export interface RoutingRecord {
    */
   harness?: string | null;
   /**
+   * Optional Phase 1 optimizer audit. Older events omit this field.
+   */
+  optimizer?: RoutingTraceV1 | null;
+  /**
    * Ownership 層: 担当（`org_nodes.id`）。
    */
   org_node?: string | null;
@@ -4887,6 +4895,45 @@ export interface ShadowDecision {
    */
   confidence: number;
   lane: Tier;
+}
+export interface RoutingTraceV1 {
+  candidates: CandidateTrace[];
+  catalog_version: string;
+  decision_id: string;
+  estimator_version: string;
+  fallback_order: string[];
+  feature_version: string;
+  mode: RoutingMode;
+  observed_at?: string | null;
+  parent_decision_id?: string | null;
+  policy_version: string;
+  reasons: string[];
+  request_id?: string | null;
+  requested_lane: Tier;
+  run_id?: string | null;
+  selected?: string | null;
+  selected_lane?: Tier | null;
+  snapshot_id: string;
+  stage: string;
+  task_id?: string | null;
+  work_unit_id?: string | null;
+}
+export interface CandidateTrace {
+  cost_usd?: number | null;
+  deployment_id: string;
+  eligible_provider_ids: string[];
+  excluded_reasons: string[];
+  latency_ms?: number | null;
+  model_profile_id: string;
+  pressure?: number | null;
+  quality?: QualityEstimate | null;
+  score?: number | null;
+}
+export interface QualityEstimate {
+  confidence?: number | null;
+  feature_version: string;
+  index?: number | null;
+  reasons: string[];
 }
 /**
  * Model 層（lane → provider / model）。
@@ -9046,6 +9093,103 @@ export interface RetryResult {
   task_id: string;
 }
 /**
+ * Phase 1: credential-free model and deployment catalog.
+ */
+export interface RoutingCatalogView {
+  catalog_version: string;
+  deployments: CatalogDeploymentView[];
+  mode: RoutingMode;
+  models: CatalogModelView[];
+  policies: RoutingPolicy[];
+  warnings: string[];
+}
+/**
+ * A deployment is a source/model pairing; credentials and endpoint URLs are omitted.
+ */
+export interface CatalogDeploymentView {
+  allowed_lanes: Tier[];
+  billing: Billing;
+  id: string;
+  model_profile_id: string;
+  price_override?: TokenPricing | null;
+  source_ref: string;
+  upstream_model: string;
+}
+export interface TokenPricing {
+  as_of?: string | null;
+  cached_input_usd_per_million?: number | null;
+  input_usd_per_million?: number | null;
+  output_usd_per_million?: number | null;
+  provenance: string;
+}
+/**
+ * Catalog model metadata. Unknown capability support is null.
+ */
+export interface CatalogModelView {
+  capabilities: CatalogCapabilitiesView;
+  context_limits: ContextLimits;
+  family: string;
+  id: string;
+  pricing?: TokenPricing | null;
+  quality?: QualityIndex[] | null;
+  revision: string;
+}
+/**
+ * Capability support is nullable because legacy configuration may not specify it.
+ */
+export interface CatalogCapabilitiesView {
+  reasoning_efforts?: string[] | null;
+  streaming?: boolean | null;
+  structured_output?: boolean | null;
+  tools?: boolean | null;
+  vision?: boolean | null;
+}
+export interface ContextLimits {
+  input?: number | null;
+  output?: number | null;
+  total?: number | null;
+}
+export interface QualityIndex {
+  domain: string;
+  evaluation_version: string;
+  index: number;
+  provenance: string;
+  samples?: number | null;
+}
+export interface RoutingPolicy {
+  constraints: Constraints;
+  escalation: boolean;
+  fallback: boolean;
+  lane: Tier;
+  local_preference: boolean;
+  min_quality: number;
+  mode: RoutingMode;
+  normalization: Normalization;
+  objective: Objective;
+  prefer_free: boolean;
+  version: string;
+  weights: Weights;
+}
+export interface Constraints {
+  allowed_deployments?: string[] | null;
+  allowed_sources?: string[] | null;
+  data_retention_allowed?: boolean | null;
+  external_network_allowed?: boolean | null;
+  max_cost_usd?: number | null;
+  max_latency_ms?: number | null;
+  required_region?: string | null;
+}
+export interface Normalization {
+  cost_reference_usd: number;
+  latency_reference_ms: number;
+}
+export interface Weights {
+  cost: number;
+  latency: number;
+  pressure: number;
+  quality: number;
+}
+/**
  * `GET /tasks/{id}/runs`。
  */
 export interface RunList {
@@ -10049,6 +10193,10 @@ export interface RoutingAudit {
   input_tokens?: number | null;
   lane?: Tier | null;
   model?: string | null;
+  /**
+   * Phase 1 optimizer trace. Absent from events written before model routing.
+   */
+  optimizer?: RoutingTraceV1 | null;
   org_node?: string | null;
   outcome?: string | null;
   output_tokens?: number | null;

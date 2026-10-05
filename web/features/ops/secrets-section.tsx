@@ -304,7 +304,7 @@ export function SecretsSection() {
   const items = secrets.data?.items ?? [];
   return (
     <section className="min-w-0 space-y-3" aria-label="secret と LLM source">
-      <h2 className={sectionTitleClass}>secret</h2>
+      <h2 className={sectionTitleClass}>秘密の値（secret）</h2>
       <p className="text-label text-muted-foreground">
         値は表示しません。保存の有無・更新日時・使っている所を確かめ、変えるときは「置き換え」で新しい値を入れます。
       </p>

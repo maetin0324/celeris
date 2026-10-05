@@ -1252,6 +1252,13 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
+    /// ADR-0132 付記 L1/L2: cheap lane で順位付けの前に試すローカルの行（設定順）。空なら前段を走らせない。
+    local_providers: Vec<LocalProviderSpec>,
+    /// ADR-0132 付記 L4: ローカルの行の health 検査（既定は `task_worker::probe_models`。テストは
+    /// `set_local_provider_probe` で差し替える）。**LLM は呼ばない**。
+    local_probe: LocalProviderProbe,
+    /// ADR-0132 付記 L4: health の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
+    local_probe_cache: HashMap<String, (Instant, Reachability)>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
     tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
     /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
@@ -1297,6 +1304,25 @@ impl Drop for Dispatcher {
 /// ある。既定は本物の HTTP GET）。第 2 引数は `[knowledge.langmem].api_key_secret` から解決した
 /// 平文のトークン（`llm-proxy` のように `/v1/models` が認証を要求する上流のため。値はログに出さない）。
 pub type KnowledgeProbe = Arc<dyn Fn(&str, Option<&str>) -> Reachability + Send + Sync>;
+
+/// ADR-0132 付記 L4: ローカルの行の health 検査のフック（`KnowledgeProbe` と同じ形）。第 2 引数は
+/// source の `api_key`（値はログに出さない）。
+pub type LocalProviderProbe = Arc<dyn Fn(&str, Option<&str>) -> Reachability + Send + Sync>;
+
+/// ADR-0132 付記 L4: ローカルの行の probe 先 1 つ（`GET <base_url>/models`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalHealthTarget {
+    pub base_url: String,
+    pub bearer_token: Option<String>,
+}
+
+/// ADR-0132 付記 L1/L4: ローカルの行（`[[providers]]` の id）とその probe 先。`health` が空なら
+/// 「確かめられない」として生きている扱い。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalProviderSpec {
+    pub provider: ProviderId,
+    pub health: Vec<LocalHealthTarget>,
+}
 
 /// ADR-0052 D2: フォールバックする run に載せる上書き（`run_extras` の結果に混ぜる）。
 #[derive(Debug, Clone)]
@@ -1457,6 +1483,11 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
+            local_providers: Vec::new(),
+            local_probe: Arc::new(|base_url, bearer_token| {
+                task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
+            }),
+            local_probe_cache: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
             tunnel_listener_probe: None,
@@ -1475,6 +1506,56 @@ impl Dispatcher {
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
         self.knowledge_probe = probe;
         self.knowledge_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L1/L7: cheap lane で先に試すローカルの行を設定する（設定順。空なら付記の前と同じ）。
+    pub fn set_local_providers(&mut self, specs: Vec<LocalProviderSpec>) {
+        self.local_providers = specs;
+        self.local_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L4: ローカルの行の health 検査を差し替える（テストはネットワークに出ない）。
+    pub fn set_local_provider_probe(&mut self, probe: LocalProviderProbe) {
+        self.local_probe = probe;
+        self.local_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L4: ローカルの行の health。probe 先が無ければ「確かめられない」= 生きている扱い。
+    /// どれか 1 つが `Ok` か `Unknown` なら生きている。全部 `Unreachable` なら最初の理由を返す。
+    /// 結果は `base_url` ごとに 60 秒キャッシュ（`knowledge_reachability` と同じ型）。
+    fn local_provider_health(
+        &mut self,
+        health: &[LocalHealthTarget],
+        now: Instant,
+    ) -> Result<(), String> {
+        let mut first_reason = None;
+        for target in health {
+            let outcome = match self.local_probe_cache.get(&target.base_url) {
+                Some((checked_at, cached))
+                    if now.saturating_duration_since(*checked_at)
+                        < task_worker::PROBE_CACHE_TTL =>
+                {
+                    cached.clone()
+                }
+                _ => {
+                    let started = Instant::now();
+                    let outcome =
+                        (self.local_probe)(&target.base_url, target.bearer_token.as_deref());
+                    log_slow_step("local_provider_probe", started);
+                    tracing::debug!(base_url = %target.base_url, ?outcome, "dispatch: probed a local provider");
+                    self.local_probe_cache
+                        .insert(target.base_url.clone(), (now, outcome.clone()));
+                    outcome
+                }
+            };
+            match outcome {
+                Reachability::Ok | Reachability::Unknown { .. } => return Ok(()),
+                Reachability::Unreachable { reason } => {
+                    first_reason.get_or_insert(format!("{}: {reason}", target.base_url));
+                }
+            }
+        }
+        first_reason.map_or(Ok(()), Err)
     }
 
     /// ADR-0052 D1: `[knowledge.langmem].base_url` の到達性（60 秒キャッシュ）。

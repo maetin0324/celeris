@@ -206,6 +206,8 @@ pub(crate) fn reload_providers(
         adapters,
         new_config.account_pool_providers(),
     );
+    // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
+    dispatcher.set_local_providers(new_config.local_cheap_providers());
     dispatcher.set_snapshot_providers(provider_lives(&new_config));
     // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
     dispatcher.reload_config(

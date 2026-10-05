@@ -401,14 +401,17 @@ impl Dispatcher {
         // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
         // アダプタ・アカウントへ倒れてしまう）。
         let sticky_session = self.cos_conversation_session(&task)?;
-        let Some((adapter_id, provider_id, selected_account)) = self.select_provider_for(
+        // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
+        let (picked, provider_selection) = self.select_provider_for(
             &task.worker_hint,
             now,
             task.id,
             full,
             sticky_session.as_ref(),
             cos,
-        ) else {
+            true,
+        );
+        let Some((adapter_id, provider_id, selected_account)) = picked else {
             return Ok(false);
         };
         let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
@@ -548,6 +551,8 @@ impl Dispatcher {
                     reasoning_effort: adapter
                         .reasoning_effort_for_tier(task.worker_hint.tier)
                         .filter(|_| adapter.supports_reasoning_effort()),
+                    // ADR-0132 付記 L8: provider 選択の理由と見た候補。
+                    selection: Some(provider_selection),
                 },
                 quota_reason: Some(routing_reason.clone()),
                 decision,

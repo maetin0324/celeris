@@ -42,6 +42,11 @@ kind = "adapter"
 adapter = "acp"
 llm_source = "celeris"
 tiers = ["cheap"]
+# この行の同時実行数。ローカルの LLM（GPU 1 枚の Qwen）なら 1 のまま、vLLM 側の並列を増やしたときだけ上げる。
+# ADR-0132 付記（2026-10-04）: cheap lane の worker run は、proxy に有効な openai_compatible source と
+# `[llm_proxy.models.qwen].cheap` があれば、アカウントプール（claude-code / codex）より先にこの行を選ぶ。
+# ここが満杯（concurrency）・source に届かない（`GET <base_url>/models`）ときだけプールに倒れる。
+# 切るには `[execution] cheap_local_first = false`。
 concurrency = 1
 # ADR-0026 D3: 空でなければ session/set_config_option { configId: model_option_id, value: model } で設定する。
 # opencode 側の設定ファイルの "model" と合わせておく（下の env の OPENCODE_CONFIG を参照）。

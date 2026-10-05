@@ -63,3 +63,39 @@ tasks: [01M3YF3NSR46FM314VHG14T3N6]
 - 旧本番形の読み込みと警告、`kind` / `llm_source` の検証、API・schema の互換を試験する。新しい Rust 試験名には `provider_kind` または `cheap_only` を含める。
 - 偽上流で `celeris/frontier` / `celeris/standard` が Qwen に向かわず、cheap が Qwen 生存時は Qwen、失敗時は Claude / GPT cheap に倒れることを試験する。`qwen/frontier` / `qwen/standard` のエラーとモデル一覧も固定する。
 - 設定例・web/・gui/ の providers 画面、knowledge probe と ADR-0052 D2 の fallback を整合させ、最終検証で `cargo fmt --all -- --check`、clippy、`llm-proxy` と `task-dispatch` の試験を通す。
+
+## 付記（2026-10-04、cheap lane のローカル優先）
+
+task `01M44G5KKF8VJ0ARJH8J843T7D`。進捗は [2026-10-04-cheap-local-first](../progress/2026-10-04-cheap-local-first.md)。
+
+### 文脈
+
+人の指摘（2026-10-04）: cheap lane で Qwen が使われていない。本番の runs（2026-10-02 以降）では cheap の routing 422 件のうち `acp` / `qwen-local/qwen3.8-27b` の run は 2 件だけで、残りは `claude-pool`（sonnet）と `codex-pool`（gpt-6-luna）に回った。原因は `task_dispatch::dispatcher::provider_select::select_provider_for` の順位付けにある。アカウントプールを持つ行を残量の score で選び、プールを持たない行（`opencode-qwen`）は fallback に回し、`best_pool.or(fallback)` でプールが全部使えないときだけ選ぶ（ADR-0049）。D3 の「cheap では生きた Qwen を先に試す」は proxy の中の話で、dispatch の provider 選択には効いていなかった。
+
+### 決定
+
+- **L1. ローカルの provider の定義。** `account_pool = false`、`tiers` に cheap を含み、実効 `llm_source`（明示値、無ければ D2 の導出値）が次のどちらかの行をローカルと呼ぶ。
+  - `openai_compatible:<id>`（Qwen のトンネルへの直結。本番の `opencode-qwen` はこれ）。
+  - `celeris`（proxy）で、かつ proxy に有効な `[[llm_proxy.sources.openai_compatible]]` と `[llm_proxy.models.qwen].cheap` がある（proxy の cheap がローカルの Qwen に向かう構成）。ローカルの source が 1 つも無い proxy の行はローカルではない（従来どおり fallback の扱い）。
+  - 専用契約のアダプタ（`paperqa`・`local-deep-research`・`langmem`）の行はローカルに含めない。その adapter に固定された仕事の唯一の行であることが多く、前段で不通として外すと ADR-0052 D2 の倒し方（知識整理の fallback）を塞ぐため。これらは従来の選び方のまま。
+- **L2. cheap lane の選び方。** worker run（`dispatch_run` の選択）で lane が cheap のとき、順位付け（ADR-0049）の**前に**ローカルの行を設定順に見る。その行が (a) この仕事の `worker_hint` に合い（adapter の固定と専用アダプタの除外は `StaticPolicy` の規則のまま）、(b) cooldown 中でなく、(c) `concurrency` に空きがあり、(d) L4 の health が落ちていなければ、その行を選ぶ（理由 `local_preferred`）。
+- **L3. プールへの倒し方。** ローカルの行が 1 つも選べなければ、従来の順位付け（プールの残量 score → プールを持たない行）をそのまま走らせる。このとき、見送ったローカルの行（満杯・不通・cooldown）は fallback の候補からも外す（不通の Qwen へ「プールも満杯だから」と流さない）。理由は、空きの無いローカルが 1 つでもあれば `local_full`、そうでなく不通・cooldown なら `local_down`、hint に合うローカルが無ければ（非対応）`pool`（プールを持たない行へ倒れたら `fallback`）。
+- **L4. health。** ローカルの行ごとに probe 先を設定から決める。`openai_compatible:<id>` はその source の `base_url`（直結の行は proxy の `enabled` に依らず動くので、`enabled = false` の source でも見る）、`celeris` は有効な `openai_compatible` source 全部（1 つでも届けば生きている）。probe は ADR-0052 D1 と同じ `GET <base_url>/models`（`task_worker::probe_models`、時間切れ 3 秒、結果は `base_url` ごとに 60 秒キャッシュ）で、**LLM は呼ばない**。本番では `http://127.0.0.1:18000/v1`（pegasus 経由の ssh トンネル）を見ることになる。probe するのは cheap の選択でローカルの行に空きがあるときだけ。probe 先を決められない行（参照先の source が設定に無い・`https://`）は「確かめられない」として生きている扱いにし、失敗は従来の provider cooldown（`error_cooldown_secs`）に任せる。cooldown 中のローカルは不通と同じに扱う。
+- **L5. 変えないもの。** standard・frontier の選び方、reviewer run の選び方（`review_spawn` の `select_provider`）、CoS の対話 run（`cos = true`）、継続セッションへの sticky（ADR-0054）は従来どおり。reviewer を外すのは、Qwen が書いたものを Qwen が合格にする組を既定にしないため（完了は reviewer か決定的な検査が決める）と、GPU 1 枚の枠（`concurrency = 1`）を review が塞がないため。
+- **L6. concurrency。** ローカルの行の同時実行数は既存の `[[providers]].concurrency`（既定 1）で決める。Qwen は GPU 1 枚なので既定の 1 のまま使い、vLLM の並列を増やしたときだけ上げる。満杯なら L3 で次へ進む。新しい欄は足さない。
+- **L7. 切り替え。** `[execution] cheap_local_first`（既定 `true`）。`false` ならローカルの行を作らず、選び方は付記の前と同じになる（戻し用）。
+- **L8. 記録。** `routing_decided` の `record.resolution` に `selection` を足す。`reason` は `local_preferred` / `local_full` / `local_down` / `pool` / `fallback` / `sticky`、`candidates` は見た行ごとの `provider`・`kind`（`local` / `pool` / `other`）・`outcome`（`selected` / `available` / `full` / `down` / `cooldown` / `unsupported` / `no_account`）・`detail`（不通のとき `<base_url>: <probe の理由>`）。`local_full` / `local_down` は L2 の前段で見送ったローカルの行だけから決まる（standard・frontier の順位付けの中でローカルの行が満杯でも、理由は `pool` / `fallback` のまま）。旧イベントには `selection` が無い（省略可能な欄）。reviewer run の記録には付けない。
+
+### 実装（2026-10-04）
+
+- 型: `task_core::model_routing::{ProviderSelection, ProviderSelectionReason, ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome}`、`LaneResolution.selection`。
+- 選択: `task_dispatch::dispatcher::provider_select::select_provider_for(…, cos, prefer_local)`。`dispatch_run` だけが `prefer_local = true` で呼ぶ。`select_provider`（reviewer・既存の呼び出し）は `prefer_local = false`。hint との照合は `ProviderPolicy::offers` / `adapter_of`（`StaticPolicy` が実装。既定実装は前段を使わない）。
+- health: `Dispatcher::set_local_providers` / `set_local_provider_probe`、`LocalProviderSpec` / `LocalHealthTarget` / `LocalProviderProbe`。既定の probe は `task_worker::probe_models`。
+- 設定: `Config::local_cheap_providers`（L1・L4）、`[execution] cheap_local_first`（L7）。起動（`daemon/bootstrap.rs`）と `POST /api/v1/reload`（`daemon/admin.rs`）で dispatcher に渡す。
+- 試験: `task-dispatch` の `dispatcher::tests::cheap_local_first`（6 件）、`celeris` の `config::tests::cheap_local_first_*`（4 件）、`task-core` の `model_routing` の serde 試験。
+
+### 検証条件
+
+- fake provider と偽の probe で、cheap はローカルが空いていればローカル、満杯・不通ならプール、standard は従来どおり、を決定的に確かめる。試験は外部ネットワークに出ない（probe は差し替える）。
+- `routing_decided` に `selection.reason` が残ることを tick を通した試験で確かめる。
+- 設定からローカルの行と probe 先が決まること、`cheap_local_first = false` で無効になることを `celeris` の config 試験で確かめる。

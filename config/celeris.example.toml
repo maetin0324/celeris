@@ -592,6 +592,16 @@ max_context_chars = 24000
 # アカウントに `max_runs_per_account + 1` 本目まで載る）。その同時数の絶対上限。既定 2、0..=8。0 で例外を無効化。
 # [execution]
 # max_cos_runs = 2
+#
+# ADR-0132 付記（2026-10-04）: cheap lane の worker run は、アカウントプールの順位付けより先に
+# ローカルの行を試す。ローカルの行 = `account_pool` が無く `tiers` に cheap を含み、`llm_source` が
+# `openai_compatible:<id>`（Qwen への直結）か、`celeris`（proxy）で proxy に有効な openai_compatible source と
+# `[llm_proxy.models.qwen].cheap` があるもの（paperqa / local-deep-research / langmem の行は除く）。
+# ローカルの行が満杯（その行の `concurrency`。既定 1。GPU 1 枚の Qwen は 1 のままにする）・不通
+# （`GET <source の base_url>/models` が 3 秒で返らない。結果は 60 秒キャッシュ）・cooldown 中・その仕事の
+# adapter 指定に合わないときだけプールに倒す。standard / frontier・reviewer・CoS の対話は従来どおり。
+# 選んだ理由は `routing_decided` の `record.resolution.selection` に残る。既定 true。false で従来の選び方に戻す。
+# cheap_local_first = true
 
 # ADR-0131 D6 / 付記 D10: 定期実行（cron job）の**種**。起動時に DB の `cron_jobs` が**空のときだけ**一度入れる
 # （org.toml と同じく DB が正。以後の変更は `celerisctl cron …` / `PATCH /api/v1/cron-jobs/{id}` で行い、

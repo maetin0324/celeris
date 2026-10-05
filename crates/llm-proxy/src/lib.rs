@@ -2,6 +2,8 @@
 mod auth;
 pub mod config;
 pub mod credentials;
+pub mod estimator_shadow;
+pub mod estimator_sidecar;
 pub mod fallback;
 pub mod legacy_catalog;
 pub mod log;

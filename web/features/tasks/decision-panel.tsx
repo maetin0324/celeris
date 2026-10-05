@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { TaskDetail } from "../../api/generated/types";
 import { ActionResultView, type ActionTarget, useActionResult } from "../../components/actions/use-action-result";
 import { Button } from "../../components/ui/button";
+import { statusView } from "../../components/ui/status-badge";
 import { taskDetailQueryKey } from "./task-detail-query";
 
 // /tasks/:id の判断パネル（P3-09、R23）。approve / reject / answer / cancel / retry / edit / comment / reopen。
@@ -85,7 +86,10 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         判断
       </h2>
       <p className="text-label">
-        状態 <span data-testid="decision-status">{detail.task.status}</span>
+        状態{" "}
+        <span data-testid="decision-status" data-status={detail.task.status}>
+          {statusView(detail.task.status).label}
+        </span>
       </p>
       {detail.latest_question && has("answer") ? (
         <p className="break-words text-label">質問: {detail.latest_question}</p>

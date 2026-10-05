@@ -154,7 +154,8 @@ test("parity: /tasks/:id 判断（expected_status と 409 再取得）", async (
     await expect
       .poll(() => daemon.requests.filter((request) => request.path === "/api/v1/tasks/T1").length)
       .toBeGreaterThan(before);
-    await expect(panel.getByTestId("decision-status")).toHaveText("done");
+    // ここで和名の表示そのものを確かめる（他の箇所は data-status／data-phase 属性で raw 値を確かめる）。
+    await expect(panel.getByTestId("decision-status")).toHaveText("完了");
     await expect(panel.getByRole("button", { name: "承認" })).toHaveCount(0);
     expect(approveCount).toBe(1);
   });
@@ -201,7 +202,7 @@ test("parity: /tasks/:id 実行（promote・phase_gate は確定まで成功と�
       const count = (route: string) => daemon.requests.filter((request) => request.path === route).length;
       await page.goto(`${base}/tasks/T1`);
       const panel = page.getByTestId("execution-panel");
-      await expect(panel.getByTestId("execution-view")).toContainText("awaiting_human");
+      await expect(panel.getByTestId("execution-view").locator("[data-phase='awaiting_human']")).toBeVisible();
       await expect(panel.getByTestId("routing-panel")).toContainText("m-1");
 
       await panel.getByLabel("途中確認の note（任意）").fill("先へ");
@@ -215,7 +216,7 @@ test("parity: /tasks/:id 実行（promote・phase_gate は確定まで成功と�
         path: "/api/tasks/T1/execution/phase-gate",
         body: { action: "continue", note: "先へ" },
       });
-      await expect(panel.getByTestId("execution-view")).toContainText("executing");
+      await expect(panel.getByTestId("execution-view").locator("[data-phase='executing']")).toBeVisible();
 
       await panel.getByText("成果物を文書に昇格").click();
       await panel.getByLabel("成果物の名前").fill("report.md");
@@ -312,7 +313,7 @@ test("parity: /tasks/:id 5 tab と全 intent・409", async ({ page }) => {
     await page.goto(`${base}/tasks/T1`);
     const decision = page.getByTestId("decision-panel");
     const execution = page.getByTestId("execution-panel");
-    await expect(decision.getByTestId("decision-status")).toHaveText("reviewing");
+    await expect(decision.getByTestId("decision-status")).toHaveAttribute("data-status", "reviewing");
     const last = () => sent.at(-1)?.path;
     const click = async (scope: typeof decision, name: string, path: string) => {
       await scope.getByRole("button", { name, exact: true }).click();

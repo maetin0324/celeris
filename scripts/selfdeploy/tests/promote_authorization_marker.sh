@@ -139,6 +139,8 @@ setup() {
   export FAKE_STATE="$CASE/fake" FAKE_OLD="$OLD" FAKE_NEW="$NEW"
   export SD_REPO="$CASE/no-repo"
   unset CELERIS_CONFIG SD_LOG_FILE
+  # 本番の paths.env（CELERIS_BACKUPS_DIR / CELERIS_LOGS_DIR）を環境から継がない（log と backup を一時側へ）。
+  unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
   mkdir -p "$CELERIS_CONFIG_DIR" "$CELERIS_STATE_DIR/releases" "$CELERIS_STATE_DIR/backups"
   printf 'db = "%s"\n' "$CELERIS_DB" >"$CELERIS_CONFIG_DIR/config.toml"
   echo fake-db >"$CELERIS_DB"

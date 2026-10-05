@@ -630,3 +630,77 @@ web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くと
 - この版の `promote.sh` は、この版が `current` になった次の昇格から効く（ADR-0040 付記 2026-10-02 の規則）。
   それまでの昇格は旧 `promote.sh` のまま（旧の判定）。
 - 進捗・検証の記録は [agent-docs/progress/2026-10-05-single-active-handoff.md](../progress/2026-10-05-single-active-handoff.md)。
+
+## 付記 2026-10-05b（D4f の修正）: `promote.sh` の「active が 2 つ」の誤検出と、打ち切りの安全側
+
+### 起きたこと（本番。2026-10-05 03:44〜03:46 UTC、約 1.5 分の停止）
+
+- `promote.sh` de69d5634efb（上の付記 2026-10-05 の版）の live 昇格。03:44:51 に新 `01M452M4C0JZ1RXN825PNXZTZJ` が
+  standby で登録し旧 `01M44YYWNK3DSXKZK5NCNQMQ7Y`（97468bdf3093）へ引き継ぎを要求、03:44:52 に旧は `draining`
+  （API listener を閉じ、in_flight=3）、03:44:53 に新は「standby -> active (no other active is alive)」になり、
+  旧が手放した WU 検査を引き継いだ。**daemon 側の動きは D4a〜D4e のとおり正しい。**
+- ところが `promote.sh` は `poll /api/v1/releases: still not settled after 60s (another instance is active)` を出し、
+  「the old celeris is still active next to the new one; stopping celeris@de69d5634efb」で新を止め、
+  「live handoff failed: two active instances (the old celeris is still serving; nothing was changed)」で終わった。
+  旧は既に draining で API を閉じていたので **active が 0** になり、`/api/v1/health` は 000 になった。
+  03:46:18 に人が `promote.sh` を再実行（stop-start）して復旧した。draining の旧が持っていた run 2 件は打ち切られた。
+
+### 原因（コードで確認）
+
+- `poll_instances_settled` は `sd_http_get "$url"` を**トークン無し**で呼んでいた。`GET /api/v1/releases` は管理系ではないが、
+  `/api/v1/health` 以外の全 API と同じく Bearer が要る（`task-api/src/middleware.rs`）。応答は毎回 401 で、
+  `sd_http_get` は失敗（exit 1）を返し、ループは 60 秒それを繰り返した。
+- 失敗の文言は「another instance is active」「two active instances」と**読めなかったこと**を**二重 active**と決めつけていた。
+  判定の中身（`sd_instances_settled`）自体は draining を active に数えておらず、本番の `daemon_instances` にも
+  active の行は新の 1 つしか無かった（journal と、復旧後の表で確認）。
+- 打ち切りが「新を止める」一択だった。旧が draining に移った後に新を止めれば active は必ず 0 になる。
+
+### 決定
+
+- **D4f'（読み方）**: `promote.sh` は `GET /api/v1/releases` を `api.token`（`$SD_API_TOKEN_FILE`）付きで読む。読めないとき
+  （HTTP の失敗・JSON でない）は DB の `daemon_instances` を**読み取り専用**（`mode=ro`。`status.sh` と同じ）で読む
+  （`sd_instances_from_db`）。それも読めなければ「読めない」であって「二重 active」ではない。
+- **D4g（生きている active の数え方。shell 側も D4a と同じ定義）**: 役割が `active` で、`drained_at` が無く、プロセス（pid）が
+  `/proc` に居る行だけを数える（`sd_instances_verdict`）。draining・終了済み（`drained_at`）・プロセスが消えた行は数えない。
+  pid が分からない行（0・欠落）は生きている側に倒す。heartbeat では決めない（D4a と同じ理由）。判定は一語で返す:
+  `settled`（新だけ）/ `two_active`（新と、他の生きた active）/ `new_not_active` / `no_active` / `unreadable`。
+- **D4h（打ち切りの安全側）**: 60 秒待って `settled` にならなかったとき、新を止めるのは **`two_active`（旧が生きた active のまま、
+  新も active）と読めたときだけ**。`unreadable` / `no_active` / `new_not_active` では新を止めない（止めると active が 0 になりうる）。
+  新を残したまま exit 1 にして人に知らせる（`promote_failed.json` → GUI の赤いバナー。`current` は旧のまま。新が active なら
+  `promote.sh` の再実行が「celeris already took over」で続きをやる）。
+- **D4i（止めた後の確認）**: 新を止めた後（D4h の `two_active`、および health が active にならなかった最初の打ち切り）は、
+  `/api/v1/health` が `role=active` を答えるかを見る（`ensure_an_active_remains`。既定 10 秒）。誰も答えなければ旧は draining か
+  消えているので、`promoting.json` を置き直して **新を起こし直し**、active 0 を残さない。起こし直したことを文言に書き、
+  `promote.sh` の再実行（リンクと GUI の続き）を求める。
+- **D4j（文言）**: 失敗の文言は読めた事実に合わせる。`two active instances` と言うのは `two_active` のときだけ。読めないときは
+  `live handoff not confirmed: daemon_instances could not be read … The new celeris@<sha> … was left running`。
+  各行に `daemon_instances (api|db): <release>:<role> pid=<pid> alive|dead|pid? [drained] …` の要約を添える。
+
+### 実装との対応
+
+- `scripts/selfdeploy/lib.sh`: `sd_pid_alive` / `sd_instances_rows` / `sd_instances_verdict` / `sd_instances_summary` /
+  `sd_instances_from_db`。`sd_instances_settled` は `verdict = settled` の薄い包み（旧 API のまま）。
+- `scripts/selfdeploy/promote.sh`: `poll_instances_settled <sha12> <timeout>`（API → DB、`SETTLE_VERDICT` / `SETTLE_SOURCE` /
+  `SETTLE_SUMMARY`）、`ensure_an_active_remains`、`promote_live` の打ち切り分岐。待ち時間は試験のため
+  `SD_HANDOFF_WAIT` / `SD_SETTLE_WAIT` / `SD_ACTIVE_RECHECK_WAIT`（既定 60 / 60 / 10 秒）。
+- `crates/task-api/src/releases.rs`: 「トークン不要」と書いていたモジュール注釈を実装（Bearer 必須）に合わせた（コードは変えていない）。
+- `docs/ops/single-active-handoff.md`: 読み取りの `curl` に Bearer を付け、打ち切り後の確認を足した。
+
+### 試験（決定的。生死は実 pid で作る）
+
+- `scripts/selfdeploy/tests/promote_live_abort.sh`（偽の `systemctl` / `curl` / `sqlite3` / `ss` で `promote.sh` を丸ごと走らせる）:
+  A 再現（`/api/v1/releases` が Bearer を要求し、旧 draining・新 active → handoff done、新を止めない。**修正前の HEAD の scripts
+  に `SD_UNDER_TEST` で同じ試験を掛けると本番と同じ 3 行のログを出して失敗する**）、B API 401・DB で settled、C API も DB も
+  読めない → 新を残して「not confirmed … left running」、D 二重 active → 新を止め、旧が答えるので起こし直さない、
+  E 二重 active と読めたが止めた後に誰も答えない → 新を起こし直す、F 旧の行が active でも pid が死んでいる → 数えない、
+  G 旧の行が active でも `drained_at` → 数えない。
+- `scripts/selfdeploy/tests/promote_handoff_settled.sh`: 判定の一語 11 件、要約、一時 DB の読み取り 2 件を追加（計 20 件）。
+- `promote_authorization_marker.sh` と新試験は本番の `paths.env` の `CELERIS_BACKUPS_DIR` / `CELERIS_LOGS_DIR` を環境から
+  継がないようにした（以前は偽 sha の log と backup が本番の `logs/` `backups/` に残っていた。残っていた分は消した）。
+
+### 採らない・残ること
+
+- `GET /releases` を無認証にすることは採らない（`/health` だけが無認証という契約を崩さない）。
+- `two_active` で新を止める判断は従来どおり（旧が生きた active なら旧に任せる）。ただし D4i で active 0 は残さない。
+- `jq` しか無い環境の `sd_instances_rows` の jq 分岐は、この host に jq が無く未検証（本番は python3）。
+- 進捗・検証の記録は [agent-docs/progress/2026-10-05-promote-settle-misdetection.md](../progress/2026-10-05-promote-settle-misdetection.md)。

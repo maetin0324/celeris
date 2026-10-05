@@ -199,26 +199,112 @@ sd_json_valid() {
   esac
 }
 
-# `GET /api/v1/releases` の本文（`file`）で、active の行がちょうど 1 つで、それが `sha12` の版か
-# （ADR-0040 D4 付記 2026-10-05: 旧は draining か、行が消えている）。妥当なら 0、そうでなければ 1。
-sd_instances_settled() {
-  local file="$1" sha12="$2"
+# ---- daemon_instances の読み方（ADR-0040 D4 付記 2026-10-05 / 付記 2026-10-05b）------------------
+#
+# 「生きている active」= 役割が `active` で、`drained_at` が無く、プロセス（pid）が生きている行
+# （celeris 側の `is_live_active` と同じ定義。heartbeat では決めない）。draining・終了済み（drained_at）・
+# プロセスが消えた行は active に数えない。pid が分からない行（0 / 欠落）は生きている側に倒す。
+
+# `sd_pid_alive <pid>` — 同一ホストの /proc で見る。0 = 生きている、1 = 死んでいる、2 = 判定できない
+# （pid が 0・空・数字でない、/proc が無い）。
+sd_pid_alive() {
+  local pid="$1"
+  case "$pid" in
+    '' | 0 | *[!0-9]*) return 2 ;;
+  esac
+  [ -d /proc ] || return 2
+  if [ -e "/proc/$pid" ]; then return 0; else return 1; fi
+}
+
+# `sd_instances_rows <file>` — `{"instances":[…]}` の JSON から `release<TAB>role<TAB>pid<TAB>drained` の
+# 行を出す（drained は drained_at があれば 1、無ければ 0。pid は無ければ 0）。JSON が読めない・
+# `instances` が配列でないときは exit 1（何も出さない）。
+sd_instances_rows() {
+  local file="$1"
   [ -f "$file" ] || return 1
   case "$SD_JSON_TOOL" in
     python3)
-      python3 - "$file" "$sha12" <<'PY' >/dev/null 2>&1
+      python3 - "$file" <<'PYROWS'
 import json, sys
-with open(sys.argv[1], encoding="utf-8") as fh:
-    rows = json.load(fh).get("instances") or []
-active = [r for r in rows if r.get("role") == "active"]
-sys.exit(0 if len(active) == 1 and active[0].get("release") == sys.argv[2] else 1)
-PY
+try:
+    with open(sys.argv[1], encoding="utf-8") as fh:
+        rows = json.load(fh).get("instances")
+except Exception:
+    sys.exit(1)
+if not isinstance(rows, list):
+    sys.exit(1)
+for r in rows:
+    if not isinstance(r, dict):
+        sys.exit(1)
+    pid = r.get("pid")
+    pid = pid if isinstance(pid, int) and pid > 0 else 0
+    drained = 1 if r.get("drained_at") not in (None, "") else 0
+    print("%s\t%s\t%d\t%d" % (r.get("release") or "", r.get("role") or "", pid, drained))
+PYROWS
       ;;
     jq)
-      jq -e --arg r "$sha12" '[.instances[]? | select(.role == "active")] | (length == 1 and .[0].release == $r)' "$file" >/dev/null 2>&1
+      jq -e -r '.instances | if type == "array" then .[] | "\(.release // "")\t\(.role // "")\t\(if (.pid|type) == "number" and .pid > 0 then .pid else 0 end)\t\(if (.drained_at // "") == "" then 0 else 1 end)" else error("no instances") end' "$file" 2>/dev/null
       ;;
     *) return 1 ;;
   esac
+}
+
+# `sd_instances_verdict <file> <sha12>` — 一語を標準出力に出す。`settled` のときだけ exit 0。
+#   settled        生きている active が `sha12` の 1 つだけ（旧は draining・終了済み・消えた）
+#   two_active     `sha12` が生きた active で、他にも生きた active がいる（二重 active）
+#   new_not_active 生きた active はいるが `sha12` ではない（新は standby のまま、または行が無い）
+#   no_active      生きた active が 1 つも無い
+#   unreadable     本文が読めない（HTTP の失敗・JSON でない・`instances` が無い）
+sd_instances_verdict() {
+  local file="$1" sha12="$2" rows release role pid drained live_other=0 live_new=0 tab
+  tab="$(printf '\t')"
+  rows="$(sd_instances_rows "$file")" || { printf 'unreadable'; return 1; }
+  while IFS="$tab" read -r release role pid drained; do
+    [ -n "$release$role" ] || continue
+    [ "$role" = active ] || continue
+    [ "$drained" = 0 ] || continue
+    if sd_pid_alive "$pid"; then :; elif [ $? -eq 1 ]; then continue; fi
+    if [ "$release" = "$sha12" ]; then live_new=$((live_new + 1)); else live_other=$((live_other + 1)); fi
+  done <<<"$rows"
+  if [ "$live_new" -eq 1 ] && [ "$live_other" -eq 0 ]; then printf 'settled'; return 0; fi
+  if [ "$live_new" -ge 1 ]; then printf 'two_active'; return 1; fi
+  if [ "$live_other" -ge 1 ]; then printf 'new_not_active'; return 1; fi
+  printf 'no_active'
+  return 1
+}
+
+# `sd_instances_summary <file>` — ログ用の 1 行（`release:role pid=<pid> <alive|dead|pid?>[ drained]` を空白区切り）。
+sd_instances_summary() {
+  local file="$1" rows release role pid drained out="" alive tab
+  tab="$(printf '\t')"
+  rows="$(sd_instances_rows "$file")" || { printf 'unreadable'; return 0; }
+  while IFS="$tab" read -r release role pid drained; do
+    [ -n "$release$role" ] || continue
+    if sd_pid_alive "$pid"; then alive=alive; elif [ $? -eq 1 ]; then alive=dead; else alive='pid?'; fi
+    out="$out ${release:-?}:${role:-?} pid=$pid $alive"
+    [ "$drained" = 0 ] || out="$out drained"
+  done <<<"$rows"
+  [ -n "$out" ] || out=" (no rows)"
+  printf '%s' "${out# }"
+}
+
+# `sd_instances_settled <file> <sha12>` — `sd_instances_verdict` が `settled` なら 0（旧 API）。
+sd_instances_settled() {
+  [ "$(sd_instances_verdict "$1" "$2")" = settled ]
+}
+
+# `sd_instances_from_db <db> <outfile>` — API が読めないときの代替: `daemon_instances` を**読み取り専用**で
+# 開き、`GET /api/v1/releases` と同じ形 `{"instances":[…]}` を `outfile` に書く（status.sh と同じ読み方）。
+# 表が無い・sqlite3 が無い・DB が読めないときは exit 1。本番の DB には書かない。
+sd_instances_from_db() {
+  local db="$1" out="$2" rows
+  command -v sqlite3 >/dev/null 2>&1 || return 1
+  [ -r "$db" ] || return 1
+  rows="$(sqlite3 "file:$db?mode=ro" -json \
+    'SELECT instance_id, "release", pid, role, started_at, heartbeat_at, handoff_requested_at, drained_at
+       FROM daemon_instances ORDER BY started_at' 2>/dev/null)" || return 1
+  printf '{"instances": %s}' "${rows:-[]}" >"$out"
+  sd_json_valid "$out"
 }
 
 # TSV（1 行目が `name:type name:type ...` のヘッダ。type は s/i/f/b）→ JSON の配列。

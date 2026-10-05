@@ -110,6 +110,7 @@ mod projects;
 mod query;
 mod repos;
 mod routing_log;
+mod routing_shadow;
 mod task_store;
 mod task_store_impl;
 mod tasks;
@@ -923,5 +924,7 @@ impl SqliteStore {
 mod client_open_tests;
 #[cfg(test)]
 mod routing_log_tests;
+#[cfg(test)]
+mod routing_shadow_tests;
 #[cfg(test)]
 mod tests;

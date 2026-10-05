@@ -7,6 +7,7 @@ pub mod feedback;
 pub mod optimizer;
 pub mod policy;
 pub mod profiles;
+pub mod shadow;
 pub mod trace;
 
 #[cfg(test)]

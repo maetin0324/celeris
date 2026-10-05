@@ -28,6 +28,7 @@ fn routing_decided(run_id: &str) -> Event {
             quota_reason: None,
             work_unit_id: None,
             optimizer: None,
+            escalation: None,
         }),
     }
 }

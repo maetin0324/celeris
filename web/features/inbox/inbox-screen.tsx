@@ -2,7 +2,14 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useRouter } from "@tanstack/react-router";
 import { type MouseEvent, type ReactNode, useId, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
-import type { HumanInboxView, InboxItem, InboxKind, InboxOption, ProjectList } from "../../api/generated/types";
+import type {
+  BrowserWait,
+  HumanInboxView,
+  InboxItem,
+  InboxKind,
+  InboxOption,
+  ProjectList,
+} from "../../api/generated/types";
 import { answerInboxItem, inboxItemsQuery } from "../../api/queries/inbox-notifications";
 import { inboxKeys, projectKeys } from "../../api/queries/keys";
 import { Markdown } from "../../components/content/markdown";
@@ -14,9 +21,11 @@ import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Section } from "../../components/ui/panel";
 import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative, serverNowMs } from "../../lib/time";
+import { openBrowserWaitsQuery } from "../browser/browser-runs-screen";
 import {
   type AnswerOutcome,
   answerFailure,
+  browserWaitBadge,
   INBOX_KINDS,
   isDestructive,
   KIND_LABELS,
@@ -167,8 +176,8 @@ function Blocking({ item, titles }: { item: InboxItem; titles: Map<string, strin
   );
 }
 
-function NativeGuide({ item, message }: { item: InboxItem; message?: string }) {
-  const target = nativeTarget(item);
+function NativeGuide({ item, waits, message }: { item: InboxItem; waits: readonly BrowserWait[]; message?: string }) {
+  const target = nativeTarget(item, waits);
   return (
     <div
       role={message ? "alert" : undefined}
@@ -182,7 +191,7 @@ function NativeGuide({ item, message }: { item: InboxItem; message?: string }) {
   );
 }
 
-function AnswerForm({ item, sender }: { item: InboxItem; sender: Sender }) {
+function AnswerForm({ item, sender, waits }: { item: InboxItem; sender: Sender; waits: readonly BrowserWait[] }) {
   const id = useId();
   const noteId = `${id}-note`;
   const errorId = `${id}-error`;
@@ -209,7 +218,7 @@ function AnswerForm({ item, sender }: { item: InboxItem; sender: Sender }) {
     return outcome;
   }
 
-  if (failure?.native) return <NativeGuide item={item} message={failure.message} />;
+  if (failure?.native) return <NativeGuide item={item} waits={waits} message={failure.message} />;
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <label id={`${noteId}-label`} htmlFor={noteId} className="text-label font-medium">
@@ -286,6 +295,7 @@ function AnswerForm({ item, sender }: { item: InboxItem; sender: Sender }) {
 
 function InboxRow({
   item,
+  waits,
   sender,
   titles,
   projectTitle,
@@ -294,6 +304,7 @@ function InboxRow({
   onToggle,
 }: {
   item: InboxItem;
+  waits: readonly BrowserWait[];
   sender: Sender;
   titles: Map<string, string>;
   projectTitle?: string;
@@ -312,7 +323,9 @@ function InboxRow({
     >
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Badge tone={item.kind === "failed" ? "danger" : "warning"}>{KIND_LABELS[item.kind] ?? item.kind}</Badge>
+          <Badge tone={item.kind === "failed" ? "danger" : "warning"}>
+            {browserWaitBadge(item, waits) ?? KIND_LABELS[item.kind] ?? item.kind}
+          </Badge>
           <h3 id={headingId} className="min-w-0 break-words text-body font-semibold">
             {item.title}
           </h3>
@@ -336,7 +349,11 @@ function InboxRow({
         ) : null}
         {open ? (
           <div id={`item-${item.id}-answer`} className="min-w-0 max-w-2xl">
-            {needsNativeScreen(item) ? <NativeGuide item={item} /> : <AnswerForm item={item} sender={sender} />}
+            {needsNativeScreen(item) ? (
+              <NativeGuide item={item} waits={waits} />
+            ) : (
+              <AnswerForm item={item} sender={sender} waits={waits} />
+            )}
           </div>
         ) : null}
         <dl className="grid min-w-0 gap-x-4 gap-y-1 text-label sm:grid-cols-2">
@@ -459,11 +476,13 @@ function InboxList({
   sender,
   projects,
   filtered,
+  waits,
 }: {
   view: HumanInboxView;
   sender: Sender;
   projects: ProjectList | undefined;
   filtered: boolean;
+  waits: readonly BrowserWait[];
 }) {
   const [openedId, setOpenedId] = useState<string | null>(null);
   const titles = new Map(view.items.map((item) => [item.id, item.title]));
@@ -494,6 +513,7 @@ function InboxList({
               <InboxRow
                 key={item.id}
                 item={item}
+                waits={waits}
                 sender={sender}
                 titles={titles}
                 projectTitle={item.project_id ? projectTitles.get(item.project_id) : undefined}
@@ -511,6 +531,10 @@ function InboxList({
 export function InboxScreen({ search = {} }: { search?: InboxSearch }) {
   const filters = { project: search.project, kind: search.kind };
   const query = useQuery(inboxItemsQuery(filters));
+  const browserWaits = useQuery({
+    ...openBrowserWaitsQuery(),
+    enabled: query.data?.items.some((item) => item.kind === "browser_wait") === true,
+  });
   const projects = useQuery({
     queryKey: projectKeys.list(),
     queryFn: ({ signal }) => apiGet<ProjectList>("/api/projects", signal),
@@ -551,6 +575,7 @@ export function InboxScreen({ search = {} }: { search?: InboxSearch }) {
             sender={sender}
             projects={projects.data}
             filtered={Boolean(search.project || search.kind)}
+            waits={(browserWaits.data?.items ?? []).map((item) => item.wait)}
           />
         )}
       </FetchFrame>

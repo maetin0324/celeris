@@ -5,7 +5,7 @@ import { apiGet } from "../../api/client";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { Button, buttonClassName } from "../../components/ui/button";
-import { StatusBadge } from "../../components/ui/status-badge";
+import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
 import { type TaskListFilters, taskListPath, taskListQuery } from "./task-list-query";
@@ -153,10 +153,11 @@ export function TasksListScreen({
                 type="checkbox"
                 name="status"
                 value={s}
+                aria-label={s}
                 defaultChecked={status.includes(s)}
                 className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
               />{" "}
-              {s}
+              {statusView(s).label}
             </label>
           ))}
         </fieldset>

@@ -12,6 +12,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Section } from "../../components/ui/panel";
+import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative, serverNowMs } from "../../lib/time";
 import {
   type AnswerOutcome,
@@ -29,7 +30,7 @@ import {
 export type InboxSearch = { project?: string; kind?: InboxKind };
 
 // スマホでも押せるよう、行内のリンクも 44px の高さを持たせる（mobile-audit）。
-const linkClass = "inline-flex min-h-11 min-w-11 items-center underline break-words";
+const linkClass = "inline-flex min-h-11 min-w-11 items-center underline wrap-anywhere";
 
 const fieldClass =
   "block min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
@@ -96,13 +97,18 @@ type Sender = ReturnType<typeof useInboxAnswer>;
 
 function Due({ dueAt }: { dueAt?: string | null }) {
   if (!dueAt) return <span className="text-muted-foreground">期限なし</span>;
-  const overdue = new Date(dueAt).getTime() < serverNowMs();
+  const remaining = new Date(dueAt).getTime() - serverNowMs();
+  const overdue = remaining < 0;
   return (
     <span className="inline-flex flex-wrap items-center gap-1">
       <time dateTime={dueAt} title={formatAbsolute(dueAt)}>
         {formatAbsolute(dueAt)}（{formatRelative(dueAt)}）
       </time>
-      {overdue ? <Badge tone="danger">期限切れ</Badge> : null}
+      {overdue ? (
+        <Badge tone="danger">期限切れ</Badge>
+      ) : remaining < 86_400_000 ? (
+        <Badge tone="warning">まもなく期限</Badge>
+      ) : null}
     </span>
   );
 }
@@ -134,7 +140,7 @@ function Blocking({ item, titles }: { item: InboxItem; titles: Map<string, strin
               {task.title}
             </Link>
           ))}
-          {blocking.units.length > 0 ? <span>葉 {blocking.units.join("・")}</span> : null}
+          {!blocking.summary && blocking.units.length > 0 ? <span>作業単位 {blocking.units.join("・")}</span> : null}
           {!blocking.summary && !blocking.root && tasks.length === 0 && blocking.units.length === 0 ? (
             <span className="text-muted-foreground">なし</span>
           ) : null}
@@ -149,7 +155,9 @@ function Blocking({ item, titles }: { item: InboxItem; titles: Map<string, strin
                   {titles.get(id)}
                 </a>
               ) : (
-                <span key={id}>{id}</span>
+                <span key={id} title={id}>
+                  {shortId(id)}
+                </span>
               ),
             )}
           </span>
@@ -205,7 +213,8 @@ function AnswerForm({ item, sender }: { item: InboxItem; sender: Sender }) {
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <label id={`${noteId}-label`} htmlFor={noteId} className="text-label font-medium">
-        理由・note{noteRequired.length > 0 ? `（${noteRequired.join("・")}は必須）` : "（任意）"}
+        理由（メモ）<span className="sr-only">理由・note</span>
+        {noteRequired.length > 0 ? `（${noteRequired.join("・")}は必須）` : "（任意）"}
       </label>
       <textarea
         id={noteId}
@@ -280,11 +289,17 @@ function InboxRow({
   sender,
   titles,
   projectTitle,
+  compact,
+  open,
+  onToggle,
 }: {
   item: InboxItem;
   sender: Sender;
   titles: Map<string, string>;
   projectTitle?: string;
+  compact: boolean;
+  open: boolean;
+  onToggle: () => void;
 }) {
   const headingId = `item-${item.id}-title`;
   const recommended = item.options.find((option) => option.key === item.recommended);
@@ -293,59 +308,85 @@ function InboxRow({
       id={`item-${encodeURIComponent(item.id)}`}
       aria-labelledby={headingId}
       data-inbox-item={item.id}
-      className="flex min-w-0 scroll-mt-4 flex-col gap-3 border-b border-border py-4 lg:flex-row lg:gap-6"
+      className="flex min-w-0 scroll-mt-4 flex-col gap-3 border-b border-border py-4"
     >
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Badge tone={item.kind === "failed" ? "danger" : "info"}>{KIND_LABELS[item.kind] ?? item.kind}</Badge>
+          <Badge tone={item.kind === "failed" ? "danger" : "warning"}>{KIND_LABELS[item.kind] ?? item.kind}</Badge>
           <h3 id={headingId} className="min-w-0 break-words text-body font-semibold">
             {item.title}
           </h3>
         </div>
-        <dl className="flex min-w-0 flex-col gap-1 text-label">
+        {item.detail ? (
+          <div className="min-w-0 break-words text-body">
+            <Markdown source={item.detail} />
+          </div>
+        ) : null}
+        {compact ? (
+          <Button
+            variant="secondary"
+            size="sm"
+            className="self-start"
+            aria-expanded={open}
+            aria-controls={`item-${item.id}-answer`}
+            onClick={onToggle}
+          >
+            {open ? "回答を閉じる" : "回答を開く"}
+          </Button>
+        ) : null}
+        {open ? (
+          <div id={`item-${item.id}-answer`} className="min-w-0 max-w-2xl">
+            {needsNativeScreen(item) ? <NativeGuide item={item} /> : <AnswerForm item={item} sender={sender} />}
+          </div>
+        ) : null}
+        <dl className="grid min-w-0 gap-x-4 gap-y-1 text-label sm:grid-cols-2">
           <Meta label="推奨">
             {recommended ? <strong>{recommended.label}</strong> : <span className="text-muted-foreground">なし</span>}
           </Meta>
           <Meta label="期限">
             <Due dueAt={item.due_at} />
           </Meta>
-          <Blocking item={item} titles={titles} />
           {item.project_id ? (
             <Meta label="案件">
-              <Link className={linkClass} to="/projects/$id" params={{ id: item.project_id }}>
-                {projectTitle ?? item.project_id}
+              <Link
+                className={linkClass}
+                to="/projects/$id"
+                params={{ id: item.project_id }}
+                title={projectTitle ? undefined : item.project_id}
+              >
+                {projectTitle ?? shortId(item.project_id)}
               </Link>
             </Meta>
           ) : null}
-          <Meta label="待ち">
-            <time dateTime={item.created_at} title={formatAbsolute(item.created_at)}>
-              {formatRelative(item.created_at)}から
-            </time>
-          </Meta>
-          {item.links.length > 0 ? (
-            <Meta label="関連">
-              <span className="inline-flex flex-wrap items-center gap-x-2">
-                {item.links.map((link) =>
-                  link.href.startsWith("/") && !link.href.startsWith("//") ? (
-                    <InternalLink key={link.href} href={link.href}>
-                      {link.label}
-                    </InternalLink>
-                  ) : (
-                    <span key={link.href}>{link.label}</span>
-                  ),
-                )}
-              </span>
-            </Meta>
-          ) : null}
         </dl>
-        {item.detail ? (
-          <div className="min-w-0 text-label">
-            <Markdown source={item.detail} />
-          </div>
+        {open ? (
+          <details open={!compact} className="text-label">
+            <summary className="min-h-11 cursor-pointer content-center font-medium">止めている範囲と関連</summary>
+            <dl className="flex min-w-0 flex-col gap-1">
+              <Blocking item={item} titles={titles} />
+              <Meta label="待ち">
+                <time dateTime={item.created_at} title={formatAbsolute(item.created_at)}>
+                  {formatRelative(item.created_at)}から
+                </time>
+              </Meta>
+              {item.links.length > 0 ? (
+                <Meta label="関連">
+                  <span className="inline-flex flex-wrap items-center gap-x-2">
+                    {item.links.map((link) =>
+                      link.href.startsWith("/") && !link.href.startsWith("//") ? (
+                        <InternalLink key={link.href} href={link.href}>
+                          {link.label}
+                        </InternalLink>
+                      ) : (
+                        <span key={link.href}>{link.label}</span>
+                      ),
+                    )}
+                  </span>
+                </Meta>
+              ) : null}
+            </dl>
+          </details>
         ) : null}
-      </div>
-      <div className="min-w-0 lg:w-96 lg:shrink-0">
-        {needsNativeScreen(item) ? <NativeGuide item={item} /> : <AnswerForm item={item} sender={sender} />}
       </div>
     </li>
   );
@@ -424,6 +465,7 @@ function InboxList({
   projects: ProjectList | undefined;
   filtered: boolean;
 }) {
+  const [openedId, setOpenedId] = useState<string | null>(null);
   const titles = new Map(view.items.map((item) => [item.id, item.title]));
   const projectTitles = new Map(projects?.items.map((project) => [project.id, project.title]));
   const byKind = Object.entries(view.counts.by_kind).filter(([, count]) => count > 0);
@@ -442,15 +484,24 @@ function InboxList({
         </p>
       ) : (
         <ul aria-label="判断待ちの項目" className="flex min-w-0 flex-col border-t border-border">
-          {view.items.map((item) => (
-            <InboxRow
-              key={item.id}
-              item={item}
-              sender={sender}
-              titles={titles}
-              projectTitle={item.project_id ? projectTitles.get(item.project_id) : undefined}
-            />
-          ))}
+          {[...view.items]
+            .sort(
+              (a, b) =>
+                (a.due_at ? new Date(a.due_at).getTime() : Infinity) -
+                (b.due_at ? new Date(b.due_at).getTime() : Infinity),
+            )
+            .map((item) => (
+              <InboxRow
+                key={item.id}
+                item={item}
+                sender={sender}
+                titles={titles}
+                projectTitle={item.project_id ? projectTitles.get(item.project_id) : undefined}
+                compact={view.items.length > 10}
+                open={view.items.length <= 10 || openedId === item.id}
+                onToggle={() => setOpenedId((id) => (id === item.id ? null : item.id))}
+              />
+            ))}
         </ul>
       )}
     </Section>
@@ -484,7 +535,16 @@ export function InboxScreen({ search = {} }: { search?: InboxSearch }) {
           </ul>
         ) : null}
       </div>
-      <FetchFrame query={query}>
+      <FetchFrame
+        query={query}
+        subject="判断待ち"
+        skeleton={
+          <div className="flex flex-col gap-3" aria-hidden="true">
+            <div className="h-20 rounded-md bg-neutral" />
+            <div className="h-20 rounded-md bg-neutral" />
+          </div>
+        }
+      >
         {query.data && (
           <InboxList
             view={query.data}

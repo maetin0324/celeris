@@ -93,6 +93,394 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// Screenshot and mobile-audit data. The normal profile stays intentionally small:
+// parity tests supply their own exact rows and counts.
+const richPath =
+  "src/very-long-workspace-name/feature-with-a-long-description/components/task-detail/overview-panel.tsx";
+const richNow = "2026-10-04T09:00:00Z";
+
+export function richFixtures() {
+  const summary = (id, title, extra = {}) => ({
+    ...fixtureFor(schema.$defs.TaskSummary),
+    id,
+    title,
+    status: "ready",
+    kind: "execute",
+    tier: "standard",
+    category: "feature",
+    priority_label: "normal",
+    created_at: richNow,
+    updated_at: richNow,
+    ...extra,
+  });
+  const title = "複数の画面にまたがる長いタスク名と依存関係を確認する作業 ".repeat(4).trim();
+  const tasks = [
+    summary("T1", title, { children: 2, project_id: "P1" }),
+    summary("T2", "子タスク: 画面の状態を調べる", { parent_id: "T1", depends_on: ["T1"], project_id: "P1" }),
+    summary("T3", "子タスク: 検証結果をまとめる", { parent_id: "T1", depends_on: ["T2"], project_id: "P1" }),
+    ...Array.from({ length: 21 }, (_, i) =>
+      summary(`T${i + 4}`, `一覧の追加タスク ${i + 4}: 表示密度を確かめる`, { project_id: "P1" }),
+    ),
+  ];
+  const detail = fixtureFor(schema.$defs.TaskDetail);
+  detail.task = {
+    ...detail.task,
+    id: "T1",
+    title,
+    objective: "長い目的文を複数行で表示し、親子関係・依存関係・作業ツリーと成果物を確認する。\n".repeat(6).trim(),
+    status: "ready",
+    created_at: richNow,
+    updated_at: richNow,
+    project_id: "P1",
+  };
+  detail.workspace_dir = `/workspace/${richPath}`;
+  detail.children = tasks.slice(1, 3).map(({ id, title, kind, status }) => ({ id, title, kind, status, actions: [] }));
+  detail.dependents = [detail.children[0]];
+  detail.runs = [
+    {
+      ...fixtureFor(schema.$defs.RunSummary),
+      run_id: "R1",
+      role: "worker",
+      adapter: "codex",
+      model: "standard",
+      started_at: richNow,
+      finished_at: richNow,
+    },
+  ];
+  const changes = fixtureFor(schema.$defs.ChangesView);
+  changes.task_id = "T1";
+  changes.gh = true;
+  changes.merge_method = "squash";
+  changes.repos = [
+    {
+      ...fixtureFor(schema.$defs.RepoChangesView),
+      repo: "web",
+      branch: "celeris/T1",
+      default_branch: "main",
+      ahead: 2,
+      files: Array.from({ length: 15 }, (_, i) => ({
+        path: i ? `${richPath.replace("overview-panel", `panel-${i}`)}` : richPath,
+        status: "M",
+        additions: i + 2,
+        deletions: 1,
+      })),
+      stat: { files: 15, additions: 135, deletions: 15 },
+      dirty: false,
+      missing: false,
+      origin: false,
+    },
+  ];
+  const project = {
+    ...fixtureFor(schema.$defs.Project),
+    id: "P1",
+    title: "画面品質の確認",
+    request: "一覧と成果物を確認する",
+    status: "active",
+    created_at: richNow,
+    updated_at: richNow,
+  };
+  const artifact = (idx) => ({
+    idx,
+    run_id: "R1",
+    ts: richNow,
+    exists: true,
+    forbidden: false,
+    size: 128 + idx,
+    artifact: {
+      kind: "file",
+      name: `report-${idx}.md`,
+      path: `reports/${richPath}/report-${idx}.md`,
+      sha256: "0".repeat(64),
+    },
+  });
+  const progressLine = (seq, kind, text, tool) => ({ seq, at: richNow, kind, text, ...(tool ? { tool } : {}) });
+  // 報告・承認・review 待ちの task の実行と routing。形は schema の required から組み（fixtureFor）、
+  // 画面が読む欄（headline・body・decision・phase・plan・runs など）だけを正常な値で埋める。
+  const report = (id, kind, headline, extra) => ({
+    ...fixtureFor(schema.$defs.Report),
+    id,
+    kind,
+    headline,
+    node_id: "cos",
+    level: 0,
+    created_at: richNow,
+    ...extra,
+  });
+  const reportRows = {
+    RP1: report("RP1", "result", "画面の検証結果を報告します", {
+      body: "## 検証の結果\n\n- 360・390・412・1440 px の撮影を確認しました。\n- 長い path と長文の折り返しに崩れはありません。\n\n受信箱の認可を判断してください。",
+      task_id: "T1",
+      project_id: "P1",
+      sources: ["RP2", "RP3"],
+    }),
+    RP2: report("RP2", "progress", "子タスクの状態を確認しました", {
+      body: "T2 と T3 の状態を確認し、依存の順を保ったまま進めています。",
+      level: 2,
+      node_id: "ui-ux",
+      task_id: "T2",
+      project_id: "P1",
+    }),
+    RP3: report("RP3", "question", "承認の判断をお願いします", {
+      body: "cluster-hpc への依頼を認めてよいか、受信箱で判断をお願いします。",
+      level: 1,
+      node_id: "software-engineering",
+      task_id: "T4",
+      project_id: "P1",
+    }),
+  };
+  const approval = (id, decision, question, extra) => ({
+    ...fixtureFor(schema.$defs.Approval),
+    id,
+    decision,
+    question,
+    node_id: "ui-ux",
+    task_id: "T1",
+    project_id: "P1",
+    created_at: "2026-10-03T09:00:00Z",
+    decided_at: "2026-10-03T10:00:00Z",
+    answer: null,
+    ...extra,
+  });
+  const approvalRows = [
+    approval("01J8APPROVAL0000000000001", "once", "ビルドの検査を走らせてよいですか", { answer: "はい。今回だけ。" }),
+    approval("01J8APPROVAL0000000000002", "standing", "web の画像を書き出してよいですか", {
+      decided_at: richNow,
+      answer: "同じ依頼は今後も認めます。",
+    }),
+  ];
+  const workUnit = (seq, key, status) => ({
+    ...fixtureFor(schema.$defs.WorkUnitView),
+    id: `WU${seq}`,
+    key,
+    seq,
+    status,
+    created_at: richNow,
+    updated_at: richNow,
+  });
+  const execution = fixtureFor(schema.$defs.TaskExecutionView);
+  execution.phase = "verifying";
+  execution.plan = {
+    ...fixtureFor(schema.$defs.ExecutionPlanView),
+    id: "PL1",
+    task_id: "T1",
+    version: 1,
+    origin: "planner",
+    status: "active",
+    created_at: richNow,
+    work_units: [workUnit(1, "fix-screens", "done"), workUnit(2, "verify-screens", "running")],
+  };
+  execution.gate = {
+    ...fixtureFor(schema.$defs.ExecutionGateDecision),
+    mode: "compound",
+    source: "policy",
+    score: 6,
+    threshold: 5,
+    rule_id: "signals-v1",
+    policy_version: "1",
+    shadow: false,
+  };
+  execution.runs = detail.runs;
+  execution.metrics = { ...execution.metrics, work_units_total: 2, work_units_done: 1, has_plan: true };
+  const routing = {
+    ...fixtureFor(schema.properties.task_routing),
+    task_id: "T1",
+    assignee: "ui-ux",
+    runs: [
+      {
+        ...fixtureFor(schema.$defs.RoutingAudit),
+        task_id: "T1",
+        run_id: "R1",
+        adapter: "codex",
+        lane: "standard",
+        model: "standard",
+        org_node: "ui-ux",
+        rule_id: "rule-standard",
+      },
+    ],
+  };
+  const reviewRoutes = {
+    "/api/v1/reports": { items: Object.values(reportRows) },
+    ...Object.fromEntries(
+      Object.entries(reportRows).map(([id, row]) => [
+        `/api/v1/reports/${id}`,
+        { report: row, sources_expanded: (row.sources ?? []).map((source) => reportRows[source]).filter(Boolean) },
+      ]),
+    ),
+    "/api/v1/approvals": { items: approvalRows },
+    "/api/v1/standing-rules": {
+      items: [
+        {
+          ...fixtureFor(schema.$defs.StandingRule),
+          id: "SR1",
+          rule: "web の画像を書き出す依頼は今後も認める",
+          node_id: "ui-ux",
+          created_at: "2026-10-03T10:00:00Z",
+        },
+      ],
+    },
+    "/api/v1/tasks/T1/execution": execution,
+    "/api/v1/tasks/T1/routing": routing,
+  };
+  return {
+    ...reviewRoutes,
+    "/api/v1/tasks": {
+      items: tasks,
+      total: tasks.length,
+      next_cursor: null,
+      counts_by_status: { ready: tasks.length },
+    },
+    "/api/v1/graph": {
+      nodes: tasks.slice(0, 8).map(({ id, title, kind, status, parent_id }) => ({
+        id,
+        title,
+        kind,
+        status,
+        ...(parent_id ? { parent_id } : {}),
+      })),
+      edges: [
+        { from: "T1", to: "T2", kind: "depends_on" },
+        { from: "T2", to: "T3", kind: "depends_on" },
+      ],
+    },
+    "/api/v1/tasks/T1": detail,
+    "/api/v1/tasks/T1/timeline": {
+      task_id: "T1",
+      items: [{ kind: "delegation", at: richNow, run_id: "R1", tasks: detail.children }],
+    },
+    "/api/v1/tasks/T1/changes": changes,
+    "/api/v1/tasks/T1/changes/web/diff": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? richPath,
+      diff: `--- a/${richPath}\n+++ b/${richPath}\n@@ -1,2 +1,3 @@\n-old text\n+${"長い差分の行".repeat(50)}\n context\n`,
+      truncated: false,
+    }),
+    "/api/v1/tasks/T1/tree": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? "",
+      repos: [{ name: "web", kind: "git", dir: `/workspace/${richPath}` }],
+      entries: [
+        { kind: "dir", name: "src", path: "src" },
+        ...Array.from({ length: 12 }, (_, i) => ({
+          kind: "file",
+          name: `long-file-${i}.tsx`,
+          path: `${richPath}/long-file-${i}.tsx`,
+          size: 120 + i,
+        })),
+      ],
+    }),
+    "/api/v1/tasks/T1/tree/file": (url) => ({
+      repo: "web",
+      path: url.searchParams.get("path") ?? richPath,
+      size: 64,
+      binary: false,
+      too_large: false,
+      text: "長いファイルの本文\n".repeat(12),
+    }),
+    "/api/v1/tasks/T1/artifacts": { task_id: "T1", items: Array.from({ length: 12 }, (_, i) => artifact(i)) },
+    "/api/v1/projects": { items: [project] },
+    "/api/v1/projects/P1": {
+      project,
+      milestones: [],
+      tasks: [
+        {
+          ...fixtureFor(schema.$defs.ProjectTaskView),
+          id: "T1",
+          title,
+          status: "ready",
+          depends_on: [],
+          conversation: false,
+        },
+      ],
+    },
+    "/api/v1/console": {
+      items: [
+        {
+          kind: "human",
+          at: richNow,
+          cursor: "c1",
+          message_id: "M1",
+          node_id: "cos",
+          text: "画面群の長文・多数行・長い path を確認してください。",
+        },
+        {
+          kind: "reply",
+          at: richNow,
+          cursor: "c2",
+          message_id: "M2",
+          node_id: "cos",
+          text: "確認を始めます。",
+          state: "done",
+          steps: [
+            { kind: "tool_use", tool: "read_file", text: `Read ${richPath}` },
+            { kind: "tool_result", tool: "read_file", text: "12 行を読みました" },
+          ],
+        },
+        {
+          kind: "progress",
+          at: richNow,
+          cursor: "c3",
+          title: "画面を検証する",
+          tier: "standard",
+          progress: {
+            task_id: "T1",
+            run_id: "R1",
+            count: 8,
+            tool_count: 2,
+            started_at: richNow,
+            updated_at: richNow,
+            first: [progressLine(1, "tool_use", `Read ${richPath}`, "read_file")],
+            last: [progressLine(8, "tool_result", "表示を確認しました", "read_file")],
+          },
+        },
+      ],
+      next_cursor: null,
+    },
+  };
+}
+
+export function richFiles() {
+  return {
+    "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+      body: `${[
+        { type: "user", message: { role: "user", content: [{ type: "text", text: "画面を確認してください" }] } },
+        {
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "確認を始めます" },
+              { type: "tool_use", id: "tool-1", name: "read_file", input: { path: richPath } },
+            ],
+          },
+        },
+        {
+          type: "user",
+          message: {
+            role: "user",
+            content: [{ type: "tool_result", tool_use_id: "tool-1", content: "12 行を読みました" }],
+          },
+        },
+        ...Array.from({ length: 24 }, (_, i) => ({
+          type: "assistant",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: `検証ログ ${i + 1}: ${"長い行".repeat(12)}` }],
+          },
+        })),
+      ]
+        .map((line) => JSON.stringify(line))
+        .join("\n")}\n`,
+      type: "text/plain; charset=utf-8",
+    },
+    ...Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `/api/v1/tasks/T1/artifacts/${i}`,
+        { body: `# report-${i}\n\n画面の検証結果\n`, type: "text/markdown" },
+      ]),
+    ),
+  };
+}
+
 // P4-10/P4-11: knowledge domain fixtures. Keep this block together for parallel merge.
 export const knowledgeFixtures = {
   "/api/v1/knowledge/tree": {
@@ -361,24 +749,55 @@ export function createFakeDaemon({
   host = "127.0.0.1",
   port = 0,
   delayMs = 0,
-  fixtures = defaultFixtures,
+  fixtures = {},
   token = null,
   files = {},
+  profile = "default",
+  // 状態の変種（web/e2e/support/states.ts）。fault は path の前置きに一致する要求を status で返し、
+  // hold は一致する要求を releaseHeld() まで保留する（読み込み中を時計でなく出来事で解く）。
+  // streamStatus は `/api/v1/stream` を最初から 200 以外にする（再接続も失敗する）。
+  fault = null,
+  hold = null,
+  streamStatus: initialStreamStatus = 200,
+  inboxItems = null,
+  notices = null,
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
-  fixtures = { ...knowledgeFixtures, ...fixtures };
+  if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
+  fixtures = { ...knowledgeFixtures, ...defaultFixtures, ...(profile === "rich" ? richFixtures() : {}), ...fixtures };
+  files = { ...(profile === "rich" ? richFiles() : {}), ...files };
   const requests = [];
   const clients = new Set();
   const consoleClients = new Set();
   let delay = delayMs;
   let postDelay = 0;
-  let streamStatus = 200;
+  let streamStatus = initialStreamStatus;
   let timer;
-  const inbox = { items: inboxItemsFixture(), notices: noticesFixture(), answers: [] };
+  let faultRule = fault;
+  let holdRule = hold;
+  const held = [];
+  const inbox = {
+    items: inboxItems ?? inboxItemsFixture(),
+    notices: notices ?? noticesFixture(),
+    answers: [],
+  };
+  const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream", "/api/v1/console/stream"]);
+  const matches = (rule, pathname) =>
+    rule !== null &&
+    !streamPaths.has(pathname) &&
+    (rule.paths ?? ["/api/v1"]).some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
   const server = http.createServer((req, res) => {
+    const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
+    if (matches(holdRule, pathname)) {
+      held.push(() => handle(req, res));
+      return;
+    }
+    handle(req, res);
+  });
+  const handle = (req, res) => {
     const pathname = new URL(req.url ?? "/", `http://${host === "::1" ? "[::1]" : host}`).pathname;
     const record = {
       path: pathname,
@@ -400,6 +819,11 @@ export function createFakeDaemon({
     if (token !== null && req.headers.authorization !== `Bearer ${token}`) {
       res.writeHead(401, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unauthorized" }));
+      return;
+    }
+    if (matches(faultRule, pathname)) {
+      res.writeHead(faultRule.status, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: faultRule.status === 403 ? "forbidden" : "unavailable" }));
       return;
     }
     if (pathname === "/api/v1/stream" && streamStatus !== 200) {
@@ -853,7 +1277,7 @@ export function createFakeDaemon({
     };
     if (delay) setTimeout(respond, delay);
     else respond();
-  });
+  };
   const sendEvent = (event, data = {}) => {
     const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
     for (const client of clients) client.write(frame);
@@ -883,6 +1307,20 @@ export function createFakeDaemon({
     dropConsoleClients() {
       for (const client of consoleClients) client.destroy();
     },
+    // 状態の変種: 失敗の規則を替える・保留を解く・SSE の接続を切る。
+    setFault(rule) {
+      faultRule = rule;
+    },
+    releaseHeld() {
+      holdRule = null;
+      for (const run of held.splice(0)) run();
+    },
+    get heldCount() {
+      return held.length;
+    },
+    dropStreamClients() {
+      for (const client of clients) client.destroy();
+    },
     setPostDelay(value) {
       postDelay = value;
     },
@@ -906,6 +1344,7 @@ export function createFakeDaemon({
     },
     async close() {
       clearInterval(timer);
+      for (const run of held.splice(0)) run();
       for (const client of [...clients, ...consoleClients]) client.destroy();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
     },

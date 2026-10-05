@@ -33,6 +33,12 @@ import {
 } from "./providers-llm-source";
 
 type Sender = ReturnType<typeof useActionResult>;
+// 段の設定語（frontier 等）は設定ファイルと揃えて残し、意味を日本語で添える。
+const TIER_LABELS: Readonly<Record<Tier, string>> = {
+  frontier: "frontier（最上位）",
+  standard: "standard（標準）",
+  cheap: "cheap（安価）",
+};
 // 枠の色は styles.css の @layer base（--color-input）に任せ、ここでは寸法だけを持つ。
 const inputClass = "block w-full min-h-11 rounded border p-2";
 const labelClass = "block min-w-0 text-label text-foreground";
@@ -84,7 +90,7 @@ function TextField({
 function TierChecks({ value, onChange }: { value: Tier[]; onChange: (next: Tier[]) => void }) {
   return (
     <fieldset className="flex min-w-0 flex-wrap gap-3">
-      <legend className="text-label text-foreground">tiers</legend>
+      <legend className="text-label text-foreground">受ける段（tiers）</legend>
       {TIERS.map((tier) => (
         <label key={tier} className="inline-flex min-h-11 items-center gap-1 text-label text-foreground">
           <input
@@ -93,7 +99,7 @@ function TierChecks({ value, onChange }: { value: Tier[]; onChange: (next: Tier[
             checked={value.includes(tier)}
             onChange={(e) => onChange(e.target.checked ? [...value, tier] : value.filter((t) => t !== tier))}
           />
-          {tier}
+          {TIER_LABELS[tier]}
         </label>
       ))}
     </fieldset>
@@ -129,10 +135,10 @@ export function ProviderSummary({ item }: { item: ProviderView }) {
   return (
     <div className="min-w-0 space-y-1 text-label text-foreground">
       <p className="break-words">
-        {item.adapter} / concurrency {item.concurrency} / tiers {item.tiers.join(", ")}
-        {item.model ? ` / model ${item.model}` : ""}
+        設定: {item.adapter}・concurrency {item.concurrency}・段 {item.tiers.join(", ") || "なし"}
+        {item.model ? `・モデル ${item.model}` : ""}
       </p>
-      <p className="break-words">harness: {adapterLabel(item.adapter)}</p>
+      <p className="break-words">道具の種類: {adapterLabel(item.adapter)}</p>
       <p className="break-words" data-source-ref={item.llm_source?.source ?? ""}>
         LLM source: {source.label}
         {source.origin ? `（${source.origin}）` : ""}
@@ -157,7 +163,7 @@ export function ProviderStatusTable({ items }: { items: readonly ProviderView[] 
           <TableHead>実行枠</TableHead>
           <TableHead>状態</TableHead>
           <TableHead>道具</TableHead>
-          <TableHead>tiers</TableHead>
+          <TableHead>受ける段</TableHead>
           <TableHead>同時実行</TableHead>
           <TableHead>前回の確認</TableHead>
         </TableRow>
@@ -285,14 +291,14 @@ function ProviderCard({
       >
         <div className="grid gap-3 sm:grid-cols-2">
           <TextField
-            label="concurrency"
+            label="同時実行数（concurrency）"
             type="number"
             value={concurrency}
             onChange={setConcurrency}
             error={errors.concurrency}
             inputRef={concurrencyRef}
           />
-          <TextField label="model" value={model} onChange={setModel} />
+          <TextField label="モデル（model）" value={model} onChange={setModel} />
         </div>
         <TierChecks value={tiers} onChange={setTiers} />
         <div className="flex flex-wrap gap-2">
@@ -388,7 +394,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
       <div className="grid gap-3 sm:grid-cols-2">
         <TextField label="新規 id" value={id} onChange={setId} error={errors.id} inputRef={idRef} />
         <label className={labelClass}>
-          adapter
+          道具（adapter）
           <select className={inputClass} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
             {ADAPTERS.map((a) => (
               <option key={a} value={a}>
@@ -398,14 +404,14 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
           </select>
         </label>
         <TextField
-          label="新規 concurrency"
+          label="新規の同時実行数（concurrency）"
           type="number"
           value={concurrency}
           onChange={setConcurrency}
           error={errors.concurrency}
           inputRef={concurrencyRef}
         />
-        <TextField label="新規 model" value={model} onChange={setModel} />
+        <TextField label="新規のモデル（model）" value={model} onChange={setModel} />
       </div>
       <TierChecks value={tiers} onChange={setTiers} />
       <Button type="submit" variant="primary" disabled={sender.pending || blocked} aria-describedby={deniedId}>
@@ -456,7 +462,10 @@ export function LlmSourceList({ data }: { data: LlmSourcesView }) {
   );
 }
 
-/** 画面の節立て: adapter / harness の実行枠と LLM source を別の見出しで並べる。 */
+/**
+ * 画面の節立て: adapter / harness の実行枠と LLM source を別の見出しで並べる。
+ * 実行枠の節は「使えるか」を先に読ませ、実装語の説明は開閉式の「用語の説明」に下げる。
+ */
 export function ProvidersSections({
   count,
   adapters,
@@ -470,13 +479,23 @@ export function ProvidersSections({
     <>
       {/* 名前は aria-label の固定語にする（見出しの「adapter」を名前に流すと、入力欄の label 探索と重なる）。 */}
       <section className="min-w-0 space-y-3" aria-label="プロバイダ一覧">
-        <h2 className={sectionTitleClass}>adapter / harness の実行枠（{count}）</h2>
+        <h2 className={sectionTitleClass}>実行枠（{count}）</h2>
         <p className="text-label text-muted-foreground">
-          {"道具（claude-code・codex・acp・paperqa・langmem・ldr など）ごとの実行枠です。" +
-            "表の「状態」で、接続を確かめたか・休止中か・失敗しているかを読みます。" +
-            "各枠の LLM source は、その道具がどの供給元のモデルを使うかを示します。" +
-            "celeris/<tier> は実行時に proxy が供給元を選ぶ抽象モデルです。"}
+          作業を実行する道具ごとの枠です。表の「状態」で、使えるか・休止中か・失敗しているかを確かめます。
         </p>
+        <details className="min-w-0 text-label text-muted-foreground">
+          <summary className="inline-flex min-h-11 cursor-pointer items-center text-foreground">用語の説明</summary>
+          <ul className="list-disc space-y-1 pl-5">
+            <li>
+              道具（adapter / harness）: claude-code・codex・acp・paperqa・langmem・ldr など、run を実行するもの。
+            </li>
+            <li>
+              受ける段（tiers）: frontier（最上位）・standard（標準）・cheap（安価）のうち、この枠が受けるモデルの段。
+            </li>
+            <li>LLM source: その道具がどの供給元のモデルを使うか。</li>
+            <li>celeris/&lt;tier&gt;: 実行時に proxy が供給元を選ぶ抽象モデル。</li>
+          </ul>
+        </details>
         {adapters}
       </section>
       <section className="min-w-0 space-y-3" aria-label="供給元の一覧">

@@ -15,9 +15,9 @@ import { type DaemonLiveness, daemonLiveness, daemonPollExhausted, daemonPollInt
 type Replay = { ok: true; report: ReplayReport } | { ok: false; message: string; denied?: boolean };
 
 const livenessView: Record<DaemonLiveness, { tone: BadgeTone; label: string; detail: string }> = {
-  running: { tone: "success", label: "稼働中", detail: "最後の tick は 1 分以内です。" },
-  stale: { tone: "warning", label: "応答なし", detail: "最後の tick から 1 分以上たっています。" },
-  absent: { tone: "neutral", label: "状態なし", detail: "dispatcher の状態はまだありません。" },
+  running: { tone: "success", label: "稼働中", detail: "最後の動作確認は 1 分以内です。" },
+  stale: { tone: "warning", label: "応答なし", detail: "最後の動作確認から 1 分以上たっています。" },
+  absent: { tone: "neutral", label: "状態なし", detail: "実行管理の状態はまだありません。" },
 };
 
 function Time({ value }: { value: string }) {
@@ -45,10 +45,10 @@ function ReplayPanel() {
         ok: false,
         denied: forbidden,
         message: forbidden
-          ? "権限がありません（403）。replay は実行できないため、ボタンを無効にしました。"
+          ? "権限がありません（403）。状態の照合は実行できないため、ボタンを無効にしました。"
           : error instanceof ApiError && (error.kind === "timeout" || error.kind === "network")
             ? "結果を確認できません。再取得して状態を確認してください。"
-            : "replay に失敗しました",
+            : "状態の照合に失敗しました",
       });
     } finally {
       setPending(false);
@@ -57,13 +57,13 @@ function ReplayPanel() {
   }
   return (
     <Section
-      title="replay"
+      title="保存履歴の照合"
       className="rounded-lg border border-border bg-surface p-4"
-      description="保存された event から状態を再計算し、保存値との差を確認します。"
+      description="保存された履歴から状態を再計算し、現在の保存値との差を確認します。"
     >
       <div className="space-y-2">
-        <Button disabled={pending || denied} onClick={() => void run()}>
-          replay を実行
+        <Button aria-label="replay を実行" disabled={pending || denied} onClick={() => void run()}>
+          状態を照合
         </Button>
         {replay?.ok === false && (
           <p role="alert" data-testid="replay-error" className="text-danger-foreground">
@@ -76,12 +76,15 @@ function ReplayPanel() {
               <Badge tone={replay.report.mismatches.length ? "warning" : "success"}>
                 {replay.report.mismatches.length ? "差あり" : "差なし"}
               </Badge>
-              {replay.report.mismatches.length} mismatches across {replay.report.tasks} tasks
+              {replay.report.tasks} 件の作業を照合、差異 {replay.report.mismatches.length} 件
+              <span className="text-label text-muted-foreground">
+                {replay.report.mismatches.length} mismatches across {replay.report.tasks} tasks
+              </span>
             </p>
             <ul className="break-all text-label">
               {replay.report.mismatches.map((m) => (
                 <li key={`${m.task_id}-${m.field}`}>
-                  {m.task_id} {m.field}: replayed={m.replayed} stored={m.stored}
+                  {m.task_id} {m.field}: 再計算 {m.replayed} / 保存値 {m.stored}
                 </li>
               ))}
             </ul>
@@ -126,7 +129,7 @@ function DaemonContent({ view, fetchedAt, exhausted }: { view: DaemonView; fetch
             items={[
               { label: "版", value: <ReleaseValue /> },
               {
-                label: "最終 poll",
+                label: "最終取得",
                 value: (
                   <span>
                     <Time value={new Date(fetchedAt).toISOString()} />
@@ -136,15 +139,15 @@ function DaemonContent({ view, fetchedAt, exhausted }: { view: DaemonView; fetch
               },
               ...(s
                 ? [
-                    { label: "最後の tick", value: <Time value={s.last_tick_at} /> },
-                    { label: "host", value: <span className="break-all">{`${s.hostname} (pid ${s.pid})`}</span> },
-                    { label: "instance", value: <span className="break-all">{s.instance_id}</span> },
+                    { label: "最後の動作確認", value: <Time value={s.last_tick_at} /> },
+                    { label: "実行ホスト", value: <span className="break-all">{`${s.hostname} (pid ${s.pid})`}</span> },
+                    { label: "実行個体", value: <span className="break-all">{s.instance_id}</span> },
                     { label: "開始", value: <Time value={s.started_at} /> },
-                    { label: "tick", value: `${s.ticks}（${s.tick_ms} ms）` },
+                    { label: "動作確認", value: `${s.ticks} 回（${s.tick_ms} ms）` },
                     { label: "実行中", value: s.in_flight.length },
                     { label: "人の待ち", value: s.awaiting_human.length },
                     { label: "担当なし", value: s.unroutable.length },
-                    { label: "cooldown", value: s.cooldowns.length },
+                    { label: "待機中", value: s.cooldowns.length },
                     { label: "プロバイダ", value: s.providers.length },
                   ]
                 : []),

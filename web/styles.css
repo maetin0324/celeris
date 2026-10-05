@@ -150,6 +150,20 @@
     border-color: var(--color-input);
   }
 
+  /* placeholder は Tailwind の既定（本文色の半透明）だと白地で 3:1 を切るので、補足の色（6:1）にする。 */
+  ::placeholder {
+    color: var(--color-muted-foreground);
+    opacity: 1;
+  }
+
+  /* 無効な入力欄は地の色で区別し、文字は本文色のまま読めるようにする（枠は --color-input を保つ）。 */
+  input:disabled,
+  textarea:disabled,
+  select:disabled {
+    background-color: var(--color-muted);
+    cursor: not-allowed;
+  }
+
   /* shell の menu 等の重なりを root 内に閉じ、body 直下の Radix Portal を覆わせない。 */
   #root {
     isolation: isolate;
@@ -167,6 +181,16 @@
   }
 }
 
+/* 画面見出し（h1 tabIndex=-1）は遷移後に script で focus を移す先（S4）。直接開いた画面の初回表示は
+   まだ keyboard 操作をしていないのに、browser の :focus-visible 判定は「まだ何も操作していない」状態を
+   keyboard 操作とみなし、素の script focus にも枠を出してしまう（S0）。実際に Tab を押した後の focus だけ
+   data-kbd-focus が付く（screen-frame.tsx が document 全体に委任して付ける）ので、それが無いときは打ち消す。 */
+h1[tabindex="-1"]:focus-visible:not([data-kbd-focus]) {
+  outline: none;
+}
+
+/* 動きを減らす設定では transition・animation・smooth scroll を止める（WCAG 2.3.3）。0 ではなく 0.01ms にして
+   transitionend / animationend は従来どおり発火させる（Radix の Presence が閉じる animation の終わりを待つため）。 */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

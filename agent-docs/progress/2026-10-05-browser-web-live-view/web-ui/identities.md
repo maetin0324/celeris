@@ -21,7 +21,7 @@ completed: 2026-10-05
   - 操作可否・状態の表示・期限の書式・state JSON の検証・エラー文言は純関数にして vitest で確かめる。
 - `web/routes/projects.$id.browser-identities.tsx`: 骨組みを `BrowserIdentitiesScreen` に差し替えた。
 - `web/features/projects/project-detail-view.tsx`: project 詳細の link 群に「ブラウザの identity」を 1 つ足した（`min-h-11`）。
-- `web/features/browser/identities-screen.test.ts`（新設）: vitest 16 件。
+- `web/features/browser/identities-screen.test.ts`（新設）: vitest 14 件。
 - `web/e2e/browser/identities.spec.ts`（新設）: Playwright 3 件。
   - 本人: 一覧（P1 の 2 件のみ、revoked に失効・復元なし）→ 登録（偽 backend に state・`ttl_secs: 604800` が届き、
     textarea は空、`page.content()` に秘密値が無い）→ 復元（project・origin 付き）→ 失効 → 削除（ConfirmDialog）。

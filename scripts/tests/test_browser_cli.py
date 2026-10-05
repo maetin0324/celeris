@@ -52,7 +52,7 @@ class BrowserCliTest(unittest.TestCase):
         self.executable.write_text(FAKE)
         self.executable.chmod(0o700)
         self.config = {'executable': str(self.executable), 'output': str(self.output),
-                       'session_id': 'celeris-test-session', 'allowed_domains': ['https://example.com', 'https://*.example.org']}
+                       'session_id': 'celeris-test-session', 'allowed_domains': ['example.com', '*.example.org']}
         (self.root / 'upstream.json').write_text('{}')
         self.policy(['click', 'close', 'download', 'gettext', 'launch', 'navigate', 'screenshot', 'scroll', 'snapshot'])
         self.mode({})
@@ -105,7 +105,7 @@ class BrowserCliTest(unittest.TestCase):
                         command = [verb] + args
                     argv = [str(self.executable), '--config', str(self.root / 'upstream.json'),
                             '--session', self.config['session_id'], '--action-policy', str(self.root / 'policy.json'),
-                            '--allowed-domains', ','.join(cli.urlsplit(d).hostname for d in self.config['allowed_domains']),
+                            '--allowed-domains', ','.join(self.config['allowed_domains']),
                             '--content-boundaries', '--max-output', '16000', '--json'] + command
                     env = {'AGENT_BROWSER_NAMESPACE': 'celeris', 'PATH': os.environ.get('PATH', '/usr/bin:/bin')}
                     result = cli.subprocess.run(argv, cwd=self.root, env=env, stdout=cli.subprocess.PIPE,
@@ -298,8 +298,7 @@ class BrowserCliTest(unittest.TestCase):
                 self.assertEqual(self.events()[-1], {'operation': 'policy_block', 'status': 'blocked'})
         (self.root / 'policy.json').write_text(good)
         self.policy(json.loads(good)['allow'])
-        for domains in [[], [''], ['https://example.com,https://evil.com'], ['*'], ['https://*.'], ['https://Example.com'],
-                        ['example.com'], ['https://example.com/path'], ['http://example.com'], None]:
+        for domains in [[], [''], ['example.com,evil.com'], ['*'], ['*.'], ['Example.com'], None]:
             with self.subTest(domains=domains):
                 (self.root / 'invocation.json').unlink(missing_ok=True)
                 (self.root / 'config.json').write_text(json.dumps(dict(self.config, allowed_domains=domains)))

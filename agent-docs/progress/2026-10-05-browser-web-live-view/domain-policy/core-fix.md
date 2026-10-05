@@ -17,10 +17,12 @@ completed: 2026-10-05
   - `browser_policy::url_origin_allowed`: action server の open と shared CDP の navigate で使う。
   - `browser_policy::origin_host_port`: egress の `host:port` と、agent-browser の `--allowed-domains` 用の host を作る。
   - shim の browser_cli.py・browser_action.py の照合（ORIGIN 正規表現と origin_allowed）。
-  - fixture を origin 形式に直した。新しい試験 `url_and_egress_follow_allowed_origin_scheme_host_port` を足した。
+  - fixture を origin 形式に直した（Rust 側のみ）。
+  - shim は旧形式の素の host も受ける（https・既定 port としてだけ読む。以前より狭い）。scripts/tests/test_browser_cli.py は葉の範囲外なので変えず、そのまま通す（attempt 1 の範囲 check 不合格の修正）。新しい試験 `url_and_egress_follow_allowed_origin_scheme_host_port` を足した。
 - worker protocol の型は変えていないので、docs/protocol の再生成は不要。
 
 ## 検査
+- attempt 2（範囲外の scripts/tests の変更を戻した後）: 範囲 check exit 0、`python3 -m unittest` test_browser_cli 15 passed
 - `cargo check --workspace --tests`: exit 0
 - `cargo test -p task-worker --lib -- prepared_file_is_hash_bound_nonempty_default_deny credential_request_origin_outside_effective_domain_is_denied`: 2 passed
 - `bash scripts/dev/test-parallel.sh`: exit 0（nextest 3956 passed / 0 failed / 13 ignored、doctest exit 0）

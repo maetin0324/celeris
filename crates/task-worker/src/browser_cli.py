@@ -33,7 +33,9 @@ VERB_ACTIONS = {"open": "navigate", "click": "click", "snapshot": "snapshot", "e
                 "screenshot": "screenshot", "download": "download", "scroll": "scroll", "close": "close"}
 # Canonical allowed origin from task-core: scheme, host and a non-default port.
 ORIGIN = re.compile(r"https://(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?"
-                    r"|http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?")
+                    r"|http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?"
+                    # Legacy bare host (pre-origin config): read as https on the default port only.
+                    r"|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+")
 
 
 def load_policy(config):
@@ -68,7 +70,7 @@ def origin_allowed(url, domains):
     if not host or host.startswith("*.") or port is None or parsed.username or parsed.password:
         return False
     for d in domains:
-        scheme, _, authority = d.partition("://")
+        scheme, _, authority = (d if "://" in d else "https://" + d).partition("://")
         default = 443 if scheme == "https" else 80
         base, sep, dport = authority.rpartition(":") if not authority.endswith("]") else ("", "", "")
         if not sep:

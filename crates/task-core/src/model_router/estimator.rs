@@ -2,6 +2,8 @@ use super::{context::RoutingContext, profiles::ModelProfile};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub mod sidecar;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct EstimatorDescriptor {
     pub id: String,

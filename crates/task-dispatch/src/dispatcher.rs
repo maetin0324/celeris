@@ -2070,6 +2070,7 @@ impl Dispatcher {
                     {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }
+                    self.record_routing_outcomes(task_id);
                     finished += 1;
                 }
                 Completion::Review {
@@ -2078,6 +2079,7 @@ impl Dispatcher {
                     outcome,
                 } => {
                     self.on_review_finished(task_id, run_id, outcome)?;
+                    self.record_routing_outcomes(task_id);
                     reviewed += 1;
                 }
                 Completion::WorkUnitChecks {
@@ -2109,6 +2111,7 @@ impl Dispatcher {
                     ) {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }
+                    self.record_routing_outcomes(task_id);
                     finished += 1;
                 }
                 Completion::Integration {
@@ -2117,6 +2120,7 @@ impl Dispatcher {
                     result,
                 } => {
                     self.on_integration_finished(task_id, &work_unit_id, *result)?;
+                    self.record_routing_outcomes(task_id);
                 }
             }
         }

@@ -279,6 +279,17 @@ impl Dispatcher {
         Some(registry.register(input.run_id, ctx, ttl, Instant::now()))
     }
 
+    /// run の完了（review の判定・WU 受け入れ検査・統合検査・終端）の後で、task の run の結果を
+    /// `routing_outcome_recorded` として追記する（ADR 2026-10-04 Phase 3）。冪等なので同じ events から
+    /// 何度呼んでもよい。記録の失敗で dispatch は止めない。
+    pub(super) fn record_routing_outcomes(&self, task_id: TaskId) {
+        if let Err(e) =
+            task_ops::routing_outcome::record_routing_outcomes(self.store.as_ref(), task_id)
+        {
+            tracing::warn!(%task_id, error = %e, "failed to record routing outcomes");
+        }
+    }
+
     /// run が `running` から外れたとき（完了・打ち切り）に、その run の context ref を外す。
     pub(super) fn release_routing_context(&self, run_id: &str) {
         if let Some(registry) = &self.routing_context_registry {

@@ -1,16 +1,17 @@
 ---
 tasks: [01M4651ZZP8FJKGG6W2WPFNKBH]
-status: draft
+status: awaiting-human
 updated: 2026-10-05
 ---
 
-# RouteLLM sidecar の shadow 評価（Phase 5・草稿）
+# RouteLLM sidecar の shadow 評価（Phase 5・実評価は人の手順待ち）
 
 ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §10 Phase 5 の記録。外部 estimator を
 sidecar adapter（`[model_routing.estimator.sidecar]`、既定 off・`shadow_only = true` 必須）で Phase 4 の
 shadow 評価に差し込めるかを確かめる。手順は [docs/ops/model-routing-migration.md](../ops/model-routing-migration.md) §10。
 
-**実 sidecar（RouteLLM の実 weights）の評価は未実行: 人の手順待ち。** 下の「偽 sidecar の結果」は配線と
+**Phase 5 の実評価は未完了（人の手順待ち）。** 実 sidecar（RouteLLM の実 weights）の start-stop と上限付き shadow は
+未実行で、原票（`docs/reports/model-routing-routellm-shadow/`）は close 時点（統合後 HEAD `18f60cef8b39`、2026-10-05）で無い。 下の「偽 sidecar の結果」は配線と
 protocol の検証であり、RouteLLM の品質・費用・overhead の実測ではない。偽の合格で実測の欄を置き換えない。
 
 ## 1. 偽 sidecar の結果（外部ネットワークなし）
@@ -79,7 +80,11 @@ prompt なしは `prompt_required`、prompt 付きは `uncalibrated_pair_score`�
 
 ## 3. 実 sidecar の結果
 
-**未実行: 人の手順待ち。** 決定 `routellm-weights-use`（weights の利用承認）と実行環境の用意が要る。
+**未実行: 人の手順待ち。** 人の決定 `routellm-weights-use`（2026-10-05）: `routellm/bert_gpt4_augmented`（観測 revision
+`86237e3df400`、HF に license 宣言なし）は**内部の shadow 評価に限り**使ってよい（再配布・公開なし、外部発表前に人が
+license を再判断）。worker は外部ネットワークと weights 取得ができないため、実行は人（Fable）が本番 host で行い、
+原票を `docs/reports/model-routing-routellm-shadow/` に置く。手順書 §10.1 の block は weights の full revision と
+checksum が記録されるまで `pending` のまま。
 手順は [docs/ops/model-routing-migration.md](../ops/model-routing-migration.md) §10.4〜§10.7、検査は
 `scripts/model-routing/real-sidecar-check.sh`（設定と weights が無ければ exit 2 = 未実行。合格扱いにしない）。
 
@@ -92,3 +97,16 @@ prompt なしは `prompt_required`、prompt 付きは `uncalibrated_pair_score`�
 | 品質（acceptance success）・費用への効果 | 未実行: 人の手順待ち |
 
 実測後にこの節を埋め、§2 の食い違いが直っていることを併記する。opt-in（本番判断への反映）はこの Phase では行わない。
+
+## 4. close 時点の確認（2026-10-05、統合後 HEAD `18f60cef8b39`）
+
+- 原票: `docs/reports/model-routing-routellm-shadow/` は無い → 転記なし。§3 は「未実行」のまま。
+- `sh scripts/model-routing/real-sidecar-check.sh` → `not run: set CELERIS_ROUTELLM_REAL=1 and CELERIS_ROUTELLM_WEIGHTS_DIR to approved local weights`（未実行。合格扱いにしない）。
+- `sh scripts/model-routing/check-runbook.sh` → ok（`routellm-weights-use=pending`）。`sh scripts/model-routing/fake-shadow-check.sh` → exit 0。
+- §2 の食い違い 1・2 は未修正（`crates/task-ops/src/routing_replay/estimator.rs::version_matches` は `estimator:<id>/<v>` を受けない）。
+  このまま実 sidecar の shadow を export/evaluate すると、正直な pin では全件 `estimator_version_mismatch`、dispatch の
+  decision id の行には shadow が付かず coverage 0 になる。実評価の前に直す（または実行時に `--estimator` の pin を
+  `estimator:<id>` にし、export の結合を確認する）。
+
+実行に使ったコマンド・exit・件数（N）・上限と実消費・completed/failed/timeout/dropped・hard constraint 違反数・
+primary 変更数・外部呼び出し数・起動停止検査（PID 終了・port 閉鎖）を、原票を置いた後に §3 の表へ転記する。

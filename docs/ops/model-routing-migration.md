@@ -567,6 +567,13 @@ approver: 未記入
 terms-evidence: 未記入
 ```
 
+- 人の決定（2026-10-05、`routellm-weights-use`）: `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`、HF に
+  license 宣言なし）は**内部の shadow 評価に限り**使ってよい。再配布・公開はしない。外部発表の前に人が license を
+  再判断する。実 sidecar の start-stop と上限付き shadow は人（Fable）が本番 host で §10.4〜§10.7 と
+  `scripts/model-routing/real-sidecar-check.sh` に沿って実行し、原票を `docs/reports/model-routing-routellm-shadow/` に置く。
+  上の block は、実行時に取得した weights の full revision・checksum と承認者・根拠を記入した時点で `approved` にする
+  （それまでは `pending`。`check-runbook.sh` は `approved` に full SHA と checksum を要求する）。
+
 ### 10.4 依存の pin と構築
 
 pin は `scripts/model-routing/requirements.lock` が正。この表と食い違うと `check-runbook.sh` が落ちる。

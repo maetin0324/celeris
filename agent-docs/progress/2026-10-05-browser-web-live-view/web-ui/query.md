@@ -33,3 +33,8 @@ tasks: [01M470CJT10MV8XVFEGSMCXHYS]
 - gateway の control command では `holder` が必要。`newControlHolder()` の UUID を takeover から renew・resume まで維持し、`lease_holder` と比較して本人の操作中かを表示する。
 - 後続の画面は `safeLivePath()` を通した `live_path` のみ iframe/link に使う。画面離脱時の beacon と pause 状態の再表示は run-screen 側で実装する。
 - web の既存 `screens.ts` 台帳には、この葉の 3 route は未登録。画面の完成時に fixture・台帳・全画面 mobile/a11y を追加する。
+
+## 再実行（attempt 2 の check 不合格の調査、2026-10-05）
+
+- `pnpm -C web test` の `components/content/artifact-preview.test.tsx` の hook timeout（30s）は負荷時の一過性。loadavg 9 で typecheck・lint・test（61 files / 369 tests、gateway 52）・check:boundaries・build を再実行して exit 0。
+- `pnpm -C web e2e e2e/shell/` の `home-layout.spec.ts:26`（360x800）は「ページが viewport より高くない」で overflow 3px。nav 行を外して build し直しても同じく落ちる（この葉の変更と無関係、main の 33465896 由来）。原因は `features/home/console-region.tsx` の枠の高さ下限 `MIN_VISIBLE + covered`（stale 電話幅の会話本文を見せる fix）が 360x800 の残り高さを超えること。home-stale-viewport の要求と home-layout の要求の調停が要り、この葉の範囲外なので plan_issue で申告した。

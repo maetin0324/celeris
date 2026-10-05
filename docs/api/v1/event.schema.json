@@ -2388,6 +2388,236 @@
           "type": "object"
         },
         {
+          "description": "2026-10-04 多目的 routing ADR §6（Phase 3）: 決定 1 件の特徴 snapshot（本文・secret なし）。wire は\n`decision_id, context_version, features, provenance, missing_fields` が event の欄に平たく並ぶ。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "context_version": {
+              "type": "string"
+            },
+            "decision_id": {
+              "type": "string"
+            },
+            "features": {
+              "default": null,
+              "description": "§3.4 の特徴（本文・生の command・credential を除いた snapshot）。形は `context_version` が決める。"
+            },
+            "missing_fields": {
+              "description": "取れなかった欄（未知を低リスクと同一視しないため、欠測を明示する）。",
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "provenance": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。",
+              "type": "object"
+            },
+            "request_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stage": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/FeatureStage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "const": "routing_features_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "decision_id",
+            "context_version"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 §6: proxy の要求 1 件の trace（run 側 decision を親に持つ。`request_id` で `llm_proxy_requests` と結合）。\n状態は変えない。",
+          "properties": {
+            "attempts": {
+              "description": "試した順の source。",
+              "items": {
+                "$ref": "#/$defs/RequestSourceAttempt"
+              },
+              "type": "array"
+            },
+            "decision_id": {
+              "description": "この要求の proxy 側 decision。",
+              "type": "string"
+            },
+            "fallback_reason": {
+              "description": "最終の source へ落ちた原因（fallback が無ければ `None`）。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parent_decision_id": {
+              "description": "run 側 decision（dispatch の `RoutingTraceV1.decision_id`）。standalone は `None`。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "description": "`llm_proxy_requests` と結合する要求 ID。",
+              "type": "string"
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "trace": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/RoutingTraceV1"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "proxy の trace（stage = proxy）。"
+            },
+            "type": {
+              "const": "routing_request_decided",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "decision_id"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 §6: run 1 件の結果 vector と reward（`model_router::feedback::project_run_outcomes` の投影）。\n訂正は新しい `outcome_id` + `supersedes` を追記する（上書きしない）。状態は変えない。",
+          "properties": {
+            "acceptance_passed": {
+              "default": null,
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "cash_usd": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "decision_id": {
+              "type": "string"
+            },
+            "evaluation_version": {
+              "type": "string"
+            },
+            "failed_criterion_ids": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "failure_class": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "outcome_id": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retries": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "review_passed": {
+              "default": null,
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "reward": {
+              "default": null,
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "supersedes": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "type": {
+              "const": "routing_outcome_recorded",
+              "type": "string"
+            },
+            "wall_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "type",
+            "outcome_id",
+            "decision_id",
+            "evaluation_version"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +\nmechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。",
           "properties": {
             "checkpoint": {
@@ -4073,6 +4303,14 @@
       ],
       "type": "object"
     },
+    "FeatureStage": {
+      "description": "特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。",
+      "enum": [
+        "dispatch",
+        "proxy"
+      ],
+      "type": "string"
+    },
     "FileDiffStat": {
       "properties": {
         "added": {
@@ -5519,6 +5757,37 @@
         "head",
         "uncommitted",
         "diff_stat"
+      ],
+      "type": "object"
+    },
+    "RequestSourceAttempt": {
+      "description": "proxy が要求 1 件で実際に試した source の参照（secret を含まない ID だけ）。",
+      "properties": {
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fallback_reason": {
+          "description": "次の候補へ送った理由（§6 の reason code。例 `rate_limit`・`health_down`）。最後に使った source は `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source_id"
       ],
       "type": "object"
     },

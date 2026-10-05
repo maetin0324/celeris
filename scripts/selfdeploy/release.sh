@@ -247,9 +247,8 @@ skip_step() {
 # 2026-10-02（task 01M3YT4PT3）: node_modules が入らない不具合そのものは bundle_web（web-bundle 段。node_modules の
 # 有無と `node -e 'import.meta.resolve(...); await import("./server/app.js")'` による import 解決）で直り、
 # node_modules が無い・import できないリリースは web.ok=false になって web-follow が切り替えない（ADR-0135）。
-# ただし NFS 上での web/app の展開（offline の prod install 含む）に 40〜60 分かかる問題は未対応で残っている。
-# それを解決するまで既定を skip にするかは人の判断なので、既定は 1（skip）のまま変えない。web の段を走らせるとき
-# は SD_GATE_SKIP_WEB=0 を明示する。
+# 2026-10-05（ADR 2026-10-05-release-web-stage-default-on）: リリースは /local（ローカル LVM）に置くようになり、
+# NFS 上の展開を理由にした既定 skip をやめた。既定は 0（web の段を走らせる）。止めたいときは SD_GATE_SKIP_WEB=1。
 WEB_OK=true
 WEB_FAILED_STEP=""
 WEB_SKIP_REASON=""
@@ -309,7 +308,7 @@ web_pnpm_release() {
 }
 
 decide_web_skip() {
-  if [ "${SD_GATE_SKIP_WEB:-1}" = 1 ]; then
+  if [ "${SD_GATE_SKIP_WEB:-0}" = 1 ]; then
     WEB_SKIP_REASON="SD_GATE_SKIP_WEB=1"
   elif [ ! -f "$BUILD/web/package.json" ]; then
     WEB_SKIP_REASON="no web/ directory"

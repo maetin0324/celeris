@@ -11,6 +11,7 @@ import { Badge } from "../components/ui/badge";
 import { shortId } from "../components/ui/short-id";
 import { ConsoleView, normalizeScope } from "../features/console/console-view";
 import { ConsoleRegion } from "../features/home/console-region";
+import { useUnconfirmedConnection } from "../features/home/use-unconfirmed";
 import { optionalString } from "../lib/search";
 import { formatAbsolute, formatRelative, serverNowMs } from "../lib/time";
 
@@ -42,7 +43,7 @@ function HomeEntries() {
         (a.due_at ? new Date(a.due_at).getTime() : Infinity) - (b.due_at ? new Date(b.due_at).getTime() : Infinity),
     )
     .slice(0, 3);
-  const unconfirmed = connection === "reconnecting" || connection === "closed" || inbox.isError;
+  const unconfirmed = useUnconfirmedConnection(connection) || inbox.isError;
   const projectTitles = new Map(projects.data?.items.map((project) => [project.id, project.title]));
   return (
     <nav aria-label="受信箱と通知" className="flex min-w-0 flex-col gap-3">

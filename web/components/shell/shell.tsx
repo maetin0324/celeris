@@ -163,7 +163,8 @@ export function Shell({ children }: { children: ReactNode }) {
 const connectionViews: Readonly<Record<ConnectionState | "down", { label: string; tone: BadgeTone }>> = {
   down: { label: "切断", tone: "danger" },
   open: { label: "接続済み", tone: "success" },
-  connecting: { label: "接続を確認中", tone: "neutral" },
+  // 「接続を確認中」は 360 で header を 2 段に折っていた（fix-r6 narrow）。他の語と同じ 3〜4 字に揃える。
+  connecting: { label: "確認中", tone: "neutral" },
   reconnecting: { label: "再接続中", tone: "warning" },
   unauthorized: { label: "認証が必要", tone: "danger" },
   closed: { label: "未接続", tone: "neutral" },

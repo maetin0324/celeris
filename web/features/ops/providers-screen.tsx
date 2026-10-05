@@ -154,11 +154,26 @@ function lastCheckText(check: { result: string; at: string; detail?: string | nu
   return `${checkResultLabel(check.result)}・${formatAbsolute(check.at)}${check.detail ? `（${check.detail}）` : ""}`;
 }
 
-/** 実行枠の現在値と状態を 1 行ずつ並べる表。状態は文字の badge で示す。 */
-export function ProviderStatusTable({ items }: { items: readonly ProviderView[] }) {
+/** 狭い幅（sm 未満）で積んだ行に出す「見出し: 」。表の見出し行は sm 未満で sr-only にするので、目で読む分だけ足す。 */
+function StackLabel({ children }: { children: string }) {
   return (
-    <Table aria-label="実行枠の状態">
-      <TableHeader>
+    <span aria-hidden="true" className="text-muted-foreground sm:hidden">
+      {children}:
+    </span>
+  );
+}
+
+/**
+ * 実行枠の現在値と状態を 1 行ずつ並べる表。状態は文字の badge で示す。
+ * sm 未満では 6 列が枠に収まらず右の列（同時実行・前回の確認）が見えなかったので、行を積んで
+ * 「見出し: 値」の形で全部の値を枠の中に出す（fix-r6 narrow）。sm 以上は従来の 6 列の表。
+ */
+export function ProviderStatusTable({ items }: { items: readonly ProviderView[] }) {
+  const cell =
+    "max-sm:flex max-sm:w-full max-sm:min-w-0 max-sm:flex-wrap max-sm:items-baseline max-sm:gap-x-1 max-sm:py-0.5";
+  return (
+    <Table aria-label="実行枠の状態" data-testid="provider-status-table">
+      <TableHeader className="max-sm:sr-only">
         <TableRow>
           <TableHead>実行枠</TableHead>
           <TableHead>状態</TableHead>
@@ -172,21 +187,38 @@ export function ProviderStatusTable({ items }: { items: readonly ProviderView[] 
         {items.map((item) => {
           const state = providerState(item, formatAbsolute);
           return (
-            <TableRow key={item.id} data-provider={item.id}>
-              <TableHead scope="row" className="align-top text-foreground">
+            <TableRow
+              key={item.id}
+              data-provider={item.id}
+              className="max-sm:flex max-sm:flex-wrap max-sm:items-center max-sm:gap-x-2 max-sm:py-2"
+            >
+              <TableHead
+                scope="row"
+                className="align-top text-foreground max-sm:min-w-0 max-sm:break-all max-sm:py-0.5"
+              >
                 {item.id}
               </TableHead>
-              <TableCell>
+              <TableCell className="max-sm:py-0.5">
                 <Badge tone={state.tone} data-state={state.label} className="whitespace-nowrap">
                   {state.label}
                 </Badge>
               </TableCell>
-              <TableCell className="whitespace-nowrap">{item.adapter}</TableCell>
-              <TableCell>{item.tiers.join(", ") || "なし"}</TableCell>
-              <TableCell>
+              <TableCell className={`whitespace-nowrap ${cell}`} data-field="adapter">
+                <StackLabel>道具</StackLabel>
+                {item.adapter}
+              </TableCell>
+              <TableCell className={cell} data-field="tiers">
+                <StackLabel>受ける段</StackLabel>
+                {item.tiers.join(", ") || "なし"}
+              </TableCell>
+              <TableCell className={cell} data-field="concurrency">
+                <StackLabel>同時実行</StackLabel>
                 {item.in_use != null ? `${item.in_use} / ${item.concurrency}` : `上限 ${item.concurrency}`}
               </TableCell>
-              <TableCell>{lastCheckText(item.last_check)}</TableCell>
+              <TableCell className={`${cell} max-sm:break-words`} data-field="last-check">
+                <StackLabel>前回の確認</StackLabel>
+                {lastCheckText(item.last_check)}
+              </TableCell>
             </TableRow>
           );
         })}

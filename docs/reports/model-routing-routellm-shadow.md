@@ -23,6 +23,9 @@ protocol の検証であり、RouteLLM の品質・費用・overhead の実測�
 
 構成: 一時 DB、in-process の llm-proxy（127.0.0.1:0）、偽の上流 2 本、loopback の偽 sidecar、
 固定時計（`FixedClock`）。`daily_max_requests = 3`、allowlist は全対象。run を 4 本流した。
+回避策は使わない: `RoutingDecided` は run の前に dispatch 側の decision id（`dec-run-<i>`）で残し、pin は
+正直な descriptor（`route-test` / `1`）で行う。proxy の要求記録（`routing_request_decided`）は daemon の
+`TaskProxyEventSink` と同じ手順で試験内に鏡写しした sink が追記する。
 
 | run | sidecar の応答 | estimator shadow の記録 |
 |---|---|---|
@@ -46,9 +49,10 @@ protocol の検証であり、RouteLLM の品質・費用・overhead の実測�
 | target_decisions | 4 |
 | evaluated / coverage | 2 / 0.5 |
 | completed / failed / timeout / dropped / prompt_required | 2 / 1 / 0 / 1 / 0 |
-| differs_from_heuristic / same_as_heuristic | 2 / 0 |
+| observed_estimator_versions | `estimator:route-test/1`（`estimator_version_mismatch` 0 件） |
+| differs_from_heuristic / same_as_heuristic / same_as_primary | 1 / 1 / 1 |
 | quality_observed / quality_unknown | 0 / 2 |
-| incomparable_reasons | `upstream_error`: 1、`cap_exceeded`: 1 |
+| incomparable_reasons | `upstream_error`: 1、`cap_exceeded`: 1、`unselected_model_outcome_unknown`: 1、`outcome_missing`: 1 |
 | unknown_reason | estimator は選ばないので、primary 以外の選択の結果は観測されない（品質は未知） |
 
 ### 1.2 実プロセスの wrapper（偽 classifier）と task-core 検証
@@ -62,21 +66,28 @@ prompt 付きの 2 要求を送った。応答 2 件とも task-core の `Estima
 prompt なしは `prompt_required`、prompt 付きは `uncalibrated_pair_score`・`raw_pair_win_rate=0.75`（偽 classifier の
 固定値）。SIGTERM 後に exit 0、PID 消滅、port 閉鎖を確認。
 
-## 2. 偽 sidecar で見つかった食い違い（未解決）
+## 2. 偽 sidecar で見つかった食い違い（解決済み）
 
-結合試験は次の 3 点を回避して通している。実 sidecar の評価の前に直す必要がある。
+shadow-check で見つけた 3 点は shadow-join unit で直した。結合試験（§1.1）は回避策なしで通る。
 
-1. **decision id の結合**: proxy が記録する estimator shadow の `primary_decision_id` は proxy の要求ごとの
-   decision id（`pdec_…`）で、`routing_replay::export` は `decision_id` が一致する行にだけ shadow を付ける。
-   dispatch の `RoutingDecided` の decision id では 4 行とも shadow 0 件になる。試験は shadow の
-   `primary_decision_id` で `RoutingDecided` を書いて回避した。
-2. **estimator version の照合**: daemon は `policy_version = estimator:<id>/<version>` で記録するが、
-   `crates/task-ops/src/routing_replay/estimator.rs` の `version_matches` は `<v>`・`<id>@<v>`・`<id>:<v>`・`<id>/<v>`
-   しか受けない。正直な descriptor（`route-test` / `1`）で pin すると 4 件とも `estimator_version_mismatch`。
-   試験は照合が直るまで `estimator:route-test` で pin し直す（直れば正直な pin の経路を通る）。
-3. **model の名前**: shadow の `model` は上流の wire model 名、dataset の候補と `primary_model` は model profile id。
-   名前が一致しないため `same_as_heuristic`・`same_as_primary` は意味のある値にならない（上の `differs = 2` は
-   この食い違いを含む）。
+1. **decision id の結合（export 側で対応表から引く）**: estimator shadow の `primary_decision_id` は今も
+   proxy の要求ごとの decision id（`pdec_…`）のまま記録する（sidecar が採点した候補列は proxy の決定のもの）。
+   `routing_replay::export` は task ごとに先に対応表（`routing_request_decided` の `decision_id` →
+   `parent_decision_id`、stage = proxy の `RoutingDecided` も同様）を作り、shadow を記録どおりの id か、
+   対応表で引いた dispatch の decision id の行に付ける。proxy が親を知らなかった記録は run id などで推定して
+   結ばない（行に付かない）。対応表は本走査の前に集めるので、shadow が要求記録より先に追記されても結ぶ。
+2. **estimator version の照合**: `crates/task-ops/src/routing_replay/estimator.rs` の `version_matches` が
+   daemon の記録形式 `estimator:<id>/<version>` を受けるようにした。正直な pin（`route-test` / `1`）で一致し、
+   別 version（`2`）の pin では `estimator_version_mismatch` のまま（試験
+   `routing_estimator_shadow_joins_daemon_records`）。
+3. **model の名前（profile id へ正規化）**: llm-proxy の estimator shadow は、shadow kernel が catalog の
+   deployment から引いた model profile id（sidecar が採点した名前と同じ）を `candidate_model` に記録する
+   （`KernelChoice.chosen_model_profile_id`）。上流の wire model 名は記録しない。evaluate は shadow の model が
+   その行の候補の profile id に無ければ `estimator_model_unknown` と数え、heuristic・primary との一致にも
+   食い違いにも数えない（旧形式の記録が wire 名で残っていても一致扱いにならない）。
+
+残る前提: dispatch の候補・`primary_model` と proxy の catalog が同じ profile id 体系（daemon は両方とも
+legacy 設定の正規化 `legacy:<family>:<wire>` から作る）であること。食い違えば `estimator_model_unknown` に出る。
 
 ## 3. 実 sidecar の結果
 
@@ -96,17 +107,14 @@ checksum が記録されるまで `pending` のまま。
 | overhead（mean / p50 / p95） | 未実行: 人の手順待ち |
 | 品質（acceptance success）・費用への効果 | 未実行: 人の手順待ち |
 
-実測後にこの節を埋め、§2 の食い違いが直っていることを併記する。opt-in（本番判断への反映）はこの Phase では行わない。
+実測後にこの節を埋める（§2 の 3 点は実測の前に直してある）。opt-in（本番判断への反映）はこの Phase では行わない。
 
 ## 4. close 時点の確認（2026-10-05、統合後 HEAD `18f60cef8b39`）
 
 - 原票: `docs/reports/model-routing-routellm-shadow/` は無い → 転記なし。§3 は「未実行」のまま。
 - `sh scripts/model-routing/real-sidecar-check.sh` → `not run: set CELERIS_ROUTELLM_REAL=1 and CELERIS_ROUTELLM_WEIGHTS_DIR to approved local weights`（未実行。合格扱いにしない）。
 - `sh scripts/model-routing/check-runbook.sh` → ok（`routellm-weights-use=pending`）。`sh scripts/model-routing/fake-shadow-check.sh` → exit 0。
-- §2 の食い違い 1・2 は未修正（`crates/task-ops/src/routing_replay/estimator.rs::version_matches` は `estimator:<id>/<v>` を受けない）。
-  このまま実 sidecar の shadow を export/evaluate すると、正直な pin では全件 `estimator_version_mismatch`、dispatch の
-  decision id の行には shadow が付かず coverage 0 になる。実評価の前に直す（または実行時に `--estimator` の pin を
-  `estimator:<id>` にし、export の結合を確認する）。
+- §2 の食い違い 3 点は shadow-join unit で解決済み（`integrate wu/shadow-join` `3687abbb` を close branch に取り込み済み）。
 
 実行に使ったコマンド・exit・件数（N）・上限と実消費・completed/failed/timeout/dropped・hard constraint 違反数・
 primary 変更数・外部呼び出し数・起動停止検査（PID 終了・port 閉鎖）を、原票を置いた後に §3 の表へ転記する。

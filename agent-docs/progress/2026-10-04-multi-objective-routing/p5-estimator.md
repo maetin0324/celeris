@@ -43,15 +43,12 @@ shadow 評価の道具立てを実装した。本番の切り替えはしてい�
 1. 実 RouteLLM sidecar の start-stop（`routing_routellm_real_sidecar_start_stop`）と上限付き shadow
    （`routing_routellm_real_shadow_within_caps`）が未実行。人の実行と原票待ち。手順書 §10.1 の block は weights の
    full revision・checksum が記録されるまで `pending`。
-2. 偽 sidecar の結合試験が回避している食い違い（report §2）: (1) estimator shadow の `primary_decision_id`（proxy の
-   `pdec_…`）と export の decision id の結合、(2) `version_matches` が `estimator:<id>/<v>` を受けない、(3) shadow の
-   wire model 名と dataset の model profile id の不一致。実評価の前に直さないと coverage 0・全件 version mismatch になる。
+2. （解決済み）偽 sidecar の結合試験が回避していた食い違い 3 点（report §2）は shadow-join unit が直し、
+   `3687abbb`（integrate wu/shadow-join）を close branch に取り込んだ。
 3. 推移依存の lock と CPU/GPU wheel の選択、sidecar 推論の実資源費（daemon は名目 `SIDECAR_NOMINAL_CALL_USD` で数える）、
    raw score の v1 DTO 専用欄、校正（`calibration_version`）。
 
 ## 提案
 
-- 実評価の前に、未解決 2 の (1)(2)(3) を直す葉（task-ops `routing_replay`・llm-proxy `estimator_shadow`、範囲 check に
-  `crates/celeris/tests/routing_estimator_shadow.rs` を許可し試験の回避を外す）を replan で close の前に置く。
 - 人の実行後、close を再走して原票の実行コマンド・exit・件数・上限消費・制約違反数を report §3 に転記し、
   本ファイルを `status: done` にする。opt-in（本番判断への反映）は別の Phase で人が決める。

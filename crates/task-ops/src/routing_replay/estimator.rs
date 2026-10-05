@@ -201,10 +201,12 @@ pub struct EstimatorComparisonV1 {
     pub unknown_reason: String,
 }
 
+/// `estimator:<id>/<v>` は daemon（llm-proxy の estimator shadow）が記録する形。
 fn version_matches(observed: &str, d: &EstimatorDescriptor) -> bool {
     let id = &d.estimator_id;
     let v = &d.version;
     [
+        format!("estimator:{id}/{v}"),
         v.clone(),
         format!("{id}@{v}"),
         format!("{id}:{v}"),
@@ -347,6 +349,12 @@ pub(super) fn compare(
             incomparable("no_estimator_choice");
             continue;
         };
+        // 比較は model profile id の名前空間で行う。候補の profile id に無い名前（上流の wire model
+        // 名で残った旧記録など）は対応が取れないので unknown と数え、一致にも食い違いにも数えない。
+        if !row.candidates.iter().any(|c| c.model == model) {
+            incomparable("estimator_model_unknown");
+            continue;
+        }
         if pair.is_some_and(|p| !p.contains(model)) {
             incomparable("outside_pinned_pair");
             continue;

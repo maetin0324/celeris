@@ -1,10 +1,14 @@
+use std::path::{Path, PathBuf};
+
 use rusqlite::{Connection, params};
 use serde_json::Value;
 
 use super::SqliteStore;
 
-#[test]
-fn chat_legacy_projects_order_idempotence_fts_and_session_retire() {
+/// Builds a pre-cos_chat database with old CoS rows in two projects and the
+/// global scope, one non-CoS row and one live CoS session, then opens the
+/// store so the migration and the legacy projection run.
+fn migrated_fixture() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("legacy.sqlite3");
     let mut conn = Connection::open(&path).expect("open fixture");
@@ -82,18 +86,26 @@ fn chat_legacy_projects_order_idempotence_fts_and_session_retire() {
         [],
     )
     .expect("session");
+    conn.execute(
+        "INSERT INTO node_sessions(id,node_id,kind,adapter,session_id,created_at,last_used_at) \
+         VALUES('eng-session','engineer','conversation','claude-code','session2','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z')",
+        [],
+    )
+    .expect("non CoS session");
     drop(conn);
-
     drop(SqliteStore::open(&path).expect("migrate and import"));
+    (dir, path)
+}
+
+fn count(path: &Path, sql: &str) -> i64 {
+    let conn = Connection::open(path).expect("inspect");
+    conn.query_row(sql, [], |r| r.get(0)).expect("count")
+}
+
+#[test]
+fn chat_legacy_one_thread_per_project_and_global() {
+    let (_dir, path) = migrated_fixture();
     let conn = Connection::open(&path).expect("inspect");
-    let threads: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM chat_threads WHERE kind='legacy'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("threads");
-    assert_eq!(threads, 3);
     let scoped: Vec<(String, Option<String>)> = conn
         .prepare("SELECT id,project_id FROM chat_threads WHERE kind='legacy' ORDER BY id")
         .expect("scopes")
@@ -109,76 +121,78 @@ fn chat_legacy_projects_order_idempotence_fts_and_session_retire() {
             ("legacy:project:p2".into(), Some("p2".into())),
         ]
     );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_messages WHERE thread_id='legacy:global'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_messages WHERE thread_id='legacy:project:p2'"
+        ),
+        1
+    );
+}
+
+#[test]
+fn chat_legacy_seq_follows_created_at_then_id_and_maps_roles() {
+    let (_dir, path) = migrated_fixture();
+    let conn = Connection::open(&path).expect("inspect");
     let mut stmt = conn
         .prepare(
             "SELECT legacy_message_id,seq,role,run_id,metadata_json FROM chat_messages \
-         WHERE thread_id='legacy:project:p1' ORDER BY seq",
+             WHERE thread_id='legacy:project:p1' ORDER BY seq",
         )
         .expect("messages");
-    let rows: Vec<_> = stmt
+    let rows: Vec<(String, i64, String, Option<String>, String)> = stmt
         .query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, i64>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, Option<String>>(3)?,
-                r.get::<_, String>(4)?,
-            ))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })
         .expect("query")
         .map(|r| r.expect("row"))
         .collect();
     assert_eq!(
         rows.iter()
-            .map(|r| (&r.0, r.1, r.2.as_str()))
+            .map(|r| (r.0.as_str(), r.1, r.2.as_str()))
             .collect::<Vec<_>>(),
         vec![
-            (&"a".to_owned(), 1, "user"),
-            (&"same-time".to_owned(), 2, "assistant"),
-            (&"b".to_owned(), 3, "assistant")
+            ("a", 1, "user"),
+            ("same-time", 2, "assistant"),
+            ("b", 3, "assistant")
         ]
     );
     assert_eq!(rows[2].3.as_deref(), Some("run-b"));
     let meta: Value = serde_json::from_str(&rows[2].4).expect("metadata");
     assert_eq!(meta["legacy_source"]["task_id"], "task-b");
     assert_eq!(meta["legacy_source"]["metadata"]["action"], "kept");
-    drop(stmt);
-    let hits: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM chat_search WHERE chat_search MATCH '回答特有語'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("fts");
-    assert_eq!(hits, 1);
-    let retired: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM node_sessions WHERE id='cos-session' AND retired_at IS NOT NULL",
-            [],
-            |r| r.get(0),
-        )
-        .expect("retired");
-    assert_eq!(retired, 1);
-    let old_count: i64 = conn
-        .query_row("SELECT count(*) FROM messages", [], |r| r.get(0))
-        .expect("old count");
-    assert_eq!(old_count, 6);
-    let non_cos: i64 = conn
-        .query_row(
-            "SELECT count(*) FROM messages WHERE id='other' AND text='非 CoS 本文'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("non CoS preserved");
-    assert_eq!(non_cos, 1);
-    drop(conn);
+}
 
+#[test]
+fn chat_legacy_reopen_is_idempotent_and_catches_up_late_rows() {
+    let (_dir, path) = migrated_fixture();
+    assert_eq!(count(&path, "SELECT count(*) FROM chat_messages"), 5);
     drop(SqliteStore::open(&path).expect("reopen"));
-    let conn = Connection::open(&path).expect("inspect again");
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM chat_messages", [], |r| r.get(0))
-        .expect("count");
-    assert_eq!(count, 5);
+    drop(SqliteStore::open(&path).expect("reopen twice"));
+    assert_eq!(count(&path, "SELECT count(*) FROM chat_messages"), 5);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_threads WHERE kind='legacy'"
+        ),
+        3
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_search WHERE chat_search MATCH '回答特有語'"
+        ),
+        1
+    );
+
+    let conn = Connection::open(&path).expect("late write");
     conn.execute(
         "INSERT INTO messages(id,node_id,project_id,role,text,created_at) \
          VALUES('new','cos','p1','user','後続本文','2026-10-05T00:00:03Z')",
@@ -187,17 +201,67 @@ fn chat_legacy_projects_order_idempotence_fts_and_session_retire() {
     .expect("late old write");
     drop(conn);
     drop(SqliteStore::open(&path).expect("catch up"));
-    let conn = Connection::open(&path).expect("final inspect");
-    let seq: i64 = conn
-        .query_row(
-            "SELECT seq FROM chat_messages WHERE legacy_message_id='new'",
-            [],
-            |r| r.get(0),
-        )
-        .expect("new projection");
-    assert_eq!(seq, 4);
-    let count: i64 = conn
-        .query_row("SELECT count(*) FROM chat_messages", [], |r| r.get(0))
-        .expect("final count");
-    assert_eq!(count, 6);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT seq FROM chat_messages WHERE legacy_message_id='new'"
+        ),
+        4
+    );
+    assert_eq!(count(&path, "SELECT count(*) FROM chat_messages"), 6);
+}
+
+#[test]
+fn chat_legacy_keeps_old_and_non_cos_messages() {
+    let (_dir, path) = migrated_fixture();
+    assert_eq!(count(&path, "SELECT count(*) FROM messages"), 6);
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM messages WHERE id='other' AND text='非 CoS 本文'"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_messages WHERE legacy_message_id='other'"
+        ),
+        0
+    );
+}
+
+#[test]
+fn chat_legacy_fts_finds_imported_bodies() {
+    let (_dir, path) = migrated_fixture();
+    for term in ["回答特有語", "質問特有語", "全体特有語"] {
+        let sql = format!("SELECT count(*) FROM chat_search WHERE chat_search MATCH '{term}'");
+        assert_eq!(count(&path, &sql), 1, "{term}");
+    }
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM chat_search WHERE chat_search MATCH '非'"
+        ),
+        0
+    );
+}
+
+#[test]
+fn chat_legacy_retires_only_cos_sessions() {
+    let (_dir, path) = migrated_fixture();
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM node_sessions WHERE id='cos-session' AND retired_at IS NOT NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &path,
+            "SELECT count(*) FROM node_sessions WHERE id='eng-session' AND retired_at IS NULL"
+        ),
+        1
+    );
 }

@@ -68,7 +68,7 @@ function HomeEntries() {
               const soon = item.due_at && new Date(item.due_at).getTime() - serverNowMs() < 86_400_000;
               return (
                 <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-2">
-                  <span className="min-w-0 flex-1 break-words font-medium">{item.title}</span>
+                  <span className="min-w-0 basis-full break-words font-medium md:basis-0 md:flex-1">{item.title}</span>
                   {item.due_at ? (
                     <span className="text-label">
                       <time dateTime={item.due_at} title={formatAbsolute(item.due_at)}>
@@ -112,7 +112,7 @@ function Screen() {
     <ScreenFrame title="ホーム" route="/">
       <HomeEntries />
       <ConsoleRegion>
-        <ConsoleView scope={scope} label={scope === "all" ? "CoS" : scope} />
+        <ConsoleView scope={scope} label={scope === "all" ? "CoS" : scope} contained />
       </ConsoleRegion>
     </ScreenFrame>
   );

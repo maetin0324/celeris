@@ -58,37 +58,47 @@ function pageMetrics() {
 }
 
 // 追記の追従。末尾にいる間だけ、version が変わるたびにページの末尾へ送る。離れたら away を立てる。
-function useFollowPage(version: string) {
+function useFollowPage(version: string, enabled: boolean) {
   const atBottom = useRef(true);
   const [away, setAway] = useState(false);
   useEffect(() => {
+    if (!enabled) return;
     const onScroll = () => {
       atBottom.current = isNearBottom(pageMetrics());
       if (atBottom.current) setAway(false);
     };
     window.addEventListener("scroll", onScroll, { passive: true });
     return () => window.removeEventListener("scroll", onScroll);
-  }, []);
+  }, [enabled]);
   useLayoutEffect(() => {
-    if (version === "0") return;
+    if (!enabled || version === "0") return;
     if (atBottom.current) window.scrollTo({ top: pageMetrics().scrollHeight });
     else setAway(true);
-  }, [version]);
+  }, [enabled, version]);
   const toLatest = useCallback(() => {
+    if (!enabled) return;
     atBottom.current = true;
     setAway(false);
     window.scrollTo({ top: pageMetrics().scrollHeight });
-  }, []);
+  }, [enabled]);
   return { away, toLatest };
 }
 
-export function ConsoleView({ scope, label }: { scope: string; label: string }) {
+export function ConsoleView({
+  scope,
+  label,
+  contained = false,
+}: {
+  scope: string;
+  label: string;
+  contained?: boolean;
+}) {
   const console_ = useConsole(scope);
   const send = useSendInstruct(scope);
   const fresh = useNewConversation(scope, console_.cursor);
   const draft = useSyncExternalStore(draftStore.subscribe, () => draftStore.get(scope));
   const composing = useRef(false);
-  const follow = useFollowPage(blocksVersion(console_.blocks));
+  const follow = useFollowPage(blocksVersion(console_.blocks), !contained);
   const loadingPhase = useDelayPhase(console_.isPending);
   useKeyboardOffset();
 
@@ -147,7 +157,7 @@ export function ConsoleView({ scope, label }: { scope: string; label: string }) 
           void submit();
         }}
       >
-        {follow.away ? (
+        {!contained && follow.away ? (
           <Button type="button" size="sm" className="self-end" onClick={follow.toLatest} data-testid="console-latest">
             <Icon name="chevron-down" />
             最新へ

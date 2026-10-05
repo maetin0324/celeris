@@ -3,14 +3,13 @@ import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 
 // ホームの会話の枠。会話（ConsoleView）をこの枠の中だけで scroll させ、ページ全体を viewport の高さに収める。
-// ConsoleView は追記のたびにページ（window）を末尾へ送るので、ページが viewport より高いと初回表示で
-// h1 と判断待ちが上へ押し出される。枠の高さを「viewport − 枠の上端 − main の下の余白」に合わせて
+// ConsoleView のページ追従は contained モードで止める。枠の高さを「viewport − 枠の上端 − main の下の余白」に合わせて
 // ページを伸ばさず、window の scroll を起こさない。高さは runtime の viewport 補正なので style へ直接書く。
 // 枠の中は末尾にいる間だけ追記に合わせて末尾へ送り、離れて読んでいる間は動かさずに「最新へ」を出す。末尾は
 // ConsoleView の下の余白（fixed の送信欄の逃げ）のうち送信欄に隠れる分までとし、最後の block を送信欄のすぐ上に置く。
 
 /** 枠の最低の高さ（px）。これより低い viewport ではページ側の scroll に任せる。 */
-const MIN_HEIGHT = 240;
+const MIN_HEIGHT = 160;
 /** 末尾とみなす距離（px）。 */
 const NEAR_BOTTOM = 48;
 /** 最後の block・「最新へ」と送信欄の間に残す隙間（px）。 */

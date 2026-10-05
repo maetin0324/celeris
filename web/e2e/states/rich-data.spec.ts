@@ -62,7 +62,7 @@ test("default fixture shows reports, approvals and the review-pending task witho
     await expect(page.locator("h1")).toContainText("タスクの詳細 T1");
     await expect(page.locator("[data-fetch-state='loading']")).toHaveCount(0);
     await expect(page.locator("[data-fetch-state='error']")).toHaveCount(0);
-    await expect(page.getByTestId("execution-view")).toContainText("verifying");
+    await expect(page.getByTestId("execution-view").locator("[data-phase]")).toHaveAttribute("data-phase", "verifying");
     await expect(page.getByTestId("execution-view")).toContainText("v1（2 件）");
     await expect(page.getByTestId("routing-panel")).toContainText("担当 ui-ux");
     await expect(page.getByTestId("routing-panel")).toContainText("R1: standard / standard / ui-ux（rule-standard）");

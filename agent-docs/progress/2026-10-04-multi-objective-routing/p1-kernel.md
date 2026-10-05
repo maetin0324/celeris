@@ -6,4 +6,6 @@ Policy は ADR §3.3 の lane 別初期値と mode を持ち、weights と正規
 
 RoutingRecord.optimizer は optional で、旧 event JSON の欠落を許容する。指定された四つの task-core 試験で profile 分離、制約の優先、安定順位と未知値、旧 event の読み取りと audit の互換を確認した。
 
-検証: `cargo test -p task-core routing_ --lib` 成功、`cargo clippy --workspace -- -D warnings` 成功。
+`RoutingDecided` の追加欄を反映するため `docs/api/v1/event.schema.json` も再生成した。前回 run でこの snapshot を更新し忘れ、`event_row_schema_matches_committed` が失敗していた。
+
+検証: `UPDATE_SCHEMA=1 cargo test -p task-core event_row_schema_matches_committed`、`cargo test -p task-core && cargo test -p task-api`、`cargo clippy --workspace -- -D warnings` はいずれも成功。初回の task-api 全体実行では docs 検索試験が一度失敗したが、単独再実行と同じ全体 check の再実行は成功した。

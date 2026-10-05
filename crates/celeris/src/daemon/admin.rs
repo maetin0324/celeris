@@ -227,6 +227,9 @@ pub(crate) fn reload_providers(
     // Phase 2: dispatcher の routing 設定も新しい snapshot に揃える（`Config::load` を通った値だけ）。
     if let Some(runtime) = &new_config.model_routing.runtime {
         dispatcher.set_dispatch_routing(runtime.dispatch_settings());
+        // Phase 4: shadow policy も同じ snapshot から。listener（llm-proxy の shadow）へは新しい
+        // mode と policy の組が 1 回で渡り、queue は上限・予約先を丸ごと差し替える。
+        dispatcher.set_routing_shadow(runtime.shadow.clone());
     }
     config.model_routing = new_config.model_routing;
     config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;

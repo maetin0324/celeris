@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::add::{NewTaskSpec, create_task};
+use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
 use task_core::model_router::policy::RoutingMode;
 use task_core::model_routing::LaneResolution;
 use task_core::{LaneCeiling, RoutingRecord, Task, Tier};
@@ -250,5 +251,134 @@ fn dispatch_decision_pointing_at_a_request_without_child_is_incomplete() {
     assert_eq!(
         audit.runs[0].incomplete_reasons,
         vec![INCOMPLETE_REQUEST_LOG_MISSING.to_string()]
+    );
+}
+
+fn request_decided(
+    request_id: &str,
+    decision_id: &str,
+    parent: Option<&str>,
+    run_id: Option<&str>,
+    attempts: &[(&str, &str, Option<&str>)],
+) -> Event {
+    let mut t = trace(PROXY_STAGE, decision_id, run_id, Some(request_id));
+    t.parent_decision_id = parent.map(str::to_string);
+    Event::RoutingRequestDecided {
+        record: Box::new(RoutingRequestRecord {
+            request_id: request_id.into(),
+            decision_id: decision_id.into(),
+            parent_decision_id: parent.map(str::to_string),
+            run_id: run_id.map(str::to_string),
+            trace: Some(Box::new(t)),
+            attempts: attempts
+                .iter()
+                .map(|(source, model, fallback)| RequestSourceAttempt {
+                    source_id: (*source).into(),
+                    model: Some((*model).into()),
+                    account_id: None,
+                    fallback_reason: fallback.map(str::to_string),
+                })
+                .collect(),
+            fallback_reason: attempts.iter().find_map(|a| a.2.map(str::to_string)),
+        }),
+    }
+}
+
+/// Phase 3: `routing_request_decided` を parent decision か run_id で run に結び、Phase 2 の同じ要求の子へ
+/// 足す。実際の source は proxy log → 試した source → trace の順。結べない要求は推定で結ばない。
+#[test]
+fn request_records_link_to_runs_with_actual_source() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = new_task(&store);
+    let events = vec![
+        decided(&task, "r1", Some(trace("dispatch", "d1", Some("r1"), None))),
+        // parent decision で r1 に結ぶ。log が無いので incomplete、実 source は試した最後。
+        request_decided(
+            "req-x",
+            "px",
+            Some("d1"),
+            None,
+            &[
+                ("openai_compatible:qwen", "qwen3", Some("rate_limit")),
+                ("claude:cc-1", "sonnet", None),
+            ],
+        ),
+        // run_id で結ぶ。log と一致するので実 source は log。
+        request_decided("req-y", "py", None, Some("r1"), &[]),
+        // Phase 2 の子と同じ要求は 1 件にまとめる。
+        decided(
+            &task,
+            "r1",
+            Some(trace(PROXY_STAGE, "pz", Some("r1"), Some("req-z"))),
+        ),
+        request_decided(
+            "req-z",
+            "pz",
+            Some("d1"),
+            Some("r1"),
+            &[("s-z", "m-z", None)],
+        ),
+        // 知らない親の要求は run に結ばない。
+        request_decided("req-u", "pu", Some("d-unknown"), None, &[]),
+    ];
+    let mut log = FakeLog::default();
+    for (req, dec) in [("req-y", "py"), ("req-z", "pz")] {
+        log.0.insert(
+            req.into(),
+            RoutingCorrelation {
+                decision_id: Some(dec.into()),
+                source_id: Some(format!("log-src-{req}")),
+                model: Some(format!("log-model-{req}")),
+                ..RoutingCorrelation::default()
+            },
+        );
+    }
+    let audit = routing_audit_with_requests(&task, &events, &log).unwrap();
+    assert_eq!(audit.runs.len(), 1);
+    let run = &audit.runs[0];
+    assert_eq!(run.decision_id.as_deref(), Some("d1"));
+    let reqs = run.requests.as_ref().expect("requests");
+    let ids: Vec<_> = reqs.iter().map(|c| c.request_id.as_deref()).collect();
+    assert_eq!(ids, vec![Some("req-z"), Some("req-x"), Some("req-y")]);
+    let x = &reqs[1];
+    assert_eq!(x.parent_decision_id.as_deref(), Some("d1"));
+    assert_eq!(x.attempts.len(), 2);
+    assert_eq!(x.fallback_reason.as_deref(), Some("rate_limit"));
+    assert_eq!(
+        x.incomplete_reason.as_deref(),
+        Some(INCOMPLETE_REQUEST_LOG_MISSING)
+    );
+    let xa = x.actual.as_ref().expect("actual");
+    assert_eq!(
+        (
+            xa.source_id.as_deref(),
+            xa.model.as_deref(),
+            xa.from.as_str()
+        ),
+        (
+            Some("claude:cc-1"),
+            Some("sonnet"),
+            ACTUAL_FROM_REQUEST_ATTEMPTS
+        )
+    );
+    let ya = reqs[2].actual.as_ref().expect("actual");
+    assert_eq!(
+        (ya.model.as_deref(), ya.from.as_str()),
+        (Some("log-model-req-y"), ACTUAL_FROM_PROXY_LOG)
+    );
+    let z = &reqs[0];
+    assert_eq!(z.attempts.len(), 1);
+    assert_eq!(z.parent_decision_id.as_deref(), Some("d1"));
+    assert_eq!(
+        z.actual.as_ref().map(|a| a.from.as_str()),
+        Some(ACTUAL_FROM_PROXY_LOG)
+    );
+    assert_eq!(run.audit_incomplete, Some(true));
+    assert_eq!(run.incomplete_reasons, vec![INCOMPLETE_REQUEST_LOG_MISSING]);
+    assert_eq!(run.actual_sources.len(), 3);
+    assert_eq!(audit.unbound_requests.len(), 1);
+    assert_eq!(
+        audit.unbound_requests[0].request_id.as_deref(),
+        Some("req-u")
     );
 }

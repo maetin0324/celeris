@@ -24,6 +24,7 @@ import {
   tiersResolvingTo,
 } from "./providers-llm-source";
 import { RoutingCatalogList } from "./routing-catalog-section";
+import { DeploymentStateList } from "./routing-state-view";
 
 type Sender = ReturnType<typeof useActionResult>;
 const inputClass = "block w-full min-h-11 rounded border p-2";
@@ -231,6 +232,11 @@ export function LlmSourceList({ data }: { data: LlmSourcesView }) {
             {source.enabled ? "有効" : "無効"} / {reach}
             {resolving.length > 0 && ` / 解決先: ${resolving.join(", ")}`}
             {scope && <span className="block">{scope}</span>}
+            {source.deployments && source.deployments.length > 0 && (
+              <div className="mt-2">
+                <DeploymentStateList states={source.deployments} />
+              </div>
+            )}
           </li>
         );
       })}

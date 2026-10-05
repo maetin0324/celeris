@@ -4,7 +4,7 @@ tasks: [01M44MBCP98FNEEMEXG5CQRQQA, 01M44H0SRV70E32AQ6C5N37MSK]
 # 多目的モデルルーティング: 共通 kernel と Phase 1〜5 の実装契約
 
 - 日付: 2026-10-04
-- 状態: **設計を記録、実装は未着手**。research 段の人レビューへ渡す architecture ADR。以下の型・設定・API・試験名は、既存と明記したもの以外は実装予定である。
+- 状態: **設計を記録**。実装済みの範囲は末尾の付記（Phase 1・Phase 2）を正とする。research 段の人レビューへ渡す architecture ADR。以下の型・設定・API・試験名は、既存と明記したもの以外は実装予定である。
 - 回答済みの決定: **shadow-exec = opt-in-capped**（実呼出しは既定 off、対象と一日上限を設定）。**estimator-scope = adapter-plus-routellm**（Phase 5 は汎用 sidecar estimator adapter に加え、RouteLLM 型 classifier を実 sidecar として動かす起動・停止手順、license・依存・CPU/GPU 要件の記録、上限付き shadow 評価まで。本番切り替えを含めない）。weights の利用条件は **[needs-human] `routellm-weights-use`**（§7.3、Phase 5 前）として分離し、この回答済みの範囲を縮小しない。
 - 根拠: [棚卸し](../progress/2026-10-04-multi-objective-routing/inventory.md)、[upstream-oss 調査](../progress/2026-10-04-multi-objective-routing/upstream-oss.md)、[進捗](../progress/2026-10-04-multi-objective-routing.md)。調査原本は `celeris-wu/01M44H0SRV70E32AQ6C5N37MSK/{inventory,upstream-oss}` の同名ファイル。着手 HEAD `aa44fe420e25` には両方を含む。
 - 拡張元: [ADR-0069](0069-routing-four-layers.md) の Model / Review 層、[ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md) の adapter/source 分離と cheap Qwen 制限。Ownership / Harness を選び直す機能ではない。
@@ -353,3 +353,17 @@ Phase 1（p1-model）の実装は次のとおり。Phase 2 以降の機能（sou
 - GUI（`gui/`）と web（`web/`）は catalog の生成型を持ち、model と deployment を分けて表示し、欠測は「不明」と出す（0 円・品質保証に見せない）。
 - 移行手順は `docs/ops/model-routing-migration.md`（旧→新対応、警告の読み方、検証、legacy→shadow、rollback）。
 - 試験: 追加した `routing_*` 8 件（task-core 3・celeris 2・task-api 1・GUI/web 1 の `routing_catalog_missing_metadata`）、`legacy_equivalence` 系、既存回帰 4 件はいずれも 0 件実行でないことを確認した。証拠は `agent-docs/progress/2026-10-04-multi-objective-routing/p1-model.md`。
+
+## 付記（2026-10-05、Phase 2 の実装済み範囲）
+
+Phase 2（p2-state-cost）の実装は次のとおり。証拠は `agent-docs/progress/2026-10-04-multi-objective-routing/p2-state-cost.md`（統合後 HEAD `762cb2254bb2` で全体検査）。Phase 3 以降（文脈搬送、軌跡 escalation、reward、shadow 実行、sidecar）は含まない。
+
+- **SourceState と effective cost**: `task-core::model_router::cost` に §4 の純粋関数（`estimate_cost`・`exclusion_reasons`・`score`）。時刻は引数で注入し、時計を読まない。`QuotaWindow` に `window_duration_s`・`estimated_consumption`・`reserve_value_usd`、`SourceState` に `cooldown_until`・`rate_limited_until` を optional で足した。観測時刻が無い・TTL（既定 300 秒）超過・未来・reset 境界超過の窓は「既知」でなく、満タンにも枯渇にもしない。shadow は一窓でも unknown なら unknown。§4 本文との差: 未知の C/L/P は順位で最悪（1）にして flag を残すが、hard な費用/latency 上限との組み合わせによる除外は dispatch/proxy の制約側に置いた。
+- **trace**: `RoutingTraceV1` に最終の `source_id`・`model`・`account_id`、`CandidateTrace` に `config_order`・`excluded_reason`（型付き）・`score_breakdown`（Q/C/L/P・重み・unknown）・`cash_usd`/`shadow_usd`/`resource_usd`/`effective_usd` を足した。すべて optional・additive で、旧 event は新欄なしで読める。**`RoutingDecided` は `record.optimizer` の optional 欄が広がっただけで、新しい event 型は作っていない**（§6 の `routing_request_decided` 等は未実装。`EVENT_TYPES`・web の event-kinds/invalidation-map は不変）。
+- **enforce は heuristic の opt-in、既定 off**: `[model_routing] mode = "enforce"` は `[model_routing.estimator] kind = "heuristic"` の明示があるときだけ受け入れる（無ければ検証エラー、heuristic 以外の kind は mode を問わずエラー）。`enforce_routes` は `standalone`・`server` だけ。既定の mode は legacy のまま。
+- **dispatcher（enforce が効く唯一の経路）**: `task-dispatch::dispatcher::routing_enforce` が account 帳簿（5h/7d 窓・総合残量・reset・cooldown・rejected・in-use）と provider の cooldown・self-host load の取り込み口から `SourceState` を組む。mode=enforce のとき、候補 allowlist（task/組織固有の制約がある時は proxy 経由の行を `context_transport_unsupported` で除外）→ 選択 → `exclusion_reasons` と quota 判定 → 外れた source を除いて同じ lane で選び直し、無ければ defer（run を始めない）。§5 どおり lane は下げない。defer は event を残さず tracing だけ。pool 内の別 account は個別に試さず provider ごと外す。legacy は従来の `select_tier` のまま。
+- **proxy**: 同一要求内 fallback（`llm-proxy::fallback`）は mode によらず有効: 失敗の分類（401/429/5xx/network/local/client）ごとの上限・総上限・deadline、stream は最初の item の前だけ次へ倒す、deployment の breaker（closed/open/half_open、試し打ち同時 1）。**401/429 以外の 4xx（client）は次の候補へ倒さなくなった**（動作の変更。既定 `client = 0`、設定で 0 以外は拒否）。state 選択・予約（`selection::state::select_state`、`reservation::reserve_with_reselect`、account 枠と共有 GPU 枠の区別）と log の相関欄書き込み（`log::insert_routed`）は試験済みの部品として入ったが、**`server.rs` には配線していない**。proxy の候補順は mode によらず legacy で、`enforce_routes` は検証と保持だけ。
+- **設定**: `observation_ttl_seconds`、`[model_routing.subscription_windows.<id>] reserve_value_usd`、`[[model_routing.resource_groups]]`（同時数・GPU 秒/待ち秒の単価）、`[model_routing.retry]`。未設定は unknown（0 で埋めない）か ADR の既定。dispatcher 側は reload で原子的に差し替わり、proxy の retry/breaker は起動時に 1 度だけ読む。
+- **store**: migration 0048 で `llm_proxy_requests` に相関欄（decision・snapshot・run・task・source・model、NULL 可）と部分索引 2 本。現状これに書き込む経路は無い（上の未配線のため）。
+- **API と画面**: `GET /api/v1/llm/sources` の各 source に `deployments`（鮮度・到達・latency・残量・reset・pressure・unknown・請求 `billed` と機会費用 `opportunity` を分けた cost）、`GET /api/v1/tasks/{id}/routing` の run に要求単位の子 trace `requests`・`audit_incomplete`・`incomplete_reasons` と task の `unbound_requests`。**daemon は `deployments` をまだ空で返し、proxy trace を task events に足す sink も無い**ため、実運用ではどちらも空（表示は fixture で確認）。gui/・web/ は未知を「不明」と出し、請求と機会費用を別の行にする。schema と両方の生成型を再生成した。
+- 試験: §10 Phase 2 の表の 7 件と回帰 7 件はすべて存在し 0 件実行でない。

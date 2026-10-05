@@ -54,7 +54,7 @@ Phase 1 で変わること:
 
 ```toml
 [model_routing]
-mode = "legacy"            # legacy（既定）| shadow。enforce は Phase 2 まで検証エラー
+mode = "legacy"            # legacy（既定）| shadow | enforce（§8。heuristic の明示 opt-in が要る）
 
 [[model_routing.models]]
 id = "legacy:qwen:qwen3.8-27b"   # 旧形由来の id を上書き
@@ -110,7 +110,11 @@ daemon は起動時（と reload 時の読み直し）に `model routing compati
 
 | エラー文（`model_routing…` を含む） | 原因 |
 |---|---|
-| `model_routing.mode=enforce requires Phase 2` | `mode = "enforce"` は Phase 2 まで使えない |
+| `model_routing.mode=enforce requires the Phase 2 heuristic opt-in` | `mode = "enforce"` に `[model_routing.estimator] kind = "heuristic"` が無い（§8） |
+| `model_routing.estimator.kind=<kind>: only "heuristic" is supported` | heuristic 以外の estimator を書いた（mode を問わずエラー） |
+| `model_routing.enforce_routes…` | `enforce_routes` が空か、`standalone`・`server` 以外を含む |
+| `model_routing.retry.client must be 0` / `retry.total_attempts must be at least 1` / `retry: deadline_secs must be positive…` | `[model_routing.retry]` の値が不正 |
+| `model_routing.observation_ttl_seconds: …` / `subscription_windows.<id>.reserve_value_usd …` / `resource_groups.<id>: …` | Phase 2 の state・cost の値が不正（非有限・負・0 の同時数・id の重複） |
 | `model_routing.models: empty or duplicate id` / `model_routing.deployments: empty or duplicate id` | id が空か重複 |
 | `model_routing.deployments.<id>: unknown model_profile_id` | 存在しない model を参照 |
 | `model_routing.deployments.<id>: unknown source_ref` | 設定に無い source を参照 |
@@ -154,7 +158,7 @@ daemon は起動時（と reload 時の読み直し）に `model routing compati
    shadow の比較記録（候補の比較・上限付き shadow 実行）は Phase 4 で入る。Phase 1 で `shadow` にする利点は、
    後の Phase に向けて catalog の値を本番設定で検証しておけることに限られる。
 
-`mode = "enforce"` は Phase 2 まで検証エラーになる（§3）。書かない。
+`mode = "enforce"` は §8 の手順で有効にする（heuristic の opt-in が無ければ検証エラー）。
 
 ## 6. 指標・選択の確認
 
@@ -185,3 +189,89 @@ Phase 1 の選択は legacy なので、移行前後で次が変わらないこ�
   の後、旧 release の `celerisctl config to-harnesses --config …` で exit 0 を確かめてから、
   人が旧 release の service（`celeris@<旧 release>.service`）に戻し、§4 の起動ログを確かめる。
 - DB の構造 migration は Phase 1 に無い（event JSON への optional 欄の追加だけ）ので、DB を戻す手順は要らない。
+  Phase 2 を含む release は migration 0048 を当てる（§8.5）。
+
+## 8. Phase 2: `mode = "enforce"`（heuristic の opt-in）
+
+Phase 2 の release で変わること:
+
+- `[model_routing]` に state・cost・retry の設定が増えた。**どれも未設定なら unknown か既定値で、0 では埋めない**。
+- `mode = "enforce"` は `[model_routing.estimator] kind = "heuristic"` を明示したときだけ受け付ける。既定は従来どおり legacy。
+- enforce が選択を変えるのは **dispatcher（run の provider 選択）だけ**。source の状態（残量・cooldown・in-use）で候補を外し、
+  同じ lane の別 source を選ぶ。無ければ run を始めずに待つ（defer）。**残量のために lane を下げない**（legacy の `select_tier` 降格は enforce では起きない）。
+- proxy（`celeris/<lane>` の要求）の候補順は enforce でも legacy のまま。`enforce_routes` は検証されて保持されるだけで、この版の proxy は使わない。
+- proxy の同一要求内 fallback は **mode によらず** 次の規則になる: 失敗の分類ごとの上限、総回数、deadline、stream は最初の byte の前だけ次へ倒す、
+  5xx・network が続いた deployment は一時的に外す（breaker）。**401/429 以外の 4xx は次の候補へ倒さない**（従来は倒していた）。
+- DB に migration 0048（`llm_proxy_requests` に NULL 可の相関欄と部分索引）が入る。この版では相関欄に値は書かれない。
+
+### 8.1 有効化の前に
+
+1. §1 の手順で config の控えを取る（`config.toml.bak-model-routing-YYYYMMDD`）。
+2. 昇格前の DB backup があることを、既存の昇格手順どおり確かめる（0048 は列と索引の追加だけ）。
+
+### 8.2 書き方
+
+```toml
+[model_routing]
+mode = "enforce"
+enforce_routes = ["standalone", "server"]   # 省略時も両方。他の値・空はエラー
+observation_ttl_seconds = 300               # 省略時 300。これより古い残量の観測は「不明」（満タンにも枯渇にもしない）
+
+[model_routing.estimator]
+kind = "heuristic"                          # enforce の opt-in。heuristic 以外はエラー
+
+# 任意。書かない窓の shadow price は「不明」のまま（0 にしない）
+[model_routing.subscription_windows.five_hour]
+reserve_value_usd = 2.0
+[model_routing.subscription_windows.seven_day]
+reserve_value_usd = 10.0
+
+# 任意。self-host の同時数と費用係数（書かない成分は「不明」）
+[[model_routing.resource_groups]]
+id = "gpu0"
+concurrency_limit = 4
+usd_per_gpu_second = 0.0005
+usd_per_wait_second = 0.0001
+
+# 任意。proxy の fallback（省略時: 401/429/local 3、5xx/network 2、client 0、総 6、deadline 120 秒）
+[model_routing.retry]
+total_attempts = 6
+deadline_secs = 120
+client = 0                                  # 0 以外はエラー
+```
+
+値は例。reserve_value・単価は運用者が決める（根拠の無い値を入れるより、書かずに「不明」とする方がよい）。
+
+### 8.3 反映と確認
+
+1. §4 の 1（`celerisctl config to-harnesses --config …` が exit 0）で検証する。§3 の Phase 2 のエラーが出たら直す。
+2. `[model_routing]` の mode・state・cost の変更は `POST /api/v1/reload` で dispatcher に原子的に入る。不正なら旧設定のまま。
+   **`[model_routing.retry]` は proxy の起動時に読むので、変えたら daemon の再起動が要る**。
+3. 確認（API は Bearer 付き。token はログに残さない）:
+   - `GET /api/v1/tasks/<task id>/routing`: enforce 後に始まった run の `optimizer.mode` が `enforce`。候補ごとの
+     `excluded_reasons`（`quota_exhausted`・`cooldown`・`rate_limit`・`context_transport_unsupported` など）と、最終の
+     `source_id`・`model`・`account_id` が出る。lane が要求どおり（下がっていない）こと。
+   - GUI の task 詳細「ルーティング」、web の task 実行パネルで同じ内容が見えること。未知は「不明」と出て、$0 に見えないこと。
+   - 残量の少ない lane で run が始まらないときは defer。event は残らないので daemon ログで理由を見る:
+
+     ```sh
+     journalctl --user -u 'celeris@<release>.service' -n 500 --no-pager | grep -iE 'enforce|defer'
+     ```
+
+   - cheap の Qwen 優先が変わっていないこと: §6 の `celeris/cheap` の `x-celeris-source` 確認を繰り返す。
+4. この版の制限（異常ではない）: `GET /api/v1/llm/sources` の `deployments` は空、routing の `requests` は空・`audit_incomplete` は false。
+   proxy の状態と要求単位の決定はまだ API に流れていない。
+
+### 8.4 戻し方
+
+- **enforce だけ戻す**: `mode = "legacy"`（または `"shadow"`）に書き換えて `POST /api/v1/reload`。次の dispatch から従来の選択
+  （`select_tier` の降格を含む）に戻る。defer されていた task は次の tick で従来どおり選ばれる。
+  `[model_routing.estimator]`・state・cost の節は legacy でも害は無いので残してよい。
+- **retry を戻す**: `[model_routing.retry]` を消して daemon を再起動すると既定値に戻る。client の 4xx を次の候補へ倒す旧動作には
+  設定では戻せない（旧 release に戻す）。
+- **binary を戻す**: §7 と同じく、旧 config の控えと組で旧 release に戻す。旧 binary は Phase 2 の設定キーを知らず起動しない。
+
+### 8.5 DB
+
+- migration 0048 は列と索引の追加だけで、既存の行・event は書き換えない。Phase 2 の release を一度起動すると DB の版は 48 になる。
+- 旧 release に戻すときの DB の扱いは既存の昇格・戻しの手順（昇格前 backup）に従う。この文書では DB を手で変えない。

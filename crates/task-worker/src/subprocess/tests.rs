@@ -53,6 +53,18 @@ fn sample_req(workspace: std::path::PathBuf) -> RunRequest {
     }
 }
 
+#[tokio::test]
+async fn routing_context_ref_is_not_persisted_in_request_snapshot() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.context_ref = Some("opaque-reference".into());
+    write_run_request(dir.path(), &req, "run").await;
+    let snapshot = std::fs::read_to_string(dir.path().join("request.json")).unwrap();
+    assert!(!snapshot.contains("opaque-reference"));
+    assert!(!snapshot.contains("context_ref"));
+    assert_eq!(req.context.context_ref.as_deref(), Some("opaque-reference"));
+}
+
 fn default_limits() -> RunLimits {
     RunLimits {
         wall_clock: Duration::from_secs(30),

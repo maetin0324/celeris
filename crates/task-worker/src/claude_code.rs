@@ -410,6 +410,7 @@ async fn run_claude_code(
 ) -> Result<RunOutcome, AdapterError> {
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
+    crate::routing_context_transport::record(&run_dir, req, false).await;
     // Browser commands and page content must not be persisted through the harness's raw
     // stream capture. Parsing still uses the pipes; the browser supervisor emits safe audit events.
     let (stdout_log_path, stderr_log_path) = if req.context.browser.is_some() {

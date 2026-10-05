@@ -77,3 +77,28 @@ export function boardGroup(items: TaskSummary[]) {
       .sort((a, b) => b.priority - a.priority || a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)),
   }));
 }
+
+// 内部の英語値を画面の言葉へ。未知の値は「未確認」にして英語を出さない（W-23）。
+export const tierLabels: Readonly<Record<string, string>> = {
+  cheap: "軽量",
+  standard: "標準",
+  frontier: "最上位",
+};
+export const categoryLabels: Readonly<Record<string, string>> = {
+  feature: "機能",
+  bug: "不具合",
+  research: "調査",
+  ops: "運用",
+  docs: "文書",
+  other: "その他",
+};
+export const priorityLabels: Readonly<Record<string, string>> = {
+  urgent: "至急",
+  high: "高",
+  normal: "通常",
+  low: "低",
+};
+export function labelOf(labels: Readonly<Record<string, string>>, value: string | null | undefined): string {
+  if (!value) return "なし";
+  return labels[value] ?? (/^P\d$/.test(value) ? value : "未確認");
+}

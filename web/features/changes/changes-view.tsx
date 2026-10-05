@@ -14,10 +14,17 @@ import { Icon } from "../../components/ui/icon";
 import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { taskChangeDiffQuery, taskChangesQuery, taskRepoChangesPath } from "./changes-query";
-import { type DiffLineKind, diffLines, fileStatusView, integrationTone } from "./diff-lines";
+import {
+  type DiffLineKind,
+  diffLines,
+  fileStatusView,
+  integrationLabel,
+  integrationTone,
+  splitChangedPaths,
+} from "./diff-lines";
 
 // /tasks/:id/changes（P3-13、R25）。変更の一覧・差分と取り込み（integrate、pr_merge）。
-// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state をそのまま出す。
+// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state で表示を分ける。
 // 差分は CodeBlock の内側でだけ横に scroll し、画面は横に溢れさせない。path は折り返し、全文を title に持つ。
 export function TaskChangesScreen({ taskId }: { taskId: string }) {
   return (
@@ -61,6 +68,7 @@ export function TaskChangesPanel({ taskId }: { taskId: string }) {
 function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: RepoChangesView; mergeMethod: string }) {
   const [selected, setSelected] = useState<string | null>(null);
   const integration = repo.integration;
+  const changedLines = repo.stat.additions + repo.stat.deletions;
   return (
     <Section
       title={<span className="break-all">{repo.repo}</span>}
@@ -68,6 +76,12 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
       data-repo={repo.repo}
       className="rounded-lg border border-border bg-surface p-3 md:p-4"
     >
+      <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 text-label" role="status">
+        <Badge tone={repo.missing ? "danger" : repo.dirty ? "warning" : "neutral"}>{repo.files.length} ファイル</Badge>
+        <span className="font-mono tabular-nums text-success-foreground">+{repo.stat.additions} 行</span>
+        <span className="font-mono tabular-nums text-danger-foreground">−{repo.stat.deletions} 行</span>
+        {changedLines > 0 ? <span className="text-muted-foreground">計 {changedLines} 行の変更</span> : null}
+      </div>
       <DataList
         items={[
           {
@@ -94,9 +108,10 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
                   label: "取り込み",
                   value: (
                     <span data-testid="integration-state" className="flex min-w-0 flex-wrap items-center gap-2">
-                      <Badge tone={integrationTone(integration.state)}>
+                      <Badge tone={integrationTone(integration.state)}>{integrationLabel(integration.state)}</Badge>
+                      <span className="text-label text-muted-foreground">
                         {integration.method} / {integration.state}
-                      </Badge>
+                      </span>
                       {integration.pr_url ? (
                         <a
                           href={integration.pr_url}
@@ -130,7 +145,8 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
   );
 }
 
-// 変更ファイルの表。path は折り返して列を広げず、全文は title に持つ。行の選択は aria-pressed の button で伝える。
+// 変更ファイルの表。path は折り返して列を広げず、全文は title と button の名前に持つ。行の選択は aria-pressed の button で伝える。
+// 全ファイルに共通の dir は表の上に 1 度だけ出し、各行はファイル名を先に、残りの dir を薄く下に置く（fix-r6 narrow）。
 function ChangedFiles({
   files,
   selected,
@@ -140,57 +156,74 @@ function ChangedFiles({
   selected: string | null;
   onSelect: (path: string) => void;
 }) {
+  const split = splitChangedPaths(files.map((file) => file.path));
   return (
-    <Table data-testid="changed-files">
-      <TableHeader>
-        <TableRow>
-          <TableHead className="w-px">状態</TableHead>
-          <TableHead>ファイル</TableHead>
-          <TableHead className="w-px text-right">行</TableHead>
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {files.map((file) => {
-          const status = fileStatusView(file.status);
-          const pressed = selected === file.path;
-          return (
-            <TableRow key={file.path} data-state={pressed ? "checked" : undefined}>
-              <TableCell className="whitespace-nowrap">
-                <Badge tone={status.tone} title={`status ${file.status}`} className="break-normal whitespace-nowrap">
-                  {status.label}
-                </Badge>
-              </TableCell>
-              <TableCell className="min-w-0">
-                <button
-                  type="button"
-                  data-file={file.path}
-                  title={file.path}
-                  aria-pressed={pressed}
-                  onClick={() => onSelect(file.path)}
-                  className="inline-flex min-h-11 min-w-0 items-center break-all text-left font-mono text-label text-primary underline underline-offset-2"
-                >
-                  {file.path}
-                </button>
-              </TableCell>
-              <TableCell className="whitespace-nowrap text-right font-mono tabular-nums">
-                {file.binary ? (
-                  <span className="text-muted-foreground">binary</span>
-                ) : (
-                  <span className="flex flex-col items-end">
-                    <span className="text-success-foreground">
-                      <span className="sr-only">追加 </span>+{file.additions}
+    <>
+      {split.common ? (
+        <p data-testid="changed-files-common" className="min-w-0 text-label text-muted-foreground">
+          共通の場所: <span className="break-all font-mono">{split.common}</span>
+        </p>
+      ) : null}
+      <Table data-testid="changed-files">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-px">状態</TableHead>
+            <TableHead>ファイル</TableHead>
+            <TableHead className="w-px text-right">行</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {files.map((file, i) => {
+            const status = fileStatusView(file.status);
+            const part = split.files[i];
+            const pressed = selected === file.path;
+            return (
+              <TableRow key={file.path} data-state={pressed ? "checked" : undefined}>
+                <TableCell className="whitespace-nowrap">
+                  <Badge tone={status.tone} title={`status ${file.status}`} className="break-normal whitespace-nowrap">
+                    {status.label}
+                  </Badge>
+                </TableCell>
+                <TableCell className="min-w-0">
+                  <button
+                    type="button"
+                    data-file={file.path}
+                    title={file.path}
+                    aria-label={file.path}
+                    aria-pressed={pressed}
+                    onClick={() => onSelect(file.path)}
+                    className="inline-flex min-h-11 min-w-0 flex-col items-start justify-center text-left font-mono text-label"
+                  >
+                    <span data-file-name className="break-all font-medium text-primary underline underline-offset-2">
+                      {part?.name ?? file.path}
                     </span>
-                    <span className="text-danger-foreground">
-                      <span className="sr-only">削除 </span>−{file.deletions}
+                    {part?.dir ? (
+                      <span data-file-dir className="break-all text-muted-foreground">
+                        {part.dir}
+                      </span>
+                    ) : null}
+                  </button>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-right font-mono tabular-nums">
+                  {file.binary ? (
+                    <span className="text-muted-foreground">binary</span>
+                  ) : (
+                    <span className="flex flex-col items-end">
+                      <span className="text-success-foreground">
+                        <span className="sr-only">追加 </span>+{file.additions}
+                      </span>
+                      <span className="text-danger-foreground">
+                        <span className="sr-only">削除 </span>−{file.deletions}
+                      </span>
                     </span>
-                  </span>
-                )}
-              </TableCell>
-            </TableRow>
-          );
-        })}
-      </TableBody>
-    </Table>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </>
   );
 }
 
@@ -279,6 +312,9 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
   return (
     <fieldset className="mt-4 min-w-0 space-y-3">
       <legend className="w-full border-t border-border pt-4 text-body font-semibold text-foreground">取り込み</legend>
+      <p className="text-label text-muted-foreground">
+        取り込む前に、上のファイルと対象ブランチを確認してください。範囲外の変更かどうかは、この一覧では判定できません。
+      </p>
       <label className="flex flex-col gap-1 text-label font-medium text-foreground">
         取り込みの方法
         <select
@@ -293,7 +329,13 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
       </label>
       <label className="flex flex-col gap-1 text-label font-medium text-foreground">
         取り込みの note（任意）
-        <textarea className={fieldClass} rows={2} value={note} onChange={(event) => setNote(event.target.value)} />
+        <textarea
+          aria-label="取り込みの note（任意）"
+          className={fieldClass}
+          rows={2}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
       </label>
       {method === "discard" ? (
         <label className="flex min-h-11 items-center gap-2 text-label text-danger-foreground">
@@ -334,7 +376,8 @@ function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: Re
           className="flex min-w-0 flex-wrap items-center gap-2 break-all text-label"
         >
           結果:
-          <Badge tone={integrationTone(outcome.integration.state)}>{outcome.integration.state}</Badge>
+          <Badge tone={integrationTone(outcome.integration.state)}>{integrationLabel(outcome.integration.state)}</Badge>
+          <span className="text-muted-foreground">{outcome.integration.state}</span>
           {outcome.integration.detail ? <span>{outcome.integration.detail}</span> : null}
           {outcome.child_task_id ? (
             <span>

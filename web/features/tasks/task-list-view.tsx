@@ -3,9 +3,10 @@ import { Link, useRouter } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
+import { ConnectionStaleNotice } from "../../components/fetch-state/connection-stale-notice";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { Button, buttonClassName } from "../../components/ui/button";
-import { StatusBadge } from "../../components/ui/status-badge";
+import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
 import { type TaskListFilters, taskListPath, taskListQuery } from "./task-list-query";
@@ -153,10 +154,11 @@ export function TasksListScreen({
                 type="checkbox"
                 name="status"
                 value={s}
+                aria-label={s}
                 defaultChecked={status.includes(s)}
                 className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
               />{" "}
-              {s}
+              {statusView(s).label}
             </label>
           ))}
         </fieldset>
@@ -178,7 +180,17 @@ export function TasksListScreen({
         <Button type="submit">絞り込み</Button>
       </form>
 
-      <FetchFrame query={base}>{merged ? <TaskTable items={merged.items} total={merged.total} /> : null}</FetchFrame>
+      <ConnectionStaleNotice />
+      <FetchFrame
+        query={base}
+        permissionAction={
+          <a className={buttonClassName} href="/">
+            ホームへ戻る
+          </a>
+        }
+      >
+        {merged ? <TaskTable items={merged.items} total={merged.total} /> : null}
+      </FetchFrame>
       {moreError && <p role="alert">続きの取得に失敗しました。もう一度お試しください。</p>}
 
       {merged && nextCursor !== null ? (

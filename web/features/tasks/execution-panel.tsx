@@ -1,7 +1,13 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet } from "../../api/client";
-import type { TaskDetail, TaskExecutionView, TaskRoutingView } from "../../api/generated/types";
+import type {
+  ExecutionMode,
+  ExecutionPhase,
+  TaskDetail,
+  TaskExecutionView,
+  TaskRoutingView,
+} from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { type ActionResult, ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -15,6 +21,26 @@ import { taskDetailQueryKey } from "./task-detail-query";
 // promote と phase_gate は応答と取り直しが済むまで成功と出さない（確定待ちの間は「確定を待っています」）。
 
 const TERMINAL = new Set(["done", "failed", "cancelled"]);
+
+// 実行の段階と形の判定の可視ラベル。写像に無い値は「未確認」（status-badge と同じ扱い）。
+const phaseLabel: Readonly<Record<ExecutionPhase, string>> = {
+  planning: "計画を作成中",
+  executing: "実行中",
+  repairing: "修復中",
+  verifying: "検証中",
+  awaiting_human: "人の判断待ち",
+  awaiting_children: "子 task の完了待ち",
+  awaiting_plan_approval: "計画の承認待ち",
+};
+
+const modeLabel: Readonly<Record<ExecutionMode, string>> = {
+  atomic: "一括で実行",
+  compound: "段階に分けて実行",
+};
+
+function enumLabel<T extends string>(table: Readonly<Record<T, string>>, value: string): string {
+  return Object.hasOwn(table, value) ? table[value as T] : "未確認";
+}
 
 export function executionQuery(taskId: string) {
   return {
@@ -92,14 +118,28 @@ export function ExecutionPanel({ detail }: { detail: TaskDetail }) {
           <DataList
             data-testid="execution-view"
             items={[
-              { label: "実行の段階", value: execution.data.phase ?? "なし" },
+              {
+                label: "実行の段階",
+                value: execution.data.phase ? (
+                  <span data-phase={execution.data.phase}>{enumLabel(phaseLabel, execution.data.phase)}</span>
+                ) : (
+                  "なし"
+                ),
+              },
               {
                 label: "計画",
                 value: execution.data.plan
                   ? `v${execution.data.plan.version}（${execution.data.plan.work_units.length} 件）`
                   : "なし",
               },
-              { label: "形の判定", value: execution.data.gate ? execution.data.gate.mode : "なし" },
+              {
+                label: "形の判定",
+                value: execution.data.gate ? (
+                  <span data-mode={execution.data.gate.mode}>{enumLabel(modeLabel, execution.data.gate.mode)}</span>
+                ) : (
+                  "なし"
+                ),
+              },
             ]}
           />
         ) : null}
@@ -136,6 +176,7 @@ export function ExecutionPanel({ detail }: { detail: TaskDetail }) {
           <label className="block text-label">
             途中確認の note（任意）
             <textarea
+              aria-label="途中確認の note（任意）"
               className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
               value={gateNote}
               onChange={(event) => setGateNote(event.target.value)}

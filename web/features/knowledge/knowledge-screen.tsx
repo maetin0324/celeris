@@ -51,6 +51,25 @@ function Updated({ value }: { value?: string | null }) {
   return value ? <time dateTime={value}>{value}</time> : <span className="text-muted-foreground">不明</span>;
 }
 
+/** 本文の先頭の見出しが Section の title と同じなら外す（`# <title>` で始まる本文で見出しが二重に出ないように）。 */
+export function withoutLeadingTitle(source: string, title: string): string {
+  const frontMatter = /^---\n[\s\S]*?\n---\n/.exec(source)?.[0] ?? "";
+  const rest = source.slice(frontMatter.length);
+  const heading = /^\s*#{1,6}[ \t]+(.+?)[ \t#]*(?:\n|$)/.exec(rest);
+  if (!heading || heading[1]?.trim() !== title.trim()) return source;
+  return frontMatter + rest.slice(heading[0].length);
+}
+
+/** 見出しを外した本文。残りが空なら空欄にせず、そう書く。 */
+function Body({ source, title }: { source: string; title: string }) {
+  const body = withoutLeadingTitle(source, title);
+  return (
+    <div className="max-w-prose-ja">
+      {body.trim() ? <Markdown source={body} /> : <p className="text-muted-foreground">本文は見出しだけです。</p>}
+    </div>
+  );
+}
+
 function PageEditor({ page, sender }: { page: KnowledgePage; sender: Sender }) {
   const [body, setBody] = useState(page.raw);
   const [message, setMessage] = useState("");
@@ -181,7 +200,7 @@ export function KnowledgeScreen() {
           候補
         </Link>
         <Link className={navLink} to="/knowledge/skills">
-          skills
+          手順書（skills）
         </Link>
       </nav>
       <form
@@ -197,10 +216,12 @@ export function KnowledgeScreen() {
         </label>
         <Button type="submit">検索</Button>
       </form>
-      <div className="grid min-w-0 gap-6 lg:grid-cols-5">
+      {/* 未選択のときは本文枠を出さず、検索結果を全幅で並べる（空の枠で画面の 2/3 を空けない）。 */}
+      <div className={path ? "grid min-w-0 gap-6 lg:grid-cols-5" : "min-w-0"}>
         {/* 名前付きの region にすると「検索」の label と取り違えるので、見出しだけで区切る。 */}
-        <div className="min-w-0 lg:col-span-2">
+        <div className={path ? "min-w-0 lg:col-span-2" : "min-w-0 space-y-1"}>
           <h2 className="text-section font-semibold text-foreground">検索結果</h2>
+          {!path && <p className="text-label text-muted-foreground">タイトルを選ぶと本文と出典を開きます。</p>}
           <FetchFrame query={tree}>
             {tree.data && <KnowledgeResults items={tree.data.items} q={q} />}
             {tree.data?.truncated && (
@@ -208,8 +229,8 @@ export function KnowledgeScreen() {
             )}
           </FetchFrame>
         </div>
-        <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
-          {path ? (
+        {path && (
+          <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
             <FetchFrame query={page}>
               {page.data && (
                 <div className="space-y-3">
@@ -235,17 +256,13 @@ export function KnowledgeScreen() {
                   {params.get("edit") === "1" ? (
                     <PageEditor key={page.data.path} page={page.data} sender={sender} />
                   ) : (
-                    <div className="max-w-prose-ja">
-                      <Markdown source={page.data.raw} />
-                    </div>
+                    <Body source={page.data.raw} title={page.data.title || page.data.path} />
                   )}
                 </div>
               )}
             </FetchFrame>
-          ) : (
-            <p className="text-muted-foreground">検索結果から知識を選んでください。</p>
-          )}
-        </div>
+          </div>
+        )}
       </div>
     </ScreenFrame>
   );
@@ -288,9 +305,7 @@ function Candidate({ item, sender }: { item: KnowledgeCandidate; sender: Sender 
               },
             ]}
           />
-          <div className="max-w-prose-ja">
-            <Markdown source={item.body} />
-          </div>
+          <Body source={item.body} title={item.title} />
           <label className="block space-y-1">
             <span className={labelText}>取り込み先</span>
             <input

@@ -121,7 +121,7 @@ export function AccountCard({
             label: "状態",
             value: state.detail ?? "使える状態です",
           },
-          { key: "adapter", label: "adapter", value: adapter },
+          { key: "adapter", label: "道具", value: adapter },
           {
             key: "credential",
             label: "認証情報",
@@ -329,7 +329,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
           )}
         </div>
         <label className="block min-w-0 text-label text-foreground">
-          adapter
+          道具（adapter）
           <select className={inputClass} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
             {ADAPTER_CHOICES.map((a) => (
               <option key={a} value={a}>

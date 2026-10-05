@@ -66,7 +66,7 @@ function ClientCard({ client }: { client: McpClient }) {
         </summary>
         <DataList
           items={[
-            { key: "scopes", label: "scopes", value: (client.scopes ?? []).join(", ") || "なし" },
+            { key: "scopes", label: "権限の範囲", value: (client.scopes ?? []).join(", ") || "なし" },
             {
               key: "last_used",
               label: "最終利用",

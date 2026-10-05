@@ -63,6 +63,16 @@ function LoginPage() {
   return (
     <main className="mx-auto flex w-full max-w-sm flex-col gap-4 p-6">
       <h1 className="text-title font-semibold text-foreground">Celeris にログイン</h1>
+      {/* 戻り先を先に示す（失敗して打ち直す間も、ログイン後にどこへ戻るかが分かるように）。 */}
+      <p className="text-label text-muted-foreground">
+        {next === "/" ? (
+          "ログイン後はホームを開きます。"
+        ) : (
+          <>
+            ログイン後に <code className="break-all font-mono text-foreground">{next}</code> へ戻ります。
+          </>
+        )}
+      </p>
       <form
         method="post"
         action="/login"

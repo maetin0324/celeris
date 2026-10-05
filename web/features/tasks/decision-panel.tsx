@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { TaskDetail } from "../../api/generated/types";
 import { ActionResultView, type ActionTarget, useActionResult } from "../../components/actions/use-action-result";
 import { Button } from "../../components/ui/button";
+import { statusView } from "../../components/ui/status-badge";
 import { taskDetailQueryKey } from "./task-detail-query";
 
 // /tasks/:id の判断パネル（P3-09、R23）。approve / reject / answer / cancel / retry / edit / comment / reopen。
@@ -85,7 +86,10 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         判断
       </h2>
       <p className="text-label">
-        状態 <span data-testid="decision-status">{detail.task.status}</span>
+        状態{" "}
+        <span data-testid="decision-status" data-status={detail.task.status}>
+          {statusView(detail.task.status).label}
+        </span>
       </p>
       {detail.latest_question && has("answer") ? (
         <p className="break-words text-label">質問: {detail.latest_question}</p>
@@ -95,6 +99,7 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         <label className="block text-label">
           理由・note（任意）
           <textarea
+            aria-label="理由・note（任意）"
             className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
             value={note}
             onChange={(event) => setNote(event.target.value)}
@@ -107,6 +112,7 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
           <label className="block text-label">
             回答
             <textarea
+              aria-label="回答"
               className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
               value={answer}
               onChange={(event) => setAnswer(event.target.value)}
@@ -142,6 +148,7 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
             <label className="block text-label">
               目的
               <textarea
+                aria-label="目的"
                 className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
                 value={objective}
                 onChange={(event) => setObjective(event.target.value)}
@@ -157,6 +164,7 @@ export function DecisionPanel({ detail }: { detail: TaskDetail }) {
         <label className="block text-label">
           コメント
           <textarea
+            aria-label="コメント"
             className="block min-h-11 w-full rounded-md border border-input bg-surface p-2 text-body"
             value={comment}
             onChange={(event) => setComment(event.target.value)}

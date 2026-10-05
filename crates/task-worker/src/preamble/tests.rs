@@ -334,6 +334,30 @@ fn secretary_instructions_tell_cos_to_route_cluster_work_via_create_task() {
     );
 }
 
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): CoS の `create_task`
+/// action の説明に「browser 子 task の origin は最小・親を超えない」規則と例
+/// `https://billing.example.com` が出る。
+#[test]
+fn browser_allowed_domains_prompt_cos_create_task_has_minimal_origin_rule() {
+    let secretary = RunContext {
+        conversation_addressee: Some(ConversationAddressee::Secretary),
+        ..RunContext::default()
+    };
+    let out = render(&secretary, "artifacts");
+    assert!(
+        out.contains("requirements.browser.allowed_domains"),
+        "{out}"
+    );
+    assert!(
+        out.contains("https://billing.example.com"),
+        "missing example origin in:\n{out}"
+    );
+    assert!(
+        out.contains("部署の browser grant 全体をコピーしないでください"),
+        "missing parent-scope rule in:\n{out}"
+    );
+}
+
 /// Phase 98（ADR-0046 D8）: CoS 宛ての「組織」一覧に、各ノードの tools（`cluster:<id>` を含む）が
 /// 1 語ずつ添う。CoS がどのノードにクラスタ作業を流せばよいかを前置きから判断できるようにする。
 #[test]

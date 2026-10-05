@@ -191,3 +191,12 @@ D3 の CoS の `actions` のうち **`add_milestone` は廃止**する（action 
 理由を人に見せる）。`create_task` の目安（「1 時間以内・承認不要なら 1 つ」「人が儀式を求めれば途中目標」）は、**1 つの依頼 = 1 つの
 `create_task`（root task）、CoS は大きさを判断せず範囲を狭めない、人が名指しした段階は `stages_hint` に写す**に置き換わる（ADR-0079 D12）。
 `propose_project` は人が新しい方向を名指ししたときだけ。`POST /console/instruct` と action の決定的な実行の仕組みは変えない。
+
+## 付記: CoS チャットと受信箱一次対応への置き換え（2026-10-05）
+
+[ADR 2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D1〜D6 により、D3 と §2 の「CoS の書く操作は actions だけ・道具を直接使わない」を置き換える。
+新 CoS は celerisctl/REST と通常の道具を直接使い、新 run の actions は実行しない。
+D1 の全案件 Console stream は /console の監視用として残し、D2 の progress 正規化を共用する。
+D4 のホームはスレッド別チャットへ置き換え、非チャット情報は既定で隠す。既存の履歴・入力 API は新 ADR D6 の互換 facade へ移す。
+D4 の「通知はそのまま」も置き換え、通常の人向け通知は CoS の判断依頼だけとし、不在時のみ直接通知に退避する。
+非 CoS ノードの経路は維持する。本文は当時の決定として残し、切替と検証は後続実装で行う。

@@ -109,3 +109,11 @@ Phase 39 を配備して webhook を登録した直後の最初の走査で、**
 4. `GET /notify` の `recent[]` に `project_id` が乗る（`milestone_ready` はその途中目標の案件、
    `secretary_reply` はその案件自身、他は省略）。
 5. `cargo test --workspace` / clippy。
+
+## 付記: CoS チャットと受信箱一次対応への置き換え（2026-10-05）
+
+[ADR 2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D3/D6 により、D1/D3 の出来事から人への直接通知、§3 の「通知文面に LLM は関与しない」を通常経路について置き換える。
+CoS worker が受信箱・通知を一次対応し、人に必要と判断したものだけ要点・選択肢・推奨・web link を持つ packet を作る。
+送信処理、秘密の保持、rate limit/retry は決定的な notifier のまま。Discord 返信・リアクションでの回答は受け付けない。
+CoS run 失敗・quota 切れ・CoS 無効・未応答期限超過時だけ、LLM 無しの直接通知へ退避する。
+旧 candidate 生成と既存 pending の移行、webhook 未達の可視化、3 経路の偽 harness 試験は新 ADR D6 に従う。本文は履歴として保持する。

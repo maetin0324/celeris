@@ -61,33 +61,38 @@ fn the_freshness_window_is_three_ticks_plus_the_lease_grace() {
     );
 }
 
-/// (d) 同じ版の `active` が生きていれば二重起動なので exit 3 の判断になる。
+/// 同じ版の生きた `active` は二重起動（exit 3）。heartbeat が古くても、プロセスが生きていれば手放すまで
+/// active とみなす（ADR-0040 D4 付記 2026-10-05）。
 #[test]
 fn the_same_release_running_as_active_is_a_duplicate() {
     let live = |_: u32| true;
     let rows = vec![row("old", "sha-aaa", InstanceRole::Active, 0)];
     assert_eq!(
-        decide_startup(&rows, "sha-aaa", at(1), WINDOW, &live),
+        decide_startup(&rows, "sha-aaa", &live),
         StartupDecision::DuplicateRelease {
             instance_id: "old".into(),
             pid: 1234
         }
     );
-    // heartbeat が古ければ二重起動ではない（前のプロセスは死んでいる）。
+    let stale = vec![row("old", "sha-aaa", InstanceRole::Active, -600)];
     assert_eq!(
-        decide_startup(&rows, "sha-aaa", at(31), WINDOW, &live),
-        StartupDecision::Active
+        decide_startup(&stale, "sha-aaa", &live),
+        StartupDecision::DuplicateRelease {
+            instance_id: "old".into(),
+            pid: 1234
+        },
+        "heartbeat が古くても生きていれば二重起動"
     );
-    // `drained_at` が付いた行も同様に数えない。
+    // `drained_at` が付いた行は終わったインスタンス。
     let mut drained = rows.clone();
     drained[0].drained_at = Some(at(0));
     assert_eq!(
-        decide_startup(&drained, "sha-aaa", at(1), WINDOW, &live),
+        decide_startup(&drained, "sha-aaa", &live),
         StartupDecision::Active
     );
-    // heartbeat が新しくてもプロセスが消えていれば二重起動ではない（SIGKILL 直後の起こし直し）。
+    // プロセスが消えていれば二重起動ではない（SIGKILL 直後の起こし直し）。
     assert_eq!(
-        decide_startup(&rows, "sha-aaa", at(1), WINDOW, &|_| false),
+        decide_startup(&rows, "sha-aaa", &|_| false),
         StartupDecision::Active
     );
     // 自分自身の pid は必ず生きている（`pid_alive` の素振り）。
@@ -95,19 +100,22 @@ fn the_same_release_running_as_active_is_a_duplicate() {
     assert!(pid_alive(0), "pid が分からない行は生きている扱い");
 }
 
-/// 別の版の `active` がいれば standby になり、その行に引き継ぎを要求する。
+/// 生きている別の版の `active` がいれば standby。その全部に引き継ぎを要求する（ADR-0040 D4 付記 2026-10-05）。
 #[test]
-fn a_different_release_becomes_standby_and_an_empty_table_becomes_active() {
+fn a_live_active_of_another_release_makes_standby_listing_every_live_active() {
     let live = |_: u32| true;
-    let rows = vec![row("old", "sha-aaa", InstanceRole::Active, 0)];
+    let rows = vec![
+        row("old", "sha-aaa", InstanceRole::Active, 0),
+        row("older-still", "sha-ccc", InstanceRole::Active, 0),
+    ];
     assert_eq!(
-        decide_startup(&rows, "sha-bbb", at(1), WINDOW, &live),
+        decide_startup(&rows, "sha-bbb", &live),
         StartupDecision::Standby {
-            active_instance_id: "old".into()
+            active_instance_ids: vec!["old".into(), "older-still".into()]
         }
     );
     assert_eq!(
-        decide_startup(&[], "sha-bbb", at(1), WINDOW, &live),
+        decide_startup(&[], "sha-bbb", &live),
         StartupDecision::Active
     );
     // `standby` / `draining` / `verify` の行は「active がいる」ことにならない。
@@ -117,53 +125,130 @@ fn a_different_release_becomes_standby_and_an_empty_table_becomes_active() {
         row("v", "sha-eee", InstanceRole::Verify, 0),
     ];
     assert_eq!(
-        decide_startup(&others, "sha-bbb", at(1), WINDOW, &live),
+        decide_startup(&others, "sha-bbb", &live),
+        StartupDecision::Active
+    );
+    // プロセスが死んだ active は数えない。
+    assert_eq!(
+        decide_startup(&rows, "sha-bbb", &|_| false),
         StartupDecision::Active
     );
 }
 
-/// 毎 tick の規則: active は要求を見たら drain、standby は active が消えたら promote。
+fn started(mut r: DaemonInstance, secs: i64) -> DaemonInstance {
+    r.started_at = at(secs);
+    r
+}
+
+/// 毎 tick の規則: active は要求を見たら drain、生きた新しい active がいれば古い方が drain、
+/// standby は生きた他の active が無くなったら昇格を試みる。
 #[test]
 fn the_tick_rules_are_symmetric() {
+    let live = |_: u32| true;
     let mut me = row("me", "new", InstanceRole::Active, 0);
     assert_eq!(
-        decide_tick(InstanceRole::Active, "me", &[me.clone()], at(1), WINDOW),
+        decide_tick(InstanceRole::Active, "me", std::slice::from_ref(&me), &live),
         TickDecision::Stay
     );
     me.handoff_requested_at = Some(at(1));
     assert_eq!(
-        decide_tick(InstanceRole::Active, "me", &[me.clone()], at(1), WINDOW),
+        decide_tick(InstanceRole::Active, "me", std::slice::from_ref(&me), &live),
         TickDecision::Drain
     );
+    // 生きた新しい active がいれば、古い自分が drain する（新しい方を残す）。
+    me.handoff_requested_at = None;
+    let newer = started(row("newer", "x", InstanceRole::Active, 0), 5);
+    assert_eq!(
+        decide_tick(
+            InstanceRole::Active,
+            "me",
+            &[started(me.clone(), 0), newer.clone()],
+            &live
+        ),
+        TickDecision::Drain
+    );
+    // 自分の方が新しければ残る（古い方が drain する）。
+    assert_eq!(
+        decide_tick(
+            InstanceRole::Active,
+            "me",
+            &[started(me.clone(), 9), newer.clone()],
+            &live
+        ),
+        TickDecision::Stay
+    );
+    // 死んだ新しい active は数えない。
+    assert_eq!(
+        decide_tick(
+            InstanceRole::Active,
+            "me",
+            &[started(me.clone(), 0), newer],
+            &|pid| pid != 1234
+        ),
+        TickDecision::Stay
+    );
 
+    // standby: 生きた他の active が無ければ promote を試みる。
     let standby = row("me", "new", InstanceRole::Standby, 0);
-    let old_active = row("old", "prev", InstanceRole::Active, 0);
-    let rows = vec![standby.clone(), old_active.clone()];
+    let old_active = row("old", "old", InstanceRole::Active, 0);
     assert_eq!(
-        decide_tick(InstanceRole::Standby, "me", &rows, at(1), WINDOW),
+        decide_tick(
+            InstanceRole::Standby,
+            "me",
+            &[standby.clone(), old_active.clone()],
+            &live
+        ),
         TickDecision::Stay
     );
-    // (a) 旧が draining になったら昇格する。
-    let mut draining = rows.clone();
-    draining[1].role = InstanceRole::Draining;
+    let mut old_draining = old_active.clone();
+    old_draining.role = InstanceRole::Draining;
     assert_eq!(
-        decide_tick(InstanceRole::Standby, "me", &draining, at(1), WINDOW),
+        decide_tick(
+            InstanceRole::Standby,
+            "me",
+            &[standby.clone(), old_draining],
+            &live
+        ),
         TickDecision::Promote
     );
-    // (e) heartbeat が止まっても昇格する。
     assert_eq!(
-        decide_tick(InstanceRole::Standby, "me", &rows, at(31), WINDOW),
+        decide_tick(
+            InstanceRole::Standby,
+            "me",
+            std::slice::from_ref(&standby),
+            &live
+        ),
         TickDecision::Promote
     );
-    // draining と verify は役割を変えない。
+    // 古くても生きていれば、まだ active（昇格しない）。
+    let mut stale_old = old_active;
+    stale_old.heartbeat_at = at(-10_000);
     assert_eq!(
-        decide_tick(InstanceRole::Draining, "me", &rows, at(31), WINDOW),
+        decide_tick(InstanceRole::Standby, "me", &[standby, stale_old], &live),
         TickDecision::Stay
     );
-    assert_eq!(
-        decide_tick(InstanceRole::Verify, "me", &[], at(31), WINDOW),
-        TickDecision::Stay
-    );
+}
+
+/// 古い行の掃除（ADR-0040 D4）: drained は常に消す。古い行は active でないか、プロセスが死んでいれば消す。
+/// 古くても生きている active は消さない（消すと見えなくなって二重起動になる）。
+#[test]
+fn removable_rows_never_include_a_stale_live_active() {
+    let live = |_: u32| true;
+    let dead = |_: u32| false;
+    let stale_active = row("a", "r", InstanceRole::Active, 0);
+    let stale_standby = row("s", "r", InstanceRole::Standby, 0);
+    let fresh_drained = {
+        let mut r = row("d", "r", InstanceRole::Draining, 100);
+        r.drained_at = Some(at(100));
+        r
+    };
+    let now = at(100);
+    assert!(!removable_row(&stale_active, now, WINDOW, &live));
+    assert!(removable_row(&stale_active, now, WINDOW, &dead));
+    assert!(removable_row(&stale_standby, now, WINDOW, &live));
+    assert!(removable_row(&fresh_drained, now, WINDOW, &live));
+    let fresh_active = row("f", "r", InstanceRole::Active, 100);
+    assert!(!removable_row(&fresh_active, now, WINDOW, &dead));
 }
 
 /// Phase 119 D4: `drained_at` が付いた行のうち、pid がまだ生きている（＝「drain 後にプロセスが
@@ -219,12 +304,25 @@ fn supervisor_with(
     drain: Duration,
     drain_force_abort: bool,
 ) -> Started {
+    supervisor_as(store, release, 1, now, drain, drain_force_abort)
+}
+
+/// pid を指定して起こす版。`pid` は `alive` で判定されるので、生きた pid（1 や自分）と死んだ pid
+/// （`DEAD_PID`）を使い分けて「生きている active」の扱いを決定的に作る。
+fn supervisor_as(
+    store: &Arc<dyn TaskStore>,
+    release: &str,
+    pid: u32,
+    now: OffsetDateTime,
+    drain: Duration,
+    drain_force_abort: bool,
+) -> Started {
     Supervisor::start(
         Arc::clone(store),
         InstanceIdentity {
             instance_id: format!("inst-{release}"),
             release: release.into(),
-            pid: 1,
+            pid,
         },
         SharedRole::new(InstanceRole::Standby),
         WINDOW,
@@ -233,6 +331,28 @@ fn supervisor_with(
         now,
     )
     .expect("start")
+}
+
+/// `/proc/<pid>` が無い pid（生きていない行の再現用）。
+const DEAD_PID: u32 = 2_000_000_000;
+
+fn ids_in(store: &Arc<dyn TaskStore>) -> Vec<String> {
+    store
+        .instance_list()
+        .expect("list")
+        .into_iter()
+        .map(|r| r.instance_id)
+        .collect()
+}
+
+fn active_ids(store: &Arc<dyn TaskStore>) -> Vec<String> {
+    store
+        .instance_list()
+        .expect("list")
+        .into_iter()
+        .filter(|r| r.role == InstanceRole::Active && r.drained_at.is_none())
+        .map(|r| r.instance_id)
+        .collect()
 }
 
 /// (a) 新 standby → 旧 draining → 新 active、を `Supervisor` の一連の呼び出しで確かめる（DB 付き）。
@@ -369,27 +489,167 @@ fn the_drain_timeout_does_not_abort_alive_runs_by_default() {
     assert_eq!(old.step(at(3601), 0).expect("step"), Step::Drained);
 }
 
-/// (e) 旧の heartbeat が止まったら standby は昇格し、旧の行を消す。
+/// (e) 旧の heartbeat が止まっても、プロセスが生きていれば standby は昇格しない（ADR-0040 D4 付記
+/// 2026-10-05）。旧が手放す（draining）のを見てから昇格し、その間 active は常に 1 つ。
 #[test]
-fn a_stale_heartbeat_promotes_the_standby_and_removes_the_dead_row() {
+fn a_stale_but_alive_active_keeps_the_standby_waiting_until_it_drains() {
     let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
-    let Started::Running(_old) = supervisor(&store, "old", at(0), Duration::from_secs(60)) else {
+    let Started::Running(mut old) = supervisor(&store, "old", at(0), Duration::from_secs(60))
+    else {
         panic!("active");
     };
     let Started::Running(mut new) = supervisor(&store, "new", at(1), Duration::from_secs(60))
     else {
         panic!("standby");
     };
-    assert_eq!(new.step(at(2), 0).expect("step"), Step::Stay);
-    // 旧が heartbeat を打たないまま窓を過ぎる。
-    assert_eq!(new.step(at(100), 0).expect("step"), Step::Promoted);
-    let left: Vec<String> = store
+    // 旧が heartbeat を打たないまま窓を過ぎる（プロセスは生きている）。
+    assert_eq!(new.step(at(100), 0).expect("step"), Step::Stay);
+    assert_eq!(new.role(), InstanceRole::Standby);
+    assert_eq!(active_ids(&store), ["inst-old"]);
+    // 旧は引き継ぎの要求を見て drain する。その後に新が昇格する。
+    assert_eq!(old.step(at(101), 0).expect("step"), Step::Draining);
+    assert_eq!(new.step(at(102), 0).expect("step"), Step::Promoted);
+    assert_eq!(active_ids(&store), ["inst-new"]);
+}
+
+/// (e2) 死んだ active（SIGKILL 直後）は起動時に引き継がれ、行は次の tick で消える。
+#[test]
+fn a_killed_active_is_taken_over_at_start_and_its_row_is_removed() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let Started::Running(_dead) = supervisor_as(
+        &store,
+        "old",
+        DEAD_PID,
+        at(0),
+        Duration::from_secs(60),
+        false,
+    ) else {
+        panic!("active");
+    };
+    let Started::Running(mut new) = supervisor(&store, "new", at(100), Duration::from_secs(60))
+    else {
+        panic!("the dead active must not block the start");
+    };
+    assert_eq!(new.role(), InstanceRole::Active);
+    assert_eq!(new.step(at(101), 0).expect("step"), Step::Stay);
+    assert_eq!(ids_in(&store), ["inst-new"]);
+}
+
+/// (R) 再現試験（ADR-0040 D4 付記 2026-10-05）: 旧が heartbeat を止めたまま（プロセスは生きている）
+/// 新が起きても、2 つの active は同時に存在しない。修正前は、古い heartbeat を「死んだ」とみなして
+/// 新が即 active になり、旧も active のまま残った（本番 2026-10-04 の split brain）。
+#[test]
+fn two_actives_never_coexist_when_the_old_one_is_stale_but_alive() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let Started::Running(_old) = supervisor(&store, "old", at(0), Duration::from_secs(60)) else {
+        panic!("active");
+    };
+    // 旧の heartbeat は at(0) のまま。新は 100 秒後に起きる（窓は 30 秒）。
+    let Started::Running(new) = supervisor(&store, "new", at(100), Duration::from_secs(60)) else {
+        panic!("a different release must start");
+    };
+    assert_eq!(new.role(), InstanceRole::Standby);
+    assert_eq!(active_ids(&store), ["inst-old"]);
+}
+
+/// (R2) 2 つの生きた active が居たら（旧版の残りや競合の痕）、起動時の引き継ぎ要求は**全部**に出る。
+#[test]
+fn the_handoff_request_reaches_every_live_active() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    for (id, pid) in [("inst-x", 1), ("inst-y", std::process::id())] {
+        store
+            .instance_register(&DaemonInstance {
+                instance_id: id.into(),
+                release: id.into(),
+                pid,
+                role: InstanceRole::Active,
+                started_at: at(0),
+                heartbeat_at: at(0),
+                handoff_requested_at: None,
+                drained_at: None,
+            })
+            .expect("register");
+    }
+    let Started::Running(_new) = supervisor(&store, "new", at(1), Duration::from_secs(60)) else {
+        panic!("standby");
+    };
+    for r in store.instance_list().expect("list") {
+        if r.role == InstanceRole::Active {
+            assert_eq!(
+                r.handoff_requested_at,
+                Some(at(1)),
+                "{} に引き継ぎ要求が届いていない",
+                r.instance_id
+            );
+        }
+    }
+}
+
+/// (R3) 監視（ADR-0040 D4 付記 2026-10-05）: 生きた active が 2 つになったら、新しい方を残して古い方が
+/// drain する。
+#[test]
+fn a_second_live_active_makes_the_older_one_drain() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let Started::Running(mut older) = supervisor(&store, "old", at(0), Duration::from_secs(60))
+    else {
+        panic!("active");
+    };
+    store
+        .instance_register(&DaemonInstance {
+            instance_id: "inst-newer".into(),
+            release: "newer".into(),
+            pid: std::process::id(),
+            role: InstanceRole::Active,
+            started_at: at(5),
+            heartbeat_at: at(5),
+            handoff_requested_at: None,
+            drained_at: None,
+        })
+        .expect("register");
+    assert_eq!(older.step(at(6), 0).expect("step"), Step::Draining);
+    let newer = store
         .instance_list()
         .expect("list")
         .into_iter()
-        .map(|r| r.instance_id)
-        .collect();
-    assert_eq!(left, ["inst-new"]);
+        .find(|r| r.instance_id == "inst-newer")
+        .expect("newer row");
+    assert_eq!(newer.role, InstanceRole::Active, "新しい方は残る");
+}
+
+/// (R4) 監視: 新しい active は、生きた古い active に引き継ぎを要求する（古い方が戻ってきた場合）。
+#[test]
+fn a_newer_active_asks_the_older_live_one_to_hand_off() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().expect("open"));
+    let older_row = |pid: u32, hb: i64| DaemonInstance {
+        instance_id: "inst-old".into(),
+        release: "old".into(),
+        pid,
+        role: InstanceRole::Active,
+        started_at: at(0),
+        heartbeat_at: at(hb),
+        handoff_requested_at: None,
+        drained_at: None,
+    };
+    // 旧は死んでいた（行だけ残っている）ので、新は起動時に active になる。
+    store
+        .instance_register(&older_row(DEAD_PID, 0))
+        .expect("register");
+    let Started::Running(mut newer) = supervisor(&store, "new", at(5), Duration::from_secs(60))
+    else {
+        panic!("standby");
+    };
+    assert_eq!(newer.role(), InstanceRole::Active);
+    // 旧が生きて戻ってきた（行が書き直された）。新は次の tick で旧に引き継ぎを要求する。
+    store.instance_register(&older_row(1, 6)).expect("register");
+    assert_eq!(newer.step(at(6), 0).expect("step"), Step::Stay);
+    assert_eq!(newer.role(), InstanceRole::Active);
+    let old = store
+        .instance_list()
+        .expect("list")
+        .into_iter()
+        .find(|r| r.instance_id == "inst-old")
+        .expect("old row");
+    assert_eq!(old.handoff_requested_at, Some(at(6)));
 }
 
 /// 行が消えても heartbeat で気づいて登録し直す（`deregister` は自分の行だけ消す）。

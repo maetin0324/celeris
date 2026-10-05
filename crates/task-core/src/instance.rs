@@ -373,7 +373,9 @@ mod store_tests {
         // 自分の行が古くても消えない。
         store.instance_heartbeat("me", at(0)).expect("heartbeat");
 
-        let removed = store.instance_delete_stale("me", at(50)).expect("stale");
+        let removed = store
+            .instance_delete_where("me", &|r| r.drained_at.is_some() || r.heartbeat_at < at(50))
+            .expect("stale");
         assert_eq!(removed, ["dead", "done"]);
         let ids: Vec<String> = store
             .instance_list()
@@ -386,6 +388,75 @@ mod store_tests {
             ["live", "me"],
             "started_at が同じなら instance_id 昇順"
         );
+    }
+
+    /// ADR-0040 D4 付記（2026-10-05）: `register_if` / `set_role_if` は `admit` が `false` のとき何も書かない。
+    /// `admit` は同じ transaction の全行を見るので、「active は 1 つだけ」の判断と書き込みが分かれない。
+    #[test]
+    fn conditional_writes_consult_the_rows_in_the_same_transaction() {
+        let store = SqliteStore::open_in_memory().expect("open");
+        store
+            .instance_register(&row("old", "old", InstanceRole::Active, 100))
+            .expect("register");
+        let no_active_but_me = |id: &'static str| {
+            move |rows: &[DaemonInstance]| {
+                !rows
+                    .iter()
+                    .any(|r| r.instance_id != id && r.role == InstanceRole::Active)
+            }
+        };
+        // active の行があるうちは新しい active を登録できない。
+        assert!(
+            !store
+                .instance_register_if(
+                    &row("new", "new", InstanceRole::Active, 100),
+                    &no_active_but_me("new"),
+                )
+                .expect("register_if")
+        );
+        assert!(
+            store
+                .instance_list()
+                .expect("list")
+                .iter()
+                .all(|r| r.instance_id != "new"),
+            "拒否されたら行は書かない"
+        );
+        // 旧が draining になれば、同じ判断で昇格できる。
+        store
+            .instance_set_role("old", InstanceRole::Draining, at(101))
+            .expect("drain");
+        assert!(
+            store
+                .instance_register_if(
+                    &row("new", "new", InstanceRole::Standby, 101),
+                    &no_active_but_me("new"),
+                )
+                .expect("register_if")
+        );
+        assert!(
+            !store
+                .instance_set_role_if("new", InstanceRole::Active, at(102), &|_| false)
+                .expect("set_role_if"),
+            "admit が false なら役割は変わらない"
+        );
+        assert!(
+            store
+                .instance_set_role_if(
+                    "new",
+                    InstanceRole::Active,
+                    at(102),
+                    &no_active_but_me("new")
+                )
+                .expect("set_role_if")
+        );
+        let new = store
+            .instance_list()
+            .expect("list")
+            .into_iter()
+            .find(|r| r.instance_id == "new")
+            .expect("new");
+        assert_eq!(new.role, InstanceRole::Active);
     }
 
     /// `is_fresh` は `now - heartbeat_at < freshness`（未来の heartbeat も「新しい」）。

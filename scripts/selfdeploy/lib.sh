@@ -199,6 +199,28 @@ sd_json_valid() {
   esac
 }
 
+# `GET /api/v1/releases` の本文（`file`）で、active の行がちょうど 1 つで、それが `sha12` の版か
+# （ADR-0040 D4 付記 2026-10-05: 旧は draining か、行が消えている）。妥当なら 0、そうでなければ 1。
+sd_instances_settled() {
+  local file="$1" sha12="$2"
+  [ -f "$file" ] || return 1
+  case "$SD_JSON_TOOL" in
+    python3)
+      python3 - "$file" "$sha12" <<'PY' >/dev/null 2>&1
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    rows = json.load(fh).get("instances") or []
+active = [r for r in rows if r.get("role") == "active"]
+sys.exit(0 if len(active) == 1 and active[0].get("release") == sys.argv[2] else 1)
+PY
+      ;;
+    jq)
+      jq -e --arg r "$sha12" '[.instances[]? | select(.role == "active")] | (length == 1 and .[0].release == $r)' "$file" >/dev/null 2>&1
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 # TSV（1 行目が `name:type name:type ...` のヘッダ。type は s/i/f/b）→ JSON の配列。
 sd_tsv_to_json() {
   local file="$1"

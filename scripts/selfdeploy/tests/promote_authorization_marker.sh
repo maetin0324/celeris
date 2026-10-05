@@ -89,6 +89,11 @@ case "$url" in
         body="{\"release\":\"$sha\",\"role\":\"active\",\"schema_version\":36}"; code=200; break
       fi
     done ;;
+  *:7710/api/v1/releases)
+    # ADR-0040 D4 付記 2026-10-05: 新が起きたら、旧は draining（handoff 済み）として答える。
+    if [ -e "$FAKE_STATE/started-celeris@$FAKE_NEW" ]; then
+      body="{\"instances\":[{\"release\":\"$FAKE_NEW\",\"role\":\"active\"},{\"release\":\"$FAKE_OLD\",\"role\":\"draining\"}]}"; code=200
+    fi ;;
   *:7700/healthz)
     for sha in $FAKE_NEW $FAKE_OLD; do
       if [ -e "$FAKE_STATE/started-celeris-gui@$sha" ]; then

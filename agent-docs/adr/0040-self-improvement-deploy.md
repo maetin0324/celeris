@@ -564,3 +564,69 @@ web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くと
   `None` として扱う（`WorkerStarted` の provider は events から引く）。
 - 止めた検査の孫 process は `kill_on_drop` が直接の子にしか効かないので残りうる（drain timeout の `abort_all_runs` と
   同じ制約）。
+
+## 付記 2026-10-05（D4）: active は常に 1 つ — 生きている active の定義・条件付きの交換・引き継ぎの全員化・監視
+
+### 起きたこと（本番の観測。2026-10-04 23:13 UTC 以降）
+
+- live 昇格（`promote.sh` 33774b6a）で新 instance `01M44K2WP0NV6GV8Y8P09XYPW9` が 43 秒後に `active` になり、`promote.sh` は
+  「handoff done」と判定した。旧 `01M44FMPEEYFQT68HGKR8JWRX0`（release c86128865adc）は `handoff_requested_at` が空のまま
+  `active` を保ち、約 3 時間、2 つの `active` が同時に dispatch した。`draining` に移ったのは 2026-10-05 02:21:49（次の昇格 97468bdf の要求を受けたとき、in_flight=3）。
+- 同じ期間に統合開始と ready 戻しの競合が 2 件起きた（`01M44NN2DCZXV0TZ5FXX5TMN58`・`01M44MZ1GW54XYXXH0EMEEDWFE`）。
+  二重 dispatch が原因だった可能性が高い（推定。ログの突き合わせは未了）。
+- 02:21 の 97468bdf の昇格では、引き継ぎ要求が古い版（c861）に向き、本来の active（33774）は譲らず、新は standby のまま 60 秒で打ち切られた。
+
+### 原因（コードで確認した経路）
+
+1. 起動時の判断（旧 `decide_startup`）は「heartbeat が新しい active」だけを生存とみなした。heartbeat が窓を過ぎた生きた旧は
+   無視され、新は即 `active` になった。旧の行は掃除（`instance_delete_stale`）で消え、旧はプロセスが生きたまま `active` で dispatch を続けた。
+2. 引き継ぎ要求は「生きた active のうち先頭の 1 つ」にしか書かなかった。
+3. 昇格の判断（standby → active）と書き込みが別々の SQL だった。複数の standby が同時に昇格しうる。
+4. `promote.sh` は新の `/api/v1/health` が `active` なら成功にした。旧の drain を見ていなかった。
+
+### 決定
+
+- **D4a（生きている active）**: `is_live_active` = 役割が `active` かつ `drained_at` が無く、プロセスが生きている（`pid_alive`）行。
+  heartbeat の新旧では決めない。古くても生きていれば手放すまで active とみなす（古いと見て引き継げば、生きたままの旧と二重に dispatch する）。
+  プロセスが死んでいる行は生きていない（SIGKILL 直後の起こし直しを妨げない。従来どおり）。
+- **D4b（条件付きの書き込み）**: 起動時に `active` として登録すること（`TaskStore::instance_register_if`）と、standby の昇格
+  （`TaskStore::instance_set_role_if`）は、**同じ writer transaction の中で**全行を読み、`no_other_live_active`（自分以外に生きた active が無い）を確かめてから書く。
+  確かめた後に別の active が現れることは、transaction の直列化で起きない。
+- **D4c（引き継ぎ要求の全員化）**: standby として起動したら、生きている**全部**の active の行に `handoff_requested_at` を書く（既に要求済みの行は上書きしない）。
+- **D4d（掃除）**: 他の行は、`drained_at` が付いたもの、または heartbeat が古く**かつ**（active でない か プロセスが死んでいる）ものだけ消す
+  （`removable_row`、`TaskStore::instance_delete_where`）。古くても生きている active の行は消さない（消すと見えなくなり二重起動になる）。
+- **D4e（監視と解消）**: 毎 tick、自分が active で、生きた他の active が居れば、新しい方（`started_at`、同時刻は `instance_id`）を残す。
+  自分より古い生きた active には引き継ぎを要求する（WARN を出す）。自分が古い方なら、tick の判断で drain する（`decide_tick`）。
+  active の行が消えて登録し直すときは、D4b の条件を通す。通らなければ active にならず `draining` へ手を離す（WARN）。
+- **D4f（promote.sh）**: 新の health が `active` になった後、`GET /api/v1/releases` の `instances` で、active の行がちょうど 1 つで
+  それが新の sha12 になるまで 60 秒待つ（`poll_instances_settled`・`sd_instances_settled`）。待って揃わなければ新を止めて失敗
+  （旧はそのまま。`handoff done` とは言わない）。旧は `draining`（または行が消えた）ことで確かめる。
+
+### 実装との対応
+
+- `crates/celeris/src/instance.rs`: `is_live_active` / `no_other_live_active` / `decide_startup`（`Standby { active_instance_ids }`）/
+  `removable_row` / `decide_tick`（`Stay`・`Promote`・`Drain`）/ `Supervisor::start`・`register_again`・`step`（2b の監視）。
+- `crates/task-core/src/store/task_store.rs` と `instances.rs`: `instance_register_if`・`instance_set_role_if`・`instance_delete_where`
+  （全部 `BEGIN IMMEDIATE`。判断の中身は celeris 側、store は読んで書くだけ）。
+- `scripts/selfdeploy/lib.sh` の `sd_instances_settled`、`scripts/selfdeploy/promote.sh` の `poll_instances_settled`。
+
+### 試験（決定的。時計は引数で渡し、生死は pid で作る）
+
+- `crates/celeris/src/instance/tests.rs`
+  - `two_actives_never_coexist_when_the_old_one_is_stale_but_alive`（再現: heartbeat が 100 秒古い生きた旧がいるとき、新は standby）。
+    修正前の規則（heartbeat の窓で生存を決める）に一時的に戻すと、この試験を含む celeris の instance 試験 12 件が落ちることを確認した（2026-10-05、変更は戻した）。
+  - `the_handoff_request_reaches_every_live_active`（D4c）、`a_second_live_active_makes_the_older_one_drain`（D4e）、
+    `a_newer_active_asks_the_older_live_one_to_hand_off`（D4e）、`a_killed_active_is_taken_over_at_start_and_its_row_is_removed`（D4a）、
+    `removable_rows_never_include_a_stale_live_active`（D4d）。
+- `crates/task-core/src/instance.rs`: `conditional_writes_consult_the_rows_in_the_same_transaction`（D4b）。
+- `scripts/selfdeploy/tests/promote_handoff_settled.sh`（D4f の判定 6 件）、`promote_authorization_marker.sh`（偽 curl に `/api/v1/releases` の応答を足した）。
+
+### 採らない・残ること
+
+- **生きているのに応答しない旧**（heartbeat が止まったまま、プロセスは生きている）は、手放すまで新が standby のまま待つ。
+  強制的に奪うと二重 dispatch になるので採らない。人が `kill` などで旧を止める判断をする（WARN が出る）。
+- 本番の既存の状態（2 つ目の active を含む行）は、本番の DB と daemon を変えるので、この版の昇格後に人が
+  `docs/ops/single-active-handoff.md` の手順で確かめる。自動で掃除しない。
+- この版の `promote.sh` は、この版が `current` になった次の昇格から効く（ADR-0040 付記 2026-10-02 の規則）。
+  それまでの昇格は旧 `promote.sh` のまま（旧の判定）。
+- 進捗・検証の記録は [agent-docs/progress/2026-10-05-single-active-handoff.md](../progress/2026-10-05-single-active-handoff.md)。

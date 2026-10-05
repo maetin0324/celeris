@@ -219,6 +219,27 @@ poll_release() {
   return 1
 }
 
+# `poll_instances_settled <url> <sha12> <timeout>` — `GET /api/v1/releases` の `instances` で、active が
+# `sha12` の 1 つだけになるまで待つ（ADR-0040 D4 付記 2026-10-05）。新が active と言っても、旧がまだ
+# active のままなら成功にしない（二重 active の検出）。
+poll_instances_settled() {
+  local url="$1" want="$2" timeout="$3"
+  local waited=0 tmp
+  tmp="$(mktemp)"
+  while [ "$waited" -lt "$timeout" ]; do
+    if sd_http_get "$url" >"$tmp" 2>/dev/null && sd_instances_settled "$tmp" "$want"; then
+      rm -f "$tmp"
+      sd_log "poll $url: active is only $want after ${waited}s (the old instance is draining or gone)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  sd_log "poll $url: still not settled after ${timeout}s (another instance is active)"
+  rm -f "$tmp"
+  return 1
+}
+
 # 0.0.0.0:7700 で LISTEN している node の pid（初回の移行で旧 GUI を止めるため）。
 find_old_gui_pid() {
   local pid
@@ -263,7 +284,14 @@ promote_live() {
     systemctl --user stop "celeris@$SHA12" || true
     sd_die "live handoff failed (the old celeris is still serving; nothing was changed)"
   fi
-  sd_log "handoff done: the new celeris is active"
+  # ADR-0040 D4 付記 2026-10-05: 新が active でも、旧が draining（または消えた）ことを daemon_instances で
+  # 確かめてから「handoff done」にする。旧がまだ active なら二重 active なので、新を止めて旧に任せる。
+  if ! poll_instances_settled "$SD_PROD_API/api/v1/releases" "$SHA12" 60; then
+    sd_log "the old celeris is still active next to the new one; stopping celeris@$SHA12"
+    systemctl --user stop "celeris@$SHA12" || true
+    sd_die "live handoff failed: two active instances (the old celeris is still serving; nothing was changed)"
+  fi
+  sd_log "handoff done: the new celeris is active and the old one is draining"
 
   systemctl --user enable "celeris@$SHA12" || sd_log "warning: enable celeris@$SHA12 failed"
   if [ -n "$OLD" ]; then

@@ -17,6 +17,47 @@ export type ScreenFrameProps = {
   actions?: ReactNode;
 };
 
+// 画面見出し（h1 tabIndex=-1）は遷移後に shell が script で focus を移す先（S4）。直接開いた画面の
+// 初回表示では、まだ誰も keyboard を触っていないのに、多くの browser の :focus-visible 判定は
+// 「まだ何も操作していない」状態を keyboard 操作とみなし、素の script focus にも枠を出してしまう（S0）。
+// 実際に Tab を押した後の focus だけ区別できるよう、自分で Tab 押下を追って data-kbd-focus を付け、
+// styles.css 側でそれが無い :focus-visible の outline を打ち消す。document 全体に委任するので、
+// 同じ h1[tabindex="-1"] パターンを使う他の画面（features/ 配下の独自見出しを含む）にも同じ修正が効く。
+let sawKeyboardTab = false;
+if (typeof document !== "undefined") {
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key === "Tab") sawKeyboardTab = true;
+    },
+    true,
+  );
+  document.addEventListener(
+    "pointerdown",
+    () => {
+      sawKeyboardTab = false;
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      const target = event.target;
+      if (target instanceof HTMLElement && target.matches('h1[tabindex="-1"]') && sawKeyboardTab) {
+        target.dataset.kbdFocus = "true";
+      }
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusout",
+    (event) => {
+      if (event.target instanceof HTMLElement) delete event.target.dataset.kbdFocus;
+    },
+    true,
+  );
+}
+
 // 画面の見出しと枠（P2-02）。h1 は tabIndex=-1 で、遷移後の focus 先になる（S4）。
 // focus 枠は focus-visible のときだけ出す。pointer で遷移した後の script focus には枠を出さず、keyboard の遷移では出す。
 // page header は パンくず → 見出し・説明 → 主操作 の順で、DOM 順と見た目の順を揃える（DESIGN.md「原則」）。

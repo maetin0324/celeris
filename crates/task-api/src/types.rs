@@ -126,7 +126,8 @@ pub struct TaskRoutingView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<task_core::TaskRouting>,
     /// run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
-    /// 要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。
+    /// 要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・
+    /// `routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。
     pub runs: Vec<task_ops::routing_audit::RunRoutingAudit>,
     /// Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

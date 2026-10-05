@@ -5,9 +5,17 @@
 //! （stage `proxy` の `routing_decided`）を子 trace として付ける。子は proxy log（`llm_proxy_requests`
 //! の相関欄 0048）で request id と decision id が一致したものだけを結び、結べないものは
 //! `audit_incomplete` にする（推定で結ばない）。Phase 2 の trace を持たない旧 run の新欄は None。
+//!
+//! Phase 3（§5・§6）: proxy の `routing_request_decided`（試した source・fallback 原因・run 側の親
+//! decision）も子 trace にする。run への帰属は `run_id`、無ければ `parent_decision_id` が run の dispatch
+//! decision と一致したときだけ。同じ要求（request id と decision id）の Phase 2 の子があればそこへ足す。
+//! dispatch で未確定だった実際の source/model は、proxy log → 試した source の最後 → proxy trace の順で
+//! `actual` に出す（出所を `from` に残す）。escalation・feature・最新 outcome は
+//! `task_core::routing_audit` が run に結ぶ。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
 use task_core::model_router::trace::RoutingTraceV1;
 use task_core::store::RoutingCorrelation;
 use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
@@ -22,6 +30,13 @@ pub const INCOMPLETE_REQUEST_ID_MISSING: &str = "request_id_missing";
 pub const INCOMPLETE_REQUEST_LOG_MISSING: &str = "request_log_missing";
 pub const INCOMPLETE_REQUEST_LOG_MISMATCH: &str = "request_log_mismatch";
 pub const INCOMPLETE_RUN_UNKNOWN: &str = "run_unknown";
+/// `routing_request_decided` が proxy の trace を持たない（子 trace を作れない）。
+pub const INCOMPLETE_REQUEST_TRACE_MISSING: &str = "request_trace_missing";
+
+/// `ActualSource.from` の値。
+pub const ACTUAL_FROM_PROXY_LOG: &str = "proxy_log";
+pub const ACTUAL_FROM_REQUEST_ATTEMPTS: &str = "request_attempts";
+pub const ACTUAL_FROM_PROXY_TRACE: &str = "proxy_trace";
 
 /// proxy log の相関欄を引く口（試験は偽物を差し込む）。
 pub trait RequestLog {
@@ -44,6 +59,20 @@ pub struct RequestLogLink {
     pub snapshot_id: Option<String>,
 }
 
+/// 要求が実際に使った source（dispatch では未確定だった model を含む）。secret を含まない ID だけ。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ActualSource {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// 出所: `proxy_log`（相関の取れた proxy log）・`request_attempts`（試した source の最後）・
+    /// `proxy_trace`（proxy の trace の選択）。
+    pub from: String,
+}
+
 /// 要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RequestRoutingAudit {
@@ -56,6 +85,18 @@ pub struct RequestRoutingAudit {
     /// 結べなかった理由（`request_log_missing` など）。結べたら None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub incomplete_reason: Option<String>,
+    /// Phase 3: run 側 decision（`routing_request_decided.parent_decision_id`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_decision_id: Option<String>,
+    /// Phase 3: 試した順の source（`routing_request_decided.attempts`）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attempts: Vec<RequestSourceAttempt>,
+    /// Phase 3: 最終の source へ落ちた原因。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_reason: Option<String>,
+    /// Phase 3: 実際に使った source/model（出所付き）。どこからも取れなければ None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actual: Option<ActualSource>,
 }
 
 /// ワーカー run 1 件の監査（旧欄）と Phase 2 の子 trace・完全性。
@@ -72,6 +113,9 @@ pub struct RunRoutingAudit {
     /// `audit_incomplete` の理由（整列・重複なし）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub incomplete_reasons: Vec<String>,
+    /// Phase 3: 子 trace の実際の source/model（要求の順、重複なし）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actual_sources: Vec<ActualSource>,
 }
 
 /// タスク 1 件の監査（run ごと）と、どの run にも結べない要求の子 trace。
@@ -142,6 +186,7 @@ pub fn routing_audit_with_requests(
                 requests: phase2.then(Vec::new),
                 audit_incomplete: phase2.then_some(false),
                 incomplete_reasons: Vec::new(),
+                actual_sources: Vec::new(),
             }
         })
         .collect();
@@ -164,6 +209,12 @@ pub fn routing_audit_with_requests(
             None => unbound.push(child),
         }
     }
+    for event in events {
+        let Event::RoutingRequestDecided { record } = event else {
+            continue;
+        };
+        attach_request_record(&mut runs, &mut unbound, record, log)?;
+    }
     for run in &mut runs {
         // dispatch の決定が要求を指すのに、その要求の子 trace が無い。
         if let Some(req) = run
@@ -184,11 +235,19 @@ pub fn routing_audit_with_requests(
         }
         run.incomplete_reasons.sort();
         run.incomplete_reasons.dedup();
+        for child in run.requests.iter().flatten() {
+            if let Some(actual) = &child.actual
+                && !run.actual_sources.contains(actual)
+            {
+                run.actual_sources.push(actual.clone());
+            }
+        }
         if run.requests.is_some() {
             run.audit_incomplete = Some(!run.incomplete_reasons.is_empty());
         }
     }
     for child in &mut unbound {
+        child.actual = actual_source(child);
         child
             .incomplete_reason
             .get_or_insert_with(|| INCOMPLETE_RUN_UNKNOWN.to_string());
@@ -210,6 +269,10 @@ fn request_child(
         trace: trace.clone(),
         log: None,
         incomplete_reason: None,
+        parent_decision_id: trace.parent_decision_id.clone(),
+        attempts: Vec::new(),
+        fallback_reason: None,
+        actual: None,
     };
     let Some(request_id) = trace.request_id.as_deref() else {
         child.incomplete_reason = Some(INCOMPLETE_REQUEST_ID_MISSING.into());
@@ -229,7 +292,102 @@ fn request_child(
             });
         }
     }
+    child.actual = actual_source(&child);
     Ok(child)
+}
+
+/// 実際に使った source: proxy log（相関が取れたもの）→ 試した source の最後 → proxy trace の選択。
+fn actual_source(child: &RequestRoutingAudit) -> Option<ActualSource> {
+    if let Some(l) = &child.log
+        && (l.source_id.is_some() || l.model.is_some())
+    {
+        return Some(ActualSource {
+            source_id: l.source_id.clone(),
+            model: l.model.clone(),
+            account: l.account.clone(),
+            from: ACTUAL_FROM_PROXY_LOG.into(),
+        });
+    }
+    if let Some(a) = child.attempts.last() {
+        return Some(ActualSource {
+            source_id: Some(a.source_id.clone()),
+            model: a.model.clone(),
+            account: a.account_id.clone(),
+            from: ACTUAL_FROM_REQUEST_ATTEMPTS.into(),
+        });
+    }
+    let t = &child.trace;
+    (t.source_id.is_some() || t.model.is_some()).then(|| ActualSource {
+        source_id: t.source_id.clone(),
+        model: t.model.clone(),
+        account: t.account_id.clone(),
+        from: ACTUAL_FROM_PROXY_TRACE.into(),
+    })
+}
+
+/// `routing_request_decided` 1 件を run の子 trace に結ぶ。帰属は `run_id`、無ければ `parent_decision_id` が
+/// run の dispatch decision と一致したときだけ。同じ要求の子（Phase 2）があればそこへ足す。
+fn attach_request_record(
+    runs: &mut [RunRoutingAudit],
+    unbound: &mut Vec<RequestRoutingAudit>,
+    record: &RoutingRequestRecord,
+    log: &dyn RequestLog,
+) -> Result<(), OpsError> {
+    let run_idx = runs.iter().position(|r| match record.run_id.as_deref() {
+        Some(run_id) => r.audit.run_id == run_id,
+        None => {
+            record.parent_decision_id.is_some() && r.audit.decision_id == record.parent_decision_id
+        }
+    });
+    let same = |c: &RequestRoutingAudit| {
+        c.request_id.as_deref() == Some(record.request_id.as_str())
+            && c.decision_id == record.decision_id
+    };
+    let enrich = |c: &mut RequestRoutingAudit| {
+        if record.parent_decision_id.is_some() {
+            c.parent_decision_id = record.parent_decision_id.clone();
+        }
+        c.attempts = record.attempts.clone();
+        c.fallback_reason = record.fallback_reason.clone();
+        c.actual = actual_source(c);
+    };
+    if let Some(i) = run_idx
+        && let Some(existing) = runs[i].requests.iter_mut().flatten().find(|c| same(c))
+    {
+        enrich(existing);
+        return Ok(());
+    }
+    if run_idx.is_none()
+        && let Some(existing) = unbound.iter_mut().find(|c| same(c))
+    {
+        enrich(existing);
+        return Ok(());
+    }
+    let Some(trace) = record.trace.as_deref() else {
+        if let Some(i) = run_idx {
+            runs[i]
+                .incomplete_reasons
+                .push(INCOMPLETE_REQUEST_TRACE_MISSING.into());
+            runs[i].requests.get_or_insert_with(Vec::new);
+        }
+        return Ok(());
+    };
+    let mut trace = trace.clone();
+    // 要求と決定の id は event 側が正（trace の id と食い違えば event を採って proxy log と照合する）。
+    trace.request_id = Some(record.request_id.clone());
+    trace.decision_id = record.decision_id.clone();
+    let mut child = request_child(&trace, log)?;
+    enrich(&mut child);
+    match run_idx {
+        Some(i) => {
+            if let Some(reason) = &child.incomplete_reason {
+                runs[i].incomplete_reasons.push(reason.clone());
+            }
+            runs[i].requests.get_or_insert_with(Vec::new).push(child);
+        }
+        None => unbound.push(child),
+    }
+    Ok(())
 }
 
 #[cfg(test)]

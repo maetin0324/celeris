@@ -526,6 +526,37 @@
         }
       ]
     },
+    "ActualSource": {
+      "description": "要求が実際に使った source（dispatch では未確定だった model を含む）。secret を含まない ID だけ。",
+      "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from": {
+          "description": "出所: `proxy_log`（相関の取れた proxy log）・`request_attempts`（試した source の最後）・\n`proxy_trace`（proxy の trace の選択）。",
+          "type": "string"
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "from"
+      ],
+      "type": "object"
+    },
     "ActualWriteSetView": {
       "properties": {
         "base_sha": {
@@ -20178,8 +20209,33 @@
     "RequestRoutingAudit": {
       "description": "要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。",
       "properties": {
+        "actual": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActualSource"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3: 実際に使った source/model（出所付き）。どこからも取れなければ None。"
+        },
+        "attempts": {
+          "description": "Phase 3: 試した順の source（`routing_request_decided.attempts`）。",
+          "items": {
+            "$ref": "#/$defs/RequestSourceAttempt"
+          },
+          "type": "array"
+        },
         "decision_id": {
           "type": "string"
+        },
+        "fallback_reason": {
+          "description": "Phase 3: 最終の source へ落ちた原因。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "incomplete_reason": {
           "description": "結べなかった理由（`request_log_missing` など）。結べたら None。",
@@ -20196,6 +20252,13 @@
             {
               "type": "null"
             }
+          ]
+        },
+        "parent_decision_id": {
+          "description": "Phase 3: run 側 decision（`routing_request_decided.parent_decision_id`）。",
+          "type": [
+            "string",
+            "null"
           ]
         },
         "request_id": {
@@ -20734,6 +20797,62 @@
       ],
       "type": "object"
     },
+    "RoutingFeaturesRecord": {
+      "description": "`Event::RoutingFeaturesRecorded` の中身（wire では event の欄に平たく並ぶ）。",
+      "properties": {
+        "context_version": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "features": {
+          "default": null,
+          "description": "§3.4 の特徴（本文・生の command・credential を除いた snapshot）。形は `context_version` が決める。"
+        },
+        "missing_fields": {
+          "description": "取れなかった欄（未知を低リスクと同一視しないため、欠測を明示する）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "provenance": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。",
+          "type": "object"
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FeatureStage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "decision_id",
+        "context_version"
+      ],
+      "type": "object"
+    },
     "RoutingMode": {
       "enum": [
         "legacy",
@@ -20741,6 +20860,129 @@
         "enforce"
       ],
       "type": "string"
+    },
+    "RoutingOutcome": {
+      "description": "`Event::RoutingOutcomeRecorded` の中身（wire では event の欄に平たく並ぶ）。生の outcome vector が正本で、\n`reward` は offline 比較用の派生値。",
+      "properties": {
+        "acceptance_passed": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cash_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "evaluation_version": {
+          "type": "string"
+        },
+        "failed_criterion_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "failure_class": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome_id": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "review_passed": {
+          "default": null,
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "reward": {
+          "default": null,
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "supersedes": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "wall_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "outcome_id",
+        "decision_id",
+        "evaluation_version"
+      ],
+      "type": "object"
+    },
+    "RoutingOutcomeState": {
+      "description": "run の routing outcome の状態（§6: 未判定を false や品質 0 とみなさないための区別）。",
+      "oneOf": [
+        {
+          "const": "not_recorded",
+          "description": "`routing_outcome_recorded` がまだ無い（run 中・未投影）。",
+          "type": "string"
+        },
+        {
+          "const": "unreviewed",
+          "description": "outcome はあるが review・acceptance の判定がどちらも null（未レビュー・中断）。",
+          "type": "string"
+        },
+        {
+          "const": "judged",
+          "description": "review か acceptance の判定がある。",
+          "type": "string"
+        }
+      ]
     },
     "RoutingPolicy": {
       "properties": {
@@ -21251,6 +21493,13 @@
             "null"
           ]
         },
+        "actual_sources": {
+          "description": "Phase 3: 子 trace の実際の source/model（要求の順、重複なし）。",
+          "items": {
+            "$ref": "#/$defs/ActualSource"
+          },
+          "type": "array"
+        },
         "adapter": {
           "type": [
             "string",
@@ -21271,11 +21520,29 @@
             "null"
           ]
         },
+        "decision_id": {
+          "description": "Phase 3: dispatch の decision id（`optimizer.decision_id`）。feature・outcome はこの id で結ぶ。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "escalation": {
           "type": [
             "string",
             "null"
           ]
+        },
+        "escalation_audit": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EscalationAudit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3: run 間 escalation の構造化監査（`RoutingRecord.escalation`）。旧 event は None。"
         },
         "features": {
           "anyOf": [
@@ -21347,6 +21614,17 @@
             "null"
           ]
         },
+        "outcome_state": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingOutcomeState"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3: outcome の状態。dispatch の decision id も outcome も無い旧 run は None。"
+        },
         "output_tokens": {
           "format": "uint64",
           "minimum": 0,
@@ -21406,6 +21684,28 @@
               "type": "null"
             }
           ]
+        },
+        "routing_features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingFeaturesRecord"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3: dispatch 時点の特徴 snapshot（stage dispatch の `routing_features_recorded`。最後の 1 件）。"
+        },
+        "routing_outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。"
         },
         "rule_id": {
           "type": [
@@ -24129,7 +24429,7 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
-          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。",
+          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。",
           "items": {
             "$ref": "#/$defs/RunRoutingAudit"
           },

@@ -2,6 +2,9 @@
 //!
 //! なぜその担当（org）・harness・lane・model になったかを、`task_ops::routing_audit` がイベントから
 //! 組み立てた run ごとの監査（Phase 2 は proxy の要求単位の子 trace と `audit_incomplete` を含む）と、タスクの routing の出自（`Task.routing`、捨てた LLM の担当を含む）で返す。
+//! Phase 3 は proxy の `routing_request_decided`（試した source・fallback 原因）と実際の source/model
+//! （`actual`・`actual_sources`）、構造化した escalation（`escalation_audit`）、dispatch 時点の特徴
+//! （`routing_features`）、最新の outcome（`routing_outcome`・`outcome_state`）を同じ run の object に足す。
 //! 集めるのは決定的（ストアだけ）。LLM は関与しない。
 
 use axum::extract::{RawQuery, State};

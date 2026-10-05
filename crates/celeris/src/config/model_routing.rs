@@ -7,6 +7,7 @@ use task_core::model_router::{
     cost::SelfHostRates,
     policy::{FreshnessPolicy, RoutingMode, RoutingPolicy, Weights},
     profiles::{Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support},
+    shadow::{ShadowAllowlist, ShadowPolicy},
 };
 
 use super::{Config, ConfigError};
@@ -35,6 +36,8 @@ pub struct ModelRoutingConfig {
     pub context_safety_margin: Option<u64>,
     /// Phase 3: run 間 escalation の品質失敗閾値と試行上限。
     pub escalation: EscalationEntry,
+    /// Phase 4: decision shadow と、明示された場合だけの実行 shadow。
+    pub shadow: ShadowEntry,
     /// Phase 2 の state・cost・retry の検証済み設定（`Config::load` が埋める。dispatcher と proxy に配る）。
     /// `Config` 本体でなくここに持つのは、reload で `model_routing` と一緒に原子的に差し替えるため。
     #[serde(skip)]
@@ -88,6 +91,38 @@ pub struct EscalationEntry {
     pub max_total_attempts: Option<u32>,
 }
 
+/// TOML の候補 policy 指定と、task-core が共有する実行上限を分ける。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ShadowEntry {
+    pub candidate_policy: Option<String>,
+    pub execute: bool,
+    pub allowlist: ShadowAllowlist,
+    pub sample_rate: f64,
+    pub daily_max_requests: Option<u64>,
+    pub daily_max_tokens: Option<u64>,
+    pub daily_max_effective_usd: Option<f64>,
+    pub max_concurrency: Option<u32>,
+    pub max_queue_depth: Option<u32>,
+    pub timeout_ms: Option<u64>,
+}
+
+impl ShadowEntry {
+    pub fn policy(&self) -> ShadowPolicy {
+        ShadowPolicy {
+            execute: self.execute,
+            allowlist: self.allowlist.clone(),
+            sample_rate: self.sample_rate,
+            daily_max_requests: self.daily_max_requests,
+            daily_max_tokens: self.daily_max_tokens,
+            daily_max_effective_usd: self.daily_max_effective_usd,
+            max_concurrency: self.max_concurrency,
+            max_queue_depth: self.max_queue_depth,
+            timeout_ms: self.timeout_ms,
+        }
+    }
+}
+
 /// 検証済みの Phase 2 実行時設定。dispatcher と proxy に配る（未知は None のまま）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct RoutingRuntime {
@@ -99,6 +134,8 @@ pub struct RoutingRuntime {
     pub fallback: llm_proxy::fallback::FallbackSettings,
     pub context_safety_margin: Option<u64>,
     pub escalation: task_core::EscalationThresholds,
+    pub shadow: ShadowPolicy,
+    pub shadow_candidate_policy: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -672,6 +709,30 @@ impl Config {
     /// Phase 2 の実行時設定（state・cost・retry）を検証して組む。未設定は unknown か ADR の既定。
     pub fn routing_runtime(&self) -> Result<RoutingRuntime, ConfigError> {
         let mr = &self.model_routing;
+        let shadow = mr.shadow.policy();
+        shadow
+            .validate()
+            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+        if shadow.execute
+            && (shadow.allowlist.task_kinds.is_empty()
+                || shadow.allowlist.roles.is_empty()
+                || shadow.allowlist.lanes.is_empty()
+                || shadow.allowlist.sources.is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "model_routing.shadow.execute = true requires every allowlist dimension".into(),
+            ));
+        }
+        if mr
+            .shadow
+            .candidate_policy
+            .as_ref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ConfigError::Invalid(
+                "model_routing.shadow.candidate_policy must not be empty".into(),
+            ));
+        }
         let mut escalation = task_core::EscalationThresholds::default();
         if let Some(value) = mr.escalation.quality_failures_per_lane {
             if value == 0 {
@@ -800,6 +861,8 @@ impl Config {
             fallback,
             context_safety_margin: mr.context_safety_margin,
             escalation,
+            shadow,
+            shadow_candidate_policy: mr.shadow.candidate_policy.clone(),
         })
     }
 }

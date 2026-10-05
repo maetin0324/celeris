@@ -1357,6 +1357,58 @@ fn routing_config_reload_is_atomic() {
 }
 
 #[test]
+fn routing_shadow_invalid_reload_keeps_previous_snapshot() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let db = dir.path().join("db.sqlite3");
+    let ws = dir.path().join("ws");
+    let base = format!(
+        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+    );
+    std::fs::write(&path, &base).unwrap();
+    let mut config = Config::load(&path).unwrap();
+    let old = Arc::clone(config.model_routing.runtime.as_ref().unwrap());
+    let catalog = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
+    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
+    std::fs::write(
+        &path,
+        format!("{base}\n[model_routing.shadow]\nexecute = true\n"),
+    )
+    .unwrap();
+    let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
+    assert!(err.contains("daily_max_requests"), "{err}");
+    assert!(Arc::ptr_eq(
+        config.model_routing.runtime.as_ref().unwrap(),
+        &old
+    ));
+    assert!(Arc::ptr_eq(
+        config.routing_catalog_snapshot.as_ref().unwrap(),
+        &catalog
+    ));
+    std::fs::write(
+        &path,
+        format!("{base}\n[model_routing.shadow]\nsample_rate = 0.5\n"),
+    )
+    .unwrap();
+    reload_providers(&mut dispatcher, &mut config).unwrap();
+    assert!(!Arc::ptr_eq(
+        config.model_routing.runtime.as_ref().unwrap(),
+        &old
+    ));
+    assert_eq!(
+        config
+            .model_routing
+            .runtime
+            .as_ref()
+            .unwrap()
+            .shadow
+            .sample_rate,
+        0.5
+    );
+}
+
+#[test]
 fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
     use task_core::model_router::policy::RoutingMode;
     let dir = tempfile::tempdir().unwrap();

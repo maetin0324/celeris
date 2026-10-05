@@ -59,6 +59,25 @@ shadow 評価の道具立てを実装した。本番の切り替えはしてい�
 - 文書検査 3 本 → exit 0
 - 人の原票（`run-manifest.txt`・`start-stop.log`・`shadow.log`・`real-sidecar-results.json`）: start-stop exit 0、shadow exit 0・30/30 completed
 
+### close-v3（再配置）: close branch を取り込んだ統合後 HEAD `8f42739e` で再検査（2026-10-05）
+
+旧 unit `close` は範囲 check の基点が join-fix 前の `18f60cef` のまま固定され通らなかったため、
+新 key `close-v3` で置き直し、close branch（`a2f43c39`・`3f1faea1`・`5c9930b0`・原票 `3c1a0f5c`・転記 `8f42739e`）を
+`git merge --ff-only` で取り込んだ（差分は `agent-docs/`・`docs/reports/`・`docs/ops/model-routing-migration.md` のみ）。
+新しい実装はしていない。人の回答 `routellm-weights-use`（start-stop exit 0・pair score 1 件・SIGTERM で exit 0・
+port 閉鎖・15.0s・peak RSS 約 2.6 GB、shadow は上限 50 に対し合成 dataset 30 件で completed 30 / failed 0 /
+dropped 0 / timeout 0 / 外部呼び出し 0、latency mean 44.6ms・p95 42.9ms・max 426ms（初回）、weights revision
+`86237e3df400762178ea98379477b8296e66d5e4`）の転記が report §3・ADR 付記・手順書 §10.1/§10.3/§10.5（approved・
+XLM-RoBERTa 実測値）に揃っていることを確認し、欠けは無し。統合後 HEAD で全体検査し直した:
+
+- `bash scripts/dev/test-parallel.sh` → exit 0、`4035 tests run: 4035 passed (1 slow), 13 skipped`、`test-parallel: ok`
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- 上表 4 の filterset → exit 0、`39 tests run: 39 passed, 4009 skipped`（Phase 5 の新試験と Phase 4・回帰）
+- `python3 -m unittest discover -s scripts/model-routing -p 'test_*.py'` → OK（3 tests）
+- `sh scripts/model-routing/check-runbook.sh --require-approved` → exit 0、`routellm-weights-use=approved`
+- `sh scripts/model-routing/fake-shadow-check.sh` → exit 0。worker 内の `real-sidecar-check.sh` → exit 2（weights なし = 未実行。合格扱いにしない）
+- 文書検査 3 本（`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`）→ 各 exit 0
+
 ## 未解決事項
 
 1. Celeris 本体の estimator shadow（本番 config の opt-in、手順書 §10.7）での coverage・`estimator_version_mismatch`・

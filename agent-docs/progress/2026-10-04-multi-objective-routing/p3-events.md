@@ -48,3 +48,11 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §5・§6・§1
 - check 不合格の原因: (a) `cargo fmt --check` の差分 → `cargo fmt --all` で解消（feedback.rs・feedback/tests.rs）。`cargo clippy -p task-core/-p task-api/-p task-ops --all-targets -- -D warnings && cargo fmt --all -- --check` は exit 0。
 - (b) nextest の check は filterset が 1 文字ずつ `test(x)` に分割され `test())` で構文不正（exit 94）。成果では直せない → plan_issue。
 - (c) 範囲 check が `docs/api/v1/{event,api-v1}.schema.json` を範囲外と見る。Event に variant を足すと `event_row_schema_matches_committed`（task-core）と `committed_schema_matches_generated`（task-api）が commit 済み schema との一致を要求するため、再生成は必須 → allow に `docs/api/v1` を足す plan_issue。
+
+## attempt 3（2026-10-05）
+
+- `git log -4 --oneline` と `git diff baccb0fd..HEAD --stat` で、成果 commit `55d9988b`・`7ff967a6`、3 event・outcome 投影・API の固定数 65・schema 再生成を確認。作業ツリーは clean。
+- `cargo nextest run -p task-core -p task-api -E 'test(routing_reward_waits_for_review_and_supersedes_idempotently) | test(routing_outcome_reads_work_unit_checks_by_run) | test(routing_feedback_events_use_adr_wire_names_and_tolerate_missing_fields) | test(routing_feedback_event_types_match_their_serde_names) | test(cluster_job_wait_event_types_match_their_serde_names)'`: exit 0、5 passed。
+- `bash scripts/dev/test-parallel.sh`: exit 0、nextest Summary は 3972 passed（1 slow）、12 skipped。集計行の `passed: 0` は既知のパーサー不具合であり、Summary 原文と exit code を採用した。
+- `cargo clippy --workspace -- -D warnings`、`cargo clippy -p task-core -p task-api --all-targets -- -D warnings`、`cargo fmt --all -- --check`: すべて exit 0。
+- 新たな実装上の未解決事項はない。上記の web・生成型・WU 合格のみの評価規則・正規化値の接続は、それぞれ既定の後続 leaf が扱う。

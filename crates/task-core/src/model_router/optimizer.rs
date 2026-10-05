@@ -3,7 +3,7 @@ use super::{
     estimator::QualityEstimator,
     policy::{Objective, RoutingMode, RoutingPolicy},
     profiles::{DeploymentProfile, ModelProfile, Reachability, SourceState, Support},
-    trace::CandidateTrace,
+    trace::{CandidateTrace, ExcludedReason, ScoreTrace},
 };
 use std::collections::{HashMap, HashSet};
 
@@ -213,6 +213,7 @@ pub fn optimize(
         }
         let mut quality = None;
         let mut score = None;
+        let mut score_breakdown = None;
         if reasons.is_empty() {
             let estimate = estimator.estimate(m, context);
             match estimate.index {
@@ -228,6 +229,27 @@ pub fn optimize(
                     let value =
                         w.quality * q - w.cost * cost - w.latency * latency - w.pressure * pressure;
                     score = Some(value);
+                    let unknown = [
+                        (c.cost_usd.is_none(), "cost_unknown"),
+                        (c.latency_ms.is_none(), "latency_unknown"),
+                        (c.pressure.is_none(), "pressure_unknown"),
+                    ]
+                    .into_iter()
+                    .filter(|(missing, _)| *missing)
+                    .map(|(_, flag)| flag.to_string())
+                    .collect();
+                    score_breakdown = Some(ScoreTrace {
+                        q,
+                        c: cost,
+                        l: latency,
+                        p: pressure,
+                        wq: w.quality,
+                        wc: w.cost,
+                        wl: w.latency,
+                        wp: w.pressure,
+                        unknown,
+                        score: value,
+                    });
                     qualities.insert(d.id.clone(), q);
                     ranked.push(RankedCandidate {
                         model_profile_id: m.id.clone(),
@@ -249,6 +271,13 @@ pub fn optimize(
             model_profile_id: m.id.clone(),
             deployment_id: d.id.clone(),
             eligible_provider_ids: c.eligible_provider_ids.clone(),
+            config_order: Some(d.config_order),
+            excluded_reason: ExcludedReason::primary(&reasons),
+            score_breakdown,
+            cash_usd: None,
+            shadow_usd: None,
+            resource_usd: None,
+            effective_usd: None,
             excluded_reasons: reasons,
             quality,
             cost_usd: c.cost_usd,

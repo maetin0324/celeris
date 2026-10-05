@@ -214,11 +214,15 @@ impl Dispatcher {
                     latency_ms: None,
                     pressure: None,
                     score: None,
+                    ..Default::default()
                 })
                 .collect(),
             selected: Some(selected.into()),
             fallback_order: result.allowlist,
             reasons: vec!["providers.tier_models/config_order".into()],
+            source_id: None,
+            model: None,
+            account_id: None,
         })
     }
 

@@ -280,6 +280,9 @@ fn routing_old_events_deserialize_without_optimizer() {
         selected: None,
         fallback_order: vec![],
         reasons: vec![],
+        source_id: None,
+        model: None,
+        account_id: None,
     });
     let new = Event::RoutingDecided {
         run_id: "r".into(),
@@ -300,4 +303,230 @@ fn routing_old_events_deserialize_without_optimizer() {
     };
     assert_eq!(strip(old_audit), strip(new_audit));
     assert!(json.to_string().contains("routing_decided"));
+}
+
+fn trace_with(candidates: Vec<super::trace::CandidateTrace>) -> super::trace::RoutingTraceV1 {
+    super::trace::RoutingTraceV1 {
+        decision_id: "d".into(),
+        parent_decision_id: None,
+        task_id: Some("t".into()),
+        work_unit_id: None,
+        run_id: Some("r".into()),
+        request_id: None,
+        stage: "dispatch".into(),
+        mode: RoutingMode::Shadow,
+        policy_version: "phase2-v1".into(),
+        catalog_version: "c".into(),
+        feature_version: "1".into(),
+        estimator_version: "heuristic-1".into(),
+        snapshot_id: "s".into(),
+        observed_at: None,
+        requested_lane: Tier::Cheap,
+        selected_lane: Some(Tier::Cheap),
+        candidates,
+        selected: None,
+        fallback_order: vec![],
+        reasons: vec![],
+        source_id: None,
+        model: None,
+        account_id: None,
+    }
+}
+
+#[test]
+fn routing_trace_fields_are_additive() {
+    use super::trace::{CandidateTrace, ExcludedReason, ScoreTrace};
+    const NEW_KEYS: [&str; 10] = [
+        "\"config_order\"",
+        "\"excluded_reason\"",
+        "\"score_breakdown\"",
+        "\"cash_usd\"",
+        "\"shadow_usd\"",
+        "\"resource_usd\"",
+        "\"effective_usd\"",
+        "\"source_id\"",
+        "\"model\"",
+        "\"account_id\"",
+    ];
+    // Phase 1 の形の JSON（新欄なし）が読め、新欄は None。
+    let old_json = r#"{"decision_id":"d","parent_decision_id":null,"task_id":null,
+        "work_unit_id":null,"run_id":"r","request_id":null,"stage":"dispatcher","mode":"legacy",
+        "policy_version":"p","catalog_version":"c","feature_version":"f","estimator_version":"e",
+        "snapshot_id":"s","observed_at":null,"requested_lane":"cheap","selected_lane":"cheap",
+        "candidates":[{"model_profile_id":"m","deployment_id":"dep","eligible_provider_ids":["p"],
+        "excluded_reasons":["cooldown"],"quality":null,"cost_usd":null,"latency_ms":null,
+        "pressure":null,"score":null}],"selected":"p","fallback_order":["p"],"reasons":[]}"#;
+    let old: super::trace::RoutingTraceV1 = serde_json::from_str(old_json).unwrap();
+    assert_eq!(old.source_id, None);
+    assert_eq!(old.model, None);
+    assert_eq!(old.account_id, None);
+    let c = &old.candidates[0];
+    assert_eq!(c.excluded_reason, None);
+    assert_eq!(c.score_breakdown, None);
+    assert_eq!(c.config_order, None);
+    assert!(c.cash_usd.is_none() && c.shadow_usd.is_none());
+    assert!(c.resource_usd.is_none() && c.effective_usd.is_none());
+    // 省略時は新欄を出さない: 旧 JSON は再直列化で同じ値に戻る（旧 event の replay が変わらない）。
+    let reserialized = serde_json::to_value(&old).unwrap();
+    let original: serde_json::Value = serde_json::from_str(old_json).unwrap();
+    assert_eq!(reserialized, original);
+    let text = reserialized.to_string();
+    for key in NEW_KEYS {
+        assert!(!text.contains(key), "{key} must be omitted when None");
+    }
+    // 旧 RoutingDecided event（optimizer の旧形）も同じ JSON に戻り、audit も変わらない。
+    let task = crate::model_policy::tests::task("test", vec![]);
+    let decision = crate::model_policy::decide_for_task(&task, &Default::default()).unwrap();
+    let record = crate::model_policy::RoutingRecord {
+        org_node: None,
+        harness: None,
+        decision,
+        resolution: Default::default(),
+        quota_reason: None,
+        work_unit_id: None,
+        optimizer: None,
+    };
+    let mut event = serde_json::to_value(Event::RoutingDecided {
+        run_id: "r".into(),
+        record: Box::new(record),
+    })
+    .unwrap();
+    event["record"]["optimizer"] = original.clone();
+    let parsed: Event = serde_json::from_value(event.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&parsed).unwrap(), event);
+    let audit = crate::routing_audit::routing_audit(&task, std::slice::from_ref(&parsed));
+    assert_eq!(audit.len(), 1);
+    assert_eq!(audit[0].optimizer.as_ref(), Some(&old));
+
+    // 新欄を全部埋めた JSON は往復する。
+    let estimate = super::cost::CostEstimate {
+        cash_usd: Some(0.0),
+        subscription_shadow_usd: Some(0.25),
+        self_host_resource_usd: Some(0.0),
+        effective_usd: Some(0.25),
+        pressure: Some(0.5),
+        assumptions: vec![],
+    };
+    let breakdown = super::cost::ScoreBreakdown {
+        quality: 0.8,
+        cost_term: 0.25,
+        latency_term: 1.0,
+        pressure_term: 0.5,
+        unknown: vec!["latency_unknown"],
+        score: 0.1,
+    };
+    let weights = RoutingPolicy::defaults(Tier::Cheap, RoutingMode::Shadow).weights;
+    let mut full = CandidateTrace {
+        model_profile_id: "m".into(),
+        deployment_id: "dep".into(),
+        eligible_provider_ids: vec!["p".into()],
+        excluded_reasons: vec!["quota_exhausted".into()],
+        config_order: Some(3),
+        excluded_reason: Some(ExcludedReason::QuotaExhausted),
+        score_breakdown: Some(ScoreTrace::new(&breakdown, &weights)),
+        ..Default::default()
+    }
+    .with_cost(&estimate);
+    full.score = Some(0.1);
+    let mut new = trace_with(vec![
+        full.clone(),
+        CandidateTrace {
+            model_profile_id: "m2".into(),
+            deployment_id: "dep2".into(),
+            excluded_reason: Some(ExcludedReason::Constraint {
+                name: "privacy".into(),
+            }),
+            ..Default::default()
+        },
+    ]);
+    new.source_id = Some("celeris".into());
+    new.model = Some("qwen".into());
+    new.account_id = Some("acct-1".into());
+    let json = serde_json::to_string(&new).unwrap();
+    for key in NEW_KEYS {
+        assert!(json.contains(key), "{key} must be serialized when set");
+    }
+    let back: super::trace::RoutingTraceV1 = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, new);
+    assert_eq!(back.candidates[0].shadow_usd, Some(0.25));
+    assert_eq!(
+        back.candidates[0].score_breakdown.as_ref().unwrap().unknown,
+        vec!["latency_unknown".to_string()]
+    );
+    assert!(json.contains(r#""excluded_reason":{"kind":"constraint","name":"privacy"}"#));
+}
+
+#[test]
+fn routing_candidate_reasons_serialize_stably() {
+    use super::trace::{CandidateTrace, ExcludedReason};
+    let cand = |id: &str, order: Option<usize>, reasons: &[&str]| CandidateTrace {
+        model_profile_id: format!("m-{id}"),
+        deployment_id: id.into(),
+        eligible_provider_ids: vec![format!("p-{id}")],
+        excluded_reasons: reasons.iter().map(|r| r.to_string()).collect(),
+        config_order: order,
+        ..Default::default()
+    };
+    let a = vec![
+        cand("a", Some(2), &["rate_limit", "cooldown", "privacy"]),
+        cand("b", Some(0), &[]),
+        cand("c", Some(1), &["quota_exhausted", "concurrency"]),
+        cand("legacy", None, &["context_unknown", "cooldown", "cooldown"]),
+        cand("d", Some(1), &["lane"]),
+    ];
+    let mut b = a.clone();
+    b.reverse();
+    for c in &mut b {
+        c.excluded_reasons.reverse();
+    }
+    let mut c = a.clone();
+    c.rotate_left(2);
+    let mut outputs = Vec::new();
+    for candidates in [a, b, c] {
+        let mut t = trace_with(candidates);
+        t.normalize();
+        outputs.push(serde_json::to_string(&t).unwrap());
+    }
+    assert_eq!(outputs[0], outputs[1]);
+    assert_eq!(outputs[0], outputs[2]);
+    let t: super::trace::RoutingTraceV1 = serde_json::from_str(&outputs[0]).unwrap();
+    let ids: Vec<_> = t
+        .candidates
+        .iter()
+        .map(|c| c.deployment_id.as_str())
+        .collect();
+    // 設定順 → ID。設定順の無い候補は最後。
+    assert_eq!(ids, ["b", "c", "d", "a", "legacy"]);
+    assert_eq!(t.candidates[0].excluded_reason, None);
+    assert_eq!(
+        t.candidates[1].excluded_reason,
+        Some(ExcludedReason::QuotaExhausted)
+    );
+    assert_eq!(
+        t.candidates[3].excluded_reason,
+        Some(ExcludedReason::Constraint {
+            name: "privacy".into()
+        })
+    );
+    assert_eq!(
+        t.candidates[3].excluded_reasons,
+        ["cooldown", "privacy", "rate_limit"]
+    );
+    assert_eq!(
+        t.candidates[4].excluded_reasons,
+        ["context_unknown", "cooldown"]
+    );
+    // 既知の理由コードは型付きの理由に写り、未知のコードは Other で残る。
+    for code in ["cooldown", "rate_limit", "concurrency", "quota_exhausted"] {
+        assert!(!matches!(
+            ExcludedReason::from_code(code),
+            ExcludedReason::Other { .. }
+        ));
+    }
+    assert_eq!(
+        ExcludedReason::from_code("brand_new"),
+        ExcludedReason::Other {
+            code: "brand_new".into()
+        }
+    );
 }

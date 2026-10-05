@@ -2272,6 +2272,23 @@
     },
     "CandidateTrace": {
       "properties": {
+        "cash_usd": {
+          "description": "Phase 2: API の実料金。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "config_order": {
+          "description": "Phase 2: 設定順（決定的な並びのキー）。旧 event には無い。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "cost_usd": {
           "format": "double",
           "type": [
@@ -2282,11 +2299,30 @@
         "deployment_id": {
           "type": "string"
         },
+        "effective_usd": {
+          "description": "Phase 2: cash + shadow + resource（どれかが未知なら None）。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "eligible_provider_ids": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "excluded_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 2: 代表の除外理由。採用可能な候補・旧 event は None。"
         },
         "excluded_reasons": {
           "items": {
@@ -2321,7 +2357,34 @@
             }
           ]
         },
+        "resource_usd": {
+          "description": "Phase 2: self-host の資源の機会費用。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "score_breakdown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScoreTrace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 2: score の内訳。score を計算しなかった候補・旧 event は None。"
+        },
+        "shadow_usd": {
+          "description": "Phase 2: subscription の shadow price。",
           "format": "double",
           "type": [
             "number",
@@ -9751,6 +9814,182 @@
         "criterion"
       ],
       "type": "object"
+    },
+    "ExcludedReason": {
+      "description": "ADR §9（Phase 2）: 候補が落ちた理由の型。旧 event には無い（None）。\n既知の理由コード（optimizer・cost の `&'static str`）は [`ExcludedReason::from_code`] で写す。",
+      "oneOf": [
+        {
+          "description": "不合格の制約（lane・deployment・source・privacy・locality・adapter・capability・context・\nprovider・cost・latency・model_identity など）。`name` は制約名。",
+          "properties": {
+            "kind": {
+              "const": "constraint",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quota_exhausted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "cooldown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "concurrency",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "rate_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "health_down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "circuit_open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "enforce で必須の値が未知（`context_unknown`・`quality_unknown` など）。`field` は欠けた値。",
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unknown_required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_invalid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_below_min",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "invalid_estimate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "上のどれにも当たらない理由コード（新しい版が足したコードを旧い読み手が落とさない）。",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ExecutionChildSpec": {
       "additionalProperties": false,
@@ -20228,6 +20467,13 @@
     },
     "RoutingTraceV1": {
       "properties": {
+        "account_id": {
+          "description": "Phase 2: 最終の account（OAuth pool の account 等）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "candidates": {
           "items": {
             "$ref": "#/$defs/CandidateTrace"
@@ -20254,6 +20500,13 @@
         },
         "mode": {
           "$ref": "#/$defs/RoutingMode"
+        },
+        "model": {
+          "description": "Phase 2: 最終の model。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "observed_at": {
           "type": [
@@ -20309,6 +20562,13 @@
         },
         "snapshot_id": {
           "type": "string"
+        },
+        "source_id": {
+          "description": "Phase 2: 最終の source（provider / deployment）。旧 event には無い。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "stage": {
           "type": "string"
@@ -20704,6 +20964,65 @@
         "artifacts",
         "verdicts",
         "reviewer_deferrals"
+      ],
+      "type": "object"
+    },
+    "ScoreTrace": {
+      "description": "score の内訳（ADR §4: score = wq·Q − wc·C − wl·L − wp·P）。C/L/P の未知は 1 で `unknown` に残す。",
+      "properties": {
+        "c": {
+          "format": "double",
+          "type": "number"
+        },
+        "l": {
+          "format": "double",
+          "type": "number"
+        },
+        "p": {
+          "format": "double",
+          "type": "number"
+        },
+        "q": {
+          "format": "double",
+          "type": "number"
+        },
+        "score": {
+          "format": "double",
+          "type": "number"
+        },
+        "unknown": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "wc": {
+          "format": "double",
+          "type": "number"
+        },
+        "wl": {
+          "format": "double",
+          "type": "number"
+        },
+        "wp": {
+          "format": "double",
+          "type": "number"
+        },
+        "wq": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "q",
+        "c",
+        "l",
+        "p",
+        "wq",
+        "wc",
+        "wl",
+        "wp",
+        "score"
       ],
       "type": "object"
     },

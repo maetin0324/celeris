@@ -24,8 +24,8 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §7.1・§10 Ph
 - `cargo fmt --all -- --check` → exit 0、`cargo clippy --workspace --all-targets -- -D warnings` → exit 0
 - `bash scripts/dev/test-parallel.sh` → exit 0、4001 tests run: 4001 passed, 12 skipped
 
-## 未解決事項
-- **範囲 check の外を 2 file 触った**: `crates/task-api/src/query.rs`（`event_type_name` の網羅 match に 1 行、`EVENT_TYPES` 65→66）と `crates/task-api/src/query/tests.rs`（件数の assert 65→66）。`Event` に variant を足すと task-api が E0004 で compile できず、受け入れ条件 2（workspace clippy）と範囲 check が両立しないため。範囲 check の allow に `crates/task-api/src/query` を足して再判定してほしい。
+## 後続への引継ぎ
+- `crates/task-api/src/query.rs`（`event_type_name` の網羅 match と `EVENT_TYPES`）と `crates/task-api/src/query/tests.rs`（件数 assert）は event 追加に伴う必須の追従。再計画で範囲 check の allow に両 file が追加され、`CELERIS_WU_BASE` からの全差分の範囲 check は exit 0。
 - ADR §6 の表は `routing_shadow_evaluated` と書くが、Objective の `routing_shadow_recorded` を採った（ADR 付記に記録）。
 - gui/web の生成型（`gui/app/celeris/types.ts` など）は未更新（gui/web unit の担当）。
 

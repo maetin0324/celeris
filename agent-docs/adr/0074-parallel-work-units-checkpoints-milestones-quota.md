@@ -1468,4 +1468,4 @@ replan で返す回避をした。
 `reconcile_parallel_tasks` を呼び、Ready 戻しを決定的に先行させる。修正前は abort 後も統合 WU が Running で残り、
 修正後は Pending を維持し通常 dispatch で Done まで進む。逆順、Ready / Running の孤立回収、冪等性、
 生きた持ち主と対象範囲の保護、人の割り込み、古い WU・二重開始の拒否も試験する。CPU 負荷・実 LLM は使わない。
-検査結果と運用上の確認点は [統合の Ready 競合修正](../../docs/ops/integration-ready-recovery.md) に記録する。
+検査結果は [進捗](../progress/2026-10-05-integration-ready-race.md)、昇格後の確認手順は [統合の Ready 残留の回収を確かめる手順](../../docs/ops/integration-ready-recovery.md) に記録する。

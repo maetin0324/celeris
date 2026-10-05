@@ -125,7 +125,12 @@ pub struct TaskRoutingView {
     /// routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing: Option<task_core::TaskRouting>,
-    pub runs: Vec<task_core::RoutingAudit>,
+    /// run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
+    /// 要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。
+    pub runs: Vec<task_ops::routing_audit::RunRoutingAudit>,
+    /// Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unbound_requests: Vec<task_ops::routing_audit::RequestRoutingAudit>,
 }
 
 /// タイムラインの 1 件（ADR-0044 D5）。`at` は RFC 3339。
@@ -2163,6 +2168,73 @@ pub struct LlmSourceView {
     pub last_hour_requests: u64,
     pub last_hour_prompt_tokens: u64,
     pub last_hour_completion_tokens: u64,
+    /// ADR 2026-10-04-multi-objective-model-routing Phase 2: deployment ごとの動的状態と費用成分
+    /// （`llm_sources::source_state_view` で組む）。古いスナップショット・状態を持たない供給元は空。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deployments: Vec<LlmSourceStateView>,
+}
+
+/// Phase 2: 観測 snapshot の鮮度。`observed_at` が無ければ `age_secs` も `null`（未観測）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmSourceFreshnessView {
+    /// 観測時刻（RFC 3339）。未観測は `null`。
+    pub observed_at: Option<String>,
+    /// 応答時刻 − 観測時刻（秒）。未観測・時刻が読めないときは `null`。
+    pub age_secs: Option<i64>,
+    /// 観測の有効期限（RFC 3339）。
+    pub expires_at: Option<String>,
+    /// 期限切れ、または未観測なら `true`（古い値は判定に使わない）。
+    pub stale: bool,
+}
+
+/// Phase 2: 請求される費用（API の実料金）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmSourceBilledCostView {
+    /// 未知は `null`（0 で埋めない）。
+    pub cash_usd: Option<f64>,
+}
+
+/// Phase 2: 請求されない機会費用（subscription の shadow price・self-host の資源）。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmSourceOpportunityCostView {
+    /// subscription の残量と reset までの時間からの shadow price。未知は `null`。
+    pub shadow_usd: Option<f64>,
+    /// self-host の load/queue/GPU の機会費用。未知は `null`。
+    pub resource_usd: Option<f64>,
+}
+
+/// Phase 2: 費用成分。請求（`billed`）と機会費用（`opportunity`）を別の欄に分ける。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmSourceCostView {
+    pub billed: LlmSourceBilledCostView,
+    pub opportunity: LlmSourceOpportunityCostView,
+    /// cash + shadow + resource（どれかが未知なら `null`）。
+    pub effective_usd: Option<f64>,
+    /// 見積もりの前提（cost.rs の assumptions）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<String>,
+}
+
+/// Phase 2: deployment 1 件の動的状態（`SourceState`）と effective cost の投影。credential は含めない。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LlmSourceStateView {
+    pub deployment_id: String,
+    pub freshness: LlmSourceFreshnessView,
+    /// `"up"` / `"down"` / `"unknown"`。
+    pub reachability: String,
+    pub latency_ms: Option<f64>,
+    /// 既知の窓のうち最も少ない残量（窓の unit）。未知は `null`。
+    pub quota_remaining: Option<f64>,
+    /// 最も早い窓の reset 時刻（RFC 3339）。未知は `null`。
+    pub quota_reset_at: Option<String>,
+    /// [0,1]。既知成分が無ければ `null`。
+    pub pressure: Option<f64>,
+    /// 値が未知の欄の名前（`latency`・`quota`・`quota_reset`・`pressure`・`cash`・`shadow`・
+    /// `resource`・`effective`・`observed_at`）。整列済み。
+    #[serde(default)]
+    pub unknown: Vec<String>,
+    /// 費用の見積もりが無ければ `null`（全部未知）。
+    pub cost: Option<LlmSourceCostView>,
 }
 
 /// ADR-0053 D4（Phase 66）: `celeris/<tier>` が今どこに解決するか。

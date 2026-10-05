@@ -1066,6 +1066,7 @@ async fn the_retry_planner_run_receives_the_previous_validation_error_and_config
         .map(|i| task_core::WorkUnitCheck {
             cmd: format!("true {i}"),
             expect_exit: 0,
+            scope: false,
         })
         .collect();
     let adapter = Arc::new(PlannerScriptAdapter::new(

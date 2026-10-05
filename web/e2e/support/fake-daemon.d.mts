@@ -18,20 +18,42 @@ export const routingTrajectoryFixture: import("../../api/generated/types").TaskR
 export const routingShadowFixture: import("../../api/generated/types").TaskRoutingView;
 export const routingEstimatorShadowFixture: import("../../api/generated/types").TaskRoutingView;
 export const llmSourcesFixture: import("../../api/generated/types").LlmSourcesView;
-export function createFakeDaemon(options?: {
+export function richFixtures(): Record<string, unknown>;
+export function richFiles(): Record<string, { body: string; type?: string }>;
+export function inboxItemsFixture(): import("../../api/generated/types").InboxItem[];
+export function noticesFixture(): import("../../api/generated/types").Notice[];
+export type FakeDaemonOptions = {
   host?: string;
   port?: number;
   delayMs?: number;
   fixtures?: Record<string, unknown | ((url: URL) => unknown)>;
   token?: string | null;
   files?: Record<string, { body: string | (() => string); type?: string; disposition?: string }>;
-}): {
+  profile?: "default" | "rich";
+  fault?: { status: number; paths?: string[] } | null;
+  hold?: { paths?: string[] } | null;
+  streamStatus?: number;
+  inboxItems?: import("../../api/generated/types").InboxItem[] | null;
+  notices?: import("../../api/generated/types").Notice[] | null;
+};
+export function createFakeDaemon(options?: FakeDaemonOptions): {
   requests: FakeDaemonRequest[];
   sendEvent(event: string, data?: unknown): void;
+  inbox: {
+    items: import("../../api/generated/types").InboxItem[];
+    notices: import("../../api/generated/types").Notice[];
+    answers: Array<{ id: string; option?: string; note?: string; payload?: unknown }>;
+  };
+  setInboxItems(items: import("../../api/generated/types").InboxItem[]): void;
+  setNotices(notices: import("../../api/generated/types").Notice[]): void;
   setDelay(value: number): void;
   setStreamStatus(value: number): void;
   sendConsoleBlock(block: unknown): void;
   dropConsoleClients(): void;
+  setFault(rule: { status: number; paths?: string[] } | null): void;
+  releaseHeld(): void;
+  readonly heldCount: number;
+  dropStreamClients(): void;
   setPostDelay(ms: number): void;
   readonly consoleClients: number;
   readonly streamClients: number;

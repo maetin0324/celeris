@@ -60,7 +60,7 @@ tasks: [01M3Z08A0T81ZQ60XVR62XJMPD]
 - `scripts/selfdeploy/status.sh` の JSON（`current` / `previous` / `health` / `gui_health` / `daemon_instances` / `stale_instances`）。読むだけで何も変えない。
 - `journalctl --user -u 'celeris@*' -u 'celeris-gui@*' -u 'celeris-credentiald@*' -n 100` でエラーが出ていないこと。
 - 新規 backup（`[db].backup_dir` = `/local/celeris/state/backups`）が作られ、検証済みの世代を home の archive に人が複製したこと（`verify` は backup の home 転送まではしない。転送が済むまで移行完了とはしない — ADR-0136 §2）。
-- web 配布物（`web/app`）は移行の成功判定に含めない（人の判断で release.sh の `SD_GATE_SKIP_WEB` が既定 1 — main f1904ecd）。
+- web 配布物（`web/app`）は移行の成功判定に含めない（移行当時は release.sh の `SD_GATE_SKIP_WEB` が既定 1 — main f1904ecd。2026-10-05 に既定 0 へ戻した）。
 
 ## 4. 戻し方（rollback）
 

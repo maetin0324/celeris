@@ -17,10 +17,12 @@ async fn integration_checks_record_start_finish_events_and_log_files() {
         task_core::WorkUnitCheck {
             cmd: "echo first-out; echo first-err 1>&2".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: "printf 'second-out\\n'".into(),
             expect_exit: 0,
+            scope: false,
         },
     ];
     adopt_v2_plan(
@@ -140,10 +142,12 @@ async fn a_running_integration_check_has_a_started_event_and_a_readable_partial_
                 gate.display()
             ),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: "echo ok".into(),
             expect_exit: 0,
+            scope: false,
         },
     ];
     let ws = task_worker::LocalWorkspace::new(ws_dir.path());

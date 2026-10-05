@@ -1049,6 +1049,9 @@ struct RunExtras {
     /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
     /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
     cargo_target_work_unit: Option<(String, String)>,
+    /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
+    /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
+    work_unit_env: Option<Vec<(String, String)>>,
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,
@@ -1178,6 +1181,9 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
+    /// 統合の状態確認直前に別の ready 戻しを差し込む、試験専用の一回フック。
+    #[cfg(test)]
+    before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
@@ -1471,6 +1477,8 @@ impl Dispatcher {
             review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
+            #[cfg(test)]
+            before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
             tx,

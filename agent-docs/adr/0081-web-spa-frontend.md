@@ -1,7 +1,7 @@
 # ADR-0081: Web GUI の遷移を daemon の遅延から切り離す SPA と薄い gateway
 
 ---
-tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B]
+tasks: [01M3MS2JRDJ4GM0D9VN9PJCB6B, 01M41RYPGEQQKT2KBPH1WYH0A6]
 ---
 
 - Date: 2026-09-28
@@ -232,3 +232,19 @@ Phase 0 は本 ADR、全 route の parity matrix、遅延 baseline と実装計�
 ### (E) 本番 host の操作は人が行う
 - 一時回避の `~/.config/systemd/user/celeris-web@ea86af6307f8.service.d/override.conf` の撤去、`systemctl --user daemon-reload`、web の再起動は、人が `docs/selfdeploy.md` の手順で行う。worker の run は本番 host を操作しない。
 - web ADR-W3 D3 の「promote.sh は web/ の unit を起こさない」という既存の記述は、本付記 (C) で上書きする（promote.sh は旧 web が動いているときに限り web を新 release へ追従させる）。
+
+## 付記（2026-10-03）: 遷移 latency は起動の完了を待ってから測る
+
+D7 の遷移予算（click から URL・見出しまで 300 ms）を確かめる `web/e2e/latency/transition.spec.ts` と `web/e2e/parity/latency-gate.spec.ts` は、goto の後、click の前に SPA 起動の完了を待つ（`web/e2e/latency/boot-idle.mjs`）。完了は出来事で判定する: nav と `main h1` の出現の後、`PerformanceObserver('longtask')` で 2 frame + `requestIdleCallback` の 1 巡に long task が終わらないこと。
+
+- 理由: goto 直後の最初の click は起動の long task の後ろで待たされ、遷移ではなく起動の費用を負荷依存で測っていた。固定 sleep を使わず出来事で待つのは agent-docs/guides/testing.md の出来事待ちの規則に従う。人の決定 b（2026-10-03）で試験側を直すと決めた。
+- 変えないもの: 予算 300 ms、10 s−0 s 差 100 ms、retries 0、click から URL・見出しまでの測り方。
+- 帰結: 起動の重さはこの 2 試験では見えなくなる。計測値は agent-docs/web/gates/p5-01-latency.md の付記にある。
+
+### 付記の追補（2026-10-03）: リンクの無い経路
+
+S1 の nav にリンクの無い経路も、計測区間に文書の読み込み（page.goto）を入れない。親画面（その URL への実リンクを持つ画面）を開き、起動の完了を待ってから、そのリンクを click して測る。親と遷移先の対応は `web/e2e/latency/in-app-routes.ts` の表に持つ。どの画面にも SPA のリンクが無い経路は、起動の完了の後に `history.pushState` と `popstate` でアプリ内遷移させる。予算・差・retries・URL と見出しまでの測り方は上の付記と同じ。計測値は agent-docs/web/gates/p5-01-latency.md の付記にある。
+
+### 付記の追補（2026-10-04）: click の actionability は計測区間の外
+
+S1 は、nav のリンクもリンクの無い経路の親画面のリンクも、計測区間の前に `click({ trial: true })` で actionability（visible・stable・hit test）を確かめ、区間では `click({ force: true })` だけを打つ。負荷下では actionability 待ちが click 1 回に 150〜320 ms かかり、click イベントの前に予算を使い切っていたため（遷移そのものは click イベントから pushState まで 1〜80 ms）。起点は click、終点は URL と見出しで、予算・差・retries は変えない。計測値は agent-docs/web/gates/p5-01-latency.md の付記（2026-10-04）にある。

@@ -496,6 +496,25 @@ pub trait TaskStore:
     /// 自分の行を作る（既にあれば上書きする＝同じ `instance_id` で起動し直したとき）。
     /// `handoff_requested_at` / `drained_at` は NULL に戻る。
     fn instance_register(&self, instance: &DaemonInstance) -> Result<(), StoreError>;
+    /// ADR-0040 D4 付記（2026-10-05）: `instance` の行を作る／上書きするが、**同じ transaction の中で**
+    /// 全行を `admit` に渡し、`true` を返したときだけ書く。`false` なら何も書かず `Ok(false)`。
+    /// 「active になってよいか」の判断と書き込みを 1 つの writer transaction に入れるための口
+    /// （判断の中身は celeris 側にある。store は読んで書くだけ）。
+    fn instance_register_if(
+        &self,
+        instance: &DaemonInstance,
+        admit: &dyn Fn(&[DaemonInstance]) -> bool,
+    ) -> Result<bool, StoreError>;
+    /// ADR-0040 D4 付記（2026-10-05）: `instance_id` の行の役割を `role` にする。`admit` は
+    /// `instance_register_if` と同じく同じ transaction で全行（この行を含む）を見て、`true` のときだけ書く。
+    /// 行が無い、または `admit` が `false` なら `Ok(false)`。
+    fn instance_set_role_if(
+        &self,
+        instance_id: &str,
+        role: InstanceRole,
+        at: OffsetDateTime,
+        admit: &dyn Fn(&[DaemonInstance]) -> bool,
+    ) -> Result<bool, StoreError>;
     /// 自分の行の `heartbeat_at` を更新する。行が無ければ `Ok(false)`（呼び出し側は登録し直す）。
     fn instance_heartbeat(&self, instance_id: &str, at: OffsetDateTime)
     -> Result<bool, StoreError>;
@@ -523,12 +542,13 @@ pub trait TaskStore:
     fn instance_list(&self) -> Result<Vec<DaemonInstance>, StoreError>;
     /// 1 行消す。無い id は `Ok(false)`。
     fn instance_delete(&self, instance_id: &str) -> Result<bool, StoreError>;
-    /// 終わった・死んだ他のインスタンスの行を消す（`keep` は消さない）。対象は `drained_at` が入っている
-    /// 行と、`heartbeat_at` が `heartbeat_before` より古い行。消した `instance_id` を昇順で返す。
-    fn instance_delete_stale(
+    /// 他のインスタンスの行のうち `removable` が真のものを消す（`keep` は消さない）。`removable` は
+    /// 同じ transaction の中で 1 行ずつ呼ばれる。消した `instance_id` を昇順で返す。
+    /// 何を消すかの規則は celeris 側（`celeris::instance::removable_row`）にある。
+    fn instance_delete_where(
         &self,
         keep: &str,
-        heartbeat_before: OffsetDateTime,
+        removable: &dyn Fn(&DaemonInstance) -> bool,
     ) -> Result<Vec<String>, StoreError>;
 
     // ---- ADR-0059 D6（Phase 99）: クラスタの作業ディレクトリの DB 上書き ----
@@ -637,6 +657,15 @@ pub trait TaskStore:
         updated: WorkUnitRow,
         event: Event,
     ) -> Result<(), StoreError>;
+
+    /// ADR-0074 付記（2026-10-05）: Task が Running で、統合 WU が読み取ったままの
+    /// Pending / Ready なら、同じ transaction で WU を Running にして reason=integrate を残す。
+    /// Task の ready 戻し・WU の更新が先行したら何も書かず false。spawn は true のときだけ行う。
+    fn try_start_work_unit_integration(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+    ) -> Result<bool, StoreError>;
 
     /// ADR-0074 D1.5（Phase F2）: WU の lease を取る。1 トランザクションで「Task が `Running`」
     /// 「WU が `ready` / `needs_continuation`」を確かめ、WU を `running` にし（`runs + 1`、

@@ -8,6 +8,7 @@ import type { EventRow } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { keysForTaskEvent, projectFallbackKeys, resolveProjectId } from "../../api/realtime/invalidation-map";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
+import { waitForBootIdle } from "../latency/boot-idle.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
@@ -74,6 +75,8 @@ test("parity-x: 遅延 10 s で遷移が止まらない（baseline の 7 経路�
   const gateway = await h.start();
   try {
     await page.goto(`${gateway.base}/`);
+    // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
+    await waitForBootIdle(page);
     const paths = ["/inbox", "/tasks", "/projects", "/reports", "/org", "/knowledge", "/daemon"];
     const measurements: Array<{ path: string; url: number; heading: number }> = [];
     h.daemon.setDelay(10000);
@@ -111,13 +114,13 @@ test("parity-x: SSE イベントごとの再取得本数と H1 project fallback"
       [4, "unknown", "transitioned"],
     ] as const;
     for (const [id, taskId, type] of samples) {
-      const before = [count("/api/v1/tasks"), count("/api/v1/inbox"), count("/api/v1/daemon")];
+      const before = [count("/api/v1/tasks"), count("/api/v1/inbox/items"), count("/api/v1/daemon")];
       h.daemon.sendEvent("task.event", row(id, taskId, type));
       await page.waitForTimeout(700); // 250 ms coalescing window plus transport/render time.
       events.push({
         event: `${taskId}:${type}`,
         tasks: count("/api/v1/tasks") - before[0],
-        inbox: count("/api/v1/inbox") - before[1],
+        inbox: count("/api/v1/inbox/items") - before[1],
         daemon: count("/api/v1/daemon") - before[2],
       });
     }

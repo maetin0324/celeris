@@ -376,6 +376,7 @@ impl Dispatcher {
             planner_permission_mode: None,
             artifacts_dir_override: None,
             cargo_target_work_unit: None,
+            work_unit_env: None,
             // ADR-0079 D7（Phase R3a）: 木の節点の worker の run だけ `dispatch_ready` が上書きする。
             decision_requests: false,
             direct_route: None,

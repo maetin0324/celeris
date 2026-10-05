@@ -17,7 +17,7 @@ ADR-0128 により、設計判断の経緯・進捗・作業記録は `docs/` �
 - `reports/` — 日付付きの調査・実装報告
 - `notes/` — 作業メモ
 - `ops/` — 一度きりの作業手順・agent 向け運用規則
-- `guides/` — agent 向けの設計・検証・作業規則（例: `guides/testing.md`）
+- `guides/` — agent 向けの設計・検証・作業規則（例: `guides/testing.md`、WU の `checks` と範囲 check の書き方 `guides/work-unit-checks.md`）
 - `gui/`, `web/` — gui・web/ SPA の設計記録・ADR・進捗
 - `GOAL_TEMPLATE.md` — 新規 goal のテンプレート
 - `PROGRESS.md` — 旧 `docs/PROGRESS.md`（凍結。追記しない）

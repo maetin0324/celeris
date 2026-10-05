@@ -5,13 +5,23 @@ import type { ReleaseItem, ReleasePromoteAccepted, Releases } from "../../api/ge
 import { releaseKeys } from "../../api/queries/keys";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { ConfirmDialog } from "../../components/ui/confirm-dialog";
+import { DataList } from "../../components/ui/data-list";
+import { Section } from "../../components/ui/panel";
+import { StatusBadge } from "../../components/ui/status-badge";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { formatAbsolute, formatRelative } from "../../lib/time";
 import {
   canPromote,
   judgePromotion,
   type PromotionOutcome,
   type PromotionTrack,
   pollDelayMs,
+  promotionActionLabel,
+  promotionConfirmCopy,
+  promotionStatus,
 } from "./releases-promotion";
 
 const releasesQuery = {
@@ -26,6 +36,8 @@ function usePromotionTracker() {
   const queryClient = useQueryClient();
   const [tracked, setTracked] = useState<Tracked | null>(null);
   const [startError, setStartError] = useState<string | null>(null);
+  // 403 を受けたら、この画面の昇格・巻き戻しを全て無効にし、理由を出す。
+  const [denied, setDenied] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const generation = useRef(0);
   const track = tracked?.track;
@@ -95,81 +107,246 @@ function usePromotionTracker() {
           body && typeof body === "object"
             ? ((body as Record<string, unknown>).error ?? (body as Record<string, unknown>).message)
             : body;
-        setStartError(typeof detail === "string" ? detail : "昇格を起動できませんでした");
+        const reason = typeof detail === "string" ? detail : "昇格を起動できませんでした";
+        if (error instanceof ApiError && error.status === 403) setDenied(reason);
+        else setStartError(reason);
         setTracked(null);
       }
     } finally {
       setStarting(false);
     }
   }
-  return { tracked, startError, starting, start };
+  return { tracked, startError, denied, starting, start };
 }
 
+function Time({ value }: { value: string | null | undefined }) {
+  if (!value) return <span className="text-muted-foreground">記録なし</span>;
+  return (
+    <time dateTime={value} title={formatAbsolute(value)}>
+      {formatRelative(value)}
+    </time>
+  );
+}
+
+/** 昇格の結果。色だけに頼らず、StatusBadge の文字（実行中・完了・失敗）と文で示す。 */
 function PromotionStatus({ tracked, startError }: { tracked: Tracked | null; startError: string | null }) {
   if (startError)
     return (
-      <p role="alert" className="text-red-800">
+      <p role="alert" className="rounded border border-border bg-danger p-3 text-danger-foreground">
         昇格を起動できませんでした: {startError}
       </p>
     );
   if (!tracked) return null;
   const { outcome, track, reconnecting } = tracked;
+  const badge = <StatusBadge status={promotionStatus(outcome)} className="shrink-0" />;
   if (outcome.state === "pending")
     return (
-      <p role="status" data-testid="promote-pending">
-        {track.sha12} を昇格中です（結果を確認するまで完了ではありません）。{outcome.detail}
-        {reconnecting && " 接続を待っています。再接続を試みています。"}
+      <p role="status" data-testid="promote-pending" className="flex flex-wrap items-center gap-2 break-words">
+        {badge}
+        <span className="min-w-0">
+          {track.sha12} を昇格中です（結果を確認するまで完了ではありません）。{outcome.detail}
+          {reconnecting && " 接続を待っています。再接続を試みています。"}
+        </span>
       </p>
     );
   if (outcome.state === "failed")
     return (
-      <p role="alert" className="text-red-800" data-testid="promote-failed">
-        {track.sha12} の昇格に失敗しました: {outcome.error}
+      <p
+        role="alert"
+        data-testid="promote-failed"
+        className="flex flex-wrap items-center gap-2 break-words rounded border border-border p-3"
+      >
+        {badge}
+        <span className="min-w-0">
+          {track.sha12} の昇格に失敗しました: {outcome.error}
+        </span>
       </p>
     );
   return (
-    <p role="status" className="text-green-800" data-testid="promote-succeeded">
-      {track.sha12} の昇格が完了しました。
+    <p role="status" data-testid="promote-succeeded" className="flex flex-wrap items-center gap-2 break-words">
+      {badge}
+      <span className="min-w-0">{track.sha12} の昇格が完了しました。</span>
     </p>
   );
 }
 
-function ReleaseRow({
+function ReleaseState({ item }: { item: ReleaseItem }) {
+  return (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {item.is_current && <Badge tone="success">current</Badge>}
+      {item.is_previous && <Badge tone="neutral">previous</Badge>}
+      {item.promoting && <StatusBadge status="running" />}
+      <Badge tone={item.gate_ok ? "success" : "warning"}>{item.gate_ok ? "gate 通過" : "gate 未通過"}</Badge>
+    </div>
+  );
+}
+
+/** 昇格できない理由。ボタンを無効にするときは必ず文字で添える。 */
+function blockedReason(item: ReleaseItem, denied: boolean, busy: boolean): string | null {
+  if (denied) return "権限がありません";
+  if (item.is_current) return "稼働中の版です";
+  if (item.promoting || busy) return "昇格中は操作できません";
+  if (!item.gate_ok) return "gate を通っていません";
+  if (item.problem) return "問題があります";
+  return null;
+}
+
+function PromoteAction({
   item,
+  current,
   busy,
+  denied,
   onPromote,
 }: {
   item: ReleaseItem;
+  current: string | null | undefined;
   busy: boolean;
-  onPromote: (item: ReleaseItem) => void;
+  denied: boolean;
+  onPromote: (item: ReleaseItem) => Promise<void>;
+}) {
+  const label = promotionActionLabel(item);
+  const reason = blockedReason(item, denied, busy) ?? (canPromote(item) ? null : "昇格できない状態です");
+  const copy = promotionConfirmCopy(item, current);
+  // 昇格が始まると reason が付くが、確認表示は閉じるまで同じ要素のまま置いておく（focus を失わないため）。
+  return (
+    <div className="space-y-1">
+      <ConfirmDialog
+        trigger={
+          <Button size="sm" disabled={reason !== null}>
+            {label}
+          </Button>
+        }
+        title={copy.title}
+        target={copy.target}
+        consequence={copy.consequence}
+        reversibility={copy.reversibility}
+        followUp="この画面の「昇格の結果」に進行中・完了・失敗が出ます。"
+        confirmLabel={label}
+        onConfirm={() => onPromote(item)}
+      />
+      {reason && <p className="text-label text-muted-foreground">{reason}</p>}
+    </div>
+  );
+}
+
+function ReleaseTable({
+  items,
+  current,
+  busy,
+  denied,
+  onPromote,
+}: {
+  items: ReleaseItem[];
+  current: string | null | undefined;
+  busy: boolean;
+  denied: boolean;
+  onPromote: (item: ReleaseItem) => Promise<void>;
 }) {
   return (
-    <li className="min-w-0 rounded border p-3 space-y-2" data-testid={`release-${item.sha12}`}>
-      <div className="flex flex-wrap items-center gap-2">
-        <code className="font-mono break-all">{item.sha12}</code>
-        {item.is_current && <span className="rounded border px-1 text-sm">current</span>}
-        {item.is_previous && <span className="rounded border px-1 text-sm">previous</span>}
-        {item.promoting && <span className="rounded border px-1 text-sm">昇格中</span>}
-        <span className="text-sm">{item.gate_ok ? "gate 通過" : "gate 未通過"}</span>
-      </div>
-      <p className="text-sm break-words">
-        {item.ref ? `ref ${item.ref} / ` : ""}ビルド {item.built_at ?? "-"} / 昇格 {item.promoted_at ?? "-"}
-      </p>
-      {item.problem && <p className="text-red-800 break-words">問題: {item.problem}</p>}
-      {item.promote_failed && !item.promoting && (
-        <p role="alert" className="text-red-800 break-words">
-          直近の昇格の失敗（{item.promote_failed.failed_at}）: {item.promote_failed.error}
-        </p>
-      )}
-      {item.changes && (
-        <p className="text-sm">
-          変更 {item.changes.commit_count} commit / {item.changes.file_count} file
-        </p>
-      )}
-      <Button disabled={busy || !canPromote(item)} onClick={() => onPromote(item)}>
-        {item.sha12} を昇格
-      </Button>
-    </li>
+    <Table aria-label="リリースの一覧">
+      <TableHeader>
+        <TableRow>
+          <TableHead>版・状態</TableHead>
+          <TableHead>操作</TableHead>
+          <TableHead>ビルド</TableHead>
+          <TableHead>昇格</TableHead>
+          <TableHead>変更</TableHead>
+          <TableHead>問題・直近の失敗</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {items.map((item) => {
+          const failed = item.promote_failed && !item.promoting ? item.promote_failed : null;
+          return (
+            <TableRow key={item.sha12} data-testid={`release-${item.sha12}`}>
+              <TableCell>
+                <code className="font-mono whitespace-nowrap">{item.sha12}</code>
+                {item.ref && <p className="min-w-32 text-label text-muted-foreground break-all">ref {item.ref}</p>}
+                <ReleaseState item={item} />
+              </TableCell>
+              <TableCell className="min-w-36">
+                <PromoteAction item={item} current={current} busy={busy} denied={denied} onPromote={onPromote} />
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                <Time value={item.built_at} />
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                <Time value={item.promoted_at} />
+              </TableCell>
+              <TableCell className="whitespace-nowrap">
+                {item.changes ? (
+                  `${item.changes.commit_count} commit / ${item.changes.file_count} file`
+                ) : (
+                  <span className="text-muted-foreground">記録なし</span>
+                )}
+              </TableCell>
+              <TableCell className="min-w-48 break-words">
+                {item.problem && <p>問題: {item.problem}</p>}
+                {failed && (
+                  <p>
+                    直近の昇格の失敗（{formatAbsolute(failed.failed_at)}）: {failed.error}
+                  </p>
+                )}
+                {!item.problem && !failed && <span className="text-muted-foreground">なし</span>}
+              </TableCell>
+            </TableRow>
+          );
+        })}
+      </TableBody>
+    </Table>
+  );
+}
+
+function MobileReleaseList({
+  items,
+  current,
+  busy,
+  denied,
+  onPromote,
+}: {
+  items: ReleaseItem[];
+  current: string | null | undefined;
+  busy: boolean;
+  denied: boolean;
+  onPromote: (item: ReleaseItem) => Promise<void>;
+}) {
+  return (
+    <ul className="space-y-3 sm:hidden" aria-label="リリースの一覧">
+      {items.map((item) => {
+        const failed = item.promote_failed && !item.promoting ? item.promote_failed : null;
+        return (
+          <li
+            key={item.sha12}
+            data-testid={`mobile-release-${item.sha12}`}
+            className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-3"
+          >
+            <div>
+              <code className="font-mono break-all">{item.sha12}</code>
+              {item.ref && <p className="text-label text-muted-foreground break-all">ref {item.ref}</p>}
+              <ReleaseState item={item} />
+            </div>
+            <div className="break-words">
+              <p className="font-medium">問題・直近の失敗</p>
+              {item.problem && <p>問題: {item.problem}</p>}
+              {failed && (
+                <p>
+                  直近の昇格の失敗（{formatAbsolute(failed.failed_at)}）: {failed.error}
+                </p>
+              )}
+              {!item.problem && !failed && <p className="text-muted-foreground">なし</p>}
+            </div>
+            <PromoteAction item={item} current={current} busy={busy} denied={denied} onPromote={onPromote} />
+            <p className="text-label text-muted-foreground">
+              ビルド: <Time value={item.built_at} /> ／ 昇格: <Time value={item.promoted_at} />
+            </p>
+            <p className="text-label text-muted-foreground">
+              変更:{" "}
+              {item.changes ? `${item.changes.commit_count} commit / ${item.changes.file_count} file` : "記録なし"}
+            </p>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -182,21 +359,67 @@ export function ReleasesScreen() {
     <ScreenFrame title="リリース" route="/releases">
       <FetchFrame query={query}>
         {data && (
-          <div className="space-y-4 min-w-0">
-            <PromotionStatus tracked={promotion.tracked} startError={promotion.startError} />
-            <p className="text-sm">
-              稼働中 {data.running.release}（{data.running.role}） / current {data.current ?? "-"} / previous{" "}
-              {data.previous ?? "-"}
-            </p>
-            {data.items.length === 0 ? (
-              <p>リリースはありません。</p>
-            ) : (
-              <ul className="space-y-3">
-                {data.items.map((item) => (
-                  <ReleaseRow key={item.sha12} item={item} busy={busy} onPromote={(i) => void promotion.start(i)} />
-                ))}
-              </ul>
+          <div className="min-w-0 space-y-6">
+            {promotion.denied && (
+              <p
+                role="alert"
+                data-testid="releases-denied"
+                className="rounded border border-border bg-danger p-3 text-danger-foreground"
+              >
+                権限がありません（403）。この画面の昇格・巻き戻しは無効にしました。理由: {promotion.denied}
+              </p>
             )}
+            <Section
+              title="稼働中の版"
+              description="本番の daemon が今動かしている版と、昇格・巻き戻しの基準になる版です。"
+            >
+              <DataList
+                className="mt-2"
+                items={[
+                  { label: "稼働中", value: `${data.running.release}（${data.running.role}）` },
+                  { label: "current", value: data.current ?? "なし" },
+                  { label: "previous", value: data.previous ?? "なし" },
+                ]}
+              />
+            </Section>
+            <Section title="昇格の結果" aria-live="polite">
+              <div className="mt-2">
+                {promotion.tracked || promotion.startError ? (
+                  <PromotionStatus tracked={promotion.tracked} startError={promotion.startError} />
+                ) : (
+                  <p className="text-label text-muted-foreground">この画面からの昇格はまだありません。</p>
+                )}
+              </div>
+            </Section>
+            <Section
+              title={`リリースの一覧（${data.items.length}）`}
+              description="昇格・巻き戻しは確認を挟みます。前の版（previous）を昇格すると巻き戻しになります。"
+            >
+              <div className="mt-2">
+                {data.items.length === 0 ? (
+                  <p>リリースはありません。</p>
+                ) : (
+                  <>
+                    <MobileReleaseList
+                      items={data.items}
+                      current={data.current}
+                      busy={busy}
+                      denied={promotion.denied !== null}
+                      onPromote={(item) => promotion.start(item)}
+                    />
+                    <div className="hidden sm:block">
+                      <ReleaseTable
+                        items={data.items}
+                        current={data.current}
+                        busy={busy}
+                        denied={promotion.denied !== null}
+                        onPromote={(item) => promotion.start(item)}
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+            </Section>
           </div>
         )}
       </FetchFrame>

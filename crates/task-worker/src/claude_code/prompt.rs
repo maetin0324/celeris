@@ -892,7 +892,7 @@ fn build_execution_plan_prompt(
          {{\"schema\":\"{planner_schema}\",\"rationale\":\"...\",\"work_units\":[{{\"key\":\"survey\",\
          \"kind\":\"investigate\"|\"design\"|\"implement\"|\"test\"|\"release\"|\"repair\"|\"other\",\
          \"title\":\"...\",\"objective\":\"...\",\"depends_on\":[\"<key of another work unit>\"],\
-         \"done_when\":[\"...\"],\"checks\":[{{\"cmd\":\"...\",\"expect_exit\":0}}],\
+         \"done_when\":[\"...\"],\"checks\":[{{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true (optional)}}],\
          \"context\":{{\"paths\":[\"...\"],\"from_work_units\":[\"<key>\"],\"knowledge\":[\"...\"]}},\
          \"harness\":\"<genre id, or omit to inherit this task's genre>\",\
          \"features\":{{\"judgment\":\"low\"|\"medium\"|\"high\",\"ambiguity\":\"low\"|\"medium\"|\"high\",\
@@ -907,7 +907,8 @@ fn build_execution_plan_prompt(
          `key` must match `[a-z0-9-]{{1,32}}` and be unique within this plan. `depends_on` refers to \
          other `key`s in this same array and must form a DAG (no cycles). `checks` may only be \
          `{{\"cmd\":\"...\",\"expect_exit\":0}}` (a deterministic command check; do not fabricate one \
-         you have not actually run — it will really be executed later). Give every mechanically \
+         you have not actually run — it will really be executed later), optionally with `\"scope\":true` \
+         for a scope check that runs only at WorkUnit time (see the check guidance below). Give every mechanically \
          checkable WorkUnit an executable `checks` entry: it raises that WorkUnit's verifiability and \
          lets it route to a cheaper lane instead of defaulting to this task's own lane. `harness`, if \
          set, must be one of the genre ids listed below (available genres); an unset `harness` inherits \
@@ -1151,7 +1152,7 @@ fn tree_plan_shape_section(
          \"units\":[\
          {{\"key\":\"api\",\"stage\":\"build\",\"kind\":\"investigate\"|\"design\"|\"implement\"|\"test\"|\"release\"|\"other\",\
          \"title\":\"...\",\"objective\":\"...\",\"depends_on\":[\"<unit key>\"],\"needs_decisions\":[\"<decision key>\"],\
-         \"done_when\":[\"...\"],\"checks\":[{{\"cmd\":\"...\",\"expect_exit\":0}}],\
+         \"done_when\":[\"...\"],\"checks\":[{{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true (optional)}}],\
          \"context\":{{\"repo\":\"<one repository>\",\"paths\":[\"...\"],\"from_work_units\":[\"<key>\"],\"knowledge\":[\"...\"]}},\
          \"harness\":\"<genre id, or omit>\",\"features\":{{...}},\
          \"budget\":{{\"max_turns\":40,\"max_wall_secs\":1800}} (optional),\"outputs\":[\"...\"]}},\
@@ -1348,8 +1349,9 @@ fn tree_replan_context_section(
             "These units are already done and carry over unchanged (celeris restores their adopted spec; you \
              may omit them): {}. The only thing you may change in a done unit is its `checks`: write the unit \
              with a new non-empty `checks` list to replace a check that cannot hold after the stage \
-             integration (e.g. one that assumes a merge commit). The done unit is not re-run; its checks are \
-             re-run at the stage integration. Every other field is restored.\n\n",
+             integration (e.g. one that assumes a merge commit, or a scope check that should be marked \
+             `\"scope\":true`). The done unit is not re-run; its checks without `\"scope\":true` are re-run at \
+             the stage integration. Every other field is restored.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -1498,8 +1500,9 @@ fn replan_context_section(planner: &crate::protocol::ExecutionPlannerContext) ->
              changes a done WorkUnit will be rejected: {}. The one exception is `checks`: you may \
              replace a done WorkUnit's `checks` (in a diff: `\"modify\":[{{\"key\":\"<done key>\",\
              \"checks\":[...]}}]`) when a check cannot hold after the phase integration (e.g. one \
-             that assumes a merge commit). The done WorkUnit is not re-run; its checks are re-run \
-             at the phase integration.\n\n",
+             that assumes a merge commit, or a scope check that should be marked `\"scope\":true`). The \
+             done WorkUnit is not re-run; its checks without `\"scope\":true` are re-run at the phase \
+             integration.\n\n",
             planner.preserve_done_keys.join(", ")
         ));
     }
@@ -1664,8 +1667,22 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
 /// ADR-0079 R7-2: planner の「check の書き方」。本番（2026-09-29/30）で unit の成果ではなく check そのものが
 /// 誤って落ちた形を 1 規則 1 文で並べる（/1・/2・/3 の planner に共通。上限の節の直後）。
 pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `checks` and command acceptance)\n\
-     - A \"no out-of-scope diff\" check must exclude the paths the unit is allowed to write as records: \
-     `agent-docs/progress/`, `agent-docs/adr/`, and every path this plan itself says the unit may write.\n\
+     - A scope check (does this unit's own change stay inside its allowed paths) is written as \
+     `{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true}`. It runs only at work-unit time in the unit's own \
+     worktree and is NOT rerun after stage integration or in a child task's final review, so never write it as \
+     task acceptance; put it on the leaf that makes the change.\n\
+     - Write a scope check exactly in this form: `out=$({ git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\"; git ls-files \
+     --others --exclude-standard; } | sort -u | grep -vE '^(<allowed path regex>)'); [ -z \"$out\" ] || { echo \
+     \"out of scope:\"; echo \"$out\"; exit 1; }`. `$CELERIS_WU_BASE` is the unit's recorded base commit, set by \
+     celeris; never compare a scope check with a hard-coded sha or `$(git merge-base HEAD main)`. Checks run \
+     before celeris commits the unit, so both the working-tree diff and untracked files are needed. To look at \
+     commits only, use `git log --format= --name-only \"$CELERIS_WU_BASE..HEAD\" --not \"$CELERIS_WU_TARGET\"`.\n\
+     - A scope check must print the out-of-scope paths before exiting non-zero (the form above); never write the \
+     silent `test -z \"$(...)\"` form, whose failure log is empty.\n\
+     - A scope check's allowed regex must include the paths the unit is allowed to write as records: \
+     `agent-docs/progress/`, `agent-docs/adr/` (its ADR), every path this plan itself says the unit may write, \
+     and files regenerated by its change (schemas under `docs/protocol/` and `docs/api/v1/`, generated types \
+     under `gui/` and `web/`).\n\
      - Records follow ADR-0128: a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers); progress \
      goes to the task's own file `agent-docs/progress/YYYY-MM-DD-<slug>.md`, and parallel units of one stage write \
      `agent-docs/progress/YYYY-MM-DD-<slug>/<unit key>.md`. Never append to `agent-docs/PROGRESS.md` (frozen).\n\
@@ -1676,8 +1693,9 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      failed).\n\
      - Pin the package manager: write `corepack pnpm@<version from package.json packageManager> -C <dir> ...` \
      instead of bare `pnpm` (the host pnpm may differ and fail with ERR_PNPM_BAD_PM_VERSION).\n\
-     - Compare against `$(git merge-base HEAD main)` (e.g. `git diff --quiet $(git merge-base HEAD main) -- \
-     <paths>`) or the unit's recorded base, never a hard-coded main sha, because main moves during the task.\n\
+     - A non-scope diff check may compare against `$(git merge-base HEAD main)` (e.g. `git diff --quiet \
+     $(git merge-base HEAD main) -- <paths>`), never a hard-coded main sha, because main moves during the task; \
+     scope checks use `$CELERIS_WU_BASE` instead.\n\
      - A negated grep (`! grep ...`) must not match text the unit itself writes (its own ADR, notes or \
      comments explaining the rule); this self-reference has failed real checks.\n\
      - A check runs where the unit's worker starts: its own unit's worktree, or the task's directory \
@@ -1690,8 +1708,6 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      - Do not put tests that need a user namespace (real browser/runtime/launcher, unshare/CLONE_NEWUSER/newuidmap) \
      in WU checks: the worker sandbox cannot create one. They skip unless CELERIS_USERNS_TESTS=1; if they must run, \
      run them with CELERIS_USERNS_TESTS=1 in the daemon's integration check (release gate), not in a leaf.\n\
-     - An out-of-scope diff check is compared with sibling units during stage integration, so exclude every \
-     unit's allowed paths in that stage, not only this unit's paths.\n\
      - Keep each leaf small enough for one run, and do not pack implementation work into a recording or close-out leaf.\n\
      - For a unit or task changing only `web/` or `docs/`, replace mandatory `cargo test --workspace` with a \
      check that `crates/` has no diff (for example `git diff --quiet $(git merge-base HEAD main) -- crates/`); \

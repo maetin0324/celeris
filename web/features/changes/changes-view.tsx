@@ -1,22 +1,41 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
-import type { IntegrateBody, IntegrateResult, RepoChangesView } from "../../api/generated/types";
+import type { ChangedFile, IntegrateBody, IntegrateResult, RepoChangesView } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
-import { FetchFrame } from "../../components/fetch-state/fetch-frame";
+import { EmptyState, FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
-import { Button } from "../../components/ui/button";
+import { Badge } from "../../components/ui/badge";
+import { Button, buttonVariants } from "../../components/ui/button";
+import { CodeBlock } from "../../components/ui/code-block";
+import { DataList } from "../../components/ui/data-list";
+import { Icon } from "../../components/ui/icon";
+import { Section } from "../../components/ui/panel";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { taskChangeDiffQuery, taskChangesQuery, taskRepoChangesPath } from "./changes-query";
+import {
+  type DiffLineKind,
+  diffLines,
+  fileStatusView,
+  integrationLabel,
+  integrationTone,
+  splitChangedPaths,
+} from "./diff-lines";
 
 // /tasks/:id/changes（P3-13、R25）。変更の一覧・差分と取り込み（integrate、pr_merge）。
-// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state をそのまま出す。
-// 差分の長い行は <pre> の中で横に scroll し、枠（画面）は横に溢れさせない。
+// 同じ部品を /tasks/:id?tab=changes に置く。衝突・git の失敗は 200 で返るので integration.state で表示を分ける。
+// 差分は CodeBlock の内側でだけ横に scroll し、画面は横に溢れさせない。path は折り返し、全文を title に持つ。
 export function TaskChangesScreen({ taskId }: { taskId: string }) {
   return (
     <ScreenFrame title={`変更 ${taskId}`} route="/tasks/:id/changes">
-      <p className="text-sm">
-        <Link to="/tasks/$id" params={{ id: taskId }} className="inline-flex min-h-11 items-center underline">
+      <p className="text-label">
+        <Link
+          to="/tasks/$id"
+          params={{ id: taskId }}
+          className="inline-flex min-h-11 items-center gap-1 text-primary underline underline-offset-2"
+        >
+          <Icon name="chevron-left" size="sm" />
           タスクの詳細へ
         </Link>
       </p>
@@ -28,11 +47,13 @@ export function TaskChangesScreen({ taskId }: { taskId: string }) {
 export function TaskChangesPanel({ taskId }: { taskId: string }) {
   const changes = useQuery(taskChangesQuery(taskId));
   return (
-    <FetchFrame query={changes}>
+    <FetchFrame query={changes} subject="変更">
       {changes.data ? (
         <div data-testid="task-changes" className="min-w-0 space-y-4">
           {changes.data.repos.length === 0 ? (
-            <p data-testid="changes-empty">git のリポジトリの変更はありません。</p>
+            <div data-testid="changes-empty">
+              <EmptyState message="git のリポジトリの変更はありません。" />
+            </div>
           ) : (
             changes.data.repos.map((repo) => (
               <RepoChanges key={repo.repo} taskId={taskId} repo={repo} mergeMethod={changes.data.merge_method} />
@@ -46,6 +67,229 @@ export function TaskChangesPanel({ taskId }: { taskId: string }) {
 
 function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: RepoChangesView; mergeMethod: string }) {
   const [selected, setSelected] = useState<string | null>(null);
+  const integration = repo.integration;
+  const changedLines = repo.stat.additions + repo.stat.deletions;
+  return (
+    <Section
+      title={<span className="break-all">{repo.repo}</span>}
+      aria-label={`リポジトリ ${repo.repo}`}
+      data-repo={repo.repo}
+      className="rounded-lg border border-border bg-surface p-3 md:p-4"
+    >
+      <div className="mb-3 flex min-w-0 flex-wrap items-center gap-2 text-label" role="status">
+        <Badge tone={repo.missing ? "danger" : repo.dirty ? "warning" : "neutral"}>{repo.files.length} ファイル</Badge>
+        <span className="font-mono tabular-nums text-success-foreground">+{repo.stat.additions} 行</span>
+        <span className="font-mono tabular-nums text-danger-foreground">−{repo.stat.deletions} 行</span>
+        {changedLines > 0 ? <span className="text-muted-foreground">計 {changedLines} 行の変更</span> : null}
+      </div>
+      <DataList
+        items={[
+          {
+            label: "ブランチ",
+            value: (
+              <span className="break-all font-mono">
+                {repo.branch} → {repo.default_branch}
+              </span>
+            ),
+          },
+          {
+            label: "先行",
+            value: (
+              <span className="flex flex-wrap items-center gap-2">
+                <span className="tabular-nums">{repo.ahead} commit</span>
+                {repo.dirty ? <Badge tone="warning">未コミットあり</Badge> : null}
+                {repo.missing ? <Badge tone="danger">作業ツリーなし</Badge> : null}
+              </span>
+            ),
+          },
+          ...(integration
+            ? [
+                {
+                  label: "取り込み",
+                  value: (
+                    <span data-testid="integration-state" className="flex min-w-0 flex-wrap items-center gap-2">
+                      <Badge tone={integrationTone(integration.state)}>{integrationLabel(integration.state)}</Badge>
+                      <span className="text-label text-muted-foreground">
+                        {integration.method} / {integration.state}
+                      </span>
+                      {integration.pr_url ? (
+                        <a
+                          href={integration.pr_url}
+                          className="inline-flex min-h-11 min-w-0 items-center gap-1 break-all text-primary underline underline-offset-2"
+                        >
+                          {integration.pr_url}
+                          <Icon name="external" size="sm" />
+                        </a>
+                      ) : null}
+                      {integration.detail ? <span className="min-w-0 break-words">{integration.detail}</span> : null}
+                    </span>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
+      <h3 className="mt-4 text-body font-semibold text-foreground">変わったファイル（{repo.files.length}）</h3>
+      {repo.files.length === 0 ? (
+        <EmptyState message="変わったファイルはありません。" />
+      ) : (
+        <ChangedFiles
+          files={repo.files}
+          selected={selected}
+          onSelect={(path) => setSelected(selected === path ? null : path)}
+        />
+      )}
+      {selected ? <DiffPane taskId={taskId} repo={repo.repo} path={selected} /> : null}
+      {repo.missing ? null : <IntegrateForm taskId={taskId} repo={repo} mergeMethod={mergeMethod} />}
+    </Section>
+  );
+}
+
+// 変更ファイルの表。path は折り返して列を広げず、全文は title と button の名前に持つ。行の選択は aria-pressed の button で伝える。
+// 全ファイルに共通の dir は表の上に 1 度だけ出し、各行はファイル名を先に、残りの dir を薄く下に置く（fix-r6 narrow）。
+function ChangedFiles({
+  files,
+  selected,
+  onSelect,
+}: {
+  files: ChangedFile[];
+  selected: string | null;
+  onSelect: (path: string) => void;
+}) {
+  const split = splitChangedPaths(files.map((file) => file.path));
+  return (
+    <>
+      {split.common ? (
+        <p data-testid="changed-files-common" className="min-w-0 text-label text-muted-foreground">
+          共通の場所: <span className="break-all font-mono">{split.common}</span>
+        </p>
+      ) : null}
+      <Table data-testid="changed-files">
+        <TableHeader>
+          <TableRow>
+            <TableHead className="w-px">状態</TableHead>
+            <TableHead>ファイル</TableHead>
+            <TableHead className="w-px text-right">行</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {files.map((file, i) => {
+            const status = fileStatusView(file.status);
+            const part = split.files[i];
+            const pressed = selected === file.path;
+            return (
+              <TableRow key={file.path} data-state={pressed ? "checked" : undefined}>
+                <TableCell className="whitespace-nowrap">
+                  <Badge tone={status.tone} title={`status ${file.status}`} className="break-normal whitespace-nowrap">
+                    {status.label}
+                  </Badge>
+                </TableCell>
+                <TableCell className="min-w-0">
+                  <button
+                    type="button"
+                    data-file={file.path}
+                    title={file.path}
+                    aria-label={file.path}
+                    aria-pressed={pressed}
+                    onClick={() => onSelect(file.path)}
+                    className="inline-flex min-h-11 min-w-0 flex-col items-start justify-center text-left font-mono text-label"
+                  >
+                    <span data-file-name className="break-all font-medium text-primary underline underline-offset-2">
+                      {part?.name ?? file.path}
+                    </span>
+                    {part?.dir ? (
+                      <span data-file-dir className="break-all text-muted-foreground">
+                        {part.dir}
+                      </span>
+                    ) : null}
+                  </button>
+                </TableCell>
+                <TableCell className="whitespace-nowrap text-right font-mono tabular-nums">
+                  {file.binary ? (
+                    <span className="text-muted-foreground">binary</span>
+                  ) : (
+                    <span className="flex flex-col items-end">
+                      <span className="text-success-foreground">
+                        <span className="sr-only">追加 </span>+{file.additions}
+                      </span>
+                      <span className="text-danger-foreground">
+                        <span className="sr-only">削除 </span>−{file.deletions}
+                      </span>
+                    </span>
+                  )}
+                </TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+    </>
+  );
+}
+
+const lineClass: Record<DiffLineKind, string> = {
+  add: "bg-success text-success-foreground",
+  remove: "bg-danger text-danger-foreground",
+  hunk: "bg-info text-info-foreground",
+  meta: "text-muted-foreground",
+  context: "",
+};
+
+function DiffPane({ taskId, repo, path }: { taskId: string; repo: string; path: string }) {
+  const diff = useQuery(taskChangeDiffQuery(taskId, repo, path));
+  return (
+    <div data-testid="change-diff" className="mt-4 min-w-0 space-y-2">
+      <h3 className="min-w-0 break-all text-body font-semibold text-foreground" title={path}>
+        差分 <span className="font-mono">{path}</span>
+      </h3>
+      <FetchFrame query={diff} subject="差分">
+        {diff.data ? (
+          <div className="min-w-0 space-y-2">
+            {diff.data.truncated ? (
+              <p
+                role="status"
+                className="border-l-2 border-warning-foreground bg-warning px-3 py-2 text-label text-warning-foreground"
+              >
+                200 KiB を超えたので途中で切っています。
+              </p>
+            ) : null}
+            {diff.data.diff === "" ? (
+              <EmptyState message="差分はありません。" />
+            ) : (
+              <>
+                <p className="text-label text-muted-foreground">
+                  <span className="text-success-foreground">+ 追加</span> /{" "}
+                  <span className="text-danger-foreground">− 削除</span>
+                </p>
+                <CodeBlock label={`差分 ${path}`} data-testid="change-diff-body" className="max-h-96 overflow-y-auto">
+                  {/* 行の背景を最長の行の幅まで伸ばすため、行を w-max の grid に並べる。 */}
+                  <span className="grid w-max min-w-full">
+                    {diffLines(diff.data.diff).map((line, index) => (
+                      <span
+                        // 行は位置で一意。差分の原文は並べ替わらない。
+                        // biome-ignore lint/suspicious/noArrayIndexKey: 同じ文字列の行が繰り返し現れる。
+                        key={index}
+                        data-line={line.kind}
+                        className={`block px-1 ${lineClass[line.kind]}`}
+                      >
+                        {line.text === "" ? " " : line.text}
+                        {"\n"}
+                      </span>
+                    ))}
+                  </span>
+                </CodeBlock>
+              </>
+            )}
+          </div>
+        ) : null}
+      </FetchFrame>
+    </div>
+  );
+}
+
+const fieldClass = "min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground";
+
+function IntegrateForm({ taskId, repo, mergeMethod }: { taskId: string; repo: RepoChangesView; mergeMethod: string }) {
   const [method, setMethod] = useState<IntegrateBody["method"]>("merge");
   const [note, setNote] = useState("");
   const [confirm, setConfirm] = useState(false);
@@ -66,135 +310,89 @@ function RepoChanges({ taskId, repo, mergeMethod }: { taskId: string; repo: Repo
   }
 
   return (
-    <section
-      aria-label={`リポジトリ ${repo.repo}`}
-      data-repo={repo.repo}
-      className="min-w-0 space-y-2 rounded border p-3"
-    >
-      <h2 className="min-w-0 break-all text-base font-semibold">{repo.repo}</h2>
-      <p className="min-w-0 break-all text-sm">
-        {repo.branch} → {repo.default_branch}（{repo.ahead} commit{repo.dirty ? "、未コミットあり" : ""}
-        {repo.missing ? "、作業ツリーなし" : ""}）
+    <fieldset className="mt-4 min-w-0 space-y-3">
+      <legend className="w-full border-t border-border pt-4 text-body font-semibold text-foreground">取り込み</legend>
+      <p className="text-label text-muted-foreground">
+        取り込む前に、上のファイルと対象ブランチを確認してください。範囲外の変更かどうかは、この一覧では判定できません。
       </p>
-      {integration ? (
-        <p data-testid="integration-state" className="min-w-0 break-all text-sm">
-          取り込み: {integration.method} / {integration.state}
-          {integration.pr_url ? ` / ${integration.pr_url}` : ""}
-          {integration.detail ? ` / ${integration.detail}` : ""}
+      <label className="flex flex-col gap-1 text-label font-medium text-foreground">
+        取り込みの方法
+        <select
+          className={fieldClass}
+          value={method}
+          onChange={(event) => setMethod(event.target.value as IntegrateBody["method"])}
+        >
+          <option value="merge">merge（default_branch へ）</option>
+          <option value="pr">PR を作る</option>
+          <option value="discard">破棄</option>
+        </select>
+      </label>
+      <label className="flex flex-col gap-1 text-label font-medium text-foreground">
+        取り込みの note（任意）
+        <textarea
+          aria-label="取り込みの note（任意）"
+          className={fieldClass}
+          rows={2}
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+        />
+      </label>
+      {method === "discard" ? (
+        <label className="flex min-h-11 items-center gap-2 text-label text-danger-foreground">
+          <input
+            type="checkbox"
+            className="size-5 shrink-0"
+            checked={confirm}
+            onChange={(event) => setConfirm(event.target.checked)}
+          />
+          取り返しがつかないことを確認した
+        </label>
+      ) : null}
+      <div className="flex flex-wrap gap-2">
+        <Button
+          variant={method === "discard" ? "destructive" : "primary"}
+          disabled={sender.pending}
+          onClick={integrate}
+        >
+          取り込む
+        </Button>
+        {prOpen ? (
+          <Button
+            disabled={sender.pending}
+            onClick={() => {
+              setLastAction("pr_merge");
+              void sender.run([{ id: "pr_merge", path: `${base}/pr/merge`, body: {} }]);
+            }}
+          >
+            Celeris で merge（{mergeMethod}）
+          </Button>
+        ) : null}
+      </div>
+      <ActionResultView result={latest?.ok ? undefined : latest} />
+      {outcome?.integration ? (
+        <p
+          role="status"
+          data-testid="integrate-result"
+          className="flex min-w-0 flex-wrap items-center gap-2 break-all text-label"
+        >
+          結果:
+          <Badge tone={integrationTone(outcome.integration.state)}>{integrationLabel(outcome.integration.state)}</Badge>
+          <span className="text-muted-foreground">{outcome.integration.state}</span>
+          {outcome.integration.detail ? <span>{outcome.integration.detail}</span> : null}
+          {outcome.child_task_id ? (
+            <span>
+              衝突の解消:{" "}
+              <Link
+                to="/tasks/$id"
+                params={{ id: outcome.child_task_id }}
+                className={buttonVariants({ variant: "ghost", size: "sm" })}
+              >
+                {outcome.child_task_id}
+              </Link>
+            </span>
+          ) : null}
         </p>
       ) : null}
-      {repo.files.length === 0 ? (
-        <p>変わったファイルはありません。</p>
-      ) : (
-        <ul className="min-w-0 space-y-1" data-testid="changed-files">
-          {repo.files.map((file) => (
-            <li key={file.path} className="min-w-0 break-all">
-              <button
-                type="button"
-                data-file={file.path}
-                aria-pressed={selected === file.path}
-                onClick={() => setSelected(selected === file.path ? null : file.path)}
-                className="inline-flex min-h-11 items-center text-left font-mono text-sm underline"
-              >
-                {file.status} {file.path}
-              </button>
-              <span className="ml-2 text-xs text-neutral-600">
-                {file.binary ? "binary" : `+${file.additions} -${file.deletions}`}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {selected ? <DiffPane taskId={taskId} repo={repo.repo} path={selected} /> : null}
-      {repo.missing ? null : (
-        <fieldset className="min-w-0 space-y-2">
-          <legend className="font-semibold">取り込み</legend>
-          <label className="flex flex-col text-sm">
-            取り込みの方法
-            <select
-              className="min-h-11 rounded border px-2"
-              value={method}
-              onChange={(event) => setMethod(event.target.value as IntegrateBody["method"])}
-            >
-              <option value="merge">merge（default_branch へ）</option>
-              <option value="pr">PR を作る</option>
-              <option value="discard">破棄</option>
-            </select>
-          </label>
-          <label className="block text-sm">
-            取り込みの note（任意）
-            <textarea
-              className="block min-h-11 w-full rounded border p-2"
-              value={note}
-              onChange={(event) => setNote(event.target.value)}
-            />
-          </label>
-          {method === "discard" ? (
-            <label className="flex min-h-11 items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-11"
-                checked={confirm}
-                onChange={(event) => setConfirm(event.target.checked)}
-              />
-              取り返しがつかないことを確認した
-            </label>
-          ) : null}
-          <Button disabled={sender.pending} onClick={integrate}>
-            取り込む
-          </Button>
-          {prOpen ? (
-            <Button
-              disabled={sender.pending}
-              onClick={() => {
-                setLastAction("pr_merge");
-                void sender.run([{ id: "pr_merge", path: `${base}/pr/merge`, body: {} }]);
-              }}
-            >
-              Celeris で merge（{mergeMethod}）
-            </Button>
-          ) : null}
-          <ActionResultView result={latest?.ok ? undefined : latest} />
-          {outcome?.integration ? (
-            <p role="status" data-testid="integrate-result" className="min-w-0 break-all text-sm">
-              結果: {outcome.integration.state}
-              {outcome.integration.detail ? `（${outcome.integration.detail}）` : ""}
-              {outcome.child_task_id ? (
-                <>
-                  {" "}
-                  衝突の解消:{" "}
-                  <Link to="/tasks/$id" params={{ id: outcome.child_task_id }} className="underline">
-                    {outcome.child_task_id}
-                  </Link>
-                </>
-              ) : null}
-            </p>
-          ) : null}
-        </fieldset>
-      )}
-    </section>
-  );
-}
-
-function DiffPane({ taskId, repo, path }: { taskId: string; repo: string; path: string }) {
-  const diff = useQuery(taskChangeDiffQuery(taskId, repo, path));
-  return (
-    <FetchFrame query={diff}>
-      {diff.data ? (
-        <section aria-label={`差分 ${path}`} data-testid="change-diff" className="min-w-0">
-          {diff.data.truncated ? <p>200 KiB を超えたので途中で切っています。</p> : null}
-          {diff.data.diff === "" ? (
-            <p>差分はありません。</p>
-          ) : (
-            <pre
-              data-testid="change-diff-body"
-              className="max-h-[70vh] min-w-0 max-w-full overflow-auto whitespace-pre rounded border p-3 text-xs"
-            >
-              {diff.data.diff}
-            </pre>
-          )}
-        </section>
-      ) : null}
-    </FetchFrame>
+    </fieldset>
   );
 }

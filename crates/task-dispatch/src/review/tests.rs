@@ -192,14 +192,17 @@ async fn work_unit_checks_pass_and_fail_like_command_criteria() {
         task_core::WorkUnitCheck {
             cmd: "test -f present.txt".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: "test -f absent.txt".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: "exit 7".into(),
             expect_exit: 7,
+            scope: false,
         },
     ];
     let results = run_work_unit_checks(&ws, &checks, Duration::from_secs(5)).await;
@@ -217,6 +220,7 @@ async fn work_unit_checks_time_out() {
     let checks = vec![task_core::WorkUnitCheck {
         cmd: "sleep 30".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let results = run_work_unit_checks(&ws, &checks, Duration::from_millis(300)).await;
     assert_eq!(results.len(), 1);

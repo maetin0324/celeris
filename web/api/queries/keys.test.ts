@@ -1,7 +1,7 @@
 import { hashKey } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { daemonBadges, inboxCountsBadge } from "./badges";
-import { daemonKeys, inboxKeys, projectKeys, queryKeys, taskKeys } from "./keys";
+import { daemonBadges, inboxItemsBadge, notificationsUnreadBadge } from "./badges";
+import { daemonKeys, inboxKeys, notificationKeys, projectKeys, queryKeys, taskKeys } from "./keys";
 import { normalizeFilters } from "./normalize";
 import { STALE_TIME_DEFAULTS, staleTimeFor } from "./stale-time";
 
@@ -34,7 +34,8 @@ describe("key factory", () => {
   });
 
   it("バッジは画面と同じ key を使い、別の cache を作らない", () => {
-    expect(inboxCountsBadge.queryKey).toEqual(inboxKeys.list());
+    expect(inboxItemsBadge.queryKey).toEqual(inboxKeys.itemList());
+    expect(notificationsUnreadBadge.queryKey).toEqual(notificationKeys.unreadCount());
     expect(daemonBadges.queryKey).toEqual(daemonKeys.rest());
     expect(daemonBadges.queryKey).not.toEqual(daemonKeys.stream());
   });
@@ -57,6 +58,10 @@ describe("staleTime（ADR-0081 D5）", () => {
     [projectKeys.plan("p"), 10_000],
     [projectKeys.docs("p", "x"), 60_000],
     [queryKeys.inbox.list(), 5_000],
+    [queryKeys.inbox.itemList(), 5_000],
+    [queryKeys.inbox.item("I1"), 5_000],
+    [queryKeys.notifications.list(), 5_000],
+    [queryKeys.notifications.unreadCount(), 5_000],
     [queryKeys.board.list(), 5_000],
     [queryKeys.reports.list(), 5_000],
     [queryKeys.approvals.list(), 5_000],

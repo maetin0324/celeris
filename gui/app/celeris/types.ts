@@ -5492,6 +5492,12 @@ export interface WorkUnitBudget {
 export interface WorkUnitCheck {
   cmd: string;
   expect_exit?: number;
+  /**
+   * ADR-0074 付記 2026-10-05（`WorkUnitCheck.scope`）: 範囲 check（WU 自身の変更が許可範囲に収まるかを見る
+   * 検査）か。`true` の check は WU の作業時（`spawn_work_unit_checks`）だけで流し、段の統合の検査
+   * （D1.4 の 4）と子 task の acceptance（`promote_to_task`）には入れない。既定 `false`（JSON に書かない）。
+   */
+  scope?: boolean;
 }
 /**
  * ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。

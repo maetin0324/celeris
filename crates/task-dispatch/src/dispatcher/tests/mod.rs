@@ -2838,6 +2838,7 @@ fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sle
         task_core::WorkUnitCheck {
             cmd: "true".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: format!(
@@ -2845,6 +2846,7 @@ fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sle
                 f = flag.display()
             ),
             expect_exit: 0,
+            scope: false,
         },
     ];
     let spec = task_core::ExecutionPlanSpec {
@@ -3056,6 +3058,7 @@ mod conversation_cos;
 mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;
+mod integration_ready_race;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;
@@ -3143,6 +3146,9 @@ mod drain_hand_off;
 mod phase_effect_ab;
 /// 多目的 routing Phase 3: run 開始時の RoutingContext（`src/dispatcher/tests/routing_context.rs`）。
 mod routing_context;
+/// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
+/// （`src/dispatcher/tests/scope_checks.rs`）。
+mod scope_checks;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

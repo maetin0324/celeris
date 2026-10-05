@@ -508,6 +508,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
             ],
         }),
         followups_env: None,
+        work_unit_env: None,
         container: None,
         permission_mode: None,
     };
@@ -527,6 +528,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permiss
     let prep = RunAdapterPrep {
         env: None,
         followups_env: None,
+        work_unit_env: None,
         container: None,
         permission_mode: Some("plan".into()),
     };
@@ -549,4 +551,40 @@ async fn dispatch_browser_fallback_prep_empty_prep_leaves_candidate_unwrapped() 
     assert_eq!(seen[0], seen[1]);
     assert_eq!(seen[1].mode, None);
     assert_eq!(seen[1].model.as_deref(), Some("standard-id"));
+}
+
+/// ADR-0074 付記 2026-10-05 D3: WU の run の `CELERIS_WU_BASE` / `CELERIS_WU_TARGET` は cargo の env に重ねて
+/// 主 adapter にも候補にも渡る（cargo の env は外さない）。
+#[tokio::test]
+async fn dispatch_prep_work_unit_env_is_stacked_on_the_cargo_env() {
+    let base = (
+        task_core::execution_plan::WU_BASE_ENV.to_string(),
+        "0123abcd".to_string(),
+    );
+    let target = (
+        task_core::execution_plan::WU_TARGET_ENV.to_string(),
+        "celeris/task-x".to_string(),
+    );
+    let prep = RunAdapterPrep {
+        env: Some(task_worker::scratch::CargoEnv {
+            set: vec![("CARGO_INCREMENTAL".into(), "0".into())],
+        }),
+        followups_env: None,
+        work_unit_env: Some(vec![base.clone(), target.clone()]),
+        container: None,
+        permission_mode: None,
+    };
+    let (primary_env, candidate_env, seen) = prep_run_both(&prep, Tier::Standard).await;
+    assert!(primary_env && candidate_env);
+    assert_eq!(seen.len(), 2);
+    for s in &seen {
+        assert!(s.env.contains(&base), "{:?}", s.env);
+        assert!(s.env.contains(&target), "{:?}", s.env);
+        assert!(
+            s.env
+                .contains(&("CARGO_INCREMENTAL".to_string(), "0".to_string())),
+            "{:?}",
+            s.env
+        );
+    }
 }

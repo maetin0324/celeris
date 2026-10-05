@@ -282,7 +282,11 @@ fn wu_row(features: Option<serde_json::Value>, checks: Vec<Criterion>) -> crate:
         checks: checks
             .into_iter()
             .filter_map(|c| match c.check {
-                Check::Command { cmd, expect_exit } => Some(WorkUnitCheck { cmd, expect_exit }),
+                Check::Command { cmd, expect_exit } => Some(WorkUnitCheck {
+                    cmd,
+                    expect_exit,
+                    scope: false,
+                }),
                 _ => None,
             })
             .collect(),

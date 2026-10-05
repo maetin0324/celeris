@@ -39,6 +39,27 @@ impl SqliteStore {
             max_retries: task.budget.max_retries,
         };
         let outcome = transition(&view, &trigger)?;
+        // ADR-0074 付記（2026-10-05）: 統合開始後の古い idle 判定で工程 lease を捨てない。
+        // 人の Interrupt / Cancel は従来どおり許す（孤立統合は dispatcher が照合する）。
+        if matches!(
+            trigger,
+            Trigger::Continue {
+                why: crate::ContinueWhy::Advance
+            }
+        ) && tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM work_units WHERE task_id = ?1 \
+                 AND kind = 'integrate' AND phase IS NOT NULL AND status = 'running')",
+            params![task_id.to_string()],
+            |row| row.get::<_, bool>(0),
+        )? {
+            return Err(StoreError::InvalidTransition(
+                crate::transition::InvalidTransition {
+                    status: view.status,
+                    kind: view.kind,
+                    trigger: "integration_running",
+                },
+            ));
+        }
         // ADR-0080 D4: browser の wait が未解決の間は、一般の回答・途中確認の再開で `ready` に戻さない
         // （解除は専用の browser 操作〈`BrowserResume` / `BrowserFail`〉だけ）。
         if matches!(trigger, Trigger::Answer | Trigger::PhaseResume { .. })

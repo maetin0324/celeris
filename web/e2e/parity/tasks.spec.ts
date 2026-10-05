@@ -96,6 +96,35 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
   }
 });
 
+test("parity: /tasks の長い名前と ID は全文を保持し、360px で横に溢れない", async ({ page }) => {
+  const id = `T${"1234567890".repeat(5)}`;
+  const title = "非常に長いタスク名と作業内容".repeat(6);
+  const h = harness({
+    "/api/v1/tasks": { items: [task(id, title)], total: 1, next_cursor: null, counts_by_status: { ready: 1 } },
+  });
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/tasks`);
+    const row = page.locator("[data-task-id]");
+    await expect(row).toBeVisible();
+    await expect(row.locator(`[title="${title}"]`)).toBeVisible();
+    await expect(row.locator(`[title="${id}"]`)).toBeVisible();
+    await expect(row.getByText("情報なし")).toBeVisible();
+    expect(await row.locator(`[title="${title}"]`).evaluate((el) => getComputedStyle(el).textOverflow)).toBe(
+      "ellipsis",
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(
+      0,
+    );
+    expect(await page.locator("[data-testid='tasks-scroll']").evaluate((el) => el.scrollWidth - el.clientWidth)).toBe(
+      0,
+    );
+  } finally {
+    await h.close(gateway);
+  }
+});
+
 test("parity: /graph root・depth", async ({ page }) => {
   const calls: string[] = [];
   const graph = {
@@ -130,6 +159,51 @@ test("parity: /graph root・depth", async ({ page }) => {
     expect(await page.locator("[data-testid='graph-canvas']").evaluate((el) => el.scrollWidth >= el.clientWidth)).toBe(
       true,
     );
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /graph は 360px で区画内だけ横スクロールする", async ({ page }) => {
+  const title = "依存関係を調べる長いタスク名".repeat(5);
+  const h = harness({
+    "/api/v1/graph": {
+      nodes: [
+        { id: "T1", title, kind: "execute", status: "ready" },
+        { id: "T2", title: "後続", kind: "execute", status: "running" },
+      ],
+      edges: [{ from: "T1", to: "T2", kind: "depends_on" }],
+    },
+  });
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/graph`);
+    await expect(page.getByRole("heading", { level: 1, name: "依存グラフ" })).toBeVisible();
+    await expect(page.locator("[data-graph-node]")).toHaveCount(2);
+    await expect(page.locator(`[data-graph-node='T1'] [title='${title}']`)).toBeVisible();
+    const canvas = page.locator("[data-testid='graph-canvas']");
+    expect(await canvas.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
+  } finally {
+    await h.close(gateway);
+  }
+});
+
+test("parity: /tasks/new は 360px で入力欄を横に溢れさせない", async ({ page }) => {
+  const h = harness({});
+  const gateway = await h.start();
+  try {
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto(`${gateway.base}/tasks/new`);
+    await expect(page.getByRole("heading", { level: 1, name: "タスクの作成" })).toBeVisible();
+    await page.getByRole("button", { name: "条件を追加" }).click();
+    await expect(page.locator("[data-testid='criterion-row']")).toHaveCount(2);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth),
+    ).toBe(true);
   } finally {
     await h.close(gateway);
   }

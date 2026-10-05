@@ -55,7 +55,11 @@ impl Dispatcher {
         // ADR-0074 F5-fix（不具合 1）: 検査も run と同じ `CARGO_TARGET_DIR` で走らせる（自分の
         // worktree の WU は `<repo-key>/wu-<id>`、それ以外は `<repo-key>`）。
         let own_tree = !self.work_unit_trees(&task, &wu)?.is_empty();
-        let check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
+        let mut check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
+        // ADR-0074 付記 2026-10-05 D3: 範囲 check が基点・統合先を知れるように。
+        check_env
+            .set
+            .extend(self.work_unit_scope_env(&task, wu.base_commit.as_deref()));
         let ws: task_worker::LocalWorkspace = match work_dir {
             Some(w) if w.is_dir() => task_worker::LocalWorkspace::new(&dir).with_work_dir(w),
             _ => task_worker::LocalWorkspace::new(&dir),
@@ -129,6 +133,29 @@ impl Dispatcher {
             },
         );
         Ok(())
+    }
+
+    /// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に足す `CELERIS_WU_BASE`（WU の `base_commit`。
+    /// 無ければ足さない）と `CELERIS_WU_TARGET`（統合先 = Task のブランチ。git の worktree が無ければ足さない）。
+    pub(super) fn work_unit_scope_env(
+        &self,
+        task: &Task,
+        base_commit: Option<&str>,
+    ) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        if let Some(base) = base_commit {
+            env.push((
+                task_core::execution_plan::WU_BASE_ENV.to_string(),
+                base.to_string(),
+            ));
+        }
+        if let Some(branch) = self
+            .task_workspaces_for(task)
+            .and_then(|ws| ws.repos.iter().find_map(|r| r.branch().map(str::to_string)))
+        {
+            env.push((task_core::execution_plan::WU_TARGET_ENV.to_string(), branch));
+        }
+        env
     }
 
     /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance で worker run が `Done` で終わり、
@@ -1276,18 +1303,38 @@ impl Dispatcher {
     /// Phase F5-fix6: WU の lease がまだ切れていなくても、その run の持ち主のデーモンが居なければ
     /// （孤児。`crate::orphan`）同じく戻す（result.json があればその内容で確定、無ければ reason
     /// `orphan_takeover` で ready / needs_continuation）。統合 WU も同じ（spawn が手元に無ければ pending）。
+    /// 2026-10-05 付記: 統合の回収は Ready も対象にし、Task lease の有無・期限に依存させない。
+    /// 手元の仕事・生きている他 instance・draining / verify の保護条件は維持する。
     pub(super) fn reconcile_parallel_tasks(&mut self) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
         let mut holders_gone: Option<bool> = None;
-        for task in self.store.list(Some(Status::Running))? {
+        let mut tasks = self.store.list(Some(Status::Running))?;
+        if self.accepting_new_work && self.orphan_takeover.is_some() {
+            tasks.extend(self.store.list(Some(Status::Ready))?);
+        }
+        for task in tasks {
             if !self.is_eligible(&task) {
+                continue;
+            }
+            // Ready への遷移は task lease を外す。lease の有無・期限より先に孤立統合を調べる。
+            let units = self.store.work_units_for(task.id)?;
+            if units.iter().any(|u| {
+                u.kind == task_core::WorkUnitKind::Integrate
+                    && u.phase.is_some()
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) && !self.holds_task_in_hand(task.id)
+                && self.lease_holders_gone(&mut holders_gone, now)
+            {
+                tracing::warn!(task_id = %task.id, "ownerless phase integration; returning it to pending (orphan_takeover)");
+                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
+            }
+            if task.status != Status::Running {
                 continue;
             }
             let Some(lease) = &task.lease else { continue };
             if !is_phase_lease_holder(&lease.worker_run_id) || lease.expires_at <= now {
                 continue;
             }
-            let units = self.store.work_units_for(task.id)?;
             for u in units.iter().filter(|u| {
                 u.status == task_core::WorkUnitStatus::Running
                     && u.kind != task_core::WorkUnitKind::Integrate
@@ -1325,18 +1372,6 @@ impl Dispatcher {
                     }
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
-            }
-            // Phase F5-fix6: 持ち主の居ない工程の統合（統合 WU が running で、spawn が手元に無い）。
-            if !self.integrating.contains_key(&task.id)
-                && self.running_for_task(task.id) == 0
-                && units.iter().any(|u| {
-                    u.kind == task_core::WorkUnitKind::Integrate
-                        && u.status == task_core::WorkUnitStatus::Running
-                })
-                && self.lease_holders_gone(&mut holders_gone, now)
-            {
-                tracing::warn!(task_id = %task.id, "the phase integration's daemon is gone; returning the integration to pending without waiting for the lease (Phase F5-fix6 orphan_takeover)");
-                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
             }
             if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
                 continue;
@@ -1983,15 +2018,15 @@ impl WorkUnitCheckRun {
             .enumerate()
             .filter(|(_, (pass, _))| !pass)
             .map(|(i, (_, detail))| {
-                let (cmd, expect_exit) = self
+                let (cmd, expect_exit, scope) = self
                     .checks
                     .get(i)
-                    .map(|c| (c.cmd.clone(), c.expect_exit))
+                    .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
                     .unwrap_or_default();
                 task_core::FailedWorkUnitCheck {
                     cmd,
                     expect_exit,
-                    detail: detail.clone(),
+                    detail: scope_check_detail(scope, detail),
                 }
             })
             .collect();
@@ -2010,6 +2045,19 @@ impl WorkUnitCheckRun {
             failed,
             usage,
         })
+    }
+}
+
+/// ADR-0074 付記 2026-10-05 D4: 範囲 check が無言で（stdout・stderr とも空で）落ちたときに判定文へ足す一文。
+pub(super) const SILENT_SCOPE_CHECK_HINT: &str = "scope check printed no out-of-scope paths — write it so it prints them before exiting non-zero (ADR-0074 appendix 2026-10-05)";
+
+/// ADR-0074 付記 2026-10-05 D4: 不合格の判定文。範囲 check（`scope`）が何も出さずに落ちていたら
+/// [`SILENT_SCOPE_CHECK_HINT`] を足す（原因の特定を速くするためだけで、判定は変えない）。
+pub(super) fn scope_check_detail(scope: bool, detail: &str) -> String {
+    if scope && detail.contains("stdout_tail=\"\" stderr_tail=\"\"") {
+        format!("{detail}; {SILENT_SCOPE_CHECK_HINT}")
+    } else {
+        detail.to_string()
     }
 }
 

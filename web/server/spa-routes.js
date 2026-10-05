@@ -3,6 +3,7 @@
 export const spaRoutePatterns = [
   "/",
   "/inbox",
+  "/notifications",
   "/login",
   "/org",
   "/org/secretary",

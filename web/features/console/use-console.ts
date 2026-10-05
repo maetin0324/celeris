@@ -42,7 +42,9 @@ export function useConsole(scope: string) {
   const keyHash = key.join("\u0000");
   // stream は初回取得が決着してから張る。cursor が REST の続きになり、daemon が遅いときに
   // 取得中の fetch と SSE 2 本で同一 host の接続上限（6）を埋めて次の document 遷移を待たせない。
-  const settled = query.status !== "pending";
+  // 初回取得に失敗したときは張らない。stream の hello が空の cache を書くと error が消えて
+  // 「まだ会話がありません」と誤って出るため。再試行で取れてから張る。
+  const settled = query.status === "success";
   // biome-ignore lint/correctness/useExhaustiveDependencies: scope と会話が変わったときだけ張り直す
   useEffect(() => {
     if (!settled) return;

@@ -5126,6 +5126,7 @@ export type WorkUnitBudget = {
 export type WorkUnitCheck = {
   "cmd": string;
   "expect_exit"?: number;
+  "scope"?: boolean;
 };
 
 export type WorkUnitCheckLog = {

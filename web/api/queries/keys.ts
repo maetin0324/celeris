@@ -41,7 +41,24 @@ function listDomain<const D extends string>(domain: D) {
   };
 }
 
-export const inboxKeys = listDomain("inbox");
+/**
+ * 受信箱。`list` は旧 `GET /inbox`（互換）、`itemList` / `item` は ADR-0133 の `GET /inbox/items`。
+ * どちらも `['inbox']` の下にあるので、`inboxKeys.all` の invalidate で両方が stale になる。
+ */
+export const inboxKeys = {
+  ...listDomain("inbox"),
+  items: () => ["inbox", "items"] as const,
+  itemList: (filters?: Filters) => ["inbox", "items", f(filters)] as const,
+  item: (itemId: string) => ["inbox", "item", itemId] as const,
+};
+
+/** 通知（ADR-0133 D3・D5）。束の一覧と未読数。 */
+export const notificationKeys = {
+  all: ["notifications"] as const,
+  lists: () => ["notifications", "list"] as const,
+  list: (filters?: Filters) => ["notifications", "list", f(filters)] as const,
+  unreadCount: () => ["notifications", "unread-count"] as const,
+};
 export const boardKeys = listDomain("board");
 export const reportKeys = listDomain("reports");
 export const approvalKeys = listDomain("approvals");
@@ -77,6 +94,7 @@ export const queryKeys = {
   tasks: taskKeys,
   projects: projectKeys,
   inbox: inboxKeys,
+  notifications: notificationKeys,
   board: boardKeys,
   reports: reportKeys,
   approvals: approvalKeys,

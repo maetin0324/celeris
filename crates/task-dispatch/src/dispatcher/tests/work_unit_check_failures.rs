@@ -136,10 +136,12 @@ async fn a_failed_work_unit_check_is_recorded_and_handed_to_the_next_run() {
             task_core::WorkUnitCheck {
                 cmd: "test -s artifacts/report.md".into(),
                 expect_exit: 0,
+                scope: false,
             },
             task_core::WorkUnitCheck {
                 cmd: "test -f .fixed".into(),
                 expect_exit: 0,
+                scope: false,
             },
         ],
     );
@@ -282,12 +284,14 @@ async fn a_work_unit_whose_check_keeps_failing_replans_with_the_failed_check_as_
         vec![task_core::WorkUnitCheck {
             cmd: wrong_check.clone(),
             expect_exit: 0,
+            scope: false,
         }],
     );
     let mut fixed = wu_spec("b", &[]);
     fixed.checks = vec![task_core::WorkUnitCheck {
         cmd: format!("sh {} 192.168.1.103 8000", script.display()),
         expect_exit: 0,
+        scope: false,
     }];
     let adapter = Arc::new(PlannerScriptAdapter::new(
         vec![Some(plan_json(vec![fixed]))],

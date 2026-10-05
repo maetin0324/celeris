@@ -10,10 +10,12 @@ fn adopt_checked_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, marker: &Path
         task_core::WorkUnitCheck {
             cmd: format!("echo ran >> {}", marker.display()),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: "echo wu-check-out; echo wu-check-err 1>&2".into(),
             expect_exit: 0,
+            scope: false,
         },
     ];
     adopt_v2_plan(store, task_id, &["build"], vec![a]);

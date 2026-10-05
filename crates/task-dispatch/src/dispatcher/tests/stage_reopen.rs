@@ -56,6 +56,7 @@ async fn blocked_repair_replan_loop_runs_the_new_leaf_once() {
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(&store, task.id, &["core"], vec![v2_wu("a", "core", &[]), b]);
     let delta = serde_json::json!({

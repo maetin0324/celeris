@@ -18,7 +18,13 @@ import { v3Screens } from "../support/screens";
 // - 最後に関係のある event（受信箱を取り直す created）を目印に流し、同じ経路（frame → 束ね窓 → invalidate →
 //   fetch）で取得が呼ばれることを確かめる（観測が空振りしていない証拠）。目印を処理し終えた時点までの
 //   記録に画面の取得が 0 本なら、関係のない SSE は取り直しを起こしていない。
-const STREAM_ONLY = ["/api/v1/stream", "/api/v1/health", "/api/v1/inbox", "/api/v1/daemon"];
+const STREAM_ONLY = [
+  "/api/v1/stream",
+  "/api/v1/health",
+  "/api/v1/inbox/items",
+  "/api/v1/notifications/unread-count",
+  "/api/v1/daemon",
+];
 const CANARY_TASK = "e2e-canary";
 
 for (const screen of v3Screens()) {
@@ -38,7 +44,7 @@ for (const screen of v3Screens()) {
       // The Phase 2 shell owns an active inbox query on both routes. Task lists are
       // still placeholders, so counting /tasks alone would make this gate vacuous.
       const count = (route: string) => daemon.requests.filter((request) => request.path === route).length;
-      await expect.poll(() => count("/api/v1/inbox")).toBeGreaterThan(0);
+      await expect.poll(() => count("/api/v1/inbox/items")).toBeGreaterThan(0);
       await waitFetchesSettled(page);
       // ここから page の時計を止める。束ね窓・poll の timer は runFor で進めたときだけ発火する。
       await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1000);
@@ -79,7 +85,7 @@ for (const screen of v3Screens()) {
       const marker = (await readRealtimeProbe(page)).fetches.length;
       await page.clock.runFor(1000);
       await expect
-        .poll(async () => (await readRealtimeProbe(page)).fetches.slice(marker).includes("/api/v1/inbox"), {
+        .poll(async () => (await readRealtimeProbe(page)).fetches.slice(marker).includes("/api/v1/inbox/items"), {
           message: "canary event refetches the inbox",
         })
         .toBe(true);
@@ -90,7 +96,7 @@ for (const screen of v3Screens()) {
 
       // One or two inbox refreshes may be its 15 s fallback poll. SSE must not
       // turn the 2 s daemon ticks or unrelated progress events into refetches.
-      expect(refetched("/api/v1/inbox")).toBeLessThanOrEqual(2);
+      expect(refetched("/api/v1/inbox/items")).toBeLessThanOrEqual(2);
       expect(refetched("/api/v1/tasks")).toBe(0);
       const screenRefetches = Object.fromEntries([...screenPaths].map((route) => [route, refetched(route)]));
       recordLatency({
@@ -98,7 +104,7 @@ for (const screen of v3Screens()) {
         path: screen.path,
         fixture: screen.fixture,
         unrelatedRefetches: screenRefetches,
-        inboxPolls: refetched("/api/v1/inbox"),
+        inboxPolls: refetched("/api/v1/inbox/items"),
         healthPolls: count("/api/v1/health"),
         daemonRestPolls: count("/api/v1/daemon"),
       });

@@ -1,7 +1,7 @@
 # PROGRESS — Web GUI（ADR-0081、`web/`）
 
 ---
-tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M]
+tasks: [01M3W79QE2ZD22YW7P499PZKPP, 01M3WAKKJQXT79DDDFCF9F5Q3D, 01M3WCAQ762PKQ75CR6K03236M, 01M41RYPGEQQKT2KBPH1WYH0A6]
 ---
 
 計画の正本: [implementation plan](../web/implementation-plan.md)、[feature parity matrix](../web/feature-parity.md)、[ADR-0081](../adr/0081-web-spa-frontend.md)。Phase 0 の記録は [PROGRESS.md](../PROGRESS.md#web-gui-phase-02026-09-29設計移行計画) に残す。
@@ -239,3 +239,42 @@ install・build 後も `git status --porcelain` は空（node_modules・dist・b
 | 今回 | `cargo clippy --workspace -- -D warnings` | 0 | warning 0 |
 
 この run では Rust test gate を完了できなかった。namespace を許可する sandbox 外 execution harness が必要。crates/ は変更していない。
+
+## latency 2 spec の測り方の修正（2026-10-03、task 01M41RYPGEQQKT2KBPH1WYH0A6 WU spec-ready）
+
+- 前回 qa（01M40B3GWG2XFJHC6HTRZH0RBG、tip `e7be8e16`）を `479ecf5c` で取り込んだ。
+- 人の決定 b: `web/e2e/latency/transition.spec.ts` と `web/e2e/parity/latency-gate.spec.ts` が click の前に起動の完了を出来事で待つ（`web/e2e/latency/boot-idle.mjs`、commit `f2859a35`）。予算 300 ms・10 s−0 s 差 100 ms・retries 0・測り方は不変。features・components・設定は変えていない。詳細は [p5-01-latency.md の付記](../web/gates/p5-01-latency.md)。
+- 変更前・変更後（CDP CPU throttle、各 30 計測、click→h1 の最大 / 300 ms 超の件数）:
+
+| CPU | 変更前 | 変更後 |
+|---|---|---|
+| 1x | 103 / 0/30 | 71 / 0/30 |
+| 4x | 235 / 0/30 | 110 / 0/30 |
+| 6x | 363 / 3/30 | 109 / 0/30 |
+
+- 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck`・`pnpm lint`（既存の warning 4 件のみ）・`pnpm check:boundaries` は exit 0。
+- 未解決: 起動そのものの費用（features/console の `useKeyboardOffset`、home の描画）は残る。試験は遷移だけを測るようになったので、起動の重さは別の指標で見る必要がある。
+
+## S1 のリンクの無い経路の測り方の修正（2026-10-03、task 01M41RYPGEQQKT2KBPH1WYH0A6 WU detail-nav）
+
+- integrate-gate の full e2e（retries 0）が S1 `/tasks/$id` で落ちた。リンクの無い経路は計測区間に文書の読み込み（SPA の再起動）を入れていたため。
+- 直し方（`web/e2e/latency/` だけ、commit `a62ab6e5`）: リンクの無い経路は `in-app-routes.ts` の親画面を開き、起動完了の後に実リンクを click する。どの画面にも SPA のリンクが無い 4 件（`/org/cos`・`files`・`changes`・`/plans/new`）は pushState + popstate。予算 300 ms・差 100 ms・retries 0 は不変。詳細は [p5-01-latency.md の付記](../web/gates/p5-01-latency.md)。
+- 変更前（goto 計測）・変更後（click・popstate 計測）、CDP CPU throttle、各 108 計測、起点→h1 の最大 / 中央値 / 300 ms 超:
+
+| CPU | 変更前 | 変更後 |
+|---|---|---|
+| 1x | 122 / 45 / 0/108 | 80 / 69 / 0/108 |
+| 4x | 450 / 181 / 4/108 | 325 / 76 / 1/108 |
+| 6x | 462 / 292 / 48/108 | 426 / 95 / 2/108 |
+
+- 証拠: 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。`pnpm typecheck` と biome は exit 0。
+- 未解決: 4x・6x の変更後の超過 3 件は Playwright の click の actionability 待ちで、page 内の遷移は 176 ms 以下。
+- 追補（2026-10-04）: celeris の check（2 spec × 3 回、retries 0）で S1 `/knowledge/inbox`・`/knowledge/skills`・`/reports` が URL @0 で 309〜342 ms になり落ちた。リンクの無い経路の click でも、時間の大半は Playwright の click の actionability 待ちだった。`transition.spec.ts` は計測区間の前に `click({ trial: true })` で確かめ、区間では `click({ force: true })` だけを打つ（commit `7fc1d0ef`）。click で測る 8 件、CDP CPU throttle、各 72 計測、起点→h1 の最大 / 中央値 / 300 ms 超:
+
+| CPU | 変更前（actionability 込み） | 変更後（actionability は区間の前） |
+|---|---|---|
+| 1x | 80 / 70 / 0/72 | 51 / 37 / 0/72 |
+| 4x | 325 / 83 / 1/72 | 91 / 46 / 0/72 |
+| 6x | 426 / 101 / 2/72 | 108 / 58 / 0/72 |
+
+- 証拠: build の後に 2 spec を retries 0 で 3 回続けて実行し 3 回とも 33 passed（exit 0）。S1 の最大は URL 177 / 見出し 230 ms。`pnpm typecheck` と `pnpm lint`（既存の warning 4 件のみ）は exit 0。

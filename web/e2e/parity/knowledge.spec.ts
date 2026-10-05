@@ -51,9 +51,21 @@ test("parity: /knowledge 検索・閲覧・保存", async ({ page }) => {
 test("parity: /knowledge/inbox 採用・却下", async ({ page }) => {
   await page.goto(`${gateway.base}/knowledge/inbox`);
   await expect(page.getByRole("heading", { name: "New knowledge", level: 2 })).toBeVisible();
+  // 出典・scope・更新日を読める形で出す。
+  await expect(page.getByText("出典", { exact: true })).toBeVisible();
+  await expect(page.getByText("scope", { exact: true })).toBeVisible();
+  await expect(page.getByText("更新日", { exact: true })).toBeVisible();
+  // 採否は確認 dialog で正本に入る内容を見てから確定する。
   await page.getByRole("button", { name: "採用" }).click();
+  const accept = page.getByRole("alertdialog");
+  await expect(accept).toContainText("取り込み先 projects/new.md");
+  await expect(accept).toContainText("scope 未設定");
+  expect(daemon.requests.filter((request) => request.path.endsWith("/accept"))).toHaveLength(0);
+  await accept.getByRole("button", { name: "「New knowledge」を正本に採用" }).click();
+  await expect(accept).toBeHidden();
   await expect(page.getByText("操作が完了しました")).toBeVisible();
   await page.getByRole("button", { name: "却下" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "「New knowledge」を却下" }).click();
   await expect.poll(() => daemon.requests.filter((request) => request.path.endsWith("/reject")).length).toBe(1);
   expect(daemon.requests.find((request) => request.path.endsWith("/accept"))?.body).toContain("projects/new.md");
 });
@@ -94,7 +106,10 @@ test("parity: /knowledge/skills 一覧・create・name・edit・削除", async (
   await expect(page.getByRole("alert")).toHaveText("skill_md が不正です");
   await expect(page.getByLabel("名前")).toHaveValue("new-skill");
   await page.goto(`${gateway.base}/knowledge/skills?name=demo`);
+  await expect(page.getByText("登録済み").filter({ visible: true }).first()).toBeVisible();
+  await expect(page.getByText("配送なし").filter({ visible: true }).first()).toBeVisible();
   await page.getByRole("button", { name: "削除" }).click();
+  await page.getByRole("alertdialog").getByRole("button", { name: "skill「demo」を削除" }).click();
   await expect
     .poll(
       () =>

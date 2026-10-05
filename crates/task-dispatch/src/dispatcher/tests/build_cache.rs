@@ -239,6 +239,7 @@ async fn parallel_work_units_get_their_own_cargo_target_dir_and_it_is_removed_wh
         w.checks = vec![task_core::WorkUnitCheck {
             cmd: format!("{record} # {key}"),
             expect_exit: 0,
+            scope: false,
         }];
         w
     };
@@ -366,6 +367,7 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
         w.checks = vec![task_core::WorkUnitCheck {
             cmd: format!("{record} # {key}"),
             expect_exit: 0,
+            scope: false,
         }];
         w
     };

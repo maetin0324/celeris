@@ -105,6 +105,7 @@ async fn a_failing_work_unit_check_retries_the_work_unit_then_completes() {
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: "test -f .checked".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let spec = task_core::ExecutionPlanSpec {
         stages: Vec::new(),
@@ -1644,6 +1645,7 @@ async fn integration_check_failure_is_repaired_when_classified() {
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: scope_check.into(),
         expect_exit: 0,
+        scope: false,
     }];
     let mut b = v2_wu("b", "build", &[]);
     b.context.paths = vec!["web/".into()];
@@ -1652,10 +1654,12 @@ async fn integration_check_failure_is_repaired_when_classified() {
         task_core::WorkUnitCheck {
             cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: scope_check.into(),
             expect_exit: 0,
+            scope: false,
         },
     ];
     adopt_v2_plan(&store, task.id, &["build"], vec![a, b]);
@@ -1724,6 +1728,7 @@ async fn integration_check_failure_replans_when_not_classified() {
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,
@@ -1776,6 +1781,7 @@ async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,
@@ -3151,6 +3157,7 @@ async fn integration_check_failure_without_replans_asks_with_the_failed_checks()
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,

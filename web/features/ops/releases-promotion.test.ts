@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { ReleaseItem } from "../../api/generated/types";
-import { canPromote, judgePromotion, pollDelayMs } from "./releases-promotion";
+import {
+  canPromote,
+  isRollback,
+  judgePromotion,
+  pollDelayMs,
+  promotionActionLabel,
+  promotionConfirmCopy,
+  promotionStatus,
+} from "./releases-promotion";
 
 const item = (patch: Partial<ReleaseItem> = {}): ReleaseItem => ({
   sha12: "aaaaaaaaaaaa",
@@ -42,5 +50,26 @@ describe("releases", () => {
     expect(canPromote(item({ gate_ok: false }))).toBe(false);
     expect(canPromote(item({ is_current: true }))).toBe(false);
     expect(canPromote(item({ promoting: true }))).toBe(false);
+  });
+});
+
+describe("releases の確認表示", () => {
+  it("前の版は巻き戻し、それ以外は昇格の動詞と対象を名前に入れる", () => {
+    expect(promotionActionLabel(item())).toBe("aaaaaaaaaaaa を昇格する");
+    expect(isRollback(item({ is_previous: true }))).toBe(true);
+    expect(promotionActionLabel(item({ is_previous: true }))).toBe("aaaaaaaaaaaa に巻き戻す");
+  });
+  it("確認の文言に対象版・現在版・影響が入る", () => {
+    const copy = promotionConfirmCopy(item({ ref: "main" }), "bbbbbbbbbbbb");
+    expect(copy.target).toContain("対象版 aaaaaaaaaaaa");
+    expect(copy.consequence).toContain("現在版 bbbbbbbbbbbb");
+    expect(copy.consequence).toContain("本番の daemon が aaaaaaaaaaaa に引き継がれ");
+    expect(copy.reversibility).toContain("bbbbbbbbbbbb");
+    expect(promotionConfirmCopy(item(), null).consequence).toContain("現在版 なし");
+  });
+  it("結果を StatusBadge の状態語へ写す", () => {
+    expect(promotionStatus({ state: "pending", detail: "" })).toBe("running");
+    expect(promotionStatus({ state: "succeeded" })).toBe("done");
+    expect(promotionStatus({ state: "failed", error: "x" })).toBe("failed");
   });
 });

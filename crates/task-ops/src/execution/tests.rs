@@ -469,6 +469,7 @@ fn human_replan_overrides_the_spec_of_a_done_work_unit() {
     v1_spec.work_units[0].checks = vec![task_core::WorkUnitCheck {
         cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
         expect_exit: 0,
+        scope: false,
     }];
     let v1 = adopt_plan(
         &store,
@@ -915,6 +916,7 @@ fn planner_replan_rewrites_the_checks_of_a_done_unit() {
     v1_spec.work_units[0].checks = vec![task_core::WorkUnitCheck {
         cmd: "git rev-parse HEAD^2".to_string(),
         expect_exit: 0,
+        scope: false,
     }];
     let v1 = adopt_plan(
         &store,
@@ -932,6 +934,7 @@ fn planner_replan_rewrites_the_checks_of_a_done_unit() {
     let fixed = vec![task_core::WorkUnitCheck {
         cmd: "! git grep -n '<<<<<<<'".to_string(),
         expect_exit: 0,
+        scope: false,
     }];
     v2_spec.work_units[0].checks = fixed.clone();
     let (v2, diff) = replan(

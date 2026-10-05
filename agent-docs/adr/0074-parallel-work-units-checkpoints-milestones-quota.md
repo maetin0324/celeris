@@ -1436,3 +1436,101 @@ replan で返す回避をした。
 ### 残したもの
 
 - schema・migration・API の変更は無い。既に作られた子には届けない（continue は次の段の子が作られる前にしか返せない）。
+
+## 付記: 統合開始と ready 戻しの競合・Ready の孤立統合の回収（2026-10-05）
+
+本番 `33774b6a` で、最後の葉の Done 記録と統合開始の間に task が `Continue{advance}` で Ready へ戻り、
+古い `PhaseSettle::Integrate` の判定から統合 WU だけが Running になる順序を観測した。
+`abort_stale_runs` はその spawn を止めるが、従来の F5-fix6 は Running かつ有効な工程 lease がある task しか
+見なかった。Ready は lease を失い、dispatch gate も Running の統合 WU を見て Skip するため、回復できなかった。
+
+### 決定と実装
+
+1. `TaskStore::try_start_work_unit_integration` は writer の `IMMEDIATE` transaction 内で、task が Running、
+   統合 WU が読み取り時と同じ Pending / Ready（status と updated_at が一致）であることを確認する。
+   一致したときだけ WU を Running にし、既存の `WorkUnitTransitioned{reason: integrate}` を残す。
+   `Dispatcher::start_integration` は成功したときだけ統合を実行する。Ready 戻しが先なら Pending のまま次の dispatch に委ねる。
+2. `Continue{advance}` は同じ writer transaction 内で Running の工程統合 WU を検査する。
+   統合開始が先なら `InvalidTransition{trigger: integration_running}` とし、task の状態・lease・event を変更しない。
+   手元の `integrating` だけを調べる場合と違い、WU の Running 記録から spawn 登録までの隙間も保護される。
+   `Interrupt` / `Cancel` 等の人の操作はこのガードに含めない。
+3. `reconcile_parallel_tasks` は Running に加えて Ready の task の工程統合 WU も調べる。
+   回収は task lease の有無・期限の判定より前に行い、`phase` のある Running の統合 WU を Pending に戻す。
+   reason は F5-fix6 と同じ `orphan_takeover`。再照合で重複 event を作らない。
+4. 対象 task の手元の worker・検査・統合・レビュー・子待ちがある間は回収しない。
+   既存の `lease_holders_gone` を使い、生きている他の active / draining instance がある場合、
+   instance 表を読めない場合、孤児回収の設定が無い場合、自分が draining / standby の場合も回収しない。
+   verify 等の task 対象フィルタを守る。Ready の追加走査は新規受付中かつ孤児回収が有効な場合に限る。
+
+### 検証
+
+`dispatcher/tests/integration_ready_race.rs` の一回フックで、最後の葉が Done、統合は Pending の隙間に
+`reconcile_parallel_tasks` を呼び、Ready 戻しを決定的に先行させる。修正前は abort 後も統合 WU が Running で残り、
+修正後は Pending を維持し通常 dispatch で Done まで進む。逆順、Ready / Running の孤立回収、冪等性、
+生きた持ち主と対象範囲の保護、人の割り込み、古い WU・二重開始の拒否も試験する。CPU 負荷・実 LLM は使わない。
+検査結果は [進捗](../progress/2026-10-05-integration-ready-race.md)、昇格後の確認手順は [統合の Ready 残留の回収を確かめる手順](../../docs/ops/integration-ready-recovery.md) に記録する。
+
+## 付記: 範囲 check は WU の作業時だけ流す（`WorkUnitCheck.scope`、2026-10-05）
+
+### 背景
+
+2026-10-04〜05 の本番で同じ形の誤検出が 4 回あった（01M440S16A の受け入れ条件 3、01M44FP87W、01M4577C94 の
+dispatch-context、01M44C029S の fix-r2）。いずれも WU の「範囲 check」（`git diff --name-only <基点>` が許可範囲の外の
+path を出していないかを見る check）が、**段の統合後**（`start_integration` が D1.4 の 4 でその段の WU の checks を
+Task の worktree で流し直す）や **final review の機械的再評価**（leaf を子 task に上げた `promote_to_task` が checks を
+command の acceptance に写す）で再び流れ、他の WU・main の変更を拾って必ず落ちた。範囲 check は「その WU の変更が
+担当範囲に収まるか」を見るもので、WU の作業ツリーで WU の base と比べるときにだけ意味がある。統合後に落ちた check は
+repair → replan → 人の対処を招き、木の replan 上限（45）に達する一因になった。同じ check が `test -z "$(…)"` の形で
+無言で非 0 になり、ログが空のまま failed になった例もある（01M4577C94）。
+
+### 決定
+
+1. **check に種類を持たせる**: `WorkUnitCheck` に `scope: bool`（既定 `false`。`false` は JSON に書かない）を足す。
+   `scope: true` の check は「範囲 check」— WU 自身の変更が許可範囲に収まるかを見る検査で、**WU の作業時
+   （`spawn_work_unit_checks`、WU の作業ツリー）だけで流す**。`Check::Command`（task の acceptance）には足さない
+   （237 箇所の pattern に波及し、task の acceptance の範囲 check は最初から final review でしか流れないため。
+   task の acceptance に範囲 check を書くこと自体をやめ、leaf の `scope: true` に置く — planner 指示と docs で揃える）。
+2. **統合後・再評価では流さない**:
+   - `start_integration`（D1.4 の 4）は `scope: true` の check を統合の検査の一覧に入れない。統合後の範囲は見ない
+     （統合は first-parent の merge で、各 WU の commit は WU の作業時に検査済み）。
+   - `promote_to_task`（ADR-0079 D4 (3)）は `scope: true` の check を子 task の acceptance に写さない。子 task 自身の
+     leaf が範囲 check を持つ。残る check が無ければ従来どおり `done_when` → reviewer に倒す。
+   - repair に渡す範囲（`repair_scope_from_units`・`review_repair_scope`、付記 2026-10-02）は `scope: true` の check を
+     範囲外差分の check として集める（従来の `cmd` に `git diff` を含むという推定は互換のため残す）。
+3. **基点を環境変数で渡す**: WU の checks（と WU の run）の環境に `CELERIS_WU_BASE`（WU の `base_commit`）と
+   `CELERIS_WU_TARGET`（統合先 = Task のブランチ `celeris/<task_id>`）を足す。planner は計画時に base の sha を知らないので、
+   既定の範囲 check はこれを使う形に揃える:
+   `out=$({ git diff --name-only "${CELERIS_WU_BASE:-HEAD}"; git ls-files --others --exclude-standard; } | sort -u | grep -vE '^(<許可 path の正規表現>)'); [ -z "$out" ] || { echo "out of scope:"; echo "$out"; exit 1; }`
+   （checks は WU の commit より前に走るので、commit 済みの差分だけでなく作業ツリーの差分と未追跡 file も見る。
+   commit だけを見るなら `git log --format= --name-only "$CELERIS_WU_BASE..HEAD" --not "$CELERIS_WU_TARGET"`。）
+4. **落ちるときは path を出す**: 範囲 check は範囲外の path を標準出力に出してから非 0 で終える（上の形）。
+   `test -z "$(…)"` の無言の形は書かない。dispatcher 側は `scope: true` の check が非 0 で stdout・stderr とも空なら、
+   不合格の判定文に「範囲 check が範囲外の path を出していない」旨の一文を足す（原因の特定を速くする。判定は変えない）。
+5. **互換**: `scope` の無い既存の計画は従来どおり（全 check が統合でも流れる）。planner 指示（`PLANNER_CHECK_GUIDANCE`・
+   /1 と /3 の形の説明）と docs に `scope: true` と上の既定の形を載せる。LLM は dispatcher・store に入れない。
+
+### 検証
+
+一時 repository で決定的に確かめる（CPU 焼き負荷・実 LLM なし）: 2 つの WU が別の範囲（`a/`・`b/`）を変え、それぞれ
+`scope: true` の範囲 check を持つ。(a) 段の統合後の統合の検査に範囲 check が含まれず、task が done になる。
+(b) WU の作業時に範囲外の file を書くと従来どおり `WorkUnitChecksFailed` になり、判定文に範囲外の path が載る。
+`promote_to_task` が scope check を acceptance に写さないこと、schema（`docs/protocol/*.schema.json`・`docs/api/v1`）
+の再生成も検査に含める。結果は [進捗](../progress/2026-10-05-scope-check-work-unit-only.md)。
+
+### 付記の実装突き合わせ（2026-10-05）
+
+- `WorkUnitCheck.scope` は `crates/task-core/src/execution_plan.rs`。環境変数名の定数 `WU_BASE_ENV` / `WU_TARGET_ENV` も同じ module。
+  schema（`docs/protocol/execution-plan*.schema.json`・`docs/api/v1/*.schema.json`）と gui/web の生成型は再生成した。
+- 統合の検査の一覧は `phase_integration::integration_checks_for_phase`（純粋関数）。repair の範囲は `is_repair_scope_check`
+  （`scope || cmd に git diff`）。`promote_to_task` は `scope` の check を acceptance に写さない。
+- `CELERIS_WU_TARGET` の値は Task の作業場所で最初の git の worktree のブランチ（`<worktree_branch_prefix><task_id>`、既定で
+  `celeris/<task_id>`）。git の worktree が無ければ設定しない。`CELERIS_WU_BASE` は checks では `wu.base_commit`、run では WU の
+  worktree を用意したときの base（無ければ `wu.base_commit`）。Task の worktree を共有する WU（repair・並列 1）は base が無いことが
+  あり、そのときは設定しない — 既定の形は `"${CELERIS_WU_BASE:-HEAD}"` と書き、base が無ければ作業ツリーの未 commit の差分だけを見る。
+- run の環境への受け渡しは `RunExtras.work_unit_env` → `RunAdapterPrep.work_unit_env`（followups の env の後、コンテナの前）。
+  `with_env` を持たない adapter には渡らず debug ログだけ出す（`CARGO_TARGET_DIR` と同じ扱い）。
+- D4 の一文（`SILENT_SCOPE_CHECK_HINT`）は判定文に `stdout_tail="" stderr_tail=""` がそのまま含まれるときだけ足す。timeout・exec 失敗には足さない。
+- task の acceptance（`Check::Command`）は `scope` を持たないので、`review_repair_scope` の acceptance 側は従来の `git diff` 推定のまま。
+- 試験: `crates/task-dispatch/src/dispatcher/tests/scope_checks.rs`（一時 repository・偽 adapter、(a)(b)(c) と純粋関数の試験）、
+  `crates/task-core/src/tree/tests.rs`（`promote_to_task_drops_scope_checks_from_acceptance`）、`crates/task-worker/src/claude_code/tests.rs`（planner 指示の文言）。
+  使い方は [`agent-docs/guides/work-unit-checks.md`](../guides/work-unit-checks.md)。

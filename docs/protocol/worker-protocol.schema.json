@@ -2485,6 +2485,13 @@
           ],
           "description": "タスクに役割があるときだけ `Some`（ADR-0016 D1）。"
         },
+        "routing_context_ref": {
+          "description": "多目的 routing ADR（2026-10-04）§10 Phase 3: dispatcher が daemon 内の registry に登録した\nRoutingContext を指す opaque な参照（期限付き。中身は運ばない）。registry を配線していない\ndaemon・reviewer run では `None`。adapter が LLM 要求へどう載せるかは task-worker 側が決める。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "session": {
           "anyOf": [
             {

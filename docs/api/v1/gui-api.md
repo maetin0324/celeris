@@ -3,6 +3,8 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-05 Phase 1（model routing）— 読取専用 `GET /llm/routing/catalog` を追加。
+  `GET /tasks/{id}/routing` の各 run に任意の `optimizer` trace を追加。旧欄は維持し、DB migration は無い。
 - 改訂: 2026-10-04（ADR 2026-10-04-release-notes）— **追加のみ。v1 のまま**。エンドポイント 175〜176:
   `GET /releases/{sha12}/promotion-preview`・`GET /deliveries`（§3.67a / §3.67b）。`GET /releases` の
   `items[]` に `notes`（そのリリースの説明。`notes.json`）と `promotion`（`current` から昇格したら入るものの
@@ -455,6 +457,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 | 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
+| 178 | GET | `/llm/routing/catalog` | モデル・deployment・lane policy の設定 snapshot（Phase 1、読取専用） | `RoutingCatalogView` | celeris の `RoutingCatalogReader` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -2722,6 +2725,12 @@ Console の入力欄の文の入口。`POST /org/{id}/messages`（§3.47）と�
 
 ### 3.108 `GET /llm/sources` → 200 `LlmSourcesView`（ADR-0053 D4）
 
+Phase 1 の `GET /llm/routing/catalog` は通常の読み取り認証を要し、クエリを受け付けない。
+`catalog_version`、`mode`、`models[]`、`deployments[]`、`policies[]`、`warnings[]` を返す。
+モデルは能力・context limit・品質・価格、deployment は source/model の対応・課金種別・lane・価格上書きだけを公開する。
+品質・価格・context limit の欠測は `null`。credential、token、account dir、endpoint URL、host は返さない。
+catalog snapshot を渡せない場合は 409 `llm_proxy_unavailable`。reload が成功した後の要求は新しい snapshot を読む。
+
 LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127.0.0.1:18100`、`/api/v1` の外）が
 使っている供給元の観測。判断（選択・cooldown）はプロキシの中で決定的に行われる。ここは**見えるように
 するだけ**（GUI の表示は `/accounts` の「LLM source」節）。
@@ -3060,6 +3069,7 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 
 `task_id`、`assignee`、`routing`、`runs[]` を返す。run ごとの routing 監査はイベントから組み立てる。
 クエリは受け付けず、不明な task は 404 `task_not_found`。`routing.rs` を参照。
+各 run の `optimizer` は `RoutingDecided.record.optimizer` がある場合のみ付く任意欄。旧 event では省略する。
 
 #### 3.126.2 `POST /tasks/{id}/rereview` → 200 `TransitionResult`（管理系）
 
@@ -3416,6 +3426,6 @@ Reviewer条件がある `done` の仕事、または直前の遷移が `review_f
 読み取りと同じ）。`routing` は `Task.routing`（`tier_source`・`assignee_explicit`・CoS/計画/委譲が書いたが
 捨てた担当 `dropped_assignee`・`features` の上書き）。`runs[]` はワーカー run ごとの `RoutingAudit`（古い順:
 `task_id, run_id, org_node, harness, adapter, provider, account, lane, model, reasoning_effort, features, rule_id,
-policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review`）。
+policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review, optimizer?`）。
 各 run の `escalation` がエスカレーションの履歴。run が無いタスクは `runs: []`、知らないタスクは 404、
 クエリパラメータは 400。

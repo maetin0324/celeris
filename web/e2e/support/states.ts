@@ -73,12 +73,27 @@ function longIdFixtures(): Fixtures {
   list.items[0] = { ...list.items[0], id: LONG_TASK_ID, project_id: LONG_PROJECT_ID };
   const detail = structuredClone(base["/api/v1/tasks/T1"]) as Detail;
   detail.task = { ...detail.task, id: LONG_TASK_ID, project_id: LONG_PROJECT_ID };
-  const timeline = { ...(base["/api/v1/tasks/T1/timeline"] as object), task_id: LONG_TASK_ID };
+  // 詳細画面が取得する T1 の下位の path（timeline・execution・routing・changes・tree・artifacts・runs）を
+  // 長い ID の path に写す。写さないと既定の 404 になり、実行節などに取得失敗帯が出る（fix-r7.md）。
+  const sub: Fixtures = {};
+  for (const [path, value] of Object.entries(base)) {
+    if (!path.startsWith("/api/v1/tasks/T1/")) continue;
+    sub[path.replace("/api/v1/tasks/T1/", `/api/v1/tasks/${LONG_TASK_ID}/`)] = withLongTaskId(value);
+  }
   return {
+    ...sub,
     "/api/v1/tasks": list,
     [`/api/v1/tasks/${LONG_TASK_ID}`]: detail,
-    [`/api/v1/tasks/${LONG_TASK_ID}/timeline`]: timeline,
   };
+}
+
+/** fixture の task_id（execution の plan・routing の runs の中も）を長い ID に差し替える。関数の fixture はそのまま。 */
+function withLongTaskId(value: unknown): unknown {
+  if (typeof value === "function" || value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(withLongTaskId);
+  return Object.fromEntries(
+    Object.entries(value).map(([k, v]) => [k, k === "task_id" && v === "T1" ? LONG_TASK_ID : withLongTaskId(v)]),
+  );
 }
 
 function longIdInbox(): InboxItem[] {

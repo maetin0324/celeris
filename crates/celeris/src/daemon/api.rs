@@ -240,6 +240,8 @@ impl task_api::LlmSourcesReader for LlmSourcesAdapter {
                     last_hour_requests: s.last_hour_requests,
                     last_hour_prompt_tokens: s.last_hour_prompt_tokens,
                     last_hour_completion_tokens: s.last_hour_completion_tokens,
+                    // Phase 2: deployment の状態の配線は config-api の統合で行う（ここでは空）。
+                    deployments: vec![],
                 })
                 .collect(),
             celeris_tiers: view

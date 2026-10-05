@@ -1,7 +1,7 @@
 //! ADR-0069 D5: `GET /tasks/{id}/routing`（読み取り）。
 //!
 //! なぜその担当（org）・harness・lane・model になったかを、`task_ops::routing_audit` がイベントから
-//! 組み立てた run ごとの監査と、タスクの routing の出自（`Task.routing`、捨てた LLM の担当を含む）で返す。
+//! 組み立てた run ごとの監査（Phase 2 は proxy の要求単位の子 trace と `audit_incomplete` を含む）と、タスクの routing の出自（`Task.routing`、捨てた LLM の担当を含む）で返す。
 //! 集めるのは決定的（ストアだけ）。LLM は関与しない。
 
 use axum::extract::{RawQuery, State};
@@ -32,13 +32,15 @@ pub(crate) async fn routing(
                 .get(id)
                 .map_err(store_problem)?
                 .ok_or_else(|| ApiProblem::task_not_found(id))?;
-            let runs = task_ops::routing_audit::task_routing_audit(store, id)
+            // Phase 2: proxy の要求単位の子 trace は同じ DB の proxy log（相関欄）と照合して結ぶ。
+            let audit = task_ops::routing_audit::task_routing_audit_with_requests(store, store, id)
                 .map_err(|e| ops_problem(store, e, None))?;
             Ok(TaskRoutingView {
                 task_id: id,
                 assignee: task.assignee,
                 routing: task.routing,
-                runs,
+                runs: audit.runs,
+                unbound_requests: audit.unbound_requests,
             })
         })
         .await?;

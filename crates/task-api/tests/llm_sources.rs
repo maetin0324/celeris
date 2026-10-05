@@ -33,6 +33,7 @@ impl LlmSourcesReader for FakeReader {
                 last_hour_requests: 3,
                 last_hour_prompt_tokens: 40,
                 last_hour_completion_tokens: 10,
+                deployments: vec![],
             }],
             celeris_tiers: vec![],
         }

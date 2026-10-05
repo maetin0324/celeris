@@ -182,6 +182,38 @@ fn candidates(trace: Option<&RoutingTraceV1>) -> Vec<CandidateV1> {
     out
 }
 
+/// Read-only handle that leaves the file set untouched. A read-only connection to a WAL-mode
+/// database otherwise creates empty `-wal`/`-shm` files when none exist; with no WAL there is
+/// nothing to miss, so the file is opened `immutable`. With an existing WAL (a live daemon) the
+/// normal read-only open reads it and only the existing wal-index is used.
+fn open_read_only(db_path: &Path) -> Result<Connection, ReplayError> {
+    let mut wal = db_path.as_os_str().to_owned();
+    wal.push("-wal");
+    if Path::new(&wal).exists() {
+        return Ok(Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?);
+    }
+    let path = db_path
+        .to_str()
+        .ok_or(ReplayError::Invalid("database path is not UTF-8"))?;
+    let mut uri = String::from("file:");
+    for c in path.chars() {
+        match c {
+            '%' => uri.push_str("%25"),
+            '?' => uri.push_str("%3F"),
+            '#' => uri.push_str("%23"),
+            c => uri.push(c),
+        }
+    }
+    uri.push_str("?mode=ro&immutable=1");
+    Ok(Connection::open_with_flags(
+        uri,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
+    )?)
+}
+
 /// Opens the existing SQLite file without migration, WAL creation or any write-capable handle.
 pub fn export(db_path: &Path, options: &ExportOptions) -> Result<DatasetV1, ReplayError> {
     let from = options
@@ -197,7 +229,7 @@ pub fn export(db_path: &Path, options: &ExportOptions) -> Result<DatasetV1, Repl
     if from.zip(until).is_some_and(|(from, until)| from > until) {
         return Err(ReplayError::Invalid("from_utc exceeds until_utc"));
     }
-    let conn = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = open_read_only(db_path)?;
     let mut stmt = conn.prepare("SELECT task_id, ts, json FROM events ORDER BY task_id, seq")?;
     let raw = stmt.query_map([], |r| {
         Ok((

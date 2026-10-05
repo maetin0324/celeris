@@ -103,16 +103,19 @@ pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron
 /// ADR parallel integration D4: 受信箱の統合依頼 event を絞る index。
 pub(crate) const MIGRATION_0047: &str =
     include_str!("../../migrations/0047_events_integration_request_index.sql");
+/// CoS chat D1: durable conversation, attachments, operations, and FTS.
+pub(crate) const MIGRATION_0050: &str = include_str!("../../migrations/0050_cos_chat.sql");
 
-/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0048/0049 routing、
+/// 0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 47;
+pub const SCHEMA_VERSION: u32 = 50;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -161,6 +164,7 @@ impl SqliteStore {
             45 => Ok(MIGRATION_0045),
             46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
+            50 => Ok(MIGRATION_0050),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

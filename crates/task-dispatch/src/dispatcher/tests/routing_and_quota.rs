@@ -1353,6 +1353,7 @@ async fn repeated_review_failures_escalate_the_retry_lane_one_step() {
             },
             quota_reason: None,
             work_unit_id: None,
+            optimizer: None,
         };
         for event in [
             Event::RoutingDecided {

@@ -1160,6 +1160,7 @@ impl Dispatcher {
             },
             quota_reason: None,
             work_unit_id: None,
+            optimizer: None,
         };
         let _ = self.store.append_event(
             task.id,

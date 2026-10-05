@@ -191,6 +191,7 @@ fn baseline_override_fixture() -> (WorkUnitSpec, ExecutionPlanSpec) {
     done_spec.checks = vec![WorkUnitCheck {
         cmd: "git diff --quiet 06e9a03cffe8 -- gui".to_string(),
         expect_exit: 0,
+        scope: false,
     }];
     let mut fixed = done_spec.clone();
     fixed.checks[0].cmd =
@@ -350,6 +351,7 @@ fn plan_size_limits_reject_oversized_work_unit_fields() {
         .map(|i| WorkUnitCheck {
             cmd: format!("cmd {i}"),
             expect_exit: 0,
+            scope: false,
         })
         .collect();
     let p = plan(vec![a]);
@@ -1338,6 +1340,7 @@ fn leaf(key: &str, stage: &str) -> PlanUnitSpec {
         checks: vec![WorkUnitCheck {
             cmd: "true".into(),
             expect_exit: 0,
+            scope: false,
         }],
         context: UnitContext::default(),
         harness: None,
@@ -1535,6 +1538,7 @@ fn rejects_task_unit_with_checks() {
     p.units[0].checks = vec![WorkUnitCheck {
         cmd: "true".into(),
         expect_exit: 0,
+        scope: false,
     }];
     p.units[0].budget = Some(WorkUnitBudget {
         max_turns: Some(10),
@@ -2010,12 +2014,14 @@ fn planner_replan_may_change_only_the_checks_of_a_done_unit() {
     done.checks = vec![WorkUnitCheck {
         cmd: "git rev-parse HEAD^2".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let done_units = vec![("a".to_string(), done.clone())];
     let mut fixed = done.clone();
     fixed.checks = vec![WorkUnitCheck {
         cmd: "! git grep -n '<<<<<<<'".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let planner = PlanContext::default();
     let v = validate_with(
@@ -2079,6 +2085,7 @@ fn carry_done_units_v3_keeps_the_planners_non_empty_checks() {
     merged.checks = vec![WorkUnitCheck {
         cmd: "git rev-parse HEAD^2".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let active = ExecutionPlanSpec {
         schema: EXECUTION_PLAN_SCHEMA_V3.into(),
@@ -2095,6 +2102,7 @@ fn carry_done_units_v3_keeps_the_planners_non_empty_checks() {
     rewritten.checks = vec![WorkUnitCheck {
         cmd: "! git grep -n '<<<<<<<'".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let mut terse = leaf("other", "s1");
     terse.checks = vec![];

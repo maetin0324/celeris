@@ -1038,6 +1038,9 @@ struct RunExtras {
     /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
     /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
     cargo_target_work_unit: Option<(String, String)>,
+    /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
+    /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
+    work_unit_env: Option<Vec<(String, String)>>,
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,

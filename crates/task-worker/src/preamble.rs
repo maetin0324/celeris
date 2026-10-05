@@ -69,6 +69,10 @@ pub fn work_unit_branch_section(wu: &crate::protocol::WorkUnitPromptContext) -> 
     out.push_str(
         "- 同じ工程の他の WorkUnit が別の作業ツリーで並行して走っています。**他の WorkUnit が担当するファイルには触らないでください**（自分の Objective の範囲だけを変更する）。工程の最後に celeris が各ブランチを決定的に merge します。\n",
     );
+    // ADR-0074 付記 2026-10-05 D3: 範囲 check の基点・統合先。worker も同じ check を自分で流せるように。
+    out.push_str(
+        "- この run の環境には `CELERIS_WU_BASE`（この WorkUnit の base commit）と `CELERIS_WU_TARGET`（統合先のブランチ）が入っています。範囲 check（`\"scope\":true`）は同じ変数を使うので、done を返す前に同じコマンドを自分で走らせて範囲外の path が無いことを確かめてください。\n",
+    );
     if !wu.parallel_siblings.is_empty() {
         out.push_str("- 並行しうる WorkUnit:\n");
         for s in &wu.parallel_siblings {

@@ -407,6 +407,37 @@ fn promoted_and_demoted_units_keep_their_work_and_validate() {
     assert!(!report.spec.units[0].is_task(), "not forced into a task");
 }
 
+/// ADR-0074 付記 2026-10-05: `promote_to_task` は範囲 check（`scope: true`）を子 task の acceptance に写さない。
+/// 普通の check は従来どおり command の acceptance になり、範囲 check しか無ければ `done_when` → reviewer に倒す。
+#[test]
+fn promote_to_task_drops_scope_checks_from_acceptance() {
+    let mut mixed = leaf_spec("a", "s1", true);
+    mixed.checks.push(crate::execution_plan::WorkUnitCheck {
+        cmd: "out=$(git diff --name-only \"$CELERIS_WU_BASE\" | grep -vE '^a/'); [ -z \"$out\" ]"
+            .into(),
+        expect_exit: 0,
+        scope: true,
+    });
+    let promoted = promote_to_task(&mixed);
+    assert_eq!(promoted.acceptance.len(), 1, "{:?}", promoted.acceptance);
+    assert!(matches!(
+        &promoted.acceptance[0].check,
+        Check::Command { cmd, .. } if cmd == "test -f a.txt"
+    ));
+    assert!(promoted.checks.is_empty());
+
+    let mut only_scope = leaf_spec("b", "s1", true);
+    only_scope.checks = vec![crate::execution_plan::WorkUnitCheck {
+        cmd: "git diff --name-only \"$CELERIS_WU_BASE\"".into(),
+        expect_exit: 0,
+        scope: true,
+    }];
+    let promoted = promote_to_task(&only_scope);
+    assert_eq!(promoted.acceptance.len(), 1, "{:?}", promoted.acceptance);
+    assert_eq!(promoted.acceptance[0].text, "b works");
+    assert!(matches!(promoted.acceptance[0].check, Check::Reviewer));
+}
+
 fn many_leaves(stage: &str, n: usize) -> Vec<PlanUnitSpec> {
     (0..n)
         .map(|i| leaf_spec(&format!("{stage}-l{i}"), stage, false))

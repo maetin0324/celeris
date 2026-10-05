@@ -643,7 +643,7 @@ impl Dispatcher {
                 unit.spec
                     .checks
                     .iter()
-                    .filter(|check| check.cmd.contains("git diff"))
+                    .filter(|check| super::phase_integration::is_repair_scope_check(check))
                     .map(|check| check.cmd.clone()),
             );
         }
@@ -704,10 +704,12 @@ impl Dispatcher {
                 task_core::WorkUnitCheck {
                     cmd: format!("git merge-base --is-ancestor {target_sha} HEAD"),
                     expect_exit: 0,
+                    scope: false,
                 },
                 task_core::WorkUnitCheck {
                     cmd: "test -z \"$(git status --porcelain)\"".to_string(),
                     expect_exit: 0,
+                    scope: false,
                 },
             ],
             context: Default::default(),

@@ -300,9 +300,12 @@ pub fn promote_to_task(
     use crate::model::{Check, Criterion};
     let mut out = unit.clone();
     out.kind = crate::execution_plan::WorkUnitKind::Task;
+    // ADR-0074 付記 2026-10-05: 範囲 check（`scope: true`）は WU の作業時だけで意味を持つので acceptance に写さない
+    // （子 task の final review で他の変更を拾って必ず落ちる）。子 task 自身の leaf が範囲 check を持つ。
     let mut acceptance: Vec<Criterion> = unit
         .checks
         .iter()
+        .filter(|c| !c.scope)
         .map(|c| Criterion {
             text: format!("`{}` exits {}", c.cmd, c.expect_exit),
             check: Check::Command {
@@ -387,6 +390,7 @@ pub fn demote_to_leaf(
             crate::model::Check::Command { cmd, expect_exit } => Some(WorkUnitCheck {
                 cmd: cmd.clone(),
                 expect_exit: *expect_exit,
+                scope: false,
             }),
             _ => None,
         })

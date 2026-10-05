@@ -711,6 +711,15 @@ impl Dispatcher {
         {
             tracing::warn!(task_id = %task.id, work_unit = %wu.key, error = %e, "failed to record the work unit run start; continuing without work-unit context");
         }
+        // ADR-0074 付記 2026-10-05 D3: WU の run にも checks と同じ `CELERIS_WU_BASE` / `CELERIS_WU_TARGET`。
+        if let Some(wu) = &current_wu {
+            let base = wu_workspace
+                .as_ref()
+                .map(|w| w.base.as_str())
+                .or(wu.base_commit.as_deref());
+            let env = self.work_unit_scope_env(&task, base);
+            extras.work_unit_env = (!env.is_empty()).then_some(env);
+        }
         if let Some(w) = &wu_workspace {
             extras.artifacts_dir_override = Some(w.artifacts_dir.clone());
             // ADR-0074 F5-fix（不具合 1）: WU ごとの `CARGO_TARGET_DIR`。

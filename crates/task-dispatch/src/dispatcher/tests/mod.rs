@@ -2838,6 +2838,7 @@ fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sle
         task_core::WorkUnitCheck {
             cmd: "true".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: format!(
@@ -2845,6 +2846,7 @@ fn adopt_gate_plan(store: &Arc<dyn TaskStore>, task_id: TaskId, flag: &Path, sle
                 f = flag.display()
             ),
             expect_exit: 0,
+            scope: false,
         },
     ];
     let spec = task_core::ExecutionPlanSpec {
@@ -3140,6 +3142,9 @@ mod drain_hand_off;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
 mod phase_effect_ab;
+/// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
+/// （`src/dispatcher/tests/scope_checks.rs`）。
+mod scope_checks;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

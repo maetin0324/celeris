@@ -12,6 +12,7 @@ export const spaRoutePatterns = [
   "/projects/$id",
   "/projects/$id/docs",
   "/projects/$id/docs/maintenance",
+  "/projects/$id/browser-identities",
   "/board",
   "/knowledge",
   "/knowledge/inbox",
@@ -32,6 +33,8 @@ export const spaRoutePatterns = [
   "/clusters",
   "/releases",
   "/graph",
+  "/browser",
+  "/browser/runs/$taskId/$runId",
   "/help",
 ];
 

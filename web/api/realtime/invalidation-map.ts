@@ -121,9 +121,9 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   project_plan_proposed: { sets: ["T", "L", "N", "P"] },
   project_plan_decided: { sets: ["T", "L", "N", "P"] },
   // --- schema にあり D6 の表に無い種類（隣接する種類にならう） ---
-  browser_updated: { sets: ["T", "R", "N"] },
-  browser_wait_opened: { sets: ["T", "R", "N"] },
-  browser_wait_resolved: { sets: ["T", "R", "N"] },
+  browser_updated: { sets: ["T", "R", "N"], extra: () => [["browser"]] },
+  browser_wait_opened: { sets: ["T", "R", "N"], extra: () => [["browser"]] },
+  browser_wait_resolved: { sets: ["T", "R", "N"], extra: () => [["browser"]] },
   cluster_job_wait_started: { sets: ["T", "R", "E", "L"] },
   cluster_job_wait_polled: { sets: ["T", "R", "E"] },
   cluster_job_wait_finished: { sets: ["T", "R", "E", "L"] },

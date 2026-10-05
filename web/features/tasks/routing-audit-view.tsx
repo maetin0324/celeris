@@ -3,6 +3,7 @@ import type {
   CandidateTrace,
   RequestRoutingAudit,
   RoutingOutcome,
+  RoutingShadowAudit,
   RoutingTraceV1,
   RunRoutingAudit,
   TaskRoutingView,
@@ -19,6 +20,10 @@ import { CostRows } from "../ops/routing-state-view";
 // 実際に使った source（actual_sources。dispatch で未確定だった model を含む）、構造化した軌跡
 // escalation（escalation_audit）、run の outcome（outcome_state で not_recorded・unreviewed・judged を
 // 区別。audit_incomplete とは別の軸で、どちらも false や 0 に丸めない）を追加で出す。
+//
+// Phase 4（§7.1・§7.2・§10）: shadow 監査（routing_shadow）を primary の欄とは別の節に出す。shadow ごとに
+// decision/execution、completed/failed/dropped と理由、候補と primary との差、token、上限の予約と消費を
+// 書く。shadow は primary の選択を変えないので、primary の表示はここから何も読まない。欠測は「不明」。
 
 export function RoutingAuditView({ data }: { data: TaskRoutingView }) {
   return (
@@ -68,6 +73,7 @@ function RunAudit({ run }: { run: RunRoutingAudit }) {
       ) : (
         <RequestList requests={run.requests} />
       )}
+      {run.routing_shadow && run.routing_shadow.length > 0 ? <ShadowList shadows={run.routing_shadow} /> : null}
       {run.optimizer ? (
         <div className="space-y-1">
           <p className="font-semibold">最適化の比較（mode {run.optimizer.mode}）</p>
@@ -121,6 +127,67 @@ function OutcomeView({
       {judgedLabel(outcome?.review_passed)} / reward {outcome?.reward ?? UNKNOWN}
     </p>
   );
+}
+
+const SHADOW_KIND_LABEL: Record<RoutingShadowAudit["kind"], string> = {
+  decision: "判断のみ（decision、追加呼出しなし）",
+  execution: "実行（execution、候補で生成）",
+};
+
+const SHADOW_STATUS_LABEL: Record<RoutingShadowAudit["status"], string> = {
+  completed: "完了",
+  failed: "失敗",
+  dropped: "破棄",
+};
+
+function ShadowList({ shadows }: { shadows: readonly RoutingShadowAudit[] }) {
+  return (
+    <section className="space-y-1" aria-label="shadow 監査">
+      <p className="font-semibold">shadow（primary の選択は変えない比較）</p>
+      <ul className="ml-4 list-disc space-y-2">
+        {shadows.map((shadow) => (
+          <ShadowRow key={shadow.shadow_id} shadow={shadow} />
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function ShadowRow({ shadow }: { shadow: RoutingShadowAudit }) {
+  const reservation = shadow.reservation;
+  return (
+    <li className="break-words" aria-label={`shadow ${shadow.shadow_id}`}>
+      <p>
+        shadow {shadow.shadow_id}（primary の決定 {shadow.primary_decision_id}）: {SHADOW_KIND_LABEL[shadow.kind]} /{" "}
+        {SHADOW_STATUS_LABEL[shadow.status]}
+        {shadow.status === "completed" ? "" : ` / 理由 ${shadow.reason ?? UNKNOWN}`}
+      </p>
+      <p>
+        候補: source {shadow.candidate_source ?? UNKNOWN} / model {shadow.candidate_model ?? UNKNOWN} / primary との差{" "}
+        {differsLabel(shadow.differs_from_primary)}
+      </p>
+      {shadow.kind === "execution" ? (
+        <p>
+          token: 入力 {shadow.input_tokens ?? UNKNOWN} / 出力 {shadow.output_tokens ?? UNKNOWN}
+        </p>
+      ) : null}
+      {reservation ? (
+        <p>
+          上限消費（{reservation.utc_day} UTC、{reservation.state}）: 予約 {reservation.reserved_tokens} token・
+          {usdLabel(reservation.reserved_effective_usd)} / 消費 {reservation.charged_tokens} token・
+          {usdLabel(reservation.charged_effective_usd)}
+        </p>
+      ) : shadow.kind === "execution" ? (
+        <p>上限消費: {UNKNOWN}（予約の記録なし）</p>
+      ) : null}
+    </li>
+  );
+}
+
+function differsLabel(value: boolean | null | undefined): string {
+  if (value === true) return "あり";
+  if (value === false) return "なし（同じ）";
+  return UNKNOWN;
 }
 
 function judgedLabel(value: boolean | null | undefined): string {

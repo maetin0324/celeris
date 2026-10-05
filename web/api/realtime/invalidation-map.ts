@@ -107,6 +107,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   routing_features_recorded: { sets: ["T", "R"] },
   routing_request_decided: { sets: ["T", "R"] },
   routing_outcome_recorded: { sets: ["T", "R"] },
+  // Phase 4: shadow 監査（primary とは別欄）。対象 task の routing 監査（R）だけを古くする。
+  routing_shadow_recorded: { sets: ["T", "R"] },
   checkpoint_saved: { sets: ["T", "R", "E"] },
   execution_planned: { sets: TLE },
   work_unit_transitioned: { sets: TLE },

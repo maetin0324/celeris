@@ -2,7 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
 import type { TaskRoutingView } from "../../api/generated/types";
-import { routingAuditFixture, routingTrajectoryFixture, validateFixture } from "../../e2e/support/fake-daemon.mjs";
+import {
+  routingAuditFixture,
+  routingShadowFixture,
+  routingTrajectoryFixture,
+  validateFixture,
+} from "../../e2e/support/fake-daemon.mjs";
 import { RoutingAuditView } from "./routing-audit-view";
 
 const html = (data: TaskRoutingView) => renderToStaticMarkup(<RoutingAuditView data={data} />);
@@ -80,5 +85,54 @@ describe("task の routing 軌跡（ADR 2026-10-04-multi-objective-model-routing
     expect(out).toContain("outcome: 未レビュー（合否は null のまま）");
     expect(out).toContain("outcome: 未記録");
     expect(out).not.toContain("outcome: 判定済み");
+  });
+});
+
+// shadow 1 件の <li> の中身だけを取り出す。
+function shadow(out: string, shadowId: string): string {
+  const start = out.indexOf(`aria-label="shadow ${shadowId}"`);
+  expect(start).toBeGreaterThanOrEqual(0);
+  return out.slice(start, out.indexOf("</li>", start));
+}
+
+describe("task の routing shadow 監査（ADR 2026-10-04-multi-objective-model-routing §7.1・§10 Phase 4）", () => {
+  it("fixture routing_shadow は TaskRoutingView の生成型に合う", () => {
+    expect(validateFixture(routingShadowFixture, schema.$defs.TaskRoutingView)).toEqual([]);
+  });
+
+  it("shadow は primary とは別の節に出し、primary の実行枠は primary の値のまま", () => {
+    const out = html(routingShadowFixture);
+    expect(out).toContain("実行枠: 供給元 claude-oauth / model claude-sonnet / 口座 main");
+    const section = out.indexOf('aria-label="shadow 監査"');
+    expect(section).toBeGreaterThan(out.indexOf("実行枠: 供給元 claude-oauth"));
+    expect(out.match(/aria-label="shadow 監査"/g)).toHaveLength(1);
+  });
+
+  it("decision と execution、completed/failed/dropped と理由、候補との差を出す", () => {
+    const out = html(routingShadowFixture);
+    const s1 = shadow(out, "S1");
+    expect(s1).toContain("判断のみ（decision、追加呼出しなし） / 完了");
+    expect(s1).toContain("候補: source openai-compatible:qwen / model Qwen/Qwen3-Coder / primary との差 あり");
+    expect(s1).not.toContain("上限消費");
+    expect(shadow(out, "S2")).toContain("primary との差 なし（同じ）");
+    expect(shadow(out, "S3")).toContain("実行（execution、候補で生成） / 失敗 / 理由 timeout");
+    expect(shadow(out, "S4")).toContain("破棄 / 理由 cap_exceeded");
+  });
+
+  it("上限の予約と消費を出し、欠測は不明と書く（0 に丸めない）", () => {
+    const out = html(routingShadowFixture);
+    expect(shadow(out, "S2")).toContain(
+      "上限消費（2026-10-05 UTC、charged）: 予約 1500 token・$0.05 / 消費 1000 token・$0.03",
+    );
+    expect(shadow(out, "S3")).toContain("token: 入力 800 / 出力 不明");
+    const s4 = shadow(out, "S4");
+    expect(s4).toContain("候補: source 不明 / model 不明 / primary との差 不明");
+    expect(s4).toContain("上限消費: 不明（予約の記録なし）");
+    expect(s4).not.toContain("0 token");
+  });
+
+  it("shadow の記録が無い run には shadow の節を出さない", () => {
+    const out = html({ ...routingShadowFixture, runs: routingShadowFixture.runs.slice(1) });
+    expect(out).not.toContain("shadow 監査");
   });
 });

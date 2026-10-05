@@ -23,11 +23,9 @@ async function expectNoHorizontalScroll(page: Page) {
   expect(overflow, "横 scroll が出ている").toBeLessThanOrEqual(0);
 }
 
-/** 画面が状態を描けない所見（記録 qa-fixtures.md に書いたもの）。期待どおり失敗する試験として残す。 */
-const findings: Record<string, string> = {
-  "long-text /inbox":
-    "受信箱の項目の題名 link が inline-flex の中で break-words のため、区切りの無い長い語が折り返さず 360px で横 scroll が出る",
-};
+/** 画面が状態を描けない所見（記録 qa-fixtures.md に書いたもの）。期待どおり失敗する試験として残す。
+ * 現在の所見は無し（受信箱の題名 link は wrap-anywhere で折り返し、横 scroll は出ない: ux-gates.md）。 */
+const findings: Record<string, string> = {};
 
 const timeout = { timeout: 20_000 };
 

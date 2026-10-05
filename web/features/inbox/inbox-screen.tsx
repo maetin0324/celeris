@@ -30,7 +30,7 @@ import {
 export type InboxSearch = { project?: string; kind?: InboxKind };
 
 // スマホでも押せるよう、行内のリンクも 44px の高さを持たせる（mobile-audit）。
-const linkClass = "inline-flex min-h-11 min-w-11 items-center underline break-words";
+const linkClass = "inline-flex min-h-11 min-w-11 items-center underline wrap-anywhere";
 
 const fieldClass =
   "block min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";

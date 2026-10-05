@@ -300,4 +300,4 @@ pub use retry_policy::{
     AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,
     EscalationThresholds, RetryDecision, attempt_history_with_interval, is_budget_outcome,
 };
-pub use routing_audit::{ReviewResult, RoutingAudit, RoutingOutcomeState, routing_audit};
+pub use routing_audit::{ReviewResult, RoutingAudit, routing_audit};

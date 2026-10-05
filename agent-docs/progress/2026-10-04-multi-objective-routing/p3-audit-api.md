@@ -9,10 +9,10 @@ completed: 2026-10-05
 
 run ごとの routing audit に次を結んだ。dispatch の `RoutingDecided`、`routing_features_recorded`（dispatch 時点）、`routing_request_decided`（proxy の子 trace。dispatch で未確定だった実際の model/source を含む）、escalation の理由（`escalation_audit`）、最新の（supersede されていない）`routing_outcome_recorded`。`GET /api/v1/tasks/{id}/routing` の run object に出る。規則の詳細は ADR 付記「Phase 3 audit-api unit の実装済み範囲」に書いた。
 
-- task-core `routing_audit.rs`: `decision_id`・`escalation_audit`・`routing_features`・`routing_outcome`・`outcome_state`（`not_recorded` / `unreviewed` / `judged`）。
-- task-ops `routing_audit.rs`: `routing_request_decided` を run_id か parent decision で run に結ぶ（推定はしない）。Phase 2 の同じ要求の子があればそこへ足す。子の `actual`（proxy log → 試した source → trace）、run の `actual_sources`、`request_trace_missing`。
+- task-core `routing_audit.rs`: `escalation_audit`・`routing_features`・`routing_outcome`・`outcome_state`（`not_recorded` / `unreviewed` / `judged`）、`RoutingAudit::decision_id()`（trace から読む method。欄にしない）。
+- task-ops `routing_audit.rs`: run object の `decision_id` 欄（`RunRoutingAudit.decision_id`）。`routing_request_decided` を run_id か parent decision で run に結ぶ（推定はしない）。Phase 2 の同じ要求の子があればそこへ足す。子の `actual`（proxy log → 試した source → trace）、run の `actual_sources`、`request_trace_missing`。
 - task-api: 応答型はそのまま `RunRoutingAudit` を返す（doc comment を更新）。API schema を再生成し、web の写しを更新した。
-- task-core `model_router/tests.rs` の `routing_old_events_deserialize_without_optimizer`: trace に由来する新欄（`decision_id`・`outcome_state`）も比較の前に落とすようにした。
+- attempt 1 の再走（2026-10-05）: 前回は task-core `lib.rs`（re-export）と `model_router/tests.rs`（比較試験で trace 由来欄を落とす）を変えて範囲 check（許可外の差分 0）に落ちた。両 file を base に戻し、`decision_id` を task-core の欄から method と task-ops の欄へ移し、`not_recorded` を「`RoutingDecided` があれば」に変えて、比較試験を変更なしで通した。`RoutingOutcomeState` は `task_core::routing_audit::RoutingOutcomeState` で参照する。
 
 ## 検証
 

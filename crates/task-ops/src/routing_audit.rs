@@ -104,6 +104,9 @@ pub struct RequestRoutingAudit {
 pub struct RunRoutingAudit {
     #[serde(flatten)]
     pub audit: RoutingAudit,
+    /// Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision_id: Option<String>,
     /// proxy の要求単位の子 trace。Phase 2 の trace を持たない旧 run は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub requests: Option<Vec<RequestRoutingAudit>>,
@@ -182,6 +185,7 @@ pub fn routing_audit_with_requests(
         .map(|audit| {
             let phase2 = audit.optimizer.is_some();
             RunRoutingAudit {
+                decision_id: audit.decision_id().map(str::to_string),
                 audit,
                 requests: phase2.then(Vec::new),
                 audit_incomplete: phase2.then_some(false),
@@ -335,9 +339,7 @@ fn attach_request_record(
 ) -> Result<(), OpsError> {
     let run_idx = runs.iter().position(|r| match record.run_id.as_deref() {
         Some(run_id) => r.audit.run_id == run_id,
-        None => {
-            record.parent_decision_id.is_some() && r.audit.decision_id == record.parent_decision_id
-        }
+        None => record.parent_decision_id.is_some() && r.decision_id == record.parent_decision_id,
     });
     let same = |c: &RequestRoutingAudit| {
         c.request_id.as_deref() == Some(record.request_id.as_str())

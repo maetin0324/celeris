@@ -21521,7 +21521,7 @@
           ]
         },
         "decision_id": {
-          "description": "Phase 3: dispatch の decision id（`optimizer.decision_id`）。feature・outcome はこの id で結ぶ。",
+          "description": "Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。",
           "type": [
             "string",
             "null"
@@ -21623,7 +21623,7 @@
               "type": "null"
             }
           ],
-          "description": "Phase 3: outcome の状態。dispatch の decision id も outcome も無い旧 run は None。"
+          "description": "Phase 3: outcome の状態。dispatch の `RoutingDecided` も outcome も無い run は None。"
         },
         "output_tokens": {
           "format": "uint64",

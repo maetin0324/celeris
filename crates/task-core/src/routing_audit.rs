@@ -6,7 +6,7 @@
 //! escalation の監査（`RoutingRecord.escalation`）、dispatch 時点の特徴 snapshot（`routing_features_recorded`）、
 //! 最新の（supersede されていない）run 単位の `routing_outcome_recorded` を結ぶ。未レビューは
 //! `outcome_state = unreviewed`（outcome の合否は null のまま。false とみなさない）、outcome が未追記なら
-//! `not_recorded` と区別する。Phase 2 の trace も Phase 3 の event も持たない旧 run の新欄は None。
+//! `not_recorded` と区別する。dispatch の決定も Phase 3 の event も持たない run の新欄は None。
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -85,9 +85,6 @@ pub struct RoutingAudit {
     /// Phase 1 optimizer trace. Absent from events written before model routing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
-    /// Phase 3: dispatch の decision id（`optimizer.decision_id`）。feature・outcome はこの id で結ぶ。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub decision_id: Option<String>,
     /// Phase 3: run 間 escalation の構造化監査（`RoutingRecord.escalation`）。旧 event は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub escalation_audit: Option<EscalationAudit>,
@@ -97,9 +94,17 @@ pub struct RoutingAudit {
     /// Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_outcome: Option<RoutingOutcome>,
-    /// Phase 3: outcome の状態。dispatch の decision id も outcome も無い旧 run は None。
+    /// Phase 3: outcome の状態。dispatch の `RoutingDecided` も outcome も無い run は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_state: Option<RoutingOutcomeState>,
+}
+
+impl RoutingAudit {
+    /// Phase 3: dispatch の decision id（`optimizer.decision_id`）。feature・outcome はこの id で結ぶ。
+    /// 欄として複写せず trace から読む（Phase 2 の trace の無い旧 run は None）。
+    pub fn decision_id(&self) -> Option<&str> {
+        self.optimizer.as_ref().map(|t| t.decision_id.as_str())
+    }
 }
 
 /// run 単位の outcome のうち、後の outcome に supersede されていない最後の 1 件。
@@ -178,7 +183,6 @@ pub fn routing_audit(task: &Task, events: &[Event]) -> Vec<RoutingAudit> {
                 a.reasons = record.decision.reasons.clone();
                 a.escalation = record.decision.escalation.clone();
                 a.escalation_audit = record.escalation.clone();
-                a.decision_id = record.optimizer.as_ref().map(|t| t.decision_id.clone());
                 a.optimizer = record.optimizer.clone();
             }
             Event::WorkerFinished {
@@ -228,7 +232,7 @@ pub fn routing_audit(task: &Task, events: &[Event]) -> Vec<RoutingAudit> {
 fn attach_feedback(out: &mut [RoutingAudit], events: &[Event]) {
     let matches = |a: &RoutingAudit, run_id: Option<&str>, decision_id: &str| match run_id {
         Some(r) => a.run_id == r,
-        None => a.decision_id.as_deref() == Some(decision_id),
+        None => a.decision_id() == Some(decision_id),
     };
     for a in out.iter_mut() {
         for event in events {
@@ -258,7 +262,8 @@ fn attach_feedback(out: &mut [RoutingAudit], events: &[Event]) {
                 Some(RoutingOutcomeState::Judged)
             }
             Some(_) => Some(RoutingOutcomeState::Unreviewed),
-            None if a.decision_id.is_some() => Some(RoutingOutcomeState::NotRecorded),
+            // dispatch の決定（`RoutingDecided`）がある run は、trace の有無にかかわらず未追記
+            None if a.rule_id.is_some() => Some(RoutingOutcomeState::NotRecorded),
             None => None,
         };
     }
@@ -476,7 +481,7 @@ mod tests {
         let audit = routing_audit(&t, &events);
         assert_eq!(audit.len(), 3, "{audit:?}");
         let a = &audit[0];
-        assert_eq!(a.decision_id.as_deref(), Some("d1"));
+        assert_eq!(a.decision_id(), Some("d1"));
         assert_eq!(
             a.escalation_audit.as_ref().map(|e| e.selected_lane),
             Some(Tier::Standard)
@@ -494,8 +499,12 @@ mod tests {
             audit[1].outcome_state,
             Some(RoutingOutcomeState::NotRecorded)
         );
-        // Phase 2 trace の無い run は状態を出さない
-        assert!(audit[2].outcome_state.is_none() && audit[2].decision_id.is_none());
+        // Phase 2 trace の無い run も dispatch の決定があれば未追記（decision id は None）
+        assert!(audit[2].decision_id().is_none());
+        assert_eq!(
+            audit[2].outcome_state,
+            Some(RoutingOutcomeState::NotRecorded)
+        );
 
         // 判定の無い outcome は unreviewed（false とみなさない）
         let unreviewed = routing_audit(&t, &events[..4]);

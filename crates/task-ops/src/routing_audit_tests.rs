@@ -336,7 +336,7 @@ fn request_records_link_to_runs_with_actual_source() {
     let audit = routing_audit_with_requests(&task, &events, &log).unwrap();
     assert_eq!(audit.runs.len(), 1);
     let run = &audit.runs[0];
-    assert_eq!(run.audit.decision_id.as_deref(), Some("d1"));
+    assert_eq!(run.decision_id.as_deref(), Some("d1"));
     let reqs = run.requests.as_ref().expect("requests");
     let ids: Vec<_> = reqs.iter().map(|c| c.request_id.as_deref()).collect();
     assert_eq!(ids, vec![Some("req-z"), Some("req-x"), Some("req-y")]);

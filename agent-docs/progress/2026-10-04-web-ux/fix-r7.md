@@ -44,3 +44,30 @@ updated: 2026-10-05
 ### 未解決・提案
 
 - 会話の block が全部 150px 未満で、宛先行と送信欄の間が 2 block 分に満たない幅・高さ（例: 高さ 700 の電話）では、(5) の揃えで 1 block だけになり得る。会話枠の揃えを「飛ばすと余白が block の半分を超えるなら飛ばさない」にする案があるが、(5) の基準との両立を確かめてから決めたい。
+
+## 長い ID の task 詳細 1440 の実行節（WU long-id-exec）
+
+### 原因
+
+- reshoot-r6.md で保留の `long-id-_tasks_<LONG_TASK_ID>-1440` は、実行節に取得失敗帯（role=alert と「再試行」）が残っていた。
+- `web/e2e/support/states.ts` の long-id 状態は `/api/v1/tasks/<LONG_TASK_ID>` と `/timeline` だけを長い ID の path に写していた。詳細画面が取る `/execution`・`/routing`（ほか `/changes`・`/tree`・`/artifacts`・`/runs/R1/stdout.jsonl`）は T1 の path にしか無く、偽 daemon の既定の 404 になっていた。画面の不具合ではなく fixture の欠けだった。
+
+### 直し方
+
+- `longIdFixtures()` で、rich fixture の `/api/v1/tasks/T1/` の下の path をすべて `/api/v1/tasks/<LONG_TASK_ID>/` に写す。値の中の `task_id: "T1"`（execution の plan・routing とその runs）は `withLongTaskId` で長い ID に差し替える（関数の fixture はそのまま使う）。fake-daemon.mjs は変えていない（rich の T1 の execution・routing を共有する）。
+- 1440 で他に崩れが無いことを確かめた: h1 の長い ID は 1 行に収まる。`#main` の下に横 overflow する要素は無く（scrollWidth > clientWidth の要素 0 件）、document の横 scroll も無い。layout の修正は要らなかった。
+
+### e2e
+
+- 新規 `web/e2e/states/long-id-execution.spec.ts`（functional）: long-id 状態の偽 daemon で `/tasks/<LONG_TASK_ID>` を 1440×900 で開き、次を確かめる。
+  - `execution-view` の phase が verifying で「v1（2 件）」が出る。routing panel に「担当 ui-ux」が出る。
+  - 実行節に role=alert と「再試行」ボタンが無い。`data-fetch-state` に loading・error が無い。
+  - document の横 scroll が無い。
+- 修正前の states.ts では同じ spec が失敗する（`execution-view` の `[data-phase]` が見つからない）ことを確かめた。既存の試験は skip・削除していない。
+
+### 検査結果
+
+- `corepack pnpm@12.6.0 -C web e2e e2e/states/ e2e/work/ e2e/shell/` exit 0、80 passed（long-id-execution・states.spec・rich-data.spec・home-stale-viewport・narrow-r6 を含む）
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test` / `build` exit 0
+- `git log --format= --name-only 7eab1be6a4e3..HEAD --not main | grep -E '^(crates|web/server)/'` 出力なし
+- 画像（追跡しない）: `/local/celeris/data/workspaces/01M463G0XRS7V5CPFEY753F3GT/wu/long-id-exec/artifacts/long-id-1440.png`

@@ -395,6 +395,7 @@ export function richFixtures() {
       next_cursor: null,
       counts_by_status: { ready: tasks.length - 1, reviewing: 1 },
     },
+    "/api/v1/tasks/counts": { counts_by_status: { ready: tasks.length - 1, reviewing: 1 } },
     "/api/v1/graph": {
       nodes: tasks.slice(0, 8).map(({ id, title, kind, status, parent_id }) => ({
         id,

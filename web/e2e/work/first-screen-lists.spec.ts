@@ -47,20 +47,26 @@ for (const size of FIRST_SCREEN_SIZES) {
   }
 }
 
-// 直に開く URL は status 1 つにする。status の繰り返しや数値の limit は、初回読み込みで router の
-// search の正規化が JSON に書き換える（この画面の外の既知の問題。報告済み）。
 test("/tasks 360: 状態は横 scroll の 1 行、URL の status・order を復元して選択状態を見せる", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });
   await page.goto(`${fixture.base}/tasks?status=ready&order=created_desc`);
   await waitForScreen(page, "タスク");
-  await expect(page.getByRole("checkbox", { name: "ready" })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: "done" })).not.toBeChecked();
+  await expect(page.getByTestId("tasks-status-chips").getByRole("button", { name: /実行待ち/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("tasks-status-chips").getByRole("button", { name: /完了/ })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   await expect(page.getByLabel("並び")).toHaveValue("created_desc");
   await expect(page.locator("[data-testid='tasks-filter'] select[name='limit']")).toBeHidden();
   // 状態の chip 8 個は 1 行（同じ上端）に並び、溢れた分は区画の中だけ横に scroll する。
   const chips = page.getByTestId("tasks-status-chips");
-  const tops = await chips.locator("label").evaluateAll((labels) => labels.map((l) => l.getBoundingClientRect().top));
-  expect(tops).toHaveLength(8);
+  const tops = await chips
+    .locator("button")
+    .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().top));
+  expect(tops).toHaveLength(9);
   expect(new Set(tops.map(Math.round)).size).toBe(1);
   expect(await chips.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
   // 検索と並びは同じ行。
@@ -80,14 +86,20 @@ test("/tasks 360: 件数は「その他の条件」で開き、絞り込みで U
   await more.click();
   await expect(more).toHaveAttribute("aria-expanded", "true");
   await limit.selectOption("50");
-  await page.getByRole("checkbox", { name: "blocked" }).check();
+  await page
+    .getByTestId("tasks-status-chips")
+    .getByRole("button", { name: /停止中/ })
+    .click();
   await page.getByRole("button", { name: "絞り込み" }).click();
   await expect(page).toHaveURL(/status=blocked/);
   await expect(page).toHaveURL(/limit=50/);
   // 件数は狭い幅で畳むが、URL に値があるときは開いたまま見せる。
   await expect(limit).toBeVisible();
   await expect(limit).toHaveValue("50");
-  await expect(page.getByRole("checkbox", { name: "blocked" })).toBeChecked();
+  await expect(page.getByTestId("tasks-status-chips").getByRole("button", { name: /停止中/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
 test("/board 360: 状態は横 scroll の 1 行、URL の column と project を復元する", async ({ page }) => {

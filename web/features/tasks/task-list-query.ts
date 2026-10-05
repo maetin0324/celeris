@@ -1,5 +1,5 @@
 import { apiGet } from "../../api/client";
-import type { TaskList } from "../../api/generated/types";
+import type { TaskList, TaskStatusCounts } from "../../api/generated/types";
 import { taskKeys } from "../../api/queries/keys";
 
 // /tasks の query（P3-05、ADR-0081 D5）。key は正規化した絞り込みを含むので、絞り込みを変えると新しい key。
@@ -38,5 +38,12 @@ export function taskListQuery(filters: TaskListFilters) {
   return {
     queryKey: taskListQueryKey(filters),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<TaskList>(taskListPath(filters), signal),
+  };
+}
+
+export function taskCountsQuery() {
+  return {
+    queryKey: taskKeys.counts(),
+    queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<TaskStatusCounts>("/api/tasks/counts", signal),
   };
 }

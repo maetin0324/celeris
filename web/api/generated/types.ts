@@ -4407,6 +4407,12 @@ export type TaskRoutingView = {
   "task_id": TaskId;
 };
 
+export type TaskStatusCounts = {
+  "counts_by_status": {
+  [key: string]: number;
+};
+};
+
 export type TaskSummary = {
   "actions": Array<Action>;
   "adapter"?: string | null;

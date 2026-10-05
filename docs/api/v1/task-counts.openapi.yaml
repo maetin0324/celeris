@@ -1,0 +1,20 @@
+openapi: 3.1.0
+info:
+  title: Celeris task status counts
+  version: 1.0.0
+  description: GET /tasks/counts の追加操作。API 全体の契約は gui-api.md と api-v1.schema.json を参照。
+paths:
+  /api/v1/tasks/counts:
+    get:
+      operationId: getTaskStatusCounts
+      summary: 全タスクの状態別件数
+      description: 検索語・案件・状態などの一覧条件とは独立して、DB 全体を状態ごとに集計する。
+      responses:
+        "200":
+          description: 状態別件数。0 件の状態は省略する。
+          content:
+            application/json:
+              schema:
+                $ref: ./api-v1.schema.json#/$defs/TaskStatusCounts
+        "400":
+          description: クエリパラメーターを指定した。

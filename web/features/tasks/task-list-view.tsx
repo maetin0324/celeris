@@ -10,7 +10,7 @@ import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
-import { type TaskListFilters, taskListPath, taskListQuery } from "./task-list-query";
+import { type TaskListFilters, taskCountsQuery, taskListPath, taskListQuery } from "./task-list-query";
 
 const STATUSES = ["draft", "ready", "running", "blocked", "reviewing", "done", "failed", "cancelled"] as const;
 const ORDERS = [
@@ -49,6 +49,7 @@ export function TasksListScreen({
   const moreId = useId();
   // 件数（limit）は狭い幅では畳む。URL に値があるときは開いておき、選んだ条件を隠さない。
   const [moreOpen, setMoreOpen] = useState(false);
+  const [draftQ, setDraftQ] = useState(q ?? "");
   const moreShown = moreOpen || limit !== undefined;
   const formRef = useRef<HTMLFormElement>(null);
   // History navigation changes the URL without remounting the form. Update its
@@ -56,19 +57,27 @@ export function TasksListScreen({
   useEffect(() => {
     const form = formRef.current;
     if (!form) return;
-    const search = form.elements.namedItem("q");
     const sort = form.elements.namedItem("order");
     const pageSize = form.elements.namedItem("limit");
-    if (search instanceof HTMLInputElement) search.value = q ?? "";
     if (sort instanceof HTMLSelectElement) sort.value = order ?? "updated_desc";
     if (pageSize instanceof HTMLSelectElement) pageSize.value = limit ?? "";
-    for (const checkbox of form.querySelectorAll<HTMLInputElement>('input[name="status"]')) {
-      checkbox.checked = status.includes(checkbox.value);
-    }
-  }, [q, status, order, limit]);
+  }, [order, limit]);
+  useEffect(() => setDraftQ(q ?? ""), [q]);
   const filters: TaskListFilters = { q, status, order, limit };
   const key = filterKey(filters);
   const base = useQuery({ ...taskListQuery(filters) });
+  const counts = useQuery({ ...taskCountsQuery() });
+
+  function toggleStatus(value?: string) {
+    const next = new URLSearchParams(window.location.search);
+    const selected = new Set(next.getAll("status").flatMap((item) => item.split(",")));
+    if (value === undefined) selected.clear();
+    else if (selected.has(value)) selected.delete(value);
+    else selected.add(value);
+    next.delete("status");
+    for (const item of STATUSES) if (selected.has(item)) next.append("status", item);
+    router.history.push(`/tasks${next.size ? `?${next}` : ""}`, {});
+  }
 
   // 続き（cursor で取得したページ群）は local state。絞り込みが変わると key がずれて無視されるので、
   // SSE の取り直しで最初のページが変わっても読み込んだ分は id 重複を除いて消えない。
@@ -102,7 +111,7 @@ export function TasksListScreen({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const nextQ = String(data.get("q") ?? "").trim() || undefined;
-    const nextStatus = (data.getAll("status") as string[]).filter((s) => (STATUSES as readonly string[]).includes(s));
+    const nextStatus = status.filter((s) => (STATUSES as readonly string[]).includes(s));
     const nextOrder = String(data.get("order") ?? "updated_desc");
     const nextLimit = String(data.get("limit") ?? "").trim() || undefined;
     const params = new URLSearchParams();
@@ -139,7 +148,8 @@ export function TasksListScreen({
               type="search"
               name="q"
               aria-labelledby="tasks-q"
-              defaultValue={q ?? ""}
+              value={draftQ}
+              onChange={(event) => setDraftQ(event.target.value)}
               placeholder="タイトル・id"
               className={`${inputClass} w-full sm:w-44`}
             />
@@ -163,23 +173,39 @@ export function TasksListScreen({
           </label>
         </div>
         <fieldset className="min-w-0">
-          <legend className="sr-only">status の絞り込み</legend>
+          <legend className="sr-only">状態で絞り込む</legend>
+          <p
+            className="text-label text-muted-foreground"
+            data-testid="tasks-counts-scope"
+            role={counts.isError ? "alert" : undefined}
+          >
+            {counts.isError
+              ? "件数を取得できません。再読み込みしてください。"
+              : "状態別件数（全タスク・検索条件に関係なし）"}
+          </p>
           <ScrollTabs className="flex gap-1.5 py-1 sm:flex-wrap" data-testid="tasks-status-chips">
+            <Button
+              type="button"
+              className={`${status.length === 0 ? "bg-accent font-semibold" : ""} shrink-0`}
+              aria-pressed={status.length === 0}
+              onClick={() => toggleStatus()}
+            >
+              すべて
+            </Button>
             {STATUSES.map((s) => (
-              <label
+              <Button
                 key={s}
-                className={`${buttonClassName} relative shrink-0 cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${status.includes(s) ? "bg-accent font-semibold" : ""}`}
+                type="button"
+                aria-pressed={status.includes(s)}
+                aria-label={`${statusView(s).label} ${counts.data ? `${counts.data.counts_by_status[s] ?? 0}件` : "件数を読み込み中"}`}
+                onClick={() => toggleStatus(s)}
+                className={`${status.includes(s) ? "bg-accent font-semibold" : ""} shrink-0`}
               >
-                <input
-                  type="checkbox"
-                  name="status"
-                  value={s}
-                  aria-label={s}
-                  defaultChecked={status.includes(s)}
-                  className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
-                />{" "}
                 {statusView(s).label}
-              </label>
+                <span aria-hidden="true" className="tabular-nums text-muted-foreground">
+                  {counts.data ? (counts.data.counts_by_status[s] ?? 0) : "…"}
+                </span>
+              </Button>
             ))}
           </ScrollTabs>
         </fieldset>

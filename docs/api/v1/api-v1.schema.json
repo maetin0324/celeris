@@ -22607,6 +22607,23 @@
       ],
       "type": "object"
     },
+    "TaskStatusCounts": {
+      "description": "`GET /tasks/counts`: SQLite の GROUP BY だけで全タスクを状態別に数える。",
+      "properties": {
+        "counts_by_status": {
+          "additionalProperties": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "counts_by_status"
+      ],
+      "type": "object"
+    },
     "TaskSummary": {
       "properties": {
         "actions": {
@@ -25077,6 +25094,9 @@
       "$ref": "#/$defs/TaskRoutingView",
       "description": "ADR-0069 D5: `GET /tasks/{id}/routing`。"
     },
+    "task_status_counts": {
+      "$ref": "#/$defs/TaskStatusCounts"
+    },
     "task_tree": {
       "$ref": "#/$defs/TaskTreeView",
       "description": "ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。"
@@ -25120,6 +25140,7 @@
     "notifications_read_all",
     "notifications_read_all_body",
     "task_list",
+    "task_status_counts",
     "task",
     "task_detail",
     "events_page",

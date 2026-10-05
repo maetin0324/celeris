@@ -6,7 +6,7 @@ import { Badge } from "../../components/ui/badge";
 import { buttonVariants } from "../../components/ui/button";
 import { DataList, type DataListItem } from "../../components/ui/data-list";
 import { Drawer } from "../../components/ui/drawer";
-import { StatusBadge } from "../../components/ui/status-badge";
+import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { executionQuery } from "./execution-panel";
 import { integrationRepairDisplay, integrationRepairTone } from "./integration-repair";
 import { IntegrationRepairPanel } from "./integration-repair-panel";
@@ -139,7 +139,7 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
 export function OverviewView({ detail, section }: { detail: TaskDetail; section?: MobileSection }) {
   const task = detail.task;
   const facts: DataListItem[] = [
-    { label: "状態", value: <span data-status={task.status}>{task.status}</span> },
+    { label: "状態", value: <span data-status={task.status}>{statusView(task.status).label}</span> },
     { label: "種別", value: task.kind },
   ];
   if (task.category) facts.push({ label: "カテゴリ", value: task.category });

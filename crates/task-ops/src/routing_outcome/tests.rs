@@ -220,3 +220,45 @@ fn routing_reward_waits_for_review_and_supersedes_idempotently() {
     );
     assert_eq!(record_routing_outcomes(&store, id).unwrap(), 0);
 }
+
+#[test]
+fn routing_outcome_sums_finished_fragments_and_estimates_known_prices() {
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let task = create_task(&store, spec(), OffsetDateTime::now_utc()).expect("create task");
+    let id = task.id;
+    let mut events = run_events(&task);
+    if let Event::WorkerStarted { model, .. } = &mut events[0] {
+        *model = "gpt-5-codex".into();
+    }
+    let Event::WorkerFinished { usage, metrics, .. } = &mut events[2] else {
+        panic!("worker finish");
+    };
+    usage.as_mut().unwrap().cost_usd = None;
+    let price =
+        task_core::estimate_cost_usd("gpt-5-codex", usage.as_ref().unwrap()).expect("known price");
+    metrics.as_mut().unwrap().wall_ms = 1_000;
+    let mut second = events[2].clone();
+    if let Event::WorkerFinished { usage, metrics, .. } = &mut second {
+        *usage = Some(Usage {
+            cost_usd: Some(0.25),
+            ..Usage::default()
+        });
+        *metrics = Some(RunMetrics {
+            wall_ms: 2_000,
+            retries: 2,
+            peak_context_tokens: None,
+            turns: None,
+        });
+    }
+    events.push(second);
+    append_all(&store, id, &events);
+
+    assert_eq!(record_routing_outcomes(&store, id).unwrap(), 1);
+    let result = outcomes(&store, id);
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].cash_usd, Some(price + 0.25));
+    assert_eq!(result[0].tokens, Some(120));
+    assert_eq!(result[0].wall_ms, Some(3_000));
+    assert_eq!(result[0].retries, Some(3));
+    assert_eq!(record_routing_outcomes(&store, id).unwrap(), 0);
+}

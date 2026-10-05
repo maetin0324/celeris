@@ -13,6 +13,7 @@ ADR 2026-10-04-multi-objective-model-routing §6（outcome の event schema）�
 
 - `task-core::model_router::feedback`: run の cash・tokens・wall・retries を、同じ run の複数の完了記録で**合算**するようにした（従来は上書き）。欠測同士は欠測のまま（`add_opt`）。
 - `task-ops::routing_outcome::record_routing_outcomes(store, task_id)`: task の events を読み、`pending_run_outcomes`（events に同じ `outcome_id` が無いものだけ）を `routing_outcome_recorded` として append する。戻り値は追記件数。events は追記のみ。
+- `WorkerStarted.model` と `WorkerFinished.usage` から既知モデルの欠測 cost を `estimate_cost_usd` で補完する。明示の `usage.cost_usd` は優先し、複数の完了記録は task-core の純粋投影で合算する。
 - `task-ops::comment::reopen`: 再開の遷移の後に呼ぶ。
 - `task-dispatch::dispatcher::routing_context::record_routing_outcomes`（Dispatcher の薄いラッパー、失敗は warn のみで dispatch を止めない）を、`drain_completions` の次の完了の後に呼ぶ:
   - `Completion::Worker`（worker run の完了）
@@ -41,10 +42,12 @@ ADR 2026-10-04-multi-objective-model-routing §6（outcome の event schema）�
 | `bash scripts/dev/test-parallel.sh` | exit 0。Summary 3986 tests run: 3986 passed (1 slow), 12 skipped |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `rustfmt --edition 2024` on the changed files | 整形済み（routing_context.rs の 1 行を折り返した） |
+| `cargo test -p task-ops routing_outcome -- --nocapture` | 2 passed（review・冪等・supersede と複数完了記録の合算・単価補完） |
+| `cargo test -p task-dispatch a_reviewer_run_not_launched_because_a_check_failed_is_closed -- --nocapture` | 1 passed（既存 review 試験） |
 
 ## 未解決事項
 
-- **cost は adapter が報告した `usage.cost_usd` だけ。** ADR §6 の「cost（pricing・usage）」の pricing 表による推定は入れていない。cost が報告されない run は `cash_usd = None`、reward も None になる。
+- **未知モデル・token 使用量欠測の cost は None。** 既知モデルは pricing 表で補完するが、価格が未登録なら推測せず reward を None にする。
 - **reopen は `task-ops::comment::reopen` だけに配線した。** `celeris/src/delivery.rs:822` の `Trigger::Reopen` は未配線。投影は冪等なので、次の完了時には届く。
 - **cancel などの完了記録の無い終端は、次の完了記録までの間 outcome が追記されない。** 中断の run は `WorkerFinished`（end=Cancelled 等）が来た時点で記録されるので、これは主に task 単位の終端（完了記録を伴わない遷移）の話。
 - ADR の付記（実装突き合わせ）は書いていない。ADR 本文は他の WU（audit-api・daemon-wire）と並行で変わるため、close 工程で付記する。
@@ -54,4 +57,4 @@ ADR 2026-10-04-multi-objective-model-routing §6（outcome の event schema）�
 
 - close 工程の ADR 付記では、「完了時の 4 つの呼び出し口」と「reopen は comment::reopen のみ」を書く。
 - delivery 側の reopen（`celeris/src/delivery.rs`）も同じ口を呼ぶ小さな follow-up にできる。
-- pricing 表による cash の推定は Phase 4 の shadow/評価と一緒に扱うのがよい（今の reward は報告された cost だけに依る）。
+- pricing 表の単価と `usage.cost_usd` の出所を audit で区別する欄は、後続の audit API で検討できる。

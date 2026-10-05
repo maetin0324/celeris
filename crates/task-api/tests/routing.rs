@@ -115,6 +115,7 @@ async fn routing_returns_per_run_audit_and_dropped_assignee() {
     assert_eq!(runs[0]["wall_ms"], 1234);
     assert_eq!(runs[0]["retries"], 1);
     assert!(runs[0].get("escalation").is_none());
+    assert!(runs[0].get("optimizer").is_none());
     assert_eq!(runs[1]["escalation"], "escalated: standard -> frontier");
 }
 
@@ -155,4 +156,49 @@ async fn routing_is_empty_without_runs_and_404_for_unknown_tasks() {
 
     let resp = send(&app, get(&format!("/api/v1/tasks/{}/routing", task.id))).await;
     assert_eq!(resp.status, 401, "{}", resp.text());
+}
+
+#[tokio::test]
+async fn routing_projects_optional_optimizer_trace_without_changing_old_fields() {
+    let env = env_with_token();
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    let mut event = serde_json::to_value(routing_decided("run-trace", None)).unwrap();
+    event["record"]["optimizer"] = json!({
+        "decision_id": "decision-1",
+        "parent_decision_id": null,
+        "task_id": null,
+        "work_unit_id": null,
+        "run_id": "run-trace",
+        "request_id": null,
+        "stage": "dispatch",
+        "mode": "legacy",
+        "policy_version": "phase1-v1",
+        "catalog_version": "phase1-v1",
+        "feature_version": "1",
+        "estimator_version": "1",
+        "snapshot_id": "snapshot-1",
+        "observed_at": null,
+        "requested_lane": "standard",
+        "selected_lane": "standard",
+        "candidates": [],
+        "selected": null,
+        "fallback_order": [],
+        "reasons": []
+    });
+    env.store
+        .append_event(task.id, &serde_json::from_value(event).unwrap())
+        .unwrap();
+    let app = env.router();
+    let resp = send(
+        &app,
+        get_with(&format!("/api/v1/tasks/{}/routing", task.id), &admin()),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let run = &resp.json()["runs"][0];
+    assert_eq!(run["optimizer"]["decision_id"], "decision-1");
+    assert_eq!(run["lane"], "standard");
+    assert_eq!(run["model"], "model-std");
+    assert_eq!(run["rule_id"], "standard/default");
 }

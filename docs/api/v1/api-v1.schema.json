@@ -1675,6 +1675,14 @@
       ],
       "type": "object"
     },
+    "Billing": {
+      "enum": [
+        "subscription",
+        "metered_api",
+        "self_hosted"
+      ],
+      "type": "string"
+    },
     "BrowserAction": {
       "description": "Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:\nno aliases, categories or pass-through of upstream names.",
       "enum": [
@@ -2326,6 +2334,137 @@
         "deployment_id",
         "eligible_provider_ids",
         "excluded_reasons"
+      ],
+      "type": "object"
+    },
+    "CatalogCapabilitiesView": {
+      "description": "Capability support is nullable because legacy configuration may not specify it.",
+      "properties": {
+        "reasoning_efforts": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "streaming": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "structured_output": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "tools": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "vision": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "CatalogDeploymentView": {
+      "description": "A deployment is a source/model pairing; credentials and endpoint URLs are omitted.",
+      "properties": {
+        "allowed_lanes": {
+          "items": {
+            "$ref": "#/$defs/Tier"
+          },
+          "type": "array"
+        },
+        "billing": {
+          "$ref": "#/$defs/Billing"
+        },
+        "id": {
+          "type": "string"
+        },
+        "model_profile_id": {
+          "type": "string"
+        },
+        "price_override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenPricing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "upstream_model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_ref",
+        "model_profile_id",
+        "upstream_model",
+        "billing",
+        "allowed_lanes"
+      ],
+      "type": "object"
+    },
+    "CatalogModelView": {
+      "description": "Catalog model metadata. Unknown capability support is null.",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/$defs/CatalogCapabilitiesView"
+        },
+        "context_limits": {
+          "$ref": "#/$defs/ContextLimits"
+        },
+        "family": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "pricing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TokenPricing"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "quality": {
+          "items": {
+            "$ref": "#/$defs/QualityIndex"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "revision": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "family",
+        "capabilities",
+        "context_limits"
       ],
       "type": "object"
     },
@@ -4554,6 +4693,61 @@
       ],
       "type": "object"
     },
+    "Constraints": {
+      "properties": {
+        "allowed_deployments": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "allowed_sources": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "data_retention_allowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "external_network_allowed": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "max_cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "max_latency_ms": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "required_region": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "ContainerProbeView": {
       "description": "`<runtime> info` の結果 1 件（`detail` は成功なら `\"ok\"`、失敗なら理由の 1 行）。",
       "properties": {
@@ -4606,6 +4800,35 @@
         "image_default",
         "build_dir"
       ],
+      "type": "object"
+    },
+    "ContextLimits": {
+      "properties": {
+        "input": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "output": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
       "type": "object"
     },
     "ContinuationMetrics": {
@@ -14249,6 +14472,23 @@
       ],
       "type": "object"
     },
+    "Normalization": {
+      "properties": {
+        "cost_reference_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "latency_reference_ms": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "cost_reference_usd",
+        "latency_reference_ms"
+      ],
+      "type": "object"
+    },
     "Notice": {
       "description": "通知の束（`feed_notices` の 1 行）。",
       "properties": {
@@ -14659,6 +14899,14 @@
         "digest_max_lines"
       ],
       "type": "object"
+    },
+    "Objective": {
+      "enum": [
+        "quality_first",
+        "balanced",
+        "resource_first"
+      ],
+      "type": "string"
     },
     "OnChildFailure": {
       "description": "ADR-0021: 委譲した子が `failed` になったとき、親をどうするか。",
@@ -17316,6 +17564,38 @@
       ],
       "type": "object"
     },
+    "QualityIndex": {
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "evaluation_version": {
+          "type": "string"
+        },
+        "index": {
+          "format": "double",
+          "type": "number"
+        },
+        "provenance": {
+          "type": "string"
+        },
+        "samples": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "domain",
+        "index",
+        "evaluation_version",
+        "provenance"
+      ],
+      "type": "object"
+    },
     "QuestionItem": {
       "properties": {
         "approval_id": {
@@ -19681,6 +19961,17 @@
             "null"
           ]
         },
+        "optimizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingTraceV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 1 optimizer trace. Absent from events written before model routing."
+        },
         "org_node": {
           "type": [
             "string",
@@ -19770,6 +20061,50 @@
       ],
       "type": "object"
     },
+    "RoutingCatalogView": {
+      "description": "Credential-free snapshot returned by `GET /llm/routing/catalog`.",
+      "properties": {
+        "catalog_version": {
+          "type": "string"
+        },
+        "deployments": {
+          "items": {
+            "$ref": "#/$defs/CatalogDeploymentView"
+          },
+          "type": "array"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "models": {
+          "items": {
+            "$ref": "#/$defs/CatalogModelView"
+          },
+          "type": "array"
+        },
+        "policies": {
+          "items": {
+            "$ref": "#/$defs/RoutingPolicy"
+          },
+          "type": "array"
+        },
+        "warnings": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "catalog_version",
+        "mode",
+        "models",
+        "deployments",
+        "policies",
+        "warnings"
+      ],
+      "type": "object"
+    },
     "RoutingMode": {
       "enum": [
         "legacy",
@@ -19777,6 +20112,62 @@
         "enforce"
       ],
       "type": "string"
+    },
+    "RoutingPolicy": {
+      "properties": {
+        "constraints": {
+          "$ref": "#/$defs/Constraints"
+        },
+        "escalation": {
+          "type": "boolean"
+        },
+        "fallback": {
+          "type": "boolean"
+        },
+        "lane": {
+          "$ref": "#/$defs/Tier"
+        },
+        "local_preference": {
+          "type": "boolean"
+        },
+        "min_quality": {
+          "format": "double",
+          "type": "number"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "normalization": {
+          "$ref": "#/$defs/Normalization"
+        },
+        "objective": {
+          "$ref": "#/$defs/Objective"
+        },
+        "prefer_free": {
+          "type": "boolean"
+        },
+        "version": {
+          "type": "string"
+        },
+        "weights": {
+          "$ref": "#/$defs/Weights"
+        }
+      },
+      "required": [
+        "version",
+        "mode",
+        "lane",
+        "objective",
+        "min_quality",
+        "weights",
+        "normalization",
+        "constraints",
+        "fallback",
+        "escalation",
+        "local_preference",
+        "prefer_free"
+      ],
+      "type": "object"
     },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",
@@ -23549,6 +23940,44 @@
       ],
       "type": "object"
     },
+    "TokenPricing": {
+      "properties": {
+        "as_of": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cached_input_usd_per_million": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "input_usd_per_million": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "output_usd_per_million": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "provenance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provenance"
+      ],
+      "type": "object"
+    },
     "TransitionResult": {
       "description": "状態変更の結果（承認・却下・回答・取り消し共通）。",
       "properties": {
@@ -24205,6 +24634,33 @@
         "pass",
         "reason",
         "ts"
+      ],
+      "type": "object"
+    },
+    "Weights": {
+      "properties": {
+        "cost": {
+          "format": "double",
+          "type": "number"
+        },
+        "latency": {
+          "format": "double",
+          "type": "number"
+        },
+        "pressure": {
+          "format": "double",
+          "type": "number"
+        },
+        "quality": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "quality",
+        "cost",
+        "latency",
+        "pressure"
       ],
       "type": "object"
     },
@@ -25234,6 +25690,10 @@
     "retry_result": {
       "$ref": "#/$defs/RetryResult"
     },
+    "routing_catalog": {
+      "$ref": "#/$defs/RoutingCatalogView",
+      "description": "Phase 1: credential-free model and deployment catalog."
+    },
     "run_list": {
       "$ref": "#/$defs/RunList"
     },
@@ -25466,6 +25926,7 @@
     "stream_heartbeat",
     "stream_reset",
     "llm_sources",
+    "routing_catalog",
     "mcp_clients",
     "mcp_calls",
     "skill_list",

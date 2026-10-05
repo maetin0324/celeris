@@ -1086,6 +1086,19 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
 export type TierSource = "human" | "system" | "hint" | "default";
+/**
+ * ADR-0132 付記 L8: 候補の種類。
+ */
+export type ProviderCandidateKind = "local" | "pool" | "other";
+/**
+ * ADR-0132 付記 L8: 候補を見た結果。
+ */
+export type ProviderCandidateOutcome =
+  "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
+/**
+ * ADR-0132 付記 L8: provider を選んだ理由。
+ */
+export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
 export type CheckpointEnd = ("completed" | "yielded" | "budget_exhausted") | "waiting";
 /**
  * checkpoint を合成した出所（D8）。
@@ -4891,6 +4904,29 @@ export interface LaneResolution {
   model_id?: string;
   provider?: string | null;
   reasoning_effort?: string | null;
+  /**
+   * ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。
+   */
+  selection?: ProviderSelection | null;
+}
+/**
+ * ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。
+ */
+export interface ProviderSelection {
+  candidates?: ProviderCandidate[];
+  reason: ProviderSelectionReason;
+}
+/**
+ * ADR-0132 付記 L8: 選択で見た 1 行。
+ */
+export interface ProviderCandidate {
+  /**
+   * probe の失敗理由など。
+   */
+  detail?: string | null;
+  kind: ProviderCandidateKind;
+  outcome: ProviderCandidateOutcome;
+  provider: string;
 }
 /**
  * D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと

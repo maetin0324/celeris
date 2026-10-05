@@ -12486,6 +12486,17 @@
             "string",
             "null"
           ]
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。"
         }
       },
       "type": "object"
@@ -16604,6 +16615,66 @@
       ],
       "type": "object"
     },
+    "ProviderCandidate": {
+      "description": "ADR-0132 付記 L8: 選択で見た 1 行。",
+      "properties": {
+        "detail": {
+          "description": "probe の失敗理由など。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ProviderCandidateKind"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ProviderCandidateOutcome"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "kind",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ProviderCandidateKind": {
+      "description": "ADR-0132 付記 L8: 候補の種類。",
+      "oneOf": [
+        {
+          "const": "local",
+          "description": "付記 L1 のローカルの行。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行。",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "それ以外（プールを持たない非ローカルの行）。",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderCandidateOutcome": {
+      "description": "ADR-0132 付記 L8: 候補を見た結果。",
+      "enum": [
+        "selected",
+        "available",
+        "full",
+        "down",
+        "cooldown",
+        "unsupported",
+        "no_account"
+      ],
+      "type": "string"
+    },
     "ProviderCheckResponse": {
       "description": "`POST /api/v1/providers/{id}/check` の応答（ADR-0017 D2）。",
       "properties": {
@@ -16877,6 +16948,59 @@
         "in_use"
       ],
       "type": "object"
+    },
+    "ProviderSelection": {
+      "description": "ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/ProviderCandidate"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/ProviderSelectionReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProviderSelectionReason": {
+      "description": "ADR-0132 付記 L8: provider を選んだ理由。",
+      "oneOf": [
+        {
+          "const": "local_preferred",
+          "description": "cheap lane でローカルの行を選んだ（付記 L2）。",
+          "type": "string"
+        },
+        {
+          "const": "local_full",
+          "description": "空きの無いローカルの行があり、順位付けへ倒した（付記 L3）。",
+          "type": "string"
+        },
+        {
+          "const": "local_down",
+          "description": "ローカルの行が不通・cooldown で、順位付けへ倒した（付記 L3/L4）。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行を残量 score で選んだ（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "fallback",
+          "description": "プールを持たない行へ倒れた、または何も選べなかった（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "sticky",
+          "description": "継続セッションに留まった（ADR-0054）。",
+          "type": "string"
+        }
+      ]
     },
     "ProviderStats": {
       "description": "プロバイダ別の run 集計（task-api のメモリ内の観測値。再起動で再計算）。",

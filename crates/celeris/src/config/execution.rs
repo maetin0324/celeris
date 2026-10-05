@@ -50,6 +50,10 @@ pub struct ExecutionTomlConfig {
     /// この上限だけで待つ。`0` で例外を無効にする（通常の run と同じ規則に戻る）。
     #[serde(default = "default_max_cos_runs")]
     pub max_cos_runs: usize,
+    /// ADR-0132 付記 L7: cheap lane の worker run で、アカウントプールの順位付けより先にローカルの行
+    /// （Qwen 等。付記 L1）を試すか（既定 `true`）。`false` で付記の前の選び方に戻す。
+    #[serde(default = "default_cheap_local_first")]
+    pub cheap_local_first: bool,
     /// ADR-0079 D3（Phase R1a）: `[execution.tree]`（再帰的な task 分解の上限。既定 `enabled = false`）。
     #[serde(default)]
     pub tree: ExecutionTreeTomlConfig,
@@ -282,11 +286,15 @@ impl Default for ExecutionTomlConfig {
             parallel: false,
             max_parallel_work_units: default_max_parallel_work_units(),
             max_cos_runs: default_max_cos_runs(),
+            cheap_local_first: default_cheap_local_first(),
             tree: ExecutionTreeTomlConfig::default(),
         }
     }
 }
 
+fn default_cheap_local_first() -> bool {
+    true
+}
 fn default_execution_continuation() -> bool {
     true
 }

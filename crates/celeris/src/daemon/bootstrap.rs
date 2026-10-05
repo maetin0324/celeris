@@ -498,6 +498,8 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
+    // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
+    dispatcher.set_local_providers(config.local_cheap_providers());
     dispatcher.set_cluster_connector(cluster_connector(
         masters.clone(),
         master_launchers(config),

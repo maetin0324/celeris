@@ -1,6 +1,8 @@
 import type {
+  ActualSource,
   CandidateTrace,
   RequestRoutingAudit,
+  RoutingOutcome,
   RoutingTraceV1,
   RunRoutingAudit,
   TaskRoutingView,
@@ -12,6 +14,11 @@ import { CostRows } from "../ops/routing-state-view";
 // タスクの routing 監査（GET /tasks/:id/routing）。run ごとに、要求単位の決定（候補の除外理由・
 // 費用の 4 成分・score 内訳・最終 source/model/account）を出す。監査が不完全なら、その旨を先に言う。
 // 選択は daemon が記録した値をそのまま出す。ここで選び直さない。
+//
+// ADR 2026-10-04-multi-objective-model-routing Phase 3（§5・§6・§10）: 実行 lane の選定理由（reasons）、
+// 実際に使った source（actual_sources。dispatch で未確定だった model を含む）、構造化した軌跡
+// escalation（escalation_audit）、run の outcome（outcome_state で not_recorded・unreviewed・judged を
+// 区別。audit_incomplete とは別の軸で、どちらも false や 0 に丸めない）を追加で出す。
 
 export function RoutingAuditView({ data }: { data: TaskRoutingView }) {
   return (
@@ -40,9 +47,10 @@ function RunAudit({ run }: { run: RunRoutingAudit }) {
   return (
     <li className="space-y-1 break-words" data-testid="routing-run">
       <p>
-        {run.run_id}: 段 {run.lane ?? UNKNOWN} / 組織 {run.org_node ?? UNKNOWN}
+        {run.run_id}: 実行 lane {run.lane ?? UNKNOWN} / 組織 {run.org_node ?? UNKNOWN}
         {run.rule_id ? `（${run.rule_id}）` : ""}
       </p>
+      {run.reasons && run.reasons.length > 0 && <p>選定理由: {run.reasons.join(", ")}</p>}
       <p>
         実行枠: 供給元 {run.provider ?? UNKNOWN} / model {run.model ?? UNKNOWN} / 口座 {run.account ?? UNKNOWN}
       </p>
@@ -52,6 +60,9 @@ function RunAudit({ run }: { run: RunRoutingAudit }) {
           {incomplete}
         </p>
       )}
+      {run.actual_sources && run.actual_sources.length > 0 ? <ActualSourceList sources={run.actual_sources} /> : null}
+      {run.escalation_audit ? <EscalationView escalation={run.escalation_audit} /> : null}
+      <OutcomeView state={run.outcome_state} outcome={run.routing_outcome} />
       {run.requests === null || run.requests === undefined ? (
         <p className="text-neutral-700">要求単位の記録がない旧 run です（欄は不明）。</p>
       ) : (
@@ -65,6 +76,57 @@ function RunAudit({ run }: { run: RunRoutingAudit }) {
       ) : null}
     </li>
   );
+}
+
+function ActualSourceList({ sources }: { sources: readonly ActualSource[] }) {
+  return (
+    <div>
+      <p className="font-semibold">実際に使った source</p>
+      <ul className="ml-4 list-disc">
+        {sources.map((source, i) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: 同じ source/model/account の重複は無い（日記の順）
+          <li key={i}>
+            source {source.source_id ?? UNKNOWN} / model {source.model ?? UNKNOWN} / 口座 {source.account ?? UNKNOWN}
+            （出所: {source.from}）
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function EscalationView({ escalation }: { escalation: NonNullable<RunRoutingAudit["escalation_audit"]> }) {
+  return (
+    <p>
+      escalation: {escalation.requested_lane}
+      {escalation.previous_lane ? `（直前 ${escalation.previous_lane}）` : ""} → {escalation.selected_lane} / 理由{" "}
+      {escalation.reason}（連続失敗 {escalation.counted_failures} 回、区間 {escalation.interval_id}）
+    </p>
+  );
+}
+
+function OutcomeView({
+  state,
+  outcome,
+}: {
+  state: RunRoutingAudit["outcome_state"];
+  outcome: RoutingOutcome | null | undefined;
+}) {
+  if (!state) return null;
+  if (state === "not_recorded") return <p>outcome: 未記録</p>;
+  if (state === "unreviewed") return <p>outcome: 未レビュー（合否は null のまま）</p>;
+  return (
+    <p>
+      outcome: 判定済み / 受け入れ {judgedLabel(outcome?.acceptance_passed)} / review{" "}
+      {judgedLabel(outcome?.review_passed)} / reward {outcome?.reward ?? UNKNOWN}
+    </p>
+  );
+}
+
+function judgedLabel(value: boolean | null | undefined): string {
+  if (value === true) return "合格";
+  if (value === false) return "不合格";
+  return UNKNOWN;
 }
 
 function RequestList({ requests }: { requests: readonly RequestRoutingAudit[] }) {

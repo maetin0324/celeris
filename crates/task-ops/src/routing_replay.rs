@@ -13,6 +13,12 @@ use task_core::model_router::trace::RoutingTraceV1;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+mod estimator;
+pub use estimator::{
+    EstimatorComparisonInputV1, EstimatorComparisonV1, PairEstimateV1, RouteLlmPairV1,
+    routellm_pair_estimates,
+};
+
 pub const DATASET_SCHEMA: &str = "celeris.routing.dataset.v1";
 pub const REPORT_SCHEMA: &str = "celeris.routing.report.v1";
 
@@ -127,6 +133,10 @@ pub struct ShadowV1 {
     pub cash_usd: Option<f64>,
     pub effective_usd: Option<f64>,
     pub latency_ms: Option<u64>,
+    /// Estimator shadow only: an allowlisted reason code taken from the record's `detail`
+    /// (for example `prompt_required`). Free text never leaves the database.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -434,6 +444,10 @@ pub fn export(db_path: &Path, options: &ExportOptions) -> Result<DatasetV1, Repl
                             cash_usd: finite(record.cash_usd),
                             effective_usd: finite(record.effective_usd),
                             latency_ms: record.latency_ms,
+                            detail_code: (record.kind
+                                == task_core::model_router::shadow::ShadowKind::Estimator)
+                                .then(|| record.detail.as_deref().and_then(estimator::detail_code))
+                                .flatten(),
                         });
                     }
                 }
@@ -576,6 +590,10 @@ pub struct ReportV1 {
     pub policies: BTreeMap<String, PolicyReportV1>,
     pub paired_metrics: BTreeMap<String, String>,
     pub external_benchmark_baseline: Option<BenchmarkBaselineV1>,
+    /// Phase 5: estimator shadow compared against the heuristic primary. Absent when the dataset
+    /// has no estimator shadow and no pinned estimator was supplied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimator_comparison: Option<EstimatorComparisonV1>,
 }
 
 /// Only choices are supplied; all quality and cost values come from observed dataset rows.
@@ -637,6 +655,19 @@ fn percentile(values: &[u64], p: usize) -> Option<u64> {
     Some(sorted[((sorted.len() * p).div_ceil(100)).saturating_sub(1)])
 }
 
+/// The top-scored eligible candidate, i.e. the choice of the default heuristic estimator.
+fn heuristic_choice(row: &DatasetRowV1) -> Option<&CandidateV1> {
+    row.candidates
+        .iter()
+        .filter(|c| c.eligible && c.score.is_some())
+        .max_by(|a, b| {
+            a.score
+                .unwrap_or(f64::NEG_INFINITY)
+                .total_cmp(&b.score.unwrap_or(f64::NEG_INFINITY))
+                .then_with(|| b.source.cmp(&a.source))
+        })
+}
+
 #[derive(Clone, Copy)]
 enum PolicyChoice {
     Legacy,
@@ -668,17 +699,9 @@ fn policy_report(rows: &[DatasetRowV1], choice: PolicyChoice) -> PolicyReportV1 
                 .primary_model
                 .as_deref()
                 .map(|m| (m, row.primary_source.as_deref())),
-            PolicyChoice::Heuristic => row
-                .candidates
-                .iter()
-                .filter(|c| c.eligible && c.score.is_some())
-                .max_by(|a, b| {
-                    a.score
-                        .unwrap_or(f64::NEG_INFINITY)
-                        .total_cmp(&b.score.unwrap_or(f64::NEG_INFINITY))
-                        .then_with(|| b.source.cmp(&a.source))
-                })
-                .map(|c| (c.model.as_str(), Some(c.source.as_str()))),
+            PolicyChoice::Heuristic => {
+                heuristic_choice(row).map(|c| (c.model.as_str(), Some(c.source.as_str())))
+            }
             PolicyChoice::Shadow => row
                 .shadows
                 .iter()
@@ -706,14 +729,12 @@ fn policy_report(rows: &[DatasetRowV1], choice: PolicyChoice) -> PolicyReportV1 
             }
         }
         if matches!(choice, PolicyChoice::Shadow) {
-            if row
-                .shadows
-                .iter()
-                .any(|s| s.reason.as_deref() == Some("timeout"))
-            {
+            // Estimator shadows are reported separately in `estimator_comparison`.
+            let shadows = || row.shadows.iter().filter(|s| s.kind != "estimator");
+            if shadows().any(|s| s.reason.as_deref() == Some("timeout")) {
                 timeouts += 1;
             }
-            if row.shadows.iter().any(|s| s.status == "dropped") {
+            if shadows().any(|s| s.status == "dropped") {
                 drops += 1;
             }
         }
@@ -792,6 +813,17 @@ pub fn evaluate_with_paired(
     dataset: &DatasetV1,
     baseline: Option<BenchmarkBaselineV1>,
     paired: Option<&PairedMetricsInputV1>,
+) -> Result<ReportV1, ReplayError> {
+    evaluate_with_estimator(dataset, baseline, paired, None)
+}
+
+/// Like `evaluate_with_paired`, plus the estimator shadow comparison against the pinned
+/// descriptor/pair. Reads only the frozen dataset; never opens the database or calls HTTP.
+pub fn evaluate_with_estimator(
+    dataset: &DatasetV1,
+    baseline: Option<BenchmarkBaselineV1>,
+    paired: Option<&PairedMetricsInputV1>,
+    estimator: Option<&EstimatorComparisonInputV1>,
 ) -> Result<ReportV1, ReplayError> {
     if dataset.manifest.schema != DATASET_SCHEMA
         || dataset.rows.iter().any(|r| {
@@ -922,6 +954,7 @@ pub fn evaluate_with_paired(
         policies,
         paired_metrics,
         external_benchmark_baseline: baseline,
+        estimator_comparison: estimator::compare(&dataset.rows, estimator)?,
     })
 }
 

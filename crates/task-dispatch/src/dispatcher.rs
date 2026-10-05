@@ -117,6 +117,7 @@ mod provider_select;
 mod quota_book;
 mod review_spawn;
 mod review_verdict;
+mod routing_enforce;
 mod run_context;
 mod sinks;
 mod snapshot;
@@ -142,6 +143,10 @@ pub use cluster::{
     TunnelListenerProbe, TunnelProbe,
 };
 pub use provider_select::provider_failure_outcome;
+pub use routing_enforce::{
+    DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
+    enforce_quota_verdict, source_state_for_provider, source_state_from_account,
+};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1259,6 +1264,10 @@ pub struct Dispatcher {
     local_probe: LocalProviderProbe,
     /// ADR-0132 付記 L4: health の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     local_probe_cache: HashMap<String, (Instant, Reachability)>,
+    /// multi-objective routing Phase 2: dispatcher の routing 設定（既定 legacy。enforce は opt-in）。
+    dispatch_routing: routing_enforce::DispatchRoutingSettings,
+    /// multi-objective routing Phase 2: self-host の queue / GPU load の取り込み口（揮発。保存しない）。
+    self_host_loads: HashMap<ProviderId, routing_enforce::SelfHostLoad>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
     tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
     /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
@@ -1488,6 +1497,8 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             local_probe_cache: HashMap::new(),
+            dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
+            self_host_loads: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
             tunnel_listener_probe: None,

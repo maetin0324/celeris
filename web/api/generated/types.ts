@@ -99,6 +99,13 @@ export type AccountView = {
 
 export type Action = "approve" | "reject" | "answer" | "cancel" | "retry" | "edit" | "reopen" | "rereview" | "phase_gate" | "plan_gate";
 
+export type ActualSource = {
+  "account"?: string | null;
+  "from": string;
+  "model"?: string | null;
+  "source_id"?: string | null;
+};
+
 export type ActualWriteSetView = {
   "base_sha"?: string | null;
   "head_sha"?: string | null;
@@ -1500,6 +1507,15 @@ export type EffectiveProfile = {
   "tools"?: Array<string>;
 };
 
+export type EscalationAudit = {
+  "counted_failures": number;
+  "interval_id": string;
+  "previous_lane"?: Tier | null;
+  "reason": string;
+  "requested_lane": Tier;
+  "selected_lane": Tier;
+};
+
 export type Event = {
   "attempt": number;
   "before_sha": string;
@@ -1682,6 +1698,44 @@ export type Event = {
   "record": RoutingRecord;
   "run_id": string;
   "type": "routing_decided";
+} | {
+  "context_version": string;
+  "decision_id": string;
+  "features"?: unknown;
+  "missing_fields"?: Array<string>;
+  "provenance"?: {
+  [key: string]: string;
+};
+  "request_id"?: string | null;
+  "run_id"?: string | null;
+  "stage"?: FeatureStage | null;
+  "type": "routing_features_recorded";
+} | {
+  "attempts"?: Array<RequestSourceAttempt>;
+  "decision_id": string;
+  "fallback_reason"?: string | null;
+  "parent_decision_id"?: string | null;
+  "request_id": string;
+  "run_id"?: string | null;
+  "trace"?: RoutingTraceV1 | null;
+  "type": "routing_request_decided";
+} | {
+  "acceptance_passed"?: boolean | null;
+  "cash_usd"?: number | null;
+  "decision_id": string;
+  "evaluation_version": string;
+  "failed_criterion_ids"?: Array<string>;
+  "failure_class"?: string | null;
+  "outcome_id": string;
+  "request_id"?: string | null;
+  "retries"?: number | null;
+  "review_passed"?: boolean | null;
+  "reward"?: number | null;
+  "run_id"?: string | null;
+  "supersedes"?: string | null;
+  "tokens"?: number | null;
+  "type": "routing_outcome_recorded";
+  "wall_ms"?: number | null;
 } | {
   "checkpoint": Checkpoint;
   "run_id": string;
@@ -2187,6 +2241,8 @@ export type FailureSummary = {
   "delivered_release"?: string | null;
   "reason": string;
 };
+
+export type FeatureStage = "dispatch" | "proxy";
 
 export type FileDiffStat = {
   "added": number;
@@ -3913,11 +3969,22 @@ export type RequestLogLink = {
 };
 
 export type RequestRoutingAudit = {
+  "actual"?: ActualSource | null;
+  "attempts"?: Array<RequestSourceAttempt>;
   "decision_id": string;
+  "fallback_reason"?: string | null;
   "incomplete_reason"?: string | null;
   "log"?: RequestLogLink | null;
+  "parent_decision_id"?: string | null;
   "request_id"?: string | null;
   "trace": RoutingTraceV1;
+};
+
+export type RequestSourceAttempt = {
+  "account_id"?: string | null;
+  "fallback_reason"?: string | null;
+  "model"?: string | null;
+  "source_id": string;
 };
 
 export type ResolutionAction = {
@@ -4025,7 +4092,40 @@ export type RoutingCatalogView = {
   "warnings": Array<string>;
 };
 
+export type RoutingFeaturesRecord = {
+  "context_version": string;
+  "decision_id": string;
+  "features"?: unknown;
+  "missing_fields"?: Array<string>;
+  "provenance"?: {
+  [key: string]: string;
+};
+  "request_id"?: string | null;
+  "run_id"?: string | null;
+  "stage"?: FeatureStage | null;
+};
+
 export type RoutingMode = "legacy" | "shadow" | "enforce";
+
+export type RoutingOutcome = {
+  "acceptance_passed"?: boolean | null;
+  "cash_usd"?: number | null;
+  "decision_id": string;
+  "evaluation_version": string;
+  "failed_criterion_ids"?: Array<string>;
+  "failure_class"?: string | null;
+  "outcome_id": string;
+  "request_id"?: string | null;
+  "retries"?: number | null;
+  "review_passed"?: boolean | null;
+  "reward"?: number | null;
+  "run_id"?: string | null;
+  "supersedes"?: string | null;
+  "tokens"?: number | null;
+  "wall_ms"?: number | null;
+};
+
+export type RoutingOutcomeState = "not_recorded" | "unreviewed" | "judged";
 
 export type RoutingPolicy = {
   "constraints": Constraints;
@@ -4044,6 +4144,7 @@ export type RoutingPolicy = {
 
 export type RoutingRecord = {
   "decision": LaneDecision;
+  "escalation"?: EscalationAudit | null;
   "harness"?: string | null;
   "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;
@@ -4124,10 +4225,13 @@ export type RunRole = "worker" | "reviewer" | "planner";
 
 export type RunRoutingAudit = {
   "account"?: string | null;
+  "actual_sources"?: Array<ActualSource>;
   "adapter"?: string | null;
   "audit_incomplete"?: boolean | null;
   "cost_usd"?: number | null;
+  "decision_id"?: string | null;
   "escalation"?: string | null;
+  "escalation_audit"?: EscalationAudit | null;
   "features"?: TaskFeatures | null;
   "harness"?: string | null;
   "incomplete_reasons"?: Array<string>;
@@ -4137,6 +4241,7 @@ export type RunRoutingAudit = {
   "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;
   "outcome"?: string | null;
+  "outcome_state"?: RoutingOutcomeState | null;
   "output_tokens"?: number | null;
   "policy_version"?: string | null;
   "provider"?: string | null;
@@ -4145,6 +4250,8 @@ export type RunRoutingAudit = {
   "requests"?: Array<RequestRoutingAudit> | null;
   "retries"?: number | null;
   "review"?: ReviewResult | null;
+  "routing_features"?: RoutingFeaturesRecord | null;
+  "routing_outcome"?: RoutingOutcome | null;
   "rule_id"?: string | null;
   "run_id": string;
   "task_id": TaskId;

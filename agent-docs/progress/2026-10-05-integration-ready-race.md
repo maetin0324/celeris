@@ -48,6 +48,12 @@ attempt 2（記録の置き場所を ADR-0128 に合わせて agent-docs/progres
 `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、
 `sh scripts/dev/check-doc-links.sh` ok、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` ok。
 
+delivery-repair（2026-10-05、run 01M44VGGNMBBZ5RRRXYZEZ71ZZ）: 配送が「取り込み処理が中断しました。gitと承認SHAの照合が必要です」で blocked になった。
+これは `crates/celeris/src/delivery.rs` の `State::Merging` を再起動後に見たときの扱いで、git 操作の再実行はしない。
+照合の結果、登録元 repo の `main` と task branch の先端はどちらも `b8871e26`。deliveries の `reviewed_sha`・`merge_candidate_sha`・`head` も `b8871e26` なので、承認した SHA がそのまま main に入っている。コードの修正は要らない。
+同じ HEAD で `bash scripts/dev/test-parallel.sh` は exit 0（Summary 3927 passed / 12 skipped）、`cargo clippy --workspace -- -D warnings` は exit 0 だった。
+リリース準備（prepare）はまだ走っていない。配送を進めるのは人の操作になる。
+
 ## 未解決事項
 
 - 本番への昇格は未実施（人の判断）。昇格後の確認は docs/ops の手順に従う。

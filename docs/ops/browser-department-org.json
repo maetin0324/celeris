@@ -11,7 +11,7 @@
     "harnesses": { "allowed": ["coding"], "default": "coding" },
     "budget": { "max_lane": "standard", "max_attempts": 2 },
     "browser": {
-      "allowed_domains": ["localhost", "127.0.0.1"],
+      "allowed_domains": ["http://localhost:3000", "http://127.0.0.1:3000"],
       "allowed_actions": null,
       "credential_policy_ids": []
     },

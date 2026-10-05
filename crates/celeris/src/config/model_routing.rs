@@ -42,6 +42,11 @@ pub struct ModelRoutingConfig {
     /// `Config` 本体でなくここに持つのは、reload で `model_routing` と一緒に原子的に差し替えるため。
     #[serde(skip)]
     pub runtime: Option<std::sync::Arc<RoutingRuntime>>,
+    /// Phase 5: daemon が llm-proxy に配線した estimator sidecar の差し替え（proxy 無しは `None`）。
+    /// reload は新しい `estimator.sidecar` をこれに適用し、これ自体は古い値から引き継ぐ。
+    #[serde(skip)]
+    pub estimator_sidecar_control:
+        Option<std::sync::Arc<crate::daemon::routing_sidecar::EstimatorSidecarControl>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -52,7 +57,7 @@ pub struct EstimatorEntry {
 }
 
 /// Phase 5 の比較 estimator。primary は常に heuristic のまま。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SidecarEntry {
     pub enabled: bool,

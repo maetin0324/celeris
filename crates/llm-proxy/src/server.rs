@@ -31,7 +31,7 @@ use task_dispatch::accounts::{
 use ulid::Ulid;
 
 use crate::config::{LlmProxyConfig, OpenAiCompatibleConfig};
-use crate::estimator_shadow::{EstimatorShadow, EstimatorShadowInput};
+use crate::estimator_shadow::{EstimatorShadow, EstimatorShadowInput, EstimatorShadowSlot};
 use crate::fallback::{
     AfterFailure, Breakers, FailureClass, FallbackBudget, FallbackSettings, RequestConstraints,
 };
@@ -87,8 +87,9 @@ pub struct ProxyState {
     in_flight: Arc<InFlightContexts>,
     /// ADR 2026-10-04 §7.1・Phase 4: decision / execution shadow。`None`（既定）なら何もしない。
     shadow: Option<ProxyShadow>,
-    /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。`None`（既定）なら何もしない。
-    estimator_shadow: Option<Arc<EstimatorShadow>>,
+    /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。空（既定）なら何もしない。daemon が
+    /// reload で差し替える。
+    estimator_shadow: Arc<EstimatorShadowSlot>,
 }
 
 impl ProxyState {
@@ -121,7 +122,7 @@ impl ProxyState {
             event_sink: None,
             in_flight: Arc::new(InFlightContexts::default()),
             shadow: None,
-            estimator_shadow: None,
+            estimator_shadow: Arc::new(EstimatorShadowSlot::default()),
         })
     }
 
@@ -140,15 +141,30 @@ impl ProxyState {
         shadow: Option<Arc<EstimatorShadow>>,
     ) -> Arc<Self> {
         match Arc::get_mut(&mut self) {
-            Some(state) => state.estimator_shadow = shadow,
+            Some(state) => state.estimator_shadow.set(shadow),
             None => tracing::warn!("llm-proxy: estimator shadow ignored (state already shared)"),
+        }
+        self
+    }
+
+    /// estimator shadow の差し替え口を共有のものに替える（作った直後、まだ共有していない `Arc` に
+    /// だけ効く）。daemon は同じ口を持ち、reload で中身を差し替える。
+    pub fn with_estimator_shadow_slot(
+        mut self: Arc<Self>,
+        slot: Arc<EstimatorShadowSlot>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => state.estimator_shadow = slot,
+            None => {
+                tracing::warn!("llm-proxy: estimator shadow slot ignored (state already shared)")
+            }
         }
         self
     }
 
     /// shadow（decision / execution / estimator）のどれかが差し込まれているか。
     fn any_shadow(&self) -> bool {
-        self.shadow.is_some() || self.estimator_shadow.is_some()
+        self.shadow.is_some() || self.estimator_shadow.current().is_some()
     }
 
     /// primary が成功した後に shadow を走らせる。decision shadow は記録だけ、実行 shadow は要求の
@@ -251,7 +267,7 @@ impl ProxyState {
         primary: &ShadowCandidate,
         req: &ChatCompletionRequest,
     ) {
-        let Some(estimator) = &self.estimator_shadow else {
+        let Some(estimator) = self.estimator_shadow.current() else {
             return;
         };
         // estimator の比較は lane の policy で回す（明示 model の要求は対象外）。

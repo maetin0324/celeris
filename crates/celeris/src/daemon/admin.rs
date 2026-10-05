@@ -231,7 +231,9 @@ pub(crate) fn reload_providers(
         // mode と policy の組が 1 回で渡り、queue は上限・予約先を丸ごと差し替える。
         dispatcher.set_routing_shadow(runtime.shadow.clone());
     }
+    let sidecar_control = config.model_routing.estimator_sidecar_control.take();
     config.model_routing = new_config.model_routing;
+    config.model_routing.estimator_sidecar_control = sidecar_control;
     config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
     if let (Some(shared), Some(snapshot)) = (
         config.routing_catalog_state.as_ref(),
@@ -243,6 +245,8 @@ pub(crate) fn reload_providers(
     } else {
         config.routing_catalog_state = new_config.routing_catalog_state;
     }
+    // Phase 5: estimator sidecar も新しい snapshot から組み直す（締める・off へ戻すのも再起動なし）。
+    super::routing_sidecar::reload_estimator_sidecar(config);
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

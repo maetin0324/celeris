@@ -216,7 +216,7 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     };
     // ADR-0053 D1/D4（Phase 65）: 主 API（`GET /llm/sources`）とプロキシ自身が同じ `Arc` を使う。
     let llm_proxy_state =
-        build_llm_proxy_state(&config, &mut dispatcher, role.clone(), routing_registry)?;
+        build_llm_proxy_state(&mut config, &mut dispatcher, role.clone(), routing_registry)?;
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。

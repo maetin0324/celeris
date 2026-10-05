@@ -222,7 +222,7 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
                         </Link>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <StatusBadge status={task.status} />
+                        <StatusBadge status={task.status} className="whitespace-nowrap break-normal" />
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {waiting > 0 ? (

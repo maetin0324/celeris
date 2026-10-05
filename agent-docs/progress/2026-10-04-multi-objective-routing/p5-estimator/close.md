@@ -1,7 +1,7 @@
 ---
 tasks: [01M4651ZZP8FJKGG6W2WPFNKBH]
 unit: close
-status: blocked
+status: done
 updated: 2026-10-05
 ---
 
@@ -18,8 +18,13 @@ ADR 末尾の付記「Phase 5 の実装済み範囲（close による全体検�
 unittest 3・check-runbook ok・fake-shadow-check ok・real-sidecar-check は not run・文書検査 3 本 exit 0）。
 範囲 check（scope）→ 範囲外 path なし。
 
+## 原票の転記（2026-10-05）
+
+人（Fable）が本番 host で実行した実 sidecar の原票（commit `3c1a0f5c`、`docs/reports/model-routing-routellm-shadow/`）を
+report §3 に転記した（実行コマンド・exit・件数・上限消費・失敗・latency・依存・weights・機材。制約違反数・coverage は
+未計測と明記）。手順書 §10.2 の license 行・§10.3 の状態（approved）・§10.5 の検証済み構成を直し、ADR 付記の状態行を
+更新した。新しい実装はしていない。再検査は task の進捗の「原票の転記後の再検査」。
+
 ## 未解決事項
 
-- 人の決定 `routellm-weights-use` の実行（実 sidecar の start-stop と上限付き shadow）と原票が無い。
-  決定は「close は原票を転記してから完了」なので、この run は人への質問で止まる。
-- report §2 の食い違い 3 点（実評価の前に直す必要がある。提案は task の進捗参照）。
+- Celeris 本体の opt-in shadow による coverage・制約違反数は未計測（人の別判断）。

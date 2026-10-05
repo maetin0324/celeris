@@ -1,9 +1,9 @@
 ---
 title: "Phase 5（p5-estimator）: 外部/学習 estimator の必要性評価と pluggable adapter（shadow → opt-in）"
 tasks: [01M4651ZZP8FJKGG6W2WPFNKBH]
-status: blocked
+status: done
 updated: 2026-10-05
-completed: 未（実 RouteLLM sidecar の評価が人の手順待ち。実装・偽 sidecar 検証・手順書は 2026-10-05 に統合済み）
+completed: 2026-10-05
 ---
 
 # Phase 5（p5-estimator）: 外部/学習 estimator の必要性評価と pluggable adapter
@@ -15,11 +15,12 @@ shadow 評価の道具立てを実装した。本番の切り替えはしてい�
 
 ## 状態
 
-- **Phase 5 の実評価は未完了（人の手順待ち）。** 人の決定 `routellm-weights-use`（2026-10-05）は weights を内部の shadow
-  評価に限り承認し、実 sidecar の start-stop と上限付き shadow を人（Fable）が本番 host で
-  `scripts/model-routing/real-sidecar-check.sh` と `docs/ops/model-routing-migration.md` §10 に沿って実行し、
-  原票を `docs/reports/model-routing-routellm-shadow/` に置くとした。close 時点で原票は無く、転記していない。
-  偽 sidecar の合格で置き換えていない（report §3・§4）。
+- **実 RouteLLM sidecar の評価は人が実行し、report §3 に転記した（2026-10-05）。** 人の決定 `routellm-weights-use`
+  （内部の shadow 評価に限る）に沿って Fable が本番 host で `real-sidecar-check.sh` の start-stop（exit 0）と
+  上限付き shadow（exit 0、上限 50 に対し 30 件、completed 30 / failed 0 / timeout 0 / dropped 0、外部呼び出し 0）を
+  実行し、原票を `docs/reports/model-routing-routellm-shadow/`（commit `3c1a0f5c`）に置いた。
+  Celeris 本体の estimator shadow（coverage・`estimator_version_mismatch`・制約違反数・primary 変更数）は本番 config の
+  opt-in が要るため未計測。偽 sidecar の結果で埋めていない（report §3.4）。本番切り替えはしていない。
 - 必要性評価（assess）: 外部 estimator を adapter で shadow 比較する価値はある。自動学習・本番選択はしない
   （[assess.md](p5-estimator/assess.md)、ADR 付記「Phase 5 必要性評価」）。
 
@@ -47,17 +48,29 @@ shadow 評価の道具立てを実装した。本番の切り替えはしてい�
 - 文書検査 3 本（`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`）→ exit 0
 - 原票 `docs/reports/model-routing-routellm-shadow/` は依然として無い → 転記なし
 
+### 原票の転記後の再検査（2026-10-05、HEAD `3c1a0f5c` + 記録の変更のみ）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0、`4035 tests run: 4035 passed (1 slow), 13 skipped`、`test-parallel: ok`
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- 上表 4 の filterset → exit 0、`39 tests run: 39 passed, 4009 skipped`
+- `python3 -m unittest discover -s scripts/model-routing -p 'test_*.py'` → OK
+- `sh scripts/model-routing/check-runbook.sh --require-approved` → exit 0、`routellm-weights-use=approved`
+- `sh scripts/model-routing/fake-shadow-check.sh` → exit 0。worker 内の `real-sidecar-check.sh` → exit 2（weights なし。実行の証拠は人の原票）
+- 文書検査 3 本 → exit 0
+- 人の原票（`run-manifest.txt`・`start-stop.log`・`shadow.log`・`real-sidecar-results.json`）: start-stop exit 0、shadow exit 0・30/30 completed
+
 ## 未解決事項
 
-1. 実 RouteLLM sidecar の start-stop（`routing_routellm_real_sidecar_start_stop`）と上限付き shadow
-   （`routing_routellm_real_shadow_within_caps`）が未実行。人の実行と原票待ち。手順書 §10.1 の block は weights の
-   full revision・checksum が記録されるまで `pending`。
-2. （解決済み）偽 sidecar の結合試験が回避していた食い違い 3 点（report §2）は shadow-join unit が直し、
-   `3687abbb`（integrate wu/shadow-join）を close branch に取り込んだ。
-3. 推移依存の lock と CPU/GPU wheel の選択、sidecar 推論の実資源費（daemon は名目 `SIDECAR_NOMINAL_CALL_USD` で数える）、
-   raw score の v1 DTO 専用欄、校正（`calibration_version`）。
+1. Celeris 本体の estimator shadow（本番 config の opt-in、手順書 §10.7）での coverage・`estimator_version_mismatch`・
+   hard constraint 違反数・primary 変更数は未計測。opt-in は人の別判断。
+2. license: HF repo に Apache-2.0 本文の `LICENSE` file があるが model card に宣言なし。外部発表前に人が再判断。
+3. 推移依存の lock と CPU/GPU wheel の選択（今回の freeze は原票 `venv-freeze.txt`）、sidecar 推論の実資源費
+   （daemon は名目 `SIDECAR_NOMINAL_CALL_USD` で数える）、raw score の v1 DTO 専用欄、校正（`calibration_version`）。
+4. 手順書 §10.5 の旧目安（BERT-base・0.45 GB）は実測（XLM-RoBERTa・1.1 GB、peak RSS 約 2.6 GB）で直した。GPU 構成は未検証。
 
 ## 提案
 
-- 人の実行後、close を再走して原票の実行コマンド・exit・件数・上限消費・制約違反数を report §3 に転記し、
-  本ファイルを `status: done` にする。opt-in（本番判断への反映）は別の Phase で人が決める。
+- 実利用の判断材料を得るなら、人が別 Phase で §10.7 の opt-in（`shadow_only = true`・日次上限付き）を短期間入れ、
+  `celerisctl routing evaluate --policy estimator` の coverage・制約違反数を測る。本番判断への反映（opt-in の primary 化）は
+  さらに別の決定とする。
+- raw_pair_win_rate は難易度の平均順に並ぶが範囲が重なり未校正。校正なしに primary の判断材料にしない。

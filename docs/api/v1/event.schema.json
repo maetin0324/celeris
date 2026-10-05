@@ -322,6 +322,73 @@
       ],
       "type": "string"
     },
+    "CandidateTrace": {
+      "properties": {
+        "cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "deployment_id": {
+          "type": "string"
+        },
+        "eligible_provider_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excluded_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "latency_ms": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "model_profile_id": {
+          "type": "string"
+        },
+        "pressure": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QualityEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model_profile_id",
+        "deployment_id",
+        "eligible_provider_ids",
+        "excluded_reasons"
+      ],
+      "type": "object"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -4995,6 +5062,38 @@
         }
       ]
     },
+    "QualityEstimate": {
+      "properties": {
+        "confidence": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "feature_version": {
+          "type": "string"
+        },
+        "index": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reasons",
+        "feature_version"
+      ],
+      "type": "object"
+    },
     "QuotaCalibration": {
       "description": "D4.2 の較正値 `k_w`（同じ source の直近の `measured` run から求めた比の和）。",
       "properties": {
@@ -5263,6 +5362,14 @@
       ],
       "type": "object"
     },
+    "RoutingMode": {
+      "enum": [
+        "legacy",
+        "shadow",
+        "enforce"
+      ],
+      "type": "string"
+    },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",
       "properties": {
@@ -5276,6 +5383,17 @@
             "string",
             "null"
           ]
+        },
+        "optimizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingTraceV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional Phase 1 optimizer audit. Older events omit this field."
         },
         "org_node": {
           "description": "Ownership 層: 担当（`org_nodes.id`）。",
@@ -5306,6 +5424,122 @@
       "required": [
         "decision",
         "resolution"
+      ],
+      "type": "object"
+    },
+    "RoutingTraceV1": {
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/CandidateTrace"
+          },
+          "type": "array"
+        },
+        "catalog_version": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "estimator_version": {
+          "type": "string"
+        },
+        "fallback_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "feature_version": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "observed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_decision_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_lane": {
+          "$ref": "#/$defs/Tier"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected_lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_id": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision_id",
+        "stage",
+        "mode",
+        "policy_version",
+        "catalog_version",
+        "feature_version",
+        "estimator_version",
+        "snapshot_id",
+        "requested_lane",
+        "candidates",
+        "fallback_order",
+        "reasons"
       ],
       "type": "object"
     },

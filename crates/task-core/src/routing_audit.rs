@@ -200,6 +200,7 @@ mod tests {
             },
             quota_reason: None,
             work_unit_id: None,
+            optimizer: None,
         };
         let events = vec![
             Event::WorkerStarted {

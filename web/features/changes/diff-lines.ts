@@ -33,7 +33,20 @@ export function fileStatusView(status: string): { label: string; tone: BadgeTone
   return fileStatus[status.trim().charAt(0).toUpperCase()] ?? { label: status, tone: "neutral" };
 }
 
-// 取り込みの状態語を tone へ。状態語そのものは可視ラベルとして出す。
+// 取り込みの状態語を運用者が読めるラベルと tone へ。
+export function integrationLabel(state: string): string {
+  const labels: Record<string, string> = {
+    merged: "取り込み済み",
+    done: "完了",
+    conflict: "衝突あり",
+    failed: "失敗",
+    error: "エラー",
+    open: "PR 公開中",
+    pending: "処理待ち",
+  };
+  return labels[state] ?? `未確認（${state}）`;
+}
+
 export function integrationTone(state: string): BadgeTone {
   if (state === "merged" || state === "done") return "success";
   if (state === "conflict" || state === "failed" || state === "error") return "danger";

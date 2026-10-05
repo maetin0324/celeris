@@ -405,6 +405,90 @@ route file は次の 3 つ。
   - LLM を使う実行は認証のある環境でだけ行い、証跡を進捗に残す。
   - launcher runtime に dashboard の upstream があるかは、ここで初めて確かめる。
 
+## D5. 設定の web 編集と task 単位 allowed_domains（2026-10-06 人の追加要望）
+
+人から次の 2 点が追加で求められた。いずれもこの task の範囲に含め、決定だけここに記す。
+具体的な実装は org-node の外（follow-up task）に送る。理由は、変更が task-api（org PATCH の event 記録）・
+task-core（task 作成時の検証・`BrowserTaskPolicy` のスキーマ）・CoS/planner の prompt という複数 crate に
+またがり、org-node 葉の受け入れ条件（org node 定義・matching 試験・投入手順）を超えるため。
+
+### D5.1 web からの設定編集
+
+既に足りているもの:
+
+- grant（`allowed_domains`・harness・budget・`credential_policy_ids`）の編集は、D1.3 で使う
+  `PATCH /api/v1/org/{id}`（`profile` 丸ごと置換、`crates/task-api/src/handlers/org.rs:134-179`）で
+  既にできる。browser 専用の管理 API は**新設しない**（経路を二重にしない）。
+- 不正な値の拒否は `BrowserCapability::validate()`（`crates/task-core/src/browser.rs:31-51`）が既に行う。
+  `allowed_domains` の各 host は `valid_host()`（同 L54-66、英数・ハイフン・ドット区切りの DNS ラベルのみ）
+  を通るので、裸の `"*"` や `scheme://` 付きの値、ポート付きの値は構文として弾かれる
+  （既存試験 `rejects_credential_urls_and_domain_policy_bypasses`、同ファイル L645-693 に host 側の
+  `"*"` 拒否を含む）。`live_view_url` も同様に `valid_live_view_url()`（L70-89）が scheme・userinfo・
+  query・fragment を拒否する。追加の検証コードは不要。
+
+欠けているもの（決定）:
+
+- **D5.1-a**: `patch_org_node` は `tracing::info!(who = "admin", ...)` の固定文字列ログだけで、
+  `Event` には org 系 variant が無い（`crates/task-core/src/model.rs` の `Event` enum）。
+  **決定**: `Event::OrgNodeUpdated { node_id, actor, fields_changed }`
+  （値そのものは入れず、変更した欄名の要約だけを持つ）を足し、org の POST/PATCH 時に実 actor
+  （web の owner session 識別子、または CLI 呼び出し元）付きで記録する。
+- **D5.1-b**: 管理画面（org の browser 欄を編集する web 画面）は web-ui WU の範囲に含める。
+  バックエンドは D5.1-a の event 記録込みの既存 `PATCH /api/v1/org/{id}` をそのまま使う。
+
+### D5.2 task 単位の allowed_domains と交わり判定
+
+既に足りているもの:
+
+- `BrowserTaskPolicy.network_domains`（ADR-0080 D1、`crates/task-core/src/browser.rs:231-248`）と
+  `EffectiveBrowserPolicy::derive`（同 L423-503）が、まさに要望どおり
+  「grant の `allowed_domains` ∩ task の `network_domains`」を実装済み（L465-486）。
+  - `task` 引数が `None`（`BrowserTaskPolicy` 未設定）なら `BrowserPolicyRequired` で拒否。
+  - 交わりが空集合なら `EmptyDomains` で拒否。
+  - つまり「grant の外は拒否」も「task 側が空集合なら動けない」も、既に fail-closed で成立している。
+  - この結果（`policy.json`）は `task-worker/src/browser_policy.rs` 経由で worker 内の
+    `browser_isolation.rs::EgressPolicy`（namespace の filtering proxy）にそのまま渡る。
+    「policy broker と egress の両方で判定する」という要望は、**単一の `derive()` の出力を両方が読む**
+    ことで満たす（判定を 2 箇所に別々に実装しない。実装が割れると片方だけ直し忘れる事故が起きる）。
+
+欠けているもの（決定）:
+
+- **D5.2-a（作成時に拒否するか、空集合として扱うか）**: **作成時に拒否する**。
+  `skills` に `browser-enabled` を含む task は、`TaskSpec` に新欄 `browser_network_domains`
+  （非空の `Vec<String>`）を必須にする。欠落・空なら `POST /tasks` を 422 で拒否する
+  （`crates/task-ops/src/add.rs` の `browser_requested` 分岐、現状 L645-663 を拡張）。
+  理由: 黙って空集合のまま作れると、後から気づかれない「何もできない browser task」が残る。
+  `derive()` の fail-closed 挙動（L465-486）はそのまま実行時の二重の網として残す。
+  作成時の検証は `normalize_host_pattern`（grant 側と同じ正規化）で構文も確かめ、grant との交わりは
+  まだ求めない（grant は assignee 決定後に変わり得るため、matching 前の作成時点では grant を前提にしない。
+  交わりの判定は実行時の `derive()` に任せる）。
+- **D5.2-b（子 task の上限）**: 子 task の `browser_network_domains` は、親 task のそれの**部分集合**
+  でなければ作成を拒否する。親が `browser_network_domains` を持たない（browser-enabled でない）場合、
+  子も持てない。これにより「子 task が親を超えて広い host を要求する」ことを作成時に防ぐ。
+  grant 自体の拡大（人が PATCH で grant を広げる）とは独立の軸であり、この部分集合チェックは
+  task 系譜の中だけで完結する。
+- **D5.2-c（CoS・planner の最小 domain 規則）**: task を作る側（CoS の起票、planner の子 task 生成、
+  `create_task` の説明文）の prompt・skill に次を足す。
+  - 規則: 「browser-enabled task には、その task が実際に必要とする最小の host 集合だけを
+    `browser_network_domains` に書く。部署の grant 全体を書き写さない。」
+  - 書き方の例: 社内 wiki の 1 ページだけを読む task なら
+    `browser_network_domains: ["wiki.internal.example"]`（grant が
+    `["*.internal.example", "github.com"]` であっても、使わない host は書かない）。
+  - 置き場所: CoS の prompt（`crates/task-core/src/console_action.rs` 近辺の説明文）と
+    `create_task` のツール説明（`crates/task-api/src/docs.rs` 等）。
+
+### D5.3 follow-up task の範囲（この WU の外）
+
+次を 1 本の follow-up task として起票する（`followups.json`）。
+
+1. `Event::OrgNodeUpdated`（actor 付き）を足し、org の POST/PATCH で記録する。
+2. `TaskSpec.browser_network_domains` を足し、browser-enabled task の作成時検証（D5.2-a）と
+   親子の部分集合チェック（D5.2-b）を実装する。
+3. CoS・planner の prompt/skill に最小 domain の規則と例（D5.2-c）を足す。
+4. 決定的な試験: 交わり判定（既存 `derive()` の試験で十分か確認し、無ければ足す）、grant 外の拒否、
+   作成時拒否（domains 無し）、子が親を超える拒否、org PATCH の event 記録と actor、
+   不正値（wildcard・scheme）の拒否（既存試験の確認）。
+
 ## 帰結
 
 - browser task は `browser-execution` にだけ割り当たり、grant は loopback から始まる。
@@ -412,3 +496,5 @@ route file は次の 3 つ。
 - web gateway の守る範囲が増える。owner socket・attestation 鍵・live upstream の 3 つの起動設定が要る。
   docs/ops に書き、`celeris-web@` unit の環境に足すのは人の操作とする。
 - 旧 GUI の browser 画面は web と同等以上になる。旧 GUI の撤去は本 ADR の範囲外とする。
+- task 単位の `allowed_domains`（D5.2）は作成時に必須化し、黙って部署 grant 全体に広がらない。
+  org の browser 設定は既存の `PATCH /api/v1/org` で編集し、actor 付き event を残す（D5.1）。

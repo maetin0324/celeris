@@ -92,6 +92,54 @@ fn browser_matching_requires_administrator_capability_grant() {
     ));
 }
 
+/// ADR 2026-10-05-browser-department-web-live-view D1.3: `browser-execution`（ブラウザ実行課。
+/// ADR-0078 の browser-specialist profile）の grant を持つ node にだけ `browser-enabled` task が
+/// 割り当たり、grant の無い他の coding node（software-engineering・systems-performance）は、
+/// 同じ harness を許し skills が一致していても候補から外れる。
+#[test]
+fn browser_specialist_node_receives_browser_enabled_tasks_and_ungranted_nodes_are_excluded() {
+    let mut nodes = org();
+    nodes.push(node(
+        "browser-execution",
+        Some("engineering"),
+        &["coding"],
+        Some("coding"),
+        &["browser-enabled", "browser", "web-automation"],
+    ));
+    let last = nodes.len() - 1;
+    let browser_task = task(Some("coding"), &["browser-enabled", "web-automation"]);
+
+    // grant が無い間は、同じ skills を持つ node があっても誰にも割り当たらない。
+    assert!(matches!(
+        decide(&nodes, &browser_task),
+        Assignment::Unroutable { .. }
+    ));
+
+    nodes[last].profile.browser = Some(task_core::BrowserCapability {
+        allowed_domains: vec!["localhost".into(), "127.0.0.1".into()],
+        live_view_url: None,
+        allowed_actions: None,
+        credential_policy_ids: vec![],
+    });
+    assert!(
+        matches!(decide(&nodes, &browser_task), Assignment::Assigned { ref node, .. } if node == "browser-execution"),
+        "browser-enabled task should be assigned to the node holding the browser grant"
+    );
+
+    // 通常の coding task（browser-enabled を求めない）は grant の有無に関係なく既存どおり動く。
+    let non_browser_task = task(Some("coding"), &["rust"]);
+    assert!(
+        matches!(decide(&nodes, &non_browser_task), Assignment::Assigned { ref node, .. } if node == "software-engineering"),
+    );
+
+    // grant を外すと再び誰にも割り当たらない（黙って候補が広がらない）。
+    nodes[last].profile.browser = None;
+    assert!(matches!(
+        decide(&nodes, &browser_task),
+        Assignment::Unroutable { .. }
+    ));
+}
+
 fn task(harness: Option<&str>, skills: &[&str]) -> Task {
     let mut t = sample_task();
     t.genre = harness.map(str::to_string);

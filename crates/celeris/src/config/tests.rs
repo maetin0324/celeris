@@ -329,6 +329,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
             "software-engineering",
             "ui-ux",
             "systems-performance",
+            "browser-execution",
             "research",
             "literature-research",
             "web-research",
@@ -341,7 +342,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
         ]
     );
     let nodes = cfg.org_nodes(time::OffsetDateTime::now_utc());
-    assert_eq!(nodes.len(), 14);
+    assert_eq!(nodes.len(), 15);
     // 親が子より先に来る（cos → 部 → 課）。
     let order: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(order[0], "cos");
@@ -726,8 +727,66 @@ fn example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering() {
     assert_eq!(route(&["typescript", "react"]), "software-engineering");
     assert_eq!(route(&["hpc", "perf"]), "systems-performance");
     // skill なし: coding を許す課（engineering 配下に限らない）はすべて 0 点・同じ深さで並び、
-    // id の辞書順で先頭の cluster-hpc になる（観測値。決定的だが意味のある振り分けではない）。
-    assert_eq!(route(&[]), "cluster-hpc");
+    // id の辞書順で先頭の browser-execution になる（観測値。決定的だが意味のある振り分けではない。
+    // browser-enabled を要求しない task なので browser grant の有無は関係ない）。
+    assert_eq!(route(&[]), "browser-execution");
+}
+
+/// ADR 2026-10-05-browser-department-web-live-view D1.3: 例の組織（`org.example.toml`）の
+/// `browser-execution`（browser-specialist profile。ADR-0078 D2）が、`browser-enabled` task を
+/// 受け、grant を持たない課（software-engineering・ui-ux）には行かないことを、seed の TOML をそのまま
+/// 読んで確かめる。
+#[test]
+fn browser_specialist_org_node_receives_browser_enabled_tasks_from_the_example_org() {
+    use task_ops::matching::{Assignment, decide};
+
+    let config_dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../config"));
+    let dir = tempfile::tempdir().unwrap();
+    let example = std::fs::read_to_string(config_dir.join("celeris.example.toml")).unwrap();
+    let enabled = example.replace("# org_include = \"org.toml\"", "org_include = \"org.toml\"");
+    std::fs::write(dir.path().join("config.toml"), enabled).unwrap();
+    std::fs::copy(
+        config_dir.join("org.example.toml"),
+        dir.path().join("org.toml"),
+    )
+    .unwrap();
+    let cfg = Config::load(&dir.path().join("config.toml")).unwrap();
+    cfg.validate().unwrap();
+    let nodes = cfg.org_nodes(time::OffsetDateTime::now_utc());
+
+    let browser_execution = nodes
+        .iter()
+        .find(|n| n.id == "browser-execution")
+        .expect("browser-execution node from config/org.example.toml");
+    assert_eq!(browser_execution.parent_id.as_deref(), Some("engineering"));
+    assert_eq!(browser_execution.genre.as_deref(), Some("coding"));
+    let grant = browser_execution
+        .profile
+        .browser
+        .as_ref()
+        .expect("browser-execution must seed a browser grant");
+    grant.validate().expect("seeded grant must validate");
+    assert_eq!(grant.allowed_domains, vec!["localhost", "127.0.0.1"]);
+
+    let mut task = routing_sample_task();
+    task.genre = Some("coding".to_string());
+    task.skills = vec!["browser-enabled".to_string()];
+    assert!(
+        matches!(decide(&nodes, &task), Assignment::Assigned { ref node, .. } if node == "browser-execution")
+    );
+
+    // software-engineering / ui-ux は同じ coding harness を許すが browser grant を持たないので、
+    // browser-enabled task の候補にはならない（matching.rs の `requests_browser` ガード）。
+    for node in &nodes {
+        if node.id == "browser-execution" {
+            continue;
+        }
+        assert!(
+            node.profile.browser.is_none(),
+            "{} は browser grant を持つべきではない（grant は browser-execution だけに置く）",
+            node.id
+        );
+    }
 }
 
 fn routing_sample_task() -> task_core::Task {

@@ -114,7 +114,7 @@ pub(crate) async fn start_mcp(
 /// **そのまま共有する**（`crates/task-dispatch/src/dispatcher.rs` の `account_book`。別の写しを作らない）。
 /// Bearer は `[api] token_file` と同じ（`docs/guides/llm-source.md`）。
 pub(crate) fn build_llm_proxy_state(
-    config: &Config,
+    config: &mut Config,
     dispatcher: &mut Dispatcher,
     role: SharedRole,
     registry: Arc<dyn RoutingContextRegistry>,
@@ -169,10 +169,27 @@ pub(crate) fn build_llm_proxy_state(
         },
     )
     .map_err(ApiError::Startup)?;
-    Ok(Some(match wiring.shadow {
+    let state = match wiring.shadow {
         Some(shadow) => state.with_shadow(Some(shadow)),
         None => state,
-    }))
+    };
+    // ADR 2026-10-04 §10 Phase 5: `[model_routing.estimator.sidecar]`。既定 off は client を作らない。
+    // 差し替え口は proxy と共有し、reload（`reload_estimator_sidecar`）で中身を替える。
+    let control = Arc::new(super::routing_sidecar::EstimatorSidecarControl::new(
+        super::routing_sidecar::SidecarDeps {
+            sink: super::routing_shadow::task_shadow_sink(dispatcher.store()),
+            clock: Arc::new(llm_proxy::reservation::SystemClock),
+            monotonic: Arc::new(llm_proxy::estimator_sidecar::TokioClock),
+            owner: format!("celeris-pid-{}", std::process::id()),
+        },
+    ));
+    control.apply(
+        &config.model_routing.estimator.sidecar,
+        super::routing_sidecar::proxy_catalog(config),
+    );
+    let state = state.with_estimator_shadow_slot(control.slot());
+    config.model_routing.estimator_sidecar_control = Some(control);
+    Ok(Some(state))
 }
 
 /// proxy 要求の task event 追記。DB 操作は blocking pool へ送り、HTTP 応答を待たせない。
@@ -316,7 +333,7 @@ mod routing_tests {
             ),
         )
         .unwrap();
-        let config = Config::load(&path).unwrap();
+        let mut config = Config::load(&path).unwrap();
         let mut dispatcher =
             crate::daemon::bootstrap::build_dispatcher(&config, Default::default()).unwrap();
         let registry: Arc<dyn RoutingContextRegistry> =
@@ -324,9 +341,10 @@ mod routing_tests {
         dispatcher.set_routing_context_registry(Arc::clone(&registry));
         assert_eq!(Arc::strong_count(&registry), 2);
         let role = SharedRole::new(task_core::InstanceRole::Active);
-        let state = build_llm_proxy_state(&config, &mut dispatcher, role, Arc::clone(&registry))
-            .unwrap()
-            .expect("proxy enabled");
+        let state =
+            build_llm_proxy_state(&mut config, &mut dispatcher, role, Arc::clone(&registry))
+                .unwrap()
+                .expect("proxy enabled");
         // test・dispatcher・proxy の 3 者が同じ Arc を持つ（with_routing_context が効いた）。
         assert_eq!(Arc::strong_count(&registry), 3);
         drop(state);

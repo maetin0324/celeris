@@ -198,6 +198,27 @@ pub fn classify_unavailable(error: &SidecarUnavailable) -> (ShadowStatus, Shadow
     }
 }
 
+/// proxy が要求ごとに読む estimator shadow の差し替え口（ADR 2026-10-04 §10 Phase 5 daemon-wire）。
+/// daemon は起動時・reload 時に [`Self::set`] で差し替える（`None` で off。off の間は client も無い）。
+/// 差し替え前に始まった評価は古い `Arc` のまま最後まで走る（primary には触れない）。
+#[derive(Default)]
+pub struct EstimatorShadowSlot {
+    current: std::sync::RwLock<Option<Arc<EstimatorShadow>>>,
+}
+
+impl EstimatorShadowSlot {
+    pub fn set(&self, shadow: Option<Arc<EstimatorShadow>>) {
+        *self.current.write().unwrap_or_else(|e| e.into_inner()) = shadow;
+    }
+
+    pub fn current(&self) -> Option<Arc<EstimatorShadow>> {
+        self.current
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+}
+
 /// estimator shadow 一式。状態は持たない（client の circuit を除く）。
 pub struct EstimatorShadow {
     config: EstimatorShadowConfig,

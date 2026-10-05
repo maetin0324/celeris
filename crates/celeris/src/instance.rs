@@ -8,15 +8,19 @@
 //! 規則（ADR-0040 D4 そのまま）:
 //!
 //! - 起動時: `--mode verify` なら役割 `verify`（`daemon_instances` に**行を書かない**）。
-//!   そうでなければ、heartbeat が新しい `active` が居て **`release` が同じ**なら二重起動なので exit 3。
-//!   `release` が違うなら `standby` になり、その `active` の行に `handoff_requested_at` を書く。
-//!   `active` が居なければ自分が `active`。
+//!   そうでなければ、**生きている** `active`（`drained_at` が無く、プロセスが生きている行。heartbeat
+//!   の新旧は問わない）が居て **`release` が同じ**なら二重起動なので exit 3。
+//!   生きている `active` が居れば `standby` になり、**生きている全ての `active`** の行に
+//!   `handoff_requested_at` を書く。居なければ `active` になる（同じ transaction で確かめて書く）。
 //! - 毎 tick: 自分の行に heartbeat を打つ。`active` は `handoff_requested_at` を見たら**同じ tick で**
 //!   `draining` へ（listener を閉じ、dispatch と裏方を止める。手元の run は面倒を見続ける）。
-//!   `standby` は `active` が `draining` になった／heartbeat が古くなったのを見たら `active` へ。
+//!   `standby` は、生きている他の `active` が 1 つも無くなったら `active` へ（判断と書き込みを 1 つの
+//!   transaction で行う。ADR-0040 D4 付記 2026-10-05）。
+//! - `active` が 2 つ以上生きていたら（規則に反する痕）、新しい方を残し古い方へ引き継ぎを要求する。
 //! - 手元の run が 0 になったら `drained_at` を書いて exit 0。`[handoff] drain_timeout_secs` を
 //!   超えたら残りを abort して exit 0。
-//! - 他のインスタンスの行は、`drained_at` が付くか heartbeat が古くなったら消す。
+//! - 他のインスタンスの行は、`drained_at` が付くか、heartbeat が古く**かつ**（active でない か プロセスが死んでいる）
+//!   なら消す。古くても生きている `active` の行は消さない（まだ手放していないので、消すと二重起動になる）。
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,17 +72,6 @@ pub fn freshness_window(tick: Duration, lease_grace_secs: u64) -> Duration {
     tick.saturating_mul(3) + Duration::from_secs(lease_grace_secs)
 }
 
-/// 起動時の判断（純粋な関数。DB には触れない）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StartupDecision {
-    /// `active` がいないので自分が `active` になる。
-    Active,
-    /// 別の `release` の `active` がいるので `standby` になり、その行に引き継ぎを要求する。
-    Standby { active_instance_id: String },
-    /// 同じ `release` の `active` が既にいる。何もせず exit 3（同じ版を二重に起こさない）。
-    DuplicateRelease { instance_id: String, pid: u32 },
-}
-
 /// そのプロセスがまだ生きているか（同一ホスト前提。ADR-0040 D4「同一ホスト・同一 SQLite」）。
 /// 判定できない環境では `true`（＝生きている）を返す。**保守的な側**（二重起動を疑う側）に倒す。
 pub fn pid_alive(pid: u32) -> bool {
@@ -93,6 +86,36 @@ pub fn pid_alive(pid: u32) -> bool {
     }
 }
 
+/// 生きている `active` か（ADR-0040 D4 付記 2026-10-05）: 役割が `active` で `drained_at` が無く、
+/// プロセスがまだ生きている行。heartbeat が古くても、プロセスが生きていれば手放すまで active とみなす
+/// （古いと見て引き継ぐと、生きたままの旧 instance と二重に dispatch する）。
+pub fn is_live_active(row: &DaemonInstance, alive: &dyn Fn(u32) -> bool) -> bool {
+    row.role == InstanceRole::Active && row.drained_at.is_none() && alive(row.pid)
+}
+
+/// `self_id` 以外に生きている `active` が 1 つも無いか（active になってよい条件）。store の
+/// `instance_register_if` / `instance_set_role_if` の `admit` に渡す。
+pub fn no_other_live_active(
+    rows: &[DaemonInstance],
+    self_id: &str,
+    alive: &dyn Fn(u32) -> bool,
+) -> bool {
+    !rows
+        .iter()
+        .any(|r| r.instance_id != self_id && is_live_active(r, alive))
+}
+
+/// 起動時の判断（純粋な関数。DB には触れない）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartupDecision {
+    /// 生きている `active` がいない。自分が `active` になる（書き込みの直前にもう一度確かめる）。
+    Active,
+    /// 生きている `active` がいる。`standby` になり、それら全部に引き継ぎを要求する。
+    Standby { active_instance_ids: Vec<String> },
+    /// 同じ `release` の生きている `active` が既にいる。何もせず exit 3（同じ版を二重に起こさない）。
+    DuplicateRelease { instance_id: String, pid: u32 },
+}
+
 /// ADR-0040 D4 の起動時の規則。`rows` は `daemon_instances` の全行。
 ///
 /// `alive` は「その pid のプロセスがまだ生きているか」（本番は `pid_alive`）。heartbeat が新しくても
@@ -101,33 +124,36 @@ pub fn pid_alive(pid: u32) -> bool {
 pub fn decide_startup(
     rows: &[DaemonInstance],
     release: &str,
-    now: OffsetDateTime,
-    freshness: Duration,
     alive: &dyn Fn(u32) -> bool,
 ) -> StartupDecision {
-    // 生きている `active` だけを見る（`drained_at` が付いた行は終わったインスタンス）。
-    let fresh_active: Vec<&DaemonInstance> = rows
-        .iter()
-        .filter(|r| {
-            r.role == InstanceRole::Active
-                && r.drained_at.is_none()
-                && r.is_fresh(now, freshness)
-                && alive(r.pid)
-        })
-        .collect();
+    let live: Vec<&DaemonInstance> = rows.iter().filter(|r| is_live_active(r, alive)).collect();
     // 同じ版が動いていれば、それが誰であっても二重起動（`started_at` が古い方を代表に選ぶ）。
-    if let Some(same) = fresh_active.iter().find(|r| r.release == release) {
+    if let Some(same) = live.iter().find(|r| r.release == release) {
         return StartupDecision::DuplicateRelease {
             instance_id: same.instance_id.clone(),
             pid: same.pid,
         };
     }
-    match fresh_active.first() {
-        Some(active) => StartupDecision::Standby {
-            active_instance_id: active.instance_id.clone(),
-        },
-        None => StartupDecision::Active,
+    if live.is_empty() {
+        StartupDecision::Active
+    } else {
+        StartupDecision::Standby {
+            active_instance_ids: live.iter().map(|r| r.instance_id.clone()).collect(),
+        }
     }
+}
+
+/// 1 行を掃除してよいか（ADR-0040 D4）。`drained_at` が付いた行は常に消す（Phase 119 D4 の監視は
+/// `Supervisor::step` の中で別に行う）。heartbeat が古い行は、active でないか、プロセスが死んでいれば消す。
+/// **古くても生きている `active` の行は消さない**（まだ手放していないので、消すと見えなくなり二重起動になる）。
+pub fn removable_row(
+    row: &DaemonInstance,
+    now: OffsetDateTime,
+    freshness: Duration,
+    alive: &dyn Fn(u32) -> bool,
+) -> bool {
+    row.drained_at.is_some()
+        || (!row.is_fresh(now, freshness) && (row.role != InstanceRole::Active || !alive(row.pid)))
 }
 
 /// ADR-0040 付記（2026-10-02）: `promoting.json` の印が昇格を認可する期限（秒。固定。設定にしない）。
@@ -328,49 +354,54 @@ pub fn read_promotion_evidence(releases_dir: &std::path::Path, release: &str) ->
 pub enum TickDecision {
     /// 役割は変わらない。
     Stay,
-    /// `standby` → `active`（dispatch と裏方を始める）。
+    /// `standby` → `active`（dispatch と裏方を始める）。書き込みは `instance_set_role_if` で確かめる。
     Promote,
     /// `active` → `draining`（listener を閉じ、dispatch と裏方を止める）。
     Drain,
 }
 
 /// ADR-0040 D4 の毎 tick の規則。`self_id` は自分の `instance_id`。
+///
+/// - `active`: 自分の行に引き継ぎの要求があれば drain。生きている別の `active` が自分より新しければ、
+///   新しい方を残すために自分が drain する（規則に反する 2 つ目の active の解消）。
+/// - `standby`: 生きている他の `active` が 1 つも無ければ昇格を試みる（最終的な判断は store の書き込みで）。
 pub fn decide_tick(
     role: InstanceRole,
     self_id: &str,
     rows: &[DaemonInstance],
-    now: OffsetDateTime,
-    freshness: Duration,
+    alive: &dyn Fn(u32) -> bool,
 ) -> TickDecision {
     match role {
         InstanceRole::Active => {
-            let asked = rows
-                .iter()
-                .any(|r| r.instance_id == self_id && r.handoff_requested_at.is_some());
-            if asked {
+            let me = rows.iter().find(|r| r.instance_id == self_id);
+            let asked = me.is_some_and(|r| r.handoff_requested_at.is_some());
+            let superseded = me.is_some_and(|me| {
+                rows.iter().any(|r| {
+                    r.instance_id != self_id && is_live_active(r, alive) && newer_than(r, me)
+                })
+            });
+            if asked || superseded {
                 TickDecision::Drain
             } else {
                 TickDecision::Stay
             }
         }
         InstanceRole::Standby => {
-            // 生きている他の `active` が 1 つも無ければ（`draining` になった／heartbeat が止まった）昇格する。
-            let another_active = rows.iter().any(|r| {
-                r.instance_id != self_id
-                    && r.role == InstanceRole::Active
-                    && r.drained_at.is_none()
-                    && r.is_fresh(now, freshness)
-            });
-            if another_active {
-                TickDecision::Stay
-            } else {
+            if no_other_live_active(rows, self_id, alive) {
                 TickDecision::Promote
+            } else {
+                TickDecision::Stay
             }
         }
         // `draining` はもう役割を変えない（run が 0 になるか drain timeout で終わる）。
         // `verify` はこの表に触れない。
         InstanceRole::Draining | InstanceRole::Verify => TickDecision::Stay,
     }
+}
+
+/// `a` が `b` より新しいか（`started_at`、同時刻は `instance_id` で決める全順序）。
+fn newer_than(a: &DaemonInstance, b: &DaemonInstance) -> bool {
+    (a.started_at, a.instance_id.as_str()) > (b.started_at, b.instance_id.as_str())
 }
 
 /// Phase 119 D4（監視）: `rows` のうち、自分（`self_id`）以外で `drained_at` が付いているのに
@@ -385,6 +416,18 @@ pub fn stale_but_alive_rows<'a>(
     rows.iter()
         .filter(|r| r.instance_id != self_id && r.drained_at.is_some() && alive(r.pid))
         .collect()
+}
+
+/// 自分以外の、生きている `active` の行（起動時の引き継ぎ要求の対象）。
+fn store_live_actives(
+    store: &Arc<dyn TaskStore>,
+    self_id: &str,
+) -> Result<Vec<DaemonInstance>, StoreError> {
+    Ok(store
+        .instance_list()?
+        .into_iter()
+        .filter(|r| r.instance_id != self_id && is_live_active(r, &pid_alive))
+        .collect())
 }
 
 /// `Supervisor::start` の結果。
@@ -431,9 +474,10 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    /// 起動時の判断を行い、`daemon_instances` に自分の行を書く（`standby` なら `active` の行に
-    /// `handoff_requested_at` も書く）。同じ `release` の `active` がいれば行を書かずに
-    /// `Started::Duplicate` を返す。
+    /// 起動時の判断を行い、`daemon_instances` に自分の行を書く。生きている `active` が居なければ
+    /// `active` として（判断と書き込みを 1 transaction で行う）、居れば `standby` として書き、生きている
+    /// **全部**の `active` の行に `handoff_requested_at` を書く。同じ `release` が生きていれば
+    /// 行を書かずに `Started::Duplicate` を返す。
     #[allow(clippy::too_many_arguments)]
     pub fn start(
         store: Arc<dyn TaskStore>,
@@ -445,29 +489,11 @@ impl Supervisor {
         now: OffsetDateTime,
     ) -> Result<Started, StoreError> {
         let rows = store.instance_list()?;
-        let decision = decide_startup(&rows, &identity.release, now, freshness, &pid_alive);
-        let initial = match decision {
-            StartupDecision::DuplicateRelease { instance_id, pid } => {
-                return Ok(Started::Duplicate { instance_id, pid });
-            }
-            StartupDecision::Active => InstanceRole::Active,
-            StartupDecision::Standby { active_instance_id } => {
-                // 先に相手へ「引き継ぎたい」と伝える（自分の行を書く前でも後でも結果は同じだが、
-                // 先に伝えておけば自分の登録に失敗しても相手は drain を始められる）。
-                match store.instance_request_handoff(&active_instance_id, now) {
-                    Ok(true) => tracing::info!(
-                        active = %active_instance_id, release = %identity.release,
-                        "handoff requested (ADR-0040 D4)"
-                    ),
-                    Ok(false) => tracing::info!(
-                        active = %active_instance_id,
-                        "handoff was already requested for the active instance"
-                    ),
-                    Err(e) => return Err(e),
-                }
-                InstanceRole::Standby
-            }
-        };
+        if let StartupDecision::DuplicateRelease { instance_id, pid } =
+            decide_startup(&rows, &identity.release, &pid_alive)
+        {
+            return Ok(Started::Duplicate { instance_id, pid });
+        }
         let supervisor = Self {
             store,
             identity,
@@ -479,9 +505,37 @@ impl Supervisor {
             drain_started_at: None,
             drain_timeout_warned: false,
         };
-        supervisor
+        let self_id = supervisor.identity.instance_id.clone();
+        let admitted = supervisor
             .store
-            .instance_register(&supervisor.row(initial, now))?;
+            .instance_register_if(&supervisor.row(InstanceRole::Active, now), &|rows| {
+                no_other_live_active(rows, &self_id, &pid_alive)
+            })?;
+        let initial = if admitted {
+            InstanceRole::Active
+        } else {
+            // 生きている active が居る（または居たのが書く直前に現れた）。先に全部へ引き継ぎを要求してから、
+            // standby として登録する。
+            for active in store_live_actives(&supervisor.store, &self_id)? {
+                match supervisor
+                    .store
+                    .instance_request_handoff(&active.instance_id, now)?
+                {
+                    true => tracing::info!(
+                        active = %active.instance_id, release = %supervisor.identity.release,
+                        "handoff requested (ADR-0040 D4)"
+                    ),
+                    false => tracing::info!(
+                        active = %active.instance_id,
+                        "handoff was already requested for the active instance"
+                    ),
+                }
+            }
+            supervisor
+                .store
+                .instance_register(&supervisor.row(InstanceRole::Standby, now))?;
+            InstanceRole::Standby
+        };
         supervisor.role.set(initial);
         tracing::info!(
             instance_id = %supervisor.identity.instance_id,
@@ -514,69 +568,105 @@ impl Supervisor {
         }
     }
 
+    /// heartbeat で行が見つからなかったときの登録し直し。`active` だった者は、行を失っている間に
+    /// 別の `active` が生きて昇格していれば**書かずに** `draining` へ手を離す（二重 active を作らない）。
+    fn register_again(&mut self, now: OffsetDateTime) -> Result<(), StoreError> {
+        let self_id = self.identity.instance_id.clone();
+        if self.role.get() == InstanceRole::Active {
+            let admitted = self
+                .store
+                .instance_register_if(&self.row(InstanceRole::Active, now), &|rows| {
+                    no_other_live_active(rows, &self_id, &pid_alive)
+                })?;
+            if !admitted {
+                tracing::warn!(
+                    instance_id = %self_id,
+                    "lost the active row and another active is alive; draining instead of \
+                     registering as active (ADR-0040 D4 付記 2026-10-05)"
+                );
+                self.role.set(InstanceRole::Draining);
+                self.drain_started_at = Some(now);
+                self.store
+                    .instance_register(&self.row(InstanceRole::Draining, now))?;
+            }
+            return Ok(());
+        }
+        let current = self.role.get();
+        self.store.instance_register(&self.row(current, now))
+    }
+
     /// 1 tick 進める。`in_flight` は**このインスタンスが抱えている** run とレビューの数
     /// （`Dispatcher::in_flight`）。heartbeat → 役割の判断 → 古い行の掃除、の順に行う。
     pub fn step(&mut self, now: OffsetDateTime, in_flight: usize) -> Result<Step, StoreError> {
+        let self_id = self.identity.instance_id.clone();
         // 1. heartbeat（何かの拍子に行が消えていたら登録し直す）。
-        let current = self.role.get();
-        if !self
-            .store
-            .instance_heartbeat(&self.identity.instance_id, now)?
-        {
+        if !self.store.instance_heartbeat(&self_id, now)? {
             tracing::warn!(
-                instance_id = %self.identity.instance_id,
+                instance_id = %self_id,
                 "the daemon_instances row disappeared; registering it again"
             );
-            self.store.instance_register(&self.row(current, now))?;
+            self.register_again(now)?;
         }
-        // 2. 役割の判断。
+        // 2. 役割の判断。書き込みが要るもの（昇格）は store で同じ transaction の中で確かめる。
+        let current = self.role.get();
         let rows = self.store.instance_list()?;
-        let mut step = match decide_tick(
-            current,
-            &self.identity.instance_id,
-            &rows,
-            now,
-            self.freshness,
-        ) {
+        let mut step = match decide_tick(current, &self_id, &rows, &pid_alive) {
             TickDecision::Stay => Step::Stay,
             TickDecision::Promote => {
-                self.store.instance_set_role(
-                    &self.identity.instance_id,
+                let admitted = self.store.instance_set_role_if(
+                    &self_id,
                     InstanceRole::Active,
                     now,
+                    &|rows| no_other_live_active(rows, &self_id, &pid_alive),
                 )?;
-                self.role.set(InstanceRole::Active);
-                tracing::info!(
-                    instance_id = %self.identity.instance_id, release = %self.identity.release,
-                    "standby -> active (the previous active is draining or gone; ADR-0040 D4)"
-                );
-                Step::Promoted
+                if admitted {
+                    self.role.set(InstanceRole::Active);
+                    tracing::info!(
+                        instance_id = %self_id, release = %self.identity.release,
+                        "standby -> active (no other active is alive; ADR-0040 D4)"
+                    );
+                    Step::Promoted
+                } else {
+                    // まだ生きている active がいる。その drain を待つ。
+                    Step::Stay
+                }
             }
             TickDecision::Drain => {
-                self.store.instance_set_role(
-                    &self.identity.instance_id,
-                    InstanceRole::Draining,
-                    now,
-                )?;
+                self.store
+                    .instance_set_role(&self_id, InstanceRole::Draining, now)?;
                 self.role.set(InstanceRole::Draining);
                 self.drain_started_at = Some(now);
                 tracing::info!(
-                    instance_id = %self.identity.instance_id, release = %self.identity.release, in_flight,
-                    "active -> draining (a newer release asked for the handoff; ADR-0040 D4)"
+                    instance_id = %self_id, release = %self.identity.release, in_flight,
+                    "active -> draining (a newer release or a newer active asked for the handoff; ADR-0040 D4)"
                 );
                 Step::Draining
             }
         };
+        // 2b. 監視（ADR-0040 D4 付記 2026-10-05）: 生きている active が自分より古い行を残していれば、
+        //     その全部へ引き継ぎを要求する（新しい方を残す。古い方は次の tick で drain する）。
+        if self.role.get() == InstanceRole::Active {
+            let me = self.row_of(&rows, &self_id);
+            for older in rows.iter().filter(|r| {
+                r.instance_id != self_id && is_live_active(r, &pid_alive) && newer_than(&me, r)
+            }) {
+                tracing::warn!(
+                    instance_id = %self_id, older = %older.instance_id,
+                    "two live active instances; requesting the handoff of the older one (ADR-0040 D4 付記 2026-10-05)"
+                );
+                self.store
+                    .instance_request_handoff(&older.instance_id, now)?;
+            }
+        }
         // 3. 終わった・死んだ他のインスタンスの行を消す。
         //
-        // Phase 119 D4（監視）: `drained_at` が付いた行は ADR-0040 D4 の設計どおりこの直後に消える
-        // （すぐ下の `instance_delete_stale`。旧に `heartbeat_at` の猶予を与えない）。消える前に、
-        // その pid がまだ生きていれば WARN を出す — D1/D2 が直した「drain 後にプロセスが終了しない」
-        // 障害（本番 2026-09-24）の再発を journal で気付けるようにするための、念のための監視。
+        // Phase 119 D4（監視）: `drained_at` が付いた行は ADR-0040 D4 の設計どおりこの直後に消える。
+        // 消える前に、その pid がまだ生きていれば WARN を出す — D1/D2 が直した「drain 後にプロセスが
+        // 終了しない」障害（本番 2026-09-24）の再発を journal で気付けるようにするための、念のための監視。
         // `GET /health`/`GET /releases` の `instances`（`daemon_instances` をそのまま返す）は、この
         // 行が消える直前の tick に限って同じ `drained_at`/`pid` を見せる（`status.sh` の
         // `stale_instances`〈Phase 119 D3〉は systemd を直接見るのでこの削除タイミングに左右されない）。
-        for r in stale_but_alive_rows(&rows, &self.identity.instance_id, &pid_alive) {
+        for r in stale_but_alive_rows(&rows, &self_id, &pid_alive) {
             tracing::warn!(
                 instance_id = %r.instance_id, release = %r.release, pid = r.pid,
                 drained_at = ?r.drained_at,
@@ -585,11 +675,10 @@ impl Supervisor {
                  --user status celeris@<release>`"
             );
         }
-        let stale_before =
-            now - time::Duration::try_from(self.freshness).unwrap_or(time::Duration::MAX);
+        let freshness = self.freshness;
         match self
             .store
-            .instance_delete_stale(&self.identity.instance_id, stale_before)
+            .instance_delete_where(&self_id, &|r| removable_row(r, now, freshness, &pid_alive))
         {
             Ok(removed) if !removed.is_empty() => {
                 tracing::info!(removed = ?removed, "removed drained or dead daemon_instances rows");
@@ -603,16 +692,14 @@ impl Supervisor {
         //    drained の判定は次の tick から）。
         if step == Step::Stay && self.role.get() == InstanceRole::Draining {
             if in_flight == 0 {
-                self.store
-                    .instance_mark_drained(&self.identity.instance_id, now)?;
-                tracing::info!(instance_id = %self.identity.instance_id, "drained; exiting 0 (ADR-0040 D4)");
+                self.store.instance_mark_drained(&self_id, now)?;
+                tracing::info!(instance_id = %self_id, "drained; exiting 0 (ADR-0040 D4)");
                 step = Step::Drained;
             } else if self.drain_timed_out(now) {
                 if self.drain_force_abort {
-                    self.store
-                        .instance_mark_drained(&self.identity.instance_id, now)?;
+                    self.store.instance_mark_drained(&self_id, now)?;
                     tracing::warn!(
-                        instance_id = %self.identity.instance_id, in_flight,
+                        instance_id = %self_id, in_flight,
                         drain_timeout_secs = self.drain_timeout.as_secs(),
                         "drain timeout; aborting the remaining runs and exiting 0 (ADR-0040 D4, \
                          drain_force_abort = true)"
@@ -622,7 +709,7 @@ impl Supervisor {
                     // ADR-0070 D4（Phase 116）: run のプロセスが生きている限り待つ。abort しない。
                     self.drain_timeout_warned = true;
                     tracing::warn!(
-                        instance_id = %self.identity.instance_id, in_flight,
+                        instance_id = %self_id, in_flight,
                         drain_timeout_secs = self.drain_timeout.as_secs(),
                         "drain timeout reached but runs are still alive; waiting instead of \
                          aborting (ADR-0070 D4). set [handoff] drain_force_abort = true to force \
@@ -632,6 +719,14 @@ impl Supervisor {
             }
         }
         Ok(step)
+    }
+
+    /// `rows` から自分の行を探す（無ければ自分の `started_at` で作る）。
+    fn row_of(&self, rows: &[DaemonInstance], self_id: &str) -> DaemonInstance {
+        rows.iter()
+            .find(|r| r.instance_id == self_id)
+            .cloned()
+            .unwrap_or_else(|| self.row(InstanceRole::Active, self.started_at))
     }
 
     fn drain_timed_out(&self, now: OffsetDateTime) -> bool {

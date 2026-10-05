@@ -186,3 +186,34 @@ task ごとの進捗ファイル（`agent-docs/progress/*.md` とその入れ子
 3. **`resolve_adr` は target にある ADR と許可リストの ADR を動かさない。** 許可済みの組に取り込み側が 3 本目を足したときは、その 3 本目だけが日付名へ移る。
 
 試験（一時 git repo、外部に出ない）: `auto_resolve::tests::allowed_adr_duplicate_brought_in_by_source_requests_nothing`（本番の形）・`duplicate_already_on_both_sides_requests_nothing`（修正前は 2 本とも classify が重複として拾って失敗することを確認済み）、`new_duplicates_are_still_renamed_or_requested`、`repository_allowlist_is_the_single_source`。
+
+
+## 付記（2026-10-04、終端 task に残る統合依頼の回収）
+
+旧版で手動統合・回答を済ませた task `01M420EMSFS1VP5RWF2FGCV6XR` が done に達しても、
+`IntegrationAnswered` のない依頼が受信箱に残った。前の付記の手動回答による後処理を、以下の自動回収で補う。
+
+- `SqliteStore::apply_transition_tx` は done・cancelled・failed への遷移と同じトランザクションで、
+  その task の未回答依頼のうち origin が `delivery` 以外のもの（段の統合 `phase:*` など）に
+  `IntegrationAnswered { answer: "task_terminal", note: None }` を追記する。
+  終端化が理由であり、統合成功や人が回答したことを意味しない。既存のイベント定義の `answer` 欄を使う。
+  子・後続への中止の伝播も共通の遷移処理を通る。
+- **配送（origin `delivery`、定数 `integration_request::DELIVERY_ORIGIN`）の依頼は回収しない。**
+  配送は task が done になった後に main へ取り込む段で、merge-base の自動解消失敗・修復上限到達のとき
+  `auto_resolve::record_request` / `fall_back` が done の task に依頼を記録し、配送を `[needs-human]` で止めて人の回答を待つ。
+  これを `task_terminal` で閉じると、人が答える前に受信箱から消え、配送が止まったまま回答の入口が無くなる。
+  配送の依頼は配送 merge の成功（`integrated`）・人の回答・同 origin の新依頼（`superseded`）で閉じる。
+- `TaskStore::close_integration_requests_of_terminal_tasks` は既存の依頼・回答を畳み込み、現在終端の task の未回答（`delivery` 以外）だけを同じ値で閉じる。
+  判定から追記まで一つの immediate transaction で行う。過去の events は変更しない。
+  回答済み依頼には再追記しないため冪等であり、非終端 task の依頼は残す。
+  問い合わせは既存の migration 0047 の部分 index を使う依頼・回答イベント専用の読み取りを再利用する。
+- dispatcher の `reconcile_terminal_records` が起動後最初の tick と 600 秒ごとに回収する。
+  失敗はログに残し次の周期で再試行する。LLM は呼ばない。新しい DB migration は不要。
+
+試験は store の `terminal_transitions_close_non_delivery_integration_requests_by_appending_answers` と
+`non_terminal_transition_keeps_integration_requests_open`、dispatcher の
+`startup_closes_only_terminal_tasks_integration_requests_once`。
+終端 3 種、複数 origin（`phase:*` は閉じ `delivery` は残る）、回答済みの保持、過去イベント行の不変、非終端依頼の保持、再起動・定期回収の冪等性を固定する。
+本番 `01M420EMSFS1VP5RWF2FGCV6XR`（done）の残留 2 件は origin が `phase:integrate-impl` と `phase:integrate-close` で、回収の対象に入る
+（本番 DB を `sqlite3 -readonly` で確認）。
+本番の取り残しはこの版を含む release の昇格後、最初の tick で閉じる。本 task の worker は本番 DB の書き込みや昇格を行わない。

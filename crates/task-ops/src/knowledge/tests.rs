@@ -233,7 +233,7 @@ fn inbox_accept_and_reject_commit_to_git() {
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, one.id);
     assert_eq!(listed[0].target, "environment/servers/fern03.md");
-    assert_eq!(listed[0].sources, vec!["human"]);
+    assert_eq!(listed[0].sources, vec![kb::SOURCE_HUMAN_INSTRUCTION]);
 
     let accepted = inbox_accept(&root, &one.id, None, false);
     let path = match &accepted {

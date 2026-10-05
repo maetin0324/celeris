@@ -2810,6 +2810,142 @@
           "type": "object"
         },
         {
+          "description": "2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`spec.checks`）が検査 1 件を始めた。形は\n`IntegrationCheckStarted` と同じで、検査を起こした worker run の `run_id` を足す。状態は変えない。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "log_path": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "started_at": {
+              "type": "string"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "work_unit_check_started",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "run_id",
+            "index",
+            "total",
+            "cmd",
+            "log_path",
+            "started_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査 1 件が終わった（`IntegrationCheckFinished` と同じ形）。",
+          "properties": {
+            "cmd": {
+              "type": "string"
+            },
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "exit": {
+              "format": "int32",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "index": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "key": {
+              "type": "string"
+            },
+            "pass": {
+              "type": "boolean"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "timed_out": {
+              "default": false,
+              "type": "boolean"
+            },
+            "total": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "work_unit_check_finished",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "run_id",
+            "index",
+            "total",
+            "cmd",
+            "pass",
+            "duration_ms"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance で worker run が終わり、受け入れ\n検査を始めずに手を離した。WU は `running`・lease はその run のまま残り、結果は `runs/<run_id>/result.json`\nにある。新しい active instance がこれを見て result.json から確定し直す（検査はそこで走る）。状態は変えない。",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "work_unit_checks_handed_off",
+              "type": "string"
+            },
+            "work_unit_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "work_unit_id",
+            "key",
+            "run_id"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0118 D5: 段階の統合で、子 task のブランチ HEAD が記録済みの `merge_candidate_sha` と違った\n（review 後に子のブランチが動いた）ので merge しなかった。子は再 sync → 再 check → 再 review に戻る。",
           "properties": {
             "branch": {
@@ -3926,6 +4062,17 @@
             "string",
             "null"
           ]
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。"
         }
       },
       "type": "object"
@@ -4734,6 +4881,119 @@
         "task_id"
       ],
       "type": "object"
+    },
+    "ProviderCandidate": {
+      "description": "ADR-0132 付記 L8: 選択で見た 1 行。",
+      "properties": {
+        "detail": {
+          "description": "probe の失敗理由など。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ProviderCandidateKind"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ProviderCandidateOutcome"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "kind",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ProviderCandidateKind": {
+      "description": "ADR-0132 付記 L8: 候補の種類。",
+      "oneOf": [
+        {
+          "const": "local",
+          "description": "付記 L1 のローカルの行。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行。",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "それ以外（プールを持たない非ローカルの行）。",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderCandidateOutcome": {
+      "description": "ADR-0132 付記 L8: 候補を見た結果。",
+      "enum": [
+        "selected",
+        "available",
+        "full",
+        "down",
+        "cooldown",
+        "unsupported",
+        "no_account"
+      ],
+      "type": "string"
+    },
+    "ProviderSelection": {
+      "description": "ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/ProviderCandidate"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/ProviderSelectionReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProviderSelectionReason": {
+      "description": "ADR-0132 付記 L8: provider を選んだ理由。",
+      "oneOf": [
+        {
+          "const": "local_preferred",
+          "description": "cheap lane でローカルの行を選んだ（付記 L2）。",
+          "type": "string"
+        },
+        {
+          "const": "local_full",
+          "description": "空きの無いローカルの行があり、順位付けへ倒した（付記 L3）。",
+          "type": "string"
+        },
+        {
+          "const": "local_down",
+          "description": "ローカルの行が不通・cooldown で、順位付けへ倒した（付記 L3/L4）。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行を残量 score で選んだ（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "fallback",
+          "description": "プールを持たない行へ倒れた、または何も選べなかった（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "sticky",
+          "description": "継続セッションに留まった（ADR-0054）。",
+          "type": "string"
+        }
+      ]
     },
     "QuotaCalibration": {
       "description": "D4.2 の較正値 `k_w`（同じ source の直近の `measured` run から求めた比の和）。",
@@ -6112,6 +6372,10 @@
           "default": 0,
           "format": "int32",
           "type": "integer"
+        },
+        "scope": {
+          "description": "ADR-0074 付記 2026-10-05（`WorkUnitCheck.scope`）: 範囲 check（WU 自身の変更が許可範囲に収まるかを見る\n検査）か。`true` の check は WU の作業時（`spawn_work_unit_checks`）だけで流し、段の統合の検査\n（D1.4 の 4）と子 task の acceptance（`promote_to_task`）には入れない。既定 `false`（JSON に書かない）。",
+          "type": "boolean"
         }
       },
       "required": [

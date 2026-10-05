@@ -55,7 +55,11 @@ impl Dispatcher {
         // ADR-0074 F5-fix（不具合 1）: 検査も run と同じ `CARGO_TARGET_DIR` で走らせる（自分の
         // worktree の WU は `<repo-key>/wu-<id>`、それ以外は `<repo-key>`）。
         let own_tree = !self.work_unit_trees(&task, &wu)?.is_empty();
-        let check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
+        let mut check_env = self.check_cargo_target_env(&task, own_tree.then_some(wu.id.as_str()));
+        // ADR-0074 付記 2026-10-05 D3: 範囲 check が基点・統合先を知れるように。
+        check_env
+            .set
+            .extend(self.work_unit_scope_env(&task, wu.base_commit.as_deref()));
         let ws: task_worker::LocalWorkspace = match work_dir {
             Some(w) if w.is_dir() => task_worker::LocalWorkspace::new(&dir).with_work_dir(w),
             _ => task_worker::LocalWorkspace::new(&dir),
@@ -67,8 +71,35 @@ impl Dispatcher {
         let checking_run_id = run_id.clone();
         // ADR-0079 付記 R7-5 D1: 不合格の記録に残す、check を実際に走らせる所。
         let check_cwd = ws.work_dir().to_path_buf();
+        // 2026-10-04 WU 検査の引き継ぎ D3: 統合の検査と同じく、1 件ごとに開始・終了を event に残し、出力をログへ逐次書く。
+        let store = Arc::clone(&self.store);
+        let observed = super::phase_integration::ObservedIntegration {
+            work_unit_id: wu.id.clone(),
+            key: wu.key.clone(),
+            run_id: Some(run_id.clone()),
+            log_dir: dir
+                .join(super::phase_integration::WORK_UNIT_CHECK_LOG_DIR)
+                .join(&wu.key),
+        };
+        let entry_meta = (
+            wu.id.clone(),
+            wu.key.clone(),
+            checks.len(),
+            result.as_ref().ok().map(|o| o.terminal.clone()),
+            account.clone(),
+            account_adapter,
+            provider.clone(),
+        );
         let handle = tokio::spawn(async move {
-            let check_results = crate::review::run_work_unit_checks(&ws, &checks, timeout).await;
+            let check_results = super::phase_integration::run_integration_checks(
+                store.as_ref(),
+                task_id,
+                &observed,
+                &ws,
+                &checks,
+                timeout,
+            )
+            .await;
             let _ = tx.send(Completion::WorkUnitChecks {
                 task_id,
                 run_id,
@@ -83,8 +114,231 @@ impl Dispatcher {
             });
         });
         // Phase F5-fix2: 検査の間も「手元の仕事」として数える（`in_flight`・lease の照合）。
-        self.checking
-            .insert(checking_run_id, CheckingEntry { task_id, handle });
+        let (work_unit_id, key, n, terminal, account, account_adapter, provider) = entry_meta;
+        self.checking.insert(
+            checking_run_id,
+            CheckingEntry {
+                task_id,
+                handle,
+                work_unit_id,
+                key,
+                checks: n,
+                terminal: terminal.unwrap_or(Terminal::Error {
+                    message: String::new(),
+                    retryable: true,
+                }),
+                account,
+                account_adapter,
+                provider,
+            },
+        );
+        Ok(())
+    }
+
+    /// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に足す `CELERIS_WU_BASE`（WU の `base_commit`。
+    /// 無ければ足さない）と `CELERIS_WU_TARGET`（統合先 = Task のブランチ。git の worktree が無ければ足さない）。
+    pub(super) fn work_unit_scope_env(
+        &self,
+        task: &Task,
+        base_commit: Option<&str>,
+    ) -> Vec<(String, String)> {
+        let mut env = Vec::new();
+        if let Some(base) = base_commit {
+            env.push((
+                task_core::execution_plan::WU_BASE_ENV.to_string(),
+                base.to_string(),
+            ));
+        }
+        if let Some(branch) = self
+            .task_workspaces_for(task)
+            .and_then(|ws| ws.repos.iter().find_map(|r| r.branch().map(str::to_string)))
+        {
+            env.push((task_core::execution_plan::WU_TARGET_ENV.to_string(), branch));
+        }
+        env
+    }
+
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining の旧 instance で worker run が `Done` で終わり、
+    /// WU に受け入れ検査があるとき、検査を始めずに手を離す（[`Self::record_check_hand_off`]）。手を離せなかった
+    /// （remote の作業場所・result.json を書けない）ら `false`（呼び出し側が従来どおり検査する）。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn hand_off_work_unit_checks(
+        &mut self,
+        task: &Task,
+        wu: &task_core::WorkUnitRow,
+        run_id: &str,
+        account: Option<&str>,
+        account_adapter: Option<AccountAdapter>,
+        provider: &ProviderId,
+        result: &Result<RunOutcome, AdapterError>,
+    ) -> Result<bool, DispatchError> {
+        let Ok(outcome) = result else {
+            return Ok(false);
+        };
+        let handed_off = self.record_check_hand_off(
+            task,
+            &wu.id,
+            &wu.key,
+            wu.spec.checks.len(),
+            run_id,
+            &outcome.terminal,
+        )?;
+        if handed_off {
+            self.release_quota_if_tracked(run_id, account, account_adapter, provider, task.id);
+            tracing::info!(task_id = %task.id, work_unit = %wu.key, %run_id, "draining: the run finished; leaving its work unit checks to the active instance (ADR-0040 addendum)");
+        }
+        Ok(handed_off)
+    }
+
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になった時点で手元にある WU の検査を止めて
+    /// 手を離す（毎 tick、完了の記録の後。active のときは何もしない）。検査は新しい active が result.json から
+    /// やり直す（検査は冪等）。止めた数を返す。
+    pub(super) fn hand_off_checks_in_hand(&mut self) -> Result<usize, DispatchError> {
+        if self.accepting_new_work || self.checking.is_empty() {
+            return Ok(0);
+        }
+        let run_ids: Vec<String> = self.checking.keys().cloned().collect();
+        let mut count = 0;
+        for run_id in run_ids {
+            let Some(entry) = self.checking.get(&run_id) else {
+                continue;
+            };
+            let Some(task) = self.store.get(entry.task_id)? else {
+                continue;
+            };
+            let (wu_id, key, n, terminal) = (
+                entry.work_unit_id.clone(),
+                entry.key.clone(),
+                entry.checks,
+                entry.terminal.clone(),
+            );
+            if !self.record_check_hand_off(&task, &wu_id, &key, n, &run_id, &terminal)? {
+                continue;
+            }
+            let Some(entry) = self.checking.remove(&run_id) else {
+                continue;
+            };
+            entry.handle.abort();
+            self.release_quota_if_tracked(
+                &run_id,
+                entry.account.as_deref(),
+                entry.account_adapter,
+                &entry.provider,
+                entry.task_id,
+            );
+            tracing::info!(task_id = %entry.task_id, work_unit = %key, %run_id, "draining: stopped the work unit checks in hand; the active instance redoes them (ADR-0040 addendum)");
+            count += 1;
+        }
+        Ok(count)
+    }
+
+    /// D1 の本体: run の `Done` を `runs/<run_id>/result.json` に残し（既に終端があればそのまま）、WU の lease を
+    /// 検査の分だけ延ばし、`WorkUnitChecksHandedOff` を残す。WU は `running`・lease はその run のまま。
+    /// `Done` でない・remote の作業場所・result.json を書けないときは何もせず `false`。
+    pub(super) fn record_check_hand_off(
+        &self,
+        task: &Task,
+        work_unit_id: &str,
+        key: &str,
+        checks: usize,
+        run_id: &str,
+        terminal: &Terminal,
+    ) -> Result<bool, DispatchError> {
+        let Some(dir) = self.task_dir(task) else {
+            return Ok(false);
+        };
+        let Terminal::Done {
+            summary,
+            evidence,
+            usage,
+        } = terminal
+        else {
+            return Ok(false);
+        };
+        if terminal_from_run_dir(&dir, run_id).is_none() {
+            let message = task_worker::protocol::WorkerMessage::Done {
+                summary: summary.clone(),
+                evidence: evidence.clone(),
+                usage: *usage,
+            };
+            let path = dir.join("runs").join(run_id).join("result.json");
+            let written = serde_json::to_string(&message)
+                .map_err(std::io::Error::other)
+                .and_then(|text| {
+                    if let Some(parent) = path.parent() {
+                        std::fs::create_dir_all(parent)?;
+                    }
+                    std::fs::write(&path, text)
+                });
+            if let Err(e) = written {
+                tracing::warn!(task_id = %task.id, %run_id, error = %e, "could not keep the run's result for the new instance; running the work unit checks here");
+                return Ok(false);
+            }
+        }
+        let ttl = self
+            .config
+            .review_timeout
+            .saturating_mul(checks as u32 * 2 + 1)
+            + self.config.lease_grace;
+        if let Err(e) = self.store.renew_lease(task.id, run_id, ttl) {
+            tracing::warn!(task_id = %task.id, %run_id, error = %e, "could not extend the work unit lease for the hand-off");
+        }
+        self.store.append_event(
+            task.id,
+            &Event::WorkUnitChecksHandedOff {
+                work_unit_id: work_unit_id.to_string(),
+                key: key.to_string(),
+                run_id: run_id.to_string(),
+            },
+        )?;
+        Ok(true)
+    }
+
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う
+    /// （active のときだけ。毎 tick、照合より前）。`WorkUnitChecksHandedOff` があり、WU がまだその run で
+    /// `running`、手元に無い run を `runs/<run_id>/result.json` から確定し直す（検査はそこで走る）。
+    /// 検査の途中でこの instance が止まっても、WU と印は残るので次の active がやり直す（冪等）。
+    pub(super) fn take_over_handed_off_checks(&mut self) -> Result<(), DispatchError> {
+        if !self.accepting_new_work {
+            return Ok(());
+        }
+        for task in self.store.list(Some(Status::Running))? {
+            if !self.is_eligible(&task) || self.just_aborted.contains(&task.id) {
+                continue;
+            }
+            let candidates: Vec<String> = self
+                .store
+                .work_units_for(task.id)?
+                .into_iter()
+                .filter(|u| {
+                    u.status == task_core::WorkUnitStatus::Running
+                        && !matches!(
+                            u.kind,
+                            task_core::WorkUnitKind::Integrate | task_core::WorkUnitKind::Task
+                        )
+                })
+                .filter_map(|u| u.lease_run_id.or(u.last_run_id))
+                .filter(|r| {
+                    !self.running.values().any(|e| &e.run_id == r) && !self.checking.contains_key(r)
+                })
+                .collect();
+            if candidates.is_empty() {
+                continue;
+            }
+            let events = self.store.events_for(task.id)?;
+            for run_id in candidates {
+                let handed_off = events.iter().any(|(_, e)| {
+                    matches!(e, Event::WorkUnitChecksHandedOff { run_id: r, .. } if r == &run_id)
+                });
+                if !handed_off {
+                    continue;
+                }
+                tracing::info!(task_id = %task.id, %run_id, "taking over the work unit checks a draining instance handed off (ADR-0040 addendum)");
+                if !self.finalise_from_result_json(&task, &run_id) {
+                    tracing::warn!(task_id = %task.id, %run_id, "a handed-off run has no terminal result.json; the lease reconciliation will requeue it");
+                }
+            }
+        }
         Ok(())
     }
 
@@ -1049,18 +1303,38 @@ impl Dispatcher {
     /// Phase F5-fix6: WU の lease がまだ切れていなくても、その run の持ち主のデーモンが居なければ
     /// （孤児。`crate::orphan`）同じく戻す（result.json があればその内容で確定、無ければ reason
     /// `orphan_takeover` で ready / needs_continuation）。統合 WU も同じ（spawn が手元に無ければ pending）。
+    /// 2026-10-05 付記: 統合の回収は Ready も対象にし、Task lease の有無・期限に依存させない。
+    /// 手元の仕事・生きている他 instance・draining / verify の保護条件は維持する。
     pub(super) fn reconcile_parallel_tasks(&mut self) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
         let mut holders_gone: Option<bool> = None;
-        for task in self.store.list(Some(Status::Running))? {
+        let mut tasks = self.store.list(Some(Status::Running))?;
+        if self.accepting_new_work && self.orphan_takeover.is_some() {
+            tasks.extend(self.store.list(Some(Status::Ready))?);
+        }
+        for task in tasks {
             if !self.is_eligible(&task) {
+                continue;
+            }
+            // Ready への遷移は task lease を外す。lease の有無・期限より先に孤立統合を調べる。
+            let units = self.store.work_units_for(task.id)?;
+            if units.iter().any(|u| {
+                u.kind == task_core::WorkUnitKind::Integrate
+                    && u.phase.is_some()
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) && !self.holds_task_in_hand(task.id)
+                && self.lease_holders_gone(&mut holders_gone, now)
+            {
+                tracing::warn!(task_id = %task.id, "ownerless phase integration; returning it to pending (orphan_takeover)");
+                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
+            }
+            if task.status != Status::Running {
                 continue;
             }
             let Some(lease) = &task.lease else { continue };
             if !is_phase_lease_holder(&lease.worker_run_id) || lease.expires_at <= now {
                 continue;
             }
-            let units = self.store.work_units_for(task.id)?;
             for u in units.iter().filter(|u| {
                 u.status == task_core::WorkUnitStatus::Running
                     && u.kind != task_core::WorkUnitKind::Integrate
@@ -1098,18 +1372,6 @@ impl Dispatcher {
                     }
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
-            }
-            // Phase F5-fix6: 持ち主の居ない工程の統合（統合 WU が running で、spawn が手元に無い）。
-            if !self.integrating.contains_key(&task.id)
-                && self.running_for_task(task.id) == 0
-                && units.iter().any(|u| {
-                    u.kind == task_core::WorkUnitKind::Integrate
-                        && u.status == task_core::WorkUnitStatus::Running
-                })
-                && self.lease_holders_gone(&mut holders_gone, now)
-            {
-                tracing::warn!(task_id = %task.id, "the phase integration's daemon is gone; returning the integration to pending without waiting for the lease (Phase F5-fix6 orphan_takeover)");
-                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
             }
             if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
                 continue;
@@ -1422,7 +1684,8 @@ impl Dispatcher {
     /// `Event::ExecutionGated` と `Task.routing.execution` を同じトランザクションで書く。
     /// `gate = "off"` なら何もしない。対象外の大半（対話・support-task・kind != Execute・`routing`
     /// 無し）は呼び出し側で既に除いてある（D13「いつ」節）ので、ここでは残りの対象外
-    /// （固定パイプラインの harness・`workspace_mode = Shared`）を `execution_gate::decide` の中で
+    /// （固定パイプラインの harness・`workspace_mode = Shared`・ADR-0131 付記 2026-10-04 の
+    /// knowledge-curation の cron task）を `execution_gate::decide` の中で
     /// 判定する。すでに判定済みの Task（`routing.execution` が `Some`）には触らない。
     ///
     /// ADR-0079 D4 (1)（Phase R2a）: 木の子 task（`tree.parent_unit` を持つ。深さ ≥ 2）は、閾値を深さで
@@ -1755,15 +2018,15 @@ impl WorkUnitCheckRun {
             .enumerate()
             .filter(|(_, (pass, _))| !pass)
             .map(|(i, (_, detail))| {
-                let (cmd, expect_exit) = self
+                let (cmd, expect_exit, scope) = self
                     .checks
                     .get(i)
-                    .map(|c| (c.cmd.clone(), c.expect_exit))
+                    .map(|c| (c.cmd.clone(), c.expect_exit, c.scope))
                     .unwrap_or_default();
                 task_core::FailedWorkUnitCheck {
                     cmd,
                     expect_exit,
-                    detail: detail.clone(),
+                    detail: scope_check_detail(scope, detail),
                 }
             })
             .collect();
@@ -1782,6 +2045,19 @@ impl WorkUnitCheckRun {
             failed,
             usage,
         })
+    }
+}
+
+/// ADR-0074 付記 2026-10-05 D4: 範囲 check が無言で（stdout・stderr とも空で）落ちたときに判定文へ足す一文。
+pub(super) const SILENT_SCOPE_CHECK_HINT: &str = "scope check printed no out-of-scope paths — write it so it prints them before exiting non-zero (ADR-0074 appendix 2026-10-05)";
+
+/// ADR-0074 付記 2026-10-05 D4: 不合格の判定文。範囲 check（`scope`）が何も出さずに落ちていたら
+/// [`SILENT_SCOPE_CHECK_HINT`] を足す（原因の特定を速くするためだけで、判定は変えない）。
+pub(super) fn scope_check_detail(scope: bool, detail: &str) -> String {
+    if scope && detail.contains("stdout_tail=\"\" stderr_tail=\"\"") {
+        format!("{detail}; {SILENT_SCOPE_CHECK_HINT}")
+    } else {
+        detail.to_string()
     }
 }
 

@@ -1719,6 +1719,33 @@ export type Event = {
   "type": "integration_check_finished";
   "work_unit_id": string;
 } | {
+  "cmd": string;
+  "index": number;
+  "key": string;
+  "log_path": string;
+  "run_id": string;
+  "started_at": string;
+  "total": number;
+  "type": "work_unit_check_started";
+  "work_unit_id": string;
+} | {
+  "cmd": string;
+  "duration_ms": number;
+  "exit"?: number | null;
+  "index": number;
+  "key": string;
+  "pass": boolean;
+  "run_id": string;
+  "timed_out"?: boolean;
+  "total": number;
+  "type": "work_unit_check_finished";
+  "work_unit_id": string;
+} | {
+  "key": string;
+  "run_id": string;
+  "type": "work_unit_checks_handed_off";
+  "work_unit_id": string;
+} | {
   "branch": string;
   "child_task": TaskId;
   "head_sha": string;
@@ -2449,6 +2476,7 @@ export type LaneResolution = {
   "model_id"?: string;
   "provider"?: string | null;
   "reasoning_effort"?: string | null;
+  "selection"?: ProviderSelection | null;
 };
 
 export type Lease = {
@@ -3230,6 +3258,17 @@ export type ProposedMilestone = {
   "task_id": TaskId;
 };
 
+export type ProviderCandidate = {
+  "detail"?: string | null;
+  "kind": ProviderCandidateKind;
+  "outcome": ProviderCandidateOutcome;
+  "provider": string;
+};
+
+export type ProviderCandidateKind = "local" | "pool" | "other";
+
+export type ProviderCandidateOutcome = "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
+
 export type ProviderCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
@@ -3290,6 +3329,13 @@ export type ProviderLive = {
 };
   "tiers": Array<Tier>;
 };
+
+export type ProviderSelection = {
+  "candidates"?: Array<ProviderCandidate>;
+  "reason": ProviderSelectionReason;
+};
+
+export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
 
 export type ProviderStats = {
   "by_day": Array<DailyUsage>;
@@ -4629,6 +4675,7 @@ export type WorkUnitBudget = {
 export type WorkUnitCheck = {
   "cmd": string;
   "expect_exit"?: number;
+  "scope"?: boolean;
 };
 
 export type WorkUnitCheckLog = {

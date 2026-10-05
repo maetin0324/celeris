@@ -830,9 +830,19 @@ struct IntegrationEntry {
 /// が spawn した検査。run 自身は `running` から既に外れている）。`in_flight` に数え（draining の
 /// インスタンスが検査の途中で exit して完了を失わないため）、lease の照合では「生きている run」と
 /// みなす。
+///
+/// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining になったら検査を止めて手を離す
+/// （`hand_off_checks_in_hand`）ので、WU・検査の数・run の終端（`Done`）・quota の持ち主も持つ。
 struct CheckingEntry {
     task_id: TaskId,
     handle: JoinHandle<()>,
+    work_unit_id: String,
+    key: String,
+    checks: usize,
+    terminal: Terminal,
+    account: Option<String>,
+    account_adapter: Option<AccountAdapter>,
+    provider: ProviderId,
 }
 
 /// ADR-0074 D1.4: 工程の統合（spawn した git 操作と検査）の結果。
@@ -1028,6 +1038,9 @@ struct RunExtras {
     /// `run_worker` が `CARGO_TARGET_DIR` を WU ごとにする（scratch なら owner `task-<id>/wu-<id>`、無効なら
     /// `<repo-key>/wu-<id>`。兄弟 WU と target を共有しない）。
     cargo_target_work_unit: Option<(String, String)>,
+    /// ADR-0074 付記 2026-10-05 D3: WU の run だけ `Some`（`CELERIS_WU_BASE` / `CELERIS_WU_TARGET`）。
+    /// `run_worker` が adapter の env に重ねる（checks の env と同じ値）。
+    work_unit_env: Option<Vec<(String, String)>>,
     /// ADR-0079 D7（Phase R3a）: 木の節点の worker の run（planner でない）だけ `true`（`result.json` の
     /// `decisions` で人への決定の要求を出せることを前置きで伝える）。
     decision_requests: bool,
@@ -1108,9 +1121,9 @@ pub struct Dispatcher {
     stall_watch: HashMap<TaskId, (u64, OffsetDateTime)>,
     /// ADR-0079 D10（Phase R3b）: 最後に生存確認をした時刻（[`LIVENESS_CHECK_INTERVAL_SECS`] ごと）。
     liveness_checked_at: Option<OffsetDateTime>,
-    /// ADR-0079 付記「R6-1」D4: 最後に終端の task の `runs` 索引の `running` の行を照合した時刻（起動後の最初の
+    /// ADR-0079 付記「R6-1」D4: 最後に終端の task の未完了 run と統合依頼を照合した時刻（起動後の最初の
     /// tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと）。
-    runs_reconciled_at: Option<OffsetDateTime>,
+    terminal_records_reconciled_at: Option<OffsetDateTime>,
     /// 最後に持ち主の居ない `running` の `runs` 行を照合した時刻（active かつ孤児の回収が有効になって
     /// 最初の tick と [`RUNS_RECONCILE_INTERVAL_SECS`] ごと。`ownerless_runs.rs`）。
     ownerless_reconciled_at: Option<OffsetDateTime>,
@@ -1155,6 +1168,9 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
+    /// 統合の状態確認直前に別の ready 戻しを差し込む、試験専用の一回フック。
+    #[cfg(test)]
+    before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
@@ -1242,6 +1258,13 @@ pub struct Dispatcher {
     knowledge_probe: KnowledgeProbe,
     /// ADR-0052 D1: 検査の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
+    /// ADR-0132 付記 L1/L2: cheap lane で順位付けの前に試すローカルの行（設定順）。空なら前段を走らせない。
+    local_providers: Vec<LocalProviderSpec>,
+    /// ADR-0132 付記 L4: ローカルの行の health 検査（既定は `task_worker::probe_models`。テストは
+    /// `set_local_provider_probe` で差し替える）。**LLM は呼ばない**。
+    local_probe: LocalProviderProbe,
+    /// ADR-0132 付記 L4: health の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
+    local_probe_cache: HashMap<String, (Instant, Reachability)>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
     tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
     /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
@@ -1287,6 +1310,25 @@ impl Drop for Dispatcher {
 /// ある。既定は本物の HTTP GET）。第 2 引数は `[knowledge.langmem].api_key_secret` から解決した
 /// 平文のトークン（`llm-proxy` のように `/v1/models` が認証を要求する上流のため。値はログに出さない）。
 pub type KnowledgeProbe = Arc<dyn Fn(&str, Option<&str>) -> Reachability + Send + Sync>;
+
+/// ADR-0132 付記 L4: ローカルの行の health 検査のフック（`KnowledgeProbe` と同じ形）。第 2 引数は
+/// source の `api_key`（値はログに出さない）。
+pub type LocalProviderProbe = Arc<dyn Fn(&str, Option<&str>) -> Reachability + Send + Sync>;
+
+/// ADR-0132 付記 L4: ローカルの行の probe 先 1 つ（`GET <base_url>/models`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalHealthTarget {
+    pub base_url: String,
+    pub bearer_token: Option<String>,
+}
+
+/// ADR-0132 付記 L1/L4: ローカルの行（`[[providers]]` の id）とその probe 先。`health` が空なら
+/// 「確かめられない」として生きている扱い。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalProviderSpec {
+    pub provider: ProviderId,
+    pub health: Vec<LocalHealthTarget>,
+}
 
 /// ADR-0052 D2: フォールバックする run に載せる上書き（`run_extras` の結果に混ぜる）。
 #[derive(Debug, Clone)]
@@ -1390,7 +1432,7 @@ impl Dispatcher {
             run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
             liveness_checked_at: None,
-            runs_reconciled_at: None,
+            terminal_records_reconciled_at: None,
             ownerless_reconciled_at: None,
             lost_review_watch: std::collections::HashSet::new(),
             disk_low: false,
@@ -1410,6 +1452,8 @@ impl Dispatcher {
             review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
+            #[cfg(test)]
+            before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
             tx,
@@ -1447,6 +1491,11 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             knowledge_probe_cache: HashMap::new(),
+            local_providers: Vec::new(),
+            local_probe: Arc::new(|base_url, bearer_token| {
+                task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
+            }),
+            local_probe_cache: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
             tunnel_listener_probe: None,
@@ -1465,6 +1514,56 @@ impl Dispatcher {
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
         self.knowledge_probe = probe;
         self.knowledge_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L1/L7: cheap lane で先に試すローカルの行を設定する（設定順。空なら付記の前と同じ）。
+    pub fn set_local_providers(&mut self, specs: Vec<LocalProviderSpec>) {
+        self.local_providers = specs;
+        self.local_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L4: ローカルの行の health 検査を差し替える（テストはネットワークに出ない）。
+    pub fn set_local_provider_probe(&mut self, probe: LocalProviderProbe) {
+        self.local_probe = probe;
+        self.local_probe_cache.clear();
+    }
+
+    /// ADR-0132 付記 L4: ローカルの行の health。probe 先が無ければ「確かめられない」= 生きている扱い。
+    /// どれか 1 つが `Ok` か `Unknown` なら生きている。全部 `Unreachable` なら最初の理由を返す。
+    /// 結果は `base_url` ごとに 60 秒キャッシュ（`knowledge_reachability` と同じ型）。
+    fn local_provider_health(
+        &mut self,
+        health: &[LocalHealthTarget],
+        now: Instant,
+    ) -> Result<(), String> {
+        let mut first_reason = None;
+        for target in health {
+            let outcome = match self.local_probe_cache.get(&target.base_url) {
+                Some((checked_at, cached))
+                    if now.saturating_duration_since(*checked_at)
+                        < task_worker::PROBE_CACHE_TTL =>
+                {
+                    cached.clone()
+                }
+                _ => {
+                    let started = Instant::now();
+                    let outcome =
+                        (self.local_probe)(&target.base_url, target.bearer_token.as_deref());
+                    log_slow_step("local_provider_probe", started);
+                    tracing::debug!(base_url = %target.base_url, ?outcome, "dispatch: probed a local provider");
+                    self.local_probe_cache
+                        .insert(target.base_url.clone(), (now, outcome.clone()));
+                    outcome
+                }
+            };
+            match outcome {
+                Reachability::Ok | Reachability::Unknown { .. } => return Ok(()),
+                Reachability::Unreachable { reason } => {
+                    first_reason.get_or_insert(format!("{}: {reason}", target.base_url));
+                }
+            }
+        }
+        first_reason.map_or(Ok(()), Err)
     }
 
     /// ADR-0052 D1: `[knowledge.langmem].base_url` の到達性（60 秒キャッシュ）。
@@ -1555,6 +1654,9 @@ impl Dispatcher {
     /// 「手元が 0」と判断して exit し、検査の完了（`Completion::WorkUnitChecks`）ごと失う。
     /// 本番（dogfood 4 回目の `gate` WU）では、その run は `running` のまま検査前に延ばした lease
     /// （`review_timeout × (2n+1) + lease_grace`）が切れるまで放置され、`lease expired` で requeue された。
+    ///
+    /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の instance は検査を始めず、手元の検査も最初の tick で
+    /// 手放す（`hand_off_checks_in_hand`）ので、draining 中の `checking` は空になり、drain は run の終わりで完了する。
     pub fn in_flight(&self) -> usize {
         self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
     }
@@ -1780,6 +1882,8 @@ impl Dispatcher {
             d
         };
         let (finished, reviewed) = self.drain_completions()?;
+        // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D1: draining なら手元の WU の検査を止めて手を離す。
+        self.hand_off_checks_in_hand()?;
         let drain_ms = lap(&mut at);
         report.finished = finished;
         report.reviewed = reviewed;
@@ -1813,12 +1917,15 @@ impl Dispatcher {
             Err(e) => tracing::warn!(error = %e, "failed to expire browser waits"),
         }
         report.reclaimed = self.reclaim_expired_leases()?;
+        // ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）D2: draining の旧 instance が手を離した WU の検査を拾う
+        // （照合より前。照合が「持ち主の居ない run」として requeue しないように）。
+        self.take_over_handed_off_checks()?;
         // ADR-0074 D1.7（Phase F2b）: v2 の Task の照合（WU の lease 切れ・何も走っていない Running）。
         self.reconcile_parallel_tasks()?;
         let reclaim_ms = lap(&mut at);
         self.abort_stale_runs()?;
-        // ADR-0079 付記「R6-1」D4: 終端の task の `running` のままの `runs` 行を閉じる（起動時と定期）。
-        self.reconcile_terminal_runs();
+        // ADR-0079 付記「R6-1」D4: 終端の task の未完了 run と統合依頼を閉じる（起動時と定期）。
+        self.reconcile_terminal_records();
         // 手元のレビューの取りこぼし（判定の完了が届かないまま終わった・期限を越えた）を閉じる（毎 tick。
         // draining 中も: 残ったままだと `in_flight` が 0 にならず drain が終わらない）。
         self.reap_lost_reviews();

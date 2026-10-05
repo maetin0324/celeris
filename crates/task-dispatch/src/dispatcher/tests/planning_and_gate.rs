@@ -1066,6 +1066,7 @@ async fn the_retry_planner_run_receives_the_previous_validation_error_and_config
         .map(|i| task_core::WorkUnitCheck {
             cmd: format!("true {i}"),
             expect_exit: 0,
+            scope: false,
         })
         .collect();
     let adapter = Arc::new(PlannerScriptAdapter::new(
@@ -1443,4 +1444,87 @@ async fn reopened_delivery_task_dispatches_only_its_ready_repair_unit() {
         .map(|(key, _)| key.clone())
         .collect();
     assert_eq!(seen, vec!["repair-1"], "main WU must not run again");
+}
+
+/// ADR-0131 付記（2026-10-04、Complexity Gate 例外）: 本番 task 01M448KR2GJ8RJ4NKHGKPWZKMR のように
+/// objective が長い cron 発火の knowledge-curation task は、強制規則（long-and-broad）も満たすほど
+/// 複雑に見えても Complexity Gate で分割されず、常に atomic の 1 run（偽アダプタ）で dispatch される。
+/// 理由（rule_id）は `Event::ExecutionGated` に残る。
+#[tokio::test]
+async fn knowledge_curation_cron_task_skips_the_gate_and_runs_atomic() {
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+        1,
+    );
+    task.genre = Some(task_core::cron::KNOWLEDGE_CURATION_HARNESS.to_string());
+    task.labels = vec![task_core::cron::CRON_TASK_LABEL.to_string()];
+    task.budget.max_turns = 60;
+    // 本番の全体整理 task を模した長い objective（強制規則 atomic/small には当たらない）。
+    task.objective = "知識ベースの全体整理\n".repeat(400);
+    task.routing = Some(task_core::TaskRouting {
+        // 強制規則 compound/long-and-broad も満たすほど複雑に見える特徴を乗せる。
+        features: Some(task_core::model_policy::TaskFeatureHints {
+            context_size: Some(task_core::model_policy::Level::High),
+            expected_length: Some(task_core::model_policy::Level::High),
+            cross_cutting: Some(task_core::model_policy::Level::High),
+            tool_intensity: Some(task_core::model_policy::Level::High),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let task_id = task.id;
+    store.insert(&task).unwrap();
+
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    d.config.execution.gate = task_core::GateMode::On;
+    let report = run_until_idle(&mut d, 400).await;
+    assert!(report.idle, "{report:?}");
+
+    let stored = store.get(task_id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done, "{stored:?}");
+    let decision = stored
+        .routing
+        .as_ref()
+        .and_then(|r| r.execution.as_ref())
+        .expect("gate decision recorded");
+    assert_eq!(decision.mode, task_core::ExecutionMode::Atomic);
+    assert_eq!(decision.rule_id, "atomic/knowledge-curation");
+    assert!(!decision.shadow);
+
+    // planner run も計画も無い: atomic の 1 run だけで done になった。
+    assert!(store.execution_plan_active(task_id).unwrap().is_none());
+    assert!(store.work_units_for(task_id).unwrap().is_empty());
+    let runs = store.runs_for_task(task_id).unwrap();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert!(
+        runs.iter()
+            .all(|r| r.role != task_core::RunIndexRole::Planner),
+        "{runs:?}"
+    );
+
+    // 理由（rule_id）が event に残る。
+    let events = store.events_for(task_id).unwrap();
+    let gated: Vec<&task_core::ExecutionGateDecision> = events
+        .iter()
+        .filter_map(|(_, e)| match e {
+            Event::ExecutionGated { decision } => Some(decision.as_ref()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(gated.len(), 1, "{events:?}");
+    assert_eq!(gated[0].rule_id, "atomic/knowledge-curation");
 }

@@ -158,6 +158,10 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
   integration_check_started: { sets: ["T", "E"] },
   integration_check_finished: { sets: ["T", "E"] },
+  // 葉の WU の受け入れ検査の開始・終了と、draining の旧 instance の手放し（同じ WU 行の check_progress）。
+  work_unit_check_started: { sets: ["T", "E"] },
+  work_unit_check_finished: { sets: ["T", "E"] },
+  work_unit_checks_handed_off: { sets: ["T", "E"] },
 };
 
 /**

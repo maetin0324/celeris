@@ -129,6 +129,47 @@ Qwen 直指定の旧 opencode 経路を一時的に残すなら、その行の `
 frontier / standard でも opencode を使う場合は、Qwen 固定の `OPENCODE_CONFIG` と別の行を作り、
 proxy の `celeris/frontier` / `celeris/standard` を使う。
 
+## cheap lane のローカル優先（ADR-0132 付記 2026-10-04）
+
+cheap lane の worker run は、アカウントプール（`claude-pool`・`codex-pool`）の順位付けより先にローカルの行を選ぶ。
+
+| 項目 | 内容 |
+| --- | --- |
+| ローカルの行 | `account_pool` が無く、`tiers` に cheap を含み、実効 `llm_source` が `openai_compatible:<id>`（本番の `opencode-qwen`）か、`celeris` で proxy に有効な `openai_compatible` source と `[llm_proxy.models.qwen].cheap` がある行。`paperqa`・`local-deep-research`・`langmem` の行は含めない |
+| 同時実行数 | その行の `[[providers]].concurrency`（既定 1）。GPU 1 枚の Qwen は 1 のままにする |
+| health | `GET <source の base_url>/models`（本番は `http://127.0.0.1:18000/v1/models`）。時間切れ 3 秒、結果は 60 秒キャッシュ。LLM は呼ばない |
+| プールに倒す条件 | ローカルの行が満杯・不通・cooldown 中・その仕事の adapter 指定に合わない |
+| 変わらないもの | standard / frontier、reviewer run、CoS の対話 run、継続セッション |
+| 切り替え | `[execution] cheap_local_first = false`（既定 `true`）で従来の選び方に戻る。`POST /api/v1/reload` で反映される |
+
+選んだ理由は `routing_decided` の `record.resolution.selection` に残る。
+
+| `reason` | 意味 |
+| --- | --- |
+| `local_preferred` | ローカルの行を選んだ |
+| `local_full` | ローカルの行が満杯で、順位付けに倒した |
+| `local_down` | ローカルの行が不通または cooldown 中で、順位付けに倒した |
+| `pool` | 合うローカルの行が無く（または cheap 以外で）、プールの行を選んだ |
+| `fallback` | プールを持たない行に倒した（従来の fallback） |
+| `sticky` | 継続セッションの行に留まった |
+
+適用後の確認（人が実行する。読み取りだけ）:
+
+```sh
+# トンネルの health（選択が見るのと同じ先）
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18000/v1/models
+# 直近の cheap の選択理由
+sqlite3 -readonly /local/celeris/data/db/celeris.sqlite3 \
+  "select json_extract(json,'$.record.resolution.provider'), json_extract(json,'$.record.resolution.selection.reason'), count(*)
+   from events where json_extract(json,'$.type')='routing_decided'
+     and json_extract(json,'$.record.resolution.lane')='cheap'
+     and json_extract(json,'$.record.resolution.selection.reason') is not null
+   group by 1,2;"
+```
+
+トンネルが落ちているあいだは `local_down` でプールに倒れ続ける。pegasus の接続（TOTP）を GUI のクラスタ画面で戻すと、
+次の probe（最長 60 秒後）からローカルに戻る。
+
 ## 人が実行する適用と確認
 
 1. 停止前に `config.toml`、`providers.d/`、PaperQA と opencode の JSON の控えを権限を保って取る。

@@ -685,6 +685,14 @@ export async function setupMockCeleris() {
               phase: "build",
               branch: `celeris-wu/${TASK_ID}/api`,
               running_run_id: "01RUNAPIAAAAAAAAAAAAAAAAA",
+              // 2026-10-04 WU 検査の引き継ぎ D3: worker run の後に daemon が流す受け入れ検査も WU の行に出す。
+              check_progress: {
+                total: 2,
+                current: { index: 1, cmd: "corepack pnpm -C web e2e --retries=0", started_at: "2026-09-21T00:40:00Z" },
+                finished: [
+                  { index: 0, cmd: "cargo test -p api", pass: true, exit: 0, timed_out: false, duration_ms: 41_200 },
+                ],
+              },
               depends_on: [],
               runs: 1,
               continuations: 0,
@@ -799,6 +807,20 @@ export async function setupMockCeleris() {
       size: 52_000,
       truncated: true,
       tail: "test dispatcher::tests::work_units::three_work_units_run_in_order ... ok\ntest result: ok. 412 passed\n",
+    }),
+  );
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/work-units/01WUAPIAAAAAAAAAAAAAAAAAA/check-log`, (_req, res) =>
+    sendJson(res, 200, {
+      work_unit_id: "01WUAPIAAAAAAAAAAAAAAAAAA",
+      key: "api",
+      index: 1,
+      total: 2,
+      cmd: "corepack pnpm -C web e2e --retries=0",
+      started_at: "2026-09-21T00:40:00Z",
+      running: true,
+      size: 2_048,
+      truncated: false,
+      tail: "Running 48 tests using 4 workers\n  ✓ 12 task detail shows work units\n",
     }),
   );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/artifacts`, (_req, res) => sendJson(res, 200, { items: [] }));

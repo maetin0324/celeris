@@ -605,3 +605,78 @@ async fn work_unit_check_log_returns_the_tail_of_the_running_check() {
     .await;
     assert_problem(&missing, 404, "file_not_found");
 }
+
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`WorkUnitCheckStarted` / `Finished`）も、実行中の
+/// 出力の末尾と終わった検査の exit・所要時間を同じ API で読める。
+#[tokio::test]
+async fn work_unit_check_log_reads_a_leaf_acceptance_check() {
+    let env = TestEnv::new();
+    let task = new_task(TaskKind::Execute, Status::Running);
+    env.seed(&task);
+    let first = env.workspace(&task).join("work-unit-checks/gate/7-0.log");
+    let second = env.workspace(&task).join("work-unit-checks/gate/7-1.log");
+    write(&first, b"build ok\n");
+    write(&second, b"Running 120 tests\n  ok 1 smoke\n");
+    let started = |index: u32, cmd: &str, path: &std::path::Path| Event::WorkUnitCheckStarted {
+        work_unit_id: "wu-gate".into(),
+        key: "gate".into(),
+        run_id: "run-1".into(),
+        index,
+        total: 2,
+        cmd: cmd.into(),
+        log_path: path.display().to_string(),
+        started_at: "2026-10-04T18:15:26Z".into(),
+    };
+    for e in [
+        started(0, "cargo build", &first),
+        Event::WorkUnitCheckFinished {
+            work_unit_id: "wu-gate".into(),
+            key: "gate".into(),
+            run_id: "run-1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo build".into(),
+            pass: true,
+            exit: Some(0),
+            timed_out: false,
+            duration_ms: 1200,
+        },
+        started(1, "corepack pnpm -C web e2e", &second),
+    ] {
+        env.store.append_event(task.id, &e).expect("append");
+    }
+    let app = env.router();
+    let running = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/work-units/wu-gate/check-log",
+            task.id
+        )),
+    )
+    .await;
+    assert_eq!(running.status, 200, "{}", running.text());
+    let v = running.json();
+    assert_eq!(v["cmd"], "corepack pnpm -C web e2e");
+    assert_eq!(v["index"], 1);
+    assert_eq!(v["running"], true);
+    assert_eq!(v["tail"], "Running 120 tests\n  ok 1 smoke\n");
+    let done = send(
+        &app,
+        get(&format!(
+            "/api/v1/tasks/{}/work-units/wu-gate/check-log?index=0",
+            task.id
+        )),
+    )
+    .await;
+    let v = done.json();
+    assert_eq!(v["running"], false);
+    assert_eq!(v["pass"], true);
+    assert_eq!(v["exit"], 0);
+    assert_eq!(v["duration_ms"], 1200);
+    assert_eq!(v["tail"], "build ok\n");
+    // events の一覧にも種別名で出る。
+    let events = send(&app, get(&format!("/api/v1/tasks/{}/events", task.id))).await;
+    let text = events.text();
+    assert!(text.contains("work_unit_check_started"), "{text}");
+    assert!(text.contains("work_unit_check_finished"), "{text}");
+}

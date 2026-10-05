@@ -15,6 +15,8 @@ pub(super) struct RunAdapterPrep {
     pub(super) env: Option<task_worker::scratch::CargoEnv>,
     /// ADR-0098 D6: 後続 task の宣言先。cargo の env の後、コンテナの前に適用する。
     pub(super) followups_env: Option<Vec<(String, String)>>,
+    /// ADR-0074 付記 2026-10-05 D3: WU の run の `CELERIS_WU_BASE` / `CELERIS_WU_TARGET`（followups の後、コンテナの前）。
+    pub(super) work_unit_env: Option<Vec<(String, String)>>,
     /// ADR-0043 D3: コンテナで走らせる run のプラン。
     pub(super) container: Option<task_worker::SharedPlan>,
     /// ADR-0072 D14: planner run の `[execution.planner].permission_mode`。
@@ -47,6 +49,16 @@ pub(super) fn prepare_run_adapter(
             Some(wrapped) => wrapped,
             None => {
                 tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_FOLLOWUPS_FILE was not applied (ADR-0098 D6)");
+                adapter
+            }
+        },
+        None => adapter,
+    };
+    let adapter = match &prep.work_unit_env {
+        Some(env) => match adapter.with_env(env) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_WU_BASE / CELERIS_WU_TARGET were not applied (ADR-0074 appendix 2026-10-05)");
                 adapter
             }
         },
@@ -368,6 +380,7 @@ pub(super) async fn run_worker(
     // ADR-0044 D2: 対話 run（人への返事だけをする run。Phase 28）にはコメントの書き方を出さない。
     let writes_comments = extras.conversation_addressee.is_none();
     let cargo_target_work_unit = extras.cargo_target_work_unit.clone();
+    let work_unit_env = extras.work_unit_env.clone();
     let mut req = RunRequest {
         cargo_target_dir: None,
         protocol: PROTOCOL_VERSION,
@@ -518,6 +531,7 @@ pub(super) async fn run_worker(
     let prep = RunAdapterPrep {
         env: target.as_ref().map(|(_, env)| env.clone()),
         followups_env,
+        work_unit_env,
         container: container_plan.clone(),
         permission_mode: planner_permission_mode.clone(),
     };

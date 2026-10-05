@@ -46,6 +46,71 @@ pub struct LaneResolution {
     pub model_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
+    /// ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selection: Option<ProviderSelection>,
+}
+
+/// ADR-0132 付記 L8: provider を選んだ理由。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderSelectionReason {
+    /// cheap lane でローカルの行を選んだ（付記 L2）。
+    LocalPreferred,
+    /// 空きの無いローカルの行があり、順位付けへ倒した（付記 L3）。
+    LocalFull,
+    /// ローカルの行が不通・cooldown で、順位付けへ倒した（付記 L3/L4）。
+    LocalDown,
+    /// アカウントプールの行を残量 score で選んだ（ADR-0049）。
+    Pool,
+    /// プールを持たない行へ倒れた、または何も選べなかった（ADR-0049）。
+    Fallback,
+    /// 継続セッションに留まった（ADR-0054）。
+    Sticky,
+}
+
+/// ADR-0132 付記 L8: 候補の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCandidateKind {
+    /// 付記 L1 のローカルの行。
+    Local,
+    /// アカウントプールの行。
+    Pool,
+    /// それ以外（プールを持たない非ローカルの行）。
+    Other,
+}
+
+/// ADR-0132 付記 L8: 候補を見た結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderCandidateOutcome {
+    Selected,
+    Available,
+    Full,
+    Down,
+    Cooldown,
+    Unsupported,
+    NoAccount,
+}
+
+/// ADR-0132 付記 L8: 選択で見た 1 行。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderCandidate {
+    pub provider: String,
+    pub kind: ProviderCandidateKind,
+    pub outcome: ProviderCandidateOutcome,
+    /// probe の失敗理由など。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderSelection {
+    pub reason: ProviderSelectionReason,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub candidates: Vec<ProviderCandidate>,
 }
 pub fn resolve(bindings: &TierModels, tier: Tier) -> Result<Option<String>, String> {
     if bindings.is_empty() {
@@ -116,6 +181,40 @@ pub fn credential_refs(env: &HashMap<String, String>) -> HashMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ADR-0132 付記 L8: 旧イベント（`selection` 無し）も読め、理由は snake_case で書く。
+    #[test]
+    fn lane_resolution_selection_is_optional_and_snake_case() {
+        let old: LaneResolution =
+            serde_json::from_str(r#"{"adapter":"acp","provider":"qwen"}"#).unwrap();
+        assert_eq!(old.selection, None);
+        let with = LaneResolution {
+            selection: Some(ProviderSelection {
+                reason: ProviderSelectionReason::LocalPreferred,
+                candidates: vec![ProviderCandidate {
+                    provider: "qwen".into(),
+                    kind: ProviderCandidateKind::Local,
+                    outcome: ProviderCandidateOutcome::NoAccount,
+                    detail: None,
+                }],
+            }),
+            ..LaneResolution::default()
+        };
+        let json = serde_json::to_value(&with).unwrap();
+        assert_eq!(json["selection"]["reason"], "local_preferred");
+        assert_eq!(json["selection"]["candidates"][0]["kind"], "local");
+        assert_eq!(json["selection"]["candidates"][0]["outcome"], "no_account");
+        assert!(json["selection"]["candidates"][0].get("detail").is_none());
+        let back: LaneResolution = serde_json::from_value(json).unwrap();
+        assert_eq!(back, with);
+        assert!(
+            serde_json::to_value(LaneResolution::default())
+                .unwrap()
+                .get("selection")
+                .is_none()
+        );
+    }
+
     #[test]
     fn tier_resolution_never_substitutes_a_missing_or_disabled_model() {
         let mut bindings = TierModels::new();

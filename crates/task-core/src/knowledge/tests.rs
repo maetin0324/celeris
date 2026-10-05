@@ -343,3 +343,102 @@ fn maintenance_objective_includes_every_section() {
     assert!(!minimal.contains("---- 報告"), "{minimal}");
     assert!(!minimal.contains("---- コメント"), "{minimal}");
 }
+
+/// ADR-0047 付記（2026-10-04）H1〜H3: 人の印の判定・run の出典の正し方・`sources` 行だけの書き換え。
+#[test]
+fn human_marks_protect_only_authored_and_legacy_and_user_pages() {
+    let authored = "---\ntitle: a\nsources: [\"human:authored\", \"url:x\"]\n---\n\nbody\n";
+    let author_key = "---\ntitle: a\nauthor: human\n---\n\nbody\n";
+    let legacy = "---\ntitle: a\nsources:\n  - human\n---\n\nbody\n";
+    let singular = "---\ntitle: a\nsource: human\n---\n\nbody\n";
+    let instruction =
+        "---\ntitle: a\nsources: [\"human:instruction\", \"task:01J1\"]\n---\n\nbody\n";
+    assert!(protected_page("projects/x/a.md", authored));
+    assert!(protected_page("projects/x/a.md", author_key));
+    assert!(protected_page("projects/x/a.md", legacy));
+    assert!(protected_page("projects/x/a.md", singular));
+    assert!(!protected_page("projects/x/a.md", instruction));
+    assert!(protected_page("user/a.md", instruction));
+    // 本文に書かれた `author: human` は印ではない。
+    assert!(!protected_page(
+        "projects/x/a.md",
+        "---\ntitle: a\n---\n\nauthor: human\n"
+    ));
+}
+
+#[test]
+fn normalize_agent_sources_turns_human_marks_into_instruction() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        normalize_agent_sources(
+            &s(&["human", "human:authored", " url:x "]),
+            &[],
+            Some("01J1")
+        ),
+        s(&["human:instruction", "url:x", "task:01J1"])
+    );
+    // 既存ページが同じ印を持つなら保つ（出典を保つ update で保護を落とさない）。
+    assert_eq!(
+        normalize_agent_sources(
+            &s(&["human:authored", "task:01J1"]),
+            &s(&["human:authored"]),
+            Some("01J2")
+        ),
+        s(&["human:authored", "task:01J1"])
+    );
+    // 人の印が無ければ task を足さない。
+    assert_eq!(
+        normalize_agent_sources(&s(&["url:x"]), &[], Some("01J1")),
+        s(&["url:x"])
+    );
+}
+
+#[test]
+fn replace_sources_rewrites_only_the_sources_lines() {
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let block =
+        "---\ntitle: a\nsources:\n  - human\n  - \"url:x\"\ntags: [t]\nextra: keep\n---\n\nbody\n";
+    let out = replace_sources(block, &s(&["human:instruction", "url:x"])).expect("rewrite");
+    assert_eq!(
+        out,
+        "---\ntitle: a\nsources: [\"human:instruction\", \"url:x\"]\ntags: [t]\nextra: keep\n---\n\nbody\n"
+    );
+    let none = "---\ntitle: a\n---\n\nbody\n";
+    assert_eq!(
+        replace_sources(none, &s(&["human:authored"])).expect("add"),
+        "---\ntitle: a\nsources: [\"human:authored\"]\n---\n\nbody\n"
+    );
+    assert_eq!(replace_sources("body only\n", &s(&["x"])), None);
+}
+
+/// ADR-0047 付記 H1: 人の GUI 編集は『人が書いた』印を付ける（旧形 `human` は置き換え、`user/` と既存の印は触らない）。
+#[test]
+fn mark_human_authored_adds_the_authored_mark_for_gui_edits() {
+    let instruction = "---\ntitle: t\nsources: [task:01X, human:instruction]\n---\n\n本文\n";
+    let marked = mark_human_authored("projects/a.md", instruction);
+    assert_eq!(
+        marked,
+        "---\ntitle: t\nsources: [\"task:01X\", \"human:instruction\", \"human:authored\"]\n---\n\n本文\n"
+    );
+    assert!(protected_page("projects/a.md", &marked));
+    // 同じ入力には同じ出力（再保存は unchanged のまま）、二度付けしない。
+    assert_eq!(mark_human_authored("projects/a.md", &marked), marked);
+
+    let legacy = "---\ntitle: t\nsources: [human]\n---\n\n本文\n";
+    assert_eq!(
+        mark_human_authored("projects/a.md", legacy),
+        "---\ntitle: t\nsources: [\"human:authored\"]\n---\n\n本文\n"
+    );
+
+    let bare = "# メモ\n";
+    let marked = mark_human_authored("projects/b.md", bare);
+    assert_eq!(
+        marked,
+        "---\nsources: [\"human:authored\"]\n---\n\n# メモ\n"
+    );
+    assert!(human_authored(&marked));
+
+    let author = "---\ntitle: t\nauthor: human\n---\n\n本文\n";
+    assert_eq!(mark_human_authored("projects/c.md", author), author);
+    assert_eq!(mark_human_authored("user/notes.md", bare), bare);
+}

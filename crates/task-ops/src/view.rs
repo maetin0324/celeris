@@ -482,11 +482,14 @@ pub struct ExecutionWorkUnitView {
     pub running_run_id: Option<String>,
     /// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
     /// 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+    /// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`WorkUnitCheckStarted` / `Finished`。worker run の
+    /// 後に daemon が流す）も同じ形で出す。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub check_progress: Option<IntegrationCheckProgress>,
 }
 
 /// 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+/// 葉の WU では最後の受け入れ検査の試行（`index` 0 の `WorkUnitCheckStarted` から後。WU 検査の引き継ぎ D3）。
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct IntegrationCheckProgress {
     /// その試行の検査の数。
@@ -535,6 +538,14 @@ pub fn integration_check_progress<'a>(
                 cmd,
                 started_at,
                 ..
+            }
+            | Event::WorkUnitCheckStarted {
+                work_unit_id: wu,
+                index,
+                total,
+                cmd,
+                started_at,
+                ..
             } if wu == work_unit_id => {
                 let p = match (&mut progress, *index) {
                     (Some(p), i) if i != 0 => p,
@@ -552,6 +563,16 @@ pub fn integration_check_progress<'a>(
                 });
             }
             Event::IntegrationCheckFinished {
+                work_unit_id: wu,
+                index,
+                cmd,
+                pass,
+                exit,
+                timed_out,
+                duration_ms,
+                ..
+            }
+            | Event::WorkUnitCheckFinished {
                 work_unit_id: wu,
                 index,
                 cmd,

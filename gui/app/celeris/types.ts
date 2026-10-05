@@ -732,6 +732,36 @@ export type Event =
       work_unit_id: string;
     }
   | {
+      cmd: string;
+      index: number;
+      key: string;
+      log_path: string;
+      run_id: string;
+      started_at: string;
+      total: number;
+      type: "work_unit_check_started";
+      work_unit_id: string;
+    }
+  | {
+      cmd: string;
+      duration_ms: number;
+      exit?: number | null;
+      index: number;
+      key: string;
+      pass: boolean;
+      run_id: string;
+      timed_out?: boolean;
+      total: number;
+      type: "work_unit_check_finished";
+      work_unit_id: string;
+    }
+  | {
+      key: string;
+      run_id: string;
+      type: "work_unit_checks_handed_off";
+      work_unit_id: string;
+    }
+  | {
       branch: string;
       child_task: TaskId;
       head_sha: string;
@@ -1056,6 +1086,19 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
 export type TierSource = "human" | "system" | "hint" | "default";
+/**
+ * ADR-0132 付記 L8: 候補の種類。
+ */
+export type ProviderCandidateKind = "local" | "pool" | "other";
+/**
+ * ADR-0132 付記 L8: 候補を見た結果。
+ */
+export type ProviderCandidateOutcome =
+  "selected" | "available" | "full" | "down" | "cooldown" | "unsupported" | "no_account";
+/**
+ * ADR-0132 付記 L8: provider を選んだ理由。
+ */
+export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
 export type CheckpointEnd = ("completed" | "yielded" | "budget_exhausted") | "waiting";
 /**
  * checkpoint を合成した出所（D8）。
@@ -4861,6 +4904,29 @@ export interface LaneResolution {
   model_id?: string;
   provider?: string | null;
   reasoning_effort?: string | null;
+  /**
+   * ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。
+   */
+  selection?: ProviderSelection | null;
+}
+/**
+ * ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。
+ */
+export interface ProviderSelection {
+  candidates?: ProviderCandidate[];
+  reason: ProviderSelectionReason;
+}
+/**
+ * ADR-0132 付記 L8: 選択で見た 1 行。
+ */
+export interface ProviderCandidate {
+  /**
+   * probe の失敗理由など。
+   */
+  detail?: string | null;
+  kind: ProviderCandidateKind;
+  outcome: ProviderCandidateOutcome;
+  provider: string;
 }
 /**
  * D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと
@@ -5109,6 +5175,12 @@ export interface WorkUnitBudget {
 export interface WorkUnitCheck {
   cmd: string;
   expect_exit?: number;
+  /**
+   * ADR-0074 付記 2026-10-05（`WorkUnitCheck.scope`）: 範囲 check（WU 自身の変更が許可範囲に収まるかを見る
+   * 検査）か。`true` の check は WU の作業時（`spawn_work_unit_checks`）だけで流し、段の統合の検査
+   * （D1.4 の 4）と子 task の acceptance（`promote_to_task`）には入れない。既定 `false`（JSON に書かない）。
+   */
+  scope?: boolean;
 }
 /**
  * ADR-0079 D2: /3 の unit の context（/1・/2 の `WorkUnitContext` に `repo` を足した形）。
@@ -9585,6 +9657,8 @@ export interface ExecutionWorkUnitView {
   /**
    * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行の検査（run を持たないので、現在の検査と済んだ
    * 検査を events から出す）。統合の検査を 1 度も始めていなければ `None`。
+   * 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`WorkUnitCheckStarted` / `Finished`。worker run の
+   * 後に daemon が流す）も同じ形で出す。
    */
   check_progress?: IntegrationCheckProgress | null;
   /**
@@ -9640,6 +9714,7 @@ export interface ExecutionWorkUnitView {
 }
 /**
  * 2026-10-04 統合の検査の進み具合 D4: 統合 WU の最後の試行（`index` 0 の `IntegrationCheckStarted` から後）の検査。
+ * 葉の WU では最後の受け入れ検査の試行（`index` 0 の `WorkUnitCheckStarted` から後。WU 検査の引き継ぎ D3）。
  */
 export interface IntegrationCheckProgress {
   /**
@@ -10456,7 +10531,8 @@ export interface WorkUnitCheckLog {
   key: string;
   pass?: boolean | null;
   /**
-   * 対応する `IntegrationCheckFinished` がまだ無い（実行中、または daemon の停止で打ち切られた）。
+   * 対応する `IntegrationCheckFinished` / `WorkUnitCheckFinished` がまだ無い（実行中、または daemon の停止で
+   * 打ち切られた）。
    */
   running: boolean;
   /**

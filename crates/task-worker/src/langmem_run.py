@@ -62,8 +62,11 @@ Extract knowledge-base candidates as structured records. Each candidate has:
   body: the full markdown body (for update/merge: the *complete* rewritten
         page body, not a diff or an addendum; for retire: optional, a short
         reason)
-  sources: at least one of "task:<id>" (use the given task id), "human",
-           "url:<...>" -- never leave this empty
+  sources: at least one of "task:<id>" (use the given task id),
+           "url:<...>" -- never leave this empty. Add "human:instruction"
+           next to "task:<id>" for a fact that comes from a human's
+           instruction or statement. Never write a bare "human" or
+           "human:authored" (that marks a page a human wrote).
   confidence: "high" | "medium" | "low", honestly
 
 Rules (do not deviate):
@@ -155,7 +158,7 @@ def candidate_schema():
         tags: List[str] = Field(default_factory=list)
         scope: str = Field(description="user | environment | project:<id> | experience")
         body: str = Field(description="Markdown body: the fact, why it matters, how to apply it")
-        sources: List[str] = Field(description="where this came from, e.g. task:<id>, message:<id>, human, url:<...>")
+        sources: List[str] = Field(description="where this came from, e.g. task:<id>, message:<id>, human:instruction, url:<...>")
         confidence: Literal["high", "medium", "low"] = "medium"
 
     return KnowledgeCandidate

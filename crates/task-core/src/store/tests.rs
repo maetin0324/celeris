@@ -5973,3 +5973,99 @@ fn integration_requests_close_once_and_newer_request_of_same_origin_supersedes()
         if request.source_sha == "source-c")
     );
 }
+
+#[test]
+fn terminal_transitions_close_non_delivery_integration_requests_by_appending_answers() {
+    use crate::integration_request::TASK_TERMINAL_ANSWER;
+    for (initial, trigger, terminal) in [
+        (Status::Reviewing, Trigger::ReviewPass, Status::Done),
+        (Status::Blocked, Trigger::Cancel, Status::Cancelled),
+        (
+            Status::Running,
+            Trigger::WorkerError { retryable: false },
+            Status::Failed,
+        ),
+    ] {
+        let store = SqliteStore::open_in_memory().unwrap();
+        let task = sample_task(initial);
+        store.insert(&task).unwrap();
+        let live = sample_task(Status::Draft);
+        store.insert(&live).unwrap();
+        let a = sample_integration_request("phase-source", "target");
+        let b = sample_integration_request("delivery-source", "target");
+        let answered = sample_integration_request("answered-source", "target");
+        store
+            .integration_request_record(task.id, &a, "phase:impl")
+            .unwrap();
+        store
+            .integration_request_record(task.id, &b, "delivery")
+            .unwrap();
+        store
+            .integration_request_record(task.id, &answered, "phase:old")
+            .unwrap();
+        store
+            .integration_request_answer(task.id, &answered.id_for(task.id), "integrated", None)
+            .unwrap();
+        store
+            .integration_request_record(live.id, &a, "phase:impl")
+            .unwrap();
+        let before = store.event_rows_for(task.id, None, 100).unwrap();
+        store.apply_transition(task.id, trigger, None).unwrap();
+        assert_eq!(store.get(task.id).unwrap().unwrap().status, terminal);
+        let after = store.event_rows_for(task.id, None, 100).unwrap();
+        assert_eq!(
+            &after[..before.len()],
+            before.as_slice(),
+            "old event rows are unchanged"
+        );
+        let mut closed = after
+            .iter()
+            .filter_map(|row| match &row.event {
+                Event::IntegrationAnswered {
+                    request_id, answer, ..
+                } if answer == TASK_TERMINAL_ANSWER => Some(request_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        closed.sort();
+        // 配送（delivery）の依頼は done の後に人の判断を待つ正当な依頼なので残る。
+        assert_eq!(closed, vec![a.id_for(task.id)]);
+        let mut open = store
+            .open_integration_requests()
+            .unwrap()
+            .into_iter()
+            .map(|row| row.task_id)
+            .collect::<Vec<_>>();
+        open.sort();
+        let mut expected_open = vec![task.id, live.id];
+        expected_open.sort();
+        assert_eq!(open, expected_open);
+        assert!(
+            store
+                .close_integration_requests_of_terminal_tasks()
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[test]
+fn non_terminal_transition_keeps_integration_requests_open() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let task = sample_task(Status::Blocked);
+    store.insert(&task).unwrap();
+    store
+        .integration_request_record(task.id, &sample_integration_request("s", "t"), "phase:impl")
+        .unwrap();
+    store
+        .apply_transition(task.id, Trigger::Answer, None)
+        .unwrap();
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Ready);
+    assert!(
+        store
+            .close_integration_requests_of_terminal_tasks()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(store.open_integration_requests().unwrap().len(), 1);
+}

@@ -36,6 +36,18 @@ pub const SEARCH_YEARS: i16 = 5;
 /// `due_fires` が数える過ぎた発火の上限。ADR-0131 D3「件数は `next_after` を最大 1000 回で打ち切る」。
 pub const MISSED_COUNT_CAP: u32 = 1000;
 
+/// cron が作った task に必ず付く label（`task_ops::cron_jobs::CRON_TASK_LABEL` はこの値を
+/// re-export する。task-ops は task-core に依存するが逆はできないため、正本をここに置く）。
+pub const CRON_TASK_LABEL: &str = "cron";
+
+/// ADR-0131 の日次整理・全体整理 task の harness id（cron の `template.harness` がそのまま
+/// task の `genre` になる。`task_ops::knowledge_curation::CURATION_HARNESS` はこの値を
+/// re-export する）。ADR-0131 付記（2026-10-04、Complexity Gate 例外）: この harness かつ
+/// [`CRON_TASK_LABEL`] を持つ task は `execution_gate::out_of_scope_rule` で常に atomic に
+/// する（daemon の検証・適用が task 直下の `artifacts/curation-plan.json` を前提にするため、
+/// planner が WorkUnit に分けると成果物が反映されない）。
+pub const KNOWLEDGE_CURATION_HARNESS: &str = "knowledge-curation";
+
 // ---- 識別子 ----
 
 /// cron job 1 件の識別子（ULID）。

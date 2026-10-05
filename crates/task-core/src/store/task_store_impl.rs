@@ -269,6 +269,12 @@ impl TaskStore for SqliteStore {
         self.integration_requests_close_impl(task_id, origin, answer, note)
     }
 
+    fn close_integration_requests_of_terminal_tasks(
+        &self,
+    ) -> Result<Vec<(TaskId, String)>, StoreError> {
+        self.close_integration_requests_of_terminal_tasks_impl()
+    }
+
     fn list_page(
         &self,
         filter: &ListFilter,
@@ -530,6 +536,24 @@ impl TaskStore for SqliteStore {
         self.instance_heartbeat_impl(instance_id, at)
     }
 
+    fn instance_register_if(
+        &self,
+        instance: &DaemonInstance,
+        admit: &dyn Fn(&[DaemonInstance]) -> bool,
+    ) -> Result<bool, StoreError> {
+        self.instance_register_if_impl(instance, admit)
+    }
+
+    fn instance_set_role_if(
+        &self,
+        instance_id: &str,
+        role: InstanceRole,
+        at: OffsetDateTime,
+        admit: &dyn Fn(&[DaemonInstance]) -> bool,
+    ) -> Result<bool, StoreError> {
+        self.instance_set_role_if_impl(instance_id, role, at, admit)
+    }
+
     fn instance_request_handoff(
         &self,
         instance_id: &str,
@@ -563,12 +587,12 @@ impl TaskStore for SqliteStore {
         self.instance_delete_impl(instance_id)
     }
 
-    fn instance_delete_stale(
+    fn instance_delete_where(
         &self,
         keep: &str,
-        heartbeat_before: OffsetDateTime,
+        removable: &dyn Fn(&DaemonInstance) -> bool,
     ) -> Result<Vec<String>, StoreError> {
-        self.instance_delete_stale_impl(keep, heartbeat_before)
+        self.instance_delete_where_impl(keep, removable)
     }
 
     fn cluster_settings_get(
@@ -689,6 +713,14 @@ impl TaskStore for SqliteStore {
         event: Event,
     ) -> Result<(), StoreError> {
         self.work_unit_transition_impl(task_id, updated, event)
+    }
+
+    fn try_start_work_unit_integration(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+    ) -> Result<bool, StoreError> {
+        self.try_start_work_unit_integration_impl(task_id, expected)
     }
 
     fn acquire_work_unit_lease(

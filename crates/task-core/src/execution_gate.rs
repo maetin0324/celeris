@@ -139,8 +139,22 @@ pub struct ExecutionGateInputs {
     pub recent_budget_exhausted_ratio: Option<f64>,
 }
 
+/// ADR-0131 付記（2026-10-04、Complexity Gate 例外）: cron が作った日次整理・全体整理 task か
+/// （harness `knowledge-curation` の genre と [`crate::cron::CRON_TASK_LABEL`] の両方で判別。
+/// `task_ops::knowledge_curation::is_curation_task` と同じ判定）。daemon
+/// （`celeris::knowledge_curation`）は task 直下の `artifacts/curation-plan.json` と `inputs/`
+/// でしか検証・適用しないため、planner が WorkUnit に分けると worker が書いた計画が反映されない。
+fn is_knowledge_curation_cron_task(task: &Task) -> bool {
+    task.genre.as_deref() == Some(crate::cron::KNOWLEDGE_CURATION_HARNESS)
+        && task
+            .labels
+            .iter()
+            .any(|l| l == crate::cron::CRON_TASK_LABEL)
+}
+
 /// D13: gate の対象外なら理由（rule_id）を返す。`kind != Execute` / 対話 / support-task /
-/// `routing` を持たない旧タスク / 固定パイプラインの harness / `workspace_mode = Shared` の内部タスク。
+/// `routing` を持たない旧タスク / 固定パイプラインの harness / `workspace_mode = Shared` の内部タスク /
+/// cron の知識整理（knowledge-curation）task。
 pub fn out_of_scope_rule(task: &Task) -> Option<&'static str> {
     if task.kind != TaskKind::Execute {
         return Some("atomic/out-of-scope");
@@ -165,6 +179,11 @@ pub fn out_of_scope_rule(task: &Task) -> Option<&'static str> {
         || task.workspace.remote_mode() == WorkspaceMode::Shared
     {
         return Some("atomic/out-of-scope");
+    }
+    // ADR-0131 付記（2026-10-04）: 専用の rule_id にして event・gate_rule_id から判別できるようにする
+    // （他の対象外規則とまとめて `atomic/out-of-scope` にすると、なぜ atomic かが event から読めない）。
+    if is_knowledge_curation_cron_task(task) {
+        return Some("atomic/knowledge-curation");
     }
     None
 }

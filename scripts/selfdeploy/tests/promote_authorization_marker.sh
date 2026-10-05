@@ -89,6 +89,11 @@ case "$url" in
         body="{\"release\":\"$sha\",\"role\":\"active\",\"schema_version\":36}"; code=200; break
       fi
     done ;;
+  *:7710/api/v1/releases)
+    # ADR-0040 D4 付記 2026-10-05: 新が起きたら、旧は draining（handoff 済み）として答える。
+    if [ -e "$FAKE_STATE/started-celeris@$FAKE_NEW" ]; then
+      body="{\"instances\":[{\"release\":\"$FAKE_NEW\",\"role\":\"active\"},{\"release\":\"$FAKE_OLD\",\"role\":\"draining\"}]}"; code=200
+    fi ;;
   *:7700/healthz)
     for sha in $FAKE_NEW $FAKE_OLD; do
       if [ -e "$FAKE_STATE/started-celeris-gui@$sha" ]; then
@@ -134,6 +139,8 @@ setup() {
   export FAKE_STATE="$CASE/fake" FAKE_OLD="$OLD" FAKE_NEW="$NEW"
   export SD_REPO="$CASE/no-repo"
   unset CELERIS_CONFIG SD_LOG_FILE
+  # 本番の paths.env（CELERIS_BACKUPS_DIR / CELERIS_LOGS_DIR）を環境から継がない（log と backup を一時側へ）。
+  unset CELERIS_BACKUPS_DIR CELERIS_LOGS_DIR
   mkdir -p "$CELERIS_CONFIG_DIR" "$CELERIS_STATE_DIR/releases" "$CELERIS_STATE_DIR/backups"
   printf 'db = "%s"\n' "$CELERIS_DB" >"$CELERIS_CONFIG_DIR/config.toml"
   echo fake-db >"$CELERIS_DB"

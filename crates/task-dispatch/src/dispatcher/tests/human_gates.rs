@@ -393,7 +393,7 @@ async fn runs_index_rows_of_terminal_tasks_are_closed() {
     d.tick().unwrap();
     let row = store.run_index_get("run-stale").unwrap().unwrap();
     assert_eq!(row.status, task_core::RunIndexStatus::Cancelled, "{row:?}");
-    d.runs_reconciled_at = None;
+    d.terminal_records_reconciled_at = None;
     d.tick().unwrap();
     let closes = store
         .events_for(stale.id)
@@ -450,4 +450,88 @@ async fn approval_facts_count_only_units_that_will_create_children() {
         .unwrap();
     let facts = task_ops::plan_gate::approval_facts(store.as_ref(), &root, &plan).unwrap();
     assert_eq!(facts.child_task_units, 1, "c1 only: {facts:?}");
+}
+
+/// 旧版で残った段の依頼は最初の tick が追記だけで閉じる。配送の依頼は残す。再起動・定期回収とも冪等。
+#[tokio::test]
+async fn startup_closes_only_terminal_tasks_integration_requests_once() {
+    use task_core::integration_request::{IntegrationRequest, TASK_TERMINAL_ANSWER};
+    let dir = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut snapshots = Vec::new();
+    for status in [
+        Status::Done,
+        Status::Cancelled,
+        Status::Failed,
+        Status::Draft,
+        Status::Blocked,
+    ] {
+        let mut task = compound_task(dir.path());
+        task.status = status;
+        store.insert(&task).unwrap();
+        for origin in ["phase:impl", "phase:close", "delivery"] {
+            // append_event で旧版の履歴を再現する（終端遷移の修正を通さない）。
+            store
+                .append_event(
+                    task.id,
+                    &Event::IntegrationRequested {
+                        request: Box::new(IntegrationRequest {
+                            target_branch: "main".into(),
+                            target_sha: "target".into(),
+                            source_branch: origin.into(),
+                            source_sha: origin.into(),
+                            merge_base: None,
+                            conflict_files: vec!["src/lib.rs".into()],
+                            intent: vec![],
+                            reason: "conflict".into(),
+                            recommendation: "review".into(),
+                            actions: vec![],
+                            candidate_sha: None,
+                        }),
+                        origin: origin.into(),
+                    },
+                )
+                .unwrap();
+        }
+        snapshots.push((
+            task.id,
+            status,
+            store.event_rows_for(task.id, None, 100).unwrap(),
+        ));
+    }
+    assert_eq!(store.open_integration_requests().unwrap().len(), 15);
+    for _ in 0..2 {
+        let mut d = tree_dispatcher(&store, Arc::new(GateAdapter::new(Vec::new())));
+        d.tick().unwrap();
+        d.terminal_records_reconciled_at = None;
+        d.tick().unwrap();
+        for (id, status, before) in &snapshots {
+            let after = store.event_rows_for(*id, None, 100).unwrap();
+            assert_eq!(&after[..before.len()], before.as_slice());
+            let answers = after
+                .iter()
+                .filter(|row| {
+                    matches!(&row.event,
+                        Event::IntegrationAnswered { answer, .. } if answer == TASK_TERMINAL_ANSWER
+                    )
+                })
+                .count();
+            // 段の依頼 2 件だけ。配送の依頼は配送が自分で閉じるので残す。
+            assert_eq!(answers, if status.is_terminal() { 2 } else { 0 });
+        }
+        let open = store.open_integration_requests().unwrap();
+        // 非終端 2 task × 3 件 + 終端 3 task の配送依頼 × 1 件。
+        assert_eq!(open.len(), 9);
+        assert!(open.iter().all(|row| {
+            let terminal = store
+                .get(row.task_id)
+                .unwrap()
+                .unwrap()
+                .status
+                .is_terminal();
+            !terminal
+                || matches!(&row.event,
+                    Event::IntegrationRequested { origin, .. } if origin == "delivery")
+        }));
+    }
 }

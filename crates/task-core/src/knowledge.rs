@@ -86,7 +86,8 @@ pub struct FrontMatter {
     /// `user` / `environment` / `project:<slug>` / `experience`（ADR-0047 D1）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
-    /// `task:<id>` / `message:<id>` / `human` / `url:<…>`。`record` では必須。
+    /// `task:<id>` / `message:<id>` / `human:authored` / `human:instruction` / `url:<…>`。`record` では必須。
+    /// 人の印の意味は ADR-0047 付記（2026-10-04）と [`protected_page`]（単独の `human` は移行前の未判別）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sources: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -998,7 +999,8 @@ pub struct Candidate {
     /// `create`/`update`/`merge` の本文。`retire` は空でもよい（理由を書いてもよい）。
     #[serde(default)]
     pub body: String,
-    /// `task:<id>` / `message:<id>` / `human` / `url:<…>`。空は許さない（出典の無い知識は入れない）。
+    /// `task:<id>` / `message:<id>` / `human:instruction` / `url:<…>`。空は許さない（出典の無い知識は入れない）。
+    /// run は `human:authored` と単独の `human` を書けない（適用時に [`normalize_agent_sources`] が正す）。
     #[serde(default)]
     pub sources: Vec<String>,
     pub confidence: Confidence,
@@ -1153,6 +1155,8 @@ pub fn maintenance_objective(input: &MaintenanceInput) -> String {
          - 将来も使える事実だけを候補にする。一時的な情報・雑談・重複・信頼性の低い推測は候補にしない\n\
          - 秘密（API キー・パスワード・トークン・秘密鍵）は絶対に候補に含めない\n\
          - 出典（`sources`。`task:{task_id}` を少なくとも 1 つ）を必ず付ける\n\
+         - 人の指示・発言に由来する事実には `human:instruction` を足す（`task:{task_id}` と並べる）。\
+           `human` 単独と `human:authored`（人が書いたページの印）は書かない\n\
          - 近い既存ページがあれば `update`（`op = update`、対象の `path`）を優先し、`create` で近い重複を作らない\n\
          - 既存ページが古い・誤っていると分かったら `merge`（本文をあなたが書き直した完全な版にする）か\n\
            `retire`（そのページはもう使えない）を使う\n\
@@ -1165,6 +1169,11 @@ pub fn maintenance_objective(input: &MaintenanceInput) -> String {
     );
     out
 }
+
+// ADR-0047 付記（2026-10-04）: sources の人の印（人が書いた / 人の指示由来 / 未判別）。
+#[path = "knowledge/human_marks.rs"]
+mod human_marks;
+pub use human_marks::*;
 
 #[cfg(test)]
 #[path = "knowledge/tests.rs"]

@@ -29,7 +29,7 @@ fn repair_scope_from_units<'a>(
             unit.spec
                 .checks
                 .iter()
-                .filter(|check| check.cmd.contains("git diff"))
+                .filter(|check| is_repair_scope_check(check))
                 .map(|check| check.cmd.clone()),
         );
     }
@@ -39,13 +39,57 @@ fn repair_scope_from_units<'a>(
     }
 }
 
+/// ADR-0074 付記 2026-10-05: repair に渡す「範囲外差分の check」か。`scope: true` を正とし、従来の
+/// `cmd` に `git diff` を含むという推定も互換のため残す。
+pub(super) fn is_repair_scope_check(check: &task_core::WorkUnitCheck) -> bool {
+    check.scope || check.cmd.contains("git diff")
+}
+
+/// D1.4 の 4（ADR-0074 付記 2026-10-05）: 段 `phase` の統合で流す検査の一覧（純粋関数）。その段の生きた
+/// 葉の WU の checks を計画の順に重複（`cmd` が同じ）を除いて集め、`workspace.toml` の check（`defaults`）を
+/// 足す。範囲 check（`scope: true`）は WU の作業時だけで意味を持つので入れない（統合後は他の WU の変更を拾う）。
+pub(super) fn integration_checks_for_phase(
+    units: &[task_core::WorkUnitRow],
+    phase: &str,
+    defaults: Vec<String>,
+) -> Vec<task_core::WorkUnitCheck> {
+    let mut checks: Vec<task_core::WorkUnitCheck> = Vec::new();
+    for u in units.iter().filter(|u| {
+        u.status.is_active()
+            && u.kind != task_core::WorkUnitKind::Integrate
+            && u.phase.as_deref() == Some(phase)
+    }) {
+        for c in u.spec.checks.iter().filter(|c| !c.scope) {
+            if !checks.iter().any(|x| x.cmd == c.cmd) {
+                checks.push(c.clone());
+            }
+        }
+    }
+    for cmd in defaults {
+        if !checks.iter().any(|x| x.cmd == cmd) {
+            checks.push(task_core::WorkUnitCheck {
+                cmd,
+                expect_exit: 0,
+                scope: false,
+            });
+        }
+    }
+    checks
+}
+
 /// 2026-10-04 統合の検査の進み具合 D2: 統合の検査のログを置く Task の作業ディレクトリ直下のディレクトリ。
 pub(crate) const INTEGRATION_CHECK_LOG_DIR: &str = "integration-checks";
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査のログの置き場所（`<task_dir>/work-unit-checks/<wu_key>`）。
+pub(crate) const WORK_UNIT_CHECK_LOG_DIR: &str = "work-unit-checks";
 
 /// 統合の検査を event とログに残すための、その統合 WU の識別とログの置き場所。
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査にも使う（`run_id` が `Some` なら
+/// `WorkUnitCheckStarted` / `WorkUnitCheckFinished` を、`None`〈統合〉なら `IntegrationCheck*` を残す）。
 pub(crate) struct ObservedIntegration {
     pub work_unit_id: String,
     pub key: String,
+    /// 検査を起こした worker run（葉の WU の受け入れ検査のときだけ）。
+    pub run_id: Option<String>,
     /// `<task_dir>/integration-checks/<wu_key>`。検査 1 件ごとに `<started_ms>-<index>.log` を作る。
     pub log_dir: PathBuf,
 }
@@ -67,14 +111,26 @@ pub(crate) async fn run_integration_checks(
     for (i, c) in checks.iter().enumerate() {
         let index = u32::try_from(i).unwrap_or(u32::MAX);
         let log_path = observed.log_dir.join(format!("{attempt_ms}-{index}.log"));
-        let started = Event::IntegrationCheckStarted {
-            work_unit_id: observed.work_unit_id.clone(),
-            key: observed.key.clone(),
-            index,
-            total,
-            cmd: c.cmd.clone(),
-            log_path: log_path.display().to_string(),
-            started_at: rfc3339(OffsetDateTime::now_utc()),
+        let started = match &observed.run_id {
+            Some(run_id) => Event::WorkUnitCheckStarted {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                run_id: run_id.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                log_path: log_path.display().to_string(),
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+            },
+            None => Event::IntegrationCheckStarted {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                log_path: log_path.display().to_string(),
+                started_at: rfc3339(OffsetDateTime::now_utc()),
+            },
         };
         if let Err(e) = store.append_event(task_id, &started) {
             tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check start");
@@ -89,16 +145,31 @@ pub(crate) async fn run_integration_checks(
             "",
         )
         .await;
-        let finished = Event::IntegrationCheckFinished {
-            work_unit_id: observed.work_unit_id.clone(),
-            key: observed.key.clone(),
-            index,
-            total,
-            cmd: c.cmd.clone(),
-            pass: outcome.pass,
-            exit: outcome.exit,
-            timed_out: outcome.timed_out,
-            duration_ms: u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX),
+        let duration_ms = u64::try_from(clock.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let finished = match &observed.run_id {
+            Some(run_id) => Event::WorkUnitCheckFinished {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                run_id: run_id.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                pass: outcome.pass,
+                exit: outcome.exit,
+                timed_out: outcome.timed_out,
+                duration_ms,
+            },
+            None => Event::IntegrationCheckFinished {
+                work_unit_id: observed.work_unit_id.clone(),
+                key: observed.key.clone(),
+                index,
+                total,
+                cmd: c.cmd.clone(),
+                pass: outcome.pass,
+                exit: outcome.exit,
+                timed_out: outcome.timed_out,
+                duration_ms,
+            },
         };
         if let Err(e) = store.append_event(task_id, &finished) {
             tracing::warn!(%task_id, work_unit = %observed.key, error = %e, "could not record the integration check finish");
@@ -478,23 +549,18 @@ impl Dispatcher {
         ) {
             return Ok(());
         }
+        #[cfg(test)]
+        if let Some(hook) = self.before_integration_start.take() {
+            hook(self, task.id);
+        }
         let phase = integ.phase.clone().unwrap_or_default();
-        let mut running = integ.clone();
-        running.status = task_core::WorkUnitStatus::Running;
-        running.blocked_reason = None;
-        running.updated_at = rfc3339(OffsetDateTime::now_utc());
-        self.store.work_unit_transition(
-            task.id,
-            running,
-            Event::WorkUnitTransitioned {
-                work_unit_id: integ.id.clone(),
-                key: integ.key.clone(),
-                from: integ.status,
-                to: task_core::WorkUnitStatus::Running,
-                reason: "integrate".to_string(),
-                run_id: None,
-            },
-        )?;
+        if !self
+            .store
+            .try_start_work_unit_integration(task.id, &integ)?
+        {
+            // ready 戻し（または WU の更新）が先に成立した。古い settle 判定で spawn しない。
+            return Ok(());
+        }
         if let Err(e) = self
             .store
             .extend_task_lease(task.id, self.integration_ttl())
@@ -558,27 +624,8 @@ impl Dispatcher {
                 (r.dir.clone(), repo_id, items)
             })
             .collect();
-        // D1.4 の 4: その工程の WU の checks（重複を除く）と workspace.toml の check。
-        let mut checks: Vec<task_core::WorkUnitCheck> = Vec::new();
-        for u in units.iter().filter(|u| {
-            u.status.is_active()
-                && u.kind != task_core::WorkUnitKind::Integrate
-                && u.phase.as_deref() == Some(phase.as_str())
-        }) {
-            for c in &u.spec.checks {
-                if !checks.iter().any(|x| x.cmd == c.cmd) {
-                    checks.push(c.clone());
-                }
-            }
-        }
-        for cmd in self.default_checks(task) {
-            if !checks.iter().any(|x| x.cmd == cmd) {
-                checks.push(task_core::WorkUnitCheck {
-                    cmd,
-                    expect_exit: 0,
-                });
-            }
-        }
+        // D1.4 の 4: その工程の WU の checks（重複を除く。範囲 check は除く）と workspace.toml の check。
+        let checks = integration_checks_for_phase(&units, &phase, self.default_checks(task));
         let task_dir = ws.task_dir.clone();
         // ADR-0074 F5-fix: 統合 WU の検査は Task の worktree で走るので `<repo-key>`。
         let check_env = self.check_cargo_target_env(task, None);
@@ -591,6 +638,7 @@ impl Dispatcher {
         let observed = ObservedIntegration {
             work_unit_id: integ.id.clone(),
             key: integ.key.clone(),
+            run_id: None,
             log_dir: ws.task_dir.join(INTEGRATION_CHECK_LOG_DIR).join(&integ.key),
         };
         let handle = tokio::spawn(async move {
@@ -863,6 +911,7 @@ impl Dispatcher {
             checks: vec![task_core::WorkUnitCheck {
                 cmd: format!("git merge-base --is-ancestor {} HEAD", conflict.branch),
                 expect_exit: 0,
+                scope: false,
             }],
             context: task_core::WorkUnitContext {
                 paths: conflict.files.clone(),

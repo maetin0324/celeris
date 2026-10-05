@@ -88,7 +88,7 @@ impl Dispatcher {
     /// 行ごとに:
     ///
     /// 1. このインスタンスが run id で抱えている（`running` / `reviewing` / `checking`）なら飛ばす。
-    /// 2. Task が無い・面倒を見ない・終端（`reconcile_terminal_runs` の受け持ち）なら飛ばす。
+    /// 2. Task が無い・面倒を見ない・終端（`reconcile_terminal_records` の受け持ち）なら飛ばす。
     /// 3. Task / WU の lease を持つ run は飛ばす（lease の経路が Task と WU の状態ごと戻す）。
     /// 4. [`crate::orphan::ownerless_run_decision`] で決める: 他に生きているインスタンスが無ければ閉じる。あれば
     ///    run の期限（[`Self::ownerless_ttl`]）を過ぎるまで待つ。

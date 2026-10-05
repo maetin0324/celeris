@@ -521,3 +521,186 @@ web/ の枝（`af133256` web phase 6 P6-02）にだけある。repo に置くと
   （unit の依存で意図せず起きる）を止める規則で、悪意ある worker への防御は worker から user systemd
   bus と `releases_dir` を隠す別の対策（phase-R.md の再発防止候補）で行う。
 - 同じ release の二重起動（exit 3）は `Restart=on-failure` で再起動されうるが、この付記では変えない。
+
+## 付記 2026-10-04: draining の旧 instance は run の終わりで手を離す（WU 検査の引き継ぎ）
+
+### 起きたこと
+
+- 2026-10-04 18:12 UTC に `08c66fa6a54b` → `864f5d29b07c` をライブ昇格した。旧 daemon（pid 2303147）は draining になり、
+  task `01M440S16A0E49172DK6ST4QPK` の worker run `01M440WBF9D82CAX1WT8H3SB05` を抱えていた。run の worker は
+  18:15:26 に終わったが、旧 daemon はそのまま同じ WU の受け入れ検査（旧版の遅い web e2e、20 分以上）を流し続け、
+  `runs.status` は running のまま drain が終わらなかった。04:07 の昇格の後も、旧 daemon が run の終わりから統合と
+  `cargo test` まで進め、新版の統合検査 event が出なかった。
+- Phase F5-fix2 は「検査の途中で exit すると完了を失う」ため `checking`・`integrating` を `in_flight` に数えていた。
+  そのため drain は run の後の処理（旧版のコードで流れる検査・統合）が終わるまで延び、新版の改良が効かなかった。
+- WU の受け入れ検査（`spawn_work_unit_checks`）は worker run の外で daemon が流すので、run のログにも events にも
+  何も出ず、GUI では止まって見えた。
+
+### 決定
+
+- D1: draining の旧 instance は、抱えている worker run のプロセスが終わったら、その結果を store に残した時点で手を
+  離す。WU に受け入れ検査がある `Done` の run は、検査を始めずに `runs/<run_id>/result.json`（無ければ `Done` の内容で
+  書く）を残し、WU の lease をその run のまま検査の分（`review_timeout × (2n+1) + lease_grace`）延ばし、追記の event
+  `WorkUnitChecksHandedOff { work_unit_id, key, run_id }` を残す。WU は `running` のまま。draining になった時点で
+  手元にある検査（`checking`）も同じく止めて（tokio task の abort。子 process は `kill_on_drop`）印を残す。段の最後の
+  WU が済んでも統合は始めない。review は従来どおり始めない（`spawn_review` の判定）。次の dispatch も始めない。
+- D2: 新しい active instance は毎 tick、lease の照合（ADR-0074 D1.7）より前に、`WorkUnitChecksHandedOff` があり WU が
+  まだその run で `running`・手元に無い run を、既存の `finalise_from_result_json`（Phase F5-fix2）で確定し直す。
+  検査はそこで新版のコードで走り、完了の記録（`WorkerFinished`・`runs` の終端・WU done/retry）は 1 回だけ。
+  検査の途中で新 instance が止まっても印と WU は残るので、次の active がやり直す（検査は冪等）。統合は、段の WU が全部
+  済んで何も走っていない Task が照合で ready に戻り、新しい active の dispatch が始める（再起動時と同じ経路）。
+- D3: WU の受け入れ検査も統合の検査と同じく、検査 1 件ごとに `WorkUnitCheckStarted` / `WorkUnitCheckFinished`
+  （`IntegrationCheck*` と同じ欄に `run_id` を足す）を残し、出力を `<task_dir>/work-unit-checks/<wu_key>/` へ逐次書く。
+  task 詳細の WU の行の `check_progress` と `GET /tasks/{id}/work-units/{wu_id}/check-log` は両方の event を読む。
+  GUI は既存の WU の行の表示（統合で入れたもの）をそのまま使う。
+- `in_flight` は run（worker・reviewer）のプロセスと、draining になる前に始まっていた統合だけを数える。手元の検査は
+  draining の最初の tick で手放すので、drain は run の終わりで完了する。
+
+### 採らない・残ること
+
+- draining になる前に始まっていた段の統合は止めない（git の merge の途中で止めると作業ツリーが半端に残り、新しい
+  active の統合と競合する）。終わるまで `in_flight` に数える。統合の検査に長いものがあると drain はその分延びる。
+- 手放した run の quota の記録（アカウントの割り当て）は旧 instance が解放する。新 instance の確定ではアカウントは
+  `None` として扱う（`WorkerStarted` の provider は events から引く）。
+- 止めた検査の孫 process は `kill_on_drop` が直接の子にしか効かないので残りうる（drain timeout の `abort_all_runs` と
+  同じ制約）。
+
+## 付記 2026-10-05（D4）: active は常に 1 つ — 生きている active の定義・条件付きの交換・引き継ぎの全員化・監視
+
+### 起きたこと（本番の観測。2026-10-04 23:13 UTC 以降）
+
+- live 昇格（`promote.sh` 33774b6a）で新 instance `01M44K2WP0NV6GV8Y8P09XYPW9` が 43 秒後に `active` になり、`promote.sh` は
+  「handoff done」と判定した。旧 `01M44FMPEEYFQT68HGKR8JWRX0`（release c86128865adc）は `handoff_requested_at` が空のまま
+  `active` を保ち、約 3 時間、2 つの `active` が同時に dispatch した。`draining` に移ったのは 2026-10-05 02:21:49（次の昇格 97468bdf の要求を受けたとき、in_flight=3）。
+- 同じ期間に統合開始と ready 戻しの競合が 2 件起きた（`01M44NN2DCZXV0TZ5FXX5TMN58`・`01M44MZ1GW54XYXXH0EMEEDWFE`）。
+  二重 dispatch が原因だった可能性が高い（推定。ログの突き合わせは未了）。
+- 02:21 の 97468bdf の昇格では、引き継ぎ要求が古い版（c861）に向き、本来の active（33774）は譲らず、新は standby のまま 60 秒で打ち切られた。
+
+### 原因（コードで確認した経路）
+
+1. 起動時の判断（旧 `decide_startup`）は「heartbeat が新しい active」だけを生存とみなした。heartbeat が窓を過ぎた生きた旧は
+   無視され、新は即 `active` になった。旧の行は掃除（`instance_delete_stale`）で消え、旧はプロセスが生きたまま `active` で dispatch を続けた。
+2. 引き継ぎ要求は「生きた active のうち先頭の 1 つ」にしか書かなかった。
+3. 昇格の判断（standby → active）と書き込みが別々の SQL だった。複数の standby が同時に昇格しうる。
+4. `promote.sh` は新の `/api/v1/health` が `active` なら成功にした。旧の drain を見ていなかった。
+
+### 決定
+
+- **D4a（生きている active）**: `is_live_active` = 役割が `active` かつ `drained_at` が無く、プロセスが生きている（`pid_alive`）行。
+  heartbeat の新旧では決めない。古くても生きていれば手放すまで active とみなす（古いと見て引き継げば、生きたままの旧と二重に dispatch する）。
+  プロセスが死んでいる行は生きていない（SIGKILL 直後の起こし直しを妨げない。従来どおり）。
+- **D4b（条件付きの書き込み）**: 起動時に `active` として登録すること（`TaskStore::instance_register_if`）と、standby の昇格
+  （`TaskStore::instance_set_role_if`）は、**同じ writer transaction の中で**全行を読み、`no_other_live_active`（自分以外に生きた active が無い）を確かめてから書く。
+  確かめた後に別の active が現れることは、transaction の直列化で起きない。
+- **D4c（引き継ぎ要求の全員化）**: standby として起動したら、生きている**全部**の active の行に `handoff_requested_at` を書く（既に要求済みの行は上書きしない）。
+- **D4d（掃除）**: 他の行は、`drained_at` が付いたもの、または heartbeat が古く**かつ**（active でない か プロセスが死んでいる）ものだけ消す
+  （`removable_row`、`TaskStore::instance_delete_where`）。古くても生きている active の行は消さない（消すと見えなくなり二重起動になる）。
+- **D4e（監視と解消）**: 毎 tick、自分が active で、生きた他の active が居れば、新しい方（`started_at`、同時刻は `instance_id`）を残す。
+  自分より古い生きた active には引き継ぎを要求する（WARN を出す）。自分が古い方なら、tick の判断で drain する（`decide_tick`）。
+  active の行が消えて登録し直すときは、D4b の条件を通す。通らなければ active にならず `draining` へ手を離す（WARN）。
+- **D4f（promote.sh）**: 新の health が `active` になった後、`GET /api/v1/releases` の `instances` で、active の行がちょうど 1 つで
+  それが新の sha12 になるまで 60 秒待つ（`poll_instances_settled`・`sd_instances_settled`）。待って揃わなければ新を止めて失敗
+  （旧はそのまま。`handoff done` とは言わない）。旧は `draining`（または行が消えた）ことで確かめる。
+
+### 実装との対応
+
+- `crates/celeris/src/instance.rs`: `is_live_active` / `no_other_live_active` / `decide_startup`（`Standby { active_instance_ids }`）/
+  `removable_row` / `decide_tick`（`Stay`・`Promote`・`Drain`）/ `Supervisor::start`・`register_again`・`step`（2b の監視）。
+- `crates/task-core/src/store/task_store.rs` と `instances.rs`: `instance_register_if`・`instance_set_role_if`・`instance_delete_where`
+  （全部 `BEGIN IMMEDIATE`。判断の中身は celeris 側、store は読んで書くだけ）。
+- `scripts/selfdeploy/lib.sh` の `sd_instances_settled`、`scripts/selfdeploy/promote.sh` の `poll_instances_settled`。
+
+### 試験（決定的。時計は引数で渡し、生死は pid で作る）
+
+- `crates/celeris/src/instance/tests.rs`
+  - `two_actives_never_coexist_when_the_old_one_is_stale_but_alive`（再現: heartbeat が 100 秒古い生きた旧がいるとき、新は standby）。
+    修正前の規則（heartbeat の窓で生存を決める）に一時的に戻すと、この試験を含む celeris の instance 試験 12 件が落ちることを確認した（2026-10-05、変更は戻した）。
+  - `the_handoff_request_reaches_every_live_active`（D4c）、`a_second_live_active_makes_the_older_one_drain`（D4e）、
+    `a_newer_active_asks_the_older_live_one_to_hand_off`（D4e）、`a_killed_active_is_taken_over_at_start_and_its_row_is_removed`（D4a）、
+    `removable_rows_never_include_a_stale_live_active`（D4d）。
+- `crates/task-core/src/instance.rs`: `conditional_writes_consult_the_rows_in_the_same_transaction`（D4b）。
+- `scripts/selfdeploy/tests/promote_handoff_settled.sh`（D4f の判定 6 件）、`promote_authorization_marker.sh`（偽 curl に `/api/v1/releases` の応答を足した）。
+
+### 採らない・残ること
+
+- **生きているのに応答しない旧**（heartbeat が止まったまま、プロセスは生きている）は、手放すまで新が standby のまま待つ。
+  強制的に奪うと二重 dispatch になるので採らない。人が `kill` などで旧を止める判断をする（WARN が出る）。
+- 本番の既存の状態（2 つ目の active を含む行）は、本番の DB と daemon を変えるので、この版の昇格後に人が
+  `docs/ops/single-active-handoff.md` の手順で確かめる。自動で掃除しない。
+- この版の `promote.sh` は、この版が `current` になった次の昇格から効く（ADR-0040 付記 2026-10-02 の規則）。
+  それまでの昇格は旧 `promote.sh` のまま（旧の判定）。
+- 進捗・検証の記録は [agent-docs/progress/2026-10-05-single-active-handoff.md](../progress/2026-10-05-single-active-handoff.md)。
+
+## 付記 2026-10-05b（D4f の修正）: `promote.sh` の「active が 2 つ」の誤検出と、打ち切りの安全側
+
+### 起きたこと（本番。2026-10-05 03:44〜03:46 UTC、約 1.5 分の停止）
+
+- `promote.sh` de69d5634efb（上の付記 2026-10-05 の版）の live 昇格。03:44:51 に新 `01M452M4C0JZ1RXN825PNXZTZJ` が
+  standby で登録し旧 `01M44YYWNK3DSXKZK5NCNQMQ7Y`（97468bdf3093）へ引き継ぎを要求、03:44:52 に旧は `draining`
+  （API listener を閉じ、in_flight=3）、03:44:53 に新は「standby -> active (no other active is alive)」になり、
+  旧が手放した WU 検査を引き継いだ。**daemon 側の動きは D4a〜D4e のとおり正しい。**
+- ところが `promote.sh` は `poll /api/v1/releases: still not settled after 60s (another instance is active)` を出し、
+  「the old celeris is still active next to the new one; stopping celeris@de69d5634efb」で新を止め、
+  「live handoff failed: two active instances (the old celeris is still serving; nothing was changed)」で終わった。
+  旧は既に draining で API を閉じていたので **active が 0** になり、`/api/v1/health` は 000 になった。
+  03:46:18 に人が `promote.sh` を再実行（stop-start）して復旧した。draining の旧が持っていた run 2 件は打ち切られた。
+
+### 原因（コードで確認）
+
+- `poll_instances_settled` は `sd_http_get "$url"` を**トークン無し**で呼んでいた。`GET /api/v1/releases` は管理系ではないが、
+  `/api/v1/health` 以外の全 API と同じく Bearer が要る（`task-api/src/middleware.rs`）。応答は毎回 401 で、
+  `sd_http_get` は失敗（exit 1）を返し、ループは 60 秒それを繰り返した。
+- 失敗の文言は「another instance is active」「two active instances」と**読めなかったこと**を**二重 active**と決めつけていた。
+  判定の中身（`sd_instances_settled`）自体は draining を active に数えておらず、本番の `daemon_instances` にも
+  active の行は新の 1 つしか無かった（journal と、復旧後の表で確認）。
+- 打ち切りが「新を止める」一択だった。旧が draining に移った後に新を止めれば active は必ず 0 になる。
+
+### 決定
+
+- **D4f'（読み方）**: `promote.sh` は `GET /api/v1/releases` を `api.token`（`$SD_API_TOKEN_FILE`）付きで読む。読めないとき
+  （HTTP の失敗・JSON でない）は DB の `daemon_instances` を**読み取り専用**（`mode=ro`。`status.sh` と同じ）で読む
+  （`sd_instances_from_db`）。それも読めなければ「読めない」であって「二重 active」ではない。
+- **D4g（生きている active の数え方。shell 側も D4a と同じ定義）**: 役割が `active` で、`drained_at` が無く、プロセス（pid）が
+  `/proc` に居る行だけを数える（`sd_instances_verdict`）。draining・終了済み（`drained_at`）・プロセスが消えた行は数えない。
+  pid が分からない行（0・欠落）は生きている側に倒す。heartbeat では決めない（D4a と同じ理由）。判定は一語で返す:
+  `settled`（新だけ）/ `two_active`（新と、他の生きた active）/ `new_not_active` / `no_active` / `unreadable`。
+- **D4h（打ち切りの安全側）**: 60 秒待って `settled` にならなかったとき、新を止めるのは **`two_active`（旧が生きた active のまま、
+  新も active）と読めたときだけ**。`unreadable` / `no_active` / `new_not_active` では新を止めない（止めると active が 0 になりうる）。
+  新を残したまま exit 1 にして人に知らせる（`promote_failed.json` → GUI の赤いバナー。`current` は旧のまま。新が active なら
+  `promote.sh` の再実行が「celeris already took over」で続きをやる）。
+- **D4i（止めた後の確認）**: 新を止めた後（D4h の `two_active`、および health が active にならなかった最初の打ち切り）は、
+  `/api/v1/health` が `role=active` を答えるかを見る（`ensure_an_active_remains`。既定 10 秒）。誰も答えなければ旧は draining か
+  消えているので、`promoting.json` を置き直して **新を起こし直し**、active 0 を残さない。起こし直したことを文言に書き、
+  `promote.sh` の再実行（リンクと GUI の続き）を求める。
+- **D4j（文言）**: 失敗の文言は読めた事実に合わせる。`two active instances` と言うのは `two_active` のときだけ。読めないときは
+  `live handoff not confirmed: daemon_instances could not be read … The new celeris@<sha> … was left running`。
+  各行に `daemon_instances (api|db): <release>:<role> pid=<pid> alive|dead|pid? [drained] …` の要約を添える。
+
+### 実装との対応
+
+- `scripts/selfdeploy/lib.sh`: `sd_pid_alive` / `sd_instances_rows` / `sd_instances_verdict` / `sd_instances_summary` /
+  `sd_instances_from_db`。`sd_instances_settled` は `verdict = settled` の薄い包み（旧 API のまま）。
+- `scripts/selfdeploy/promote.sh`: `poll_instances_settled <sha12> <timeout>`（API → DB、`SETTLE_VERDICT` / `SETTLE_SOURCE` /
+  `SETTLE_SUMMARY`）、`ensure_an_active_remains`、`promote_live` の打ち切り分岐。待ち時間は試験のため
+  `SD_HANDOFF_WAIT` / `SD_SETTLE_WAIT` / `SD_ACTIVE_RECHECK_WAIT`（既定 60 / 60 / 10 秒）。
+- `crates/task-api/src/releases.rs`: 「トークン不要」と書いていたモジュール注釈を実装（Bearer 必須）に合わせた（コードは変えていない）。
+- `docs/ops/single-active-handoff.md`: 読み取りの `curl` に Bearer を付け、打ち切り後の確認を足した。
+
+### 試験（決定的。生死は実 pid で作る）
+
+- `scripts/selfdeploy/tests/promote_live_abort.sh`（偽の `systemctl` / `curl` / `sqlite3` / `ss` で `promote.sh` を丸ごと走らせる）:
+  A 再現（`/api/v1/releases` が Bearer を要求し、旧 draining・新 active → handoff done、新を止めない。**修正前の HEAD の scripts
+  に `SD_UNDER_TEST` で同じ試験を掛けると本番と同じ 3 行のログを出して失敗する**）、B API 401・DB で settled、C API も DB も
+  読めない → 新を残して「not confirmed … left running」、D 二重 active → 新を止め、旧が答えるので起こし直さない、
+  E 二重 active と読めたが止めた後に誰も答えない → 新を起こし直す、F 旧の行が active でも pid が死んでいる → 数えない、
+  G 旧の行が active でも `drained_at` → 数えない。
+- `scripts/selfdeploy/tests/promote_handoff_settled.sh`: 判定の一語 11 件、要約、一時 DB の読み取り 2 件を追加（計 20 件）。
+- `promote_authorization_marker.sh` と新試験は本番の `paths.env` の `CELERIS_BACKUPS_DIR` / `CELERIS_LOGS_DIR` を環境から
+  継がないようにした（以前は偽 sha の log と backup が本番の `logs/` `backups/` に残っていた。残っていた分は消した）。
+
+### 採らない・残ること
+
+- `GET /releases` を無認証にすることは採らない（`/health` だけが無認証という契約を崩さない）。
+- `two_active` で新を止める判断は従来どおり（旧が生きた active なら旧に任せる）。ただし D4i で active 0 は残さない。
+- `jq` しか無い環境の `sd_instances_rows` の jq 分岐は、この host に jq が無く未検証（本番は python3）。
+- 進捗・検証の記録は [agent-docs/progress/2026-10-05-promote-settle-misdetection.md](../progress/2026-10-05-promote-settle-misdetection.md)。

@@ -592,30 +592,34 @@ tiers = ["standard"]
     );
 }
 
-/// (e) `active` の heartbeat が止まれば `standby` が `active` になる（旧の行も消える）。
+/// (e) ADR-0040 D4 付記 2026-10-05: heartbeat が止まっても、プロセスが生きている `active` は手放すまで
+/// 置き換えない（standby のまま、引き継ぎを要求し続ける）。プロセスが消えた（SIGKILL して reap した）
+/// とき初めて `standby` が `active` になり、死んだ行は消える。生死は子プロセス（`sleep`）で作る。
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_stale_heartbeat_promotes_the_standby() {
+async fn a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_gone() {
     let env = Env::with_lease_grace(SEEDED_LEASE_GRACE_SECS);
     let store = env.store();
-    // 「生きているが heartbeat を打たない active」を手で置く（pid はこのテストプロセス自身なので
-    // `pid_alive` は真になり、standby になる経路を通る）。
-    let now = OffsetDateTime::now_utc();
+    // 「heartbeat が止まった active」を手で置く。pid は生きている子プロセス（`sleep`）。
+    let mut ghost_process = std::process::Command::new("sleep")
+        .arg("600")
+        .spawn()
+        .unwrap_or_else(|e| panic!("spawn sleep: {e}"));
+    let long_ago = OffsetDateTime::now_utc() - time::Duration::hours(1);
     store
         .instance_register(&task_core::DaemonInstance {
             instance_id: "ghost".into(),
             release: "ghost-release".into(),
-            pid: std::process::id(),
+            pid: ghost_process.id(),
             role: InstanceRole::Active,
-            started_at: now,
-            heartbeat_at: now,
+            started_at: long_ago,
+            heartbeat_at: long_ago,
             handoff_requested_at: None,
             drained_at: None,
         })
         .unwrap_or_else(|e| panic!("register: {e}"));
 
-    // `ghost` が古くなる（SEEDED_LEASE_GRACE_SECS 秒）まで tick を続けられる回数にする（最後に abort する）。
     let new = tokio::spawn(celeris::run(env.config(), options("fresh", 4000, false)));
-    // 最初は standby（`ghost` の heartbeat がまだ新しい）。
+    // heartbeat は古いが、プロセスは生きている。新は standby のまま。
     assert!(
         wait_until(Duration::from_secs(SEEDED_LEASE_GRACE_SECS), || role_of(
             &store, "fresh"
@@ -633,16 +637,27 @@ async fn a_stale_heartbeat_promotes_the_standby() {
             .find(|i| i.instance_id == "ghost")
             .and_then(|i| i.handoff_requested_at)
             .is_some(),
-        "standby は active に引き継ぎを要求する"
+        "standby は生きている active に引き継ぎを要求する"
     );
-    // `ghost` は heartbeat を打たないので、3 × tick + lease_grace（≈ SEEDED_LEASE_GRACE_SECS 秒）で古くなる。
+    assert_eq!(
+        role_of(&store, "fresh"),
+        Some(InstanceRole::Standby),
+        "生きている旧が手放すまで active にならない（二重 active の防止）"
+    );
+    // プロセスを SIGKILL して reap する（/proc から消えるまで待つ）。次の tick で standby が active になる。
+    ghost_process
+        .kill()
+        .unwrap_or_else(|e| panic!("kill sleep: {e}"));
+    ghost_process
+        .wait()
+        .unwrap_or_else(|e| panic!("reap sleep: {e}"));
     assert!(
         wait_until(
             Duration::from_secs(SEEDED_LEASE_GRACE_SECS + 60),
             || role_of(&store, "fresh") == Some(InstanceRole::Active)
         )
         .await,
-        "heartbeat が止まった active を置き換えられない"
+        "プロセスが消えた active を引き継げない"
     );
     assert!(
         store

@@ -1769,6 +1769,7 @@ async fn final_review_repair_includes_all_unit_paths_and_task_diff_checks() {
     main.checks = vec![task_core::WorkUnitCheck {
         cmd: scope_check.into(),
         expect_exit: 0,
+        scope: false,
     }];
     task_ops::execution::adopt_plan(
         store.as_ref(),

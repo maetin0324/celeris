@@ -9,6 +9,7 @@
 //! celerisctl knowledge get    <path> [--json]
 //! celerisctl knowledge record --title … --scope … [--tags a,b] --source task:<id> [--confidence …] [--path …] < body.md
 //! celerisctl knowledge reindex
+//! celerisctl knowledge migrate-human-sources [--apply] [--json]   # ADR-0047 付記 H4。既定は dry-run
 //! celerisctl knowledge rerun   <task_id> [--db …]     # 管理系。**DB を開く**（ADR-0052 D3）
 //! ```
 //!
@@ -49,6 +50,21 @@ pub enum KnowledgeCommand {
     Reindex(RootArgs),
     /// 知識整理 run をもう一度やらせる（ADR-0052 D3。**DB を開く**管理系）。
     Rerun(RerunArgs),
+    /// 旧形の `sources: human` を git 履歴から『人が書いた』『人の指示由来』に分ける
+    /// （ADR-0047 付記 2026-10-04 H4。既定は dry-run。`--apply` で 1 commit）。
+    MigrateHumanSources(MigrateHumanSourcesArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct MigrateHumanSourcesArgs {
+    /// 書き換えて commit する（無ければ dry-run で何も書かない）。
+    #[arg(long)]
+    pub apply: bool,
+    /// JSON で出す。
+    #[arg(long)]
+    pub json: bool,
+    #[command(flatten)]
+    pub root: RootArgs,
 }
 
 impl KnowledgeCommand {
@@ -113,7 +129,8 @@ pub struct RecordArgs {
     /// `--tags a,b` か `--tags a --tags b`。
     #[arg(long, value_delimiter = ',')]
     pub tags: Vec<String>,
-    /// **1 件以上必須**（`task:<id>` / `message:<id>` / `human` / `url:<…>`）。
+    /// **1 件以上必須**（`task:<id>` / `message:<id>` / `human:instruction` / `url:<…>`）。
+    /// 人の指示・発言に由来する事実は `human:instruction`（`human` と `human:authored` は `human:instruction` に直る）。
     #[arg(long = "source", value_delimiter = ',')]
     pub sources: Vec<String>,
     /// `high` / `medium` / `low`。
@@ -152,6 +169,7 @@ pub fn run(command: KnowledgeCommand) -> Result<ExitCode, CliError> {
         KnowledgeCommand::Get(args) => run_get(&args),
         KnowledgeCommand::Record(args) => run_record(&args),
         KnowledgeCommand::Reindex(args) => run_reindex(&args),
+        KnowledgeCommand::MigrateHumanSources(args) => run_migrate_human_sources(&args),
         KnowledgeCommand::Rerun(_) => Err(CliError::msg(
             "knowledge rerun は DB を開く（`KnowledgeCommand::needs_db` を見て store 付きで呼ぶこと）",
         )),
@@ -225,6 +243,35 @@ fn run_reindex(args: &RootArgs) -> Result<ExitCode, CliError> {
     require_kb(&root)?;
     let index = ops::reindex(&root).map_err(CliError::msg)?;
     outln!("{} pages ({})", index.items.len(), index.generated_at);
+    Ok(ExitCode::SUCCESS)
+}
+
+fn run_migrate_human_sources(args: &MigrateHumanSourcesArgs) -> Result<ExitCode, CliError> {
+    use ops::HumanSourceClass as C;
+    let root = root_of(&args.root);
+    require_kb(&root)?;
+    let report = ops::migrate_human_sources(&root, args.apply).map_err(CliError::msg)?;
+    if args.json {
+        let json = serde_json::to_string_pretty(&report)
+            .map_err(|e| CliError::msg(format!("failed to render json: {e}")))?;
+        outln!("{json}");
+        return Ok(ExitCode::SUCCESS);
+    }
+    for (class, label) in [
+        (C::Authored, "人が書いた（human:authored）"),
+        (C::Instruction, "人の指示由来（human:instruction）"),
+        (C::Undetermined, "判別できない（human のまま保護）"),
+    ] {
+        outln!("## {label}: {} 件", report.count(class));
+        for e in report.entries.iter().filter(|e| e.class == class) {
+            outln!("- {} — {}", e.path, e.reason);
+        }
+    }
+    match (&report.sha, report.applied) {
+        (Some(sha), _) => outln!("applied: {sha}"),
+        (None, true) => outln!("applied: 書き換えなし"),
+        (None, false) => outln!("dry-run（何も書いていない。--apply で書き換える）"),
+    }
     Ok(ExitCode::SUCCESS)
 }
 

@@ -1561,3 +1561,43 @@ fn integration_check_progress_shows_the_current_check_of_the_last_attempt() {
     assert!(stopped.current.is_none());
     assert!(integration_check_progress(&events, "none", true).is_none());
 }
+
+/// 2026-10-04 WU 検査の引き継ぎ D3: 葉の WU の受け入れ検査（`WorkUnitCheckStarted` / `Finished`）も同じ形で出る。
+#[test]
+fn work_unit_check_progress_shows_the_running_acceptance_check() {
+    let started = |index: u32, cmd: &str| Event::WorkUnitCheckStarted {
+        work_unit_id: "leaf".into(),
+        key: "a".into(),
+        run_id: "r1".into(),
+        index,
+        total: 2,
+        cmd: cmd.into(),
+        log_path: format!("/tmp/{index}.log"),
+        started_at: "2026-10-04T18:15:26Z".into(),
+    };
+    let events = [
+        started(0, "cargo build"),
+        Event::WorkUnitCheckFinished {
+            work_unit_id: "leaf".into(),
+            key: "a".into(),
+            run_id: "r1".into(),
+            index: 0,
+            total: 2,
+            cmd: "cargo build".into(),
+            pass: true,
+            exit: Some(0),
+            timed_out: false,
+            duration_ms: 900,
+        },
+        started(1, "corepack pnpm -C web e2e"),
+    ];
+    let p = integration_check_progress(&events, "leaf", true).expect("progress");
+    assert_eq!(p.total, 2);
+    let current = p.current.expect("current");
+    assert_eq!(
+        (current.index, current.cmd.as_str()),
+        (1, "corepack pnpm -C web e2e")
+    );
+    assert_eq!(p.finished.len(), 1);
+    assert_eq!(p.finished[0].duration_ms, 900);
+}

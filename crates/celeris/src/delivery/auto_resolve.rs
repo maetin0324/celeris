@@ -230,7 +230,11 @@ pub(super) fn record_request(
     let brief = format!("{} ({})", request.reason, request.conflict_files.join(", "));
     let mut next = d.clone();
     next.detail = format!("[needs-human] 統合の依頼: {brief}");
-    store.integration_request_record(d.task_id, request, "delivery")?;
+    store.integration_request_record(
+        d.task_id,
+        request,
+        task_core::integration_request::DELIVERY_ORIGIN,
+    )?;
     store.delivery_save(Some(d), &next)?;
     Ok(())
 }

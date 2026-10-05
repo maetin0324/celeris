@@ -96,7 +96,21 @@ pub struct WorkUnitCheck {
     pub cmd: String,
     #[serde(default)]
     pub expect_exit: i32,
+    /// ADR-0074 付記 2026-10-05（`WorkUnitCheck.scope`）: 範囲 check（WU 自身の変更が許可範囲に収まるかを見る
+    /// 検査）か。`true` の check は WU の作業時（`spawn_work_unit_checks`）だけで流し、段の統合の検査
+    /// （D1.4 の 4）と子 task の acceptance（`promote_to_task`）には入れない。既定 `false`（JSON に書かない）。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub scope: bool,
 }
+
+fn is_false(v: &bool) -> bool {
+    !*v
+}
+
+/// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、WU の `base_commit`（範囲 check の基点）。
+pub const WU_BASE_ENV: &str = "CELERIS_WU_BASE";
+/// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、統合先（Task のブランチ `celeris/<task_id>`）。
+pub const WU_TARGET_ENV: &str = "CELERIS_WU_TARGET";
 
 /// D14: WU が読むべき context のヒント。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]

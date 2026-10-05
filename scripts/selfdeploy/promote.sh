@@ -219,6 +219,98 @@ poll_release() {
   return 1
 }
 
+# `poll_instances_settled <sha12> <timeout>` — `daemon_instances` で、**生きている** active が `sha12` の
+# 1 つだけになるまで待つ（ADR-0040 D4 付記 2026-10-05 D4f と付記 2026-10-05b）。
+#
+# 読む先は `GET /api/v1/releases`（Bearer が要る。`$SD_API_TOKEN_FILE`）。読めないときは DB の
+# `daemon_instances` を**読み取り専用**で見る（status.sh と同じ）。生きている active の定義は
+# `sd_instances_verdict`（役割 active・drained_at 無し・pid が生きている。draining・終了済みは数えない）。
+#
+# 本番 2026-10-05 03:44: 旧版はトークン無しで `/api/v1/releases` を読み、401 を「別の active がいる」と
+# 記録して、引き継ぎ済みの新を止めた（active が 0 になり 1.5 分停止）。読めないことと二重 active を
+# 区別するため、最後の判定を `SETTLE_VERDICT` / `SETTLE_SOURCE` / `SETTLE_SUMMARY` に残す。
+SETTLE_VERDICT=unreadable
+SETTLE_SOURCE=none
+SETTLE_SUMMARY=""
+poll_instances_settled() {
+  local want="$1" timeout="$2" url="$SD_PROD_API/api/v1/releases"
+  local waited=0 tmp verdict source warned_api=false warned_token=false
+  tmp="$(mktemp)"
+  if [ ! -r "$SD_API_TOKEN_FILE" ]; then
+    sd_log "warning: $SD_API_TOKEN_FILE is not readable; GET $url will be tried without a token"
+    warned_token=true
+  fi
+  while [ "$waited" -lt "$timeout" ]; do
+    source=none
+    if sd_http_get "$url" "$SD_API_TOKEN_FILE" >"$tmp" 2>/dev/null && sd_instances_rows "$tmp" >/dev/null; then
+      source=api
+    elif sd_instances_from_db "$SD_DB" "$tmp"; then
+      source=db
+      if [ "$warned_api" = false ]; then
+        sd_log "GET $url is not readable (HTTP failure or no JSON; token file: $SD_API_TOKEN_FILE readable=$([ "$warned_token" = true ] && echo no || echo yes)); reading daemon_instances from the DB read-only instead"
+        warned_api=true
+      fi
+    else
+      : >"$tmp"
+    fi
+    verdict="$(sd_instances_verdict "$tmp" "$want")" || true
+    SETTLE_VERDICT="$verdict"
+    SETTLE_SOURCE="$source"
+    SETTLE_SUMMARY="$(sd_instances_summary "$tmp")"
+    if [ "$verdict" = settled ]; then
+      rm -f "$tmp"
+      sd_log "daemon_instances ($source): the only live active is $want after ${waited}s (the old instance is draining, drained or gone): $SETTLE_SUMMARY"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  rm -f "$tmp"
+  case "$SETTLE_VERDICT" in
+    two_active) sd_log "daemon_instances ($SETTLE_SOURCE): two live active instances after ${timeout}s: $SETTLE_SUMMARY" ;;
+    new_not_active) sd_log "daemon_instances ($SETTLE_SOURCE): $want is not a live active after ${timeout}s: $SETTLE_SUMMARY" ;;
+    no_active) sd_log "daemon_instances ($SETTLE_SOURCE): no live active instance after ${timeout}s: $SETTLE_SUMMARY" ;;
+    *) sd_log "daemon_instances: not readable after ${timeout}s (API and DB); cannot tell whether the old instance is still active" ;;
+  esac
+  return 1
+}
+
+# `ensure_an_active_remains <sha12>` — 新を止めた**後**に呼ぶ（ADR-0040 付記 2026-10-05b）。
+# 誰も `/api/v1/health` で `role=active` を答えなければ、旧は既に draining か消えている（止めたせいで
+# active が 0 になった）ので、新を起こし直す。起こし直したら `RESTARTED_NEW=true`。
+RESTARTED_NEW=false
+ensure_an_active_remains() {
+  local sha12="$1" wait="${SD_ACTIVE_RECHECK_WAIT:-10}" waited=0 tmp role rel
+  tmp="$(mktemp)"
+  while [ "$waited" -lt "$wait" ]; do
+    if sd_http_get "$SD_PROD_API/api/v1/health" >"$tmp" 2>/dev/null; then
+      role="$(sd_json_get "$tmp" role 2>/dev/null || echo "")"
+      rel="$(sd_json_get "$tmp" release 2>/dev/null || echo "?")"
+      if [ "$role" = active ]; then
+        rm -f "$tmp"
+        sd_log "an active celeris is still serving after stopping celeris@$sha12 (release=$rel)"
+        return 0
+      fi
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  rm -f "$tmp"
+  sd_log "no active celeris answered $SD_PROD_API/api/v1/health for ${wait}s after stopping celeris@$sha12 (the old one is draining or gone); starting celeris@$sha12 again so that production is not left without an active instance"
+  mark_promoting
+  if systemctl --user start "celeris@$sha12"; then
+    RESTARTED_NEW=true
+    if poll_release "$SD_PROD_API/api/v1/health" release "$sha12" role active 60; then
+      sd_log "celeris@$sha12 is active again; the links were not changed — rerun promote.sh $sha12 to finish (it resumes when the new one is already active)"
+    else
+      sd_log "warning: celeris@$sha12 was started again but did not report role=active within 60s; check it by hand"
+    fi
+  else
+    sd_log "ERROR: could not start celeris@$sha12 again; production has no active celeris — start one by hand"
+  fi
+  return 1
+}
+
 # 0.0.0.0:7700 で LISTEN している node の pid（初回の移行で旧 GUI を止めるため）。
 find_old_gui_pid() {
   local pid
@@ -258,12 +350,41 @@ promote_live() {
   mark_promoting
   sd_log "systemctl --user start celeris@$SHA12"
   systemctl --user start "celeris@$SHA12" || sd_die "failed to start celeris@$SHA12"
-  if ! poll_release "$SD_PROD_API/api/v1/health" release "$SHA12" role active 60; then
-    sd_log "handoff did not complete within 60s; stopping celeris@$SHA12 and leaving the old one alone"
+  if ! poll_release "$SD_PROD_API/api/v1/health" release "$SHA12" role active "${SD_HANDOFF_WAIT:-60}"; then
+    sd_log "handoff did not complete within ${SD_HANDOFF_WAIT:-60}s; stopping celeris@$SHA12 and leaving the old one alone"
     systemctl --user stop "celeris@$SHA12" || true
-    sd_die "live handoff failed (the old celeris is still serving; nothing was changed)"
+    # 付記 2026-10-05b: 止めた後に active が 0 なら新を起こし直す（旧が先に draining へ移っていた場合）。
+    if ensure_an_active_remains "$SHA12"; then
+      sd_die "live handoff failed: the new celeris did not become active (the old celeris is still serving; nothing was changed)"
+    fi
+    sd_die "live handoff failed: the new celeris did not become active in time, and no active celeris was left after stopping it; celeris@$SHA12 was started again (restarted=$RESTARTED_NEW). Check /api/v1/health and daemon_instances, then rerun promote.sh $SHA12"
   fi
-  sd_log "handoff done: the new celeris is active"
+  # ADR-0040 D4 付記 2026-10-05: 新が active でも、旧が draining（または消えた）ことを daemon_instances で
+  # 確かめてから「handoff done」にする。
+  # 付記 2026-10-05b: 新を止めるのは、**旧が生きた active のまま、新も active**（二重 active）と読めたときだけ。
+  # 旧が draining に移った後に新を止めると active が 0 になる（本番 2026-10-05 03:44 の停止）。読めない・
+  # 判断できないときは新を残し、人に知らせる（exit 1 → promote_failed.json → GUI のバナー）。
+  if ! poll_instances_settled "$SHA12" "${SD_SETTLE_WAIT:-60}"; then
+    case "$SETTLE_VERDICT" in
+      two_active)
+        sd_log "the old celeris is still a live active next to the new one ($SETTLE_SUMMARY); stopping celeris@$SHA12 so that the old one keeps serving"
+        systemctl --user stop "celeris@$SHA12" || true
+        if ensure_an_active_remains "$SHA12"; then
+          sd_die "live handoff failed: two active instances (the old celeris was still active next to the new one; the new celeris@$SHA12 was stopped; the old one keeps serving; links unchanged)"
+        fi
+        sd_die "live handoff failed: two active instances were read, but after stopping celeris@$SHA12 no active celeris answered; celeris@$SHA12 was started again (restarted=$RESTARTED_NEW). Check daemon_instances and rerun promote.sh $SHA12"
+        ;;
+      *)
+        sd_log "cannot confirm that the old celeris released active (verdict=$SETTLE_VERDICT source=$SETTLE_SOURCE: ${SETTLE_SUMMARY:-?}); leaving celeris@$SHA12 running (stopping it could leave production without an active instance)"
+        case "$SETTLE_VERDICT" in
+          unreadable) sd_die "live handoff not confirmed: daemon_instances could not be read (GET /api/v1/releases with $SD_API_TOKEN_FILE and the DB $SD_DB). The new celeris@$SHA12 is active per /api/v1/health and was left running; the links were not changed. Check with status.sh, then rerun promote.sh $SHA12 (it resumes when the new one is already active)" ;;
+          no_active) sd_die "live handoff not confirmed: /api/v1/health says $SHA12 is active but daemon_instances shows no live active ($SETTLE_SUMMARY). The new celeris@$SHA12 was left running; the links were not changed. Check daemon_instances, then rerun promote.sh $SHA12" ;;
+          *) sd_die "live handoff not confirmed: daemon_instances shows the old celeris still active and $SHA12 not active ($SETTLE_SUMMARY) although /api/v1/health answered as $SHA12. The new celeris@$SHA12 was left running; the links were not changed. Check daemon_instances, then rerun promote.sh $SHA12" ;;
+        esac
+        ;;
+    esac
+  fi
+  sd_log "handoff done: the new celeris is the only live active and the old one is draining (or gone)"
 
   systemctl --user enable "celeris@$SHA12" || sd_log "warning: enable celeris@$SHA12 failed"
   if [ -n "$OLD" ]; then

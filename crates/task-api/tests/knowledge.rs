@@ -13,6 +13,7 @@ mod common;
 use common::*;
 use serde_json::{Value, json};
 use std::path::Path;
+use task_core::knowledge as kb;
 
 fn g(path: &str) -> axum::http::Request<axum::body::Body> {
     get_with(
@@ -237,7 +238,8 @@ async fn a_page_is_rendered_with_its_front_matter_history_and_etag() {
     assert_eq!(body["title"], "wisteria の使い方");
     assert_eq!(body["scope"], "environment");
     assert_eq!(body["tags"][0], "hpc");
-    assert_eq!(body["sources"][0], "human");
+    // ADR-0047 付記 H1: 人の編集の旧形 `human` は `human:authored` に置き換わる。
+    assert_eq!(body["sources"][0], "human:authored");
     assert_eq!(body["etag"], etag);
     assert_eq!(body["too_large"], false);
     let html = body["html"].as_str().expect("html");
@@ -717,4 +719,73 @@ async fn the_write_endpoints_are_admin_only() {
     )
     .await;
     assert_eq!(put_no_token.status.as_u16(), 401, "{}", put_no_token.text());
+}
+
+/// ADR-0047 付記 H1: 人の GUI 編集（`PUT /knowledge/page`）は `human:authored` を付けて保存し、
+/// 整理の保護（`protected_page`）が効く。`human:instruction` だけのページを人が直しても同じ。
+#[tokio::test]
+async fn a_gui_edit_marks_the_page_as_human_authored() {
+    let env = env();
+    init_kb(&env.knowledge_root);
+    let app = env.router();
+
+    let fresh = send(
+        &app,
+        pu(
+            "/api/v1/knowledge/page",
+            &json!({"path": "projects/x/new.md", "body": "# 新しいページ\n"}),
+        ),
+    )
+    .await;
+    assert_eq!(fresh.status.as_u16(), 200, "{}", fresh.text());
+    let raw = std::fs::read_to_string(env.knowledge_root.join("projects/x/new.md")).expect("read");
+    assert_eq!(
+        raw,
+        "---\nsources: [\"human:authored\"]\n---\n\n# 新しいページ\n"
+    );
+    assert!(kb::protected_page("projects/x/new.md", &raw));
+
+    // run が書いた『人の指示由来』のページは保護されない。人が直すと保護される。
+    write_page(
+        &env.knowledge_root,
+        "projects/x/fact.md",
+        "---\ntitle: 事実\nsources: [task:01X, human:instruction]\n---\n\n古い本文\n",
+    );
+    let before = send(&app, g("/api/v1/knowledge/page?path=projects/x/fact.md")).await;
+    assert_eq!(before.status.as_u16(), 200, "{}", before.text());
+    let before_raw = before.json()["raw"].as_str().expect("raw").to_string();
+    assert!(!kb::protected_page("projects/x/fact.md", &before_raw));
+    let etag = before.json()["etag"].as_str().expect("etag").to_string();
+    let edited = send(
+        &app,
+        pu(
+            "/api/v1/knowledge/page",
+            &json!({
+                "path": "projects/x/fact.md",
+                "body": "---\ntitle: 事実\nsources: [task:01X, human:instruction]\n---\n\n人が直した本文\n",
+                "etag": etag,
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(edited.status.as_u16(), 200, "{}", edited.text());
+    let raw = std::fs::read_to_string(env.knowledge_root.join("projects/x/fact.md")).expect("read");
+    assert_eq!(
+        raw,
+        "---\ntitle: 事実\nsources: [\"task:01X\", \"human:instruction\", \"human:authored\"]\n---\n\n人が直した本文\n"
+    );
+    assert!(kb::protected_page("projects/x/fact.md", &raw));
+
+    // 同じ本文の再保存は unchanged（印を二度付けしない）。
+    let etag = edited.json()["etag"].as_str().expect("etag").to_string();
+    let again = send(
+        &app,
+        pu(
+            "/api/v1/knowledge/page",
+            &json!({"path": "projects/x/fact.md", "body": raw, "etag": etag}),
+        ),
+    )
+    .await;
+    assert_eq!(again.status.as_u16(), 200, "{}", again.text());
+    assert_eq!(again.json()["unchanged"], true);
 }

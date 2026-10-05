@@ -105,6 +105,7 @@ async fn a_failing_work_unit_check_retries_the_work_unit_then_completes() {
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: "test -f .checked".into(),
         expect_exit: 0,
+        scope: false,
     }];
     let spec = task_core::ExecutionPlanSpec {
         stages: Vec::new(),
@@ -1644,6 +1645,7 @@ async fn integration_check_failure_is_repaired_when_classified() {
     a.checks = vec![task_core::WorkUnitCheck {
         cmd: scope_check.into(),
         expect_exit: 0,
+        scope: false,
     }];
     let mut b = v2_wu("b", "build", &[]);
     b.context.paths = vec!["web/".into()];
@@ -1652,10 +1654,12 @@ async fn integration_check_failure_is_repaired_when_classified() {
         task_core::WorkUnitCheck {
             cmd: "test ! -f fmt-bad.txt # rustfmt --check".into(),
             expect_exit: 0,
+            scope: false,
         },
         task_core::WorkUnitCheck {
             cmd: scope_check.into(),
             expect_exit: 0,
+            scope: false,
         },
     ];
     adopt_v2_plan(&store, task.id, &["build"], vec![a, b]);
@@ -1724,6 +1728,7 @@ async fn integration_check_failure_replans_when_not_classified() {
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,
@@ -1776,6 +1781,7 @@ async fn a_pending_human_replan_runs_the_planner_before_retrying_the_integration
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,
@@ -2054,12 +2060,12 @@ async fn replan_delta_after_an_integrated_phase_keeps_the_daemon_integration_uni
 
 /// Phase F5-fix2（根本原因）: run が終わって WU の `checks` を走らせている間に、デーモンが
 /// draining になった（本番: 03:39 に検査開始 → 03:42 G1 のライブ切替 / 05:38 に切替 → 05:43 に
-/// 検査開始）。検査は `running` から外れた後に spawn されるので、修正前の `in_flight()` は 0 を返し、
-/// supervisor（`instance.rs` の drain）はその tick でプロセスを終わらせ、検査の完了
-/// （`Completion::WorkUnitChecks`）ごと失っていた。修正後は検査が終わるまで in-flight に数え、
-/// draining のまま完了（`WorkerFinished`・`runs` の finish・WU done）を記録してから 0 になる。
+/// 検査開始）。F5-fix2 では検査が終わるまで in-flight に数えて旧デーモンが完了を記録していたが、
+/// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）で、draining の旧 instance は手元の検査を止めて
+/// `WorkUnitChecksHandedOff` を残し、すぐ in_flight 0 になる。新しい active が result.json から検査を
+/// やり直し、完了（`WorkerFinished`・`runs` の finish・WU done）を 1 回だけ記録する。
 #[tokio::test]
-async fn draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completion_is_recorded() {
+async fn draining_dispatcher_hands_off_work_unit_checks_in_hand_to_the_new_active() {
     let repo = tempfile::tempdir().unwrap();
     init_test_repo(repo.path());
     let root = tempfile::tempdir().unwrap();
@@ -2072,26 +2078,42 @@ async fn draining_dispatcher_keeps_work_unit_checks_in_flight_until_the_completi
         terminal: gate_done_terminal(),
         delay: Duration::from_millis(20),
     });
-    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 2, 2, 2);
     let run_id = run_gate_until_second_checks(&mut d, &store, task.id).await;
+    assert!(d.checking.contains_key(&run_id));
 
     // live handoff: このインスタンスは draining になる（新しい仕事は始めない）。
     d.set_accepting_new_work(false);
-    assert!(
-        d.in_flight() > 0,
-        "WU の checks が走っているのに in_flight() == 0（draining のデーモンがここで exit する）"
+    d.tick().unwrap();
+    assert_eq!(
+        d.in_flight(),
+        0,
+        "draining の旧 instance が検査を抱えたまま"
     );
-    // supervisor と同じく、in_flight が 0 になるまで tick する。
-    let mut drained = false;
-    for _ in 0..500 {
-        d.tick().unwrap();
-        if d.in_flight() == 0 {
-            drained = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    assert!(drained);
+    assert!(d.checking.is_empty());
+    let handed: Vec<String> = events_of(&store, task.id)
+        .into_iter()
+        .filter_map(|e| match e {
+            Event::WorkUnitChecksHandedOff { run_id, .. } => Some(run_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(handed, vec![run_id.clone()]);
+    assert!(worker_finished_outcomes(&store, task.id, &run_id).is_empty());
+    assert_eq!(
+        gate_row(&store, task.id).status,
+        task_core::WorkUnitStatus::Running
+    );
+    drop(d);
+
+    let mut active = parallel_dispatcher(store.clone(), adapter, root.path(), 2, 2, 2);
+    let s = store.clone();
+    let rid = run_id.clone();
+    assert!(
+        run_until_state(&mut active, || !worker_finished_outcomes(&s, task.id, &rid)
+            .is_empty())
+        .await
+    );
     let outcomes = worker_finished_outcomes(&store, task.id, &run_id);
     assert_eq!(outcomes.len(), 1, "{:?}", events_of(&store, task.id));
     assert!(outcomes[0].starts_with("done: "), "{outcomes:?}");
@@ -3135,6 +3157,7 @@ async fn integration_check_failure_without_replans_asks_with_the_failed_checks()
     b.checks = vec![task_core::WorkUnitCheck {
         cmd: "test ! -f bad.txt".into(),
         expect_exit: 0,
+        scope: false,
     }];
     adopt_v2_plan(
         &store,

@@ -6,7 +6,6 @@ use std::path::{Component, Path};
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use task_core::knowledge::front_matter;
 
 use crate::knowledge;
 
@@ -14,7 +13,9 @@ mod inputs;
 pub use inputs::{InputSnapshot, SNAPSHOT_FILE, verify_inputs};
 
 /// 日次整理の harness id（`[[cron.seed.template]] harness`。cron 由来の task の `genre` になる）。
-pub const CURATION_HARNESS: &str = "knowledge-curation";
+/// 正本は `task_core::cron::KNOWLEDGE_CURATION_HARNESS`（task-core の Complexity Gate も同じ値で
+/// 判別する。ADR-0131 付記 2026-10-04）。
+pub use task_core::cron::KNOWLEDGE_CURATION_HARNESS as CURATION_HARNESS;
 
 /// ADR-0131 付記 D12: 1 回の日次整理 run が扱う `_inbox/` 候補の上限。残りは次回へ持ち越す。
 pub const MAX_INBOX_CANDIDATES_PER_RUN: usize = 40;
@@ -147,18 +148,27 @@ fn check_hash(name: &str, raw: &str, expected: Option<&str>) -> Result<(), Strin
     Ok(())
 }
 
+/// ADR-0047 付記 H3: 自動の削除・統合・大幅書き換えから守るページ（`user/` 配下・`human:authored`・
+/// `author: human`・未判別の旧形 `human`）。`human:instruction` だけのページは通常の整理対象。
 fn human_page(name: &str, raw: &str) -> bool {
-    if name.starts_with("user/") {
-        return true;
+    task_core::knowledge::protected_page(name, raw)
+}
+
+/// ADR-0047 付記 H3: 計画の本文が『人が書いた』印を付け外しするか（run が保護を作ったり外したりしない）。
+fn authorship_changed(before: Option<&str>, after: Option<&str>) -> bool {
+    let Some(after) = after else {
+        return false;
+    };
+    let before_marked = before.is_some_and(|raw| {
+        task_core::knowledge::human_authored(raw) || task_core::knowledge::legacy_human(raw)
+    });
+    let after_marked =
+        task_core::knowledge::human_authored(after) || task_core::knowledge::legacy_human(after);
+    if before_marked {
+        !after_marked
+    } else {
+        task_core::knowledge::human_authored(after)
     }
-    let (front, _) = front_matter(raw);
-    if front.sources.iter().any(|source| source == "human") {
-        return true;
-    }
-    // 古いページの単数形も保護する。
-    raw.strip_prefix("---\n")
-        .and_then(|rest| rest.split_once("\n---"))
-        .is_some_and(|(head, _)| head.lines().any(|line| line.trim() == "source: human"))
 }
 
 fn major_rewrite(before: &str, after: &str) -> bool {
@@ -299,7 +309,15 @@ pub fn validate_with_inbox(
             human_page(item.target.as_deref().unwrap_or_default(), raw)
                 && major_rewrite(raw, item.content.as_deref().unwrap_or_default())
         });
-        if protected || target_protected {
+        // merge は統合先（target）の本文を書き換える。それ以外は path の本文。
+        let marks_changed = match item.action {
+            Action::Merge => authorship_changed(target_before.as_deref(), item.content.as_deref()),
+            Action::New | Action::Fix => {
+                authorship_changed(before.as_deref(), item.content.as_deref())
+            }
+            Action::Delete | Action::Keep => false,
+        };
+        if protected || target_protected || marks_changed {
             human_decisions.push(HumanDecision {
                 subject: item.path.clone(),
                 proposal: format!(
@@ -310,7 +328,11 @@ pub fn validate_with_inbox(
                         .map(|t| format!(" -> {t}"))
                         .unwrap_or_default()
                 ),
-                reason: format!("人が書いたページの保護: {}", item.reason),
+                reason: if marks_changed && !(protected || target_protected) {
+                    format!("人が書いた印の付け外し: {}", item.reason)
+                } else {
+                    format!("人が書いたページの保護: {}", item.reason)
+                },
             });
         } else {
             kb.push(item.clone());

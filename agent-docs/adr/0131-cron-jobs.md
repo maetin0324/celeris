@@ -452,3 +452,49 @@ git から救出する方針で運用する。これに合わせ D5・付記 D11
    `git checkout <commit> -- <path>`）。手順は `docs/ops/cron-jobs.md` に書く。
 6. **変えないこと。** 1 回 40 件の上限と持ち越し規則（付記 D12）、計画の形と daemon の検証順、本番 KB は
    worker が書かないこと。
+
+## 付記（2026-10-04、Complexity Gate 例外）
+
+本番 task 01M448KR2GJ8RJ4NKHGKPWZKMR（一回きりの全体整理、kb-full-cleanup）は objective が長いため
+Complexity Gate（ADR-0072 D13）が compound と判定し、planner が `curate` / `land` の 2 WorkUnit に分けた。
+しかし daemon（`celeris::knowledge_curation`）は task 直下の `artifacts/curation-plan.json` と `inputs/`
+（`curation-inputs.json` の snapshot）でしか検証・適用しない（本付記冒頭・D10）。WorkUnit が自分の
+`work-units/<key>/artifacts/` に書いた計画は daemon から見えず反映されない。planner がこれに気づいて
+decision（copy / refire / fix-gate）を出し、人が毎回 `copy` と答える運用になっていた。これは無駄で、かつ
+`land` WU 側の写し replan は壊れやすい。
+
+**決定。** harness `knowledge-curation`（cron が作った日次整理・全体整理 task。genre
+`knowledge-curation` かつ label `cron` の両方で判別——`task_ops::knowledge_curation::is_curation_task`
+と同じ条件）は、Complexity Gate を通さず常に atomic（planner なし、単一 run）で dispatch する。
+
+1. **判定は `execution_gate::out_of_scope_rule` に追加する。** 既存の 6 条件（`kind != Execute` / 対話 /
+   support-task / `routing` 無し / 固定パイプラインの harness / `workspace_mode = Shared`）と同じ扱いの
+   7 番目の条件にし、専用の rule_id `atomic/knowledge-curation` を返す（他の対象外条件とまとめて
+   `atomic/out-of-scope` にはしない。event から理由が読めなくなるため）。`Event::ExecutionGated.rule_id`
+   がそのまま「knowledge-curation は daemon の検証・適用が task 直下の成果物を前提にするため atomic」の
+   理由の記録になる。
+2. **genre/label の正本は task-core に置く。** `task_core::cron::CRON_TASK_LABEL`・
+   `KNOWLEDGE_CURATION_HARNESS` を正本の定数にし、`task_ops::cron_jobs::CRON_TASK_LABEL` と
+   `task_ops::knowledge_curation::CURATION_HARNESS` はそれを re-export する（task-ops は task-core に
+   依存するが逆はできないため。値が離れて drift するのを防ぐ）。
+3. **強制規則・規則表より先に評価する。** `out_of_scope_rule` は `decide_at` の最初（強制規則
+   long-and-broad・atomic/small や規則表のスコアより前）で評価されるので、objective がどれだけ長くても
+   （S5 の `objective_len > 2000` や F1〜F4 の強制シグナルが満点でも）knowledge-curation の cron task は
+   常に atomic になる。
+4. **長い作業は auto_leaf の continuation に任せる。** 1 run で終わらない量の `_inbox/` 候補（D11 付記の
+   40 件上限はそのまま）は、atomic task の budget 超過時の continuation（compaction・continuation の
+   閾値超過は人への決定で知らせる。2026-10-04 auto-leaf の仕組み）で続きの run にまたがる。task を複数
+   WorkUnit に割ることはしない。
+5. **試験。** `task-core::execution_gate::tests::knowledge_curation_cron_tasks_are_always_atomic`
+   （純粋関数: genre と label が揃ったときだけ `atomic/knowledge-curation`、長い objective・強制規則を
+   満たす features でも atomic）と `task-dispatch::dispatcher::tests::planning_and_gate::
+   knowledge_curation_cron_task_skips_the_gate_and_runs_atomic`（偽アダプタで実際に 1 run だけが起き、
+   planner run が無く、`Event::ExecutionGated{rule_id: "atomic/knowledge-curation"}` が残ることを確認）。
+
+## 付記（2026-10-04、保護の印を分ける）
+
+D10 の「frontmatter が `source: human` のページの保護」は、ADR-0047 付記（2026-10-04、sources の human を分ける）で
+意味を絞った。validator（`task_ops::knowledge_curation::human_page` → `task_core::knowledge::protected_page`）が守るのは
+`user/` 配下・`human:authored`・`author: human`・移行前の未判別の `human`（単数形 `source: human` を含む）だけで、
+`human:instruction`（人の指示由来）だけのページは通常どおり統合・削除・修正される。計画の本文が『人が書いた』印を
+付け外しするときも `human_decisions` に回す（理由の接頭辞「人が書いた印の付け外し:」）。

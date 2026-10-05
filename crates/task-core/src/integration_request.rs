@@ -9,6 +9,11 @@ pub const SUPERSEDED_ANSWER: &str = "superseded";
 /// 統合側（段の統合・配送）が、target が source を祖先に含むようになった（統合済み）ことを記録して閉じる answer。
 /// 人が受信箱で「統合した」と答えたときの値と同じ。
 pub const INTEGRATED_ANSWER: &str = "integrated";
+/// task が終端になったため依頼を閉じる。統合の成功や人の回答を意味しない。
+pub const TASK_TERMINAL_ANSWER: &str = "task_terminal";
+/// 配送（task が done になった後に main へ取り込む段）が記録する依頼の origin。配送は done の task の上で
+/// 人の判断を待つので、`TASK_TERMINAL_ANSWER` の回収対象から外す（配送は統合できたら自分で閉じる）。
+pub const DELIVERY_ORIGIN: &str = "delivery";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum ConflictKind {

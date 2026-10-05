@@ -1,5 +1,5 @@
 ---
-tasks: [01M44NN2DCZXV0TZ5FXX5TMN58, 01M45RPPM85XTGYC17WCZQCER1, 01M4651ZZP8FJKGG6W2WPFNKBH]
+tasks: [01M44NN2DCZXV0TZ5FXX5TMN58, 01M45RPPM85XTGYC17WCZQCER1, 01M4651ZZP8FJKGG6W2WPFNKBH, 01M44H0SRV70E32AQ6C5N37MSK]
 ---
 # model routing（`[model_routing]`）への移行手順
 
@@ -680,3 +680,46 @@ sources = ["*"]
   primary と別欄で出る。`celerisctl routing evaluate --policy estimator`（§9.5）で比較 report を作る。
 - 戻し方（既定 off）: `enabled = false` にする（または節を消す）→ 検証 → reload。sidecar を §10.6 の 3〜4 で
   止める。止めてから off にしても heuristic は続く（到達不能として記録されるだけ）。
+
+## 11. Phase 3（tracking context・escalation）と全 Phase の本番操作まとめ
+
+Phase 3（p3-context-esc）の release で変わること:
+
+- dispatcher は run 開始時に §3.4 の `RoutingContext` を task/WU metadata から組み、run に結び（`context_ref` を発行）、
+  `routing_features_recorded`（stage=dispatch）を `RoutingDecided` と同じ decision_id で 1 件追記する。
+  本文・command・credential・account・パスは特徴に入らない。
+- adapter が proxy へ `x-celeris-routing-context` を渡す経路（ACP/OpenCode の provider header、aider の
+  `extra_headers`）。header を渡せない adapter と対象外は run 記録に `context-transport` の `unsupported`。
+  proxy は無効・期限切れの参照は 400、参照なしは standalone の最小 context で従来どおり動く。
+- 軌跡 escalation が run の retry lane に効く: review/acceptance/検査の同一 lane 連続失敗 2 回で 1 段上げる
+  （cheap → standard → frontier）、組織・task・WU の天井と人の明示 lane は守る。供給失敗・中断・予算切れでは
+  上げない。`RoutingRecord.escalation`（audit）は `RoutingDecided` の optional 欄。
+- `routing_features_recorded`・`routing_request_decided`・`routing_outcome_recorded` の 3 event を追加
+  （`EVENT_TYPES` 65 件、schema は再生成済み）。`GET /api/v1/tasks/<task id>/routing` の run に
+  `decision_id`・`actual_sources`・`escalation_audit`・`routing_features`・`routing_outcome`・
+  `outcome_state`（`not_recorded`/`unreviewed`/`judged`）が出る（未レビューの合否と reward は null）。
+- 設定: `[model_routing.escalation] quality_failures_per_lane` / `max_total_attempts`（任意、既定 2 / 4、
+  0 はエラー）と `[model_routing] context_safety_margin`（任意）は **`POST /api/v1/reload` で原子的に効く**。
+  書き方・戻し方は §8.2・§8.4 と同じ（値を消して reload すれば既定に戻る）。DB の構造 migration は無い。
+
+### 11.1 本番操作の手順のまとめ（すべて人が実行する）
+
+| 操作 | 手順 | 反映 | 戻し方 |
+| --- | --- | --- | --- |
+| config の控え | §1（`config.toml.bak-model-routing-YYYYMMDD`、providers.d も） | - | - |
+| 新 release の config 検証 | §4 の 1（`celerisctl config to-harnesses --config …` が exit 0） | - | - |
+| `[model_routing]` の新形を書く / 旧形のまま残す | §2（旧形はそのまま読める。実行経路は Phase 1 では変わらない） | §4 の 2（起動ログの警告で確認） | - |
+| `mode = "shadow"`（decision shadow の有効化） | §5・§9.1 | `POST /api/v1/reload`。llm-proxy 側の decision shadow は daemon 再起動で効く（daemon ログに warning） | `mode = "legacy"` に戻して reload（§9.3） |
+| 実行 shadow の opt-in | §9.2（`[model_routing.shadow]` の全項目が必要） | **daemon の再起動**（起動時 off だった proxy の queue は reload では作られない） | `execute = false` にして reload（§9.2 末・§9.3） |
+| `mode = "enforce"`（heuristic の opt-in） | §8.1〜§8.3（`[model_routing.estimator] kind = "heuristic"` が要る） | mode・state・cost・escalation は `POST /api/v1/reload`。**`[model_routing.retry]` の変更は daemon の再起動** | `mode = "legacy"` に戻して reload（§8.4）。retry は節を消して再起動 |
+| escalation 閾値 / context margin | §11（`[model_routing.escalation]`・`context_safety_margin`） | `POST /api/v1/reload` | 節を消して reload（既定に戻る） |
+| estimator sidecar の opt-in | §10.7（`[model_routing.estimator.sidecar]`、`shadow_only = true` 必須） | 検証 → `POST /api/v1/reload`（proxy 側が再起動待ちなら daemon ログの warning を見る） | `enabled = false`（または節を消す）→ 検証 → reload。sidecar は §10.6 の 3〜4 で停止 |
+| offline replay（過去ログの比較） | §9.5（`celerisctl routing export --db …` / `routing evaluate --dataset …`） | 読み取り専用・DB を書き換えない（backup の写し推奨） | 不要（一時の出力を消すだけ） |
+| 確認 | §6（`GET /api/v1/tasks/<id>/routing`・`GET /api/v1/llm/sources`・`GET /api/v1/llm/routing/catalog`・proxy の `x-celeris-source`）＋ §8.3・§9.1・§9.2・§10.7 の各確認 | - | - |
+| rollback（設定だけ） | 該当節を戻して `POST /api/v1/reload`（retry・shadow 起動時の queue・sidecar の queue は再起動が要る） | - | - |
+| rollback（binary を戻す） | §7・§8.4・§9.3（**§1 の旧 config の控えと組で戻す**。旧 binary は新キーを知らず起動しない） | - | - |
+| DB | migration 0048（Phase 2、列と索引の追加）・0049（Phase 4、新しい表の追加）は additive。手で変えない。昇格前に backup | - | §8.5・§9.4（表を残したまま旧 release に戻してもよい） |
+
+本番で有効にしていないもの（close 時点）: 本番の `~/.config/celeris`・daemon・DB はこの task では変更していない。
+既定は `mode = "legacy"`（primary は従来どおり）、decision / 実行 shadow・estimator sidecar はすべて既定 off。
+有効化は §11.1 の表の opt-in 手順で人が行う。

@@ -4,8 +4,8 @@ tasks: [01M44MBCP98FNEEMEXG5CQRQQA, 01M44H0SRV70E32AQ6C5N37MSK]
 # 多目的モデルルーティング: 共通 kernel と Phase 1〜5 の実装契約
 
 - 日付: 2026-10-04
-- 状態: **設計を記録**。実装済みの範囲は末尾の付記（Phase 1・Phase 2）を正とする。research 段の人レビューへ渡す architecture ADR。以下の型・設定・API・試験名は、既存と明記したもの以外は実装予定である。
-- 回答済みの決定: **shadow-exec = opt-in-capped**（実呼出しは既定 off、対象と一日上限を設定）。**estimator-scope = adapter-plus-routellm**（Phase 5 は汎用 sidecar estimator adapter に加え、RouteLLM 型 classifier を実 sidecar として動かす起動・停止手順、license・依存・CPU/GPU 要件の記録、上限付き shadow 評価まで。本番切り替えを含めない）。weights の利用条件は **[needs-human] `routellm-weights-use`**（§7.3、Phase 5 前）として分離し、この回答済みの範囲を縮小しない。
+- 状態: **実装済み**（Phase 1〜5）。各 Phase の実装記録・全体検査（commit・試験）は末尾の付記を正とし、進捗は [2026-10-04-multi-objective-routing.md](../progress/2026-10-04-multi-objective-routing.md)。以下の型・設定・API・試験名は付記が「実装していないもの」と明記した項目以外は実装済みな値である。
+- 回答済みの決定: **shadow-exec = opt-in-capped**（実呼出しは既定 off、対象と一日上限を設定）。**estimator-scope = adapter-plus-routellm**（Phase 5 は汎用 sidecar estimator adapter に加え、RouteLLM 型 classifier を実 sidecar として動かす起動・停止手順、license・依存・CPU/GPU 要件の記録、上限付き shadow 評価まで。本番切り替えを含めない）。**`routellm-weights-use`（§7.3）は 2026-10-05 の人の決定で解消**（内部 shadow 評価に限り `routellm/bert_gpt4_augmented` を使ってよい。再配布・公開なし、外部発表前に人が license を再判断。末尾の付記を正とする）。
 - 根拠: [棚卸し](../progress/2026-10-04-multi-objective-routing/inventory.md)、[upstream-oss 調査](../progress/2026-10-04-multi-objective-routing/upstream-oss.md)、[進捗](../progress/2026-10-04-multi-objective-routing.md)。調査原本は `celeris-wu/01M44H0SRV70E32AQ6C5N37MSK/{inventory,upstream-oss}` の同名ファイル。着手 HEAD `aa44fe420e25` には両方を含む。
 - 拡張元: [ADR-0069](0069-routing-four-layers.md) の Model / Review 層、[ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md) の adapter/source 分離と cheap Qwen 制限。Ownership / Harness を選び直す機能ではない。
 
@@ -202,6 +202,8 @@ RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter 
 回答済みの `adapter-plus-routellm` に従い、Phase 5 は汎用 adapter とともに **実 RouteLLM を呼ぶ wrapper、再現できる起動・停止手順、実 sidecar の上限付き shadow 評価 report** を成果に含める。wrapper は `/estimate` を実装し、classifier の score だけを取り出す。strong/weak の生成 API は呼ばない。通常 CI はネットワーク不要の偽 sidecar で protocol と異常系を検証するが、その合格だけでは Phase 5 完了にならない。実評価は明示 opt-in の別検査とし、未実行・skip・全件失敗は未完了にする。
 
 **[needs-human] `routellm-weights-use`（needed_before: p5-estimator）:** [upstream-oss §5](../progress/2026-10-04-multi-objective-routing/upstream-oss.md) では第一候補 `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`）の license 宣言を確認できていない。人が利用条件の根拠を確認して当該 weights のローカル shadow 評価を認めるか、確認まで Phase 5 を保留するかを決める。コードの Apache-2.0 から weights の許諾を推定しない。回答までは weights を取得・使用せず、Phase 5 の必須評価を免除しない。この前提待ちは本 ADR 作成や Phase 1〜4 の完了を妨げない。承認後も weights は利用者が取得する手順とし、自動取得・同梱・再配布はしない。承認記録と確認した条件・対象 revision を手順と report に残す。
+
+**[解消済み]（2026-10-05、人の決定）:** `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`）は HF に license 宣言が無いが、**手元（本番 host・内部環境）での shadow 評価に限り使ってよい**（再配布・公開・同梱はしない。取得先 revision は固定して記録）。外部発表の段階で license を人が再判断する。承認記録・条件・対象 revision と checksum は手順書 [docs/ops/model-routing-migration.md §10.1・§10.3](../../docs/ops/model-routing-migration.md)（`approved`）と [report §3](../../docs/reports/model-routing-routellm-shadow.md)（原票 `docs/reports/model-routing-routellm-shadow/`）に残す。実 sidecar の start-stop と上限付き shadow は 2026-10-05 に実行済み（末尾の Phase 5 付記を正とする）。
 
 ## 8. upstream の (a)/(b)/(c) 採否と追従
 
@@ -477,3 +479,37 @@ Phase 5（p5-estimator）の全 unit（assess・config・sidecar-model・proxy-c
 - **本番切替なし**: opt-in（本番判断への反映）の経路は作っていない。本番の `~/.config/celeris`・daemon・DB は変更していない。
 - **結合の食い違い（report §2）は解決済み**: shadow-check が見つけた 3 点（decision id の結合・`estimator:<id>/<version>` の照合・wire model 名）は shadow-join unit が直した（上の付記「shadow-join」）。
 - **Phase 5 で実装していないもの**: 推移依存の lock と CPU/GPU wheel の選択（人の手順）、sidecar 推論の実資源費の計測、raw score の v1 DTO 専用欄、校正（`calibration_version`）、自動学習・learned scorer・bandit（assess の結論どおり範囲外）。
+
+## 付記（2026-10-05、全 Phase の close）
+
+Phase 1〜5（p1-model・p2-state-cost・p3-context-esc・p4-shadow-eval・p5-estimator）の全 WorkUnit を統合した
+close（close-v3、統合 HEAD `dace40c0`）で、本 ADR は **実装済み** とする。Phase ごとの実装記録（unit 別と
+各 close の全体検査: commit・試験・結果）は [進捗](../progress/2026-10-04-multi-objective-routing.md) と同じ
+ディレクトリの `p1-model.md`・`p2-state-cost.md`・`p3-context-esc.md`・`p4-shadow-eval.md`・`p5-estimator.md`
+（unit 別は各 `p*-<key>.md`・`p5-estimator/`）。上の Phase 1〜5 の付記は各 Phase の実装と本文の突き合わせであり、
+本付記は close 時点での全体確認である。
+
+- **全体検査（close HEAD `dace40c0`）**: `bash scripts/dev/test-parallel.sh` exit 0（`4035 tests run: 4035 passed (1 slow), 13 skipped`）、
+  `cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0、
+  Phase 5 新試験 + Phase 4 + 既存回帰の filterset 39 件が 0 件実行でなく通る（`39 tests run: 39 passed`）、
+  `python3 -m unittest discover -s scripts/model-routing -p 'test_*.py'` OK（3 tests）、
+  `sh scripts/model-routing/check-runbook.sh --require-approved` exit 0（`routellm-weights-use=approved`）、
+  `sh scripts/model-routing/fake-shadow-check.sh` exit 0、文書検査 3 本
+  （`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`）と
+  `check-architecture-map.py` が exit 0。`real-sidecar-check.sh` は worker 内では exit 2（weights なし = 未実行。
+  実行の証拠は人の原票）。
+- **本番の人手順**: 本番 config の移行（旧形の控え、`[model_routing]` 新形、警告・エラーの読み方、
+  `mode = "legacy"` → `"shadow"` → `"enforce"`（heuristic opt-in）、shadow / estimator sidecar の opt-in、
+  offline replay（`routing export` / `routing evaluate`）、rollback 含む全手順は
+  [docs/ops/model-routing-migration.md](../../docs/ops/model-routing-migration.md)。本番 host の操作
+  （config 適用・daemon 再起動・確認）はすべて人が行う。
+- **本番で有効にしていないもの**: 本番の `~/.config/celeris`・daemon・DB はこの task では変更していない。
+  既定は legacy（primary は従来どおり）。decision shadow・execution shadow・estimator sidecar は
+  本番設定での opt-in（人の判断）を待っている。
+- **未解決（実施していない・将来の変更が必要な項目）**: 各 Phase 付記の「実装していないもの」の通り。
+  主なものは (1) Celeris 本体の estimator shadow（coverage・`estimator_version_mismatch`・hard constraint
+  違反数・primary 変更数）の本番 config での opt-in 計測（Phase 5 付記・report §3.4）、
+  (2) `mode = "enforce"` の対象拡大（§7.2 末どおり自動で行わない。人の判断）、
+  (3) 組織 privacy 制約の設定経路（`Constraints` の server/org 単位設定）と、enforce の proxy 選択への
+  context 適用（Phase 3 付記）、(4) learned scorer / bandit（assess の結論どおり範囲外。paired outcome
+  が集まってから再検討）、(5) RouteLLM weights の外部発表前の license 再判断（人の判断。手順書 §10.3）。

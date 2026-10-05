@@ -558,7 +558,7 @@ impl Dispatcher {
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
-                optimizer: None,
+                optimizer: self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
             };
             self.store.append_event(
                 task.id,

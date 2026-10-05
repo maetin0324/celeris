@@ -65,6 +65,29 @@ export type IntegrationMethod = "merge" | "pr" | "discard";
  * 取り込みの行方（ADR-0043 D5）。
  */
 export type IntegrationState = "done" | "open" | "merged" | "closed" | "conflict" | "failed";
+export type ChatAttachmentState = "ready" | "deleted";
+export type ChatActor = "human" | "cos" | "system";
+export type ChatCardKind = "task" | "decision" | "question" | "approval" | "plan_gate" | "notice" | "operation";
+export type ChatEventData =
+  | ChatMessageData
+  | ChatTextDeltaData
+  | ChatStatusData
+  | ChatToolData
+  | ChatRunData
+  | ChatQueueData
+  | ChatCardData
+  | ChatThreadData;
+export type ChatMessageRole = "user" | "assistant" | "system";
+export type ChatMessageState = "queued" | "running" | "completed" | "cancelled" | "interrupted" | "failed";
+export type ChatStatusPhase = "queued" | "starting" | "thinking" | "working" | "waiting";
+export type ChatToolState = "running" | "completed" | "failed";
+export type ChatSessionMode = "new" | "resumed" | "fresh";
+export type ChatRunState = "queued" | "running" | "stopping" | "completed" | "stopped" | "failed" | "interrupted";
+export type ChatThreadKind = "human" | "inbox" | "legacy";
+export type ChatThreadStatus = "open" | "archived";
+export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread";
+export type ChatSendMode = "queue" | "interrupt";
+export type ChatReferenceOwnerKind = "task" | "knowledge_inbox";
 /**
  * 誰が書いたか（`task_comments.author_kind` の CHECK と対）。
  */
@@ -1595,6 +1618,29 @@ export interface ApiV1Schema {
   cancel: CancelBody;
   change_diff: ChangeDiffView;
   changes: ChangesView;
+  chat_attachment: ChatAttachment;
+  chat_attachment_response: ChatAttachmentResponse;
+  chat_card: ChatCard;
+  chat_event: ChatEvent;
+  chat_event_list: ChatEventListResponse;
+  chat_message: ChatMessage;
+  chat_message_list: ChatMessageListResponse;
+  chat_message_response: ChatMessageResponse;
+  chat_post_message: ChatPostMessageRequest;
+  chat_post_message_response: ChatPostMessageResponse;
+  chat_reference: ChatReferenceRequest;
+  chat_reference_response: ChatReferenceResponse;
+  chat_resume_queue: ChatResumeQueueRequest;
+  chat_run: ChatRun;
+  chat_run_response: ChatRunResponse;
+  chat_stop: ChatStopRequest;
+  chat_stop_response: ChatStopResponse;
+  chat_thread: ChatThread;
+  chat_thread_create: ChatCreateThreadRequest;
+  chat_thread_detail: ChatThreadDetailResponse;
+  chat_thread_list: ChatThreadListResponse;
+  chat_thread_patch: ChatPatchThreadRequest;
+  chat_thread_response: ChatThreadResponse;
   cluster_connect_result: ClusterConnectResult;
   cluster_connect_start: ClusterConnectStart;
   cluster_settings: ClusterSettingsView;
@@ -2458,6 +2504,189 @@ export interface DiffStat {
   additions: number;
   deletions: number;
   files: number;
+}
+export interface ChatAttachment {
+  download_url: string;
+  expires_at?: string | null;
+  id: string;
+  media_type: string;
+  name: string;
+  preview_url?: string | null;
+  sha256: string;
+  size_bytes: number;
+  state: ChatAttachmentState;
+  thread_id: string;
+}
+export interface ChatAttachmentResponse {
+  attachment: ChatAttachment;
+}
+export interface ChatCard {
+  actor: ChatActor;
+  href: string;
+  id: string;
+  kind: ChatCardKind;
+  operation_id?: string | null;
+  reason?: string | null;
+  state: string;
+  title: string;
+}
+export interface ChatEvent {
+  at: string;
+  data: ChatEventData;
+  id: string;
+  message_id?: string | null;
+  run_id?: string | null;
+  thread_id: string;
+  type: ChatEventType;
+}
+export interface ChatMessageData {
+  message: ChatMessage;
+}
+export interface ChatMessage {
+  attachment_ids: string[];
+  cards: ChatCard[];
+  client_message_id?: string | null;
+  created_at: string;
+  id: string;
+  reply_to_id?: string | null;
+  role: ChatMessageRole;
+  run_id?: string | null;
+  seq: number;
+  state: ChatMessageState;
+  text: string;
+  thread_id: string;
+  updated_at: string;
+}
+export interface ChatTextDeltaData {
+  offset: number;
+  text: string;
+}
+export interface ChatStatusData {
+  phase: ChatStatusPhase;
+  summary: string;
+}
+export interface ChatToolData {
+  call_id: string;
+  detail?: string | null;
+  error: boolean;
+  name: string;
+  state: ChatToolState;
+  summary: string;
+  truncated: boolean;
+}
+export interface ChatRunData {
+  run: ChatRun;
+}
+export interface ChatRun {
+  account_id?: string | null;
+  finished_at?: string | null;
+  harness?: string | null;
+  id: string;
+  input_message_id: string;
+  llm_source?: string | null;
+  model?: string | null;
+  output_message_id?: string | null;
+  provider?: string | null;
+  reason?: string | null;
+  session_mode?: ChatSessionMode | null;
+  started_at?: string | null;
+  state: ChatRunState;
+  thread_id: string;
+  tier?: string | null;
+}
+export interface ChatQueueData {
+  message_ids: string[];
+  paused: boolean;
+}
+export interface ChatCardData {
+  card: ChatCard;
+}
+export interface ChatThreadData {
+  thread: ChatThread;
+}
+export interface ChatThread {
+  active_run_id?: string | null;
+  created_at: string;
+  id: string;
+  kind: ChatThreadKind;
+  project_id?: string | null;
+  queue_paused: boolean;
+  queued_count: number;
+  revision: number;
+  status: ChatThreadStatus;
+  title: string;
+  updated_at: string;
+}
+export interface ChatEventListResponse {
+  items: ChatEvent[];
+  next_cursor?: string | null;
+}
+export interface ChatMessageListResponse {
+  items: ChatMessage[];
+  next_after_seq?: number | null;
+  next_before_seq?: number | null;
+  snapshot_event_id: string;
+}
+export interface ChatMessageResponse {
+  message: ChatMessage;
+}
+export interface ChatPostMessageRequest {
+  attachment_ids: string[];
+  client_message_id: string;
+  mode: ChatSendMode;
+  reply_to_id?: string | null;
+  resume_queue: boolean;
+  text: string;
+}
+export interface ChatPostMessageResponse {
+  message: ChatMessage;
+  queue_position: number;
+  run_id?: string | null;
+}
+export interface ChatReferenceRequest {
+  idempotency_key: string;
+  owner_id: string;
+  owner_kind: ChatReferenceOwnerKind;
+}
+export interface ChatReferenceResponse {
+  attachment_id: string;
+  owner_id: string;
+  owner_kind: ChatReferenceOwnerKind;
+}
+export interface ChatResumeQueueRequest {
+  expected_revision: number;
+}
+export interface ChatRunResponse {
+  run: ChatRun;
+}
+export interface ChatStopRequest {
+  run_id: string;
+}
+export interface ChatStopResponse {
+  queue_paused: boolean;
+  run: ChatRun;
+}
+export interface ChatCreateThreadRequest {
+  client_thread_id: string;
+  project_id?: string | null;
+  title: string;
+}
+export interface ChatThreadDetailResponse {
+  active_run?: ChatRun | null;
+  last_event_id: string;
+  thread: ChatThread;
+}
+export interface ChatThreadListResponse {
+  items: ChatThread[];
+  next_cursor?: string | null;
+}
+export interface ChatPatchThreadRequest {
+  expected_revision: number;
+  status?: ChatThreadStatus | null;
+  title?: string | null;
+}
+export interface ChatThreadResponse {
+  thread: ChatThread;
 }
 /**
  * `POST /clusters/{id}/connect/code` の応答。コード・URL は含まない。

@@ -36,3 +36,37 @@ test("shared rich fixture renders data on the seven task surfaces and Console", 
     await gateway.close();
   }
 });
+
+test("default fixture shows reports, approvals and the review-pending task without fetch errors", async ({ page }) => {
+  const gateway = await startFixtureGateway();
+  try {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${gateway.base}/reports?report=RP1`);
+    await expect(page.locator("h1")).toContainText("報告");
+    await expect(page.locator("[data-report-id]")).toHaveCount(3);
+    await expect(page.locator("[data-fetch-state='loading']")).toHaveCount(0);
+    await expect(page.locator("[data-fetch-state='error']")).toHaveCount(0);
+    await expect(page.locator("[data-report-id='RP1']")).toContainText("画面の検証結果を報告します");
+    await expect(page.getByText("360・390・412・1440 px の撮影を確認しました。")).toBeVisible();
+
+    await page.goto(`${gateway.base}/approvals`);
+    await expect(page.locator("h1")).toContainText("承認");
+    await expect(page.locator("[data-fetch-state='loading']")).toHaveCount(0);
+    await expect(page.locator("[data-fetch-state='error']")).toHaveCount(0);
+    await expect(page.locator("[data-approval-id]")).toHaveCount(2);
+    await expect(page.locator("[data-approval-id]").first()).toContainText("web の画像を書き出してよいですか");
+    await expect(page.locator("[data-approval-id]").last()).toContainText("ビルドの検査を走らせてよいですか");
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto(`${gateway.base}/tasks/T1`);
+    await expect(page.locator("h1")).toContainText("タスクの詳細 T1");
+    await expect(page.locator("[data-fetch-state='loading']")).toHaveCount(0);
+    await expect(page.locator("[data-fetch-state='error']")).toHaveCount(0);
+    await expect(page.getByTestId("execution-view")).toContainText("verifying");
+    await expect(page.getByTestId("execution-view")).toContainText("v1（2 件）");
+    await expect(page.getByTestId("routing-panel")).toContainText("担当 ui-ux");
+    await expect(page.getByTestId("routing-panel")).toContainText("R1: standard / standard / ui-ux（rule-standard）");
+  } finally {
+    await gateway.close();
+  }
+});

@@ -194,7 +194,135 @@ export function richFixtures() {
     },
   });
   const progressLine = (seq, kind, text, tool) => ({ seq, at: richNow, kind, text, ...(tool ? { tool } : {}) });
+  // 報告・承認・review 待ちの task の実行と routing。形は schema の required から組み（fixtureFor）、
+  // 画面が読む欄（headline・body・decision・phase・plan・runs など）だけを正常な値で埋める。
+  const report = (id, kind, headline, extra) => ({
+    ...fixtureFor(schema.$defs.Report),
+    id,
+    kind,
+    headline,
+    node_id: "cos",
+    level: 0,
+    created_at: richNow,
+    ...extra,
+  });
+  const reportRows = {
+    RP1: report("RP1", "result", "画面の検証結果を報告します", {
+      body: "## 検証の結果\n\n- 360・390・412・1440 px の撮影を確認しました。\n- 長い path と長文の折り返しに崩れはありません。\n\n受信箱の認可を判断してください。",
+      task_id: "T1",
+      project_id: "P1",
+      sources: ["RP2", "RP3"],
+    }),
+    RP2: report("RP2", "progress", "子タスクの状態を確認しました", {
+      body: "T2 と T3 の状態を確認し、依存の順を保ったまま進めています。",
+      level: 2,
+      node_id: "ui-ux",
+      task_id: "T2",
+      project_id: "P1",
+    }),
+    RP3: report("RP3", "question", "承認の判断をお願いします", {
+      body: "cluster-hpc への依頼を認めてよいか、受信箱で判断をお願いします。",
+      level: 1,
+      node_id: "software-engineering",
+      task_id: "T4",
+      project_id: "P1",
+    }),
+  };
+  const approval = (id, decision, question, extra) => ({
+    ...fixtureFor(schema.$defs.Approval),
+    id,
+    decision,
+    question,
+    node_id: "ui-ux",
+    task_id: "T1",
+    project_id: "P1",
+    created_at: "2026-10-03T09:00:00Z",
+    decided_at: "2026-10-03T10:00:00Z",
+    answer: null,
+    ...extra,
+  });
+  const approvalRows = [
+    approval("01J8APPROVAL0000000000001", "once", "ビルドの検査を走らせてよいですか", { answer: "はい。今回だけ。" }),
+    approval("01J8APPROVAL0000000000002", "standing", "web の画像を書き出してよいですか", {
+      decided_at: richNow,
+      answer: "同じ依頼は今後も認めます。",
+    }),
+  ];
+  const workUnit = (seq, key, status) => ({
+    ...fixtureFor(schema.$defs.WorkUnitView),
+    id: `WU${seq}`,
+    key,
+    seq,
+    status,
+    created_at: richNow,
+    updated_at: richNow,
+  });
+  const execution = fixtureFor(schema.$defs.TaskExecutionView);
+  execution.phase = "verifying";
+  execution.plan = {
+    ...fixtureFor(schema.$defs.ExecutionPlanView),
+    id: "PL1",
+    task_id: "T1",
+    version: 1,
+    origin: "planner",
+    status: "active",
+    created_at: richNow,
+    work_units: [workUnit(1, "fix-screens", "done"), workUnit(2, "verify-screens", "running")],
+  };
+  execution.gate = {
+    ...fixtureFor(schema.$defs.ExecutionGateDecision),
+    mode: "compound",
+    source: "policy",
+    score: 6,
+    threshold: 5,
+    rule_id: "signals-v1",
+    policy_version: "1",
+    shadow: false,
+  };
+  execution.runs = detail.runs;
+  execution.metrics = { ...execution.metrics, work_units_total: 2, work_units_done: 1, has_plan: true };
+  const routing = {
+    ...fixtureFor(schema.properties.task_routing),
+    task_id: "T1",
+    assignee: "ui-ux",
+    runs: [
+      {
+        ...fixtureFor(schema.$defs.RoutingAudit),
+        task_id: "T1",
+        run_id: "R1",
+        adapter: "codex",
+        lane: "standard",
+        model: "standard",
+        org_node: "ui-ux",
+        rule_id: "rule-standard",
+      },
+    ],
+  };
+  const reviewRoutes = {
+    "/api/v1/reports": { items: Object.values(reportRows) },
+    ...Object.fromEntries(
+      Object.entries(reportRows).map(([id, row]) => [
+        `/api/v1/reports/${id}`,
+        { report: row, sources_expanded: (row.sources ?? []).map((source) => reportRows[source]).filter(Boolean) },
+      ]),
+    ),
+    "/api/v1/approvals": { items: approvalRows },
+    "/api/v1/standing-rules": {
+      items: [
+        {
+          ...fixtureFor(schema.$defs.StandingRule),
+          id: "SR1",
+          rule: "web の画像を書き出す依頼は今後も認める",
+          node_id: "ui-ux",
+          created_at: "2026-10-03T10:00:00Z",
+        },
+      ],
+    },
+    "/api/v1/tasks/T1/execution": execution,
+    "/api/v1/tasks/T1/routing": routing,
+  };
   return {
+    ...reviewRoutes,
     "/api/v1/tasks": {
       items: tasks,
       total: tasks.length,

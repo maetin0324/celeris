@@ -349,7 +349,7 @@ impl Dispatcher {
         // tier`（既定 standard。E3〜E6 は frontier 固定だった）。人が Task に `tier:frontier` を
         // 明示していれば `TierSource::Human` として記録する。D21: WU の run は WU の view
         // （objective/acceptance/budget/genre/features を差し替えたもの）で lane を決める。
-        let lane_decision = if is_planner_dispatch {
+        let (lane_decision, escalation_audit) = if is_planner_dispatch {
             let tier = task.worker_hint.tier;
             let (source, rule_id, reason) = if planner_human_frontier {
                 (
@@ -375,23 +375,29 @@ impl Dispatcher {
                         .to_string(),
                 )
             };
-            Some(task_core::LaneDecision {
-                lane: tier,
-                proposed: tier,
-                source,
-                rule_id,
-                policy_version: task_core::LANE_POLICY_VERSION.to_string(),
-                features: task_core::TaskFeatures::infer(&task),
-                reasons: vec![reason],
-                clamped_by: None,
-                hint: None,
-                escalation: None,
-                shadow: None,
-            })
+            (
+                Some(task_core::LaneDecision {
+                    lane: tier,
+                    proposed: tier,
+                    source,
+                    rule_id,
+                    policy_version: task_core::LANE_POLICY_VERSION.to_string(),
+                    features: task_core::TaskFeatures::infer(&task),
+                    reasons: vec![reason],
+                    clamped_by: None,
+                    hint: None,
+                    escalation: None,
+                    shadow: None,
+                }),
+                None,
+            )
         } else if let Some(wu) = &current_wu {
-            self.decide_lane_for_work_unit(&task, wu)?
+            // WU の lane は task の lane を上限にする（ADR-0074 D5.2）。軌跡 escalation は task の
+            // run だけに掛け、WU の retry では上げない（ADR-0072 D21）。
+            (self.decide_lane_for_work_unit(&task, wu)?, None)
         } else {
             self.decide_lane(&task)?
+                .map_or((None, None), |(decision, audit)| (Some(decision), audit))
         };
         if let Some(decision) = &lane_decision {
             task.worker_hint.tier = decision.lane;
@@ -628,7 +634,8 @@ impl Dispatcher {
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
-                escalation: None,
+                // Phase 3（ADR 2026-10-04 §5）: 上げた/上げなかった決定の構造化監査。task の run だけ。
+                escalation: escalation_audit,
                 optimizer: match &enforce_round {
                     Some(round) => Some(self.enforce_optimizer_trace(
                         &task.worker_hint,
@@ -1230,12 +1237,14 @@ impl Dispatcher {
     /// 呼び出し側）。**先頭のリポジトリの** `[commands] check` だけを使う。
     /// ADR-0069 D3 / D6（Phase 114）: このタスクの lane を決める（`routing` を持つ execute タスクだけ。
     /// それ以外は `None` で従来どおり `worker_hint.tier`）。担当の実効 profile の天井（`allowed_tiers` /
-    /// `budget.max_lane`）で丸め、やり直し（`attempts > 0`）ならイベントの履歴から
-    /// `EscalationPolicy` で 1 段まで上げる。LLM は使わない（DESIGN 原則 1）。
+    /// `budget.max_lane`）で丸め、やり直し（`attempts > 0`）ならイベントの軌跡から
+    /// `EscalationPolicy::decide_trajectory` で 1 段まで上げる。上げた/上げなかった決定を
+    /// `EscalationAudit` として返す（`RoutingRecord.escalation` に残す）。LLM は使わない（DESIGN 原則 1）。
     pub(super) fn decide_lane(
         &self,
         task: &Task,
-    ) -> Result<Option<task_core::LaneDecision>, DispatchError> {
+    ) -> Result<Option<(task_core::LaneDecision, Option<task_core::EscalationAudit>)>, DispatchError>
+    {
         if task.routing.is_none() || task.kind != TaskKind::Execute {
             return Ok(None);
         }
@@ -1252,28 +1261,47 @@ impl Dispatcher {
         let Some(mut decision) = task_core::model_policy::decide_for_task(task, &ceiling) else {
             return Ok(None);
         };
-        if task.attempts > 0 && decision.source.policy_decides() {
+        let mut audit = None;
+        // 人の明示・System の lane も評価する（上げず、理由を audit に残す。`decide_trajectory` が判定）。
+        if task.attempts > 0 {
             let events: Vec<Event> = self
                 .store
                 .events_for(task.id)?
                 .into_iter()
                 .map(|(_, e)| e)
                 .collect();
-            let history = task_core::retry_policy::attempt_history(task, &events);
-            let policy = task_core::EscalationPolicy::for_task(task, profile.as_ref());
-            let next = policy.decide(&history, decision.lane, task_core::BudgetState::Ok);
-            if next.lane() != decision.lane {
+            let (history, interval_id) =
+                task_core::retry_policy::attempt_history_with_interval(task, &events);
+            let thresholds = task_core::EscalationThresholds {
+                org_ceiling: ceiling.clone(),
+                ..task_core::EscalationThresholds::default()
+            };
+            let policy = task_core::EscalationPolicy::for_task_with_thresholds(
+                task,
+                profile.as_ref(),
+                &thresholds,
+            );
+            let next = policy.decide_trajectory(
+                &history,
+                decision.lane,
+                decision.source,
+                task_core::BudgetState::Ok,
+                &thresholds,
+                &interval_id,
+            );
+            let described = describe_escalation(&next);
+            if next.selected_lane != decision.lane {
                 decision.reasons.push(format!(
                     "retry lane {:?} -> {:?}",
-                    decision.lane,
-                    next.lane()
+                    decision.lane, next.selected_lane
                 ));
             }
-            decision.lane = next.lane();
-            decision.escalation = Some(next.describe());
-            tracing::info!(task_id = %task.id, attempts = task.attempts, decision = %next.describe(), "retry lane decided (ADR-0069 D6)");
+            decision.lane = next.selected_lane;
+            decision.escalation = Some(described.clone());
+            tracing::info!(task_id = %task.id, attempts = task.attempts, decision = %described, "retry lane decided (ADR-0069 D6 / ADR 2026-10-04 §5)");
+            audit = Some(next);
         }
-        Ok(Some(decision))
+        Ok(Some((decision, audit)))
     }
 
     /// ADR-0046 D5（Phase 59）: `assignee` が無い `ready` のタスクの担当を**決定的に**決める。
@@ -1433,5 +1461,27 @@ fn direct_route_context(
             .filter(|r| r.ok)
             .map(|r| format!("{}: {}", r.rule_id, r.detail))
             .collect(),
+    }
+}
+
+/// 軌跡 escalation の監査を 1 行にする。上げた決定は `escalate <from> -> <to>: <理由>` で始まる
+/// （旧 `RetryDecision::describe` と同じ書式）。上げなかった決定は `retry at <lane>: <理由>`。
+fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
+    let current = audit
+        .previous_lane
+        .filter(|l| {
+            task_core::model_policy::lane_rank(*l)
+                >= task_core::model_policy::lane_rank(audit.requested_lane)
+        })
+        .unwrap_or(audit.requested_lane);
+    if task_core::model_policy::lane_rank(audit.selected_lane)
+        > task_core::model_policy::lane_rank(current)
+    {
+        format!(
+            "escalate {current:?} -> {:?}: {}",
+            audit.selected_lane, audit.reason
+        )
+    } else {
+        format!("retry at {:?}: {}", audit.selected_lane, audit.reason)
     }
 }

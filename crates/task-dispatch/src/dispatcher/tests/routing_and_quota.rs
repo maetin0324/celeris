@@ -1399,6 +1399,221 @@ async fn repeated_review_failures_escalate_the_retry_lane_one_step() {
     );
 }
 
+/// 試行 1 回分の event（`RoutingDecided` と結果）を積む。`outcome` は `review_fail`（品質失敗）・
+/// `requeue`（供給失敗）・`reopen`（区間の区切り）。
+fn push_trajectory_run(store: &dyn TaskStore, task: &Task, run: &str, lane: Tier, outcome: &str) {
+    let mut decision = task_core::model_policy::decide_for_task(task, &Default::default()).unwrap();
+    decision.lane = lane;
+    let record = task_core::RoutingRecord {
+        org_node: task.assignee.clone(),
+        harness: Some("coding".into()),
+        decision,
+        resolution: task_core::model_routing::LaneResolution {
+            lane: Some(lane),
+            ..Default::default()
+        },
+        quota_reason: None,
+        work_unit_id: None,
+        escalation: None,
+        optimizer: None,
+    };
+    store
+        .append_event(
+            task.id,
+            &Event::RoutingDecided {
+                run_id: run.into(),
+                record: Box::new(record),
+            },
+        )
+        .unwrap();
+    if outcome == "review_fail" {
+        store
+            .append_event(
+                task.id,
+                &Event::ReviewVerdict {
+                    run_id: format!("{run}-review"),
+                    criterion_idx: 0,
+                    pass: false,
+                    reason: "tests fail".into(),
+                },
+            )
+            .unwrap();
+    }
+    let (from, to) = if outcome == "reopen" {
+        (Status::Done, Status::Ready)
+    } else {
+        (Status::Reviewing, Status::Ready)
+    };
+    store
+        .append_event(
+            task.id,
+            &Event::Transitioned {
+                from,
+                to,
+                reason: outcome.into(),
+            },
+        )
+        .unwrap();
+}
+
+/// 軌跡の試験用のタスク（execute・既定の経路・命令は cheap に落ちる）。`attempts > 0` は retry の評価に要る。
+fn trajectory_task(dir: &std::path::Path, max_retries: u32) -> Task {
+    let mut task = new_task(
+        dir,
+        Check::Command {
+            cmd: "cargo test".into(),
+            expect_exit: 0,
+        },
+        max_retries,
+    );
+    task.objective = "crates/task-core/src/model.rs の typo を直す".into();
+    task.genre = Some("coding".into());
+    task.routing = Some(task_core::TaskRouting::default());
+    task.attempts = 1;
+    task
+}
+
+/// Phase 3（ADR 2026-10-04 §5・§10）: 軌跡 escalation は同じ lane の品質失敗（review・検査）2 回で
+/// 1 段だけ上げる。供給失敗・人の明示 lane・組織の天井・試行上限では上げず、reopen で数え直す。
+/// 上げた/上げなかった決定は `EscalationAudit` として返り、`RoutingDecided` の record にも載る。
+#[tokio::test]
+async fn routing_trajectory_escalates_one_lane_and_respects_caps() {
+    fn lane_now(d: &Dispatcher, task: &Task) -> (Tier, task_core::EscalationAudit) {
+        let (decision, audit) = d.decide_lane(task).unwrap().expect("routed task");
+        (decision.lane, audit.expect("retry is audited"))
+    }
+
+    // 品質失敗 2 回で cheap → standard（1 段だけ）。供給失敗は数えず据え置く。
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let task = trajectory_task(ws.path(), 3);
+    store.insert(&task).unwrap();
+    let d = dispatcher(store.clone(), three_lane_adapter(), 1);
+
+    push_trajectory_run(store.as_ref(), &task, "r1", Tier::Cheap, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(
+        (lane, audit.counted_failures),
+        (Tier::Cheap, 1),
+        "{audit:?}"
+    );
+    assert_eq!(audit.selected_lane, Tier::Cheap);
+
+    push_trajectory_run(store.as_ref(), &task, "r2", Tier::Cheap, "requeue");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(
+        (lane, audit.counted_failures),
+        (Tier::Cheap, 1),
+        "{audit:?}"
+    );
+
+    push_trajectory_run(store.as_ref(), &task, "r3", Tier::Cheap, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(lane, Tier::Standard, "{audit:?}");
+    assert_eq!(audit.previous_lane, Some(Tier::Cheap));
+    assert_eq!(audit.counted_failures, 2);
+    let (decision, _) = d.decide_lane(&task).unwrap().unwrap();
+    assert!(
+        decision
+            .escalation
+            .as_deref()
+            .is_some_and(|e| e.starts_with("escalate Cheap -> Standard")),
+        "{:?}",
+        decision.escalation
+    );
+
+    // 上げた lane では数え直す（1 回の失敗では据え置き）。
+    push_trajectory_run(store.as_ref(), &task, "r4", Tier::Standard, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(
+        (lane, audit.counted_failures),
+        (Tier::Standard, 1),
+        "{audit:?}"
+    );
+
+    // 総試行 4 回（既定の上限）に達したら、これ以上は上げない（max_retries 3 → 上限 4）。
+    push_trajectory_run(store.as_ref(), &task, "r5", Tier::Standard, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(lane, Tier::Standard, "{audit:?}");
+    assert!(audit.reason.contains("max_total_attempts"), "{audit:?}");
+
+    // reopen は履歴を区切る。区間の中の 1 回の失敗は数えず、cheap のまま。
+    push_trajectory_run(store.as_ref(), &task, "r6", Tier::Standard, "reopen");
+    push_trajectory_run(store.as_ref(), &task, "r7", Tier::Cheap, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(
+        (lane, audit.counted_failures),
+        (Tier::Cheap, 1),
+        "{audit:?}"
+    );
+    assert!(audit.interval_id.starts_with("reopen:"), "{audit:?}");
+
+    // 組織の天井（cheap まで）を超えて上げない。決定は audit に残る。
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut eng = org_node_of("eng", Some("secretary"), OrgKind::Department, None);
+    eng.profile.budget.max_lane = Some(Tier::Cheap);
+    for n in [
+        org_node_of("secretary", None, OrgKind::Secretary, Some("secretary")),
+        eng,
+    ] {
+        store.org_upsert(&n).unwrap();
+    }
+    let mut task = trajectory_task(ws.path(), 3);
+    task.assignee = Some("eng".into());
+    store.insert(&task).unwrap();
+    let d = dispatcher(store.clone(), three_lane_adapter(), 1);
+    push_trajectory_run(store.as_ref(), &task, "c1", Tier::Cheap, "review_fail");
+    push_trajectory_run(store.as_ref(), &task, "c2", Tier::Cheap, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(lane, Tier::Cheap, "{audit:?}");
+    assert!(audit.reason.contains("ceiling"), "{audit:?}");
+
+    // 人の明示 lane は policy が決めないので、品質失敗が続いても上げない。
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = trajectory_task(ws.path(), 3);
+    task.worker_hint.tier = Tier::Cheap;
+    task.routing = Some(task_core::TaskRouting {
+        tier_source: TierSource::Human,
+        ..task_core::TaskRouting::default()
+    });
+    store.insert(&task).unwrap();
+    let d = dispatcher(store.clone(), three_lane_adapter(), 1);
+    push_trajectory_run(store.as_ref(), &task, "h1", Tier::Cheap, "review_fail");
+    push_trajectory_run(store.as_ref(), &task, "h2", Tier::Cheap, "review_fail");
+    let (lane, audit) = lane_now(&d, &task);
+    assert_eq!(lane, Tier::Cheap, "{audit:?}");
+    assert_eq!(audit.requested_lane, Tier::Cheap);
+    assert!(audit.reason.contains("explicit"), "{audit:?}");
+
+    // 上げた決定は RoutingDecided の record に載る（tick で実際に走らせて確かめる）。
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = trajectory_task(ws.path(), 3);
+    task.routing = Some(task_core::TaskRouting::default());
+    task.attempts = 2;
+    task.updated_at = OffsetDateTime::now_utc() - time::Duration::days(1);
+    store.insert(&task).unwrap();
+    push_trajectory_run(store.as_ref(), &task, "t1", Tier::Cheap, "review_fail");
+    push_trajectory_run(store.as_ref(), &task, "t2", Tier::Cheap, "review_fail");
+    let mut d = dispatcher(store.clone(), three_lane_adapter(), 1);
+    d.tick().unwrap();
+    let events = store.events_for(task.id).unwrap();
+    let record = routing_record(&events).expect("routing_decided");
+    assert_eq!(record.decision.lane, Tier::Standard);
+    let audit = record.escalation.expect("audit on the record");
+    assert_eq!(
+        (
+            audit.requested_lane,
+            audit.selected_lane,
+            audit.counted_failures
+        ),
+        (Tier::Cheap, Tier::Standard, 2),
+        "{audit:?}"
+    );
+}
+
 /// `skills_context` は KB にある skill を `SkillMount` に解決し、無い名前は 2 つ目の戻り値
 /// （`missing`）に回す（run は落とさない）。
 #[test]

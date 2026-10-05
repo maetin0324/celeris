@@ -383,3 +383,15 @@ Phase 2（p2-state-cost）の実装は次のとおり。証拠は `agent-docs/pr
 - `routing_features_recorded`（stage=dispatch）は `RoutingDecided` を書いた run だけ、同じ decision_id で 1 回追記する。
 - `Dispatcher::set_routing_context_registry` で registry を差し込んだときだけ run_id に結んで登録し（ttl は run の wall + lease grace）、ref を worker protocol の `RunContext.routing_context_ref`（optional）に載せる。run の完了・打ち切りで release する。daemon の配線・task-worker の搬送・reviewer run は未配線（後続 unit）。
 - 試験: `routing_context_extracts_acceptance_tools_environment_and_history`、`routing_context_is_registered_recorded_once_and_released_at_run_end`（task-dispatch）。証拠は `agent-docs/progress/2026-10-04-multi-objective-routing/p3-dispatch-context.md`。
+
+## 付記（2026-10-05、Phase 3 dispatch-esc unit の実装済み範囲）
+
+この付記は task の run の retry lane 決定に軌跡 escalation を配線した範囲を記録する。設定ファイルからの閾値読み込み、reward/outcome の追記、audit API は後続 unit が担当する。
+
+- `dispatch_run::decide_lane` は `attempt_history_with_interval` で events の軌跡を作り、`EscalationPolicy::for_task_with_thresholds` と `decide_trajectory` で lane を決める（従来の `decide` 直呼びをやめた）。閾値は `EscalationThresholds::default()`（同 lane の品質失敗 2 回、総試行 4 回）。`org_ceiling` は担当の実効 profile の天井。task の天井と WU の天井は今は渡さない（既定の無制限）。
+- 上がるのは `ReviewFailed`・`VerificationFailed`（acceptance・review・決定的検査の失敗）だけ。`requeue`（供給失敗）は数えず据え置き、`BudgetExhausted` と `LowQuality`（worker の自己申告）は品質証拠にしない。`reopen` は区間を区切り、区間 ID（`reopen:<index>`）の下で数え直す。
+- 人の明示・System の lane は上げない。ただし `attempts > 0` の run では監査（`EscalationAudit`）を必ず残す（`reason` が `explicit lane; escalation disabled`）。
+- `RoutingRecord.escalation` に `EscalationAudit` を載せる（task の run、`attempts > 0`）。WU の run と計画 run は従来どおり `None`（WU の lane は task の lane を上限にする既存規則のまま。軌跡 escalation は WU の retry では行わない）。
+- `LaneDecision.escalation`（文字列）は `escalate <from> -> <to>: <理由>` で始まる。上げなかった決定は `retry at <lane>: <理由>`。
+- `BudgetState` は今は `Ok` 固定。quota 層の defer は軌跡に入れていない（予算切れは `BudgetExhausted` の履歴として別に止まる）。
+- 試験: `routing_trajectory_escalates_one_lane_and_respects_caps`（task-dispatch の dispatcher/tests）。品質失敗 2 回で 1 段（cheap → standard）、供給失敗で据え置き、総試行上限 4 で止まる、reopen 後の数え直し、組織天井（cheap まで）、人の明示 lane の据え置き、tick 後の `RoutingDecided` の record に audit が載る。既存の `repeated_review_failures_escalate_the_retry_lane_one_step` は変更なしで通る。証拠は `agent-docs/progress/2026-10-04-multi-objective-routing/p3-dispatch-esc.md`。

@@ -19,7 +19,7 @@ const outlineOf = (page: Page) =>
 
 test("pointer で遷移した後の h1 には focus 枠が出ず、keyboard で遷移すると出る", async ({ page }) => {
   await page.goto(gateway.base);
-  const nav = page.getByRole("navigation", { name: "主要" });
+  const nav = page.getByRole("navigation", { name: "主要", exact: true });
   await nav.getByRole("link", { name: "タスク", exact: true }).click();
   const inbox = page.getByRole("heading", { level: 1, name: "タスク" });
   await expect(inbox).toBeFocused();

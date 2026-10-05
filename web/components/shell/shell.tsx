@@ -1,4 +1,5 @@
-import { Link, useRouter } from "@tanstack/react-router";
+import { Link, useLocation, useRouter } from "@tanstack/react-router";
+import { Dialog } from "radix-ui";
 import { type ReactNode, useEffect, useRef, useState } from "react";
 import { badgeView } from "../../api/queries/badges";
 import type { ConnectionState } from "../../api/realtime/connection-state";
@@ -8,7 +9,7 @@ import { formatAbsolute, formatRelative, useLastHello } from "../../lib/time";
 import { Badge, type BadgeTone } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
 import { Icon } from "../ui/icon";
-import { navGroups, navItems } from "./nav-items";
+import { mobileOtherItems, mobileTabs, navGroups, navItems } from "./nav-items";
 import { installScrollMemory } from "./scroll-memory";
 import { useShellServerState } from "./use-server-state";
 
@@ -21,6 +22,11 @@ export function Shell({ children }: { children: ReactNode }) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButton = useRef<HTMLButtonElement>(null);
+  // 画面下のタブの「その他」のシート。遷移で閉じたときは focus を「その他」へ戻さず、遷移先の見出しへ移す。
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreOpenRef = useRef(false);
+  moreOpenRef.current = moreOpen;
+  const moreClosedByNavigation = useRef(false);
   // shell は root の認証 gate を通ったときだけ mount される。
   const server = useShellServerState(true);
   const badges: Record<string, { view: NavBadgeView; tone: BadgeTone }> = {
@@ -46,6 +52,10 @@ export function Shell({ children }: { children: ReactNode }) {
       router.subscribe("onResolved", ({ pathChanged }) => {
         if (!pathChanged) return;
         setMenuOpen(false);
+        if (moreOpenRef.current) {
+          moreClosedByNavigation.current = true;
+          setMoreOpen(false);
+        }
         requestAnimationFrame(() => {
           const heading = document.querySelector<HTMLElement>("#main h1");
           heading?.focus({ preventScroll: true });
@@ -139,7 +149,8 @@ export function Shell({ children }: { children: ReactNode }) {
           </p>
         )}
       </header>
-      <div className="flex min-w-0 flex-1 flex-col bg-surface">
+      {/* md 未満は画面下の固定タブ（MobileTabBar）が覆う分だけ列の下を空け、本文と Console の置き場を隠さない。 */}
+      <div className="flex min-w-0 flex-1 flex-col bg-surface pb-shell-inset">
         {server.down && (
           <p
             role="alert"
@@ -154,6 +165,13 @@ export function Shell({ children }: { children: ReactNode }) {
         </main>
         <aside data-console-slot aria-label="Console" className="border-t border-border" />
       </div>
+      <MobileTabBar
+        badges={badges}
+        notificationsUnread={(server.notificationsBadge ?? 0) > 0}
+        open={moreOpen}
+        onOpenChange={setMoreOpen}
+        closedByNavigation={moreClosedByNavigation}
+      />
     </div>
   );
 }
@@ -185,5 +203,118 @@ function NavBadge({ badge }: { badge: { view: NavBadgeView; tone: BadgeTone } | 
     <Badge asChild data-badge tone={tone} role="img" aria-label={badge.view.label}>
       <span className="shrink-0">{badge.view.text}</span>
     </Badge>
+  );
+}
+
+const tabClass =
+  "relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 text-label font-medium whitespace-nowrap hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+
+// md 未満の画面下の固定タブ（旧 GUI の MobileTabBar）。主要 4 つと「その他」。「その他」は残りの項目を下からのシートで出す。
+// シートは Radix Dialog（focus trap・Escape・aria-modal・閉じた後に「その他」へ focus を戻す）。
+function MobileTabBar({
+  badges,
+  notificationsUnread,
+  open,
+  onOpenChange,
+  closedByNavigation,
+}: {
+  badges: Record<string, { view: NavBadgeView; tone: BadgeTone }>;
+  notificationsUnread: boolean;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  closedByNavigation: { current: boolean };
+}) {
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const otherActive = mobileOtherItems.some((item) => pathname === item.to || pathname.startsWith(`${item.to}/`));
+  return (
+    <nav
+      aria-label="主要（モバイル）"
+      data-testid="mobile-tabbar"
+      className="fixed inset-x-0 bottom-0 z-30 grid h-shell-inset grid-cols-5 border-t border-border bg-surface md:hidden"
+      style={{ paddingBottom: "env(safe-area-inset-bottom)" }}
+    >
+      {mobileTabs.map((tab) => (
+        <Link
+          key={tab.to}
+          to={tab.to}
+          activeOptions={{ exact: tab.to === "/" }}
+          activeProps={{ "aria-current": "page", className: "text-primary" }}
+          inactiveProps={{ className: "text-muted-foreground" }}
+          className={tabClass}
+        >
+          <Icon name={tab.icon} />
+          <span>{tab.label}</span>
+          {badges[tab.to] ? (
+            <span className="absolute top-1 left-1/2 ml-2">
+              <NavBadge badge={badges[tab.to]} />
+            </span>
+          ) : null}
+        </Link>
+      ))}
+      <Dialog.Root open={open} onOpenChange={onOpenChange}>
+        <Dialog.Trigger
+          data-active={otherActive ? "true" : undefined}
+          className={`${tabClass} ${open || otherActive ? "text-primary" : "text-muted-foreground"}`}
+        >
+          <Icon name="more-horizontal" />
+          <span>その他</span>
+          {notificationsUnread && !otherActive ? (
+            <span aria-hidden="true" className="absolute top-2 left-1/2 ml-3 size-2 rounded-full bg-info-foreground" />
+          ) : null}
+        </Dialog.Trigger>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 bg-overlay transition-opacity duration-150 motion-reduce:transition-none" />
+          <Dialog.Content
+            aria-describedby={undefined}
+            // Radix は背後を aria-hidden にするが aria-modal は付けない。読み上げにモーダルであることを明示する。
+            aria-modal="true"
+            data-testid="mobile-more-sheet"
+            onCloseAutoFocus={(event) => {
+              // 遷移で閉じたときは shell が遷移先の見出しへ focus を移す。
+              if (!closedByNavigation.current) return;
+              closedByNavigation.current = false;
+              event.preventDefault();
+            }}
+            className="fixed inset-x-0 bottom-0 max-h-2/3 overflow-y-auto overscroll-contain rounded-t-lg border-t border-border bg-surface px-4 pt-4 text-foreground shadow-dialog"
+            style={{ paddingBottom: "max(1rem, env(safe-area-inset-bottom))" }}
+          >
+            <div className="flex min-w-0 items-center justify-between gap-2">
+              <Dialog.Title className="text-section font-semibold">その他</Dialog.Title>
+              <Dialog.Close
+                aria-label="閉じる"
+                className="inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center rounded-md text-foreground hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                <Icon name="close" />
+              </Dialog.Close>
+            </div>
+            {navGroups.map((group) => {
+              const items = mobileOtherItems.filter((item) => item.group === group.key);
+              if (items.length === 0) return null;
+              return (
+                <div key={group.key} className="mt-3">
+                  <p id={`mobile-more-${group.key}`} className="py-1 text-label font-medium text-muted-foreground">
+                    {group.label}
+                  </p>
+                  <ul aria-labelledby={`mobile-more-${group.key}`} className="grid grid-cols-2 gap-2">
+                    {items.map((item) => (
+                      <li key={item.to} className="min-w-0">
+                        <Link
+                          to={item.to}
+                          activeProps={{ "aria-current": "page", className: "bg-accent font-semibold" }}
+                          className="flex min-h-11 min-w-0 items-center justify-between gap-2 rounded-md border border-border px-3 text-body text-foreground hover:bg-accent"
+                        >
+                          <span className="min-w-0 break-words">{item.label}</span>
+                          <NavBadge badge={badges[item.to]} />
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              );
+            })}
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
+    </nav>
   );
 }

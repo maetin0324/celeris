@@ -29,7 +29,8 @@ function composerOf(el: HTMLElement): Element | null {
 function slack(el: HTMLElement, content: Element): number {
   const pad = Number.parseFloat(getComputedStyle(content).paddingBottom) || 0;
   const composer = composerOf(el);
-  const overlap = composer ? Math.max(0, composer.getBoundingClientRect().height - belowOf(el)) : 0;
+  // 送信欄は viewport の下端から浮くことがある（md 未満の画面下のタブ・ソフトキーボード）ので、高さでなく上端から測る。
+  const overlap = composer ? Math.max(0, window.innerHeight - belowOf(el) - composer.getBoundingClientRect().top) : 0;
   return Math.max(0, pad - overlap - GAP);
 }
 
@@ -133,13 +134,14 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // 「最新へ」は送信欄のすぐ上に置く。送信欄の高さ（送信の失敗の文・safe area）は runtime に測る。
+  // 「最新へ」は送信欄のすぐ上に置く。送信欄の上端（送信の失敗の文・safe area・md 未満の画面下のタブ）は runtime に測る。
   useLayoutEffect(() => {
     const el = ref.current;
     const button = latestRef.current;
     if (!away || !el || !button) return;
     const composer = composerOf(el);
-    button.style.bottom = `${(composer ? composer.getBoundingClientRect().height : 0) + GAP}px`;
+    const covered = composer ? Math.max(0, window.innerHeight - composer.getBoundingClientRect().top) : 0;
+    button.style.bottom = `${covered + GAP}px`;
   }, [away]);
 
   function toLatest() {

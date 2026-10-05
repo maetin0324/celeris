@@ -89,7 +89,18 @@ export function GraphScreen({ root, depth }: { root?: string; depth?: number }) 
         </label>
         <Button type="submit">絞り込み</Button>
       </form>
-      <FetchFrame query={query}>{layout && <GraphCanvas layout={layout} />}</FetchFrame>
+      <FetchFrame
+        query={query}
+        empty={query.data?.nodes.length === 0}
+        emptyMessage="表示できるタスクの依存関係はありません。"
+        emptyAction={
+          <Link to="/tasks" className="inline-flex min-h-11 items-center text-primary underline">
+            タスク一覧を見る
+          </Link>
+        }
+      >
+        {layout && <GraphCanvas layout={layout} />}
+      </FetchFrame>
     </ScreenFrame>
   );
 }

@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, type UIEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RunSummary } from "../../api/generated/types";
+import { ConnectionStaleNotice } from "../../components/fetch-state/connection-stale-notice";
 import { ErrorNotice, LoadingState, useDelayPhase } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
@@ -51,6 +52,7 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
       }
     >
       <RunHeader run={run} pending={detail.isPending} failed={detail.isError} onRetry={() => void detail.refetch()} />
+      <ConnectionStaleNotice />
       {log.status === "loading" ? (
         <LoadingState
           phase={loadingPhase}

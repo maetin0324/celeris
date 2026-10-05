@@ -15,11 +15,14 @@ const arg = (name) => {
   return index < 0 ? null : process.argv[index + 1];
 };
 const only = arg("--only");
+const onlyState = arg("--only-state");
 const out = arg("--out");
 const withStates = process.argv.includes("--states");
 if (!out) throw new Error("--out <directory> is required");
 const selected = only ? screens.filter((screen) => screen.fixture === only.split("?")[0]) : screens;
+const selectedStates = onlyState ? states.filter((state) => state.key === onlyState) : states;
 if (!withStates && !selected.length) throw new Error(`unknown screen: ${only}`);
+if (onlyState && (!withStates || selectedStates.length === 0)) throw new Error(`unknown state: ${onlyState}`);
 if (!existsSync(path.join(webRoot, "dist/index.html"))) {
   const built = spawnSync(path.join(webRoot, "node_modules/.bin/vite"), ["build"], { cwd: webRoot, stdio: "inherit" });
   if (built.status !== 0) throw new Error("vite build failed");
@@ -29,7 +32,7 @@ const browser = await chromium.launch();
 let screenshotCount = 0;
 try {
   if (withStates) {
-    for (const state of states) {
+    for (const state of selectedStates) {
       for (const target of state.screens) {
         const gateway = await startFixtureGateway(state.daemon);
         try {
@@ -84,5 +87,5 @@ try {
   await browser.close();
 }
 process.stdout.write(
-  `screenshots: ${screenshotCount} image(s)${withStates ? ` across ${states.length} states` : ` from ${selected.length} screen(s)`} -> ${out}\n`,
+  `screenshots: ${screenshotCount} image(s)${withStates ? ` across ${selectedStates.length} states` : ` from ${selected.length} screen(s)`} -> ${out}\n`,
 );

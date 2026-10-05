@@ -5,7 +5,7 @@ test("shared rich fixture renders data on the seven task surfaces and Console", 
   const gateway = await startFixtureGateway();
   try {
     await page.goto(`${gateway.base}/tasks`);
-    await expect(page.locator("[data-task-id]")).toHaveCount(24);
+    await expect(page.locator("[data-task-id]")).toHaveCount(25);
     await expect(page.locator("[data-task-id='T1']")).toContainText("複数の画面");
 
     await page.goto(`${gateway.base}/graph`);
@@ -66,6 +66,28 @@ test("default fixture shows reports, approvals and the review-pending task witho
     await expect(page.getByTestId("execution-view")).toContainText("v1（2 件）");
     await expect(page.getByTestId("routing-panel")).toContainText("担当 ui-ux");
     await expect(page.getByTestId("routing-panel")).toContainText("R1: standard / standard / ui-ux（rule-standard）");
+  } finally {
+    await gateway.close();
+  }
+});
+
+test("rich fixture shows org, project milestones, docs and maintenance as loaded data", async ({ page }) => {
+  const gateway = await startFixtureGateway();
+  try {
+    await page.setViewportSize({ width: 390, height: 800 });
+    await page.goto(`${gateway.base}/org`);
+    await expect(page.getByRole("button", { name: /UI\/UX/ })).toBeVisible();
+
+    await page.goto(`${gateway.base}/projects`);
+    await expect(page.locator('[data-project-id="P1"]')).toContainText("途中目標 1 / 1 達成");
+
+    await page.goto(`${gateway.base}/projects/P1/docs`);
+    await expect(page.getByTestId("project-docs")).toContainText("画面確認の案内");
+
+    await page.goto(`${gateway.base}/projects/P1/docs/maintenance`);
+    await expect(page.getByTestId("docs-audit-findings")).toContainText("見出しの整理を確認してください");
+    await expect(page.getByTestId("docs-plan-actions")).toContainText("docs/guide.md");
+    await expect(page.locator('[data-fetch-state="loading"], [data-fetch-state="error"]')).toHaveCount(0);
   } finally {
     await gateway.close();
   }

@@ -46,9 +46,11 @@ const checks: Record<StateKey, Check> = {
       "/inbox": "いま決めることはありません。",
       "/notifications": "通知はありません。",
       "/tasks": "条件に一致するタスクがありません",
-      "/graph": "0 ノード / 0 辺",
+      "/graph": "表示できるタスクの依存関係はありません。",
     };
     await expect(main).toContainText(message[url], timeout);
+    if (url === "/graph")
+      await expect(main.getByRole("link", { name: "タスク一覧を見る" })).toHaveAttribute("href", "/tasks");
     await expect(page.locator('[data-fetch-state="error"]')).toHaveCount(0);
   },
   many: async (page, url) => {
@@ -90,11 +92,21 @@ const checks: Record<StateKey, Check> = {
       "/providers": "claude-main",
     };
     await expect(page.locator("#main")).toContainText(content[url], timeout);
+    if (url === "/tasks" || url === "/tasks/T1/runs/R1") {
+      await expect(page.getByTestId("connection-stale-notice")).toContainText("表示中の情報は更新されていません");
+    }
   },
-  forbidden: async (page) => {
+  forbidden: async (page, url) => {
     const denied = page.locator('[data-fetch-state="permission-denied"]').first();
     await expect(denied).toBeVisible(timeout);
     await expect(denied).toContainText("権限がありません");
+    if (url === "/tasks") await expect(denied.getByRole("link", { name: "ホームへ戻る" })).toHaveAttribute("href", "/");
+  },
+  reviewing: async (page) => {
+    await expect(page.getByTestId("decision-status")).toHaveAttribute("data-status", "reviewing", timeout);
+    await page.getByTestId("mobile-sections").getByRole("button", { name: "判断" }).click();
+    await expect(page.getByTestId("decision-panel").getByRole("button", { name: "承認" })).toBeVisible();
+    await expect(page.getByTestId("decision-panel").getByRole("button", { name: "却下" })).toBeVisible();
   },
 };
 
@@ -120,7 +132,7 @@ for (const { key } of states) {
   });
 }
 
-test("states.ts は 8 状態を持ち、各状態が 2〜4 画面に当たる", () => {
+test("states.ts は 8 つのデータ状態と reviewing の判断画面を持つ", () => {
   expect(states.map((state) => state.key)).toEqual([
     "long-text",
     "long-id",
@@ -130,9 +142,10 @@ test("states.ts は 8 状態を持ち、各状態が 2〜4 画面に当たる", 
     "error",
     "stale",
     "forbidden",
+    "reviewing",
   ]);
   for (const state of states) {
-    expect(state.screens.length, state.key).toBeGreaterThanOrEqual(2);
+    expect(state.screens.length, state.key).toBeGreaterThanOrEqual(state.key === "reviewing" ? 1 : 2);
     expect(state.screens.length, state.key).toBeLessThanOrEqual(4);
   }
 });

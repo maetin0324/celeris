@@ -27,6 +27,10 @@ it("serves schema-valid rich data without changing the default profile", async (
     ["tasks/T1/artifacts", "artifact_list"],
     ["projects/P1", "project_detail"],
     ["console", "console"],
+    ["org", "org_list"],
+    ["projects/P1/docs", "docs_tree"],
+    ["projects/P1/docs/page", "doc_page"],
+    ["tasks/T25", "task_detail"],
   ] as const) {
     const raw = rich[`/api/v1/${path}`];
     const value = typeof raw === "function" ? raw(new URL(`http://fixture.test/${path}`)) : raw;
@@ -39,7 +43,7 @@ it("serves schema-valid rich data without changing the default profile", async (
     expect(response.status, path).toBe(200);
     return response;
   };
-  expect(((await (await get("/tasks")).json()) as { items: unknown[] }).items).toHaveLength(24);
+  expect(((await (await get("/tasks")).json()) as { items: unknown[] }).items).toHaveLength(25);
   expect(((await (await get("/graph")).json()) as { nodes: unknown[] }).nodes).toHaveLength(8);
   expect(
     ((await (await get("/tasks/T1/changes")).json()) as { repos: Array<{ files: unknown[] }> }).repos[0].files,

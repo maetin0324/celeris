@@ -6,7 +6,16 @@ import type { InboxItem, Notice } from "../../api/generated/types";
 import type { FakeDaemonOptions } from "./fake-daemon.mjs";
 import { inboxItemsFixture, noticesFixture, richFixtures } from "./fake-daemon.mjs";
 
-export type StateKey = "long-text" | "long-id" | "empty" | "many" | "loading" | "error" | "stale" | "forbidden";
+export type StateKey =
+  | "long-text"
+  | "long-id"
+  | "empty"
+  | "many"
+  | "loading"
+  | "error"
+  | "stale"
+  | "forbidden"
+  | "reviewing";
 
 export type FixtureState = {
   key: StateKey;
@@ -179,6 +188,12 @@ export const states = [
     route: { status: 403, paths: ["/api/inbox/items", "/api/tasks", "/api/providers"] },
     screens: ["/inbox", "/tasks", "/tasks/T1", "/providers"],
   },
+  {
+    key: "reviewing",
+    label: "レビュー待ち（判断を開けるタスク）",
+    daemon: {},
+    screens: ["/tasks/T25"],
+  },
 ] as const satisfies readonly FixtureState[];
 
 export function stateByKey(key: StateKey): FixtureState {
@@ -214,6 +229,20 @@ export async function waitForStateCapture(page: Page, state: FixtureState): Prom
       .waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
   } else {
     await page.waitForFunction((selector) => !document.querySelector(selector), LOADING_SELECTOR, CAPTURE_TIMEOUT);
+    if (state.key === "reviewing") {
+      await page
+        .locator('[data-testid="decision-status"][data-status="reviewing"]')
+        .waitFor({ state: "attached", ...CAPTURE_TIMEOUT });
+      const decisionSwitch = page.locator('[data-testid="mobile-sections"] [data-section="decision"]');
+      if (await decisionSwitch.isVisible()) await decisionSwitch.click();
+      await page
+        .locator('[data-testid="decision-panel"] button')
+        .first()
+        .waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
+    }
+    if (state.key === "stale" && (page.url().endsWith("/tasks") || page.url().includes("/runs/"))) {
+      await page.locator('[data-testid="connection-stale-notice"]').waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
+    }
   }
 }
 

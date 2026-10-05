@@ -137,7 +137,7 @@ pub(crate) fn build_llm_proxy_state(
     );
     // ADR 2026-10-04 Phase 2: `[model_routing.retry]` の分類別上限と breaker（未設定は proxy の既定）。
     // proxy は起動時に 1 度だけ組むので、retry の変更は再起動で効く（reload では変えない）。
-    let state = match &config.routing_runtime {
+    let state = match &config.model_routing.runtime {
         Some(runtime) => state.with_fallback(
             runtime.fallback.clone(),
             Arc::new(llm_proxy::reservation::SystemClock),

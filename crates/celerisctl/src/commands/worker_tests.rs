@@ -137,7 +137,6 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         model_routing: Default::default(),
         routing_catalog_snapshot: None,
         routing_catalog_state: None,
-        routing_runtime: None,
         sessions: Default::default(),
         mcp: Default::default(),
         source_path: None,

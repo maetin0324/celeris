@@ -31,6 +31,10 @@ pub struct ModelRoutingConfig {
     pub resource_groups: Vec<ResourceGroupEntry>,
     /// Phase 2: proxy の同一要求内 fallback の分類別上限と breaker。
     pub retry: RetryEntry,
+    /// Phase 2 の state・cost・retry の検証済み設定（`Config::load` が埋める。dispatcher と proxy に配る）。
+    /// `Config` 本体でなくここに持つのは、reload で `model_routing` と一緒に原子的に差し替えるため。
+    #[serde(skip)]
+    pub runtime: Option<std::sync::Arc<RoutingRuntime>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

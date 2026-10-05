@@ -4015,7 +4015,7 @@ fn routing_enforce_opt_in_validates_heuristic_only() {
         "[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
     )
     .unwrap();
-    let runtime = cfg.routing_runtime.as_ref().unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
     assert_eq!(runtime.mode, RoutingMode::Enforce);
     assert_eq!(
         cfg.routing_catalog_snapshot.as_ref().unwrap().mode,
@@ -4028,7 +4028,7 @@ fn routing_enforce_opt_in_validates_heuristic_only() {
     )
     .unwrap();
     assert_eq!(
-        cfg.routing_runtime.as_ref().unwrap().enforce_routes,
+        cfg.model_routing.runtime.as_ref().unwrap().enforce_routes,
         vec!["standalone"]
     );
     // opt-in の無い enforce は拒否（Phase 1 の文言を保つ）。
@@ -4064,7 +4064,7 @@ fn routing_enforce_opt_in_validates_heuristic_only() {
     )
     .unwrap();
     assert_eq!(
-        cfg.routing_runtime.as_ref().unwrap().mode,
+        cfg.model_routing.runtime.as_ref().unwrap().mode,
         RoutingMode::Shadow
     );
     // 不正な数値も拒否する。
@@ -4104,7 +4104,7 @@ fn routing_enforce_opt_in_validates_heuristic_only() {
 fn routing_config_defaults_do_not_seed_unknown_as_zero() {
     use task_core::model_router::policy::{FreshnessPolicy, RoutingMode};
     let cfg = routing_phase2_load("").unwrap();
-    let runtime = cfg.routing_runtime.as_ref().unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
     assert_eq!(runtime.mode, RoutingMode::Legacy);
     assert_eq!(runtime.freshness, FreshnessPolicy::default());
     assert!(runtime.window_reserves.is_empty());
@@ -4129,7 +4129,7 @@ fn routing_config_defaults_do_not_seed_unknown_as_zero() {
          [model_routing.retry]\nserver = 1\n",
     )
     .unwrap();
-    let runtime = cfg.routing_runtime.as_ref().unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
     assert_eq!(runtime.freshness.observation_ttl_seconds, 120.0);
     assert_eq!(runtime.window_reserves.get("five_hour"), Some(&4.0));
     assert_eq!(runtime.window_reserves.get("seven_day"), None);

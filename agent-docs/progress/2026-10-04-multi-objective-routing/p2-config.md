@@ -19,12 +19,12 @@ completed: 2026-10-05
     `client` は 0 以外を拒否（p2-proxy-fallback の提案）、`total_attempts = 0` も拒否。
   - policy 正規化定数・weights・min_quality は Phase 1 の `[model_routing.policies.<lane>]` のまま（`RoutingPolicy::validate`）。
 - `Config::routing_runtime()` → `RoutingRuntime`（`dispatch_settings()`・`self_host_rates()`・`capacity_limits()`）。
-  `Config::load` が catalog の後に組み `Config.routing_runtime` に置く（不正なら load が失敗）。
+  `Config::load` が catalog の後に組み `Config.model_routing.runtime`（`#[serde(skip)]`）に置く（不正なら load が失敗）。reload は `model_routing` ごと差し替えるので runtime も一緒に原子的に替わる。
 - 配線: `build_dispatcher` と `reload_providers` が `Dispatcher::set_dispatch_routing` を呼ぶ（reload は `Config::load` 成功後だけ = 原子的）。
   proxy は `build_llm_proxy_state` で `ProxyState::with_fallback(runtime.fallback, SystemClock)`。
 - task-dispatch の公開口に最小の追加: `DispatchRoutingSettings.window_reserves`（窓 id → reserve_value）。
   `source_state_of` が account の quota 窓に写す（無い窓は None のまま）。
-- celerisctl の試験の `Config` 全欄 literal に `routing_runtime: None`。
+- attempt 2: attempt 1 は `Config` に欄を足し celerisctl の試験の全欄 literal を変えたため範囲 check（crates の差分は celeris/llm-proxy/task-dispatch/task-api/task-ops のみ）に落ちた。欄を `ModelRoutingConfig.runtime` へ移し celerisctl の変更を取り消した。
 
 ## 証拠
 
@@ -34,7 +34,8 @@ completed: 2026-10-05
 | 既存 routing / Qwen | `cargo nextest run -p celeris -p llm-proxy -p task-dispatch routing_ cheap_only_default_and_legacy_qwen_config` | 47 passed |
 | workspace 全体 | `bash scripts/dev/test-parallel.sh` | exit 0、Summary「3964 tests run: 3964 passed (1 slow), 12 skipped」 |
 | clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
-| 試験コードの clippy | `cargo clippy -p celeris -p task-dispatch -p celerisctl --all-targets -- -D warnings` | exit 0 |
+| 試験コードの clippy | `cargo clippy -p celeris --all-targets -- -D warnings` | exit 0 |
+| 範囲 check | `git diff --name-only $(git merge-base HEAD celeris/01M44ZK8GADYD9PVAYBY73F6YC) -- crates` から許可 crate を除いて空 | exit 0（attempt 2） |
 
 ## 未解決事項
 

@@ -511,23 +511,18 @@ impl Dispatcher {
         ) {
             return Ok(());
         }
+        #[cfg(test)]
+        if let Some(hook) = self.before_integration_start.take() {
+            hook(self, task.id);
+        }
         let phase = integ.phase.clone().unwrap_or_default();
-        let mut running = integ.clone();
-        running.status = task_core::WorkUnitStatus::Running;
-        running.blocked_reason = None;
-        running.updated_at = rfc3339(OffsetDateTime::now_utc());
-        self.store.work_unit_transition(
-            task.id,
-            running,
-            Event::WorkUnitTransitioned {
-                work_unit_id: integ.id.clone(),
-                key: integ.key.clone(),
-                from: integ.status,
-                to: task_core::WorkUnitStatus::Running,
-                reason: "integrate".to_string(),
-                run_id: None,
-            },
-        )?;
+        if !self
+            .store
+            .try_start_work_unit_integration(task.id, &integ)?
+        {
+            // ready 戻し（または WU の更新）が先に成立した。古い settle 判定で spawn しない。
+            return Ok(());
+        }
         if let Err(e) = self
             .store
             .extend_task_lease(task.id, self.integration_ttl())

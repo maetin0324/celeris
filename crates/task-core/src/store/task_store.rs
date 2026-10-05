@@ -638,6 +638,15 @@ pub trait TaskStore:
         event: Event,
     ) -> Result<(), StoreError>;
 
+    /// ADR-0074 付記（2026-10-05）: Task が Running で、統合 WU が読み取ったままの
+    /// Pending / Ready なら、同じ transaction で WU を Running にして reason=integrate を残す。
+    /// Task の ready 戻し・WU の更新が先行したら何も書かず false。spawn は true のときだけ行う。
+    fn try_start_work_unit_integration(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+    ) -> Result<bool, StoreError>;
+
     /// ADR-0074 D1.5（Phase F2）: WU の lease を取る。1 トランザクションで「Task が `Running`」
     /// 「WU が `ready` / `needs_continuation`」を確かめ、WU を `running` にし（`runs + 1`、
     /// `last_run_id = run_id`、lease 列）、`WorkUnitTransitioned{to: running, reason: "dispatch"}` を

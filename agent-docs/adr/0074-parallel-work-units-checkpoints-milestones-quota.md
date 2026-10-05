@@ -1436,3 +1436,36 @@ replan で返す回避をした。
 ### 残したもの
 
 - schema・migration・API の変更は無い。既に作られた子には届けない（continue は次の段の子が作られる前にしか返せない）。
+
+## 付記: 統合開始と ready 戻しの競合・Ready の孤立統合の回収（2026-10-05）
+
+本番 `33774b6a` で、最後の葉の Done 記録と統合開始の間に task が `Continue{advance}` で Ready へ戻り、
+古い `PhaseSettle::Integrate` の判定から統合 WU だけが Running になる順序を観測した。
+`abort_stale_runs` はその spawn を止めるが、従来の F5-fix6 は Running かつ有効な工程 lease がある task しか
+見なかった。Ready は lease を失い、dispatch gate も Running の統合 WU を見て Skip するため、回復できなかった。
+
+### 決定と実装
+
+1. `TaskStore::try_start_work_unit_integration` は writer の `IMMEDIATE` transaction 内で、task が Running、
+   統合 WU が読み取り時と同じ Pending / Ready（status と updated_at が一致）であることを確認する。
+   一致したときだけ WU を Running にし、既存の `WorkUnitTransitioned{reason: integrate}` を残す。
+   `Dispatcher::start_integration` は成功したときだけ統合を実行する。Ready 戻しが先なら Pending のまま次の dispatch に委ねる。
+2. `Continue{advance}` は同じ writer transaction 内で Running の工程統合 WU を検査する。
+   統合開始が先なら `InvalidTransition{trigger: integration_running}` とし、task の状態・lease・event を変更しない。
+   手元の `integrating` だけを調べる場合と違い、WU の Running 記録から spawn 登録までの隙間も保護される。
+   `Interrupt` / `Cancel` 等の人の操作はこのガードに含めない。
+3. `reconcile_parallel_tasks` は Running に加えて Ready の task の工程統合 WU も調べる。
+   回収は task lease の有無・期限の判定より前に行い、`phase` のある Running の統合 WU を Pending に戻す。
+   reason は F5-fix6 と同じ `orphan_takeover`。再照合で重複 event を作らない。
+4. 対象 task の手元の worker・検査・統合・レビュー・子待ちがある間は回収しない。
+   既存の `lease_holders_gone` を使い、生きている他の active / draining instance がある場合、
+   instance 表を読めない場合、孤児回収の設定が無い場合、自分が draining / standby の場合も回収しない。
+   verify 等の task 対象フィルタを守る。Ready の追加走査は新規受付中かつ孤児回収が有効な場合に限る。
+
+### 検証
+
+`dispatcher/tests/integration_ready_race.rs` の一回フックで、最後の葉が Done、統合は Pending の隙間に
+`reconcile_parallel_tasks` を呼び、Ready 戻しを決定的に先行させる。修正前は abort 後も統合 WU が Running で残り、
+修正後は Pending を維持し通常 dispatch で Done まで進む。逆順、Ready / Running の孤立回収、冪等性、
+生きた持ち主と対象範囲の保護、人の割り込み、古い WU・二重開始の拒否も試験する。CPU 負荷・実 LLM は使わない。
+検査結果と運用上の確認点は [統合の Ready 競合修正](../../docs/ops/integration-ready-recovery.md) に記録する。

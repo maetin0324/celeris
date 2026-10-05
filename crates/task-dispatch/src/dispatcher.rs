@@ -1165,6 +1165,9 @@ pub struct Dispatcher {
     /// ADR-0074 D1.4（Phase F2b）: 工程の統合を走らせている Task（spawn した git 操作と検査）。
     /// 再起動の照合（D1.7）は「running の統合 WU で、ここに無いもの」を pending に戻す。
     integrating: HashMap<TaskId, IntegrationEntry>,
+    /// 統合の状態確認直前に別の ready 戻しを差し込む、試験専用の一回フック。
+    #[cfg(test)]
+    before_integration_start: Option<fn(&mut Dispatcher, TaskId)>,
     /// Phase F5-fix2: WU の `checks` を走らせている run（キーは run id）。
     checking: HashMap<String, CheckingEntry>,
     /// Phase F5-fix6: 居なくなったデーモンの run（孤児）を lease 失効を待たずに回収する（`None` = 無効）。
@@ -1446,6 +1449,8 @@ impl Dispatcher {
             review_sync_seq: 0,
             awaiting_children: HashMap::new(),
             integrating: HashMap::new(),
+            #[cfg(test)]
+            before_integration_start: None,
             checking: HashMap::new(),
             orphan_takeover: None,
             tx,

@@ -235,6 +235,61 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub(in crate::store) fn try_start_work_unit_integration_impl(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+    ) -> Result<bool, StoreError> {
+        if expected.task_id != task_id.to_string()
+            || expected.kind != WorkUnitKind::Integrate
+            || expected.phase.is_none()
+            || !matches!(
+                expected.status,
+                WorkUnitStatus::Pending | WorkUnitStatus::Ready
+            )
+        {
+            return Ok(false);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        // Continue{advance} もこの writer transaction 内で統合 WU を検査する。
+        // どちらが先でも Ready + Running の統合 WU という組を作らない。
+        let can_start: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM tasks t JOIN work_units w ON w.task_id = t.id \
+             WHERE t.id = ?1 AND t.status = 'running' AND w.id = ?2 \
+             AND w.kind = 'integrate' AND w.status = ?3 AND w.updated_at = ?4)",
+            params![
+                task_id.to_string(),
+                expected.id,
+                expected.status.as_str(),
+                expected.updated_at
+            ],
+            |row| row.get(0),
+        )?;
+        if !can_start {
+            return Ok(false);
+        }
+        let mut running = expected.clone();
+        running.status = WorkUnitStatus::Running;
+        running.blocked_reason = None;
+        running.updated_at = format_rfc3339(OffsetDateTime::now_utc())?;
+        Self::update_work_unit_tx(&tx, &running)?;
+        Self::append_event_tx(
+            &tx,
+            task_id,
+            &Event::WorkUnitTransitioned {
+                work_unit_id: expected.id.clone(),
+                key: expected.key.clone(),
+                from: expected.status,
+                to: WorkUnitStatus::Running,
+                reason: "integrate".to_string(),
+                run_id: None,
+            },
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub(in crate::store) fn acquire_work_unit_lease_impl(
         &self,
         task_id: TaskId,

@@ -3056,6 +3056,7 @@ mod conversation_cos;
 mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;
+mod integration_ready_race;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;

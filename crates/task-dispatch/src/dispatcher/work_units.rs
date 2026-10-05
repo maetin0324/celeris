@@ -1276,18 +1276,38 @@ impl Dispatcher {
     /// Phase F5-fix6: WU の lease がまだ切れていなくても、その run の持ち主のデーモンが居なければ
     /// （孤児。`crate::orphan`）同じく戻す（result.json があればその内容で確定、無ければ reason
     /// `orphan_takeover` で ready / needs_continuation）。統合 WU も同じ（spawn が手元に無ければ pending）。
+    /// 2026-10-05 付記: 統合の回収は Ready も対象にし、Task lease の有無・期限に依存させない。
+    /// 手元の仕事・生きている他 instance・draining / verify の保護条件は維持する。
     pub(super) fn reconcile_parallel_tasks(&mut self) -> Result<(), DispatchError> {
         let now = OffsetDateTime::now_utc();
         let mut holders_gone: Option<bool> = None;
-        for task in self.store.list(Some(Status::Running))? {
+        let mut tasks = self.store.list(Some(Status::Running))?;
+        if self.accepting_new_work && self.orphan_takeover.is_some() {
+            tasks.extend(self.store.list(Some(Status::Ready))?);
+        }
+        for task in tasks {
             if !self.is_eligible(&task) {
+                continue;
+            }
+            // Ready への遷移は task lease を外す。lease の有無・期限より先に孤立統合を調べる。
+            let units = self.store.work_units_for(task.id)?;
+            if units.iter().any(|u| {
+                u.kind == task_core::WorkUnitKind::Integrate
+                    && u.phase.is_some()
+                    && u.status == task_core::WorkUnitStatus::Running
+            }) && !self.holds_task_in_hand(task.id)
+                && self.lease_holders_gone(&mut holders_gone, now)
+            {
+                tracing::warn!(task_id = %task.id, "ownerless phase integration; returning it to pending (orphan_takeover)");
+                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
+            }
+            if task.status != Status::Running {
                 continue;
             }
             let Some(lease) = &task.lease else { continue };
             if !is_phase_lease_holder(&lease.worker_run_id) || lease.expires_at <= now {
                 continue;
             }
-            let units = self.store.work_units_for(task.id)?;
             for u in units.iter().filter(|u| {
                 u.status == task_core::WorkUnitStatus::Running
                     && u.kind != task_core::WorkUnitKind::Integrate
@@ -1325,18 +1345,6 @@ impl Dispatcher {
                     }
                     self.requeue_orphaned_work_unit_run(&task, &run_id)?;
                 }
-            }
-            // Phase F5-fix6: 持ち主の居ない工程の統合（統合 WU が running で、spawn が手元に無い）。
-            if !self.integrating.contains_key(&task.id)
-                && self.running_for_task(task.id) == 0
-                && units.iter().any(|u| {
-                    u.kind == task_core::WorkUnitKind::Integrate
-                        && u.status == task_core::WorkUnitStatus::Running
-                })
-                && self.lease_holders_gone(&mut holders_gone, now)
-            {
-                tracing::warn!(task_id = %task.id, "the phase integration's daemon is gone; returning the integration to pending without waiting for the lease (Phase F5-fix6 orphan_takeover)");
-                self.reconcile_integration(task.id, crate::orphan::ORPHAN_TAKEOVER_REASON)?;
             }
             if self.running_for_task(task.id) > 0 || self.integrating.contains_key(&task.id) {
                 continue;

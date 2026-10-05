@@ -697,6 +697,14 @@ impl TaskStore for SqliteStore {
         self.work_unit_transition_impl(task_id, updated, event)
     }
 
+    fn try_start_work_unit_integration(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+    ) -> Result<bool, StoreError> {
+        self.try_start_work_unit_integration_impl(task_id, expected)
+    }
+
     fn acquire_work_unit_lease(
         &self,
         task_id: TaskId,

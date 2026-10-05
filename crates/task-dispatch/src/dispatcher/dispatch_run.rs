@@ -596,6 +596,8 @@ impl Dispatcher {
         )?;
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
         // ADR-0069 D5: この run の routing の監査記録（担当・harness・lane・model・features・規則）。
+        // 多目的 routing Phase 3: 同じ decision_id で `routing_features_recorded` を後で 1 回追記する。
+        let mut routing_decision_id: Option<String> = None;
         if let Some(mut decision) = lane_decision {
             if task_core::model_policy::lane_rank(task.worker_hint.tier)
                 < task_core::model_policy::lane_rank(decision.lane)
@@ -639,6 +641,13 @@ impl Dispatcher {
                     None => self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
                 },
             };
+            routing_decision_id = Some(
+                record
+                    .optimizer
+                    .as_ref()
+                    .map(|t| t.decision_id.clone())
+                    .unwrap_or_else(|| format!("run:{run_id}")),
+            );
             self.store.append_event(
                 task.id,
                 &Event::RoutingDecided {
@@ -904,6 +913,33 @@ impl Dispatcher {
         if !is_planner_dispatch {
             self.capture_run_write_bases(&task, &run_id, worktree.as_ref());
         }
+        // 多目的 routing Phase 3（ADR 2026-10-04 §3.4・§6）: task / WU / 実効 profile / 履歴から RoutingContext を
+        // 組み、features を記録し、registry があれば run に結んで ref を worker の文脈に載せる。
+        let routing_events: Vec<Event> = match self.store.events_for(task.id) {
+            Ok(events) => events.into_iter().map(|(_, e)| e).collect(),
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to read events for the routing context");
+                Vec::new()
+            }
+        };
+        extras.routing_context_ref = self.record_routing_context(
+            &routing_context::RoutingContextInput {
+                task: &task,
+                work_unit: current_wu.as_ref(),
+                run_id: &run_id,
+                role: if is_planner_dispatch {
+                    routing_context::RoutingRunRole::Planner
+                } else {
+                    routing_context::RoutingRunRole::Worker
+                },
+                harness: &adapter_id,
+                profile: extras.profile.as_ref(),
+                cluster: cluster.as_ref().map(|(spec, ..)| spec.id.as_str()),
+                events: &routing_events,
+            },
+            routing_decision_id.as_deref(),
+            ttl,
+        );
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,

@@ -401,49 +401,117 @@ impl Dispatcher {
         // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
         // アダプタ・アカウントへ倒れてしまう）。
         let sticky_session = self.cos_conversation_session(&task)?;
-        // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
-        let (picked, provider_selection) = self.select_provider_for(
-            &task.worker_hint,
-            now,
-            task.id,
-            full,
-            sticky_session.as_ref(),
-            cos,
-            true,
-        );
-        let Some((adapter_id, provider_id, selected_account)) = picked else {
-            return Ok(false);
-        };
-        let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
-            tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for provider");
-            return Ok(false);
-        };
-        // ADR-0024 D2 / ADR-0025 D2: プールで選んだアカウントの env を重ねる。`with_env` が `None` を返すのは
-        // アダプタの実装漏れ（設定検証で account_pool は claude-code/codex 限定にしているため通常は起きない）
-        // なので、このタスクは今回見送る。
-        let adapter = match &selected_account {
-            Some((account_adapter, account_id)) => {
-                match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
-                    Some(a) => a,
-                    None => {
-                        tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools (with_env returned None); skipping this tick");
-                        return Ok(false);
+        // multi-objective routing Phase 2: mode=enforce（opt-in）だけ候補 allowlist と source 状態で選ぶ。
+        // quota の枯渇・圧迫は lane を下げず、同じ lane の別 source を先に試し、無ければ defer する。
+        let mut enforce_round = self
+            .enforce_active()
+            .then(|| self.enforce_round(&task.worker_hint));
+        let mut enforce_full = full.clone();
+        let (
+            adapter_id,
+            provider_id,
+            selected_account,
+            provider_selection,
+            adapter,
+            tier,
+            routing_reason,
+        ) = loop {
+            // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
+            let (picked, provider_selection) = match &enforce_round {
+                Some(round) => {
+                    // enforce の除外は満杯の集合へ混ぜない（他の task の判定を汚さない）。
+                    let excluded = round.excluded.clone();
+                    let result = self.select_provider_excluding(
+                        &task.worker_hint,
+                        now,
+                        task.id,
+                        &mut enforce_full,
+                        sticky_session.as_ref(),
+                        cos,
+                        true,
+                        &excluded,
+                    );
+                    full.extend(enforce_full.iter().cloned());
+                    result
+                }
+                None => self.select_provider_for(
+                    &task.worker_hint,
+                    now,
+                    task.id,
+                    full,
+                    sticky_session.as_ref(),
+                    cos,
+                    true,
+                ),
+            };
+            let Some((adapter_id, provider_id, selected_account)) = picked else {
+                if let Some(round) = &enforce_round {
+                    tracing::info!(task_id = %task.id, tier = ?task.worker_hint.tier, excluded = %round.summary(),
+                        "routing enforce: no source in the requested lane; deferring (lane is not lowered)");
+                }
+                return Ok(false);
+            };
+            let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
+                tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for provider");
+                return Ok(false);
+            };
+            // ADR-0024 D2 / ADR-0025 D2: プールで選んだアカウントの env を重ねる。`with_env` が `None` を返すのは
+            // アダプタの実装漏れ（設定検証で account_pool は claude-code/codex 限定にしているため通常は起きない）
+            // なので、このタスクは今回見送る。
+            let adapter = match &selected_account {
+                Some((account_adapter, account_id)) => {
+                    match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
+                        Some(a) => a,
+                        None => {
+                            tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools (with_env returned None); skipping this tick");
+                            return Ok(false);
+                        }
+                    }
+                }
+                None => base_adapter,
+            };
+            if let Some(round) = enforce_round.as_mut() {
+                let state = self.source_state_of(&provider_id, selected_account.as_ref(), now);
+                match self.enforce_check_source(task.worker_hint.tier, &state) {
+                    Ok(reason) => {
+                        round.observed_at = state.observed_at.clone();
+                        break (
+                            adapter_id,
+                            provider_id,
+                            selected_account,
+                            provider_selection,
+                            adapter,
+                            task.worker_hint.tier,
+                            reason,
+                        );
+                    }
+                    Err((codes, detail)) => {
+                        Self::enforce_exclude(round, &provider_id, &codes, detail);
+                        continue;
                     }
                 }
             }
-            None => base_adapter,
+            let remaining = selected_account.as_ref().and_then(|(kind, id)| {
+                let book = self.account_book(*kind)?;
+                let book = book.lock().ok()?;
+                let observation = book.state(id)?.usage.as_ref()?;
+                crate::accounts::measured_remaining(observation, (self.now_unix_fn)())
+            });
+            let (tier, routing_reason) =
+                match task_core::model_routing::select_tier(task.worker_hint.tier, remaining) {
+                    Ok(decision) => decision,
+                    Err(_) => return Ok(false), // quota refresh will make this task eligible again
+                };
+            break (
+                adapter_id,
+                provider_id,
+                selected_account,
+                provider_selection,
+                adapter,
+                tier,
+                routing_reason,
+            );
         };
-        let remaining = selected_account.as_ref().and_then(|(kind, id)| {
-            let book = self.account_book(*kind)?;
-            let book = book.lock().ok()?;
-            let observation = book.state(id)?.usage.as_ref()?;
-            crate::accounts::measured_remaining(observation, (self.now_unix_fn)())
-        });
-        let (tier, routing_reason) =
-            match task_core::model_routing::select_tier(task.worker_hint.tier, remaining) {
-                Ok(decision) => decision,
-                Err(_) => return Ok(false), // quota refresh will make this task eligible again
-            };
         // A legacy provider has no tier mapping: keep its historical behavior.
         if adapter
             .model_for_tier(task.worker_hint.tier)
@@ -558,7 +626,17 @@ impl Dispatcher {
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
-                optimizer: self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
+                optimizer: match &enforce_round {
+                    Some(round) => Some(self.enforce_optimizer_trace(
+                        &task.worker_hint,
+                        &run_id,
+                        round,
+                        &provider_id,
+                        &model,
+                        account.as_deref(),
+                    )),
+                    None => self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
+                },
             };
             self.store.append_event(
                 task.id,

@@ -207,7 +207,7 @@ function NavBadge({ badge }: { badge: { view: NavBadgeView; tone: BadgeTone } | 
 }
 
 const tabClass =
-  "relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 text-label font-medium whitespace-nowrap hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
+  "relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-t-2 text-label font-medium whitespace-nowrap hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
 
 // md 未満の画面下の固定タブ（旧 GUI の MobileTabBar）。主要 4 つと「その他」。「その他」は残りの項目を下からのシートで出す。
 // シートは Radix Dialog（focus trap・Escape・aria-modal・閉じた後に「その他」へ focus を戻す）。
@@ -238,8 +238,8 @@ function MobileTabBar({
           key={tab.to}
           to={tab.to}
           activeOptions={{ exact: tab.to === "/" }}
-          activeProps={{ "aria-current": "page", className: "text-primary" }}
-          inactiveProps={{ className: "text-muted-foreground" }}
+          activeProps={{ "aria-current": "page", className: "border-primary text-primary font-semibold" }}
+          inactiveProps={{ className: "border-transparent text-muted-foreground" }}
           className={tabClass}
         >
           <Icon name={tab.icon} />
@@ -254,7 +254,7 @@ function MobileTabBar({
       <Dialog.Root open={open} onOpenChange={onOpenChange}>
         <Dialog.Trigger
           data-active={otherActive ? "true" : undefined}
-          className={`${tabClass} ${open || otherActive ? "text-primary" : "text-muted-foreground"}`}
+          className={`${tabClass} ${open || otherActive ? "border-primary text-primary font-semibold" : "border-transparent text-muted-foreground"}`}
         >
           <Icon name="more-horizontal" />
           <span>その他</span>

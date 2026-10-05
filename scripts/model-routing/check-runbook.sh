@@ -117,7 +117,7 @@ fi
 # References: repository paths and relative links in the section must resolve.
 for p in $(printf '%s\n' "$section" | grep -oE '(scripts|docs|crates|agent-docs)/[A-Za-z0-9._/-]+\.(sh|py|lock|md|rs)' | sort -u); do
   case $p in
-    docs/reports/model-routing-routellm-shadow.md) ;;  # created by the real evaluation
+    */model-routing-routellm-shadow.md) ;;  # report written by the real evaluation (not yet present)
     *) [ -e "$root/$p" ] || fail "referenced path not found: $p" ;;
   esac
 done

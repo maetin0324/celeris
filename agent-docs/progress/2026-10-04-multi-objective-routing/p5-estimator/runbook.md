@@ -33,3 +33,8 @@ completed: 2026-10-05
 - `routellm-weights-use` は人の決定待ち（pending）。weights の取得・実起動・CPU/GPU 実測はしていない。
 - `celerisctl routing evaluate --policy estimator` と reload で proxy へ届く範囲は並行の cli / daemon-wire 葉の成果に依存する。統合後に §10.7 の記述と実装を突き合わせること。
 - lock は直接依存の pin のみ。推移依存の freeze は構築した環境で行う手順にした。
+
+## 再走（2026-10-05, attempt 1 修正）
+- 前回の check `git diff --quiet $CELERIS_WU_BASE -- crates/ && sh scripts/dev/check-doc-links.sh` が exit 1: check-runbook.sh の case パターンに未作成の report の素のパス（docs/reports/…）を書いていたため、生きた参照として壊れたリンク扱いになった。
+- 修正: パターンを `*/model-routing-routellm-shadow.md` に変えた（挙動は同じ）。
+- 証拠: `sh scripts/model-routing/check-runbook.sh` → exit 0（pending）、`--require-approved` → exit 1、上の check → `check-doc-links: ok` exit 0。

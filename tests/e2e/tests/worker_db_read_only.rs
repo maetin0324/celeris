@@ -71,7 +71,6 @@ fn project_with_primary(store: &SqliteStore, dir: &Path) -> (ProjectId, RepoId) 
 fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> TaskId {
     let now = OffsetDateTime::now_utc();
     let task = Task {
-        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

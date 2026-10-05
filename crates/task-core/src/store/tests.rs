@@ -112,6 +112,26 @@ fn browser_allowed_domains_store_rejects_invalid_children_without_events() {
 }
 
 #[test]
+fn browser_allowed_domains_store_accepts_child_with_narrower_origin() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut parent = sample_task(Status::Ready);
+    parent.skills = vec![crate::browser::BROWSER_SKILL.into()];
+    parent.requirements.browser = Some(crate::model::BrowserRequirements {
+        allowed_domains: vec!["https://*.example.com:8443".into()],
+    });
+    store.create_task(&parent, vec![]).unwrap();
+
+    let mut child = sample_task(Status::Draft);
+    child.parent_id = Some(parent.id);
+    child.skills = parent.skills.clone();
+    child.requirements.browser = Some(crate::model::BrowserRequirements {
+        allowed_domains: vec!["https://billing.example.com:8443".into()],
+    });
+    store.create_task(&child, vec![]).unwrap();
+    assert_eq!(store.get(child.id).unwrap(), Some(child));
+}
+
+#[test]
 fn list_filters_by_status() {
     let store = SqliteStore::open_in_memory().expect("open");
     let ready = sample_task(Status::Ready);

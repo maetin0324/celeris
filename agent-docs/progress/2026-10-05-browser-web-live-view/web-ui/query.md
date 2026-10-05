@@ -38,3 +38,14 @@ tasks: [01M470CJT10MV8XVFEGSMCXHYS]
 
 - `pnpm -C web test` の `components/content/artifact-preview.test.tsx` の hook timeout（30s）は負荷時の一過性。loadavg 9 で typecheck・lint・test（61 files / 369 tests、gateway 52）・check:boundaries・build を再実行して exit 0。
 - `pnpm -C web e2e e2e/shell/` の `home-layout.spec.ts:26`（360x800）は「ページが viewport より高くない」で overflow 3px。nav 行を外して build し直しても同じく落ちる（この葉の変更と無関係、main の 33465896 由来）。原因は `features/home/console-region.tsx` の枠の高さ下限 `MIN_VISIBLE + covered`（stale 電話幅の会話本文を見せる fix）が 360x800 の残り高さを超えること。home-stale-viewport の要求と home-layout の要求の調停が要り、この葉の範囲外なので plan_issue で申告した。
+
+## 再計画後の確認（2026-10-05、run 01M471DQQPFXZ3S0W0ZS6EK6ZW）
+
+| コマンド | 結果 |
+| --- | --- |
+| `install --offline && typecheck && lint && test && check:boundaries && build`（`pnpm -C web`） | exit 0。vitest 61 files / 369 tests、gateway 52 pass（loadavg 7） |
+| `pnpm -C web e2e e2e/shell/ e2e/parity/shell.spec.ts` | 19 pass / 1 fail（home-layout.spec.ts:26 の 360x800 のみ。main 由来の既知の失敗、この葉では直さない） |
+| 同上に `--grep-invert '入力欄が見える（360x800）'` | exit 0。19 pass |
+| `git log --format= --name-only $CELERIS_WU_BASE..HEAD` | web/（features/browser・routes 3 本・nav-items・spa-routes・routeTree.gen・invalidation-map）と本記録のみ。gui/・crates/・web/server/browser-live.js は無差分 |
+
+未解決: home-layout.spec.ts:26（360x800）の overflow 3px は features/home/console-region.tsx の高さ下限（main 33465896）が原因で、ホーム側の葉で調停が要る。

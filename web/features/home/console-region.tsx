@@ -43,6 +43,26 @@ function belowOf(el: HTMLElement): number {
   return below;
 }
 
+// 末尾への追従後、宛先行の下で見出しが途中から始まる block を飛ばす。
+// 枠内を手で読んでいる間には呼ばず、追記・初回表示・「最新へ」の時だけ揃える。
+function alignVisibleBlock(el: HTMLElement) {
+  const toolbar = el.querySelector("[data-console-toolbar]");
+  const blocks = Array.from(el.querySelectorAll<HTMLElement>('ol[aria-label="Console の会話"] > li'));
+  if (!toolbar || blocks.length === 0) return;
+  const edge = toolbar.getBoundingClientRect().bottom;
+  const clipped = blocks.find((block) => {
+    const box = block.getBoundingClientRect();
+    return box.top < edge - 1 && box.bottom > edge + 1;
+  });
+  if (!clipped) return;
+  const next = blocks[blocks.indexOf(clipped) + 1];
+  // 最後の block 自体が長いときは末尾と送信欄の距離を優先する。
+  // その block を先頭へ戻すと、新しい返事の末尾が何百 px も上へ離れてしまう。
+  if (!next) return;
+  const start = next.getBoundingClientRect().top;
+  el.scrollTop += start - edge;
+}
+
 export function ConsoleRegion({ children }: { children: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const latestRef = useRef<HTMLDivElement>(null);
@@ -99,8 +119,10 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
       const height = content.getBoundingClientRect().height;
       const grew = height > lastHeight;
       lastHeight = height;
-      if (atBottom.current) el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
-      else if (grew) setAway(true);
+      if (atBottom.current) {
+        el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
+        alignVisibleBlock(el);
+      } else if (grew) setAway(true);
     };
     el.addEventListener("scroll", onScroll, { passive: true });
     const observer = new ResizeObserver(follow);
@@ -127,6 +149,7 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
     atBottom.current = true;
     setAway(false);
     el.scrollTop = Math.max(0, el.scrollHeight - el.clientHeight - slack(el, content));
+    alignVisibleBlock(el);
   }
 
   return (

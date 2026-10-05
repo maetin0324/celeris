@@ -8,7 +8,7 @@ import { applyStateRoute, stateByKey } from "../support/states";
 // (2) /tasks/T1 360: tab 列の「成果物」が右で切れた → 余白を詰め、収まらない幅は折り返す。
 // (3) /graph 360〜412: 横に続く graph の手がかりが無かった → 注記と、見えていない側の端の影。
 // (4) /tasks/T1/changes: 長い共通 prefix が毎行反復した → 共通の場所を 1 度だけ出し、各行はファイル名を先に。
-// (5) /（1440・電話幅）: 会話枠の先頭 block の見出し行が上端で半分切れて見えた → 留めた宛先行の下にぼかしの帯。
+// (5) /（1440・電話幅）: 会話枠の先頭 block の見出し行が上端で半分切れて見えた → 末尾追従時に block の先頭を宛先行の下に揃える。
 // (6) stale の / 360: 会話枠が約 40px に縮んだ → 宛先行と送信欄を除いて 160px を保つ。
 // (7) loading の /providers 360: 接続状態の語が長く header が 2 段に折れた → 語を短くし 1 段に保つ。
 
@@ -170,28 +170,40 @@ for (const [width, height] of [
   [360, 800],
   [1440, 800],
 ] as const) {
-  test(`(5) / ${width}: 会話枠に留めた宛先行の下に、切れ目をぼかす帯がある`, async ({ page }) => {
+  test(`(5) / ${width}: 会話枠の先頭に見える block の見出しが欠けない`, async ({ page }) => {
     const gateway = await startFixtureGateway();
     try {
       await page.setViewportSize({ width, height });
       await page.goto(`${gateway.base}/`);
       await expect(page.getByRole("list", { name: "Console の会話" }).getByRole("listitem").first()).toBeVisible();
       await settle(page);
-      const fade = await page.locator("[data-home-console] [data-console-toolbar]").evaluate((el) => {
-        const after = getComputedStyle(el, "::after");
-        return {
-          position: getComputedStyle(el).position,
-          content: after.content,
-          height: Number.parseFloat(after.height),
-          image: after.backgroundImage,
-          pointer: after.pointerEvents,
-        };
+      await expect
+        .poll(async () =>
+          page.locator("[data-home-console]").evaluate((region) => {
+            const toolbar = region.querySelector("[data-console-toolbar]") as HTMLElement;
+            const edge = toolbar.getBoundingClientRect().bottom;
+            const blocks = Array.from(region.querySelectorAll('ol[aria-label="Console の会話"] > li'));
+            const first = blocks.find((block) => block.getBoundingClientRect().bottom > edge + 1);
+            const box = first?.getBoundingClientRect();
+            return {
+              toolbar: getComputedStyle(toolbar).position,
+              firstTop: box?.top ?? 0,
+              edge,
+              visible: Boolean(box && box.top < region.getBoundingClientRect().bottom),
+            };
+          }),
+        )
+        .toMatchObject({ toolbar: "sticky", visible: true });
+      const alignment = await page.locator("[data-home-console]").evaluate((region) => {
+        const edge = (region.querySelector("[data-console-toolbar]") as HTMLElement).getBoundingClientRect().bottom;
+        const first = Array.from(region.querySelectorAll('ol[aria-label="Console の会話"] > li')).find(
+          (block) => block.getBoundingClientRect().bottom > edge + 1,
+        );
+        return { edge, top: first?.getBoundingClientRect().top ?? 0 };
       });
-      expect(fade.position).toBe("sticky");
-      expect(fade.content).not.toBe("none");
-      expect(fade.height).toBeGreaterThanOrEqual(16);
-      expect(fade.image).toContain("gradient");
-      expect(fade.pointer).toBe("none");
+      expect(alignment.top, "先頭に見える block の見出しが宛先行より下にある").toBeGreaterThanOrEqual(
+        alignment.edge - 1,
+      );
     } finally {
       await gateway.close();
     }

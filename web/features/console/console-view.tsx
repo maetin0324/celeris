@@ -121,15 +121,12 @@ export function ConsoleView({
   return (
     <div className="flex min-w-0 flex-col gap-3 pb-40" data-console data-scope={scope}>
       {/* contained（ホームの枠）では枠が末尾へ送られても宛先と「新しい会話」を枠の上端に留める。
-          留めないと枠の上端で button が切れ、下辺の線だけが空の枠に見えた（fix-r5/fix-home-states.md）。
-          留めた行の下には枠の地の色から透明への帯を置く。末尾へ送ると先頭に見える block の見出し行が
-          この行の下端で半分に切れて見えたので、切れ目を帯でぼかす（fix-r6 narrow）。 */}
+          留めないと枠の上端で button が切れ、下辺の線だけが空の枠に見えた（fix-r5/fix-home-states.md）。 */}
       <div
         data-console-toolbar
         className={cn(
           "flex min-w-0 flex-wrap items-center justify-between gap-2",
-          contained &&
-            "sticky top-0 z-10 bg-surface pb-2 after:pointer-events-none after:absolute after:inset-x-0 after:top-full after:h-6 after:bg-linear-to-b after:from-surface after:to-transparent after:content-['']",
+          contained && "sticky top-0 z-10 bg-surface pb-2",
         )}
       >
         <p className="min-w-0 break-words text-body text-muted-foreground">宛先: {label}</p>

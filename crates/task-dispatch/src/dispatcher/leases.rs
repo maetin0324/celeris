@@ -436,6 +436,7 @@ impl Dispatcher {
     ) {
         task_worker::kill_tree_with(run_id, self.config.kill_grace, container);
         handle.abort();
+        self.release_routing_context(run_id);
     }
 
     /// レビュー側（判定コマンドの run と Reviewer run）の停止。run は 2 本ありうるので両方に送る。
@@ -675,6 +676,7 @@ impl Dispatcher {
             .iter()
             .find(|(_, e)| e.run_id == run_id)
             .map(|(k, _)| k.clone())?;
+        self.release_routing_context(run_id);
         self.running.remove(&key)
     }
 

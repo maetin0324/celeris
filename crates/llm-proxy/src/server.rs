@@ -22,6 +22,9 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
 use task_core::AccountAdapter;
 use task_core::SharedRole;
+use task_core::model_router::context_registry::RoutingContextRegistry;
+use task_core::model_router::feedback::RequestSourceAttempt;
+use task_core::store::RoutingCorrelation;
 use task_dispatch::accounts::{
     AccountBook, AccountCooldownReason, AccountDir, cooldown_for_failure, scan_accounts,
 };
@@ -35,6 +38,9 @@ use crate::log::{self, RequestLogRow};
 use crate::naming::{self, ModelRequest, SourceKind, SourceScope};
 use crate::openai::ChatCompletionRequest;
 use crate::reservation::{Clock, SystemClock};
+use crate::routing_context::{
+    self as rctx, InFlightContexts, InFlightGuard, ProxyEventSink, ResolvedRouting,
+};
 use crate::selection::{self, PoolInput, SelectedAccount};
 use crate::sources::{SendOutcome, SourceError, claude, codex, relay};
 
@@ -70,6 +76,13 @@ pub struct ProxyState {
     breakers: Arc<Breakers>,
     /// fallback の deadline と breaker の遷移に使う時計（試験で差し替える）。
     clock: Arc<dyn Clock>,
+    /// daemon が登録した `context_ref` の解決先（ADR 2026-10-04 §10 Phase 3）。`None` の proxy は
+    /// `x-celeris-routing-context` を信頼できないので、header 付きの要求を 400 にする。
+    routing_registry: Option<Arc<dyn RoutingContextRegistry>>,
+    /// task に相関できる要求の受け口。`None` なら何もしない（proxy log だけ）。
+    event_sink: Option<Arc<dyn ProxyEventSink>>,
+    /// run ごとの in-flight 要求数（ref を外す前に daemon が見る）。
+    in_flight: Arc<InFlightContexts>,
 }
 
 impl ProxyState {
@@ -98,7 +111,32 @@ impl ProxyState {
             breakers: Breakers::new(FallbackSettings::default().breaker),
             fallback: FallbackSettings::default(),
             clock: Arc::new(SystemClock),
+            routing_registry: None,
+            event_sink: None,
+            in_flight: Arc::new(InFlightContexts::default()),
         })
+    }
+
+    /// `context_ref` の registry と routing event の sink を差し込む（作った直後、まだ共有していない
+    /// `Arc` にだけ効く。[`Self::with_fallback`] と同じ流儀）。
+    pub fn with_routing_context(
+        mut self: Arc<Self>,
+        registry: Option<Arc<dyn RoutingContextRegistry>>,
+        sink: Option<Arc<dyn ProxyEventSink>>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => {
+                state.routing_registry = registry;
+                state.event_sink = sink;
+            }
+            None => tracing::warn!("llm-proxy: routing context ignored (state already shared)"),
+        }
+        self
+    }
+
+    /// run ごとの in-flight 要求数（daemon は run 終了後、これが 0 になってから ref を外す）。
+    pub fn in_flight_contexts(&self) -> &Arc<InFlightContexts> {
+        &self.in_flight
     }
 
     /// fallback の設定と時計を差し替える（作った直後、まだ共有していない `Arc` にだけ効く）。
@@ -445,16 +483,43 @@ impl ProxyState {
 // 記録
 // ---------------------------------------------------------------------------
 
-struct LogHandle {
+/// 要求 1 件の記録に共通するもの（id・時刻・routing の相関・試した source・in-flight の数え）。
+/// 終わり方ごとに [`RequestScope::log`] で [`LogHandle`] に変えて 1 回だけ書く。
+struct RequestScope {
     id: String,
     ts: i64,
-    source: Option<String>,
-    account: Option<String>,
     requested_model: String,
-    upstream_model: Option<String>,
     started: Instant,
     db_path: Option<PathBuf>,
     busy_timeout: Duration,
+    routing: ResolvedRouting,
+    attempts: Vec<RequestSourceAttempt>,
+    sink: Option<Arc<dyn ProxyEventSink>>,
+    /// 要求の間だけ持つ（drop で in-flight の数が戻る）。
+    _in_flight: Option<InFlightGuard>,
+}
+
+impl RequestScope {
+    fn log(
+        self,
+        source: Option<String>,
+        account: Option<String>,
+        upstream_model: Option<String>,
+    ) -> LogHandle {
+        LogHandle {
+            source,
+            account,
+            upstream_model,
+            scope: self,
+        }
+    }
+}
+
+struct LogHandle {
+    source: Option<String>,
+    account: Option<String>,
+    upstream_model: Option<String>,
+    scope: RequestScope,
 }
 
 impl LogHandle {
@@ -464,28 +529,67 @@ impl LogHandle {
         usage: (Option<u64>, Option<u64>),
         error_kind: Option<String>,
     ) {
-        let Some(db_path) = &self.db_path else { return };
+        let scope = &self.scope;
+        if let (Some(sink), Some(event)) = (
+            &scope.sink,
+            rctx::build_event(&scope.routing, &scope.id, &scope.attempts),
+        ) {
+            sink.record(event);
+        }
+        let Some(db_path) = &scope.db_path else {
+            return;
+        };
         let row = RequestLogRow {
-            id: self.id.clone(),
-            ts: self.ts,
+            id: scope.id.clone(),
+            ts: scope.ts,
             source: self.source.clone(),
             account: self.account.clone(),
-            requested_model: self.requested_model.clone(),
+            requested_model: scope.requested_model.clone(),
             upstream_model: self.upstream_model.clone(),
             prompt_tokens: usage.0,
             completion_tokens: usage.1,
-            latency_ms: self.started.elapsed().as_millis() as u64,
+            latency_ms: scope.started.elapsed().as_millis() as u64,
             status,
             error_kind,
         };
-        match log::open(db_path, self.busy_timeout) {
-            Ok(conn) => {
-                if let Err(e) = log::insert(&conn, &row) {
-                    tracing::warn!(error = %e, "llm-proxy: could not record the request log row");
-                }
+        let conn = match log::open(db_path, scope.busy_timeout) {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::warn!(error = %e, "llm-proxy: could not open the request log db");
+                return;
             }
-            Err(e) => tracing::warn!(error = %e, "llm-proxy: could not open the request log db"),
+        };
+        // daemon 登録の context を持つ要求は 0048 の相関欄（run 側 decision・run・task・実 source・model）
+        // も書く。standalone は従来の欄だけ。
+        let result = if scope.routing.registered {
+            let correlation = RoutingCorrelation {
+                decision_id: scope.routing.parent_decision_id.clone(),
+                snapshot_id: None,
+                run_id: scope.routing.run_id().map(str::to_owned),
+                task_id: scope.routing.task_id().map(str::to_owned),
+                source_id: self.source.clone(),
+                model: self.upstream_model.clone(),
+                account: None,
+            };
+            log::insert_routed(&conn, &row, &correlation)
+        } else {
+            log::insert(&conn, &row)
+        };
+        if let Err(e) = result {
+            tracing::warn!(error = %e, "llm-proxy: could not record the request log row");
         }
+        // in-flight の数えはここで戻る（`self` の drop で guard も落ちる）。
+    }
+}
+
+/// 次の候補へ倒した理由の reason code（ADR §6 の安定値に寄せる）。
+fn fallback_reason(class: FailureClass) -> &'static str {
+    match class {
+        FailureClass::Unauthorized => "auth_failed",
+        FailureClass::RateLimited => "rate_limit",
+        FailureClass::Server | FailureClass::Network => "health_down",
+        FailureClass::Local => "local",
+        FailureClass::Client => "client",
     }
 }
 
@@ -873,27 +977,81 @@ fn error_response(e: &SourceError) -> Response {
 
 async fn chat_completions(
     State(state): State<Arc<ProxyState>>,
+    headers: HeaderMap,
     Json(req): Json<ChatCompletionRequest>,
 ) -> Response {
     let started = Instant::now();
     let request_id = Ulid::new().to_string();
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
 
+    // ADR 2026-10-04 §10 Phase 3: 文脈は daemon 登録の ref からだけ取る（本文の自己申告は採らない）。
+    // header は以後どこにも渡さない（上流への要求は `req` から組み直す）。
+    let (context, registered) =
+        match rctx::resolve(&headers, state.routing_registry.as_deref(), &req, started) {
+            Ok(resolved) => resolved,
+            Err(e) => {
+                RequestScope {
+                    id: request_id,
+                    ts: now,
+                    requested_model: req.model.clone(),
+                    started,
+                    db_path: state.db_path.clone(),
+                    busy_timeout: state.busy_timeout,
+                    routing: ResolvedRouting {
+                        context: task_core::model_router::context::standalone_context(
+                            "llm-proxy:rejected",
+                        ),
+                        registered: false,
+                        decision_id: format!("pdec_{}", Ulid::new()),
+                        parent_decision_id: None,
+                    },
+                    attempts: Vec::new(),
+                    sink: None,
+                    _in_flight: None,
+                }
+                .log(None, None, None)
+                .write("error", (None, None), Some(e.code().to_string()));
+                return problem(
+                    StatusCode::BAD_REQUEST,
+                    e.code(),
+                    "the x-celeris-routing-context reference is not registered or has expired",
+                );
+            }
+        };
+    let parent_decision_id = match (&state.event_sink, context.run_id.as_deref()) {
+        (Some(sink), Some(run_id)) if registered => sink.parent_decision(run_id),
+        _ => None,
+    };
+    let in_flight = match (registered, context.run_id.as_deref()) {
+        (true, Some(run_id)) => Some(state.in_flight.enter(run_id)),
+        _ => None,
+    };
+    let mut scope = RequestScope {
+        id: request_id,
+        ts: now,
+        requested_model: req.model.clone(),
+        started,
+        db_path: state.db_path.clone(),
+        busy_timeout: state.busy_timeout,
+        routing: ResolvedRouting {
+            context,
+            registered,
+            decision_id: format!("pdec_{}", Ulid::new()),
+            parent_decision_id,
+        },
+        attempts: Vec::new(),
+        sink: state.event_sink.clone(),
+        _in_flight: in_flight,
+    };
+
     let parsed = match naming::parse_model(&req.model) {
         Ok(p) => p,
         Err(e) => {
-            LogHandle {
-                id: request_id,
-                ts: now,
-                source: None,
-                account: None,
-                requested_model: req.model.clone(),
-                upstream_model: None,
-                started,
-                db_path: state.db_path.clone(),
-                busy_timeout: state.busy_timeout,
-            }
-            .write("error", (None, None), Some("invalid_model".to_string()));
+            scope.log(None, None, None).write(
+                "error",
+                (None, None),
+                Some("invalid_model".to_string()),
+            );
             return problem(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_model",
@@ -915,18 +1073,7 @@ async fn chat_completions(
         attempts = state.attempts_for(&parsed, rescan_now).await;
     }
     if attempts.is_empty() {
-        LogHandle {
-            id: request_id,
-            ts: now,
-            source: None,
-            account: None,
-            requested_model: req.model.clone(),
-            upstream_model: None,
-            started,
-            db_path: state.db_path.clone(),
-            busy_timeout: state.busy_timeout,
-        }
-        .write(
+        scope.log(None, None, None).write(
             "unavailable",
             (None, None),
             Some("no_source_available".to_string()),
@@ -972,6 +1119,12 @@ async fn chat_completions(
         if let Some(k) = &in_use_key {
             state.in_use_start(k);
         }
+        scope.attempts.push(RequestSourceAttempt {
+            source_id: source_label.clone(),
+            model: Some(upstream_model.clone()),
+            account_id: account_label.clone(),
+            fallback_reason: None,
+        });
         let result = match run_attempt(&state, attempt, upstream_model, &req).await {
             // 最初の byte が来るまでは失敗を「送る前」と同じに扱う（まだ caller へ何も返していない）。
             Ok(AttemptOutcome::Stream(mut stream)) => match stream.next().await {
@@ -990,18 +1143,13 @@ async fn chat_completions(
             Ok(AttemptOutcome::NonStreamJson(value)) => {
                 permit.success(state.clock.now());
                 let usage = usage_from_value(&value);
-                LogHandle {
-                    id: request_id,
-                    ts: now,
-                    source: Some(source_label.clone()),
-                    account: account_label.clone(),
-                    requested_model: req.model.clone(),
-                    upstream_model: Some(upstream_model.clone()),
-                    started,
-                    db_path: state.db_path.clone(),
-                    busy_timeout: state.busy_timeout,
-                }
-                .write("ok", usage, None);
+                scope
+                    .log(
+                        Some(source_label.clone()),
+                        account_label.clone(),
+                        Some(upstream_model.clone()),
+                    )
+                    .write("ok", usage, None);
                 let mut resp = (StatusCode::OK, Json(value)).into_response();
                 attach_source_headers(resp.headers_mut(), &source_label, account_label.as_deref());
                 return resp;
@@ -1009,17 +1157,11 @@ async fn chat_completions(
             Ok(AttemptOutcome::Stream(stream)) => {
                 // 最初の byte を受け取った。以後の失敗は caller に返す（再送しない）。
                 permit.success(state.clock.now());
-                let log = LogHandle {
-                    id: request_id,
-                    ts: now,
-                    source: Some(source_label.clone()),
-                    account: account_label.clone(),
-                    requested_model: req.model.clone(),
-                    upstream_model: Some(upstream_model.clone()),
-                    started,
-                    db_path: state.db_path.clone(),
-                    busy_timeout: state.busy_timeout,
-                };
+                let log = scope.log(
+                    Some(source_label.clone()),
+                    account_label.clone(),
+                    Some(upstream_model.clone()),
+                );
                 let body = Body::from_stream(finalize_stream(stream, log));
                 let mut resp = Response::new(body);
                 resp.headers_mut().insert(
@@ -1044,6 +1186,9 @@ async fn chat_completions(
                 ) {
                     state.record_failure(attempt.source_kind(), account, &e, now);
                 }
+                if let Some(last) = scope.attempts.last_mut() {
+                    last.fallback_reason = Some(fallback_reason(class).to_string());
+                }
                 let decision = budget.after_failure(class, failed_at);
                 tracing::warn!(source = %source_label, account = ?account_label, kind = error_kind(&e), class = class.as_str(), ?decision, "llm-proxy: candidate failed before any bytes were sent");
                 last_error = Some((source_label, account_label, upstream_model.clone(), e));
@@ -1056,18 +1201,7 @@ async fn chat_completions(
 
     if last_error.is_none() {
         // 候補は居たが、制約に合わないか breaker が開いていて 1 回も送らなかった。
-        LogHandle {
-            id: request_id,
-            ts: now,
-            source: None,
-            account: None,
-            requested_model: req.model.clone(),
-            upstream_model: None,
-            started,
-            db_path: state.db_path.clone(),
-            busy_timeout: state.busy_timeout,
-        }
-        .write(
+        scope.log(None, None, None).write(
             "unavailable",
             (None, None),
             Some("no_source_available".to_string()),
@@ -1095,18 +1229,13 @@ async fn chat_completions(
         String::new(),
         SourceError::Unavailable("no candidate succeeded".to_string()),
     ));
-    LogHandle {
-        id: request_id,
-        ts: now,
-        source: Some(source_label),
-        account: account_label,
-        requested_model: req.model.clone(),
-        upstream_model: Some(upstream_model),
-        started,
-        db_path: state.db_path.clone(),
-        busy_timeout: state.busy_timeout,
+    // 最後に試した source は次へ倒していない（理由は error_kind に残る）。
+    if let Some(last) = scope.attempts.last_mut() {
+        last.fallback_reason = None;
     }
-    .write("error", (None, None), Some(error_kind(&e).to_string()));
+    scope
+        .log(Some(source_label), account_label, Some(upstream_model))
+        .write("error", (None, None), Some(error_kind(&e).to_string()));
     error_response(&e)
 }
 

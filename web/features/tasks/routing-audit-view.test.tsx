@@ -2,7 +2,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
 import type { TaskRoutingView } from "../../api/generated/types";
-import { routingAuditFixture, validateFixture } from "../../e2e/support/fake-daemon.mjs";
+import { routingAuditFixture, routingTrajectoryFixture, validateFixture } from "../../e2e/support/fake-daemon.mjs";
 import { RoutingAuditView } from "./routing-audit-view";
 
 const html = (data: TaskRoutingView) => renderToStaticMarkup(<RoutingAuditView data={data} />);
@@ -55,5 +55,30 @@ describe("task の routing 監査（ADR 2026-10-04-multi-objective-model-routing
       unbound_requests: [],
     });
     expect(out).toContain("要求単位の記録がない旧 run です");
+  });
+});
+
+describe("task の routing 軌跡（ADR 2026-10-04-multi-objective-model-routing §5・§6・§10 Phase 3）", () => {
+  it("fixture は TaskRoutingView の生成型に合う", () => {
+    expect(validateFixture(routingTrajectoryFixture, schema.$defs.TaskRoutingView)).toEqual([]);
+  });
+
+  it("実行 lane・選定理由・実際の source を出す", () => {
+    const out = html(routingTrajectoryFixture);
+    expect(out).toContain("実行 lane standard");
+    expect(out).toContain("選定理由: trajectory_escalation");
+    expect(out).toContain("source claude-oauth / model claude-sonnet / 口座 main（出所: proxy_log）");
+  });
+
+  it("escalation の理由を requested→selected と連続失敗回数つきで出す", () => {
+    const out = html(routingTrajectoryFixture);
+    expect(out).toContain("escalation: cheap（直前 cheap） → standard / 理由 repeated_review_failures（連続失敗 2 回");
+  });
+
+  it("outcome_state で unreviewed・not_recorded・audit_incomplete を区別する（false や 0 に丸めない）", () => {
+    const out = html(routingTrajectoryFixture);
+    expect(out).toContain("outcome: 未レビュー（合否は null のまま）");
+    expect(out).toContain("outcome: 未記録");
+    expect(out).not.toContain("outcome: 判定済み");
   });
 });

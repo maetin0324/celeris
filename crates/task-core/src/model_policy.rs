@@ -545,6 +545,9 @@ pub struct RoutingRecord {
     /// Optional Phase 1 optimizer audit. Older events omit this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
+    /// Phase 3 run 間 escalation の構造化監査。旧 event では欠落する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub escalation: Option<crate::retry_policy::EscalationAudit>,
 }
 
 /// 規則 1 件。`when` が真なら `lane`。

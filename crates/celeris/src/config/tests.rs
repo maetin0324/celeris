@@ -4156,3 +4156,29 @@ fn routing_config_defaults_do_not_seed_unknown_as_zero() {
     );
     assert_eq!(runtime.dispatch_settings().window_reserves.len(), 1);
 }
+
+#[test]
+fn routing_phase3_escalation_defaults_and_validation() {
+    let cfg = routing_phase2_load("").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(
+        runtime.escalation,
+        task_core::EscalationThresholds::default()
+    );
+    assert_eq!(runtime.context_safety_margin, None);
+    let cfg = routing_phase2_load("[model_routing]\ncontext_safety_margin = 512\n[model_routing.escalation]\nquality_failures_per_lane = 3\nmax_total_attempts = 5\n").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.context_safety_margin, Some(512));
+    assert_eq!(runtime.escalation.quality_failures_per_lane, 3);
+    assert_eq!(runtime.escalation.max_total_attempts, 5);
+    for key in ["quality_failures_per_lane", "max_total_attempts"] {
+        let err =
+            routing_phase2_load(&format!("[model_routing.escalation]\n{key} = 0\n")).unwrap_err();
+        assert!(err.contains(key), "{err}");
+    }
+    let cfg = routing_phase2_load("[model_routing]\nfuture_context_field = 1\n[model_routing.escalation]\nfuture_threshold = 7\n").unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().escalation,
+        task_core::EscalationThresholds::default()
+    );
+}

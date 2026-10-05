@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 62] = [
+pub(crate) const EVENT_TYPES: [&str; 65] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -192,6 +192,10 @@ pub(crate) const EVENT_TYPES: [&str; 62] = [
     "workspace_pruned",
     // ADR-0069 D5（Phase 114）: run ごとの routing の監査記録。
     "routing_decided",
+    // 2026-10-04 多目的 routing ADR §6（Phase 3）: 特徴 snapshot・proxy 要求の trace・run の outcome。
+    "routing_features_recorded",
+    "routing_request_decided",
+    "routing_outcome_recorded",
     // ADR-0072 D5（Phase E1）: run 終了時に確定させた checkpoint。
     "checkpoint_saved",
     // ADR-0072 D5（Phase E2）: 計画の採用（新規または replan）。
@@ -274,6 +278,9 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::ClusterMasterExited { .. } => "cluster_master_exited",
         Event::WorkspacePruned { .. } => "workspace_pruned",
         Event::RoutingDecided { .. } => "routing_decided",
+        Event::RoutingFeaturesRecorded { .. } => "routing_features_recorded",
+        Event::RoutingRequestDecided { .. } => "routing_request_decided",
+        Event::RoutingOutcomeRecorded { .. } => "routing_outcome_recorded",
         Event::CheckpointSaved { .. } => "checkpoint_saved",
         Event::ExecutionPlanned { .. } => "execution_planned",
         Event::WorkUnitTransitioned { .. } => "work_unit_transitioned",

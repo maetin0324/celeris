@@ -259,6 +259,86 @@ export const routingAuditFixture = {
   unbound_requests: [],
 };
 
+// ADR 2026-10-04-multi-objective-model-routing §5/§6/§10 Phase 3: GET /tasks/:id/routing の軌跡
+// escalation・feature snapshot・遅延 outcome（fixture id: routing_trajectory）。R1 は escalation 済みで
+// 未レビュー（outcome はあるが合否が null）、R2 は dispatch の決定のみで outcome 未記録（not_recorded）。
+// 実際の source は dispatch で未確定だった model を proxy log 相関から埋める（actual.from）。欠測を
+// false や 0 に丸めない。
+export const routingTrajectoryFixture = {
+  task_id: "T2",
+  assignee: "software-engineering",
+  runs: [
+    {
+      run_id: "R1",
+      task_id: "T2",
+      org_node: "software-engineering",
+      lane: "standard",
+      provider: "claude-oauth",
+      model: "claude-sonnet",
+      account: "main",
+      rule_id: "trajectory-escalation",
+      cost_usd: 0.4,
+      reasons: ["trajectory_escalation"],
+      decision_id: "D10",
+      escalation_audit: {
+        requested_lane: "cheap",
+        previous_lane: "cheap",
+        selected_lane: "standard",
+        reason: "repeated_review_failures",
+        counted_failures: 2,
+        interval_id: "I1",
+      },
+      routing_features: {
+        decision_id: "D10",
+        context_version: "context-fixture-1",
+        features: { task_kind: "code", attempts: 2 },
+        provenance: { task_kind: "task.kind", attempts: "run.attempt_history" },
+        missing_fields: [],
+        run_id: "R1",
+        request_id: null,
+        stage: "dispatch",
+      },
+      routing_outcome: {
+        outcome_id: "O1",
+        decision_id: "D10",
+        run_id: "R1",
+        evaluation_version: "outcome-fixture-1",
+        acceptance_passed: null,
+        review_passed: null,
+        failed_criterion_ids: [],
+        cash_usd: 0.4,
+        tokens: 1200,
+        wall_ms: 9000,
+        retries: 2,
+        reward: null,
+      },
+      outcome_state: "unreviewed",
+      actual_sources: [{ source_id: "claude-oauth", model: "claude-sonnet", account: "main", from: "proxy_log" }],
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+    },
+    {
+      run_id: "R2",
+      task_id: "T2",
+      org_node: "software-engineering",
+      lane: "cheap",
+      provider: "openai-compatible:qwen",
+      model: null,
+      account: null,
+      rule_id: "cheap-local-first",
+      cost_usd: null,
+      reasons: ["cheap_local_first"],
+      decision_id: "D11",
+      outcome_state: "not_recorded",
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+    },
+  ],
+  unbound_requests: [],
+};
+
 // ADR 2026-10-04-multi-objective-model-routing §6/§8 Phase 2: GET /llm/sources の deployment 状態。
 // 観測が無い・期限切れの値、請求と機会費用が別の欄、欠測の残量を含める（欠測は 0 にしない）。
 export const llmSourcesFixture = {

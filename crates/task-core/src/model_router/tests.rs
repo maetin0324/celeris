@@ -78,6 +78,7 @@ fn context() -> RoutingContext {
         output_reserve: Some(10),
         safety_margin: 5,
         provenance: "test".into(),
+        ..RoutingContext::default()
     }
 }
 fn candidate<'a>(m: &'a ModelProfile, d: &'a DeploymentProfile) -> Candidate<'a> {
@@ -246,16 +247,19 @@ fn routing_old_events_deserialize_without_optimizer() {
         resolution: Default::default(),
         quota_reason: None,
         work_unit_id: None,
+        escalation: None,
         optimizer: None,
     };
     let old_event = Event::RoutingDecided {
         run_id: "r".into(),
         record: Box::new(record.clone()),
     };
-    let json = serde_json::to_value(&old_event).unwrap();
+    let mut json = serde_json::to_value(&old_event).unwrap();
+    json["record"]["future_field"] = serde_json::json!("ignored");
     let old: Event = serde_json::from_value(json.clone()).unwrap();
     if let Event::RoutingDecided { record, .. } = &old {
         assert!(record.optimizer.is_none());
+        assert!(record.escalation.is_none());
     } else {
         panic!("wrong event");
     }
@@ -384,6 +388,7 @@ fn routing_trace_fields_are_additive() {
         resolution: Default::default(),
         quota_reason: None,
         work_unit_id: None,
+        escalation: None,
         optimizer: None,
     };
     let mut event = serde_json::to_value(Event::RoutingDecided {
@@ -528,5 +533,167 @@ fn routing_candidate_reasons_serialize_stably() {
         ExcludedReason::Other {
             code: "brand_new".into()
         }
+    );
+}
+
+#[test]
+fn routing_context_ignores_unknown_fields() {
+    let json = serde_json::json!({
+        "version": "1",
+        "origin": "test",
+        "task_id": "t1",
+        "org_node": "software-engineering",
+        "role": "worker",
+        "harness": "claude-code",
+        "task_kind": "coding",
+        "phase": "implementation",
+        "acceptance_criteria": ["ac-0", "ac-1"],
+        "required_tools": true,
+        "required_tool_ids": ["bash"],
+        "required_structured_output": false,
+        "required_vision": false,
+        "required_streaming": false,
+        "environment": {"locality": "local", "host": null, "external_network": false},
+        "input_tokens": 40,
+        "output_reserve": 10,
+        "safety_margin": 5,
+        "attempts": 1,
+        "review_failures": 0,
+        "check_failures": 0,
+        "priority": 3,
+        "provenance": "test",
+        "field_provenance": {"role": "task-dispatch"},
+        "missing_fields": [],
+        // Phase 3 より後の未知の欄。deny_unknown_fields を付けていないので無視して decode できる。
+        "future_quantum_lane": {"nested": true},
+    });
+    let ctx: RoutingContext = serde_json::from_value(json).unwrap();
+    assert_eq!(ctx.task_id, Some("t1".into()));
+    assert_eq!(
+        ctx.phase,
+        Some(super::context::RoutingPhase::Implementation)
+    );
+    assert_eq!(ctx.acceptance_criteria, vec!["ac-0", "ac-1"]);
+    assert_eq!(ctx.environment.locality, Some("local".into()));
+    assert_eq!(ctx.attempts, Some(1));
+    assert_eq!(
+        ctx.field_provenance.get("role").map(String::as_str),
+        Some("task-dispatch")
+    );
+
+    // 知らない phase の値も decode を失敗させず Unknown に読む。
+    let unknown_phase: RoutingContext = serde_json::from_value(serde_json::json!({
+        "version": "1",
+        "origin": "test",
+        "phase": "some_future_phase",
+        "provenance": "test",
+    }))
+    .unwrap();
+    assert_eq!(
+        unknown_phase.phase,
+        Some(super::context::RoutingPhase::Unknown)
+    );
+}
+
+#[test]
+fn routing_context_decodes_phase2_json() {
+    // Phase 2 時点の RoutingContext（この欄の集合しか知らない旧 event/設定）を、
+    // Phase 3 で足した欄なしで decode できることを固定する。
+    let phase2_json = serde_json::json!({
+        "version": "1",
+        "origin": "test",
+        "task_id": null,
+        "work_unit_id": null,
+        "run_id": null,
+        "role": null,
+        "harness": null,
+        "task_kind": null,
+        "required_tools": true,
+        "required_structured_output": false,
+        "required_vision": false,
+        "required_streaming": false,
+        "input_tokens": 40,
+        "output_reserve": 10,
+        "safety_margin": 5,
+        "provenance": "test",
+    });
+    let ctx: RoutingContext = serde_json::from_value(phase2_json).unwrap();
+    assert_eq!(ctx.version, "1");
+    assert!(ctx.required_tools);
+    assert_eq!(ctx.safety_margin, 5);
+    // Phase 3 で足した欄は欠けていたので既定値（None / 空）になる。0 や false で埋めない。
+    assert_eq!(ctx.org_node, None);
+    assert_eq!(ctx.phase, None);
+    assert!(ctx.acceptance_criteria.is_empty());
+    assert_eq!(
+        ctx.environment,
+        super::context::RoutingEnvironment::default()
+    );
+    assert_eq!(ctx.attempts, None);
+    assert_eq!(ctx.review_failures, None);
+    assert_eq!(ctx.check_failures, None);
+    assert_eq!(ctx.priority, None);
+    assert!(ctx.field_provenance.is_empty());
+    assert!(ctx.missing_fields.is_empty());
+}
+
+#[test]
+fn routing_context_registry_expires_and_rejects_unknown_refs() {
+    use super::context_registry::{
+        ContextRefError, InMemoryRoutingContextRegistry, RoutingContextRegistry,
+    };
+    use std::time::{Duration, Instant};
+
+    let registry = InMemoryRoutingContextRegistry::new();
+    let base = Instant::now();
+    let ctx = context();
+    let reference = registry.register("run-1", ctx.clone(), Duration::from_secs(10), base);
+
+    // 未知の ref は登録の有無に関わらず Invalid。
+    assert_eq!(
+        registry.resolve("ctx_does_not_exist", base),
+        Err(ContextRefError::Invalid)
+    );
+
+    // ttl 内は in-flight の間ずっと解決できる。
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(5)),
+        Ok(ctx.clone())
+    );
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(9)),
+        Ok(ctx.clone())
+    );
+
+    // ttl を過ぎたら Expired（Invalid と区別する）。
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(10)),
+        Err(ContextRefError::Expired)
+    );
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(99)),
+        Err(ContextRefError::Expired)
+    );
+
+    // 別の run を登録し、in-flight 終了（release）で ttl 前でも即時に Invalid へ落とす。
+    let reference2 = registry.register("run-2", ctx.clone(), Duration::from_secs(10), base);
+    registry.release("run-2");
+    assert_eq!(
+        registry.resolve(&reference2, base + Duration::from_secs(1)),
+        Err(ContextRefError::Invalid)
+    );
+
+    // release は指定した run だけに効く。他の run の ref は影響を受けない。
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(1)),
+        Ok(ctx.clone())
+    );
+
+    // prune は期限切れの entry だけ数えて取り除く。
+    let pruned = registry.prune(base + Duration::from_secs(10));
+    assert_eq!(pruned, 1);
+    assert_eq!(
+        registry.resolve(&reference, base + Duration::from_secs(10)),
+        Err(ContextRefError::Invalid)
     );
 }

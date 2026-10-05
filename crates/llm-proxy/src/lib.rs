@@ -9,6 +9,7 @@ pub mod naming;
 mod neterr;
 pub mod openai;
 pub mod reservation;
+pub mod routing_context;
 pub mod selection;
 pub mod server;
 pub mod sources;

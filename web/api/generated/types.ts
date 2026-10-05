@@ -340,6 +340,8 @@ export type BehindTargetRepo = {
   "target_sha"?: string | null;
 };
 
+export type Billing = "subscription" | "metered_api" | "self_hosted";
+
 export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
 
 export type BrowserCapability = {
@@ -464,6 +466,46 @@ export type BudgetPrefs = {
 
 export type CancelBody = {
   "expected_status"?: Status | null;
+};
+
+export type CandidateTrace = {
+  "cost_usd"?: number | null;
+  "deployment_id": string;
+  "eligible_provider_ids": Array<string>;
+  "excluded_reasons": Array<string>;
+  "latency_ms"?: number | null;
+  "model_profile_id": string;
+  "pressure"?: number | null;
+  "quality"?: QualityEstimate | null;
+  "score"?: number | null;
+};
+
+export type CatalogCapabilitiesView = {
+  "reasoning_efforts"?: Array<string> | null;
+  "streaming"?: boolean | null;
+  "structured_output"?: boolean | null;
+  "tools"?: boolean | null;
+  "vision"?: boolean | null;
+};
+
+export type CatalogDeploymentView = {
+  "allowed_lanes": Array<Tier>;
+  "billing": Billing;
+  "id": string;
+  "model_profile_id": string;
+  "price_override"?: TokenPricing | null;
+  "source_ref": string;
+  "upstream_model": string;
+};
+
+export type CatalogModelView = {
+  "capabilities": CatalogCapabilitiesView;
+  "context_limits": ContextLimits;
+  "family": string;
+  "id": string;
+  "pricing"?: TokenPricing | null;
+  "quality"?: Array<QualityIndex> | null;
+  "revision": string;
 };
 
 export type ChangeDiffView = {
@@ -907,6 +949,16 @@ export type ConsoleTaskLine = {
   "to": Status;
 };
 
+export type Constraints = {
+  "allowed_deployments"?: Array<string> | null;
+  "allowed_sources"?: Array<string> | null;
+  "data_retention_allowed"?: boolean | null;
+  "external_network_allowed"?: boolean | null;
+  "max_cost_usd"?: number | null;
+  "max_latency_ms"?: number | null;
+  "required_region"?: string | null;
+};
+
 export type ContainerProbeView = {
   "detail": string;
   "runtime": string;
@@ -918,6 +970,12 @@ export type ContainersLive = {
   "preference": string;
   "probes"?: Array<ContainerProbeView>;
   "runtime"?: string | null;
+};
+
+export type ContextLimits = {
+  "input"?: number | null;
+  "output"?: number | null;
+  "total"?: number | null;
 };
 
 export type ContinuationMetrics = {
@@ -2789,6 +2847,11 @@ export type NodeSessionSummary = {
   "turns": number;
 };
 
+export type Normalization = {
+  "cost_reference_usd": number;
+  "latency_reference_ms": number;
+};
+
 export type Notice = {
   "count": number;
   "first_at": string;
@@ -2865,6 +2928,8 @@ export type NotifyView = {
   "recent": Array<NotifyRecent>;
   "secret_id": string;
 };
+
+export type Objective = "quality_first" | "balanced" | "resource_first";
 
 export type OnChildFailure = "retry_then_ask" | "ignore";
 
@@ -3379,6 +3444,21 @@ export type Providers = {
   "items": Array<ProviderView>;
 };
 
+export type QualityEstimate = {
+  "confidence"?: number | null;
+  "feature_version": string;
+  "index"?: number | null;
+  "reasons": Array<string>;
+};
+
+export type QualityIndex = {
+  "domain": string;
+  "evaluation_version": string;
+  "index": number;
+  "provenance": string;
+  "samples"?: number | null;
+};
+
 export type QuestionItem = {
   "approval_id"?: ApprovalId | null;
   "asked_at"?: string | null;
@@ -3857,6 +3937,7 @@ export type RoutingAudit = {
   "input_tokens"?: number | null;
   "lane"?: Tier | null;
   "model"?: string | null;
+  "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;
   "outcome"?: string | null;
   "output_tokens"?: number | null;
@@ -3872,12 +3953,62 @@ export type RoutingAudit = {
   "wall_ms"?: number | null;
 };
 
+export type RoutingCatalogView = {
+  "catalog_version": string;
+  "deployments": Array<CatalogDeploymentView>;
+  "mode": RoutingMode;
+  "models": Array<CatalogModelView>;
+  "policies": Array<RoutingPolicy>;
+  "warnings": Array<string>;
+};
+
+export type RoutingMode = "legacy" | "shadow" | "enforce";
+
+export type RoutingPolicy = {
+  "constraints": Constraints;
+  "escalation": boolean;
+  "fallback": boolean;
+  "lane": Tier;
+  "local_preference": boolean;
+  "min_quality": number;
+  "mode": RoutingMode;
+  "normalization": Normalization;
+  "objective": Objective;
+  "prefer_free": boolean;
+  "version": string;
+  "weights": Weights;
+};
+
 export type RoutingRecord = {
   "decision": LaneDecision;
   "harness"?: string | null;
+  "optimizer"?: RoutingTraceV1 | null;
   "org_node"?: string | null;
   "quota_reason"?: string | null;
   "resolution": LaneResolution;
+  "work_unit_id"?: string | null;
+};
+
+export type RoutingTraceV1 = {
+  "candidates": Array<CandidateTrace>;
+  "catalog_version": string;
+  "decision_id": string;
+  "estimator_version": string;
+  "fallback_order": Array<string>;
+  "feature_version": string;
+  "mode": RoutingMode;
+  "observed_at"?: string | null;
+  "parent_decision_id"?: string | null;
+  "policy_version": string;
+  "reasons": Array<string>;
+  "request_id"?: string | null;
+  "requested_lane": Tier;
+  "run_id"?: string | null;
+  "selected"?: string | null;
+  "selected_lane"?: Tier | null;
+  "snapshot_id": string;
+  "stage": string;
+  "task_id"?: string | null;
   "work_unit_id"?: string | null;
 };
 
@@ -4534,6 +4665,14 @@ export type Timers = {
   "now": string;
 };
 
+export type TokenPricing = {
+  "as_of"?: string | null;
+  "cached_input_usd_per_million"?: number | null;
+  "input_usd_per_million"?: number | null;
+  "output_usd_per_million"?: number | null;
+  "provenance": string;
+};
+
 export type TransitionResult = {
   "cascaded"?: Array<TaskRef>;
   "from": Status;
@@ -4663,6 +4802,13 @@ export type VerdictView = {
   "reason": string;
   "run_id": string;
   "ts": string;
+};
+
+export type Weights = {
+  "cost": number;
+  "latency": number;
+  "pressure": number;
+  "quality": number;
 };
 
 export type WorkUnitBlockedReason = "question" | "dependency_failed" | "limit" | "plan_issue" | "decision" | "infra" | "cluster_jobs";

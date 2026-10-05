@@ -1,7 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { apiGet } from "../../api/client";
-import type { LlmSourcesView, ProviderCheckResponse, Providers, ProviderView, Tier } from "../../api/generated/types";
+import type {
+  LlmSourcesView,
+  ProviderCheckResponse,
+  Providers,
+  ProviderView,
+  RoutingCatalogView,
+  Tier,
+} from "../../api/generated/types";
 import { accountKeys, providerKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -16,6 +23,7 @@ import {
   sourceTierScopeNote,
   tiersResolvingTo,
 } from "./providers-llm-source";
+import { RoutingCatalogList } from "./routing-catalog-section";
 
 type Sender = ReturnType<typeof useActionResult>;
 const inputClass = "block w-full min-h-11 rounded border p-2";
@@ -272,6 +280,10 @@ export function ProvidersScreen() {
     queryKey: accountKeys.list({ section: "llm" }),
     queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<LlmSourcesView>("/api/llm/sources", signal),
   });
+  const catalog = useQuery({
+    queryKey: accountKeys.list({ section: "routing-catalog" }),
+    queryFn: ({ signal }: { signal: AbortSignal }) => apiGet<RoutingCatalogView>("/api/llm/routing/catalog", signal),
+  });
   const sender = useActionResult(providerKeys.all);
   const reload = sender.results.reload;
   return (
@@ -294,6 +306,14 @@ export function ProvidersScreen() {
               }
               sources={<FetchFrame query={llm}>{llm.data && <LlmSourceList data={llm.data} />}</FetchFrame>}
             />
+            <section className="space-y-2 min-w-0" aria-label="モデルの catalog">
+              <h2 className="text-lg font-semibold">モデルの catalog</h2>
+              <p className="text-sm">
+                routing が参照する model と deployment（供給元 ×
+                model）です。設定に無い価格・品質・能力は「不明」と表示します。
+              </p>
+              <FetchFrame query={catalog}>{catalog.data && <RoutingCatalogList data={catalog.data} />}</FetchFrame>
+            </section>
             <CreateForm sender={sender} />
             {reload && !reload.ok && <p role="alert">設定の reload に失敗しました。</p>}
           </div>

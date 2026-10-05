@@ -62,6 +62,9 @@ pub struct RoutingAudit {
     pub retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub review: Option<ReviewResult>,
+    /// Phase 1 optimizer trace. Absent from events written before model routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
 }
 
 /// タスク 1 件のイベント列から、ワーカー run ごとの監査を作る（古い run が先）。
@@ -126,6 +129,7 @@ pub fn routing_audit(task: &Task, events: &[Event]) -> Vec<RoutingAudit> {
                 a.policy_version = Some(record.decision.policy_version.clone());
                 a.reasons = record.decision.reasons.clone();
                 a.escalation = record.decision.escalation.clone();
+                a.optimizer = record.optimizer.clone();
             }
             Event::WorkerFinished {
                 run_id,
@@ -196,9 +200,11 @@ mod tests {
                 account: None,
                 model_id: "model-std".into(),
                 reasoning_effort: Some("medium".into()),
+                selection: None,
             },
             quota_reason: None,
             work_unit_id: None,
+            optimizer: None,
         };
         let events = vec![
             Event::WorkerStarted {

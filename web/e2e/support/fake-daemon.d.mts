@@ -12,6 +12,7 @@ export type FakeDaemonRequest = {
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
 export const defaultFixtures: Record<string, unknown>;
+export const routingCatalogFixture: import("../../api/generated/types").RoutingCatalogView;
 export function createFakeDaemon(options?: {
   host?: string;
   port?: number;

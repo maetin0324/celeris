@@ -80,6 +80,23 @@ pub trait ProviderPolicy: Send {
     fn cooldowns(&self, _now: Instant) -> Vec<Cooldown> {
         Vec::new()
     }
+
+    /// ADR-0132 付記 L2 (a): 設定行 `provider` がこの `hint` に合うか（adapter の固定と専用アダプタの
+    /// 除外を含む）。cooldown は見ない。既定実装は `false`（ローカル優先の前段を使わない）。
+    fn offers(&self, _provider: &str, _hint: &WorkerHint) -> bool {
+        false
+    }
+
+    /// ADR-0132 付記 L2: 設定行 `provider` のアダプタ名。既定実装は `None`。
+    fn adapter_of(&self, _provider: &str) -> Option<AdapterId> {
+        None
+    }
+
+    /// Legacy optimizer input in config order. Custom policies without an enumerable
+    /// config keep their existing selector behavior.
+    fn legacy_specs(&self, _hint: &WorkerHint) -> Vec<ProviderSpec> {
+        Vec::new()
+    }
 }
 
 /// 設定表の優先順位どおりに選ぶ。Throttled は cooldown まで除外。
@@ -218,6 +235,27 @@ impl ProviderPolicy for StaticPolicy {
             .find(|p| p.id == provider)
             .map(|p| p.concurrency)
             .unwrap_or(0)
+    }
+
+    fn offers(&self, provider: &str, hint: &WorkerHint) -> bool {
+        self.providers
+            .iter()
+            .any(|p| p.id == provider && Self::matches(p, hint))
+    }
+
+    fn adapter_of(&self, provider: &str) -> Option<AdapterId> {
+        self.providers
+            .iter()
+            .find(|p| p.id == provider)
+            .map(|p| p.adapter.clone())
+    }
+
+    fn legacy_specs(&self, hint: &WorkerHint) -> Vec<ProviderSpec> {
+        self.providers
+            .iter()
+            .filter(|p| Self::matches(p, hint))
+            .cloned()
+            .collect()
     }
 
     /// ADR-0012 D2: 設定表の順に、条件に合い cooldown 中でも除外されてもいない最初の行。

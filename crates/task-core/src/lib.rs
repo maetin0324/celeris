@@ -157,6 +157,7 @@ pub use model::{
     validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
+pub mod model_router;
 pub mod pricing;
 pub mod routing;
 pub use pricing::{estimate_cost_usd, output_input_ratio};

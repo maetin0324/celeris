@@ -1305,3 +1305,53 @@ model_id = "explicit-id"
             .contains("missing-key")
     );
 }
+
+#[test]
+fn routing_config_reload_is_atomic() {
+    use std::sync::Arc;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let db = dir.path().join("db.sqlite3");
+    let ws = dir.path().join("ws");
+    let base = format!(
+        "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n"
+    );
+    std::fs::write(&path, &base).unwrap();
+    let mut config = Config::load(&path).unwrap();
+    let old = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
+    let shared = Arc::clone(config.routing_catalog_state.as_ref().unwrap());
+    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
+    std::fs::write(
+        &path,
+        format!("{base}\n[model_routing]\nmode = \"enforce\"\n"),
+    )
+    .unwrap();
+    assert!(
+        reload_providers(&mut dispatcher, &mut config)
+            .unwrap_err()
+            .contains("Phase 2")
+    );
+    assert!(Arc::ptr_eq(
+        config.routing_catalog_snapshot.as_ref().unwrap(),
+        &old
+    ));
+    assert!(Arc::ptr_eq(&shared.read().unwrap(), &old));
+    std::fs::write(
+        &path,
+        format!("{base}\n[model_routing]\nmode = \"shadow\"\n"),
+    )
+    .unwrap();
+    reload_providers(&mut dispatcher, &mut config).unwrap();
+    assert!(!Arc::ptr_eq(
+        config.routing_catalog_snapshot.as_ref().unwrap(),
+        &old
+    ));
+    assert!(Arc::ptr_eq(
+        &shared.read().unwrap(),
+        config.routing_catalog_snapshot.as_ref().unwrap()
+    ));
+    assert_eq!(
+        config.routing_catalog_snapshot.as_ref().unwrap().mode,
+        task_core::model_router::policy::RoutingMode::Shadow
+    );
+}

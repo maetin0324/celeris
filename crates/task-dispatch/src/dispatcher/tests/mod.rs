@@ -3049,6 +3049,7 @@ fn parent_sccache_family() -> String {
 }
 
 mod build_cache;
+mod cheap_local_first;
 mod cleanup_and_disk;
 mod cluster_tunnel;
 mod conversation_cos;

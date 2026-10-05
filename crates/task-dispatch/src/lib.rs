@@ -39,7 +39,8 @@ pub use accounts::{
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
     DispatchConfig, DispatchError, Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig,
-    SnapshotPublisher, TaskFilter, TickReport,
+    LocalHealthTarget, LocalProviderProbe, LocalProviderSpec, SnapshotPublisher, TaskFilter,
+    TickReport,
 };
 pub use policy::{
     AdapterId, ProviderId, ProviderOutcome, ProviderPolicy, ProviderSpec, StaticPolicy,

@@ -340,3 +340,16 @@ RouteLLM は strong/weak の 2 択の win-rate を返すため、汎用 adapter 
 追加の各 Rust 試験は表の crate に配置し、`cargo test -p <crate> routing_` と該当する既存回帰名で 0 件実行になっていないことを確認する。GUI/web fixture の試験名も表どおり用意し、それぞれの既存 test runner で実行する。API/schema 変更時は `UPDATE_SCHEMA=1` の既存 schema 検査と両 frontend の生成・typecheck、event 購読/再取得の fixture を通す。未来の試験を現時点で合格済みと記録しない。
 
 各実装段の統合後に `cargo fmt --all -- --check`、`bash scripts/dev/test-parallel.sh`、`cargo clippy --workspace -- -D warnings` と文書検査 3 本（ADR 番号、doc links、progress-index）を実行する。今回の arch-adr は文書のみなので、実装試験の実行対象ではない。新規 migration 番号は着手時に全 ref の空きを検査する。最終 close は設定互換・Qwen 回帰・両画面の型と fixture・Phase 5 shadow-only 制約・移行/rollback 手順の一致を確認し、実装した状態だけ ADR に追記する。
+
+## 付記（2026-10-05、Phase 1 の実装済み範囲）
+
+Phase 1（p1-model）の実装は次のとおり。Phase 2 以降の機能（source 状態による effective cost、enforce 選択、予約、軌跡 escalation、reward、shadow 実行、sidecar）は含まない。
+
+- `task-core::model_router` に 6 要素の型を置いた（`profiles`・`context`・`policy`・`estimator`・`optimizer`・`trace`）。ModelProfile と DeploymentProfile は別の型で、同じ model の複数 deployment が wire model 名と価格 override を独立に持つ。SourceState は観測値を Option で持ち、未観測を 0 とみなさない。
+- `HeuristicEstimator` は profile の品質指数だけを読む純粋関数。Optimizer は hard constraints → candidates → estimate → score の順で、品質 floor を通った候補だけを量子化 score と設定順で並べる。最終の provider・account は既存の選択と予約に残し、estimator は最終決定権を持たない。worker が具体的な provider/model 名を選ぶ経路は作っていない。
+- `RoutingRecord.optimizer` は optional。旧 `RoutingDecided` JSON（欄なし）を読める。`GET /api/v1/llm/routing/catalog`（`task-api::routing_catalog`）は credential を含まず、task routing の optional trace に optimizer 投影を載せる。既存の routing 欄は変えない。
+- `celeris` の `[model_routing]` は旧 `[llm_proxy.models.*]`・`[llm_proxy.sources.*]`・`tier_models` を読み続け、警告（起動は続く）と矛盾・不正値のエラー（起動・reload を拒否）を分けた。reload は原子的で、不正な reload では旧 snapshot が残る。`mode = "enforce"` は Phase 2 まで検証エラー。
+- legacy 経路: `llm-proxy` の selection と `task-dispatch` の provider 選択は kernel の legacy policy を経由し、既存と同じ source/model/account を選ぶ。cheap-local-first（main 33774b6a）の選択はそのまま再利用し、独自の local selector は作っていない。
+- GUI（`gui/`）と web（`web/`）は catalog の生成型を持ち、model と deployment を分けて表示し、欠測は「不明」と出す（0 円・品質保証に見せない）。
+- 移行手順は `docs/ops/model-routing-migration.md`（旧→新対応、警告の読み方、検証、legacy→shadow、rollback）。
+- 試験: 追加した `routing_*` 8 件（task-core 3・celeris 2・task-api 1・GUI/web 1 の `routing_catalog_missing_metadata`）、`legacy_equivalence` 系、既存回帰 4 件はいずれも 0 件実行でないことを確認した。証拠は `agent-docs/progress/2026-10-04-multi-objective-routing/p1-model.md`。

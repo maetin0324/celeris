@@ -206,6 +206,8 @@ pub(crate) fn reload_providers(
         adapters,
         new_config.account_pool_providers(),
     );
+    // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
+    dispatcher.set_local_providers(new_config.local_cheap_providers());
     dispatcher.set_snapshot_providers(provider_lives(&new_config));
     // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
     dispatcher.reload_config(
@@ -222,6 +224,18 @@ pub(crate) fn reload_providers(
     config.reports = new_config.reports;
     config.notify = new_config.notify;
     config.conversation = new_config.conversation;
+    config.model_routing = new_config.model_routing;
+    config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
+    if let (Some(shared), Some(snapshot)) = (
+        config.routing_catalog_state.as_ref(),
+        config.routing_catalog_snapshot.as_ref(),
+    ) {
+        *shared
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::sync::Arc::clone(snapshot);
+    } else {
+        config.routing_catalog_state = new_config.routing_catalog_state;
+    }
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

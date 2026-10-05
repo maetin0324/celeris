@@ -542,6 +542,9 @@ pub struct RoutingRecord {
     /// 暗黙の WorkUnit・導入前のイベントには無い）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_unit_id: Option<String>,
+    /// Optional Phase 1 optimizer audit. Older events omit this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub optimizer: Option<crate::model_router::trace::RoutingTraceV1>,
 }
 
 /// 規則 1 件。`when` が真なら `lane`。

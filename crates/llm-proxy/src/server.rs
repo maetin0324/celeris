@@ -282,10 +282,6 @@ impl Attempt {
     }
 }
 
-fn tier_model(models: &HashMap<task_core::Tier, String>, tier: task_core::Tier) -> Option<String> {
-    models.get(&tier).cloned()
-}
-
 impl ProxyState {
     async fn attempts_for(&self, parsed: &ModelRequest, now: i64) -> Vec<(Attempt, String)> {
         match parsed {
@@ -307,68 +303,81 @@ impl ProxyState {
                     .map(|cfg| (Attempt::Relay(cfg), model.clone()))
                     .collect(),
             },
-            ModelRequest::Tiered { scope, tier } => match scope {
-                SourceScope::Only(SourceKind::Claude) => {
-                    let Some(model) = tier_model(&self.config.models.claude, *tier) else {
-                        return vec![];
-                    };
-                    self.rank_claude(&self.claude_dirs(), now)
-                        .into_iter()
-                        .map(|a| (Attempt::Claude(a), model.clone()))
-                        .collect()
-                }
-                SourceScope::Only(SourceKind::Gpt) => {
-                    let Some(model) = tier_model(&self.config.models.gpt, *tier) else {
-                        return vec![];
-                    };
-                    self.rank_codex(&self.codex_dirs(), now)
-                        .into_iter()
-                        .map(|a| (Attempt::Codex(a), model.clone()))
-                        .collect()
-                }
-                SourceScope::Only(SourceKind::Qwen) => {
-                    let Some(model) = selection::qwen_tier_model(&self.config.models.qwen, *tier)
-                    else {
-                        return vec![];
-                    };
-                    self.rank_relays(&self.config.sources.openai_compatible)
-                        .await
-                        .into_iter()
-                        .map(|cfg| (Attempt::Relay(cfg), model.to_string()))
-                        .collect()
-                }
-                SourceScope::Any => {
-                    let mut attempts = Vec::new();
-                    if self.config.prefer_free {
-                        let qwen_model =
-                            selection::qwen_tier_model(&self.config.models.qwen, *tier);
-                        if let Some(model) = qwen_model {
+            ModelRequest::Tiered { scope, tier } => {
+                let catalog = crate::legacy_catalog::normalize_legacy_config(&self.config);
+                let deployments =
+                    selection::legacy_deployments(&catalog, *scope, *tier, self.config.prefer_free);
+                let model_for = |source: &str| -> Option<String> {
+                    deployments
+                        .iter()
+                        .find(|d| d.source_ref == source)
+                        .map(|d| d.upstream_model.clone())
+                };
+                match scope {
+                    SourceScope::Only(SourceKind::Claude) => {
+                        let Some(model) = model_for("claude-oauth") else {
+                            return vec![];
+                        };
+                        self.rank_claude(&self.claude_dirs(), now)
+                            .into_iter()
+                            .map(|a| (Attempt::Claude(a), model.clone()))
+                            .collect()
+                    }
+                    SourceScope::Only(SourceKind::Gpt) => {
+                        let Some(model) = model_for("codex-oauth") else {
+                            return vec![];
+                        };
+                        self.rank_codex(&self.codex_dirs(), now)
+                            .into_iter()
+                            .map(|a| (Attempt::Codex(a), model.clone()))
+                            .collect()
+                    }
+                    SourceScope::Only(SourceKind::Qwen) => {
+                        if deployments.is_empty() {
+                            return vec![];
+                        }
+                        self.rank_relays(&self.config.sources.openai_compatible)
+                            .await
+                            .into_iter()
+                            .filter_map(|cfg| {
+                                model_for(&format!("openai-compatible:{}", cfg.id))
+                                    .map(|model| (Attempt::Relay(cfg), model))
+                            })
+                            .collect()
+                    }
+                    SourceScope::Any => {
+                        let mut attempts = Vec::new();
+                        if deployments
+                            .iter()
+                            .any(|d| d.source_ref.starts_with("openai-compatible:"))
+                        {
                             let relays = self
                                 .rank_relays(&self.config.sources.openai_compatible)
                                 .await;
-                            attempts.extend(
-                                relays
-                                    .into_iter()
-                                    .map(|cfg| (Attempt::Relay(cfg), model.to_string())),
-                            );
+                            attempts.extend(relays.into_iter().filter_map(|cfg| {
+                                model_for(&format!("openai-compatible:{}", cfg.id))
+                                    .map(|model| (Attempt::Relay(cfg), model))
+                            }));
                         }
+                        let claude_dirs = self.claude_dirs();
+                        let codex_dirs = self.codex_dirs();
+                        attempts.extend(
+                            self.rank_cross(&claude_dirs, &codex_dirs, now)
+                                .into_iter()
+                                .filter_map(|a| match a.source {
+                                    SourceKind::Claude => {
+                                        model_for("claude-oauth").map(|m| (Attempt::Claude(a), m))
+                                    }
+                                    SourceKind::Gpt => {
+                                        model_for("codex-oauth").map(|m| (Attempt::Codex(a), m))
+                                    }
+                                    SourceKind::Qwen => None,
+                                }),
+                        );
+                        attempts
                     }
-                    let claude_dirs = self.claude_dirs();
-                    let codex_dirs = self.codex_dirs();
-                    attempts.extend(
-                        self.rank_cross(&claude_dirs, &codex_dirs, now)
-                            .into_iter()
-                            .filter_map(|a| match a.source {
-                                SourceKind::Claude => tier_model(&self.config.models.claude, *tier)
-                                    .map(|m| (Attempt::Claude(a), m)),
-                                SourceKind::Gpt => tier_model(&self.config.models.gpt, *tier)
-                                    .map(|m| (Attempt::Codex(a), m)),
-                                SourceKind::Qwen => None,
-                            }),
-                    );
-                    attempts
                 }
-            },
+            }
         }
     }
 

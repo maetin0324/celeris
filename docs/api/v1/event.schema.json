@@ -322,6 +322,73 @@
       ],
       "type": "string"
     },
+    "CandidateTrace": {
+      "properties": {
+        "cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "deployment_id": {
+          "type": "string"
+        },
+        "eligible_provider_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "excluded_reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "latency_ms": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "model_profile_id": {
+          "type": "string"
+        },
+        "pressure": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quality": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QualityEstimate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model_profile_id",
+        "deployment_id",
+        "eligible_provider_ids",
+        "excluded_reasons"
+      ],
+      "type": "object"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -4062,6 +4129,17 @@
             "string",
             "null"
           ]
+        },
+        "selection": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderSelection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。"
         }
       },
       "type": "object"
@@ -4871,6 +4949,151 @@
       ],
       "type": "object"
     },
+    "ProviderCandidate": {
+      "description": "ADR-0132 付記 L8: 選択で見た 1 行。",
+      "properties": {
+        "detail": {
+          "description": "probe の失敗理由など。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ProviderCandidateKind"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ProviderCandidateOutcome"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "kind",
+        "outcome"
+      ],
+      "type": "object"
+    },
+    "ProviderCandidateKind": {
+      "description": "ADR-0132 付記 L8: 候補の種類。",
+      "oneOf": [
+        {
+          "const": "local",
+          "description": "付記 L1 のローカルの行。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行。",
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "それ以外（プールを持たない非ローカルの行）。",
+          "type": "string"
+        }
+      ]
+    },
+    "ProviderCandidateOutcome": {
+      "description": "ADR-0132 付記 L8: 候補を見た結果。",
+      "enum": [
+        "selected",
+        "available",
+        "full",
+        "down",
+        "cooldown",
+        "unsupported",
+        "no_account"
+      ],
+      "type": "string"
+    },
+    "ProviderSelection": {
+      "description": "ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。",
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/ProviderCandidate"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "$ref": "#/$defs/ProviderSelectionReason"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "type": "object"
+    },
+    "ProviderSelectionReason": {
+      "description": "ADR-0132 付記 L8: provider を選んだ理由。",
+      "oneOf": [
+        {
+          "const": "local_preferred",
+          "description": "cheap lane でローカルの行を選んだ（付記 L2）。",
+          "type": "string"
+        },
+        {
+          "const": "local_full",
+          "description": "空きの無いローカルの行があり、順位付けへ倒した（付記 L3）。",
+          "type": "string"
+        },
+        {
+          "const": "local_down",
+          "description": "ローカルの行が不通・cooldown で、順位付けへ倒した（付記 L3/L4）。",
+          "type": "string"
+        },
+        {
+          "const": "pool",
+          "description": "アカウントプールの行を残量 score で選んだ（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "fallback",
+          "description": "プールを持たない行へ倒れた、または何も選べなかった（ADR-0049）。",
+          "type": "string"
+        },
+        {
+          "const": "sticky",
+          "description": "継続セッションに留まった（ADR-0054）。",
+          "type": "string"
+        }
+      ]
+    },
+    "QualityEstimate": {
+      "properties": {
+        "confidence": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "feature_version": {
+          "type": "string"
+        },
+        "index": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "reasons",
+        "feature_version"
+      ],
+      "type": "object"
+    },
     "QuotaCalibration": {
       "description": "D4.2 の較正値 `k_w`（同じ source の直近の `measured` run から求めた比の和）。",
       "properties": {
@@ -5139,6 +5362,14 @@
       ],
       "type": "object"
     },
+    "RoutingMode": {
+      "enum": [
+        "legacy",
+        "shadow",
+        "enforce"
+      ],
+      "type": "string"
+    },
     "RoutingRecord": {
       "description": "ADR-0069 D5: `Event::RoutingDecided` の中身。",
       "properties": {
@@ -5152,6 +5383,17 @@
             "string",
             "null"
           ]
+        },
+        "optimizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingTraceV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Optional Phase 1 optimizer audit. Older events omit this field."
         },
         "org_node": {
           "description": "Ownership 層: 担当（`org_nodes.id`）。",
@@ -5182,6 +5424,122 @@
       "required": [
         "decision",
         "resolution"
+      ],
+      "type": "object"
+    },
+    "RoutingTraceV1": {
+      "properties": {
+        "candidates": {
+          "items": {
+            "$ref": "#/$defs/CandidateTrace"
+          },
+          "type": "array"
+        },
+        "catalog_version": {
+          "type": "string"
+        },
+        "decision_id": {
+          "type": "string"
+        },
+        "estimator_version": {
+          "type": "string"
+        },
+        "fallback_order": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "feature_version": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/RoutingMode"
+        },
+        "observed_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_decision_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "requested_lane": {
+          "$ref": "#/$defs/Tier"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selected_lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "snapshot_id": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "work_unit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "decision_id",
+        "stage",
+        "mode",
+        "policy_version",
+        "catalog_version",
+        "feature_version",
+        "estimator_version",
+        "snapshot_id",
+        "requested_lane",
+        "candidates",
+        "fallback_order",
+        "reasons"
       ],
       "type": "object"
     },

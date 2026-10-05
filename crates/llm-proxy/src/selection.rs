@@ -245,6 +245,10 @@ pub fn qwen_tier_model(models: &HashMap<Tier, String>, tier: Tier) -> Option<&st
         .flatten()
 }
 
+/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。legacy の経路は上の関数のまま。
+#[path = "selection_state.rs"]
+pub mod state;
+
 #[cfg(test)]
 #[path = "selection_tests.rs"]
 mod tests;

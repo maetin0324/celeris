@@ -296,12 +296,15 @@ fn routing_old_events_deserialize_without_optimizer() {
     let old_audit = crate::routing_audit::routing_audit(&task, &[old]);
     let new_audit = crate::routing_audit::routing_audit(&task, &[new]);
     // optimizer trace は ADR §9 のとおり task routing の optional trace。旧 event は None、
-    // 新 event は Some(trace) を投影する。それ以外の欄は旧新で等しいことを確かめる。
+    // 新 event は Some(trace) を投影する（Phase 3 の decision_id・outcome_state は trace 由来）。
+    // それ以外の欄は旧新で等しいことを確かめる。
     assert!(old_audit.iter().all(|a| a.optimizer.is_none()));
     assert!(new_audit.iter().all(|a| a.optimizer.is_some()));
     let strip = |mut audits: Vec<crate::routing_audit::RoutingAudit>| {
         for a in &mut audits {
             a.optimizer = None;
+            a.decision_id = None;
+            a.outcome_state = None;
         }
         audits
     };

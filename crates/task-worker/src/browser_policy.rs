@@ -54,6 +54,46 @@ impl PreparedBrowserPolicy {
     }
 }
 
+/// Whether a navigable URL's origin (scheme, host, port) is covered by an effective allowed
+/// origin. Credentials in the URL and wildcard hosts are never navigable.
+pub fn url_origin_allowed(url: &str, domains: &[String]) -> bool {
+    let Ok(url) = url::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = url.host_str().filter(|h| !h.starts_with("*.")) else {
+        return false;
+    };
+    if !matches!(url.scheme(), "https" | "http")
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return false;
+    }
+    let origin = match url.port() {
+        Some(port) => format!("{}://{host}:{port}", url.scheme()),
+        None => format!("{}://{host}", url.scheme()),
+    };
+    domains
+        .iter()
+        .any(|d| task_core::browser::origin_covers(d, &origin))
+}
+
+/// `(host pattern, port)` of an allowed origin, for host-level filters (egress, agent-browser
+/// `--allowed-domains`). The scheme and port are enforced by the origin checks above them.
+pub fn origin_host_port(origin: &str) -> Option<(String, u16)> {
+    let canonical = task_core::browser::parse_allowed_origin(origin)
+        .ok()?
+        .canonical();
+    let (scheme, authority) = canonical.split_once("://")?;
+    let default = if scheme == "https" { 443 } else { 80 };
+    match authority.rsplit_once(':') {
+        Some((host, port)) if !authority.ends_with(']') => {
+            Some((host.to_string(), port.parse().ok()?))
+        }
+        _ => Some((authority.to_string(), default)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -65,7 +105,7 @@ mod tests {
             revision: 3,
             domain_mode: BrowserDomainMode::CommonHosts,
             navigation_origins: vec![],
-            network_domains: vec!["example.com".into()],
+            network_domains: vec!["https://example.com".into()],
             allowed_actions: actions.to_vec(),
             approval_actions: vec![],
             credential_policy_ids: vec![],
@@ -76,7 +116,7 @@ mod tests {
     #[test]
     fn prepared_file_is_hash_bound_nonempty_default_deny() {
         let grant = BrowserCapability {
-            allowed_domains: vec!["example.com".into()],
+            allowed_domains: vec!["https://example.com".into()],
             ..Default::default()
         };
         let prepared =
@@ -90,7 +130,7 @@ mod tests {
             format!("{:x}", Sha256::digest(&prepared.action_policy))
         );
         assert_eq!(prepared.binding.revision, 3);
-        assert_eq!(prepared.allowed_domains(), ["example.com"]);
+        assert_eq!(prepared.allowed_domains(), ["https://example.com"]);
         assert_eq!(
             prepare(&grant, Some(&policy(&[])), "0.38.1").unwrap_err(),
             BrowserPolicyError::EmptyActions
@@ -99,5 +139,33 @@ mod tests {
             prepare(&grant, None, "0.38.1").unwrap_err(),
             BrowserPolicyError::BrowserPolicyRequired
         );
+    }
+
+    #[test]
+    fn url_and_egress_follow_allowed_origin_scheme_host_port() {
+        let domains = vec![
+            "https://*.example.com".to_string(),
+            "http://127.0.0.1:3000".to_string(),
+        ];
+        for (url, ok) in [
+            ("https://a.example.com/x", true),
+            ("https://example.com/", false),
+            ("http://a.example.com/", false),
+            ("https://a.example.com:8443/", false),
+            ("http://127.0.0.1:3000/", true),
+            ("http://127.0.0.1:3001/", false),
+            ("https://user@a.example.com/", false),
+        ] {
+            assert_eq!(url_origin_allowed(url, &domains), ok, "{url}");
+        }
+        assert_eq!(
+            origin_host_port("https://*.example.com"),
+            Some(("*.example.com".into(), 443))
+        );
+        assert_eq!(
+            origin_host_port("http://127.0.0.1:3000"),
+            Some(("127.0.0.1".into(), 3000))
+        );
+        assert_eq!(origin_host_port("http://[::1]"), Some(("[::1]".into(), 80)));
     }
 }

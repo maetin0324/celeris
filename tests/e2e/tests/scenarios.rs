@@ -104,6 +104,7 @@ model = "fake"
         let now = OffsetDateTime::now_utc();
         let task = Task {
             tree: None,
+            requirements: Default::default(),
             paused_at: None,
             routing: None,
             mode: Default::default(),
@@ -437,6 +438,7 @@ fn expired_lease_is_reclaimed_and_task_completes() {
     let now = OffsetDateTime::now_utc();
     let task = Task {
         tree: None,
+        requirements: Default::default(),
         paused_at: None,
         routing: None,
         mode: Default::default(),

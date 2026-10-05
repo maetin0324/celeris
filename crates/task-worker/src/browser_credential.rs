@@ -190,7 +190,14 @@ async fn substrate(
         .arg("--action-policy")
         .arg(seg.runtime.join("policy.json"))
         .arg("--allowed-domains")
-        .arg(seg.allowed_domains.join(","))
+        .arg(
+            seg.allowed_domains
+                .iter()
+                .filter_map(|d| crate::browser_policy::origin_host_port(d))
+                .map(|(host, _)| host)
+                .collect::<Vec<_>>()
+                .join(","),
+        )
         .args(["--content-boundaries", "--max-output", "16000", "--json"])
         .args(command)
         .stdin(Stdio::null())

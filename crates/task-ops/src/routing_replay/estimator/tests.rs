@@ -449,3 +449,146 @@ fn routing_routellm_pair_adapter_preserves_unknown_models() {
             .is_none()
     );
 }
+
+/// The daemon records `estimator:<id>/<version>` against the proxy decision (`pdec_…`) with the
+/// upstream-independent model profile id. An honest pin matches, the proxy decision is joined to
+/// the dispatch decision through the proxy's recorded parent, and a model name outside the
+/// candidates' profile ids is unknown rather than a difference.
+#[test]
+fn routing_estimator_shadow_joins_daemon_records() {
+    use task_core::model_router::feedback::RoutingRequestRecord;
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("estimator-join.sqlite");
+    let daemon_shadow = |run: &str, pdec: &str, model: &str| {
+        let Event::RoutingShadowRecorded { mut record } = estimator_shadow(
+            run,
+            "estimator:route-test/1",
+            ShadowStatus::Completed,
+            None,
+            None,
+            Some(model),
+            10,
+        ) else {
+            unreachable!()
+        };
+        record.primary_decision_id = pdec.into();
+        record.request_id = Some(format!("req-{run}"));
+        Event::RoutingShadowRecorded { record }
+    };
+    let request = |run: &str, pdec: &str, parent: Option<&str>| Event::RoutingRequestDecided {
+        record: Box::new(RoutingRequestRecord {
+            request_id: format!("req-{run}"),
+            decision_id: pdec.into(),
+            parent_decision_id: parent.map(str::to_owned),
+            run_id: Some(run.into()),
+            trace: None,
+            attempts: vec![],
+            fallback_reason: None,
+        }),
+    };
+    {
+        let store = SqliteStore::open(&path).unwrap();
+        let t = task(&store);
+        for run in ["j1", "j2", "j3", "j4"] {
+            store.append_event(t.id, &decided(&t, run)).unwrap();
+        }
+        // j1: the heuristic choice; the mapping arrives after the shadow.
+        store
+            .append_event(t.id, &daemon_shadow("j1", "pdec_1", "model-b"))
+            .unwrap();
+        store
+            .append_event(t.id, &request("j1", "pdec_1", Some("d-j1")))
+            .unwrap();
+        // j2: the primary; the mapping arrives first.
+        store
+            .append_event(t.id, &request("j2", "pdec_2", Some("d-j2")))
+            .unwrap();
+        store
+            .append_event(t.id, &daemon_shadow("j2", "pdec_2", "model-a"))
+            .unwrap();
+        // j3: an upstream wire model name has no profile id among the candidates.
+        store
+            .append_event(t.id, &request("j3", "pdec_3", Some("d-j3")))
+            .unwrap();
+        store
+            .append_event(t.id, &daemon_shadow("j3", "pdec_3", "qwen3.8-27b"))
+            .unwrap();
+        // j4: the proxy did not know the dispatch decision; no join by run id is inferred.
+        store
+            .append_event(t.id, &request("j4", "pdec_4", None))
+            .unwrap();
+        store
+            .append_event(t.id, &daemon_shadow("j4", "pdec_4", "model-a"))
+            .unwrap();
+    }
+    let dataset = export(
+        &path,
+        &ExportOptions {
+            policy_hash: "p".into(),
+            catalog_hash: "c".into(),
+            estimator_hash: "e".into(),
+            from_utc: None,
+            until_utc: None,
+            seed: 7,
+        },
+    )
+    .unwrap();
+    let shadows = |run: &str| {
+        dataset
+            .rows
+            .iter()
+            .find(|r| r.run_id == run)
+            .map(|r| r.shadows.len())
+    };
+    assert_eq!(
+        [shadows("j1"), shadows("j2"), shadows("j3"), shadows("j4")],
+        [Some(1), Some(1), Some(1), Some(0)]
+    );
+    let input = EstimatorComparisonInputV1 {
+        descriptor: descriptor(),
+        pair: None,
+    };
+    let est = evaluate_with_estimator(&dataset, None, None, Some(&input))
+        .unwrap()
+        .estimator_comparison
+        .unwrap();
+    assert_eq!(est.observed_estimator_versions, ["estimator:route-test/1"]);
+    assert_eq!(
+        est.incomparable_reasons.get("estimator_version_mismatch"),
+        None
+    );
+    assert_eq!((est.target_decisions, est.evaluated), (4, 3));
+    assert_eq!(
+        (
+            est.same_as_heuristic,
+            est.differs_from_heuristic,
+            est.same_as_primary
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(
+        est.incomparable_reasons.get("estimator_model_unknown"),
+        Some(&1)
+    );
+    assert_eq!(est.incomparable_reasons.get("not_evaluated"), Some(&1));
+    // A different version string is still not the pinned estimator.
+    let mut other = descriptor();
+    other.version = "2".into();
+    let est = evaluate_with_estimator(
+        &dataset,
+        None,
+        None,
+        Some(&EstimatorComparisonInputV1 {
+            descriptor: other,
+            pair: None,
+        }),
+    )
+    .unwrap()
+    .estimator_comparison
+    .unwrap();
+    assert_eq!(est.evaluated, 0);
+    assert_eq!(
+        est.incomparable_reasons.get("estimator_version_mismatch"),
+        Some(&3)
+    );
+}

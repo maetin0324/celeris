@@ -5,8 +5,12 @@
 //! `routing_shadow_recorded` event として追記し、`task_ops::routing_replay` の export → evaluate
 //! （`celerisctl routing export` / `evaluate --policy estimator` と同じ関数）で比較表を確かめる。
 //!
+//! RoutingDecided は dispatch 側の decision id で run の前に残し、pin は正直な descriptor
+//! （`route-test` / `1`）で行う（回避策なし）。proxy の decision（`pdec_…`）と dispatch の decision の
+//! 対応は proxy が記録する `routing_request_decided` の `parent_decision_id` から export が引く。
+//!
 //! daemon 内部の配線（`EstimatorSidecarControl`・`shadow_settings`・`SidecarDailyBudget`・
-//! `task_shadow_sink` / `append_shadow_event`）は `pub(crate)` で外から呼べないため、この file では
+//! `task_shadow_sink` / `append_shadow_event`・`TaskProxyEventSink`）は `pub(crate)` で外から呼べないため、この file では
 //! 同じ手順を鏡写しにしている。daemon 内部の試験は `crates/celeris/src/daemon/routing_sidecar_tests.rs`。
 //! 待ちは記録の到着（Notify）で行い、60 秒の保険の timeout だけを置く（固定 sleep は使わない）。
 
@@ -20,6 +24,7 @@ use llm_proxy::estimator_shadow::{EstimatorShadow, EstimatorShadowConfig, Estima
 use llm_proxy::estimator_sidecar::{SidecarClientConfig, SidecarEstimatorClient, TokioClock};
 use llm_proxy::legacy_catalog::{LegacyCatalog, normalize_legacy_config};
 use llm_proxy::reservation::FixedClock;
+use llm_proxy::routing_context::{ProxyEventSink, ProxyRoutingEvent};
 use llm_proxy::shadow::{ShadowBudget, ShadowEvent, ShadowSink};
 use serde_json::{Value, json};
 use task_core::model_policy::RoutingRecord;
@@ -270,6 +275,62 @@ impl ShadowSink for DbSink {
     }
 }
 
+/// `TaskProxyEventSink` の鏡写し: run 側 decision を DB の `RoutingDecided` から引き、要求ごとの
+/// `RoutingRequestDecided`（proxy decision → run 側 decision の対応）を追記する。
+struct RequestSink {
+    store: Arc<SqliteStore>,
+    appended: Mutex<usize>,
+    changed: Notify,
+}
+
+impl RequestSink {
+    async fn wait_appended(&self, n: usize) {
+        let wait = async {
+            loop {
+                let changed = self.changed.notified();
+                if *self.appended.lock().unwrap() >= n {
+                    return;
+                }
+                changed.await;
+            }
+        };
+        tokio::time::timeout(Duration::from_secs(60), wait)
+            .await
+            .expect("proxy request event did not arrive");
+    }
+}
+
+impl ProxyEventSink for RequestSink {
+    fn parent_decision(&self, run_id: &str) -> Option<String> {
+        let run = self.store.run_index_get(run_id).ok()??;
+        let task_id: TaskId = run.task_id.parse().ok()?;
+        self.store
+            .events_for(task_id)
+            .ok()?
+            .into_iter()
+            .find_map(|(_, event)| match event {
+                Event::RoutingDecided { run_id: id, record } if id == run_id => {
+                    record.optimizer.map(|trace| trace.decision_id)
+                }
+                _ => None,
+            })
+    }
+
+    fn record(&self, event: ProxyRoutingEvent) {
+        let task_id: TaskId = event.task_id.parse().unwrap();
+        self.store
+            .append_event(
+                task_id,
+                &Event::RoutingRequestDecided {
+                    record: Box::new(event.request),
+                },
+            )
+            .unwrap();
+        *self.appended.lock().unwrap() += 1;
+        self.changed.notify_waiters();
+    }
+}
+
 fn config_text(dir: &std::path::Path, ups: [SocketAddr; 2], sidecar: SocketAddr) -> String {
     format!(
         "db = {:?}\nworkspace_root = {:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n\
@@ -468,6 +529,11 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
     let slot = Arc::new(EstimatorShadowSlot::default());
     slot.set(Some(estimator));
     let registry = Arc::new(InMemoryRoutingContextRegistry::new());
+    let requests = Arc::new(RequestSink {
+        store: Arc::clone(&store),
+        appended: Mutex::new(0),
+        changed: Notify::new(),
+    });
     let state = llm_proxy::ProxyState::new(
         config.llm_proxy.clone(),
         reqwest::Client::new(),
@@ -481,7 +547,7 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
     .with_estimator_shadow_slot(slot)
     .with_routing_context(
         Some(Arc::clone(&registry) as Arc<dyn RoutingContextRegistry>),
-        None,
+        Some(Arc::clone(&requests) as Arc<dyn ProxyEventSink>),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let proxy = listener.local_addr().unwrap();
@@ -522,6 +588,13 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
                 finished_at: None,
             })
             .unwrap();
+        // dispatch の決定は run の前に、dispatch 側の decision id で残す（daemon と同じ順）。
+        store
+            .append_event(
+                task.id,
+                &decided(&task, &run_id, &format!("dec-{run_id}"), &models),
+            )
+            .unwrap();
         *sidecar.mode.lock().unwrap() = *mode;
         let reference = registry.register(
             &run_id,
@@ -558,21 +631,26 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
             want.sort();
             assert_eq!(seen, want, "the sidecar sees both relay candidates");
         }
-        // estimator の記録は proxy 側の decision id（`pdec_…`）を `primary_decision_id` に持つ。export は
-        // それと同じ decision_id の RoutingDecided 行にだけ shadow を結ぶので、その id で決定を残す
-        // （dispatch の decision id が proxy の id と別になる点は報告の「未解決事項」を参照）。
-        let decision_id = store
-            .events_for(task.id)
-            .unwrap()
-            .into_iter()
+        requests.wait_appended(i + 1).await;
+        // estimator の記録は proxy 側の decision id（`pdec_…`）を持ち、proxy の要求記録が
+        // それを dispatch の decision id に結ぶ。
+        let events = store.events_for(task.id).unwrap();
+        let pdec = events
+            .iter()
             .find_map(|(_, e)| match e {
-                Event::RoutingShadowRecorded { record } => Some(record.primary_decision_id),
+                Event::RoutingShadowRecorded { record } => Some(record.primary_decision_id.clone()),
                 _ => None,
             })
             .expect("shadow event for the run");
-        store
-            .append_event(task.id, &decided(&task, &run_id, &decision_id, &models))
-            .unwrap();
+        assert!(pdec.starts_with("pdec_"), "{pdec}");
+        assert!(
+            events
+                .iter()
+                .any(|(_, e)| matches!(e, Event::RoutingRequestDecided { record }
+                if record.decision_id == pdec
+                    && record.parent_decision_id.as_deref() == Some(&*format!("dec-{run_id}")))),
+            "the proxy request maps {pdec} to the dispatch decision"
+        );
         runs.push((task, run_id));
     }
     assert_eq!(*sink.attempts.lock().unwrap(), 4);
@@ -633,6 +711,8 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
     .unwrap();
     assert_eq!(dataset.rows.len(), 4);
     for row in &dataset.rows {
+        // shadow は dispatch の decision の行に付く。
+        assert_eq!(row.decision_id, format!("dec-{}", row.run_id));
         // primary の判断は dataset でも RoutingDecided のまま（1 番目の候補）。
         assert_eq!(row.primary_model.as_deref(), Some(&*models[0]));
         assert_eq!(row.shadows.len(), 1);
@@ -662,22 +742,8 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
         )
         .unwrap()
     };
-    let mut report = evaluate(descriptor.clone());
-    let honest = report.estimator_comparison.clone().expect("comparison");
-    if honest.evaluated == 0
-        && honest
-            .incomparable_reasons
-            .get("estimator_version_mismatch")
-            == Some(&4)
-    {
-        // 既知の食い違い（報告の「未解決事項」）: daemon が記録する policy_version は
-        // `estimator:<id>/<version>` だが、evaluate の版照合は `<id>/<version>` 等しか受けない。
-        // 照合が直るまでは、記録と同じ文字列になる id で pin し直して下流の集計を確かめる。
-        eprintln!("KNOWN GAP: estimator_version_mismatch with the pinned descriptor; re-pinning");
-        let mut repinned = descriptor;
-        repinned.estimator_id = "estimator:route-test".into();
-        report = evaluate(repinned);
-    }
+    // 正直な pin（daemon が記録する `estimator:route-test/1` と同じ id・version）で一致する。
+    let report = evaluate(descriptor);
     let cmp = report
         .estimator_comparison
         .as_ref()
@@ -705,12 +771,28 @@ async fn routing_estimator_sidecar_plugs_into_shadow_eval() {
         "{}",
         cmp.coverage
     );
-    // 完了した 2 件はどれも heuristic の選択と比べられる（heuristic 不明は 0）。
-    // 注意: 記録の model は上流の実 model 名、dataset の候補は model profile id なので、
-    // 現状は名前が一致せず「食い違い」に数えられる（報告の「未解決事項」）。ここでは 1 件以上とだけ見る。
-    assert!(cmp.differs_from_heuristic >= 1);
-    assert_eq!(cmp.differs_from_heuristic + cmp.same_as_heuristic, 2);
+    assert_eq!(cmp.observed_estimator_versions, ["estimator:route-test/1"]);
+    assert_eq!(
+        cmp.incomparable_reasons.get("estimator_version_mismatch"),
+        None
+    );
+    assert_eq!(
+        cmp.incomparable_reasons.get("estimator_model_unknown"),
+        None
+    );
+    // 記録の model は profile id で残るので、dataset の候補・primary と同じ名前空間で比べられる。
+    assert_eq!(by_run(0).candidate_model.as_deref(), Some(MODEL_B));
+    assert_eq!(by_run(2).candidate_model.as_deref(), Some(MODEL_A));
+    // run 0 は heuristic（score の高い MODEL_A）と食い違い、run 2 は一致して primary とも同じ。
+    assert_eq!(cmp.differs_from_heuristic, 1);
+    assert_eq!(cmp.same_as_heuristic, 1);
+    assert_eq!(cmp.same_as_primary, 1);
     assert_eq!(cmp.heuristic_unavailable, 0);
+    assert_eq!(
+        cmp.incomparable_reasons
+            .get("unselected_model_outcome_unknown"),
+        Some(&1)
+    );
     assert_eq!(cmp.incomparable_reasons.get("upstream_error"), Some(&1));
     assert_eq!(cmp.incomparable_reasons.get("cap_exceeded"), Some(&1));
     assert!(!cmp.unknown_reason.is_empty());

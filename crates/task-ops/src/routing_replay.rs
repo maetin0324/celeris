@@ -312,6 +312,28 @@ pub fn export(db_path: &Path, options: &ExportOptions) -> Result<DatasetV1, Repl
                     shadows: Vec::new(),
                 });
         }
+        // proxy の decision（`pdec_…`）→ run 側（dispatch）の decision の対応表。proxy が記録した
+        // `parent_decision_id` からだけ引き、run id などで推定しない。shadow より後に追記された
+        // 対応も使えるよう、本走査の前に集める。
+        let mut proxy_parent: BTreeMap<&str, &str> = BTreeMap::new();
+        for event in &events {
+            match event {
+                Event::RoutingRequestDecided { record } => {
+                    if let Some(parent) = &record.parent_decision_id {
+                        proxy_parent.insert(&record.decision_id, parent);
+                    }
+                }
+                Event::RoutingDecided { record, .. } => {
+                    if let Some(trace) = &record.optimizer
+                        && trace.stage == "proxy"
+                        && let Some(parent) = &trace.parent_decision_id
+                    {
+                        proxy_parent.insert(&trace.decision_id, parent);
+                    }
+                }
+                _ => {}
+            }
+        }
         let mut last_worker_run: Option<String> = None;
         let mut failed_review_criteria = Vec::new();
         for event in &events {
@@ -429,11 +451,13 @@ pub fn export(db_path: &Path, options: &ExportOptions) -> Result<DatasetV1, Repl
                     }
                 }
                 Event::RoutingShadowRecorded { record } => {
-                    for row in by_run
-                        .values_mut()
-                        .flatten()
-                        .filter(|r| r.decision_id == record.primary_decision_id)
-                    {
+                    // estimator shadow は proxy の decision に対して記録される。対応表で dispatch の
+                    // decision に引き直す（対応が無ければ記録どおりの id でだけ結ぶ）。
+                    let primary = record.primary_decision_id.as_str();
+                    let parent = proxy_parent.get(primary).copied();
+                    for row in by_run.values_mut().flatten().filter(|r| {
+                        r.decision_id == primary || Some(r.decision_id.as_str()) == parent
+                    }) {
                         row.shadows.push(ShadowV1 {
                             kind: wire_enum(&record.kind).unwrap_or_default(),
                             status: wire_enum(&record.status).unwrap_or_default(),

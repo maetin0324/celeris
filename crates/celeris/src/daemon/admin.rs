@@ -224,6 +224,8 @@ pub(crate) fn reload_providers(
     config.reports = new_config.reports;
     config.notify = new_config.notify;
     config.conversation = new_config.conversation;
+    config.model_routing = new_config.model_routing;
+    config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

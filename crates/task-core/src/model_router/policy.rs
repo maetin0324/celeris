@@ -144,3 +144,42 @@ impl RoutingPolicy {
         Ok(())
     }
 }
+
+/// ADR §4 の観測の鮮度（TTL）。既定は 300 秒。config の観測 TTL で上書きする。
+/// 観測時刻が無い・TTL を超えた・負（未来）の観測は「既知」ではなく unknown として扱う。
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct FreshnessPolicy {
+    pub observation_ttl_seconds: f64,
+}
+
+impl Default for FreshnessPolicy {
+    fn default() -> Self {
+        Self {
+            observation_ttl_seconds: 300.0,
+        }
+    }
+}
+
+impl FreshnessPolicy {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !self.observation_ttl_seconds.is_finite() || self.observation_ttl_seconds <= 0.0 {
+            return Err("observation ttl must be finite and positive");
+        }
+        Ok(())
+    }
+}
+
+/// subscription 窓の既定の長さ（秒）。5h / weekly / monthly の 3 種。
+pub const WINDOW_5H_SECONDS: f64 = 5.0 * 3600.0;
+pub const WINDOW_WEEKLY_SECONDS: f64 = 7.0 * 24.0 * 3600.0;
+pub const WINDOW_MONTHLY_SECONDS: f64 = 30.0 * 24.0 * 3600.0;
+
+/// 窓 id から既定の窓長を引く。未知の id は None（窓長不明なので shadow は unknown になる）。
+pub fn default_window_duration_seconds(window_id: &str) -> Option<f64> {
+    match window_id {
+        "five_hour" | "5h" => Some(WINDOW_5H_SECONDS),
+        "seven_day" | "weekly" => Some(WINDOW_WEEKLY_SECONDS),
+        "monthly" => Some(WINDOW_MONTHLY_SECONDS),
+        _ => None,
+    }
+}

@@ -763,6 +763,7 @@ async fn run_codex(
 ) -> Result<RunOutcome, AdapterError> {
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
+    crate::routing_context_transport::record(&run_dir, req, false).await;
 
     // 前回の run（リトライ）が残した結果ファイルを、今回の run の結果と誤読しない（ADR-0006 D3 と同じ理由）。
     // ADR-0036 D1/D2: 置き場はディスパッチャが決めた `artifacts_dir`（共有 workspace ではタスクごと）。

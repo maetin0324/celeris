@@ -962,6 +962,22 @@ pub struct RunRequest {
     pub cargo_target_dir: Option<PathBuf>,
 }
 
+/// How an adapter carried the daemon-issued routing reference.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextTransport {
+    Header,
+    Unsupported,
+}
+
+/// Trusted adapter report stored at `runs/<run_id>/context-transport.json`.
+/// Missing fields from earlier runs decode as unknown.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RunTransportEvidence {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_transport: Option<ContextTransport>,
+}
+
 impl RunRequest {
     /// ワーカーを動かすディレクトリ（ADR-0041 D1: worktree があればそこ、無ければ `workspace`）。
     pub fn cwd(&self) -> &std::path::Path {
@@ -1162,6 +1178,8 @@ pub struct ProtocolSchema {
     pub message: WorkerMessage,
     /// `artifacts/review.json`（ADR-0007 D1）。
     pub review_output: ReviewOutput,
+    /// `runs/<run_id>/context-transport.json`。
+    pub transport_evidence: Option<RunTransportEvidence>,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

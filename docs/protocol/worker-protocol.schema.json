@@ -618,6 +618,14 @@
       ],
       "type": "string"
     },
+    "ContextTransport": {
+      "description": "How an adapter carried the daemon-issued routing reference.",
+      "enum": [
+        "header",
+        "unsupported"
+      ],
+      "type": "string"
+    },
     "ContinuationContext": {
       "description": "ADR-0072 D9（Phase E1）: 続きの実行に渡す最小限の文脈。前の run の会話・出力の全文は載せない\n（checkpoint と、これまでの run の 1 行要約だけ）。",
       "properties": {
@@ -2571,6 +2579,22 @@
       ],
       "type": "object"
     },
+    "RunTransportEvidence": {
+      "description": "Trusted adapter report stored at `runs/<run_id>/context-transport.json`.\nMissing fields from earlier runs decode as unknown.",
+      "properties": {
+        "context_transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextTransport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "SessionHandle": {
       "description": "`context.session`（ADR-0054 D1。Phase 67）: 継続セッションの手がかり。\nディスパッチャが `node_sessions`（`task_core::NodeSession`）から決定的に組む。",
       "properties": {
@@ -3920,6 +3944,17 @@
     },
     "run": {
       "$ref": "#/$defs/run"
+    },
+    "transport_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunTransportEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`runs/<run_id>/context-transport.json`。"
     }
   },
   "required": [

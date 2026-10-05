@@ -7,7 +7,7 @@ import { Markdown } from "../../components/content/markdown";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge, type BadgeTone } from "../../components/ui/badge";
-import { StatusBadge } from "../../components/ui/status-badge";
+import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
 import { ProjectStatusBadge } from "./project-list-screen";
@@ -97,7 +97,7 @@ function Overview({ detail }: { detail: ProjectDetail }) {
         <p data-testid="project-totals">
           根の task {totals.root_tasks} 件
           {Object.entries(totals.by_status ?? {})
-            .map(([status, count]) => ` / ${status} ${count}`)
+            .map(([status, count]) => ` / ${statusView(status).label} ${count}`)
             .join("")}
         </p>
       )}
@@ -108,12 +108,12 @@ function Overview({ detail }: { detail: ProjectDetail }) {
 
 function PlanDag({ detail }: { detail: ProjectDetail }) {
   const nodes = detail.project_plan?.nodes ?? [];
+  const titles = new Map(nodes.map((node) => [node.key, node.title]));
   if (nodes.length === 0) return <p className="text-muted-foreground">計画はまだありません。</p>;
   return (
     <div
-      className="max-w-full overflow-auto rounded-md border border-border"
+      className="max-h-screen max-w-full overflow-auto rounded-md border border-border"
       data-testid="project-dag-frame"
-      style={{ maxHeight: "70vh" }}
     >
       <ol className="flex w-max gap-4 p-3">
         {dagLayers(nodes).map((layer, index) => (
@@ -140,7 +140,9 @@ function PlanDag({ detail }: { detail: ProjectDetail }) {
                     </span>
                   </p>
                   {node.depends_on.length > 0 && (
-                    <p className="text-label text-muted-foreground">依存: {node.depends_on.join(", ")}</p>
+                    <p className="text-label text-muted-foreground">
+                      依存: {node.depends_on.map((key) => titles.get(key) ?? key).join("、")}
+                    </p>
                   )}
                 </li>
               ))}
@@ -204,7 +206,7 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
                   const waiting = pending.get(task.id) ?? 0;
                   return (
                     <TableRow key={task.id} data-tree-task={task.id} data-depth={depth}>
-                      <TableCell className={`whitespace-nowrap ${indent[Math.min(depth, indent.length - 1)]}`}>
+                      <TableCell className={`min-w-48 break-words ${indent[Math.min(depth, indent.length - 1)]}`}>
                         {depth > 0 ? (
                           <span aria-hidden="true" className="me-1 text-muted-foreground">
                             └
@@ -220,7 +222,7 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
                         </Link>
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
-                        <StatusBadge status={task.status} />
+                        <StatusBadge status={task.status} className="whitespace-nowrap break-normal" />
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         {waiting > 0 ? (
@@ -280,7 +282,9 @@ export function ProjectDetailScreen({
       <FetchFrame query={detail}>
         {detail.data ? (
           <div className="min-w-0 space-y-4" data-project={detail.data.project.id}>
-            <p className="text-section font-semibold break-words">{detail.data.project.title}</p>
+            <p className="text-title font-semibold break-words" data-testid="project-title">
+              {detail.data.project.title}
+            </p>
             <nav aria-label="案件の頁" className="flex flex-wrap gap-2">
               <Link className="inline-flex min-h-11 min-w-11 items-center text-primary underline" to="/projects">
                 案件の一覧
@@ -292,7 +296,11 @@ export function ProjectDetailScreen({
               >
                 文書
               </Link>
-              <Link className="inline-flex min-h-11 min-w-11 items-center text-primary underline" to="/board">
+              <Link
+                className="inline-flex min-h-11 min-w-11 items-center text-primary underline"
+                to="/board"
+                search={{ project: projectId }}
+              >
                 ボード
               </Link>
             </nav>

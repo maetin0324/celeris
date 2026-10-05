@@ -29,7 +29,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   authorization: "認可",
   question: "質問",
   acceptance_check: "受け入れの確認",
-  draft_accept: "draft の受け入れ",
+  draft_accept: "下書きの受け入れ",
   project_plan: "案件の計画",
   failed: "失敗",
   unroutable: "担当が決まらない",

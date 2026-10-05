@@ -132,14 +132,23 @@ function ProjectTable({ projects }: { projects: readonly Project[] }) {
         <TableRow>
           <TableHead>案件</TableHead>
           <TableHead>状態</TableHead>
-          <TableHead>途中目標</TableHead>
+          <TableHead className="hidden sm:table-cell">途中目標</TableHead>
           <TableHead>判断待ち</TableHead>
-          <TableHead>最終更新</TableHead>
+          <TableHead className="hidden sm:table-cell">最終更新</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
         {projects.map((project, index) => {
-          const progress = details[index]?.data ? milestoneProgress(details[index].data) : null;
+          const detail = details[index];
+          const progress = detail?.data ? milestoneProgress(detail.data) : null;
+          // 0 件・取得中・取得失敗を同じ「—」にしない（W-40）。
+          const milestones = progress
+            ? progress.total === 0
+              ? "なし"
+              : `${progress.reached} / ${progress.total} 達成`
+            : detail?.isError
+              ? "取得不可"
+              : "取得中…";
           const waiting = pending?.get(project.id) ?? 0;
           return (
             <TableRow key={project.id} data-project-id={project.id}>
@@ -151,6 +160,9 @@ function ProjectTable({ projects }: { projects: readonly Project[] }) {
                 >
                   {project.title}
                 </Link>
+                <p className="text-label text-muted-foreground sm:hidden">
+                  途中目標 {milestones} · 更新 {formatRelative(project.updated_at)}
+                </p>
               </TableCell>
               <TableCell className="whitespace-nowrap">
                 <div className="flex flex-col gap-1">
@@ -158,21 +170,28 @@ function ProjectTable({ projects }: { projects: readonly Project[] }) {
                   {project.archived_at ? <span className="text-muted-foreground">アーカイブ済み</span> : null}
                 </div>
               </TableCell>
-              <TableCell className="whitespace-nowrap tabular-nums" data-testid="project-milestones">
-                {progress ? `${progress.reached} / ${progress.total} 達成` : "—"}
+              <TableCell
+                className="hidden whitespace-nowrap tabular-nums sm:table-cell"
+                data-testid="project-milestones"
+              >
+                {milestones}
               </TableCell>
               <TableCell className="whitespace-nowrap tabular-nums" data-testid="project-pending">
                 {pending === null ? (
                   "—"
                 ) : waiting > 0 ? (
-                  <Link className="inline-flex min-h-11 min-w-11 items-center text-primary underline" to="/inbox">
+                  <Link
+                    className="inline-flex min-h-11 min-w-11 items-center text-primary underline"
+                    to="/inbox"
+                    search={{ project: project.id }}
+                  >
                     {waiting} 件
                   </Link>
                 ) : (
                   <span className="text-muted-foreground">0 件</span>
                 )}
               </TableCell>
-              <TableCell className="whitespace-nowrap">
+              <TableCell className="hidden whitespace-nowrap sm:table-cell">
                 <time dateTime={project.updated_at} title={formatAbsolute(project.updated_at)}>
                   {formatRelative(project.updated_at)}
                 </time>
@@ -194,7 +213,7 @@ export function ProjectsListScreen({ archived }: { archived: boolean }) {
         <label className="flex min-h-11 w-fit items-center gap-2 text-label" data-testid="projects-filter">
           <input
             type="checkbox"
-            className="h-11 w-11 accent-primary"
+            className="size-5 accent-primary"
             checked={archived}
             onChange={(event) =>
               void navigate({ to: "/projects", search: event.target.checked ? { archived: true } : {} })

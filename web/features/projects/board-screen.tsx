@@ -20,6 +20,10 @@ import {
   boardHref,
   boardQueryFields,
   boardTasksPath,
+  categoryLabels,
+  labelOf,
+  priorityLabels,
+  tierLabels,
 } from "./board-model";
 import { projectListQuery } from "./project-queries";
 
@@ -81,7 +85,9 @@ function BoardEditRow({
             レベル
             <select className={control} value={tier} onChange={(e) => setTier(e.target.value)}>
               {["cheap", "standard", "frontier"].map((value) => (
-                <option key={value}>{value}</option>
+                <option key={value} value={value}>
+                  {tierLabels[value]}
+                </option>
               ))}
             </select>
           </label>
@@ -104,7 +110,16 @@ function BoardEditRow({
   );
 }
 
-function BoardRow({ task, filterKey }: { task: TaskSummary; filterKey: ReturnType<typeof boardKeys.list> }) {
+function BoardRow({
+  task,
+  filterKey,
+  projectTitle,
+}: {
+  task: TaskSummary;
+  filterKey: ReturnType<typeof boardKeys.list>;
+  /** すべての案件を出すときだけ渡す。行の題名の下に所属の案件名を出す。 */
+  projectTitle?: string;
+}) {
   const [open, setOpen] = useState(false);
   const formId = useId();
   const editable = task.actions.includes("edit");
@@ -119,18 +134,26 @@ function BoardRow({ task, filterKey }: { task: TaskSummary; filterKey: ReturnTyp
           >
             {task.title}
           </Link>
+          {projectTitle ? (
+            <p className="break-words text-label text-muted-foreground" data-testid="board-row-project">
+              案件: {projectTitle}
+            </p>
+          ) : null}
           <StatusBadge status={task.status} className="mt-1 sm:hidden" />
           <p className="break-words text-muted-foreground md:hidden">
-            {task.priority_label} · {task.tier} · 担当 {task.assignee || "なし"}
+            {labelOf(priorityLabels, task.priority_label)} · {labelOf(tierLabels, task.tier)} · 担当{" "}
+            {task.assignee || "なし"}
           </p>
         </TableCell>
         <TableCell className="hidden whitespace-nowrap sm:table-cell">
           <StatusBadge status={task.status} className="whitespace-nowrap" />
         </TableCell>
-        <TableCell className={cn(wideCell, "whitespace-nowrap tabular-nums")}>{task.priority_label}</TableCell>
-        <TableCell className={cn(wideCell, "whitespace-nowrap")}>{task.tier}</TableCell>
+        <TableCell className={cn(wideCell, "whitespace-nowrap tabular-nums")}>
+          {labelOf(priorityLabels, task.priority_label)}
+        </TableCell>
+        <TableCell className={cn(wideCell, "whitespace-nowrap")}>{labelOf(tierLabels, task.tier)}</TableCell>
         <TableCell className={cn(wideCell, "break-words")}>{task.assignee || "なし"}</TableCell>
-        <TableCell className={cn(wideCell, "break-words")}>{task.category}</TableCell>
+        <TableCell className={cn(wideCell, "break-words")}>{labelOf(categoryLabels, task.category)}</TableCell>
         <TableCell className="whitespace-nowrap text-right">
           {editable && (
             <Button
@@ -236,12 +259,11 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
     number
   >;
   const shown = groups.filter((group) => (filter.column ? group.id === filter.column : group.items.length > 0));
+  const projectTitles = new Map((projects.data?.items ?? []).map((project) => [project.id, project.title]));
   const extraOpen = extraFields.some((field) => filter[field.name]) || !!filter.priority || !!filter.show_support;
   return (
     <ScreenFrame title="ボード" route="/board">
-      <p className="max-w-prose text-muted-foreground">
-        案件のタスクを状態ごとにまとめた一覧です。優先度・レベル・担当は行の「編集」から変えます。
-      </p>
+      <p className="max-w-prose text-muted-foreground">案件のタスクを状態ごとにまとめた一覧です。</p>
       <form ref={form} onSubmit={apply} className="min-w-0 space-y-3" data-testid="board-filter-form">
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
           <label className={cn(fieldLabel, "sm:flex-1")}>
@@ -287,7 +309,7 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
               <input
                 name="show_support"
                 type="checkbox"
-                className="size-11 accent-primary"
+                className="size-5 accent-primary"
                 defaultChecked={filter.show_support}
               />
               裏方も表示
@@ -335,7 +357,18 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
                           </TableHead>
                         </TableRow>
                         {group.items.map((task) => (
-                          <BoardRow key={task.id} task={task} filterKey={key} />
+                          <BoardRow
+                            key={task.id}
+                            task={task}
+                            filterKey={key}
+                            projectTitle={
+                              filter.project
+                                ? undefined
+                                : task.project_id
+                                  ? (projectTitles.get(task.project_id) ?? task.project_id)
+                                  : "なし"
+                            }
+                          />
                         ))}
                       </TableBody>
                     ))}

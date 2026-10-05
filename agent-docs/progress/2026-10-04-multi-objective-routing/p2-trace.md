@@ -42,11 +42,13 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §9 の routing
 
 ## 未解決事項
 
-- 範囲 check（`-- crates` の差分を model_router/・model_policy.rs 等に限る）は `provider_select.rs` で落ちる。
-  `CandidateTrace`/`RoutingTraceV1` の欄追加は他 crate の構造体リテラルを必ず壊すため、最小の追随（4 行）を入れた。
-  model_policy.rs は変えていない（`RoutingRecord.optimizer` の型が広がるだけで足りた）。
+- （解決済み 2026-10-05）初回の範囲 check は `provider_select.rs` で落ちた。`CandidateTrace`/`RoutingTraceV1` の欄追加は
+  他 crate の構造体リテラルを必ず壊すため最小の追随（4 行）を入れており、replan で legacy_routing_trace の既定値追加だけが
+  例外として許された。model_policy.rs は変えていない（`RoutingRecord.optimizer` の型が広がるだけで足りた）。
+- 再確認（attempt 2 の run）: 範囲 grep（provider_select.rs を許可）で範囲外 0 件、`cargo fmt --all -- --check` exit 0、
+  `cargo clippy --workspace -- -D warnings` と `cargo clippy -p task-core --all-targets -- -D warnings` exit 0、
+  `cargo nextest run -p task-core -p task-dispatch -p task-api -p llm-proxy` → 1930 passed, 2 skipped。
 
 ## 提案
 
-- 範囲 check の allow に `crates/task-dispatch/src/dispatcher/provider_select.rs` を足す（model 段の兄弟の和）。
 - runtime 段は trace を作ったあと `normalize()` を呼び、`with_cost` と `source_id/model/account_id` を埋める。

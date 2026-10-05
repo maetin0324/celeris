@@ -575,6 +575,11 @@ pub struct RunContext {
     /// プロンプトは 1 バイトも変わらない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_route: Option<DirectRouteContext>,
+    /// 多目的 routing ADR（2026-10-04）§10 Phase 3: dispatcher が daemon 内の registry に登録した
+    /// RoutingContext を指す opaque な参照（期限付き。中身は運ばない）。registry を配線していない
+    /// daemon・reviewer run では `None`。adapter が LLM 要求へどう載せるかは task-worker 側が決める。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_context_ref: Option<String>,
 }
 
 /// `context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。

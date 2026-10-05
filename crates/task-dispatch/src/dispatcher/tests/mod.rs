@@ -3140,6 +3140,8 @@ mod drain_hand_off;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
 mod phase_effect_ab;
+/// 多目的 routing Phase 3: run 開始時の RoutingContext（`src/dispatcher/tests/routing_context.rs`）。
+mod routing_context;
 /// ADR-0140 D1: WU の execute continuation の同一 session resume と checkpoint fallback
 /// （`src/dispatcher/tests/session_resume.rs`）。
 mod session_resume;

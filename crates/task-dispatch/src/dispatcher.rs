@@ -117,6 +117,7 @@ mod provider_select;
 mod quota_book;
 mod review_spawn;
 mod review_verdict;
+mod routing_context;
 mod routing_enforce;
 mod run_context;
 mod sinks;
@@ -1052,6 +1053,8 @@ struct RunExtras {
     /// 知識整理のフォールバックなら ADR-0052 の値、それ以外は task の予算）。`run_worker` は DB から読み直した
     /// 写しの `budget` をこれで置き換える（`max_turns` が `RunRequest.task.budget` → `--max-turns` に届くように）。
     budget: Option<task_core::Budget>,
+    /// 多目的 routing Phase 3: registry に登録した RoutingContext の参照（`RunContext.routing_context_ref`）。
+    routing_context_ref: Option<String>,
 }
 
 struct ReviewEntry {
@@ -1266,6 +1269,10 @@ pub struct Dispatcher {
     local_probe_cache: HashMap<String, (Instant, Reachability)>,
     /// multi-objective routing Phase 2: dispatcher の routing 設定（既定 legacy。enforce は opt-in）。
     dispatch_routing: routing_enforce::DispatchRoutingSettings,
+    /// 多目的 routing Phase 3: run に結ぶ RoutingContext の登録簿（`set_routing_context_registry`）。
+    /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
+    routing_context_registry:
+        Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
     /// multi-objective routing Phase 2: self-host の queue / GPU load の取り込み口（揮発。保存しない）。
     self_host_loads: HashMap<ProviderId, routing_enforce::SelfHostLoad>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
@@ -1498,6 +1505,7 @@ impl Dispatcher {
             }),
             local_probe_cache: HashMap::new(),
             dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
+            routing_context_registry: None,
             self_host_loads: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
@@ -1523,6 +1531,15 @@ impl Dispatcher {
     pub fn set_local_providers(&mut self, specs: Vec<LocalProviderSpec>) {
         self.local_providers = specs;
         self.local_probe_cache.clear();
+    }
+
+    /// 多目的 routing Phase 3: run 開始時に RoutingContext を登録する registry を差し込む（daemon が配線する）。
+    /// 未設定の dispatcher は登録せず、worker に `context_ref` を渡さない。
+    pub fn set_routing_context_registry(
+        &mut self,
+        registry: Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>,
+    ) {
+        self.routing_context_registry = Some(registry);
     }
 
     /// ADR-0132 付記 L4: ローカルの行の health 検査を差し替える（テストはネットワークに出ない）。

@@ -103,6 +103,12 @@ pub struct QuotaWindow {
     pub reset_at: Option<String>,
     pub measured: bool,
     pub observed_at: Option<String>,
+    /// 窓の長さ（秒）。未設定なら window_id の既定（policy::default_window_duration_seconds）。
+    pub window_duration_s: Option<f64>,
+    /// 1 呼出しの見積もり消費（窓の unit）。未知は None（0 で seed しない）。
+    pub estimated_consumption: Option<f64>,
+    /// 窓の残量 1 単位の機会価値（USD）。config 由来。未設定なら shadow は unknown。
+    pub reserve_value_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -113,6 +119,10 @@ pub struct SourceState {
     pub enabled: bool,
     pub reachability: Reachability,
     pub cooldown: bool,
+    /// cooldown の終了時刻（RFC3339）。now より後なら冷却中。
+    pub cooldown_until: Option<String>,
+    /// rate limit の終了時刻（RFC3339）。now より後なら制限中。
+    pub rate_limited_until: Option<String>,
     pub circuit_open: bool,
     pub latency_ms: Option<f64>,
     pub in_use: Option<u32>,
@@ -138,6 +148,8 @@ impl SourceState {
             enabled: true,
             reachability: Reachability::Unknown,
             cooldown: false,
+            cooldown_until: None,
+            rate_limited_until: None,
             circuit_open: false,
             latency_ms: None,
             in_use: None,

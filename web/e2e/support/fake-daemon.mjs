@@ -121,6 +121,7 @@ export function richFixtures() {
     ...Array.from({ length: 21 }, (_, i) =>
       summary(`T${i + 4}`, `一覧の追加タスク ${i + 4}: 表示密度を確かめる`, { project_id: "P1" }),
     ),
+    summary("T25", "レビュー結果を確認して判断する", { status: "reviewing", project_id: "P1" }),
   ];
   const detail = fixtureFor(schema.$defs.TaskDetail);
   detail.task = {
@@ -147,6 +148,18 @@ export function richFixtures() {
       finished_at: richNow,
     },
   ];
+  const reviewing = structuredClone(detail);
+  reviewing.task = {
+    ...reviewing.task,
+    id: "T25",
+    title: "レビュー結果を確認して判断する",
+    objective: "検証結果を読み、承認するか理由を添えて却下する。",
+    status: "reviewing",
+    kind: "execute",
+  };
+  reviewing.actions = ["approve", "reject"];
+  reviewing.children = [];
+  reviewing.dependents = [];
   const changes = fixtureFor(schema.$defs.ChangesView);
   changes.task_id = "T1";
   changes.gh = true;
@@ -178,6 +191,59 @@ export function richFixtures() {
     status: "active",
     created_at: richNow,
     updated_at: richNow,
+  };
+  const milestone = {
+    ...fixtureFor(schema.$defs.MilestoneView),
+    id: "M1",
+    project_id: "P1",
+    seq: 1,
+    title: "画面の検証を終える",
+    status: "reached",
+    created_at: richNow,
+    updated_at: richNow,
+  };
+  const org = {
+    items: [
+      { id: "cos", name: "CoS", kind: "secretary", created_at: richNow, updated_at: richNow },
+      {
+        id: "software-engineering",
+        name: "ソフトウェア開発",
+        kind: "department",
+        parent_id: "cos",
+        created_at: richNow,
+        updated_at: richNow,
+      },
+      {
+        id: "ui-ux",
+        name: "UI/UX",
+        kind: "section",
+        parent_id: "software-engineering",
+        created_at: richNow,
+        updated_at: richNow,
+      },
+    ],
+  };
+  const docsTree = {
+    ...fixtureFor(schema.$defs.DocsTree),
+    project_id: "P1",
+    repo: "agent-platform",
+    root: "docs",
+    default_branch: "main",
+    items: [{ path: "docs/guide.md", title: "画面確認の案内" }],
+    truncated: false,
+  };
+  const docPage = {
+    ...fixtureFor(schema.$defs.DocPage),
+    project_id: "P1",
+    repo: "agent-platform",
+    root: "docs",
+    default_branch: "main",
+    path: "docs/guide.md",
+    title: "画面確認の案内",
+    raw: "# 画面確認の案内\n\n状態と判断画面を確認します。",
+    html: "",
+    history: [],
+    too_large: false,
   };
   const artifact = (idx) => ({
     idx,
@@ -327,7 +393,7 @@ export function richFixtures() {
       items: tasks,
       total: tasks.length,
       next_cursor: null,
-      counts_by_status: { ready: tasks.length },
+      counts_by_status: { ready: tasks.length - 1, reviewing: 1 },
     },
     "/api/v1/graph": {
       nodes: tasks.slice(0, 8).map(({ id, title, kind, status, parent_id }) => ({
@@ -343,6 +409,18 @@ export function richFixtures() {
       ],
     },
     "/api/v1/tasks/T1": detail,
+    "/api/v1/tasks/T25": reviewing,
+    "/api/v1/org": org,
+    "/api/v1/projects/P1/docs": docsTree,
+    "/api/v1/projects/P1/docs/page": docPage,
+    "/api/v1/projects/P1/docs/maintenance": {
+      audit: {
+        revision: "fixture",
+        documents: [{ path: "docs/guide.md", title: "画面確認の案内", findings: ["見出しの整理を確認してください"] }],
+      },
+      proposal: { actions: [{ operation: "rewrite", path: "docs/guide.md" }], rationale: ["案内の見出しを揃える"] },
+      policy: { mode: "observe" },
+    },
     "/api/v1/tasks/T1/timeline": {
       task_id: "T1",
       items: [{ kind: "delegation", at: richNow, run_id: "R1", tasks: detail.children }],
@@ -380,7 +458,8 @@ export function richFixtures() {
     "/api/v1/projects": { items: [project] },
     "/api/v1/projects/P1": {
       project,
-      milestones: [],
+      milestones: [milestone],
+      milestones_frozen: 1,
       tasks: [
         {
           ...fixtureFor(schema.$defs.ProjectTaskView),

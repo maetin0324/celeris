@@ -7435,6 +7435,46 @@
       ],
       "type": "object"
     },
+    "EscalationAudit": {
+      "description": "Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。",
+      "properties": {
+        "counted_failures": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "interval_id": {
+          "type": "string"
+        },
+        "previous_lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "requested_lane": {
+          "$ref": "#/$defs/Tier"
+        },
+        "selected_lane": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "requested_lane",
+        "selected_lane",
+        "reason",
+        "counted_failures",
+        "interval_id"
+      ],
+      "type": "object"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
@@ -20495,6 +20535,17 @@
         "decision": {
           "$ref": "#/$defs/LaneDecision",
           "description": "Model 層（lane）。"
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EscalationAudit"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 3 run 間 escalation の構造化監査。旧 event では欠落する。"
         },
         "harness": {
           "description": "Harness 層: ハーネス id（`Task.genre`）。",

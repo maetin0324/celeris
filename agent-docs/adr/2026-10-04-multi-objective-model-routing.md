@@ -367,3 +367,12 @@ Phase 2（p2-state-cost）の実装は次のとおり。証拠は `agent-docs/pr
 - **store**: migration 0048 で `llm_proxy_requests` に相関欄（decision・snapshot・run・task・source・model、NULL 可）と部分索引 2 本。現状これに書き込む経路は無い（上の未配線のため）。
 - **API と画面**: `GET /api/v1/llm/sources` の各 source に `deployments`（鮮度・到達・latency・残量・reset・pressure・unknown・請求 `billed` と機会費用 `opportunity` を分けた cost）、`GET /api/v1/tasks/{id}/routing` の run に要求単位の子 trace `requests`・`audit_incomplete`・`incomplete_reasons` と task の `unbound_requests`。**daemon は `deployments` をまだ空で返し、proxy trace を task events に足す sink も無い**ため、実運用ではどちらも空（表示は fixture で確認）。gui/・web/ は未知を「不明」と出し、請求と機会費用を別の行にする。schema と両方の生成型を再生成した。
 - 試験: §10 Phase 2 の表の 7 件と回帰 7 件はすべて存在し 0 件実行でない。
+
+## 付記（2026-10-05、Phase 3 escalation unit の実装済み範囲）
+
+この付記は Phase 3 の escalation WorkUnit の型と純粋関数だけを記録する。dispatch への配線、設定ファイルの読み込み、routing audit API の投影は後続 WorkUnit が担当する。
+
+- `task-core::retry_policy::EscalationThresholds` は同一 lane の品質失敗閾値（既定 2）、total attempts 上限（既定 4）、組織・task・WorkUnit の独立した `LaneCeiling` を受け取る。`EscalationPolicy::for_task_with_thresholds` が設定値を task の `max_retries + 1` と profile の上限で丸め、`decide_trajectory` はそれ以上に緩めない。既存の `for_task` は既定値で同じ処理を呼ぶ。
+- `decide_trajectory` は `TierSource::Human/System` を固定し、policy 決定のときだけ 1 段上昇を検討する。`ReviewFailed` と `VerificationFailed` だけを既定の品質証拠にし、`LowQuality` の自己申告・`WorkerError`・`SupplySide`・`BudgetExhausted` では上げない。供給失敗は品質失敗数にも total attempts にも加えない。組織・task・WorkUnit の天井を超える候補は採用しない。
+- 戻り値 `EscalationAudit` は requested/previous/selected lane、理由、同一 lane の品質失敗数、区間 ID を持つ。selected lane を後続 optimizer の floor として使う。`attempt_history_with_interval` は既存の event 投影を使い、`reopen` event の位置に基づく ID で区間を切る。`RoutingRecord.escalation` は `Option` + serde default で、旧 `RoutingDecided` は欄なしのまま読める。未知欄は無視する。
+- 固定 `EventRow` schema と API schema は `docs/api/v1/event.schema.json` と `docs/api/v1/api-v1.schema.json` を再生成した。gui/web 生成型は audit API の WorkUnit で更新する。検証結果は `agent-docs/progress/2026-10-04-multi-objective-routing/p3-escalation.md` に記す。

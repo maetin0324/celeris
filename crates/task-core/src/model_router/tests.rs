@@ -247,16 +247,19 @@ fn routing_old_events_deserialize_without_optimizer() {
         resolution: Default::default(),
         quota_reason: None,
         work_unit_id: None,
+        escalation: None,
         optimizer: None,
     };
     let old_event = Event::RoutingDecided {
         run_id: "r".into(),
         record: Box::new(record.clone()),
     };
-    let json = serde_json::to_value(&old_event).unwrap();
+    let mut json = serde_json::to_value(&old_event).unwrap();
+    json["record"]["future_field"] = serde_json::json!("ignored");
     let old: Event = serde_json::from_value(json.clone()).unwrap();
     if let Event::RoutingDecided { record, .. } = &old {
         assert!(record.optimizer.is_none());
+        assert!(record.escalation.is_none());
     } else {
         panic!("wrong event");
     }
@@ -385,6 +388,7 @@ fn routing_trace_fields_are_additive() {
         resolution: Default::default(),
         quota_reason: None,
         work_unit_id: None,
+        escalation: None,
         optimizer: None,
     };
     let mut event = serde_json::to_value(Event::RoutingDecided {

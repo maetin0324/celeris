@@ -297,6 +297,7 @@ pub use model_policy::{
     decide_for_task, decide_for_work_unit,
 };
 pub use retry_policy::{
-    AttemptOutcome, AttemptRecord, BudgetState, EscalationPolicy, RetryDecision, is_budget_outcome,
+    AttemptOutcome, AttemptRecord, BudgetState, EscalationAudit, EscalationPolicy,
+    EscalationThresholds, RetryDecision, attempt_history_with_interval, is_budget_outcome,
 };
 pub use routing_audit::{ReviewResult, RoutingAudit, routing_audit};

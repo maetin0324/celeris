@@ -59,6 +59,7 @@ fn decided(task: &Task, run_id: &str, optimizer: Option<RoutingTraceV1>) -> Even
             resolution: LaneResolution::default(),
             quota_reason: None,
             work_unit_id: None,
+            escalation: None,
             optimizer,
         }),
     }

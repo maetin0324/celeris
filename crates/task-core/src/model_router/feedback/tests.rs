@@ -137,7 +137,10 @@ fn routing_reward_waits_for_review_and_supersedes_idempotently() {
     assert_eq!(pending.supersedes, None);
     assert_eq!(pending.failure_class, None);
     assert_eq!(pending.tokens, Some(120));
-    assert_eq!(pending.evaluation_version, ROUTING_OUTCOME_EVALUATION_VERSION);
+    assert_eq!(
+        pending.evaluation_version,
+        ROUTING_OUTCOME_EVALUATION_VERSION
+    );
     // run の合否を個々の request に複写しない。
     assert!(before.iter().all(|o| o.request_id.is_none()));
     // 再投影は同じ outcome_id。
@@ -153,7 +156,10 @@ fn routing_reward_waits_for_review_and_supersedes_idempotently() {
     let passed = after[0].clone();
     assert_eq!(passed.review_passed, Some(true));
     assert!(approx(passed.reward, 0.825), "{:?}", passed.reward);
-    assert_eq!(passed.supersedes.as_deref(), Some(pending.outcome_id.as_str()));
+    assert_eq!(
+        passed.supersedes.as_deref(),
+        Some(pending.outcome_id.as_str())
+    );
     assert_ne!(passed.outcome_id, pending.outcome_id);
     assert_eq!(pending_run_outcomes(&events, &norm), vec![passed.clone()]);
     // 再投影は同じ outcome_id（入力の順序・回数に依らない）。
@@ -172,9 +178,15 @@ fn routing_reward_waits_for_review_and_supersedes_idempotently() {
     let failed = &corrected[0];
     assert_eq!(failed.review_passed, Some(false));
     assert_eq!(failed.failure_class.as_deref(), Some("review_failed"));
-    assert_eq!(failed.failed_criterion_ids, vec!["acceptance:1".to_string()]);
+    assert_eq!(
+        failed.failed_criterion_ids,
+        vec!["acceptance:1".to_string()]
+    );
     assert!(approx(failed.reward, -0.175), "{:?}", failed.reward);
-    assert_eq!(failed.supersedes.as_deref(), Some(passed.outcome_id.as_str()));
+    assert_eq!(
+        failed.supersedes.as_deref(),
+        Some(passed.outcome_id.as_str())
+    );
     assert!(failed.outcome_id != passed.outcome_id && failed.outcome_id != pending.outcome_id);
     events.push(recorded(failed));
     assert!(pending_run_outcomes(&events, &norm).is_empty());

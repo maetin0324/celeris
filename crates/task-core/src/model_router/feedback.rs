@@ -151,7 +151,13 @@ pub fn routing_reward(
     norm: &RewardNormalization,
 ) -> Option<f64> {
     let pass = if pass? { 1.0 } else { 0.0 };
-    let ratio = |v: f64, r: f64| if r > 0.0 { (v / r).clamp(0.0, 1.0) } else { 1.0 };
+    let ratio = |v: f64, r: f64| {
+        if r > 0.0 {
+            (v / r).clamp(0.0, 1.0)
+        } else {
+            1.0
+        }
+    };
     let c = ratio(cash_usd?, norm.cash_ref_usd);
     let l = ratio(wall_ms? as f64, norm.wall_ref_ms as f64);
     let r = (f64::from(retries?) / 4.0).min(1.0);
@@ -275,7 +281,10 @@ pub fn project_run_outcomes(events: &[Event], norm: &RewardNormalization) -> Vec
                 }
             }
             Event::WorkUnitCheckFinished {
-                run_id, pass, index, ..
+                run_id,
+                pass,
+                index,
+                ..
             } => {
                 let f = runs.entry(run_id.clone()).or_default();
                 if *pass {

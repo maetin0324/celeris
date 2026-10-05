@@ -42,3 +42,9 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §5・§6・§1
 ## 提案
 
 - close leaf で ADR に付記: §6 の 3 event は `#[serde(flatten)]` で欄が event 直下、`evaluation_version = routing-outcome/1`、outcome_id は内容 hash、pass の確定規則（review 優先・検査不合格のみ確定）、failure_class の code 一覧、`request_id` を持つ outcome は投影しない（要求単位の評価は Phase 4 以降）。
+
+## attempt 2（2026-10-05）
+
+- check 不合格の原因: (a) `cargo fmt --check` の差分 → `cargo fmt --all` で解消（feedback.rs・feedback/tests.rs）。`cargo clippy -p task-core/-p task-api/-p task-ops --all-targets -- -D warnings && cargo fmt --all -- --check` は exit 0。
+- (b) nextest の check は filterset が 1 文字ずつ `test(x)` に分割され `test())` で構文不正（exit 94）。成果では直せない → plan_issue。
+- (c) 範囲 check が `docs/api/v1/{event,api-v1}.schema.json` を範囲外と見る。Event に variant を足すと `event_row_schema_matches_committed`（task-core）と `committed_schema_matches_generated`（task-api）が commit 済み schema との一致を要求するため、再生成は必須 → allow に `docs/api/v1` を足す plan_issue。

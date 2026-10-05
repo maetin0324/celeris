@@ -1,11 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link, useRouter } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type { TaskList, TaskSummary } from "../../api/generated/types";
 import { ConnectionStaleNotice } from "../../components/fetch-state/connection-stale-notice";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { Button, buttonClassName } from "../../components/ui/button";
+import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { mergeTaskPages } from "./merge-pages";
@@ -45,6 +46,10 @@ export function TasksListScreen({
   limit: string | undefined;
 }) {
   const router = useRouter();
+  const moreId = useId();
+  // 件数（limit）は狭い幅では畳む。URL に値があるときは開いておき、選んだ条件を隠さない。
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreShown = moreOpen || limit !== undefined;
   const formRef = useRef<HTMLFormElement>(null);
   // History navigation changes the URL without remounting the form. Update its
   // controls in place so the focused search input stays focused on submit.
@@ -117,67 +122,88 @@ export function TasksListScreen({
         タスク
       </h1>
 
+      {/* 狭い幅では 検索＋並び の 1 行、状態の横 scroll 1 行、絞り込み（件数は「その他の条件」で開く）の 3 段に詰め、
+          一覧の先頭行を最初の 1 画面に入れる。sm 以上は sm:contents で従来どおり 1 本の折り返し行に並べる。 */}
       <form
         ref={formRef}
-        className="flex min-w-0 flex-wrap items-center gap-3"
+        className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center"
         onSubmit={applyFilters}
         data-testid="tasks-filter"
       >
-        <label className="flex items-center gap-2 text-sm">
-          <span id="tasks-q">検索</span>
-          <input
-            type="search"
-            name="q"
-            aria-labelledby="tasks-q"
-            defaultValue={q ?? ""}
-            placeholder="タイトル・id"
-            className={`${inputClass} w-44 max-w-full`}
-          />
-        </label>
-        <label className="flex items-center gap-2 text-sm">
-          <span>件数</span>
-          <select name="limit" defaultValue={limit ?? ""} className={inputClass}>
-            <option value="">既定</option>
-            <option value="20">20</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
-        </label>
-        <fieldset className="flex flex-wrap items-center gap-1.5">
-          <legend className="sr-only">status の絞り込み</legend>
-          {STATUSES.map((s) => (
-            <label
-              key={s}
-              className={`${buttonClassName} relative cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${status.includes(s) ? "bg-accent font-semibold" : ""}`}
+        <div className="flex min-w-0 items-center gap-2 sm:contents" data-testid="tasks-toolbar">
+          <label className="flex min-w-0 flex-1 items-center gap-2 text-sm sm:flex-none">
+            <span id="tasks-q" className="sr-only sm:not-sr-only">
+              検索
+            </span>
+            <input
+              type="search"
+              name="q"
+              aria-labelledby="tasks-q"
+              defaultValue={q ?? ""}
+              placeholder="タイトル・id"
+              className={`${inputClass} w-full sm:w-44`}
+            />
+          </label>
+          <label className="flex shrink-0 items-center gap-2 text-sm">
+            <span id="tasks-order" className="sr-only sm:not-sr-only">
+              並び
+            </span>
+            <select
+              name="order"
+              aria-labelledby="tasks-order"
+              defaultValue={order ?? "updated_desc"}
+              className={inputClass}
             >
-              <input
-                type="checkbox"
-                name="status"
-                value={s}
-                aria-label={s}
-                defaultChecked={status.includes(s)}
-                className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
-              />{" "}
-              {statusView(s).label}
-            </label>
-          ))}
-        </fieldset>
-        <label className="flex items-center gap-2 text-sm">
-          <span id="tasks-order">並び</span>
-          <select
-            name="order"
-            aria-labelledby="tasks-order"
-            defaultValue={order ?? "updated_desc"}
-            className={inputClass}
-          >
-            {ORDERS.map(([value, label]) => (
-              <option key={value} value={value}>
-                {label}
-              </option>
+              {ORDERS.map(([value, label]) => (
+                <option key={value} value={value}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <fieldset className="min-w-0">
+          <legend className="sr-only">status の絞り込み</legend>
+          <ScrollTabs className="flex gap-1.5 py-1 sm:flex-wrap" data-testid="tasks-status-chips">
+            {STATUSES.map((s) => (
+              <label
+                key={s}
+                className={`${buttonClassName} relative shrink-0 cursor-pointer focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-ring ${status.includes(s) ? "bg-accent font-semibold" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  name="status"
+                  value={s}
+                  aria-label={s}
+                  defaultChecked={status.includes(s)}
+                  className="absolute inset-0 h-full min-h-11 w-full min-w-11 cursor-pointer opacity-0"
+                />{" "}
+                {statusView(s).label}
+              </label>
             ))}
-          </select>
-        </label>
-        <Button type="submit">絞り込み</Button>
+          </ScrollTabs>
+        </fieldset>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 sm:contents">
+          <Button type="submit">絞り込み</Button>
+          <Button
+            type="button"
+            className="sm:hidden"
+            aria-expanded={moreShown}
+            aria-controls={moreId}
+            onClick={() => setMoreOpen((value) => !value)}
+          >
+            その他の条件
+          </Button>
+          <label id={moreId} className={`${moreShown ? "flex" : "hidden"} items-center gap-2 text-sm sm:flex`}>
+            <span>件数</span>
+            <select name="limit" defaultValue={limit ?? ""} className={inputClass}>
+              <option value="">既定</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </label>
+        </div>
       </form>
 
       <ConnectionStaleNotice />

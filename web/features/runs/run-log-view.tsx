@@ -18,6 +18,7 @@ import { parseRunLog, type RunLogEvent } from "./run-log";
 import { useRunLog } from "./use-run-log";
 
 // /tasks/:id/runs/:runId（P3-12、R26）。見出しは取得を待たずに出す（S1）。
+// 説明文は置かず、状態などのメタは 1 行（折り返し可）にまとめ、ログ本文を最初の 1 画面に入れる。
 // 実行中かどうかは task 詳細の runs の finished_at で決める（分からない間は追い掛ける。取得に失敗したら終わった扱い）。
 // 本文は高さ上限のある面の内側でだけ scroll し（ページ全体は広げない・動かさない）、
 // 末尾にいるときだけ追記に合わせて面を末尾へ送る。離れていれば「最新へ」を出す。
@@ -39,7 +40,6 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
         { label: `task ${taskId}`, link: { to: "/tasks/$id", params: { id: taskId } } },
         { label: `run ${runId}` },
       ]}
-      description="run の状態と出力。末尾にいる間は追記に合わせて送ります。"
       actions={
         <>
           <Button size="sm" aria-pressed={wrap} onClick={() => setWrap((v) => !v)}>
@@ -148,15 +148,11 @@ function RunHeader({
     { label: "所要時間", value: duration ?? "不明" },
   ];
   return (
-    // 狭い幅でも縦に伸びすぎないよう 2 列（md 以上は 4 列）に並べ、各項目は項目名の下に値を置く。
-    <section
-      aria-label="run の概要"
-      data-testid="run-header"
-      className="min-w-0 rounded-lg border border-border px-4 py-2"
-    >
-      <DataList className="grid grid-cols-2 gap-x-4 divide-y-0 md:grid-cols-4">
+    // 項目名と値を横に並べた短い組を 1 行に並べ、幅が足りなければ組ごと折り返す（縦に積まない）。
+    <section aria-label="run の概要" data-testid="run-header" className="min-w-0">
+      <DataList className="flex flex-wrap gap-x-6 gap-y-1 divide-y-0">
         {items.map((item) => (
-          <DataListRow key={String(item.label)} className="md:flex-col md:gap-1">
+          <DataListRow key={String(item.label)} className="flex-row items-center gap-2 py-0 md:gap-2">
             <DataListTerm className="md:w-auto">{item.label}</DataListTerm>
             <DataListValue>{item.value}</DataListValue>
           </DataListRow>

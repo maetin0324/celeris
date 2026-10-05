@@ -8,6 +8,8 @@ import { applyStateRoute, states } from "../e2e/support/states.ts";
 import { startFixtureGateway } from "./fixture-gateway.mjs";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+// FetchFrame の読み込み中（data-fetch-state="loading"）と、読み込み中の表示（aria-busy）。
+const LOADING_SELECTOR = '[data-fetch-state="loading"], [aria-busy="true"]';
 const arg = (name) => {
   const index = process.argv.indexOf(name);
   return index < 0 ? null : process.argv[index + 1];
@@ -61,6 +63,9 @@ try {
         for (const width of [360, 390, 412, 1440]) {
           const page = await browser.newPage({ viewport: { width, height: 800 } });
           await page.goto(`${gateway.base}${target}`);
+          // 見出しが出てから、読み込み中（loading・aria-busy）が消えるまで待って撮る。固定の時間では待たない。
+          await page.locator("h1").first().waitFor({ state: "visible" });
+          await page.waitForFunction((selector) => !document.querySelector(selector), LOADING_SELECTOR);
           await page.screenshot({
             path: path.join(out, `${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
             fullPage: true,

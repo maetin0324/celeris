@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 62);
+    assert_eq!(EVENT_TYPES.len(), 65);
 }
 
 #[test]
@@ -285,4 +285,64 @@ fn integration_repair_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name));
     }
+}
+
+/// 2026-10-04 多目的 routing ADR §6（Phase 3）: feature・request・outcome の Event の `type` 名が serde の名前・
+/// `event_type_name`・`EVENT_TYPES` で一致する（`EVENT_TYPES` は 65 語）。
+#[test]
+fn routing_feedback_event_types_match_their_serde_names() {
+    use task_core::model_router::feedback::{
+        RoutingFeaturesRecord, RoutingOutcome, RoutingRequestRecord,
+    };
+    let events = [
+        Event::RoutingFeaturesRecorded {
+            record: Box::new(RoutingFeaturesRecord {
+                decision_id: "d1".into(),
+                context_version: "routing-context/1".into(),
+                features: serde_json::json!({}),
+                provenance: Default::default(),
+                missing_fields: vec![],
+                run_id: None,
+                request_id: None,
+                stage: None,
+            }),
+        },
+        Event::RoutingRequestDecided {
+            record: Box::new(RoutingRequestRecord {
+                request_id: "req-1".into(),
+                decision_id: "d2".into(),
+                parent_decision_id: Some("d1".into()),
+                run_id: None,
+                trace: None,
+                attempts: vec![],
+                fallback_reason: None,
+            }),
+        },
+        Event::RoutingOutcomeRecorded {
+            outcome: Box::new(RoutingOutcome {
+                outcome_id: "o1".into(),
+                decision_id: "d1".into(),
+                run_id: Some("r1".into()),
+                request_id: None,
+                evaluation_version: "routing-outcome/1".into(),
+                supersedes: None,
+                acceptance_passed: None,
+                review_passed: None,
+                failed_criterion_ids: vec![],
+                failure_class: None,
+                cash_usd: None,
+                tokens: None,
+                wall_ms: None,
+                retries: None,
+                reward: None,
+            }),
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
+    }
+    assert_eq!(EVENT_TYPES.len(), 65);
 }

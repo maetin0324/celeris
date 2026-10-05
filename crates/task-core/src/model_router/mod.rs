@@ -3,6 +3,7 @@ pub mod context;
 pub mod context_registry;
 pub mod cost;
 pub mod estimator;
+pub mod feedback;
 pub mod optimizer;
 pub mod policy;
 pub mod profiles;

@@ -1236,6 +1236,25 @@ pub enum Event {
         run_id: String,
         record: Box<crate::model_policy::RoutingRecord>,
     },
+    /// 2026-10-04 多目的 routing ADR §6（Phase 3）: 決定 1 件の特徴 snapshot（本文・secret なし）。wire は
+    /// `decision_id, context_version, features, provenance, missing_fields` が event の欄に平たく並ぶ。
+    /// 状態は変えない（`replay` は無視する）。
+    RoutingFeaturesRecorded {
+        #[serde(flatten)]
+        record: Box<crate::model_router::feedback::RoutingFeaturesRecord>,
+    },
+    /// 同 §6: proxy の要求 1 件の trace（run 側 decision を親に持つ。`request_id` で `llm_proxy_requests` と結合）。
+    /// 状態は変えない。
+    RoutingRequestDecided {
+        #[serde(flatten)]
+        record: Box<crate::model_router::feedback::RoutingRequestRecord>,
+    },
+    /// 同 §6: run 1 件の結果 vector と reward（`model_router::feedback::project_run_outcomes` の投影）。
+    /// 訂正は新しい `outcome_id` + `supersedes` を追記する（上書きしない）。状態は変えない。
+    RoutingOutcomeRecorded {
+        #[serde(flatten)]
+        outcome: Box<crate::model_router::feedback::RoutingOutcome>,
+    },
     /// ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +
     /// mechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。
     CheckpointSaved {

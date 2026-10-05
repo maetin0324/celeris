@@ -38,6 +38,14 @@ const WAIT_ACTION_TEXT: Record<string, string> = {
   request_failed: "操作に失敗しました。",
 };
 
+const WAIT_STATE_TEXT: Record<string, string> = {
+  pending: "対応待ち",
+  approved: "一回だけ承認済み",
+  denied: "拒否済み",
+  registered: "登録済み・使用は未承認",
+  expired: "期限切れ",
+};
+
 /** 固定コードの文言だけを出す（celeris の応答本文・入力値は出さない）。 */
 export function waitActionMessage(code: string): string {
   return WAIT_ACTION_TEXT[code] ?? "操作に失敗しました。";
@@ -246,12 +254,13 @@ function WaitCard({ wait, csrf }: { wait: BrowserWait; csrf: string | null }) {
       className="space-y-2 break-words border-b border-border py-3 last:border-b-0"
       data-testid="browser-wait"
       data-wait-reason={wait.reason}
+      data-wait-state={wait.state}
     >
       <div className="flex flex-wrap items-center gap-2">
         <Badge tone={open ? "warning" : wait.state === "denied" || wait.state === "expired" ? "danger" : "neutral"}>
           {kind === "credential" ? "credential の登録依頼" : "一回だけの承認依頼"}
         </Badge>
-        <span className="text-label text-muted-foreground">{wait.state}</span>
+        <span className="text-label text-muted-foreground">{WAIT_STATE_TEXT[wait.state] ?? wait.state}</span>
       </div>
       <WaitSummary wait={wait} />
       {kind === "decision" && !open ? <OperationSummary wait={wait} /> : null}

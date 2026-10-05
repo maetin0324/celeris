@@ -30,6 +30,10 @@ pub struct DispatchRoutingSettings {
     /// subscription 窓 id（`five_hour`・`seven_day` 等）→ 設定の reserve_value（USD）。
     /// 載っていない窓の `reserve_value_usd` は None（unknown）のまま。
     pub window_reserves: std::collections::BTreeMap<String, f64>,
+    /// Phase 3: context 長の余裕 token 数。
+    pub context_safety_margin: Option<u64>,
+    /// Phase 3: run 間 escalation の閾値と上限。
+    pub escalation: task_core::EscalationThresholds,
 }
 
 impl Default for DispatchRoutingSettings {
@@ -39,6 +43,8 @@ impl Default for DispatchRoutingSettings {
             constraints: Constraints::default(),
             freshness: FreshnessPolicy::default(),
             window_reserves: std::collections::BTreeMap::new(),
+            context_safety_margin: None,
+            escalation: task_core::EscalationThresholds::default(),
         }
     }
 }

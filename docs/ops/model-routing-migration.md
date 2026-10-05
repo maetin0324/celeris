@@ -216,6 +216,11 @@ Phase 2 の release で変わること:
 mode = "enforce"
 enforce_routes = ["standalone", "server"]   # 省略時も両方。他の値・空はエラー
 observation_ttl_seconds = 300               # 省略時 300。これより古い残量の観測は「不明」（満タンにも枯渇にもしない）
+context_safety_margin = 512                 # 任意。run の context 長に積む余裕 token 数
+
+[model_routing.escalation]
+quality_failures_per_lane = 2               # 任意。同じ lane の品質失敗がこの回数に達したら 1 段上げる
+max_total_attempts = 4                     # 任意。ADR-0069 の既定上限。どちらも 0 は不可
 
 [model_routing.estimator]
 kind = "heuristic"                          # enforce の opt-in。heuristic 以外はエラー
@@ -245,7 +250,7 @@ client = 0                                  # 0 以外はエラー
 ### 8.3 反映と確認
 
 1. §4 の 1（`celerisctl config to-harnesses --config …` が exit 0）で検証する。§3 の Phase 2 のエラーが出たら直す。
-2. `[model_routing]` の mode・state・cost の変更は `POST /api/v1/reload` で dispatcher に原子的に入る。不正なら旧設定のまま。
+2. `[model_routing]` の mode・state・cost・context safety margin・escalation の変更は `POST /api/v1/reload` で dispatcher に原子的に入る。不正なら旧設定のまま。
    **`[model_routing.retry]` は proxy の起動時に読むので、変えたら daemon の再起動が要る**。
 3. 確認（API は Bearer 付き。token はログに残さない）:
    - `GET /api/v1/tasks/<task id>/routing`: enforce 後に始まった run の `optimizer.mode` が `enforce`。候補ごとの

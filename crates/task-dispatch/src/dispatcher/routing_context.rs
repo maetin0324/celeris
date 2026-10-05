@@ -258,7 +258,14 @@ impl Dispatcher {
         decision_id: Option<&str>,
         ttl: Duration,
     ) -> Option<String> {
-        let ctx = build_routing_context(input);
+        let mut ctx = build_routing_context(input);
+        if let Some(margin) = self.dispatch_routing.context_safety_margin {
+            ctx.safety_margin = margin;
+            ctx.field_provenance.insert(
+                "safety_margin".into(),
+                "model_routing.context_safety_margin".into(),
+            );
+        }
         let task_id = input.task.id;
         if let Some(decision_id) = decision_id {
             let event = Event::RoutingFeaturesRecorded {

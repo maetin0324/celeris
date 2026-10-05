@@ -38,6 +38,15 @@ shadow 評価の道具立てを実装した。本番の切り替えはしてい�
 | 9 | `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` | exit 0 |
 | 10 | `test -d docs/reports/model-routing-routellm-shadow` | 無い（原票なし → 転記なし） |
 
+### 再検査（2026-10-05、shadow-join 統合を取り込んだ HEAD `3f1faea1`）
+
+- `bash scripts/dev/test-parallel.sh` → exit 0、`4035 tests run: 4035 passed, 13 skipped`
+- `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all -- --check` → exit 0
+- 上表 4 の filterset → exit 0、`39 tests run: 39 passed, 4009 skipped`（shadow-join の `routing_estimator_shadow_joins_daemon_records` が増えた）
+- `check-runbook.sh` → ok（`routellm-weights-use=pending`）、`fake-shadow-check.sh` → exit 0、`real-sidecar-check.sh` → exit 2（未実行）
+- 文書検査 3 本（`check-doc-links.sh`・`check-adr-numbers.sh`・`progress-index.sh --check`）→ exit 0
+- 原票 `docs/reports/model-routing-routellm-shadow/` は依然として無い → 転記なし
+
 ## 未解決事項
 
 1. 実 RouteLLM sidecar の start-stop（`routing_routellm_real_sidecar_start_stop`）と上限付き shadow

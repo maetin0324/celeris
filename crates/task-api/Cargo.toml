@@ -8,9 +8,12 @@ task-core = { path = "../task-core" }
 task-ops = { path = "../task-ops" }
 celeris-credentiald = { path = "../celeris-credentiald" }
 async-trait = "0.1"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "query"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "json", "query", "multipart"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif"] }
+tempfile = "3"
 tokio = { version = "1.53.1", features = ["sync", "time", "net", "rt", "macros", "fs", "io-util"] }
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
+http-body-util = "0.1"
 form_urlencoded = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }

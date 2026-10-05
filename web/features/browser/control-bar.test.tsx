@@ -114,24 +114,65 @@ describe("liveViewState", () => {
   const owner = { available: true, isOwner: true };
   it("uses only the same-origin live path", () => {
     expect(
-      liveViewState({ run: { state: "RUNNING", live_path: "/browser/live/T1/R1" }, owner, authInterval: false }),
+      liveViewState({
+        taskId: "T1",
+        runId: "R1",
+        run: { state: "RUNNING", live_path: "/browser/live/T1/R1" },
+        owner,
+        authInterval: false,
+      }),
     ).toEqual({ kind: "frame", href: "/browser/live/T1/R1" });
     expect(
-      liveViewState({ run: { state: "RUNNING", live_path: "https://evil.example/x" }, owner, authInterval: false }),
+      liveViewState({
+        taskId: "T1",
+        runId: "R1",
+        run: { state: "RUNNING", live_path: "https://evil.example/x" },
+        owner,
+        authInterval: false,
+      }),
+    ).toEqual({ kind: "unavailable", reason: "not_configured" });
+    expect(
+      liveViewState({
+        taskId: "T1",
+        runId: "R1",
+        run: { state: "RUNNING", live_path: "/browser/live/T2/R1" },
+        owner,
+        authInterval: false,
+      }),
     ).toEqual({ kind: "unavailable", reason: "not_configured" });
   });
   it("gives the reason in order: owner, running, auth interval", () => {
     const run = { state: "RUNNING" as const, live_path: "/browser/live/T1/R1" };
-    expect(liveViewState({ run, owner: { available: false, isOwner: false }, authInterval: false })).toMatchObject({
+    expect(
+      liveViewState({
+        taskId: "T1",
+        runId: "R1",
+        run,
+        owner: { available: false, isOwner: false },
+        authInterval: false,
+      }),
+    ).toMatchObject({
       reason: "owner_unavailable",
     });
-    expect(liveViewState({ run, owner: { available: true, isOwner: false }, authInterval: false })).toMatchObject({
+    expect(
+      liveViewState({
+        taskId: "T1",
+        runId: "R1",
+        run,
+        owner: { available: true, isOwner: false },
+        authInterval: false,
+      }),
+    ).toMatchObject({
       reason: "not_owner",
     });
-    expect(liveViewState({ run: { ...run, state: "COMPLETED" }, owner, authInterval: false })).toMatchObject({
+    expect(
+      liveViewState({ taskId: "T1", runId: "R1", run: { ...run, state: "COMPLETED" }, owner, authInterval: false }),
+    ).toMatchObject({
       reason: "not_running",
     });
-    expect(liveViewState({ run, owner, authInterval: true })).toMatchObject({ reason: "auth_interval" });
+    expect(liveViewState({ taskId: "T1", runId: "R1", run, owner, authInterval: true })).toMatchObject({
+      reason: "auth_interval",
+    });
   });
 });
 

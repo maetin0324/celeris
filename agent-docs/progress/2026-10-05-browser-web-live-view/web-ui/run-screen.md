@@ -29,7 +29,8 @@ WorkUnit `run-screen`。[ADR 2026-10-05-browser-department-web-live-view](../../
 - `web/features/browser/browser-run-screen.tsx`（新規）: 本人 notice → control bar → Live View → 待ち（`#browser-waits`、既存 `BrowserWaitsList`）→ イベント。
   狭幅は縦積み、`lg` 以上は Live View と 待ち・イベント の 2 列（DOM の順は同じ）。
 - `web/routes/browser.runs.$taskId.$runId.tsx`: 画面を差した（19 行）。
-- `web/styles.css`: `@theme` に `--aspect-live: 16 / 10` を 1 行足した（任意値 `aspect-[16/10]` を使わないため）。
+- `web/styles.css`: ファイル末尾の `/* browser: run-screen */` 節に `@theme` の `--aspect-live: 16 / 10` を足した（既存規則には触れず、任意値 `aspect-[16/10]` を使わないため）。
+- `liveViewState` は安全な形式に加え、表示中の task/run と path が一致することを検査する。別 run の path は iframe に渡さない。
 - 試験: `web/features/browser/control-bar.test.tsx`（vitest 11 本）、`web/e2e/browser/lease.spec.ts`（Playwright 2 本）。
 
 ## 実行したコマンドと結果
@@ -43,6 +44,10 @@ WorkUnit `run-screen`。[ADR 2026-10-05-browser-department-web-live-view](../../
 | `pnpm -C web lint` | exit 0（既存の warning 5 件のみ） |
 | `pnpm -C web test` | exit 0。Vitest 64 files / 408 tests、gateway の node --test も pass |
 | `pnpm -C web check:boundaries` / `check:secrets` | 各 exit 0 |
+| `pnpm -C web exec vitest run features/browser/control-bar.test.tsx` / `pnpm -C web typecheck` / `pnpm -C web lint` / `pnpm -C web build`（再試行） | 各 exit 0。CSS token を末尾へ移した後も `aspect-live` が build 出力に生成された。lint は既存 warning 5 件のみ |
+| `WEB_E2E_SCOPE=functional pnpm -C web exec playwright test e2e/browser/lease.spec.ts --output /tmp/celeris-run-screen-lease-results`（再試行） | 2 passed |
+| `pnpm -C web check:boundaries` / `git diff --check`（再試行） | 各 exit 0 |
+| `git diff --name-only "$CELERIS_WU_BASE"` と Python による許可 path・CSS 末尾の比較 | 9 path が許可範囲内、`web/styles.css` は base の内容と完全一致する前半に `/* browser: run-screen */` 節だけ追加。exit 0 |
 | `pnpm -C web check:parity` | exit 1。`/browser`・`/browser/runs/$taskId/$runId`・`/projects/$id/browser-identities` が `missing V3 screen`。3 route は base（query WU）からあり、base の `e2e/support/screens.ts` にも browser の行は 0 件 — この WU 以前からの失敗 |
 | FRONTEND_CONTRACT.md の生の色・任意値 grep（変更 5 file） | 0 件 |
 | 一時 spec（`web/e2e/.tmp-run-screen/`、実行後に削除）で 360/390/412/1440 を撮影 | 4 passed。360/390/412 で 状態→ボタン→iframe→待ち→イベント の縦順、横溢れなし、axe serious/critical 0（監視中・操作中の両方） |

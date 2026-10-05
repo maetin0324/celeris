@@ -108,9 +108,6 @@
   --shadow-popover: 0 4px 12px rgb(32 48 60 / 0.12);
   --shadow-dialog: 0 8px 24px rgb(32 48 60 / 0.18);
 
-  /* ブラウザの Live View（D3.6: 16:10、幅いっぱい）。 */
-  --aspect-live: 16 / 10;
-
   --breakpoint-md: 48rem;
   --breakpoint-lg: 64rem;
 }
@@ -203,4 +200,10 @@ h1[tabindex="-1"]:focus-visible:not([data-kbd-focus]) {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* browser: run-screen */
+@theme {
+  /* D3.6: Live View は狭い画面でも 16:10 で表示する。 */
+  --aspect-live: 16 / 10;
 }

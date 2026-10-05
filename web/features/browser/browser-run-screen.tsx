@@ -40,6 +40,8 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
       ? "認証を扱っている間は、すべての操作を止めています。"
       : null;
   const live = liveViewState({
+    taskId,
+    runId,
     run: run ?? { state: "RUNNING", live_path: undefined, live: undefined },
     owner,
     authInterval,

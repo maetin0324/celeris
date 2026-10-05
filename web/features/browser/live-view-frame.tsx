@@ -10,6 +10,8 @@ export type LiveViewState = { kind: "frame"; href: string } | { kind: "unavailab
 
 /** 理由の判定順: 本人 → 実行中 → 認証区間 → gateway の理由 → href の検査。 */
 export function liveViewState(input: {
+  taskId: string;
+  runId: string;
   run: Pick<BrowserRunItem, "state" | "live_path" | "live">;
   owner: Pick<OwnerSession, "available" | "isOwner"> | undefined;
   authInterval: boolean;
@@ -25,7 +27,9 @@ export function liveViewState(input: {
       reason: KNOWN.includes(run.live.reason) ? (run.live.reason as LiveUnavailableReason) : "relay_unavailable",
     };
   const href = safeLivePath(run.live?.state === "link" ? run.live.href : run.live_path);
-  return href ? { kind: "frame", href } : { kind: "unavailable", reason: "not_configured" };
+  return href === `/browser/live/${input.taskId}/${input.runId}`
+    ? { kind: "frame", href }
+    : { kind: "unavailable", reason: "not_configured" };
 }
 
 export function LiveViewFrame({ state, taskLabel }: { state: LiveViewState; taskLabel: string }) {

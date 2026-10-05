@@ -28,8 +28,10 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
       <TaskDetailHeader taskId={taskId} />
-      <nav aria-label="タスクの表示" className="min-w-0 overflow-x-auto border-b border-border">
-        <ul className="flex w-max gap-1">
+      {/* 360 では 5 つの tab が 1 行に収まらず末尾の「成果物」が右で切れていた。狭い幅は tab の左右の余白を詰め、
+          それでも収まらない幅では折り返して、どの tab も枠の中に全文で出す（fix-r6 narrow）。 */}
+      <nav aria-label="タスクの表示" className="min-w-0 border-b border-border">
+        <ul className="flex flex-wrap gap-x-1">
           {TASK_DETAIL_TABS.map((item) => (
             <li key={item.key}>
               <Link
@@ -38,7 +40,7 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
                 search={{ tab: item.key === "overview" ? undefined : item.key }}
                 aria-current={item.key === tab ? "page" : undefined}
                 data-tab={item.key}
-                className={`inline-flex min-h-11 items-center whitespace-nowrap px-3 text-label ${
+                className={`inline-flex min-h-11 items-center whitespace-nowrap px-2 text-label sm:px-3 ${
                   item.key === tab
                     ? "border-b-2 border-primary font-semibold text-foreground"
                     : "text-muted-foreground hover:text-foreground"

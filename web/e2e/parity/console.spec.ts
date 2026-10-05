@@ -317,22 +317,37 @@ test("parity: / Console 追記の追従と『最新へ』", async ({ page }) => 
   await page.goto(`${base}/`);
   await expect(page.getByText("発言 29")).toBeVisible();
   await expect.poll(() => daemon.consoleClients).toBeGreaterThan(0);
-  const gap = () => page.evaluate(() => document.documentElement.scrollHeight - window.scrollY - window.innerHeight);
+  const region = page.locator("[data-home-console]");
+  // 枠の末尾は、送信欄の逃げ（ConsoleView の padding-bottom）のうち送信欄に隠れず空白に見える分を除いた位置。
+  const gap = () =>
+    region.evaluate((el) => {
+      const content = el.firstElementChild;
+      const composer = el.querySelector('[data-testid="console-composer"]');
+      const pad = content ? Number.parseFloat(getComputedStyle(content).paddingBottom) || 0 : 0;
+      const overlap = composer
+        ? Math.max(0, el.getBoundingClientRect().bottom - composer.getBoundingClientRect().top)
+        : 0;
+      const slack = Math.max(0, pad - overlap - 12);
+      return el.scrollHeight - el.scrollTop - el.clientHeight - slack;
+    });
   // 開いた直後は末尾にいる。
   await expect.poll(gap).toBeLessThanOrEqual(24);
   // 上へ離れている間は追記で動かさず、「最新へ」を出す。
-  await page.evaluate(() => window.scrollTo(0, 0));
+  await region.evaluate((el) => el.scrollTo(0, 0));
   // scroll の event が届いてから追記する（2 frame 待つ）。
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   daemon.sendConsoleBlock(reply("f30", "追記 1"));
   const latest = page.getByRole("button", { name: "最新へ" });
   await expect(latest).toBeVisible();
+  expect(await region.evaluate((el) => el.scrollTop)).toBe(0);
   expect(await page.evaluate(() => window.scrollY)).toBe(0);
   await latest.click();
+  await expect(page.getByText("追記 1")).toBeInViewport();
   await expect.poll(gap).toBeLessThanOrEqual(24);
   await expect(latest).toBeHidden();
   // 末尾にいれば追記に合わせて末尾へ送る。
   daemon.sendConsoleBlock(reply("f31", "追記 2\n".repeat(20)));
   await expect(page.getByText("追記 2").first()).toBeVisible();
+  await expect(page.getByText("追記 2").first()).toBeInViewport();
   await expect.poll(gap).toBeLessThanOrEqual(24);
 });

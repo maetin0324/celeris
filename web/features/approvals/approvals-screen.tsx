@@ -2,76 +2,130 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { apiGet } from "../../api/client";
-import type { ApprovalList, StandingRuleList } from "../../api/generated/types";
+import type { Approval, ApprovalList, OrgList, StandingRule, StandingRuleList } from "../../api/generated/types";
 import { inboxItemsQuery } from "../../api/queries/inbox-notifications";
-import { approvalKeys } from "../../api/queries/keys";
+import { approvalKeys, orgKeys } from "../../api/queries/keys";
 import { ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { Markdown } from "../../components/content/markdown";
-import { FetchFrame } from "../../components/fetch-state/fetch-frame";
+import { FetchFrame, fetchView } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
-import { Badge } from "../../components/ui/badge";
+import { Badge, type BadgeTone } from "../../components/ui/badge";
 import { Button, buttonVariants } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
+import { fieldClassName, Input } from "../../components/ui/input";
+import { Notice } from "../../components/ui/notice";
 import { Section } from "../../components/ui/panel";
+import { Select } from "../../components/ui/select";
+import { ShortId } from "../../components/ui/short-id";
+import { formatAbsolute } from "../../lib/time";
 
 const decidedKey = approvalKeys.list({ pending: false });
 const rulesKey = ["approvals", "rules"] as const;
+const rulesAnchor = "standing-rules";
 
-const fieldClass =
-  "block min-h-11 w-full rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
+const linkClass =
+  "inline-flex min-h-11 items-center underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
-const decisionLabels: Record<string, string> = {
-  once: "今回だけ認めた",
-  standing: "今後も認めた",
-  denied: "認めなかった",
-  withdrawn: "取り下げ",
+// 決めた結果は見た目でも区別する。今後も認めた（常設）は以後の依頼に効くので warning、取り下げは結果なしの neutral。
+export const decisionView: Record<string, { label: string; tone: BadgeTone }> = {
+  once: { label: "今回だけ認めた", tone: "success" },
+  standing: { label: "今後も認めた", tone: "warning" },
+  denied: { label: "認めなかった", tone: "danger" },
+  withdrawn: { label: "取り下げ", tone: "neutral" },
 };
+
+/** 新しく決めたものを上に。決めた日時が無い記録は依頼の日時で並べる。 */
+export function sortDecided(items: readonly Approval[]): Approval[] {
+  const at = (item: Approval) => item.decided_at ?? item.created_at;
+  return [...items].sort((a, b) => at(b).localeCompare(at(a)));
+}
+
+function useOrgNames() {
+  const org = useQuery({ queryKey: orgKeys.list(), queryFn: ({ signal }) => apiGet<OrgList>("/api/org", signal) });
+  const names = new Map((org.data?.items ?? []).map((node) => [node.id, node.name]));
+  return { org, names };
+}
+
+function NodeName({ id, names }: { id: string; names: Map<string, string> }) {
+  const name = names.get(id);
+  return name ? <span>{name}</span> : <ShortId value={id} label="課の ID" length={16} copyable={false} />;
+}
+
+function RuleRow({
+  item,
+  names,
+  sender,
+}: {
+  item: StandingRule;
+  names: Map<string, string>;
+  sender: ReturnType<typeof useActionResult>;
+}) {
+  const target = item.node_id ? (names.get(item.node_id) ?? item.node_id) : "全員";
+  return (
+    <li className="flex min-w-0 flex-col gap-2 border-b border-border py-3 sm:flex-row sm:items-center sm:gap-4">
+      <div className="min-w-0 flex-1">
+        <p className="break-words">{item.rule}</p>
+        <p className="text-label text-muted-foreground">
+          対象: {item.node_id ? <NodeName id={item.node_id} names={names} /> : "全員"}・追加{" "}
+          {formatAbsolute(item.created_at)}
+        </p>
+        <ActionResultView result={sender.results[item.id]} />
+      </div>
+      <ConfirmDialog
+        trigger={
+          <Button variant="destructive" size="sm" disabled={sender.pending}>
+            削除
+          </Button>
+        }
+        title="常設ルールを削除しますか"
+        target={`${item.rule}（対象: ${target}）`}
+        consequence="以後、一致する認可の依頼は受信箱に出て、人の判断を待ちます。"
+        reversibility="同じ規則文で追加し直せます。"
+        followUp="この一覧から消えたことで確かめられます。"
+        confirmLabel="常設ルールを削除"
+        onConfirm={async () => {
+          const [outcome] = await sender.run([
+            { id: item.id, path: `/api/standing-rules/${encodeURIComponent(item.id)}`, method: "DELETE" },
+          ]);
+          if (outcome && !outcome.ok) throw new Error(outcome.message);
+        }}
+      />
+    </li>
+  );
+}
 
 function Rules() {
   const query = useQuery({
     queryKey: rulesKey,
     queryFn: ({ signal }) => apiGet<StandingRuleList>("/api/standing-rules", signal),
   });
+  const { org, names } = useOrgNames();
   const sender = useActionResult(rulesKey);
   const [rule, setRule] = useState("");
   const [node, setNode] = useState("");
   const id = useId();
+  const view = fetchView(query);
+  // 既存のルールを確かめられない間は足さない（重複・広すぎる規則を防ぐ）。
+  const blocked = view === "error" || view === "disconnected" || view === "permission-denied" || view === "loading";
+  const created = sender.results.create;
+  const createdId =
+    created?.ok && created.response && typeof created.response === "object"
+      ? (created.response as Partial<StandingRule>).id
+      : undefined;
+  const createdStillListed = createdId !== undefined && query.data?.items.some((item) => item.id === createdId);
+  const targetName = node ? (names.get(node) ?? node) : "全員";
   return (
-    <Section title="常設ルール" description="一致する認可の依頼を、受信箱に出さずに自動で認めます。">
+    <Section
+      id={rulesAnchor}
+      title="常設ルール"
+      description="ここにある規則は対象の課の仕事に常に添えられ、一致する認可の依頼は受信箱に出ずに自動で認められます。"
+    >
       <div className="flex flex-col gap-4">
-        <FetchFrame query={query}>
+        <FetchFrame query={query} subject="常設ルール">
           {query.data?.items.length ? (
             <ul aria-label="常設ルールの一覧" className="flex flex-col border-t border-border">
               {query.data.items.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex min-w-0 flex-col gap-2 border-b border-border py-3 sm:flex-row sm:items-center sm:gap-4"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="break-words">{item.rule}</p>
-                    <p className="text-label text-muted-foreground">対象: {item.node_id || "全員"}</p>
-                    <ActionResultView result={sender.results[item.id]} />
-                  </div>
-                  <ConfirmDialog
-                    trigger={
-                      <Button variant="destructive" size="sm" disabled={sender.pending}>
-                        削除
-                      </Button>
-                    }
-                    title="常設ルールを削除しますか"
-                    target={item.rule}
-                    consequence="以後、一致する認可の依頼は受信箱に出て、人の判断を待ちます。"
-                    reversibility="同じ規則文で追加し直せます。"
-                    followUp="この一覧から消えたことで確かめられます。"
-                    confirmLabel="常設ルールを削除"
-                    onConfirm={async () => {
-                      const [outcome] = await sender.run([
-                        { id: item.id, path: `/api/standing-rules/${encodeURIComponent(item.id)}`, method: "DELETE" },
-                      ]);
-                      if (outcome && !outcome.ok) throw new Error(outcome.message);
-                    }}
-                  />
-                </li>
+                <RuleRow key={item.id} item={item} names={names} sender={sender} />
               ))}
             </ul>
           ) : (
@@ -83,46 +137,132 @@ function Rules() {
           className="flex max-w-form flex-col gap-3"
           onSubmit={(event) => {
             event.preventDefault();
-            if (!rule.trim()) return;
+            if (!rule.trim() || blocked) return;
             void sender.run([
               { id: "create", path: "/api/standing-rules", body: { rule, ...(node ? { node_id: node } : {}) } },
             ]);
           }}
         >
           <h3 className="text-body font-semibold">常設ルールを追加</h3>
-          <div className="flex flex-col gap-1">
-            <label htmlFor={`${id}-node`} className="text-label font-medium">
-              対象の node ID（空欄は全員）
-            </label>
-            <input
-              id={`${id}-node`}
-              className={fieldClass}
-              value={node}
-              onChange={(event) => setNode(event.target.value)}
-            />
-          </div>
-          <div className="flex flex-col gap-1">
-            <label id={`${id}-rule-label`} htmlFor={`${id}-rule`} className="text-label font-medium">
-              規則文
-            </label>
-            <textarea
-              id={`${id}-rule`}
-              aria-labelledby={`${id}-rule-label`}
-              className={fieldClass}
-              value={rule}
-              onChange={(event) => setRule(event.target.value)}
-              aria-describedby={sender.results.create?.status === 422 ? "rule-result" : undefined}
-            />
-          </div>
-          <div>
-            <Button type="submit" disabled={sender.pending || !rule.trim()}>
-              追加
-            </Button>
-          </div>
-          <ActionResultView result={sender.results.create} fieldId="rule-result" />
+          {blocked && view !== "loading" ? (
+            <Notice title="既存のルールを確認できないため、追加を止めています。">
+              {view === "permission-denied"
+                ? "常設ルールを扱う権限がありません。"
+                : "上の一覧を取り直してから追加してください。"}
+            </Notice>
+          ) : null}
+          <fieldset disabled={blocked} className="flex min-w-0 flex-col gap-3">
+            <div className="flex flex-col gap-1">
+              <label htmlFor={`${id}-node`} className="text-label font-medium">
+                対象の課（空は全員）
+              </label>
+              {org.data ? (
+                <Select id={`${id}-node`} value={node} onChange={(event) => setNode(event.target.value)}>
+                  <option value="">全員</option>
+                  {org.data.items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                    </option>
+                  ))}
+                </Select>
+              ) : (
+                <Input
+                  id={`${id}-node`}
+                  value={node}
+                  placeholder="組織を読めないときは課の ID を入力"
+                  onChange={(event) => setNode(event.target.value)}
+                />
+              )}
+            </div>
+            <div className="flex flex-col gap-1">
+              <label id={`${id}-rule-label`} htmlFor={`${id}-rule`} className="text-label font-medium">
+                規則文
+              </label>
+              <p id={`${id}-rule-hint`} className="text-label text-muted-foreground">
+                例: 「{"cross-department: software-engineering -> cluster-hpc"}
+                」。書いた範囲に一致する依頼が以後すべて自動で通るので、広すぎる書き方を避けます。
+              </p>
+              <textarea
+                id={`${id}-rule`}
+                aria-labelledby={`${id}-rule-label`}
+                className={fieldClassName}
+                value={rule}
+                onChange={(event) => setRule(event.target.value)}
+                aria-describedby={
+                  sender.results.create?.status === 422 ? `${id}-rule-hint rule-result` : `${id}-rule-hint`
+                }
+              />
+            </div>
+            <p className="text-label text-muted-foreground">
+              追加すると、{targetName}
+              の認可の依頼のうちこの規則に一致するものは、確認なしで自動で認められます。取り消すには一覧の「削除」を使います。
+            </p>
+            <div>
+              <Button type="submit" disabled={sender.pending || !rule.trim()}>
+                追加
+              </Button>
+            </div>
+          </fieldset>
+          <ActionResultView result={created} fieldId="rule-result" />
+          {createdId && createdStillListed ? (
+            <div>
+              <Button
+                variant="secondary"
+                size="sm"
+                disabled={sender.pending}
+                onClick={() =>
+                  void sender.run([
+                    { id: createdId, path: `/api/standing-rules/${encodeURIComponent(createdId)}`, method: "DELETE" },
+                  ])
+                }
+              >
+                いま足した規則を取り消す
+              </Button>
+            </div>
+          ) : null}
         </form>
       </div>
     </Section>
+  );
+}
+
+function DecidedRow({ item, names }: { item: Approval; names: Map<string, string> }) {
+  const view = item.decision ? decisionView[item.decision] : undefined;
+  return (
+    <li
+      data-approval-id={item.id}
+      className="flex min-w-0 flex-col gap-2 border-b border-border py-3 sm:flex-row sm:gap-4"
+    >
+      <span className="flex shrink-0 flex-col gap-1 sm:w-32">
+        <Badge tone={view?.tone ?? "neutral"}>{view?.label ?? "記録なし"}</Badge>
+        {item.decision === "standing" ? (
+          <a href={`#${rulesAnchor}`} className={`${linkClass} text-label`}>
+            常設ルールを見る
+          </a>
+        ) : null}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
+        <div className="max-w-prose-ja min-w-0 break-words">
+          <Markdown source={item.question} />
+        </div>
+        {item.answer ? <p className="max-w-prose-ja break-words text-label">回答: {item.answer}</p> : null}
+        <p className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-label text-muted-foreground">
+          <span>
+            依頼元: <NodeName id={item.node_id} names={names} />
+          </span>
+          {item.task_id ? (
+            <Link to="/tasks/$id" params={{ id: item.task_id }} className={linkClass}>
+              元のタスクを開く
+            </Link>
+          ) : null}
+          {item.decided_at ? (
+            <span>
+              決めた日時: <time dateTime={item.decided_at}>{formatAbsolute(item.decided_at)}</time>
+            </span>
+          ) : null}
+        </p>
+      </div>
+    </li>
   );
 }
 
@@ -133,15 +273,17 @@ export function ApprovalsScreen() {
     queryKey: decidedKey,
     queryFn: ({ signal }) => apiGet<ApprovalList>("/api/approvals?pending=false", signal),
   });
+  const { names } = useOrgNames();
   const count = pending.data?.counts.total;
+  const decidedItems = sortDecided(decided.data?.items ?? []);
   return (
     <ScreenFrame
       title="承認"
       route="/approvals"
-      description="認可の判断は受信箱で返します。この画面は常設ルールと、これまでに決めた認可の記録です。"
+      description="判断待ちの認可は受信箱で答えます。ここでは決めた認可を振り返り、自動で認める常設ルールを管理します。"
     >
       <Section title="認可待ち">
-        <FetchFrame query={pending}>
+        <FetchFrame query={pending} subject="未決の認可の件数">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
             <p>{count ? `受信箱に未決の認可が ${count} 件あります。` : "未決の認可はありません。"}</p>
             <Link
@@ -154,24 +296,12 @@ export function ApprovalsScreen() {
           </div>
         </FetchFrame>
       </Section>
-      <Section title="決めたもの">
-        <FetchFrame query={decided}>
-          {decided.data?.items.length ? (
+      <Section title="決めたもの" description="新しく決めた順です。">
+        <FetchFrame query={decided} subject="決めた認可">
+          {decidedItems.length ? (
             <ul aria-label="決めた認可" className="flex flex-col border-t border-border">
-              {decided.data.items.map((item) => (
-                <li
-                  key={item.id}
-                  className="flex min-w-0 flex-col gap-1 border-b border-border py-3 sm:flex-row sm:gap-4"
-                >
-                  <span className="shrink-0 sm:w-24">
-                    <Badge tone={item.decision === "denied" ? "danger" : "success"}>
-                      {decisionLabels[item.decision ?? ""] ?? item.decision ?? "記録なし"}
-                    </Badge>
-                  </span>
-                  <div className="min-w-0 flex-1 text-label">
-                    <Markdown source={item.question} />
-                  </div>
-                </li>
+              {decidedItems.map((item) => (
+                <DecidedRow key={item.id} item={item} names={names} />
               ))}
             </ul>
           ) : (

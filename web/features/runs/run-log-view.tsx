@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, type UIEvent, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { RunSummary } from "../../api/generated/types";
+import { ConnectionStaleNotice } from "../../components/fetch-state/connection-stale-notice";
+import { ErrorNotice, LoadingState, useDelayPhase } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { CodeBlock, LogSurface } from "../../components/ui/code-block";
 import { DataList, type DataListItem, DataListRow, DataListTerm, DataListValue } from "../../components/ui/data-list";
 import { Icon } from "../../components/ui/icon";
+import { Notice } from "../../components/ui/notice";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { formatAbsolute, serverNowMs } from "../../lib/time";
 import { taskDetailQuery } from "../tasks/task-detail-query";
@@ -23,6 +26,8 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
   const run = detail.data?.runs.find((item) => item.run_id === runId);
   const running = detail.isError ? false : detail.data ? Boolean(run && !run.finished_at) : undefined;
   const log = useRunLog(taskId, runId, running);
+  const following = log.following;
+  const loadingPhase = useDelayPhase(log.status === "loading");
   const events = useMemo(() => parseRunLog(log.buffer.lines), [log.buffer.lines]);
   const [wrap, setWrap] = useState(true);
   const [raw, setRaw] = useState(false);
@@ -46,13 +51,16 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
         </>
       }
     >
-      <RunHeader run={run} pending={detail.isPending} />
+      <RunHeader run={run} pending={detail.isPending} failed={detail.isError} onRetry={() => void detail.refetch()} />
+      <ConnectionStaleNotice />
       {log.status === "loading" ? (
-        <div aria-busy="true" data-fetch-state="loading" className="h-16 animate-pulse rounded-sm bg-muted" />
+        <LoadingState
+          phase={loadingPhase}
+          onRetry={log.retry}
+          skeleton={<div aria-hidden="true" className="h-16 animate-pulse rounded-sm bg-muted" />}
+        />
       ) : log.status === "error" ? (
-        <p role="alert" data-fetch-state="error" className="text-body text-foreground">
-          run ログを取得できませんでした。ページを再読み込みすると取り直します。
-        </p>
+        <ErrorNotice subject="run ログ" onRetry={log.retry} />
       ) : (
         <section aria-label="run ログ" className="flex min-w-0 flex-col gap-2" data-testid="run-log">
           <p className="text-label text-muted-foreground">
@@ -60,15 +68,28 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
               {log.buffer.lines.length} 行
             </span>
             {log.buffer.dropped > 0 ? `（古い ${log.buffer.dropped} 行は省略）` : null}
-            {log.following ? "・実行中（追記を追っています）" : null}
+            {following ? "・実行中（追記を追っています）" : null}
           </p>
-          <FollowScroller version={`${raw}:${log.buffer.lines.length}:${log.buffer.dropped}`} following={log.following}>
+          {log.capped && running !== false ? (
+            <Notice
+              title="追記の自動取得を止めました"
+              data-testid="run-log-capped"
+              action={
+                <Button size="sm" onClick={log.retry}>
+                  読み直す
+                </Button>
+              }
+            >
+              長く続いている run のため、一定回数で追うのを止めました。続きは読み直すと表示します。
+            </Notice>
+          ) : null}
+          <FollowScroller version={`${raw}:${log.buffer.lines.length}:${log.buffer.dropped}`} following={following}>
             {log.buffer.lines.length === 0 ? (
               <p
                 data-fetch-state="empty"
                 className="rounded-lg border border-border p-3 text-body text-muted-foreground"
               >
-                まだ出力がありません。{log.following ? "出力され次第ここに追記します。" : null}
+                まだ出力がありません。{following ? "出力され次第ここに追記します。" : null}
               </p>
             ) : raw ? (
               <LogSurface label="run ログ本文（原文）" wrap={wrap} size="lg" data-follow-target>
@@ -84,14 +105,44 @@ export function RunLogScreen({ taskId, runId }: { taskId: string; runId: string 
   );
 }
 
-// header: API にある値（run の状態・harness・開始時刻・所要時間）だけを出す。run が一覧に無ければ出さない。
-function RunHeader({ run, pending }: { run: RunSummary | undefined; pending: boolean }) {
+// header: API にある値（run の状態・harness・開始時刻・所要時間）だけを出す。
+// task 詳細を取れなかったとき・run が一覧に無いときは、ログだけを出していることを文字で伝える。
+function RunHeader({
+  run,
+  pending,
+  failed,
+  onRetry,
+}: {
+  run: RunSummary | undefined;
+  pending: boolean;
+  failed: boolean;
+  onRetry: () => void;
+}) {
   if (pending) return <div aria-busy="true" className="h-12 animate-pulse rounded-sm bg-muted" />;
-  if (!run) return null;
+  if (failed)
+    return (
+      <Notice
+        title="run の概要を取得できませんでした"
+        data-testid="run-header-error"
+        action={
+          <Button size="sm" onClick={onRetry}>
+            再試行
+          </Button>
+        }
+      >
+        状態・所要時間は出せませんが、ログは読めます。
+      </Notice>
+    );
+  if (!run)
+    return (
+      <Notice title="この run は task の run 一覧にありません" data-testid="run-header-missing">
+        状態・所要時間は出せませんが、ログは読めます。
+      </Notice>
+    );
   const status = runStatus(run);
   const duration = runDuration(run, serverNowMs());
   const items: DataListItem[] = [
-    { label: "状態", value: status ? <StatusBadge status={status} /> : "未確認" },
+    { label: "状態", value: status ? <StatusBadge status={status} /> : "終了（結果の記録なし）" },
     { label: "harness", value: <span className="break-all">{runHarness(run)}</span> },
     { label: "開始", value: formatAbsolute(run.started_at) },
     { label: "所要時間", value: duration ?? "不明" },
@@ -155,7 +206,8 @@ function FollowScroller({
     <div ref={ref} onScrollCapture={onScroll} className="flex min-w-0 flex-col gap-2">
       {children}
       {away ? (
-        <Button size="sm" className="self-end" onClick={toLatest} data-testid="run-log-latest">
+        // 面が画面より高いときも押せるよう、画面の下端に貼り付ける。
+        <Button size="sm" className="sticky bottom-4 self-end" onClick={toLatest} data-testid="run-log-latest">
           <Icon name="chevron-down" />
           最新へ
         </Button>

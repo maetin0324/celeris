@@ -297,6 +297,59 @@ function ReleaseTable({
   );
 }
 
+function MobileReleaseList({
+  items,
+  current,
+  busy,
+  denied,
+  onPromote,
+}: {
+  items: ReleaseItem[];
+  current: string | null | undefined;
+  busy: boolean;
+  denied: boolean;
+  onPromote: (item: ReleaseItem) => Promise<void>;
+}) {
+  return (
+    <ul className="space-y-3 sm:hidden" aria-label="リリースの一覧">
+      {items.map((item) => {
+        const failed = item.promote_failed && !item.promoting ? item.promote_failed : null;
+        return (
+          <li
+            key={item.sha12}
+            data-testid={`mobile-release-${item.sha12}`}
+            className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-3"
+          >
+            <div>
+              <code className="font-mono break-all">{item.sha12}</code>
+              {item.ref && <p className="text-label text-muted-foreground break-all">ref {item.ref}</p>}
+              <ReleaseState item={item} />
+            </div>
+            <div className="break-words">
+              <p className="font-medium">問題・直近の失敗</p>
+              {item.problem && <p>問題: {item.problem}</p>}
+              {failed && (
+                <p>
+                  直近の昇格の失敗（{formatAbsolute(failed.failed_at)}）: {failed.error}
+                </p>
+              )}
+              {!item.problem && !failed && <p className="text-muted-foreground">なし</p>}
+            </div>
+            <PromoteAction item={item} current={current} busy={busy} denied={denied} onPromote={onPromote} />
+            <p className="text-label text-muted-foreground">
+              ビルド: <Time value={item.built_at} /> ／ 昇格: <Time value={item.promoted_at} />
+            </p>
+            <p className="text-label text-muted-foreground">
+              変更:{" "}
+              {item.changes ? `${item.changes.commit_count} commit / ${item.changes.file_count} file` : "記録なし"}
+            </p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 export function ReleasesScreen() {
   const query = useQuery(releasesQuery);
   const promotion = usePromotionTracker();
@@ -346,13 +399,24 @@ export function ReleasesScreen() {
                 {data.items.length === 0 ? (
                   <p>リリースはありません。</p>
                 ) : (
-                  <ReleaseTable
-                    items={data.items}
-                    current={data.current}
-                    busy={busy}
-                    denied={promotion.denied !== null}
-                    onPromote={(item) => promotion.start(item)}
-                  />
+                  <>
+                    <MobileReleaseList
+                      items={data.items}
+                      current={data.current}
+                      busy={busy}
+                      denied={promotion.denied !== null}
+                      onPromote={(item) => promotion.start(item)}
+                    />
+                    <div className="hidden sm:block">
+                      <ReleaseTable
+                        items={data.items}
+                        current={data.current}
+                        busy={busy}
+                        denied={promotion.denied !== null}
+                        onPromote={(item) => promotion.start(item)}
+                      />
+                    </div>
+                  </>
                 )}
               </div>
             </Section>

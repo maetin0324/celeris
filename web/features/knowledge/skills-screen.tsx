@@ -197,15 +197,15 @@ function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; send
                       削除
                     </Button>
                   }
-                  title="skill を削除しますか"
-                  target={`skill「${detail.data.name}」`}
+                  title="手順書（skill）を削除しますか"
+                  target={`手順書「${detail.data.name}」`}
                   consequence={
                     detail.data.mounted_by?.length
                       ? `SKILL.md と付属ファイルを消します。配送先の課（${detail.data.mounted_by.join("、")}）にも届かなくなります。`
                       : "SKILL.md と付属ファイルを消します。"
                   }
                   reversibility="削除は戻せません。必要なら同じ名前で作り直します。"
-                  followUp="skill 一覧から消えたことで確かめられます。"
+                  followUp="手順書の一覧から消えたことで確かめられます。"
                   confirmLabel={`skill「${detail.data.name}」を削除`}
                   onConfirm={async () => {
                     const [outcome] = await sender.run([
@@ -252,7 +252,7 @@ function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; send
 }
 
 function SkillTable({ items, results }: { items: SkillList["items"]; results: Sender["results"] }) {
-  if (items.length === 0) return <p>skill はありません。</p>;
+  if (items.length === 0) return <p>手順書はまだありません。「作成」から SKILL.md を書いて登録します。</p>;
   return (
     <>
       {/* スマホ: 対象名 → 状態 → 補助情報の順の行（DESIGN.md「Table と list」）。 */}
@@ -268,7 +268,7 @@ function SkillTable({ items, results }: { items: SkillList["items"]; results: Se
         ))}
       </ul>
       <div className="hidden md:block">
-        <Table aria-label="skill の一覧">
+        <Table aria-label="手順書の一覧">
           <TableCaption>{items.length} 件</TableCaption>
           <TableHeader>
             <TableRow>
@@ -312,8 +312,8 @@ export function SkillsScreen() {
     queryFn: ({ signal }) => apiGet<SkillList>("/api/skills", signal),
   });
   return (
-    <ScreenFrame title="skills" route="/knowledge/skills">
-      <nav aria-label="skills の操作" className="flex flex-wrap gap-4">
+    <ScreenFrame title="手順書（skills）" route="/knowledge/skills">
+      <nav aria-label="手順書の操作" className="flex flex-wrap gap-4">
         <Link className={navLink} to="/knowledge">
           知識に戻る
         </Link>
@@ -331,23 +331,31 @@ export function SkillsScreen() {
             </div>
           ))}
       </section>
-      <div className="grid min-w-0 gap-6 lg:grid-cols-5">
-        <Section title="skill 一覧" className="lg:col-span-2">
+      <p className="max-w-prose-ja text-label text-muted-foreground">
+        手順書（SKILL.md と付属ファイル）は、組織の画面で課に付けるとその課の作業場所に配られます。
+      </p>
+      {/* 未選択のときは右の枠を出さず、一覧を全幅で並べる（空の枠で画面の 2/3 を空けない）。 */}
+      <div className={create || name ? "grid min-w-0 gap-6 lg:grid-cols-5" : "min-w-0"}>
+        <Section
+          title="手順書の一覧"
+          description={create || name ? undefined : "名前を選ぶと SKILL.md と配送先を開きます。"}
+          className={create || name ? "lg:col-span-2" : undefined}
+        >
           <FetchFrame query={list}>
             {list.data && <SkillTable items={list.data.items} results={sender.results} />}
           </FetchFrame>
         </Section>
-        <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
-          {create ? (
-            <Section title="skill の作成">
-              <SkillForm sender={sender} />
-            </Section>
-          ) : name ? (
-            <SkillDetail key={name} name={name} edit={edit} sender={sender} />
-          ) : (
-            <p className="text-muted-foreground">skill 一覧から skill を選んでください。</p>
-          )}
-        </div>
+        {(create || name) && (
+          <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
+            {create ? (
+              <Section title="手順書の作成">
+                <SkillForm sender={sender} />
+              </Section>
+            ) : (
+              <SkillDetail key={name} name={name} edit={edit} sender={sender} />
+            )}
+          </div>
+        )}
       </div>
     </ScreenFrame>
   );

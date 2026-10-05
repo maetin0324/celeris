@@ -398,9 +398,6 @@ impl OrgNodeContext {
 /// `run.context`。未知フィールドは無視する（前方互換）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RunContext {
-    /// Daemon-issued opaque reference for proxy requests. Never contains task metadata or secrets.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub context_ref: Option<String>,
     /// A supervisor-provisioned CLI; absent on ordinary, planner and reviewer runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub browser: Option<crate::browser::BrowserContext>,

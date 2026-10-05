@@ -12,7 +12,7 @@ use crate::protocol::{ContextTransport, RunRequest, RunTransportEvidence};
 pub(crate) const HEADER: &str = "x-celeris-routing-context";
 
 pub(crate) async fn record(run_dir: &Path, req: &RunRequest, supported: bool) {
-    if req.context.context_ref.is_none() {
+    if req.context.routing_context_ref.is_none() {
         return;
     }
     let transport = if supported {
@@ -30,11 +30,14 @@ pub(crate) async fn record(run_dir: &Path, req: &RunRequest, supported: bool) {
 }
 
 fn valid_ref(req: &RunRequest) -> Option<&str> {
-    req.context.context_ref.as_deref().filter(|reference| {
-        !reference.is_empty()
-            && reference.len() <= 256
-            && reference.bytes().all(|byte| byte.is_ascii_graphic())
-    })
+    req.context
+        .routing_context_ref
+        .as_deref()
+        .filter(|reference| {
+            !reference.is_empty()
+                && reference.len() <= 256
+                && reference.bytes().all(|byte| byte.is_ascii_graphic())
+        })
 }
 
 fn env_value<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {

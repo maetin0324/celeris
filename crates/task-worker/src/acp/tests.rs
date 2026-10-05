@@ -192,7 +192,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
             r#"{"provider":{"celeris-proxy":{"options":{"headers":{"X-Celeris-Routing-Context":"spoofed","x-other":"kept"}}}}}"#.into()),
     ];
     let mut req = sample_req(dir.path().to_path_buf());
-    req.context.context_ref = Some("daemon-issued-ref".into());
+    req.context.routing_context_ref = Some("daemon-issued-ref".into());
     let sink = RecordingSink::default();
     AcpAdapter::new(config.clone())
         .run(req.clone(), "proxy", default_limits(), &sink)

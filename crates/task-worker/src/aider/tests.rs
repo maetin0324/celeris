@@ -76,7 +76,7 @@ printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
         .env
         .push(("OPENAI_API_BASE".into(), "http://127.0.0.1:18100/v1".into()));
     let mut req = sample_req(dir.path().to_path_buf());
-    req.context.context_ref = Some("daemon-issued-ref".into());
+    req.context.routing_context_ref = Some("daemon-issued-ref".into());
     AiderAdapter::new(config)
         .run(req, "proxy", default_limits(), &RecordingSink::default())
         .await

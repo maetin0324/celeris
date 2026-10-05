@@ -36,7 +36,7 @@ pub(crate) async fn write_run_request(run_dir: &Path, req: &RunRequest, run_id: 
     // The opaque routing reference is a bearer capability. Keep it out of persisted
     // request snapshots; context-transport.json records only whether it was delivered.
     let mut snapshot = req.clone();
-    snapshot.context.context_ref = None;
+    snapshot.context.routing_context_ref = None;
     match serde_json::to_string_pretty(&snapshot) {
         Ok(pretty) => {
             if let Err(e) =

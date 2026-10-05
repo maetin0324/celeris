@@ -2317,13 +2317,6 @@
           "description": "ADR-0044 D2: この run はコメントを書ける（`{\"type\":\"comment\",\"body\":\"…\"}`）か。\n`true` のときだけ前置きに「短い進捗や判断の記録はコメントに書け」の節を出す。\n**仕事の run はすべて true** なので、Phase 53 以降、普通の run の前置きにはこの節が必ず入る\n（Phase 52 とバイト単位で同じなのは、この 3 つが既定のまま = レビュー run と対話 run だけ）。",
           "type": "boolean"
         },
-        "context_ref": {
-          "description": "Daemon-issued opaque reference for proxy requests. Never contains task metadata or secrets.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "continuation": {
           "anyOf": [
             {

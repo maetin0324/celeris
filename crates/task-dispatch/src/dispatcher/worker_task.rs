@@ -376,7 +376,6 @@ pub(super) async fn run_worker(
         work_dir,
         artifacts_dir,
         context: RunContext {
-            context_ref: None,
             browser: None,
             browser_policy: store
                 .browser_task_policy_get(task.id)

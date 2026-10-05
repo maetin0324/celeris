@@ -168,7 +168,8 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
       data-testid="project-tree-frame"
     >
       <Table wrapperClassName="overflow-x-visible">
-        <TableHeader>
+        {/* 640px 未満は見出しの行を隠し、各行を「題名」の下に「状態: …・判断待ち: …」と積む（右で切れない）。 */}
+        <TableHeader className="max-sm:sr-only">
           <TableRow>
             <TableHead>仕事</TableHead>
             <TableHead>状態</TableHead>
@@ -205,8 +206,15 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
                 rows.map(({ task, depth }) => {
                   const waiting = pending.get(task.id) ?? 0;
                   return (
-                    <TableRow key={task.id} data-tree-task={task.id} data-depth={depth}>
-                      <TableCell className={`min-w-48 break-words ${indent[Math.min(depth, indent.length - 1)]}`}>
+                    <TableRow
+                      key={task.id}
+                      data-tree-task={task.id}
+                      data-depth={depth}
+                      className="max-sm:flex max-sm:flex-wrap max-sm:items-center"
+                    >
+                      <TableCell
+                        className={`min-w-48 break-words max-sm:w-full max-sm:min-w-0 max-sm:pb-0 ${indent[Math.min(depth, indent.length - 1)]}`}
+                      >
                         {depth > 0 ? (
                           <span aria-hidden="true" className="me-1 text-muted-foreground">
                             └
@@ -221,10 +229,17 @@ function WorkTree({ detail }: { detail: ProjectDetail }) {
                           {task.title}
                         </Link>
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      <TableCell
+                        className={`whitespace-nowrap max-sm:flex max-sm:items-center max-sm:gap-1 ${indent[Math.min(depth, indent.length - 1)]} sm:ps-2`}
+                      >
+                        <span className="text-label text-muted-foreground sm:hidden">状態:</span>
                         <StatusBadge status={task.status} className="whitespace-nowrap break-normal" />
                       </TableCell>
-                      <TableCell className="whitespace-nowrap">
+                      <TableCell className="whitespace-nowrap max-sm:flex max-sm:items-center max-sm:gap-1">
+                        {/* 判断待ちのある行は link の文が「判断待ち N 件」なので、見出しは無い行（—）にだけ付ける。 */}
+                        {waiting > 0 ? null : (
+                          <span className="text-label text-muted-foreground sm:hidden">判断待ち:</span>
+                        )}
                         {waiting > 0 ? (
                           <Link
                             className="inline-flex min-h-11 min-w-11 items-center font-medium text-primary underline"

@@ -80,3 +80,10 @@ task_core::is_conversation(task)            // Task.conversation がある（人
 - アカウントの同時 run は CoS の分だけ一時的に `max_runs_per_account + 1` になりうる（レート制限の観点では CoS の run は短い対話 1 本）。
 - 部署ノードとの対話・途中目標レビュー・CoS に割り当てた通常の仕事は例外に乗らない（必要になれば規則 1 を広げる別の決定にする）。
 - `max_concurrency` の意味は「CoS の対話以外の run の上限」に変わる。
+
+## 付記: CoS チャットと受信箱一次対応への置き換え（2026-10-05）
+
+[ADR 2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D2/D6 により、規則 1 の対象に内部で生成する CoS chat/受信箱 triage run を加える。
+全体 1 本の直列化はスレッドごとの直列化となる。規則 2〜4 の会計、max_cos_runs、pool 例外と account 上限 +1 は維持する。
+max_cos_runs=0 は従来どおり通常枠に戻すだけで、cos.enabled=false とは異なる。quota は迂回せず、一次対応できない待ちは新 ADR の退避通知へ進む。
+通常 task や非 CoS worker をこの例外に含めない。切替は新 ADR の後続実装で行う。

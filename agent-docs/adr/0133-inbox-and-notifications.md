@@ -485,3 +485,12 @@ smoke と同じ台本）を手元で再現し、修正後の debug build で煙�
 **未解決**: 本番（active）の tick loop は 30 秒ごとに `notify::schedule_routes`（29d0ffc5）で受信箱全体を
 構築する。受信箱の構築は task ごとに events を読む既存の形（写しで 0.2〜0.6 秒）で、verify（`verify` 役は
 通知を回さない）の退行とは別。差分化するなら別の task にする。
+
+## 付記: CoS チャットと受信箱一次対応への置き換え（2026-10-05）
+
+[ADR 2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D3/D6 により、D6 の outbound inbox_new/reminder/digest の直接通知を CoS 一次対応へ置き換える。
+受信箱の各領域の正本、notice store・既読・報告は維持するが、派生 inbox はまず CoS が確認する待ちを含む。
+新待ちのイベントから決定的に専用の継続 session を起こし、CoS が代答/判断不要/人への判断依頼を選ぶ。
+代答は events の actor=cos と理由、チャットのカード、人の取消/差し戻し経路を持つ。
+人への通常通知は CoS のみ。不在時だけ決定的な直接通知へ退避する。自動片付けの規則や API の検証は保持する。
+旧 outbox/cursor の移行と送信入口の一本化、偽 harness/webhook の 3 経路試験は新 ADR D6 に従う。

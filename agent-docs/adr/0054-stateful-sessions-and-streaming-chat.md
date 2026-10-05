@@ -964,3 +964,12 @@ TaskKind::Execute` からしか許していなかった（コード上のコメ�
   試行回数の表示など）には影響する（`rereview` 直後は `failed` になる直前より 1 少ない値になる）。
   実害は無いと判断したが、GUI 等で `attempts` を「これまでに何回試したか」の実数として見せている
   箇所があれば、rereview を経た履歴で見え方が変わる可能性がある。
+
+## 付記: CoS チャットと受信箱一次対応への置き換え（2026-10-05）
+
+[ADR 2026-10-05-cos-chat-home](2026-10-05-cos-chat-home.md) D1/D2 により、D1 の「CoS の対話は全体で 1 本」を会話スレッドごとの session に置き換える。
+node_sessions と resume/rollover の仕組みを継承し、DB に要約・履歴を保持して session cache 消失後も継続できるようにする。
+D2 と §2 の「読み取り道具だけ・書く操作は actions だけ・actions で run 終了」は新 ADR D3 の全道具/API 操作へ置き換える。
+Phase 68 の adapter 別 read-only/permission 一律拒否も CoS について撤去する。
+D3 の新会話は旧 session を捨てる操作ではなく新 thread の作成となる。streaming・停止・queue は新 ADR D2/D5 の契約に従う。
+部門長の lead session と通常 WU continuation は変更しない。移行と実装状態は新 ADR D6 を参照。

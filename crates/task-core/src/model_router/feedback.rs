@@ -178,6 +178,14 @@ struct RunFacts {
     retries: Option<u32>,
 }
 
+/// 欠測（`None`）は足し算の単位元として扱うが、両方欠測なら `None` のまま（0 とみなさない）。
+fn add_opt<T: std::ops::Add<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a + b),
+        (a, b) => a.or(b),
+    }
+}
+
 /// 中断・供給側の終わり方の安定 code（低品質の証拠ではない）。品質の失敗は `acceptance_failed` /
 /// `review_failed` が優先する。
 fn end_class(end: RunEnd) -> Option<&'static str> {
@@ -268,16 +276,18 @@ pub fn project_run_outcomes(events: &[Event], norm: &RewardNormalization) -> Vec
                 let f = runs.entry(run_id.clone()).or_default();
                 f.finished = true;
                 f.end = *end;
+                // run に合算する（同じ run の複数の完了記録を足す）。欠測同士は欠測のままにする。
                 if let Some(u) = usage {
-                    f.cash_usd = u.cost_usd;
-                    f.tokens = match (u.input_tokens, u.output_tokens) {
+                    f.cash_usd = add_opt(f.cash_usd, u.cost_usd);
+                    let tokens = match (u.input_tokens, u.output_tokens) {
                         (None, None) => None,
                         (i, o) => Some(i.unwrap_or(0) + o.unwrap_or(0)),
                     };
+                    f.tokens = add_opt(f.tokens, tokens);
                 }
                 if let Some(m) = metrics {
-                    f.wall_ms = Some(m.wall_ms);
-                    f.retries = Some(m.retries);
+                    f.wall_ms = add_opt(f.wall_ms, Some(m.wall_ms));
+                    f.retries = add_opt(f.retries, Some(m.retries));
                 }
             }
             Event::WorkUnitCheckFinished {

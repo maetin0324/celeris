@@ -348,7 +348,12 @@ function InboxRow({
           </Meta>
           {item.project_id ? (
             <Meta label="案件">
-              <Link className={linkClass} to="/projects/$id" params={{ id: item.project_id }}>
+              <Link
+                className={linkClass}
+                to="/projects/$id"
+                params={{ id: item.project_id }}
+                title={projectTitle ? undefined : item.project_id}
+              >
                 {projectTitle ?? shortId(item.project_id)}
               </Link>
             </Meta>

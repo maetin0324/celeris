@@ -4,6 +4,7 @@ import schema from "../../api/generated/schema.json";
 import type { TaskRoutingView } from "../../api/generated/types";
 import {
   routingAuditFixture,
+  routingEstimatorShadowFixture,
   routingShadowFixture,
   routingTrajectoryFixture,
   validateFixture,
@@ -134,5 +135,47 @@ describe("task の routing shadow 監査（ADR 2026-10-04-multi-objective-model-
   it("shadow の記録が無い run には shadow の節を出さない", () => {
     const out = html({ ...routingShadowFixture, runs: routingShadowFixture.runs.slice(1) });
     expect(out).not.toContain("shadow 監査");
+  });
+});
+
+describe("task の routing estimator shadow 監査（ADR 2026-10-04-multi-objective-model-routing §10 Phase 5）", () => {
+  it("fixture routing_estimator_shadow は TaskRoutingView の生成型に合う", () => {
+    expect(validateFixture(routingEstimatorShadowFixture, schema.$defs.TaskRoutingView)).toEqual([]);
+  });
+
+  it("task を跨いだ要約を task の先頭・run とは別の節に出し、欠測を 0 に丸めない", () => {
+    const out = html(routingEstimatorShadowFixture);
+    const section = out.indexOf('aria-label="estimator shadow 要約"');
+    expect(section).toBeGreaterThanOrEqual(0);
+    expect(section).toBeLessThan(out.indexOf("実行枠: 供給元 claude-oauth"));
+    expect(out).toContain("estimator shadow 要約（estimator: routellm-bert/0.2.2）");
+    expect(out).toContain("対象 5 / 完了 2 / 失敗 0 / timeout 1 / 破棄 1 / 評価不能（prompt 必須） 1 / coverage 40.0%");
+    expect(out).toContain("primary（実行した決定）と違った 1 件 / heuristic 首位と違った 1 件");
+    expect(out).toContain("平均 推論 overhead: 73 ms");
+  });
+
+  it("estimator id/version・primary=heuristic との差を shadow ごとに別欄で出す", () => {
+    const out = html(routingEstimatorShadowFixture);
+    const s1 = shadow(out, "ES1");
+    expect(s1).toContain("品質推定（estimator、primary の選択には効かない） / 完了");
+    expect(s1).toContain("estimator routellm-bert/0.2.2: 完了");
+    expect(s1).toContain("primary（実行した決定）との差 なし（同じ） / heuristic 首位との差 なし（同じ）");
+    expect(s1).toContain("推論 overhead: 40 ms");
+    const s2 = shadow(out, "ES2");
+    expect(s2).toContain("primary（実行した決定）との差 あり / heuristic 首位との差 あり");
+  });
+
+  it("timeout・prompt_required・dropped の理由を区別して出す（primary の outcome とは別）", () => {
+    const out = html(routingEstimatorShadowFixture);
+    const s3 = shadow(out, "ES3");
+    expect(s3).toContain("estimator routellm-bert/0.2.2: timeout / 理由 timeout");
+    const s4 = shadow(out, "ES4");
+    expect(s4).toContain("estimator 不明/不明: 評価不能（prompt 必須、送っていない） / 理由 不明");
+    expect(s4).toContain("依存: prompt 必須");
+    const s5 = shadow(out, "ES5");
+    expect(s5).toContain("estimator 不明/不明: 破棄 / 理由 dependencies_not_allowed");
+    expect(s5).toContain("依存: 許可されていない依存");
+    expect(s5).not.toContain("推論 overhead: 0 ms");
+    expect(s5).toContain("推論 overhead: 不明");
   });
 });

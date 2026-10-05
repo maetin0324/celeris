@@ -4,7 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
 import { screens } from "../e2e/support/screens.ts";
-import { applyStateRoute, states } from "../e2e/support/states.ts";
+import { applyStateRoute, states, waitForStateCapture } from "../e2e/support/states.ts";
 import { startFixtureGateway } from "./fixture-gateway.mjs";
 
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -38,7 +38,9 @@ try {
             try {
               await applyStateRoute(page, state);
               await page.goto(`${gateway.base}${target}`);
+              // 状態ごとの待ち（states.ts の capture）。error は取得失敗の表示と再試行が出てから撮る。
               // loading は状態を撮り終えるまで保留し、撮影後に必ず解放する。
+              await waitForStateCapture(page, state);
               await page.screenshot({
                 path: path.join(out, `${state.key}-${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
                 fullPage: true,

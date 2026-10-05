@@ -60,6 +60,61 @@ for (const [width, height] of [
   });
 }
 
+// 1440 の通知の右・会話枠の上端の右（x≈1300〜1415, y≈340〜360）に中身の無い枠が浮かない。
+// 退行の形: 枠（[data-home-console]）が末尾へ送られて宛先と「新しい会話」の行が枠の上端で切れ、button の下辺の線だけが
+// 空の枠に見えた（fix-r5/fix-home-states.md）。その領域の点ごとに、点を含む border 付きの要素が枠の上端で切れておらず、
+// 文字を持つことを DOM（elementFromPoint・bounding box）で確かめる。
+test("ホーム 1440: 会話枠の上端の右に中身の無い枠（border だけの切れた要素）が無い", async ({ page }) => {
+  const gateway = await startFixtureGateway();
+  try {
+    await page.setViewportSize({ width: 1440, height: 800 });
+    await page.goto(`${gateway.base}/`);
+    await expect(page.getByRole("list", { name: "Console の会話" }).getByRole("listitem").first()).toBeVisible();
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    const found = await page.evaluate(() => {
+      const region = document.querySelector("[data-home-console]");
+      if (!region) throw new Error("no [data-home-console]");
+      const top = region.getBoundingClientRect().top;
+      const bad: string[] = [];
+      let hits = 0;
+      for (let x = 1300; x <= 1415; x += 5) {
+        for (let y = 340; y <= 360; y += 2) {
+          let el = document.elementFromPoint(x, y);
+          while (el && el.id !== "main") {
+            const cs = getComputedStyle(el);
+            const bordered = ["Top", "Right", "Bottom", "Left"].some(
+              (side) => Number.parseFloat(cs.getPropertyValue(`border-${side.toLowerCase()}-width`)) > 0,
+            );
+            if (bordered) {
+              hits += 1;
+              const box = el.getBoundingClientRect();
+              const text = (el.textContent ?? "").trim();
+              const clipped = region.contains(el) && box.top < top - 0.5;
+              if (clipped || text === "")
+                bad.push(
+                  `${el.tagName}「${text.slice(0, 20)}」 top=${Math.round(box.top)} 枠の上端=${Math.round(top)}`,
+                );
+              break;
+            }
+            el = el.parentElement;
+          }
+        }
+      }
+      return { bad: [...new Set(bad)], hits };
+    });
+    expect(found.bad, "中身の無い枠・枠の上端で切れた border 付きの要素").toEqual([]);
+    // 領域には「新しい会話」の button がある（点が何にも当たらずに通るのを防ぐ）。
+    expect(found.hits).toBeGreaterThan(0);
+    const fresh = page.getByRole("button", { name: "新しい会話" });
+    const region = await page.locator("[data-home-console]").boundingBox();
+    const button = await fresh.boundingBox();
+    if (!region || !button) throw new Error("no box");
+    expect(button.y, "「新しい会話」は枠の上端より下から始まる").toBeGreaterThanOrEqual(region.y - 0.5);
+  } finally {
+    await gateway.close();
+  }
+});
+
 // 会話は枠の中で scroll する。開いた直後は枠の末尾にいて、追記に合わせて末尾へ送る。
 // 枠の上へ離れている間は追記で動かさず「最新へ」を出す。どの間もページ（window）は scroll しない。
 test("ホームの会話の枠: 追記の追従と『最新へ』（ページは動かない）", async ({ page }) => {

@@ -17,6 +17,7 @@ import { Button } from "../../components/ui/button";
 import { CodeBlock, LogSurface } from "../../components/ui/code-block";
 import { Icon } from "../../components/ui/icon";
 import { formatAbsolute } from "../../lib/time";
+import { cn } from "../../lib/utils";
 import { isNearBottom } from "../runs/run-header";
 import { blockKindLabel, blocksVersion, progressPreview, splitFences, stepLine } from "./console-labels";
 import { fetchRunEvents } from "./run-events";
@@ -119,7 +120,15 @@ export function ConsoleView({
 
   return (
     <div className="flex min-w-0 flex-col gap-3 pb-40" data-console data-scope={scope}>
-      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+      {/* contained（ホームの枠）では枠が末尾へ送られても宛先と「新しい会話」を枠の上端に留める。
+          留めないと枠の上端で button が切れ、下辺の線だけが空の枠に見えた（fix-r5/fix-home-states.md）。 */}
+      <div
+        data-console-toolbar
+        className={cn(
+          "flex min-w-0 flex-wrap items-center justify-between gap-2",
+          contained && "sticky top-0 z-10 bg-surface pb-2",
+        )}
+      >
         <p className="min-w-0 break-words text-body text-muted-foreground">宛先: {label}</p>
         <Button onClick={fresh.start} disabled={fresh.pending}>
           新しい会話

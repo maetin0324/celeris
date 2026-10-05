@@ -21,6 +21,11 @@ export type FixtureState = {
   route?: { status: number; paths: readonly string[] };
   /** 当てる代表画面の URL（主画面・task 系・管理などの各群から）。 */
   screens: readonly string[];
+  /**
+   * screenshots.mjs --states が撮る前に待つもの（既定 settled）。held: 読み込み中の表示が出たら保留のまま撮る。
+   * alert: 取得失敗の表示（role=alert と「再試行」）が出るまで待つ。settled: 見出しが出て読み込み中が消えるまで待つ。
+   */
+  capture?: "held" | "alert" | "settled";
 };
 
 /** 区切りの無い長い ID（ULID 2 つ分）。折り返し・横 scroll の確認に使う。 */
@@ -149,6 +154,7 @@ export const states = [
     key: "loading",
     label: "読み込み中（応答を保留し、試験が releaseHeld() で解く）",
     daemon: { hold: {} },
+    capture: "held",
     screens: ["/inbox", "/tasks", "/tasks/T1", "/providers"],
   },
   {
@@ -157,6 +163,7 @@ export const states = [
     daemon: {
       fault: { status: 503, paths: ["/api/v1/inbox", "/api/v1/tasks", "/api/v1/providers"] },
     },
+    capture: "alert",
     screens: ["/inbox", "/tasks", "/tasks/T1", "/providers"],
   },
   {
@@ -178,6 +185,36 @@ export function stateByKey(key: StateKey): FixtureState {
   const found = states.find((state) => state.key === key);
   if (!found) throw new Error(`unknown state: ${key}`);
   return found;
+}
+
+// FetchFrame の読み込み中（data-fetch-state="loading"）と、読み込み中の表示（aria-busy）。
+const LOADING_SELECTOR = '[data-fetch-state="loading"], [aria-busy="true"]';
+const CAPTURE_TIMEOUT = { timeout: 20_000 };
+
+/**
+ * 状態を撮れる所まで待つ（固定の時間では待たない）。error は応答の 503 の後に取得失敗の表示（role=alert の中の
+ * 「再試行」）が出るまで待つ。待たずに撮ると読み込み中のまま写り、取得失敗の文と再試行が写らなかった（fix-r5）。
+ */
+export async function waitForStateCapture(page: Page, state: FixtureState): Promise<void> {
+  await page
+    .locator("h1")
+    .first()
+    .waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
+  const capture = state.capture ?? "settled";
+  if (capture === "held") {
+    await page
+      .locator('[data-fetch-state="loading"]')
+      .first()
+      .waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
+  } else if (capture === "alert") {
+    await page
+      .locator('[data-fetch-state="error"][role="alert"]')
+      .first()
+      .getByRole("button", { name: "再試行" })
+      .waitFor({ state: "visible", ...CAPTURE_TIMEOUT });
+  } else {
+    await page.waitForFunction((selector) => !document.querySelector(selector), LOADING_SELECTOR, CAPTURE_TIMEOUT);
+  }
 }
 
 /** 状態の route（403 など）を page に当てる。route の無い状態では何もしない。 */

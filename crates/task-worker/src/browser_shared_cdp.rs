@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Value, json};
-use url::Url;
 
 use crate::browser_cdp_sink::{CdpController, InjectionError};
 
@@ -226,19 +225,7 @@ fn navigation_allowed(method: &str, params: &Value, domains: &[String]) -> bool 
     if url == "about:blank" {
         return true;
     }
-    let Ok(url) = Url::parse(url) else {
-        return false;
-    };
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    domains.iter().any(|d| {
-        d.strip_prefix("*.")
-            .map_or(host == d, |base| host.ends_with(&format!(".{base}")))
-    })
+    crate::browser_policy::url_origin_allowed(url, domains)
 }
 
 fn error(id: &Value, code: &str) -> Value {

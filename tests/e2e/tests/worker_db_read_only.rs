@@ -72,6 +72,7 @@ fn ready_task(store: &SqliteStore, dir: &Path, project: Option<ProjectId>) -> Ta
     let now = OffsetDateTime::now_utc();
     let task = Task {
         tree: None,
+        requirements: Default::default(),
         paused_at: None,
         routing: None,
         mode: Default::default(),

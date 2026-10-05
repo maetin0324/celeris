@@ -415,15 +415,11 @@ struct CredentialRequest {
     purpose: String,
 }
 
-fn host_in_domains(origin: &str, domains: &[String]) -> bool {
-    let authority = origin.strip_prefix("https://").unwrap_or("");
-    let host = authority.split(':').next().unwrap_or("");
+/// A concrete request origin must be covered by an effective allowed origin (scheme, host, port).
+fn origin_in_domains(origin: &str, domains: &[String]) -> bool {
     domains
         .iter()
-        .any(|domain| match domain.strip_prefix("*.") {
-            Some(base) => host.ends_with(&format!(".{base}")),
-            None => host == domain,
-        })
+        .any(|domain| task_core::browser::origin_covers(domain, origin))
 }
 
 fn read_credential_request(
@@ -449,7 +445,7 @@ fn read_credential_request(
             .contains(&request.policy_id)
         || task_core::browser::normalize_https_origin(&request.origin).as_deref()
             != Some(&request.origin)
-        || !host_in_domains(&request.origin, policy.allowed_domains())
+        || !origin_in_domains(&request.origin, policy.allowed_domains())
         || !task_core::browser_wait::valid_purpose(&request.purpose)
     {
         return Err(AdapterError::Other(
@@ -1067,7 +1063,7 @@ async fn run_with_executable_attempt(
                 .credential_policy_id
                 .as_ref()
                 .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !host_in_domains(&wait.origin, policy.allowed_domains())
+            || !origin_in_domains(&wait.origin, policy.allowed_domains())
             || credentials.is_none())
     {
         return Err(AdapterError::Other(
@@ -1088,7 +1084,7 @@ async fn run_with_executable_attempt(
                 .credential_policy_id
                 .as_ref()
                 .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !host_in_domains(&registered.origin, policy.allowed_domains())
+            || !origin_in_domains(&registered.origin, policy.allowed_domains())
         {
             return Err(AdapterError::Other(
                 "browser credential approval request denied".into(),
@@ -1237,7 +1233,8 @@ async fn run_with_executable_attempt(
         allow: policy
             .allowed_domains()
             .iter()
-            .map(|d| format!("{d}:443"))
+            .filter_map(|d| crate::browser_policy::origin_host_port(d))
+            .map(|(host, port)| format!("{host}:{port}"))
             .collect(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,

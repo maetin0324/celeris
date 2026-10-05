@@ -22,7 +22,7 @@ use crate::types::ValidationError;
 
 mod accounts;
 mod clusters;
-mod org;
+pub(crate) mod org;
 mod projects;
 mod providers;
 mod secrets;
@@ -39,7 +39,7 @@ use clusters::{
     cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
     submit_cluster_connect_code,
 };
-use org::{create_org_node, delete_org_node, org_list, patch_org_node};
+use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, patch_org_node};
 use projects::{
     create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
 };
@@ -139,6 +139,10 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route(
             "/api/v1/org/{id}",
             patch(patch_org_node).delete(delete_org_node),
+        )
+        .route(
+            "/api/v1/org/{id}/browser-settings",
+            patch(patch_browser_settings),
         )
         // ADR-0033 D4（Phase 24）: 対話。実装は `crate::conversation`。
         .route(

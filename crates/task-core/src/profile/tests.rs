@@ -251,6 +251,7 @@ fn with_task_overrides_harness_tier_and_skills() {
 fn browser_grant_is_inherited_but_task_skills_cannot_create_it() {
     let mut org = tree();
     let grant = crate::BrowserCapability {
+        credential_identity_ids: Default::default(),
         allowed_domains: vec!["https://example.com".into()],
         live_view_url: Some("https://browser.example.com/live".into()),
         allowed_actions: None,

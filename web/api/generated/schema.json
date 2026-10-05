@@ -1709,6 +1709,13 @@
           },
           "type": "array"
         },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Policy ID to browser identity ID. This contains identifiers only, never credentials.",
+          "type": "object"
+        },
         "credential_policy_ids": {
           "description": "Credential policies a task may reference. Absent/empty means no credential use.",
           "items": {
@@ -1961,6 +1968,60 @@
         "FAILED"
       ],
       "type": "string"
+    },
+    "BrowserSettingsPatch": {
+      "additionalProperties": false,
+      "description": "PATCH /org/{id}/browser-settings. Only browser-related profile fields are editable.",
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetPrefs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "credential_policy_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "harnesses": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HarnessPrefs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "BrowserWait": {
       "additionalProperties": false,
@@ -24666,6 +24727,9 @@
     "browser_revoke": {
       "$ref": "#/$defs/BrowserRevokeBody"
     },
+    "browser_settings_patch": {
+      "$ref": "#/$defs/BrowserSettingsPatch"
+    },
     "browser_wait_list": {
       "$ref": "#/$defs/BrowserWaitList",
       "description": "`GET /tasks/{id}/browser/waits` と `GET /browser/waits`。"
@@ -25204,6 +25268,7 @@
     "org_list",
     "org_create",
     "org_patch",
+    "browser_settings_patch",
     "project_list",
     "project_create",
     "project_patch",

@@ -208,6 +208,7 @@ fn run_request(w: &World) -> RunRequest {
         context: task_worker::protocol::RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {
+                    credential_identity_ids: Default::default(),
                     allowed_domains: vec!["*.example.com".into()],
                     allowed_actions: Some(vec![
                         BrowserAction::Navigate,

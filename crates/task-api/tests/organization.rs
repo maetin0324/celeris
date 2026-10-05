@@ -87,6 +87,137 @@ fn env_with_token() -> TestEnv {
     })
 }
 
+fn browser_settings_db(env: &TestEnv) -> (String, i64, i64, i64) {
+    let conn = rusqlite::Connection::open(&env.db_path).unwrap();
+    let profile = conn
+        .query_row(
+            "SELECT profile_json FROM org_nodes WHERE id = 'browser-execution'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let events = conn
+        .query_row("SELECT count(*) FROM org_browser_events", [], |r| r.get(0))
+        .unwrap();
+    let task_events = conn
+        .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+        .unwrap();
+    let org_rows = conn
+        .query_row("SELECT count(*) FROM org_nodes", [], |r| r.get(0))
+        .unwrap();
+    (profile, events, task_events, org_rows)
+}
+
+#[tokio::test]
+async fn browser_settings_patch_validates_and_audits_atomically() {
+    let env = env_with_token();
+    let app = env.router();
+    assert_eq!(
+        send(
+            &app,
+            p(
+                "/api/v1/org",
+                &json!({"id":"secretary", "name":"Secretary", "kind":"secretary"})
+            )
+        )
+        .await
+        .status
+        .as_u16(),
+        201
+    );
+    assert_eq!(send(&app, p("/api/v1/org", &json!({"id":"browser-execution", "name":"Browser", "kind":"department", "parent_id":"secretary", "profile":{"browser":{"allowed_domains":["http://localhost:3000"], "credential_policy_ids":["policy-1"]}}}))).await.status.as_u16(), 201);
+    let path = "/api/v1/org/browser-execution/browser-settings";
+    let before = browser_settings_db(&env);
+    for bad in [
+        "*",
+        "https://*.com",
+        "https://*.co.uk",
+        "https://user@example.com",
+        "https://example.com/path",
+        "https://example.com?x=1",
+        "https://example.com#x",
+        "ftp://example.com",
+        "http://example.com",
+    ] {
+        let response = send(&app, pa(path, &json!({"allowed_domains":[bad]}))).await;
+        assert_problem(&response, 422, "validation");
+        assert_eq!(browser_settings_db(&env), before, "{bad}");
+    }
+    for invalid in [
+        json!({"allowed_domains":[]}),
+        json!({"credential_identity_ids":{"unknown":"identity-7"}}),
+    ] {
+        let response = send(&app, pa(path, &invalid)).await;
+        assert_problem(&response, 422, "validation");
+        assert_eq!(browser_settings_db(&env), before);
+    }
+    let generic = send(
+        &app,
+        pa(
+            "/api/v1/org/browser-execution",
+            &json!({"profile":{"browser":{"allowed_domains":["https://*.com"]}}}),
+        ),
+    )
+    .await;
+    assert_problem(&generic, 422, "validation");
+    assert_eq!(browser_settings_db(&env), before);
+
+    let unauthenticated = send(
+        &app,
+        patch_json_with(
+            path,
+            &json!({"allowed_domains":["https://billing.example.com"]}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(unauthenticated.status.as_u16(), 401);
+    assert_eq!(browser_settings_db(&env), before);
+    let csrf = send(
+        &app,
+        patch_json_with(
+            path,
+            &json!({"allowed_domains":["https://billing.example.com"]}),
+            &[
+                ("authorization", format!("Bearer {TOKEN}").as_str()),
+                ("origin", "https://foreign.example"),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(csrf.status.as_u16(), 403);
+    assert_eq!(browser_settings_db(&env), before);
+
+    let response = send(
+        &app,
+        pa(
+            path,
+            &json!({
+                "allowed_domains":["https://billing.example.com"],
+                "credential_identity_ids":{"policy-1":"identity-7"},
+                "harnesses":{"allowed":["coding"],"default":"coding"},
+                "budget":{"max_attempts":2}
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(response.status.as_u16(), 200, "{}", response.text());
+    let conn = rusqlite::Connection::open(&env.db_path).unwrap();
+    let (actor, old, new): (String, String, String) = conn.query_row(
+        "SELECT actor, before_json, after_json FROM org_browser_events WHERE node_id='browser-execution'", [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    ).unwrap();
+    assert_eq!(actor, "admin");
+    assert!(old.contains("http://localhost:3000"));
+    assert!(new.contains("https://billing.example.com"));
+    assert!(new.contains("identity-7"));
+    assert!(!new.contains(TOKEN));
+    assert!(!new.contains("secret"));
+    assert_eq!(browser_settings_db(&env).1, before.1 + 1);
+    assert_eq!(browser_settings_db(&env).2, before.2);
+    assert_eq!(browser_settings_db(&env).3, before.3);
+}
+
 /// 秘書 → 研究部 → 関連研究調査課 を API から作る。
 async fn seed_org(app: &axum::Router) {
     let a = auth();

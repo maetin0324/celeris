@@ -2,6 +2,7 @@ use super::*;
 
 fn grant() -> BrowserCapability {
     BrowserCapability {
+        credential_identity_ids: Default::default(),
         allowed_domains: vec!["https://example.com".into(), "https://*.example.org".into()],
         allowed_actions: None,
         credential_policy_ids: vec!["cred-policy-1".into()],

@@ -345,6 +345,9 @@ export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "scr
 export type BrowserCapability = {
   "allowed_actions"?: Array<BrowserAction> | null;
   "allowed_domains": Array<string>;
+  "credential_identity_ids"?: {
+  [key: string]: string;
+};
   "credential_policy_ids"?: Array<string>;
   "live_view_url"?: string | null;
 };
@@ -406,6 +409,16 @@ export type BrowserRun = {
 };
 
 export type BrowserRunState = "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
+
+export type BrowserSettingsPatch = {
+  "allowed_domains"?: Array<string> | null;
+  "budget"?: BudgetPrefs | null;
+  "credential_identity_ids"?: {
+  [key: string]: string;
+} | null;
+  "credential_policy_ids"?: Array<string> | null;
+  "harnesses"?: HarnessPrefs | null;
+};
 
 export type BrowserWait = {
   "approval_id"?: string | null;

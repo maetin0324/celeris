@@ -1,6 +1,6 @@
 //! Browser execution is a capability granted by an administrator's profile, never an agent genre.
 //! No credentials, browser storage, page content, or process I/O belong in these contracts.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
@@ -29,6 +29,9 @@ pub struct BrowserCapability {
     /// Credential policies a task may reference. Absent/empty means no credential use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_policy_ids: Vec<String>,
+    /// Policy ID to browser identity ID. This contains identifiers only, never credentials.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credential_identity_ids: BTreeMap<String, String>,
     /// Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.
     /// This is not a CDP endpoint or a bearer-token URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,6 +68,15 @@ impl BrowserCapability {
             .is_some_and(|url| !valid_live_view_url(url))
         {
             return Err("browser.live_view_url must be an HTTPS dashboard URL without credentials, query, or fragment".into());
+        }
+        if self
+            .credential_identity_ids
+            .iter()
+            .any(|(policy, identity)| {
+                !self.credential_policy_ids.contains(policy) || identity.trim().is_empty()
+            })
+        {
+            return Err("browser.credential_identity_ids requires granted policy IDs and non-empty identity IDs".into());
         }
         Ok(())
     }

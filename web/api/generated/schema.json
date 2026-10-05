@@ -8745,6 +8745,135 @@
           "type": "object"
         },
         {
+          "description": "同 §7.1・Phase 4: shadow（decision / execution）1 件の結果。primary の選択・成功/失敗・attempts とは\n別欄で、それらを変えない。本文・prompt・credential は持たない（出力は SHA-256 と tokens だけ）。\n状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "candidate_model": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "candidate_source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "cash_usd": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "detail": {
+              "description": "秘密を含まない短い説明（任意）。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "effective_usd": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "input_tokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "kind": {
+              "$ref": "#/$defs/ShadowKind"
+            },
+            "latency_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "output_sha256": {
+              "description": "出力本文の SHA-256（小文字 16 進 64 桁）。本文は保存しない。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "output_tokens": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "policy_version": {
+              "description": "判断した policy/estimator の版。",
+              "type": "string"
+            },
+            "primary_decision_id": {
+              "description": "shadow が比べた primary の決定（`RoutingTraceV1.decision_id`）。",
+              "type": "string"
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ShadowReason"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "completed は `None`。failed/dropped は必須。"
+            },
+            "request_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reservation_id": {
+              "description": "実行 shadow の日次予約（store の reservation id）。decision shadow・予約前の drop は `None`。",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "run_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "shadow_id": {
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/ShadowStatus"
+            },
+            "type": {
+              "const": "routing_shadow_recorded",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "shadow_id",
+            "primary_decision_id",
+            "kind",
+            "status",
+            "policy_version"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +\nmechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。",
           "properties": {
             "checkpoint": {
@@ -21108,6 +21237,85 @@
       ],
       "type": "object"
     },
+    "RoutingShadowAudit": {
+      "description": "primary の結果から独立した shadow 1 件の監査。",
+      "properties": {
+        "candidate_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "differs_from_primary": {
+          "description": "primary の model/source と候補が両方分かる場合だけ比較する。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ShadowKind"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "primary_decision_id": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShadowReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reservation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShadowReservationAudit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadow_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ShadowStatus"
+        }
+      },
+      "required": [
+        "shadow_id",
+        "primary_decision_id",
+        "kind",
+        "status"
+      ],
+      "type": "object"
+    },
     "RoutingTraceV1": {
       "properties": {
         "account_id": {
@@ -21706,6 +21914,16 @@
             }
           ],
           "description": "Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。"
+        },
+        "routing_shadow": {
+          "description": "Phase 4: run に結び付いた decision/execution shadow。旧 run は欄なし。",
+          "items": {
+            "$ref": "#/$defs/RoutingShadowAudit"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "rule_id": {
           "type": [
@@ -22771,6 +22989,102 @@
         "confidence"
       ],
       "type": "object"
+    },
+    "ShadowKind": {
+      "description": "shadow の種類。`decision` は追加呼出しなしの判断比較、`execution` は候補で実際に生成した。",
+      "enum": [
+        "decision",
+        "execution"
+      ],
+      "type": "string"
+    },
+    "ShadowReason": {
+      "description": "failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。",
+      "oneOf": [
+        {
+          "enum": [
+            "not_allowlisted",
+            "sampled_out",
+            "queue_full",
+            "concurrency_limit",
+            "timeout",
+            "privacy",
+            "upstream_error"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "off",
+          "description": "shadow 実行が設定で off（既定）または設定が不完全。",
+          "type": "string"
+        },
+        {
+          "const": "cap_exceeded",
+          "description": "日次の request/token/effective 上限を超える（予約できない）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown_cost",
+          "description": "最悪消費の費用が分からない（実行対象にしない）。",
+          "type": "string"
+        },
+        {
+          "const": "resource_group_shared",
+          "description": "primary と同じ非分離の resource group を使う。",
+          "type": "string"
+        },
+        {
+          "const": "primary_pressure",
+          "description": "primary の予約待ちが発生したので未開始の shadow を落とした。",
+          "type": "string"
+        }
+      ]
+    },
+    "ShadowReservationAudit": {
+      "description": "監査表示用の予約と確定の消費。額は effective USD。",
+      "properties": {
+        "charged_effective_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "charged_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserved_effective_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "reserved_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "utc_day": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "utc_day",
+        "state",
+        "reserved_tokens",
+        "reserved_effective_usd",
+        "charged_tokens",
+        "charged_effective_usd"
+      ],
+      "type": "object"
+    },
+    "ShadowStatus": {
+      "enum": [
+        "completed",
+        "failed",
+        "dropped"
+      ],
+      "type": "string"
     },
     "SideIntent": {
       "properties": {
@@ -24429,7 +24743,7 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
-          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。",
+          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。\nPhase 4 の `routing_shadow` は primary の結果から独立した optional の配列。",
           "items": {
             "$ref": "#/$defs/RunRoutingAudit"
           },

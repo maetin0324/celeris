@@ -57,7 +57,7 @@ test.describe("ops-config", () => {
     await page.goto(`${gateway.base}/providers`);
     const form = page.getByRole("form", { name: "プロバイダを追加" });
     const id = form.getByLabel("新規 id");
-    const concurrency = form.getByLabel("新規 concurrency");
+    const concurrency = form.getByLabel("新規の同時実行数");
     // 空の id と不正な concurrency: 先に並ぶ id へ focus。
     await concurrency.fill("-2");
     await form.getByRole("button", { name: "追加" }).click();

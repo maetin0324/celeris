@@ -62,7 +62,8 @@ try {
             el.getAttribute("aria-label") ||
             (el.getAttribute("aria-labelledby") &&
               document.getElementById(el.getAttribute("aria-labelledby"))?.textContent) ||
-            (el instanceof HTMLInputElement && el.labels?.[0]?.textContent) ||
+            ((el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el instanceof HTMLSelectElement) &&
+              el.labels?.[0]?.textContent) ||
             el.textContent;
           if (!label?.trim()) unnamed.push(el.outerHTML.slice(0, 120));
           if (el.tabIndex > 0) badFocus.push(el.outerHTML.slice(0, 120));

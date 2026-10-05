@@ -89,3 +89,14 @@ test("login: gateway に届かないときも理由を出し欄へ focus", async
   await expect(page.getByRole("alert")).toContainText("gateway に接続できません");
   await expect(input).toBeFocused();
 });
+
+test("login: 戻り先 next を画面に示し、失敗後も残す", async ({ page }) => {
+  await page.goto(`${base}/login?next=${encodeURIComponent("/tasks?status=failed")}`);
+  await expect(page.getByText("ログイン後に /tasks?status=failed へ戻ります。")).toBeVisible();
+  await page.getByLabel("パスワード").fill("wrong");
+  await page.getByRole("button", { name: "ログイン" }).click();
+  await expect(page.getByRole("alert")).toHaveText("パスワードが違います");
+  await expect(page.getByText("ログイン後に /tasks?status=failed へ戻ります。")).toBeVisible();
+  await page.goto(`${base}/login?next=${encodeURIComponent("//evil.example/")}`);
+  await expect(page.getByText("ログイン後はホームを開きます。")).toBeVisible();
+});

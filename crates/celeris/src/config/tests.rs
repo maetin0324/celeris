@@ -4008,6 +4008,63 @@ fn routing_phase2_load(extra: &str) -> Result<Config, String> {
 }
 
 #[test]
+fn routing_shadow_config_defaults_off_and_requires_caps() {
+    let legacy = routing_phase2_load("").unwrap();
+    let policy = &legacy.model_routing.runtime.as_ref().unwrap().shadow;
+    assert!(!policy.execute);
+    assert_eq!(policy.sample_rate, 0.0);
+    assert!(policy.daily_caps().is_none());
+
+    let decision = routing_phase2_load("[model_routing]\nmode = \"shadow\"\n").unwrap();
+    assert!(
+        !decision
+            .model_routing
+            .runtime
+            .as_ref()
+            .unwrap()
+            .shadow
+            .execute
+    );
+
+    let base = "[model_routing.shadow]\nexecute = true\nsample_rate = 1.0\n";
+    let err = routing_phase2_load(base).unwrap_err();
+    assert!(err.contains("daily_max_requests"), "{err}");
+
+    let capped = format!(
+        "{base}candidate_policy = \"candidate-v1\"\ndaily_max_requests = 10\ndaily_max_tokens = 1000\n\
+         daily_max_effective_usd = 1.5\nmax_concurrency = 2\nmax_queue_depth = 4\n\
+         timeout_ms = 3000\n"
+    );
+    let err = routing_phase2_load(&capped).unwrap_err();
+    assert!(err.contains("allowlist"), "{err}");
+    let partial = format!("{capped}[model_routing.shadow.allowlist]\ntask_kinds = [\"*\"]\n");
+    let err = routing_phase2_load(&partial).unwrap_err();
+    assert!(err.contains("every allowlist dimension"), "{err}");
+    let valid = format!(
+        "{capped}[model_routing.shadow.allowlist]\n\
+         task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
+    );
+    let config = routing_phase2_load(&valid).unwrap();
+    let runtime = config.model_routing.runtime.as_ref().unwrap();
+    assert!(runtime.shadow.execute);
+    assert_eq!(runtime.shadow.daily_caps().unwrap().max_requests, 10);
+    assert_eq!(runtime.shadow.allowlist.sources, ["qwen"]);
+    assert_eq!(
+        runtime.shadow_candidate_policy.as_deref(),
+        Some("candidate-v1")
+    );
+
+    for (suffix, reason) in [
+        ("sample_rate = 1.1\n", "sample_rate"),
+        ("sample_rate = -0.1\n", "sample_rate"),
+        ("daily_max_tokens = 0\n", "daily_max_tokens"),
+    ] {
+        let err = routing_phase2_load(&format!("[model_routing.shadow]\n{suffix}")).unwrap_err();
+        assert!(err.contains(reason), "{err}");
+    }
+}
+
+#[test]
 fn routing_enforce_opt_in_validates_heuristic_only() {
     use task_core::model_router::policy::RoutingMode;
     // heuristic の明示 opt-in だけが通る。

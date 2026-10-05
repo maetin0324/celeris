@@ -1,12 +1,13 @@
 ---
 tasks: [01M45RPPM85XTGYC17WCZQCER1]
-unit: web
+unit: web-shadow
 status: done
 completed: 2026-10-05
 ---
 
-# Phase 4: web の task routing に shadow 監査を primary と別欄で表示（p4-web）
+# Phase 4: web の task routing に shadow 監査を primary と別欄で表示（p4-web-shadow）
 
+旧 key `web` の成果（commit 2f775d51）を `git cherry-pick` で取り込んだ（旧 key は check が存在しない web/src を grep して blocked）。
 ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §7.1・§7.2・§10 Phase 4 に従う。
 
 ## 変更
@@ -38,6 +39,10 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §7.1・§7.2�
   （Phase 3 の 207 件 + 本 unit の 5 件）、node `tests 42 / pass 42 / fail 0`。
 - `corepack pnpm@12.6.0 -C web run lint`: exit 0（info 1 件は既存・範囲外）。`check:boundaries`: exit 0。
 - 範囲: `git diff --name-only $CELERIS_WU_BASE` は `web/` と本ファイルのみ。
+
+- 再走（web-shadow, base 7294e72f）での再確認: install --offline exit 0、gen-types 差分なし、typecheck exit 0、
+  test exit 0（vitest 29 files / 212 tests passed、node 42 pass / 0 fail）、lint exit 0、check:boundaries exit 0、
+  `grep -rl routing_shadow web/features web/api` が routing-audit-view.tsx・test・generated types 等に一致。
 
 ## 未解決事項
 

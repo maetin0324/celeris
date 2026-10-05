@@ -54,6 +54,19 @@ async fn setup(max_file_bytes: u64) -> (TestEnv, String) {
     )
 }
 
+async fn upload(app: &axum::Router, thread: &str, key: &str, name: &str, bytes: &[u8]) -> Resp {
+    send(
+        app,
+        multipart(
+            &format!("{BASE}/threads/{thread}/attachments"),
+            key,
+            name,
+            bytes,
+        ),
+    )
+    .await
+}
+
 #[tokio::test]
 async fn chat_attach_api_unconfigured_is_unavailable() {
     let env = admin_env();
@@ -241,4 +254,111 @@ async fn chat_attach_api_preview_delete_and_references() {
     };
     assert_eq!(send(&app, deletion()).await.status.as_u16(), 204);
     assert_eq!(send(&app, deletion()).await.status.as_u16(), 204);
+}
+
+#[tokio::test]
+async fn chat_attach_api_requires_client_upload_id() {
+    let (env, thread) = setup(64).await;
+    let body = b"--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"x.txt\"\r\n\r\nx\r\n--boundary--\r\n";
+    let request = Request::post(format!("{BASE}/threads/{thread}/attachments"))
+        .header("host", HOST)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(body.as_slice()))
+        .expect("request");
+    assert_problem(&send(&env.router(), request).await, 400, "bad_request");
+}
+
+#[tokio::test]
+async fn chat_attach_api_rejects_empty_client_upload_id() {
+    let (env, thread) = setup(64).await;
+    assert_problem(
+        &upload(&env.router(), &thread, "", "x.txt", b"x").await,
+        400,
+        "bad_request",
+    );
+}
+
+#[tokio::test]
+async fn chat_attach_api_rejects_duplicate_file_fields() {
+    let (env, thread) = setup(64).await;
+    let body = b"--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.txt\"\r\n\r\na\r\n--boundary\r\nContent-Disposition: form-data; name=\"file\"; filename=\"b.txt\"\r\n\r\nb\r\n--boundary\r\nContent-Disposition: form-data; name=\"client_upload_id\"\r\n\r\nkey\r\n--boundary--\r\n";
+    let request = Request::post(format!("{BASE}/threads/{thread}/attachments"))
+        .header("host", HOST)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .header("content-type", "multipart/form-data; boundary=boundary")
+        .body(Body::from(body.as_slice()))
+        .expect("request");
+    assert_problem(&send(&env.router(), request).await, 400, "bad_request");
+}
+
+#[tokio::test]
+async fn chat_attach_api_replay_different_bytes_conflicts() {
+    let (env, thread) = setup(64).await;
+    let app = env.router();
+    assert_eq!(
+        upload(&app, &thread, "same", "x.txt", b"first")
+            .await
+            .status
+            .as_u16(),
+        201
+    );
+    assert_problem(
+        &upload(&app, &thread, "same", "x.txt", b"other").await,
+        409,
+        "chat_conflict",
+    );
+}
+
+#[tokio::test]
+async fn chat_attach_api_metadata_exposes_download_url() {
+    let (env, thread) = setup(64).await;
+    let app = env.router();
+    let created = upload(&app, &thread, "metadata", "x.txt", b"hello")
+        .await
+        .json();
+    let id = created["attachment"]["id"].as_str().expect("id");
+    let metadata = send(&app, get_admin(&format!("{BASE}/attachments/{id}"))).await;
+    assert_eq!(metadata.status.as_u16(), 200);
+    assert_eq!(metadata.json()["attachment"]["id"], id);
+    assert_eq!(
+        metadata.json()["attachment"]["download_url"],
+        format!("{BASE}/attachments/{id}/content")
+    );
+}
+
+#[tokio::test]
+async fn chat_attach_api_knowledge_inbox_reference() {
+    let (env, thread) = setup(64).await;
+    let app = env.router();
+    let created = upload(&app, &thread, "knowledge", "x.txt", b"hello")
+        .await
+        .json();
+    let id = created["attachment"]["id"].as_str().expect("id");
+    let path = format!("{BASE}/attachments/{id}/references");
+    let body = json!({"owner_kind":"knowledge_inbox","owner_id":"inbox-1","idempotency_key":"ref-knowledge"});
+    let added = send(&app, post_admin(&path, &body)).await;
+    assert_eq!(added.status.as_u16(), 200, "{}", added.text());
+    assert_eq!(added.json()["owner_kind"], "knowledge_inbox");
+}
+
+#[tokio::test]
+async fn chat_attach_api_deleted_content_is_unavailable() {
+    let (env, thread) = setup(64).await;
+    let app = env.router();
+    let created = upload(&app, &thread, "delete", "x.txt", b"hello")
+        .await
+        .json();
+    let id = created["attachment"]["id"].as_str().expect("id");
+    let deletion = Request::delete(format!("{BASE}/attachments/{id}"))
+        .header("host", HOST)
+        .header("authorization", format!("Bearer {TOKEN}"))
+        .body(Body::empty())
+        .expect("delete");
+    assert_eq!(send(&app, deletion).await.status.as_u16(), 204);
+    assert_problem(
+        &send(&app, get_admin(&format!("{BASE}/attachments/{id}/content"))).await,
+        404,
+        "chat_not_found",
+    );
 }

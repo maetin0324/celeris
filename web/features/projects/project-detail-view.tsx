@@ -318,6 +318,13 @@ export function ProjectDetailScreen({
               >
                 ボード
               </Link>
+              <Link
+                className="inline-flex min-h-11 min-w-11 items-center text-primary underline"
+                to="/projects/$id/browser-identities"
+                params={{ id: projectId }}
+              >
+                ブラウザの identity
+              </Link>
             </nav>
             <Overview detail={detail.data} />
             <ProjectSection

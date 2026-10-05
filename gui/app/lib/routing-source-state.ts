@@ -1,4 +1,5 @@
 import type {
+  ActualSource,
   CandidateTrace,
   ExcludedReason,
   LlmSourceCostView,
@@ -213,6 +214,27 @@ const INCOMPLETE_LABEL: Record<string, string> = {
 export function incompleteReasonLabel(code: string | null | undefined): string | null {
   if (!code) return null;
   return INCOMPLETE_LABEL[code] ?? code;
+}
+
+/**
+ * Phase 3: 要求が実際に使った source/model/account（出所 `from` を人の語にして併記する）。
+ * secret を含まない ID だけ。出所は celeris が `proxy_log` / `request_attempts` / `proxy_trace` の
+ * 順で決めている（proxy log と結べた → 試した source の最後 → proxy の決定）。
+ */
+const ACTUAL_FROM_LABEL: Record<string, string> = {
+  proxy_log: "proxy log",
+  request_attempts: "試した source の最後",
+  proxy_trace: "proxy の決定",
+};
+
+export function actualSourceLine(actual: ActualSource): string {
+  const from = ACTUAL_FROM_LABEL[actual.from] ?? actual.from;
+  const parts = [
+    actual.source_id ? `source ${actual.source_id}` : null,
+    actual.model ? `model ${actual.model}` : null,
+    actual.account ? `account ${actual.account}` : null,
+  ].filter((p): p is string => p !== null);
+  return `${parts.join(" / ") || UNKNOWN_LABEL}（${from}）`;
 }
 
 /** 監査が不完全なときの注記（完全なら `null`）。理由は整列済みの配列をそのまま人の語にする。 */

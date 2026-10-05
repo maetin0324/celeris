@@ -2,6 +2,7 @@ import type { CandidateTrace, LlmSourceStateView, RequestRoutingAudit } from "~/
 import { Mono } from "~/components/ui/misc";
 import { shortId } from "~/lib/format";
 import {
+  actualSourceLine,
   candidateStatusLabel,
   costRows,
   deploymentSummary,
@@ -167,10 +168,38 @@ export function RequestAudit({ request }: { request: RequestRoutingAudit }) {
           <span className="mx-1.5 text-fg-subtle">/</span>
           <span data-final-field="account">account {final.account}</span>
         </dd>
+        {(request.trace.reasons ?? []).length > 0 && (
+          <>
+            <dt className={dtClass}>選択理由</dt>
+            <dd className={ddClass} data-testid="routing-request-reasons">
+              {(request.trace.reasons ?? []).join("・")}
+            </dd>
+          </>
+        )}
       </dl>
       {request.incomplete_reason && (
         <p className="text-sm text-warning-soft-fg" data-testid="routing-request-incomplete">
           {incompleteReasonLabel(request.incomplete_reason)}
+        </p>
+      )}
+      {(request.attempts ?? []).length > 0 && (
+        <p className="text-sm text-fg" data-testid="routing-request-attempts">
+          試した順: {(request.attempts ?? []).map((a) => a.source_id).join(" → ")}
+          {request.fallback_reason && (
+            <span className="ml-1.5 text-warning-soft-fg" data-testid="routing-request-fallback">
+              （最後の source へ落ちた原因: {request.fallback_reason}）
+            </span>
+          )}
+        </p>
+      )}
+      {request.fallback_reason && (request.attempts ?? []).length === 0 && (
+        <p className="text-sm text-warning-soft-fg" data-testid="routing-request-fallback">
+          最後の source へ落ちた原因: {request.fallback_reason}
+        </p>
+      )}
+      {request.actual && (
+        <p className="text-sm text-fg" data-testid="routing-request-actual">
+          実際: {actualSourceLine(request.actual)}
         </p>
       )}
       {candidates.length > 0 && (

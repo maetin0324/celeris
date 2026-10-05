@@ -7,6 +7,8 @@ import { buttonVariants } from "../../components/ui/button";
 import { DataList, type DataListItem } from "../../components/ui/data-list";
 import { Drawer } from "../../components/ui/drawer";
 import { StatusBadge, statusView } from "../../components/ui/status-badge";
+import { browserWaitsQuery } from "../browser/browser-query";
+import { TaskBrowserSection } from "../browser/task-browser-section";
 import { executionQuery } from "./execution-panel";
 import { integrationRepairDisplay, integrationRepairTone } from "./integration-repair";
 import { IntegrationRepairPanel } from "./integration-repair-panel";
@@ -69,10 +71,13 @@ export function availableNextSteps(actions: readonly Action[]): NextStep[] {
 /** 画面上部の header。h1 の下で、状態・現在の run・次の操作を tab に関係なく出す。 */
 export function TaskDetailHeader({ taskId }: { taskId: string }) {
   const detail = useQuery(taskDetailQuery(taskId));
+  const browserTask = detail.data?.task.skills?.includes("browser-enabled") === true;
+  const browserWaits = useQuery({ ...browserWaitsQuery(taskId), enabled: browserTask, retry: false });
   if (!detail.data) return null;
   const { task } = detail.data;
   const run = currentRun(detail.data.runs);
   const steps = availableNextSteps(detail.data.actions);
+  const pendingBrowserWaits = browserWaits.data?.items.filter((wait) => wait.state === "pending").length ?? 0;
   return (
     <section aria-label="タスクの現在" data-testid="task-header" className={card}>
       {/* 長い題は 3 行で省略し、全文は title 属性と下の概要で読める。 */}
@@ -109,8 +114,21 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
         <div className="flex min-w-0 flex-col gap-1" data-testid="task-header-next">
           <dt className="font-medium text-muted-foreground">次の操作</dt>
           <dd>
-            {steps.length > 0 ? (
+            {steps.length > 0 || pendingBrowserWaits > 0 ? (
               <ul className="flex flex-wrap gap-2">
+                {pendingBrowserWaits > 0 ? (
+                  <li>
+                    <Link
+                      to="/tasks/$id"
+                      params={{ id: task.id }}
+                      search={{ tab: undefined }}
+                      hash="browser-waits"
+                      className={buttonVariants({ variant: "secondary", size: "sm" })}
+                    >
+                      ブラウザの待ち {pendingBrowserWaits} 件に対応
+                    </Link>
+                  </li>
+                ) : null}
                 {steps.map((step) => (
                   <li key={step.action} data-action={step.action}>
                     <Link
@@ -196,6 +214,7 @@ export function OverviewView({ detail, section }: { detail: TaskDetail; section?
       </div>
 
       <div className={mobileSectionClass("summary", section)}>
+        <TaskBrowserSection detail={detail} />
         <RelatedTasks title="依存" items={detail.dependencies} />
         <RelatedTasks title="依存元" items={detail.dependents} />
 

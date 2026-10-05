@@ -3,15 +3,18 @@ import { RequestAudit } from "~/components/RoutingSourceState";
 import { Mono } from "~/components/ui/misc";
 import { shortId } from "~/lib/format";
 import { tierLabel } from "~/lib/labels";
-import { auditIncompleteNote } from "~/lib/routing-source-state";
+import { actualSourceLine, auditIncompleteNote } from "~/lib/routing-source-state";
 import {
   droppedAssigneeNote,
   escalationHistory,
+  executedLaneNote,
   featureRows,
   formatCostUsd,
   formatTokens,
   formatWallMs,
   latestRoutingRun,
+  outcomeLine,
+  outcomeStateLabel,
   ROUTING_PANEL_LABEL,
   reviewResultLabel,
   routingSummaryLine,
@@ -30,6 +33,7 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
   const dropped = droppedAssigneeNote(view);
   if (!view || (!run && !dropped)) return null;
   const escalations = escalationHistory(view);
+  const laneNote = run ? executedLaneNote(run) : null;
   const dtClass = "text-sm font-medium text-fg-subtle lg:text-xs";
   const ddClass = "min-w-0 break-words text-sm text-fg";
   const ddBreakAll = "min-w-0 break-all text-sm text-fg";
@@ -60,14 +64,27 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
               {view.runs.length > 1 && <span className="ml-1.5 text-fg-subtle">（{view.runs.length} 件中の最新）</span>}
             </dd>
             <dt className={dtClass}>lane</dt>
-            <dd className={ddClass}>
+            <dd className={ddClass} data-testid="task-routing-lane">
               {run.lane ? tierLabel(run.lane) : "—"}
               <span className="ml-1.5 text-fg-subtle">（{tierSourceLabel(view.routing?.tier_source)}）</span>
+              {laneNote && (
+                <span className="ml-1.5 text-warning-soft-fg" data-testid="task-routing-lane-note">
+                  {laneNote}
+                </span>
+              )}
             </dd>
             <dt className={dtClass}>model</dt>
             <dd className={ddBreakAll}>
               {[run.provider, run.model, run.reasoning_effort].filter(Boolean).join(" · ") || "—"}
             </dd>
+            {(run.actual_sources ?? []).length > 0 && (
+              <>
+                <dt className={dtClass}>実 source</dt>
+                <dd className={ddBreakAll} data-testid="task-routing-actual-sources">
+                  {(run.actual_sources ?? []).map((a) => actualSourceLine(a)).join("；")}
+                </dd>
+              </>
+            )}
             <dt className={dtClass}>規則</dt>
             <dd className={ddBreakAll} data-testid="task-routing-rule">
               {run.rule_id ?? "—"}
@@ -85,6 +102,15 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
             <dt className={dtClass}>レビュー</dt>
             <dd className={ddClass} data-testid="task-routing-review">
               {reviewResultLabel(run.review)}
+            </dd>
+            <dt className={dtClass}>outcome</dt>
+            <dd className={ddClass} data-testid="task-routing-outcome">
+              {outcomeStateLabel(run)}
+              {outcomeLine(run.routing_outcome) && (
+                <span className="ml-1.5 text-fg" data-testid="task-routing-outcome-line">
+                  {outcomeLine(run.routing_outcome)}
+                </span>
+              )}
             </dd>
           </dl>
         )}
@@ -144,6 +170,11 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
               ))}
             </ul>
           </div>
+        )}
+        {run?.routing_outcome?.supersedes && (
+          <p className="text-sm text-fg-subtle" data-testid="task-routing-outcome-supersede">
+            前の outcome（{shortId(run.routing_outcome.supersedes)}）を置き換えています
+          </p>
         )}
       </div>
     </details>

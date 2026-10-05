@@ -1,4 +1,12 @@
-import type { Level, ReviewResult, RunRoutingAudit, TaskFeatures, TaskRoutingView, TierSource } from "~/celeris/types";
+import type {
+  Level,
+  ReviewResult,
+  RoutingOutcome,
+  RunRoutingAudit,
+  TaskFeatures,
+  TaskRoutingView,
+  TierSource,
+} from "~/celeris/types";
 
 /**
  * タスク詳細の「ルーティング」パネル（celeris ADR-0069 D5、`GET /tasks/{id}/routing`）の表示用の純粋関数。
@@ -94,7 +102,65 @@ export function reviewResultLabel(review: ReviewResult | null | undefined): stri
   return failed.length > 0 ? `不合格（条件 ${failed.map((i) => `#${i}`).join(", ")}）` : "不合格";
 }
 
-/** エスカレーションの履歴（`escalation` が付いた run。古い順）。 */
+/** エスカレーションの履歴（`escalation` か `escalation_audit` が付いた run。古い順）。 */
 export function escalationHistory(view: TaskRoutingView | null | undefined): { runId: string; text: string }[] {
-  return (view?.runs ?? []).filter((r) => r.escalation).map((r) => ({ runId: r.run_id, text: r.escalation ?? "" }));
+  return (view?.runs ?? [])
+    .filter((r) => r.escalation || r.escalation_audit)
+    .map((r) => ({ runId: r.run_id, text: escalationLine(r) ?? "" }));
+}
+
+/**
+ * Phase 3（ADR 2026-10-04-multi-objective-model-routing §5）: run 間 escalation の 1 行。
+ * 構造化監査（`escalation_audit`）があれば requested → selected と理由・回数を出し、
+ * 無ければ旧 event の自由文字列 `escalation` をそのまま出す。両方無ければ null。
+ */
+export function escalationLine(run: RunRoutingAudit): string | null {
+  const audit = run.escalation_audit;
+  if (audit) {
+    const moved = audit.selected_lane !== audit.requested_lane;
+    const lanes = `${audit.requested_lane} → ${audit.selected_lane}`;
+    const count = moved
+      ? `（品質失敗 ${audit.counted_failures} 回で 1 段）`
+      : `（${audit.counted_failures} 回でも上げない）`;
+    return `${lanes} ${audit.reason}${count}`;
+  }
+  return run.escalation ?? null;
+}
+
+/**
+ * Phase 3: outcome の状態（§6「未レビュー/中断は null、false や品質 0 とみなさない」）。
+ * `outcome_state`（celeris が決めた値）を人の語にする。run 全体と outcome 本体を別々に持たせるのは、
+ * `not_recorded`（outcome 自体が未追記）を「未レビュー」と見分けられなくするため。
+ */
+export const OUTCOME_STATE_LABEL = {
+  not_recorded: "未追記（まだ outcome が無い）",
+  unreviewed: "未レビュー（review・acceptance の判定待ち）",
+  judged: "判定済み",
+} as const;
+
+export function outcomeStateLabel(run: RunRoutingAudit): string {
+  return OUTCOME_STATE_LABEL[run.outcome_state ?? "not_recorded"];
+}
+
+/** Phase 3: outcome 本体（`routing_outcome_recorded`）の 1 行。未追記（null）は null。 */
+export function outcomeLine(outcome: RoutingOutcome | null | undefined): string | null {
+  if (!outcome) return null;
+  const parts: string[] = [];
+  if (outcome.review_passed === true) parts.push("review 合格");
+  else if (outcome.review_passed === false) parts.push("review 不合格");
+  if (outcome.acceptance_passed === true) parts.push("acceptance 合格");
+  else if (outcome.acceptance_passed === false) parts.push("acceptance 不合格");
+  if ((outcome.failed_criterion_ids ?? []).length > 0)
+    parts.push(`失敗条件 ${outcome.failed_criterion_ids?.join(", ")}`);
+  if (outcome.failure_class) parts.push(`（${outcome.failure_class}）`);
+  const reward = outcome.reward == null ? "reward 未判定" : `reward ${outcome.reward.toFixed(3)}`;
+  return `${parts.join("・") || "判定なし（未レビュー/中断）"}${outcome.supersedes ? `、旧 ${outcome.supersedes} を置き換え` : ""} ${reward}`;
+}
+
+/** Phase 3: 実行 lane（この run が実際に走った lane `run.lane`）と希望 lane（trace の `requested_lane`）の差。同じなら null。 */
+export function executedLaneNote(run: RunRoutingAudit): string | null {
+  const actual = run.lane;
+  const requested = (run.requests ?? [])[0]?.trace.requested_lane;
+  if (!actual || !requested) return null;
+  return actual === requested ? null : `希望 ${requested} → 実行 ${actual}`;
 }

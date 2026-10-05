@@ -584,6 +584,76 @@ export type Event =
       type: "routing_decided";
     }
   | {
+      context_version: string;
+      decision_id: string;
+      /**
+       * §3.4 の特徴（本文・生の command・credential を除いた snapshot）。形は `context_version` が決める。
+       */
+      features?: {
+        [k: string]: unknown;
+      };
+      /**
+       * 取れなかった欄（未知を低リスクと同一視しないため、欠測を明示する）。
+       */
+      missing_fields?: string[];
+      /**
+       * 欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。
+       */
+      provenance?: {
+        [k: string]: string;
+      };
+      request_id?: string | null;
+      run_id?: string | null;
+      stage?: FeatureStage | null;
+      type: "routing_features_recorded";
+    }
+  | {
+      /**
+       * 試した順の source。
+       */
+      attempts?: RequestSourceAttempt[];
+      /**
+       * この要求の proxy 側 decision。
+       */
+      decision_id: string;
+      /**
+       * 最終の source へ落ちた原因（fallback が無ければ `None`）。
+       */
+      fallback_reason?: string | null;
+      /**
+       * run 側 decision（dispatch の `RoutingTraceV1.decision_id`）。standalone は `None`。
+       */
+      parent_decision_id?: string | null;
+      /**
+       * `llm_proxy_requests` と結合する要求 ID。
+       */
+      request_id: string;
+      run_id?: string | null;
+      /**
+       * proxy の trace（stage = proxy）。
+       */
+      trace?: RoutingTraceV1 | null;
+      type: "routing_request_decided";
+    }
+  | {
+      acceptance_passed?: boolean | null;
+      cash_usd?: number | null;
+      decision_id: string;
+      evaluation_version: string;
+      failed_criterion_ids?: string[];
+      failure_class?: string | null;
+      outcome_id: string;
+      request_id?: string | null;
+      retries?: number | null;
+      review_passed?: boolean | null;
+      reward?: number | null;
+      run_id?: string | null;
+      supersedes?: string | null;
+      tokens?: number | null;
+      type: "routing_outcome_recorded";
+      wall_ms?: number | null;
+    }
+  | {
       checkpoint: Checkpoint;
       run_id: string;
       type: "checkpoint_saved";
@@ -1147,6 +1217,10 @@ export type ProviderCandidateOutcome =
  * ADR-0132 付記 L8: provider を選んだ理由。
  */
 export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_down" | "pool" | "fallback" | "sticky";
+/**
+ * 特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。
+ */
+export type FeatureStage = "dispatch" | "proxy";
 export type CheckpointEnd = ("completed" | "yielded" | "budget_exhausted") | "waiting";
 /**
  * checkpoint を合成した出所（D8）。
@@ -1533,6 +1607,10 @@ export type ExecutionPhase =
  * 不合格やワーカー自身の明示的な失敗（人が中身を見て判断すべきもの）。
  */
 export type FailureClass = "infra" | "work";
+/**
+ * run の routing outcome の状態（§6: 未判定を false や品質 0 とみなさないための区別）。
+ */
+export type RoutingOutcomeState = "not_recorded" | "unreviewed" | "judged";
 /**
  * 木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。
  */
@@ -4837,6 +4915,10 @@ export interface Usage {
 export interface RoutingRecord {
   decision: LaneDecision;
   /**
+   * Phase 3 run 間 escalation の構造化監査。旧 event では欠落する。
+   */
+  escalation?: EscalationAudit | null;
+  /**
    * Harness 層: ハーネス id（`Task.genre`）。
    */
   harness?: string | null;
@@ -4942,6 +5024,17 @@ export interface ShadowDecision {
    */
   confidence: number;
   lane: Tier;
+}
+/**
+ * Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。
+ */
+export interface EscalationAudit {
+  counted_failures: number;
+  interval_id: string;
+  previous_lane?: Tier | null;
+  reason: string;
+  requested_lane: Tier;
+  selected_lane: Tier;
 }
 export interface RoutingTraceV1 {
   /**
@@ -5076,6 +5169,18 @@ export interface ProviderCandidate {
   kind: ProviderCandidateKind;
   outcome: ProviderCandidateOutcome;
   provider: string;
+}
+/**
+ * proxy が要求 1 件で実際に試した source の参照（secret を含まない ID だけ）。
+ */
+export interface RequestSourceAttempt {
+  account_id?: string | null;
+  /**
+   * 次の候補へ送った理由（§6 の reason code。例 `rate_limit`・`health_down`）。最後に使った source は `None`。
+   */
+  fallback_reason?: string | null;
+  model?: string | null;
+  source_id: string;
 }
 /**
  * D8: daemon が確定させた checkpoint（`celeris.checkpoint/1`）。`CheckpointSaved` イベントと
@@ -10377,7 +10482,8 @@ export interface TaskRoutingView {
   routing?: TaskRouting | null;
   /**
    * run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
-   * 要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。
+   * 要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・
+   * `routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。
    */
   runs: RunRoutingAudit[];
   task_id: TaskId;
@@ -10391,13 +10497,25 @@ export interface TaskRoutingView {
  */
 export interface RunRoutingAudit {
   account?: string | null;
+  /**
+   * Phase 3: 子 trace の実際の source/model（要求の順、重複なし）。
+   */
+  actual_sources?: ActualSource[];
   adapter?: string | null;
   /**
    * 子 trace のどれかが proxy log と結べない（または決定が要求を指すのに子が無い）。旧 run は None。
    */
   audit_incomplete?: boolean | null;
   cost_usd?: number | null;
+  /**
+   * Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。
+   */
+  decision_id?: string | null;
   escalation?: string | null;
+  /**
+   * Phase 3: run 間 escalation の構造化監査（`RoutingRecord.escalation`）。旧 event は None。
+   */
+  escalation_audit?: EscalationAudit | null;
   features?: TaskFeatures | null;
   harness?: string | null;
   /**
@@ -10413,6 +10531,10 @@ export interface RunRoutingAudit {
   optimizer?: RoutingTraceV1 | null;
   org_node?: string | null;
   outcome?: string | null;
+  /**
+   * Phase 3: outcome の状態。dispatch の `RoutingDecided` も outcome も無い run は None。
+   */
+  outcome_state?: RoutingOutcomeState | null;
   output_tokens?: number | null;
   policy_version?: string | null;
   provider?: string | null;
@@ -10424,21 +10546,58 @@ export interface RunRoutingAudit {
   requests?: RequestRoutingAudit[] | null;
   retries?: number | null;
   review?: ReviewResult | null;
+  /**
+   * Phase 3: dispatch 時点の特徴 snapshot（stage dispatch の `routing_features_recorded`。最後の 1 件）。
+   */
+  routing_features?: RoutingFeaturesRecord | null;
+  /**
+   * Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。
+   */
+  routing_outcome?: RoutingOutcome | null;
   rule_id?: string | null;
   run_id: string;
   task_id: TaskId;
   wall_ms?: number | null;
 }
 /**
+ * 要求が実際に使った source（dispatch では未確定だった model を含む）。secret を含まない ID だけ。
+ */
+export interface ActualSource {
+  account?: string | null;
+  /**
+   * 出所: `proxy_log`（相関の取れた proxy log）・`request_attempts`（試した source の最後）・
+   * `proxy_trace`（proxy の trace の選択）。
+   */
+  from: string;
+  model?: string | null;
+  source_id?: string | null;
+}
+/**
  * 要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。
  */
 export interface RequestRoutingAudit {
+  /**
+   * Phase 3: 実際に使った source/model（出所付き）。どこからも取れなければ None。
+   */
+  actual?: ActualSource | null;
+  /**
+   * Phase 3: 試した順の source（`routing_request_decided.attempts`）。
+   */
+  attempts?: RequestSourceAttempt[];
   decision_id: string;
+  /**
+   * Phase 3: 最終の source へ落ちた原因。
+   */
+  fallback_reason?: string | null;
   /**
    * 結べなかった理由（`request_log_missing` など）。結べたら None。
    */
   incomplete_reason?: string | null;
   log?: RequestLogLink | null;
+  /**
+   * Phase 3: run 側 decision（`routing_request_decided.parent_decision_id`）。
+   */
+  parent_decision_id?: string | null;
   request_id?: string | null;
   trace: RoutingTraceV11;
 }
@@ -10497,6 +10656,53 @@ export interface ReviewResult {
    */
   failed_criteria?: number[];
   passed: boolean;
+}
+/**
+ * `Event::RoutingFeaturesRecorded` の中身（wire では event の欄に平たく並ぶ）。
+ */
+export interface RoutingFeaturesRecord {
+  context_version: string;
+  decision_id: string;
+  /**
+   * §3.4 の特徴（本文・生の command・credential を除いた snapshot）。形は `context_version` が決める。
+   */
+  features?: {
+    [k: string]: unknown;
+  };
+  /**
+   * 取れなかった欄（未知を低リスクと同一視しないため、欠測を明示する）。
+   */
+  missing_fields?: string[];
+  /**
+   * 欄名 → 出自（例 `task.acceptance`、`work_unit.spec`、`estimator:chars/4`）。
+   */
+  provenance?: {
+    [k: string]: string;
+  };
+  request_id?: string | null;
+  run_id?: string | null;
+  stage?: FeatureStage | null;
+}
+/**
+ * `Event::RoutingOutcomeRecorded` の中身（wire では event の欄に平たく並ぶ）。生の outcome vector が正本で、
+ * `reward` は offline 比較用の派生値。
+ */
+export interface RoutingOutcome {
+  acceptance_passed?: boolean | null;
+  cash_usd?: number | null;
+  decision_id: string;
+  evaluation_version: string;
+  failed_criterion_ids?: string[];
+  failure_class?: string | null;
+  outcome_id: string;
+  request_id?: string | null;
+  retries?: number | null;
+  review_passed?: boolean | null;
+  reward?: number | null;
+  run_id?: string | null;
+  supersedes?: string | null;
+  tokens?: number | null;
+  wall_ms?: number | null;
 }
 /**
  * ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。

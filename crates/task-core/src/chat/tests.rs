@@ -258,3 +258,27 @@ fn chat_migration_upgrade_from_47_preserves_existing_rows() {
         .expect("version");
     assert_eq!(version, 50);
 }
+
+#[test]
+fn chat_migration_one_active_run_per_thread() {
+    let (_dir, path) = new_db();
+    let conn = Connection::open(path).expect("open");
+    let now = "2026-10-05T00:00:00Z";
+    conn.execute(
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at) VALUES('t','human','test','open',?1,?1)",
+        [now],
+    )
+    .expect("thread");
+    let insert_run =
+        "INSERT INTO chat_runs(run_id,thread_id,input_message_id,state) VALUES(?1,'t','input',?2)";
+    conn.execute(insert_run, params!["r1", "running"])
+        .expect("first active run");
+    assert!(conn.execute(insert_run, params!["r2", "stopping"]).is_err());
+    conn.execute("UPDATE chat_runs SET state='stopped' WHERE run_id='r1'", [])
+        .expect("finish first run");
+    conn.execute(insert_run, params!["r2", "stopping"])
+        .expect("new active run after stop");
+    assert!(conn.execute(insert_run, params!["r3", "running"]).is_err());
+    conn.execute(insert_run, params!["r4", "completed"])
+        .expect("completed run does not consume the active slot");
+}

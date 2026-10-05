@@ -238,6 +238,9 @@ pub struct Config {
     #[serde(skip)]
     pub routing_catalog_state:
         Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<RoutingCatalog>>>>,
+    /// Phase 2 の state・cost・retry の検証済み設定（dispatcher と proxy に配る）。
+    #[serde(skip)]
+    pub routing_runtime: Option<std::sync::Arc<RoutingRuntime>>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション。ここから ----
     /// `[sessions]`。CoS の対話・部門長のレビュー run の継続セッション（`node_sessions`）の逼迫判定。
@@ -449,6 +452,7 @@ impl Config {
         // 3. 検証。
         cfg.validate()?;
         let catalog = cfg.routing_catalog()?;
+        cfg.routing_runtime = Some(std::sync::Arc::new(cfg.routing_runtime()?));
         for warning in &catalog.warnings {
             tracing::warn!(key = %warning, "model routing compatibility warning");
         }

@@ -125,7 +125,7 @@ pub(crate) fn build_llm_proxy_state(
     })?;
     let claude_book = dispatcher.account_book(task_core::AccountAdapter::ClaudeCode);
     let codex_book = dispatcher.account_book(task_core::AccountAdapter::Codex);
-    Ok(Some(llm_proxy::ProxyState::new(
+    let state = llm_proxy::ProxyState::new(
         config.llm_proxy.clone(),
         client,
         claude_book,
@@ -134,7 +134,17 @@ pub(crate) fn build_llm_proxy_state(
         role,
         Some(config.db.path.clone()),
         config.db.busy_timeout(),
-    )))
+    );
+    // ADR 2026-10-04 Phase 2: `[model_routing.retry]` の分類別上限と breaker（未設定は proxy の既定）。
+    // proxy は起動時に 1 度だけ組むので、retry の変更は再起動で効く（reload では変えない）。
+    let state = match &config.routing_runtime {
+        Some(runtime) => state.with_fallback(
+            runtime.fallback.clone(),
+            Arc::new(llm_proxy::reservation::SystemClock),
+        ),
+        None => state,
+    };
+    Ok(Some(state))
 }
 
 /// `state` を `[llm_proxy] listen` に bind して動かす。`standby`/`draining` の間はプロキシ自身の

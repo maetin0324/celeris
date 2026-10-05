@@ -224,7 +224,12 @@ pub(crate) fn reload_providers(
     config.reports = new_config.reports;
     config.notify = new_config.notify;
     config.conversation = new_config.conversation;
+    // Phase 2: dispatcher の routing 設定も新しい snapshot に揃える（`Config::load` を通った値だけ）。
+    if let Some(runtime) = &new_config.routing_runtime {
+        dispatcher.set_dispatch_routing(runtime.dispatch_settings());
+    }
     config.model_routing = new_config.model_routing;
+    config.routing_runtime = new_config.routing_runtime;
     config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
     if let (Some(shared), Some(snapshot)) = (
         config.routing_catalog_state.as_ref(),

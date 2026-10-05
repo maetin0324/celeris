@@ -4,7 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use task_core::Tier;
 use task_core::model_router::{
-    policy::{RoutingMode, RoutingPolicy, Weights},
+    cost::SelfHostRates,
+    policy::{FreshnessPolicy, RoutingMode, RoutingPolicy, Weights},
     profiles::{Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support},
 };
 
@@ -17,6 +18,122 @@ pub struct ModelRoutingConfig {
     pub models: Vec<ModelEntry>,
     pub deployments: Vec<DeploymentEntry>,
     pub policies: std::collections::HashMap<Tier, PolicyEntry>,
+    /// Phase 2: `[model_routing.estimator] kind`。enforce は `kind = "heuristic"` の明示だけを受け入れる。
+    pub estimator: EstimatorEntry,
+    /// Phase 2: enforce を適用する経路。`standalone`（context の無い proxy 要求）と
+    /// `server`（サーバ全体の制約で足りる経路）だけ。未設定は両方。
+    pub enforce_routes: Option<Vec<String>>,
+    /// Phase 2: 観測の鮮度（秒）。未設定は ADR の既定 300 秒。
+    pub observation_ttl_seconds: Option<f64>,
+    /// Phase 2: subscription 窓 id（`five_hour`・`seven_day`・`monthly` 等）ごとの reserve_value。
+    pub subscription_windows: BTreeMap<String, SubscriptionWindowEntry>,
+    /// Phase 2: self-host の resource group（同時数と費用係数）。
+    pub resource_groups: Vec<ResourceGroupEntry>,
+    /// Phase 2: proxy の同一要求内 fallback の分類別上限と breaker。
+    pub retry: RetryEntry,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct EstimatorEntry {
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SubscriptionWindowEntry {
+    /// 窓を使い切る機会費用（USD）。未設定は unknown（shadow price も unknown）。
+    pub reserve_value_usd: Option<f64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ResourceGroupEntry {
+    pub id: String,
+    #[serde(default)]
+    pub concurrency_limit: Option<u32>,
+    #[serde(default)]
+    pub usd_per_gpu_second: Option<f64>,
+    #[serde(default)]
+    pub usd_per_wait_second: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RetryEntry {
+    pub unauthorized: Option<u32>,
+    pub rate_limited: Option<u32>,
+    pub server: Option<u32>,
+    pub network: Option<u32>,
+    pub local: Option<u32>,
+    pub client: Option<u32>,
+    pub total_attempts: Option<u32>,
+    pub deadline_secs: Option<i64>,
+    pub breaker_failure_threshold: Option<u32>,
+    pub breaker_open_secs: Option<i64>,
+}
+
+/// 検証済みの Phase 2 実行時設定。dispatcher と proxy に配る（未知は None のまま）。
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutingRuntime {
+    pub mode: RoutingMode,
+    pub enforce_routes: Vec<String>,
+    pub freshness: FreshnessPolicy,
+    pub window_reserves: BTreeMap<String, f64>,
+    pub resource_groups: BTreeMap<String, ResourceGroupRates>,
+    pub fallback: llm_proxy::fallback::FallbackSettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ResourceGroupRates {
+    pub concurrency_limit: Option<u32>,
+    pub rates: SelfHostRates,
+}
+
+/// enforce が受け入れる経路（ADR §10 Phase 2: standalone かサーバ全体の制約で足りる経路だけ）。
+pub const ENFORCE_ROUTES: [&str; 2] = ["standalone", "server"];
+
+impl RoutingRuntime {
+    pub fn dispatch_settings(&self) -> task_dispatch::DispatchRoutingSettings {
+        task_dispatch::DispatchRoutingSettings {
+            mode: self.mode,
+            constraints: Default::default(),
+            freshness: self.freshness,
+            window_reserves: self.window_reserves.clone(),
+        }
+    }
+
+    /// resource group の費用係数。未登録・未設定は unknown（None）。
+    pub fn self_host_rates(&self, resource_group_id: Option<&str>) -> SelfHostRates {
+        resource_group_id
+            .and_then(|id| self.resource_groups.get(id))
+            .map(|g| g.rates)
+            .unwrap_or_default()
+    }
+
+    /// proxy の予約表の上限。account 上限は呼び出し側（`max_concurrent_per_account`）。
+    pub fn capacity_limits(
+        &self,
+        per_account: Option<u32>,
+    ) -> llm_proxy::reservation::CapacityLimits {
+        llm_proxy::reservation::CapacityLimits {
+            per_account,
+            resource_groups: self
+                .resource_groups
+                .iter()
+                .filter_map(|(id, g)| g.concurrency_limit.map(|n| (id.clone(), n)))
+                .collect(),
+        }
+    }
+}
+
+fn finite_nonneg(value: Option<f64>, key: &str) -> Result<(), ConfigError> {
+    match value {
+        Some(v) if !v.is_finite() || v < 0.0 => Err(ConfigError::Invalid(format!(
+            "{key} must be finite and nonnegative"
+        ))),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -170,11 +287,7 @@ impl Config {
     /// Builds a complete, credential-free snapshot before it can replace a running one.
     pub fn routing_catalog(&self) -> Result<RoutingCatalog, ConfigError> {
         let mode = self.model_routing.mode.unwrap_or(RoutingMode::Legacy);
-        if mode == RoutingMode::Enforce {
-            return Err(ConfigError::Invalid(
-                "model_routing.mode=enforce requires Phase 2".into(),
-            ));
-        }
+        self.validate_enforce_opt_in(mode)?;
         let mut models = BTreeMap::<String, ModelProfile>::new();
         let mut deployments = BTreeMap::<String, DeploymentProfile>::new();
         let mut warnings = BTreeSet::<String>::new();
@@ -497,6 +610,158 @@ impl Config {
             deployments: deployments.into_values().collect(),
             policies,
             warnings: warnings.into_iter().collect(),
+        })
+    }
+}
+
+impl Config {
+    /// enforce は Phase 2 の heuristic の明示 opt-in と、standalone / サーバ全体の制約の経路だけ受け入れる。
+    fn validate_enforce_opt_in(&self, mode: RoutingMode) -> Result<(), ConfigError> {
+        let kind = self.model_routing.estimator.kind.as_deref();
+        if let Some(kind) = kind
+            && kind != "heuristic"
+        {
+            return Err(ConfigError::Invalid(format!(
+                "model_routing.estimator.kind={kind}: only \"heuristic\" is supported (Phase 2)"
+            )));
+        }
+        if mode == RoutingMode::Enforce && kind != Some("heuristic") {
+            return Err(ConfigError::Invalid(
+                "model_routing.mode=enforce requires the Phase 2 heuristic opt-in \
+                 ([model_routing.estimator] kind = \"heuristic\")"
+                    .into(),
+            ));
+        }
+        if let Some(routes) = &self.model_routing.enforce_routes {
+            if routes.is_empty() {
+                return Err(ConfigError::Invalid(
+                    "model_routing.enforce_routes is empty".into(),
+                ));
+            }
+            for route in routes {
+                if !ENFORCE_ROUTES.contains(&route.as_str()) {
+                    return Err(ConfigError::Invalid(format!(
+                        "model_routing.enforce_routes.{route}: enforce is limited to standalone \
+                         or server-wide constraints (Phase 2)"
+                    )));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Phase 2 の実行時設定（state・cost・retry）を検証して組む。未設定は unknown か ADR の既定。
+    pub fn routing_runtime(&self) -> Result<RoutingRuntime, ConfigError> {
+        let mr = &self.model_routing;
+        let mode = mr.mode.unwrap_or(RoutingMode::Legacy);
+        self.validate_enforce_opt_in(mode)?;
+        let mut freshness = FreshnessPolicy::default();
+        if let Some(ttl) = mr.observation_ttl_seconds {
+            freshness.observation_ttl_seconds = ttl;
+        }
+        freshness.validate().map_err(|reason| {
+            ConfigError::Invalid(format!("model_routing.observation_ttl_seconds: {reason}"))
+        })?;
+        let mut window_reserves = BTreeMap::new();
+        for (id, w) in &mr.subscription_windows {
+            if id.trim().is_empty() {
+                return Err(ConfigError::Invalid(
+                    "model_routing.subscription_windows: empty window id".into(),
+                ));
+            }
+            finite_nonneg(
+                w.reserve_value_usd,
+                &format!("model_routing.subscription_windows.{id}.reserve_value_usd"),
+            )?;
+            if let Some(v) = w.reserve_value_usd {
+                window_reserves.insert(id.clone(), v);
+            }
+        }
+        let mut resource_groups = BTreeMap::new();
+        for g in &mr.resource_groups {
+            if g.id.trim().is_empty() || resource_groups.contains_key(&g.id) {
+                return Err(ConfigError::Invalid(
+                    "model_routing.resource_groups: empty or duplicate id".into(),
+                ));
+            }
+            if g.concurrency_limit == Some(0) {
+                return Err(ConfigError::Invalid(format!(
+                    "model_routing.resource_groups.{}: concurrency_limit must be positive",
+                    g.id
+                )));
+            }
+            finite_nonneg(
+                g.usd_per_gpu_second,
+                &format!("model_routing.resource_groups.{}.usd_per_gpu_second", g.id),
+            )?;
+            finite_nonneg(
+                g.usd_per_wait_second,
+                &format!("model_routing.resource_groups.{}.usd_per_wait_second", g.id),
+            )?;
+            resource_groups.insert(
+                g.id.clone(),
+                ResourceGroupRates {
+                    concurrency_limit: g.concurrency_limit,
+                    rates: SelfHostRates {
+                        usd_per_gpu_second: g.usd_per_gpu_second,
+                        usd_per_wait_second: g.usd_per_wait_second,
+                    },
+                },
+            );
+        }
+        let mut fallback = llm_proxy::fallback::FallbackSettings::default();
+        let r = &mr.retry;
+        let limits = &mut fallback.limits;
+        for (slot, value) in [
+            (&mut limits.unauthorized, r.unauthorized),
+            (&mut limits.rate_limited, r.rate_limited),
+            (&mut limits.server, r.server),
+            (&mut limits.network, r.network),
+            (&mut limits.local, r.local),
+            (&mut limits.client, r.client),
+            (&mut limits.total_attempts, r.total_attempts),
+            (
+                &mut fallback.breaker.failure_threshold,
+                r.breaker_failure_threshold,
+            ),
+        ] {
+            if let Some(v) = value {
+                *slot = v;
+            }
+        }
+        if let Some(v) = r.deadline_secs {
+            fallback.deadline_secs = v;
+        }
+        if let Some(v) = r.breaker_open_secs {
+            fallback.breaker.open_secs = v;
+        }
+        // 4xx（client）の誤りを別候補へ投げると quota を無駄にする（p2-proxy-fallback の提案）。
+        if fallback.limits.client != 0 {
+            return Err(ConfigError::Invalid(
+                "model_routing.retry.client must be 0 (client errors are not retried)".into(),
+            ));
+        }
+        if fallback.limits.total_attempts == 0 {
+            return Err(ConfigError::Invalid(
+                "model_routing.retry.total_attempts must be at least 1".into(),
+            ));
+        }
+        if fallback.deadline_secs <= 0 || fallback.breaker.open_secs < 0 {
+            return Err(ConfigError::Invalid(
+                "model_routing.retry: deadline_secs must be positive and breaker_open_secs nonnegative"
+                    .into(),
+            ));
+        }
+        Ok(RoutingRuntime {
+            mode,
+            enforce_routes: mr
+                .enforce_routes
+                .clone()
+                .unwrap_or_else(|| ENFORCE_ROUTES.iter().map(|r| (*r).to_string()).collect()),
+            freshness,
+            window_reserves,
+            resource_groups,
+            fallback,
         })
     }
 }

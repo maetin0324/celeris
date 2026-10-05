@@ -2,12 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { TaskRoutingView } from "~/celeris/types";
 import { TaskRoutingPanel } from "~/components/TaskRoutingPanel";
-import routingEstimatorShadowFixture from "../fixtures/api/routing-estimator-shadow.json";
+import routingEstimatorShadowFixture from "../fixtures/api/routing_estimator_shadow.json";
 
 /**
  * Phase 5: estimator shadow の欄。primary（heuristic）の review・model・outcome とは別欄に、
  * estimator id/version・heuristic primary との差・timeout・prompt_required・dropped の理由を出す。
- * 本番切替の操作は出さない。`routing-estimator-shadow.json` は mock と共有しない（この unit 専用）。
+ * 本番切替の操作は出さない。`routing_estimator_shadow.json` は mock と共有しない（この unit 専用）。
  */
 const view = routingEstimatorShadowFixture as unknown as TaskRoutingView;
 

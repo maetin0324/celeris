@@ -1,8 +1,8 @@
 ---
 title: Web work 画面群の visual QA（受信箱・通知・案件・board/home・報告・承認）
 tasks: [01M44C029SCGEZHEK57WEK3QNB]
-status: running
-updated: 2026-10-04
+status: done
+updated: 2026-10-05
 ---
 
 # Web work 画面群の visual QA（受信箱・通知・案件・board/home・報告・承認）
@@ -108,13 +108,101 @@ ui-ux-quality-gate の Frontend Thinking Gate（要約）:
 
 ## 修正
 
-fix-inbox・fix-projects・fix-reports の各 leaf が、重い順に直した W-xx と commit を追記する。
+3 つの fix leaf の記録（[fix-inbox](qa-work/fix-inbox.md)・[fix-projects](qa-work/fix-projects.md)・[fix-reports](qa-work/fix-reports.md)）を指摘 ID ごとにまとめる。commit: fix-inbox `9abbfd92`、fix-projects `9a8527d3`・`87b5e3e3`・`f720b40d`、fix-reports `bb8ce583`、verify `bd393ea1`。扱いは次の 3 種類: 「修正」は直した、「一部」は直したうえで残りを残課題へ回した、「確認」は変更が不要だった。
+
+| ID | 扱い | commit | 要点 |
+|---|---|---|---|
+| W-01 | 修正 | 9abbfd92 | 見出しの直下に問いを置き、回答・推奨・期限・案件の順に並べた。止めている範囲と関連は折りたたんだ |
+| W-03 | 修正（一部は V-01） | 9abbfd92 | ホームの会話より上に、期限の近い判断待ち 3 件を置いた（題名・期限・案件。24 時間以内は「まもなく期限」）。通知は件数の入口だけにした |
+| W-04 | 一部 | 9abbfd92 | 再接続中・取得失敗のときは、ホームに鮮度の注意と「未確認」を出す。shell の最終受信時刻は残課題 |
+| W-05 | 修正 | 9a8527d3・f720b40d | 仕事の木の題名を折り返すようにした（`min-w-48 break-words`）。1440 で状態・判断待ちの列が見え、状態 badge は折り返さない |
+| W-06 | 修正 | 9a8527d3 | 監査は指摘の一覧、整理案は操作の表、方針は日本語で表示する。JSON は details の中へ移した |
+| W-07 | 修正 | 9a8527d3 | 承認・適用・採用を ConfirmDialog にした（対象数・影響・戻し方・結果 task を示す） |
+| W-08 | 一部 | 9a8527d3 | 削除ボタンを destructive にした。ConfirmDialog 化は残課題 |
+| W-09 | 修正 | 9a8527d3 | 3 画面の FetchFrame に subject を渡した。409 は「文書リポジトリがありません → 文書を用意する」と出す |
+| W-10 | 一部 | bb8ce583 | 送信前に自動承認の影響を常に表示し、追加直後に「取り消す」を出す。確認ダイアログは残課題 |
+| W-11 | 修正 | bb8ce583 | 一覧が読めない間（loading・error・切断・403）は追加を止め、Notice で理由を出す |
+| W-12 | 修正 | bb8ce583 | 結果ごとに色を分けた（今回だけ success／今後も warning／認めなかった danger／取り下げ neutral）。常設には常設ルールへの参照を添えた |
+| W-13 | 一部 | 9abbfd92 | 範囲の重複を消し、画面側で作る語を「作業単位」にした。API が返す文の「葉」「planner」は残課題 |
+| W-14 | 修正 | 9abbfd92 | 11 件以上は期限順の一覧にし、回答欄は同時に 1 件だけ開く |
+| W-15 | 修正 | 9abbfd92 | メタ情報を desktop で 2 列にし、長い関連リンクは補助の節へ移した |
+| W-16 | 一部 | 9abbfd92 | 案件は名前で出し、名前が無いときは ShortId にした。task リンクの名前は残課題 |
+| W-17 | 一部 | 9abbfd92 | 「理由（メモ）」「下書きの受け入れ」に改めた。parity が固定している語は残課題 |
+| W-18 | 確認 | — | 未読がある間はボタンが有効で、枠が 1px あることを e2e で確かめた。pre の薄い見た目は取得途中の姿だった |
+| W-19 | 一部 | 9abbfd92 | subject「判断待ち」を渡し、403 では権限の確認を案内する。戻り先の文言と `<a>` は共通部品側の残課題 |
+| W-20 | 一部 | 9abbfd92 | 行の形の skeleton と subject を足した。「再取得」と「再試行」の語の不一致は W-52 へ |
+| W-23 | 修正 | 9a8527d3 | board の tier・category・priority を日本語で出す。未知の値は「未確認」 |
+| W-24 | 一部 | 9a8527d3 | 集計を日本語の状態名に、依存を相手の題名にした。repo.id のラベルは残課題 |
+| W-25 | 修正 | 9a8527d3 | 「すべての案件」のときは、行に「案件: <名前>」を出す |
+| W-26 | 修正 | 9a8527d3 | sm 未満では途中目標と最終更新を題名の下へ回し、360 で枠に収めた |
+| W-28 | 一部 | 9a8527d3 | 一覧の判断待ちは `/inbox?project=` へ送り、ボードには `?project=` を渡す。詳細側は残課題 |
+| W-30 | 修正 | 9a8527d3 | JSON が読めないときは送らず、`role="alert"` で理由を出す |
+| W-31 | 修正 | bb8ce583 | 依頼元・元のタスク・決めた日時・回答を出し、新しい順に並べた |
+| W-32 | 修正 | bb8ce583 | 種類を和名にし、悪い知らせ danger・質問 warning とした。段の語をフィルタと揃えた |
+| W-33 | 修正 | bb8ce583 | 送り手・元のタスク・案件・「受信箱で答える」を出す |
+| W-34 | 一部 | bb8ce583 | 失敗箱を subject で区別できるようにした。1 つにまとめる案は残課題 |
+| W-35 | 修正 | bb8ce583 | 対象を組織から選ぶ Select にし、規則文に例と注意を添えた |
+| W-36 | 修正 | bb8ce583 | 開閉ボタンの名前を「「見出し」を展開」にし、`aria-controls` を付けた |
+| W-37 | 修正 | 9a8527d3 | nav リンクを 44px 四方にした |
+| W-38 | 修正 | 9a8527d3 | 保守の 3 節を ProjectSection に揃え、「適用」を primary にした |
+| W-40 | 修正 | 9a8527d3 | 途中目標を「なし」「取得中…」「取得不可」で区別する |
+| W-41 | 一部 | 9a8527d3 | 誤った説明文を削った。狭い幅で案件 select を畳む件は残課題 |
+| W-42 | 修正 | 9a8527d3 | inline style・任意値・裸の border を token に置き換えた |
+| W-43 | 一部 | 9a8527d3 | h1 直下の案件名を `text-title` にした（h1 の文字列は parity のため変えていない） |
+| W-44 | 修正 | 9abbfd92 | 判断待ちを warning、失敗を danger にし、24 時間以内は「まもなく期限」と出す |
+| V-02 | 修正 | bd393ea1 | verify の全画面 mobile-audit で見つかった。兄弟 task の task 詳細のスマホ化（c67913d8）で `/tasks/T1` の run リンクが `min-w-0`（幅 17px）になっていたので、`min-w-11` にした。`web/features/tasks/` は本 task の画面群の外だが、task の範囲 check（`web/`）の中で、受け入れ条件の mobile-audit を通すための最小の変更 |
 
 ## 残課題
 
-- 撮影の制約（上記）: 800px で止まる fullPage、error 状態が loading と同じ、長 ID が fold の下。verify 葉の post 撮影では `data-fetch-state` の settle を待つか、少なくとも error・many の確認は e2e（`web/e2e/states/`）の結果で補う。`web/scripts/screenshots.mjs` の改修は本 task の範囲外なので提案に留める。
-- `/reports`・`/approvals`・`/projects/P1/docs` 系は偽 daemon に既定 fixture が無く、データ入りの姿が未確認。fix-reports・fix-projects は画面固有の非 parity e2e で本文の状態を確かめる。
-- W-51・W-52 は共通部品（`screen-frame.tsx`・`fetch-frame.tsx`）の変更が要り、この task では直さない。
+指摘は、上の「修正」（「一部」を含む）かこの節のどちらか、または両方に入っている。
+大半は parity e2e（`web/e2e/parity/`）の期待と衝突する。この task は parity の期待を書き換えないので、parity と画面を一緒に直す task に回す。
+
+| ID | 重さ | 残る理由 | 次の手 |
+|---|---|---|---|
+| W-02 | 高 | 推奨でない非破壊の選択は即送信のまま。parity `inbox.spec.ts` が click の直後に API 応答を期待している | parity の更新と合わせて、確認か数秒の取り消しを入れる |
+| W-03（V-01） | 高 | verify で見つかった。ホームの会話は、開いた直後に末尾まで scroll する（parity `console.spec.ts:321`「開いた直後は末尾にいる」）。判断待ちの区画を足したので頁が viewport より高くなり、360 では h1 と最も期限の近い判断待ち 1 件が初回表示で画面外に出る（実測 scrollY 253px。1440 では 121px で、3 件は見える）。fullPage 撮影では上部が空白帯に写る（`_-360`・`_-1440`・`stale-_-*`） | 会話を独立の scroll 領域にするか、初回の追従を会話が viewport を超えたときだけにする（`web/features/console/` と parity の協調変更） |
+| W-04 | 高 | shell の最終受信時刻がスマホ幅で隠れる（`web/components/shell/`） | 共通部品の task |
+| W-08 | 高 | `window.confirm` が残っている。parity が `page.once("dialog")` を期待している | parity の更新と合わせて ConfirmDialog にする |
+| W-10 | 高 | 常設ルールの追加に確認ダイアログが無い。parity の /approvals 試験が「追加」1 click で POST を期待している | parity の更新と合わせて ConfirmDialog にする |
+| W-13・W-16・W-17・W-24 | 中 | API が返す文（葉・planner）、parity が固定している accessible name（「タスク」「理由・note」「task の完了」「run の作業」「Console への入力」）、repo.id のラベル | API の文言と parity の協調変更 |
+| W-19・W-20 | 中 | FetchFrame の戻り先と語（共通部品） | W-52 と一緒に直す |
+| W-21・W-22・W-27・W-29 | 中 | 操作節の畳み込み、操作の出し分け、作成フォームの開閉、作業場所の削除と状態変更の確認。いずれも parity `projects.spec.ts` が開いた form と click 直後の送信を期待している | parity と一緒に直す |
+| W-28・W-41・W-43 | 中〜低 | 詳細の判断待ちリンク（parity が `href="/inbox"` を期待）、board の案件 select（parity が使う）、h1 の文字列 | parity と一緒に直す |
+| W-34 | 中 | 両方失敗したときに失敗箱を 1 つにまとめる機能が FetchFrame に無い | 共通部品の task |
+| W-39 | 低 | checkbox を 20px にすると、mobile-audit が input 自体を 44px 未満と判定する | mobile-audit を label の当たり判定込みにしてから直す |
+| W-45・W-46 | 低 | 通知の既読ボタンの位置、自動既読の失敗の黙殺 | 遷移をまたいで操作結果を持ち越す共通の仕組みと一緒に |
+| W-47 | 低 | Console の入力欄の語と focus（`web/features/console/`、parity が名前を固定） | console の task |
+| W-51・W-52 | 低 | h1 に当たる script focus の枠、失敗文の二重否定と語の不一致（`screen-frame.tsx`・`fetch-frame.tsx`） | 共通部品の task |
+
+撮影の制約: fullPage が 800px で止まる問題は残る（/approvals のように shell の外へ伸びる頁だけ全高で写る）。error 状態の撮影は改善し、`error-_inbox-360` は loading と別の姿になった。偽 daemon に reports・approvals・文書の既定 fixture が無いため、それらは取得失敗の姿で撮れている。データ入りの姿は fix-reports の parity fixture screenshot と、非 parity e2e（`e2e/work/`）で確かめた。
+
+## pre/post
+
+- pre: `<task>/wu/critique/artifacts/qa-qa-work-pre/`（240 枚）。post: `<task>/wu/verify/artifacts/qa-qa-work-post/`（240 枚。build 後に `corepack pnpm@12.6.0 -C web screenshots --out <dir>` で 128 枚、`--states --out <dir>` で 116 枚）。
+- 名前は pre と post で同じで、`comm -3` の差は 0 件。同じ名前の画像どうしが対応する。work 画面群（`_-*`・`_inbox*`・`_notifications*`・`_projects*`・`_board*`・`_reports*`・`_approvals*` と、各状態の work 画面）80 枚のうち、変化したのは 72 枚。同一の 8 枚は `empty-_inbox-*`・`empty-_notifications-*` で、0 件の表示は変えていない。
+
+### 再評価（ui-ux-quality-gate、post を pre と並べて）
+
+| 対応（pre → post） | 再評価 |
+|---|---|
+| `_inbox-360` | pre は推奨・期限・止めている範囲・案件・待ち・関連が並んだ後に、やっと問いが出ていた。post は見出し → 問い → 理由欄 → 推奨の選択肢の順で、最初の選択肢が fold の中にある。W-01 解消 |
+| `many-_inbox-360` | 40 件の回答欄の常設が無くなった。各行は問い・「回答を開く」・推奨・期限・案件の順。W-14 解消 |
+| `_-1440`・`_-360` | 期限の近い判断待ち 3 件と「まもなく期限」が会話より上に出る（W-03）。ただし初回は会話の末尾まで scroll するので、360 では最上位の判断待ちが隠れる（残課題 V-01） |
+| `_projects_P1-1440` | 長い題名が折り返り、状態「実行待ち」と「判断待ち 1 件」の列が見える。案件名は `text-title` になった。W-05・W-43 |
+| `_projects-360` | 横溢れが無く、途中目標と更新は題名の下の 1 行に出る。作成フォームは常に開いたまま（W-27 残課題） |
+| `_board-1440` | 優先度・レベル・種類が日本語（通常・標準・機能）になり、各行に「案件: 画面品質の確認」が出る。W-23・W-25 |
+| `_approvals-360` | 失敗箱が「決めた認可」「常設ルール」の subject で区別できる。一覧が読めない間は追加が止まり、Notice が理由を示す。W-11・W-34・W-50 |
+| `_reports-*`・`_projects_P1_docs*` | 取得失敗の姿だが、何が取れなかったかを subject で示す。W-09・W-34 |
+
+判定: generic AI dashboard 化はしていない（pre と同じ）。critique で挙げた 3 つの弱点のうち、「状態と次の操作が先に読めない」と「内部値の主表示」は、画面側で直せる範囲を直した。「確認の無い危険な操作」は、保守画面（W-07）と常設ルールの誤追加（W-11）を直した。残る確認（W-02・W-08・W-10・W-29）はどれも parity が click 直後の送信を固定していて、parity と一緒に直す必要がある。新しく見つけた V-01（ホームの初回 scroll）も、parity の console 試験との協調が要る。
+
+### 検査（verify、HEAD `bd393ea1`）
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` exit 0、`build` exit 0
+- `typecheck` exit 0、`lint` exit 0（既存の warning 5 件）、`test` exit 0（vitest 57 files / 347 tests、node 42 pass）、`check:boundaries`・`check:parity`・`check:secrets` exit 0
+- `mobile-audit`（全画面）: 1 回目は exit 1（`/tasks/T1` の `a#- 17x44`、V-02）。`bd393ea1` の後は exit 0（`31 path(s) x 4 widths ok`）
+- `e2e`（functional 全体と release）: exit 0、174 passed / 8 skipped
+- 生の色・任意値の grep（FRONTEND_CONTRACT の式）: `web/components web/features web/routes web/lib` で 0 件（fixtures と test を除く）。基点 45a8fde5 からの追加行でも 0 件
 
 ## 提案
 

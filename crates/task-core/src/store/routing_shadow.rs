@@ -17,6 +17,17 @@ use crate::model_router::shadow::{
 
 use super::{SqliteStore, StoreError, format_rfc3339};
 
+/// 監査表示用の予約と確定の消費。額は effective USD。
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct ShadowReservationAudit {
+    pub utc_day: String,
+    pub state: String,
+    pub reserved_tokens: u64,
+    pub reserved_effective_usd: f64,
+    pub charged_tokens: u64,
+    pub charged_effective_usd: f64,
+}
+
 fn to_i64(name: &str, v: u64) -> Result<i64, StoreError> {
     i64::try_from(v).map_err(|_| StoreError::Invalid(format!("{name} out of range: {v}")))
 }
@@ -41,6 +52,37 @@ fn usage_in(conn: &rusqlite::Connection, day: &str) -> Result<ShadowDailyUsage, 
 }
 
 impl SqliteStore {
+    /// shadow event の reservation id だけで照会する。存在しない id は None。
+    pub fn routing_shadow_reservation_audit(
+        &self,
+        reservation_id: &str,
+    ) -> Result<Option<ShadowReservationAudit>, StoreError> {
+        self.with_read_conn(|conn| {
+            let row = conn
+                .query_row(
+                    "SELECT day, state, reserved_tokens, reserved_micro_usd, charged_tokens, \
+                 charged_micro_usd FROM routing_shadow_reservations WHERE id = ?1",
+                    [reservation_id],
+                    |r| {
+                        let reserved_tokens: i64 = r.get(2)?;
+                        let charged_tokens: i64 = r.get(4)?;
+                        let reserved_micros: i64 = r.get(3)?;
+                        let charged_micros: i64 = r.get(5)?;
+                        Ok(ShadowReservationAudit {
+                            utc_day: r.get(0)?,
+                            state: r.get(1)?,
+                            reserved_tokens: to_u64(reserved_tokens),
+                            reserved_effective_usd: to_u64(reserved_micros) as f64 / 1_000_000.0,
+                            charged_tokens: to_u64(charged_tokens),
+                            charged_effective_usd: to_u64(charged_micros) as f64 / 1_000_000.0,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(row)
+        })
+    }
+
     /// 最悪消費を `now` の UTC 日に予約する。未知の費用は `Denied(UnknownCost)`、どれか 1 つの上限を
     /// 越えるなら `Denied(CapExceeded)`（どちらも行を書かない）。
     pub fn routing_shadow_reserve(

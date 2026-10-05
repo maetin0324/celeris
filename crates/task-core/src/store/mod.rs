@@ -111,6 +111,7 @@ mod query;
 mod repos;
 mod routing_log;
 mod routing_shadow;
+pub use routing_shadow::ShadowReservationAudit;
 mod task_store;
 mod task_store_impl;
 mod tasks;

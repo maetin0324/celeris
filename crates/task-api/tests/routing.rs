@@ -4,6 +4,9 @@ mod common;
 
 use common::*;
 use serde_json::json;
+use task_core::model_router::shadow::{
+    ShadowDailyCaps, ShadowReservation, ShadowReservationRequest, ShadowSettlement,
+};
 use task_core::{Event, Status, TaskId, TaskKind, TaskRouting, TaskStore, TierSource};
 
 fn admin() -> [(&'static str, &'static str); 1] {
@@ -48,6 +51,114 @@ fn routing_decided(run_id: &str, escalation: Option<&str>) -> Event {
         }
     }))
     .expect("routing_decided event")
+}
+
+/// shadow の失敗・timeout は primary の outcome、attempts、review に影響しない。
+#[tokio::test]
+async fn routing_shadow_audit_keeps_primary_outcome_separate() {
+    let env = env_with_token();
+    let task = new_task(TaskKind::Execute, Status::Done);
+    env.seed(&task);
+    let id = task.id;
+    let mut primary = serde_json::to_value(routing_decided("run-1", None)).unwrap();
+    primary["record"]["optimizer"] = trace_json("decision-1", "dispatch", Some("run-1"), None);
+    for event in [
+        serde_json::from_value(primary).unwrap(),
+        Event::WorkerFinished {
+            run_id: "run-1".into(),
+            outcome: "done: ok".into(),
+            usage: None,
+            role: None,
+            metrics: Some(task_core::RunMetrics {
+                wall_ms: 50,
+                retries: 1,
+                peak_context_tokens: None,
+                turns: None,
+            }),
+            end: None,
+        },
+        serde_json::from_value(json!({
+            "type": "routing_outcome_recorded", "outcome_id": "out-1",
+            "decision_id": "decision-1", "run_id": "run-1",
+            "evaluation_version": "routing-outcome/1", "acceptance_passed": true,
+            "review_passed": true, "reward": 1.0
+        }))
+        .unwrap(),
+    ] {
+        env.store.append_event(id, &event).unwrap();
+    }
+    let now = time::OffsetDateTime::parse(
+        "2026-10-05T10:00:00Z",
+        &time::format_description::well_known::Rfc3339,
+    )
+    .unwrap();
+    let reservation = env
+        .store
+        .routing_shadow_reserve(
+            &ShadowDailyCaps {
+                max_requests: 2,
+                max_tokens: 1000,
+                max_effective_usd: 1.0,
+            },
+            &ShadowReservationRequest {
+                shadow_id: "shadow-timeout".into(),
+                owner: "test".into(),
+                worst_tokens: 500,
+                worst_effective_usd: Some(0.2),
+            },
+            now,
+        )
+        .unwrap();
+    let ShadowReservation::Reserved { reservation_id, .. } = reservation else {
+        panic!("reservation denied")
+    };
+    env.store
+        .routing_shadow_settle(&reservation_id, ShadowSettlement::TimedOut, now)
+        .unwrap();
+    for shadow in [
+        json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-decision",
+            "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "decision",
+            "status": "completed", "policy_version": "p4", "candidate_model": "candidate" }),
+        json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-timeout",
+            "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "execution",
+            "status": "failed", "reason": "timeout", "policy_version": "p4",
+            "candidate_model": "candidate", "input_tokens": 20, "reservation_id": reservation_id }),
+        json!({ "type": "routing_shadow_recorded", "shadow_id": "shadow-drop",
+            "primary_decision_id": "decision-1", "run_id": "run-1", "kind": "execution",
+            "status": "dropped", "reason": "queue_full", "policy_version": "p4" }),
+    ] {
+        env.store
+            .append_event(id, &serde_json::from_value(shadow).unwrap())
+            .unwrap();
+    }
+    let resp = send(
+        &env.router(),
+        get_with(&format!("/api/v1/tasks/{id}/routing"), &admin()),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let run = &resp.json()["runs"][0];
+    assert_eq!(run["model"], "model-std");
+    assert_eq!(run["routing_outcome"]["review_passed"], true);
+    assert_eq!(run["retries"], 1);
+    assert_eq!(run["wall_ms"], 50);
+    let shadows = run["routing_shadow"].as_array().unwrap();
+    assert_eq!(shadows.len(), 3);
+    assert_eq!(shadows[0]["kind"], "decision");
+    assert_eq!(shadows[0]["differs_from_primary"], true);
+    assert_eq!(shadows[1]["status"], "failed");
+    assert_eq!(shadows[1]["reason"], "timeout");
+    assert_eq!(shadows[1]["input_tokens"], 20);
+    assert_eq!(shadows[1]["reservation"]["state"], "timed_out");
+    assert_eq!(shadows[1]["reservation"]["reserved_tokens"], 500);
+    assert_eq!(shadows[1]["reservation"]["charged_tokens"], 500);
+    assert_eq!(shadows[1]["reservation"]["reserved_effective_usd"], 0.2);
+    assert_eq!(shadows[1]["reservation"]["charged_effective_usd"], 0.2);
+    assert_eq!(shadows[2]["status"], "dropped");
+    assert!(shadows[2].get("reservation").is_none());
+    let stored = env.store.get(id).unwrap().unwrap();
+    assert_eq!(stored.status, Status::Done);
+    assert_eq!(stored.attempts, task.attempts);
 }
 
 /// run の監査（lane・model・規則・features・メトリクス・レビュー）と、捨てた担当が返る。
@@ -114,6 +225,7 @@ async fn routing_returns_per_run_audit_and_dropped_assignee() {
     assert_eq!(runs[0]["features"]["judgment"], "low");
     assert_eq!(runs[0]["wall_ms"], 1234);
     assert_eq!(runs[0]["retries"], 1);
+    assert!(runs[0].get("routing_shadow").is_none());
     assert!(runs[0].get("escalation").is_none());
     assert!(runs[0].get("optimizer").is_none());
     assert_eq!(runs[1]["escalation"], "escalated: standard -> frontier");

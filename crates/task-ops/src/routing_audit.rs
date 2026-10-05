@@ -16,8 +16,9 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::model_router::feedback::{RequestSourceAttempt, RoutingRequestRecord};
+use task_core::model_router::shadow::{ShadowKind, ShadowReason, ShadowRecord, ShadowStatus};
 use task_core::model_router::trace::RoutingTraceV1;
-use task_core::store::RoutingCorrelation;
+use task_core::store::{RoutingCorrelation, ShadowReservationAudit};
 use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
 
 use crate::error::OpsError;
@@ -42,12 +43,51 @@ pub const ACTUAL_FROM_PROXY_TRACE: &str = "proxy_trace";
 pub trait RequestLog {
     /// 要求 `request_id` の相関欄。行が無ければ `None`。
     fn correlation(&self, request_id: &str) -> Result<Option<RoutingCorrelation>, OpsError>;
+
+    /// 実行 shadow の共有予約。偽 log と旧 DB では予約を表示しない。
+    fn shadow_reservation(
+        &self,
+        _reservation_id: &str,
+    ) -> Result<Option<ShadowReservationAudit>, OpsError> {
+        Ok(None)
+    }
 }
 
 impl RequestLog for SqliteStore {
     fn correlation(&self, request_id: &str) -> Result<Option<RoutingCorrelation>, OpsError> {
         Ok(self.routing_correlation_get(request_id)?)
     }
+
+    fn shadow_reservation(
+        &self,
+        reservation_id: &str,
+    ) -> Result<Option<ShadowReservationAudit>, OpsError> {
+        Ok(self.routing_shadow_reservation_audit(reservation_id)?)
+    }
+}
+
+/// primary の結果から独立した shadow 1 件の監査。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RoutingShadowAudit {
+    pub shadow_id: String,
+    pub primary_decision_id: String,
+    pub kind: ShadowKind,
+    pub status: ShadowStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<ShadowReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_source: Option<String>,
+    /// primary の model/source と候補が両方分かる場合だけ比較する。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub differs_from_primary: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<ShadowReservationAudit>,
 }
 
 /// proxy log に記録された要求の実際の行き先（相関欄の写し）。
@@ -104,6 +144,9 @@ pub struct RequestRoutingAudit {
 pub struct RunRoutingAudit {
     #[serde(flatten)]
     pub audit: RoutingAudit,
+    /// Phase 4: run に結び付いた decision/execution shadow。旧 run は欄なし。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub routing_shadow: Option<Vec<RoutingShadowAudit>>,
     /// Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_id: Option<String>,
@@ -187,6 +230,7 @@ pub fn routing_audit_with_requests(
             RunRoutingAudit {
                 decision_id: audit.decision_id().map(str::to_string),
                 audit,
+                routing_shadow: None,
                 requests: phase2.then(Vec::new),
                 audit_incomplete: phase2.then_some(false),
                 incomplete_reasons: Vec::new(),
@@ -218,6 +262,28 @@ pub fn routing_audit_with_requests(
             continue;
         };
         attach_request_record(&mut runs, &mut unbound, record, log)?;
+    }
+    for event in events {
+        let Event::RoutingShadowRecorded { record } = event else {
+            continue;
+        };
+        let target = match record.run_id.as_deref() {
+            Some(id) => runs.iter().position(|r| r.audit.run_id == id),
+            None => runs.iter().position(|r| {
+                r.decision_id.as_deref() == Some(record.primary_decision_id.as_str())
+                    || r.requests
+                        .iter()
+                        .flatten()
+                        .any(|request| request.decision_id == record.primary_decision_id)
+            }),
+        };
+        if let Some(i) = target {
+            let shadow = shadow_audit(record, &runs[i], log)?;
+            runs[i]
+                .routing_shadow
+                .get_or_insert_with(Vec::new)
+                .push(shadow);
+        }
     }
     for run in &mut runs {
         // dispatch の決定が要求を指すのに、その要求の子 trace が無い。
@@ -259,6 +325,69 @@ pub fn routing_audit_with_requests(
     Ok(TaskRoutingAudit {
         runs,
         unbound_requests: unbound,
+    })
+}
+
+fn shadow_audit(
+    record: &ShadowRecord,
+    run: &RunRoutingAudit,
+    log: &dyn RequestLog,
+) -> Result<RoutingShadowAudit, OpsError> {
+    let primary_request = run
+        .requests
+        .iter()
+        .flatten()
+        .find(|request| request.decision_id == record.primary_decision_id);
+    let (primary_model, primary_source) = match primary_request {
+        Some(request) => (
+            request
+                .actual
+                .as_ref()
+                .and_then(|actual| actual.model.as_ref()),
+            request
+                .actual
+                .as_ref()
+                .and_then(|actual| actual.source_id.as_ref()),
+        ),
+        None => (
+            run.audit.model.as_ref(),
+            run.audit
+                .optimizer
+                .as_ref()
+                .and_then(|trace| trace.source_id.as_ref()),
+        ),
+    };
+    let differences = [
+        record
+            .candidate_model
+            .as_ref()
+            .zip(primary_model)
+            .map(|(a, b)| a != b),
+        record
+            .candidate_source
+            .as_ref()
+            .zip(primary_source)
+            .map(|(a, b)| a != b),
+    ];
+    let differs_from_primary = differences.into_iter().flatten().reduce(|a, b| a || b);
+    let reservation = record
+        .reservation_id
+        .as_deref()
+        .map(|id| log.shadow_reservation(id))
+        .transpose()?
+        .flatten();
+    Ok(RoutingShadowAudit {
+        shadow_id: record.shadow_id.clone(),
+        primary_decision_id: record.primary_decision_id.clone(),
+        kind: record.kind,
+        status: record.status,
+        reason: record.reason,
+        candidate_model: record.candidate_model.clone(),
+        candidate_source: record.candidate_source.clone(),
+        differs_from_primary,
+        input_tokens: record.input_tokens,
+        output_tokens: record.output_tokens,
+        reservation,
     })
 }
 

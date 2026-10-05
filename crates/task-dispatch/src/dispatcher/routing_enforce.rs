@@ -27,6 +27,9 @@ pub struct DispatchRoutingSettings {
     /// task/組織固有の追加制約。既定（空）なら制約なし。
     pub constraints: Constraints,
     pub freshness: FreshnessPolicy,
+    /// subscription 窓 id（`five_hour`・`seven_day` 等）→ 設定の reserve_value（USD）。
+    /// 載っていない窓の `reserve_value_usd` は None（unknown）のまま。
+    pub window_reserves: std::collections::BTreeMap<String, f64>,
 }
 
 impl Default for DispatchRoutingSettings {
@@ -35,6 +38,7 @@ impl Default for DispatchRoutingSettings {
             mode: RoutingMode::Legacy,
             constraints: Constraints::default(),
             freshness: FreshnessPolicy::default(),
+            window_reserves: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -328,7 +332,15 @@ impl Dispatcher {
                     .as_ref()
                     .map(|b| b.lock().unwrap_or_else(|e| e.into_inner()));
                 let state = guard.as_ref().and_then(|g| g.state(id));
-                source_state_from_account(provider, id, state, in_use, now_unix)
+                let mut s = source_state_from_account(provider, id, state, in_use, now_unix);
+                for w in &mut s.quota_windows {
+                    w.reserve_value_usd = self
+                        .dispatch_routing
+                        .window_reserves
+                        .get(&w.window_id)
+                        .copied();
+                }
+                s
             }
             None => {
                 let cooldown_until = self

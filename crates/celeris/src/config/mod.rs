@@ -449,6 +449,7 @@ impl Config {
         // 3. 検証。
         cfg.validate()?;
         let catalog = cfg.routing_catalog()?;
+        cfg.model_routing.runtime = Some(std::sync::Arc::new(cfg.routing_runtime()?));
         for warning in &catalog.warnings {
             tracing::warn!(key = %warning, "model routing compatibility warning");
         }

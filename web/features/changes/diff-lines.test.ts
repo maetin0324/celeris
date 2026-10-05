@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { diffLineKind, diffLines, fileStatusView, integrationTone } from "./diff-lines";
+import { diffLineKind, diffLines, fileStatusView, integrationTone, splitChangedPaths } from "./diff-lines";
 
 describe("diffLines", () => {
   it("行の種類を見分け、末尾の改行で空行を足さない", () => {
@@ -28,5 +28,27 @@ describe("integrationTone", () => {
     expect(integrationTone("conflict")).toBe("danger");
     expect(integrationTone("merged")).toBe("success");
     expect(integrationTone("open")).toBe("info");
+  });
+});
+
+describe("splitChangedPaths", () => {
+  it("2 件以上に共通の dir を取り出し、各行はファイル名と残りの dir に分ける", () => {
+    const split = splitChangedPaths(["src/a/b/x.tsx", "src/a/b/c/y.tsx", "src/a/b/z.ts"]);
+    expect(split.common).toBe("src/a/b/");
+    expect(split.files.map((file) => [file.name, file.dir])).toEqual([
+      ["x.tsx", ""],
+      ["y.tsx", "c/"],
+      ["z.ts", ""],
+    ]);
+    expect(split.files[1]?.path).toBe("src/a/b/c/y.tsx");
+  });
+
+  it("名前の途中では切らず、1 件や共通が無いときは共通 dir を空にする", () => {
+    expect(splitChangedPaths(["src/ab/x.ts", "src/ac/y.ts"]).common).toBe("src/");
+    expect(splitChangedPaths(["src/a/x.ts"])).toEqual({
+      common: "",
+      files: [{ path: "src/a/x.ts", dir: "src/a/", name: "x.ts" }],
+    });
+    expect(splitChangedPaths(["a.ts", "b/c.ts"]).common).toBe("");
   });
 });

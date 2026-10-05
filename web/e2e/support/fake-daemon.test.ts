@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
-import { createFakeDaemon, defaultFixtures, validateFixture } from "./fake-daemon.mjs";
+import { createFakeDaemon, defaultFixtures, richFixtures, validateFixture } from "./fake-daemon.mjs";
 
 const props = schema.properties as Record<string, unknown>;
 
@@ -14,6 +14,56 @@ it("provides responses that conform to the committed API schema", () => {
   for (const name of ["health", "inbox", "daemon"] as const) {
     expect(validateFixture(defaultFixtures[`/api/v1/${name}`], schema.properties[name])).toEqual([]);
   }
+});
+
+it("serves schema-valid rich data without changing the default profile", async () => {
+  const rich = richFixtures();
+  for (const [path, name] of [
+    ["tasks", "task_list"],
+    ["graph", "graph"],
+    ["tasks/T1", "task_detail"],
+    ["tasks/T1/changes", "changes"],
+    ["tasks/T1/tree", "tree"],
+    ["tasks/T1/artifacts", "artifact_list"],
+    ["projects/P1", "project_detail"],
+    ["console", "console"],
+    ["org", "org_list"],
+    ["projects/P1/docs", "docs_tree"],
+    ["projects/P1/docs/page", "doc_page"],
+    ["tasks/T25", "task_detail"],
+  ] as const) {
+    const raw = rich[`/api/v1/${path}`];
+    const value = typeof raw === "function" ? raw(new URL(`http://fixture.test/${path}`)) : raw;
+    expect(validateFixture(value, props[name]), path).toEqual([]);
+  }
+  daemon = createFakeDaemon({ profile: "rich" });
+  const url = await daemon.start();
+  const get = async (path: string) => {
+    const response = await fetch(`${url}/api/v1${path}`);
+    expect(response.status, path).toBe(200);
+    return response;
+  };
+  expect(((await (await get("/tasks")).json()) as { items: unknown[] }).items).toHaveLength(25);
+  expect(((await (await get("/graph")).json()) as { nodes: unknown[] }).nodes).toHaveLength(8);
+  expect(
+    ((await (await get("/tasks/T1/changes")).json()) as { repos: Array<{ files: unknown[] }> }).repos[0].files,
+  ).toHaveLength(15);
+  expect(((await (await get("/tasks/T1/artifacts")).json()) as { items: unknown[] }).items).toHaveLength(12);
+  expect((await (await get("/tasks/T1/runs/R1/stdout.jsonl")).text()).split("\n")).toHaveLength(28);
+  expect(((await (await get("/console")).json()) as { items: unknown[] }).items).toHaveLength(3);
+  expect(defaultFixtures["/api/v1/console"]).not.toEqual(rich["/api/v1/console"]);
+});
+
+it("serves schema-valid reports, approvals and review-pending execution data in the rich profile", () => {
+  const rich = richFixtures();
+  const checks = [
+    ["/api/v1/reports", "report_list"],
+    ["/api/v1/reports/RP1", "report_detail"],
+    ["/api/v1/approvals", "approval_list"],
+    ["/api/v1/tasks/T1/execution", "task_execution"],
+    ["/api/v1/tasks/T1/routing", "task_routing"],
+  ] as const;
+  for (const [path, name] of checks) expect(validateFixture(rich[path], props[name]), path).toEqual([]);
 });
 
 it("rejects non-loopback and reserved production or staging ports", () => {

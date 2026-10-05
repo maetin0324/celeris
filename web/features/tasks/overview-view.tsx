@@ -6,7 +6,7 @@ import { Badge } from "../../components/ui/badge";
 import { buttonVariants } from "../../components/ui/button";
 import { DataList, type DataListItem } from "../../components/ui/data-list";
 import { Drawer } from "../../components/ui/drawer";
-import { StatusBadge } from "../../components/ui/status-badge";
+import { StatusBadge, statusView } from "../../components/ui/status-badge";
 import { executionQuery } from "./execution-panel";
 import { integrationRepairDisplay, integrationRepairTone } from "./integration-repair";
 import { IntegrationRepairPanel } from "./integration-repair-panel";
@@ -95,7 +95,7 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
                   to="/tasks/$id/runs/$runId"
                   params={{ id: task.id, runId: run.run_id }}
                   aria-label={`run ${run.run_id} を開く`}
-                  className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                  className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                 >
                   <ShortId id={run.run_id} />
                 </Link>
@@ -139,7 +139,7 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
 export function OverviewView({ detail, section }: { detail: TaskDetail; section?: MobileSection }) {
   const task = detail.task;
   const facts: DataListItem[] = [
-    { label: "状態", value: <span data-status={task.status}>{task.status}</span> },
+    { label: "状態", value: <span data-status={task.status}>{statusView(task.status).label}</span> },
     { label: "種別", value: task.kind },
   ];
   if (task.category) facts.push({ label: "カテゴリ", value: task.category });
@@ -222,7 +222,7 @@ export function OverviewView({ detail, section }: { detail: TaskDetail; section?
                   <Link
                     to="/tasks/$id/runs/$runId"
                     params={{ id: task.id, runId: run.run_id }}
-                    className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                    className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
                   >
                     <ShortId id={run.run_id} />
                   </Link>
@@ -275,7 +275,7 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
   const repairNode = repairDisplay ? (
     <li className={nodeRow} data-testid="tree-integration-repair" data-state={repairDisplay.state}>
       <span className={kindLabel}>main から取り込み</span>
-      <a href="#integration-repair" className={`hidden md:inline ${textLink}`}>
+      <a href="#integration-repair" className={`hidden min-h-11 min-w-11 items-center md:inline-flex ${textLink}`}>
         integration repair
       </a>
       <Drawer
@@ -360,7 +360,7 @@ export function TaskTree({ detail }: { detail: TaskDetail }) {
                 to="/tasks/$id"
                 params={{ id: task.parent_id }}
                 aria-label={`親 task ${task.parent_id} を開く`}
-                className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+                className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
               >
                 <ShortId id={task.parent_id} />
               </Link>
@@ -383,7 +383,7 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       to="/tasks/$id"
       params={{ id: unit.child_task_id }}
       aria-label={`WU ${unit.key} の子 task ${unit.child_task_id} を開く`}
-      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+      className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
     >
       <ShortId id={unit.child_task_id} />
     </Link>
@@ -393,7 +393,7 @@ function WorkUnitNode({ taskId, unit, repairNode }: { taskId: string; unit: Work
       to="/tasks/$id/runs/$runId"
       params={{ id: taskId, runId }}
       aria-label={`WU ${unit.key} の run ${runId} を開く`}
-      className={`inline-flex min-h-11 min-w-0 max-w-full items-center ${textLink}`}
+      className={`inline-flex min-h-11 min-w-11 max-w-full items-center justify-center ${textLink}`}
     >
       <ShortId id={runId} />
     </Link>

@@ -162,11 +162,11 @@ test("parity: /projects/:id 表示・計画 DAG・仕事の木・成果物", asy
       "href",
       "/inbox",
     );
-    // DAG と木は枠の中でスクロールし、ページは横に溢れない。
-    for (const id of ["project-dag-frame", "project-tree-frame"]) {
-      const frame = page.getByTestId(id);
-      expect(await frame.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
-    }
+    // DAG は枠の中でスクロールし、ページは横に溢れない。木は 640px 未満で行を積み、枠にも収まる（fix-r5 fix-narrow）。
+    const dag = page.getByTestId("project-dag-frame");
+    expect(await dag.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+    const tree = page.getByTestId("project-tree-frame");
+    expect(await tree.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     // 成果物は開いたときだけ取る。
     await page.getByText("根の仕事 の成果物").click();

@@ -10,7 +10,8 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
 
-const input = "box-border min-h-11 w-full max-w-full rounded-md border bg-surface p-2 text-foreground";
+const input = "box-border min-h-11 w-full max-w-full rounded-md border border-input bg-surface p-2 text-foreground";
+const navLink = "inline-flex min-h-11 min-w-11 items-center text-primary underline";
 const docsBase = (id: string) => `/api/projects/${encodeURIComponent(id)}/docs`;
 const docsUrl = (id: string, path?: string, q?: string, edit?: boolean) => {
   const params = new URLSearchParams();
@@ -116,29 +117,26 @@ export function ProjectDocsScreen({
   }
   return (
     <ScreenFrame title={`案件の文書 ${projectId}`} route="/projects/:id/docs">
-      <nav className="flex flex-wrap gap-3">
-        <Link className="min-h-11 underline" to="/projects/$id" params={{ id: projectId }}>
+      <nav aria-label="文書の頁" className="flex flex-wrap gap-3">
+        <Link className={navLink} to="/projects/$id" params={{ id: projectId }}>
           案件詳細
         </Link>
-        <Link className="min-h-11 underline" to="/projects/$id/docs/maintenance" params={{ id: projectId }}>
+        <Link className={navLink} to="/projects/$id/docs/maintenance" params={{ id: projectId }}>
           文書の保守
         </Link>
       </nav>
       <ActionResultView result={result} />
-      <FetchFrame query={tree}>
+      <FetchFrame query={tree} subject="案件の文書の一覧">
         {tree.data === null ? (
-          <section className="space-y-2">
-            <p>文書リポジトリがありません。</p>
+          <section className="space-y-2 rounded-lg border border-border bg-surface p-4">
+            <p>文書リポジトリがありません。用意すると、ここで文書を読み書きできます。</p>
             <Button onClick={init} disabled={sender.pending}>
               文書を用意する
             </Button>
           </section>
         ) : tree.data ? (
-          <div
-            className="grid min-w-0 gap-4 lg:grid-cols-[minmax(14rem,20rem)_minmax(0,1fr)]"
-            data-testid="project-docs"
-          >
-            <aside className="min-w-0 rounded border p-3">
+          <div className="grid min-w-0 gap-4 lg:grid-cols-3" data-testid="project-docs">
+            <aside className="min-w-0 rounded-lg border border-border bg-surface p-3">
               <form onSubmit={search} className="space-y-2">
                 <label>
                   文書を検索
@@ -146,16 +144,32 @@ export function ProjectDocsScreen({
                 </label>
                 <Button type="submit">検索</Button>
               </form>
+              {tree.data.items.length === 0 ? (
+                <p className="mt-3 text-muted-foreground">
+                  {q ? `「${q}」に一致する文書はありません。` : "文書はまだありません。"}
+                </p>
+              ) : null}
+              {tree.data.truncated ? (
+                <p className="mt-3 text-label text-muted-foreground">
+                  件数が多いため一部だけ表示しています。検索で絞ってください。
+                </p>
+              ) : null}
               <ul className="mt-3 space-y-1">
                 {tree.data.items.map((item) => (
                   <li key={item.path}>
                     <Link
-                      className="block min-h-11 break-all py-2 underline"
+                      className="block min-h-11 py-2 break-words text-primary underline"
                       to="/projects/$id/docs"
                       params={{ id: projectId }}
                       search={{ path: item.path, q }}
+                      aria-current={item.path === path ? "page" : undefined}
                     >
-                      {item.title || item.path}
+                      <span className={item.path === path ? "font-semibold" : undefined}>
+                        {item.title || item.path}
+                      </span>
+                      {item.title ? (
+                        <span className="block text-label text-muted-foreground break-all">{item.path}</span>
+                      ) : null}
                     </Link>
                   </li>
                 ))}
@@ -169,27 +183,27 @@ export function ProjectDocsScreen({
                 新しいページ
               </Link>
             </aside>
-            <section className="min-w-0 space-y-3 rounded border p-3">
+            <section className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-3 lg:col-span-2">
               {!path ? (
                 <p>ページを選んでください。</p>
               ) : edit && (page.data || page.isError) ? (
                 <Editor key={path} projectId={projectId} path={path} page={page.data} />
               ) : (
-                <FetchFrame query={page}>
+                <FetchFrame query={page} subject={`文書 ${path}`}>
                   {page.data ? (
                     <>
-                      <h2 className="text-lg font-semibold">{page.data.title}</h2>
+                      <h2 className="text-section font-semibold break-words">{page.data.title}</h2>
                       <Markdown source={page.data.raw} />
                       <div className="flex flex-wrap gap-3">
                         <Link
-                          className="min-h-11 underline"
+                          className={navLink}
                           to="/projects/$id/docs"
                           params={{ id: projectId }}
                           search={{ path, q, edit: "1" }}
                         >
                           編集
                         </Link>
-                        <Button onClick={remove} disabled={sender.pending}>
+                        <Button variant="destructive" onClick={remove} disabled={sender.pending}>
                           削除
                         </Button>
                       </div>

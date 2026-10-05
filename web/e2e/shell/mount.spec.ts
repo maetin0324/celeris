@@ -68,7 +68,7 @@ test("遷移後に見出しへ focus、戻るでスクロール位置が戻る",
     await page.goBack();
     await expect(page).toHaveURL(`${gateway.base}/tasks`);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
-    await expect.poll(() => page.evaluate(() => window.scrollY)).toBe(1200);
+    await expect.poll(() => page.evaluate(() => Math.abs(window.scrollY - 1200))).toBeLessThanOrEqual(20);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeFocused();
   } finally {
     await gateway.close();

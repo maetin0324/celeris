@@ -310,3 +310,290 @@ async fn chat_api_disabled_send_is_unavailable() {
         "cos_unavailable",
     );
 }
+
+#[tokio::test]
+async fn chat_api_list_status_filter() {
+    let env = admin_env();
+    let app = env.router();
+    let open = create(&app, "filter-open", "Open").await;
+    let archived = create(&app, "filter-archived", "Archived").await;
+    let id = archived["id"].as_str().expect("id");
+    let response = send(
+        &app,
+        patch_admin(
+            &format!("{BASE}/{id}"),
+            &json!({"status":"archived","expected_revision":1}),
+        ),
+    )
+    .await;
+    assert_eq!(response.status.as_u16(), 200);
+    let found = send(&app, get_admin(&format!("{BASE}?status=open")))
+        .await
+        .json();
+    assert_eq!(found["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(found["items"][0]["id"], open["id"]);
+    let found = send(&app, get_admin(&format!("{BASE}?status=archived")))
+        .await
+        .json();
+    assert_eq!(found["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(found["items"][0]["id"], archived["id"]);
+}
+
+#[tokio::test]
+async fn chat_api_search_message_body() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "search-body", "Plain title").await;
+    let id = thread["id"].as_str().expect("id");
+    assert_eq!(
+        send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{id}/messages"),
+                &message_body("search", "distinctive comet")
+            )
+        )
+        .await
+        .status
+        .as_u16(),
+        202
+    );
+    let found = send(&app, get_admin(&format!("{BASE}?q=comet")))
+        .await
+        .json();
+    assert_eq!(found["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(found["items"][0]["id"], id);
+}
+
+#[tokio::test]
+async fn chat_api_message_before_and_after_pages() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "page-messages", "Pages").await;
+    let id = thread["id"].as_str().expect("id");
+    let path = format!("{BASE}/{id}/messages");
+    for n in 1..=3 {
+        assert_eq!(
+            send(
+                &app,
+                post_admin(
+                    &path,
+                    &message_body(&format!("page-{n}"), &format!("body {n}"))
+                )
+            )
+            .await
+            .status
+            .as_u16(),
+            202
+        );
+    }
+    let newest = send(&app, get_admin(&format!("{path}?limit=2")))
+        .await
+        .json();
+    assert_eq!(newest["items"][0]["seq"], 2);
+    assert_eq!(newest["items"][1]["seq"], 3);
+    assert_eq!(newest["next_before_seq"], 2);
+    let older = send(&app, get_admin(&format!("{path}?before_seq=2")))
+        .await
+        .json();
+    assert_eq!(older["items"][0]["seq"], 1);
+    let newer = send(&app, get_admin(&format!("{path}?after_seq=1&limit=1")))
+        .await
+        .json();
+    assert_eq!(newer["items"][0]["seq"], 2);
+    assert_eq!(newer["next_after_seq"], 2);
+}
+
+#[tokio::test]
+async fn chat_api_archived_thread_rejects_send() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "archive-send", "Archived").await;
+    let id = thread["id"].as_str().expect("id");
+    assert_eq!(
+        send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{id}"),
+                &json!({"status":"archived","expected_revision":1})
+            )
+        )
+        .await
+        .status
+        .as_u16(),
+        200
+    );
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{id}/messages"),
+                &message_body("post", "hello"),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+}
+
+#[tokio::test]
+async fn chat_api_resume_queue_stale_revision() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "stale-resume", "Queue").await;
+    let id = thread["id"].as_str().expect("id");
+    let path = format!("{BASE}/{id}/resume-queue");
+    assert_problem(
+        &send(&app, post_admin(&path, &json!({"expected_revision":0}))).await,
+        409,
+        "chat_conflict",
+    );
+    let response = send(&app, post_admin(&path, &json!({"expected_revision":1}))).await;
+    assert_eq!(response.status.as_u16(), 200);
+    assert_eq!(response.json()["thread"]["queue_paused"], false);
+}
+
+#[tokio::test]
+async fn chat_api_blank_message_validation() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "blank-message", "Blank").await;
+    let id = thread["id"].as_str().expect("id");
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{id}/messages"),
+                &message_body("blank", "  \n  "),
+            ),
+        )
+        .await,
+        422,
+        "validation",
+    );
+}
+
+#[tokio::test]
+async fn chat_api_query_validation() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "query-errors", "Query").await;
+    let id = thread["id"].as_str().expect("id");
+    for path in [
+        format!("{BASE}?limit=0"),
+        format!("{BASE}?status=invalid"),
+        format!("{BASE}?surprise=1"),
+    ] {
+        assert_problem(&send(&app, get_admin(&path)).await, 400, "bad_request");
+    }
+    let path = format!("{BASE}/{id}/messages");
+    for query in ["limit=0", "before_seq=2&after_seq=1", "after_seq=bogus"] {
+        assert_problem(
+            &send(&app, get_admin(&format!("{path}?{query}"))).await,
+            400,
+            "bad_request",
+        );
+    }
+}
+
+#[tokio::test]
+async fn chat_api_write_unknown_fields() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "unknown-fields", "Unknown").await;
+    let id = thread["id"].as_str().expect("id");
+    let mut message = message_body("extra", "hello");
+    message["unexpected"] = json!(true);
+    assert_problem(
+        &send(&app, post_admin(&format!("{BASE}/{id}/messages"), &message)).await,
+        400,
+        "bad_request",
+    );
+    assert_problem(
+        &send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{id}"),
+                &json!({"title":"changed","expected_revision":1,"unexpected":true}),
+            ),
+        )
+        .await,
+        400,
+        "bad_request",
+    );
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                &format!("{BASE}/{id}/stop"),
+                &json!({"run_id":"r","unexpected":true}),
+            ),
+        )
+        .await,
+        400,
+        "bad_request",
+    );
+}
+
+#[tokio::test]
+async fn chat_api_missing_resources() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "missing-resources", "Missing").await;
+    let id = thread["id"].as_str().expect("id");
+    assert_problem(
+        &send(&app, get_admin(&format!("{BASE}/{id}/runs/missing"))).await,
+        404,
+        "chat_not_found",
+    );
+    assert_problem(
+        &send(
+            &app,
+            delete_with(&format!("{BASE}/{id}/messages/missing"), &admin_headers()),
+        )
+        .await,
+        404,
+        "chat_not_found",
+    );
+    assert_problem(
+        &send(&app, get_admin(&format!("{BASE}/missing/messages"))).await,
+        404,
+        "chat_not_found",
+    );
+}
+
+#[tokio::test]
+async fn chat_api_cross_thread_cancel_is_not_found() {
+    let env = admin_env();
+    let app = env.router();
+    let first = create(&app, "cancel-owner", "Owner").await;
+    let second = create(&app, "cancel-other", "Other").await;
+    let owner = first["id"].as_str().expect("id");
+    let other = second["id"].as_str().expect("id");
+    let posted = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/{owner}/messages"),
+            &message_body("owned", "hello"),
+        ),
+    )
+    .await
+    .json();
+    let mid = posted["message"]["id"].as_str().expect("id");
+    assert_problem(
+        &send(
+            &app,
+            delete_with(&format!("{BASE}/{other}/messages/{mid}"), &admin_headers()),
+        )
+        .await,
+        404,
+        "chat_not_found",
+    );
+    assert_eq!(
+        send(&app, get_admin(&format!("{BASE}/{owner}/messages")))
+            .await
+            .json()["items"][0]["state"],
+        "queued"
+    );
+}

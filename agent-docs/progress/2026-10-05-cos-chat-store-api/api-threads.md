@@ -15,7 +15,8 @@ completed: 2026-10-05
 ## 確認
 
 - `cargo check -p task-api`: exit 0。
-- `cargo test -p task-api --test chat_api`: 5 passed。仮 run は store で claim し、実 worker を起動していない。待機や CPU 負荷はない。
+- `cargo test -p task-api --test chat_api`: 15 passed。仮 run は store で claim し、実 worker を起動していない。待機や CPU 負荷はない。検索対象と状態フィルタ、message の前後ページ、archived 後の送信拒否、revision 競合、入力・query 検証、404 と別 thread の取消拒否を追加した。
+- `n=$(cargo test -p task-api chat_api_ -- --list 2>/dev/null | grep -c ': test$'); echo "$n tests"; [ "$n" -ge 15 ]`: `15 tests`、exit 0。
 - `cargo clippy -p task-api --all-targets -- -D warnings`: exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 - `CELERIS_TEST_JOBS=2 bash scripts/dev/test-parallel.sh`: 3987 passed、0 failed、13 ignored（doc test 込み）、exit 0。

@@ -2272,6 +2272,23 @@
     },
     "CandidateTrace": {
       "properties": {
+        "cash_usd": {
+          "description": "Phase 2: API の実料金。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "config_order": {
+          "description": "Phase 2: 設定順（決定的な並びのキー）。旧 event には無い。",
+          "format": "uint",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "cost_usd": {
           "format": "double",
           "type": [
@@ -2282,11 +2299,30 @@
         "deployment_id": {
           "type": "string"
         },
+        "effective_usd": {
+          "description": "Phase 2: cash + shadow + resource（どれかが未知なら None）。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "eligible_provider_ids": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "excluded_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ExcludedReason"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 2: 代表の除外理由。採用可能な候補・旧 event は None。"
         },
         "excluded_reasons": {
           "items": {
@@ -2321,7 +2357,34 @@
             }
           ]
         },
+        "resource_usd": {
+          "description": "Phase 2: self-host の資源の機会費用。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "score": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "score_breakdown": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ScoreTrace"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 2: score の内訳。score を計算しなかった候補・旧 event は None。"
+        },
+        "shadow_usd": {
+          "description": "Phase 2: subscription の shadow price。",
           "format": "double",
           "type": [
             "number",
@@ -9752,6 +9815,182 @@
       ],
       "type": "object"
     },
+    "ExcludedReason": {
+      "description": "ADR §9（Phase 2）: 候補が落ちた理由の型。旧 event には無い（None）。\n既知の理由コード（optimizer・cost の `&'static str`）は [`ExcludedReason::from_code`] で写す。",
+      "oneOf": [
+        {
+          "description": "不合格の制約（lane・deployment・source・privacy・locality・adapter・capability・context・\nprovider・cost・latency・model_identity など）。`name` は制約名。",
+          "properties": {
+            "kind": {
+              "const": "constraint",
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quota_exhausted",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "cooldown",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "concurrency",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "rate_limit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "health_down",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "circuit_open",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "disabled",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "enforce で必須の値が未知（`context_unknown`・`quality_unknown` など）。`field` は欠けた値。",
+          "properties": {
+            "field": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "unknown_required",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "field"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_invalid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "quality_below_min",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "invalid_estimate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "上のどれにも当たらない理由コード（新しい版が足したコードを旧い読み手が落とさない）。",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "kind": {
+              "const": "other",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "code"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ExecutionChildSpec": {
       "additionalProperties": false,
       "description": "ADR-0074 D3.7（Phase F4b (f)）: planner が提案する子 Task 1 件（`delegate` メッセージと同じ中身。\n`assignee` / `tier` / `model` は持たない〈担当は matching が決める。ADR-0069 D1〉）。",
@@ -12889,8 +13128,180 @@
       ],
       "type": "object"
     },
+    "LlmSourceBilledCostView": {
+      "description": "Phase 2: 請求される費用（API の実料金）。",
+      "properties": {
+        "cash_usd": {
+          "description": "未知は `null`（0 で埋めない）。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "LlmSourceCostView": {
+      "description": "Phase 2: 費用成分。請求（`billed`）と機会費用（`opportunity`）を別の欄に分ける。",
+      "properties": {
+        "assumptions": {
+          "description": "見積もりの前提（cost.rs の assumptions）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "billed": {
+          "$ref": "#/$defs/LlmSourceBilledCostView"
+        },
+        "effective_usd": {
+          "description": "cash + shadow + resource（どれかが未知なら `null`）。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "opportunity": {
+          "$ref": "#/$defs/LlmSourceOpportunityCostView"
+        }
+      },
+      "required": [
+        "billed",
+        "opportunity"
+      ],
+      "type": "object"
+    },
+    "LlmSourceFreshnessView": {
+      "description": "Phase 2: 観測 snapshot の鮮度。`observed_at` が無ければ `age_secs` も `null`（未観測）。",
+      "properties": {
+        "age_secs": {
+          "description": "応答時刻 − 観測時刻（秒）。未観測・時刻が読めないときは `null`。",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "description": "観測の有効期限（RFC 3339）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_at": {
+          "description": "観測時刻（RFC 3339）。未観測は `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stale": {
+          "description": "期限切れ、または未観測なら `true`（古い値は判定に使わない）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "stale"
+      ],
+      "type": "object"
+    },
+    "LlmSourceOpportunityCostView": {
+      "description": "Phase 2: 請求されない機会費用（subscription の shadow price・self-host の資源）。",
+      "properties": {
+        "resource_usd": {
+          "description": "self-host の load/queue/GPU の機会費用。未知は `null`。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "shadow_usd": {
+          "description": "subscription の残量と reset までの時間からの shadow price。未知は `null`。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
     "LlmSourceRef": {
       "type": "string"
+    },
+    "LlmSourceStateView": {
+      "description": "Phase 2: deployment 1 件の動的状態（`SourceState`）と effective cost の投影。credential は含めない。",
+      "properties": {
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmSourceCostView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "費用の見積もりが無ければ `null`（全部未知）。"
+        },
+        "deployment_id": {
+          "type": "string"
+        },
+        "freshness": {
+          "$ref": "#/$defs/LlmSourceFreshnessView"
+        },
+        "latency_ms": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "pressure": {
+          "description": "[0,1]。既知成分が無ければ `null`。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quota_remaining": {
+          "description": "既知の窓のうち最も少ない残量（窓の unit）。未知は `null`。",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "quota_reset_at": {
+          "description": "最も早い窓の reset 時刻（RFC 3339）。未知は `null`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reachability": {
+          "description": "`\"up\"` / `\"down\"` / `\"unknown\"`。",
+          "type": "string"
+        },
+        "unknown": {
+          "default": [],
+          "description": "値が未知の欄の名前（`latency`・`quota`・`quota_reset`・`pressure`・`cash`・`shadow`・\n`resource`・`effective`・`observed_at`）。整列済み。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "deployment_id",
+        "freshness",
+        "reachability"
+      ],
+      "type": "object"
     },
     "LlmSourceView": {
       "description": "`GET /llm/sources` の 1 供給元。",
@@ -12898,6 +13309,13 @@
         "accounts": {
           "items": {
             "$ref": "#/$defs/LlmSourceAccountView"
+          },
+          "type": "array"
+        },
+        "deployments": {
+          "description": "ADR 2026-10-04-multi-objective-model-routing Phase 2: deployment ごとの動的状態と費用成分\n（`llm_sources::source_state_view` で組む）。古いスナップショット・状態を持たない供給元は空。",
+          "items": {
+            "$ref": "#/$defs/LlmSourceStateView"
           },
           "type": "array"
         },
@@ -19449,6 +19867,76 @@
       ],
       "type": "object"
     },
+    "RequestLogLink": {
+      "description": "proxy log に記録された要求の実際の行き先（相関欄の写し）。",
+      "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "snapshot_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "RequestRoutingAudit": {
+      "description": "要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。",
+      "properties": {
+        "decision_id": {
+          "type": "string"
+        },
+        "incomplete_reason": {
+          "description": "結べなかった理由（`request_log_missing` など）。結べたら None。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "log": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RequestLogLink"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "trace": {
+          "$ref": "#/$defs/RoutingTraceV1",
+          "description": "要求単位の決定（候補ごとの除外理由・score 内訳・最終 source/model/account）。"
+        }
+      },
+      "required": [
+        "decision_id",
+        "trace"
+      ],
+      "type": "object"
+    },
     "ResolutionAction": {
       "properties": {
         "detail": {
@@ -19893,174 +20381,6 @@
       ],
       "type": "object"
     },
-    "RoutingAudit": {
-      "description": "ワーカー run 1 件の routing の監査。",
-      "properties": {
-        "account": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "adapter": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "cost_usd": {
-          "format": "double",
-          "type": [
-            "number",
-            "null"
-          ]
-        },
-        "escalation": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "features": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskFeatures"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "harness": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "input_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "lane": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Tier"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "optimizer": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/RoutingTraceV1"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Phase 1 optimizer trace. Absent from events written before model routing."
-        },
-        "org_node": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "outcome": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "output_tokens": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "policy_version": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasoning_effort": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "reasons": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "retries": {
-          "format": "uint32",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "review": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ReviewResult"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "rule_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "run_id": {
-          "type": "string"
-        },
-        "task_id": {
-          "$ref": "#/$defs/TaskId"
-        },
-        "wall_ms": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "task_id",
-        "run_id"
-      ],
-      "type": "object"
-    },
     "RoutingCatalogView": {
       "description": "Credential-free snapshot returned by `GET /llm/routing/catalog`.",
       "properties": {
@@ -20228,6 +20548,13 @@
     },
     "RoutingTraceV1": {
       "properties": {
+        "account_id": {
+          "description": "Phase 2: 最終の account（OAuth pool の account 等）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "candidates": {
           "items": {
             "$ref": "#/$defs/CandidateTrace"
@@ -20254,6 +20581,13 @@
         },
         "mode": {
           "$ref": "#/$defs/RoutingMode"
+        },
+        "model": {
+          "description": "Phase 2: 最終の model。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "observed_at": {
           "type": [
@@ -20309,6 +20643,13 @@
         },
         "snapshot_id": {
           "type": "string"
+        },
+        "source_id": {
+          "description": "Phase 2: 最終の source（provider / deployment）。旧 event には無い。",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "stage": {
           "type": "string"
@@ -20581,6 +20922,198 @@
         }
       ]
     },
+    "RunRoutingAudit": {
+      "description": "ワーカー run 1 件の監査（旧欄）と Phase 2 の子 trace・完全性。",
+      "properties": {
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "adapter": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "audit_incomplete": {
+          "description": "子 trace のどれかが proxy log と結べない（または決定が要求を指すのに子が無い）。旧 run は None。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "cost_usd": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "escalation": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "features": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskFeatures"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "incomplete_reasons": {
+          "description": "`audit_incomplete` の理由（整列・重複なし）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "lane": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "optimizer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RoutingTraceV1"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Phase 1 optimizer trace. Absent from events written before model routing."
+        },
+        "org_node": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "policy_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasoning_effort": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reasons": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "requests": {
+          "description": "proxy の要求単位の子 trace。Phase 2 の trace を持たない旧 run は None。",
+          "items": {
+            "$ref": "#/$defs/RequestRoutingAudit"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "retries": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "review": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ReviewResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rule_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "task_id": {
+          "$ref": "#/$defs/TaskId"
+        },
+        "wall_ms": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "task_id",
+        "run_id"
+      ],
+      "type": "object"
+    },
     "RunSummary": {
       "properties": {
         "account": {
@@ -20704,6 +21237,65 @@
         "artifacts",
         "verdicts",
         "reviewer_deferrals"
+      ],
+      "type": "object"
+    },
+    "ScoreTrace": {
+      "description": "score の内訳（ADR §4: score = wq·Q − wc·C − wl·L − wp·P）。C/L/P の未知は 1 で `unknown` に残す。",
+      "properties": {
+        "c": {
+          "format": "double",
+          "type": "number"
+        },
+        "l": {
+          "format": "double",
+          "type": "number"
+        },
+        "p": {
+          "format": "double",
+          "type": "number"
+        },
+        "q": {
+          "format": "double",
+          "type": "number"
+        },
+        "score": {
+          "format": "double",
+          "type": "number"
+        },
+        "unknown": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "wc": {
+          "format": "double",
+          "type": "number"
+        },
+        "wl": {
+          "format": "double",
+          "type": "number"
+        },
+        "wp": {
+          "format": "double",
+          "type": "number"
+        },
+        "wq": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "q",
+        "c",
+        "l",
+        "p",
+        "wq",
+        "wc",
+        "wl",
+        "wp",
+        "score"
       ],
       "type": "object"
     },
@@ -23217,13 +23809,21 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
+          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。",
           "items": {
-            "$ref": "#/$defs/RoutingAudit"
+            "$ref": "#/$defs/RunRoutingAudit"
           },
           "type": "array"
         },
         "task_id": {
           "$ref": "#/$defs/TaskId"
+        },
+        "unbound_requests": {
+          "description": "Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。",
+          "items": {
+            "$ref": "#/$defs/RequestRoutingAudit"
+          },
+          "type": "array"
         }
       },
       "required": [

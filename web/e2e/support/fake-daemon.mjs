@@ -93,6 +93,61 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// ADR 2026-10-04-multi-objective-model-routing §9/§10 Phase 1: GET /llm/routing/catalog。
+// 旧設定から導いた形を模す。品質・価格・能力・context の欠測は null（画面は「不明」と出す）。
+export const routingCatalogFixture = {
+  catalog_version: "legacy-fixture-1",
+  mode: "legacy",
+  models: [
+    {
+      id: "claude-opus",
+      revision: "legacy",
+      family: "claude",
+      capabilities: { tools: true, structured_output: null, vision: null, streaming: true, reasoning_efforts: null },
+      context_limits: { input: null, output: null, total: 200000 },
+      quality: [{ domain: "coding", index: 0.9, evaluation_version: "fixture-1", provenance: "fixture", samples: 12 }],
+      pricing: {
+        input_usd_per_million: 15,
+        output_usd_per_million: 75,
+        cached_input_usd_per_million: null,
+        as_of: "2026-10-01",
+        provenance: "fixture",
+      },
+    },
+    {
+      id: "qwen3-coder",
+      revision: "legacy",
+      family: "qwen",
+      capabilities: { tools: null, structured_output: null, vision: null, streaming: null, reasoning_efforts: null },
+      context_limits: { input: null, output: null, total: null },
+      quality: null,
+      pricing: null,
+    },
+  ],
+  deployments: [
+    {
+      id: "claude-oauth/claude-opus",
+      source_ref: "claude-oauth",
+      model_profile_id: "claude-opus",
+      upstream_model: "claude-opus-4",
+      billing: "subscription",
+      allowed_lanes: ["frontier", "standard"],
+      price_override: null,
+    },
+    {
+      id: "openai-compatible:qwen/qwen3-coder",
+      source_ref: "openai-compatible:qwen",
+      model_profile_id: "qwen3-coder",
+      upstream_model: "Qwen/Qwen3-Coder",
+      billing: "self_hosted",
+      allowed_lanes: ["cheap"],
+      price_override: null,
+    },
+  ],
+  policies: [],
+  warnings: ["llm_proxy.models.cheap: 旧形の設定です（[model_routing] へ移行できます）"],
+};
+
 // P4-10/P4-11: knowledge domain fixtures. Keep this block together for parallel merge.
 export const knowledgeFixtures = {
   "/api/v1/knowledge/tree": {
@@ -154,7 +209,7 @@ export function createFakeDaemon({
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
-  fixtures = { ...knowledgeFixtures, ...fixtures };
+  fixtures = { ...knowledgeFixtures, "/api/v1/llm/routing/catalog": routingCatalogFixture, ...fixtures };
   const requests = [];
   const clients = new Set();
   const consoleClients = new Set();

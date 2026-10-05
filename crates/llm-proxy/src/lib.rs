@@ -13,6 +13,7 @@ pub mod routing_context;
 pub mod selection;
 pub mod server;
 pub mod shadow;
+pub mod shadow_budget;
 pub mod sources;
 pub mod sources_view;
 mod sse;

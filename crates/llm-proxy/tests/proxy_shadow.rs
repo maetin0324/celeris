@@ -20,8 +20,8 @@ use llm_proxy::{ProxyState, router};
 use serde_json::{Value, json};
 use task_core::SharedRole;
 use task_core::model_router::shadow::{
-    SHADOW_ALLOW_ANY, ShadowAllowlist, ShadowKind, ShadowPolicy, ShadowRecord, ShadowStatus,
-    output_sha256,
+    SHADOW_ALLOW_ANY, ShadowAllowlist, ShadowKind, ShadowPolicy, ShadowReason, ShadowRecord,
+    ShadowStatus, output_sha256,
 };
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
@@ -364,4 +364,330 @@ async fn routing_execution_shadow_copies_request_without_delaying_primary() {
     assert_eq!(sent["messages"][0]["content"], "hi");
     assert_eq!(sent["max_tokens"], 32);
     assert_eq!(budget.settled().len(), 1);
+}
+
+/// 差し替えられる偽時計（UTC 日界を跨ぐ）。
+struct MutClock(StdMutex<time::OffsetDateTime>);
+
+impl MutClock {
+    fn new(at: time::OffsetDateTime) -> Arc<Self> {
+        Arc::new(Self(StdMutex::new(at)))
+    }
+    fn set(&self, at: time::OffsetDateTime) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = at;
+    }
+    fn now_utc(&self) -> time::OffsetDateTime {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+impl llm_proxy::reservation::Clock for MutClock {
+    fn now(&self) -> time::OffsetDateTime {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// 1 instance（proxy + 共有 DB の予約）を立てる。`store` を開き直せば再起動と同じ。
+async fn spawn_capped_proxy(
+    config: &LlmProxyConfig,
+    policy: ShadowPolicy,
+    owner: &str,
+    store: Arc<task_core::store::SqliteStore>,
+    clock: Arc<MutClock>,
+    sink: Arc<Sink>,
+    cost_usd: Option<f64>,
+) -> SocketAddr {
+    let budget = llm_proxy::shadow_budget::StoreShadowBudget::new(store, &policy, clock.clone());
+    let execution = budget.and_then(|budget| {
+        ShadowQueue::new(
+            policy,
+            owner,
+            Arc::new(RelayShadowExecutor::new(
+                reqwest::Client::new(),
+                config.sources.openai_compatible.clone(),
+            )),
+            Arc::new(budget),
+            sink.clone(),
+            clock,
+        )
+    });
+    spawn_proxy(
+        config.clone(),
+        Some(ProxyShadow {
+            decision: None,
+            execution,
+            sink,
+            cost: Some(Arc::new(move |_: &str, _: &str, _: u64| cost_usd)),
+            default_output_reserve: 1024,
+        }),
+    )
+    .await
+}
+
+fn count(records: &[ShadowRecord], status: ShadowStatus, reason: Option<ShadowReason>) -> usize {
+    records
+        .iter()
+        .filter(|r| r.status == status && r.reason == reason)
+        .count()
+}
+
+fn rows(path: &std::path::Path) -> i64 {
+    let conn = rusqlite::Connection::open(path).expect("open db");
+    conn.query_row(
+        "SELECT COUNT(*) FROM routing_shadow_reservations",
+        [],
+        |r| r.get(0),
+    )
+    .expect("count")
+}
+
+fn assert_within(
+    store: &task_core::store::SqliteStore,
+    policy: &ShadowPolicy,
+    now: time::OffsetDateTime,
+) -> task_core::model_router::shadow::ShadowDailyUsage {
+    let caps = policy.daily_caps().expect("caps");
+    let usage = store.routing_shadow_usage(now).expect("usage");
+    assert!(usage.requests <= caps.max_requests, "{usage:?}");
+    assert!(usage.tokens <= caps.max_tokens, "{usage:?}");
+    assert!(
+        usage.effective_usd <= caps.max_effective_usd + 1e-9,
+        "{usage:?}"
+    );
+    assert_eq!(usage.open_reservations, 0, "{usage:?}");
+    usage
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn routing_shadow_opt_in_caps_survive_restart_and_handoff() {
+    use time::macros::datetime;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("celeris.db");
+    let open = || Arc::new(task_core::store::SqliteStore::open(&db).expect("open temp db"));
+    // primary は ra、shadow の候補は rb（rb の chat は shadow だけが叩く）。
+    let (_primary, pa) = spawn_fake(false, false).await;
+    let (cand, ca) = spawn_fake(false, false).await;
+    let config = relay_config(&[("ra", pa), ("rb", ca)]);
+    let clock = MutClock::new(datetime!(2026-10-05 23:58:00 UTC));
+    let sink = Arc::new(Sink::default());
+    // 1 件の最悪消費: input "hi"（1 token）+ max_tokens 32 = 33 tokens、費用は 0.1 USD。
+    let capped = |requests: u64, tokens: u64, usd: f64| ShadowPolicy {
+        daily_max_requests: Some(requests),
+        daily_max_tokens: Some(tokens),
+        daily_max_effective_usd: Some(usd),
+        max_concurrency: Some(8),
+        max_queue_depth: Some(8),
+        ..execute_policy()
+    };
+
+    // A. off（既定）と allowlist 外は偽上流への送信 0・予約 0・記録 0。
+    let store = open();
+    let off = spawn_capped_proxy(
+        &config,
+        ShadowPolicy::default(),
+        "a",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    let mut other_source = capped(10, 10_000, 10.0);
+    other_source.allowlist.sources = vec!["openai-compatible:zz".to_string()];
+    let outside = spawn_capped_proxy(
+        &config,
+        other_source,
+        "a",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    for addr in [off, outside] {
+        let (source, _) = post_chat(addr, false).await;
+        assert_eq!(source.as_deref(), Some("openai-compatible:ra"));
+    }
+    assert_eq!(cand.hits().0, 0);
+    assert_eq!(rows(&db), 0);
+    assert!(sink.records().is_empty());
+
+    // B. 未知の費用は送らず dropped(unknown_cost)、予約 0。
+    let unknown = spawn_capped_proxy(
+        &config,
+        capped(10, 10_000, 10.0),
+        "a",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        None,
+    )
+    .await;
+    post_chat(unknown, false).await;
+    sink.wait_len(1).await;
+    assert_eq!(
+        count(
+            &sink.records(),
+            ShadowStatus::Dropped,
+            Some(ShadowReason::UnknownCost)
+        ),
+        1
+    );
+    assert_eq!(cand.hits().0, 0);
+    assert_eq!(rows(&db), 0);
+
+    // C. request 上限 2: 3 件目は dropped(cap_exceeded)。再起動（store と proxy を作り直す）しても
+    //    同じ UTC 日なら共有 DB の予約を数えて送らない。
+    let day1 = capped(2, 10_000, 10.0);
+    let a = spawn_capped_proxy(
+        &config,
+        day1.clone(),
+        "a",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    for n in 0..3 {
+        post_chat(a, false).await;
+        sink.wait_len(2 + n).await;
+    }
+    let recs = sink.records();
+    assert_eq!(count(&recs, ShadowStatus::Completed, None), 2);
+    assert_eq!(
+        count(
+            &recs,
+            ShadowStatus::Dropped,
+            Some(ShadowReason::CapExceeded)
+        ),
+        1
+    );
+    assert_eq!(cand.hits().0, 2);
+    drop(store);
+    let store = open();
+    clock.set(datetime!(2026-10-05 23:59:59 UTC));
+    let restarted = spawn_capped_proxy(
+        &config,
+        day1.clone(),
+        "a2",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    post_chat(restarted, false).await;
+    sink.wait_len(5).await;
+    assert_eq!(
+        count(
+            &sink.records(),
+            ShadowStatus::Dropped,
+            Some(ShadowReason::CapExceeded)
+        ),
+        2
+    );
+    assert_eq!(cand.hits().0, 2);
+    let usage = assert_within(&store, &day1, clock.now_utc());
+    assert_eq!(usage.requests, 2);
+
+    // D. UTC 日界を跨ぐと新しい日の上限で数える（+09:00 の 2026-10-06 08:59 はまだ 10-05）。
+    clock.set(datetime!(2026-10-06 08:59:00 +09:00));
+    post_chat(restarted, false).await;
+    sink.wait_len(6).await;
+    assert_eq!(cand.hits().0, 2);
+    clock.set(datetime!(2026-10-06 00:00:01 UTC));
+    post_chat(restarted, false).await;
+    sink.wait_len(7).await;
+    assert_eq!(cand.hits().0, 3);
+    assert_eq!(count(&sink.records(), ShadowStatus::Completed, None), 3);
+
+    // E. token 上限 70: 予約は最悪 33 tokens で数える。完了で実測（2 tokens）に確定するので
+    //    33 → 2+33 → 4+33 → 6+33 = 39 … と入り、和 + 33 が 70 を越える所で止まる。
+    clock.set(datetime!(2026-10-07 12:00:00 UTC));
+    let day3 = capped(100, 70, 100.0);
+    let tok = spawn_capped_proxy(
+        &config,
+        day3.clone(),
+        "a3",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    let before = sink.records().len();
+    let hits_before = cand.hits().0;
+    for n in 0..20 {
+        post_chat(tok, false).await;
+        sink.wait_len(before + n + 1).await;
+    }
+    let recs: Vec<ShadowRecord> = sink.records().split_off(before);
+    let done = count(&recs, ShadowStatus::Completed, None);
+    // 和 2k + 33 <= 70 を満たす k = 0..=18 → 19 件、20 件目で止まる。
+    assert_eq!(done, 19);
+    assert_eq!(
+        count(
+            &recs,
+            ShadowStatus::Dropped,
+            Some(ShadowReason::CapExceeded)
+        ),
+        1
+    );
+    assert_eq!(cand.hits().0 - hits_before, 19);
+    assert_within(&store, &day3, clock.now_utc());
+
+    // F. handoff: 同じ DB を別々に開いた 2 instance が同時に要求を受ける。effective 上限 0.35 USD
+    //    （1 件 0.1）なので、どう競合しても 2 instance 合わせて 3 件だけが送られる。
+    clock.set(datetime!(2026-10-08 06:00:00 UTC));
+    let day4 = capped(100, 100_000, 0.35);
+    let store_b = open();
+    let a = spawn_capped_proxy(
+        &config,
+        day4.clone(),
+        "old-daemon",
+        store.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    let b = spawn_capped_proxy(
+        &config,
+        day4.clone(),
+        "new-daemon",
+        store_b.clone(),
+        clock.clone(),
+        sink.clone(),
+        Some(0.1),
+    )
+    .await;
+    let before = sink.records().len();
+    let hits_before = cand.hits().0;
+    let sends: Vec<_> = (0..8)
+        .map(|i| tokio::spawn(post_chat(if i % 2 == 0 { a } else { b }, false)))
+        .collect();
+    for s in sends {
+        s.await.expect("join");
+    }
+    sink.wait_len(before + 8).await;
+    let recs: Vec<ShadowRecord> = sink.records().split_off(before);
+    assert_eq!(count(&recs, ShadowStatus::Completed, None), 3);
+    assert_eq!(
+        count(
+            &recs,
+            ShadowStatus::Dropped,
+            Some(ShadowReason::CapExceeded)
+        ),
+        5
+    );
+    assert_eq!(cand.hits().0 - hits_before, 3);
+    let usage = assert_within(&store_b, &day4, clock.now_utc());
+    assert_eq!(usage.requests, 3);
+    // 予約の行は送った数と同じ（拒否・対象外は行を書かない）。
+    assert_eq!(rows(&db), i64::from(cand.hits().0));
+    for r in sink.records() {
+        r.validate().expect("valid");
+    }
 }

@@ -407,3 +407,60 @@ fn decision_record_compares_candidates_without_usage() {
     );
     assert_eq!(same.detail.as_deref(), Some("same_as_primary"));
 }
+
+#[tokio::test(start_paused = true)]
+async fn routing_shadow_uses_only_capacity_left_by_primary() {
+    use crate::reservation::{CapacityLimits, ReservationTable, SlotKey};
+
+    let sink = Arc::new(RecordingSink::default());
+    let exec = Arc::new(GateExecutor::default());
+    let budget = Arc::new(AllowAllBudget::default());
+    let table = ReservationTable::new(CapacityLimits {
+        per_account: None,
+        resource_groups: HashMap::from([("gpu-b".to_string(), 1)]),
+    });
+    let queue = ShadowQueue::new(
+        policy(),
+        "instance-a",
+        exec.clone(),
+        budget.clone(),
+        sink.clone(),
+        Arc::new(FixedClock(datetime!(2026-10-05 12:00:00 UTC))),
+    )
+    .expect("execute policy is valid")
+    .with_capacity(table.clone());
+    let on_gpu_b = |id: &str| {
+        let mut j = job(id);
+        j.candidate_resource_group = Some("gpu-b".to_string());
+        j
+    };
+
+    // primary が先に gpu-b の枠を取っている: shadow は待たずに dropped、予約・送信 0。
+    let primary = table
+        .try_reserve(&[SlotKey::group("gpu-b")])
+        .expect("primary takes the slot first");
+    assert_eq!(queue.submit(on_gpu_b("p")), SubmitOutcome::Started);
+    sink.wait_len(1).await;
+    let p = sink.by_id("p");
+    assert_eq!(
+        (p.status, p.reason),
+        (ShadowStatus::Dropped, Some(ShadowReason::ConcurrencyLimit))
+    );
+    assert_eq!(exec.calls("p"), 0);
+    assert!(budget.settled().is_empty());
+    assert_eq!(queue.depth(), (0, 0));
+
+    // primary が返した残り枠は使う。shadow が持つ間は primary 1 + shadow 1 にならない（上限 1）。
+    drop(primary);
+    let gate = Arc::new(Notify::new());
+    exec.set("q", Behavior::Gate(gate.clone()));
+    let arrived = exec.arrived.notified();
+    assert_eq!(queue.submit(on_gpu_b("q")), SubmitOutcome::Started);
+    arrived.await;
+    assert_eq!(table.held(&SlotKey::group("gpu-b")), 1);
+    gate.notify_one();
+    sink.wait_len(2).await;
+    assert_eq!(sink.by_id("q").status, ShadowStatus::Completed);
+    assert_eq!(table.held(&SlotKey::group("gpu-b")), 0);
+    assert_eq!(table.peak(&SlotKey::group("gpu-b")), 1);
+}

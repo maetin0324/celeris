@@ -11,8 +11,12 @@
 //! - dropped の理由: queue 満杯（`queue_full`）、queue 内で期限切れ（`timeout`）、primary と同じ
 //!   非分離 resource group（`resource_group_shared`）、primary の予約待ち発生時の未開始分
 //!   （`primary_pressure`）、日次予約の拒否（`cap_exceeded` / `unknown_cost`）。
-//! - 日次予約は [`ShadowBudget`] で抽象化する。共有 DB（migration 0049）への接続は別の WorkUnit が
-//!   与える。ここの [`AllowAllBudget`] は試験用の偽（費用が分かれば常に許可）。
+//! - 日次予約は [`ShadowBudget`] で抽象化する。共有 DB（migration 0049）の実装は
+//!   [`crate::shadow_budget::StoreShadowBudget`]。ここの [`AllowAllBudget`] は試験用の偽（費用が
+//!   分かれば常に許可）。
+//! - 実行枠: [`ShadowQueue::with_capacity`] で primary と同じ [`ReservationTable`] を渡すと、shadow は
+//!   開始時に候補の resource group の枠を**待たずに**取る（primary が先に取った残りだけを使う）。
+//!   埋まっていれば日次予約の前に `concurrency_limit` で dropped にする（予約・送信 0）。
 
 use std::collections::VecDeque;
 use std::future::Future;
@@ -30,7 +34,7 @@ use tokio::time::Instant;
 
 use crate::config::OpenAiCompatibleConfig;
 use crate::openai::ChatCompletionRequest;
-use crate::reservation::Clock;
+use crate::reservation::{Clock, ReservationTable, SlotKey};
 use crate::sources::relay;
 
 /// openai-compatible の source ref の接頭辞（`Attempt::source_label` と同じ形）。
@@ -313,6 +317,8 @@ pub struct ShadowQueue {
     budget: Arc<dyn ShadowBudget>,
     sink: Arc<dyn ShadowSink>,
     clock: Arc<dyn Clock>,
+    /// primary と共有する実行枠の表（`None` なら枠を数えない）。
+    capacity: Option<Arc<ReservationTable>>,
     inner: StdMutex<Inner>,
 }
 
@@ -335,8 +341,18 @@ impl ShadowQueue {
             budget,
             sink,
             clock,
+            capacity: None,
             inner: StdMutex::new(Inner::default()),
         }))
+    }
+
+    /// primary と共有する実行枠の表を差し込む（作った直後、まだ共有していない `Arc` にだけ効く）。
+    pub fn with_capacity(mut self: Arc<Self>, table: Arc<ReservationTable>) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(queue) => queue.capacity = Some(table),
+            None => tracing::warn!("llm-proxy: shadow capacity ignored (queue already shared)"),
+        }
+        self
     }
 
     pub fn settings(&self) -> ShadowQueueSettings {
@@ -449,6 +465,22 @@ impl ShadowQueue {
     }
 
     async fn run(&self, job: ShadowJob) {
+        // primary が先に取った残りの枠だけを使う（待たない）。枠は実行が終わるまで持つ。
+        let _slot = match (&self.capacity, &job.candidate_resource_group) {
+            (Some(table), Some(group)) => match table.try_reserve(&[SlotKey::group(group.clone())])
+            {
+                Ok(slot) => Some(slot),
+                Err(_) => {
+                    self.drop_job(
+                        &job,
+                        ShadowReason::ConcurrencyLimit,
+                        Some(format!("resource_group_full:{group}")),
+                    );
+                    return;
+                }
+            },
+            _ => None,
+        };
         let request = ShadowReservationRequest {
             shadow_id: job.shadow_id.clone(),
             owner: self.owner.clone(),

@@ -151,7 +151,7 @@ pub use routing_enforce::{
 };
 pub use routing_shadow::{
     DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
-    DecisionShadowComparison,
+    DecisionShadowComparison, RoutingShadowListener,
 };
 pub use snapshot::SnapshotPublisher;
 
@@ -1278,6 +1278,10 @@ pub struct Dispatcher {
     /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
     routing_context_registry:
         Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
+    /// 多目的 routing Phase 4: `[model_routing.shadow]` の検証済み policy（既定 off）と、
+    /// 差し替えを受け取る listener（daemon が llm-proxy の shadow を繋ぐ）。
+    routing_shadow_policy: task_core::model_router::shadow::ShadowPolicy,
+    routing_shadow_listeners: Vec<Arc<dyn RoutingShadowListener>>,
     /// multi-objective routing Phase 2: self-host の queue / GPU load の取り込み口（揮発。保存しない）。
     self_host_loads: HashMap<ProviderId, routing_enforce::SelfHostLoad>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
@@ -1511,6 +1515,8 @@ impl Dispatcher {
             local_probe_cache: HashMap::new(),
             dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
             routing_context_registry: None,
+            routing_shadow_policy: Default::default(),
+            routing_shadow_listeners: Vec::new(),
             self_host_loads: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,

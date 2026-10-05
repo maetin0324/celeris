@@ -115,7 +115,7 @@ pub(crate) async fn start_mcp(
 /// Bearer は `[api] token_file` と同じ（`docs/guides/llm-source.md`）。
 pub(crate) fn build_llm_proxy_state(
     config: &Config,
-    dispatcher: &Dispatcher,
+    dispatcher: &mut Dispatcher,
     role: SharedRole,
     registry: Arc<dyn RoutingContextRegistry>,
 ) -> Result<Option<Arc<llm_proxy::ProxyState>>, DaemonError> {
@@ -130,7 +130,7 @@ pub(crate) fn build_llm_proxy_state(
     let codex_book = dispatcher.account_book(task_core::AccountAdapter::Codex);
     let state = llm_proxy::ProxyState::new(
         config.llm_proxy.clone(),
-        client,
+        client.clone(),
         claude_book,
         codex_book,
         token,
@@ -148,7 +148,31 @@ pub(crate) fn build_llm_proxy_state(
         None => state,
     };
     let sink: Arc<dyn ProxyEventSink> = Arc::new(TaskProxyEventSink::new(dispatcher.store()));
-    Ok(Some(state.with_routing_context(Some(registry), Some(sink))))
+    let state = state.with_routing_context(Some(registry), Some(sink));
+    // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。既定（legacy・execute = false）は差し込まない。
+    let wiring = super::routing_shadow::install_proxy_shadow(
+        dispatcher,
+        super::routing_shadow::ShadowDeps {
+            db_path: config.db.path.clone(),
+            busy_timeout: config.db.busy_timeout(),
+            task_store: dispatcher.store(),
+            executor: Arc::new(llm_proxy::shadow::RelayShadowExecutor::new(
+                client,
+                config.llm_proxy.sources.openai_compatible.clone(),
+            )),
+            clock: Arc::new(llm_proxy::reservation::SystemClock),
+            owner: format!("celeris-pid-{}", std::process::id()),
+            cost: config
+                .routing_catalog_state
+                .as_ref()
+                .map(|catalog| super::routing_shadow::catalog_cost(Arc::clone(catalog))),
+        },
+    )
+    .map_err(ApiError::Startup)?;
+    Ok(Some(match wiring.shadow {
+        Some(shadow) => state.with_shadow(Some(shadow)),
+        None => state,
+    }))
 }
 
 /// proxy 要求の task event 追記。DB 操作は blocking pool へ送り、HTTP 応答を待たせない。
@@ -300,7 +324,7 @@ mod routing_tests {
         dispatcher.set_routing_context_registry(Arc::clone(&registry));
         assert_eq!(Arc::strong_count(&registry), 2);
         let role = SharedRole::new(task_core::InstanceRole::Active);
-        let state = build_llm_proxy_state(&config, &dispatcher, role, Arc::clone(&registry))
+        let state = build_llm_proxy_state(&config, &mut dispatcher, role, Arc::clone(&registry))
             .unwrap()
             .expect("proxy enabled");
         // test・dispatcher・proxy の 3 者が同じ Arc を持つ（with_routing_context が効いた）。

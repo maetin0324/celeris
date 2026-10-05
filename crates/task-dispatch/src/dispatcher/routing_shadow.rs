@@ -15,7 +15,7 @@ use crate::accounts::AccountCandidate;
 use serde::{Deserialize, Serialize};
 use task_core::model_router::{
     policy::RoutingMode,
-    shadow::{ShadowKind, ShadowRecord, ShadowStatus},
+    shadow::{ShadowKind, ShadowPolicy, ShadowRecord, ShadowStatus},
 };
 use task_core::model_routing::{ProviderCandidateOutcome, ProviderSelection};
 
@@ -79,9 +79,34 @@ impl DecisionShadowRound {
     }
 }
 
+/// `[model_routing.shadow]` の差し替えを受け取る側（daemon が llm-proxy の shadow queue を繋ぐ）。
+/// `mode` は同じ時点の `DispatchRoutingSettings.mode`。呼び出し側を待たせない実装にする。
+pub trait RoutingShadowListener: Send + Sync {
+    fn reload(&self, mode: RoutingMode, policy: &ShadowPolicy);
+}
+
 impl Dispatcher {
     pub(super) fn shadow_active(&self) -> bool {
         self.dispatch_routing.mode == RoutingMode::Shadow
+    }
+
+    /// 検証済みの shadow policy を差し替え、listener へ同じ値を渡す。`set_dispatch_routing` の後に呼ぶ
+    /// （listener は新しい mode と policy の組を 1 回で受け取る）。
+    pub fn set_routing_shadow(&mut self, policy: ShadowPolicy) {
+        self.routing_shadow_policy = policy;
+        for listener in &self.routing_shadow_listeners {
+            listener.reload(self.dispatch_routing.mode, &self.routing_shadow_policy);
+        }
+    }
+
+    pub fn routing_shadow_policy(&self) -> &ShadowPolicy {
+        &self.routing_shadow_policy
+    }
+
+    /// listener を足す。足した時点の mode と policy をすぐ 1 回渡す。
+    pub fn add_routing_shadow_listener(&mut self, listener: Arc<dyn RoutingShadowListener>) {
+        listener.reload(self.dispatch_routing.mode, &self.routing_shadow_policy);
+        self.routing_shadow_listeners.push(listener);
     }
 
     /// pool のアカウントを読むだけで選ぶ（`pick_account` と同じ規則。scan cache には書かない）。

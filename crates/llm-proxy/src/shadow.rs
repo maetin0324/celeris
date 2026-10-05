@@ -307,14 +307,19 @@ struct Inner {
     inflight: usize,
 }
 
-/// 実行 shadow の bounded queue。
-pub struct ShadowQueue {
+/// queue の差し替えられる設定（reload で 1 回の書き込みで丸ごと入れ替える）。
+struct QueueConfig {
     policy: ShadowPolicy,
     settings: ShadowQueueSettings,
+    budget: Arc<dyn ShadowBudget>,
+}
+
+/// 実行 shadow の bounded queue。
+pub struct ShadowQueue {
+    config: std::sync::RwLock<Arc<QueueConfig>>,
     /// 予約の持ち主（instance id。監査用）。
     owner: String,
     executor: Arc<dyn ShadowExecutor>,
-    budget: Arc<dyn ShadowBudget>,
     sink: Arc<dyn ShadowSink>,
     clock: Arc<dyn Clock>,
     /// primary と共有する実行枠の表（`None` なら枠を数えない）。
@@ -334,11 +339,13 @@ impl ShadowQueue {
     ) -> Option<Arc<Self>> {
         let settings = ShadowQueueSettings::from_policy(&policy)?;
         Some(Arc::new(Self {
-            policy,
-            settings,
+            config: std::sync::RwLock::new(Arc::new(QueueConfig {
+                policy,
+                settings,
+                budget,
+            })),
             owner: owner.into(),
             executor,
-            budget,
             sink,
             clock,
             capacity: None,
@@ -356,7 +363,43 @@ impl ShadowQueue {
     }
 
     pub fn settings(&self) -> ShadowQueueSettings {
-        self.settings
+        self.config().settings
+    }
+
+    /// いま効いている policy。
+    pub fn policy(&self) -> ShadowPolicy {
+        self.config().policy.clone()
+    }
+
+    fn config(&self) -> Arc<QueueConfig> {
+        Arc::clone(&self.config.read().unwrap_or_else(|e| e.into_inner()))
+    }
+
+    /// reload: policy・上限・日次予約先を 1 回で差し替える（読む側は常に新旧どちらか一方の組を見る）。
+    /// 実行中の分は始めた時の予約先で確定する。`policy` が実行を許さない（off・不完全）なら上限は
+    /// 旧値のまま、以後の `submit` は `NotAdmitted(Off)`、queue で待っている未開始分は `dropped/off`。
+    /// `budget` が `None` なら旧い予約先を使い続ける。
+    pub fn reconfigure(&self, policy: ShadowPolicy, budget: Option<Arc<dyn ShadowBudget>>) {
+        let executable = ShadowQueueSettings::from_policy(&policy);
+        {
+            let mut slot = self.config.write().unwrap_or_else(|e| e.into_inner());
+            let next = QueueConfig {
+                settings: executable.unwrap_or(slot.settings),
+                budget: budget.unwrap_or_else(|| Arc::clone(&slot.budget)),
+                policy,
+            };
+            *slot = Arc::new(next);
+        }
+        if executable.is_none() {
+            let drained: Vec<Queued> = self.lock().queued.drain(..).collect();
+            for q in &drained {
+                self.drop_job(
+                    &q.job,
+                    ShadowReason::Off,
+                    Some("reconfigured_off".to_string()),
+                );
+            }
+        }
     }
 
     /// (queue で待つ数, 実行中の数)。
@@ -372,7 +415,8 @@ impl ShadowQueue {
     /// 要求のコピーを受け取る。同期で返り、実行は spawn する（primary はこれを待たない）。
     /// tokio の runtime の中から呼ぶ。
     pub fn submit(self: &Arc<Self>, job: ShadowJob) -> SubmitOutcome {
-        if let Err(reason) = self.policy.admit(&job.target, &job.primary_decision_id) {
+        let config = self.config();
+        if let Err(reason) = config.policy.admit(&job.target, &job.primary_decision_id) {
             return SubmitOutcome::NotAdmitted(reason);
         }
         if job.shares_resource_group() {
@@ -380,13 +424,13 @@ impl ShadowQueue {
             return SubmitOutcome::Dropped(ShadowReason::ResourceGroupShared);
         }
         let mut inner = self.lock();
-        if inner.queued.is_empty() && inner.inflight < self.settings.max_concurrency {
+        if inner.queued.is_empty() && inner.inflight < config.settings.max_concurrency {
             inner.inflight += 1;
             drop(inner);
             self.spawn_run(job);
             return SubmitOutcome::Started;
         }
-        if inner.queued.len() < self.settings.max_queue_depth {
+        if inner.queued.len() < config.settings.max_queue_depth {
             inner.queued.push_back(Queued {
                 job,
                 enqueued: Instant::now(),
@@ -437,14 +481,15 @@ impl ShadowQueue {
     fn finish_one(self: &Arc<Self>) {
         let mut expired = Vec::new();
         let mut start = Vec::new();
+        let settings = self.config().settings;
         {
             let mut inner = self.lock();
             inner.inflight = inner.inflight.saturating_sub(1);
-            while inner.inflight < self.settings.max_concurrency {
+            while inner.inflight < settings.max_concurrency {
                 let Some(q) = inner.queued.pop_front() else {
                     break;
                 };
-                if q.enqueued.elapsed() >= self.settings.timeout {
+                if q.enqueued.elapsed() >= settings.timeout {
                     expired.push(q.job);
                     continue;
                 }
@@ -465,6 +510,9 @@ impl ShadowQueue {
     }
 
     async fn run(&self, job: ShadowJob) {
+        // 始めた時点の設定で予約・確定する（途中の reload で予約先が変わっても同じ先で確定する）。
+        let config = self.config();
+        let budget = Arc::clone(&config.budget);
         // primary が先に取った残りの枠だけを使う（待たない）。枠は実行が終わるまで持つ。
         let _slot = match (&self.capacity, &job.candidate_resource_group) {
             (Some(table), Some(group)) => match table.try_reserve(&[SlotKey::group(group.clone())])
@@ -487,7 +535,7 @@ impl ShadowQueue {
             worst_tokens: job.worst_tokens,
             worst_effective_usd: job.worst_effective_usd,
         };
-        let reservation_id = match self.budget.reserve(&request, self.clock.now()) {
+        let reservation_id = match budget.reserve(&request, self.clock.now()) {
             ShadowReservation::Reserved { reservation_id, .. } => reservation_id,
             ShadowReservation::Denied(reason) => {
                 self.drop_job(&job, reason, None);
@@ -495,7 +543,8 @@ impl ShadowQueue {
             }
         };
         let started = Instant::now();
-        let result = tokio::time::timeout(self.settings.timeout, self.executor.execute(&job)).await;
+        let result =
+            tokio::time::timeout(config.settings.timeout, self.executor.execute(&job)).await;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut record = match result {
             Ok(Ok(output)) => {
@@ -507,7 +556,7 @@ impl ShadowQueue {
                     .effective_usd
                     .or(job.worst_effective_usd)
                     .unwrap_or(0.0);
-                self.budget.settle(
+                budget.settle(
                     &reservation_id,
                     ShadowSettlement::Completed {
                         tokens,
@@ -522,7 +571,7 @@ impl ShadowQueue {
                 r
             }
             Ok(Err(detail)) => {
-                self.budget.settle(
+                budget.settle(
                     &reservation_id,
                     ShadowSettlement::Failed {
                         tokens: None,
@@ -534,8 +583,7 @@ impl ShadowQueue {
                 r
             }
             Err(_) => {
-                self.budget
-                    .settle(&reservation_id, ShadowSettlement::TimedOut);
+                budget.settle(&reservation_id, ShadowSettlement::TimedOut);
                 job.record(ShadowStatus::Failed, Some(ShadowReason::Timeout))
             }
         };

@@ -644,14 +644,17 @@ mod tests {
         OffsetDateTime::UNIX_EPOCH
     }
 
-    #[test]
-    fn chat_attach_stream_limit_hash_modes_and_magic() {
-        let limits = ChatAttachmentLimits {
+    fn small_limits() -> ChatAttachmentLimits {
+        ChatAttachmentLimits {
             max_file_bytes: 8,
             max_storage_bytes: 16,
             ..ChatAttachmentLimits::default()
-        };
-        let (temp, store) = fixture(limits);
+        }
+    }
+
+    #[test]
+    fn chat_attach_stores_blob_with_hash_and_modes() {
+        let (temp, store) = fixture(small_limits());
         let bytes = b"%PDF-123";
         let row = store
             .upload(
@@ -662,8 +665,7 @@ mod tests {
                 Cursor::new(bytes),
                 now(),
             )
-            .expect("exact limit");
-        assert_eq!(row.size_bytes, 8);
+            .expect("upload");
         assert_eq!(row.media_type, "application/pdf");
         assert_eq!(row.sha256, format!("{:x}", Sha256::digest(bytes)));
         assert_eq!(row.relative_path, format!("attachments/{}/blob", row.id));
@@ -695,6 +697,22 @@ mod tests {
             .read_to_end(&mut copy)
             .expect("read");
         assert_eq!(copy, bytes);
+    }
+
+    #[test]
+    fn chat_attach_file_limit_exact_and_over() {
+        let (temp, store) = fixture(small_limits());
+        let row = store
+            .upload(
+                "thread",
+                "exact",
+                "x",
+                None,
+                Cursor::new(b"12345678"),
+                now(),
+            )
+            .expect("exact limit");
+        assert_eq!(row.size_bytes, 8);
         assert!(matches!(
             store.upload(
                 "thread",
@@ -723,6 +741,31 @@ mod tests {
                 .count(),
             0
         );
+    }
+
+    #[test]
+    fn chat_attach_unknown_magic_is_octet_stream() {
+        let (_temp, store) = fixture(small_limits());
+        let row = store
+            .upload(
+                "thread",
+                "plain",
+                "a.png",
+                None,
+                Cursor::new(b"hello"),
+                now(),
+            )
+            .expect("upload");
+        assert_eq!(row.media_type, "application/octet-stream");
+    }
+
+    #[test]
+    fn chat_attach_read_verified_rejects_tampered_blob() {
+        let (temp, store) = fixture(small_limits());
+        let row = store
+            .upload("thread", "key", "x", None, Cursor::new(b"abc"), now())
+            .expect("upload");
+        let path = temp.path().join("chat").join(&row.relative_path);
         fs::write(&path, b"tampered!").expect("tamper");
         assert!(matches!(
             store.read_verified(&row.id),
@@ -731,14 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn chat_attach_idempotency_refs_gc_and_message_limits() {
-        let limits = ChatAttachmentLimits {
-            max_file_bytes: 8,
-            max_message_bytes: 8,
-            max_files_per_message: 1,
-            ..ChatAttachmentLimits::default()
-        };
-        let (_temp, store) = fixture(limits);
+    fn chat_attach_idempotent_client_upload_id() {
+        let (_temp, store) = fixture(small_limits());
         let first = store
             .upload("thread", "key", "a", None, Cursor::new(b"abc"), now())
             .expect("first");
@@ -750,18 +787,53 @@ mod tests {
             store.upload("thread", "key", "b", None, Cursor::new(b"abc"), now()),
             Err(AttachmentError::Conflict)
         ));
+        assert!(matches!(
+            store.upload("thread", "key", "a", None, Cursor::new(b"abd"), now()),
+            Err(AttachmentError::Conflict)
+        ));
         let second = store
             .upload("thread", "other", "a", None, Cursor::new(b"abc"), now())
             .expect("same hash separate id");
         assert_ne!(first.id, second.id);
+    }
+
+    #[test]
+    fn chat_attach_message_count_and_thread_checks() {
+        let limits = ChatAttachmentLimits {
+            max_file_bytes: 8,
+            max_message_bytes: 8,
+            max_files_per_message: 1,
+            ..ChatAttachmentLimits::default()
+        };
+        let (_temp, store) = fixture(limits);
+        let first = store
+            .upload("thread", "a", "a", None, Cursor::new(b"abc"), now())
+            .expect("first");
+        let second = store
+            .upload("thread", "b", "b", None, Cursor::new(b"abc"), now())
+            .expect("second");
+        store
+            .validate_message("thread", std::slice::from_ref(&first.id))
+            .expect("one file");
         assert!(matches!(
-            store.validate_message("thread", &[first.id.clone(), second.id.clone()]),
+            store.validate_message("thread", &[first.id.clone(), second.id]),
             Err(AttachmentError::Limit)
         ));
         assert!(matches!(
-            store.validate_message("another", &[first.id.clone()]),
+            store.validate_message("another", std::slice::from_ref(&first.id)),
             Err(AttachmentError::Conflict)
         ));
+    }
+
+    #[test]
+    fn chat_attach_refs_block_delete_and_gc_by_injected_clock() {
+        let (_temp, store) = fixture(small_limits());
+        let first = store
+            .upload("thread", "key", "a", None, Cursor::new(b"abc"), now())
+            .expect("first");
+        let orphan = store
+            .upload("thread", "other", "a", None, Cursor::new(b"abc"), now())
+            .expect("orphan");
         store
             .add_ref(&first.id, "task", "task-1", now())
             .expect("pin");
@@ -769,9 +841,10 @@ mod tests {
             store.delete_unreferenced(&first.id),
             Err(AttachmentError::Conflict)
         ));
+        assert_eq!(store.gc(now() + Duration::hours(23)).expect("early gc"), 0);
         assert_eq!(store.gc(now() + Duration::hours(25)).expect("orphan gc"), 1);
         assert!(matches!(
-            store.get(&second.id),
+            store.get(&orphan.id),
             Err(AttachmentError::NotFound)
         ));
         store

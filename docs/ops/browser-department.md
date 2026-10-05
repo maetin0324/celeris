@@ -16,14 +16,14 @@ D1・D5 に従う。このタスクでは本番の DB・daemon を変更しな�
 
 ## 1. 投入（POST）
 
-投入する body は [`browser-execution-section.org.json`](browser-execution-section.org.json)
+投入する body は [`browser-department-org.json`](browser-department-org.json)
 （`OrgCreateBody` の形。`config/org.example.toml` の `[[org]] id = "browser-execution"` と同じ内容）。
 
 ```bash
 curl --fail-with-body -X POST \
   -H "Authorization: Bearer $CELERIS_API_TOKEN" \
   -H "Content-Type: application/json" \
-  --data-binary @docs/ops/browser-execution-section.org.json \
+  --data-binary @docs/ops/browser-department-org.json \
   "$CELERIS_API/api/v1/org"
 ```
 

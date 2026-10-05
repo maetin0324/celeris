@@ -489,3 +489,103 @@ fn browser_allowed_domains_seed_grants_validate() {
         assert_eq!(grant.allowed_domains, expected);
     }
 }
+
+fn requirements(origins: &[&str]) -> crate::TaskRequirements {
+    crate::TaskRequirements {
+        browser: Some(crate::BrowserRequirements {
+            allowed_domains: origins.iter().map(|o| o.to_string()).collect(),
+        }),
+    }
+}
+
+/// D2.0: 実効許可は task の requirements ∩ 保存 policy ∩ grant。wildcard の grant から task の
+/// 単一 origin だけが残り、grant 全体には広がらない。
+#[test]
+fn browser_allowed_domains_intersection_is_task_and_grant() {
+    let grant = BrowserCapability {
+        allowed_domains: vec![
+            "https://*.example.com".into(),
+            "http://127.0.0.1:3000".into(),
+        ],
+        ..Default::default()
+    };
+    let mut stored = task(&[BrowserAction::Navigate]);
+    stored.network_domains = vec!["https://*.example.com".into()];
+    let policy = task_run_policy(
+        &requirements(&["https://billing.example.com", "https://other.test"]),
+        Some(&stored),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(policy.network_domains, ["https://billing.example.com"]);
+    let effective = derive(&grant, &policy).unwrap();
+    assert_eq!(effective.allowed_domains, ["https://billing.example.com"]);
+    // Narrowing twice (dispatch, then worker) is idempotent and binds the same hash.
+    let again = task_run_policy(
+        &requirements(&["https://billing.example.com", "https://other.test"]),
+        Some(&policy),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(derive(&grant, &again).unwrap().hash(), effective.hash());
+    // Tasks created before the requirement keep their stored policy as is.
+    assert_eq!(
+        task_run_policy(&crate::TaskRequirements::default(), Some(&stored)).unwrap(),
+        Some(stored.clone())
+    );
+    assert_eq!(task_run_policy(&requirements(&[]), None).unwrap(), None);
+}
+
+/// D2.0: scheme・port が違う origin は交差に入らず、交差が空なら固定コードで拒否する。
+#[test]
+fn browser_allowed_domains_scheme_and_port_mismatch_leave_empty_intersection() {
+    let mut stored = task(&[BrowserAction::Navigate]);
+    stored.network_domains = vec![
+        "https://*.example.com".into(),
+        "http://127.0.0.1:3000".into(),
+    ];
+    for outside in [
+        "https://127.0.0.1:3000",
+        "http://127.0.0.1:3001",
+        "https://billing.example.com:8443",
+        "https://example.com",
+        "https://billing.example.net",
+    ] {
+        assert_eq!(
+            task_run_policy(&requirements(&[outside]), Some(&stored)),
+            Err(BrowserPolicyError::EmptyDomains),
+            "{outside}"
+        );
+    }
+    // Plain HTTP outside loopback is not an origin at all: also refused.
+    assert_eq!(
+        task_run_policy(
+            &requirements(&["http://billing.example.com"]),
+            Some(&stored)
+        ),
+        Err(BrowserPolicyError::InvalidDomain)
+    );
+    assert_eq!(
+        task_run_policy(&requirements(&[]), Some(&stored)),
+        Err(BrowserPolicyError::EmptyDomains)
+    );
+    // Within the task but outside the grant: the effective set is empty, so no run.
+    let grant = BrowserCapability {
+        allowed_domains: vec!["https://app.example.com".into()],
+        ..Default::default()
+    };
+    let policy = task_run_policy(
+        &requirements(&["https://billing.example.com"]),
+        Some(&stored),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        derive(&grant, &policy).unwrap_err(),
+        BrowserPolicyError::EmptyDomains
+    );
+    assert_eq!(
+        BrowserPolicyError::EmptyDomains.code(),
+        "empty_browser_domains"
+    );
+}

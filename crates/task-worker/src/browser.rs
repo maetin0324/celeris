@@ -1034,8 +1034,9 @@ async fn run_with_executable_attempt(
         })?;
     capability.validate().map_err(AdapterError::Other)?;
     // Refuse before starting the substrate or the harness: no fail-open policy file.
-    let policy = crate::browser_policy::prepare(
+    let policy = crate::browser_policy::prepare_for_task(
         capability,
+        &req.task,
         req.context.browser_policy.as_ref(),
         SUPPORTED_VERSION,
     )
@@ -1230,12 +1231,7 @@ async fn run_with_executable_attempt(
     )
     .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let egress_policy = task_core::browser_isolation::EgressPolicy {
-        allow: policy
-            .allowed_domains()
-            .iter()
-            .filter_map(|d| crate::browser_policy::origin_host_port(d))
-            .map(|(host, port)| format!("{host}:{port}"))
-            .collect(),
+        allow: policy.egress_allow(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,
     };

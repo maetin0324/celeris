@@ -3136,6 +3136,9 @@ mod stage_reopen;
 /// ADR-0130 D2: 実装 run・WU の actual write-set の記録（`src/dispatcher/tests/write_set_record.rs`）。
 mod write_set_record;
 
+/// ADR 2026-10-05-browser-department-web-live-view D2.0: run 時の task ∩ grant と grant 縮小の即時適用
+/// （`src/dispatcher/tests/browser_allowed_domains.rs`）。
+mod browser_allowed_domains;
 mod browser_fallback;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;

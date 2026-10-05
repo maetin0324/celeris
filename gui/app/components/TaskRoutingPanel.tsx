@@ -1,4 +1,9 @@
-import type { RoutingShadowAudit, TaskRoutingView } from "~/celeris/types";
+import type {
+  EstimatorShadowAudit,
+  EstimatorShadowSummary,
+  RoutingShadowAudit,
+  TaskRoutingView,
+} from "~/celeris/types";
 import { RequestAudit } from "~/components/RoutingSourceState";
 import { Mono } from "~/components/ui/misc";
 import { shortId } from "~/lib/format";
@@ -34,6 +39,14 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
   if (!view || (!run && !dropped)) return null;
   const escalations = escalationHistory(view);
   const laneNote = run ? executedLaneNote(run) : null;
+  const shadows = run ? (run.routing_shadow ?? []).filter((s) => s.kind !== "estimator") : [];
+  const estimatorRows = run
+    ? (run.routing_shadow ?? [])
+        .filter((s) => s.kind === "estimator")
+        .map((s) => ({ shadow_id: s.shadow_id, estimator: s.estimator }))
+        .filter((row): row is { shadow_id: string; estimator: EstimatorShadowAudit } => row.estimator != null)
+    : [];
+  const estimatorSummary = view.estimator_shadow ?? null;
   const dtClass = "text-sm font-medium text-fg-subtle lg:text-xs";
   const ddClass = "min-w-0 break-words text-sm text-fg";
   const ddBreakAll = "min-w-0 break-all text-sm text-fg";
@@ -114,15 +127,28 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
             </dd>
           </dl>
         )}
-        {run && (run.routing_shadow ?? []).length > 0 && (
+        {run && shadows.length > 0 && (
           <section
             aria-label="shadow routing"
             data-testid="task-routing-shadow"
             className="space-y-2 border-t border-border pt-3"
           >
             <h3 className="font-medium text-fg">shadow（primary とは別の評価）</h3>
-            {(run.routing_shadow ?? []).map((shadow) => (
+            {shadows.map((shadow) => (
               <ShadowAudit key={shadow.shadow_id} shadow={shadow} />
+            ))}
+          </section>
+        )}
+        {run && (estimatorSummary !== null || estimatorRows.length > 0) && (
+          <section
+            aria-label="estimator shadow"
+            data-testid="task-routing-estimator-shadow"
+            className="space-y-2 border-t border-border pt-3"
+          >
+            <h3 className="font-medium text-fg">estimator shadow（heuristic primary との比較・本番には効かない）</h3>
+            {estimatorSummary && <EstimatorShadowSummaryRow summary={estimatorSummary} />}
+            {estimatorRows.map((row) => (
+              <EstimatorAudit key={row.shadow_id} estimator={row.estimator} />
             ))}
           </section>
         )}
@@ -233,5 +259,82 @@ function ShadowAudit({ shadow }: { shadow: RoutingShadowAudit }) {
         )}
       </dd>
     </dl>
+  );
+}
+
+const estimatorOutcomeLabel: Record<EstimatorShadowAudit["outcome"], string> = {
+  completed: "完了",
+  failed: "失敗",
+  timeout: "timeout",
+  dropped: "見送り",
+  prompt_required: "prompt 要",
+};
+
+const estimatorComparisonLabel: Record<string, string> = {
+  same: "同じ",
+  differs: "異なる",
+  no_candidate: "候補なし",
+};
+
+function estimatorDepsLabel(deps: EstimatorShadowAudit["dependencies"]): string {
+  const parts = [
+    deps.needs_prompt ? "prompt 要" : null,
+    deps.needs_network ? "network 要" : null,
+    deps.external_embeddings ? "外部 embeddings" : null,
+  ].filter((p): p is string => p != null);
+  const base = parts.length > 0 ? parts.join(" · ") : "不明";
+  return deps.not_allowed ? `${base}（daemon の許可外）` : base;
+}
+
+/**
+ * Phase 5: estimator shadow の 1 件（`RoutingShadowAudit.estimator`）。primary の outcome・attempts・
+ * 上限消費とは別欄にだけ表示し、本番切替の操作は出さない。
+ */
+function EstimatorAudit({ estimator }: { estimator: EstimatorShadowAudit }) {
+  const deps = estimator.dependencies;
+  return (
+    <dl
+      className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded border border-border p-2 text-sm"
+      data-testid="task-routing-estimator-shadow-row"
+    >
+      <dt>estimator</dt>
+      <dd data-testid="task-routing-estimator-id" className="break-all">
+        {[estimator.estimator_id, estimator.estimator_version].filter(Boolean).join("/") || "不明"}
+      </dd>
+      <dt>状態</dt>
+      <dd>{estimatorOutcomeLabel[estimator.outcome] ?? "不明"}</dd>
+      <dt>heuristic 首位との差</dt>
+      <dd data-testid="task-routing-estimator-vs-heuristic">
+        {estimator.vs_heuristic == null ? "不明" : (estimatorComparisonLabel[estimator.vs_heuristic] ?? "不明")}
+      </dd>
+      <dt>heuristic primary との差</dt>
+      <dd data-testid="task-routing-estimator-vs-primary">
+        {estimator.vs_primary == null ? "不明" : (estimatorComparisonLabel[estimator.vs_primary] ?? "不明")}
+      </dd>
+      <dt>理由</dt>
+      <dd data-testid="task-routing-estimator-reason">
+        {[estimator.reason, estimator.unavailable_reason]
+          .filter((v): v is string => v != null && v !== "")
+          .join(" · ") || "不明"}
+      </dd>
+      <dt>overhead</dt>
+      <dd>{estimator.overhead_ms != null ? formatWallMs(estimator.overhead_ms) : "不明"}</dd>
+      <dt>依存</dt>
+      <dd data-testid="task-routing-estimator-deps">{estimatorDepsLabel(deps)}</dd>
+    </dl>
+  );
+}
+
+/** Phase 5: run を跨いだ estimator shadow の要約（`TaskRoutingView.estimator_shadow`）。 */
+function EstimatorShadowSummaryRow({ summary }: { summary: EstimatorShadowSummary }) {
+  return (
+    <p className="text-sm text-fg" data-testid="task-routing-estimator-summary">
+      対象 {summary.targets} 件 · 完了 {summary.completed} 件（coverage {Math.round(summary.coverage * 100)}%） · 失敗{" "}
+      {summary.failed} · timeout {summary.timeout} · 見送り {summary.dropped} · prompt 要 {summary.prompt_required} ·
+      heuristic 首位と異なる {summary.differs_from_heuristic} 件 · heuristic primary と異なる{" "}
+      {summary.differs_from_primary} 件
+      {summary.mean_overhead_ms != null && <> · 平均 overhead {formatWallMs(summary.mean_overhead_ms)}</>}
+      {summary.estimators.length > 0 && <> · estimator {summary.estimators.join("、")}</>}
+    </p>
   );
 }

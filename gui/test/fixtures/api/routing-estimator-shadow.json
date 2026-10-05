@@ -1,0 +1,87 @@
+{
+  "task_id": "01ESTSHADTASK000000000001",
+  "estimator_shadow": {
+    "targets": 4,
+    "completed": 1,
+    "failed": 1,
+    "timeout": 1,
+    "dropped": 1,
+    "prompt_required": 1,
+    "coverage": 0.25,
+    "differs_from_heuristic": 1,
+    "differs_from_primary": 1,
+    "mean_overhead_ms": 42,
+    "estimators": ["routellm/1"]
+  },
+  "runs": [
+    {
+      "task_id": "01ESTSHADTASK000000000001",
+      "run_id": "01ESTSHADRUN000000000001",
+      "lane": "standard",
+      "provider": "primary-provider",
+      "model": "primary-model",
+      "review": { "passed": true },
+      "routing_shadow": [
+        {
+          "shadow_id": "est-completed",
+          "primary_decision_id": "primary-decision",
+          "kind": "estimator",
+          "status": "completed",
+          "estimator": {
+            "estimator_id": "routellm",
+            "estimator_version": "1",
+            "outcome": "completed",
+            "vs_heuristic": "differs",
+            "vs_primary": "differs",
+            "overhead_ms": 42,
+            "dependencies": { "needs_prompt": false }
+          }
+        },
+        {
+          "shadow_id": "est-timeout",
+          "primary_decision_id": "primary-decision",
+          "kind": "estimator",
+          "status": "failed",
+          "reason": "timeout",
+          "estimator": {
+            "estimator_id": "routellm",
+            "estimator_version": "1",
+            "outcome": "timeout",
+            "reason": "timeout",
+            "unavailable_reason": "timeout",
+            "dependencies": {}
+          }
+        },
+        {
+          "shadow_id": "est-dropped",
+          "primary_decision_id": "primary-decision",
+          "kind": "estimator",
+          "status": "dropped",
+          "reason": "cap_exceeded",
+          "estimator": {
+            "estimator_id": "routellm",
+            "estimator_version": "1",
+            "outcome": "dropped",
+            "reason": "cap_exceeded",
+            "unavailable_reason": "cap_exceeded",
+            "dependencies": {}
+          }
+        },
+        {
+          "shadow_id": "est-prompt",
+          "primary_decision_id": "primary-decision",
+          "kind": "estimator",
+          "status": "dropped",
+          "reason": "privacy",
+          "estimator": {
+            "estimator_id": "routellm",
+            "estimator_version": "1",
+            "outcome": "prompt_required",
+            "reason": "privacy",
+            "dependencies": { "needs_prompt": true, "not_allowed": true }
+          }
+        }
+      ]
+    }
+  ]
+}

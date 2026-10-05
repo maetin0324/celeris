@@ -1,0 +1,312 @@
+//! D2 chat REST contract against a temporary SQLite database and a claimed fake run.
+mod common;
+
+use common::*;
+use serde_json::{Value, json};
+use task_core::chat::ChatRunState;
+use time::OffsetDateTime;
+
+const BASE: &str = "/api/v1/chat/threads";
+
+fn thread_body(key: &str, title: &str) -> Value {
+    json!({"title":title,"project_id":null,"client_thread_id":key})
+}
+
+async fn create(app: &axum::Router, key: &str, title: &str) -> Value {
+    let response = send(app, post_admin(BASE, &thread_body(key, title))).await;
+    assert_eq!(response.status.as_u16(), 201, "{}", response.text());
+    response.json()["thread"].clone()
+}
+
+fn message_body(key: &str, text: &str) -> Value {
+    json!({"client_message_id":key,"text":text,"attachment_ids":[],"reply_to_id":null,"mode":"queue","resume_queue":false})
+}
+
+#[tokio::test]
+async fn chat_api_create_list_search_and_patch() {
+    let env = admin_env();
+    let app = env.router();
+    let first = create(&app, "key-one", "Alpha moon").await;
+    let id = first["id"].as_str().expect("id");
+    let again = send(
+        &app,
+        post_admin(BASE, &thread_body("key-one", "Alpha moon")),
+    )
+    .await;
+    assert_eq!(again.status.as_u16(), 200);
+    assert_eq!(again.json()["thread"]["id"], id);
+    assert_problem(
+        &send(&app, post_admin(BASE, &thread_body("key-one", "other"))).await,
+        409,
+        "chat_conflict",
+    );
+    create(&app, "key-two", "Beta sun").await;
+    let page = send(&app, get_admin(&format!("{BASE}?limit=1")))
+        .await
+        .json();
+    assert_eq!(page["items"].as_array().map(Vec::len), Some(1));
+    let cursor = page["next_cursor"].as_str().expect("cursor");
+    let next = send(&app, get_admin(&format!("{BASE}?limit=1&before={cursor}")))
+        .await
+        .json();
+    assert_eq!(next["items"].as_array().map(Vec::len), Some(1));
+    let found = send(&app, get_admin(&format!("{BASE}?q=moon")))
+        .await
+        .json();
+    assert_eq!(found["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(found["items"][0]["id"], id);
+    let detail = send(&app, get_admin(&format!("{BASE}/{id}"))).await.json();
+    assert_eq!(detail["thread"]["id"], id);
+    assert_eq!(detail["last_event_id"], "1");
+    let changed = send(
+        &app,
+        patch_admin(
+            &format!("{BASE}/{id}"),
+            &json!({"title":"Renamed","expected_revision":1}),
+        ),
+    )
+    .await;
+    assert_eq!(changed.status.as_u16(), 200, "{}", changed.text());
+    assert_eq!(changed.json()["thread"]["title"], "Renamed");
+    assert_problem(
+        &send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{id}"),
+                &json!({"status":"archived","expected_revision":1}),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+    let rev = changed.json()["thread"]["revision"]
+        .as_u64()
+        .expect("revision");
+    let archived = send(
+        &app,
+        patch_admin(
+            &format!("{BASE}/{id}"),
+            &json!({"status":"archived","expected_revision":rev}),
+        ),
+    )
+    .await;
+    assert_eq!(archived.status.as_u16(), 200);
+    assert_eq!(archived.json()["thread"]["status"], "archived");
+}
+
+#[tokio::test]
+async fn chat_api_post_replay_limits_and_cancel() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "message-thread", "Messages").await;
+    let id = thread["id"].as_str().expect("id");
+    let path = format!("{BASE}/{id}/messages");
+    let body = message_body("one", "hello moon");
+    let posted = send(&app, post_admin(&path, &body)).await;
+    assert_eq!(posted.status.as_u16(), 202, "{}", posted.text());
+    let result = posted.json();
+    assert_eq!(result["queue_position"], 1);
+    let mid = result["message"]["id"].as_str().expect("message id");
+    let replay = send(&app, post_admin(&path, &body)).await;
+    assert_eq!(replay.status.as_u16(), 202);
+    assert_eq!(replay.json()["message"]["id"], mid);
+    assert_problem(
+        &send(&app, post_admin(&path, &message_body("one", "different"))).await,
+        409,
+        "chat_conflict",
+    );
+    assert_problem(
+        &send(
+            &app,
+            post_admin(&path, &message_body("big", &"x".repeat(65537))),
+        )
+        .await,
+        413,
+        "payload_too_large",
+    );
+    let list = send(&app, get_admin(&path)).await.json();
+    assert_eq!(list["items"].as_array().map(Vec::len), Some(1));
+    assert_eq!(list["items"][0]["id"], mid);
+    assert!(list["snapshot_event_id"].is_string());
+    let cancelled = send(
+        &app,
+        delete_with(&format!("{path}/{mid}"), &admin_headers()),
+    )
+    .await;
+    assert_eq!(cancelled.status.as_u16(), 200);
+    assert_eq!(cancelled.json()["message"]["state"], "cancelled");
+    let again = send(
+        &app,
+        delete_with(&format!("{path}/{mid}"), &admin_headers()),
+    )
+    .await;
+    assert_eq!(again.status.as_u16(), 200);
+}
+
+#[tokio::test]
+async fn chat_api_queue_limit_and_run_stop_resume() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "run-thread", "Run").await;
+    let id = thread["id"].as_str().expect("id").to_owned();
+    let path = format!("{BASE}/{id}/messages");
+    for n in 0..100 {
+        let result = send(
+            &app,
+            post_admin(&path, &message_body(&format!("m-{n}"), "queued")),
+        )
+        .await;
+        assert_eq!(result.status.as_u16(), 202, "{}", result.text());
+    }
+    assert_problem(
+        &send(&app, post_admin(&path, &message_body("overflow", "queued"))).await,
+        429,
+        "chat_queue_full",
+    );
+    let revision =
+        send(&app, get_admin(&format!("{BASE}/{id}"))).await.json()["thread"]["revision"]
+            .as_u64()
+            .expect("revision");
+    assert_problem(
+        &send(
+            &app,
+            patch_admin(
+                &format!("{BASE}/{id}"),
+                &json!({"status":"archived","expected_revision":revision}),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+    let claimed = env
+        .store
+        .chat_run_claim_next(
+            &id,
+            "fake-run",
+            &json!({"harness":"claude-code"}),
+            OffsetDateTime::now_utc(),
+        )
+        .expect("claim")
+        .expect("run");
+    assert_eq!(claimed.state, ChatRunState::Running);
+    assert_problem(
+        &send(
+            &app,
+            delete_with(
+                &format!("{path}/{}", claimed.input_message_id),
+                &admin_headers(),
+            ),
+        )
+        .await,
+        409,
+        "chat_conflict",
+    );
+    let run_path = format!("{BASE}/{id}/runs/fake-run");
+    let got = send(&app, get_admin(&run_path)).await;
+    assert_eq!(got.status.as_u16(), 200);
+    assert_eq!(got.json()["run"]["id"], "fake-run");
+    let stop_path = format!("{BASE}/{id}/stop");
+    let stopped = send(&app, post_admin(&stop_path, &json!({"run_id":"fake-run"}))).await;
+    assert_eq!(stopped.status.as_u16(), 202, "{}", stopped.text());
+    assert_eq!(stopped.json()["queue_paused"], true);
+    let revision =
+        send(&app, get_admin(&format!("{BASE}/{id}"))).await.json()["thread"]["revision"]
+            .as_u64()
+            .expect("revision");
+    let resumed = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/{id}/resume-queue"),
+            &json!({"expected_revision":revision}),
+        ),
+    )
+    .await;
+    assert_eq!(resumed.status.as_u16(), 200, "{}", resumed.text());
+    assert_eq!(resumed.json()["thread"]["queue_paused"], false);
+    env.store
+        .chat_run_finish(
+            "fake-run",
+            ChatRunState::Stopped,
+            None,
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("finish fake run");
+    let replay = send(&app, post_admin(&stop_path, &json!({"run_id":"fake-run"}))).await;
+    assert_eq!(replay.status.as_u16(), 200);
+}
+
+#[tokio::test]
+async fn chat_api_auth_and_input_errors() {
+    let env = admin_env();
+    let app = env.router();
+    assert_problem(&send(&app, get(BASE)).await, 401, "unauthorized");
+    assert_problem(
+        &send(&app, post_json(BASE, &thread_body("unauth", "Title"))).await,
+        401,
+        "unauthorized",
+    );
+    assert_problem(
+        &send(
+            &app,
+            post_json_with(
+                BASE,
+                &thread_body("cross-origin", "Title"),
+                &[
+                    ("authorization", "Bearer s3cret-token-value"),
+                    ("origin", "https://example.invalid"),
+                ],
+            ),
+        )
+        .await,
+        403,
+        "origin_forbidden",
+    );
+    let mut unknown = thread_body("key", "Title");
+    unknown["kind"] = json!("inbox");
+    assert_problem(
+        &send(&app, post_admin(BASE, &unknown)).await,
+        400,
+        "bad_request",
+    );
+    assert_problem(
+        &send(
+            &app,
+            post_admin(
+                BASE,
+                &json!({"title":3,"project_id":null,"client_thread_id":"key"}),
+            ),
+        )
+        .await,
+        422,
+        "validation",
+    );
+    assert_problem(
+        &send(&app, get_admin(&format!("{BASE}/missing"))).await,
+        404,
+        "chat_not_found",
+    );
+}
+
+#[tokio::test]
+async fn chat_api_disabled_send_is_unavailable() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = create(&app, "disabled-thread", "Disabled").await;
+    let id = thread["id"].as_str().expect("id");
+    let disabled = task_api::router(env.state.clone().with_cos_enabled(false));
+    assert_problem(
+        &send(
+            &disabled,
+            post_admin(
+                &format!("{BASE}/{id}/messages"),
+                &message_body("disabled", "hello"),
+            ),
+        )
+        .await,
+        503,
+        "cos_unavailable",
+    );
+}

@@ -147,6 +147,7 @@ enum Command {
         command: CurationCommand,
     },
     /// ADR-0069 Phase 118 D3: `routing show`。tier → 実行モデル/effort の表。DB には触らない。
+    /// Phase 4: `routing export`（明示の `--db` を読み取り専用で開く）/ `routing evaluate`（DB を開かない）。
     Routing {
         #[command(subcommand)]
         command: RoutingCommand,
@@ -249,7 +250,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         // `Config` は DB を開く前に処理される（`main` を見よ）。
         Command::Config { command } => config_cmd::run(command),
         // `Routing` も同じ（設定ファイルだけを読む。`main` を見よ）。
-        Command::Routing { command } => routing_cmd::run(command),
+        Command::Routing { command } => routing_cmd::run(Some(db_path), command),
         Command::Add(args) => add::run(store, args),
         Command::Plan(args) => plan::run(store, args),
         Command::PlanLint => plan_lint::run(store),
@@ -356,8 +357,10 @@ fn main() -> ExitCode {
         };
     }
     // ADR-0069 Phase 118 D3: `routing show` も設定ファイルしか読まない（DB を開かない）。
+    // Phase 4 の `routing export` は明示の `--db` だけを task-ops の読み取り専用接続で開く
+    // （`CELERIS_DB` 等の既定は解決しない。store も開かない＝migration しない）。
     if let Command::Routing { command } = cli.command {
-        return match routing_cmd::run(command) {
+        return match routing_cmd::run(cli.db.as_deref(), command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");

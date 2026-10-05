@@ -21237,6 +21237,85 @@
       ],
       "type": "object"
     },
+    "RoutingShadowAudit": {
+      "description": "primary の結果から独立した shadow 1 件の監査。",
+      "properties": {
+        "candidate_model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "candidate_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "differs_from_primary": {
+          "description": "primary の model/source と候補が両方分かる場合だけ比較する。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "kind": {
+          "$ref": "#/$defs/ShadowKind"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "primary_decision_id": {
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShadowReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reservation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ShadowReservationAudit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "shadow_id": {
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ShadowStatus"
+        }
+      },
+      "required": [
+        "shadow_id",
+        "primary_decision_id",
+        "kind",
+        "status"
+      ],
+      "type": "object"
+    },
     "RoutingTraceV1": {
       "properties": {
         "account_id": {
@@ -21835,6 +21914,16 @@
             }
           ],
           "description": "Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。"
+        },
+        "routing_shadow": {
+          "description": "Phase 4: run に結び付いた decision/execution shadow。旧 run は欄なし。",
+          "items": {
+            "$ref": "#/$defs/RoutingShadowAudit"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
         },
         "rule_id": {
           "type": [
@@ -22950,6 +23039,44 @@
           "type": "string"
         }
       ]
+    },
+    "ShadowReservationAudit": {
+      "description": "監査表示用の予約と確定の消費。額は effective USD。",
+      "properties": {
+        "charged_effective_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "charged_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "reserved_effective_usd": {
+          "format": "double",
+          "type": "number"
+        },
+        "reserved_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "utc_day": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "utc_day",
+        "state",
+        "reserved_tokens",
+        "reserved_effective_usd",
+        "charged_tokens",
+        "charged_effective_usd"
+      ],
+      "type": "object"
     },
     "ShadowStatus": {
       "enum": [
@@ -24616,7 +24743,7 @@
           "description": "routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。"
         },
         "runs": {
-          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。",
+          "description": "run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の\n要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・\n`routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。\nPhase 4 の `routing_shadow` は primary の結果から独立した optional の配列。",
           "items": {
             "$ref": "#/$defs/RunRoutingAudit"
           },

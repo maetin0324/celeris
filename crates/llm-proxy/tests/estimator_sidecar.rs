@@ -65,9 +65,7 @@ async fn handle(State(fake): State<Arc<Fake>>, body: Bytes) -> Response {
     fake.arrived.notify_one();
     match mode {
         Mode::Body(body) => ([("content-type", "application/json")], body).into_response(),
-        Mode::Status(code) => StatusCode::from_u16(code)
-            .expect("status")
-            .into_response(),
+        Mode::Status(code) => StatusCode::from_u16(code).expect("status").into_response(),
         Mode::Hang => std::future::pending().await,
     }
 }
@@ -122,7 +120,10 @@ async fn routing_sidecar_protocol_validates_identity_range_and_size() {
     assert!(Arc::ptr_eq(&snapshot, &cached));
     use task_core::model_router::estimator::QualityEstimator;
     let kernel = snapshot.descriptor();
-    assert_eq!((kernel.id.as_str(), kernel.version.as_str()), ("route-test", "1"));
+    assert_eq!(
+        (kernel.id.as_str(), kernel.version.as_str()),
+        ("route-test", "1")
+    );
 
     // 応答の検証失敗はすべて理由付きの評価不能。
     for (name, reason) in [
@@ -135,10 +136,8 @@ async fn routing_sidecar_protocol_validates_identity_range_and_size() {
     ] {
         assert_eq!(reason_for(&fixture(name)).await, reason, "{name}");
     }
-    let deps = fixture("response_valid").replace(
-        r#""needs_network":false"#,
-        r#""needs_network":true"#,
-    );
+    let deps =
+        fixture("response_valid").replace(r#""needs_network":false"#, r#""needs_network":true"#);
     assert_eq!(reason_for(&deps).await, "dependency_mismatch");
     assert_eq!(reason_for("not json").await, "decode");
 
@@ -146,7 +145,10 @@ async fn routing_sidecar_protocol_validates_identity_range_and_size() {
     let (fake, url) = fake_sidecar(Mode::Body(fixture("response_valid"))).await;
     let mut wrong = config(&url);
     wrong.descriptor.protocol_version = 2;
-    let err = client(wrong).estimate(request()).await.expect_err("version");
+    let err = client(wrong)
+        .estimate(request())
+        .await
+        .expect_err("version");
     assert_eq!(err.reason(), "version_mismatch");
     assert_eq!(fake.hits(), 0);
 
@@ -172,7 +174,10 @@ async fn routing_sidecar_protocol_validates_identity_range_and_size() {
 
     // HTTP の失敗。
     let (_fake, url) = fake_sidecar(Mode::Status(500)).await;
-    let err = client(config(&url)).estimate(request()).await.expect_err("500");
+    let err = client(config(&url))
+        .estimate(request())
+        .await
+        .expect_err("500");
     assert_eq!(err, SidecarUnavailable::Status(500));
 
     // timeout と max_inflight: 1 件目が sidecar に届いて止まっている間、2 件目は送らない。
@@ -215,7 +220,10 @@ async fn routing_sidecar_protocol_validates_identity_range_and_size() {
     assert!(!breaker.circuit_open());
     tokio::time::resume();
     fake.set(Mode::Body(fixture("response_valid")));
-    breaker.estimate(request()).await.expect("half-open trial succeeds");
+    breaker
+        .estimate(request())
+        .await
+        .expect("half-open trial succeeds");
     assert_eq!(fake.hits(), 3);
     assert!(!breaker.circuit_open());
 }

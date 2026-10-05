@@ -27,3 +27,8 @@ completed: 2026-10-05
 
 - celeris config（`SidecarEntry`）→ `SidecarClientConfig` の写像（`estimator_version`、descriptor の needs_prompt/dependencies の出所、`network_allowlist` と `allow_external_dependencies` の関係、circuit 値）は daemon-wire unit で決める。
 - 試験の timeout は実時間 300ms（Hang mode は応答しないので結果は決定的）。circuit の時間経過は `tokio::time::pause/advance` で進める。
+
+## 再走（attempt 1, 2026-10-05）
+- 前回の check 不合格は `cargo fmt --all -- --check` の整形差分のみ（tests/estimator_sidecar.rs・src/estimator_sidecar.rs）。`cargo fmt -p llm-proxy` で整形。
+- `cargo clippy -p llm-proxy --all-targets -- -D warnings && cargo fmt --all -- --check` → exit 0
+- `cargo nextest run -p llm-proxy` → 93 passed, 0 skipped（routing_sidecar_* 2 件を含む）

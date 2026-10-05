@@ -278,8 +278,8 @@ impl SidecarEstimatorClient {
             }
             body.extend_from_slice(&chunk);
         }
-        let parsed: EstimateResponseV1 = serde_json::from_slice(&body)
-            .map_err(|e| SidecarUnavailable::Decode(e.to_string()))?;
+        let parsed: EstimateResponseV1 =
+            serde_json::from_slice(&body).map_err(|e| SidecarUnavailable::Decode(e.to_string()))?;
         let snapshot = SidecarEstimateSnapshot::from_response(
             request,
             &parsed,

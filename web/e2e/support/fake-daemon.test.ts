@@ -50,6 +50,18 @@ it("serves schema-valid rich data without changing the default profile", async (
   expect(defaultFixtures["/api/v1/console"]).not.toEqual(rich["/api/v1/console"]);
 });
 
+it("serves schema-valid reports, approvals and review-pending execution data in the rich profile", () => {
+  const rich = richFixtures();
+  const checks = [
+    ["/api/v1/reports", "report_list"],
+    ["/api/v1/reports/RP1", "report_detail"],
+    ["/api/v1/approvals", "approval_list"],
+    ["/api/v1/tasks/T1/execution", "task_execution"],
+    ["/api/v1/tasks/T1/routing", "task_routing"],
+  ] as const;
+  for (const [path, name] of checks) expect(validateFixture(rich[path], props[name]), path).toEqual([]);
+});
+
 it("rejects non-loopback and reserved production or staging ports", () => {
   expect(() => createFakeDaemon({ host: "0.0.0.0" })).toThrow("loopback");
   for (const port of [7700, 7701, 7710, 7711, 7712]) expect(() => createFakeDaemon({ port })).toThrow("reserved port");

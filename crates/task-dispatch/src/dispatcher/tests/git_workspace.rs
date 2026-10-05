@@ -760,6 +760,7 @@ async fn a_compaction_task_does_not_get_a_worktree_even_when_its_project_has_a_p
         .unwrap();
 
     let spec = task_ops::add::NewTaskSpec {
+        requirements: Default::default(),
         title: "報告のまとめ: engineering 課".into(),
         objective: "まとめてください".into(),
         acceptance: Vec::new(),

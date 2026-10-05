@@ -7,6 +7,7 @@ fn store() -> SqliteStore {
 
 fn spec(title: &str) -> crate::add::NewTaskSpec {
     crate::add::NewTaskSpec {
+        requirements: Default::default(),
         mode: Default::default(),
         skills: Vec::new(),
         repos: Vec::new(),

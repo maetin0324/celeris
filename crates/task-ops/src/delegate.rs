@@ -327,6 +327,7 @@ pub fn plan_children(
     let proposals: Vec<DelegateTask> = children
         .iter()
         .map(|c| DelegateTask {
+            requirements: c.requirements.clone(),
             title: c.title.clone(),
             objective: c.objective.clone(),
             acceptance: c.acceptance.clone(),
@@ -362,6 +363,12 @@ pub fn plan_children(
         if let Some(features) = spec.features.filter(|f| !f.is_empty()) {
             task.routing.get_or_insert_with(Default::default).features = Some(features);
         }
+        task_core::browser::validate_task_requirements(
+            &task.skills,
+            &task.requirements,
+            Some(parent),
+        )
+        .map_err(|e| format!("child {}: {e}", spec.key))?;
     }
 
     // 部をまたぐか（担当は matching が決めるので、決まるはずのノードで判定する）。

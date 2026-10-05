@@ -358,6 +358,7 @@ fn harness_genres_are_marked_and_the_plan_is_fixed_before_children_are_created()
 
     let mut plan = task_core::PlanOutput {
         tasks: vec![task_core::NewTask {
+            requirements: Default::default(),
             harness: None,
             mode: Default::default(),
             skills: Vec::new(),

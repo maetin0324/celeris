@@ -291,6 +291,7 @@ pub fn build_child_task(
         Some(unit.stage.as_str()),
     );
     let proposal = DelegateTask {
+        requirements: unit.requirements.clone(),
         title: unit.title.clone(),
         objective: child_objective(unit, &ancestors, decisions, &gate_notes),
         acceptance: unit.acceptance.clone(),
@@ -351,6 +352,12 @@ pub fn build_child_task(
     } else {
         unit.skills.clone()
     };
+    task_core::browser::validate_task_requirements(
+        &child.skills,
+        &child.requirements,
+        Some(parent),
+    )
+    .map_err(|e| format!("unit {}: {e}", unit.key))?;
     if !unit.repos.is_empty() {
         let inherited = workspace.child_repos(parent, &[]);
         child.repos = unit

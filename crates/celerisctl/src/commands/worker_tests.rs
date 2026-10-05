@@ -169,6 +169,7 @@ fn cluster(id: &str, host: &str) -> celeris::config::ClusterConfig {
 fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

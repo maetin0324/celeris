@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 fn new_task(title: &str, deps: Vec<usize>) -> NewTask {
     NewTask {
+        requirements: Default::default(),
         harness: None,
         mode: Default::default(),
         skills: Vec::new(),
@@ -43,6 +44,7 @@ fn genre(id: &str, default_role: Option<&str>, roles: &[&str]) -> GenreSpec {
 fn parent() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

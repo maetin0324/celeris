@@ -738,6 +738,7 @@ fn routing_sample_task() -> task_core::Task {
     };
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

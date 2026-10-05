@@ -15,3 +15,5 @@ host は ASCII DNS 名または IPv4、括弧付き IPv6 は `[::1]` のみを�
 ## 配線
 
 task-core は grant と task policy の交差を origin の集合として計算する。agent-browser の起動引数、broker と egress への渡し方は後続の強制工程で更新する。古い host 形式の実行データも同じ狭める規則で読み取る。
+
+task ごとの新規指定は `Task.requirements.browser.allowed_domains` に置く。API、CoS、execution plan の spec も同じ `requirements.browser.allowed_domains` を使う。新規 task の値には scheme を明示し、旧 host 形式の読み替えは既存 grant と既存実行データの互換読取りだけに限定する。

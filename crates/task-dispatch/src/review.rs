@@ -870,6 +870,7 @@ fn check_plan_file(
 pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHint) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

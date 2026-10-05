@@ -720,6 +720,53 @@ async fn create_task_returns_201_with_location_and_cli_defaults() {
 }
 
 #[tokio::test]
+async fn browser_allowed_domains_api_create_rejects_missing_empty_and_invalid() {
+    let env = admin_env();
+    let app = env.router();
+    for requirements in [
+        serde_json::Value::Null,
+        json!({"browser": {"allowed_domains": []}}),
+        json!({"browser": {"allowed_domains": ["http://example.com"]}}),
+        json!({"browser": {"allowed_domains": ["https://example.com/path"]}}),
+    ] {
+        let mut body = json!({"title":"browser task", "objective":"browse", "skills":["browser-enabled"],
+            "acceptance":[{"type":"reviewer", "text":"done"}]});
+        if !requirements.is_null() {
+            body["requirements"] = requirements;
+        }
+        let response = send(&app, post_admin("/api/v1/tasks", &body)).await;
+        assert_problem(&response, 422, "validation");
+    }
+    let body = json!({"title":"browser task", "objective":"browse", "skills":["browser-enabled"],
+        "requirements":{"browser":{"allowed_domains":["https://billing.example.com"]}},
+        "acceptance":[{"type":"reviewer", "text":"done"}]});
+    let response = send(&app, post_admin("/api/v1/tasks", &body)).await;
+    assert_eq!(response.status, 201, "{}", response.text());
+}
+
+#[tokio::test]
+async fn browser_allowed_domains_api_patch_cannot_add_skill_without_origins() {
+    let env = admin_env();
+    let app = env.router();
+    let body = json!({"title":"ordinary task", "objective":"work", "acceptance":[{"type":"reviewer", "text":"done"}]});
+    let response = send(&app, post_admin("/api/v1/tasks", &body)).await;
+    assert_eq!(response.status, 201);
+    let id = response.json()["id"].as_str().unwrap().to_string();
+    let task_id = id.parse().unwrap();
+    let before = env.store.events_for(task_id).unwrap().len();
+    let response = send(
+        &app,
+        patch_admin(
+            &format!("/api/v1/tasks/{id}"),
+            &json!({"skills":["browser-enabled"]}),
+        ),
+    )
+    .await;
+    assert_problem(&response, 422, "validation");
+    assert_eq!(env.store.events_for(task_id).unwrap().len(), before);
+}
+
+#[tokio::test]
 async fn create_task_validation_errors_insert_nothing() {
     let env = admin_env();
     let app = env.router();

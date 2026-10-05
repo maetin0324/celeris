@@ -17,6 +17,7 @@ use super::*;
 pub(super) fn sample_task(status: Status) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -82,6 +83,32 @@ fn insert_then_get_roundtrips() {
 
     let fetched = store.get(task.id).expect("get").expect("some");
     assert_eq!(fetched, task);
+}
+
+#[test]
+fn browser_allowed_domains_store_rejects_invalid_children_without_events() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut parent = sample_task(Status::Ready);
+    parent.skills = vec![crate::browser::BROWSER_SKILL.into()];
+    parent.requirements.browser = Some(crate::model::BrowserRequirements {
+        allowed_domains: vec!["https://*.example.com:8443".into()],
+    });
+    store.create_task(&parent, vec![]).unwrap();
+    for domain in [
+        "https://other.com:8443",
+        "https://billing.example.com",
+        "https://example.com:8443",
+    ] {
+        let mut child = sample_task(Status::Draft);
+        child.parent_id = Some(parent.id);
+        child.skills = parent.skills.clone();
+        child.requirements.browser = Some(crate::model::BrowserRequirements {
+            allowed_domains: vec![domain.into()],
+        });
+        assert!(store.create_task(&child, vec![]).is_err());
+        assert!(store.get(child.id).unwrap().is_none());
+        assert!(store.events_for(child.id).unwrap().is_empty());
+    }
 }
 
 #[test]

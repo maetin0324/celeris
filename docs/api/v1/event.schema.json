@@ -57,6 +57,21 @@
       ],
       "type": "object"
     },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
     "BrowserRun": {
       "additionalProperties": false,
       "properties": {
@@ -3587,6 +3602,9 @@
         "objective": {
           "type": "string"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
+        },
         "skills": {
           "default": [],
           "items": {
@@ -4725,6 +4743,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Browser origins for a child task. An inherited browser skill still needs an explicit set."
+        },
         "skills": {
           "items": {
             "type": "string"
@@ -5748,6 +5770,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
+        },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
           "type": [
@@ -6014,6 +6040,22 @@
           "type": "string"
         }
       ]
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "TaskRouting": {
       "description": "ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。",

@@ -1000,6 +1000,7 @@ fn v2_uses_the_v2_work_unit_limit_not_the_v1_one() {
 
 fn child(key: &str, deps: &[&str]) -> ExecutionChildSpec {
     ExecutionChildSpec {
+        requirements: Default::default(),
         key: key.into(),
         title: format!("child {key}"),
         objective: format!("do {key}"),
@@ -1321,6 +1322,7 @@ fn v3_errors(spec: &ExecutionPlanSpec) -> Vec<PlanValidationError> {
 
 fn leaf(key: &str, stage: &str) -> PlanUnitSpec {
     PlanUnitSpec {
+        requirements: Default::default(),
         expected_write_paths: None,
         key: key.into(),
         stage: stage.into(),

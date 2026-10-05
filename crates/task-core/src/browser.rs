@@ -111,6 +111,44 @@ pub fn requests_browser(skills: &[String]) -> bool {
     skills.iter().any(|skill| skill == BROWSER_SKILL)
 }
 
+/// Validate task origins before storing a new task. A child can only narrow its parent's set.
+pub fn validate_task_requirements(
+    skills: &[String],
+    requirements: &crate::model::TaskRequirements,
+    parent: Option<&crate::model::Task>,
+) -> Result<(), String> {
+    let domains = requirements.browser.as_ref().map(|b| &b.allowed_domains);
+    if requests_browser(skills) && domains.is_none_or(Vec::is_empty) {
+        return Err(
+            "requirements.browser.allowed_domains must be non-empty for browser-enabled tasks"
+                .into(),
+        );
+    }
+    if let Some(domains) = domains {
+        for domain in domains {
+            // New task requirements use explicit origins; legacy bare hosts are only read from grants.
+            AllowedOrigin::parse(domain).map_err(|_| {
+                "requirements.browser.allowed_domains contains an invalid origin".to_string()
+            })?;
+        }
+        if let Some(parent) = parent {
+            let inherited = parent
+                .requirements
+                .browser
+                .as_ref()
+                .map(|b| b.allowed_domains.as_slice())
+                .unwrap_or_default();
+            if !domains
+                .iter()
+                .all(|domain| inherited.iter().any(|p| origin_covers(p, domain)))
+            {
+                return Err("requirements.browser.allowed_domains exceeds the parent task".into());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Pin capability-bearing tasks to a supported adapter: never fall back to a backend that loses it.
 pub fn browser_adapter(explicit: Option<&str>) -> Result<&str, String> {
     match explicit {

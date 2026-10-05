@@ -9,6 +9,7 @@ fn sample_task() -> Task {
     use task_core::*;
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

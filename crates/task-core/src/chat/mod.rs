@@ -5,6 +5,20 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod attachments;
+mod run_store;
+mod store;
+#[cfg(test)]
+mod store_tests;
+pub use run_store::{
+    CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
+    CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
+};
+pub use store::{
+    CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,
+    CHAT_MESSAGE_PAGE_MAX, CHAT_MESSAGE_TEXT_MAX_BYTES, CHAT_QUEUE_MAX, CHAT_THREAD_PAGE_DEFAULT,
+    CHAT_THREAD_PAGE_MAX, CHAT_TITLE_MAX_CHARS, ChatError, ChatMessagePosted, ChatMessageQuery,
+    ChatThreadCreated, ChatThreadQuery, chat_fts_literal,
+};
 
 macro_rules! wire_enum {
     ($name:ident { $($variant:ident),+ $(,)? }) => {

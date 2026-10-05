@@ -1,7 +1,7 @@
 ---
 tasks: [01M4577C9412HCDQEV1AFTT69C]
 unit: worker-transport
-status: complete
+status: done-in-branch
 completed: 2026-10-05
 ---
 # Phase 3: task-worker の routing context 搬送

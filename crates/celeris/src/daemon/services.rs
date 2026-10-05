@@ -245,6 +245,26 @@ fn append_proxy_event(
     Ok(())
 }
 
+/// `state` を `[llm_proxy] listen` に bind して動かす。`standby`/`draining` の間はプロキシ自身の
+/// `guard` が他の管理 API と同じく 503 を返す（bind/unbind は主 API と同じ `SO_REUSEPORT` のライフサイクル）。
+pub(crate) async fn start_llm_proxy(
+    config: &Config,
+    state: Arc<llm_proxy::ProxyState>,
+) -> Result<RunningLlmProxy, DaemonError> {
+    let listen = config.llm_proxy.listen;
+    let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
+        addr: listen,
+        source,
+    })?;
+    let addr = listener.local_addr().unwrap_or(listen);
+    tracing::info!(%addr, "llm-proxy listening");
+    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let handle = tokio::spawn(llm_proxy::serve(listener, state, async move {
+        let _ = stop_rx.await;
+    }));
+    Ok(RunningLlmProxy { stop, handle })
+}
+
 #[cfg(test)]
 mod routing_tests {
     use super::*;
@@ -385,24 +405,4 @@ mod routing_tests {
         assert!(append_proxy_event(&store, &lock, spoofed).is_err());
         assert_eq!(store.events_for(task.id).unwrap().len(), 2);
     }
-}
-
-/// `state` を `[llm_proxy] listen` に bind して動かす。`standby`/`draining` の間はプロキシ自身の
-/// `guard` が他の管理 API と同じく 503 を返す（bind/unbind は主 API と同じ `SO_REUSEPORT` のライフサイクル）。
-pub(crate) async fn start_llm_proxy(
-    config: &Config,
-    state: Arc<llm_proxy::ProxyState>,
-) -> Result<RunningLlmProxy, DaemonError> {
-    let listen = config.llm_proxy.listen;
-    let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {
-        addr: listen,
-        source,
-    })?;
-    let addr = listener.local_addr().unwrap_or(listen);
-    tracing::info!(%addr, "llm-proxy listening");
-    let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
-    let handle = tokio::spawn(llm_proxy::serve(listener, state, async move {
-        let _ = stop_rx.await;
-    }));
-    Ok(RunningLlmProxy { stop, handle })
 }

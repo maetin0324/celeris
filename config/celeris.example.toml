@@ -186,14 +186,6 @@ dir = "../memory"
 # `claude/<tier>` / `gpt/<tier>` / `qwen/cheap`（供給元を固定。Qwen は cheap のみ）、または `<source>:<具体モデル名>`
 # （素通り。例 `claude:claude-sonnet-5`）のどれかをモデル名に書く。
 # ---------------------------------------------------------------------------
-# Phase 3: task ごとの routing context と run 間 escalation（任意）。
-# 未設定なら context の既定 margin、ADR-0069 の品質失敗 2 回・総試行 4 回を使う。
-# [model_routing]
-# context_safety_margin = 512
-# [model_routing.escalation]
-# quality_failures_per_lane = 2
-# max_total_attempts = 4
-
 [llm_proxy]
 # enabled = true                 # 省略時は「どれかの source が設定されていれば有効」
 # listen = "127.0.0.1:18100"     # 既定。loopback のみ。認証は [api] の token_file と同じ

@@ -27,7 +27,7 @@ ADR `agent-docs/adr/2026-10-04-multi-objective-model-routing.md` §5・§6・§1
 - `crates/task-dispatch`: `DispatchRoutingSettings` に `context_safety_margin`・`escalation` を追加。retry lane の
   `EscalationThresholds` は設定値を基に org ceiling を重ねる（`dispatch_run.rs`）。context 登録時に margin を上書きし provenance に
   `model_routing.context_safety_margin` を残す（`routing_context.rs`）。
-- `config/celeris.example.toml`・`docs/ops/model-routing-migration.md` §8: 設定例と reload で効く旨。
+- `docs/ops/model-routing-migration.md` §8: 設定例と reload で効く旨（`config/celeris.example.toml` は葉の範囲外なので変えない）。
 
 ## privacy 制約と context_transport
 
@@ -44,6 +44,7 @@ daemon 側は `dispatch_settings()` が `constraints` を既定のまま渡す�
 - `cargo nextest run -p celeris -p task-dispatch` → 1089 passed
 - `bash scripts/dev/test-parallel.sh` → 3988 passed, 12 skipped, test-parallel: ok
 - `cargo clippy --workspace -- -D warnings` → exit 0、`cargo fmt --all --check` → exit 0
+- 再走（check 不合格の修正）: `services.rs` の `start_llm_proxy` を test module の前へ移した（clippy items_after_test_module）。`cargo clippy -p celeris --all-targets -- -D warnings && cargo fmt --all -- --check` → exit 0、`cargo nextest run -p celeris` → 402 passed、範囲 check → exit 0
 
 ## 未解決
 

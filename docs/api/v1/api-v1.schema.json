@@ -22991,10 +22991,11 @@
       "type": "object"
     },
     "ShadowKind": {
-      "description": "shadow の種類。`decision` は追加呼出しなしの判断比較、`execution` は候補で実際に生成した。",
+      "description": "shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、\n`estimator` は品質推定を primary heuristic と比較する。",
       "enum": [
         "decision",
-        "execution"
+        "execution",
+        "estimator"
       ],
       "type": "string"
     },

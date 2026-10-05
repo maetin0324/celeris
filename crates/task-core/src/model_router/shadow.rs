@@ -192,12 +192,14 @@ pub fn sampled_in(decision_id: &str, sample_rate: f64) -> bool {
     unit < sample_rate
 }
 
-/// shadow の種類。`decision` は追加呼出しなしの判断比較、`execution` は候補で実際に生成した。
+/// shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、
+/// `estimator` は品質推定を primary heuristic と比較する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ShadowKind {
     Decision,
     Execution,
+    Estimator,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -282,7 +284,7 @@ pub enum ShadowRecordError {
     UnexpectedReason(String),
     #[error("shadow record {0}: output_sha256 must be 64 lowercase hex digits")]
     BadHash(String),
-    #[error("shadow record {0}: decision shadow must not carry tokens, cost or output")]
+    #[error("shadow record {0}: decision/estimator shadow must not carry tokens, cost or output")]
     DecisionWithUsage(String),
     #[error("shadow record {0}: cost must be finite and non-negative")]
     BadCost(String),
@@ -305,7 +307,7 @@ impl ShadowRecord {
         {
             return Err(ShadowRecordError::BadHash(id()));
         }
-        if self.kind == ShadowKind::Decision
+        if matches!(self.kind, ShadowKind::Decision | ShadowKind::Estimator)
             && (self.input_tokens.is_some()
                 || self.output_tokens.is_some()
                 || self.output_sha256.is_some()

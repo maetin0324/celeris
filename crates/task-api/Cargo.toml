@@ -36,4 +36,4 @@ celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-h
 async-trait = "0.1"
 tempfile = "3"
 base64 = "0.22"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "time"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "test-util"] }

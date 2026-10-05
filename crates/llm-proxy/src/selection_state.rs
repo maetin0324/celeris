@@ -107,6 +107,7 @@ pub fn request_context(req: &ChatCompletionRequest) -> RoutingContext {
         output_reserve: req.max_tokens.map(u64::from),
         safety_margin: 0,
         provenance: "llm-proxy:request-fields".into(),
+        ..RoutingContext::default()
     }
 }
 

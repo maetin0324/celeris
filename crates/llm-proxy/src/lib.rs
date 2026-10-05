@@ -2,6 +2,7 @@
 mod auth;
 pub mod config;
 pub mod credentials;
+pub mod fallback;
 pub mod legacy_catalog;
 pub mod log;
 pub mod naming;

@@ -28,9 +28,13 @@ use task_dispatch::accounts::{
 use ulid::Ulid;
 
 use crate::config::{LlmProxyConfig, OpenAiCompatibleConfig};
+use crate::fallback::{
+    AfterFailure, Breakers, FailureClass, FallbackBudget, FallbackSettings, RequestConstraints,
+};
 use crate::log::{self, RequestLogRow};
 use crate::naming::{self, ModelRequest, SourceKind, SourceScope};
 use crate::openai::ChatCompletionRequest;
+use crate::reservation::{Clock, SystemClock};
 use crate::selection::{self, PoolInput, SelectedAccount};
 use crate::sources::{SendOutcome, SourceError, claude, codex, relay};
 
@@ -60,6 +64,12 @@ pub struct ProxyState {
     /// 供給元 id → (probe した時刻, 結果)。`Err` は人が読む理由（`relay::probe`）。
     probe_cache: StdMutex<HashMap<String, ProbeCacheEntry>>,
     in_use: StdMutex<HashMap<String, usize>>,
+    /// 同一要求内 fallback の上限・breaker の設定（ADR 2026-10-04 §5）。
+    fallback: FallbackSettings,
+    /// deployment（`<source>/<upstream model>`）ごとの closed/open/half_open。
+    breakers: Arc<Breakers>,
+    /// fallback の deadline と breaker の遷移に使う時計（試験で差し替える）。
+    clock: Arc<dyn Clock>,
 }
 
 impl ProxyState {
@@ -85,7 +95,33 @@ impl ProxyState {
             busy_timeout,
             probe_cache: StdMutex::new(HashMap::new()),
             in_use: StdMutex::new(HashMap::new()),
+            breakers: Breakers::new(FallbackSettings::default().breaker),
+            fallback: FallbackSettings::default(),
+            clock: Arc::new(SystemClock),
         })
+    }
+
+    /// fallback の設定と時計を差し替える（作った直後、まだ共有していない `Arc` にだけ効く）。
+    /// breaker の状態はここで作り直す。
+    pub fn with_fallback(
+        mut self: Arc<Self>,
+        settings: FallbackSettings,
+        clock: Arc<dyn Clock>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => {
+                state.breakers = Breakers::new(settings.breaker.clone());
+                state.fallback = settings;
+                state.clock = clock;
+            }
+            None => tracing::warn!("llm-proxy: fallback settings ignored (state already shared)"),
+        }
+        self
+    }
+
+    /// deployment の breaker（表示・試験用）。
+    pub fn breakers(&self) -> &Arc<Breakers> {
+        &self.breakers
     }
 
     fn in_use_count(&self, key: &str) -> usize {
@@ -278,6 +314,13 @@ impl Attempt {
         match self {
             Attempt::Claude(a) | Attempt::Codex(a) => Some(a.account_id.clone()),
             Attempt::Relay(_) => None,
+        }
+    }
+    fn source_kind(&self) -> SourceKind {
+        match self {
+            Attempt::Claude(_) => SourceKind::Claude,
+            Attempt::Codex(_) => SourceKind::Gpt,
+            Attempt::Relay(_) => SourceKind::Qwen,
         }
     }
 }
@@ -899,22 +942,53 @@ async fn chat_completions(
         return resp;
     }
 
+    // ADR 2026-10-04 §5: 同一要求内 fallback。要求の制約に合う候補へだけ倒し、stream は最初の
+    // byte を受け取る前だけ次の候補へ送る。分類別・総数の上限と deadline は budget が、deployment
+    // の closed/open/half_open は breaker が決める（時刻は注入した時計）。
+    let constraints = RequestConstraints::from_request(&parsed);
+    let mut budget = FallbackBudget::new(&state.fallback, state.clock.now());
+    let mut breaker_skipped: Vec<String> = Vec::new();
     let mut last_error = None;
     for (attempt, upstream_model) in &attempts {
         let source_label = attempt.source_label();
         let account_label = attempt.account_label();
+        if !constraints.admits(attempt.source_kind()) {
+            tracing::debug!(source = %source_label, "llm-proxy: candidate outside the request constraints; skipped");
+            continue;
+        }
+        let deployment = format!("{source_label}/{upstream_model}");
+        let Some(permit) = state.breakers.admit(&deployment, state.clock.now()) else {
+            tracing::debug!(%deployment, "llm-proxy: deployment breaker is open (or probing); skipped");
+            breaker_skipped.push(deployment);
+            continue;
+        };
+        if !budget.begin_attempt() {
+            drop(permit);
+            break;
+        }
         let in_use_key = account_label
             .as_ref()
             .map(|a| format!("{source_label}:{a}"));
         if let Some(k) = &in_use_key {
             state.in_use_start(k);
         }
-        let result = run_attempt(&state, attempt, upstream_model, &req).await;
+        let result = match run_attempt(&state, attempt, upstream_model, &req).await {
+            // 最初の byte が来るまでは失敗を「送る前」と同じに扱う（まだ caller へ何も返していない）。
+            Ok(AttemptOutcome::Stream(mut stream)) => match stream.next().await {
+                Some(Ok(first)) => Ok(AttemptOutcome::Stream(Box::pin(
+                    futures_util::stream::once(async move { Ok(first) }).chain(stream),
+                ))),
+                Some(Err(e)) => Err(e),
+                None => Ok(AttemptOutcome::Stream(stream)),
+            },
+            other => other,
+        };
         if let Some(k) = &in_use_key {
             state.in_use_end(k);
         }
         match result {
             Ok(AttemptOutcome::NonStreamJson(value)) => {
+                permit.success(state.clock.now());
                 let usage = usage_from_value(&value);
                 LogHandle {
                     id: request_id,
@@ -933,6 +1007,8 @@ async fn chat_completions(
                 return resp;
             }
             Ok(AttemptOutcome::Stream(stream)) => {
+                // 最初の byte を受け取った。以後の失敗は caller に返す（再送しない）。
+                permit.success(state.clock.now());
                 let log = LogHandle {
                     id: request_id,
                     ts: now,
@@ -956,6 +1032,9 @@ async fn chat_completions(
                 return resp;
             }
             Err(e) => {
+                let class = FailureClass::of(&e);
+                let failed_at = state.clock.now();
+                permit.failed_with(class, failed_at);
                 if let (Some(account), true) = (
                     &account_label,
                     matches!(
@@ -963,17 +1042,51 @@ async fn chat_completions(
                         SourceError::Unauthorized | SourceError::RateLimited { .. }
                     ),
                 ) {
-                    let source_kind = match attempt {
-                        Attempt::Claude(_) => SourceKind::Claude,
-                        Attempt::Codex(_) => SourceKind::Gpt,
-                        Attempt::Relay(_) => SourceKind::Qwen,
-                    };
-                    state.record_failure(source_kind, account, &e, now);
+                    state.record_failure(attempt.source_kind(), account, &e, now);
                 }
-                tracing::warn!(source = %source_label, account = ?account_label, kind = error_kind(&e), "llm-proxy: candidate failed before any bytes were sent; trying the next one");
+                let decision = budget.after_failure(class, failed_at);
+                tracing::warn!(source = %source_label, account = ?account_label, kind = error_kind(&e), class = class.as_str(), ?decision, "llm-proxy: candidate failed before any bytes were sent");
                 last_error = Some((source_label, account_label, upstream_model.clone(), e));
+                if let AfterFailure::Stop(_) = decision {
+                    break;
+                }
             }
         }
+    }
+
+    if last_error.is_none() {
+        // 候補は居たが、制約に合わないか breaker が開いていて 1 回も送らなかった。
+        LogHandle {
+            id: request_id,
+            ts: now,
+            source: None,
+            account: None,
+            requested_model: req.model.clone(),
+            upstream_model: None,
+            started,
+            db_path: state.db_path.clone(),
+            busy_timeout: state.busy_timeout,
+        }
+        .write(
+            "unavailable",
+            (None, None),
+            Some("no_source_available".to_string()),
+        );
+        let mut resp = problem(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "no_source_available",
+            "every candidate for this model is temporarily unavailable",
+        );
+        let clock_now = state.clock.now();
+        let retry_after = state
+            .breakers
+            .earliest_reopen(&breaker_skipped, clock_now)
+            .map(|at| (at - clock_now).whole_seconds().max(1))
+            .unwrap_or(5);
+        if let Ok(v) = HeaderValue::from_str(&retry_after.to_string()) {
+            resp.headers_mut().insert(header::RETRY_AFTER, v);
+        }
+        return resp;
     }
 
     let (source_label, account_label, upstream_model, e) = last_error.unwrap_or((

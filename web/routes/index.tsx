@@ -28,6 +28,8 @@ const entry =
 
 /**
  * 判断待ちの期限順の入口と未読通知への短い入口。通知件数は shell の cache を読む。
+ * 電話幅で未確認の間は、黄帯の文を短くし期限の近い判断待ちを最も近い 1 件に絞る（件数は受信箱の入口が示す）。
+ * 黄帯と 3 件で入口が 480px を超え、初期 viewport の会話が固定の送信欄の上に約 50px しか見えなかった（fix-r7）。
  */
 function HomeEntries() {
   const inbox = useQuery(inboxItemsQuery());
@@ -46,10 +48,11 @@ function HomeEntries() {
   const unconfirmed = useUnconfirmedConnection(connection) || inbox.isError;
   const projectTitles = new Map(projects.data?.items.map((project) => [project.id, project.title]));
   return (
-    <nav aria-label="受信箱と通知" className="flex min-w-0 flex-col gap-3">
+    <nav aria-label="受信箱と通知" className="flex min-w-0 flex-col gap-3 max-md:gap-2">
       {unconfirmed ? (
-        <p role="status" className="rounded-md bg-warning p-3 text-warning-foreground">
-          接続を確認しています。判断待ちと会話の最新の状態は未確認です。再接続後に受信箱を開いて確かめてください。
+        <p role="status" className="rounded-md bg-warning p-3 text-warning-foreground max-md:py-2 max-md:text-label">
+          接続を確認しています。判断待ちと会話の最新の状態は未確認です。
+          <span className="max-md:hidden">再接続後に受信箱を開いて確かめてください。</span>
         </p>
       ) : null}
       <div className="rounded-md border border-input bg-surface p-3">
@@ -59,16 +62,21 @@ function HomeEntries() {
           </h2>
           {unconfirmed ? <Badge tone="warning">未確認</Badge> : null}
           <Link to="/inbox" className={entry}>
-            受信箱{" "}
-            <span className="tabular-nums text-muted-foreground">判断待ち {inbox.data?.counts.total ?? 0} 件</span>
+            受信箱 {/* 電話幅では見出しと同じ件数を省き、見出し・未確認・入口を 1 行に収める。 */}
+            <span className="tabular-nums text-muted-foreground max-md:hidden">
+              判断待ち {inbox.data?.counts.total ?? 0} 件
+            </span>
           </Link>
         </div>
         {urgent.length > 0 ? (
           <ul className="mt-2 flex flex-col divide-y divide-border" aria-label="期限の近い判断待ち">
-            {urgent.map((item) => {
+            {urgent.map((item, index) => {
               const soon = item.due_at && new Date(item.due_at).getTime() - serverNowMs() < 86_400_000;
               return (
-                <li key={item.id} className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-2">
+                <li
+                  key={item.id}
+                  className={`flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 py-2${unconfirmed ? (index > 0 ? " max-md:hidden" : " max-md:border-b-0") : ""}`}
+                >
                   <span className="min-w-0 basis-full break-words font-medium md:basis-0 md:flex-1">{item.title}</span>
                   {item.due_at ? (
                     <span className="text-label">

@@ -240,8 +240,11 @@ test("(6) stale の / 360: 会話枠は宛先行と送信欄を除いて 150px �
     if (!lastBox || !composerBox) throw new Error("no box");
     expect(lastBox.y + lastBox.height).toBeLessThanOrEqual(composerBox.y + 1);
     // 再接続を試すたびに接続状態は「確認中」を挟む。その間も黄帯は消えず、ページの高さが跳ねて scroll が先頭へ戻らない。
+    // fix-r7 で電話幅の入口を詰め、stale の 360 でもページは viewport に収まる（scroll 位置 0 のまま）。
+    // ページが伸びて scroll できる場合も、できない場合も、切替の前後で位置が変わらないことを下で確かめる。
     const scrolled = await page.evaluate(() => window.scrollY);
-    expect(scrolled).toBeGreaterThan(0);
+    const overflow = await page.evaluate(() => document.documentElement.scrollHeight - window.innerHeight);
+    expect(scrolled, "末尾まで送った位置").toBe(Math.max(0, overflow));
     await page.evaluate(() => {
       const w = window as unknown as { __r6: { state: string | null; banner: boolean; y: number }[] };
       w.__r6 = [];

@@ -7,6 +7,7 @@
 //! （`routing_features`）、最新の outcome（`routing_outcome`・`outcome_state`）を同じ run の object に足す。
 //! 集めるのは決定的（ストアだけ）。LLM は関与しない。
 //! Phase 4 の `routing_shadow` は run ごとに別欄で返し、primary の outcome・attempts・review を変えない。
+//! Phase 5 の estimator shadow は `routing_shadow[].estimator` と task 全体の `estimator_shadow` 要約で返す。
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
@@ -39,12 +40,20 @@ pub(crate) async fn routing(
             // Phase 2: proxy の要求単位の子 trace は同じ DB の proxy log（相関欄）と照合して結ぶ。
             let audit = task_ops::routing_audit::task_routing_audit_with_requests(store, store, id)
                 .map_err(|e| ops_problem(store, e, None))?;
+            let estimator_shadow = task_ops::routing_audit::estimator_shadow_summary(
+                audit
+                    .runs
+                    .iter()
+                    .flat_map(|run| run.routing_shadow.iter().flatten())
+                    .filter_map(|shadow| shadow.estimator.as_ref()),
+            );
             Ok(TaskRoutingView {
                 task_id: id,
                 assignee: task.assignee,
                 routing: task.routing,
                 runs: audit.runs,
                 unbound_requests: audit.unbound_requests,
+                estimator_shadow,
             })
         })
         .await?;

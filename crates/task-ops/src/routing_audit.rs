@@ -23,6 +23,13 @@ use task_core::{Event, RoutingAudit, SqliteStore, TaskId, TaskStore};
 
 use crate::error::OpsError;
 
+mod estimator;
+pub use estimator::{
+    ESTIMATOR_POLICY_PREFIX, EstimatorComparison, EstimatorDependencyAudit, EstimatorShadowAudit,
+    EstimatorShadowOutcome, EstimatorShadowSummary, estimator_shadow_audit,
+    estimator_shadow_summary,
+};
+
 /// proxy の要求単位の決定の stage 名（`llm_proxy::selection_state::routing_trace` と同じ）。
 pub const PROXY_STAGE: &str = "proxy";
 
@@ -88,6 +95,10 @@ pub struct RoutingShadowAudit {
     pub output_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reservation: Option<ShadowReservationAudit>,
+    /// Phase 5: `kind = estimator` のときだけ。estimator の id/version・依存・評価不能理由・
+    /// heuristic primary との差（primary の outcome・attempts とは別）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimator: Option<EstimatorShadowAudit>,
 }
 
 /// proxy log に記録された要求の実際の行き先（相関欄の写し）。
@@ -388,6 +399,7 @@ fn shadow_audit(
         input_tokens: record.input_tokens,
         output_tokens: record.output_tokens,
         reservation,
+        estimator: estimator_shadow_audit(record),
     })
 }
 

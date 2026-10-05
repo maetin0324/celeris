@@ -1261,9 +1261,10 @@ export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_
  */
 export type FeatureStage = "dispatch" | "proxy";
 /**
- * shadow の種類。`decision` は追加呼出しなしの判断比較、`execution` は候補で実際に生成した。
+ * shadow の種類。`decision` は追加呼出しなし、`execution` は候補で生成、
+ * `estimator` は品質推定を primary heuristic と比較する。
  */
-export type ShadowKind = "decision" | "execution";
+export type ShadowKind = "decision" | "execution" | "estimator";
 /**
  * failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。
  */
@@ -1665,6 +1666,14 @@ export type FailureClass = "infra" | "work";
  * run の routing outcome の状態（§6: 未判定を false や品質 0 とみなさないための区別）。
  */
 export type RoutingOutcomeState = "not_recorded" | "unreviewed" | "judged";
+/**
+ * estimator shadow 1 件の結果。primary の成否とは別。
+ */
+export type EstimatorShadowOutcome = ("completed" | "failed" | "timeout" | "dropped") | "prompt_required";
+/**
+ * estimator の選択と比較相手の関係。
+ */
+export type EstimatorComparison = ("same" | "differs") | "no_candidate";
 /**
  * 木の節点の「今どこか」（ADR-0079 D5 / D10 の名指しの待ちを含む表示用の導出値。状態機械には足さない）。
  */
@@ -10531,6 +10540,11 @@ export interface TaskRoutingView {
    */
   assignee?: string | null;
   /**
+   * Phase 5: run を跨いだ estimator shadow（`routing_shadow[].estimator`）の coverage・失敗/timeout・
+   * prompt_required・heuristic primary との差・推論 overhead。primary の outcome とは別。無ければ省く。
+   */
+  estimator_shadow?: EstimatorShadowSummary | null;
+  /**
    * routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。
    */
   routing?: TaskRouting | null;
@@ -10538,7 +10552,8 @@ export interface TaskRoutingView {
    * run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
    * 要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・
    * `routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。
-   * Phase 4 の `routing_shadow` は primary の結果から独立した optional の配列。
+   * Phase 4 の `routing_shadow` は primary の結果から独立した optional の配列。Phase 5 の estimator
+   * shadow は各要素の `estimator`（id/version・依存・評価不能理由・heuristic primary との差）。
    */
   runs: RunRoutingAudit[];
   task_id: TaskId;
@@ -10546,6 +10561,40 @@ export interface TaskRoutingView {
    * Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。
    */
   unbound_requests?: RequestRoutingAudit[];
+}
+/**
+ * task の estimator shadow の要約（run を跨いで数える）。対象が 0 件なら作らない。
+ */
+export interface EstimatorShadowSummary {
+  completed: number;
+  /**
+   * completed / targets。
+   */
+  coverage: number;
+  /**
+   * completed のうち heuristic 首位と選択が違った件数。
+   */
+  differs_from_heuristic: number;
+  /**
+   * completed のうち heuristic primary と選択が違った件数。
+   */
+  differs_from_primary: number;
+  dropped: number;
+  /**
+   * 記録に現れた estimator（`<id>/<version>`、重複なし・昇順）。
+   */
+  estimators: string[];
+  failed: number;
+  /**
+   * overhead の記録がある件の平均（ms）。
+   */
+  mean_overhead_ms?: number | null;
+  prompt_required: number;
+  /**
+   * estimator shadow の記録数（評価の対象）。
+   */
+  targets: number;
+  timeout: number;
 }
 /**
  * ワーカー run 1 件の監査（旧欄）と Phase 2 の子 trace・完全性。
@@ -10773,6 +10822,11 @@ export interface RoutingShadowAudit {
    * primary の model/source と候補が両方分かる場合だけ比較する。
    */
   differs_from_primary?: boolean | null;
+  /**
+   * Phase 5: `kind = estimator` のときだけ。estimator の id/version・依存・評価不能理由・
+   * heuristic primary との差（primary の outcome・attempts とは別）。
+   */
+  estimator?: EstimatorShadowAudit | null;
   input_tokens?: number | null;
   kind: ShadowKind;
   output_tokens?: number | null;
@@ -10781,6 +10835,47 @@ export interface RoutingShadowAudit {
   reservation?: ShadowReservationAudit | null;
   shadow_id: string;
   status: ShadowStatus;
+}
+/**
+ * `RoutingShadowAudit.estimator`（`kind = estimator` のときだけ）。
+ */
+export interface EstimatorShadowAudit {
+  dependencies: EstimatorDependencyAudit;
+  /**
+   * `policy_version` が `estimator:<id>/<version>` のときの id と version。
+   */
+  estimator_id?: string | null;
+  estimator_version?: string | null;
+  outcome: EstimatorShadowOutcome;
+  /**
+   * 推論 overhead（sidecar 往復 ms）。
+   */
+  overhead_ms?: number | null;
+  reason?: ShadowReason | null;
+  /**
+   * 評価不能の理由語（allowlist のみ。自由文は出さない）。
+   */
+  unavailable_reason?: string | null;
+  /**
+   * estimator の選択と、同じ候補集合での heuristic 首位の差。completed のみ。
+   */
+  vs_heuristic?: EstimatorComparison | null;
+  /**
+   * estimator の選択と heuristic primary（実際の primary 決定）の差。completed のみ。
+   */
+  vs_primary?: EstimatorComparison | null;
+}
+/**
+ * descriptor の依存。記録から分かる値だけ `Some`（未記録は推定しない）。
+ */
+export interface EstimatorDependencyAudit {
+  external_embeddings?: boolean | null;
+  needs_network?: boolean | null;
+  needs_prompt?: boolean | null;
+  /**
+   * 宣言された依存が daemon の許可（network allowlist・privacy）に合わず送らなかった。
+   */
+  not_allowed?: boolean;
 }
 /**
  * 監査表示用の予約と確定の消費。額は effective USD。

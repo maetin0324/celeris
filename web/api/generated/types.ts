@@ -1516,6 +1516,43 @@ export type EscalationAudit = {
   "selected_lane": Tier;
 };
 
+export type EstimatorComparison = "same" | "differs" | "no_candidate";
+
+export type EstimatorDependencyAudit = {
+  "external_embeddings"?: boolean | null;
+  "needs_network"?: boolean | null;
+  "needs_prompt"?: boolean | null;
+  "not_allowed"?: boolean;
+};
+
+export type EstimatorShadowAudit = {
+  "dependencies": EstimatorDependencyAudit;
+  "estimator_id"?: string | null;
+  "estimator_version"?: string | null;
+  "outcome": EstimatorShadowOutcome;
+  "overhead_ms"?: number | null;
+  "reason"?: ShadowReason | null;
+  "unavailable_reason"?: string | null;
+  "vs_heuristic"?: EstimatorComparison | null;
+  "vs_primary"?: EstimatorComparison | null;
+};
+
+export type EstimatorShadowOutcome = "completed" | "failed" | "timeout" | "dropped" | "prompt_required";
+
+export type EstimatorShadowSummary = {
+  "completed": number;
+  "coverage": number;
+  "differs_from_heuristic": number;
+  "differs_from_primary": number;
+  "dropped": number;
+  "estimators": Array<string>;
+  "failed": number;
+  "mean_overhead_ms"?: number | null;
+  "prompt_required": number;
+  "targets": number;
+  "timeout": number;
+};
+
 export type Event = {
   "attempt": number;
   "before_sha": string;
@@ -4177,6 +4214,7 @@ export type RoutingShadowAudit = {
   "candidate_model"?: string | null;
   "candidate_source"?: string | null;
   "differs_from_primary"?: boolean | null;
+  "estimator"?: EstimatorShadowAudit | null;
   "input_tokens"?: number | null;
   "kind": ShadowKind;
   "output_tokens"?: number | null;
@@ -4487,7 +4525,7 @@ export type ShadowDecision = {
   "lane": Tier;
 };
 
-export type ShadowKind = "decision" | "execution";
+export type ShadowKind = "decision" | "execution" | "estimator";
 
 export type ShadowReason = "not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "timeout" | "privacy" | "upstream_error" | "off" | "cap_exceeded" | "unknown_cost" | "resource_group_shared" | "primary_pressure";
 
@@ -4798,6 +4836,7 @@ export type TaskRouting = {
 
 export type TaskRoutingView = {
   "assignee"?: string | null;
+  "estimator_shadow"?: EstimatorShadowSummary | null;
   "routing"?: TaskRouting | null;
   "runs": Array<RunRoutingAudit>;
   "task_id": TaskId;

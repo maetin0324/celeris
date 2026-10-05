@@ -16,12 +16,17 @@ completed: 2026-10-05
 | `cargo test -p task-core routing_trajectory_escalates_one_lane_and_respects_caps -- --nocapture` | 1 passed |
 | `UPDATE_SCHEMA=1 cargo test -p task-core event_row_schema_matches_committed` | 1 passed、`docs/api/v1/event.schema.json` 更新 |
 | `cargo test -p task-core --quiet` | 730 passed、0 failed |
+| `cargo nextest run -p task-core -E 'test(routing_trajectory_escalates_one_lane_and_respects_caps) \| test(never_escalates_above_the_ceiling_or_on_supply_side_failures) \| test(work_unit_lane_is_capped_by_the_task_lane)'` | 3 passed、727 skipped |
+| `cargo test -p task-api committed_schema_matches_generated --quiet` | 1 passed、`docs/api/v1/api-v1.schema.json` 更新 |
 | `cargo clippy -p task-core -p task-ops -p task-dispatch -p task-api --all-targets -- -D warnings` | exit 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `bash scripts/dev/test-parallel.sh` | exit 0。nextest Summary 原文は 3969 passed (1 slow)、12 skipped。doc test は 0 passed、1 ignored。集計器の `passed: 0` は Summary 原文と一致しないため件数には使わない |
 | `cargo fmt --all -- --check`、`git diff --check` | exit 0 |
+| `git diff --name-only $(git merge-base HEAD celeris/01M4577C9412HCDQEV1AFTT69C)` の許可範囲外件数 | 0 |
 | `sh scripts/dev/check-adr-numbers.sh`、`sh scripts/dev/check-doc-links.sh`、`sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | すべて exit 0 |
 
 ## 未解決と提案
 
 - dispatcher の retry lane 選択への `decide_trajectory` 配線と `RoutingRecord.escalation` の `Some` 記録は後続 `dispatch-esc` WorkUnit で行う。今は全 callsite が `None` を入れる。
-- API schema、gui/web の生成型は audit API の WorkUnit で更新する。event schema は task-core の固定 schema 試験に必要なのでこの unit で再生成した。
+- API schema と event schema は固定 schema 試験に合わせて再生成した。gui/web の生成型は audit API の WorkUnit で更新する。
 - event の区間 ID は event 配列の index に基づく。store 側の単調 seq に置き換えるなら、後続で `attempt_history_with_interval` の入力を event row に拡張する。

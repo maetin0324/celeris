@@ -1274,7 +1274,7 @@ impl Dispatcher {
                 task_core::retry_policy::attempt_history_with_interval(task, &events);
             let thresholds = task_core::EscalationThresholds {
                 org_ceiling: ceiling.clone(),
-                ..task_core::EscalationThresholds::default()
+                ..self.dispatch_routing.escalation.clone()
             };
             let policy = task_core::EscalationPolicy::for_task_with_thresholds(
                 task,

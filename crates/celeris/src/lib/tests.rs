@@ -1390,6 +1390,19 @@ fn routing_runtime_is_wired_to_the_dispatcher_and_reload_is_atomic() {
     reload_providers(&mut dispatcher, &mut config).unwrap();
     assert_eq!(dispatcher.dispatch_routing().mode, RoutingMode::Enforce);
     assert!(dispatcher.dispatch_routing().window_reserves.is_empty());
+    std::fs::write(&path, format!("{enforce}\n[model_routing.escalation]\nquality_failures_per_lane = 3\nmax_total_attempts = 5\n")).unwrap();
+    reload_providers(&mut dispatcher, &mut config).unwrap();
+    assert_eq!(
+        dispatcher
+            .dispatch_routing()
+            .escalation
+            .quality_failures_per_lane,
+        3
+    );
+    assert_eq!(
+        dispatcher.dispatch_routing().escalation.max_total_attempts,
+        5
+    );
     let old = std::sync::Arc::clone(config.model_routing.runtime.as_ref().unwrap());
     // 不正な設定は dispatcher・runtime・catalog のどれも変えない。
     std::fs::write(

@@ -28,6 +28,10 @@ completed: 2026-10-05
 - `bash scripts/dev/test-parallel.sh`: exit 0、4003 passed / 0 failed / 13 ignored。
 - `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy -p task-api --all-targets -- -D warnings`: exit 0。
 
+## 再試行での補強
+
+前回の WU check は `chat_stream_` が 6 件で下限 8 件に届かず失敗した。既存の実装と試験はそのまま使い、`chat_stream_replay_crosses_store_page_boundary`（500 件を超える再生）と `chat_stream_does_not_mix_threads`（スレッド分離）を追加した。`cargo test -p task-api --test chat_stream chat_stream_ -- --quiet` は 7 passed、単体試験を含む計画の件数 check は `8 tests`、exit 0。`cargo clippy -p task-api --all-targets -- -D warnings` と `cargo fmt --all -- --check` も exit 0。
+
 ## 未解決・申し送り
 
 - `crates/task-api/Cargo.toml` を api-attach 葉も触る可能性がある（multer 等）。統合で衝突したら両方の行を残す。

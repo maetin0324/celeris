@@ -427,3 +427,94 @@ async fn chat_stream_run_events_page() {
         "bad_request",
     );
 }
+
+#[tokio::test(start_paused = true)]
+async fn chat_stream_replay_crosses_store_page_boundary() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = thread_with_message(&app, "large-replay").await;
+    let snapshot = snapshot_event_id(&app, &thread).await;
+    claim(&env, &thread, "run-large");
+    // The stream reads at most 500 rows per store call. The terminal event must
+    // arrive after it advances the cursor and reads another page.
+    for _ in 0..501 {
+        env.store
+            .chat_run_append_text("run-large", "x", now())
+            .expect("append text");
+    }
+    env.store
+        .chat_run_finish("run-large", ChatRunState::Completed, None, None, now())
+        .expect("finish");
+    let mut sse = open_stream(
+        &app,
+        stream_get(&thread, &format!("?after={snapshot}"), None),
+    )
+    .await;
+    let frames = collect_until(&mut sse, is_terminal_run).await;
+    let received = ids(&frames);
+    assert!(received.windows(2).all(|pair| pair[0] < pair[1]));
+    assert!(received.len() > 500, "replay must cross a store page");
+    let mut expected = Vec::new();
+    let mut after = snapshot.to_string();
+    loop {
+        let page = send(
+            &app,
+            get_admin(&format!(
+                "{BASE}/{thread}/runs/run-large/events?after={after}&limit=500"
+            )),
+        )
+        .await;
+        assert_eq!(page.status.as_u16(), 200, "{}", page.text());
+        let body = page.json();
+        expected.extend(body["items"].as_array().expect("items").iter().map(|item| {
+            item["id"]
+                .as_str()
+                .expect("id")
+                .parse::<u64>()
+                .expect("numeric id")
+        }));
+        match body["next_cursor"].as_str() {
+            Some(next) => after = next.to_string(),
+            None => break,
+        }
+    }
+    let received_run: Vec<u64> = frames
+        .iter()
+        .filter(|frame| frame.data["run_id"] == "run-large")
+        .map(|frame| frame.id.expect("id"))
+        .collect();
+    assert_eq!(received_run, expected);
+    assert_eq!(
+        frames.iter().filter(|f| f.event == "text_delta").count(),
+        501
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn chat_stream_does_not_mix_threads() {
+    let env = admin_env();
+    let app = env.router();
+    let thread = thread_with_message(&app, "first-thread").await;
+    let other = thread_with_message(&app, "second-thread").await;
+    let snapshot = snapshot_event_id(&app, &thread).await;
+    claim(&env, &other, "other-run");
+    finish_fake_run(&env, "other-run");
+    claim(&env, &thread, "own-run");
+    finish_fake_run(&env, "own-run");
+    let mut sse = open_stream(
+        &app,
+        stream_get(&thread, &format!("?after={snapshot}"), None),
+    )
+    .await;
+    let frames = collect_until(&mut sse, is_terminal_run).await;
+    assert!(frames.iter().all(|f| f.data["thread_id"] == thread));
+    assert!(frames.iter().all(|f| f.data["run_id"] != "other-run"));
+    assert_eq!(
+        frames
+            .iter()
+            .filter(|f| f.data["run_id"] == "own-run")
+            .map(|f| f.id.expect("id"))
+            .collect::<Vec<_>>(),
+        stored_ids(&app, &thread, "own-run", snapshot).await
+    );
+}

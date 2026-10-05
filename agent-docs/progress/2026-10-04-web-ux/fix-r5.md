@@ -52,6 +52,11 @@ shots-r4 では追加の修正は要らなかった（コード変更なし）�
 | `corepack pnpm@12.6.0 -C web e2e --grep-invert 'S1 /' --retries=0` | exit 0（186 passed / 8 skipped、skip は既存） |
 | `corepack pnpm@12.6.0 -C web mobile-audit` | exit 0（31 path × 4 幅 ok） |
 
+## after-r4 の置き場
+
+- 受け入れ条件が探す場所: `/local/celeris/data/workspaces/01M45PRPACBEP4X1FWPNP4FRMG/wu/fix-r5/artifacts/after-r4`（shots-r4 の後述を `cp -a` で写したもの、撮り直しなし）。**240 枚**（基本 124 ＋ 状態変種 116）、うち error 変種 16 枚。`_artifacts-360.png`・`_projects_P1-360.png`・`_projects_P1-390.png`・`_-1440.png` と `error-*`（/inbox・/tasks・/tasks/T1・/providers × 4 幅）が揃っていることを確認済み。
+- error 変種の取得失敗の文と再試行: 撮像は `waitForStateCapture`（states.ts）の `role=alert` 内の「再試行」表示まで待ってからなので、写り込む内容は states.spec.ts の error 判定（`[data-fetch-state="error"]` 可視・`role="alert"`・「再試行」button 可視）と同一。本 run（HEAD 43ad339d）で 4 画面すべて再実行し pass（4 passed）。
+
 ## 未解決事項
 
 - 無し。

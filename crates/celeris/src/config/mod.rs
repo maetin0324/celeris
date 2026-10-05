@@ -234,6 +234,10 @@ pub struct Config {
     /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
     #[serde(skip)]
     pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,
+    /// Shared handle for API readers; each reader keeps its own immutable Arc snapshot.
+    #[serde(skip)]
+    pub routing_catalog_state:
+        Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<RoutingCatalog>>>>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション。ここから ----
     /// `[sessions]`。CoS の対話・部門長のレビュー run の継続セッション（`node_sessions`）の逼迫判定。
@@ -448,7 +452,9 @@ impl Config {
         for warning in &catalog.warnings {
             tracing::warn!(key = %warning, "model routing compatibility warning");
         }
-        cfg.routing_catalog_snapshot = Some(std::sync::Arc::new(catalog));
+        let catalog = std::sync::Arc::new(catalog);
+        cfg.routing_catalog_snapshot = Some(std::sync::Arc::clone(&catalog));
+        cfg.routing_catalog_state = Some(std::sync::Arc::new(std::sync::RwLock::new(catalog)));
         for code in cfg.provider_kind_warnings() {
             tracing::warn!(warning = %code, "provider kind compatibility warning");
         }

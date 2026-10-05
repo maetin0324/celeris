@@ -1319,6 +1319,7 @@ fn routing_config_reload_is_atomic() {
     std::fs::write(&path, &base).unwrap();
     let mut config = Config::load(&path).unwrap();
     let old = Arc::clone(config.routing_catalog_snapshot.as_ref().unwrap());
+    let shared = Arc::clone(config.routing_catalog_state.as_ref().unwrap());
     let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
     std::fs::write(
         &path,
@@ -1334,6 +1335,7 @@ fn routing_config_reload_is_atomic() {
         config.routing_catalog_snapshot.as_ref().unwrap(),
         &old
     ));
+    assert!(Arc::ptr_eq(&shared.read().unwrap(), &old));
     std::fs::write(
         &path,
         format!("{base}\n[model_routing]\nmode = \"shadow\"\n"),
@@ -1343,6 +1345,10 @@ fn routing_config_reload_is_atomic() {
     assert!(!Arc::ptr_eq(
         config.routing_catalog_snapshot.as_ref().unwrap(),
         &old
+    ));
+    assert!(Arc::ptr_eq(
+        &shared.read().unwrap(),
+        config.routing_catalog_snapshot.as_ref().unwrap()
     ));
     assert_eq!(
         config.routing_catalog_snapshot.as_ref().unwrap().mode,

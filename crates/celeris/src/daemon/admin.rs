@@ -226,6 +226,16 @@ pub(crate) fn reload_providers(
     config.conversation = new_config.conversation;
     config.model_routing = new_config.model_routing;
     config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
+    if let (Some(shared), Some(snapshot)) = (
+        config.routing_catalog_state.as_ref(),
+        config.routing_catalog_snapshot.as_ref(),
+    ) {
+        *shared
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::sync::Arc::clone(snapshot);
+    } else {
+        config.routing_catalog_state = new_config.routing_catalog_state;
+    }
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

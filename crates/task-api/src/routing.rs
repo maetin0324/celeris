@@ -6,6 +6,7 @@
 //! （`actual`・`actual_sources`）、構造化した escalation（`escalation_audit`）、dispatch 時点の特徴
 //! （`routing_features`）、最新の outcome（`routing_outcome`・`outcome_state`）を同じ run の object に足す。
 //! 集めるのは決定的（ストアだけ）。LLM は関与しない。
+//! Phase 4 の `routing_shadow` は run ごとに別欄で返し、primary の outcome・attempts・review を変えない。
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;

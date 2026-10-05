@@ -1,0 +1,51 @@
+{
+  "task_id": "01SHADOWTASK0000000000001",
+  "runs": [
+    {
+      "task_id": "01SHADOWTASK0000000000001",
+      "run_id": "01SHADOWRUN00000000000001",
+      "lane": "standard",
+      "provider": "primary-provider",
+      "model": "primary-model",
+      "review": { "passed": true },
+      "routing_shadow": [
+        {
+          "shadow_id": "shadow-decision",
+          "primary_decision_id": "primary-decision",
+          "kind": "decision",
+          "status": "completed",
+          "candidate_source": "candidate-source",
+          "candidate_model": "candidate-model",
+          "differs_from_primary": true
+        },
+        {
+          "shadow_id": "shadow-execution",
+          "primary_decision_id": "primary-decision",
+          "kind": "execution",
+          "status": "failed",
+          "reason": "timeout",
+          "candidate_source": "candidate-source",
+          "candidate_model": "candidate-model",
+          "differs_from_primary": false,
+          "input_tokens": 120,
+          "output_tokens": 0,
+          "reservation": {
+            "utc_day": "2026-10-05",
+            "state": "timed_out",
+            "reserved_tokens": 500,
+            "reserved_effective_usd": 0.05,
+            "charged_tokens": 500,
+            "charged_effective_usd": 0.05
+          }
+        },
+        {
+          "shadow_id": "shadow-dropped",
+          "primary_decision_id": "primary-decision",
+          "kind": "execution",
+          "status": "dropped",
+          "reason": "cap_exceeded"
+        }
+      ]
+    }
+  ]
+}

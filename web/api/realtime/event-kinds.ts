@@ -38,6 +38,7 @@ export const EVENT_KINDS = [
   "routing_features_recorded",
   "routing_request_decided",
   "routing_outcome_recorded",
+  "routing_shadow_recorded",
   "checkpoint_saved",
   "execution_planned",
   "work_unit_transitioned",

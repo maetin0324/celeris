@@ -1255,6 +1255,13 @@ pub enum Event {
         #[serde(flatten)]
         outcome: Box<crate::model_router::feedback::RoutingOutcome>,
     },
+    /// 同 §7.1・Phase 4: shadow（decision / execution）1 件の結果。primary の選択・成功/失敗・attempts とは
+    /// 別欄で、それらを変えない。本文・prompt・credential は持たない（出力は SHA-256 と tokens だけ）。
+    /// 状態は変えない（`replay` は無視する）。
+    RoutingShadowRecorded {
+        #[serde(flatten)]
+        record: Box<crate::model_router::shadow::ShadowRecord>,
+    },
     /// ADR-0072 D5/D8（Phase E1）: run 終了時に daemon が確定させた checkpoint（worker の申告 +
     /// mechanical の合成）。状態は変えない（`replay` の attempts 計算は無視する）。
     CheckpointSaved {

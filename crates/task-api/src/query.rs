@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 65] = [
+pub(crate) const EVENT_TYPES: [&str; 66] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -196,6 +196,7 @@ pub(crate) const EVENT_TYPES: [&str; 65] = [
     "routing_features_recorded",
     "routing_request_decided",
     "routing_outcome_recorded",
+    "routing_shadow_recorded",
     // ADR-0072 D5（Phase E1）: run 終了時に確定させた checkpoint。
     "checkpoint_saved",
     // ADR-0072 D5（Phase E2）: 計画の採用（新規または replan）。
@@ -281,6 +282,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::RoutingFeaturesRecorded { .. } => "routing_features_recorded",
         Event::RoutingRequestDecided { .. } => "routing_request_decided",
         Event::RoutingOutcomeRecorded { .. } => "routing_outcome_recorded",
+        Event::RoutingShadowRecorded { .. } => "routing_shadow_recorded",
         Event::CheckpointSaved { .. } => "checkpoint_saved",
         Event::ExecutionPlanned { .. } => "execution_planned",
         Event::WorkUnitTransitioned { .. } => "work_unit_transitioned",

@@ -107,6 +107,9 @@ pub(crate) const MIGRATION_0047: &str =
 /// （decision / snapshot / run / task / source / model）と、決定の索引を足す（additive）。
 pub(crate) const MIGRATION_0048: &str =
     include_str!("../../migrations/0048_routing_log_correlation.sql");
+/// ADR 2026-10-04-multi-objective-model-routing Phase 4: 実行 shadow の UTC 日次上限の共有予約（additive）。
+pub(crate) const MIGRATION_0049: &str =
+    include_str!("../../migrations/0049_routing_shadow_budget.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
@@ -116,7 +119,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 48;
+pub const SCHEMA_VERSION: u32 = 49;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -166,6 +169,7 @@ impl SqliteStore {
             46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
             48 => Ok(MIGRATION_0048),
+            49 => Ok(MIGRATION_0049),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

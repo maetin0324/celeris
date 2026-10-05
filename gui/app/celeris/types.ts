@@ -654,6 +654,45 @@ export type Event =
       wall_ms?: number | null;
     }
   | {
+      candidate_model?: string | null;
+      candidate_source?: string | null;
+      cash_usd?: number | null;
+      /**
+       * 秘密を含まない短い説明（任意）。
+       */
+      detail?: string | null;
+      effective_usd?: number | null;
+      input_tokens?: number | null;
+      kind: ShadowKind;
+      latency_ms?: number | null;
+      /**
+       * 出力本文の SHA-256（小文字 16 進 64 桁）。本文は保存しない。
+       */
+      output_sha256?: string | null;
+      output_tokens?: number | null;
+      /**
+       * 判断した policy/estimator の版。
+       */
+      policy_version: string;
+      /**
+       * shadow が比べた primary の決定（`RoutingTraceV1.decision_id`）。
+       */
+      primary_decision_id: string;
+      /**
+       * completed は `None`。failed/dropped は必須。
+       */
+      reason?: ShadowReason | null;
+      request_id?: string | null;
+      /**
+       * 実行 shadow の日次予約（store の reservation id）。decision shadow・予約前の drop は `None`。
+       */
+      reservation_id?: string | null;
+      run_id?: string | null;
+      shadow_id: string;
+      status: ShadowStatus;
+      type: "routing_shadow_recorded";
+    }
+  | {
       checkpoint: Checkpoint;
       run_id: string;
       type: "checkpoint_saved";
@@ -1221,6 +1260,21 @@ export type ProviderSelectionReason = "local_preferred" | "local_full" | "local_
  * 特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。
  */
 export type FeatureStage = "dispatch" | "proxy";
+/**
+ * shadow の種類。`decision` は追加呼出しなしの判断比較、`execution` は候補で実際に生成した。
+ */
+export type ShadowKind = "decision" | "execution";
+/**
+ * failed/dropped の安定 reason code（説明文は別欄 `detail`。secret を入れない）。
+ */
+export type ShadowReason =
+  | ("not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "timeout" | "privacy" | "upstream_error")
+  | "off"
+  | "cap_exceeded"
+  | "unknown_cost"
+  | "resource_group_shared"
+  | "primary_pressure";
+export type ShadowStatus = "completed" | "failed" | "dropped";
 export type CheckpointEnd = ("completed" | "yielded" | "budget_exhausted") | "waiting";
 /**
  * checkpoint を合成した出所（D8）。
@@ -10484,6 +10538,7 @@ export interface TaskRoutingView {
    * run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
    * 要求単位の子 trace）・`audit_incomplete`、Phase 3 の `escalation_audit`・`routing_features`・
    * `routing_outcome`・`outcome_state`・`actual_sources` は旧欄と同じ object に並ぶ（旧 run は無い）。
+   * Phase 4 の `routing_shadow` は primary の結果から独立した optional の配列。
    */
   runs: RunRoutingAudit[];
   task_id: TaskId;
@@ -10554,6 +10609,10 @@ export interface RunRoutingAudit {
    * Phase 3: run 単位の最新の outcome（supersede された旧 outcome は出さない）。未追記は None。
    */
   routing_outcome?: RoutingOutcome | null;
+  /**
+   * Phase 4: run に結び付いた decision/execution shadow。旧 run は欄なし。
+   */
+  routing_shadow?: RoutingShadowAudit[] | null;
   rule_id?: string | null;
   run_id: string;
   task_id: TaskId;
@@ -10703,6 +10762,36 @@ export interface RoutingOutcome {
   supersedes?: string | null;
   tokens?: number | null;
   wall_ms?: number | null;
+}
+/**
+ * primary の結果から独立した shadow 1 件の監査。
+ */
+export interface RoutingShadowAudit {
+  candidate_model?: string | null;
+  candidate_source?: string | null;
+  /**
+   * primary の model/source と候補が両方分かる場合だけ比較する。
+   */
+  differs_from_primary?: boolean | null;
+  input_tokens?: number | null;
+  kind: ShadowKind;
+  output_tokens?: number | null;
+  primary_decision_id: string;
+  reason?: ShadowReason | null;
+  reservation?: ShadowReservationAudit | null;
+  shadow_id: string;
+  status: ShadowStatus;
+}
+/**
+ * 監査表示用の予約と確定の消費。額は effective USD。
+ */
+export interface ShadowReservationAudit {
+  charged_effective_usd: number;
+  charged_tokens: number;
+  reserved_effective_usd: number;
+  reserved_tokens: number;
+  state: string;
+  utc_day: string;
 }
 /**
  * ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。

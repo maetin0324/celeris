@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 65);
+    assert_eq!(EVENT_TYPES.len(), 66);
 }
 
 #[test]
@@ -344,5 +344,5 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 65);
+    assert_eq!(EVENT_TYPES.len(), 66);
 }

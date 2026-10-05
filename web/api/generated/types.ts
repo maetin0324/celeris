@@ -1737,6 +1737,26 @@ export type Event = {
   "type": "routing_outcome_recorded";
   "wall_ms"?: number | null;
 } | {
+  "candidate_model"?: string | null;
+  "candidate_source"?: string | null;
+  "cash_usd"?: number | null;
+  "detail"?: string | null;
+  "effective_usd"?: number | null;
+  "input_tokens"?: number | null;
+  "kind": ShadowKind;
+  "latency_ms"?: number | null;
+  "output_sha256"?: string | null;
+  "output_tokens"?: number | null;
+  "policy_version": string;
+  "primary_decision_id": string;
+  "reason"?: ShadowReason | null;
+  "request_id"?: string | null;
+  "reservation_id"?: string | null;
+  "run_id"?: string | null;
+  "shadow_id": string;
+  "status": ShadowStatus;
+  "type": "routing_shadow_recorded";
+} | {
   "checkpoint": Checkpoint;
   "run_id": string;
   "type": "checkpoint_saved";
@@ -4153,6 +4173,20 @@ export type RoutingRecord = {
   "work_unit_id"?: string | null;
 };
 
+export type RoutingShadowAudit = {
+  "candidate_model"?: string | null;
+  "candidate_source"?: string | null;
+  "differs_from_primary"?: boolean | null;
+  "input_tokens"?: number | null;
+  "kind": ShadowKind;
+  "output_tokens"?: number | null;
+  "primary_decision_id": string;
+  "reason"?: ShadowReason | null;
+  "reservation"?: ShadowReservationAudit | null;
+  "shadow_id": string;
+  "status": ShadowStatus;
+};
+
 export type RoutingTraceV1 = {
   "account_id"?: string | null;
   "candidates": Array<CandidateTrace>;
@@ -4252,6 +4286,7 @@ export type RunRoutingAudit = {
   "review"?: ReviewResult | null;
   "routing_features"?: RoutingFeaturesRecord | null;
   "routing_outcome"?: RoutingOutcome | null;
+  "routing_shadow"?: Array<RoutingShadowAudit> | null;
   "rule_id"?: string | null;
   "run_id": string;
   "task_id": TaskId;
@@ -4451,6 +4486,21 @@ export type ShadowDecision = {
   "confidence": number;
   "lane": Tier;
 };
+
+export type ShadowKind = "decision" | "execution";
+
+export type ShadowReason = "not_allowlisted" | "sampled_out" | "queue_full" | "concurrency_limit" | "timeout" | "privacy" | "upstream_error" | "off" | "cap_exceeded" | "unknown_cost" | "resource_group_shared" | "primary_pressure";
+
+export type ShadowReservationAudit = {
+  "charged_effective_usd": number;
+  "charged_tokens": number;
+  "reserved_effective_usd": number;
+  "reserved_tokens": number;
+  "state": string;
+  "utc_day": string;
+};
+
+export type ShadowStatus = "completed" | "failed" | "dropped";
 
 export type SideIntent = {
   "branch": string;

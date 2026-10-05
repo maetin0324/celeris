@@ -303,6 +303,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
             "DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor; \
              DROP INDEX idx_events_integration_request; \
+             DROP TABLE routing_shadow_reservations; \
              DROP INDEX idx_events_routing_decided; DROP INDEX idx_llm_proxy_requests_decision; \
              ALTER TABLE llm_proxy_requests DROP COLUMN model; ALTER TABLE llm_proxy_requests DROP COLUMN source_id; \
              ALTER TABLE llm_proxy_requests DROP COLUMN task_id; ALTER TABLE llm_proxy_requests DROP COLUMN run_id; \
@@ -328,7 +329,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 48);
+    assert_eq!(SCHEMA_VERSION, 49);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

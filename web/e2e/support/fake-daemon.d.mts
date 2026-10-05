@@ -16,6 +16,7 @@ export const routingCatalogFixture: import("../../api/generated/types").RoutingC
 export const routingAuditFixture: import("../../api/generated/types").TaskRoutingView;
 export const routingTrajectoryFixture: import("../../api/generated/types").TaskRoutingView;
 export const routingShadowFixture: import("../../api/generated/types").TaskRoutingView;
+export const routingEstimatorShadowFixture: import("../../api/generated/types").TaskRoutingView;
 export const llmSourcesFixture: import("../../api/generated/types").LlmSourcesView;
 export function createFakeDaemon(options?: {
   host?: string;

@@ -4065,6 +4065,85 @@ fn routing_shadow_config_defaults_off_and_requires_caps() {
 }
 
 #[test]
+fn routing_sidecar_config_defaults_off_and_rejects_primary() {
+    let config = routing_phase2_load("").unwrap();
+    let sidecar = &config.model_routing.estimator.sidecar;
+    assert!(!sidecar.enabled);
+    assert!(sidecar.shadow_only);
+    assert!(!sidecar.send_prompt);
+    assert_eq!(sidecar.protocol_version, 1);
+
+    for (snippet, expected) in [
+        ("shadow_only = false\n", "shadow_only"),
+        ("enabled = true\n", "requires endpoint"),
+        (
+            "enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
+             estimator_id = \"test\"\nestimator_version = \"v1\"\n",
+            "daily_max_requests",
+        ),
+        ("endpoint = \"http://example.com:8080\"\n", "endpoint"),
+    ] {
+        let err = routing_phase2_load(&format!("[model_routing.estimator.sidecar]\n{snippet}"))
+            .unwrap_err();
+        assert!(err.contains(expected), "{err}");
+    }
+
+    let valid = "[model_routing.estimator.sidecar]\n\
+        enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
+        estimator_id = \"test\"\nestimator_version = \"v1\"\n\
+        daily_max_requests = 10\n\
+        [model_routing.estimator.sidecar.allowlist]\n\
+        task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n";
+    let config = routing_phase2_load(valid).unwrap();
+    assert!(config.model_routing.estimator.sidecar.enabled);
+    assert!(config.model_routing.estimator.sidecar.shadow_only);
+}
+
+#[test]
+fn routing_sidecar_privacy_and_dependencies_gate_prompt() {
+    use task_core::model_router::shadow::ShadowTarget;
+
+    let base = "[model_routing.estimator.sidecar]\n\
+        endpoint = \"https://router.example/estimate\"\n\
+        network_allowlist = [\"router.example\"]\n";
+    let config = routing_phase2_load(base).unwrap();
+    let sidecar = &config.model_routing.estimator.sidecar;
+    let target = ShadowTarget {
+        task_kind: "coding".into(),
+        role: "software-engineering".into(),
+        lane: "cheap".into(),
+        source: "qwen".into(),
+    };
+    assert!(!sidecar.allows_prompt(&target));
+    assert!(sidecar.allows_dependencies(&["router.example".into()]));
+    assert!(!sidecar.allows_dependencies(&["embeddings.example".into()]));
+
+    let err = routing_phase2_load(&format!("{base}send_prompt = true\n")).unwrap_err();
+    assert!(err.contains("prompt_allowlist"), "{err}");
+    let config = routing_phase2_load(&format!(
+        "{base}send_prompt = true\n\
+         [model_routing.estimator.sidecar.prompt_allowlist]\n\
+         task_kinds = [\"coding\"]\nroles = [\"software-engineering\"]\n\
+         lanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
+    ))
+    .unwrap();
+    assert!(
+        config
+            .model_routing
+            .estimator
+            .sidecar
+            .allows_prompt(&target)
+    );
+    assert!(
+        !config
+            .model_routing
+            .estimator
+            .sidecar
+            .allows_dependencies(&["embeddings.example".into()])
+    );
+}
+
+#[test]
 fn routing_enforce_opt_in_validates_heuristic_only() {
     use task_core::model_router::policy::RoutingMode;
     // heuristic の明示 opt-in だけが通る。

@@ -219,6 +219,15 @@ pub(crate) fn catalog_cost(
     })
 }
 
+/// estimator shadow（`kind = estimator`）用の sink。decision shadow の開閉には関わらない。
+pub(crate) fn task_shadow_sink(store: Arc<dyn TaskStore>) -> Arc<dyn ShadowSink> {
+    Arc::new(TaskShadowSink {
+        store,
+        decision_on: Arc::new(AtomicBool::new(false)),
+        append_lock: Arc::new(std::sync::Mutex::new(())),
+    })
+}
+
 /// shadow の記録を task event（`routing_shadow_recorded`）として追記する。decision shadow は
 /// mode = shadow の間だけ。run の所属を DB で照合できない記録は task に結ばない（proxy log のみ）。
 struct TaskShadowSink {

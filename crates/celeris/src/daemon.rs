@@ -22,6 +22,7 @@ pub(crate) mod api;
 pub(crate) mod bootstrap;
 pub(crate) mod clusters;
 pub(crate) mod routing_shadow;
+pub(crate) mod routing_sidecar;
 pub(crate) mod run;
 pub(crate) mod secrets;
 pub(crate) mod services;

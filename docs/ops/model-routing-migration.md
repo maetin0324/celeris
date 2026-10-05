@@ -1,5 +1,5 @@
 ---
-tasks: [01M44NN2DCZXV0TZ5FXX5TMN58, 01M45RPPM85XTGYC17WCZQCER1]
+tasks: [01M44NN2DCZXV0TZ5FXX5TMN58, 01M45RPPM85XTGYC17WCZQCER1, 01M4651ZZP8FJKGG6W2WPFNKBH]
 ---
 # model routing（`[model_routing]`）への移行手順
 
@@ -505,3 +505,178 @@ RouterBench 型の外部 baseline（`--baseline <file>` の JSON）:
 - `name`（識別）と `models`（model 名 → `quality` / `cost_usd`、未観測は省略可）。
   `external_benchmark_baseline` に**別欄**で載るだけ。Celeris の観測指標や `policies` とは混ぜない。
   版 pin・出所（commit / 日付）を `name` か report の隣で管理する。
+
+## 10. Phase 5: RouteLLM sidecar（比較 estimator、既定 off）
+
+[ADR](../../agent-docs/adr/2026-10-04-multi-objective-model-routing.md) §7.3・§10 Phase 5 に対応する。RouteLLM の BERT classifier を**別 process の sidecar**
+（`scripts/model-routing/routellm_sidecar.py`）として loopback で動かし、`[model_routing.estimator.sidecar]`
+で llm-proxy の estimator shadow に比較用として差し込む。**primary は常に heuristic**（`shadow_only = true`
+以外は `Config::load` が拒否）。sidecar が到達不能・timeout・不正応答なら heuristic のまま続く。
+Celeris は weights を自動取得・同梱・再配布しない。**実行者は人**。本番 host の操作は下の手順を人が行う。
+
+検査: `sh scripts/model-routing/check-runbook.sh`（この節と `requirements.lock` の pin 一致・必須見出し・
+参照先の存在・承認状態の書式。表示名 `routing_routellm_runbook_pins_dependencies_and_license`）。
+実 weights を使う段は `sh scripts/model-routing/check-runbook.sh --require-approved` が exit 0 になってから。
+
+### 10.1 版と出所の記録
+
+下の block は `check-runbook.sh` が読む。`未記入` は承認後に人が埋める欄（推測で埋めない）。
+
+```text
+routellm-commit: 0b64fdafe049e596a3f5657c219329f24af24198
+wrapper-revision: d5225fc41210a829ea05cf9a8bdacc692f51f254
+weights-repository: routellm/bert_gpt4_augmented
+weights-revision: 86237e3df400762178ea98379477b8296e66d5e4
+weights-sha256: 6ec0b06c8af3c1b11aaefccb55f51f01ab531f80e276a7ad283607eec279cae5
+tokenizer-repository: routellm/bert_gpt4_augmented
+tokenizer-revision: 86237e3df400762178ea98379477b8296e66d5e4（checkpoint 内に tokenizer.json・tokenizer_config.json・special_tokens_map.json・sentencepiece.bpe.model あり）
+tokenizer-sha256: 06112d98f5dd4e57a3aa9ee546d938a7c671b99ae5e25eaa9ef6b411ce15b492（上の 4 file を LC_ALL=C sort して sha256sum | sha256sum）
+routellm-weights-use: approved
+```
+
+- `routellm-commit` は RouteLLM の full SHA（ADR の `0b64fdafe049`）。`requirements.lock` の
+  `routellm @ git+…@<sha>` と一致させる。
+- `wrapper-revision` は `routellm_sidecar.py` を入れた Celeris の commit。wrapper を変えたら更新する。
+- weights は upstream-oss 調査（2026-10-04）の観測 revision が `86237e3df400`。**承認時に実際に使う revision の
+  full SHA を記入する**（観測値をそのまま転記しない）。tokenizer は BERTRouter が checkpoint ディレクトリから
+  読むため同じ repository とする。承認時に checkpoint 内の tokenizer ファイルの有無を確かめて記入する。
+- checksum は取得したローカルディレクトリの全ファイルの SHA-256 を 1 つにまとめた値:
+  `(cd "$WEIGHTS_DIR" && find . -type f ! -path './.cache/*' | LC_ALL=C sort | xargs sha256sum) | sha256sum`
+
+### 10.2 license と notice
+
+| 対象 | license | notice・扱い |
+| --- | --- | --- |
+| RouteLLM code（`0b64fdafe049`） | Apache-2.0（[LICENSE](https://github.com/lm-sys/RouteLLM/blob/0b64fdafe049/LICENSE)） | 取り込み対象に NOTICE なし。Celeris は同梱せず pip で取得 |
+| Celeris wrapper（`routellm_sidecar.py`） | Celeris のリポジトリと同じ | RouteLLM のコードを複写していない（import のみ） |
+| weights / tokenizer（`routellm/bert_gpt4_augmented`） | model card に宣言なし（HF の `cardData.license` も `license:` tag も無い。調査 §5）。2026-10-05 の取得時、repo に Apache License 2.0 本文の `LICENSE` file（git blob `f49a4e16e68b`）を観測 | コードの Apache-2.0 から推定しない。§10.3 の人の決定どおり内部 shadow 評価に限る（再配布・公開なし、外部発表前に人が再判断） |
+| torch / transformers / litellm | BSD-3-Clause / Apache-2.0 / MIT（enterprise を除く） | 専用 venv に入れるだけで再配布しない。将来 image に同梱するなら各配布物の notice を付ける |
+
+### 10.3 承認記録（ADR §7.3 `routellm-weights-use`）
+
+- 状態: `routellm-weights-use` は **approved**（2026-10-05、内部 shadow 評価に限る。§10.1 の block が正）。値は
+  `approved` か `pending` だけ。
+- `pending` の間は weights を取得せず、実 sidecar の起動（§10.6）と実 shadow 評価をしない。偽 classifier
+  （`--fake-classifier`）の合格は実測の代わりにならない。
+- 承認したら人が次を記録する: 承認日・承認者・確認した利用条件の根拠（URL と確認日）・対象 revision・checksum。
+  block の `routellm-weights-use: approved` と `weights-*`/`tokenizer-*` を埋め、この下に追記する。
+
+```text
+approval-date: 2026-10-05
+approver: rmaeda（人の決定、内部 shadow 評価に限る）
+terms-evidence: https://huggingface.co/routellm/bert_gpt4_augmented （2026-10-05 確認: model card に license 宣言なし・cardData なし・license tag なし。repo には Apache-2.0 本文の LICENSE file あり。内部 shadow 評価に限り使用、再配布・公開しない、外部発表前に人が再判断）
+```
+
+- 人の決定（2026-10-05、`routellm-weights-use`）: `routellm/bert_gpt4_augmented`（観測 revision `86237e3df400`、HF に
+  license 宣言なし）は**内部の shadow 評価に限り**使ってよい。再配布・公開はしない。外部発表の前に人が license を
+  再判断する。実 sidecar の start-stop と上限付き shadow は人（Fable）が本番 host で §10.4〜§10.7 と
+  `scripts/model-routing/real-sidecar-check.sh` に沿って実行し、原票を `docs/reports/model-routing-routellm-shadow/` に置く。
+  上の block は、実行時に取得した weights の full revision・checksum と承認者・根拠を記入した時点で `approved` にする
+  （それまでは `pending`。`check-runbook.sh` は `approved` に full SHA と checksum を要求する）。
+
+### 10.4 依存の pin と構築
+
+pin は `scripts/model-routing/requirements.lock` が正。この表と食い違うと `check-runbook.sh` が落ちる。
+
+| 依存 | pin |
+| --- | --- |
+| Python | `python==3.11` |
+| RouteLLM | `0b64fdafe049e596a3f5657c219329f24af24198` |
+| torch | `torch==2.3.1` |
+| transformers | `transformers==4.41.2` |
+| litellm | `litellm==1.60.0` |
+
+lock は直接依存だけの pin。推移依存と wheel（CPU か CUDA か）は構築した環境で freeze して控える。
+専用 venv を本番の Celeris と別の場所に作る（例: `/work/routellm-venv`。`~/.config/celeris` や release
+ディレクトリの中に置かない）:
+
+```sh
+python3.11 -m venv /work/routellm-venv
+# CPU のみ: torch の CPU wheel を先に入れる（CUDA を使うなら §10.5 の版に合う index を使う）
+/work/routellm-venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch==2.3.1
+/work/routellm-venv/bin/pip install -r scripts/model-routing/requirements.lock
+/work/routellm-venv/bin/pip freeze > /work/routellm-venv/freeze.txt   # 推移依存の控え（report に hash を残す）
+```
+
+期待結果: `pip install` が exit 0、`/work/routellm-venv/bin/python -c 'import routellm, torch, transformers'` が
+exit 0。構築はネットワークを使うので人が行う（Celeris の run・試験では行わない）。
+
+### 10.5 CPU / GPU 要件
+
+- **検証済み構成（2026-10-05、CPU のみ）**: AMD Ryzen Threadripper PRO 3945WX（12 core / 24 thread）、RAM 110 GiB、
+  GPU 不使用。Python 3.11.15、torch 2.3.1+cpu、transformers 4.41.2、`OMP_NUM_THREADS=4`。peak RSS（`/usr/bin/time -v`
+  の Maximum resident set size）は start-stop 約 2.6 GB（2643756 kB）、30 件 shadow 約 2.6 GB（2623488 kB）。
+  原票は `docs/reports/model-routing-routellm-shadow/`（`run-manifest.txt`）。未検証の CPU/GPU 構成を保証しない。
+- CPU: x86_64 Linux、torch の CPU wheel。`routellm/bert_gpt4_augmented`（revision `86237e3df400`）の checkpoint は
+  BERT-base ではなく XLM-RoBERTa の sequence classification（`model.safetensors` 約 1.1 GB）で、1 process に読む。
+  当初の目安（BERT-base 相当・weights 約 0.45 GB）は誤り。thread 数は `OMP_NUM_THREADS` で絞る（例: 4）。
+- GPU（任意）: torch 2.3.1 の CUDA 12.1 か 11.8 の wheel と、それに合う NVIDIA driver。VRAM は未計測。
+- 最初の実測で、試した機材（CPU 型番・コア数・RAM、GPU 型番・VRAM・CUDA/driver）と peak RAM/VRAM
+  （例: `/usr/bin/time -v` の Maximum resident set size、`nvidia-smi --query-gpu=memory.used --format=csv`）を
+  `docs/reports/model-routing-routellm-shadow.md` に記録し、この節を「検証済み構成」に更新する。
+
+### 10.6 起動・確認・停止（loopback）
+
+前提: §10.3 が approved、weights は利用者が手動で取得したローカルディレクトリ（既存の HF cache を使う場合も
+`--weights-dir` に snapshot のディレクトリを明示する。sidecar は `HF_HUB_OFFLINE=1` で動き、推論時に download しない）。
+`--host` は `127.0.0.1` 以外を受け付けない。
+
+```sh
+WEIGHTS_DIR=/work/routellm-weights/bert_gpt4_augmented   # 手動取得したディレクトリ
+PORT=18731
+/work/routellm-venv/bin/python scripts/model-routing/routellm_sidecar.py \
+  --host 127.0.0.1 --port "$PORT" --router bert --weights-dir "$WEIGHTS_DIR" \
+  --strong <strong の model_profile_id> --weak <weak の model_profile_id> > /work/routellm-sidecar.log 2>&1 &
+SIDECAR_PID=$!
+```
+
+1. ready: log の 1 行目が `READY port=18731`。`curl -s http://127.0.0.1:18731/healthz` が
+   `"status":"ready"`・`"protocol_version":1`・`"needs_network":false`・`"external_embeddings":false` を返す。
+2. 実 `/estimate`（prompt あり。strong の `reasons` に有限な `raw_pair_win_rate=<0..1>` が出る）:
+   `curl -s -X POST -H 'Content-Type: application/json' --data '{"request_id":"rb-1","context_features":{},"candidates":[{"model_profile_id":"<strong>"},{"model_profile_id":"<weak>"}],"optional_prompt":"hello"}' http://127.0.0.1:18731/estimate`
+   prompt 無しでは `prompt_required`、pair 外の候補は `outside_configured_pair` で、`index` は常に `null`（未校正）。
+3. 停止: `kill -TERM "$SIDECAR_PID"; wait "$SIDECAR_PID"`。自分が起動した PID だけを止める（`pkill` しない）。
+4. 停止の確認: `kill -0 "$SIDECAR_PID"` が失敗（PID 終了）、`ss -ltn "sport = :18731"` に LISTEN 行が無い
+   （port 閉鎖）、`/healthz` が接続拒否。
+5. 停止後の heuristic 継続: sidecar を設定していれば、以降の要求で routing 監査の estimator shadow が
+   timeout / 到達不能として記録され、primary（heuristic）の選択と応答は変わらないこと（§6 の確認と同じ）。
+
+一連は `CELERIS_ROUTELLM_REAL=1 CELERIS_ROUTELLM_WEIGHTS_DIR="$WEIGHTS_DIR" sh scripts/model-routing/real-sidecar-check.sh start-stop`
+でも確かめられる（条件が揃わないと「not run」で exit 2。skip を合格にしない）。
+
+### 10.7 Celeris への接続（opt-in）・上限・戻し方
+
+本番の `~/.config/celeris/config.toml` を変えるのは人。§1 の控えを取ってから書く。既定は
+`enabled = false`（節を書かない＝off、送信 0）。
+
+```toml
+[model_routing.estimator.sidecar]
+enabled = true                       # opt-in。既定 false
+shadow_only = true                   # 必須。false は起動・reload を拒否（heuristic が primary のまま）
+endpoint = "http://127.0.0.1:18731"  # loopback か network_allowlist の host のみ。client が /estimate を付ける
+estimator_id = "routellm-bert"
+estimator_version = "1"
+timeout_ms = 1000                    # 超えたら heuristic のまま（timeout として記録）
+max_inflight = 4
+send_prompt = false                  # 既定 false。true には prompt_allowlist の 4 次元すべてが要る
+daily_max_requests = 100             # 必須（正の整数）。UTC 日界で計数
+
+[model_routing.estimator.sidecar.allowlist]   # 対象。4 次元とも空でないこと
+task_kinds = ["*"]
+roles = ["*"]
+lanes = ["cheap"]
+sources = ["*"]
+```
+
+- RouteLLM classifier は prompt が無いと評価しない（`prompt_required`）。比較値を得るには `send_prompt = true` と
+  `[model_routing.estimator.sidecar.prompt_allowlist]`（4 次元）で送る範囲を明示的に許可する。prompt は loopback の
+  sidecar にだけ渡り、sidecar は prompt を log に書かない。
+- 上限: sidecar の上限は `daily_max_requests` と `timeout_ms`・`max_inflight`・`max_payload_bytes`。sidecar 推論の
+  token/effective-cost と CPU/GPU 資源費は**未計測であり 0 とみなさない**（report では unknown）。生成を伴う実行
+  shadow の token・USD 上限は §9.2 の別設定。
+- 反映: `celerisctl config to-harnesses --config …` が exit 0 を確かめてから `POST /api/v1/reload`。daemon ログに
+  反映の warning が出たら（proxy 側が再起動待ち）、人が再起動の時機を決める。
+- 確認: `GET /api/v1/tasks/<task id>/routing` の estimator shadow 欄に estimator id/version と heuristic との差が
+  primary と別欄で出る。`celerisctl routing evaluate --policy estimator`（§9.5）で比較 report を作る。
+- 戻し方（既定 off）: `enabled = false` にする（または節を消す）→ 検証 → reload。sidecar を §10.6 の 3〜4 で
+  止める。止めてから off にしても heuristic は続く（到達不能として記録されるだけ）。

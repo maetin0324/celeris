@@ -1,0 +1,1 @@
+{"request_id": "shadow-029", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Compare the convergence guarantees of Adam and SGD with momentum for non-convex objectives, citing the relevant assumptions."}

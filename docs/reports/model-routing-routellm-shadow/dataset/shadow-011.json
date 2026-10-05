@@ -1,0 +1,1 @@
+{"request_id": "shadow-011", "context_features": {"synthetic_category": "medium"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Write a Python function that returns the n-th Fibonacci number iteratively."}

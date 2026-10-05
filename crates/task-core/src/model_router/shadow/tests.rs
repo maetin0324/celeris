@@ -177,6 +177,21 @@ fn shadow_record_wire_and_validation() {
         decision.validate(),
         Err(ShadowRecordError::DecisionWithUsage(_))
     ));
+
+    decision.kind = ShadowKind::Estimator;
+    decision.output_tokens = None;
+    decision.policy_version = "route-test/1".into();
+    decision.detail = Some("heuristic=0.7;sidecar=0.8".into());
+    assert_eq!(decision.validate(), Ok(()));
+    assert_eq!(
+        serde_json::to_value(&decision).unwrap()["kind"],
+        "estimator"
+    );
+    decision.output_tokens = Some(1);
+    assert!(matches!(
+        decision.validate(),
+        Err(ShadowRecordError::DecisionWithUsage(_))
+    ));
 }
 
 #[test]

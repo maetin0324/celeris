@@ -31,6 +31,7 @@ use task_dispatch::accounts::{
 use ulid::Ulid;
 
 use crate::config::{LlmProxyConfig, OpenAiCompatibleConfig};
+use crate::estimator_shadow::{EstimatorShadow, EstimatorShadowInput, EstimatorShadowSlot};
 use crate::fallback::{
     AfterFailure, Breakers, FailureClass, FallbackBudget, FallbackSettings, RequestConstraints,
 };
@@ -86,6 +87,9 @@ pub struct ProxyState {
     in_flight: Arc<InFlightContexts>,
     /// ADR 2026-10-04 §7.1・Phase 4: decision / execution shadow。`None`（既定）なら何もしない。
     shadow: Option<ProxyShadow>,
+    /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。空（既定）なら何もしない。daemon が
+    /// reload で差し替える。
+    estimator_shadow: Arc<EstimatorShadowSlot>,
 }
 
 impl ProxyState {
@@ -118,6 +122,7 @@ impl ProxyState {
             event_sink: None,
             in_flight: Arc::new(InFlightContexts::default()),
             shadow: None,
+            estimator_shadow: Arc::new(EstimatorShadowSlot::default()),
         })
     }
 
@@ -128,6 +133,38 @@ impl ProxyState {
             None => tracing::warn!("llm-proxy: shadow ignored (state already shared)"),
         }
         self
+    }
+
+    /// estimator shadow を差し込む（作った直後、まだ共有していない `Arc` にだけ効く）。
+    pub fn with_estimator_shadow(
+        mut self: Arc<Self>,
+        shadow: Option<Arc<EstimatorShadow>>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => state.estimator_shadow.set(shadow),
+            None => tracing::warn!("llm-proxy: estimator shadow ignored (state already shared)"),
+        }
+        self
+    }
+
+    /// estimator shadow の差し替え口を共有のものに替える（作った直後、まだ共有していない `Arc` に
+    /// だけ効く）。daemon は同じ口を持ち、reload で中身を差し替える。
+    pub fn with_estimator_shadow_slot(
+        mut self: Arc<Self>,
+        slot: Arc<EstimatorShadowSlot>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => state.estimator_shadow = slot,
+            None => {
+                tracing::warn!("llm-proxy: estimator shadow slot ignored (state already shared)")
+            }
+        }
+        self
+    }
+
+    /// shadow（decision / execution / estimator）のどれかが差し込まれているか。
+    fn any_shadow(&self) -> bool {
+        self.shadow.is_some() || self.estimator_shadow.current().is_some()
     }
 
     /// primary が成功した後に shadow を走らせる。decision shadow は記録だけ、実行 shadow は要求の
@@ -141,6 +178,7 @@ impl ProxyState {
         primary: &ShadowCandidate,
         req: &ChatCompletionRequest,
     ) {
+        self.estimator_after_primary(routing, request_id, lane, candidates, primary, req);
         let Some(shadow) = &self.shadow else {
             return;
         };
@@ -217,6 +255,54 @@ impl ProxyState {
             worst_effective_usd,
         });
         tracing::debug!(?outcome, "llm-proxy: execution shadow submitted");
+    }
+
+    /// sidecar estimator の比較を始める（同期で返り、sidecar の完了を待たない）。primary は変えない。
+    fn estimator_after_primary(
+        &self,
+        routing: &ResolvedRouting,
+        request_id: &str,
+        lane: &str,
+        candidates: &[ShadowCandidate],
+        primary: &ShadowCandidate,
+        req: &ChatCompletionRequest,
+    ) {
+        let Some(estimator) = self.estimator_shadow.current() else {
+            return;
+        };
+        // estimator の比較は lane の policy で回す（明示 model の要求は対象外）。
+        let Ok(tier) = serde_json::from_value::<task_core::Tier>(serde_json::json!(lane)) else {
+            return;
+        };
+        let ctx = &routing.context;
+        let target = task_core::model_router::shadow::ShadowTarget {
+            task_kind: ctx.task_kind.clone().unwrap_or_default(),
+            role: ctx.role.clone().unwrap_or_default(),
+            lane: lane.to_string(),
+            source: primary.source.clone(),
+        };
+        let prompt = estimator.prompt_allowed(&target).then(|| {
+            req.messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .and_then(|m| m.content.as_ref())
+                .map(|c| c.as_text())
+                .unwrap_or_default()
+        });
+        let outcome = estimator.submit(EstimatorShadowInput {
+            primary_decision_id: routing.decision_id.clone(),
+            task_id: routing.task_id().map(str::to_owned),
+            run_id: routing.run_id().map(str::to_owned),
+            request_id: Some(request_id.to_string()),
+            lane: tier,
+            target,
+            context: ctx.clone(),
+            candidates: candidates.to_vec(),
+            primary: primary.clone(),
+            prompt,
+        });
+        tracing::debug!(?outcome, "llm-proxy: estimator shadow submitted");
     }
 
     /// primary が候補待ち（予約待ち）に入った: 未開始の実行 shadow を落とす。
@@ -1212,7 +1298,7 @@ async fn chat_completions(
             .unwrap_or_default(),
         ModelRequest::Explicit { .. } => "explicit".to_string(),
     };
-    let shadow_candidates: Vec<ShadowCandidate> = if state.shadow.is_some() {
+    let shadow_candidates: Vec<ShadowCandidate> = if state.any_shadow() {
         attempts
             .iter()
             .filter(|(a, _)| constraints.admits(a.source_kind()))

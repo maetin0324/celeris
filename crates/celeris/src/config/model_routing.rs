@@ -7,7 +7,7 @@ use task_core::model_router::{
     cost::SelfHostRates,
     policy::{FreshnessPolicy, RoutingMode, RoutingPolicy, Weights},
     profiles::{Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support},
-    shadow::{ShadowAllowlist, ShadowPolicy},
+    shadow::{ShadowAllowlist, ShadowPolicy, ShadowTarget},
 };
 
 use super::{Config, ConfigError};
@@ -42,12 +42,159 @@ pub struct ModelRoutingConfig {
     /// `Config` 本体でなくここに持つのは、reload で `model_routing` と一緒に原子的に差し替えるため。
     #[serde(skip)]
     pub runtime: Option<std::sync::Arc<RoutingRuntime>>,
+    /// Phase 5: daemon が llm-proxy に配線した estimator sidecar の差し替え（proxy 無しは `None`）。
+    /// reload は新しい `estimator.sidecar` をこれに適用し、これ自体は古い値から引き継ぐ。
+    #[serde(skip)]
+    pub estimator_sidecar_control:
+        Option<std::sync::Arc<crate::daemon::routing_sidecar::EstimatorSidecarControl>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct EstimatorEntry {
     pub kind: Option<String>,
+    pub sidecar: SidecarEntry,
+}
+
+/// Phase 5 の比較 estimator。primary は常に heuristic のまま。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct SidecarEntry {
+    pub enabled: bool,
+    pub shadow_only: bool,
+    pub endpoint: Option<String>,
+    pub protocol_version: u32,
+    pub estimator_id: Option<String>,
+    pub estimator_version: Option<String>,
+    pub timeout_ms: u64,
+    pub max_inflight: u32,
+    pub max_payload_bytes: usize,
+    pub send_prompt: bool,
+    /// Endpoint と response に宣言された外部依存先の許可 host。完全一致。
+    pub network_allowlist: Vec<String>,
+    pub allowlist: ShadowAllowlist,
+    pub prompt_allowlist: ShadowAllowlist,
+    pub daily_max_requests: Option<u64>,
+}
+
+impl Default for SidecarEntry {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            shadow_only: true,
+            endpoint: None,
+            protocol_version: 1,
+            estimator_id: None,
+            estimator_version: None,
+            timeout_ms: 1_000,
+            max_inflight: 4,
+            max_payload_bytes: 65_536,
+            send_prompt: false,
+            network_allowlist: Vec::new(),
+            allowlist: ShadowAllowlist::default(),
+            prompt_allowlist: ShadowAllowlist::default(),
+            daily_max_requests: None,
+        }
+    }
+}
+
+impl SidecarEntry {
+    fn allowed_host(&self, host: &str) -> bool {
+        host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+            || self
+                .network_allowlist
+                .iter()
+                .any(|allowed| allowed.eq_ignore_ascii_case(host))
+    }
+
+    /// response の依存先も送信先と同じ許可集合に制限する。
+    pub fn allows_dependencies(&self, hosts: &[String]) -> bool {
+        hosts.iter().all(|host| self.allowed_host(host))
+    }
+
+    pub fn allows_prompt(&self, target: &ShadowTarget) -> bool {
+        self.send_prompt && self.prompt_allowlist.matches(target)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        let invalid = |reason: &str| {
+            ConfigError::Invalid(format!("model_routing.estimator.sidecar.{reason}"))
+        };
+        if !self.shadow_only {
+            return Err(invalid(
+                "shadow_only must be true (heuristic remains primary)",
+            ));
+        }
+        if self.protocol_version != 1 {
+            return Err(invalid("protocol_version must be 1"));
+        }
+        if self.timeout_ms == 0 || self.max_inflight == 0 || self.max_payload_bytes == 0 {
+            return Err(invalid(
+                "timeout_ms, max_inflight and max_payload_bytes must be positive",
+            ));
+        }
+        for host in &self.network_allowlist {
+            if host.is_empty() || host.trim() != host || host.contains(['/', ':', '@', '*', ' ']) {
+                return Err(invalid("network_allowlist must contain host names only"));
+            }
+        }
+        if let Some(endpoint) = &self.endpoint {
+            let url = reqwest::Url::parse(endpoint)
+                .map_err(|_| invalid("endpoint must be a valid URL"))?;
+            if !matches!(url.scheme(), "http" | "https")
+                || !url.username().is_empty()
+                || url.password().is_some()
+                || url.query().is_some()
+                || url.fragment().is_some()
+                || !url.host_str().is_some_and(|host| self.allowed_host(host))
+            {
+                return Err(invalid(
+                    "endpoint must use HTTP(S) and a loopback or network_allowlist host",
+                ));
+            }
+        }
+        if self.send_prompt && !allowlist_complete(&self.prompt_allowlist) {
+            return Err(invalid(
+                "send_prompt requires every prompt_allowlist dimension",
+            ));
+        }
+        if self.enabled {
+            if self.endpoint.is_none() {
+                return Err(invalid("enabled requires endpoint"));
+            }
+            if !self
+                .estimator_id
+                .as_ref()
+                .is_some_and(|s| !s.trim().is_empty())
+                || !self
+                    .estimator_version
+                    .as_ref()
+                    .is_some_and(|s| !s.trim().is_empty())
+            {
+                return Err(invalid(
+                    "enabled requires estimator_id and estimator_version",
+                ));
+            }
+            if !allowlist_complete(&self.allowlist)
+                || self.daily_max_requests.is_none_or(|n| n == 0)
+            {
+                return Err(invalid(
+                    "enabled requires allowlist and positive daily_max_requests",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+fn allowlist_complete(list: &ShadowAllowlist) -> bool {
+    !list.task_kinds.is_empty()
+        && !list.roles.is_empty()
+        && !list.lanes.is_empty()
+        && !list.sources.is_empty()
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -709,6 +856,7 @@ impl Config {
     /// Phase 2 の実行時設定（state・cost・retry）を検証して組む。未設定は unknown か ADR の既定。
     pub fn routing_runtime(&self) -> Result<RoutingRuntime, ConfigError> {
         let mr = &self.model_routing;
+        mr.estimator.sidecar.validate()?;
         let shadow = mr.shadow.policy();
         shadow
             .validate()

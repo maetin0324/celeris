@@ -7,6 +7,7 @@ pub mod log;
 pub mod naming;
 mod neterr;
 pub mod openai;
+pub mod reservation;
 pub mod selection;
 pub mod server;
 pub mod sources;

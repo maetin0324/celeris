@@ -17,6 +17,7 @@ import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
+import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative } from "../../lib/time";
 import { Route } from "../../routes/notifications";
 import { NotificationsEnable } from "../reports/notifications-enable";
@@ -26,7 +27,8 @@ import { noticeKinds, noticeKindView, noticeLinks } from "./notice-view";
 // 判断が要るものは受信箱（/inbox）。絞り込みと頁は URL の search param に持つ。
 
 const PAGE_SIZE = 50;
-const control = "block min-h-11 max-w-full rounded-md border bg-background px-2 text-body text-foreground";
+const control =
+  "block min-h-11 max-w-full rounded-md border border-input bg-background px-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 
 const projectsQuery = {
   queryKey: projectKeys.list(),
@@ -48,7 +50,7 @@ function AppLink({ href, children, onOpen }: { href: string; children: string; o
   );
 }
 
-function NoticeRow({ notice }: { notice: Notice }) {
+function NoticeRow({ notice, projectTitle }: { notice: Notice; projectTitle?: string }) {
   const queryClient = useQueryClient();
   const reader = useActionResult(notificationReadInvalidates[0]);
   const kind = noticeKindView(notice.kind);
@@ -94,7 +96,9 @@ function NoticeRow({ notice }: { notice: Notice }) {
               </AppLink>
             ))}
             {notice.project_id ? (
-              <span className="text-label text-muted-foreground">案件 {notice.project_id}</span>
+              <span className="break-words text-label text-muted-foreground">
+                案件 {projectTitle ?? shortId(notice.project_id)}
+              </span>
             ) : null}
           </div>
         ) : null}
@@ -236,7 +240,11 @@ export function NotificationsScreen() {
           className="flex min-w-0 flex-col rounded-md border border-border bg-surface px-3 md:px-4"
         >
           {query.data?.items.map((notice) => (
-            <NoticeRow key={notice.id} notice={notice} />
+            <NoticeRow
+              key={notice.id}
+              notice={notice}
+              projectTitle={projects.data?.items.find((project) => project.id === notice.project_id)?.title}
+            />
           ))}
         </ul>
       </FetchFrame>

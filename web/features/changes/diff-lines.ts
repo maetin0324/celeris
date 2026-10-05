@@ -33,10 +33,48 @@ export function fileStatusView(status: string): { label: string; tone: BadgeTone
   return fileStatus[status.trim().charAt(0).toUpperCase()] ?? { label: status, tone: "neutral" };
 }
 
-// 取り込みの状態語を tone へ。状態語そのものは可視ラベルとして出す。
+// 取り込みの状態語を運用者が読めるラベルと tone へ。
+export function integrationLabel(state: string): string {
+  const labels: Record<string, string> = {
+    merged: "取り込み済み",
+    done: "完了",
+    conflict: "衝突あり",
+    failed: "失敗",
+    error: "エラー",
+    open: "PR 公開中",
+    pending: "処理待ち",
+  };
+  return labels[state] ?? `未確認（${state}）`;
+}
+
 export function integrationTone(state: string): BadgeTone {
   if (state === "merged" || state === "done") return "success";
   if (state === "conflict" || state === "failed" || state === "error") return "danger";
   if (state === "open" || state === "pending") return "info";
   return "neutral";
+}
+
+/**
+ * 変更ファイルの path を「全部に共通の dir」と「各ファイルの dir の残り・ファイル名」に分ける。
+ * 狭い幅で長い共通 prefix が毎行折り返され、ファイル名を比べにくかった（fix-r6 narrow）。
+ * 共通 dir は 2 件以上のときだけ取り出す（1 件なら dir の残りに全部を置く）。区切りは `/` 単位で、名前の途中では切らない。
+ */
+export function splitChangedPaths(paths: readonly string[]): {
+  common: string;
+  files: { path: string; dir: string; name: string }[];
+} {
+  const dirs = paths.map((path) => path.split("/").slice(0, -1));
+  let depth = 0;
+  if (paths.length > 1) {
+    const first = dirs[0] ?? [];
+    while (depth < first.length && dirs.every((dir) => dir[depth] === first[depth])) depth += 1;
+  }
+  const common = depth > 0 ? `${(dirs[0] ?? []).slice(0, depth).join("/")}/` : "";
+  return {
+    common,
+    files: paths.map((path, i) => {
+      const rest = (dirs[i] ?? []).slice(depth);
+      return { path, dir: rest.length > 0 ? `${rest.join("/")}/` : "", name: path.split("/").at(-1) ?? path };
+    }),
+  };
 }

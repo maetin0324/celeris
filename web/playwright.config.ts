@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import os from "node:os";
+import path from "node:path";
 import { defineConfig, devices, type Project } from "@playwright/test";
 
 const PICK_PORT = `
@@ -27,8 +28,9 @@ if (!realBaseUrl && !process.env.WEB_E2E_PORT) {
 const PORT = Number(process.env.WEB_E2E_PORT);
 
 // 機能（functional）と非機能（nfr）を project で分ける。`pnpm e2e` は functional、`pnpm e2e:nfr` は nfr、
-// `pnpm e2e:all` は両方（WEB_E2E_SCOPE で選ぶ）。WU の check は対象画面の functional spec を基本にし、
-// nfr は visual-qa・最終の受け入れ・release gate の段で流す。
+// `pnpm e2e:all` は両方（WEB_E2E_SCOPE で選ぶ）。spec file を名指しすると、その file が属する project
+// （nfr / nfr-latency / release）だけで走る（functional の全試験は巻き込まない）。WU の check は対象画面の
+// functional spec を基本にし、nfr は visual-qa・最終の受け入れ・release gate の段で流す。
 // - nfr: 全画面の axe（a11y/axe・parity/mobile-gate）と、関係のない SSE の全画面掃引（realtime/refetch-scope）。
 // - nfr-latency: 時間を測る gate（latency/transition の S1・parity/latency-gate）。他の project が終わってから
 //   少ない worker で流す（他の試験の負荷で時間の閾値を揺らさない。retries 0 のまま）。
@@ -39,9 +41,31 @@ const PORT = Number(process.env.WEB_E2E_PORT);
 const NFR = ["a11y/axe.spec.ts", "parity/mobile-gate.spec.ts", "realtime/refetch-scope.spec.ts"];
 const LATENCY = ["latency/transition.spec.ts", "parity/latency-gate.spec.ts"];
 const RELEASE = ["parity/cutover.spec.ts"];
-const scope = process.env.WEB_E2E_SCOPE ?? "all";
-if (!["functional", "nfr", "all"].includes(scope))
-  throw new Error(`WEB_E2E_SCOPE must be functional, nfr or all: ${scope}`);
+
+// spec file を名指ししたとき（位置指定の引数が NFR/LATENCY/RELEASE の file に当たるとき）、その file を
+// 属する project（nfr / nfr-latency / release）で走らせる。名指し無し（grep だけの指定を含む）は
+// env（`pnpm e2e` は functional、`pnpm e2e:nfr` は nfr、`pnpm e2e:all` は all）で決めたまま。
+// config を読み直す worker は argv ではなく env（WEB_E2E_SCOPE）を見るので、main process が決めた
+// scope を env に書き戻す（PORT と同じ機構）。名指しで project だけを選ぶときは dependencies を作らず、
+// 依存 project（functional・nfr）の全試験が巻き込まれない。
+const positional = process.argv.slice(2).filter((arg) => arg.length > 1 && !arg.startsWith("-") && !arg.includes("="));
+const namedProject = (file: string): string | null =>
+  RELEASE.includes(file) ? "release" : LATENCY.includes(file) ? "nfr-latency" : NFR.includes(file) ? "nfr" : null;
+const named = positional
+  .map(path.normalize)
+  .map(namedProject)
+  .filter((p): p is string => p !== null);
+const namedSet = new Set(named);
+let scope = process.env.WEB_E2E_SCOPE ?? "all";
+if (namedSet.size === 1) {
+  scope = [...namedSet][0] as "nfr" | "nfr-latency" | "release";
+} else if (namedSet.size > 1) {
+  if (namedSet.has("release") && namedSet.has("nfr-latency")) scope = "latency";
+  else throw new Error(`cannot run mixed spec projects in one e2e: ${named.join(", ")}`);
+}
+process.env.WEB_E2E_SCOPE = scope;
+if (!["functional", "nfr", "nfr-latency", "release", "latency", "all"].includes(scope))
+  throw new Error(`WEB_E2E_SCOPE must be functional, nfr, nfr-latency, release, latency or all: ${scope}`);
 
 // 既定の worker 数は CPU 数の半分（上限 8）。CI などは WEB_E2E_WORKERS で上書きする（数か "50%"）。
 const workersEnv = process.env.WEB_E2E_WORKERS;
@@ -56,17 +80,29 @@ const workers = workersEnv
 const latencyWorkers = Number(process.env.WEB_E2E_LATENCY_WORKERS ?? 4);
 
 const chrome = { ...devices["Desktop Chrome"] };
-const parallel: Project[] = [];
-if (scope !== "nfr") parallel.push({ name: "functional", testIgnore: [...NFR, ...LATENCY, ...RELEASE], use: chrome });
-if (scope !== "functional") parallel.push({ name: "nfr", testMatch: NFR, use: chrome });
-const projects: Project[] = [...parallel];
-let last = parallel.map((project) => project.name as string);
-if (scope !== "functional") {
+const projects: Project[] = [];
+let last: string[] = [];
+if (scope === "functional") {
+  projects.push({ name: "functional", testIgnore: [...NFR, ...LATENCY, ...RELEASE], use: chrome });
+} else if (scope === "nfr") {
+  projects.push({ name: "nfr", testMatch: NFR, use: chrome });
+} else if (scope === "nfr-latency") {
+  // 名指しで latency の spec を走らせる。dependencies を作らず、functional・nfr の全試験を巻き込まない。
+  projects.push({ name: "nfr-latency", testMatch: LATENCY, workers: latencyWorkers, use: chrome });
+} else if (scope === "release") {
+  projects.push({ name: "release", testMatch: RELEASE, workers: 1, use: chrome });
+} else if (scope === "latency") {
+  // 名指しで latency と release の spec が混ざるとき。release は dist/ を build し直すので最後に。
+  projects.push({ name: "nfr-latency", testMatch: LATENCY, workers: latencyWorkers, use: chrome });
+  projects.push({ name: "release", testMatch: RELEASE, workers: 1, dependencies: ["nfr-latency"], use: chrome });
+} else {
+  projects.push({ name: "functional", testIgnore: [...NFR, ...LATENCY, ...RELEASE], use: chrome });
+  projects.push({ name: "nfr", testMatch: NFR, use: chrome });
+  last = ["functional", "nfr"];
   projects.push({ name: "nfr-latency", testMatch: LATENCY, workers: latencyWorkers, dependencies: last, use: chrome });
   last = ["nfr-latency"];
-}
-if (scope !== "nfr")
   projects.push({ name: "release", testMatch: RELEASE, workers: 1, dependencies: last, use: chrome });
+}
 
 export default defineConfig({
   testDir: "./e2e",

@@ -13,6 +13,11 @@ describe("ScreenFrame", () => {
     expect(html).not.toContain("page-description");
   });
 
+  it("h1 は focus-visible の枠の class を保つ（初回の script focus の枠は styles.css が data-kbd-focus なしで消す）", () => {
+    const html = renderToStaticMarkup(<ScreenFrame title="タスク" route="/tasks" />);
+    expect(html).toMatch(/<h1 tabindex="-1" [^>]*focus-visible:outline-ring/);
+  });
+
   it("breadcrumb・description・actions を見出しの前後に出す", () => {
     const html = renderToStaticMarkup(
       <ScreenFrame

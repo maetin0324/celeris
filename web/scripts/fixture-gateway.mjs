@@ -7,11 +7,11 @@ import { FIXTURE_TOKEN } from "./check-secrets.mjs";
 
 // mobile-audit と screenshots の共通。偽 daemon と gateway を loopback の空き port で起こし、
 // 画面を偽 daemon の fixture（T1 / R1 / cos / P1）で描く。:7700 / :7710 / staging には接続しない。
-export async function startFixtureGateway() {
+export async function startFixtureGateway(options = {}) {
   const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-audit-"));
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-  const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const daemon = createFakeDaemon({ profile: "rich", ...options, token: FIXTURE_TOKEN });
   const daemonUrl = await daemon.start();
   const server = createApp({ log: () => {}, daemonUrl, daemonTokenFile: tokenFile }).listen(0, "127.0.0.1");
   await new Promise((resolve, reject) => {
@@ -20,6 +20,7 @@ export async function startFixtureGateway() {
   });
   return {
     base: `http://127.0.0.1:${server.address().port}`,
+    daemon,
     async close() {
       await new Promise((resolve) => {
         server.close(resolve);

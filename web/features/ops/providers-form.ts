@@ -34,7 +34,7 @@ export function validateProviderForm(
   if (mode === "create" && (form.id ?? "").trim() === "") errors.id = "id を入力してください。";
   const c = form.concurrency.trim();
   if (c !== "" && !(Number.isInteger(Number(c)) && Number(c) >= 0))
-    errors.concurrency = "concurrency は 0 以上の整数で入力してください（空欄なら変えません）。";
+    errors.concurrency = "同時実行数は 0 以上の整数で入力してください（空欄なら変えません）。";
   return errors;
 }
 

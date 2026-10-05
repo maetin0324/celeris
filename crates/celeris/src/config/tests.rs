@@ -297,7 +297,7 @@ genre = "conversation"
 
 // ---- ADR-0033 D1（Phase 23）: 組織図の種 ----
 
-/// 例の設定（`config/org.example.toml`）が読め、ADR-0046 D7 の組織図（13 ノード。cos を根に
+/// 例の設定（`config/org.example.toml`）が読め、ADR-0046 D7 の組織図（15 ノード。cos を根に
 /// Engineering / Research / Operations の 3 部、それぞれの下に課）になる。`genre` は実在する
 /// harness id（`conversation` / `coding` / `literature` / `web-research` / `data-analysis` /
 /// `writing`）だけを指す。
@@ -329,6 +329,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
             "software-engineering",
             "ui-ux",
             "systems-performance",
+            "browser-execution",
             "research",
             "literature-research",
             "web-research",
@@ -341,7 +342,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
         ]
     );
     let nodes = cfg.org_nodes(time::OffsetDateTime::now_utc());
-    assert_eq!(nodes.len(), 14);
+    assert_eq!(nodes.len(), 15);
     // 親が子より先に来る（cos → 部 → 課）。
     let order: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(order[0], "cos");
@@ -725,9 +726,10 @@ fn example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering() {
     // "software-engineering" < "ui-ux" となり software-engineering に行く。
     assert_eq!(route(&["typescript", "react"]), "software-engineering");
     assert_eq!(route(&["hpc", "perf"]), "systems-performance");
-    // skill なし: coding を許す課（engineering 配下に限らない）はすべて 0 点・同じ深さで並び、
-    // id の辞書順で先頭の cluster-hpc になる（観測値。決定的だが意味のある振り分けではない）。
+    // skill なし: browser 専用課は候補外。残る coding 課は 0 点・同じ深さで並び、
+    // id の辞書順で先頭の cluster-hpc になる。
     assert_eq!(route(&[]), "cluster-hpc");
+    assert_ne!(route(&[]), "browser-execution");
 }
 
 fn routing_sample_task() -> task_core::Task {

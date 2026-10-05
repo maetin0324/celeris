@@ -131,6 +131,11 @@ fn browser_specialist_node_receives_browser_enabled_tasks_and_ungranted_nodes_ar
     assert!(
         matches!(decide(&nodes, &non_browser_task), Assignment::Assigned { ref node, .. } if node == "software-engineering"),
     );
+    let unskilled_task = task(Some("coding"), &[]);
+    assert!(
+        matches!(decide(&nodes, &unskilled_task), Assignment::Assigned { ref node, .. } if node == "software-engineering"),
+        "unskilled coding task must not route to browser-specialist"
+    );
 
     // grant を外すと再び誰にも割り当たらない（黙って候補が広がらない）。
     nodes[last].profile.browser = None;

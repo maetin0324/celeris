@@ -81,6 +81,9 @@ harness が合わないため。
 
 - **grant**: `skills` に `browser-enabled` を入れる。matching の採点で一致するように「要求」と同じ語を持たせる。
   実際に効く grant は `browser` 欄である。
+  - matching は実効 profile に `browser-enabled` を持つ node を、browser を要求しない task の候補から外す。
+    専用課が空 skill の task を id 順の同点判定で奪わないため。grant だけを持つ兼任 node は対象外とし、
+    既存の通常 task の振り分けを保つ。
   - `allowed_actions` は省く（`null`）。Phase 1 の集合になり、`credential_use` は含まれない（ADR-0080 D1）。
   - `credential_policy_ids` は空にする。credential を使う task は、人が policy を登録してから PATCH で足す。
 - **許可 origin**: 初期の `allowed_domains` は loopback（`localhost`・`127.0.0.1`）だけにする。

@@ -153,7 +153,7 @@ ui-ux-quality-gate の Frontend Thinking Gate（要約）:
 | W-48 | 修正 | bb8ce583 | 段の select を共通 Select にし（--color-input の枠・focus-visible・44px）、通知へのリンクに focus-visible を付けた |
 | W-49 | 修正 | bb8ce583 | 通知へのリンクを絞り込みの行へ移し、label を「報告元の段」にした |
 | W-50 | 修正 | bb8ce583 | 画面が自分を説明する文を、利用者の行動の文にした |
-| V-02 | 修正 | bd393ea1 | verify の全画面 mobile-audit で見つかった。兄弟 task の task 詳細のスマホ化（c67913d8）で `/tasks/T1` の run リンクが `min-w-0`（幅 17px）になっていたので、`min-w-11` にした。`web/features/tasks/` は本 task の画面群の外だが、task の範囲 check（`web/`）の中で、受け入れ条件の mobile-audit を通すための最小の変更 |
+| V-02 | 修正 | bd393ea1 | verify の全画面 mobile-audit で見つかった。task 詳細の header・木（71c37c34、基点 45a8fde5 より前）から `/tasks/T1` の run・子 task リンクが `min-w-0`（短い ID で幅 17px）だったので、`min-w-11` にした。`web/features/tasks/` は本 task の画面群の外だが、task の範囲 check（`web/`）の中で、受け入れ条件の mobile-audit を通すための最小の変更 |
 
 ## 残課題
 

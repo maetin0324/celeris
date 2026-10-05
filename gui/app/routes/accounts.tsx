@@ -35,6 +35,7 @@ import { AccountActionFlash, ErrorFlash, SecretActionFlash } from "~/components/
 import { HelpLink } from "~/components/HelpLink";
 import { LocalTime } from "~/components/LocalTime";
 import { RouteRecovery } from "~/components/RouteRecovery";
+import { SourceDeployments } from "~/components/RoutingSourceState";
 import { Badge } from "~/components/ui/badge";
 import { Button } from "~/components/ui/button";
 import { Card, CardBody, CardHeader } from "~/components/ui/card";
@@ -667,6 +668,13 @@ function LlmSourceCard({ source, nowSec }: { source: LlmSourceView; nowSec: numb
             {source.accounts.map((account) => (
               <LlmAccountRow key={account.id} account={account} nowSec={nowSec} />
             ))}
+          </div>
+        )}
+
+        {(source.deployments ?? []).length > 0 && (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-fg-subtle lg:text-xs">deployment の状態と費用（未知は「不明」）</p>
+            <SourceDeployments deployments={source.deployments ?? []} nowMs={nowSec * 1000} />
           </div>
         )}
       </CardBody>

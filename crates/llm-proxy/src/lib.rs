@@ -2,11 +2,13 @@
 mod auth;
 pub mod config;
 pub mod credentials;
+pub mod fallback;
 pub mod legacy_catalog;
 pub mod log;
 pub mod naming;
 mod neterr;
 pub mod openai;
+pub mod reservation;
 pub mod selection;
 pub mod server;
 pub mod sources;

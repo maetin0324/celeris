@@ -80,11 +80,39 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
     }
 }
 
+/// 設定行を正規化した 1 候補（`proxy_routed` は `llm_source` を持つ行）。
+pub(super) struct LegacyProfile {
+    pub model: ModelProfile,
+    pub deployment: DeploymentProfile,
+    pub proxy_routed: bool,
+}
+
 impl Dispatcher {
     /// Normalize the legacy provider rows into model/deployment identities. The kernel
     /// preserves their config order; the existing selector still owns live capacity,
     /// cooldown and account decisions.
     fn legacy_provider_rank(&self, hint: &task_core::WorkerHint) -> OptimizationResult {
+        let profiles = self.legacy_provider_profiles(hint);
+        let candidates: Vec<_> = profiles
+            .iter()
+            .map(|p| Candidate {
+                model: &p.model,
+                deployment: &p.deployment,
+                state: None,
+                eligible_provider_ids: vec![p.deployment.id.clone()],
+                cost_usd: None,
+                latency_ms: None,
+                pressure: None,
+            })
+            .collect();
+        legacy_rank(&candidates)
+    }
+
+    /// 設定行（hint に合うもの・設定順）を model/deployment の profile に写す。
+    pub(super) fn legacy_provider_profiles(
+        &self,
+        hint: &task_core::WorkerHint,
+    ) -> Vec<LegacyProfile> {
         let specs = self.policy.legacy_specs(hint);
         let mut profiles = Vec::with_capacity(specs.len());
         for (order, spec) in specs.iter().enumerate() {
@@ -123,6 +151,7 @@ impl Dispatcher {
                 pricing: None,
                 provenance: "providers.tier_models".into(),
             };
+            let proxy_routed = live.and_then(|p| p.llm_source.as_ref()).is_some();
             let source_ref = live
                 .and_then(|p| p.llm_source.as_ref())
                 .map(|s| match &s.source {
@@ -157,21 +186,13 @@ impl Dispatcher {
                 price_override: None,
                 config_order: order,
             };
-            profiles.push((model, deployment));
-        }
-        let candidates: Vec<_> = profiles
-            .iter()
-            .map(|(model, deployment)| Candidate {
+            profiles.push(LegacyProfile {
                 model,
                 deployment,
-                state: None,
-                eligible_provider_ids: vec![deployment.id.clone()],
-                cost_usd: None,
-                latency_ms: None,
-                pressure: None,
-            })
-            .collect();
-        legacy_rank(&candidates)
+                proxy_routed,
+            });
+        }
+        profiles
     }
 
     pub(super) fn legacy_optimizer_trace(
@@ -214,11 +235,15 @@ impl Dispatcher {
                     latency_ms: None,
                     pressure: None,
                     score: None,
+                    ..Default::default()
                 })
                 .collect(),
             selected: Some(selected.into()),
             fallback_order: result.allowlist,
             reasons: vec!["providers.tier_models/config_order".into()],
+            source_id: None,
+            model: None,
+            account_id: None,
         })
     }
 
@@ -290,10 +315,38 @@ impl Dispatcher {
         cos: bool,
         prefer_local: bool,
     ) -> (Option<ProviderPick>, ProviderSelection) {
+        self.select_provider_excluding(
+            hint,
+            now,
+            task_id,
+            full,
+            sticky_session,
+            cos,
+            prefer_local,
+            &std::collections::HashSet::new(),
+        )
+    }
+
+    /// `select_provider_for` に enforce の除外集合（制約・quota で外した provider）を足したもの。
+    /// `excluded` は満杯の集合 `full` に混ぜない（他の task の判定を汚さない）。空なら従来と同じ。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn select_provider_excluding(
+        &mut self,
+        hint: &task_core::WorkerHint,
+        now: Instant,
+        task_id: TaskId,
+        full: &mut std::collections::HashSet<ProviderId>,
+        sticky_session: Option<&NodeSession>,
+        cos: bool,
+        prefer_local: bool,
+        excluded: &std::collections::HashSet<ProviderId>,
+    ) -> (Option<ProviderPick>, ProviderSelection) {
         let allowlist = self.legacy_provider_rank(hint).allowlist;
         let mut cos_full = std::collections::HashSet::new();
         let full = if cos { &mut cos_full } else { full };
-        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos) {
+        if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos)
+            && !excluded.contains(&sticky.1)
+        {
             return (
                 Some(sticky),
                 ProviderSelection {
@@ -304,6 +357,7 @@ impl Dispatcher {
         }
         // 候補を列挙するための除外はこの選択だけ。満杯の集合へ候補自体を混ぜない。
         let mut visited = full.clone();
+        visited.extend(excluded.iter().cloned());
         let mut candidates: Vec<ProviderCandidate> = Vec::new();
         let mut local_full = false;
         let mut local_down = false;
@@ -324,7 +378,8 @@ impl Dispatcher {
                     detail,
                 };
                 let adapter = self.policy.adapter_of(id);
-                if !self.policy.offers(id, hint)
+                if excluded.contains(id)
+                    || !self.policy.offers(id, hint)
                     || self.account_pool_providers.contains(id)
                     || adapter.is_none()
                 {

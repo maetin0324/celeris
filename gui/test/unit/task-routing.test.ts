@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { RoutingAudit, TaskRoutingView } from "~/celeris/types";
+import type { RunRoutingAudit, TaskRoutingView } from "~/celeris/types";
 import {
   droppedAssigneeNote,
   escalationHistory,
@@ -15,11 +15,11 @@ import {
 
 /** `~/lib/task-routing.ts`（celeris ADR-0069 D5 の「ルーティング」パネル）の純粋関数。 */
 
-function run(over: Partial<RoutingAudit> = {}): RoutingAudit {
+function run(over: Partial<RunRoutingAudit> = {}): RunRoutingAudit {
   return { task_id: "T1", run_id: "R1", ...over };
 }
 
-function view(runs: RoutingAudit[], routing: TaskRoutingView["routing"] = null): TaskRoutingView {
+function view(runs: RunRoutingAudit[], routing: TaskRoutingView["routing"] = null): TaskRoutingView {
   return { task_id: "T1", routing, runs };
 }
 

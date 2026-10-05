@@ -1,4 +1,4 @@
-import type { Level, ReviewResult, RoutingAudit, TaskFeatures, TaskRoutingView, TierSource } from "~/celeris/types";
+import type { Level, ReviewResult, RunRoutingAudit, TaskFeatures, TaskRoutingView, TierSource } from "~/celeris/types";
 
 /**
  * タスク詳細の「ルーティング」パネル（celeris ADR-0069 D5、`GET /tasks/{id}/routing`）の表示用の純粋関数。
@@ -11,12 +11,12 @@ export const ROUTING_PANEL_LABEL = "ルーティング";
 const NONE = "—";
 
 /** 表示の中心にする run（いちばん新しい run）。run が無ければ null。 */
-export function latestRoutingRun(view: TaskRoutingView | null | undefined): RoutingAudit | null {
+export function latestRoutingRun(view: TaskRoutingView | null | undefined): RunRoutingAudit | null {
   return view?.runs.at(-1) ?? null;
 }
 
 /** 1 行の要約: `org / harness / lane / model`（無い値は `—`）。 */
-export function routingSummaryParts(run: RoutingAudit): { label: string; value: string }[] {
+export function routingSummaryParts(run: RunRoutingAudit): { label: string; value: string }[] {
   return [
     { label: "担当", value: run.org_node ?? NONE },
     { label: "harness", value: run.harness ?? NONE },
@@ -25,7 +25,7 @@ export function routingSummaryParts(run: RoutingAudit): { label: string; value: 
   ];
 }
 
-export function routingSummaryLine(run: RoutingAudit): string {
+export function routingSummaryLine(run: RunRoutingAudit): string {
   return routingSummaryParts(run)
     .map((p) => p.value)
     .join(" / ");

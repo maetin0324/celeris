@@ -3060,6 +3060,7 @@ mod planning_and_gate;
 mod provider_and_retry;
 mod review;
 mod routing_and_quota;
+mod routing_enforce;
 mod target_sync;
 mod tick_and_dispatch;
 mod ui_ux_skills;

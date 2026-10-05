@@ -1,7 +1,9 @@
 import type { TaskRoutingView } from "~/celeris/types";
+import { RequestAudit } from "~/components/RoutingSourceState";
 import { Mono } from "~/components/ui/misc";
 import { shortId } from "~/lib/format";
 import { tierLabel } from "~/lib/labels";
+import { auditIncompleteNote } from "~/lib/routing-source-state";
 import {
   droppedAssigneeNote,
   escalationHistory,
@@ -20,7 +22,8 @@ import {
  * 「なぜこの担当・harness・lane・model か」（celeris ADR-0069 D5、`GET /tasks/{id}/routing`）。
  * 閉じた状態は 1 行（`org / harness / lane / model`）、開くと features・当たった規則と policy の版・
  * 理由・コスト等・レビュー結果を出す。値は celeris の監査記録をそのまま並べるだけ（GUI では再計算しない）。
- * run が無く、捨てた担当も無いタスクでは何も出さない。
+ * 多目的 routing（Phase 2）の要求ごとの決定（候補・除外理由・score・最終の source/model/account）と、
+ * 監査が不完全なときの注記も出す。run が無く、捨てた担当も無いタスクでは何も出さない。
  */
 export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
   const run = latestRoutingRun(view);
@@ -96,6 +99,24 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
               ))}
             </ul>
           </div>
+        )}
+        {run && auditIncompleteNote(run.audit_incomplete, run.incomplete_reasons) && (
+          <p data-testid="task-routing-incomplete" className="break-words text-sm text-warning-soft-fg">
+            {auditIncompleteNote(run.audit_incomplete, run.incomplete_reasons)}
+          </p>
+        )}
+        {run && (run.requests ?? []).length > 0 && (
+          <div className="space-y-2" data-testid="task-routing-requests">
+            <p className={dtClass}>要求ごとの決定（{run.requests?.length} 件）</p>
+            {(run.requests ?? []).map((request) => (
+              <RequestAudit key={request.decision_id} request={request} />
+            ))}
+          </div>
+        )}
+        {(view.unbound_requests ?? []).length > 0 && (
+          <p className="text-sm text-warning-soft-fg" data-testid="task-routing-unbound">
+            どの run にも結べない要求が {view.unbound_requests?.length} 件あります
+          </p>
         )}
         {run?.features && (
           <table className="w-full table-fixed text-sm" data-testid="task-routing-features">

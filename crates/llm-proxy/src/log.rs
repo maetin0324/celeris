@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use rusqlite::{Connection, params};
+use task_core::store::RoutingCorrelation;
 
 #[derive(Debug, thiserror::Error)]
 pub enum LogError {
@@ -60,6 +61,43 @@ pub fn insert(conn: &Connection, row: &RequestLogRow) -> Result<(), LogError> {
             row.latency_ms,
             row.status,
             row.error_kind,
+        ],
+    )?;
+    Ok(())
+}
+
+/// 要求 1 件と routing の相関欄（0048: decision・snapshot・run・task・source・model）を 1 文で書く。
+/// task events（`routing_decided`）とは `row.id`（request id）と `decision_id` で結ぶ。
+/// `correlation.account` が `Some` なら `row.account` より優先する（決定で選んだ account）。
+pub fn insert_routed(
+    conn: &Connection,
+    row: &RequestLogRow,
+    correlation: &RoutingCorrelation,
+) -> Result<(), LogError> {
+    conn.execute(
+        "INSERT INTO llm_proxy_requests (
+            id, ts, source, account, requested_model, upstream_model,
+            prompt_tokens, completion_tokens, latency_ms, status, error_kind,
+            decision_id, snapshot_id, run_id, task_id, source_id, model
+        ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)",
+        params![
+            row.id,
+            row.ts,
+            row.source,
+            correlation.account.as_ref().or(row.account.as_ref()),
+            row.requested_model,
+            row.upstream_model,
+            row.prompt_tokens,
+            row.completion_tokens,
+            row.latency_ms,
+            row.status,
+            row.error_kind,
+            correlation.decision_id,
+            correlation.snapshot_id,
+            correlation.run_id,
+            correlation.task_id,
+            correlation.source_id,
+            correlation.model,
         ],
     )?;
     Ok(())
@@ -135,6 +173,53 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM llm_proxy_requests", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn insert_routed_writes_the_correlation_columns() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_table(&conn);
+        // 0048 は events の部分索引も作るので、試験では最小の events を先に用意する。
+        conn.execute_batch("CREATE TABLE events (seq INTEGER, task_id TEXT, json TEXT);")
+            .unwrap();
+        conn.execute_batch(include_str!(
+            "../../task-core/migrations/0048_routing_log_correlation.sql"
+        ))
+        .unwrap();
+        let row = RequestLogRow {
+            id: "req-2".into(),
+            ts: 2000,
+            source: Some("openai-compatible:qwen".into()),
+            account: None,
+            requested_model: "celeris/cheap".into(),
+            upstream_model: Some("qwen3".into()),
+            prompt_tokens: None,
+            completion_tokens: None,
+            latency_ms: 5,
+            status: "ok",
+            error_kind: None,
+        };
+        let corr = RoutingCorrelation {
+            decision_id: Some("dec-1".into()),
+            snapshot_id: Some("snap-1".into()),
+            run_id: Some("run-1".into()),
+            task_id: None,
+            source_id: Some("openai-compatible:qwen".into()),
+            model: Some("qwen3".into()),
+            account: None,
+        };
+        insert_routed(&conn, &row, &corr).unwrap();
+        let (decision, snapshot, model): (String, String, String) = conn
+            .query_row(
+                "SELECT decision_id, snapshot_id, model FROM llm_proxy_requests WHERE id='req-2'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (decision.as_str(), snapshot.as_str(), model.as_str()),
+            ("dec-1", "snap-1", "qwen3")
+        );
     }
 
     #[test]

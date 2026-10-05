@@ -1,5 +1,6 @@
 //! Pure, deterministic model routing kernel. Callers own observations and reservations.
 pub mod context;
+pub mod cost;
 pub mod estimator;
 pub mod optimizer;
 pub mod policy;

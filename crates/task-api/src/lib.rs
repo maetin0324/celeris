@@ -134,7 +134,11 @@ pub use console::{
 };
 pub use types::{ConsoleBlock, ConsolePage};
 // ---- ADR-0053 D4（Phase 65）: LLM source のローカルプロキシの観測 ----
-pub use types::{LlmCelerisTierView, LlmSourceAccountView, LlmSourceView, LlmSourcesView};
+pub use types::{
+    LlmCelerisTierView, LlmSourceAccountView, LlmSourceBilledCostView, LlmSourceCostView,
+    LlmSourceFreshnessView, LlmSourceOpportunityCostView, LlmSourceStateView, LlmSourceView,
+    LlmSourcesView,
+};
 // ---- ADR-0043 D5（Phase 54）: 変更の取り込み ----
 pub use types::{
     ChangeDiffView, ChangesView, IntegrateBody, IntegrateResult, ProjectIntegrationItem,

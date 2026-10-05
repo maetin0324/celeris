@@ -6,6 +6,7 @@ import { taskKeys } from "../../api/queries/keys";
 import { type ActionResult, ActionResultView, useActionResult } from "../../components/actions/use-action-result";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { Button } from "../../components/ui/button";
+import { RoutingAuditView } from "./routing-audit-view";
 import { taskDetailQueryKey } from "./task-detail-query";
 
 // /tasks/:id の実行と routing（P3-10、R23）。rereview / promote / phase_gate / execution_decompose、
@@ -106,25 +107,7 @@ export function ExecutionPanel({ detail }: { detail: TaskDetail }) {
         <h3 id="routing-panel-title" className="text-sm font-semibold">
           routing
         </h3>
-        <FetchFrame query={routing}>
-          {routing.data ? (
-            <div className="space-y-1 text-sm">
-              <p className="break-words">担当 {routing.data.assignee ?? "未定"}</p>
-              {routing.data.runs.length === 0 ? (
-                <p>routing の記録はありません。</p>
-              ) : (
-                <ul className="space-y-1">
-                  {routing.data.runs.map((run) => (
-                    <li key={run.run_id} className="break-words">
-                      {run.run_id}: {run.lane ?? "-"} / {run.model ?? "-"} / {run.org_node ?? "-"}
-                      {run.rule_id ? `（${run.rule_id}）` : ""}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ) : null}
-        </FetchFrame>
+        <FetchFrame query={routing}>{routing.data ? <RoutingAuditView data={routing.data} /> : null}</FetchFrame>
       </section>
 
       {has("phase_gate") && (

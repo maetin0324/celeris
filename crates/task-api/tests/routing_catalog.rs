@@ -70,6 +70,7 @@ impl LlmSourcesReader for Sources {
                 last_hour_requests: 2,
                 last_hour_prompt_tokens: 3,
                 last_hour_completion_tokens: 4,
+                deployments: vec![],
             }],
             celeris_tiers: vec![],
         }

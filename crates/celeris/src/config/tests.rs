@@ -3991,3 +3991,168 @@ fn routing_legacy_equivalence_qwen_is_cheap_only() {
     );
     assert_eq!(normalized.source_ref, "openai_compatible:qwen");
 }
+
+fn routing_phase2_load(extra: &str) -> Result<Config, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let db = dir.path().join("db.sqlite3");
+    let ws = dir.path().join("ws");
+    std::fs::write(
+        &path,
+        format!(
+            "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{extra}"
+        ),
+    )
+    .unwrap();
+    Config::load(&path).map_err(|e| e.to_string())
+}
+
+#[test]
+fn routing_enforce_opt_in_validates_heuristic_only() {
+    use task_core::model_router::policy::RoutingMode;
+    // heuristic の明示 opt-in だけが通る。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.mode, RoutingMode::Enforce);
+    assert_eq!(
+        cfg.routing_catalog_snapshot.as_ref().unwrap().mode,
+        RoutingMode::Enforce
+    );
+    assert_eq!(runtime.enforce_routes, vec!["standalone", "server"]);
+    assert_eq!(runtime.dispatch_settings().mode, RoutingMode::Enforce);
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"standalone\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().enforce_routes,
+        vec!["standalone"]
+    );
+    // opt-in の無い enforce は拒否（Phase 1 の文言を保つ）。
+    let err = routing_phase2_load("[model_routing]\nmode = \"enforce\"\n").unwrap_err();
+    assert!(
+        err.contains("Phase 2") && err.contains("heuristic"),
+        "{err}"
+    );
+    // heuristic 以外の optimizer は enforce でも shadow でも拒否。
+    for mode in ["enforce", "shadow", "legacy"] {
+        let err = routing_phase2_load(&format!(
+            "[model_routing]\nmode = \"{mode}\"\n[model_routing.estimator]\nkind = \"routellm\"\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("only \"heuristic\""), "{mode}: {err}");
+    }
+    // standalone でもサーバ全体の制約でもない経路は拒否。
+    for route in ["task", "org", ""] {
+        let err = routing_phase2_load(&format!(
+            "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"{route}\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("standalone or server-wide"), "{route}: {err}");
+    }
+    let err = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\nenforce_routes = []\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("enforce_routes is empty"), "{err}");
+    // shadow + heuristic の明示は従来どおり通る（mode=shadow の挙動は変えない）。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"shadow\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().mode,
+        RoutingMode::Shadow
+    );
+    // 不正な数値も拒否する。
+    for (extra, needle) in [
+        (
+            "[model_routing]\nobservation_ttl_seconds = 0\n",
+            "observation_ttl_seconds",
+        ),
+        (
+            "[model_routing.subscription_windows.five_hour]\nreserve_value_usd = -1\n",
+            "reserve_value_usd",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nusd_per_gpu_second = nan\n",
+            "usd_per_gpu_second",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 0\n",
+            "concurrency_limit",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"g\"\n[[model_routing.resource_groups]]\nid = \"g\"\n",
+            "duplicate id",
+        ),
+        ("[model_routing.retry]\nclient = 1\n", "retry.client"),
+        (
+            "[model_routing.retry]\ntotal_attempts = 0\n",
+            "total_attempts",
+        ),
+    ] {
+        let err = routing_phase2_load(extra).unwrap_err();
+        assert!(err.contains(needle), "{extra}: {err}");
+    }
+}
+
+#[test]
+fn routing_config_defaults_do_not_seed_unknown_as_zero() {
+    use task_core::model_router::policy::{FreshnessPolicy, RoutingMode};
+    let cfg = routing_phase2_load("").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.mode, RoutingMode::Legacy);
+    assert_eq!(runtime.freshness, FreshnessPolicy::default());
+    assert!(runtime.window_reserves.is_empty());
+    assert!(runtime.resource_groups.is_empty());
+    let rates = runtime.self_host_rates(Some("gpu0"));
+    assert_eq!(rates.usd_per_gpu_second, None);
+    assert_eq!(rates.usd_per_wait_second, None);
+    assert!(runtime.capacity_limits(None).resource_groups.is_empty());
+    assert_eq!(
+        runtime.fallback,
+        llm_proxy::fallback::FallbackSettings::default()
+    );
+    let settings = runtime.dispatch_settings();
+    assert_eq!(settings, task_dispatch::DispatchRoutingSettings::default());
+    // 一部だけ書いた欄も、書いていない成分は unknown のまま（0 にしない）。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nobservation_ttl_seconds = 120\n\
+         [model_routing.subscription_windows.five_hour]\nreserve_value_usd = 4.0\n\
+         [model_routing.subscription_windows.seven_day]\n\
+         [[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 2\n\
+         [[model_routing.resource_groups]]\nid = \"gpu1\"\nusd_per_gpu_second = 0.001\n\
+         [model_routing.retry]\nserver = 1\n",
+    )
+    .unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.freshness.observation_ttl_seconds, 120.0);
+    assert_eq!(runtime.window_reserves.get("five_hour"), Some(&4.0));
+    assert_eq!(runtime.window_reserves.get("seven_day"), None);
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu0")).usd_per_gpu_second,
+        None
+    );
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu1")).usd_per_gpu_second,
+        Some(0.001)
+    );
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu1")).usd_per_wait_second,
+        None
+    );
+    let caps = runtime.capacity_limits(Some(3));
+    assert_eq!(caps.per_account, Some(3));
+    assert_eq!(caps.resource_groups.get("gpu0"), Some(&2));
+    assert_eq!(caps.resource_groups.get("gpu1"), None);
+    assert_eq!(runtime.fallback.limits.server, 1);
+    assert_eq!(
+        runtime.fallback.limits.rate_limited,
+        llm_proxy::fallback::RetryLimits::default().rate_limited
+    );
+    assert_eq!(runtime.dispatch_settings().window_reserves.len(), 1);
+}

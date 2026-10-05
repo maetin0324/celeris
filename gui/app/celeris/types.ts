@@ -1086,6 +1086,53 @@ export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_tim
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
 export type TierSource = "human" | "system" | "hint" | "default";
+/**
+ * ADR §9（Phase 2）: 候補が落ちた理由の型。旧 event には無い（None）。
+ * 既知の理由コード（optimizer・cost の `&'static str`）は [`ExcludedReason::from_code`] で写す。
+ */
+export type ExcludedReason =
+  | {
+      kind: "constraint";
+      name: string;
+    }
+  | {
+      kind: "quota_exhausted";
+    }
+  | {
+      kind: "cooldown";
+    }
+  | {
+      kind: "concurrency";
+    }
+  | {
+      kind: "rate_limit";
+    }
+  | {
+      kind: "health_down";
+    }
+  | {
+      kind: "circuit_open";
+    }
+  | {
+      kind: "disabled";
+    }
+  | {
+      field: string;
+      kind: "unknown_required";
+    }
+  | {
+      kind: "quality_invalid";
+    }
+  | {
+      kind: "quality_below_min";
+    }
+  | {
+      kind: "invalid_estimate";
+    }
+  | {
+      code: string;
+      kind: "other";
+    };
 export type RoutingMode = "legacy" | "shadow" | "enforce";
 /**
  * ADR-0132 付記 L8: 候補の種類。
@@ -4897,6 +4944,10 @@ export interface ShadowDecision {
   lane: Tier;
 }
 export interface RoutingTraceV1 {
+  /**
+   * Phase 2: 最終の account（OAuth pool の account 等）。
+   */
+  account_id?: string | null;
   candidates: CandidateTrace[];
   catalog_version: string;
   decision_id: string;
@@ -4904,6 +4955,10 @@ export interface RoutingTraceV1 {
   fallback_order: string[];
   feature_version: string;
   mode: RoutingMode;
+  /**
+   * Phase 2: 最終の model。
+   */
+  model?: string | null;
   observed_at?: string | null;
   parent_decision_id?: string | null;
   policy_version: string;
@@ -4914,26 +4969,73 @@ export interface RoutingTraceV1 {
   selected?: string | null;
   selected_lane?: Tier | null;
   snapshot_id: string;
+  /**
+   * Phase 2: 最終の source（provider / deployment）。旧 event には無い。
+   */
+  source_id?: string | null;
   stage: string;
   task_id?: string | null;
   work_unit_id?: string | null;
 }
 export interface CandidateTrace {
+  /**
+   * Phase 2: API の実料金。
+   */
+  cash_usd?: number | null;
+  /**
+   * Phase 2: 設定順（決定的な並びのキー）。旧 event には無い。
+   */
+  config_order?: number | null;
   cost_usd?: number | null;
   deployment_id: string;
+  /**
+   * Phase 2: cash + shadow + resource（どれかが未知なら None）。
+   */
+  effective_usd?: number | null;
   eligible_provider_ids: string[];
+  /**
+   * Phase 2: 代表の除外理由。採用可能な候補・旧 event は None。
+   */
+  excluded_reason?: ExcludedReason | null;
   excluded_reasons: string[];
   latency_ms?: number | null;
   model_profile_id: string;
   pressure?: number | null;
   quality?: QualityEstimate | null;
+  /**
+   * Phase 2: self-host の資源の機会費用。
+   */
+  resource_usd?: number | null;
   score?: number | null;
+  /**
+   * Phase 2: score の内訳。score を計算しなかった候補・旧 event は None。
+   */
+  score_breakdown?: ScoreTrace | null;
+  /**
+   * Phase 2: subscription の shadow price。
+   */
+  shadow_usd?: number | null;
 }
 export interface QualityEstimate {
   confidence?: number | null;
   feature_version: string;
   index?: number | null;
   reasons: string[];
+}
+/**
+ * score の内訳（ADR §4: score = wq·Q − wc·C − wl·L − wp·P）。C/L/P の未知は 1 で `unknown` に残す。
+ */
+export interface ScoreTrace {
+  c: number;
+  l: number;
+  p: number;
+  q: number;
+  score: number;
+  unknown?: string[];
+  wc: number;
+  wl: number;
+  wp: number;
+  wq: number;
 }
 /**
  * Model 層（lane → provider / model）。
@@ -6728,6 +6830,11 @@ export interface LlmCelerisTierView {
  */
 export interface LlmSourceView {
   accounts: LlmSourceAccountView[];
+  /**
+   * ADR 2026-10-04-multi-objective-model-routing Phase 2: deployment ごとの動的状態と費用成分
+   * （`llm_sources::source_state_view` で組む）。古いスナップショット・状態を持たない供給元は空。
+   */
+  deployments?: LlmSourceStateView[];
   enabled: boolean;
   /**
    * `claude-oauth` / `codex-oauth` / `openai-compatible:<id>`。
@@ -6768,6 +6875,97 @@ export interface LlmSourceAccountView {
    * ADR-0053 D4（Phase 66）: 短期枠（Claude の 5 時間 / Codex の週内相当）だけの残り。測れないときは `null`。
    */
   remaining_short?: number | null;
+}
+/**
+ * Phase 2: deployment 1 件の動的状態（`SourceState`）と effective cost の投影。credential は含めない。
+ */
+export interface LlmSourceStateView {
+  /**
+   * 費用の見積もりが無ければ `null`（全部未知）。
+   */
+  cost?: LlmSourceCostView | null;
+  deployment_id: string;
+  freshness: LlmSourceFreshnessView;
+  latency_ms?: number | null;
+  /**
+   * [0,1]。既知成分が無ければ `null`。
+   */
+  pressure?: number | null;
+  /**
+   * 既知の窓のうち最も少ない残量（窓の unit）。未知は `null`。
+   */
+  quota_remaining?: number | null;
+  /**
+   * 最も早い窓の reset 時刻（RFC 3339）。未知は `null`。
+   */
+  quota_reset_at?: string | null;
+  /**
+   * `"up"` / `"down"` / `"unknown"`。
+   */
+  reachability: string;
+  /**
+   * 値が未知の欄の名前（`latency`・`quota`・`quota_reset`・`pressure`・`cash`・`shadow`・
+   * `resource`・`effective`・`observed_at`）。整列済み。
+   */
+  unknown?: string[];
+}
+/**
+ * Phase 2: 費用成分。請求（`billed`）と機会費用（`opportunity`）を別の欄に分ける。
+ */
+export interface LlmSourceCostView {
+  /**
+   * 見積もりの前提（cost.rs の assumptions）。
+   */
+  assumptions?: string[];
+  billed: LlmSourceBilledCostView;
+  /**
+   * cash + shadow + resource（どれかが未知なら `null`）。
+   */
+  effective_usd?: number | null;
+  opportunity: LlmSourceOpportunityCostView;
+}
+/**
+ * Phase 2: 請求される費用（API の実料金）。
+ */
+export interface LlmSourceBilledCostView {
+  /**
+   * 未知は `null`（0 で埋めない）。
+   */
+  cash_usd?: number | null;
+}
+/**
+ * Phase 2: 請求されない機会費用（subscription の shadow price・self-host の資源）。
+ */
+export interface LlmSourceOpportunityCostView {
+  /**
+   * self-host の load/queue/GPU の機会費用。未知は `null`。
+   */
+  resource_usd?: number | null;
+  /**
+   * subscription の残量と reset までの時間からの shadow price。未知は `null`。
+   */
+  shadow_usd?: number | null;
+}
+/**
+ * Phase 2: 観測 snapshot の鮮度。`observed_at` が無ければ `age_secs` も `null`（未観測）。
+ */
+export interface LlmSourceFreshnessView {
+  /**
+   * 応答時刻 − 観測時刻（秒）。未観測・時刻が読めないときは `null`。
+   */
+  age_secs?: number | null;
+  /**
+   * 観測の有効期限（RFC 3339）。
+   */
+  expires_at?: string | null;
+  /**
+   * 観測時刻（RFC 3339）。未観測は `null`。
+   */
+  observed_at?: string | null;
+  /**
+   * 期限切れ、または未観測なら `true`（古い値は判定に使わない）。
+   */
+  stale: boolean;
 }
 export interface McpCallsView {
   items: McpCall[];
@@ -10177,19 +10375,35 @@ export interface TaskRoutingView {
    * routing の出自（tier を誰が決めたか・捨てた LLM の担当 `dropped_assignee`・features の上書き）。
    */
   routing?: TaskRouting | null;
-  runs: RoutingAudit[];
+  /**
+   * run ごとの監査。ADR 2026-10-04-multi-objective-model-routing Phase 2 の `requests`（proxy の
+   * 要求単位の子 trace）・`audit_incomplete` は旧欄と同じ object に並ぶ（旧 run は無い）。
+   */
+  runs: RunRoutingAudit[];
   task_id: TaskId;
+  /**
+   * Phase 2: どの run にも結べない要求の子 trace（推定で結ばない）。無ければ欄ごと省く。
+   */
+  unbound_requests?: RequestRoutingAudit[];
 }
 /**
- * ワーカー run 1 件の routing の監査。
+ * ワーカー run 1 件の監査（旧欄）と Phase 2 の子 trace・完全性。
  */
-export interface RoutingAudit {
+export interface RunRoutingAudit {
   account?: string | null;
   adapter?: string | null;
+  /**
+   * 子 trace のどれかが proxy log と結べない（または決定が要求を指すのに子が無い）。旧 run は None。
+   */
+  audit_incomplete?: boolean | null;
   cost_usd?: number | null;
   escalation?: string | null;
   features?: TaskFeatures | null;
   harness?: string | null;
+  /**
+   * `audit_incomplete` の理由（整列・重複なし）。
+   */
+  incomplete_reasons?: string[];
   input_tokens?: number | null;
   lane?: Tier | null;
   model?: string | null;
@@ -10204,12 +10418,75 @@ export interface RoutingAudit {
   provider?: string | null;
   reasoning_effort?: string | null;
   reasons?: string[];
+  /**
+   * proxy の要求単位の子 trace。Phase 2 の trace を持たない旧 run は None。
+   */
+  requests?: RequestRoutingAudit[] | null;
   retries?: number | null;
   review?: ReviewResult | null;
   rule_id?: string | null;
   run_id: string;
   task_id: TaskId;
   wall_ms?: number | null;
+}
+/**
+ * 要求 1 件の子 trace。`log` は proxy log と結べたときだけ `Some`。
+ */
+export interface RequestRoutingAudit {
+  decision_id: string;
+  /**
+   * 結べなかった理由（`request_log_missing` など）。結べたら None。
+   */
+  incomplete_reason?: string | null;
+  log?: RequestLogLink | null;
+  request_id?: string | null;
+  trace: RoutingTraceV11;
+}
+/**
+ * proxy log に記録された要求の実際の行き先（相関欄の写し）。
+ */
+export interface RequestLogLink {
+  account?: string | null;
+  model?: string | null;
+  snapshot_id?: string | null;
+  source_id?: string | null;
+}
+/**
+ * 要求単位の決定（候補ごとの除外理由・score 内訳・最終 source/model/account）。
+ */
+export interface RoutingTraceV11 {
+  /**
+   * Phase 2: 最終の account（OAuth pool の account 等）。
+   */
+  account_id?: string | null;
+  candidates: CandidateTrace[];
+  catalog_version: string;
+  decision_id: string;
+  estimator_version: string;
+  fallback_order: string[];
+  feature_version: string;
+  mode: RoutingMode;
+  /**
+   * Phase 2: 最終の model。
+   */
+  model?: string | null;
+  observed_at?: string | null;
+  parent_decision_id?: string | null;
+  policy_version: string;
+  reasons: string[];
+  request_id?: string | null;
+  requested_lane: Tier;
+  run_id?: string | null;
+  selected?: string | null;
+  selected_lane?: Tier | null;
+  snapshot_id: string;
+  /**
+   * Phase 2: 最終の source（provider / deployment）。旧 event には無い。
+   */
+  source_id?: string | null;
+  stage: string;
+  task_id?: string | null;
+  work_unit_id?: string | null;
 }
 /**
  * レビューの結果（その run の後の `review_pass` / `review_fail`）。

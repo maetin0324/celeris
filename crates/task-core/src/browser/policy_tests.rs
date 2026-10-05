@@ -426,6 +426,45 @@ fn browser_allowed_domains_intersection_checks_scheme_host_and_port() {
 }
 
 #[test]
+fn browser_allowed_domains_containment_respects_apex_and_default_port() {
+    assert!(origin_covers(
+        "https://*.example.com",
+        "https://app.example.com:443"
+    ));
+    assert!(origin_covers(
+        "https://*.example.com",
+        "https://*.sub.example.com"
+    ));
+    assert!(!origin_covers(
+        "https://*.example.com",
+        "https://example.com"
+    ));
+    assert!(!origin_covers(
+        "https://*.example.com",
+        "https://app.example.com:8443"
+    ));
+    assert!(!origin_covers("http://localhost", "https://localhost"));
+}
+
+#[test]
+fn browser_allowed_domains_derive_minimizes_overlapping_intersections() {
+    let mut grant = grant();
+    grant.allowed_domains = vec![
+        "https://*.example.com".into(),
+        "https://app.example.com".into(),
+    ];
+    let mut task = task(&[BrowserAction::Snapshot]);
+    task.network_domains = vec![
+        "https://*.sub.example.com".into(),
+        "https://app.sub.example.com".into(),
+    ];
+    assert_eq!(
+        derive(&grant, &task).unwrap().allowed_domains,
+        ["https://*.sub.example.com"]
+    );
+}
+
+#[test]
 fn browser_allowed_domains_seed_grants_validate() {
     let toml: toml::Value =
         toml::from_str(include_str!("../../../../config/org.example.toml")).unwrap();

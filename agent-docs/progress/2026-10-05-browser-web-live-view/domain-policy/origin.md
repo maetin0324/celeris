@@ -8,4 +8,4 @@ tasks: [01M470CJRXMPWS39S14PN7XPFP]
 - task-core に origin の解析・正規化・包含・交差・冗長削除を追加。`EffectiveBrowserPolicy::derive` は grant と task policy を scheme・host・port 込みで交差する。
 - org の TOML/JSON seed は loopback の 3000 番 port のみに変更。両 seed を `include_str!` で読む検証試験を追加。
 - 実行側の broker/egress と起動引数の配線は後続の enforce 工程が担当する。
-- 検査: `cargo test -p task-core --lib` は 723 件成功、`cargo clippy --workspace -- -D warnings` は成功。
+- 検査: `cargo test -p task-core browser_allowed_domains_` は 5 件成功、`cargo test -p task-core` は 725 件成功、`cargo fmt --all -- --check` と `cargo clippy --workspace -- -D warnings` は成功。

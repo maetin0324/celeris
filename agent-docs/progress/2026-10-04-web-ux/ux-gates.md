@@ -64,8 +64,153 @@ skipped 8 件の理由（テストの `test.skip` 条件どおり）:
 
 - task 差分の確認は acceptance の式で行う（`git log --format= --name-only 7eab1be6a4e3..HEAD --not main` 等）。結果は本記録の commit 後に確認する。
 
+## after screenshot
+
+build（`corepack pnpm@12.6.0 -C web build`、dist 再生成）後に `web/scripts/screenshots.mjs`（偽 daemon `fixture-gateway.mjs` 経由、360/390/412/1440px の 4 幅・fullPage）で撮影。UI は変更していない。
+
+- after（全台帳 31 画面 × 4 幅 = 124 枚）: `/local/celeris/data/workspaces/01M44XGC0TDNPHQCPQYT9VZA6Q/wu/shots/artifacts/after`
+  - コマンド: `corepack pnpm@12.6.0 -C web screenshots -- --out /local/celeris/data/workspaces/01M44XGC0TDNPHQCPQYT9VZA6Q/wu/shots/artifacts/after`
+  - 出力: `screenshots: 124 image(s) from 31 screen(s)`
+- after-states（8 状態 × 各画面 × 4 幅 = 116 枚）: `/local/celeris/data/workspaces/01M44XGC0TDNPHQCPQYT9VZA6Q/wu/shots/artifacts/after-states`
+  - コマンド: `corepack pnpm@12.6.0 -C web screenshots -- --states --out /local/celeris/data/workspaces/01M44XGC0TDNPHQCPQYT9VZA6Q/wu/shots/artifacts/after-states`
+  - 出力: `screenshots: 116 image(s) across 8 states`
+- before（120 枚、`/notifications` 追加前の台帳）: `/local/celeris/data/workspaces/01M3YEN6B6AWRGRVGTPKGQ32YP/wu/before-shots/artifacts/before`
+
+## after と before の対応表
+
+file 名の同名対応（31 名前 × 4 幅 = 124 行）。before 有無・after 有無は同名 file の存在。
+
+- before に無い名前（after のみ）: `_notifications-*`（4 幅）。`/notifications`（通知）は before 撮影後に台帳へ追加された画面（`docs/frontend/UX_AUDIT.md` §撮影 の before は 120 枚・30 画面）。
+- after に無い名前（before のみ）: なし。before の 120 枚は全て after に同名存在。
+
+| 名前 | 幅 | before 有無 | after 有無 |
+|---|---|---|---|
+| _-360.png | 360px | 有 | 有 |
+| _-390.png | 390px | 有 | 有 |
+| _-412.png | 412px | 有 | 有 |
+| _-1440.png | 1440px | 有 | 有 |
+| _accounts-360.png | 360px | 有 | 有 |
+| _accounts-390.png | 390px | 有 | 有 |
+| _accounts-412.png | 412px | 有 | 有 |
+| _accounts-1440.png | 1440px | 有 | 有 |
+| _approvals-360.png | 360px | 有 | 有 |
+| _approvals-390.png | 390px | 有 | 有 |
+| _approvals-412.png | 412px | 有 | 有 |
+| _approvals-1440.png | 1440px | 有 | 有 |
+| _artifacts-360.png | 360px | 有 | 有 |
+| _artifacts-390.png | 390px | 有 | 有 |
+| _artifacts-412.png | 412px | 有 | 有 |
+| _artifacts-1440.png | 1440px | 有 | 有 |
+| _board-360.png | 360px | 有 | 有 |
+| _board-390.png | 390px | 有 | 有 |
+| _board-412.png | 412px | 有 | 有 |
+| _board-1440.png | 1440px | 有 | 有 |
+| _clusters-360.png | 360px | 有 | 有 |
+| _clusters-390.png | 390px | 有 | 有 |
+| _clusters-412.png | 412px | 有 | 有 |
+| _clusters-1440.png | 1440px | 有 | 有 |
+| _daemon-360.png | 360px | 有 | 有 |
+| _daemon-390.png | 390px | 有 | 有 |
+| _daemon-412.png | 412px | 有 | 有 |
+| _daemon-1440.png | 1440px | 有 | 有 |
+| _graph-360.png | 360px | 有 | 有 |
+| _graph-390.png | 390px | 有 | 有 |
+| _graph-412.png | 412px | 有 | 有 |
+| _graph-1440.png | 1440px | 有 | 有 |
+| _help-360.png | 360px | 有 | 有 |
+| _help-390.png | 390px | 有 | 有 |
+| _help-412.png | 412px | 有 | 有 |
+| _help-1440.png | 1440px | 有 | 有 |
+| _inbox-360.png | 360px | 有 | 有 |
+| _inbox-390.png | 390px | 有 | 有 |
+| _inbox-412.png | 412px | 有 | 有 |
+| _inbox-1440.png | 1440px | 有 | 有 |
+| _knowledge-360.png | 360px | 有 | 有 |
+| _knowledge-390.png | 390px | 有 | 有 |
+| _knowledge-412.png | 412px | 有 | 有 |
+| _knowledge-1440.png | 1440px | 有 | 有 |
+| _knowledge_inbox-360.png | 360px | 有 | 有 |
+| _knowledge_inbox-390.png | 390px | 有 | 有 |
+| _knowledge_inbox-412.png | 412px | 有 | 有 |
+| _knowledge_inbox-1440.png | 1440px | 有 | 有 |
+| _knowledge_skills-360.png | 360px | 有 | 有 |
+| _knowledge_skills-390.png | 390px | 有 | 有 |
+| _knowledge_skills-412.png | 412px | 有 | 有 |
+| _knowledge_skills-1440.png | 1440px | 有 | 有 |
+| _login-360.png | 360px | 有 | 有 |
+| _login-390.png | 390px | 有 | 有 |
+| _login-412.png | 412px | 有 | 有 |
+| _login-1440.png | 1440px | 有 | 有 |
+| _notifications-360.png | 360px | 無 | 有 |
+| _notifications-390.png | 390px | 無 | 有 |
+| _notifications-412.png | 412px | 無 | 有 |
+| _notifications-1440.png | 1440px | 無 | 有 |
+| _org-360.png | 360px | 有 | 有 |
+| _org-390.png | 390px | 有 | 有 |
+| _org-412.png | 412px | 有 | 有 |
+| _org-1440.png | 1440px | 有 | 有 |
+| _org_cos-360.png | 360px | 有 | 有 |
+| _org_cos-390.png | 390px | 有 | 有 |
+| _org_cos-412.png | 412px | 有 | 有 |
+| _org_cos-1440.png | 1440px | 有 | 有 |
+| _plans_new-360.png | 360px | 有 | 有 |
+| _plans_new-390.png | 390px | 有 | 有 |
+| _plans_new-412.png | 412px | 有 | 有 |
+| _plans_new-1440.png | 1440px | 有 | 有 |
+| _projects-360.png | 360px | 有 | 有 |
+| _projects-390.png | 390px | 有 | 有 |
+| _projects-412.png | 412px | 有 | 有 |
+| _projects-1440.png | 1440px | 有 | 有 |
+| _projects_P1-360.png | 360px | 有 | 有 |
+| _projects_P1-390.png | 390px | 有 | 有 |
+| _projects_P1-412.png | 412px | 有 | 有 |
+| _projects_P1-1440.png | 1440px | 有 | 有 |
+| _projects_P1_docs-360.png | 360px | 有 | 有 |
+| _projects_P1_docs-390.png | 390px | 有 | 有 |
+| _projects_P1_docs-412.png | 412px | 有 | 有 |
+| _projects_P1_docs-1440.png | 1440px | 有 | 有 |
+| _projects_P1_docs_maintenance-360.png | 360px | 有 | 有 |
+| _projects_P1_docs_maintenance-390.png | 390px | 有 | 有 |
+| _projects_P1_docs_maintenance-412.png | 412px | 有 | 有 |
+| _projects_P1_docs_maintenance-1440.png | 1440px | 有 | 有 |
+| _providers-360.png | 360px | 有 | 有 |
+| _providers-390.png | 390px | 有 | 有 |
+| _providers-412.png | 412px | 有 | 有 |
+| _providers-1440.png | 1440px | 有 | 有 |
+| _releases-360.png | 360px | 有 | 有 |
+| _releases-390.png | 390px | 有 | 有 |
+| _releases-412.png | 412px | 有 | 有 |
+| _releases-1440.png | 1440px | 有 | 有 |
+| _reports-360.png | 360px | 有 | 有 |
+| _reports-390.png | 390px | 有 | 有 |
+| _reports-412.png | 412px | 有 | 有 |
+| _reports-1440.png | 1440px | 有 | 有 |
+| _tasks-360.png | 360px | 有 | 有 |
+| _tasks-390.png | 390px | 有 | 有 |
+| _tasks-412.png | 412px | 有 | 有 |
+| _tasks-1440.png | 1440px | 有 | 有 |
+| _tasks_T1-360.png | 360px | 有 | 有 |
+| _tasks_T1-390.png | 390px | 有 | 有 |
+| _tasks_T1-412.png | 412px | 有 | 有 |
+| _tasks_T1-1440.png | 1440px | 有 | 有 |
+| _tasks_T1_changes-360.png | 360px | 有 | 有 |
+| _tasks_T1_changes-390.png | 390px | 有 | 有 |
+| _tasks_T1_changes-412.png | 412px | 有 | 有 |
+| _tasks_T1_changes-1440.png | 1440px | 有 | 有 |
+| _tasks_T1_files-360.png | 360px | 有 | 有 |
+| _tasks_T1_files-390.png | 390px | 有 | 有 |
+| _tasks_T1_files-412.png | 412px | 有 | 有 |
+| _tasks_T1_files-1440.png | 1440px | 有 | 有 |
+| _tasks_T1_runs_R1-360.png | 360px | 有 | 有 |
+| _tasks_T1_runs_R1-390.png | 390px | 有 | 有 |
+| _tasks_T1_runs_R1-412.png | 412px | 有 | 有 |
+| _tasks_T1_runs_R1-1440.png | 1440px | 有 | 有 |
+| _tasks_new-360.png | 360px | 有 | 有 |
+| _tasks_new-390.png | 390px | 有 | 有 |
+| _tasks_new-412.png | 412px | 有 | 有 |
+| _tasks_new-1440.png | 1440px | 有 | 有 |
 ## 未解決事項・提案
 
 - lint warning 5 件（既存）は直していない。`states.spec.ts` の未使用引数（`checks` の `url`）と `styles.css` の `!important` 4 件は別の小 WU で扱える。
-- after screenshot と before との同名対応表は、この WU の範囲外（`shots` WU）。このファイルには書いていない。
+- after screenshot と before の同名対応表は `shots` WU（本 run）が上記「after と before の対応表」に書いた。
 - `test.fail` の仕組み（`states.spec.ts` の `findings`）は残してある。所見を書けば、その画面は再び期待どおり失敗として数えられる。

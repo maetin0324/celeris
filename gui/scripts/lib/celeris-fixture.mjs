@@ -404,6 +404,11 @@ export async function setupMockCeleris() {
     });
   }
 
+  // ADR 2026-10-04-multi-objective-model-routing Phase 2: 動的状態（deployment）・要求ごとの routing 監査。
+  // 試験（test/unit/routing-source-state.test.ts）と同じ fixture を読む（pathname で照合）。
+  const routingState = JSON.parse(
+    fs.readFileSync(path.join(GUI_DIR, "test/fixtures/api/routing-source-state.json"), "utf8"),
+  );
   mock.on("GET", "/api/v1/llm/sources", (_req, res) =>
     sendJson(res, 200, {
       sources: [
@@ -451,6 +456,7 @@ export async function setupMockCeleris() {
           last_hour_requests: 40,
           last_hour_prompt_tokens: 9000,
           last_hour_completion_tokens: 5000,
+          deployments: routingState.llm_sources.sources[1].deployments,
         },
       ],
       celeris_tiers: [
@@ -561,6 +567,7 @@ export async function setupMockCeleris() {
       .replaceAll("01R4BROOT0000000000000001", TASK_ID),
   );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/task-tree`, (_req, res) => sendJson(res, 200, taskTree));
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/routing`, (_req, res) => sendJson(res, 200, routingState.task_routing));
 
   mock.on(`GET`, `/api/v1/tasks/${TASK_ID}`, (_req, res) =>
     sendJson(res, 200, {

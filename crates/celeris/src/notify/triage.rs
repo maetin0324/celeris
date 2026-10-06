@@ -60,8 +60,11 @@ pub fn render(row: &Notification, config: &NotifyConfig) -> Result<String, &'sta
         .unwrap_or_else(|| "web で回答".into());
     let recommended = field(&packet, "recommended");
     let reason = field(&packet, "recommendation_reason");
-    let recommendation = if recommended.is_empty() {
+    // D3: 推奨なしは null と理由。理由があれば推奨なしでも落とさない。
+    let recommendation = if recommended.is_empty() && reason.is_empty() {
         "CoS の推奨なし".to_string()
+    } else if recommended.is_empty() {
+        format!("CoS の推奨なし（{}）", excerpt(reason, 180))
     } else if reason.is_empty() {
         excerpt(recommended, 60)
     } else {

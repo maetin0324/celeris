@@ -252,7 +252,7 @@ pub(crate) fn notice_source(notice: &Notice, policy_version: &str) -> Option<Cos
     })
 }
 
-fn card_kind(source_kind: &str) -> ChatCardKind {
+pub(super) fn card_kind(source_kind: &str) -> ChatCardKind {
     match source_kind {
         "decision" => ChatCardKind::Decision,
         "question" => ChatCardKind::Question,
@@ -303,6 +303,17 @@ impl CosChatLaunch {
         if let Err(error) = self.triage_notices(now) {
             tracing::warn!(%error, "CoS triage notice intake failed");
         }
+        // D6: LLM-free direct notice for items CoS cannot answer.
+        self.triage_fallback(dispatcher, now);
+    }
+
+    /// Items of the current derived inbox (shared with the fallback leaf).
+    pub(super) fn human_inbox_items(
+        &self,
+        dispatcher: &Dispatcher,
+        now: OffsetDateTime,
+    ) -> Result<Vec<InboxItem>, String> {
+        self.human_inbox(dispatcher, now).map(|inbox| inbox.items)
     }
 
     fn human_inbox(
@@ -513,7 +524,7 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    fn inbox_thread(&mut self) -> Result<Option<String>, String> {
+    pub(super) fn inbox_thread(&mut self) -> Result<Option<String>, String> {
         if let Some(id) = &self.triage.inbox_thread {
             return Ok(Some(id.clone()));
         }

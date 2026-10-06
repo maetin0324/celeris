@@ -17,13 +17,17 @@ struct Fixture {
 }
 
 fn fixture(enabled: bool) -> Fixture {
+    fixture_script(enabled, DONE)
+}
+
+fn fixture_script(enabled: bool, script: &str) -> Fixture {
     let dir = tempfile::tempdir().expect("tempdir");
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec![
         "sh".into(),
         "-c".into(),
-        DONE.into(),
+        script.into(),
     ]));
     let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, "fake");
     d.test_now = Some(Arc::new(StdMutex::new(
@@ -331,9 +335,9 @@ async fn cos_chat_triage_ingest_introduction_takes_old_waits_once_and_disabled_s
     assert_eq!(f.items(), 2);
     assert_eq!(f.inbox_runs(), 0);
     assert_eq!(
-        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='pending'"),
+        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='fallback'"),
         2,
-        "items stay queued for the fallback path"
+        "cos.enabled=false hands the items to the fallback path"
     );
 }
 
@@ -444,3 +448,6 @@ async fn cos_chat_triage_ingest_places_reference_card_in_origin_thread() {
     assert_eq!(f.inbox_runs(), 1, "triage runs only in the inbox thread");
     assert!(f.join_inbox().await);
 }
+
+#[path = "cos_chat_triage_fallback.rs"]
+mod fallback;

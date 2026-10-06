@@ -226,7 +226,7 @@ impl Config {
             .map(|p| p.kind.unwrap_or_default())
     }
 
-    fn effective_model<'a>(&'a self, p: &'a ProviderConfig) -> Option<&'a str> {
+    pub(super) fn effective_model<'a>(&'a self, p: &'a ProviderConfig) -> Option<&'a str> {
         if !p.model.is_empty() {
             return Some(&p.model);
         }

@@ -223,6 +223,7 @@ pub(crate) fn reload_providers(
     config.delegation = new_config.delegation;
     config.reports = new_config.reports;
     config.notify = new_config.notify;
+    config.cos = new_config.cos;
     config.conversation = new_config.conversation;
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =

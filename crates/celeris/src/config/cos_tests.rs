@@ -142,3 +142,109 @@ fn chat_config_example_toml_carries_the_defaults() {
     );
     assert_eq!(cfg.cos.stream_retention_days, 30);
 }
+
+#[test]
+fn cos_chat_config_defaults_and_unavailable_reason() {
+    let cfg = load("").unwrap();
+    assert!(cfg.cos.enabled);
+    assert_eq!(cfg.cos.harness, CosHarness::ClaudeCode);
+    assert_eq!(cfg.cos.tier, Tier::Frontier);
+    assert_eq!(cfg.cos.max_turns, 70);
+    assert_eq!(cfg.cos.max_wall_secs, 900);
+    assert_eq!(cfg.cos.triage.policy_skill, "cos-inbox-triage");
+    assert_eq!(cfg.cos.triage.policy_version, "1");
+    assert_eq!(cfg.cos.triage.min_confidence, 0.85);
+    assert_eq!(cfg.cos.triage.human_required, default_human_required());
+    assert_eq!(cfg.cos.triage.unavailable_after_secs, 120);
+    let reason = cfg.resolve_cos_provider().unwrap_err();
+    assert!(reason.contains("no provider"), "{reason}");
+    assert!(reason.contains("claude-code"), "{reason}");
+}
+
+#[test]
+fn cos_chat_config_rejects_unknown_and_invalid_values() {
+    for text in [
+        "[cos]\nunknown = 1\n",
+        "[cos.triage]\nunknown = 1\n",
+        "[cos]\nharness = \"fake\"\n",
+        "[cos]\nllm_source = \"invalid\"\n",
+    ] {
+        assert!(matches!(load(text), Err(ConfigError::Parse(_))), "{text}");
+    }
+    for (text, needle) in [
+        ("[cos]\nllm_source = \"none\"\n", "llm_source"),
+        ("[cos]\nllm_source = \"unknown\"\n", "llm_source"),
+        ("[cos]\nmax_turns = 0\n", "max_turns"),
+        ("[cos.triage]\nmin_confidence = 1.1\n", "min_confidence"),
+        (
+            "[cos.triage]\nunavailable_after_secs = 0\n",
+            "unavailable_after_secs",
+        ),
+        ("[cos]\nprovider = \"missing\"\n", "provider"),
+        (
+            "[cos]\nharness = \"codex\"\nllm_source = \"claude_oauth\"\n",
+            "llm_source",
+        ),
+        ("[cos]\nmodel = \"celeris/frontier\"\n", "model"),
+    ] {
+        let err = load(text).unwrap_err().to_string();
+        assert!(err.contains(needle), "{text}: {err}");
+    }
+}
+
+#[test]
+fn cos_chat_config_explicit_provider_conflicts_and_resolves() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let provider = "[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n[providers.tier_models.frontier]\nname = \"opus\"\nmodel_id = \"claude-opus-5-5\"\n";
+    std::fs::write(
+        &path,
+        format!("[cos]\nprovider = \"claude\"\nllm_source = \"codex_oauth\"\n{provider}"),
+    )
+    .unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("llm_source")
+    );
+    std::fs::write(
+        &path,
+        format!("[cos]\nprovider = \"claude\"\nllm_source = \"claude_oauth\"\n{provider}"),
+    )
+    .unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let resolved = cfg.resolve_cos_provider().unwrap();
+    assert_eq!(resolved.provider, "claude");
+    assert_eq!(resolved.llm_source, LlmSourceRef::ClaudeOauth);
+    assert_eq!(resolved.model.as_deref(), Some("claude-opus-5-5"));
+}
+
+#[test]
+fn cos_chat_config_reload_rejects_change_and_preserves_old_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        "[cos]\nmax_turns = 12\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n",
+    )
+    .unwrap();
+    let old = Config::load(&path).unwrap();
+    std::fs::write(&path, "[cos]\nmax_turns = 99\nprovider = \"claude\"\nharness = \"codex\"\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n").unwrap();
+    assert!(Config::load(&path).is_err());
+    assert_eq!(old.cos.max_turns, 12);
+    assert_eq!(old.resolve_cos_provider().unwrap().provider, "claude");
+}
+
+#[test]
+fn cos_chat_config_unavailable_tier_keeps_reason() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "[cos]\nprovider = \"claude\"\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n[providers.tier_models.frontier]\nname = \"frontier\"\nunavailable_reason = \"account cannot access this model\"\n").unwrap();
+    let cfg = Config::load(&path).unwrap();
+    assert!(
+        cfg.resolve_cos_provider()
+            .unwrap_err()
+            .contains("account cannot access this model")
+    );
+}

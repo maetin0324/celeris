@@ -668,7 +668,24 @@ inputs/reports.json（前回の整理以降に終わった task の報告の抜�
 # unreferenced_retention_days 経過した blob、期限切れの upload 予約、run 終端後 stream_retention_days
 # を過ぎた chat_events の text/tool 詳細を片付ける（LLM は使わない）。
 [cos]
+# CoS worker (D2)。候補が無ければ理由付き unavailable とする。
+enabled = true
+harness = "claude-code"             # claude-code / codex / opencode
+# llm_source = "claude_oauth"       # 省略時は適合 provider の source
+# provider = "claude-pool"          # 明示時はこの provider に固定
+# account_id = "claude_max_lab"     # 固定すると他 account に逃がさない
+# model = "claude-opus-5-5"         # 指定時は tier より優先
+tier = "frontier"
+max_turns = 70
+max_wall_secs = 900
 stream_retention_days = 30
+
+[cos.triage]
+policy_skill = "cos-inbox-triage"
+policy_version = "1"
+min_confidence = 0.85
+human_required = ["fundamental_change", "external_publish", "destructive", "resource_overrun", "security", "explicit_human"]
+unavailable_after_secs = 120
 
 [cos.attachments]
 max_file_bytes = 26214400           # 1 ファイル 25 MiB（upload の body limit もこれに合わせる）

@@ -471,6 +471,7 @@ impl Config {
         self.containers.validate()?;
         self.storage.validate()?;
         self.cos.validate()?;
+        self.validate_cos_mapping()?;
         providers::validate_providers(self)?;
         if let Some(accounts) = &self.accounts {
             accounts.validate()?;

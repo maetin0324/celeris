@@ -2374,7 +2374,6 @@ dependencies = [
  "nix",
  "serde",
  "serde_json",
- "sha2",
  "task-core",
  "task-ops",
  "task-worker",

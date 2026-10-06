@@ -8,3 +8,8 @@
 - `cos_chat_run_attach_` の試験で一致、欠落、不一致、symlink、thread 不一致、原名の安全化、delivery の区別を確認する。
 
 この leaf では dispatcher の起動経路への接続は行わない。後続の統合工程が `stage_message_attachments` と `workspace_dir` を呼ぶ。
+
+## 再試行（attempt 2, 2026-10-06）
+- 前回の check 不合格: clippy の `cloned_ref_to_slice_refs`（tests.rs）と範囲外の Cargo.toml/Cargo.lock（sha2 依存の追加）。
+- 直し: sha2 の直接依存をやめ、既存依存 task-worker の `artifact::sha256_file` で stage 後のファイルを照合（`verify_staged`）。試験は `std::slice::from_ref`。
+- 証拠: `cargo fmt --all -- --check && cargo clippy -p task-dispatch --all-targets -- -D warnings` exit 0、`cargo test -p task-dispatch --lib cos_chat_run_attach_` 5 passed、範囲 check の出力なし。

@@ -142,7 +142,11 @@ fn cos_chat_run_attach_rejects_missing_and_mismatched_blob_without_staging() {
     );
     fs::remove_file(temp.path().join("chat").join(&good.relative_path)).expect("remove");
     assert!(matches!(
-        stage_message_attachments(&store, temp.path(), &message(&[good.id.clone()])),
+        stage_message_attachments(
+            &store,
+            temp.path(),
+            &message(std::slice::from_ref(&good.id))
+        ),
         Err(StageError::Attachment {
             source: AttachmentError::Io(_),
             ..
@@ -173,7 +177,7 @@ fn cos_chat_run_attach_rejects_symlink_and_traversal() {
     fs::remove_file(&source).expect("remove blob");
     symlink(temp.path().join("test.sqlite"), &source).expect("symlink blob");
     assert!(matches!(
-        stage_message_attachments(&store, temp.path(), &message(&[row.id.clone()])),
+        stage_message_attachments(&store, temp.path(), &message(std::slice::from_ref(&row.id))),
         Err(StageError::Attachment {
             source: AttachmentError::InvalidPath,
             ..
@@ -205,7 +209,8 @@ fn cos_chat_run_attach_sanitizes_original_name_and_checks_thread() {
         )
         .expect("upload");
     let manifest =
-        stage_message_attachments(&store, temp.path(), &message(&[row.id.clone()])).expect("stage");
+        stage_message_attachments(&store, temp.path(), &message(std::slice::from_ref(&row.id)))
+            .expect("stage");
     assert_eq!(manifest[0].name, "folder/file name.pdf");
     assert_eq!(
         manifest[0].path.file_name().expect("filename"),

@@ -1,12 +1,10 @@
 //! Verified, read-only delivery of chat attachments into a CoS thread workspace.
 
-use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::{self, OpenOptions};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use task_core::chat::ChatMessage;
 use task_core::chat::attachments::{AttachmentError, ChatAttachmentStore};
 
@@ -119,6 +117,20 @@ fn safe_filename(name: &str) -> Result<String, StageError> {
     Ok(safe)
 }
 
+/// Check the staged bytes against the durable source record (size and SHA-256).
+fn verify_staged(path: &Path, id: &str, size_bytes: u64, sha256: &str) -> Result<(), StageError> {
+    let io = |source| StageError::Io {
+        id: id.to_owned(),
+        source,
+    };
+    let size = fs::metadata(path).map_err(io)?.len();
+    let digest = task_worker::artifact::sha256_file(path).map_err(io)?;
+    if size != size_bytes || digest != sha256 {
+        return Err(StageError::HashMismatch { id: id.to_owned() });
+    }
+    Ok(())
+}
+
 /// Verify every source before creating any staged attachment. The source store checks
 /// its DB metadata, generated blob path, symlinks, byte count and SHA-256.
 pub fn stage_message_attachments(
@@ -166,39 +178,10 @@ pub fn stage_message_attachments(
         if path.exists() {
             // A later run in this thread may receive the same attachment again.
             // Reuse it only if its bytes still match the durable source record.
-            let mut existing = File::open(&path).map_err(|source| StageError::Io {
-                id: row.id.clone(),
-                source,
-            })?;
-            if !existing
-                .metadata()
-                .map_err(|source| StageError::Io {
-                    id: row.id.clone(),
-                    source,
-                })?
-                .is_file()
-            {
+            if !fs::symlink_metadata(&path)?.is_file() {
                 return Err(StageError::UnsafePath);
             }
-            let mut hash = Sha256::new();
-            let mut size = 0u64;
-            let mut buf = [0u8; 64 * 1024];
-            loop {
-                let n = existing.read(&mut buf).map_err(|source| StageError::Io {
-                    id: row.id.clone(),
-                    source,
-                })?;
-                if n == 0 {
-                    break;
-                }
-                size = size
-                    .checked_add(n as u64)
-                    .ok_or_else(|| StageError::HashMismatch { id: row.id.clone() })?;
-                hash.update(&buf[..n]);
-            }
-            if size != row.size_bytes || format!("{:x}", hash.finalize()) != row.sha256 {
-                return Err(StageError::HashMismatch { id: row.id });
-            }
+            verify_staged(&path, &row.id, row.size_bytes, &row.sha256)?;
             fs::set_permissions(&path, fs::Permissions::from_mode(0o400))?;
             fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))?;
         } else {
@@ -212,35 +195,15 @@ pub fn stage_message_attachments(
                         id: row.id.clone(),
                         source,
                     })?;
-                let mut hash = Sha256::new();
-                let mut size = 0u64;
-                let mut buf = [0u8; 64 * 1024];
-                loop {
-                    let n = source.read(&mut buf).map_err(|source| StageError::Io {
-                        id: row.id.clone(),
-                        source,
-                    })?;
-                    if n == 0 {
-                        break;
-                    }
-                    size = size
-                        .checked_add(n as u64)
-                        .ok_or_else(|| StageError::HashMismatch { id: row.id.clone() })?;
-                    hash.update(&buf[..n]);
-                    target
-                        .write_all(&buf[..n])
-                        .map_err(|source| StageError::Io {
-                            id: row.id.clone(),
-                            source,
-                        })?;
-                }
-                if size != row.size_bytes || format!("{:x}", hash.finalize()) != row.sha256 {
-                    return Err(StageError::HashMismatch { id: row.id.clone() });
-                }
+                std::io::copy(&mut source, &mut target).map_err(|source| StageError::Io {
+                    id: row.id.clone(),
+                    source,
+                })?;
                 target.sync_all().map_err(|source| StageError::Io {
                     id: row.id.clone(),
                     source,
                 })?;
+                verify_staged(&path, &row.id, row.size_bytes, &row.sha256)?;
                 fs::set_permissions(&path, fs::Permissions::from_mode(0o400))?;
                 fs::set_permissions(&directory, fs::Permissions::from_mode(0o500))?;
                 Ok(())

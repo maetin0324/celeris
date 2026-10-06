@@ -730,6 +730,18 @@ async fn egress_head_and_default_path_are_forwarded() {
 }
 
 #[tokio::test]
+async fn egress_get_query_only_uri_uses_origin_form() {
+    let (port, origin) = http_origin(REPLY).await;
+    let request =
+        format!("GET http://127.0.0.1:{port}?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    let (output, result, _) = forward_exchange(request.into_bytes(), loopback_policy(port)).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(output, REPLY);
+    let seen = String::from_utf8(origin.await.unwrap()).unwrap();
+    assert!(seen.starts_with("GET /?q=1 HTTP/1.1\r\n"), "{seen}");
+}
+
+#[tokio::test]
 async fn egress_get_drops_hop_by_hop_headers() {
     let (port, origin) = http_origin(REPLY).await;
     let request = format!(
@@ -886,6 +898,12 @@ async fn egress_get_denials_are_recorded_like_connect() {
         ),
         (
             format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n X-Fold: a\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-End: safe\nX-Injected: value\r\n\r\n"),
             "malformed",
             None,
             None,

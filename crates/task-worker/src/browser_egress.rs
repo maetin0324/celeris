@@ -145,8 +145,8 @@ fn forward_request(header: &[u8], policy: &EgressPolicy) -> Result<(String, u16,
     if !text.ends_with("\r\n\r\n")
         || !text.is_ascii()
         || text
-            .chars()
-            .any(|c| c.is_control() && c != '\r' && c != '\n')
+            .split("\r\n")
+            .any(|line| line.chars().any(char::is_control))
     {
         return Err(malformed());
     }
@@ -228,7 +228,13 @@ fn forward_request(header: &[u8], policy: &EgressPolicy) -> Result<(String, u16,
     if !seen_host {
         return Err(Denial::forward("host_mismatch", Some((host, port))));
     }
-    let path = if path.is_empty() { "/" } else { path };
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else if path.starts_with('?') {
+        format!("/{path}")
+    } else {
+        path.to_string()
+    };
     let mut request = format!("{method} {path} HTTP/1.1\r\nHost: {authority}\r\n");
     for (lower, name, value) in kept {
         if !dropped.contains(&lower) {

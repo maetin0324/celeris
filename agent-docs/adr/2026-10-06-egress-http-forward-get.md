@@ -28,7 +28,7 @@ Host ヘッダが無い・重複・`host[:port]`（port の既定 80）が URI �
 
 - 落とす: `Connection` と、その値に列挙された名前、`Proxy-Connection`、`Proxy-Authorization`、`Keep-Alive`、`TE`、`Trailer`、`Upgrade`（RFC 9110 §7.6.1 と proxy 認証の資格情報）。
 - それ以外の end-to-end ヘッダ（Accept・Cookie・User-Agent・Referer など）はそのまま渡す。ヘッダ名は token 文字だけ、継続行（obs-fold）や空白入りの名前は `malformed`。
-- 上流への要求行は `<METHOD> <path?query> HTTP/1.1`（origin-form）、末尾に `Connection: close` を付ける。
+- 上流への要求行は `<METHOD> <path?query> HTTP/1.1`（origin-form）、末尾に `Connection: close` を付ける。URI が query だけなら path は `/` にする。単独の CR/LF を含む要求行・ヘッダは拒否し、上流へのヘッダ注入を防ぐ。
 
 ### D5. keep-alive はしない（1 接続 1 要求）
 
@@ -42,7 +42,7 @@ proxy は 1 接続で要求を 1 つだけ読む。上流の応答を（転送�
 
 `browser_egress/tests.rs` で in-process の loopback 上流（`TcpListener`）と `UnixStream::pair` だけを使う。https の試験証明書は使わない。
 
-- 許可 origin（試験専用 loopback）の GET が上流に origin-form・`Connection: close` で届き、応答が client に返る。HEAD も同じ。
+- 許可 origin（試験専用 loopback）の GET が上流に origin-form・`Connection: close` で届き、応答が client に返る。HEAD と query だけの URI も同じ。
 - hop-by-hop ヘッダ（Connection が列挙する名前を含む）が上流に届かず、end-to-end ヘッダは届く。
 - 許可外 origin・IP literal・DNS 後の private address の GET が拒否され、拒否理由が `Denial` と `egress-denied.jsonl` に記録される（path・ヘッダの秘密を含まない）。
 - Host の欠落・不一致、https の GET、body 付き要求の拒否と記録。

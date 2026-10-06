@@ -7,6 +7,7 @@
 
 pub mod inbox;
 pub mod operations;
+pub mod override_op;
 pub(crate) mod triage_view;
 
 use axum::Extension;
@@ -190,6 +191,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/cos/threads/{t}/checkpoint", post(checkpoint))
         .merge(operations::routes())
         .merge(inbox::routes())
+        .merge(override_op::routes())
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

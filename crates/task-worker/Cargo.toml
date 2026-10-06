@@ -31,7 +31,7 @@ base64 = "0.22"
 # `fs` は ADR-0032 の TOTP 中継で使う `mkfifo` と `OFlag::O_NONBLOCK` のため。
 nix = { version = "0.30", features = ["signal", "process", "fs", "user"] }
 # ADR-0095: `db_guard` の statvfs（"fs"）と getuid/getgid（"user"）。unshare/mount は nix::libc を直接呼ぶ。
-time = { version = "0.3", features = ["serde", "formatting"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 tempfile = "3"
 
 [dev-dependencies]

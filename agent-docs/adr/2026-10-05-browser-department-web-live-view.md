@@ -706,7 +706,11 @@ egress は拒否を記録しなかった。ADR-0102/0104 の egress 判定は変
   構文で落ちた要求（`EgressError::Denied` で `EgressDenied` が付かないもの）は `kind: "malformed"` とし
   host・port を空にする。**要求本文・header・DNS 応答・上流の error 文は残さない**。
 - 置き場所: launcher の session dir（`<session_root>/<session_id>/egress-denied.jsonl`、session と同じ
-  所有者・0600）に 1 行 1 件で追記し、件数に上限を置く（超えたら捨てて最後に `truncated` の 1 行）。
+  所有者・0600）に 1 行 1 件で追記する。親 relay は proxy の stderr から固定 JSON の `kind`・`host`・`port`
+  のみを最大 512 byte 読み、時刻と session id を親で付ける。1 行は最大 512 byte、拒否は最大 128 件。
+  超えたら `{"kind":"truncated","at":...,"session_id":...}` を 1 行だけ追加し、その後は捨てる。
+  記録ファイルは browser 起動前に排他的に作成し、既存なら起動を拒否する。親は開いた file descriptor
+  を保持して追記し、browser が書ける session dir 内での差し替えを追わない。
   session の終わりに launcher が controller 経由で daemon に返し、daemon は run の artifact（browser の
   session 証跡と同じ所）に置く。台本 `browser-web-live-check.sh` はそれを `egress-denied.json` として集める。
 - 実装の葉: E1 は policy（本付記と `check_egress`・`browser_egress`）、E2 は launcher-cfg、E3 は denial-record。

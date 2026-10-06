@@ -1,5 +1,144 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 use tokio::net::TcpListener;
+
+async fn recorded_request(
+    request: Vec<u8>,
+    policy: EgressPolicy,
+) -> (Result<(), EgressError>, Option<Denial>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    client.write_all(&request).await.unwrap();
+    client.shutdown().await.unwrap();
+    job.await.unwrap()
+}
+
+#[tokio::test]
+async fn egress_denial_record_reasons_and_no_request_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder =
+        crate::browser_runtime::DenialRecorder::new(dir.path(), "session-1").unwrap();
+    let (resolver, dns) = dns_fixture(&["10.1.2.3"]).await;
+    let mut policy = policy();
+    policy.resolver = resolver.ip();
+    for (request, expected_kind, expected_host) in [
+        (b"CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com:443\r\nUser-Agent: HEADER_SECRET\r\n\r\nBODY_SECRET".to_vec(), "not_allowed", "evil.com"),
+        (connect("127.0.0.1:443"), "ip_literal", "127.0.0.1"),
+    ] {
+        let (result, denial) = recorded_request(request, policy.clone()).await;
+        assert_eq!(result, Err(EgressError::Denied));
+        let denial = denial.unwrap();
+        assert_eq!(denial.kind, expected_kind);
+        assert_eq!(denial.host.as_deref(), Some(expected_host));
+        recorder.append(denial).unwrap();
+    }
+    // A listed domain can still be rejected after DNS returns a private address.
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move {
+        let mut denial = None;
+        let mut server = server;
+        let result = destination_recorded(&mut server, &policy, resolver, &mut denial).await;
+        (result, denial)
+    });
+    client.write_all(&connect("example.com:443")).await.unwrap();
+    let (result, denial) = job.await.unwrap();
+    assert_eq!(result, Err(EgressError::Denied));
+    let denial = denial.unwrap();
+    assert_eq!(denial.kind, "private_address");
+    recorder.append(denial).unwrap();
+    dns.await.unwrap();
+
+    let path = dir.path().join("egress-denied.jsonl");
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(!contents.contains("HEADER_SECRET"));
+    assert!(!contents.contains("BODY_SECRET"));
+    assert!(!contents.contains("10.1.2.3"));
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let lines: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 3);
+    for (line, kind) in lines
+        .iter()
+        .zip(["not_allowed", "ip_literal", "private_address"])
+    {
+        assert_eq!(line["kind"], kind);
+        assert_eq!(line["port"], 443);
+        assert_eq!(line["session_id"], "session-1");
+        time::OffsetDateTime::parse(
+            line["at"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn egress_denial_record_allowed_connection_has_no_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let _recorder = crate::browser_runtime::DenialRecorder::new(dir.path(), "session-2").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut policy = policy();
+    policy.allow.insert(format!("127.0.0.1:{port}"));
+    policy
+        .test_loopback_allow
+        .insert(format!("127.0.0.1:{port}"));
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    client
+        .write_all(&connect(&format!("127.0.0.1:{port}")))
+        .await
+        .unwrap();
+    let (upstream, _) = listener.accept().await.unwrap();
+    let mut response = [0u8; 39];
+    let _ = client.read(&mut response).await.unwrap();
+    drop(client);
+    drop(upstream);
+    let (result, denial) = job.await.unwrap();
+    assert!(result.is_ok());
+    assert!(denial.is_none());
+    assert!(
+        std::fs::read(dir.path().join("egress-denied.jsonl"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn egress_denial_record_rejects_preexisting_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("egress-denied.jsonl");
+    std::fs::write(&path, b"browser-owned").unwrap();
+    assert!(crate::browser_runtime::DenialRecorder::new(dir.path(), "session-3").is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"browser-owned");
+}
+
+#[tokio::test]
+async fn egress_denial_record_malformed_and_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder =
+        crate::browser_runtime::DenialRecorder::new(dir.path(), "session-4").unwrap();
+    let (result, denial) = recorded_request(b"BAD SECRET_HEADER\r\n\r\n".to_vec(), policy()).await;
+    assert_eq!(result, Err(EgressError::Denied));
+    let denial = denial.unwrap();
+    assert_eq!(denial.kind, "malformed");
+    assert!(denial.host.is_none());
+    for _ in 0..130 {
+        recorder.append(denial.clone()).unwrap();
+    }
+    let contents = std::fs::read_to_string(dir.path().join("egress-denied.jsonl")).unwrap();
+    let lines: Vec<_> = contents.lines().collect();
+    assert_eq!(lines.len(), 129);
+    assert!(lines.iter().all(|line| line.len() < 512));
+    assert!(!contents.contains("SECRET_HEADER"));
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(last["kind"], "truncated");
+}
 
 fn policy() -> EgressPolicy {
     EgressPolicy {

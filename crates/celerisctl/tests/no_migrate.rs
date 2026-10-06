@@ -80,8 +80,8 @@ const ADD: &[&str] = &[
 
 #[test]
 fn celerisctl_refuses_an_older_db_and_leaves_its_schema_alone() {
-    // 48/49 are reserved on this branch; 47 is the last real pre-chat migration.
-    const OLD_SCHEMA_VERSION: u32 = 47;
+    // The immediately preceding real schema must also be refused without migration.
+    const OLD_SCHEMA_VERSION: u32 = 52;
     let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
     let db = db_at(dir.path(), OLD_SCHEMA_VERSION);
     for args in [&["ls"][..], ADD] {

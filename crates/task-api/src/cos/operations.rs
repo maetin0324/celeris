@@ -121,7 +121,7 @@ impl OperationAudit {
                 |tx, ctx| {
                     let result = write(tx)?;
                     if let Some(mark) = &self.item {
-                        SqliteStore::cos_triage_mark_tx(
+                        super::triage_view::mark_tx(
                             tx,
                             &mark.item_id,
                             mark.outcome,

@@ -15,7 +15,6 @@ use axum::http::StatusCode;
 use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use task_core::chat::triage_view::CosInboxItem;
 use task_core::chat::{AuditContext, ChatActor, ChatError};
 use task_core::store::SqliteStore;
 use task_core::{TaskId, TaskStore};
@@ -26,6 +25,7 @@ use ulid::Ulid;
 use super::operations::{
     DispatchEnv, ItemMark, Matched, OperationAudit, OperationView, dispatch, request_hash,
 };
+use super::triage_view::{self, CosInboxItem};
 use super::{CosCaller, cos_only, cos_problem, reject_identity_claims};
 use crate::handlers::{ApiResult, Params, json_response};
 use crate::inbox_notifications::{InboxAnswerBody, delegated_request, human_feed};
@@ -141,12 +141,9 @@ async fn list(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> ApiResu
             .filter(|n| (1..=MAX_LIMIT).contains(n))
             .ok_or_else(|| ApiProblem::bad_request(format!("limit must be 1..={MAX_LIMIT}")))?,
     };
+    let db = triage_db(&state)?;
     let items = state
-        .blocking(move |store| {
-            store
-                .cos_triage_items(filter.as_deref(), limit)
-                .map_err(cos_problem)
-        })
+        .blocking(move |_| triage_view::items(&db, filter.as_deref(), limit).map_err(cos_problem))
         .await?;
     Ok(json_response(StatusCode::OK, &CosInboxList { items }))
 }
@@ -367,6 +364,8 @@ async fn resolve(
     let env = DispatchEnv::of(&state);
     let item_key = i.clone();
     let lookup = i.clone();
+    let db = triage_db(&state)?;
+    let lookup_db = db.clone();
     let (operation, notification_id) = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -385,7 +384,7 @@ async fn resolve(
             let rejecter = audit.clone();
             let reject =
                 |problem: ApiProblem| rejecter.reject(store, "cos_inbox_item", &item_key, problem);
-            let Some(item) = store.cos_triage_item_get(&i).map_err(cos_problem)? else {
+            let Some(item) = triage_view::item_get(&db, &i).map_err(cos_problem)? else {
                 return Err(reject(cos_problem(ChatError::NotFound {
                     kind: "triage item",
                     id: i.clone(),
@@ -403,7 +402,7 @@ async fn resolve(
                     item.source_revision, req.expected_revision
                 ))));
             }
-            if store.cos_triage_superseded(&item).map_err(cos_problem)? {
+            if triage_view::superseded(&db, &item).map_err(cos_problem)? {
                 return Err(reject(revision_conflict(format!(
                     "a newer revision of {}:{} was ingested; judge that one",
                     item.source_kind, item.source_key
@@ -556,7 +555,7 @@ async fn resolve(
         .await?;
     state.chat.events.notify_waiters();
     let item = state
-        .blocking(move |store| store.cos_triage_item_get(&lookup).map_err(cos_problem))
+        .blocking(move |_| triage_view::item_get(&lookup_db, &lookup).map_err(cos_problem))
         .await?;
     Ok(json_response(
         StatusCode::OK,
@@ -566,4 +565,15 @@ async fn resolve(
             notification_id,
         },
     ))
+}
+
+/// The daemon DB the triage view reads (the API's own connection; see [`triage_view`]).
+fn triage_db(state: &ApiState) -> Result<std::path::PathBuf, ApiProblem> {
+    state.chat.attachment_db_path.clone().ok_or_else(|| {
+        ApiProblem::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "cos_inbox_unavailable",
+            "the CoS inbox needs a file-backed database",
+        )
+    })
 }

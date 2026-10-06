@@ -15,13 +15,13 @@ completed: 2026-10-06
 - 明示 human_required の判定は `inbox::human_required_reason` に置き、resolve と `/cos/operations`（decision.answer・approval.decide・execution.phase_gate）の両方から呼ぶ。対象は human check の待ち（`AcceptanceCheck`）と、人が `human_required`/`human-required` のラベルを付けた task のすべての待ち（gate を含む）。結果は 403 `cos_human_required` で、rejected として記録する。
 - observe: `answer`・`escalation` がどちらか非 null なら 422。元の待ちが未解決の inbox 項目（判断が要る）なら 422 `cos_observe_needs_judgment`。notice は observe できる。
 - escalate: packet を検証して 422 `cos_escalation_invalid` を返す。条件は summary が 1〜600 字、options が空でない・key が重複しない・label が空でない・key が今の問いの選択肢であること（自由記述の問いだけ `reply`）、recommended が options の key か null、recommendation_reason が空でないこと。web_path はサーバが対象から導く path と完全一致させる（task があれば `/tasks/{id}`、無ければ `/inbox`、notice は `/notifications`）。外部 URL・`//`・相対 path は拒否する。answer 付きは 422。検証が通ったら `cos_triage_outbox_claim(item,"escalation",…)` で `notifications`（kind `cos_escalation`）を 1 行作り、続けて監査 operation の transaction で item を `escalated` にする。
-- task-core に `chat/triage_view.rs` を足した（`CosInboxItem`、`cos_triage_item_get`・`cos_triage_items`・`cos_triage_superseded`・`cos_triage_mark_tx`）。`triage.rs` は ingest 葉と衝突しないように触っていない。
+- item の読み取りと transaction 内の状態更新は `crates/task-api/src/cos/triage_view.rs` に置いた（`CosInboxItem`、`items`・`item_get`・`superseded`・`mark_tx`）。この葉の範囲は task-api・task-ops なので task-core には足さない（attempt 1 で task-core に置いて範囲 check に落ちたため移した）。読み取りは chat 添付と同じく daemon DB に別の接続を開く。`mark_tx` は `cos_operation_apply` が渡す transaction で書く。task-core の `triage.rs` は触っていない。
 
 ## 証拠
 
 - `cargo test -p task-api --test cos_triage` → 8 passed（answer の成功と監査 event の actor=cos・理由・card・冪等な再送、人の credential の 403、409 の 3 通り、human_required の resolve と /cos/operations での拒否、observe の 422 と notice の observe、packet の検証、web_path の不一致の拒否、escalate で outbox 1 行・route 1 行・再送で増えないこと）。
 - `cargo test -p task-api --no-fail-fast` → 全 binary が ok。既存の cos_operations・cos_operations_domains、lib の `committed_schema_matches_generated` を含む。
-- `cargo test -p task-core triage` → 4 passed。
+- 範囲 check（WU の allow パターン）→ exit 0。
 - `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
 
 ## 未解決

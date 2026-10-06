@@ -126,13 +126,13 @@ fn ingest(env: &TestEnv, kind: &str, key: &str, revision: &str, secs: i64) -> St
     env.store
         .cos_triage_ingest_batch(kind, &format!("{secs}"), &[source], at(secs))
         .expect("ingest");
-    env.store
-        .cos_triage_items(None, 500)
-        .expect("items")
-        .into_iter()
-        .find(|i| i.source_key == key && i.source_revision == revision)
+    db(env)
+        .query_row(
+            "SELECT id FROM cos_inbox_items WHERE source_kind=?1 AND source_key=?2 AND source_revision=?3",
+            [kind, key, revision],
+            |r| r.get(0),
+        )
         .expect("ingested row")
-        .id
 }
 
 fn resolve_path(item: &str) -> String {
@@ -170,11 +170,13 @@ fn db(env: &TestEnv) -> rusqlite::Connection {
 }
 
 fn item_state(env: &TestEnv, item: &str) -> String {
-    env.store
-        .cos_triage_item_get(item)
-        .expect("get")
+    db(env)
+        .query_row(
+            "SELECT state FROM cos_inbox_items WHERE id=?1",
+            [item],
+            |r| r.get(0),
+        )
         .expect("item")
-        .state
 }
 
 fn decision_answered_by(env: &TestEnv, task: &task_core::Task) -> Vec<String> {

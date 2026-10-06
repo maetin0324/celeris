@@ -476,7 +476,7 @@ pub fn build_dispatcher(
     config.ensure_memory_dir()?;
     // ADR-0064 D1/D5: `[db]` の `busy_timeout_ms` を使い、デーモンの書き込み接続は
     // `background_checkpoint` を立てる（別の背景 tick が `PRAGMA wal_checkpoint(PASSIVE)` を打つ）。
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_with(
+    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_with(
         &config.db.path,
         StoreOptions {
             busy_timeout: config.db.busy_timeout(),
@@ -491,12 +491,54 @@ pub fn build_dispatcher(
         std::time::Duration::from_secs(config.error_cooldown_secs),
     );
     let mut dispatcher = Dispatcher::new(
-        store,
+        store.clone(),
         Box::new(policy),
         effective_models(config),
         build_adapters(config),
         config.account_pool_providers(),
         config.dispatch_config(),
+    );
+    let resolved = config.resolve_cos_provider();
+    let (provider, llm_source, account_id, model, mut unavailable_reason) = match resolved {
+        Ok(provider) => (
+            Some(provider.provider),
+            Some(provider.llm_source.as_str().to_owned()),
+            provider.account_id,
+            provider.model,
+            None,
+        ),
+        Err(reason) => (None, None, None, None, Some(reason)),
+    };
+    let api_base_url = config.api.listen.map(|addr| match addr {
+        std::net::SocketAddr::V4(_) => format!("http://127.0.0.1:{}/api/v1", addr.port()),
+        std::net::SocketAddr::V6(_) => format!("http://[::1]:{}/api/v1", addr.port()),
+    });
+    if api_base_url.is_none() && unavailable_reason.is_none() {
+        unavailable_reason = Some("CoS unavailable: [api] listen is not configured".into());
+    }
+    dispatcher.set_cos_chat_launch(
+        store,
+        task_dispatch::dispatcher::cos_chat::launch::CosChatLaunchConfig {
+            enabled: config.cos.enabled,
+            harness: config.cos.harness.adapter().to_owned(),
+            llm_source,
+            provider,
+            account_id,
+            model,
+            tier: config.cos.tier,
+            max_turns: config.cos.max_turns,
+            max_wall_secs: config.cos.max_wall_secs,
+            unavailable_reason,
+            data_dir: config
+                .db
+                .path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf(),
+            db_path: config.db.path.clone(),
+            attachment_limits: config.cos.attachments.limits(),
+            api_base_url: api_base_url.unwrap_or_default(),
+        },
     );
     // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
     dispatcher.set_local_providers(config.local_cheap_providers());

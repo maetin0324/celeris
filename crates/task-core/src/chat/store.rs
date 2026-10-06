@@ -575,6 +575,20 @@ impl SqliteStore {
         })
     }
 
+    /// Summary written by a CoS worker checkpoint. The delivery cursor remains
+    /// independent: the caller must still claim queued inputs through `chat_run_claim_next`.
+    pub fn chat_thread_summary(&self, id: &str) -> Result<(String, u64), ChatError> {
+        read_tx(self, |conn| {
+            thread_require(conn, id)?;
+            let (summary, through): (String, i64) = conn.query_row(
+                "SELECT summary,summary_through_seq FROM chat_threads WHERE id=?1",
+                params![id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            Ok((summary, u64::try_from(through).unwrap_or(0)))
+        })
+    }
+
     /// D1/D2 `GET /chat/threads`: `(updated_at, id)` descending keyset pages. A non-blank `q`
     /// searches titles and message text through FTS5 with the query taken literally; hits are
     /// deduplicated per thread. A blank `q` is the plain list.

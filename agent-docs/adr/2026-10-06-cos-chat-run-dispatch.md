@@ -5,7 +5,7 @@ tasks: [01M47J2YNMZ14NQ4AXTNA355AA]
 ---
 
 - 日付: 2026-10-06
-- 状態: 採用（proto WorkUnit で protocol・前置き・試験を実装済み。dispatcher の起動は後続の launch WU）
+- 状態: 採用（proto WorkUnit で protocol・前置き・試験を実装済み。launch WorkUnit で dispatcher の起動を実装済み）
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md) D2/D3/D4、[ADR-0003](0003-worker-protocol.md)（protocol は追加だけ）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0013](0013-taskd-api-and-gui-foundations.md) D11（秘密は request に載せない）
 
 ## 背景
@@ -36,3 +36,10 @@ cos-chat-home D2 は CoS の会話を `chat_threads`/`chat_messages`/`chat_runs`
 ## 影響
 - 後続 WU: launch は一時 Task と `CosChatContext` を組んで env に credential を置く。attach は stage した manifest をこの型に写す。session は `context.session` を thread 単位で埋める。sink は progress を chat_events に写す。
 - `docs/protocol/worker-protocol.schema.json` を再生成し、`worker-protocol.md` の context 表に 1 行足した。
+
+## 実装付記: launch WorkUnit（2026-10-06）
+
+- `celeris::daemon::build_dispatcher` は同じ `SqliteStore` を通常の `TaskStore` と chat 起動経路へ渡す。tick は通常 task の dispatch 後に `tick_cos_chat_launch` を呼ぶ。chat run は task の events・lease を作らず、`chat_runs` と `chat_events` を正本にする。
+- `resolve_cos_provider` の結果を `resolved_config_json` に写す。固定 account は使用不能ならキューに残す。account 未指定時は現役 session の account を試し、使えなければ ADR-0089 の +1 上限を含む least-loaded 選択を使う。`max_cos_runs` は従来の CoS 対話 run と新 chat run の合計に当てる。
+- `cos_run_credential_issue_at` は 64 桁の生 secret を返す。API は `celeris-cos-run.` prefix を付けた bearer を受け付けるため、launch は env に prefix 付きの値を渡す。request・prompt・log には値を入れない。chat store の終端処理と launch の明示的 revoke で失効させる。
+- `ChatRunSink` の text/tool/status と finish が SSE の `chat_events` を作る。要約は worker の checkpoint だけを読み、dispatcher は LLM を呼ばない。停止・割り込み・再起動回収・rollover の詳細は後段の control / rollover WorkUnit が hook に実装する。

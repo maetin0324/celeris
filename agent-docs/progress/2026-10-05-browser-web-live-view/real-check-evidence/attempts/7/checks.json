@@ -1,0 +1,77 @@
+[
+  {
+    "step": "org list",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org PATCH",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "task POST",
+    "status": 201,
+    "expected": 201
+  },
+  {
+    "step": "task browser policy PUT",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "task_id": "01M47NDBME0A60GF4NS8Q2R73K",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ]
+  },
+  {
+    "step": "web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner challenge",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner session",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "live view",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "control status",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "pause",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "pause_phase": "paused",
+    "agent_phase_before": "agent_running"
+  },
+  {
+    "step": "takeover",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "release",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "wait open",
+    "status": 422,
+    "expected": 201
+  }
+]

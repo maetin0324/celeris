@@ -1,0 +1,8 @@
+         task_id = 01M47NP5QD1DHHHADJ84BG9HKH
+          run_id = 01M47NP5VDFZ4K4123QRBC0V8H
+      session_id = celeris-8e73469deda0d63be8a3177fb19abf19
+           phase = "paused"
+         version = 3
+    lease_holder = 
+lease_expires_at = 
+      state_json = {"phase":"paused","version":3,"in_flight":0,"lease":null,"auth_section_active":false,"applied":{"real-check-pause":[{"kind":"pause"},{"phase":"paused","version":1,"lease_expires_at":null,"replayed":false}],"real-check-takeover":[{"kind":"takeover","holder":"<redacted-owner-session-hash>","ttl_secs":60},{"phase":"human_control","version":2,"lease_expires_at":1791259050,"replayed":false}]}}

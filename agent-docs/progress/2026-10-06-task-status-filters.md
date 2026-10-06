@@ -1,5 +1,8 @@
 ---
+title: タスク一覧の状態切り替えと件数表示
 tasks: [01M475Z7T5E8PAPGBCE4XG2K7B]
+status: done
+updated: 2026-10-06
 ---
 # タスク一覧の状態切り替えと件数表示
 
@@ -12,6 +15,8 @@ chip を `aria-pressed` 付きのボタンに変え、押下時に URL の状態
 `GET /api/v1/tasks/counts` は既存の `TaskStore::count_by_status`（SQLite の `GROUP BY status`）から集計値だけを返す。一覧の行は取得しない。web の件数 query は task list 系の key に置き、状態が変わる SSE で再取得する。gateway は `/api/tasks/counts` を既存の規則で中継する。daemon の複数 status 指定は `QueryParams::list` と `ListFilter.statuses` で OR として処理されることを API 試験で確認した。
 
 API の契約は `gui-api.md`、生成した `api-v1.schema.json`、追加操作の `task-counts.openapi.yaml` に記録した。`web/api/generated/types.ts` も同じ schema から再生成した。CLI の `celerisctl show --json` はタスク詳細を返す既存契約を保ち、件数専用 API は CLI に追加しない。
+
+`gui/app/celeris/types.ts` は今回再生成しない。共通 schema を再生成すると GUI 側にも `TaskStatusCounts` と `task_status_counts` が増えるが、このタスクの指示「gui/ は変えない」を優先した。GUI はこの新しい API を呼ばないため実行上の影響はない。GUI の生成型と共通 schema の完全一致は今回の範囲に含めず、GUI を変更する作業で `pnpm -C gui gen:types` を実行する。
 
 ## 表示確認
 
@@ -32,3 +37,7 @@ API の契約は `gui-api.md`、生成した `api-v1.schema.json`、追加操作
 | `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv`・`bash scripts/dev/check-doc-links.sh` | 成功 |
 
 途中の functional E2E では、変更後の checkbox 前提試験、空状態の URL、検索入力と scroll の戻りで失敗した。試験の操作を新しいボタンに更新し、空状態の URL を正規化し、検索入力と件数エラー表示の高さを安定させた後、全 243 件が通過した。
+
+## 再審査対応
+
+前回の実装 commit `f8a9460a` はそのままに、進捗を `docs/progress/` から `agent-docs/progress/` へ移し、索引に必要な `title`・`tasks`・`status`・`updated` を付けた。`progress-index.sh` の一覧にこの文書が出ること、`check-doc-layout.sh`・`check-doc-links.sh` が通ることを確認した。`progress-index.sh --check` は既存の `2026-10-05-web-artifact-viewer.md`（title/updated 不足）と `2026-10-06-web-tabbar-first-screen.md`（tasks/updated 不足）で失敗する。今回の文書については警告なし。今回の差分は文書だけで、上記の UI・API の検証結果は前回の実装に対する結果である。

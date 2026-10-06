@@ -75,3 +75,16 @@ check（`pnpm -C web build && pnpm -C web e2e`）が上記 home 2 件のみで e
 ### 範囲
 
 `crates/`・`gui/` に差分なし（`git diff --name-only $CELERIS_WU_BASE` で変更 file は web/ の 4 件のみ: `web/e2e/states/rich-data.spec.ts`、`web/features/ops/routing-state-view.tsx`、`web/features/ops/routing-state.test.tsx`、`web/routes/index.tsx` ＋ 本 progress file）。home 画面の 360px レイアウト修正は web/ の home（`routes/index.tsx`）に留め、shell 本体は変えていない。host の font 環境は元の状態（Noto CJK 追加の削除済み、`~/.local/share/fonts` に HackGen のみ・`~/.config/fontconfig` なし）で、checks は host の既存フォント（WenQuanYi Zen Hei フォールバック）で全数 exit 0 を確認済み。本番 host には触れていない。
+
+## 受け入れ条件 3 について
+
+Task の受け入れ条件 3 は `git diff --quiet $(git merge-base HEAD main) -- crates/ gui/ && test -s agent-docs/progress/2026-10-04-multi-objective-routing/web-e2e-fix.md`（exit 0）。
+
+**merge-base 比較が構造的に満たせない理由**: この子 task の branch は親 branch（`celeris/01M44H0SRV70E32AQ6C5N37MSK`、多目的ルーティング本体）の先端 `438fca9d` を base に作られている（task の base commit）。`438fca9d` は親が main（`8dc4c5e4` = `git merge-base HEAD main`）に対して `crates/`・`gui/` を 167 files / +30876・−318 変更した上にある。したがって `git diff $(git merge-base HEAD main) HEAD -- crates/ gui/` は **この子 task が行った変更ではなく、親 task の多目的ルーティング 86 commits（`5621a711` phase 1 kernel … `791fa12a` phase 5 estimator 統合まで）の差分** であり、親 branch 上で main 未取り込みである限り構造的に空にならない。child 側で `crates/`・`gui/` を戻すことは本 task の意図（web/ での e2e 退行修正）と矛盾するため、この形式の条件 3 は child の都合では満たせない（WU 範囲 check の既知の誤検出と同型: 差分の基点が child 作成時の base ではなく main との merge-base になっている）。
+
+**task base 比較の結果（この child が crates/・gui/ を変えていないことの確認）**:
+- `git diff --quiet 438fca9d HEAD -- crates/ gui/` → **exit 0**（差分ゼロ）
+- `git log --oneline 438fca9d..HEAD -- crates/ gui/` → 0 件（この child の commit は `6ab32880` wu/web-e2e-fix と `b2cf2c87` integrate のみ、変更 file は web/ の 4 件と本 progress file）
+- 参考: `git diff --name-only $(git merge-base HEAD main) HEAD -- crates/ gui/`（167 files）と `git diff --name-only $(git merge-base HEAD main) 438fca9d -- crates/ gui/`（167 files）の file 集合は **完全に一致**（`diff` で同一）。すなわち merge-base 比の全差分が `438fca9d` 以前（親 branch）の commit に由来することの直接の確認。
+
+**人の decision（`crit3-basis`）への回答**: 2026-10-06、人（Fable）は「task base 438fca9d との差分ゼロで条件 3 を満たしたとみなし、記録して完了にする」を選択: この子 task の意図は『自分で crates/・gui/ を変えない』ことであり、base 438fca9d（親 branch）比で `crates/`・`gui/` の差分ゼロを満たしたとみなす。merge-base 比の差分は親の変更でこの子の責任ではない（WU の範囲 check の既知の誤検出と同型）。final review でもこの読み替えを適用する。上記の base 比 exit 0 と file 集合の一致がその根拠。

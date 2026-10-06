@@ -1,0 +1,6 @@
+error: failed to parse config: TOML parse error at line 166, column 1
+    |
+166 | [[org]]
+    | ^^^^^^^
+missing field `id`
+

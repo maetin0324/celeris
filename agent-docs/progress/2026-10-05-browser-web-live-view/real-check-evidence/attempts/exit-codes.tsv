@@ -1,0 +1,9 @@
+attempt	script	evidence_dir	exit	stopped_at
+1	as documented	/tmp/celeris-browser-check-Mnro	1	launcher abort (IO Safety violation, fd3 CLOEXEC); daemon config error (operator org seed)
+2	diagnostic (fd3 fix)	/tmp/celeris-browser-check-Mnro	1	daemon config error llm_source (operator)
+3	diagnostic	/tmp/celeris-browser-check-Mnro	1	run never started: browser_policy_required
+4	+task policy PUT	/tmp/celeris-browser-check-Mnro	1	launcher start bwrap ENOENT (state under /tmp hidden by SessionMount tmpfs)
+5	same, moved to /var/tmp	/var/tmp/celeris-browser-check-SA5l	1	isolated_runtime_unavailable (action socket path 125 bytes > 107)
+6	same, short path	/var/tmp/cbCao7	1	takeover 409 invalid_phase (no pause); shim refuses all actions
+7	+pause before takeover	/var/tmp/cbCao7	1	wait open 422 origin (http rejected)
+8	+https wait origin	/var/tmp/cbCao7	1	all API checks passed; no egress denial evidence (shim refused every action)

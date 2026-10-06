@@ -1,0 +1,58 @@
+[
+  {
+    "step": "org list",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org PATCH",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "task POST",
+    "status": 201,
+    "expected": 201
+  },
+  {
+    "step": "task browser policy PUT",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "task_id": "01M47NAH3FVXDAAPT9E48V4NRB",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ]
+  },
+  {
+    "step": "web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner challenge",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner session",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "live view",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "control status",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "takeover",
+    "status": 409,
+    "expected": 200
+  }
+]

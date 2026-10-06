@@ -1,0 +1,22 @@
+scripts/dev/browser-web-live-check.sh: line 137: 514746 Aborted                 setsid sudo -n python3 - "$LAUNCHER_USER" "$LAUNCHER_CONFIG" "$LAUNCHER_BIN" "$(id -u)" <<'PY' > "$EVIDENCE/launcher.log" 2>&1
+import os, pathlib, pwd, socket, sys, tomllib
+user, config, binary, daemon_uid = sys.argv[1:]
+cfg = tomllib.load(open(config, "rb"))
+path = pathlib.Path(cfg["socket"])
+sock = socket.socket(socket.AF_UNIX)
+sock.bind(str(path))
+os.chown(path, int(daemon_uid), -1)
+os.chmod(path, 0o600)
+sock.listen(128)
+os.dup2(sock.fileno(), 3, inheritable=True)
+account = pwd.getpwnam(user)
+os.setgroups([])
+os.setgid(account.pw_gid)
+os.setuid(account.pw_uid)
+os.environ["LISTEN_FDS"] = "1"
+os.environ["LISTEN_PID"] = str(os.getpid())
+os.execv(binary, [binary, "--config", config])
+PY
+
+daemon exited
+exit=1

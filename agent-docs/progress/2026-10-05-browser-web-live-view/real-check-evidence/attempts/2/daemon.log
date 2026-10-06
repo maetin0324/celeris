@@ -1,0 +1,1 @@
+error: invalid config: provider loopback-acp: llm_source conflicts with adapter or model

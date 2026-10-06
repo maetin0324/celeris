@@ -1,0 +1,10 @@
+socket = "/var/tmp/cbCao7/launcher.sock"
+state_dir = "/var/tmp/cbCao7/launcher-state"
+session_root = "/var/tmp/cbCao7/launcher-state/sessions"
+allowed_uids = [1001]
+bwrap = "/usr/bin/bwrap"
+sandboxd = "/var/tmp/celeris-browser-config-3cSe/bin/celeris-browser-sandboxd"
+egress = "/var/tmp/celeris-browser-config-3cSe/bin/celeris-browser-egress"
+chrome = "/opt/celeris-browser/chrome/chrome"
+agent_browser = "/opt/celeris-browser/agent-browser/node_modules/.bin/agent-browser"
+resolver = "127.0.0.1"

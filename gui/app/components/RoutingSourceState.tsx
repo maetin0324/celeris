@@ -130,20 +130,23 @@ function CandidateItem({ candidate }: { candidate: CandidateTrace }) {
         </dd>
       </dl>
       {rows.length > 0 && (
-        <table className="w-full table-fixed text-xs" data-testid="routing-score-breakdown">
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.key} className="border-t border-border">
-                <th scope="row" className="py-0.5 pr-2 text-left font-normal text-fg-muted">
-                  {r.label}
-                  {r.unknownNote && <span className="ml-1 text-warning-soft-fg">{r.unknownNote}</span>}
-                </th>
-                <td className="w-16 py-0.5 text-right tabular-nums text-fg">{r.value.toFixed(3)}</td>
-                <td className="w-14 py-0.5 text-right tabular-nums text-fg-subtle">×{r.weight.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        // ADR-0055 D1-6: 表は overflow-x-auto の箱に入れる（狭い画面で列がはみ出しても箱の中で横に送る）。
+        <div className="overflow-x-auto">
+          <table className="w-full table-fixed text-xs" data-testid="routing-score-breakdown">
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.key} className="border-t border-border">
+                  <th scope="row" className="py-0.5 pr-2 text-left font-normal text-fg-muted">
+                    {r.label}
+                    {r.unknownNote && <span className="ml-1 text-warning-soft-fg">{r.unknownNote}</span>}
+                  </th>
+                  <td className="w-16 py-0.5 text-right tabular-nums text-fg">{r.value.toFixed(3)}</td>
+                  <td className="w-14 py-0.5 text-right tabular-nums text-fg-subtle">×{r.weight.toFixed(2)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </li>
   );

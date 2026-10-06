@@ -232,6 +232,16 @@
     text-rendering: optimizeLegibility;
   }
 
+  /* ADR-0055 D1-5: 下部固定タブ（`mobile-tabbar`、`h-16` + safe-area、`lg:hidden`）の裏に、フォーカス移動・
+     アンカー・scrollIntoView で要素が送り込まれないよう、文書のスクロールの「見える範囲」からタブの高さを
+     除く。これが無いと、ちょうどタブの高さの帯に来た要素（例: 経路欄の 1 行で押し下がったタスク詳細の
+     タブ列）は「見えている」と判定されてスクロールされず、指で触るとタブバーに当たる。 */
+  @media (width < 64rem) {
+    html {
+      scroll-padding-bottom: calc(4rem + env(safe-area-inset-bottom));
+    }
+  }
+
   *,
   ::before,
   ::after,

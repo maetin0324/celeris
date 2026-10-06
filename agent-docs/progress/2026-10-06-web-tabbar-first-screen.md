@@ -1,9 +1,10 @@
 ---
-task: 01M46VAZ0G1A6DN7BBK2DQ7X36
+tasks: [01M46VAZ0G1A6DN7BBK2DQ7X36]
 title: web/ SPA の下部固定タブバーと縦に長い画面の圧縮
 status: done
 started: 2026-10-06
 completed: 2026-10-06
+updated: 2026-10-06
 adr: agent-docs/adr/2026-10-06-web-bottom-tabbar-first-screen.md
 ---
 

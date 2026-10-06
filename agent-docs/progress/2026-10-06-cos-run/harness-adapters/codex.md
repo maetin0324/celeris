@@ -22,7 +22,7 @@ completed: 2026-10-06
 - `cargo test -p task-worker --lib cos_chat_harness_codex`: 9 passed（初回の thread id 確定、exec resume、experimental と翻訳不能 extra_args の明示 fresh＋DB 履歴、message/command/MCP/status の写像、画像 native（fresh・resume）、`,` 入り path の写し、unsupported・path+tool、非 CoS の read-only）。
 - `cargo test -p task-worker --lib codex`: 91 passed（既存の codex 試験を含む）。
 - `cargo clippy --workspace --all-targets -- -D warnings`: exit 0。
-- `bash scripts/dev/test-parallel.sh`: 結果は下に追記。
+- `bash scripts/dev/test-parallel.sh`: exit 0、4147 tests run: 4147 passed, 12 skipped。
 
 ## 未解決事項
 

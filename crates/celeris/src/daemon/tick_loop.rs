@@ -53,6 +53,28 @@ pub(crate) async fn tick_loop(
     let mut notify_last: Option<std::time::Instant> = None;
     // ADR-0037 D5: 429 が返っている間は次の送信を控える（`Retry-After` 秒）。
     let mut notify_blocked_until: Option<std::time::Instant> = None;
+    let triage_store = task_core::SqliteStore::open_client(&config.db.path).map(|(store, _)| store);
+    let triage_ready = if let Ok(store) = &triage_store {
+        let view = task_ops::view::ViewContext {
+            workspace_root: config.workspace_root.clone(),
+            retry_backoff_base: Duration::from_secs(config.retry_backoff_base_secs),
+            retry_backoff_max: Duration::from_secs(config.retry_backoff_max_secs),
+            max_requeues: config.max_requeues,
+            clusters: config.cluster_view_infos(),
+        };
+        match notify::triage::cutover(store, &view, OffsetDateTime::now_utc()) {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "notify: CoS route cutover failed");
+                false
+            }
+        }
+    } else if let Err(error) = &triage_store {
+        tracing::warn!(%error, "notify: CoS outbox store unavailable");
+        false
+    } else {
+        false
+    };
     let tick = config.tick();
     let mut ticks: u64 = 0;
     // ADR-0040 D4: 手元の run とレビューの数（drain の判定に使う。最後の tick の値）。
@@ -322,75 +344,113 @@ pub(crate) async fn tick_loop(
                         max_requeues: config.max_requeues,
                         clusters: config.cluster_view_infos(),
                     };
-                    match notify::schedule_routes(store.as_ref(), &config.notify, &view, now) {
-                        Ok(created) if !created.is_empty() => {
-                            tracing::info!(count = created.len(), "notify: new notifications");
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(error = %e, "notify: could not evaluate the conditions")
-                        }
-                    }
                     match store.notification_pending() {
                         Ok(pending) => {
-                            // Old notice-side rows may remain from before the two-route switch.
-                            // The feed is authoritative; retire these without sending them
-                            // individually. Keep human-side legacy rows for migration.
+                            // Legacy rows are retired by the cos_v1 cutover transaction.
                             let legacy: Vec<_> = pending
                                 .iter()
                                 .filter(|n| {
-                                    matches!(
+                                    !matches!(
                                         n.kind,
-                                        task_core::NotificationKind::MilestoneReady
-                                            | task_core::NotificationKind::BadNews
-                                            | task_core::NotificationKind::SecretaryReply
-                                            | task_core::NotificationKind::TaskReady
+                                        task_core::NotificationKind::CosEscalation
+                                            | task_core::NotificationKind::CosFallback
                                     )
                                 })
                                 .cloned()
                                 .collect();
-                            if let Err(e) = notify::discard_pending(store.as_ref(), &legacy, now) {
+                            if triage_ready
+                                && let Err(e) =
+                                    notify::discard_pending(store.as_ref(), &legacy, now)
+                            {
                                 tracing::warn!(error = %e, "notify: could not retire legacy rows");
                             }
-                            let url = notify::webhook_url(
-                                notify_secrets_dir.as_deref(),
-                                &config.notify.discord_webhook_secret,
-                            );
-                            match (url, notify_client.as_ref()) {
-                                (Some(url), Some(client)) => {
-                                    let available: Vec<task_core::Notification> = pending
-                                        .iter()
-                                        .filter(|n| !notify_in_flight.contains(&n.id))
-                                        .cloned()
-                                        .collect();
-                                    if let Some(batch) = notify::select_routes_batch(&available) {
-                                        for id in &batch.ids {
-                                            notify_in_flight.insert(*id);
+                            let available: Vec<_> = pending
+                                .iter()
+                                .filter(|n| !notify_in_flight.contains(&n.id))
+                                .cloned()
+                                .collect();
+                            if triage_ready
+                                && let Some(mut batch) = notify::select_routes_batch(&available)
+                                && let Some(row) =
+                                    available.iter().find(|n| batch.ids.contains(&n.id))
+                            {
+                                match &triage_store {
+                                    Ok(outbox) => {
+                                        match notify::triage::withdraw_if_resolved(
+                                            outbox,
+                                            &config.db.path,
+                                            &view,
+                                            row,
+                                            now,
+                                        ) {
+                                            Ok(true) => {
+                                                match notify::triage::render(row, &config.notify) {
+                                                    Ok(content) => {
+                                                        batch.content = content;
+                                                        match (
+                                                            notify::webhook_url(
+                                                                notify_secrets_dir.as_deref(),
+                                                                &config
+                                                                    .notify
+                                                                    .discord_webhook_secret,
+                                                            ),
+                                                            notify_client.as_ref(),
+                                                        ) {
+                                                            (Some(url), Some(client)) => {
+                                                                notify_in_flight.insert(row.id);
+                                                                notify::spawn_send(
+                                                                    client.clone(),
+                                                                    url,
+                                                                    &batch,
+                                                                    notify_tx.clone(),
+                                                                );
+                                                            }
+                                                            _ => {
+                                                                let failure = notify::SendResult {
+                                                                    ids: batch.ids,
+                                                                    outcome:
+                                                                        notify::SendOutcome::Failed(
+                                                                            notify::NOT_CONFIGURED
+                                                                                .into(),
+                                                                        ),
+                                                                };
+                                                                if let Err(error) = notify::record(
+                                                                    store.as_ref(),
+                                                                    &pending,
+                                                                    &failure,
+                                                                    now,
+                                                                ) {
+                                                                    tracing::warn!(%error, "notify: could not record missing webhook");
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Err(error) => {
+                                                        let failure = notify::SendResult {
+                                                            ids: batch.ids,
+                                                            outcome: notify::SendOutcome::Failed(
+                                                                error.into(),
+                                                            ),
+                                                        };
+                                                        if let Err(error) = notify::record(
+                                                            store.as_ref(),
+                                                            &pending,
+                                                            &failure,
+                                                            now,
+                                                        ) {
+                                                            tracing::warn!(%error, "notify: could not record invalid CoS outbound configuration");
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Ok(false) => {}
+                                            Err(error) => {
+                                                tracing::warn!(%error, "notify: could not recheck CoS wait")
+                                            }
                                         }
-                                        notify::spawn_send(
-                                            client.clone(),
-                                            url.clone(),
-                                            &batch,
-                                            notify_tx.clone(),
-                                        );
                                     }
-                                }
-                                // ADR-0037 D2: 秘密が無い間は送らず、pending も溜めない。
-                                _ => {
-                                    let idle: Vec<_> = pending
-                                        .iter()
-                                        .filter(|n| !notify_in_flight.contains(&n.id))
-                                        .cloned()
-                                        .collect();
-                                    match notify::discard_pending(store.as_ref(), &idle, now) {
-                                        Ok(n) if n > 0 => tracing::debug!(
-                                            count = n,
-                                            "notify: no webhook secret; nothing was sent"
-                                        ),
-                                        Ok(_) => {}
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "notify: could not discard the pending rows")
-                                        }
+                                    Err(error) => {
+                                        tracing::warn!(%error, "notify: CoS outbox store unavailable")
                                     }
                                 }
                             }

@@ -38,6 +38,33 @@ opencode go の subscription を account pool の第 3 の adapter・LLM source 
 - `pnpm -C web lint`: exit 0（382 files、error 0。既存の `styles.css` の warning 4 件）。前回の organizeImports / format の error 2 件を解消した。
 - 上記以外の検証結果は前回の実行記録。今回の変更は import の整形と本記録のみのため、Rust・web の機能試験は再実行していない。
 
+## リリース準備の修復（2026-10-06）
+
+`a1ad97612612` の prepare.log では Rust の検査・release build は成功したが、
+旧 GUI の `pnpm-typecheck` が TS2741 で停止した。
+`QuotaWindow` に追加した `one_month` に対応する表示ラベルが
+`gui/app/lib/task-execution.ts` の `QUOTA_WINDOW_LABEL` に無かったため、`1mo` を追加した。
+main と HEAD はともに `a1ad9761` で、追加の merge は不要だった。
+
+検証対象は `a1ad9761` + このラベル修正。すべて worktree で実行し、本番の設定・DB・サービスは変更せず、
+release prepare・デプロイも実行していない。
+
+- `cargo fmt --all -- --check`: exit 0。
+- `bash scripts/dev/test-parallel.sh`: exit 0。4,184 passed / 0 failed / 14 ignored、140 binaries（doc を含む）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- gui ディレクトリで `pnpm typecheck` / `pnpm test` / `pnpm build`: すべて exit 0。96 files / 1,341 tests passed。
+- gui ディレクトリで `MOBILE_AUDIT_SKIP_BUILD=1 pnpm mobile-audit`: exit 0。29 routes × 2 schemes、違反 0。
+- gui ディレクトリで `E2E_SKIP_BUILD=1 pnpm e2e:mock`: exit 0。`ok: true`、failures 空。
+- `pnpm -C web typecheck` / `pnpm -C web lint`: exit 0。lint は既存の styles.css の warning 4 件。
+- `pnpm -C web test`: exit 0。70 files / 468 tests と node の 59 tests が成功。
+- `pnpm -C web e2e`: exit 0。269 passed / 8 skipped。
+- `pnpm -C web e2e:nfr`: exit 0。106 passed。
+
+GUI は pnpm 11.27.0、web は 12.6.0 を使用した。初回の `pnpm -C gui typecheck` は
+リポジトリ直下の Corepack が web 用の 12.6.0 を選び、版数不一致で検査開始前に終了した。
+gui ディレクトリを cwd にして、固定された版数で上記の全検査を完了した。
+実行ログは task の成果物ディレクトリの `repair-gui.log` / `repair-web.log` / `repair-rust.log` に保存した。
+
 ## 統合時の注意
 
 本ブランチの `0052_model_catalog.sql` は、並行中の CoS ブランチ

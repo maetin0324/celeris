@@ -273,6 +273,7 @@ export function gateModeLabel(execution: ExecutionView | null | undefined): stri
 const QUOTA_WINDOW_LABEL: Record<QuotaUse["window"], string> = {
   five_hour: "5h",
   seven_day: "7d",
+  one_month: "1mo",
 };
 
 /**

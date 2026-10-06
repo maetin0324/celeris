@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
+import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -18,11 +19,38 @@ let base;
 before(async () => {
   const app = createApp({ distDir, release: "test", log: (entry) => entries.push(entry) });
   server = app.listen(0, "127.0.0.1");
+  server.on("upgrade", app.locals.browserLiveUpgrade);
   await new Promise((resolve, reject) => {
     server.once("listening", resolve);
     server.once("error", reject);
   });
   base = `http://127.0.0.1:${server.address().port}`;
+});
+
+test("rejected upgrade RST on invalid host leaves gateway serving", async () => {
+  const uncaught = [];
+  const onUncaught = (error) => uncaught.push(error);
+  process.on("uncaughtExceptionMonitor", onUncaught);
+  try {
+    for (const resetOnResponse of [false, true]) {
+      const socket = connect(server.address().port, "127.0.0.1");
+      socket.on("error", () => {});
+      const closed = new Promise((resolve) => socket.once("close", resolve));
+      if (resetOnResponse) socket.once("data", () => socket.resetAndDestroy());
+      else server.prependOnceListener("upgrade", () => socket.resetAndDestroy());
+      await new Promise((resolve) => socket.once("connect", resolve));
+      socket.write(
+        "GET /api/session/1234/stream HTTP/1.1\r\nHost: evil.example\r\nConnection: Upgrade\r\n" +
+          "Upgrade: websocket\r\nSec-WebSocket-Version: 13\r\n" +
+          "Sec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n\r\nextra bytes",
+      );
+      await closed;
+      assert.equal((await get("/healthz")).status, 200);
+      assert.deepEqual(uncaught, []);
+    }
+  } finally {
+    process.off("uncaughtExceptionMonitor", onUncaught);
+  }
 });
 after(async () => {
   await new Promise((resolve) => server.close(resolve));

@@ -13,6 +13,7 @@ const READ = /^\/api\/session\/(\d{1,5})\/(tabs|status)$/;
 const STREAM = /^\/api\/session\/(\d{1,5})\/stream$/;
 const CSP =
   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
+const guardedSockets = new WeakSet();
 
 export function parseLiveUpstream(raw) {
   if (!raw) return null;
@@ -24,6 +25,22 @@ export function parseLiveUpstream(raw) {
     port: Number(match[3]),
     authority: match[1] ? `[::1]:${match[3]}` : `${match[2]}:${match[3]}`,
   };
+}
+
+// Upgrade sockets are detached from HTTP's error handling. Keep an error
+// listener through teardown, including while a rejected response is in flight.
+export function guardUpgradeSocket(socket) {
+  if (guardedSockets.has(socket)) return;
+  guardedSockets.add(socket);
+  socket.on("error", () => {});
+}
+
+export function rejectUpgrade(socket, response) {
+  guardUpgradeSocket(socket);
+  const deadline = setTimeout(() => socket.destroy(), 1000);
+  deadline.unref();
+  socket.once("close", () => clearTimeout(deadline));
+  socket.end(response);
 }
 
 function privateKey(file) {
@@ -668,8 +685,10 @@ export function createBrowserLive({
     });
   }
   async function upgrade(req, client, head) {
+    guardUpgradeSocket(client);
     const reject = (status, code) => {
-      client.end(
+      rejectUpgrade(
+        client,
         `HTTP/1.1 ${status} Rejected\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n${JSON.stringify({ code })}`,
       );
     };
@@ -718,8 +737,10 @@ export function createBrowserLive({
       },
       timeout: 10000,
     });
+    upstreamRequest.on("socket", guardUpgradeSocket);
     const upstreamSocket = await new Promise((resolve) => {
       upstreamRequest.once("upgrade", (response, socket, extra) => {
+        guardUpgradeSocket(socket);
         const expected = createHash("sha1")
           .update(upstreamKey + WS_MAGIC)
           .digest("base64");

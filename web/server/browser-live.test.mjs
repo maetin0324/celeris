@@ -146,6 +146,7 @@ dashboard.on("upgrade", (req, socket) => {
 const servers = [daemon, dashboard];
 let app;
 let base;
+let gateway;
 let cookie;
 let csrf;
 async function listen(server) {
@@ -174,6 +175,7 @@ before(async () => {
   });
   const server = app.listen(0, "127.0.0.1");
   server.on("upgrade", app.locals.browserLiveUpgrade);
+  gateway = server;
   servers.push(server);
   base = await new Promise((resolve) =>
     server.once("listening", () => resolve(`http://127.0.0.1:${server.address().port}`)),
@@ -202,6 +204,34 @@ before(async () => {
   });
   assert.deepEqual(approved, { ok: true, code: "approved" });
   csrf = (await (await get("/browser/owner-session")).json()).csrfToken;
+});
+
+test("rejected upgrade RST leaves gateway serving after unauthenticated and origin mismatch requests", async () => {
+  const uncaught = [];
+  const onUncaught = (error) => uncaught.push(error);
+  process.on("uncaughtExceptionMonitor", onUncaught);
+  try {
+    for (const [headers, resetOnResponse] of [
+      [{ Origin: base }, false],
+      [{ Origin: "http://evil.example", Cookie: cookie }, true],
+    ]) {
+      const socket = connect(gateway.address().port, "127.0.0.1");
+      socket.on("error", () => {});
+      const closed = new Promise((resolve) => socket.once("close", resolve));
+      if (resetOnResponse) socket.once("data", () => socket.resetAndDestroy());
+      else gateway.prependOnceListener("upgrade", () => socket.resetAndDestroy());
+      await new Promise((resolve) => socket.once("connect", resolve));
+      socket.write(
+        `GET /api/session/1234/stream?last_seen=0 HTTP/1.1\r\nHost: 127.0.0.1:${gateway.address().port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nOrigin: ${headers.Origin}\r\n${headers.Cookie ? `Cookie: ${headers.Cookie}\r\n` : ""}\r\n` +
+          "Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: AAAAAAAAAAAAAAAAAAAAAA==\r\n\r\nextra bytes",
+      );
+      await closed;
+      assert.equal((await get("/healthz")).status, 200);
+      assert.deepEqual(uncaught, []);
+    }
+  } finally {
+    process.off("uncaughtExceptionMonitor", onUncaught);
+  }
 });
 after(async () => {
   for (const socket of upgradedSockets) socket.destroy();

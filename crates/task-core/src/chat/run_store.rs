@@ -503,6 +503,7 @@ impl SqliteStore {
             "UPDATE chat_runs SET state=?2,reason=?3,finished_at=?4 WHERE run_id=?1",
             params![run_id, enum_str(&state)?, reason, at],
         )?;
+        super::credential::revoke_conn(&tx, run_id, &at)?;
         let msg_state = enum_str(&message_state_for(state))?;
         tx.execute(
             "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",

@@ -105,17 +105,21 @@ pub(crate) const MIGRATION_0047: &str =
     include_str!("../../migrations/0047_events_integration_request_index.sql");
 /// CoS chat D1: durable conversation, attachments, operations, and FTS.
 pub(crate) const MIGRATION_0050: &str = include_str!("../../migrations/0050_cos_chat.sql");
+/// CoS D3: hash-only, expiring credentials scoped to a chat run.
+pub(crate) const MIGRATION_0052: &str =
+    include_str!("../../migrations/0052_cos_run_credentials.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0048/0049 routing、
+/// 0051 は並行ブランチ、
 /// 0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49, 51];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 50;
+pub const SCHEMA_VERSION: u32 = 52;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -165,6 +169,7 @@ impl SqliteStore {
             46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
             50 => Ok(MIGRATION_0050),
+            52 => Ok(MIGRATION_0052),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

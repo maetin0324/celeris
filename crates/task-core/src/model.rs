@@ -952,6 +952,18 @@ pub struct FailedWorkUnitCheck {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// CoS operation attempt, including rejected attempts. The envelope is immutable.
+    CosOperation {
+        actor: String,
+        thread_id: String,
+        run_id: String,
+        operation_id: String,
+        reason: String,
+        policy_version: String,
+        state: String,
+        target_kind: String,
+        target_id: String,
+    },
     /// ADR-0118 D3: immutable snapshot of one repository's review attempt.
     ReviewTargetSynced {
         review_run: String,

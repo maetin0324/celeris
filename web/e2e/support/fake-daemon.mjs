@@ -1580,6 +1580,9 @@ function createChatFixture() {
     }
     return fields;
   };
+  // 受ける経路: /api/v1/chat/threads（一覧・作成・PATCH・messages・stop・resume-queue・stream）、
+  // /api/v1/chat/attachments（upload・取得・preview・content・delete・references）、
+  // 制御用の /__fixture/chat/hold と /__fixture/chat/threads/{t}/emit。
   const handle = async (req, res, url, record) => {
     const path = url.pathname;
     if (!path.startsWith("/api/v1/chat/") && !path.startsWith("/__fixture/chat/")) return false;

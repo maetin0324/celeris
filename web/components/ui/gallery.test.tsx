@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openOverlayFixture, OVERLAY_FIXTURE_TIMEOUT, seriousViolations } from "./overlay-browser-test";
+import { OVERLAY_FIXTURE_TIMEOUT, openOverlayFixture, seriousViolations } from "./overlay-browser-test";
 
 // 部品と状態の gallery fixture。GALLERY_SHOT_DIR（絶対 path）があれば 3 状態 × 4 幅の full page PNG を書く。
 const fixturePath = "/components/ui/fixtures/gallery.html";

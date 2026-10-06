@@ -15,7 +15,13 @@ updated: 2026-10-06
 - `corepack pnpm@12.6.0 -C web test` — 394 件と server 47 件が成功。
 - `corepack pnpm@12.6.0 -C web typecheck` — 成功。
 - `corepack pnpm@12.6.0 -C web e2e` — functional 243 件成功、8 件 skip。
-- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` — js-tokens の tarball がローカル store に無く失敗。続く pnpm exec が依存を取得し、上記検査は成功。
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` — 再試行（attempt 2）では exit 0。
+
+## 再試行（前回 check の不合格への対処）
+
+- `web lint` が base（c40b3669）の時点で既に落ちていた: `components/content/artifact-preview.test.tsx`・`components/ui/{confirm-dialog,drawer,gallery}.test.tsx` の import 並び（biome organizeImports）4 件。`biome check --write` でこの 4 file の import 行だけ直した（範囲外だが check を通すのに必要な機械的修正）。
+- `grep -q '/api/v1/chat/threads' fake-daemon.mjs` が落ちていた: 経路は path を分解して照合しており文字列が無かった。`handle` の上に受ける経路の一覧の注釈を足した（挙動は不変）。
+- 計画の check 全体（install --offline --frozen-lockfile → typecheck → lint → test）を同じ cwd で実行: exit 0。lint は 4 warnings（styles.css の !important、既存）・0 error、test は 62 files / 394 件 + server 47 件 成功。grep check も exit 0。
 
 ## 未解決と提案
 

@@ -1,5 +1,5 @@
 ---
-tasks: [01M46W97H391DSFW1XJ745W0G9]
+tasks: [01M46W97H391DSFW1XJ745W0G9, 01M47M7QCGRA9V72WKP07Z471B]
 ---
 
 # ブラウザ実行課（browser-execution）の投入手順
@@ -40,56 +40,76 @@ curl --fail-with-body "$CELERIS_API/api/v1/org" | \
 確かめる点:
 
 - `parent_id` が `"engineering"`、`genre` が `"coding"`。
-- `profile.browser.allowed_domains` が `["localhost", "127.0.0.1"]`（初期は loopback だけ。
-  人の決定 `browser-initial-domains`）。
+- `profile.browser.allowed_domains` が `["http://localhost:3000", "http://127.0.0.1:3000"]`
+  （初期は loopback だけ。人の決定 `browser-initial-domains`。投入時の値は origin として正規化されて
+  保存される）。
 - `profile.harnesses.allowed` に `"coding"` が入っている（`browser-enabled` task を受けられる）。
 
 `GET /api/v1/org` のレスポンスは `effective_profiles` も返す。`browser-execution` の
 `effective_profiles[].browser` が `null` でないことも合わせて見ると、継承後も grant が消えていないと
 確認できる。
 
-## 3. 業務 host を足す（PATCH）
+## 3. 業務 host を足す（browser-settings）
 
-初期値は loopback だけなので、実際に操作してよい業務 host を人が決めてから `profile` を**丸ごと**
-PATCH する（`profile` は部分更新ではなく置換。D1.2 の他の欄もすべて書き直す必要がある）。
+初期値は loopback だけなので、実際に操作してよい業務 host を人が決める。browser 欄の編集は
+`PATCH /api/v1/org/{id}/browser-settings`（実装: `crates/task-api/src/handlers/org.rs` の
+`patch_browser_settings`）で行う。
+
+- 管理トークンで `admin` 権限が必要。
+- 対象ノードが `profile.browser`（browser grant）を持たないと `422`（`browser: node has no browser grant`）。
+- 本文は `BrowserSettingsPatch`（`deny_unknown_fields`）の**フラットな形**。browser grant だけでなく
+  `harnesses`・`budget` も同じ本文で置き換えられる。書いた欄だけが置き換わり、`profile` の他の欄
+  （`skills`・`policy` 等）は触れない。
 
 ```bash
 curl --fail-with-body -X PATCH \
   -H "Authorization: Bearer $CELERIS_API_TOKEN" \
   -H "Content-Type: application/json" \
   --data-binary @- \
-  "$CELERIS_API/api/v1/org/browser-execution" <<'JSON'
+  "$CELERIS_API/api/v1/org/browser-execution/browser-settings" <<'JSON'
 {
-  "profile": {
-    "skills": ["browser-enabled", "browser", "web-automation"],
-    "harnesses": { "allowed": ["coding"], "default": "coding" },
-    "budget": { "max_lane": "standard", "max_attempts": 2 },
-    "browser": {
-      "allowed_domains": ["localhost", "127.0.0.1", "wiki.internal.example"],
-      "allowed_actions": null,
-      "credential_policy_ids": []
-    },
-    "policy": [
-      "ブラウザ操作は grant と task の browser policy の範囲だけで行う。範囲外の origin・操作が要るときは自分で広げず、waits で人に上げる。",
-      "人が control lease を持つ間は操作しない。返却されたら現在の画面を読み直してから続ける。",
-      "credential・cookie・token をメモ・成果物・会話に書かない。"
-    ]
-  }
+  "allowed_domains": ["http://localhost:3000", "http://127.0.0.1:3000", "https://wiki.internal.example"],
+  "harnesses": { "allowed": ["coding"], "default": "coding" },
+  "budget": { "max_lane": "standard", "max_attempts": 2 },
+  "credential_policy_ids": [],
+  "credential_identity_ids": {}
 }
 JSON
 ```
 
-`allowed_domains` は `BrowserCapability::validate()`（`crates/task-core/src/browser.rs`）がその場で検証する。
-裸の `"*"` や `scheme://` 付き、ポート付きの値は構文として `422` で拒否される
-（`valid_host()` は英数・ハイフン・ドット区切りの DNS ラベルのみを受ける）。
+成功時は `200` で更新後のノードが返る。`allowed_domains` だけ足す場合は
+`{"allowed_domains": ["…"]}` 1 欄だけでもよい。
 
-`credential_policy_ids` を足す場合も同じ PATCH で `browser.credential_policy_ids` に id を追加する
-（policy 自体は別途登録してから参照する）。
+`allowed_domains` の各値は `AllowedOrigin::parse`（`crates/task-core/src/browser/origin.rs`）で検証され、
+不正なら `422`（`browser.allowed_domains: expected valid browser origins`）。許される形は次の通り。
+
+- origin 形 `scheme://host[:port]`。port 省略は HTTPS 443 / HTTP 80。
+- 外向きは HTTPS のみ。HTTP は `localhost`・`127.0.0.1`・`[::1]`（loopback）だけ。
+- wildcard は `https://*.example.com` の形。public suffix（`com` 等の単一ラベル、2 レベルの ccTLD、
+  `github.io` 等）を覆う wildcard と loopback・IPv4 への wildcard は拒否。userinfo・path・query・fragment
+  を含める値は拒否。
+- 旧形の裸 host（`wiki.internal.example` 等）は読み込み時のみ HTTPS 443 として読める
+  （`parse_allowed_origin`）。新規の書き込みは origin 形で行う。
+
+`credential_policy_ids` を足す場合も同一 endpoint で `credential_policy_ids` に id を書き、
+`credential_identity_ids` に policy ID → identity ID の対応を入れる（policy 自体は別途登録してから
+参照する。値は ID のみで、秘密は書かない）。
+
+browser 設定の変更は `tracing::info!` に出ず、`org_browser_events`（migration `0051`）に
+actor と変更前後のスナップショットが同 transaction で残る
+（`crates/task-core/src/store/org.rs` の `org_upsert_browser_settings`）。読み取り API は無い。
+
+`profile` の丸ごと置換（`skills`・`policy` 等を含む）が必要なときは、通常の
+`PATCH /api/v1/org/browser-execution`（`OrgPatchBody`、本文は `{"profile": {…}}`）を使う。
+その場合も `profile.browser.allowed_domains` は origin 形を渡すこと。
 
 ## 4. 戻し方
 
-grant を外す（この課に browser task を割り当てないようにする）には、`profile.browser` を省略した
-`profile` で PATCH する（`profile` は丸ごと置換なので、`browser` を書かなければ `None` になる）。
+grant の**縮小**は §3 の `PATCH /api/v1/org/browser-execution/browser-settings` でよい。
+grant を外す（この課に browser task を割り当てないようにする）のは browser-settings ではできない
+（node に browser grant が無いと `422`）。`profile.browser` を省略した `profile` で
+`PATCH /api/v1/org/browser-execution` する（`profile` は丸ごと置換なので、`browser` を書かなければ
+`None` になる）。
 node 自体を削除する場合は:
 
 ```bash
@@ -107,5 +127,7 @@ curl --fail-with-body -X DELETE \
 ## 変更の記録
 
 `POST /api/v1/org` と `PATCH /api/v1/org/{id}` の呼び出しは、操作ログ（`tracing::info!`）に
-`who = "admin"` で残る。actor 付きの `Event`（`Event::OrgNodeUpdated`）による変更履歴の記録は
-この WorkUnit の範囲外であり、follow-up task として起票する（ADR D5.3）。
+`who = "admin"` で残る。browser 設定の変更（§3）は `tracing::info!` ではなく
+`org_browser_events`（migration `0051`）に actor と変更前後のスナップショットを同 transaction で残す
+（読み取り API は無い。ADR 2026-10-05 付記）。actor 付きの `Event`（`Event::OrgNodeUpdated`）による
+変更履歴の記録は ADR D5.3 の follow-up task の範囲であり、まだ実装されていない。

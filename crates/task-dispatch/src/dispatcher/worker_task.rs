@@ -450,6 +450,8 @@ pub(super) async fn run_worker(
             decision_requests: extras.decision_requests,
             // ADR-0124 D4: 直行経路の implementation run にだけ `Some`。
             direct_route: extras.direct_route.clone(),
+            // ADR 2026-10-06 cos-chat-run-dispatch: task の run は CoS chat run ではない。
+            cos_chat: None,
         },
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの

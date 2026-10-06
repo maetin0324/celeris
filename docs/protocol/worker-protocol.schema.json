@@ -684,6 +684,219 @@
       ],
       "type": "object"
     },
+    "CosChatAttachment": {
+      "description": "One entry of the attachment manifest (D4).",
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/CosChatDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "description": "Original name (display only).",
+          "type": "string"
+        },
+        "path": {
+          "description": "Absolute path of the read-only staged copy (`<workspace>/attachments/<id>/<name>`).",
+          "type": "string"
+        },
+        "sha256": {
+          "description": "Lowercase hex SHA-256, verified by the daemon when staging.",
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "sha256",
+        "path",
+        "delivery"
+      ],
+      "type": "object"
+    },
+    "CosChatContext": {
+      "description": "`context.cos_chat`. Present only on CoS chat runs started by the dispatcher.",
+      "properties": {
+        "api_base_url": {
+          "description": "Base URL of the Celeris API ending in `/api/v1` (for checkpoint and history requests).",
+          "type": "string"
+        },
+        "attachments": {
+          "description": "Attachments staged read-only under `<workspace>/attachments` (D4).",
+          "items": {
+            "$ref": "#/$defs/CosChatAttachment"
+          },
+          "type": "array"
+        },
+        "credential_env": {
+          "description": "Name of the environment variable holding the run credential. Never the value.",
+          "type": "string"
+        },
+        "inputs": {
+          "description": "The input messages this run must handle, in delivery order (an interrupt first).\nDelivery is recorded by `chat_runs.input_message_id` and the message state, not here.",
+          "items": {
+            "$ref": "#/$defs/CosChatInput"
+          },
+          "type": "array"
+        },
+        "run_id": {
+          "description": "`chat_runs.id` (distinct from the worker run id in the prompt header).",
+          "type": "string"
+        },
+        "skills": {
+          "description": "Names of the skills mounted for this run (`cos-operator`, `cos-inbox-triage`, ...).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "description": "The thread summary written by an earlier CoS run, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary_through_seq": {
+          "default": 0,
+          "description": "The last seq the summary covers (0 = no summary yet). Independent of the delivery cursor.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "thread_id": {
+          "description": "`chat_threads.id`.",
+          "type": "string"
+        },
+        "unsummarized": {
+          "$ref": "#/$defs/CosChatHistory",
+          "default": {
+            "from_seq": 0,
+            "through_seq": 0
+          },
+          "description": "History after `summary_through_seq` that the summary does not cover yet."
+        }
+      },
+      "required": [
+        "thread_id",
+        "run_id",
+        "inputs",
+        "credential_env",
+        "api_base_url"
+      ],
+      "type": "object"
+    },
+    "CosChatDelivery": {
+      "description": "How an attachment reaches the harness (D4).",
+      "oneOf": [
+        {
+          "const": "image",
+          "description": "A native image input of the harness (or the path and an image-reading tool).",
+          "type": "string"
+        },
+        {
+          "const": "file",
+          "description": "A path plus the manifest; the CoS picks the tool.",
+          "type": "string"
+        }
+      ]
+    },
+    "CosChatHistory": {
+      "description": "An explicit range of the thread history. `messages` may hold fewer seqs than the range\n(a size budget); the missing seqs are named in the prompt, never dropped silently.",
+      "properties": {
+        "from_seq": {
+          "description": "First seq of the range (inclusive). `from_seq > through_seq` means an empty range.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "messages": {
+          "description": "The messages handed over, in seq order.",
+          "items": {
+            "$ref": "#/$defs/CosChatHistoryMessage"
+          },
+          "type": "array"
+        },
+        "through_seq": {
+          "description": "Last seq of the range (inclusive).",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from_seq",
+        "through_seq"
+      ],
+      "type": "object"
+    },
+    "CosChatHistoryMessage": {
+      "description": "A message of [`CosChatHistory`].",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "role": {
+          "description": "`user` / `assistant` / `system`.",
+          "type": "string"
+        },
+        "seq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "role",
+        "text"
+      ],
+      "type": "object"
+    },
+    "CosChatInput": {
+      "description": "One message delivered to the run.",
+      "properties": {
+        "attachment_ids": {
+          "description": "Ids of the attachments sent with this message (details in `cos_chat.attachments`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "`chat_messages.id`.",
+          "type": "string"
+        },
+        "interrupt": {
+          "description": "`true` when the human sent it with `mode = interrupt`.",
+          "type": "boolean"
+        },
+        "seq": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "seq",
+        "text"
+      ],
+      "type": "object"
+    },
     "Criterion": {
       "description": "DESIGN §4.1 の `Criterion`。",
       "properties": {
@@ -2337,6 +2550,17 @@
             }
           ],
           "description": "ADR-0033 D4（Phase 28）: 対話用タスクの run にだけ `Some`。委譲・`Question` を使わせず、\n返事だけを求める前置き（`preamble::conversation_instructions`）を出すための印。"
+        },
+        "cos_chat": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CosChatContext"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-06 cos-chat-run-dispatch: CoS chat run（`chat_runs` の 1 行を worker として\n起こした run）だけ `Some`。`RunRequest.task` はディスパッチャが保存しない一時の Task で、\nCoS chat run かどうかはこの欄の有無だけで決める（`is_cos_chat_run`）。`None` の run の\n`request.json` とプロンプトは 1 バイトも変わらない。"
         },
         "decision_requests": {
           "description": "ADR-0079 D7（Phase R3a）: 木の節点（`[execution.tree] enabled` の子 task・/3 の root）の worker の run だけ\n`true`。前置きに「`result.json` の `decisions` で人への決定の要求を出せる」節が出る。`false` なら\nプロンプトは変わらない。",

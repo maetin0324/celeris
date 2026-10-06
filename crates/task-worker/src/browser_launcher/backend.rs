@@ -134,6 +134,21 @@ fn chain_ok(chain: &[u32], uid: u32, subuid: u32, forbidden: &[u32]) -> bool {
         && !chain.iter().any(|o| forbidden.contains(o))
 }
 
+fn egress_policy(
+    domains: &[String],
+    resolver: IpAddr,
+) -> task_core::browser_isolation::EgressPolicy {
+    task_core::browser_isolation::EgressPolicy {
+        allow: domains
+            .iter()
+            .filter_map(|d| crate::browser_policy::origin_host_port(d))
+            .map(|(host, port)| format!("{host}:{port}"))
+            .collect(),
+        resolver,
+        allow_ipv6: false,
+    }
+}
+
 fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &[u32]) -> bool {
     let uid_map = std::fs::read_to_string(format!("/proc/{pid}/uid_map"));
     let gid_map = std::fs::read_to_string(format!("/proc/{pid}/gid_map"));
@@ -254,16 +269,7 @@ impl SessionBackend for RuntimeBackend {
                 }))
                 .map_err(|_| ErrorCode::LaunchFailed)?,
             )?;
-            let egress_policy = task_core::browser_isolation::EgressPolicy {
-                allow: req
-                    .policy
-                    .allowed_domains
-                    .iter()
-                    .map(|d| format!("{d}:443"))
-                    .collect(),
-                resolver: cfg.resolver,
-                allow_ipv6: false,
-            };
+            let egress_policy = egress_policy(&req.policy.allowed_domains, cfg.resolver);
             let dirs = [&cfg.sandboxd, &cfg.chrome, &cfg.agent_browser];
             let mut ro_dirs: Vec<PathBuf> = dirs
                 .iter()
@@ -560,7 +566,33 @@ impl BackendSession for RuntimeSession {
 
 #[cfg(test)]
 mod chain_tests {
-    use super::chain_ok;
+    use super::{chain_ok, egress_policy};
+
+    #[test]
+    fn launcher_egress_uses_origin_scheme_and_port() {
+        let domains = [
+            "https://example.com",
+            "http://localhost",
+            "http://127.0.0.1:8123",
+            "https://billing.example.com:8443",
+            "legacy.example.com",
+        ]
+        .map(str::to_owned);
+        let policy = egress_policy(&domains, "127.0.0.53".parse().unwrap());
+        assert_eq!(
+            policy.allow,
+            [
+                "example.com:443",
+                "localhost:80",
+                "127.0.0.1:8123",
+                "billing.example.com:8443",
+                "legacy.example.com:443",
+            ]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+        );
+    }
 
     #[test]
     fn owner_chain_accepts_nested_bwrap_levels_and_rejects_daemon_uid() {

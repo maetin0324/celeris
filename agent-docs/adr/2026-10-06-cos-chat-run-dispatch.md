@@ -5,7 +5,7 @@ tasks: [01M47J2YNMZ14NQ4AXTNA355AA]
 ---
 
 - 日付: 2026-10-06
-- 状態: 採用（proto WorkUnit で protocol・前置き・試験を実装済み。launch WorkUnit で dispatcher の起動を実装済み）
+- 状態: 実装済み（protocol・添付・session・sink・起動・停止・rollover を統合し、通し試験で検証）
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md) D2/D3/D4、[ADR-0003](0003-worker-protocol.md)（protocol は追加だけ）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0013](0013-taskd-api-and-gui-foundations.md) D11（秘密は request に載せない）
 
 ## 背景
@@ -34,7 +34,7 @@ cos-chat-home D2 は CoS の会話を `chat_threads`/`chat_messages`/`chat_runs`
 - 前置きは、返事は本文として書く（そのまま chat に流れる）、旧 `result.actions` を使わない（出すとエラーのカード）、checkpoint API（`POST /cos/threads/{t}/checkpoint`。through_seq は配送済みまで、32 KiB、409 は読み直し）、履歴 API のページ送りを書く。要約は worker が作り、dispatcher は LLM を呼ばない。
 
 ## 影響
-- 後続 WU: launch は一時 Task と `CosChatContext` を組んで env に credential を置く。attach は stage した manifest をこの型に写す。session は `context.session` を thread 単位で埋める。sink は progress を chat_events に写す。
+- dispatcher は一時 Task と `CosChatContext` を組んで env に credential を置く。stage した manifest をこの型に写し、`context.session` を thread 単位で埋め、sink が progress を chat_events に写す。
 - `docs/protocol/worker-protocol.schema.json` を再生成し、`worker-protocol.md` の context 表に 1 行足した。
 
 ## 実装付記: launch WorkUnit（2026-10-06）

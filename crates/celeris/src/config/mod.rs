@@ -305,11 +305,16 @@ impl BrowserRuntimeConfig {
     }
 
     /// ADR-0116 D5: `validate` を通した後にだけ呼ぶ想定（`runtime = "launcher"` なら
-    /// `launcher_socket` が `Some` であることを前提にする）。
-    pub fn runtime_kind(&self) -> task_worker::browser::BrowserRuntimeKind {
+    /// `launcher_socket` が `Some` であることを前提にする）。`refuse_test_loopback` は本番の daemon か
+    /// （付記 E2。`daemon::bootstrap::browser_launcher_refuses_test_loopback`）。
+    pub fn runtime_kind(
+        &self,
+        refuse_test_loopback: bool,
+    ) -> task_worker::browser::BrowserRuntimeKind {
         match self.runtime.as_str() {
             "launcher" => task_worker::browser::BrowserRuntimeKind::Launcher {
                 socket: self.launcher_socket.clone().unwrap_or_default(),
+                refuse_test_loopback,
             },
             _ => task_worker::browser::BrowserRuntimeKind::Daemon,
         }

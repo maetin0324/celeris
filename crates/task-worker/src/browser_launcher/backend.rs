@@ -1,4 +1,5 @@
 //! Launcher-owned browser runtime. Paths come only from the root-owned service config.
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::net::IpAddr;
 use std::os::fd::AsRawFd;
@@ -29,6 +30,110 @@ pub struct BackendConfig {
     pub chrome: PathBuf,
     pub agent_browser: PathBuf,
     pub resolver: IpAddr,
+    /// 試験専用 loopback 許可（`127.0.0.1:<port>` だけ。省略時は空 = off）。本番の path では有効に
+    /// できない（[`refuse_test_loopback_in_production`]、ADR 2026-10-05-browser-department-web-live-view
+    /// 付記 E1/E2）。
+    #[serde(default)]
+    pub test_loopback_allow: BTreeSet<String>,
+}
+
+/// 本番の launcher の固定 path（docs/ops/browser-launcher-host-setup.md）。
+pub const PRODUCTION_CONFIG: &str = "/etc/celeris-browser/launcher.toml";
+pub const PRODUCTION_SOCKET: &str = "/run/celeris-browser/launcher.sock";
+pub const PRODUCTION_STATE_DIR: &str = "/var/lib/celeris-browser";
+
+impl BackendConfig {
+    /// `test_loopback_allow` の各項目が `127.0.0.1:<port>`（port は 10 進・先頭 0 なし・0/53/853 以外）
+    /// であること。違えば config 読込みで拒否する。
+    pub fn validate_test_loopback(&self) -> Result<(), String> {
+        for entry in &self.test_loopback_allow {
+            let port = entry
+                .strip_prefix("127.0.0.1:")
+                .filter(|p| {
+                    !p.is_empty() && !p.starts_with('0') && p.bytes().all(|b| b.is_ascii_digit())
+                })
+                .and_then(|p| p.parse::<u16>().ok());
+            if !matches!(port, Some(p) if !matches!(p, 0 | 53 | 853)) {
+                return Err(format!(
+                    "test_loopback_allow entry {entry:?} must be \"127.0.0.1:<port>\" (port 1-65535, not 53/853)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// path を正規化する（存在する祖先までを `canonicalize` し、残りを足す）。正規化できなければ `None`。
+fn normalize(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut rest = Vec::new();
+    let mut cur = path;
+    loop {
+        match std::fs::canonicalize(cur) {
+            Ok(base) => {
+                let mut out = base;
+                for c in rest.iter().rev() {
+                    out.push(c);
+                }
+                return Some(out);
+            }
+            Err(_) => {
+                let name = cur.file_name()?;
+                if name == ".." {
+                    return None;
+                }
+                rest.push(name.to_os_string());
+                cur = cur.parent()?;
+            }
+        }
+    }
+}
+
+/// 2 つの path が正規化後に一致するか。どちらかが正規化できなければ一致とみなす（fail closed）。
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (normalize(a), normalize(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+/// 付記 E2（launcher 側）: 試験許可が空でないのに、config path・socket（socket activation なら
+/// `getsockname` の path）・state_dir のどれかが本番の固定値と一致したら拒否する。state_dir は本番の
+/// 配下・祖先も一致とみなす。試験許可が空（既定）なら何も見ない。
+pub fn refuse_test_loopback_in_production(
+    config_path: &Path,
+    cfg: &BackendConfig,
+    activated_socket: Option<&Path>,
+) -> Result<(), String> {
+    if cfg.test_loopback_allow.is_empty() {
+        return Ok(());
+    }
+    let refuse = |what: &str, p: &Path| {
+        Err(format!(
+            "test_loopback_allow is set but the {what} {} is the production one; refusing to start",
+            p.display()
+        ))
+    };
+    if same_path(config_path, Path::new(PRODUCTION_CONFIG)) {
+        return refuse("config", config_path);
+    }
+    for socket in [cfg.socket.as_deref(), activated_socket]
+        .into_iter()
+        .flatten()
+    {
+        if same_path(socket, Path::new(PRODUCTION_SOCKET)) {
+            return refuse("socket", socket);
+        }
+    }
+    match (
+        normalize(&cfg.state_dir),
+        normalize(Path::new(PRODUCTION_STATE_DIR)),
+    ) {
+        (Some(a), Some(b)) if !a.starts_with(&b) && !b.starts_with(&a) => Ok(()),
+        _ => refuse("state_dir", &cfg.state_dir),
+    }
 }
 
 pub struct RuntimeBackend {
@@ -134,19 +239,23 @@ fn chain_ok(chain: &[u32], uid: u32, subuid: u32, forbidden: &[u32]) -> bool {
         && !chain.iter().any(|o| forbidden.contains(o))
 }
 
+/// session の egress policy。試験専用 loopback 許可は、session の許可 origin（`host:port`）と launcher
+/// config の集合の交わりだけ（付記 E1）。
 fn egress_policy(
     domains: &[String],
     resolver: IpAddr,
+    test_loopback: &BTreeSet<String>,
 ) -> task_core::browser_isolation::EgressPolicy {
+    let allow: BTreeSet<String> = domains
+        .iter()
+        .filter_map(|d| crate::browser_policy::origin_host_port(d))
+        .map(|(host, port)| format!("{host}:{port}"))
+        .collect();
     task_core::browser_isolation::EgressPolicy {
-        allow: domains
-            .iter()
-            .filter_map(|d| crate::browser_policy::origin_host_port(d))
-            .map(|(host, port)| format!("{host}:{port}"))
-            .collect(),
+        test_loopback_allow: allow.intersection(test_loopback).cloned().collect(),
+        allow,
         resolver,
         allow_ipv6: false,
-        test_loopback_allow: Default::default(),
     }
 }
 
@@ -177,6 +286,10 @@ fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &
 }
 
 impl SessionBackend for RuntimeBackend {
+    fn test_loopback_allow(&self) -> Vec<String> {
+        self.cfg.test_loopback_allow.iter().cloned().collect()
+    }
+
     fn start(&self, req: &StartRequest) -> Result<Launched, ErrorCode> {
         let cfg = &self.cfg;
         let sid = req.session_id.as_str();
@@ -270,7 +383,11 @@ impl SessionBackend for RuntimeBackend {
                 }))
                 .map_err(|_| ErrorCode::LaunchFailed)?,
             )?;
-            let egress_policy = egress_policy(&req.policy.allowed_domains, cfg.resolver);
+            let egress_policy = egress_policy(
+                &req.policy.allowed_domains,
+                cfg.resolver,
+                &cfg.test_loopback_allow,
+            );
             let dirs = [&cfg.sandboxd, &cfg.chrome, &cfg.agent_browser];
             let mut ro_dirs: Vec<PathBuf> = dirs
                 .iter()
@@ -566,6 +683,10 @@ impl BackendSession for RuntimeSession {
 }
 
 #[cfg(test)]
+#[path = "backend_tests.rs"]
+mod test_loopback_tests;
+
+#[cfg(test)]
 mod chain_tests {
     use super::{chain_ok, egress_policy};
 
@@ -579,7 +700,7 @@ mod chain_tests {
             "legacy.example.com",
         ]
         .map(str::to_owned);
-        let policy = egress_policy(&domains, "127.0.0.53".parse().unwrap());
+        let policy = egress_policy(&domains, "127.0.0.53".parse().unwrap(), &Default::default());
         assert_eq!(
             policy.allow,
             [

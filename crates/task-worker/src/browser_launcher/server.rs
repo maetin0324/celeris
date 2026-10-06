@@ -90,6 +90,10 @@ pub struct Launched {
 /// session の起動の中身（userns・bwrap・Chrome）。単体試験では偽の実装を使う。
 pub trait SessionBackend: Send + Sync + 'static {
     fn start(&self, req: &StartRequest) -> Result<Launched, ErrorCode>;
+    /// 試験専用 loopback 許可（`127.0.0.1:<port>`）。`hello` で daemon に申告する。既定は空（off）。
+    fn test_loopback_allow(&self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// 起動済みの 1 session。
@@ -448,6 +452,10 @@ fn err(code: ErrorCode) -> Response {
 
 fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
     match req {
+        Request::Hello {} => Response::Hello {
+            protocol_version: super::PROTOCOL_VERSION,
+            test_loopback_allow: inner.backend.test_loopback_allow(),
+        },
         Request::StartSession {
             task_id,
             run_id,

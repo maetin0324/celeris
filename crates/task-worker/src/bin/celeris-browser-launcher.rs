@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use nix::libc;
-use task_worker::browser_launcher::backend::{BackendConfig, RuntimeBackend};
+use task_worker::browser_launcher::backend::{
+    BackendConfig, RuntimeBackend, refuse_test_loopback_in_production,
+};
 use task_worker::browser_launcher::{LauncherLimits, LauncherServer, Registry, ServerConfig};
 
 fn config_path() -> Result<PathBuf, String> {
@@ -24,6 +26,9 @@ fn load(path: &Path) -> Result<BackendConfig, String> {
     }
     let contents = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let cfg: BackendConfig = toml::from_str(&contents).map_err(|e| e.to_string())?;
+    cfg.validate_test_loopback()?;
+    // 付記 E2: 試験許可を本番の config path・socket・state_dir で有効にしない（listen の前に止める）。
+    refuse_test_loopback_in_production(path, &cfg, None)?;
     if cfg.allowed_uids.is_empty() || cfg.allowed_uids.contains(&unsafe { libc::geteuid() }) {
         return Err("allowed_uids must name a distinct daemon UID".into());
     }
@@ -81,9 +86,29 @@ fn activation_listener() -> Result<Option<UnixListener>, String> {
     }
 }
 
+/// socket activation で受け取った socket の path（`getsockname`）。採れなければ error（fail closed）。
+fn listener_path(listener: &UnixListener) -> Result<PathBuf, String> {
+    listener
+        .local_addr()
+        .ok()
+        .and_then(|a| a.as_pathname().map(Path::to_path_buf))
+        .ok_or_else(|| "cannot resolve the activated socket path".to_string())
+}
+
 fn run() -> Result<(), String> {
     let path = config_path()?;
     let cfg = load(&path)?;
+    let activated = activation_listener()?;
+    if !cfg.test_loopback_allow.is_empty() {
+        if let Some(listener) = &activated {
+            refuse_test_loopback_in_production(&path, &cfg, Some(&listener_path(listener)?))?;
+        }
+        let enabled: Vec<&str> = cfg.test_loopback_allow.iter().map(String::as_str).collect();
+        eprintln!(
+            "celeris-browser-launcher: test-only loopback egress enabled: {} (not for production)",
+            enabled.join(", ")
+        );
+    }
     let registry = Registry::open(
         cfg.state_dir.join("registry"),
         task_worker::browser_launcher::random_id().map_err(|e| e.to_string())?,
@@ -94,7 +119,7 @@ fn run() -> Result<(), String> {
         limits: LauncherLimits::default(),
     };
     let backend = Arc::new(RuntimeBackend::new(cfg.clone()));
-    let server = match activation_listener()? {
+    let server = match activated {
         Some(listener) => LauncherServer::from_listener(listener, server_cfg, backend, registry),
         None => {
             let socket = cfg.socket.as_ref().ok_or("socket path missing")?;

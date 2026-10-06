@@ -6,6 +6,9 @@ use task_core::{ArtifactRef, DelegateTask, RateLimitObservation};
 use super::*;
 use crate::protocol::{GenreContext, PROTOCOL_VERSION, RunContext};
 
+#[path = "cos_chat_tests.rs"]
+mod cos_chat_tests;
+
 #[derive(Default)]
 struct RecordingSink {
     progress: Mutex<Vec<String>>,

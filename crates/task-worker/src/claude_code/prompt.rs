@@ -11,6 +11,18 @@ pub const CLUSTER_JOB_PLANNER_GUIDANCE: &str = "**Long cluster jobs (PBS / Slurm
      An acceptance check may require the jobs to have finished successfully (for example \"all PBS jobs are \
      F with Exit_status 0\" verified from the scheduler or the job logs).";
 
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): browser 子 task の
+/// `requirements.browser.allowed_domains` には作業に必要な最小の origin だけを書き、親を超えない規則と例。
+/// v2 の `children`（`parallel_phases_section`）と v3 の子 task unit（`tree_plan_shape_section`）の
+/// 両方に足す。
+pub const BROWSER_ALLOWED_DOMAINS_GUIDANCE: &str = "**Browser child-task origins (`requirements.browser.allowed_domains`)**: when a child task needs \
+     the `browser` skill, set its `requirements.browser.allowed_domains` to only the origins (scheme, \
+     host, port) the work actually needs, and never wider than this task's own `allowed_domains`. \
+     Example: a child that only touches the internal billing screen uses \
+     `{\"browser\":{\"allowed_domains\":[\"https://billing.example.com\"]}}`, not a wildcard like \
+     `[\"*.example.com\"]` and not a copy of the whole department grant. A browser-enabled child task \
+     with a missing or empty `allowed_domains` is rejected when celeris creates it.\n\n";
+
 /// ADR-0006 Phase 115 D1（本番障害 01M3915FARENW8M0JM11XVF6W0 / 01M38T8N17MEWPTJQXGX1TNYJD）:
 /// `work_dir`（実際の cwd）が `workspace` と異なる run（部署のリポジトリの git worktree で走るタスク）
 /// だけ、プロンプトの先頭に「cwd と成果物ディレクトリは別」の注意を 2 行足す。`result_json_instructions`
@@ -1248,6 +1260,7 @@ fn tree_plan_shape_section(
         },
         CLUSTER_JOB_PLANNER_GUIDANCE,
     ));
+    out.push_str(BROWSER_ALLOWED_DOMAINS_GUIDANCE);
 
     out.push_str(&format!(
         "#### Decisions for a human (`decisions`, ADR-0079 D7)\n\
@@ -1399,6 +1412,7 @@ fn parallel_phases_section(max_phases: usize) -> String {
          with the secretary. Do not split a WorkUnit that is merely too large into children — make it \
          smaller WorkUnits instead. Otherwise leave `\"children\"` out.\n\n",
     );
+    out.push_str(BROWSER_ALLOWED_DOMAINS_GUIDANCE);
     out.push_str(
         "Example: `{\"schema\":\"celeris.execution-plan/2\",\"rationale\":\"...\",\"phases\":[\
          {\"key\":\"build\",\"kind\":\"implement\",\"title\":\"core pieces\"},\

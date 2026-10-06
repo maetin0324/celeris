@@ -3477,6 +3477,68 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(!prompt.contains("Remaining depth"));
 }
 
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): /3（木の子 task unit）の
+/// planner プロンプトに「browser 子 task の origin は最小・親を超えない」規則と例
+/// `https://billing.example.com` が出る。
+#[test]
+fn browser_allowed_domains_prompt_tree_planner_has_minimal_origin_rule() {
+    let task = crate::protocol::tests::sample_task();
+    let tree = crate::protocol::TreePlannerContext {
+        remaining_depth: 2,
+        max_depth: 3,
+        ..crate::protocol::TreePlannerContext::default()
+    };
+    let context = RunContext {
+        execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+            tree: Some(tree),
+            ..crate::protocol::ExecutionPlannerContext::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-planner-browser-origin", "artifacts");
+    assert!(
+        prompt.contains("requirements.browser.allowed_domains"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("https://billing.example.com"),
+        "missing example origin in:\n{prompt}"
+    );
+    assert!(
+        prompt.contains("never wider than this task's own `allowed_domains`"),
+        "missing minimal/parent-scope rule in:\n{prompt}"
+    );
+}
+
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): /2（`children`）の planner
+/// プロンプトにも同じ規則と例が出る。
+#[test]
+fn browser_allowed_domains_prompt_v2_planner_has_minimal_origin_rule() {
+    let task = crate::protocol::tests::sample_task();
+    let context = RunContext {
+        execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+            parallel: true,
+            ..crate::protocol::ExecutionPlannerContext::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(
+        &task,
+        &context,
+        "run-planner-browser-origin-v2",
+        "artifacts",
+    );
+    assert!(prompt.contains("Phases and parallel WorkUnits"));
+    assert!(
+        prompt.contains("requirements.browser.allowed_domains"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("https://billing.example.com"),
+        "missing example origin in:\n{prompt}"
+    );
+}
+
 /// ADR-0079 R7-2/R7-10: /2 と /3 の planner のプロンプトに「check の書き方」の節が出る。/3 は子を作る unit
 /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
 #[test]

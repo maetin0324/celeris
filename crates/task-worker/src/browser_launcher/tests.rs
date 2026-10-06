@@ -26,12 +26,14 @@ struct FakeBackend {
     /// true なら stop で何もしない（registry 側の process group 停止だけで回収されることを見る）。
     leaky_stop: bool,
     isolation_ok: bool,
+    observe_failed: bool,
 }
 
 struct FakeSession {
     child: Option<Child>,
     leaky: bool,
     isolation_ok: bool,
+    observe_failed: bool,
 }
 
 impl SessionBackend for FakeBackend {
@@ -50,6 +52,7 @@ impl SessionBackend for FakeBackend {
                 child: Some(child),
                 leaky: self.leaky_stop,
                 isolation_ok: self.isolation_ok,
+                observe_failed: self.observe_failed,
             }),
             pid,
             pgid: pid,
@@ -71,7 +74,11 @@ impl BackendSession for FakeSession {
     }
     fn observe(&mut self) -> (SessionState, SessionFacts) {
         (
-            SessionState::Running,
+            if self.observe_failed {
+                SessionState::Failed
+            } else {
+                SessionState::Running
+            },
             SessionFacts {
                 host_uid: 4242,
                 ..SessionFacts::default()
@@ -92,6 +99,29 @@ impl BackendSession for FakeSession {
             let _ = c.wait();
         }
     }
+}
+
+#[test]
+fn failed_supervisor_observation_reaps_session_immediately() {
+    let f = fixture_with(
+        vec![uid()],
+        LauncherLimits::default(),
+        FakeBackend {
+            isolation_ok: true,
+            observe_failed: true,
+            ..FakeBackend::default()
+        },
+    );
+    let mut c = connect(&f.sock);
+    let s = c
+        .start_session("t1", "r1", "lease1", policy(60))
+        .expect("start");
+    let (pid, st) = f.backend.launched.lock().expect("lock")[0];
+    let (state, _) = c.observe(&s.session_id, "lease1").expect("observe");
+    assert_eq!(state, SessionState::Failed);
+    assert!(wait_dead(pid, st));
+    assert_eq!(f.handle.session_count(), 0);
+    assert_eq!(records(&f.state_dir), 0);
 }
 
 struct Fixture {

@@ -3,7 +3,7 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::post;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use task_core::chat::OverrideAction;
 use time::OffsetDateTime;
 
@@ -32,6 +32,20 @@ pub enum OverrideMode {
 pub struct OverrideBody {
     pub action: OverrideMode,
     pub reason: String,
+}
+
+/// Response of `POST /cos/operations/{o}/override`. `new_revision` / `new_wait_id` are set when a
+/// fresh human wait replaced the answered one; `remediation_task_id` when the effect is irreversible;
+/// `paused_task_ids` are the subtree paused because a run already consumed the operation.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct OverrideResponse {
+    pub operation_id: String,
+    pub state: String,
+    pub action: String,
+    pub new_revision: Option<String>,
+    pub new_wait_id: Option<String>,
+    pub remediation_task_id: Option<String>,
+    pub paused_task_ids: Vec<String>,
 }
 
 async fn override_operation(
@@ -70,17 +84,18 @@ async fn override_operation(
                 .map_err(cos_problem)
         })
         .await?;
+    let response = OverrideResponse {
+        operation_id: result.operation_id,
+        state: result.state,
+        action: match result.action {
+            OverrideAction::Revoke => "revoke".into(),
+            OverrideAction::Return => "return".into(),
+        },
+        new_revision: result.new_revision,
+        new_wait_id: result.new_wait_id,
+        remediation_task_id: result.remediation_task_id,
+        paused_task_ids: result.paused_task_ids,
+    };
     state.chat.events.notify_waiters();
-    Ok(json_response(
-        StatusCode::OK,
-        &serde_json::json!({
-            "operation_id":result.operation_id,
-            "state":result.state,
-            "action":match result.action { OverrideAction::Revoke=>"revoke",OverrideAction::Return=>"return" },
-            "new_revision":result.new_revision,
-            "new_wait_id":result.new_wait_id,
-            "remediation_task_id":result.remediation_task_id,
-            "paused_task_ids":result.paused_task_ids,
-        }),
-    ))
+    Ok(json_response(StatusCode::OK, &response))
 }

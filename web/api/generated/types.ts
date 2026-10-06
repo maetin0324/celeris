@@ -1204,6 +1204,27 @@ export type CooldownView = {
   "until": string;
 };
 
+export type CosInboxItem = {
+  "created_at": string;
+  "id": string;
+  "message_id": string;
+  "operation_id"?: string | null;
+  "policy_version": string;
+  "reason"?: string | null;
+  "run_id"?: string | null;
+  "source_event_id"?: number | null;
+  "source_key": string;
+  "source_kind": string;
+  "source_revision": string;
+  "state": string;
+  "thread_id": string;
+  "updated_at": string;
+};
+
+export type CosInboxList = {
+  "items": Array<CosInboxItem>;
+};
+
 export type CosOperation = {
   "action": string;
   "event_id"?: number | null;
@@ -1713,6 +1734,19 @@ export type EffectiveProfile = {
   "skills_mounts"?: Array<string>;
   "tier"?: Tier | null;
   "tools"?: Array<string>;
+};
+
+export type EscalationOption = {
+  "key": string;
+  "label": string;
+};
+
+export type EscalationPacket = {
+  "options": Array<EscalationOption>;
+  "recommendation_reason": string;
+  "recommended"?: string | null;
+  "summary": string;
+  "web_path": string;
 };
 
 export type Event = {
@@ -3244,6 +3278,23 @@ export type OrgSkillMountBody = {
   "skill": string;
 };
 
+export type OverrideBody = {
+  "action": OverrideMode;
+  "reason": string;
+};
+
+export type OverrideMode = "revoke" | "return";
+
+export type OverrideResponse = {
+  "action": string;
+  "new_revision"?: string | null;
+  "new_wait_id"?: string | null;
+  "operation_id": string;
+  "paused_task_ids": Array<string>;
+  "remediation_task_id"?: string | null;
+  "state": string;
+};
+
 export type ParentUnit = {
   "attempt"?: number;
   "plan_id": string;
@@ -4079,6 +4130,24 @@ export type ResolutionAction = {
   "detail": string;
   "kind": ConflictKind;
   "path": string;
+};
+
+export type ResolveBody = {
+  "answer"?: InboxAnswerBody | null;
+  "escalation"?: EscalationPacket | null;
+  "expected_revision": string;
+  "idempotency_key": string;
+  "outcome": ResolveOutcome;
+  "policy_version": string;
+  "reason": string;
+};
+
+export type ResolveOutcome = "answer" | "observe" | "escalate";
+
+export type ResolveResponse = {
+  "item"?: CosInboxItem | null;
+  "notification_id"?: string | null;
+  "operation": OperationView;
 };
 
 export type ResolvedLlmSource = {

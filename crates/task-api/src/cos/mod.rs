@@ -8,7 +8,7 @@
 pub mod inbox;
 pub mod operations;
 pub mod override_op;
-pub(crate) mod triage_view;
+pub mod triage_view;
 
 use axum::Extension;
 use axum::body::Body;

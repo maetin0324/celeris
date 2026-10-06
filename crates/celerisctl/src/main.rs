@@ -24,6 +24,7 @@ use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
 use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
+use commands::models::{self as models_cmd, ModelsCommand};
 use commands::org::{self as org_cmd, OrgCommand};
 use commands::plan::{self, PlanArgs};
 use commands::plan_lint;
@@ -140,6 +141,13 @@ enum Command {
         #[arg(long)]
         config: Option<PathBuf>,
     },
+    /// ADR 2026-10-06 D5: model catalog through the daemon API (`models list|discover`).
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommand,
+        #[arg(long)]
+        config: Option<PathBuf>,
+    },
     /// ADR-0131 付記 D12: 日次知識整理の `curation-plan.json` を daemon と同じ規則で点検する
     /// （`curation validate`）。DB を開かず、ネットワークも使わない。
     Curation {
@@ -241,6 +249,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     match command {
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::Cron { .. } => unreachable!("handled before store open"),
+        Command::Models { .. } => unreachable!("handled before store open"),
         Command::Curation { .. } => unreachable!("handled before store open"),
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
@@ -339,6 +348,15 @@ fn main() -> ExitCode {
     }
     if let Command::Cron { command, config } = cli.command {
         return match cron_cmd::run(config, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {}", error::render(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Models { command, config } = cli.command {
+        return match models_cmd::run(config, command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {}", error::render(&e));

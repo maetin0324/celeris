@@ -69,6 +69,7 @@ export type AccountStats = {
 export type AccountUsageLive = {
   "five_hour"?: RateWindow | null;
   "observed_at": number;
+  "one_month"?: RateWindow | null;
   "seven_day"?: RateWindow | null;
   "source": string;
   "status"?: string | null;
@@ -77,6 +78,7 @@ export type AccountUsageLive = {
 export type AccountUsageView = {
   "five_hour"?: RateWindowView | null;
   "observed_at": string;
+  "one_month"?: RateWindowView | null;
   "seven_day"?: RateWindowView | null;
   "source": string;
   "status"?: string | null;
@@ -517,6 +519,13 @@ export type CatalogCapabilitiesView = {
   "structured_output"?: boolean | null;
   "tools"?: boolean | null;
   "vision"?: boolean | null;
+};
+
+export type CatalogDelta = {
+  "added": Array<string>;
+  "removed": Array<string>;
+  "restored": Array<string>;
+  "source": string;
 };
 
 export type CatalogDeploymentView = {
@@ -1423,6 +1432,31 @@ export type DiffStat = {
   "files": number;
 };
 
+export type DiscoverBody = {
+  "source"?: string | null;
+};
+
+export type DiscoverResponse = {
+  "results": Array<DiscoverySummaryView>;
+  "unavailable": boolean;
+};
+
+export type DiscoveryRecordView = {
+  "at": string;
+  "count": number;
+  "error"?: string | null;
+  "ok": boolean;
+  "source": string;
+};
+
+export type DiscoverySummaryView = {
+  "count": number;
+  "delta": CatalogDelta;
+  "error"?: string | null;
+  "ok": boolean;
+  "source": string;
+};
+
 export type DocCommit = {
   "at": string;
   "author": string;
@@ -2041,6 +2075,12 @@ export type Event = {
   "note"?: string | null;
   "request_id": string;
   "type": "integration_answered";
+} | {
+  "added"?: Array<string>;
+  "removed"?: Array<string>;
+  "restored"?: Array<string>;
+  "source": string;
+  "type": "model_catalog_changed";
 } | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
@@ -2975,6 +3015,35 @@ export type ModelBinding = {
   "unavailable_reason"?: string | null;
 };
 
+export type ModelCatalogItem = {
+  "available": boolean;
+  "capabilities": unknown;
+  "display_name"?: string | null;
+  "first_seen": string;
+  "last_seen": string;
+  "model_id": string;
+  "override"?: ModelCatalogOverrideView | null;
+  "routing": ModelCatalogRoutingView;
+  "source": string;
+};
+
+export type ModelCatalogOverrideView = {
+  "alias"?: string | null;
+  "disabled"?: boolean;
+  "note"?: string | null;
+  "tier"?: Tier | null;
+};
+
+export type ModelCatalogRoutingView = {
+  "deployments": Array<string>;
+  "tiers": Array<string>;
+};
+
+export type ModelCatalogView = {
+  "items": Array<ModelCatalogItem>;
+  "last_discovery": Array<DiscoveryRecordView>;
+};
+
 export type ModelPrefs = {
   "allowed_tiers"?: Array<Tier>;
   "tier"?: Tier | null;
@@ -3696,7 +3765,7 @@ export type QuotaUse = {
   "window": QuotaWindow;
 };
 
-export type QuotaWindow = "five_hour" | "seven_day";
+export type QuotaWindow = "five_hour" | "seven_day" | "one_month";
 
 export type QuotaWindowUse = {
   "after"?: number | null;

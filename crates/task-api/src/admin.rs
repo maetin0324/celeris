@@ -234,8 +234,10 @@ pub struct ProviderConfigFile {
     #[serde(default)]
     pub env_from_secrets: HashMap<String, String>,
     /// ADR-0024 D2: `[accounts]` のプールから選ぶ（`adapter = "claude-code"` かつ `[accounts]` があるときだけ有効）。
+    ///
+    /// ADR 2026-10-06 D2: `"opencode-go"` のように pool の adapter 名を文字列で書ける（人が書いた行を往復で保つ）。
     #[serde(default)]
-    pub account_pool: bool,
+    pub account_pool: task_core::AccountPoolSetting,
     /// ADR-0026 D7: `adapter = "acp"` のときだけ意味を持つ、ACP エージェントの実行ファイルの上書き。
     /// **管理 API はこのフィールドを読み書きしない**（`create`/`patch` の本文に来たら 422 で拒否する。
     /// `handlers::providers::reject_provider_command_and_args` を参照）。人が直接編集した `providers.d/<id>.toml` の値を
@@ -267,15 +269,24 @@ impl ProviderConfigFile {
             concurrency: self.concurrency,
             model: (!self.model.is_empty()).then(|| self.model.clone()),
             env_keys,
-            account_pool: self.account_pool,
+            account_pool: self.account_pool.is_on(),
         }
     }
 
-    fn resolved_llm_source(&self) -> ResolvedLlmSource {
+    pub(crate) fn resolved_llm_source(&self) -> ResolvedLlmSource {
         let derived = match self.adapter.as_str() {
             "fake" => LlmSourceRef::None,
             "claude-code" => LlmSourceRef::ClaudeOauth,
             "codex" => LlmSourceRef::CodexOauth,
+            "acp"
+                if self.model.starts_with("opencode-go/")
+                    || self.account_pool
+                        == task_core::AccountPoolSetting::Adapter(
+                            task_core::AccountAdapter::OpencodeGo,
+                        ) =>
+            {
+                LlmSourceRef::OpencodeGo
+            }
             _ if matches!(
                 self.model.as_str(),
                 "celeris/frontier"
@@ -353,7 +364,7 @@ impl ProviderCreateBody {
             // ADR-0030 D2: 管理 API は env_from_secrets を書かない（`create` された行は必ず空。人が後から
             // ファイルへ足す）。
             env_from_secrets: self.credential_refs,
-            account_pool: self.account_pool,
+            account_pool: self.account_pool.into(),
             // ADR-0026 D7 / ADR-0027 D3: 管理 API は command/args/settings を書かない（`create` された行は
             // 必ず `None`。人が後からファイルへ足す）。
             command: None,
@@ -423,7 +434,11 @@ impl ProviderPatchBody {
             file.env = env.clone();
         }
         if let Some(account_pool) = self.account_pool {
-            file.account_pool = account_pool;
+            // 名前付き pool（"opencode-go"）の行を `true` で上書きしても名前は保つ。`false` は外す。
+            file.account_pool = match (account_pool, file.account_pool) {
+                (true, named @ task_core::AccountPoolSetting::Adapter(_)) => named,
+                (on, _) => on.into(),
+            };
         }
         file
     }

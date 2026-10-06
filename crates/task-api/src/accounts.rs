@@ -82,6 +82,10 @@ pub(crate) fn usage_view_from_observation(
             utilization: w.utilization,
             resets_at: rfc3339_unix(w.resets_at),
         }),
+        one_month: obs.one_month.map(|w| RateWindowView {
+            utilization: w.utilization,
+            resets_at: rfc3339_unix(w.resets_at),
+        }),
         status: obs.status.clone(),
         observed_at: rfc3339_unix(obs.observed_at),
         source: source.to_string(),
@@ -96,6 +100,10 @@ pub(crate) fn usage_view_from_live(live: &task_ops::daemon::AccountUsageLive) ->
             resets_at: rfc3339_unix(w.resets_at),
         }),
         seven_day: live.seven_day.map(|w| RateWindowView {
+            utilization: w.utilization,
+            resets_at: rfc3339_unix(w.resets_at),
+        }),
+        one_month: live.one_month.map(|w| RateWindowView {
             utilization: w.utilization,
             resets_at: rfc3339_unix(w.resets_at),
         }),

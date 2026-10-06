@@ -1394,6 +1394,7 @@ fn pool_dispatcher_with_requeues(
 
 fn usage_window(utilization: f64, resets_at_secs_from_now: i64) -> RateLimitObservation {
     RateLimitObservation {
+        one_month: None,
         five_hour: Some(task_core::RateWindow {
             utilization,
             resets_at: 10_000 + resets_at_secs_from_now,

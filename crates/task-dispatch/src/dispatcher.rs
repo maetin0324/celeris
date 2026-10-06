@@ -1208,6 +1208,9 @@ pub struct Dispatcher {
     publisher: Option<SnapshotPublisher>,
     /// ADR-0024 D2: `account_pool = true` のプロバイダ id。`reload_providers` で差し替える。
     account_pool_providers: std::collections::HashSet<ProviderId>,
+    /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
+    /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
+    account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
     /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
@@ -1493,6 +1496,7 @@ impl Dispatcher {
             ticks: 0,
             publisher: None,
             account_pool_providers,
+            account_pool_adapters: HashMap::new(),
             account_books,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),
@@ -1797,6 +1801,24 @@ impl Dispatcher {
     /// ADR-0053 D1（Phase 65）: `llm-proxy` が同じアカウントプールの cooldown・観測値を共有するための
     /// アクセサでもある（CLI ワーカーの dispatch と**同じ帳簿**を返す。別の写しを作らない）。
     /// そのアダプタの `[accounts]` 根が設定されていなければ `None`。
+    /// `account_pool = "<adapter>"` で pool の adapter を明示した行の対応を差し替える（`reload_providers` と
+    /// 同じ場面で呼ぶ。ADR 2026-10-06 D3）。
+    pub fn set_account_pool_adapters(&mut self, adapters: HashMap<ProviderId, AccountAdapter>) {
+        self.account_pool_adapters = adapters;
+    }
+
+    /// 行 `provider`（adapter 名 `row_adapter`）が使う pool の adapter。明示があればそれ、無ければ行の adapter 名。
+    pub(super) fn pool_adapter_of(
+        &self,
+        provider: &ProviderId,
+        row_adapter: &str,
+    ) -> Option<AccountAdapter> {
+        self.account_pool_adapters
+            .get(provider)
+            .copied()
+            .or_else(|| AccountAdapter::parse(row_adapter))
+    }
+
     pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
         self.account_books.get(&adapter).cloned()
     }

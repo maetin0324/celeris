@@ -165,6 +165,19 @@ struct Selected {
     account: Option<String>,
 }
 
+/// プロバイダ行の pool の adapter（`account_pool = true` は行の adapter 名、`"opencode-go"` 等は明示した名前）。
+fn pool_adapter(
+    config: &Config,
+    provider_id: &str,
+    adapter_kind: &str,
+) -> Option<task_core::AccountAdapter> {
+    config
+        .providers
+        .iter()
+        .find(|p| p.id == provider_id)
+        .and_then(|p| p.account_pool.pool_adapter(adapter_kind))
+}
+
 /// ADR-0024 D2 / ADR-0025 D2: `account_pool = true` のプロバイダのアカウントを決める。`--account` があれば
 /// それ（固定 account_id と異なる指定は拒否）、無ければ固定参照または `<root>/.celeris-usage.json`（永続化された観測値）を読み取り専用で見て選ぶ（`in_use` は 0
 /// 扱い）。`account_pool` でないプロバイダに `--account` を渡したらエラー。アダプタ（claude-code/codex）は
@@ -177,7 +190,7 @@ fn resolve_account(
 ) -> Result<Option<String>, CliError> {
     let provider = config.providers.iter().find(|p| p.id == provider_id);
     let fixed_account = provider.and_then(|p| p.account_id.as_deref());
-    let is_pool = provider.is_some_and(|p| p.account_pool);
+    let is_pool = provider.is_some_and(|p| p.account_pool.is_on());
     if let (Some(fixed), Some(requested)) = (fixed_account, args.account.as_deref())
         && fixed != requested
     {
@@ -193,7 +206,7 @@ fn resolve_account(
         }
         return Ok(None);
     }
-    let account_adapter = task_core::AccountAdapter::parse(adapter_kind).ok_or_else(|| {
+    let account_adapter = pool_adapter(config, provider_id, adapter_kind).ok_or_else(|| {
         CliError::msg(format!("provider {provider_id} has account_pool = true but adapter {adapter_kind:?} is not a pool adapter"))
     })?;
     let accounts = config.accounts.as_ref().ok_or_else(|| {
@@ -284,7 +297,7 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
             // B3: `resolve_account` は `account_pool` のプロバイダでしか `Some` を返さない（そのときは
             // `[accounts]` に対応する根ディレクトリが要る、と検証済み）はずだが、`.expect()` は使わず、
             // 万一の不整合はエラーとして返す。
-            let account_adapter = task_core::AccountAdapter::parse(&adapter_kind).ok_or_else(|| {
+            let account_adapter = pool_adapter(&config, &provider_id, &adapter_kind).ok_or_else(|| {
                 CliError::msg(format!("provider {provider_id} resolved an account but adapter {adapter_kind:?} is not a pool adapter"))
             })?;
             let accounts = config.accounts.as_ref().ok_or_else(|| {
@@ -311,7 +324,7 @@ pub fn run_run(store: &dyn TaskStore, args: WorkerRunArgs) -> Result<ExitCode, C
     };
     let adapter = effective_adapter.as_ref();
     let remaining = account.as_deref().and_then(|id| {
-        let kind = task_core::AccountAdapter::parse(&adapter_kind)?;
+        let kind = pool_adapter(&config, &provider_id, &adapter_kind)?;
         let root = config.accounts.as_ref()?.root_for(kind)?;
         let book = task_dispatch::AccountBook::load(&root.join(".celeris-usage.json"));
         task_dispatch::accounts::measured_remaining(

@@ -10,7 +10,7 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { EventRow } from "../generated/types";
 import {
-  accountKeys,
+  accountKeys, modelKeys,
   approvalKeys,
   boardKeys,
   clusterKeys,
@@ -47,6 +47,7 @@ type Token =
   | "clusters"
   | "providers"
   | "accounts"
+  | "llmModels"
   | "daemonRest";
 
 export type EventContext = {
@@ -160,6 +161,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   delivery_skipped: { sets: ["T", "L", "N"] },
   // ADR-0131 付記（2026-10-04）: 日次整理の適用・commit・push の記録。報告は別に 1 件ある。
   knowledge_curation_applied: { sets: ["T", "N"] },
+  // ADR 2026-10-06 opencode-go-and-model-catalog D4: catalog の入れ替わり。モデル一覧と providers（routing catalog）を古くする。
+  model_catalog_changed: { sets: ["llmModels", "providers"] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。
@@ -218,6 +221,7 @@ const TOKEN_KEYS: Record<Exclude<Token, "P">, (taskId: string) => QueryKey[]> = 
   clusters: () => [clusterKeys.all],
   providers: () => [providerKeys.all],
   accounts: () => [accountKeys.all],
+  llmModels: () => [modelKeys.all],
   daemonRest: () => [daemonKeys.rest()],
 };
 

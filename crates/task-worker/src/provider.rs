@@ -4,6 +4,9 @@
 
 use crate::protocol::ProviderFailure;
 
+// TODO(ADR 2026-10-06 D2): opencode go の 429 `GoUsageLimitError`（`metadata.limitName` と `retry-after`）は、
+// いまは本文の "usage limit" で Exhausted に落ちる。窓（5 時間 / 週 / 月）の特定と `resets_at = now +
+// retry-after` の記録は未実装（acp.rs の失敗経路が本文を持ち回らないため。別 WU）。
 const EXHAUSTED_PATTERNS: &[&str] = &["usage limit", "quota", "credit balance"];
 const THROTTLED_PATTERNS: &[&str] = &["rate limit", "rate_limit", "overloaded"];
 const THROTTLED_CODES: &[&str] = &["429", "529"];

@@ -267,6 +267,12 @@ pub struct ApiV1Schema {
     pub cron_job_list: crate::cron_jobs::CronJobList,
     pub cron_job_run_list: crate::cron_jobs::CronJobRunList,
     pub cron_run_result: crate::cron_jobs::CronRunResult,
+    /// ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。
+    pub model_catalog: crate::model_catalog::ModelCatalogView,
+    pub model_catalog_item: crate::model_catalog::ModelCatalogItem,
+    pub model_catalog_override: crate::model_catalog::ModelCatalogOverrideView,
+    pub model_discover: crate::model_catalog::DiscoverBody,
+    pub model_discover_result: crate::model_catalog::DiscoverResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

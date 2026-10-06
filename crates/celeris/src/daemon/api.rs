@@ -127,7 +127,7 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
                     concurrency: p.concurrency,
                     model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
                     env_keys,
-                    account_pool: p.account_pool,
+                    account_pool: p.account_pool.is_on(),
                 }
             })
             .collect(),
@@ -352,6 +352,8 @@ pub fn api_settings(
             Arc::new(RoutingCatalogAdapter(Arc::clone(snapshot)))
                 as task_api::SharedRoutingCatalogReader
         }),
+        // ADR 2026-10-06 D5: `POST /llm/models/discover` の実行は `wire_model_discovery` が差す（store と config を持つ側）。
+        model_discovery: None,
         // ADR-0079 R4a: 木の view の上限の使用率（`GET /tasks/{id}/task-tree`）。
         tree_limits: config.execution.tree.limits(),
     }
@@ -448,6 +450,11 @@ pub(crate) async fn start_api(
         role,
         llm_proxy_state,
     );
+    // ADR 2026-10-06 D5: 手動の発見。起動時の設定の写しで対象を組む（reload で足した source は次の起動から）。
+    settings.model_discovery = Some(Arc::new(crate::model_discovery::DaemonDiscoveryHook {
+        store: dispatcher.store(),
+        config: Arc::new(config.clone()),
+    }));
     match (
         &config.api.browser_attestation_public_key_file,
         &config.api.browser_credentiald_control_socket,

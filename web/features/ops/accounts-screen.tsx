@@ -22,11 +22,16 @@ import { cn } from "../../lib/utils";
 import { McpClientsSection } from "./mcp-clients";
 import { SecretsSection } from "./secrets-section";
 
+/** account の道具（adapter）の表示名。未知の値はそのまま。 */
+export function adapterLabel(adapter: string): string {
+  return adapter === "opencode-go" ? "OpenCode Go" : adapter;
+}
+
 type Sender = ReturnType<typeof useActionResult>;
 // 枠の色は styles.css の @layer base（--color-input）に任せ、ここでは寸法だけを持つ。
 const inputClass = "block w-full min-h-11 rounded border p-2";
 const fieldErrorClass = "mt-1 text-label text-danger-foreground";
-export const ADAPTER_CHOICES = ["claude-code", "codex"] as const;
+export const ADAPTER_CHOICES = ["claude-code", "codex", "opencode-go"] as const;
 
 /** ログイン中の状態（url・user_code）は account 単位で画面の state に持つ。取り直しでは消さない。 */
 type Logins = Record<string, AccountLoginStart>;
@@ -53,6 +58,7 @@ export const EXCLUDED_REASON_LABEL: Readonly<Record<string, string>> = {
   cooldown: "cooldown 中",
   five_hour_exhausted: "短期枠を使い切りました",
   seven_day_exhausted: "長期枠を使い切りました",
+  one_month_exhausted: "1 か月の枠切れ",
   rejected: "拒否されました",
 };
 
@@ -96,7 +102,7 @@ export function formatRemaining(ms: number): string {
 
 type RateWindow = { utilization: number; resets_at: string };
 
-/** 5 時間枠・7 日枠の残量。残り時間は取得時刻（server 時計に補正）を基準にする。窓が無ければ「-」。 */
+/** 5 時間枠・7 日枠・1 か月枠の残量。残り時間は取得時刻（server 時計に補正）を基準にする。窓が無ければ「不明」（0% とは書かない）。 */
 export function UsageBar({
   label,
   window,
@@ -111,8 +117,12 @@ export function UsageBar({
       <div className="min-w-0" data-usage-window="none">
         <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 text-label">
           <span className="font-medium text-foreground">{label}</span>
-          <span className="text-muted-foreground">-（観測なし）</span>
+          <span className="text-muted-foreground">不明</span>
         </div>
+        <div
+          aria-hidden="true"
+          className="mt-1 h-2 w-full overflow-hidden rounded-full border border-border bg-muted"
+        />
       </div>
     );
   }
@@ -228,6 +238,7 @@ export function AccountCard({
       <section className="min-w-0 space-y-3" aria-label={`使用量 ${item.id}`}>
         <UsageBar label="短期枠（5時間）" window={item.usage?.five_hour} fetchedAtMs={fetchedAtMs} />
         <UsageBar label="長期枠（7日）" window={item.usage?.seven_day} fetchedAtMs={fetchedAtMs} />
+        <UsageBar label="月間枠（1か月）" window={item.usage?.one_month} fetchedAtMs={fetchedAtMs} />
       </section>
       <DataList
         items={[
@@ -253,7 +264,7 @@ export function AccountCard({
                   ? `除外: ${excludedReasonLabel(item.excluded_reason)}`
                   : "-",
           },
-          { key: "adapter", label: "道具", value: adapter },
+          { key: "adapter", label: "道具", value: adapterLabel(adapter) },
           {
             key: "credential",
             label: "認証情報",
@@ -465,7 +476,7 @@ function CreateForm({ sender, blocked, deniedId }: { sender: Sender; blocked: bo
           <select className={inputClass} value={adapter} onChange={(e) => setAdapter(e.target.value)}>
             {ADAPTER_CHOICES.map((a) => (
               <option key={a} value={a}>
-                {a}
+                {adapterLabel(a)}
               </option>
             ))}
           </select>

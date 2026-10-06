@@ -41,6 +41,7 @@ export const screens = [
   { path: "/plans/new", fixture: "/plans/new", heading: "計画の作成", v3: true },
   { path: "/daemon", fixture: "/daemon", heading: "daemon", v3: true },
   { path: "/providers", fixture: "/providers", heading: "プロバイダ", v3: true },
+  { path: "/models", fixture: "/models", heading: "モデル", v3: true },
   { path: "/accounts", fixture: "/accounts", heading: "アカウント", v3: true },
   { path: "/clusters", fixture: "/clusters", heading: "クラスタ", v3: true },
   { path: "/releases", fixture: "/releases", heading: "リリース", v3: true },

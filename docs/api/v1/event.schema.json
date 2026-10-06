@@ -4051,6 +4051,44 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
+          "properties": {
+            "added": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "removed": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "restored": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "const": "model_catalog_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -5812,12 +5850,21 @@
       ]
     },
     "QuotaWindow": {
-      "description": "D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。",
-      "enum": [
-        "five_hour",
-        "seven_day"
-      ],
-      "type": "string"
+      "description": "D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。",
+      "oneOf": [
+        {
+          "enum": [
+            "five_hour",
+            "seven_day"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "one_month",
+          "description": "opencode go の 1 か月窓（ADR 2026-10-06 D1）。",
+          "type": "string"
+        }
+      ]
     },
     "QuotaWindowUse": {
       "description": "D4.3: run 1 件・窓 1 つの消費。",

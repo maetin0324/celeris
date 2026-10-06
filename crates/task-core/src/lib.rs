@@ -95,7 +95,7 @@ pub mod tree_metrics;
 pub mod workspace_config;
 pub mod write_set;
 
-pub use accounts::{AccountAdapter, RateLimitObservation, RateWindow};
+pub use accounts::{AccountAdapter, AccountPoolSetting, RateLimitObservation, RateWindow};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
 pub use artifacts::{
     ARTIFACTS_DIR_NAME, SHARED_ARTIFACTS_PREFIX, artifacts_dir_for, artifacts_rel_for,
@@ -157,6 +157,7 @@ pub use model::{
     priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
+pub mod model_catalog;
 pub mod model_router;
 pub mod pricing;
 pub mod routing;
@@ -207,9 +208,10 @@ pub use repos::{
 };
 pub use store::{
     ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
-    ListFilter, ListOrder, LockCounts, Page, ProjectPlanApply, ProjectPlanMilestoneChange,
-    SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption,
-    backup_database, event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
+    ListFilter, ListOrder, LockCounts, ModelCatalogStore, Page, ProjectPlanApply,
+    ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore,
+    TreeAdoption, backup_database, event_row_schema_value, integrity_check, is_busy_error,
+    is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

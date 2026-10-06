@@ -1667,6 +1667,17 @@ pub enum Event {
         #[serde(default)]
         note: Option<String>,
     },
+    /// ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、
+    /// `model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。
+    ModelCatalogChanged {
+        source: String,
+        #[serde(default)]
+        added: Vec<String>,
+        #[serde(default)]
+        removed: Vec<String>,
+        #[serde(default)]
+        restored: Vec<String>,
+    },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
     /// 1 回だけ）。

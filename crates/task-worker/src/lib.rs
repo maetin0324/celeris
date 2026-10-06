@@ -26,6 +26,7 @@ pub mod claude_code;
 pub mod cluster_login;
 pub mod codex;
 pub mod codex_account;
+pub mod opencode_account;
 /// ADR-0043 D3（Phase 56）: ハーネスの CLI をコンテナの中で起こす（runtime 検出・包み方・イメージ）。
 pub mod container;
 pub mod db_guard;
@@ -81,6 +82,7 @@ pub use cluster_login::{
 };
 pub use codex::{CodexAdapter, CodexConfig, CodexResumeBypass, CodexResumeMode};
 pub use codex_account::{CodexLoginSession, check_account_codex, start_login_codex};
+pub use opencode_account::check_account_opencode_go;
 pub use container::{
     ContainerChoice, ContainerPlan, ContainerStop, ContainerStopper, ImageSource, RepoRunInput,
     Runtime, RuntimePreference, RuntimeProbe, SharedPlan,

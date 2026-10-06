@@ -277,7 +277,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（177 = 表 171 + browser 制御 6）
+## 2. エンドポイント一覧（182 = 表 176 + browser 制御 6）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -459,6 +459,10 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 | 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
 | 178 | GET | `/llm/routing/catalog` | モデル・deployment・lane policy の設定 snapshot（Phase 1、読取専用） | `RoutingCatalogView` | celeris の `RoutingCatalogReader` |
+| 179 | GET | `/llm/models` | 自動発見したモデル catalog と上書き・routing での使われ方・最終発見記録（§3.127。ADR 2026-10-06 D5） | `ModelCatalogView` | store `model_catalog_list` |
+| 180 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
+| 181 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
+| 182 | POST | `/llm/models/discover` | 発見を今すぐ走らせる（202） | `DiscoverResponse` | celeris の `ModelDiscoveryHook` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3201,6 +3205,47 @@ path は event の `log_path` から引き、要求からは受け取らない�
   `exit?`・`duration_ms?`・`size`（ログの大きさ。まだ無ければ 0）・`truncated`（前を切った）・`tail`（UTF-8 の境界で切る）。
 - その WU に検査の開始が無ければ 404 `file_not_found`、不明な task は 404 `task_not_found`。
 - GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
+
+### 3.127 モデル catalog（ADR 2026-10-06 D4 / D5）
+
+利用可能モデルは daemon が定期的（`[model_catalog] refresh_interval_seconds`、既定 3600、`0` で無効）に発見して
+SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行だけで、LLM は呼ばない。`source` は
+`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`。取得に失敗した source は catalog を変えず、
+失敗だけを `last_discovery` に残す（消えたと誤認しない）。今回見えなかった既存のモデルは行を残して `available = false`。
+追加・消失・復活は event `model_catalog_changed`（`source`・`added[]`・`removed[]`・`restored[]`）に追記する
+（task に属さないので、nil ULID の疑似 task の列）。
+
+#### 3.127.1 `GET /llm/models` → 200 `ModelCatalogView`
+
+通常の読み取り認証。クエリは受け付けない。
+
+```json
+{"items": [{"source": "opencode-go", "model_id": "glm-5", "display_name": null, "available": true,
+            "first_seen": "2026-10-06T00:00:00Z", "last_seen": "2026-10-06T01:00:00Z", "capabilities": {},
+            "override": {"disabled": false, "tier": "cheap", "alias": null, "note": null},
+            "routing": {"tiers": ["cheap"], "deployments": ["provider:opencode-go/cheap"]}}],
+ "last_discovery": [{"source": "opencode-go", "at": "2026-10-06T01:00:00Z", "ok": true, "error": null, "count": 12}]}
+```
+
+- `items` は `source`・`model_id` の昇順。`override` は人の上書き（無ければ `null`）。
+- `routing` は routing catalog の deployment（`source_ref` と `upstream_model`。`<source>/` 接頭辞は外して比べる）との
+  突き合わせ。routing catalog を渡せない daemon では空。catalog は config を**足さない**（新モデルを自動で routing に入れない）。
+- `last_discovery` は source ごとの最後の発見（`ok = false` なら `error` に理由。`count` は成功時の件数）。
+
+#### 3.127.2 `PUT` / `DELETE /llm/models/{source}/{model_id}/override`
+
+管理系（bearer 必須）。`PUT` の本文 `{disabled?, tier?, alias?, note?}`（`tier` は `frontier|standard|cheap`）を
+置き換えで保存し、200 で `ModelCatalogItem` を返す。catalog に無いモデルにも置ける（その場合 `available = false` の行で返る）。
+`disabled = true` か catalog で `available = false` のモデルの deployment は routing の候補から外れる
+（`celeris::config::apply_model_catalog`）。上書きは自動の発見では書き換わらない。不明な `source`・不正な `tier` は 400。
+`model_id` に `/` を含むものは `%2F` で符号化する。`DELETE` は 204、上書きが無ければ 404 `model_override_not_found`。
+
+#### 3.127.3 `POST /llm/models/discover` → 202 `DiscoverResponse`
+
+管理系。本文 `{source?}`（省略で全 source）。daemon が発見の係を渡していれば同期に走らせ、
+`{"results": [{"source", "ok", "count", "error", "delta": {"source", "added", "removed", "restored"}}], "unavailable": false}`
+を返す。係が無い process（試験・standby 等）では `{"results": [], "unavailable": true}`。不明な `source` は 400。
+`celerisctl models list|discover [--source S]` が同じ API を呼ぶ。
 
 
 ## 4. SSE `GET /stream`

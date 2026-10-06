@@ -31,6 +31,7 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod model_catalog;
 mod model_routing;
 mod org;
 mod providers;
@@ -53,6 +54,7 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use model_catalog::*;
 pub use model_routing::*;
 pub use org::*;
 pub use providers::*;
@@ -231,6 +233,9 @@ pub struct Config {
     /// Phase 1 model catalog and lane policies; legacy remains the default execution mode.
     #[serde(default)]
     pub model_routing: ModelRoutingConfig,
+    /// ADR 2026-10-06 D4: `[model_catalog]`。利用可能モデルの自動発見（周期・opencode go の取得先）。
+    #[serde(default)]
+    pub model_catalog: ModelCatalogConfig,
     /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
     #[serde(skip)]
     pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,

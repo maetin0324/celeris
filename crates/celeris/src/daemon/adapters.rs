@@ -347,7 +347,7 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
                 in_use_cos: 0,
                 // ADR-0022 D2: 確認の記録は Dispatcher 側（SnapshotPublisher.provider_checks）が持つ。
                 last_check: None,
-                account_pool: p.account_pool,
+                account_pool: p.account_pool.is_on(),
             }
         })
         .collect()

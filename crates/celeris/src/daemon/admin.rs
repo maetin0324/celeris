@@ -206,6 +206,7 @@ pub(crate) fn reload_providers(
         adapters,
         new_config.account_pool_providers(),
     );
+    dispatcher.set_account_pool_adapters(new_config.account_pool_adapters());
     // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
     dispatcher.set_local_providers(new_config.local_cheap_providers());
     dispatcher.set_snapshot_providers(provider_lives(&new_config));
@@ -245,6 +246,9 @@ pub(crate) fn reload_providers(
     } else {
         config.routing_catalog_state = new_config.routing_catalog_state;
     }
+    // ADR 2026-10-06 D4: reload で組み直した snapshot にも catalog の `available` と上書きを当て直す
+    // （外す deployment が無ければ snapshot はそのまま）。
+    crate::model_discovery::apply_catalog_to_snapshot(dispatcher.store().as_ref(), config);
     // Phase 5: estimator sidecar も新しい snapshot から組み直す（締める・off へ戻すのも再起動なし）。
     super::routing_sidecar::reload_estimator_sidecar(config);
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;

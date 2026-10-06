@@ -130,7 +130,7 @@ pub(super) async fn create_account(
     }
     let Some(account_adapter) = task_core::AccountAdapter::parse(&create.adapter) else {
         return Err(ApiProblem::bad_request(
-            "adapter must be claude-code or codex",
+            "adapter must be claude-code, codex or opencode-go",
         ));
     };
     let Some(root) = state.inner.accounts_roots.get(&account_adapter).cloned() else {
@@ -333,6 +333,8 @@ pub(super) async fn start_account_login(
             let kind = match adapter {
                 task_core::AccountAdapter::ClaudeCode => "paste_code",
                 task_core::AccountAdapter::Codex => "device_code",
+                // 中継するログインは無い（celeris が LoginFailed で返すので通常ここには来ない）。
+                task_core::AccountAdapter::OpencodeGo => "manual",
             };
             Ok(json_response(
                 StatusCode::OK,

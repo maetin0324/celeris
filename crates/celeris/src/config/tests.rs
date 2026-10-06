@@ -2580,6 +2580,61 @@ fn account_pool_for_codex_requires_codex_dir_specifically() {
     assert_eq!(cfg.account_pool_providers(), ["pool".to_string()].into());
 }
 
+/// ADR 2026-10-06 D2 / D3: `adapter = "acp"` + `llm_source = "opencode_go"` + `account_pool = "opencode-go"` の行は
+/// `[accounts] opencode_dir` があれば通り、無ければ設定エラー。
+#[test]
+fn opencode_go_pool_row_requires_opencode_dir() {
+    let row = "[[providers]]\nid = \"go\"\nadapter = \"acp\"\nllm_source = \"opencode_go\"\nmodel = \"opencode-go/kimi-k3\"\naccount_pool = \"opencode-go\"\ntiers = [\"standard\"]\n";
+    let cfg: Config =
+        toml::from_str(&format!("[accounts]\nopencode_dir = \"acct\"\n{row}")).unwrap();
+    cfg.validate().expect("opencode_dir set: valid");
+    assert_eq!(cfg.account_pool_providers(), ["go".to_string()].into());
+    assert_eq!(
+        cfg.account_pool_adapters().get("go"),
+        Some(&AccountAdapter::OpencodeGo)
+    );
+    assert_eq!(
+        cfg.accounts.as_ref().unwrap().opencode_go_usage_url,
+        "https://opencode.ai/zen/go/v1/usage"
+    );
+    assert_eq!(
+        cfg.provider_llm_source("go").unwrap().source,
+        task_core::LlmSourceRef::OpencodeGo
+    );
+
+    // opencode_dir が無い（claude_dir だけ）と拒否。
+    let cfg: Config = toml::from_str(&format!("[accounts]\nclaude_dir = \"acct\"\n{row}")).unwrap();
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("opencode_dir"), "{err}");
+
+    // opencode_go は acp 以外の adapter では使えない。
+    let cfg: Config = toml::from_str(
+        "[accounts]\nopencode_dir = \"acct\"\n[[providers]]\nid = \"x\"\nadapter = \"codex\"\nllm_source = \"opencode_go\"\n",
+    )
+    .unwrap();
+    assert!(cfg.validate().is_err());
+}
+
+/// ADR 2026-10-06 D3: 例の設定 `config/celeris.opencode-go.example.toml` が読めて、routing の source 名が
+/// `opencode-go`（subscription）になる。
+#[test]
+fn opencode_go_example_config_loads_and_routes_as_opencode_go_subscription() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../config/celeris.opencode-go.example.toml");
+    let cfg = Config::load(&path).expect("example loads");
+    let catalog = cfg.routing_catalog().expect("catalog");
+    let dep = catalog
+        .deployments
+        .iter()
+        .find(|d| d.id == "provider:opencode-go")
+        .expect("deployment");
+    assert_eq!(dep.source_ref, "opencode-go");
+    assert_eq!(
+        dep.billing,
+        task_core::model_router::profiles::Billing::Subscription
+    );
+}
+
 /// `[accounts]` の既定値と、相対 `claude_dir`/`codex_dir` の解決（設定ファイル基準）。
 #[test]
 fn accounts_section_defaults_and_relative_dirs_are_resolved() {

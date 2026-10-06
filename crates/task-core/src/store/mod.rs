@@ -104,6 +104,8 @@ mod execution;
 mod instances;
 mod integrations;
 mod messages;
+mod model_catalog;
+pub use model_catalog::ModelCatalogStore;
 pub(crate) mod migrations;
 mod org;
 mod projects;

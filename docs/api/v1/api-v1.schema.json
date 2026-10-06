@@ -125,7 +125,7 @@
           ]
         },
         "excluded_reason": {
-          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"rejected\"`。",
+          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"one_month_exhausted\" | \"rejected\"`。",
           "type": [
             "string",
             "null"
@@ -325,6 +325,17 @@
           "format": "int64",
           "type": "integer"
         },
+        "one_month": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1 か月窓（opencode go。ADR 2026-10-06 D1）。観測できなければ `None`（『不明』）。"
+        },
         "seven_day": {
           "anyOf": [
             {
@@ -367,6 +378,18 @@
         },
         "observed_at": {
           "type": "string"
+        },
+        "one_month": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateWindowView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "1 か月窓（opencode go）。観測できなければ `null`（画面では『不明』。0 にしない）。"
         },
         "seven_day": {
           "anyOf": [
@@ -418,7 +441,7 @@
           "type": "string"
         },
         "excluded_reason": {
-          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"rejected\"`。",
+          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"one_month_exhausted\" | \"rejected\"`。",
           "type": [
             "string",
             "null"
@@ -2544,6 +2567,39 @@
           ]
         }
       },
+      "type": "object"
+    },
+    "CatalogDelta": {
+      "description": "1 回の反映で変わったモデル。",
+      "properties": {
+        "added": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "restored": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "added",
+        "removed",
+        "restored"
+      ],
       "type": "object"
     },
     "CatalogDeploymentView": {
@@ -7038,6 +7094,105 @@
       ],
       "type": "object"
     },
+    "DiscoverBody": {
+      "additionalProperties": false,
+      "description": "`POST /llm/models/discover` の本文。",
+      "properties": {
+        "source": {
+          "default": null,
+          "description": "1 source だけ走らせる（省略で全 source）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DiscoverResponse": {
+      "description": "`POST /llm/models/discover` の応答。",
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySummaryView"
+          },
+          "type": "array"
+        },
+        "unavailable": {
+          "description": "daemon が発見の係を渡していない（この process では発見できない）とき `true`。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "results",
+        "unavailable"
+      ],
+      "type": "object"
+    },
+    "DiscoveryRecordView": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "at",
+        "ok",
+        "count"
+      ],
+      "type": "object"
+    },
+    "DiscoverySummaryView": {
+      "description": "発見 1 source の結果の要約。",
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delta": {
+          "$ref": "#/$defs/CatalogDelta",
+          "description": "失敗したときは空の delta。"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "ok",
+        "count",
+        "delta"
+      ],
+      "type": "object"
+    },
     "DocCommit": {
       "description": "コミット 1 件（ツリーの「最終コミット」とページの履歴）。",
       "properties": {
@@ -10417,6 +10572,44 @@
             "type",
             "request_id",
             "answer"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
+          "properties": {
+            "added": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "removed": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "restored": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "const": "model_catalog_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
           ],
           "type": "object"
         },
@@ -15108,6 +15301,137 @@
       ],
       "type": "object"
     },
+    "ModelCatalogItem": {
+      "properties": {
+        "available": {
+          "type": "boolean"
+        },
+        "capabilities": true,
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first_seen": {
+          "description": "RFC3339（UTC）。",
+          "type": "string"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCatalogOverrideView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "人の上書き（無ければ `null`）。"
+        },
+        "routing": {
+          "$ref": "#/$defs/ModelCatalogRoutingView"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "model_id",
+        "available",
+        "first_seen",
+        "last_seen",
+        "capabilities",
+        "routing"
+      ],
+      "type": "object"
+    },
+    "ModelCatalogOverrideView": {
+      "additionalProperties": false,
+      "description": "上書きの本文・応答。",
+      "properties": {
+        "alias": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "routing で使う tier の上書き（無ければ `null`）。"
+        }
+      },
+      "type": "object"
+    },
+    "ModelCatalogRoutingView": {
+      "description": "routing で使われている tier・deployment（routing catalog の `source_ref` と `upstream_model` で突き合わせる）。",
+      "properties": {
+        "deployments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tiers",
+        "deployments"
+      ],
+      "type": "object"
+    },
+    "ModelCatalogView": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ModelCatalogItem"
+          },
+          "type": "array"
+        },
+        "last_discovery": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryRecordView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "last_discovery"
+      ],
+      "type": "object"
+    },
     "ModelPrefs": {
       "additionalProperties": false,
       "description": "ADR-0046 D1: モデルの段（`tier` は子が勝つ、`allowed_tiers` は交わり）。",
@@ -18913,12 +19237,21 @@
       "type": "object"
     },
     "QuotaWindow": {
-      "description": "D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。",
-      "enum": [
-        "five_hour",
-        "seven_day"
-      ],
-      "type": "string"
+      "description": "D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。",
+      "oneOf": [
+        {
+          "enum": [
+            "five_hour",
+            "seven_day"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "one_month",
+          "description": "opencode go の 1 か月窓（ADR 2026-10-06 D1）。",
+          "type": "string"
+        }
+      ]
     },
     "QuotaWindowUse": {
       "description": "D4.3: run 1 件・窓 1 つの消費。",
@@ -18967,7 +19300,7 @@
       "type": "object"
     },
     "RateWindow": {
-      "description": "1 つの枠（5 時間 / 7 日）の観測値。",
+      "description": "1 つの枠（5 時間 / 7 日 / 1 か月）の観測値。",
       "properties": {
         "resets_at": {
           "description": "枠がリセットされる時刻（Unix 秒、`resetsAt`）",
@@ -27452,6 +27785,22 @@
     "milestone_patch": {
       "$ref": "#/$defs/MilestonePatchBody"
     },
+    "model_catalog": {
+      "$ref": "#/$defs/ModelCatalogView",
+      "description": "ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。"
+    },
+    "model_catalog_item": {
+      "$ref": "#/$defs/ModelCatalogItem"
+    },
+    "model_catalog_override": {
+      "$ref": "#/$defs/ModelCatalogOverrideView"
+    },
+    "model_discover": {
+      "$ref": "#/$defs/DiscoverBody"
+    },
+    "model_discover_result": {
+      "$ref": "#/$defs/DiscoverResponse"
+    },
     "new_plan": {
       "$ref": "#/$defs/NewPlanSpec"
     },
@@ -27879,7 +28228,12 @@
     "cron_job",
     "cron_job_list",
     "cron_job_run_list",
-    "cron_run_result"
+    "cron_run_result",
+    "model_catalog",
+    "model_catalog_item",
+    "model_catalog_override",
+    "model_discover",
+    "model_discover_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

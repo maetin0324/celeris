@@ -5,6 +5,7 @@ use super::*;
 #[test]
 fn window_remaining_table() {
     let obs = RateLimitObservation {
+        one_month: None,
         five_hour: Some(RateWindow {
             utilization: 0.3,
             resets_at: 2_000,
@@ -51,6 +52,7 @@ fn window_remaining_table() {
 #[test]
 fn missing_stale_and_expired_quota_are_unknown() {
     let mut obs = RateLimitObservation {
+        one_month: None,
         five_hour: Some(RateWindow {
             utilization: 0.5,
             resets_at: 2000,

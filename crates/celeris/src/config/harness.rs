@@ -217,7 +217,7 @@ impl Config {
             model: FakeAdapter::ID.to_string(),
             env: HashMap::new(),
             env_from_secrets: HashMap::new(),
-            account_pool: false,
+            account_pool: task_core::AccountPoolSetting::Off,
             command: None,
             args: None,
             settings: None,

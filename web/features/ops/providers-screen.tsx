@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { type ReactNode, type RefObject, useId, useRef, useState } from "react";
 import { apiGet } from "../../api/client";
 import type {
@@ -14,7 +15,7 @@ import { ActionResultView, useActionResult } from "../../components/actions/use-
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { Button, buttonClassName } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -575,7 +576,15 @@ export function ProvidersScreen() {
   const deniedId = denied ? deniedNoticeId : undefined;
   const reload = sender.results.reload;
   return (
-    <ScreenFrame title="プロバイダ" route="/providers">
+    <ScreenFrame
+      title="プロバイダ"
+      route="/providers"
+      actions={
+        <Link to="/models" className={buttonClassName}>
+          モデル一覧
+        </Link>
+      }
+    >
       <FetchFrame query={query} subject="プロバイダ">
         {query.data && (
           <div className="min-w-0 space-y-6">

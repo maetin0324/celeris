@@ -1,7 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { AccountView } from "../../api/generated/types";
-import { AccountCard, accountState, excludedReasonLabel, formatRemaining, usageTone } from "./accounts-screen";
+import {
+  AccountCard,
+  ADAPTER_CHOICES,
+  accountState,
+  excludedReasonLabel,
+  formatRemaining,
+  usageTone,
+} from "./accounts-screen";
 
 const stats = { done: 1, error: 0, input_tokens: 0, output_tokens: 0, runs: 1 };
 const account = (over: Partial<AccountView>): AccountView => ({
@@ -139,11 +146,51 @@ describe("使用量（5 時間枠・7 日枠）", () => {
   it("窓なし・usage なし: meter を出さず「-」", () => {
     const none = render(account({ score: 0.9, usage: { ...usage(null, null) } }));
     expect(meters(none)).toHaveLength(0);
-    expect(none.match(/data-usage-window="none"/g)?.length).toBe(2);
-    expect(none).toContain("-（観測なし）");
+    expect(none.match(/data-usage-window="none"/g)?.length).toBe(3);
+    expect(none).toContain("不明");
+    expect(none).not.toContain("0%");
     const absent = render(account({}));
     expect(meters(absent)).toHaveLength(0);
-    expect(absent.match(/data-usage-window="none"/g)?.length).toBe(2);
+    expect(absent.match(/data-usage-window="none"/g)?.length).toBe(3);
+  });
+
+  it("opencode-go: 3 本の meter が割合とリセット時刻を持つ", () => {
+    const out = render(
+      account({
+        adapter: "opencode-go",
+        usage: {
+          source: "opencode-go",
+          status: "allowed",
+          observed_at: iso(-60_000),
+          five_hour: { utilization: 0.1, resets_at: iso(2 * 3_600_000) },
+          seven_day: { utilization: 0.5, resets_at: iso(3 * 86_400_000) },
+          one_month: { utilization: 0.95, resets_at: iso(20 * 86_400_000) },
+        },
+      }),
+    );
+    const [five, seven, month] = meters(out);
+    expect(meters(out)).toHaveLength(3);
+    expect(five).toContain('aria-valuenow="10"');
+    expect(seven).toContain('aria-valuenow="50"');
+    expect(month).toContain('aria-label="月間枠（1か月）"');
+    expect(month).toContain('aria-valuetext="使用 95% / 残り 5%・上限間近・リセットまで 20日"');
+    expect(out).toContain("リセットまで 2時間");
+    expect(out).toContain("リセットまで 20日");
+    expect(out).toContain("OpenCode Go");
+    expect(out).toContain("opencode-go・allowed");
+  });
+
+  it("claude: one_month が null の 3 本目は「不明」で 0% にしない", () => {
+    const out = render(account({ usage: { ...usage(0.2, 0.3), one_month: null } }));
+    expect(meters(out)).toHaveLength(2);
+    expect(out.match(/data-usage-window="none"/g)?.length).toBe(1);
+    expect(out).toContain("月間枠（1か月）");
+    expect(out).toContain("不明");
+  });
+
+  it("道具の選択肢と 1 か月枠の除外理由", () => {
+    expect(ADAPTER_CHOICES).toContain("opencode-go");
+    expect(excludedReasonLabel("one_month_exhausted")).toBe("1 か月の枠切れ（one_month_exhausted）");
   });
 
   it("段階・残り時間・除外理由の変換", () => {

@@ -44,6 +44,7 @@ pub(super) fn excluded_reason_name(reason: ExcludedReason) -> &'static str {
         ExcludedReason::Cooldown => "cooldown",
         ExcludedReason::FiveHourExhausted => "five_hour_exhausted",
         ExcludedReason::SevenDayExhausted => "seven_day_exhausted",
+        ExcludedReason::OneMonthExhausted => "one_month_exhausted",
         ExcludedReason::Rejected => "rejected",
     }
 }
@@ -457,7 +458,8 @@ impl Dispatcher {
                         continue;
                     }
                     if is_pool {
-                        let Some(account_adapter) = AccountAdapter::parse(&adapter) else {
+                        let Some(account_adapter) = self.pool_adapter_of(&provider, &adapter)
+                        else {
                             record(ProviderCandidateOutcome::NoAccount);
                             full.insert(provider);
                             continue;

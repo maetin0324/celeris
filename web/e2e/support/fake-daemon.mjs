@@ -621,6 +621,83 @@ export const routingEstimatorShadowFixture = {
   unbound_requests: [],
 };
 
+// ADR 2026-10-06-opencode-go-and-model-catalog D1/D2/D5: GET /llm/models。source ごとの model・発見の結果・人の上書き。
+export const modelCatalogFixture = {
+  items: [
+    {
+      source: "opencode-go",
+      model_id: "glm-5",
+      display_name: "GLM 5",
+      available: true,
+      first_seen: "2026-10-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: { tools: true },
+      override: null,
+      routing: { tiers: ["standard"], deployments: ["opencode-go/glm-5"] },
+    },
+    {
+      source: "opencode-go",
+      model_id: "kimi-k2",
+      display_name: "Kimi K2",
+      available: true,
+      first_seen: "2026-10-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: [], deployments: [] },
+    },
+    {
+      source: "opencode-go",
+      model_id: "retired-model",
+      display_name: null,
+      available: false,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-09-20T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: [], deployments: [] },
+    },
+    {
+      source: "claude-oauth",
+      model_id: "claude-opus-4",
+      display_name: "Claude Opus 4",
+      available: true,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: ["frontier"], deployments: ["claude-oauth/opus"] },
+    },
+    {
+      source: "claude-oauth",
+      model_id: "claude-sonnet-4",
+      display_name: "Claude Sonnet 4",
+      available: true,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: ["standard"], deployments: [] },
+    },
+    {
+      source: "openai-compatible:qwen",
+      model_id: "qwen3-coder",
+      display_name: "Qwen3 Coder",
+      available: true,
+      first_seen: "2026-09-10T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: { disabled: false, tier: "cheap", alias: null, note: null },
+      routing: { tiers: ["cheap"], deployments: ["qwen/qwen3-coder"] },
+    },
+  ],
+  last_discovery: [
+    { source: "opencode-go", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 3 },
+    { source: "claude-oauth", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 2 },
+    { source: "openai-compatible:qwen", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 1 },
+  ],
+};
+
 // ADR 2026-10-04-multi-objective-model-routing §6/§8 Phase 2: GET /llm/sources の deployment 状態。
 // 観測が無い・期限切れの値、請求と機会費用が別の欄、欠測の残量を含める（欠測は 0 にしない）。
 export const llmSourcesFixture = {
@@ -2280,10 +2357,40 @@ export function createFakeDaemon({
     // accounts/clusters (P4-13..15)
     // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
     // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
-    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
       if (!server.fakeAc) {
         server.fakeAc = {
-          accounts: [{ id: "main", adapter: "claude-code", logged_in: true, login_pending: false }],
+          accounts: [
+            {
+              id: "main",
+              adapter: "claude-code",
+              logged_in: true,
+              login_pending: false,
+              usage: {
+                source: "statusline",
+                status: "allowed",
+                observed_at: "2026-10-06T00:00:00Z",
+                five_hour: { utilization: 0.2, resets_at: "2099-01-01T05:00:00Z" },
+                seven_day: { utilization: 0.4, resets_at: "2099-01-07T00:00:00Z" },
+                one_month: null,
+              },
+            },
+            {
+              id: "go-main",
+              adapter: "opencode-go",
+              logged_in: true,
+              login_pending: false,
+              usage: {
+                source: "opencode-go",
+                status: "allowed",
+                observed_at: "2026-10-06T00:00:00Z",
+                five_hour: { utilization: 0.1, resets_at: "2099-01-01T05:00:00Z" },
+                seven_day: { utilization: 0.5, resets_at: "2099-01-07T00:00:00Z" },
+                one_month: { utilization: 0.75, resets_at: "2099-02-01T00:00:00Z" },
+              },
+            },
+          ],
+          models: structuredClone(modelCatalogFixture),
           secrets: [],
           clusters: [
             {
@@ -2390,6 +2497,41 @@ export function createFakeDaemon({
             ac.secrets = ac.secrets.filter((s) => s.id !== parts[1]);
             return json(200, {});
           }
+        }
+        if (parts[0] === "llm" && parts[1] === "models") {
+          const nowIso = new Date().toISOString();
+          if (parts.length === 2 && req.method === "GET") return json(200, ac.models);
+          if (parts.length === 3 && parts[2] === "discover" && req.method === "POST") {
+            const sources = input.source ? [input.source] : ac.models.last_discovery.map((d) => d.source);
+            const results = sources.map((source) => {
+              const count = ac.models.items.filter((m) => m.source === source && m.available).length;
+              ac.models.last_discovery = ac.models.last_discovery.filter((d) => d.source !== source);
+              ac.models.last_discovery.push({ source, at: nowIso, ok: true, error: null, count });
+              for (const m of ac.models.items) if (m.source === source && m.available) m.last_seen = nowIso;
+              return { source, ok: true, count, error: null };
+            });
+            return json(202, { results });
+          }
+          if (parts.length === 5 && parts[4] === "override") {
+            const source = decodeURIComponent(parts[2]);
+            const modelId = decodeURIComponent(parts[3]);
+            const m = ac.models.items.find((x) => x.source === source && x.model_id === modelId);
+            if (!m) return json(404, { error: "not found" });
+            if (req.method === "PUT") {
+              m.override = {
+                disabled: input.disabled === true,
+                tier: input.tier ?? null,
+                alias: input.alias ?? null,
+                note: input.note ?? null,
+              };
+              return json(200, m.override);
+            }
+            if (req.method === "DELETE") {
+              m.override = null;
+              return json(200, {});
+            }
+          }
+          return json(404, { error: "not found" });
         }
         if (parts[0] === "llm" && req.method === "GET") return json(200, llmSourcesFixture);
         if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")

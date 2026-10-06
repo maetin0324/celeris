@@ -589,6 +589,7 @@ fn fixed_account_and_quota_routing_reach_the_cli_without_mutating_the_store() {
             book.record_observation(
                 "b",
                 task_core::RateLimitObservation {
+                    one_month: None,
                     five_hour: Some(window),
                     seven_day: Some(window),
                     status: None,

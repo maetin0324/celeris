@@ -107,7 +107,7 @@ impl QueryParams {
             None => Ok(AccountAdapter::ClaudeCode),
             Some(s) => AccountAdapter::parse(s).ok_or_else(|| {
                 ApiProblem::bad_request(format!(
-                    "unknown adapter `{s}` (must be claude-code or codex)"
+                    "unknown adapter `{s}` (must be claude-code, codex or opencode-go)"
                 ))
             }),
         }
@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 66] = [
+pub(crate) const EVENT_TYPES: [&str; 67] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -242,6 +242,8 @@ pub(crate) const EVENT_TYPES: [&str; 66] = [
     "delivery_skipped",
     "integration_requested",
     "integration_answered",
+    // ADR 2026-10-06 D4: モデル catalog の変化（疑似 task の列）。
+    "model_catalog_changed",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -318,6 +320,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::KnowledgeCurationApplied { .. } => "knowledge_curation_applied",
         Event::IntegrationRequested { .. } => "integration_requested",
         Event::IntegrationAnswered { .. } => "integration_answered",
+        Event::ModelCatalogChanged { .. } => "model_catalog_changed",
     }
 }
 

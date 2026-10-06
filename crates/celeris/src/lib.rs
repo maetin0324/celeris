@@ -17,6 +17,8 @@ pub mod instance;
 pub mod knowledge_curation;
 pub mod knowledge_gc;
 pub mod knowledge_maint;
+/// ADR 2026-10-06 D4: 利用可能モデルの発見（HTTP・コマンド実行。解析と保存は task-core）。
+pub mod model_discovery;
 /// ADR-0037（Phase 39）: 人の判断が要るときだけ Discord に知らせる（判定は決定的、送信は spawn）。
 pub mod notify;
 /// ADR-0040 D6（Phase 48）: `[selfdeploy] releases_dir` を読む／`promote.sh` を起こす。

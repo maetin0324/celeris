@@ -182,29 +182,26 @@ impl Dispatcher {
                 before_valid,
             } => {
                 let mut calibration_used = None;
-                let windows: Vec<_> = [
-                    task_core::QuotaWindow::FiveHour,
-                    task_core::QuotaWindow::SevenDay,
-                ]
-                .into_iter()
-                .map(|w| {
-                    let calibration = self.quota_calibration.calibration(&source, w);
-                    let qw = Self::decide_quota_window(
-                        w,
-                        before.as_ref(),
-                        after.as_ref(),
-                        before_valid,
-                        true,
-                        None,
-                        weighted_tokens,
-                        calibration,
-                    );
-                    if qw.method == task_core::QuotaMethod::Estimated {
-                        calibration_used = calibration;
-                    }
-                    qw
-                })
-                .collect();
+                let windows: Vec<_> = quota_windows_for(adapter)
+                    .into_iter()
+                    .map(|w| {
+                        let calibration = self.quota_calibration.calibration(&source, w);
+                        let qw = Self::decide_quota_window(
+                            w,
+                            before.as_ref(),
+                            after.as_ref(),
+                            before_valid,
+                            true,
+                            None,
+                            weighted_tokens,
+                            calibration,
+                        );
+                        if qw.method == task_core::QuotaMethod::Estimated {
+                            calibration_used = calibration;
+                        }
+                        qw
+                    })
+                    .collect();
                 for qw in &windows {
                     if qw.method == task_core::QuotaMethod::Measured
                         && let Some(pct) = qw.used_pct
@@ -277,31 +274,28 @@ impl Dispatcher {
                 let total_weighted: f64 = members.iter().map(|m| m.weighted_tokens).sum();
                 let mut own_event = None;
                 for m in &members {
-                    let windows: Vec<_> = [
-                        task_core::QuotaWindow::FiveHour,
-                        task_core::QuotaWindow::SevenDay,
-                    ]
-                    .into_iter()
-                    .map(|w| {
-                        let apportion = task_core::quota::ApportionedInputs {
-                            group_before: task_core::quota::snapshot(before.as_ref(), w),
-                            group_after: task_core::quota::snapshot(after.as_ref(), w),
-                            group_before_valid: before_valid,
-                            member_weighted_tokens: m.weighted_tokens,
-                            group_weighted_tokens_total: total_weighted,
-                        };
-                        Self::decide_quota_window(
-                            w,
-                            None,
-                            None,
-                            false,
-                            false,
-                            Some(&apportion),
-                            m.weighted_tokens,
-                            None,
-                        )
-                    })
-                    .collect();
+                    let windows: Vec<_> = quota_windows_for(adapter)
+                        .into_iter()
+                        .map(|w| {
+                            let apportion = task_core::quota::ApportionedInputs {
+                                group_before: task_core::quota::snapshot(before.as_ref(), w),
+                                group_after: task_core::quota::snapshot(after.as_ref(), w),
+                                group_before_valid: before_valid,
+                                member_weighted_tokens: m.weighted_tokens,
+                                group_weighted_tokens_total: total_weighted,
+                            };
+                            Self::decide_quota_window(
+                                w,
+                                None,
+                                None,
+                                false,
+                                false,
+                                Some(&apportion),
+                                m.weighted_tokens,
+                                None,
+                            )
+                        })
+                        .collect();
                     let method = task_core::quota::representative_method(&windows);
                     let ev = Event::QuotaEstimated {
                         run_id: m.run_id.clone(),
@@ -336,4 +330,17 @@ impl Dispatcher {
             }
         }
     }
+}
+
+/// quota の見積りで見る窓（ADR 2026-10-06 D1）。1 か月窓を持つのは opencode go だけで、claude / codex の
+/// event には従来どおり 5 時間と 7 日だけを載せる。
+fn quota_windows_for(adapter: AccountAdapter) -> Vec<task_core::QuotaWindow> {
+    let mut windows = vec![
+        task_core::QuotaWindow::FiveHour,
+        task_core::QuotaWindow::SevenDay,
+    ];
+    if adapter == AccountAdapter::OpencodeGo {
+        windows.push(task_core::QuotaWindow::OneMonth);
+    }
+    windows
 }

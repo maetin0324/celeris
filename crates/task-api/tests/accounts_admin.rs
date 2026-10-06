@@ -381,6 +381,7 @@ async fn list_accounts_merges_filesystem_snapshot_and_stats() {
         logged_in: true,
         in_use: 1,
         usage: Some(AccountUsageLive {
+            one_month: None,
             five_hour: Some(task_core::RateWindow {
                 utilization: 0.2,
                 resets_at: 2_000_000_000,

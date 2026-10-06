@@ -76,6 +76,7 @@ export const healthKeys = { all: ["health"] as const };
 
 export const providerKeys = listDomain("providers");
 export const accountKeys = listDomain("accounts");
+export const modelKeys = listDomain("llm-models");
 export const clusterKeys = listDomain("clusters");
 export const releaseKeys = listDomain("releases");
 export const metricKeys = listDomain("metrics");

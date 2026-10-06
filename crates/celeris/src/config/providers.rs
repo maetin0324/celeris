@@ -43,8 +43,11 @@ pub struct ProviderConfig {
     pub env_from_secrets: HashMap<String, String>,
     /// ADR-0024 D2: `true` なら `[accounts]` のプールから残量に基づいてアカウントを選ぶ。`adapter = "claude-code"`
     /// かつ `[accounts]` があるときだけ有効（既定 `false`）。
+    ///
+    /// ADR 2026-10-06 D2: `"opencode-go"` のように pool の adapter 名を文字列で書ける（ACP 行のように
+    /// 行の adapter 名が pool の adapter と一致しない行で使う）。
     #[serde(default)]
-    pub account_pool: bool,
+    pub account_pool: task_core::AccountPoolSetting,
     /// ADR-0026 D2: `adapter = "acp"` のときだけ意味を持つ、この行の ACP エージェント実行ファイルの上書き
     /// （省略時は `[adapters.acp].command`）。他のアダプタで指定すると `Config::validate` が設定エラーにする。
     #[serde(default)]
@@ -116,8 +119,20 @@ impl Config {
     pub fn account_pool_providers(&self) -> std::collections::HashSet<String> {
         self.providers
             .iter()
-            .filter(|p| p.account_pool)
+            .filter(|p| p.account_pool.is_on())
             .map(|p| p.id.clone())
+            .collect()
+    }
+
+    /// `account_pool = "<adapter>"` で pool の adapter を明示した行の provider id → adapter
+    /// （ADR 2026-10-06 D3。dispatcher が行の adapter 名では引けない pool の解決に使う）。
+    pub fn account_pool_adapters(&self) -> std::collections::HashMap<String, AccountAdapter> {
+        self.providers
+            .iter()
+            .filter_map(|p| match p.account_pool {
+                task_core::AccountPoolSetting::Adapter(a) => Some((p.id.clone(), a)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -185,7 +200,7 @@ impl Config {
                 .is_some_and(|m| !m.trim().is_empty());
         self.providers
             .iter()
-            .filter(|p| !p.account_pool && p.tiers.contains(&Tier::Cheap))
+            .filter(|p| !p.account_pool.is_on() && p.tiers.contains(&Tier::Cheap))
             // 専用契約のアダプタ（ADR-0049。`StaticPolicy` が hint の無い仕事を渡さない）は、それに固定された
             // 仕事の唯一の行であることが多い。前段で不通として外すと従来の経路（ADR-0052 の倒し方）を
             // 塞ぐので、ローカルの行にしない。
@@ -272,6 +287,13 @@ impl Config {
             _ => {}
         }
         let model = self.effective_model(p).unwrap_or_default();
+        if p.adapter == "acp"
+            && (p.account_pool
+                == task_core::AccountPoolSetting::Adapter(AccountAdapter::OpencodeGo)
+                || model.starts_with("opencode-go/"))
+        {
+            return LlmSourceRef::OpencodeGo;
+        }
         if is_celeris_model(model) || self.model_from_env_is_celeris(p) {
             return LlmSourceRef::Celeris;
         }
@@ -386,6 +408,8 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                     p.adapter != "codex"
                         || is_celeris_model(cfg.effective_model(p).unwrap_or_default())
                 }
+                // ADR 2026-10-06 D3: opencode_go は ACP（opencode）adapter の行だけ。
+                LlmSourceRef::OpencodeGo => p.adapter != "acp",
                 LlmSourceRef::None => !matches!(p.adapter.as_str(), "fake" | "browser-specialist"),
                 LlmSourceRef::Celeris => inferred != LlmSourceRef::Celeris,
                 LlmSourceRef::OpenaiCompatible(_) => {
@@ -414,15 +438,23 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                 )));
             }
         }
-        if p.account_id.is_some() && !p.account_pool {
+        if p.account_id.is_some() && !p.account_pool.is_on() {
             return Err(ConfigError::Invalid(format!(
                 "provider {}: account_id requires account_pool",
                 p.id
             )));
         }
-        if !p.tier_models.is_empty() && !matches!(p.adapter.as_str(), "claude-code" | "codex") {
+        // ADR 2026-10-06 D3: tier_models は claude-code / codex と、llm_source が opencode_go の ACP 行で使える。
+        let opencode_go_acp = p.adapter == "acp"
+            && cfg
+                .provider_llm_source(&p.id)
+                .is_some_and(|r| r.source == LlmSourceRef::OpencodeGo);
+        if !p.tier_models.is_empty()
+            && !matches!(p.adapter.as_str(), "claude-code" | "codex")
+            && !opencode_go_acp
+        {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: tier_models supported only for Claude/GPT",
+                "provider {}: tier_models supported only for Claude/GPT or opencode_go",
                 p.id
             )));
         }
@@ -475,13 +507,32 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
         }
         // ADR-0024 D2 / ADR-0025 D1: `account_pool = true` は claude-code か codex だけ、かつ `[accounts]` に
         // そのアダプタの根ディレクトリが設定されている必要がある。
-        if p.account_pool {
-            let Some(account_adapter) = AccountAdapter::parse(&p.adapter) else {
+        if p.account_pool.is_on() {
+            let Some(account_adapter) = p.account_pool.pool_adapter(&p.adapter) else {
                 return Err(ConfigError::Invalid(format!(
-                    "provider {}: account_pool = true requires adapter = \"claude-code\" or \"codex\"",
+                    "provider {}: account_pool = true requires adapter = \"claude-code\" or \"codex\" (or account_pool = \"opencode-go\" on an acp row)",
                     p.id
                 )));
             };
+            // opencode-go の pool を使えるのは ACP（opencode）行だけ（ADR 2026-10-06 D3）。
+            if account_adapter == AccountAdapter::OpencodeGo && p.adapter != "acp" {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: account_pool = \"opencode-go\" requires adapter = \"acp\"",
+                    p.id
+                )));
+            }
+            // 名前付き pool は行の adapter が claude-code / codex なら同名のものだけ。
+            if let task_core::AccountPoolSetting::Adapter(named) = p.account_pool
+                && let Some(own) = AccountAdapter::parse(&p.adapter)
+                && own != named
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: account_pool = {:?} conflicts with adapter {:?}",
+                    p.id,
+                    named.as_str(),
+                    p.adapter
+                )));
+            }
             match accounts {
                 Some(accounts) if accounts.root_for(account_adapter).is_some() => {}
                 Some(_) => {
@@ -491,6 +542,7 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                         match account_adapter {
                             AccountAdapter::ClaudeCode => "claude_dir",
                             AccountAdapter::Codex => "codex_dir",
+                            AccountAdapter::OpencodeGo => "opencode_dir",
                         }
                     )));
                 }

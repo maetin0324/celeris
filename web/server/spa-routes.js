@@ -29,6 +29,7 @@ export const spaRoutePatterns = [
   "/plans/new",
   "/daemon",
   "/providers",
+  "/models",
   "/accounts",
   "/clusters",
   "/releases",

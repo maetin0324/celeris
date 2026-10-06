@@ -51,6 +51,7 @@ pub mod mcp_admin;
 pub mod memory;
 mod middleware;
 pub mod milestones;
+pub mod model_catalog;
 pub mod notify;
 mod problem;
 pub mod project_plan;
@@ -92,6 +93,7 @@ pub use cron_jobs::{
 pub use llm_sources::{LlmSourcesReader, SharedLlmSourcesReader};
 pub use memory::MemoryView;
 pub use milestones::{MilestoneDecideBody, MilestoneDecided};
+pub use model_catalog::{DiscoverySummaryView, ModelDiscoveryHook, SharedModelDiscoveryHook};
 pub use notify::{NotifyRecent, NotifyTestResult, NotifyView};
 pub use project_plan::{ProjectPlanAccepted, ProjectPlanBody};
 pub use releases::{
@@ -254,6 +256,9 @@ pub struct ApiSettings {
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
     /// Credential-free model routing catalog, refreshed atomically by the daemon.
     pub routing_catalog: Option<routing_catalog::SharedRoutingCatalogReader>,
+    /// ADR 2026-10-06 D5: `POST /llm/models/discover` が呼ぶ発見の実行（daemon が渡す）。`None` なら
+    /// 202 で `results: []`・`unavailable: true`。
+    pub model_discovery: Option<model_catalog::SharedModelDiscoveryHook>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     /// ADR-0080 D5: human attestation の公開鍵と credential broker の control IPC。既定（どちらも無し）では
     /// 人の登録・決定は 503 `browser_unavailable`。
@@ -321,6 +326,10 @@ impl std::fmt::Debug for ApiSettings {
             .field(
                 "routing_catalog",
                 &self.routing_catalog.as_ref().map(|_| "<reader>"),
+            )
+            .field(
+                "model_discovery",
+                &self.model_discovery.as_ref().map(|_| "<hook>"),
             )
             .field("browser", &self.browser)
             .finish()

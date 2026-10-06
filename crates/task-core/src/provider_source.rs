@@ -15,6 +15,8 @@ pub enum LlmSourceRef {
     Celeris,
     ClaudeOauth,
     CodexOauth,
+    /// opencode go の subscription（ADR 2026-10-06 D3）。
+    OpencodeGo,
     OpenaiCompatible(String),
     None,
     Unknown,
@@ -26,6 +28,7 @@ impl LlmSourceRef {
             Self::Celeris => "celeris",
             Self::ClaudeOauth => "claude_oauth",
             Self::CodexOauth => "codex_oauth",
+            Self::OpencodeGo => "opencode_go",
             Self::OpenaiCompatible(_) => "openai_compatible",
             Self::None => "none",
             Self::Unknown => "unknown",
@@ -51,6 +54,7 @@ impl<'de> Deserialize<'de> for LlmSourceRef {
             "celeris" => Ok(Self::Celeris),
             "claude_oauth" => Ok(Self::ClaudeOauth),
             "codex_oauth" => Ok(Self::CodexOauth),
+            "opencode_go" => Ok(Self::OpencodeGo),
             "none" => Ok(Self::None),
             "unknown" => Ok(Self::Unknown),
             _ => value
@@ -94,6 +98,7 @@ mod tests {
             LlmSourceRef::Celeris,
             LlmSourceRef::ClaudeOauth,
             LlmSourceRef::CodexOauth,
+            LlmSourceRef::OpencodeGo,
             LlmSourceRef::OpenaiCompatible("qwen".into()),
             LlmSourceRef::None,
             LlmSourceRef::Unknown,

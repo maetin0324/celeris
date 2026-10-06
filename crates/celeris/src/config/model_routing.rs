@@ -474,6 +474,8 @@ fn deployment(
 fn source_name(source: &task_core::LlmSourceRef) -> String {
     match source {
         task_core::LlmSourceRef::OpenaiCompatible(id) => format!("openai_compatible:{id}"),
+        // routing / llm-proxy の source 名はハイフン区切り（ADR 2026-10-06 D4。設定の文字列 `opencode_go` とは別）。
+        task_core::LlmSourceRef::OpencodeGo => "opencode-go".into(),
         other => other.as_str().into(),
     }
 }
@@ -661,6 +663,11 @@ impl Config {
             let known_source = match entry.source_ref.as_str() {
                 "claude-oauth" | "claude_oauth" => self.llm_proxy.sources.claude_oauth.is_some(),
                 "codex-oauth" | "codex_oauth" => self.llm_proxy.sources.codex_oauth.is_some(),
+                // ADR 2026-10-06 D3: opencode go は llm-proxy を経由しない。source が opencode_go の行があれば既知。
+                "opencode-go" | "opencode_go" => self.providers.iter().any(|p| {
+                    self.provider_llm_source(&p.id)
+                        .is_some_and(|r| r.source == task_core::LlmSourceRef::OpencodeGo)
+                }),
                 s if s.starts_with("openai-compatible:") || s.starts_with("openai_compatible:") => {
                     self.llm_proxy
                         .sources

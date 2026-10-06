@@ -30,7 +30,7 @@ fn create_body_fills_defaults_like_provider_config() {
     assert_eq!(file.tiers, default_tiers());
     assert_eq!(file.concurrency, 1);
     assert_eq!(file.model, "");
-    assert!(!file.account_pool);
+    assert!(!file.account_pool.is_on());
 }
 
 #[test]
@@ -47,7 +47,7 @@ fn patch_only_overwrites_provided_fields() {
         model: "m1".into(),
         env: HashMap::from([("K".to_string(), "v".to_string())]),
         env_from_secrets: HashMap::new(),
-        account_pool: false,
+        account_pool: false.into(),
         command: None,
         args: None,
         settings: None,
@@ -64,13 +64,13 @@ fn patch_only_overwrites_provided_fields() {
     assert_eq!(patched.tiers, vec![Tier::Standard]);
     assert_eq!(patched.model, "m1");
     assert_eq!(patched.env.get("K"), Some(&"v".to_string()));
-    assert!(!patched.account_pool);
+    assert!(!patched.account_pool.is_on());
 
     let pool_patch = ProviderPatchBody {
         account_pool: Some(true),
         ..Default::default()
     };
-    assert!(pool_patch.apply(file).account_pool);
+    assert!(pool_patch.apply(file).account_pool.is_on());
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn write_then_read_round_trips() {
         model: "".into(),
         env: HashMap::from([("CLAUDE_CONFIG_DIR".to_string(), "/x".to_string())]),
         env_from_secrets: HashMap::from([("K".to_string(), "secret-id".to_string())]),
-        account_pool: true,
+        account_pool: true.into(),
         command: None,
         args: None,
         settings: None,
@@ -103,7 +103,7 @@ fn write_then_read_round_trips() {
         read.env_from_secrets.get("K"),
         Some(&"secret-id".to_string())
     );
-    assert!(read.account_pool);
+    assert!(read.account_pool.is_on());
 }
 
 /// ADR-0026 D7 / ADR-0030 D2: `command`/`args`/`env_from_secrets` は API から書かないが、人が
@@ -124,7 +124,7 @@ fn patch_round_trip_preserves_hand_edited_command_and_args() {
         model: "qwen-local/qwen3.8-27b".into(),
         env: HashMap::new(),
         env_from_secrets: HashMap::from([("SOME_KEY".to_string(), "some-secret".to_string())]),
-        account_pool: false,
+        account_pool: false.into(),
         command: Some("opencode".into()),
         args: Some(vec!["acp".into()]),
         settings: None,

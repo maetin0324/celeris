@@ -209,7 +209,7 @@ impl Dispatcher {
                     self.policy
                         .adapter_of(&id)
                         .as_deref()
-                        .and_then(AccountAdapter::parse)
+                        .and_then(|row| self.pool_adapter_of(&id, row))
                         .and_then(|a| self.peek_account(a, &id, cos).map(|acct| (a, acct)))
                 };
                 let Some(account) = account else {
@@ -251,7 +251,9 @@ impl Dispatcher {
                                 .policy
                                 .adapter_of(&candidates[i].deployment_id)
                                 .as_deref()
-                                .and_then(AccountAdapter::parse)?;
+                                .and_then(|row| {
+                                    self.pool_adapter_of(&candidates[i].deployment_id, row)
+                                })?;
                             Some(self.account_score(adapter, acct.as_deref()?))
                         })
                         .unwrap_or(f64::NEG_INFINITY);

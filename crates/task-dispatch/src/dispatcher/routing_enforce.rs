@@ -95,7 +95,10 @@ fn account_window(
     }
 }
 
-/// pool の 1 アカウントの `SourceState`。帳簿の観測（5h / 7d 窓・rejected の reset）・cooldown・in-use
+/// 1 か月窓の長さ（30 日。ADR 2026-10-06 D1）。
+const ONE_MONTH_SECS: i64 = 30 * 24 * 3600;
+
+/// pool の 1 アカウントの `SourceState`。帳簿の観測（5h / 7d / 1 か月窓・rejected の reset）・cooldown・in-use
 /// だけを写す。帳簿に無い量（latency・rpm/tpm・queue・GPU）は None。
 pub fn source_state_from_account(
     deployment_id: &str,
@@ -143,6 +146,16 @@ pub fn source_state_from_account(
                 account_id,
                 "seven_day",
                 crate::accounts::SEVEN_DAY_SECS,
+                obs,
+                w,
+                now,
+            ));
+        }
+        if let Some(w) = obs.one_month {
+            s.quota_windows.push(account_window(
+                account_id,
+                "one_month",
+                ONE_MONTH_SECS,
                 obs,
                 w,
                 now,
@@ -486,6 +499,7 @@ mod tests {
 
     fn obs(u5: f64, u7: Option<f64>, observed_at: i64) -> RateLimitObservation {
         RateLimitObservation {
+            one_month: None,
             five_hour: Some(RateWindow {
                 utilization: u5,
                 resets_at: observed_at + 3600,

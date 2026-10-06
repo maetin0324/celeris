@@ -45,6 +45,10 @@ export type BrowserWaitReason = "waiting_for_auth" | "waiting_for_approval";
 export type BrowserWaitState =
   ("pending" | "denied" | "expired" | "cancelled" | "revoked" | "invalidated") | "registered" | "approved" | "resumed";
 /**
+ * DESIGN §5.4 の `WorkerHint`。
+ */
+export type Tier = "frontier" | "standard" | "cheap";
+/**
  * 対話の 1 行の識別子（ULID）。
  */
 export type MessageId = string;
@@ -79,10 +83,6 @@ export type CommentId = string;
 export type CommentEffect = "stored" | "interrupted" | "answered" | "terminal";
 export type SourceOrigin = "explicit" | "derived";
 export type LlmSourceRef = string;
-/**
- * DESIGN §5.4 の `WorkerHint`。
- */
-export type Tier = "frontier" | "standard" | "cheap";
 /**
  * Console の 1 ブロック（ADR-0048 D1 の 8 種 + 予約の `knowledge`）。
  * `at` は RFC 3339、`cursor` はそのブロックの位置（`since` にそのまま渡せる）。
@@ -1023,6 +1023,13 @@ export type Event =
       type: "integration_answered";
     }
   | {
+      added?: string[];
+      removed?: string[];
+      restored?: string[];
+      source: string;
+      type: "model_catalog_changed";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -1306,9 +1313,9 @@ export type WorkUnitStatus =
  */
 export type RepairOrigin = "review" | "integration" | "delivery" | "planner";
 /**
- * D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。
+ * D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。
  */
-export type QuotaWindow = "five_hour" | "seven_day";
+export type QuotaWindow = ("five_hour" | "seven_day") | "one_month";
 /**
  * D2.1: `pause_after` を誰が書いたか（ADR-0069 D1 の `SpecOrigin` と同じ考え方。`task_ops::add::SpecOrigin`
  * は task-ops 側の内部型なので、`Event` から見える task-core 側にこの小さな型を別に置く）。
@@ -1781,6 +1788,7 @@ export interface ApiV1Schema {
   browser_request: NewBrowserWait;
   browser_request_result: BrowserRequestResult;
   browser_revoke: BrowserRevokeBody;
+  browser_settings_patch: BrowserSettingsPatch;
   browser_wait_list: BrowserWaitList;
   browser_wait_result: BrowserWaitResult;
   cancel: CancelBody;
@@ -1853,6 +1861,11 @@ export interface ApiV1Schema {
   milestone_decided: MilestoneDecided;
   milestone_lifecycle: MilestoneLifecycle;
   milestone_patch: MilestonePatchBody;
+  model_catalog: ModelCatalogView;
+  model_catalog_item: ModelCatalogItem;
+  model_catalog_override: ModelCatalogOverrideView;
+  model_discover: DiscoverBody;
+  model_discover_result: DiscoverResponse;
   new_plan: NewPlanSpec;
   new_task: NewTaskBody;
   notification_read: NoticeReadResult;
@@ -1921,6 +1934,7 @@ export interface ApiV1Schema {
   task_list: TaskList;
   task_pause: TaskPauseResult;
   task_routing: TaskRoutingView;
+  task_status_counts: TaskStatusCounts;
   task_tree: TaskTreeView;
   timeline: Timeline;
   transition_result: TransitionResult;
@@ -1944,7 +1958,7 @@ export interface AccountView {
    */
   dir: string;
   /**
-   * `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "rejected"`。
+   * `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
    */
   excluded_reason?: string | null;
   id: string;
@@ -2009,6 +2023,10 @@ export interface AccountStats {
 export interface AccountUsageView {
   five_hour?: RateWindowView | null;
   observed_at: string;
+  /**
+   * 1 か月窓（opencode go）。観測できなければ `null`（画面では『不明』。0 にしない）。
+   */
+  one_month?: RateWindowView | null;
   seven_day?: RateWindowView | null;
   /**
    * `"run" | "check"`。
@@ -2457,6 +2475,39 @@ export interface BrowserRevokeBody {
   attestation: HumanAttestation;
   expected_version: number;
   idempotency_key: string;
+}
+/**
+ * PATCH /org/{id}/browser-settings. Only browser-related profile fields are editable.
+ */
+export interface BrowserSettingsPatch {
+  allowed_domains?: string[] | null;
+  budget?: BudgetPrefs | null;
+  credential_identity_ids?: {
+    [k: string]: string;
+  } | null;
+  credential_policy_ids?: string[] | null;
+  harnesses?: HarnessPrefs | null;
+}
+/**
+ * ADR-0069 D2（Phase 114）: そのノード以下の予算の天井。どちらも**最も厳しい値が勝つ**
+ * （根→葉の最小。子は緩められない）。
+ */
+export interface BudgetPrefs {
+  /**
+   * 1 タスクあたりの試行回数の上限（エスカレーション込み。タスクの `max_retries + 1` も超えない）。
+   */
+  max_attempts?: number | null;
+  /**
+   * 使ってよい最も高い lane（`allowed_tiers` と合わせて天井になる）。
+   */
+  max_lane?: Tier | null;
+}
+/**
+ * ADR-0046 D1 / D3: このノードが受けられるハーネス。`allowed` は親と和、`default` は子が勝つ。
+ */
+export interface HarnessPrefs {
+  allowed?: string[];
+  default?: string | null;
 }
 /**
  * `GET /tasks/{id}/browser/waits` と `GET /browser/waits`。
@@ -3567,7 +3618,7 @@ export interface AccountLive {
   adapter?: string;
   cooldown?: AccountCooldownLive | null;
   /**
-   * `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "rejected"`。
+   * `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
    */
   excluded_reason?: string | null;
   id: string;
@@ -3606,6 +3657,10 @@ export interface AccountCooldownLive {
 export interface AccountUsageLive {
   five_hour?: RateWindow | null;
   observed_at: number;
+  /**
+   * 1 か月窓（opencode go。ADR 2026-10-06 D1）。観測できなければ `None`（『不明』）。
+   */
+  one_month?: RateWindow | null;
   seven_day?: RateWindow | null;
   /**
    * `"run" | "check"`。
@@ -3614,7 +3669,7 @@ export interface AccountUsageLive {
   status?: string | null;
 }
 /**
- * 1 つの枠（5 時間 / 7 日）の観測値。
+ * 1 つの枠（5 時間 / 7 日 / 1 か月）の観測値。
  */
 export interface RateWindow {
   /**
@@ -4654,6 +4709,7 @@ export interface Task {
    * 導入前のタスクには無いので既定は空（従来どおり `workspace` 1 つで動く）。
    */
   repos?: RepoRef[];
+  requirements?: TaskRequirements;
   /**
    * ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。
    * 導入前のタスクには無いので任意。
@@ -4712,6 +4768,15 @@ export interface Lease {
 export interface RepoRef {
   name: string;
   repo_id: RepoId;
+}
+/**
+ * Per-task browser permissions. Absent for tasks created before this policy.
+ */
+export interface TaskRequirements {
+  browser?: BrowserRequirements | null;
+}
+export interface BrowserRequirements {
+  allowed_domains: string[];
 }
 /**
  * ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。
@@ -5363,8 +5428,12 @@ export interface ExecutionChildSpec {
    */
   key: string;
   objective: string;
+  requirements?: TaskRequirements1;
   skills?: string[];
   title: string;
+}
+export interface TaskRequirements1 {
+  browser?: BrowserRequirements | null;
 }
 /**
  * D2 / D7: 計画に書く決定の形（`id` / `path` / `raised_by` / `status` は daemon が付ける）。
@@ -5472,6 +5541,7 @@ export interface PlanUnitSpec {
    * 親の repos の部分集合（repo の名前。子の生成〈R1b〉で検証する）。
    */
   repos?: string[];
+  requirements?: TaskRequirements2;
   skills?: string[];
   /**
    * `stages` の key。
@@ -5507,6 +5577,12 @@ export interface UnitContext {
   knowledge?: string[];
   paths?: string[];
   repo?: RepoSelector | null;
+}
+/**
+ * Browser origins for a child task. An inherited browser skill still needs an explicit set.
+ */
+export interface TaskRequirements2 {
+  browser?: BrowserRequirements | null;
 }
 /**
  * D14: 計画の中の 1 WorkUnit の spec。**`assignee` / `tier` / `model` の欄は持たない**
@@ -7424,6 +7500,94 @@ export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
 /**
+ * ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。
+ */
+export interface ModelCatalogView {
+  items: ModelCatalogItem[];
+  last_discovery: DiscoveryRecordView[];
+}
+export interface ModelCatalogItem {
+  available: boolean;
+  capabilities: unknown;
+  display_name?: string | null;
+  /**
+   * RFC3339（UTC）。
+   */
+  first_seen: string;
+  last_seen: string;
+  model_id: string;
+  /**
+   * 人の上書き（無ければ `null`）。
+   */
+  override?: ModelCatalogOverrideView | null;
+  routing: ModelCatalogRoutingView;
+  source: string;
+}
+/**
+ * 上書きの本文・応答。
+ */
+export interface ModelCatalogOverrideView {
+  alias?: string | null;
+  disabled?: boolean;
+  note?: string | null;
+  /**
+   * routing で使う tier の上書き（無ければ `null`）。
+   */
+  tier?: Tier | null;
+}
+/**
+ * routing で使われている tier・deployment（routing catalog の `source_ref` と `upstream_model` で突き合わせる）。
+ */
+export interface ModelCatalogRoutingView {
+  deployments: string[];
+  tiers: string[];
+}
+export interface DiscoveryRecordView {
+  at: string;
+  count: number;
+  error?: string | null;
+  ok: boolean;
+  source: string;
+}
+/**
+ * `POST /llm/models/discover` の本文。
+ */
+export interface DiscoverBody {
+  /**
+   * 1 source だけ走らせる（省略で全 source）。
+   */
+  source?: string | null;
+}
+/**
+ * `POST /llm/models/discover` の応答。
+ */
+export interface DiscoverResponse {
+  results: DiscoverySummaryView[];
+  /**
+   * daemon が発見の係を渡していない（この process では発見できない）とき `true`。
+   */
+  unavailable: boolean;
+}
+/**
+ * 発見 1 source の結果の要約。
+ */
+export interface DiscoverySummaryView {
+  count: number;
+  delta: CatalogDelta;
+  error?: string | null;
+  ok: boolean;
+  source: string;
+}
+/**
+ * 失敗したときは空の delta。
+ */
+export interface CatalogDelta {
+  added: string[];
+  removed: string[];
+  restored: string[];
+  source: string;
+}
+/**
  * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。
  */
 export interface NewPlanSpec {
@@ -7535,6 +7699,7 @@ export interface NewTaskBody {
    * 他と混ぜたものも 422（`task_core::resolve_task_repos`）。
    */
   repos?: string[];
+  requirements?: TaskRequirements3;
   /**
    * ADR-0016 D1: 役割名（自由記述）。`[[roles]]` にあれば省略値の既定と run 時の指示文が効く。
    */
@@ -7567,6 +7732,12 @@ export interface NewTaskBody {
    * （従来どおりクラスタの `sync` 設定に従う）。`Local` タスク（`cluster` 無し）には関係ない。
    */
   workspace_mode?: WorkspaceMode | null;
+}
+/**
+ * Browser origins requested by this task; required with the browser-enabled skill.
+ */
+export interface TaskRequirements3 {
+  browser?: BrowserRequirements | null;
 }
 export interface NoticeReadResult {
   id: string;
@@ -7735,7 +7906,7 @@ export interface Profile {
    * Administrator-granted browser capability; child profiles replace the complete grant.
    */
   browser?: BrowserCapability | null;
-  budget?: BudgetPrefs;
+  budget?: BudgetPrefs1;
   /**
    * 禁止する道具。和だが**常に勝つ**（実効の `tools` から引かれる）。
    */
@@ -7775,9 +7946,15 @@ export interface BrowserCapability {
    */
   allowed_actions?: BrowserAction[] | null;
   /**
-   * Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.
+   * Allowed origins. Legacy host patterns read as HTTPS on port 443 only.
    */
   allowed_domains: string[];
+  /**
+   * Policy ID to browser identity ID. This contains identifiers only, never credentials.
+   */
+  credential_identity_ids?: {
+    [k: string]: string;
+  };
   /**
    * Credential policies a task may reference. Absent/empty means no credential use.
    */
@@ -7789,9 +7966,10 @@ export interface BrowserCapability {
   live_view_url?: string | null;
 }
 /**
- * ADR-0069 D2（Phase 114）: 予算の天井（最も厳しい値が勝つ）。
+ * ADR-0069 D2（Phase 114）: そのノード以下の予算の天井。どちらも**最も厳しい値が勝つ**
+ * （根→葉の最小。子は緩められない）。
  */
-export interface BudgetPrefs {
+export interface BudgetPrefs1 {
   /**
    * 1 タスクあたりの試行回数の上限（エスカレーション込み。タスクの `max_retries + 1` も超えない）。
    */
@@ -7800,13 +7978,6 @@ export interface BudgetPrefs {
    * 使ってよい最も高い lane（`allowed_tiers` と合わせて天井になる）。
    */
   max_lane?: Tier | null;
-}
-/**
- * ADR-0046 D1 / D3: このノードが受けられるハーネス。`allowed` は親と和、`default` は子が勝つ。
- */
-export interface HarnessPrefs {
-  allowed?: string[];
-  default?: string | null;
 }
 /**
  * ADR-0046 D1 の `knowledge = [ … ]` の 1 件。**Phase 59 の `Profile.knowledge` はこの型を持つ**
@@ -7969,7 +8140,7 @@ export interface Profile1 {
    * Administrator-granted browser capability; child profiles replace the complete grant.
    */
   browser?: BrowserCapability | null;
-  budget?: BudgetPrefs;
+  budget?: BudgetPrefs1;
   /**
    * 禁止する道具。和だが**常に勝つ**（実効の `tools` から引かれる）。
    */
@@ -10893,6 +11064,14 @@ export interface ShadowReservationAudit {
   reserved_tokens: number;
   state: string;
   utc_day: string;
+}
+/**
+ * `GET /tasks/counts`: SQLite の GROUP BY だけで全タスクを状態別に数える。
+ */
+export interface TaskStatusCounts {
+  counts_by_status: {
+    [k: string]: number;
+  };
 }
 /**
  * ADR-0079 D11（Phase R4a）: `GET /tasks/{id}/task-tree`（木と roll-up）。

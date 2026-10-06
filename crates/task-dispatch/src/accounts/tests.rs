@@ -13,6 +13,7 @@ fn obs(
     observed_at: i64,
 ) -> RateLimitObservation {
     RateLimitObservation {
+        one_month: None,
         five_hour,
         seven_day,
         status: None,
@@ -567,6 +568,59 @@ fn evaluate_exhausted_seven_day_is_excluded() {
     let state = state_with_usage(obs(None, Some(window(0.99, 500_000)), 900));
     let e = evaluate(&cand("a", true, 0), Some(&state), 2, 1_000);
     assert_eq!(e.excluded, Some(ExcludedReason::SevenDayExhausted));
+}
+
+// ---- one_month 窓（ADR 2026-10-06 D1） ----
+
+fn with_month(mut o: RateLimitObservation, month: Option<RateWindow>) -> RateLimitObservation {
+    o.one_month = month;
+    o
+}
+
+#[test]
+fn evaluate_exhausted_one_month_is_excluded() {
+    let state = state_with_usage(with_month(
+        obs(Some(window(0.1, 5_000)), Some(window(0.2, 500_000)), 900),
+        Some(window(1.0, 2_000_000)),
+    ));
+    let e = evaluate(&cand("a", true, 0), Some(&state), 2, 1_000);
+    assert_eq!(e.excluded, Some(ExcludedReason::OneMonthExhausted));
+    assert_eq!(e.score, None);
+}
+
+#[test]
+fn evaluate_score_is_the_minimum_over_present_windows_including_month() {
+    let state = state_with_usage(with_month(
+        obs(Some(window(0.1, 5_000)), None, 900),
+        Some(window(0.6, 2_000_000)),
+    ));
+    let e = evaluate(&cand("a", true, 0), Some(&state), 2, 1_000);
+    assert_eq!(e.excluded, None);
+    assert!((e.score.expect("score") - 0.4).abs() < 1e-9);
+}
+
+#[test]
+fn measured_remaining_uses_present_windows_when_a_month_window_exists() {
+    let o = with_month(
+        obs(Some(window(0.1, 5_000)), None, 900),
+        Some(window(0.7, 2_000_000)),
+    );
+    assert!((measured_remaining(&o, 1_000).expect("remaining") - 0.3).abs() < 1e-9);
+    // 1 か月窓が無い観測は従来どおり 5 時間と 7 日の両方を要求する。
+    assert_eq!(
+        measured_remaining(&obs(Some(window(0.1, 5_000)), None, 900), 1_000),
+        None
+    );
+}
+
+#[test]
+fn cooldown_for_failure_considers_the_month_window() {
+    let state = state_with_usage(with_month(
+        obs(None, None, 900),
+        Some(window(1.0, 2_000_000)),
+    ));
+    let cd = cooldown_for_failure(Some(&state), AccountCooldownReason::Exhausted, 1_000, 60);
+    assert_eq!(cd.until, 2_000_000);
 }
 
 #[test]

@@ -23,8 +23,12 @@ use super::{ApiResult, Params, json_response, no_query, now_rfc3339, read_body};
 
 /// ADR-0024 D2 / ADR-0025 D1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` にそのアダプタの
 /// 根ディレクトリが設定済みのときだけ有効。
-fn check_account_pool_adapter(state: &ApiState, adapter: &str) -> Result<(), ApiProblem> {
-    let Some(account_adapter) = task_core::AccountAdapter::parse(adapter) else {
+fn check_account_pool_adapter(
+    state: &ApiState,
+    pool: task_core::AccountPoolSetting,
+    adapter: &str,
+) -> Result<(), ApiProblem> {
+    let Some(account_adapter) = pool.pool_adapter(adapter) else {
         return Err(ApiProblem::invalid_provider(
             "account_pool = true requires adapter = \"claude-code\" or \"codex\"",
         ));
@@ -207,7 +211,7 @@ pub(super) async fn create_provider(
     // ADR-0024 D2 / ADR-0025 D1 / S1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` に
     // そのアダプタの根ディレクトリが設定済みのときだけ有効。
     if create.account_pool {
-        check_account_pool_adapter(&state, &create.adapter)?;
+        check_account_pool_adapter(&state, create.account_pool.into(), &create.adapter)?;
     }
     let path = crate::admin::provider_file_path(&dir, &create.id);
     if path.exists() {
@@ -265,8 +269,8 @@ pub(super) async fn patch_provider(
     check_provider_kind(&state, &updated)?;
     restrict_qwen_acp_tiers(&mut updated, patch.tiers.is_some())?;
     // ADR-0024 D2 / ADR-0025 D1 / S1: patch 後の組み合わせも検証する（`id`/`adapter` は patch で変わらない）。
-    if updated.account_pool {
-        check_account_pool_adapter(&state, &updated.adapter)?;
+    if updated.account_pool.is_on() {
+        check_account_pool_adapter(&state, updated.account_pool, &updated.adapter)?;
     }
     migrate_credentials(&state, &mut updated)?;
     write_provider_file(&dir, &updated).map_err(|e| ApiProblem::internal(e.to_string()))?;
@@ -437,10 +441,18 @@ fn check_model_routing(file: &crate::admin::ProviderConfigFile) -> Result<(), Ap
     {
         return Err(ApiProblem::bad_request("invalid account_id"));
     }
-    if file.account_id.is_some() && !file.account_pool {
+    if file.account_id.is_some() && !file.account_pool.is_on() {
         return Err(ApiProblem::bad_request("account_id requires account_pool"));
     }
-    if !file.tier_models.is_empty() && !matches!(file.adapter.as_str(), "claude-code" | "codex") {
+    let opencode_go_acp = file.adapter == "acp"
+        && matches!(
+            file.resolved_llm_source().source,
+            task_core::LlmSourceRef::OpencodeGo
+        );
+    if !file.tier_models.is_empty()
+        && !matches!(file.adapter.as_str(), "claude-code" | "codex")
+        && !opencode_go_acp
+    {
         return Err(ApiProblem::bad_request(
             "tier_models supported only for Claude/GPT",
         ));
@@ -484,6 +496,7 @@ fn check_provider_kind(
         LlmSourceRef::Celeris => celeris_model || celeris_env_model,
         LlmSourceRef::ClaudeOauth => file.adapter == "claude-code" && !celeris_model,
         LlmSourceRef::CodexOauth => file.adapter == "codex" && !celeris_model,
+        LlmSourceRef::OpencodeGo => file.adapter == "acp",
         LlmSourceRef::None => matches!(file.adapter.as_str(), "fake" | "browser-specialist"),
         LlmSourceRef::OpenaiCompatible(id) => {
             !matches!(file.adapter.as_str(), "fake" | "claude-code" | "codex")

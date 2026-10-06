@@ -642,3 +642,323 @@ async fn egress_test_loopback_destination_skips_dns_only_for_listed_literal() {
     );
     assert_eq!(job.await.unwrap(), vec![1, 28]);
 }
+
+/// A one-shot loopback origin: records the request header it receives, answers
+/// `reply`, then closes (as a `Connection: close` server does).
+async fn http_origin(reply: &'static [u8]) -> (u16, tokio::task::JoinHandle<Vec<u8>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut header = vec![];
+        while !header.ends_with(b"\r\n\r\n") {
+            header.push(socket.read_u8().await.unwrap());
+        }
+        socket.write_all(reply).await.unwrap();
+        socket.shutdown().await.unwrap();
+        // Anything further on this connection would be a second request.
+        let mut rest = vec![];
+        let _ = socket.read_to_end(&mut rest).await;
+        header.extend(rest);
+        header
+    });
+    (port, task)
+}
+
+fn loopback_policy(port: u16) -> EgressPolicy {
+    let mut policy = policy();
+    policy.allow.insert(format!("127.0.0.1:{port}"));
+    policy
+        .test_loopback_allow
+        .insert(format!("127.0.0.1:{port}"));
+    policy
+}
+
+/// Sends `request` through `serve_recorded` and returns everything the client reads.
+async fn forward_exchange(
+    request: Vec<u8>,
+    policy: EgressPolicy,
+) -> (Vec<u8>, Result<(), EgressError>, Option<Denial>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    client.write_all(&request).await.unwrap();
+    let mut output = vec![];
+    timeout(Duration::from_secs(5), client.read_to_end(&mut output))
+        .await
+        .unwrap()
+        .unwrap();
+    drop(client);
+    let (result, denial) = job.await.unwrap();
+    (output, result, denial)
+}
+
+const REPLY: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello";
+
+#[tokio::test]
+async fn egress_get_allowed_origin_is_forwarded_in_origin_form() {
+    let (port, origin) = http_origin(REPLY).await;
+    let request = format!(
+        "GET http://127.0.0.1:{port}/page?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Proxy-Connection: keep-alive\r\nAccept: text/html\r\nUser-Agent: Chrome\r\n\r\n"
+    );
+    let (output, result, denial) =
+        forward_exchange(request.into_bytes(), loopback_policy(port)).await;
+    assert_eq!(result, Ok(()));
+    assert!(denial.is_none());
+    assert_eq!(output, REPLY);
+    let seen = String::from_utf8(origin.await.unwrap()).unwrap();
+    assert_eq!(
+        seen,
+        format!(
+            "GET /page?q=1 HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nAccept: text/html\r\n\
+             User-Agent: Chrome\r\nConnection: close\r\n\r\n"
+        )
+    );
+}
+
+#[tokio::test]
+async fn egress_head_and_default_path_are_forwarded() {
+    let reply: &[u8] = b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\n";
+    let (port, origin) = http_origin(reply).await;
+    let request =
+        format!("HEAD http://127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    let (output, result, _) = forward_exchange(request.into_bytes(), loopback_policy(port)).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(output, reply);
+    let seen = String::from_utf8(origin.await.unwrap()).unwrap();
+    assert!(seen.starts_with("HEAD / HTTP/1.1\r\n"), "{seen}");
+}
+
+#[tokio::test]
+async fn egress_get_drops_hop_by_hop_headers() {
+    let (port, origin) = http_origin(REPLY).await;
+    let request = format!(
+        "GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\
+         Connection: keep-alive, X-Secret-Hop\r\nX-Secret-Hop: drop-me\r\n\
+         Proxy-Connection: keep-alive\r\nProxy-Authorization: Basic c2VjcmV0\r\n\
+         Keep-Alive: timeout=5\r\nTE: trailers\r\nTrailer: Expires\r\nUpgrade: websocket\r\n\
+         Content-Length: 0\r\nCookie: a=b\r\nX-End: kept\r\n\r\n"
+    );
+    let (output, result, _) = forward_exchange(request.into_bytes(), loopback_policy(port)).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(output, REPLY);
+    let seen = String::from_utf8(origin.await.unwrap()).unwrap();
+    assert_eq!(
+        seen,
+        format!(
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: a=b\r\nX-End: kept\r\n\
+             Connection: close\r\n\r\n"
+        )
+    );
+    for gone in [
+        "keep-alive",
+        "X-Secret-Hop",
+        "drop-me",
+        "Proxy-",
+        "c2VjcmV0",
+        "TE:",
+        "Trailer",
+        "Upgrade",
+        "Content-Length",
+    ] {
+        assert!(!seen.contains(gone), "{gone} leaked: {seen}");
+    }
+}
+
+#[tokio::test]
+async fn egress_get_serves_one_request_per_connection() {
+    let (port, origin) = http_origin(REPLY).await;
+    let one = format!("GET http://127.0.0.1:{port}/a HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    // A pipelined second request, even to the same allowed origin, is never read.
+    let two = format!("GET http://127.0.0.1:{port}/b HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n");
+    let (output, result, _) =
+        forward_exchange(format!("{one}{two}").into_bytes(), loopback_policy(port)).await;
+    assert_eq!(result, Ok(()));
+    // The client sees exactly one response followed by EOF.
+    assert_eq!(output, REPLY);
+    let seen = String::from_utf8(origin.await.unwrap()).unwrap();
+    assert!(seen.starts_with("GET /a HTTP/1.1\r\n"), "{seen}");
+    assert!(!seen.contains("/b"), "{seen}");
+}
+
+#[tokio::test]
+async fn egress_get_switching_origin_on_the_same_connection_never_connects() {
+    let (port, origin) = http_origin(REPLY).await;
+    let other = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let other_port = other.local_addr().unwrap().port();
+    let mut policy = loopback_policy(port);
+    policy
+        .test_loopback_allow
+        .insert(format!("127.0.0.1:{other_port}"));
+    let request = format!(
+        "GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n\
+         GET http://127.0.0.1:{other_port}/ HTTP/1.1\r\nHost: 127.0.0.1:{other_port}\r\n\r\n"
+    );
+    let (output, result, _) = forward_exchange(request.into_bytes(), policy).await;
+    assert_eq!(result, Ok(()));
+    assert_eq!(output, REPLY);
+    origin.await.unwrap();
+    assert!(
+        timeout(Duration::from_millis(50), other.accept())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn egress_get_denials_are_recorded_like_connect() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder =
+        crate::browser_runtime::DenialRecorder::new(dir.path(), "session-get").unwrap();
+    let (port, _origin) = http_origin(REPLY).await;
+    let cases: Vec<(String, &str, Option<&str>, Option<u16>)> = vec![
+        (
+            "GET http://evil.com/PATH_SECRET HTTP/1.1\r\nHost: evil.com\r\nCookie: HEADER_SECRET\r\n\r\n".into(),
+            "not_allowed",
+            Some("evil.com"),
+            Some(80),
+        ),
+        (
+            format!("GET http://127.0.0.1:{}/ HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n\r\n", port.wrapping_add(1).max(1), port.wrapping_add(1).max(1)),
+            "ip_literal",
+            Some("127.0.0.1"),
+            Some(port.wrapping_add(1).max(1)),
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: evil.com\r\n\r\n"),
+            "host_mismatch",
+            Some("127.0.0.1"),
+            Some(port),
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"),
+            "host_mismatch",
+            Some("127.0.0.1"),
+            Some(port),
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\n\r\n"),
+            "host_mismatch",
+            Some("127.0.0.1"),
+            Some(port),
+        ),
+        (
+            "GET https://example.com/PATH_SECRET HTTP/1.1\r\nHost: example.com\r\n\r\n".into(),
+            "scheme_not_allowed",
+            Some("example.com"),
+            Some(80),
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: 4\r\n\r\nBODY_SECRET"),
+            "request_body",
+            Some("127.0.0.1"),
+            Some(port),
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nTransfer-Encoding: chunked\r\n\r\n"),
+            "request_body",
+            Some("127.0.0.1"),
+            Some(port),
+        ),
+        (
+            format!("POST http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+        (
+            format!("GET http://user@127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+        (
+            format!("GET /relative HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.0\r\nHost: 127.0.0.1:{port}\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+        (
+            format!("GET http://127.0.0.1:{port}/ HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n X-Fold: a\r\n\r\n"),
+            "malformed",
+            None,
+            None,
+        ),
+    ];
+    // Closed resolver: any DNS attempt fails instead of leaving the host.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut policy = loopback_policy(port);
+    policy.resolver = closed.local_addr().unwrap().ip();
+    drop(closed);
+    let expected: Vec<_> = cases.iter().map(|(_, kind, _, _)| *kind).collect();
+    for (request, kind, host, record_port) in cases {
+        let (output, result, denial) =
+            forward_exchange(request.clone().into_bytes(), policy.clone()).await;
+        assert_eq!(output, DENIED, "{request}");
+        assert!(result.is_err(), "{request}");
+        let denial = denial.unwrap();
+        assert_eq!(denial.kind, kind, "{request}");
+        assert_eq!(denial.host.as_deref(), host, "{request}");
+        assert_eq!(denial.port, record_port, "{request}");
+        recorder.append(denial).unwrap();
+    }
+    let contents = std::fs::read_to_string(dir.path().join("egress-denied.jsonl")).unwrap();
+    for secret in ["PATH_SECRET", "HEADER_SECRET", "BODY_SECRET"] {
+        assert!(!contents.contains(secret), "{secret}");
+    }
+    let kinds: Vec<String> = contents
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(kinds, expected);
+}
+
+#[tokio::test]
+async fn egress_get_allowed_name_is_checked_after_dns() {
+    // A listed name resolving to a private address is refused after DNS and recorded.
+    let (resolver, dns) = dns_fixture(&["10.1.2.3"]).await;
+    let mut policy = policy();
+    policy.allow.insert("example.com:80".into());
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client
+        .write_all(b"GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        .await
+        .unwrap();
+    let mut denial = None;
+    let result = destination_recorded(&mut server, &policy, resolver, &mut denial).await;
+    assert_eq!(result, Err(EgressError::Denied));
+    let denial = denial.unwrap();
+    assert_eq!(denial.kind, "private_address");
+    assert_eq!(denial.host.as_deref(), Some("example.com"));
+    assert_eq!(denial.port, Some(80));
+    assert_eq!(dns.await.unwrap(), vec![1, 28]);
+    // A public answer is pinned and carried as an origin-form forward.
+    let (resolver, dns) = dns_fixture(&["93.184.216.34"]).await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client
+        .write_all(b"GET http://example.com/x HTTP/1.1\r\nHost: example.com:80\r\n\r\n")
+        .await
+        .unwrap();
+    let (address, mode) = destination_recorded(&mut server, &policy, resolver, &mut None)
+        .await
+        .unwrap();
+    assert_eq!(address, "93.184.216.34:80".parse().unwrap());
+    assert_eq!(
+        mode,
+        Mode::Forward(
+            b"GET /x HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n".to_vec()
+        )
+    );
+    assert_eq!(dns.await.unwrap(), vec![1, 28]);
+}

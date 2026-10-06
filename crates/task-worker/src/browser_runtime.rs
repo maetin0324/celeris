@@ -430,7 +430,9 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
     }
     a.push(SESSION_ROOT.into());
     for (k, v) in [
-        ("HOME", SESSION_ROOT.to_owned()),
+        // F4: Chrome/fontconfig write ~/.config and ~/.cache as the browser UID; keep them in
+        // home/, which the launcher's subuid cleanup empties.
+        ("HOME", format!("{SESSION_ROOT}/home")),
         ("TMPDIR", format!("{SESSION_ROOT}/tmp")),
         ("PATH", "/usr/bin:/bin".to_owned()),
     ] {

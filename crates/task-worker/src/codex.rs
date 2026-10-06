@@ -444,6 +444,7 @@ async fn run_codex_once(
     sink: &dyn EventSink,
     prompt: &str,
     resume_id: Option<&str>,
+    images: &[PathBuf],
     stdout_log_path: &std::path::Path,
     stderr_log_path: &std::path::Path,
 ) -> Result<CodexAttempt, AdapterError> {
@@ -490,12 +491,22 @@ async fn run_codex_once(
         command.arg("resume").arg(id);
         is_exec_resume_subcommand = true;
     }
+    // ADR 2026-10-05 cos-chat-home D4: native image input of a CoS chat run. `-i/--image` is on
+    // both `codex exec --help` and `codex exec resume --help`. It takes several values, so it goes
+    // before `--json` (the next flag ends its values; the trailing `-` prompt is never swallowed).
+    for image in images {
+        command.arg("--image").arg(image);
+    }
     // ADR-0054 D2（Phase 68）: CoS の対話 run だけ read-only sandbox（読み取りの道具の代わり。codex には
     // claude-code の `--allowedTools` に相当する道具単位の許可リストが無いため、書き込みそのものを
     // 塞ぐ）。`--add-dir` した `artifacts_dir`（下。fresh run のみ。Phase 68b/68c 参照）は read-only でも
     // 書ける（celeris が渡す「結果ファイルを書く場所」の明示的な例外。codex の writable_roots の扱いに依る）。
     // それ以外の run は従来どおり `workspace-write`（result.json の契約に書き込みが要る）。
-    let sandbox_mode = if req.context.conversation_addressee
+    // ADR 2026-10-05 cos-chat-home D2: a CoS chat run (`context.cos_chat`) is not this read-only
+    // conversation; it gets the normal workspace-write tools within D3 (no ADR-0095 D-b flags).
+    let sandbox_mode = if req.context.cos_chat.is_some() {
+        "workspace-write"
+    } else if req.context.conversation_addressee
         == Some(crate::protocol::ConversationAddressee::Secretary)
     {
         "read-only"
@@ -725,7 +736,13 @@ async fn run_codex_once(
                             conversation_reply = None;
                         }
                     }
-                    handle_line(trimmed, sink, &mut last_signal, &mut last_error_message);
+                    handle_line(
+                        trimmed,
+                        sink,
+                        &mut last_signal,
+                        &mut last_error_message,
+                        req.context.cos_chat.is_some(),
+                    );
                 }
             }
         }
@@ -825,6 +842,33 @@ async fn run_codex(
     } else {
         resume_id
     };
+    let cos_chat = req.context.cos_chat.as_ref();
+    // ADR 2026-10-05 cos-chat-home D2: a CoS chat run whose resume cannot be guaranteed starts an
+    // explicit fresh session (the prompt carries the DB history) and says why in a status.
+    let resume_id = match cos_chat {
+        Some(_) if codex_session_requested(req) => match (resume_id, config.resume_mode) {
+            (Some(id), CodexResumeMode::ExecResume) => Some(id),
+            (Some(_), CodexResumeMode::ExperimentalResume) => {
+                cos_chat_explicit_fresh(
+                    sink,
+                    "codex resume_mode = experimental cannot guarantee `codex exec resume`",
+                );
+                None
+            }
+            (None, _) => {
+                cos_chat_explicit_fresh(
+                    sink,
+                    "extra_args have no -c translation for `codex exec resume`; ADR-0095 D-b",
+                );
+                None
+            }
+        },
+        _ => resume_id,
+    };
+    let images = match cos_chat {
+        Some(chat) => cos_chat_images(chat, &run_dir, sink).await,
+        None => Vec::new(),
+    };
 
     let stdout_log_path = run_dir.join("stdout.jsonl");
     let mut stderr_log_path = run_dir.join("stderr.log");
@@ -836,6 +880,7 @@ async fn run_codex(
         sink,
         &prompt,
         resume_id.as_deref(),
+        &images,
         &stdout_log_path,
         &stderr_log_path,
     )
@@ -875,6 +920,7 @@ async fn run_codex(
                 sink,
                 &prompt,
                 None,
+                &images,
                 &retry_stdout_log_path,
                 &retry_stderr_log_path,
             )
@@ -972,8 +1018,9 @@ async fn run_codex(
             )
             .await;
             // A conversation can answer directly; work orders still require their artifacts.
+            // A CoS chat run (transient task without `conversation`) also replies in the chat.
             let terminal = if exit_status.success()
-                && req.task.conversation.is_some()
+                && (req.task.conversation.is_some() || cos_chat.is_some())
                 && req.task.kind == task_core::TaskKind::Execute
                 && matches!(tokio::fs::metadata(&result_path).await,
                     Err(ref error) if error.kind() == std::io::ErrorKind::NotFound)
@@ -987,7 +1034,10 @@ async fn run_codex(
                 // terminal from disk through the normal path (`terminal_from_result`) so
                 // `actions`/`memory`/`milestone_proposal` all pick it up via the existing,
                 // disk-reading machinery instead of the raw JSON text being treated as inert prose.
-                if crate::result_report::final_message_is_recoverable_result(&summary) {
+                // A CoS chat run must not use `result.actions`; its reply stays plain text.
+                if cos_chat.is_none()
+                    && crate::result_report::final_message_is_recoverable_result(&summary)
+                {
                     match tokio::fs::write(&result_path, &summary).await {
                         Ok(()) => {
                             crate::progress::emit_status(
@@ -1049,6 +1099,86 @@ async fn run_codex(
     })
 }
 
+/// CoS chat: did the dispatcher ask this adapter to resume a session?
+fn codex_session_requested(req: &RunRequest) -> bool {
+    req.context
+        .session
+        .as_ref()
+        .is_some_and(|s| s.adapter == CodexAdapter::ID && s.resume)
+}
+
+/// The explicit fresh start of a CoS chat run: the prompt already carries the summary and the
+/// unsummarized DB history (`cos_chat::build_prompt`); the status names the reason.
+fn cos_chat_explicit_fresh(sink: &dyn EventSink, why: &str) {
+    crate::progress::emit_status(
+        sink,
+        &format!(
+            "{} ({why})",
+            crate::cos_chat::capability_reason(crate::cos_chat::MissingCapability::Continuation)
+        ),
+    );
+}
+
+/// ADR 2026-10-05 cos-chat-home D4: the `--image` paths of a CoS chat run. The route is the same
+/// `image_delivery` judgement the prompt shows (`actual=`): native → `--image`, path+tool → only
+/// the path in the prompt, unsupported → a status saying the image was not inspected. codex splits
+/// `--image` values on `,`, so a path containing one is passed as a copy under the run dir.
+async fn cos_chat_images(
+    chat: &crate::protocol::CosChatContext,
+    run_dir: &Path,
+    sink: &dyn EventSink,
+) -> Vec<PathBuf> {
+    use crate::cos_chat::{ImageDelivery, image_delivery, image_delivery_reason};
+    let mut images = Vec::new();
+    for (index, attachment) in chat.attachments.iter().enumerate() {
+        let delivery = image_delivery(attachment.delivery, chat.harness_capabilities.as_ref());
+        match delivery {
+            ImageDelivery::Native => {
+                if !attachment.path.to_string_lossy().contains(',') {
+                    images.push(attachment.path.clone());
+                    continue;
+                }
+                let ext = attachment
+                    .path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .filter(|e| !e.contains(','))
+                    .unwrap_or("img");
+                let dir = run_dir.join("cos-images");
+                let copy = dir.join(format!("{index}.{ext}"));
+                let copied = async {
+                    tokio::fs::create_dir_all(&dir).await?;
+                    tokio::fs::copy(&attachment.path, &copy).await
+                }
+                .await;
+                match copied {
+                    Ok(_) => images.push(copy),
+                    Err(e) => crate::progress::emit_status(
+                        sink,
+                        &format!(
+                            "attachment {}: {} (could not stage for --image: {e})",
+                            attachment.id,
+                            crate::cos_chat::capability_reason(
+                                crate::cos_chat::MissingCapability::Image
+                            )
+                        ),
+                    ),
+                }
+            }
+            ImageDelivery::PathAndTool | ImageDelivery::Unsupported => {
+                if let Some(reason) = image_delivery_reason(delivery) {
+                    crate::progress::emit_status(
+                        sink,
+                        &format!("attachment {}: {reason}", attachment.id),
+                    );
+                }
+            }
+            ImageDelivery::FilePath => {}
+        }
+    }
+    images
+}
+
 /// codex の JSON Lines の 1 行を解釈する。既知でない `type` や JSON として不正な行は無視する
 /// （`claude_code::handle_line` と同じ方針。ADR-0008 D3）。
 fn handle_line(
@@ -1056,6 +1186,7 @@ fn handle_line(
     sink: &dyn EventSink,
     last_signal: &mut Option<TurnSignal>,
     last_error_message: &mut Option<String>,
+    cos_chat: bool,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -1071,7 +1202,7 @@ fn handle_line(
     if ty.starts_with("item.") {
         // ADR-0048 D2（Phase 60a）: codex の `item.*` を正規化する。`msg` は従来どおり行そのもの
         // （500 バイトで切る）で、構造化フィールドを**足すだけ**。
-        let fields = item_progress(ty, value.get("item"));
+        let fields = item_progress(ty, value.get("item"), cos_chat);
         sink.progress_with(&truncate(line, 500), &fields);
         return;
     }
@@ -1135,7 +1266,13 @@ fn handle_line(
 ///   （`exit_code != 0` は `error`）。
 /// - `agent_message` は `text`、`reasoning` は `thinking`（要約だけ）。
 /// - それ以外（`todo_list` や知らない item）は `status`（節目）。
-fn item_progress(ty: &str, item: Option<&serde_json::Value>) -> task_core::ProgressFields {
+///
+/// `cos_chat`: a CoS chat run streams the whole `agent_message` (newlines kept) as its text delta.
+fn item_progress(
+    ty: &str,
+    item: Option<&serde_json::Value>,
+    cos_chat: bool,
+) -> task_core::ProgressFields {
     let Some(item) = item else {
         return progress::status();
     };
@@ -1149,7 +1286,11 @@ fn item_progress(ty: &str, item: Option<&serde_json::Value>) -> task_core::Progr
     match item_type {
         "agent_message" => {
             let text = item.get("text").and_then(|t| t.as_str()).unwrap_or("");
-            progress::text(&progress::one_line(text))
+            if cos_chat {
+                progress::text(text)
+            } else {
+                progress::text(&progress::one_line(text))
+            }
         }
         "reasoning" => {
             let text = item
@@ -1279,3 +1420,6 @@ async fn terminal_from_result(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod cos_chat_tests;

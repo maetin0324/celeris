@@ -5,10 +5,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod attachments;
+mod credential;
+#[cfg(test)]
+mod credential_tests;
 mod run_store;
 mod store;
 #[cfg(test)]
 mod store_tests;
+pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,

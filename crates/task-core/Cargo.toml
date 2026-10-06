@@ -9,6 +9,7 @@ time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 # ADR-0064 D2/D3: "backup" は `rusqlite::backup`（バックアップ API）を有効にする。
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 sha2 = "0.10"
+getrandom = "0.2"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -1,0 +1,1 @@
+{"api_version":"1","schema_version":51,"celeris_version":"0.1.0","instance_id":"01M48BW07CTH269P5XKCEQGF57","started_at":"2026-10-06T10:24:10.393993743Z","now":"2026-10-06T10:24:10.583785508Z","db":{"journal_mode":"wal","busy_timeout_ms":5000,"filesystem":"ext4","device":"/dev/mapper/pve-vm--100--disk--0"},"release":"dev","mode":"normal","role":"active"}

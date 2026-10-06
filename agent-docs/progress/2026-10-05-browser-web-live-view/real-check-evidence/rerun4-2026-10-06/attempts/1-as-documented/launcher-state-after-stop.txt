@@ -1,0 +1,121 @@
+/var/tmp/cb-1001/launcher-state:
+total 20
+drwx------  5 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwx--x--x 11 rmaeda          rmaeda          4096 10月  6 10:26 ..
+drwx------  2 celeris-browser celeris-browser 4096 10月  6 10:24 registry
+drwx------  3 celeris-browser celeris-browser 4096 10月  6 10:24 sessions
+drwx------  2 celeris-browser celeris-browser 4096 10月  6 10:24 supervisor
+
+/var/tmp/cb-1001/launcher-state/registry:
+total 8
+drwx------ 2 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwx------ 5 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions:
+total 12
+drwx------ 3 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwx------ 5 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 53fd8dada5502c7351fca9efd2e3853b
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b:
+total 36
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwx------ 3 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+drwxr-xr-x 3          296608          296608 4096 10月  6 10:24 .cache
+drwx------ 3          296608          296608 4096 10月  6 10:24 .config
+-rw-r--r-- 1 celeris-browser celeris-browser 5568 10月  6 10:24 browser_action.py
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 home
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 output
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 run
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.cache:
+total 12
+drwxr-xr-x 3          296608          296608 4096 10月  6 10:24 .
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+drwxr-xr-x 2          296608          296608 4096 10月  6 10:24 fontconfig
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.cache/fontconfig:
+total 280
+drwxr-xr-x 2 296608 296608  4096 10月  6 10:24 .
+drwxr-xr-x 3 296608 296608  4096 10月  6 10:24 ..
+-rw------- 1 296608 296608  3016 10月  6 10:24 0bd3dc0958fa2205aaaa8ebb13e2872b-le64.cache-11
+-rw------- 1 296608 296608   120 10月  6 10:24 111149350c6eff283e78acef98e70f62-le64.cache-11
+-rw------- 1 296608 296608 23640 10月  6 10:24 3047814df9a2f067bd2d96a2b9c36e5a-le64.cache-11
+-rw------- 1 296608 296608   224 10月  6 10:24 3830d5c3ddfd5cd38a049b759396e72e-le64.cache-11
+-rw------- 1 296608 296608   112 10月  6 10:24 4c599c202bc5c08e2d34565a40eac3b2-le64.cache-11
+-rw------- 1 296608 296608 14656 10月  6 10:24 4d6aee6d44eccb37054d3216e945f618-le64.cache-11
+-rw------- 1 296608 296608   264 10月  6 10:24 573ec803664ed168555e0e8b6d0f0c7f-le64.cache-11
+-rw------- 1 296608 296608   128 10月  6 10:24 6333f38776742d18e214673cd2c24e34-le64.cache-11
+-rw------- 1 296608 296608   168 10月  6 10:24 707971e003b4ae6c8121c3a920e507f5-le64.cache-11
+-rw------- 1 296608 296608 12984 10月  6 10:24 7ef2298fde41cc6eeb7af42e48b7d293-le64.cache-11
+-rw------- 1 296608 296608 11064 10月  6 10:24 99e8ed0e538f840c565b6ed5dad60d56-le64.cache-11
+-rw------- 1 296608 296608   200 10月  6 10:24 CACHEDIR.TAG
+-rw------- 1 296608 296608 35824 10月  6 10:24 bb9ef35e7661cc55c3d6e0d2d8cc2051-le64.cache-11
+-rw------- 1 296608 296608   272 10月  6 10:24 c855463f699352c367813e37f3f70ea7-le64.cache-11
+-rw------- 1 296608 296608 91232 10月  6 10:24 d52a8644073d54c13679302ca1180695-le64.cache-11
+-rw------- 1 296608 296608 21472 10月  6 10:24 d589a48862398ed80a3d6066f4f56f4c-le64.cache-11
+-rw------- 1 296608 296608  7232 10月  6 10:24 da82082e1ef13c4097208324d67c180c-le64.cache-11
+-rw------- 1 296608 296608   120 10月  6 10:24 e13b20fdb08344e0e664864cc2ede53d-le64.cache-11
+-rw------- 1 296608 296608   120 10月  6 10:24 fe547fea3a41b43a38975d292a2b19c7-le64.cache-11
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config:
+total 12
+drwx------ 3          296608          296608 4096 10月  6 10:24 .
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+drwx------ 3          296608          296608 4096 10月  6 10:24 google-chrome-for-testing
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing:
+total 12
+drwx------ 3 296608 296608 4096 10月  6 10:24 .
+drwx------ 3 296608 296608 4096 10月  6 10:24 ..
+drwx------ 6 296608 296608 4096 10月  6 10:24 Crash Reports
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing/Crash Reports:
+total 28
+drwx------ 6 296608 296608 4096 10月  6 10:24 .
+drwx------ 3 296608 296608 4096 10月  6 10:24 ..
+drwx------ 2 296608 296608 4096 10月  6 10:24 attachments
+drwx------ 2 296608 296608 4096 10月  6 10:24 completed
+drwx------ 2 296608 296608 4096 10月  6 10:24 new
+drwx------ 2 296608 296608 4096 10月  6 10:24 pending
+-rw------- 1 296608 296608   40 10月  6 10:24 settings.dat
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing/Crash Reports/attachments:
+total 8
+drwx------ 2 296608 296608 4096 10月  6 10:24 .
+drwx------ 6 296608 296608 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing/Crash Reports/completed:
+total 8
+drwx------ 2 296608 296608 4096 10月  6 10:24 .
+drwx------ 6 296608 296608 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing/Crash Reports/new:
+total 8
+drwx------ 2 296608 296608 4096 10月  6 10:24 .
+drwx------ 6 296608 296608 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/.config/google-chrome-for-testing/Crash Reports/pending:
+total 8
+drwx------ 2 296608 296608 4096 10月  6 10:24 .
+drwx------ 6 296608 296608 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/home:
+total 8
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/output:
+total 8
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/sessions/53fd8dada5502c7351fca9efd2e3853b/run:
+total 8
+drwxrwxrwx 2 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwxrwxrwt 7 celeris-browser celeris-browser 4096 10月  6 10:24 ..
+
+/var/tmp/cb-1001/launcher-state/supervisor:
+total 8
+drwx------ 2 celeris-browser celeris-browser 4096 10月  6 10:24 .
+drwx------ 5 celeris-browser celeris-browser 4096 10月  6 10:24 ..

@@ -1,0 +1,2 @@
+current launcher session contains no denial for the forbidden origin
+exit=1

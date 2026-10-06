@@ -1,0 +1,87 @@
+{"t": 1791282505.117, "started": true, "argv": [], "cwd": "/var/tmp/cb-1001/w/01M48C3S3BG7BGMTYWJVQX9GZG"}
+{"t": 1791282505.117, "rpc": "initialize"}
+{"t": 1791282505.118, "rpc": "session/new"}
+{"t": 1791282505.119, "rpc": "session/prompt"}
+{"t": 1791282505.119, "cli": "/var/tmp/cb-1001/w/01M48C3S3BG7BGMTYWJVQX9GZG/runs/01M48C3S97HP0VV8N3ZSD8P7RG/browser/celeris-browser.py"}
+{"t": 1791282530.502, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.38, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282533.544, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282536.583, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282539.618, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282542.661, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282545.701, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282548.741, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282551.781, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282554.82, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282554.82, "summary": {"allowed_open_exit": 1, "link_ref": null, "click_exit": null, "snapshot_after_click_exit": 1}}
+{"t": 1791282554.86, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282557.902, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282560.941, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282563.98, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282567.019, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282570.058, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282573.098, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282576.139, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282579.179, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282582.218, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282585.258, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282588.297, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282591.336, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282594.376, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282597.415, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282600.455, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282603.495, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282606.534, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282609.574, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282612.613, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282615.652, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282618.692, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282621.731, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282624.772, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282627.813, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282630.856, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282633.897, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282636.938, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282639.981, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282643.022, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282646.063, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282649.105, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282652.148, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282655.189, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282658.23, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282661.271, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282664.311, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282667.352, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282670.392, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282673.432, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282676.472, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282679.511, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282682.55, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282685.59, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282688.63, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282691.671, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282694.711, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282697.75, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282700.79, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282703.829, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282706.863, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282709.897, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282712.932, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282715.966, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282719.002, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282722.037, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282725.073, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282728.108, "call": ["snapshot"], "exit": 1, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282731.149, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282734.19, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282737.231, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282740.273, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282743.313, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282746.355, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282749.396, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282752.437, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282755.478, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282758.518, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282761.559, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282764.598, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282767.637, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282770.677, "call": ["snapshot"], "exit": 1, "secs": 0.04, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}

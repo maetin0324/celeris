@@ -1,0 +1,202 @@
+[
+  {
+    "step": "org list",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org PATCH",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings PATCH widen",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings PATCH invalid origin",
+    "status": 422,
+    "expected": 422
+  },
+  {
+    "step": "settings PATCH restore",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org list after settings",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings edit",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ],
+    "result": "passed"
+  },
+  {
+    "step": "launcher log boundary",
+    "daemon_log_offset": 2812
+  },
+  {
+    "step": "task POST",
+    "status": 201,
+    "expected": 201
+  },
+  {
+    "step": "task browser policy PUT",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "task browser policy GET",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "task_id": "01M48CEK12T3C9YATFE2Z0JBRN",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ],
+    "policy": {
+      "policy": {
+        "allowed_actions": [
+          "navigate",
+          "snapshot",
+          "extract",
+          "click",
+          "scroll"
+        ],
+        "approval_actions": [],
+        "credential_policy_ids": [],
+        "domain_mode": "common_hosts",
+        "navigation_origins": [],
+        "network_domains": [
+          "http://127.0.0.1:17730"
+        ],
+        "policy_id": "real-check-loopback",
+        "revision": 1
+      }
+    }
+  },
+  {
+    "step": "owner challenge",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner session",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "live view unauthenticated",
+    "status": 401,
+    "expected": 401
+  },
+  {
+    "step": "live stream unauthenticated",
+    "status_line": "HTTP/1.1 401 Rejected"
+  },
+  {
+    "step": "second web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "second owner session",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "live view non-owner",
+    "status": 403,
+    "expected": 403
+  },
+  {
+    "step": "live stream non-owner",
+    "status_line": "HTTP/1.1 403 Rejected"
+  },
+  {
+    "step": "live view",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "input without lease (agent running)",
+    "reply": {
+      "type": "input_denied",
+      "code": "lease_required"
+    },
+    "upstream_input_frames": 0
+  },
+  {
+    "step": "DIAG2 collector before pause",
+    "collector_status": "1"
+  },
+  {
+    "step": "control status",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "pause",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "pause_phase": "pausing",
+    "agent_phase_before": "agent_running"
+  },
+  {
+    "step": "takeover",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "input with lease",
+    "upstream_input_forwarded": true
+  },
+  {
+    "step": "release",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "input without lease (after release)",
+    "reply": {
+      "type": "input_denied",
+      "code": "lease_required"
+    },
+    "upstream_input_frames": 0
+  },
+  {
+    "step": "wait open",
+    "status": 201,
+    "expected": 201
+  },
+  {
+    "step": "wait listed",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "decision deny",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "run_id": "01M48CEK6TQVKK4NP9NANGGDH2",
+    "session_id": "celeris-add90fd2da455f20cbf6948bf22173f8",
+    "wait_id": "01M48CMHX6NQ2JSQMJPG2QXAK1",
+    "decision_origin": "https://real-check.celeris.invalid",
+    "result": "api_passed"
+  }
+]

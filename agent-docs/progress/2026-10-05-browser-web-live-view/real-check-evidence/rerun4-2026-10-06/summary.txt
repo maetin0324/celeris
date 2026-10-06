@@ -1,0 +1,91 @@
+Fable rerun 4 of the browser web Live View real check, 2026-10-06 (task 01M46W97H391DSFW1XJ745W0G9).
+Tested code: child task 01M4896B1Q1617Q95NT2BNDNAF tree at bee1c2e4 (bee1c2e499845a6167fa949274ecf0cbbeafc617,
+"integrate wu/verify (phase verify)", includes c2696fee and the R5-R8 fixes). Binaries were built from that tree with
+CARGO_TARGET_DIR=/var/tmp/fable-merge-target. The script, doc and web were run from a git-archive copy of bee1c2e4 in
+/var/tmp/fable-rerun4-src (the child tree has no web/node_modules; node_modules were copied from the parent tree and
+web/dist was rebuilt there, giving the same index.html sha256 as rerun 3). The child tree was used read-only and is still
+clean. The sha256 of every binary, the script and the doc is in versions.txt.
+
+Result: FAIL (exit 1 as documented; exit 1 after 2 diagnostic attempts).
+
+Isolation: test daemon on 127.0.0.1:17728 (DB /var/tmp/cb-1001/test.sqlite3, HOME=/var/tmp/cb-1001/home), plus a separate
+test launcher run as celeris-browser via sudo -n. Its config /var/tmp/celeris-browser-config-1001/launcher.toml was
+root:root 0644 in a root:root 0755 dir and had test_loopback_allow = ["127.0.0.1:17730"], exactly PAGE_PORT. The script
+checked that this matched exactly, and the launcher logged "test-only loopback egress enabled: 127.0.0.1:17730 (not for
+production)". Loopback pages on 17730/17731, live fixture on 17732, web gateway on 17729. Nothing production was touched:
+production daemon pid 639460 (7710), production web (7720/7721), production launcher pid 3335880
+(/etc/celeris-browser/launcher.toml) with /run/celeris-browser/launcher.sock, ~/.config/celeris, and /local/celeris/data/db.
+No external network was used and no host config, packages or fonts were changed. The configs were copied to config/
+BEFORE cleanup. The harness (config/loopback-acp-harness.py) is a local scripted ACP agent with no LLM. It follows the new
+objective: open the allowed page, snapshot, then click #forbidden-link by its @e ref. It never opens the forbidden URL
+with the wrapper. Secrets (api.token, web.password, attestation key) were never copied, and the evidence was grepped for
+all three with no hit.
+Cleanup: PASS. After the run no test process was left and nothing listened on 17728-17732. /var/tmp/cb-1001,
+/var/tmp/celeris-browser-config-1001 and /var/tmp/fable-rerun4-src were removed. /tmp/celeris-browser-1001 already
+existed before this run (other daemons of this UID use it). It was left in place and is empty.
+
+Per check (attempt 1, unpatched; attempts 2-3 gave the same result for these):
+- run list: PASS. /browser/runs shows a RUNNING run with live_path=/browser/live/{task}/{run} and no raw live_view_url.
+- Live View auth: PASS. The owner's GET returned 200. Unauthenticated: GET 401 and WS upgrade "HTTP/1.1 401 Rejected". A
+  second logged-in session has isOwner=false; its GET returned 403 and its WS upgrade "HTTP/1.1 403 Rejected".
+- gateway survives client RST: PASS. The script closes each rejected upgrade socket abruptly. The gateway kept serving
+  (the following live view/control requests returned 200), and web.log has no ECONNRESET or crash.
+- lease acquire/return: PASS. pause gave pausing then paused, takeover gave human_control, and release returned 200.
+- input with/without lease: PASS. With the lease, the marked input_mouse frame reached the upstream fixture. Without a
+  lease the gateway replied input_denied/lease_required and 0 frames went upstream, both while the agent ran and after
+  release.
+- waits: PASS. wait open 201 (origin https://real-check.celeris.invalid), listed as pending, web deny 200.
+- settings edit: PASS. Gateway PATCH widen 200 (both origins), javascript:alert(1) 422, restore 200, and the daemon's
+  GET /api/v1/org stores [http://127.0.0.1:17730].
+- allowed loopback navigation + screenshot: FAIL. Chrome itself now reaches the page through the egress. page.log has the
+  run's GET / 200 and GET /favicon.ico at the session start, and in attempt 3 a GET / 304 about every 28 s, so R5 and R6 are
+  fixed at the network level. But every agent-browser `open` returns after 25 s with "Operation timed out. The page may
+  still be loading or the element may not exist." (attempts 2-3, action observer). The run's browser action therefore
+  never succeeds, and no snapshot or click is possible. The script's page.log condition (>= 2 GET /) was met, but the
+  script stops at the egress step before Playwright runs, so no allowed-page.png exists.
+- Chrome-initiated out-of-scope navigation denied by egress: FAIL. The forbidden link could not be clicked because no
+  snapshot was ever available. 17731 received no request (denied-page.log has no GET). The current launcher session's
+  egress-denied.jsonl (attempts 2-3: launcher-session-egress-denied-records.txt) holds only Chrome background hosts
+  (clients2.google.com:80, update.googleapis.com, www.google.com, android.clients.google.com: kind=not_allowed), so
+  egress-denied.json is empty. The good part: the R7 lookup now finds the right launcher session id
+  (e.g. 4c789281c7166839f0041450e3784afe, taken from the daemon log) and reads its records.
+
+Cause, precisely (code vs script/doc):
+- F1 (CODE, blocking): agent-browser open never completes on the launcher runtime although Chrome loads the page.
+  Attempt 3 removes every pause/takeover interference: the driver waits for the collector before it pauses. All 7 opens
+  still reached Chrome (page.log) and each timed out after 25 s (agent-browser default timeout). In rerun 3 attempt 4 a
+  failing navigation came back in 0.4 s with net::ERR_HTTP_RESPONSE_CODE_FAILURE, so agent-browser does see navigation
+  failures. What it does not see is load completion. Likely places: the launcher's CDP attach/relay path between
+  agent-browser and Chrome (lifecycle/load events not delivered on the attached target), or the egress GET response
+  framing seen from Chrome. The 304 on revisit shows Chrome got the first response completely. Chrome logs 4x "Chrome
+  stderr category=other-startup-error" per session. Not decidable within the 2 diagnostics.
+- F2 (SCRIPT/DESIGN, blocking even after F1): the egress denial is collected only after the API driver finishes. By
+  then the driver has (a) paused, taken over and released the run, and release leaves ControlPhase=paused by design
+  (browser_control.rs: "Paused: no automatic resume"), so every agent action is Blocked in 0.04 s and never reaches the
+  launcher (attempt 2); and (b) opened and denied the decision wait. Deny moves the task blocked->failed
+  (approval_denied) and cancels the run and launcher session (attempt 1, task events) before the collector runs. The
+  script must let the agent do open/snapshot/click and collect the denial before pause (or resume after release), and in
+  any case before the decision wait deny.
+- F3 (SCRIPT/DOC vs CODE, would fail next): the doc and script require kind=private_address for 127.0.0.1:17731. The
+  egress (task-core check_egress, also used for forward GET) returns IpLiteral for any IP-literal host that is not the
+  test allowance, before any address check, so the record would be kind=ip_literal. Either the doc/script expects
+  ip_literal, or the denied target must be a hostname that resolves to loopback (that needs a resolver/hosts entry, which
+  is a host change and so a human decision). The diagnostics accepted ip_literal; this was not reached.
+- F4 (CODE, minor, not fixed): session dir left after the run. At session stop the launcher logs "remove session dir
+  /var/tmp/cb-1001/launcher-state/sessions/<id>: Permission denied (os error 13)". The launcher-owned files
+  (egress-denied.jsonl, policy, actions) are deleted, but .cache/.config owned by subuid 296608 remain
+  (launcher-state-after-stop.txt in every attempt). The mapped-subuid cleanup did not run or did not work on this host.
+  Note also that deleting egress-denied.jsonl at session stop means the denial evidence must be collected while the
+  session is alive (this relates to F2).
+
+Remaining defects: F1 (code: agent-browser open never reports load on the launcher runtime), F2 (script: denial collection
+comes after pause/release and after the decision deny, both of which stop agent actions or the session), F3 (doc/script:
+kind=private_address cannot occur for an IP-literal target; the code records ip_literal), F4 (code, minor: session dir with
+subuid-owned files left behind, EACCES).
+
+Files: attempts/1-as-documented (unpatched), attempts/2-diag1-collect-before-deny, attempts/3-diag2-collect-before-pause
+(each has checks.json, logs, run-browser/, task-events, launcher-state-after-stop.txt; diag attempts also have
+action-observer.jsonl and launcher-session-egress-denied-records.txt). commands/ holds setup, reset, run scripts,
+diag1/diag2 script patches (diagnostic only, not proposed fixes as written), and the observer. config/ holds launcher.toml,
+daemon.toml, harness, org.toml, conformance.json. No allowed-page.png. egress-denied.json is empty in every attempt
+(copied as-is).

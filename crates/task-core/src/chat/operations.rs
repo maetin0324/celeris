@@ -173,6 +173,26 @@ impl SqliteStore {
         get_conn(&conn, id)
     }
 
+    /// The operation recorded for `(thread_id, idempotency_key)`, if any.
+    pub fn cos_operation_find(
+        &self,
+        thread_id: &str,
+        idempotency_key: &str,
+    ) -> Result<Option<CosOperation>, ChatError> {
+        let conn = self.lock()?;
+        let id = conn
+            .query_row(
+                "SELECT id FROM cos_operations WHERE thread_id=?1 AND idempotency_key=?2",
+                params![thread_id, idempotency_key],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        match id {
+            Some(id) => get_conn(&conn, &id),
+            None => Ok(None),
+        }
+    }
+
     /// The closure must perform all domain writes through `tx`; any error rolls them back.
     /// A failed application is recorded in a new transaction after the rollback.
     #[allow(clippy::too_many_arguments)]

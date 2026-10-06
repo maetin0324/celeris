@@ -71,17 +71,34 @@ impl SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        match Self::decision_get_tx(&tx, decision_id)? {
+        let applied =
+            Self::decision_resolve_apply_tx(&tx, task_id, decision_id, expect, updated, events)?;
+        if applied {
+            tx.commit()?;
+        }
+        Ok(applied)
+    }
+
+    /// `decision_resolve_apply_impl` inside a caller's transaction (ADR 2026-10-05 D3). `false`
+    /// when the decision is no longer in `expect`; nothing is written then.
+    pub fn decision_resolve_apply_tx(
+        tx: &rusqlite::Connection,
+        task_id: TaskId,
+        decision_id: &str,
+        expect: crate::decision::DecisionStatus,
+        updated: Vec<WorkUnitRow>,
+        events: Vec<Event>,
+    ) -> Result<bool, StoreError> {
+        match Self::decision_get_tx(tx, decision_id)? {
             Some(row) if row.status == expect && row.task_id == task_id => {}
             _ => return Ok(false),
         }
         for wu in &updated {
-            Self::update_work_unit_tx(&tx, wu)?;
+            Self::update_work_unit_tx(tx, wu)?;
         }
         for ev in &events {
-            Self::append_event_tx(&tx, task_id, ev)?;
+            Self::append_event_tx(tx, task_id, ev)?;
         }
-        tx.commit()?;
         Ok(true)
     }
 }

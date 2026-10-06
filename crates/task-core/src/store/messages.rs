@@ -221,6 +221,17 @@ impl SqliteStore {
     ) -> Result<Option<Outcome>, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let outcome = Self::comment_add_tx(&tx, comment, transition)?;
+        tx.commit()?;
+        Ok(outcome)
+    }
+
+    /// `comment_add_impl` inside a caller's transaction (ADR 2026-10-05 D3).
+    pub fn comment_add_tx(
+        tx: &rusqlite::Connection,
+        comment: &TaskComment,
+        transition: Option<(Trigger, Vec<Event>)>,
+    ) -> Result<Option<Outcome>, StoreError> {
         let exists: bool = tx
             .query_row(
                 "SELECT 1 FROM tasks WHERE id = ?1",
@@ -250,14 +261,13 @@ impl SqliteStore {
         )?;
         let outcome = match transition {
             Some((trigger, extra_events)) => Some(Self::apply_transition_tx(
-                &tx,
+                tx,
                 comment.task_id,
                 trigger,
                 extra_events,
             )?),
             None => None,
         };
-        tx.commit()?;
         Ok(outcome)
     }
 

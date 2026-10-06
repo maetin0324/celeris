@@ -382,6 +382,7 @@ fn is_node_scoped(d: &DecisionRequest) -> bool {
 
 /// 決定の効き目を unit と events に写す（回答・取り下げで共有）。`after` は今回の回答・取り下げを当てた
 /// 節点の決定の行。
+#[derive(Debug, Clone)]
 struct Plan {
     rows: Vec<WorkUnitRow>,
     events: Vec<Event>,
@@ -533,6 +534,49 @@ pub fn answer(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<DecisionOutcome, OpsError> {
+    let plan = plan_answer(store, id, option, note, by, now)?;
+    if !store.decision_resolve_apply(
+        plan.node_id,
+        &plan.decision_id,
+        DecisionStatus::Open,
+        plan.plan.rows.clone(),
+        plan.plan.events.clone(),
+    )? {
+        let current = get_row(store, id)?;
+        return Err(not_open(&current, "answered"));
+    }
+    finish_answer(store, plan, now)
+}
+
+/// 回答の書き込み計画（読むだけ）。`decision_resolve_apply(node_id, decision_id, Open, rows, events)`
+/// で書き、結果を [`finish_answer`] に渡す。CoS の操作（ADR 2026-10-05 D3）は同じ計画を監査と同じ
+/// トランザクションで `SqliteStore::decision_resolve_apply_tx` に渡す。
+#[derive(Debug, Clone)]
+pub struct AnswerPlan {
+    pub node_id: TaskId,
+    pub decision_id: String,
+    effect: DecisionEffect,
+    plan: Plan,
+}
+
+impl AnswerPlan {
+    pub fn rows(&self) -> Vec<WorkUnitRow> {
+        self.plan.rows.clone()
+    }
+
+    pub fn events(&self) -> Vec<Event> {
+        self.plan.events.clone()
+    }
+}
+
+pub fn plan_answer(
+    store: &dyn TaskStore,
+    id: &str,
+    option: Option<&str>,
+    note: Option<&str>,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<AnswerPlan, OpsError> {
     let row = get_row(store, id)?;
     if row.status != DecisionStatus::Open {
         return Err(not_open(
@@ -547,29 +591,40 @@ pub fn answer(
     let effect = decision::answer_effect(row.kind, &option);
     let mut after_row = row.clone();
     after_row.apply_answer(&option, note, by, &rfc3339(now));
-    let plan = plan_effect(store, &node, &row, &after_row, effect, by, note, now)?;
+    let mut plan = plan_effect(store, &node, &row, &after_row, effect, by, note, now)?;
     let mut events = vec![Event::DecisionAnswered {
         id: row.id.clone(),
         option: option.clone(),
         note: note.map(str::to_string),
         by: by.to_string(),
     }];
-    events.extend(plan.events);
-    if !store.decision_resolve_apply(node.id, &row.id, DecisionStatus::Open, plan.rows, events)? {
-        let current = get_row(store, id)?;
-        return Err(not_open(&current, "answered"));
-    }
+    events.append(&mut plan.events);
+    plan.events = events;
+    Ok(AnswerPlan {
+        node_id: node.id,
+        decision_id: row.id,
+        effect,
+        plan,
+    })
+}
+
+/// 書いた後の後始末（`self` の取り下げなら節点を中止）と結果。
+pub fn finish_answer(
+    store: &dyn TaskStore,
+    plan: AnswerPlan,
+    now: OffsetDateTime,
+) -> Result<DecisionOutcome, OpsError> {
     let mut cancelled_task = None;
-    if plan.cancel_node {
-        cancel_node(store, node.id, now)?;
-        cancelled_task = Some(node.id);
+    if plan.plan.cancel_node {
+        cancel_node(store, plan.node_id, now)?;
+        cancelled_task = Some(plan.node_id);
     }
     Ok(DecisionOutcome {
-        decision: DecisionView::from_row(&get_row(store, id)?),
-        effect,
-        resumed: plan.resumed,
-        cancelled: plan.cancelled,
-        replan_requested: plan.replan_requested,
+        decision: DecisionView::from_row(&get_row(store, &plan.decision_id)?),
+        effect: plan.effect,
+        resumed: plan.plan.resumed,
+        cancelled: plan.plan.cancelled,
+        replan_requested: plan.plan.replan_requested,
         cancelled_task,
         notified_children: Vec::new(),
     })

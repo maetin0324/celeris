@@ -8,6 +8,7 @@ use serde::{Deserialize, Deserializer};
 use task_core::TaskStore;
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
 use crate::query::parse_task_id;
@@ -319,14 +320,54 @@ pub(super) async fn create_comment(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let CommentBody { body } = read_json(body, false).await?;
+    let body: CommentBody = read_json(body, false).await?;
     let result = state
-        .blocking(move |store| {
-            task_ops::comment::post_human_comment(store, id, body, OffsetDateTime::now_utc())
-                .map_err(|e| ops_problem(store, e, Some("comment")))
-        })
+        .blocking(move |store| create_comment_op(store, id, body, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::CREATED, &result))
+}
+
+/// `POST /tasks/{id}/comments` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （ADR 2026-10-05 D3。author は `cos`、コメント・遷移・監査を同じ transaction で書く）が共有する。
+pub(crate) fn create_comment_op(
+    store: &task_core::store::SqliteStore,
+    id: task_core::TaskId,
+    CommentBody { body }: CommentBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::comment::CommentResult>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        return task_ops::comment::post_human_comment(store, id, body, now)
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some("comment")));
+    };
+    let target_id = id.to_string();
+    let plan = task_ops::comment::plan_human_comment(store, id, Some("cos".into()), body, now)
+        .map_err(|e| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, e, Some("comment")),
+            )
+        })?;
+    let mut outcome = None;
+    let operation = audit.apply(store, "task", &target_id, "comment.create", |tx| {
+        outcome = task_core::store::SqliteStore::comment_add_tx(
+            tx,
+            &plan.comment,
+            plan.transition.clone(),
+        )?;
+        Ok(serde_json::json!({"task_id": target_id, "comment_id": plan.comment.id.to_string()}))
+    })?;
+    if operation.id == audit.ctx.operation_id {
+        // Follow-up writes (pending approval settlement) are idempotent and run after commit,
+        // exactly as on the human path.
+        if let Err(error) = task_ops::comment::finish_human_comment(store, plan, outcome) {
+            tracing::warn!(operation_id = %operation.id, %error, "cos comment follow-up failed");
+        }
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 /// `POST /tasks/{id}/reopen`（**管理系**。ADR-0044 D2）。`done` / `failed` を `ready` に戻す

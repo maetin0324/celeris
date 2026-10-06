@@ -79,6 +79,35 @@ pub fn post_human_comment_as(
     body: String,
     now: OffsetDateTime,
 ) -> Result<CommentResult, OpsError> {
+    let plan = plan_human_comment(store, id, author, body, now)?;
+    let outcome = store.comment_add(&plan.comment, plan.transition.clone())?;
+    finish_human_comment(store, plan, outcome)
+}
+
+/// 人のコメントの書き込み計画（読むだけ）。`comment_add` に `comment` と `transition` を渡して書き、
+/// 結果を [`finish_human_comment`] に渡す。CoS の操作（ADR 2026-10-05 D3）は同じ計画を監査と同じ
+/// トランザクションで `SqliteStore::comment_add_tx` に渡す。
+#[derive(Debug, Clone)]
+pub struct HumanCommentPlan {
+    pub comment: TaskComment,
+    pub transition: Option<(Trigger, Vec<Event>)>,
+    effect: CommentEffect,
+    from: Status,
+}
+
+impl HumanCommentPlan {
+    pub fn task_id(&self) -> TaskId {
+        self.comment.task_id
+    }
+}
+
+pub fn plan_human_comment(
+    store: &dyn TaskStore,
+    id: TaskId,
+    author: Option<String>,
+    body: String,
+    now: OffsetDateTime,
+) -> Result<HumanCommentPlan, OpsError> {
     TaskComment::validate_body(&body).map_err(OpsError::Validation)?;
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     let comment = TaskComment::new(
@@ -89,8 +118,7 @@ pub fn post_human_comment_as(
         None,
         now,
     );
-
-    match task.status {
+    let (effect, transition) = match task.status {
         // 走っている（レビュー中も含む）run を止めて `ready` に戻す。コメントと遷移は同じトランザクション。
         Status::Running | Status::Reviewing => {
             // `WorkerFinished{outcome: "interrupted: comment"}` は**いま走っているワーカー run**
@@ -109,22 +137,10 @@ pub fn post_human_comment_as(
                 }],
                 None => Vec::new(),
             };
-            let from = task.status;
-            let outcome = store
-                .comment_add(&comment, Some((Trigger::Interrupt, extra)))?
-                .ok_or_else(|| OpsError::Validation("interrupt produced no outcome".to_string()))?;
-            Ok(CommentResult {
-                comment,
-                effect: CommentEffect::Interrupted,
-                transition: Some(TransitionResult {
-                    id,
-                    from,
-                    to: outcome.next,
-                    reason: outcome.reason.to_string(),
-                    cascaded: Vec::new(),
-                }),
-                can_reopen: false,
-            })
+            (
+                CommentEffect::Interrupted,
+                Some((Trigger::Interrupt, extra)),
+            )
         }
         // ADR-0021 D2: 質問待ちのタスクへのコメントは「回答」そのもの。
         // コメント・`Trigger::Answer`・`Event::Answered` を**同じトランザクション**で書く
@@ -134,45 +150,60 @@ pub fn post_human_comment_as(
             let question = crate::derive::latest_question(&store.events_for(id)?);
             let answered = Event::Answered {
                 question,
-                answer: body.clone(),
+                answer: body,
             };
-            let outcome = store
-                .comment_add(&comment, Some((Trigger::Answer, vec![answered])))?
-                .ok_or_else(|| OpsError::Validation("answer produced no outcome".to_string()))?;
-            // GUI 監査 H2 と同じ後始末（`gate::answer` と同じ関数。別の書き込みで、冪等）。
-            gate::settle_pending_approvals(store, id, &body)?;
-            Ok(CommentResult {
-                comment,
-                effect: CommentEffect::Answered,
-                transition: Some(TransitionResult {
-                    id,
-                    from: Status::Blocked,
-                    to: outcome.next,
-                    reason: outcome.reason.to_string(),
-                    cascaded: Vec::new(),
-                }),
-                can_reopen: false,
+            (
+                CommentEffect::Answered,
+                Some((Trigger::Answer, vec![answered])),
+            )
+        }
+        Status::Done | Status::Failed | Status::Cancelled => (CommentEffect::Terminal, None),
+        Status::Draft | Status::Ready => (CommentEffect::Stored, None),
+    };
+    Ok(HumanCommentPlan {
+        comment,
+        transition,
+        effect,
+        from: task.status,
+    })
+}
+
+/// 書いた後の結果と後始末（`blocked` への回答は承認待ちを片付ける。別の書き込みで、冪等）。
+pub fn finish_human_comment(
+    store: &dyn TaskStore,
+    plan: HumanCommentPlan,
+    outcome: Option<task_core::transition::Outcome>,
+) -> Result<CommentResult, OpsError> {
+    let id = plan.comment.task_id;
+    let transition = match plan.effect {
+        CommentEffect::Interrupted | CommentEffect::Answered => {
+            let what = if plan.effect == CommentEffect::Answered {
+                "answer"
+            } else {
+                "interrupt"
+            };
+            let outcome = outcome
+                .ok_or_else(|| OpsError::Validation(format!("{what} produced no outcome")))?;
+            Some(TransitionResult {
+                id,
+                from: plan.from,
+                to: outcome.next,
+                reason: outcome.reason.to_string(),
+                cascaded: Vec::new(),
             })
         }
-        Status::Done | Status::Failed | Status::Cancelled => {
-            store.comment_add(&comment, None)?;
-            Ok(CommentResult {
-                comment,
-                effect: CommentEffect::Terminal,
-                transition: None,
-                can_reopen: task.status != Status::Cancelled,
-            })
-        }
-        Status::Draft | Status::Ready => {
-            store.comment_add(&comment, None)?;
-            Ok(CommentResult {
-                comment,
-                effect: CommentEffect::Stored,
-                transition: None,
-                can_reopen: false,
-            })
-        }
+        CommentEffect::Stored | CommentEffect::Terminal => None,
+    };
+    if plan.effect == CommentEffect::Answered {
+        // GUI 監査 H2 と同じ後始末（`gate::answer` と同じ関数。別の書き込みで、冪等）。
+        gate::settle_pending_approvals(store, id, &plan.comment.body)?;
     }
+    Ok(CommentResult {
+        effect: plan.effect,
+        transition,
+        can_reopen: plan.effect == CommentEffect::Terminal && plan.from != Status::Cancelled,
+        comment: plan.comment,
+    })
 }
 
 /// 組織の「人」（ワーカーの `{"type":"comment"}` 行、秘書・lead が委譲先に書くもの）のコメント。

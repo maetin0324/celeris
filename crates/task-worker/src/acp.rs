@@ -37,10 +37,15 @@ use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, ChildStdout, Command};
 use tracing::warn;
 
+use base64::Engine;
 use task_core::ProgressKind;
 
 use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 use crate::claude_code::build_prompt;
+use crate::cos_chat::capabilities::{
+    Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
+    image_delivery, image_delivery_reason,
+};
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::progress;
 use crate::protocol::{Evidence, ProviderFailure, RunRequest};
@@ -359,6 +364,7 @@ fn choose_permission_option(
 /// 一定量たまるまで溜めてから出す。`heartbeat()` は溜めずに毎行呼ぶので、無出力タイムアウトの判定は変わらない。
 struct ChunkBuffer {
     text: String,
+    cos_chat: bool,
     /// ADR-0048 D2（Phase 60a）: 溜めている本文の種別（`text` = 発話 / `thinking` = 思考）。
     /// 種別が変わったら先に出す（発話と思考を 1 件に混ぜない）。
     kind: ProgressKind,
@@ -368,6 +374,7 @@ impl Default for ChunkBuffer {
     fn default() -> Self {
         Self {
             text: String::new(),
+            cos_chat: false,
             kind: ProgressKind::Text,
         }
     }
@@ -468,8 +475,13 @@ fn handle_notification(value: &serde_json::Value, sink: &dyn EventSink, chunks: 
             };
             sink.progress_with(&format!("tool: {name} {status}"), &fields);
         }
-        // `plan` やそれ以外の通知は heartbeat のみ（ADR-0026 D3 の表）。
-        _ => {}
+        // Non-CoS runs preserve the original heartbeat-only behavior.
+        other => {
+            if chunks.cos_chat {
+                chunks.flush(sink);
+                progress::emit_status(sink, &format!("ACP session update: {other}"));
+            }
+        }
     }
 }
 
@@ -826,24 +838,25 @@ async fn run_acp(
     limits: &RunLimits,
     sink: &dyn EventSink,
 ) -> Result<RunOutcome, AdapterError> {
-    // ADR-0054 D2（Phase 68）: CoS の対話 run だけ、道具の許可要求を常に拒否する（fail-closed）。
-    // ACP には claude-code の `--allowedTools` / codex の `sandbox_mode` に相当する「道具単位の読み取り
-    // 許可」が無く、`session/request_permission` にはこのコードベースが解釈できる形で道具の識別子が
-    // 乗らない（実機で確認していない）。曖昧な照合で書き込みを誤って許すより、対話 run の間は
-    // 一律で拒否する方が安全という判断（`choose_permission_option` の `Deny` 経路をそのまま使う。
-    // `reject_always` → `reject_once` → 選択肢の最初、の優先順は変えない）。読み取りだけの道具
-    // （`celerisctl knowledge search|get` 等）は、モデルが許可要求を経ない組み込みの読み取りで
-    // 済ませられる範囲でしか使えない（ACP エージェント実装依存。`agent-docs/adr/0054-*.md` の「Phase 68
-    // 追記」に明記）。
-    let config = &if req.context.conversation_addressee
-        == Some(crate::protocol::ConversationAddressee::Secretary)
+    // CoS chat has full tool permission within the worker's existing sandbox. The older
+    // Secretary conversation path keeps its ADR-0054 blanket Deny exactly as before.
+    let config = &if req.context.cos_chat.is_none()
+        && req.context.conversation_addressee
+            == Some(crate::protocol::ConversationAddressee::Secretary)
     {
         AcpConfig {
             permission: AcpPermission::Deny,
             ..config.clone()
         }
     } else {
-        config.clone()
+        AcpConfig {
+            permission: if req.context.cos_chat.is_some() {
+                AcpPermission::Allow
+            } else {
+                config.permission
+            },
+            ..config.clone()
+        }
     };
     let run_dir = req.workspace.join("runs").join(run_id);
     tokio::fs::create_dir_all(&run_dir).await?;
@@ -925,7 +938,10 @@ async fn run_acp(
     let mut stdout_file = tokio::fs::File::create(&stdout_log_path).await?;
     let mut reader = BufReader::new(stdout);
     // 本文のチャンクをまとめる入れ物（run 全体で 1 つ。initialize の前から使う）。
-    let mut chunks = ChunkBuffer::default();
+    let mut chunks = ChunkBuffer {
+        cos_chat: req.context.cos_chat.is_some(),
+        ..ChunkBuffer::default()
+    };
 
     // --- Phase A: initialize（ADR-0026 D3 手順 2, D4: startup_timeout） ---
     let init_params = serde_json::json!({
@@ -1006,6 +1022,63 @@ async fn run_acp(
         .await);
     }
 
+    let cos_chat = req.context.cos_chat.as_ref();
+    let agent_caps = init_response.pointer("/result/agentCapabilities");
+    let load_supported = agent_caps
+        .and_then(|c| c.get("loadSession"))
+        .and_then(|v| v.as_bool())
+        == Some(true);
+    let image_supported = agent_caps
+        .and_then(|c| c.pointer("/promptCapabilities/image"))
+        .and_then(|v| v.as_bool())
+        == Some(true);
+    let resource_supported = agent_caps.is_some_and(|c| {
+        [
+            "/promptCapabilities/resource",
+            "/promptCapabilities/embeddedContext",
+        ]
+        .iter()
+        .any(|path| c.pointer(path).and_then(|v| v.as_bool()) == Some(true))
+    });
+    if cos_chat.is_some() {
+        // The run prompt must describe negotiated abilities, not configured aspirations.
+        let mut context = req.context.clone();
+        context
+            .cos_chat
+            .as_mut()
+            .expect("CoS context")
+            .harness_capabilities = Some(HarnessCapabilities {
+            continuation: Continuation::AcpSessionLoad,
+            native_image_input: image_supported,
+            image_read_tool: resource_supported,
+            shell: agent_caps
+                .and_then(|c| c.get("terminal"))
+                .and_then(|v| v.as_bool())
+                == Some(true),
+            filesystem: agent_caps
+                .and_then(|c| c.get("fs"))
+                .and_then(|v| v.as_bool())
+                == Some(true),
+            mcp: agent_caps
+                .and_then(|c| c.get("mcp"))
+                .and_then(|v| v.as_bool())
+                == Some(true),
+        });
+        prompt = build_prompt(&req.task, &context, run_id, &artifacts_rel);
+        prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
+        crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
+    }
+    if cos_chat.is_some()
+        && !load_supported
+        && req
+            .context
+            .session
+            .as_ref()
+            .is_some_and(|s| s.adapter == AcpAdapter::ID && s.resume)
+    {
+        progress::emit_status(sink, capability_reason(MissingCapability::Continuation));
+    }
+
     // ここから先は通常の壁時計・アイドルタイムアウトを使う（ADR-0026 D4。`startup_timeout` は
     // initialize の応答待ちだけに使う別枠）。
     let start = Instant::now();
@@ -1019,7 +1092,7 @@ async fn run_acp(
         .session
         .as_ref()
         .filter(|s| s.adapter == AcpAdapter::ID);
-    let resuming = acp_session.is_some_and(|s| s.resume);
+    let resuming = acp_session.is_some_and(|s| s.resume) && (cos_chat.is_none() || load_supported);
     let (new_session_method, new_session_params) =
         if let Some(session) = acp_session.filter(|_| resuming) {
             (
@@ -1056,7 +1129,7 @@ async fn run_acp(
         )
         .await);
     }
-    let new_session_response = match wait_for_response(
+    let mut new_session_response = match wait_for_response(
         &mut reader,
         &mut stdin,
         &mut stdout_file,
@@ -1110,6 +1183,73 @@ async fn run_acp(
             return Err(e);
         }
     };
+    let mut fell_back = false;
+    if cos_chat.is_some() && resuming && new_session_response.get("error").is_some() {
+        let msg = jsonrpc_error_text(
+            &new_session_response["error"],
+            req.context.browser.is_some(),
+        );
+        progress::emit_status(
+            sink,
+            &format!("CoS session/load rejected ({msg}); starting fresh from saved chat history"),
+        );
+        write_line(
+            &mut stdin,
+            &jsonrpc_request(
+                3,
+                "session/new",
+                serde_json::json!({
+                    "cwd": req.cwd().to_string_lossy(), "mcpServers": []
+                }),
+            ),
+        )
+        .await?;
+        new_session_response = match wait_for_response(
+            &mut reader,
+            &mut stdin,
+            &mut stdout_file,
+            sink,
+            config,
+            run_id,
+            3,
+            start,
+            &mut last_activity,
+            limits,
+            &mut chunks,
+        )
+        .await
+        {
+            Ok(WaitOutcome::Response(v)) => v,
+            Ok(WaitOutcome::Eof) => {
+                return Err(kill_and_classify(
+                    &mut child,
+                    stderr_task,
+                    &stderr_log_path,
+                    limits.kill_grace,
+                    None,
+                    "acp agent exited before fresh session/new".into(),
+                )
+                .await);
+            }
+            Ok(WaitOutcome::TimedOut(_)) => {
+                return Err(kill_and_classify(
+                    &mut child,
+                    stderr_task,
+                    &stderr_log_path,
+                    limits.kill_grace,
+                    None,
+                    "acp agent timed out during fresh session/new".into(),
+                )
+                .await);
+            }
+            Err(e) => {
+                let _ = kill_now(&mut child, limits.kill_grace).await;
+                let _ = stderr_task.await;
+                return Err(e);
+            }
+        };
+        fell_back = true;
+    }
     if let Some(error) = new_session_response.get("error") {
         let msg = jsonrpc_error_text(error, req.context.browser.is_some());
         // ADR-0054 D1（Phase 67）: `session/load` が拒否された（セッションが無い・失効した）ことを
@@ -1135,7 +1275,7 @@ async fn run_acp(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
     let Some(session_id) = response_session_id.or_else(|| {
-        resuming
+        (resuming && !fell_back)
             .then(|| acp_session.map(|s| s.session_id.clone()))
             .flatten()
     }) else {
@@ -1160,7 +1300,7 @@ async fn run_acp(
     }
 
     // --- Phase B: セッションが存在する。以降の失敗は artifacts/result.json 経由の終端として扱う。 ---
-    let mut next_id = 3u64;
+    let mut next_id = if fell_back { 4u64 } else { 3u64 };
 
     // 手順 4: モデル指定があれば session/set_config_option（ADR-0026 D3）。
     if let Some(model) = config.model.as_deref().filter(|m| !m.is_empty()) {
@@ -1272,9 +1412,36 @@ async fn run_acp(
 
     // 手順 5: session/prompt（ADR-0026 D3）。
     let prompt_id = next_id;
+    let mut prompt_parts = vec![serde_json::json!({"type": "text", "text": prompt})];
+    if let Some(chat) = cos_chat {
+        for attachment in &chat.attachments {
+            if !matches!(attachment.delivery, crate::protocol::CosChatDelivery::Image) {
+                continue;
+            }
+            let delivery = if image_supported {
+                ImageDelivery::Native
+            } else if resource_supported {
+                ImageDelivery::PathAndTool
+            } else {
+                image_delivery(attachment.delivery, None)
+            };
+            match delivery {
+                ImageDelivery::Native => {
+                    let bytes = tokio::fs::read(&attachment.path).await?;
+                    prompt_parts.push(serde_json::json!({"type":"image", "data":base64::engine::general_purpose::STANDARD.encode(bytes), "mimeType":attachment.media_type}));
+                }
+                ImageDelivery::PathAndTool => prompt_parts.push(serde_json::json!({"type":"resource_link", "uri":format!("file://{}", attachment.path.display()), "name":attachment.name})),
+                ImageDelivery::Unsupported => {}
+                ImageDelivery::FilePath => unreachable!(),
+            }
+            if let Some(reason) = image_delivery_reason(delivery) {
+                progress::emit_status(sink, reason);
+            }
+        }
+    }
     let prompt_params = serde_json::json!({
         "sessionId": session_id,
-        "prompt": [{"type": "text", "text": prompt}],
+        "prompt": prompt_parts,
     });
     if let Err(e) = write_line(
         &mut stdin,

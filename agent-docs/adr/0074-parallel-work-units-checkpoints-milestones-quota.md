@@ -1572,4 +1572,4 @@ checkpoint 継続、Cancel、新 run・replan に対する古い回収の拒否�
 回収後は実際の dispatch で新 run の開始通知を待ち、WU が新しい run ID を
 持つことを確認する。固定時間の sleep・CPU 焼き負荷・実 LLM は使わない。
 
-検査結果は [進捗](../../docs/progress/2026-10-06-orphan-work-unit-recovery.md) に記録する。
+検査結果は [進捗](../progress/2026-10-06-orphan-work-unit-recovery.md) に記録する。

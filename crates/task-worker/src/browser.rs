@@ -188,7 +188,12 @@ pub enum BrowserRuntimeKind {
     Daemon,
     /// 専用 host user の launcher（ADR-0115）に Unix socket で頼む。daemon は CDP pipe も
     /// 機密 state も持たず、receipt と非機密の観測だけを受ける。不達は fail closed。
-    Launcher { socket: PathBuf },
+    /// `refuse_test_loopback` が真（本番の config・DB を使う daemon、または判定不能）なら、試験専用
+    /// loopback 許可を申告した launcher を使わない（付記 E2）。
+    Launcher {
+        socket: PathBuf,
+        refuse_test_loopback: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -1043,8 +1048,22 @@ async fn run_with_executable_attempt(
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
     let _routing = route_existing_backend(adapter.id(), &policy, record_path)?;
     let isolation = isolated_runtime_ready(ISOLATED.get())?;
-    if let BrowserRuntimeKind::Launcher { socket } = &isolation.runtime {
-        return launcher_run::run(adapter, req, run_id, limits, sink, socket, &policy).await;
+    if let BrowserRuntimeKind::Launcher {
+        socket,
+        refuse_test_loopback,
+    } = &isolation.runtime
+    {
+        return launcher_run::run(
+            adapter,
+            req,
+            run_id,
+            limits,
+            sink,
+            socket,
+            *refuse_test_loopback,
+            &policy,
+        )
+        .await;
     }
     let waits = sink
         .browser_waits()
@@ -1235,6 +1254,7 @@ async fn run_with_executable_attempt(
         allow: policy.egress_allow(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     };
     let mut ro_dirs = vec![
         real_executable.parent().unwrap().to_path_buf(),

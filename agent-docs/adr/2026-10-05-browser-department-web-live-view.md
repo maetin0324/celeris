@@ -638,3 +638,94 @@ loopback の試験ページが launcher egress の設計（`check_egress` が IP
 3 回目の再実行を行う。経緯（attempts 1〜8 → launcher-fix → 再実行）と各段の結果は
 [agent-docs/progress/2026-10-05-browser-web-live-view/real-check.md](../progress/2026-10-05-browser-web-live-view/real-check.md)
 に記録する。
+
+## 付記: 試験専用 egress 許可と拒否理由の記録（2026-10-06）
+
+final review の指摘 R3 への回答。実機確認台本 `scripts/dev/browser-web-live-check.sh` の試験ページは
+`http://127.0.0.1:<port>` に立つが、launcher 経路の egress（`crates/task-worker/src/browser_egress.rs`）と
+`task_core::browser_isolation::check_egress` は IP literal（`IpLiteral`）と DNS で loopback に解ける名前
+（`PrivateAddress`）を拒否するので、許可 origin への navigation も egress 拒否の証跡も取れなかった。
+egress は拒否を記録しなかった。ADR-0102/0104 の egress 判定は変えず、次の 2 つを足す。
+
+### E1. 試験専用 loopback 許可の形（既定 off・完全一致のみ）
+
+- `EgressPolicy` に `test_loopback_allow: BTreeSet<String>` を足す。serde は `default`（無ければ空）で、
+  空なら JSON に出さない（`skip_serializing_if`）。既存の policy・既存の JSON はそのまま空集合になる。
+- `check_egress` の `Connect` は、**host が文字列として `127.0.0.1` そのもの**で、port が 0・53・853 以外、
+  かつ `127.0.0.1:<port>` が `test_loopback_allow` に**完全一致**で入っているときだけ `Ok` を返す
+  （この経路では DNS 結果を見ない）。それ以外は従来どおり判定し、`IpLiteral`・`PrivateAddress`・
+  `NotAllowed`・`InvalidHost`・`Unresolved`・`Ipv6Disabled`・`DnsBypass`・`ProxyChain` の結果は 1 つも
+  変わらない。特に次は許可集合にあっても拒否のまま: 別 port、`localhost` 等の名前（DNS を経た loopback は
+  `PrivateAddress`）、`10.x` 等の private literal、`[::1]`、`2130706433`・`0x7f.1`・`0177.0.0.1` などの
+  10/8/16 進の変種（`IpLiteral`）、`127.0.0.2` など `127.0.0.1` 以外の loopback。
+  集合に `127.0.0.1:<port>` 以外の形の項目があっても、どの要求とも一致しないので何も許さない。
+- egress の CONNECT 経路（`browser_egress::destination`）は、許可された loopback literal なら resolver に
+  問い合わせず `127.0.0.1:<port>` へ直接つなぐ（名前解決を経ないので DNS rebinding の余地も無い）。
+- 集合を埋めるのは launcher だけ。launcher の root 所有の固定 config（`/etc/celeris-browser/launcher.toml`
+  と、試験用に別 path で起こす launcher の config）に `test_loopback_allow = ["127.0.0.1:<port>", …]` を
+  明示したときに限る。daemon の設定・task policy・web の設定画面からは入れられない（ADR-0116 D5 と同じ
+  理由: daemon が乗っ取られても egress を広げられない）。
+- launcher config の欄は `BackendConfig.test_loopback_allow`（省略時は空 = off、
+  `crates/task-worker/src/browser_launcher/backend.rs`）。各項目は `127.0.0.1:<port>`（port は 10 進・先頭
+  0 なし・1〜65535・53/853 以外）の形だけを受け、それ以外が 1 つでもあれば config 読込みで起動を拒否する
+  （`validate_test_loopback`）。session の `EgressPolicy.test_loopback_allow` に入るのは、session の
+  `allowed_domains`（`origin_host_port` の `host:port`）と config の集合の**交わり**だけ（`egress_policy`）。
+  有効なとき launcher は起動時に stderr（journal）へ
+  `test-only loopback egress enabled: 127.0.0.1:<port>, …` を出す。
+
+### E2. 本番では有効にできない（fail-closed の判定方法）
+
+試験許可が空でない設定は、次のどれか 1 つでも本番と一致したら**起動を拒否**する（判定できないときも拒否）。
+
+- **launcher 側**（config を読んだ直後、socket を listen する前）: 自分の config path が
+  `/etc/celeris-browser/launcher.toml`、`socket` が `/run/celeris-browser/launcher.sock` と一致するか、
+  `state_dir` が `/var/lib/celeris-browser` と一致・その配下・その祖先なら exit 非 0
+  （`refuse_test_loopback_in_production`、`crates/task-worker/src/bin/celeris-browser-launcher.rs`）。
+  比較は path を正規化（存在する祖先までの `canonicalize`、symlink を解き、残りを足す）してから行い、
+  正規化できない path（相対 path、未作成部分の `..`）は一致とみなす。systemd の socket activation で
+  受け取った socket は、その path（`getsockname`。採れなければ拒否）で同じく比べる。
+- **daemon 側**: launcher protocol に `hello`（要求 `{"type":"hello"}`、応答
+  `{"type":"hello","protocol_version":3,"test_loopback_allow":[…]}`。空なら欄を出さない）を足し、launcher は
+  config の試験許可をそのまま申告する。daemon は `[browser] runtime = "launcher"` のとき起動時に本番判定を
+  し（`crates/celeris/src/daemon/bootstrap.rs` の `browser_launcher_refuses_test_loopback` /
+  `launcher_test_loopback_refusal`）、本番なら各 session の `start_session` の前に `hello` を送る。申告が
+  空でない、または `hello` に答えない（旧版の launcher・error）なら session を作らず
+  `isolated_runtime_unavailable` にする（`LauncherRuntime::start_guarded`）。本番判定は次のどれか:
+  ADR-0126 A1 の `worker_db_guard_protected_set`（getpwuid の home の `~/.config/celeris/config.toml`）で
+  P を決められない、daemon が読んだ config がその本番 config そのもの（正規化して比べる。verify の staging
+  のように DB だけ差し替えた daemon も含む）、`judge_worker_db_guard`（印は `Absent` で呼ぶ）が
+  `RefuseProduction`（DB・DB のディレクトリ・token の path か中身が本番に当たる）。本番 daemon が試験用
+  launcher に誤ってつながっても有効にならない。本番の daemon は `hello` に答える launcher を要るので、
+  この版の daemon を入れるときは launcher の binary も同じ release のものに入れ替える。
+- 試験許可が空の launcher（既定）にはこの検査は掛からず、従来どおり動く。
+
+### E3. 拒否理由の記録
+
+- 1 件の形: `{"kind": <EgressDenied の snake_case>, "host": <要求の host>, "port": <u16>,
+  "at": <RFC 3339 UTC>, "session_id": <session id>}`。`host` は CONNECT の authority から取った値で、
+  構文で落ちた要求（`EgressError::Denied` で `EgressDenied` が付かないもの）は `kind: "malformed"` とし
+  host・port を空にする。**要求本文・header・DNS 応答・上流の error 文は残さない**。
+- 置き場所: launcher の session dir（`<session_root>/<session_id>/egress-denied.jsonl`、session と同じ
+  所有者・0600）に 1 行 1 件で追記する。親 relay は proxy の stderr から固定 JSON の `kind`・`host`・`port`
+  のみを最大 512 byte 読み、時刻と session id を親で付ける。1 行は最大 512 byte、拒否は最大 128 件。
+  超えたら `{"kind":"truncated","at":...,"session_id":...}` を 1 行だけ追加し、その後は捨てる。
+  記録ファイルは browser 起動前に排他的に作成し、既存なら起動を拒否する。親は開いた file descriptor
+  を保持して追記し、browser が書ける session dir 内での差し替えを追わない。
+  session の終わりに launcher が controller 経由で daemon に返し、daemon は run の artifact（browser の
+  session 証跡と同じ所）に置く。台本 `browser-web-live-check.sh` はそれを `egress-denied.json` として集める。
+- 実装の葉: E1 は policy（本付記と `check_egress`・`browser_egress`）、E2 は launcher-cfg、E3 は denial-record。
+
+### E4. close 実装との突き合わせ（2026-10-06）
+
+- host 設定: `docs/ops/browser-launcher-host-setup.md` §4 は `BackendConfig.test_loopback_allow`（`crates/task-worker/src/browser_launcher/backend.rs::BackendConfig`）を記す。省略は off、launcher 起動時の拒否と有効ログは `crates/task-worker/src/bin/celeris-browser-launcher.rs::run` / `refuse_test_loopback_in_production`。本番 daemon の fail-closed handshake は `crates/celeris/src/daemon/bootstrap.rs::browser_launcher_refuses_test_loopback` と `crates/task-worker/src/browser_launcher/runtime.rs::LauncherRuntime::start_guarded`。
+- 許可ページは `scripts/dev/browser-web-live-check.sh` が launcher TOML の `test_loopback_allow` に `127.0.0.1:<PAGE_PORT>` があることを起動前に検査する。拒否証跡段は `<state_dir>/sessions/*/egress-denied.jsonl` を読み、範囲外 `127.0.0.1:<DENIED_PORT>` の `kind=private_address`・host・port・時刻・session id を検査して `egress-denied.json` に集める。不許可ページに GET が無いことも検査する。本文/header/DNS 応答は証跡に含めない。
+- launcher 配置時は daemon と同じ release の launcher binary へ更新する。host の root 操作や本番設定変更は人がこの運用手順で実施し、実機再実行は `CELERIS_USERNS_TESTS=1` を含め [実機確認手順](../../docs/ops/browser-web-live-check.md) に従う。
+
+### E5. 実装・試験対応
+
+| 契約 | 実装 | 試験 |
+| --- | --- | --- |
+| loopback allow 欄の検証・既定 off・session allowlist との交差 | `crates/task-worker/src/browser_launcher/backend.rs::BackendConfig::{validate_test_loopback, egress_policy}` | `egress_test_loopback_default_off_when_config_omits_it`, `egress_test_loopback_policy_is_intersection_with_session_domains`, `egress_test_loopback_config_rejects_anything_but_127_0_0_1_port` |
+| 本番 launcher path/socket/state_dir 起動拒否と enabled log | `crates/task-worker/src/bin/celeris-browser-launcher.rs::run`; `backend.rs::refuse_test_loopback_in_production` | `egress_test_loopback_refuses_production_config_socket_or_state_dir` |
+| 本番 daemon と launcher hello の fail-closed | `crates/celeris/src/daemon/bootstrap.rs::browser_launcher_refuses_test_loopback`; `crates/task-worker/src/browser_launcher/runtime.rs::LauncherRuntime::start_guarded` | `egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher`, `egress_test_loopback_production_daemon_refuses_test_launcher`, `egress_test_loopback_production_daemon_refuses_launcher_without_hello` |
+| session 単位の拒否記録と秘密非記録 | `crates/task-worker/src/browser_egress.rs`; `crates/task-worker/src/browser_launcher/backend.rs` relay | `egress_denial_record_reasons_and_no_request_secrets`, `egress_denial_record_allowed_connection_has_no_entry`, `egress_denial_record_malformed_and_bounded`, `egress_denial_record_rejects_preexisting_file` |

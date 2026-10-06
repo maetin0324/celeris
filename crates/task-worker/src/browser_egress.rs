@@ -8,7 +8,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
-use task_core::browser_isolation::{EgressPolicy, EgressRequest, check_egress};
+use task_core::browser_isolation::{
+    EgressDenied, EgressPolicy, EgressRequest, check_egress, test_loopback_target,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::time::timeout;
@@ -34,6 +36,87 @@ pub enum EgressError {
     Timeout,
 }
 
+/// The only data the untrusted request can contribute to a denial record.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Denial {
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
+}
+
+impl Denial {
+    fn malformed() -> Self {
+        Self {
+            kind: "malformed".into(),
+            host: None,
+            port: None,
+        }
+    }
+
+    fn policy(reason: EgressDenied, host: &str, port: u16) -> Self {
+        let kind = match reason {
+            EgressDenied::NotAllowed => "not_allowed",
+            EgressDenied::IpLiteral => "ip_literal",
+            EgressDenied::PrivateAddress => "private_address",
+            EgressDenied::Ipv6Disabled => "ipv6_disabled",
+            EgressDenied::Unresolved => "unresolved",
+            EgressDenied::DnsBypass => "dns_bypass",
+            EgressDenied::ProxyChain => "proxy_chain",
+            EgressDenied::InvalidHost => "invalid_host",
+        };
+        Self {
+            kind: kind.into(),
+            host: Some(host.into()),
+            port: Some(port),
+        }
+    }
+}
+
+fn request_authority_recorded(
+    header: &[u8],
+    policy: &EgressPolicy,
+    denial: &mut Option<Denial>,
+) -> Result<(String, u16), EgressError> {
+    let result = request_authority(header, policy);
+    if result.is_err() {
+        // Only a successfully parsed CONNECT authority may supply a host. Never
+        // copy arbitrary header bytes into a record.
+        *denial = Some(Denial::malformed());
+        if let Ok(text) = std::str::from_utf8(header)
+            && let Some(line) = text.split("\r\n").next()
+            && let ["CONNECT", authority, "HTTP/1.1"] =
+                line.split(' ').collect::<Vec<_>>().as_slice()
+            && let Some((host, port_text)) = authority.rsplit_once(':')
+            && let Ok(port) = port_text.parse::<u16>()
+            && port != 0
+            && port != 53
+            && port != 853
+            && port.to_string() == port_text
+            && host.len() <= 253
+            && host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']'))
+        {
+            let reason = check_egress(
+                policy,
+                &EgressRequest::Connect {
+                    host: host.into(),
+                    port,
+                    resolved: vec![],
+                },
+            );
+            if let Err(reason) = reason
+                && reason != EgressDenied::Unresolved
+            {
+                *denial = Some(Denial::policy(reason, host, port));
+            }
+        }
+    }
+    result
+}
+
 fn request_authority(header: &[u8], policy: &EgressPolicy) -> Result<(String, u16), EgressError> {
     let text = std::str::from_utf8(header).map_err(|_| EgressError::Denied)?;
     if !text.ends_with("\r\n\r\n")
@@ -55,15 +138,19 @@ fn request_authority(header: &[u8], policy: &EgressPolicy) -> Result<(String, u1
         return Err(EgressError::Denied);
     }
     // Validate syntax and admission *before DNS*. Unresolved is the sole permitted
-    // failure here. Re-run with the complete trusted DNS result before connecting.
-    if check_egress(
+    // failure here (an allowed test-only loopback literal passes without DNS). Re-run
+    // with the complete trusted DNS result before connecting.
+    let verdict = check_egress(
         policy,
         &EgressRequest::Connect {
             host: host.into(),
             port,
             resolved: vec![],
         },
-    ) != Err(task_core::browser_isolation::EgressDenied::Unresolved)
+    );
+    let loopback = test_loopback_target(policy, host, port).is_some();
+    if !(verdict == Err(task_core::browser_isolation::EgressDenied::Unresolved)
+        || (loopback && verdict == Ok(())))
     {
         return Err(EgressError::Denied);
     }
@@ -272,23 +359,40 @@ async fn resolve_at(server: SocketAddr, host: &str) -> Result<Vec<IpAddr>, Egres
     Ok(addresses.into_iter().collect())
 }
 
+#[cfg(test)]
 async fn destination(
     stream: &mut UnixStream,
     policy: &EgressPolicy,
     resolver: SocketAddr,
 ) -> Result<SocketAddr, EgressError> {
+    destination_recorded(stream, policy, resolver, &mut None).await
+}
+
+async fn destination_recorded(
+    stream: &mut UnixStream,
+    policy: &EgressPolicy,
+    resolver: SocketAddr,
+    denial: &mut Option<Denial>,
+) -> Result<SocketAddr, EgressError> {
     let header = read_header(stream).await?;
-    let (host, port) = request_authority(&header, policy)?;
+    let (host, port) = request_authority_recorded(&header, policy, denial)?;
+    // Test-only loopback literal (ADR addendum E1): connect directly, never via DNS.
+    if let Some(address) = test_loopback_target(policy, &host, port) {
+        return Ok(address);
+    }
     let resolved = resolve_at(resolver, &host).await?;
     check_egress(
         policy,
         &EgressRequest::Connect {
-            host,
+            host: host.clone(),
             port,
             resolved: resolved.clone(),
         },
     )
-    .map_err(|_| EgressError::Denied)?;
+    .map_err(|reason| {
+        *denial = Some(Denial::policy(reason, &host, port));
+        EgressError::Denied
+    })?;
     let ip = resolved
         .first()
         .ok_or(EgressError::Resolution)?
@@ -298,23 +402,40 @@ async fn destination(
 
 /// Serve one bounded CONNECT connection. Only the configured resolver and a
 /// checked, pinned destination IP are reachable from this transport.
-pub async fn serve(mut stream: UnixStream, policy: &EgressPolicy) -> Result<(), EgressError> {
+pub async fn serve(stream: UnixStream, policy: &EgressPolicy) -> Result<(), EgressError> {
+    serve_recorded(stream, policy).await.0
+}
+
+pub async fn serve_recorded(
+    mut stream: UnixStream,
+    policy: &EgressPolicy,
+) -> (Result<(), EgressError>, Option<Denial>) {
+    let mut denial = None;
     let setup = timeout(SETUP_TIMEOUT, async {
-        let address =
-            destination(&mut stream, policy, SocketAddr::new(policy.resolver, 53)).await?;
+        let address = destination_recorded(
+            &mut stream,
+            policy,
+            SocketAddr::new(policy.resolver, 53),
+            &mut denial,
+        )
+        .await?;
         TcpStream::connect(address)
             .await
             .map_err(|_| EgressError::Transport)
     })
     .await
     .unwrap_or(Err(EgressError::Timeout));
-    match setup {
+    let result = match setup {
         Ok(upstream) => tunnel(stream, upstream).await,
         Err(error) => {
             let _ = timeout(Duration::from_secs(1), stream.write_all(DENIED)).await;
             Err(error)
         }
+    };
+    if result == Err(EgressError::Denied) && denial.is_none() {
+        denial = Some(Denial::malformed());
     }
+    (result, denial)
 }
 
 async fn tunnel(mut client: UnixStream, mut upstream: TcpStream) -> Result<(), EgressError> {

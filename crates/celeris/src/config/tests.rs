@@ -194,7 +194,7 @@ fn browser_runtime_defaults_to_daemon() {
     assert!(cfg.browser.launcher_socket.is_none());
     assert!(cfg.browser.validate().is_ok());
     assert_eq!(
-        cfg.browser.runtime_kind(),
+        cfg.browser.runtime_kind(true),
         task_worker::browser::BrowserRuntimeKind::Daemon
     );
 }
@@ -207,9 +207,10 @@ fn browser_runtime_launcher_with_socket_validates() {
     .unwrap();
     assert!(cfg.browser.validate().is_ok());
     assert_eq!(
-        cfg.browser.runtime_kind(),
+        cfg.browser.runtime_kind(true),
         task_worker::browser::BrowserRuntimeKind::Launcher {
             socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
+            refuse_test_loopback: true,
         }
     );
 }

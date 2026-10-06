@@ -21,12 +21,14 @@ const SUBUID: u32 = 5_000_000;
 #[derive(Default)]
 struct Log {
     actions: Vec<(Verb, ActionArgs)>,
+    started: usize,
     stopped: usize,
 }
 
 struct FakeBackend {
     facts: SessionFacts,
     log: Arc<Mutex<Log>>,
+    test_loopback: Vec<String>,
 }
 
 struct FakeSession {
@@ -47,6 +49,7 @@ impl SessionBackend for FakeBackend {
         let pid = child.id() as i32;
         let starttime =
             crate::browser_runtime::process_starttime(pid).ok_or(ErrorCode::LaunchFailed)?;
+        self.log.lock().expect("lock").started += 1;
         Ok(Launched {
             session: Box::new(FakeSession {
                 facts: self.facts.clone(),
@@ -61,6 +64,9 @@ impl SessionBackend for FakeBackend {
             ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
                 .map_err(|_| ErrorCode::LaunchFailed)?,
         })
+    }
+    fn test_loopback_allow(&self) -> Vec<String> {
+        self.test_loopback.clone()
     }
 }
 
@@ -112,6 +118,10 @@ struct FakeLauncher {
 }
 
 fn fake_launcher(facts: SessionFacts) -> FakeLauncher {
+    fake_launcher_with(facts, Vec::new())
+}
+
+fn fake_launcher_with(facts: SessionFacts, test_loopback: Vec<String>) -> FakeLauncher {
     let dir = tempfile::tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let registry = Registry::open(dir.path().join("state"), "inst-test").expect("registry");
@@ -125,6 +135,7 @@ fn fake_launcher(facts: SessionFacts) -> FakeLauncher {
         Arc::new(FakeBackend {
             facts,
             log: Arc::clone(&log),
+            test_loopback,
         }),
         registry,
     )
@@ -429,6 +440,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
     // launcher 経路の binary は launcher 側にあり、到達性は接続時に確かめる。
     let launcher = cfg(super::super::BrowserRuntimeKind::Launcher {
         socket: dir.path().join("launcher.sock"),
+        refuse_test_loopback: true,
     });
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
 }
@@ -870,4 +882,56 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
         drop(runtime);
         assert_eq!(wait_stopped(&launcher.log), 1);
     }
+}
+
+// ---- 付記 E2（daemon 側）: 本番の daemon は試験専用 loopback 許可の launcher を使わない ----
+
+#[test]
+fn egress_test_loopback_production_daemon_refuses_test_launcher() {
+    let test_launcher = fake_launcher_with(good_facts(), vec!["127.0.0.1:18080".into()]);
+    // 本番（または判定不能）の daemon: hello で申告を見て、session を作らずに拒否する。
+    let err = LauncherRuntime::start_guarded(&test_launcher.sock, true, "t", "r", policy())
+        .expect_err("production daemon must refuse");
+    assert_eq!(err, UNAVAILABLE);
+    assert_eq!(test_launcher.log.lock().expect("lock").started, 0);
+    // 本番でない daemon は同じ launcher を使える。
+    let (runtime, _) =
+        LauncherRuntime::start_guarded(&test_launcher.sock, false, "t", "r", policy())
+            .expect("non-production daemon");
+    drop(runtime);
+    assert_eq!(test_launcher.log.lock().expect("lock").started, 1);
+
+    // 試験許可の無い（既定の）launcher は本番の daemon でも使える。
+    let plain = fake_launcher(good_facts());
+    let (runtime, _) = LauncherRuntime::start_guarded(&plain.sock, true, "t", "r", policy())
+        .expect("default launcher");
+    drop(runtime);
+}
+
+#[test]
+fn egress_test_loopback_production_daemon_refuses_launcher_without_hello() {
+    use crate::browser_launcher::Response;
+    use crate::browser_launcher::protocol::{read_frame, write_message};
+    // hello を知らない（旧版の）launcher: 未知の要求に bad_request を返して閉じる。
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("old.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let body = read_frame(&mut stream, 64 * 1024).expect("frame");
+        let req: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        write_message(
+            &mut stream,
+            &Response::Error {
+                code: ErrorCode::BadRequest,
+            },
+            64 * 1024,
+        )
+        .expect("write");
+        req["type"].as_str().map(str::to_owned)
+    });
+    let err = LauncherRuntime::start_guarded(&sock, true, "t", "r", policy())
+        .expect_err("unanswered hello must refuse");
+    assert_eq!(err, UNAVAILABLE);
+    assert_eq!(server.join().expect("join").as_deref(), Some("hello"));
 }

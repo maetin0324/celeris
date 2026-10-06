@@ -1,5 +1,144 @@
 use super::*;
+use std::os::unix::fs::PermissionsExt;
 use tokio::net::TcpListener;
+
+async fn recorded_request(
+    request: Vec<u8>,
+    policy: EgressPolicy,
+) -> (Result<(), EgressError>, Option<Denial>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    client.write_all(&request).await.unwrap();
+    client.shutdown().await.unwrap();
+    job.await.unwrap()
+}
+
+#[tokio::test]
+async fn egress_denial_record_reasons_and_no_request_secrets() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder =
+        crate::browser_runtime::DenialRecorder::new(dir.path(), "session-1").unwrap();
+    let (resolver, dns) = dns_fixture(&["10.1.2.3"]).await;
+    let mut policy = policy();
+    policy.resolver = resolver.ip();
+    for (request, expected_kind, expected_host) in [
+        (b"CONNECT evil.com:443 HTTP/1.1\r\nHost: evil.com:443\r\nUser-Agent: HEADER_SECRET\r\n\r\nBODY_SECRET".to_vec(), "not_allowed", "evil.com"),
+        (connect("127.0.0.1:443"), "ip_literal", "127.0.0.1"),
+    ] {
+        let (result, denial) = recorded_request(request, policy.clone()).await;
+        assert_eq!(result, Err(EgressError::Denied));
+        let denial = denial.unwrap();
+        assert_eq!(denial.kind, expected_kind);
+        assert_eq!(denial.host.as_deref(), Some(expected_host));
+        recorder.append(denial).unwrap();
+    }
+    // A listed domain can still be rejected after DNS returns a private address.
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move {
+        let mut denial = None;
+        let mut server = server;
+        let result = destination_recorded(&mut server, &policy, resolver, &mut denial).await;
+        (result, denial)
+    });
+    client.write_all(&connect("example.com:443")).await.unwrap();
+    let (result, denial) = job.await.unwrap();
+    assert_eq!(result, Err(EgressError::Denied));
+    let denial = denial.unwrap();
+    assert_eq!(denial.kind, "private_address");
+    recorder.append(denial).unwrap();
+    dns.await.unwrap();
+
+    let path = dir.path().join("egress-denied.jsonl");
+    let contents = std::fs::read_to_string(&path).unwrap();
+    assert!(!contents.contains("HEADER_SECRET"));
+    assert!(!contents.contains("BODY_SECRET"));
+    assert!(!contents.contains("10.1.2.3"));
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let lines: Vec<serde_json::Value> = contents
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), 3);
+    for (line, kind) in lines
+        .iter()
+        .zip(["not_allowed", "ip_literal", "private_address"])
+    {
+        assert_eq!(line["kind"], kind);
+        assert_eq!(line["port"], 443);
+        assert_eq!(line["session_id"], "session-1");
+        time::OffsetDateTime::parse(
+            line["at"].as_str().unwrap(),
+            &time::format_description::well_known::Rfc3339,
+        )
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn egress_denial_record_allowed_connection_has_no_entry() {
+    let dir = tempfile::tempdir().unwrap();
+    let _recorder = crate::browser_runtime::DenialRecorder::new(dir.path(), "session-2").unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut policy = policy();
+    policy.allow.insert(format!("127.0.0.1:{port}"));
+    policy
+        .test_loopback_allow
+        .insert(format!("127.0.0.1:{port}"));
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve_recorded(server, &policy).await });
+    client
+        .write_all(&connect(&format!("127.0.0.1:{port}")))
+        .await
+        .unwrap();
+    let (upstream, _) = listener.accept().await.unwrap();
+    let mut response = [0u8; 39];
+    let _ = client.read(&mut response).await.unwrap();
+    drop(client);
+    drop(upstream);
+    let (result, denial) = job.await.unwrap();
+    assert!(result.is_ok());
+    assert!(denial.is_none());
+    assert!(
+        std::fs::read(dir.path().join("egress-denied.jsonl"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn egress_denial_record_rejects_preexisting_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("egress-denied.jsonl");
+    std::fs::write(&path, b"browser-owned").unwrap();
+    assert!(crate::browser_runtime::DenialRecorder::new(dir.path(), "session-3").is_err());
+    assert_eq!(std::fs::read(path).unwrap(), b"browser-owned");
+}
+
+#[tokio::test]
+async fn egress_denial_record_malformed_and_bounded() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut recorder =
+        crate::browser_runtime::DenialRecorder::new(dir.path(), "session-4").unwrap();
+    let (result, denial) = recorded_request(b"BAD SECRET_HEADER\r\n\r\n".to_vec(), policy()).await;
+    assert_eq!(result, Err(EgressError::Denied));
+    let denial = denial.unwrap();
+    assert_eq!(denial.kind, "malformed");
+    assert!(denial.host.is_none());
+    for _ in 0..130 {
+        recorder.append(denial.clone()).unwrap();
+    }
+    let contents = std::fs::read_to_string(dir.path().join("egress-denied.jsonl")).unwrap();
+    let lines: Vec<_> = contents.lines().collect();
+    assert_eq!(lines.len(), 129);
+    assert!(lines.iter().all(|line| line.len() < 512));
+    assert!(!contents.contains("SECRET_HEADER"));
+    let last: serde_json::Value = serde_json::from_str(lines.last().unwrap()).unwrap();
+    assert_eq!(last["kind"], "truncated");
+}
 
 fn policy() -> EgressPolicy {
     EgressPolicy {
@@ -11,6 +150,7 @@ fn policy() -> EgressPolicy {
         .into(),
         resolver: "127.0.0.1".parse().unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     }
 }
 
@@ -364,6 +504,7 @@ async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
         allow: prepared.egress_allow(),
         resolver: "127.0.0.1".parse().unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     };
     for authority in [
         "billing.example.com:80",
@@ -389,6 +530,115 @@ async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
     assert_eq!(
         destination(&mut server, &policy, address).await,
         Ok("93.184.216.34:443".parse().unwrap())
+    );
+    assert_eq!(job.await.unwrap(), vec![1, 28]);
+}
+
+/// One CONNECT through `serve` over a Unix pair; returns the proxy's status line
+/// and, when established, echoes a byte through the tunnel.
+async fn loopback_connect(policy: EgressPolicy, authority: &str) -> (String, Option<u8>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve(server, &policy).await });
+    client.write_all(&connect(authority)).await.unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        match client.read_u8().await {
+            Ok(b) => head.push(b),
+            Err(_) => break,
+        }
+    }
+    let status = String::from_utf8_lossy(&head)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let mut echoed = None;
+    if status.contains(" 200 ") {
+        client.write_all(b"x").await.unwrap();
+        echoed = Some(client.read_u8().await.unwrap());
+        drop(client);
+    }
+    let _ = job.await.unwrap();
+    (status, echoed)
+}
+
+async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut b = [0u8; 1];
+            if socket.read_exact(&mut b).await.is_ok() {
+                let _ = socket.write_all(&b).await;
+            }
+        }
+    });
+    (port, task)
+}
+
+#[tokio::test]
+async fn egress_test_loopback_connect_allowed_only_when_listed() {
+    let (port, listener) = echo_listener().await;
+    let authority = format!("127.0.0.1:{port}");
+    // Default (empty set): the loopback literal stays denied with 403.
+    let (status, echoed) = loopback_connect(policy(), &authority).await;
+    assert!(status.contains(" 403 "), "{status}");
+    assert_eq!(echoed, None);
+    // Listed: 200 and the tunnel reaches the loopback listener without DNS
+    // (the policy resolver 127.0.0.1:53 is not listening).
+    let mut allowed = policy();
+    allowed.test_loopback_allow = [authority.clone()].into();
+    let (status, echoed) = loopback_connect(allowed.clone(), &authority).await;
+    assert!(status.contains(" 200 "), "{status}");
+    assert_eq!(echoed, Some(b'x'));
+    listener.await.unwrap();
+    // Another port, a name resolving to loopback, ::1 and literal variants: 403.
+    for other in [
+        format!("127.0.0.1:{}", port.wrapping_add(1).max(1)),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+        format!("10.0.0.1:{port}"),
+        format!("2130706433:{port}"),
+        format!("0x7f.0.0.1:{port}"),
+        format!("0177.0.0.1:{port}"),
+    ] {
+        let (status, _) = loopback_connect(allowed.clone(), &other).await;
+        assert!(status.contains(" 403 "), "{other}: {status}");
+    }
+}
+
+#[tokio::test]
+async fn egress_test_loopback_destination_skips_dns_only_for_listed_literal() {
+    let mut allowed = policy();
+    allowed.test_loopback_allow = ["127.0.0.1:18080".to_string()].into();
+    // Resolver points at a closed port: any DNS attempt would fail with Resolution.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let resolver = closed.local_addr().unwrap();
+    drop(closed);
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client.write_all(&connect("127.0.0.1:18080")).await.unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, resolver).await,
+        Ok("127.0.0.1:18080".parse().unwrap())
+    );
+    // A name for the same port is unaffected: not in `allow`, denied before DNS.
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client.write_all(&connect("localhost:18080")).await.unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, resolver).await,
+        Err(EgressError::Denied)
+    );
+    // Allowed name that resolves to loopback via DNS stays PrivateAddress (Denied).
+    allowed.allow.insert("example.com:18080".into());
+    let (address, job) = dns_fixture(&["127.0.0.1"]).await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client
+        .write_all(&connect("example.com:18080"))
+        .await
+        .unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, address).await,
+        Err(EgressError::Denied)
     );
     assert_eq!(job.await.unwrap(), vec![1, 28]);
 }

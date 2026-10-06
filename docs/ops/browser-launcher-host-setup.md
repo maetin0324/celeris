@@ -113,7 +113,21 @@ egress = "/usr/local/libexec/celeris/celeris-browser-egress"
 chrome = "/usr/bin/google-chrome"
 agent_browser = "/usr/local/libexec/celeris/agent-browser"
 resolver = "1.1.1.1"
+# 本番 config ではこの欄を省略する（既定 off）。試験専用 launcher config のみ:
+# test_loopback_allow = ["127.0.0.1:17730"]
 ```
+
+`test_loopback_allow` は試験専用の任意欄で、省略時は off。明示する場合も `127.0.0.1:<port>` の完全一致のみを許し、port は 1〜65535（53/853 は不可）。launcher は試験許可を session policy に渡すとき task の `allowed_domains` との共通部分だけを使うため、設定した port 以外の private address や IP literal の拒否動作は変わらない。試験 harness が許可する loopback ページの port をここに列挙する。
+
+**本番用 `/etc/celeris-browser/launcher.toml` にはこの欄を設定しない。** launcher は有効な設定を本番 config path、socket (`/run/celeris-browser/launcher.sock`)、state dir (`/var/lib/celeris-browser`) またはその配下・祖先で検出すると listen 前に起動を拒否する。socket activation の socket path も検査する。さらに本番 daemon は本番 config/DB/token の判定が fail-closed となり、launcher の `hello` が試験許可を申告した場合や hello に答えない旧 launcher では session を開始しない。試験用 daemon・DB・token・launcher socket は本番と完全に分離する。
+
+試験用 config の例（試験専用の一時 path でのみ使用）:
+
+```toml
+test_loopback_allow = ["127.0.0.1:17730"]
+```
+
+試験許可が有効な launcher は stderr に `test-only loopback egress enabled: 127.0.0.1:17730 (not for production)` を出す。拒否記録は `<state_dir>/sessions/<session_id>/egress-denied.jsonl` にあり、1 行ごとに `kind`、`host`、`port`、UTC の `at`、`session_id` を記録する。要求本文、header、DNS 応答、上流エラーは記録しない。最大 128 件で、超過後は `truncated` を 1 件記録する。実機確認台本は当該 session 記録を `egress-denied.json` に集約する。
 
 `resolver` は host で使用を許可する DNS resolver に置き換える。値が合っていることを確認してから unit を起動する。
 
@@ -157,6 +171,8 @@ systemctl show celeris-browser-launcher.service -p User -p Group -p KillMode -p 
 # User=celeris-browser / Group=celeris-browser / KillMode=control-group / NoNewPrivileges=no
 ps -o user,group,pid,cmd -C celeris-browser-launcher
 ```
+
+launcher protocol が `hello` を追加で必要とする daemon を導入するときは、daemon と同じ release の `celeris-browser-launcher` binary も `/usr/local/libexec/celeris/` に配置してから起動する。
 
 `NoNewPrivileges` を付けないのは setuid の `newuidmap` を使うため（ADR-0115 ホスト側の準備 4）。Chrome 側の `no_new_privs` と capability 全落としは bwrap が付ける。
 

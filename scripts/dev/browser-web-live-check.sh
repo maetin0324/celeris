@@ -117,6 +117,16 @@ WEB="http://127.0.0.1:$WEB_PORT"
 PAGE="http://127.0.0.1:$PAGE_PORT"
 DENIED_ORIGIN="http://127.0.0.1:$DENIED_PORT"
 LIVE_UPSTREAM="127.0.0.1:$LIVE_PORT"
+LAUNCHER_STATE_DIR=$(python3 - "$LAUNCHER_CONFIG" "$PAGE_PORT" <<'PY'
+import sys,tomllib
+cfg=tomllib.load(open(sys.argv[1],"rb"))
+allow=cfg.get("test_loopback_allow", [])
+expected=f"127.0.0.1:{sys.argv[2]}"
+if expected not in allow:
+    raise SystemExit(f"launcher test_loopback_allow must include {expected}")
+print(cfg["state_dir"])
+PY
+)
 TOKEN_FILE=$(python3 - "$DAEMON_CONFIG" <<'PY'
 import sys,tomllib
 print(tomllib.load(open(sys.argv[1],"rb"))["api"]["token_file"])
@@ -435,16 +445,33 @@ finally:
     (out/"checks.json").write_text(json.dumps(log, indent=2, ensure_ascii=False)+"\n")
 PY
 
-python3 - "$DENIAL_FILE" "$PAGE" "$DENIED_ORIGIN" <<'PY'
+python3 - "$LAUNCHER_STATE_DIR" "$DENIAL_FILE" "$PAGE_PORT" "$DENIED_PORT" <<'PY'
 import json, pathlib, sys, time
-path, allowed, denied = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+state, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+page_port, denied_port = map(int, sys.argv[3:])
+sessions = state / "sessions"
 deadline = time.monotonic() + 30
-while not path.is_file() and time.monotonic() < deadline:
+records = []
+while time.monotonic() < deadline:
+    records = []
+    if sessions.is_dir():
+        for record_file in sessions.glob("*/egress-denied.jsonl"):
+            for line in record_file.read_text().splitlines():
+                try: record = json.loads(line)
+                except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
+                if record.get("port") == denied_port:
+                    records.append(record)
+    if records: break
     time.sleep(0.2)
-if not path.is_file(): raise SystemExit("browser harness did not produce egress denial evidence")
-record = json.loads(path.read_text())
-if record != {"allowed_origin": allowed, "attempted_origin": denied, "denied": True, "source": "agent-browser"}:
-    raise SystemExit("egress denial evidence did not match the local fixture")
+if not records: raise SystemExit("launcher session records contain no denial for the forbidden origin")
+if not any(r.get("kind") == "private_address" and r.get("host") == "127.0.0.1" and
+           r.get("port") == denied_port and r.get("session_id") and r.get("at") for r in records):
+    raise SystemExit("forbidden-origin denial must record kind=private_address and host:port")
+for record in records:
+    if record.get("port") == page_port:
+        raise SystemExit("allowed loopback test page was recorded as denied")
+# Publish only the launcher records needed as portable evidence.
+output.write_text(json.dumps(records, indent=2, ensure_ascii=False)+"\n")
 PY
 if grep -q '"GET ' "$EVIDENCE/denied-page.log"; then
   echo "forbidden origin received a page request" >&2

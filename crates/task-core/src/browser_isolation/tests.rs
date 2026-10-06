@@ -201,7 +201,160 @@ fn policy() -> EgressPolicy {
         allow: ["example.com:443".to_string()].into_iter().collect(),
         resolver: "10.200.0.1".parse().unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: BTreeSet::new(),
     }
+}
+
+fn connect_port(host: &str, port: u16, ips: &[&str]) -> EgressRequest {
+    EgressRequest::Connect {
+        host: host.into(),
+        port,
+        resolved: ips.iter().map(|s| s.parse().unwrap()).collect(),
+    }
+}
+
+fn loopback_policy(entries: &[&str]) -> EgressPolicy {
+    let mut p = policy();
+    p.test_loopback_allow = entries.iter().map(|s| s.to_string()).collect();
+    p
+}
+
+#[test]
+fn egress_test_loopback_default_off_keeps_ip_literal() {
+    let p = policy();
+    assert!(p.test_loopback_allow.is_empty());
+    for port in [8080, 443, 1] {
+        assert_eq!(
+            check_egress(&p, &connect_port("127.0.0.1", port, &[])),
+            Err(EgressDenied::IpLiteral),
+            "{port}"
+        );
+        assert_eq!(test_loopback_target(&p, "127.0.0.1", port), None);
+    }
+    // 既定（空）は JSON に出ず、欄の無い JSON は空として読む。
+    let json = serde_json::to_value(&p).unwrap();
+    assert!(json.get("test_loopback_allow").is_none(), "{json}");
+    let back: EgressPolicy = serde_json::from_value(json).unwrap();
+    assert_eq!(back, p);
+}
+
+#[test]
+fn egress_test_loopback_allows_only_listed_host_port() {
+    let p = loopback_policy(&["127.0.0.1:18080"]);
+    assert_eq!(
+        check_egress(&p, &connect_port("127.0.0.1", 18080, &[])),
+        Ok(())
+    );
+    assert_eq!(
+        test_loopback_target(&p, "127.0.0.1", 18080),
+        Some("127.0.0.1:18080".parse().unwrap())
+    );
+    // 別 port は IpLiteral のまま。
+    assert_eq!(
+        check_egress(&p, &connect_port("127.0.0.1", 18081, &[])),
+        Err(EgressDenied::IpLiteral)
+    );
+    let json = serde_json::to_value(&p).unwrap();
+    assert_eq!(
+        json["test_loopback_allow"],
+        serde_json::json!(["127.0.0.1:18080"])
+    );
+}
+
+#[test]
+fn egress_test_loopback_other_private_and_variants_stay_denied() {
+    let p = loopback_policy(&[
+        "127.0.0.1:18080",
+        "localhost:18080",
+        "10.0.0.1:18080",
+        "[::1]:18080",
+        "::1:18080",
+        "127.0.0.2:18080",
+        "2130706433:18080",
+        "0x7f.1:18080",
+        "0177.0.0.1:18080",
+        "127.0.0.1:53",
+        "127.0.0.1:853",
+        "127.0.0.1:0",
+    ]);
+    for h in [
+        "10.0.0.1",
+        "[::1]",
+        "::1",
+        "127.0.0.2",
+        "2130706433",
+        "0x7f.1",
+        "0177.0.0.1",
+        "0x7f.0.0.1",
+        "127.1",
+    ] {
+        assert_eq!(
+            check_egress(&p, &connect_port(h, 18080, &["127.0.0.1"])),
+            Err(EgressDenied::IpLiteral),
+            "{h}"
+        );
+        assert_eq!(test_loopback_target(&p, h, 18080), None, "{h}");
+    }
+    // DNS を経る名前の loopback 解決は従来どおり（許可に無ければ NotAllowed、あっても PrivateAddress）。
+    assert_eq!(
+        check_egress(&p, &connect_port("localhost", 18080, &["127.0.0.1"])),
+        Err(EgressDenied::NotAllowed)
+    );
+    let mut named = p.clone();
+    named.allow.insert("localhost:18080".into());
+    assert_eq!(
+        check_egress(&named, &connect_port("localhost", 18080, &["127.0.0.1"])),
+        Err(EgressDenied::PrivateAddress)
+    );
+    // DNS/DoT と port 0 は集合にあっても通さない。
+    for port in [53, 853, 0] {
+        assert_eq!(
+            check_egress(&p, &connect_port("127.0.0.1", port, &[])),
+            Err(EgressDenied::IpLiteral),
+            "{port}"
+        );
+    }
+}
+
+#[test]
+fn egress_test_loopback_does_not_change_other_verdicts() {
+    let p = loopback_policy(&["127.0.0.1:443"]);
+    assert_eq!(
+        check_egress(&p, &connect("example.com", &["93.184.216.34"])),
+        Ok(())
+    );
+    assert_eq!(
+        check_egress(&p, &connect("example.com", &["93.184.216.34", "127.0.0.1"])),
+        Err(EgressDenied::PrivateAddress)
+    );
+    assert_eq!(
+        check_egress(&p, &connect("evil.com", &["93.184.216.34"])),
+        Err(EgressDenied::NotAllowed)
+    );
+    assert_eq!(
+        check_egress(&p, &connect("93.184.216.34", &["93.184.216.34"])),
+        Err(EgressDenied::IpLiteral)
+    );
+    assert_eq!(
+        check_egress(
+            &p,
+            &EgressRequest::Dns {
+                server: "127.0.0.1".parse().unwrap(),
+                port: 53
+            }
+        ),
+        Err(EgressDenied::DnsBypass)
+    );
+    assert_eq!(
+        check_egress(
+            &p,
+            &EgressRequest::UpstreamProxy {
+                host: "127.0.0.1".into(),
+                port: 443
+            }
+        ),
+        Err(EgressDenied::ProxyChain)
+    );
 }
 
 fn connect(host: &str, ips: &[&str]) -> EgressRequest {

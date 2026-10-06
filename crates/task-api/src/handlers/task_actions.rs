@@ -436,10 +436,23 @@ pub(crate) fn answer_op(
             }]),
         ));
     }
-    let (from, question) = task_ops::gate::plan_answer(store, id, expected_status)
-        .map_err(|e| audit.reject(store, "task", &target_id, ops_problem(store, e, Some("answer"))))?;
-    task_ops::gate::close_phase_integration_requests(store, id, &answer)
-        .map_err(|e| audit.reject(store, "task", &target_id, ops_problem(store, e, Some("answer"))))?;
+    let (from, question) =
+        task_ops::gate::plan_answer(store, id, expected_status).map_err(|e| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, e, Some("answer")),
+            )
+        })?;
+    task_ops::gate::close_phase_integration_requests(store, id, &answer).map_err(|e| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, e, Some("answer")),
+        )
+    })?;
     let event = task_core::Event::Answered {
         question,
         answer: answer.clone(),

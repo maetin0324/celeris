@@ -646,5 +646,7 @@ pub(crate) fn plan_gate_op(
             "reason": outcome.reason.to_string(),
         }))
     })?;
-    Ok(crate::cos::operations::Applied::Audited(Box::new(operation)))
+    Ok(crate::cos::operations::Applied::Audited(Box::new(
+        operation,
+    )))
 }

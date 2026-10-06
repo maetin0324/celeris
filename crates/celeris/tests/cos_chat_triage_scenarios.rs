@@ -128,7 +128,10 @@ async fn tick(
     batch.content = notify::triage::render(&row, &config()).expect("render");
     let client = notify::client().expect("client");
     let outcome = notify::post_webhook(&client, &hook.url, &batch.content).await;
-    hook.seen.recv().await.expect("the fake webhook saw the post");
+    hook.seen
+        .recv()
+        .await
+        .expect("the fake webhook saw the post");
     notify::record(
         store,
         &pending,
@@ -208,19 +211,13 @@ fn question_task(store: &SqliteStore, title: &str) -> Task {
 fn escalate(store: &SqliteStore, db: &std::path::Path, task: &Task, summary: &str) -> String {
     // The revision is the derived item's `created_at`, as the dispatcher's intake keys it.
     let dir = db.parent().expect("dir");
-    let derived = task_ops::human_inbox::human_inbox(
-        store,
-        None,
-        &view(dir),
-        at(),
-        &|_, _| Vec::new(),
-        None,
-    )
-    .expect("inbox")
-    .items
-    .into_iter()
-    .find(|i| i.id == format!("question-{}", task.id))
-    .expect("derived question item");
+    let derived =
+        task_ops::human_inbox::human_inbox(store, None, &view(dir), at(), &|_, _| Vec::new(), None)
+            .expect("inbox")
+            .items
+            .into_iter()
+            .find(|i| i.id == format!("question-{}", task.id))
+            .expect("derived question item");
     let source = CosTriageSource {
         source_kind: "question".into(),
         source_key: derived.id.clone(),
@@ -287,7 +284,10 @@ async fn cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook() {
             .expect("notice");
     }
     for _ in 0..(LEGACY.len() + NoticeKind::ALL.len()) {
-        assert!(!tick(&store, &db, &view, &mut hook).await, "a legacy kind was sent");
+        assert!(
+            !tick(&store, &db, &view, &mut hook).await,
+            "a legacy kind was sent"
+        );
     }
     assert!(hook.bodies.lock().expect("bodies").is_empty());
 

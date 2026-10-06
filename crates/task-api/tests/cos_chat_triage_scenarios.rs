@@ -216,10 +216,7 @@ fn ingest_all(env: &TestEnv, cursor: i64) -> Vec<(String, String, String)> {
         .collect()
 }
 
-fn find<'a>(
-    rows: &'a [(String, String, String)],
-    prefix: &str,
-) -> &'a (String, String, String) {
+fn find<'a>(rows: &'a [(String, String, String)], prefix: &str) -> &'a (String, String, String) {
     rows.iter()
         .find(|(key, _, _)| key.starts_with(prefix))
         .unwrap_or_else(|| panic!("no derived item {prefix} in {rows:?}"))
@@ -273,10 +270,22 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
     let bearer = cos_bearer(&env, "a");
     let headers = [("authorization", bearer.as_str())];
     let cases = [
-        ("decision-", json!({"option": "vault", "note": "既定どおり"})),
-        ("question-", json!({"option": "answer", "note": "main に入れる"})),
-        ("authorization-", json!({"option": "once", "note": "既定の queue"})),
-        ("plan_gate-", json!({"option": "approve", "note": "既承認計画の具体化"})),
+        (
+            "decision-",
+            json!({"option": "vault", "note": "既定どおり"}),
+        ),
+        (
+            "question-",
+            json!({"option": "answer", "note": "main に入れる"}),
+        ),
+        (
+            "authorization-",
+            json!({"option": "once", "note": "既定の queue"}),
+        ),
+        (
+            "plan_gate-",
+            json!({"option": "approve", "note": "既承認計画の具体化"}),
+        ),
     ];
     let mut ops = Vec::new();
     for (prefix, answer) in cases {
@@ -306,9 +315,13 @@ async fn cos_chat_triage_a_answers_each_wait_kind_without_webhook() {
     }
     // The source waits are gone: decision answered by cos, question/plan resumed, approval decided.
     assert!(derived(&env).is_empty(), "{:?}", derived(&env));
-    assert!(env.store.events_for(decision.id).expect("events").iter().any(
-        |(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if by == "cos")
-    ));
+    assert!(
+        env.store
+            .events_for(decision.id)
+            .expect("events")
+            .iter()
+            .any(|(_, e)| matches!(e, Event::DecisionAnswered { by, .. } if by == "cos"))
+    );
     assert_eq!(env.status_of(question.id), Status::Ready);
     assert_ne!(env.status_of(plan.id), Status::Blocked);
     let decided = env
@@ -383,7 +396,13 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
         &app,
         post_json_with(
             &resolve_path(explicit_item),
-            &body("k-try", explicit_rev, "answer", "定型", json!({"answer": {"option": "vault"}})),
+            &body(
+                "k-try",
+                explicit_rev,
+                "answer",
+                "定型",
+                json!({"answer": {"option": "vault"}}),
+            ),
             &headers,
         ),
     )
@@ -395,10 +414,38 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
         {"key": "manual", "label": "手で入れる"}
     ]);
     let cases = [
-        ("decision-dec-push", push.id, "外部 repo への push", decision_options.clone(), json!("manual"), "push 先が未認可"),
-        ("decision-dec-design", design.id, "設計の根本変更", decision_options.clone(), json!(null), "受け入れ条件が変わる"),
-        ("decision-dec-human", explicit.id, "人の判断指定", decision_options.clone(), json!("vault"), "human_required の待ち"),
-        ("question-", low.id, "低確信の質問", json!([{"key": "reply", "label": "web で回答"}]), json!(null), "confidence 0.4 < 0.85"),
+        (
+            "decision-dec-push",
+            push.id,
+            "外部 repo への push",
+            decision_options.clone(),
+            json!("manual"),
+            "push 先が未認可",
+        ),
+        (
+            "decision-dec-design",
+            design.id,
+            "設計の根本変更",
+            decision_options.clone(),
+            json!(null),
+            "受け入れ条件が変わる",
+        ),
+        (
+            "decision-dec-human",
+            explicit.id,
+            "人の判断指定",
+            decision_options.clone(),
+            json!("vault"),
+            "human_required の待ち",
+        ),
+        (
+            "question-",
+            low.id,
+            "低確信の質問",
+            json!([{"key": "reply", "label": "web で回答"}]),
+            json!(null),
+            "confidence 0.4 < 0.85",
+        ),
     ];
     for (prefix, task_id, summary, options, recommended, why) in cases {
         let (_, item, revision) = find(&rows, prefix);
@@ -440,7 +487,10 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
         assert_eq!(sent["web_path"], format!("/tasks/{task_id}"));
     }
     assert_eq!(
-        count(&env, "SELECT COUNT(*) FROM notifications WHERE kind='cos_escalation'"),
+        count(
+            &env,
+            "SELECT COUNT(*) FROM notifications WHERE kind='cos_escalation'"
+        ),
         4
     );
     // The waits stay open for the human.
@@ -463,7 +513,13 @@ async fn cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait() {
         &app,
         post_json_with(
             &resolve_path(push_item),
-            &body("k-late", push_rev, "answer", "遅れた代答", json!({"answer": {"option": "vault"}})),
+            &body(
+                "k-late",
+                push_rev,
+                "answer",
+                "遅れた代答",
+                json!({"answer": {"option": "vault"}}),
+            ),
             &headers,
         ),
     )
@@ -486,7 +542,13 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
         &app,
         post_json_with(
             &resolve_path(item),
-            &body("k-o", revision, "answer", "定型", json!({"answer": {"option": "vault"}})),
+            &body(
+                "k-o",
+                revision,
+                "answer",
+                "定型",
+                json!({"answer": {"option": "vault"}}),
+            ),
             &headers,
         ),
     )
@@ -499,7 +561,10 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
     let path = format!("/api/v1/cos/operations/{op}/override");
     let revoke = send(
         &app,
-        post_admin(&path, &json!({"action": "revoke", "reason": "人が選び直す"})),
+        post_admin(
+            &path,
+            &json!({"action": "revoke", "reason": "人が選び直す"}),
+        ),
     )
     .await;
     assert_eq!(revoke.status.as_u16(), 200, "{}", revoke.text());
@@ -538,6 +603,13 @@ async fn cos_chat_triage_override_revokes_a_resolved_answer_end_to_end() {
         .into_iter()
         .map(|(_, e)| serde_json::to_string(&e).expect("json"))
         .collect();
-    assert!(events.iter().any(|e| e.contains("人が選び直す")), "{events:?}");
-    assert!(events.iter().any(|e| e.contains("DecisionAnswered") || e.contains("decision_answered")));
+    assert!(
+        events.iter().any(|e| e.contains("人が選び直す")),
+        "{events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| e.contains("DecisionAnswered") || e.contains("decision_answered"))
+    );
 }

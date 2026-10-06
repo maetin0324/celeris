@@ -65,6 +65,10 @@ impl std::str::FromStr for NotificationId {
 )]
 #[serde(rename_all = "snake_case")]
 pub enum NotificationKind {
+    /// CoS explicitly escalated an unresolved source revision.
+    CosEscalation,
+    /// CoS was unavailable; deterministic direct fallback for an unresolved revision.
+    CosFallback,
     /// ADR-0133 D6: new human decisions, batched into one webhook message.
     InboxNew,
     /// ADR-0133 D6: periodic summary of non-actionable notices.
@@ -105,6 +109,8 @@ pub enum NotificationKind {
 impl NotificationKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            NotificationKind::CosEscalation => "cos_escalation",
+            NotificationKind::CosFallback => "cos_fallback",
             NotificationKind::InboxNew => "inbox_new",
             NotificationKind::Digest => "digest",
             NotificationKind::MilestoneReady => "milestone_ready",
@@ -123,6 +129,8 @@ impl NotificationKind {
 
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "cos_escalation" => Some(NotificationKind::CosEscalation),
+            "cos_fallback" => Some(NotificationKind::CosFallback),
             "inbox_new" => Some(NotificationKind::InboxNew),
             "digest" => Some(NotificationKind::Digest),
             "milestone_ready" => Some(NotificationKind::MilestoneReady),
@@ -141,7 +149,9 @@ impl NotificationKind {
     }
 
     /// 判定の順（GUI と再送の順を決定的にするため）。
-    pub const ALL: [NotificationKind; 13] = [
+    pub const ALL: [NotificationKind; 15] = [
+        NotificationKind::CosEscalation,
+        NotificationKind::CosFallback,
         NotificationKind::InboxNew,
         NotificationKind::Digest,
         NotificationKind::MilestoneReady,

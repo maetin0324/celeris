@@ -70,8 +70,7 @@ fn notify_digest_waits_for_interval_and_never_sends_notice_kind_immediately() {
         .notification_upsert_pending(NotificationKind::TaskReady, "old", "old", None, at)
         .unwrap()
         .unwrap();
-    let batch = select_routes_batch(&[legacy, rows[0].clone()]).unwrap();
-    assert_eq!(batch.ids, vec![rows[0].id]);
+    assert!(select_routes_batch(&[legacy, rows[0].clone()]).is_none());
 }
 
 /// ADR-0074 §6 F3 (c)（途中確認）: 工程の後の途中確認（`blocked(awaiting_human)`）は

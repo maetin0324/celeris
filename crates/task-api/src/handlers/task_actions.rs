@@ -411,3 +411,70 @@ pub(super) async fn rereview(
         .await?;
     Ok(json_response(StatusCode::OK, &result))
 }
+
+/// ADR 2026-10-05 D3（D6 一次対応 A）: CoS が `POST /tasks/{id}/answer` を代わりに答える監査つきの
+/// 操作。検証は人の経路と同じ `gate::plan_answer`、遷移は `cos_operation_apply` の transaction 内で書く。
+/// 統合依頼を閉じる・未決の approvals を決める後始末は冪等で、人の経路と同じく commit 後に走らせる。
+pub(crate) fn answer_op(
+    store: &task_core::store::SqliteStore,
+    id: task_core::TaskId,
+    AnswerBody {
+        answer,
+        expected_status,
+    }: AnswerBody,
+    audit: &OperationAudit,
+) -> Result<Applied<()>, ApiProblem> {
+    let target_id = id.to_string();
+    if answer.trim().is_empty() {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            ApiProblem::validation(vec![ValidationError {
+                field: Some("answer".to_string()),
+                message: "answer must not be blank".to_string(),
+            }]),
+        ));
+    }
+    let (from, question) =
+        task_ops::gate::plan_answer(store, id, expected_status).map_err(|e| {
+            audit.reject(
+                store,
+                "task",
+                &target_id,
+                ops_problem(store, e, Some("answer")),
+            )
+        })?;
+    task_ops::gate::close_phase_integration_requests(store, id, &answer).map_err(|e| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, e, Some("answer")),
+        )
+    })?;
+    let event = task_core::Event::Answered {
+        question,
+        answer: answer.clone(),
+    };
+    let operation = audit.apply(store, "task", &target_id, "question.answer", |tx| {
+        let outcome = task_core::store::SqliteStore::apply_transition_tx(
+            tx,
+            id,
+            task_core::Trigger::Answer,
+            vec![event],
+        )?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "from": from,
+            "to": outcome.next,
+            "reason": outcome.reason.to_string(),
+        }))
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let Err(error) = task_ops::gate::settle_pending_approvals(store, id, &answer)
+    {
+        tracing::warn!(operation_id = %operation.id, %error, "cos answer follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
+}

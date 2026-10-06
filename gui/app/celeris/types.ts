@@ -281,6 +281,8 @@ export type ReportId = string;
  * 報告の種類（ADR-0033 D3）。
  */
 export type ReportKind = "progress" | "result" | "bad_news" | "proposal" | "question";
+export type OverrideMode = "revoke" | "return";
+export type ResolveOutcome = "answer" | "observe" | "escalate";
 /**
  * ADR-0131 D3: daemon 停止中に過ぎた予定時刻の扱い。
  */
@@ -1427,6 +1429,8 @@ export type NoticeKind =
  * 判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。
  */
 export type NotificationKind =
+  | "cos_escalation"
+  | "cos_fallback"
   | "inbox_new"
   | "digest"
   | "milestone_ready"
@@ -1667,6 +1671,19 @@ export interface ApiV1Schema {
   console_hello: ConsoleHello;
   console_instruct: InstructBody;
   console_instruct_accepted: ConsoleInstructAccepted;
+  cos_checkpoint_request: CheckpointRequest;
+  cos_checkpoint_response: CheckpointResponse;
+  cos_checkpoint_saved: ChatCheckpointSaved;
+  cos_escalation_packet: EscalationPacket;
+  cos_inbox_item: CosInboxItem;
+  cos_inbox_list: CosInboxList;
+  cos_operation: CosOperation;
+  cos_operation_request: OperationBody;
+  cos_operation_response: OperationView;
+  cos_override_request: OverrideBody;
+  cos_override_response: OverrideResponse;
+  cos_resolve_request: ResolveBody;
+  cos_resolve_response: ResolveResponse;
   cron_job: CronJobView;
   cron_job_create: CronJobCreateBody;
   cron_job_list: CronJobList;
@@ -3386,6 +3403,226 @@ export interface ConsoleInstructAccepted {
    * タスクの一意識別子（ULID）。DESIGN §4.1。
    */
   task_id: string;
+}
+/**
+ * Request for `POST /cos/threads/{t}/checkpoint`.
+ */
+export interface CheckpointRequest {
+  expected_summary_through_seq: number;
+  run_id: string;
+  summary: string;
+  through_seq: number;
+}
+/**
+ * Response for `POST /cos/threads/{t}/checkpoint`.
+ */
+export interface CheckpointResponse {
+  summary_through_seq: number;
+  thread_id: string;
+}
+export interface ChatCheckpointSaved {
+  summary_through_seq: number;
+  thread_id: string;
+}
+/**
+ * D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).
+ */
+export interface EscalationPacket {
+  options: EscalationOption[];
+  recommendation_reason: string;
+  recommended?: string | null;
+  summary: string;
+  web_path: string;
+}
+export interface EscalationOption {
+  key: string;
+  label: string;
+}
+/**
+ * One `cos_inbox_items` row.
+ */
+export interface CosInboxItem {
+  created_at: string;
+  id: string;
+  message_id: string;
+  operation_id?: string | null;
+  policy_version: string;
+  reason?: string | null;
+  run_id?: string | null;
+  source_event_id?: number | null;
+  source_key: string;
+  source_kind: string;
+  source_revision: string;
+  state: string;
+  thread_id: string;
+  updated_at: string;
+}
+/**
+ * `GET /cos/inbox` の応答。
+ */
+export interface CosInboxList {
+  items: CosInboxItem1[];
+}
+/**
+ * One `cos_inbox_items` row.
+ */
+export interface CosInboxItem1 {
+  created_at: string;
+  id: string;
+  message_id: string;
+  operation_id?: string | null;
+  policy_version: string;
+  reason?: string | null;
+  run_id?: string | null;
+  source_event_id?: number | null;
+  source_key: string;
+  source_kind: string;
+  source_revision: string;
+  state: string;
+  thread_id: string;
+  updated_at: string;
+}
+/**
+ * ADR 2026-10-05 D2/D3: `POST /cos/operations`, `GET /cos/operations/{o}`,
+ * and run-scoped `POST /cos/threads/{t}/checkpoint` wire types.
+ */
+export interface CosOperation {
+  action: string;
+  event_id?: number | null;
+  expected_revision?: string | null;
+  id: string;
+  idempotency_key: string;
+  payload: unknown;
+  policy_version: string;
+  reason: string;
+  request_hash: string;
+  result?: unknown;
+  run_id: string;
+  state: string;
+  target_id: string;
+  target_kind: string;
+  thread_id: string;
+}
+/**
+ * Request for `POST /cos/operations`; credential fixes actor/thread/run.
+ */
+export interface OperationBody {
+  expected_revision?: string | null;
+  idempotency_key: string;
+  policy_version: string;
+  reason: string;
+  request: OperationRequest;
+}
+export interface OperationRequest {
+  body?: {
+    [k: string]: unknown;
+  };
+  method: string;
+  path: string;
+}
+/**
+ * `O` of the ADR D2 table.
+ */
+export interface OperationView {
+  action: string;
+  actor: string;
+  event_id?: string | null;
+  expected_revision?: string | null;
+  id: string;
+  idempotency_key: string;
+  payload: unknown;
+  policy_version: string;
+  reason: string;
+  request_hash: string;
+  result?: unknown;
+  run_id: string;
+  state: string;
+  target_id: string;
+  target_kind: string;
+  thread_id: string;
+}
+/**
+ * `POST /cos/operations/{o}/override` の本文（revoke / return）。
+ */
+export interface OverrideBody {
+  action: OverrideMode;
+  reason: string;
+}
+/**
+ * `POST /cos/operations/{o}/override` の応答。
+ */
+export interface OverrideResponse {
+  action: string;
+  new_revision?: string | null;
+  new_wait_id?: string | null;
+  operation_id: string;
+  paused_task_ids: string[];
+  remediation_task_id?: string | null;
+  state: string;
+}
+/**
+ * `POST /cos/inbox/{i}/resolve` の本文（answer / observe / escalate）。
+ */
+export interface ResolveBody {
+  answer?: InboxAnswerBody | null;
+  escalation?: EscalationPacket1 | null;
+  /**
+   * The `source_revision` of the item the worker judged.
+   */
+  expected_revision: string;
+  idempotency_key: string;
+  outcome: ResolveOutcome;
+  policy_version: string;
+  reason: string;
+}
+export interface InboxAnswerBody {
+  note?: string | null;
+  option: string;
+  payload?: {
+    [k: string]: unknown;
+  };
+}
+/**
+ * D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).
+ */
+export interface EscalationPacket1 {
+  options: EscalationOption[];
+  recommendation_reason: string;
+  recommended?: string | null;
+  summary: string;
+  web_path: string;
+}
+/**
+ * `POST /cos/inbox/{i}/resolve` の応答。
+ */
+export interface ResolveResponse {
+  item?: CosInboxItem1 | null;
+  /**
+   * The outbox notification of `escalate` (null when the item was already routed).
+   */
+  notification_id?: string | null;
+  operation: OperationView1;
+}
+/**
+ * `O` of the ADR D2 table.
+ */
+export interface OperationView1 {
+  action: string;
+  actor: string;
+  event_id?: string | null;
+  expected_revision?: string | null;
+  id: string;
+  idempotency_key: string;
+  payload: unknown;
+  policy_version: string;
+  reason: string;
+  request_hash: string;
+  result?: unknown;
+  run_id: string;
+  state: string;
+  target_id: string;
+  target_kind: string;
+  thread_id: string;
 }
 /**
  * job 1 件と最後の履歴（一覧・詳細・作成・更新・一時停止・再開の応答）。
@@ -6573,13 +6810,6 @@ export interface QuestionItem {
 export interface AnswerNote {
   answer: string;
   question: string;
-}
-export interface InboxAnswerBody {
-  note?: string | null;
-  option: string;
-  payload?: {
-    [k: string]: unknown;
-  };
 }
 export interface InboxAnswerResult {
   item_id: string;
@@ -10792,71 +11022,3 @@ export interface WorkUnitCheckLog {
   truncated: boolean;
   work_unit_id: string;
 }
-
-/** CoS run operation record for `POST /cos/operations` and `GET /cos/operations/{o}`. */
-export type CosOperation = {
-  id: string;
-  thread_id: string;
-  run_id: string;
-  idempotency_key: string;
-  request_hash: string;
-  target_kind: string;
-  target_id: string;
-  expected_revision?: string | null;
-  action: string;
-  payload: unknown;
-  reason: string;
-  policy_version: string;
-  state: string;
-  result?: unknown;
-  event_id?: number | null;
-};
-
-/** Request body for `POST /cos/operations`; actor, thread, and run come from the credential. */
-export type OperationBody = {
-  idempotency_key: string;
-  expected_revision?: string | null;
-  reason: string;
-  policy_version: string;
-  request: OperationRequest;
-};
-
-export type OperationRequest = {
-  method: string;
-  path: string;
-  body?: unknown;
-};
-
-/** Response for `POST /cos/operations` and `GET /cos/operations/{o}`. */
-export type OperationView = {
-  id: string;
-  actor: string;
-  thread_id: string;
-  run_id: string;
-  idempotency_key: string;
-  request_hash: string;
-  target_kind: string;
-  target_id: string;
-  expected_revision?: string | null;
-  action: string;
-  payload: unknown;
-  reason: string;
-  policy_version: string;
-  state: string;
-  result?: unknown;
-  event_id?: string | null;
-};
-
-/** Request for `POST /cos/threads/{t}/checkpoint`. */
-export type CheckpointRequest = {
-  run_id: string;
-  summary: string;
-  through_seq: number;
-  expected_summary_through_seq: number;
-};
-
-/** Response for `POST /cos/threads/{t}/checkpoint`. */
-export type CheckpointResponse = {
-  thread_id: string;
-  summary_through_seq: number;
-};

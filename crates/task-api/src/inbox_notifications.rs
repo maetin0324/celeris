@@ -63,7 +63,7 @@ fn gone(id: &str) -> ApiProblem {
     )
 }
 
-async fn human_feed(state: &ApiState) -> Result<HumanInbox, ApiProblem> {
+pub(crate) async fn human_feed(state: &ApiState) -> Result<HumanInbox, ApiProblem> {
     let snapshot = state.snapshot();
     let ctx = state.inner.view.clone();
     let knowledge_root = state.inner.knowledge_root.clone();
@@ -155,7 +155,7 @@ pub struct InboxAnswerResult {
 
 // Build a request to the existing domain endpoint so validation, audit, and state
 // transitions remain in one place. The path comes only from the derived InboxItem.
-fn delegated_request(
+pub(crate) fn delegated_request(
     item: &InboxItem,
     input: &InboxAnswerBody,
 ) -> Result<(Method, String, serde_json::Value), ApiProblem> {

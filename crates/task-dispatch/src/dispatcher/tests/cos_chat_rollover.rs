@@ -161,6 +161,7 @@ fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path)
             db_path: dir.join("celeris.db"),
             attachment_limits: Default::default(),
             api_base_url: "http://127.0.0.1:7700/api/v1".into(),
+            triage: Default::default(),
         },
     );
     d

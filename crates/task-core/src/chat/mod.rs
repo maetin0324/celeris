@@ -11,6 +11,7 @@ mod credential_tests;
 mod operations;
 #[cfg(test)]
 mod operations_tests;
+mod override_op;
 mod run_store;
 mod session;
 #[cfg(test)]
@@ -18,8 +19,12 @@ mod session_tests;
 pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
+pub mod triage;
+#[cfg(test)]
+mod triage_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use operations::{AuditContext, CosOperation};
+pub use override_op::{OverrideAction, OverrideResult};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,

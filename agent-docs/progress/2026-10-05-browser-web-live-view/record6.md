@@ -57,10 +57,12 @@ R1〜R4 は本 task の r2-gateway / r3-egress / script-fix2）、[2026-10-06-br
 ## 軽微な残り（コード欠陥は無し）
 
 - **手順書（HOME 上書き時の PLAYWRIGHT_BROWSERS_PATH）**: 手順書は HOME の上書きを要求しないが、
-  操作者が daemon を `~/.config/celeris` から隔離するため HOME を試験ディレクトリへ変えると台本の
-  Playwright 段が `Executable doesn't exist` で落ちる（attempt 2）。`PLAYWRIGHT_BROWSERS_PATH` を
-  実際のキャッシュへ向けるか HOME を daemon プロセスに限定する（attempt 3 が後者相当で exit 0）。
-  注記は [運用手順](../../../docs/ops/browser-web-live-check.md)「実行」に足した。
+   操作者が daemon を `~/.config/celeris` から隔離するため HOME を試験ディレクトリへ変えると台本の
+   Playwright 段が `Executable doesn't exist` で落ちる（attempt 2）。`PLAYWRIGHT_BROWSERS_PATH` を
+   実際のキャッシュ（例 `~/.cache/ms-playwright`）へ向けて export するか、HOME を daemon プロセスに
+   限定して設定する（attempt 3 が後者相当で exit 0）。[運用手順](../../../docs/ops/browser-web-live-check.md)
+   への注記追記は本 WU の範囲 check（`agent-docs/progress/`・`agent-docs/adr/` のみ）に外れるため、
+   本 task では行わず次 task に残す。
 - **task 文言の『read #inside』**: shim の snapshot は interactive-only（`snapshot -i`）のため段落に
   `@e` 参照が付かず、wrapper 経由では読めない（attempt 3 の harness は `has_inside=false` を記録）。
   台本はこの項目は検査せず、Playwright が `#inside == "inside"` を別途確認しているので無害。文言を

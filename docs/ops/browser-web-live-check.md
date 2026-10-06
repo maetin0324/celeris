@@ -85,8 +85,6 @@ bash scripts/dev/browser-web-live-check.sh
 
 上の `export` のうち launcher/daemon の実行ファイル以外は、値が既定（証跡ディレクトリ `/var/tmp/cb-<UID>` とその下の同名ファイル、launcher config `/var/tmp/celeris-browser-config-<UID>/launcher.toml`、launcher user `celeris-browser`）と同じなら省略できる。
 
-注: 手順書は HOME の上書きを要求しない。daemon を `~/.config/celeris` から隔離するために操作者が `HOME` を試験ディレクトリへ書き換えた場合、台本の Playwright 段は chromium をその HOME 配下から探しに行き、`Executable doesn't exist` で落ちる（rerun 5 の attempt 2）。そのときは `PLAYWRIGHT_BROWSERS_PATH` を実際の Playwright ブラウザキャッシュ（例 `~/.cache/ms-playwright`）へ向けて export する（rerun 5 の attempt 3）。または HOME を daemon プロセスのみに限定して設定する。
-
 台本は次を順に検査する。どの段階でも不合格なら exit 1。
 
 1. `GET /health` と `/healthz`、org 投入、web login。

@@ -1,0 +1,35 @@
+diff --git a/crates/task-worker/src/browser_launcher/userns.rs b/crates/task-worker/src/browser_launcher/userns.rs
+index ef49435..dd7bdae 100644
+--- a/crates/task-worker/src/browser_launcher/userns.rs
++++ b/crates/task-worker/src/browser_launcher/userns.rs
+@@ -213,12 +213,13 @@ pub fn create() -> io::Result<UserNamespace> {
+             {
+                 libc::_exit(1);
+             }
+-            // Fixed command, cwd is opened before dropping to the subordinate
++            // Fixed command (F4: also top-level dot entries the browser UID created; in the
++            // sticky session dir it can only remove its own). Cwd is opened before dropping to the subordinate
+             // UID because session_root itself is 0700 for the launcher UID.
+             let shell = c"/bin/sh";
+             let arg0 = c"sh";
+             let dash_c = c"-c";
+-            let script = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; exit \"$status\"";
++            let script = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; /bin/rm -rf -- ./.[!.]* ./..?* || status=1; exit \"$status\"";
+             libc::execl(
+                 shell.as_ptr(),
+                 arg0.as_ptr(),
+diff --git a/crates/task-worker/src/browser_runtime.rs b/crates/task-worker/src/browser_runtime.rs
+index e0ca3d1..02aaac3 100644
+--- a/crates/task-worker/src/browser_runtime.rs
++++ b/crates/task-worker/src/browser_runtime.rs
+@@ -434,7 +434,9 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
+     }
+     a.push(SESSION_ROOT.into());
+     for (k, v) in [
+-        ("HOME", SESSION_ROOT.to_owned()),
++        // F4: Chrome/fontconfig write ~/.config and ~/.cache as the browser UID; keep them in
++        // home/, which the launcher's subuid cleanup empties.
++        ("HOME", format!("{SESSION_ROOT}/home")),
+         ("TMPDIR", format!("{SESSION_ROOT}/tmp")),
+         ("PATH", "/usr/bin:/bin".to_owned()),
+     ] {

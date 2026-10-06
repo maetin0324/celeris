@@ -8,7 +8,7 @@ completed: 2026-10-06
 
 # ブラウザ実行の launcher 経路と確認台本の修正 — 統合後検査と記録
 
-Fable の実機確認（[証跡](../2026-10-05-browser-web-live-view/real-check-evidence/)）で見つかった欠陥を 3 つの WorkUnit（run-path / egress / script）で直し、統合 commit `d8f3e5e6ca6a` で検査を通した。本葉は実装の修正をせず、検査の実行と記録のみ。
+Fable の実機確認（[証跡](2026-10-05-browser-web-live-view/real-check-evidence/)）で見つかった欠陥を 3 つの WorkUnit（run-path / egress / script）で直し、統合 commit `d8f3e5e6ca6a` で検査を通した。本葉は実装の修正をせず、検査の実行と記録のみ。
 
 ## 直したこと（各葉の記録参照）
 

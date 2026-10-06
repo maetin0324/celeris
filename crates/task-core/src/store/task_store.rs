@@ -658,6 +658,16 @@ pub trait TaskStore:
         event: Event,
     ) -> Result<(), StoreError>;
 
+    /// ADR-0070/0074 付記（2026-10-06）: 持ち主の無い Running WU を checkpoint の有無で
+    /// Ready / NeedsContinuation に戻す。生死は呼び出し側が確認する。writer transaction 内で
+    /// expected の status・plan・run・更新時刻と非終端 task を再確認し、古い回収で新 run を戻さない。
+    fn recover_work_unit(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+        reason: &str,
+    ) -> Result<bool, StoreError>;
+
     /// ADR-0074 付記（2026-10-05）: Task が Running で、統合 WU が読み取ったままの
     /// Pending / Ready なら、同じ transaction で WU を Running にして reason=integrate を残す。
     /// Task の ready 戻し・WU の更新が先行したら何も書かず false。spawn は true のときだけ行う。

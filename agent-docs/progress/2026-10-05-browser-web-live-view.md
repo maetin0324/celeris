@@ -46,8 +46,13 @@ web-ui/・domain-policy/・web-settings・real-check）。ADR 末尾の「付記
 
 ## 全体検査（2026-10-06、統合後の HEAD `a0927c8b`）
 
-この run（close、attempt 1）で再実行した結果。ログは run の `artifacts/`（test-parallel.log・
-clippy.log・web-e2e.log）。
+統合後の HEAD（`a0927c8b`。文書 commit `eb3c4e60` はその上に乗り、コード検査には影響しない）で
+全項目を再実行した結果。最初の close run（`eb3c4e60`）の結果を、close の 2 回目
+（run `01M47HVMHSX9MW1S9EFDPS8TMV`、2026-10-06）でも全項目再実行し、件数・結果が一致すること
+を確認した。後者のログは run の `artifacts/`
+（test-parallel-close2.log・clippy-close2.log・web-typecheck-close2.log・web-test-close2.log・
+web-build-close2.log・web-boundaries-close2.log・web-secrets-close2.log・mobile-audit-close2.log・
+web-parity-close2.log・web-e2e-close2.log）。
 
 - `bash scripts/dev/test-parallel.sh`: **exit 0（失敗 0）** —
   `CELERIS_TEST_SUMMARY {"passed": 3976, "failed": 0, "ignored": 13, "nextest_exit": 0, "doctest_exit": 0}`

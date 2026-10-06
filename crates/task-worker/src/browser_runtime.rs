@@ -474,6 +474,29 @@ mod userns_args_tests {
     }
 
     #[test]
+    fn home_is_session_root_subdir_not_session_root_itself() {
+        // F4: Chrome/fontconfig writing ~/.cache and ~/.config directly under
+        // SESSION_ROOT leaves dot entries the launcher's subuid cleanup cannot
+        // remove (sticky session dir). HOME must be a subdirectory instead.
+        let spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Fd(11),
+            session_id: "test".into(),
+            session_dir: "/tmp/test-session".into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        let args = bwrap_args(&spec);
+        let home = args
+            .iter()
+            .position(|a| a == "HOME")
+            .map(|i| args[i + 1].clone());
+        assert_eq!(home, Some(format!("{SESSION_ROOT}/home").into()));
+    }
+
+    #[test]
     fn external_userns_binds_session_from_private_mount() {
         let mut spec = RuntimeSpec {
             bwrap: "/usr/bin/bwrap".into(),

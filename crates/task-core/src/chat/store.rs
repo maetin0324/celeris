@@ -998,6 +998,33 @@ impl SqliteStore {
         cards: &[ChatCard],
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
+        self.chat_system_message_add_keyed(thread_id, None, text, cards, now)
+    }
+
+    /// A system notice whose stable key prevents duplicate cards when daemon
+    /// recovery is retried after a crash.
+    pub fn chat_system_message_add_once(
+        &self,
+        thread_id: &str,
+        key: &str,
+        text: &str,
+        cards: &[ChatCard],
+        now: OffsetDateTime,
+    ) -> Result<ChatMessage, ChatError> {
+        if key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
+            return Err(ChatError::TooLarge("system message key".into()));
+        }
+        self.chat_system_message_add_keyed(thread_id, Some(key), text, cards, now)
+    }
+
+    fn chat_system_message_add_keyed(
+        &self,
+        thread_id: &str,
+        key: Option<&str>,
+        text: &str,
+        cards: &[ChatCard],
+        now: OffsetDateTime,
+    ) -> Result<ChatMessage, ChatError> {
         if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
             return Err(ChatError::TooLarge("system message text".into()));
         }
@@ -1005,6 +1032,27 @@ impl SqliteStore {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
         thread_require(&tx, thread_id)?;
+        if let Some(key) = key {
+            let existing = tx
+                .query_row(
+                    &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+                    params![thread_id, key],
+                    message_raw,
+                )
+                .optional()?;
+            if let Some(raw) = existing {
+                let message = message_from_raw(&tx, raw)?;
+                if message.role == ChatMessageRole::System
+                    && message.text == text
+                    && message.cards == cards
+                {
+                    return Ok(message);
+                }
+                return Err(ChatError::Conflict(format!(
+                    "system message key {key} reused"
+                )));
+            }
+        }
         let meta = json!({ "cards": cards });
         let id = insert_message(
             &tx,
@@ -1013,7 +1061,7 @@ impl SqliteStore {
                 role: ChatMessageRole::System,
                 text,
                 state: ChatMessageState::Completed,
-                client_message_id: None,
+                client_message_id: key,
                 reply_to_id: None,
                 run_id: None,
                 metadata: &meta,

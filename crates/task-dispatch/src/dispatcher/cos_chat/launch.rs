@@ -80,9 +80,9 @@ impl Dispatcher {
         launch
             .providers_in_flight
             .retain(|thread, _| launch.running.contains_key(thread));
-        // The later control leaf owns stop/interrupt/restart reconciliation. Its
-        // hook runs before a new claim so an old process cannot overlap a new one.
-        launch.control_hook();
+        // Reconcile stop and ownerless runs before a new claim, so an old
+        // process cannot overlap a new one in the same thread.
+        launch.control_hook(self);
         if self.accepting_new_work
             && self.disk_ready
             && launch.config.enabled
@@ -95,9 +95,6 @@ impl Dispatcher {
 }
 
 impl CosChatLaunch {
-    /// Control leaf hook: stop, interrupt and orphan confirmation run before claiming.
-    fn control_hook(&mut self) {}
-
     /// Rollover leaf hook: inspect the sink's session signals before finalising.
     fn rollover_hook(
         _signals: &super::sink::ChatSessionSignals,
@@ -598,7 +595,11 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    fn find_input(&self, thread_id: &str, message_id: &str) -> Result<ChatMessage, String> {
+    pub(super) fn find_input(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+    ) -> Result<ChatMessage, String> {
         let mut before = None;
         loop {
             let page = self
@@ -638,7 +639,38 @@ async fn run_claimed(
     grace: Duration,
     clock: ChatClock,
 ) {
-    let sink = ChatRunSink::new(Arc::clone(&store), thread_id, run_id, clock, vec![token]);
+    let sink = ChatRunSink::new(
+        Arc::clone(&store),
+        thread_id,
+        run_id,
+        Arc::clone(&clock),
+        vec![token],
+    );
+    // A stop may be committed between the claim and the spawned task's first poll.
+    match store.chat_run_get(thread_id, run_id) {
+        Ok(run) if run.state == ChatRunState::Stopping => {
+            let intent = super::control::stop_intent(&run);
+            let finish = chat_finish_for(
+                &Err(task_worker::adapter::AdapterError::Other(
+                    "stopped before launch".into(),
+                )),
+                intent,
+            );
+            if let Err(error) = sink.finish(
+                &finish,
+                &task_worker::result_report::ParsedActions::default(),
+            ) {
+                tracing::warn!(%error, %run_id, "CoS chat pre-launch stop failed");
+            }
+            return;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(%error, %run_id, "CoS chat state unavailable before launch");
+            let _ = store.cos_run_credential_revoke(run_id, (clock)());
+            return;
+        }
+    }
     let limits = RunLimits {
         wall_clock: Duration::from_secs(wall),
         idle_timeout: idle,
@@ -653,7 +685,42 @@ async fn run_claimed(
     if let Err(error) = store.chat_session_touch(session_row_id, 0, OffsetDateTime::now_utc()) {
         tracing::warn!(%error, %run_id, "CoS session usage was not saved");
     }
-    let finish = chat_finish_for(&outcome, ChatStopIntent::None);
+    let current = match store.chat_run_get(thread_id, run_id) {
+        Ok(run) => run,
+        Err(error) => {
+            tracing::warn!(%error, %run_id, "CoS chat state unavailable at completion");
+            let _ = store.cos_run_credential_revoke(run_id, (clock)());
+            return;
+        }
+    };
+    let intent = if current.state == ChatRunState::Stopping {
+        super::control::stop_intent(&current)
+    } else {
+        ChatStopIntent::None
+    };
+    let pending = match store.cos_operation_pending_for_run(run_id) {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!(%error, %run_id, "CoS pending operation check failed");
+            let _ = store.cos_run_credential_revoke(run_id, (clock)());
+            return; // a later ownerless pass can resolve the operation safely
+        }
+    };
+    let mut finish = chat_finish_for(&outcome, intent);
+    if pending {
+        match super::control::pending_review(&store, &current, (clock)()) {
+            Ok(()) => {
+                finish.state = ChatRunState::Interrupted;
+                finish.final_text = None;
+                finish.reason = Some("operation outcome unknown; human review required".into());
+            }
+            Err(error) => {
+                tracing::warn!(%error, %run_id, "CoS pending operation review failed");
+                let _ = store.cos_run_credential_revoke(run_id, (clock)());
+                return;
+            }
+        }
+    }
     CosChatLaunch::rollover_hook(&sink.signals(), &finish);
     let actions = task_worker::read_result_actions(&artifacts_dir);
     if let Err(error) = sink.finish(&finish, &actions) {

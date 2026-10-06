@@ -168,6 +168,52 @@ fn insert_record(
 }
 
 impl SqliteStore {
+    /// A pending operation may have reached an external system before the daemon disappeared.
+    /// Recovery must wait for a human to establish its outcome instead of replaying it.
+    pub fn cos_operation_pending_for_run(&self, run_id: &str) -> Result<bool, ChatError> {
+        let conn = self.lock()?;
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cos_operations WHERE run_id=?1 AND state='pending')",
+            [run_id],
+            |row| row.get(0),
+        )
+        .map_err(Into::into)
+    }
+
+    fn cos_operations_for_run_state(
+        &self,
+        run_id: &str,
+        state: &str,
+    ) -> Result<Vec<CosOperation>, ChatError> {
+        let conn = self.lock()?;
+        let mut stmt = conn.prepare(
+            "SELECT id FROM cos_operations WHERE run_id=?1 AND state=?2 ORDER BY created_at,id",
+        )?;
+        let ids = stmt
+            .query_map(params![run_id, state], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.into_iter()
+            .map(|id| get_conn(&conn, &id)?.ok_or_else(|| ChatError::not_found("operation", &id)))
+            .collect()
+    }
+
+    /// Applied operation receipts from a disappeared run, ordered for a
+    /// continuation worker. The idempotency key remains unique per thread.
+    pub fn cos_operation_applied_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<CosOperation>, ChatError> {
+        self.cos_operations_for_run_state(run_id, "applied")
+    }
+
+    /// Pending operation records requiring human review after a worker disappears.
+    pub fn cos_operation_pending_details_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<CosOperation>, ChatError> {
+        self.cos_operations_for_run_state(run_id, "pending")
+    }
+
     pub fn cos_operation_get(&self, id: &str) -> Result<Option<CosOperation>, ChatError> {
         let conn = self.lock()?;
         get_conn(&conn, id)

@@ -31,7 +31,7 @@ function ts(node) {
   return "unknown";
 }
 
-const types = `// Generated from docs/api/v1/api-v1.schema.json by web/scripts/gen-types.mjs. Do not edit.\n${Object.entries(
+const types = `// Generated from docs/api/v1/api-v1.schema.json by web/scripts/gen-types.mjs. Do not edit.\n// CoS run credential routes: POST /cos/operations, GET /cos/operations/{o}, POST /cos/threads/{t}/checkpoint.\n${Object.entries(
   schema.$defs,
 )
   .map(([key, value]) => `export type ${key} = ${ts(value)};`)

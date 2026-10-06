@@ -189,17 +189,17 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .merge(operations::routes())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct CheckpointRequest {
+pub struct CheckpointRequest {
     run_id: String,
     summary: String,
     through_seq: u64,
     expected_summary_through_seq: u64,
 }
 
-#[derive(Debug, Serialize)]
-struct CheckpointResponse {
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct CheckpointResponse {
     thread_id: String,
     summary_through_seq: u64,
 }

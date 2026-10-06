@@ -4,12 +4,12 @@
 
 use schemars::JsonSchema;
 use task_core::chat::{
-    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCreateThreadRequest, ChatEvent,
-    ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
+    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCheckpointSaved, ChatCreateThreadRequest,
+    ChatEvent, ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
     ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse, ChatReferenceRequest,
     ChatReferenceResponse, ChatResumeQueueRequest, ChatRun, ChatRunResponse, ChatStopRequest,
     ChatStopResponse, ChatThread, ChatThreadDetailResponse, ChatThreadListResponse,
-    ChatThreadResponse,
+    ChatThreadResponse, CosOperation,
 };
 use task_core::{EventRow, Task};
 use task_ops::daemon::DaemonSnapshot;
@@ -295,6 +295,18 @@ pub struct ApiV1Schema {
     pub chat_event_list: ChatEventListResponse,
     pub chat_attachment_response: ChatAttachmentResponse,
     pub chat_reference_response: ChatReferenceResponse,
+    /// ADR 2026-10-05 D2/D3: `POST /cos/operations`, `GET /cos/operations/{o}`,
+    /// and run-scoped `POST /cos/threads/{t}/checkpoint` wire types.
+    pub cos_operation: CosOperation,
+    pub cos_checkpoint_saved: ChatCheckpointSaved,
+    /// Request for `POST /cos/operations`; credential fixes actor/thread/run.
+    pub cos_operation_request: crate::cos::operations::OperationBody,
+    /// Response for `POST /cos/operations` and `GET /cos/operations/{o}`.
+    pub cos_operation_response: crate::cos::operations::OperationView,
+    /// Request for `POST /cos/threads/{t}/checkpoint`.
+    pub cos_checkpoint_request: crate::cos::CheckpointRequest,
+    /// Response for `POST /cos/threads/{t}/checkpoint`.
+    pub cos_checkpoint_response: crate::cos::CheckpointResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

@@ -157,9 +157,9 @@ impl OperationAudit {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct OperationBody {
+pub struct OperationBody {
     idempotency_key: String,
     expected_revision: Option<String>,
     reason: String,
@@ -167,9 +167,9 @@ struct OperationBody {
     request: OperationRequest,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct OperationRequest {
+pub(crate) struct OperationRequest {
     method: String,
     path: String,
     #[serde(default)]
@@ -177,8 +177,8 @@ struct OperationRequest {
 }
 
 /// `O` of the ADR D2 table.
-#[derive(Debug, Serialize)]
-pub(crate) struct OperationView {
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct OperationView {
     id: String,
     actor: &'static str,
     thread_id: String,

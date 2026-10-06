@@ -2509,6 +2509,23 @@
       ],
       "type": "string"
     },
+    "ChatCheckpointSaved": {
+      "properties": {
+        "summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "summary_through_seq"
+      ],
+      "type": "object"
+    },
     "ChatCreateThreadRequest": {
       "additionalProperties": false,
       "properties": {
@@ -3646,6 +3663,51 @@
       },
       "required": [
         "what"
+      ],
+      "type": "object"
+    },
+    "CheckpointRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "summary",
+        "through_seq",
+        "expected_summary_through_seq"
+      ],
+      "type": "object"
+    },
+    "CheckpointResponse": {
+      "properties": {
+        "summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "summary_through_seq"
       ],
       "type": "object"
     },
@@ -5621,6 +5683,73 @@
         "provider",
         "until",
         "reason"
+      ],
+      "type": "object"
+    },
+    "CosOperation": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "event_id": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "payload": true,
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "result": true,
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "run_id",
+        "idempotency_key",
+        "request_hash",
+        "target_kind",
+        "target_id",
+        "action",
+        "payload",
+        "reason",
+        "policy_version",
+        "state"
       ],
       "type": "object"
     },
@@ -15645,6 +15774,36 @@
         }
       ]
     },
+    "OperationBody": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/OperationRequest"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "reason",
+        "policy_version",
+        "request"
+      ],
+      "type": "object"
+    },
     "OperationIntent": {
       "additionalProperties": false,
       "description": "承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。",
@@ -15666,6 +15825,96 @@
       "required": [
         "intent_id",
         "action"
+      ],
+      "type": "object"
+    },
+    "OperationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": null
+        },
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "OperationView": {
+      "description": "`O` of the ADR D2 table.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "payload": true,
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "result": true,
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "actor",
+        "thread_id",
+        "run_id",
+        "idempotency_key",
+        "request_hash",
+        "target_kind",
+        "target_id",
+        "action",
+        "payload",
+        "reason",
+        "policy_version",
+        "state"
       ],
       "type": "object"
     },
@@ -25789,6 +26038,29 @@
     "console_instruct_accepted": {
       "$ref": "#/$defs/ConsoleInstructAccepted"
     },
+    "cos_checkpoint_request": {
+      "$ref": "#/$defs/CheckpointRequest",
+      "description": "Request for `POST /cos/threads/{t}/checkpoint`."
+    },
+    "cos_checkpoint_response": {
+      "$ref": "#/$defs/CheckpointResponse",
+      "description": "Response for `POST /cos/threads/{t}/checkpoint`."
+    },
+    "cos_checkpoint_saved": {
+      "$ref": "#/$defs/ChatCheckpointSaved"
+    },
+    "cos_operation": {
+      "$ref": "#/$defs/CosOperation",
+      "description": "ADR 2026-10-05 D2/D3: `POST /cos/operations`, `GET /cos/operations/{o}`,\nand run-scoped `POST /cos/threads/{t}/checkpoint` wire types."
+    },
+    "cos_operation_request": {
+      "$ref": "#/$defs/OperationBody",
+      "description": "Request for `POST /cos/operations`; credential fixes actor/thread/run."
+    },
+    "cos_operation_response": {
+      "$ref": "#/$defs/OperationView",
+      "description": "Response for `POST /cos/operations` and `GET /cos/operations/{o}`."
+    },
     "cron_job": {
       "$ref": "#/$defs/CronJobView"
     },
@@ -26401,7 +26673,13 @@
     "chat_stop_response",
     "chat_event_list",
     "chat_attachment_response",
-    "chat_reference_response"
+    "chat_reference_response",
+    "cos_operation",
+    "cos_checkpoint_saved",
+    "cos_operation_request",
+    "cos_operation_response",
+    "cos_checkpoint_request",
+    "cos_checkpoint_response"
   ],
   "title": "ApiV1Schema",
   "type": "object"

@@ -22,7 +22,7 @@ pub struct AuditContext {
     pub policy_version: String,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
 pub struct CosOperation {
     pub id: String,
     pub thread_id: String,

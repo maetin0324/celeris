@@ -94,7 +94,7 @@ chmod 700 "$(dirname "$OWNER_SOCKET")"
 for f in "$LAUNCHER_BIN" "$DAEMON_BIN" "$WEB_PASSWORD_FILE" "$ATTESTATION_KEY" "$CONFORMANCE"; do
   [[ -f $f ]] || { echo "missing prerequisite: $f" >&2; exit 1; }
 done
-if [[ -e $DENIAL_FILE ]]; then echo "denial evidence already exists" >&2; exit 1; fi
+if [[ -e $OWNER_SOCKET ]]; then echo "test web owner socket already exists; refusing to reuse another process" >&2; exit 1; fi
 
 API_PORT=$(python3 - "$DAEMON_CONFIG" <<'PY'
 import sys,tomllib
@@ -122,8 +122,8 @@ import sys,tomllib
 cfg=tomllib.load(open(sys.argv[1],"rb"))
 allow=cfg.get("test_loopback_allow", [])
 expected=f"127.0.0.1:{sys.argv[2]}"
-if expected not in allow:
-    raise SystemExit(f"launcher test_loopback_allow must include {expected}")
+if allow != [expected]:
+    raise SystemExit(f"launcher test_loopback_allow must contain only {expected}")
 print(cfg["state_dir"])
 PY
 )
@@ -138,6 +138,9 @@ cleanup() {
   for pid in "${WEB_PID:-}" "${DAEMON_PID:-}" "${LAUNCHER_PID:-}" "${PAGE_PID:-}" "${DENIED_PID:-}" "${LIVE_PID:-}"; do
     if [[ -n $pid ]]; then kill -TERM -- "-$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; fi
   done
+  # Both paths were checked under the isolated evidence dir before startup. Remove the
+  # socket names after their owners exit so this same evidence dir can be used again.
+  rm -f -- "$LAUNCHER_SOCKET" "$OWNER_SOCKET"
 }
 trap cleanup EXIT
 
@@ -319,11 +322,11 @@ def ws_read(sock):
     if n == 126: n = int.from_bytes(exact(2), "big")
     elif n == 127: n = int.from_bytes(exact(8), "big")
     return b0 & 0x0F, exact(n)
-def ws_open(path, *, cookies=True):
+def ws_open(path, *, cookie_jar=jar):
     """Upgrade through the gateway like the Live View page does. Returns (status line, socket)."""
     url = urllib.parse.urlsplit(web)
     host = url.netloc
-    cookie = "; ".join(f"{c.name}={c.value}" for c in jar) if cookies else ""
+    cookie = "; ".join(f"{c.name}={c.value}" for c in cookie_jar) if cookie_jar else ""
     key = base64.b64encode(os.urandom(16)).decode()
     sock = socket.create_connection((url.hostname, url.port), timeout=10)
     lines = [f"GET {path} HTTP/1.1", f"Host: {host}", f"Origin: {web}", "Connection: Upgrade", "Upgrade: websocket",
@@ -355,6 +358,22 @@ def lease_less_input(label, stream_path):
     log.append({"step": label, "reply": reply, "upstream_input_frames": after - before})
     if reply.get("code") != "lease_required" or after != before:
         raise AssertionError(f"{label}: lease-less input was not refused: {reply}, forwarded={after - before}")
+def leased_input(stream_path):
+    """A valid human lease must pass an input frame through to the upstream fixture."""
+    marker = "real-check-leased-input"
+    frames = out/"live-upstream-frames.jsonl"
+    status_line, sock = ws_open(stream_path)
+    with sock:
+        if " 101 " not in status_line + " ": raise AssertionError(f"leased stream upgrade refused: {status_line}")
+        sock.sendall(ws_frame(json.dumps({"type":"input_mouse","event":"mousePressed","x":2,"y":2,
+                                         "button":"left","clickCount":1,"check_marker":marker})))
+        deadline = time.monotonic()+10
+        while time.monotonic() < deadline:
+            if frames.exists() and any(marker in line for line in frames.read_text().splitlines()):
+                log.append({"step":"input with lease", "upstream_input_forwarded":True})
+                return
+            time.sleep(0.1)
+    raise AssertionError("leased input did not reach the upstream fixture")
 try:
     org = json.loads((pathlib.Path(root)/"docs/ops/browser-department-org.json").read_text())
     org["profile"]["browser"]["allowed_domains"] = [page]
@@ -409,10 +428,21 @@ try:
     # Unauthenticated Live View: no session cookie, both the page and the stream upgrade.
     checked("live view unauthenticated", web+run["live_path"], opener=anonymous, expected=401)
     stream_path = run["live_path"]+"/api/session/9222/stream?last_seen=0"
-    status_line, sock = ws_open(stream_path, cookies=False)
+    status_line, sock = ws_open(stream_path, cookie_jar=None)
     sock.close()
     log.append({"step":"live stream unauthenticated", "status_line":status_line})
     if " 401 " not in status_line + " ": raise AssertionError(f"unauthenticated stream not refused: {status_line}")
+    # A second authenticated browser must remain a viewer without owner approval.
+    other_jar = http.cookiejar.CookieJar()
+    other = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(other_jar))
+    checked("second web login", web+"/login", "POST", {"password":password}, origin=web, opener=other)
+    if checked("second owner session", web+"/browser/owner-session", opener=other)["isOwner"]:
+        raise AssertionError("second logged-in session became owner")
+    checked("live view non-owner", web+run["live_path"], opener=other, expected=403)
+    status_line, sock = ws_open(stream_path, cookie_jar=other_jar)
+    sock.close()
+    log.append({"step":"live stream non-owner", "status_line":status_line})
+    if " 403 " not in status_line + " ": raise AssertionError(f"non-owner stream not refused: {status_line}")
     checked("live view", web+run["live_path"])
     lease_less_input("input without lease (agent running)", stream_path)
     control_url = web+f"/browser/control/{task_id}/{run_id}/{session_id}"
@@ -428,6 +458,7 @@ try:
     if paused.get("phase") != "paused": raise AssertionError(f"pause did not reach paused: {paused.get('phase')}")
     control = checked("takeover", control_url, "POST", {"csrf":csrf,"expected_version":paused["version"],"idempotency_key":"real-check-takeover","command":{"kind":"takeover","ttl_secs":60}}, origin=web)["status"]
     if control["phase"] != "human_control": raise AssertionError(f"lease not acquired: {control['phase']}")
+    leased_input(stream_path)
     checked("release", control_url+"/release", "POST", {"csrf":csrf}, origin=web)
     lease_less_input("input without lease (after release)", stream_path)
     # Open a trusted, non-credential decision wait on the real run. This is independent
@@ -445,42 +476,70 @@ finally:
     (out/"checks.json").write_text(json.dumps(log, indent=2, ensure_ascii=False)+"\n")
 PY
 
-python3 - "$LAUNCHER_STATE_DIR" "$DENIAL_FILE" "$PAGE_PORT" "$DENIED_PORT" <<'PY'
-import json, pathlib, sys, time
-state, output = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
-page_port, denied_port = map(int, sys.argv[3:])
+sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$EVIDENCE/checks.json" <<'PY' >"$DENIAL_FILE"
+import json, pathlib, re, sys, time
+state = pathlib.Path(sys.argv[1])
+page_port, denied_port = map(int, sys.argv[2:4])
+checks = json.loads(pathlib.Path(sys.argv[4]).read_text())
+session_id = next(row["session_id"] for row in checks if "session_id" in row and "run_id" in row)
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id):
+    raise SystemExit("invalid browser session id in checks")
 sessions = state / "sessions"
 deadline = time.monotonic() + 30
 records = []
 while time.monotonic() < deadline:
     records = []
-    if sessions.is_dir():
-        for record_file in sessions.glob("*/egress-denied.jsonl"):
-            for line in record_file.read_text().splitlines():
-                try: record = json.loads(line)
-                except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
-                if record.get("port") == denied_port:
-                    records.append(record)
-    if records: break
+    record_file = sessions / session_id / "egress-denied.jsonl"
+    if record_file.is_file():
+        for line in record_file.read_text().splitlines():
+            try: record = json.loads(line)
+            except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
+            records.append(record)
+    if any(record.get("port") == denied_port for record in records): break
     time.sleep(0.2)
-if not records: raise SystemExit("launcher session records contain no denial for the forbidden origin")
+if not any(record.get("port") == denied_port for record in records):
+    raise SystemExit("current launcher session contains no denial for the forbidden origin")
 if not any(r.get("kind") == "private_address" and r.get("host") == "127.0.0.1" and
-           r.get("port") == denied_port and r.get("session_id") and r.get("at") for r in records):
+           r.get("port") == denied_port and r.get("session_id") == session_id and r.get("at") for r in records):
     raise SystemExit("forbidden-origin denial must record kind=private_address and host:port")
 for record in records:
     if record.get("port") == page_port:
         raise SystemExit("allowed loopback test page was recorded as denied")
 # Publish only the launcher records needed as portable evidence.
-output.write_text(json.dumps(records, indent=2, ensure_ascii=False)+"\n")
+print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
 PY
 if grep -q '"GET ' "$EVIDENCE/denied-page.log"; then
   echo "forbidden origin received a page request" >&2
   exit 1
 fi
+# The first GET is the readiness probe above. Require a second GET from the run before
+# capturing a visual record. Playwright's own GET happens only after that check.
+for _ in {1..150}; do
+  [[ $(grep -c '"GET / ' "$EVIDENCE/page.log" 2>/dev/null || true) -ge 2 ]] && break
+  sleep 0.2
+done
+[[ $(grep -c '"GET / ' "$EVIDENCE/page.log" 2>/dev/null || true) -ge 2 ]] || {
+  echo "browser run did not request the allowed test page" >&2; exit 1;
+}
+(cd "$ROOT/web" && node --input-type=module - "$PAGE" "$EVIDENCE/allowed-page.png" <<'JS'
+import { chromium } from '@playwright/test';
+const [, , pageUrl, output] = process.argv;
+const browser = await chromium.launch({ headless: true });
+try {
+  const page = await browser.newPage();
+  await page.goto(pageUrl, { waitUntil: 'load' });
+  if (await page.locator('#inside').textContent() !== 'inside') throw new Error('allowed page content mismatch');
+  await page.screenshot({ path: output });
+} finally {
+  await browser.close();
+}
+JS
+)
 python3 - "$EVIDENCE/checks.json" <<'PY'
 import json, pathlib, sys
 path = pathlib.Path(sys.argv[1])
 checks = json.loads(path.read_text())
-checks.append({"step":"browser egress", "denied":True, "forbidden_page_requests":0, "result":"passed"})
+checks.append({"step":"browser egress", "allowed_page_requested":True, "allowed_page_screenshot":"allowed-page.png",
+               "denied":True, "forbidden_page_requests":0, "result":"passed"})
 path.write_text(json.dumps(checks, indent=2, ensure_ascii=False)+"\n")
 PY

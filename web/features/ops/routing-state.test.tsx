@@ -76,7 +76,7 @@ describe("動的な source 状態・費用・score・除外理由（ADR 2026-10-
 
   it("deployment の状態は費用を請求と機会費用に分けて描く", () => {
     const out = renderToStaticMarkup(<DeploymentStateList states={llmSourcesFixture.sources[1].deployments ?? []} />);
-    expect(out).toContain('aria-label="deployment openai-compatible:qwen/qwen3-coder"');
+    expect(out).toContain('aria-label="deployment state openai-compatible:qwen/qwen3-coder"');
     expect(out).toContain("観測 不明（観測なし）");
     expect(out).toContain("請求（実料金）");
     expect(out).toContain("自前計算の機会費用（GPU・待ち）");

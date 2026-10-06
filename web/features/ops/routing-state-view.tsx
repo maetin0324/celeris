@@ -21,7 +21,11 @@ export function DeploymentStateList({ states }: { states: readonly LlmSourceStat
   return (
     <ul className="space-y-2" aria-label="deployment の状態">
       {states.map((state) => (
-        <li key={state.deployment_id} className="break-words text-sm" aria-label={`deployment ${state.deployment_id}`}>
+        <li
+          key={state.deployment_id}
+          className="break-words text-sm"
+          aria-label={`deployment state ${state.deployment_id}`}
+        >
           <span className="font-semibold">{state.deployment_id}</span>
           <ul className="ml-4 list-disc">
             {sourceStateLines(state).map((line) => (

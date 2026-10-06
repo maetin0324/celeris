@@ -65,7 +65,9 @@ test("default fixture shows reports, approvals and the review-pending task witho
     await expect(page.getByTestId("execution-view").locator("[data-phase]")).toHaveAttribute("data-phase", "verifying");
     await expect(page.getByTestId("execution-view")).toContainText("v1（2 件）");
     await expect(page.getByTestId("routing-panel")).toContainText("担当 ui-ux");
-    await expect(page.getByTestId("routing-panel")).toContainText("R1: standard / standard / ui-ux（rule-standard）");
+    await expect(page.getByTestId("routing-panel")).toContainText(
+      "R1: 実行 lane standard / 組織 ui-ux（rule-standard）",
+    );
   } finally {
     await gateway.close();
   }

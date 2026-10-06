@@ -19,6 +19,7 @@ pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
 pub mod triage;
+pub mod triage_view;
 #[cfg(test)]
 mod triage_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};

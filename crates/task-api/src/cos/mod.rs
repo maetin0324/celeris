@@ -5,6 +5,7 @@
 //! secret after the prefix is verified by `task_core`. The verified `{thread_id, run_id}` becomes the
 //! [`CosCaller`] request extension; actor, thread and run claims in headers or JSON are never read.
 
+pub mod inbox;
 pub mod operations;
 
 use axum::Extension;
@@ -187,6 +188,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
         .route("/api/v1/cos/threads/{t}/checkpoint", post(checkpoint))
         .merge(operations::routes())
+        .merge(inbox::routes())
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]

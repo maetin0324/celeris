@@ -7,6 +7,8 @@
 use task_core::{BudgetKind, MessageRole, NodeSession, RunEnd, Tier, WorkUnitSession};
 use time::OffsetDateTime;
 
+pub mod cos_chat;
+
 /// このアダプタだけが継続セッションを持てる（ADR-0054 D1）。他のアダプタ（`paperqa` /
 /// `local-deep-research` / `langmem` 等）は resume の手段が無いので継続しない。
 pub const SUPPORTED_ADAPTERS: [&str; 3] = ["claude-code", "codex", "acp"];

@@ -31,6 +31,16 @@ impl SqliteStore {
             _ => None,
         };
         let conn = self.lock()?;
+        Self::set_task_expected_write_paths_tx(&conn, task_id, normalized, now)
+    }
+
+    /// Write an already-normalized hint inside a caller's transaction (ADR 2026-10-05 D3).
+    pub fn set_task_expected_write_paths_tx(
+        conn: &rusqlite::Connection,
+        task_id: TaskId,
+        normalized: Option<Vec<String>>,
+        now: &str,
+    ) -> Result<(), StoreError> {
         match normalized {
             Some(paths) => {
                 conn.execute(

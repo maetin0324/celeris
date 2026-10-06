@@ -418,9 +418,22 @@ impl SqliteStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        Self::insert_tx(&tx, task)?;
+        Self::create_task_tx(&tx, task, origin, extra_events)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `create_task_impl` inside a caller's transaction (ADR 2026-10-05 D3: a CoS operation writes
+    /// the task, `cos_operations` and the audit events in one transaction).
+    pub fn create_task_tx(
+        tx: &Connection,
+        task: &Task,
+        origin: Option<crate::model::CreatedOrigin>,
+        extra_events: Vec<Event>,
+    ) -> Result<(), StoreError> {
+        Self::insert_tx(tx, task)?;
         Self::append_event_tx(
-            &tx,
+            tx,
             task.id,
             &Event::Created {
                 task: Box::new(task.clone()),
@@ -428,9 +441,8 @@ impl SqliteStore {
             },
         )?;
         for event in &extra_events {
-            Self::append_event_tx(&tx, task.id, event)?;
+            Self::append_event_tx(tx, task.id, event)?;
         }
-        tx.commit()?;
         Ok(())
     }
 

@@ -1,5 +1,5 @@
 ---
-tasks: [01M46W97H391DSFW1XJ745W0G9]
+tasks: [01M46W97H391DSFW1XJ745W0G9, 01M47M7QCGRA9V72WKP07Z471B]
 ---
 
 # ブラウザ実行課（browser-execution）の投入手順
@@ -95,9 +95,9 @@ JSON
 `credential_identity_ids` に policy ID → identity ID の対応を入れる（policy 自体は別途登録してから
 参照する。値は ID のみで、秘密は書かない）。
 
-browser 設定の変更は `tracing::info!`（`op = "org_patch"`）に加え、`org_browser_events`
-（migration `0051`）に actor と変更前後のスナップショットが同 transaction で残る
-（`crates/task-core/src/store/org.rs` の `org_upsert_browser_settings`）。
+browser 設定の変更は `tracing::info!` に出ず、`org_browser_events`（migration `0051`）に
+actor と変更前後のスナップショットが同 transaction で残る
+（`crates/task-core/src/store/org.rs` の `org_upsert_browser_settings`）。読み取り API は無い。
 
 `profile` の丸ごと置換（`skills`・`policy` 等を含む）が必要なときは、通常の
 `PATCH /api/v1/org/browser-execution`（`OrgPatchBody`、本文は `{"profile": {…}}`）を使う。

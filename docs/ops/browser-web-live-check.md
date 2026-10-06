@@ -88,7 +88,7 @@ bash scripts/dev/browser-web-live-check.sh
 台本は次を順に検査する。どの段階でも不合格なら exit 1。
 
 1. `GET /health` と `/healthz`、org 投入、web login。
-2. **設定の編集**: web gateway 経由で `PATCH /api/v1/org/browser-execution/browser-settings`（web の設定画面と同じ経路）を送り、`allowed_domains` を許可・不許可の 2 origin に広げて応答に反映されること、不正な origin（`javascript:alert(1)`）が 422 で拒否されること、許可ページ 1 件に戻して `GET /api/v1/org` の保存値が戻っていることを確かめる。
+2. **設定の編集**: web gateway 経由で `PATCH /api/org/browser-execution/browser-settings`（web の設定画面と同じ経路。gateway が daemon の `/api/v1/org/...` に写す）を送り、`allowed_domains` を許可・不許可の 2 origin に広げて応答に反映されること、不正な origin（`javascript:alert(1)`）が 422 で拒否されること、許可ページ 1 件に戻して daemon の `GET /api/v1/org` の保存値が戻っていることを確かめる。
 3. `requirements.browser.allowed_domains` が許可ページだけの task 作成と task browser policy の `PUT`/`GET`（上記）。
 4. owner 承認、`/browser/runs` に RUNNING の run が出ること（`live_path` が同一 origin の `/browser/live/{task}/{run}` で、生の `live_view_url` を返さないこと）。
 5. **未認証・非 owner の Live View の拒否**: cookie を持たない client で `live_path` の GET と stream の WebSocket upgrade（`{live_path}/api/session/9222/stream?last_seen=0`）がどちらも 401 になること。別のログイン済み session は owner ではなく、同じ GET・upgrade がどちらも 403 になること。そのあと owner session で `live_path` を開く。

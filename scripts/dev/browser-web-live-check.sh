@@ -385,8 +385,9 @@ try:
     password = pathlib.Path(password_file).read_text().strip()
     checked("web login", web+"/login", "POST", {"password":password}, origin=web)
     # Settings edit through the gateway, the same route the web settings screen uses
-    # (PATCH /api/v1/org/{id}/browser-settings). Widen, reject an invalid origin, then restore.
-    settings = web+"/api/v1/org/browser-execution/browser-settings"
+    # The web gateway maps /api/* to the daemon's /api/v1/*.
+    # Widen, reject an invalid origin, then restore the grant.
+    settings = web+"/api/org/browser-execution/browser-settings"
     def grant_domains(node): return node["profile"]["browser"]["allowed_domains"]
     widened = checked("settings PATCH widen", settings, "PATCH", {"allowed_domains":[page, denied_origin]}, origin=web)
     if grant_domains(widened) != [page, denied_origin]: raise AssertionError(f"settings not applied: {grant_domains(widened)}")

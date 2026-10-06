@@ -83,6 +83,16 @@ pub(crate) struct OperationAudit {
     pub(crate) request_hash: String,
     pub(crate) expected_revision: Option<String>,
     pub(crate) payload: Value,
+    /// Set by `/cos/inbox/{i}/resolve`: the triage item and its outcome, marked in the same
+    /// transaction as the domain write and the audit record.
+    pub(crate) item: Option<ItemMark>,
+}
+
+/// The triage item a resolve request settles (ADR 2026-10-05 D3).
+#[derive(Debug, Clone)]
+pub(crate) struct ItemMark {
+    pub(crate) item_id: String,
+    pub(crate) outcome: &'static str,
 }
 
 impl OperationAudit {
@@ -108,7 +118,20 @@ impl OperationAudit {
                 self.expected_revision.as_deref(),
                 action,
                 &self.payload,
-                |tx, _| write(tx),
+                |tx, ctx| {
+                    let result = write(tx)?;
+                    if let Some(mark) = &self.item {
+                        super::triage_view::mark_tx(
+                            tx,
+                            &mark.item_id,
+                            mark.outcome,
+                            &ctx.operation_id,
+                            &ctx.reason,
+                            time::OffsetDateTime::now_utc(),
+                        )?;
+                    }
+                    Ok(result)
+                },
             )
             .map_err(cos_problem)
     }
@@ -393,10 +416,13 @@ async fn create_operation(
             "path": path,
             "body": req.request.body,
         }),
+        item: None,
     };
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
-    let kb_root = crate::knowledge::root_of(&state);
+    let env = DispatchEnv::of(&state);
+    let human_required = match match_operation(&method, &path) {
+        Ok(matched) => super::inbox::human_required_for_operation(&state, &matched, &path).await?,
+        Err(_) => None,
+    };
     let operation = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -412,123 +438,163 @@ async fn create_operation(
                 }
                 return Ok(existing);
             }
-            let matched = match_operation(&method, &path).map_err(|why| {
-                audit.reject(
+            if let Some(why) = human_required {
+                return Err(audit.reject(
                     store,
                     "api",
                     &path,
-                    unprocessable("cos_operation_not_allowed", why),
-                )
-            })?;
-            reject_identity_claims(&req.request.body)
-                .map_err(|problem| audit.reject(store, "api", &path, problem))?;
-            let body = req.request.body;
-            let decode = |error: serde_json::Error| {
-                audit.reject(
-                    store,
-                    "api",
-                    &path,
-                    unprocessable("validation", format!("request.body: {error}")),
-                )
-            };
-            match matched.action {
-                "task.create" => {
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::handlers::tasks::create_task_op(
-                        store,
-                        &roles,
-                        &genres,
-                        input,
-                        Some(&audit),
-                    )?)
-                }
-                "comment.create" => {
-                    let raw_id = matched.id.unwrap_or_default();
-                    let id = parse_task_id(&raw_id)
-                        .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::handlers::task_actions::create_comment_op(
-                        store,
-                        id,
-                        input,
-                        Some(&audit),
-                    )?)
-                }
-                "decision.answer" => {
-                    let decision_id = matched.id.unwrap_or_default();
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::decisions::answer_op(
-                        store,
-                        &decision_id,
-                        input,
-                        Some(&audit),
-                    )?)
-                }
-                "approval.decide" => {
-                    let raw_id = matched.id.unwrap_or_default();
-                    let id = raw_id.parse().map_err(|_| {
-                        audit.reject(
-                            store,
-                            "approval",
-                            &raw_id,
-                            ApiProblem::new(
-                                StatusCode::NOT_FOUND,
-                                "approval_not_found",
-                                format!("no approval {raw_id}"),
-                            ),
-                        )
-                    })?;
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::approvals::decide_op(store, id, input, Some(&audit))?)
-                }
-                "execution.phase_gate" => {
-                    let raw_id = matched.id.unwrap_or_default();
-                    let id = parse_task_id(&raw_id)
-                        .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::execution::phase_gate_op(
-                        store,
-                        id,
-                        input,
-                        Some(&audit),
-                    )?)
-                }
-                "project.update" => {
-                    let raw_id = matched.id.unwrap_or_default();
-                    let id = crate::handlers::parse_project_id(&raw_id)
-                        .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
-                    let input = serde_json::from_value(body).map_err(decode)?;
-                    audited(crate::handlers::projects::cos_patch_project(
-                        store, id, input, &audit,
-                    )?)
-                }
-                "knowledge.reject" => {
-                    let raw_id = matched.id.unwrap_or_default();
-                    let root = kb_root
-                        .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
-                    if !body.is_null() && body != serde_json::json!({}) {
-                        return Err(audit.reject(
-                            store,
-                            "knowledge",
-                            &raw_id,
-                            unprocessable("validation", "request.body must be empty"),
-                        ));
-                    }
-                    audited(crate::knowledge::reject_op(
-                        store,
-                        &root,
-                        raw_id,
-                        Some(&audit),
-                    )?)
-                }
-                other => Err(ApiProblem::internal(format!(
-                    "registered CoS operation {other} has no implementation"
-                ))),
+                    super::inbox::human_required_problem(&why),
+                ));
             }
+            dispatch(store, &env, &audit, &method, &path, req.request.body)
         })
         .await?;
     state.chat.events.notify_waiters();
     Ok(operation_response(operation))
+}
+
+/// What the operation functions need from [`ApiState`], captured before the blocking section.
+#[derive(Clone)]
+pub(crate) struct DispatchEnv {
+    roles: Vec<task_core::RoleSpec>,
+    genres: Vec<task_core::GenreSpec>,
+    kb_root: Result<std::path::PathBuf, ApiProblem>,
+}
+
+impl DispatchEnv {
+    pub(crate) fn of(state: &ApiState) -> Self {
+        Self {
+            roles: state.inner.roles.clone(),
+            genres: state.inner.genres.clone(),
+            kb_root: crate::knowledge::root_of(state),
+        }
+    }
+}
+
+/// Match `(method, path)` against [`ALLOWED`] and run the handler's shared operation function with
+/// `audit`. `/cos/operations` and the `answer` outcome of `/cos/inbox/{i}/resolve` both come here, so
+/// the domain validation is the same on both routes.
+pub(crate) fn dispatch(
+    store: &SqliteStore,
+    env: &DispatchEnv,
+    audit: &OperationAudit,
+    method: &str,
+    path: &str,
+    body: Value,
+) -> Result<CosOperation, ApiProblem> {
+    let matched = match_operation(method, path).map_err(|why| {
+        audit.reject(
+            store,
+            "api",
+            path,
+            unprocessable("cos_operation_not_allowed", why),
+        )
+    })?;
+    reject_identity_claims(&body).map_err(|problem| audit.reject(store, "api", path, problem))?;
+    let decode = |error: serde_json::Error| {
+        audit.reject(
+            store,
+            "api",
+            path,
+            unprocessable("validation", format!("request.body: {error}")),
+        )
+    };
+    match matched.action {
+        "task.create" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::tasks::create_task_op(
+                store,
+                &env.roles,
+                &env.genres,
+                input,
+                Some(audit),
+            )?)
+        }
+        "comment.create" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::task_actions::create_comment_op(
+                store,
+                id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "decision.answer" => {
+            let decision_id = matched.id.unwrap_or_default();
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::decisions::answer_op(
+                store,
+                &decision_id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "approval.decide" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = raw_id.parse().map_err(|_| {
+                audit.reject(
+                    store,
+                    "approval",
+                    &raw_id,
+                    ApiProblem::new(
+                        StatusCode::NOT_FOUND,
+                        "approval_not_found",
+                        format!("no approval {raw_id}"),
+                    ),
+                )
+            })?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::approvals::decide_op(store, id, input, Some(audit))?)
+        }
+        "execution.phase_gate" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::execution::phase_gate_op(
+                store,
+                id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "project.update" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::handlers::parse_project_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::handlers::projects::cos_patch_project(
+                store, id, input, audit,
+            )?)
+        }
+        "knowledge.reject" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let root = env
+                .kb_root
+                .clone()
+                .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
+            if !body.is_null() && body != serde_json::json!({}) {
+                return Err(audit.reject(
+                    store,
+                    "knowledge",
+                    &raw_id,
+                    unprocessable("validation", "request.body must be empty"),
+                ));
+            }
+            audited(crate::knowledge::reject_op(
+                store,
+                &root,
+                raw_id,
+                Some(audit),
+            )?)
+        }
+        other => Err(ApiProblem::internal(format!(
+            "registered CoS operation {other} has no implementation"
+        ))),
+    }
 }
 
 async fn get_operation(

@@ -29,3 +29,18 @@ department's design generator) that loads one of these skills must follow this p
 
 See each skill's own `SOURCE.md` for what, if anything, was changed from upstream, and
 `agent-docs/progress/ui-ux-skills.md` for the vendoring and review history.
+
+## Celeris-authored skills for the CoS special worker
+
+`cos-operator/` and `cos-inbox-triage/` are **not** vendored: they are written for Celeris and
+handed to the CoS chat run (ADR 2026-10-05-cos-chat-home D3). Their `SOURCE.md` links the ADR
+sections they implement instead of an upstream URL; the ADR is authoritative.
+
+- `cos-operator` — how the CoS uses its full tool set: every production DB / control change goes
+  through the authenticated API (`/api/v1/cos/operations`) or `celerisctl`, operation examples,
+  repo changes in a dedicated worktree, the selfdeploy check → promote procedure (human-only steps
+  stay with the human), secrets, untrusted inputs, no legacy `result.actions`, and the summary
+  checkpoint rules.
+- `cos-inbox-triage` — the inbox first-response policy (`[cos.triage] policy_skill`): the
+  "escalate to a human" table, answer / observe / escalate, the escalation packet, confidence,
+  and "never answer through Discord".

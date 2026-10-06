@@ -184,6 +184,7 @@ fn build_run_spec(
         let objective = kb::maintenance_objective(&input);
 
         let spec = NewTaskSpec {
+            requirements: Default::default(),
             repos: Vec::new(),
             title: format!("知識整理: {}", task.title),
             objective,

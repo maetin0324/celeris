@@ -4,6 +4,7 @@ use task_core::{Budget, Check, Criterion, SqliteStore, TaskKind, Tier, WorkerHin
 fn parent(repos: &[&str]) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -183,6 +184,58 @@ fn build_child_task_inherits_from_the_parent_and_the_unit() {
     )
     .unwrap();
     assert_eq!(child.repos, p.repos);
+}
+
+#[test]
+fn browser_allowed_domains_plan_child_requires_explicit_subset() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut p = parent(&[]);
+    p.skills = vec!["browser-enabled".into()];
+    p.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://*.example.com:8443".into()],
+    });
+    for (requested, accepted) in [
+        (serde_json::Value::Null, false),
+        (serde_json::json!({"browser":{"allowed_domains":[]}}), false),
+        (
+            serde_json::json!({"browser":{"allowed_domains":["http://example.com"]}}),
+            false,
+        ),
+        (
+            serde_json::json!({"browser":{"allowed_domains":["https://billing.example.com:8443"]}}),
+            true,
+        ),
+        (
+            serde_json::json!({"browser":{"allowed_domains":["https://billing.example.com"]}}),
+            false,
+        ),
+        (
+            serde_json::json!({"browser":{"allowed_domains":["https://other.com:8443"]}}),
+            false,
+        ),
+        (
+            serde_json::json!({"browser":{"allowed_domains":["https://example.com:8443"]}}),
+            false,
+        ),
+    ] {
+        let mut unit = task_unit(&[]);
+        unit["skills"] = serde_json::json!(["browser-enabled"]);
+        if !requested.is_null() {
+            unit["requirements"] = requested;
+        }
+        let plan = v3(serde_json::json!([unit]));
+        let result = build_child_task(
+            &store,
+            &p,
+            "plan-browser",
+            &plan.units[0],
+            &[],
+            &[],
+            &[],
+            OffsetDateTime::now_utc(),
+        );
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
+    }
 }
 
 fn build(store: &SqliteStore, p: &Task, plan_id: &str) -> Task {

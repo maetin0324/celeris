@@ -38,6 +38,8 @@ use serde::{Deserialize, Serialize};
 pub enum ConsoleAction {
     CreateTask {
         #[serde(default)]
+        requirements: Box<crate::model::TaskRequirements>,
+        #[serde(default)]
         tier: Option<crate::Tier>,
         title: String,
         objective: String,
@@ -82,7 +84,7 @@ pub enum ConsoleAction {
         /// ADR-0079 D12（Phase R5a）: 人が段階（「Phase 1〜4」など）を名指ししたときだけ、その名前と範囲を
         /// そのまま写す（`Task.routing.stages_hint`。root の planner への入力で、構造の強制ではない）。
         #[serde(default)]
-        stages_hint: Vec<crate::tree::StageHint>,
+        stages_hint: Box<Vec<crate::tree::StageHint>>,
     },
     ProposeProject {
         title: String,

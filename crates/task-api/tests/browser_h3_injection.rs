@@ -148,6 +148,9 @@ fn world() -> World {
         .expect("test fixture");
     let mut task = new_task(TaskKind::Execute, Status::Ready);
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://fixture.example.com".into()],
+    });
     env.seed(&task);
     let password = format!("H3-sentinel-{}", task.id);
     World {
@@ -205,6 +208,7 @@ fn run_request(w: &World) -> RunRequest {
         context: task_worker::protocol::RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {
+                    credential_identity_ids: Default::default(),
                     allowed_domains: vec!["*.example.com".into()],
                     allowed_actions: Some(vec![
                         BrowserAction::Navigate,

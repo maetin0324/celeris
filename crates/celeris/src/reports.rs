@@ -146,6 +146,7 @@ fn compaction_spec(
     pending: &[Report],
 ) -> NewTaskSpec {
     NewTaskSpec {
+        requirements: Default::default(),
         repos: Vec::new(),
         title: format!("報告のまとめ: {}", node.name),
         objective: report::compaction_objective(node, pending),

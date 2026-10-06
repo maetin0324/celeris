@@ -89,6 +89,9 @@ fn request(workspace: &Path) -> RunRequest {
     });
     let mut task = crate::protocol::tests::sample_task();
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     RunRequest {
         protocol: crate::protocol::PROTOCOL_VERSION,
         task,

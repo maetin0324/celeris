@@ -145,15 +145,11 @@ fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool 
             else {
                 return false;
             };
-            let host = rest.split(['/', ':', '?', '#']).next().unwrap_or("");
-            !host.is_empty()
-                && !rest.contains('@')
+            !rest.contains('@')
                 && !rest.contains('?')
                 && !rest.contains('#')
-                && domains.iter().any(|d| {
-                    d.strip_prefix("*.")
-                        .map_or(host == d, |base| host.ends_with(&format!(".{base}")))
-                })
+                && !rest.contains('\\')
+                && crate::browser_policy::url_origin_allowed(url, domains)
         }
         "click" | "extract" | "download" => {
             req.args.len() == 1

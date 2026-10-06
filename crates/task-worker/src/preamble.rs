@@ -1051,6 +1051,7 @@ fn actions_instructions() -> String {
      \"harness\": \"coding\", \"skills\": [\"rust\"], \"mode\": \"prototype\", \"repos\": [], \
      \"project\": \"<案件の id か null>\", \
      \"stages_hint\": [{\"title\": \"Phase 1\", \"scope\": \"…\"}], \
+     \"requirements\": {\"browser\": {\"allowed_domains\": [\"https://billing.example.com\"]}}, \
      \"workspace\": {\"kind\":\"remote\",\"cluster\":\"<id>\",\"path\":\"<作業ディレクトリ>\",\
      \"mode\":\"shared\"}}`\
      （`workspace` は省略可。クラスタでの仕事だけ入れる。\
@@ -1058,6 +1059,11 @@ fn actions_instructions() -> String {
      `workspace.mode` はコマンドを実行するだけでコードの diff を作らない仕事のとき `\"shared\"` にします\
      （worktree を切らず、`path` にそのまま cd して実行します。ADR-0059）。コードを直す仕事では付けません\
      （省略時は worktree）。`create_task.mode`（下）とは別のフィールドです。\n\
+     `browser` skill を含む仕事（Live View での操作・承認が要る task）では、\
+     `requirements.browser.allowed_domains` に作業に必要な**最小の origin だけ**を書いてください。\
+     例: 社内請求画面だけなら `[\"https://billing.example.com\"]` とし、`[\"*.example.com\"]` や\
+     部署の browser grant 全体をコピーしないでください。`browser` skill を付けたのに\
+     `allowed_domains` が無い・空だと task の作成が拒否されます。\n\
      - `{\"type\": \"propose_project\", \"title\": \"…\", \"request\": \"…\", \"repos\": [\"/abs/path\"]}`\n\
      - `{\"type\": \"ask_human\", \"text\": \"…\"}`\n\
      **あなた（CoS）は goal / harness / skills / mode / repos / 制約を定義し、担当（`assignee`）とモデル（`tier`）は\

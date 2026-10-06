@@ -447,6 +447,9 @@ pub fn priority_label(priority: i32) -> &'static str {
 /// DESIGN §4.1 の `Task`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
+    /// Per-task browser permissions. Absent for tasks created before this policy.
+    #[serde(default, skip_serializing_if = "TaskRequirements::is_empty")]
+    pub requirements: TaskRequirements,
     pub id: TaskId,
     pub parent_id: Option<TaskId>,
     pub kind: TaskKind,
@@ -540,6 +543,25 @@ pub struct Task {
     )]
     #[schemars(with = "Option<String>")]
     pub paused_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserRequirements>,
+}
+
+impl TaskRequirements {
+    pub fn is_empty(&self) -> bool {
+        self.browser.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRequirements {
+    pub allowed_domains: Vec<String>,
 }
 
 /// ADR-0069 D1: `worker_hint.tier` を誰が決めたか。

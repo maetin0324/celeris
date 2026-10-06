@@ -7,6 +7,7 @@ fn task() -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

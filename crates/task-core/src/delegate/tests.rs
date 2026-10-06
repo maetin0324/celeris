@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 fn dt(title: &str, deps: Vec<DelegateDep>) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: title.into(),
         objective: format!("do {title}"),
         acceptance: vec![Criterion {
@@ -25,6 +26,7 @@ fn dt(title: &str, deps: Vec<DelegateDep>) -> DelegateTask {
 fn parent() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

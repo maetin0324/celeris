@@ -71,6 +71,7 @@ fn browser_matching_requires_administrator_capability_grant() {
         Assignment::Unroutable { .. }
     ));
     nodes[3].profile.browser = Some(task_core::BrowserCapability {
+        credential_identity_ids: Default::default(),
         allowed_domains: vec!["example.com".into()],
         live_view_url: None,
         allowed_actions: None,
@@ -116,6 +117,7 @@ fn browser_specialist_node_receives_browser_enabled_tasks_and_ungranted_nodes_ar
     ));
 
     nodes[last].profile.browser = Some(task_core::BrowserCapability {
+        credential_identity_ids: Default::default(),
         allowed_domains: vec!["localhost".into(), "127.0.0.1".into()],
         live_view_url: None,
         allowed_actions: None,
@@ -156,6 +158,7 @@ fn sample_task() -> Task {
     use task_core::{Budget, Status, TaskId, TaskKind, TaskMode, Tier, WorkerHint, WorkspaceSpec};
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

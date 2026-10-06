@@ -1,19 +1,26 @@
 //! Browser execution is a capability granted by an administrator's profile, never an agent genre.
 //! No credentials, browser storage, page content, or process I/O belong in these contracts.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::TaskId;
+
+#[path = "browser/origin.rs"]
+mod origin;
+pub use origin::{
+    AllowedOrigin, intersect_origins, minimize_origins, origin_covers, parse_allowed_origin,
+};
 
 pub const BROWSER_SKILL: &str = "browser-enabled";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BrowserCapability {
-    /// Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.
+    /// Allowed origins. Legacy host patterns read as HTTPS on port 443 only.
+    #[serde(deserialize_with = "deserialize_allowed_origins")]
     pub allowed_domains: Vec<String>,
     /// Business actions the administrator grants (ADR-0080 D1). Absent means the Phase 1
     /// set; `credential_use` is never implied.
@@ -22,10 +29,27 @@ pub struct BrowserCapability {
     /// Credential policies a task may reference. Absent/empty means no credential use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_policy_ids: Vec<String>,
+    /// Policy ID to browser identity ID. This contains identifiers only, never credentials.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub credential_identity_ids: BTreeMap<String, String>,
     /// Administrator-operated authenticated HTTPS reverse proxy to the substrate dashboard.
     /// This is not a CDP endpoint or a bearer-token URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_view_url: Option<String>,
+}
+
+fn deserialize_allowed_origins<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<String>, D::Error> {
+    let values = Vec::<String>::deserialize(deserializer)?;
+    values
+        .into_iter()
+        .map(|value| {
+            parse_allowed_origin(&value)
+                .map(|origin| origin.canonical())
+                .map_err(|_| serde::de::Error::custom("invalid browser origin"))
+        })
+        .collect()
 }
 
 impl BrowserCapability {
@@ -34,11 +58,9 @@ impl BrowserCapability {
             || self
                 .allowed_domains
                 .iter()
-                .any(|host| !valid_host(host.strip_prefix("*.").unwrap_or(host)))
+                .any(|origin| parse_allowed_origin(origin).is_err())
         {
-            return Err(
-                "browser.allowed_domains must contain explicit hosts (optional *. prefix)".into(),
-            );
+            return Err("browser.allowed_domains must contain valid origins".into());
         }
         if self
             .live_view_url
@@ -46,6 +68,15 @@ impl BrowserCapability {
             .is_some_and(|url| !valid_live_view_url(url))
         {
             return Err("browser.live_view_url must be an HTTPS dashboard URL without credentials, query, or fragment".into());
+        }
+        if self
+            .credential_identity_ids
+            .iter()
+            .any(|(policy, identity)| {
+                !self.credential_policy_ids.contains(policy) || identity.trim().is_empty()
+            })
+        {
+            return Err("browser.credential_identity_ids requires granted policy IDs and non-empty identity IDs".into());
         }
         Ok(())
     }
@@ -90,6 +121,44 @@ pub fn valid_live_view_url(url: &str) -> bool {
 
 pub fn requests_browser(skills: &[String]) -> bool {
     skills.iter().any(|skill| skill == BROWSER_SKILL)
+}
+
+/// Validate task origins before storing a new task. A child can only narrow its parent's set.
+pub fn validate_task_requirements(
+    skills: &[String],
+    requirements: &crate::model::TaskRequirements,
+    parent: Option<&crate::model::Task>,
+) -> Result<(), String> {
+    let domains = requirements.browser.as_ref().map(|b| &b.allowed_domains);
+    if requests_browser(skills) && domains.is_none_or(Vec::is_empty) {
+        return Err(
+            "requirements.browser.allowed_domains must be non-empty for browser-enabled tasks"
+                .into(),
+        );
+    }
+    if let Some(domains) = domains {
+        for domain in domains {
+            // New task requirements use explicit origins; legacy bare hosts are only read from grants.
+            AllowedOrigin::parse(domain).map_err(|_| {
+                "requirements.browser.allowed_domains contains an invalid origin".to_string()
+            })?;
+        }
+        if let Some(parent) = parent {
+            let inherited = parent
+                .requirements
+                .browser
+                .as_ref()
+                .map(|b| b.allowed_domains.as_slice())
+                .unwrap_or_default();
+            if !domains
+                .iter()
+                .all(|domain| inherited.iter().any(|p| origin_covers(p, domain)))
+            {
+                return Err("requirements.browser.allowed_domains exceeds the parent task".into());
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Pin capability-bearing tasks to a supported adapter: never fall back to a backend that loses it.
@@ -327,7 +396,7 @@ impl BrowserTaskPolicy {
             return Err(BrowserPolicyError::InvalidPolicy);
         }
         for domain in &self.network_domains {
-            normalize_host_pattern(domain)?;
+            parse_allowed_origin(domain)?;
         }
         for origin in &self.navigation_origins {
             normalize_https_origin(origin).ok_or(BrowserPolicyError::InvalidDomain)?;
@@ -357,11 +426,11 @@ impl BrowserTaskPolicy {
         let domains = self
             .network_domains
             .iter()
-            .map(|d| normalize_host_pattern(d))
+            .map(|d| parse_allowed_origin(d).map(|o| o.canonical()))
             .collect::<Result<Vec<_>, _>>()?;
         let within_domains = domains
             .iter()
-            .all(|d| current.allowed_domains.iter().any(|c| host_covers(c, d)));
+            .all(|d| current.allowed_domains.iter().any(|c| origin_covers(c, d)));
         let actions: BTreeSet<_> = self.allowed_actions.iter().copied().collect();
         let within_actions = actions.is_subset(&current.actions);
         let credentials: BTreeSet<_> = self.credential_policy_ids.iter().cloned().collect();
@@ -385,6 +454,47 @@ impl BrowserTaskPolicy {
         }
         Ok(())
     }
+
+    /// ADR 2026-10-05-browser-department-web-live-view D2.0: narrow `network_domains` to the
+    /// task's own `requirements.browser.allowed_domains` (origin intersection, never string
+    /// equality). An empty result is refused so a run never starts without an allowed origin.
+    pub fn within_task_origins(&self, allowed: &[String]) -> Result<Self, BrowserPolicyError> {
+        self.validate()?;
+        let task = allowed
+            .iter()
+            .map(|d| parse_allowed_origin(d).map(|o| o.canonical()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut domains = Vec::new();
+        for domain in &self.network_domains {
+            let domain = parse_allowed_origin(domain)?.canonical();
+            domains.extend(task.iter().filter_map(|t| intersect_origins(&domain, t)));
+        }
+        let network_domains = minimize_origins(domains);
+        if network_domains.is_empty() {
+            return Err(BrowserPolicyError::EmptyDomains);
+        }
+        Ok(Self {
+            network_domains,
+            ..self.clone()
+        })
+    }
+}
+
+/// D2.0: the task policy a run is bound to. A task with `requirements.browser` is narrowed to
+/// those origins; a task created before the requirement keeps its stored policy as is. The
+/// grant is applied later by [`EffectiveBrowserPolicy::derive`] with the grant read at run time,
+/// so a grant shrink reaches existing tasks on their next run.
+pub fn task_run_policy(
+    requirements: &crate::TaskRequirements,
+    stored: Option<&BrowserTaskPolicy>,
+) -> Result<Option<BrowserTaskPolicy>, BrowserPolicyError> {
+    match (stored, requirements.browser.as_ref()) {
+        (None, _) => Ok(None),
+        (Some(policy), None) => Ok(Some(policy.clone())),
+        (Some(policy), Some(browser)) => policy
+            .within_task_origins(&browser.allowed_domains)
+            .map(Some),
+    }
 }
 
 /// What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).
@@ -404,7 +514,7 @@ pub struct EffectiveBrowserPolicy {
     pub task_revision: u64,
     pub actions: BTreeSet<BrowserAction>,
     pub approval_actions: BTreeSet<BrowserAction>,
-    /// Sorted, normalized, redundancy-free host patterns for `--allowed-domains`.
+    /// Sorted, normalized, redundancy-free origins.
     pub allowed_domains: Vec<String>,
     pub credential_policy_ids: BTreeSet<String>,
     pub artifact_policy_id: Option<String>,
@@ -465,22 +575,22 @@ impl EffectiveBrowserPolicy {
             .chain(BrowserAction::ALWAYS_APPROVED)
             .filter(|a| actions.contains(a))
             .collect();
-        let grant_hosts = grant
+        let grant_origins = grant
             .allowed_domains
             .iter()
-            .map(|d| normalize_host_pattern(d))
+            .map(|d| parse_allowed_origin(d).map(|o| o.canonical()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|_| BrowserPolicyError::InvalidGrant)?;
         let mut domains = Vec::new();
         for requested in &task.network_domains {
-            let requested = normalize_host_pattern(requested)?;
+            let requested = parse_allowed_origin(requested)?.canonical();
             domains.extend(
-                grant_hosts
+                grant_origins
                     .iter()
-                    .filter_map(|g| intersect_hosts(g, &requested)),
+                    .filter_map(|g| intersect_origins(g, &requested)),
             );
         }
-        let allowed_domains = minimize_hosts(domains);
+        let allowed_domains = minimize_origins(domains);
         if allowed_domains.is_empty() {
             return Err(BrowserPolicyError::EmptyDomains);
         }
@@ -582,37 +692,6 @@ pub fn normalize_host_pattern(pattern: &str) -> Result<String, BrowserPolicyErro
     Ok(lower)
 }
 
-/// Does pattern `outer` admit every host admitted by `inner`?
-fn host_covers(outer: &str, inner: &str) -> bool {
-    match (outer.strip_prefix("*."), inner.strip_prefix("*.")) {
-        (None, None) => outer == inner,
-        (None, Some(_)) => false,
-        (Some(base), Some(inner_base)) => {
-            inner_base == base || inner_base.ends_with(&format!(".{base}"))
-        }
-        (Some(base), None) => inner.ends_with(&format!(".{base}")),
-    }
-}
-
-fn intersect_hosts(a: &str, b: &str) -> Option<String> {
-    if host_covers(a, b) {
-        Some(b.into())
-    } else if host_covers(b, a) {
-        Some(a.into())
-    } else {
-        None
-    }
-}
-
-fn minimize_hosts(hosts: Vec<String>) -> Vec<String> {
-    let unique: BTreeSet<String> = hosts.into_iter().collect();
-    unique
-        .iter()
-        .filter(|h| !unique.iter().any(|o| o != *h && host_covers(o, h)))
-        .cloned()
-        .collect()
-}
-
 /// Canonical `https://host[:port]` (default port elided), or None.
 pub fn normalize_https_origin(origin: &str) -> Option<String> {
     let rest = origin.strip_prefix("https://")?;
@@ -682,7 +761,7 @@ mod tests {
         }
         assert!(
             BrowserCapability {
-                allowed_domains: vec!["example.com".into(), "*.example.org".into()],
+                allowed_domains: vec!["https://example.com".into(), "https://*.example.org".into()],
                 live_view_url: None,
                 ..Default::default()
             }

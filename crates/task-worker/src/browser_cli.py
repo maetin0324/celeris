@@ -31,7 +31,11 @@ ACTIONS = {"launch", "navigate", "click", "snapshot", "gettext", "screenshot", "
 # Shim verb -> upstream internal action checked against the generated allow list.
 VERB_ACTIONS = {"open": "navigate", "click": "click", "snapshot": "snapshot", "extract": "gettext",
                 "screenshot": "screenshot", "download": "download", "scroll": "scroll", "close": "close"}
-HOST = re.compile(r"(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+")
+# Canonical allowed origin from task-core: scheme, host and a non-default port.
+ORIGIN = re.compile(r"https://(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)*(:[0-9]{1,5})?"
+                    r"|http://(localhost|127\.0\.0\.1|\[::1\])(:[0-9]{1,5})?"
+                    # Legacy bare host (pre-origin config): read as https on the default port only.
+                    r"|(\*\.)?[a-z0-9-]+(\.[a-z0-9-]+)+|[a-z0-9-]+")
 
 
 def load_policy(config):
@@ -50,14 +54,32 @@ def load_policy(config):
           and len(set(policy["allow"])) == len(policy["allow"])
           and all(isinstance(a, str) and a in ACTIONS for a in policy["allow"])
           and isinstance(domains, list) and len(domains) > 0
-          and all(isinstance(d, str) and HOST.fullmatch(d) for d in domains))
+          and all(isinstance(d, str) and ORIGIN.fullmatch(d) for d in domains))
     return policy if ok else None
 
 
-def host_allowed(host, domains):
-    """Same containment rule as task-core: `*.base` admits subdomains, never the apex."""
-    host = host.lower() if host else ""
-    return any(host.endswith(d[1:]) if d.startswith("*.") else host == d for d in domains)
+def origin_allowed(url, domains):
+    """Same containment rule as task-core: scheme and port must match, `*.base` admits
+    subdomains, never the apex."""
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port or {"https": 443, "http": 80}.get(parsed.scheme)
+    except ValueError:
+        return False
+    host = parsed.hostname or ""
+    if not host or host.startswith("*.") or port is None or parsed.username or parsed.password:
+        return False
+    for d in domains:
+        scheme, _, authority = (d if "://" in d else "https://" + d).partition("://")
+        default = 443 if scheme == "https" else 80
+        base, sep, dport = authority.rpartition(":") if not authority.endswith("]") else ("", "", "")
+        if not sep:
+            base, dport = authority, str(default)
+        base = base.strip("[]")
+        if (scheme == parsed.scheme and int(dport) == port
+                and (host.endswith(base[1:]) if base.startswith("*.") else host == base)):
+            return True
+    return False
 
 
 def audit(operation, status, artifact=None):
@@ -115,7 +137,7 @@ def main(args):
                     or parsed.scheme != "https" or not parsed.hostname
                     or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
                     or parsed.netloc.lower() != parsed.netloc
-                    or not host_allowed(parsed.hostname, config["allowed_domains"])
+                    or not origin_allowed(origin, config["allowed_domains"])
                     or not 1 <= len(purpose) <= 500 or any(ord(c) < 32 for c in purpose)):
                 raise ValueError()
             with (ROOT / "credential-request.json").open("x") as request:
@@ -141,7 +163,7 @@ def main(args):
     # Defence in depth ahead of the substrate: actions and hosts outside the task policy
     # never reach agent-browser, whatever page content asked for.
     if (VERB_ACTIONS[args[0]] not in policy["allow"]
-            or (args[0] == "open" and not host_allowed(urlsplit(args[1]).hostname, config["allowed_domains"]))):
+            or (args[0] == "open" and not origin_allowed(args[1], config["allowed_domains"]))):
         audit("policy_block", "blocked")
         print('{"success":false,"error":"command not permitted by the task browser policy"}')
         return 2

@@ -38,6 +38,7 @@ fn worker_that_spawns_a_grandchild(pidfile: &Path) -> Arc<dyn WorkerAdapter> {
 fn new_task(dir: &Path) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

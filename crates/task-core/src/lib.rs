@@ -23,7 +23,7 @@ pub mod browser_wait;
 /// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
 pub mod cluster_job;
 pub use browser::{
-    AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
+    AgentBrowserActionPolicy, AllowedOrigin, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
     EffectiveBrowserPolicy,
 };
@@ -125,9 +125,9 @@ pub use harness::{
 // `KnowledgeMount` は ADR-0047（Phase 61）の型をそのまま使う（Phase 59 追記）。
 pub use profile::resolve as resolve_profile;
 pub use profile::{
-    CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs, Permissions,
-    Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry, is_known_tool,
-    is_valid_skill, validate_profile,
+    BudgetPrefs, CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs,
+    Permissions, Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry,
+    is_known_tool, is_valid_skill, validate_profile,
 };
 // ---- ADR-0047（Phase 61）: 知識ベース ----
 pub use knowledge::{
@@ -147,14 +147,14 @@ pub use message::{
     is_conversation, is_milestone_review, milestone_review_of,
 };
 pub use model::{
-    ArtifactRef, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY, Event,
-    FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS,
+    ArtifactRef, BrowserRequirements, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY,
+    Event, FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS,
     PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult, PhaseMerged, ProgressFields,
     ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole, Status, Task, TaskCategory,
-    TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage, WorkerHint, WorkspaceMode,
-    WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home, home_dir,
-    is_valid_label, normalize_labels, normalize_skills, priority_from_label, priority_label,
-    validate_human_checks_have_deliverable,
+    TaskId, TaskKind, TaskMode, TaskRequirements, TaskRouting, Tier, TierSource, Usage, WorkerHint,
+    WorkspaceMode, WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home,
+    home_dir, is_valid_label, normalize_labels, normalize_skills, priority_from_label,
+    priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
 pub mod pricing;

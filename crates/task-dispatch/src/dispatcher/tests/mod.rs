@@ -41,6 +41,7 @@ impl WorkerAdapter for InstantAdapter {
 fn new_task(dir: &std::path::Path, check: Check, max_retries: u32) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -1116,6 +1117,7 @@ impl WorkerAdapter for DelegatingAdapter {
 
 fn proposal(title: &str, deps: Vec<task_core::DelegateDep>) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: title.into(),
         objective: format!("do {title}"),
         acceptance: vec![Criterion {
@@ -1509,6 +1511,7 @@ fn assigned_task(workspace_root: &std::path::Path, name: &str, assignee: &str) -
 
 fn delegate_to(assignee: &str) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: "任せたい仕事".into(),
         objective: "やっておいて".into(),
         // ADR-0067 D2: `human` チェックには artifacts か知識ベースの参照が要る。
@@ -3133,6 +3136,9 @@ mod stage_reopen;
 /// ADR-0130 D2: 実装 run・WU の actual write-set の記録（`src/dispatcher/tests/write_set_record.rs`）。
 mod write_set_record;
 
+/// ADR 2026-10-05-browser-department-web-live-view D2.0: run 時の task ∩ grant と grant 縮小の即時適用
+/// （`src/dispatcher/tests/browser_allowed_domains.rs`）。
+mod browser_allowed_domains;
 mod browser_fallback;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;

@@ -159,7 +159,7 @@ max_lane = "standard"
 max_attempts = 2
 
 [org.profile.browser]
-allowed_domains = ["localhost", "127.0.0.1"]
+allowed_domains = ["http://localhost:3000", "http://127.0.0.1:3000"]
 credential_policy_ids = []
 
 # ---- Research ----

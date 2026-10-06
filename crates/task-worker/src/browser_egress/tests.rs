@@ -326,3 +326,69 @@ async fn malformed_dns_length_or_transaction_is_rejected_over_tcp() {
         job.await.unwrap();
     }
 }
+
+/// D2.0: the egress proxy fed from the prepared policy (task ∩ grant) refuses CONNECT to origins
+/// outside it — scheme (port 80) and port differences, grant-only and task-only hosts — before
+/// any DNS, and admits the intersection.
+#[tokio::test]
+async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
+    let grant = task_core::BrowserCapability {
+        allowed_domains: vec![
+            "https://*.example.com".into(),
+            "http://127.0.0.1:3000".into(),
+        ],
+        ..Default::default()
+    };
+    let stored = task_core::BrowserTaskPolicy {
+        policy_id: "p".into(),
+        revision: 1,
+        domain_mode: task_core::BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: grant.allowed_domains.clone(),
+        allowed_actions: vec![task_core::BrowserAction::Navigate],
+        approval_actions: vec![],
+        credential_policy_ids: vec![],
+        artifact_policy_id: None,
+    };
+    let mut task = crate::protocol::tests::sample_task();
+    task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec![
+            "https://billing.example.com".into(),
+            "https://evil.test".into(),
+        ],
+    });
+    let prepared =
+        crate::browser_policy::prepare_for_task(&grant, &task, Some(&stored), "0.38.1").unwrap();
+    let policy = EgressPolicy {
+        allow: prepared.egress_allow(),
+        resolver: "127.0.0.1".parse().unwrap(),
+        allow_ipv6: false,
+    };
+    for authority in [
+        "billing.example.com:80",
+        "billing.example.com:8443",
+        "app.example.com:443",
+        "evil.test:443",
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let (mut client, mut server) = UnixStream::pair().unwrap();
+        client.write_all(&connect(authority)).await.unwrap();
+        assert_eq!(
+            destination(&mut server, &policy, listener.local_addr().unwrap()).await,
+            Err(EgressError::Denied),
+            "{authority}"
+        );
+    }
+    let (address, job) = dns_fixture(&["93.184.216.34"]).await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client
+        .write_all(&connect("billing.example.com:443"))
+        .await
+        .unwrap();
+    assert_eq!(
+        destination(&mut server, &policy, address).await,
+        Ok("93.184.216.34:443".parse().unwrap())
+    );
+    assert_eq!(job.await.unwrap(), vec![1, 28]);
+}

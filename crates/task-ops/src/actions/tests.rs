@@ -9,6 +9,7 @@ fn cos_task() -> Task {
     use task_core::{Budget, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let t = now();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -146,6 +147,44 @@ fn create_task_makes_a_ready_task_and_records_a_summary() {
     assert_eq!(stored.genre.as_deref(), Some("coding"));
     assert_eq!(stored.assignee, None, "matching は別経路");
     assert!(outcome.executed[0].summary.contains("直す"));
+}
+
+#[test]
+fn browser_allowed_domains_cos_create_rejects_missing_empty_and_invalid() {
+    for suffix in [
+        "",
+        r#","requirements":{"browser":{"allowed_domains":[]}}"#,
+        r#","requirements":{"browser":{"allowed_domains":["https://example.com/path"]}}"#,
+    ] {
+        let store = SqliteStore::open_in_memory().unwrap();
+        seed_engineering(&store);
+        let task = cos_task();
+        let payload = format!(
+            r#"{{"actions":[{{"type":"create_task","title":"browse","objective":"browse","acceptance":["done"],"skills":["browser-enabled"]{suffix}}}]}}"#
+        );
+        let parsed = parse(&payload);
+        let outcome = execute(
+            &store,
+            &[],
+            &[],
+            &[],
+            &[],
+            &task,
+            "run-browser-reject",
+            &parsed.0,
+            &parsed.1,
+            now(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(outcome.executed.is_empty());
+        assert_eq!(outcome.failed.len(), 1);
+        assert!(
+            outcome.failed[0].reason.contains("allowed_domains"),
+            "{:?}",
+            outcome.failed
+        );
+    }
 }
 
 /// ADR-0074 D2.1（Phase F3 途中確認、区切り 1 (a)）: CoS が `create_task.pause_after` を書けば

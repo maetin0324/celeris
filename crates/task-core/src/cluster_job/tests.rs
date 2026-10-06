@@ -173,6 +173,7 @@ fn task(status: crate::Status) -> crate::Task {
     use crate::model::{Budget, Task, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),
@@ -409,7 +410,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 47);
+    assert_eq!(crate::SCHEMA_VERSION, 51);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

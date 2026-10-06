@@ -39,6 +39,7 @@ fn spec() -> ExecutionPlanSpec {
 fn sample_task() -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

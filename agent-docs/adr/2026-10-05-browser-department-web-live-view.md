@@ -748,8 +748,10 @@ sha256 で確認）で `scripts/dev/browser-web-live-check.sh` を 5 回目を�
   [HTTP forward GET](2026-10-06-egress-http-forward-get.md)）の全修正が実機で効いている。
 - **軽微な残り（コード欠陥は無し）**:
   1. 手順書: HOME を試験ディレクトリへ上書きした操作環境では台本の Playwright 段が
-     `PLAYWRIGHT_BROWSERS_PATH` を要する（rerun 5 attempt 2 の失敗要因、操作者環境の差）。
-     注記を `docs/ops/browser-web-live-check.md`「実行」に足した。
+     `PLAYWRIGHT_BROWSERS_PATH`（例 `~/.cache/ms-playwright`）を要する（rerun 5 attempt 2 の
+     失敗要因、操作者環境の差）。あるいは HOME を daemon プロセスに限定する。本 task の
+     範囲 check（`agent-docs/progress/`・`agent-docs/adr/` のみ）に `docs/ops/browser-web-live-check.md`
+     が外れるため、注記の追記は次 task に残す。
   2. task 文言の『read #inside』: shim の snapshot は interactive-only で段落に `@e` 参照が
      付かないため wrapper 経由では読めない（台本はこの項目を検査せず、Playwright が
      `#inside == "inside"` を別途確認するので無害）。文言を落とすか Playwright 依存に直す余地。

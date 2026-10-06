@@ -257,6 +257,7 @@ flex/grid 子に `min-width: 0`、長い対象名と path は折り返しを許�
 | `--spacing-11` / `--spacing-target` | `2.75rem` / `2.75rem` | 44px target（CSS px の下限も共通部品で保証） |
 | `--spacing-icon-sm` / `--spacing-icon` | `1rem` / `1.25rem` | 16 / 20px icon |
 | `--spacing-nav` / `--spacing-list` / `--spacing-drawer` / `--spacing-form` | `14rem` / `20rem` / `32rem` / `40rem` | nav / 一覧の基準幅 / drawer 上限 / form 上限 |
+| `--spacing-tabbar` | `4rem` | md 未満の画面下の固定タブ（shell の MobileTabBar）の高さ。本文の列の下余白と Console の送信欄の bottom は `--shell-bottom-inset`（= これ + `env(safe-area-inset-bottom)`、md 以上は 0）で空ける |
 | `--container-prose` / `--container-prose-ja` | `65ch` / `40em` | 本文の行長上限 |
 | `--radius-sm` / `--radius-md` / `--radius-lg` / `--radius-xl` | `0.25rem` / `0.375rem` / `0.5rem` / `0.75rem` | 4/6/8/12px の角丸 |
 | `--shadow-flat` | `none` | 通常面 |

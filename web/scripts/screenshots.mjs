@@ -18,6 +18,9 @@ const only = arg("--only");
 const onlyState = arg("--only-state");
 const out = arg("--out");
 const withStates = process.argv.includes("--states");
+// --viewport: ページ全体でなく最初の 1 画面（viewport）だけを撮る（縦の長さの棚卸し用）。--widths で幅を絞れる。
+const viewportOnly = process.argv.includes("--viewport");
+const widths = (arg("--widths") ?? "360,390,412,1440").split(",").map(Number);
 if (!out) throw new Error("--out <directory> is required");
 const selected = only ? screens.filter((screen) => screen.fixture === only.split("?")[0]) : screens;
 const selectedStates = onlyState ? states.filter((state) => state.key === onlyState) : states;
@@ -36,7 +39,7 @@ try {
       for (const target of state.screens) {
         const gateway = await startFixtureGateway(state.daemon);
         try {
-          for (const width of [360, 390, 412, 1440]) {
+          for (const width of widths) {
             const page = await browser.newPage({ viewport: { width, height: 800 } });
             try {
               await applyStateRoute(page, state);
@@ -46,7 +49,7 @@ try {
               await waitForStateCapture(page, state);
               await page.screenshot({
                 path: path.join(out, `${state.key}-${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
-                fullPage: true,
+                fullPage: !viewportOnly,
               });
               screenshotCount += 1;
             } finally {
@@ -65,7 +68,7 @@ try {
       for (const screen of selected) {
         // --only は台帳の fixture に ?tab= などの query を付けてもよい（P3-13 の tab）。
         const target = only ?? screen.fixture;
-        for (const width of [360, 390, 412, 1440]) {
+        for (const width of widths) {
           const page = await browser.newPage({ viewport: { width, height: 800 } });
           await page.goto(`${gateway.base}${target}`);
           // 見出しが出てから、読み込み中（loading・aria-busy）が消えるまで待って撮る。固定の時間では待たない。
@@ -73,7 +76,7 @@ try {
           await page.waitForFunction((selector) => !document.querySelector(selector), LOADING_SELECTOR);
           await page.screenshot({
             path: path.join(out, `${target.replace(/[^a-z0-9]+/gi, "_") || "root"}-${width}.png`),
-            fullPage: true,
+            fullPage: !viewportOnly,
           });
           screenshotCount += 1;
           await page.close();

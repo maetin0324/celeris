@@ -11,10 +11,12 @@ import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
-import { DataList } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { cn } from "../../lib/utils";
+import { MetaLine } from "./meta-line";
+import { useFocusOnChange } from "./use-focus-on-change";
 
 type Sender = ReturnType<typeof useActionResult>;
 
@@ -23,6 +25,8 @@ const field =
   "block w-full min-w-0 min-h-11 rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 const labelText = "text-label font-medium";
 const navLink = "inline-flex min-h-11 min-w-11 items-center text-primary underline";
+// 広い幅の 2 ペインの一覧側。window の scroll に付いて来て、長い一覧は枠の中で scroll する。
+const listPane = "min-w-0 lg:sticky lg:top-0 lg:col-span-2 lg:max-h-dvh lg:self-start lg:overflow-y-auto";
 const href = (name?: string, edit = false) =>
   name ? `/knowledge/skills?name=${encodeURIComponent(name)}${edit ? "&edit=1" : ""}` : "/knowledge/skills";
 const createHref: string = `${href()}?create=1`;
@@ -169,13 +173,25 @@ function SkillForm({ name: selected, detail, sender }: { name?: string; detail?:
   );
 }
 
-function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; sender: Sender }) {
+function SkillDetail({
+  name,
+  edit,
+  sender,
+  chosen,
+}: {
+  name: string;
+  edit: boolean;
+  sender: Sender;
+  /** 直接開いたのではなく、一覧から選び直して開いた（見出しへ focus を移す）。 */
+  chosen: boolean;
+}) {
   const router = useRouter();
   const detail = useQuery({
     queryKey: [...skillKeys.all, "detail", name],
     queryFn: ({ signal }) => apiGet<SkillDetailView>(`/api/skills/${encodeURIComponent(name)}`, signal),
   });
   const result = sender.results[name];
+  const headingRef = useFocusOnChange<HTMLHeadingElement>(name, !edit && detail.data?.name === name, chosen);
   return (
     <FetchFrame query={detail}>
       {detail.data &&
@@ -184,10 +200,17 @@ function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; send
             <SkillForm name={name} detail={detail.data} sender={sender} />
           </Section>
         ) : (
-          <Section
-            title={<span className="break-all">{detail.data.name}</span>}
-            actions={
-              <>
+          <section aria-labelledby="skill-detail-title" className="min-w-0 space-y-3">
+            <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4 gap-y-2">
+              <h2
+                id="skill-detail-title"
+                ref={headingRef}
+                tabIndex={-1}
+                className="min-w-0 break-all pt-2 text-section font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                {detail.data.name}
+              </h2>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
                 <Link className={navLink} to={href(name, true)}>
                   編集
                 </Link>
@@ -215,58 +238,87 @@ function SkillDetail({ name, edit, sender }: { name: string; edit: boolean; send
                     router.history.push(href(), {});
                   }}
                 />
-              </>
-            }
-          >
-            <div className="space-y-3">
-              <DataList
-                items={[
-                  { label: "状態", value: <SkillState mountedBy={detail.data.mounted_by} result={result} /> },
-                  { label: "配送先", value: <MountedBy mountedBy={detail.data.mounted_by} /> },
-                  { label: "更新日", value: <Updated value={detail.data.updated} /> },
-                  {
-                    label: "付属ファイル",
-                    value: detail.data.files?.length ? (
-                      <ul className="space-y-1">
-                        {detail.data.files.map((file) => (
-                          <li className="break-all" key={file}>
-                            {file}
-                          </li>
-                        ))}
-                      </ul>
-                    ) : (
-                      <span className="text-muted-foreground">なし</span>
-                    ),
-                  },
-                ]}
-              />
-              {result?.status === 422 && <ActionResultView result={result} />}
-              <div className="max-w-prose-ja">
-                <Markdown source={detail.data.skill_md} />
+                <Link className={cn(navLink, "lg:hidden")} to={href()}>
+                  一覧に戻る
+                </Link>
               </div>
             </div>
-          </Section>
+            <MetaLine
+              items={[
+                { label: "状態", value: <SkillState mountedBy={detail.data.mounted_by} result={result} /> },
+                { label: "配送先", value: <MountedBy mountedBy={detail.data.mounted_by} /> },
+                { label: "更新日", value: <Updated value={detail.data.updated} /> },
+                {
+                  label: "付属ファイル",
+                  value: detail.data.files?.length ? (
+                    detail.data.files.join("、")
+                  ) : (
+                    <span className="text-muted-foreground">なし</span>
+                  ),
+                },
+              ]}
+            />
+            {result?.status === 422 && <ActionResultView result={result} />}
+            <div className="max-w-prose-ja">
+              <Markdown source={detail.data.skill_md} />
+            </div>
+          </section>
         ))}
     </FetchFrame>
   );
 }
 
-function SkillTable({ items, results }: { items: SkillList["items"]; results: Sender["results"] }) {
-  if (items.length === 0) return <p>手順書はまだありません。「作成」から SKILL.md を書いて登録します。</p>;
+/** 行を並べた一覧（狭い幅と、選んだ時の一覧ペイン）。選んだ行は aria-current と背景で示す。 */
+function SkillRows({
+  items,
+  results,
+  selected,
+}: {
+  items: SkillList["items"];
+  results: Sender["results"];
+  selected: string;
+}) {
   return (
-    <>
-      {/* スマホ: 対象名 → 状態 → 補助情報の順の行（DESIGN.md「Table と list」）。 */}
-      <ul className="divide-y divide-border md:hidden">
-        {items.map((item) => (
-          <li key={item.name} className="min-w-0 space-y-1 py-2">
-            <Link className={`${navLink} break-all`} to={href(item.name)}>
+    <ul className="divide-y divide-border">
+      {items.map((item) => {
+        const current = item.name === selected;
+        return (
+          <li
+            key={item.name}
+            className={cn("min-w-0 space-y-1 rounded-md px-2 pb-2", current && "bg-accent text-accent-foreground")}
+          >
+            <Link className={`${navLink} break-all`} to={href(item.name)} aria-current={current ? "true" : undefined}>
               {item.name}
             </Link>
             <SkillState mountedBy={item.mounted_by} result={results[item.name]} />
-            <p className="break-words text-label text-muted-foreground">{item.description}</p>
+            <p className="truncate text-label text-muted-foreground">{item.description}</p>
           </li>
-        ))}
-      </ul>
+        );
+      })}
+    </ul>
+  );
+}
+
+function SkillTable({
+  items,
+  results,
+  selected,
+  pane,
+}: {
+  items: SkillList["items"];
+  results: Sender["results"];
+  selected: string;
+  /** 一覧ペイン（広い幅の 2 ペインの左側）に出す。表ではなく行の一覧にする。 */
+  pane: boolean;
+}) {
+  if (items.length === 0) return <p>手順書はまだありません。「作成」から SKILL.md を書いて登録します。</p>;
+  if (pane) return <SkillRows items={items} results={results} selected={selected} />;
+  return (
+    <>
+      {/* スマホ: 対象名 → 状態 → 補助情報の順の行（DESIGN.md「Table と list」）。 */}
+      <div className="md:hidden">
+        <SkillRows items={items} results={results} selected={selected} />
+      </div>
       <div className="hidden md:block">
         <Table aria-label="手順書の一覧">
           <TableCaption>{items.length} 件</TableCaption>
@@ -311,48 +363,59 @@ export function SkillsScreen() {
     queryKey: skillKeys.list(),
     queryFn: ({ signal }) => apiGet<SkillList>("/api/skills", signal),
   });
+  const selected = create || !!name;
+  // 初回の表示の後に name が変わった（一覧から選び直した）ことを覚える。直接開いた時は shell の h1 focus に任せる。
+  const [shownName, setShownName] = useState(name);
+  const [chosen, setChosen] = useState(false);
+  if (name !== shownName) {
+    setShownName(name);
+    setChosen(true);
+  }
+  const outcomes = Object.entries(sender.results).filter(([, result]) => result.status !== 422);
   return (
-    <ScreenFrame title="手順書（skills）" route="/knowledge/skills">
-      <nav aria-label="手順書の操作" className="flex flex-wrap gap-4">
-        <Link className={navLink} to="/knowledge">
-          知識に戻る
-        </Link>
-        <Link className={navLink} to={createHref}>
-          作成
-        </Link>
-      </nav>
-      <section aria-label="操作の結果">
-        {Object.entries(sender.results)
-          .filter(([, result]) => result.status !== 422)
-          .map(([id, result]) => (
+    <ScreenFrame
+      title="手順書（skills）"
+      route="/knowledge/skills"
+      description="組織の画面で課に付けると配られます。"
+      actions={
+        <nav aria-label="手順書の操作" className="flex flex-wrap gap-x-4">
+          <Link className={navLink} to="/knowledge">
+            知識に戻る
+          </Link>
+          <Link className={navLink} to={createHref}>
+            作成
+          </Link>
+        </nav>
+      }
+    >
+      {outcomes.length > 0 && (
+        <section aria-label="操作の結果">
+          {outcomes.map(([id, result]) => (
             <div key={id} className="flex flex-wrap gap-1">
               <strong>{id}:</strong>
               <ActionResultView result={result} />
             </div>
           ))}
-      </section>
-      <p className="max-w-prose-ja text-label text-muted-foreground">
-        手順書（SKILL.md と付属ファイル）は、組織の画面で課に付けるとその課の作業場所に配られます。
-      </p>
-      {/* 未選択のときは右の枠を出さず、一覧を全幅で並べる（空の枠で画面の 2/3 を空けない）。 */}
-      <div className={create || name ? "grid min-w-0 gap-6 lg:grid-cols-5" : "min-w-0"}>
-        <Section
-          title="手順書の一覧"
-          description={create || name ? undefined : "名前を選ぶと SKILL.md と配送先を開きます。"}
-          className={create || name ? "lg:col-span-2" : undefined}
-        >
+        </section>
+      )}
+      {/* 未選択のときは右の枠を出さず、一覧を全幅で並べる（空の枠で画面の 2/3 を空けない）。
+          選んだ時は広い幅で一覧と中身の 2 ペイン、狭い幅では一覧を畳んで中身を見出しの直下に出す。 */}
+      <div className={selected ? "grid min-w-0 gap-6 lg:grid-cols-5" : "min-w-0"}>
+        <Section title="手順書の一覧" level={2} className={selected ? cn("hidden lg:block", listPane) : undefined}>
           <FetchFrame query={list}>
-            {list.data && <SkillTable items={list.data.items} results={sender.results} />}
+            {list.data && (
+              <SkillTable items={list.data.items} results={sender.results} selected={name} pane={selected} />
+            )}
           </FetchFrame>
         </Section>
-        {(create || name) && (
+        {selected && (
           <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
             {create ? (
               <Section title="手順書の作成">
                 <SkillForm sender={sender} />
               </Section>
             ) : (
-              <SkillDetail key={name} name={name} edit={edit} sender={sender} />
+              <SkillDetail key={name} name={name} edit={edit} sender={sender} chosen={chosen} />
             )}
           </div>
         )}

@@ -395,6 +395,7 @@ export function richFixtures() {
       next_cursor: null,
       counts_by_status: { ready: tasks.length - 1, reviewing: 1 },
     },
+    "/api/v1/tasks/counts": { counts_by_status: { ready: tasks.length - 1, reviewing: 1 } },
     "/api/v1/graph": {
       nodes: tasks.slice(0, 8).map(({ id, title, kind, status, parent_id }) => ({
         id,
@@ -1318,15 +1319,19 @@ export function createFakeDaemon({
         return res.end(body.subarray(start, end + 1));
       }
       // `offset`（P3-12 の追い掛け）: offset == size は空本体、offset > size は 416。
-      const offsetParam = new URL(req.url ?? "/", "http://x").searchParams.get("offset");
-      if (offsetParam !== null) {
-        const offset = Number(offsetParam);
+      // `length`（成果物の範囲取得）は offset からの byte 数。`X-Celeris-Size` は常に全体の大きさ（実 daemon と同じ）。
+      const search = new URL(req.url ?? "/", "http://x").searchParams;
+      const offsetParam = search.get("offset");
+      const lengthParam = search.get("length");
+      headers["x-celeris-size"] = String(body.length);
+      if (offsetParam !== null || lengthParam !== null) {
+        const offset = Number(offsetParam ?? 0);
         if (offset > body.length) {
           res.writeHead(416, { "content-range": `bytes */${body.length}` });
           return res.end();
         }
         res.writeHead(200, headers);
-        return res.end(body.subarray(offset));
+        return res.end(body.subarray(offset, lengthParam === null ? undefined : offset + Number(lengthParam)));
       }
       res.writeHead(200, headers);
       return res.end(body);

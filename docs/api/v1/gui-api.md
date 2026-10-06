@@ -291,6 +291,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 1 | GET | `/health` | 版、スキーマ版数、DB の journal_mode | `Health` | task-api |
 | 2 | GET | `/inbox` | 承認待ち / 質問 / draft / 注意 | `Inbox` | task-ops（+ スナップショット） |
 | 3 | GET | `/tasks` | 一覧（フィルタ・keyset ページング） | `TaskList` | store `list_page` + task-ops |
+| 3a | GET | `/tasks/counts` | 全タスクの状態別件数 | `TaskStatusCounts` | store `count_by_status` |
 | 4 | POST | `/tasks` | `celerisctl add` 相当 | 201 `Task` | task-ops |
 | 5 | GET | `/tasks/{id}` | 詳細（`celerisctl show --json` と同一） | `TaskDetail` | task-ops |
 | 6 | GET | `/tasks/{id}/events` | そのタスクのイベント（`after_seq`） | `EventsPage` | store `events_for` |
@@ -582,6 +583,13 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
   `status` / `kind` / `genre` は同じキーの中では OR）。
 - `counts_by_status` は**フィルタに関係なく** DB 全体の status 別件数（0 件の status は現れない）。タイトルバーの件数表示用。
 - 空のときは `{"items":[],"next_cursor":null,"total":0,"counts_by_status":{…}}`。
+
+### 3.3a `GET /tasks/counts` → 200 `TaskStatusCounts`
+
+`GET /tasks/counts` → 200 `TaskStatusCounts` は `{ "counts_by_status": { "ready": 12, "running": 3 } }` を返す。
+`TaskStore::count_by_status` の SQLite `GROUP BY status` を使い、タスク行は取得しない。
+検索語・案件・状態などの一覧条件は件数に影響せず、DB 全体の各状態を数える。0 件の状態は省略する。
+クエリは受けない。読み取り専用で、`celerisctl show --json` の応答は変えない。
 
 ### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`。**管理系**）
 

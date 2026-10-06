@@ -60,7 +60,7 @@ test("parity: 通知 束の一覧と未読・種類の絞り込み", async ({ pa
 
 test("parity: 通知 1 件の既読と nav の未読数", async ({ page }) => {
   await page.goto(`${gateway.base}/notifications`);
-  const nav = page.getByRole("navigation", { name: "主要" });
+  const nav = page.getByRole("navigation", { name: "主要", exact: true });
   await expect(nav.getByRole("img", { name: "未読の通知 3 件" })).toBeVisible();
   const row = page.getByRole("listitem", { name: "日次の報告" });
   await row.getByRole("button", { name: "「日次の報告」を既読にする" }).click();

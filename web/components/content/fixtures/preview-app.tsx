@@ -9,5 +9,6 @@ createRoot(root).render(
     <h1 className="text-title">成果物プレビュー</h1>
     <ArtifactPreview taskId="T1" idx={0} name="報告.md" />
     <ArtifactPreview taskId="T1" idx={1} name="添付.zip" />
+    <ArtifactPreview taskId="T1" idx={2} name="run.log" chunkBytes={16} />
   </main>,
 );

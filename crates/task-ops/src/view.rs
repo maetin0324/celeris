@@ -122,6 +122,22 @@ pub struct TaskList {
     pub counts_by_status: BTreeMap<String, u64>,
 }
 
+/// `GET /tasks/counts`: SQLite の GROUP BY だけで全タスクを状態別に数える。
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
+pub struct TaskStatusCounts {
+    pub counts_by_status: BTreeMap<String, u64>,
+}
+
+pub fn task_status_counts(store: &dyn TaskStore) -> Result<TaskStatusCounts, OpsError> {
+    Ok(TaskStatusCounts {
+        counts_by_status: store
+            .count_by_status()?
+            .into_iter()
+            .map(|(status, count)| (status_key(status).to_string(), count))
+            .collect(),
+    })
+}
+
 /// `celerisctl show --json` と `GET /api/v1/tasks/{id}` の本体。
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub struct TaskDetail {
@@ -1170,11 +1186,7 @@ pub fn task_list(
         })
         .collect();
 
-    let counts_by_status = store
-        .count_by_status()?
-        .into_iter()
-        .map(|(s, n)| (status_key(s).to_string(), n))
-        .collect();
+    let counts_by_status = task_status_counts(store)?.counts_by_status;
 
     Ok(TaskList {
         items,

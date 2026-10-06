@@ -30,7 +30,7 @@ const findings: Record<string, string> = {};
 const timeout = { timeout: 20_000 };
 
 const checks: Record<StateKey, Check> = {
-  "long-text": async (page, url) => {
+  "long-text": async (page) => {
     await expect(page.locator("#main")).toContainText("averyveryverylongword", timeout);
     await expectNoHorizontalScroll(page);
   },

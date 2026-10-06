@@ -49,7 +49,9 @@ test("parity: * 未定義パスの 404 と header", async ({ page }) => {
   await page.goto(`${gateway.base}/no-such-page`);
   const shell = page.locator("[data-shell]");
   await expect(shell.getByRole("heading", { level: 1, name: "ページが見つかりません" })).toBeVisible();
-  await expect(shell.getByRole("navigation", { name: "主要" }).getByRole("link", { name: "タスク" })).toBeAttached();
+  await expect(
+    shell.getByRole("navigation", { name: "主要", exact: true }).getByRole("link", { name: "タスク" }),
+  ).toBeAttached();
   await shell.getByRole("link", { name: "ホームへ戻る" }).click();
   await expect(page).toHaveURL(`${gateway.base}/`);
   await expect(page.getByRole("heading", { level: 1, name: "ホーム" })).toBeFocused();
@@ -76,7 +78,7 @@ test("parity-x: daemon 停止中のバナーと復旧", async ({ page }) => {
     await daemon.close();
     await expect(banner).toBeVisible({ timeout: 20_000 });
     await expect(page.getByRole("alert").filter({ hasText: "celeris に接続できません" })).toBeVisible();
-    await shell.getByRole("navigation", { name: "主要" }).getByRole("link", { name: "タスク" }).click();
+    await shell.getByRole("navigation", { name: "主要", exact: true }).getByRole("link", { name: "タスク" }).click();
     await expect(page).toHaveURL(`${local.base}/tasks`);
     await expect(shell.getByRole("heading", { level: 1 })).toBeVisible();
     // login も daemon 無しで開ける。

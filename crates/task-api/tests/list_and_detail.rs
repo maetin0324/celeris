@@ -22,6 +22,36 @@ fn ids(page: &Value) -> Vec<String> {
 }
 
 #[tokio::test]
+async fn task_counts_group_all_statuses_without_list_filters() {
+    let env = TestEnv::new();
+    let app = env.router();
+    for status in [
+        Status::Ready,
+        Status::Ready,
+        Status::Running,
+        Status::Blocked,
+    ] {
+        env.seed(&new_task(TaskKind::Execute, status));
+    }
+    let response = send(&app, get("/api/v1/tasks/counts")).await;
+    assert_eq!(response.status, 200);
+    let counts = response.json();
+    assert_eq!(counts["counts_by_status"]["ready"], 2);
+    assert_eq!(counts["counts_by_status"]["running"], 1);
+    assert_eq!(counts["counts_by_status"]["blocked"], 1);
+    assert!(counts["counts_by_status"].get("draft").is_none());
+    let filtered = send(&app, get("/api/v1/tasks?status=ready&status=running")).await;
+    assert_eq!(filtered.status, 200);
+    assert_eq!(filtered.json()["total"], 3);
+    assert_eq!(
+        send(&app, get("/api/v1/tasks/counts?status=ready"))
+            .await
+            .status,
+        400
+    );
+}
+
+#[tokio::test]
 async fn list_pages_through_250_tasks_in_every_order() {
     let _ = REQUIRES_VIEWS;
     let env = TestEnv::new();

@@ -44,6 +44,20 @@ fn created_task(task: &Task) -> Response {
 
 // ---- 3. GET /tasks ----
 
+/// `GET /tasks/counts` は一覧の重い行取得をせず、状態別件数だけを返す。
+pub(super) async fn task_counts(
+    State(state): State<ApiState>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    no_query(&raw)?;
+    let counts = state
+        .blocking(|store| {
+            task_ops::view::task_status_counts(store).map_err(|e| ops_problem(store, e, None))
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &counts))
+}
+
 pub(super) async fn list_tasks(
     State(state): State<ApiState>,
     RawQuery(raw): RawQuery,

@@ -8,7 +8,7 @@ import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
-import { DataList } from "../../components/ui/data-list";
+import { DataList, DataListRow, DataListTerm, DataListValue } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -359,7 +359,7 @@ export function ReleasesScreen() {
     <ScreenFrame title="リリース" route="/releases">
       <FetchFrame query={query}>
         {data && (
-          <div className="min-w-0 space-y-6">
+          <div className="min-w-0 space-y-4">
             {promotion.denied && (
               <p
                 role="alert"
@@ -373,52 +373,54 @@ export function ReleasesScreen() {
               title="稼働中の版"
               description="本番の daemon が今動かしている版と、昇格・巻き戻しの基準になる版です。"
             >
-              <DataList
-                className="mt-2"
-                items={[
+              {/* 3 項目は短いので、狭い幅でも 1 行（折り返し可）の横並びにして一覧を上へ寄せる。 */}
+              <DataList className="flex flex-wrap gap-x-6 divide-y-0" data-testid="releases-running">
+                {[
                   { label: "稼働中", value: `${data.running.release}（${data.running.role}）` },
                   { label: "current", value: data.current ?? "なし" },
                   { label: "previous", value: data.previous ?? "なし" },
-                ]}
-              />
-            </Section>
-            <Section title="昇格の結果" aria-live="polite">
-              <div className="mt-2">
-                {promotion.tracked || promotion.startError ? (
-                  <PromotionStatus tracked={promotion.tracked} startError={promotion.startError} />
-                ) : (
-                  <p className="text-label text-muted-foreground">この画面からの昇格はまだありません。</p>
-                )}
-              </div>
+                ].map((item) => (
+                  <DataListRow key={item.label} className="flex-row gap-2 py-0 md:gap-2">
+                    <DataListTerm className="md:w-auto">{item.label}</DataListTerm>
+                    <DataListValue>{item.value}</DataListValue>
+                  </DataListRow>
+                ))}
+              </DataList>
             </Section>
             <Section
               title={`リリースの一覧（${data.items.length}）`}
               description="昇格・巻き戻しは確認を挟みます。前の版（previous）を昇格すると巻き戻しになります。"
             >
-              <div className="mt-2">
-                {data.items.length === 0 ? (
-                  <p>リリースはありません。</p>
-                ) : (
-                  <>
-                    <MobileReleaseList
+              {/* 昇格の結果は、この画面から昇格したときだけ出す（空の節を置かない）。live region は常に置いておく。 */}
+              <div aria-live="polite" data-testid="promote-result">
+                {promotion.tracked || promotion.startError ? (
+                  <Section title="昇格の結果" level={3} className="mb-4">
+                    <PromotionStatus tracked={promotion.tracked} startError={promotion.startError} />
+                  </Section>
+                ) : null}
+              </div>
+              {data.items.length === 0 ? (
+                <p>リリースはありません。</p>
+              ) : (
+                <>
+                  <MobileReleaseList
+                    items={data.items}
+                    current={data.current}
+                    busy={busy}
+                    denied={promotion.denied !== null}
+                    onPromote={(item) => promotion.start(item)}
+                  />
+                  <div className="hidden sm:block">
+                    <ReleaseTable
                       items={data.items}
                       current={data.current}
                       busy={busy}
                       denied={promotion.denied !== null}
                       onPromote={(item) => promotion.start(item)}
                     />
-                    <div className="hidden sm:block">
-                      <ReleaseTable
-                        items={data.items}
-                        current={data.current}
-                        busy={busy}
-                        denied={promotion.denied !== null}
-                        onPromote={(item) => promotion.start(item)}
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
+                  </div>
+                </>
+              )}
             </Section>
           </div>
         )}

@@ -1,6 +1,8 @@
 ---
+title: web/ の成果物をブラウザ内で表示する（旧 GUI 同等）
 tasks: [01M46X1BPS53HYHP6J7TE7V6D5]
 status: done
+updated: 2026-10-05
 completed: 2026-10-05
 ---
 # web/ の成果物をブラウザ内で表示する（旧 GUI 同等）

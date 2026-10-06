@@ -28,11 +28,24 @@ use crate::query::parse_task_id;
 use crate::state::ApiState;
 
 /// Registered CoS operations: `(method, path pattern, action)`. `{id}` matches one id segment.
-/// The remaining D3 domains (approval・execution・project・knowledge) are added by ops-domains.
+/// One representative mutation per D3 domain (task・comment・decision・approval・execution・project・
+/// knowledge); each runs the handler's shared operation function with the audit context.
 pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/tasks", "task.create"),
     ("POST", "/api/v1/tasks/{id}/comments", "comment.create"),
     ("POST", "/api/v1/decisions/{id}/answer", "decision.answer"),
+    ("POST", "/api/v1/approvals/{id}/decide", "approval.decide"),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/execution/phase-gate",
+        "execution.phase_gate",
+    ),
+    ("PATCH", "/api/v1/projects/{id}", "project.update"),
+    (
+        "POST",
+        "/api/v1/knowledge/inbox/{id}/reject",
+        "knowledge.reject",
+    ),
 ];
 
 /// Longest path recorded on a rejection (`target_id`); longer input is truncated.
@@ -383,6 +396,7 @@ async fn create_operation(
     };
     let roles = state.inner.roles.clone();
     let genres = state.inner.genres.clone();
+    let kb_root = crate::knowledge::root_of(&state);
     let operation = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -447,6 +461,63 @@ async fn create_operation(
                         store,
                         &decision_id,
                         input,
+                        Some(&audit),
+                    )?)
+                }
+                "approval.decide" => {
+                    let raw_id = matched.id.unwrap_or_default();
+                    let id = raw_id.parse().map_err(|_| {
+                        audit.reject(
+                            store,
+                            "approval",
+                            &raw_id,
+                            ApiProblem::new(
+                                StatusCode::NOT_FOUND,
+                                "approval_not_found",
+                                format!("no approval {raw_id}"),
+                            ),
+                        )
+                    })?;
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::approvals::decide_op(store, id, input, Some(&audit))?)
+                }
+                "execution.phase_gate" => {
+                    let raw_id = matched.id.unwrap_or_default();
+                    let id = parse_task_id(&raw_id)
+                        .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::execution::phase_gate_op(
+                        store,
+                        id,
+                        input,
+                        Some(&audit),
+                    )?)
+                }
+                "project.update" => {
+                    let raw_id = matched.id.unwrap_or_default();
+                    let id = crate::handlers::parse_project_id(&raw_id)
+                        .map_err(|problem| audit.reject(store, "project", &raw_id, problem))?;
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::handlers::projects::cos_patch_project(
+                        store, id, input, &audit,
+                    )?)
+                }
+                "knowledge.reject" => {
+                    let raw_id = matched.id.unwrap_or_default();
+                    let root = kb_root
+                        .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
+                    if !body.is_null() && body != serde_json::json!({}) {
+                        return Err(audit.reject(
+                            store,
+                            "knowledge",
+                            &raw_id,
+                            unprocessable("validation", "request.body must be empty"),
+                        ));
+                    }
+                    audited(crate::knowledge::reject_op(
+                        store,
+                        &root,
+                        raw_id,
                         Some(&audit),
                     )?)
                 }

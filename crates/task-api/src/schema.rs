@@ -307,6 +307,21 @@ pub struct ApiV1Schema {
     pub cos_checkpoint_request: crate::cos::CheckpointRequest,
     /// Response for `POST /cos/threads/{t}/checkpoint`.
     pub cos_checkpoint_response: crate::cos::CheckpointResponse,
+    // ---- ADR 2026-10-06-cos-inbox-triage: 受信箱の一次対応（resolve・override） ----
+    /// `GET /cos/inbox` の 1 件（`cos_inbox_items` 行）。
+    pub cos_inbox_item: crate::cos::triage_view::CosInboxItem,
+    /// `GET /cos/inbox` の応答。
+    pub cos_inbox_list: crate::cos::inbox::CosInboxList,
+    /// `POST /cos/inbox/{i}/resolve` の本文（answer / observe / escalate）。
+    pub cos_resolve_request: crate::cos::inbox::ResolveBody,
+    /// `POST /cos/inbox/{i}/resolve` の応答。
+    pub cos_resolve_response: crate::cos::inbox::ResolveResponse,
+    /// escalate の escalation packet（`summary` / `options` / `recommended` / `web_path`）。
+    pub cos_escalation_packet: crate::cos::inbox::EscalationPacket,
+    /// `POST /cos/operations/{o}/override` の本文（revoke / return）。
+    pub cos_override_request: crate::cos::override_op::OverrideBody,
+    /// `POST /cos/operations/{o}/override` の応答。
+    pub cos_override_response: crate::cos::override_op::OverrideResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

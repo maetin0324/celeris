@@ -29,3 +29,9 @@ completed: 2026-10-06
 
 ## 提案
 - 無し
+
+## 再試行 v2（2026-10-06）
+- 前回の不合格は範囲 check のみ（worker_task.rs の `cos_chat: None`）。replan で範囲に許可された。成果 626def22 はそのまま。
+- 他の RunContext リテラルは `..Default::default()` 等で通るため変更不要（`cargo check --workspace --all-targets` exit 0）。
+- `cargo test -p task-worker`: 全 pass（lib 771 passed、cos_chat_run_proto_ 6 件、committed_schema_matches_generated ok）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。

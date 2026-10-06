@@ -183,19 +183,22 @@ export function TaskRoutingPanel({ view }: { view: TaskRoutingView | null }) {
           </p>
         )}
         {run?.features && (
-          <table className="w-full table-fixed text-sm" data-testid="task-routing-features">
-            <caption className={`${dtClass} pb-1 text-left`}>features</caption>
-            <tbody>
-              {featureRows(run.features).map((row) => (
-                <tr key={row.key} className="border-t border-border">
-                  <th scope="row" className="py-1 pr-2 text-left font-normal text-fg-muted">
-                    {row.label}
-                  </th>
-                  <td className="w-12 py-1 text-right text-fg">{row.level}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          // ADR-0055 D1-6: 表は overflow-x-auto の箱に入れる。
+          <div className="overflow-x-auto">
+            <table className="w-full table-fixed text-sm" data-testid="task-routing-features">
+              <caption className={`${dtClass} pb-1 text-left`}>features</caption>
+              <tbody>
+                {featureRows(run.features).map((row) => (
+                  <tr key={row.key} className="border-t border-border">
+                    <th scope="row" className="py-1 pr-2 text-left font-normal text-fg-muted">
+                      {row.label}
+                    </th>
+                    <td className="w-12 py-1 text-right text-fg">{row.level}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {escalations.length > 0 && (
           <div>

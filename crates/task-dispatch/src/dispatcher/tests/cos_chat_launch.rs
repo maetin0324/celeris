@@ -120,6 +120,520 @@ async fn join(d: &mut Dispatcher, thread: &str) {
     task.await.expect("worker did not panic");
 }
 
+fn active_run(store: &SqliteStore, thread: &str) -> task_core::chat::ChatRun {
+    let id = store
+        .chat_thread_get(thread)
+        .expect("thread")
+        .expect("exists")
+        .active_run_id
+        .expect("active run");
+    store.chat_run_get(thread, &id).expect("run")
+}
+
+#[tokio::test]
+async fn cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolated() {
+    // The shell reports its PID over a FIFO, then remains blocked in read. The
+    // test stops it with SIGSTOP before requesting cancellation, so SIGKILL's
+    // process-group fallback is exercised without any sleep-based timing.
+    let command = vec!["sh".into(), "-c".into(),
+        "cat >/dev/null; printf '%s' \"$CELERIS_COS_RUN_CREDENTIAL\" > .token; printf '%s' \"$$\" > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into()];
+    let (dir, store, mut d) = fixture(command, 1);
+    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.config.kill_grace = std::time::Duration::from_millis(20);
+    let t = thread(&store, "control-stop");
+    post(&store, &t, "first");
+    post(&store, &t, "second");
+    let workspace = dir.path().join("cos/threads").join(&t).join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    for name in ["ready.fifo", "release.fifo"] {
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(workspace.join(name))
+                .status()
+                .expect("mkfifo")
+                .success()
+        );
+    }
+    let ready = tokio::task::spawn_blocking({
+        let path = workspace.join("ready.fifo");
+        move || std::fs::read_to_string(path).expect("ready PID")
+    });
+    d.tick_cos_chat_launch();
+    let first = active_run(&store, &t);
+    let pid = tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .expect("ready deadline")
+        .expect("ready task");
+    assert!(
+        std::process::Command::new("kill")
+            .args(["-STOP", pid.trim()])
+            .status()
+            .expect("SIGSTOP")
+            .success()
+    );
+    let stopped = store
+        .chat_run_stop(&t, &first.id, d.now_utc())
+        .expect("stop");
+    assert!(stopped.accepted && stopped.response.queue_paused);
+    d.tick_cos_chat_launch();
+    tokio::time::timeout(std::time::Duration::from_secs(10), join(&mut d, &t))
+        .await
+        .expect("stopped worker deadline");
+    assert_eq!(
+        store.chat_run_get(&t, &first.id).expect("first").state,
+        ChatRunState::Stopped
+    );
+    assert!(
+        store
+            .chat_thread_get(&t)
+            .expect("thread")
+            .expect("exists")
+            .active_run_id
+            .is_none(),
+        "the per-thread live-run slot is released"
+    );
+    let bearer = std::fs::read_to_string(workspace.join(".token")).expect("credential");
+    let secret = bearer
+        .strip_prefix("celeris-cos-run.")
+        .expect("bearer prefix");
+    assert!(matches!(
+        store.cos_run_credential_verify(secret, d.now_utc()),
+        Err(task_core::chat::CosRunCredentialError::Revoked)
+    ));
+    d.tick_cos_chat_launch();
+    assert!(
+        store
+            .chat_thread_get(&t)
+            .expect("thread")
+            .expect("exists")
+            .queue_paused
+    );
+    assert_eq!(runs(&store, &t).len(), 1, "queued input stays paused");
+    let revision = store
+        .chat_thread_get(&t)
+        .expect("thread")
+        .expect("exists")
+        .revision;
+    store
+        .chat_thread_resume_queue(&t, revision, d.now_utc())
+        .expect("resume");
+    // A new run is claimable; a stop addressed to the old run cannot pause it.
+    d.tick_cos_chat_launch();
+    let second = active_run(&store, &t);
+    assert_ne!(first.id, second.id);
+    assert!(
+        !store
+            .chat_run_stop(&t, &first.id, d.now_utc())
+            .expect("late stop")
+            .accepted
+    );
+    assert_eq!(
+        store.chat_run_get(&t, &second.id).expect("second").state,
+        ChatRunState::Running
+    );
+    assert!(
+        !store
+            .chat_thread_get(&t)
+            .expect("thread")
+            .expect("exists")
+            .queue_paused
+    );
+    // Release the second shell through its FIFO (no timed poll).
+    let release = tokio::task::spawn_blocking({
+        let path = workspace.join("release.fifo");
+        move || std::fs::write(path, b"go\n").expect("release")
+    });
+    let ready_second = tokio::task::spawn_blocking({
+        let path = workspace.join("ready.fifo");
+        move || std::fs::read_to_string(path).expect("second ready")
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready_second)
+        .await
+        .expect("second ready deadline")
+        .expect("second ready task");
+    tokio::time::timeout(std::time::Duration::from_secs(10), release)
+        .await
+        .expect("release deadline")
+        .expect("release task");
+    tokio::time::timeout(std::time::Duration::from_secs(10), join(&mut d, &t))
+        .await
+        .expect("second deadline");
+}
+
+#[tokio::test]
+async fn cos_chat_run_control_interrupt_precedes_queue_without_changing_pause() {
+    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
+    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    let t = thread(&store, "control-interrupt");
+    post(&store, &t, "first");
+    post(&store, &t, "queued");
+    let old = store
+        .chat_run_claim_next(&t, "old-interrupt", &serde_json::json!({}), d.now_utc())
+        .expect("claim")
+        .expect("run");
+    store
+        .chat_message_post(
+            &t,
+            &ChatPostMessageRequest {
+                client_message_id: "urgent".into(),
+                text: "urgent".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Interrupt,
+                resume_queue: false,
+            },
+            d.now_utc(),
+        )
+        .expect("interrupt");
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Stopping
+    );
+    d.set_orphan_takeover(crate::orphan::OrphanTakeover {
+        instance_id: "this-daemon".into(),
+        freshness: std::time::Duration::from_secs(60),
+        pid_alive: Arc::new(|_| true),
+    });
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Interrupted
+    );
+    let urgent = active_run(&store, &t);
+    let input = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items
+        .into_iter()
+        .find(|m| m.id == urgent.input_message_id)
+        .expect("urgent input");
+    assert_eq!(input.text, "urgent");
+    join(&mut d, &t).await;
+    d.tick_cos_chat_launch();
+    let queued = active_run(&store, &t);
+    let input = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items
+        .into_iter()
+        .find(|m| m.id == queued.input_message_id)
+        .expect("queued input");
+    assert_eq!(input.text, "queued");
+    join(&mut d, &t).await;
+    assert!(
+        !store
+            .chat_thread_get(&t)
+            .expect("thread")
+            .expect("exists")
+            .queue_paused
+    );
+}
+
+#[tokio::test]
+async fn cos_chat_run_control_live_interrupt_waits_for_old_worker_exit() {
+    let command = vec![
+        "sh".into(),
+        "-c".into(),
+        "cat >/dev/null; printf ready > ready.fifo; read x < release.fifo; echo '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'".into(),
+    ];
+    let (dir, store, mut d) = fixture(command, 1);
+    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    d.config.kill_grace = std::time::Duration::from_millis(20);
+    let t = thread(&store, "control-live-interrupt");
+    post(&store, &t, "first");
+    post(&store, &t, "queued");
+    let workspace = dir.path().join("cos/threads").join(&t).join("workspace");
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    for name in ["ready.fifo", "release.fifo"] {
+        assert!(
+            std::process::Command::new("mkfifo")
+                .arg(workspace.join(name))
+                .status()
+                .expect("mkfifo")
+                .success()
+        );
+    }
+    let ready = tokio::task::spawn_blocking({
+        let path = workspace.join("ready.fifo");
+        move || std::fs::read_to_string(path).expect("ready")
+    });
+    d.tick_cos_chat_launch();
+    let old = active_run(&store, &t);
+    tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+        .await
+        .expect("ready deadline")
+        .expect("ready task");
+    store
+        .chat_message_post(
+            &t,
+            &ChatPostMessageRequest {
+                client_message_id: "urgent-live".into(),
+                text: "urgent-live".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Interrupt,
+                resume_queue: false,
+            },
+            d.now_utc(),
+        )
+        .expect("interrupt");
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        runs(&store, &t).len(),
+        1,
+        "new run must await the old worker"
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(10), join(&mut d, &t))
+        .await
+        .expect("old worker deadline");
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Interrupted
+    );
+    d.adapters
+        .insert("p1".into(), Arc::new(FakeAdapter::default()));
+    d.tick_cos_chat_launch();
+    let urgent = active_run(&store, &t);
+    let messages = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items;
+    assert_eq!(
+        messages
+            .iter()
+            .find(|m| m.id == urgent.input_message_id)
+            .expect("urgent input")
+            .text,
+        "urgent-live"
+    );
+    join(&mut d, &t).await;
+    d.tick_cos_chat_launch();
+    let queued = active_run(&store, &t);
+    let messages = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items;
+    assert_eq!(
+        messages
+            .iter()
+            .find(|m| m.id == queued.input_message_id)
+            .expect("queued input")
+            .text,
+        "queued"
+    );
+    join(&mut d, &t).await;
+}
+
+#[tokio::test]
+async fn cos_chat_run_control_restart_waits_for_orphan_then_continues_input() {
+    let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
+    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    let t = thread(&store, "control-orphan");
+    post(&store, &t, "original");
+    let old = store
+        .chat_run_claim_next(&t, "orphan-run", &serde_json::json!({}), d.now_utc())
+        .expect("claim")
+        .expect("run");
+    let conn = rusqlite::Connection::open(dir.path().join("celeris.db")).expect("db");
+    conn.execute("INSERT INTO cos_operations(id,thread_id,run_id,idempotency_key,request_hash,\
+        target_kind,target_id,action,payload_json,reason,policy_version,state,result_json,created_at,updated_at)\
+        VALUES('applied-op',?1,?2,'applied-key','hash','task','target','update','{}','why','1','applied','{}',?3,?3)",
+        rusqlite::params![t, old.id, d.now_utc().to_string()]).expect("applied operation");
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Running
+    );
+    assert!(
+        d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .running
+            .is_empty()
+    );
+    d.set_orphan_takeover(crate::orphan::OrphanTakeover {
+        instance_id: "this-daemon".into(),
+        freshness: std::time::Duration::from_secs(60),
+        pid_alive: Arc::new(|_| true),
+    });
+    let other = crate::dispatcher::tests::orphan_takeover::instance(
+        "other-daemon",
+        InstanceRole::Active,
+        12345,
+    );
+    store.instance_register(&other).expect("other daemon");
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Running,
+        "a live former owner prevents takeover"
+    );
+    store
+        .instance_delete(&other.instance_id)
+        .expect("owner disappeared");
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Interrupted
+    );
+    let continuation = active_run(&store, &t);
+    assert_ne!(continuation.id, old.id);
+    let input = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items
+        .into_iter()
+        .find(|m| m.id == continuation.input_message_id)
+        .expect("continuation input");
+    assert_eq!(input.text, "original");
+    let messages = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items;
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.role == task_core::chat::ChatMessageRole::System
+                && m.text.contains("applied-op")
+                && m.text.contains("applied-key"))
+    );
+    join(&mut d, &t).await;
+}
+
+#[tokio::test]
+async fn cos_chat_run_control_pending_side_effect_waits_for_human() {
+    let (dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
+    d.test_now = Some(Arc::new(StdMutex::new(OffsetDateTime::now_utc())));
+    let t = thread(&store, "control-pending");
+    post(&store, &t, "original");
+    let old = store
+        .chat_run_claim_next(&t, "pending-run", &serde_json::json!({}), d.now_utc())
+        .expect("claim")
+        .expect("run");
+    store
+        .chat_message_post(
+            &t,
+            &ChatPostMessageRequest {
+                client_message_id: "urgent-after-pending".into(),
+                text: "urgent".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Interrupt,
+                resume_queue: false,
+            },
+            d.now_utc(),
+        )
+        .expect("interrupt while operation pending");
+    let conn = rusqlite::Connection::open(dir.path().join("celeris.db")).expect("db");
+    conn.execute("INSERT INTO cos_operations(id,thread_id,run_id,idempotency_key,request_hash,\
+        target_kind,target_id,action,payload_json,reason,policy_version,state,created_at,updated_at)\
+        VALUES('pending-op',?1,?2,'key','hash','task','target','update','{}','why','1','pending',?3,?3)",
+        rusqlite::params![t, old.id, d.now_utc().to_string()]).expect("pending operation");
+    d.set_orphan_takeover(crate::orphan::OrphanTakeover {
+        instance_id: "this-daemon".into(),
+        freshness: std::time::Duration::from_secs(60),
+        pid_alive: Arc::new(|_| true),
+    });
+    d.tick_cos_chat_launch();
+    assert_eq!(
+        store.chat_run_get(&t, &old.id).expect("old").state,
+        ChatRunState::Interrupted
+    );
+    assert!(
+        store
+            .chat_thread_get(&t)
+            .expect("thread")
+            .expect("exists")
+            .queue_paused
+    );
+    assert!(
+        d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .running
+            .is_empty()
+    );
+    let messages = store
+        .chat_message_list(
+            &t,
+            &ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items;
+    assert!(messages.iter().any(|m| {
+        m.role == task_core::chat::ChatMessageRole::System
+            && m.cards.iter().any(|c| {
+                c.kind == task_core::chat::ChatCardKind::Operation
+                    && c.operation_id.as_deref() == Some("pending-op")
+                    && c.href == "/cos/operations/pending-op"
+            })
+    }));
+    conn.execute(
+        "UPDATE cos_operations SET state='applied' WHERE id='pending-op'",
+        [],
+    )
+    .expect("human established outcome");
+    d.tick_cos_chat_launch();
+    assert!(
+        d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .running
+            .is_empty(),
+        "an explicit queue resume is still required"
+    );
+    let revision = store
+        .chat_thread_get(&t)
+        .expect("thread")
+        .expect("exists")
+        .revision;
+    store
+        .chat_thread_resume_queue(&t, revision, d.now_utc())
+        .expect("resume after review");
+    d.tick_cos_chat_launch();
+    assert_eq!(active_run(&store, &t).state, ChatRunState::Running);
+    join(&mut d, &t).await;
+}
+
 fn runs(store: &SqliteStore, thread: &str) -> Vec<task_core::chat::ChatRun> {
     let messages = store
         .chat_message_list(

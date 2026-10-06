@@ -18,6 +18,42 @@ fn store() -> SqliteStore {
     SqliteStore::open_in_memory().expect("store")
 }
 
+#[test]
+fn cos_chat_run_control_system_review_card_is_idempotent() {
+    let s = store();
+    let t = create(&s, "review-card", "Review", 0);
+    let card = ChatCard {
+        kind: ChatCardKind::Operation,
+        id: "run-1".into(),
+        title: "Check operation".into(),
+        state: "pending".into(),
+        href: "/chat/threads/review-card/runs/run-1".into(),
+        actor: ChatActor::System,
+        reason: Some("outcome unknown".into()),
+        operation_id: None,
+    };
+    let first = s
+        .chat_system_message_add_once(
+            &t.id,
+            "cos-review:run-1",
+            "Review",
+            std::slice::from_ref(&card),
+            at(1),
+        )
+        .expect("first review card");
+    let second = s
+        .chat_system_message_add_once(&t.id, "cos-review:run-1", "Review", &[card], at(2))
+        .expect("same review card");
+    assert_eq!(first.id, second.id);
+    assert_eq!(
+        status(
+            s.chat_system_message_add_once(&t.id, "cos-review:run-1", "different", &[], at(3))
+                .expect_err("key cannot be reused")
+        ),
+        409
+    );
+}
+
 fn create(s: &SqliteStore, key: &str, title: &str, now: i64) -> ChatThread {
     s.chat_thread_create(
         "admin",

@@ -1,4 +1,4 @@
-//! ADR-0056 D2: `console_instruct` / `console_reply`（人の発言と同じ経路で CoS に渡す）。
+//! ADR-0056 D2 / CoS chat D6: MCP の旧入力を legacy chat thread に渡す。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -52,11 +52,10 @@ async fn instruct_impl(
     let author = format!("mcp:{}", client.id);
     let started = state
         .blocking(move |store| {
-            task_ops::conversation::start_as(
+            task_ops::conversation::start_legacy_cos(
                 store,
-                COS_ID,
                 project_id,
-                &author,
+                Some(&author),
                 &args.text,
                 &roles,
                 &genres,
@@ -83,7 +82,7 @@ fn instruct_call<'a>(
 pub fn instruct_def() -> ToolDef {
     ToolDef {
         name: "console_instruct",
-        description: "人の発言と同じ経路で CoS に渡す（発言の author は mcp:<client_id>）。案件化・タスク化は CoS が actions で作る。",
+        description: "CoS の互換 legacy thread に発言を積む（author は mcp:<client_id>）。",
         scope: task_core::McpScope::ConsoleInstruct,
         input_schema: schema::<InstructArgs>,
         call: instruct_call,
@@ -156,6 +155,23 @@ async fn reply_impl(
                         "task {task_id} was not found"
                     )));
                 };
+                if task.status == task_core::Status::Draft
+                    && let Some((state, reply)) = store
+                        .chat_legacy_reply(task_id)
+                        .map_err(|e| ToolError::internal(e.to_string()))?
+                {
+                    match state.as_str() {
+                        "completed" => {
+                            return Ok(ReplyOutput::Done {
+                                reply: reply.unwrap_or_default(),
+                                actions: Vec::new(),
+                            });
+                        }
+                        "failed" => return Ok(ReplyOutput::Failed { reply }),
+                        "stopped" | "interrupted" => return Ok(ReplyOutput::Cancelled),
+                        _ => {}
+                    }
+                }
                 if task.status.is_terminal() {
                     return terminal_reply(store, &task);
                 }
@@ -234,7 +250,7 @@ fn reply_call<'a>(
 pub fn reply_def() -> ToolDef {
     ToolDef {
         name: "console_reply",
-        description: "console_instruct の対話 run の返事と、起きた actions の結果を返す（wait_secs 上限 60）。",
+        description: "console_instruct の CoS chat run の返事を返す（wait_secs 上限 60）。",
         scope: task_core::McpScope::ConsoleInstruct,
         input_schema: schema::<ReplyArgs>,
         call: reply_call,

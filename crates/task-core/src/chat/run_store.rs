@@ -291,6 +291,21 @@ impl SqliteStore {
         if thread.active_run_id.is_some() {
             return Ok(None);
         }
+        // An interrupted run with an unresolved external effect needs a
+        // human's review. Interrupt priority must not bypass that pause.
+        // The review card remains historical after an explicit resume; a
+        // still-pending operation blocks even if the queue was unpaused.
+        let review_blocked: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM cos_operations WHERE thread_id=?1 AND state='pending') \
+             OR EXISTS(SELECT 1 FROM chat_runs WHERE thread_id=?1 \
+             AND state='interrupted' AND reason='operation outcome unknown; human review required' \
+             AND (SELECT queue_paused FROM chat_threads WHERE id=?1)=1)",
+            params![thread_id],
+            |row| row.get(0),
+        )?;
+        if review_blocked {
+            return Ok(None);
+        }
         let mut candidates = queue_order(&tx, thread_id)?.into_iter();
         let Some(next) = candidates.next() else {
             return Ok(None);
@@ -503,6 +518,7 @@ impl SqliteStore {
             "UPDATE chat_runs SET state=?2,reason=?3,finished_at=?4 WHERE run_id=?1",
             params![run_id, enum_str(&state)?, reason, at],
         )?;
+        super::credential::revoke_conn(&tx, run_id, &at)?;
         let msg_state = enum_str(&message_state_for(state))?;
         tx.execute(
             "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",
@@ -535,8 +551,8 @@ impl SqliteStore {
     }
 
     /// D2 `POST /chat/threads/{t}/stop`: only the named run. A running run becomes stopping and
-    /// the queue is paused (accepted). A run that is already stopping is accepted again without
-    /// change. A finished run (including an old run_id arriving late) changes nothing and does
+    /// the queue is paused (accepted). A run that is already stopping is accepted again and
+    /// pauses the queue if an interrupt had left it unpaused. A finished run (including an old run_id arriving late) changes nothing and does
     /// not pause the queue or touch the current run (`accepted=false`, API 200).
     pub fn chat_run_stop(
         &self,
@@ -552,7 +568,13 @@ impl SqliteStore {
             .ok_or_else(|| ChatError::not_found("run", run_id))?;
         let accepted = match run.state {
             s if chat_run_state_is_terminal(s) => false,
-            ChatRunState::Stopping => true,
+            ChatRunState::Stopping => {
+                if !thread.queue_paused {
+                    super::store::set_paused(&tx, thread_id, true, &at)?;
+                    emit_queue(&tx, thread_id, &at)?;
+                }
+                true
+            }
             ChatRunState::Running => {
                 request_stop(&tx, thread_id, run_id, "stopped by human", &at)?;
                 if !thread.queue_paused {

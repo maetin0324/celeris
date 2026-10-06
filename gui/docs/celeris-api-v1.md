@@ -3,6 +3,10 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-06（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）— **追加のみ。v1 のまま**。
+  エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・
+  `POST /cos/operations/{o}/override`（§3.129）。`NotificationKind` に `cos_escalation` /
+  `cos_fallback` が増えた。DB のマイグレーションは 0053 以降（`cos_inbox_items` ほか。§7）。
 - 改訂: 2026-10-04（ADR 2026-10-04-release-notes）— **追加のみ。v1 のまま**。エンドポイント 175〜176:
   `GET /releases/{sha12}/promotion-preview`・`GET /deliveries`（§3.67a / §3.67b）。`GET /releases` の
   `items[]` に `notes`（そのリリースの説明。`notes.json`）と `promotion`（`current` から昇格したら入るものの
@@ -23,7 +27,7 @@
   のデータモデルのみ。届け方は Phase 79）が増えた。`GET /console` の `human` ブロックに `author` が
   増えた（§3.98）。
 - 改訂: 2026-09-21 Phase 67（ADR-0054 D1、ノードごとの継続セッションと resume）— **追加のみ。v1 のまま**。
-  エンドポイント 98: `POST /console/new-conversation`（§3.109。CoS の継続セッションを捨てる。**管理系**、
+  エンドポイント 98: `POST /console/new-conversation`（§3.109。互換 scope の既定 legacy thread を切り替える。**管理系**、
   204、本文なし）。DB のスキーマ版数は **23**（migration 0023: `node_sessions`。ノードごとの継続セッション
   の目印。本文・トークンの値は書かない）。CoS の対話・部門長のレビュー run 自体の挙動（`--resume` 等、
   前置きの差分化）は `GET /console` / `POST /console/instruct`（§3.98 / §3.107）の応答の形を変えない
@@ -275,7 +279,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（195 = 表 171 + browser 制御 6 + chat 18）
+## 2. エンドポイント一覧（201 = 表 171 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -381,7 +385,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 95 | POST | `/knowledge/inbox/{id}/reject` | 候補を捨てる（**管理系**） | 200 `KnowledgeRejectResult` | ファイル + コミット |
 | 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
 | 97 | GET | `/llm/sources` | LLM source ごとの到達性・残量・cooldown・直近 1 時間の要求数（ADR-0053 D4。`[llm_proxy]` が無効なら 409） | `LlmSourcesView` | celeris の `LlmSourcesReader` |
-| 98 | POST | `/console/new-conversation` | CoS の継続セッションを捨てる（ADR-0054 D1）（**管理系**） | 204 | store `node_sessions` |
+| 98 | POST | `/console/new-conversation` | 互換 scope の既定 legacy thread を新規作成（CoS chat D6、**管理系**） | 204 | store `chat_threads` / `feed_cursor` |
 | 99 | GET | `/mcp/clients` | MCP クライアントの一覧（トークンの値は出ない。ADR-0056 D4） | `McpClientsView` | store `mcp_clients` |
 | 100 | GET | `/mcp/calls` | MCP の呼び出しログ（`?client=`） | `McpCallsView` | store `mcp_calls` |
 | 101 | GET | `/skills` | skill の一覧（name / description / updated / mounted_by。ADR-0056 D3 続き、Phase 82） | `SkillList` | KB `skills/` + org |
@@ -473,6 +477,12 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 193 | GET | `/chat/attachments/{a}/content` | 添付のバイト列（`attachment` として返す） | バイト列 | `crate::chat::attachments` |
 | 194 | GET | `/chat/attachments/{a}/preview` | 安全に再エンコードした raster の preview | バイト列 | `crate::chat::attachments` |
 | 195 | POST | `/chat/attachments/{a}/references` | 添付を task / 受信箱の知識へ参照させる（**管理系**） | 200 `ChatReferenceResponse` | `crate::chat::attachments` |
+| 196 | POST | `/cos/operations` | credential による CoS 監査付き変更 | 200 `OperationView` | `crate::cos::operations` |
+| 197 | GET | `/cos/operations/{o}` | CoS operation の詳細 | 200 `OperationView` | `crate::cos::operations` |
+| 198 | POST | `/cos/threads/{t}/checkpoint` | run-scoped thread summary checkpoint | 200 `CheckpointResponse` | `crate::cos` |
+| 199 | GET | `/cos/inbox` | 受信箱の一次対応 item（`?state` / `?limit`） | 200 `CosInboxList` | `crate::cos::inbox` |
+| 200 | POST | `/cos/inbox/{i}/resolve` | CoS の一次対応（answer / observe / escalate） | 200 `ResolveResponse` | `crate::cos::inbox` |
+| 201 | POST | `/cos/operations/{o}/override` | 人の取消・差し戻し（revoke / return。管理系） | 200 `OverrideResponse` | `crate::cos::override_op` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -2782,21 +2792,13 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
   選べる候補が無ければ `null`（`no_source_available` になる状態）。古いスナップショットには無いので
   省略時は空配列として扱う。
 
-### 3.109 `POST /console/new-conversation` → 204（管理系。ADR-0054 D1）
+### 3.109 `POST /console/new-conversation` → 204（管理系。CoS chat D6）
 
-CoS の**継続セッション**（`node_sessions`。§3.107 の対話 run が `--resume` 等で続けているもの）を捨てる。
-GUI の「新しい会話」ボタンの入口。**薄い**: ディスパッチャには触らず、ストアの `node_sessions.retired_at`
-を立てるだけ（DESIGN 原則 1）。
+旧 Console の「新しい会話」ボタンの入口。互換 scope の既定 legacy thread を新しく作り、次の旧入力をそこへ積む。旧 thread の履歴と新 UI の別 thread は残り、継続 session を retire しない。
 
-- 要求本文は無い（`{}` を送っても無視される）。
-- 現役セッションが有っても無くても **204**（結果として「捨てた」状態にするだけなので、既に無かったことを
-  エラーにしない）。
-- 効果: 次に人が CoS（`GET /console` の `scope=all` / `project:<id>`。§3.98）に話しかけたときの対話 run は
-  **新規セッション**（前置きは全量。§3.107 の「進行中の案件」等をもう一度渡す）から始まる。捨てなければ、
-  逼迫（`[sessions] rollover_tokens`）かアカウント変更が起きるまで、前置きは差分だけ（`session_diff`）が
-  続く。
-- 部門長（engineering/research/operations の根ノード）のレビュー・切り分け run（ADR-0051）の継続セッション
-  （`kind = lead`）はこの API の対象外（部署ごとに 1 本、GUI からの操作は今回のスコープに無い）。
+- 要求本文は無い（`{}` を送っても無視される）。省略時の scope は `all`。任意の `?scope=project:<id>` で案件の既定だけを切り替えられる。`node:cos` は `all` と同じ扱い。
+- 成功時は **204**。新しく作られた thread ID は旧応答に追加しない。
+- CoS 以外の node scope は 400。存在しない project scope は 422。管理認証が無ければ 401。
 
 ### 3.110〜3.111 MCP サーバーの観測（ADR-0056 D4。読み取り）
 
@@ -3241,7 +3243,33 @@ path は event の `log_path` から引き、要求からは受け取らない�
 | DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
 | POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse` |
 
+### 3.128 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
+
+以下の route は `Authorization: Bearer celeris-cos-run.<credential>` を要求する。credential から actor=`cos`・thread_id・run_id を確定し、本文や header の actor/thread/run 主張は受け付けない。credential が無効・期限切れ・失効済みなら 401。CoS credential で既存の変更 route を直接呼ぶと 422 になり、`/cos/operations` の監査経路を必ず通す。
+
+| メソッド・endpoint | 入力 | 成功 |
+|---|---|---|
+| POST `/cos/operations` | `{"idempotency_key","expected_revision","reason","policy_version","request":{"method","path","body"}}` | 200 `OperationView`（再送含む） |
+| GET `/cos/operations/{o}` | なし | 200 `OperationView` |
+| POST `/cos/threads/{t}/checkpoint` | `{"run_id","summary","through_seq","expected_summary_through_seq"}` | 200 checkpoint 応答 |
+
+操作要求は登録済みの task/decision/approval/execution/project/knowledge/comment の変更 path のみ実行する。外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
+
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
+
+### 3.129 CoS 受信箱の一次対応と代答の取消（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）
+
+`GET /cos/inbox` と `POST /cos/inbox/{i}/resolve` は CoS run credential（§3.128 の `celeris-cos-run.<credential>`）のみ。`POST /cos/operations/{o}/override` は**人だけが**（管理系。CoS credential は 403）。
+
+| メソッド・endpoint | 認証 | 入力 | 成功 |
+|---|---|---|---|
+| GET `/cos/inbox` | CoS credential | `?state=<pending\|running\|answered\|observed\|escalated\|fallback\|resolved>`・`?limit=1..=500`（既定 100） | 200 `CosInboxList {items[]:CosInboxItem}`（新しい順） |
+| POST `/cos/inbox/{i}/resolve` | CoS credential | `{"idempotency_key","expected_revision","outcome":"answer\|observe\|escalate","reason","policy_version","answer"?,"escalation"?}` | 200 `ResolveResponse {item?,operation,notification_id?}` |
+| POST `/cos/operations/{o}/override` | 人（管理系） | `{"action":"revoke\|return","reason"}` | 200 `OverrideResponse` |
+
+`CosInboxItem` は `cos_inbox_items` の 1 行（`id`・`source_kind`・`source_key`・`source_revision`・`state` など。§6）。`resolve` は判断そのものは worker が行うが、構造・credential・現在の revision（`expected_revision` と不一致は 409 `cos_inbox_revision_conflict`）・`human_required`（403 `cos_human_required`）は API が決定的に検査する。`answer` は `InboxAnswerBody` を既存の受信箱 answer と同じ domain request へ変えて `dispatch` する（`/cos/operations` と同じ操作層）。`observe` は判断を要さない待ち（notice）にだけ許され、判断を要する待ちへは 422 `cos_observe_needs_judgment`。`escalate` は escalation packet（`EscalationPacket`）を検証し永続 outbox を claim する（`web_path` は対象から導出、`recommended` は `options[].key` の 1 つか null）。`idempotency_key` は thread 内一意で、同じ key の異なる request は 409。
+
+`override` は適用済み（`applied`）の CoS 操作を 1 回だけ修正する。`revoke` / `return` で、元の payload・event は残し現在状態を投影として書き換える。不可逆な操作（decision/approval 以外）は `state=needs_remediation` にし `remediation_task_id`（人が確認する修正 task）を返す。decision/approval は `superseded` にし、`new_wait_id` / `new_revision` で代わった人の待ちを返す（CoS は代答できない）。run が既に消費していた操作は対象 task の subtree を pause し `paused_task_ids` を返す。
 
 ---
 

@@ -15,6 +15,7 @@ tracing = "0.1"
 time = "0.3"
 ulid = "1"
 nix = { version = "0.30", features = ["fs"] }
+rusqlite = "0.32"
 
 [dev-dependencies]
 tempfile = "3"

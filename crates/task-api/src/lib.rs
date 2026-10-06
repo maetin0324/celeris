@@ -32,6 +32,8 @@ pub mod chat;
 /// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
 pub mod console;
 pub mod conversation;
+/// ADR 2026-10-05 D2/D3: CoS run credential の認証と監査付き CoS API。
+pub mod cos;
 pub mod cron_jobs;
 pub mod decisions;
 /// ADR-0044 D7（Phase 57）: 案件の文書（git が正本）。ツリー・ページ・編集・昇格。

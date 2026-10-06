@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
+use base64::Engine;
 use serde::Deserialize;
 use task_core::{Check, RateLimitObservation, Task, TaskKind, Usage};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -444,6 +445,19 @@ async fn run_claude_code(
         work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir),
         build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
     );
+    // Claude's print mode accepts a stream-json user message when the run has native images.
+    // Keep ordinary runs on their original text stdin path byte for byte.
+    let native_images = req.context.cos_chat.as_ref().is_some_and(|chat| {
+        chat.attachments.iter().any(|a| {
+            crate::cos_chat::image_delivery(a.delivery, chat.harness_capabilities.as_ref())
+                == crate::cos_chat::ImageDelivery::Native
+        })
+    });
+    let stdin_input = if native_images {
+        claude_image_input(req, &prompt).await?
+    } else {
+        prompt.clone()
+    };
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
@@ -473,6 +487,9 @@ async fn run_claude_code(
         // 終えると run が終わること・長い command も foreground で走らせることを system prompt に足す。
         .arg("--append-system-prompt")
         .arg(crate::preamble::HEADLESS_RUN_NOTE);
+    if native_images {
+        command.arg("--input-format").arg("stream-json");
+    }
     // ADR-0054 D1（Phase 67）: `context.session`（この run が継続セッションの一部）が無ければ、
     // Phase 66 までと同じ `--no-session-persistence`（session を残さない）。ある場合は、そのアダプタが
     // `claude-code` のときだけ、初回は `--session-id <id>`（これから使う id を固定）、2 回目以降は
@@ -517,10 +534,11 @@ async fn run_claude_code(
     if let Some(model) = &config.model {
         command.arg("--model").arg(model);
     }
-    // ADR-0054 D2（Phase 68）: CoS の対話 run だけ、読み取りだけの `celerisctl` を許す
-    // （`Bash(celerisctl <サブコマンド>:*)` の形。claude-code の `--allowedTools` はこの許可リストに
-    // 無い道具を拒否する＝それ以外は禁止のまま。ADR-0033 D4 の「対話 run は道具を使わない」の例外）。
-    if req.context.conversation_addressee == Some(crate::protocol::ConversationAddressee::Secretary)
+    // ADR-0054 D2 の旧対話 run は読み取り専用の `celerisctl` 6 件に制限する。
+    // D2/D3 の CoS chat run だけはこの allowlist を付けず、通常の shell・ファイル・MCP 道具を使える。
+    if req.context.cos_chat.is_none()
+        && req.context.conversation_addressee
+            == Some(crate::protocol::ConversationAddressee::Secretary)
     {
         let allowed = crate::protocol::CONVERSATION_READONLY_CELERISCTL
             .iter()
@@ -564,7 +582,7 @@ async fn run_claude_code(
     let _process_group = crate::process_group::ProcessGroup::register(run_id, child.id());
     // F5-fix10: プロンプトを stdin に流して閉じる（別タスク。下の stdout 読み取りと並行に進む）。
     let stdin_writer =
-        crate::subprocess::feed_stdin(&mut child, prompt, ClaudeCodeAdapter::ID, run_id)?;
+        crate::subprocess::feed_stdin(&mut child, stdin_input, ClaudeCodeAdapter::ID, run_id)?;
     // ADR-0054 D1（Phase 67）: 起動できたら、このアダプタ宛ての継続セッションの id をそのまま報告する
     // （claude-code は id を`自分で`固定するので、成功した spawn の直後に確定する）。
     if let Some(session) = req
@@ -661,12 +679,13 @@ async fn run_claude_code(
                 let text = String::from_utf8_lossy(&bytes);
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
-                    handle_line(
+                    handle_line_for_run(
                         trimmed,
                         sink,
                         &mut last_result,
                         &mut background,
                         &mut exploration,
+                        req.context.cos_chat.is_some(),
                     );
                 }
             }
@@ -861,13 +880,71 @@ pub(crate) fn now_unix_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// Encode only attachments that the confirmed capability table routes to native input.
+/// Other image routes remain in the prompt as paths with their explicit reason.
+async fn claude_image_input(req: &RunRequest, prompt: &str) -> Result<String, AdapterError> {
+    let chat = req.context.cos_chat.as_ref().expect("CoS image input");
+    let mut content = vec![serde_json::json!({"type": "text", "text": prompt})];
+    for attachment in &chat.attachments {
+        if crate::cos_chat::image_delivery(attachment.delivery, chat.harness_capabilities.as_ref())
+            != crate::cos_chat::ImageDelivery::Native
+        {
+            continue;
+        }
+        if !crate::protocol::COS_CHAT_IMAGE_MEDIA_TYPES.contains(&attachment.media_type.as_str()) {
+            return Err(AdapterError::Other(format!(
+                "claude-code: unsupported native image media type {}",
+                attachment.media_type
+            )));
+        }
+        // Exceeds the default 25 MiB upload limit while bounding the encoded stdin buffer.
+        const MAX_NATIVE_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+        let metadata = tokio::fs::metadata(&attachment.path).await.map_err(|e| {
+            AdapterError::Other(format!("claude-code: image {}: {e}", attachment.id))
+        })?;
+        if metadata.len() > MAX_NATIVE_IMAGE_BYTES || metadata.len() != attachment.size_bytes {
+            return Err(AdapterError::Other(format!(
+                "claude-code: image {} size mismatch or exceeds native input limit",
+                attachment.id
+            )));
+        }
+        let bytes = tokio::fs::read(&attachment.path).await.map_err(|e| {
+            AdapterError::Other(format!("claude-code: image {}: {e}", attachment.id))
+        })?;
+        content.push(serde_json::json!({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": attachment.media_type,
+                "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+        }));
+    }
+    Ok(format!(
+        "{}\n",
+        serde_json::json!({"type": "user", "message": {"role": "user", "content": content}})
+    ))
+}
+
 /// stream-json の 1 行を解釈する。既知でない `type` や JSON として不正な行は無視する（ADR-0006 D5）。
+#[cfg(test)]
 fn handle_line(
     line: &str,
     sink: &dyn EventSink,
     last_result: &mut Option<ResultMeta>,
     background: &mut BackgroundTasks,
     exploration: &mut ExplorationTracker,
+) {
+    handle_line_for_run(line, sink, last_result, background, exploration, false);
+}
+
+fn handle_line_for_run(
+    line: &str,
+    sink: &dyn EventSink,
+    last_result: &mut Option<ResultMeta>,
+    background: &mut BackgroundTasks,
+    exploration: &mut ExplorationTracker,
+    cos_chat: bool,
 ) {
     let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
         return;
@@ -907,8 +984,8 @@ fn handle_line(
                             flush(&mut texts, sink);
                             // 思考は**要約だけ**（本文は流さない）。要約が取れなければ何も出さない。
                             let summary = item
-                                .get("thinking")
-                                .or_else(|| item.get("text"))
+                                .get(if cos_chat { "summary" } else { "thinking" })
+                                .or_else(|| if cos_chat { None } else { item.get("text") })
                                 .and_then(|t| t.as_str())
                                 .unwrap_or("");
                             if !summary.trim().is_empty() {

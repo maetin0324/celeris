@@ -1,4 +1,5 @@
 // Generated from docs/api/v1/api-v1.schema.json by web/scripts/gen-types.mjs. Do not edit.
+// CoS run credential routes: POST /cos/operations, GET /cos/operations/{o}, POST /cos/threads/{t}/checkpoint.
 export type AccountCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
@@ -527,6 +528,11 @@ export type ChatCardData = {
 
 export type ChatCardKind = "task" | "decision" | "question" | "approval" | "plan_gate" | "notice" | "operation";
 
+export type ChatCheckpointSaved = {
+  "summary_through_seq": number;
+  "thread_id": string;
+};
+
 export type ChatCreateThreadRequest = {
   "client_thread_id": string;
   "project_id"?: string | null;
@@ -793,6 +799,18 @@ export type CheckpointFileChange = {
 export type CheckpointKnownFailure = {
   "detail"?: string | null;
   "what": string;
+};
+
+export type CheckpointRequest = {
+  "expected_summary_through_seq": number;
+  "run_id": string;
+  "summary": string;
+  "through_seq": number;
+};
+
+export type CheckpointResponse = {
+  "summary_through_seq": number;
+  "thread_id": string;
 };
 
 export type CheckpointSource = "worker" | "yield" | "mechanical" | "merged";
@@ -1184,6 +1202,45 @@ export type CooldownView = {
   "provider": string;
   "reason": string;
   "until": string;
+};
+
+export type CosInboxItem = {
+  "created_at": string;
+  "id": string;
+  "message_id": string;
+  "operation_id"?: string | null;
+  "policy_version": string;
+  "reason"?: string | null;
+  "run_id"?: string | null;
+  "source_event_id"?: number | null;
+  "source_key": string;
+  "source_kind": string;
+  "source_revision": string;
+  "state": string;
+  "thread_id": string;
+  "updated_at": string;
+};
+
+export type CosInboxList = {
+  "items": Array<CosInboxItem>;
+};
+
+export type CosOperation = {
+  "action": string;
+  "event_id"?: number | null;
+  "expected_revision"?: string | null;
+  "id": string;
+  "idempotency_key": string;
+  "payload": unknown;
+  "policy_version": string;
+  "reason": string;
+  "request_hash": string;
+  "result"?: unknown;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
 };
 
 export type CostOfReversal = "low" | "medium" | "high";
@@ -1679,7 +1736,31 @@ export type EffectiveProfile = {
   "tools"?: Array<string>;
 };
 
+export type EscalationOption = {
+  "key": string;
+  "label": string;
+};
+
+export type EscalationPacket = {
+  "options": Array<EscalationOption>;
+  "recommendation_reason": string;
+  "recommended"?: string | null;
+  "summary": string;
+  "web_path": string;
+};
+
 export type Event = {
+  "actor": string;
+  "operation_id": string;
+  "policy_version": string;
+  "reason": string;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
+  "type": "cos_operation";
+} | {
   "attempt": number;
   "before_sha": string;
   "merge_candidate_sha": string;
@@ -3072,7 +3153,7 @@ export type NoticeTarget = {
   "kind": string;
 };
 
-export type NotificationKind = "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+export type NotificationKind = "cos_escalation" | "cos_fallback" | "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
 
 export type NotificationsView = {
   "items": Array<Notice>;
@@ -3112,10 +3193,43 @@ export type NotifyView = {
 
 export type OnChildFailure = "retry_then_ask" | "ignore";
 
+export type OperationBody = {
+  "expected_revision"?: string | null;
+  "idempotency_key": string;
+  "policy_version": string;
+  "reason": string;
+  "request": OperationRequest;
+};
+
 export type OperationIntent = {
   "action": string;
   "args_digest"?: string | null;
   "intent_id": string;
+};
+
+export type OperationRequest = {
+  "body"?: unknown;
+  "method": string;
+  "path": string;
+};
+
+export type OperationView = {
+  "action": string;
+  "actor": string;
+  "event_id"?: string | null;
+  "expected_revision"?: string | null;
+  "id": string;
+  "idempotency_key": string;
+  "payload": unknown;
+  "policy_version": string;
+  "reason": string;
+  "request_hash": string;
+  "result"?: unknown;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
 };
 
 export type OrgCreateBody = {
@@ -3162,6 +3276,23 @@ export type OrgPatchBody = {
 
 export type OrgSkillMountBody = {
   "skill": string;
+};
+
+export type OverrideBody = {
+  "action": OverrideMode;
+  "reason": string;
+};
+
+export type OverrideMode = "revoke" | "return";
+
+export type OverrideResponse = {
+  "action": string;
+  "new_revision"?: string | null;
+  "new_wait_id"?: string | null;
+  "operation_id": string;
+  "paused_task_ids": Array<string>;
+  "remediation_task_id"?: string | null;
+  "state": string;
 };
 
 export type ParentUnit = {
@@ -3999,6 +4130,24 @@ export type ResolutionAction = {
   "detail": string;
   "kind": ConflictKind;
   "path": string;
+};
+
+export type ResolveBody = {
+  "answer"?: InboxAnswerBody | null;
+  "escalation"?: EscalationPacket | null;
+  "expected_revision": string;
+  "idempotency_key": string;
+  "outcome": ResolveOutcome;
+  "policy_version": string;
+  "reason": string;
+};
+
+export type ResolveOutcome = "answer" | "observe" | "escalate";
+
+export type ResolveResponse = {
+  "item"?: CosInboxItem | null;
+  "notification_id"?: string | null;
+  "operation": OperationView;
 };
 
 export type ResolvedLlmSource = {

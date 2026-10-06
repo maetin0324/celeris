@@ -81,6 +81,12 @@ impl WorkerAdapter for FakeAdapter {
         run_subprocess(&self.spec, &req, run_id, &limits, sink).await
     }
 
+    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut next = self.clone();
+        next.spec.env.extend_from_slice(extra);
+        Some(Arc::new(next))
+    }
+
     /// ADR-0043 D3（Phase 56）: コンテナの中で起こす複製（差し込み点は `subprocess::run_subprocess`）。
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         let mut next = self.clone();

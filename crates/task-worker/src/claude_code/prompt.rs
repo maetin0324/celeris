@@ -48,6 +48,11 @@ pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: 
 }
 
 fn build_prompt_inner(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
+    // ADR 2026-10-06 cos-chat-run-dispatch: CoS chat run は `task.kind` に依らず、
+    // `context.cos_chat` の有無だけで専用の前置きを組む（一時の Task は保存されない）。
+    if let Some(chat) = &context.cos_chat {
+        return crate::cos_chat::build_prompt(task, context, chat, run_id, artifacts);
+    }
     // ADR-0072 D14（Phase E3）: task-local な planner run は `task.kind` に依らず（常に `Execute`）、
     // `context.execution_planner` の有無で選ぶ。
     if context.execution_planner.is_some() {

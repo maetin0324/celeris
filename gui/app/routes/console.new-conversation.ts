@@ -14,6 +14,7 @@ export function loader() {
 }
 
 export async function action({ request }: Route.ActionArgs) {
-  const outcome = await sendNewConversation(getCelerisClient(), request.signal);
+  const scope = new URL(request.url).searchParams.get("scope");
+  const outcome = await sendNewConversation(getCelerisClient(), scope, request.signal);
   return data(outcome, { status: outcome.ok ? 200 : outcome.error.status });
 }

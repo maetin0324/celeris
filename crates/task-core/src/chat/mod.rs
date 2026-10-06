@@ -5,13 +5,33 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 pub mod attachments;
+mod credential;
+#[cfg(test)]
+mod credential_tests;
+mod operations;
+#[cfg(test)]
+mod operations_tests;
+mod override_op;
 mod run_store;
-mod store;
+mod session;
+#[cfg(test)]
+mod session_tests;
+pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
+pub mod triage;
+#[cfg(test)]
+mod triage_tests;
+pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
+pub use operations::{AuditContext, CosOperation};
+pub use override_op::{OverrideAction, OverrideResult};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
+};
+pub use session::{
+    COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
+    ChatSession, ChatSessionKey,
 };
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,

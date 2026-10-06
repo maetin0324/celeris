@@ -2509,6 +2509,23 @@
       ],
       "type": "string"
     },
+    "ChatCheckpointSaved": {
+      "properties": {
+        "summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "summary_through_seq"
+      ],
+      "type": "object"
+    },
     "ChatCreateThreadRequest": {
       "additionalProperties": false,
       "properties": {
@@ -3646,6 +3663,51 @@
       },
       "required": [
         "what"
+      ],
+      "type": "object"
+    },
+    "CheckpointRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "run_id",
+        "summary",
+        "through_seq",
+        "expected_summary_through_seq"
+      ],
+      "type": "object"
+    },
+    "CheckpointResponse": {
+      "properties": {
+        "summary_through_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "thread_id",
+        "summary_through_seq"
       ],
       "type": "object"
     },
@@ -5621,6 +5683,160 @@
         "provider",
         "until",
         "reason"
+      ],
+      "type": "object"
+    },
+    "CosInboxItem": {
+      "description": "One `cos_inbox_items` row.",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": "string"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_event_id": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "source_key": {
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "source_kind",
+        "source_key",
+        "source_revision",
+        "thread_id",
+        "message_id",
+        "state",
+        "policy_version",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "CosInboxList": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/CosInboxItem"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "CosOperation": {
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "event_id": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "payload": true,
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "result": true,
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "run_id",
+        "idempotency_key",
+        "request_hash",
+        "target_kind",
+        "target_id",
+        "action",
+        "payload",
+        "reason",
+        "policy_version",
+        "state"
       ],
       "type": "object"
     },
@@ -8070,9 +8286,108 @@
       ],
       "type": "object"
     },
+    "EscalationOption": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ],
+      "type": "object"
+    },
+    "EscalationPacket": {
+      "additionalProperties": false,
+      "description": "D3 escalation packet. `recommended` is one of `options[].key` or null (then the reason says why).",
+      "properties": {
+        "options": {
+          "items": {
+            "$ref": "#/$defs/EscalationOption"
+          },
+          "type": "array"
+        },
+        "recommendation_reason": {
+          "type": "string"
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "web_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "options",
+        "recommendation_reason",
+        "web_path"
+      ],
+      "type": "object"
+    },
     "Event": {
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
+        {
+          "description": "CoS operation attempt, including rejected attempts. The envelope is immutable.",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "target_id": {
+              "type": "string"
+            },
+            "target_kind": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cos_operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "actor",
+            "thread_id",
+            "run_id",
+            "operation_id",
+            "reason",
+            "policy_version",
+            "state",
+            "target_kind",
+            "target_id"
+          ],
+          "type": "object"
+        },
         {
           "description": "ADR-0118 D3: immutable snapshot of one repository's review attempt.",
           "properties": {
@@ -15334,6 +15649,16 @@
       "description": "判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。",
       "oneOf": [
         {
+          "const": "cos_escalation",
+          "description": "CoS explicitly escalated an unresolved source revision.",
+          "type": "string"
+        },
+        {
+          "const": "cos_fallback",
+          "description": "CoS was unavailable; deterministic direct fallback for an unresolved revision.",
+          "type": "string"
+        },
+        {
           "const": "inbox_new",
           "description": "ADR-0133 D6: new human decisions, batched into one webhook message.",
           "type": "string"
@@ -15596,6 +15921,36 @@
         }
       ]
     },
+    "OperationBody": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/OperationRequest"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "reason",
+        "policy_version",
+        "request"
+      ],
+      "type": "object"
+    },
     "OperationIntent": {
       "additionalProperties": false,
       "description": "承認を求める操作 intent（内部 action 名と、非秘密の引数 digest）。",
@@ -15617,6 +15972,96 @@
       "required": [
         "intent_id",
         "action"
+      ],
+      "type": "object"
+    },
+    "OperationRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "default": null
+        },
+        "method": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "method",
+        "path"
+      ],
+      "type": "object"
+    },
+    "OperationView": {
+      "description": "`O` of the ADR D2 table.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "event_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expected_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "payload": true,
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "request_hash": {
+          "type": "string"
+        },
+        "result": true,
+        "run_id": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        },
+        "target_id": {
+          "type": "string"
+        },
+        "target_kind": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "actor",
+        "thread_id",
+        "run_id",
+        "idempotency_key",
+        "request_hash",
+        "target_kind",
+        "target_id",
+        "action",
+        "payload",
+        "reason",
+        "policy_version",
+        "state"
       ],
       "type": "object"
     },
@@ -15854,6 +16299,74 @@
       },
       "required": [
         "skill"
+      ],
+      "type": "object"
+    },
+    "OverrideBody": {
+      "additionalProperties": false,
+      "properties": {
+        "action": {
+          "$ref": "#/$defs/OverrideMode"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "OverrideMode": {
+      "enum": [
+        "revoke",
+        "return"
+      ],
+      "type": "string"
+    },
+    "OverrideResponse": {
+      "description": "Response of `POST /cos/operations/{o}/override`. `new_revision` / `new_wait_id` are set when a\nfresh human wait replaced the answered one; `remediation_task_id` when the effect is irreversible;\n`paused_task_ids` are the subtree paused because a run already consumed the operation.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "new_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "new_wait_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "type": "string"
+        },
+        "paused_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "remediation_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "state",
+        "action",
+        "paused_task_ids"
       ],
       "type": "object"
     },
@@ -20074,6 +20587,92 @@
         "path",
         "kind",
         "detail"
+      ],
+      "type": "object"
+    },
+    "ResolveBody": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/InboxAnswerBody"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "escalation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EscalationPacket"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "expected_revision": {
+          "description": "The `source_revision` of the item the worker judged.",
+          "type": "string"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ResolveOutcome"
+        },
+        "policy_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "idempotency_key",
+        "expected_revision",
+        "outcome",
+        "reason",
+        "policy_version"
+      ],
+      "type": "object"
+    },
+    "ResolveOutcome": {
+      "enum": [
+        "answer",
+        "observe",
+        "escalate"
+      ],
+      "type": "string"
+    },
+    "ResolveResponse": {
+      "properties": {
+        "item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CosInboxItem"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "notification_id": {
+          "description": "The outbox notification of `escalate` (null when the item was already routed).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation": {
+          "$ref": "#/$defs/OperationView"
+        }
+      },
+      "required": [
+        "operation"
       ],
       "type": "object"
     },
@@ -25740,6 +26339,57 @@
     "console_instruct_accepted": {
       "$ref": "#/$defs/ConsoleInstructAccepted"
     },
+    "cos_checkpoint_request": {
+      "$ref": "#/$defs/CheckpointRequest",
+      "description": "Request for `POST /cos/threads/{t}/checkpoint`."
+    },
+    "cos_checkpoint_response": {
+      "$ref": "#/$defs/CheckpointResponse",
+      "description": "Response for `POST /cos/threads/{t}/checkpoint`."
+    },
+    "cos_checkpoint_saved": {
+      "$ref": "#/$defs/ChatCheckpointSaved"
+    },
+    "cos_escalation_packet": {
+      "$ref": "#/$defs/EscalationPacket",
+      "description": "escalate の escalation packet（`summary` / `options` / `recommended` / `web_path`）。"
+    },
+    "cos_inbox_item": {
+      "$ref": "#/$defs/CosInboxItem",
+      "description": "`GET /cos/inbox` の 1 件（`cos_inbox_items` 行）。"
+    },
+    "cos_inbox_list": {
+      "$ref": "#/$defs/CosInboxList",
+      "description": "`GET /cos/inbox` の応答。"
+    },
+    "cos_operation": {
+      "$ref": "#/$defs/CosOperation",
+      "description": "ADR 2026-10-05 D2/D3: `POST /cos/operations`, `GET /cos/operations/{o}`,\nand run-scoped `POST /cos/threads/{t}/checkpoint` wire types."
+    },
+    "cos_operation_request": {
+      "$ref": "#/$defs/OperationBody",
+      "description": "Request for `POST /cos/operations`; credential fixes actor/thread/run."
+    },
+    "cos_operation_response": {
+      "$ref": "#/$defs/OperationView",
+      "description": "Response for `POST /cos/operations` and `GET /cos/operations/{o}`."
+    },
+    "cos_override_request": {
+      "$ref": "#/$defs/OverrideBody",
+      "description": "`POST /cos/operations/{o}/override` の本文（revoke / return）。"
+    },
+    "cos_override_response": {
+      "$ref": "#/$defs/OverrideResponse",
+      "description": "`POST /cos/operations/{o}/override` の応答。"
+    },
+    "cos_resolve_request": {
+      "$ref": "#/$defs/ResolveBody",
+      "description": "`POST /cos/inbox/{i}/resolve` の本文（answer / observe / escalate）。"
+    },
+    "cos_resolve_response": {
+      "$ref": "#/$defs/ResolveResponse",
+      "description": "`POST /cos/inbox/{i}/resolve` の応答。"
+    },
     "cron_job": {
       "$ref": "#/$defs/CronJobView"
     },
@@ -26352,7 +27002,20 @@
     "chat_stop_response",
     "chat_event_list",
     "chat_attachment_response",
-    "chat_reference_response"
+    "chat_reference_response",
+    "cos_operation",
+    "cos_checkpoint_saved",
+    "cos_operation_request",
+    "cos_operation_response",
+    "cos_checkpoint_request",
+    "cos_checkpoint_response",
+    "cos_inbox_item",
+    "cos_inbox_list",
+    "cos_resolve_request",
+    "cos_resolve_response",
+    "cos_escalation_packet",
+    "cos_override_request",
+    "cos_override_response"
   ],
   "title": "ApiV1Schema",
   "type": "object"

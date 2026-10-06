@@ -393,8 +393,8 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE node_sessions DROP COLUMN model; \
              ALTER TABLE node_sessions DROP COLUMN summary_through_seq; \
              DROP TABLE chat_search; DROP TABLE chat_upload_reservations; \
-             DROP TABLE chat_client_requests; DROP TABLE cos_notification_routes; \
-             DROP TABLE cos_operations; DROP TABLE cos_inbox_items; \
+             DROP TABLE chat_client_requests; DROP TABLE cos_legacy_notification_links; DROP TABLE cos_notification_routes; \
+             DROP TABLE cos_run_credentials; DROP TABLE cos_operations; DROP TABLE cos_inbox_items; \
              DROP TABLE chat_attachment_refs; DROP TABLE chat_attachments; \
              DROP TABLE chat_events; DROP TABLE chat_runs; \
              DROP TABLE chat_messages; DROP TABLE chat_threads; \
@@ -422,7 +422,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 50);
+    assert_eq!(crate::SCHEMA_VERSION, 53);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

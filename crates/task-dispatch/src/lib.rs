@@ -26,6 +26,8 @@ pub mod review;
 pub mod scratch_gc;
 /// ADR-0054 D1（Phase 67）: ノードごとの継続セッションの決定的な判断（純粋関数）。
 pub mod sessions;
+#[cfg(test)]
+mod test_support;
 /// ADR-0067 D3: 未申告の成果物（`artifacts/` の外に書かれた `*.md`）を拾う走査。
 pub mod undeclared_artifacts;
 

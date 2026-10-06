@@ -19,6 +19,7 @@ use axum::http::{HeaderMap, StatusCode};
 use task_ops::decision::{DecisionAnswerBody, DecisionFilter, DecisionWithdrawBody};
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
@@ -27,6 +28,8 @@ use crate::state::ApiState;
 
 /// API から答えたときの `DecisionAnswered.by`（管理系のトークン = 人）。
 const HUMAN: &str = "human";
+/// CoS の `/cos/operations` から答えたときの `DecisionAnswered.by`。
+const COS: &str = "cos";
 
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
@@ -85,20 +88,72 @@ async fn answer(
     let payload: DecisionAnswerBody = read_json(body, false).await?;
     let decision_id = id.clone();
     let outcome = state
-        .blocking(move |store| {
-            task_ops::decision::answer(
-                store,
-                &decision_id,
-                payload.option.as_deref(),
-                payload.note.as_deref(),
-                HUMAN,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("decision_answer")))
-        })
+        .blocking(move |store| answer_op(store, &decision_id, payload, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "decision_answer", decision_id = %id, effect = outcome.effect.as_str(), resumed = outcome.resumed.len(), cancelled = outcome.cancelled.len(), "admin: decision answered");
     Ok(json_response(StatusCode::OK, &outcome))
+}
+
+/// `POST /decisions/{id}/answer` の本体。handler（`audit = None`、`by = human`）と CoS の
+/// `/cos/operations`（ADR 2026-10-05 D3。`by = cos`、回答・unit 更新・監査を同じ transaction で書く）が
+/// 共有する。
+pub(crate) fn answer_op(
+    store: &task_core::store::SqliteStore,
+    decision_id: &str,
+    payload: DecisionAnswerBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::decision::DecisionOutcome>, ApiProblem> {
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        return task_ops::decision::answer(
+            store,
+            decision_id,
+            payload.option.as_deref(),
+            payload.note.as_deref(),
+            HUMAN,
+            now,
+        )
+        .map(Applied::Direct)
+        .map_err(|e| ops_problem(store, e, Some("decision_answer")));
+    };
+    let plan = task_ops::decision::plan_answer(
+        store,
+        decision_id,
+        payload.option.as_deref(),
+        payload.note.as_deref(),
+        COS,
+        now,
+    )
+    .map_err(|e| {
+        audit.reject(
+            store,
+            "decision",
+            decision_id,
+            ops_problem(store, e, Some("decision_answer")),
+        )
+    })?;
+    let operation = audit.apply(store, "decision", decision_id, "decision.answer", |tx| {
+        let applied = task_core::store::SqliteStore::decision_resolve_apply_tx(
+            tx,
+            plan.node_id,
+            &plan.decision_id,
+            task_core::decision::DecisionStatus::Open,
+            plan.rows(),
+            plan.events(),
+        )?;
+        if !applied {
+            return Err(task_core::chat::ChatError::Conflict(format!(
+                "decision {decision_id} is no longer open"
+            )));
+        }
+        Ok(serde_json::json!({"decision_id": decision_id, "task_id": plan.node_id.to_string()}))
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let Err(error) = task_ops::decision::finish_answer(store, plan, now)
+    {
+        tracing::warn!(operation_id = %operation.id, %error, "cos decision follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 async fn withdraw(

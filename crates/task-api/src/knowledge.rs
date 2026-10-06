@@ -27,6 +27,7 @@ use task_core::knowledge::{self as kb, Confidence, PathError};
 use task_ops::docs::{self as ops_docs, DocCommit};
 use task_ops::knowledge::{self as ops_kb, InboxOutcome, PageEdit, WriteOutcome};
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::ApiProblem;
@@ -601,21 +602,71 @@ async fn reject(
     require_admin(&state, &headers)?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |_| {
-            require_kb(&root)?;
-            ops_kb::inbox_path(&id).map_err(path_problem)?;
-            match ops_kb::inbox_reject(&root, &id) {
-                InboxOutcome::Rejected { sha } => {
-                    tracing::info!(who = "admin", op = "knowledge_reject", id = %id, "admin: knowledge candidate rejected");
-                    Ok(KnowledgeRejectResult { id, sha })
-                }
-                InboxOutcome::Missing => Err(candidate_not_found(&id)),
-                InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
-                other => Err(knowledge_unavailable(format!("unexpected outcome: {other:?}"))),
-            }
-        })
+        .blocking(move |store| reject_op(store, &root, id, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `POST /knowledge/inbox/{id}/reject` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （ADR 2026-10-05 D3）が共有する。KB は SQLite の外（git）なので、監査ありでは候補の取り下げを
+/// `cos_operation_apply` の transaction の中で行い、失敗すれば `cos_operations`・監査 event・card は
+/// 書かない（取り下げの git commit の後に SQLite の commit が失敗したときだけ、監査の無い取り下げが残る）。
+pub(crate) fn reject_op(
+    store: &task_core::SqliteStore,
+    root: &std::path::Path,
+    id: String,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<KnowledgeRejectResult>, ApiProblem> {
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "knowledge", &id, problem),
+        None => problem,
+    };
+    require_kb(root).map_err(reject)?;
+    ops_kb::inbox_path(&id).map_err(|e| reject(path_problem(e)))?;
+    let Some(audit) = audit else {
+        return match ops_kb::inbox_reject(root, &id) {
+            InboxOutcome::Rejected { sha } => {
+                tracing::info!(who = "admin", op = "knowledge_reject", id = %id, "admin: knowledge candidate rejected");
+                Ok(Applied::Direct(KnowledgeRejectResult { id, sha }))
+            }
+            InboxOutcome::Missing => Err(candidate_not_found(&id)),
+            InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+            other => Err(knowledge_unavailable(format!(
+                "unexpected outcome: {other:?}"
+            ))),
+        };
+    };
+    let mut failure = None;
+    let outcome =
+        audit.apply(
+            store,
+            "knowledge",
+            &id,
+            "knowledge.reject",
+            |_tx| match ops_kb::inbox_reject(root, &id) {
+                InboxOutcome::Rejected { sha } => Ok(serde_json::json!({"id": id, "sha": sha})),
+                InboxOutcome::Missing => {
+                    failure = Some(candidate_not_found(&id));
+                    Err(task_core::chat::ChatError::NotFound {
+                        kind: "knowledge candidate",
+                        id: id.clone(),
+                    })
+                }
+                InboxOutcome::Failed { detail } => {
+                    failure = Some(knowledge_unavailable(detail.clone()));
+                    Err(task_core::chat::ChatError::Conflict(detail))
+                }
+                other => {
+                    let detail = format!("unexpected outcome: {other:?}");
+                    failure = Some(knowledge_unavailable(detail.clone()));
+                    Err(task_core::chat::ChatError::Conflict(detail))
+                }
+            },
+        );
+    match outcome {
+        Ok(operation) => Ok(Applied::Audited(Box::new(operation))),
+        Err(problem) => Err(failure.unwrap_or(problem)),
+    }
 }
 
 #[cfg(test)]

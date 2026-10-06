@@ -117,6 +117,48 @@ pub fn plan_gate(
     note: Option<String>,
     by: &str,
 ) -> Result<TransitionResult, OpsError> {
+    match plan_plan_gate(store, id, action, note, by)? {
+        PlanGatePlan::Withdraw { audit } => {
+            store.append_event(id, &audit)?;
+            crate::gate::cancel(store, id, Some(Status::Blocked))
+        }
+        PlanGatePlan::Resume {
+            trigger,
+            extra,
+            from,
+        } => {
+            let outcome = store.apply_transition_with_events(id, trigger, extra)?;
+            Ok(TransitionResult {
+                id,
+                from,
+                to: outcome.next,
+                reason: outcome.reason.to_string(),
+                cascaded: Vec::new(),
+            })
+        }
+    }
+}
+
+/// `plan_gate` の検証と遷移の組み立て（書き込みなし）。CoS の監査つき操作（ADR 2026-10-05 D3）が
+/// 同じ検証のまま 1 transaction で書けるように切り出した。
+pub enum PlanGatePlan {
+    /// 取り下げ（`gate::cancel`。中止の連鎖があるので 1 遷移ではない）。
+    Withdraw { audit: Event },
+    /// 1 遷移で再開する。
+    Resume {
+        trigger: Trigger,
+        extra: Vec<Event>,
+        from: Status,
+    },
+}
+
+pub fn plan_plan_gate(
+    store: &dyn TaskStore,
+    id: TaskId,
+    action: PlanGateAction,
+    note: Option<String>,
+    by: &str,
+) -> Result<PlanGatePlan, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     let events = store.events_for(id)?;
     if !is_awaiting_plan_approval(&task, &events) {
@@ -158,8 +200,9 @@ pub fn plan_gate(
     };
     let (trigger, extra) = match action {
         PlanGateAction::Withdraw => {
-            store.append_event(id, &audit("取り下げ"))?;
-            return crate::gate::cancel(store, id, Some(Status::Blocked));
+            return Ok(PlanGatePlan::Withdraw {
+                audit: audit("取り下げ"),
+            });
         }
         PlanGateAction::Approve => {
             let mut extra = vec![audit("承認")];
@@ -202,14 +245,10 @@ pub fn plan_gate(
             )
         }
     };
-    let from = task.status;
-    let outcome = store.apply_transition_with_events(id, trigger, extra)?;
-    Ok(TransitionResult {
-        id,
-        from,
-        to: outcome.next,
-        reason: outcome.reason.to_string(),
-        cascaded: Vec::new(),
+    Ok(PlanGatePlan::Resume {
+        trigger,
+        extra,
+        from: task.status,
     })
 }
 

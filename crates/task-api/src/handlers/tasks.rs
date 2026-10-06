@@ -13,6 +13,7 @@ use task_ops::OpsError;
 use task_ops::add::NewTaskSpec;
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::files;
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem};
@@ -194,14 +195,36 @@ pub(super) async fn create_task(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let body: NewTaskBody = read_json(body, false).await?;
+    let roles = state.inner.roles.clone();
+    let genres = state.inner.genres.clone();
+    let task = state
+        .blocking(move |store| create_task_op(store, &roles, &genres, body, None)?.direct())
+        .await?;
+    Ok(created_task(&task))
+}
+
+/// `POST /tasks` の本体。handler（`audit = None`）と CoS の `/cos/operations`（ADR 2026-10-05 D3。
+/// `audit` の transaction で task・`cos_operations`・監査 event を一緒に書く）が共有する。
+pub(crate) fn create_task_op(
+    store: &task_core::store::SqliteStore,
+    roles: &[task_core::RoleSpec],
+    genres: &[task_core::GenreSpec],
+    body: NewTaskBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<Task>, ApiProblem> {
     let NewTaskBody {
         mut task,
         expected_write_paths,
-    } = read_json(body, false).await?;
+    } = body;
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "task", "new", problem),
+        None => problem,
+    };
     let paths = expected_write_paths
         .map(|paths| task_core::write_set::normalize_write_paths(&paths))
         .transpose()
-        .map_err(ApiProblem::bad_request)?;
+        .map_err(|e| reject(ApiProblem::bad_request(e)))?;
     // ADR-0044 D1（Phase 53）: **人が作ったタスクは `ready`**（人は Go を出す側なので draft を挟まない）。
     // `draft` にしたければ `status: "draft"` を明示する。計画・委譲で作られる子（`draft` → Go）の経路は
     // ここを通らないので変わらない。
@@ -212,33 +235,44 @@ pub(super) async fn create_task(
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
     // いれば知らない `genre` / `genre` と `role` の不整合は常に検証する（celerisctl の「`--config` 無し」の
     // 緩さはここには無い）。
-    let roles = state.inner.roles.clone();
-    let genres = state.inner.genres.clone();
-    let task = state
-        .blocking(move |store| {
-            task_ops::add::create_task_with_roles(
-                store,
-                task,
-                &roles,
-                &genres,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, None))
-            .and_then(|created| {
-                if let Some(paths) = &paths {
-                    store
-                        .set_task_expected_write_paths(
-                            created.id,
-                            Some(paths),
-                            &OffsetDateTime::now_utc().to_string(),
-                        )
-                        .map_err(|e| ops_problem(store, OpsError::Store(e), None))?;
-                }
-                Ok(created)
-            })
-        })
-        .await?;
-    Ok(created_task(&task))
+    let Some(audit) = audit else {
+        let created = task_ops::add::create_task_with_roles(
+            store,
+            task,
+            roles,
+            genres,
+            OffsetDateTime::now_utc(),
+        )
+        .map_err(|e| ops_problem(store, e, None))?;
+        if let Some(paths) = &paths {
+            store
+                .set_task_expected_write_paths(
+                    created.id,
+                    Some(paths),
+                    &OffsetDateTime::now_utc().to_string(),
+                )
+                .map_err(|e| ops_problem(store, OpsError::Store(e), None))?;
+        }
+        return Ok(Applied::Direct(created));
+    };
+    let built =
+        task_ops::add::build_task_with_roles(store, task, roles, genres, OffsetDateTime::now_utc())
+            .map_err(|e| reject(ops_problem(store, e, None)))?;
+    let target_id = built.id.to_string();
+    let paths = paths.filter(|paths| !paths.is_empty());
+    let operation = audit.apply(store, "task", &target_id, "task.create", |tx| {
+        task_core::store::SqliteStore::create_task_tx(tx, &built, None, vec![])?;
+        if paths.is_some() {
+            task_core::store::SqliteStore::set_task_expected_write_paths_tx(
+                tx,
+                built.id,
+                paths,
+                &OffsetDateTime::now_utc().to_string(),
+            )?;
+        }
+        Ok(serde_json::json!({"task_id": built.id.to_string()}))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---- 5. GET /tasks/{id} ----

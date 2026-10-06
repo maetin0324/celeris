@@ -61,14 +61,22 @@ export function buildInstructBodyFromForm(form: FormData): InstructBody {
 
 /**
  * `POST /console/new-conversation`（ADR-0054 D1、Phase 67。GUI の配線は Phase 68、ADR-0054 D3）。
- * CoS の継続セッションを捨てる（**管理系**、204・本文なし）。GUI の「新しい会話」ボタンの入口。
+ * 互換 Console の既定 legacy thread を切り替える（**管理系**、204・本文なし）。
  */
 export async function sendNewConversation(
   client: CelerisClient,
+  scope?: string | null,
   signal?: AbortSignal,
 ): Promise<ConsoleNewConversationOutcome> {
   try {
-    await client.post<void>("/console/new-conversation", {}, { signal });
+    await client.post<void>(
+      "/console/new-conversation",
+      {},
+      {
+        signal,
+        query: scope ? { scope } : undefined,
+      },
+    );
     return { ok: true, op: "new_conversation" };
   } catch (e) {
     return { ok: false, op: "new_conversation", error: toActionError(e) };

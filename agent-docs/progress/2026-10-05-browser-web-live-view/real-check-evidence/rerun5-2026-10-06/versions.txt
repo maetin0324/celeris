@@ -1,0 +1,29 @@
+date: 2026-10-06T11:56:52+00:00
+host kernel: 6.8.12-9-pve
+tested code: child tree /local/celeris/data/workspaces/01M48DGY90GJAW2T8C95267HV3/repos/agent-platform
+tested code sha: f5b9dc4efbfeca9605e22f95ae91a83968614046 (integrate wu/verify (phase verify)) branch celeris/01M48DGY90GJAW2T8C95267HV3
+child tree clean: yes
+script/doc/web run from: /var/tmp/fable-rerun5-src (git archive f5b9dc4e of web scripts docs config; web/node_modules copied from parent tree)
+script sha256: b93b20356a43c83de82747a19c91cf93225785e90ee09b042470af8e69787664 (child) / b93b20356a43c83de82747a19c91cf93225785e90ee09b042470af8e69787664 (archive copy)
+doc sha256: 94b6765422d31c99bfe8387bb70601d679d99a99d1090568d08324718610233d (child) / 94b6765422d31c99bfe8387bb70601d679d99a99d1090568d08324718610233d (archive copy)
+build: cd child tree; CARGO_TARGET_DIR=/var/tmp/fable-merge-target cargo build -p celeris --bin celeris -p task-worker --bin celeris-browser-launcher --bin celeris-browser-sandboxd --bin celeris-browser-egress -> exit 0
+sha256 e896c4fa3af3a758d761a79eab96c36136f100c6fee2ae8ef963ad18f860e98a  /var/tmp/fable-merge-target/debug/celeris
+sha256 55c664bbe244a30ca9ce6464de2dbc0ad673a166ce99c36c263a7bef2d204784  /var/tmp/fable-merge-target/debug/celeris-browser-launcher
+sha256 f9067c7cb7677ed1f966dcd42c6e6136964e61e73d08cf9f0c81dc392c869f4f  /var/tmp/fable-merge-target/debug/celeris-browser-sandboxd
+sha256 ccd46133f79a858a79ce9c57ebcbcca29413502dbabd08bacfa2fc86b3680e76  /var/tmp/fable-merge-target/debug/celeris-browser-egress
+sha256 55c664bbe244a30ca9ce6464de2dbc0ad673a166ce99c36c263a7bef2d204784  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-launcher (root:root 0755 copy)
+sha256 f9067c7cb7677ed1f966dcd42c6e6136964e61e73d08cf9f0c81dc392c869f4f  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-sandboxd (root:root 0755 copy)
+sha256 ccd46133f79a858a79ce9c57ebcbcca29413502dbabd08bacfa2fc86b3680e76  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-egress (root:root 0755 copy)
+chrome: Google Chrome for Testing 153.0.8010.12 
+agent-browser: agent-browser 0.38.1
+bwrap: bubblewrap 0.11.0
+node: v24.14.1  python3: Python 3.13.3
+playwright browsers: /home/rmaeda/.cache/ms-playwright (chromium_headless_shell-1243, read-only use, diag1 only)
+launcher user: uid=995(celeris-browser) gid=989(celeris-browser) groups=989(celeris-browser)
+daemon user: rmaeda uid=1001
+conformance ledger sha256: cf0a4b7d961330a20c9554a283bbee199a5cae703cdf594b9aa4e51224b2a8b4
+harness v2 sha256 (attempts 2-3): bc8f4cd4178262545650b87b9ba3e2b715bdd5bb0ce72feb0c03f57f4e1db674
+harness v1 sha256 (attempt 1): 8d8732fdf9eb2a9bd342490e47aa03fac9fe4a9d87fcde9395881c1fc09ba3fe
+launcher config sha256: 6e72564ef6f87056a4b57108cf7919c2569f49e1876ecafbb31accf6e610398e  owner/mode: root:root 644 dir root:root 755
+web dist: npx --offline vite build in /var/tmp/fable-rerun5-src/web, index.html sha256 1baea3dee73b7a957bb720b484fa8e2665a32cecbcd15709ce049d885795c7b3
+production launcher pid 3335880 (--config /etc/celeris-browser/launcher.toml, no test_loopback_allow) with /run/celeris-browser/launcher.sock; production daemon pid 639460 (release ea6f0e243acf, port 7710); untouched

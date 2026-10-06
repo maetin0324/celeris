@@ -1,0 +1,3 @@
+Serving live fixture
+live-upstream "GET / HTTP/1.1" 200 -
+live-upstream "GET /api/session/9222/stream?last_seen=0 HTTP/1.1" 101 -

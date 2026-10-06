@@ -442,6 +442,47 @@ impl BrowserTaskPolicy {
         }
         Ok(())
     }
+
+    /// ADR 2026-10-05-browser-department-web-live-view D2.0: narrow `network_domains` to the
+    /// task's own `requirements.browser.allowed_domains` (origin intersection, never string
+    /// equality). An empty result is refused so a run never starts without an allowed origin.
+    pub fn within_task_origins(&self, allowed: &[String]) -> Result<Self, BrowserPolicyError> {
+        self.validate()?;
+        let task = allowed
+            .iter()
+            .map(|d| parse_allowed_origin(d).map(|o| o.canonical()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut domains = Vec::new();
+        for domain in &self.network_domains {
+            let domain = parse_allowed_origin(domain)?.canonical();
+            domains.extend(task.iter().filter_map(|t| intersect_origins(&domain, t)));
+        }
+        let network_domains = minimize_origins(domains);
+        if network_domains.is_empty() {
+            return Err(BrowserPolicyError::EmptyDomains);
+        }
+        Ok(Self {
+            network_domains,
+            ..self.clone()
+        })
+    }
+}
+
+/// D2.0: the task policy a run is bound to. A task with `requirements.browser` is narrowed to
+/// those origins; a task created before the requirement keeps its stored policy as is. The
+/// grant is applied later by [`EffectiveBrowserPolicy::derive`] with the grant read at run time,
+/// so a grant shrink reaches existing tasks on their next run.
+pub fn task_run_policy(
+    requirements: &crate::TaskRequirements,
+    stored: Option<&BrowserTaskPolicy>,
+) -> Result<Option<BrowserTaskPolicy>, BrowserPolicyError> {
+    match (stored, requirements.browser.as_ref()) {
+        (None, _) => Ok(None),
+        (Some(policy), None) => Ok(Some(policy.clone())),
+        (Some(policy), Some(browser)) => policy
+            .within_task_origins(&browser.allowed_domains)
+            .map(Some),
+    }
 }
 
 /// What the run is bound to: approvals, waits and leases compare this hash (ADR-0080 D1).

@@ -390,9 +390,7 @@ pub(super) async fn run_worker(
         artifacts_dir,
         context: RunContext {
             browser: None,
-            browser_policy: store
-                .browser_task_policy_get(task.id)
-                .map_err(|e| AdapterError::Other(format!("browser policy: {e}")))?,
+            browser_policy: browser_run_policy(store.as_ref(), &task)?,
             prior_review,
             inputs: task.inputs.clone(),
             answers: to_answers(answers_from_events(&events)),
@@ -587,6 +585,12 @@ pub(super) async fn run_worker(
         Err(AdapterError::Other(
             "browser capability currently requires a local host run".into(),
         ))
+    } else if let Err(e) = task_worker::browser_policy::admit(&req) {
+        // D2.0: task ∩ the grant read for this run is empty (or invalid): never start the run.
+        Err(AdapterError::Other(format!(
+            "browser policy rejected: {}",
+            e.code()
+        )))
     } else {
         let run = task_worker::browser::run_with_candidates(
             adapter,
@@ -765,4 +769,22 @@ pub(super) fn scratch_cargo_env(
     let mut set = task_worker::scratch::target_env(&settings.pool(), owner);
     set.extend(task_worker::scratch::cargo_tuning_env(&settings.cargo));
     task_worker::scratch::CargoEnv::set_only(set)
+}
+
+/// ADR 2026-10-05-browser-department-web-live-view D2.0: the task browser policy handed to the
+/// worker, narrowed to the task's `requirements.browser.allowed_domains`. The grant is not
+/// stored with the task: `run_extras` reads the assignee's profile from the org for every run,
+/// so the worker intersects with the grant in force (a shrink applies to the next run).
+pub(super) fn browser_run_policy(
+    store: &dyn TaskStore,
+    task: &Task,
+) -> Result<Option<task_core::BrowserTaskPolicy>, AdapterError> {
+    let stored = store
+        .browser_task_policy_get(task.id)
+        .map_err(|e| AdapterError::Other(format!("browser policy: {e}")))?;
+    if !task_core::browser::requests_browser(&task.skills) {
+        return Ok(stored);
+    }
+    task_core::browser::task_run_policy(&task.requirements, stored.as_ref())
+        .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))
 }

@@ -103,6 +103,10 @@ impl DenialRecorder {
             "dns_bypass",
             "proxy_chain",
             "invalid_host",
+            // Forwarded http GET/HEAD (ADR 2026-10-06-egress-http-forward-get).
+            "scheme_not_allowed",
+            "host_mismatch",
+            "request_body",
         ];
         if !KINDS.contains(&denial.kind.as_str()) || self.count > DENIAL_RECORD_LIMIT {
             return Ok(());

@@ -1421,12 +1421,21 @@ async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
     let temp = tempfile::tempdir().unwrap();
     let executable = substrate(temp.path());
     let sink = RecordingSink::default();
+    let mut req = request(temp.path());
+    // ADR 2026-10-05 browser-allowed-origins: the task asks for explicit origins; the legacy
+    // host-form grant `*.example.org` must contain `https://docs.example.org` (HTTPS 443 only).
+    req.task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec![
+            "https://example.com".into(),
+            "https://docs.example.org".into(),
+        ],
+    });
     run_with_executable(
         Arc::new(CliHarness {
             id: "acp",
             question: false,
         }),
-        request(temp.path()),
+        req,
         "generated",
         limits(),
         &sink,
@@ -1443,10 +1452,11 @@ async fn launch_uses_generated_policy_and_binds_its_hash_to_the_run() {
     );
     let config: serde_json::Value =
         serde_json::from_slice(&std::fs::read(runtime.join("config.json")).unwrap()).unwrap();
-    // grant {example.com, *.example.org} ∩ task {example.com, docs.example.org}
+    // stored policy {example.com, docs.example.org} ∩ requirements {https://example.com,
+    // https://docs.example.org} ∩ legacy grant {example.com, *.example.org}, as HTTPS origins.
     assert_eq!(
         config["allowed_domains"],
-        serde_json::json!(["docs.example.org", "example.com"])
+        serde_json::json!(["https://docs.example.org", "https://example.com"])
     );
     assert_eq!(
         config["policy_sha256"],
@@ -1875,6 +1885,11 @@ print(json.dumps({{'success': True, 'data': {{}}}}))
         .allowed_domains = vec!["fixture.example.com".into()];
     req.context.browser_policy.as_mut().unwrap().network_domains =
         vec!["fixture.example.com".into()];
+    // ADR 2026-10-05: effective = policy ∩ Task.requirements.browser ∩ grant; the task must
+    // ask for the fixture origin too, or admission rejects with empty_browser_domains.
+    req.task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://fixture.example.com".into()],
+    });
     let outcome = run_with_executable(
         Arc::new(FixtureHarness),
         req,

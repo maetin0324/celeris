@@ -275,6 +275,44 @@ mod tests {
         }
     }
 
+    /// Legacy host-form grant and stored policy (`example.com`, `*.example.org`) are read as
+    /// HTTPS:443 origins; the wildcard contains a subdomain but not the apex, and HTTP or other
+    /// ports are never added. Mirrors the userns-only launch test so it runs on every host.
+    #[test]
+    fn legacy_host_form_grant_and_policy_narrow_to_requested_https_origins() {
+        let grant = grant(&["example.com", "*.example.org"]);
+        let policy = BrowserTaskPolicy {
+            network_domains: vec!["example.com".into(), "docs.example.org".into()],
+            ..policy(&[BrowserAction::Navigate])
+        };
+        let task = browser_task(&["https://example.com", "https://docs.example.org"]);
+        let prepared = prepare_for_task(&grant, &task, Some(&policy), "0.38.1").unwrap();
+        assert_eq!(
+            prepared.allowed_domains(),
+            ["https://docs.example.org", "https://example.com"]
+        );
+        for (url, ok) in [
+            ("https://docs.example.org/x", true),
+            ("https://example.org/", false),
+            ("http://docs.example.org/", false),
+            ("https://docs.example.org:8443/", false),
+        ] {
+            assert_eq!(
+                url_origin_allowed(url, prepared.allowed_domains()),
+                ok,
+                "{url}"
+            );
+        }
+        let narrowed = browser_task(&["https://example.com"]);
+        let prepared = prepare_for_task(&grant, &narrowed, Some(&policy), "0.38.1").unwrap();
+        assert_eq!(prepared.allowed_domains(), ["https://example.com"]);
+        let outside = browser_task(&["https://fixture.example.com"]);
+        assert_eq!(
+            prepare_for_task(&grant, &outside, Some(&policy), "0.38.1").unwrap_err(),
+            BrowserPolicyError::EmptyDomains
+        );
+    }
+
     /// D2.0: the egress allow list is task ∩ grant as `host:port`; the scheme shows as the port.
     #[test]
     fn browser_allowed_domains_egress_allow_is_task_and_grant() {

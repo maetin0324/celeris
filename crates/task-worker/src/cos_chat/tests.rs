@@ -3,6 +3,10 @@ use std::time::Duration;
 
 use task_core::{ArtifactRef, Budget, DelegateTask};
 
+use super::{
+    Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
+    image_delivery,
+};
 use crate::adapter::{EventSink, RunLimits, Terminal, WorkerAdapter};
 use crate::fake::FakeAdapter;
 use crate::protocol::tests::sample_task;
@@ -78,6 +82,7 @@ fn chat() -> CosChatContext {
             attachment("a1", "screen.png", "image/png"),
             attachment("a2", "spec.pdf", "application/pdf"),
         ],
+        harness_capabilities: None,
         skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
         credential_env: COS_RUN_CREDENTIAL_ENV.into(),
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
@@ -113,6 +118,74 @@ fn request(workspace: &Path, cos_chat: Option<CosChatContext>) -> RunRequest {
 
 fn prompt(req: &RunRequest) -> String {
     crate::claude_code::build_prompt(&req.task, &req.context, "wrun1", "artifacts")
+}
+
+#[test]
+fn cos_chat_harness_caps_native_image_route() {
+    for adapter in ["claude-code", "codex"] {
+        let caps = HarnessCapabilities::for_adapter(adapter).unwrap();
+        assert_eq!(
+            image_delivery(CosChatDelivery::Image, Some(&caps)),
+            ImageDelivery::Native
+        );
+        assert!(caps.shell && caps.filesystem && caps.mcp);
+        let mut c = chat();
+        c.harness_capabilities = Some(caps);
+        let p = prompt(&request(Path::new("/tmp/ws"), Some(c)));
+        assert!(p.contains("delivery=image path=`/ws/attachments/a1/screen.png` actual=native"));
+    }
+}
+
+#[test]
+fn cos_chat_harness_caps_continuation_and_tool_table() {
+    let claude = HarnessCapabilities::for_adapter("claude-code").unwrap();
+    let codex = HarnessCapabilities::for_adapter("codex").unwrap();
+    let acp = HarnessCapabilities::for_adapter("acp").unwrap();
+    assert_eq!(claude.continuation, Continuation::ClaudeSessionResume);
+    assert_eq!(codex.continuation, Continuation::CodexExecResume);
+    assert_eq!(acp.continuation, Continuation::AcpSessionLoad);
+    assert!(claude.shell && claude.filesystem && claude.mcp);
+    assert!(codex.shell && codex.filesystem && codex.mcp);
+    assert!(!acp.shell && !acp.filesystem && !acp.mcp);
+    assert!(!acp.native_image_input && !acp.image_read_tool);
+}
+
+#[test]
+fn cos_chat_harness_caps_path_and_tool_route() {
+    let mut caps = HarnessCapabilities::for_adapter("acp").unwrap();
+    caps.image_read_tool = true; // negotiated by an ACP adapter
+    assert_eq!(
+        image_delivery(CosChatDelivery::Image, Some(&caps)),
+        ImageDelivery::PathAndTool
+    );
+    let mut c = chat();
+    c.harness_capabilities = Some(caps);
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(c)));
+    assert!(p.contains("delivery=image path=`/ws/attachments/a1/screen.png` actual=path+tool"));
+    assert!(p.contains("use the confirmed image-reading tool"));
+}
+
+#[test]
+fn cos_chat_harness_caps_unsupported_route_and_reason() {
+    let caps = HarnessCapabilities::for_adapter("acp").unwrap();
+    assert_eq!(
+        image_delivery(CosChatDelivery::Image, Some(&caps)),
+        ImageDelivery::Unsupported
+    );
+    assert_eq!(
+        image_delivery(CosChatDelivery::Image, None),
+        ImageDelivery::Unsupported
+    );
+    assert_eq!(
+        image_delivery(CosChatDelivery::File, None),
+        ImageDelivery::FilePath
+    );
+    assert!(HarnessCapabilities::for_adapter("unknown").is_none());
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(chat())));
+    assert!(p.contains("delivery=image path=`/ws/attachments/a1/screen.png` actual=unsupported"));
+    assert!(p.contains(capability_reason(MissingCapability::Image)));
+    assert!(capability_reason(MissingCapability::Shell).contains("no command was run"));
+    assert!(capability_reason(MissingCapability::Mcp).contains("no MCP operation was performed"));
 }
 
 #[test]

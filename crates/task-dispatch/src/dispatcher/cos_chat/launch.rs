@@ -386,6 +386,7 @@ impl CosChatLaunch {
             summary_through_seq: i64::try_from(summary_through_seq).unwrap_or(i64::MAX),
             unsummarized,
             attachments,
+            harness_capabilities: None,
             skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),

@@ -5,7 +5,7 @@ tasks: [01M46VVAD0ZAVZ9C4Q0KJM9ESV]
 ---
 
 - 日付: 2026-10-05（2026-10-06 付の人の追加要望を含む）
-- 状態: **設計確定・人の確認待ち、未実装**。人が既に決めた方針を以下の契約に具体化した。design 段の確認は Fable が行い、その後に実装する。
+- 状態: **設計確定・人の確認待ち、未実装**。人が既に決めた方針を以下の契約に具体化した。design 段の確認は Fable が行い、その後に実装する。**2026-10-06 付記（cos-run 完了）: cos-run 担当の実装（`[cos]` config・CoS 特別 worker としての chat run 起動/継続/停止/queue/SSE・3 harness（claude-code/codex/opencode）の継続と全道具・画像入力の写像・受信箱一次対応と Discord escalation・CoS 不在退避・通知一本化・代答の取消/差し戻し・旧 Console/MCP 入力の legacy facade・`/cos/operations` 監査付き操作層・run credential）は実装済みで、統合後 HEAD `5434785b` で `bash scripts/dev/test-parallel.sh`（4230 passed）・`cargo clippy --workspace -- -D warnings`・文書検査 4 本が exit 0 を確認済み（`agent-docs/progress/2026-10-06-cos-run.md`）。D6 表の cos-run 担当行の `cos_chat_` 試験対応表（130 件）と、実機 1 回（live-check）・replan/pause/resume の allowlist 登録・添付→task manifest と KB provenance の連結を未解決として記録する。**
 - 対象: web のホーム、CoS の実行、会話・添付の永続化、受信箱一次対応、外向け通知。実装・実機確認の完了をこの ADR の作成で代替しない。
 - 関連: [ADR-0033 D4](0033-organization-projects-and-reports.md)、[ADR-0048](0048-console.md)、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0089](0089-cos-runs-bypass-concurrency.md)、[ADR-0140](0140-claude-session-resume.md)、[ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md)、[ADR-0133](0133-inbox-and-notifications.md)、[ADR-0037](0037-discord-notifications.md)、[ADR-0050](0050-request-completion-and-notifications.md)。
 

@@ -3,6 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use time::{Duration, OffsetDateTime};
 
 use super::store::{ChatError, chat_ts, immediate, read_tx, writer};
@@ -75,11 +76,13 @@ impl SqliteStore {
             .checked_add(ttl)
             .ok_or_else(|| ChatError::Invalid("credential ttl overflows time".into()))?;
         let mut random = [0_u8; 32];
-        getrandom::getrandom(&mut random).map_err(|_| {
-            ChatError::Store(crate::store::StoreError::Invalid(
-                "OS credential entropy unavailable".into(),
-            ))
-        })?;
+        std::fs::File::open("/dev/urandom")
+            .and_then(|mut source| source.read_exact(&mut random))
+            .map_err(|_| {
+                ChatError::Store(crate::store::StoreError::Invalid(
+                    "OS credential entropy unavailable".into(),
+                ))
+            })?;
         let mut token = String::with_capacity(64);
         for byte in random {
             use std::fmt::Write;

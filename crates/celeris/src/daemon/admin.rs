@@ -236,6 +236,40 @@ pub(crate) fn reload_providers(
     Ok(())
 }
 
+#[cfg(test)]
+mod cos_chat_config_tests {
+    use super::*;
+
+    #[test]
+    fn cos_chat_config_reload_keeps_old_config_on_invalid_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let db = dir.path().join("celeris.db");
+        let ws = dir.path().join("ws");
+        let write_config = |cos: &str| {
+            std::fs::write(
+                &path,
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n"),
+            )
+            .unwrap();
+        };
+        write_config("max_turns = 12");
+        let mut config = Config::load(&path).unwrap();
+        let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+        write_config("max_turns = 99\nprovider = \"claude\"\nharness = \"codex\"");
+        assert!(
+            reload_providers(&mut dispatcher, &mut config)
+                .unwrap_err()
+                .contains("conflicts")
+        );
+        assert_eq!(config.cos.max_turns, 12);
+        assert_eq!(config.resolve_cos_provider().unwrap().provider, "claude");
+        write_config("max_turns = 99");
+        reload_providers(&mut dispatcher, &mut config).unwrap();
+        assert_eq!(config.cos.max_turns, 99);
+    }
+}
+
 /// S7: `claude_dir` / `max_runs_per_account` / `check_model` のどれかが変わっていれば `true`
 /// （`None` ⇔ `Some` の変化も含む）。
 pub(crate) fn accounts_section_changed(

@@ -932,35 +932,6 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     assert!(err.contains("restart"), "{err}");
 }
 
-#[test]
-fn cos_chat_config_reload_keeps_old_config_on_invalid_mapping() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let db = dir.path().join("celeris.db");
-    let ws = dir.path().join("ws");
-    let write_config = |cos: &str| {
-        std::fs::write(
-            &path,
-            format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n"),
-        )
-        .unwrap();
-    };
-    write_config("max_turns = 12");
-    let mut config = Config::load(&path).unwrap();
-    let mut dispatcher = build_dispatcher(&config, Default::default()).unwrap();
-    write_config("max_turns = 99\nprovider = \"claude\"\nharness = \"codex\"");
-    assert!(
-        reload_providers(&mut dispatcher, &mut config)
-            .unwrap_err()
-            .contains("conflicts")
-    );
-    assert_eq!(config.cos.max_turns, 12);
-    assert_eq!(config.resolve_cos_provider().unwrap().provider, "claude");
-    write_config("max_turns = 99");
-    reload_providers(&mut dispatcher, &mut config).unwrap();
-    assert_eq!(config.cos.max_turns, 99);
-}
-
 /// Phase 44（実機 2026-09-18）: `[[roles]]` の `max_turns` を変えて `reload` すると、次に作られる子の
 /// budget が新しい値になる（`Dispatcher::config().roles` に反映される。委譲の子は `spawn_worker` の
 /// 時点でこの写しを使う）。`[reports]` / `[notify]` / `[conversation]` も同様に `Config` 自身へ反映する。

@@ -32,3 +32,16 @@ updated: 2026-10-06
 - 範囲 check が上の 4 file（import 並びの修正）を範囲外として落とした。4 file を base に戻すと `corepack pnpm@12.6.0 -C web lint` は base と同じ 4 error（organizeImports）で exit 1、戻さないと範囲 check が exit 1。計画の check 同士が両立しないので plan_issue として申告した。
 - 4 file を戻した状態で確かめた結果: typecheck exit 0、vitest 62 files / 394 件成功、server 47 件成功、fake-daemon.test.ts 9/9、build exit 0、e2e functional 243 件成功・8 skip。範囲 check は exit 0。
 - 提案: fixture の範囲 check の allow に `web/components/(content/artifact-preview|ui/(confirm-dialog|drawer|gallery))\.test\.tsx` を足す（作業ツリーは import 修正を残した HEAD のまま）。または base の lint 不合格を別の葉で直し、この葉の check から lint を外す。
+
+## 再試行 3（現在の HEAD）
+
+- 今回の Objective で上記 4 file の import 並びのみを明示的に許可された。差分を確認し、変更が import 並びだけであることを確かめた。
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile` — exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck` — exit 0。
+- `corepack pnpm@12.6.0 -C web lint` — exit 0（既存 styles.css の !important 警告 4 件）。
+- `corepack pnpm@12.6.0 -C web test` — exit 0（vitest 62 files / 394 件、server 47 件）。
+- `corepack pnpm@12.6.0 -C web build` — exit 0。
+- `corepack pnpm@12.6.0 -C web e2e` — exit 0（functional 243 件成功、8 件 skip）。
+- `git diff --check "$CELERIS_WU_BASE" HEAD` — exit 0。差分は fixture 本体・型・試験・この進捗と、許可された 4 file の import 並びだけ。
+
+未解決の実装・試験の失敗はない。上記「再試行 2」は当時の範囲 check の経緯であり、今回は明示的な許可により解消した。

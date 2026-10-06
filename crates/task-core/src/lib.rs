@@ -23,7 +23,7 @@ pub mod browser_wait;
 /// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
 pub mod cluster_job;
 pub use browser::{
-    AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
+    AgentBrowserActionPolicy, AllowedOrigin, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
     EffectiveBrowserPolicy,
 };
@@ -125,9 +125,9 @@ pub use harness::{
 // `KnowledgeMount` は ADR-0047（Phase 61）の型をそのまま使う（Phase 59 追記）。
 pub use profile::resolve as resolve_profile;
 pub use profile::{
-    CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs, Permissions,
-    Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry, is_known_tool,
-    is_valid_skill, validate_profile,
+    BudgetPrefs, CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs,
+    Permissions, Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry,
+    is_known_tool, is_valid_skill, validate_profile,
 };
 // ---- ADR-0047（Phase 61）: 知識ベース ----
 pub use knowledge::{

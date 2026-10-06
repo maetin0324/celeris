@@ -24,3 +24,11 @@ task ごとの新規指定は `Task.requirements.browser.allowed_domains` に置
 - dispatcher は run ごとに（`run_extras` が org を DB から読み直した）現在の grant と、狭めた task policy を `RunContext.profile.browser`・`RunContext.browser_policy` に入れる。task 作成時の grant は保存しない。起動前に `task_worker::browser_policy::admit` で同じ交差を計算し、空・不正なら process を起動せず `browser policy rejected: <固定コード>`（空は `empty_browser_domains`）で run を失敗にする。
 - worker は同じ入力から `browser_policy::prepare_for_task` で同じ交差を作り（狭めは冪等）、action server・shared CDP の navigate（`url_origin_allowed`）、credential 要求の origin 判定、egress の `host:port` 許可（`PreparedBrowserPolicy::egress_allow`。CONNECT には scheme が無いので scheme は port〈HTTPS 443・HTTP 80〉で判定）の全てに使う。
 - 実行中の run には grant の変更を流し込まない。run の policy は起動時に確定し、grant 縮小は同じ task の**次の run**から効く。人待ち（browser wait）の承認・再開は policy の binding hash を照合するので、縮小で交差が変われば hash が変わり、縮小前に承認した credential 使用や待ちは次の判定で拒否される。実行中の run を直ちに止める必要がある場合は、管理者がその run を取り消す（既存の取消経路）。
+
+## Browser settings API
+
+管理 API は `PATCH /api/v1/org/{id}/browser-settings` とする。`browser-execution` は既存の
+`/api/v1/org/{id}` で node id として解釈されるため、専用の下位経路を使う。
+body は `allowed_domains`、`credential_policy_ids`、`credential_identity_ids`、
+`harnesses`、`budget` の任意の組み合わせを受ける。更新は既存の browser grant を持つ
+node に限り、成功時に org browser event を同一 transaction で追記する。

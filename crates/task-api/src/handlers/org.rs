@@ -4,6 +4,10 @@ use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::BTreeMap;
 use task_core::{NodeSessionStore, OrgNode, TaskStore};
 use time::OffsetDateTime;
 
@@ -13,6 +17,92 @@ use crate::state::ApiState;
 use crate::types::{OrgCreateBody, OrgList, OrgPatchBody, ValidationError};
 
 use super::{ApiResult, Params, json_response, load_org_node, no_query, read_json};
+
+/// PATCH /org/{id}/browser-settings. Only browser-related profile fields are editable.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserSettingsPatch {
+    pub allowed_domains: Option<Vec<String>>,
+    pub credential_policy_ids: Option<Vec<String>>,
+    pub credential_identity_ids: Option<BTreeMap<String, String>>,
+    pub harnesses: Option<task_core::HarnessPrefs>,
+    pub budget: Option<task_core::BudgetPrefs>,
+}
+
+fn parse_browser_settings_json<T: serde::de::DeserializeOwned>(
+    value: Value,
+    domains: Option<&Value>,
+) -> Result<T, ApiProblem> {
+    if let Some(domains) = domains {
+        let valid = domains.as_array().is_some_and(|values| {
+            values.iter().all(|value| {
+                value
+                    .as_str()
+                    .is_some_and(|origin| task_core::AllowedOrigin::parse(origin).is_ok())
+            })
+        });
+        if !valid {
+            return Err(ApiProblem::validation(vec![ValidationError {
+                field: Some("browser.allowed_domains".into()),
+                message: "expected valid browser origins".into(),
+            }]));
+        }
+    }
+    serde_json::from_value(value)
+        .map_err(|e| ApiProblem::bad_request(format!("invalid JSON body: {e}")))
+}
+
+pub(super) async fn patch_browser_settings(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params(id): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let raw: Value = read_json(body, true).await?;
+    let patch: BrowserSettingsPatch =
+        parse_browser_settings_json(raw.clone(), raw.get("allowed_domains"))?;
+    let known = task_core::known_harness_ids(&state.inner.genres);
+    let node = state
+        .blocking(move |store| {
+            let mut node = load_org_node(store, &id)?;
+            let browser = node.profile.browser.as_mut().ok_or_else(|| {
+                ApiProblem::validation(vec![ValidationError {
+                    field: Some("browser".into()),
+                    message: "node has no browser grant".into(),
+                }])
+            })?;
+            if let Some(domains) = patch.allowed_domains {
+                browser.allowed_domains = domains;
+            }
+            if let Some(ids) = patch.credential_policy_ids {
+                browser.credential_policy_ids = ids;
+            }
+            if let Some(ids) = patch.credential_identity_ids {
+                browser.credential_identity_ids = ids;
+            }
+            if let Some(harnesses) = patch.harnesses {
+                node.profile.harnesses = harnesses;
+            }
+            if let Some(budget) = patch.budget {
+                node.profile.budget = budget;
+            }
+            task_core::validate_profile(&node.profile, &known).map_err(|e| {
+                ApiProblem::validation(vec![ValidationError {
+                    field: Some("profile".into()),
+                    message: e.to_string(),
+                }])
+            })?;
+            node.updated_at = OffsetDateTime::now_utc();
+            store
+                .org_upsert_browser_settings(&node, "admin")
+                .map_err(store_problem)
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &node))
+}
 
 /// 監査 L-1: 組織のノードの `genre` は設定の `[[genres]]` にあるものだけ（分野を 1 つも設定していない
 /// 構成では検証しない。`POST /tasks` の `genre` と同じ規律。ADR-0027 D1）。
@@ -140,7 +230,9 @@ pub(super) async fn patch_org_node(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let patch: OrgPatchBody = read_json(body, true).await?;
+    let raw: Value = read_json(body, true).await?;
+    let domains = raw.pointer("/profile/browser/allowed_domains").cloned();
+    let patch: OrgPatchBody = parse_browser_settings_json(raw, domains.as_ref())?;
     if let Some(genre) = &patch.genre {
         validate_genre(&state, genre.as_deref())?;
     }
@@ -167,11 +259,21 @@ pub(super) async fn patch_org_node(
                 node.position = position;
             }
             // ADR-0046 D1（Phase 59）: profile は**丸ごと差し替え**（書かなければ今のまま）。
+            let browser_changed = patch
+                .profile
+                .as_ref()
+                .is_some_and(|profile| profile.browser != node.profile.browser);
             if let Some(profile) = patch.profile {
                 node.profile = profile;
             }
             node.updated_at = OffsetDateTime::now_utc();
-            store.org_upsert(&node).map_err(store_problem)
+            if browser_changed {
+                store
+                    .org_upsert_browser_settings(&node, "admin")
+                    .map_err(store_problem)
+            } else {
+                store.org_upsert(&node).map_err(store_problem)
+            }
         })
         .await?;
     tracing::info!(who = "admin", op = "org_patch", org_id = %node.id, "admin: org node updated");

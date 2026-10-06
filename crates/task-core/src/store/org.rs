@@ -5,6 +5,18 @@ use crate::org::{OrgKind, OrgNode};
 
 use super::{SqliteStore, StoreError, format_rfc3339, parse_rfc3339};
 
+fn browser_settings_snapshot(node: &OrgNode) -> serde_json::Value {
+    let browser = node.profile.browser.as_ref();
+    serde_json::json!({
+        "allowed_domains": browser.map(|b| &b.allowed_domains),
+        "allowed_actions": browser.and_then(|b| b.allowed_actions.as_ref()),
+        "credential_policy_ids": browser.map(|b| &b.credential_policy_ids),
+        "credential_identity_ids": browser.map(|b| &b.credential_identity_ids),
+        "harnesses": &node.profile.harnesses,
+        "budget": &node.profile.budget,
+    })
+}
+
 impl SqliteStore {
     // ---- ADR-0046 D7（Phase 59）: `celerisctl org migrate-v2` のための低レベルの書き換え。
     // 通常の経路（`org_upsert` / `update_task`）は状態機械と検証を通すが、移行は「id の付け替え」だけを
@@ -170,6 +182,23 @@ impl SqliteStore {
     }
 
     pub(super) fn org_upsert_impl(&self, node: &OrgNode) -> Result<OrgNode, StoreError> {
+        self.org_upsert_with_actor(node, None)
+    }
+
+    /// Persist a browser settings change and its org audit event atomically.
+    pub fn org_upsert_browser_settings(
+        &self,
+        node: &OrgNode,
+        actor: &str,
+    ) -> Result<OrgNode, StoreError> {
+        self.org_upsert_with_actor(node, Some(actor))
+    }
+
+    fn org_upsert_with_actor(
+        &self,
+        node: &OrgNode,
+        actor: Option<&str>,
+    ) -> Result<OrgNode, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         let existing = Self::org_list_tx(&tx)?;
@@ -200,6 +229,20 @@ impl SqliteStore {
                 profile_json(&stored.profile)?,
             ],
         )?;
+        if let Some(actor) = actor {
+            let before = previous.map(browser_settings_snapshot);
+            let after = browser_settings_snapshot(&stored);
+            tx.execute(
+                "INSERT INTO org_browser_events (node_id, ts, actor, before_json, after_json) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    stored.id,
+                    format_rfc3339(stored.updated_at)?,
+                    actor,
+                    serde_json::to_string(&before)?,
+                    serde_json::to_string(&after)?,
+                ],
+            )?;
+        }
         tx.commit()?;
         Ok(stored)
     }

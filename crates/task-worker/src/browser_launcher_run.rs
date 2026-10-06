@@ -431,6 +431,35 @@ fn refuse_confidential(
     Ok(())
 }
 
+/// shim（`celeris-browser.py`）が読む `policy.json`・`config.json` を書く。形は daemon 経路と同じ
+/// （`policy_sha256` は `policy.json` の byte の sha256、`action_socket` は共通の短い path）。
+/// shim の `load_policy` はこれが揃わないと全 action を拒否する。返すのは shim と action socket の path。
+fn write_shim_files(
+    runtime_dir: &Path,
+    session: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
+    let output = runtime_dir.join("output");
+    std::fs::create_dir_all(&output)?;
+    let cli = runtime_dir.join("celeris-browser.py");
+    let action_socket = crate::browser_action::action_socket_path(runtime_dir)?;
+    write_private(&cli, CLI)?;
+    write_private(&runtime_dir.join("policy.json"), &policy.action_policy)?;
+    write_private(
+        &runtime_dir.join("config.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "session_id": session,
+            "allowed_domains": policy.allowed_domains(),
+            "output": output,
+            "action_socket": action_socket,
+            "policy_sha256": policy.action_policy_sha256,
+            "credential_policy_ids": [],
+            "credential_use": false,
+        }))?,
+    )?;
+    Ok((cli, action_socket))
+}
+
 /// launcher 経由の browser run。harness は従来と同じ shim（`celeris-browser.py`）を使い、
 /// shim の action は daemon の [`ActionServer`] の検査と gate を通ってから launcher に頼まれる。
 pub(super) async fn run(
@@ -447,21 +476,7 @@ pub(super) async fn run(
     let session = super::session_id(req.task.id, run_id);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
-    std::fs::create_dir_all(&output)?;
-    let cli = runtime_dir.join("celeris-browser.py");
-    let action_socket = runtime_dir.with_extension("action.sock");
-    write_private(&cli, CLI)?;
-    write_private(&runtime_dir.join("policy.json"), &policy.action_policy)?;
-    write_private(
-        &runtime_dir.join("config.json"),
-        serde_json::to_vec(&serde_json::json!({
-            "session_id": session,
-            "allowed_domains": policy.allowed_domains(),
-            "output": output,
-            "credential_policy_ids": [],
-            "credential_use": false,
-        }))?,
-    )?;
+    let (cli, action_socket) = write_shim_files(&runtime_dir, &session, policy)?;
     let allowed: task_core::AgentBrowserActionPolicy =
         serde_json::from_slice(&policy.action_policy)
             .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;

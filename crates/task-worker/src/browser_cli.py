@@ -173,7 +173,10 @@ def main(args):
             fcntl.flock(lock, fcntl.LOCK_EX)
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(50)
-                connection.connect(str(ROOT.with_suffix(".action.sock")))
+                # Celeris writes a short socket path (unix sun_path limit); older configs
+                # placed it next to the session dir.
+                sock = config.get("action_socket")
+                connection.connect(sock if isinstance(sock, str) else str(ROOT.with_suffix(".action.sock")))
                 request = {"verb": args[0], "args": args[1:],
                            "artifact": artifact.name if artifact and args[0] in ("screenshot", "download") else None}
                 connection.sendall(json.dumps(request).encode())

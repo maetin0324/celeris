@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use task_core::chat::attachments::ChatAttachmentLimits;
 use task_core::{LlmSourceRef, Tier};
+use task_worker::cos_chat::{HarnessCapabilities, MissingCapability, capability_reason};
 
 use super::{Config, ConfigError};
 
@@ -80,6 +81,29 @@ impl CosHarness {
     }
 }
 
+/// ADR 2026-10-05-cos-chat-home D2: task-worker の能力表（`HarnessCapabilities::for_adapter`）を
+/// 読んで、この harness がまだ確認していない能力の reason を返す。足りない能力があっても harness や
+/// provider を変えない（呼び出し側は警告として扱う）。
+fn harness_capability_warnings(harness: CosHarness) -> Vec<String> {
+    let Some(caps) = HarnessCapabilities::for_adapter(harness.adapter()) else {
+        return Vec::new();
+    };
+    let mut reasons = Vec::new();
+    if !caps.shell {
+        reasons.push(capability_reason(MissingCapability::Shell).to_owned());
+    }
+    if !caps.filesystem {
+        reasons.push(capability_reason(MissingCapability::Filesystem).to_owned());
+    }
+    if !caps.mcp {
+        reasons.push(capability_reason(MissingCapability::Mcp).to_owned());
+    }
+    if !caps.native_image_input && !caps.image_read_tool {
+        reasons.push(capability_reason(MissingCapability::Image).to_owned());
+    }
+    reasons
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CosTriageConfig {
@@ -117,6 +141,9 @@ pub struct ResolvedCosProvider {
     pub account_id: Option<String>,
     pub model: Option<String>,
     pub tier: Tier,
+    /// D2 harness capability table (非致命): この harness の adapter がまだ確認していない能力の
+    /// 理由。CoS の harness/provider 選択には使わない（警告のみ）。
+    pub capability_warnings: Vec<String>,
 }
 
 fn default_enabled() -> bool {
@@ -396,10 +423,28 @@ impl Config {
         Ok(())
     }
 
+    /// D2 harness capability table: non-fatal reasons for abilities the configured harness's
+    /// adapter does not confirm yet (e.g. no native image input, no image-reading tool). This
+    /// never changes `[cos] harness`/`provider`; it is informational only.
+    pub fn cos_harness_capability_warnings(&self) -> Vec<String> {
+        harness_capability_warnings(self.cos.harness)
+    }
+
     /// Pure candidate selection. A missing candidate is an explicit unavailable reason, never
     /// a silent fallback to another harness or source.
     pub fn resolve_cos_provider(&self) -> Result<ResolvedCosProvider, String> {
         let cos = &self.cos;
+        let capability_warnings = harness_capability_warnings(cos.harness);
+        let with_capability_notes = |reason: String| -> String {
+            if capability_warnings.is_empty() {
+                reason
+            } else {
+                format!(
+                    "{reason} (harness capability notes: {})",
+                    capability_warnings.join("; ")
+                )
+            }
+        };
         if !cos.enabled {
             return Err("CoS is disabled by [cos] enabled=false".into());
         }
@@ -438,19 +483,19 @@ impl Config {
                     .and_then(|p| p.tier_models.get(&cos.tier))
                     .and_then(|binding| binding.unavailable_reason.as_ref())
             {
-                return Err(format!(
+                return Err(with_capability_notes(format!(
                     "CoS unavailable: provider {id:?} tier {:?}: {reason}",
                     cos.tier
-                ));
+                )));
             }
-            return Err(format!(
+            return Err(with_capability_notes(format!(
                 "CoS unavailable: no provider for harness={}, tier={:?}, source={:?}, provider={:?}, account={:?}",
                 cos.harness.adapter(),
                 cos.tier,
                 cos.llm_source,
                 cos.provider,
                 cos.account_id
-            ));
+            )));
         };
         Ok(ResolvedCosProvider {
             provider: p.id.clone(),
@@ -467,6 +512,7 @@ impl Config {
                     .or_else(|| self.effective_model(p).map(str::to_owned))
             }),
             tier: cos.tier,
+            capability_warnings,
         })
     }
     /// 添付上限の `[cos.attachments]` を task-core の型で返す。

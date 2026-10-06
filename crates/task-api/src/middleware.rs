@@ -1,6 +1,7 @@
 //! 全要求に掛ける共通の検査と応答ヘッダ（`docs/api/v1/gui-api.md` §1.2〜§1.5）。
 //!
-//! 順序: Host 検査 → `OPTIONS` は 405 → Bearer 認証（`/health` を除く）→ `POST` の Origin / Content-Type / 本文サイズ。
+//! 順序: Host 検査 → `OPTIONS` は 405 → Bearer 認証（`/health` を除く）→ `POST` の Origin / Content-Type / 本文サイズ
+//! → CoS run credential の検証（`crate::cos::authenticate`。`celeris-cos-run.` 接頭辞の bearer だけ）。
 //! 応答には `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`X-Request-Id` を付け、ハンドラが返した
 //! `ApiProblem` をここで `application/problem+json` に描画する（`instance` = `X-Request-Id`）。CORS ヘッダは出さない。
 
@@ -23,13 +24,17 @@ const STREAM_PATH: &str = "/api/v1/stream";
 /// これ以上かかった要求は `warn` で記録する（ADR-0015 D1）。SSE は対象外。
 const SLOW_REQUEST: std::time::Duration = std::time::Duration::from_secs(1);
 
-pub(crate) async fn guard(State(state): State<ApiState>, req: Request, next: Next) -> Response {
+pub(crate) async fn guard(State(state): State<ApiState>, mut req: Request, next: Next) -> Response {
     let request_id = Ulid::new().to_string();
     // ADR-0015 D1: 所要時間を測る。パス以外（クエリ・本体）は記録しない。
     let started = std::time::Instant::now();
     let method = req.method().clone();
     let path = req.uri().path().to_string();
-    let mut response = match check_request(&state, &req) {
+    let checked = match check_request(&state, &req) {
+        Ok(()) => crate::cos::authenticate(&state, &mut req).await,
+        Err(problem) => Err(problem),
+    };
+    let mut response = match checked {
         Ok(()) => {
             let req = if *req.method() == Method::POST
                 && req.uri().path().starts_with("/api/v1/chat/threads/")
@@ -106,8 +111,10 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
         return Err(ApiProblem::method_not_allowed());
     }
 
+    // CoS run credential は接頭辞で決まり、admin token とは比べない（検証は `crate::cos::authenticate`）。
     if let Some(expected) = &state.inner.token_digest
         && req.uri().path() != HEALTH_PATH
+        && crate::cos::cos_bearer_secret(req.headers()).is_none()
     {
         check_bearer(req.headers(), expected)?;
     }
@@ -180,7 +187,13 @@ pub(crate) fn check_bearer(headers: &HeaderMap, expected: &[u8; 32]) -> Result<(
 
 /// ADR-0017 D1: 管理系エンドポイントは `token_file` 未設定（loopback 限定構成）でも認証をスキップしない
 /// （通常のガードは `token_digest` が無ければ全て通す。管理系はここで別に検査する）。
+///
+/// CoS run credential（接頭辞の bearer）は guard が検証済みで、変更系は `/api/v1/cos/` だけが handler に届く
+/// （それ以外は guard が 422）。よってここでは閲覧と CoS 経路の管理操作として通す（ADR 2026-10-05 D2）。
 pub(crate) fn require_admin(state: &ApiState, headers: &HeaderMap) -> Result<(), ApiProblem> {
+    if crate::cos::cos_bearer_secret(headers).is_some() {
+        return Ok(());
+    }
     match &state.inner.token_digest {
         Some(expected) => check_bearer(headers, expected),
         None => Err(ApiProblem::unauthorized()),

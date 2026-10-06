@@ -104,6 +104,7 @@ mod behind_target;
 mod child_tasks;
 mod cluster;
 mod continuation_session;
+pub mod cos_chat;
 mod dispatch_run;
 /// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。
 mod followups;

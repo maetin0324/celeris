@@ -26,3 +26,9 @@ updated: 2026-10-06
 ## 未解決と提案
 
 この fixture は UI 試験用で、CoS の実行は自動進行しない。e2e は hold と emit を使って出来事を進める。実 daemon の処理・権限・容量制限を検証する場合は task-api 側の試験を使う。
+
+## 再試行 2（attempt 2 の範囲 check 不合格）
+
+- 範囲 check が上の 4 file（import 並びの修正）を範囲外として落とした。4 file を base に戻すと `corepack pnpm@12.6.0 -C web lint` は base と同じ 4 error（organizeImports）で exit 1、戻さないと範囲 check が exit 1。計画の check 同士が両立しないので plan_issue として申告した。
+- 4 file を戻した状態で確かめた結果: typecheck exit 0、vitest 62 files / 394 件成功、server 47 件成功、fake-daemon.test.ts 9/9、build exit 0、e2e functional 243 件成功・8 skip。範囲 check は exit 0。
+- 提案: fixture の範囲 check の allow に `web/components/(content/artifact-preview|ui/(confirm-dialog|drawer|gallery))\.test\.tsx` を足す（作業ツリーは import 修正を残した HEAD のまま）。または base の lint 不合格を別の葉で直し、この葉の check から lint を外す。

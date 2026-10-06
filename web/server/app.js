@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createChat } from "./chat.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
@@ -73,14 +74,22 @@ export function createApp({
   daemonUrl,
   daemonTokenFile,
   relayTimeoutMs,
+  chatUploadLimitBytes,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
-  // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。
+  // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。チャットの添付・stream・ダウンロードは
+  // JSON relay の body 上限と timeout を通らないよう、JSON relay より前に登録する（ADR 2026-10-05-cos-chat-home D2・D4）。
   const relays = daemonUrl
     ? [
+        createChat({
+          upstream: daemonUrl,
+          tokenFile: daemonTokenFile,
+          timeoutMs: relayTimeoutMs,
+          uploadLimitBytes: chatUploadLimitBytes,
+        }),
         createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createFiles({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createEvents({ upstream: daemonUrl, tokenFile: daemonTokenFile }),

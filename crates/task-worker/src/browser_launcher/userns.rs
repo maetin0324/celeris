@@ -3,6 +3,7 @@
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -103,10 +104,44 @@ impl UserNamespace {
     pub fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
+
+    /// Ask the mapped subordinate UID to empty browser-writable directories.
+    /// The holder inherited this userns at creation, so no host privilege or
+    /// setns operation is needed. The caller must stop the runtime first.
+    pub fn clear_session_contents(&mut self, dir: &Path) -> io::Result<()> {
+        let path = dir.as_os_str().as_bytes();
+        if path.is_empty() || path.len() >= 4096 || path.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid session path",
+            ));
+        }
+        let mut msg = Vec::with_capacity(path.len() + 1);
+        msg.extend_from_slice(path);
+        msg.push(0);
+        // One write below PIPE_BUF keeps the path intact for the holder.
+        let n = unsafe { libc::write(self._hold.as_raw_fd(), msg.as_ptr().cast(), msg.len()) };
+        if n < 0 || n as usize != msg.len() {
+            return Err(io::Error::last_os_error());
+        }
+        let mut status = 0;
+        if unsafe { libc::waitpid(self.child, &mut status, 0) } != self.child {
+            return Err(io::Error::last_os_error());
+        }
+        self.child = 0;
+        if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::other("subuid session cleanup failed"))
+        }
+    }
 }
 
 impl Drop for UserNamespace {
     fn drop(&mut self) {
+        if self.child == 0 {
+            return;
+        }
         // SAFETY: child is our unreaped holder process and cannot be PID-reused before waitpid.
         unsafe {
             libc::kill(self.child, libc::SIGKILL);
@@ -167,9 +202,31 @@ pub fn create() -> io::Result<UserNamespace> {
             if result != 0 {
                 libc::_exit(1);
             }
-            let mut byte = 0u8;
-            libc::read(hold_r.as_raw_fd(), &mut byte as *mut u8 as *mut _, 1);
-            libc::_exit(0);
+            let mut path = [0u8; 4096];
+            let n = libc::read(hold_r.as_raw_fd(), path.as_mut_ptr().cast(), path.len());
+            if n <= 1 || path[(n - 1) as usize] != 0 {
+                libc::_exit(0);
+            }
+            if libc::chdir(path.as_ptr().cast()) != 0
+                || libc::setresgid(1000, 1000, 1000) != 0
+                || libc::setresuid(1000, 1000, 1000) != 0
+            {
+                libc::_exit(1);
+            }
+            // Fixed command, cwd is opened before dropping to the subordinate
+            // UID because session_root itself is 0700 for the launcher UID.
+            let shell = c"/bin/sh";
+            let arg0 = c"sh";
+            let dash_c = c"-c";
+            let script = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; exit \"$status\"";
+            libc::execl(
+                shell.as_ptr(),
+                arg0.as_ptr(),
+                dash_c.as_ptr(),
+                script.as_ptr(),
+                std::ptr::null::<libc::c_char>(),
+            );
+            libc::_exit(1);
         }
     }
     drop(ready_w);

@@ -2,9 +2,63 @@
 use std::path::{Path, PathBuf};
 
 use super::{
-    BackendConfig, PRODUCTION_CONFIG, PRODUCTION_SOCKET, PRODUCTION_STATE_DIR, egress_policy,
-    refuse_test_loopback_in_production,
+    BackendConfig, PRODUCTION_CONFIG, PRODUCTION_SOCKET, PRODUCTION_STATE_DIR, SessionDir,
+    agent_browser_policy, egress_policy, refuse_test_loopback_in_production, write_shared,
 };
+use crate::browser_launcher::protocol::{ActionArgs, SessionPolicy, Verb};
+use crate::browser_launcher::server::action_allowed;
+
+#[test]
+fn launcher_policy_allows_attach_and_only_authorized_navigation() {
+    let policy = SessionPolicy {
+        allowed_domains: vec!["http://127.0.0.1:17730".into()],
+        allowed_actions: vec![Verb::Open],
+        lease_seconds: 60,
+    };
+    let dir = tempfile::tempdir().expect("session");
+    let path = dir.path().join("policy.json");
+    write_shared(
+        &path,
+        &serde_json::to_vec(&agent_browser_policy(&policy)).expect("encode"),
+    )
+    .expect("write launcher policy");
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(path).expect("read")).expect("decode");
+    assert_eq!(written["allow"], serde_json::json!(["launch", "navigate"]));
+    let open = |url: &str| {
+        action_allowed(
+            &policy,
+            Verb::Open,
+            &ActionArgs {
+                url: Some(url.into()),
+                ..ActionArgs::default()
+            },
+        )
+    };
+    assert!(open("http://127.0.0.1:17730/allowed"));
+    assert!(!open("http://127.0.0.1:17731/denied"));
+    assert_eq!(
+        agent_browser_policy(&SessionPolicy {
+            allowed_actions: vec![],
+            ..policy
+        })["allow"],
+        serde_json::json!(["launch"]),
+        "attach must not grant any user action"
+    );
+}
+
+#[test]
+fn session_dir_guard_removes_session_after_stop_or_failed_setup() {
+    let root = tempfile::tempdir().expect("root");
+    for id in ["stopped", "failed-setup", "supervisor-ended"] {
+        let dir = root.path().join(id);
+        std::fs::create_dir_all(dir.join("profile/nested")).expect("create session");
+        std::fs::write(dir.join("profile/nested/state"), "x").expect("write state");
+        let guard = SessionDir(dir.clone());
+        drop(guard);
+        assert!(!dir.exists(), "{id} session dir remains");
+    }
+}
 
 fn config(extra: &str, socket: &str, state_dir: &str) -> BackendConfig {
     toml::from_str(&format!(

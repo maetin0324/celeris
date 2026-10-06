@@ -117,7 +117,7 @@ function Breadcrumb({ items }: { items: readonly BreadcrumbItem[] }) {
               {item.link && index !== last ? (
                 <Link
                   {...item.link}
-                  className="inline-flex min-h-11 items-center rounded-sm text-primary underline-offset-4 hover:underline"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-sm px-1 text-primary underline-offset-4 hover:underline"
                 >
                   {item.label}
                 </Link>

@@ -1,7 +1,7 @@
 # opencode go を LLM source に加え、subscription と self-host の利用可能モデルを catalog で一括管理する
 
 - 日付: 2026-10-06
-- 状態: 提案（人の確認待ち。確定後に実装を縛る）
+- 状態: 実装済み（phase 1、人の確認待ち: 本番 config の追記は Fable が配送後に行う）
 - 関連: ADR-0024（account pool）、ADR-0049（codex の利用枠確認）、ADR-0053（llm-proxy）、ADR-0069（routing 4 層）、ADR-0080（credential broker）、ADR-0131（cron job）、ADR-0132（provider / llm_source 分離）、ADR 2026-10-04（多目的 model routing）
 - 一次情報の調査記録: run artifacts `opencode-go-research.md`（opencode の source `anomalyco/opencode@52a6c35825` を depth 1 で取得して確かめた）
 
@@ -76,3 +76,19 @@
 - models.dev の `api.json` を catalog の一次にする: 公開 catalog で「その subscription で使えるか」を表さない。opencode go は gateway の `/models`、claude・codex は各 API の方が subscription の実態に近い。
 - catalog の新モデルを自動で tier に入れる: routing の品質評価が無いモデルが勝手に候補になる。人の override で入れる。
 - cron の task として発見を回す: task は LLM run を起こす枠組み。発見は決定的な処理なので tick loop の throttle job にする。
+
+## 付記: 実装突き合わせ（2026-10-06）
+
+phase 1（commit 0bbdafa6）の実装で、本文から変えた点・決めた点。
+
+- **`account_pool` は bool ではなく `AccountPoolSetting`**（`task_core::AccountPoolSetting`、`crates/celeris/src/config/providers.rs`）。`true` / `false` / adapter 名の文字列を受け、acp 行は `account_pool = "opencode-go"` で名前付き pool を指す。行の adapter と名前付き pool が食い違う（claude-code 行で `"codex"` など）と `Config::validate` が拒否する。`llm_source` を省略した acp 行は、pool が opencode-go か model が `opencode-go/` 始まりなら `opencode_go` と推定する。
+- **`measured_remaining`**（`crates/task-dispatch/src/accounts.rs`）: `one_month` を持つ観測は、観測できた窓（5 時間・週・月）だけの最大利用率から残りを出す。持たない観測（claude / codex）は従来どおり 5 時間と 7 日の両方が揃うことを要求する。
+- **確認結果の写像**（`crates/task-worker/src/opencode_account.rs` の `AccountCheckResult`）: `auth.json` なし・鍵が読めない・401/403 は `AuthFailed`、429 は `Throttled`、通信失敗・timeout・解析不能は `SpawnFailed`（観測は更新しない）。
+- **`ModelCatalogChanged` は nil ULID の疑似 task に追記**（`task_core::model_catalog` の疑似 task id、`store/model_catalog.rs`）。events は task ごとの列で、catalog はシステム全体の事柄で task に属さないため。
+- **routing への反映は `unavailable_reason` ではなく deployment の除去**: `apply_model_catalog`（`crates/celeris/src/config/model_catalog.rs`）が `available = 0` か `disabled` のモデルを指す deployment を候補から外し、理由（`catalog:unavailable` / `override:disabled`）を `warnings` に書く。上書きの `disabled` は catalog に行が無いモデルにも効く。`tier` / `alias` は routing には使わない。
+- **self-host の取得先は `<base_url>/models`**（`crates/celeris/src/model_discovery.rs`）。ADR 本文の `<base_url>/v1/models` と違い、config の `base_url` が `…/v1` を含む前提（qwen は `http://127.0.0.1:18000/v1`）。claude は `<base_url>/v1/models?limit=1000`、token は account dir の `.credentials.json` から読む（更新はしない）。
+- **空の発見結果は失敗扱い**（`non_empty`）: 全モデルが「消えた」にならないよう、catalog を変えない。
+- **`one_month` を event に載せるのは OpencodeGo の pool の run だけ**（`quota_estimated`、`crates/task-dispatch/src/dispatcher/quota_book.rs` の `quota_windows_for`）。claude / codex の event は従来の 2 窓のまま。
+- **run 中の 429 の窓の特定は未実装**（D2 の `GoUsageLimitError` / `limitName` / `retry-after`）。`crates/task-worker/src/provider.rs` に TODO を残した。いまは "usage limit" で Exhausted になり、次の定期確認で窓の値が入る。
+- **sticky session は acp の pool に適用しない**: opencode go の run は毎回 pool から account を選ぶ。
+- 発見 hook（`POST /api/v1/llm/models/discover`）は daemon 起動時の config の写しを使うので、`[model_catalog]` の変更は再起動後に効く。

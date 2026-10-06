@@ -18,4 +18,10 @@ tasks: [01M47VN94QK6KHXQDNPCA0V7KK]
 
 ## 実装範囲
 
-この段階は能力表・delivery 判定・共通 reason・prompt のみ。adapter の CLI 引数、ACP メッセージ、能力交渉、画像バイトの受け渡しは後続の各 harness WorkUnit が接続する。dispatcher は能力未確認を `None` として渡し、画像の受け渡しができたと主張しない。
+この段階は能力表・delivery 判定・共通 reason・prompt のみ。adapter の CLI 引数、ACP メッセージ、能力交渉、画像バイトの受け渡しは後続の各 harness WorkUnit が接続する。
+
+## 実装付記（2026-10-06）
+
+dispatcher の `cos_chat/launch.rs` は選択済み harness が `claude-code` または `codex` のとき、その実装済み CLI 入力能力を `CosChatContext.harness_capabilities` に載せる。これが無いと `image_delivery` は `unsupported` を返し、添付は native image 入力に届かない。ACP は起動先 agent が能力を交渉するため、dispatcher は引き続き `None` を渡す。ACP 側で image/resource capability を確認した場合に限って prompt の image/resource block を送る。
+
+`dispatcher/cos_chat/harness_tests.rs` は実 adapter と偽 CLI/偽 ACP を使い、初回→2 run 目の resume、chat_events の text/tool/status、native 画像入力と unsupported の理由を一時 SQLite 上で確認する。偽 CLI は別プロセスで作成し、ETXTBSY を回避する。CoS 判定は `RunContext.cos_chat` に限定され、通常の conversation と WU continuation の分岐は変更していない。

@@ -3115,6 +3115,8 @@ mod remote_push_after_run;
 
 mod cluster_job_wait;
 mod cos_capacity;
+#[path = "../cos_chat/harness_tests.rs"]
+mod cos_chat_harness_tests;
 mod cos_chat_launch;
 mod cos_chat_rollover;
 mod human_gates;

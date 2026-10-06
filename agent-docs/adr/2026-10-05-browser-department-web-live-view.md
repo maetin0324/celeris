@@ -665,21 +665,38 @@ egress は拒否を記録しなかった。ADR-0102/0104 の egress 判定は変
   と、試験用に別 path で起こす launcher の config）に `test_loopback_allow = ["127.0.0.1:<port>", …]` を
   明示したときに限る。daemon の設定・task policy・web の設定画面からは入れられない（ADR-0116 D5 と同じ
   理由: daemon が乗っ取られても egress を広げられない）。
+- launcher config の欄は `BackendConfig.test_loopback_allow`（省略時は空 = off、
+  `crates/task-worker/src/browser_launcher/backend.rs`）。各項目は `127.0.0.1:<port>`（port は 10 進・先頭
+  0 なし・1〜65535・53/853 以外）の形だけを受け、それ以外が 1 つでもあれば config 読込みで起動を拒否する
+  （`validate_test_loopback`）。session の `EgressPolicy.test_loopback_allow` に入るのは、session の
+  `allowed_domains`（`origin_host_port` の `host:port`）と config の集合の**交わり**だけ（`egress_policy`）。
+  有効なとき launcher は起動時に stderr（journal）へ
+  `test-only loopback egress enabled: 127.0.0.1:<port>, …` を出す。
 
 ### E2. 本番では有効にできない（fail-closed の判定方法）
 
 試験許可が空でない設定は、次のどれか 1 つでも本番と一致したら**起動を拒否**する（判定できないときも拒否）。
 
 - **launcher 側**（config を読んだ直後、socket を listen する前）: 自分の config path が
-  `/etc/celeris-browser/launcher.toml`、`socket` が `/run/celeris-browser/launcher.sock`、`state_dir` が
-  `/var/lib/celeris-browser` のいずれかと一致したら exit 非 0。比較は path を正規化（存在する祖先までの
-  `canonicalize`、symlink を解く）してから行い、正規化できない path は一致とみなす。systemd の socket
-  activation で受け取った socket は、その path（`getsockname`）で同じく比べる。
-- **daemon 側**: launcher は handshake（ADR-0116 の IPC）で「試験許可が有効」を申告する。daemon が本番の
-  config・DB を使っていると判定したら（bootstrap の本番判定。ADR-0126 A1 の
-  `worker_db_guard_protected_set` と同じく getpwuid の home の `~/.config/celeris/config.toml` から作った
-  本番 DB・token の集合と自分の DB・token が一致する、または判定不能）、試験許可を申告した launcher との
-  session を作らず拒否する。本番 daemon が試験用 launcher に誤ってつながっても有効にならない。
+  `/etc/celeris-browser/launcher.toml`、`socket` が `/run/celeris-browser/launcher.sock` と一致するか、
+  `state_dir` が `/var/lib/celeris-browser` と一致・その配下・その祖先なら exit 非 0
+  （`refuse_test_loopback_in_production`、`crates/task-worker/src/bin/celeris-browser-launcher.rs`）。
+  比較は path を正規化（存在する祖先までの `canonicalize`、symlink を解き、残りを足す）してから行い、
+  正規化できない path（相対 path、未作成部分の `..`）は一致とみなす。systemd の socket activation で
+  受け取った socket は、その path（`getsockname`。採れなければ拒否）で同じく比べる。
+- **daemon 側**: launcher protocol に `hello`（要求 `{"type":"hello"}`、応答
+  `{"type":"hello","protocol_version":3,"test_loopback_allow":[…]}`。空なら欄を出さない）を足し、launcher は
+  config の試験許可をそのまま申告する。daemon は `[browser] runtime = "launcher"` のとき起動時に本番判定を
+  し（`crates/celeris/src/daemon/bootstrap.rs` の `browser_launcher_refuses_test_loopback` /
+  `launcher_test_loopback_refusal`）、本番なら各 session の `start_session` の前に `hello` を送る。申告が
+  空でない、または `hello` に答えない（旧版の launcher・error）なら session を作らず
+  `isolated_runtime_unavailable` にする（`LauncherRuntime::start_guarded`）。本番判定は次のどれか:
+  ADR-0126 A1 の `worker_db_guard_protected_set`（getpwuid の home の `~/.config/celeris/config.toml`）で
+  P を決められない、daemon が読んだ config がその本番 config そのもの（正規化して比べる。verify の staging
+  のように DB だけ差し替えた daemon も含む）、`judge_worker_db_guard`（印は `Absent` で呼ぶ）が
+  `RefuseProduction`（DB・DB のディレクトリ・token の path か中身が本番に当たる）。本番 daemon が試験用
+  launcher に誤ってつながっても有効にならない。本番の daemon は `hello` に答える launcher を要るので、
+  この版の daemon を入れるときは launcher の binary も同じ release のものに入れ替える。
 - 試験許可が空の launcher（既定）にはこの検査は掛からず、従来どおり動く。
 
 ### E3. 拒否理由の記録

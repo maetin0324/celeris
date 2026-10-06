@@ -461,6 +461,61 @@ pub(crate) fn worker_db_guard_decision(
     }
 }
 
+/// 付記 E2（ADR 2026-10-05-browser-department-web-live-view、daemon 側）: この daemon が試験専用 loopback
+/// 許可を申告した browser launcher を拒否するか（真 = 拒否）。本番判定は worker db guard と同じ P
+/// （[`worker_db_guard_protected_set`]）を使う。
+pub(crate) fn browser_launcher_refuses_test_loopback(config: &Config) -> bool {
+    match launcher_test_loopback_refusal(
+        passwd_home().as_deref(),
+        config.source_path.as_deref(),
+        &worker_db_guard_daemon_paths(config),
+    ) {
+        Some(reason) => {
+            tracing::debug!(%reason, "browser launcher: test-only loopback egress is refused for this daemon");
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`browser_launcher_refuses_test_loopback`] の判定（試験から userns なしで呼ぶ）。拒否するなら理由。
+/// 次のどれかで拒否する（fail closed）: 本番 config（`home` の `.config/celeris/config.toml`）から P を
+/// 決められない、daemon が読んだ config がその本番 config そのもの（正規化して比べる。正規化できなければ
+/// 一致とみなす）、daemon の DB・DB のディレクトリ・token が本番に当たる（`judge_worker_db_guard` の
+/// `RefuseProduction`。印は見ない）。
+pub(crate) fn launcher_test_loopback_refusal(
+    home: Option<&Path>,
+    config_path: Option<&Path>,
+    daemon: &DaemonPaths,
+) -> Option<String> {
+    let protected = worker_db_guard_protected_set(home);
+    if !protected.unknown_reasons().is_empty() {
+        return Some(format!(
+            "the production config cannot be determined: {}",
+            protected.unknown_reasons().join("; ")
+        ));
+    }
+    if let (Some(home), Some(config_path)) = (home, config_path) {
+        let production = home.join(".config/celeris/config.toml");
+        if production.exists() {
+            match (production.canonicalize(), config_path.canonicalize()) {
+                (Ok(p), Ok(c)) if p != c => {}
+                _ => {
+                    return Some(format!(
+                        "config {} is the production config",
+                        config_path.display()
+                    ));
+                }
+            }
+        }
+    }
+    match task_worker::db_guard::judge_worker_db_guard(&protected, daemon, &WorkerRunMarker::Absent)
+    {
+        GuardDecision::RefuseProduction { reason, .. } => Some(reason),
+        GuardDecision::Exempt | GuardDecision::RequireUserns { .. } => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "bootstrap_worker_db_guard_tests.rs"]
 mod worker_db_guard_tests;

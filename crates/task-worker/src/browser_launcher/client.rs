@@ -140,6 +140,17 @@ impl LauncherClient {
         }
     }
 
+    /// launcher の申告（protocol の版と試験専用 loopback 許可）を問う。session は作らない。
+    pub fn hello(&mut self) -> Result<(u32, Vec<String>), ClientError> {
+        match self.request(&Request::Hello {})? {
+            Response::Hello {
+                protocol_version,
+                test_loopback_allow,
+            } => Ok((protocol_version, test_loopback_allow)),
+            other => Err(unexpected("hello", &other)),
+        }
+    }
+
     pub fn start_session(
         &mut self,
         task_id: &str,
@@ -225,6 +236,7 @@ fn raw_excerpt(body: &[u8]) -> String {
 
 fn unexpected(want: &str, got: &Response) -> ClientError {
     let got = match got {
+        Response::Hello { .. } => "hello",
         Response::Started { .. } => "started",
         Response::ActionResult { .. } => "action_result",
         Response::Observed { .. } => "observed",

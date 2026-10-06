@@ -12,6 +12,9 @@ mod operations;
 #[cfg(test)]
 mod operations_tests;
 mod run_store;
+mod session;
+#[cfg(test)]
+mod session_tests;
 mod store;
 #[cfg(test)]
 mod store_tests;
@@ -20,6 +23,10 @@ pub use operations::{AuditContext, CosOperation};
 pub use run_store::{
     CHAT_EVENT_PAGE_DEFAULT, CHAT_EVENT_PAGE_MAX, CHAT_EVENT_RETENTION_DAYS,
     CHAT_TOOL_DETAIL_MAX_BYTES, ChatEventQuery, ChatStopOutcome, chat_run_state_is_terminal,
+};
+pub use session::{
+    COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
+    ChatSession, ChatSessionKey,
 };
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,

@@ -32,6 +32,22 @@ opencode go の subscription を account pool の第 3 の adapter・LLM source 
 - `pnpm -C web e2e`: exit 0（269 passed、8 skipped。`e2e/admin/models.spec.ts` 5 件を含む）
 - `pnpm -C web e2e:nfr`: exit 0（106 passed。`/models` の axe 4 幅を含む）
 
+## 再レビュー対応（attempt 2、2026-10-06）
+
+- `web/api/realtime/invalidation-map.ts` の import を Biome で整形し、`modelKeys` を名前順に配置した。実行時の処理は変更していない。
+- `pnpm -C web lint`: exit 0（382 files、error 0。既存の `styles.css` の warning 4 件）。前回の organizeImports / format の error 2 件を解消した。
+- 上記以外の検証結果は前回の実行記録。今回の変更は import の整形と本記録のみのため、Rust・web の機能試験は再実行していない。
+
+## 統合時の注意
+
+本ブランチの `0052_model_catalog.sql` は、並行中の CoS ブランチ
+`celeris-wu/01M46VVAD0ZAVZ9C4Q0KJM9ESV/live-check` の
+`0052_cos_run_credentials.sql` と版数が重なる。同ブランチは `0053_cos_triage.sql` も使用している。
+本ブランチの `RESERVED_VERSIONS` は `[38, 39, 40, 50]` で、この重複を回避しない。
+後から main に取り込む側で、その時点の未使用番号へ振り直すこと。
+SQL ファイル名・migration 登録・`SCHEMA_VERSION`・版数を固定した試験と文書の参照をそろえ、
+既存 DB からの migration 試験と workspace 検査を再実行する。
+
 ## 未解決事項
 
 - run 中の 429（`GoUsageLimitError`）の窓の特定と `resets_at` の記録が未実装（`crates/task-worker/src/provider.rs` の TODO）。

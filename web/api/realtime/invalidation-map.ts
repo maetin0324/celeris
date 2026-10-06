@@ -10,13 +10,14 @@
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { EventRow } from "../generated/types";
 import {
-  accountKeys, modelKeys,
+  accountKeys,
   approvalKeys,
   boardKeys,
   clusterKeys,
   daemonKeys,
   inboxKeys,
   metricKeys,
+  modelKeys,
   notificationKeys,
   projectKeys,
   providerKeys,

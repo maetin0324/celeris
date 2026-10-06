@@ -57,7 +57,7 @@ it("serves schema-valid rich data without changing the default profile", async (
     ((await (await get("/tasks/T1/changes")).json()) as { repos: Array<{ files: unknown[] }> }).repos[0].files,
   ).toHaveLength(15);
   expect(((await (await get("/tasks/T1/artifacts")).json()) as { items: unknown[] }).items).toHaveLength(12);
-  expect((await (await get("/tasks/T1/runs/R1/stdout.jsonl")).text()).split("\n")).toHaveLength(28);
+  expect((await (await get("/tasks/T1/runs/R1/stdout")).text()).split("\n")).toHaveLength(28);
   expect(((await (await get("/console")).json()) as { items: unknown[] }).items).toHaveLength(3);
   expect(defaultFixtures["/api/v1/console"]).not.toEqual(rich["/api/v1/console"]);
 });

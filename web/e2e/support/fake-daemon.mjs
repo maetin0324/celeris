@@ -1134,7 +1134,7 @@ export function richFixtures() {
 
 export function richFiles() {
   return {
-    "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+    "/api/v1/tasks/T1/runs/R1/stdout": {
       body: `${[
         { type: "user", message: { role: "user", content: [{ type: "text", text: "画面を確認してください" }] } },
         {

@@ -104,7 +104,7 @@ after(async () => {
 });
 
 test("filePath accepts runs and artifacts, rejects traversal, separators and NUL", () => {
-  assert.equal(filePath("/tasks/T1/runs/R1/stdout.jsonl"), "/api/v1/tasks/T1/runs/R1/stdout.jsonl");
+  assert.equal(filePath("/tasks/T1/runs/R1/stdout"), "/api/v1/tasks/T1/runs/R1/stdout");
   assert.equal(filePath("/tasks/T1/artifacts/3"), "/api/v1/tasks/T1/artifacts/3");
   for (const bad of [
     "/tasks/T1/runs/R1/..",
@@ -172,12 +172,12 @@ test("view helpers fill html/svg/pdf types by name and keep sandbox except for p
 });
 
 test("run file relays offset/length/download and allowlisted headers with nosniff", async () => {
-  const res = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl?offset=10&length=5&download=1`, {
+  const res = await fetch(`${base}/files/tasks/T1/runs/R1/stdout?offset=10&length=5&download=1`, {
     headers: { Authorization: "Bearer browser", Cookie: "a=b" },
   });
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), {
-    path: "/api/v1/tasks/T1/runs/R1/stdout.jsonl",
+    path: "/api/v1/tasks/T1/runs/R1/stdout",
     query: "?offset=10&length=5&download=1",
   });
   const req = seen.at(-1);
@@ -191,14 +191,14 @@ test("run file relays offset/length/download and allowlisted headers with nosnif
 });
 
 test("Range is forwarded and 206 / 416 with Content-Range are kept", async () => {
-  const partial = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=2-5" } });
+  const partial = await fetch(`${base}/files/tasks/T1/runs/R1/stdout`, { headers: { Range: "bytes=2-5" } });
   assert.equal(partial.status, 206);
   assert.equal(partial.headers.get("content-range"), "bytes 2-5/20");
   assert.equal(await partial.text(), "2345");
-  const outside = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=99-100" } });
+  const outside = await fetch(`${base}/files/tasks/T1/runs/R1/stdout`, { headers: { Range: "bytes=99-100" } });
   assert.equal(outside.status, 416);
   assert.equal(outside.headers.get("content-range"), "bytes */20");
-  const bad = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "lines=1-2" } });
+  const bad = await fetch(`${base}/files/tasks/T1/runs/R1/stdout`, { headers: { Range: "lines=1-2" } });
   assert.equal(bad.status, 400);
 });
 
@@ -300,7 +300,7 @@ test("daemon 401 is reported as daemon_auth, not a session 401", async () => {
   const other = await listen(
     http.createServer(createApp({ daemonUrl: base.replace(/:\d+$/, `:${daemon.address().port}`), log: () => {} })),
   );
-  const res = await fetch(`${other}/files/tasks/T1/runs/R1/stdout.jsonl`);
+  const res = await fetch(`${other}/files/tasks/T1/runs/R1/stdout`);
   assert.equal(res.status, 502);
   assert.equal(res.headers.get("x-celeris-web-error"), "daemon_auth");
   assert.ok(!(await res.text()).includes(TOKEN));

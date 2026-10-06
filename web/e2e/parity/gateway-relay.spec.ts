@@ -18,7 +18,7 @@ writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
 const daemon = createFakeDaemon({
   token: FIXTURE_TOKEN,
   files: {
-    "/api/v1/tasks/T1/runs/R1/stdout.jsonl": { body: '{"n":1}\n{"n":2}\n', type: "application/x-ndjson" },
+    "/api/v1/tasks/T1/runs/R1/stdout": { body: '{"n":1}\n{"n":2}\n', type: "application/x-ndjson" },
     "/api/v1/tasks/T1/artifacts/0": { body: "# report\n", type: "text/markdown" },
     "/api/v1/tasks/T1/artifacts/1": {
       body: "<script>document.title='ran'</script><p>html</p>",
@@ -76,17 +76,17 @@ test("parity-x: token が HTML・bundle・エラーに出ない", async ({ page 
 });
 
 test("parity: files runs 中継・Range・offset・不正 name", async () => {
-  const full = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl?offset=0&length=100`);
+  const full = await fetch(`${base}/files/tasks/T1/runs/R1/stdout?offset=0&length=100`);
   expect(full.status).toBe(200);
   expect(await full.text()).toBe('{"n":1}\n{"n":2}\n');
   expect(full.headers.get("x-content-type-options")).toBe("nosniff");
   expect(daemon.requests.at(-1)?.authorization).toBe(`Bearer ${FIXTURE_TOKEN}`);
 
-  const partial = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=8-" } });
+  const partial = await fetch(`${base}/files/tasks/T1/runs/R1/stdout`, { headers: { Range: "bytes=8-" } });
   expect(partial.status).toBe(206);
   expect(partial.headers.get("content-range")).toBe("bytes 8-15/16");
   expect(await partial.text()).toBe('{"n":2}\n');
-  const outside = await fetch(`${base}/files/tasks/T1/runs/R1/stdout.jsonl`, { headers: { Range: "bytes=99-" } });
+  const outside = await fetch(`${base}/files/tasks/T1/runs/R1/stdout`, { headers: { Range: "bytes=99-" } });
   expect(outside.status).toBe(416);
   expect(outside.headers.get("content-range")).toBe("bytes */16");
 

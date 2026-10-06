@@ -42,5 +42,5 @@ export function flushPartial(buffer: RunLogBuffer): RunLogBuffer {
 }
 
 export function runFilePath(taskId: string, runId: string, offset: number): string {
-  return `/files/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/stdout.jsonl?offset=${offset}`;
+  return `/files/tasks/${encodeURIComponent(taskId)}/runs/${encodeURIComponent(runId)}/stdout?offset=${offset}`;
 }

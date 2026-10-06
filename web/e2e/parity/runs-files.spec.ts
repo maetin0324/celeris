@@ -29,7 +29,7 @@ test.describe("P3-12", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-run-log-"));
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-    const stdoutPath = "/api/v1/tasks/T1/runs/R1/stdout.jsonl";
+    const stdoutPath = "/api/v1/tasks/T1/runs/R1/stdout";
     const lines = Array.from({ length: 40 }, (_, i) => line(`行 ${i + 1}`));
     lines.push("not json");
     let body = `${lines.join("\n")}\n`;

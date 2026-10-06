@@ -24,7 +24,7 @@ describe("run-log buffer", () => {
   });
 
   it("builds the relay path", () => {
-    expect(runFilePath("T 1", "R1", 5)).toBe("/files/tasks/T%201/runs/R1/stdout.jsonl?offset=5");
+    expect(runFilePath("T 1", "R1", 5)).toBe("/files/tasks/T%201/runs/R1/stdout?offset=5");
   });
 
   it("parses claude-code stream-json", () => {

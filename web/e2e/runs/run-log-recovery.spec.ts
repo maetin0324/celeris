@@ -10,7 +10,7 @@ test("run ログの取得失敗は再試行で読み直せる", async ({ page })
   const gateway = await startFixtureGateway();
   try {
     let fail = true;
-    await page.route("**/files/tasks/T1/runs/R1/stdout.jsonl*", (route) =>
+    await page.route("**/files/tasks/T1/runs/R1/stdout*", (route) =>
       fail ? route.fulfill({ status: 503, body: "unavailable" }) : route.fallback(),
     );
     await page.setViewportSize({ width: 360, height: 800 });

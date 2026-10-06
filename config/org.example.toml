@@ -133,7 +133,7 @@ default = "coding"
 # ADR 2026-10-05-browser-department-web-live-view D1: Engineering の下に置く（部に格上げしない・
 # CoS 直下にしない）。子 node は作らない（grant は丸ごと置換で継がれ、課だけに留める）。
 # 初期の allowed_domains は loopback だけ（人の決定 browser-initial-domains）。業務 host は
-# 配送後に人が PATCH /api/v1/org/browser-execution で足す（docs/ops/browser-execution-section.md）。
+# 配送後に人が PATCH /api/v1/org/browser-execution/browser-settings で足す（docs/ops/browser-department.md の §3）。
 [[org]]
 id = "browser-execution"
 name = "ブラウザ実行課"

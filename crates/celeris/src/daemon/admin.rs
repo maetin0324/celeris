@@ -223,6 +223,7 @@ pub(crate) fn reload_providers(
     config.delegation = new_config.delegation;
     config.reports = new_config.reports;
     config.notify = new_config.notify;
+    config.cos = new_config.cos;
     config.conversation = new_config.conversation;
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
@@ -432,4 +433,38 @@ pub(crate) fn truncate_detail(text: &str) -> String {
         return one_line;
     }
     one_line.chars().take(199).collect::<String>() + "…"
+}
+
+#[cfg(test)]
+mod cos_chat_config_tests {
+    use super::*;
+
+    #[test]
+    fn cos_chat_config_reload_keeps_old_config_on_invalid_mapping() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let db = dir.path().join("celeris.db");
+        let ws = dir.path().join("ws");
+        let write_config = |cos: &str| {
+            std::fs::write(
+                &path,
+                format!("db = {db:?}\nworkspace_root = {ws:?}\n[cos]\n{cos}\n[[providers]]\nid = \"claude\"\nadapter = \"claude-code\"\n"),
+            )
+            .unwrap();
+        };
+        write_config("max_turns = 12");
+        let mut config = Config::load(&path).unwrap();
+        let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+        write_config("max_turns = 99\nprovider = \"claude\"\nharness = \"codex\"");
+        assert!(
+            reload_providers(&mut dispatcher, &mut config)
+                .unwrap_err()
+                .contains("conflicts")
+        );
+        assert_eq!(config.cos.max_turns, 12);
+        assert_eq!(config.resolve_cos_provider().unwrap().provider, "claude");
+        write_config("max_turns = 99");
+        reload_providers(&mut dispatcher, &mut config).unwrap();
+        assert_eq!(config.cos.max_turns, 99);
+    }
 }

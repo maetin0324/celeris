@@ -1,14 +1,13 @@
-//! Discord への送り出し。ADR-0133 D6 では受信箱の新着と通知の要約を別経路で送る。
-//! `schedule_routes` が現行の判定で、旧 `scan` / `schedule` は既存試験用に残す。
+//! Discord への送り出し。通常の送信は CoS escalation / unavailable fallback のみ。
+//! 旧 `scan` / `schedule` / `schedule_routes` は互換試験用に残すが daemon は呼ばない。
 //!
 //! ADR-0050: 通常仕事の完了・全体対話も通知する。未解決の待ちは再起動後も対象、
 //! 終端イベントの走査時刻はDBに永続化する。以下のPhase記録の起動時刻制限を更新した。
 //!
 //! 判定と送信を分ける:
 //!
-//! 1. **判定**（`schedule_routes`）— 派生した受信箱項目と通知を読み、二経路の pending を作る。
-//!    LLM は関与せず、`tick_loop` の中から同期で呼ぶ。旧 `scan` / `schedule` は互換試験用。
-//! 2. **送信**（`spawn_send` / `post_webhook`）— pending を Discord の webhook へ POST する。
+//! 1. **判定** — CoS resolve / fallback が source revision ごとの outbox を作る。
+//! 2. **送信**（`spawn_send` / `post_webhook`）— CoS の pending のみ Discord の webhook へ POST する。
 //!    tick をブロックしないよう `tokio::spawn` で送り、**結果は次の tick で** `notification_mark` する
 //!    （送信結果は `mpsc` でループへ戻る。ADR-0022 D2 の `check` と同じ形）。
 //!
@@ -43,6 +42,8 @@ use task_core::{
     ListFilter, ListOrder, Notification, ProjectStatus, Status, StoreError, TaskStore,
 };
 use time::OffsetDateTime;
+
+pub mod triage;
 
 /// `[notify] interval_secs` の既定（ADR-0037 D3）。
 pub const DEFAULT_INTERVAL_SECS: u64 = 30;
@@ -1154,12 +1155,16 @@ pub fn schedule_routes(
     Ok(created)
 }
 
-/// Only the two ADR-0133 outbound kinds may reach the webhook.
+/// Only the two CoS outbox kinds may reach the webhook.
 pub fn select_routes_batch(pending: &[Notification]) -> Option<SendBatch> {
     pending
         .iter()
-        .find(|n| n.kind == NotificationKind::InboxNew)
-        .or_else(|| pending.iter().find(|n| n.kind == NotificationKind::Digest))
+        .find(|n| {
+            matches!(
+                n.kind,
+                NotificationKind::CosEscalation | NotificationKind::CosFallback
+            )
+        })
         .map(|n| SendBatch {
             ids: vec![n.id],
             content: n.body.clone(),
@@ -1256,6 +1261,7 @@ pub async fn post_webhook(client: &reqwest::Client, url: &str, content: &str) ->
     let payload = serde_json::json!({
         "content": clamp_content(content),
         "username": WEBHOOK_USERNAME,
+        "allowed_mentions": { "parse": [] },
     });
     let response = match client
         .post(url)

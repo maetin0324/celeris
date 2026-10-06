@@ -37,6 +37,62 @@ impl ActionExecutor for FileExecutor {
     }
 }
 
+/// `sockaddr_un.sun_path` は NUL 込みで 108 byte。bind できる path はこの長さまで。
+pub(crate) const SUN_PATH_MAX: usize = 107;
+/// action socket を置く短い base（ADR 2026-10-06-browser-action-socket-path）。
+const ACTION_SOCKET_BASE: &str = "/tmp";
+
+/// shim と daemon の間の action socket の path。daemon 経路と launcher 経路で共通。
+/// workspace の深さに依らない固定長（`/tmp/celeris-browser-<uid>/<hash 16 桁>.sock`）にし、
+/// 上限を超えるなら bind の前に path と長さを含む誤りにする。
+pub(crate) fn action_socket_path(session_dir: &Path) -> Result<PathBuf, crate::AdapterError> {
+    action_socket_path_in(Path::new(ACTION_SOCKET_BASE), session_dir)
+}
+
+pub(crate) fn action_socket_path_in(
+    base: &Path,
+    session_dir: &Path,
+) -> Result<PathBuf, crate::AdapterError> {
+    use sha2::{Digest, Sha256};
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{DirBuilderExt, FileTypeExt, MetadataExt};
+    let uid = nix::unistd::geteuid().as_raw();
+    let dir = base.join(format!("celeris-browser-{uid}"));
+    let digest = Sha256::digest(session_dir.as_os_str().as_bytes());
+    let socket = dir.join(format!("{:x}", digest)[..16].to_string() + ".sock");
+    let len = socket.as_os_str().len();
+    if len > SUN_PATH_MAX {
+        return Err(crate::AdapterError::Other(format!(
+            "browser action socket path is {len} bytes (unix socket limit {SUN_PATH_MAX}): {}",
+            socket.display()
+        )));
+    }
+    let unusable = |why: &str| {
+        crate::AdapterError::Other(format!(
+            "browser action socket dir {} is unusable: {why}",
+            dir.display()
+        ))
+    };
+    match std::fs::DirBuilder::new().mode(0o700).create(&dir) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(e) => return Err(unusable(&e.to_string())),
+    }
+    // 共有の /tmp なので、他人の dir・symlink・緩い mode は使わない。
+    let meta = std::fs::symlink_metadata(&dir).map_err(|e| unusable(&e.to_string()))?;
+    if !meta.is_dir() || meta.uid() != uid || meta.mode() & 0o077 != 0 {
+        return Err(unusable("not a private directory owned by this user"));
+    }
+    // 前の run が残した同じ名前の socket は消す（名前は session dir ごとに決まる）。
+    if let Ok(old) = std::fs::symlink_metadata(&socket) {
+        if !old.file_type().is_socket() {
+            return Err(unusable("socket name is taken by a non-socket"));
+        }
+        std::fs::remove_file(&socket).map_err(|e| unusable(&e.to_string()))?;
+    }
+    Ok(socket)
+}
+
 pub struct ActionServer {
     socket: PathBuf,
     stop: mpsc::Sender<()>,

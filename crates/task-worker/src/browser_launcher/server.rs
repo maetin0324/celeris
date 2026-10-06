@@ -655,7 +655,7 @@ fn authorize(
     Ok(e.clone())
 }
 
-/// launcher 側での policy の再検査（verb と URL の domain）。
+/// launcher 側での policy の再検査（verb と URL の origin）。
 fn action_allowed(policy: &SessionPolicy, verb: Verb, args: &ActionArgs) -> bool {
     if !policy.allowed_actions.contains(&verb) {
         return false;
@@ -672,10 +672,14 @@ fn action_allowed(policy: &SessionPolicy, verb: Verb, args: &ActionArgs) -> bool
             let Some(host) = url.host_str() else {
                 return false;
             };
-            policy
-                .allowed_domains
-                .iter()
-                .any(|d| host == d || host.ends_with(&format!(".{d}")))
+            // daemon が渡すのは task-core の正規 origin（`https://host[:port]`・loopback の
+            // `http://…`）。scheme・host・port で照合する。`://` の無い旧来の素の host は従来どおり。
+            crate::browser_policy::url_origin_allowed(u, &policy.allowed_domains)
+                || policy
+                    .allowed_domains
+                    .iter()
+                    .filter(|d| !d.contains("://"))
+                    .any(|d| host == d || host.ends_with(&format!(".{d}")))
         }
     }
 }
@@ -794,5 +798,53 @@ where
             g.abandoned = true;
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod origin_tests {
+    use super::*;
+
+    fn open(policy: &SessionPolicy, url: &str) -> bool {
+        action_allowed(
+            policy,
+            Verb::Open,
+            &ActionArgs {
+                url: Some(url.into()),
+                ..ActionArgs::default()
+            },
+        )
+    }
+
+    /// daemon が渡す正規 origin は scheme・host・port で照合する（素の host 比較では全拒否だった）。
+    #[test]
+    fn open_matches_canonical_origins_by_scheme_host_and_port() {
+        let policy = SessionPolicy {
+            allowed_domains: vec![
+                "https://example.com".into(),
+                "http://127.0.0.1:17730".into(),
+            ],
+            allowed_actions: vec![Verb::Open],
+            lease_seconds: 60,
+        };
+        assert!(open(&policy, "https://example.com/a"));
+        assert!(open(&policy, "http://127.0.0.1:17730/"));
+        assert!(!open(&policy, "http://example.com/a"));
+        assert!(!open(&policy, "https://example.com:8443/"));
+        assert!(!open(&policy, "https://sub.example.com/"));
+        assert!(!open(&policy, "http://127.0.0.1:17731/"));
+        assert!(!open(&policy, "https://evil.test/"));
+    }
+
+    #[test]
+    fn open_keeps_bare_host_entries_as_before() {
+        let policy = SessionPolicy {
+            allowed_domains: vec!["example.com".into()],
+            allowed_actions: vec![Verb::Open],
+            lease_seconds: 60,
+        };
+        assert!(open(&policy, "https://example.com/a"));
+        assert!(open(&policy, "https://docs.example.com/a"));
+        assert!(!open(&policy, "https://evil.test/"));
     }
 }

@@ -34,7 +34,8 @@ import type {
   TransitionResult,
 } from "../../../api/generated/types";
 
-const API = "/api/v1";
+// Browser-facing gateway は /api を daemon の /api/v1 に中継する。
+const API = "/api";
 const seg = encodeURIComponent;
 
 function query(params: Record<string, string | number | null | undefined>): string {

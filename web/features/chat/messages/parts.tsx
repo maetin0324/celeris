@@ -4,6 +4,7 @@ import type { ChatAttachment, ChatStatusData } from "../../../api/generated/type
 import { CodeBlock } from "../../../components/ui/code-block";
 import { Icon } from "../../../components/ui/icon";
 import { cn } from "../../../lib/utils";
+import { chatPaths } from "../data/client";
 import type { ToolEntry } from "../data/reducer";
 import { formatBytes, statusLabel } from "./logic";
 
@@ -117,13 +118,13 @@ export function AttachmentList({
         return (
           <li key={id} data-slot="chat-attachment" className="min-w-0 max-w-full">
             <a
-              href={attachment.download_url}
+              href={chatPaths.attachmentContent(id)}
               download={attachment.name}
               className="flex min-h-11 min-w-0 max-w-full items-center gap-2 rounded-md border border-border bg-card px-3 py-2 text-label hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               {image ? (
                 <img
-                  src={attachment.preview_url ?? undefined}
+                  src={chatPaths.attachmentPreview(id)}
                   alt={attachment.name}
                   loading="lazy"
                   className="max-h-40 max-w-full rounded-sm object-contain"

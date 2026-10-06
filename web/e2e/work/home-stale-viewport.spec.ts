@@ -3,7 +3,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { startFixtureGateway } from "../support/fixture-gateway";
 import { applyStateRoute, stateByKey } from "../support/states";
 
-// fix-r7 home: stale の /（stream が 503 を返し続ける）を電話幅で開いた初期 viewport（scroll 前）で、
+// fix-r7 home: stale の /console（stream が 503 を返し続ける）を電話幅で開いた初期 viewport（scroll 前）で、
 // 固定の送信欄の上端より上に会話本文が 150px 以上見える（narrow-r6.spec の (6) と同じ基準を scroll 前で測る）。
 // stale では接続状態が「確認中」と「再接続中」を行き来する。その切替で document の高さが変わらない。
 
@@ -12,7 +12,7 @@ async function settle(page: Page) {
 }
 
 for (const width of [360, 390, 412]) {
-  test(`stale の / ${width}: scroll 前の viewport で送信欄の上に会話本文が 150px 以上見え、接続状態の切替で高さが跳ねない`, async ({
+  test(`stale の /console ${width}: scroll 前の viewport で送信欄の上に会話本文が 150px 以上見え、接続状態の切替で高さが跳ねない`, async ({
     page,
   }) => {
     const stale = stateByKey("stale");
@@ -20,7 +20,7 @@ for (const width of [360, 390, 412]) {
     try {
       await page.setViewportSize({ width, height: 800 });
       await applyStateRoute(page, stale);
-      await page.goto(`${gateway.base}/`);
+      await page.goto(`${gateway.base}/console`);
       await expect(page.locator("[data-connection]")).toHaveAttribute("data-connection", "reconnecting", {
         timeout: 15_000,
       });

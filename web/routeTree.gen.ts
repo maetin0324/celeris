@@ -15,6 +15,7 @@ import { Route as ApprovalsRouteImport } from './routes/approvals'
 import { Route as ArtifactsRouteImport } from './routes/artifacts'
 import { Route as BoardRouteImport } from './routes/board'
 import { Route as ClustersRouteImport } from './routes/clusters'
+import { Route as ConsoleRouteImport } from './routes/console'
 import { Route as DaemonRouteImport } from './routes/daemon'
 import { Route as GraphRouteImport } from './routes/graph'
 import { Route as HelpRouteImport } from './routes/help'
@@ -70,6 +71,11 @@ const BoardRoute = BoardRouteImport.update({
 const ClustersRoute = ClustersRouteImport.update({
   id: '/clusters',
   path: '/clusters',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ConsoleRoute = ConsoleRouteImport.update({
+  id: '/console',
+  path: '/console',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DaemonRoute = DaemonRouteImport.update({
@@ -211,6 +217,7 @@ export interface FileRoutesByFullPath {
   '/artifacts': typeof ArtifactsRoute
   '/board': typeof BoardRoute
   '/clusters': typeof ClustersRoute
+  '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
   '/help': typeof HelpRoute
@@ -245,6 +252,7 @@ export interface FileRoutesByTo {
   '/artifacts': typeof ArtifactsRoute
   '/board': typeof BoardRoute
   '/clusters': typeof ClustersRoute
+  '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
   '/help': typeof HelpRoute
@@ -280,6 +288,7 @@ export interface FileRoutesById {
   '/artifacts': typeof ArtifactsRoute
   '/board': typeof BoardRoute
   '/clusters': typeof ClustersRoute
+  '/console': typeof ConsoleRoute
   '/daemon': typeof DaemonRoute
   '/graph': typeof GraphRoute
   '/help': typeof HelpRoute
@@ -316,6 +325,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/board'
     | '/clusters'
+    | '/console'
     | '/daemon'
     | '/graph'
     | '/help'
@@ -350,6 +360,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/board'
     | '/clusters'
+    | '/console'
     | '/daemon'
     | '/graph'
     | '/help'
@@ -384,6 +395,7 @@ export interface FileRouteTypes {
     | '/artifacts'
     | '/board'
     | '/clusters'
+    | '/console'
     | '/daemon'
     | '/graph'
     | '/help'
@@ -419,6 +431,7 @@ export interface RootRouteChildren {
   ArtifactsRoute: typeof ArtifactsRoute
   BoardRoute: typeof BoardRoute
   ClustersRoute: typeof ClustersRoute
+  ConsoleRoute: typeof ConsoleRoute
   DaemonRoute: typeof DaemonRoute
   GraphRoute: typeof GraphRoute
   HelpRoute: typeof HelpRoute
@@ -489,6 +502,13 @@ declare module '@tanstack/react-router' {
       path: '/clusters'
       fullPath: '/clusters'
       preLoaderRoute: typeof ClustersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/console': {
+      id: '/console'
+      path: '/console'
+      fullPath: '/console'
+      preLoaderRoute: typeof ConsoleRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/daemon': {
@@ -683,6 +703,7 @@ const rootRouteChildren: RootRouteChildren = {
   ArtifactsRoute: ArtifactsRoute,
   BoardRoute: BoardRoute,
   ClustersRoute: ClustersRoute,
+  ConsoleRoute: ConsoleRoute,
   DaemonRoute: DaemonRoute,
   GraphRoute: GraphRoute,
   HelpRoute: HelpRoute,

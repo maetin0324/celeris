@@ -93,7 +93,7 @@ const attachment = {
   sha256: "0".repeat(64),
   state: "ready",
   preview_url: null,
-  download_url: "/api/v1/chat/attachments/a1/content",
+  download_url: "/api/chat/attachments/a1/content",
   expires_at: null,
 };
 
@@ -118,16 +118,16 @@ describe("chat client", () => {
     await answerPlanGate("task1", { action: "approve" });
     await overrideOperation("o1", { action: "return", reason: "再検討" });
     expect(seen.map((s) => `${s.method} ${s.url}`)).toEqual([
-      "GET /api/v1/chat/threads?q=%E7%94%BB%E9%9D%A2&status=open&limit=50",
-      "GET /api/v1/chat/threads/t%2F1/messages?before_seq=100&limit=50",
-      "POST /api/v1/chat/threads/t1/messages",
-      "DELETE /api/v1/chat/threads/t1/messages/m3",
-      "POST /api/v1/chat/threads/t1/stop",
-      "POST /api/v1/chat/threads/t1/resume-queue",
-      "POST /api/v1/decisions/d1/answer",
-      "POST /api/v1/approvals/ap1/decide",
-      "POST /api/v1/tasks/task1/execution/plan-gate",
-      "POST /api/v1/cos/operations/o1/override",
+      "GET /api/chat/threads?q=%E7%94%BB%E9%9D%A2&status=open&limit=50",
+      "GET /api/chat/threads/t%2F1/messages?before_seq=100&limit=50",
+      "POST /api/chat/threads/t1/messages",
+      "DELETE /api/chat/threads/t1/messages/m3",
+      "POST /api/chat/threads/t1/stop",
+      "POST /api/chat/threads/t1/resume-queue",
+      "POST /api/decisions/d1/answer",
+      "POST /api/approvals/ap1/decide",
+      "POST /api/tasks/task1/execution/plan-gate",
+      "POST /api/cos/operations/o1/override",
     ]);
     expect(seen[4]?.body).toEqual({ run_id: "r1" });
     expect(seen[5]?.body).toEqual({ expected_revision: 2 });
@@ -143,7 +143,7 @@ describe("chat client", () => {
     });
     const xhr = FakeXhr.last;
     expect(xhr?.method).toBe("POST");
-    expect(xhr?.url).toBe(`/api/v1/chat/threads/${T}/attachments`);
+    expect(xhr?.url).toBe(`/api/chat/threads/${T}/attachments`);
     expect(xhr?.sent?.get("client_upload_id")).toBe("u1");
     expect((xhr?.sent?.get("file") as File | undefined)?.name).toBe("screen.png");
     xhr?.upload.onprogress?.({ loaded: 1, total: 2, lengthComputable: true });
@@ -237,7 +237,7 @@ describe("chat send", () => {
   it("chat_data_send_with_retry_gives_up_after_attempts", async () => {
     vi.useFakeTimers();
     const send = vi.fn(async () => {
-      throw new ApiError("network", { method: "POST", path: "/api/v1/x" });
+      throw new ApiError("network", { method: "POST", path: "/api/x" });
     });
     const result = sendWithRetry(send, { attempts: 2, delayMs: 10 });
     const settled = expect(result).rejects.toMatchObject({ kind: "network" });

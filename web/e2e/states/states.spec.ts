@@ -86,7 +86,7 @@ const checks: Record<StateKey, Check> = {
     await expect(status).toHaveText("接続状態: 再接続中");
     // 切断中も取得済みのデータは残る。
     const content: Record<string, string> = {
-      "/": "画面群の長文",
+      "/console": "画面群の長文",
       "/tasks": "複数の画面",
       "/tasks/T1/runs/R1": "検証ログ 1",
       "/providers": "claude-main",

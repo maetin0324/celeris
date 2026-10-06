@@ -162,7 +162,6 @@ export function createApp({
       req.path.startsWith("/events/") ||
       req.path === "/events" ||
       req.path.startsWith("/console/") ||
-      req.path === "/console" ||
       path.extname(req.path)
     )
       return res.status(404).type("text/plain").send("not found");

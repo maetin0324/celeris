@@ -267,9 +267,9 @@ describe("chat_messages_attachments", () => {
     );
     expect(out).toContain("report.pdf");
     expect(out).toContain("2.0 KB");
-    expect(out).toContain('href="/api/v1/chat/attachments/a1/content"');
+    expect(out).toContain('href="/api/chat/attachments/a1/content"');
     expect(out).toContain('download="report.pdf"');
-    expect(out).toContain('src="/api/v1/chat/attachments/a2/preview"');
+    expect(out).toContain('src="/api/chat/attachments/a2/preview"');
     expect(out).toContain('alt="図.png"');
     expect(out).toContain("添付を読み込み中");
     expect(count(out, "min-h-11")).toBe(3);

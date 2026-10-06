@@ -47,10 +47,10 @@ test("多数の判断待ちは期限順で、一件の回答欄だけを開く",
   await expect(rows.nth(1).getByRole("textbox", { name: /理由・note/ })).toBeVisible();
 });
 
-test("ホームは期限の近い判断を通知より先に示す", async ({ page }) => {
+test("Console は期限の近い判断を通知より先に示す", async ({ page }) => {
   const seed = inboxItemsFixture()[0];
   daemon.setInboxItems([{ ...seed, id: "decision:urgent", title: "期限のある判断", due_at: "2026-10-05T09:00:00Z" }]);
-  await page.goto(gateway.base);
+  await page.goto(`${gateway.base}/console`);
   const entries = page.getByRole("navigation", { name: "受信箱と通知" });
   await expect(entries.getByRole("list", { name: "期限の近い判断待ち" })).toContainText("期限のある判断");
   await expect(entries.getByRole("link", { name: /^受信箱/ })).toContainText("判断待ち 1 件");

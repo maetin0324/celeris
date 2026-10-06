@@ -6,7 +6,7 @@
 //! （ADR-0101 D3: identity の復元は隔離下でのみ）。
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
 use serde::{Deserialize, Serialize};
 
@@ -489,6 +489,10 @@ pub struct EgressPolicy {
     pub resolver: IpAddr,
     /// IPv6 の宛先を許すか。既定 false（v6 の private 判定漏れを避ける）。
     pub allow_ipv6: bool,
+    /// 試験専用の loopback 許可（`127.0.0.1:<port>` の完全一致のみ）。既定は空で、空なら何も変わらない。
+    /// 入れられるのは launcher の root 所有 config だけ（ADR 2026-10-05-browser-department-web-live-view 付記 E1）。
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub test_loopback_allow: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -596,6 +600,22 @@ fn valid_host(host: &str) -> bool {
         })
 }
 
+/// 試験専用 loopback 許可に当たる宛先。host が文字列として `127.0.0.1` そのもので、port が 0・53・853
+/// 以外、かつ `127.0.0.1:<port>` が `test_loopback_allow` に完全一致するときだけ `Some`。
+/// 当たれば DNS を引かずにこの宛先へつなぐ。
+pub fn test_loopback_target(policy: &EgressPolicy, host: &str, port: u16) -> Option<SocketAddr> {
+    if policy.test_loopback_allow.is_empty()
+        || host != "127.0.0.1"
+        || matches!(port, 0 | 53 | 853)
+        || !policy
+            .test_loopback_allow
+            .contains(&format!("127.0.0.1:{port}"))
+    {
+        return None;
+    }
+    Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
+}
+
 /// egress の判定。解決先は全部を検査する（DNS rebinding で 1 つだけ private も拒否）。
 pub fn check_egress(policy: &EgressPolicy, req: &EgressRequest) -> Result<(), EgressDenied> {
     match req {
@@ -612,6 +632,9 @@ pub fn check_egress(policy: &EgressPolicy, req: &EgressRequest) -> Result<(), Eg
             port,
             resolved,
         } => {
+            if test_loopback_target(policy, host, *port).is_some() {
+                return Ok(());
+            }
             if looks_like_ip_literal(host) {
                 return Err(EgressDenied::IpLiteral);
             }

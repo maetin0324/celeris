@@ -146,6 +146,7 @@ fn egress_policy(
             .collect(),
         resolver,
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     }
 }
 

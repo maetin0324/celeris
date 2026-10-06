@@ -1235,6 +1235,7 @@ async fn run_with_executable_attempt(
         allow: policy.egress_allow(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     };
     let mut ro_dirs = vec![
         real_executable.parent().unwrap().to_path_buf(),

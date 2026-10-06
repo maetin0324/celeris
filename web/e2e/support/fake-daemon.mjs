@@ -694,6 +694,24 @@ const richPath =
   "src/very-long-workspace-name/feature-with-a-long-description/components/task-detail/overview-panel.tsx";
 const richNow = "2026-10-04T09:00:00Z";
 
+const browserExecutionOrgNode = () => ({
+  id: "browser-execution",
+  name: "ブラウザ実行",
+  kind: "section",
+  parent_id: "software-engineering",
+  created_at: "2026-10-06T00:00:00Z",
+  updated_at: "2026-10-06T00:00:00Z",
+  profile: {
+    browser: {
+      allowed_domains: ["http://localhost:3000", "http://127.0.0.1:3000"],
+      credential_policy_ids: [],
+      credential_identity_ids: {},
+    },
+    harnesses: { allowed: ["codex"], default: "codex" },
+    budget: { max_attempts: 2, max_lane: "standard" },
+  },
+});
+
 export function richFixtures() {
   const summary = (id, title, extra = {}) => ({
     ...fixtureFor(schema.$defs.TaskSummary),
@@ -816,6 +834,7 @@ export function richFixtures() {
         created_at: richNow,
         updated_at: richNow,
       },
+      browserExecutionOrgNode(),
     ],
   };
   const docsTree = {
@@ -1927,23 +1946,7 @@ export function createFakeDaemon({
   if (browserBackend) {
     const org = fixtures["/api/v1/org"] ?? { items: [] };
     fixtures["/api/v1/org"] = org;
-    org.items.push({
-      id: "browser-execution",
-      name: "ブラウザ実行",
-      kind: "section",
-      parent_id: "software-engineering",
-      created_at: "2026-10-06T00:00:00Z",
-      updated_at: "2026-10-06T00:00:00Z",
-      profile: {
-        browser: {
-          allowed_domains: ["http://localhost:3000", "http://127.0.0.1:3000"],
-          credential_policy_ids: [],
-          credential_identity_ids: {},
-        },
-        harnesses: { allowed: ["codex"], default: "codex" },
-        budget: { max_attempts: 2, max_lane: "standard" },
-      },
-    });
+    if (!org.items.some((item) => item.id === "browser-execution")) org.items.push(browserExecutionOrgNode());
   }
   const inbox = {
     items: [...(inboxItems ?? inboxItemsFixture()), ...(browserBackend?.inboxItems() ?? [])],

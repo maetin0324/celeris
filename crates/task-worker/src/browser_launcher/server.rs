@@ -514,7 +514,12 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
                 |_| {},
             );
             match out {
-                Some(Some((state, facts))) => Response::Observed { state, facts },
+                Some(Some((state, facts))) => {
+                    if state == SessionState::Failed {
+                        remove_and_teardown(inner, &entry.record.session_id);
+                    }
+                    Response::Observed { state, facts }
+                }
                 Some(None) => err(ErrorCode::LeaseMismatch),
                 None => {
                     remove_and_teardown(inner, &entry.record.session_id);
@@ -664,7 +669,7 @@ fn authorize(
 }
 
 /// launcher 側での policy の再検査（verb と URL の origin）。
-fn action_allowed(policy: &SessionPolicy, verb: Verb, args: &ActionArgs) -> bool {
+pub(super) fn action_allowed(policy: &SessionPolicy, verb: Verb, args: &ActionArgs) -> bool {
     if !policy.allowed_actions.contains(&verb) {
         return false;
     }

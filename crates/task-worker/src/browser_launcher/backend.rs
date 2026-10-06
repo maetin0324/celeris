@@ -174,6 +174,64 @@ fn write_shared(path: &Path, data: &[u8]) -> Result<(), ErrorCode> {
     })
 }
 
+/// `launch` is agent-browser's CDP attach operation, not a launcher action verb.
+/// Keep it in the private agent-browser policy even when no user action is allowed.
+fn agent_browser_policy(policy: &super::protocol::SessionPolicy) -> serde_json::Value {
+    let mut allow = vec!["launch"];
+    for verb in &policy.allowed_actions {
+        let name = action_name(*verb);
+        if !allow.contains(&name) {
+            allow.push(name);
+        }
+    }
+    json!({ "allow": allow })
+}
+
+/// The launcher owns the session root, but Chrome creates nested files as its
+/// subordinate UID. Remove those contents as that UID if an ordinary removal
+/// cannot traverse them, then remove the launcher-owned directory itself.
+fn remove_session_dir(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() != std::io::ErrorKind::PermissionDenied => return Err(e),
+        Err(_) => {}
+    }
+    use std::os::unix::fs::PermissionsExt;
+    for child in ["output", "home", "run", "actions", "profile", "tmp"] {
+        let path = dir.join(child);
+        if path.is_dir() {
+            // These immediate children belong to the launcher. In particular,
+            // tmp is sticky while the browser runs; it can be relaxed after stop.
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))?;
+        }
+    }
+    let mut ns = userns::create()?;
+    ns.clear_session_contents(dir)?;
+    std::fs::remove_dir_all(dir)
+}
+
+struct SessionDir(PathBuf);
+
+impl std::ops::Deref for SessionDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for SessionDir {
+    fn drop(&mut self) {
+        if let Err(e) = remove_session_dir(&self.0) {
+            eprintln!(
+                "celeris-browser-launcher: remove session dir {}: {e}",
+                self.0.display()
+            );
+        }
+    }
+}
+
 fn ns_owner(f: &std::fs::File) -> std::io::Result<u32> {
     let mut owner = 0u32;
     // NS_GET_OWNER_UID = _IO(0xb7, 0x4); Linux nsfs.h.
@@ -330,7 +388,8 @@ impl SessionBackend for RuntimeBackend {
             "create session dir",
             ErrorCode::LaunchFailed,
         ))?;
-        let setup = (|| {
+        let cleanup = SessionDir(dir.clone());
+        (|| {
             for child in ["output", "home", "run", "actions", "profile"] {
                 std::fs::create_dir(dir.join(child)).map_err(fail(
                     sid,
@@ -357,15 +416,9 @@ impl SessionBackend for RuntimeBackend {
                 &dir.join("upstream.json"),
                 br#"{"idleTimeout":"5m","noWebmcp":true}"#,
             )?;
-            let allowed: Vec<&str> = req
-                .policy
-                .allowed_actions
-                .iter()
-                .map(|v| action_name(*v))
-                .collect();
             write_shared(
                 &dir.join("policy.json"),
-                &serde_json::to_vec(&json!({"allow":allowed}))
+                &serde_json::to_vec(&agent_browser_policy(&req.policy))
                     .map_err(|_| ErrorCode::LaunchFailed)?,
             )?;
             let token = format!(
@@ -495,7 +548,7 @@ impl SessionBackend for RuntimeBackend {
                     sup,
                     _shared: shared,
                     sequence: 0,
-                    dir: dir.clone(),
+                    dir: cleanup,
                     uid,
                     gid,
                     subuid,
@@ -503,11 +556,7 @@ impl SessionBackend for RuntimeBackend {
                     forbidden: cfg.allowed_uids.clone(),
                 }),
             })
-        })();
-        if setup.is_err() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        setup
+        })()
     }
 }
 
@@ -528,7 +577,7 @@ struct RuntimeSession {
     sup: Supervisor,
     _shared: SharedCdp,
     sequence: u64,
-    dir: PathBuf,
+    dir: SessionDir,
     uid: u32,
     gid: u32,
     subuid: u32,
@@ -678,7 +727,7 @@ impl BackendSession for RuntimeSession {
         } = *self;
         drop(_shared);
         sup.stop();
-        let _ = std::fs::remove_dir_all(dir);
+        drop(dir);
     }
 }
 

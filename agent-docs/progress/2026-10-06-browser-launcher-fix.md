@@ -33,7 +33,17 @@ worker sandbox では launcher・userns を使えないため、`cargo test --wo
 
 ## 未解決事項
 
-- Fable による実機再確認（台本 `scripts/dev/browser-web-live-check.sh` の全実行、egress 拒否の証跡 `egress-denied.json` 等）は未実施。sandbox 外で launcher が要る。
+- Fable による実機再確認（人の決定 `rerun-evidence`、回答 `fable-rerun`）を tree `0e167295`
+  （launcher-fix 統合後、`d8f3e5e6` を祖先に持つ）で実施した（証跡 commit `3680b70e`、
+  `agent-docs/progress/2026-10-05-browser-web-live-view/real-check-evidence/rerun-2026-10-06/`）。
+  **D4・D6 修正は実機で効いていた**（run は起動し、`policy_sha256` あり、`policy.json` が
+  `launch` を許可、action socket は短い固定長 path）。ただし**再実行は不合格（FAIL）**:
+  loopback の試験ページが launcher egress の設計（`check_egress` が IP literal と
+  private/loopback を拒否）で許可 origin でも開けず、egress 拒否の証跡（`egress-denied.json` 等）は
+  未取得（egress は拒否を記録しないため）。再実行で R1（台本 settings URL）・R2（gateway の
+  拒否 upgrade 時に未処理 ECONNRESET）・R3（loopback 試験ページを egress で開けない＋拒否記録
+  の欠落）・R4（cleanup の socket 残留）が見つかった。**R1〜R4 の修正後の 3 回目の再実行が未実施**。
+  経緯と各段の結果は [browser-web real-check](2026-10-05-browser-web-live-view/real-check.md) を参照。
 - host の `/usr/local/libexec/celeris/celeris-browser-launcher` を root が入れ替えないと、launcher 側の修正（origin 照合・egress allow）は本番に効かない。手順は [egress 記録](2026-10-06-browser-launcher-fix/egress.md#人が行う-host-launcher-入れ替え) と `docs/ops/browser-launcher-admission-evidence-run.md` にある。
 
 ## 提案

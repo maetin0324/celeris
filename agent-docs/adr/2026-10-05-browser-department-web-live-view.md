@@ -624,3 +624,17 @@ route は `web/routes/browser.index.tsx`・`browser.runs.$taskId.$runId.tsx`・
 - **migration 0048〜0050 はこの branch では空番**: 本 branch では 0051 のみが入る。統合時に他の
   branch 側の 0048〜0050 実体が入ったら、番号の重複検査（`scripts/dev/check-migration-numbers.sh` 相当）で
   確認する。
+
+## 付記: 実機再確認（2026-10-06、人の決定 rerun-evidence への回答 fable-rerun）
+
+launcher-fix 統合後の tree（`0e167295`、`d8f3e5e6` を祖先に持つ。証跡の `versions.txt` と
+`git merge-base --is-ancestor` で確認済み）で Fable が `scripts/dev/browser-web-live-check.sh` を
+再実行し、証跡を commit（`3680b70e`）した。D4・D6 修正は実機で効いていた（run 起動・shim
+config の `policy_sha256` あり・`policy.json` が `launch` を許可）が、再実行は**不合格**で、
+loopback の試験ページが launcher egress の設計（`check_egress` が IP literal と private/loopback を
+拒否）で許可 origin でも開けず、範囲外 origin の egress 拒否の証跡は未取得（egress は拒否を記録しない）。
+再実行で台本・gateway・egress の確認 4 点（settings URL、拒否 upgrade の未処理 ECONNRESET、
+試験専用 egress 許可と拒否記録の欠落、cleanup の socket 残留）が見つかり、修正後に Fable が
+3 回目の再実行を行う。経緯（attempts 1〜8 → launcher-fix → 再実行）と各段の結果は
+[agent-docs/progress/2026-10-05-browser-web-live-view/real-check.md](../progress/2026-10-05-browser-web-live-view/real-check.md)
+に記録する。

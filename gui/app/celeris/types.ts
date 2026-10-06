@@ -1439,7 +1439,9 @@ export type NotificationKind =
   | "task_failed"
   | "phase_checkpoint"
   | "decision_requested"
-  | "plan_approval";
+  | "plan_approval"
+  | "cos_escalation"
+  | "cos_fallback";
 /**
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */

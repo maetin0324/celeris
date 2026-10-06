@@ -99,9 +99,13 @@ fn main() -> ExitCode {
         .map_err(|_| ())??;
         let policy: EgressPolicy = serde_json::from_slice(&bytes).map_err(|_| ())?;
         let stream = tokio::net::UnixStream::from_std(stream).map_err(|_| ())?;
-        task_worker::browser_egress::serve(stream, &policy)
-            .await
-            .map_err(|_| ())
+        let (outcome, denial) = task_worker::browser_egress::serve_recorded(stream, &policy).await;
+        if let Some(denial) = denial
+            && let Ok(line) = serde_json::to_string(&denial)
+        {
+            eprintln!("{line}");
+        }
+        outcome.map_err(|_| ())
     });
     if result.is_ok() {
         ExitCode::SUCCESS

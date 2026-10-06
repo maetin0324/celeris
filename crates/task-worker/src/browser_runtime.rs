@@ -7,8 +7,9 @@
 use std::collections::BTreeSet;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -64,6 +65,85 @@ pub struct EgressRelay {
 
 /// 同時 egress 数の既定（ADR-0108 D1）。
 pub const DEFAULT_MAX_EGRESS: usize = 32;
+
+const DENIAL_RECORD_LIMIT: usize = 128;
+const DENIAL_LINE_LIMIT: usize = 512;
+
+pub(crate) struct DenialRecorder {
+    file: File,
+    session_id: String,
+    count: usize,
+}
+
+impl DenialRecorder {
+    pub(crate) fn new(session_dir: &Path, session_id: &str) -> std::io::Result<Self> {
+        // The session directory is writable by the browser UID. Claim the name
+        // before starting it, and retain the descriptor so it cannot redirect writes.
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(session_dir.join("egress-denied.jsonl"))?;
+        Ok(Self {
+            file,
+            session_id: session_id.into(),
+            count: 0,
+        })
+    }
+
+    pub(crate) fn append(&mut self, denial: crate::browser_egress::Denial) -> std::io::Result<()> {
+        const KINDS: &[&str] = &[
+            "malformed",
+            "not_allowed",
+            "ip_literal",
+            "private_address",
+            "ipv6_disabled",
+            "unresolved",
+            "dns_bypass",
+            "proxy_chain",
+            "invalid_host",
+        ];
+        if !KINDS.contains(&denial.kind.as_str()) || self.count > DENIAL_RECORD_LIMIT {
+            return Ok(());
+        }
+        if let Some(host) = &denial.host {
+            if host.len() > 253
+                || !host.bytes().all(|b| {
+                    b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b':' | b'[' | b']')
+                })
+                || denial.port.is_none()
+            {
+                return Ok(());
+            }
+        } else if denial.port.is_some() {
+            return Ok(());
+        }
+        let at = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .map_err(std::io::Error::other)?;
+        let mut line = if self.count == DENIAL_RECORD_LIMIT {
+            serde_json::json!({"kind":"truncated", "at":at, "session_id":self.session_id})
+        } else {
+            serde_json::json!({"kind":denial.kind, "host":denial.host, "port":denial.port, "at":at, "session_id":self.session_id})
+        };
+        if denial.host.is_none()
+            && self.count < DENIAL_RECORD_LIMIT
+            && let Some(fields) = line.as_object_mut()
+        {
+            fields.remove("host");
+            fields.remove("port");
+        }
+        let mut bytes = serde_json::to_vec(&line).map_err(std::io::Error::other)?;
+        if bytes.len() + 1 > DENIAL_LINE_LIMIT {
+            return Ok(());
+        }
+        bytes.push(b'\n');
+        self.file.write_all(&bytes)?;
+        self.count += 1;
+        Ok(())
+    }
+}
 
 /// 起動した egress の観測（pid は起動順）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -469,6 +549,11 @@ impl IsolatedRuntime {
     /// 「発火を取りこぼした」場合（prctl 前の競合）を実プロセスで再現する試験のためだけに使う。
     pub fn launch_with(spec: &RuntimeSpec, arm_parent_death: bool) -> Result<Self, RuntimeError> {
         prepare_session_tmp(spec)?;
+        let denial_recorder = spec
+            .egress
+            .as_ref()
+            .map(|_| DenialRecorder::new(&spec.session_dir, &spec.session_id))
+            .transpose()?;
         let (info_r, info_w) = pipe()?;
         let (to_browser_r, to_browser_w) = pipe()?;
         let (from_browser_r, from_browser_w) = pipe()?;
@@ -633,9 +718,10 @@ impl IsolatedRuntime {
             rt.egress_stats = Some(stats.clone());
             let (ready_tx, ready_rx) = mpsc::channel();
             // 長寿命の専用 thread（egress の PDEATHSIG は親 thread の終了で発火する。ADR-0108 D2）。
+            let recorder = Arc::new(Mutex::new(denial_recorder.expect("egress recorder")));
             std::thread::Builder::new()
                 .name(format!("celeris-browser-rt-{}", spec.session_id))
-                .spawn(move || relay_loop(ctrl, cfg, pgid, stats, ready_tx))?;
+                .spawn(move || relay_loop(ctrl, cfg, pgid, stats, recorder, ready_tx))?;
             // listener が立つまで browser は起動しない（sandboxd が READY の後に起動する）。
             if ready_rx.recv_timeout(Duration::from_secs(10)).is_err() {
                 return Err(RuntimeError::RelayNotReady(rt.failed_stderr()));
@@ -948,6 +1034,7 @@ fn relay_loop(
     cfg: EgressRelay,
     pgid: i32,
     stats: Arc<Mutex<EgressStats>>,
+    recorder: Arc<Mutex<DenialRecorder>>,
     ready: mpsc::Sender<()>,
 ) {
     let active = Arc::new(Mutex::new(0usize));
@@ -965,7 +1052,7 @@ fn relay_loop(
                 let granted = if busy {
                     None
                 } else {
-                    spawn_egress(&cfg, pgid, &stats, &active)
+                    spawn_egress(&cfg, pgid, &stats, &active, &recorder)
                 };
                 let sent = match &granted {
                     Some(end) => {
@@ -992,6 +1079,7 @@ fn spawn_egress(
     pgid: i32,
     stats: &Arc<Mutex<EgressStats>>,
     active: &Arc<Mutex<usize>>,
+    recorder: &Arc<Mutex<DenialRecorder>>,
 ) -> Option<std::os::unix::net::UnixStream> {
     use std::io::Write;
     let (proxy_end, sandbox_end) = std::os::unix::net::UnixStream::pair().ok()?;
@@ -1000,7 +1088,7 @@ fn spawn_egress(
     cmd.env_clear()
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     // SAFETY: fork と exec の間は async-signal-safe な呼び出しだけ。fd は spawn まで親が保持する。
     unsafe {
         cmd.pre_exec(move || {
@@ -1036,11 +1124,21 @@ fn spawn_egress(
     if let Ok(mut a) = active.lock() {
         *a += 1;
     }
-    let (stats, active) = (stats.clone(), active.clone());
+    let (stats, active, recorder) = (stats.clone(), active.clone(), recorder.clone());
+    let stderr = child.stderr.take();
     let waiter = std::thread::Builder::new()
         .name("celeris-browser-egress-wait".into())
         .spawn(move || {
             let _ = child.wait();
+            if let Some(stderr) = stderr {
+                let mut line = String::new();
+                let _ = BufReader::new(stderr.take(DENIAL_LINE_LIMIT as u64)).read_line(&mut line);
+                if let Ok(denial) = serde_json::from_str::<crate::browser_egress::Denial>(&line)
+                    && let Ok(mut recorder) = recorder.lock()
+                {
+                    let _ = recorder.append(denial);
+                }
+            }
             if let Ok(mut s) = stats.lock() {
                 s.exited.push(pid);
             }

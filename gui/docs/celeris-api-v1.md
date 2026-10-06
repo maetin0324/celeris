@@ -275,7 +275,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（177 = 表 171 + browser 制御 6）
+## 2. エンドポイント一覧（195 = 表 171 + browser 制御 6 + chat 18）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -455,6 +455,24 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 | 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
+| 178 | GET | `/chat/threads` | CoS チャットのスレッド一覧（§3.127） | `ChatThreadListResponse` | `crate::chat` + task-core chat store |
+| 179 | POST | `/chat/threads` | スレッドを作る（`client_thread_id` で冪等）（**管理系**） | 201 `ChatThreadResponse` | `crate::chat` |
+| 180 | GET | `/chat/threads/{t}` | スレッドの詳細と実行中の run | `ChatThreadDetailResponse` | `crate::chat` |
+| 181 | PATCH | `/chat/threads/{t}` | 題名・状態の変更（`expected_revision`）（**管理系**） | `ChatThreadResponse` | `crate::chat` |
+| 182 | GET | `/chat/threads/{t}/messages` | メッセージ一覧（`before_seq` / `after_seq`） | `ChatMessageListResponse` | `crate::chat` |
+| 183 | POST | `/chat/threads/{t}/messages` | 人の発言を受け付ける（`queue` / `interrupt`）（**管理系**） | 202 `ChatPostMessageResponse` | `crate::chat` |
+| 184 | DELETE | `/chat/threads/{t}/messages/{m}` | queued の人の発言を取り消す（**管理系**） | `ChatMessageResponse` | `crate::chat` |
+| 185 | POST | `/chat/threads/{t}/stop` | run を止める（**管理系**） | 202 `ChatStopResponse` | `crate::chat` |
+| 186 | POST | `/chat/threads/{t}/resume-queue` | 停止で止まった queue を再開する（**管理系**） | `ChatThreadResponse` | `crate::chat` |
+| 187 | GET | `/chat/threads/{t}/runs/{r}` | run の状態 | `ChatRunResponse` | `crate::chat` |
+| 188 | GET | `/chat/threads/{t}/runs/{r}/events` | run の event（`after` / `limit`） | `ChatEventListResponse` | `crate::chat` |
+| 189 | GET | `/chat/threads/{t}/stream` | スレッドの SSE（§4 のチャット stream） | `text/event-stream` | `crate::chat::stream` |
+| 190 | POST | `/chat/threads/{t}/attachments` | 添付を upload する（multipart、`file` と `client_upload_id`）（**管理系**） | 201 `ChatAttachmentResponse` | `crate::chat::attachments` |
+| 191 | GET | `/chat/attachments/{a}` | 添付の情報 | `ChatAttachmentResponse` | `crate::chat::attachments` |
+| 192 | DELETE | `/chat/attachments/{a}` | 未参照の upload を消す（**管理系**） | 204 | `crate::chat::attachments` |
+| 193 | GET | `/chat/attachments/{a}/content` | 添付のバイト列（`attachment` として返す） | バイト列 | `crate::chat::attachments` |
+| 194 | GET | `/chat/attachments/{a}/preview` | 安全に再エンコードした raster の preview | バイト列 | `crate::chat::attachments` |
+| 195 | POST | `/chat/attachments/{a}/references` | 添付を task / 受信箱の知識へ参照させる（**管理系**） | 200 `ChatReferenceResponse` | `crate::chat::attachments` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -2999,6 +3017,15 @@ root の /3 の計画が人の承認を待っている Task（`blocked` で直�
 
 人への決定の要求（`DecisionRequest`。計画の `decisions`・worker の `result.json` の `decisions`・daemon の `leaf_too_large` / `limit` / `plan_invalid`）の一覧と回答。`[execution.tree] enabled = false`（既定）では決定が作られないので、一覧は空（404 ではない）、回答は 404 になる。効き目（選択肢 → 効き目の表）は ADR-0079 付記「R3a 実装時の逸脱・明確化」。MCP では `decision_list` / `decision_answer`（scope `tasks:interact`、`docs/guides/mcp.md`）。
 
+深さ上限の compound leaf は `[execution.tree] auto_leaf=true`（既定）なら決定を出さず実行する。
+計画に紐づく `UnitGateOverridden.action=auto_leaf` と `reason` に理由が残る。実測の compaction / context rollover または
+continuation が各設定閾値（既定はともに 2、超過は 3 回目）を超えると、既存 `kind=leaf_too_large` の決定を
+`key=auto_leaf_budget:<work_unit_id>:<run_id>` で発行する。`question` に回数・閾値・直近の進捗、`path` に leaf の位置、
+`needed_before` に停止対象の leaf key が入る。受信箱の決定として回答待ちになる。
+選択肢は `run-as-leaf`（続ける。回答以降を再計数して checkpoint/session を引き継ぐ）、`replan`、`withdraw`。
+`auto_leaf=false` は実行前の従来の判断待ちを使う。新しい決定 kind は追加していない。
+
+
 ##### `GET /decisions?open=&root_id=` → 200 `DecisionList`
 
 `items[]` は `DecisionView`（`decision`: `DecisionRequest`、`task_id` = 決定を出した節点、`root_id`、`created_at`、`answered_at?`、`effect?` = 回答済みならその効き目 `DecisionEffect`: `resume` / `raise_once` / `replan` / `atomic` / `withdraw`）。`created_at` 昇順。`open=true` は未回答だけ、`false` は回答済み・取り下げ済みだけ、省略は全件。`root_id` で 1 つの木（root task の id）に絞る。不正な `open` / `root_id` は 400。
@@ -3176,6 +3203,48 @@ path は event の `log_path` から引き、要求からは受け取らない�
 - GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
 
 
+### 3.127 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）
+
+§2 の 178〜195。パスは `/api/v1` から。閲覧は既存の認証（Bearer / Host）、書込みは管理権限。型は `ChatThread`・`ChatMessage`・`ChatRun`・`ChatAttachment`・`ChatCard`・`ChatEvent` と各 request/response（§6、`api-v1.schema.json` の `$defs`）。設計の正本は [ADR 2026-10-05](../../agent-docs/adr/2026-10-05-cos-chat-home.md) D2。
+
+| 事項 | 決め |
+|---|---|
+| 時刻・id | 時刻は RFC3339 UTC、id は文字列（SSE cursor も文字列） |
+| 未知フィールド | 書込みで 400、型・内容不正は 422 |
+| エラー | `application/problem+json`（§1.5）。状態・冪等 key 不一致は 409、容量超過は 413、queue 上限は 429 |
+| 冪等 | スレッドは `client_thread_id`（再送は 200）、発言は `client_message_id`（同じ本文・添付・mode なら同じ応答、違えば 409）、upload は `client_upload_id`（同じ key と bytes なら 200、違えば 409）。再送で新しい run を増やさない |
+| 上限 | 本文 64 KiB（UTF-8）。空白だけの本文は添付がある場合だけ可。1 発言 10 添付。thread あたりの queue 100 件。題名 200 字。一覧は最大 100 件、メッセージは最大 200 件、event は最大 500 件 |
+| 添付 | 1 ファイル 25 MiB、1 発言 100 MiB、保存先の総量 10 GiB（超過は 413）。発言に参照されない upload は 24 時間後に掃除し、参照が外れた添付は 30 日後に掃除する。`sha256` で内容を識別する |
+| 配信の順序 | 人の発言は受信 transaction で即保存し、`seq` の順に一つずつ run へ渡す。稼働中の run に新発言は混ぜない（`mode=interrupt` だけが停止を要求して次の入力にする） |
+| 停止 | `stop` は run の停止を要求し、確認してから `stopped` にする。停止は `queue_paused=true` にして次を自動起動しない。`resume-queue` か `resume_queue=true` の送信で再開 |
+| 履歴 | `messages` の応答の `snapshot_event_id` と同じ read transaction の値。そこから SSE を `after` で継げば取りこぼさない |
+| run 本体 | run の起動・継続・CoS の処理は次の段（cos-run）。本段では `POST …/messages` は run_id を null で返し、状態遷移だけを試せる。CoS 無効時の 503 判定は cos-run の段で入れる |
+
+| メソッド・endpoint | 入力（JSON / query） | 成功 |
+|---|---|---|
+| GET `/chat/threads` | `q`、`status=open`、`before`、`limit`（既定 50） | 200 `ChatThreadListResponse` |
+| POST `/chat/threads` | `{"title","project_id","client_thread_id"}` | 201 `ChatThreadResponse` |
+| GET `/chat/threads/{t}` | なし | 200 `ChatThreadDetailResponse` |
+| PATCH `/chat/threads/{t}` | `{"title"?,"status"?,"expected_revision"}`（title と status の少なくとも一方） | 200 `ChatThreadResponse`。queue や run が残る archive は 409 |
+| GET `/chat/threads/{t}/messages` | `before_seq`、`after_seq`（両方は不可）、`limit` | 200 `ChatMessageListResponse`（seq 昇順） |
+| POST `/chat/threads/{t}/messages` | `{"client_message_id","text","attachment_ids","reply_to_id","mode":"queue\|interrupt","resume_queue"}` | 202 `ChatPostMessageResponse`（`run_id`・`queue_position`） |
+| DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
+| POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
+| POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
+| GET `/chat/threads/{t}/runs/{r}` | なし | 200 `ChatRunResponse` |
+| GET `/chat/threads/{t}/runs/{r}/events` | `after`、`limit`（既定 100、最大 500） | 200 `ChatEventListResponse` |
+| GET `/chat/threads/{t}/stream` | `after`、または `Last-Event-ID`（両方あり不一致は 400） | 200 `text/event-stream`（§4） |
+| POST `/chat/threads/{t}/attachments` | multipart: `file` 1 個、`client_upload_id` 1 個 | 201 `ChatAttachmentResponse`（同じ key・bytes は 200） |
+| GET `/chat/attachments/{a}` | なし | 200 `ChatAttachmentResponse` |
+| GET `/chat/attachments/{a}/content` | なし | 200 バイト列。`Content-Disposition: attachment`、`X-Content-Type-Options: nosniff` |
+| GET `/chat/attachments/{a}/preview` | なし | 200 安全に再エンコードした raster。非対応は 404（`preview_url` は null） |
+| DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
+| POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse` |
+
+スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
+
+---
+
 ## 4. SSE `GET /stream`
 
 ```
@@ -3211,6 +3280,32 @@ data: {"reason":"cursor_too_old","cursor":20000}
 
 `data` は 1 行の JSON（`event: <name>\n[id: <id>\n]data: <json>\n\n`）。型は `StreamHello` / `EventRow` / `DaemonSnapshot` / `StreamHeartbeat` / `StreamReset`（§6）。
 `GET /console/stream` は同じ枠組み（`hello` / `heartbeat` に加えて `console.block`）を使う別の stream（§3.99）。
+
+### チャット stream `GET /chat/threads/{t}/stream`（ADR 2026-10-05-cos-chat-home D2）
+
+`text/event-stream`。`event:` は下の type、`id:` は `chat_events.id` の十進文字列。`data:` は共通の envelope `ChatEvent`: `{"id","type","thread_id","run_id","message_id","at","data"}`（run_id・message_id は対象が無ければ null）。id は thread 内で単調増加する（連番とは限らない）。
+
+| type | data の形 | 表示・適用 |
+|---|---|---|
+| `message` | `{"message":ChatMessage}` | id ごとに全体を置き換える（queued・確定した返事・system カード） |
+| `text_delta` | `{"offset","text"}`（offset は UTF-8 byte） | 現在の本文長と offset が一致するときだけ追記。不一致は履歴を取り直す |
+| `status` | `{"phase":"queued\|starting\|thinking\|working\|waiting","summary"}` | 公開の要約だけ。非公開の推論本文は保存しない |
+| `tool` | `{"call_id","name","state":"running\|completed\|failed","summary","detail","error","truncated"}` | call_id ごとに更新。detail は redact 後 4 KiB まで |
+| `run` | `{"run":ChatRun}` | 開始・停止・終端。終端の後に同じ run の本文差分は送らない |
+| `queue` | `{"message_ids","paused"}` | 順序と pause 状態を全置換 |
+| `card` | `{"card":ChatCard}` | kind・id ごとに全置換 |
+| `thread` | `{"thread":ChatThread}` | 題名・件数・archive の更新 |
+
+| 事項 | 決め |
+|---|---|
+| 接続 | 接続時に `after`（または `Last-Event-ID`。両方あって不一致なら 400）より後の event を DB から再生し、そのまま live へ続ける。`after=0` は残っている全 event |
+| 永続化 | event は保存してから送る。再送は同じ id。UI は適用済みの id 以下を捨てる |
+| heartbeat | 15 秒ごとの SSE コメント（`: heartbeat`）。id を進めない |
+| 期限切れ | retention（30 日）で cursor が消えたら HTTP 410 `application/problem+json`（code=`chat-cursor-expired`）。クライアントは `GET /chat/threads/{t}` と messages を取り直す |
+| 未来の cursor | 400 |
+| 切断 | run の停止とはみなさない |
+
+run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/runs/{r}/events` で必要なときだけ読む。Console の `since` cursor と差分 reply の仕組みと、このチャット stream の cursor は混ぜない。
 
 クライアント（BFF）の規約: `task.event` を受けたら該当画面のデータを**再取得**する（イベント本体から状態を組み立てない。真実は DB）。`celerisctl` による書き込みも同じ経路で流れる（in-process 通知は使わない。ADR-0013 D6）。
 

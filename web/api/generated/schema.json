@@ -2363,6 +2363,994 @@
       ],
       "type": "object"
     },
+    "ChatActor": {
+      "enum": [
+        "human",
+        "cos",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ChatAttachment": {
+      "properties": {
+        "download_url": {
+          "type": "string"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "preview_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ChatAttachmentState"
+        },
+        "thread_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "sha256",
+        "state",
+        "download_url"
+      ],
+      "type": "object"
+    },
+    "ChatAttachmentResponse": {
+      "properties": {
+        "attachment": {
+          "$ref": "#/$defs/ChatAttachment"
+        }
+      },
+      "required": [
+        "attachment"
+      ],
+      "type": "object"
+    },
+    "ChatAttachmentState": {
+      "enum": [
+        "ready",
+        "deleted"
+      ],
+      "type": "string"
+    },
+    "ChatCard": {
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/ChatActor"
+        },
+        "href": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChatCardKind"
+        },
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "title",
+        "state",
+        "href",
+        "actor"
+      ],
+      "type": "object"
+    },
+    "ChatCardData": {
+      "additionalProperties": false,
+      "properties": {
+        "card": {
+          "$ref": "#/$defs/ChatCard"
+        }
+      },
+      "required": [
+        "card"
+      ],
+      "type": "object"
+    },
+    "ChatCardKind": {
+      "enum": [
+        "task",
+        "decision",
+        "question",
+        "approval",
+        "plan_gate",
+        "notice",
+        "operation"
+      ],
+      "type": "string"
+    },
+    "ChatCreateThreadRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "client_thread_id": {
+          "type": "string"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "client_thread_id"
+      ],
+      "type": "object"
+    },
+    "ChatEvent": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/ChatEventData"
+        },
+        "id": {
+          "type": "string"
+        },
+        "message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ChatEventType"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "thread_id",
+        "at",
+        "data"
+      ],
+      "type": "object"
+    },
+    "ChatEventData": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ChatMessageData"
+        },
+        {
+          "$ref": "#/$defs/ChatTextDeltaData"
+        },
+        {
+          "$ref": "#/$defs/ChatStatusData"
+        },
+        {
+          "$ref": "#/$defs/ChatToolData"
+        },
+        {
+          "$ref": "#/$defs/ChatRunData"
+        },
+        {
+          "$ref": "#/$defs/ChatQueueData"
+        },
+        {
+          "$ref": "#/$defs/ChatCardData"
+        },
+        {
+          "$ref": "#/$defs/ChatThreadData"
+        }
+      ]
+    },
+    "ChatEventListResponse": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChatEvent"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "ChatEventType": {
+      "enum": [
+        "message",
+        "text_delta",
+        "status",
+        "tool",
+        "run",
+        "queue",
+        "card",
+        "thread"
+      ],
+      "type": "string"
+    },
+    "ChatMessage": {
+      "properties": {
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "cards": {
+          "items": {
+            "$ref": "#/$defs/ChatCard"
+          },
+          "type": "array"
+        },
+        "client_message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "reply_to_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "$ref": "#/$defs/ChatMessageRole"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/ChatMessageState"
+        },
+        "text": {
+          "type": "string"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "seq",
+        "role",
+        "text",
+        "state",
+        "attachment_ids",
+        "cards",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "ChatMessageData": {
+      "additionalProperties": false,
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/ChatMessage"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "ChatMessageListResponse": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "type": "array"
+        },
+        "next_after_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "next_before_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "snapshot_event_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "items",
+        "snapshot_event_id"
+      ],
+      "type": "object"
+    },
+    "ChatMessageResponse": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/ChatMessage"
+        }
+      },
+      "required": [
+        "message"
+      ],
+      "type": "object"
+    },
+    "ChatMessageRole": {
+      "enum": [
+        "user",
+        "assistant",
+        "system"
+      ],
+      "type": "string"
+    },
+    "ChatMessageState": {
+      "enum": [
+        "queued",
+        "running",
+        "completed",
+        "cancelled",
+        "interrupted",
+        "failed"
+      ],
+      "type": "string"
+    },
+    "ChatPatchThreadRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatThreadStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "expected_revision"
+      ],
+      "type": "object"
+    },
+    "ChatPostMessageRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "attachment_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "client_message_id": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/ChatSendMode"
+        },
+        "reply_to_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume_queue": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "client_message_id",
+        "text",
+        "attachment_ids",
+        "mode",
+        "resume_queue"
+      ],
+      "type": "object"
+    },
+    "ChatPostMessageResponse": {
+      "properties": {
+        "message": {
+          "$ref": "#/$defs/ChatMessage"
+        },
+        "queue_position": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "message",
+        "queue_position"
+      ],
+      "type": "object"
+    },
+    "ChatQueueData": {
+      "additionalProperties": false,
+      "properties": {
+        "message_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paused": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "message_ids",
+        "paused"
+      ],
+      "type": "object"
+    },
+    "ChatReferenceOwnerKind": {
+      "enum": [
+        "task",
+        "knowledge_inbox"
+      ],
+      "type": "string"
+    },
+    "ChatReferenceRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "idempotency_key": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "owner_kind": {
+          "$ref": "#/$defs/ChatReferenceOwnerKind"
+        }
+      },
+      "required": [
+        "owner_kind",
+        "owner_id",
+        "idempotency_key"
+      ],
+      "type": "object"
+    },
+    "ChatReferenceResponse": {
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "owner_id": {
+          "type": "string"
+        },
+        "owner_kind": {
+          "$ref": "#/$defs/ChatReferenceOwnerKind"
+        }
+      },
+      "required": [
+        "attachment_id",
+        "owner_kind",
+        "owner_id"
+      ],
+      "type": "object"
+    },
+    "ChatResumeQueueRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "expected_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "expected_revision"
+      ],
+      "type": "object"
+    },
+    "ChatRun": {
+      "properties": {
+        "account_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "finished_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "harness": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "input_message_id": {
+          "type": "string"
+        },
+        "llm_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatSessionMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "state": {
+          "$ref": "#/$defs/ChatRunState"
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tier": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "input_message_id",
+        "state"
+      ],
+      "type": "object"
+    },
+    "ChatRunData": {
+      "additionalProperties": false,
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/ChatRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "ChatRunResponse": {
+      "properties": {
+        "run": {
+          "$ref": "#/$defs/ChatRun"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "type": "object"
+    },
+    "ChatRunState": {
+      "enum": [
+        "queued",
+        "running",
+        "stopping",
+        "completed",
+        "stopped",
+        "failed",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "ChatSendMode": {
+      "enum": [
+        "queue",
+        "interrupt"
+      ],
+      "type": "string"
+    },
+    "ChatSessionMode": {
+      "enum": [
+        "new",
+        "resumed",
+        "fresh"
+      ],
+      "type": "string"
+    },
+    "ChatStatusData": {
+      "additionalProperties": false,
+      "properties": {
+        "phase": {
+          "$ref": "#/$defs/ChatStatusPhase"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "phase",
+        "summary"
+      ],
+      "type": "object"
+    },
+    "ChatStatusPhase": {
+      "enum": [
+        "queued",
+        "starting",
+        "thinking",
+        "working",
+        "waiting"
+      ],
+      "type": "string"
+    },
+    "ChatStopRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "run_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run_id"
+      ],
+      "type": "object"
+    },
+    "ChatStopResponse": {
+      "properties": {
+        "queue_paused": {
+          "type": "boolean"
+        },
+        "run": {
+          "$ref": "#/$defs/ChatRun"
+        }
+      },
+      "required": [
+        "run",
+        "queue_paused"
+      ],
+      "type": "object"
+    },
+    "ChatTextDeltaData": {
+      "additionalProperties": false,
+      "properties": {
+        "offset": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "offset",
+        "text"
+      ],
+      "type": "object"
+    },
+    "ChatThread": {
+      "properties": {
+        "active_run_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ChatThreadKind"
+        },
+        "project_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "queue_paused": {
+          "type": "boolean"
+        },
+        "queued_count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "$ref": "#/$defs/ChatThreadStatus"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "title",
+        "status",
+        "queue_paused",
+        "queued_count",
+        "revision",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "ChatThreadData": {
+      "additionalProperties": false,
+      "properties": {
+        "thread": {
+          "$ref": "#/$defs/ChatThread"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "type": "object"
+    },
+    "ChatThreadDetailResponse": {
+      "properties": {
+        "active_run": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ChatRun"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_event_id": {
+          "type": "string"
+        },
+        "thread": {
+          "$ref": "#/$defs/ChatThread"
+        }
+      },
+      "required": [
+        "thread",
+        "last_event_id"
+      ],
+      "type": "object"
+    },
+    "ChatThreadKind": {
+      "enum": [
+        "human",
+        "inbox",
+        "legacy"
+      ],
+      "type": "string"
+    },
+    "ChatThreadListResponse": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChatThread"
+          },
+          "type": "array"
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "ChatThreadResponse": {
+      "properties": {
+        "thread": {
+          "$ref": "#/$defs/ChatThread"
+        }
+      },
+      "required": [
+        "thread"
+      ],
+      "type": "object"
+    },
+    "ChatThreadStatus": {
+      "enum": [
+        "open",
+        "archived"
+      ],
+      "type": "string"
+    },
+    "ChatToolData": {
+      "additionalProperties": false,
+      "properties": {
+        "call_id": {
+          "type": "string"
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ChatToolState"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "call_id",
+        "name",
+        "state",
+        "summary",
+        "error",
+        "truncated"
+      ],
+      "type": "object"
+    },
+    "ChatToolState": {
+      "enum": [
+        "running",
+        "completed",
+        "failed"
+      ],
+      "type": "string"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -24636,6 +25624,75 @@
       "$ref": "#/$defs/ChangesView",
       "description": "Phase 54（ADR-0043 D5）: 変更の取り込み（差分・merge・PR・衝突タスク）。"
     },
+    "chat_attachment": {
+      "$ref": "#/$defs/ChatAttachment"
+    },
+    "chat_attachment_response": {
+      "$ref": "#/$defs/ChatAttachmentResponse"
+    },
+    "chat_card": {
+      "$ref": "#/$defs/ChatCard"
+    },
+    "chat_event": {
+      "$ref": "#/$defs/ChatEvent"
+    },
+    "chat_event_list": {
+      "$ref": "#/$defs/ChatEventListResponse"
+    },
+    "chat_message": {
+      "$ref": "#/$defs/ChatMessage"
+    },
+    "chat_message_list": {
+      "$ref": "#/$defs/ChatMessageListResponse"
+    },
+    "chat_message_response": {
+      "$ref": "#/$defs/ChatMessageResponse"
+    },
+    "chat_post_message": {
+      "$ref": "#/$defs/ChatPostMessageRequest"
+    },
+    "chat_post_message_response": {
+      "$ref": "#/$defs/ChatPostMessageResponse"
+    },
+    "chat_reference": {
+      "$ref": "#/$defs/ChatReferenceRequest"
+    },
+    "chat_reference_response": {
+      "$ref": "#/$defs/ChatReferenceResponse"
+    },
+    "chat_resume_queue": {
+      "$ref": "#/$defs/ChatResumeQueueRequest"
+    },
+    "chat_run": {
+      "$ref": "#/$defs/ChatRun"
+    },
+    "chat_run_response": {
+      "$ref": "#/$defs/ChatRunResponse"
+    },
+    "chat_stop": {
+      "$ref": "#/$defs/ChatStopRequest"
+    },
+    "chat_stop_response": {
+      "$ref": "#/$defs/ChatStopResponse"
+    },
+    "chat_thread": {
+      "$ref": "#/$defs/ChatThread"
+    },
+    "chat_thread_create": {
+      "$ref": "#/$defs/ChatCreateThreadRequest"
+    },
+    "chat_thread_detail": {
+      "$ref": "#/$defs/ChatThreadDetailResponse"
+    },
+    "chat_thread_list": {
+      "$ref": "#/$defs/ChatThreadListResponse"
+    },
+    "chat_thread_patch": {
+      "$ref": "#/$defs/ChatPatchThreadRequest"
+    },
+    "chat_thread_response": {
+      "$ref": "#/$defs/ChatThreadResponse"
+    },
     "cluster_connect_result": {
       "$ref": "#/$defs/ClusterConnectResult"
     },
@@ -25272,7 +26329,30 @@
     "cron_job",
     "cron_job_list",
     "cron_job_run_list",
-    "cron_run_result"
+    "cron_run_result",
+    "chat_thread",
+    "chat_message",
+    "chat_run",
+    "chat_attachment",
+    "chat_card",
+    "chat_event",
+    "chat_thread_create",
+    "chat_thread_patch",
+    "chat_post_message",
+    "chat_stop",
+    "chat_resume_queue",
+    "chat_reference",
+    "chat_thread_list",
+    "chat_thread_response",
+    "chat_thread_detail",
+    "chat_message_list",
+    "chat_message_response",
+    "chat_post_message_response",
+    "chat_run_response",
+    "chat_stop_response",
+    "chat_event_list",
+    "chat_attachment_response",
+    "chat_reference_response"
   ],
   "title": "ApiV1Schema",
   "type": "object"

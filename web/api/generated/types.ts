@@ -489,6 +489,250 @@ export type ChangesView = {
   "task_id": string;
 };
 
+export type ChatActor = "human" | "cos" | "system";
+
+export type ChatAttachment = {
+  "download_url": string;
+  "expires_at"?: string | null;
+  "id": string;
+  "media_type": string;
+  "name": string;
+  "preview_url"?: string | null;
+  "sha256": string;
+  "size_bytes": number;
+  "state": ChatAttachmentState;
+  "thread_id": string;
+};
+
+export type ChatAttachmentResponse = {
+  "attachment": ChatAttachment;
+};
+
+export type ChatAttachmentState = "ready" | "deleted";
+
+export type ChatCard = {
+  "actor": ChatActor;
+  "href": string;
+  "id": string;
+  "kind": ChatCardKind;
+  "operation_id"?: string | null;
+  "reason"?: string | null;
+  "state": string;
+  "title": string;
+};
+
+export type ChatCardData = {
+  "card": ChatCard;
+};
+
+export type ChatCardKind = "task" | "decision" | "question" | "approval" | "plan_gate" | "notice" | "operation";
+
+export type ChatCreateThreadRequest = {
+  "client_thread_id": string;
+  "project_id"?: string | null;
+  "title": string;
+};
+
+export type ChatEvent = {
+  "at": string;
+  "data": ChatEventData;
+  "id": string;
+  "message_id"?: string | null;
+  "run_id"?: string | null;
+  "thread_id": string;
+  "type": ChatEventType;
+};
+
+export type ChatEventData = ChatMessageData | ChatTextDeltaData | ChatStatusData | ChatToolData | ChatRunData | ChatQueueData | ChatCardData | ChatThreadData;
+
+export type ChatEventListResponse = {
+  "items": Array<ChatEvent>;
+  "next_cursor"?: string | null;
+};
+
+export type ChatEventType = "message" | "text_delta" | "status" | "tool" | "run" | "queue" | "card" | "thread";
+
+export type ChatMessage = {
+  "attachment_ids": Array<string>;
+  "cards": Array<ChatCard>;
+  "client_message_id"?: string | null;
+  "created_at": string;
+  "id": string;
+  "reply_to_id"?: string | null;
+  "role": ChatMessageRole;
+  "run_id"?: string | null;
+  "seq": number;
+  "state": ChatMessageState;
+  "text": string;
+  "thread_id": string;
+  "updated_at": string;
+};
+
+export type ChatMessageData = {
+  "message": ChatMessage;
+};
+
+export type ChatMessageListResponse = {
+  "items": Array<ChatMessage>;
+  "next_after_seq"?: number | null;
+  "next_before_seq"?: number | null;
+  "snapshot_event_id": string;
+};
+
+export type ChatMessageResponse = {
+  "message": ChatMessage;
+};
+
+export type ChatMessageRole = "user" | "assistant" | "system";
+
+export type ChatMessageState = "queued" | "running" | "completed" | "cancelled" | "interrupted" | "failed";
+
+export type ChatPatchThreadRequest = {
+  "expected_revision": number;
+  "status"?: ChatThreadStatus | null;
+  "title"?: string | null;
+};
+
+export type ChatPostMessageRequest = {
+  "attachment_ids": Array<string>;
+  "client_message_id": string;
+  "mode": ChatSendMode;
+  "reply_to_id"?: string | null;
+  "resume_queue": boolean;
+  "text": string;
+};
+
+export type ChatPostMessageResponse = {
+  "message": ChatMessage;
+  "queue_position": number;
+  "run_id"?: string | null;
+};
+
+export type ChatQueueData = {
+  "message_ids": Array<string>;
+  "paused": boolean;
+};
+
+export type ChatReferenceOwnerKind = "task" | "knowledge_inbox";
+
+export type ChatReferenceRequest = {
+  "idempotency_key": string;
+  "owner_id": string;
+  "owner_kind": ChatReferenceOwnerKind;
+};
+
+export type ChatReferenceResponse = {
+  "attachment_id": string;
+  "owner_id": string;
+  "owner_kind": ChatReferenceOwnerKind;
+};
+
+export type ChatResumeQueueRequest = {
+  "expected_revision": number;
+};
+
+export type ChatRun = {
+  "account_id"?: string | null;
+  "finished_at"?: string | null;
+  "harness"?: string | null;
+  "id": string;
+  "input_message_id": string;
+  "llm_source"?: string | null;
+  "model"?: string | null;
+  "output_message_id"?: string | null;
+  "provider"?: string | null;
+  "reason"?: string | null;
+  "session_mode"?: ChatSessionMode | null;
+  "started_at"?: string | null;
+  "state": ChatRunState;
+  "thread_id": string;
+  "tier"?: string | null;
+};
+
+export type ChatRunData = {
+  "run": ChatRun;
+};
+
+export type ChatRunResponse = {
+  "run": ChatRun;
+};
+
+export type ChatRunState = "queued" | "running" | "stopping" | "completed" | "stopped" | "failed" | "interrupted";
+
+export type ChatSendMode = "queue" | "interrupt";
+
+export type ChatSessionMode = "new" | "resumed" | "fresh";
+
+export type ChatStatusData = {
+  "phase": ChatStatusPhase;
+  "summary": string;
+};
+
+export type ChatStatusPhase = "queued" | "starting" | "thinking" | "working" | "waiting";
+
+export type ChatStopRequest = {
+  "run_id": string;
+};
+
+export type ChatStopResponse = {
+  "queue_paused": boolean;
+  "run": ChatRun;
+};
+
+export type ChatTextDeltaData = {
+  "offset": number;
+  "text": string;
+};
+
+export type ChatThread = {
+  "active_run_id"?: string | null;
+  "created_at": string;
+  "id": string;
+  "kind": ChatThreadKind;
+  "project_id"?: string | null;
+  "queue_paused": boolean;
+  "queued_count": number;
+  "revision": number;
+  "status": ChatThreadStatus;
+  "title": string;
+  "updated_at": string;
+};
+
+export type ChatThreadData = {
+  "thread": ChatThread;
+};
+
+export type ChatThreadDetailResponse = {
+  "active_run"?: ChatRun | null;
+  "last_event_id": string;
+  "thread": ChatThread;
+};
+
+export type ChatThreadKind = "human" | "inbox" | "legacy";
+
+export type ChatThreadListResponse = {
+  "items": Array<ChatThread>;
+  "next_cursor"?: string | null;
+};
+
+export type ChatThreadResponse = {
+  "thread": ChatThread;
+};
+
+export type ChatThreadStatus = "open" | "archived";
+
+export type ChatToolData = {
+  "call_id": string;
+  "detail"?: string | null;
+  "error": boolean;
+  "name": string;
+  "state": ChatToolState;
+  "summary": string;
+  "truncated": boolean;
+};
+
+export type ChatToolState = "running" | "completed" | "failed";
+
 export type Check = {
   "cmd": string;
   "expect_exit": number;

@@ -31,6 +31,20 @@ pub struct RunningDbMaintenance {
 }
 
 impl RunningDbMaintenance {
+    /// 同じ流儀の背景タスク（`chat_gc` 等）が止め方を共有する。
+    pub(crate) fn from_task(
+        stop: tokio::sync::oneshot::Sender<()>,
+        handle: tokio::task::JoinHandle<()>,
+        name: &'static str,
+    ) -> Self {
+        Self {
+            stop,
+            handle,
+            name,
+            cancel: None,
+        }
+    }
+
     pub async fn stop(self) {
         if let Some(cancel) = &self.cancel {
             cancel.store(true, Ordering::Relaxed);

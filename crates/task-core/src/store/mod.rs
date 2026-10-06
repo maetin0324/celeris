@@ -103,6 +103,7 @@ mod events;
 mod execution;
 mod instances;
 mod integrations;
+mod legacy;
 mod messages;
 pub(crate) mod migrations;
 mod org;
@@ -749,6 +750,7 @@ impl SqliteStore {
     ) -> Result<Self, StoreError> {
         Self::configure_pragmas(&conn, options)?;
         Self::migrate(&mut conn)?;
+        Self::backfill_legacy_cos(&mut conn)?;
         // ADR-0064 D4: ファイル DB でだけ、読み取り専用の小さな接続プールを作る（`read_pool_size = 0`
         // にすれば無効化できる）。
         let read_pool = match path {

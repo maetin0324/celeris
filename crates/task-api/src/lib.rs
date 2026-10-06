@@ -28,6 +28,7 @@ pub mod browser_identity;
 mod browser_live;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;
+pub mod chat;
 /// ADR-0048 D1（Phase 60a）: Console の読み取り側（一本の流れと SSE）。
 pub mod console;
 pub mod conversation;

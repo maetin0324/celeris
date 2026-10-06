@@ -1,13 +1,13 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openOverlayFixture, seriousViolations } from "../ui/overlay-browser-test";
+import { openOverlayFixture, OVERLAY_FIXTURE_TIMEOUT, seriousViolations } from "../ui/overlay-browser-test";
 
 describe("ArtifactPreview", () => {
   let fixture: Awaited<ReturnType<typeof openOverlayFixture>>;
   beforeAll(async () => {
     fixture = await openOverlayFixture("/components/content/fixtures/preview.html");
-  }, 30_000);
+  }, OVERLAY_FIXTURE_TIMEOUT);
   afterAll(async () => {
     await fixture?.close();
   });

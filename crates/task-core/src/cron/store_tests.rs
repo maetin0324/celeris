@@ -300,7 +300,20 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
         // 版数 37 の DB に戻す。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
+            "DROP TRIGGER chat_node_session_thread_insert; \
+             DROP TRIGGER chat_node_session_thread_update; \
+             DROP INDEX idx_node_sessions_cos_chat_active; \
+             ALTER TABLE node_sessions DROP COLUMN thread_id; \
+             ALTER TABLE node_sessions DROP COLUMN llm_source; \
+             ALTER TABLE node_sessions DROP COLUMN model; \
+             ALTER TABLE node_sessions DROP COLUMN summary_through_seq; \
+             DROP TABLE chat_search; DROP TABLE chat_upload_reservations; \
+             DROP TABLE chat_client_requests; DROP TABLE cos_notification_routes; \
+             DROP TABLE cos_operations; DROP TABLE cos_inbox_items; \
+             DROP TABLE chat_attachment_refs; DROP TABLE chat_attachments; \
+             DROP TABLE chat_events; DROP TABLE chat_runs; \
+             DROP TABLE chat_messages; DROP TABLE chat_threads; \
+             DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP TABLE feed_notices; DROP TABLE feed_sources; DROP TABLE feed_cursor; \
              DROP INDEX idx_events_integration_request; \
              DROP TABLE task_behind_targets; \
@@ -324,7 +337,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 47);
+    assert_eq!(SCHEMA_VERSION, 50);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

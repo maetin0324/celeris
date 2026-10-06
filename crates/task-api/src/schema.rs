@@ -3,6 +3,14 @@
 //! （`UPDATE_SCHEMA=1 cargo test -p task-api` で再生成）。
 
 use schemars::JsonSchema;
+use task_core::chat::{
+    ChatAttachment, ChatAttachmentResponse, ChatCard, ChatCreateThreadRequest, ChatEvent,
+    ChatEventListResponse, ChatMessage, ChatMessageListResponse, ChatMessageResponse,
+    ChatPatchThreadRequest, ChatPostMessageRequest, ChatPostMessageResponse, ChatReferenceRequest,
+    ChatReferenceResponse, ChatResumeQueueRequest, ChatRun, ChatRunResponse, ChatStopRequest,
+    ChatStopResponse, ChatThread, ChatThreadDetailResponse, ChatThreadListResponse,
+    ChatThreadResponse,
+};
 use task_core::{EventRow, Task};
 use task_ops::daemon::DaemonSnapshot;
 use task_ops::gate::TransitionResult;
@@ -263,6 +271,30 @@ pub struct ApiV1Schema {
     pub cron_job_list: crate::cron_jobs::CronJobList,
     pub cron_job_run_list: crate::cron_jobs::CronJobRunList,
     pub cron_run_result: crate::cron_jobs::CronRunResult,
+    // ---- ADR 2026-10-05-cos-chat-home D2: CoS チャット（スレッド・メッセージ・run・添付・SSE） ----
+    pub chat_thread: ChatThread,
+    pub chat_message: ChatMessage,
+    pub chat_run: ChatRun,
+    pub chat_attachment: ChatAttachment,
+    pub chat_card: ChatCard,
+    pub chat_event: ChatEvent,
+    pub chat_thread_create: ChatCreateThreadRequest,
+    pub chat_thread_patch: ChatPatchThreadRequest,
+    pub chat_post_message: ChatPostMessageRequest,
+    pub chat_stop: ChatStopRequest,
+    pub chat_resume_queue: ChatResumeQueueRequest,
+    pub chat_reference: ChatReferenceRequest,
+    pub chat_thread_list: ChatThreadListResponse,
+    pub chat_thread_response: ChatThreadResponse,
+    pub chat_thread_detail: ChatThreadDetailResponse,
+    pub chat_message_list: ChatMessageListResponse,
+    pub chat_message_response: ChatMessageResponse,
+    pub chat_post_message_response: ChatPostMessageResponse,
+    pub chat_run_response: ChatRunResponse,
+    pub chat_stop_response: ChatStopResponse,
+    pub chat_event_list: ChatEventListResponse,
+    pub chat_attachment_response: ChatAttachmentResponse,
+    pub chat_reference_response: ChatReferenceResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

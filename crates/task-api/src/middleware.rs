@@ -30,7 +30,27 @@ pub(crate) async fn guard(State(state): State<ApiState>, req: Request, next: Nex
     let method = req.method().clone();
     let path = req.uri().path().to_string();
     let mut response = match check_request(&state, &req) {
-        Ok(()) => next.run(req).await,
+        Ok(()) => {
+            let req = if *req.method() == Method::POST
+                && req.uri().path().starts_with("/api/v1/chat/threads/")
+                && req.uri().path().ends_with("/attachments")
+            {
+                let limit = state
+                    .chat
+                    .attachment_limits
+                    .max_file_bytes
+                    .saturating_add(1024 * 1024)
+                    .min(usize::MAX as u64) as usize;
+                let (parts, body) = req.into_parts();
+                Request::from_parts(
+                    parts,
+                    axum::body::Body::new(http_body_util::Limited::new(body, limit)),
+                )
+            } else {
+                req
+            };
+            next.run(req).await
+        }
         Err(problem) => problem.into_response(),
     };
     if let Some(PendingProblem(problem)) = response.extensions_mut().remove::<PendingProblem>() {
@@ -104,7 +124,15 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
     }
     // Content-Type / 本文サイズは本文を伴うメソッド（POST・PUT・PATCH）だけ検査する（DELETE は本文を取らない）。
     if matches!(*req.method(), Method::POST | Method::PUT | Method::PATCH) {
-        if !is_json_content_type(req.headers()) {
+        let attachment_upload = *req.method() == Method::POST
+            && req.uri().path().starts_with("/api/v1/chat/threads/")
+            && req.uri().path().ends_with("/attachments");
+        let multipart = req
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.to_ascii_lowercase().starts_with("multipart/form-data;"));
+        if !(attachment_upload && multipart) && !is_json_content_type(req.headers()) {
             return Err(ApiProblem::unsupported_media_type());
         }
         let declared = req
@@ -112,7 +140,16 @@ fn check_request(state: &ApiState, req: &Request) -> Result<(), ApiProblem> {
             .get(header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.trim().parse::<u64>().ok());
-        if declared.is_some_and(|len| len > MAX_BODY_BYTES as u64) {
+        let limit = if attachment_upload && multipart {
+            state
+                .chat
+                .attachment_limits
+                .max_file_bytes
+                .saturating_add(1024 * 1024)
+        } else {
+            MAX_BODY_BYTES as u64
+        };
+        if declared.is_some_and(|len| len > limit) {
             return Err(ApiProblem::payload_too_large());
         }
     }

@@ -53,6 +53,8 @@ pub struct ApiState {
     /// ADR-0108 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
     /// restore は常に `isolation_required`。
     pub(crate) live_sessions: Option<Arc<dyn task_core::browser_isolation::LiveSessionRegistry>>,
+    /// Chat attachment configuration and live event wakeups, shared with SSE/upload routes.
+    pub(crate) chat: Arc<crate::chat::ChatState>,
 }
 
 pub(crate) struct Inner {
@@ -144,6 +146,10 @@ impl ApiState {
         let db_mount = detect_db_mount(&settings.db_path);
         let (shutdown, _) = watch::channel(false);
         let browser = Arc::new(settings.browser.clone());
+        let chat = crate::chat::ChatState {
+            attachment_db_path: Some(settings.db_path.clone()),
+            ..Default::default()
+        };
         let inner = Inner {
             store: Arc::new(store),
             token_digest: settings.token.as_deref().map(token_digest),
@@ -200,6 +206,7 @@ impl ApiState {
             browser,
             identity_sealer: None,
             live_sessions: None,
+            chat: Arc::new(chat),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -207,6 +214,27 @@ impl ApiState {
     /// ADR-0080 D5: browser の鍵・broker を差し替える（テストと、起動後に broker を結線する経路）。
     pub fn with_browser(mut self, browser: crate::browser::BrowserApiConfig) -> Self {
         self.browser = Arc::new(browser);
+        self
+    }
+
+    /// Attachments are unavailable until daemon wiring provides a data directory.
+    pub fn with_chat_attachments(
+        mut self,
+        data_dir: std::path::PathBuf,
+        limits: task_core::chat::attachments::ChatAttachmentLimits,
+    ) -> Self {
+        let mut chat = (*self.chat).clone();
+        chat.attachment_data_dir = Some(data_dir);
+        chat.attachment_limits = limits;
+        self.chat = Arc::new(chat);
+        self
+    }
+
+    /// cos-run may disable new chat input from its `[cos]` setting at this one API gate.
+    pub fn with_cos_enabled(mut self, enabled: bool) -> Self {
+        let mut chat = (*self.chat).clone();
+        chat.enabled = enabled;
+        self.chat = Arc::new(chat);
         self
     }
 

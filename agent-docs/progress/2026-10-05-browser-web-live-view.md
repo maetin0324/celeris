@@ -1,7 +1,7 @@
 ---
 title: ブラウザ実行課と web の Live View・操作・承認画面 — 総括
 tasks: [01M46W97H391DSFW1XJ745W0G9]
-status: done
+status: running
 updated: 2026-10-06
 ---
 
@@ -101,21 +101,48 @@ web-parity-close2.log・web-e2e-close2.log）。
   event 不変の検証を domain-policy の API 試験と併せて確定系でカバーしている。
   突き合わせで `check:parity` の漏れ（V3 台帳行の未追加）を発見（上の「未解決事項」・「提案」）。
 
+## 実機確認: review-fix と launcher-fix の結果、rerun-evidence の回答（2026-10-06）
+
+- **review-fix**: final review 指摘の 2 件を修正した。`/browser/settings` を画面台帳
+  （`web/e2e/support/screens.ts`）に fixture 付きで追加（`e2e:nfr` 103 件成功・exit 0）、
+  `config/org.example.toml:136` の参照を実在の手順 `docs/ops/browser-department.md` と
+  実際の API `PATCH /api/v1/org/browser-execution/browser-settings` に直した。
+  記録は [review-fix](2026-10-05-browser-web-live-view/review-fix.md)。
+- **launcher-fix**: 実機確認（attempts 1〜8、tree `8aecea65`）で見つかった launcher 経路の
+  欠陥（D4 action socket path 107 byte 超過・D6 shim policy / `policy_sha256` 欠落・egress の
+  origin 照合）と確認台本の欠陥（D1〜D3・D5・D7）を、統合 commit `d8f3e5e6`（`0e167295` で
+  統合）で修正した。記録は [launcher-fix 進捗](2026-10-06-browser-launcher-fix.md)。
+- **rerun-evidence（人の決定、回答 `fable-rerun`）**: launcher-fix 統合後、Fable が
+  tree `0e167295`（`d8f3e5e6` を祖先に持つ。証跡の `versions.txt`・`git merge-base --is-ancestor`
+  で確認済み）で `scripts/dev/browser-web-live-check.sh` を再実行し、証跡を
+  `real-check-evidence/rerun-2026-10-06/` に commit（`3680b70e`）。**結果は不合格（FAIL）**:
+  D4・D6 修正は実機で効いていた（run 起動・`policy_sha256` あり・`launch` 許可）が、
+  loopback の試験ページが launcher egress の設計（IP literal・private/loopback 拒否）で
+  開けず、許可 origin の navigate 成功・範囲外 origin の egress 拒否の証跡・screenshot を
+  取得できなかった。再実行で R1（台本 settings URL）・R2（gateway の拒否 upgrade 時に
+  未処理 ECONNRESET で node 全体が落ちる）・R3（loopback 試験ページを egress で開けない、
+  egress が拒否を記録しない）・R4（cleanup が socket を残す）と、別 session の Live View
+  拒否・lease 保持時の入力転送のカバー欠けが見つかった。close せず、R1〜R4 の修正後に
+  Fable が 3 回目の再実行を行う。各段の結果と経緯（attempts 1〜8 → launcher-fix → 再実行）は
+  [real-check.md](2026-10-05-browser-web-live-view/real-check.md) に記録する。
+
 ## 未解決事項
 
-- **`check:parity` が exit 1（`/browser/settings: missing V3 screen`）**: web-settings 葉
-  （7f91202d）が route だけ足して V3 台帳行（`web/e2e/support/screens.ts`）を足していない。
-  修正は 1 行（`{ path: "/browser/settings", fixture: "/browser/settings", heading:
-  "ブラウザ実行課の設定" }`、`v3: true` は browser backend 対応があるまで付けない）。ただし
-  `mobile-gate`（nfr project・axe 全画面）が fixture gateway（browser backend 無し）で h1 を
-  期待するため、追加時は fixture 側の browser grant 付き org と `mobile-audit` の再実行が要る
-  （web-settings 葉の再計画で直す）。本 close run（文書のみ）では直していない。
+- **実機再確認が不合格（rerun-evidence 回答 `fable-rerun`）**: tree `0e167295` で再実行した
+  ところ、D4・D6 修正は効いていたが loopback 試験ページが launcher egress で開けず、
+  egress 拒否の証跡が取れなかった。R1〜R4（上）と 2 件のカバー欠けの修正が未実施。
+  修正後に Fable が 3 回目の再実行を行う。詳細は
+  [real-check.md](2026-10-05-browser-web-live-view/real-check.md)。
+- ~~`check:parity` が exit 1（`/browser/settings: missing V3 screen`）~~: **review-fix で修正済み**
+  （`web/e2e/support/screens.ts` に `/browser/settings` を fixture 付きで追加、rich fixture に
+  `browser-execution` node を加え `e2e:nfr` 103 件成功・exit 0。記録は [review-fix](2026-10-05-browser-web-live-view/review-fix.md)）。
 - **functional e2e の home 360px 失敗 2 件は main 由来の既知の失敗**: `home-layout.spec.ts:26`
   （360x800）・`home-stale-viewport.spec.ts`（stale の / 360）。この branch の web 差分は
   browser 画面のみ。web-ui 葉と同様に除外して残りを 0 failed で確認済み。main 側の修正を待つ。
-- **本番の org 投入と実機確認は未実施**: 配送後に Fable が `docs/ops/browser-department.md` で
-  `POST /api/v1/org` し、`scripts/dev/browser-web-live-check.sh`（opt-in）で実機確認して証跡を
-  ここへ転記する。本 run は本番 DB・daemon には触れていない。
+- **本番の org 投入は未実施・実機再確認は不合格**: 本番 org への投入（`docs/ops/browser-department.md`
+  で `POST /api/v1/org`）は配送後に Fable が行う。実機確認は attempts 1〜8（tree `8aecea65`）と
+  launcher-fix 後の再実行（tree `0e167295`、証跡 `3680b70e`）まで実施済みで、再実行は不合格
+  （上「rerun-evidence」。R1〜R4 修正後の 3 回目の再実行が未実施）。
 - **egress は `host:port` の完全一致**: wildcard origin（`*.example.com`）は egress で一致せず
   fail-closed に拒否される（以前からの挙動）。実運用では wildcard ではなく単一 origin を指定する。
 - **launcher 経路（`browser_launcher`）は prepared policy を受け取るだけ**: 追加の origin 検証は
@@ -133,12 +160,10 @@ web-parity-close2.log・web-e2e-close2.log）。
 
 ## 提案
 
-- **`check:parity` の修復（最優先・小さく確定）**: `web/e2e/support/screens.ts` に
-  `{ path: "/browser/settings", fixture: "/browser/settings", heading: "ブラウザ実行課の設定" }`
-  （`v3: true` 無し）を 1 行足し、`mobile-gate`・`check:parity`・`check:boundaries`・`mobile-audit`
-  を再実行して 0 failed を確かめる。fixture gateway が `browser-execution` node（browser grant 付き）
-  を持たない場合は、org fixture に node を足すか settings 画面の fetch 失敗表示で h1 が出ることを
-  先に確認する。web-settings 葉の再計画か、次の close で直す。
+- **実機再確認の R1〜R4 修正（次段・最優先）**: 台本（R1 settings URL・R4 cleanup）・
+  web gateway（R2 拒否 upgrade の未処理 ECONNRESET）・egress（R3 試験専用 egress 許可と
+  拒否理由の記録）を直し、Fable が 3 回目の再実行で許可 origin の navigate 成功と
+  egress 拒否の証跡を取る（[real-check.md](2026-10-05-browser-web-live-view/real-check.md)）。
 - **`org_browser_events` の読み取り API**（`GET /api/v1/org/{id}/browser-events`）を足し、設定画面に
   変更履歴一覧を出す（actor・時刻・変更欄の要約のみ）。
 - **launcher 経路の origin 検証**: `browser_launcher` が prepared policy をそのまま egress へ渡す

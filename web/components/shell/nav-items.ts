@@ -1,3 +1,5 @@
+import type { IconName } from "../ui/icon";
+
 // ナビの項目（P2-02）。path は現行 gui/ と同じ（S5）。
 // group はナビの見出しの区分（DESIGN.md: 日々の仕事と管理に分ける）。並びは navItems の順のまま。
 export const navItems = [
@@ -28,3 +30,16 @@ export const navGroups: readonly { key: NavGroup; label: string }[] = [
   { key: "work", label: "日々の仕事" },
   { key: "admin", label: "組織と管理" },
 ];
+
+// md 未満の画面下のタブ（旧 GUI の MobileTabBar と同じ形）。この 4 つと「その他」で 5 列にする。
+// 「その他」のシートには navItems のうちここに無いものを navItems の順で出す。
+export const mobileTabs = [
+  { to: "/", label: "ホーム", icon: "home" },
+  { to: "/inbox", label: "受信箱", icon: "inbox" },
+  { to: "/tasks", label: "タスク", icon: "list-checks" },
+  { to: "/projects", label: "案件", icon: "folder" },
+] as const satisfies readonly { to: (typeof navItems)[number]["to"]; label: string; icon: IconName }[];
+
+const mobileTabPaths: readonly string[] = mobileTabs.map((tab) => tab.to);
+
+export const mobileOtherItems = navItems.filter((item) => !mobileTabPaths.includes(item.to));

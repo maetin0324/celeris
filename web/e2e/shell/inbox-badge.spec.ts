@@ -17,7 +17,7 @@ test("nav の受信箱件数は /inbox/items の counts から出て、inbox_cha
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${gateway.base}/tasks`);
-    const nav = page.getByRole("navigation", { name: "主要" });
+    const nav = page.getByRole("navigation", { name: "主要", exact: true });
     await expect(nav.getByRole("img", { name: "受信箱 5 件" })).toBeVisible();
     expect(daemon.requests.some((request) => request.path === "/api/v1/inbox/items")).toBe(true);
     await expect.poll(() => daemon.streamClients).toBeGreaterThan(0);

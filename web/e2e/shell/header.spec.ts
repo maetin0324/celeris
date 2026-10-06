@@ -131,7 +131,7 @@ test("メニュー: md 未満は 44px のボタンで開閉し、Escape で閉�
     await page.goto(`${gateway.base}/tasks`);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
     const button = page.getByRole("button", { name: "メニュー" });
-    const nav = page.getByRole("navigation", { name: "主要" });
+    const nav = page.getByRole("navigation", { name: "主要", exact: true });
     await expect(button).toHaveAttribute("aria-controls", "shell-nav");
     await expect(button).toHaveAttribute("aria-expanded", "false");
     const b = await button.boundingBox();
@@ -171,7 +171,7 @@ test("メニュー: md 以上は幅 --spacing-nav の左列で、メニューの
     await page.goto(`${gateway.base}/tasks`);
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
     await expect(page.getByRole("button", { name: "メニュー" })).toBeHidden();
-    const nav = page.getByRole("navigation", { name: "主要" });
+    const nav = page.getByRole("navigation", { name: "主要", exact: true });
     await expect(nav).toBeVisible();
     await expect(page.locator("[data-connection]")).toBeVisible();
     const column = await box(page, "[data-shell] > header");

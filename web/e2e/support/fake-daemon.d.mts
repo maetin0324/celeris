@@ -28,7 +28,7 @@ export type FakeDaemonOptions = {
   delayMs?: number;
   fixtures?: Record<string, unknown | ((url: URL) => unknown)>;
   token?: string | null;
-  files?: Record<string, { body: string | (() => string); type?: string; disposition?: string }>;
+  files?: Record<string, { body: string | Uint8Array | (() => string); type?: string; disposition?: string }>;
   profile?: "default" | "rich";
   fault?: { status: number; paths?: string[] } | null;
   hold?: { paths?: string[] } | null;

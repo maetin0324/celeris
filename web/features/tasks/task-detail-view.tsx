@@ -3,6 +3,7 @@ import { Link, useLocation } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
+import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
 import { TaskChangesPanel } from "../changes/changes-view";
 import { TaskFilesPanel } from "../files/task-files-view";
@@ -21,9 +22,11 @@ import {
 import { TimelineView } from "./timeline-view";
 
 // /tasks/:id の枠（P3-08、R23）。見出しと tab は取得を待たずに出し、中身だけが FetchFrame で待つ（S1）。
-// header（状態・現在の run・次の操作）は tab に関係なく h1 の下に出す。tab は ?tab= の search param。判断パネル（P3-09）と実行・routing（P3-10）は overview の上。
+// header（題・状態・現在の run・次の操作）は tab に関係なく h1 の下に出す。tab は ?tab= の search param。
+// 概要 tab は目的の本文を先頭に置き、判断パネル（P3-09）と実行・routing（P3-10）はその下（最初の 1 画面に目的を入れる）。
 // changes・files・artifacts（P3-13）は /tasks/:id/changes・/tasks/:id/files・/artifacts と同じ部品を置く。
 // スマホ幅（md 未満）では概要 tab の中を「概要・判断・実行・木」の区画に切り替える（desktop は全区画を並べる）。
+// 区画の切り替えは横 1 列の ScrollTabs に置き、上の tab 行と 2 段の箱にしない。
 export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDetailTab }) {
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
@@ -38,6 +41,9 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
                 to="/tasks/$id"
                 params={{ id: taskId }}
                 search={{ tab: item.key === "overview" ? undefined : item.key }}
+                // 既定の判定は search の部分一致で、tab の無い概要の link が他の tab でも「現在」になる。
+                // 選択は ?tab= から決めた `tab` だけで示す（URL から復元した tab だけが aria-current）。
+                activeOptions={{ exact: true }}
                 aria-current={item.key === tab ? "page" : undefined}
                 data-tab={item.key}
                 className={`inline-flex min-h-11 items-center whitespace-nowrap px-2 text-label sm:px-3 ${
@@ -80,13 +86,20 @@ function OverviewTab({ taskId }: { taskId: string }) {
       {detail.data ? (
         <div className="flex min-w-0 flex-col gap-4">
           <SectionSwitcher current={section.current} onSelect={section.select} />
-          <div className={mobileSectionClass("decision", section.current)}>
-            <DecisionPanel key={detail.data.task.id} detail={detail.data} />
-          </div>
-          <div className={mobileSectionClass("execution", section.current)}>
-            <ExecutionPanel key={`execution-${detail.data.task.id}`} detail={detail.data} />
-          </div>
-          <OverviewView detail={detail.data} section={section.current} />
+          <OverviewView
+            detail={detail.data}
+            section={section.current}
+            panels={
+              <>
+                <div className={mobileSectionClass("decision", section.current)}>
+                  <DecisionPanel key={detail.data.task.id} detail={detail.data} />
+                </div>
+                <div className={mobileSectionClass("execution", section.current)}>
+                  <ExecutionPanel key={`execution-${detail.data.task.id}`} detail={detail.data} />
+                </div>
+              </>
+            }
+          />
         </div>
       ) : null}
     </FetchFrame>
@@ -110,7 +123,7 @@ function useMobileSection() {
   return { current, select: setCurrent };
 }
 
-/** スマホ幅だけの区画切り替え。desktop では隠れ、全区画が並ぶ。 */
+/** スマホ幅だけの区画切り替え（横 1 列、溢れたら枠の中で横 scroll）。desktop では隠れ、全区画が並ぶ。 */
 function SectionSwitcher({
   current,
   onSelect,
@@ -119,24 +132,26 @@ function SectionSwitcher({
   onSelect: (section: MobileSection) => void;
 }) {
   return (
-    <fieldset data-testid="mobile-sections" className="m-0 grid min-w-0 grid-cols-4 gap-1 border-0 p-0 md:hidden">
+    <fieldset data-testid="mobile-sections" className="m-0 min-w-0 border-0 p-0 md:hidden">
       <legend className="sr-only">概要の区画</legend>
-      {MOBILE_SECTIONS.map((item) => (
-        <button
-          key={item.key}
-          type="button"
-          data-section={item.key}
-          aria-pressed={item.key === current}
-          onClick={() => onSelect(item.key)}
-          className={`inline-flex min-h-11 min-w-0 items-center justify-center whitespace-nowrap rounded-md border px-2 text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
-            item.key === current
-              ? "border-primary bg-accent font-semibold text-foreground"
-              : "border-border bg-surface text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
+      <ScrollTabs className="flex gap-1">
+        {MOBILE_SECTIONS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            data-section={item.key}
+            aria-pressed={item.key === current}
+            onClick={() => onSelect(item.key)}
+            className={`inline-flex min-h-11 min-w-11 shrink-0 items-center justify-center whitespace-nowrap rounded-md px-3 text-label focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring ${
+              item.key === current
+                ? "bg-accent font-semibold text-foreground"
+                : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {item.label}
+          </button>
+        ))}
+      </ScrollTabs>
     </fieldset>
   );
 }

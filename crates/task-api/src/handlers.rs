@@ -56,7 +56,7 @@ use task_io::{
     artifact_body, artifact_list, events, run_prompt, run_request, run_result, run_stderr,
     run_stdout, task_events, task_runs, work_unit_check_log,
 };
-use tasks::{create_task, list_tasks, task_detail};
+use tasks::{create_task, list_tasks, task_counts, task_detail};
 
 pub(crate) type ApiResult = Result<Response, ApiProblem>;
 
@@ -68,6 +68,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/inbox", get(inbox))
         .merge(crate::inbox_notifications::routes())
         .route("/api/v1/tasks", get(list_tasks).post(create_task))
+        .route("/api/v1/tasks/counts", get(task_counts))
         .route("/api/v1/tasks/{id}", get(task_detail).patch(patch_task))
         // ADR-0044 D2（Phase 53）: タスク単位のコメントと再開。
         .route(

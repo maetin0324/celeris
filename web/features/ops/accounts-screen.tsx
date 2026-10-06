@@ -17,7 +17,8 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { DataList } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
-import { formatAbsolute } from "../../lib/time";
+import { formatAbsolute, formatRelative, getServerClockOffset } from "../../lib/time";
+import { cn } from "../../lib/utils";
 import { McpClientsSection } from "./mcp-clients";
 import { SecretsSection } from "./secrets-section";
 
@@ -45,9 +46,116 @@ function checkResultLabel(result: string): string {
   return Object.hasOwn(checkLabel, result) ? checkLabel[result as ProviderCheckResult] : result;
 }
 
+/** 除外理由（GET /accounts の excluded_reason）の日本語。未知の値はそのまま出す（旧 GUI と同じ語）。 */
+export const EXCLUDED_REASON_LABEL: Readonly<Record<string, string>> = {
+  not_logged_in: "未ログイン",
+  at_capacity: "上限に達しています",
+  cooldown: "cooldown 中",
+  five_hour_exhausted: "短期枠を使い切りました",
+  seven_day_exhausted: "長期枠を使い切りました",
+  rejected: "拒否されました",
+};
+
+export function excludedReasonLabel(reason: string): string {
+  const label = Object.hasOwn(EXCLUDED_REASON_LABEL, reason) ? EXCLUDED_REASON_LABEL[reason] : undefined;
+  return label ? `${label}（${reason}）` : reason;
+}
+
+export type UsageTone = "normal" | "warning" | "danger";
+
+/** 使用率の段階（旧 GUI の usageTone と同じ境目: 70% で注意、90% で上限間近）。 */
+export function usageTone(utilization: number): UsageTone {
+  if (utilization >= 0.9) return "danger";
+  if (utilization >= 0.7) return "warning";
+  return "normal";
+}
+
+const USAGE_TONE_WORD: Readonly<Record<UsageTone, string>> = { normal: "", warning: "注意", danger: "上限間近" };
+// 塗りは状態色の前景（文字色と同じ濃さ）を使い、地の muted と区別できる明度差を保つ。
+const USAGE_FILL: Readonly<Record<UsageTone, string>> = {
+  normal: "bg-primary",
+  warning: "bg-warning-foreground",
+  danger: "bg-danger-foreground",
+};
+
+/** 残り時間を上位 2 単位で表す（例「2時間15分」「3日4時間」）。0 以下は「リセット時刻を過ぎました」。 */
+export function formatRemaining(ms: number): string {
+  if (!Number.isFinite(ms)) return "-";
+  if (ms <= 0) return "リセット時刻を過ぎました";
+  const totalMin = Math.floor(ms / 60_000);
+  if (totalMin < 1) return "1分未満";
+  const days = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const minutes = totalMin % 60;
+  const parts: string[] = [];
+  if (days) parts.push(`${days}日`);
+  if (hours) parts.push(`${hours}時間`);
+  if (minutes && parts.length < 2) parts.push(`${minutes}分`);
+  return parts.slice(0, 2).join("");
+}
+
+type RateWindow = { utilization: number; resets_at: string };
+
+/** 5 時間枠・7 日枠の残量。残り時間は取得時刻（server 時計に補正）を基準にする。窓が無ければ「-」。 */
+export function UsageBar({
+  label,
+  window,
+  fetchedAtMs,
+}: {
+  label: string;
+  window: RateWindow | null | undefined;
+  fetchedAtMs: number;
+}) {
+  if (!window) {
+    return (
+      <div className="min-w-0" data-usage-window="none">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 text-label">
+          <span className="font-medium text-foreground">{label}</span>
+          <span className="text-muted-foreground">-（観測なし）</span>
+        </div>
+      </div>
+    );
+  }
+  const used = Math.min(100, Math.max(0, Math.round(window.utilization * 100)));
+  const left = 100 - used;
+  const tone = usageTone(window.utilization);
+  const word = USAGE_TONE_WORD[tone];
+  const remaining = formatRemaining(Date.parse(window.resets_at) - fetchedAtMs);
+  const text = `使用 ${used}% / 残り ${left}%`;
+  return (
+    <div className="min-w-0" data-usage-tone={tone}>
+      <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 text-label">
+        <span className="font-medium text-foreground">{label}</span>
+        <span className="tabular-nums text-foreground">
+          {text}
+          {word && (
+            <span className={tone === "danger" ? "text-danger-foreground" : "text-warning-foreground"}>（{word}）</span>
+          )}
+        </span>
+      </div>
+      {/* biome-ignore lint/a11y/useSemanticElements: 素の <meter> は browser ごとに塗りの色・dark の扱いが揃わないので、token で塗る div に role を付ける。 */}
+      <div
+        role="meter"
+        aria-label={label}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={used}
+        aria-valuetext={`${text}${word ? `・${word}` : ""}・リセットまで ${remaining}`}
+        className="mt-1 h-2 w-full overflow-hidden rounded-full border border-border bg-muted"
+      >
+        <div className={cn("h-full", USAGE_FILL[tone])} style={{ width: `${used}%` }} />
+      </div>
+      <p className="mt-1 break-words text-label text-muted-foreground">
+        リセットまで {remaining}（{formatAbsolute(window.resets_at)}）
+      </p>
+    </div>
+  );
+}
+
 /** account の状態を 1 つの語にまとめる。重いもの（除外・失敗）から順に見る。色だけにせず必ず文字を出す。 */
 export function accountState(item: AccountView): { tone: BadgeTone; label: string; detail?: string } {
-  if (item.excluded_reason) return { tone: "danger", label: "除外中", detail: item.excluded_reason };
+  if (item.excluded_reason)
+    return { tone: "danger", label: "除外中", detail: excludedReasonLabel(item.excluded_reason) };
   const check = item.last_check?.result;
   if (check === "auth_failed" || check === "spawn_failed")
     return { tone: "danger", label: checkResultLabel(check), detail: item.last_check?.detail ?? undefined };
@@ -72,6 +180,7 @@ function isDenied(results: Record<string, ActionResult>) {
 export function AccountCard({
   item,
   max,
+  fetchedAtMs,
   sender,
   blocked,
   deniedId,
@@ -80,6 +189,8 @@ export function AccountCard({
 }: {
   item: AccountView;
   max: number;
+  /** 一覧を取得した時刻（server 時計に補正済み）。残り時間と観測の相対時刻の基準。 */
+  fetchedAtMs: number;
   sender: Sender;
   blocked: boolean;
   deniedId: string | undefined;
@@ -114,12 +225,33 @@ export function AccountCard({
           {state.label}
         </Badge>
       </div>
+      <section className="min-w-0 space-y-3" aria-label={`使用量 ${item.id}`}>
+        <UsageBar label="短期枠（5時間）" window={item.usage?.five_hour} fetchedAtMs={fetchedAtMs} />
+        <UsageBar label="長期枠（7日）" window={item.usage?.seven_day} fetchedAtMs={fetchedAtMs} />
+      </section>
       <DataList
         items={[
           {
             key: "state",
             label: "状態",
             value: state.detail ?? "使える状態です",
+          },
+          {
+            key: "observed",
+            label: "使用量の観測",
+            value: item.usage
+              ? `${formatAbsolute(item.usage.observed_at)}（${formatRelative(item.usage.observed_at, fetchedAtMs)}・${item.usage.source}${item.usage.status ? `・${item.usage.status}` : ""}）`
+              : "-",
+          },
+          {
+            key: "score",
+            label: "選択の score",
+            value:
+              item.score != null
+                ? item.score.toFixed(2)
+                : item.excluded_reason
+                  ? `除外: ${excludedReasonLabel(item.excluded_reason)}`
+                  : "-",
           },
           { key: "adapter", label: "道具", value: adapter },
           {
@@ -394,6 +526,7 @@ export function AccountsScreen() {
                         key={accountKey(item)}
                         item={item}
                         max={query.data.max_runs_per_account}
+                        fetchedAtMs={query.dataUpdatedAt + getServerClockOffset()}
                         sender={sender}
                         blocked={denied}
                         deniedId={deniedId}

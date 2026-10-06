@@ -4843,6 +4843,12 @@ export type TaskRoutingView = {
   "unbound_requests"?: Array<RequestRoutingAudit>;
 };
 
+export type TaskStatusCounts = {
+  "counts_by_status": {
+  [key: string]: number;
+};
+};
+
 export type TaskSummary = {
   "actions": Array<Action>;
   "adapter"?: string | null;

@@ -45,7 +45,9 @@ for (const screen of v3Screens()) {
       } else {
         await page.goto(gateway.base);
         await waitForBootIdle(page);
-        const link = page.getByRole("navigation", { name: "主要" }).getByRole("link", { name: screen.heading });
+        const link = page
+          .getByRole("navigation", { name: "主要", exact: true })
+          .getByRole("link", { name: screen.heading });
         if (await link.count()) warmupNavigate = await armClick(link);
         else
           warmupNavigate = () =>
@@ -81,7 +83,9 @@ for (const screen of v3Screens()) {
           await page.goto(gateway.base);
           // goto 直後の起動の long task を計測に含めない（ADR-0081 付記、人の決定 b）。
           await waitForBootIdle(page);
-          const link = page.getByRole("navigation", { name: "主要" }).getByRole("link", { name: screen.heading });
+          const link = page
+            .getByRole("navigation", { name: "主要", exact: true })
+            .getByRole("link", { name: screen.heading });
           if (await link.count()) navigate = await armClick(link);
           else
             navigate = () =>

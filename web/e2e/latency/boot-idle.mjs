@@ -36,7 +36,7 @@ const QUIET_ROUND = `(async (timeoutMs) => {
 
 /** @param {import("@playwright/test").Page} page */
 export async function waitForBootIdle(page, timeoutMs = 15_000) {
-  await expect(page.getByRole("navigation", { name: "主要" })).toBeAttached({ timeout: timeoutMs });
+  await expect(page.getByRole("navigation", { name: "主要", exact: true })).toBeAttached({ timeout: timeoutMs });
   await expect(page.locator("main h1")).toBeVisible({ timeout: timeoutMs });
   return page.evaluate(`${QUIET_ROUND}(${timeoutMs})`);
 }

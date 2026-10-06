@@ -614,10 +614,11 @@ test("parity: /tasks/:id スマホ幅の区画 tab と Drawer、長い ID・題�
       expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
     };
 
-    // 長い題: header は省略（全文は title 属性）、長い ID は 1 行で省略（全文は title 属性）。
-    const headerTitle = page.getByTestId("task-header").locator("p[title]").first();
-    await expect(headerTitle).toHaveAttribute("title", longTitle);
-    expect(await headerTitle.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+    // 長い題: header に全文を 1 回だけ折り返して出す（概要では再掲しない）。長い ID は 1 行で省略（全文は title 属性）。
+    const headerTitle = page.getByTestId("task-header-title");
+    await expect(headerTitle).toHaveText(longTitle);
+    expect(await headerTitle.evaluate((node) => node.scrollHeight <= node.clientHeight + 1)).toBe(true);
+    await expect(page.getByTestId("task-overview").getByRole("heading", { name: longTitle })).toHaveCount(0);
     const runId = page.getByTestId("task-header-run").locator("[data-slot='short-id']");
     await expect(runId).toHaveAttribute("title", `R-${"7".repeat(60)}`);
     expect(await runId.evaluate((node) => node.scrollWidth > node.clientWidth)).toBe(true);

@@ -27,6 +27,7 @@ use task_core::{
 /// Phase 59（ADR-0046 D1/D4/D6）: `context.profile`（実効 profile）、`context.mode`（進め方）、
 /// `context.organization[].skills` / `.harnesses` を追加（版数は据え置き。追加だけなので v4 のまま）。
 /// Phase 67（ADR-0054 D1）: `context.session`（継続セッションの手がかり）を追加（版数は据え置き）。
+/// ADR 2026-10-06 cos-chat-run-dispatch: `context.cos_chat`（CoS chat run の入力）を追加（版数は据え置き）。
 /// 全て追加のみで v1〜v3 のワーカーはそのまま動く。
 pub const PROTOCOL_VERSION: u32 = 4;
 
@@ -572,6 +573,12 @@ pub struct RunContext {
     /// プロンプトは 1 バイトも変わらない。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direct_route: Option<DirectRouteContext>,
+    /// ADR 2026-10-06 cos-chat-run-dispatch: CoS chat run（`chat_runs` の 1 行を worker として
+    /// 起こした run）だけ `Some`。`RunRequest.task` はディスパッチャが保存しない一時の Task で、
+    /// CoS chat run かどうかはこの欄の有無だけで決める（`is_cos_chat_run`）。`None` の run の
+    /// `request.json` とプロンプトは 1 バイトも変わらない。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cos_chat: Option<CosChatContext>,
 }
 
 /// `context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。
@@ -1164,6 +1171,12 @@ pub fn schema_value() -> serde_json::Value {
     let schema = schemars::schema_for!(ProtocolSchema);
     serde_json::to_value(schema).unwrap_or(serde_json::Value::Null)
 }
+
+mod cos_chat;
+pub use cos_chat::{
+    COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,
+    CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInput, is_cos_chat_run,
+};
 
 #[cfg(test)]
 pub(crate) mod tests;

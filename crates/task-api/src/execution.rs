@@ -593,3 +593,58 @@ async fn get_execution_metrics(
     }
     Ok(json_response(StatusCode::OK, &summary))
 }
+
+/// ADR 2026-10-05 D3（D6 一次対応 A）: CoS が root の計画の承認（plan gate）を既承認の範囲で答える監査
+/// つきの操作。検証は人の経路と同じ `plan_gate::plan_plan_gate`（回答の主体は `cos`）、遷移は
+/// `cos_operation_apply` の transaction 内で書く。`withdraw` は中止の連鎖なので CoS からは 422。
+pub(crate) fn plan_gate_op(
+    store: &task_core::SqliteStore,
+    task_id: task_core::TaskId,
+    req: task_ops::plan_gate::PlanGateRequest,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<crate::cos::operations::Applied<()>, ApiProblem> {
+    use task_ops::plan_gate::PlanGatePlan;
+    let target_id = task_id.to_string();
+    let action = req.action.as_str();
+    let plan = task_ops::plan_gate::plan_plan_gate(store, task_id, req.action, req.note, "cos")
+        .map_err(|e| {
+            let problem = match e {
+                task_ops::OpsError::Validation(message) => {
+                    ApiProblem::validation(vec![crate::types::ValidationError {
+                        field: Some("note".to_string()),
+                        message,
+                    }])
+                }
+                other => ops_problem(store, other, Some("plan_gate")),
+            };
+            audit.reject(store, "task", &target_id, problem)
+        })?;
+    let PlanGatePlan::Resume {
+        trigger,
+        extra,
+        from,
+    } = plan
+    else {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            ApiProblem::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "cos_operation_not_allowed",
+                "plan-gate withdraw cascades a cancellation and is left to a human",
+            ),
+        ));
+    };
+    let operation = audit.apply(store, "task", &target_id, "execution.plan_gate", |tx| {
+        let outcome = task_core::SqliteStore::apply_transition_tx(tx, task_id, trigger, extra)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "action": action,
+            "from": from,
+            "to": outcome.next,
+            "reason": outcome.reason.to_string(),
+        }))
+    })?;
+    Ok(crate::cos::operations::Applied::Audited(Box::new(operation)))
+}

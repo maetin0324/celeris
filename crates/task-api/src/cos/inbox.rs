@@ -208,7 +208,11 @@ pub(crate) async fn human_required_for_operation(
 ) -> Result<Option<String>, ApiProblem> {
     if !matches!(
         matched.action,
-        "decision.answer" | "approval.decide" | "execution.phase_gate"
+        "decision.answer"
+            | "approval.decide"
+            | "execution.phase_gate"
+            | "execution.plan_gate"
+            | "question.answer"
     ) {
         return Ok(None);
     }
@@ -219,15 +223,19 @@ pub(crate) async fn human_required_for_operation(
             .as_ref()
             .is_some_and(|native| native.path == path)
     });
-    let kind = found
-        .map(|x| x.kind)
-        .or_else(|| (matched.action == "execution.phase_gate").then_some(InboxKind::PhaseGate));
+    let task_scoped = match matched.action {
+        "execution.phase_gate" => Some(InboxKind::PhaseGate),
+        "execution.plan_gate" => Some(InboxKind::PlanGate),
+        "question.answer" => Some(InboxKind::Question),
+        _ => None,
+    };
+    let kind = found.map(|x| x.kind).or(task_scoped);
     let task_id = found
         .and_then(|x| x.task.as_ref().map(|t| t.id))
         .or_else(|| {
-            (matched.action == "execution.phase_gate")
-                .then(|| matched.id.as_deref().and_then(|id| id.parse().ok()))
-                .flatten()
+            task_scoped
+                .and(matched.id.as_deref())
+                .and_then(|id| id.parse().ok())
         });
     let override_source = match matched.action {
         "decision.answer" => matched.id.as_ref().map(|id| ("decision", id.clone())),

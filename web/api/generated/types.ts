@@ -1,4 +1,5 @@
 // Generated from docs/api/v1/api-v1.schema.json by web/scripts/gen-types.mjs. Do not edit.
+// CoS run credential routes: POST /cos/operations, GET /cos/operations/{o}, POST /cos/threads/{t}/checkpoint.
 export type AccountCheckResponse = {
   "checked_at": string;
   "detail"?: string | null;
@@ -527,6 +528,11 @@ export type ChatCardData = {
 
 export type ChatCardKind = "task" | "decision" | "question" | "approval" | "plan_gate" | "notice" | "operation";
 
+export type ChatCheckpointSaved = {
+  "summary_through_seq": number;
+  "thread_id": string;
+};
+
 export type ChatCreateThreadRequest = {
   "client_thread_id": string;
   "project_id"?: string | null;
@@ -793,6 +799,18 @@ export type CheckpointFileChange = {
 export type CheckpointKnownFailure = {
   "detail"?: string | null;
   "what": string;
+};
+
+export type CheckpointRequest = {
+  "expected_summary_through_seq": number;
+  "run_id": string;
+  "summary": string;
+  "through_seq": number;
+};
+
+export type CheckpointResponse = {
+  "summary_through_seq": number;
+  "thread_id": string;
 };
 
 export type CheckpointSource = "worker" | "yield" | "mechanical" | "merged";
@@ -1184,6 +1202,24 @@ export type CooldownView = {
   "provider": string;
   "reason": string;
   "until": string;
+};
+
+export type CosOperation = {
+  "action": string;
+  "event_id"?: number | null;
+  "expected_revision"?: string | null;
+  "id": string;
+  "idempotency_key": string;
+  "payload": unknown;
+  "policy_version": string;
+  "reason": string;
+  "request_hash": string;
+  "result"?: unknown;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
 };
 
 export type CostOfReversal = "low" | "medium" | "high";
@@ -1680,6 +1716,17 @@ export type EffectiveProfile = {
 };
 
 export type Event = {
+  "actor": string;
+  "operation_id": string;
+  "policy_version": string;
+  "reason": string;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
+  "type": "cos_operation";
+} | {
   "attempt": number;
   "before_sha": string;
   "merge_candidate_sha": string;
@@ -3112,10 +3159,43 @@ export type NotifyView = {
 
 export type OnChildFailure = "retry_then_ask" | "ignore";
 
+export type OperationBody = {
+  "expected_revision"?: string | null;
+  "idempotency_key": string;
+  "policy_version": string;
+  "reason": string;
+  "request": OperationRequest;
+};
+
 export type OperationIntent = {
   "action": string;
   "args_digest"?: string | null;
   "intent_id": string;
+};
+
+export type OperationRequest = {
+  "body"?: unknown;
+  "method": string;
+  "path": string;
+};
+
+export type OperationView = {
+  "action": string;
+  "actor": string;
+  "event_id"?: string | null;
+  "expected_revision"?: string | null;
+  "id": string;
+  "idempotency_key": string;
+  "payload": unknown;
+  "policy_version": string;
+  "reason": string;
+  "request_hash": string;
+  "result"?: unknown;
+  "run_id": string;
+  "state": string;
+  "target_id": string;
+  "target_kind": string;
+  "thread_id": string;
 };
 
 export type OrgCreateBody = {

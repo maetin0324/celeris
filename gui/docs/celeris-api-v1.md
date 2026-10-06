@@ -275,7 +275,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（195 = 表 171 + browser 制御 6 + chat 18）
+## 2. エンドポイント一覧（198 = 表 171 + browser 制御 6 + chat 18 + CoS operations 3）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -473,6 +473,9 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 193 | GET | `/chat/attachments/{a}/content` | 添付のバイト列（`attachment` として返す） | バイト列 | `crate::chat::attachments` |
 | 194 | GET | `/chat/attachments/{a}/preview` | 安全に再エンコードした raster の preview | バイト列 | `crate::chat::attachments` |
 | 195 | POST | `/chat/attachments/{a}/references` | 添付を task / 受信箱の知識へ参照させる（**管理系**） | 200 `ChatReferenceResponse` | `crate::chat::attachments` |
+| 196 | POST | `/cos/operations` | credential による CoS 監査付き変更 | 200 `OperationView` | `crate::cos::operations` |
+| 197 | GET | `/cos/operations/{o}` | CoS operation の詳細 | 200 `OperationView` | `crate::cos::operations` |
+| 198 | POST | `/cos/threads/{t}/checkpoint` | run-scoped thread summary checkpoint | 200 `CheckpointResponse` | `crate::cos` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3240,6 +3243,18 @@ path は event の `log_path` から引き、要求からは受け取らない�
 | GET `/chat/attachments/{a}/preview` | なし | 200 安全に再エンコードした raster。非対応は 404（`preview_url` は null） |
 | DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
 | POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse` |
+
+### 3.128 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
+
+以下の route は `Authorization: Bearer celeris-cos-run.<credential>` を要求する。credential から actor=`cos`・thread_id・run_id を確定し、本文や header の actor/thread/run 主張は受け付けない。credential が無効・期限切れ・失効済みなら 401。CoS credential で既存の変更 route を直接呼ぶと 422 になり、`/cos/operations` の監査経路を必ず通す。
+
+| メソッド・endpoint | 入力 | 成功 |
+|---|---|---|
+| POST `/cos/operations` | `{"idempotency_key","expected_revision","reason","policy_version","request":{"method","path","body"}}` | 200 `OperationView`（再送含む） |
+| GET `/cos/operations/{o}` | なし | 200 `OperationView` |
+| POST `/cos/threads/{t}/checkpoint` | `{"run_id","summary","through_seq","expected_summary_through_seq"}` | 200 checkpoint 応答 |
+
+操作要求は登録済みの task/decision/approval/execution/project/knowledge/comment の変更 path のみ実行する。外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
 

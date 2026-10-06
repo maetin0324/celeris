@@ -29,7 +29,7 @@ pub enum CosRunCredentialError {
     Revoked,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, schemars::JsonSchema)]
 pub struct ChatCheckpointSaved {
     pub thread_id: String,
     pub summary_through_seq: u64,

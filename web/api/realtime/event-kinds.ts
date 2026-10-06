@@ -53,6 +53,7 @@ export const EVENT_KINDS = [
   "project_plan_proposed",
   "project_plan_decided",
   "child_task_created",
+  "cos_operation",
   "child_adopted",
   "unit_gate_overridden",
   "decision_requested",

@@ -3,7 +3,9 @@
 use axum::body::Body;
 use axum::extract::{RawQuery, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
-use task_core::{ListFilter, ListOrder, Project, ProjectId, ProjectStatus, TaskStore};
+use task_core::{ListFilter, ListOrder, Project, ProjectId, ProjectStatus, SqliteStore, TaskStore};
+
+use crate::cos::operations::{Applied, OperationAudit};
 use time::OffsetDateTime;
 
 use crate::middleware::require_admin;
@@ -255,38 +257,7 @@ pub(super) async fn patch_project(
                 .into(),
         }]));
     }
-    // ADR-0072「Phase F6 実装時の決定」: 名前と説明（依頼文）。前後の空白を除き、空と長すぎるものは 422。
-    let title = patch.title.as_deref().map(str::trim).map(str::to_string);
-    let request = patch.request.as_deref().map(str::trim).map(str::to_string);
-    let mut text_errors = Vec::new();
-    for (field, value, max) in [
-        (
-            "title",
-            title.as_deref(),
-            crate::types::PROJECT_TITLE_MAX_CHARS,
-        ),
-        (
-            "request",
-            request.as_deref(),
-            crate::types::PROJECT_REQUEST_MAX_CHARS,
-        ),
-    ] {
-        let Some(value) = value else { continue };
-        if value.is_empty() {
-            text_errors.push(ValidationError {
-                field: Some(field.into()),
-                message: format!("{field} must not be blank"),
-            });
-        } else if value.chars().count() > max {
-            text_errors.push(ValidationError {
-                field: Some(field.into()),
-                message: format!("{field} must be at most {max} characters"),
-            });
-        }
-    }
-    if !text_errors.is_empty() {
-        return Err(ApiProblem::validation(text_errors));
-    }
+    let (title, request) = project_text_input(patch.title.as_deref(), patch.request.as_deref())?;
     // Phase K-1: slug の綴りは先に見る（422）。重複は store が 409 で返す。
     if let Some(slug) = patch.slug.as_deref()
         && !task_core::knowledge::is_valid_project_slug(slug.trim())
@@ -345,31 +316,19 @@ pub(super) async fn patch_project(
                 return Err(ApiProblem::project_not_found(&project_id.to_string()));
             }
             // ADR-0072「Phase F6 実装時の決定」: 変わった欄だけを書き、監査用に名前を返す。
-            let before = store
-                .project_get(project_id)
-                .map_err(store_problem)?
-                .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
-            let new_title = title.as_deref().filter(|t| *t != before.title);
-            let new_request = request.as_deref().filter(|r| *r != before.request);
-            let mut text_fields: Vec<&'static str> = Vec::new();
-            if new_title.is_some() {
-                text_fields.push("title");
-            }
-            if new_request.is_some() {
-                text_fields.push("request");
-            }
-            if !text_fields.is_empty()
-                && !store
-                    .project_set_text(project_id, new_title, new_request)
-                    .map_err(store_problem)?
-            {
-                return Err(ApiProblem::project_not_found(&project_id.to_string()));
-            }
+            let (text_fields, old_title) = set_project_text_op(
+                store,
+                project_id,
+                title.as_deref(),
+                request.as_deref(),
+                None,
+            )?
+            .direct()?;
             let project = store
                 .project_get(project_id)
                 .map_err(store_problem)?
                 .ok_or_else(|| ApiProblem::project_not_found(&project_id.to_string()))?;
-            Ok((project, text_fields, before.title))
+            Ok((project, text_fields, old_title))
         })
         .await?;
     let (project, text_fields, old_title) = project;
@@ -379,6 +338,141 @@ pub(super) async fn patch_project(
         tracing::info!(who = "admin", op = "project_updated", project_id = %project_id, fields = ?text_fields, old_title = %old_title, title = %project.title, "admin: project updated");
     }
     Ok(json_response(StatusCode::OK, &project))
+}
+
+/// `title` / `request` の入力検証（前後の空白を除き、空と長すぎるものは 422）。
+fn project_text_input(
+    title: Option<&str>,
+    request: Option<&str>,
+) -> Result<(Option<String>, Option<String>), ApiProblem> {
+    // ADR-0072「Phase F6 実装時の決定」: 名前と説明（依頼文）。前後の空白を除き、空と長すぎるものは 422。
+    let title = title.map(str::trim).map(str::to_string);
+    let request = request.map(str::trim).map(str::to_string);
+    let mut text_errors = Vec::new();
+    for (field, value, max) in [
+        (
+            "title",
+            title.as_deref(),
+            crate::types::PROJECT_TITLE_MAX_CHARS,
+        ),
+        (
+            "request",
+            request.as_deref(),
+            crate::types::PROJECT_REQUEST_MAX_CHARS,
+        ),
+    ] {
+        let Some(value) = value else { continue };
+        if value.is_empty() {
+            text_errors.push(ValidationError {
+                field: Some(field.into()),
+                message: format!("{field} must not be blank"),
+            });
+        } else if value.chars().count() > max {
+            text_errors.push(ValidationError {
+                field: Some(field.into()),
+                message: format!("{field} must be at most {max} characters"),
+            });
+        }
+    }
+    if !text_errors.is_empty() {
+        return Err(ApiProblem::validation(text_errors));
+    }
+    Ok((title, request))
+}
+
+/// CoS の `PATCH /api/v1/projects/{id}` の本文（ADR 2026-10-05 D3）。CoS が変えられるのは名前と説明だけ
+/// （状態・作業場所・slug は人の管理操作に残す）。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CosProjectPatchBody {
+    #[serde(default)]
+    pub(crate) title: Option<String>,
+    #[serde(default)]
+    pub(crate) request: Option<String>,
+}
+
+/// 案件の名前・説明の書き換え。`PATCH /projects/{id}` の handler（`audit = None`）と CoS の
+/// `/cos/operations` が共有する。変わった欄の名前と元の名前を返す（監査ありでは書き込み・
+/// `cos_operations`・監査 envelope・card が 1 transaction）。
+pub(crate) fn set_project_text_op(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    title: Option<&str>,
+    request: Option<&str>,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<(Vec<&'static str>, String)>, ApiProblem> {
+    let target_id = project_id.to_string();
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "project", &target_id, problem),
+        None => problem,
+    };
+    let before = store
+        .project_get(project_id)
+        .map_err(|e| reject(store_problem(e)))?
+        .ok_or_else(|| reject(ApiProblem::project_not_found(&target_id)))?;
+    let new_title = title.filter(|t| *t != before.title);
+    let new_request = request.filter(|r| *r != before.request);
+    let mut text_fields: Vec<&'static str> = Vec::new();
+    if new_title.is_some() {
+        text_fields.push("title");
+    }
+    if new_request.is_some() {
+        text_fields.push("request");
+    }
+    let Some(audit) = audit else {
+        if !text_fields.is_empty()
+            && !store
+                .project_set_text(project_id, new_title, new_request)
+                .map_err(store_problem)?
+        {
+            return Err(ApiProblem::project_not_found(&target_id));
+        }
+        return Ok(Applied::Direct((text_fields, before.title)));
+    };
+    let operation = audit.apply(store, "project", &target_id, "project.update", |tx| {
+        if !SqliteStore::project_set_text_tx(tx, project_id, new_title, new_request)? {
+            return Err(task_core::chat::ChatError::NotFound {
+                kind: "project",
+                id: target_id.clone(),
+            });
+        }
+        Ok(serde_json::json!({
+            "project_id": target_id,
+            "fields": text_fields,
+            "old_title": before.title,
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// CoS 経路の入口: 本文を検証してから [`set_project_text_op`] に渡す。
+pub(crate) fn cos_patch_project(
+    store: &SqliteStore,
+    project_id: ProjectId,
+    body: CosProjectPatchBody,
+    audit: &OperationAudit,
+) -> Result<Applied<(Vec<&'static str>, String)>, ApiProblem> {
+    let target_id = project_id.to_string();
+    if body.title.is_none() && body.request.is_none() {
+        return Err(audit.reject(
+            store,
+            "project",
+            &target_id,
+            ApiProblem::validation(vec![ValidationError {
+                field: None,
+                message: "specify at least one of `title` or `request`".into(),
+            }]),
+        ));
+    }
+    let (title, request) = project_text_input(body.title.as_deref(), body.request.as_deref())
+        .map_err(|problem| audit.reject(store, "project", &target_id, problem))?;
+    set_project_text_op(
+        store,
+        project_id,
+        title.as_deref(),
+        request.as_deref(),
+        Some(audit),
+    )
 }
 
 /// ADR-0079 D13（Phase R5a）: 途中目標の作成は 410（途中目標は root task の段階で表す）。

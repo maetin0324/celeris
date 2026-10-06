@@ -161,7 +161,7 @@ fn parse_object(raw: &str) -> Result<Value, CliError> {
     Ok(value)
 }
 
-fn request(
+pub(crate) fn request(
     api: &ApiConfig,
     method: &str,
     path: &str,

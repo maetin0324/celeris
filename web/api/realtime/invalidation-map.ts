@@ -4,7 +4,7 @@
 //
 // D6 の記号: T=task detail+timeline、L=tasks/list・inbox・board、P=project 集計、N=reports・approvals・daemon/rest、
 // R=task の runs と run 群、E=task の execution。timeline は全 task.event で対象 task だけ stale にする。
-// 表に無い 13 種（browser_*, decision_*, child_*, work_unit_spec_overridden, unit_gate_overridden,
+// 表に無い 14 種（browser_*, decision_*, child_*, cos_operation, work_unit_spec_overridden, unit_gate_overridden,
 // plan_approval_requested, stall_detected, delivery_skipped）の範囲は web ADR-W1 に記録。
 
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
@@ -134,6 +134,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
     sets: ["T", "E", "R", "L", "P"],
     extra: ({ event }) => (event.type === "child_task_created" ? [taskKeys.detail(String(event.child_task_id))] : []),
   },
+  cos_operation: { sets: ["T"] },
   child_adopted: {
     sets: ["T", "E", "R", "L", "P"],
     extra: ({ event }) => (event.type === "child_adopted" ? [taskKeys.detail(String(event.child_task_id))] : []),

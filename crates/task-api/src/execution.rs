@@ -394,22 +394,78 @@ async fn post_phase_gate(
     let req: task_ops::phase_gate::PhaseGateRequest = read_json(body, false).await?;
     let action = req.action;
     let result = state
-        .blocking(move |store| {
-            task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note).map_err(|e| {
-                match e {
-                    task_ops::OpsError::Validation(message) => {
-                        ApiProblem::validation(vec![crate::types::ValidationError {
-                            field: Some("note".to_string()),
-                            message,
-                        }])
-                    }
-                    other => ops_problem(store, other, Some("phase_gate")),
-                }
-            })
-        })
+        .blocking(move |store| phase_gate_op(store, task_id, req, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "phase_gate", task_id = %task_id, action = action.as_str(), to = ?result.to, "admin: phase gate");
     Ok(json_response(StatusCode::OK, &result))
+}
+
+fn phase_gate_problem(store: &task_core::SqliteStore, e: task_ops::OpsError) -> ApiProblem {
+    match e {
+        task_ops::OpsError::Validation(message) => {
+            ApiProblem::validation(vec![crate::types::ValidationError {
+                field: Some("note".to_string()),
+                message,
+            }])
+        }
+        other => ops_problem(store, other, Some("phase_gate")),
+    }
+}
+
+/// `POST /tasks/{id}/execution/phase-gate` の本体。handler（`audit = None`）と CoS の
+/// `/cos/operations`（ADR 2026-10-05 D3）が共有する。監査ありでは再開の遷移（と人のメモの
+/// `Answered`）を `cos_operation_apply` の transaction 内で書く。`withdraw` は中止の連鎖が
+/// 1 transaction に収まらないので CoS からは 422（人が受信箱で取り下げる）。
+pub(crate) fn phase_gate_op(
+    store: &task_core::SqliteStore,
+    task_id: task_core::TaskId,
+    req: task_ops::phase_gate::PhaseGateRequest,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<task_ops::gate::TransitionResult>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    use task_ops::phase_gate::PhaseGatePlan;
+    let Some(audit) = audit else {
+        return task_ops::phase_gate::phase_gate(store, task_id, req.action, req.note)
+            .map(Applied::Direct)
+            .map_err(|e| phase_gate_problem(store, e));
+    };
+    let target_id = task_id.to_string();
+    let plan = task_ops::phase_gate::plan_phase_gate(store, task_id, req.action, req.note)
+        .map_err(|e| audit.reject(store, "task", &target_id, phase_gate_problem(store, e)))?;
+    let PhaseGatePlan::Resume {
+        trigger,
+        extra_event,
+        from,
+    } = plan
+    else {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            ApiProblem::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "cos_operation_not_allowed",
+                "phase-gate withdraw cascades a cancellation and is left to a human",
+            ),
+        ));
+    };
+    let action = req.action.as_str();
+    let operation = audit.apply(store, "task", &target_id, "execution.phase_gate", |tx| {
+        let outcome = task_core::SqliteStore::apply_transition_tx(
+            tx,
+            task_id,
+            trigger,
+            extra_event.into_iter().map(|e| *e).collect(),
+        )?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "action": action,
+            "from": from,
+            "to": outcome.next,
+            "reason": outcome.reason.to_string(),
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 /// ADR-0079 D8（Phase R3b）: `POST /tasks/{id}/execution/plan-gate`（管理系 = 人だけ。回答の主体は `human`）。

@@ -334,6 +334,18 @@ export type DecisionEffect = "resume" | "raise_once" | "replan" | "atomic" | "wi
  */
 export type Event =
   | {
+      actor: string;
+      operation_id: string;
+      policy_version: string;
+      reason: string;
+      run_id: string;
+      state: string;
+      target_id: string;
+      target_kind: string;
+      thread_id: string;
+      type: "cos_operation";
+    }
+  | {
       attempt: number;
       before_sha: string;
       merge_candidate_sha: string;
@@ -10780,3 +10792,71 @@ export interface WorkUnitCheckLog {
   truncated: boolean;
   work_unit_id: string;
 }
+
+/** CoS run operation record for `POST /cos/operations` and `GET /cos/operations/{o}`. */
+export type CosOperation = {
+  id: string;
+  thread_id: string;
+  run_id: string;
+  idempotency_key: string;
+  request_hash: string;
+  target_kind: string;
+  target_id: string;
+  expected_revision?: string | null;
+  action: string;
+  payload: unknown;
+  reason: string;
+  policy_version: string;
+  state: string;
+  result?: unknown;
+  event_id?: number | null;
+};
+
+/** Request body for `POST /cos/operations`; actor, thread, and run come from the credential. */
+export type OperationBody = {
+  idempotency_key: string;
+  expected_revision?: string | null;
+  reason: string;
+  policy_version: string;
+  request: OperationRequest;
+};
+
+export type OperationRequest = {
+  method: string;
+  path: string;
+  body?: unknown;
+};
+
+/** Response for `POST /cos/operations` and `GET /cos/operations/{o}`. */
+export type OperationView = {
+  id: string;
+  actor: string;
+  thread_id: string;
+  run_id: string;
+  idempotency_key: string;
+  request_hash: string;
+  target_kind: string;
+  target_id: string;
+  expected_revision?: string | null;
+  action: string;
+  payload: unknown;
+  reason: string;
+  policy_version: string;
+  state: string;
+  result?: unknown;
+  event_id?: string | null;
+};
+
+/** Request for `POST /cos/threads/{t}/checkpoint`. */
+export type CheckpointRequest = {
+  run_id: string;
+  summary: string;
+  through_seq: number;
+  expected_summary_through_seq: number;
+};
+
+/** Response for `POST /cos/threads/{t}/checkpoint`. */
+export type CheckpointResponse = {
+  thread_id: string;
+  summary_through_seq: number;
+};

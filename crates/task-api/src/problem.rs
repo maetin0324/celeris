@@ -56,6 +56,10 @@ impl ApiProblem {
         self.code
     }
 
+    pub(crate) fn detail(&self) -> &str {
+        &self.detail
+    }
+
     /// ADR-0079 D13 / U-R6（Phase R5a）: 撤去した入口（案件計画・途中目標の書き込み・`POST /plans`）の 410。
     /// `type` は `urn:celeris:problem:removed_by_adr_0079`、`adr` と代わりの入口（`instead`）を添える。
     pub(crate) fn gone(detail: impl Into<String>, instead: &str) -> Self {

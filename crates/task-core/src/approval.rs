@@ -474,26 +474,8 @@ impl ApprovalStore for SqliteStore {
         answer: Option<String>,
         at: OffsetDateTime,
     ) -> Result<Option<Approval>, StoreError> {
-        let ts = format_rfc3339(at)?;
         let conn = self.lock()?;
-        let changed = conn.execute(
-            "UPDATE approvals SET decision = ?2, answer = ?3, decided_at = ?4 WHERE id = ?1",
-            params![id.to_string(), decision.as_str(), answer, ts],
-        )?;
-        if changed == 0 {
-            return Ok(None);
-        }
-        let row = conn
-            .query_row(
-                &format!("{SELECT_APPROVAL} WHERE id = ?1"),
-                params![id.to_string()],
-                row_to_approval,
-            )
-            .optional()?;
-        match row {
-            Some(r) => Ok(Some(r?)),
-            None => Ok(None),
-        }
+        Self::approval_decide_tx(&conn, id, decision, answer, at)
     }
 
     fn approval_withdraw_stale(
@@ -549,16 +531,7 @@ impl ApprovalStore for SqliteStore {
 
     fn standing_rule_append(&self, rule: &StandingRule) -> Result<(), StoreError> {
         let conn = self.lock()?;
-        conn.execute(
-            "INSERT INTO standing_rules (id, node_id, rule, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                rule.id.to_string(),
-                rule.node_id,
-                rule.rule,
-                format_rfc3339(rule.created_at)?
-            ],
-        )?;
-        Ok(())
+        Self::standing_rule_append_tx(&conn, rule)
     }
 
     fn standing_rule_list(&self, node_id: Option<&str>) -> Result<Vec<StandingRule>, StoreError> {
@@ -593,3 +566,51 @@ impl ApprovalStore for SqliteStore {
 #[cfg(test)]
 #[path = "approval/tests.rs"]
 mod tests;
+
+impl SqliteStore {
+    /// `approval_decide` の本体。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
+    pub fn approval_decide_tx(
+        conn: &rusqlite::Connection,
+        id: ApprovalId,
+        decision: Decision,
+        answer: Option<String>,
+        at: OffsetDateTime,
+    ) -> Result<Option<Approval>, StoreError> {
+        let ts = format_rfc3339(at)?;
+        let changed = conn.execute(
+            "UPDATE approvals SET decision = ?2, answer = ?3, decided_at = ?4 WHERE id = ?1",
+            params![id.to_string(), decision.as_str(), answer, ts],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        let row = conn
+            .query_row(
+                &format!("{SELECT_APPROVAL} WHERE id = ?1"),
+                params![id.to_string()],
+                row_to_approval,
+            )
+            .optional()?;
+        match row {
+            Some(r) => Ok(Some(r?)),
+            None => Ok(None),
+        }
+    }
+
+    /// `standing_rule_append` の本体。呼び出し側の transaction 内で使う。
+    pub fn standing_rule_append_tx(
+        conn: &rusqlite::Connection,
+        rule: &StandingRule,
+    ) -> Result<(), StoreError> {
+        conn.execute(
+            "INSERT INTO standing_rules (id, node_id, rule, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![
+                rule.id.to_string(),
+                rule.node_id,
+                rule.rule,
+                format_rfc3339(rule.created_at)?
+            ],
+        )?;
+        Ok(())
+    }
+}

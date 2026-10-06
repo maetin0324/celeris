@@ -10,7 +10,7 @@ use super::{SqliteStore, StoreError, format_rfc3339, kind_str, status_str};
 impl SqliteStore {
     /// `apply_transition_with_events` の本体（ADR-0004 D1 / ADR-0005 D4）。`tx` 内で任意のトリガーを
     /// 検証し、tasks の更新と Event::Transitioned (+ extra_events) の追記を行う。commit は呼び出し側。
-    pub(crate) fn apply_transition_tx(
+    pub fn apply_transition_tx(
         tx: &Connection,
         task_id: TaskId,
         trigger: Trigger,

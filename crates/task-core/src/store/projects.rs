@@ -461,6 +461,16 @@ impl SqliteStore {
         request: Option<&str>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_text_tx(&conn, id, title, request)
+    }
+
+    /// `project_set_text` の本体。呼び出し側の transaction 内で使う（CoS の監査付き操作。ADR 2026-10-05 D3）。
+    pub fn project_set_text_tx(
+        conn: &rusqlite::Connection,
+        id: ProjectId,
+        title: Option<&str>,
+        request: Option<&str>,
+    ) -> Result<bool, StoreError> {
         let affected = conn.execute(
             "UPDATE projects SET title = COALESCE(?1, title), request = COALESCE(?2, request), \
              updated_at = ?3 WHERE id = ?4",

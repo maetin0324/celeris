@@ -17,6 +17,7 @@ use commands::browser::{self as browser_cmd, BrowserCommand};
 use commands::build_cache::{self, BuildCacheCommand};
 use commands::cancel::{self, CancelArgs};
 use commands::config::{self as config_cmd, ConfigCommand};
+use commands::cos_ops::{self, ApiRequestArgs};
 use commands::cron::{self as cron_cmd, CronCommand};
 use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
@@ -52,12 +53,27 @@ struct Cli {
     #[arg(long, global = true)]
     db: Option<PathBuf>,
 
+    /// Reason recorded in the CoS operation audit event.
+    #[arg(long, global = true)]
+    reason: Option<String>,
+    /// Reuse this key when retrying the same CoS operation.
+    #[arg(long, global = true)]
+    idempotency_key: Option<String>,
+    /// Optimistic revision expected by the CoS operation.
+    #[arg(long, global = true)]
+    expected_revision: Option<String>,
+    /// Override the configured API base URL (including /api/v1).
+    #[arg(long, global = true)]
+    api_url: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Subcommand, Debug)]
 enum Command {
+    /// Send a registered domain mutation through the audited CoS operation API.
+    ApiRequest(ApiRequestArgs),
     /// ADR 2026-10-04-release-notes: `notes`（リリースの説明を書く）/ `preview`（昇格の要約）。DB は開かない。
     Release {
         #[command(subcommand)]
@@ -238,6 +254,7 @@ fn followups_target(cli_db: Option<&Path>) -> Option<PathBuf> {
 
 fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<ExitCode, CliError> {
     match command {
+        Command::ApiRequest(_) => unreachable!("handled before store open"),
         Command::DocsMaintenance { .. } => unreachable!("handled before store open"),
         Command::Cron { .. } => unreachable!("handled before store open"),
         Command::Curation { .. } => unreachable!("handled before store open"),
@@ -280,7 +297,71 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
 }
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    let cos_options = cos_ops::Options {
+        reason: cli.reason.take(),
+        idempotency_key: cli.idempotency_key.take(),
+        expected_revision: cli.expected_revision.take(),
+        api_url: cli.api_url.take(),
+    };
+    if let Command::ApiRequest(args) = cli.command {
+        return match cos_ops::run(args, &cos_options) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Some(credential) = cos_ops::credential() {
+        if let Command::Add(args) = cli.command {
+            let result = (|| {
+                let body = add::cos_body(args)?;
+                let api = cos_ops::api_config(cos_options.api_url.as_deref())?;
+                cos_ops::send(
+                    &api,
+                    "POST",
+                    "/api/v1/tasks",
+                    body,
+                    &cos_options,
+                    Some(&credential),
+                )
+            })();
+            return match result {
+                Ok(value) => {
+                    println!("{value}");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
+        let read_only = matches!(
+            &cli.command,
+            Command::Ls(_)
+                | Command::Show(_)
+                | Command::Log(_)
+                | Command::PlanLint
+                | Command::Projects { .. }
+                | Command::Routing { .. }
+                | Command::Config { .. }
+                | Command::Knowledge {
+                    command: KnowledgeCommand::Search(_) | KnowledgeCommand::Get(_)
+                }
+                | Command::Cron {
+                    command: CronCommand::List | CronCommand::Show(_) | CronCommand::History(_),
+                    ..
+                }
+        );
+        if !read_only {
+            eprintln!(
+                "error: this command has no audited CoS operation mapping; use api-request with a registered domain path"
+            );
+            return ExitCode::FAILURE;
+        }
+    }
     if let Command::Scratch { command } = cli.command {
         return match scratch_cmd::run(cli.db, command) {
             Ok(code) => code,

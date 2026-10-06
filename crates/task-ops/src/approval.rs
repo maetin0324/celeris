@@ -9,7 +9,7 @@
 //! `Approval` の取得と「無い id は 404」の判定は呼び出し側（`task-api`）が行う（`report.rs` / `reports.rs`
 //! と同じ役割分担）。ここは判断と、決まった後の書き込みだけ。
 
-use task_core::approval::{Approval, ApprovalId, Decision, StandingRule, StandingRuleId};
+use task_core::approval::{Approval, Decision, StandingRule, StandingRuleId};
 use task_core::{Status, TaskId, TaskStore};
 use time::OffsetDateTime;
 
@@ -59,6 +59,47 @@ pub fn decide(
     scope: Scope,
     now: OffsetDateTime,
 ) -> Result<DecideOutcome, OpsError> {
+    let plan = plan_decide(store, approval, decision, answer, scope, now)?;
+    let decided = store
+        .approval_decide(
+            plan.approval.id,
+            plan.decision,
+            Some(plan.answer.clone()),
+            now,
+        )?
+        .unwrap_or_else(|| plan.approval.clone());
+    let (transition, note) = resume_target(store, &plan)?;
+    if let Some(rule) = &plan.standing_rule {
+        store.standing_rule_append(rule)?;
+    }
+    Ok(DecideOutcome {
+        approval: decided,
+        standing_rule: plan.standing_rule,
+        transition,
+        note,
+    })
+}
+
+/// `decide` の読み取りと判断（書く前の検証、答える相手、`standing` の規則）。CoS の監査付き操作
+/// （ADR 2026-10-05 D3）は、これで決めた書き込みを `cos_operation_apply` の transaction 内で行い、
+/// タスクの再開（[`finish_decide`]）を commit 後に行う。
+#[derive(Debug, Clone)]
+pub struct DecidePlan {
+    pub approval: Approval,
+    pub decision: Decision,
+    pub answer: String,
+    pub standing_rule: Option<StandingRule>,
+    target: Target,
+}
+
+pub fn plan_decide(
+    store: &dyn TaskStore,
+    approval: Approval,
+    decision: Decision,
+    answer: String,
+    scope: Scope,
+    now: OffsetDateTime,
+) -> Result<DecidePlan, OpsError> {
     if answer.trim().is_empty() {
         return Err(OpsError::Validation("answer must not be blank".to_string()));
     }
@@ -68,7 +109,6 @@ pub fn decide(
                 .to_string(),
         ));
     }
-
     // Phase F7: **書く前に**タスクへ答えを渡せるかを決める（以前は決定を書いてから `gate::answer` が
     // 409 を返し、決定だけが残る半端な状態になった）。
     // - タスクが無い / 終端: 答える相手がいない。決定だけ記録して 200（`note` で知らせる）。
@@ -116,57 +156,61 @@ pub fn decide(
         },
     };
 
-    let id: ApprovalId = approval.id;
-    let decided = store
-        .approval_decide(id, decision, Some(answer.clone()), now)?
-        .unwrap_or(approval);
-
-    // ADR-0033 D5: `denied` は「認めない: …」を答えにして、ワーカーが自分で判断できるようにする。
-    // `once` / `standing` はそのまま答えを渡す。
-    let effective_answer = match decision {
-        Decision::Denied => format!("認めない: {answer}"),
-        Decision::Once | Decision::Standing | Decision::Withdrawn => answer.clone(),
-    };
-
-    // 既存の「質問に答える」経路にそのまま乗せる（`task_id` が無い approval は再開するタスクが無い）。
-    let (transition, note) = match target {
-        Target::Answer(task_id) => (
-            Some(gate::answer(store, task_id, effective_answer, None)?),
-            None,
-        ),
-        Target::Closed { note } => (None, Some(note)),
-        Target::Nothing => (None, None),
-    };
-
-    let standing_rule = if decision == Decision::Standing {
+    let standing_rule = (decision == Decision::Standing).then(|| {
         // Phase 27（監査 H-1）: 部をまたぐ委譲の質問だけは、答えの文ではなく**質問の鍵**を規則にする
         // （`delegate` の照合が前方一致でできるように）。それ以外の質問は従来どおり答えの文。
-        let rule = crate::conversation::cross_department_key(&decided.question)
+        let rule = crate::conversation::cross_department_key(&approval.question)
             .unwrap_or_else(|| answer.clone());
-        let rule = StandingRule {
+        StandingRule {
             id: StandingRuleId::new(),
             node_id: match scope {
-                Scope::Node => Some(decided.node_id.clone()),
+                Scope::Node => Some(approval.node_id.clone()),
                 Scope::All => None,
             },
             rule,
             created_at: now,
-        };
-        store.standing_rule_append(&rule)?;
-        Some(rule)
-    } else {
-        None
-    };
-
-    Ok(DecideOutcome {
-        approval: decided,
+        }
+    });
+    Ok(DecidePlan {
+        approval,
+        decision,
+        answer,
         standing_rule,
-        transition,
-        note,
+        target,
     })
 }
 
+/// 決定を書いた後、紐づく `blocked` のタスクに答えて再開する（既存の「質問に答える」経路）。
+fn resume_target(
+    store: &dyn TaskStore,
+    plan: &DecidePlan,
+) -> Result<(Option<TransitionResult>, Option<String>), OpsError> {
+    // ADR-0033 D5: `denied` は「認めない: …」を答えにして、ワーカーが自分で判断できるようにする。
+    // `once` / `standing` はそのまま答えを渡す。
+    let effective_answer = match plan.decision {
+        Decision::Denied => format!("認めない: {}", plan.answer),
+        Decision::Once | Decision::Standing | Decision::Withdrawn => plan.answer.clone(),
+    };
+    Ok(match &plan.target {
+        Target::Answer(task_id) => (
+            Some(gate::answer(store, *task_id, effective_answer, None)?),
+            None,
+        ),
+        Target::Closed { note } => (None, Some(note.clone())),
+        Target::Nothing => (None, None),
+    })
+}
+
+/// CoS の監査付き決定の後始末（commit 後）。タスクの再開と `note` を返す。
+pub fn finish_decide(
+    store: &dyn TaskStore,
+    plan: &DecidePlan,
+) -> Result<(Option<TransitionResult>, Option<String>), OpsError> {
+    resume_target(store, plan)
+}
+
 /// `decide` が決定を書いた後にすること（Phase F7）。
+#[derive(Debug, Clone)]
 enum Target {
     /// 紐づくタスクが無い approval。決定だけ。
     Nothing,

@@ -1637,6 +1637,15 @@ function createChatFixture() {
           row.expiredBefore = Number(input.before_id ?? lastId(row));
           json(res, 200, { expired_before: String(row.expiredBefore) });
         }
+      } else if (tail[0] === "disconnect" && method === "POST") {
+        // 全チャットの SSE 接続を切る（再接続の試験。offline だけでは live 接続が切れないため）。
+        let count = 0;
+        for (const row of rows.values())
+          for (const client of row.clients) {
+            client.destroy();
+            count += 1;
+          }
+        json(res, 200, { disconnected: count });
       } else error(res, 404, "not-found");
       return true;
     }

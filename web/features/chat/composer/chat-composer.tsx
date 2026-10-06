@@ -55,7 +55,8 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
 
   const chat = snapshot.chat;
   const activeRun = selectActiveRun(chat);
-  const paused = chat.thread?.queue_paused ?? chat.queue.paused;
+  // キュー（停止含む）は chat.queue が正本（snapshot でも queue event でも導かれる）。
+  const paused = chat.queue.paused;
   const queued = chat.queue.message_ids.map((id) => chat.messages[id]).filter((message) => message?.state === "queued");
   const uploading = uploads.some((item) => item.state !== "ready");
   const canSend = !busy && !uploading && (text.trim().length > 0 || uploads.length > 0);

@@ -20,7 +20,8 @@ export function chatSeedFixture(): Array<{
 // POST /__fixture/chat/hold {thread_id, hold?: boolean} creates a held active run.
 // POST /__fixture/chat/threads/{t}/emit accepts {type, data, run_id?, message_id?}
 // and broadcasts a persisted ChatEvent. POST /__fixture/chat/threads/{t}/expire
-// {before_id} makes older SSE cursors return 410.
+// {before_id} makes older SSE cursors return 410. POST /__fixture/chat/disconnect
+// tears down all chat SSE connections (to test reconnection).
 export type ChatFixtureControl = {
   rows: Map<
     string,

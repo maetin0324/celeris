@@ -46,6 +46,8 @@ pub struct CosChatLaunchConfig {
     pub db_path: PathBuf,
     pub attachment_limits: task_core::chat::attachments::ChatAttachmentLimits,
     pub api_base_url: String,
+    /// `[cos.triage]` as a whole (ADR 2026-10-05 D3/D6). Later triage leaves read it here.
+    pub triage: super::triage::CosTriageSettings,
 }
 
 pub(crate) struct CosChatLaunch {
@@ -54,6 +56,16 @@ pub(crate) struct CosChatLaunch {
     pub running: HashMap<String, tokio::task::JoinHandle<()>>,
     pub(crate) accounts_in_flight: HashMap<String, String>,
     pub(crate) providers_in_flight: HashMap<String, String>,
+    pub(crate) triage: super::triage::CosTriageState,
+}
+
+/// Which durable claim binds the new run to its input message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ClaimSource {
+    /// The oldest queued user message of the thread.
+    Queue,
+    /// Up to twenty pending triage items, as one system message in the inbox thread.
+    Triage,
 }
 
 impl Dispatcher {
@@ -65,6 +77,7 @@ impl Dispatcher {
             running: HashMap::new(),
             accounts_in_flight: HashMap::new(),
             providers_in_flight: HashMap::new(),
+            triage: super::triage::CosTriageState::default(),
         });
     }
 
@@ -83,12 +96,16 @@ impl Dispatcher {
         // Reconcile stop and ownerless runs before a new claim, so an old
         // process cannot overlap a new one in the same thread.
         launch.control_hook(self);
-        if self.accepting_new_work
-            && self.disk_ready
-            && launch.config.enabled
-            && let Err(error) = launch.claim_queued(self)
-        {
-            tracing::warn!(%error, "CoS chat launch tick failed");
+        // Intake is DB-only and runs even when CoS is disabled, so the
+        // unavailable fallback can still see every new wait.
+        launch.triage_ingest(self);
+        if self.accepting_new_work && self.disk_ready && launch.config.enabled {
+            if let Err(error) = launch.claim_queued(self) {
+                tracing::warn!(%error, "CoS chat launch tick failed");
+            }
+            if let Err(error) = launch.triage_launch(self) {
+                tracing::warn!(%error, "CoS triage launch failed");
+            }
         }
         self.cos_chat_launch = Some(launch);
     }
@@ -113,17 +130,10 @@ impl CosChatLaunch {
                 if self.running.contains_key(&thread.id) {
                     continue;
                 }
-                let in_flight =
-                    self.running.len() + dispatcher.running.values().filter(|run| run.cos).count();
-                let capacity = if dispatcher.config.execution.max_cos_runs == 0 {
-                    dispatcher.workers_in_flight() + in_flight < dispatcher.config.max_concurrency
-                } else {
-                    in_flight < dispatcher.config.execution.max_cos_runs
-                };
-                if !capacity {
+                if !self.has_capacity(dispatcher) {
                     return Ok(());
                 }
-                self.start_thread(dispatcher, &thread.id)?;
+                self.start_thread(dispatcher, &thread.id, ClaimSource::Queue)?;
             }
             before = page.next_cursor;
             if before.is_none() {
@@ -133,7 +143,23 @@ impl CosChatLaunch {
         Ok(())
     }
 
-    fn start_thread(&mut self, dispatcher: &mut Dispatcher, thread_id: &str) -> Result<(), String> {
+    /// ADR-0089: the CoS slot (or the general slot when `max_cos_runs = 0`).
+    pub(super) fn has_capacity(&self, dispatcher: &Dispatcher) -> bool {
+        let in_flight =
+            self.running.len() + dispatcher.running.values().filter(|run| run.cos).count();
+        if dispatcher.config.execution.max_cos_runs == 0 {
+            dispatcher.workers_in_flight() + in_flight < dispatcher.config.max_concurrency
+        } else {
+            in_flight < dispatcher.config.execution.max_cos_runs
+        }
+    }
+
+    pub(super) fn start_thread(
+        &mut self,
+        dispatcher: &mut Dispatcher,
+        thread_id: &str,
+        source: ClaimSource,
+    ) -> Result<(), String> {
         let now = dispatcher.now_utc();
         let cfg = &self.config;
         let account = if let Some(provider) = cfg.provider.as_deref() {
@@ -235,11 +261,14 @@ impl CosChatLaunch {
             "model": cfg.model,
             "tier": format!("{:?}", cfg.tier).to_lowercase(),
         });
-        let Some(run) = self
-            .store
-            .chat_run_claim_next(thread_id, &run_id, &resolved, now)
-            .map_err(|e| e.to_string())?
-        else {
+        let run = match source {
+            ClaimSource::Queue => self
+                .store
+                .chat_run_claim_next(thread_id, &run_id, &resolved, now)
+                .map_err(|e| e.to_string())?,
+            ClaimSource::Triage => self.triage_claim(thread_id, &run_id, now)?,
+        };
+        let Some(run) = run else {
             return Ok(());
         };
         if let Err(reason) = self.launch_claimed(dispatcher, thread_id, &run_id, &run, account, now)

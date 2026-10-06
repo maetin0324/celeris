@@ -88,7 +88,7 @@ function fakeApi(over: Partial<CardApi> = {}) {
 const conflict = () =>
   new ApiError("conflict", {
     method: "POST",
-    path: "/api/v1/cos/operations/o1/override",
+    path: "/api/cos/operations/o1/override",
     status: 409,
     body: { code: "chat_conflict", detail: "human revision wins" },
   });
@@ -281,7 +281,7 @@ describe("chat cards: その場の回答", () => {
     await defaultCardApi.override("o1", { action: "revoke", reason: "見直す" });
     expect(seen).toEqual([
       { url: "/api/inbox/items/decision-d1/answer", method: "POST", body: { option: "a" } },
-      { url: "/api/v1/cos/operations/o1/override", method: "POST", body: { action: "revoke", reason: "見直す" } },
+      { url: "/api/cos/operations/o1/override", method: "POST", body: { action: "revoke", reason: "見直す" } },
     ]);
   });
 });

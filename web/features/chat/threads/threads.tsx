@@ -41,7 +41,7 @@ function ThreadList({
     if (await model.rename(item, title)) setEditing(null);
   };
   return (
-    <div className="flex min-h-0 flex-col gap-3">
+    <div className="flex h-full min-h-0 flex-col gap-3">
       <Button variant="primary" disabled={state.busy} onClick={() => void model.create(select)}>
         新しい会話
       </Button>
@@ -162,7 +162,7 @@ export function ChatThreads(props: ChatThreadsProps) {
   }, [model]);
   return (
     <>
-      <div className="hidden md:block">
+      <div className="hidden md:flex md:h-full md:min-h-0 md:flex-col">
         <Button
           aria-expanded={desktopOpen}
           aria-controls="chat-thread-sidebar"
@@ -171,7 +171,10 @@ export function ChatThreads(props: ChatThreadsProps) {
           {desktopOpen ? "会話一覧を閉じる" : "会話一覧を開く"}
         </Button>
         {desktopOpen && (
-          <aside id="chat-thread-sidebar" className="w-72 max-w-full border-r border-border bg-surface p-3">
+          <aside
+            id="chat-thread-sidebar"
+            className="min-h-0 w-72 max-w-full flex-1 overflow-y-auto border-r border-border bg-surface p-3"
+          >
             <ThreadList {...props} model={model} />
           </aside>
         )}

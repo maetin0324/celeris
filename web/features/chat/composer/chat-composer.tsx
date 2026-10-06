@@ -229,7 +229,7 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
           ref={input}
           type="file"
           multiple
-          className="sr-only"
+          className="hidden"
           aria-label="添付ファイルを選択"
           onChange={(event) => {
             queue.add(Array.from(event.currentTarget.files ?? []));

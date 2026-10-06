@@ -83,7 +83,7 @@ describe("chat stream", () => {
     });
     stream.start();
     await until(() => calls[0]?.body !== undefined && stream.state() === "open");
-    expect(calls[0]?.url).toBe(`/api/v1/chat/threads/${T}/stream?after=5`);
+    expect(calls[0]?.url).toBe(`/api/chat/threads/${T}/stream?after=5`);
     expect(calls[0]?.headers["Last-Event-ID"]).toBe("5");
     calls[0]?.body?.send(sse(event(6, "queue", { message_ids: [], paused: false })));
     calls[0]?.body?.send(": heartbeat\n\n");
@@ -93,7 +93,7 @@ describe("chat stream", () => {
     await until(() => stream.state() === "reconnecting");
     await vi.advanceTimersByTimeAsync(1_000);
     await until(() => calls.length === 2);
-    expect(calls[1]?.url).toBe(`/api/v1/chat/threads/${T}/stream?after=6`);
+    expect(calls[1]?.url).toBe(`/api/chat/threads/${T}/stream?after=6`);
     expect(calls[1]?.headers["Last-Event-ID"]).toBe("6");
     stream.stop();
   });

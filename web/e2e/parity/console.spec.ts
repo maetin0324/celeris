@@ -177,7 +177,7 @@ test("parity: /console/new-conversation 開始", async () => {
 
 test("parity: runs/:runId/events 全行の取得", async ({ page }) => {
   initial = [progress()];
-  await page.goto(`${base}/`);
+  await page.goto(`${base}/console`);
   await page.getByRole("button", { name: /作業/ }).click();
   await page.getByRole("button", { name: /すべて見る/ }).click();
   for (const n of [1, 2, 3, 4, 5]) await expect(page.getByText(`line-${n}`)).toBeVisible();
@@ -186,7 +186,7 @@ test("parity: runs/:runId/events 全行の取得", async ({ page }) => {
 
 test("parity: / Console の送信・返事・IME", async ({ page }) => {
   initial = [human("a1", "こんにちは")];
-  await page.goto(`${base}/`);
+  await page.goto(`${base}/console`);
   await expect(page.getByText("こんにちは")).toBeVisible();
   const box = page.getByRole("textbox", { name: "Console への入力" });
   const send = page.getByRole("button", { name: "送信" });
@@ -295,7 +295,7 @@ test("parity: / Console 360px で長い 1 行がページを広げず、種類�
   const long = "y".repeat(2400);
   initial = [human("l1", long), reply("l2", `前置き\n\`\`\`\n${long}\n\`\`\``), withFirstLine(progress(), long)];
   await page.setViewportSize({ width: 360, height: 740 });
-  await page.goto(`${base}/`);
+  await page.goto(`${base}/console`);
   const conversation = page.getByRole("list", { name: "Console の会話" });
   await expect(conversation.getByText("あなた", { exact: true })).toBeVisible();
   await expect(conversation.getByText("返事", { exact: true })).toBeVisible();
@@ -314,7 +314,7 @@ test("parity: / Console 360px で長い 1 行がページを広げず、種類�
 
 test("parity: / Console 追記の追従と『最新へ』", async ({ page }) => {
   initial = Array.from({ length: 30 }, (_, i) => human(`f${i}`, `発言 ${i}`));
-  await page.goto(`${base}/`);
+  await page.goto(`${base}/console`);
   await expect(page.getByText("発言 29")).toBeVisible();
   await expect.poll(() => daemon.consoleClients).toBeGreaterThan(0);
   const region = page.locator("[data-home-console]");

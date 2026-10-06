@@ -8,8 +8,8 @@ import { applyStateRoute, stateByKey } from "../support/states";
 // (2) /tasks/T1 360: tab 列の「成果物」が右で切れた → 余白を詰め、収まらない幅は折り返す。
 // (3) /graph 360〜412: 横に続く graph の手がかりが無かった → 注記と、見えていない側の端の影。
 // (4) /tasks/T1/changes: 長い共通 prefix が毎行反復した → 共通の場所を 1 度だけ出し、各行はファイル名を先に。
-// (5) /（1440・電話幅）: 会話枠の先頭 block の見出し行が上端で半分切れて見えた → 末尾追従時に block の先頭を宛先行の下に揃える。
-// (6) stale の / 360: 会話枠が約 40px に縮んだ → 宛先行と送信欄を除いて 160px を保つ。
+// (5) /console（1440・電話幅）: 会話枠の先頭 block の見出し行が上端で半分切れて見えた → 末尾追従時に block の先頭を宛先行の下に揃える。
+// (6) stale の /console 360: 会話枠が約 40px に縮んだ → 宛先行と送信欄を除いて 160px を保つ。
 // (7) loading の /providers 360: 接続状態の語が長く header が 2 段に折れた → 語を短くし 1 段に保つ。
 
 async function settle(page: Page) {
@@ -170,11 +170,11 @@ for (const [width, height] of [
   [360, 800],
   [1440, 800],
 ] as const) {
-  test(`(5) / ${width}: 会話枠の先頭に見える block の見出しが欠けない`, async ({ page }) => {
+  test(`(5) /console ${width}: 会話枠の先頭に見える block の見出しが欠けない`, async ({ page }) => {
     const gateway = await startFixtureGateway();
     try {
       await page.setViewportSize({ width, height });
-      await page.goto(`${gateway.base}/`);
+      await page.goto(`${gateway.base}/console`);
       await expect(page.getByRole("list", { name: "Console の会話" }).getByRole("listitem").first()).toBeVisible();
       await settle(page);
       await expect
@@ -210,13 +210,13 @@ for (const [width, height] of [
   });
 }
 
-test("(6) stale の / 360: 会話枠は宛先行と送信欄を除いて 150px 以上の会話を見せる", async ({ page }) => {
+test("(6) stale の /console 360: 会話枠は宛先行と送信欄を除いて 150px 以上の会話を見せる", async ({ page }) => {
   const stale = stateByKey("stale");
   const gateway = await startFixtureGateway(stale.daemon);
   try {
     await page.setViewportSize({ width: 360, height: 800 });
     await applyStateRoute(page, stale);
-    await page.goto(`${gateway.base}/`);
+    await page.goto(`${gateway.base}/console`);
     await expect(page.locator("[data-connection]")).toHaveAttribute("data-connection", "reconnecting", {
       timeout: 15_000,
     });

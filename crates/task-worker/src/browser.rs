@@ -1172,7 +1172,7 @@ async fn run_with_executable_attempt(
     std::fs::create_dir_all(runtime.join("home"))?;
     std::fs::create_dir_all(runtime.join("run"))?;
     let cli = runtime.join("celeris-browser.py");
-    let action_socket = runtime.with_extension("action.sock");
+    let action_socket = crate::browser_action::action_socket_path(&runtime)?;
     write_private(&cli, CLI)?;
     write_private(&runtime.join("browser_action.py"), ACTION_RUNNER)?;
     std::fs::create_dir_all(runtime.join("actions"))?;
@@ -1191,6 +1191,7 @@ async fn run_with_executable_attempt(
         serde_json::to_vec(&serde_json::json!({
             "session_id":session,
             "allowed_domains":policy.allowed_domains(), "output":output,
+            "action_socket":action_socket,
             "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),

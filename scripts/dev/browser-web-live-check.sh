@@ -276,7 +276,7 @@ done
 
 # Use one deterministic driver for all API assertions. It writes only redacted JSON.
 python3 - "$ROOT" "$EVIDENCE" "$API" "$WEB" "$PAGE" "$DENIED_ORIGIN" "$TOKEN_FILE" "$OWNER_SOCKET" "$WEB_PASSWORD_FILE" "$DECISION_ORIGIN" "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$DENIAL_FILE" <<'PY'
-import base64, http.cookiejar, json, os, pathlib, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+import base64, http.cookiejar, json, os, pathlib, re, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
 root, evidence, api, web, page, denied_origin, token_file, owner_socket, password_file, decision_origin, state_dir, page_port, denied_port, denial_file = sys.argv[1:]
 token = pathlib.Path(token_file).read_text().strip()
 out = pathlib.Path(evidence)
@@ -399,6 +399,7 @@ try:
         raise AssertionError(f"settings restore not stored: {grant_domains(stored)}")
     log.append({"step":"settings edit", "allowed_domains":grant_domains(stored), "result":"passed"})
     body = {"title":"loopback browser live check", "objective":f"Open {page}, take a snapshot, read #inside, then click #forbidden-link using its @e ref. Report that egress denied the link navigation to {denied_origin}; then wait for this check to finish.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
+    log.append({"step":"launcher log boundary", "daemon_log_offset":(out/"daemon.log").stat().st_size})
     task = checked("task POST", api+"/tasks", "POST", body, auth=True, expected=201)
     task_id = task["id"]
     # Dispatch refuses a browser run without a stored task policy (browser_policy_required, D2).
@@ -483,14 +484,30 @@ if any(r.get("port") == page_port for r in records):
     raise SystemExit("allowed loopback test page was recorded as denied")
 print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
 '''
-    result = subprocess.run(["sudo", "-n", "python3", "-", state_dir, page_port, denied_port, session_id],
+    # The launcher names its session dir with the id from its Started response (logged by the
+    # daemon), not with the browser run's session_id (R7). Find it after the task was created.
+    boundary = next(row["daemon_log_offset"] for row in log if row.get("step") == "launcher log boundary")
+    started = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
+    ansi = re.compile(r"\x1b\[[0-9;]*m")
+    deadline = time.monotonic()+30
+    while True:
+        with (out/"daemon.log").open("rb") as stream:
+            stream.seek(boundary)
+            launcher_ids = set(started.findall(ansi.sub("", stream.read().decode(errors="replace"))))
+        if launcher_ids or time.monotonic() >= deadline: break
+        time.sleep(0.2)
+    if len(launcher_ids) != 1:
+        raise AssertionError(f"expected one launcher Started session after task creation, found {len(launcher_ids)}")
+    launcher_session_id = launcher_ids.pop()
+    log.append({"step":"launcher session", "launcher_session_id":launcher_session_id, "run_session_id":session_id})
+    result = subprocess.run(["sudo", "-n", "python3", "-", state_dir, page_port, denied_port, launcher_session_id],
                             input=collector, capture_output=True, text=True)
     if result.returncode:
         raise AssertionError(f"egress denial collection failed: {result.stderr.strip()}")
     pathlib.Path(denial_file).write_text(result.stdout)
     if '"GET ' in (out/"denied-page.log").read_text():
         raise AssertionError("forbidden origin received a page request")
-    log.append({"step":"browser egress denial", "session_id":session_id, "kind":"ip_literal",
+    log.append({"step":"browser egress denial", "session_id":launcher_session_id, "kind":"ip_literal",
                 "host":"127.0.0.1", "port":int(denied_port), "result":"passed"})
     # step: pause-takeover-release
     control_url = web+f"/browser/control/{task_id}/{run_id}/{session_id}"

@@ -103,6 +103,10 @@ impl DenialRecorder {
             "dns_bypass",
             "proxy_chain",
             "invalid_host",
+            // Forwarded http GET/HEAD (ADR 2026-10-06-egress-http-forward-get).
+            "scheme_not_allowed",
+            "host_mismatch",
+            "request_body",
         ];
         if !KINDS.contains(&denial.kind.as_str()) || self.count > DENIAL_RECORD_LIMIT {
             return Ok(());
@@ -430,7 +434,9 @@ pub fn bwrap_args(spec: &RuntimeSpec) -> Vec<OsString> {
     }
     a.push(SESSION_ROOT.into());
     for (k, v) in [
-        ("HOME", SESSION_ROOT.to_owned()),
+        // F4: Chrome/fontconfig write ~/.config and ~/.cache as the browser UID; keep them in
+        // home/, which the launcher's subuid cleanup empties.
+        ("HOME", format!("{SESSION_ROOT}/home")),
         ("TMPDIR", format!("{SESSION_ROOT}/tmp")),
         ("PATH", "/usr/bin:/bin".to_owned()),
     ] {
@@ -465,6 +471,29 @@ mod userns_args_tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o7777, 0o1777);
+    }
+
+    #[test]
+    fn home_is_session_root_subdir_not_session_root_itself() {
+        // F4: Chrome/fontconfig writing ~/.cache and ~/.config directly under
+        // SESSION_ROOT leaves dot entries the launcher's subuid cleanup cannot
+        // remove (sticky session dir). HOME must be a subdirectory instead.
+        let spec = RuntimeSpec {
+            bwrap: "/usr/bin/bwrap".into(),
+            userns: UsernsMode::Fd(11),
+            session_id: "test".into(),
+            session_dir: "/tmp/test-session".into(),
+            ro_dirs: Vec::new(),
+            argv: vec!["/usr/bin/true".into()],
+            cdp_pipe: false,
+            egress: None,
+        };
+        let args = bwrap_args(&spec);
+        let home = args
+            .iter()
+            .position(|a| a == "HOME")
+            .map(|i| args[i + 1].clone());
+        assert_eq!(home, Some(format!("{SESSION_ROOT}/home").into()));
     }
 
     #[test]

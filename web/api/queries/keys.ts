@@ -9,6 +9,7 @@ const f = normalizeFilters;
 export const taskKeys = {
   all: ["tasks"] as const,
   lists: () => ["tasks", "list"] as const,
+  counts: () => ["tasks", "list", "counts"] as const,
   list: (filters?: Filters) => ["tasks", "list", f(filters)] as const,
   detail: (taskId: string) => ["tasks", "detail", taskId] as const,
   timelines: (taskId: string) => ["tasks", "timeline", taskId] as const,

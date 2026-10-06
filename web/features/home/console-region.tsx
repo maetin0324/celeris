@@ -9,7 +9,7 @@ import { Icon } from "../../components/ui/icon";
 // ConsoleView の下の余白（fixed の送信欄の逃げ）のうち送信欄に隠れる分までとし、最後の block を送信欄のすぐ上に置く。
 
 /**
- * 枠の中で会話が見える最低の高さ（px）。枠の上端に留めた宛先の行と、枠の下に重なる fixed の送信欄の高さは別に足す。
+ * 枠の中で会話が見える最低の高さ（px）。枠の上端に留めた宛先の行と、枠の下に重なる fixed の送信欄の分は別に足す。
  * これより低い viewport ではページ側の scroll に任せる。以前は枠の高さ全体を 160px にしていたので、stale の黄帯が出た
  * 360 では宛先の行と送信欄に食われて会話が約 40px しか見えなかった（fix-r6 narrow）。
  */
@@ -28,9 +28,15 @@ function composerOf(el: HTMLElement): Element | null {
 // 測ると、最低の高さを保って枠が viewport の下へはみ出す低い viewport で余白を全部見せてしまった（fix-r6 narrow）。
 function slack(el: HTMLElement, content: Element): number {
   const pad = Number.parseFloat(getComputedStyle(content).paddingBottom) || 0;
+  return Math.max(0, pad - composerOverlap(el) - GAP);
+}
+
+// ページを末尾まで scroll したときに、枠の下端に fixed の送信欄が重なる量。
+// 送信欄は viewport の下端から浮くことがある（md 未満の画面下のタブ・ソフトキーボード）ので、高さでなく上端から測る。
+// 枠の下端は viewport の下端から「main の下の余白と後ろに続く列（画面下のタブの逃げを含む）」だけ上にある。
+function composerOverlap(el: HTMLElement): number {
   const composer = composerOf(el);
-  const overlap = composer ? Math.max(0, composer.getBoundingClientRect().height - belowOf(el)) : 0;
-  return Math.max(0, pad - overlap - GAP);
+  return composer ? Math.max(0, window.innerHeight - belowOf(el) - composer.getBoundingClientRect().top) : 0;
 }
 
 // 枠の下端から viewport の下端までに残る量（main の下の余白と、main の後ろに続く列の分）。
@@ -77,10 +83,9 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
       const top = el.getBoundingClientRect().top + window.scrollY;
       const below = belowOf(el);
       const toolbar = el.querySelector("[data-console-toolbar]");
-      const composer = composerOf(el);
-      const covered =
-        (toolbar ? toolbar.getBoundingClientRect().height : 0) +
-        (composer ? composer.getBoundingClientRect().height : 0);
+      // 会話を覆うのは上端に留めた宛先の行と、枠の下端に重なる分の送信欄。送信欄の高さ全体を足すと、送信欄の下の
+      // 画面下のタブ・main の下の余白（枠の外）まで二重に数え、電話幅でページを viewport より伸ばしていた。
+      const covered = (toolbar ? toolbar.getBoundingClientRect().height : 0) + composerOverlap(el);
       const height = Math.max(MIN_VISIBLE + covered, Math.floor(window.innerHeight - top - below));
       if (el.style.height !== `${height}px`) el.style.height = `${height}px`;
     };
@@ -133,13 +138,14 @@ export function ConsoleRegion({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // 「最新へ」は送信欄のすぐ上に置く。送信欄の高さ（送信の失敗の文・safe area）は runtime に測る。
+  // 「最新へ」は送信欄のすぐ上に置く。送信欄の上端（送信の失敗の文・safe area・md 未満の画面下のタブ）は runtime に測る。
   useLayoutEffect(() => {
     const el = ref.current;
     const button = latestRef.current;
     if (!away || !el || !button) return;
     const composer = composerOf(el);
-    button.style.bottom = `${(composer ? composer.getBoundingClientRect().height : 0) + GAP}px`;
+    const covered = composer ? Math.max(0, window.innerHeight - composer.getBoundingClientRect().top) : 0;
+    button.style.bottom = `${covered + GAP}px`;
   }, [away]);
 
   function toLatest() {

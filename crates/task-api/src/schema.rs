@@ -62,6 +62,7 @@ pub struct ApiV1Schema {
     pub notifications_read_all: crate::inbox_notifications::NoticeReadAllResult,
     pub notifications_read_all_body: crate::inbox_notifications::ReadAllBody,
     pub task_list: TaskList,
+    pub task_status_counts: task_ops::view::TaskStatusCounts,
     pub task: Task,
     pub task_detail: TaskDetail,
     pub events_page: EventsPage,

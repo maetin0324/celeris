@@ -66,7 +66,10 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
     await expect(page.locator("[data-task-id='T2']")).toBeVisible();
     const search = page.getByRole("searchbox", { name: "検索" });
     await search.fill("計算");
-    await page.getByRole("checkbox", { name: "ready" }).check();
+    await page
+      .getByTestId("tasks-status-chips")
+      .getByRole("button", { name: /実行待ち/ })
+      .click();
     await page.getByLabel("並び").selectOption("created_desc");
     await page.locator("[data-testid='tasks-filter'] select[name='limit']").selectOption("20");
     await search.focus();
@@ -81,11 +84,15 @@ test("parity: /tasks 絞り込み・検索・続き", async ({ page }) => {
       .toBe(true);
     await page.reload();
     await expect(page.getByRole("searchbox", { name: "検索" })).toHaveValue("計算");
-    await expect(page.getByRole("checkbox", { name: "ready" })).toBeChecked();
+    await expect(page.getByTestId("tasks-status-chips").getByRole("button", { name: /実行待ち/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(page).toHaveURL(/status=ready/);
     await page.getByRole("searchbox", { name: "検索" }).fill("別条件");
     await page.getByRole("searchbox", { name: "検索" }).press("Enter");
     await page.goBack();
+    await expect(page).toHaveURL(/q=%E8%A8%88%E7%AE%97/);
     await expect(page.getByRole("searchbox", { name: "検索" })).toHaveValue("計算");
     expect(calls.some((query) => query.includes("cursor=next"))).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBe(

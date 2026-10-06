@@ -11,18 +11,18 @@ use std::time::Duration;
 use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
-    ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSession, ChatSessionKey,
+    ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
     ChatStatusPhase, ChatThreadQuery,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
-    COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext, CosChatDelivery, CosChatHistory,
-    CosChatHistoryMessage, CosChatInput, RunContext, RunRequest, SessionHandle,
+    COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext, CosChatDelivery, CosChatInput,
+    RunContext, RunRequest, SessionHandle,
 };
 use time::OffsetDateTime;
 
 use super::attachments::{stage_message_attachments, workspace_dir};
-use super::sink::{ChatClock, ChatRunSink, ChatStopIntent, chat_finish_for};
+use super::sink::ChatClock;
 use crate::dispatcher::Dispatcher;
 
 /// `task-api::cos::COS_BEARER_PREFIX` wire form. The store issues only the
@@ -97,13 +97,6 @@ impl Dispatcher {
 impl CosChatLaunch {
     /// Control leaf hook: stop, interrupt and orphan confirmation run before claiming.
     fn control_hook(&mut self) {}
-
-    /// Rollover leaf hook: inspect the sink's session signals before finalising.
-    fn rollover_hook(
-        _signals: &super::sink::ChatSessionSignals,
-        _finish: &super::sink::ChatFinish,
-    ) {
-    }
     fn claim_queued(&mut self, dispatcher: &mut Dispatcher) -> Result<(), String> {
         let mut before = None;
         loop {
@@ -372,62 +365,15 @@ impl CosChatLaunch {
             cwd: Some(workspace.to_string_lossy().into_owned()),
             model: cfg.model.clone(),
         };
-        let existing = self
-            .store
-            .chat_session_active(thread_id)
-            .map_err(|e| e.to_string())?;
-        let (session, mode, session_reason) = if let Some(old) = existing
-            .as_ref()
-            .filter(|old| old.key == session_key && !old.session_id.is_empty())
-        {
-            (old.clone(), ChatRunSessionMode::Resumed, None)
-        } else {
-            let mode = if existing.is_some() {
-                ChatRunSessionMode::Fresh
-            } else {
-                ChatRunSessionMode::New
-            };
-            let reason = existing.as_ref().map(|old| {
-                if old.key == session_key {
-                    "cache_missing"
-                } else {
-                    "key_changed"
-                }
-            });
-            let next = ChatSession::new(
-                session_key,
-                crate::sessions::new_session_id(&cfg.harness),
-                now,
-            );
-            self.store
-                .chat_session_rotate(&next, now)
-                .map_err(|e| e.to_string())?;
-            (next, mode, reason)
-        };
-        self.store
-            .chat_run_record_session(run_id, mode, &session.id, session_reason, now)
-            .map_err(|e| e.to_string())?;
-        let (summary, summary_through_seq) = self
-            .store
-            .chat_thread_summary(thread_id)
-            .map_err(|e| e.to_string())?;
-        let history_from = summary_through_seq.saturating_add(1);
-        let history_through = input.seq.saturating_sub(1);
-        let history = if history_from <= history_through {
-            self.store
-                .chat_message_list(
-                    thread_id,
-                    &ChatMessageQuery {
-                        after_seq: Some(summary_through_seq),
-                        limit: Some(200),
-                        ..ChatMessageQuery::default()
-                    },
-                )
-                .map_err(|e| e.to_string())?
-                .items
-        } else {
-            Vec::new()
-        };
+        let super::rollover::SessionChoice { session, mode, .. } = super::rollover::choose_session(
+            &self.store,
+            run_id,
+            session_key,
+            dispatcher.config.session_rollover_tokens,
+            now,
+        )?;
+        let (summary, summary_through_seq, unsummarized) =
+            super::rollover::history_since_summary(&self.store, thread_id, input.seq)?;
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
@@ -438,22 +384,9 @@ impl CosChatLaunch {
                 interrupt: false,
                 attachment_ids: input.attachment_ids.clone(),
             }],
-            summary: (!summary.is_empty()).then_some(summary),
-            summary_through_seq: summary_through_seq as i64,
-            unsummarized: CosChatHistory {
-                from_seq: history_from as i64,
-                through_seq: history_through as i64,
-                messages: history
-                    .into_iter()
-                    .filter(|m| m.seq <= history_through)
-                    .map(|m| CosChatHistoryMessage {
-                        id: m.id,
-                        seq: m.seq as i64,
-                        role: format!("{:?}", m.role).to_lowercase(),
-                        text: m.text,
-                    })
-                    .collect(),
-            },
+            summary,
+            summary_through_seq: i64::try_from(summary_through_seq).unwrap_or(i64::MAX),
+            unsummarized,
             attachments,
             skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
@@ -638,23 +571,24 @@ async fn run_claimed(
     grace: Duration,
     clock: ChatClock,
 ) {
-    let sink = ChatRunSink::new(Arc::clone(&store), thread_id, run_id, clock, vec![token]);
     let limits = RunLimits {
         wall_clock: Duration::from_secs(wall),
         idle_timeout: idle,
         kill_grace: grace,
     };
-    let outcome = adapter.run(req, run_id, limits, &sink).await;
-    if let Some(session_id) = sink.signals().established
-        && let Err(error) = store.chat_session_set_id(session_row_id, &session_id)
-    {
-        tracing::warn!(%error, %run_id, "CoS session id was not saved");
-    }
-    if let Err(error) = store.chat_session_touch(session_row_id, 0, OffsetDateTime::now_utc()) {
-        tracing::warn!(%error, %run_id, "CoS session usage was not saved");
-    }
-    let finish = chat_finish_for(&outcome, ChatStopIntent::None);
-    CosChatLaunch::rollover_hook(&sink.signals(), &finish);
+    // Rollover leaf: a refused resume is retried once with a fresh session inside this run.
+    let (sink, finish) = super::rollover::run_attempts(super::rollover::ChatAttempt {
+        store: Arc::clone(&store),
+        adapter,
+        req,
+        thread_id: thread_id.to_owned(),
+        run_id: run_id.to_owned(),
+        session_row_id: session_row_id.to_owned(),
+        secrets: vec![token],
+        limits,
+        clock,
+    })
+    .await;
     let actions = task_worker::read_result_actions(&artifacts_dir);
     if let Err(error) = sink.finish(&finish, &actions) {
         tracing::warn!(%error, %run_id, "CoS chat run finish failed");

@@ -25,6 +25,7 @@ import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
 import { Route as BrowserIndexRouteImport } from './routes/browser.index'
+import { Route as BrowserSettingsRouteImport } from './routes/browser.settings'
 import { Route as KnowledgeIndexRouteImport } from './routes/knowledge.index'
 import { Route as KnowledgeInboxRouteImport } from './routes/knowledge.inbox'
 import { Route as KnowledgeSkillsRouteImport } from './routes/knowledge.skills'
@@ -123,6 +124,11 @@ const ReportsRoute = ReportsRouteImport.update({
 const BrowserIndexRoute = BrowserIndexRouteImport.update({
   id: '/browser/',
   path: '/browser/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BrowserSettingsRoute = BrowserSettingsRouteImport.update({
+  id: '/browser/settings',
+  path: '/browser/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 const KnowledgeIndexRoute = KnowledgeIndexRouteImport.update({
@@ -239,6 +245,7 @@ export interface FileRoutesByFullPath {
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/browser/settings': typeof BrowserSettingsRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -276,6 +283,7 @@ export interface FileRoutesByTo {
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/browser/settings': typeof BrowserSettingsRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -314,6 +322,7 @@ export interface FileRoutesById {
   '/providers': typeof ProvidersRoute
   '/releases': typeof ReleasesRoute
   '/reports': typeof ReportsRoute
+  '/browser/settings': typeof BrowserSettingsRoute
   '/knowledge/inbox': typeof KnowledgeInboxRoute
   '/knowledge/skills': typeof KnowledgeSkillsRoute
   '/org/$id': typeof OrgIdRoute
@@ -353,6 +362,7 @@ export interface FileRouteTypes {
     | '/providers'
     | '/releases'
     | '/reports'
+    | '/browser/settings'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -390,6 +400,7 @@ export interface FileRouteTypes {
     | '/providers'
     | '/releases'
     | '/reports'
+    | '/browser/settings'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -427,6 +438,7 @@ export interface FileRouteTypes {
     | '/providers'
     | '/releases'
     | '/reports'
+    | '/browser/settings'
     | '/knowledge/inbox'
     | '/knowledge/skills'
     | '/org/$id'
@@ -465,6 +477,7 @@ export interface RootRouteChildren {
   ProvidersRoute: typeof ProvidersRoute
   ReleasesRoute: typeof ReleasesRoute
   ReportsRoute: typeof ReportsRoute
+  BrowserSettingsRoute: typeof BrowserSettingsRoute
   KnowledgeInboxRoute: typeof KnowledgeInboxRoute
   KnowledgeSkillsRoute: typeof KnowledgeSkillsRoute
   OrgIdRoute: typeof OrgIdRoute
@@ -599,6 +612,13 @@ declare module '@tanstack/react-router' {
       path: '/browser'
       fullPath: '/browser/'
       preLoaderRoute: typeof BrowserIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/browser/settings': {
+      id: '/browser/settings'
+      path: '/browser/settings'
+      fullPath: '/browser/settings'
+      preLoaderRoute: typeof BrowserSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/knowledge/': {
@@ -753,6 +773,7 @@ const rootRouteChildren: RootRouteChildren = {
   ProvidersRoute: ProvidersRoute,
   ReleasesRoute: ReleasesRoute,
   ReportsRoute: ReportsRoute,
+  BrowserSettingsRoute: BrowserSettingsRoute,
   KnowledgeInboxRoute: KnowledgeInboxRoute,
   KnowledgeSkillsRoute: KnowledgeSkillsRoute,
   OrgIdRoute: OrgIdRoute,

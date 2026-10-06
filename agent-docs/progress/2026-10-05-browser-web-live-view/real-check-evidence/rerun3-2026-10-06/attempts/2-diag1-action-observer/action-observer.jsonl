@@ -1,0 +1,4 @@
+{"observer": "started", "t": 1791278222.38}
+{"session_dir": "b9a10d736badb0f08aae03c57bffe753", "t": 1791278225.182}
+{"session": "b9a10d736badb0f08aae03c57bffe753", "file": "0000000000000001.request", "body": "{\"args\":[\"http://127.0.0.1:17730/\"],\"artifact\":null,\"verb\":\"open\"}", "t": 1791278225.321}
+{"session": "b9a10d736badb0f08aae03c57bffe753", "file": "0000000000000001.result", "body": "{\"status\": 1, \"stdout\": \"{\\\"error\\\":\\\"Action 'launch' denied by policy: Action 'launch' is not in the allow list\\\",\\\"success\\\":false}\\n\"}", "t": 1791278225.469}

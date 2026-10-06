@@ -1,0 +1,52 @@
+# Test-only daemon for scripts/dev/browser-web-live-check.sh (isolated DB, loopback only).
+db = "/var/tmp/cb-1001/test.sqlite3"
+workspace_root = "/var/tmp/cb-1001/w"
+org_include = "/var/tmp/cb-1001/org.toml"
+tick_ms = 200
+max_concurrency = 1
+idle_timeout_secs = 900
+
+[api]
+listen = "127.0.0.1:17728"
+token_file = "/var/tmp/cb-1001/api.token"
+browser_attestation_public_key_file = "/var/tmp/cb-1001/attestation.pub"
+browser_credentiald_control_socket = "/var/tmp/cb-1001/credentiald/control.sock"
+
+[browser]
+runtime = "launcher"
+launcher_socket = "/var/tmp/cb-1001/launcher.sock"
+
+[adapters.acp]
+command = "python3"
+args = ["/var/tmp/cb-1001/harness/loopback-acp-harness.py"]
+permission = "deny"
+startup_timeout_secs = 30
+
+[[harnesses]]
+id = "conversation"
+description = "unused in this check"
+tier = "standard"
+adapter = "acp"
+conversation = true
+
+[[harnesses]]
+id = "plan"
+description = "unused in this check"
+tier = "standard"
+adapter = "acp"
+
+[[harnesses]]
+id = "coding"
+description = "loopback browser live check harness"
+tier = "standard"
+adapter = "acp"
+budget = { max_wall_secs = 900 }
+
+[[providers]]
+id = "loopback-acp"
+kind = "adapter"
+adapter = "acp"
+tiers = ["frontier", "standard", "cheap"]
+concurrency = 1
+model = ""
+env = { REAL_CHECK_DENIAL_FILE = "/var/tmp/cb-1001/harness/agent-denial-note.json", REAL_CHECK_LOG = "/var/tmp/cb-1001/harness.log", REAL_CHECK_ALLOWED = "http://127.0.0.1:17730", REAL_CHECK_DENIED = "http://127.0.0.1:17731", REAL_CHECK_HOLD_SECS = "240" }

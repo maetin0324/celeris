@@ -1,0 +1,28 @@
+date: 2026-10-06T09:14:19+00:00
+host kernel: 6.8.12-9-pve
+tree: /local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform
+tree HEAD: d750b121b4ff8bba4e669c5d73deeee3318334c8 (integrate wu/script-fix2 (phase fix2))
+tree branch: celeris/01M46W97H391DSFW1XJ745W0G9
+script sha256: 81d2a90fa2f79defb18544f6ed26889ab72ea67f33248e4d1013e6a8730736ba  scripts/dev/browser-web-live-check.sh
+doc sha256: 27ebf9f703cdab7188017b729a59521b3d75ca6b6f1cf8fae93d104ed0feed13  docs/ops/browser-web-live-check.md
+build: CARGO_TARGET_DIR=/var/tmp/fable-merge-target cargo build (dev profile) -p celeris --bin celeris -p task-worker --bin celeris-browser-launcher --bin celeris-browser-sandboxd --bin celeris-browser-egress -> exit 0
+sha256 7dfb82b6c5aad13a62a99fb31ddd07abf3803629f6ad51cd6f3f8d126d156062  /var/tmp/fable-merge-target/debug/celeris
+sha256 a15e0bc563cb1ef2fcb7f7045e39afc23498283c5f73ac077ad91a696a8f6134  /var/tmp/fable-merge-target/debug/celeris-browser-launcher
+sha256 536c026c2dbc26479947e4f0c101f8c835282ddb2499b370178c6d1cb9bfb5d9  /var/tmp/fable-merge-target/debug/celeris-browser-sandboxd
+sha256 8238923a1701f066e6f9fa9ec18ec43d520214a328a39b22ec781f29df8d2142  /var/tmp/fable-merge-target/debug/celeris-browser-egress
+sha256 a15e0bc563cb1ef2fcb7f7045e39afc23498283c5f73ac077ad91a696a8f6134  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-launcher (root:root 0755 copy)
+sha256 536c026c2dbc26479947e4f0c101f8c835282ddb2499b370178c6d1cb9bfb5d9  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-sandboxd (root:root 0755 copy)
+sha256 8238923a1701f066e6f9fa9ec18ec43d520214a328a39b22ec781f29df8d2142  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-egress (root:root 0755 copy)
+chrome: Google Chrome for Testing 153.0.8010.12 
+agent-browser: agent-browser 0.38.1
+bwrap: bubblewrap 0.11.0
+node: v24.14.1  python3: Python 3.13.3
+launcher user: uid=995(celeris-browser) gid=989(celeris-browser) groups=989(celeris-browser)
+daemon user: rmaeda uid=1001
+conformance ledger sha256: cf0a4b7d961330a20c9554a283bbee199a5cae703cdf594b9aa4e51224b2a8b4
+harness sha256: 0da14e7f7678d8fcb45245f02f5dd1867abd5d5c23a2040d4b54bc7514d52560
+launcher config sha256: 6e72564ef6f87056a4b57108cf7919c2569f49e1876ecafbb31accf6e610398e  owner/mode: root:root 644 dir root:root 755
+web dist: rebuilt with 'npx --offline vite build' in web/ at 09:13:41 (gitignored), exit 0; index.html sha256 1baea3dee73b7a957bb720b484fa8e2665a32cecbcd15709ce049d885795c7b3
+production launcher pid 3335880 (--config /etc/celeris-browser/launcher.toml, no test_loopback_allow); production daemon pid 639460 (ea6f0e243acf, port 7710); untouched
+diag2 launcher (patched, commands/diag2-launcher.patch, built from git archive d750b121 in /var/tmp/fable-rerun3-src): sha256 06002177bd40f035682e3c2bba67c7af23b704d57c37cf7d412f3b70ddd37fa4  /var/tmp/celeris-browser-config-1001/bin/celeris-browser-launcher-diag2
+after cleanup: workspace crates in /var/tmp/fable-merge-target cleaned and rebuilt from the tree; celeris-browser-launcher sha256 back to a15e0bc5... (identical to the binary tested in attempts 1-2)

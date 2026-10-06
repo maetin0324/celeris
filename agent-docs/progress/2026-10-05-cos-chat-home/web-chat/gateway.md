@@ -1,7 +1,8 @@
 ---
 title: web gateway — チャット添付の streaming 中継・チャット SSE・添付ダウンロードの中継
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: blocked
+status: done
+completed: 2026-10-06
 updated: 2026-10-06
 ---
 # web-chat / gateway WorkUnit
@@ -31,11 +32,11 @@ ADR [2026-10-05-cos-chat-home](../../../adr/2026-10-05-cos-chat-home.md) の D2�
 - `corepack pnpm@12.6.0 -C web exec biome check server` → exit 0。
 - `corepack pnpm@12.6.0 -C web typecheck` → exit 0。
 - `corepack pnpm@12.6.0 -C web test` → exit 0（vitest 391、node 57）。
-- 指定 check `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile >/dev/null && corepack pnpm@12.6.0 -C web typecheck && corepack pnpm@12.6.0 -C web lint && corepack pnpm@12.6.0 -C web test` → exit 1。lint の 4 件は開始 commit `c40b3669` に存在する `web/components/content/artifact-preview.test.tsx`、`web/components/ui/{confirm-dialog,drawer,gallery}.test.tsx` の import 順。4 ファイルはこの WU の objective（`web/server/`）の外。`web lint` を server の lint に絞るか、先行の別 WU で 4 ファイルを直す必要がある。
+- base `c40b3669` で biome の organizeImports に落ちていた既存試験 4 file（`web/components/content/artifact-preview.test.tsx`・`web/components/ui/{confirm-dialog,drawer,gallery}.test.tsx`）の import 並びだけを `biome check --write` で直した（objective で許可。各 1 行）。
+- 指定 check `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile >/dev/null && corepack pnpm@12.6.0 -C web typecheck && corepack pnpm@12.6.0 -C web lint && corepack pnpm@12.6.0 -C web test` → exit 0（lint: 344 files・error 0、styles.css の既存 warning 4 件のみ。vitest 62 files / 391 tests pass、node 57 pass）。
 - crates/・gui/ は変えていないので cargo の検査は対象外。
 
 ## 未解決
-- 上記の全域 lint check が開始 commit にある 4 件で失敗する。計画の check を修正する必要がある。
 - `check:secrets` は `web/dist` を要するため build 後の統合段で確認する。
 
 ## 提案

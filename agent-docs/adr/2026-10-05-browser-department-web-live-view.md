@@ -531,3 +531,96 @@ task-core（task 作成時の検証・`BrowserTaskPolicy` のスキーマ）・C
 - 旧 GUI の browser 画面は web と同等以上になる。旧 GUI の撤去は本 ADR の範囲外とする。
 - task 単位の `allowed_domains`（D5.2）は作成時に必須化し、黙って部署 grant 全体に広がらない。
   org の browser 設定は既存の `PATCH /api/v1/org` で編集し、actor 付き event を残す（D5.1）。
+
+## 付記: 実装との突き合わせ（2026-10-06、close-out）
+
+統合後の HEAD（`a0927c8b`）で各節を実装と突き合わせた。証拠は
+[agent-docs/progress/2026-10-05-browser-web-live-view.md](../progress/2026-10-05-browser-web-live-view.md)。
+
+### D1 部署
+
+| 決めたこと | 実装 |
+|---|---|
+| `browser-execution`（section、親 `engineering`、genre `coding`）を seed に足す | `config/org.example.toml`（`[[org]] id = "browser-execution"`、D1.2 の profile と同じ） |
+| 投入 JSON と手順 | `docs/ops/browser-department-org.json`（`OrgCreateBody`）と `docs/ops/browser-department.md`（POST・GET・PATCH・DELETE の curl 例） |
+| matching 試験 | `browser_specialist_node_receives_browser_enabled_tasks_and_ungranted_nodes_are_excluded`（`crates/task-ops/src/matching/tests.rs`）。grant なしで `Unroutable`、grant 付きで `browser-execution` 宛、grant 無し node（software-engineering 等）は通常 task のまま、grant を外すと再び `Unroutable` |
+| browser を要求しない task を専用課から外す | `crates/task-ops/src/matching.rs`（実効 profile に `browser-enabled` を持つ node を除外）＋ org-tests 葉で `crates/celeris` の org 試験 3 件を更新（seed 15 件・id 一覧・`route(&[])` が `browser-execution` にならない） |
+
+D1.3 の 4 本目中「子 node で grant が継承・置き換え」の個別試験は未追加（`Profile` 継承規則の汎用試験で
+カバー、org-node の申し送りと同じ判断）。本番への POST は配送後に Fable が行う（この run は未実施）。
+
+### D2 gateway
+
+| 決めたこと | 実装 |
+|---|---|
+| live proxy（HTTP・WS） | `web/server/browser-live.js`（928 行。`/browser/live/{task}/{run}` の grant 取得・15 秒前更新、`/_next`・`/api/sessions`・`/api/chat/status`・`/api/session/{port}/*` の固定 path、WS `upgrade` で message ごとの再判定） |
+| 全経路共通の guard（D2.2） | 同上。拒否コード `owner_unavailable`・`unauthenticated`・`not_owner`・`csrf_failed`・`origin_mismatch`・`other_task`・`not_running`・`run_ended`・`auth_interval`・`grant_expired` |
+| owner session（D2.1） | 同上（`GET/POST /browser/owner-session`、`CELERIS_WEB_OWNER_SOCKET`、12 hex challenge）。`celerisctl browser owner-session approve <challenge> --socket <path>` |
+| 入力転送 | 同上。`ack`・`config` は常に、`input_mouse`・`input_keyboard`・`input_touch` は lease holder かつ `human_control` かつ期限内かつ認証区間外のみ。binary frame は常に破棄 |
+| control・waits・identity 中継（D2.4） | 同上（`/browser/control/*`・`/browser/control/.../release`・`/browser/waits/{wait}/decision`・`/credential`・`/browser/identities*`。restore は追加） |
+| generic relay の拒否と redact | `web/server/relay.js`（`browserRouteRequired` で `browser_route_required`）・`web/server/events.js`（SSE の `live_view_url` 除去） |
+| 試験 | `web/server/browser-live.test.mjs`（`node:test`。D4 各項目）・`web/server/relay.test.mjs`・`web/server/events.test.mjs` |
+
+### D3 web 画面
+
+`web/features/browser/` には `browser-query.ts`・`browser-model.ts`・`browser-runs-screen.tsx`・
+`browser-run-screen.tsx`・`live-view-frame.tsx`・`control-bar.tsx`・`live-events.tsx`・
+`browser-waits-panel.tsx`・`owner-session-notice.tsx`・`task-browser-section.tsx`・
+`browser-settings-screen.tsx`（D2.0/D5.1-b の設定画面、ADR 表の 1 行追加分）と単体試験がある。
+route は `web/routes/browser.index.tsx`・`browser.runs.$taskId.$runId.tsx`・
+`projects.$id.browser-identities.tsx`・`browser.settings.tsx`（追加）の 4 つ。
+`web/server/spa-routes.js` にも 4 path。
+
+- 導線: `web/components/shell/nav-items.ts` の「ブラウザ」1 行、task 詳細の
+  `web/features/tasks/overview-view.tsx`（`TaskBrowserSection`・`#browser-waits` への link）、
+  受信箱 `web/features/inbox/inbox-screen.tsx`・承認 `web/features/approvals/approvals-screen.tsx` の
+  browser_wait badge と run 画面 link。
+- Live View は同一 origin の `/browser/live/...` だけ（`live-view-frame.tsx`）。raw `live_view_url` は
+  SPA の DOM・JSON に出さない（`safeLivePath`、relay・events の redact）。
+- 試験: `web/e2e/browser/`（runs-list・lease・proxy-authz・waits・identities・links・narrow-a11y・settings・
+  fixture-smoke の 9 spec）、`web/e2e/support/fake-daemon.mjs` の browser backend。
+
+### D2.0 / D5（2026-10-06 追記）
+
+| 決めたこと | 実装 |
+|---|---|
+| origin 形式の検証・包含・交差 | `crates/task-core/src/browser/origin.rs`（`AllowedOrigin::parse`・`origin_covers`）。`browser.rs` の `task_run_policy`・`EffectiveBrowserPolicy::derive` が origin で交差。形式の決定は [2026-10-05-browser-allowed-origins.md](2026-10-05-browser-allowed-origins.md) |
+| browser-enabled 新規 task の欠落・空は作成拒否（全経路） | `Task.requirements.browser.allowed_domains` を正本に。`NewTaskSpec`・`PlanUnitSpec`・`ExecutionChildSpec`・`ConsoleAction::CreateTask`・`SqliteStore::insert_tx`・`PATCH /tasks/{id}` で同じ決定的検証 |
+| 子は親の部分集合 | 同上（`origin_covers` で scheme・host・port。親が browser-enabled でない場合子は持てない） |
+| broker と egress の両方で grant 外を拒否 | `task_worker::browser_policy::{prepare_for_task, admit, egress_allow}`。単一の `derive()` 出力を broker・egress・credential 判定・shim（`browser_cli.py`）が共有（D5.2 の「2 箇所に別実装しない」どおり） |
+| grant 縮小は次の run から | `task-dispatch` の `browser_run_policy`（run ごとに org の現 grant を読み `RunContext.browser_policy` に入れる） |
+| 管理 API | `PATCH /api/v1/org/{id}/browser-settings`（`crates/task-api/src/handlers/org.rs::patch_browser_settings`）。D5.1 の「browser 専用管理 API は新設しない」とは異なり下位経路を新設した（`{id}` が node id 文字列の `PATCH /api/v1/org/{id}` と URL 衝突するため）。`allowed_domains`・`credential_policy_ids`・`credential_identity_ids`・`harnesses`・`budget` の任意組合せ。失敗時は DB と event を変えない。成功時は `org_browser_events`（migration `0051`、`crates/task-core/src/store/org.rs`）に actor=`admin`・変更前後を同 transaction で書く |
+| actor 付き event（D5.1-a） | `Event::OrgNodeUpdated` 型の新 variant は**追加していない**。browser 設定変更は専用の監査 table `org_browser_events` に残す形にした（`Event` enum の変更を browser 設定に限定せず済ませるため）。機密値は credential policy ID と identity ID のみ |
+| 最小 origin 規則の prompt | `crates/task-worker/src/claude_code/prompt.rs`（`BROWSER_ALLOWED_DOMAINS_GUIDANCE`、execution-plan/2・/3 両方）と `crates/task-worker/src/preamble.rs`（CoS の `create_task` 例、例 `https://billing.example.com`）。CoS 専用の外部 skill file は無く（`config/skills/` に無し）、preamble の Rust 文字列 1 箇所に入った |
+| web の設定画面 | `web/features/browser/browser-settings-screen.tsx`（`/browser/settings`。`web/routes/browser.settings.tsx`）。422 の field 表示・確認 dialog・scheme/wildcard の入力補助 |
+
+試験名の完全な対応表は
+[domain-policy.md](../progress/2026-10-05-browser-web-live-view/domain-policy.md)（`browser_allowed_domains_` 23 件・
+`browser_settings_` 9 件〈task-api/tests/organization.rs。`crates/celeris` の
+`browser_settings_default_to_unconfigured_and_site_policy_validates` は 2026-10-01 以前からの
+ config 検証試験で本節の管理 API 試験ではない〉の一覧）。
+
+### 残っているもの（この run で直さない）
+
+- **本番の org 投入と実機確認は未実施**: 配送後に Fable が `docs/ops/browser-department.md` で POST し、
+  `scripts/dev/browser-web-live-check.sh`（opt-in・未実行時 exit 2）で実行し、証跡を進捗に転記する。
+- **egress は `host:port` の完全一致**: wildcard origin（`*.example.com`）は egress で一致せず
+  fail-closed に拒否される（以前からの挙動）。実運用では wildcard ではなく単一 origin で指定する。
+- **launcher 経路（`browser_launcher`）は prepared policy を受け取るだけ**: 本 ADR の範囲では追加の
+  origin 検証を足していない。
+- **`org_browser_events` の読み取り API は無い**: web 設定画面は直前の保存の actor・`updated_at` だけを出し、
+  過去の履歴は出せない（読み取り API の追加は別 task）。
+- **mobile-audit の browser fixture**: owner 状態の control bar・待ち form の 44 px は
+  `scripts/mobile-audit.mjs`（password 無・owner socket 無の fixture）では見ていない。owner 状態は
+  `web/e2e/browser/narrow-a11y.spec.ts`（360px）が確かめる。
+- **`v3: true` を browser 画面に付けていない**: S1 latency・S2 realtime の browser backend 対応が
+  別途要るため（web-ui の申し送り）。
+- **`check:parity` が exit 1（`/browser/settings: missing V3 screen`）**: web-settings 葉が
+  `web/server/spa-routes.js` に route を足したが、V3 画面台帳 `web/e2e/support/screens.ts` の
+  対応行を足していない（close-out での突き合わせで発見）。修正は `screens.ts` 1 行だが、
+  `mobile-gate`（nfr project）が fixture gateway（browser backend 無し）で h1 を期待するため、
+  fixture 側の browser grant 付き org と `mobile-audit` の再実行が要る。web-settings 葉の
+  再計画で直す（close-out は文書のみを編集する範囲）。
+- **migration 0048〜0050 はこの branch では空番**: 本 branch では 0051 のみが入る。統合時に他の
+  branch 側の 0048〜0050 実体が入ったら、番号の重複検査（`scripts/dev/check-migration-numbers.sh` 相当）で
+  確認する。

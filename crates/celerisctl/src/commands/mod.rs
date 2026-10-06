@@ -7,6 +7,7 @@ pub mod build_cache;
 pub mod cancel;
 /// ADR-0046 D3（Phase 59）: `celerisctl config to-harnesses`。
 pub mod config;
+pub mod cos_ops;
 /// ADR-0131 D5: HTTP API based cron job operations.
 pub mod cron;
 /// ADR-0131 付記 D12: `celerisctl curation validate`（日次整理の計画を daemon と同じ規則で点検する。DB もネットワークも使わない）。

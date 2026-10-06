@@ -205,6 +205,11 @@ pub fn run(store: &dyn TaskStore, args: AddArgs) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
+/// The CoS API accepts the same task specification as `POST /tasks`.
+pub(crate) fn cos_body(args: AddArgs) -> Result<serde_json::Value, CliError> {
+    serde_json::to_value(build_spec(args)?).map_err(|e| CliError::msg(format!("task JSON: {e}")))
+}
+
 /// ADR-0098 D6: worker の run の中で daemon の DB（`CELERIS_RUN_DB`）に向けた `add` は **DB を開かず**、spec を
 /// その run の `followups.json` に追記する。run の終わりに daemon が run の task の案件・リポジトリで `draft` として作る。
 /// `--parent` / `--workspace` / `--cluster` は daemon が使わない欄なのでここで断る（D3-4）。`--role` / `--genre` は

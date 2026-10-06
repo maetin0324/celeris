@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
-import { createBrowserLive } from "./browser-live.js";
+import { createBrowserLive, guardUpgradeSocket, rejectUpgrade } from "./browser-live.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
@@ -157,8 +157,10 @@ export function createApp({
   browser.register(app);
   app.locals.browserLive = browser;
   app.locals.browserLiveUpgrade = (req, socket, head) => {
+    guardUpgradeSocket(socket);
     const host = hostName(req.headers.host);
-    if (!host || !allowed.has(host)) return socket.end("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    if (!host || !allowed.has(host))
+      return rejectUpgrade(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
     browser.upgrade(req, socket, head).catch(() => socket.destroy());
   };
   registerRoutes(app);

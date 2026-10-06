@@ -1,7 +1,7 @@
 ---
 tasks: [01M470CJT10MV8XVFEGSMCXHYS]
 status: done
-completed: 2026-10-05
+completed: 2026-10-06
 adr: agent-docs/adr/2026-10-05-browser-department-web-live-view.md
 unit: web-ui
 ---
@@ -52,19 +52,21 @@ unit: web-ui
 
 ## 証拠コマンドと結果
 
-すべて `web/` で実行（exit 0 の物は exit 0）。
+再実行は cherry-pick `eb12a3af` 後の統合 HEAD（`eb12a3af`）で行った。すべて `web/` で実行。
 
 - `pnpm typecheck`（`tsc -b`）: exit 0。
 - `pnpm lint`（`biome check .`）: exit 0（`Checked 355 files. Found 5 warnings.`。warning は styles.css の `scroll-behavior: auto !important`、既存）。
 - `pnpm test`（`vitest run && node --test server/*.test.mjs`）: vitest `Test Files 66 passed (66)`、`Tests 428 passed (428)`。node:test `tests 52 pass 52 fail 0`。
 - `pnpm check:boundaries`: exit 0。
 - `pnpm check:parity`: exit 0（出力なし。修正前は `/projects/$id/browser-identities`・`/browser`・`/browser/runs/$taskId/$runId`: missing V3 screen）。
-- `pnpm check:secrets`: exit 0（`token absent from build output, HTML, /api responses, errors and logs`）。
+- `pnpm check:secrets`: build 後に exit 0（`token absent from build output, HTML, /api responses, errors and logs`）。build 前は dist 不在で失敗したため、順序を改めて再実行。
 - `pnpm build`: exit 0（`dist/index.html` `dist/assets/index-*.js` 803.94 kB、gzip 236.37 kB）。
 - `WEB_E2E_SCOPE=functional pnpm exec playwright test --grep-invert "空白帯が無く.*360x800|stale の / [0-9]+: scroll 前|\(5\) / 360: 会話枠の先頭に見える"`: `220 passed`、`8 skipped`、failed 0（`--list` で 228 件・除外は 3 件分の一致を確認）。
 - `WEB_E2E_SCOPE=functional pnpm exec playwright test e2e/work/narrow-r6.spec.ts --workers 1`: `14 passed`（`(5) / 360` を含む。負荷で揺れる 1 件は単独では通る）。
 - `WEB_E2E_SCOPE=functional pnpm exec playwright test e2e/browser`: `19 passed`。
-- `node scripts/mobile-audit.mjs --screenshots <artifacts>/mobile-audit-close`: `mobile-audit: 34 path(s) x 4 widths ok`、exit 0。スクリーンショット 136 枚（artifacts の `mobile-audit-close/`。browser 3 画面は `_browser-<w>.png`・`_browser_runs_T1_R1-<w>.png`・`_projects_P1_browser_identities-<w>.png`、w = 360/390/412/1440）。
+- `node scripts/mobile-audit.mjs --screenshots /local/celeris/data/workspaces/01M470CJT10MV8XVFEGSMCXHYS/wu/close-r6/artifacts/mobile-audit-close-r6`: `mobile-audit: 34 path(s) x 4 widths ok`、exit 0。スクリーンショット 136 枚（成果物ディレクトリ。browser 3 画面は `_browser-<w>.png`・`_browser_runs_T1_R1-<w>.png`・`_projects_P1_browser_identities-<w>.png`、w = 360/390/412/1440）。
+- 再実行した static 検査は typecheck、lint（5 既存 warning）、test（Vitest 66 files/428 tests、node:test 52）、check:boundaries、check:parity、build、check:secrets がすべて exit 0。build は 803.94 kB JS chunk warning を出す。
+- 再実行した functional e2e: 220 passed、8 skipped。明示除外は home layout 360、stale home、narrow-r6 (5)/360。`narrow-r6.spec.ts --workers 1`: 14 passed。`e2e/browser`: 19 passed。
 
 ## 未解決事項
 

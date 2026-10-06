@@ -36,6 +36,25 @@ ADR 2026-10-05-cos-chat-home D6「導入順と受け入れ条件」の cos-run �
 
 `cos_chat_triage_` で始まる試験は合計 47 件。内訳は task-api 3+8+8、celeris 2+8、task-dispatch 18。
 
+## dispatcher 公開 API の通し試験（`crates/task-dispatch/tests/cos_chat_triage.rs`）
+
+1 回目の run の後の check（`cargo test -p task-dispatch --test cos_chat_triage`）は、この統合試験 target が無かったので落ちた（試験は lib 内の `dispatcher/tests/` にしか無かった）。そこで、公開 API（`Dispatcher::new`・`tick`・`set_cos_chat_launch`・`request_cos_triage_reconcile`・`set_accepting_new_work`）だけで D6 の各行を通す統合試験を足した。CoS の resolve の役は、試験コードが API と同じ store 操作（`cos_triage_resolve`・`cos_triage_outbox_claim`・`cos_triage_outbox_sendable`）で務める。run の終わりは `chat_runs` の状態を出来事として待つ（60 秒の保険付き）。期限超過は item の `created_at` を 600 秒前に置いて時刻を注入する（`test_now` は `cfg(test)` なので統合試験からは使えない）。
+
+| D6 の行 | 試験 | 結果 |
+|---|---|---|
+| A | `cos_chat_triage_a_answered_wait_sends_nothing_and_is_not_redelivered`（outbox 0 行、reconcile・再起動の後も item と run は増えない、再回答は false）・`cos_chat_triage_a_observed_notice_sends_nothing` | ok |
+| B | `cos_chat_triage_b_escalation_is_one_outbox_and_wait_stays_open`（escalation 1 行、fallback 0、元 task は Blocked のまま、二度目の claim は None）・`cos_chat_triage_b_human_answer_before_post_withdraws_the_escalation`（人の回答後は送信前の再照合で取り下げ、未送信 0） | ok |
+| C | `cos_chat_triage_c_run_failure_falls_back_once`・`_c_quota_or_login_falls_back_once`・`_c_disabled_falls_back_without_a_run`・`_c_deadline_falls_back_when_cos_never_starts`（各独立 fixture、revision ごとに fallback 1 行）・`_c_restart_and_recovery_neither_resend_nor_answer` | ok |
+| 通知一本化 | `cos_chat_triage_unified_no_direct_outbox_for_any_notice_kind`（`NoticeKind::ALL` 9 種と question を入れても直接の outbox は 0。observe は 0 行、escalation だけが 1 行） | ok |
+| 代答の修正 | `cos_chat_triage_override_new_revision_reopens_triage_and_old_is_closed`（代答後に待ちが新しい revision で開くと新 item と CoS run が 1 つずつ。旧 item への再回答は false＝API の 409） | ok |
+
+証拠（2 回目の run）:
+- `cargo test -p task-dispatch --test cos_chat_triage` → 11 passed、check のコマンドそのままで exit 0。
+- `cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
+- `bash scripts/dev/test-parallel.sh` → exit 0、nextest 4196 passed・0 failed・ignored 13。
+
+これで `cos_chat_triage_` で始まる試験は合計 58 件（task-dispatch の統合試験 11 件を足した）。crates/ の製品コードは 2 回目の run では変えていない。
+
 ## 未解決
 
 - 偽 harness が実際に resolve API を HTTP で呼ぶ 1 本通しの試験（dispatcher の run の中で台本が curl する形）は作っていない。dispatcher（task-dispatch）は task-api に依存しないため、取り込み → run は dispatcher の試験で確かめ、resolve 以降は API の試験で確かめた。2 つをつなぐ契約は「source_kind = 派生 inbox の kind、source_key = 派生 item id、source_revision = created_at」で、両方の試験が同じ導出を使う。

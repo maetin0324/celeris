@@ -32,8 +32,6 @@ export const STALE_TIME_DEFAULTS: readonly (readonly [QueryKey, number])[] = [
   [["config"], 60_000],
   [["mcp"], 60_000],
   [["console"], 0],
-  // チャットの本文・run は stream（features/chat/data の reducer）が正。query は一覧と取り直しだけ。
-  [["chat"], 0],
 ];
 
 function isPrefix(prefix: QueryKey, key: QueryKey): boolean {

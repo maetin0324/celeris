@@ -9,8 +9,6 @@ pub mod cancel;
 pub mod config;
 /// ADR-0131 D5: HTTP API based cron job operations.
 pub mod cron;
-/// ADR 2026-10-06 D5: HTTP API based model catalog operations.
-pub mod models;
 /// ADR-0131 付記 D12: `celerisctl curation validate`（日次整理の計画を daemon と同じ規則で点検する。DB もネットワークも使わない）。
 pub mod curation;
 /// ADR-0064 D2/D3（Phase 110a）: `celerisctl db backup|integrity-check`。DB を通常の経路では開かない。
@@ -22,6 +20,8 @@ pub mod gate;
 pub mod knowledge;
 /// ADR-0056 D1（Phase 78）: MCP クライアントの発行・一覧・失効、stdio 橋。
 pub mod mcp;
+/// ADR 2026-10-06 D5: HTTP API based model catalog operations.
+pub mod models;
 /// ADR-0046 D7（Phase 59）: `celerisctl org migrate-v2`。
 pub mod org;
 pub mod plan;

@@ -16,6 +16,7 @@ ADR D5 の会話一覧を `web/features/chat/threads/` に実装した。home �
 - `corepack pnpm@12.6.0 -C web exec biome check features/chat/threads`: exit 0。
 - `corepack pnpm@12.6.0 -C web exec vitest run features/chat/threads`: 2 files、7 tests passed。`chat_threads_*` で新規の冪等 key、題名変更の revision と 409、q 検索結果、archive の 409、受信箱固定と legacy 表示を確認。実ブラウザで mobile Drawer の Escape・選択後の focus 復元と操作ボタン 44 px 以上を確認。
 - `corepack pnpm@12.6.0 -C web lint`: exit 0（既存 `styles.css` 警告 4）。`corepack pnpm@12.6.0 -C web test`: exit 0（vitest 67 files/428 tests、server 57 tests）。`corepack pnpm@12.6.0 -C web check:boundaries`: exit 0。
+- 再試行: 前回の check は `threads.test.tsx` の Biome format 違反 1 件で失敗した。`corepack pnpm@12.6.0 -C web exec biome format --write features/chat/threads` で修正し、`install --offline --frozen-lockfile && typecheck && lint && test` を同じ worktree で再実行して exit 0（lint は既存警告 4、vitest 428 件・server 57 件成功）。
 
 ## 未解決
 

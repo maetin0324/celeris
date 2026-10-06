@@ -38,7 +38,9 @@ describe("chat threads", () => {
     const selected = vi.fn();
     api.list.mockResolvedValue({ items: [thread({ id: "existing", title: "残す会話" })], next_cursor: null });
     await model.load();
-    api.create.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ thread: thread({ id: "created", updated_at: "2026-10-06T00:00:00Z" }) });
+    api.create
+      .mockRejectedValueOnce(new Error("offline"))
+      .mockResolvedValueOnce({ thread: thread({ id: "created", updated_at: "2026-10-06T00:00:00Z" }) });
     await model.create(selected);
     expect(model.state.error).toBeTruthy();
     await model.create(selected);

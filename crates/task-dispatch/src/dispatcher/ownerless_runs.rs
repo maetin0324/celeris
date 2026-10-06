@@ -162,6 +162,56 @@ impl Dispatcher {
             );
             self.close_aborted_run(task_id, &row.run_id, role, why);
         }
+        if let Err(e) = self.reconcile_ownerless_work_units(&mut holders_gone, now) {
+            tracing::warn!(error = %e, "failed to reconcile work units without a live run");
+        }
+    }
+
+    /// 起動時と定期の修復: run を閉じてから WU を戻すまでに落ちた場合や、旧版が残した行を回収する。
+    /// Done の run でも検査中は WU が Running なので、run 索引だけで生死を決めない。
+    fn reconcile_ownerless_work_units(
+        &self,
+        holders_gone: &mut Option<bool>,
+        now: OffsetDateTime,
+    ) -> Result<(), DispatchError> {
+        if !self.lease_holders_gone(holders_gone, now) {
+            return Ok(());
+        }
+        for status in [Status::Running, Status::Ready, Status::Blocked] {
+            for task in self.store.list(Some(status))? {
+                if !self.is_eligible(&task) {
+                    continue;
+                }
+                for wu in self.store.work_units_for(task.id)? {
+                    if wu.status != task_core::WorkUnitStatus::Running
+                        || matches!(
+                            wu.kind,
+                            task_core::WorkUnitKind::Task | task_core::WorkUnitKind::Integrate
+                        )
+                        || self.holds_task_in_hand(task.id)
+                    {
+                        continue;
+                    }
+                    // last_run_id と lease_run_id のどちらにも live な run が無いことを確認する。
+                    let mut live = false;
+                    for run_id in wu.last_run_id.iter().chain(wu.lease_run_id.iter()) {
+                        if self.holds_run_in_hand(run_id)
+                            || self
+                                .store
+                                .run_index_get(run_id)?
+                                .is_some_and(|r| r.status == task_core::RunIndexStatus::Running)
+                        {
+                            live = true;
+                            break;
+                        }
+                    }
+                    if !live {
+                        self.reconcile_running_work_unit(task.id, &wu, "restart_reconcile")?;
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// 他に生きているインスタンスがあるとき、lease を持たない run の行を閉じるまで待つ長さ（`started_at` から）。

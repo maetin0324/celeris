@@ -234,34 +234,25 @@ impl Dispatcher {
         let units = self.store.work_units_for(task_id)?;
         let Some(wu) = units.iter().find(|u| {
             u.status == task_core::WorkUnitStatus::Running
+                && !matches!(
+                    u.kind,
+                    task_core::WorkUnitKind::Task | task_core::WorkUnitKind::Integrate
+                )
                 && u.last_run_id.as_deref() == Some(run_id)
         }) else {
             return Ok(());
         };
-        let has_checkpoint = self
-            .store
-            .runs_for_work_unit(&wu.id)?
-            .iter()
-            .any(|r| r.checkpoint.is_some());
-        let mut updated = wu.clone();
-        updated.status = if has_checkpoint {
-            task_core::WorkUnitStatus::NeedsContinuation
-        } else {
-            task_core::WorkUnitStatus::Ready
-        };
-        updated.clear_lease();
-        self.store.work_unit_transition(
-            task_id,
-            updated.clone(),
-            Event::WorkUnitTransitioned {
-                work_unit_id: wu.id.clone(),
-                key: wu.key.clone(),
-                from: task_core::WorkUnitStatus::Running,
-                to: updated.status,
-                reason: reason.to_string(),
-                run_id: Some(run_id.to_string()),
-            },
-        )?;
+        self.reconcile_running_work_unit(task_id, wu, reason)
+    }
+
+    /// run 索引・last_run_id が欠けた起動時回収にも、通常の中断と同じ継続規則を使う。
+    pub(super) fn reconcile_running_work_unit(
+        &self,
+        task_id: TaskId,
+        wu: &task_core::WorkUnitRow,
+        reason: &str,
+    ) -> Result<(), DispatchError> {
+        self.store.recover_work_unit(task_id, wu, reason)?;
         Ok(())
     }
 

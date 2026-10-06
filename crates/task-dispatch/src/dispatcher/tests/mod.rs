@@ -3163,3 +3163,5 @@ mod stale_priority;
 /// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
+
+mod orphan_work_units;

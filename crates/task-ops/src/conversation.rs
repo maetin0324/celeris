@@ -70,6 +70,7 @@ pub fn start(
         genres,
         conversation_genre,
         now,
+        true,
     )
 }
 
@@ -98,6 +99,7 @@ pub fn start_as(
         genres,
         conversation_genre,
         now,
+        true,
     )
 }
 
@@ -127,7 +129,40 @@ pub fn start_with_milestone(
         genres,
         conversation_genre,
         now,
+        true,
     )
+}
+
+/// Compatibility input reserves the old identifiers and visible message, but the
+/// CoS reply is scheduled by the chat queue rather than by a legacy task run.
+#[allow(clippy::too_many_arguments)]
+pub fn start_legacy_cos(
+    store: &task_core::SqliteStore,
+    project_id: Option<ProjectId>,
+    author: Option<&str>,
+    text: &str,
+    roles: &[RoleSpec],
+    genres: &[GenreSpec],
+    conversation_genre: &str,
+    now: OffsetDateTime,
+) -> Result<StartedConversation, OpsError> {
+    let started = start_full(
+        store,
+        task_core::COS_ID,
+        project_id,
+        None,
+        author,
+        text,
+        roles,
+        genres,
+        conversation_genre,
+        now,
+        false,
+    )?;
+    store
+        .chat_legacy_enqueue(&started.message, now)
+        .map_err(|e| OpsError::Validation(e.to_string()))?;
+    Ok(started)
 }
 
 /// `start` / `start_with_milestone` / `start_as` の共通の芯（ADR-0056 D2 で `author` を足した）。
@@ -143,6 +178,7 @@ fn start_full(
     genres: &[GenreSpec],
     conversation_genre: &str,
     now: OffsetDateTime,
+    activate: bool,
 ) -> Result<StartedConversation, OpsError> {
     if text.trim().is_empty() {
         return Err(OpsError::Validation("text must not be blank".to_string()));
@@ -161,7 +197,11 @@ fn start_full(
     }
 
     // 監査 M-3: 同じノード・同じ案件に未終了の対話タスクがあれば、その後ろに並べる（返事は送った順に返る）。
-    let depends_on = open_conversation_tasks(store, &node.id, project_id)?;
+    let depends_on = if activate {
+        open_conversation_tasks(store, &node.id, project_id)?
+    } else {
+        Vec::new()
+    };
 
     let mut task = conversation_task(
         &node,
@@ -174,6 +214,9 @@ fn start_full(
     );
     task.depends_on = depends_on;
     task.milestone_id = milestone_id;
+    if !activate {
+        task.labels.push("cos_legacy_receipt".to_owned());
+    }
     let message = Message {
         id: MessageId::new(),
         node_id: node.id.clone(),
@@ -197,7 +240,9 @@ fn start_full(
     };
     store.create_task(&task, vec![])?;
     // 対話用タスクは人が承認するものではない（話しかけた時点が承認）。draft のままだと run が起きない。
-    store.apply_transition(task.id, Trigger::Accept, None)?;
+    if activate {
+        store.apply_transition(task.id, Trigger::Accept, None)?;
+    }
     let task = store.get(task.id)?.unwrap_or(task);
     Ok(StartedConversation { message, task })
 }
@@ -236,6 +281,7 @@ fn open_conversation_tasks(
         .iter()
         .filter(|t| {
             task_core::is_conversation(t)
+                && !t.labels.iter().any(|label| label == "cos_legacy_receipt")
                 && t.assignee.as_deref() == Some(node_id)
                 && (is_cos || t.project_id == project_id)
         })

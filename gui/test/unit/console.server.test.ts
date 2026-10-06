@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
-import { buildInstructBodyFromForm, loadConsole, sendInstruct } from "~/celeris/console.server";
+import { buildInstructBodyFromForm, loadConsole, sendInstruct, sendNewConversation } from "~/celeris/console.server";
 import type { ConsoleInstructAccepted, OrgList, ProjectList } from "~/celeris/types";
 import { consolePage } from "../mock-celeris/fixtures";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
@@ -149,6 +149,16 @@ describe("sendInstruct（POST /console/instruct。202 を素通しする）", ()
     const outcome = await sendInstruct(client, { text: "   " });
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error.status).toBe(422);
+  });
+});
+
+describe("sendNewConversation", () => {
+  it("project scope の既定 legacy thread だけを切り替える", async () => {
+    mock.on("POST", "/api/v1/console/new-conversation", (req, res) => {
+      expect(req.url).toBe("/api/v1/console/new-conversation?scope=project%3A01JPROJECT");
+      res.writeHead(204).end();
+    });
+    expect(await sendNewConversation(client, "project:01JPROJECT")).toEqual({ ok: true, op: "new_conversation" });
   });
 });
 

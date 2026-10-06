@@ -75,7 +75,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .merge(attachments::routes())
 }
 
-fn chat_problem(error: ChatError) -> ApiProblem {
+pub(crate) fn chat_problem(error: ChatError) -> ApiProblem {
     let status =
         StatusCode::from_u16(error.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let code = match &error {

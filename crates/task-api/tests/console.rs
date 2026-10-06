@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use common::*;
 use task_api::StreamTuning;
+use task_core::chat::{ChatPostMessageRequest, ChatSendMode};
 use task_core::{
     Approval, ApprovalStore, COS_ID, Event, Message, MessageId, MessageRole, MilestoneStatus,
     NodeSession, NodeSessionStore, ProgressFields, ProgressKind, Project, ProjectId, Report,
@@ -72,6 +73,39 @@ fn message(node_id: &str, project_id: Option<ProjectId>, role: MessageRole, text
         metadata: None,
         created_at: OffsetDateTime::now_utc(),
     }
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_stream_reads_new_cos_message() {
+    let env = TestEnv::new();
+    let app = task_api::router(fast(&env));
+    let mut sse = open_stream(&app, get("/api/v1/console/stream?scope=all")).await;
+    sse.next_frame(EVENT_WAIT).await.expect("hello");
+    let thread = env
+        .store
+        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
+        .unwrap();
+    env.store
+        .chat_message_post(
+            &thread,
+            &ChatPostMessageRequest {
+                client_message_id: "stream-new".into(),
+                text: "SSE の新着".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    let frame = sse
+        .next_named("console.block", EVENT_WAIT)
+        .await
+        .expect("new message");
+    assert_eq!(frame.data["kind"], "human");
+    assert_eq!(frame.data["text"], "SSE の新着");
+    assert_eq!(frame.data["node_id"], COS_ID);
 }
 
 /// 偽アダプタの run と同じ形（`ready → running`、進行 5 行、`running → done`）を 1 つのタスクに積む。
@@ -907,7 +941,7 @@ async fn run_events_returns_only_that_runs_rows() {
 
 /// 現役の CoS 継続セッションがあれば捨てる（`retired_at` が立つ）。管理系（bearer 必須）。
 #[tokio::test]
-async fn new_conversation_retires_the_active_cos_session() {
+async fn cos_chat_legacy_new_conversation_preserves_other_session() {
     let env = admin_env();
     let app = env.router();
     let now = OffsetDateTime::now_utc();
@@ -934,15 +968,14 @@ async fn new_conversation_retires_the_active_cos_session() {
     )
     .await;
     assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
-    assert_eq!(
+    assert!(
         env.store
             .node_session_active(COS_ID, SessionKind::Conversation, None)
-            .expect("active"),
-        None,
-        "the session is retired, so the next CoS run starts fresh"
+            .expect("active")
+            .is_some()
     );
 
-    // 現役セッションが無くても 204（「無い」状態にするだけなので、無かったことをエラーにしない）。
+    // もう一度切り替えても 204。既存 session は触らない。
     let resp = send(
         &app,
         post_admin("/api/v1/console/new-conversation", &serde_json::json!({})),

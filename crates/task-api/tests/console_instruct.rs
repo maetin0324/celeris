@@ -8,7 +8,8 @@ mod common;
 
 use common::*;
 use serde_json::{Value, json};
-use task_core::{GenreSpec, RoleSpec, TaskStore, Tier};
+use task_core::chat::{ChatMessageQuery, ChatPostMessageRequest, ChatSendMode};
+use task_core::{GenreSpec, RoleSpec, Status, TaskStore, Tier};
 
 fn p(path: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
     post_json_with(
@@ -57,6 +58,278 @@ async fn seed_org(app: &axum::Router) {
         let resp = send(app, p("/api/v1/org", &body)).await;
         assert_eq!(resp.status.as_u16(), 201, "{}", resp.text());
     }
+}
+
+fn legacy_items(
+    env: &TestEnv,
+    project_id: Option<task_core::ProjectId>,
+) -> Vec<task_core::chat::ChatMessage> {
+    let thread = env
+        .store
+        .chat_legacy_default_thread(project_id, time::OffsetDateTime::now_utc())
+        .unwrap();
+    env.store
+        .chat_message_list(&thread, &ChatMessageQuery::default())
+        .unwrap()
+        .items
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_console_instruct_queues_and_keeps_ids() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let result = send(
+        &app,
+        p("/api/v1/console/instruct", &json!({"text":"互換入力"})),
+    )
+    .await;
+    assert_eq!(result.status.as_u16(), 202, "{}", result.text());
+    let body = result.json();
+    assert_eq!(body["node_id"], "cos");
+    let task_id = body["task_id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        env.store.get(task_id).unwrap().unwrap().status,
+        Status::Draft
+    );
+    let items = legacy_items(&env, None);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].text, "互換入力");
+    assert_eq!(items[0].state, task_core::chat::ChatMessageState::Queued);
+    let old = send(&app, g("/api/v1/org/cos/messages")).await.json();
+    assert_eq!(old["items"][0]["id"], body["message_id"]);
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_org_message_uses_same_queue() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let result = send(
+        &app,
+        p("/api/v1/org/cos/messages", &json!({"text":"組織入口"})),
+    )
+    .await;
+    assert_eq!(result.status.as_u16(), 202, "{}", result.text());
+    assert_eq!(legacy_items(&env, None)[0].text, "組織入口");
+    assert!(result.json()["task_id"].as_str().is_some());
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_project_has_own_default() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let created = send(
+        &app,
+        p(
+            "/api/v1/projects",
+            &json!({"title":"Scope","request":"調査"}),
+        ),
+    )
+    .await
+    .json();
+    let project: task_core::ProjectId = created["id"].as_str().unwrap().parse().unwrap();
+    let result = send(
+        &app,
+        p(
+            "/api/v1/console/instruct",
+            &json!({"text":"案件側", "scope":format!("project:{project}")}),
+        ),
+    )
+    .await;
+    assert_eq!(result.status.as_u16(), 202, "{}", result.text());
+    assert!(
+        legacy_items(&env, Some(project))
+            .iter()
+            .any(|m| m.text == "案件側")
+    );
+    assert!(!legacy_items(&env, None).iter().any(|m| m.text == "案件側"));
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_new_conversation_rotates_only_default() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let first = env
+        .store
+        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
+        .unwrap();
+    let created = send(
+        &app,
+        p(
+            "/api/v1/projects",
+            &json!({"title":"Separate","request":"調査"}),
+        ),
+    )
+    .await
+    .json();
+    let project: task_core::ProjectId = created["id"].as_str().unwrap().parse().unwrap();
+    let project_first = env
+        .store
+        .chat_legacy_default_thread(Some(project), time::OffsetDateTime::now_utc())
+        .unwrap();
+    let scoped = send(
+        &app,
+        p(
+            &format!("/api/v1/console/new-conversation?scope=project:{project}"),
+            &json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(scoped.status.as_u16(), 204, "{}", scoped.text());
+    assert_ne!(
+        project_first,
+        env.store
+            .chat_legacy_default_thread(Some(project), time::OffsetDateTime::now_utc())
+            .unwrap()
+    );
+    assert_eq!(
+        first,
+        env.store
+            .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
+            .unwrap()
+    );
+    let resp = send(&app, p("/api/v1/console/new-conversation", &json!({}))).await;
+    assert_eq!(resp.status.as_u16(), 204, "{}", resp.text());
+    let second = env
+        .store
+        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
+        .unwrap();
+    assert_ne!(first, second);
+    assert_eq!(
+        env.store.chat_thread_get(&first).unwrap().unwrap().status,
+        task_core::chat::ChatThreadStatus::Open
+    );
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_non_cos_keeps_old_path() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let resp = send(
+        &app,
+        p(
+            "/api/v1/console/instruct",
+            &json!({"text":"@software-engineering 修正"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 202, "{}", resp.text());
+    let task_id = resp.json()["task_id"].as_str().unwrap().parse().unwrap();
+    assert_eq!(
+        env.store.get(task_id).unwrap().unwrap().status,
+        Status::Ready
+    );
+    assert!(legacy_items(&env, None).is_empty());
+}
+
+#[tokio::test]
+async fn cos_chat_legacy_console_reads_chat_without_duplicate_projection() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_org(&app).await;
+    let old = send(
+        &app,
+        p("/api/v1/console/instruct", &json!({"text":"旧から"})),
+    )
+    .await
+    .json();
+    let thread = env
+        .store
+        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
+        .unwrap();
+    env.store
+        .chat_message_post(
+            &thread,
+            &ChatPostMessageRequest {
+                client_message_id: "new-ui".into(),
+                text: "新から".into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let texts: Vec<_> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect();
+    assert_eq!(texts.iter().filter(|t| **t == "旧から").count(), 1);
+    assert_eq!(texts.iter().filter(|t| **t == "新から").count(), 1);
+    assert!(old["message_id"].as_str().is_some());
+
+    env.store
+        .chat_run_claim_next(
+            &thread,
+            "legacy-run",
+            &json!({}),
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    env.store
+        .chat_run_finish(
+            "legacy-run",
+            task_core::chat::ChatRunState::Completed,
+            Some("同じ返信"),
+            None,
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    env.store
+        .message_append(&task_core::Message {
+            id: task_core::MessageId::new(),
+            node_id: "cos".into(),
+            project_id: None,
+            role: task_core::MessageRole::Node,
+            text: "同じ返信".into(),
+            run_id: Some("legacy-run".into()),
+            task_id: Some(old["task_id"].as_str().unwrap().parse().unwrap()),
+            metadata: None,
+            created_at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let texts: Vec<_> = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|b| b["text"].as_str())
+        .collect();
+    assert_eq!(texts.iter().filter(|t| **t == "同じ返信").count(), 1);
+
+    env.store
+        .chat_run_claim_next(
+            &thread,
+            "new-run",
+            &json!({}),
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    env.store
+        .chat_run_finish(
+            "new-run",
+            task_core::chat::ChatRunState::Completed,
+            Some("新しい返信"),
+            None,
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    let page = send(&app, g("/api/v1/console?scope=all")).await.json();
+    let reply = page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["text"] == "新しい返信")
+        .expect("new reply");
+    assert_eq!(reply["run_id"], "new-run");
 }
 
 /// scope 無しの素の文は CoS（`OrgKind::Secretary` の根ノード）への対話になる。

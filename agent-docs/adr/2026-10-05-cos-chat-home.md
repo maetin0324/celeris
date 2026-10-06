@@ -290,3 +290,61 @@ fallback は「**CoS 不在のため直接通知**」、不在理由、元の待
 | 実機 1 回 | 試験用 DB の daemon で既定 claude-code と同じ会話を複数往復、resume と添付/API 操作を確認。実効設定、run id、redact 済み event/画面を記録する。本番 webhook は使わない | live-check |
 
 close-out は `bash scripts/dev/test-parallel.sh`、`cargo clippy --workspace -- -D warnings`、web の typecheck/test/e2e と文書検査を実行し、各 WorkUnit の進捗に結果を残す。実機未実行・不合格を fake 成功で置き換えず、完了状態にしない。通知の通常経路が CoS のみで、例外が本節の不在退避と明示 test だけであることを送信入口の call-site 調査と上表の試験の両方で確認する。
+
+## 付記: 実装との突き合わせ（cos-run、2026-10-06）
+
+D2/D3 の小節ごとに、実装の場所・試験名・ADR との差分（未実装・縮退・食い違い）を書く。検査は統合後 HEAD `5434785b`（文書だけを足した `c9d3919d` でも再実行）で `bash scripts/dev/test-parallel.sh` exit 0（4230 passed）と `cargo clippy --workspace -- -D warnings` exit 0。試験はすべて偽 harness・一時 SQLite・偽 webhook を使う決定的なもの。略号: tc=`crates/task-core`、td=`crates/task-dispatch`、tw=`crates/task-worker`、ta=`crates/task-api`、cc=`crates/celeris`、ctl=`crates/celerisctl`。D6 の受け入れ行と試験名の対応は `agent-docs/progress/2026-10-06-cos-run.md` にある。
+
+### D2 継続・キュー・停止
+
+- 実装: 起動と枠は td `dispatcher/cos_chat/launch.rs`、stop・interrupt・queue_paused・再起動後の回収は `control.rs`、resume 拒否後の fresh 1 回と rollover は `rollover.rs`、session 照合 key と retire 理由は td `sessions/cos_chat/`、session 行は tc `chat/session.rs`、run・queue の保存は tc `chat/run_store.rs`・`chat/store.rs`、要約 checkpoint は tc `chat/credential.rs` と ta `cos/mod.rs`（`POST /cos/threads/{t}/checkpoint`）。
+- 試験: `cos_chat_run_control_stop_kills_group_pauses_queue_and_late_stop_isolated`・`_interrupt_precedes_queue_without_changing_pause`・`_live_interrupt_waits_for_old_worker_exit`・`_restart_waits_for_orphan_then_continues_input`・`_pending_side_effect_waits_for_human`（td `dispatcher/tests/cos_chat_launch.rs`）。`cos_chat_run_session_first_run_is_new_and_match_resumes`・`_any_key_change_retires`・`_cache_missing_or_bad_id_retires`・`_resume_refusal_retires_as_fresh_after_refusal`・`_context_limit_retires`（td `sessions/cos_chat/tests.rs`）。`cos_chat_run_rollover_resume_refusal_retries_fresh_exactly_once`・`_retry_does_not_reapply_input_or_operation`・`_token_limit_makes_next_run_fresh`・`_context_exhaustion_makes_next_run_fresh`（td `dispatcher/tests/cos_chat_rollover.rs`）。`cos_chat_ops_checkpoint_enforces_cursor_and_size`・`_requires_current_run`・`_rejects_queued_gap_before_interrupt_input`（tc）。`cos_chat_run_proto_unsummarized_range_is_explicit`・`_prompt_puts_interrupt_first_and_forbids_actions`（tw `cos_chat/tests.rs`）。client_message_id の冪等と queue 上限は store-api の `chat_api_post_replay_limits_and_cancel`・`chat_api_queue_limit_and_run_stop_resume`（ta `tests/chat_api.rs`）。
+- 差分: 無し。ただし dispatcher と API router を同じ一時 DB で並べた 1 本通しの試験は無い（progress の未解決に記録）。
+
+### D2 config と harness の写像
+
+- 実装: `[cos]`・`[cos.triage]` の読み込み・検証・reload は cc `config/cos.rs`。reload の拒否と旧設定の維持は cc `daemon/admin.rs`。CoS 枠（ADR-0089 の例外・`max_cos_runs`・固定 account の +1・sticky）は td `dispatcher/cos_chat/launch.rs`。harness の写像は tw `claude_code/`（全道具・UUID の resume）、tw `codex/`（exec resume・thread.started）、tw `acp/`（session/new→load・permission の許可）。能力の表は tw `cos_chat.rs`。
+- 試験: `cos_chat_config_defaults_and_unavailable_reason`・`_rejects_unknown_and_invalid_values`・`_explicit_provider_conflicts_and_resolves`・`_reload_rejects_change_and_preserves_old_values`（cc `config/cos_tests.rs`）。`cos_chat_config_reload_keeps_old_config_on_invalid_mapping`（cc `daemon/admin.rs`）。`cos_chat_run_launch_two_threads_fifo_and_capacity`・`_non_pool_provider_keeps_its_limit`・`_max_cos_zero_disables_global_exception`・`_no_candidate_records_unavailable`・`_fixed_account_gets_one_extra_slot_then_waits`・`_sticky_account_falls_back_when_logged_out`（td）。`cos_chat_harness_claude_*`（7 件）・`cos_chat_harness_codex_*`（9 件）・`cos_chat_harness_acp_*`（6 件）・`cos_chat_harness_caps_*`（4 件）・`cos_chat_harness_config_*`（5 件）。`cos_chat_harness_e2e_{claude,codex,acp}_*`（td `dispatcher/cos_chat/harness_tests.rs`）。
+- 差分（縮退）: opencode（acp）は、session/load・画像の能力が未確認の場合に config の warning と実行時の reason を出し、明示 fresh で動く（`cos_chat_harness_config_opencode_lists_unconfirmed_capabilities`・`cos_chat_harness_acp_missing_load_starts_fresh_once`）。これは ADR の「能力なし・拒否なら明示 fresh」どおり。「一般 pool が満杯でも CoS が別枠で起動する」を 1 本で通す fixture は無い（枠 0 の例外と CoS 枠の容量は上の試験で確かめた）。
+
+### D2 REST の固定契約
+
+- 実装: `/chat/*` は ta `chat/mod.rs`・`chat/attachments.rs`（store-api 担当）。`/cos/inbox`・resolve は ta `cos/inbox.rs`、`/cos/operations` は ta `cos/operations.rs`、override は ta `cos/override_op.rs`、run credential は ta `cos/mod.rs` と tc `chat/credential.rs`。
+- 試験: `chat_api_*`（15 件。ta `tests/chat_api.rs`、store-api 担当）。`cos_chat_ops_api_*`（6 件）・`cos_chat_ops_auth_*`（5 件）・`cos_chat_ops_checkpoint_api_*`（2 件）・`cos_chat_triage_resolve_*`（3 件）・`cos_chat_triage_override_*`（8 件）（いずれも ta `tests/`）。
+- 差分: 無し。
+
+### D2 SSE の event と再接続
+
+- 実装: ta `chat/stream.rs`（cursor・410・heartbeat、store-api 担当）。worker の進行を chat_events に写すのは td `dispatcher/cos_chat/sink.rs`（Text/ToolUse/ToolResult/Thinking/Status → text_delta/tool/status）。
+- 試験: `chat_stream_snapshot_then_live_has_no_gap`・`chat_stream_last_event_id_reconnect_has_no_duplicate`・`chat_stream_heartbeat_does_not_advance_the_id`・`chat_stream_expired_cursor_is_*`（ta `tests/chat_stream.rs`）。`cos_chat_run_sink_maps_text_tool_thinking_status_in_order`・`_pairs_tool_calls_and_fails_open_calls_at_end`・`_redacts_tool_detail_and_caps_it`・`_sends_nothing_after_terminal`・`_terminal_mapping`（td `sink_tests.rs`）。
+- 差分（食い違い）: 受信箱の一次対応で `cos_triage_claim` が起こす chat_run は output message と message event を作らない。このため SSE は次の run event まで更新されない（`agent-docs/progress/2026-10-06-cos-run/triage.md` の未解決）。
+
+### D3 全道具・全権限の具体
+
+- 実装: 全道具は D2 の写像の行のとおり（read-only・道具禁止の撤去。非 CoS の secretary は read-only のまま）。監査付きの操作層は ta `cos/operations.rs`（allowlist `ALLOWED`）と tc `chat/operations.rs`（同じ transaction で領域 write・`cos_operations`・監査 envelope・カード）。直接の領域 API に CoS credential を使うと 422（ta `cos/mod.rs`）。celerisctl の変更操作は ctl `commands/cos_ops.rs` で `/cos/operations` に包む。前置き skill は `config/skills/cos-operator/SKILL.md`。
+- 試験: `cos_chat_ops_store_*`（4 件、tc）。`cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_events`・`_idempotency_same_hash_same_operation_different_hash_409`・`_body_shape_and_identity_claims_are_rejected`（ta）。`cos_chat_ops_domain_*`（7 件、ta `tests/cos_operations_domains.rs`）。`cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit`・`_identity_claims_are_ignored_or_422`（ta）。`cos_chat_ops_ctl_*`（9 件、ctl）。`cos_chat_run_proto_credential_value_stays_out_of_request_json_and_prompt`（tw）。`cos_chat_harness_codex_non_cos_secretary_stays_read_only`（tw）。
+- 差分（食い違い・未実装）: D3 は「replan・pause/resume を同じ操作層で行える」とするが、`ALLOWED` に登録されているのは task.create・comment.create・decision.answer・approval.decide・execution.phase_gate・execution.plan_gate・question.answer・project.update・knowledge.reject だけである。`PUT /tasks/{id}/execution-plan`、`POST /tasks/{id}/pause|resume`、`POST /projects/{id}/pause` は未登録。一方、`config/skills/cos-operator/SKILL.md` の操作表は、replan・pause/resume（ほかに `/knowledge/inbox/{id}/accept` と `/standing-rules`）を `/cos/operations` 経由で行うと書いている。そのため CoS が skill どおりに実行すると、allowlist 外として拒否される（`cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_events` が確かめている経路）。D3 が求める KB の取り込み（accept）も同じく未登録。**人の判断事項**: (a) `ALLOWED` に execution-plan PUT・pause/resume（task・project）・knowledge accept を足し、共有の操作関数に監査 context を通す（D3 に合わせる）、(b) skill の該当行を「allowlist 未登録のため人に依頼する」に直し、D3 の「全権限」の範囲を縮める。推奨は (a)。standing-rules は D3 の人に回す基準（新しい standing permission は security）により、どちらの場合も人に回す。
+
+### D3 一次対応の起動とルーティング
+
+- 実装: `(source_kind,source_key,source_revision)` の upsert と cursor は tc `chat/triage.rs`、ingest と受信箱スレッドへの投入（1 run 最大 20 項目・cos operation 由来を除く・origin thread への参照カード）は td `dispatcher/cos_chat/triage.rs`、resolve と revision の検証は ta `cos/inbox.rs`。
+- 試験: `cos_chat_triage_store_*`（4 件、tc）。`cos_chat_triage_ingest_*`（7 件、td `dispatcher/tests/cos_chat_triage.rs`）。`cos_chat_triage_resolve_conflicts_on_stale_revision`・`cos_chat_triage_observe_needs_no_judgment`（ta）。`cos_chat_triage_a_*`（ta・td）。
+- 差分: 上の SSE の差分（triage run の output message 無し）だけ。
+
+### D3 人に回す基準
+
+- 実装: 既定 policy は `config/skills/cos-inbox-triage/`。`human_required`・`min_confidence` は cc `config/cos.rs`。API 側の決定的な検査（明示の human_required を resolve と operations の両方で拒否・confidence 欠落の扱い）は ta `cos/inbox.rs`・`cos/operations.rs`。
+- 試験: `cos_chat_triage_human_required_refused_on_resolve_and_operations`・`cos_chat_triage_b_escalates_human_matters_and_keeps_the_wait`（ta）、`cos_chat_triage_b_*`（td・cc）。
+- 差分: 表の各分類（根本変更・外部公開など）を選ぶのは CoS worker（LLM）の判断であり、決定的に試せるのは明示の human_required と構造・revision の検査だけ。これは ADR の設計どおりで、分類の正しさは実機確認（live-check 担当、未実施）で見る。
+
+### D3 代答・取り消し・差し戻し
+
+- 実装: ta `cos/override_op.rs`・tc `chat/override_op.rs`（revoke/return・消費済みの pause・superseded・needs_remediation と補償 task）。代答カードは tc `chat/operations.rs`。
+- 試験: `cos_chat_triage_override_revoke_reopens_unconsumed_decision_and_preserves_audit`・`_return_pauses_consumed_task_and_blocks_old_epoch`・`_irreversible_op_creates_remediation_task`・`_rejects_cos_credential_and_missing_reason`・`_human_revision_wins_race_with_cos_answer`・`_reblocks_released_work_unit_until_human_answer`（ta）、`cos_chat_triage_override_new_revision_reopens_triage_and_old_is_closed`（td）、`cos_chat_triage_override_revokes_a_resolved_answer_end_to_end`（ta scenarios）。
+- 差分（縮退）: plan gate の回答の withdraw は中止の連鎖を伴うため 422 で拒否する（triage.md の未解決）。
+
+### D3 Discord 通知
+
+- 実装: escalation packet の検証・web_path の照合・outbox は ta `cos/inbox.rs` と tc `chat/triage.rs`。送信（文面・1,900 文字・`allowed_mentions`・Retry-After・送信前の撤回）は cc の notifier。CoS 不在の退避は td `dispatcher/cos_chat/fallback.rs`。
+- 試験: `cos_chat_triage_escalation_packet_is_validated`・`cos_chat_triage_web_path_must_match_the_target`・`cos_chat_triage_escalate_claims_one_outbox_row`（ta）。cc `tests/cos_chat_triage_notify.rs` の 8 件（`_escalation_packet_has_bounded_text_and_absolute_link`・`_long_packet_keeps_link_within_1900_characters`・`_webhook_disables_mentions_and_obeys_retry_after` など）。`cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook`（cc scenarios）。`cos_chat_triage_fallback_*`（11 件、td）。
+- 差分: Discord の返信・リアクションを無視することは、受信経路を実装していないことの帰結であり、それを積極的に確かめる試験は無い。`notify.gui_base_url` が未設定の場合の表示を docs に反映するのは ops-docs 担当。

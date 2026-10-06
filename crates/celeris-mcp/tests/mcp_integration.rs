@@ -576,7 +576,7 @@ async fn knowledge_propose_writes_to_inbox_with_the_mcp_source_and_rejects_secre
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn console_instruct_records_an_mcp_author_and_console_reply_returns_the_reply_and_actions() {
+async fn cos_chat_legacy_mcp_instruct_and_reply_use_chat_run() {
     let server = spawn_token_server(60).await;
     create_client(
         &server.store,
@@ -638,28 +638,29 @@ async fn console_instruct_records_an_mcp_author_and_console_reply_returns_the_re
     let parsed: Value = serde_json::from_str(text).expect("inner json");
     assert_eq!(parsed["state"], "pending");
 
-    // CoS の run が終わって返事する（偽のディスパッチャの代わりに直接ストアへ書く。
-    // task-api の対話テストと同じ流儀）。
-    let task = server.store.get(task_id).unwrap().unwrap();
-    server
+    // The compatibility task is a receipt; the chat queue owns the actual run.
+    let thread = server
         .store
-        .apply_transition(task_id, task_core::Trigger::Dispatch, None)
+        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
         .unwrap();
-    task_ops::conversation::record_reply(
-        server.store.as_ref(),
-        &task,
-        "run-1",
-        "3 件のタスクを作りました",
-        OffsetDateTime::now_utc(),
-    )
-    .unwrap();
-    server
+    assert_eq!(
+        server.store.get(task_id).unwrap().unwrap().status,
+        Status::Draft
+    );
+    let run = server
         .store
-        .apply_transition(task_id, task_core::Trigger::WorkerDone, None)
+        .chat_run_claim_next(&thread, "run-1", &json!({}), OffsetDateTime::now_utc())
         .unwrap();
+    assert!(run.is_some());
     server
         .store
-        .apply_transition(task_id, task_core::Trigger::ReviewPass, None)
+        .chat_run_finish(
+            "run-1",
+            task_core::chat::ChatRunState::Completed,
+            Some("3 件のタスクを作りました"),
+            None,
+            OffsetDateTime::now_utc(),
+        )
         .unwrap();
 
     let resp = rpc(

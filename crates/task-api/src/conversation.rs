@@ -71,19 +71,36 @@ pub(crate) async fn post_message(
             if store.org_get(&id).map_err(store_problem)?.is_none() {
                 return Err(ApiProblem::org_node_not_found(&id));
             }
-            task_ops::conversation::start(
-                store,
-                &id,
-                post.project_id,
-                &post.text,
-                &roles,
-                &genres,
-                &conversation_genre,
-                OffsetDateTime::now_utc(),
-            )
+            let now = OffsetDateTime::now_utc();
+            if id == task_core::COS_ID {
+                task_ops::conversation::start_legacy_cos(
+                    store,
+                    post.project_id,
+                    None,
+                    &post.text,
+                    &roles,
+                    &genres,
+                    &conversation_genre,
+                    now,
+                )
+            } else {
+                task_ops::conversation::start(
+                    store,
+                    &id,
+                    post.project_id,
+                    &post.text,
+                    &roles,
+                    &genres,
+                    &conversation_genre,
+                    now,
+                )
+            }
             .map_err(|e| ops_problem(store, e, None))
         })
         .await?;
+    if started.message.node_id == task_core::COS_ID {
+        state.chat.events.notify_waiters();
+    }
     tracing::info!(
         who = "admin",
         op = "org_message",

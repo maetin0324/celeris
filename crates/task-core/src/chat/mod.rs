@@ -12,7 +12,7 @@ mod operations;
 #[cfg(test)]
 mod operations_tests;
 mod run_store;
-mod store;
+pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};

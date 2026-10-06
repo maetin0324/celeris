@@ -23,7 +23,7 @@
   のデータモデルのみ。届け方は Phase 79）が増えた。`GET /console` の `human` ブロックに `author` が
   増えた（§3.98）。
 - 改訂: 2026-09-21 Phase 67（ADR-0054 D1、ノードごとの継続セッションと resume）— **追加のみ。v1 のまま**。
-  エンドポイント 98: `POST /console/new-conversation`（§3.109。CoS の継続セッションを捨てる。**管理系**、
+  エンドポイント 98: `POST /console/new-conversation`（§3.109。互換 scope の既定 legacy thread を切り替える。**管理系**、
   204、本文なし）。DB のスキーマ版数は **23**（migration 0023: `node_sessions`。ノードごとの継続セッション
   の目印。本文・トークンの値は書かない）。CoS の対話・部門長のレビュー run 自体の挙動（`--resume` 等、
   前置きの差分化）は `GET /console` / `POST /console/instruct`（§3.98 / §3.107）の応答の形を変えない
@@ -381,7 +381,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 95 | POST | `/knowledge/inbox/{id}/reject` | 候補を捨てる（**管理系**） | 200 `KnowledgeRejectResult` | ファイル + コミット |
 | 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
 | 97 | GET | `/llm/sources` | LLM source ごとの到達性・残量・cooldown・直近 1 時間の要求数（ADR-0053 D4。`[llm_proxy]` が無効なら 409） | `LlmSourcesView` | celeris の `LlmSourcesReader` |
-| 98 | POST | `/console/new-conversation` | CoS の継続セッションを捨てる（ADR-0054 D1）（**管理系**） | 204 | store `node_sessions` |
+| 98 | POST | `/console/new-conversation` | 互換 scope の既定 legacy thread を新規作成（CoS chat D6、**管理系**） | 204 | store `chat_threads` / `feed_cursor` |
 | 99 | GET | `/mcp/clients` | MCP クライアントの一覧（トークンの値は出ない。ADR-0056 D4） | `McpClientsView` | store `mcp_clients` |
 | 100 | GET | `/mcp/calls` | MCP の呼び出しログ（`?client=`） | `McpCallsView` | store `mcp_calls` |
 | 101 | GET | `/skills` | skill の一覧（name / description / updated / mounted_by。ADR-0056 D3 続き、Phase 82） | `SkillList` | KB `skills/` + org |
@@ -2785,21 +2785,13 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
   選べる候補が無ければ `null`（`no_source_available` になる状態）。古いスナップショットには無いので
   省略時は空配列として扱う。
 
-### 3.109 `POST /console/new-conversation` → 204（管理系。ADR-0054 D1）
+### 3.109 `POST /console/new-conversation` → 204（管理系。CoS chat D6）
 
-CoS の**継続セッション**（`node_sessions`。§3.107 の対話 run が `--resume` 等で続けているもの）を捨てる。
-GUI の「新しい会話」ボタンの入口。**薄い**: ディスパッチャには触らず、ストアの `node_sessions.retired_at`
-を立てるだけ（DESIGN 原則 1）。
+旧 Console の「新しい会話」ボタンの入口。互換 scope の既定 legacy thread を新しく作り、次の旧入力をそこへ積む。旧 thread の履歴と新 UI の別 thread は残り、継続 session を retire しない。
 
-- 要求本文は無い（`{}` を送っても無視される）。
-- 現役セッションが有っても無くても **204**（結果として「捨てた」状態にするだけなので、既に無かったことを
-  エラーにしない）。
-- 効果: 次に人が CoS（`GET /console` の `scope=all` / `project:<id>`。§3.98）に話しかけたときの対話 run は
-  **新規セッション**（前置きは全量。§3.107 の「進行中の案件」等をもう一度渡す）から始まる。捨てなければ、
-  逼迫（`[sessions] rollover_tokens`）かアカウント変更が起きるまで、前置きは差分だけ（`session_diff`）が
-  続く。
-- 部門長（engineering/research/operations の根ノード）のレビュー・切り分け run（ADR-0051）の継続セッション
-  （`kind = lead`）はこの API の対象外（部署ごとに 1 本、GUI からの操作は今回のスコープに無い）。
+- 要求本文は無い（`{}` を送っても無視される）。省略時の scope は `all`。任意の `?scope=project:<id>` で案件の既定だけを切り替えられる。`node:cos` は `all` と同じ扱い。
+- 成功時は **204**。新しく作られた thread ID は旧応答に追加しない。
+- CoS 以外の node scope は 400。存在しない project scope は 422。管理認証が無ければ 401。
 
 ### 3.110〜3.111 MCP サーバーの観測（ADR-0056 D4。読み取り）
 

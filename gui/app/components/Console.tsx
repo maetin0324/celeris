@@ -90,7 +90,7 @@ export function Console({ data }: { data: ConsoleData }) {
         </div>
         {/* フェーズ 73（ADR-0055 D2 ラウンド 5）: モバイルは「送る」だけを主役のボタンにしたいので、
             低頻度の「新しい会話」はここでは「その他」の開閉メニューに収める（`lg:` は従来どおり常時表示）。 */}
-        <NewConversationMenu />
+        <NewConversationMenu scope={scope} />
       </div>
       <div className="grid gap-4 xl:grid-cols-[16rem_minmax(0,1fr)]">
         <ScopePicker parsedScope={parsedScope} org={org} projects={projects} />
@@ -134,17 +134,25 @@ function ConsoleInputSpacer() {
 }
 
 /**
- * ADR-0054 D1/D3（Phase 67/68）: CoS の継続セッションを捨てる（`POST /console/new-conversation`）。
+ * CoS chat D6: 互換 Console の既定 legacy thread を切り替える（`POST /console/new-conversation`）。
  * 確認は `window.confirm`（ブラウザ以外では聞かずそのまま送る。`~/components/ProjectRepos.tsx` の
- * 「削除」と同じ作り）。過去のやり取り自体は消えない（次に CoS へ話しかけたときの前置きが全量に戻るだけ）。
+ * 「削除」と同じ作り）。過去のやり取り自体は消えず、次の旧入力が新しい thread に積まれる。
  * `onSubmitted` はメニューに収めたとき（`NewConversationMenu`）に、押した直後にメニューを閉じるため。
  */
-function NewConversationButton({ onSubmitted }: { onSubmitted?: () => void }) {
+function NewConversationButton({ scope, onSubmitted }: { scope: string; onSubmitted?: () => void }) {
   const fetcher = useFetcher<ConsoleNewConversationOutcome>();
   const submitting = fetcher.state !== "idle";
   const done = fetcher.data?.ok === true;
   return (
-    <fetcher.Form method="post" action="/console/new-conversation" className="shrink-0">
+    <fetcher.Form
+      method="post"
+      action={
+        scope.startsWith("project:")
+          ? `/console/new-conversation?scope=${encodeURIComponent(scope)}`
+          : "/console/new-conversation"
+      }
+      className="shrink-0"
+    >
       <Button
         type="submit"
         variant="secondary"
@@ -154,7 +162,7 @@ function NewConversationButton({ onSubmitted }: { onSubmitted?: () => void }) {
         className="w-full justify-start lg:w-auto lg:justify-center"
         onClick={(e) => {
           if (typeof window !== "undefined" && typeof window.confirm === "function") {
-            if (!window.confirm("CoS との会話をリセットします（過去のやり取りは消えません）。よろしいですか？")) {
+            if (!window.confirm("CoS との新しい会話を始めます（過去のやり取りは消えません）。よろしいですか？")) {
               e.preventDefault();
               return;
             }
@@ -175,12 +183,12 @@ function NewConversationButton({ onSubmitted }: { onSubmitted?: () => void }) {
  * （`~/root.tsx` の `MobileOtherSheet` と同じ「押すと開く・背景ボタンで閉じる」作り）。
  * `lg:` はこれまでどおりインラインの secondary ボタンのまま（デスクトップの見た目は変えない）。
  */
-function NewConversationMenu() {
+function NewConversationMenu({ scope }: { scope: string }) {
   const [open, setOpen] = useState(false);
   return (
     <>
       <div className="hidden lg:block">
-        <NewConversationButton />
+        <NewConversationButton scope={scope} />
       </div>
       <div className="relative shrink-0 lg:hidden">
         <button
@@ -207,7 +215,7 @@ function NewConversationMenu() {
               data-testid="console-overflow-menu"
               className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-border bg-surface p-1.5 shadow-md"
             >
-              <NewConversationButton onSubmitted={() => setOpen(false)} />
+              <NewConversationButton scope={scope} onSubmitted={() => setOpen(false)} />
             </div>
           </>
         )}

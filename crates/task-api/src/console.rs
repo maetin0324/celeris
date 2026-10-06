@@ -6,11 +6,11 @@
 //!
 //! `POST /console/instruct`（D3。Phase 60b）: 素の文の入力口。`@<node-id> ` で始まる文か
 //! `scope=node:<id>` はそのノードとの対話（既存の `POST /org/{id}/messages` と同じ経路）に、
-//! それ以外は CoS（根ノード）との対話 run になる。ここは**入口を選ぶだけ**（判断は
-//! `task_ops::conversation::start`。LLM は呼ばない）。
+//! それ以外は CoS（根ノード）の legacy chat thread に積む。非 CoS は従来の
+//! `task_ops::conversation::start` に委ねる。LLM はここでは呼ばない。
 //!
-//! 読み取りは状態を変えない。引くのは `events` / `messages` / `approvals` / `reports` / `milestones`
-//! の 5 つで、どれも上限付き（`EVENT_WINDOW` / `limit`）。LLM も判断も無い（DESIGN 原則 1〜4）。
+//! 読み取りは状態を変えない。`events` / `messages` / `chat_messages` / `approvals` /
+//! `reports` / `milestones` はどれも上限付き（`EVENT_WINDOW` / `limit`）。LLM も判断も無い。
 //!
 //! ブロックの束ね方・1 行の作り方・カーソルは `task_ops::console` にある（`GET /tasks/{id}/timeline`
 //! と同じ「時刻で 1 本に並べる」規則を共有する）。
@@ -24,8 +24,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::{
     ApprovalStore, COS_ID, Event, EventRow, KnowledgeRunState, KnowledgeRunStore, ListFilter,
-    ListOrder, Message, MessageRole, MilestoneStatus, NodeSessionStore, OrgKind, ProjectId,
-    ReportFilter, ReportStore, SessionKind, SqliteStore, Status, Task, TaskId, TaskStore,
+    ListOrder, Message, MessageRole, MilestoneStatus, OrgKind, ProjectId, ReportFilter,
+    ReportStore, SqliteStore, Status, Task, TaskId, TaskStore,
 };
 use task_ops::console::{ConsoleCursor, at_nanos, group_progress, task_line};
 use time::OffsetDateTime;
@@ -51,7 +51,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/console", axum::routing::get(console))
         .route("/api/v1/console/stream", axum::routing::get(stream))
         .route("/api/v1/console/instruct", axum::routing::post(instruct))
-        // ADR-0054 D1（Phase 67）: CoS の継続セッションを捨てる（次の run から新規セッション）。
+        // D6: 互換 scope の既定 legacy thread を新規作成する。
         .route(
             "/api/v1/console/new-conversation",
             axum::routing::post(new_conversation),
@@ -161,19 +161,36 @@ async fn instruct(
                     (cos.id, project_id)
                 }
             };
-            task_ops::conversation::start(
-                store,
-                &node_id,
-                project_id,
-                &text,
-                &roles,
-                &genres,
-                &conversation_genre,
-                OffsetDateTime::now_utc(),
-            )
+            let now = OffsetDateTime::now_utc();
+            if node_id == COS_ID {
+                task_ops::conversation::start_legacy_cos(
+                    store,
+                    project_id,
+                    None,
+                    &text,
+                    &roles,
+                    &genres,
+                    &conversation_genre,
+                    now,
+                )
+            } else {
+                task_ops::conversation::start(
+                    store,
+                    &node_id,
+                    project_id,
+                    &text,
+                    &roles,
+                    &genres,
+                    &conversation_genre,
+                    now,
+                )
+            }
             .map_err(|e| ops_problem(store, e, None))
         })
         .await?;
+    if started.message.node_id == COS_ID {
+        state.chat.events.notify_waiters();
+    }
     tracing::info!(
         who = "admin",
         op = "console_instruct",
@@ -193,37 +210,40 @@ async fn instruct(
 
 // ---- POST /console/new-conversation（ADR-0054 D1。Phase 67）----
 
-/// `POST /console/new-conversation`: CoS の継続セッション（`node_sessions`）を捨てる。次の対話 run は
-/// 新規セッションから始まる（前置きは全量に戻り、ADR-0033 D4 の対話履歴の末尾 20 件が「これまでの
-/// 要約」として乗る。`task_dispatch::sessions::FreshReason::NoActive` と同じ経路）。書くのは
-/// `node_sessions` の 1 行だけ（ディスパッチへの依存は無い、thin な管理操作）。現役セッションが
-/// 既に無くても 204（結果として「無い」状態にするだけなので、無かったことをエラーにしない）。
+/// `POST /console/new-conversation`: 互換 scope の既定 legacy thread を切り替える。
+/// 旧 thread と新 UI の thread は保存し、204 を返す。
 async fn new_conversation(
     State(state): State<ApiState>,
     headers: HeaderMap,
     RawQuery(raw): RawQuery,
 ) -> ApiResult {
-    no_query(&raw)?;
     require_admin(&state, &headers)?;
+    let query = QueryParams::parse(raw.as_deref(), &["scope"])?;
+    let project_id = match Scope::parse(query.single("scope")?)? {
+        Scope::All => None,
+        Scope::Node(id) if id == COS_ID => None,
+        Scope::Node(_) => {
+            return Err(ApiProblem::bad_request(
+                "new conversation requires a CoS scope",
+            ));
+        }
+        Scope::Project(id) => Some(id),
+    };
     state
         .blocking(move |store| {
-            let retired = store
-                .node_session_retire(
-                    COS_ID,
-                    SessionKind::Conversation,
-                    None,
-                    OffsetDateTime::now_utc(),
-                )
-                .map_err(store_problem)?;
+            let thread_id = store
+                .chat_legacy_new_conversation(project_id, OffsetDateTime::now_utc())
+                .map_err(crate::chat::chat_problem)?;
             tracing::info!(
                 who = "admin",
                 op = "console_new_conversation",
-                retired,
-                "admin: retired the CoS continuation session"
+                thread_id,
+                "admin: created a new default legacy thread"
             );
             Ok(())
         })
         .await?;
+    state.chat.events.notify_waiters();
     Ok(axum::response::IntoResponse::into_response(
         StatusCode::NO_CONTENT,
     ))
@@ -570,6 +590,12 @@ pub(crate) fn side_blocks(
         .message_page(scope.node(), scope.project(), after_at.as_deref(), limit)
         .map_err(store_problem)?;
     for message in messages {
+        blocks.push(message_block(&message));
+    }
+    for message in store
+        .chat_legacy_console_messages(scope.project(), scope.node(), after_at.as_deref(), limit)
+        .map_err(crate::chat::chat_problem)?
+    {
         blocks.push(message_block(&message));
     }
 

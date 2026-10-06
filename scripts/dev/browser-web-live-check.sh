@@ -189,7 +189,10 @@ done
 [[ -s $EVIDENCE/health.json ]] || { echo "test daemon health timeout" >&2; exit 1; }
 
 mkdir -p "$EVIDENCE/page"
-printf '<!doctype html><title>Celeris browser check</title><p id="inside">inside</p>\n' > "$EVIDENCE/page/index.html"
+cat > "$EVIDENCE/page/index.html" <<EOF
+<!doctype html><title>Celeris browser check</title><p id="inside">inside</p>
+<a id="forbidden-link" href="$DENIED_ORIGIN/">Follow this link to test the forbidden origin</a>
+EOF
 setsid python3 -m http.server "$PAGE_PORT" --bind 127.0.0.1 --directory "$EVIDENCE/page" >"$EVIDENCE/page.log" 2>&1 &
 PAGE_PID=$!
 for _ in {1..100}; do
@@ -398,7 +401,10 @@ try:
     if grant_domains(restored) != [page] or grant_domains(stored) != [page]:
         raise AssertionError(f"settings restore not stored: {grant_domains(stored)}")
     log.append({"step":"settings edit", "allowed_domains":grant_domains(stored), "result":"passed"})
-    body = {"title":"loopback browser live check", "objective":f"Visit {page}, read #inside, attempt navigation to {denied_origin} and report that egress denied it; then wait for this check to finish.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
+    # The forbidden URL must be followed by Chrome from the allowed page. An explicit
+    # navigate action is rejected by the wrapper before it reaches the egress proxy.
+    body = {"title":"loopback browser live check", "objective":f"Open {page}, read #inside, take a snapshot, then click the 'Follow this link to test the forbidden origin' link using its snapshot @e reference. Let Chrome follow the link to {denied_origin}; report the failed load, then wait for this check to finish. Do not use a navigate/open action for the forbidden URL.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
+    log.append({"step":"launcher log boundary", "daemon_log_offset":(out/"daemon.log").stat().st_size})
     task = checked("task POST", api+"/tasks", "POST", body, auth=True, expected=201)
     task_id = task["id"]
     # Dispatch refuses a browser run without a stored task policy (browser_policy_required, D2).
@@ -477,18 +483,34 @@ finally:
     (out/"checks.json").write_text(json.dumps(log, indent=2, ensure_ascii=False)+"\n")
 PY
 
-sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$EVIDENCE/checks.json" <<'PY' >"$DENIAL_FILE"
+sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$EVIDENCE/checks.json" "$EVIDENCE/daemon.log" <<'PY' >"$DENIAL_FILE"
 import json, pathlib, re, sys, time
 state = pathlib.Path(sys.argv[1])
 page_port, denied_port = map(int, sys.argv[2:4])
 checks = json.loads(pathlib.Path(sys.argv[4]).read_text())
-session_id = next(row["session_id"] for row in checks if "session_id" in row and "run_id" in row)
-if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id):
-    raise SystemExit("invalid browser session id in checks")
-sessions = state / "sessions"
+daemon_log = pathlib.Path(sys.argv[5])
+offset = next(row["daemon_log_offset"] for row in checks if row.get("step") == "launcher log boundary")
+# The daemon logs the session_id from the launcher's Started response. Its browser
+# run session_id in /browser/runs and checks.json is a different identifier.
+ansi = re.compile(r"\x1b\[[0-9;]*m")
+marker = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
+def launcher_ids():
+    with daemon_log.open("rb") as stream:
+        stream.seek(offset)
+        tail = stream.read().decode(errors="replace")
+    return set(marker.findall(ansi.sub("", tail)))
 deadline = time.monotonic() + 30
+while not (ids := launcher_ids()) and time.monotonic() < deadline:
+    time.sleep(0.2)
+if len(ids) != 1:
+    raise SystemExit(f"expected one launcher Started session after task creation, found {len(ids)}")
+session_id = ids.pop()
+sessions = state / "sessions"
+deadline = time.monotonic() + 90
 records = []
 while time.monotonic() < deadline:
+    if launcher_ids() != {session_id}:
+        raise SystemExit("multiple launcher sessions after task creation; denial is ambiguous")
     records = []
     record_file = sessions / session_id / "egress-denied.jsonl"
     if record_file.is_file():

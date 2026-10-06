@@ -229,8 +229,22 @@ pub(crate) async fn human_required_for_operation(
                 .then(|| matched.id.as_deref().and_then(|id| id.parse().ok()))
                 .flatten()
         });
+    let override_source = match matched.action {
+        "decision.answer" => matched.id.as_ref().map(|id| ("decision", id.clone())),
+        "approval.decide" => matched.id.as_ref().map(|id| ("authorization", id.clone())),
+        _ => None,
+    };
     state
-        .blocking(move |store| human_required_reason(store, kind, task_id))
+        .blocking(move |store| {
+            if let Some((source_kind, id)) = override_source
+                && store
+                    .cos_override_wait_requires_human(source_kind, &id)
+                    .map_err(cos_problem)?
+            {
+                return Ok(Some("human override wait".into()));
+            }
+            human_required_reason(store, kind, task_id)
+        })
         .await
 }
 
@@ -433,6 +447,9 @@ async fn resolve(
                             unprocessable("validation", "a notice has nothing to answer")
                         }));
                     };
+                    if store.cos_override_wait_requires_human(&item.source_kind,&item.source_key).map_err(cos_problem)? {
+                        return Err(reject(human_required_problem("human override wait")));
+                    }
                     if let Some(why) = human_required_reason(
                         store,
                         Some(found.kind),

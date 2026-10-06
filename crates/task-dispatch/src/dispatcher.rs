@@ -1076,6 +1076,7 @@ struct ReviewEntry {
 
 pub struct Dispatcher {
     store: Arc<dyn TaskStore>,
+    cos_chat_launch: Option<cos_chat::launch::CosChatLaunch>,
     policy: Box<dyn ProviderPolicy>,
     models: HashMap<ProviderId, String>,
     /// プロバイダ（= アカウント）ごとのアダプタのインスタンス（ADR-0012 D1）。
@@ -1409,6 +1410,7 @@ impl Dispatcher {
         }
         Self {
             store,
+            cos_chat_launch: None,
             policy,
             models,
             adapters,
@@ -1659,7 +1661,14 @@ impl Dispatcher {
     /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の instance は検査を始めず、手元の検査も最初の tick で
     /// 手放す（`hand_off_checks_in_hand`）ので、draining 中の `checking` は空になり、drain は run の終わりで完了する。
     pub fn in_flight(&self) -> usize {
-        self.running.len() + self.reviewing.len() + self.checking.len() + self.integrating.len()
+        self.running.len()
+            + self.reviewing.len()
+            + self.checking.len()
+            + self.integrating.len()
+            + self
+                .cos_chat_launch
+                .as_ref()
+                .map_or(0, |chat| chat.running.len())
     }
 
     pub fn set_delivery_policy(&mut self, policy: task_ops::delivery::DeliveryPolicy) {
@@ -1733,6 +1742,15 @@ impl Dispatcher {
                 .values()
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
+            + self.cos_chat_launch.as_ref().map_or(0, |chat| {
+                if chat.config.harness != adapter.as_str() {
+                    return 0;
+                }
+                chat.accounts_in_flight
+                    .values()
+                    .filter(|account| *account == id)
+                    .count()
+            })
     }
 
     /// ADR-0025 D1: `login_pending_accounts` のキー（同じ id でもアダプタが違えば別のログインとして扱う）。
@@ -2003,6 +2021,7 @@ impl Dispatcher {
         } else {
             0
         };
+        self.tick_cos_chat_launch();
         let dispatch_ms = lap(&mut at);
         report.in_flight = self.in_flight();
         report.idle = self.is_idle()?;
@@ -2118,6 +2137,10 @@ impl Dispatcher {
     /// ADR-0089（Phase R6-5）: 走っている CoS の対話 run の数。
     fn cos_in_flight(&self) -> usize {
         self.running.values().filter(|e| e.cos).count()
+            + self
+                .cos_chat_launch
+                .as_ref()
+                .map_or(0, |chat| chat.running.len())
     }
 
     /// ADR-0089（Phase R6-5）: 並列度の会計（`crate::capacity::RunLoad`）。
@@ -2156,6 +2179,12 @@ impl Dispatcher {
             .values()
             .filter(|e| e.cos && &e.provider == provider)
             .count()
+            + self.cos_chat_launch.as_ref().map_or(0, |chat| {
+                chat.providers_in_flight
+                    .values()
+                    .filter(|active| *active == provider)
+                    .count()
+            })
     }
 
     /// そのプロバイダで走っている run の数。ADR-0089（Phase R6-5）: CoS の対話 run は数えない
@@ -2239,7 +2268,13 @@ impl Dispatcher {
     }
 
     fn is_idle(&self) -> Result<bool, DispatchError> {
-        if !self.running.is_empty() || !self.reviewing.is_empty() {
+        if !self.running.is_empty()
+            || !self.reviewing.is_empty()
+            || self
+                .cos_chat_launch
+                .as_ref()
+                .is_some_and(|chat| !chat.running.is_empty())
+        {
             return Ok(false);
         }
         if !self.store.list(Some(Status::Running))?.is_empty() {

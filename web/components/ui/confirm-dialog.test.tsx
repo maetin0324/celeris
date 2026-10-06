@@ -2,13 +2,13 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import type { ConfirmDialogProps } from "./confirm-dialog";
-import { openOverlayFixture, seriousViolations } from "./overlay-browser-test";
+import { openOverlayFixture, OVERLAY_FIXTURE_TIMEOUT, seriousViolations } from "./overlay-browser-test";
 
 describe("ConfirmDialog", () => {
   let fixture: Awaited<ReturnType<typeof openOverlayFixture>>;
   beforeAll(async () => {
     fixture = await openOverlayFixture();
-  }, 30_000);
+  }, OVERLAY_FIXTURE_TIMEOUT);
   afterAll(async () => {
     await fixture?.close();
   });

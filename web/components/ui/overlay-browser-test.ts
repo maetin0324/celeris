@@ -6,6 +6,9 @@ import { createServer, type ViteDevServer } from "vite";
 
 const axePath = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
+// Fixture startup and browser operations can be slow when the UI test files run together.
+export const OVERLAY_FIXTURE_TIMEOUT = 120_000;
+
 export async function seriousViolations(page: Page) {
   await page.addScriptTag({ path: axePath });
   return page.evaluate(async () => {
@@ -34,10 +37,13 @@ export async function openOverlayFixture(
     await server.listen();
     const address = server.httpServer?.address();
     if (!address || typeof address === "string") throw new Error("Vite の port を取得できません");
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: true, timeout: OVERLAY_FIXTURE_TIMEOUT });
     const page = await browser.newPage();
-    await page.goto(`http://127.0.0.1:${address.port}${fixturePath}`);
-    await page.getByRole("heading", { level: 1 }).waitFor();
+    await page.goto(`http://127.0.0.1:${address.port}${fixturePath}`, {
+      waitUntil: "domcontentloaded",
+      timeout: OVERLAY_FIXTURE_TIMEOUT,
+    });
+    await page.getByRole("heading", { level: 1 }).waitFor({ timeout: OVERLAY_FIXTURE_TIMEOUT });
     return {
       page,
       close: async () => {

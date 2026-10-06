@@ -1320,6 +1320,29 @@ export function createFakeDaemon({
   let holdRule = hold;
   const held = [];
   const browserBackend = browser ? createBrowserBackend(browser === true ? {} : browser) : null;
+  // browser 設定の専用管理 API。初期 grant は loopback の 2 origin だけ。
+  const browserSettingsEvents = [];
+  if (browserBackend) {
+    const org = fixtures["/api/v1/org"] ?? { items: [] };
+    fixtures["/api/v1/org"] = org;
+    org.items.push({
+      id: "browser-execution",
+      name: "ブラウザ実行",
+      kind: "section",
+      parent_id: "software-engineering",
+      created_at: "2026-10-06T00:00:00Z",
+      updated_at: "2026-10-06T00:00:00Z",
+      profile: {
+        browser: {
+          allowed_domains: ["http://localhost:3000", "http://127.0.0.1:3000"],
+          credential_policy_ids: [],
+          credential_identity_ids: {},
+        },
+        harnesses: { allowed: ["codex"], default: "codex" },
+        budget: { max_attempts: 2, max_lane: "standard" },
+      },
+    });
+  }
   const inbox = {
     items: [...(inboxItems ?? inboxItemsFixture()), ...(browserBackend?.inboxItems() ?? [])],
     notices: notices ?? noticesFixture(),
@@ -1404,6 +1427,65 @@ export function createFakeDaemon({
         });
         return;
       }
+    }
+    if (browserBackend && pathname === "/api/v1/org/browser-execution/browser-settings" && req.method === "PATCH") {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        record.body = Buffer.concat(chunks).toString("utf8");
+        const json = (status, value) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(value));
+        };
+        let patch;
+        try {
+          patch = JSON.parse(record.body);
+        } catch {
+          return json(400, { code: "bad_request" });
+        }
+        const bad = (field, message) =>
+          json(422, { code: "validation", detail: message, errors: [{ field, message }] });
+        const domains = patch.allowed_domains;
+        if (domains !== undefined) {
+          if (!Array.isArray(domains) || domains.length === 0)
+            return bad("browser.allowed_domains", "at least one origin is required");
+          for (const origin of domains) {
+            const wildcard =
+              typeof origin === "string" && /^https:\/\/\*\.([a-z0-9-]+\.)+[a-z0-9-]+(?::\d+)?$/.test(origin);
+            const wildcardBase = wildcard ? origin.slice("https://*.".length).replace(/:\d+$/, "") : "";
+            const labels = wildcardBase.split(".");
+            const publicSuffix =
+              wildcard &&
+              (labels.length === 1 ||
+                (labels.length === 2 && labels[1].length === 2) ||
+                ["github.io", "appspot.com", "pages.dev", "cloudfront.net"].includes(wildcardBase));
+            const plain = typeof origin === "string" && /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]+(?::\d+)?$/.test(origin);
+            const loopback =
+              typeof origin === "string" && /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(origin);
+            if (publicSuffix || (!wildcard && !plain && !loopback))
+              return bad("browser.allowed_domains", "expected valid browser origins (scheme or wildcard)");
+          }
+        }
+        const org = fixtures["/api/v1/org"];
+        const node = org.items.find((item) => item.id === "browser-execution");
+        const before = structuredClone(node.profile);
+        if (domains !== undefined) node.profile.browser.allowed_domains = domains;
+        if (patch.credential_policy_ids !== undefined)
+          node.profile.browser.credential_policy_ids = patch.credential_policy_ids;
+        if (patch.credential_identity_ids !== undefined)
+          node.profile.browser.credential_identity_ids = patch.credential_identity_ids;
+        if (patch.harnesses !== undefined) node.profile.harnesses = patch.harnesses;
+        if (patch.budget !== undefined) node.profile.budget = patch.budget;
+        node.updated_at = "2026-10-06T01:23:45Z";
+        browserSettingsEvents.push({
+          actor: "admin",
+          ts: node.updated_at,
+          before,
+          after: structuredClone(node.profile),
+        });
+        return json(200, node);
+      });
+      return;
     }
     // ops: daemon/providers (P4-12)
     if (pathname === "/api/v1/replay" || pathname.startsWith("/api/v1/providers") || pathname === "/api/v1/reload") {
@@ -1863,6 +1945,7 @@ export function createFakeDaemon({
     inbox,
     // 偽 browser backend（`browser` を渡したときだけ。受けた body は browser.records）。
     browser: browserBackend,
+    browserSettingsEvents,
     setInboxItems(items) {
       inbox.items = items;
       sendEvent("inbox_changed", {});

@@ -86,6 +86,12 @@ export function createFakeDaemon(options?: FakeDaemonOptions): {
     answers: Array<{ id: string; option?: string; note?: string; payload?: unknown }>;
   };
   browser: BrowserBackend | null;
+  browserSettingsEvents: Array<{
+    actor: string;
+    ts: string;
+    before: Record<string, unknown>;
+    after: Record<string, unknown>;
+  }>;
   setInboxItems(items: import("../../api/generated/types").InboxItem[]): void;
   setNotices(notices: import("../../api/generated/types").Notice[]): void;
   setDelay(value: number): void;

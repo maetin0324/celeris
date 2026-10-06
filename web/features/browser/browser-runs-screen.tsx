@@ -45,6 +45,14 @@ export function BrowserRunsScreen() {
       route="/browser"
       description="ブラウザ実行の状態と、人の対応を待っている依頼を確認します。"
     >
+      <div className="mb-4 flex justify-end">
+        <Link
+          to="/browser/settings"
+          className="inline-flex min-h-11 items-center text-link underline underline-offset-2"
+        >
+          ブラウザ実行課の設定
+        </Link>
+      </div>
       <FetchFrame query={owner} subject="本人確認">
         {owner.data && notice ? (
           <div data-testid="browser-owner-required" className="space-y-3">

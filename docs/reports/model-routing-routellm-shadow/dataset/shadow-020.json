@@ -1,0 +1,1 @@
+{"request_id": "shadow-020", "context_features": {"synthetic_category": "medium"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Write unit tests in Rust for a function that parses a comma-separated list of integers."}

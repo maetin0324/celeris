@@ -349,7 +349,7 @@ impl Dispatcher {
         // tier`（既定 standard。E3〜E6 は frontier 固定だった）。人が Task に `tier:frontier` を
         // 明示していれば `TierSource::Human` として記録する。D21: WU の run は WU の view
         // （objective/acceptance/budget/genre/features を差し替えたもの）で lane を決める。
-        let lane_decision = if is_planner_dispatch {
+        let (lane_decision, escalation_audit) = if is_planner_dispatch {
             let tier = task.worker_hint.tier;
             let (source, rule_id, reason) = if planner_human_frontier {
                 (
@@ -375,23 +375,29 @@ impl Dispatcher {
                         .to_string(),
                 )
             };
-            Some(task_core::LaneDecision {
-                lane: tier,
-                proposed: tier,
-                source,
-                rule_id,
-                policy_version: task_core::LANE_POLICY_VERSION.to_string(),
-                features: task_core::TaskFeatures::infer(&task),
-                reasons: vec![reason],
-                clamped_by: None,
-                hint: None,
-                escalation: None,
-                shadow: None,
-            })
+            (
+                Some(task_core::LaneDecision {
+                    lane: tier,
+                    proposed: tier,
+                    source,
+                    rule_id,
+                    policy_version: task_core::LANE_POLICY_VERSION.to_string(),
+                    features: task_core::TaskFeatures::infer(&task),
+                    reasons: vec![reason],
+                    clamped_by: None,
+                    hint: None,
+                    escalation: None,
+                    shadow: None,
+                }),
+                None,
+            )
         } else if let Some(wu) = &current_wu {
-            self.decide_lane_for_work_unit(&task, wu)?
+            // WU の lane は task の lane を上限にする（ADR-0074 D5.2）。軌跡 escalation は task の
+            // run だけに掛け、WU の retry では上げない（ADR-0072 D21）。
+            (self.decide_lane_for_work_unit(&task, wu)?, None)
         } else {
             self.decide_lane(&task)?
+                .map_or((None, None), |(decision, audit)| (Some(decision), audit))
         };
         if let Some(decision) = &lane_decision {
             task.worker_hint.tier = decision.lane;
@@ -401,49 +407,129 @@ impl Dispatcher {
         // 軽く行う。継続セッションを見つけてから選ぶのでないと、ADR-0049 ランキングが先に別の
         // アダプタ・アカウントへ倒れてしまう）。
         let sticky_session = self.cos_conversation_session(&task)?;
-        // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
-        let (picked, provider_selection) = self.select_provider_for(
-            &task.worker_hint,
-            now,
-            task.id,
-            full,
-            sticky_session.as_ref(),
-            cos,
-            true,
-        );
-        let Some((adapter_id, provider_id, selected_account)) = picked else {
-            return Ok(false);
-        };
-        let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
-            tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for provider");
-            return Ok(false);
-        };
-        // ADR-0024 D2 / ADR-0025 D2: プールで選んだアカウントの env を重ねる。`with_env` が `None` を返すのは
-        // アダプタの実装漏れ（設定検証で account_pool は claude-code/codex 限定にしているため通常は起きない）
-        // なので、このタスクは今回見送る。
-        let adapter = match &selected_account {
-            Some((account_adapter, account_id)) => {
-                match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
-                    Some(a) => a,
-                    None => {
-                        tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools (with_env returned None); skipping this tick");
-                        return Ok(false);
+        // multi-objective routing Phase 2: mode=enforce（opt-in）だけ候補 allowlist と source 状態で選ぶ。
+        // quota の枯渇・圧迫は lane を下げず、同じ lane の別 source を先に試し、無ければ defer する。
+        let mut enforce_round = self
+            .enforce_active()
+            .then(|| self.enforce_round(&task.worker_hint));
+        let mut enforce_full = full.clone();
+        let (
+            adapter_id,
+            provider_id,
+            selected_account,
+            provider_selection,
+            adapter,
+            tier,
+            routing_reason,
+        ) = loop {
+            // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
+            let (picked, provider_selection) = match &enforce_round {
+                Some(round) => {
+                    // enforce の除外は満杯の集合へ混ぜない（他の task の判定を汚さない）。
+                    let excluded = round.excluded.clone();
+                    let result = self.select_provider_excluding(
+                        &task.worker_hint,
+                        now,
+                        task.id,
+                        &mut enforce_full,
+                        sticky_session.as_ref(),
+                        cos,
+                        true,
+                        &excluded,
+                    );
+                    full.extend(enforce_full.iter().cloned());
+                    result
+                }
+                None => self.select_provider_for(
+                    &task.worker_hint,
+                    now,
+                    task.id,
+                    full,
+                    sticky_session.as_ref(),
+                    cos,
+                    true,
+                ),
+            };
+            let Some((adapter_id, provider_id, selected_account)) = picked else {
+                if let Some(round) = &enforce_round {
+                    tracing::info!(task_id = %task.id, tier = ?task.worker_hint.tier, excluded = %round.summary(),
+                        "routing enforce: no source in the requested lane; deferring (lane is not lowered)");
+                }
+                return Ok(false);
+            };
+            let Some(base_adapter) = self.adapters.get(&provider_id).cloned() else {
+                tracing::warn!(task_id = %task.id, provider = %provider_id, adapter = %adapter_id, "no adapter instance for provider");
+                return Ok(false);
+            };
+            // ADR-0024 D2 / ADR-0025 D2: プールで選んだアカウントの env を重ねる。`with_env` が `None` を返すのは
+            // アダプタの実装漏れ（設定検証で account_pool は claude-code/codex 限定にしているため通常は起きない）
+            // なので、このタスクは今回見送る。
+            let adapter = match &selected_account {
+                Some((account_adapter, account_id)) => {
+                    match self.adapter_for_account(&base_adapter, *account_adapter, account_id) {
+                        Some(a) => a,
+                        None => {
+                            tracing::warn!(task_id = %task.id, provider = %provider_id, account_id, "adapter does not support account pools (with_env returned None); skipping this tick");
+                            return Ok(false);
+                        }
+                    }
+                }
+                None => base_adapter,
+            };
+            if let Some(round) = enforce_round.as_mut() {
+                let state = self.source_state_of(&provider_id, selected_account.as_ref(), now);
+                match self.enforce_check_source(task.worker_hint.tier, &state) {
+                    Ok(reason) => {
+                        round.observed_at = state.observed_at.clone();
+                        break (
+                            adapter_id,
+                            provider_id,
+                            selected_account,
+                            provider_selection,
+                            adapter,
+                            task.worker_hint.tier,
+                            reason,
+                        );
+                    }
+                    Err((codes, detail)) => {
+                        Self::enforce_exclude(round, &provider_id, &codes, detail);
+                        continue;
                     }
                 }
             }
-            None => base_adapter,
+            let remaining = selected_account.as_ref().and_then(|(kind, id)| {
+                let book = self.account_book(*kind)?;
+                let book = book.lock().ok()?;
+                let observation = book.state(id)?.usage.as_ref()?;
+                crate::accounts::measured_remaining(observation, (self.now_unix_fn)())
+            });
+            let (tier, routing_reason) =
+                match task_core::model_routing::select_tier(task.worker_hint.tier, remaining) {
+                    Ok(decision) => decision,
+                    Err(_) => return Ok(false), // quota refresh will make this task eligible again
+                };
+            break (
+                adapter_id,
+                provider_id,
+                selected_account,
+                provider_selection,
+                adapter,
+                tier,
+                routing_reason,
+            );
         };
-        let remaining = selected_account.as_ref().and_then(|(kind, id)| {
-            let book = self.account_book(*kind)?;
-            let book = book.lock().ok()?;
-            let observation = book.state(id)?.usage.as_ref()?;
-            crate::accounts::measured_remaining(observation, (self.now_unix_fn)())
+        // 多目的 routing Phase 4: mode=shadow だけ、primary（legacy）を決めた直後の同じ候補行・source 状態で
+        // 候補 policy の判断を純粋に計算する（run の登録より前。追加の呼出し・状態の書換えはしない）。
+        let decision_shadow = self.shadow_active().then(|| {
+            self.decision_shadow_round(
+                &task.worker_hint,
+                cos,
+                &provider_id,
+                selected_account.as_ref(),
+                &provider_selection,
+                now,
+            )
         });
-        let (tier, routing_reason) =
-            match task_core::model_routing::select_tier(task.worker_hint.tier, remaining) {
-                Ok(decision) => decision,
-                Err(_) => return Ok(false), // quota refresh will make this task eligible again
-            };
         // A legacy provider has no tier mapping: keep its historical behavior.
         if adapter
             .model_for_tier(task.worker_hint.tier)
@@ -528,6 +614,8 @@ impl Dispatcher {
         )?;
         // ADR-0077 D1 の dispatch での途中目標の `in_progress` は ADR-0079 D13（Phase R5a）で廃止（途中目標は凍結）。
         // ADR-0069 D5: この run の routing の監査記録（担当・harness・lane・model・features・規則）。
+        // 多目的 routing Phase 3: 同じ decision_id で `routing_features_recorded` を後で 1 回追記する。
+        let mut routing_decision_id: Option<String> = None;
         if let Some(mut decision) = lane_decision {
             if task_core::model_policy::lane_rank(task.worker_hint.tier)
                 < task_core::model_policy::lane_rank(decision.lane)
@@ -558,7 +646,27 @@ impl Dispatcher {
                 decision,
                 // ADR-0072 D21（Phase E3）: WU の run だけ `work_unit_id` を持つ。
                 work_unit_id: current_wu.as_ref().map(|wu| wu.id.clone()),
+                // Phase 3（ADR 2026-10-04 §5）: 上げた/上げなかった決定の構造化監査。task の run だけ。
+                escalation: escalation_audit,
+                optimizer: match &enforce_round {
+                    Some(round) => Some(self.enforce_optimizer_trace(
+                        &task.worker_hint,
+                        &run_id,
+                        round,
+                        &provider_id,
+                        &model,
+                        account.as_deref(),
+                    )),
+                    None => self.legacy_optimizer_trace(&task.worker_hint, &run_id, &provider_id),
+                },
             };
+            routing_decision_id = Some(
+                record
+                    .optimizer
+                    .as_ref()
+                    .map(|t| t.decision_id.clone())
+                    .unwrap_or_else(|| format!("run:{run_id}")),
+            );
             self.store.append_event(
                 task.id,
                 &Event::RoutingDecided {
@@ -566,6 +674,23 @@ impl Dispatcher {
                     record: Box::new(record),
                 },
             )?;
+            // Phase 4 decision shadow: primary と別欄の記録 1 件（primary の選択・結果は変えない）。
+            if let (Some(round), Some(decision_id)) = (&decision_shadow, &routing_decision_id) {
+                let shadow = Self::decision_shadow_record(
+                    round,
+                    decision_id,
+                    &run_id,
+                    &provider_id,
+                    &model,
+                    task.worker_hint.tier,
+                );
+                self.store.append_event(
+                    task.id,
+                    &Event::RoutingShadowRecorded {
+                        record: Box::new(shadow),
+                    },
+                )?;
+            }
         }
         if matches!(adapter_id.as_str(), "claude-code" | "codex") {
             self.store.append_event(task.id, &Event::worker_progress(&run_id,
@@ -833,6 +958,33 @@ impl Dispatcher {
         if !is_planner_dispatch {
             self.capture_run_write_bases(&task, &run_id, worktree.as_ref());
         }
+        // 多目的 routing Phase 3（ADR 2026-10-04 §3.4・§6）: task / WU / 実効 profile / 履歴から RoutingContext を
+        // 組み、features を記録し、registry があれば run に結んで ref を worker の文脈に載せる。
+        let routing_events: Vec<Event> = match self.store.events_for(task.id) {
+            Ok(events) => events.into_iter().map(|(_, e)| e).collect(),
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, %run_id, error = %e, "failed to read events for the routing context");
+                Vec::new()
+            }
+        };
+        extras.routing_context_ref = self.record_routing_context(
+            &routing_context::RoutingContextInput {
+                task: &task,
+                work_unit: current_wu.as_ref(),
+                run_id: &run_id,
+                role: if is_planner_dispatch {
+                    routing_context::RoutingRunRole::Planner
+                } else {
+                    routing_context::RoutingRunRole::Worker
+                },
+                harness: &adapter_id,
+                profile: extras.profile.as_ref(),
+                cluster: cluster.as_ref().map(|(spec, ..)| spec.id.as_str()),
+                events: &routing_events,
+            },
+            routing_decision_id.as_deref(),
+            ttl,
+        );
         let handle = self.spawn_worker(
             task.id,
             task.worker_hint.tier,
@@ -1123,12 +1275,14 @@ impl Dispatcher {
     /// 呼び出し側）。**先頭のリポジトリの** `[commands] check` だけを使う。
     /// ADR-0069 D3 / D6（Phase 114）: このタスクの lane を決める（`routing` を持つ execute タスクだけ。
     /// それ以外は `None` で従来どおり `worker_hint.tier`）。担当の実効 profile の天井（`allowed_tiers` /
-    /// `budget.max_lane`）で丸め、やり直し（`attempts > 0`）ならイベントの履歴から
-    /// `EscalationPolicy` で 1 段まで上げる。LLM は使わない（DESIGN 原則 1）。
+    /// `budget.max_lane`）で丸め、やり直し（`attempts > 0`）ならイベントの軌跡から
+    /// `EscalationPolicy::decide_trajectory` で 1 段まで上げる。上げた/上げなかった決定を
+    /// `EscalationAudit` として返す（`RoutingRecord.escalation` に残す）。LLM は使わない（DESIGN 原則 1）。
     pub(super) fn decide_lane(
         &self,
         task: &Task,
-    ) -> Result<Option<task_core::LaneDecision>, DispatchError> {
+    ) -> Result<Option<(task_core::LaneDecision, Option<task_core::EscalationAudit>)>, DispatchError>
+    {
         if task.routing.is_none() || task.kind != TaskKind::Execute {
             return Ok(None);
         }
@@ -1145,28 +1299,47 @@ impl Dispatcher {
         let Some(mut decision) = task_core::model_policy::decide_for_task(task, &ceiling) else {
             return Ok(None);
         };
-        if task.attempts > 0 && decision.source.policy_decides() {
+        let mut audit = None;
+        // 人の明示・System の lane も評価する（上げず、理由を audit に残す。`decide_trajectory` が判定）。
+        if task.attempts > 0 {
             let events: Vec<Event> = self
                 .store
                 .events_for(task.id)?
                 .into_iter()
                 .map(|(_, e)| e)
                 .collect();
-            let history = task_core::retry_policy::attempt_history(task, &events);
-            let policy = task_core::EscalationPolicy::for_task(task, profile.as_ref());
-            let next = policy.decide(&history, decision.lane, task_core::BudgetState::Ok);
-            if next.lane() != decision.lane {
+            let (history, interval_id) =
+                task_core::retry_policy::attempt_history_with_interval(task, &events);
+            let thresholds = task_core::EscalationThresholds {
+                org_ceiling: ceiling.clone(),
+                ..self.dispatch_routing.escalation.clone()
+            };
+            let policy = task_core::EscalationPolicy::for_task_with_thresholds(
+                task,
+                profile.as_ref(),
+                &thresholds,
+            );
+            let next = policy.decide_trajectory(
+                &history,
+                decision.lane,
+                decision.source,
+                task_core::BudgetState::Ok,
+                &thresholds,
+                &interval_id,
+            );
+            let described = describe_escalation(&next);
+            if next.selected_lane != decision.lane {
                 decision.reasons.push(format!(
                     "retry lane {:?} -> {:?}",
-                    decision.lane,
-                    next.lane()
+                    decision.lane, next.selected_lane
                 ));
             }
-            decision.lane = next.lane();
-            decision.escalation = Some(next.describe());
-            tracing::info!(task_id = %task.id, attempts = task.attempts, decision = %next.describe(), "retry lane decided (ADR-0069 D6)");
+            decision.lane = next.selected_lane;
+            decision.escalation = Some(described.clone());
+            tracing::info!(task_id = %task.id, attempts = task.attempts, decision = %described, "retry lane decided (ADR-0069 D6 / ADR 2026-10-04 §5)");
+            audit = Some(next);
         }
-        Ok(Some(decision))
+        Ok(Some((decision, audit)))
     }
 
     /// ADR-0046 D5（Phase 59）: `assignee` が無い `ready` のタスクの担当を**決定的に**決める。
@@ -1326,5 +1499,27 @@ fn direct_route_context(
             .filter(|r| r.ok)
             .map(|r| format!("{}: {}", r.rule_id, r.detail))
             .collect(),
+    }
+}
+
+/// 軌跡 escalation の監査を 1 行にする。上げた決定は `escalate <from> -> <to>: <理由>` で始まる
+/// （旧 `RetryDecision::describe` と同じ書式）。上げなかった決定は `retry at <lane>: <理由>`。
+fn describe_escalation(audit: &task_core::EscalationAudit) -> String {
+    let current = audit
+        .previous_lane
+        .filter(|l| {
+            task_core::model_policy::lane_rank(*l)
+                >= task_core::model_policy::lane_rank(audit.requested_lane)
+        })
+        .unwrap_or(audit.requested_lane);
+    if task_core::model_policy::lane_rank(audit.selected_lane)
+        > task_core::model_policy::lane_rank(current)
+    {
+        format!(
+            "escalate {current:?} -> {:?}: {}",
+            audit.selected_lane, audit.reason
+        )
+    } else {
+        format!("retry at {:?}: {}", audit.selected_lane, audit.reason)
     }
 }

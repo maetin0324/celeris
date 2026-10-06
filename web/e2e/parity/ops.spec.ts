@@ -138,6 +138,9 @@ test.describe("P4-12 daemon/providers", () => {
     await page.goto(`${base}/providers`);
     await expect(page.getByRole("heading", { level: 1, name: "プロバイダ" })).toBeVisible();
     await expect(page.getByRole("heading", { name: "claude-main" })).toBeVisible();
+    const qwenModel = page.getByRole("listitem", { name: "model qwen3-coder" });
+    await expect(qwenModel.getByText("不明（価格の情報なし。0 円ではありません）")).toBeVisible();
+    await expect(page.getByRole("listitem", { name: "deployment openai-compatible:qwen/qwen3-coder" })).toBeVisible();
     await page.getByLabel("新規 id").fill("codex-2");
     await page.getByLabel("adapter").selectOption("codex");
     await page.getByRole("button", { name: "追加" }).click();

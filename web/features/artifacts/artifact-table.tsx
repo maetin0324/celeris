@@ -7,7 +7,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { formatAbsolute } from "../../lib/time";
 import { formatBytes } from "../files/task-files-query";
 
-// 成果物の一覧（/artifacts と /tasks/:id?tab=artifacts で共有）。本文は ArtifactPreview（H8: Markdown 以外は download）。
+// 成果物の一覧（/artifacts と /tasks/:id?tab=artifacts で共有）。本文は ArtifactPreview（形式ごとにブラウザ内で表示。
+// HTML・SVG は sandbox、表に無い形式は download。H8、ADR 2026-10-05-web-artifact-inline-view）。
+// 記録した sha256 は先頭 12 桁を出し、全文は title。記録後に中身が変わっていれば知らせる。
 // 360px でも読めるよう、大きさ・記録日時は md 以上でだけ列にし、狭い幅では成果物の欄の下に小さく出す。
 // 長い path は折り返し、全文は title 属性に置く。
 // タスクの列も md 以上だけ。狭い幅では列を 1 本にし、タスクの題名を成果物の欄の上に積む（題名は 2 行で省略、全文は title）。
@@ -98,6 +100,16 @@ function ArtifactRowView({
           <p className="min-w-0 break-all font-mono text-label text-muted-foreground" title={view.artifact.path}>
             {view.artifact.path}
           </p>
+          {view.artifact.sha256 ? (
+            <p
+              className="flex min-w-0 flex-wrap items-center gap-2 font-mono text-label text-muted-foreground"
+              title={`sha256 ${view.artifact.sha256}`}
+              data-testid="artifact-sha256"
+            >
+              <span className="break-all">sha256 {view.artifact.sha256.slice(0, 12)}</span>
+              {view.sha256_matches === false ? <Badge tone="warning">記録後に変更あり</Badge> : null}
+            </p>
+          ) : null}
           <p className="text-label text-muted-foreground tabular-nums md:hidden">
             {size}・{recorded}
           </p>

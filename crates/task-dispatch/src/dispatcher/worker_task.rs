@@ -448,6 +448,8 @@ pub(super) async fn run_worker(
             decision_requests: extras.decision_requests,
             // ADR-0124 D4: 直行経路の implementation run にだけ `Some`。
             direct_route: extras.direct_route.clone(),
+            // 多目的 routing Phase 3: registry を差し込んだ dispatcher の worker/planner run だけ `Some`。
+            routing_context_ref: extras.routing_context_ref.clone(),
         },
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの

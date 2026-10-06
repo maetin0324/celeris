@@ -92,6 +92,7 @@
   --spacing-icon-sm: 1rem;
   --spacing-icon: 1.25rem;
   --spacing-nav: 14rem;
+  --spacing-tabbar: 4rem;
   --spacing-list: 20rem;
   --spacing-drawer: 32rem;
   --spacing-form: 40rem;
@@ -179,6 +180,27 @@
     outline: var(--focus-width) solid var(--color-ring);
     outline-offset: var(--focus-offset);
   }
+}
+
+/* md 未満の画面下の固定タブ（shell.tsx の MobileTabBar、高さ --spacing-tabbar）が覆う量。本文の列の下余白・
+   ホームの送信欄の bottom・「最新へ」の位置に足して、fixed のタブの裏に中身を隠さない。md 以上はタブを出さないので 0。 */
+[data-shell] {
+  --shell-bottom-inset: calc(var(--spacing-tabbar) + env(safe-area-inset-bottom));
+}
+
+@media (width >= 48rem) {
+  [data-shell] {
+    --shell-bottom-inset: 0px;
+  }
+}
+
+@utility pb-shell-inset {
+  padding-bottom: var(--shell-bottom-inset, 0px);
+}
+
+/* 画面下のタブの高さ（border と safe area の padding を含む）。覆う量と同じにして、隠す量と空ける量をずらさない。 */
+@utility h-shell-inset {
+  height: var(--shell-bottom-inset, 0px);
 }
 
 /* 画面見出し（h1 tabIndex=-1）は遷移後に script で focus を移す先（S4）。直接開いた画面の初回表示は

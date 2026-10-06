@@ -17,10 +17,78 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use task_core::Tier;
+use task_core::model_router::optimizer::{Candidate, legacy_rank};
+use task_core::model_router::profiles::DeploymentProfile;
 use task_dispatch::accounts::{AccountBook, AccountCandidate, AccountDir, evaluate};
 
 use crate::config::OpenAiCompatibleConfig;
-use crate::naming::SourceKind;
+use crate::legacy_catalog::LegacyCatalog;
+use crate::naming::{SourceKind, SourceScope};
+
+/// Kernel legacy mode supplies the eligible deployment order. The existing
+/// `rank_*` functions still settle relay reachability and OAuth account order.
+pub fn legacy_deployments(
+    catalog: &LegacyCatalog,
+    scope: SourceScope,
+    lane: Tier,
+    prefer_free: bool,
+) -> Vec<&DeploymentProfile> {
+    let eligible = |d: &DeploymentProfile| {
+        if !d.allowed_lanes.contains(&lane) {
+            return false;
+        }
+        if d.source_ref.starts_with("openai-compatible:") {
+            return scope == SourceScope::Only(SourceKind::Qwen)
+                || (scope == SourceScope::Any && prefer_free);
+        }
+        match scope {
+            SourceScope::Any => true,
+            SourceScope::Only(SourceKind::Claude) => d.source_ref == "claude-oauth",
+            SourceScope::Only(SourceKind::Gpt) => d.source_ref == "codex-oauth",
+            SourceScope::Only(SourceKind::Qwen) => false,
+        }
+    };
+    let mut deployments: Vec<_> = catalog.deployments.iter().filter(|d| eligible(d)).collect();
+    deployments.sort_by_key(|d| {
+        (
+            if d.source_ref.starts_with("openai-compatible:") {
+                0
+            } else {
+                1
+            },
+            d.config_order,
+        )
+    });
+    let candidates: Vec<_> = deployments
+        .iter()
+        .filter_map(|deployment| {
+            catalog
+                .models
+                .iter()
+                .find(|model| model.id == deployment.model_profile_id)
+                .map(|model| Candidate {
+                    model,
+                    deployment,
+                    state: None,
+                    eligible_provider_ids: vec![deployment.source_ref.clone()],
+                    cost_usd: None,
+                    latency_ms: None,
+                    pressure: None,
+                })
+        })
+        .collect();
+    let ranked = legacy_rank(&candidates);
+    ranked
+        .ranked
+        .iter()
+        .filter_map(|r| {
+            deployments
+                .iter()
+                .copied()
+                .find(|d| d.id == r.deployment_id)
+        })
+        .collect()
+}
 
 /// 1 プール分の入力（`scan_accounts` 済みの一覧・帳簿・使用中カウント）。
 pub struct PoolInput<'a> {
@@ -176,6 +244,10 @@ pub fn qwen_tier_model(models: &HashMap<Tier, String>, tier: Tier) -> Option<&st
         .then(|| models.get(&Tier::Cheap).map(String::as_str))
         .flatten()
 }
+
+/// Phase 2 の state 選択（SourceState・制約・effective cost・予約の枠）。legacy の経路は上の関数のまま。
+#[path = "selection_state.rs"]
+pub mod state;
 
 #[cfg(test)]
 #[path = "selection_tests.rs"]

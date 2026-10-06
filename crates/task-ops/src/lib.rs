@@ -59,6 +59,9 @@ pub mod replay;
 pub mod retry;
 /// ADR-0069 D5（Phase 114）: run ごとの routing の監査（担当・harness・lane・model・メトリクス・レビュー）。
 pub mod routing_audit;
+pub mod routing_outcome;
+/// Read-only, task-grouped routing dataset export and deterministic offline evaluation.
+pub mod routing_replay;
 pub mod tree;
 pub mod tree_adopt;
 pub mod tree_plan;

@@ -328,6 +328,171 @@ fn cheap_local_first_unsupported_adapter_goes_to_pool() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
+/// A policy with the old trait surface is the control path: it has no kernel
+/// candidate enumeration, but forwards every live decision to StaticPolicy.
+struct LegacyControlPolicy(StaticPolicy);
+
+impl crate::policy::ProviderPolicy for LegacyControlPolicy {
+    fn pick(&self, hint: &WorkerHint, now: Instant) -> Option<(AdapterId, ProviderId)> {
+        self.0.pick(hint, now)
+    }
+    fn report(&mut self, provider: ProviderId, outcome: &crate::policy::ProviderOutcome) {
+        self.0.report(provider, outcome)
+    }
+    fn concurrency_limit(&self, provider: ProviderId) -> usize {
+        self.0.concurrency_limit(provider)
+    }
+    fn select(
+        &self,
+        hint: &WorkerHint,
+        now: Instant,
+        excluded: &std::collections::HashSet<ProviderId>,
+    ) -> crate::policy::Selection {
+        self.0.select(hint, now, excluded)
+    }
+    fn cooldowns(&self, now: Instant) -> Vec<crate::policy::Cooldown> {
+        self.0.cooldowns(now)
+    }
+    fn offers(&self, provider: &str, hint: &WorkerHint) -> bool {
+        self.0.offers(provider, hint)
+    }
+    fn adapter_of(&self, provider: &str) -> Option<AdapterId> {
+        self.0.adapter_of(provider)
+    }
+}
+
+#[test]
+fn routing_dispatch_legacy_equivalence_matrix() {
+    let claude = accounts_fixture();
+    let now = Instant::now();
+    for lane in [Tier::Cheap, Tier::Standard, Tier::Frontier] {
+        for (role, cos, prefer_local) in [
+            ("worker", false, true),
+            ("reviewer", false, false),
+            ("cos", true, true),
+            ("worker_no_local", false, false),
+        ] {
+            for sticky in [false, true] {
+                for supply in ["free", "local_full", "local_down", "pool_full", "all_full"] {
+                    let reachability = if supply == "local_down" {
+                        Reachability::Unreachable {
+                            reason: "offline".into(),
+                        }
+                    } else {
+                        Reachability::Ok
+                    };
+                    let run = |control: bool| {
+                        let (probe, _) = counting_probe(reachability.clone());
+                        let mut d = local_first_dispatcher(
+                            &claude,
+                            vec![Tier::Cheap, Tier::Standard],
+                            probe,
+                        );
+                        if control {
+                            d.policy = Box::new(LegacyControlPolicy(StaticPolicy::new(
+                                vec![
+                                    ProviderSpec {
+                                        id: "p1".into(),
+                                        adapter: "claude-code".into(),
+                                        tiers: vec![Tier::Cheap, Tier::Standard],
+                                        concurrency: 2,
+                                        model: String::new(),
+                                    },
+                                    ProviderSpec {
+                                        id: "qwen".into(),
+                                        adapter: "acp".into(),
+                                        tiers: vec![Tier::Cheap, Tier::Standard],
+                                        concurrency: 1,
+                                        model: String::new(),
+                                    },
+                                ],
+                                Duration::from_secs(5),
+                            )));
+                        }
+                        let mut full: std::collections::HashSet<ProviderId> = match supply {
+                            "local_full" => ["qwen".into()].into(),
+                            "pool_full" => ["p1".into()].into(),
+                            "all_full" => ["qwen".into(), "p1".into()].into(),
+                            _ => Default::default(),
+                        };
+                        let session = sticky.then(|| {
+                            NodeSession::new(
+                                "cos",
+                                SessionKind::Conversation,
+                                None,
+                                "claude-code",
+                                Some("a".into()),
+                                "550e8400-e29b-41d4-a716-446655440000",
+                                OffsetDateTime::now_utc(),
+                            )
+                        });
+                        let (pick, selection) = d.select_provider_for(
+                            &hint(lane, None),
+                            now,
+                            TaskId::new(),
+                            &mut full,
+                            session.as_ref(),
+                            cos,
+                            prefer_local,
+                        );
+                        let result = pick.map(|(_, provider, account)| {
+                            let model = d.models.get(&provider).cloned().unwrap_or_default();
+                            (provider, account.map(|(_, id)| id), model)
+                        });
+                        (result, selection.reason)
+                    };
+                    assert_eq!(
+                        run(false),
+                        run(true),
+                        "lane={lane:?} role={role} sticky={sticky} supply={supply}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn routing_dispatch_legacy_tier_models_feed_model_identity_only() {
+    let claude = accounts_fixture();
+    let (probe, _) = counting_probe(Reachability::Ok);
+    let mut d = local_first_dispatcher(&claude, vec![Tier::Cheap], probe);
+    let (tx, _) = tokio::sync::watch::channel(None);
+    d.set_snapshot_publisher(crate::dispatcher::SnapshotPublisher {
+        tx,
+        instance_id: "test".into(),
+        hostname: "test".into(),
+        started_at: String::new(),
+        tick_ms: 1000,
+        providers: vec![
+            serde_json::from_value(serde_json::json!({
+                "id": "qwen", "adapter": "acp", "tiers": ["cheap"],
+                "concurrency": 1, "model": "old-model", "in_use": 0,
+                "llm_source": {"source": "openai_compatible:qwen", "origin": "explicit"},
+                "tier_models": {"cheap": {"name": "qwen", "model_id": "qwen-from-binding"}}
+            }))
+            .unwrap(),
+        ],
+        provider_checks: Default::default(),
+    });
+    let trace = d
+        .legacy_optimizer_trace(&hint(Tier::Cheap, None), "run", "qwen")
+        .unwrap();
+    assert_eq!(trace.candidates[1].model_profile_id, "qwen-from-binding");
+    assert_eq!(trace.fallback_order, ["p1", "qwen"]);
+    let (picked, selection) = d.select_provider_for(
+        &hint(Tier::Cheap, None),
+        Instant::now(),
+        TaskId::new(),
+        &mut Default::default(),
+        None,
+        false,
+        true,
+    );
+    assert_eq!(picked.unwrap().1, "qwen");
+    assert_eq!(selection.reason, ProviderSelectionReason::LocalPreferred);
+}
+
 /// tick を通して、worker run の `RoutingDecided` に選択の理由が残る（付記 L8）。
 async fn routing_decided_with_probe(
     probe_outcome: Reachability,
@@ -387,6 +552,14 @@ async fn routing_decided_with_probe(
 #[tokio::test]
 async fn cheap_local_first_routing_decided_records_reason() {
     let (record, calls) = routing_decided_with_probe(Reachability::Ok).await;
+    let trace = record.optimizer.as_ref().expect("legacy optimizer trace");
+    assert_eq!(
+        trace.mode,
+        task_core::model_router::policy::RoutingMode::Legacy
+    );
+    assert_eq!(trace.selected.as_deref(), Some("qwen"));
+    assert_eq!(trace.fallback_order, ["p1", "qwen"]);
+    assert_eq!(trace.candidates[1].model_profile_id, "qwen3.8-27b");
     assert_eq!(record.resolution.provider.as_deref(), Some("qwen"));
     assert_eq!(record.resolution.adapter, "acp");
     let selection = record.resolution.selection.expect("selection");

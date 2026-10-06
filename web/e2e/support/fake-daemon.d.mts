@@ -12,6 +12,12 @@ export type FakeDaemonRequest = {
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
 export const defaultFixtures: Record<string, unknown>;
+export const routingCatalogFixture: import("../../api/generated/types").RoutingCatalogView;
+export const routingAuditFixture: import("../../api/generated/types").TaskRoutingView;
+export const routingTrajectoryFixture: import("../../api/generated/types").TaskRoutingView;
+export const routingShadowFixture: import("../../api/generated/types").TaskRoutingView;
+export const routingEstimatorShadowFixture: import("../../api/generated/types").TaskRoutingView;
+export const llmSourcesFixture: import("../../api/generated/types").LlmSourcesView;
 export function richFixtures(): Record<string, unknown>;
 export function richFiles(): Record<string, { body: string; type?: string }>;
 export function inboxItemsFixture(): import("../../api/generated/types").InboxItem[];
@@ -68,7 +74,7 @@ export type FakeDaemonOptions = {
   delayMs?: number;
   fixtures?: Record<string, unknown | ((url: URL) => unknown)>;
   token?: string | null;
-  files?: Record<string, { body: string | (() => string); type?: string; disposition?: string }>;
+  files?: Record<string, { body: string | Uint8Array | (() => string); type?: string; disposition?: string }>;
   profile?: "default" | "rich";
   fault?: { status: number; paths?: string[] } | null;
   hold?: { paths?: string[] } | null;

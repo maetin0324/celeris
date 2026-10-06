@@ -210,3 +210,284 @@ fn cheap_only_qwen_tier_selection_ignores_legacy_mappings() {
     assert_eq!(qwen_tier_model(&models, Tier::Standard), None);
     assert_eq!(qwen_tier_model(&models, Tier::Cheap), Some("qwen3.8-27b"));
 }
+
+#[test]
+fn routing_proxy_legacy_equivalence_tiers_and_fallback() {
+    use crate::config::LlmProxyConfig;
+    use crate::legacy_catalog::normalize_legacy_config;
+    use crate::naming::{ModelRequest, SourceScope, parse_model};
+
+    let config: LlmProxyConfig = serde_json::from_value(serde_json::json!({
+        "sources": {
+            "claude_oauth": { "accounts_dir": "/unused" },
+            "codex_oauth": { "accounts_dir": "/unused" },
+            "openai_compatible": [
+                { "id": "relay-a", "base_url": "http://localhost/a" },
+                { "id": "relay-b", "base_url": "http://localhost/b" }
+            ]
+        },
+        "models": {
+            "claude": { "frontier": "claude-f", "standard": "claude-s", "cheap": "claude-c" },
+            "gpt": { "frontier": "gpt-f", "standard": "gpt-s", "cheap": "gpt-c" },
+            "qwen": { "frontier": "ignored", "standard": "ignored", "cheap": "qwen-c" }
+        }
+    }))
+    .unwrap();
+    let catalog = normalize_legacy_config(&config);
+    assert!(
+        catalog
+            .deployments
+            .iter()
+            .filter(|d| d.source_ref.starts_with("openai-compatible:"))
+            .all(|d| d.allowed_lanes == vec![Tier::Cheap])
+    );
+
+    let claude_dirs = dirs(&["c1"]);
+    let codex_dirs = dirs(&["g1"]);
+    let claude_book = AccountBook::new_in_memory();
+    let codex_book = AccountBook::new_in_memory();
+    let cases = [
+        (
+            "celeris/frontier",
+            true,
+            0usize,
+            true,
+            "claude-oauth",
+            "c1",
+            "claude-f",
+        ),
+        (
+            "celeris/standard",
+            true,
+            0,
+            true,
+            "claude-oauth",
+            "c1",
+            "claude-s",
+        ),
+        (
+            "celeris/cheap",
+            true,
+            0,
+            true,
+            "openai-compatible:relay-a",
+            "",
+            "qwen-c",
+        ),
+        (
+            "celeris/cheap",
+            false,
+            0,
+            true,
+            "openai-compatible:relay-b",
+            "",
+            "qwen-c",
+        ),
+        (
+            "celeris/cheap",
+            false,
+            0,
+            false,
+            "claude-oauth",
+            "c1",
+            "claude-c",
+        ),
+        (
+            "celeris/cheap",
+            false,
+            3,
+            false,
+            "codex-oauth",
+            "g1",
+            "gpt-c",
+        ),
+        (
+            "claude/frontier",
+            true,
+            0,
+            true,
+            "claude-oauth",
+            "c1",
+            "claude-f",
+        ),
+        ("gpt/standard", true, 0, true, "codex-oauth", "g1", "gpt-s"),
+        (
+            "qwen/cheap",
+            false,
+            0,
+            true,
+            "openai-compatible:relay-b",
+            "",
+            "qwen-c",
+        ),
+    ];
+    for (wire_name, first_reachable, claude_in_use, second_reachable, source, account, wire) in
+        cases
+    {
+        let ModelRequest::Tiered { scope, tier } = parse_model(wire_name).unwrap() else {
+            panic!("tier name")
+        };
+        let claude_input = PoolInput {
+            dirs: &claude_dirs,
+            book: &claude_book,
+            in_use: &|_| claude_in_use,
+            max_concurrent_per_account: 4,
+        };
+        let codex_input = PoolInput {
+            dirs: &codex_dirs,
+            book: &codex_book,
+            in_use: &no_in_use,
+            max_concurrent_per_account: 4,
+        };
+        // The old path: relay first for cheap, then account score across pools.
+        let old_relay = if tier == Tier::Cheap
+            && (scope == SourceScope::Only(SourceKind::Qwen)
+                || scope == SourceScope::Any && config.prefer_free)
+        {
+            rank_relays(&config.sources.openai_compatible, |id| {
+                if id == "relay-a" {
+                    first_reachable
+                } else {
+                    second_reachable
+                }
+            })
+            .first()
+            .map(|s| {
+                (
+                    format!("openai-compatible:{}", s.id),
+                    String::new(),
+                    config.models.qwen[&tier].clone(),
+                )
+            })
+        } else {
+            None
+        };
+        let old_pool = match scope {
+            SourceScope::Any => rank_across_pools(Some(&claude_input), Some(&codex_input), 1000),
+            SourceScope::Only(SourceKind::Claude) => {
+                rank_pool(SourceKind::Claude, &claude_input, 1000)
+            }
+            SourceScope::Only(SourceKind::Gpt) => rank_pool(SourceKind::Gpt, &codex_input, 1000),
+            SourceScope::Only(SourceKind::Qwen) => vec![],
+        }
+        .into_iter()
+        .map(|a| {
+            let (source, wire) = match a.source {
+                SourceKind::Claude => ("claude-oauth", &config.models.claude[&tier]),
+                SourceKind::Gpt => ("codex-oauth", &config.models.gpt[&tier]),
+                SourceKind::Qwen => unreachable!(),
+            };
+            (source.to_string(), a.account_id, wire.clone())
+        })
+        .next();
+        let expected = old_relay.or(old_pool).unwrap();
+        assert_eq!(
+            expected,
+            (source.into(), account.into(), wire.into()),
+            "{wire_name}"
+        );
+
+        let deployments = legacy_deployments(&catalog, scope, tier, config.prefer_free);
+        let new_relay = deployments.iter().find_map(|d| {
+            let id = d.source_ref.strip_prefix("openai-compatible:")?;
+            let reachable = if id == "relay-a" {
+                first_reachable
+            } else {
+                second_reachable
+            };
+            reachable.then(|| {
+                (
+                    d.source_ref.clone(),
+                    String::new(),
+                    d.upstream_model.clone(),
+                )
+            })
+        });
+        let new_pool = match scope {
+            SourceScope::Any => rank_across_pools(Some(&claude_input), Some(&codex_input), 1000),
+            SourceScope::Only(SourceKind::Claude) => {
+                rank_pool(SourceKind::Claude, &claude_input, 1000)
+            }
+            SourceScope::Only(SourceKind::Gpt) => rank_pool(SourceKind::Gpt, &codex_input, 1000),
+            SourceScope::Only(SourceKind::Qwen) => vec![],
+        }
+        .into_iter()
+        .find_map(|a| {
+            let source = if a.source == SourceKind::Claude {
+                "claude-oauth"
+            } else {
+                "codex-oauth"
+            };
+            deployments
+                .iter()
+                .find(|d| d.source_ref == source)
+                .map(|d| (source.to_string(), a.account_id, d.upstream_model.clone()))
+        });
+        assert_eq!(new_relay.or(new_pool), Some(expected), "{wire_name}");
+    }
+    assert!(
+        legacy_deployments(
+            &catalog,
+            SourceScope::Only(SourceKind::Qwen),
+            Tier::Frontier,
+            true
+        )
+        .is_empty()
+    );
+    assert!(
+        legacy_deployments(&catalog, SourceScope::Any, Tier::Standard, true)
+            .iter()
+            .all(|d| !d.source_ref.starts_with("openai-compatible:"))
+    );
+
+    // Measured quota headroom, rather than the source's position, chooses the pool.
+    use task_core::{RateLimitObservation, RateWindow};
+    use task_dispatch::accounts::ObservationSource;
+    let mut claude_book = AccountBook::new_in_memory();
+    let mut codex_book = AccountBook::new_in_memory();
+    for (book, id, utilization) in [(&mut claude_book, "c1", 0.9), (&mut codex_book, "g1", 0.1)] {
+        book.record_observation(
+            id,
+            RateLimitObservation {
+                five_hour: Some(RateWindow {
+                    utilization,
+                    resets_at: 2_000,
+                }),
+                seven_day: None,
+                status: Some("allowed".into()),
+                resets_at: None,
+                observed_at: 900,
+            },
+            ObservationSource::Run,
+        );
+    }
+    let claude_input = PoolInput {
+        dirs: &claude_dirs,
+        book: &claude_book,
+        in_use: &no_in_use,
+        max_concurrent_per_account: 4,
+    };
+    let codex_input = PoolInput {
+        dirs: &codex_dirs,
+        book: &codex_book,
+        in_use: &no_in_use,
+        max_concurrent_per_account: 4,
+    };
+    let old_pick = rank_across_pools(Some(&claude_input), Some(&codex_input), 1_000)
+        .into_iter()
+        .next()
+        .unwrap();
+    assert_eq!(
+        (old_pick.source, old_pick.account_id.as_str()),
+        (SourceKind::Gpt, "g1")
+    );
+    let deployments = legacy_deployments(&catalog, SourceScope::Any, Tier::Standard, true);
+    let new_pick = deployments
+        .iter()
+        .find(|d| d.source_ref == "codex-oauth")
+        .unwrap();
+    assert_eq!(
+        (&new_pick.upstream_model, old_pick.account_id.as_str()),
+        (&config.models.gpt[&Tier::Standard], "g1")
+    );
+}

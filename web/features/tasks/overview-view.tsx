@@ -68,7 +68,7 @@ export function availableNextSteps(actions: readonly Action[]): NextStep[] {
   return nextSteps.filter((step) => actions.includes(step.action));
 }
 
-/** 画面上部の header。h1 の下で、状態・現在の run・次の操作を tab に関係なく出す。 */
+/** 画面上部の header。h1 の下で、題（全文 1 回）と状態・現在の run・次の操作を tab に関係なく 1 行に並べる。 */
 export function TaskDetailHeader({ taskId }: { taskId: string }) {
   const detail = useQuery(taskDetailQuery(taskId));
   const browserTask = detail.data?.task.skills?.includes("browser-enabled") === true;
@@ -78,22 +78,27 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
   const run = currentRun(detail.data.runs);
   const steps = availableNextSteps(detail.data.actions);
   const pendingBrowserWaits = browserWaits.data?.items.filter((wait) => wait.state === "pending").length ?? 0;
+  const item = "flex min-w-0 max-w-full flex-wrap items-center gap-x-2";
   return (
-    <section aria-label="タスクの現在" data-testid="task-header" className={card}>
-      {/* 長い題は 3 行で省略し、全文は title 属性と下の概要で読める。 */}
-      <p title={task.title} className="line-clamp-3 break-words text-body font-semibold text-foreground">
+    <section
+      aria-label="タスクの現在"
+      data-testid="task-header"
+      className="min-w-0 rounded-lg border border-border bg-surface px-4 py-3"
+    >
+      {/* 題はここで全文を 1 回だけ出す（概要では再掲しない）。区切りの少ない長い語も枠の中で折り返す。 */}
+      <p data-testid="task-header-title" className="break-words text-body font-semibold text-foreground">
         {task.title}
       </p>
-      <dl className="mt-3 flex min-w-0 flex-col gap-3 text-label md:flex-row md:flex-wrap md:gap-x-8">
-        <div className="flex min-w-0 flex-col gap-1" data-testid="task-header-status">
+      <dl className="mt-1 flex min-w-0 flex-wrap items-center gap-x-6 text-label">
+        <div className={item} data-testid="task-header-status">
           <dt className="font-medium text-muted-foreground">状態</dt>
-          <dd>
+          <dd className="inline-flex min-h-11 items-center">
             <StatusBadge status={task.status} />
           </dd>
         </div>
-        <div className="flex min-w-0 flex-col gap-1" data-testid="task-header-run">
+        <div className={item} data-testid="task-header-run">
           <dt className="font-medium text-muted-foreground">現在の run</dt>
-          <dd className="flex min-w-0 flex-wrap items-center gap-2">
+          <dd className="flex min-w-0 max-w-full flex-wrap items-center gap-x-2">
             {run ? (
               <>
                 <Link
@@ -107,15 +112,15 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
                 <StatusBadge status={runStatus(run)} />
               </>
             ) : (
-              <span className="text-muted-foreground">まだありません</span>
+              <span className="inline-flex min-h-11 items-center text-muted-foreground">まだありません</span>
             )}
           </dd>
         </div>
-        <div className="flex min-w-0 flex-col gap-1" data-testid="task-header-next">
+        <div className={item} data-testid="task-header-next">
           <dt className="font-medium text-muted-foreground">次の操作</dt>
-          <dd>
+          <dd className="min-w-0">
             {steps.length > 0 || pendingBrowserWaits > 0 ? (
-              <ul className="flex flex-wrap gap-2">
+              <ul className="flex flex-wrap gap-2 py-1">
                 {pendingBrowserWaits > 0 ? (
                   <li>
                     <Link
@@ -144,7 +149,7 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
                 ))}
               </ul>
             ) : (
-              <span className="text-muted-foreground">人の操作を待っていません</span>
+              <span className="inline-flex min-h-11 items-center text-muted-foreground">人の操作を待っていません</span>
             )}
           </dd>
         </div>
@@ -153,8 +158,19 @@ export function TaskDetailHeader({ taskId }: { taskId: string }) {
   );
 }
 
-/** section を渡すとスマホ幅でその区画だけを出す（desktop は全部）。渡さなければ全部を出す。 */
-export function OverviewView({ detail, section }: { detail: TaskDetail; section?: MobileSection }) {
+/**
+ * section を渡すとスマホ幅でその区画だけを出す（desktop は全部）。渡さなければ全部を出す。
+ * 先頭は目的の本文（最初の 1 画面に入れる）。`panels`（判断・実行）はその下、事実の一覧より上に置く。
+ */
+export function OverviewView({
+  detail,
+  section,
+  panels,
+}: {
+  detail: TaskDetail;
+  section?: MobileSection;
+  panels?: ReactNode;
+}) {
   const task = detail.task;
   const facts: DataListItem[] = [
     { label: "状態", value: <span data-status={task.status}>{statusView(task.status).label}</span> },
@@ -172,15 +188,14 @@ export function OverviewView({ detail, section }: { detail: TaskDetail; section?
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="task-overview">
       <div className={mobileSectionClass("summary", section)}>
-        <section className={card}>
-          <h2 className={`${heading} break-words`}>{task.title}</h2>
-          <DataList className="mt-2" items={facts} />
-        </section>
-
         {task.objective ? (
-          <section className={card}>
-            <h2 className={heading}>目的</h2>
-            <p className="mt-1 whitespace-pre-wrap break-words text-label">{task.objective}</p>
+          <section className={card} aria-labelledby="task-objective-title">
+            <h2 id="task-objective-title" className={heading}>
+              目的
+            </h2>
+            <p data-testid="task-objective" className="mt-1 whitespace-pre-wrap break-words text-label">
+              {task.objective}
+            </p>
           </section>
         ) : null}
 
@@ -202,6 +217,15 @@ export function OverviewView({ detail, section }: { detail: TaskDetail; section?
             <p className="mt-1 whitespace-pre-wrap break-words text-label">{detail.latest_question}</p>
           </section>
         ) : null}
+      </div>
+
+      {panels}
+
+      <div className={mobileSectionClass("summary", section)}>
+        <section className={card}>
+          <h2 className={heading}>詳細</h2>
+          <DataList className="mt-2" items={facts} />
+        </section>
       </div>
 
       <div className={mobileSectionClass("tree", section)} id="task-tree">

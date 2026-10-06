@@ -109,6 +109,9 @@ mod org;
 mod projects;
 mod query;
 mod repos;
+mod routing_log;
+mod routing_shadow;
+pub use routing_shadow::ShadowReservationAudit;
 mod task_store;
 mod task_store_impl;
 mod tasks;
@@ -122,6 +125,7 @@ use migrations::{
     MIGRATION_0007, MIGRATION_0008, MIGRATION_0009, MIGRATION_0010, MIGRATION_0011,
 };
 pub use query::{ListFilter, ListOrder, Page};
+pub use routing_log::RoutingCorrelation;
 pub use task_store::TaskStore;
 
 /// ADR-0074 D3.4（Phase F4b (e)）: `TaskStore::project_plan_apply` の入力。
@@ -919,5 +923,9 @@ impl SqliteStore {
 
 #[cfg(test)]
 mod client_open_tests;
+#[cfg(test)]
+mod routing_log_tests;
+#[cfg(test)]
+mod routing_shadow_tests;
 #[cfg(test)]
 mod tests;

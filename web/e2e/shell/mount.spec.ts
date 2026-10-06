@@ -29,14 +29,14 @@ test("shell は daemon の停止と復帰で入れ替わらない", async ({ pag
       });
 
     await daemon.close();
-    await page.getByRole("navigation", { name: "主要" }).getByRole("link", { name: "案件" }).click();
+    await page.getByRole("navigation", { name: "主要", exact: true }).getByRole("link", { name: "案件" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "案件" })).toBeVisible();
     await page.waitForTimeout(500);
     expect(await same()).toBe(true);
 
     daemon = createFakeDaemon({ port });
     await daemon.start();
-    await page.getByRole("navigation", { name: "主要" }).getByRole("link", { name: "タスク" }).click();
+    await page.getByRole("navigation", { name: "主要", exact: true }).getByRole("link", { name: "タスク" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
     await page.waitForTimeout(500);
     expect(await same()).toBe(true);

@@ -143,6 +143,18 @@ fn run_request_serializes_with_type_tag() {
     assert_eq!(back, req);
 }
 
+#[test]
+fn transport_evidence_keeps_old_and_unknown_fields_compatible() {
+    let old: RunTransportEvidence = serde_json::from_str(r#"{"future_field":1}"#).unwrap();
+    assert_eq!(old.context_transport, None);
+    let unsupported: RunTransportEvidence =
+        serde_json::from_str(r#"{"context_transport":"unsupported","future_field":1}"#).unwrap();
+    assert_eq!(
+        unsupported.context_transport,
+        Some(ContextTransport::Unsupported),
+    );
+}
+
 /// ADR-0027 D1: `available_genres` は空なら省略され、非空なら分野と役割の一覧が乗る。
 #[test]
 fn available_genres_round_trips_and_is_omitted_when_empty() {

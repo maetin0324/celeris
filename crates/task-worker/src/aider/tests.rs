@@ -57,6 +57,44 @@ fn default_limits() -> RunLimits {
     }
 }
 
+#[tokio::test]
+async fn routing_context_ref_propagates_to_aider_proxy_settings() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_aider(
+        dir.path(),
+        r#"
+while [ $# -gt 0 ]; do
+  if [ "$1" = "--model-settings-file" ]; then cp "$2" settings.copy; fi
+  shift
+done
+mkdir -p artifacts
+printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
+"#,
+    );
+    config.model = Some("openai/celeris/cheap".into());
+    config
+        .env
+        .push(("OPENAI_API_BASE".into(), "http://127.0.0.1:18100/v1".into()));
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.routing_context_ref = Some("daemon-issued-ref".into());
+    AiderAdapter::new(config)
+        .run(req, "proxy", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    let settings = std::fs::read_to_string(dir.path().join("settings.copy")).unwrap();
+    assert!(settings.contains("x-celeris-routing-context: \"daemon-issued-ref\""));
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("runs/proxy/context-transport.json")).unwrap(),
+        "{\"context_transport\":\"header\"}\n",
+    );
+    for entry in std::fs::read_dir(dir.path().join("runs/proxy")).unwrap() {
+        let path = entry.unwrap().path();
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            assert!(!contents.contains("daemon-issued-ref"));
+        }
+    }
+}
+
 /// F5-fix10: 200 KiB のプロンプトも argv ではなく `--message-file <run dir のファイル>` で渡り、spawn は
 /// E2BIG で落ちない。fake の aider がそのファイルを写し、`prompt.txt` と一致することを見る。
 #[tokio::test]

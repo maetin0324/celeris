@@ -660,12 +660,17 @@ async fn a_stale_heartbeat_does_not_replace_a_live_active_until_its_process_is_g
         .await,
         "プロセスが消えた active を引き継げない"
     );
+    // active への切替（tick の手順 1・2）と死んだ行の削除（手順 3）は別の文なので、切替を見た直後は
+    // まだ行が残っていることがある。削除も出来事として待つ。
     assert!(
-        store
-            .instance_list()
-            .unwrap_or_else(|e| panic!("instances: {e}"))
-            .iter()
-            .all(|i| i.instance_id != "ghost"),
+        wait_until(Duration::from_secs(10), || {
+            store
+                .instance_list()
+                .unwrap_or_else(|e| panic!("instances: {e}"))
+                .iter()
+                .all(|i| i.instance_id != "ghost")
+        })
+        .await,
         "死んだ行は消える"
     );
     new.abort();

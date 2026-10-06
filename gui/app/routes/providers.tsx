@@ -12,7 +12,16 @@ import {
   deleteProvider,
   patchProvider,
 } from "~/celeris/providers-admin.server";
-import type { LlmSourcesView, LlmSourceView, Providers, ProviderView, Tier } from "~/celeris/types";
+import type {
+  CatalogDeploymentView,
+  CatalogModelView,
+  LlmSourcesView,
+  LlmSourceView,
+  Providers,
+  ProviderView,
+  RoutingCatalogView,
+  Tier,
+} from "~/celeris/types";
 import { ProviderActionFlash } from "~/components/Flash";
 import { HelpLink } from "~/components/HelpLink";
 import { RouteRecovery } from "~/components/RouteRecovery";
@@ -34,6 +43,14 @@ import {
 } from "~/lib/llm-sources";
 import { isTransientStatus } from "~/lib/recovery";
 import { revalidateAfterActionErrors } from "~/lib/revalidate";
+import {
+  billingLabel,
+  capabilityLabel,
+  contextLimitsLabel,
+  deploymentPricingLabel,
+  pricingLabel,
+  qualityLabel,
+} from "~/lib/routing-catalog";
 import { formatDuration, secondsBetween } from "~/lib/time-delta";
 import { CelerisBanner } from "~/root";
 import type { Route } from "./+types/providers";
@@ -47,15 +64,19 @@ import type { Route } from "./+types/providers";
  * 別の節に出す。供給元の正本は `GET /llm/sources`（`/accounts` の「LLM source」節と同じ）。
  * `[llm_proxy]` が無効（409 `llm_proxy_unavailable`）・取得失敗のときは `llmSources` を `null` にし、
  * 実行枠の一覧だけを出す（供給元の節が取れないことで画面全体を落とさない）。
+ * model routing Phase 1（ADR 2026-10-04-multi-objective-model-routing §9）: `GET /llm/routing/catalog` の
+ * model と deployment を別の節に出す。取れないときは `routingCatalog` を `null` にする（同じ扱い）。
  */
 export interface ProvidersData {
   providers: Providers;
   llmSources: LlmSourcesView | null;
   llmSourcesUnavailable: boolean;
+  routingCatalog: RoutingCatalogView | null;
+  routingCatalogUnavailable: boolean;
   fetchedAt: string;
 }
 
-/** `GET /providers` と `GET /llm/sources` を呼ぶ。応答はそのまま返す（派生の集計はしない）。 */
+/** `GET /providers`・`GET /llm/sources`・`GET /llm/routing/catalog` を呼ぶ。応答はそのまま返す（派生の集計はしない）。 */
 export async function loadProviders(client: CelerisClient, request: Request): Promise<ProvidersData> {
   const providers = await client.get<Providers>("/providers", { signal: request.signal });
   let llmSources: LlmSourcesView | null = null;
@@ -67,8 +88,17 @@ export async function loadProviders(client: CelerisClient, request: Request): Pr
       llmSourcesUnavailable = true;
     }
   }
+  let routingCatalog: RoutingCatalogView | null = null;
+  let routingCatalogUnavailable = false;
+  try {
+    routingCatalog = await client.get<RoutingCatalogView>("/llm/routing/catalog", { signal: request.signal });
+  } catch (e) {
+    if (e instanceof CelerisError && e.status === 409 && e.code === "llm_proxy_unavailable") {
+      routingCatalogUnavailable = true;
+    }
+  }
   const fetchedAt = new Date().toISOString();
-  return { providers, llmSources, llmSourcesUnavailable, fetchedAt };
+  return { providers, llmSources, llmSourcesUnavailable, routingCatalog, routingCatalogUnavailable, fetchedAt };
 }
 
 // 409 / 422 の action 後も再検証する（docs/adr/0005 D2）。追加・変更・削除の後の一覧更新にも要る。
@@ -121,7 +151,8 @@ const TIER_OPTIONS: Tier[] = ["frontier", "standard", "cheap"];
 export const ADAPTER_OPTIONS = ["fake", "claude-code", "codex", "acp", "paperqa", "local-deep-research"] as const;
 
 export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
-  const { providers, llmSources, llmSourcesUnavailable, fetchedAt } = loaderData;
+  const { providers, llmSources, llmSourcesUnavailable, routingCatalog, routingCatalogUnavailable, fetchedAt } =
+    loaderData;
   // celeris の SSE（daemon tick）で自動再検証が走るたびに loader の再取得が起きる（`useCelerisStream`）。
   // 通常の `<Form>` の `actionData` はその再検証のたびに消えてしまう（React Router の仕様）ので、
   // 追加・編集・削除・疎通確認は 1 つの `useFetcher()` にまとめ、その `fetcher.data` を表示する
@@ -165,6 +196,8 @@ export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
       </section>
 
       <LlmSourcesOverview llmSources={llmSources} unavailable={llmSourcesUnavailable} />
+
+      <RoutingCatalogOverview catalog={routingCatalog} unavailable={routingCatalogUnavailable} />
 
       <section aria-labelledby="provider-add-heading" className="space-y-4">
         <SectionTitle icon="plus" id="provider-add-heading">
@@ -296,7 +329,7 @@ export function LlmSourcesOverview({
       <p className={hintClass}>
         モデルを供給するものです。Qwen などの OpenAI 互換源は <Mono className="text-xs">celeris/cheap</Mono>{" "}
         にだけ使われ、frontier / standard は Claude / GPT から選ばれます。残量と cooldown は{" "}
-        <a href="/accounts#llm-sources" className="underline">
+        <a href="/accounts#llm-sources" className="inline-flex min-h-11 items-center underline">
           アカウント画面
         </a>
         で確かめます。
@@ -316,6 +349,150 @@ export function LlmSourcesOverview({
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * 「model routing catalog」節（ADR 2026-10-04-multi-objective-model-routing §9・§10 Phase 1）:
+ * `GET /llm/routing/catalog` の model（能力・context・品質・単価）と deployment（source と model の対応・
+ * 課金種別・lane・単価の上書き）を別の一覧に出す。欠測は「不明」で、0 円・品質保証に見せない。
+ */
+export function RoutingCatalogOverview({
+  catalog,
+  unavailable,
+}: {
+  catalog: RoutingCatalogView | null;
+  unavailable: boolean;
+}) {
+  return (
+    <section
+      aria-labelledby="provider-routing-catalog-heading"
+      data-testid="provider-routing-catalog"
+      className="space-y-4"
+    >
+      <SectionTitle icon="server" id="provider-routing-catalog-heading">
+        model routing catalog
+      </SectionTitle>
+      <p className={hintClass}>
+        model（モデルそのもの）と deployment（どの LLM source でその model を出すか）を分けて示します。
+        値が設定に無いものは「不明」と出し、0 円や品質の保証とはみなしません。
+      </p>
+      {!catalog ? (
+        <EmptyState
+          icon="server"
+          title={unavailable ? "[llm_proxy] が設定されていません" : "routing catalog を取得できませんでした"}
+        />
+      ) : (
+        <div className="space-y-4">
+          <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+            <DataItem label="mode">
+              <span data-testid="routing-catalog-mode">{catalog.mode}</span>
+            </DataItem>
+            <DataItem label="catalog version">
+              <Mono className="break-all text-xs">{catalog.catalog_version}</Mono>
+            </DataItem>
+          </dl>
+          {catalog.warnings.length > 0 && (
+            <ul className="space-y-1 text-sm" data-testid="routing-catalog-warnings">
+              {catalog.warnings.map((w) => (
+                <li key={w} className="break-words">
+                  {w}
+                </li>
+              ))}
+            </ul>
+          )}
+          <h3 className="text-sm font-semibold">model（{catalog.models.length}）</h3>
+          {catalog.models.length === 0 ? (
+            <EmptyState icon="server" title="model がありません" />
+          ) : (
+            <div className="grid items-start gap-4 xl:grid-cols-2">
+              {catalog.models.map((model) => (
+                <CatalogModelCard key={model.id} model={model} />
+              ))}
+            </div>
+          )}
+          <h3 className="text-sm font-semibold">deployment（{catalog.deployments.length}）</h3>
+          {catalog.deployments.length === 0 ? (
+            <EmptyState icon="server" title="deployment がありません" />
+          ) : (
+            <div className="grid items-start gap-4 xl:grid-cols-2">
+              {catalog.deployments.map((deployment) => (
+                <CatalogDeploymentCard key={deployment.id} deployment={deployment} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CatalogModelCard({ model }: { model: CatalogModelView }) {
+  return (
+    <Card data-testid="routing-catalog-model" data-model-id={model.id} className="min-w-0">
+      <CardHeader
+        icon="cpu"
+        title={<span className="break-all">{model.id}</span>}
+        description={
+          <Mono className="break-all text-xs text-fg-subtle">
+            {model.family} / {model.revision}
+          </Mono>
+        }
+        actions={<Badge tone="neutral">model</Badge>}
+      />
+      <CardBody>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          <DataItem label="単価">
+            <span data-testid="routing-catalog-model-pricing">{pricingLabel(model.pricing)}</span>
+          </DataItem>
+          <DataItem label="品質">
+            <span data-testid="routing-catalog-model-quality">{qualityLabel(model.quality)}</span>
+          </DataItem>
+          <DataItem label="context">
+            <span data-testid="routing-catalog-model-context">{contextLimitsLabel(model.context_limits)}</span>
+          </DataItem>
+          <DataItem label="tools">
+            <span data-testid="routing-catalog-model-tools">{capabilityLabel(model.capabilities.tools)}</span>
+          </DataItem>
+        </dl>
+      </CardBody>
+    </Card>
+  );
+}
+
+function CatalogDeploymentCard({ deployment }: { deployment: CatalogDeploymentView }) {
+  return (
+    <Card data-testid="routing-catalog-deployment" data-deployment-id={deployment.id} className="min-w-0">
+      <CardHeader
+        icon="server"
+        title={<span className="break-all">{deployment.id}</span>}
+        description={<Mono className="break-all text-xs text-fg-subtle">{deployment.upstream_model}</Mono>}
+        actions={<Badge tone="neutral">deployment</Badge>}
+      />
+      <CardBody>
+        <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+          <DataItem label="LLM source">
+            <span className="break-all" data-testid="routing-catalog-deployment-source">
+              {deployment.source_ref}
+            </span>
+          </DataItem>
+          <DataItem label="model">
+            <span className="break-all" data-testid="routing-catalog-deployment-model">
+              {deployment.model_profile_id}
+            </span>
+          </DataItem>
+          <DataItem label="課金">
+            <span data-testid="routing-catalog-deployment-billing">{billingLabel(deployment.billing)}</span>
+          </DataItem>
+          <DataItem label="lane">
+            <span>{deployment.allowed_lanes.length > 0 ? deployment.allowed_lanes.join(", ") : "-"}</span>
+          </DataItem>
+          <DataItem label="単価">
+            <span data-testid="routing-catalog-deployment-pricing">{deploymentPricingLabel(deployment)}</span>
+          </DataItem>
+        </dl>
+      </CardBody>
+    </Card>
   );
 }
 

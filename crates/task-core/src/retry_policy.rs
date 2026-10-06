@@ -6,7 +6,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Check, Event, Task, Tier};
+use crate::model::{Check, Event, Task, Tier, TierSource};
 use crate::model_policy::{LaneCeiling, lane_rank, lane_up};
 
 /// 1 回の試行の終わり方（イベントから決定的に分類する）。
@@ -17,7 +17,7 @@ pub enum AttemptOutcome {
     ReviewFailed,
     /// command / artifact / knowledge_page の決定的な検査で不合格。
     VerificationFailed,
-    /// 品質が低い（Phase 2 の予約。Phase 1 ではイベントから作られない）。
+    /// 旧予約値。worker の自己申告だけでは品質証拠にしない。
     LowQuality,
     /// ワーカーの失敗（予算切れ以外）。
     WorkerError,
@@ -104,6 +104,41 @@ pub const DEFAULT_MAX_ATTEMPTS_PER_LANE: u32 = 2;
 /// 既定: 全体の試行回数の上限。
 pub const DEFAULT_MAX_TOTAL_ATTEMPTS: u32 = 4;
 
+/// Phase 3 の軌跡 escalation に渡す設定値。未指定の上限は制限しない。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default)]
+pub struct EscalationThresholds {
+    pub quality_failures_per_lane: u32,
+    pub max_total_attempts: u32,
+    pub org_ceiling: LaneCeiling,
+    pub task_ceiling: LaneCeiling,
+    pub work_unit_ceiling: LaneCeiling,
+}
+
+impl Default for EscalationThresholds {
+    fn default() -> Self {
+        Self {
+            quality_failures_per_lane: DEFAULT_MAX_ATTEMPTS_PER_LANE,
+            max_total_attempts: DEFAULT_MAX_TOTAL_ATTEMPTS,
+            org_ceiling: LaneCeiling::default(),
+            task_ceiling: LaneCeiling::default(),
+            work_unit_ceiling: LaneCeiling::default(),
+        }
+    }
+}
+
+/// Run 間の lane 決定。selected_lane を次の optimizer の floor として使う。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EscalationAudit {
+    pub requested_lane: Tier,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_lane: Option<Tier>,
+    pub selected_lane: Tier,
+    pub reason: String,
+    pub counted_failures: u32,
+    pub interval_id: String,
+}
+
 /// ADR-0069 D6: fallback / retry / escalation policy。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EscalationPolicy {
@@ -123,7 +158,6 @@ impl Default for EscalationPolicy {
             escalate_on: vec![
                 AttemptOutcome::ReviewFailed,
                 AttemptOutcome::VerificationFailed,
-                AttemptOutcome::LowQuality,
             ],
             never_escalate_on: vec![AttemptOutcome::SupplySide, AttemptOutcome::BudgetExhausted],
             ceiling: LaneCeiling::default(),
@@ -132,11 +166,95 @@ impl Default for EscalationPolicy {
 }
 
 impl EscalationPolicy {
+    /// event から作った現在の区間だけを評価する。明示 lane と各 ceiling は必ず優先する。
+    /// `interval_id` は `attempt_history_with_interval` の値を渡す。
+    pub fn decide_trajectory(
+        &self,
+        history: &[AttemptRecord],
+        requested_lane: Tier,
+        source: TierSource,
+        budget: BudgetState,
+        thresholds: &EscalationThresholds,
+        interval_id: &str,
+    ) -> EscalationAudit {
+        let previous_lane = history.iter().rev().find_map(|r| r.lane);
+        let current = previous_lane
+            .filter(|lane| lane_rank(*lane) >= lane_rank(requested_lane))
+            .unwrap_or(requested_lane);
+        let counted_failures = history
+            .iter()
+            .rev()
+            .take_while(|r| {
+                r.lane.unwrap_or(requested_lane) == current
+                    && (self.escalate_on.contains(&r.outcome)
+                        || r.outcome == AttemptOutcome::SupplySide)
+            })
+            .filter(|r| self.escalate_on.contains(&r.outcome))
+            .count() as u32;
+        let (selected_lane, reason) = if !source.policy_decides() {
+            (requested_lane, "explicit lane; escalation disabled".into())
+        } else {
+            let mut policy = self.clone();
+            policy.max_attempts_per_lane = thresholds.quality_failures_per_lane.max(1);
+            policy.max_total_attempts = policy
+                .max_total_attempts
+                .min(thresholds.max_total_attempts.max(1));
+            // `decide` keeps the existing retry/stop semantics. Enforce all three
+            // independent ceilings on the candidate before accepting an escalation.
+            let decision = policy.decide(history, requested_lane, budget);
+            let selected = decision.lane();
+            let ceilings = [
+                &policy.ceiling,
+                &thresholds.org_ceiling,
+                &thresholds.task_ceiling,
+                &thresholds.work_unit_ceiling,
+            ];
+            if ceilings.iter().all(|ceiling| ceiling.permits(selected)) {
+                (selected, decision.reason().to_owned())
+            } else {
+                let permitted = crate::model_policy::LANES
+                    .iter()
+                    .rev()
+                    .copied()
+                    .find(|lane| {
+                        lane_rank(*lane) <= lane_rank(selected)
+                            && ceilings.iter().all(|ceiling| ceiling.permits(*lane))
+                    })
+                    .unwrap_or(requested_lane);
+                (
+                    permitted,
+                    "org, task, or work unit ceiling limits lane".into(),
+                )
+            }
+        };
+        EscalationAudit {
+            requested_lane,
+            previous_lane,
+            selected_lane,
+            reason,
+            counted_failures,
+            interval_id: interval_id.to_owned(),
+        }
+    }
+
     /// タスクと実効 profile から作る。`max_total_attempts` はタスクの `max_retries + 1`
     /// （状態機械が許す試行回数）と profile の `max_attempts` を超えない。profile の
     /// `review.escalate_on_fail = false` ならレビュー不合格では上げない。
     pub fn for_task(task: &Task, profile: Option<&crate::profile::EffectiveProfile>) -> Self {
-        let mut policy = EscalationPolicy::default();
+        Self::for_task_with_thresholds(task, profile, &EscalationThresholds::default())
+    }
+
+    /// 設定値を先に反映し、task/profile の試行上限で丸める。
+    pub fn for_task_with_thresholds(
+        task: &Task,
+        profile: Option<&crate::profile::EffectiveProfile>,
+        thresholds: &EscalationThresholds,
+    ) -> Self {
+        let mut policy = EscalationPolicy {
+            max_attempts_per_lane: thresholds.quality_failures_per_lane.max(1),
+            max_total_attempts: thresholds.max_total_attempts.max(1),
+            ..EscalationPolicy::default()
+        };
         let task_limit = task.budget.max_retries.saturating_add(1);
         policy.max_total_attempts = policy.max_total_attempts.min(task_limit);
         if let Some(p) = profile {
@@ -206,8 +324,9 @@ impl EscalationPolicy {
         let failures_here = counted
             .iter()
             .rev()
-            .take_while(|r| r.lane.unwrap_or(base) == current)
-            .filter(|r| self.escalate_on.contains(&r.outcome))
+            .take_while(|r| {
+                r.lane.unwrap_or(base) == current && self.escalate_on.contains(&r.outcome)
+            })
             .count() as u32;
         if failures_here < self.max_attempts_per_lane {
             return RetryDecision::Retry {
@@ -267,11 +386,20 @@ pub fn is_budget_outcome(outcome: &str) -> bool {
 
 /// ADR-0069 D6: イベント列（古い順）から試行の履歴を作る。`reopen` で履歴はリセットする。
 pub fn attempt_history(task: &Task, events: &[Event]) -> Vec<AttemptRecord> {
+    attempt_history_with_interval(task, events).0
+}
+
+/// `reopen` ごとに履歴を区切り、event 列内の位置から安定した区間 ID を返す。
+pub fn attempt_history_with_interval(
+    task: &Task,
+    events: &[Event],
+) -> (Vec<AttemptRecord>, String) {
     let mut out: Vec<AttemptRecord> = Vec::new();
+    let mut interval_id = "initial".to_owned();
     let mut lane: Option<Tier> = None;
     let mut last_finish: Option<String> = None;
     let mut failed_checks: Vec<usize> = Vec::new();
-    for event in events {
+    for (index, event) in events.iter().enumerate() {
         match event {
             Event::RoutingDecided { record, .. } => {
                 lane = Some(record.resolution.lane.unwrap_or(record.decision.lane));
@@ -319,6 +447,10 @@ pub fn attempt_history(task: &Task, events: &[Event]) -> Vec<AttemptRecord> {
                     "requeue" => Some(AttemptOutcome::SupplySide),
                     "reopen" => {
                         out.clear();
+                        lane = None;
+                        last_finish = None;
+                        failed_checks.clear();
+                        interval_id = format!("reopen:{index}");
                         None
                     }
                     _ => None,
@@ -332,7 +464,7 @@ pub fn attempt_history(task: &Task, events: &[Event]) -> Vec<AttemptRecord> {
             _ => {}
         }
     }
-    out
+    (out, interval_id)
 }
 
 #[cfg(test)]
@@ -501,6 +633,14 @@ mod tests {
         assert!(!p.escalate_on.contains(&ReviewFailed));
         assert!(p.escalate_on.contains(&VerificationFailed));
         assert_eq!(p.ceiling.max_lane, Some(Tier::Standard));
+        let thresholds = EscalationThresholds {
+            max_total_attempts: 6,
+            ..EscalationThresholds::default()
+        };
+        assert_eq!(
+            EscalationPolicy::for_task_with_thresholds(&t, None, &thresholds).max_total_attempts,
+            6
+        );
     }
 
     #[test]
@@ -566,5 +706,160 @@ mod tests {
         let mut with_reopen = events.clone();
         with_reopen.push(tr("reopen"));
         assert!(attempt_history(&t, &with_reopen).is_empty());
+    }
+
+    #[test]
+    fn routing_trajectory_escalates_one_lane_and_respects_caps() {
+        use crate::model::Status;
+
+        let policy = EscalationPolicy::default();
+        let thresholds = EscalationThresholds::default();
+        let failures = [
+            rec(Tier::Cheap, ReviewFailed),
+            rec(Tier::Cheap, VerificationFailed),
+        ];
+        let audit = policy.decide_trajectory(
+            &failures,
+            Tier::Cheap,
+            TierSource::Default,
+            BudgetState::Ok,
+            &thresholds,
+            "initial",
+        );
+        assert_eq!(audit.requested_lane, Tier::Cheap);
+        assert_eq!(audit.previous_lane, Some(Tier::Cheap));
+        assert_eq!(audit.selected_lane, Tier::Standard);
+        assert_eq!(audit.counted_failures, 2);
+        assert_eq!(audit.interval_id, "initial");
+
+        for source in [TierSource::Human, TierSource::System] {
+            let explicit = policy.decide_trajectory(
+                &failures,
+                Tier::Cheap,
+                source,
+                BudgetState::Ok,
+                &thresholds,
+                "initial",
+            );
+            assert_eq!(explicit.selected_lane, Tier::Cheap);
+        }
+        for cap in 0..3 {
+            let mut limited = thresholds.clone();
+            let ceiling = LaneCeiling {
+                max_lane: Some(Tier::Cheap),
+                ..LaneCeiling::default()
+            };
+            match cap {
+                0 => limited.org_ceiling = ceiling,
+                1 => limited.task_ceiling = ceiling,
+                _ => limited.work_unit_ceiling = ceiling,
+            }
+            assert_eq!(
+                policy
+                    .decide_trajectory(
+                        &failures,
+                        Tier::Cheap,
+                        TierSource::Default,
+                        BudgetState::Ok,
+                        &limited,
+                        "initial",
+                    )
+                    .selected_lane,
+                Tier::Cheap
+            );
+        }
+        let mut tuned = thresholds.clone();
+        tuned.quality_failures_per_lane = 3;
+        assert_eq!(
+            policy
+                .decide_trajectory(
+                    &failures,
+                    Tier::Cheap,
+                    TierSource::Default,
+                    BudgetState::Ok,
+                    &tuned,
+                    "initial",
+                )
+                .selected_lane,
+            Tier::Cheap
+        );
+        let supply = [failures[0], failures[1], rec(Tier::Cheap, SupplySide)];
+        assert_eq!(
+            policy
+                .decide_trajectory(
+                    &supply,
+                    Tier::Cheap,
+                    TierSource::Default,
+                    BudgetState::Ok,
+                    &thresholds,
+                    "initial",
+                )
+                .selected_lane,
+            Tier::Cheap
+        );
+        for outcome in [WorkerError, BudgetExhausted, LowQuality] {
+            let history = [rec(Tier::Cheap, outcome), rec(Tier::Cheap, outcome)];
+            assert_eq!(
+                policy
+                    .decide_trajectory(
+                        &history,
+                        Tier::Cheap,
+                        TierSource::Default,
+                        BudgetState::Ok,
+                        &thresholds,
+                        "initial",
+                    )
+                    .selected_lane,
+                Tier::Cheap
+            );
+        }
+        let second_lane = [failures[0], failures[1], rec(Tier::Standard, ReviewFailed)];
+        assert_eq!(
+            policy
+                .decide_trajectory(
+                    &second_lane,
+                    Tier::Cheap,
+                    TierSource::Default,
+                    BudgetState::Ok,
+                    &thresholds,
+                    "initial",
+                )
+                .selected_lane,
+            Tier::Standard
+        );
+
+        let task = crate::model_policy::tests::task("reopen", vec![]);
+        let reopen = Event::Transitioned {
+            from: Status::Done,
+            to: Status::Ready,
+            reason: "reopen".into(),
+        };
+        let review_fail = Event::Transitioned {
+            from: Status::Reviewing,
+            to: Status::Ready,
+            reason: "review_fail".into(),
+        };
+        let events = [
+            review_fail.clone(),
+            review_fail.clone(),
+            reopen,
+            review_fail,
+        ];
+        let (history, interval_id) = attempt_history_with_interval(&task, &events);
+        assert_eq!(interval_id, "reopen:2");
+        assert_eq!(history.len(), 1);
+        assert_eq!(
+            policy
+                .decide_trajectory(
+                    &history,
+                    Tier::Cheap,
+                    TierSource::Default,
+                    BudgetState::Ok,
+                    &thresholds,
+                    &interval_id,
+                )
+                .counted_failures,
+            1
+        );
     }
 }

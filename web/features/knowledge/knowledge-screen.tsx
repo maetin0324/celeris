@@ -10,9 +10,11 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
-import { DataList } from "../../components/ui/data-list";
 import { Section } from "../../components/ui/panel";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { cn } from "../../lib/utils";
+import { MetaLine } from "./meta-line";
+import { useFocusOnChange } from "./use-focus-on-change";
 
 type Sender = ReturnType<typeof useActionResult>;
 
@@ -21,6 +23,9 @@ const field =
   "block w-full min-w-0 min-h-11 rounded-md border border-input bg-surface px-3 py-2 text-body text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring";
 const labelText = "text-label font-medium";
 const navLink = "inline-flex min-h-11 min-w-11 items-center text-primary underline";
+// 広い幅の 2 ペインの一覧側。window の scroll に付いて来て、長い一覧は枠の中で scroll する。
+const listPane = "min-w-0 lg:sticky lg:top-0 lg:col-span-2 lg:max-h-dvh lg:self-start lg:overflow-y-auto";
+const contentPane = "min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3";
 const pathFor = (q: string, path?: string, edit = false) => {
   const params = new URLSearchParams();
   if (q) params.set("q", q);
@@ -32,15 +37,7 @@ const pathFor = (q: string, path?: string, edit = false) => {
 /** 出典の一覧。無い時は「なし」と書き、空欄にしない。 */
 function Sources({ sources }: { sources?: readonly string[] }) {
   if (!sources?.length) return <span className="text-muted-foreground">なし</span>;
-  return (
-    <ul className="min-w-0 space-y-1">
-      {sources.map((source) => (
-        <li key={source} className="break-all">
-          {source}
-        </li>
-      ))}
-    </ul>
-  );
+  return <span className="break-all">{sources.join("、")}</span>;
 }
 
 function Scope({ scope }: { scope?: string | null }) {
@@ -115,27 +112,54 @@ function PageEditor({ page, sender }: { page: KnowledgePage; sender: Sender }) {
   );
 }
 
-function KnowledgeResults({ items, q }: { items: KnowledgeTree["items"]; q: string }) {
-  if (items.length === 0) return <p>一致する知識はありません。</p>;
+type TreeItem = KnowledgeTree["items"][number];
+
+/** 一覧の行の 1 行の補助情報（更新日・scope・出典の件数）。出典の全文は中身の側で見せる。何も無ければ path。 */
+function rowMeta(item: TreeItem): string {
+  const parts = [
+    item.updated ? `更新 ${item.updated}` : "",
+    item.scope ? `scope ${item.scope}` : "",
+    item.sources?.length ? `出典 ${item.sources.length} 件` : "",
+  ].filter(Boolean);
+  return parts.length ? parts.join("・") : item.path;
+}
+
+/** 行を並べた一覧（狭い幅と、選んだ時の一覧ペイン）。選んだ行は aria-current と背景で示す。 */
+function ResultRows({ items, q, selected }: { items: readonly TreeItem[]; q: string; selected: string }) {
   return (
-    <>
-      {/* スマホ: 対象名 → 補助情報の順の行（DESIGN.md「Table と list」）。 */}
-      <ul className="divide-y divide-border md:hidden">
-        {items.map((item) => (
-          <li key={item.path} className="min-w-0 py-2">
-            <Link className={`${navLink} break-all`} to={pathFor(q, item.path)}>
+    <ul className="divide-y divide-border">
+      {items.map((item) => {
+        const current = item.path === selected;
+        return (
+          <li
+            key={item.path}
+            className={cn("min-w-0 rounded-md px-2 pb-2", current && "bg-accent text-accent-foreground")}
+          >
+            <Link
+              className={`${navLink} break-all`}
+              to={pathFor(q, item.path)}
+              aria-current={current ? "true" : undefined}
+            >
               {item.title || item.path}
             </Link>
-            <DataList
-              items={[
-                { label: "出典", value: <Sources sources={item.sources} /> },
-                { label: "scope", value: <Scope scope={item.scope} /> },
-                { label: "更新日", value: <Updated value={item.updated} /> },
-              ]}
-            />
+            <p className="break-all text-label text-muted-foreground">{rowMeta(item)}</p>
           </li>
-        ))}
-      </ul>
+        );
+      })}
+    </ul>
+  );
+}
+
+function KnowledgeResults({ items, q, selected }: { items: KnowledgeTree["items"]; q: string; selected: string }) {
+  if (items.length === 0) return <p>一致する知識はありません。</p>;
+  // 選んだ時は一覧ペインが狭いので、表ではなく行の一覧にする。
+  if (selected) return <ResultRows items={items} q={q} selected={selected} />;
+  return (
+    <>
+      {/* スマホ: 対象名 → 補助情報 1 行の順の行（DESIGN.md「Table と list」）。 */}
+      <div className="md:hidden">
+        <ResultRows items={items} q={q} selected={selected} />
+      </div>
       <div className="hidden md:block">
         <Table aria-label="知識の一覧">
           <TableCaption>{items.length} 件</TableCaption>
@@ -180,6 +204,7 @@ export function KnowledgeScreen() {
   const params = new URLSearchParams(searchStr);
   const q = params.get("q") ?? "";
   const path = params.get("path") ?? "";
+  const edit = params.get("edit") === "1";
   const sender = useActionResult(knowledgeKeys.all);
   const [search, setSearch] = useState(q);
   useEffect(() => setSearch(q), [q]);
@@ -193,72 +218,92 @@ export function KnowledgeScreen() {
     queryFn: ({ signal }) => apiGet<KnowledgePage>(`/api/knowledge/page?path=${encodeURIComponent(path)}`, signal),
     enabled: !!path,
   });
+  const headingRef = useFocusOnChange<HTMLHeadingElement>(path, page.data?.path === path);
   return (
-    <ScreenFrame title="知識" route="/knowledge">
-      <nav aria-label="知識の画面" className="flex flex-wrap gap-4">
-        <Link className={navLink} to="/knowledge/inbox">
-          候補
-        </Link>
-        <Link className={navLink} to="/knowledge/skills">
-          手順書（skills）
-        </Link>
-      </nav>
+    <ScreenFrame
+      title="知識"
+      route="/knowledge"
+      actions={
+        <nav aria-label="知識の画面" className="flex flex-wrap gap-x-4">
+          <Link className={navLink} to="/knowledge/inbox">
+            候補
+          </Link>
+          <Link className={navLink} to="/knowledge/skills">
+            手順書（skills）
+          </Link>
+        </nav>
+      }
+    >
       <form
-        className="flex flex-wrap items-end gap-2"
+        className="flex min-w-0 items-center gap-2"
         onSubmit={(event) => {
           event.preventDefault();
           router.history.push(pathFor(search.trim(), path), {});
         }}
       >
-        <label className="block min-w-0 flex-1 space-y-1">
-          <span className={labelText}>検索</span>
-          <input className={field} value={search} onChange={(event) => setSearch(event.target.value)} />
+        <label className="block min-w-0 flex-1">
+          <span className="sr-only">検索</span>
+          <input
+            className={field}
+            value={search}
+            placeholder="タイトル・本文で検索"
+            onChange={(event) => setSearch(event.target.value)}
+          />
         </label>
         <Button type="submit">検索</Button>
       </form>
-      {/* 未選択のときは本文枠を出さず、検索結果を全幅で並べる（空の枠で画面の 2/3 を空けない）。 */}
+      {/* 未選択のときは本文枠を出さず、検索結果を全幅で並べる（空の枠で画面の 2/3 を空けない）。
+          選んだ時は広い幅で一覧と中身の 2 ペイン、狭い幅では一覧を畳んで中身を見出しの直下に出す。 */}
       <div className={path ? "grid min-w-0 gap-6 lg:grid-cols-5" : "min-w-0"}>
         {/* 名前付きの region にすると「検索」の label と取り違えるので、見出しだけで区切る。 */}
-        <div className={path ? "min-w-0 lg:col-span-2" : "min-w-0 space-y-1"}>
-          <h2 className="text-section font-semibold text-foreground">検索結果</h2>
-          {!path && <p className="text-label text-muted-foreground">タイトルを選ぶと本文と出典を開きます。</p>}
+        <div className={path ? cn("hidden lg:block", listPane) : "min-w-0"}>
+          <h2 className={path ? "text-section font-semibold text-foreground" : "sr-only"}>検索結果</h2>
           <FetchFrame query={tree}>
-            {tree.data && <KnowledgeResults items={tree.data.items} q={q} />}
+            {tree.data && <KnowledgeResults items={tree.data.items} q={q} selected={path} />}
             {tree.data?.truncated && (
               <p className="text-label text-muted-foreground">結果の一部だけを表示しています。</p>
             )}
           </FetchFrame>
         </div>
         {path && (
-          <div className="min-w-0 rounded-lg border border-border bg-surface p-4 lg:col-span-3">
+          <div className={contentPane}>
             <FetchFrame query={page}>
               {page.data && (
-                <div className="space-y-3">
-                  <Section
-                    title={page.data.title || page.data.path}
-                    description={<span className="break-all">{page.data.path}</span>}
-                    actions={
-                      params.get("edit") === "1" ? null : (
+                <section aria-labelledby="knowledge-page-title" className="min-w-0 space-y-3">
+                  <div className="flex min-w-0 flex-wrap items-start justify-between gap-x-4">
+                    <h2
+                      id="knowledge-page-title"
+                      ref={headingRef}
+                      tabIndex={-1}
+                      className="min-w-0 break-words pt-2 text-section font-semibold text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    >
+                      {page.data.title || page.data.path}
+                    </h2>
+                    <div className="flex flex-wrap gap-x-4">
+                      {!edit && (
                         <Link className={navLink} to={pathFor(q, path, true)}>
                           編集
                         </Link>
-                      )
-                    }
-                  >
-                    <DataList
-                      items={[
-                        { label: "出典", value: <Sources sources={page.data.sources} /> },
-                        { label: "scope", value: <Scope scope={page.data.scope} /> },
-                        { label: "更新日", value: <Updated value={page.data.updated} /> },
-                      ]}
-                    />
-                  </Section>
-                  {params.get("edit") === "1" ? (
+                      )}
+                      <Link className={cn(navLink, "lg:hidden")} to={pathFor(q)}>
+                        一覧に戻る
+                      </Link>
+                    </div>
+                  </div>
+                  <MetaLine
+                    items={[
+                      { label: "場所", value: page.data.path },
+                      { label: "scope", value: <Scope scope={page.data.scope} /> },
+                      { label: "更新日", value: <Updated value={page.data.updated} /> },
+                      { label: "出典", value: <Sources sources={page.data.sources} /> },
+                    ]}
+                  />
+                  {edit ? (
                     <PageEditor key={page.data.path} page={page.data} sender={sender} />
                   ) : (
                     <Body source={page.data.raw} title={page.data.title || page.data.path} />
                   )}
-                </div>
+                </section>
               )}
             </FetchFrame>
           </div>
@@ -289,20 +334,15 @@ function Candidate({ item, sender }: { item: KnowledgeCandidate; sender: Sender 
     <li className="min-w-0 rounded-lg border border-border bg-surface p-4">
       <Section title={item.title} description={<span className="break-all">{item.path}</span>}>
         <div className="space-y-3">
-          <DataList
+          <MetaLine
             items={[
-              { label: "出典", value: <Sources sources={item.sources} /> },
-              { label: "scope", value: <Scope scope={item.scope} /> },
-              { label: "更新日", value: <Updated value={item.created} /> },
               {
                 label: "提案された取り込み先",
-                value: (
-                  <span className="break-all">
-                    {item.target}
-                    {item.target_exists ? "（既存ページあり）" : "（新規ページ）"}
-                  </span>
-                ),
+                value: `${item.target}${item.target_exists ? "（既存ページあり）" : "（新規ページ）"}`,
               },
+              { label: "scope", value: <Scope scope={item.scope} /> },
+              { label: "更新日", value: <Updated value={item.created} /> },
+              { label: "出典", value: <Sources sources={item.sources} /> },
             ]}
           />
           <Body source={item.body} title={item.title} />
@@ -386,18 +426,25 @@ export function KnowledgeInboxScreen() {
     ([id, result]) => result.status !== 422 && !shown.has(id),
   );
   return (
-    <ScreenFrame title="知識の候補" route="/knowledge/inbox">
-      <Link className={navLink} to="/knowledge">
-        知識に戻る
-      </Link>
-      <section aria-label="操作の結果">
-        {orphanResults.map(([id, result]) => (
-          <div key={id} className="flex flex-wrap gap-1">
-            <strong>{id}:</strong>
-            <ActionResultView result={result} />
-          </div>
-        ))}
-      </section>
+    <ScreenFrame
+      title="知識の候補"
+      route="/knowledge/inbox"
+      actions={
+        <Link className={navLink} to="/knowledge">
+          知識に戻る
+        </Link>
+      }
+    >
+      {orphanResults.length > 0 && (
+        <section aria-label="操作の結果">
+          {orphanResults.map(([id, result]) => (
+            <div key={id} className="flex flex-wrap gap-1">
+              <strong>{id}:</strong>
+              <ActionResultView result={result} />
+            </div>
+          ))}
+        </section>
+      )}
       <FetchFrame query={inbox}>
         {!!inbox.data?.items.length && (
           <p className="text-label text-muted-foreground">

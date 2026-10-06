@@ -160,7 +160,11 @@ export function ConsoleView({
       <form
         data-testid="console-composer"
         className="fixed inset-x-0 z-20 flex flex-col gap-2 border-t border-border bg-background px-3 pt-2 md:left-nav"
-        style={{ bottom: "var(--console-kb, 0px)", paddingBottom: "max(0.5rem, env(safe-area-inset-bottom))" }}
+        // md 未満は画面下の固定タブ（--shell-bottom-inset）の上に置く。safe area はタブが受け持つので二重に空けない。
+        style={{
+          bottom: "calc(var(--console-kb, 0px) + var(--shell-bottom-inset, 0px))",
+          paddingBottom: "max(0.5rem, calc(env(safe-area-inset-bottom) - var(--shell-bottom-inset, 0px)))",
+        }}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();

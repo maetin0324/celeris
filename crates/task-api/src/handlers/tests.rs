@@ -93,6 +93,7 @@ fn state_rx(
         knowledge_root: None,
         docs_repo_root: Some(dir.join("workspace")),
         llm_sources: None,
+        routing_catalog: None,
         tree_limits: task_core::TreeLimits::default(),
     };
     ApiState::new(settings, rx).unwrap_or_else(|e| panic!("{e}"))

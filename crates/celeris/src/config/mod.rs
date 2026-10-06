@@ -31,6 +31,7 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod model_routing;
 mod org;
 mod providers;
 mod proxy;
@@ -52,6 +53,7 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use model_routing::*;
 pub use org::*;
 pub use providers::*;
 pub use scratch::*;
@@ -226,6 +228,16 @@ pub struct Config {
     /// （`Config::load` が行う。`Config::validate` が「必要なのに埋まらない」を弾く）。
     #[serde(default)]
     pub llm_proxy: llm_proxy::config::LlmProxyConfig,
+    /// Phase 1 model catalog and lane policies; legacy remains the default execution mode.
+    #[serde(default)]
+    pub model_routing: ModelRoutingConfig,
+    /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
+    #[serde(skip)]
+    pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,
+    /// Shared handle for API readers; each reader keeps its own immutable Arc snapshot.
+    #[serde(skip)]
+    pub routing_catalog_state:
+        Option<std::sync::Arc<std::sync::RwLock<std::sync::Arc<RoutingCatalog>>>>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション。ここから ----
     /// `[sessions]`。CoS の対話・部門長のレビュー run の継続セッション（`node_sessions`）の逼迫判定。
@@ -436,6 +448,14 @@ impl Config {
 
         // 3. 検証。
         cfg.validate()?;
+        let catalog = cfg.routing_catalog()?;
+        cfg.model_routing.runtime = Some(std::sync::Arc::new(cfg.routing_runtime()?));
+        for warning in &catalog.warnings {
+            tracing::warn!(key = %warning, "model routing compatibility warning");
+        }
+        let catalog = std::sync::Arc::new(catalog);
+        cfg.routing_catalog_snapshot = Some(std::sync::Arc::clone(&catalog));
+        cfg.routing_catalog_state = Some(std::sync::Arc::new(std::sync::RwLock::new(catalog)));
         for code in cfg.provider_kind_warnings() {
             tracing::warn!(warning = %code, "provider kind compatibility warning");
         }
@@ -500,6 +520,7 @@ impl Config {
             ));
         }
         proxy::validate(&self.llm_proxy)?;
+        self.routing_catalog()?;
         // ADR-0056 D1（Phase 78）: `auth = "none"` は loopback だけ、`client` は `none` のときだけ。
         self.mcp
             .resolve_listeners()

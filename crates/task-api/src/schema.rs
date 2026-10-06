@@ -54,6 +54,7 @@ pub struct ApiV1Schema {
     pub notifications_read_all: crate::inbox_notifications::NoticeReadAllResult,
     pub notifications_read_all_body: crate::inbox_notifications::ReadAllBody,
     pub task_list: TaskList,
+    pub task_status_counts: task_ops::view::TaskStatusCounts,
     pub task: Task,
     pub task_detail: TaskDetail,
     pub events_page: EventsPage,
@@ -209,6 +210,8 @@ pub struct ApiV1Schema {
     pub stream_reset: StreamReset,
     /// Phase 65（ADR-0053 D4）: `GET /llm/sources`（API と型のみ。GUI 表示は Phase 66）。
     pub llm_sources: crate::types::LlmSourcesView,
+    /// Phase 1: credential-free model and deployment catalog.
+    pub routing_catalog: crate::routing_catalog::RoutingCatalogView,
     /// Phase 78（ADR-0056 D4）: `GET /mcp/clients` と `GET /mcp/calls?client=`。
     pub mcp_clients: crate::mcp_admin::McpClientsView,
     pub mcp_calls: crate::mcp_admin::McpCallsView,

@@ -19,7 +19,7 @@ test("nav の通知の未読数は /notifications/unread-count から出て、no
   try {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${gateway.base}/tasks`);
-    const nav = page.getByRole("navigation", { name: "主要" });
+    const nav = page.getByRole("navigation", { name: "主要", exact: true });
     await expect(nav.getByRole("link", { name: /通知/ })).toHaveAttribute("href", "/notifications");
     await expect(nav.getByRole("img", { name: "未読の通知 3 件" })).toBeVisible();
     expect(daemon.requests.some((request) => request.path === "/api/v1/notifications/unread-count")).toBe(true);

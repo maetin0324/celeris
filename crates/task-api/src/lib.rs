@@ -61,6 +61,7 @@ mod reports;
 pub mod repos;
 /// ADR-0069 D5: タスクの routing の監査（`GET /tasks/{id}/routing`）。
 pub mod routing;
+pub mod routing_catalog;
 pub mod schema;
 pub mod secrets;
 /// Phase 82（ADR-0056 D3 続き）: skills を GUI から見る・作る・mount する（`GET/PUT/DELETE /skills…`、
@@ -99,6 +100,7 @@ pub use releases::{
 pub use reports::{
     ReportDetail, ReportList, ReportsNotifiedResult, ReportsReadBody, ReportsReadResult,
 };
+pub use routing_catalog::{RoutingCatalogReader, RoutingCatalogView, SharedRoutingCatalogReader};
 pub use schema::{API_V1_SCHEMA_JSON, ApiV1Schema, api_v1_schema_json, api_v1_schema_value};
 pub use state::{ApiState, StreamTuning};
 pub use stats::classify_outcome;
@@ -132,7 +134,11 @@ pub use console::{
 };
 pub use types::{ConsoleBlock, ConsolePage};
 // ---- ADR-0053 D4（Phase 65）: LLM source のローカルプロキシの観測 ----
-pub use types::{LlmCelerisTierView, LlmSourceAccountView, LlmSourceView, LlmSourcesView};
+pub use types::{
+    LlmCelerisTierView, LlmSourceAccountView, LlmSourceBilledCostView, LlmSourceCostView,
+    LlmSourceFreshnessView, LlmSourceOpportunityCostView, LlmSourceStateView, LlmSourceView,
+    LlmSourcesView,
+};
 // ---- ADR-0043 D5（Phase 54）: 変更の取り込み ----
 pub use types::{
     ChangeDiffView, ChangesView, IntegrateBody, IntegrateResult, ProjectIntegrationItem,
@@ -246,6 +252,8 @@ pub struct ApiSettings {
     /// `[llm_proxy]` が有効なときだけ `Some`（celeris が渡す）。`None` なら `GET /llm/sources` は 409
     /// `llm_proxy_unavailable`。
     pub llm_sources: Option<llm_sources::SharedLlmSourcesReader>,
+    /// Credential-free model routing catalog, refreshed atomically by the daemon.
+    pub routing_catalog: Option<routing_catalog::SharedRoutingCatalogReader>,
     // ---- ADR-0053（Phase 65）: ここまで ----
     /// ADR-0080 D5: human attestation の公開鍵と credential broker の control IPC。既定（どちらも無し）では
     /// 人の登録・決定は 503 `browser_unavailable`。
@@ -309,6 +317,10 @@ impl std::fmt::Debug for ApiSettings {
             .field(
                 "llm_sources",
                 &self.llm_sources.as_ref().map(|_| "<reader>"),
+            )
+            .field(
+                "routing_catalog",
+                &self.routing_catalog.as_ref().map(|_| "<reader>"),
             )
             .field("browser", &self.browser)
             .finish()

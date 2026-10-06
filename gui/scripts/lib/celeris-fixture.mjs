@@ -77,6 +77,9 @@ export function buildRoutes({
     { route: "knowledge-skills", path: "/knowledge/skills" },
     { route: "clusters", path: "/clusters" },
     { route: "accounts", path: "/accounts" },
+    // model routing Phase 1（ADR 2026-10-04-multi-objective-model-routing §9）: 「model routing catalog」節の
+    // model / deployment の別表示と欠測の「不明」を機械検査の対象にする。
+    { route: "providers", path: "/providers" },
     { route: "help", path: "/help" },
   ];
   if (orgId) {
@@ -401,6 +404,11 @@ export async function setupMockCeleris() {
     });
   }
 
+  // ADR 2026-10-04-multi-objective-model-routing Phase 2: 動的状態（deployment）・要求ごとの routing 監査。
+  // 試験（test/unit/routing-source-state.test.ts）と同じ fixture を読む（pathname で照合）。
+  const routingState = JSON.parse(
+    fs.readFileSync(path.join(GUI_DIR, "test/fixtures/api/routing-source-state.json"), "utf8"),
+  );
   mock.on("GET", "/api/v1/llm/sources", (_req, res) =>
     sendJson(res, 200, {
       sources: [
@@ -448,6 +456,7 @@ export async function setupMockCeleris() {
           last_hour_requests: 40,
           last_hour_prompt_tokens: 9000,
           last_hour_completion_tokens: 5000,
+          deployments: routingState.llm_sources.sources[1].deployments,
         },
       ],
       celeris_tiers: [
@@ -455,6 +464,98 @@ export async function setupMockCeleris() {
         { tier: "standard", resolves_to: "claude-oauth" },
         { tier: "cheap", resolves_to: "openai-compatible:qwen" },
       ],
+    }),
+  );
+
+  // model routing Phase 1（ADR 2026-10-04-multi-objective-model-routing §9）: `/providers` の「model routing
+  // catalog」節。旧設定から導いた欠測だらけの model（「不明」の表示）と値の揃った model、deployment を監査する。
+  mock.on("GET", "/api/v1/providers", (_req, res) =>
+    sendJson(res, 200, {
+      items: [
+        {
+          id: "claude-pool",
+          adapter: "claude-code",
+          kind: "adapter",
+          tiers: ["frontier", "standard", "cheap"],
+          concurrency: 2,
+          model: null,
+          env_keys: [],
+          in_use: 0,
+          cooldown: null,
+          llm_source: { source: "claude_oauth", origin: "explicit" },
+          stats: {
+            runs: 0,
+            done: 0,
+            question: 0,
+            error: 0,
+            requeue: 0,
+            lease_expired: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            by_day: [],
+          },
+        },
+      ],
+    }),
+  );
+  mock.on("GET", "/api/v1/llm/routing/catalog", (_req, res) =>
+    sendJson(res, 200, {
+      catalog_version: "phase1-v1",
+      mode: "legacy",
+      models: [
+        {
+          id: "qwen3-coder",
+          revision: "legacy",
+          family: "qwen",
+          capabilities: {
+            tools: null,
+            structured_output: null,
+            vision: null,
+            streaming: null,
+            reasoning_efforts: null,
+          },
+          context_limits: { input: null, output: null, total: null },
+          quality: null,
+          pricing: null,
+        },
+        {
+          id: "claude-sonnet",
+          revision: "2026-09",
+          family: "claude",
+          capabilities: {
+            tools: true,
+            structured_output: true,
+            vision: null,
+            streaming: true,
+            reasoning_efforts: null,
+          },
+          context_limits: { input: null, output: 64000, total: 200000 },
+          quality: [{ domain: "coding", index: 0.8, evaluation_version: "eval-v1", provenance: "manual" }],
+          pricing: { input_usd_per_million: 3, output_usd_per_million: 15, provenance: "manual" },
+        },
+      ],
+      deployments: [
+        {
+          id: "local/qwen3-coder",
+          source_ref: "openai_compatible:qwen",
+          model_profile_id: "qwen3-coder",
+          upstream_model: "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+          billing: "self_hosted",
+          allowed_lanes: ["cheap"],
+          price_override: null,
+        },
+        {
+          id: "claude-oauth/claude-sonnet",
+          source_ref: "claude_oauth",
+          model_profile_id: "claude-sonnet",
+          upstream_model: "claude-sonnet-4-5",
+          billing: "subscription",
+          allowed_lanes: ["frontier", "standard"],
+          price_override: null,
+        },
+      ],
+      policies: [],
+      warnings: ["[llm_proxy.models.cheap] は旧形式です（[model_routing] へ移行できます）"],
     }),
   );
 
@@ -466,6 +567,7 @@ export async function setupMockCeleris() {
       .replaceAll("01R4BROOT0000000000000001", TASK_ID),
   );
   mock.on("GET", `/api/v1/tasks/${TASK_ID}/task-tree`, (_req, res) => sendJson(res, 200, taskTree));
+  mock.on("GET", `/api/v1/tasks/${TASK_ID}/routing`, (_req, res) => sendJson(res, 200, routingState.task_routing));
 
   mock.on(`GET`, `/api/v1/tasks/${TASK_ID}`, (_req, res) =>
     sendJson(res, 200, {

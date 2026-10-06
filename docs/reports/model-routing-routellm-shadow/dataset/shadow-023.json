@@ -1,0 +1,1 @@
+{"request_id": "shadow-023", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Derive the time complexity of Dijkstra's algorithm with a Fibonacci heap and explain why decrease-key is amortized O(1)."}

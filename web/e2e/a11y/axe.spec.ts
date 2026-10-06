@@ -24,7 +24,7 @@ for (const screen of screens) {
     } else {
       // 現在地と同じ link は遷移しないので、"/" は別の画面から始める。
       await page.goto(screen.path === "/" ? `${gateway.base}/help` : gateway.base);
-      const nav = page.getByRole("navigation", { name: "主要" });
+      const nav = page.getByRole("navigation", { name: "主要", exact: true });
       await expect(nav).toBeAttached();
       const link = nav.getByRole("link", { name: screen.heading, exact: true });
       const hasNavLink = (await link.count()) > 0;
@@ -33,7 +33,7 @@ for (const screen of screens) {
       if (hasNavLink) await expect(heading).toBeFocused();
       else await expect(heading).toBeVisible();
       await expect(page.getByRole("main")).toHaveCount(1);
-      await expect(page.getByRole("navigation", { name: "主要" })).toHaveCount(1);
+      await expect(page.getByRole("navigation", { name: "主要", exact: true })).toHaveCount(1);
     }
     expect(await seriousViolations(page)).toEqual([]);
   });

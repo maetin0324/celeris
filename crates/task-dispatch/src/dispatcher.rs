@@ -117,6 +117,9 @@ mod provider_select;
 mod quota_book;
 mod review_spawn;
 mod review_verdict;
+mod routing_context;
+mod routing_enforce;
+mod routing_shadow;
 mod run_context;
 mod sinks;
 mod snapshot;
@@ -142,6 +145,14 @@ pub use cluster::{
     TunnelListenerProbe, TunnelProbe,
 };
 pub use provider_select::provider_failure_outcome;
+pub use routing_enforce::{
+    DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
+    enforce_quota_verdict, source_state_for_provider, source_state_from_account,
+};
+pub use routing_shadow::{
+    DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
+    DecisionShadowComparison, RoutingShadowListener,
+};
 pub use snapshot::SnapshotPublisher;
 
 #[cfg(test)]
@@ -1050,6 +1061,8 @@ struct RunExtras {
     /// 知識整理のフォールバックなら ADR-0052 の値、それ以外は task の予算）。`run_worker` は DB から読み直した
     /// 写しの `budget` をこれで置き換える（`max_turns` が `RunRequest.task.budget` → `--max-turns` に届くように）。
     budget: Option<task_core::Budget>,
+    /// 多目的 routing Phase 3: registry に登録した RoutingContext の参照（`RunContext.routing_context_ref`）。
+    routing_context_ref: Option<String>,
 }
 
 struct ReviewEntry {
@@ -1265,6 +1278,18 @@ pub struct Dispatcher {
     local_probe: LocalProviderProbe,
     /// ADR-0132 付記 L4: health の結果のキャッシュ（`base_url` → (いつ調べたか, 結果)）。60 秒。
     local_probe_cache: HashMap<String, (Instant, Reachability)>,
+    /// multi-objective routing Phase 2: dispatcher の routing 設定（既定 legacy。enforce は opt-in）。
+    dispatch_routing: routing_enforce::DispatchRoutingSettings,
+    /// 多目的 routing Phase 3: run に結ぶ RoutingContext の登録簿（`set_routing_context_registry`）。
+    /// 未設定なら登録も `context_ref` の発行もしない（`routing_features_recorded` の追記は続ける）。
+    routing_context_registry:
+        Option<Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>>,
+    /// 多目的 routing Phase 4: `[model_routing.shadow]` の検証済み policy（既定 off）と、
+    /// 差し替えを受け取る listener（daemon が llm-proxy の shadow を繋ぐ）。
+    routing_shadow_policy: task_core::model_router::shadow::ShadowPolicy,
+    routing_shadow_listeners: Vec<Arc<dyn RoutingShadowListener>>,
+    /// multi-objective routing Phase 2: self-host の queue / GPU load の取り込み口（揮発。保存しない）。
+    self_host_loads: HashMap<ProviderId, routing_enforce::SelfHostLoad>,
     /// ADR-0053 D3（Phase 66）: `[[clusters]].forwards` を(再)確立するフック。`None` なら何もしない。
     tunnel_forward_ensurer: Option<TunnelForwardEnsurer>,
     /// ADR-0053 D3 / Phase 85: forward の target（先方）の健康を見るフック。`None` なら常に「不健全」扱い。
@@ -1496,6 +1521,11 @@ impl Dispatcher {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
             local_probe_cache: HashMap::new(),
+            dispatch_routing: routing_enforce::DispatchRoutingSettings::default(),
+            routing_context_registry: None,
+            routing_shadow_policy: Default::default(),
+            routing_shadow_listeners: Vec::new(),
+            self_host_loads: HashMap::new(),
             tunnel_forward_ensurer: None,
             tunnel_probe: None,
             tunnel_listener_probe: None,
@@ -1520,6 +1550,15 @@ impl Dispatcher {
     pub fn set_local_providers(&mut self, specs: Vec<LocalProviderSpec>) {
         self.local_providers = specs;
         self.local_probe_cache.clear();
+    }
+
+    /// 多目的 routing Phase 3: run 開始時に RoutingContext を登録する registry を差し込む（daemon が配線する）。
+    /// 未設定の dispatcher は登録せず、worker に `context_ref` を渡さない。
+    pub fn set_routing_context_registry(
+        &mut self,
+        registry: Arc<dyn task_core::model_router::context_registry::RoutingContextRegistry>,
+    ) {
+        self.routing_context_registry = Some(registry);
     }
 
     /// ADR-0132 付記 L4: ローカルの行の health 検査を差し替える（テストはネットワークに出ない）。
@@ -2050,6 +2089,7 @@ impl Dispatcher {
                     {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }
+                    self.record_routing_outcomes(task_id);
                     finished += 1;
                 }
                 Completion::Review {
@@ -2058,6 +2098,7 @@ impl Dispatcher {
                     outcome,
                 } => {
                     self.on_review_finished(task_id, run_id, outcome)?;
+                    self.record_routing_outcomes(task_id);
                     reviewed += 1;
                 }
                 Completion::WorkUnitChecks {
@@ -2089,6 +2130,7 @@ impl Dispatcher {
                     ) {
                         self.record_finalisation_failure(task_id, &run_id, &e);
                     }
+                    self.record_routing_outcomes(task_id);
                     finished += 1;
                 }
                 Completion::Integration {
@@ -2097,6 +2139,7 @@ impl Dispatcher {
                     result,
                 } => {
                     self.on_integration_finished(task_id, &work_unit_id, *result)?;
+                    self.record_routing_outcomes(task_id);
                 }
             }
         }

@@ -224,6 +224,29 @@ pub(crate) fn reload_providers(
     config.reports = new_config.reports;
     config.notify = new_config.notify;
     config.conversation = new_config.conversation;
+    // Phase 2: dispatcher の routing 設定も新しい snapshot に揃える（`Config::load` を通った値だけ）。
+    if let Some(runtime) = &new_config.model_routing.runtime {
+        dispatcher.set_dispatch_routing(runtime.dispatch_settings());
+        // Phase 4: shadow policy も同じ snapshot から。listener（llm-proxy の shadow）へは新しい
+        // mode と policy の組が 1 回で渡り、queue は上限・予約先を丸ごと差し替える。
+        dispatcher.set_routing_shadow(runtime.shadow.clone());
+    }
+    let sidecar_control = config.model_routing.estimator_sidecar_control.take();
+    config.model_routing = new_config.model_routing;
+    config.model_routing.estimator_sidecar_control = sidecar_control;
+    config.routing_catalog_snapshot = new_config.routing_catalog_snapshot;
+    if let (Some(shared), Some(snapshot)) = (
+        config.routing_catalog_state.as_ref(),
+        config.routing_catalog_snapshot.as_ref(),
+    ) {
+        *shared
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = std::sync::Arc::clone(snapshot);
+    } else {
+        config.routing_catalog_state = new_config.routing_catalog_state;
+    }
+    // Phase 5: estimator sidecar も新しい snapshot から組み直す（締める・off へ戻すのも再起動なし）。
+    super::routing_sidecar::reload_estimator_sidecar(config);
     config.selfdeploy.delivery_projects = new_config.selfdeploy.delivery_projects;
     config.selfdeploy.delivery_default_departments =
         new_config.selfdeploy.delivery_default_departments;

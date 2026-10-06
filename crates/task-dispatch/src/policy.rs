@@ -91,6 +91,12 @@ pub trait ProviderPolicy: Send {
     fn adapter_of(&self, _provider: &str) -> Option<AdapterId> {
         None
     }
+
+    /// Legacy optimizer input in config order. Custom policies without an enumerable
+    /// config keep their existing selector behavior.
+    fn legacy_specs(&self, _hint: &WorkerHint) -> Vec<ProviderSpec> {
+        Vec::new()
+    }
 }
 
 /// 設定表の優先順位どおりに選ぶ。Throttled は cooldown まで除外。
@@ -242,6 +248,14 @@ impl ProviderPolicy for StaticPolicy {
             .iter()
             .find(|p| p.id == provider)
             .map(|p| p.adapter.clone())
+    }
+
+    fn legacy_specs(&self, hint: &WorkerHint) -> Vec<ProviderSpec> {
+        self.providers
+            .iter()
+            .filter(|p| Self::matches(p, hint))
+            .cloned()
+            .collect()
     }
 
     /// ADR-0012 D2: 設定表の順に、条件に合い cooldown 中でも除外されてもいない最初の行。

@@ -3836,3 +3836,488 @@ fn cheap_local_first_concurrency_comes_from_the_provider_row() {
         assert_eq!(spec.concurrency, expected);
     }
 }
+
+#[test]
+fn routing_legacy_config_normalizes_with_warnings() {
+    use task_core::Tier;
+    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, fixture).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
+    assert!(
+        catalog
+            .deployments
+            .iter()
+            .any(|d| d.source_ref == "openai_compatible:qwen"
+                && d.allowed_lanes == vec![Tier::Cheap])
+    );
+    assert!(
+        catalog
+            .deployments
+            .iter()
+            .filter(|d| d.model_profile_id.to_ascii_lowercase().contains("qwen"))
+            .all(|d| d.allowed_lanes == vec![Tier::Cheap])
+    );
+    assert!(
+        catalog
+            .warnings
+            .iter()
+            .any(|w| w.contains("llm_proxy.models.qwen"))
+    );
+    assert!(
+        catalog
+            .warnings
+            .iter()
+            .all(|w| !w.contains("fixture-secret-sentinel"))
+    );
+    let mut dedup = catalog.warnings.clone();
+    dedup.sort();
+    dedup.dedup();
+    assert_eq!(catalog.warnings, dedup);
+
+    let new = format!(
+        "{fixture}\n[[model_routing.models]]\nid = \"legacy:qwen:qwen3.8-27b\"\nrevision = \"v1\"\n"
+    );
+    std::fs::write(&path, new).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
+    assert_eq!(
+        catalog
+            .models
+            .iter()
+            .find(|m| m.id == "legacy:qwen:qwen3.8-27b")
+            .unwrap()
+            .revision,
+        "v1"
+    );
+    assert!(catalog.warnings.iter().any(|w| w.contains("overrides")));
+
+    std::fs::write(&path, format!("{fixture}\n[model_routing]\nmode = \"shadow\"\n[model_routing.policies.cheap]\nmin_quality = 0.55\n")).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
+    assert_eq!(
+        catalog.mode,
+        task_core::model_router::policy::RoutingMode::Shadow
+    );
+    assert_eq!(
+        catalog
+            .policies
+            .iter()
+            .find(|p| p.lane == Tier::Cheap)
+            .unwrap()
+            .min_quality,
+        0.55
+    );
+    std::fs::write(
+        &path,
+        format!("{fixture}\n[model_routing.policies.cheap]\nmin_quality = 1.5\n"),
+    )
+    .unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("min_quality")
+    );
+
+    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"openai-compatible:qwen\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nhost = \"local-gpu\"\n")).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let dep = cfg
+        .routing_catalog_snapshot
+        .as_ref()
+        .unwrap()
+        .deployments
+        .iter()
+        .find(|d| d.id == "legacy:openai-compatible:qwen:Cheap")
+        .unwrap();
+    assert_eq!(dep.allowed_lanes, vec![Tier::Cheap]);
+    assert_eq!(
+        dep.billing,
+        task_core::model_router::profiles::Billing::SelfHosted
+    );
+    assert_eq!(dep.host.as_deref(), Some("local-gpu"));
+
+    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"bad\"\nsource_ref = \"openai_compatible:missing\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown source_ref")
+    );
+    std::fs::write(&path, format!("{fixture}\n[[model_routing.deployments]]\nid = \"legacy:openai-compatible:qwen:Cheap\"\nsource_ref = \"codex-oauth\"\nmodel_profile_id = \"legacy:qwen:qwen3.8-27b\"\nupstream_model = \"qwen3.8-27b\"\nallowed_lanes = [\"cheap\"]\n")).unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("identity conflicts")
+    );
+    std::fs::write(
+        &path,
+        format!("{fixture}\n[model_routing]\nmode = \"enforce\"\n"),
+    )
+    .unwrap();
+    assert!(
+        Config::load(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("Phase 2")
+    );
+}
+
+#[test]
+fn routing_legacy_equivalence_qwen_is_cheap_only() {
+    use task_core::Tier;
+    let fixture = include_str!("fixtures/provider_kind_legacy_production.toml");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, fixture).unwrap();
+    let cfg = Config::load(&path).unwrap();
+    let catalog = cfg.routing_catalog_snapshot.as_ref().unwrap();
+    let legacy = cfg
+        .provider_specs()
+        .into_iter()
+        .find(|p| p.id == "opencode-qwen")
+        .unwrap();
+    let normalized = catalog
+        .deployments
+        .iter()
+        .find(|d| d.id == "provider:opencode-qwen")
+        .unwrap();
+    assert_eq!(legacy.tiers, vec![Tier::Cheap]);
+    assert_eq!(normalized.allowed_lanes, legacy.tiers);
+    assert_eq!(normalized.upstream_model, "qwen-local/qwen3.8-27b");
+    assert_eq!(
+        cfg.provider_llm_source(&legacy.id).unwrap().source,
+        task_core::LlmSourceRef::OpenaiCompatible("qwen".into())
+    );
+    assert_eq!(normalized.source_ref, "openai_compatible:qwen");
+}
+
+fn routing_phase2_load(extra: &str) -> Result<Config, String> {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    let db = dir.path().join("db.sqlite3");
+    let ws = dir.path().join("ws");
+    std::fs::write(
+        &path,
+        format!(
+            "db = {db:?}\nworkspace_root = {ws:?}\n[[providers]]\nid = \"x\"\nadapter = \"fake\"\n{extra}"
+        ),
+    )
+    .unwrap();
+    Config::load(&path).map_err(|e| e.to_string())
+}
+
+#[test]
+fn routing_shadow_config_defaults_off_and_requires_caps() {
+    let legacy = routing_phase2_load("").unwrap();
+    let policy = &legacy.model_routing.runtime.as_ref().unwrap().shadow;
+    assert!(!policy.execute);
+    assert_eq!(policy.sample_rate, 0.0);
+    assert!(policy.daily_caps().is_none());
+
+    let decision = routing_phase2_load("[model_routing]\nmode = \"shadow\"\n").unwrap();
+    assert!(
+        !decision
+            .model_routing
+            .runtime
+            .as_ref()
+            .unwrap()
+            .shadow
+            .execute
+    );
+
+    let base = "[model_routing.shadow]\nexecute = true\nsample_rate = 1.0\n";
+    let err = routing_phase2_load(base).unwrap_err();
+    assert!(err.contains("daily_max_requests"), "{err}");
+
+    let capped = format!(
+        "{base}candidate_policy = \"candidate-v1\"\ndaily_max_requests = 10\ndaily_max_tokens = 1000\n\
+         daily_max_effective_usd = 1.5\nmax_concurrency = 2\nmax_queue_depth = 4\n\
+         timeout_ms = 3000\n"
+    );
+    let err = routing_phase2_load(&capped).unwrap_err();
+    assert!(err.contains("allowlist"), "{err}");
+    let partial = format!("{capped}[model_routing.shadow.allowlist]\ntask_kinds = [\"*\"]\n");
+    let err = routing_phase2_load(&partial).unwrap_err();
+    assert!(err.contains("every allowlist dimension"), "{err}");
+    let valid = format!(
+        "{capped}[model_routing.shadow.allowlist]\n\
+         task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
+    );
+    let config = routing_phase2_load(&valid).unwrap();
+    let runtime = config.model_routing.runtime.as_ref().unwrap();
+    assert!(runtime.shadow.execute);
+    assert_eq!(runtime.shadow.daily_caps().unwrap().max_requests, 10);
+    assert_eq!(runtime.shadow.allowlist.sources, ["qwen"]);
+    assert_eq!(
+        runtime.shadow_candidate_policy.as_deref(),
+        Some("candidate-v1")
+    );
+
+    for (suffix, reason) in [
+        ("sample_rate = 1.1\n", "sample_rate"),
+        ("sample_rate = -0.1\n", "sample_rate"),
+        ("daily_max_tokens = 0\n", "daily_max_tokens"),
+    ] {
+        let err = routing_phase2_load(&format!("[model_routing.shadow]\n{suffix}")).unwrap_err();
+        assert!(err.contains(reason), "{err}");
+    }
+}
+
+#[test]
+fn routing_sidecar_config_defaults_off_and_rejects_primary() {
+    let config = routing_phase2_load("").unwrap();
+    let sidecar = &config.model_routing.estimator.sidecar;
+    assert!(!sidecar.enabled);
+    assert!(sidecar.shadow_only);
+    assert!(!sidecar.send_prompt);
+    assert_eq!(sidecar.protocol_version, 1);
+
+    for (snippet, expected) in [
+        ("shadow_only = false\n", "shadow_only"),
+        ("enabled = true\n", "requires endpoint"),
+        (
+            "enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
+             estimator_id = \"test\"\nestimator_version = \"v1\"\n",
+            "daily_max_requests",
+        ),
+        ("endpoint = \"http://example.com:8080\"\n", "endpoint"),
+    ] {
+        let err = routing_phase2_load(&format!("[model_routing.estimator.sidecar]\n{snippet}"))
+            .unwrap_err();
+        assert!(err.contains(expected), "{err}");
+    }
+
+    let valid = "[model_routing.estimator.sidecar]\n\
+        enabled = true\nendpoint = \"http://127.0.0.1:8080\"\n\
+        estimator_id = \"test\"\nestimator_version = \"v1\"\n\
+        daily_max_requests = 10\n\
+        [model_routing.estimator.sidecar.allowlist]\n\
+        task_kinds = [\"*\"]\nroles = [\"*\"]\nlanes = [\"cheap\"]\nsources = [\"qwen\"]\n";
+    let config = routing_phase2_load(valid).unwrap();
+    assert!(config.model_routing.estimator.sidecar.enabled);
+    assert!(config.model_routing.estimator.sidecar.shadow_only);
+}
+
+#[test]
+fn routing_sidecar_privacy_and_dependencies_gate_prompt() {
+    use task_core::model_router::shadow::ShadowTarget;
+
+    let base = "[model_routing.estimator.sidecar]\n\
+        endpoint = \"https://router.example/estimate\"\n\
+        network_allowlist = [\"router.example\"]\n";
+    let config = routing_phase2_load(base).unwrap();
+    let sidecar = &config.model_routing.estimator.sidecar;
+    let target = ShadowTarget {
+        task_kind: "coding".into(),
+        role: "software-engineering".into(),
+        lane: "cheap".into(),
+        source: "qwen".into(),
+    };
+    assert!(!sidecar.allows_prompt(&target));
+    assert!(sidecar.allows_dependencies(&["router.example".into()]));
+    assert!(!sidecar.allows_dependencies(&["embeddings.example".into()]));
+
+    let err = routing_phase2_load(&format!("{base}send_prompt = true\n")).unwrap_err();
+    assert!(err.contains("prompt_allowlist"), "{err}");
+    let config = routing_phase2_load(&format!(
+        "{base}send_prompt = true\n\
+         [model_routing.estimator.sidecar.prompt_allowlist]\n\
+         task_kinds = [\"coding\"]\nroles = [\"software-engineering\"]\n\
+         lanes = [\"cheap\"]\nsources = [\"qwen\"]\n"
+    ))
+    .unwrap();
+    assert!(
+        config
+            .model_routing
+            .estimator
+            .sidecar
+            .allows_prompt(&target)
+    );
+    assert!(
+        !config
+            .model_routing
+            .estimator
+            .sidecar
+            .allows_dependencies(&["embeddings.example".into()])
+    );
+}
+
+#[test]
+fn routing_enforce_opt_in_validates_heuristic_only() {
+    use task_core::model_router::policy::RoutingMode;
+    // heuristic の明示 opt-in だけが通る。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.mode, RoutingMode::Enforce);
+    assert_eq!(
+        cfg.routing_catalog_snapshot.as_ref().unwrap().mode,
+        RoutingMode::Enforce
+    );
+    assert_eq!(runtime.enforce_routes, vec!["standalone", "server"]);
+    assert_eq!(runtime.dispatch_settings().mode, RoutingMode::Enforce);
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"standalone\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().enforce_routes,
+        vec!["standalone"]
+    );
+    // opt-in の無い enforce は拒否（Phase 1 の文言を保つ）。
+    let err = routing_phase2_load("[model_routing]\nmode = \"enforce\"\n").unwrap_err();
+    assert!(
+        err.contains("Phase 2") && err.contains("heuristic"),
+        "{err}"
+    );
+    // heuristic 以外の optimizer は enforce でも shadow でも拒否。
+    for mode in ["enforce", "shadow", "legacy"] {
+        let err = routing_phase2_load(&format!(
+            "[model_routing]\nmode = \"{mode}\"\n[model_routing.estimator]\nkind = \"routellm\"\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("only \"heuristic\""), "{mode}: {err}");
+    }
+    // standalone でもサーバ全体の制約でもない経路は拒否。
+    for route in ["task", "org", ""] {
+        let err = routing_phase2_load(&format!(
+            "[model_routing]\nmode = \"enforce\"\nenforce_routes = [\"{route}\"]\n[model_routing.estimator]\nkind = \"heuristic\"\n"
+        ))
+        .unwrap_err();
+        assert!(err.contains("standalone or server-wide"), "{route}: {err}");
+    }
+    let err = routing_phase2_load(
+        "[model_routing]\nmode = \"enforce\"\nenforce_routes = []\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap_err();
+    assert!(err.contains("enforce_routes is empty"), "{err}");
+    // shadow + heuristic の明示は従来どおり通る（mode=shadow の挙動は変えない）。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nmode = \"shadow\"\n[model_routing.estimator]\nkind = \"heuristic\"\n",
+    )
+    .unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().mode,
+        RoutingMode::Shadow
+    );
+    // 不正な数値も拒否する。
+    for (extra, needle) in [
+        (
+            "[model_routing]\nobservation_ttl_seconds = 0\n",
+            "observation_ttl_seconds",
+        ),
+        (
+            "[model_routing.subscription_windows.five_hour]\nreserve_value_usd = -1\n",
+            "reserve_value_usd",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nusd_per_gpu_second = nan\n",
+            "usd_per_gpu_second",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 0\n",
+            "concurrency_limit",
+        ),
+        (
+            "[[model_routing.resource_groups]]\nid = \"g\"\n[[model_routing.resource_groups]]\nid = \"g\"\n",
+            "duplicate id",
+        ),
+        ("[model_routing.retry]\nclient = 1\n", "retry.client"),
+        (
+            "[model_routing.retry]\ntotal_attempts = 0\n",
+            "total_attempts",
+        ),
+    ] {
+        let err = routing_phase2_load(extra).unwrap_err();
+        assert!(err.contains(needle), "{extra}: {err}");
+    }
+}
+
+#[test]
+fn routing_config_defaults_do_not_seed_unknown_as_zero() {
+    use task_core::model_router::policy::{FreshnessPolicy, RoutingMode};
+    let cfg = routing_phase2_load("").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.mode, RoutingMode::Legacy);
+    assert_eq!(runtime.freshness, FreshnessPolicy::default());
+    assert!(runtime.window_reserves.is_empty());
+    assert!(runtime.resource_groups.is_empty());
+    let rates = runtime.self_host_rates(Some("gpu0"));
+    assert_eq!(rates.usd_per_gpu_second, None);
+    assert_eq!(rates.usd_per_wait_second, None);
+    assert!(runtime.capacity_limits(None).resource_groups.is_empty());
+    assert_eq!(
+        runtime.fallback,
+        llm_proxy::fallback::FallbackSettings::default()
+    );
+    let settings = runtime.dispatch_settings();
+    assert_eq!(settings, task_dispatch::DispatchRoutingSettings::default());
+    // 一部だけ書いた欄も、書いていない成分は unknown のまま（0 にしない）。
+    let cfg = routing_phase2_load(
+        "[model_routing]\nobservation_ttl_seconds = 120\n\
+         [model_routing.subscription_windows.five_hour]\nreserve_value_usd = 4.0\n\
+         [model_routing.subscription_windows.seven_day]\n\
+         [[model_routing.resource_groups]]\nid = \"gpu0\"\nconcurrency_limit = 2\n\
+         [[model_routing.resource_groups]]\nid = \"gpu1\"\nusd_per_gpu_second = 0.001\n\
+         [model_routing.retry]\nserver = 1\n",
+    )
+    .unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.freshness.observation_ttl_seconds, 120.0);
+    assert_eq!(runtime.window_reserves.get("five_hour"), Some(&4.0));
+    assert_eq!(runtime.window_reserves.get("seven_day"), None);
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu0")).usd_per_gpu_second,
+        None
+    );
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu1")).usd_per_gpu_second,
+        Some(0.001)
+    );
+    assert_eq!(
+        runtime.self_host_rates(Some("gpu1")).usd_per_wait_second,
+        None
+    );
+    let caps = runtime.capacity_limits(Some(3));
+    assert_eq!(caps.per_account, Some(3));
+    assert_eq!(caps.resource_groups.get("gpu0"), Some(&2));
+    assert_eq!(caps.resource_groups.get("gpu1"), None);
+    assert_eq!(runtime.fallback.limits.server, 1);
+    assert_eq!(
+        runtime.fallback.limits.rate_limited,
+        llm_proxy::fallback::RetryLimits::default().rate_limited
+    );
+    assert_eq!(runtime.dispatch_settings().window_reserves.len(), 1);
+}
+
+#[test]
+fn routing_phase3_escalation_defaults_and_validation() {
+    let cfg = routing_phase2_load("").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(
+        runtime.escalation,
+        task_core::EscalationThresholds::default()
+    );
+    assert_eq!(runtime.context_safety_margin, None);
+    let cfg = routing_phase2_load("[model_routing]\ncontext_safety_margin = 512\n[model_routing.escalation]\nquality_failures_per_lane = 3\nmax_total_attempts = 5\n").unwrap();
+    let runtime = cfg.model_routing.runtime.as_ref().unwrap();
+    assert_eq!(runtime.context_safety_margin, Some(512));
+    assert_eq!(runtime.escalation.quality_failures_per_lane, 3);
+    assert_eq!(runtime.escalation.max_total_attempts, 5);
+    for key in ["quality_failures_per_lane", "max_total_attempts"] {
+        let err =
+            routing_phase2_load(&format!("[model_routing.escalation]\n{key} = 0\n")).unwrap_err();
+        assert!(err.contains(key), "{err}");
+    }
+    let cfg = routing_phase2_load("[model_routing]\nfuture_context_field = 1\n[model_routing.escalation]\nfuture_threshold = 7\n").unwrap();
+    assert_eq!(
+        cfg.model_routing.runtime.as_ref().unwrap().escalation,
+        task_core::EscalationThresholds::default()
+    );
+}

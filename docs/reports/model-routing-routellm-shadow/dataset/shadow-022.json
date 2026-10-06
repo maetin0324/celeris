@@ -1,0 +1,1 @@
+{"request_id": "shadow-022", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Design a crash-consistent write-ahead log for an append-only event store on SQLite, and explain recovery after power loss mid-transaction."}

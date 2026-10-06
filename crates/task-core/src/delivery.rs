@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(
             versions,
             (1..=37)
-                .chain([41, 42, 43, 44, 45, 46, 47, 51])
+                .chain([41, 42, 43, 44, 45, 46, 47, 48, 49, 51])
                 .collect::<Vec<u32>>()
         );
         let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();

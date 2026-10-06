@@ -103,6 +103,13 @@ pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron
 /// ADR parallel integration D4: 受信箱の統合依頼 event を絞る index。
 pub(crate) const MIGRATION_0047: &str =
     include_str!("../../migrations/0047_events_integration_request_index.sql");
+/// ADR 2026-10-04-multi-objective-model-routing Phase 2: `llm_proxy_requests` に routing の相関欄
+/// （decision / snapshot / run / task / source / model）と、決定の索引を足す（additive）。
+pub(crate) const MIGRATION_0048: &str =
+    include_str!("../../migrations/0048_routing_log_correlation.sql");
+/// ADR 2026-10-04-multi-objective-model-routing Phase 4: 実行 shadow の UTC 日次上限の共有予約（additive）。
+pub(crate) const MIGRATION_0049: &str =
+    include_str!("../../migrations/0049_routing_shadow_budget.sql");
 pub(crate) const MIGRATION_0051: &str =
     include_str!("../../migrations/0051_org_browser_events.sql");
 
@@ -110,7 +117,7 @@ pub(crate) const MIGRATION_0051: &str =
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49, 50];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 50];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
@@ -163,6 +170,8 @@ impl SqliteStore {
             45 => Ok(MIGRATION_0045),
             46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
+            48 => Ok(MIGRATION_0048),
+            49 => Ok(MIGRATION_0049),
             51 => Ok(MIGRATION_0051),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"

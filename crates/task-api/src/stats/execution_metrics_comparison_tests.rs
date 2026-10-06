@@ -212,6 +212,8 @@ fn fixture() -> SqliteStore {
                         },
                         quota_reason: None,
                         work_unit_id: None,
+                        escalation: None,
+                        optimizer: None,
                     }),
                 },
                 Event::WorkerFinished {

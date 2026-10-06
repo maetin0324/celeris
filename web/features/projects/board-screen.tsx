@@ -8,6 +8,7 @@ import { ActionResultView, useActionResult } from "../../components/actions/use-
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { Button } from "../../components/ui/button";
+import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { cn } from "../../lib/utils";
@@ -191,30 +192,35 @@ function StateFilter({
     ...boardColumns.map((column) => ({ id: column.id, title: column.title, count: counts[column.id] })),
   ];
   return (
+    // 狭い幅では横 scroll の 1 行（sm 以上は折り返す）。
     <nav aria-label="状態で絞り込む" className="min-w-0">
-      <ul className="flex flex-wrap gap-2">
-        {options.map((option) => {
-          const current = filter.column === option.id;
-          return (
-            <li key={option.id ?? "all"}>
-              <Link
-                to="/board"
-                search={searchObject({ ...filter, column: option.id })}
-                aria-current={current ? "page" : undefined}
-                className={cn(
-                  "inline-flex min-h-11 items-center gap-1 rounded-md border px-3 text-label",
-                  current
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-input bg-surface text-foreground hover:bg-accent",
-                )}
-              >
-                {option.title}
-                <span className="tabular-nums">{option.count}</span>
-              </Link>
-            </li>
-          );
-        })}
-      </ul>
+      <ScrollTabs>
+        <ul className="flex w-max gap-2 py-1 sm:w-auto sm:flex-wrap">
+          {options.map((option) => {
+            const current = filter.column === option.id;
+            return (
+              <li key={option.id ?? "all"} className="shrink-0">
+                <Link
+                  to="/board"
+                  search={searchObject({ ...filter, column: option.id })}
+                  // 既定の部分一致だと column の無い「すべて」が常に active（aria-current）になる。
+                  activeOptions={{ exact: true }}
+                  aria-current={current ? "page" : undefined}
+                  className={cn(
+                    "inline-flex min-h-11 items-center gap-1 rounded-md border px-3 text-label",
+                    current
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : "border-input bg-surface text-foreground hover:bg-accent",
+                  )}
+                >
+                  {option.title}
+                  <span className="tabular-nums">{option.count}</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </ScrollTabs>
     </nav>
   );
 }
@@ -263,11 +269,11 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
   const extraOpen = extraFields.some((field) => filter[field.name]) || !!filter.priority || !!filter.show_support;
   return (
     <ScreenFrame title="ボード" route="/board">
-      <p className="max-w-prose text-muted-foreground">案件のタスクを状態ごとにまとめた一覧です。</p>
-      <form ref={form} onSubmit={apply} className="min-w-0 space-y-3" data-testid="board-filter-form">
-        <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:items-end">
-          <label className={cn(fieldLabel, "sm:flex-1")}>
-            案件
+      {/* 案件＋検索 を 1 行、絞り込む＋条件を足す を 1 行に詰め、狭い幅でも一覧の先頭行を最初の 1 画面に入れる。 */}
+      <form ref={form} onSubmit={apply} className="min-w-0 space-y-2 sm:space-y-3" data-testid="board-filter-form">
+        <div className="flex min-w-0 items-end gap-2 sm:gap-3" data-testid="board-toolbar">
+          <label className={cn(fieldLabel, "flex-1")}>
+            <span className="sr-only sm:not-sr-only">案件</span>
             <select name="project" className={control} defaultValue={filter.project ?? ""}>
               <option value="">すべての案件</option>
               {projects.data?.items.map((project) => (
@@ -277,45 +283,48 @@ export function BoardScreen({ searchStr }: { searchStr: string }) {
               ))}
             </select>
           </label>
-          <label className={cn(fieldLabel, "sm:flex-1")}>
-            検索
-            <input name="q" type="search" className={control} defaultValue={filter.q} />
+          <label className={cn(fieldLabel, "flex-1")}>
+            <span className="sr-only sm:not-sr-only">検索</span>
+            <input name="q" type="search" placeholder="検索" className={control} defaultValue={filter.q} />
           </label>
-          <Button type="submit" variant="primary">
+        </div>
+        <div className="flex min-w-0 items-start gap-2">
+          <Button type="submit" variant="primary" className="shrink-0">
             絞り込む
           </Button>
-        </div>
-        <details open={extraOpen} className="min-w-0">
-          <summary className="inline-flex min-h-11 cursor-pointer items-center text-label font-medium text-primary">
-            条件を足す（ラベル・種類・レベル・優先度・担当・途中目標）
-          </summary>
-          <div className="mt-2 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            {extraFields.map((field) => (
-              <label key={field.name} className={fieldLabel}>
-                {field.title}
-                <input name={field.name} className={control} defaultValue={filter[field.name]} />
+          <details open={extraOpen} className="min-w-0 flex-1">
+            <summary className="inline-flex min-h-11 cursor-pointer items-center text-label font-medium text-primary">
+              条件を足す
+              <span className="hidden sm:inline">（ラベル・種類・レベル・優先度・担当・途中目標）</span>
+            </summary>
+            <div className="mt-2 grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              {extraFields.map((field) => (
+                <label key={field.name} className={fieldLabel}>
+                  {field.title}
+                  <input name={field.name} className={control} defaultValue={filter[field.name]} />
+                </label>
+              ))}
+              <label className={fieldLabel}>
+                優先度
+                <select name="priority" className={control} defaultValue={filter.priority ?? ""}>
+                  <option value="">すべて</option>
+                  {["P0", "P1", "P2", "P3"].map((v) => (
+                    <option key={v}>{v}</option>
+                  ))}
+                </select>
               </label>
-            ))}
-            <label className={fieldLabel}>
-              優先度
-              <select name="priority" className={control} defaultValue={filter.priority ?? ""}>
-                <option value="">すべて</option>
-                {["P0", "P1", "P2", "P3"].map((v) => (
-                  <option key={v}>{v}</option>
-                ))}
-              </select>
-            </label>
-            <label className="flex min-h-11 items-center gap-2 self-end text-label font-medium">
-              <input
-                name="show_support"
-                type="checkbox"
-                className="size-11 accent-primary"
-                defaultChecked={filter.show_support}
-              />
-              裏方も表示
-            </label>
-          </div>
-        </details>
+              <label className="flex min-h-11 items-center gap-2 self-end text-label font-medium">
+                <input
+                  name="show_support"
+                  type="checkbox"
+                  className="size-11 accent-primary"
+                  defaultChecked={filter.show_support}
+                />
+                裏方も表示
+              </label>
+            </div>
+          </details>
+        </div>
       </form>
       <FetchFrame query={projects}>
         {projects.data ? (

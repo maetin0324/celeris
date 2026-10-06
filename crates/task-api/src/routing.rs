@@ -1,8 +1,13 @@
 //! ADR-0069 D5: `GET /tasks/{id}/routing`（読み取り）。
 //!
 //! なぜその担当（org）・harness・lane・model になったかを、`task_ops::routing_audit` がイベントから
-//! 組み立てた run ごとの監査と、タスクの routing の出自（`Task.routing`、捨てた LLM の担当を含む）で返す。
+//! 組み立てた run ごとの監査（Phase 2 は proxy の要求単位の子 trace と `audit_incomplete` を含む）と、タスクの routing の出自（`Task.routing`、捨てた LLM の担当を含む）で返す。
+//! Phase 3 は proxy の `routing_request_decided`（試した source・fallback 原因）と実際の source/model
+//! （`actual`・`actual_sources`）、構造化した escalation（`escalation_audit`）、dispatch 時点の特徴
+//! （`routing_features`）、最新の outcome（`routing_outcome`・`outcome_state`）を同じ run の object に足す。
 //! 集めるのは決定的（ストアだけ）。LLM は関与しない。
+//! Phase 4 の `routing_shadow` は run ごとに別欄で返し、primary の outcome・attempts・review を変えない。
+//! Phase 5 の estimator shadow は `routing_shadow[].estimator` と task 全体の `estimator_shadow` 要約で返す。
 
 use axum::extract::{RawQuery, State};
 use axum::http::StatusCode;
@@ -32,13 +37,23 @@ pub(crate) async fn routing(
                 .get(id)
                 .map_err(store_problem)?
                 .ok_or_else(|| ApiProblem::task_not_found(id))?;
-            let runs = task_ops::routing_audit::task_routing_audit(store, id)
+            // Phase 2: proxy の要求単位の子 trace は同じ DB の proxy log（相関欄）と照合して結ぶ。
+            let audit = task_ops::routing_audit::task_routing_audit_with_requests(store, store, id)
                 .map_err(|e| ops_problem(store, e, None))?;
+            let estimator_shadow = task_ops::routing_audit::estimator_shadow_summary(
+                audit
+                    .runs
+                    .iter()
+                    .flat_map(|run| run.routing_shadow.iter().flatten())
+                    .filter_map(|shadow| shadow.estimator.as_ref()),
+            );
             Ok(TaskRoutingView {
                 task_id: id,
                 assignee: task.assignee,
                 routing: task.routing,
-                runs,
+                runs: audit.runs,
+                unbound_requests: audit.unbound_requests,
+                estimator_shadow,
             })
         })
         .await?;

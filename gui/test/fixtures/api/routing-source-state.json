@@ -1,0 +1,209 @@
+{
+  "llm_sources": {
+    "sources": [
+      {
+        "id": "codex-oauth",
+        "kind": "codex-oauth",
+        "enabled": true,
+        "accounts": [],
+        "last_hour_requests": 3,
+        "last_hour_prompt_tokens": 1200,
+        "last_hour_completion_tokens": 300,
+        "deployments": [
+          {
+            "deployment_id": "codex-oauth/gpt-standard",
+            "reachability": "up",
+            "latency_ms": 820,
+            "freshness": {
+              "observed_at": "2026-10-05T11:59:00Z",
+              "age_secs": 60,
+              "expires_at": "2026-10-05T12:04:00Z",
+              "stale": false
+            },
+            "quota_remaining": 0.4,
+            "quota_reset_at": "2026-10-05T14:00:00Z",
+            "pressure": null,
+            "unknown": ["pressure"],
+            "cost": {
+              "billed": { "cash_usd": 0.0 },
+              "opportunity": { "shadow_usd": 0.31, "resource_usd": null },
+              "effective_usd": null,
+              "assumptions": ["subscription の残量と reset までの時間からの shadow price"]
+            }
+          }
+        ]
+      },
+      {
+        "id": "openai-compatible:qwen",
+        "kind": "openai-compatible",
+        "enabled": true,
+        "reachable": true,
+        "accounts": [],
+        "last_hour_requests": 40,
+        "last_hour_prompt_tokens": 9000,
+        "last_hour_completion_tokens": 5000,
+        "deployments": [
+          {
+            "deployment_id": "openai-compatible:qwen/self",
+            "reachability": "unknown",
+            "latency_ms": null,
+            "freshness": {
+              "observed_at": null,
+              "age_secs": null,
+              "expires_at": null,
+              "stale": true
+            },
+            "quota_remaining": null,
+            "quota_reset_at": null,
+            "pressure": 0.7,
+            "unknown": ["latency", "quota", "quota_reset", "cash", "shadow", "effective", "observed_at"],
+            "cost": {
+              "billed": { "cash_usd": null },
+              "opportunity": { "shadow_usd": null, "resource_usd": 0.12 },
+              "effective_usd": null,
+              "assumptions": ["self-host の load / queue / GPU の機会費用"]
+            }
+          }
+        ]
+      }
+    ],
+    "celeris_tiers": [
+      { "tier": "frontier", "resolves_to": "codex-oauth" },
+      { "tier": "standard", "resolves_to": "codex-oauth" },
+      { "tier": "cheap", "resolves_to": "openai-compatible:qwen" }
+    ]
+  },
+  "task_routing": {
+    "task_id": "01BOARDTASK00000000000001",
+    "assignee": "coding",
+    "routing": { "tier_source": "system" },
+    "runs": [
+      {
+        "task_id": "01BOARDTASK00000000000001",
+        "run_id": "01RUNSTATE0000000000000001",
+        "org_node": "coding",
+        "harness": "coding",
+        "lane": "standard",
+        "model": "gpt-standard",
+        "audit_incomplete": true,
+        "incomplete_reasons": ["request_id_missing", "request_log_missing"],
+        "requests": [
+          {
+            "decision_id": "01DECISIONSTATE000000000A",
+            "request_id": "01REQSTATE00000000000000A",
+            "incomplete_reason": "request_log_missing",
+            "trace": {
+              "decision_id": "01DECISIONSTATE000000000A",
+              "stage": "proxy",
+              "mode": "enforce",
+              "catalog_version": "catalog-1",
+              "estimator_version": "est-1",
+              "feature_version": "feat-1",
+              "policy_version": "policy-1",
+              "snapshot_id": "snap-1",
+              "requested_lane": "standard",
+              "selected": "codex-oauth/gpt-standard",
+              "selected_lane": "standard",
+              "source_id": "codex-oauth/gpt-standard",
+              "model": "gpt-standard",
+              "account_id": "codex-a",
+              "fallback_order": ["openai-compatible:qwen/self"],
+              "reasons": ["quality", "cost"],
+              "candidates": [
+                {
+                  "deployment_id": "codex-oauth/gpt-standard",
+                  "model_profile_id": "gpt-standard",
+                  "eligible_provider_ids": ["codex-oauth"],
+                  "excluded_reasons": [],
+                  "excluded_reason": null,
+                  "config_order": 0,
+                  "cash_usd": 0.0,
+                  "shadow_usd": 0.31,
+                  "resource_usd": null,
+                  "effective_usd": null,
+                  "latency_ms": 820,
+                  "pressure": null,
+                  "quality": { "feature_version": "feat-1", "reasons": [], "confidence": 0.8, "index": 0.82 },
+                  "score": 0.41,
+                  "score_breakdown": {
+                    "q": 0.82,
+                    "c": 0.31,
+                    "l": 0.82,
+                    "p": 1.0,
+                    "wq": 1.0,
+                    "wc": 0.5,
+                    "wl": 0.2,
+                    "wp": 0.3,
+                    "score": 0.41,
+                    "unknown": ["cost_unknown", "pressure_unknown"]
+                  }
+                },
+                {
+                  "deployment_id": "openai-compatible:qwen/self",
+                  "model_profile_id": "qwen-local",
+                  "eligible_provider_ids": ["qwen"],
+                  "excluded_reasons": ["quota_exhausted"],
+                  "excluded_reason": { "kind": "quota_exhausted" },
+                  "config_order": 1,
+                  "cash_usd": null,
+                  "shadow_usd": null,
+                  "resource_usd": 0.12,
+                  "effective_usd": null,
+                  "latency_ms": null,
+                  "pressure": 0.7,
+                  "quality": null,
+                  "score": null,
+                  "score_breakdown": null
+                },
+                {
+                  "deployment_id": "claude-oauth/pool",
+                  "model_profile_id": "claude-std",
+                  "eligible_provider_ids": [],
+                  "excluded_reasons": ["cooldown"],
+                  "excluded_reason": { "kind": "cooldown" },
+                  "config_order": 2,
+                  "cash_usd": null,
+                  "shadow_usd": null,
+                  "resource_usd": null,
+                  "effective_usd": null,
+                  "latency_ms": null,
+                  "pressure": null,
+                  "quality": null,
+                  "score": null,
+                  "score_breakdown": null
+                }
+              ]
+            },
+            "log": {
+              "source_id": "codex-oauth/gpt-standard",
+              "model": "gpt-standard",
+              "account": "codex-a",
+              "snapshot_id": "snap-1"
+            }
+          }
+        ]
+      }
+    ],
+    "unbound_requests": [
+      {
+        "decision_id": "01DECISIONSTATE000000000B",
+        "incomplete_reason": "request_id_missing",
+        "trace": {
+          "decision_id": "01DECISIONSTATE000000000B",
+          "stage": "proxy",
+          "mode": "shadow",
+          "catalog_version": "catalog-1",
+          "estimator_version": "est-1",
+          "feature_version": "feat-1",
+          "policy_version": "policy-1",
+          "snapshot_id": "snap-1",
+          "requested_lane": "cheap",
+          "selected": "openai-compatible:qwen/self",
+          "fallback_order": [],
+          "reasons": [],
+          "candidates": []
+        }
+      }
+    ]
+  }
+}

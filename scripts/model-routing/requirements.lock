@@ -1,0 +1,8 @@
+# Direct pins for the opt-in RouteLLM environment. Resolve and freeze all
+# transitive packages for the target Python/CPU or CUDA platform before use.
+# RouteLLM source: https://github.com/lm-sys/RouteLLM, commit below.
+# python==3.11 (interpreter for the dedicated venv; not installed by pip)
+routellm @ git+https://github.com/lm-sys/RouteLLM.git@0b64fdafe049e596a3f5657c219329f24af24198
+torch==2.3.1
+transformers==4.41.2
+litellm==1.60.0

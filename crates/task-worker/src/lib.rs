@@ -52,6 +52,7 @@ pub mod protocol;
 pub mod provider;
 pub mod research_targets;
 pub mod result_report;
+mod routing_context_transport;
 /// ADR-0075 D1〜D3（Phase G1）: ローカルの scratch pool（owner ごとの `CARGO_TARGET_DIR`、lease、semantic GC の計画）。
 pub mod scratch;
 /// ADR-0056 D3（Phase 79）: mount された skills を run にアダプタごとに届ける。

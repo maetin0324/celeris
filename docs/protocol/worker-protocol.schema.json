@@ -618,6 +618,14 @@
       ],
       "type": "string"
     },
+    "ContextTransport": {
+      "description": "How an adapter carried the daemon-issued routing reference.",
+      "enum": [
+        "header",
+        "unsupported"
+      ],
+      "type": "string"
+    },
     "Continuation": {
       "enum": [
         "claude_session_resume",
@@ -2760,6 +2768,13 @@
           ],
           "description": "タスクに役割があるときだけ `Some`（ADR-0016 D1）。"
         },
+        "routing_context_ref": {
+          "description": "多目的 routing ADR（2026-10-04）§10 Phase 3: dispatcher が daemon 内の registry に登録した\nRoutingContext を指す opaque な参照（期限付き。中身は運ばない）。registry を配線していない\ndaemon・reviewer run では `None`。adapter が LLM 要求へどう載せるかは task-worker 側が決める。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "session": {
           "anyOf": [
             {
@@ -2837,6 +2852,22 @@
         "prior_review",
         "inputs"
       ],
+      "type": "object"
+    },
+    "RunTransportEvidence": {
+      "description": "Trusted adapter report stored at `runs/<run_id>/context-transport.json`.\nMissing fields from earlier runs decode as unknown.",
+      "properties": {
+        "context_transport": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ContextTransport"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
       "type": "object"
     },
     "SessionHandle": {
@@ -4188,6 +4219,17 @@
     },
     "run": {
       "$ref": "#/$defs/run"
+    },
+    "transport_evidence": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/RunTransportEvidence"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "`runs/<run_id>/context-transport.json`。"
     }
   },
   "required": [

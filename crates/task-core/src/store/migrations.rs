@@ -103,6 +103,13 @@ pub(crate) const MIGRATION_0046: &str = include_str!("../../migrations/0046_cron
 /// ADR parallel integration D4: 受信箱の統合依頼 event を絞る index。
 pub(crate) const MIGRATION_0047: &str =
     include_str!("../../migrations/0047_events_integration_request_index.sql");
+/// ADR 2026-10-04-multi-objective-model-routing Phase 2: `llm_proxy_requests` に routing の相関欄
+/// （decision / snapshot / run / task / source / model）と、決定の索引を足す（additive）。
+pub(crate) const MIGRATION_0048: &str =
+    include_str!("../../migrations/0048_routing_log_correlation.sql");
+/// ADR 2026-10-04-multi-objective-model-routing Phase 4: 実行 shadow の UTC 日次上限の共有予約（additive）。
+pub(crate) const MIGRATION_0049: &str =
+    include_str!("../../migrations/0049_routing_shadow_budget.sql");
 /// CoS chat D1: durable conversation, attachments, operations, and FTS.
 pub(crate) const MIGRATION_0050: &str = include_str!("../../migrations/0050_cos_chat.sql");
 /// CoS D3: hash-only, expiring credentials scoped to a chat run.
@@ -111,13 +118,12 @@ pub(crate) const MIGRATION_0052: &str =
 /// CoS D6: old notification provenance at route cutover.
 pub(crate) const MIGRATION_0053: &str = include_str!("../../migrations/0053_cos_triage.sql");
 
-/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0048/0049 routing、
-/// 0051 は並行ブランチ、
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0051 は並行ブランチ、
 /// 0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49, 51];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 51];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
@@ -170,6 +176,8 @@ impl SqliteStore {
             45 => Ok(MIGRATION_0045),
             46 => Ok(MIGRATION_0046),
             47 => Ok(MIGRATION_0047),
+            48 => Ok(MIGRATION_0048),
+            49 => Ok(MIGRATION_0049),
             50 => Ok(MIGRATION_0050),
             52 => Ok(MIGRATION_0052),
             53 => Ok(MIGRATION_0053),

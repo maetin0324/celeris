@@ -436,6 +436,7 @@ impl Dispatcher {
     ) {
         task_worker::kill_tree_with(run_id, self.config.kill_grace, container);
         handle.abort();
+        self.release_routing_context(run_id);
     }
 
     /// レビュー側（判定コマンドの run と Reviewer run）の停止。run は 2 本ありうるので両方に送る。
@@ -449,7 +450,8 @@ impl Dispatcher {
 
     /// Phase F5-fix3: 止めた run に `WorkerFinished` がまだ無ければ、`interrupted: <why>`（`end =
     /// cancelled`。GUI では割り込みと同じ「失敗ではない」扱い、コメントの割り込みも消費しない）を追記する。
-    /// ストアが同じトランザクションで `runs` 行を `cancelled` にする。失敗しても警告だけ。
+    /// ストアが同じトランザクションで `runs` 行を `cancelled` にする。続けて v1/v2 の WU を回収する。
+    /// 終端 task の WU は cancel_open_work_units に任せる。失敗や途中のクラッシュは起動時照合が拾う。
     pub(super) fn close_aborted_run(
         &self,
         task_id: TaskId,
@@ -466,9 +468,6 @@ impl Dispatcher {
                 return;
             }
         };
-        if already {
-            return;
-        }
         let finished = Event::WorkerFinished {
             run_id: run_id.to_string(),
             outcome: format!("interrupted: {why}"),
@@ -477,8 +476,27 @@ impl Dispatcher {
             metrics: None,
             end: Some(task_core::RunEnd::Cancelled),
         };
-        if let Err(e) = self.store.append_event(task_id, &finished) {
+        if !already && let Err(e) = self.store.append_event(task_id, &finished) {
             tracing::warn!(%task_id, %run_id, error = %e, "failed to close an aborted run");
+            return;
+        }
+        // Task が comment / pause により既に Ready でも、run の終端と WU の回収を組にする。
+        // 再実行時（WorkerFinished 記録後のクラッシュ）にも WU の照合は省略しない。
+        let recovered = (|| -> Result<(), DispatchError> {
+            if let Some(task) = self.store.get(task_id)?
+                && !task.status.is_terminal()
+            {
+                let reason = if why.starts_with(crate::orphan::ORPHAN_TAKEOVER_REASON) {
+                    crate::orphan::ORPHAN_TAKEOVER_REASON
+                } else {
+                    "aborted"
+                };
+                self.reconcile_work_unit_run(task_id, run_id, reason)?;
+            }
+            Ok(())
+        })();
+        if let Err(e) = recovered {
+            tracing::warn!(%task_id, %run_id, error = %e, "failed to reconcile the work unit of a closed run");
         }
     }
 
@@ -543,18 +561,6 @@ impl Dispatcher {
                     "aborted (task no longer running under this lease)",
                 );
                 self.just_aborted.insert(id);
-                // ADR-0074 D1.6/D1.7（Phase F2）: v2 の WU の run を止めたなら、WU を `running` の
-                // まま残さない（割り込み・lease 喪失なら checkpoint の有無で needs_continuation /
-                // ready に戻す。Cancel は `cancel_open_work_units` が cancelled にする）。
-                // ADR-0140 付記 comment-resume: 段の無い計画（v1）の WU の run も同じ（`RunKey.work_unit` は
-                // 持たないが、`last_run_id` がこの run の `running` の WU を戻す。無ければ何もしない）。これが
-                // 無いとコメントの割り込みの後、WU が `running` のまま残り task が再 dispatch されない。
-                if let Some(t) = &current
-                    && !t.status.is_terminal()
-                    && let Err(e) = self.reconcile_work_unit_run(id, &entry.run_id, "aborted")
-                {
-                    tracing::warn!(task_id = %id, run_id = %entry.run_id, error = %e, "failed to reconcile the work unit of an aborted run");
-                }
             }
         }
         // ADR-0074 D1.4/D1.6（Phase F2b）: Running でなくなった Task の統合も止める。Cancel なら
@@ -582,6 +588,9 @@ impl Dispatcher {
             if !still_running && let Some(entry) = self.checking.remove(&run_id) {
                 tracing::warn!(task_id = %id, %run_id, "aborting the work unit checks (task no longer running)");
                 entry.handle.abort();
+                self.just_aborted.insert(id);
+                // run は完了済みでも、検査の保持を失った WU を Running のまま残さない。
+                self.reconcile_work_unit_run(id, &run_id, "aborted")?;
             }
         }
         let aborted: Vec<TaskId> = self.just_aborted.iter().copied().collect();
@@ -675,6 +684,7 @@ impl Dispatcher {
             .iter()
             .find(|(_, e)| e.run_id == run_id)
             .map(|(k, _)| k.clone())?;
+        self.release_routing_context(run_id);
         self.running.remove(&key)
     }
 

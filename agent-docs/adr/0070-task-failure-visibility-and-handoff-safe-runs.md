@@ -241,3 +241,30 @@ lease 失効で reclaim されない（`process_group::group_alive` を使う）
    `InfraRequeue`（WU は reason `shutdown`）を書いてから exit する。run が error 以外の終端の `result.json` を
    書き終えていたら DB は触らず、次のデーモンの 4. に任せる（ここで検査・レビューを spawn しても exit で失われる）。
    レビュー・検査・統合は触らない（次のデーモンの `recover_reviews` と 4. が拾う）。
+
+## 付記: 中断した run と Running WU を一緒に回収する（2026-10-06）
+
+本番 task `01M44H0SRV70E32AQ6C5N37MSK` の `main-sync-4` では、02:35 のコメント割り込みで
+Task が Ready になり工程 lease を失った後、02:44 に run `01M47GB02JWSC6MBP73WARMFEB` が
+`interrupted: orphan_takeover: no live daemon instance holds this run` / Cancelled で閉じた。
+lease の無い run の回収は WU を戻さず、Running task 向けの WU 回収にも入らなかったため、
+Task は Ready でも WU が Running のまま配車を妨げた。pause/resume は配車の停止フラグであり、
+WU を修復しないので解消しなかった。
+
+- **不変条件**: 非終端 task の通常 WU を Running として保持できるのは、run またはその後処理
+  （検査等）を生きた daemon が保持している間だけ。run 索引の終端だけでは検査中との区別はできない。
+  中断・cancel・孤児回収でその保持が終わった WU は Ready（checkpoint があれば NeedsContinuation）へ戻す。
+  Task 自体の Cancel は WU を Cancelled にする既存経路を使い、終端 task を再配車しない。
+- `close_aborted_run` は WorkerFinished の有無にかかわらず、対象 run が `last_run_id` と一致する
+  Running WU を照合する。Task が先に Ready になった場合も同じ。lease 回収・shutdown は既存の
+  `reconcile_work_unit_run` を使う。いずれも attempts・WU の runs/retries/continuations を回収で増やさない。
+- run の終端記録と WU 回収は別 transaction。途中で停止しても、新 active の最初の tick と
+  `RUNS_RECONCILE_INTERVAL_SECS` ごとの照合が、run 索引の終端・欠落・run ID 欠落を検出して修復する。
+  DB エラーはログを残して次の周期に再試行する。即時の原子的な run/WU 同時更新を保証するものではなく、
+  **回収処理の完了時および起動時照合後に残留しない**ことを保証する。
+- 回収は active・対象 task フィルタ・他の active/draining の生存判定を守る。生きた旧 daemon が
+  保持している可能性がある間は横取りしない。pause は保持したまま WU だけを修復し、resume 後に配車する。
+- store は writer transaction で WU の状態・plan・kind・run ID・更新時刻と task が非終端であることを
+  再確認する。新 run の開始・replan・Cancel が先行すれば古い回収は何も書かない。LLM は使わない。
+
+具体的な対象・試験は [ADR-0074 の同日付記](0074-parallel-work-units-checkpoints-milestones-quota.md) を参照。

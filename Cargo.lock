@@ -2391,6 +2391,7 @@ name = "task-ops"
 version = "0.1.0"
 dependencies = [
  "pulldown-cmark",
+ "rusqlite",
  "schemars",
  "serde",
  "serde_json",

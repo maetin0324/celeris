@@ -416,6 +416,11 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP INDEX idx_events_delivery_skipped; \
              DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP INDEX idx_events_integration_request; \
+             DROP TABLE routing_shadow_reservations; \
+             DROP INDEX idx_events_routing_decided; DROP INDEX idx_llm_proxy_requests_decision; \
+             ALTER TABLE llm_proxy_requests DROP COLUMN model; ALTER TABLE llm_proxy_requests DROP COLUMN source_id; \
+             ALTER TABLE llm_proxy_requests DROP COLUMN task_id; ALTER TABLE llm_proxy_requests DROP COLUMN run_id; \
+             ALTER TABLE llm_proxy_requests DROP COLUMN snapshot_id; ALTER TABLE llm_proxy_requests DROP COLUMN decision_id; \
              DELETE FROM schema_migrations WHERE version >= 34;",
         )
         .unwrap();

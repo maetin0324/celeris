@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CelerisClient } from "~/celeris/client.server";
 import type { Providers } from "~/celeris/types";
 import { ADAPTER_OPTIONS, loadProviders } from "~/routes/providers";
+import { routingCatalogView } from "../mock-celeris/fixtures";
 import { type MockCeleris, sendJson, sendProblem, startMockCeleris } from "../mock-celeris/server";
 
 let mock: MockCeleris;
@@ -110,6 +111,37 @@ describe("loadProviders", () => {
 
     expect(result.llmSources).toEqual(llm);
     expect(result.llmSourcesUnavailable).toBe(false);
+  });
+
+  it("routing_catalog_missing_metadata: loads GET /llm/routing/catalog as-is, with missing metadata kept null", async () => {
+    const catalog = routingCatalogView();
+    mock.on("GET", "/api/v1/providers", (_req, res) => {
+      sendJson(res, 200, providersView);
+    });
+    mock.on("GET", "/api/v1/llm/routing/catalog", (_req, res) => {
+      sendJson(res, 200, catalog);
+    });
+
+    const result = await loadProviders(client, new Request("http://gui.invalid/providers"));
+
+    expect(result.routingCatalog).toEqual(catalog);
+    expect(result.routingCatalog?.models[0]?.pricing).toBeNull();
+    expect(result.routingCatalogUnavailable).toBe(false);
+  });
+
+  it("keeps the provider list when GET /llm/routing/catalog is unavailable", async () => {
+    mock.on("GET", "/api/v1/providers", (_req, res) => {
+      sendJson(res, 200, providersView);
+    });
+    mock.on("GET", "/api/v1/llm/routing/catalog", (_req, res) => {
+      sendProblem(res, { status: 409, code: "llm_proxy_unavailable", detail: "[llm_proxy] is not configured" });
+    });
+
+    const result = await loadProviders(client, new Request("http://gui.invalid/providers"));
+
+    expect(result.providers).toEqual(providersView);
+    expect(result.routingCatalog).toBeNull();
+    expect(result.routingCatalogUnavailable).toBe(true);
   });
 
   it("keeps the provider list when GET /llm/sources fails", async () => {

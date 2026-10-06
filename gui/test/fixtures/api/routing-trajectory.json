@@ -1,0 +1,196 @@
+{
+  "task_id": "01BOARDTASK00000000000001",
+  "assignee": "coding",
+  "routing": { "tier_source": "system" },
+  "runs": [
+    {
+      "task_id": "01BOARDTASK00000000000001",
+      "run_id": "01RUNTRAJ0000000000000001",
+      "org_node": "coding",
+      "harness": "coding",
+      "adapter": "claude-code",
+      "provider": "openai-compatible:qwen",
+      "lane": "cheap",
+      "model": "qwen-local",
+      "escalation": null,
+      "audit_incomplete": true,
+      "incomplete_reasons": ["request_log_missing"],
+      "actual_sources": [
+        {
+          "source_id": "openai-compatible:qwen/self",
+          "model": "qwen-local",
+          "account": null,
+          "from": "request_attempts"
+        }
+      ],
+      "outcome_state": "unreviewed",
+      "routing_outcome": {
+        "outcome_id": "01OUTTRAJ0000000000000001",
+        "decision_id": "01DECISIONTRAJ000000000A",
+        "run_id": "01RUNTRAJ0000000000000001",
+        "evaluation_version": "1",
+        "acceptance_passed": null,
+        "review_passed": null,
+        "failed_criterion_ids": [],
+        "failure_class": null,
+        "cash_usd": 0.0,
+        "tokens": 4100,
+        "wall_ms": 8200,
+        "retries": 0,
+        "reward": null
+      },
+      "requests": [
+        {
+          "decision_id": "01DECISIONTRAJ000000000A",
+          "request_id": "01REQTRAJ000000000000000A",
+          "incomplete_reason": "request_log_missing",
+          "attempts": [
+            { "source_id": "openai-compatible:qwen/self", "model": "qwen-local", "account_id": null, "fallback_reason": null }
+          ],
+          "fallback_reason": null,
+          "actual": {
+            "source_id": "openai-compatible:qwen/self",
+            "model": "qwen-local",
+            "account": null,
+            "from": "request_attempts"
+          },
+          "trace": {
+            "decision_id": "01DECISIONTRAJ000000000A",
+            "stage": "proxy",
+            "mode": "enforce",
+            "catalog_version": "catalog-1",
+            "estimator_version": "est-1",
+            "feature_version": "feat-1",
+            "policy_version": "policy-1",
+            "snapshot_id": "snap-1",
+            "requested_lane": "cheap",
+            "selected_lane": "cheap",
+            "selected": "openai-compatible:qwen/self",
+            "source_id": "openai-compatible:qwen/self",
+            "model": "qwen-local",
+            "account_id": null,
+            "fallback_order": ["codex-oauth/gpt-standard"],
+            "reasons": ["quality", "cost"],
+            "candidates": [
+              {
+                "deployment_id": "openai-compatible:qwen/self",
+                "model_profile_id": "qwen-local",
+                "eligible_provider_ids": ["qwen"],
+                "excluded_reasons": [],
+                "excluded_reason": null,
+                "config_order": 0
+              },
+              {
+                "deployment_id": "codex-oauth/gpt-standard",
+                "model_profile_id": "gpt-standard",
+                "eligible_provider_ids": ["codex-oauth"],
+                "excluded_reasons": ["quality_below_min"],
+                "excluded_reason": { "kind": "quality_below_min" },
+                "config_order": 1
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "01BOARDTASK00000000000001",
+      "run_id": "01RUNTRAJ0000000000000002",
+      "org_node": "coding",
+      "harness": "coding",
+      "adapter": "claude-code",
+      "provider": "codex-oauth",
+      "lane": "standard",
+      "model": "gpt-standard",
+      "escalation": "escalate Cheap -> Standard: 2 consecutive VerificationFailed at Cheap",
+      "escalation_audit": {
+        "requested_lane": "cheap",
+        "selected_lane": "standard",
+        "previous_lane": "cheap",
+        "reason": "2 consecutive quality failures at cheap (acceptance/review/test)",
+        "counted_failures": 2,
+        "interval_id": "01INTERVALTRAJ000000001"
+      },
+      "audit_incomplete": false,
+      "incomplete_reasons": [],
+      "actual_sources": [
+        {
+          "source_id": "codex-oauth/gpt-standard",
+          "model": "gpt-standard",
+          "account": "codex-a",
+          "from": "proxy_log"
+        }
+      ],
+      "outcome_state": "judged",
+      "routing_outcome": {
+        "outcome_id": "01OUTTRAJ0000000000000002",
+        "decision_id": "01DECISIONTRAJ000000000B",
+        "run_id": "01RUNTRAJ0000000000000002",
+        "evaluation_version": "1",
+        "acceptance_passed": true,
+        "review_passed": true,
+        "failed_criterion_ids": [],
+        "failure_class": null,
+        "cash_usd": 0.021,
+        "tokens": 30200,
+        "wall_ms": 96000,
+        "retries": 0,
+        "reward": 0.982,
+        "supersedes": "01OUTTRAJ0000000000000002a"
+      },
+      "review": { "passed": true },
+      "requests": [
+        {
+          "decision_id": "01DECISIONTRAJ000000000B",
+          "request_id": "01REQTRAJ000000000000000B",
+          "incomplete_reason": null,
+          "attempts": [
+            { "source_id": "codex-oauth/gpt-standard", "model": "gpt-standard", "account_id": "codex-b", "fallback_reason": "rate_limit" },
+            { "source_id": "codex-oauth/gpt-standard", "model": "gpt-standard", "account_id": "codex-a", "fallback_reason": null }
+          ],
+          "fallback_reason": "rate_limit",
+          "actual": {
+            "source_id": "codex-oauth/gpt-standard",
+            "model": "gpt-standard",
+            "account": "codex-a",
+            "from": "proxy_log"
+          },
+          "log": {
+            "source_id": "codex-oauth/gpt-standard",
+            "model": "gpt-standard",
+            "account": "codex-a",
+            "snapshot_id": "snap-2"
+          },
+          "trace": {
+            "decision_id": "01DECISIONTRAJ000000000B",
+            "stage": "proxy",
+            "mode": "enforce",
+            "catalog_version": "catalog-1",
+            "estimator_version": "est-1",
+            "feature_version": "feat-1",
+            "policy_version": "policy-1",
+            "snapshot_id": "snap-2",
+            "requested_lane": "standard",
+            "selected_lane": "standard",
+            "selected": "codex-oauth/gpt-standard",
+            "source_id": "codex-oauth/gpt-standard",
+            "model": "gpt-standard",
+            "account_id": "codex-a",
+            "fallback_order": ["codex-oauth/gpt-standard"],
+            "reasons": ["quality"],
+            "candidates": [
+              {
+                "deployment_id": "codex-oauth/gpt-standard",
+                "model_profile_id": "gpt-standard",
+                "eligible_provider_ids": ["codex-oauth"],
+                "excluded_reasons": [],
+                "excluded_reason": null,
+                "config_order": 0
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

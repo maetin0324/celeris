@@ -452,6 +452,8 @@ pub(super) async fn run_worker(
             direct_route: extras.direct_route.clone(),
             // ADR 2026-10-06 cos-chat-run-dispatch: task の run は CoS chat run ではない。
             cos_chat: None,
+            // 多目的 routing Phase 3: registry を差し込んだ dispatcher の worker/planner run だけ `Some`。
+            routing_context_ref: extras.routing_context_ref.clone(),
         },
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの

@@ -715,6 +715,15 @@ impl TaskStore for SqliteStore {
         self.work_unit_transition_impl(task_id, updated, event)
     }
 
+    fn recover_work_unit(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+        reason: &str,
+    ) -> Result<bool, StoreError> {
+        self.recover_work_unit_impl(task_id, expected, reason)
+    }
+
     fn try_start_work_unit_integration(
         &self,
         task_id: TaskId,

@@ -1534,3 +1534,42 @@ repair → replan → 人の対処を招き、木の replan 上限（45）に達
 - 試験: `crates/task-dispatch/src/dispatcher/tests/scope_checks.rs`（一時 repository・偽 adapter、(a)(b)(c) と純粋関数の試験）、
   `crates/task-core/src/tree/tests.rs`（`promote_to_task_drops_scope_checks_from_acceptance`）、`crates/task-worker/src/claude_code/tests.rs`（planner 指示の文言）。
   使い方は [`agent-docs/guides/work-unit-checks.md`](../guides/work-unit-checks.md)。
+
+## 付記: Ready task に残った通常 WU の孤児回収（2026-10-06）
+
+[ADR-0070 の同日付記](0070-task-failure-visibility-and-handoff-safe-runs.md) の run/WU の不変条件を
+v1・v2 の通常 WU に適用する。10-05 の統合 WU 修復だけでは、コメント割り込みで工程 lease を失った
+通常 WU は回復しなかった。
+
+1. **中断時**: `dispatcher/leases.rs::close_aborted_run` は、run を Cancelled に閉じた後に
+   `reconcile_work_unit_run` を呼ぶ。WorkerFinished が既にある場合も WU の回収は省略しない。
+   `ownerless_runs` から閉じる場合の reason は `orphan_takeover`、その他の abort は `aborted`。
+   lease 回収・shutdown の既存経路も同じ store の回復処理へ到達する。
+   検査中のコメント/Cancel は `abort_stale_runs` が検査を止め、WU を回収する（完了済み run の結果は保持）。
+2. **起動時・定期照合**: `reconcile_ownerless_runs` の後半で Running / Ready / Blocked task の
+   Running WU を調べる。Task lease の存在や期限、phase の有無、pause の有無に依存しない。
+   `last_run_id` と `lease_run_id` が指す run がどちらも終端または欠落し、手元に task の
+   run・検査・統合・レビュー・子待ちが無く、他の生きた保持可能 daemon も無ければ回収する。
+   run ID 自体が無い WU も同じ。reason は `restart_reconcile`。Running の run 索引が残る場合は
+   既存の lease/ownerless run 回収で先に閉じる。run 索引だけの判断で検査中の WU を戻さない。
+3. **戻し先**: その WU の run 履歴に checkpoint があれば NeedsContinuation、なければ Ready。
+   lease を外し、`last_run_id` と履歴・カウンタは保持する。`WorkUnitTransitioned` と行更新は同じ
+   transaction にする。統合 WU は既存の Pending 回収、kind=task の WU は子 task 状態の投影に任せる。
+4. **競合と冪等性**: `TaskStore::recover_work_unit` は IMMEDIATE transaction 内で読み取り時の
+   Running 状態・plan・kind・last/lease run ID・updated_at を照合し、終端 task を除く。
+   一致しない場合は更新も event も書かない。回復先は SQL で必要な列だけ更新し、再照合は重複 event を作らない。
+   run と WU の更新間のクラッシュは 2 の回収で修復する。Task の人待ち・pause は解除しない。
+5. **実装範囲**: `store/execution/work_units.rs`、`dispatcher/leases.rs`、`phase_integration.rs`、
+   `ownerless_runs.rs`。schema・migration・API 変更は無い。dispatcher / store に LLM は導入しない。
+
+### 検証
+
+`dispatcher/tests/orphan_work_units.rs` は一時 SQLite DB と偽 worker の開始通知で順序を固定する。
+コメント→孤児回収（v1/v2）、run 終端後かつ WU 回収前の停止、run 索引/ID の消失と DB 再オープン、
+pause→comment→回収→resume / comment→pause→resume→回収 / comment→pause→回収→resume、
+checkpoint 継続、Cancel、新 run・replan に対する古い回収の拒否、他 daemon・対象外 task・kind=task・
+手元の run・検査の保護、検査中の Interrupt/Cancel を検査する。差し替えた時計で定期回収の境界も確認する。
+回収後は実際の dispatch で新 run の開始通知を待ち、WU が新しい run ID を
+持つことを確認する。固定時間の sleep・CPU 焼き負荷・実 LLM は使わない。
+
+検査結果は [進捗](../progress/2026-10-06-orphan-work-unit-recovery.md) に記録する。

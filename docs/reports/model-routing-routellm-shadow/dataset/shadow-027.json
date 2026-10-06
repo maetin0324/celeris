@@ -1,0 +1,1 @@
+{"request_id": "shadow-027", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Solve: find all real x such that x^4 - 5x^2 + 4 < 0, and show each step."}

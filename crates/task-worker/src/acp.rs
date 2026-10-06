@@ -896,6 +896,13 @@ async fn run_acp(
         .args(&config.args)
         .envs(config.env.iter().cloned())
         .current_dir(req.cwd());
+    let context_transport = crate::routing_context_transport::configure_acp(
+        &mut command,
+        &config.env,
+        config.model.as_deref(),
+        req,
+    );
+    crate::routing_context_transport::record(&run_dir, req, context_transport).await;
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::db_guard::launch(command, config.container.as_deref());
     command

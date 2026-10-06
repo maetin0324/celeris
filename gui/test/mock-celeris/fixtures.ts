@@ -38,6 +38,7 @@ import type {
   ReleaseVerifyCheck,
   RepoChangesView,
   RepoList,
+  RoutingCatalogView,
   SkillDetailView,
   SkillList,
   SkillPutResult,
@@ -1408,4 +1409,49 @@ export function skillDetail(overrides: Partial<SkillDetailView> = {}): SkillDeta
 /** `PUT /skills/{name}` の既定応答。 */
 export function skillPutResult(overrides: Partial<SkillPutResult> = {}): SkillPutResult {
   return { path: "skills/rust-review/SKILL.md", ...overrides };
+}
+
+/**
+ * `GET /llm/routing/catalog` の応答（ADR 2026-10-04-multi-objective-model-routing §9 Phase 1）。旧設定から導いた
+ * model（品質・単価・能力・context が欠測）と、値の揃った model、source と model の対応の deployment を 1 件ずつ持つ。
+ */
+export function routingCatalogView(overrides: Partial<RoutingCatalogView> = {}): RoutingCatalogView {
+  return {
+    catalog_version: "phase1-v1",
+    mode: "legacy",
+    models: [
+      {
+        id: "qwen3-coder",
+        revision: "legacy",
+        family: "qwen",
+        capabilities: { tools: null, structured_output: null, vision: null, streaming: null, reasoning_efforts: null },
+        context_limits: { input: null, output: null, total: null },
+        quality: null,
+        pricing: null,
+      },
+      {
+        id: "claude-sonnet",
+        revision: "2026-09",
+        family: "claude",
+        capabilities: { tools: true, structured_output: false, vision: null, streaming: true, reasoning_efforts: null },
+        context_limits: { input: null, output: 64000, total: 200000 },
+        quality: [{ domain: "coding", index: 0.8, evaluation_version: "eval-v1", provenance: "manual" }],
+        pricing: { input_usd_per_million: 3, output_usd_per_million: 15, provenance: "manual" },
+      },
+    ],
+    deployments: [
+      {
+        id: "local/qwen3-coder",
+        source_ref: "openai_compatible:local",
+        model_profile_id: "qwen3-coder",
+        upstream_model: "Qwen/Qwen3-Coder",
+        billing: "self_hosted",
+        allowed_lanes: ["cheap"],
+        price_override: null,
+      },
+    ],
+    policies: [],
+    warnings: ["[llm_proxy.models.cheap] is legacy"],
+    ...overrides,
+  };
 }

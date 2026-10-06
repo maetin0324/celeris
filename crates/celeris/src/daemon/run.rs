@@ -103,6 +103,11 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
     // ADR-0126 A2: worker run の中で本番 DB・本番 token を使う daemon は DB を開く前に止める。
     refuse_production_db_in_worker_run(&config)?;
     let mut dispatcher = build_dispatcher(&config, Arc::clone(&cluster_masters))?;
+    // 同じ registry を dispatcher の発行と proxy の解決に使う。
+    let routing_registry: Arc<
+        dyn task_core::model_router::context_registry::RoutingContextRegistry,
+    > = Arc::new(task_core::model_router::context_registry::InMemoryRoutingContextRegistry::new());
+    dispatcher.set_routing_context_registry(Arc::clone(&routing_registry));
     // ADR-0095 D5: worker の run から DB を読み取り専用にする（verify も含む。効かないホストでは起動しない）。
     install_worker_db_guard(&config)?;
     // ADR-0062 A（Phase 107）: 実 ssh を打つフック（実通信 probe・死んだ接続の片付け）は本番の起動経路
@@ -230,7 +235,8 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
         )
     });
     // ADR-0053 D1/D4（Phase 65）: 主 API（`GET /llm/sources`）とプロキシ自身が同じ `Arc` を使う。
-    let llm_proxy_state = build_llm_proxy_state(&config, &dispatcher, role.clone())?;
+    let llm_proxy_state =
+        build_llm_proxy_state(&mut config, &mut dispatcher, role.clone(), routing_registry)?;
     let (api, admin_rx) = match config.api.listen {
         Some(listen) => {
             // `standby` も起きてすぐ API を受ける（同じポートに `SO_REUSEPORT` で bind する）。

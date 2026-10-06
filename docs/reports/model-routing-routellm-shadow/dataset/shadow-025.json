@@ -1,0 +1,1 @@
+{"request_id": "shadow-025", "context_features": {"synthetic_category": "hard"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Given an MPI program that deadlocks only at 512 ranks with Allreduce inside a nonblocking halo exchange, outline a systematic debugging plan."}

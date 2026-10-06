@@ -3063,6 +3063,8 @@ mod planning_and_gate;
 mod provider_and_retry;
 mod review;
 mod routing_and_quota;
+mod routing_enforce;
+mod routing_shadow;
 mod target_sync;
 mod tick_and_dispatch;
 mod ui_ux_skills;
@@ -3147,6 +3149,8 @@ mod drain_hand_off;
 /// 工程の効き目の A/B 試験（off/on の `ab-metric` 行と効き目の assert）
 /// （`src/dispatcher/tests/phase_effect_ab.rs`）。
 mod phase_effect_ab;
+/// 多目的 routing Phase 3: run 開始時の RoutingContext（`src/dispatcher/tests/routing_context.rs`）。
+mod routing_context;
 /// ADR-0074 付記 2026-10-05: 範囲 check（`WorkUnitCheck.scope`）は WU の作業時だけ流す
 /// （`src/dispatcher/tests/scope_checks.rs`）。
 mod scope_checks;
@@ -3158,3 +3162,5 @@ mod stale_priority;
 /// ADR-0130 D3: 同じ repo の expected write-set の重なりで run の起動を待たせる
 /// （`src/dispatcher/tests/write_set_gate.rs`）。
 mod write_set_gate;
+
+mod orphan_work_units;

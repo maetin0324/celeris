@@ -40,9 +40,9 @@ pub use accounts::{
 };
 pub use dispatcher::{
     AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
-    DispatchConfig, DispatchError, Dispatcher, ExecutionConfig, KnowledgeRuntimeConfig,
-    LocalHealthTarget, LocalProviderProbe, LocalProviderSpec, SnapshotPublisher, TaskFilter,
-    TickReport,
+    DispatchConfig, DispatchError, DispatchRoutingSettings, Dispatcher, ExecutionConfig,
+    KnowledgeRuntimeConfig, LocalHealthTarget, LocalProviderProbe, LocalProviderSpec,
+    RoutingShadowListener, SelfHostLoad, SnapshotPublisher, TaskFilter, TickReport,
 };
 pub use policy::{
     AdapterId, ProviderId, ProviderOutcome, ProviderPolicy, ProviderSpec, StaticPolicy,

@@ -169,6 +169,82 @@ printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-1","configOpt
 "#;
 
 #[tokio::test]
+async fn routing_context_ref_propagates_and_rejects_spoofing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_path = dir.path().join("opencode.json");
+    std::fs::write(
+        &config_path,
+        r#"{"provider":{"celeris-proxy":{"npm":"@ai-sdk/openai-compatible","options":{"baseURL":"http://127.0.0.1:18100/v1","headers":{"X-CELERIS-ROUTING-CONTEXT":"file-spoof"}}}}}"#,
+    )
+    .unwrap();
+    let mut config = stub_acp(
+        dir.path(),
+        &format!(
+            r#"printf '%s' "$OPENCODE_CONFIG_CONTENT" > overlay.json
+{HANDSHAKE}
+read -r _prompt
+printf '%s' '{{"summary":"ok","evidence":[]}}' > artifacts/result.json
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+"#
+        ),
+    );
+    config.model = Some("celeris-proxy/celeris/cheap".into());
+    config.env = vec![
+        ("OPENCODE_CONFIG".into(), config_path.to_string_lossy().into_owned()),
+        ("OPENCODE_CONFIG_CONTENT".into(),
+            r#"{"provider":{"celeris-proxy":{"options":{"headers":{"X-Celeris-Routing-Context":"spoofed","x-other":"kept"}}}}}"#.into()),
+    ];
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.routing_context_ref = Some("daemon-issued-ref".into());
+    let sink = RecordingSink::default();
+    AcpAdapter::new(config.clone())
+        .run(req.clone(), "proxy", default_limits(), &sink)
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    let headers = &overlay["provider"]["celeris-proxy"]["options"]["headers"];
+    assert_eq!(headers["x-celeris-routing-context"], "daemon-issued-ref");
+    assert_eq!(headers["X-CELERIS-ROUTING-CONTEXT"], "daemon-issued-ref");
+    assert_eq!(headers["x-other"], "kept");
+    assert!(headers.get("X-Celeris-Routing-Context").is_none());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("runs/proxy/context-transport.json")).unwrap(),
+        "{\"context_transport\":\"header\"}\n",
+    );
+
+    let mut default_location = config.clone();
+    default_location.env.clear();
+    AcpAdapter::new(default_location)
+        .run(req.clone(), "default-config", default_limits(), &sink)
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(
+        overlay["provider"]["celeris-proxy"]["options"]["headers"]["x-celeris-routing-context"],
+        "daemon-issued-ref",
+    );
+
+    config.model = Some("unrelated/model".into());
+    AcpAdapter::new(config)
+        .run(req, "direct", default_limits(), &sink)
+        .await
+        .unwrap();
+    let direct_overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert!(
+        direct_overlay["provider"]["celeris-proxy"]["options"]["headers"]
+            .get("x-celeris-routing-context")
+            .is_none()
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("runs/direct/context-transport.json")).unwrap(),
+        "{\"context_transport\":\"unsupported\"}\n",
+    );
+}
+
+#[tokio::test]
 async fn browser_rpc_errors_are_redacted_at_initialize_and_prompt() {
     for initialize_failure in [true, false] {
         let dir = tempfile::tempdir().unwrap();

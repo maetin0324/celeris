@@ -235,6 +235,60 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub(in crate::store) fn recover_work_unit_impl(
+        &self,
+        task_id: TaskId,
+        expected: &WorkUnitRow,
+        reason: &str,
+    ) -> Result<bool, StoreError> {
+        if expected.task_id != task_id.to_string()
+            || expected.status != WorkUnitStatus::Running
+            || matches!(expected.kind, WorkUnitKind::Task | WorkUnitKind::Integrate)
+        {
+            return Ok(false);
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let has_checkpoint: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM runs WHERE work_unit_id = ?1 AND checkpoint_json IS NOT NULL)",
+            params![expected.id],
+            |row| row.get(0),
+        )?;
+        let status = if has_checkpoint {
+            WorkUnitStatus::NeedsContinuation
+        } else {
+            WorkUnitStatus::Ready
+        };
+        let changed = tx.execute(
+            "UPDATE work_units SET status = ?1, lease_run_id = NULL, lease_expires_at = NULL, updated_at = ?2 \
+             WHERE id = ?3 AND task_id = ?4 AND status = 'running' AND plan_id = ?5 AND kind = ?6 \
+             AND last_run_id IS ?7 AND lease_run_id IS ?8 AND updated_at = ?9 \
+             AND EXISTS (SELECT 1 FROM tasks WHERE id = ?4 AND status NOT IN ('done', 'failed', 'cancelled'))",
+            params![
+                status.as_str(), format_rfc3339(OffsetDateTime::now_utc())?, expected.id,
+                task_id.to_string(), expected.plan_id, expected.kind.as_str(), expected.last_run_id,
+                expected.lease_run_id, expected.updated_at,
+            ],
+        )?;
+        if changed == 0 {
+            return Ok(false);
+        }
+        Self::append_event_tx(
+            &tx,
+            task_id,
+            &Event::WorkUnitTransitioned {
+                work_unit_id: expected.id.clone(),
+                key: expected.key.clone(),
+                from: WorkUnitStatus::Running,
+                to: status,
+                reason: reason.to_string(),
+                run_id: expected.last_run_id.clone(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
     pub(in crate::store) fn try_start_work_unit_integration_impl(
         &self,
         task_id: TaskId,

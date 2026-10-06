@@ -255,6 +255,8 @@ pub fn reopen(
     }
     let from = task.status;
     let outcome = store.apply_transition(id, Trigger::Reopen, None)?;
+    // ADR 2026-10-04 Phase 3: 再開は run の履歴を区切る。ここで届いている結果を追記する（冪等）。
+    crate::routing_outcome::record_routing_outcomes(store, id)?;
     Ok(TransitionResult {
         id,
         from,

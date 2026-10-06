@@ -93,6 +93,600 @@ export const defaultFixtures = Object.fromEntries(
   }),
 );
 
+// ADR 2026-10-04-multi-objective-model-routing §9/§10 Phase 1: GET /llm/routing/catalog。
+// 旧設定から導いた形を模す。品質・価格・能力・context の欠測は null（画面は「不明」と出す）。
+export const routingCatalogFixture = {
+  catalog_version: "legacy-fixture-1",
+  mode: "legacy",
+  models: [
+    {
+      id: "claude-opus",
+      revision: "legacy",
+      family: "claude",
+      capabilities: { tools: true, structured_output: null, vision: null, streaming: true, reasoning_efforts: null },
+      context_limits: { input: null, output: null, total: 200000 },
+      quality: [{ domain: "coding", index: 0.9, evaluation_version: "fixture-1", provenance: "fixture", samples: 12 }],
+      pricing: {
+        input_usd_per_million: 15,
+        output_usd_per_million: 75,
+        cached_input_usd_per_million: null,
+        as_of: "2026-10-01",
+        provenance: "fixture",
+      },
+    },
+    {
+      id: "qwen3-coder",
+      revision: "legacy",
+      family: "qwen",
+      capabilities: { tools: null, structured_output: null, vision: null, streaming: null, reasoning_efforts: null },
+      context_limits: { input: null, output: null, total: null },
+      quality: null,
+      pricing: null,
+    },
+  ],
+  deployments: [
+    {
+      id: "claude-oauth/claude-opus",
+      source_ref: "claude-oauth",
+      model_profile_id: "claude-opus",
+      upstream_model: "claude-opus-4",
+      billing: "subscription",
+      allowed_lanes: ["frontier", "standard"],
+      price_override: null,
+    },
+    {
+      id: "openai-compatible:qwen/qwen3-coder",
+      source_ref: "openai-compatible:qwen",
+      model_profile_id: "qwen3-coder",
+      upstream_model: "Qwen/Qwen3-Coder",
+      billing: "self_hosted",
+      allowed_lanes: ["cheap"],
+      price_override: null,
+    },
+  ],
+  policies: [],
+  warnings: ["llm_proxy.models.cheap: 旧形の設定です（[model_routing] へ移行できます）"],
+};
+
+// ADR 2026-10-04-multi-objective-model-routing §8/§10 Phase 2: GET /tasks/:id/routing の監査。
+// 1 件目は結べた要求（除外理由・費用 4 成分・score 内訳・最終 source）、2 件目は proxy log と結べない要求。
+// 旧形の欄（cash・機会費用・score）が欠けた候補も混ぜ、画面が「不明」と出すことを確かめられるようにする。
+const routingTraceFixture = (decisionId, candidates, selected) => ({
+  decision_id: decisionId,
+  catalog_version: "catalog-fixture-1",
+  estimator_version: "heuristic-fixture-1",
+  feature_version: "feature-fixture-1",
+  policy_version: "policy-fixture-1",
+  snapshot_id: "snapshot-fixture-1",
+  mode: "enforce",
+  stage: "proxy",
+  requested_lane: "cheap",
+  selected_lane: selected ? "cheap" : null,
+  selected,
+  source_id: selected ? "openai-compatible:qwen" : null,
+  model: selected ? "Qwen/Qwen3-Coder" : null,
+  account_id: null,
+  observed_at: "2026-10-05T00:00:00Z",
+  fallback_order: candidates.map((candidate) => candidate.deployment_id),
+  reasons: selected ? ["cheap_local_first"] : ["no_candidate"],
+  candidates,
+});
+
+export const routingAuditFixture = {
+  task_id: "T1",
+  assignee: "software-engineering",
+  runs: [
+    {
+      run_id: "R1",
+      task_id: "T1",
+      org_node: "software-engineering",
+      lane: "cheap",
+      provider: "openai-compatible:qwen",
+      model: "qwen3-coder",
+      account: null,
+      rule_id: "cheap-local-first",
+      cost_usd: 0.02,
+      audit_incomplete: true,
+      incomplete_reasons: ["request_log_missing"],
+      reasons: ["cheap_local_first"],
+      requests: [
+        {
+          request_id: "Q1",
+          decision_id: "D1",
+          trace: routingTraceFixture(
+            "D1",
+            [
+              {
+                deployment_id: "openai-compatible:qwen/qwen3-coder",
+                model_profile_id: "qwen3-coder",
+                eligible_provider_ids: ["openai-compatible:qwen"],
+                excluded_reasons: [],
+                cash_usd: 0,
+                shadow_usd: null,
+                resource_usd: 0.01,
+                effective_usd: null,
+                cost_usd: null,
+                latency_ms: 900,
+                pressure: 0.3,
+                quality: { feature_version: "feature-fixture-1", index: 0.7, confidence: 0.5, reasons: [] },
+                score: 0.58,
+                score_breakdown: {
+                  q: 0.7,
+                  wq: 1,
+                  c: 0.1,
+                  wc: 0.5,
+                  l: 0.2,
+                  wl: 0.2,
+                  p: 0.3,
+                  wp: 0.1,
+                  score: 0.58,
+                  unknown: ["shadow"],
+                },
+              },
+              {
+                deployment_id: "claude-oauth/claude-opus",
+                model_profile_id: "claude-opus",
+                eligible_provider_ids: ["claude-oauth"],
+                excluded_reasons: ["quota_exhausted"],
+                excluded_reason: { kind: "quota_exhausted" },
+                cash_usd: null,
+                shadow_usd: 0.5,
+                resource_usd: null,
+                effective_usd: null,
+                cost_usd: null,
+                latency_ms: null,
+                pressure: null,
+                quality: null,
+                score: null,
+                score_breakdown: null,
+              },
+            ],
+            "openai-compatible:qwen/qwen3-coder",
+          ),
+          log: null,
+          incomplete_reason: null,
+        },
+        {
+          request_id: null,
+          decision_id: "D2",
+          trace: routingTraceFixture("D2", [], null),
+          log: null,
+          incomplete_reason: "request_log_missing",
+        },
+      ],
+    },
+  ],
+  unbound_requests: [],
+};
+
+// ADR 2026-10-04-multi-objective-model-routing §5/§6/§10 Phase 3: GET /tasks/:id/routing の軌跡
+// escalation・feature snapshot・遅延 outcome（fixture id: routing_trajectory）。R1 は escalation 済みで
+// 未レビュー（outcome はあるが合否が null）、R2 は dispatch の決定のみで outcome 未記録（not_recorded）。
+// 実際の source は dispatch で未確定だった model を proxy log 相関から埋める（actual.from）。欠測を
+// false や 0 に丸めない。
+export const routingTrajectoryFixture = {
+  task_id: "T2",
+  assignee: "software-engineering",
+  runs: [
+    {
+      run_id: "R1",
+      task_id: "T2",
+      org_node: "software-engineering",
+      lane: "standard",
+      provider: "claude-oauth",
+      model: "claude-sonnet",
+      account: "main",
+      rule_id: "trajectory-escalation",
+      cost_usd: 0.4,
+      reasons: ["trajectory_escalation"],
+      decision_id: "D10",
+      escalation_audit: {
+        requested_lane: "cheap",
+        previous_lane: "cheap",
+        selected_lane: "standard",
+        reason: "repeated_review_failures",
+        counted_failures: 2,
+        interval_id: "I1",
+      },
+      routing_features: {
+        decision_id: "D10",
+        context_version: "context-fixture-1",
+        features: { task_kind: "code", attempts: 2 },
+        provenance: { task_kind: "task.kind", attempts: "run.attempt_history" },
+        missing_fields: [],
+        run_id: "R1",
+        request_id: null,
+        stage: "dispatch",
+      },
+      routing_outcome: {
+        outcome_id: "O1",
+        decision_id: "D10",
+        run_id: "R1",
+        evaluation_version: "outcome-fixture-1",
+        acceptance_passed: null,
+        review_passed: null,
+        failed_criterion_ids: [],
+        cash_usd: 0.4,
+        tokens: 1200,
+        wall_ms: 9000,
+        retries: 2,
+        reward: null,
+      },
+      outcome_state: "unreviewed",
+      actual_sources: [{ source_id: "claude-oauth", model: "claude-sonnet", account: "main", from: "proxy_log" }],
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+    },
+    {
+      run_id: "R2",
+      task_id: "T2",
+      org_node: "software-engineering",
+      lane: "cheap",
+      provider: "openai-compatible:qwen",
+      model: null,
+      account: null,
+      rule_id: "cheap-local-first",
+      cost_usd: null,
+      reasons: ["cheap_local_first"],
+      decision_id: "D11",
+      outcome_state: "not_recorded",
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+    },
+  ],
+  unbound_requests: [],
+};
+
+// ADR 2026-10-04-multi-objective-model-routing §7.1/§10 Phase 4: GET /tasks/:id/routing の shadow 監査
+// （fixture id: routing_shadow）。primary（R5 は claude-sonnet）とは別欄の routing_shadow に、decision shadow
+// の completed（候補が primary と違う）、execution shadow の completed（上限消費あり）・failed（timeout）・
+// dropped（cap_exceeded、予約なし）と、候補・比較・token が欠測の行を含める。欠測を false や 0 に丸めない。
+export const routingShadowFixture = {
+  task_id: "T3",
+  assignee: "software-engineering",
+  runs: [
+    {
+      run_id: "R5",
+      task_id: "T3",
+      org_node: "software-engineering",
+      lane: "standard",
+      provider: "claude-oauth",
+      model: "claude-sonnet",
+      account: "main",
+      rule_id: "default-standard",
+      cost_usd: 0.3,
+      reasons: ["default_lane"],
+      decision_id: "D20",
+      outcome_state: "not_recorded",
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+      routing_shadow: [
+        {
+          shadow_id: "S1",
+          primary_decision_id: "D20",
+          kind: "decision",
+          status: "completed",
+          reason: null,
+          candidate_source: "openai-compatible:qwen",
+          candidate_model: "Qwen/Qwen3-Coder",
+          differs_from_primary: true,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+        },
+        {
+          shadow_id: "S2",
+          primary_decision_id: "D20",
+          kind: "execution",
+          status: "completed",
+          reason: null,
+          candidate_source: "claude-oauth",
+          candidate_model: "claude-sonnet",
+          differs_from_primary: false,
+          input_tokens: 800,
+          output_tokens: 200,
+          reservation: {
+            utc_day: "2026-10-05",
+            state: "charged",
+            reserved_tokens: 1500,
+            reserved_effective_usd: 0.05,
+            charged_tokens: 1000,
+            charged_effective_usd: 0.03,
+          },
+        },
+        {
+          shadow_id: "S3",
+          primary_decision_id: "D20",
+          kind: "execution",
+          status: "failed",
+          reason: "timeout",
+          candidate_source: "openai-compatible:qwen",
+          candidate_model: "Qwen/Qwen3-Coder",
+          differs_from_primary: true,
+          input_tokens: 800,
+          output_tokens: null,
+          reservation: {
+            utc_day: "2026-10-05",
+            state: "charged",
+            reserved_tokens: 1500,
+            reserved_effective_usd: 0.02,
+            charged_tokens: 1500,
+            charged_effective_usd: 0.02,
+          },
+        },
+        {
+          shadow_id: "S4",
+          primary_decision_id: "D20",
+          kind: "execution",
+          status: "dropped",
+          reason: "cap_exceeded",
+          candidate_source: null,
+          candidate_model: null,
+          differs_from_primary: null,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+        },
+      ],
+    },
+    {
+      run_id: "R6",
+      task_id: "T3",
+      org_node: "software-engineering",
+      lane: "cheap",
+      provider: "openai-compatible:qwen",
+      model: "Qwen/Qwen3-Coder",
+      account: null,
+      rule_id: "cheap-local-first",
+      cost_usd: null,
+      reasons: ["cheap_local_first"],
+      decision_id: "D21",
+      outcome_state: "not_recorded",
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+    },
+  ],
+  unbound_requests: [],
+};
+
+// ADR 2026-10-04-multi-objective-model-routing §10 Phase 5: GET /tasks/:id/routing の estimator shadow
+// 監査（fixture id: routing_estimator_shadow）。primary（R7 は claude-sonnet）は変わらない。estimator-kind
+// の routing_shadow に、primary/heuristic 首位のどちらとも一致した completed（ES1）、両方と違った
+// completed（ES2）、timeout で理由だけ出す failed（ES3）、prompt を送らず評価不能な dropped（ES4、
+// dependencies.needs_prompt）、依存が許可外で評価不能な dropped（ES5、dependencies.not_allowed）を混ぜる。
+// 本番切替は無い（shadow の表示のみ）。task を跨いだ要約 estimator_shadow を併せて出す。欠測を 0/false に
+// 丸めない。
+export const routingEstimatorShadowFixture = {
+  task_id: "T4",
+  assignee: "software-engineering",
+  estimator_shadow: {
+    targets: 5,
+    completed: 2,
+    failed: 0,
+    timeout: 1,
+    dropped: 1,
+    prompt_required: 1,
+    coverage: 2 / 5,
+    differs_from_primary: 1,
+    differs_from_heuristic: 1,
+    mean_overhead_ms: 73,
+    estimators: ["routellm-bert/0.2.2"],
+  },
+  runs: [
+    {
+      run_id: "R7",
+      task_id: "T4",
+      org_node: "software-engineering",
+      lane: "standard",
+      provider: "claude-oauth",
+      model: "claude-sonnet",
+      account: "main",
+      rule_id: "default-standard",
+      cost_usd: 0.3,
+      reasons: ["default_lane"],
+      decision_id: "D30",
+      outcome_state: "not_recorded",
+      audit_incomplete: false,
+      incomplete_reasons: [],
+      requests: [],
+      routing_shadow: [
+        {
+          shadow_id: "ES1",
+          primary_decision_id: "D30",
+          kind: "estimator",
+          status: "completed",
+          reason: null,
+          candidate_source: "claude-oauth",
+          candidate_model: "claude-sonnet",
+          differs_from_primary: false,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+          estimator: {
+            estimator_id: "routellm-bert",
+            estimator_version: "0.2.2",
+            outcome: "completed",
+            reason: null,
+            unavailable_reason: null,
+            vs_primary: "same",
+            vs_heuristic: "same",
+            overhead_ms: 40,
+            dependencies: { not_allowed: false },
+          },
+        },
+        {
+          shadow_id: "ES2",
+          primary_decision_id: "D30",
+          kind: "estimator",
+          status: "completed",
+          reason: null,
+          candidate_source: "openai-compatible:qwen",
+          candidate_model: "Qwen/Qwen3-Coder",
+          differs_from_primary: true,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+          estimator: {
+            estimator_id: "routellm-bert",
+            estimator_version: "0.2.2",
+            outcome: "completed",
+            reason: null,
+            unavailable_reason: null,
+            vs_primary: "differs",
+            vs_heuristic: "differs",
+            overhead_ms: 50,
+            dependencies: { not_allowed: false },
+          },
+        },
+        {
+          shadow_id: "ES3",
+          primary_decision_id: "D30",
+          kind: "estimator",
+          status: "failed",
+          reason: "timeout",
+          candidate_source: null,
+          candidate_model: null,
+          differs_from_primary: null,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+          estimator: {
+            estimator_id: "routellm-bert",
+            estimator_version: "0.2.2",
+            outcome: "timeout",
+            reason: "timeout",
+            unavailable_reason: "timeout",
+            vs_primary: null,
+            vs_heuristic: null,
+            overhead_ms: 200,
+            dependencies: { not_allowed: false },
+          },
+        },
+        {
+          shadow_id: "ES4",
+          primary_decision_id: "D30",
+          kind: "estimator",
+          status: "dropped",
+          reason: "privacy",
+          candidate_source: null,
+          candidate_model: null,
+          differs_from_primary: null,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+          estimator: {
+            estimator_id: null,
+            estimator_version: null,
+            outcome: "prompt_required",
+            reason: "privacy",
+            unavailable_reason: null,
+            vs_primary: null,
+            vs_heuristic: null,
+            overhead_ms: 2,
+            dependencies: { needs_prompt: true, not_allowed: false },
+          },
+        },
+        {
+          shadow_id: "ES5",
+          primary_decision_id: "D30",
+          kind: "estimator",
+          status: "dropped",
+          reason: "privacy",
+          candidate_source: null,
+          candidate_model: null,
+          differs_from_primary: null,
+          input_tokens: null,
+          output_tokens: null,
+          reservation: null,
+          estimator: {
+            estimator_id: null,
+            estimator_version: null,
+            outcome: "dropped",
+            reason: "privacy",
+            unavailable_reason: "dependencies_not_allowed",
+            vs_primary: null,
+            vs_heuristic: null,
+            overhead_ms: null,
+            dependencies: { not_allowed: true },
+          },
+        },
+      ],
+    },
+  ],
+  unbound_requests: [],
+};
+
+// ADR 2026-10-04-multi-objective-model-routing §6/§8 Phase 2: GET /llm/sources の deployment 状態。
+// 観測が無い・期限切れの値、請求と機会費用が別の欄、欠測の残量を含める（欠測は 0 にしない）。
+export const llmSourcesFixture = {
+  sources: [
+    {
+      id: "claude-oauth",
+      kind: "claude-oauth",
+      enabled: true,
+      reachable: true,
+      accounts: [{ id: "main", logged_in: true, remaining_short: 0.4, remaining_long: 0.8, cooldown_until: null }],
+      last_hour_requests: 3,
+      last_hour_prompt_tokens: 0,
+      last_hour_completion_tokens: 0,
+      deployments: [
+        {
+          deployment_id: "claude-oauth/claude-opus",
+          reachability: "up",
+          freshness: { observed_at: "2026-10-05T00:00:00Z", age_secs: 120, expires_at: null, stale: false },
+          quota_remaining: 0.4,
+          quota_reset_at: "2026-10-05T05:00:00Z",
+          pressure: 0.2,
+          latency_ms: 1200,
+          cost: {
+            billed: { cash_usd: 0 },
+            opportunity: { shadow_usd: null, resource_usd: null },
+            effective_usd: null,
+            assumptions: ["subscription の固定月額は別会計"],
+          },
+          unknown: ["shadow_usd"],
+        },
+      ],
+    },
+    {
+      id: "openai-compatible:qwen",
+      kind: "openai-compatible",
+      enabled: true,
+      reachable: null,
+      accounts: [],
+      last_hour_requests: 0,
+      last_hour_prompt_tokens: 0,
+      last_hour_completion_tokens: 0,
+      deployments: [
+        {
+          deployment_id: "openai-compatible:qwen/qwen3-coder",
+          reachability: "unknown",
+          freshness: { observed_at: null, age_secs: null, expires_at: null, stale: true },
+          quota_remaining: null,
+          quota_reset_at: null,
+          pressure: null,
+          latency_ms: null,
+          cost: {
+            billed: { cash_usd: null },
+            opportunity: { shadow_usd: null, resource_usd: 0.01 },
+            effective_usd: null,
+          },
+          unknown: ["cash_usd", "shadow_usd"],
+        },
+      ],
+    },
+  ],
+  celeris_tiers: [
+    { tier: "frontier", resolves_to: "claude-oauth" },
+    { tier: "standard", resolves_to: "claude-oauth" },
+    { tier: "cheap", resolves_to: "openai-compatible:qwen" },
+  ],
+};
+
 // Screenshot and mobile-audit data. The normal profile stays intentionally small:
 // parity tests supply their own exact rows and counts.
 const richPath =
@@ -353,7 +947,7 @@ export function richFixtures() {
     assignee: "ui-ux",
     runs: [
       {
-        ...fixtureFor(schema.$defs.RoutingAudit),
+        ...fixtureFor(schema.$defs.RunRoutingAudit),
         task_id: "T1",
         run_id: "R1",
         adapter: "codex",
@@ -847,7 +1441,14 @@ export function createFakeDaemon({
     throw new Error("fake daemon refuses reserved port");
   if (!delayValues.has(delayMs)) throw new Error("JSON delay must be 0, 5000 or 10000 ms");
   if (!new Set(["default", "rich"]).has(profile)) throw new Error(`unknown fixture profile: ${profile}`);
-  fixtures = { ...knowledgeFixtures, ...defaultFixtures, ...(profile === "rich" ? richFixtures() : {}), ...fixtures };
+  fixtures = {
+    ...knowledgeFixtures,
+    ...defaultFixtures,
+    "/api/v1/llm/routing/catalog": routingCatalogFixture,
+    "/api/v1/tasks/T1/routing": routingAuditFixture,
+    ...(profile === "rich" ? richFixtures() : {}),
+    ...fixtures,
+  };
   files = { ...(profile === "rich" ? richFiles() : {}), ...files };
   const requests = [];
   const clients = new Set();
@@ -1210,20 +1811,7 @@ export function createFakeDaemon({
             return json(200, {});
           }
         }
-        if (parts[0] === "llm" && req.method === "GET")
-          return json(200, {
-            sources: [
-              {
-                id: "claude-oauth",
-                kind: "oauth",
-                enabled: true,
-                last_hour_completion_tokens: 0,
-                last_hour_prompt_tokens: 0,
-                last_hour_requests: 3,
-                accounts: [{ id: "main", logged_in: true }],
-              },
-            ],
-          });
+        if (parts[0] === "llm" && req.method === "GET") return json(200, llmSourcesFixture);
         if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")
           return json(200, {
             items: [{ id: "c1", name: "editor", created_at: "2026-09-01T00:00:00Z", scopes: ["tasks:read"] }],

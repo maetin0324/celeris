@@ -1,0 +1,1 @@
+{"request_id": "shadow-008", "context_features": {"synthetic_category": "easy"}, "candidates": [{"model_profile_id": "legacy:claude:opus"}, {"model_profile_id": "legacy:qwen:qwen3.8-27b"}], "optional_prompt": "Give me a synonym for 'happy'."}

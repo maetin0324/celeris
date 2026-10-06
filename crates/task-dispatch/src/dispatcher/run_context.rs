@@ -382,6 +382,8 @@ impl Dispatcher {
             direct_route: None,
             // ADR-0074「R7-11」: 呼び出し元（`dispatch_ready_task`）が spawn の直前に実効の予算を入れる。
             budget: None,
+            // 多目的 routing Phase 3: `dispatch_one` が spawn の直前に registry へ登録して埋める。
+            routing_context_ref: None,
         })
     }
 

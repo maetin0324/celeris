@@ -1,0 +1,22 @@
+celeris-web: listening on 127.0.0.1:17729
+{"path":"/healthz","status":200,"ms":3.2}
+{"path":"/login","status":200,"ms":6.5}
+{"path":"/org/browser-execution/browser-settings","status":200,"ms":16.8}
+{"path":"/org/browser-execution/browser-settings","status":422,"ms":2.4}
+{"path":"/org/browser-execution/browser-settings","status":200,"ms":2.6}
+{"path":"/browser/owner-session","status":200,"ms":0.7}
+{"path":"/browser/owner-session","status":200,"ms":0.5}
+{"path":"/browser/runs","status":200,"ms":2.6}
+{"path":"/browser/runs","status":200,"ms":3.1}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3","status":401,"ms":0.5}
+{"path":"/login","status":200,"ms":0.6}
+{"path":"/browser/owner-session","status":200,"ms":0.2}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3","status":403,"ms":0.2}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3","status":200,"ms":21.5}
+{"browser_live":"input_denied","code":"lease_required"}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3/celeris-07611528fa5c3da6783b3205a9ed574f","status":200,"ms":7.6}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3/celeris-07611528fa5c3da6783b3205a9ed574f","status":200,"ms":8.7}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3/celeris-07611528fa5c3da6783b3205a9ed574f","status":200,"ms":9.1}
+{"path":"/01M48H3HQB4NDM7QMV3CV3X1HN/01M48H3HR001M7DJWP1QSHKHE3/celeris-07611528fa5c3da6783b3205a9ed574f/release","status":200,"ms":10.1}
+{"browser_live":"input_denied","code":"lease_required"}
+{"path":"/01M48H3KEEZ3QHGZYSMRYGH454/decision","status":200,"ms":5.5}

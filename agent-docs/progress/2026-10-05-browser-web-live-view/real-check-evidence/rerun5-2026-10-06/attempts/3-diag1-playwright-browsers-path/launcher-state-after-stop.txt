@@ -1,0 +1,4 @@
+drwx------ celeris-browser:celeris-browser /var/tmp/cb-1001/launcher-state
+drwx------ celeris-browser:celeris-browser /var/tmp/cb-1001/launcher-state/registry
+drwx------ celeris-browser:celeris-browser /var/tmp/cb-1001/launcher-state/sessions
+drwx------ celeris-browser:celeris-browser /var/tmp/cb-1001/launcher-state/supervisor

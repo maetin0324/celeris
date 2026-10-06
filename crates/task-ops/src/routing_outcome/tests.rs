@@ -13,6 +13,7 @@ fn spec() -> NewTaskSpec {
     NewTaskSpec {
         mode: Default::default(),
         skills: Vec::new(),
+        requirements: Default::default(),
         repos: Vec::new(),
         title: "routing outcome".to_string(),
         objective: "record the run outcome".to_string(),

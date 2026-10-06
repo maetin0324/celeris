@@ -390,6 +390,7 @@ mod routing_tests {
             labels: vec![],
             category: Default::default(),
             skills: vec![],
+            requirements: Default::default(),
             mode: Default::default(),
             conversation: None,
             routing: None,

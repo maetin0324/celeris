@@ -109,7 +109,7 @@ fn json_events_map_to_structured_progress() {
     let sink = RecordingSink::default();
     let (mut signal, mut error) = (None, None);
     for line in text.lines() {
-        handle_line(line, &sink, &mut signal, &mut error);
+        handle_line(line, &sink, &mut signal, &mut error, false);
     }
     let items = sink
         .structured

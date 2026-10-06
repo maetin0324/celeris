@@ -618,6 +618,14 @@
       ],
       "type": "string"
     },
+    "Continuation": {
+      "enum": [
+        "claude_session_resume",
+        "codex_exec_resume",
+        "acp_session_load"
+      ],
+      "type": "string"
+    },
     "ContinuationContext": {
       "description": "ADR-0072 D9（Phase E1）: 続きの実行に渡す最小限の文脈。前の run の会話・出力の全文は載せない\n（checkpoint と、これまでの run の 1 行要約だけ）。",
       "properties": {
@@ -742,6 +750,17 @@
         "credential_env": {
           "description": "Name of the environment variable holding the run credential. Never the value.",
           "type": "string"
+        },
+        "harness_capabilities": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HarnessCapabilities"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Abilities confirmed by the active adapter for this run. Absent means unconfirmed, not\nthat a configured harness can already deliver an image or use a tool."
         },
         "inputs": {
           "description": "The input messages this run must handle, in delivery order (an interrupt first).\nDelivery is recorded by `chat_runs.input_message_id` and the message state, not here.",
@@ -1552,6 +1571,38 @@
       },
       "required": [
         "id"
+      ],
+      "type": "object"
+    },
+    "HarnessCapabilities": {
+      "description": "Adapter abilities confirmed for a run. `for_adapter` gives the contract to implement; an\nadapter must only publish this value after confirming its CLI/protocol supports the abilities.",
+      "properties": {
+        "continuation": {
+          "$ref": "#/$defs/Continuation"
+        },
+        "filesystem": {
+          "type": "boolean"
+        },
+        "image_read_tool": {
+          "type": "boolean"
+        },
+        "mcp": {
+          "type": "boolean"
+        },
+        "native_image_input": {
+          "type": "boolean"
+        },
+        "shell": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "continuation",
+        "native_image_input",
+        "image_read_tool",
+        "shell",
+        "filesystem",
+        "mcp"
       ],
       "type": "object"
     },

@@ -386,6 +386,14 @@ impl CosChatLaunch {
             summary_through_seq: i64::try_from(summary_through_seq).unwrap_or(i64::MAX),
             unsummarized,
             attachments,
+            // These two concrete CLI adapters implement native image input. ACP abilities
+            // are negotiated by the agent at runtime, so they stay unconfirmed here.
+            harness_capabilities: match cfg.harness.as_str() {
+                "claude-code" | "codex" => {
+                    task_worker::cos_chat::HarnessCapabilities::for_adapter(&cfg.harness)
+                }
+                _ => None,
+            },
             skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),

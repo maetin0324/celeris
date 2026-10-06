@@ -128,7 +128,7 @@ fn ui_ux_skills_config_skills_import_into_a_temp_kb() {
 
     // 冪等: 同じ内容の再取り込みは KB の HEAD を進めない。
     let head_before = head(&root).expect("head");
-    skills_import_dir(&root, &config, &[], Some("celerisctl")).expect("re-import");
+    skills_import_dir(&root, &config, &names, Some("celerisctl")).expect("re-import");
     assert_eq!(head(&root).expect("head"), head_before);
 }
 

@@ -88,3 +88,15 @@ Task の受け入れ条件 3 は `git diff --quiet $(git merge-base HEAD main) -
 - 参考: `git diff --name-only $(git merge-base HEAD main) HEAD -- crates/ gui/`（167 files）と `git diff --name-only $(git merge-base HEAD main) 438fca9d -- crates/ gui/`（167 files）の file 集合は **完全に一致**（`diff` で同一）。すなわち merge-base 比の全差分が `438fca9d` 以前（親 branch）の commit に由来することの直接の確認。
 
 **人の decision（`crit3-basis`）への回答**: 2026-10-06、人（Fable）は「task base 438fca9d との差分ゼロで条件 3 を満たしたとみなし、記録して完了にする」を選択: この子 task の意図は『自分で crates/・gui/ を変えない』ことであり、base 438fca9d（親 branch）比で `crates/`・`gui/` の差分ゼロを満たしたとみなす。merge-base 比の差分は親の変更でこの子の責任ではない（WU の範囲 check の既知の誤検出と同型）。final review でもこの読み替えを適用する。上記の base 比 exit 0 と file 集合の一致がその根拠。
+
+#### 人の回答（crit3-human）
+
+2026-10-06、decision `crit3-human`（「条件 3 について」の api-rewrite 提案への回答）に対する人の回答:
+
+- **選ばれた option**: `api-rewrite` — 人が API でこの task の acceptance 条件 3 を書き換える（推奨どおり）。
+- **人のメモ**: 「人が API でこの task の acceptance 条件 3 を『git diff --quiet 438fca9d -- crates/ gui/ && test -s agent-docs/progress/2026-10-04-multi-objective-routing/web-e2e-fix.md』に書き換えてから回答する（推奨どおり） — Fable が PATCH /api/v1/tasks/01M46PRETC で acceptance 条件 3 を『git diff --quiet 438fca9d -- crates/ gui/ && test -s agent-docs/progress/2026-10-04-multi-objective-routing/web-e2e-fix.md』に書き換え済み（他の 3 条件は不変）。」
+- **回答時点の merge-base**: `git merge-base HEAD main` = `8dc4c5e48b08415372d747a0d5f91fcab5a5b9d4`（main `2a167a3f7df1bd613e4cad70cd80ff42064c2d86`）。その merge-base 比の `crates/`・`gui/` の差分 file 数は **167 files**（`git diff --name-only 8dc4c5e4 HEAD -- crates/ gui/`。すべて親 branch の多目的ルーティング commit に由来、上記の file 集合一致確認のとおり）。
+- **task base 438fca9d 比で差分ゼロ**: `git diff --quiet 438fca9d HEAD -- crates/ gui/` → **exit 0**（worktree 比 `git diff --quiet 438fca9d -- crates/ gui/` も exit 0）。
+- **書き換え後の条件 3 の実行**（`git diff --quiet 438fca9d -- crates/ gui/ && test -s agent-docs/progress/2026-10-04-multi-objective-routing/web-e2e-fix.md`）→ 本 run で手元実行し **exit 0**。
+
+付記（host のフォント環境・home の 360px spec 2 件について、人的コメントへの対応）: `~/.local/share/fonts/noto-cjk` は削除済み・`~/.config/fontconfig` 不在（`~/.local/share/fonts` は HackGen 4 点のみ、`fc-list` の Noto CJK は 0 件）。checks は host の既存フォント（WenQuanYi Zen Hei フォールバック）で実行しており、home の 360px spec 2 件（`e2e/shell/home-layout.spec.ts`・`e2e/work/home-stale-viewport.spec.ts`）は run 3 の `web/routes/index.tsx`（home 入口帯の `max-md` 詰め）修正済みレイアウトで本 run に再実行し **7 passed / exit 0**（360x800・390・412 を含む）。main（`bc7ff505`）比の落ちるか否かは run 3 の節に記録済み（main では落ちない）。

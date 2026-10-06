@@ -1,7 +1,7 @@
 ---
 title: web gateway — チャット添付の streaming 中継・チャット SSE・添付ダウンロードの中継
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: done
+status: blocked
 updated: 2026-10-06
 ---
 # web-chat / gateway WorkUnit
@@ -18,21 +18,24 @@ ADR [2026-10-05-cos-chat-home](../../../adr/2026-10-05-cos-chat-home.md) の D2�
 - `web/server/app.js`・`app.d.ts`・`index.js`: 配線のみ。
 
 ## 証拠
-- `node --test server/chat.test.mjs`（web/ で）→ tests 10 / pass 10 / fail 0。5 回連続で同じ。
+- `node --test server/chat.test.mjs`（web/ で）→ tests 10 / pass 10 / fail 0。
   - 上限ちょうど（1024 B）: 201、daemon は全バイトと boundary 付き Content-Type・daemon token を受け、cookie は受けない。daemon が先頭を受けた時点でブラウザ側は送信途中（貯めていない証拠）。
   - 上限超過（chunked で 1026 B）: 413 `request_too_large`、daemon の request は未完了のまま close（受信 ≤ 1024 B）。
   - 宣言 Content-Length 超過: 413、daemon に届かない。
   - upload 中のブラウザ切断: daemon の request が未完了で close。
-  - SSE: relayTimeoutMs=1 でも 20ms 後の event が届く（timer の発火順で決定的、sleep 依存の判定ではない）、`after`・`Last-Event-ID` が届き cookie は届かない、`text/event-stream`・no-store・`X-Accel-Buffering: no`、切断で daemon 側 close。
+  - SSE: `after`・`Last-Event-ID` が届き cookie は届かない。次の event を daemon から送るまで stream を保持し、`text/event-stream`・no-store・`X-Accel-Buffering: no`、切断で daemon 側 close。時間待ちは使わない。
   - 410 problem+json はそのまま（Content-Type も一致）、不正 cursor は 400 `invalid_query` で daemon に届かない。
   - content/preview の Content-Type・Content-Disposition（filename* 込み）・nosniff・HEAD・Disposition 無し SVG → attachment、preview 404 problem+json の素通し。
   - 他の `/api/chat/*`（一覧・送信）は JSON relay のまま、1mb 上限も 413 のまま。
 - `node --test server/*.test.mjs` → tests 57 / pass 57 / fail 0（既存の relay・files・events・console・auth を含む）。
-- `npx biome check server/` → 指摘なし（`biome check .` の残る指摘は components/*.test.tsx の既存の organizeImports で、この WU の範囲外）。
-- `corepack pnpm@12.6.0 typecheck` → exit 0。
+- `corepack pnpm@12.6.0 -C web exec biome check server` → exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck` → exit 0。
+- `corepack pnpm@12.6.0 -C web test` → exit 0（vitest 391、node 57）。
+- 指定 check `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile >/dev/null && corepack pnpm@12.6.0 -C web typecheck && corepack pnpm@12.6.0 -C web lint && corepack pnpm@12.6.0 -C web test` → exit 1。lint の 4 件は開始 commit `c40b3669` に存在する `web/components/content/artifact-preview.test.tsx`、`web/components/ui/{confirm-dialog,drawer,gallery}.test.tsx` の import 順。4 ファイルはこの WU の objective（`web/server/`）の外。`web lint` を server の lint に絞るか、先行の別 WU で 4 ファイルを直す必要がある。
 - crates/・gui/ は変えていないので cargo の検査は対象外。
 
 ## 未解決
+- 上記の全域 lint check が開始 commit にある 4 件で失敗する。計画の check を修正する必要がある。
 - `check:secrets` は `web/dist` を要するため build 後の統合段で確認する。
 
 ## 提案

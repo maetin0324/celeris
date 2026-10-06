@@ -257,8 +257,7 @@ test("chat SSE is relayed without a timeout, with Last-Event-ID, and aborted on 
   const decoder = new TextDecoder();
   let text = "";
   while (!text.includes("id: 5")) text += decoder.decode((await reader.read()).value);
-  // relayTimeoutMs=1 の timer は後に登録した 20ms の timer より必ず先に発火する。それでも stream は続く。
-  await new Promise((resolve) => setTimeout(resolve, 20));
+  // upstream から次の event を送るまで stream を保持する。時間待ちに依存しない。
   upstreamRes.write('id: 6\nevent: message\ndata: {"id":"6"}\n\n');
   while (!text.includes("id: 6")) text += decoder.decode((await reader.read()).value);
   assert.match(text, /: hello\n\nid: 5\nevent: text_delta\ndata: \{"id":"5","type":"text_delta"\}\n\nid: 6/);

@@ -1,0 +1,104 @@
+[
+  {
+    "step": "org list",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org PATCH",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings PATCH widen",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings PATCH invalid origin",
+    "status": 422,
+    "expected": 422
+  },
+  {
+    "step": "settings PATCH restore",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org list after settings",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings edit",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ],
+    "result": "passed"
+  },
+  {
+    "step": "task POST",
+    "status": 201,
+    "expected": 201
+  },
+  {
+    "step": "task browser policy PUT",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "task browser policy GET",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "task_id": "01M47Z6W180NH02RPVPRKSW6VA",
+    "allowed_domains": [
+      "http://127.0.0.1:17730"
+    ],
+    "policy": {
+      "policy": {
+        "allowed_actions": [
+          "navigate",
+          "snapshot",
+          "extract",
+          "click",
+          "scroll"
+        ],
+        "approval_actions": [],
+        "credential_policy_ids": [],
+        "domain_mode": "common_hosts",
+        "navigation_origins": [],
+        "network_domains": [
+          "http://127.0.0.1:17730"
+        ],
+        "policy_id": "real-check-loopback",
+        "revision": 1
+      }
+    }
+  },
+  {
+    "step": "owner challenge",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "owner session",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "live view unauthenticated",
+    "status": 401,
+    "expected": 401
+  },
+  {
+    "step": "live stream unauthenticated",
+    "status_line": "HTTP/1.1 401 Rejected"
+  }
+]

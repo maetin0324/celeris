@@ -1,0 +1,7 @@
+== browser_control_actions
+== browser_control_state
+task_id|run_id|session_id|phase|version|lease_holder|lease_expires_at|state_json
+01M47Z94Z3W4ZGQJWYYE9JY226|01M47Z94ZBCWKA92MDEJESYVR7|celeris-4469f1d0aff494963f53afec336799ef|"paused"|3|||{"phase":"paused","version":3,"in_flight":0,"lease":null,"auth_section_active":false,"applied":{"real-check-pause":[{"kind":"pause"},{"phase":"paused","version":1,"lease_expires_at":null,"replayed":false}],"real-check-takeover":[{"kind":"takeover","holder":"d22d42448a4b9090dc4d7bd53e772f2ae4
+== browser_waits
+wait_id|task_id|work_unit_id|run_id|session_id|reason|origin|purpose|credential_id|credential_provider|credential_policy_id|operation_intent_id|action|args_digest|approval_id|policy_revision|policy_hash|owner_id|deadline|resume_key|version|state|resolution_code|created_at|resolved_at|trusted_login_json
+01M47Z96J3XGX2F6N82KZGNW4B|01M47Z94Z3W4ZGQJWYYE9JY226||01M47Z94ZBCWKA92MDEJESYVR7|celeris-4469f1d0aff494963f53afec336799ef|waiting_for_approval|https://real-check.celeris.invalid|real-check decision route||||real-check-intent|navigate|||1|real-check-policy|owner|2026-10-06T06:49:10.947275151Z|real-check-wait|2|denied|approval_denied|2026-10-06T06:44:10.947275151Z|2026-10-06T06:44:10.954436972Z|

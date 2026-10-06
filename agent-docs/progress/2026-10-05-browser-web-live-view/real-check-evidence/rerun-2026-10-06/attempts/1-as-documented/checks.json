@@ -1,0 +1,22 @@
+[
+  {
+    "step": "org list",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "org PATCH",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "web login",
+    "status": 200,
+    "expected": 200
+  },
+  {
+    "step": "settings PATCH widen",
+    "status": 404,
+    "expected": 200
+  }
+]

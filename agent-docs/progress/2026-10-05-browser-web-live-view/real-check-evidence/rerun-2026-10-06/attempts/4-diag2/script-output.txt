@@ -1,0 +1,2 @@
+browser harness did not produce egress denial evidence
+exit=1

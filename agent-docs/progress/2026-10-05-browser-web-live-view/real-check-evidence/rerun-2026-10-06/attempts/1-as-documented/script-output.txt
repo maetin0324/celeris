@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<stdin>", line 97, in <module>
+  File "<stdin>", line 27, in checked
+AssertionError: settings PATCH widen: HTTP 404, wanted 200: {'type': 'urn:celeris:problem:not_found', 'title': 'not found', 'status': 404, 'detail': 'no such endpoint', 'code': 'not_found', 'instance': 'urn:celeris:request:01M47Z4A418W3736DXE888X9ER'}
+exit=1

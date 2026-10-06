@@ -1,0 +1,20 @@
+--- /local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform/scripts/dev/browser-web-live-check.sh	2026-10-06 05:23:49.207169020 +0000
++++ /tmp/claude-1001/-home-rmaeda-workspace-agent-platform/ae36633b-4d02-4b11-975b-c8070527ae25/scratchpad/browser-web-live-check.diag1.sh	2026-10-06 06:42:21.180225907 +0000
+@@ -7,7 +7,7 @@
+ fi
+ umask 077
+ 
+-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
++ROOT=/local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform  # PATCH(fable): copy runs outside the tree
+ # Defaults live under /var/tmp, never /tmp: the launcher covers /tmp with a per-session tmpfs,
+ # so a socket, state_dir or bwrap path under /tmp disappears inside the session (D3).
+ # Keep the evidence dir name short: the run workspace lives below it.
+@@ -357,7 +357,7 @@
+     checked("web login", web+"/login", "POST", {"password":password}, origin=web)
+     # Settings edit through the gateway, the same route the web settings screen uses
+     # (PATCH /api/v1/org/{id}/browser-settings). Widen, reject an invalid origin, then restore.
+-    settings = web+"/api/v1/org/browser-execution/browser-settings"
++    settings = web+"/api/org/browser-execution/browser-settings"  # PATCH(fable): gateway maps /api/* to daemon /api/v1/*
+     def grant_domains(node): return node["profile"]["browser"]["allowed_domains"]
+     widened = checked("settings PATCH widen", settings, "PATCH", {"allowed_domains":[page, denied_origin]}, origin=web)
+     if grant_domains(widened) != [page, denied_origin]: raise AssertionError(f"settings not applied: {grant_domains(widened)}")

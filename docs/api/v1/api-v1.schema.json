@@ -8074,6 +8074,55 @@
       "description": "DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の\n*結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。\n`JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。",
       "oneOf": [
         {
+          "description": "CoS operation attempt, including rejected attempts. The envelope is immutable.",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "policy_version": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string"
+            },
+            "target_id": {
+              "type": "string"
+            },
+            "target_kind": {
+              "type": "string"
+            },
+            "thread_id": {
+              "type": "string"
+            },
+            "type": {
+              "const": "cos_operation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "actor",
+            "thread_id",
+            "run_id",
+            "operation_id",
+            "reason",
+            "policy_version",
+            "state",
+            "target_kind",
+            "target_id"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0118 D3: immutable snapshot of one repository's review attempt.",
           "properties": {
             "attempt": {

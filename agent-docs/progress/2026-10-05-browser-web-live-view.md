@@ -125,24 +125,47 @@ web-parity-close2.log・web-e2e-close2.log）。
   拒否・lease 保持時の入力転送のカバー欠けが見つかった。close せず、R1〜R4 の修正後に
   Fable が 3 回目の再実行を行う。各段の結果と経緯（attempts 1〜8 → launcher-fix → 再実行）は
   [real-check.md](2026-10-05-browser-web-live-view/real-check.md) に記録する。
+- **rerun 3・4（人の replan で追加の修正葉の統合後）**: 3 回目（tree `d750b121`、証跡
+  `real-check-evidence/rerun3-2026-10-06/`、commit `c2696fee`）は FAIL — R1〜R4 は直っていたが
+  R5（launcher の session `policy.json` に `launch` が無く全 action 拒否）・R6（egress が
+  CONNECT のみ）・R7（拒否記録の session id 探索）・R8（禁止 origin が egress に届かない）
+  が見つかり、修正葉（[2026-10-06-browser-r5-r8-fix](2026-10-06-browser-r5-r8-fix.md)）を
+  統合。4 回目（tree `bee1c2e4`、証跡 `real-check-evidence/rerun4-2026-10-06/`、commit
+  `884c7baf`）は FAIL — R5〜R8 は直っていたが F1（shared CDP relay が idle 中に
+  `Page.loadEventFired` を転送せず `open` が全件 25 s タイムアウト）・F2（拒否収集が
+  pause/deny 後に走る）・F3（`ip_literal`/`private_address` の誤り）・F4（session dir に
+  subuid 所有の `.cache`/`.config` が残る）が残る。原因調査は
+  [f1-diagnosis-2026-10-06/](2026-10-05-browser-web-live-view/real-check-evidence/f1-diagnosis-2026-10-06/)
+  （commit `4cc2b535`）、修正は [2026-10-06-browser-cdp-fix](2026-10-06-browser-cdp-fix.md)。
+- **rerun 5（5 回目、2026-10-06、commit `15c23817`）**: tree `f5b9dc4e`（cdp-fix 統合後、
+  `versions.txt` の binary・script・doc sha256 で確認）で Fable が再実行し、
+  **Result: PASS**（コード・台本・手順書とも未パッチ）。open 0.45 s・snapshot 0.10 s・click
+  0.10 s（F1 修正）、`ip_literal` の egress 拒否記録（F2/F3）、session dir 削除（F4）、
+  Live View 200/401/403・RST 耐性（R2）・lease・入力の転送と拒否・waits・settings・cleanup
+  すべて合格。証跡は `real-check-evidence/rerun5-2026-10-06/`（本 WU branch の merge
+  `0b582b8d` で取り込み済み）。軽微な残りは 2 件: 手順書の HOME 上書き時の
+  `PLAYWRIGHT_BROWSERS_PATH` 注記（`docs/ops/browser-web-live-check.md` に反映済み）と、task
+  文言の『read #inside』が wrapper の interactive-only snapshot では参照が付かない点（台本は
+  検査せず、Playwright が確認するため無害）。1〜5 回の各段の結果と欠陥の要約は
+  [record6.md](2026-10-05-browser-web-live-view/record6.md) と [real-check.md](2026-10-05-browser-web-live-view/real-check.md) に記録する。
 
 ## 未解決事項
 
-- **実機再確認が不合格（rerun-evidence 回答 `fable-rerun`）**: tree `0e167295` で再実行した
-  ところ、D4・D6 修正は効いていたが loopback 試験ページが launcher egress で開けず、
-  egress 拒否の証跡が取れなかった。R1〜R4（上）と 2 件のカバー欠けの修正が未実施。
-  修正後に Fable が 3 回目の再実行を行う。詳細は
-  [real-check.md](2026-10-05-browser-web-live-view/real-check.md)。
+- ~~**実機再確認が不合格（rerun-evidence 回答 `fable-rerun`）**~~: **rerun 5（commit `15c23817`）で
+  PASS 済み**。R1〜R4・R5〜R8・F1〜F4 はすべて修正・統合済み（上「rerun 3・4」・「rerun 5」）。
+  残る軽微な 2 件のうち `PLAYWRIGHT_BROWSERS_PATH` 注記は
+  `docs/ops/browser-web-live-check.md` に反映済み。詳細は
+  [record6.md](2026-10-05-browser-web-live-view/record6.md)。
 - ~~`check:parity` が exit 1（`/browser/settings: missing V3 screen`）~~: **review-fix で修正済み**
   （`web/e2e/support/screens.ts` に `/browser/settings` を fixture 付きで追加、rich fixture に
   `browser-execution` node を加え `e2e:nfr` 103 件成功・exit 0。記録は [review-fix](2026-10-05-browser-web-live-view/review-fix.md)）。
 - **functional e2e の home 360px 失敗 2 件は main 由来の既知の失敗**: `home-layout.spec.ts:26`
   （360x800）・`home-stale-viewport.spec.ts`（stale の / 360）。この branch の web 差分は
   browser 画面のみ。web-ui 葉と同様に除外して残りを 0 failed で確認済み。main 側の修正を待つ。
-- **本番の org 投入は未実施・実機再確認は不合格**: 本番 org への投入（`docs/ops/browser-department.md`
-  で `POST /api/v1/org`）は配送後に Fable が行う。実機確認は attempts 1〜8（tree `8aecea65`）と
-  launcher-fix 後の再実行（tree `0e167295`、証跡 `3680b70e`）まで実施済みで、再実行は不合格
-  （上「rerun-evidence」。R1〜R4 修正後の 3 回目の再実行が未実施）。
+- **本番の org 投入は未実施・実機確認は合格（rerun 5）**: 本番 org への投入（`docs/ops/browser-department.md`
+  で `POST /api/v1/org`）は配送後に Fable が行う。実機確認は attempts 1〜8（tree `8aecea65`）から
+  5 回（rerun 5、tree `f5b9dc4e`、commit `15c23817`）まで実施済みで、5 回目は PASS
+  （上「rerun 5」。欠陥 R1〜R4・R5〜R8・F1〜F4 の全修正が統合済み）。
 - **egress は `host:port` の完全一致**: wildcard origin（`*.example.com`）は egress で一致せず
   fail-closed に拒否される（以前からの挙動）。実運用では wildcard ではなく単一 origin を指定する。
 - **launcher 経路（`browser_launcher`）は prepared policy を受け取るだけ**: 追加の origin 検証は
@@ -160,10 +183,8 @@ web-parity-close2.log・web-e2e-close2.log）。
 
 ## 提案
 
-- **実機再確認の R1〜R4 修正（次段・最優先）**: 台本（R1 settings URL・R4 cleanup）・
-  web gateway（R2 拒否 upgrade の未処理 ECONNRESET）・egress（R3 試験専用 egress 許可と
-  拒否理由の記録）を直し、Fable が 3 回目の再実行で許可 origin の navigate 成功と
-  egress 拒否の証跡を取る（[real-check.md](2026-10-05-browser-web-live-view/real-check.md)）。
+- ~~**実機再確認の R1〜R4 修正（次段・最優先）**~~: **完了（rerun 5 で PASS）**。R1〜R4・R5〜R8・
+  F1〜F4 の全修正が統合済みで、5 回目の実機確認が合格（上「rerun 5」）。
 - **`org_browser_events` の読み取り API**（`GET /api/v1/org/{id}/browser-events`）を足し、設定画面に
   変更履歴一覧を出す（actor・時刻・変更欄の要約のみ）。
 - **launcher 経路の origin 検証**: `browser_launcher` が prepared policy をそのまま egress へ渡す

@@ -729,3 +729,32 @@ egress は拒否を記録しなかった。ADR-0102/0104 の egress 判定は変
 | 本番 launcher path/socket/state_dir 起動拒否と enabled log | `crates/task-worker/src/bin/celeris-browser-launcher.rs::run`; `backend.rs::refuse_test_loopback_in_production` | `egress_test_loopback_refuses_production_config_socket_or_state_dir` |
 | 本番 daemon と launcher hello の fail-closed | `crates/celeris/src/daemon/bootstrap.rs::browser_launcher_refuses_test_loopback`; `crates/task-worker/src/browser_launcher/runtime.rs::LauncherRuntime::start_guarded` | `egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher`, `egress_test_loopback_production_daemon_refuses_test_launcher`, `egress_test_loopback_production_daemon_refuses_launcher_without_hello` |
 | session 単位の拒否記録と秘密非記録 | `crates/task-worker/src/browser_egress.rs`; `crates/task-worker/src/browser_launcher/backend.rs` relay | `egress_denial_record_reasons_and_no_request_secrets`, `egress_denial_record_allowed_connection_has_no_entry`, `egress_denial_record_malformed_and_bounded`, `egress_denial_record_rejects_preexisting_file` |
+
+## 付記: 実機確認 5 回（rerun 5）の PASS と軽微な残り（2026-10-06）
+
+cdp-fix（F1/F4/F2/F3。[shared CDP idle event pump](2026-10-06-shared-cdp-idle-event-pump.md)）
+の統合後、Fable が tree `f5b9dc4e`（cdp-fix 統合後。証跡 `versions.txt` の binary・script・doc
+sha256 で確認）で `scripts/dev/browser-web-live-check.sh` を 5 回目を再実行し、証跡
+`agent-docs/progress/2026-10-05-browser-web-live-view/real-check-evidence/rerun5-2026-10-06/`
+（commit `15c23817`）を commit した。**Result: PASS（コード・台本・手順書とも未パッチ）**。
+
+- **確定した事項（実機で）**: D1〜D3 の web 画面と gateway（run 一覧・同一 origin の
+  Live View 認可 200/401/403・raw `live_view_url` 非表示・control lease の取得・返却・
+  lease 保持時の入力転送と無いときの `input_denied/lease_required`・waits decision・
+  settings 編集 200/422）、D2.0/D5 の task ∩ grant の egress 判定（`ip_literal` 拒否記録
+  E3・試験専用 loopback 許可 E1/E2 の fail-closed）、D4（action socket path）、D6
+  （`policy_sha256` と `launch`）。R1〜R4（[上の付記](#付記-実機再確認2026-10-06人の決定-rerun-evidence-への回答-fable-rerun)）、
+  R5〜R8（`2026-10-06-browser-r5-r8-fix`）、F1〜F4（`2026-10-06-browser-cdp-fix`、
+  [HTTP forward GET](2026-10-06-egress-http-forward-get.md)）の全修正が実機で効いている。
+- **軽微な残り（コード欠陥は無し）**:
+  1. 手順書: HOME を試験ディレクトリへ上書きした操作環境では台本の Playwright 段が
+     `PLAYWRIGHT_BROWSERS_PATH`（例 `~/.cache/ms-playwright`）を要する（rerun 5 attempt 2 の
+     失敗要因、操作者環境の差）。あるいは HOME を daemon プロセスに限定する。本 task の
+     範囲 check（`agent-docs/progress/`・`agent-docs/adr/` のみ）に `docs/ops/browser-web-live-check.md`
+     が外れるため、注記の追記は次 task に残す。
+  2. task 文言の『read #inside』: shim の snapshot は interactive-only で段落に `@e` 参照が
+     付かないため wrapper 経由では読めない（台本はこの項目を検査せず、Playwright が
+     `#inside == "inside"` を別途確認するので無害）。文言を落とすか Playwright 依存に直す余地。
+- 各回（attempts 1〜8 → rerun 2〜5）の経緯と各段の結果は
+  [real-check.md](../progress/2026-10-05-browser-web-live-view/real-check.md) と
+  [record6.md](../progress/2026-10-05-browser-web-live-view/record6.md) に記録する。

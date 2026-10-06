@@ -43,8 +43,12 @@ tasks: [01M46W97H391DSFW1XJ745W0G9]
 - **R4（台本）**: cleanup が `launcher.sock`・`owner.sock` を残し同じ dir の再実行が壊れる（`EADDRINUSE`）。
 - **カバーの欠け**: 別 login session の Live View 拒否、lease 保持時の入力転送の成功が台本に無い。
 
+## 経緯: 3〜5 回目（R5〜R8 → F1〜F4 → rerun 5）
+
+4. **3 回目（rerun 3、tree `d750b121`、証跡 [real-check-evidence/rerun3-2026-10-06/](real-check-evidence/rerun3-2026-10-06/)、commit `c2696fee`）**: **FAIL**。R1〜R4 は直っていたが、R5（launcher の session `policy.json` に `launch` が無く全 action が `Action launch denied by policy`）・R6（egress が CONNECT のみで http:// の絶対 URI GET を malformed 拒否）・R7（拒否記録を daemon session id で探している）・R8（wrapper 経由の禁止 origin は egress に届かない）が見つかった。
+5. **4 回目（rerun 4、tree `bee1c2e4`、証跡 [real-check-evidence/rerun4-2026-10-06/](real-check-evidence/rerun4-2026-10-06/)、commit `884c7baf`）**: **FAIL**。R5〜R8 の修正で Chrome は許可ページに到達するが、F1（shared CDP relay が idle 中に `Page.loadEventFired` を転送せず `open` が全件 25 s タイムアウト）・F2（拒否収集が pause/deny 後に走る）・F3（`ip_literal` と `private_address` の誤り）・F4（session dir に subuid 所有の `.cache`/`.config` が残る）が残る。原因調査は [f1-diagnosis-2026-10-06/](real-check-evidence/f1-diagnosis-2026-10-06/)（commit `4cc2b535`）。修正は [2026-10-06-browser-cdp-fix](../2026-10-06-browser-cdp-fix.md)。
+6. **5 回目（rerun 5、tree `f5b9dc4e` = cdp-fix 統合後、証跡 [real-check-evidence/rerun5-2026-10-06/](real-check-evidence/rerun5-2026-10-06/)、commit `15c23817`）**: **Result: PASS**（コード・台本・手順書とも未パッチ）。各段（F1 修正の open 0.45 s / snapshot 0.10 s / click 0.10 s、F2/F3 の `ip_literal` 拒否証跡、F4 の session dir 削除、R2 の RST 耐性、lease・入力・waits・settings・cleanup）と軽微な残り（HOME 上書き時の `PLAYWRIGHT_BROWSERS_PATH` 注記・task 文言の『read #inside』）は [record6.md](record6.md) と ADR 付記に記録する。
+
 ## 次
 
-- R1〜R4 を直す（台本 + web gateway R2 + egress 試験許可 R3・拒否記録）。
-- 修正後に Fable が 3 回目の再実行を行い、許可 origin の navigate 成功（screenshot）・範囲外 origin の egress 拒否記録を証跡として commit する。
-- 本 run（`rerun-record`）は記録のみで、上記のコード・台本修正は行わない（別 WU の範囲）。
+- 本 run（`record6`）は記録のみで、上記のコード・台本修正は行わない（別 WU の範囲）。

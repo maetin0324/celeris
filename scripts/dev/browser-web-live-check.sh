@@ -189,10 +189,7 @@ done
 [[ -s $EVIDENCE/health.json ]] || { echo "test daemon health timeout" >&2; exit 1; }
 
 mkdir -p "$EVIDENCE/page"
-cat > "$EVIDENCE/page/index.html" <<EOF
-<!doctype html><title>Celeris browser check</title><p id="inside">inside</p>
-<a id="forbidden-link" href="$DENIED_ORIGIN/">Follow this link to test the forbidden origin</a>
-EOF
+printf '<!doctype html><title>Celeris browser check</title><p id="inside">inside</p><a id="forbidden-link" href="%s/">forbidden</a>\n' "$DENIED_ORIGIN" > "$EVIDENCE/page/index.html"
 setsid python3 -m http.server "$PAGE_PORT" --bind 127.0.0.1 --directory "$EVIDENCE/page" >"$EVIDENCE/page.log" 2>&1 &
 PAGE_PID=$!
 for _ in {1..100}; do
@@ -278,9 +275,9 @@ done
 [[ -s $EVIDENCE/web-health.json && -S $OWNER_SOCKET ]] || { echo "web gateway readiness timeout" >&2; exit 1; }
 
 # Use one deterministic driver for all API assertions. It writes only redacted JSON.
-python3 - "$ROOT" "$EVIDENCE" "$API" "$WEB" "$PAGE" "$DENIED_ORIGIN" "$TOKEN_FILE" "$OWNER_SOCKET" "$WEB_PASSWORD_FILE" "$DECISION_ORIGIN" <<'PY'
-import base64, http.cookiejar, json, os, pathlib, socket, sys, time, urllib.error, urllib.parse, urllib.request
-root, evidence, api, web, page, denied_origin, token_file, owner_socket, password_file, decision_origin = sys.argv[1:]
+python3 - "$ROOT" "$EVIDENCE" "$API" "$WEB" "$PAGE" "$DENIED_ORIGIN" "$TOKEN_FILE" "$OWNER_SOCKET" "$WEB_PASSWORD_FILE" "$DECISION_ORIGIN" "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$DENIAL_FILE" <<'PY'
+import base64, http.cookiejar, json, os, pathlib, re, socket, subprocess, sys, time, urllib.error, urllib.parse, urllib.request
+root, evidence, api, web, page, denied_origin, token_file, owner_socket, password_file, decision_origin, state_dir, page_port, denied_port, denial_file = sys.argv[1:]
 token = pathlib.Path(token_file).read_text().strip()
 out = pathlib.Path(evidence)
 log = []
@@ -401,9 +398,7 @@ try:
     if grant_domains(restored) != [page] or grant_domains(stored) != [page]:
         raise AssertionError(f"settings restore not stored: {grant_domains(stored)}")
     log.append({"step":"settings edit", "allowed_domains":grant_domains(stored), "result":"passed"})
-    # The forbidden URL must be followed by Chrome from the allowed page. An explicit
-    # navigate action is rejected by the wrapper before it reaches the egress proxy.
-    body = {"title":"loopback browser live check", "objective":f"Open {page}, read #inside, take a snapshot, then click the 'Follow this link to test the forbidden origin' link using its snapshot @e reference. Let Chrome follow the link to {denied_origin}; report the failed load, then wait for this check to finish. Do not use a navigate/open action for the forbidden URL.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
+    body = {"title":"loopback browser live check", "objective":f"Open {page}, take a snapshot, read #inside, then click #forbidden-link using its @e ref. Report that egress denied the link navigation to {denied_origin}; then wait for this check to finish.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
     log.append({"step":"launcher log boundary", "daemon_log_offset":(out/"daemon.log").stat().st_size})
     task = checked("task POST", api+"/tasks", "POST", body, auth=True, expected=201)
     task_id = task["id"]
@@ -452,6 +447,69 @@ try:
     if " 403 " not in status_line + " ": raise AssertionError(f"non-owner stream not refused: {status_line}")
     checked("live view", web+run["live_path"])
     lease_less_input("input without lease (agent running)", stream_path)
+    # step: agent-actions
+    # The agent opens the allowed page, snapshots it, and clicks #forbidden-link.
+    # The first GET is the readiness probe; the second must come from the run.
+    deadline = time.monotonic()+120
+    page_log = out/"page.log"
+    while time.monotonic() < deadline:
+        if page_log.read_text().count('"GET / ') >= 2: break
+        time.sleep(0.2)
+    else:
+        raise AssertionError("browser run did not request the allowed test page")
+    # step: egress-denials
+    # Wait for the click's denial while the current launcher session is alive.
+    collector = r'''
+import json, pathlib, re, sys, time
+state = pathlib.Path(sys.argv[1])
+page_port, denied_port = map(int, sys.argv[2:4])
+session_id = sys.argv[4]
+if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", session_id):
+    raise SystemExit("invalid browser session id")
+record_file = state / "sessions" / session_id / "egress-denied.jsonl"
+deadline = time.monotonic() + 120
+while True:
+    records = []
+    if record_file.is_file():
+        for line in record_file.read_text().splitlines():
+            try: records.append(json.loads(line))
+            except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
+    if any(r.get("kind") == "ip_literal" and r.get("host") == "127.0.0.1" and
+           r.get("port") == denied_port and r.get("session_id") == session_id and r.get("at") for r in records):
+        break
+    if time.monotonic() >= deadline:
+        raise SystemExit("current launcher session contains no ip_literal denial for the forbidden origin")
+    time.sleep(0.2)
+if any(r.get("port") == page_port for r in records):
+    raise SystemExit("allowed loopback test page was recorded as denied")
+print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
+'''
+    # The launcher names its session dir with the id from its Started response (logged by the
+    # daemon), not with the browser run's session_id (R7). Find it after the task was created.
+    boundary = next(row["daemon_log_offset"] for row in log if row.get("step") == "launcher log boundary")
+    started = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
+    ansi = re.compile(r"\x1b\[[0-9;]*m")
+    deadline = time.monotonic()+30
+    while True:
+        with (out/"daemon.log").open("rb") as stream:
+            stream.seek(boundary)
+            launcher_ids = set(started.findall(ansi.sub("", stream.read().decode(errors="replace"))))
+        if launcher_ids or time.monotonic() >= deadline: break
+        time.sleep(0.2)
+    if len(launcher_ids) != 1:
+        raise AssertionError(f"expected one launcher Started session after task creation, found {len(launcher_ids)}")
+    launcher_session_id = launcher_ids.pop()
+    log.append({"step":"launcher session", "launcher_session_id":launcher_session_id, "run_session_id":session_id})
+    result = subprocess.run(["sudo", "-n", "python3", "-", state_dir, page_port, denied_port, launcher_session_id],
+                            input=collector, capture_output=True, text=True)
+    if result.returncode:
+        raise AssertionError(f"egress denial collection failed: {result.stderr.strip()}")
+    pathlib.Path(denial_file).write_text(result.stdout)
+    if '"GET ' in (out/"denied-page.log").read_text():
+        raise AssertionError("forbidden origin received a page request")
+    log.append({"step":"browser egress denial", "session_id":launcher_session_id, "kind":"ip_literal",
+                "host":"127.0.0.1", "port":int(denied_port), "result":"passed"})
+    # step: pause-takeover-release
     control_url = web+f"/browser/control/{task_id}/{run_id}/{session_id}"
     state = checked("control status", control_url)["status"]
     # Takeover is only valid from paused (ControlPhase); pause first (D5).
@@ -468,6 +526,7 @@ try:
     leased_input(stream_path)
     checked("release", control_url+"/release", "POST", {"csrf":csrf}, origin=web)
     lease_less_input("input without lease (after release)", stream_path)
+    # step: decision-deny
     # Open a trusted, non-credential decision wait on the real run. This is independent
     # of when the local ACP harness decides to request human input.
     wait_body = {"run_id":run_id,"session_id":session_id,"reason":"waiting_for_approval",
@@ -482,68 +541,7 @@ try:
 finally:
     (out/"checks.json").write_text(json.dumps(log, indent=2, ensure_ascii=False)+"\n")
 PY
-
-sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$EVIDENCE/checks.json" "$EVIDENCE/daemon.log" <<'PY' >"$DENIAL_FILE"
-import json, pathlib, re, sys, time
-state = pathlib.Path(sys.argv[1])
-page_port, denied_port = map(int, sys.argv[2:4])
-checks = json.loads(pathlib.Path(sys.argv[4]).read_text())
-daemon_log = pathlib.Path(sys.argv[5])
-offset = next(row["daemon_log_offset"] for row in checks if row.get("step") == "launcher log boundary")
-# The daemon logs the session_id from the launcher's Started response. Its browser
-# run session_id in /browser/runs and checks.json is a different identifier.
-ansi = re.compile(r"\x1b\[[0-9;]*m")
-marker = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
-def launcher_ids():
-    with daemon_log.open("rb") as stream:
-        stream.seek(offset)
-        tail = stream.read().decode(errors="replace")
-    return set(marker.findall(ansi.sub("", tail)))
-deadline = time.monotonic() + 30
-while not (ids := launcher_ids()) and time.monotonic() < deadline:
-    time.sleep(0.2)
-if len(ids) != 1:
-    raise SystemExit(f"expected one launcher Started session after task creation, found {len(ids)}")
-session_id = ids.pop()
-sessions = state / "sessions"
-deadline = time.monotonic() + 90
-records = []
-while time.monotonic() < deadline:
-    if launcher_ids() != {session_id}:
-        raise SystemExit("multiple launcher sessions after task creation; denial is ambiguous")
-    records = []
-    record_file = sessions / session_id / "egress-denied.jsonl"
-    if record_file.is_file():
-        for line in record_file.read_text().splitlines():
-            try: record = json.loads(line)
-            except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
-            records.append(record)
-    if any(record.get("port") == denied_port for record in records): break
-    time.sleep(0.2)
-if not any(record.get("port") == denied_port for record in records):
-    raise SystemExit("current launcher session contains no denial for the forbidden origin")
-if not any(r.get("kind") == "private_address" and r.get("host") == "127.0.0.1" and
-           r.get("port") == denied_port and r.get("session_id") == session_id and r.get("at") for r in records):
-    raise SystemExit("forbidden-origin denial must record kind=private_address and host:port")
-for record in records:
-    if record.get("port") == page_port:
-        raise SystemExit("allowed loopback test page was recorded as denied")
-# Publish only the launcher records needed as portable evidence.
-print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
-PY
-if grep -q '"GET ' "$EVIDENCE/denied-page.log"; then
-  echo "forbidden origin received a page request" >&2
-  exit 1
-fi
-# The first GET is the readiness probe above. Require a second GET from the run before
-# capturing a visual record. Playwright's own GET happens only after that check.
-for _ in {1..150}; do
-  [[ $(grep -c '"GET / ' "$EVIDENCE/page.log" 2>/dev/null || true) -ge 2 ]] && break
-  sleep 0.2
-done
-[[ $(grep -c '"GET / ' "$EVIDENCE/page.log" 2>/dev/null || true) -ge 2 ]] || {
-  echo "browser run did not request the allowed test page" >&2; exit 1;
-}
+# Playwright supplies an independent visual record after the run's GET has been checked.
 (cd "$ROOT/web" && node --input-type=module - "$PAGE" "$EVIDENCE/allowed-page.png" <<'JS'
 import { chromium } from '@playwright/test';
 const [, , pageUrl, output] = process.argv;

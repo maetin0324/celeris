@@ -1,5 +1,6 @@
 //! Create a two-entry user namespace owned by the dedicated launcher UID.
 //! Mapping failures are fatal; the holder child is always reaped.
+use std::ffi::CStr;
 use std::fs::File;
 use std::io::{self, Read};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
@@ -8,6 +9,12 @@ use std::path::Path;
 use std::process::Command;
 
 use nix::libc;
+
+/// Empties the browser-writable session subdirectories and, since HOME is a
+/// subdirectory of the session root (F4), any top-level dot entry the
+/// browser subuid left directly under the session dir (the sticky session
+/// root means only the subuid can remove its own files there).
+const CLEANUP_SCRIPT: &CStr = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; /bin/rm -rf -- ./.[!.]* ./..?* || status=1; exit \"$status\"";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Mapping {
@@ -213,17 +220,16 @@ pub fn create() -> io::Result<UserNamespace> {
             {
                 libc::_exit(1);
             }
-            // Fixed command, cwd is opened before dropping to the subordinate
+            // Fixed command; cwd is opened before dropping to the subordinate
             // UID because session_root itself is 0700 for the launcher UID.
             let shell = c"/bin/sh";
             let arg0 = c"sh";
             let dash_c = c"-c";
-            let script = c"status=0; for d in output home run actions profile tmp; do [ -d \"$d\" ] || continue; /bin/rm -rf -- \"$d\"/* \"$d\"/.[!.]* \"$d\"/..?* || status=1; done; exit \"$status\"";
             libc::execl(
                 shell.as_ptr(),
                 arg0.as_ptr(),
                 dash_c.as_ptr(),
-                script.as_ptr(),
+                CLEANUP_SCRIPT.as_ptr(),
                 std::ptr::null::<libc::c_char>(),
             );
             libc::_exit(1);
@@ -335,6 +341,29 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn cleanup_script_removes_top_level_dot_entries_and_known_subdirs() {
+        // F4: no userns needed — the script is plain shell, runnable directly
+        // in a scratch dir as the current user.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("home")).unwrap();
+        std::fs::write(dir.path().join("home").join("marker"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join(".config")).unwrap();
+        std::fs::write(dir.path().join(".cache"), b"x").unwrap();
+        std::fs::write(dir.path().join("kept-non-dot"), b"x").unwrap();
+        let status = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(CLEANUP_SCRIPT.to_str().unwrap())
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(!dir.path().join("home").join("marker").exists());
+        assert!(!dir.path().join(".config").exists());
+        assert!(!dir.path().join(".cache").exists());
+        assert!(dir.path().join("kept-non-dot").exists());
     }
 
     #[test]

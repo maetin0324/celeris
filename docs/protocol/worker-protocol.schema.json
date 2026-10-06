@@ -134,6 +134,13 @@
           },
           "type": "array"
         },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Policy ID to browser identity ID. This contains identifiers only, never credentials.",
+          "type": "object"
+        },
         "credential_policy_ids": {
           "description": "Credential policies a task may reference. Absent/empty means no credential use.",
           "items": {

@@ -280,9 +280,38 @@ pub fn answer(
     })
 }
 
+/// 質問への回答の検証だけ（書き込みなし）。返すのは `(元の状態, 問い)`。CoS の監査つき操作
+/// （ADR 2026-10-05 D3）が同じ検証のまま遷移を自分の transaction で書くのに使う。
+pub fn plan_answer(
+    store: &dyn TaskStore,
+    id: TaskId,
+    expected: Option<Status>,
+) -> Result<(Status, String), OpsError> {
+    let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    check_expected(task.status, expected)?;
+    if task.status != Status::Blocked {
+        return Err(OpsError::InvalidState {
+            id,
+            context: format!("status={:?}", task.status),
+            action: "answered; only blocked tasks accept an answer".to_string(),
+        });
+    }
+    let events = store.events_for(id)?;
+    if crate::phase_gate::is_awaiting_human(&task, &events)
+        || crate::plan_gate::is_awaiting_plan_approval(&task, &events)
+    {
+        return Err(OpsError::InvalidState {
+            id,
+            context: format!("status={:?}", task.status),
+            action: "answered; a gate is resumed via execution/phase-gate or plan-gate".to_string(),
+        });
+    }
+    Ok((task.status, latest_question(&events)))
+}
+
 /// 汎用の回答で再開される統合 WU（`blocked(question)` の `Integrate`）が出した未回答の統合依頼を
 /// `answered` で閉じる。依頼の無い task では何もしない。
-fn close_phase_integration_requests(
+pub fn close_phase_integration_requests(
     store: &dyn TaskStore,
     task_id: TaskId,
     answer: &str,
@@ -305,7 +334,7 @@ fn close_phase_integration_requests(
 /// `task_id` に紐づく未決の `approvals` を、渡された `answer` で `once` に決定する。
 /// `task_ops::approval::decide` は呼ばない（そちらは決定のたびに `gate::answer` を呼び直すため、
 /// ここから呼ぶと循環する。ストアへの書き込みだけをここで完結させる）。
-pub(crate) fn settle_pending_approvals(
+pub fn settle_pending_approvals(
     store: &dyn TaskStore,
     task_id: TaskId,
     answer: &str,

@@ -40,6 +40,12 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/tasks/{id}/execution/phase-gate",
         "execution.phase_gate",
     ),
+    ("POST", "/api/v1/tasks/{id}/answer", "question.answer"),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/execution/plan-gate",
+        "execution.plan_gate",
+    ),
     ("PATCH", "/api/v1/projects/{id}", "project.update"),
     (
         "POST",
@@ -560,6 +566,20 @@ pub(crate) fn dispatch(
                 input,
                 Some(audit),
             )?)
+        }
+        "question.answer" | "execution.plan_gate" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            if matched.action == "question.answer" {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                audited(crate::handlers::task_actions::answer_op(
+                    store, id, input, audit,
+                )?)
+            } else {
+                let input = serde_json::from_value(body).map_err(decode)?;
+                audited(crate::execution::plan_gate_op(store, id, input, audit)?)
+            }
         }
         "project.update" => {
             let raw_id = matched.id.unwrap_or_default();

@@ -28,6 +28,7 @@ export type MobileSection = (typeof MOBILE_SECTIONS)[number]["key"];
 
 // header の「次の操作」と木の link は hash で移る。スマホではその移動先を含む区画を開く。
 const SECTION_BY_HASH: Record<string, MobileSection> = {
+  "browser-waits": "summary",
   "decision-panel": "decision",
   "execution-panel": "execution",
   "task-tree": "tree",

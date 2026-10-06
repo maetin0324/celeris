@@ -201,3 +201,9 @@ h1[tabindex="-1"]:focus-visible:not([data-kbd-focus]) {
     scroll-behavior: auto !important;
   }
 }
+
+/* browser: run-screen */
+@theme {
+  /* D3.6: Live View は狭い画面でも 16:10 で表示する。 */
+  --aspect-live: 16 / 10;
+}

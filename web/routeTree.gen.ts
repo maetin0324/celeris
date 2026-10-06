@@ -24,6 +24,7 @@ import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as ProvidersRouteImport } from './routes/providers'
 import { Route as ReleasesRouteImport } from './routes/releases'
 import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as BrowserIndexRouteImport } from './routes/browser.index'
 import { Route as KnowledgeIndexRouteImport } from './routes/knowledge.index'
 import { Route as KnowledgeInboxRouteImport } from './routes/knowledge.inbox'
 import { Route as KnowledgeSkillsRouteImport } from './routes/knowledge.skills'
@@ -35,9 +36,11 @@ import { Route as ProjectsIndexRouteImport } from './routes/projects.index'
 import { Route as TasksIndexRouteImport } from './routes/tasks.index'
 import { Route as TasksNewRouteImport } from './routes/tasks.new'
 import { Route as ProjectsIdIndexRouteImport } from './routes/projects.$id.index'
+import { Route as ProjectsIdBrowserIdentitiesRouteImport } from './routes/projects.$id.browser-identities'
 import { Route as TasksIdIndexRouteImport } from './routes/tasks.$id.index'
 import { Route as TasksIdChangesRouteImport } from './routes/tasks.$id.changes'
 import { Route as TasksIdFilesRouteImport } from './routes/tasks.$id.files'
+import { Route as BrowserRunsTaskIdRunIdRouteImport } from './routes/browser.runs.$taskId.$runId'
 import { Route as ProjectsIdDocsIndexRouteImport } from './routes/projects.$id.docs.index'
 import { Route as ProjectsIdDocsMaintenanceRouteImport } from './routes/projects.$id.docs.maintenance'
 import { Route as TasksIdRunsRunIdRouteImport } from './routes/tasks.$id.runs.$runId'
@@ -117,6 +120,11 @@ const ReportsRoute = ReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => rootRouteImport,
 } as any)
+const BrowserIndexRoute = BrowserIndexRouteImport.update({
+  id: '/browser/',
+  path: '/browser/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const KnowledgeIndexRoute = KnowledgeIndexRouteImport.update({
   id: '/knowledge/',
   path: '/knowledge/',
@@ -172,6 +180,12 @@ const ProjectsIdIndexRoute = ProjectsIdIndexRouteImport.update({
   path: '/projects/$id/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ProjectsIdBrowserIdentitiesRoute =
+  ProjectsIdBrowserIdentitiesRouteImport.update({
+    id: '/projects/$id/browser-identities',
+    path: '/projects/$id/browser-identities',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const TasksIdIndexRoute = TasksIdIndexRouteImport.update({
   id: '/tasks/$id/',
   path: '/tasks/$id/',
@@ -185,6 +199,11 @@ const TasksIdChangesRoute = TasksIdChangesRouteImport.update({
 const TasksIdFilesRoute = TasksIdFilesRouteImport.update({
   id: '/tasks/$id/files',
   path: '/tasks/$id/files',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const BrowserRunsTaskIdRunIdRoute = BrowserRunsTaskIdRunIdRouteImport.update({
+  id: '/browser/runs/$taskId/$runId',
+  path: '/browser/runs/$taskId/$runId',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ProjectsIdDocsIndexRoute = ProjectsIdDocsIndexRouteImport.update({
@@ -226,14 +245,17 @@ export interface FileRoutesByFullPath {
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
+  '/browser/': typeof BrowserIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/tasks/': typeof TasksIndexRoute
+  '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
   '/tasks/$id/files': typeof TasksIdFilesRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/tasks/$id/': typeof TasksIdIndexRoute
+  '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs/': typeof ProjectsIdDocsIndexRoute
@@ -260,14 +282,17 @@ export interface FileRoutesByTo {
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
+  '/browser': typeof BrowserIndexRoute
   '/knowledge': typeof KnowledgeIndexRoute
   '/org': typeof OrgIndexRoute
   '/projects': typeof ProjectsIndexRoute
   '/tasks': typeof TasksIndexRoute
+  '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
   '/tasks/$id/files': typeof TasksIdFilesRoute
   '/projects/$id': typeof ProjectsIdIndexRoute
   '/tasks/$id': typeof TasksIdIndexRoute
+  '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs': typeof ProjectsIdDocsIndexRoute
@@ -295,14 +320,17 @@ export interface FileRoutesById {
   '/org/secretary': typeof OrgSecretaryRoute
   '/plans/new': typeof PlansNewRoute
   '/tasks/new': typeof TasksNewRoute
+  '/browser/': typeof BrowserIndexRoute
   '/knowledge/': typeof KnowledgeIndexRoute
   '/org/': typeof OrgIndexRoute
   '/projects/': typeof ProjectsIndexRoute
   '/tasks/': typeof TasksIndexRoute
+  '/projects/$id/browser-identities': typeof ProjectsIdBrowserIdentitiesRoute
   '/tasks/$id/changes': typeof TasksIdChangesRoute
   '/tasks/$id/files': typeof TasksIdFilesRoute
   '/projects/$id/': typeof ProjectsIdIndexRoute
   '/tasks/$id/': typeof TasksIdIndexRoute
+  '/browser/runs/$taskId/$runId': typeof BrowserRunsTaskIdRunIdRoute
   '/projects/$id/docs/maintenance': typeof ProjectsIdDocsMaintenanceRoute
   '/tasks/$id/runs/$runId': typeof TasksIdRunsRunIdRoute
   '/projects/$id/docs/': typeof ProjectsIdDocsIndexRoute
@@ -331,14 +359,17 @@ export interface FileRouteTypes {
     | '/org/secretary'
     | '/plans/new'
     | '/tasks/new'
+    | '/browser/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
     | '/tasks/'
+    | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
     | '/tasks/$id/files'
     | '/projects/$id/'
     | '/tasks/$id/'
+    | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs/'
@@ -365,14 +396,17 @@ export interface FileRouteTypes {
     | '/org/secretary'
     | '/plans/new'
     | '/tasks/new'
+    | '/browser'
     | '/knowledge'
     | '/org'
     | '/projects'
     | '/tasks'
+    | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
     | '/tasks/$id/files'
     | '/projects/$id'
     | '/tasks/$id'
+    | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs'
@@ -399,14 +433,17 @@ export interface FileRouteTypes {
     | '/org/secretary'
     | '/plans/new'
     | '/tasks/new'
+    | '/browser/'
     | '/knowledge/'
     | '/org/'
     | '/projects/'
     | '/tasks/'
+    | '/projects/$id/browser-identities'
     | '/tasks/$id/changes'
     | '/tasks/$id/files'
     | '/projects/$id/'
     | '/tasks/$id/'
+    | '/browser/runs/$taskId/$runId'
     | '/projects/$id/docs/maintenance'
     | '/tasks/$id/runs/$runId'
     | '/projects/$id/docs/'
@@ -434,14 +471,17 @@ export interface RootRouteChildren {
   OrgSecretaryRoute: typeof OrgSecretaryRoute
   PlansNewRoute: typeof PlansNewRoute
   TasksNewRoute: typeof TasksNewRoute
+  BrowserIndexRoute: typeof BrowserIndexRoute
   KnowledgeIndexRoute: typeof KnowledgeIndexRoute
   OrgIndexRoute: typeof OrgIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   TasksIndexRoute: typeof TasksIndexRoute
+  ProjectsIdBrowserIdentitiesRoute: typeof ProjectsIdBrowserIdentitiesRoute
   TasksIdChangesRoute: typeof TasksIdChangesRoute
   TasksIdFilesRoute: typeof TasksIdFilesRoute
   ProjectsIdIndexRoute: typeof ProjectsIdIndexRoute
   TasksIdIndexRoute: typeof TasksIdIndexRoute
+  BrowserRunsTaskIdRunIdRoute: typeof BrowserRunsTaskIdRunIdRoute
   ProjectsIdDocsMaintenanceRoute: typeof ProjectsIdDocsMaintenanceRoute
   TasksIdRunsRunIdRoute: typeof TasksIdRunsRunIdRoute
   ProjectsIdDocsIndexRoute: typeof ProjectsIdDocsIndexRoute
@@ -554,6 +594,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/browser/': {
+      id: '/browser/'
+      path: '/browser'
+      fullPath: '/browser/'
+      preLoaderRoute: typeof BrowserIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/knowledge/': {
       id: '/knowledge/'
       path: '/knowledge'
@@ -631,6 +678,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsIdIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/projects/$id/browser-identities': {
+      id: '/projects/$id/browser-identities'
+      path: '/projects/$id/browser-identities'
+      fullPath: '/projects/$id/browser-identities'
+      preLoaderRoute: typeof ProjectsIdBrowserIdentitiesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/tasks/$id/': {
       id: '/tasks/$id/'
       path: '/tasks/$id'
@@ -650,6 +704,13 @@ declare module '@tanstack/react-router' {
       path: '/tasks/$id/files'
       fullPath: '/tasks/$id/files'
       preLoaderRoute: typeof TasksIdFilesRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/browser/runs/$taskId/$runId': {
+      id: '/browser/runs/$taskId/$runId'
+      path: '/browser/runs/$taskId/$runId'
+      fullPath: '/browser/runs/$taskId/$runId'
+      preLoaderRoute: typeof BrowserRunsTaskIdRunIdRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/projects/$id/docs/': {
@@ -698,14 +759,17 @@ const rootRouteChildren: RootRouteChildren = {
   OrgSecretaryRoute: OrgSecretaryRoute,
   PlansNewRoute: PlansNewRoute,
   TasksNewRoute: TasksNewRoute,
+  BrowserIndexRoute: BrowserIndexRoute,
   KnowledgeIndexRoute: KnowledgeIndexRoute,
   OrgIndexRoute: OrgIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   TasksIndexRoute: TasksIndexRoute,
+  ProjectsIdBrowserIdentitiesRoute: ProjectsIdBrowserIdentitiesRoute,
   TasksIdChangesRoute: TasksIdChangesRoute,
   TasksIdFilesRoute: TasksIdFilesRoute,
   ProjectsIdIndexRoute: ProjectsIdIndexRoute,
   TasksIdIndexRoute: TasksIdIndexRoute,
+  BrowserRunsTaskIdRunIdRoute: BrowserRunsTaskIdRunIdRoute,
   ProjectsIdDocsMaintenanceRoute: ProjectsIdDocsMaintenanceRoute,
   TasksIdRunsRunIdRoute: TasksIdRunsRunIdRoute,
   ProjectsIdDocsIndexRoute: ProjectsIdDocsIndexRoute,

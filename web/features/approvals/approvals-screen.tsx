@@ -18,6 +18,7 @@ import { Section } from "../../components/ui/panel";
 import { Select } from "../../components/ui/select";
 import { ShortId } from "../../components/ui/short-id";
 import { formatAbsolute } from "../../lib/time";
+import { openBrowserWaitsQuery } from "../browser/browser-runs-screen";
 
 const decidedKey = approvalKeys.list({ pending: false });
 const rulesKey = ["approvals", "rules"] as const;
@@ -269,6 +270,7 @@ function DecidedRow({ item, names }: { item: Approval; names: Map<string, string
 export function ApprovalsScreen() {
   // /approvals は常設ルールと履歴だけの最小限。未決の認可は受信箱の `authorization` 項目として答える（web ADR 2026-10-04 D4）。ここは件数と誘導だけ。
   const pending = useQuery(inboxItemsQuery({ kind: "authorization" }));
+  const browserWaits = useQuery(openBrowserWaitsQuery());
   const decided = useQuery({
     queryKey: decidedKey,
     queryFn: ({ signal }) => apiGet<ApprovalList>("/api/approvals?pending=false", signal),
@@ -296,6 +298,32 @@ export function ApprovalsScreen() {
           </div>
         </FetchFrame>
       </Section>
+      {browserWaits.data?.items.some((item) => item.wait.state === "pending") ? (
+        <Section title="ブラウザの待ち" description="対象の実行画面で承認または credential を登録します。">
+          <ul className="flex min-w-0 flex-col divide-y divide-border">
+            {browserWaits.data.items
+              .filter((item) => item.wait.state === "pending")
+              .map(({ task, wait }) => (
+                <li key={wait.wait_id} className="flex min-w-0 flex-wrap items-center gap-2 py-2">
+                  <Badge tone="warning">
+                    {wait.reason === "waiting_for_auth" ? "credential 待ち" : "ブラウザの承認待ち"}
+                  </Badge>
+                  <span className="min-w-0 flex-1 break-words text-label">
+                    {task.title}: {wait.purpose}
+                  </span>
+                  <Link
+                    to="/browser/runs/$taskId/$runId"
+                    params={{ taskId: wait.task_id, runId: wait.run_id }}
+                    hash="browser-waits"
+                    className={buttonVariants({ variant: "secondary", size: "sm" })}
+                  >
+                    ブラウザの実行画面を開く
+                  </Link>
+                </li>
+              ))}
+          </ul>
+        </Section>
+      ) : null}
       <Section title="決めたもの" description="新しく決めた順です。">
         <FetchFrame query={decided} subject="決めた認可">
           {decidedItems.length ? (

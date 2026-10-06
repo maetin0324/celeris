@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../../api/client";
-import type { InboxItem } from "../../api/generated/types";
-import { answerFailure, isDestructive, isInboxKind, nativeTarget, needsNativeScreen } from "./inbox-model";
+import type { BrowserWait, InboxItem } from "../../api/generated/types";
+import {
+  answerFailure,
+  browserWaitBadge,
+  isDestructive,
+  isInboxKind,
+  nativeTarget,
+  needsNativeScreen,
+} from "./inbox-model";
 
 const item = (extra: Partial<InboxItem>): InboxItem => ({
   id: "x",
@@ -54,5 +61,29 @@ describe("inbox model", () => {
     expect(needsNativeScreen(item({ kind: "cluster_login" }))).toBe(true);
     expect(needsNativeScreen(item({ options: [] }))).toBe(true);
     expect(needsNativeScreen(item({}))).toBe(false);
+  });
+
+  it("browser_wait の badge と run 導線は待ち ID を照合し、無ければ task の待ちへ戻す", () => {
+    const task = {
+      id: "T1",
+      title: "請求書",
+      kind: "execute",
+      status: "running",
+      actions: [],
+    } as unknown as InboxItem["task"];
+    const approval = item({
+      id: "browser_wait:W1",
+      kind: "browser_wait",
+      title: "承認待ち",
+      task,
+      links: [{ label: "古い", href: "/tasks/T1" }],
+    });
+    const credential = item({ id: "browser_wait:W2", kind: "browser_wait", title: "credential 待ち", task });
+    const wait = { wait_id: "W1", task_id: "T1", run_id: "R1", state: "pending" } as BrowserWait;
+    expect(browserWaitBadge(approval)).toBe("ブラウザの承認待ち");
+    expect(browserWaitBadge(credential)).toBe("credential 待ち");
+    expect(nativeTarget(approval, [wait]).href).toBe("/browser/runs/T1/R1#browser-waits");
+    expect(nativeTarget(credential, [wait]).href).toBe("/tasks/T1#browser-waits");
+    expect(nativeTarget(approval, [{ ...wait, task_id: "T2" }]).href).toBe("/tasks/T1#browser-waits");
   });
 });

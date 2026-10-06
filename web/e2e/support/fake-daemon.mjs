@@ -1,3 +1,4 @@
+import { verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -824,6 +825,464 @@ function handleInboxNotifications(state, req, res, url, body, sendEvent) {
 
 // files は daemon の path（`/api/v1/tasks/...`）→ `{ body, type?, disposition? }`。
 // token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
+// 偽 browser backend（ADR 2026-10-05-browser-department-web-live-view D2.4・D3）。`browser` を渡したときだけ動く。
+// T1（P1・browser-enabled）と T2（P2）に browser_updated（raw の live_view_url 付き）、control の状態機械、
+// waits（decision 1 件・credential 1 件）、live grant/check/read、identities、受信箱の browser_wait 項目を持つ。
+// 受けた body は `records` に残り、試験が後から読む。時刻は `now`（ms）で差し替えられる（lease 期限を時計で進める）。
+export const BROWSER_RAW_LIVE_VIEW_URL = "http://127.0.0.1:9/raw-live-view-secret";
+const browserTaskIds = ["T1", "T2"];
+const BROWSER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function createBrowserBackend({ credentialWait = true, publicKey = null, now = Date.now } = {}) {
+  const clock = { now };
+  const secs = () => Math.floor(clock.now() / 1000);
+  const run = (task_id, run_id, session_id, state) => ({
+    task_id,
+    run_id,
+    session_id,
+    state,
+    live_view_url: BROWSER_RAW_LIVE_VIEW_URL,
+    policy: null,
+  });
+  const row = (task_id, seq, browser) => ({
+    id: seq,
+    task_id,
+    seq,
+    ts: `2026-10-04T09:0${seq}:00Z`,
+    event: { type: "browser_updated", browser },
+  });
+  const tasks = {
+    T1: { title: "請求書フォームの入力", project_id: "P1", skills: ["browser-enabled"], status: "running" },
+    T2: { title: "社内ポータルの確認", project_id: "P2", skills: ["browser-enabled"], status: "running" },
+  };
+  const events = {
+    T1: [
+      row("T1", 1, run("T1", "R0", "S0", "COMPLETED")),
+      row("T1", 2, run("T1", "R1", "S1", "WAITING_FOR_APPROVAL")),
+      // 別 task の値を混ぜた行。gateway は event の task_id が経路の task と違う行を捨てる。
+      row("T1", 3, run("T2", "R9", "S9", "RUNNING")),
+      row("T1", 4, run("T1", "R1", "S1", "RUNNING")),
+    ],
+    T2: [row("T2", 1, run("T2", "R2", "S2", "RUNNING"))],
+  };
+  const runs = {
+    T1: [
+      { run_id: "R0", finished_at: "2026-10-04T08:00:00Z", outcome: "done" },
+      { run_id: "R1", finished_at: null, outcome: null },
+    ],
+    T2: [{ run_id: "R2", finished_at: null, outcome: null }],
+  };
+  const wait = (extra) => ({
+    approval_id: null,
+    created_at: "2026-10-04T09:00:00Z",
+    credential: null,
+    credential_policy_id: null,
+    deadline: "2099-01-01T00:00:00Z",
+    operation: null,
+    owner_id: null,
+    policy_revision: 3,
+    resolution_code: null,
+    resolved_at: null,
+    state: "pending",
+    trusted_login: null,
+    version: 1,
+    work_unit_id: null,
+    ...extra,
+  });
+  const waits = [
+    wait({
+      wait_id: "W1",
+      task_id: "T1",
+      run_id: "R1",
+      session_id: "S1",
+      reason: "waiting_for_approval",
+      origin: "https://billing.example.com",
+      purpose: "請求書フォームを送信する",
+      policy_hash: "ph-W1",
+      resume_key: "rk-W1",
+      operation: { intent_id: "I1", action: "submit", args_digest: "sha256:4f2a9c" },
+    }),
+  ];
+  if (credentialWait)
+    waits.push(
+      wait({
+        wait_id: "W2",
+        task_id: "T2",
+        run_id: "R2",
+        session_id: "S2",
+        reason: "waiting_for_auth",
+        origin: "https://portal.example.com",
+        purpose: "社内ポータルにログインする",
+        policy_hash: "ph-W2",
+        resume_key: "rk-W2",
+        credential: { credential_id: "C1", provider: "local", policy_id: "CP1" },
+        credential_policy_id: "CP1",
+      }),
+    );
+  const control = new Map();
+  for (const [task, run_id, session] of [
+    ["T1", "R1", "S1"],
+    ["T2", "R2", "S2"],
+  ])
+    control.set(`${task}/${run_id}/${session}`, {
+      phase: "agent_running",
+      version: 0,
+      lease_holder: null,
+      lease_expires_at: null,
+      in_flight: 0,
+      auth_section: false,
+    });
+  const live = {
+    "T1/R1/S1": [
+      { seq: 1, body: { kind: "status", state: "running" } },
+      { seq: 2, body: { kind: "tabs", count: 1, origins: ["https://billing.example.com"] } },
+      // task-api が保存前に query・fragment を落とした後の値（scrub 済み）。
+      { seq: 3, body: { kind: "url", url: "https://billing.example.com/invoices/new" } },
+      { seq: 4, body: { kind: "console", level: "info", text: "form ready" } },
+    ],
+    "T2/R2/S2": [{ seq: 1, body: { kind: "status", state: "running" } }],
+  };
+  const identities = [
+    identity("ID1", "P1", "https://billing.example.com", "active", 1),
+    identity("ID2", "P1", "https://old.example.com", "revoked", 2),
+    identity("ID3", "P2", "https://portal.example.com", "active", 1),
+  ];
+  function identity(identity_id, project_id, origin, state, generation) {
+    return {
+      identity_id,
+      project_id,
+      origin,
+      demand_confirmed_by: "owner",
+      generation,
+      created_at: 1790000000,
+      expires_at: 1790604800,
+      state,
+    };
+  }
+  const grants = new Map();
+  const replies = new Map();
+  let grantSeq = 0;
+  const records = { control: [], disconnect: [], waits: [], grants: [], checks: [], reads: [], identities: [] };
+
+  const taskSummary = (id) => ({
+    ...fixtureFor(schema.$defs.TaskSummary),
+    id,
+    kind: "execute",
+    status: tasks[id].status,
+    title: tasks[id].title,
+    created_at: "2026-10-04T08:00:00Z",
+    updated_at: "2026-10-04T09:00:00Z",
+    project_id: tasks[id].project_id,
+  });
+  const taskRef = (id) => ({ id, title: tasks[id].title, kind: "execute", status: tasks[id].status, actions: [] });
+  const runSummary = (r) => ({
+    run_id: r.run_id,
+    role: "worker",
+    adapter: "claude-code",
+    model: "sonnet",
+    started_at: "2026-10-04T08:30:00Z",
+    finished_at: r.finished_at,
+    outcome: r.outcome,
+    progress: 0,
+    artifacts: 0,
+    verdicts: 0,
+    reviewer_deferrals: 0,
+  });
+  function taskDetail(id, base) {
+    const detail = structuredClone(base ?? fixtureFor(schema.$defs.TaskDetail));
+    Object.assign(detail.task, {
+      id,
+      kind: "execute",
+      title: tasks[id].title,
+      status: tasks[id].status,
+      skills: tasks[id].skills,
+      project_id: tasks[id].project_id,
+    });
+    detail.runs = runs[id].map(runSummary);
+    return detail;
+  }
+  const waitItem = (w) => ({
+    task: taskRef(w.task_id),
+    run_state: w.reason === "waiting_for_auth" ? "WAITING_FOR_AUTH" : "WAITING_FOR_APPROVAL",
+    wait: w,
+  });
+  function inboxItems() {
+    return waits
+      .filter((w) => w.state === "pending")
+      .map((w) => ({
+        id: `browser_wait:${w.wait_id}`,
+        kind: "browser_wait",
+        title: w.reason === "waiting_for_auth" ? `credential 待ち: ${w.purpose}` : `ブラウザの承認待ち: ${w.purpose}`,
+        detail: w.origin,
+        options: [],
+        recommended: null,
+        due_at: w.deadline,
+        blocking: { tasks: [taskRef(w.task_id)], units: [], summary: "browser run を止めている" },
+        blocked_by: [],
+        answer: inboxAnswer(`browser_wait:${w.wait_id}`),
+        created_at: w.created_at,
+        age_secs: 600,
+        links: [{ label: "タスク", href: `/tasks/${w.task_id}` }],
+        project_id: tasks[w.task_id].project_id,
+        task: taskRef(w.task_id),
+      }));
+  }
+  // assertion（gateway が鍵で署名した payload）を読む。publicKey があれば署名も確かめる。
+  function claims(body) {
+    const assertion = body?.assertion ?? body?.attestation;
+    if (typeof assertion?.payload !== "string" || typeof assertion?.signature !== "string") return null;
+    if (publicKey && !verify(null, Buffer.from(assertion.payload), publicKey, Buffer.from(assertion.signature, "hex")))
+      return null;
+    try {
+      const value = JSON.parse(assertion.payload);
+      return value.expires_at > secs() ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  function expire(state) {
+    if (state.phase === "human_control" && state.lease_expires_at <= secs()) {
+      Object.assign(state, { phase: "paused", lease_holder: null, lease_expires_at: null });
+      state.version += 1;
+    }
+    return state;
+  }
+  const status = (state) => ({ ...expire(state), agent_may_act: state.phase === "agent_running" });
+  function command(state, holder, input) {
+    const cmd = input.command ?? {};
+    const ttl = Math.min(Math.max(Number(cmd.ttl_secs ?? 60), 1), 300);
+    if (input.expected_version !== state.version) return [409, "version_conflict"];
+    if (state.auth_section) return [409, "auth_section_active"];
+    if (cmd.kind === "pause" && state.phase === "agent_running") state.phase = state.in_flight ? "pausing" : "paused";
+    else if (cmd.kind === "takeover" && state.phase === "paused")
+      Object.assign(state, { phase: "human_control", lease_holder: holder, lease_expires_at: secs() + ttl });
+    else if (cmd.kind === "renew" && state.phase === "human_control") {
+      if (state.lease_holder !== holder) return [403, "not_lease_holder"];
+      state.lease_expires_at = secs() + ttl;
+    } else if (cmd.kind === "resume" && ["paused", "human_control"].includes(state.phase)) {
+      if (state.phase === "human_control" && state.lease_holder !== holder) return [403, "not_lease_holder"];
+      if (cmd.fresh_snapshot !== true || cmd.policy_origin_ok !== true) return [422, "resume_not_verified"];
+      Object.assign(state, { phase: "agent_running", lease_holder: null, lease_expires_at: null });
+    } else if (cmd.kind === "stop" && state.phase !== "stopped")
+      Object.assign(state, { phase: "stopped", lease_holder: null, lease_expires_at: null });
+    else return [409, "invalid_transition"];
+    state.version += 1;
+    return [200, null];
+  }
+
+  /** browser の要求を処理する。扱わない path なら false。 */
+  function handle(req, url, input, json, base, sendEvent, inbox) {
+    const p = url.pathname;
+    const m =
+      /^\/api\/v1\/tasks\/([^/]+)\/browser\/(control|live)\/([^/]+)\/([^/]+)(?:\/(disconnect|grant|check|read))?$/.exec(
+        p,
+      );
+    if (m) {
+      const [, task, kind, runId, session, sub] = m;
+      const key = `${task}/${runId}/${session}`;
+      const found = events[task]?.some(
+        (r) => r.event.browser.run_id === runId && r.event.browser.session_id === session,
+      );
+      if (!found) return json(404, { code: "not_found" });
+      if (kind === "control") {
+        const state = control.get(key);
+        if (!state) return json(404, { code: "not_found" });
+        if (req.method === "GET" && !sub) return json(200, status(state));
+        if (req.method !== "POST" || (sub && sub !== "disconnect")) return json(405, { code: "method_not_allowed" });
+        const who = claims(input);
+        if (!who || who.task_id !== task || who.run_id !== runId || who.browser_session_id !== session)
+          return json(403, { code: "attestation_invalid" });
+        expire(state);
+        if (sub === "disconnect") {
+          records.disconnect.push({ key, holder: who.owner_session_id });
+          if (state.phase === "human_control" && state.lease_holder === who.owner_session_id) {
+            Object.assign(state, { phase: "paused", lease_holder: null, lease_expires_at: null });
+            state.version += 1;
+          }
+          return json(200, status(state));
+        }
+        records.control.push({ key, holder: who.owner_session_id, body: input });
+        const replay = replies.get(`${key}\0${input.idempotency_key}`);
+        if (replay) return json(replay[0], replay[1]);
+        const [code, error] = command(state, who.owner_session_id, input);
+        const reply = [code, error ? { code: error } : status(state)];
+        if (!error) {
+          replies.set(`${key}\0${input.idempotency_key}`, reply);
+          sendEvent("task.event", {
+            id: Date.now(),
+            seq: 0,
+            task_id: task,
+            ts: FAKE_NOW,
+            event: { type: "browser_updated", browser: run(task, runId, session, "RUNNING") },
+          });
+        }
+        return json(reply[0], reply[1]);
+      }
+      if (req.method !== "POST") return json(405, { code: "method_not_allowed" });
+      const who = claims(input);
+      if (!who || who.task_id !== task || who.run_id !== runId || who.browser_session_id !== session)
+        return json(403, { code: "attestation_invalid" });
+      if (sub === "grant") {
+        records.grants.push({ key, owner: who.owner_session_id });
+        const grant = { grant_id: `G${++grantSeq}`, expires_at: secs() + 60 };
+        grants.set(grant.grant_id, { key, expires_at: grant.expires_at });
+        return json(200, grant);
+      }
+      const grant = grants.get(input.grant_id);
+      if (!grant || grant.key !== key || grant.expires_at <= secs()) return json(410, { code: "grant_expired" });
+      if (sub === "check") {
+        records.checks.push({ key, grant_id: input.grant_id });
+        return json(200, { connected: true });
+      }
+      if (sub === "read") {
+        records.reads.push({ key, after: url.searchParams.get("after") });
+        const list = live[key] ?? [];
+        const latest = list.at(-1)?.seq ?? 0;
+        const oldest = list[0]?.seq ?? 1;
+        const raw = url.searchParams.get("after");
+        const after = raw === null ? null : Number(raw);
+        if (after === null || after > latest || after + 1 < oldest)
+          return json(200, { plan: { kind: "reset", latest_seq: latest }, events: [] });
+        return json(200, { plan: { kind: "replay", after_seq: after }, events: list.filter((e) => e.seq > after) });
+      }
+      return json(404, { code: "not_found" });
+    }
+    const w = /^\/api\/v1\/tasks\/([^/]+)\/browser\/waits(?:\/([^/]+)\/(decision|credential))?$/.exec(p);
+    // 一覧にある他の task（rich profile の T3 など）は待ちなし・browser 履歴なしの task として答える。
+    const listed = (id) => base("/api/v1/tasks")?.items?.find((x) => x.id === id) ?? null;
+    if (w) {
+      if (!tasks[w[1]] && !w[2] && req.method === "GET" && listed(w[1])) return json(200, { items: [] });
+      if (!tasks[w[1]]) return json(404, { code: "task_not_found" });
+      if (!w[2] && req.method === "GET") return json(200, { items: waits.filter((x) => x.task_id === w[1]) });
+      if (!w[2] || req.method !== "POST") return json(405, { code: "method_not_allowed" });
+      records.waits.push({ task_id: w[1], wait_id: w[2], kind: w[3], body: input });
+      const item = waits.find((x) => x.wait_id === w[2] && x.task_id === w[1]);
+      if (!item) return json(404, { code: "wait_not_found" });
+      if (!claims(input)) return json(403, { code: "attestation_invalid" });
+      if (item.reason !== (w[3] === "decision" ? "waiting_for_approval" : "waiting_for_auth"))
+        return json(409, { code: "wait_not_actionable" });
+      if (item.state !== "pending") return json(409, { code: "wait_not_actionable" });
+      if (input.expected_version !== item.version) return json(409, { code: "version_conflict" });
+      if (w[3] === "decision" && !["approve_once", "deny"].includes(input.decision))
+        return json(422, { code: "invalid_input" });
+      if (w[3] === "credential" && (!input.username || !input.password)) return json(422, { code: "invalid_input" });
+      item.state = w[3] === "credential" ? "registered" : input.decision === "deny" ? "denied" : "approved";
+      item.version += 1;
+      item.resolved_at = FAKE_NOW;
+      item.resolution_code = item.state;
+      inbox.items = inbox.items.filter((x) => x.id !== `browser_wait:${item.wait_id}`);
+      sendEvent("task.event", {
+        id: Date.now(),
+        seq: 0,
+        task_id: item.task_id,
+        ts: FAKE_NOW,
+        event: { type: "browser_wait_resolved", wait_id: item.wait_id },
+      });
+      sendEvent("inbox_changed", {});
+      return json(200, { wait: item, task_status: tasks[item.task_id].status, replayed: false });
+    }
+    if (p === "/api/v1/browser/waits" && req.method === "GET")
+      return json(200, { items: waits.filter((x) => x.state === "pending").map(waitItem) });
+    const id = /^\/api\/v1\/browser\/identities(?:\/([^/]+)(?:\/(revoke|restore))?)?$/.exec(p);
+    if (id) {
+      records.identities.push({ method: req.method, path: p, query: url.search, body: input });
+      if (!id[1] && req.method === "GET") {
+        const project = url.searchParams.get("project_id");
+        return json(200, {
+          identities: identities.filter((x) => x.project_id === project && x.state !== "deleted"),
+        });
+      }
+      if (!id[1] && req.method === "POST") {
+        if (
+          !BROWSER_ID.test(input.identity_id ?? "") ||
+          !BROWSER_ID.test(input.project_id ?? "") ||
+          !/^https:\/\/[^\s/?#]+$/.test(input.origin ?? "") ||
+          !Array.isArray(input.state?.entries)
+        )
+          return json(422, { code: "invalid_input" });
+        if (identities.some((x) => x.identity_id === input.identity_id && x.state !== "deleted"))
+          return json(409, { code: "identity_exists" });
+        const created = identity(input.identity_id, input.project_id, input.origin, "active", 1);
+        created.demand_confirmed_by = input.demand_confirmed_by;
+        created.expires_at = created.created_at + (input.ttl_secs ?? 604800);
+        identities.push(created);
+        return json(201, { identity: created });
+      }
+      const found = identities.find((x) => x.identity_id === id[1] && x.state !== "deleted");
+      if (!found) return json(404, { code: "identity_not_found" });
+      if (req.method === "DELETE" && !id[2]) {
+        found.state = "deleted";
+        return json(200, { identity: found });
+      }
+      if (req.method === "POST" && id[2] === "revoke") {
+        if (found.state !== "active") return json(409, { code: "identity_not_active" });
+        found.state = "revoked";
+        found.generation += 1;
+        return json(200, { identity: found });
+      }
+      if (req.method === "POST" && id[2] === "restore") {
+        if (found.state !== "active" || input.project_id !== found.project_id || input.origin !== found.origin)
+          return json(409, { code: "identity_not_restorable" });
+        return json(204, null);
+      }
+      return json(405, { code: "method_not_allowed" });
+    }
+    if (req.method !== "GET") return false;
+    const t = /^\/api\/v1\/tasks\/([^/]+)(\/events)?$/.exec(p);
+    if (t && !tasks[t[1]] && listed(t[1]) && base(p) === undefined) {
+      if (t[2]) return json(200, { items: [], has_more: false });
+      const detail = fixtureFor(schema.$defs.TaskDetail);
+      const summary = listed(t[1]);
+      Object.assign(detail.task, { id: summary.id, title: summary.title, status: summary.status, kind: summary.kind });
+      return json(200, detail);
+    }
+    if (t && tasks[t[1]]) {
+      if (!t[2]) return json(200, taskDetail(t[1], base(p)));
+      const after = Number(url.searchParams.get("after_seq") ?? -1);
+      const types = url.searchParams.get("types");
+      const items = events[t[1]].filter((r) => r.seq > after && (!types || types.split(",").includes(r.event.type)));
+      return json(200, { items, has_more: false });
+    }
+    if (p === "/api/v1/tasks") {
+      const list = structuredClone(base(p) ?? { items: [], total: 0, counts_by_status: {} });
+      const statuses = url.searchParams.get("status")?.split(",");
+      list.items = [
+        ...browserTaskIds.map(taskSummary),
+        ...list.items.filter((x) => !browserTaskIds.includes(x.id)),
+      ].filter((x) => !statuses || statuses.includes(x.status));
+      list.total = list.items.length;
+      list.next_cursor = null;
+      return json(200, list);
+    }
+    if (p === "/api/v1/inbox" || p === "/inbox") {
+      const value = base(p);
+      return json(200, { ...value, browser_waits: waits.filter((x) => x.state === "pending").map(waitItem) });
+    }
+    return false;
+  }
+  return {
+    handle,
+    inboxItems,
+    records,
+    waits,
+    identities,
+    control,
+    live,
+    clock,
+    /** run の control に値を入れる（in_flight・auth_section の変種）。 */
+    setControl(task, run_id, session, patch) {
+      Object.assign(control.get(`${task}/${run_id}/${session}`), patch);
+    },
+    /** scrub 済みの live event を足す。 */
+    appendLive(task, run_id, session, body) {
+      const key = `${task}/${run_id}/${session}`;
+      if (!live[key]) live[key] = [];
+      const list = live[key];
+      list.push({ seq: (list.at(-1)?.seq ?? 0) + 1, body });
+    },
+  };
+}
+
 export function createFakeDaemon({
   host = "127.0.0.1",
   port = 0,
@@ -840,6 +1299,8 @@ export function createFakeDaemon({
   streamStatus: initialStreamStatus = 200,
   inboxItems = null,
   notices = null,
+  // 偽 browser backend（createBrowserBackend）。true か createBrowserBackend の options で有効にする。
+  browser = null,
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
@@ -858,8 +1319,9 @@ export function createFakeDaemon({
   let faultRule = fault;
   let holdRule = hold;
   const held = [];
+  const browserBackend = browser ? createBrowserBackend(browser === true ? {} : browser) : null;
   const inbox = {
-    items: inboxItems ?? inboxItemsFixture(),
+    items: [...(inboxItems ?? inboxItemsFixture()), ...(browserBackend?.inboxItems() ?? [])],
     notices: notices ?? noticesFixture(),
     answers: [],
   };
@@ -909,6 +1371,39 @@ export function createFakeDaemon({
       res.writeHead(streamStatus, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "too_many_streams" }));
       return;
+    }
+    if (
+      browserBackend &&
+      (/^\/api\/v1\/(tasks\/[^/]+\/)?browser(\/|$)/.test(pathname) ||
+        (req.method === "GET" && /^\/(api\/v1\/)?(tasks|inbox)(\/|$)/.test(pathname)))
+    ) {
+      const url = new URL(req.url ?? "/", "http://x");
+      const base = (key) => {
+        const raw = fixtures[key] ?? fixtures[key.replace(/^\/api\/v1/, "")];
+        return typeof raw === "function" ? raw(url) : raw;
+      };
+      const json = (status, value) => {
+        res.writeHead(status, value === null ? {} : { "content-type": "application/json" });
+        res.end(value === null ? undefined : JSON.stringify(value));
+      };
+      if (req.method === "GET") {
+        if (browserBackend.handle(req, url, {}, json, base, sendEvent, inbox) !== false) return;
+      } else {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          record.body = Buffer.concat(chunks).toString("utf8");
+          let input;
+          try {
+            input = record.body ? JSON.parse(record.body) : {};
+          } catch {
+            return json(400, { code: "invalid_json" });
+          }
+          if (browserBackend.handle(req, url, input, json, base, sendEvent, inbox) === false)
+            json(404, { code: "not_found" });
+        });
+        return;
+      }
     }
     // ops: daemon/providers (P4-12)
     if (pathname === "/api/v1/replay" || pathname.startsWith("/api/v1/providers") || pathname === "/api/v1/reload") {
@@ -1366,6 +1861,8 @@ export function createFakeDaemon({
     sendEvent,
     // 受信箱・通知の状態（ADR-0133）。試験が項目を差し替えたら合図を送る。
     inbox,
+    // 偽 browser backend（`browser` を渡したときだけ。受けた body は browser.records）。
+    browser: browserBackend,
     setInboxItems(items) {
       inbox.items = items;
       sendEvent("inbox_changed", {});

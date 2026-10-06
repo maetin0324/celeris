@@ -18,6 +18,9 @@ mod session_tests;
 pub(crate) mod store;
 #[cfg(test)]
 mod store_tests;
+pub mod triage;
+#[cfg(test)]
+mod triage_tests;
 pub use credential::{ChatCheckpointSaved, CosRunCredentialError, CosRunIdentity};
 pub use operations::{AuditContext, CosOperation};
 pub use run_store::{

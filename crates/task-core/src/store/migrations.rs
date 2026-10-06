@@ -108,6 +108,8 @@ pub(crate) const MIGRATION_0050: &str = include_str!("../../migrations/0050_cos_
 /// CoS D3: hash-only, expiring credentials scoped to a chat run.
 pub(crate) const MIGRATION_0052: &str =
     include_str!("../../migrations/0052_cos_run_credentials.sql");
+/// CoS D6: old notification provenance at route cutover.
+pub(crate) const MIGRATION_0053: &str = include_str!("../../migrations/0053_cos_triage.sql");
 
 /// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0048/0049 routing、
 /// 0051 は並行ブランチ、
@@ -119,7 +121,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 48, 49, 51];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 52;
+pub const SCHEMA_VERSION: u32 = 53;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -170,6 +172,7 @@ impl SqliteStore {
             47 => Ok(MIGRATION_0047),
             50 => Ok(MIGRATION_0050),
             52 => Ok(MIGRATION_0052),
+            53 => Ok(MIGRATION_0053),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

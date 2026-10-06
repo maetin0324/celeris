@@ -3119,7 +3119,7 @@ export type NoticeTarget = {
   "kind": string;
 };
 
-export type NotificationKind = "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
+export type NotificationKind = "cos_escalation" | "cos_fallback" | "inbox_new" | "digest" | "milestone_ready" | "approval_pending" | "question_blocked" | "bad_news" | "secretary_reply" | "task_ready" | "cluster_login_needed" | "task_failed" | "phase_checkpoint" | "decision_requested" | "plan_approval";
 
 export type NotificationsView = {
   "items": Array<Notice>;

@@ -15512,6 +15512,16 @@
       "description": "判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。",
       "oneOf": [
         {
+          "const": "cos_escalation",
+          "description": "CoS explicitly escalated an unresolved source revision.",
+          "type": "string"
+        },
+        {
+          "const": "cos_fallback",
+          "description": "CoS was unavailable; deterministic direct fallback for an unresolved revision.",
+          "type": "string"
+        },
+        {
           "const": "inbox_new",
           "description": "ADR-0133 D6: new human decisions, batched into one webhook message.",
           "type": "string"

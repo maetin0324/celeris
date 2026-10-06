@@ -125,6 +125,45 @@ pub fn phase_gate(
     action: PhaseGateAction,
     note: Option<String>,
 ) -> Result<TransitionResult, OpsError> {
+    match plan_phase_gate(store, id, action, note)? {
+        PhaseGatePlan::Withdraw => crate::gate::cancel(store, id, Some(Status::Blocked)),
+        PhaseGatePlan::Resume {
+            trigger,
+            extra_event,
+            from,
+        } => {
+            let outcome = store.apply_transition(id, trigger, extra_event.map(|e| *e))?;
+            Ok(TransitionResult {
+                id,
+                from,
+                to: outcome.next,
+                reason: outcome.reason.to_string(),
+                cascaded: Vec::new(),
+            })
+        }
+    }
+}
+
+/// `phase_gate` の読み取りと判断。CoS の監査付き操作（ADR 2026-10-05 D3）は `Resume` の遷移を
+/// `cos_operation_apply` の transaction 内で `apply_transition_tx` に渡す。
+#[derive(Debug, Clone)]
+pub enum PhaseGatePlan {
+    /// 取り下げ（`gate::cancel`。中止の連鎖があるので 1 遷移ではない）。
+    Withdraw,
+    /// 1 遷移で再開する。
+    Resume {
+        trigger: Trigger,
+        extra_event: Option<Box<Event>>,
+        from: Status,
+    },
+}
+
+pub fn plan_phase_gate(
+    store: &dyn TaskStore,
+    id: TaskId,
+    action: PhaseGateAction,
+    note: Option<String>,
+) -> Result<PhaseGatePlan, OpsError> {
     let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     let events = store.events_for(id)?;
     if !is_awaiting_human(&task, &events) {
@@ -151,7 +190,7 @@ pub fn phase_gate(
         })
         .unwrap_or_default();
     let (trigger, extra) = match action {
-        PhaseGateAction::Withdraw => return crate::gate::cancel(store, id, Some(Status::Blocked)),
+        PhaseGateAction::Withdraw => return Ok(PhaseGatePlan::Withdraw),
         PhaseGateAction::Continue => (
             Trigger::PhaseResume {
                 mode: PhaseResumeMode::Continue,
@@ -177,14 +216,10 @@ pub fn phase_gate(
         question: format!("{PHASE_GATE_QUESTION_PREFIX}『{phase}』の後"),
         answer,
     });
-    let from = task.status;
-    let outcome = store.apply_transition(id, trigger, extra_event)?;
-    Ok(TransitionResult {
-        id,
-        from,
-        to: outcome.next,
-        reason: outcome.reason.to_string(),
-        cascaded: Vec::new(),
+    Ok(PhaseGatePlan::Resume {
+        trigger,
+        extra_event: extra_event.map(Box::new),
+        from: task.status,
     })
 }
 

@@ -24,6 +24,7 @@ use task_core::{ProjectId, SqliteStore};
 use task_ops::approval::Scope;
 use time::OffsetDateTime;
 
+use crate::cos::operations::{Applied, OperationAudit};
 use crate::handlers::{ApiResult, Params, json_response, no_query, read_json};
 use crate::middleware::require_admin;
 use crate::problem::{ApiProblem, ops_problem, store_problem};
@@ -150,27 +151,9 @@ pub(crate) async fn decide(
     require_admin(&state, &headers)?;
     let approval_id = parse_approval_id(&id)?;
     let payload: ApprovalDecideBody = read_json(body, false).await?;
-    let scope = match payload.scope.as_deref() {
-        None => Scope::Node,
-        Some(raw) => Scope::parse(raw)
-            .ok_or_else(|| ApiProblem::bad_request("`scope` must be \"node\" or \"all\""))?,
-    };
     let decision = payload.decision;
     let outcome = state
-        .blocking(move |store| {
-            let Some(approval) = store.approval_get(approval_id).map_err(store_problem)? else {
-                return Err(approval_not_found(&approval_id.to_string()));
-            };
-            task_ops::approval::decide(
-                store,
-                approval,
-                decision,
-                payload.answer,
-                scope,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("decide")))
-        })
+        .blocking(move |store| decide_op(store, approval_id, payload, None)?.direct())
         .await?;
     tracing::info!(
         who = "admin",
@@ -179,15 +162,88 @@ pub(crate) async fn decide(
         decision = decision.as_str(),
         "admin: approval decided"
     );
-    Ok(json_response(
-        StatusCode::OK,
-        &ApprovalDecideResult {
+    Ok(json_response(StatusCode::OK, &outcome))
+}
+
+/// `POST /approvals/{id}/decide` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （ADR 2026-10-05 D3）が共有する。監査ありでは決定と `standing` の規則を `cos_operation_apply` の
+/// transaction 内で書き、紐づく `blocked` のタスクの再開（既存の「質問に答える」経路）は commit 後に行う。
+pub(crate) fn decide_op(
+    store: &SqliteStore,
+    approval_id: ApprovalId,
+    payload: ApprovalDecideBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<ApprovalDecideResult>, ApiProblem> {
+    let target_id = approval_id.to_string();
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "approval", &target_id, problem),
+        None => problem,
+    };
+    let scope = match payload.scope.as_deref() {
+        None => Scope::Node,
+        Some(raw) => Scope::parse(raw).ok_or_else(|| {
+            reject(ApiProblem::bad_request(
+                "`scope` must be \"node\" or \"all\"",
+            ))
+        })?,
+    };
+    let Some(approval) = store
+        .approval_get(approval_id)
+        .map_err(|e| reject(store_problem(e)))?
+    else {
+        return Err(reject(approval_not_found(&target_id)));
+    };
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let outcome = task_ops::approval::decide(
+            store,
+            approval,
+            payload.decision,
+            payload.answer,
+            scope,
+            now,
+        )
+        .map_err(|e| ops_problem(store, e, Some("decide")))?;
+        return Ok(Applied::Direct(ApprovalDecideResult {
             approval: outcome.approval,
             standing_rule: outcome.standing_rule,
             transition: outcome.transition,
             note: outcome.note,
-        },
-    ))
+        }));
+    };
+    let plan = task_ops::approval::plan_decide(
+        store,
+        approval,
+        payload.decision,
+        payload.answer,
+        scope,
+        now,
+    )
+    .map_err(|e| reject(ops_problem(store, e, Some("decide"))))?;
+    let operation = audit.apply(store, "approval", &target_id, "approval.decide", |tx| {
+        SqliteStore::approval_decide_tx(
+            tx,
+            approval_id,
+            plan.decision,
+            Some(plan.answer.clone()),
+            now,
+        )?;
+        if let Some(rule) = &plan.standing_rule {
+            SqliteStore::standing_rule_append_tx(tx, rule)?;
+        }
+        Ok(serde_json::json!({
+            "approval_id": target_id,
+            "decision": plan.decision.as_str(),
+            "standing_rule_id": plan.standing_rule.as_ref().map(|r| r.id.to_string()),
+        }))
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let Err(error) = task_ops::approval::finish_decide(store, &plan)
+    {
+        // The decision is recorded; resuming the task is the same follow-up as on the human path.
+        tracing::warn!(operation_id = %operation.id, %error, "cos approval follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 pub(crate) async fn list_standing_rules(

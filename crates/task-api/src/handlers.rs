@@ -23,7 +23,7 @@ use crate::types::ValidationError;
 mod accounts;
 mod clusters;
 mod org;
-mod projects;
+pub(crate) mod projects;
 mod providers;
 mod secrets;
 mod system;

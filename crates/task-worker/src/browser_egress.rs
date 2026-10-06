@@ -8,7 +8,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
-use task_core::browser_isolation::{EgressPolicy, EgressRequest, check_egress};
+use task_core::browser_isolation::{
+    EgressPolicy, EgressRequest, check_egress, test_loopback_target,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
 use tokio::time::timeout;
@@ -55,15 +57,19 @@ fn request_authority(header: &[u8], policy: &EgressPolicy) -> Result<(String, u1
         return Err(EgressError::Denied);
     }
     // Validate syntax and admission *before DNS*. Unresolved is the sole permitted
-    // failure here. Re-run with the complete trusted DNS result before connecting.
-    if check_egress(
+    // failure here (an allowed test-only loopback literal passes without DNS). Re-run
+    // with the complete trusted DNS result before connecting.
+    let verdict = check_egress(
         policy,
         &EgressRequest::Connect {
             host: host.into(),
             port,
             resolved: vec![],
         },
-    ) != Err(task_core::browser_isolation::EgressDenied::Unresolved)
+    );
+    let loopback = test_loopback_target(policy, host, port).is_some();
+    if !(verdict == Err(task_core::browser_isolation::EgressDenied::Unresolved)
+        || (loopback && verdict == Ok(())))
     {
         return Err(EgressError::Denied);
     }
@@ -279,6 +285,10 @@ async fn destination(
 ) -> Result<SocketAddr, EgressError> {
     let header = read_header(stream).await?;
     let (host, port) = request_authority(&header, policy)?;
+    // Test-only loopback literal (ADR addendum E1): connect directly, never via DNS.
+    if let Some(address) = test_loopback_target(policy, &host, port) {
+        return Ok(address);
+    }
     let resolved = resolve_at(resolver, &host).await?;
     check_egress(
         policy,

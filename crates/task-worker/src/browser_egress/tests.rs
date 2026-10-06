@@ -11,6 +11,7 @@ fn policy() -> EgressPolicy {
         .into(),
         resolver: "127.0.0.1".parse().unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     }
 }
 
@@ -364,6 +365,7 @@ async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
         allow: prepared.egress_allow(),
         resolver: "127.0.0.1".parse().unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     };
     for authority in [
         "billing.example.com:80",
@@ -389,6 +391,115 @@ async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
     assert_eq!(
         destination(&mut server, &policy, address).await,
         Ok("93.184.216.34:443".parse().unwrap())
+    );
+    assert_eq!(job.await.unwrap(), vec![1, 28]);
+}
+
+/// One CONNECT through `serve` over a Unix pair; returns the proxy's status line
+/// and, when established, echoes a byte through the tunnel.
+async fn loopback_connect(policy: EgressPolicy, authority: &str) -> (String, Option<u8>) {
+    let (mut client, server) = UnixStream::pair().unwrap();
+    let job = tokio::spawn(async move { serve(server, &policy).await });
+    client.write_all(&connect(authority)).await.unwrap();
+    let mut head = Vec::new();
+    while !head.ends_with(b"\r\n\r\n") {
+        match client.read_u8().await {
+            Ok(b) => head.push(b),
+            Err(_) => break,
+        }
+    }
+    let status = String::from_utf8_lossy(&head)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_string();
+    let mut echoed = None;
+    if status.contains(" 200 ") {
+        client.write_all(b"x").await.unwrap();
+        echoed = Some(client.read_u8().await.unwrap());
+        drop(client);
+    }
+    let _ = job.await.unwrap();
+    (status, echoed)
+}
+
+async fn echo_listener() -> (u16, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let task = tokio::spawn(async move {
+        if let Ok((mut socket, _)) = listener.accept().await {
+            let mut b = [0u8; 1];
+            if socket.read_exact(&mut b).await.is_ok() {
+                let _ = socket.write_all(&b).await;
+            }
+        }
+    });
+    (port, task)
+}
+
+#[tokio::test]
+async fn egress_test_loopback_connect_allowed_only_when_listed() {
+    let (port, listener) = echo_listener().await;
+    let authority = format!("127.0.0.1:{port}");
+    // Default (empty set): the loopback literal stays denied with 403.
+    let (status, echoed) = loopback_connect(policy(), &authority).await;
+    assert!(status.contains(" 403 "), "{status}");
+    assert_eq!(echoed, None);
+    // Listed: 200 and the tunnel reaches the loopback listener without DNS
+    // (the policy resolver 127.0.0.1:53 is not listening).
+    let mut allowed = policy();
+    allowed.test_loopback_allow = [authority.clone()].into();
+    let (status, echoed) = loopback_connect(allowed.clone(), &authority).await;
+    assert!(status.contains(" 200 "), "{status}");
+    assert_eq!(echoed, Some(b'x'));
+    listener.await.unwrap();
+    // Another port, a name resolving to loopback, ::1 and literal variants: 403.
+    for other in [
+        format!("127.0.0.1:{}", port.wrapping_add(1).max(1)),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+        format!("10.0.0.1:{port}"),
+        format!("2130706433:{port}"),
+        format!("0x7f.0.0.1:{port}"),
+        format!("0177.0.0.1:{port}"),
+    ] {
+        let (status, _) = loopback_connect(allowed.clone(), &other).await;
+        assert!(status.contains(" 403 "), "{other}: {status}");
+    }
+}
+
+#[tokio::test]
+async fn egress_test_loopback_destination_skips_dns_only_for_listed_literal() {
+    let mut allowed = policy();
+    allowed.test_loopback_allow = ["127.0.0.1:18080".to_string()].into();
+    // Resolver points at a closed port: any DNS attempt would fail with Resolution.
+    let closed = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let resolver = closed.local_addr().unwrap();
+    drop(closed);
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client.write_all(&connect("127.0.0.1:18080")).await.unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, resolver).await,
+        Ok("127.0.0.1:18080".parse().unwrap())
+    );
+    // A name for the same port is unaffected: not in `allow`, denied before DNS.
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client.write_all(&connect("localhost:18080")).await.unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, resolver).await,
+        Err(EgressError::Denied)
+    );
+    // Allowed name that resolves to loopback via DNS stays PrivateAddress (Denied).
+    allowed.allow.insert("example.com:18080".into());
+    let (address, job) = dns_fixture(&["127.0.0.1"]).await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client
+        .write_all(&connect("example.com:18080"))
+        .await
+        .unwrap();
+    assert_eq!(
+        destination(&mut server, &allowed, address).await,
+        Err(EgressError::Denied)
     );
     assert_eq!(job.await.unwrap(), vec![1, 28]);
 }

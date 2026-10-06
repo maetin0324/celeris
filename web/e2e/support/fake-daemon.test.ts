@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
-import { createFakeDaemon, defaultFixtures, richFixtures, validateFixture } from "./fake-daemon.mjs";
+import { chatSeedFixture, createFakeDaemon, defaultFixtures, richFixtures, validateFixture } from "./fake-daemon.mjs";
 
 const props = schema.properties as Record<string, unknown>;
 
@@ -8,6 +8,172 @@ let daemon: ReturnType<typeof createFakeDaemon> | undefined;
 afterEach(async () => {
   if (daemon) await daemon.close();
   daemon = undefined;
+});
+
+it("seeds chat threads, long history and every card kind with schema-valid responses", async () => {
+  const seed = chatSeedFixture();
+  expect(seed.map((row) => row.thread.kind)).toEqual(["human", "human", "inbox", "legacy"]);
+  expect(seed[1].messages).toHaveLength(240);
+  expect(seed.flatMap((row) => row.messages.flatMap((message) => message.cards.map((card) => card.kind)))).toEqual(
+    expect.arrayContaining(["task", "decision", "question", "approval", "plan_gate", "notice", "operation"]),
+  );
+  daemon = createFakeDaemon();
+  const base = `${await daemon.start()}/api/v1/chat`;
+  const get = async (path: string) => (await fetch(`${base}${path}`)).json();
+  const list = await get("/threads?q=CoS");
+  expect(validateFixture(list, schema.$defs.ChatThreadListResponse)).toEqual([]);
+  expect(list.items.map((thread: { id: string }) => thread.id)).toContain("chat-main");
+  expect((await get("/threads?q=進捗")).items.map((thread: { id: string }) => thread.id)).toContain("chat-main");
+  const firstThread = await get("/threads?limit=1");
+  expect(firstThread.next_cursor).toContain("|");
+  expect((await get(`/threads?limit=1&before=${encodeURIComponent(firstThread.next_cursor)}`)).items[0].id).not.toBe(
+    firstThread.items[0].id,
+  );
+  const page = await get("/threads/chat-history/messages?limit=20");
+  expect(validateFixture(page, schema.$defs.ChatMessageListResponse)).toEqual([]);
+  expect(page.items[0].seq).toBe(221);
+  const older = await get(`/threads/chat-history/messages?before_seq=${page.items[0].seq}&limit=20`);
+  expect(older.items.at(-1).seq).toBe(220);
+});
+
+it("supports thread and queue mutations with revisions and idempotency", async () => {
+  daemon = createFakeDaemon();
+  const base = `${await daemon.start()}/api/v1/chat`;
+  const request = (path: string, method: string, body: unknown) =>
+    fetch(`${base}${path}`, { method, headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+  const create = { client_thread_id: "client-1", title: "新しい相談", project_id: null };
+  const first = await request("/threads", "POST", create);
+  expect(first.status).toBe(201);
+  const thread = (await first.json()).thread;
+  expect((await request("/threads", "POST", create)).status).toBe(200);
+  expect((await request(`/threads/${thread.id}`, "PATCH", { title: "変更後", expected_revision: 1 })).status).toBe(200);
+  expect((await request(`/threads/${thread.id}`, "PATCH", { title: "古い", expected_revision: 1 })).status).toBe(409);
+  const message = { client_message_id: "m1", text: "送信", attachment_ids: [], mode: "queue", resume_queue: false };
+  const post = await request(`/threads/${thread.id}/messages`, "POST", message);
+  expect(post.status).toBe(202);
+  const queued = await post.json();
+  expect(validateFixture(queued, schema.$defs.ChatPostMessageResponse)).toEqual([]);
+  expect(queued.queue_position).toBe(1);
+  expect((await request(`/threads/${thread.id}/messages`, "POST", message)).status).toBe(202);
+  expect((await request(`/threads/${thread.id}/messages`, "POST", { ...message, text: "違う" })).status).toBe(409);
+  expect((await fetch(`${base}/threads/${thread.id}/messages/${queued.message.id}`, { method: "DELETE" })).status).toBe(
+    200,
+  );
+  expect((await request(`/threads/${thread.id}`, "PATCH", { status: "archived", expected_revision: 2 })).status).toBe(
+    200,
+  );
+  expect(
+    (await (await fetch(`${base}/threads?status=archived`)).json()).items.map((row: { id: string }) => row.id),
+  ).toContain(thread.id);
+});
+
+it("replays chat SSE, emits live events, expires old cursors and handles attachments", async () => {
+  daemon = createFakeDaemon();
+  const root = await daemon.start();
+  const base = `${root}/api/v1/chat`;
+  const control = (path: string, body: unknown) =>
+    fetch(`${root}/__fixture/chat${path}`, { method: "POST", body: JSON.stringify(body) });
+  const hold = await (await control("/hold", { thread_id: "chat-main" })).json();
+  const runResponse = await (await fetch(`${base}/threads/chat-main/runs/${hold.run_id}`)).json();
+  expect(validateFixture(runResponse, schema.$defs.ChatRunResponse)).toEqual([]);
+  const interrupt = await fetch(`${base}/threads/chat-main/messages`, {
+    method: "POST",
+    body: JSON.stringify({
+      client_message_id: "interrupt-1",
+      text: "急ぎです",
+      attachment_ids: [],
+      mode: "interrupt",
+      resume_queue: false,
+    }),
+  });
+  expect((await interrupt.json()).queue_position).toBe(1);
+  expect((await (await fetch(`${base}/threads/chat-main/runs/${hold.run_id}`)).json()).run.state).toBe("stopping");
+  const stream = await fetch(`${base}/threads/chat-main/stream?after=0`);
+  expect(stream.status).toBe(200);
+  const reader = stream.body?.getReader();
+  if (!reader) throw new Error("missing stream");
+  let initial = "";
+  while (!initial.includes("event: run")) initial += new TextDecoder().decode((await reader.read()).value);
+  expect(initial).toContain("event: run");
+  const emitted = await (
+    await control("/threads/chat-main/emit", {
+      type: "text_delta",
+      run_id: hold.run_id,
+      data: { offset: 0, text: "途中" },
+    })
+  ).json();
+  expect(validateFixture(emitted.event, schema.$defs.ChatEvent)).toEqual([]);
+  expect(
+    (await (await fetch(`${base}/threads/chat-main/runs/${hold.run_id}/events?after=0`)).json()).items.length,
+  ).toBe(3);
+  let live = "";
+  while (!live.includes("途中")) live += new TextDecoder().decode((await reader.read()).value);
+  expect(live).toContain("途中");
+  await reader.cancel();
+  const replay = await fetch(`${base}/threads/chat-main/stream`, { headers: { "Last-Event-ID": "1" } });
+  const replayReader = replay.body?.getReader();
+  expect(await replayReader?.read()).toBeDefined();
+  await replayReader?.cancel();
+  expect((await fetch(`${base}/threads/chat-main/stream?after=0`, { headers: { "Last-Event-ID": "1" } })).status).toBe(
+    400,
+  );
+  await control("/threads/chat-main/expire", { before_id: emitted.event.id });
+  expect((await fetch(`${base}/threads/chat-main/stream?after=0`)).status).toBe(410);
+  const stop = await fetch(`${base}/threads/chat-main/stop`, {
+    method: "POST",
+    body: JSON.stringify({ run_id: hold.run_id }),
+  });
+  expect(stop.status).toBe(202);
+  expect(validateFixture(await stop.json(), schema.$defs.ChatStopResponse)).toEqual([]);
+  const detail = await (await fetch(`${base}/threads/chat-main`)).json();
+  expect(detail.thread.queue_paused).toBe(true);
+  expect(
+    (
+      await fetch(`${base}/threads/chat-main/resume-queue`, {
+        method: "POST",
+        body: JSON.stringify({ expected_revision: detail.thread.revision }),
+      })
+    ).status,
+  ).toBe(200);
+  const form = new FormData();
+  form.set("client_upload_id", "upload-1");
+  form.set("file", new Blob(["hello"], { type: "text/plain" }), "note.txt");
+  const upload = await fetch(`${base}/threads/chat-main/attachments`, { method: "POST", body: form });
+  expect(upload.status).toBe(201);
+  const attachment = (await upload.json()).attachment;
+  expect(validateFixture({ attachment }, schema.$defs.ChatAttachmentResponse)).toEqual([]);
+  expect((await fetch(`${base}/threads/chat-main/attachments`, { method: "POST", body: form })).status).toBe(200);
+  expect(await (await fetch(`${base}/attachments/${attachment.id}/content`)).text()).toBe("hello");
+  expect((await fetch(`${base}/attachments/${attachment.id}/preview`)).status).toBe(404);
+  expect(
+    (
+      await fetch(`${base}/attachments/${attachment.id}/references`, {
+        method: "POST",
+        body: JSON.stringify({ owner_kind: "task", owner_id: "T1", idempotency_key: "r1" }),
+      })
+    ).status,
+  ).toBe(200);
+  expect((await fetch(`${base}/attachments/${attachment.id}`, { method: "DELETE" })).status).toBe(409);
+  const unusedForm = new FormData();
+  unusedForm.set("client_upload_id", "unused");
+  unusedForm.set("file", new Blob(["unused"], { type: "text/plain" }), "unused.txt");
+  const unused = (
+    await (await fetch(`${base}/threads/chat-main/attachments`, { method: "POST", body: unusedForm })).json()
+  ).attachment;
+  expect((await fetch(`${base}/attachments/${unused.id}`, { method: "DELETE" })).status).toBe(204);
+  expect((await fetch(`${base}/attachments/${unused.id}/content`)).status).toBe(404);
+  const imageForm = new FormData();
+  imageForm.set("client_upload_id", "image");
+  imageForm.set("file", new Blob(["original"], { type: "image/png" }), "image.png");
+  const image = (
+    await (await fetch(`${base}/threads/chat-main/attachments`, { method: "POST", body: imageForm })).json()
+  ).attachment;
+  const preview = await fetch(`${base}/attachments/${image.id}/preview`);
+  expect(preview.status).toBe(200);
+  expect(preview.headers.get("content-type")).toBe("image/png");
+  expect(Array.from(new Uint8Array(await preview.arrayBuffer())).slice(0, 8)).toEqual([
+    137, 80, 78, 71, 13, 10, 26, 10,
+  ]);
 });
 
 it("provides responses that conform to the committed API schema", () => {

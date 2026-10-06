@@ -30,6 +30,8 @@ ADR 2026-10-05-cos-chat-home D2（gui-api.md §3.127・「チャット stream」
 | 範囲 | 計画の scope check（web/features/chat/data/・web/api/queries/keys・本 file だけ） | stale-time.ts は base に戻した。既存試験 4 file の import 並び 1 行ずつは、計画の lint check を通すために当てた（下の未解決） |
 | 境界 | `corepack pnpm@12.6.0 -C web check:boundaries` | exit 0 |
 
+attempt 1 の再検証（2026-10-06、HEAD `82940843`）: 初回の `install --offline --frozen-lockfile` は store に `@radix-ui/react-compose-refs@1.1.5` が無く exit 1。続けて `install --frozen-lockfile` で lockfile を変えずに取得し、`install --offline --frozen-lockfile` の再実行は exit 0。`typecheck` exit 0、`lint` exit 0（既存 `styles.css` の警告 4 件）、`test` exit 0（vitest 65 files・418 tests、node server 47 tests）。`check:boundaries`、`git diff --check ${CELERIS_WU_BASE}..HEAD`、4 試験 file を許可した差分範囲 check も exit 0。`git status --short` は空。
+
 試験は fake timer（`vi.advanceTimersByTimeAsync`）と試験側から流す `ReadableStream` で決定的に進める。実時間の sleep・負荷は無い。
 
 ## 未解決

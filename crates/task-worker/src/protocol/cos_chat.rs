@@ -50,6 +50,10 @@ pub struct CosChatContext {
     /// Attachments staged read-only under `<workspace>/attachments` (D4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<CosChatAttachment>,
+    /// Abilities confirmed by the active adapter for this run. Absent means unconfirmed, not
+    /// that a configured harness can already deliver an image or use a tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_capabilities: Option<super::super::cos_chat::HarnessCapabilities>,
     /// Names of the skills mounted for this run (`cos-operator`, `cos-inbox-triage`, ...).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skills: Vec<String>,

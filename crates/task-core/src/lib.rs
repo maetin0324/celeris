@@ -289,6 +289,13 @@ pub use pause::{
 };
 
 pub mod model_routing;
+// ---- ADR 2026-10-07（coding harness の既定）: model family と coding の既定 adapter ----
+pub mod coding_harness;
+pub mod model_family;
+pub use coding_harness::{
+    AdapterChoice, AdapterPolicy, CodingHarness, coding_harness_default_adapter,
+};
+pub use model_family::{FamilyBasis, FamilyDecision, ModelFamily, derive_family};
 // ---- ADR-0069（Phase 114）: routing の 4 層（lane policy・retry/escalation・監査）----
 pub mod model_policy;
 pub mod retry_policy;

@@ -174,6 +174,16 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok"}\n'
 
     fn write_config(&self, claude: &Path, token: Option<&str>, extra_provider: &str) -> PathBuf {
         let path = self.root.join("config.toml");
+        // この台本は「ワーカー run がプールのどのアカウントに行くか」だけを見る。プールの消費者を
+        // ワーカー run に限るため、次の 2 つを切る（どちらもホストや既定値に結果が左右されないように）。
+        // - `[cos] enabled = false`: CoS は既定で有効で、`celerisctl add` の draft が受信箱の
+        //   `draft_accept` になると CoS の triage run が同じプール（唯一の provider `pool`）の
+        //   アカウントを least-loaded で取る（id 昇順で "a"）。その run の分だけ "a" の `in_use` が
+        //   増え（スコア 1.0 − 0.05）、直後の t1 が "b" に行く。CoS run の `accounts_in_flight` は
+        //   `tick_cos_chat_launch`（`dispatch_ready` の後）でしか刈られないので、スタブが即座に
+        //   終わっても次の tick の dispatch では "a" が使用中のまま数えられ、ほぼ毎回 "b" になる。
+        // - `[dispatch] min_free_disk_mb = 0`: 空き容量の検査は `/` を必ず見る。ホストの `/` が
+        //   5 GiB を切ると dispatch が保留され、t1 が始まらない（台本の対象外の環境要因）。
         let token_line = if let Some(token) = token {
             std::fs::write(self.root.join("api.token"), token).unwrap();
             "token_file = \"api.token\"\n"
@@ -190,6 +200,12 @@ idle_timeout_secs = 30
 kill_grace_secs = 1
 review_timeout_secs = 30
 retry_backoff_base_secs = 0
+
+[dispatch]
+min_free_disk_mb = 0
+
+[cos]
+enabled = false
 
 [accounts]
 claude_dir = "claude-accounts"

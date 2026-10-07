@@ -5,7 +5,7 @@
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
 - 改訂: 2026-10-06（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）— **追加のみ。v1 のまま**。
   エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・
-  `POST /cos/operations/{o}/override`（§3.129）。`NotificationKind` に `cos_escalation` /
+  `POST /cos/operations/{o}/override`（§3.130）。`NotificationKind` に `cos_escalation` /
   `cos_fallback` が増えた。DB のマイグレーションは 0053 以降（`cos_inbox_items` ほか。§7）。
 - 改訂: 2026-10-05 Phase 1（model routing）— 読取専用 `GET /llm/routing/catalog` を追加。
   `GET /tasks/{id}/routing` の各 run に任意の `optimizer` trace を追加。旧欄は維持し、DB migration は無い。
@@ -463,7 +463,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 175 | GET | `/releases/{sha12}/promotion-preview` | `current` から対象リリースまでに入る全リリースの要約（同じ task は 1 回。§3.67a。ADR 2026-10-04-release-notes） | `ReleasePromotionPreview` | `crate::releases` |
 | 176 | GET | `/deliveries` | 配送記録の task と commit の対応（`release.sh` が notes の task 判別に使う。§3.67b） | `DeliveryList` | store `delivery_list` |
 | 177 | GET | `/tasks/{id}/work-units/{wu_id}/check-log` | 統合 WU の検査・葉の WU の受け入れ検査（実行中・済み）のログの末尾（§3.126.19。ADR 2026-10-04-integration-check-progress、ADR-0040 付記 2026-10-04） | `WorkUnitCheckLog` | events + ファイル |
-| 178 | GET | `/chat/threads` | CoS チャットのスレッド一覧（§3.127） | `ChatThreadListResponse` | `crate::chat` + task-core chat store |
+| 178 | GET | `/chat/threads` | CoS チャットのスレッド一覧（§3.128） | `ChatThreadListResponse` | `crate::chat` + task-core chat store |
 | 179 | POST | `/chat/threads` | スレッドを作る（`client_thread_id` で冪等）（**管理系**） | 201 `ChatThreadResponse` | `crate::chat` |
 | 180 | GET | `/chat/threads/{t}` | スレッドの詳細と実行中の run | `ChatThreadDetailResponse` | `crate::chat` |
 | 181 | PATCH | `/chat/threads/{t}` | 題名・状態の変更（`expected_revision`）（**管理系**） | `ChatThreadResponse` | `crate::chat` |
@@ -496,10 +496,10 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 208 | PUT | `/llm/models/assignments/{source}/{tier}` | 割り当てを置く（`{model_id, note?}`。200 `{item, impact}`） | `AssignmentPutResponse` | store `model_role_assignment_set` |
 | 209 | DELETE | `/llm/models/assignments/{source}/{tier}` | 割り当てを外す（204。無ければ 404 `model_assignment_not_found`） | なし | store `model_role_assignment_delete` |
 | 210 | POST | `/llm/models/assignments/preview` | 書かずに影響（impact）だけ返す（`{source, tier, model_id?}`） | `AssignmentPreviewResponse` | routing catalog + providers |
-| 211 | POST | `/browser/trusted-devices` | 信頼端末を登録する（201。秘密の hash と名前。owner session の assertion）（**管理系** + assertion。§3.128.1） | `TrustedDeviceResult` | store `trusted_device_register` |
-| 212 | POST | `/browser/trusted-devices/verify` | 提示された hash を検証し回転する（`readonly: true` は何も書かない。§3.128.2）（**管理系** + assertion） | `TrustedDeviceResult` | store `trusted_device_verify_and_rotate` / `trusted_device_verify_readonly` |
-| 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.128.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
-| 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.128.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
+| 211 | POST | `/browser/trusted-devices` | 信頼端末を登録する（201。秘密の hash と名前。owner session の assertion）（**管理系** + assertion。§3.131.1） | `TrustedDeviceResult` | store `trusted_device_register` |
+| 212 | POST | `/browser/trusted-devices/verify` | 提示された hash を検証し回転する（`readonly: true` は何も書かない。§3.131.2）（**管理系** + assertion） | `TrustedDeviceResult` | store `trusted_device_verify_and_rotate` / `trusted_device_verify_readonly` |
+| 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.131.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
+| 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3329,7 +3329,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 - `source` / `tier` の path 区間は `%` 符号化に対応する。
 
 
-### 3.127 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）
+### 3.128 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）
 
 §2 の 178〜195。パスは `/api/v1` から。閲覧は既存の認証（Bearer / Host）、書込みは管理権限。型は `ChatThread`・`ChatMessage`・`ChatRun`・`ChatAttachment`・`ChatCard`・`ChatEvent` と各 request/response（§6、`api-v1.schema.json` の `$defs`）。設計の正本は [ADR 2026-10-05](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) D2。
 
@@ -3367,7 +3367,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 | DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
 | POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse`。owner が無ければ 404（task は `task_not_found`、KB 候補は `candidate_not_found`。CoS の `attachment.reference` も同じ） |
 
-### 3.128 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
+### 3.129 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
 
 以下の route は `Authorization: Bearer celeris-cos-run.<credential>` を要求する。credential から actor=`cos`・thread_id・run_id を確定し、本文や header の actor/thread/run 主張は受け付けない。credential が無効・期限切れ・失効済みなら 401。CoS credential で既存の変更 route を直接呼ぶと 422 になり、`/cos/operations` の監査経路を必ず通す。
 
@@ -3381,9 +3381,9 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
 
-### 3.129 CoS 受信箱の一次対応と代答の取消（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）
+### 3.130 CoS 受信箱の一次対応と代答の取消（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）
 
-`GET /cos/inbox` と `POST /cos/inbox/{i}/resolve` は CoS run credential（§3.128 の `celeris-cos-run.<credential>`）のみ。`POST /cos/operations/{o}/override` は**人だけが**（管理系。CoS credential は 403）。
+`GET /cos/inbox` と `POST /cos/inbox/{i}/resolve` は CoS run credential（§3.129 の `celeris-cos-run.<credential>`）のみ。`POST /cos/operations/{o}/override` は**人だけが**（管理系。CoS credential は 403）。
 
 | メソッド・endpoint | 認証 | 入力 | 成功 |
 |---|---|---|---|
@@ -3395,7 +3395,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 
 `override` は適用済み（`applied`）の CoS 操作を 1 回だけ修正する。`revoke` / `return` で、元の payload・event は残し現在状態を投影として書き換える。不可逆な操作（decision/approval 以外）は `state=needs_remediation` にし `remediation_task_id`（人が確認する修正 task）を返す。decision/approval は `superseded` にし、`new_wait_id` / `new_revision` で代わった人の待ちを返す（CoS は代答できない）。run が既に消費していた操作は対象 task の subtree を pause し `paused_task_ids` を返す。
 
-### 3.128 ブラウザの信頼端末（ADR 2026-10-07-browser-trusted-devices）
+### 3.131 ブラウザの信頼端末（ADR 2026-10-07-browser-trusted-devices）
 
 呼ぶのは web gateway だけ（`crate::browser_trusted_devices`）。owner session の再承認を、password login 済み session ＋
 登録端末の 2 要素で置き換えるための端点。全端点で次を確かめる:
@@ -3412,7 +3412,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 秘密の値は daemon に来ない（web が `sha256("celeris-device\0" + secret)` の小文字 hex を送る）。応答・events のどこにも hash を返さない。
 時刻は `ApiState` に注入した時計（UNIX 秒。試験は `ApiState::with_clock` で差し替える）。`TrustedDevice` の時刻欄はすべて UNIX 秒。
 
-#### 3.128.1 `POST /browser/trusted-devices` → 201 `TrustedDeviceResult`
+#### 3.131.1 `POST /browser/trusted-devices` → 201 `TrustedDeviceResult`
 
 本文 `TrustedDeviceRegisterBody` `{name, secret_hash, assertion}`（claims の `name`・`presented_hash` と一致）。daemon が ULID の `id` を振り、
 期限は `now + 90 日`（使うと延長。絶対上限なし）。`trusted_device_registered` を actor 付きで追記する。
@@ -3420,7 +3420,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 - 有効な端末が既に 5 台: 409 `device_limit`（`limit: 5`）。`trusted_device_rejected`（`reason = limit`）を残す。古い端末を自動で落とさない。
 - 名前が空・64 文字超、hash の形が不正: 422 `device_invalid`。
 
-#### 3.128.2 `POST /browser/trusted-devices/verify` → 200 `TrustedDeviceResult`
+#### 3.131.2 `POST /browser/trusted-devices/verify` → 200 `TrustedDeviceResult`
 
 本文 `TrustedDeviceVerifyBody` `{device_id, presented_hash, next_hash?, readonly?, assertion}`。
 
@@ -3431,13 +3431,13 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 - 未知の id・不一致・失効済み・期限切れ・再提示: 403 `device_rejected`（理由は応答で区別せず、通常の検証では `trusted_device_rejected` の
   `reason` にだけ残す）。
 
-#### 3.128.3 `GET /browser/trusted-devices` → 200 `TrustedDeviceList`
+#### 3.131.3 `GET /browser/trusted-devices` → 200 `TrustedDeviceList`
 
 `{devices, limit, now}`。`devices[]` は失効・期限切れも含めて新しい順で、`id`・`name`・`method`（`cookie`）・`created_at`・`last_used_at`・
 `expires_at`・`absolute_expires_at`・`revoked_at`・`revoked_reason`（`owner` / `reuse`）・`actor`。hash は含まない。`now` は daemon の時計で、
 画面が期限切れを判定するのに使う。
 
-#### 3.128.4 `DELETE /browser/trusted-devices/{id}` → 200 `TrustedDeviceRevokeResult`
+#### 3.131.4 `DELETE /browser/trusted-devices/{id}` → 200 `TrustedDeviceRevokeResult`
 
 claims の `device_id` が path と一致すること。行を即時に失効させ（`revoked_reason = owner`）、`trusted_device_revoked` を actor 付きで追記する。
 `{revoked, device}` の `revoked` は今回失効させたか（既に失効済みなら `false`・event なし）。未知の id は 404 `device_not_found`。

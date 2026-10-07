@@ -170,8 +170,25 @@ fn attachments_section(chat: &CosChatContext) -> String {
     {
         out.push_str("delivery=file は path から必要な道具で読む。archive を勝手に展開しない。\n");
     }
+    out.push_str(&attachment_pin_rules(chat));
     out.push('\n');
     out
+}
+
+/// How to hand an attachment over to a task or a KB inbox candidate (ADR cos-chat-home D4): pin it
+/// with the references API through `/cos/operations`, never by passing this run's path on.
+fn attachment_pin_rules(chat: &CosChatContext) -> String {
+    let env = &chat.credential_env;
+    let api = chat.api_base_url.trim_end_matches('/');
+    format!(
+        "### 添付の引き渡し (pin)\n\
+         後続の task や KB に添付を渡すときは、添付を owner に pin する。上の path（この chat run の一時の場所）を後続に渡さない（起票本文・objective・KB 本文に path を書かない。後続は pin から自分の入力として受け取る）。\n\
+         1. owner を先に作り、成功を確かめる。screenshot など画像は task へ（`{api}/cos/operations` の `POST /api/v1/tasks`、応答の task id）。PDF など資料は KB 候補へ（`celerisctl knowledge record --json …` の `id`）。\n\
+         2. references API で pin する。CoS の credential で `POST {api}/chat/attachments/{{id}}/references` を直接叩くと 422 なので、`/cos/operations` に包む:\n\
+         `curl -sf -X POST -H \"Authorization: Bearer ${env}\" -H 'Content-Type: application/json' {api}/cos/operations -d '{{\"idempotency_key\":\"pin-<添付 id>-<owner id>\",\"expected_revision\":null,\"reason\":\"…\",\"policy_version\":\"1\",\"request\":{{\"method\":\"POST\",\"path\":\"/api/v1/chat/attachments/<添付 id>/references\",\"body\":{{\"owner_kind\":\"task\",\"owner_id\":\"<task id>\",\"idempotency_key\":\"pin-<添付 id>-<owner id>\"}}}}}}'`\n\
+         owner_kind は `task`（task の id）か `knowledge_inbox`（KB 候補の id）。再試行は同じ idempotency_key で。\n\
+         3. 応答の operation が `state` = `applied` で `result` に同じ attachment_id・owner_kind・owner_id が返ったのを確かめてから、初めて人に「引き渡し済み」と言う。404・409・422 なら引き渡していない。そう書いて理由を確かめる。\n",
+    )
 }
 
 fn skills_section(chat: &CosChatContext) -> String {

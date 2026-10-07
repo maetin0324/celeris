@@ -383,22 +383,7 @@ impl ChatAttachmentStore {
         }
         let mut conn = self.conn.lock().map_err(|_| AttachmentError::Poisoned)?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND state='ready')",
-            [id],
-            |r| r.get(0),
-        )?;
-        if !exists {
-            return Err(AttachmentError::NotFound);
-        }
-        tx.execute(
-            "INSERT OR IGNORE INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) VALUES(?1,?2,?3,?4)",
-            params![id, owner_kind, owner_id, stamp(now)?],
-        )?;
-        tx.execute(
-            "UPDATE chat_attachments SET expires_at=NULL WHERE id=?1",
-            [id],
-        )?;
+        add_ref_tx(&tx, id, owner_kind, owner_id, now)?;
         tx.commit()?;
         Ok(())
     }
@@ -570,6 +555,40 @@ fn stamp(now: OffsetDateTime) -> Result<String, AttachmentError> {
         now.second(),
         now.nanosecond(),
     ))
+}
+
+/// Pin a ready attachment to an owner inside the caller's transaction (the REST route and the
+/// audited CoS operation `attachment.reference` share this). Idempotent; clears the expiry.
+pub fn add_ref_tx(
+    tx: &rusqlite::Transaction<'_>,
+    id: &str,
+    owner_kind: &str,
+    owner_id: &str,
+    now: OffsetDateTime,
+) -> Result<(), AttachmentError> {
+    if !valid_id(id)
+        || !matches!(owner_kind, "message" | "task" | "knowledge_inbox")
+        || owner_id.is_empty()
+    {
+        return Err(AttachmentError::InvalidPath);
+    }
+    let exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND state='ready')",
+        [id],
+        |r| r.get(0),
+    )?;
+    if !exists {
+        return Err(AttachmentError::NotFound);
+    }
+    tx.execute(
+        "INSERT OR IGNORE INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) VALUES(?1,?2,?3,?4)",
+        params![id, owner_kind, owner_id, stamp(now)?],
+    )?;
+    tx.execute(
+        "UPDATE chat_attachments SET expires_at=NULL WHERE id=?1",
+        [id],
+    )?;
+    Ok(())
 }
 
 fn valid_id(id: &str) -> bool {

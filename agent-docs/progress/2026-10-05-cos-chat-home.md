@@ -147,3 +147,43 @@ web の typecheck/lint/test/e2e は本葉では再実行していない（web �
 - D3: `ResolveBody` に任意の `confidence` を足すか skill から外す。D4: 終わった run を takeover 対象から外す。
 - 4: 要約 checkpoint を前置きで必須にするか N 往復ごとでよいかを人が決める。5: `[cos] model` を本番 config に書く。
 - D1〜D4 を直す task を別に起こし、直した後に運用セッションが実機確認を再実行する。
+
+---
+
+# close-out 3: D1〜D4 修正後の実機再確認の記録（2026-10-07）
+
+ADR `2026-10-05-cos-chat-home` に付記「D1〜D4 の修正と実機再確認（close-out 3）」を追加し、`2026-10-07-cos-live-fixes` の状態を実機再確認済みにした。本葉は実装を修正していない。
+
+## 受け入れ条件ごとの証拠
+
+| 条件 | 証拠 |
+|---|---|
+| 0. ADR 置き換え範囲 | `2026-10-05-cos-chat-home.md` の「置き換えの境界」表。変更なし |
+| 1. ホームのチャット UI | web-chat の screenshot 11 枚と e2e（`web-chat.md`）。変更なし |
+| 2. 継続・config・API 操作・添付の引き継ぎ・実機 | 実機（live-fixes tip `767a15760901`、運用セッション実行、`live-check.md`）で (a) 5 往復 completed・new→resumed **PASS**、(b) 画像 **PASS**、(c) `--api-url` なしの起票と actor=cos **PASS**、(d) screenshot が最初の run の入力に載る **PASS**、(e) PDF が KB 候補に provenance 付きで入る **PASS**。偽ハーネス: `cos_live_fix_d1_`〜`d4_`・`cos_chat_attach_handoff_*` ほか |
+| 3. 監査・検査 | events の `cos_operation` actor=cos（実機）。下の全体検査 |
+
+## D1〜D4・台本・gui-api
+
+- D1〜D4 は上の実機で解消（ADR 付記に実装と試験名）。
+- 台本 2 点（run_id は messages で待つ、concurrency 4）は live-fixes で直った。
+- gui-api の節番号は 3.127〜3.131 で重複なし。
+
+## 全体検査（HEAD `95b6fa0a` + 本葉の文書）
+
+| コマンド | 結果 |
+|---|---|
+| `bash scripts/dev/test-parallel.sh` | exit 0。160 binaries、**4660 passed・0 failed・14 ignored** |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `check-adr-numbers.sh`（160 files）/ `check-doc-layout.sh scripts/dev/docs-layout.tsv` / `check-doc-links.sh` | 各 exit 0 |
+
+web: `web/server/spa-routes.test.mjs` の期待値を 40（39 宣言画面 + 404）に直した（close-out4）。`corepack pnpm@12.6.0 -C web test` は 77 pass・0 fail・exit 0。close-out4 の全体検査: test-parallel 4660 passed・0 failed・14 ignored（exit 0）、clippy exit 0。
+
+## 未解決事項と提案
+
+- 不具合 4: 短い往復で `summary_through_seq` が 0 のまま。前置きで run 終了時 checkpoint を必須にするか、N 往復ごとでよいかを人が決める。
+- 不具合 5: provider に model を書かないと `chat_runs` の実効 model が null。本番 config に `[cos] model` か provider の model を書く運用。
+- 台本の残り: daemon 起動前の `knowledge init`、project fixture（会話を起こさない作り方）、`pgrep -f "$OUT"` の LEFTOVER 誤報、verdict FAIL でも exit 0。
+- `task-worker/src/cos_chat.rs` の `attachment_pin_rules` が旧手順のまま（skill §3a と不一致）。
+- 拒否された CoS operation の `cos_operations.action` が `rejected` になり要求 action が残らない。
+- 前節の allowlist 不足（replan・pause/resume・KB accept）、codex の実機未確認、D1 の人の API 経路での pin event 未記録。いずれも別 task で。

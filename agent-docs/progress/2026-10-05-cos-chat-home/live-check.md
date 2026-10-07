@@ -145,6 +145,56 @@ token は一時ファイル、`CELERIS_*` は run の env を継がず、すべ�
 `bash <WU 成果物>/live2/live2-ops.sh "$PWD" "$CARGO_TARGET_DIR/debug" <新しい data dir> full`。
 `evidence/steps.log`・`db.txt`（`chat_runs`・`node_sessions`・`cos_operations`・`chat_attachment_refs`）・`kb-inbox.json`・`prompt-files.txt`・`staged.txt` を上の表と同じ観点で見る。
 
+## 実機確認（D1〜D4 修正後）
+
+2026-10-07。WorkUnit live3-record（run `01M4AW6EEE5C2J0B4MZ17RSVHQ`）。人の決定 `live3-llm-run` のとおり、**運用セッション（Claude Opus 5.5）**が
+live-fixes の tip **`767a15760901872f8c753ce91b5c5e4afcf0e1da`** で `scripts/dev/cos-chat-live.sh <repo> <bin dir> <data dir> full` を本番でない shell（claude_oauth）から流した。
+この節は、その証跡を worker が読んでまとめたもの（worker は LLM を伴う実機確認を流していない）。
+
+- 合格の証跡: `/var/tmp/cos-live3-20261007-094511-full-fixture/evidence/`（`steps.log`・`db.txt`・`run-t*.json`・`kb-inbox.json`・`prompt-files.txt`・`staged.txt`・`input-manifest.txt`・`verdict.txt`・`daemon.log`）
+- この run は運用セッションが台本の手元の写しで 2 点を補ったもの（daemon 起動前の `celerisctl knowledge init --root $OUT/kb`、試験用 DB への project `agent-platform` の fixture）。台本のままの 2 回は (e) が FAIL（下の「台本のままの記録」）
+- 試験用 daemon: pid 131807、`http://127.0.0.1:17932/api/v1`、`steps.log` の表示 commit `767a15760901`、mode full、harness claude-code・llm_source claude_oauth・provider `claude-live`・tier frontier
+- fixture project: `01M4AW00000000000000000PRJ`（agent-platform、active）
+- thread `01M4AW1CKJ8367V4CWVF1R0498`、node_sessions row `01M4AW1D1AFR126X2SYD15CEXF`（session `01a115c0-b42a-…`、turns 5）
+- 添付: 青い PNG `01M4AW1CMA9WH9A78A0REVEDZR`、screenshot `01M4AW1CNRDN1T6AC3E2YDPZSZ`、PDF `01M4AW1CQB1E38F18S5XDANK1F`（3 件とも ready、sha256 つき）
+
+| turn | run id | state | session_mode |
+|---|---|---|---|
+| t1 | `01M4AW1D180F35Q8Y3WAMRWJ9C` | completed | new |
+| t2 | `01M4AW1RTBXX033WDDCM5S86GK` | completed | resumed |
+| t3 | `01M4AW24MJR8CTETY8F7V8Y41Y` | completed | resumed |
+| t4 | `01M4AW2NDX7V4RJPWP6ERTR5MJ` | completed | resumed |
+| t5 | `01M4AW3C3ABP6F3AXD11174D42` | completed | resumed |
+
+### (a)〜(e) の結果（full、2026-10-07 09:45〜09:46）
+
+| 確認 | 判定 | 証跡 |
+|---|---|---|
+| (a) 2 往復以上で completed、new→resumed、同じ node_sessions row | **PASS** | 5 run とも completed・`reason` 空。`chat_runs` の `session_row_id` はすべて `01M4AW1D1AFR…`。t2 の返事「合言葉は「みかん42」」で前の turn を継いでいる |
+| (b) 画像添付を CoS が読む | **PASS** | t2 の返事「添付画像は青色の正方形です」 |
+| (c) `--api-url` なしの `celerisctl add` が試験用 daemon に届き、events に `cos_operation` actor=cos | **PASS** | 試験用 DB に task `01M4AW2ADJZEY9D29RCGV7TBF3`（done）、`cos_operations` `01M4AW2ADH048G1ACFW36N4XGF` task.create applied、events seq 1 が `cos_operation` actor=cos（thread_id・run_id・reason つき） |
+| (d) screenshot を起票した UI 修正 task に引き継ぐ | **PASS** | operation `01M4AW2YDZZF9QMD17KWA77R1C`（task.create applied、result の `attachment_ids` に screenshot）。task `01M4AW2YDZV4XSBVV5514GKEKQ` に owner_kind=task の pin（09:46:03.58）。最初の作業 run `01M4AW2Z97YDYQ9T7VS47BN5JM` の `prompt.txt` に「## 入力の添付」（screen.png、delivery `image`）があり、`staged.txt` に読み取り専用（`-r--------`）の screen.png。起票と pin は 1 回の operation で、別の attachment.reference は 0 件 |
+| (e) PDF を KB inbox candidate に provenance 付きで取り込む | **PASS** | operation `01M4AW3PCHRBQ5JBESEDQHN6E4`（knowledge.record applied、scope `project:agent-platform`）。候補 `20261007T094628Z-cos-chat-live-codeword-cos` が `_inbox/` にあり、provenance に facts.pdf の sha256 `8f1555f9…`・thread・message `01M4AW3B705Q…`・依頼本文。owner_kind=knowledge_inbox の pin と events の `cos_operation`（actor=cos、target_kind knowledge）がある。候補本文に codeword「SAKURA-77」 |
+| 停止と残り | 注意 | `steps.log` は `LEFTOVER processes:` を出し、`pgrep-after-stop.txt` に pid 2 件。運用セッションの判定では台本の `pgrep -f "$OUT"` が自分の shell に当たる誤報告（台本の不備 (3)） |
+
+本番 daemon・本番 DB・`~/.config/celeris` は読み書きしていない（data dir は `/var/tmp/cos-live3-20261007-094511-full-fixture/`）。外部への通信は claude（claude_oauth）の LLM 呼び出しだけ。
+
+### D1〜D4 の実機での解消
+
+| # | 内容 | 実機 | 証跡 |
+|---|---|---|---|
+| D1 | 起票と pin の競合（pin より先に worker が始まる） | **解消** | 作成時の `attachment_ids` で同じ operation の中で pin された。最初の run の manifest に screen.png があり、stage にも置かれた（(d)） |
+| D2 | CoS の監査つき KB 候補作成の経路が無い・scope 書式の不一致 | **解消** | `knowledge.record` が `/cos/operations` 経由で applied、scope `project:agent-platform` で候補と pin と監査 event がそろった（(e)） |
+| D3 | triage の confidence と `ResolveBody` の不一致 | **解消** | `cos_operations` `01M4AW3955TENS4AGHE1AYGEMS`（inbox.observe applied）の result に `"confidence":0.97` |
+| D4 | 終わった triage run の orphan takeover による重複 run | **解消** | triage thread `01M4AW2PDYCDX2FN5R6SCWAC24` の `chat_runs` は `01M4AW2PE2HCH53F6T7TN6ZRN2`（completed）の 1 件だけ、run dir も 1 つ。3 回の full の `daemon.log` に takeover/orphan は 0 件（運用セッションの note も「3 回とも再発しなかった」） |
+
+### 台本のままの記録と残り
+
+- `/var/tmp/cos-live3-20261007-093912-full`: (d) PASS、(e) FAIL（KB 未初期化）。`/var/tmp/cos-live3-20261007-094248-full-kbinit`: (d) PASS、(e) FAIL（project が無い）。dry `/var/tmp/cos-live3-20261007-093912-dry` は exit 0
+- 台本 `scripts/dev/cos-chat-live.sh` の直すこと（close-out で直す。人の決定の指示）: (1) daemon 起動前に `celerisctl knowledge init --root $OUT/kb`、(2) t5 用の project `agent-platform` を会話を起こさない作り方で試験用 DB に作る、(3) `pgrep -f "$OUT"` の誤った LEFTOVER、(4) verdict が FAIL でも exit 0
+- 軽微: 拒否された CoS operation の `cos_operations.action` が `rejected` になり、要求した action が残らない
+- LLM の使用は 3 回の full で約 26 session
+
 ## 提案（live-check2）
 
 - D1: 作成時に attachment id を受けて同じ transaction で pin する（起票と pin の間に dispatcher が入らない）。

@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 69] = [
+pub(crate) const EVENT_TYPES: [&str; 73] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -248,6 +248,11 @@ pub(crate) const EVENT_TYPES: [&str; 69] = [
     "model_catalog_changed",
     // ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更。
     "model_role_assignment_changed",
+    // ADR 2026-10-07-browser-trusted-devices D5: 信頼端末の登録・使用・失効・拒否（疑似 task の列。秘密・hash なし）。
+    "trusted_device_registered",
+    "trusted_device_used",
+    "trusted_device_revoked",
+    "trusted_device_rejected",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -327,6 +332,10 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::IntegrationAnswered { .. } => "integration_answered",
         Event::ModelCatalogChanged { .. } => "model_catalog_changed",
         Event::ModelRoleAssignmentChanged { .. } => "model_role_assignment_changed",
+        Event::TrustedDeviceRegistered { .. } => "trusted_device_registered",
+        Event::TrustedDeviceUsed { .. } => "trusted_device_used",
+        Event::TrustedDeviceRevoked { .. } => "trusted_device_revoked",
+        Event::TrustedDeviceRejected { .. } => "trusted_device_rejected",
     }
 }
 

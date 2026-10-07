@@ -28,10 +28,10 @@ export function ToolCall({ tool, defaultOpen = false }: { tool: ToolEntry; defau
       <span className="min-w-0 flex-1 truncate text-muted-foreground">{tool.summary}</span>
       <span
         className={cn(
-          "shrink-0 font-medium",
-          outcome === "failed" && "text-danger",
-          outcome === "completed" && "text-success",
-          outcome === "running" && "text-running",
+          "shrink-0 whitespace-nowrap font-medium",
+          outcome === "failed" && "text-danger-foreground",
+          outcome === "completed" && "text-success-foreground",
+          outcome === "running" && "text-running-foreground",
         )}
       >
         {outcomeLabel[outcome]}

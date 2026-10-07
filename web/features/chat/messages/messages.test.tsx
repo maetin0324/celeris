@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { ChatAttachment, ChatEvent } from "../../../api/generated/types";
@@ -157,6 +158,39 @@ describe("chat_messages_bubbles", () => {
 });
 
 describe("chat_messages_tool", () => {
+  it.each([
+    ["completed", "success", "成功"],
+    ["failed", "danger", "失敗"],
+    ["running", "running", "実行中"],
+  ] as const)("tool %s uses a readable foreground on white and hover surfaces", (state, tone, label) => {
+    const out = renderToStaticMarkup(<ToolCall tool={{ ...tool(), state, run_id: null, message_id: null }} />);
+    expect(out).toContain(`data-state="${state}"`);
+    const status = out.match(new RegExp(`<span class="([^"]*)">${label}</span>`));
+    expect(status).not.toBeNull();
+    expect(status?.[1].split(" ")).toEqual(
+      expect.arrayContaining(["shrink-0", "whitespace-nowrap", `text-${tone}-foreground`]),
+    );
+    expect(status?.[1].split(" ")).not.toContain(`text-${tone}`);
+
+    // 正本の token から計算するので、前景/背景色の変更でも AA を下回れば落ちる。
+    const css = readFileSync(new URL("../../../styles.css", import.meta.url), "utf8");
+    const luminance = (token: string) => {
+      const hex = css.match(new RegExp(`--color-${token}: #([0-9a-f]{6});`))?.[1];
+      expect(hex).toBeDefined();
+      const rgb = [0, 2, 4].map((offset) => {
+        const value = Number.parseInt((hex as string).slice(offset, offset + 2), 16) / 255;
+        return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+      });
+      return rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722;
+    };
+    const foreground = luminance(`${tone}-foreground`);
+    for (const background of ["surface", "accent"]) {
+      const surface = luminance(background);
+      expect((Math.max(surface, foreground) + 0.05) / (Math.min(surface, foreground) + 0.05)).toBeGreaterThanOrEqual(
+        4.5,
+      );
+    }
+  });
   it("chat_messages_tool_collapsed_shows_name_summary_outcome_without_detail", () => {
     const out = renderToStaticMarkup(<ToolCall tool={{ ...tool(), run_id: "r1", message_id: null }} />);
     expect(out).toContain("Bash");

@@ -78,3 +78,47 @@ test("共有された ?thread= URL で開き、再読込しても同じ会話と
     await gateway.close();
   }
 });
+
+test("長い題名の旧会話でも badge は一行に収まり、題名を省略する", async ({ page }) => {
+  const gateway = await startChatGateway();
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(`${gateway.base}/?thread=chat-main`);
+    const sidebar = page.locator("#chat-thread-sidebar");
+    await sidebar.getByRole("button", { name: "旧 Console の会話の題名を変更", exact: true }).click();
+    const title = "旧 Console の長い題名の会話".repeat(8);
+    await sidebar.getByRole("textbox", { name: "会話の題名" }).fill(title);
+    await sidebar.getByRole("button", { name: "保存", exact: true }).click();
+    const button = sidebar.getByRole("button", { name: `${title} 旧会話`, exact: true });
+    await expect(button).toBeVisible();
+    const badge = button.locator('[data-slot="badge"]');
+    const box = await badge.boundingBox();
+    const row = await button.boundingBox();
+    expect(box).not.toBeNull();
+    expect(row).not.toBeNull();
+    if (!box || !row) throw new Error("会話行と badge の矩形が取得できません");
+    expect(box.height).toBeLessThan(box.width);
+    expect(box.height).toBeLessThanOrEqual(row.height);
+    expect(box.x).toBeGreaterThanOrEqual(row.x);
+    expect(box.x + box.width).toBeLessThanOrEqual(row.x + row.width);
+    const metrics = await badge.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        height: element.getBoundingClientRect().height,
+        singleLineHeight:
+          Number.parseFloat(style.lineHeight) +
+          Number.parseFloat(style.paddingTop) +
+          Number.parseFloat(style.paddingBottom),
+      };
+    });
+    expect(metrics.height).toBeLessThanOrEqual(metrics.singleLineHeight + 1);
+    expect(
+      await button
+        .locator("span")
+        .first()
+        .evaluate((element) => element.scrollWidth > element.clientWidth),
+    ).toBe(true);
+  } finally {
+    await gateway.close();
+  }
+});

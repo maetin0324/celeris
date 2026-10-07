@@ -101,10 +101,16 @@ function ThreadList({
                     aria-current={selectedThreadId === item.id ? "page" : undefined}
                     onClick={() => select(item.id)}
                   >
-                    <span className="truncate">{item.title}</span>
-                    {item.kind === "legacy" && <Badge tone="neutral">旧会話</Badge>}
+                    <span className="min-w-0 truncate">{item.title}</span>
+                    {item.kind === "legacy" && (
+                      <Badge tone="neutral" className="shrink-0 whitespace-nowrap">
+                        旧会話
+                      </Badge>
+                    )}
                     {item.kind === "inbox" && (
-                      <Badge tone="info">受信箱{inboxWaitingCount > 0 ? ` ${inboxWaitingCount} 件待ち` : ""}</Badge>
+                      <Badge tone="info" className="shrink-0 whitespace-nowrap">
+                        受信箱{inboxWaitingCount > 0 ? ` ${inboxWaitingCount} 件待ち` : ""}
+                      </Badge>
                     )}
                   </Button>
                   {item.kind !== "inbox" && (

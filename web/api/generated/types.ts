@@ -3052,12 +3052,25 @@ export type KnowledgeCandidate = {
   "id": string;
   "op"?: string | null;
   "path": string;
+  "provenance"?: Array<KnowledgeCandidateProvenance>;
   "scope"?: string | null;
   "sources"?: Array<string>;
   "tags"?: Array<string>;
   "target": string;
   "target_exists": boolean;
   "title": string;
+};
+
+export type KnowledgeCandidateProvenance = {
+  "attachment_id": string;
+  "media_type": string;
+  "message_id"?: string | null;
+  "name": string;
+  "pinned_at": string;
+  "request_text"?: string | null;
+  "sha256": string;
+  "size_bytes": number;
+  "thread_id": string;
 };
 
 export type KnowledgeInbox = {

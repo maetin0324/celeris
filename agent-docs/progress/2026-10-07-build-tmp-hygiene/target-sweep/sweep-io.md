@@ -46,6 +46,9 @@ ADR 2026-10-07-build-tmp-hygiene D1.2 規則 4〜6・D1.3 の I/O 層を `crates
   `crates/task-dispatch/src/undeclared_artifacts/tests.rs:146` の `clippy::useless_vec` で落ちる（exit 101）。この葉の範囲 check はこのファイルを
   許可しないので、この葉では直せない。`-A clippy::useless_vec` を付けると exit 0（この葉の変更は警告なし）。`target_sweep_` 試験 6 本は pass。
   plan_issue として申告した（範囲に当該ファイルを足すか、check から除くか、別の修正葉を先に置く）。
+- 2026-10-07 attempt 3（replan 後）: 範囲に許可されたので `undeclared_artifacts/tests.rs:146` の `vec![...]` を配列にした（挙動不変）。
+  `cargo clippy -p task-dispatch --all-targets -- -D warnings` → exit 0、`cargo test -p task-dispatch --lib target_sweep_` → 6 passed（exit 0）、
+  `cargo test -p task-dispatch --lib undeclared_artifacts` → 18 passed。
 
 ## 提案
 

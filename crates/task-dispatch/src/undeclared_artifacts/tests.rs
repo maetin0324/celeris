@@ -143,7 +143,7 @@ fn registered_keys_cover_declared_and_undeclared_artifacts() {
             declared,
         },
     };
-    let events = vec![
+    let events = [
         mk("artifacts/a.md", "ABCD", true),
         mk("artifacts/b.md", "ef01", false),
         Event::WorkspacePruned { removed: vec![] },

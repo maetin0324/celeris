@@ -32,6 +32,25 @@ describe("chat threads", () => {
     expect(html).toContain('aria-label="会話一覧を開く"');
   });
 
+  it("chat_threads_long_titles_truncate_without_shrinking_or_wrapping_badges", async () => {
+    const title = "長い題名の会話".repeat(20);
+    const api = mockApi();
+    api.list.mockResolvedValue({
+      items: [thread({ id: "legacy", kind: "legacy", title }), thread({ id: "inbox", kind: "inbox", title })],
+      next_cursor: null,
+    });
+    const model = new ThreadsModel(api);
+    await model.load();
+    const html = renderToStaticMarkup(<ChatThreads model={model} inboxWaitingCount={123} onSelectThread={() => {}} />);
+    expect(html).toContain(`<span class="min-w-0 truncate">${title}</span>`);
+    for (const label of ["旧会話", "受信箱 123 件待ち"]) {
+      const badge = html.match(new RegExp(`<span[^>]*class="([^"]*)"[^>]*>${label}</span>`));
+      expect(badge).not.toBeNull();
+      expect(badge?.[1].split(" ")).toEqual(expect.arrayContaining(["shrink-0", "whitespace-nowrap"]));
+      expect(badge?.[1].split(" ")).not.toContain("whitespace-normal");
+    }
+  });
+
   it("chat_threads_create_reuses_client_thread_id_after_unknown_failure_and_selects_existing_response", async () => {
     const api = mockApi();
     const model = new ThreadsModel(api);

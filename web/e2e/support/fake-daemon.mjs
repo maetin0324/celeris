@@ -1585,9 +1585,9 @@ function createChatFixture() {
   const at = "2026-10-05T12:00:00Z";
   let nextThread = 1;
   let nextAttachment = 1;
-  // A fixed 1x1 raster stands in for the daemon's safe re-encoded image preview.
+  // A colored 96x64 checkerboard stands in for the daemon's safe re-encoded image preview.
   const previewPng = Buffer.from(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+    "iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAAAl0lEQVR4nO3YwQmAMBQFwfTi2dYszCKsyRIsIQQvGxh45yWZ4x/H9Sztvc+l7d4fu38AEKB2HxAgQIAAhfuAAAECBCjcBwToJ1DtQbU+IECAAAEK9wEBAgQIULgPCBAgQIDCfQezyQABAgQIULgPCBAgQIDCfUCAAAECFO47mE0GCBAgQIDCfUCAAAECFO4DAgQIEKBw/wOPPwosxBMoPAAAAABJRU5ErkJggg==",
     "base64",
   );
   const json = (res, status, value, problem = false) => {

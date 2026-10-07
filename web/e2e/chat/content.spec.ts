@@ -109,6 +109,15 @@ test("Markdown・code・表・tool の折りたたみと展開を 1 回だけ表
     await expect(section.getByRole("button", { name: /grep/ })).toHaveCount(0);
     await expect(section.locator('[data-slot="chat-tool"]').filter({ hasText: "grep" })).toContainText("成功");
 
+    // 表・code と両 tool の状態を同じ画面に収める。
+    await toolRow.click();
+    await expect(toolRow).toHaveAttribute("aria-expanded", "false");
+    await conversation(page).scroller.evaluate((el) => {
+      el.scrollTop = el.scrollHeight;
+    });
+    await expect(readTool.getByText("成功", { exact: true })).toBeVisible();
+    await expect(section.locator('[data-slot="chat-tool"]').filter({ hasText: "grep" })).toBeVisible();
+
     // スクリーンショット: 広い幅（1440 px）の会話（Markdown・表・code・tool 折りたたみ）。
     const shots = process.env.CHAT_SHOT_DIR;
     if (shots) await page.screenshot({ path: `${shots}/chat-content-1440.png` });
@@ -121,6 +130,7 @@ test("streaming は text_delta を流し、確定 message に置き換えて二�
   const gateway = await startChatGateway();
   const { section } = conversation(page);
   try {
+    await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(`${gateway.base}/?thread=chat-history`);
     await expect(section.getByText("履歴 240", { exact: true })).toBeVisible();
     await waitForStream(gateway, "chat-history");
@@ -152,6 +162,12 @@ test("streaming は text_delta を流し、確定 message に置き換えて二�
     // streaming 中の本文は caret 付きで 1 項目（二重にない）。
     await expect(section.locator('[data-slot="chat-caret"]')).toHaveCount(1);
     await expectOnce(section, '[data-slot="chat-body"]', "進捗はこうです");
+    // hold 制御により完了イベントは流れない。生成途中の本文と停止を同時に撮る。
+    await section.locator('[data-slot="chat-caret"]').scrollIntoViewIfNeeded();
+    await expect(section.getByText("2 段落", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "停止", exact: true })).toBeVisible();
+    const shots = process.env.CHAT_SHOT_DIR;
+    if (shots) await page.screenshot({ path: `${shots}/chat-streaming-1440.png` });
 
     // run が確定したら、running の message が同じ id で置き換わる（caret 消え・項目 1 つ）。
     await gateway.emit("chat-history", {

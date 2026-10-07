@@ -177,7 +177,7 @@ ADR `2026-10-05-cos-chat-home` に付記「D1〜D4 の修正と実機再確認�
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `check-adr-numbers.sh`（160 files）/ `check-doc-layout.sh scripts/dev/docs-layout.tsv` / `check-doc-links.sh` | 各 exit 0 |
 
-web: `web/server/spa-routes.test.mjs` の宣言画面数（39 → 40、main 取り込みで増えた route）は、この WU の範囲（adr/progress のみ）外のため直していない。提案: 範囲に web/server/spa-routes.test.mjs を許す葉で `assert.equal(spaRoutePatterns.length + 1, 40)` に直す。
+web: `web/server/spa-routes.test.mjs` の期待値を 40（39 宣言画面 + 404）に直した（close-out4）。`corepack pnpm@12.6.0 -C web test` は 77 pass・0 fail・exit 0。close-out4 の全体検査: test-parallel 4660 passed・0 failed・14 ignored（exit 0）、clippy exit 0。
 
 ## 未解決事項と提案
 

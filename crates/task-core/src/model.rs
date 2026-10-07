@@ -1678,6 +1678,18 @@ pub enum Event {
         #[serde(default)]
         restored: Vec<String>,
     },
+    /// ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。
+    /// `model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。
+    /// `catalog_event_task_id()` の疑似 task の列に追記する。
+    ModelRoleAssignmentChanged {
+        source: String,
+        tier: Tier,
+        #[serde(default)]
+        model_id: Option<String>,
+        #[serde(default)]
+        previous: Option<String>,
+        actor: String,
+    },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
     /// 1 回だけ）。

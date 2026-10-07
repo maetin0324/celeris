@@ -257,6 +257,16 @@ pub trait WorkerAdapter: Send + Sync {
         None
     }
 
+    /// ADR 2026-10-06 model-role-assignments D2: lane ごとの束縛（`TierModels`）を差し替えた複製を返す。
+    /// DB の割り当てを反映した実効 bindings で run を起こすために使う。既定は `None`（束縛を持たない
+    /// アダプタ。呼び出し側は元のアダプタのまま実行する）。`TieredAdapter` だけが実装する。
+    fn with_tier_models(
+        &self,
+        _models: task_core::model_routing::TierModels,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        None
+    }
+
     /// ADR-0072 D14（Phase E4b 項目3）: `mode`（例: `"plan"`）を CLI の permission-mode に使う複製を
     /// 返す（`with_model` と同じ形）。既定は `None` = この経路を持たないアダプタ（呼び出し側は元の
     /// アダプタのまま実行する。permission-mode の概念が無い研究系ハーネスなどはこの既定のまま）。

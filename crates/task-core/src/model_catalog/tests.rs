@@ -1,5 +1,7 @@
 use super::*;
+use crate::Tier;
 use crate::model::Event;
+use crate::model_catalog::assignments::{AssignmentState, RoleAssignmentReader};
 use crate::{ModelCatalogStore, SqliteStore, TaskStore};
 
 fn models(ids: &[&str]) -> Vec<DiscoveredModel> {
@@ -160,4 +162,110 @@ fn failure_is_recorded_without_touching_catalog() {
     assert!(!rec[0].ok);
     assert_eq!(rec[0].error.as_deref(), Some("HTTP 500"));
     assert_eq!(rec[0].at, 20);
+}
+
+fn assignment_events(store: &SqliteStore) -> Vec<Event> {
+    store
+        .events_since(0, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|r| matches!(r.event, Event::ModelRoleAssignmentChanged { .. }))
+        .map(|r| r.event)
+        .collect()
+}
+
+/// ADR 2026-10-06 model-role-assignments D1/D6: set は upsert で event を残し、delete は無ければ false。
+#[test]
+fn role_assignment_set_and_delete_append_events() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let src = CatalogSource::new("opencode-go");
+    let a = store
+        .model_role_assignment_set(&src, Tier::Cheap, "glm-5", Some("n"), "admin", 10)
+        .unwrap();
+    assert_eq!(a.model_id, "glm-5");
+    store
+        .model_role_assignment_set(&src, Tier::Cheap, "kimi", None, "admin", 20)
+        .unwrap();
+    let rows = store.model_role_assignments().unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].model_id, "kimi");
+    assert_eq!(rows[0].note, None);
+    assert_eq!(rows[0].updated_at, 20);
+
+    assert!(
+        store
+            .model_role_assignment_delete(&src, Tier::Cheap, "admin", 30)
+            .unwrap()
+    );
+    assert!(
+        !store
+            .model_role_assignment_delete(&src, Tier::Cheap, "admin", 31)
+            .unwrap()
+    );
+    assert!(store.model_role_assignments().unwrap().is_empty());
+
+    let events = assignment_events(&store);
+    assert_eq!(events.len(), 3);
+    let tuple = |e: &Event| match e {
+        Event::ModelRoleAssignmentChanged {
+            model_id, previous, ..
+        } => (model_id.clone(), previous.clone()),
+        _ => (None, None),
+    };
+    assert_eq!(tuple(&events[0]), (Some("glm-5".into()), None));
+    assert_eq!(
+        tuple(&events[1]),
+        (Some("kimi".into()), Some("glm-5".into()))
+    );
+    assert_eq!(tuple(&events[2]), (None, Some("kimi".into())));
+}
+
+/// catalog の反映・上書きの変更は割り当て表を触らない。view は実効の状態を返す。
+#[test]
+fn role_assignments_survive_catalog_changes_and_view_reflects_them() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let src = CatalogSource::new("opencode-go");
+    store
+        .model_catalog_apply(&src, &models(&["a", "b"]), 10)
+        .unwrap();
+    store
+        .model_role_assignment_set(&src, Tier::Frontier, "a", None, "admin", 11)
+        .unwrap();
+    store
+        .model_role_assignment_set(&src, Tier::Cheap, "b", None, "admin", 11)
+        .unwrap();
+    // a が消え、b は disabled になる。
+    store
+        .model_catalog_apply(&src, &models(&["b"]), 20)
+        .unwrap();
+    let ov = CatalogOverride {
+        disabled: true,
+        ..CatalogOverride::default()
+    };
+    store
+        .model_catalog_set_override(&src, "b", &ov, 21)
+        .unwrap();
+    assert_eq!(store.model_role_assignments().unwrap().len(), 2);
+    let view = store.model_role_assignment_view().unwrap();
+    assert_eq!(
+        view.get("opencode-go", Tier::Frontier).map(|a| a.state),
+        Some(AssignmentState::Excluded {
+            reason: "catalog:unavailable"
+        })
+    );
+    assert_eq!(
+        view.get("opencode-go", Tier::Cheap).map(|a| a.state),
+        Some(AssignmentState::Excluded {
+            reason: "override:disabled"
+        })
+    );
+    // 上書きを消しても割り当ては残り、b は Assigned に戻る。
+    store.model_catalog_delete_override(&src, "b").unwrap();
+    assert_eq!(store.model_role_assignments().unwrap().len(), 2);
+    let reader: &dyn RoleAssignmentReader = &store;
+    let view = reader.assignment_view().unwrap();
+    assert_eq!(
+        view.get("opencode-go", Tier::Cheap).map(|a| a.state),
+        Some(AssignmentState::Assigned)
+    );
 }

@@ -269,7 +269,7 @@ mod tests {
 
         let store = SqliteStore::open(&path).unwrap();
         assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-        assert_eq!(crate::SCHEMA_VERSION, 52);
+        assert_eq!(crate::SCHEMA_VERSION, 53);
         let conn = Connection::open(&path).unwrap();
         let mut stmt = conn
             .prepare("SELECT version FROM schema_migrations ORDER BY version")
@@ -282,7 +282,7 @@ mod tests {
         assert_eq!(
             versions,
             (1..=37)
-                .chain([41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 52])
+                .chain([41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 52, 53])
                 .collect::<Vec<u32>>()
         );
         let mut stmt = conn.prepare("PRAGMA table_info(deliveries)").unwrap();

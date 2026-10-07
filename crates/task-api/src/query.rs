@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 67] = [
+pub(crate) const EVENT_TYPES: [&str; 68] = [
     "browser_updated",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
@@ -244,6 +244,8 @@ pub(crate) const EVENT_TYPES: [&str; 67] = [
     "integration_answered",
     // ADR 2026-10-06 D4: モデル catalog の変化（疑似 task の列）。
     "model_catalog_changed",
+    // ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更。
+    "model_role_assignment_changed",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -321,6 +323,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::IntegrationRequested { .. } => "integration_requested",
         Event::IntegrationAnswered { .. } => "integration_answered",
         Event::ModelCatalogChanged { .. } => "model_catalog_changed",
+        Event::ModelRoleAssignmentChanged { .. } => "model_role_assignment_changed",
     }
 }
 

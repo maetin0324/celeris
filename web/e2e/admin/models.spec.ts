@@ -34,7 +34,7 @@ test.describe("models", () => {
     const gone = page.locator('[data-model-state="消失"]');
     await expect(gone).toHaveCount(1);
     await expect(gone).toContainText("retired-model");
-    await expect(page.getByRole("row", { name: /qwen3-coder/ })).toContainText("固定 cheap");
+    await expect(page.getByRole("row", { name: /claude-opus-4 Claude Opus 4/ })).toContainText("割り当て frontier");
   });
 
   test("発見を実行すると最終発見と最終確認が更新される", async ({ page }) => {
@@ -49,23 +49,62 @@ test.describe("models", () => {
     await expect(section.getByRole("row", { name: /glm-5/ })).not.toHaveText(before);
   });
 
-  test("上書きの drawer で tier を固定でき、消すと戻る", async ({ page }) => {
+  test("上書きの drawer で別名を設定でき、消すと戻る", async ({ page }) => {
     await page.goto(`${gateway.base}/models`);
     await page.getByRole("button", { name: "上書きを編集 kimi-k2" }).click();
     const drawer = page.getByRole("dialog", { name: /上書き: kimi-k2/ });
-    await drawer.getByLabel("tier を固定").selectOption("frontier");
+    await expect(drawer.getByLabel("tier を固定")).toHaveCount(0);
     await drawer.getByLabel("別名（alias）").fill("kimi");
     await drawer.getByRole("button", { name: "上書きを保存" }).click();
     await expect(drawer).toBeHidden();
     const row = page.getByRole("row", { name: /kimi-k2/ });
-    await expect(row).toContainText("固定 frontier");
     await expect(row).toContainText("別名: kimi");
     await page.getByRole("button", { name: "上書きを編集 kimi-k2" }).click();
     await page
       .getByRole("dialog", { name: /上書き: kimi-k2/ })
       .getByRole("button", { name: "上書きを消す" })
       .click();
-    await expect(page.getByRole("row", { name: /kimi-k2/ })).not.toContainText("固定");
+    await expect(page.getByRole("row", { name: /kimi-k2/ })).not.toContainText("別名");
+  });
+
+  test("役割の割り当て: 由来 badge・除外理由・opencode-go の未設定を出す", async ({ page }) => {
+    await page.goto(`${gateway.base}/models`);
+    await expect(page.getByRole("heading", { level: 2, name: "役割の割り当て" })).toBeVisible();
+    const claude = page.locator('[data-assignment-source="claude-oauth"]');
+    await expect(claude.locator('[data-role-tier="frontier"]')).toContainText("割り当て");
+    await expect(claude.locator('[data-role-tier="standard"]')).toContainText("config");
+    await expect(claude.locator('[data-role-tier="cheap"]')).toContainText("catalog:unavailable");
+    await expect(claude).toContainText("残り 60%");
+    const go = page.locator('[data-assignment-source="opencode-go"]');
+    await expect(go.locator('[data-role-tier="frontier"]')).toContainText("未設定");
+    await expect(go).toContainText("残り 25%");
+  });
+
+  test("役割の変更: 影響を確認してから割り当て、解除で config に戻る", async ({ page }) => {
+    await page.goto(`${gateway.base}/models`);
+    const claude = page.locator('[data-assignment-source="claude-oauth"]');
+    await claude.getByRole("button", { name: "standard を変更" }).click();
+    const drawer = page.getByRole("dialog", { name: /役割の変更: standard/ });
+    await drawer.getByLabel("モデル").selectOption("claude-opus-4");
+    await expect(drawer.getByRole("button", { name: "割り当てる" })).toHaveCount(0);
+    await drawer.getByRole("button", { name: "影響を確認" }).click();
+    await expect(drawer.getByRole("list", { name: "影響" })).toContainText("claude-sonnet-4 → claude-opus-4");
+    await drawer.getByRole("button", { name: "割り当てる" }).click();
+    await expect(drawer).toBeHidden();
+    const row = claude.locator('[data-role-tier="standard"]');
+    await expect(row).toContainText("claude-opus-4");
+    await expect(row).toContainText("割り当て");
+    await row.getByRole("button", { name: "standard を解除" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "standard の割り当てを解除" }).click();
+    await expect(row).toContainText("claude-sonnet-4");
+    await expect(row).toContainText("config");
+  });
+
+  test("opencode go を使う: provider を追加するとボタンが消える", async ({ page }) => {
+    await page.goto(`${gateway.base}/models`);
+    await page.getByRole("button", { name: "opencode go を使う（provider を追加）" }).click();
+    await page.getByRole("alertdialog").getByRole("button", { name: "provider opencode-go を追加" }).click();
+    await expect(page.getByRole("button", { name: "opencode go を使う（provider を追加）" })).toHaveCount(0);
   });
 
   test("360px で横に溢れない", async ({ page }) => {

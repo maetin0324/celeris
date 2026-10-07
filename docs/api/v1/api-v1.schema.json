@@ -10614,6 +10614,45 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。\n`model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。\n`catalog_event_task_id()` の疑似 task の列に追記する。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "model_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": {
+              "const": "model_role_assignment_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "tier",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {

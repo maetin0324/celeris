@@ -164,6 +164,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   knowledge_curation_applied: { sets: ["T", "N"] },
   // ADR 2026-10-06 opencode-go-and-model-catalog D4: catalog の入れ替わり。モデル一覧と providers（routing catalog）を古くする。
   model_catalog_changed: { sets: ["llmModels", "providers"] },
+  // ADR 2026-10-06 model-role-assignments D2: 役割の割り当ての変更。assignments と models は同じ key 配下（llm-models）。
+  model_role_assignment_changed: { sets: ["llmModels", "providers"] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。

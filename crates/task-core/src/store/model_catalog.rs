@@ -10,6 +10,9 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 
 use crate::Tier;
 use crate::model::Event;
+use crate::model_catalog::assignments::{
+    AssignmentView, RoleAssignment, RoleAssignmentReader, tier_from_str, tier_str,
+};
 use crate::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource,
     DiscoveredModel, DiscoveryRecord, catalog_event_task_id,
@@ -17,22 +20,7 @@ use crate::model_catalog::{
 
 use super::{SqliteStore, StoreError};
 
-fn tier_to_str(tier: Tier) -> &'static str {
-    match tier {
-        Tier::Frontier => "frontier",
-        Tier::Standard => "standard",
-        Tier::Cheap => "cheap",
-    }
-}
-
-fn tier_from_str(s: &str) -> Option<Tier> {
-    match s {
-        "frontier" => Some(Tier::Frontier),
-        "standard" => Some(Tier::Standard),
-        "cheap" => Some(Tier::Cheap),
-        _ => None,
-    }
-}
+use tier_str as tier_to_str;
 
 fn parse_caps(json: &str) -> serde_json::Value {
     serde_json::from_str(json).unwrap_or_else(|_| serde_json::json!({}))
@@ -131,6 +119,69 @@ pub trait ModelCatalogStore: Send + Sync {
         source: &CatalogSource,
         model_id: &str,
     ) -> Result<bool, StoreError>;
+    /// ADR 2026-10-06 model-role-assignments D1: 全割り当て（source・tier 昇順）。
+    fn model_role_assignments(&self) -> Result<Vec<RoleAssignment>, StoreError>;
+    /// 割り当てを置く（あれば置き換える）。同じトランザクションで `Event::ModelRoleAssignmentChanged`
+    /// （`previous` は置き換え前の model_id）を catalog の疑似 task に追記する。catalog の自動更新は
+    /// この表を触らない。
+    fn model_role_assignment_set(
+        &self,
+        source: &CatalogSource,
+        tier: Tier,
+        model_id: &str,
+        note: Option<&str>,
+        actor: &str,
+        now: i64,
+    ) -> Result<RoleAssignment, StoreError>;
+    /// 割り当てを外す。行が無ければ `Ok(false)`（event も書かない）。外したら
+    /// `model_id: None, previous: Some(旧)` の event を同じトランザクションで追記する。
+    fn model_role_assignment_delete(
+        &self,
+        source: &CatalogSource,
+        tier: Tier,
+        actor: &str,
+        now: i64,
+    ) -> Result<bool, StoreError>;
+    /// 3 表（割り当て・catalog・上書き）から実効の view を組む（D2）。
+    fn model_role_assignment_view(&self) -> Result<AssignmentView, StoreError>;
+}
+
+fn assignment_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RoleAssignment>> {
+    let tier: String = r.get(1)?;
+    let Some(tier) = tier_from_str(&tier) else {
+        return Ok(None);
+    };
+    Ok(Some(RoleAssignment {
+        source: CatalogSource(r.get(0)?),
+        tier,
+        model_id: r.get(2)?,
+        note: r.get(3)?,
+        updated_at: r.get(4)?,
+        updated_by: r.get(5)?,
+    }))
+}
+
+const ASSIGNMENT_COLUMNS: &str = "source, tier, model_id, note, updated_at, updated_by";
+
+fn read_assignments(conn: &Connection) -> Result<Vec<RoleAssignment>, StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {ASSIGNMENT_COLUMNS} FROM model_role_assignments ORDER BY source ASC, tier ASC"
+    ))?;
+    let rows = stmt.query_map([], assignment_from_row)?;
+    let mut out = Vec::new();
+    for row in rows {
+        // 知らない tier 名の行（手書きなど）は読み飛ばす。
+        if let Some(a) = row? {
+            out.push(a);
+        }
+    }
+    Ok(out)
+}
+
+impl RoleAssignmentReader for SqliteStore {
+    fn assignment_view(&self) -> Result<AssignmentView, String> {
+        self.model_role_assignment_view().map_err(|e| e.to_string())
+    }
 }
 
 impl ModelCatalogStore for SqliteStore {
@@ -322,6 +373,112 @@ impl ModelCatalogStore for SqliteStore {
             params![source.as_str(), model_id],
         )?;
         Ok(n > 0)
+    }
+
+    fn model_role_assignments(&self) -> Result<Vec<RoleAssignment>, StoreError> {
+        self.with_read_conn(read_assignments)
+    }
+
+    fn model_role_assignment_set(
+        &self,
+        source: &CatalogSource,
+        tier: Tier,
+        model_id: &str,
+        note: Option<&str>,
+        actor: &str,
+        now: i64,
+    ) -> Result<RoleAssignment, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+                params![source.as_str(), tier_str(tier)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.execute(
+            "INSERT INTO model_role_assignments (source, tier, model_id, note, updated_at, \
+             updated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(source, tier) DO UPDATE SET model_id = ?3, note = ?4, updated_at = ?5, \
+             updated_by = ?6",
+            params![source.as_str(), tier_str(tier), model_id, note, now, actor],
+        )?;
+        Self::append_event_tx(
+            &tx,
+            catalog_event_task_id(),
+            &Event::ModelRoleAssignmentChanged {
+                source: source.0.clone(),
+                tier,
+                model_id: Some(model_id.to_string()),
+                previous,
+                actor: actor.to_string(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(RoleAssignment {
+            source: source.clone(),
+            tier,
+            model_id: model_id.to_string(),
+            note: note.map(str::to_string),
+            updated_at: now,
+            updated_by: actor.to_string(),
+        })
+    }
+
+    fn model_role_assignment_delete(
+        &self,
+        source: &CatalogSource,
+        tier: Tier,
+        actor: &str,
+        _now: i64,
+    ) -> Result<bool, StoreError> {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+                params![source.as_str(), tier_str(tier)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(previous) = previous else {
+            return Ok(false);
+        };
+        tx.execute(
+            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        Self::append_event_tx(
+            &tx,
+            catalog_event_task_id(),
+            &Event::ModelRoleAssignmentChanged {
+                source: source.0.clone(),
+                tier,
+                model_id: None,
+                previous: Some(previous),
+                actor: actor.to_string(),
+            },
+        )?;
+        tx.commit()?;
+        Ok(true)
+    }
+
+    fn model_role_assignment_view(&self) -> Result<AssignmentView, StoreError> {
+        self.with_read_conn(|conn| {
+            let assignments = read_assignments(conn)?;
+            let entries = read_entries(conn)?;
+            let mut stmt = conn.prepare(&format!(
+                "SELECT {OVERRIDE_COLUMNS} FROM model_catalog_overrides \
+                 ORDER BY source ASC, model_id ASC"
+            ))?;
+            let rows = stmt.query_map([], override_from_row)?;
+            let mut overrides = Vec::new();
+            for row in rows {
+                overrides.push(row?);
+            }
+            Ok(AssignmentView::build(&assignments, &entries, &overrides))
+        })
     }
 
     /// source ごとの最終発見記録（source 昇順）。

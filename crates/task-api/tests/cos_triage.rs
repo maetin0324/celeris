@@ -787,3 +787,72 @@ async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
     }
     assert_eq!(item_state(&env, &notice), "pending");
 }
+
+/// ADR 2026-10-07-cos-inbox-thread-conversation D3: a human instruction written in the inbox
+/// thread is relayed through `/cos/operations` with `instructed_by`; the operation records the
+/// instruction, the explicit human_required refusal is waived, and the domain path is the one a
+/// human answer would take. Without `instructed_by` the same relay is refused like a direct call.
+#[tokio::test]
+async fn cos_chat_inbox_thread_instructed_by_relays_the_human_answer() {
+    let env = admin_env();
+    let app = env.router();
+    let (task, inbox_id) = decision_wait(&env, "dec-h", &["human_required"]);
+    let item = ingest(&env, "inbox", &inbox_id, "r1", 0);
+    let (thread, _r, bearer) = cos_bearer(&env, "relay");
+    let headers = [("authorization", bearer.as_str())];
+    let (human_message, human_seq): (String, i64) = db(&env)
+        .query_row(
+            "SELECT id,seq FROM chat_messages WHERE thread_id=?1 AND role='user'",
+            [&thread],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .expect("human message");
+    let relay = |key: &str, instructed_by: Value| {
+        json!({
+            "idempotency_key": key,
+            "expected_revision": null,
+            "reason": "(b) にして、ただし host 1 台だけで",
+            "policy_version": "1",
+            "instructed_by": instructed_by,
+            "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{inbox_id}/answer"),
+                        "body": {"option": "manual", "note": "host 1 台だけ"}},
+        })
+    };
+
+    // Without an instruction the human_required wait is refused (same as a direct call).
+    let resp = send(&app, post_json_with(OPS, &relay("k-no-instruction", Value::Null), &headers)).await;
+    assert_problem(&resp, 403, "cos_human_required");
+    assert!(decision_answered_by(&env, &task).is_empty());
+
+    // An instruction must be a human message of this thread.
+    let resp = send(&app, post_json_with(OPS, &relay("k-bad", json!("not-a-message")), &headers)).await;
+    assert_problem(&resp, 422, "cos_instruction_invalid");
+    assert!(decision_answered_by(&env, &task).is_empty());
+
+    // With the human's message the relay applies through the decision's own domain path.
+    let resp = send(&app, post_json_with(OPS, &relay("k-relay", json!(human_message)), &headers)).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let op: Value = resp.json()["operation"].clone();
+    assert_eq!(op["state"], "applied");
+    assert_eq!(op["action"], "decision.answer");
+    assert_eq!(op["payload"]["instructed_by"]["message_id"], json!(human_message));
+    assert_eq!(op["payload"]["instructed_by"]["seq"], json!(human_seq));
+    let reason = op["reason"].as_str().expect("reason");
+    assert!(
+        reason.starts_with(&format!("人の指示（seq {human_seq}）: ")),
+        "{reason}"
+    );
+    assert_eq!(decision_answered_by(&env, &task).len(), 1);
+    let audit = audit_events(&env, op["id"].as_str().expect("id"));
+    assert!(
+        audit.iter().any(|e| e["state"] == "applied"
+            && e["actor"] == "cos"
+            && e["reason"].as_str().is_some_and(|r| r.contains("人の指示（seq"))),
+        "{audit:?}"
+    );
+    assert_eq!(item_state(&env, &item), "pending", "the triage item is not CoS's outcome");
+
+    // A closed wait is a conflict, recorded as rejected.
+    let resp = send(&app, post_json_with(OPS, &relay("k-again", json!(human_message)), &headers)).await;
+    assert_problem(&resp, 409, "cos_revision_conflict");
+}

@@ -237,6 +237,53 @@ fn handoff_key(item_id: &str) -> String {
     format!("cos-fallback:{item_id}")
 }
 
+/// The hand-off line and its card (D2 of the inbox-thread ADR). Pure.
+pub(crate) fn handoff_text(
+    c: &FallbackCandidate,
+    reason: &str,
+    report: Option<&task_core::chat::triage::CosTriageItemReport>,
+) -> (String, ChatCard) {
+    let title = report
+        .map(|r| r.title())
+        .unwrap_or_else(|| format!("{}:{}", c.source_kind, c.source_key));
+    let kind = super::digest::kind_label(&c.source_kind);
+    let decision = report.and_then(|r| r.decision.as_ref());
+    let mut text = format!(
+        "{COS_FALLBACK_HEADLINE}: 「{title}」（{kind}）は人へ委ねた（{reason}）。CoS はこの件を再送・代答しない。"
+    );
+    let mut href = "/inbox".to_owned();
+    if let Some(d) = decision {
+        let point = if d.summary.is_empty() {
+            title.clone()
+        } else {
+            d.summary.clone()
+        };
+        text.push_str(&format!("\n決めること: {point}"));
+        if !d.options.is_empty() {
+            let labels: Vec<&str> = d.options.iter().map(|o| o.label.as_str()).collect();
+            text.push_str(&format!("\n選択肢: {}", labels.join(" / ")));
+        } else {
+            text.push_str("\n選択肢: （自由文。web で回答）");
+        }
+        if !d.web_path.is_empty() {
+            text.push_str(&format!("\n回答: {}", d.web_path));
+            href = d.web_path.clone();
+        }
+    }
+    let card = ChatCard {
+        kind: super::triage::card_kind(&c.source_kind),
+        id: c.source_key.clone(),
+        title,
+        // Still an open wait of the person: answerable from the card.
+        state: "pending".into(),
+        href,
+        actor: ChatActor::System,
+        reason: Some(reason.to_owned()),
+        operation_id: None,
+    };
+    (text, card)
+}
+
 impl CosChatLaunch {
     /// One fallback pass. Errors are logged per item and retried next tick;
     /// they never create a new wait.
@@ -340,7 +387,9 @@ impl CosChatLaunch {
         }
     }
 
-    /// D6: the next CoS session sees the item as already with the person.
+    /// D6: the next CoS session sees the item as already with the person. ADR
+    /// 2026-10-07-cos-inbox-thread-conversation D2: the line names the wait and what the
+    /// person must decide; the card stays answerable while the wait is open.
     fn handoff_message(&mut self, c: &FallbackCandidate, reason: &str, now: OffsetDateTime) {
         let thread = match self.inbox_thread() {
             Ok(Some(thread)) => thread,
@@ -350,20 +399,8 @@ impl CosChatLaunch {
                 return;
             }
         };
-        let card = ChatCard {
-            kind: super::triage::card_kind(&c.source_kind),
-            id: c.source_key.clone(),
-            title: format!("{} (revision {})", c.source_key, c.source_revision),
-            state: "fallback".into(),
-            href: "/inbox".into(),
-            actor: ChatActor::System,
-            reason: Some(reason.to_owned()),
-            operation_id: None,
-        };
-        let text = format!(
-            "{COS_FALLBACK_HEADLINE}: item_id={} は人へ委ね済み。CoS はこの revision を再送・代答しない。",
-            c.item_id
-        );
+        let report = self.store.cos_triage_item_report(&c.item_id).ok().flatten();
+        let (text, card) = handoff_text(c, reason, report.as_ref());
         if let Err(error) = self.store.chat_system_message_add_once(
             &thread,
             &handoff_key(&c.item_id),

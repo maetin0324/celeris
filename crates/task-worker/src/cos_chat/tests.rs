@@ -86,6 +86,7 @@ fn chat() -> CosChatContext {
         skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
         credential_env: COS_RUN_CREDENTIAL_ENV.into(),
         api_base_url: "http://127.0.0.1:7070/api/v1".into(),
+        inbox_items: vec![],
     }
 }
 
@@ -399,4 +400,50 @@ async fn cos_chat_run_proto_credential_value_stays_out_of_request_json_and_promp
     let p = prompt(&req);
     assert!(!p.contains(SECRET));
     assert!(p.contains(&format!("`${COS_RUN_CREDENTIAL_ENV}`")));
+}
+
+#[test]
+fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
+    use crate::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInboxOption};
+    let mut c = chat();
+    assert!(
+        !prompt(&request(Path::new("/tmp/w"), Some(c.clone()))).contains("受信箱の未解決の件"),
+        "no section outside the inbox thread"
+    );
+    c.inbox_items = vec![CosChatInboxItem {
+        item_id: "i1".into(),
+        source_kind: "question".into(),
+        source_key: "q1".into(),
+        source_revision: "r1".into(),
+        state: "escalated".into(),
+        summary: "公開前の確認".into(),
+        reason: Some("外部公開なので人の判断".into()),
+        created_at: "2026-10-07T00:00:00.000Z".into(),
+        decision: Some(CosChatInboxDecision {
+            summary: "公開してよいか".into(),
+            options: vec![
+                CosChatInboxOption {
+                    key: "publish".into(),
+                    label: "公開する".into(),
+                },
+                CosChatInboxOption {
+                    key: "hold".into(),
+                    label: "保留".into(),
+                },
+            ],
+            recommended: Some("hold".into()),
+            recommendation_reason: Some("公開先が未確認".into()),
+            web_path: "/tasks/t1".into(),
+        }),
+        answer_path: Some("/api/v1/inbox/items/q1/answer".into()),
+    }];
+    let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
+    assert!(p.contains("## 受信箱の未解決の件"), "{p}");
+    assert!(p.contains("item i1 [人待ち（CoS が人に回した）] question: 「公開前の確認」"), "{p}");
+    assert!(p.contains("CoS の理由: 外部公開なので人の判断"), "{p}");
+    assert!(p.contains("決めること: 公開してよいか"), "{p}");
+    assert!(p.contains("選択肢: 公開する (key `publish`) / 保留 (key `hold`, 推奨)"), "{p}");
+    assert!(p.contains("回答の経路: POST /api/v1/inbox/items/q1/answer"), "{p}");
+    assert!(p.contains("\"instructed_by\":\"<message id>\""), "{p}");
+    assert!(p.contains("operation を出さずに返事で聞き返す"), "{p}");
 }

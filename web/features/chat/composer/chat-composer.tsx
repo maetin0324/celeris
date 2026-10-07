@@ -20,13 +20,18 @@ export type ChatComposerProps = {
   session: ChatSession;
   snapshot: ChatSessionSnapshot;
   uploadApi?: UploadApi;
+  /** 入力欄の placeholder（受信箱 thread では件について聞く・指示する場所であることを示す）。 */
+  placeholder?: string;
 };
+
+/** ADR 2026-10-07-cos-inbox-thread-conversation D5: 受信箱 thread の composer の placeholder。 */
+export const INBOX_COMPOSER_PLACEHOLDER = "受信箱の件について CoS に聞く・指示する";
 
 function bytes(size: number) {
   return size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KiB`;
 }
 
-export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatComposerProps) {
+export function ChatComposer({ threadId, session, snapshot, uploadApi, placeholder }: ChatComposerProps) {
   const queue = useMemo(() => createUploadQueue(threadId, uploadApi), [threadId, uploadApi]);
   const uploads = useSyncExternalStore(queue.subscribe, queue.getSnapshot, queue.getSnapshot);
   const [text, setText] = useState("");
@@ -230,6 +235,7 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
         </Button>
         <textarea
           aria-label="CoS へのメッセージ"
+          placeholder={placeholder}
           value={text}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={keyDown}

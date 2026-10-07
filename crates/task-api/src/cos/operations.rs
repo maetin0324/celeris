@@ -58,7 +58,13 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/chat/attachments/{id}/references",
         "attachment.reference",
     ),
+    // ADR 2026-10-07-cos-inbox-thread-conversation D3: a human instruction relayed to the wait
+    // the person answers in the inbox; delegated to the domain path like a human answer.
+    ("POST", "/api/v1/inbox/items/{id}/answer", "inbox.answer"),
 ];
+
+/// Problem code of an `instructed_by` that is not a human message of the caller's thread.
+pub const INSTRUCTION_INVALID: &str = "cos_instruction_invalid";
 
 /// Longest path recorded on a rejection (`target_id`); longer input is truncated.
 const MAX_RECORDED_PATH: usize = 512;
@@ -200,6 +206,11 @@ pub struct OperationBody {
     reason: String,
     policy_version: String,
     request: OperationRequest,
+    /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message (same
+    /// thread, `role=user`) this operation relays. Recorded in the payload and the audit reason;
+    /// waives the explicit human_required refusal (the person decided, CoS only relays).
+    #[serde(default)]
+    instructed_by: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -411,7 +422,7 @@ async fn create_operation(
     }
     let method = req.request.method.to_ascii_uppercase();
     let path = req.request.path.clone();
-    let audit = OperationAudit {
+    let mut audit = OperationAudit {
         ctx: AuditContext {
             actor: ChatActor::Cos,
             thread_id: caller.thread_id.clone(),
@@ -430,11 +441,33 @@ async fn create_operation(
         }),
         item: None,
     };
-    let env = DispatchEnv::of(&state);
-    let human_required = match match_operation(&method, &path) {
-        Ok(matched) => super::inbox::human_required_for_operation(&state, &matched, &path).await?,
-        Err(_) => None,
+    let mut env = DispatchEnv::of(&state);
+    let matched = match_operation(&method, &path).ok();
+    let mut human_required = match &matched {
+        Some(matched) => {
+            super::inbox::human_required_for_operation(&state, matched, &path).await?
+        }
+        None => None,
     };
+    if matched.as_ref().is_some_and(|m| m.action == "inbox.answer") {
+        // The delegated domain path decides human_required, exactly as a direct call would.
+        let feed = crate::inbox_notifications::human_feed(&state).await?;
+        if let Some(found) = matched
+            .as_ref()
+            .and_then(|m| m.id.as_deref())
+            .and_then(|id| feed.items.iter().find(|item| item.id == id))
+            && let Ok(input) = serde_json::from_value::<crate::inbox_notifications::InboxAnswerBody>(
+                req.request.body.clone(),
+            )
+            && let Ok((dm, dp, _)) = crate::inbox_notifications::delegated_request(found, &input)
+            && let Ok(delegated) = match_operation(dm.as_str(), &dp)
+        {
+            human_required =
+                super::inbox::human_required_for_operation(&state, &delegated, &dp).await?;
+        }
+        env.inbox_feed = Some(std::sync::Arc::new(feed.items));
+    }
+    let instructed_by = req.instructed_by.clone();
     let operation = state
         .blocking(move |store| {
             if let Some(existing) = store
@@ -449,6 +482,48 @@ async fn create_operation(
                     ));
                 }
                 return Ok(existing);
+            }
+            if let Some(message_id) = instructed_by.as_deref() {
+                // D3: the instruction must be a human message of this very thread.
+                let message = match store.chat_message_get(&audit.ctx.thread_id, message_id) {
+                    Ok(message) if message.role == task_core::chat::ChatMessageRole::User => {
+                        message
+                    }
+                    Ok(_) => {
+                        return Err(audit.reject(
+                            store,
+                            "api",
+                            &path,
+                            unprocessable(
+                                INSTRUCTION_INVALID,
+                                format!("instructed_by {message_id} is not a human message"),
+                            ),
+                        ));
+                    }
+                    Err(_) => {
+                        return Err(audit.reject(
+                            store,
+                            "api",
+                            &path,
+                            unprocessable(
+                                INSTRUCTION_INVALID,
+                                format!(
+                                    "instructed_by {message_id} is not a message of thread {}",
+                                    audit.ctx.thread_id
+                                ),
+                            ),
+                        ));
+                    }
+                };
+                audit.ctx.reason = format!("人の指示（seq {}）: {}", message.seq, audit.ctx.reason);
+                if let Value::Object(payload) = &mut audit.payload {
+                    payload.insert(
+                        "instructed_by".into(),
+                        serde_json::json!({"message_id": message.id, "seq": message.seq}),
+                    );
+                }
+                // The person decided; CoS only relays. The domain validation still applies.
+                human_required = None;
             }
             if let Some(why) = human_required {
                 return Err(audit.reject(
@@ -471,6 +546,8 @@ pub(crate) struct DispatchEnv {
     roles: Vec<task_core::RoleSpec>,
     genres: Vec<task_core::GenreSpec>,
     kb_root: Result<std::path::PathBuf, ApiProblem>,
+    /// The derived human inbox, when the operation is `inbox.answer` (built before blocking).
+    inbox_feed: Option<std::sync::Arc<Vec<task_ops::human_inbox::InboxItem>>>,
 }
 
 impl DispatchEnv {
@@ -479,6 +556,7 @@ impl DispatchEnv {
             roles: state.inner.roles.clone(),
             genres: state.inner.genres.clone(),
             kb_root: crate::knowledge::root_of(state),
+            inbox_feed: None,
         }
     }
 }
@@ -641,6 +719,31 @@ pub(crate) fn dispatch(
                 input,
                 audit,
             )
+        }
+        "inbox.answer" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let input: crate::inbox_notifications::InboxAnswerBody =
+                serde_json::from_value(body).map_err(decode)?;
+            let found = env
+                .inbox_feed
+                .as_ref()
+                .and_then(|items| items.iter().find(|item| item.id == raw_id))
+                .ok_or_else(|| {
+                    audit.reject(
+                        store,
+                        "inbox_item",
+                        &raw_id,
+                        ApiProblem::new(
+                            StatusCode::CONFLICT,
+                            "cos_revision_conflict",
+                            format!("inbox item {raw_id} is not open (answered or changed)"),
+                        ),
+                    )
+                })?;
+            let (dm, dp, domain_body) =
+                crate::inbox_notifications::delegated_request(found, &input)
+                    .map_err(|problem| audit.reject(store, "inbox_item", &raw_id, problem))?;
+            dispatch(store, env, audit, dm.as_str(), &dp, domain_body)
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation"

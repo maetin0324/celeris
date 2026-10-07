@@ -792,6 +792,13 @@
           ],
           "description": "Abilities confirmed by the active adapter for this run. Absent means unconfirmed, not\nthat a configured harness can already deliver an image or use a tool."
         },
+        "inbox_items": {
+          "description": "ADR 2026-10-07-cos-inbox-thread-conversation D3: the unresolved inbox items (newest first)\nwhen this run is in the inbox thread. Empty in every other thread.",
+          "items": {
+            "$ref": "#/$defs/CosChatInboxItem"
+          },
+          "type": "array"
+        },
         "inputs": {
           "description": "The input messages this run must handle, in delivery order (an interrupt first).\nDelivery is recorded by `chat_runs.input_message_id` and the message state, not here.",
           "items": {
@@ -910,6 +917,121 @@
         "seq",
         "role",
         "text"
+      ],
+      "type": "object"
+    },
+    "CosChatInboxDecision": {
+      "description": "The decision packet of a routed item.",
+      "properties": {
+        "options": {
+          "items": {
+            "$ref": "#/$defs/CosChatInboxOption"
+          },
+          "type": "array"
+        },
+        "recommendation_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recommended": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "web_path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "web_path"
+      ],
+      "type": "object"
+    },
+    "CosChatInboxItem": {
+      "description": "One unresolved item of the CoS inbox (`cos_inbox_items`), as context for a run in the inbox\nthread (ADR 2026-10-07-cos-inbox-thread-conversation D3).",
+      "properties": {
+        "answer_path": {
+          "description": "Same-app API path a human instruction is relayed to through `/cos/operations`\n(`POST /api/v1/inbox/items/{source_key}/answer`); absent for notices.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CosChatInboxDecision"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "What the person must decide (from the escalation / fallback packet), if routed."
+        },
+        "item_id": {
+          "description": "`cos_inbox_items.id` (the triage item; `/cos/inbox/{i}/resolve` while `pending`/`running`).",
+          "type": "string"
+        },
+        "reason": {
+          "description": "CoS's recorded reason for the outcome, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_key": {
+          "description": "The id of the original wait (the human inbox item id for inbox sources).",
+          "type": "string"
+        },
+        "source_kind": {
+          "description": "`decision` / `question` / `authorization` / `plan_gate` / `phase_gate` / `notice` / …",
+          "type": "string"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "state": {
+          "description": "`escalated` (waiting on the person), `fallback` (handed over without CoS), `pending` /\n`running` (not judged yet).",
+          "type": "string"
+        },
+        "summary": {
+          "description": "The title of the wait as ingested.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "item_id",
+        "source_kind",
+        "source_key",
+        "source_revision",
+        "state",
+        "summary",
+        "created_at"
+      ],
+      "type": "object"
+    },
+    "CosChatInboxOption": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "label"
       ],
       "type": "object"
     },

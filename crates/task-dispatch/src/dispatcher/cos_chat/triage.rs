@@ -85,9 +85,14 @@ pub(crate) struct CosTriageState {
     /// The startup comparison has run in this process.
     reconciled: bool,
     /// Pending items may exist; try one claim when the inbox thread is idle.
-    dirty: bool,
+    pub(super) dirty: bool,
     /// Cached id of the single `kind=inbox` thread.
-    inbox_thread: Option<String>,
+    pub(super) inbox_thread: Option<String>,
+    /// A run of the inbox thread finished (or the process started): write the digests
+    /// of finished triage runs (ADR 2026-10-07-cos-inbox-thread-conversation D1).
+    pub(crate) digest_due: bool,
+    /// A run of the inbox thread was started by this process and may have ended since.
+    pub(crate) inbox_run_live: bool,
 }
 
 impl Dispatcher {
@@ -290,6 +295,7 @@ impl CosChatLaunch {
                 Ok(()) => {
                     self.triage.reconciled = true;
                     self.triage.dirty = true;
+                    self.triage.digest_due = true;
                 }
                 Err(error) => {
                     tracing::warn!(%error, "CoS triage reconcile failed");
@@ -302,6 +308,13 @@ impl CosChatLaunch {
         }
         if let Err(error) = self.triage_notices(now) {
             tracing::warn!(%error, "CoS triage notice intake failed");
+        }
+        // D1 of the inbox-thread ADR: the judgment of each finished triage run as an
+        // assistant message (and the requeue of an interrupted run's items), before the
+        // fallback looks at what is left.
+        if self.triage.digest_due {
+            self.triage.digest_due = false;
+            self.triage_digest(now);
         }
         // D6: LLM-free direct notice for items CoS cannot answer.
         self.triage_fallback(dispatcher, now);

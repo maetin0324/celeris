@@ -4,6 +4,7 @@ import type { ChatAttachment, ChatCard, ChatMessage } from "../../../api/generat
 import { Markdown } from "../../../components/content/markdown";
 import { Button } from "../../../components/ui/button";
 import { cn } from "../../../lib/utils";
+import { pendingHumanCount } from "../cards/card-model";
 import type { DraftMessage, PendingMessage, ToolEntry } from "../data/reducer";
 import { AttachmentList, ToolCallList } from "./parts";
 
@@ -72,6 +73,13 @@ function Body({ speaker, text, streaming }: { speaker: ChatMessage["role"]; text
 
 const roleName: Record<ChatMessage["role"], string> = { user: "あなた", assistant: "CoS", system: "システム" };
 
+/** 折りたたんだ system 行の 1 行目（本文の先頭行。無ければカードの題名の数）。 */
+export function foldedSummary(message: Pick<ChatMessage, "text" | "cards">): string {
+  const first = message.text.split("\n").find((line) => line.trim() !== "") ?? "";
+  if (first !== "") return first;
+  return message.cards.length > 0 ? `${message.cards.length} 件の知らせ` : "システムの記録";
+}
+
 export function MessageItem({
   message,
   streaming,
@@ -86,6 +94,29 @@ export function MessageItem({
   renderCards?: RenderCards;
 }) {
   const note = streaming ? undefined : stateNote[message.state];
+  // ADR 2026-10-07-cos-inbox-thread-conversation D5: a system row with no card waiting on the
+  // person (triage input lines, notices, closed hand-offs) folds into one line so the rows that
+  // need an answer stand out. Rows with a human wait, and every human/CoS message, stay open.
+  if (message.role === "system" && !streaming && pendingHumanCount(message.cards) === 0) {
+    return (
+      <Bubble speaker="system" label={roleName.system}>
+        <details data-slot="chat-system-folded" className="w-full min-w-0 max-w-full">
+          <summary className="cursor-pointer truncate rounded-md bg-muted px-3 py-1 text-label text-muted-foreground">
+            {foldedSummary(message)}
+          </summary>
+          <div className="mt-2 flex min-w-0 flex-col items-center gap-2">
+            <Body speaker="system" text={message.text} />
+            {note ? <p className="text-label text-muted-foreground">{note}</p> : null}
+            {message.cards.length > 0 && renderCards ? (
+              <div data-slot="chat-cards" className="w-full min-w-0">
+                {renderCards(message.cards, message)}
+              </div>
+            ) : null}
+          </div>
+        </details>
+      </Bubble>
+    );
+  }
   return (
     <Bubble speaker={message.role} busy={streaming} label={roleName[message.role]}>
       <ToolCallList tools={tools} />

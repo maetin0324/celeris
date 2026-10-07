@@ -21,6 +21,9 @@ use task_worker::protocol::{
 };
 use time::OffsetDateTime;
 
+use task_core::chat::triage::CosTriageItemReport;
+use task_worker::protocol::{CosChatInboxDecision, CosChatInboxItem, CosChatInboxOption};
+
 use super::attachments::{stage_message_attachments, workspace_dir};
 use super::sink::{ChatClock, ChatRunSink, chat_finish_for};
 use crate::dispatcher::Dispatcher;
@@ -61,6 +64,41 @@ pub(crate) fn path_with_first(
         entries.extend(std::env::split_paths(&inherited).filter(|p| p != dir));
     }
     std::env::join_paths(entries).ok()?.into_string().ok()
+}
+
+/// Open inbox items handed to a run of the inbox thread (newest first).
+const COS_INBOX_CONTEXT_ITEMS: usize = 50;
+
+/// `cos_inbox_items` row → worker context item (no judgment; the packet is copied as recorded).
+pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem {
+    let answer_path = (item.source_kind != super::triage::COS_TRIAGE_NOTICE_KIND)
+        .then(|| format!("/api/v1/inbox/items/{}/answer", item.source_key));
+    let summary = item.title();
+    CosChatInboxItem {
+        item_id: item.item_id,
+        source_kind: item.source_kind,
+        source_key: item.source_key,
+        source_revision: item.source_revision,
+        state: item.state,
+        summary,
+        reason: item.reason,
+        created_at: item.created_at,
+        decision: item.decision.map(|d| CosChatInboxDecision {
+            summary: d.summary,
+            options: d
+                .options
+                .into_iter()
+                .map(|o| CosChatInboxOption {
+                    key: o.key,
+                    label: o.label,
+                })
+                .collect(),
+            recommended: d.recommended,
+            recommendation_reason: d.recommendation_reason,
+            web_path: d.web_path,
+        }),
+        answer_path,
+    }
 }
 
 /// Values resolved from `[cos]` by the daemon, before the dispatcher starts.
@@ -121,6 +159,17 @@ impl Dispatcher {
             return;
         };
         launch.running.retain(|_, handle| !handle.is_finished());
+        if launch.triage.inbox_run_live
+            && !launch
+                .triage
+                .inbox_thread
+                .as_ref()
+                .is_some_and(|thread| launch.running.contains_key(thread))
+        {
+            // The inbox thread's run ended: its digest may be due (cheap DB check).
+            launch.triage.inbox_run_live = false;
+            launch.triage.digest_due = true;
+        }
         launch
             .accounts_in_flight
             .retain(|thread, _| launch.running.contains_key(thread));
@@ -337,6 +386,18 @@ impl CosChatLaunch {
         account: Option<String>,
         now: OffsetDateTime,
     ) -> Result<(), String> {
+        // ADR 2026-10-07-cos-inbox-thread-conversation D3: a run in the inbox thread (triage or
+        // a human message) sees the unresolved items.
+        let inbox_items = if self.inbox_thread()?.as_deref() == Some(thread_id) {
+            self.store
+                .cos_triage_open_items(COS_INBOX_CONTEXT_ITEMS)
+                .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
+                .into_iter()
+                .map(inbox_context_item)
+                .collect()
+        } else {
+            Vec::new()
+        };
         let cfg = &self.config;
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
@@ -460,6 +521,7 @@ impl CosChatLaunch {
             skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
+            inbox_items,
         };
         let budget = task_core::Budget {
             max_turns: cfg.max_turns,
@@ -590,6 +652,9 @@ impl CosChatLaunch {
                 .await;
             }),
         );
+        if self.triage.inbox_thread.as_deref() == Some(thread_id) {
+            self.triage.inbox_run_live = true;
+        }
         if let Some(account) = account {
             self.accounts_in_flight
                 .insert(thread_id.to_owned(), account);

@@ -45,6 +45,7 @@ pub fn cos_chat_section(chat: &CosChatContext) -> String {
     out.push_str(&inputs_section(chat));
     out.push_str(&summary_section(chat));
     out.push_str(&history_section(chat));
+    out.push_str(&inbox_section(chat));
     out.push_str(&attachments_section(chat));
     out.push_str(&skills_section(chat));
     out.push_str(&rules_section(chat));
@@ -126,6 +127,90 @@ fn history_section(chat: &CosChatContext) -> String {
         ));
     }
     out.push('\n');
+    out
+}
+
+/// ADR 2026-10-07-cos-inbox-thread-conversation D3: the unresolved inbox items of the inbox
+/// thread, so a human's free-text instruction can be matched to its item and relayed.
+fn inbox_section(chat: &CosChatContext) -> String {
+    if chat.inbox_items.is_empty() {
+        return String::new();
+    }
+    let api = chat.api_base_url.trim_end_matches('/');
+    let env = &chat.credential_env;
+    fn state_label(state: &str) -> &str {
+        match state {
+            "escalated" => "人待ち（CoS が人に回した）",
+            "fallback" => "人待ち（CoS 不在のため直接通知済み）",
+            "pending" | "running" => "CoS 未処理",
+            other => other,
+        }
+    }
+    let mut out = String::from(
+        "## 受信箱の未解決の件 (open inbox items, newest first)
+         人がこのスレッドに書いた発言は、ここに挙がる件への質問・回答・指示として読む。
+",
+    );
+    for item in &chat.inbox_items {
+        out.push_str(&format!(
+            "- item {} [{}] {}: 「{}」 (source {}:{} rev {}, {})
+",
+            item.item_id,
+            state_label(&item.state),
+            item.source_kind,
+            item.summary,
+            item.source_kind,
+            item.source_key,
+            item.source_revision,
+            item.created_at,
+        ));
+        if let Some(reason) = item.reason.as_deref().filter(|r| !r.trim().is_empty()) {
+            out.push_str(&format!("  CoS の理由: {reason}
+"));
+        }
+        if let Some(d) = &item.decision {
+            if !d.summary.is_empty() {
+                out.push_str(&format!("  決めること: {}
+", d.summary));
+            }
+            if !d.options.is_empty() {
+                let options: Vec<String> = d
+                    .options
+                    .iter()
+                    .map(|o| {
+                        if d.recommended.as_deref() == Some(o.key.as_str()) {
+                            format!("{} (key `{}`, 推奨)", o.label, o.key)
+                        } else {
+                            format!("{} (key `{}`)", o.label, o.key)
+                        }
+                    })
+                    .collect();
+                out.push_str(&format!("  選択肢: {}
+", options.join(" / ")));
+            }
+            if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
+                out.push_str(&format!("  推奨の理由: {why}
+"));
+            }
+            if !d.web_path.is_empty() {
+                out.push_str(&format!("  画面: {}
+", d.web_path));
+            }
+        }
+        if let Some(path) = &item.answer_path {
+            out.push_str(&format!("  回答の経路: POST {path}
+"));
+        }
+    }
+    out.push_str(&format!(
+        "\n### 人の発言を件への回答にする (relay a human instruction)\n\
+         - 人の発言がどの件への回答か（選択肢・条件）を上の一覧から特定する。候補が 2 つ以上あるか、どの選択肢か読めなければ、operation を出さずに返事で聞き返す。\n\
+         - 特定できたら `{api}/cos/operations` に **`instructed_by`**（その人の発言の message id）を付けて回答の経路を呼ぶ:\n\
+         `curl -sf -X POST -H \"Authorization: Bearer ${env}\" -H 'Content-Type: application/json' {api}/cos/operations -d '{{\"idempotency_key\":\"relay-<item id>-<message id>\",\"expected_revision\":null,\"reason\":\"人の発言 seq <n> の指示: …\",\"policy_version\":\"1\",\"instructed_by\":\"<message id>\",\"request\":{{\"method\":\"POST\",\"path\":\"<回答の経路>\",\"body\":{{\"option\":\"<key>\",\"note\":\"<人が付けた条件>\"}}}}}}'`\n\
+         `instructed_by` は同じスレッドの人の発言でなければ 422。人の指示は payload と監査に「人の指示（seq n）」として残る。人の指示の無い件を自分の判断で答えるときは `instructed_by` を付けない（skill の基準に従う）。\n\
+         - 「人待ち」の件は `/cos/inbox/{{i}}/resolve` では閉じられない（終端済み）。人の指示を伝えるのは上の経路だけ。\n\
+         - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したことを書く。\n\n",
+    ));
     out
 }
 

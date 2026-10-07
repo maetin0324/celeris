@@ -874,6 +874,17 @@ impl SqliteStore {
         Ok(message)
     }
 
+    /// One message of a thread by id (404 when the thread or the message is missing).
+    pub fn chat_message_get(
+        &self,
+        thread_id: &str,
+        message_id: &str,
+    ) -> Result<ChatMessage, ChatError> {
+        let conn = writer(self)?;
+        thread_require(&conn, thread_id)?;
+        message_require(&conn, thread_id, message_id)
+    }
+
     /// Adds a completed system message (cards such as task/operation notices) to a thread.
     pub fn chat_system_message_add(
         &self,
@@ -901,12 +912,60 @@ impl SqliteStore {
         self.chat_system_message_add_keyed(thread_id, Some(key), text, cards, now)
     }
 
+    /// ADR 2026-10-07-cos-inbox-thread-conversation D1: a completed assistant message written by
+    /// the daemon (the deterministic digest of one triage run). The stable key makes the write
+    /// idempotent across ticks and restarts; `run_id` records which run the digest describes.
+    pub fn chat_assistant_message_add_once(
+        &self,
+        thread_id: &str,
+        key: &str,
+        text: &str,
+        cards: &[ChatCard],
+        run_id: Option<&str>,
+        now: OffsetDateTime,
+    ) -> Result<ChatMessage, ChatError> {
+        if key.len() > CHAT_CLIENT_KEY_MAX_BYTES {
+            return Err(ChatError::TooLarge("assistant message key".into()));
+        }
+        self.chat_daemon_message_add_keyed(
+            thread_id,
+            ChatMessageRole::Assistant,
+            Some(key),
+            text,
+            cards,
+            run_id,
+            now,
+        )
+    }
+
     fn chat_system_message_add_keyed(
         &self,
         thread_id: &str,
         key: Option<&str>,
         text: &str,
         cards: &[ChatCard],
+        now: OffsetDateTime,
+    ) -> Result<ChatMessage, ChatError> {
+        self.chat_daemon_message_add_keyed(
+            thread_id,
+            ChatMessageRole::System,
+            key,
+            text,
+            cards,
+            None,
+            now,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn chat_daemon_message_add_keyed(
+        &self,
+        thread_id: &str,
+        role: ChatMessageRole,
+        key: Option<&str>,
+        text: &str,
+        cards: &[ChatCard],
+        run_id: Option<&str>,
         now: OffsetDateTime,
     ) -> Result<ChatMessage, ChatError> {
         if text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
@@ -926,10 +985,7 @@ impl SqliteStore {
                 .optional()?;
             if let Some(raw) = existing {
                 let message = message_from_raw(&tx, raw)?;
-                if message.role == ChatMessageRole::System
-                    && message.text == text
-                    && message.cards == cards
-                {
+                if message.role == role && message.text == text && message.cards == cards {
                     return Ok(message);
                 }
                 return Err(ChatError::Conflict(format!(
@@ -942,12 +998,12 @@ impl SqliteStore {
             &tx,
             NewMessage {
                 thread_id,
-                role: ChatMessageRole::System,
+                role,
                 text,
                 state: ChatMessageState::Completed,
                 client_message_id: key,
                 reply_to_id: None,
-                run_id: None,
+                run_id,
                 metadata: &meta,
             },
             &at,

@@ -61,6 +61,58 @@ pub struct CosChatContext {
     pub credential_env: String,
     /// Base URL of the Celeris API ending in `/api/v1` (for checkpoint and history requests).
     pub api_base_url: String,
+    /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the unresolved inbox items (newest first)
+    /// when this run is in the inbox thread. Empty in every other thread.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inbox_items: Vec<CosChatInboxItem>,
+}
+
+/// One unresolved item of the CoS inbox (`cos_inbox_items`), as context for a run in the inbox
+/// thread (ADR 2026-10-07-cos-inbox-thread-conversation D3).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CosChatInboxItem {
+    /// `cos_inbox_items.id` (the triage item; `/cos/inbox/{i}/resolve` while `pending`/`running`).
+    pub item_id: String,
+    /// `decision` / `question` / `authorization` / `plan_gate` / `phase_gate` / `notice` / …
+    pub source_kind: String,
+    /// The id of the original wait (the human inbox item id for inbox sources).
+    pub source_key: String,
+    pub source_revision: String,
+    /// `escalated` (waiting on the person), `fallback` (handed over without CoS), `pending` /
+    /// `running` (not judged yet).
+    pub state: String,
+    /// The title of the wait as ingested.
+    pub summary: String,
+    /// CoS's recorded reason for the outcome, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    pub created_at: String,
+    /// What the person must decide (from the escalation / fallback packet), if routed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<CosChatInboxDecision>,
+    /// Same-app API path a human instruction is relayed to through `/cos/operations`
+    /// (`POST /api/v1/inbox/items/{source_key}/answer`); absent for notices.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_path: Option<String>,
+}
+
+/// The decision packet of a routed item.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CosChatInboxDecision {
+    pub summary: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<CosChatInboxOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommended: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recommendation_reason: Option<String>,
+    pub web_path: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CosChatInboxOption {
+    pub key: String,
+    pub label: String,
 }
 
 /// One message delivered to the run.

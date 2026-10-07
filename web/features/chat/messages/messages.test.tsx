@@ -18,7 +18,7 @@ import {
   scrollTopAfterPrepend,
   statusLabel,
 } from "./logic";
-import { MessageItem } from "./message-item";
+import { foldedSummary, MessageItem } from "./message-item";
 import { MessageList } from "./message-list";
 import { AttachmentList, JumpToLatest, StatusLine, ToolCall } from "./parts";
 
@@ -445,5 +445,88 @@ describe("chat_messages_live_region", () => {
     expect(out).toContain('aria-live="polite" aria-atomic="true" class="sr-only"');
     expect(out).toContain('aria-label="会話"');
     expect(out).not.toContain('role="log"');
+  });
+});
+
+// ADR 2026-10-07-cos-inbox-thread-conversation D5: 受信箱 thread の行の見せ方。
+describe("chat_inbox_rows", () => {
+  const render = (cards: { title: string }[]) => <span>{`カード ${cards.map((c) => c.title).join(",")}`}</span>;
+
+  it("chat_inbox_rows_system_row_without_human_wait_is_folded", () => {
+    const triageInput = renderToStaticMarkup(
+      <MessageItem
+        message={message("s1", 1, { role: "system", text: 'CoS 受信箱の一次対応: item_ids=["i1"]' })}
+        streaming={false}
+      />,
+    );
+    expect(triageInput).toContain('data-slot="chat-system-folded"');
+    expect(triageInput).toContain("<summary");
+    expect(triageInput).toContain("CoS 受信箱の一次対応");
+    const notice = renderToStaticMarkup(
+      <MessageItem
+        message={message("s2", 2, {
+          role: "system",
+          text: "知らせ",
+          cards: [card({ kind: "notice", id: "n1", title: "完了の知らせ", state: "observed" })],
+        })}
+        streaming={false}
+        renderCards={render}
+      />,
+    );
+    expect(notice).toContain('data-slot="chat-system-folded"');
+    expect(notice).toContain("カード 完了の知らせ");
+    const closed = renderToStaticMarkup(
+      <MessageItem
+        message={message("s3", 3, {
+          role: "system",
+          text: "",
+          cards: [card({ kind: "decision", id: "d9", title: "済み", state: "answered" })],
+        })}
+        streaming={false}
+        renderCards={render}
+      />,
+    );
+    expect(closed).toContain('data-slot="chat-system-folded"');
+    expect(closed).toContain("1 件の知らせ");
+  });
+
+  it("chat_inbox_rows_human_wait_rows_and_cos_digest_stay_open", () => {
+    const handoff = renderToStaticMarkup(
+      <MessageItem
+        message={message("s4", 4, {
+          role: "system",
+          text: "CoS 不在のため直接通知: 「質問: deploy」（質問）は人へ委ねた",
+          cards: [card({ kind: "question", id: "q1", title: "質問: deploy", state: "pending" })],
+        })}
+        streaming={false}
+        renderCards={render}
+      />,
+    );
+    expect(handoff).not.toContain('data-slot="chat-system-folded"');
+    expect(handoff).toContain("カード 質問: deploy");
+    const digest = renderToStaticMarkup(
+      <MessageItem
+        message={message("a5", 5, {
+          role: "assistant",
+          text: "受信箱の一次対応の結果（1 件）\n\n### 質問: deploy（質問）\n- 判断: 人に回した",
+          cards: [card({ kind: "question", id: "q1", title: "質問: deploy", state: "escalated", actor: "cos" })],
+        })}
+        streaming={false}
+        renderCards={render}
+      />,
+    );
+    expect(digest).not.toContain('data-slot="chat-system-folded"');
+    expect(digest).toContain("人に回した");
+    expect(digest).toContain("カード 質問: deploy");
+    const human = renderToStaticMarkup(
+      <MessageItem message={message("u6", 6, { role: "user", text: "(b) にして" })} streaming={false} />,
+    );
+    expect(human).not.toContain('data-slot="chat-system-folded"');
+  });
+
+  it("chat_inbox_rows_folded_summary_is_the_first_line", () => {
+    expect(foldedSummary({ text: "\n一行目\n二行目", cards: [] })).toBe("一行目");
+    expect(foldedSummary({ text: "", cards: [card(), card({ id: "d2" })] })).toBe("2 件の知らせ");
+    expect(foldedSummary({ text: "  ", cards: [] })).toBe("システムの記録");
   });
 });

@@ -76,10 +76,10 @@ fn insert_items(
             return Err(ChatError::Invalid("empty triage source triple".into()));
         }
         inserted += tx.execute(
-            "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,created_at,updated_at) \
-             VALUES(?1,?2,?3,?4,?5,?6,'','pending',?7,?8,?8) \
+            "INSERT INTO cos_inbox_items(id,source_kind,source_key,source_revision,source_event_id,thread_id,message_id,state,policy_version,summary,created_at,updated_at) \
+             VALUES(?1,?2,?3,?4,?5,?6,'','pending',?7,?9,?8,?8) \
              ON CONFLICT(source_kind,source_key,source_revision) DO NOTHING",
-            params![Ulid::new().to_string(),item.source_kind,item.source_key,item.source_revision,item.source_event_id,thread_id,item.policy_version,at],
+            params![Ulid::new().to_string(),item.source_kind,item.source_key,item.source_revision,item.source_event_id,thread_id,item.policy_version,at,item.summary],
         )?;
     }
     Ok(inserted)
@@ -371,5 +371,180 @@ impl SqliteStore {
         put_cursor(&tx, ROUTE_VERSION_CURSOR, "cos_v1")?;
         tx.commit()?;
         Ok(true)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ADR 2026-10-07-cos-inbox-thread-conversation: the read side the inbox thread
+// needs — the items one triage run handled (digest, D1) and the unresolved
+// items passed to a run in the inbox thread as context (D3). SQLite only.
+// ---------------------------------------------------------------------------
+
+/// Prefix of the idempotency key of one run's digest message (`<prefix><run_id>`).
+pub const COS_TRIAGE_DIGEST_KEY_PREFIX: &str = "cos-triage-digest:";
+
+/// One option of the original wait as the outbox body recorded it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosTriageOption {
+    pub key: String,
+    pub label: String,
+}
+
+/// What the person must decide, as the escalation / fallback outbox body recorded it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CosTriageDecision {
+    pub summary: String,
+    pub options: Vec<CosTriageOption>,
+    pub recommended: Option<String>,
+    pub recommendation_reason: Option<String>,
+    pub web_path: String,
+}
+
+/// One `cos_inbox_items` row with its route and decision packet (if routed to the person).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CosTriageItemReport {
+    pub item_id: String,
+    pub source_kind: String,
+    pub source_key: String,
+    pub source_revision: String,
+    pub state: String,
+    pub summary: String,
+    pub reason: Option<String>,
+    pub operation_id: Option<String>,
+    pub run_id: Option<String>,
+    pub created_at: String,
+    /// `escalation` / `fallback` when an outbox row exists for the item.
+    pub route: Option<String>,
+    pub decision: Option<CosTriageDecision>,
+}
+
+impl CosTriageItemReport {
+    /// The title shown to people; falls back to the source triple for rows ingested before 0059.
+    pub fn title(&self) -> String {
+        if self.summary.trim().is_empty() {
+            format!("{}:{}", self.source_kind, self.source_key)
+        } else {
+            self.summary.clone()
+        }
+    }
+}
+
+/// Parse the outbox body of either route. Escalation options are `{key,label}`; the fallback body
+/// lists labels only (its `recommended` is a label too).
+pub fn decision_from_outbox(body: &str) -> Option<CosTriageDecision> {
+    let v: serde_json::Value = serde_json::from_str(body).ok()?;
+    let options = v["options"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|o| match o {
+                    serde_json::Value::String(label) => Some(CosTriageOption {
+                        key: label.clone(),
+                        label: label.clone(),
+                    }),
+                    serde_json::Value::Object(_) => Some(CosTriageOption {
+                        key: o["key"].as_str()?.to_owned(),
+                        label: o["label"].as_str().unwrap_or(o["key"].as_str()?).to_owned(),
+                    }),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(CosTriageDecision {
+        summary: v["summary"].as_str().unwrap_or_default().to_owned(),
+        options,
+        recommended: v["recommended"].as_str().map(str::to_owned),
+        recommendation_reason: v["recommendation_reason"]
+            .as_str()
+            .or_else(|| v["recommendation_text"].as_str())
+            .map(str::to_owned),
+        web_path: v["web_path"].as_str().unwrap_or_default().to_owned(),
+    })
+}
+
+const REPORT_SELECT: &str = "SELECT i.id,i.source_kind,i.source_key,i.source_revision,i.state,i.summary,i.reason,i.operation_id,i.run_id,i.created_at,n.route,nt.body \
+    FROM cos_inbox_items i \
+    LEFT JOIN cos_notification_routes n ON n.item_id=i.id \
+    LEFT JOIN notifications nt ON nt.id=n.notification_id";
+
+fn report_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CosTriageItemReport> {
+    let body: Option<String> = r.get(11)?;
+    Ok(CosTriageItemReport {
+        item_id: r.get(0)?,
+        source_kind: r.get(1)?,
+        source_key: r.get(2)?,
+        source_revision: r.get(3)?,
+        state: r.get(4)?,
+        summary: r.get(5)?,
+        reason: r.get(6)?,
+        operation_id: r.get(7)?,
+        run_id: r.get(8)?,
+        created_at: r.get(9)?,
+        route: r.get(10)?,
+        decision: body.as_deref().and_then(decision_from_outbox),
+    })
+}
+
+impl SqliteStore {
+    /// D1: the items one triage run claimed, in claim order (requeued items no longer count).
+    pub fn cos_triage_run_report(&self, run_id: &str) -> Result<Vec<CosTriageItemReport>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(&format!(
+            "{REPORT_SELECT} WHERE i.run_id=?1 ORDER BY i.created_at,i.id"
+        ))?;
+        let rows = stmt.query_map([run_id], report_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// One item with its route and decision packet.
+    pub fn cos_triage_item_report(
+        &self,
+        item_id: &str,
+    ) -> Result<Option<CosTriageItemReport>, ChatError> {
+        let conn = writer(self)?;
+        Ok(conn
+            .query_row(
+                &format!("{REPORT_SELECT} WHERE i.id=?1"),
+                [item_id],
+                report_row,
+            )
+            .optional()?)
+    }
+
+    /// D3: unresolved items (waiting on the person, handed over, or not yet judged), newest first.
+    pub fn cos_triage_open_items(&self, limit: usize) -> Result<Vec<CosTriageItemReport>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(&format!(
+            "{REPORT_SELECT} WHERE i.state IN ('escalated','fallback','pending','running') \
+             ORDER BY i.created_at DESC,i.id DESC LIMIT ?1"
+        ))?;
+        let rows = stmt.query_map([i64::try_from(limit).unwrap_or(i64::MAX)], report_row)?;
+        Ok(rows.collect::<Result<_, _>>()?)
+    }
+
+    /// D1: finished triage runs (system input message, at least one item) of the inbox thread that
+    /// have no digest message yet: `(run_id, run state)` oldest first.
+    pub fn cos_triage_runs_without_digest(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(String, String)>, ChatError> {
+        let conn = writer(self)?;
+        let mut stmt = conn.prepare(
+            "SELECT r.run_id,r.state FROM chat_runs r \
+             JOIN chat_messages m ON m.id=r.input_message_id \
+             WHERE r.thread_id=(SELECT id FROM chat_threads WHERE kind='inbox') \
+             AND m.role='system' \
+             AND r.state IN ('completed','failed','stopped','interrupted') \
+             AND EXISTS(SELECT 1 FROM cos_inbox_items i WHERE i.run_id=r.run_id) \
+             AND NOT EXISTS(SELECT 1 FROM chat_messages d WHERE d.thread_id=r.thread_id AND d.client_message_id=?1||r.run_id) \
+             ORDER BY r.started_at,r.run_id LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(
+            params![COS_TRIAGE_DIGEST_KEY_PREFIX, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        Ok(rows.collect::<Result<_, _>>()?)
     }
 }

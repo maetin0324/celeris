@@ -3710,6 +3710,7 @@ export type OnChildFailure = "retry_then_ask" | "ignore";
 export type OperationBody = {
   "expected_revision"?: string | null;
   "idempotency_key": string;
+  "instructed_by"?: string | null;
   "policy_version": string;
   "reason": string;
   "request": OperationRequest;

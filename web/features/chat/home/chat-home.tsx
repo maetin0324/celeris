@@ -4,7 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } fr
 import { inboxItemsQuery } from "../../../api/queries/inbox-notifications";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { ChatCardItem } from "../cards/chat-card";
-import { ChatComposer } from "../composer/chat-composer";
+import { ChatComposer, INBOX_COMPOSER_PLACEHOLDER } from "../composer/chat-composer";
 import { useChatSession } from "../data/use-chat-session";
 import { attachmentIdsOf, useAttachmentMap, useOlderMessages } from "../messages/history";
 import { MessageList } from "../messages/message-list";
@@ -138,7 +138,12 @@ function ChatConversation({ threadId }: { threadId: string }) {
         }
         empty={<p className="mx-auto max-w-3xl text-muted-foreground">CoS にメッセージを送って会話を始めましょう。</p>}
       />
-      <ChatComposer threadId={threadId} session={session} snapshot={snapshot} />
+      <ChatComposer
+        threadId={threadId}
+        session={session}
+        snapshot={snapshot}
+        placeholder={chat.thread?.kind === "inbox" ? INBOX_COMPOSER_PLACEHOLDER : undefined}
+      />
     </>
   );
 }

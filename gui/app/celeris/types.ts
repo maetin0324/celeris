@@ -3894,6 +3894,12 @@ export interface CosOperation {
 export interface OperationBody {
   expected_revision?: string | null;
   idempotency_key: string;
+  /**
+   * ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message (same
+   * thread, `role=user`) this operation relays. Recorded in the payload and the audit reason;
+   * waives the explicit human_required refusal (the person decided, CoS only relays).
+   */
+  instructed_by?: string | null;
   policy_version: string;
   reason: string;
   request: OperationRequest;

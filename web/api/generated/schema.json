@@ -18589,6 +18589,14 @@
         "idempotency_key": {
           "type": "string"
         },
+        "instructed_by": {
+          "default": null,
+          "description": "ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message (same\nthread, `role=user`) this operation relays. Recorded in the payload and the audit reason;\nwaives the explicit human_required refusal (the person decided, CoS only relays).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "policy_version": {
           "type": "string"
         },

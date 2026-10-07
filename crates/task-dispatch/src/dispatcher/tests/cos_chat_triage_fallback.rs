@@ -174,7 +174,7 @@ async fn cos_chat_triage_fallback_restart_and_recovery_neither_resend_nor_answer
     f.assert_one_fallback("cos.enabled=false");
     let item = f.only_item();
     let inbox = f.inbox_thread().expect("inbox thread");
-    let handoff = f
+    let all = f
         .store
         .chat_message_list(
             &inbox,
@@ -184,13 +184,23 @@ async fn cos_chat_triage_fallback_restart_and_recovery_neither_resend_nor_answer
             },
         )
         .expect("messages")
-        .items
+        .items;
+    let dump: Vec<String> = all.iter().map(|m| format!("{} {:?}", m.text, m.cards)).collect();
+    let handoff = all
         .into_iter()
-        .filter(|m| m.text.contains(&item) && m.text.contains("人へ委ね済み"))
+        .filter(|m| {
+            m.text.contains("handed」")
+                && m.text.contains("人へ委ねた")
+                && m.text.contains("決めること: ")
+                && m.cards
+                    .iter()
+                    .any(|c| c.title.contains("handed") && c.state == "pending")
+        })
         .count();
+    let _ = item;
     assert_eq!(
         handoff, 1,
-        "the session is told the item is with the person"
+        "the session is told the item is with the person: {dump:?}"
     );
 
     // Restart with CoS back: the reconcile pass sees the same revision.

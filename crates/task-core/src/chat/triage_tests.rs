@@ -231,3 +231,100 @@ fn cos_chat_triage_store_cutover_supersedes_only_old_pending_once() {
         "10"
     );
 }
+
+#[test]
+fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
+    use super::triage::{COS_TRIAGE_DIGEST_KEY_PREFIX, decision_from_outbox};
+    use crate::chat::{ChatActor, ChatCard, ChatCardKind, ChatRunState};
+    let s = SqliteStore::open_in_memory().expect("store");
+    let mut b = item("b", "1");
+    b.summary = "second".into();
+    s.cos_triage_ingest_batch("decisions", "7", &[item("a", "1"), b], at(0))
+        .expect("ingest");
+    let claim = s
+        .cos_triage_claim("run-1", at(1))
+        .expect("claim")
+        .expect("items");
+    assert_eq!(claim.item_ids.len(), 2);
+    let (a, b) = (&claim.item_ids[0], &claim.item_ids[1]);
+    let report = s.cos_triage_run_report("run-1").expect("report");
+    assert_eq!(report.len(), 2);
+    assert_eq!(report[0].summary, "approve?");
+    assert_eq!(report[1].title(), "second");
+    assert_eq!(report[0].state, "running");
+    assert!(report[0].decision.is_none());
+
+    let body = serde_json::json!({"summary":"公開前の確認","options":[{"key":"go","label":"公開する"},{"key":"hold","label":"保留"}],"recommended":"hold","recommendation_reason":"未確認","web_path":"/tasks/t1"});
+    s.cos_triage_outbox_claim(a, "escalation", &body.to_string(), at(2))
+        .expect("claim")
+        .expect("routed");
+    assert!(
+        s.cos_triage_resolve(a, "escalated", Some("op-1"), Some("人の判断"), at(2))
+            .expect("resolve")
+    );
+    let report = s.cos_triage_run_report("run-1").expect("report");
+    let d = report[0].decision.as_ref().expect("packet");
+    assert_eq!(d.summary, "公開前の確認");
+    assert_eq!(d.options.len(), 2);
+    assert_eq!(d.options[1].label, "保留");
+    assert_eq!(d.recommended.as_deref(), Some("hold"));
+    assert_eq!(d.web_path, "/tasks/t1");
+    assert_eq!(report[0].route.as_deref(), Some("escalation"));
+    assert_eq!(report[0].reason.as_deref(), Some("人の判断"));
+    let fb = decision_from_outbox(
+        r#"{"summary":"x","options":["公開する","保留"],"recommended":"保留","recommendation_text":"CoS の推奨なし","web_path":"/inbox"}"#,
+    )
+    .expect("fallback packet");
+    assert_eq!(fb.options[0].key, "公開する");
+    assert_eq!(fb.recommendation_reason.as_deref(), Some("CoS の推奨なし"));
+
+    let open = s.cos_triage_open_items(10).expect("open");
+    assert_eq!(open.len(), 2);
+    assert!(open.iter().any(|i| &i.item_id == a && i.state == "escalated"));
+    assert!(open.iter().any(|i| &i.item_id == b && i.state == "running"));
+    assert_eq!(
+        s.cos_triage_item_report(a).expect("one").expect("row").item_id,
+        *a
+    );
+
+    assert!(s.cos_triage_runs_without_digest(10).expect("scan").is_empty());
+    s.chat_run_finish("run-1", ChatRunState::Completed, None, None, at(3))
+        .expect("finish");
+    assert_eq!(
+        s.cos_triage_runs_without_digest(10).expect("scan"),
+        vec![("run-1".to_string(), "completed".to_string())]
+    );
+    let card = ChatCard {
+        kind: ChatCardKind::Decision,
+        id: "a".into(),
+        title: "approve?".into(),
+        state: "escalated".into(),
+        href: "/tasks/t1".into(),
+        actor: ChatActor::Cos,
+        reason: None,
+        operation_id: Some("op-1".into()),
+    };
+    let key = format!("{COS_TRIAGE_DIGEST_KEY_PREFIX}run-1");
+    let m = s
+        .chat_assistant_message_add_once(
+            &claim.thread_id,
+            &key,
+            "digest",
+            std::slice::from_ref(&card),
+            Some("run-1"),
+            at(4),
+        )
+        .expect("digest");
+    assert_eq!(m.role, crate::chat::ChatMessageRole::Assistant);
+    assert_eq!(m.run_id.as_deref(), Some("run-1"));
+    assert_eq!(m.cards, vec![card.clone()]);
+    let again = s
+        .chat_assistant_message_add_once(&claim.thread_id, &key, "digest", &[card], Some("run-1"), at(5))
+        .expect("idempotent");
+    assert_eq!(again.id, m.id);
+    assert!(s.cos_triage_runs_without_digest(10).expect("scan").is_empty());
+    assert_eq!(
+        s.chat_message_get(&claim.thread_id, &m.id).expect("get").text,
+        "digest"
+    );
+}

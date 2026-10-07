@@ -451,3 +451,5 @@ async fn cos_chat_triage_ingest_places_reference_card_in_origin_thread() {
 
 #[path = "cos_chat_triage_fallback.rs"]
 mod fallback;
+#[path = "cos_chat_triage_inbox_thread.rs"]
+mod inbox_thread;

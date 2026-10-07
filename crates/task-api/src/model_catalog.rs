@@ -19,6 +19,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use task_core::model_catalog::assignments::RoleAssignment;
 use task_core::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource, DiscoveryRecord,
 };
@@ -66,6 +67,8 @@ pub struct ModelCatalogItem {
     #[serde(rename = "override")]
     pub override_: Option<ModelCatalogOverrideView>,
     pub routing: ModelCatalogRoutingView,
+    /// ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。
+    pub assigned_tiers: Vec<Tier>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
@@ -132,7 +135,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         )
 }
 
-fn rfc3339(unix: i64) -> String {
+pub(crate) fn rfc3339(unix: i64) -> String {
     OffsetDateTime::from_unix_timestamp(unix)
         .ok()
         .and_then(|t| t.format(&Rfc3339).ok())
@@ -148,7 +151,7 @@ fn tier_name(tier: Tier) -> &'static str {
 }
 
 /// routing catalog の source 名（`claude_oauth` / `openai_compatible:x` 等）を catalog の source 名に揃える。
-fn normalize_source(source_ref: &str) -> String {
+pub(crate) fn normalize_source(source_ref: &str) -> String {
     match source_ref.split_once(':') {
         Some((head, rest)) => format!("{}:{rest}", head.replace('_', "-")),
         None => source_ref.replace('_', "-"),
@@ -206,6 +209,7 @@ fn override_view(value: &CatalogOverride) -> ModelCatalogOverrideView {
 fn item(
     entry: &CatalogEntry,
     overrides: &[CatalogOverrideRow],
+    assignments: &[RoleAssignment],
     catalog: Option<&crate::routing_catalog::RoutingCatalogView>,
 ) -> ModelCatalogItem {
     let ov = overrides
@@ -221,6 +225,11 @@ fn item(
         capabilities: entry.capabilities.clone(),
         override_: ov.map(|o| override_view(&o.value)),
         routing: routing_for(catalog, entry.source.as_str(), &entry.model_id),
+        assigned_tiers: assignments
+            .iter()
+            .filter(|a| a.source == entry.source && a.model_id == entry.model_id)
+            .map(|a| a.tier)
+            .collect(),
     }
 }
 
@@ -252,13 +261,14 @@ async fn list_models(State(state): State<ApiState>, RawQuery(raw): RawQuery) -> 
         .blocking(move |store| {
             let entries = store.model_catalog_list().map_err(store_problem)?;
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
+            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let records = store
                 .model_catalog_discovery_records()
                 .map_err(store_problem)?;
             Ok(ModelCatalogView {
                 items: entries
                     .iter()
-                    .map(|e| item(e, &overrides, routing.as_ref()))
+                    .map(|e| item(e, &overrides, &assignments, routing.as_ref()))
                     .collect(),
                 last_discovery: records.iter().map(record_view).collect(),
             })
@@ -293,6 +303,7 @@ async fn put_override(
                 .model_catalog_set_override(&source, &model_id, &value, now)
                 .map_err(store_problem)?;
             let overrides = store.model_catalog_overrides().map_err(store_problem)?;
+            let assignments = store.model_role_assignments().map_err(store_problem)?;
             let entry = store
                 .model_catalog_list()
                 .map_err(store_problem)?
@@ -308,7 +319,7 @@ async fn put_override(
                     available: false,
                     capabilities: serde_json::json!({}),
                 });
-            Ok(item(&entry, &overrides, routing.as_ref()))
+            Ok(item(&entry, &overrides, &assignments, routing.as_ref()))
         })
         .await?;
     tracing::info!(op = "model_catalog_override_set", source = %result.source, model_id = %result.model_id, "model catalog override set");

@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use task_core::model_catalog::assignments::AssignmentView;
 use task_core::model_catalog::{
     CatalogDelta, CatalogSource, DiscoveredModel, parse_codex_model_list, parse_openai_models_list,
     parse_opencode_models_stdout,
@@ -581,6 +582,14 @@ impl DiscoveryTicker {
     }
 }
 
+/// 割り当ての実効 view。読めなければ警告して空（config のまま routing する）。
+fn role_assignment_view<S: ModelCatalogStore + ?Sized>(store: &S) -> AssignmentView {
+    store.model_role_assignment_view().unwrap_or_else(|error| {
+        tracing::warn!(%error, "model role assignments: could not be read; routing by config only");
+        AssignmentView::empty()
+    })
+}
+
 /// config から routing catalog を組み直し、catalog の `available` と上書きを当てて共有 snapshot
 /// （`routing_catalog_state`）を差し替える。共有 snapshot が無ければ何もしない。
 /// 発見の後・reload の後に呼ぶ（catalog は config を足さない・絞るだけ）。
@@ -602,6 +611,18 @@ pub fn refresh_routing_catalog<S: ModelCatalogStore + ?Sized>(store: &S, config:
             return;
         }
     };
+    // ADR 2026-10-06 model-role-assignments D2: 割り当てを先に重ねる（config の model が消えていても、
+    // 利用可能な model への割り当てでその lane が復活する）。割り当て済みで使えない model は
+    // `apply_role_assignments` が外すので、続く `apply_model_catalog` と警告は重ならない。
+    let view = role_assignment_view(store);
+    let applied =
+        crate::config::apply_role_assignments(&mut catalog, &view, &config.provider_lane_seeds());
+    if !applied.is_empty() {
+        tracing::info!(
+            count = applied.len(),
+            "model role assignments: applied to routing deployments"
+        );
+    }
     let dropped = crate::config::apply_model_catalog(&mut catalog, &entries, &overrides);
     if !dropped.is_empty() {
         tracing::info!(
@@ -626,7 +647,12 @@ pub fn apply_catalog_to_snapshot<S: ModelCatalogStore + ?Sized>(store: &S, confi
         return;
     };
     let mut applied = (**snapshot).clone();
-    if crate::config::apply_model_catalog(&mut applied, &entries, &overrides).is_empty() {
+    // 割り当てを先に（`refresh_routing_catalog` と同じ順）。
+    let view = role_assignment_view(store);
+    let assigned =
+        crate::config::apply_role_assignments(&mut applied, &view, &config.provider_lane_seeds());
+    let dropped = crate::config::apply_model_catalog(&mut applied, &entries, &overrides);
+    if dropped.is_empty() && assigned.is_empty() {
         return;
     }
     let applied = Arc::new(applied);

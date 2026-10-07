@@ -273,6 +273,12 @@ pub struct ApiV1Schema {
     pub model_catalog_override: crate::model_catalog::ModelCatalogOverrideView,
     pub model_discover: crate::model_catalog::DiscoverBody,
     pub model_discover_result: crate::model_catalog::DiscoverResponse,
+    /// ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
+    pub model_assignment_list: crate::model_assignments::AssignmentList,
+    pub model_assignment_put: crate::model_assignments::AssignmentPutBody,
+    pub model_assignment_put_result: crate::model_assignments::AssignmentPutResponse,
+    pub model_assignment_preview: crate::model_assignments::AssignmentPreviewBody,
+    pub model_assignment_preview_result: crate::model_assignments::AssignmentPreviewResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

@@ -278,6 +278,7 @@ pub(crate) fn proxy_catalog(config: &crate::Config) -> Arc<LegacyCatalog> {
             models: catalog.models.clone(),
             deployments: catalog.deployments.clone(),
             policies: catalog.policies.clone(),
+            warnings: Vec::new(),
         },
         None => llm_proxy::legacy_catalog::normalize_legacy_config(&config.llm_proxy),
     })

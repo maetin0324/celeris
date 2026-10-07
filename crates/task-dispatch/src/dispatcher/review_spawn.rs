@@ -683,9 +683,11 @@ impl Dispatcher {
         let produced = artifacts_for_run(&events, &run_id);
         // ADR-0014 D1: Reviewer run も対象タスクに WorkerStarted（role: reviewer）を残す（アカウント別の集計に含めるため）。
         if let Some((provider_id, review_run_id, adapter_id)) = &review_run {
+            let view = self.current_assignment_view();
             let model = self
                 .adapters
                 .get(provider_id)
+                .map(|a| self.adapter_with_effective_models(provider_id, a.clone(), &view))
                 .and_then(|a| {
                     a.model_for_tier(self.config.reviewer_hint.tier)
                         .ok()
@@ -1052,6 +1054,12 @@ impl Dispatcher {
                 return None;
             }
         };
+        // ADR 2026-10-06 model-role-assignments D2: reviewer run も割り当てを重ねた実効 bindings で起こす。
+        let base_adapter = self.adapter_with_effective_models(
+            &provider_id,
+            base_adapter,
+            &self.current_assignment_view(),
+        );
         if let Err(reason) = base_adapter.model_for_tier(hint.tier) {
             if self.warned_unroutable.insert(task.id) {
                 let _ = self.store.append_event(

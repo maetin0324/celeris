@@ -476,6 +476,12 @@ impl Dispatcher {
                 }
                 None => base_adapter,
             };
+            // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを重ねた実効 bindings で run を起こす。
+            let adapter = self.adapter_with_effective_models(
+                &provider_id,
+                adapter,
+                &self.current_assignment_view(),
+            );
             if let Some(round) = enforce_round.as_mut() {
                 let state = self.source_state_of(&provider_id, selected_account.as_ref(), now);
                 match self.enforce_check_source(task.worker_hint.tier, &state) {

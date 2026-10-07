@@ -252,6 +252,33 @@ export type ArtifactView = {
   "ts": string;
 };
 
+export type AssignmentList = {
+  "effective": Array<RoleSlotView>;
+  "items": Array<EffectiveAssignmentView>;
+};
+
+export type AssignmentPreviewBody = {
+  "model_id"?: string | null;
+  "source": string;
+  "tier": Tier;
+};
+
+export type AssignmentPreviewResponse = {
+  "impact": ImpactView;
+};
+
+export type AssignmentPutBody = {
+  "model_id": string;
+  "note"?: string | null;
+};
+
+export type AssignmentPutResponse = {
+  "impact": ImpactView;
+  "item": EffectiveAssignmentView;
+};
+
+export type AssignmentStateView = "assigned" | "excluded";
+
 export type AttentionItem = {
   "at": string;
   "class": FailureClass;
@@ -1535,6 +1562,17 @@ export type EditResult = {
   "task": Task;
 };
 
+export type EffectiveAssignmentView = {
+  "excluded_reason"?: string | null;
+  "model_id": string;
+  "note"?: string | null;
+  "source": string;
+  "state": AssignmentStateView;
+  "tier": Tier;
+  "updated_at": string;
+  "updated_by": string;
+};
+
 export type EffectiveProfile = {
   "allowed_tiers"?: Array<Tier>;
   "approvals"?: Array<string>;
@@ -2082,6 +2120,13 @@ export type Event = {
   "source": string;
   "type": "model_catalog_changed";
 } | {
+  "actor": string;
+  "model_id"?: string | null;
+  "previous"?: string | null;
+  "source": string;
+  "tier": Tier;
+  "type": "model_role_assignment_changed";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -2446,6 +2491,21 @@ export type HumanInboxView = {
   "suppressed": {
   [key: string]: number;
 };
+};
+
+export type ImpactChangeView = {
+  "after"?: string | null;
+  "before"?: string | null;
+  "excluded_reason"?: string | null;
+  "id": string;
+  "kind": ImpactKind;
+  "tier": string;
+};
+
+export type ImpactKind = "provider" | "proxy";
+
+export type ImpactView = {
+  "changes": Array<ImpactChangeView>;
 };
 
 export type InFlight = {
@@ -3016,6 +3076,7 @@ export type ModelBinding = {
 };
 
 export type ModelCatalogItem = {
+  "assigned_tiers": Array<Tier>;
   "available": boolean;
   "capabilities": unknown;
   "display_name"?: string | null;
@@ -4186,6 +4247,18 @@ export type RoleConfigView = {
   "tier"?: Tier | null;
 };
 
+export type RoleSlotView = {
+  "available"?: boolean | null;
+  "excluded_reason"?: string | null;
+  "last_seen"?: string | null;
+  "model_id"?: string | null;
+  "origin"?: SlotOrigin | null;
+  "providers": Array<string>;
+  "proxy": boolean;
+  "source": string;
+  "tier": Tier;
+};
+
 export type RollupMetrics = {
   "busy_ms": number;
   "child_tasks_done": number;
@@ -4671,6 +4744,8 @@ export type SkillSummaryView = {
   "name": string;
   "updated"?: string | null;
 };
+
+export type SlotOrigin = "assignment" | "config";
 
 export type SourceOrigin = "explicit" | "derived";
 

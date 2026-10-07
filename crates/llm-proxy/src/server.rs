@@ -22,6 +22,7 @@ use futures_util::{Stream, StreamExt};
 use serde_json::{Value, json};
 use task_core::AccountAdapter;
 use task_core::SharedRole;
+use task_core::model_catalog::assignments::{AssignmentView, RoleAssignmentReader};
 use task_core::model_router::context_registry::RoutingContextRegistry;
 use task_core::model_router::feedback::RequestSourceAttempt;
 use task_core::store::RoutingCorrelation;
@@ -90,6 +91,9 @@ pub struct ProxyState {
     /// ADR 2026-10-04 §10 Phase 5: sidecar estimator の shadow。空（既定）なら何もしない。daemon が
     /// reload で差し替える。
     estimator_shadow: Arc<EstimatorShadowSlot>,
+    /// ADR 2026-10-06 model-role-assignments D2: DB の割り当てを読む口。`None`（既定）なら
+    /// `[llm_proxy.models]` だけで lane を解決する。`ModelRequest::Tiered` の解決ごとに読む。
+    role_assignments: Option<Arc<dyn RoleAssignmentReader>>,
 }
 
 impl ProxyState {
@@ -123,6 +127,31 @@ impl ProxyState {
             in_flight: Arc::new(InFlightContexts::default()),
             shadow: None,
             estimator_shadow: Arc::new(EstimatorShadowSlot::default()),
+            role_assignments: None,
+        })
+    }
+
+    /// 割り当ての reader を差し込む（作った直後、まだ共有していない `Arc` にだけ効く。
+    /// [`Self::with_routing_context`] と同じ流儀）。
+    pub fn with_role_assignments(
+        mut self: Arc<Self>,
+        reader: Option<Arc<dyn RoleAssignmentReader>>,
+    ) -> Arc<Self> {
+        match Arc::get_mut(&mut self) {
+            Some(state) => state.role_assignments = reader,
+            None => tracing::warn!("llm-proxy: role assignments ignored (state already shared)"),
+        }
+        self
+    }
+
+    /// 割り当ての実効 view。reader が無ければ空、読めなければ警告して空（config のまま続ける）。
+    fn assignment_view(&self) -> AssignmentView {
+        let Some(reader) = &self.role_assignments else {
+            return AssignmentView::empty();
+        };
+        reader.assignment_view().unwrap_or_else(|error| {
+            tracing::warn!(%error, "llm-proxy: cannot read model role assignments; using [llm_proxy.models]");
+            AssignmentView::empty()
         })
     }
 
@@ -580,7 +609,13 @@ impl ProxyState {
                     .collect(),
             },
             ModelRequest::Tiered { scope, tier } => {
-                let catalog = crate::legacy_catalog::normalize_legacy_config(&self.config);
+                let catalog = crate::legacy_catalog::normalize_legacy_config_with(
+                    &self.config,
+                    &self.assignment_view(),
+                );
+                for warning in &catalog.warnings {
+                    tracing::debug!(%warning, "llm-proxy: lane deployment excluded");
+                }
                 let deployments =
                     selection::legacy_deployments(&catalog, *scope, *tier, self.config.prefer_free);
                 let model_for = |source: &str| -> Option<String> {

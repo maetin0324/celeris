@@ -463,6 +463,10 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 180 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
 | 181 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
 | 182 | POST | `/llm/models/discover` | 発見を今すぐ走らせる（202） | `DiscoverResponse` | celeris の `ModelDiscoveryHook` |
+| 183 | GET | `/llm/models/assignments` | source × 役割（tier）→ model の割り当て（実効の状態つき）と全枠の実効（§3.127.4。ADR 2026-10-06 model-role-assignments D4） | `AssignmentList` | store `model_role_assignment_view` + routing catalog |
+| 184 | PUT | `/llm/models/assignments/{source}/{tier}` | 割り当てを置く（`{model_id, note?}`。200 `{item, impact}`） | `AssignmentPutResponse` | store `model_role_assignment_set` |
+| 185 | DELETE | `/llm/models/assignments/{source}/{tier}` | 割り当てを外す（204。無ければ 404 `model_assignment_not_found`） | なし | store `model_role_assignment_delete` |
+| 186 | POST | `/llm/models/assignments/preview` | 書かずに影響（impact）だけ返す（`{source, tier, model_id?}`） | `AssignmentPreviewResponse` | routing catalog + providers |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3246,6 +3250,29 @@ SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行�
 `{"results": [{"source", "ok", "count", "error", "delta": {"source", "added", "removed", "restored"}}], "unavailable": false}`
 を返す。係が無い process（試験・standby 等）では `{"results": [], "unavailable": true}`。不明な `source` は 400。
 `celerisctl models list|discover [--source S]` が同じ API を呼ぶ。
+
+#### 3.127.4 `/llm/models/assignments`（役割への割り当て）
+
+人が「source の frontier / standard / cheap にはこのモデル」と決める表（ADR 2026-10-06 model-role-assignments）。
+catalog の自動発見は表を消さない。`GET /llm/models` の各 item には、そのモデルが割り当てられている tier の一覧
+`assigned_tiers` が付く。書き込み（`PUT`/`DELETE`/`preview`）は管理系（bearer 必須）。
+
+- `GET` → 200 `{items: [{source, tier, model_id, state: "assigned"|"excluded", excluded_reason, note, updated_at, updated_by}],
+  effective: [{source, tier, model_id, origin: "assignment"|"config"|null, excluded_reason, providers[], proxy, available, last_seen}]}`。
+  `effective` は (catalog の source ∪ provider の `llm_source` ∪ routing catalog の source) × 3 tier の全枠。割り当てがあれば
+  `origin = "assignment"`、無ければ config の値（`origin = "config"`。provider は provider の一覧の `tier_models[lane].model_id`、無ければ `model`。
+  llm-proxy の lane は routing catalog の `legacy:*` deployment の upstream model。`<source>/` 接頭辞は外す）、どちらも無ければ `null`。
+  `providers` は枠を使う provider の id、`proxy` は llm-proxy の lane が使うか。
+- `state = "excluded"` は割り当て行は残るが routing には使えない状態。`excluded_reason` は `override:disabled`（上書きで無効）か
+  `catalog:unavailable`（発見で見えなくなった）。
+- `PUT` の本文は `{model_id, note?}`（未知のキーは 400）。`source`・`tier`（`frontier|standard|cheap`）が不正、または `model_id` が
+  その source の catalog に無いときは 400（`model_not_in_catalog`）。200 `{item, impact}`。成功すると event
+  `model_role_assignment_changed` を catalog の疑似 task の列に追記する。
+- `impact.changes[]` は `{kind: "provider"|"proxy", id, tier, before, after, excluded_reason}`。枠を使う provider と proxy の lane ごとに、
+  今の実効の model と変更後の model を並べる。解除（`preview` の `model_id = null`）の `after` は config の値。provider は routing hook が割り当てを反映済みでも provider の一覧の値が出る。
+  proxy の lane は割り当て中に config の値を判別できないとき（catalog の値が割り当てと同じ）`after = null`。
+- `preview` は書き込みなしで `{impact}` だけ返す。`model_id` が `null`（省略）なら解除した場合。
+- `source` / `tier` の path 区間は `%` 符号化に対応する。
 
 
 ## 4. SSE `GET /stream`

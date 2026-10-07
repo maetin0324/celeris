@@ -24,7 +24,7 @@ mod accounts;
 mod clusters;
 pub(crate) mod org;
 mod projects;
-mod providers;
+pub(crate) mod providers;
 mod secrets;
 mod system;
 pub(crate) mod task_actions;
@@ -194,6 +194,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing_catalog::routes())
         // ADR 2026-10-06 D5: モデル catalog。実装は `crate::model_catalog`。
         .merge(crate::model_catalog::routes())
+        .merge(crate::model_assignments::routes())
         // ADR-0056 D4（Phase 78）: MCP クライアント / 呼び出しログの観測。実装は `crate::mcp_admin`。
         .merge(crate::mcp_admin::routes())
         // ADR-0056 D3 続き（Phase 82）: skills を GUI から見る・作る・mount する。実装は `crate::skills`。

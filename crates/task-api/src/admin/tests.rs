@@ -24,7 +24,7 @@ fn create_body_fills_defaults_like_provider_config() {
         concurrency: None,
         model: None,
         env: HashMap::new(),
-        account_pool: false,
+        account_pool: false.into(),
     };
     let file = body.into_file();
     assert_eq!(file.tiers, default_tiers());
@@ -67,7 +67,7 @@ fn patch_only_overwrites_provided_fields() {
     assert!(!patched.account_pool.is_on());
 
     let pool_patch = ProviderPatchBody {
-        account_pool: Some(true),
+        account_pool: Some(true.into()),
         ..Default::default()
     };
     assert!(pool_patch.apply(file).account_pool.is_on());

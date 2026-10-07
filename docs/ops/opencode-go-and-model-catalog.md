@@ -59,6 +59,32 @@ env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode
    idle の logged-in account は 300 秒おきに確認される。すぐ見たいときは `POST /api/v1/accounts/opencode-go/main/check`。
 4. web の `/accounts` に 3 本目のバー（1 か月）、`/models` に source ごとの表と発見ボタン・上書き編集があることを見る。
 
+## 3a. 画面から役割へモデルを割り当てる（config を編集しない）
+
+ADR 2026-10-06 model-role-assignments。`[[providers]]` の `model` / `tier_models` を書かなくても、web の `/models` 画面で
+source ごとに「frontier / standard / cheap にはこのモデル」を決められる。
+
+1. `[accounts] opencode_dir` を設定し account を作っておく（§1・§2）。これだけは config が要る。
+2. `/models` で opencode-go の source を開き、`発見` でモデル一覧を取る（`celerisctl models discover` でも同じ）。
+3. 役割（frontier / standard / cheap）ごとにモデルを選んで保存する。保存前の影響表示（preview）で、その枠を使う provider 行と
+   llm-proxy の lane が何から何に変わるかを確かめる。決めた値は DB に残り、次の解決から効く（daemon の再起動も reload も要らない）。
+4. `opencode go を使う` を押すと、`llm_source = opencode_go` の provider 行が無いときだけ
+   `{id: "opencode-go", adapter: "acp", llm_source: "opencode_go", account_pool: "opencode-go", tiers: [frontier, standard, cheap]}` を
+   `POST /api/v1/providers` で作る（providers.d に書いて reload）。割り当てが無い役割はその provider の候補にならない。
+   `account_pool` は `true` / `false` に加えて pool 名の文字列（`"opencode-go"`）を API でも設定できる。名前付き pool は
+   `[accounts]` に対応する dir（opencode なら `opencode_dir`）があるときだけ受け付ける（無ければ 422 `invalid_provider`）。
+
+API: `GET /api/v1/llm/models/assignments`（割り当てと全枠の実効）、`PUT`/`DELETE …/assignments/{source}/{tier}`、
+`POST …/assignments/preview`。割り当ての変更は event `model_role_assignment_changed` に残る。
+`celerisctl models assign <source> <tier> <model_id>` / `unassign <source> <tier>` も同じ API を呼ぶ。
+
+### Excluded（除外）とは
+
+割り当て行は残るが、いまは routing に使えない状態。理由は 2 つ。`override:disabled` はそのモデルに `disabled` の上書きがある
+（先に見る）、`catalog:unavailable` は発見で見えなくなった（`available = false`）。Excluded の枠は黙って別のモデルに差し替えず、
+その provider / lane を「未設定」として候補から外す。モデルが戻る（`available = true`）か上書きを外せば、割り当てのまま自動で
+Assigned に戻る。直したくなければ割り当てを外す（config の値に戻る）か別のモデルに替える。
+
 ## 4. 枠切れの挙動と『不明』
 
 - usage の `status = "rate-limited"` の窓は利用率 100% として扱い、pool の全 account が枠切れなら provider 選択から外れて、
@@ -74,4 +100,3 @@ env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }   # OPENCODE_CONFIG は opencode
 - 発見は claude の OAuth token を更新しない。期限切れなら claude の発見は失敗し、catalog は変わらない（消えたと誤認しない）。
 - 発見 hook は daemon 起動時の config の写しを使う。`[model_catalog]` や providers を変えたら daemon の再起動が要る。
 - catalog の新モデルは routing に自動で入らない。override の `tier` か config で決める。
-- API の provider の作成・更新では、名前付き `account_pool`（`"opencode-go"` 等）をまだ設定できない。config ファイルで書く。

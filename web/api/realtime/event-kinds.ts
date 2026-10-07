@@ -8,7 +8,7 @@ import type { Event } from "../generated/types";
  * 生成型（schema.json）に未反映の種類。Rust 側が schema を再生成したら `Event["type"]` に含まれるので、この一覧から消す
  * （消すまでは重複しても union は変わらない）。ADR 2026-10-06 model-role-assignments D2。
  */
-export const PENDING_GENERATED_KINDS = ["model_role_assignment_changed"] as const;
+export const PENDING_GENERATED_KINDS = [] as const;
 
 export type EventKind = Event["type"] | (typeof PENDING_GENERATED_KINDS)[number];
 

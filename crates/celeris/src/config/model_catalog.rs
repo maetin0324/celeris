@@ -38,9 +38,15 @@ fn default_opencode_cli() -> String {
     "opencode".to_string()
 }
 
+use task_core::Tier;
+use task_core::model_catalog::assignments::{
+    AssignmentState, AssignmentView, tier_str, wire_prefix_for,
+};
 use task_core::model_catalog::{CatalogEntry, CatalogOverrideRow};
+use task_core::model_router::profiles::{DeploymentProfile, ModelProfile};
 
 use super::RoutingCatalog;
+use super::model_routing::{deployment, unknown_model};
 
 /// routing の source 名（`opencode_go` / `openai_compatible:x` / `openai-compatible:x`）を catalog の
 /// source 名（ハイフン区切り）に揃える。
@@ -115,6 +121,231 @@ pub fn apply_model_catalog(
         ));
     }
     dropped
+}
+
+/// `apply_role_assignments` が当てた（または外した）deployment 1 件（ログ・結合試験用）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedAssignment {
+    /// 当てた後の deployment id（`provider:<id>` を割ったときは `provider:<id>/<lane>`）。
+    pub deployment_id: String,
+    /// catalog の source 名（ハイフン区切り）。
+    pub source: String,
+    pub tier: Tier,
+    /// 割り当てた `upstream_model`（`Excluded` なら `None`）。
+    pub upstream_model: Option<String>,
+    /// `Excluded` のときの理由（`catalog:unavailable` / `override:disabled`）。
+    pub excluded_reason: Option<&'static str>,
+}
+
+/// 割り当てた model を deployment の `upstream_model` に書く形にする。opencode go の ACP 行は `opencode-go/<model>`
+/// と書く慣習（`wire_prefix_for`）で、routing catalog は adapter を知らないので、元の `upstream_model` が
+/// `<source>/` で始まっていたときだけ同じ接頭辞を付ける。
+fn assigned_upstream(old_upstream: &str, source: &str, model_id: &str) -> String {
+    let prefix = format!("{source}/");
+    if old_upstream.starts_with(&prefix) {
+        format!("{prefix}{model_id}")
+    } else {
+        model_id.to_string()
+    }
+}
+
+fn ensure_model(catalog_models: &mut Vec<ModelProfile>, id: &str, family: Option<&str>) {
+    if catalog_models.iter().any(|m| m.id == id) {
+        return;
+    }
+    let mut model = unknown_model(id, "model_role_assignments");
+    if let Some(family) = family {
+        model.family = family.to_string();
+    }
+    catalog_models.push(model);
+}
+
+/// `apply_role_assignments` が deployment を足せる provider 行（model も `tier_models` も無い opencode go の
+/// acp 行など。D3）。`Config::provider_lane_seeds` が作る。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderLaneSeed {
+    pub provider_id: String,
+    /// catalog の source 名（ハイフン区切り）。
+    pub source: String,
+    pub adapter: String,
+    pub lanes: Vec<Tier>,
+    pub config_order: usize,
+}
+
+/// ADR 2026-10-06 model-role-assignments D2: DB の割り当て（`source × 役割 → model`）を routing catalog の
+/// deployment に重ねる。`apply_model_catalog` の前に適用する（割り当て済みで使えない model はここで外すので、
+/// 後段と警告は重ならない。config の model が消えていても、利用可能な model への割り当てで lane が復活する）。dispatcher の `apply_to_bindings`・llm-proxy の
+/// `normalize_legacy_config_with` と同じ `(source, tier) → model` を返す。
+///
+/// 対象は `legacy:<source>:<Tier>`（llm-proxy 由来）と `provider:<id>/<lane>`（`providers.tier_models` 由来）の
+/// 1 lane deployment、および `provider:<id>`（`providers.model` 由来、複数 lane を持つ）。`source_ref` を
+/// catalog の source 名に正規化したものが割り当ての source と一致し、deployment の lane に割り当てがあるときだけ動く。
+///
+/// - `Assigned`: `upstream_model` を割り当ての model に、`model_profile_id` を `legacy:<family>:<wire>`（legacy）または
+///   `<upstream_model>`（provider）に書き換える。model profile が無ければ `unknown_model(.., "model_role_assignments")` を足す。
+/// - `Excluded`: deployment を外し、`catalog.warnings` に
+///   `model_role_assignments: deployment <id> excluded (<reason>)` を足す。
+/// - `provider:<id>`（lane なし）は複数 lane を覆う。割り当てのある lane だけを per-lane の
+///   `provider:<id>/<lane>` に割って（同じ id が既にあればそちらが書き換わる）、割り当てのない lane は元の
+///   deployment に残す（lane から割り当て済みのものを除く。残る lane が無ければ元の deployment は消える）。
+///   割り当てのない lane の `assignment:none` 除外は dispatcher だけが行い、ここでは config のまま残す。
+/// - 上記以外の deployment（`[[model_routing.deployments]]` の手書き行）には触らない。
+/// - `seeds` の provider 行は、`Assigned` の lane に既存の `provider:<id>/<lane>` も、その lane を覆う
+///   `provider:<id>` も無ければ、`provider:<id>/<lane>` を足す（`upstream_model` は `wire_prefix_for` + model_id、
+///   `adapter_constraints = [adapter]`）。`Excluded` の lane には足さない。
+pub fn apply_role_assignments(
+    catalog: &mut RoutingCatalog,
+    view: &AssignmentView,
+    seeds: &[ProviderLaneSeed],
+) -> Vec<AppliedAssignment> {
+    let mut applied = Vec::new();
+    if view.items.is_empty() {
+        return applied;
+    }
+    let covered: Vec<(String, Vec<Tier>)> = catalog
+        .deployments
+        .iter()
+        .map(|d| (d.id.clone(), d.allowed_lanes.clone()))
+        .collect();
+    let existing_ids: std::collections::HashSet<String> =
+        catalog.deployments.iter().map(|d| d.id.clone()).collect();
+    let mut out: Vec<DeploymentProfile> = Vec::with_capacity(catalog.deployments.len());
+    let mut warnings = Vec::new();
+    let mut new_models: Vec<(String, Option<String>)> = Vec::new();
+    for dep in std::mem::take(&mut catalog.deployments) {
+        let is_legacy = dep.id.starts_with("legacy:");
+        let provider_rest = dep.id.strip_prefix("provider:");
+        let is_provider_lane = provider_rest.is_some_and(|r| r.contains('/'));
+        let is_provider_multi = provider_rest.is_some_and(|r| !r.contains('/'));
+        if !(is_legacy || is_provider_lane || is_provider_multi) {
+            out.push(dep);
+            continue;
+        }
+        let source = normalize_source(&dep.source_ref);
+        let lanes: Vec<Tier> = dep
+            .allowed_lanes
+            .iter()
+            .copied()
+            .filter(|lane| view.get(&source, *lane).is_some())
+            .collect();
+        if lanes.is_empty() {
+            out.push(dep);
+            continue;
+        }
+        let mut remaining = dep.allowed_lanes.clone();
+        let start = out.len();
+        for lane in lanes {
+            let Some(assignment) = view.get(&source, lane) else {
+                continue;
+            };
+            // 1 lane の deployment はそのまま書き換える。複数 lane の `provider:<id>` は割って新しい id にする。
+            let split = is_provider_multi;
+            let id = if split {
+                format!("{}/{}", dep.id, tier_str(lane))
+            } else {
+                dep.id.clone()
+            };
+            remaining.retain(|l| *l != lane);
+            // 割った先の id が既にある（`tier_models` 由来の deployment）なら、そちらが自分の番で書き換わる／外れる。
+            if split && existing_ids.contains(&id) {
+                continue;
+            }
+            match assignment.state {
+                AssignmentState::Excluded { reason } => {
+                    warnings.push(format!(
+                        "model_role_assignments: deployment {id} excluded ({reason})"
+                    ));
+                    applied.push(AppliedAssignment {
+                        deployment_id: id,
+                        source: source.clone(),
+                        tier: lane,
+                        upstream_model: None,
+                        excluded_reason: Some(reason),
+                    });
+                }
+                AssignmentState::Assigned => {
+                    let upstream =
+                        assigned_upstream(&dep.upstream_model, &source, &assignment.model_id);
+                    let (profile_id, family) = if is_legacy {
+                        let family = dep.model_profile_id.split(':').nth(1).map(str::to_string);
+                        (
+                            format!(
+                                "legacy:{}:{upstream}",
+                                family.as_deref().unwrap_or("unknown")
+                            ),
+                            family,
+                        )
+                    } else {
+                        (upstream.clone(), None)
+                    };
+                    new_models.push((profile_id.clone(), family));
+                    let mut next = dep.clone();
+                    next.id = id.clone();
+                    next.upstream_model = upstream.clone();
+                    next.model_profile_id = profile_id;
+                    next.allowed_lanes = vec![lane];
+                    applied.push(AppliedAssignment {
+                        deployment_id: id,
+                        source: source.clone(),
+                        tier: lane,
+                        upstream_model: Some(upstream),
+                        excluded_reason: None,
+                    });
+                    out.push(next);
+                }
+            }
+        }
+        // 割り当てのない lane が残る（`provider:<id>` を割った場合だけ）。元の deployment に残す。
+        if is_provider_multi && !remaining.is_empty() {
+            let mut rest = dep;
+            rest.allowed_lanes = remaining;
+            out.insert(start, rest);
+        }
+    }
+    for seed in seeds {
+        for &lane in &seed.lanes {
+            let Some(assignment) = view.get(&seed.source, lane) else {
+                continue;
+            };
+            if assignment.state != AssignmentState::Assigned {
+                continue;
+            }
+            let lane_id = format!("provider:{}/{}", seed.provider_id, tier_str(lane));
+            let multi_id = format!("provider:{}", seed.provider_id);
+            if covered
+                .iter()
+                .any(|(id, lanes)| id == &lane_id || (id == &multi_id && lanes.contains(&lane)))
+            {
+                continue;
+            }
+            let prefix = wire_prefix_for(&seed.source, &seed.adapter).unwrap_or("");
+            let upstream = format!("{prefix}{}", assignment.model_id);
+            let mut dep = deployment(
+                lane_id.clone(),
+                seed.source.clone(),
+                upstream.clone(),
+                upstream.clone(),
+                vec![lane],
+                seed.config_order,
+            );
+            dep.adapter_constraints = vec![seed.adapter.clone()];
+            out.push(dep);
+            new_models.push((upstream.clone(), None));
+            applied.push(AppliedAssignment {
+                deployment_id: lane_id,
+                source: seed.source.clone(),
+                tier: lane,
+                upstream_model: Some(upstream),
+                excluded_reason: None,
+            });
+        }
+    }
+    catalog.deployments = out;
+    for (id, family) in new_models {
+        ensure_model(&mut catalog.models, &id, family.as_deref());
+    }
+    catalog.warnings.extend(warnings);
+    applied
 }
 
 #[cfg(test)]
@@ -231,5 +462,268 @@ mod tests {
         assert!(dropped.is_empty());
         assert_eq!(catalog.deployments.len(), 4);
         assert!(catalog.warnings.is_empty());
+    }
+
+    fn view(items: &[(&str, Tier, &str, AssignmentState)]) -> AssignmentView {
+        AssignmentView {
+            items: items
+                .iter()
+                .map(|(source, tier, model, state)| {
+                    task_core::model_catalog::assignments::EffectiveAssignment {
+                        source: CatalogSource::new(*source),
+                        tier: *tier,
+                        model_id: (*model).into(),
+                        state: *state,
+                        note: None,
+                        updated_at: 0,
+                        updated_by: "admin".into(),
+                    }
+                })
+                .collect(),
+        }
+    }
+
+    fn lane_dep(
+        id: &str,
+        source_ref: &str,
+        upstream: &str,
+        profile: &str,
+        lane: Tier,
+    ) -> DeploymentProfile {
+        let mut d = dep(id, source_ref, upstream);
+        d.model_profile_id = profile.into();
+        d.allowed_lanes = vec![lane];
+        d
+    }
+
+    #[test]
+    fn role_assignments_rewrite_lane_deployments_and_add_the_model_profile() {
+        let mut catalog = routing();
+        catalog.deployments = vec![
+            lane_dep(
+                "legacy:claude-oauth:Cheap",
+                "claude-oauth",
+                "claude-c",
+                "legacy:claude:claude-c",
+                Tier::Cheap,
+            ),
+            lane_dep(
+                "legacy:claude-oauth:Standard",
+                "claude-oauth",
+                "claude-s",
+                "legacy:claude:claude-s",
+                Tier::Standard,
+            ),
+            lane_dep(
+                "provider:og/cheap",
+                "opencode-go",
+                "opencode-go/old",
+                "opencode-go/old",
+                Tier::Cheap,
+            ),
+            lane_dep(
+                "manual",
+                "claude_oauth",
+                "hand-written",
+                "hand-written",
+                Tier::Cheap,
+            ),
+        ];
+        let v = view(&[
+            (
+                "claude-oauth",
+                Tier::Cheap,
+                "claude-new",
+                AssignmentState::Assigned,
+            ),
+            (
+                "opencode-go",
+                Tier::Cheap,
+                "glm-5",
+                AssignmentState::Assigned,
+            ),
+        ]);
+        let applied = apply_role_assignments(&mut catalog, &v, &[]);
+        assert_eq!(applied.len(), 2);
+        let by_id = |id: &str| catalog.deployments.iter().find(|d| d.id == id).unwrap();
+        let c = by_id("legacy:claude-oauth:Cheap");
+        assert_eq!(c.upstream_model, "claude-new");
+        assert_eq!(c.model_profile_id, "legacy:claude:claude-new");
+        assert_eq!(
+            by_id("legacy:claude-oauth:Standard").upstream_model,
+            "claude-s"
+        );
+        // opencode go の `<source>/` 接頭辞の慣習は保つ。
+        let og = by_id("provider:og/cheap");
+        assert_eq!(og.upstream_model, "opencode-go/glm-5");
+        assert_eq!(og.model_profile_id, "opencode-go/glm-5");
+        // 手書きの deployment には触らない。
+        assert_eq!(by_id("manual").upstream_model, "hand-written");
+        for id in ["legacy:claude:claude-new", "opencode-go/glm-5"] {
+            let m = catalog.models.iter().find(|m| m.id == id).expect(id);
+            assert_eq!(m.provenance, "model_role_assignments");
+        }
+        assert!(catalog.warnings.is_empty());
+    }
+
+    #[test]
+    fn role_assignments_remove_excluded_lanes_with_a_warning() {
+        let mut catalog = routing();
+        catalog.deployments = vec![lane_dep(
+            "legacy:codex-oauth:Cheap",
+            "codex-oauth",
+            "gpt-c",
+            "legacy:gpt:gpt-c",
+            Tier::Cheap,
+        )];
+        let v = view(&[(
+            "codex-oauth",
+            Tier::Cheap,
+            "gone",
+            AssignmentState::Excluded {
+                reason: "override:disabled",
+            },
+        )]);
+        let applied = apply_role_assignments(&mut catalog, &v, &[]);
+        assert!(catalog.deployments.is_empty());
+        assert_eq!(applied[0].excluded_reason, Some("override:disabled"));
+        assert_eq!(
+            catalog.warnings,
+            [
+                "model_role_assignments: deployment legacy:codex-oauth:Cheap excluded (override:disabled)"
+            ]
+        );
+    }
+
+    #[test]
+    fn multi_lane_provider_deployment_is_split_only_for_assigned_lanes() {
+        let mut catalog = routing();
+        let mut multi = dep("provider:p", "claude_oauth", "cfg-model");
+        multi.allowed_lanes = vec![Tier::Frontier, Tier::Standard, Tier::Cheap];
+        catalog.deployments = vec![multi];
+        let v = view(&[
+            (
+                "claude-oauth",
+                Tier::Standard,
+                "assigned-s",
+                AssignmentState::Assigned,
+            ),
+            (
+                "claude-oauth",
+                Tier::Cheap,
+                "gone",
+                AssignmentState::Excluded {
+                    reason: "catalog:unavailable",
+                },
+            ),
+        ]);
+        apply_role_assignments(&mut catalog, &v, &[]);
+        let ids: Vec<(&str, Vec<Tier>, &str)> = catalog
+            .deployments
+            .iter()
+            .map(|d| {
+                (
+                    d.id.as_str(),
+                    d.allowed_lanes.clone(),
+                    d.upstream_model.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            [
+                ("provider:p", vec![Tier::Frontier], "cfg-model"),
+                ("provider:p/standard", vec![Tier::Standard], "assigned-s"),
+            ]
+        );
+        assert_eq!(
+            catalog.warnings,
+            ["model_role_assignments: deployment provider:p/cheap excluded (catalog:unavailable)"]
+        );
+    }
+
+    #[test]
+    fn empty_view_changes_nothing() {
+        let mut catalog = routing();
+        assert!(apply_role_assignments(&mut catalog, &AssignmentView::empty(), &[]).is_empty());
+        assert_eq!(catalog.deployments.len(), 4);
+    }
+
+    #[test]
+    fn seeds_add_lane_deployments_only_where_nothing_covers_the_lane() {
+        let mut catalog = routing();
+        let mut multi = dep("provider:covered", "opencode-go", "opencode-go/old");
+        multi.allowed_lanes = vec![Tier::Cheap, Tier::Standard];
+        catalog.deployments = vec![multi];
+        let seed = |id: &str, adapter: &str| ProviderLaneSeed {
+            provider_id: id.into(),
+            source: "opencode-go".into(),
+            adapter: adapter.into(),
+            lanes: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
+            config_order: 3,
+        };
+        let v = view(&[
+            (
+                "opencode-go",
+                Tier::Standard,
+                "glm-5",
+                AssignmentState::Assigned,
+            ),
+            (
+                "opencode-go",
+                Tier::Cheap,
+                "gone",
+                AssignmentState::Excluded {
+                    reason: "catalog:unavailable",
+                },
+            ),
+        ]);
+        let applied = apply_role_assignments(
+            &mut catalog,
+            &v,
+            &[seed("og", "acp"), seed("covered", "acp")],
+        );
+        let og = catalog
+            .deployments
+            .iter()
+            .find(|d| d.id == "provider:og/standard")
+            .unwrap();
+        assert_eq!(og.upstream_model, "opencode-go/glm-5");
+        assert_eq!(og.model_profile_id, "opencode-go/glm-5");
+        assert_eq!(og.adapter_constraints, ["acp"]);
+        assert_eq!(og.allowed_lanes, vec![Tier::Standard]);
+        // 割り当てのない lane・Excluded の lane には足さない。
+        assert!(
+            !catalog
+                .deployments
+                .iter()
+                .any(|d| d.id.starts_with("provider:og/") && d.id != "provider:og/standard")
+        );
+        // `provider:covered` が standard を覆っているので、seed は足さず、割って書き換えるだけ。
+        assert_eq!(
+            catalog
+                .deployments
+                .iter()
+                .filter(|d| d.id == "provider:covered/standard"
+                    && d.upstream_model == "opencode-go/glm-5")
+                .count(),
+            1
+        );
+        assert!(
+            catalog
+                .models
+                .iter()
+                .any(|m| m.id == "opencode-go/glm-5" && m.provenance == "model_role_assignments")
+        );
+        assert!(
+            applied
+                .iter()
+                .any(|a| a.deployment_id == "provider:og/standard")
+        );
+        // acp 以外の adapter は接頭辞を付けない。
+        let mut other = routing();
+        other.deployments = vec![];
+        apply_role_assignments(&mut other, &v, &[seed("cc", "claude-code")]);
+        assert_eq!(other.deployments[0].upstream_model, "glm-5");
     }
 }

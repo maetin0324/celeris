@@ -1030,6 +1030,14 @@ export type Event =
       type: "model_catalog_changed";
     }
   | {
+      actor: string;
+      model_id?: string | null;
+      previous?: string | null;
+      source: string;
+      tier: Tier;
+      type: "model_role_assignment_changed";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -1515,6 +1523,9 @@ export type McpScope =
  * 誰が言ったか（ADR-0033 D4）。`user` = 人、`node` = 組織のノード（その run の返事）。
  */
 export type MessageRole = "user" | "node";
+export type SlotOrigin = "assignment" | "config";
+export type AssignmentStateView = "assigned" | "excluded";
+export type ImpactKind = "provider" | "proxy";
 /**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
  * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
@@ -1861,6 +1872,11 @@ export interface ApiV1Schema {
   milestone_decided: MilestoneDecided;
   milestone_lifecycle: MilestoneLifecycle;
   milestone_patch: MilestonePatchBody;
+  model_assignment_list: AssignmentList;
+  model_assignment_preview: AssignmentPreviewBody;
+  model_assignment_preview_result: AssignmentPreviewResponse;
+  model_assignment_put: AssignmentPutBody;
+  model_assignment_put_result: AssignmentPutResponse;
   model_catalog: ModelCatalogView;
   model_catalog_item: ModelCatalogItem;
   model_catalog_override: ModelCatalogOverrideView;
@@ -7500,6 +7516,88 @@ export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
 /**
+ * ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
+ */
+export interface AssignmentList {
+  effective: RoleSlotView[];
+  items: EffectiveAssignmentView[];
+}
+/**
+ * 1 つの `(source, tier)` の枠の実効。
+ */
+export interface RoleSlotView {
+  /**
+   * catalog に行があるときだけ。
+   */
+  available?: boolean | null;
+  excluded_reason?: string | null;
+  last_seen?: string | null;
+  model_id?: string | null;
+  origin?: SlotOrigin | null;
+  /**
+   * この枠を使う provider の id（昇順）。
+   */
+  providers: string[];
+  /**
+   * llm-proxy の lane がこの枠を使うか。
+   */
+  proxy: boolean;
+  source: string;
+  tier: Tier;
+}
+/**
+ * 割り当て 1 件（実効の状態つき）。
+ */
+export interface EffectiveAssignmentView {
+  /**
+   * `override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。
+   */
+  excluded_reason?: string | null;
+  model_id: string;
+  note?: string | null;
+  source: string;
+  state: AssignmentStateView;
+  tier: Tier;
+  /**
+   * RFC3339（UTC）。
+   */
+  updated_at: string;
+  updated_by: string;
+}
+/**
+ * `POST …/assignments/preview` の本文。`model_id` が `null`（省略）なら解除した場合の影響。
+ */
+export interface AssignmentPreviewBody {
+  model_id?: string | null;
+  source: string;
+  tier: Tier;
+}
+export interface AssignmentPreviewResponse {
+  impact: ImpactView;
+}
+export interface ImpactView {
+  changes: ImpactChangeView[];
+}
+export interface ImpactChangeView {
+  after?: string | null;
+  before?: string | null;
+  excluded_reason?: string | null;
+  id: string;
+  kind: ImpactKind;
+  tier: string;
+}
+/**
+ * `PUT …/assignments/{source}/{tier}` の本文。
+ */
+export interface AssignmentPutBody {
+  model_id: string;
+  note?: string | null;
+}
+export interface AssignmentPutResponse {
+  impact: ImpactView;
+  item: EffectiveAssignmentView;
+}
+/**
  * ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。
  */
 export interface ModelCatalogView {
@@ -7507,6 +7605,10 @@ export interface ModelCatalogView {
   last_discovery: DiscoveryRecordView[];
 }
 export interface ModelCatalogItem {
+  /**
+   * ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。
+   */
+  assigned_tiers: Tier[];
   available: boolean;
   capabilities: unknown;
   display_name?: string | null;

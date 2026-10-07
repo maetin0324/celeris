@@ -51,6 +51,7 @@ pub mod mcp_admin;
 pub mod memory;
 mod middleware;
 pub mod milestones;
+pub mod model_assignments;
 pub mod model_catalog;
 pub mod notify;
 mod problem;

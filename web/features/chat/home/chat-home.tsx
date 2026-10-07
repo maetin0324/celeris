@@ -53,9 +53,10 @@ export function ChatHome() {
       const shellBottom = column ? Number.parseFloat(getComputedStyle(column).paddingBottom) || 0 : 0;
       const viewport = window.visualViewport;
       const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-      setHeight(
-        Math.max(160, Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - shellBottom)),
-      );
+      // keyboard が layout viewport の下部タブを覆う間は、その退避余白を重ねて引かない。
+      const keyboardInset = Math.max(0, window.innerHeight - visibleBottom);
+      const tabInset = Math.max(0, shellBottom - keyboardInset);
+      setHeight(Math.max(160, Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - tabInset)));
     };
     resize();
     window.addEventListener("resize", resize);

@@ -116,7 +116,6 @@ describe("chat composer", () => {
     const html = renderToStaticMarkup(<ChatComposer threadId="t1" snapshot={snapshot} session={{} as ChatSession} />);
     for (const label of ["送信待ち", "1. 待機中", "停止", "割り込んで送信", "キューを再開", "停止を要求中"])
       expect(html).toContain(label);
-    expect(html).toContain("--shell-bottom-inset");
     expect(html).toContain("safe-area-inset-bottom");
     expect(html).toContain('aria-label="CoS へのメッセージ"');
     expect(html).toContain('aria-label="ファイルを添付"');

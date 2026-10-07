@@ -1,6 +1,14 @@
 import { afterEach, expect, it } from "vitest";
 import schema from "../../api/generated/schema.json";
-import { chatSeedFixture, createFakeDaemon, defaultFixtures, richFixtures, validateFixture } from "./fake-daemon.mjs";
+import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
+import {
+  chatInboxItemsFixture,
+  chatSeedFixture,
+  createFakeDaemon,
+  defaultFixtures,
+  richFixtures,
+  validateFixture,
+} from "./fake-daemon.mjs";
 
 const props = schema.properties as Record<string, unknown>;
 
@@ -17,7 +25,22 @@ it("seeds chat threads, long history and every card kind with schema-valid respo
   expect(seed.flatMap((row) => row.messages.flatMap((message) => message.cards.map((card) => card.kind)))).toEqual(
     expect.arrayContaining(["task", "decision", "question", "approval", "plan_gate", "notice", "operation"]),
   );
-  daemon = createFakeDaemon();
+  // 受信箱 thread のカードは人待ちの決定・質問。
+  const inboxCards =
+    seed.find((row) => row.thread.kind === "inbox")?.messages.flatMap((message) => message.cards) ?? [];
+  expect(inboxCards.map((card) => `${card.kind}:${card.id}:${card.state}`)).toEqual([
+    "decision:decision:D1:pending",
+    "question:question:Q1:pending",
+  ]);
+  const inboxItems = chatInboxItemsFixture();
+  expect(
+    validateFixture({ items: inboxItems, counts: { total: 6, by_kind: {} }, suppressed: {} }, props.inbox_items),
+  ).toEqual([]);
+  const answerable = seed
+    .flatMap((row) => row.messages.flatMap((message) => message.cards))
+    .filter((card) => ["question", "decision", "approval", "plan_gate"].includes(card.kind));
+  expect(answerable.every((card) => inboxItems.some((item) => item.id === card.id))).toBe(true);
+  daemon = createFakeDaemon({ inboxItems });
   const base = `${await daemon.start()}/api/v1/chat`;
   const get = async (path: string) => (await fetch(`${base}${path}`)).json();
   const list = await get("/threads?q=CoS");
@@ -173,6 +196,41 @@ it("replays chat SSE, emits live events, expires old cursors and handles attachm
   expect(preview.headers.get("content-type")).toBe("image/png");
   expect(Array.from(new Uint8Array(await preview.arrayBuffer())).slice(0, 8)).toEqual([
     137, 80, 78, 71, 13, 10, 26, 10,
+  ]);
+});
+
+it("answers CoS operation overrides deterministically (succeed and 409 conflict)", async () => {
+  daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const root = await daemon.start();
+  const overridePath = "/api/v1/cos/operations/OP1/override";
+  // gateway の relay は Bearer を付ける。token の無い要求は 401。
+  const request = (path: string, body: unknown, method: "GET" | "POST" = "POST") =>
+    fetch(`${root}${path}`, {
+      method,
+      headers: { "content-type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(body),
+    });
+  const tokenized = (path: string, body: unknown, method: "GET" | "POST" = "POST") =>
+    fetch(`${root}${path}`, {
+      method,
+      headers: { authorization: `Bearer ${FIXTURE_TOKEN}`, "content-type": "application/json" },
+      body: method === "GET" ? undefined : JSON.stringify(body),
+    });
+  expect((await request(overridePath, { action: "revoke", reason: "誤り" })).status).toBe(401);
+  // 理由の無い操作は 422（log には残さない）。
+  expect((await tokenized(overridePath, { action: "revoke" })).status).toBe(422);
+  const first = await (await tokenized(overridePath, { action: "revoke", reason: "誤り" })).json();
+  expect(first).toMatchObject({ action: "revoke", state: "revoked", operation_id: "OP1", paused_task_ids: [] });
+  // conflict に切ると 409（stale-revision）。
+  await (await tokenized("/__fixture/chat/override-state", { state: "conflict" })).json();
+  expect((await tokenized(overridePath, { action: "return", reason: "戻す" })).status).toBe(409);
+  await (await tokenized("/__fixture/chat/override-state", { state: "succeed" })).json();
+  await tokenized(overridePath, { action: "return", reason: "戻す" });
+  const log = await (await tokenized("/__fixture/chat/override-log", {}, "GET")).json();
+  expect(log.overrides).toEqual([
+    { operation_id: "OP1", action: "revoke", reason: "誤り" },
+    { operation_id: "OP1", action: "return", reason: "戻す" },
+    { operation_id: "OP1", action: "return", reason: "戻す" },
   ]);
 });
 

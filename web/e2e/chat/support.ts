@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
-import { createFakeDaemon, type FakeDaemonOptions } from "../support/fake-daemon.mjs";
+import { chatInboxItemsFixture, createFakeDaemon, type FakeDaemonOptions } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 
 export type ChatEventInput = {
@@ -33,6 +33,10 @@ export type ChatGateway = {
   requests(): Promise<
     Array<{ path: string; method: string; body?: string; query?: string; lastEventId?: string | null }>
   >;
+  /** override 応答の切り替え（succeed | conflict=409）。 */
+  setOverrideState(state: "succeed" | "conflict"): Promise<void>;
+  /** 届いた override の body（operation_id・action・reason の順）。 */
+  overrideLog(): Promise<Array<{ operation_id: string; action: string; reason: string }>>;
   close(): Promise<void>;
 };
 
@@ -40,14 +44,19 @@ export async function startChatGateway(options: FakeDaemonOptions = {}): Promise
   const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-chat-"));
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
-  const daemon = createFakeDaemon({ profile: "rich", ...options, token: FIXTURE_TOKEN });
+  const daemon = createFakeDaemon({
+    profile: "rich",
+    inboxItems: chatInboxItemsFixture(),
+    ...options,
+    token: FIXTURE_TOKEN,
+  });
   const daemonUrl = await daemon.start();
   const gateway = await startGateway({ daemonUrl, daemonTokenFile: tokenFile });
-  const control = async (pathName: string, body: Record<string, unknown>) => {
+  const control = async (pathName: string, body: Record<string, unknown>, method = "POST") => {
     const response = await fetch(`${daemonUrl}${pathName}`, {
-      method: "POST",
+      method,
       headers: { authorization: `Bearer ${FIXTURE_TOKEN}`, "content-type": "application/json" },
-      body: JSON.stringify(body),
+      body: method === "GET" ? undefined : JSON.stringify(body),
     });
     if (!response.ok) throw new Error(`fixture control ${pathName} failed: ${response.status}`);
     return (await response.json()) as Record<string, unknown>;
@@ -82,6 +91,13 @@ export async function startChatGateway(options: FakeDaemonOptions = {}): Promise
         query?: string;
         lastEventId?: string | null;
       }>;
+    },
+    async setOverrideState(state) {
+      await control("/__fixture/chat/override-state", { state });
+    },
+    async overrideLog() {
+      const result = await control("/__fixture/chat/override-log", {}, "GET");
+      return result.overrides as Array<{ operation_id: string; action: string; reason: string }>;
     },
     async close() {
       await gateway.close();

@@ -12,6 +12,7 @@ export type FakeDaemonRequest = {
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
 export const defaultFixtures: Record<string, unknown>;
+export function chatInboxItemsFixture(): import("../../api/generated/types").InboxItem[];
 export function chatSeedFixture(): Array<{
   thread: import("../../api/generated/types").ChatThread;
   messages: import("../../api/generated/types").ChatMessage[];
@@ -22,6 +23,9 @@ export function chatSeedFixture(): Array<{
 // and broadcasts a persisted ChatEvent. POST /__fixture/chat/threads/{t}/expire
 // {before_id} makes older SSE cursors return 410. POST /__fixture/chat/disconnect
 // tears down all chat SSE connections (to test reconnection).
+// POST /__fixture/chat/override-state {state: "succeed" | "conflict"} controls
+// POST /api/v1/cos/operations/{o}/override (409 while conflict).
+// GET /__fixture/chat/override-log lists the override bodies that were received.
 export type ChatFixtureControl = {
   rows: Map<
     string,

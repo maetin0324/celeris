@@ -520,7 +520,8 @@ async fn every_cargo_path_uses_the_scratch_target_dir() {
 async fn scratch_runs_get_target_and_cargo_tuning_but_no_sccache() {
     let (settings, owner, run_env, check) = run_scratch_env().await;
     let target = settings.pool().target_dir(&owner).display().to_string();
-    // cargo の env（先頭の 3 つ）の後は後続 task の宣言先（`CELERIS_*`、ADR-0098 D6）だけ。
+    // cargo の env（先頭の 3 つ）の後は後続 task の宣言先（`CELERIS_*`、ADR-0098 D6）と run の一時 dir
+    // （`TMPDIR`・`TMP`・`TEMP`、ADR 2026-10-07-build-tmp-hygiene D2）だけ。
     assert_eq!(
         run_env[..run_env.len().min(3)],
         [
@@ -533,7 +534,8 @@ async fn scratch_runs_get_target_and_cargo_tuning_but_no_sccache() {
         ]
     );
     assert!(
-        run_env[3..].iter().all(|(k, _)| k.starts_with("CELERIS_")),
+        run_env[3..].iter().all(|(k, _)| k.starts_with("CELERIS_")
+            || task_worker::run_tmpdir::RUN_TMPDIR_VARS.contains(&k.as_str())),
         "{run_env:?}"
     );
     let parent = |key: &str| std::env::var(key).unwrap_or_else(|_| "unset".to_string());

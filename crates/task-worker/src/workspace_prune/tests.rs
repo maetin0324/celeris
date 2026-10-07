@@ -128,6 +128,19 @@ fn prunable_paths_finds_target_under_repos_and_ignores_symlinks() {
     assert_eq!(found, expected);
 }
 
+/// ADR 2026-10-07-build-tmp-hygiene D2.2: 終端タスクに残った `runs/<run_id>/tmp` は刈る対象（ログは残す）。
+#[test]
+fn run_tmpdir_leftovers_of_a_terminal_task_are_prunable() {
+    let dir = tempfile::tempdir().unwrap();
+    let task_dir = dir.path();
+    let run_dir = task_dir.join("runs").join("run-a");
+    std::fs::create_dir_all(run_dir.join("tmp").join("rw")).unwrap();
+    std::fs::write(run_dir.join("result.json"), "{}").unwrap();
+    std::fs::create_dir_all(task_dir.join("runs").join("run-b")).unwrap();
+    let found = prunable_paths(task_dir);
+    assert_eq!(found, vec![run_dir.join("tmp")]);
+}
+
 #[test]
 fn prunable_paths_falls_back_to_the_legacy_tree_dir() {
     let dir = tempfile::tempdir().unwrap();

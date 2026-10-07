@@ -110,10 +110,11 @@ fn an_empty_context_renders_only_the_deliverables_placement_note() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }
@@ -251,10 +252,11 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     assert_eq!(
         render(&with_instructions, "artifacts"),
         format!(
-            "## Role: lead\nYou coordinate.\n\n{}{}{}",
+            "## Role: lead\nYou coordinate.\n\n{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
     let bare = RunContext {
@@ -267,10 +269,11 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     assert_eq!(
         render(&bare, "artifacts"),
         format!(
-            "## Role: lead\n\n{}{}{}",
+            "## Role: lead\n\n{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }
@@ -313,10 +316,11 @@ fn conversation_runs_get_a_reply_only_instruction_appended_at_the_end() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }
@@ -361,10 +365,11 @@ fn secretary_instructions_tell_cos_to_route_cluster_work_via_create_task() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }
@@ -700,10 +705,11 @@ fn recent_work_is_shown_right_after_memory_and_before_conversation() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }
@@ -933,10 +939,11 @@ fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             deliverables_placement_note(),
             production_host_note(),
-            tool_launch_policy_note()
+            tool_launch_policy_note(),
+            run_tmpdir_note()
         )
     );
 }

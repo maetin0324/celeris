@@ -512,6 +512,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_env_and_target() 
         }),
         followups_env: None,
         work_unit_env: None,
+        run_tmp_env: None,
         container: None,
         permission_mode: None,
     };
@@ -532,6 +533,7 @@ async fn dispatch_browser_fallback_prep_candidate_gets_primary_model_and_permiss
         env: None,
         followups_env: None,
         work_unit_env: None,
+        run_tmp_env: None,
         container: None,
         permission_mode: Some("plan".into()),
     };
@@ -574,6 +576,7 @@ async fn dispatch_prep_work_unit_env_is_stacked_on_the_cargo_env() {
         }),
         followups_env: None,
         work_unit_env: Some(vec![base.clone(), target.clone()]),
+        run_tmp_env: None,
         container: None,
         permission_mode: None,
     };

@@ -638,6 +638,9 @@ async fn run_claude_code(
     let mut exploration = ExplorationTracker::new(Some(req.cwd()), is_resuming);
     let mut force_kill = false;
     let mut timeout_terminal: Option<Terminal> = None;
+    // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body, not in
+    // `result.json`; keep the streamed assistant text as the fallback reply.
+    let mut cos_chat_streamed = String::new();
 
     loop {
         let wall_elapsed = start.elapsed();
@@ -692,6 +695,9 @@ async fn run_claude_code(
                 let text = String::from_utf8_lossy(&bytes);
                 let trimmed = text.trim();
                 if !trimmed.is_empty() {
+                    if req.context.cos_chat.is_some() {
+                        push_assistant_text(&mut cos_chat_streamed, trimmed);
+                    }
                     handle_line_for_run(
                         trimmed,
                         sink,
@@ -780,7 +786,29 @@ async fn run_claude_code(
                 }
                 _ => None,
             };
-            if let Some(message) = missing_result_json
+            // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: the CoS chat preamble does not ask for
+            // `result.json` (the reply is the body), so a successful CoS chat run without it is done
+            // with the `result` text, or the streamed assistant text when that is empty. An existing
+            // `result.json` still wins (it was read above); failed results stay failed.
+            if missing_result_json.is_some()
+                && req.context.cos_chat.is_some()
+                && !meta.is_error
+                && meta.subtype == "success"
+            {
+                let summary = meta
+                    .result
+                    .clone()
+                    .filter(|text| !text.trim().is_empty())
+                    .unwrap_or_else(|| cos_chat_streamed.trim().to_string());
+                outcome = (
+                    Terminal::Done {
+                        summary,
+                        evidence: Vec::new(),
+                        usage: usage_with_cost(meta.usage, config.model.as_deref()),
+                    },
+                    None,
+                );
+            } else if let Some(message) = missing_result_json
                 && req.context.browser.is_none()
                 && !meta.is_error
                 && meta.subtype == "success"
@@ -965,6 +993,30 @@ fn handle_line(
     exploration: &mut ExplorationTracker,
 ) {
     handle_line_for_run(line, sink, last_result, background, exploration, false);
+}
+
+/// Append the `text` blocks of an `assistant` stream-json line (CoS chat reply fallback).
+fn push_assistant_text(out: &mut String, line: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
+    };
+    if value.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return;
+    }
+    let Some(blocks) = value.pointer("/message/content").and_then(|c| c.as_array()) else {
+        return;
+    };
+    for text in blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
+        .filter_map(|b| b.get("text").and_then(|t| t.as_str()))
+        .filter(|t| !t.trim().is_empty())
+    {
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(text.trim());
+    }
 }
 
 fn handle_line_for_run(

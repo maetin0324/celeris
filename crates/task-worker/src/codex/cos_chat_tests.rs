@@ -466,3 +466,52 @@ async fn cos_chat_harness_codex_non_cos_secretary_stays_read_only() {
     );
     assert!(!args.contains(&"--image".to_string()));
 }
+
+/// live-check 不具合 1: a CoS chat codex run writes no `result.json`; the last `agent_message`
+/// (after a tool item) is the reply.
+#[tokio::test]
+async fn cos_chat_harness_codex_done_without_result_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_codex(
+        dir.path(),
+        &[
+            THREAD_STARTED,
+            r#"{"type":"item.completed","item":{"id":"i1","type":"agent_message","text":"調べます"}}"#,
+            r#"{"type":"item.started","item":{"id":"i2","type":"command_execution","command":"pwd"}}"#,
+            r#"{"type":"item.completed","item":{"id":"i2","type":"command_execution","command":"pwd","aggregated_output":"/w","exit_code":0,"status":"completed"}}"#,
+            REPLY,
+            TURN_COMPLETED,
+        ],
+    );
+    let sink = Sink::default();
+    let req = cos_req(dir.path(), chat(), None);
+    let result_json = req.artifacts_dir.join("result.json");
+    let outcome = run(config, req, &sink).await;
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "直しました"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+    // The reply is plain text; it is not recovered into result.json.
+    assert!(!result_json.exists());
+}
+
+/// A failed turn of a CoS chat codex run stays failed even with a streamed message.
+#[tokio::test]
+async fn cos_chat_harness_codex_failed_turn_without_result_json_stays_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = fake_codex(
+        dir.path(),
+        &[
+            THREAD_STARTED,
+            REPLY,
+            r#"{"type":"turn.failed","error":{"message":"boom"}}"#,
+        ],
+    );
+    let sink = Sink::default();
+    let outcome = run(config, cos_req(dir.path(), chat(), None), &sink).await;
+    assert!(
+        matches!(outcome.terminal, Terminal::Error { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+}

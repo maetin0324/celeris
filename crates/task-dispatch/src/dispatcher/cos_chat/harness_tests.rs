@@ -329,3 +329,39 @@ printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
     );
     assert_mapped(&events(&store, &thread, &third.id));
 }
+
+/// live-check 不具合 1: the claude CLI streams the reply and writes no `result.json` (the CoS chat
+/// preamble does not ask for it); the chat run completes and the output message is the reply.
+#[tokio::test]
+async fn cos_chat_harness_e2e_claude_without_result_json_completes() {
+    let script = r#"
+cat > /dev/null
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"確認します"},{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"了解しました"}'
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let command = stub(dir.path(), "claude.sh", script);
+    let adapter = Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig {
+        command,
+        ..Default::default()
+    }));
+    let (_data, store, mut d, thread) = fixture("claude-code", adapter);
+    post(&store, &d, &thread, "one", vec![]);
+    // `run` asserts `ChatRunState::Completed`.
+    let finished = run(&mut d, &store, &thread).await;
+    assert_eq!(finished.reason, None, "{finished:?}");
+    let output_id = finished.output_message_id.clone().expect("output message");
+    let output = store
+        .chat_message_list(
+            &thread,
+            &task_core::chat::ChatMessageQuery {
+                limit: Some(100),
+                ..Default::default()
+            },
+        )
+        .expect("messages")
+        .items
+        .into_iter()
+        .find(|m| m.id == output_id)
+        .expect("output message row");
+    assert_eq!(output.text, "了解しました");
+}

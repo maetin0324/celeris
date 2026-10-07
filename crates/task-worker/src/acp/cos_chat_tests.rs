@@ -263,3 +263,55 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         }
     }
 }
+
+/// live-check 不具合 1: an ACP CoS chat run writes no `result.json`; an `end_turn` stop is done with
+/// the streamed agent message chunks (other stop reasons stay failed).
+#[tokio::test]
+async fn cos_chat_harness_acp_done_without_result_json() {
+    let script = |stop: &str| {
+        format!(
+            r#"
+read -r init
+printf '%s\n' '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1,"agentCapabilities":{{}}}}}}'
+read -r new
+printf '%s\n' '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"new-session"}}}}'
+read -r prompt
+printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"了解"}}}}}}}}'
+printf '%s\n' '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"しました"}}}}}}}}'
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"{stop}"}}}}'
+"#
+        )
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let adapter = AcpAdapter::new(stub_acp(dir.path(), &script("end_turn")));
+    let result = adapter
+        .run(
+            chat_req(dir.path()),
+            "cos-acp-no-result",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    match result.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "了解しました"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let adapter = AcpAdapter::new(stub_acp(dir.path(), &script("refusal")));
+    let result = adapter
+        .run(
+            chat_req(dir.path()),
+            "cos-acp-refusal",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(result.terminal, Terminal::Error { .. }),
+        "{:?}",
+        result.terminal
+    );
+}

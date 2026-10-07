@@ -432,6 +432,15 @@ async fn run_pi(
             message: "pi exited unsuccessfully or without agent_end".into(),
             retryable: true,
         }
+    } else if let Some(summary) = stream.last_reply.clone().filter(|_| {
+        // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body.
+        req.context.cos_chat.is_some() && !req.artifacts_dir.join("result.json").exists()
+    }) {
+        Terminal::Done {
+            summary,
+            evidence: Vec::new(),
+            usage: stream.usage,
+        }
     } else {
         terminal_from_result(&req.artifacts_dir, &artifacts_rel, stream.usage).await
     };
@@ -504,6 +513,8 @@ struct PiStream {
     usage: Option<Usage>,
     error: Option<String>,
     ended: bool,
+    /// Text of the last assistant message (a CoS chat run's reply when `result.json` is absent).
+    last_reply: Option<String>,
 }
 
 impl PiStream {
@@ -539,12 +550,19 @@ impl PiStream {
                     self.error = None;
                 }
                 if let Some(content) = message["content"].as_array() {
+                    let mut reply = Vec::new();
                     for block in content {
                         if block["type"] == "text"
                             && let Some(text) = block["text"].as_str()
                         {
                             sink.progress(text);
+                            if !text.trim().is_empty() {
+                                reply.push(text.trim());
+                            }
                         }
+                    }
+                    if !reply.is_empty() {
+                        self.last_reply = Some(reply.join("\n\n"));
                     }
                 }
             }

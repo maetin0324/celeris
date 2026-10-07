@@ -434,6 +434,26 @@ impl SqliteStore {
         Ok(())
     }
 
+    /// `create_task_impl` that also runs `also` in the same transaction before the commit
+    /// (ADR 2026-10-07 cos-live-fixes D1: `POST /tasks` pins chat attachments with the new task, so
+    /// the dispatcher never sees the task without its pins). An `also` error writes nothing.
+    pub fn create_task_with<F>(
+        &self,
+        task: &Task,
+        extra_events: Vec<Event>,
+        also: F,
+    ) -> Result<(), StoreError>
+    where
+        F: FnOnce(&rusqlite::Transaction<'_>) -> Result<(), StoreError>,
+    {
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::create_task_tx(&tx, task, None, extra_events)?;
+        also(&tx)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// `create_task_impl` inside a caller's transaction (ADR 2026-10-05 D3: a CoS operation writes
     /// the task, `cos_operations` and the audit events in one transaction).
     pub fn create_task_tx(

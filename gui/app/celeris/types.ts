@@ -8369,6 +8369,13 @@ export interface NewTaskBody {
    */
   assignee?: string | null;
   /**
+   * ADR 2026-10-07 cos-live-fixes D1: chat attachment ids to pin to the new task
+   * (`owner_kind: "task"`) in the transaction that creates it, so the first run's input manifest
+   * already has them. An unknown, deleted, expired or duplicate id (or, from a CoS run, one from
+   * another thread) is 422 `invalid_attachment` and creates nothing.
+   */
+  attachment_ids?: string[];
+  /**
    * ADR-0044 D3: 種類。省略時は `other`。
    */
   category?: TaskCategory | null;

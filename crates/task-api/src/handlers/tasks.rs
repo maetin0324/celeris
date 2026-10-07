@@ -32,6 +32,12 @@ pub struct NewTaskBody {
     pub task: NewTaskSpec,
     #[serde(default)]
     pub expected_write_paths: Option<Vec<String>>,
+    /// ADR 2026-10-07 cos-live-fixes D1: chat attachment ids to pin to the new task
+    /// (`owner_kind: "task"`) in the transaction that creates it, so the first run's input manifest
+    /// already has them. An unknown, deleted, expired or duplicate id (or, from a CoS run, one from
+    /// another thread) is 422 `invalid_attachment` and creates nothing.
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
 }
 
 fn created_task(task: &Task) -> Response {
@@ -230,6 +236,7 @@ pub(crate) fn create_task_op(
     let NewTaskBody {
         mut task,
         expected_write_paths,
+        attachment_ids,
     } = body;
     let reject = |problem: ApiProblem| match audit {
         Some(audit) => audit.reject(store, "task", "new", problem),
@@ -249,44 +256,79 @@ pub(crate) fn create_task_op(
     // `default_role` の既定 → 全体の既定で埋める。API は常に完全な設定を持つので、`genres` が設定されて
     // いれば知らない `genre` / `genre` と `role` の不整合は常に検証する（celerisctl の「`--config` 無し」の
     // 緩さはここには無い）。
-    let Some(audit) = audit else {
-        let created = task_ops::add::create_task_with_roles(
-            store,
-            task,
-            roles,
-            genres,
-            OffsetDateTime::now_utc(),
-        )
-        .map_err(|e| ops_problem(store, e, None))?;
-        if let Some(paths) = &paths {
-            store
-                .set_task_expected_write_paths(
-                    created.id,
-                    Some(paths),
-                    &OffsetDateTime::now_utc().to_string(),
-                )
-                .map_err(|e| ops_problem(store, OpsError::Store(e), None))?;
-        }
-        return Ok(Applied::Direct(created));
-    };
     let built =
         task_ops::add::build_task_with_roles(store, task, roles, genres, OffsetDateTime::now_utc())
             .map_err(|e| reject(ops_problem(store, e, None)))?;
-    let target_id = built.id.to_string();
     let paths = paths.filter(|paths| !paths.is_empty());
-    let operation = audit.apply(store, "task", &target_id, "task.create", |tx| {
-        task_core::store::SqliteStore::create_task_tx(tx, &built, None, vec![])?;
+    let thread = audit.map(|audit| audit.ctx.thread_id.clone());
+    // ADR 2026-10-07 cos-live-fixes D1: the task row, its `ready` status and the attachment pins are
+    // one transaction, so the dispatcher never picks the task up before its pins exist.
+    let mut failure = None;
+    let mut write = |tx: &rusqlite::Transaction<'_>| -> Result<(), StoreError> {
         if paths.is_some() {
             task_core::store::SqliteStore::set_task_expected_write_paths_tx(
                 tx,
                 built.id,
-                paths,
+                paths.clone(),
                 &OffsetDateTime::now_utc().to_string(),
             )?;
         }
-        Ok(serde_json::json!({"task_id": built.id.to_string()}))
-    })?;
+        if let Err(problem) = pin_attachments_tx(tx, &attachment_ids, built.id, thread.as_deref()) {
+            let detail = problem.detail().to_string();
+            failure = Some(problem);
+            return Err(StoreError::Invalid(detail));
+        }
+        Ok(())
+    };
+    let Some(audit) = audit else {
+        let outcome = store.create_task_with(&built, vec![], write);
+        if let Some(problem) = failure {
+            return Err(problem);
+        }
+        outcome.map_err(|e| ops_problem(store, OpsError::Store(e), None))?;
+        return Ok(Applied::Direct(built));
+    };
+    let target_id = built.id.to_string();
+    let outcome = audit.apply(store, "task", &target_id, "task.create", |tx| {
+        task_core::store::SqliteStore::create_task_tx(tx, &built, None, vec![])?;
+        write(tx).map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
+        Ok(serde_json::json!({
+            "task_id": built.id.to_string(),
+            "attachment_ids": attachment_ids,
+        }))
+    });
+    let operation = outcome.map_err(|problem| failure.take().unwrap_or(problem))?;
     Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// Pin `ids` to the task being created inside its creation transaction (ADR 2026-10-07
+/// cos-live-fixes D1). Any invalid id fails the whole request with 422 `invalid_attachment`.
+fn pin_attachments_tx(
+    tx: &rusqlite::Transaction<'_>,
+    ids: &[String],
+    task: task_core::TaskId,
+    thread: Option<&str>,
+) -> Result<(), ApiProblem> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let now = OffsetDateTime::now_utc();
+    let internal =
+        |e: task_core::chat::attachments::AttachmentError| ApiProblem::internal(e.to_string());
+    if let Some(why) =
+        task_core::chat::attachments::task_pin_problem_tx(tx, ids, thread, now).map_err(internal)?
+    {
+        return Err(ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_attachment",
+            why,
+        ));
+    }
+    let owner = task.to_string();
+    for id in ids {
+        task_core::chat::attachments::add_ref_tx(tx, id, "task", &owner, now).map_err(internal)?;
+    }
+    Ok(())
 }
 
 // ---- 5. GET /tasks/{id} ----

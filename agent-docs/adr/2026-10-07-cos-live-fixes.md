@@ -1,7 +1,7 @@
 # ADR 2026-10-07: CoS 実機確認 live2 の不具合 D1〜D4 を直す（作成時 pin・KB 候補 operation・triage の confidence・終端 run の takeover 除外）
 
 - 日付: 2026-10-07
-- 状態: 承認済み・未実装（task 01M4APB5FP8T3TAAE51Z20E3M1）
+- 状態: 実装済み（task 01M4APB5FP8T3TAAE51Z20E3M1。実機の再実行は未、付記 実装突き合わせ）
 - 関連: ADR 2026-10-05-cos-chat-home D2（chat API）/ D3（CoS credential と監査付き操作）/ D4（添付の pin）、
   ADR 2026-10-06-cos-inbox-triage（受信箱の一次対応）、ADR 2026-10-06-cos-chat-run-dispatch（CoS run の起動）、
   ADR 2026-10-03-ownerless-running-runs（lease を持たない running run の回収）、ADR-0047 D1（KB の scope）、
@@ -126,3 +126,22 @@ branch tree `5664ef5fb20e`、2026-10-07）で、(d) screenshot の task への�
   （git の履歴には書いて消した 2 commit が残る）。
 - 残る隙: 候補の commit と pin の commit の間に process が落ちると、pin の無い候補が `_inbox` に残る。人の受信箱で
   見える（provenance が空）ので、捨てるか取り込むかを人が決める。
+
+## 付記 実装との突き合わせ（2026-10-07、close）
+
+| 決定 | 実装 | 試験 |
+|---|---|---|
+| D1 | `crates/task-api/src/handlers/tasks.rs` の `NewTaskBody.attachment_ids: Vec<String>`（`serde(default)`）。`create_task_op` が 1 transaction で task 行・`Created` event・書き込み範囲の予告・pin を書く（`SqliteStore::create_task_with`、`crates/task-core/src/store/tasks.rs`）。検証 `task_pin_problem_tx`（`crates/task-core/src/chat/attachments.rs`。ULID 形・重複・上限 `MAX_TASK_CREATE_ATTACHMENTS = 20`・`ready`・未期限切れ・CoS は thread 一致）。不正は 422 `invalid_attachment` で task も作らない。CoS は `/cos/operations` の `task.create`（`ALLOWED` の `("POST", "/api/v1/tasks", "task.create")` は既存）で、`cos_operations.result` は `{"task_id","attachment_ids"}` | `crates/task-api/tests/cos_live_fix_d1.rs`: `cos_live_fix_d1_created_task_already_has_its_pins`・`..._invalid_attachment_creates_no_task`・`..._cos_task_create_pins_and_audits` |
+| D2 | `crates/task-api/src/knowledge.rs` の `POST /api/v1/knowledge/inbox`（201 `KnowledgeRecordResult`、本文 `KnowledgeRecordBody`、`deny_unknown_fields`）。本体 `record_op` を handler と CoS operation が共有。`crates/task-api/src/cos/operations.rs` の `ALLOWED` の行 `("POST", "/api/v1/knowledge/inbox", "knowledge.record")`。CLI は `crates/celerisctl/src/commands/knowledge.rs` が CoS credential のとき `/cos/operations` 経由。scope は `project:<slug>`（`projects/<slug>` は受けて正規化） | `crates/task-api/tests/cos_live_fix_d2.rs`: `cos_live_fix_d2_api_creates_candidate_with_provenance`・`..._invalid_scope_is_422_and_writes_nothing`・`..._cos_operation_records_audit_row`、`crates/celerisctl/src/commands/knowledge_tests.rs`: `cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api`・`..._cli_idempotency_key_is_stable`・`..._cli_direct_record_refuses_attachment_ids` |
+| D3 | `crates/task-api/src/cos/inbox.rs` の `ResolveBody.confidence: Option<f64>`（範囲外・非有限は 422 `validation`、`deny_unknown_fields` は維持）。本文が `cos_operations.payload` に入り、observe / escalate の `result` にも `confidence` が入る | `crates/task-api/tests/cos_triage.rs`: `cos_live_fix_d3_confidence_is_recorded_in_the_operation`・`..._out_of_range_is_422`・`..._omitted_keeps_working` |
+| D4 | `crates/task-core/src/chat/run_store.rs` の `chat_run_takeover`（非終端の確認・続きの message 投入・interrupted 化を 1 write transaction。終端なら `Ok(None)`）。`cos_chat/control.rs` の `recover_orphan` は終端なら何もしない。原因は `cos_chat/sink.rs` の `ChatRunSink::write` が Conflict を「終端」と誤読して `chat_run_finish` を呼ばなかったこと（triage run は出力 message が無い）。Conflict 後に store で状態を読み、終端のときだけ止める | `crates/task-dispatch/src/dispatcher/tests/cos_live_fix_d4.rs`: `cos_live_fix_d4_finished_triage_run_is_not_taken_over`・`..._terminal_run_with_expired_lease_is_left_alone`・`..._takeover_of_terminal_run_writes_nothing`・`..._true_orphan_is_still_taken_over_once`・`..._terminal_is_recorded_before_slot_release` |
+| D5 | `scripts/dev/cos-chat-live.sh`、`docs/ops/cos-chat.md`「実機確認の再実行」節 | 構文・usage のみ確認（dry / full は未実行） |
+
+決定からのずれ・残り:
+
+- D1 の「人の API 経路でも pin ごとの event を積む」は積んでいない。`Event` に variant を足すと `task-api/src/query.rs`・web の
+  event-kinds / invalidation-map まで波及するので、`chat_attachment_refs.created_at`（同じ transaction）を記録とした。
+- D4 の「持ち主の sink が記録するのを待つ」は、handle が生きている間のみ。`run_claimed` の早期 return（DB 読み取りエラー）は
+  終端を書かず、次の tick で takeover に回る（DB が読めない時の回収経路として残した）。
+- `crates/task-worker/src/cos_chat.rs` の `attachment_pin_rules`（CoS run の前置き）は旧手順（owner を先に作って references で pin）の
+  ままで、skill §3a の新しい形と食い違う。別 task で直す（進捗ファイルの提案）。

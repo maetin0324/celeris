@@ -385,7 +385,7 @@ fn role_members_catalog_proxy_and_dispatch_share_priority_and_empty_scope() {
                     priority: 1,
                 },
             ],
-            &[source.clone()],
+            std::slice::from_ref(&source),
             "admin",
             2,
         )

@@ -55,6 +55,14 @@ fn load(extra: &str) -> (tempfile::TempDir, Result<Config, ConfigError>) {
     (dir, cfg)
 }
 
+fn example_seed<'a>(cfg: &'a Config, name: &str) -> &'a crate::config::CronSeedConfig {
+    cfg.cron
+        .seed
+        .iter()
+        .find(|s| s.name == name)
+        .unwrap_or_else(|| panic!("{name} が例に無い: {:?}", cfg.cron.seed))
+}
+
 fn open_store(dir: &tempfile::TempDir) -> SqliteStore {
     SqliteStore::open(&dir.path().join("t.sqlite3")).unwrap()
 }
@@ -90,6 +98,21 @@ fn cron_seed_rejects_invalid_seeds_at_load() {
             "nope",
         ),
         (format!("{SEED}{SEED}"), "duplicate"),
+        // ADR 2026-10-07-build-tmp-hygiene D1.4: action は予約語だけ。未実装の tmp_sweep も拒否する。
+        (
+            SEED.replace(
+                "mode = \"dry_run\"",
+                "mode = \"dry_run\"\naction = \"rm_rf\"",
+            ),
+            "extra.action",
+        ),
+        (
+            SEED.replace(
+                "mode = \"dry_run\"",
+                "mode = \"dry_run\"\naction = \"tmp_sweep\"",
+            ),
+            "not implemented",
+        ),
         (
             SEED.replace("name = \"daily-curation\"", "name = \" \""),
             "blank",
@@ -201,9 +224,7 @@ fn cron_seed_with_an_invalid_template_is_a_config_error_and_writes_nothing() {
 #[test]
 fn cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness() {
     let cfg = Config::load(example_path()).unwrap();
-    let [seed] = cfg.cron.seed.as_slice() else {
-        panic!("{:?}", cfg.cron.seed)
-    };
+    let seed = example_seed(&cfg, "daily-curation");
     assert_eq!(seed.name, "daily-curation");
     assert!(!seed.enabled);
     assert_eq!(seed.overlap, CronOverlap::Skip);
@@ -270,17 +291,16 @@ fn cron_seed_example_toml_has_daily_curation_and_knowledge_curation_harness() {
 
     let dir = tempfile::tempdir().unwrap();
     let store = SqliteStore::open(&dir.path().join("t.sqlite3")).unwrap();
-    assert_eq!(seed_cron_if_empty(&store, &cfg, now()).unwrap(), 1);
+    // 例には daily-curation と target-sweep の 2 件がある（target-sweep は下の試験で見る）。
+    assert_eq!(seed_cron_if_empty(&store, &cfg, now()).unwrap(), 2);
     assert_eq!(seed_cron_if_empty(&store, &cfg, now()).unwrap(), 0);
-    assert_eq!(store.cron_job_list().unwrap().len(), 1);
+    assert_eq!(store.cron_job_list().unwrap().len(), 2);
 }
 
 #[test]
 fn seed_objective_describes_curation_content_hashes_and_diff_scope() {
     let cfg = Config::load(example_path()).unwrap();
-    let [seed] = cfg.cron.seed.as_slice() else {
-        panic!("{:?}", cfg.cron.seed)
-    };
+    let seed = example_seed(&cfg, "daily-curation");
     let objective = &seed.template.objective;
     for word in [
         "content",
@@ -295,4 +315,37 @@ fn seed_objective_describes_curation_content_hashes_and_diff_scope() {
     ] {
         assert!(objective.contains(word), "objective に {word} が無い");
     }
+}
+
+/// ADR 2026-10-07-build-tmp-hygiene D1.4: 例の target-sweep の種（無効・04:15 Asia/Tokyo・overlap skip・
+/// catch_up latest・action target_sweep・mode apply）が設定の検証と、空の DB への投入（`validate_job`）を通る。
+#[test]
+fn target_sweep_cron_seed_example_toml_passes_validation() {
+    let cfg = Config::load(example_path()).unwrap();
+    let seed = example_seed(&cfg, "target-sweep");
+    assert!(!seed.enabled, "有効化は人の resume");
+    assert_eq!(seed.schedule, "15 4 * * *");
+    assert_eq!(seed.timezone, "Asia/Tokyo");
+    assert_eq!(seed.overlap, CronOverlap::Skip);
+    assert_eq!(seed.catch_up, CronCatchUp::Latest);
+    assert_eq!(
+        seed.template.extra.get("action"),
+        Some(&"target_sweep".into())
+    );
+    assert_eq!(seed.template.extra.get("mode"), Some(&"apply".into()));
+    assert_eq!(
+        task_ops::cron_jobs::template_action(&seed.template),
+        Ok(Some("target_sweep"))
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let store = SqliteStore::open(&dir.path().join("t.sqlite3")).unwrap();
+    assert_eq!(seed_cron_if_empty(&store, &cfg, now()).unwrap(), 2);
+    let job = store
+        .cron_job_list()
+        .unwrap()
+        .into_iter()
+        .find(|j| j.name == "target-sweep")
+        .unwrap();
+    assert!(!job.enabled);
 }

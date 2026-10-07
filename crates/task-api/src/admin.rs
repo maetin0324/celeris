@@ -437,7 +437,10 @@ impl ProviderPatchBody {
         if let Some(account_pool) = self.account_pool {
             // 名前付き pool（"opencode-go"）の行を `true` で上書きしても名前は保つ。`false` は外す。
             file.account_pool = match (account_pool, file.account_pool) {
-                (task_core::AccountPoolSetting::On, named @ task_core::AccountPoolSetting::Adapter(_)) => named,
+                (
+                    task_core::AccountPoolSetting::On,
+                    named @ task_core::AccountPoolSetting::Adapter(_),
+                ) => named,
                 (setting, _) => setting,
             };
         }

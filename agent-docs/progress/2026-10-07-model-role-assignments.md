@@ -47,3 +47,18 @@ completed: 2026-10-07
 
 - `ProviderCandidateOutcome` に `assignment_excluded` の variant を足して除外理由を構造化する（今は `Unsupported` + detail 文字列）。
 - `ProviderLive` に `llm_proxy.models` 由来の lane 値も載せて、API の config 由来の値を 1 か所から取る。
+
+## delivery-repair（2026-10-07）
+
+リリース準備ログ `7a7d2943cac36d5148d24b7ad9daf9aee591e7df/prepare.log` は、最初の `cargo-fmt-check` で停止していた。`crates/task-api/src/admin.rs` の名前付き account pool を維持する match arm に rustfmt の改行が未適用で、同じ失敗をこの worktree でも再現した（exit 1）。`cargo fmt --all` で当該箇所だけを整形し、動作は変更していない。main は修正前 HEAD と同じ `7a7d2943` なので merge は不要だった。
+
+ログは `/local/celeris/data/workspaces/01M49T2H94J93KPF9SF7CW28AG/artifacts/repair-*.log` に保存。本番操作・リリース準備の再実行・デプロイは行っていない。
+
+| コマンド | 修正後の結果 |
+| --- | --- |
+| `cargo fmt --all -- --check` | exit 0（修正前は exit 1） |
+| `bash scripts/dev/test-parallel.sh` | exit 0。4219 passed / 0 failed / 14 ignored、doc-test exit 0 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web test` | exit 0。vitest 71 files / 479 tests、node:test 59 pass |
+| `pnpm -C web e2e` | exit 0。272 passed / 8 skipped |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |

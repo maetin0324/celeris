@@ -558,6 +558,7 @@ impl ProxyState {
 // 候補の組み立て
 // ---------------------------------------------------------------------------
 
+#[derive(Clone)]
 enum Attempt {
     Claude(SelectedAccount),
     Codex(SelectedAccount),
@@ -624,7 +625,7 @@ impl ProxyState {
                         .find(|d| d.source_ref == source)
                         .map(|d| d.upstream_model.clone())
                 };
-                match scope {
+                let attempts: Vec<(Attempt, String)> = match scope {
                     SourceScope::Only(SourceKind::Claude) => {
                         let Some(model) = model_for("claude-oauth") else {
                             return vec![];
@@ -687,7 +688,21 @@ impl ProxyState {
                         );
                         attempts
                     }
+                };
+                let mut expanded = Vec::new();
+                for (attempt, _) in attempts {
+                    for d in deployments
+                        .iter()
+                        .filter(|d| d.source_ref == attempt.source_label())
+                    {
+                        expanded.push((d.config_order, attempt.clone(), d.upstream_model.clone()));
+                    }
                 }
+                expanded.sort_by_key(|(priority, _, _)| *priority);
+                expanded
+                    .into_iter()
+                    .map(|(_, attempt, model)| (attempt, model))
+                    .collect()
             }
         }
     }
@@ -1348,9 +1363,13 @@ async fn chat_completions(
     let mut budget = FallbackBudget::new(&state.fallback, state.clock.now());
     let mut breaker_skipped: Vec<String> = Vec::new();
     let mut last_error = None;
+    let mut rejected_accounts = std::collections::HashSet::new();
     for (attempt, upstream_model) in &attempts {
         let source_label = attempt.source_label();
         let account_label = attempt.account_label();
+        if rejected_accounts.contains(&(source_label.clone(), account_label.clone())) {
+            continue;
+        }
         if !constraints.admits(attempt.source_kind()) {
             tracing::debug!(source = %source_label, "llm-proxy: candidate outside the request constraints; skipped");
             continue;
@@ -1459,6 +1478,12 @@ async fn chat_completions(
                     ),
                 ) {
                     state.record_failure(attempt.source_kind(), account, &e, now);
+                    if matches!(
+                        e,
+                        SourceError::Unauthorized | SourceError::RateLimited { .. }
+                    ) {
+                        rejected_accounts.insert((source_label.clone(), account_label.clone()));
+                    }
                 }
                 if let Some(last) = scope.attempts.last_mut() {
                     last.fallback_reason = Some(fallback_reason(class).to_string());

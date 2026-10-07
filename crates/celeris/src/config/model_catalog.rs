@@ -199,7 +199,7 @@ pub fn apply_role_assignments(
     seeds: &[ProviderLaneSeed],
 ) -> Vec<AppliedAssignment> {
     let mut applied = Vec::new();
-    if view.items.is_empty() {
+    if view.items.is_empty() && view.managed.is_empty() {
         return applied;
     }
     let covered: Vec<(String, Vec<Tier>)> = catalog
@@ -226,7 +226,7 @@ pub fn apply_role_assignments(
             .allowed_lanes
             .iter()
             .copied()
-            .filter(|lane| view.get(&source, *lane).is_some())
+            .filter(|lane| view.manages(&source, *lane))
             .collect();
         if lanes.is_empty() {
             out.push(dep);
@@ -235,63 +235,69 @@ pub fn apply_role_assignments(
         let mut remaining = dep.allowed_lanes.clone();
         let start = out.len();
         for lane in lanes {
-            let Some(assignment) = view.get(&source, lane) else {
-                continue;
-            };
-            // 1 lane の deployment はそのまま書き換える。複数 lane の `provider:<id>` は割って新しい id にする。
-            let split = is_provider_multi;
-            let id = if split {
-                format!("{}/{}", dep.id, tier_str(lane))
-            } else {
-                dep.id.clone()
-            };
             remaining.retain(|l| *l != lane);
-            // 割った先の id が既にある（`tier_models` 由来の deployment）なら、そちらが自分の番で書き換わる／外れる。
-            if split && existing_ids.contains(&id) {
-                continue;
-            }
-            match assignment.state {
-                AssignmentState::Excluded { reason } => {
-                    warnings.push(format!(
-                        "model_role_assignments: deployment {id} excluded ({reason})"
-                    ));
-                    applied.push(AppliedAssignment {
-                        deployment_id: id,
-                        source: source.clone(),
-                        tier: lane,
-                        upstream_model: None,
-                        excluded_reason: Some(reason),
-                    });
+            for (index, assignment) in view.members(&source, lane).into_iter().enumerate() {
+                // 1 lane の deployment はそのまま書き換える。複数 lane の `provider:<id>` は割って新しい id にする。
+                let split = is_provider_multi;
+                let id = if split {
+                    format!("{}/{}", dep.id, tier_str(lane))
+                } else {
+                    dep.id.clone()
+                };
+                remaining.retain(|l| *l != lane);
+                // 割った先の id が既にある（`tier_models` 由来の deployment）なら、そちらが自分の番で書き換わる／外れる。
+                if split && existing_ids.contains(&id) {
+                    continue;
                 }
-                AssignmentState::Assigned => {
-                    let upstream =
-                        assigned_upstream(&dep.upstream_model, &source, &assignment.model_id);
-                    let (profile_id, family) = if is_legacy {
-                        let family = dep.model_profile_id.split(':').nth(1).map(str::to_string);
-                        (
-                            format!(
-                                "legacy:{}:{upstream}",
-                                family.as_deref().unwrap_or("unknown")
-                            ),
-                            family,
-                        )
-                    } else {
-                        (upstream.clone(), None)
-                    };
-                    new_models.push((profile_id.clone(), family));
-                    let mut next = dep.clone();
-                    next.id = id.clone();
-                    next.upstream_model = upstream.clone();
-                    next.model_profile_id = profile_id;
-                    next.allowed_lanes = vec![lane];
-                    applied.push(AppliedAssignment {
-                        deployment_id: id,
-                        source: source.clone(),
-                        tier: lane,
-                        upstream_model: Some(upstream),
-                        excluded_reason: None,
-                    });
-                    out.push(next);
+                let id = if index == 0 {
+                    id
+                } else {
+                    format!("{id}/model:{}", assignment.model_id)
+                };
+                match assignment.state {
+                    AssignmentState::Excluded { reason } => {
+                        warnings.push(format!(
+                            "model_role_assignments: deployment {id} excluded ({reason})"
+                        ));
+                        applied.push(AppliedAssignment {
+                            deployment_id: id,
+                            source: source.clone(),
+                            tier: lane,
+                            upstream_model: None,
+                            excluded_reason: Some(reason),
+                        });
+                    }
+                    AssignmentState::Assigned => {
+                        let upstream =
+                            assigned_upstream(&dep.upstream_model, &source, &assignment.model_id);
+                        let (profile_id, family) = if is_legacy {
+                            let family = dep.model_profile_id.split(':').nth(1).map(str::to_string);
+                            (
+                                format!(
+                                    "legacy:{}:{upstream}",
+                                    family.as_deref().unwrap_or("unknown")
+                                ),
+                                family,
+                            )
+                        } else {
+                            (upstream.clone(), None)
+                        };
+                        new_models.push((profile_id.clone(), family));
+                        let mut next = dep.clone();
+                        next.id = id.clone();
+                        next.upstream_model = upstream.clone();
+                        next.model_profile_id = profile_id;
+                        next.allowed_lanes = vec![lane];
+                        next.config_order = assignment.priority as usize;
+                        applied.push(AppliedAssignment {
+                            deployment_id: id,
+                            source: source.clone(),
+                            tier: lane,
+                            upstream_model: Some(upstream),
+                            excluded_reason: None,
+                        });
+                        out.push(next);
+                    }
                 }
             }
         }
@@ -304,40 +310,44 @@ pub fn apply_role_assignments(
     }
     for seed in seeds {
         for &lane in &seed.lanes {
-            let Some(assignment) = view.get(&seed.source, lane) else {
-                continue;
-            };
-            if assignment.state != AssignmentState::Assigned {
-                continue;
+            for (index, assignment) in view.members(&seed.source, lane).into_iter().enumerate() {
+                if assignment.state != AssignmentState::Assigned {
+                    continue;
+                }
+                let lane_id = format!("provider:{}/{}", seed.provider_id, tier_str(lane));
+                let multi_id = format!("provider:{}", seed.provider_id);
+                if covered
+                    .iter()
+                    .any(|(id, lanes)| id == &lane_id || (id == &multi_id && lanes.contains(&lane)))
+                {
+                    continue;
+                }
+                let lane_id = if index == 0 {
+                    lane_id
+                } else {
+                    format!("{lane_id}/model:{}", assignment.model_id)
+                };
+                let prefix = wire_prefix_for(&seed.source, &seed.adapter).unwrap_or("");
+                let upstream = format!("{prefix}{}", assignment.model_id);
+                let mut dep = deployment(
+                    lane_id.clone(),
+                    seed.source.clone(),
+                    upstream.clone(),
+                    upstream.clone(),
+                    vec![lane],
+                    assignment.priority as usize,
+                );
+                dep.adapter_constraints = vec![seed.adapter.clone()];
+                out.push(dep);
+                new_models.push((upstream.clone(), None));
+                applied.push(AppliedAssignment {
+                    deployment_id: lane_id,
+                    source: seed.source.clone(),
+                    tier: lane,
+                    upstream_model: Some(upstream),
+                    excluded_reason: None,
+                });
             }
-            let lane_id = format!("provider:{}/{}", seed.provider_id, tier_str(lane));
-            let multi_id = format!("provider:{}", seed.provider_id);
-            if covered
-                .iter()
-                .any(|(id, lanes)| id == &lane_id || (id == &multi_id && lanes.contains(&lane)))
-            {
-                continue;
-            }
-            let prefix = wire_prefix_for(&seed.source, &seed.adapter).unwrap_or("");
-            let upstream = format!("{prefix}{}", assignment.model_id);
-            let mut dep = deployment(
-                lane_id.clone(),
-                seed.source.clone(),
-                upstream.clone(),
-                upstream.clone(),
-                vec![lane],
-                seed.config_order,
-            );
-            dep.adapter_constraints = vec![seed.adapter.clone()];
-            out.push(dep);
-            new_models.push((upstream.clone(), None));
-            applied.push(AppliedAssignment {
-                deployment_id: lane_id,
-                source: seed.source.clone(),
-                tier: lane,
-                upstream_model: Some(upstream),
-                excluded_reason: None,
-            });
         }
     }
     catalog.deployments = out;
@@ -466,10 +476,12 @@ mod tests {
 
     fn view(items: &[(&str, Tier, &str, AssignmentState)]) -> AssignmentView {
         AssignmentView {
+            managed: Vec::new(),
             items: items
                 .iter()
                 .map(|(source, tier, model, state)| {
                     task_core::model_catalog::assignments::EffectiveAssignment {
+                        priority: 0,
                         source: CatalogSource::new(*source),
                         tier: *tier,
                         model_id: (*model).into(),

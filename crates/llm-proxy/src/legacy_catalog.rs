@@ -65,21 +65,24 @@ pub fn normalize_legacy_config_with(
     let mut resolve = |source_ref: &str,
                        tier: Tier,
                        configured: Option<&String>|
-     -> Option<String> {
-        match view.get(source_ref, tier) {
-            Some(a) => match a.state {
-                AssignmentState::Assigned => Some(a.model_id.clone()),
-                AssignmentState::Excluded { reason } => {
-                    warnings.push(format!(
-                        "model_role_assignments: deployment legacy:{source_ref}:{tier:?} excluded ({reason})"
-                    ));
-                    None
-                }
-            },
-            None => configured.cloned(),
+     -> Vec<(String, usize)> {
+        if !view.manages(source_ref, tier) {
+            return configured.map(|s| vec![(s.clone(), 0)]).unwrap_or_default();
         }
+        view.members(source_ref, tier).into_iter().filter_map(|a| match a.state {
+            AssignmentState::Assigned => Some((a.model_id.clone(), a.priority as usize)),
+            AssignmentState::Excluded { reason } => {
+                warnings.push(format!("model_role_assignments: deployment legacy:{source_ref}:{tier:?} excluded ({reason})"));
+                None
+            }
+        }).collect()
     };
-    let mut add = |source_ref: &str, family: &str, billing: Billing, tier: Tier, wire: &str| {
+    let mut add = |source_ref: &str,
+                   family: &str,
+                   billing: Billing,
+                   tier: Tier,
+                   wire: &str,
+                   priority: usize| {
         let model_id = format!("legacy:{family}:{wire}");
         if !catalog.models.iter().any(|m| m.id == model_id) {
             catalog.models.push(ModelProfile {
@@ -103,9 +106,14 @@ pub fn normalize_legacy_config_with(
                 provenance: "llm_proxy.models (legacy)".into(),
             });
         }
-        let order = catalog.deployments.len();
+        let base_id = format!("legacy:{source_ref}:{tier:?}");
+        let id = if catalog.deployments.iter().any(|d| d.id == base_id) {
+            format!("{base_id}/model:{wire}")
+        } else {
+            base_id
+        };
         catalog.deployments.push(DeploymentProfile {
-            id: format!("legacy:{source_ref}:{tier:?}"),
+            id,
             source_ref: source_ref.into(),
             model_profile_id: model_id,
             upstream_model: wire.into(),
@@ -122,7 +130,7 @@ pub fn normalize_legacy_config_with(
             rpm_limit: None,
             tpm_limit: None,
             price_override: None,
-            config_order: order,
+            config_order: priority,
         });
     };
     for tier in [Tier::Frontier, Tier::Standard, Tier::Cheap] {
@@ -131,18 +139,34 @@ pub fn normalize_legacy_config_with(
             .claude_oauth
             .as_ref()
             .is_some_and(|s| s.enabled)
-            && let Some(wire) = resolve("claude-oauth", tier, config.models.claude.get(&tier))
         {
-            add("claude-oauth", "claude", Billing::Subscription, tier, &wire);
+            for (wire, priority) in resolve("claude-oauth", tier, config.models.claude.get(&tier)) {
+                add(
+                    "claude-oauth",
+                    "claude",
+                    Billing::Subscription,
+                    tier,
+                    &wire,
+                    priority,
+                );
+            }
         }
         if config
             .sources
             .codex_oauth
             .as_ref()
             .is_some_and(|s| s.enabled)
-            && let Some(wire) = resolve("codex-oauth", tier, config.models.gpt.get(&tier))
         {
-            add("codex-oauth", "gpt", Billing::Subscription, tier, &wire);
+            for (wire, priority) in resolve("codex-oauth", tier, config.models.gpt.get(&tier)) {
+                add(
+                    "codex-oauth",
+                    "gpt",
+                    Billing::Subscription,
+                    tier,
+                    &wire,
+                    priority,
+                );
+            }
         }
         // The deployment lane is fixed here, independently of source or wire prefixes.
         if tier == Tier::Cheap {
@@ -153,9 +177,17 @@ pub fn normalize_legacy_config_with(
                 .filter(|s| s.enabled)
             {
                 let source_ref = format!("openai-compatible:{}", source.id);
-                if let Some(wire) = resolve(&source_ref, tier, config.models.qwen.get(&Tier::Cheap))
+                for (wire, priority) in
+                    resolve(&source_ref, tier, config.models.qwen.get(&Tier::Cheap))
                 {
-                    add(&source_ref, "qwen", Billing::SelfHosted, tier, &wire);
+                    add(
+                        &source_ref,
+                        "qwen",
+                        Billing::SelfHosted,
+                        tier,
+                        &wire,
+                        priority,
+                    );
                 }
             }
         }
@@ -191,9 +223,11 @@ mod tests {
 
     fn view(items: &[(&str, Tier, &str, AssignmentState)]) -> AssignmentView {
         AssignmentView {
+            managed: Vec::new(),
             items: items
                 .iter()
                 .map(|(source, tier, model, state)| EffectiveAssignment {
+                    priority: 0,
                     source: CatalogSource::new(*source),
                     tier: *tier,
                     model_id: (*model).into(),

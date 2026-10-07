@@ -142,7 +142,7 @@ async fn empty_list_shows_config_origin_slots() {
         .iter()
         .filter(|s| s["source"] == "opencode-go")
         .count();
-    assert_eq!(n, 3);
+    assert_eq!(n, 4); // Both config models of the cheap role are retained.
     let cheap = slot(&body, "opencode-go", "cheap");
     assert_eq!(cheap["model_id"], "glm-5");
     assert_eq!(cheap["origin"], "config");
@@ -415,4 +415,45 @@ async fn provider_config_value_survives_a_catalog_that_reflects_the_assignment()
     let cheap = slot(&body, "opencode-go", "cheap");
     assert_eq!(cheap["model_id"], "glm-5");
     assert_eq!(cheap["origin"], "config");
+}
+
+#[tokio::test]
+async fn role_members_api_preview_multiple_roles_and_empty_no_config_revival() {
+    let env = env();
+    let app = env.router();
+    let put_admin = |path: &str, body: Value| put_json_with(path, &body, &admin_headers());
+    let path = format!("{BASE}/roles/standard");
+    let members = json!({"members": [
+        {"source":"opencode-go","model_id":"glm-5","priority":5},
+        {"source":"opencode-go","model_id":"kimi","priority":1}
+    ]});
+    let response = send(&app, post_admin(&format!("{path}/preview"), &members)).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    assert_eq!(response.json()["after"].as_array().unwrap().len(), 2);
+    assert!(env.store.model_role_assignments().unwrap().is_empty());
+    let response = send(&app, put_admin(&path, members.clone())).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    let response = send(&app, put_admin(&format!("{BASE}/roles/frontier"), members)).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    let response = send(&app, get_admin(BASE)).await;
+    let body = response.json();
+    assert_eq!(body["items"].as_array().unwrap().len(), 4);
+    assert_eq!(body["items"][0]["priority"], 1);
+    let response = send(&app, put_admin(&path, json!({"members":[]}))).await;
+    assert_eq!(response.status, 200, "{}", response.text());
+    let response = send(&app, get_admin(BASE)).await;
+    assert_eq!(
+        slot(&response.json(), "opencode-go", "standard")["model_id"],
+        Value::Null
+    );
+    let response = send(
+        &app,
+        put_admin(
+            &path,
+            json!({"members":[{"source":"opencode-go","model_id":"unknown","priority":0}]}),
+        ),
+    )
+    .await;
+    assert_eq!(response.status, 400);
+    assert_eq!(env.store.model_role_assignments().unwrap().len(), 2);
 }

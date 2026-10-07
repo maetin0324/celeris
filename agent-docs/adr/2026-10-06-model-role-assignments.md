@@ -94,3 +94,17 @@ phase 1（commit dae4c31a・86d8b8cc と続く修正）の実装で、本文か�
 - **CLI**: `celerisctl models assign <source> <tier> <model_id> [--note]` / `unassign <source> <tier>`。
 - **web**: client は `web/api/model-assignments.ts`（D4 の型は生成型 `web/api/generated/types.ts` と並存。path は gateway が `/api/v1` へ写す `/api/llm/models/assignments…`）。override editor から `tier` を外し、表には `assigned_tiers` の badge。枠の表示は accounts API の各窓の `1 - utilization` の最小値を同じ adapter の全 account で取る。provider 追加後は providers 画面と同じく `POST /api/reload` を呼ぶ。
 - **未実装・残り**: run 中の 429 の窓別記録（ADR 2026-10-06 D2 の TODO のまま）。本番での割り当てと shadow 開始は配送後に人が行う（`docs/ops/opencode-go-and-model-catalog.md`）。
+
+## 付記: モデルごとの複数役割と優先度（2026-10-07）
+
+task `01M49Z9NNAAKRJB4GJHFHGXX21` の変更では、上記 D1 の「source × tier に 1 モデル」という制限を廃止する。正本は `(source, tier, model_id)` ごとの membership と非負の `priority`。同じモデルを複数役割に登録でき、同じ source の複数モデルを同じ役割に登録できる。小さい priority を先にし、同順位は source / model ID 順で決定する。
+
+migration `0054_model_role_memberships.sql` は旧割り当ての model・メモ・更新者・更新日時を保持し、priority を 0 にする。config の割り当ては未編集の scope に限って互換読み取りする。`model_role_scopes` に編集済みの `(source, tier)` を記録するため、最後の membership を外しても config のモデルは復活しない。catalog の消失・disabled は membership を削除せず、実効候補から除外する。
+
+新 API は `PUT /api/v1/llm/models/assignments/roles/{tier}`。本文は `{"members":[{"source":"opencode-go","model_id":"glm-5","priority":0}]}` で、その役割の全 source の集合を 1 トランザクションで置く。`POST …/roles/{tier}/preview` は同じ本文で保存前後の集合と provider / proxy への影響を返し、書き込まない。GET の `effective` は同じ source / tier の複数行を返す。旧単体 PUT / DELETE は互換用として残す（PUT はその source / tier の集合を 1 件に置換、DELETE はその scope の上書きを解除して config に戻す）。新画面は集合 API だけを使用する。
+
+legacy は利用可能な membership を優先度順に選ぶ。account の認証・枠・cooldown・同時実行数は既存の source / account 単位の判定を使う。同じ subscription 内の複数モデルが枠を共有するため、その account の枯渇時は同じ account の別モデルを試さず次の利用可能な source / account に進む。proxy の要求内で 401 / 429 を受けた account も、同じ要求の残りのモデル候補から除く。
+
+shadow / enforce へは先頭 1 件に縮めず役割の全モデルを渡す。routing catalog の各 deployment はモデルごとに分け、provider / pool の容量管理は source 側で共有する。推定器による順位づけを優先し、membership の priority は legacy の選択順と推定不能・同点時の決定的な順序に用いる。この配線の完了状況は進捗文書に記録する。
+
+web `/models` の主操作は全 source のモデルを横断した一覧とし、各行に 3 役割の独立した checkbox と priority 入力を置く。役割別表示では上へ / 下へボタンで順位を変更する。検索・source / 状態の絞り込み、保存前の影響確認、設定の破棄を備える。opencode go の provider 追加は既存の API とボタンを使い、`adapter=acp, llm_source=opencode_go, account_pool=opencode-go` を指定する。shell / navigation は変更しない。

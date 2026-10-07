@@ -2792,6 +2792,10 @@
       ],
       "type": "object"
     },
+    "CatalogSource": {
+      "description": "catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`\n（llm-proxy / routing の source 名と同じ）。",
+      "type": "string"
+    },
     "ChangeDiffView": {
       "description": "`GET /tasks/{id}/changes/{repo}/diff?path=` の応答（ADR-0043 D5。200 KiB で切る）。",
       "properties": {
@@ -7658,6 +7662,11 @@
             "null"
           ]
         },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "source": {
           "type": "string"
         },
@@ -7679,6 +7688,7 @@
         "source",
         "tier",
         "model_id",
+        "priority",
         "state",
         "updated_at",
         "updated_by"
@@ -21598,6 +21608,70 @@
       ],
       "type": "object"
     },
+    "RoleMember": {
+      "additionalProperties": false,
+      "description": "One model's membership in a role. Priority is global within that role.",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/CatalogSource"
+        }
+      },
+      "required": [
+        "source",
+        "model_id",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "RoleMembersBody": {
+      "additionalProperties": false,
+      "description": "Complete membership of one role, in all sources. An empty list disables the role.",
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "members"
+      ],
+      "type": "object"
+    },
+    "RoleMembersResponse": {
+      "properties": {
+        "after": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "before": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "impact"
+      ],
+      "type": "object"
+    },
     "RoleSlotView": {
       "description": "1 つの `(source, tier)` の枠の実効。",
       "properties": {
@@ -21636,6 +21710,11 @@
             }
           ]
         },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
         "providers": {
           "description": "この枠を使う provider の id（昇順）。",
           "items": {
@@ -21657,6 +21736,7 @@
       "required": [
         "source",
         "tier",
+        "priority",
         "providers",
         "proxy"
       ],
@@ -28162,8 +28242,7 @@
       "$ref": "#/$defs/MilestonePatchBody"
     },
     "model_assignment_list": {
-      "$ref": "#/$defs/AssignmentList",
-      "description": "ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。"
+      "$ref": "#/$defs/AssignmentList"
     },
     "model_assignment_preview": {
       "$ref": "#/$defs/AssignmentPreviewBody"
@@ -28192,6 +28271,13 @@
     },
     "model_discover_result": {
       "$ref": "#/$defs/DiscoverResponse"
+    },
+    "model_role_members": {
+      "$ref": "#/$defs/RoleMembersBody",
+      "description": "ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。"
+    },
+    "model_role_members_result": {
+      "$ref": "#/$defs/RoleMembersResponse"
     },
     "new_plan": {
       "$ref": "#/$defs/NewPlanSpec"
@@ -28626,6 +28712,8 @@
     "model_catalog_override",
     "model_discover",
     "model_discover_result",
+    "model_role_members",
+    "model_role_members_result",
     "model_assignment_list",
     "model_assignment_put",
     "model_assignment_put_result",

@@ -1548,6 +1548,11 @@ export type SlotOrigin = "assignment" | "config";
 export type AssignmentStateView = "assigned" | "excluded";
 export type ImpactKind = "provider" | "proxy";
 /**
+ * catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`
+ * （llm-proxy / routing の source 名と同じ）。
+ */
+export type CatalogSource = string;
+/**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
  * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
  */
@@ -1903,6 +1908,8 @@ export interface ApiV1Schema {
   model_catalog_override: ModelCatalogOverrideView;
   model_discover: DiscoverBody;
   model_discover_result: DiscoverResponse;
+  model_role_members: RoleMembersBody;
+  model_role_members_result: RoleMembersResponse;
   new_plan: NewPlanSpec;
   new_task: NewTaskBody;
   notification_read: NoticeReadResult;
@@ -7536,9 +7543,6 @@ export interface MilestoneLifecycle {
 export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
-/**
- * ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
- */
 export interface AssignmentList {
   effective: RoleSlotView[];
   items: EffectiveAssignmentView[];
@@ -7555,6 +7559,7 @@ export interface RoleSlotView {
   last_seen?: string | null;
   model_id?: string | null;
   origin?: SlotOrigin | null;
+  priority: number;
   /**
    * この枠を使う provider の id（昇順）。
    */
@@ -7576,6 +7581,7 @@ export interface EffectiveAssignmentView {
   excluded_reason?: string | null;
   model_id: string;
   note?: string | null;
+  priority: number;
   source: string;
   state: AssignmentStateView;
   tier: Tier;
@@ -7709,6 +7715,25 @@ export interface CatalogDelta {
   removed: string[];
   restored: string[];
   source: string;
+}
+/**
+ * ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
+ */
+export interface RoleMembersBody {
+  members: RoleMember[];
+}
+/**
+ * One model's membership in a role. Priority is global within that role.
+ */
+export interface RoleMember {
+  model_id: string;
+  priority: number;
+  source: CatalogSource;
+}
+export interface RoleMembersResponse {
+  after: RoleMember[];
+  before: RoleMember[];
+  impact: ImpactView;
 }
 /**
  * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。

@@ -269,3 +269,136 @@ fn role_assignments_survive_catalog_changes_and_view_reflects_them() {
         Some(AssignmentState::Assigned)
     );
 }
+
+#[test]
+fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
+    use crate::model_catalog::assignments::{RoleMember, apply_to_bindings};
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("roles.db");
+    let src = CatalogSource::new("opencode-go");
+    let member = |id: &str, priority| RoleMember {
+        source: src.clone(),
+        model_id: id.into(),
+        priority,
+    };
+    {
+        let store = SqliteStore::open(&path).unwrap();
+        store
+            .model_catalog_apply(&src, &models(&["a", "b", "c"]), 1)
+            .unwrap();
+        store
+            .model_role_members_replace(
+                Tier::Standard,
+                &[member("a", 9), member("b", 1), member("c", 2)],
+                &[src.clone()],
+                "admin",
+                2,
+            )
+            .unwrap();
+        store
+            .model_role_members_replace(
+                Tier::Frontier,
+                &[member("a", 0)],
+                &[src.clone()],
+                "admin",
+                3,
+            )
+            .unwrap();
+        let view = store.model_role_assignment_view().unwrap();
+        assert_eq!(
+            view.get(src.as_str(), Tier::Standard).unwrap().model_id,
+            "b"
+        );
+        assert_eq!(
+            view.get(src.as_str(), Tier::Frontier).unwrap().model_id,
+            "a"
+        );
+        // Missing and disabled models remain members but cannot be chosen.
+        store
+            .model_catalog_apply(&src, &models(&["a", "c"]), 4)
+            .unwrap();
+        store
+            .model_catalog_set_override(
+                &src,
+                "c",
+                &CatalogOverride {
+                    disabled: true,
+                    ..Default::default()
+                },
+                5,
+            )
+            .unwrap();
+        let view = store.model_role_assignment_view().unwrap();
+        assert_eq!(view.members(src.as_str(), Tier::Standard).len(), 3);
+        assert_eq!(
+            view.get(src.as_str(), Tier::Standard).unwrap().model_id,
+            "a"
+        );
+        // Invalid batch rolls back without changing any membership.
+        assert!(
+            store
+                .model_role_members_replace(
+                    Tier::Standard,
+                    &[member("a", 1), member("a", 2)],
+                    &[src.clone()],
+                    "admin",
+                    6
+                )
+                .is_err()
+        );
+        assert_eq!(store.model_role_assignment_view().unwrap(), view);
+        store
+            .model_role_members_replace(Tier::Standard, &[], &[src.clone()], "admin", 7)
+            .unwrap();
+    }
+    let store = SqliteStore::open(&path).unwrap();
+    let view = store.model_role_assignment_view().unwrap();
+    assert!(view.manages(src.as_str(), Tier::Standard));
+    assert!(view.members(src.as_str(), Tier::Standard).is_empty());
+    let configured = [(
+        Tier::Standard,
+        crate::model_routing::ModelBinding {
+            name: "legacy".into(),
+            model_id: Some("legacy".into()),
+            unavailable_reason: None,
+            reasoning_effort: None,
+        },
+    )]
+    .into_iter()
+    .collect();
+    let effective = apply_to_bindings(&configured, src.as_str(), &[Tier::Standard], None, &view);
+    assert!(crate::model_routing::resolve(&effective, Tier::Standard).is_err());
+    assert_eq!(
+        view.get(src.as_str(), Tier::Frontier).unwrap().model_id,
+        "a"
+    );
+}
+
+#[test]
+fn role_members_migration_preserves_v1_assignment_and_metadata() {
+    let conn = rusqlite::Connection::open_in_memory().unwrap();
+    conn.execute_batch(include_str!(
+        "../../migrations/0053_model_role_assignments.sql"
+    ))
+    .unwrap();
+    conn.execute("INSERT INTO model_role_assignments VALUES ('opencode-go', 'standard', 'old', 'keep', 12, 'admin')", []).unwrap();
+    conn.execute_batch(include_str!(
+        "../../migrations/0054_model_role_memberships.sql"
+    ))
+    .unwrap();
+    let row: (String, u32, String, i64, String) = conn
+        .query_row(
+            "SELECT model_id, priority, note, updated_at, updated_by FROM model_role_assignments",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap();
+    assert_eq!(row, ("old".into(), 0, "keep".into(), 12, "admin".into()));
+    conn.execute("INSERT INTO model_role_assignments VALUES ('opencode-go', 'standard', 'second', 1, NULL, 13, 'admin')", []).unwrap();
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM model_role_scopes", [], |r| r
+            .get::<_, u32>(0))
+            .unwrap(),
+        1
+    );
+}

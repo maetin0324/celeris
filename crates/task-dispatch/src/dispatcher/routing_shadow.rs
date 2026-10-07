@@ -161,7 +161,12 @@ impl Dispatcher {
                 model_profile_id: c.model_profile_id.clone(),
                 excluded_reasons: c.excluded_reasons.clone(),
                 selected: false,
-                primary: c.deployment_id == primary_provider,
+                primary: c.deployment_id == primary_provider
+                    && self
+                        .effective_lane_model(primary_provider, hint.tier)
+                        .ok()
+                        .flatten()
+                        .is_none_or(|m| m == c.model_profile_id),
             })
             .collect();
         // 静的な適格性と state（pool はアカウント）を 1 回だけ集める。

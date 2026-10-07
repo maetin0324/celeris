@@ -659,26 +659,28 @@ function assignmentTiersFor(ac, source, modelId) {
 
 function assignmentsView(ac) {
   const effective = [];
-  for (const source of ASSIGNMENT_SOURCES) {
+  for (const source of ASSIGNMENT_SOURCES)
     for (const tier of ASSIGNMENT_TIERS) {
-      const a = ac.assignments.find((x) => x.source === source && x.tier === tier);
-      const configured = ASSIGNMENT_CONFIG_SLOTS[source]?.[tier] ?? null;
-      const modelId = a ? a.model_id : configured;
-      const row = modelId ? ac.models.items.find((m) => m.source === source && m.model_id === modelId) : null;
-      effective.push({
-        source,
-        tier,
-        model_id: modelId,
-        origin: a ? "assignment" : configured ? "config" : null,
-        excluded_reason: a?.excluded_reason ?? null,
-        providers: modelId && source !== "openai-compatible:qwen" ? [`${source}-main`] : [],
-        proxy: source === "openai-compatible:qwen" && tier === "cheap",
-        available: row ? row.available : null,
-        last_seen: row ? row.last_seen : null,
-      });
+      const members = ac.assignments.filter((x) => x.source === source && x.tier === tier);
+      const configured = ac.managedRoles?.includes(tier) ? null : ASSIGNMENT_CONFIG_SLOTS[source]?.[tier];
+      const values = members.length ? members : [{ model_id: configured ?? null, priority: 0 }];
+      for (const a of values) {
+        const row = ac.models.items.find((m) => m.source === source && m.model_id === a.model_id);
+        effective.push({
+          source,
+          tier,
+          model_id: a.model_id,
+          priority: a.priority ?? 0,
+          origin: members.length ? "assignment" : configured ? "config" : null,
+          excluded_reason: a.excluded_reason ?? null,
+          providers: a.model_id && source !== "openai-compatible:qwen" ? [`${source}-main`] : [],
+          proxy: source === "openai-compatible:qwen" && tier === "cheap",
+          available: row?.available ?? null,
+          last_seen: row?.last_seen ?? null,
+        });
+      }
     }
-  }
-  return { items: ac.assignments, effective };
+  return { items: ac.assignments.map((a) => ({ priority: 0, ...a })), effective };
 }
 
 function assignmentImpact(ac, source, tier, modelId) {
@@ -2583,6 +2585,47 @@ export function createFakeDaemon({
             if (parts.length === 3 && req.method === "GET") return json(200, assignmentsView(ac));
             if (parts.length === 4 && parts[3] === "preview" && req.method === "POST")
               return json(200, { impact: assignmentImpact(ac, input.source, input.tier, input.model_id ?? null) });
+            if (parts[3] === "roles" && ["PUT", "POST"].includes(req.method)) {
+              const tier = parts[4];
+              const before = assignmentsView(ac)
+                .effective.filter((s) => s.tier === tier && s.model_id)
+                .map(({ source, model_id, priority }) => ({ source, model_id, priority }));
+              const after = input.members;
+              const impact = {
+                changes: ASSIGNMENT_SOURCES.map((source) => ({
+                  kind: "provider",
+                  id: `${source}-main`,
+                  tier,
+                  before:
+                    before
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  after:
+                    after
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  excluded_reason: null,
+                })),
+              };
+              if (req.method === "PUT") {
+                ac.assignments = ac.assignments.filter((a) => a.tier !== tier);
+                ac.assignments.push(
+                  ...after.map((m) => ({
+                    ...m,
+                    tier,
+                    state: "assigned",
+                    excluded_reason: null,
+                    note: null,
+                    updated_at: nowIso,
+                    updated_by: "web",
+                  })),
+                );
+                ac.managedRoles = [...new Set([...(ac.managedRoles ?? []), tier])];
+              }
+              return json(200, { before, after, impact });
+            }
             if (parts.length === 5) {
               const source = decodeURIComponent(parts[3]);
               const tier = decodeURIComponent(parts[4]);

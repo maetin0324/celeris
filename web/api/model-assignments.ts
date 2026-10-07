@@ -11,6 +11,7 @@ export type EffectiveAssignmentView = {
   source: string;
   tier: AssignmentTier;
   model_id: string;
+  priority?: number;
   state: "assigned" | "excluded";
   excluded_reason: string | null;
   note: string | null;
@@ -22,6 +23,7 @@ export type RoleSlotView = {
   source: string;
   tier: AssignmentTier;
   model_id: string | null;
+  priority?: number;
   origin: "assignment" | "config" | null;
   excluded_reason: string | null;
   providers: string[];

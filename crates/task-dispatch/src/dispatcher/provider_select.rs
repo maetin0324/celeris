@@ -338,12 +338,55 @@ impl Dispatcher {
                 price_override: None,
                 config_order: order,
             };
-            profiles.push(LegacyProfile {
-                model,
-                deployment,
-                proxy_routed,
-            });
+            let source = live
+                .and_then(|p| p.llm_source.as_ref())
+                .and_then(|s| source_name_for_llm_source(&s.source));
+            if let Some(source) = source.as_deref().filter(|s| view.manages(s, hint.tier)) {
+                for member in view
+                    .members(source, hint.tier)
+                    .into_iter()
+                    .filter(|a| a.state == AssignmentState::Assigned)
+                {
+                    let wire = format!(
+                        "{}{}",
+                        live.and_then(|p| wire_prefix_for(source, &p.adapter))
+                            .unwrap_or(""),
+                        member.model_id
+                    );
+                    let mut model = model.clone();
+                    model.id = wire.clone();
+                    model.provenance = "model_role_assignments".into();
+                    let mut deployment = deployment.clone();
+                    deployment.model_profile_id = wire.clone();
+                    deployment.upstream_model = wire;
+                    deployment.config_order = member.priority as usize;
+                    deployment.allowed_lanes = vec![hint.tier];
+                    profiles.push(LegacyProfile {
+                        model,
+                        deployment,
+                        proxy_routed,
+                    });
+                }
+            } else {
+                profiles.push(LegacyProfile {
+                    model,
+                    deployment,
+                    proxy_routed,
+                });
+            }
         }
+        profiles.sort_by(|a, b| {
+            (
+                a.deployment.config_order,
+                &a.deployment.source_ref,
+                &a.model.id,
+            )
+                .cmp(&(
+                    b.deployment.config_order,
+                    &b.deployment.source_ref,
+                    &b.model.id,
+                ))
+        });
         profiles
     }
 
@@ -501,6 +544,17 @@ impl Dispatcher {
         prefer_local: bool,
         excluded: &std::collections::HashSet<ProviderId>,
     ) -> (Option<ProviderPick>, ProviderSelection) {
+        let view = self.current_assignment_view();
+        let ranked_role = view.items.iter().any(|a| a.tier == hint.tier)
+            || view.managed.iter().any(|(_, tier)| *tier == hint.tier);
+        let profiles = self.legacy_provider_profiles(hint);
+        let priority = |id: &str| {
+            profiles
+                .iter()
+                .position(|p| p.deployment.id == id)
+                .unwrap_or(usize::MAX)
+        };
+        let prefer_local = prefer_local && !ranked_role;
         let allowlist = self.legacy_provider_rank(hint).allowlist;
         // ADR 2026-10-06 model-role-assignments D2: 割り当てで lane に出せない provider は候補から外す。
         let assignment_excluded =
@@ -508,6 +562,7 @@ impl Dispatcher {
         let mut cos_full = std::collections::HashSet::new();
         let full = if cos { &mut cos_full } else { full };
         if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos)
+            && !ranked_role
             && !excluded.contains(&sticky.1)
             && !assignment_excluded.iter().any(|(id, _)| *id == sticky.1)
         {
@@ -660,7 +715,11 @@ impl Dispatcher {
                             continue;
                         };
                         let index = record(ProviderCandidateOutcome::Available);
-                        let score = self.account_score(account_adapter, &account_id);
+                        let score = if ranked_role {
+                            -(priority(&provider) as f64)
+                        } else {
+                            self.account_score(account_adapter, &account_id)
+                        };
                         if score > best_score {
                             best_score = score;
                             best_pool_index = Some(index);
@@ -669,7 +728,9 @@ impl Dispatcher {
                         }
                     } else {
                         let index = record(ProviderCandidateOutcome::Available);
-                        if fallback.is_none() {
+                        if fallback.as_ref().is_none_or(|(_, id, _): &ProviderPick| {
+                            ranked_role && priority(&provider) < priority(id)
+                        }) {
                             fallback_index = Some(index);
                             fallback = Some((adapter, provider, None));
                         }
@@ -701,6 +762,12 @@ impl Dispatcher {
             if self.warned_unroutable.insert(task_id) {
                 tracing::warn!(%task_id, ?hint, "every provider for this worker_hint is excluded by model_role_assignments");
             }
+        }
+        if ranked_role
+            && let (Some(pool), Some(other)) = (&best_pool, &fallback)
+            && priority(&other.1) < priority(&pool.1)
+        {
+            best_pool = None;
         }
         let (selected, selected_index, pool_selected) = match best_pool {
             Some(pool) => (Some(pool), best_pool_index, true),

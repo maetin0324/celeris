@@ -1,7 +1,7 @@
-//! ADR 2026-10-06 model-role-assignments D1/D2: `source × 役割（Tier）→ model_id` の割り当てと、
+//! ADR 2026-10-06 model-role-assignments 付記: モデルごとの役割 membership・優先度と、
 //! その実効の解決（純粋関数）。
 //!
-//! 表は `model_role_assignments`（migration 0053）。人が決めた割り当てで、catalog の自動更新は消さない。
+//! 表は `model_role_assignments`（migration 0053 → 0054）。人が決めた割り当てで、catalog の自動更新は消さない。
 //! 実効の状態（`AssignmentState`）は catalog の `available` と上書きの `disabled` から都度求める。
 //! dispatcher・llm-proxy・routing catalog の 3 か所は同じ `RoleAssignmentReader` を見て、同じ
 //! `apply_to_bindings` / `AssignmentView::get` で解決する。I/O も LLM 呼び出しも持たない。
@@ -38,9 +38,21 @@ pub struct RoleAssignment {
     pub source: CatalogSource,
     pub tier: Tier,
     pub model_id: String,
+    /// Lower values are preferred; ties use source and model ID.
+    #[serde(default)]
+    pub priority: u32,
     pub note: Option<String>,
     pub updated_at: i64,
     pub updated_by: String,
+}
+
+/// One model's membership in a role. Priority is global within that role.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RoleMember {
+    pub source: CatalogSource,
+    pub model_id: String,
+    pub priority: u32,
 }
 
 /// 割り当ての実効の状態。`Excluded` は割り当て行は残るが routing には使えない（D2）。
@@ -64,16 +76,22 @@ pub struct EffectiveAssignment {
     pub source: CatalogSource,
     pub tier: Tier,
     pub model_id: String,
+    /// Lower values are preferred; ties use source and model ID.
+    #[serde(default)]
+    pub priority: u32,
     pub state: AssignmentState,
     pub note: Option<String>,
     pub updated_at: i64,
     pub updated_by: String,
 }
 
-/// 全割り当ての実効の一覧（`(source, tier)` の順）。
+/// 全割り当ての実効の一覧（priority、source、model_id、tier の順）。
 #[derive(Debug, Clone, Default, PartialEq, Serialize, JsonSchema)]
 pub struct AssignmentView {
     pub items: Vec<EffectiveAssignment>,
+    /// Explicitly managed scopes, including roles with no remaining members.
+    #[serde(default)]
+    pub managed: Vec<(CatalogSource, Tier)>,
 }
 
 impl AssignmentView {
@@ -113,6 +131,7 @@ impl AssignmentView {
                     source: a.source.clone(),
                     tier: a.tier,
                     model_id: a.model_id.clone(),
+                    priority: a.priority,
                     state,
                     note: a.note.clone(),
                     updated_at: a.updated_at,
@@ -121,19 +140,52 @@ impl AssignmentView {
             })
             .collect();
         items.sort_by(|a, b| {
-            (a.source.as_str(), tier_str(a.tier)).cmp(&(b.source.as_str(), tier_str(b.tier)))
+            (a.priority, a.source.as_str(), &a.model_id, tier_str(a.tier)).cmp(&(
+                b.priority,
+                b.source.as_str(),
+                &b.model_id,
+                tier_str(b.tier),
+            ))
         });
-        Self { items }
+        Self {
+            items,
+            managed: Vec::new(),
+        }
     }
 
-    pub fn get(&self, source: &str, tier: Tier) -> Option<&EffectiveAssignment> {
-        self.items
+    pub fn manages(&self, source: &str, tier: Tier) -> bool {
+        self.managed
             .iter()
-            .find(|i| i.source.as_str() == source && i.tier == tier)
+            .any(|(s, t)| s.as_str() == source && *t == tier)
+            || self
+                .items
+                .iter()
+                .any(|a| a.source.as_str() == source && a.tier == tier)
+    }
+
+    /// All members in deterministic priority order, including excluded members for display.
+    pub fn members(&self, source: &str, tier: Tier) -> Vec<&EffectiveAssignment> {
+        let mut items: Vec<_> = self
+            .items
+            .iter()
+            .filter(|a| a.source.as_str() == source && a.tier == tier)
+            .collect();
+        items.sort_by_key(|a| (a.priority, a.source.as_str(), &a.model_id));
+        items
+    }
+
+    /// Legacy selection skips unavailable members before trying the next priority.
+    pub fn get(&self, source: &str, tier: Tier) -> Option<&EffectiveAssignment> {
+        let members = self.members(source, tier);
+        members
+            .iter()
+            .copied()
+            .find(|a| a.state == AssignmentState::Assigned)
+            .or_else(|| members.first().copied())
     }
 }
 
-/// `bindings`（config 由来）に割り当てを重ねた実効 bindings を返す（D2）。
+/// Legacy 用に各役割の先頭の利用可能モデルを bindings に重ねる。全候補は `members` から読む。
 ///
 /// - `lanes` のうち `source` に割り当てがある lane は binding を置き換える。`Assigned` は
 ///   `name = model_id`・`model_id = Some(wire_prefix + model_id)`（`wire_prefix` が `None` なら接頭辞なし）・
@@ -156,6 +208,18 @@ pub fn apply_to_bindings(
     let mut applied = false;
     for &lane in lanes {
         let Some(a) = view.get(source, lane) else {
+            if view.manages(source, lane) {
+                applied = true;
+                out.insert(
+                    lane,
+                    ModelBinding {
+                        name: tier_str(lane).into(),
+                        model_id: None,
+                        unavailable_reason: Some("assignment:none".into()),
+                        reasoning_effort: None,
+                    },
+                );
+            }
             continue;
         };
         applied = true;
@@ -226,6 +290,7 @@ mod tests {
 
     fn assignment(source: &str, tier: Tier, model: &str) -> RoleAssignment {
         RoleAssignment {
+            priority: 0,
             source: CatalogSource::new(source),
             tier,
             model_id: model.into(),
@@ -261,9 +326,11 @@ mod tests {
 
     fn view_of(items: &[(&str, Tier, &str, AssignmentState)]) -> AssignmentView {
         AssignmentView {
+            managed: Vec::new(),
             items: items
                 .iter()
                 .map(|(s, t, m, st)| EffectiveAssignment {
+                    priority: 0,
                     source: CatalogSource::new(*s),
                     tier: *t,
                     model_id: (*m).into(),

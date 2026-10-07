@@ -325,3 +325,95 @@ fn dispatcher_llm_proxy_and_routing_catalog_agree_on_assignments() {
         Some("proxy-gpt-c")
     );
 }
+
+#[test]
+fn role_members_catalog_proxy_and_dispatch_share_priority_and_empty_scope() {
+    use task_core::model_catalog::assignments::RoleMember;
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("claude-accounts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("codex-accounts")).unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_text(dir.path())).unwrap();
+    let config = Config::load(&path).unwrap();
+    let store = SqliteStore::open(&config.db.path).unwrap();
+    let source = CatalogSource::new("claude-oauth");
+    store
+        .model_catalog_apply(&source, &models(&["a", "b"]), 1)
+        .unwrap();
+    store
+        .model_role_members_replace(
+            Tier::Standard,
+            &[
+                RoleMember {
+                    source: source.clone(),
+                    model_id: "a".into(),
+                    priority: 8,
+                },
+                RoleMember {
+                    source: source.clone(),
+                    model_id: "b".into(),
+                    priority: 1,
+                },
+            ],
+            &[source.clone()],
+            "admin",
+            2,
+        )
+        .unwrap();
+    let mut dispatcher = celeris::build_dispatcher(&config, Default::default()).unwrap();
+    let (tx, _) = tokio::sync::watch::channel(None);
+    dispatcher.set_snapshot_publisher(SnapshotPublisher {
+        tx,
+        instance_id: "test".into(),
+        hostname: "test".into(),
+        started_at: String::new(),
+        tick_ms: 1000,
+        providers: celeris::provider_lives(&config),
+        provider_checks: Default::default(),
+    });
+    let view = store.model_role_assignment_view().unwrap();
+    let proxy = normalize_legacy_config_with(&config.llm_proxy, &view);
+    let mut routing = config.routing_catalog().unwrap();
+    apply_role_assignments(&mut routing, &view, &config.provider_lane_seeds());
+    let proxy_models: Vec<_> = proxy
+        .deployments
+        .iter()
+        .filter(|d| d.source_ref == "claude-oauth" && d.allowed_lanes == [Tier::Standard])
+        .map(|d| d.upstream_model.as_str())
+        .collect();
+    assert_eq!(proxy_models, ["b", "a"]);
+    let routing_models: Vec<_> = routing
+        .deployments
+        .iter()
+        .filter(|d| d.id.starts_with("provider:claude/") && d.allowed_lanes == [Tier::Standard])
+        .map(|d| d.upstream_model.as_str())
+        .collect();
+    assert_eq!(routing_models, ["b", "a"]);
+    assert_eq!(
+        dispatcher
+            .effective_lane_model("claude", Tier::Standard)
+            .unwrap()
+            .as_deref(),
+        Some("b")
+    );
+    store
+        .model_role_members_replace(Tier::Standard, &[], &[source], "admin", 3)
+        .unwrap();
+    let view = store.model_role_assignment_view().unwrap();
+    let proxy = normalize_legacy_config_with(&config.llm_proxy, &view);
+    assert!(proxy.deployment("claude-oauth", Tier::Standard).is_none());
+    assert!(
+        dispatcher
+            .effective_lane_model("claude", Tier::Standard)
+            .is_err()
+    );
+    let mut routing = config.routing_catalog().unwrap();
+    apply_role_assignments(&mut routing, &view, &config.provider_lane_seeds());
+    assert!(
+        !routing
+            .deployments
+            .iter()
+            .any(|d| d.id.starts_with("provider:claude/")
+                && d.allowed_lanes.contains(&Tier::Standard))
+    );
+}

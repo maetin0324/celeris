@@ -11,7 +11,7 @@ use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use crate::Tier;
 use crate::model::Event;
 use crate::model_catalog::assignments::{
-    AssignmentView, RoleAssignment, RoleAssignmentReader, tier_from_str, tier_str,
+    AssignmentView, RoleAssignment, RoleAssignmentReader, RoleMember, tier_from_str, tier_str,
 };
 use crate::model_catalog::{
     CatalogDelta, CatalogEntry, CatalogOverride, CatalogOverrideRow, CatalogSource,
@@ -142,6 +142,15 @@ pub trait ModelCatalogStore: Send + Sync {
         actor: &str,
         now: i64,
     ) -> Result<bool, StoreError>;
+    /// Atomically replace a role's entire membership, retaining explicitly empty scopes.
+    fn model_role_members_replace(
+        &self,
+        tier: Tier,
+        members: &[RoleMember],
+        sources: &[CatalogSource],
+        actor: &str,
+        now: i64,
+    ) -> Result<(), StoreError>;
     /// 3 表（割り当て・catalog・上書き）から実効の view を組む（D2）。
     fn model_role_assignment_view(&self) -> Result<AssignmentView, StoreError>;
 }
@@ -152,6 +161,7 @@ fn assignment_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RoleAss
         return Ok(None);
     };
     Ok(Some(RoleAssignment {
+        priority: r.get(6)?,
         source: CatalogSource(r.get(0)?),
         tier,
         model_id: r.get(2)?,
@@ -161,11 +171,11 @@ fn assignment_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Option<RoleAss
     }))
 }
 
-const ASSIGNMENT_COLUMNS: &str = "source, tier, model_id, note, updated_at, updated_by";
+const ASSIGNMENT_COLUMNS: &str = "source, tier, model_id, note, updated_at, updated_by, priority";
 
 fn read_assignments(conn: &Connection) -> Result<Vec<RoleAssignment>, StoreError> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {ASSIGNMENT_COLUMNS} FROM model_role_assignments ORDER BY source ASC, tier ASC"
+        "SELECT {ASSIGNMENT_COLUMNS} FROM model_role_assignments ORDER BY priority ASC, source ASC, model_id ASC, tier ASC"
     ))?;
     let rows = stmt.query_map([], assignment_from_row)?;
     let mut out = Vec::new();
@@ -398,9 +408,17 @@ impl ModelCatalogStore for SqliteStore {
             )
             .optional()?;
         tx.execute(
+            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO model_role_scopes (source, tier) VALUES (?1, ?2)",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        tx.execute(
             "INSERT INTO model_role_assignments (source, tier, model_id, note, updated_at, \
              updated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(source, tier) DO UPDATE SET model_id = ?3, note = ?4, updated_at = ?5, \
+             ON CONFLICT(source, tier, model_id) DO UPDATE SET model_id = ?3, note = ?4, updated_at = ?5, \
              updated_by = ?6",
             params![source.as_str(), tier_str(tier), model_id, note, now, actor],
         )?;
@@ -417,6 +435,7 @@ impl ModelCatalogStore for SqliteStore {
         )?;
         tx.commit()?;
         Ok(RoleAssignment {
+            priority: 0,
             source: source.clone(),
             tier,
             model_id: model_id.to_string(),
@@ -442,7 +461,12 @@ impl ModelCatalogStore for SqliteStore {
                 |r| r.get(0),
             )
             .optional()?;
+        tx.execute(
+            "DELETE FROM model_role_scopes WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
         let Some(previous) = previous else {
+            tx.commit()?;
             return Ok(false);
         };
         tx.execute(
@@ -464,6 +488,100 @@ impl ModelCatalogStore for SqliteStore {
         Ok(true)
     }
 
+    fn model_role_members_replace(
+        &self,
+        tier: Tier,
+        members: &[RoleMember],
+        sources: &[CatalogSource],
+        actor: &str,
+        now: i64,
+    ) -> Result<(), StoreError> {
+        let mut unique = std::collections::HashSet::new();
+        for m in members {
+            if !m.source.is_valid()
+                || m.model_id.trim().is_empty()
+                || !unique.insert((m.source.as_str(), m.model_id.as_str()))
+            {
+                return Err(StoreError::Invalid(
+                    "invalid or duplicate role membership".into(),
+                ));
+            }
+        }
+        let mut conn = self.lock()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let old = read_assignments(&tx)?;
+        let scopes = sources
+            .iter()
+            .chain(members.iter().map(|m| &m.source))
+            .chain(old.iter().filter(|a| a.tier == tier).map(|a| &a.source));
+        for source in scopes {
+            tx.execute(
+                "INSERT OR IGNORE INTO model_role_scopes (source, tier) VALUES (?1, ?2)",
+                params![source.as_str(), tier_str(tier)],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM model_role_assignments WHERE tier = ?1",
+            [tier_str(tier)],
+        )?;
+        for m in members {
+            let prior = old
+                .iter()
+                .find(|a| a.tier == tier && a.source == m.source && a.model_id == m.model_id);
+            tx.execute("INSERT INTO model_role_assignments (source, tier, model_id, priority, note, updated_at, updated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![m.source.as_str(), tier_str(tier), m.model_id, m.priority, prior.and_then(|a| a.note.as_deref()), now, actor])?;
+            Self::append_event_tx(
+                &tx,
+                catalog_event_task_id(),
+                &Event::ModelRoleAssignmentChanged {
+                    source: m.source.0.clone(),
+                    tier,
+                    model_id: Some(m.model_id.clone()),
+                    previous: prior.map(|a| a.model_id.clone()),
+                    actor: actor.into(),
+                },
+            )?;
+        }
+        for a in old.iter().filter(|a| a.tier == tier) {
+            if !members
+                .iter()
+                .any(|m| m.source == a.source && m.model_id == a.model_id)
+            {
+                Self::append_event_tx(
+                    &tx,
+                    catalog_event_task_id(),
+                    &Event::ModelRoleAssignmentChanged {
+                        source: a.source.0.clone(),
+                        tier,
+                        model_id: None,
+                        previous: Some(a.model_id.clone()),
+                        actor: actor.into(),
+                    },
+                )?;
+            }
+        }
+        // Config-only scopes also need an event when cleared, so cached routing catalogs refresh.
+        for source in sources {
+            if !old.iter().any(|a| a.tier == tier && &a.source == source)
+                && !members.iter().any(|m| &m.source == source)
+            {
+                Self::append_event_tx(
+                    &tx,
+                    catalog_event_task_id(),
+                    &Event::ModelRoleAssignmentChanged {
+                        source: source.0.clone(),
+                        tier,
+                        model_id: None,
+                        previous: None,
+                        actor: actor.into(),
+                    },
+                )?;
+            }
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     fn model_role_assignment_view(&self) -> Result<AssignmentView, StoreError> {
         self.with_read_conn(|conn| {
             let assignments = read_assignments(conn)?;
@@ -477,7 +595,19 @@ impl ModelCatalogStore for SqliteStore {
             for row in rows {
                 overrides.push(row?);
             }
-            Ok(AssignmentView::build(&assignments, &entries, &overrides))
+            let mut view = AssignmentView::build(&assignments, &entries, &overrides);
+            let mut stmt =
+                conn.prepare("SELECT source, tier FROM model_role_scopes ORDER BY source, tier")?;
+            let rows = stmt.query_map([], |r| {
+                Ok((CatalogSource(r.get(0)?), r.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (source, tier) = row?;
+                if let Some(tier) = tier_from_str(&tier) {
+                    view.managed.push((source, tier));
+                }
+            }
+            Ok(view)
         })
     }
 

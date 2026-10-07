@@ -3258,6 +3258,14 @@ SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行�
 
 #### 3.127.4 `/llm/models/assignments`（役割への割り当て）
 
+2026-10-07 付記: `effective` はモデルごとの候補行となり、同じ `(source, tier)` の行が複数ある。`items` / `effective` に `priority`（非負、小さい順）を追加した。
+
+- `PUT /llm/models/assignments/roles/{tier}`: `{"members":[{"source":"opencode-go","model_id":"glm-5","priority":0}]}`。全 source のその役割の集合を原子的に置換し、200 `{before, after, impact}` を返す。空の配列は役割を明示的に空にし、config を復活させない。
+- `POST /llm/models/assignments/roles/{tier}/preview`: 同じ本文、同じ応答。書き込みなし。
+- config の各モデルは未編集の scope に限って候補として互換読み取りする。旧 `PUT/DELETE …/{source}/{tier}` は互換 API（PUT はその scope を 1 モデルに置換、DELETE は config へ戻す）。web の複数モデル編集は新しい集合 API を使う。
+
+以下は旧単体 API の説明。
+
 人が「source の frontier / standard / cheap にはこのモデル」と決める表（ADR 2026-10-06 model-role-assignments）。
 catalog の自動発見は表を消さない。`GET /llm/models` の各 item には、そのモデルが割り当てられている tier の一覧
 `assigned_tiers` が付く。書き込み（`PUT`/`DELETE`/`preview`）は管理系（bearer 必須）。

@@ -116,22 +116,16 @@ describe("RoleAssignmentsView", () => {
       </QueryClientProvider>,
     );
 
-  it("source ごとのカードに由来 badge・未設定・除外理由・枠を出す", () => {
+  it("全モデルの役割トグルと検索・絞り込み・役割別表示を出す", () => {
     const out = render([]);
-    expect(out.match(/data-assignment-source="/g)).toHaveLength(2);
-    expect(out).toContain("割り当て");
-    expect(out).toContain("config");
-    expect(out).toContain("未設定");
-    expect(out).toContain("catalog:unavailable");
-    expect(out).toContain("残り 10%");
+    expect(out).toContain("モデルごとの役割");
+    expect(out).toContain('aria-label="claude-oauth opus frontier"');
+    expect(out).toContain('aria-label="claude-oauth opus standard"');
+    expect(out).toContain('aria-label="claude-oauth opus cheap"');
+    expect(out).toContain("供給元で絞り込み");
+    expect(out).toContain("状態で絞り込み");
+    expect(out).toContain("役割ごとの表示");
     expect(out).toContain("消失");
-    expect(out).toContain("利用可");
-    expect(out).toContain("不明");
-  });
-
-  it("解除は割り当て由来の行にだけ出る（2 行）", () => {
-    expect(render([]).match(/を解除/g)).toHaveLength(2);
-    expect(render([]).match(/を変更/g)).toHaveLength(6);
   });
 
   it("opencode go の provider が無いときだけ追加ボタンを出す", () => {
@@ -197,5 +191,26 @@ describe("client", () => {
       tiers: ["frontier", "standard", "cheap"],
       concurrency: 1,
     });
+  });
+});
+
+describe("role membership ordering", () => {
+  it("同じ source の複数候補を保持し、並べ替えは他の役割を変えない", async () => {
+    const { roleMembers, moveMember } = await import("./model-role-editor");
+    const multiple: AssignmentList = {
+      items: [],
+      effective: [
+        slot({ source: "opencode-go", tier: "standard", model_id: "a", priority: 5 }),
+        slot({ source: "opencode-go", tier: "standard", model_id: "b", priority: 1 }),
+        slot({ source: "opencode-go", tier: "frontier", model_id: "a", priority: 0 }),
+      ],
+    };
+    const ordered = roleMembers(multiple, "standard");
+    expect(ordered.map((m) => m.model_id)).toEqual(["b", "a"]);
+    expect(moveMember(ordered, 1, -1)).toEqual([
+      { source: "opencode-go", model_id: "a", priority: 0 },
+      { source: "opencode-go", model_id: "b", priority: 1 },
+    ]);
+    expect(roleMembers(multiple, "frontier").map((m) => m.model_id)).toEqual(["a"]);
   });
 });

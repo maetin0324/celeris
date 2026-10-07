@@ -575,6 +575,8 @@ export type CatalogModelView = {
   "revision": string;
 };
 
+export type CatalogSource = string;
+
 export type ChangeDiffView = {
   "diff": string;
   "path": string;
@@ -1566,6 +1568,7 @@ export type EffectiveAssignmentView = {
   "excluded_reason"?: string | null;
   "model_id": string;
   "note"?: string | null;
+  "priority": number;
   "source": string;
   "state": AssignmentStateView;
   "tier": Tier;
@@ -4254,12 +4257,29 @@ export type RoleConfigView = {
   "tier"?: Tier | null;
 };
 
+export type RoleMember = {
+  "model_id": string;
+  "priority": number;
+  "source": CatalogSource;
+};
+
+export type RoleMembersBody = {
+  "members": Array<RoleMember>;
+};
+
+export type RoleMembersResponse = {
+  "after": Array<RoleMember>;
+  "before": Array<RoleMember>;
+  "impact": ImpactView;
+};
+
 export type RoleSlotView = {
   "available"?: boolean | null;
   "excluded_reason"?: string | null;
   "last_seen"?: string | null;
   "model_id"?: string | null;
   "origin"?: SlotOrigin | null;
+  "priority": number;
   "providers": Array<string>;
   "proxy": boolean;
   "source": string;

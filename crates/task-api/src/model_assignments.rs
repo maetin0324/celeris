@@ -1,4 +1,6 @@
-//! ADR 2026-10-06 model-role-assignments D3/D4: source × 役割（Tier）→ model の割り当ての API。
+//! モデルごとの複数役割・優先度の API（ADR 2026-10-06 model-role-assignments 付記）。
+//! 集合の更新は `PUT …/assignments/roles/{tier}`、preview は `POST …/roles/{tier}/preview`。
+//! 以下の単体 API は旧 client の互換用として保持する。
 //!
 //! - `GET /api/v1/llm/models/assignments` — 割り当て（実効の状態つき）と、全 `(source, tier)` の実効の枠（`effective`）。
 //! - `PUT /api/v1/llm/models/assignments/{source}/{tier}` — 割り当てを置く → 200 `{ item, impact }`。
@@ -19,7 +21,7 @@ use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::model_catalog::assignments::{
-    AssignmentState, AssignmentView, EffectiveAssignment, RoleAssignment,
+    AssignmentState, AssignmentView, EffectiveAssignment, RoleAssignment, RoleMember,
     source_name_for_llm_source, tier_from_str, tier_str,
 };
 use task_core::model_catalog::{CatalogEntry, CatalogSource};
@@ -64,6 +66,7 @@ pub struct EffectiveAssignmentView {
     pub source: String,
     pub tier: Tier,
     pub model_id: String,
+    pub priority: u32,
     pub state: AssignmentStateView,
     /// `override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。
     pub excluded_reason: Option<String>,
@@ -79,6 +82,7 @@ pub struct RoleSlotView {
     pub source: String,
     pub tier: Tier,
     pub model_id: Option<String>,
+    pub priority: u32,
     pub origin: Option<SlotOrigin>,
     pub excluded_reason: Option<String>,
     /// この枠を使う provider の id（昇順）。
@@ -141,11 +145,33 @@ pub struct AssignmentPreviewBody {
     pub model_id: Option<String>,
 }
 
+/// Complete membership of one role, in all sources. An empty list disables the role.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RoleMembersBody {
+    pub members: Vec<RoleMember>,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct RoleMembersResponse {
+    pub before: Vec<RoleMember>,
+    pub after: Vec<RoleMember>,
+    pub impact: ImpactView,
+}
+
 pub(crate) fn routes() -> axum::Router<ApiState> {
     use axum::routing::{get, post};
     axum::Router::new()
         .route("/api/v1/llm/models/assignments", get(list_assignments))
         .route("/api/v1/llm/models/assignments/preview", post(preview))
+        .route(
+            "/api/v1/llm/models/assignments/roles/{tier}",
+            axum::routing::put(replace_role),
+        )
+        .route(
+            "/api/v1/llm/models/assignments/roles/{tier}/preview",
+            post(preview_role),
+        )
         .route(
             "/api/v1/llm/models/assignments/{source}/{tier}",
             axum::routing::put(put_assignment).delete(delete_assignment),
@@ -192,6 +218,7 @@ fn assignment_item(a: &EffectiveAssignment) -> EffectiveAssignmentView {
         source: a.source.0.clone(),
         tier: a.tier,
         model_id: a.model_id.clone(),
+        priority: a.priority,
         state,
         excluded_reason,
         note: a.note.clone(),
@@ -285,6 +312,8 @@ fn participants(
     out
 }
 
+type SlotValue = (Option<String>, Option<SlotOrigin>, Option<String>, u32);
+
 fn effective_slots(
     view: &AssignmentView,
     entries: &[CatalogEntry],
@@ -310,41 +339,56 @@ fn effective_slots(
     {
         for tier in TIERS {
             let parts = participants(source, tier, providers, catalog);
-            let assignment = view.get(source, tier);
-            let (model_id, origin, excluded_reason) = match assignment {
-                Some(a) => (
-                    Some(a.model_id.clone()),
-                    Some(SlotOrigin::Assignment),
-                    match a.state {
-                        AssignmentState::Assigned => None,
-                        AssignmentState::Excluded { reason } => Some(reason.to_string()),
-                    },
-                ),
-                None => match parts.iter().find_map(|p| p.config_model.clone()) {
-                    Some(m) => (Some(m), Some(SlotOrigin::Config), None),
-                    None => (None, None, None),
-                },
-            };
-            let entry = model_id.as_ref().and_then(|m| {
-                entries
-                    .iter()
-                    .find(|e| e.source.as_str() == source && &e.model_id == m)
-            });
-            out.push(RoleSlotView {
-                source: source.clone(),
-                tier,
-                model_id,
-                origin,
-                excluded_reason,
-                providers: parts
-                    .iter()
-                    .filter(|p| p.kind == ImpactKind::Provider)
-                    .map(|p| p.id.clone())
-                    .collect(),
-                proxy: parts.iter().any(|p| p.kind == ImpactKind::Proxy),
-                available: entry.map(|e| e.available),
-                last_seen: entry.map(|e| rfc3339(e.last_seen)),
-            });
+            let mut members: Vec<SlotValue> = view
+                .members(source, tier)
+                .iter()
+                .map(|a| {
+                    (
+                        Some(a.model_id.clone()),
+                        Some(SlotOrigin::Assignment),
+                        match a.state {
+                            AssignmentState::Assigned => None,
+                            AssignmentState::Excluded { reason } => Some(reason.to_string()),
+                        },
+                        a.priority,
+                    )
+                })
+                .collect();
+            if !view.manages(source, tier) {
+                for part in &parts {
+                    if let Some(model) = &part.config_model
+                        && !members.iter().any(|(m, _, _, _)| m.as_ref() == Some(model))
+                    {
+                        members.push((Some(model.clone()), Some(SlotOrigin::Config), None, 0));
+                    }
+                }
+            }
+            if members.is_empty() {
+                members.push((None, None, None, 0));
+            }
+            for (model_id, origin, excluded_reason, priority) in members {
+                let entry = model_id.as_ref().and_then(|m| {
+                    entries
+                        .iter()
+                        .find(|e| e.source.as_str() == source && &e.model_id == m)
+                });
+                out.push(RoleSlotView {
+                    source: source.clone(),
+                    tier,
+                    model_id,
+                    priority,
+                    origin,
+                    excluded_reason,
+                    providers: parts
+                        .iter()
+                        .filter(|p| p.kind == ImpactKind::Provider)
+                        .map(|p| p.id.clone())
+                        .collect(),
+                    proxy: parts.iter().any(|p| p.kind == ImpactKind::Proxy),
+                    available: entry.map(|e| e.available),
+                    last_seen: entry.map(|e| rfc3339(e.last_seen)),
+                });
+            }
         }
     }
     out
@@ -364,6 +408,7 @@ fn compute_impact(
 ) -> ImpactView {
     let excluded_reason = new_model.and_then(|m| {
         let synthetic = RoleAssignment {
+            priority: 0,
             source: source.clone(),
             tier,
             model_id: m.to_string(),
@@ -549,6 +594,135 @@ async fn preview(State(state): State<ApiState>, RawQuery(raw): RawQuery, body: B
                     &providers,
                     routing.as_ref(),
                 ),
+            })
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &response))
+}
+
+async fn replace_role(
+    State(state): State<ApiState>,
+    Params(tier): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    edit_role(
+        state,
+        parse_tier(&tier)?,
+        read_json(body, false).await?,
+        false,
+    )
+    .await
+}
+
+async fn preview_role(
+    State(state): State<ApiState>,
+    Params(tier): Params<String>,
+    RawQuery(raw): RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    edit_role(
+        state,
+        parse_tier(&tier)?,
+        read_json(body, false).await?,
+        true,
+    )
+    .await
+}
+
+async fn edit_role(
+    state: ApiState,
+    tier: Tier,
+    payload: RoleMembersBody,
+    preview: bool,
+) -> ApiResult {
+    let routing = state.inner.routing_catalog.as_ref().map(|r| r.view());
+    let providers = current_providers(&state);
+    let response = state
+        .blocking(move |store| {
+            let entries = store.model_catalog_list().map_err(store_problem)?;
+            let view = store.model_role_assignment_view().map_err(store_problem)?;
+            let slots = effective_slots(&view, &entries, &providers, routing.as_ref());
+            let before: Vec<RoleMember> = slots
+                .iter()
+                .filter(|s| s.tier == tier)
+                .filter_map(|s| {
+                    s.model_id.as_ref().map(|model| RoleMember {
+                        source: CatalogSource::new(&s.source),
+                        model_id: model.clone(),
+                        priority: s.priority,
+                    })
+                })
+                .collect();
+            let mut unique = std::collections::HashSet::new();
+            for m in &payload.members {
+                parse_source(m.source.as_str())?;
+                if !unique.insert((m.source.as_str(), m.model_id.as_str())) {
+                    return Err(ApiProblem::bad_request("duplicate role membership"));
+                }
+                // Already configured models remain editable before their first discovery.
+                if !entries
+                    .iter()
+                    .any(|e| e.source == m.source && e.model_id == m.model_id)
+                    && !before
+                        .iter()
+                        .any(|b| b.source == m.source && b.model_id == m.model_id)
+                {
+                    return Err(model_not_in_catalog(&m.source, &m.model_id));
+                }
+            }
+            let sources: std::collections::BTreeSet<String> = slots
+                .iter()
+                .map(|s| s.source.clone())
+                .chain(payload.members.iter().map(|m| m.source.0.clone()))
+                .collect();
+            let mut impact = ImpactView::default();
+            for source in &sources {
+                let list = |members: &[RoleMember]| -> Option<String> {
+                    let mut items: Vec<_> = members
+                        .iter()
+                        .filter(|m| m.source.as_str() == source)
+                        .collect();
+                    items.sort_by_key(|m| (m.priority, &m.model_id));
+                    (!items.is_empty()).then(|| {
+                        items
+                            .iter()
+                            .map(|m| m.model_id.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+                };
+                for part in participants(source, tier, &providers, routing.as_ref()) {
+                    impact.changes.push(ImpactChangeView {
+                        kind: part.kind,
+                        id: part.id,
+                        tier: tier_str(tier).into(),
+                        before: list(&before),
+                        after: list(&payload.members),
+                        excluded_reason: None,
+                    });
+                }
+            }
+            if !preview {
+                store
+                    .model_role_members_replace(
+                        tier,
+                        &payload.members,
+                        &sources
+                            .into_iter()
+                            .map(CatalogSource::new)
+                            .collect::<Vec<_>>(),
+                        ACTOR,
+                        time::OffsetDateTime::now_utc().unix_timestamp(),
+                    )
+                    .map_err(store_problem)?;
+            }
+            Ok(RoleMembersResponse {
+                before,
+                after: payload.members,
+                impact,
             })
         })
         .await?;

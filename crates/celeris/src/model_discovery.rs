@@ -652,7 +652,7 @@ pub fn apply_catalog_to_snapshot<S: ModelCatalogStore + ?Sized>(store: &S, confi
     let assigned =
         crate::config::apply_role_assignments(&mut applied, &view, &config.provider_lane_seeds());
     let dropped = crate::config::apply_model_catalog(&mut applied, &entries, &overrides);
-    if dropped.is_empty() && assigned.is_empty() {
+    if dropped.is_empty() && assigned.is_empty() && view.managed.is_empty() {
         return;
     }
     let applied = Arc::new(applied);

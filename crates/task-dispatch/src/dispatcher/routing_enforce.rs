@@ -290,14 +290,14 @@ pub(super) struct EnforceRound {
 impl EnforceRound {
     fn exclude(&mut self, provider: &str, codes: &[&str], detail: Option<String>) {
         self.excluded.insert(provider.to_string());
-        if let Some(c) = self
+        for c in self
             .candidates
             .iter_mut()
-            .find(|c| c.deployment_id == provider)
+            .filter(|c| c.deployment_id == provider)
         {
             c.excluded_reasons
                 .extend(codes.iter().map(|s| (*s).to_string()));
-            if let Some(d) = detail {
+            if let Some(d) = &detail {
                 c.excluded_reasons.push(format!("detail:{d}"));
             }
             c.excluded_reason = codes.first().map(|code| trace_reason(code));

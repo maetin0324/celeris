@@ -53,6 +53,7 @@ fn hint(tier: Tier, adapter: Option<&str>) -> task_core::WorkerHint {
 
 fn item(source: &str, tier: Tier, model: &str, state: AssignmentState) -> EffectiveAssignment {
     EffectiveAssignment {
+        priority: 0,
         source: CatalogSource::new(source),
         tier,
         model_id: model.into(),
@@ -64,7 +65,10 @@ fn item(source: &str, tier: Tier, model: &str, state: AssignmentState) -> Effect
 }
 
 fn view(items: Vec<EffectiveAssignment>) -> AssignmentView {
-    AssignmentView { items }
+    AssignmentView {
+        items,
+        managed: Vec::new(),
+    }
 }
 
 fn excluded() -> AssignmentState {
@@ -563,4 +567,86 @@ async fn modelless_opencode_go_row_routes_only_through_assignments() {
     );
     // standard はまだ og に出ない（og だけの policy なので Ready のまま）。
     assert!(started(&store, only).is_none());
+}
+
+#[tokio::test]
+async fn role_members_priority_all_candidates_and_opencode_execution() {
+    let accounts = opencode_accounts();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut preferred = item(
+        "opencode-go",
+        Tier::Cheap,
+        "preferred",
+        AssignmentState::Assigned,
+    );
+    preferred.priority = 1;
+    let mut second = item(
+        "opencode-go",
+        Tier::Cheap,
+        "second",
+        AssignmentState::Assigned,
+    );
+    second.priority = 2;
+    let mut removed = item("opencode-go", Tier::Cheap, "removed", excluded());
+    removed.priority = 0;
+    let mut fallback_member = item(
+        "openai-compatible:p2",
+        Tier::Cheap,
+        "p2-cheap-id",
+        AssignmentState::Assigned,
+    );
+    fallback_member.priority = 20;
+    let mut d = opencode_dispatcher(
+        store.clone(),
+        &accounts,
+        view(vec![second.clone(), removed, preferred, fallback_member]),
+    );
+    let profiles = d.legacy_provider_profiles(&hint(Tier::Cheap, None));
+    let candidates: Vec<_> = profiles
+        .iter()
+        .filter(|p| p.deployment.id == "og")
+        .map(|p| p.model.id.as_str())
+        .collect();
+    assert_eq!(candidates, ["opencode-go/preferred", "opencode-go/second"]);
+    let round = d.enforce_round(&hint(Tier::Cheap, None));
+    assert_eq!(
+        round
+            .candidates
+            .iter()
+            .filter(|c| c.deployment_id == "og")
+            .count(),
+        2
+    );
+    let cheap = insert_task(&store, ws.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    assert_eq!(
+        started(&store, cheap).unwrap().model,
+        "opencode-go/preferred"
+    );
+    // The pool quota belongs to the source, so exhaustion skips both models together.
+    d.record_account_failure(
+        AccountAdapter::OpencodeGo,
+        "a",
+        "exhausted",
+        &ProviderOutcome::Exhausted,
+    );
+    let ws2 = tempfile::tempdir().unwrap();
+    let fallback = insert_task(&store, ws2.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    assert_eq!(
+        started(&store, fallback).unwrap().provider.as_deref(),
+        Some("p2")
+    );
+    // Excluding the preferred model selects the next model without removing its role.
+    d.set_role_assignment_reader(Arc::new(StaticAssignments(view(vec![
+        item("opencode-go", Tier::Cheap, "preferred", excluded()),
+        second,
+    ]))));
+    assert_eq!(
+        d.effective_lane_model("og", Tier::Cheap)
+            .unwrap()
+            .as_deref(),
+        Some("opencode-go/second")
+    );
 }

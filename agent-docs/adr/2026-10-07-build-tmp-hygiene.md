@@ -1,7 +1,7 @@
 # ADR 2026-10-07: ビルド成果物と /tmp の衛生規則（共有 cargo target の定期掃除・run の TMPDIR・試験の後片付け・ディスク監視）
 
 - 日付: 2026-10-07
-- 状態: 採択（実装前。task 01M4B4J92KBR73EQA5S7FWB21G の葉 target-sweep / run-tmpdir / rust-test-tmp / web-e2e-tmp / disk-watch が実装する）
+- 状態: 採択（task 01M4B4J92KBR73EQA5S7FWB21G の葉 target-sweep / run-tmpdir / rust-test-tmp / web-e2e-tmp / disk-watch が実装する。disk-watch（D4）は実装済み、末尾の付記）
 - 関連: ADR-0066 D1（worktree 間の cargo キャッシュ共有）、ADR-0074 F5（disk guard `min_free_disk_mb`・WU ごとの target）、
   ADR-0075（scratch pool・lease・`scratch_gc`）、ADR-0131（cron job）、ADR-0133（受信箱と通知）、ADR-0136（/local の配置）、
   ADR-0125（時間依存試験の決定化）、ADR-0001 D2 原則 1（dispatcher・store に LLM を入れない）
@@ -189,3 +189,29 @@
 - `/tmp` 全体の時間基準の掃除（systemd-tmpfiles 等の host 設定）は host 管理であり Celeris は持たない。
   `extra.action = "tmp_sweep"` は予約だけして今回は実装しない。
 - sccache・host の cargo 設定（ADR-0136 で host 管理）。
+
+## 付記: D4 の実装（2026-10-07、葉 disk-watch）
+
+- 表 `disk_watch_state`（migration 0058、`SCHEMA_VERSION = 58`）。列は `path`（主キー）・`level`（`ok|warn|critical|unavailable`）・
+  `since`・`last_pct`・`last_notified_at`・`updated_at`。読み書きは `task_core::DiskWatchStore`（`TaskStore` の supertrait）。
+  `disk_watch_apply` は状態の upsert と通知の記録（`feed::record_in_tx`）を 1 つの transaction で行う。
+- 判定は `task_dispatch::disk_watch`（`next_level`・`evaluate` は純関数、`run_disk_watch` が store と `DiskProbe` を使う）。
+  本物の probe は `StatvfsProbe`（path そのものの `statvfs`。祖先へは辿らず、無ければ `unavailable`）。
+  しきい値は「以上」で上がる。下げるのは `< しきい値 − 5`（1 回の測定で critical → ok の 2 段も下がる）。
+  `unavailable` は `ok` と同じ扱いで次の測定を評価する。
+- 通知: `NoticeKind::Disk`（`"disk"`）、group_key `disk:<path>`、source_key `disk:<path>:warn:<since>:<now>`、
+  target `{kind: "disk", id: <path>}`。`warn` への上昇と、`warn` が続く間の 24 時間ごとの再通知だけ。
+  `critical` への上昇・level の下降は通知しない。
+- 受信箱: `InboxKind::DiskFull`（`"disk_full"`、`cluster_login` の次）。`inbox::inbox` が `disk_watch_state` の
+  `critical` の行を `Inbox.disk_full`（serde・schema では skip。旧来の `GET /inbox` には出さない）に載せ、
+  `human_inbox` が `disk_full-<slug>`（`/` は `root`、`/local` は `local`、`/var/tmp` は `var-tmp`）を作る。
+  選択肢は `free_space` の 1 つで、`POST /inbox/items/{id}/answer` は `409 native_action_required`（host の操作）。
+  web は `/daemon` へ案内する。
+- 書き込みを減らすため、level・通知に変化が無く `last_pct` の動きが 1 ポイント未満の測定は DB に書かない。
+- 間隔の時刻（前回測った時刻）だけは dispatcher のメモリに持つ（注入時計）。config の reload で測り直すが、
+  状態が DB にあるので重複しない。draining のインスタンスは測らない。
+- config: `[[maintenance.disk_watch]]`（`path` 必須・絶対 path、`warn_pct` 既定 80、`critical_pct` 既定 95、
+  `0 < warn < critical <= 100`、path の重複不可）。省略で既定の 3 つ、`[maintenance] disk_watch = []` で無効。
+  `Config::disk_watch_entries()` を daemon の起動（bootstrap）と reload（admin）が `Dispatcher::set_disk_watch` に渡す。
+- D1.5: 保守 executor の target sweep が `over_cap_unresolved` のとき `disk:target_sweep` の通知
+  （source_key `disk:target_sweep:<task id>`、上限を超えたままの root と大きさを要約に書く）。

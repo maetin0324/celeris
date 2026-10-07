@@ -41,6 +41,8 @@ pub mod decision;
 pub mod delegate;
 /// ADR-0124: atomic coding task の決定的な直行経路判定。
 pub mod direct_route;
+/// ADR 2026-10-07-build-tmp-hygiene D4.4: ディスク使用率の監視の状態。
+pub mod disk_watch;
 /// ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation の純粋な型と関数。
 pub mod execution;
 /// ADR-0072 D13（Phase E3）: Complexity Gate（atomic/compound の決定的な判定）の純粋な型と関数。
@@ -171,6 +173,7 @@ pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingP
 // ---- ADR-0054 D1（Phase 67）: ノードごとの継続セッション ----
 pub use node_session::{NodeSession, NodeSessionStore, SessionKind, WorkUnitSession};
 // ---- ADR-0056 D1 / D4（Phase 78）: MCP サーバーの認証とログ ----
+pub use disk_watch::{DiskLevel, DiskWatchState, DiskWatchStore};
 pub use feed::{
     Notice, NoticeEvent, NoticeId, NoticeKind, NoticeLink, NoticePage, NoticeQuery,
     NoticeRecordOutcome, NoticeStore, NoticeTarget, NoticeUnreadCount,

@@ -56,7 +56,7 @@ impl std::str::FromStr for NoticeId {
     }
 }
 
-/// 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。
+/// 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。`Disk` は ADR 2026-10-07-build-tmp-hygiene D4.3。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -71,10 +71,12 @@ pub enum NoticeKind {
     CronRun,
     AutoRecovered,
     RequeueLimitNear,
+    // ディスク使用率の警告（group_key `disk:<path>`）と target sweep の上限超え（`disk:target_sweep`）。
+    Disk,
 }
 
 impl NoticeKind {
-    pub const ALL: [NoticeKind; 9] = [
+    pub const ALL: [NoticeKind; 10] = [
         NoticeKind::TaskDone,
         NoticeKind::Report,
         NoticeKind::BadNews,
@@ -84,6 +86,7 @@ impl NoticeKind {
         NoticeKind::CronRun,
         NoticeKind::AutoRecovered,
         NoticeKind::RequeueLimitNear,
+        NoticeKind::Disk,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -97,6 +100,7 @@ impl NoticeKind {
             NoticeKind::CronRun => "cron_run",
             NoticeKind::AutoRecovered => "auto_recovered",
             NoticeKind::RequeueLimitNear => "requeue_limit_near",
+            NoticeKind::Disk => "disk",
         }
     }
 
@@ -353,7 +357,7 @@ fn kinds_clause(kinds: &[NoticeKind]) -> Option<String> {
 }
 
 /// 1 件の記録（`notice_record` / `notice_record_batch` 共通。呼び出し側が transaction を持つ）。
-fn record_in_tx(
+pub(crate) fn record_in_tx(
     tx: &rusqlite::Transaction<'_>,
     event: &NoticeEvent,
 ) -> Result<NoticeRecordOutcome, StoreError> {

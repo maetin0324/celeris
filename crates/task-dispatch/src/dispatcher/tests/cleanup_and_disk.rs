@@ -192,3 +192,108 @@ async fn workspace_prune_after_secs_zero_disables_pruning() {
         "prune_after_secs = 0 must disable pruning"
     );
 }
+
+/// ADR 2026-10-07-build-tmp-hygiene D4: tick の段 `disk_watch` は注入した probe と時計で 60 秒ごとに測り、
+/// warn で通知・critical で受信箱に出す。run は止めない（task は dispatch される）。
+#[tokio::test]
+async fn disk_watch_tick_phase_notifies_and_opens_inbox_without_stopping_runs() {
+    use crate::disk_watch::{DiskProbe, DiskUsage, DiskWatchEntry};
+
+    /// 使用率 = `pct` の偽の filesystem（試験の途中で値を変える）。
+    struct Probe(Arc<StdMutex<u64>>);
+    impl DiskProbe for Probe {
+        fn usage(&self, _: &std::path::Path) -> Result<DiskUsage, String> {
+            let used = *self.0.lock().unwrap();
+            Ok(DiskUsage {
+                blocks: 100,
+                bfree: 100 - used,
+                bavail: 100 - used,
+            })
+        }
+    }
+
+    let sqlite = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let store: Arc<dyn TaskStore> = sqlite.clone();
+    let dir = tempfile::tempdir().unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: String::new(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    let clock = Arc::new(StdMutex::new(
+        OffsetDateTime::from_unix_timestamp(1_791_331_200).unwrap(),
+    ));
+    d.test_now = Some(clock.clone());
+    let pct = Arc::new(StdMutex::new(85));
+    d.set_disk_watch_with_probe(
+        vec![DiskWatchEntry {
+            path: "/local".into(),
+            warn_pct: 80.0,
+            critical_pct: 95.0,
+        }],
+        Box::new(Probe(pct.clone())),
+    );
+    let disk_notices = || {
+        store
+            .notice_list(&task_core::feed::NoticeQuery {
+                kinds: vec![task_core::feed::NoticeKind::Disk],
+                ..Default::default()
+            })
+            .unwrap()
+            .items
+    };
+    d.tick().unwrap();
+    assert_eq!(disk_notices().len(), 1);
+    // 60 秒経つまでは測らない（使用率を上げても critical にならない）。
+    *pct.lock().unwrap() = 97;
+    *clock.lock().unwrap() += time::Duration::seconds(30);
+    d.tick().unwrap();
+    assert_eq!(
+        sqlite.disk_watch_states().unwrap()[0].level,
+        task_core::DiskLevel::Warn
+    );
+    *clock.lock().unwrap() += time::Duration::seconds(30);
+    d.tick().unwrap();
+    assert_eq!(
+        sqlite.disk_watch_states().unwrap()[0].level,
+        task_core::DiskLevel::Critical
+    );
+    let ctx = task_ops::view::ViewContext {
+        workspace_root: dir.path().to_path_buf(),
+        retry_backoff_base: Duration::ZERO,
+        retry_backoff_max: Duration::ZERO,
+        max_requeues: 5,
+        clusters: Default::default(),
+    };
+    let inbox = task_ops::human_inbox::human_inbox(
+        store.as_ref(),
+        None,
+        &ctx,
+        OffsetDateTime::now_utc(),
+        &|_, _| vec![],
+        None,
+    )
+    .unwrap();
+    assert!(
+        inbox.items.iter().any(|i| i.id == "disk_full-local"),
+        "{:?}",
+        inbox.items
+    );
+    assert_eq!(disk_notices().len(), 1, "critical goes to the inbox only");
+
+    // 監視は run を止めない。
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: ":".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+}

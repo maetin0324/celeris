@@ -499,10 +499,11 @@ fn target_sweep_rejects_outside_root_and_symlink() {
         ]
     );
     // skip のある target は丸ごと消さない。
-    assert!(plan
-        .delete
-        .iter()
-        .all(|d| d.reason != DeleteReason::StaleTarget));
+    assert!(
+        plan.delete
+            .iter()
+            .all(|d| d.reason != DeleteReason::StaleTarget)
+    );
 }
 
 #[test]

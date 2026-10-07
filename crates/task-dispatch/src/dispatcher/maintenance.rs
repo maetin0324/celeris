@@ -35,6 +35,34 @@ impl Dispatcher {
         self.target_sweep = Some(params);
     }
 
+    /// ADR 2026-10-07-build-tmp-hygiene D4: 監視する path としきい値（celeris が `[[maintenance.disk_watch]]` から
+    /// 渡す）。測るのは本物の `statvfs`。空なら監視しない。
+    pub fn set_disk_watch(&mut self, entries: Vec<crate::disk_watch::DiskWatchEntry>) {
+        self.set_disk_watch_with_probe(entries, Box::new(crate::disk_watch::StatvfsProbe));
+    }
+
+    /// [`Self::set_disk_watch`] の測り方を差し替える（試験は偽の使用率を返す probe を渡す）。
+    pub fn set_disk_watch_with_probe(
+        &mut self,
+        entries: Vec<crate::disk_watch::DiskWatchEntry>,
+        probe: Box<dyn crate::disk_watch::DiskProbe>,
+    ) {
+        self.disk_watch = Some(crate::disk_watch::DiskWatchRunner {
+            entries,
+            probe,
+            last_at: None,
+        });
+    }
+
+    /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。
+    pub(super) fn tick_disk_watch(&mut self) {
+        let now = self.now_utc();
+        let store = self.store.clone();
+        if let Some(runner) = self.disk_watch.as_mut() {
+            runner.tick(store.as_ref(), now);
+        }
+    }
+
     fn target_sweep_params(&self) -> SweepParams {
         self.target_sweep.clone().unwrap_or_else(|| SweepParams {
             roots: vec![
@@ -100,6 +128,24 @@ impl Dispatcher {
             .apply_transition(task.id, Trigger::Dispatch, None)?;
         let report = run_sweep(&params.roots, &params, mode, &clock);
         let event = report.to_event();
+        // D1.5: 上限まで下げきれなければ D4 の `disk` 通知（`disk:target_sweep`）も出す。
+        if report.over_cap_unresolved {
+            let over_roots: Vec<(String, u64)> = report
+                .roots
+                .iter()
+                .filter(|r| r.after_bytes > params.max_bytes_per_root)
+                .map(|r| (r.root.display().to_string(), r.after_bytes))
+                .collect();
+            let notice = crate::disk_watch::target_sweep_notice(
+                task.id,
+                &over_roots,
+                params.max_bytes_per_root,
+                self.now_utc(),
+            );
+            if let Err(error) = self.store.notice_record(&notice) {
+                tracing::warn!(task_id = %task.id, %error, "failed to record target sweep disk notice");
+            }
+        }
         if report.errors.is_empty() {
             self.store
                 .apply_transition(task.id, Trigger::WorkerDone, Some(event))?;

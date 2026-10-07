@@ -1,4 +1,5 @@
 //! ADR 2026-10-07-build-tmp-hygiene D1.1・D1.2・D1.4: `[maintenance.target_sweep]`（共有 cargo target の掃除）。
+//! D4.1: `[[maintenance.disk_watch]]`（ディスク使用率の監視の path としきい値）。
 //!
 //! cron の決定的な保守 executor（雛形の `extra.action = "target_sweep"`）と `celerisctl target sweep` の
 //! `--root` 省略時が読む。欄を省略したら `SweepParams::default()` と既定の roots
@@ -15,11 +16,87 @@ use super::ConfigError;
 pub const DEFAULT_DEV_BUILD_CACHE: &str = "/var/tmp/agent-platform-build";
 
 /// `[maintenance]`。
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MaintenanceConfig {
     #[serde(default)]
     pub target_sweep: TargetSweepConfig,
+    /// D4.1: 省略すると既定の 3 つ（`/`・`/local`・`/tmp`、80% / 95%）。`disk_watch = []` で監視しない。
+    #[serde(default = "default_disk_watch")]
+    pub disk_watch: Vec<DiskWatchConfig>,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            target_sweep: TargetSweepConfig::default(),
+            disk_watch: default_disk_watch(),
+        }
+    }
+}
+
+/// `[[maintenance.disk_watch]]` の 1 つ（path としきい値の組。しきい値は使用率 %）。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiskWatchConfig {
+    pub path: PathBuf,
+    #[serde(default = "default_warn_pct")]
+    pub warn_pct: f64,
+    #[serde(default = "default_critical_pct")]
+    pub critical_pct: f64,
+}
+
+fn default_warn_pct() -> f64 {
+    task_dispatch::disk_watch::DEFAULT_WARN_PCT
+}
+
+fn default_critical_pct() -> f64 {
+    task_dispatch::disk_watch::DEFAULT_CRITICAL_PCT
+}
+
+fn default_disk_watch() -> Vec<DiskWatchConfig> {
+    task_dispatch::disk_watch::DiskWatchEntry::defaults()
+        .into_iter()
+        .map(|e| DiskWatchConfig {
+            path: e.path,
+            warn_pct: e.warn_pct,
+            critical_pct: e.critical_pct,
+        })
+        .collect()
+}
+
+impl MaintenanceConfig {
+    /// `~` を展開する（相対 path は `validate` で拒否する。監視の path は host の mount 点）。
+    pub(super) fn resolve_disk_watch_paths(&mut self) {
+        let home = task_core::home_dir();
+        for w in &mut self.disk_watch {
+            w.path = task_core::expand_home(&w.path, home.as_deref());
+        }
+    }
+
+    pub(super) fn validate_disk_watch(&self) -> Result<(), ConfigError> {
+        let mut seen = std::collections::BTreeSet::new();
+        for w in &self.disk_watch {
+            let invalid = |msg: &str| {
+                ConfigError::Invalid(format!(
+                    "[[maintenance.disk_watch]] {}: {msg}",
+                    w.path.display()
+                ))
+            };
+            if !w.path.is_absolute() {
+                return Err(invalid("path must be absolute"));
+            }
+            if !(w.warn_pct > 0.0 && w.warn_pct < w.critical_pct && w.critical_pct <= 100.0) {
+                return Err(invalid(
+                    "thresholds must satisfy 0 < warn_pct < critical_pct <= 100",
+                ));
+            }
+            if !seen.insert(w.path.clone()) {
+                return Err(invalid("duplicate path"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// `[maintenance.target_sweep]`。`roots` を省略すると既定の 2 つ（[`TargetSweepConfig::resolved_roots`]）。
@@ -127,6 +204,19 @@ impl TargetSweepConfig {
 }
 
 impl super::Config {
+    /// D4: dispatcher の tick の段 `disk_watch` に渡す path としきい値。
+    pub fn disk_watch_entries(&self) -> Vec<task_dispatch::disk_watch::DiskWatchEntry> {
+        self.maintenance
+            .disk_watch
+            .iter()
+            .map(|w| task_dispatch::disk_watch::DiskWatchEntry {
+                path: w.path.clone(),
+                warn_pct: w.warn_pct,
+                critical_pct: w.critical_pct,
+            })
+            .collect()
+    }
+
     /// cron の保守 executor と `celerisctl target sweep`（`--root` 省略時）が使う掃除の roots と上限。
     pub fn target_sweep_params(&self) -> SweepParams {
         self.maintenance

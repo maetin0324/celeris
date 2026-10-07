@@ -2989,7 +2989,7 @@ export type InboxItem = {
   "title": string;
 };
 
-export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "delivery_skipped" | "integration_request" | "knowledge_review";
+export type InboxKind = "decision" | "plan_gate" | "phase_gate" | "authorization" | "browser_wait" | "question" | "acceptance_check" | "draft_accept" | "project_plan" | "failed" | "unroutable" | "cluster_login" | "disk_full" | "delivery_skipped" | "integration_request" | "knowledge_review";
 
 export type InboxLink = {
   "href": string;
@@ -3644,7 +3644,7 @@ export type Notice = {
 
 export type NoticeId = string;
 
-export type NoticeKind = "task_done" | "report" | "bad_news" | "secretary_reply" | "delivery" | "release" | "cron_run" | "auto_recovered" | "requeue_limit_near";
+export type NoticeKind = "task_done" | "report" | "bad_news" | "secretary_reply" | "delivery" | "release" | "cron_run" | "auto_recovered" | "requeue_limit_near" | "disk";
 
 export type NoticeLink = {
   "href": string;

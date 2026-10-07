@@ -220,6 +220,7 @@ pub struct Config {
     #[serde(default)]
     pub cron: CronConfig,
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: `[maintenance.target_sweep]`（共有 cargo target の掃除の roots と上限）。
+    /// D4.1: `[[maintenance.disk_watch]]`（ディスク使用率の監視）。
     #[serde(default)]
     pub maintenance: MaintenanceConfig,
     /// ADR 2026-10-05-cos-chat-home D4: `[cos]`（`stream_retention_days`）と `[cos.attachments]`（添付の上限・GC）。
@@ -438,6 +439,7 @@ impl Config {
         cfg.containers.resolve_paths(&base);
         cfg.workspace.resolve_paths(&base);
         cfg.maintenance.target_sweep.resolve_paths(&base);
+        cfg.maintenance.resolve_disk_watch_paths();
         cfg.scratch.resolve_paths(&base);
         cfg.api.resolve_paths(&base);
         if let Some(org_include) = &cfg.org_include {
@@ -517,6 +519,7 @@ impl Config {
         cluster::validate_clusters(&self.clusters)?;
         self.workspace.validate()?;
         self.maintenance.target_sweep.validate()?;
+        self.maintenance.validate_disk_watch()?;
         harness::validate_harnesses(&self.harnesses)?;
         let role_ids = harness::validate_roles(&self.roles)?;
         let genre_ids = harness::validate_genres(&self.genres, &role_ids)?;

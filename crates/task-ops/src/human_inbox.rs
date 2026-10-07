@@ -39,13 +39,15 @@ pub enum InboxKind {
     Failed,
     Unroutable,
     ClusterLogin,
+    // ADR 2026-10-07-build-tmp-hygiene D4.3: ディスク使用率が `critical` を超えた path。
+    DiskFull,
     DeliverySkipped,
     IntegrationRequest,
     KnowledgeReview,
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 15] = [
+    pub const ALL: [InboxKind; 16] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -58,6 +60,7 @@ impl InboxKind {
         InboxKind::Failed,
         InboxKind::Unroutable,
         InboxKind::ClusterLogin,
+        InboxKind::DiskFull,
         InboxKind::DeliverySkipped,
         InboxKind::IntegrationRequest,
         InboxKind::KnowledgeReview,
@@ -77,6 +80,7 @@ impl InboxKind {
             InboxKind::Failed => "failed",
             InboxKind::Unroutable => "unroutable",
             InboxKind::ClusterLogin => "cluster_login",
+            InboxKind::DiskFull => "disk_full",
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
             InboxKind::KnowledgeReview => "knowledge_review",
@@ -247,6 +251,9 @@ pub fn from_inbox(
     if let Some(k) = knowledge.filter(|k| k.count > 0) {
         items.push(b.knowledge_review(k));
     }
+    for d in &inbox.disk_full {
+        items.push(b.disk_full(d));
+    }
 
     sort_items(&mut items);
     let mut by_kind: BTreeMap<String, u32> = BTreeMap::new();
@@ -289,6 +296,18 @@ fn id_part(s: &str) -> String {
             }
         })
         .collect()
+}
+
+/// ADR 2026-10-07-build-tmp-hygiene D4.3: `disk_full` 項目の id（`disk_full-<path の slug>`）。
+/// slug は前後の `/` を落として残りの `/` 等を `-` にしたもの（`/` は `root`、`/local` は `local`）。
+pub fn disk_full_item_id(path: &str) -> String {
+    let trimmed = path.trim_matches('/');
+    let slug = if trimmed.is_empty() {
+        "root".to_string()
+    } else {
+        id_part(trimmed)
+    };
+    format!("disk_full-{slug}")
 }
 
 /// 時刻の数字だけ（`2026-10-02T13:10:00Z` → `20261002131000`）。同じ task の別の出来事を id で分ける。
@@ -1102,6 +1121,44 @@ impl Builder<'_> {
             project_id: None,
             created_at: k.oldest_created.clone().unwrap_or_else(|| self.now_str()),
             links: vec![link("候補", "/api/v1/knowledge/inbox".to_string())],
+        })
+    }
+
+    fn disk_full(&self, d: &task_core::DiskWatchState) -> InboxItem {
+        let pct = d
+            .last_pct
+            .map(|p| format!("{p:.1}%"))
+            .unwrap_or_else(|| "?".to_string());
+        self.finish(Draft {
+            id: disk_full_item_id(&d.path),
+            kind: InboxKind::DiskFull,
+            title: format!("ディスクがほぼ満杯: {}（使用率 {pct}）", d.path),
+            detail: clip(&format!(
+                "{} の使用率が {pct} で critical のしきい値を超えている。空きを作る（`celerisctl target sweep --apply`、\
+                 不要な file の削除）。使用率がしきい値より 5 ポイント下がると自動で消える。run は止めない\
+                 （空きの下限による停止は ADR-0074 の min_free_disk_mb）。",
+                d.path
+            )),
+            options: vec![opt(
+                "free_space",
+                "空きを作る（host の操作）",
+                false,
+                "使用率が下がると項目は自動で消える",
+            )],
+            recommended: Some("free_space".to_string()),
+            due_at: None,
+            blocking: InboxBlocking {
+                tasks: Vec::new(),
+                units: Vec::new(),
+                root: None,
+                summary: "止めているものは無い（知らせるだけ）".to_string(),
+            },
+            blocked_by: Vec::new(),
+            native: None,
+            task: None,
+            project_id: None,
+            created_at: view::to_rfc3339(d.since),
+            links: Vec::new(),
         })
     }
 

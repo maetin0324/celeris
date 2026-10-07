@@ -1641,6 +1641,7 @@ export type InboxKind =
   | "failed"
   | "unroutable"
   | "cluster_login"
+  | "disk_full"
   | "delivery_skipped"
   | "integration_request"
   | "knowledge_review";
@@ -1717,7 +1718,7 @@ export type PriorityInput = ("P0" | "P1" | "P2" | "P3") | number;
  */
 export type NoticeId = string;
 /**
- * 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。
+ * 通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。`Disk` は ADR 2026-10-07-build-tmp-hygiene D4.3。
  */
 export type NoticeKind =
   | "task_done"
@@ -1728,7 +1729,8 @@ export type NoticeKind =
   | "release"
   | "cron_run"
   | "auto_recovered"
-  | "requeue_limit_near";
+  | "requeue_limit_near"
+  | "disk";
 /**
  * 判断待ち・返事・成果の引き渡し（ADR-0037 / ADR-0050）。進行中の細かな更新は通知しない。
  */

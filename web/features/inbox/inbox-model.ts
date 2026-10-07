@@ -17,6 +17,7 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "unroutable",
   "browser_wait",
   "cluster_login",
+  "disk_full",
   "delivery_skipped",
   "integration_request",
   "knowledge_review",
@@ -35,6 +36,7 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   unroutable: "担当が決まらない",
   browser_wait: "ブラウザ操作",
   cluster_login: "クラスタ接続",
+  disk_full: "ディスクの逼迫",
   delivery_skipped: "配送の見送り",
   integration_request: "統合の依頼",
   knowledge_review: "知識の候補",
@@ -62,7 +64,13 @@ export function isDestructive(option: InboxOption): boolean {
 }
 
 /** 画面から答えられず、専用画面で操作する種類（answer が 409 native_action_required を返す）。 */
-const NATIVE_KINDS = new Set<InboxKind>(["cluster_login", "delivery_skipped", "integration_request", "browser_wait"]);
+const NATIVE_KINDS = new Set<InboxKind>([
+  "cluster_login",
+  "disk_full",
+  "delivery_skipped",
+  "integration_request",
+  "browser_wait",
+]);
 
 export function needsNativeScreen(item: InboxItem): boolean {
   return NATIVE_KINDS.has(item.kind) || item.options.length === 0;
@@ -98,6 +106,7 @@ export function nativeTarget(item: InboxItem, waits: readonly BrowserWait[] = []
   const link = item.links.find((row) => row.href.startsWith("/") && !row.href.startsWith("//"));
   if (link) return { href: link.href, label: link.label };
   if (item.kind === "cluster_login") return { href: "/clusters", label: "クラスタの画面" };
+  if (item.kind === "disk_full") return { href: "/daemon", label: "daemon の画面" };
   if (item.task) return { href: `/tasks/${encodeURIComponent(item.task.id)}`, label: `タスク「${item.task.title}」` };
   return { href: "/tasks", label: "タスクの一覧" };
 }

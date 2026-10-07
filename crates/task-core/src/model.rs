@@ -1935,7 +1935,11 @@ mod tests {
                 after_bytes: 80,
                 deleted_bytes: 120,
                 deleted_items: 7,
-                by_reason: TargetSweepByReason { age: 4, cap: 2, stale_target: 1 },
+                by_reason: TargetSweepByReason {
+                    age: 4,
+                    cap: 2,
+                    stale_target: 1,
+                },
             }],
             skipped: vec![TargetSweepSkip {
                 path: "/x/debug".into(),

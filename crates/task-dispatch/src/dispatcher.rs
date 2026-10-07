@@ -1111,6 +1111,9 @@ pub struct Dispatcher {
     /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
     /// `None` は既定（`dispatcher::maintenance` を参照）。
     target_sweep: Option<task_worker::target_sweep::SweepParams>,
+    /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`None` は無効。celeris が
+    /// `[[maintenance.disk_watch]]` から `set_disk_watch` で渡す）。
+    disk_watch: Option<crate::disk_watch::DiskWatchRunner>,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     #[cfg(test)]
@@ -1467,6 +1470,7 @@ impl Dispatcher {
             adapters,
             config,
             target_sweep: None,
+            disk_watch: None,
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -2078,6 +2082,11 @@ impl Dispatcher {
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
         self.prune_one_workspace();
+        // ADR 2026-10-07-build-tmp-hygiene D4: 使用率の監視（60 秒ごと。statvfs だけで軽い）。draining の
+        // インスタンスは測らない（状態の正本は DB にあり、引き継いだ側が続ける）。
+        if self.accepting_new_work {
+            self.tick_disk_watch();
+        }
         let prune_ms = lap(&mut at);
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。

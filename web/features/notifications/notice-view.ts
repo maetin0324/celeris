@@ -5,6 +5,7 @@ import type { BadgeTone } from "../../components/ui/badge";
 export const noticeKinds: readonly { key: NoticeKind; label: string; tone: BadgeTone }[] = [
   { key: "bad_news", label: "悪い知らせ", tone: "danger" },
   { key: "requeue_limit_near", label: "再試行の上限が近い", tone: "warning" },
+  { key: "disk", label: "ディスク", tone: "warning" },
   { key: "report", label: "報告", tone: "info" },
   { key: "secretary_reply", label: "秘書の返信", tone: "info" },
   { key: "task_done", label: "task の完了", tone: "success" },

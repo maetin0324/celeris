@@ -391,6 +391,11 @@ async fn add_reference(
     if prior.is_some_and(|hash| hash != request_hash) {
         return Err(error(AttachmentError::Conflict));
     }
+    let kb_root = crate::knowledge::root_of(&state);
+    let (owner_kind, owner_id) = (req.owner_kind, req.owner_id.clone());
+    state
+        .blocking(move |store| owner_checked(store, kb_root, owner_kind, &owner_id))
+        .await?;
     open(&state)?
         .add_ref(&id, kind, &req.owner_id, OffsetDateTime::now_utc())
         .map_err(error)?;
@@ -406,4 +411,85 @@ async fn add_reference(
             owner_id: req.owner_id,
         },
     ))
+}
+
+/// The pin's owner must already exist (ADR 2026-10-05 cos-chat-home D4): a task that is not in the
+/// store is 404 `task_not_found`, a KB inbox candidate without `_inbox/<id>.md` is 404
+/// `candidate_not_found`. The REST route and the CoS operation share this check.
+fn owner_checked(
+    store: &task_core::store::SqliteStore,
+    kb_root: Result<std::path::PathBuf, ApiProblem>,
+    owner_kind: ChatReferenceOwnerKind,
+    owner_id: &str,
+) -> Result<&'static str, ApiProblem> {
+    match owner_kind {
+        ChatReferenceOwnerKind::Task => {
+            let task = crate::query::parse_task_id(owner_id)?;
+            if task_core::TaskStore::get(store, task)
+                .map_err(|e| ApiProblem::internal(e.to_string()))?
+                .is_none()
+            {
+                return Err(ApiProblem::new(
+                    StatusCode::NOT_FOUND,
+                    "task_not_found",
+                    format!("no task {owner_id}"),
+                ));
+            }
+            Ok("task")
+        }
+        ChatReferenceOwnerKind::KnowledgeInbox => {
+            let root = kb_root?;
+            if task_ops::knowledge::inbox_get(&root, owner_id).is_none() {
+                return Err(ApiProblem::new(
+                    StatusCode::NOT_FOUND,
+                    "candidate_not_found",
+                    format!("knowledge candidate not found: {owner_id}"),
+                ));
+            }
+            Ok("knowledge_inbox")
+        }
+    }
+}
+
+/// The audited CoS operation `attachment.reference` (ADR 2026-10-05 cos-chat-home D4): a CoS run
+/// pins a chat attachment to the task or KB inbox candidate it just created. The CoS credential
+/// cannot POST the references route directly (422 `cos_audit_context_required`), so the same body
+/// goes through `/cos/operations`. The owner must already exist; the pin is written in the audit
+/// transaction.
+pub(crate) fn add_reference_op(
+    store: &task_core::store::SqliteStore,
+    kb_root: Result<std::path::PathBuf, ApiProblem>,
+    id: String,
+    req: ChatReferenceRequest,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let reject = |problem: ApiProblem| audit.reject(store, "attachment", &id, problem);
+    if req.owner_id.is_empty() || req.idempotency_key.is_empty() {
+        return Err(reject(ApiProblem::bad_request(
+            "owner_id and idempotency_key are required",
+        )));
+    }
+    let kind = owner_checked(store, kb_root, req.owner_kind, &req.owner_id).map_err(reject)?;
+    let mut failure = None;
+    let outcome = audit.apply(store, "attachment", &id, "attachment.reference", |tx| {
+        match task_core::chat::attachments::add_ref_tx(
+            tx,
+            &id,
+            kind,
+            &req.owner_id,
+            OffsetDateTime::now_utc(),
+        ) {
+            Ok(()) => Ok(serde_json::json!(ChatReferenceResponse {
+                attachment_id: id.clone(),
+                owner_kind: req.owner_kind,
+                owner_id: req.owner_id.clone(),
+            })),
+            Err(err) => {
+                let detail = err.to_string();
+                failure = Some(error(err));
+                Err(task_core::chat::ChatError::Invalid(detail))
+            }
+        }
+    });
+    outcome.map_err(|problem| failure.unwrap_or(problem))
 }

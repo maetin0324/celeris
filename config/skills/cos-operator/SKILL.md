@@ -60,6 +60,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | pause / resume | — | `{"method":"POST","path":"/api/v1/tasks/<id>/pause","body":{}}` / `…/resume`（案件は `/api/v1/projects/<id>/pause`） |
 | コメント | — | `{"method":"POST","path":"/api/v1/tasks/<id>/comments","body":{"body":"…"}}` |
 | KB | `celerisctl knowledge search <語>` / `get <path>` / `record --title … --scope … --source …` | 候補の取り込み `{"method":"POST","path":"/api/v1/knowledge/inbox/<id>/accept","body":{}}` |
+| 添付の pin | — | `{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references","body":{"owner_kind":"task"\|"knowledge_inbox","owner_id":"…","idempotency_key":"…"}}`（§3a） |
 | 監視（読み取り） | `celerisctl ls` / `show <id>` / `log <id>` | `GET /api/v1/tasks/<id>`・`/timeline`・`/events`、`GET /api/v1/inbox`、`GET /api/v1/notifications`、`GET /api/v1/cos/inbox`、`GET /api/v1/cos/operations/{o}` |
 
 例: 起票の本文全体。
@@ -72,6 +73,37 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 `request.body` は指定先の既存 JSON schema で検証される。body の形が分からなければ推測で送らず、
 `docs/api/v1/` の schema（[gui-api.md](../../../docs/api/v1/gui-api.md)）を読む。
+
+## 3a. 添付の引き渡し（pin）
+
+チャットの添付（screenshot・PDF など）を後続の task や KB に渡すときは、添付を owner に **pin** する
+（ADR cos-chat-home D4）。pin された添付だけが後続の run の入力・KB 候補の原ファイルとして残る。
+
+- **元チャットの run path を後続に渡さない**。前置きの添付の path は chat run の一時の場所で、run が終われば消える。
+  起票本文・objective・KB 本文・コメントに path を書かない。後続は pin から自分の入力として受け取る。
+- 渡し先: **screenshot など画像は task へ**（`owner_kind: "task"`、owner_id は task id）。
+  **PDF など資料は KB 候補へ**（`owner_kind: "knowledge_inbox"`、owner_id は候補 id）。
+
+手順（順序を崩さない）:
+
+1. **owner を作り、成功を確かめる**。task は `/cos/operations` の `POST /api/v1/tasks`（応答 operation が `applied`、
+   作った task id を控える）。KB 候補は `celerisctl knowledge record --json --title … --scope … --source message:<id> < body.md`
+   の出力の `id`（`_inbox` の候補 id。`/api/v1/knowledge/inbox/{id}` と同じ）。owner が無いうちに pin すると 404。
+2. **pin する**。CoS の credential で `POST /api/v1/chat/attachments/{id}/references` を直接叩くと
+   422 `cos_audit_context_required` なので、`/cos/operations` に包む（監査が付く）:
+
+   ```json
+   {"idempotency_key":"pin-<添付 id>-<owner id>","expected_revision":null,
+    "reason":"人がチャットで screenshot つきで画面修正を依頼した（seq 12）","policy_version":"1",
+    "request":{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references",
+               "body":{"owner_kind":"task","owner_id":"<task id>","idempotency_key":"pin-<添付 id>-<owner id>"}}}
+   ```
+
+   再試行は同じ idempotency_key で（同じ key・違う owner は 409）。添付 1 件・owner 1 件ごとに 1 回。
+3. **pin の応答を確かめてから**、初めて人に「引き渡し済み」と言う。応答の operation が `state: "applied"` で、
+   `result` に同じ `attachment_id`・`owner_kind`・`owner_id` が返っていること。404（添付・owner が無い）・
+   409・422 なら引き渡していない。「引き渡せなかった」と理由つきで人に書き、owner の作成からやり直すか人に回す。
+4. 要約 checkpoint に owner id と pin した添付 id を残す（§8）。
 
 ## 4. 登録 repo の変更
 

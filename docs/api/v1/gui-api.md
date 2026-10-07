@@ -383,7 +383,8 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 90 | GET | `/knowledge/tree` | 知識ベースのツリー（`?scope=` / `?q=`。ADR-0047、Phase 61） | `KnowledgeTree` | `index.json` + `grep` |
 | 91 | GET | `/knowledge/page` | ページ 1 枚（raw / html / front matter / 履歴 / etag） | `KnowledgePage` | ファイル + 履歴 |
 | 92 | PUT | `/knowledge/page` | ページを 1 件 1 コミットで書く（**管理系**） | 200 `KnowledgePageResult` | ファイル + コミット |
-| 93 | GET | `/knowledge/inbox` | `_inbox/` の候補（出典・取り込み先つき） | `KnowledgeInbox` | ファイル |
+| 93 | GET | `/knowledge/inbox` | `_inbox/` の候補（出典・取り込み先・添付の provenance つき） | `KnowledgeInbox` | ファイル + `chat_attachment_refs` |
+| 93a | GET | `/knowledge/inbox/{id}` | 候補 1 件（添付の provenance つき） | `KnowledgeCandidate` | ファイル + `chat_attachment_refs` |
 | 94 | POST | `/knowledge/inbox/{id}/accept` | 候補を正本に取り込む（**管理系**） | 200 `KnowledgePageResult` | ファイル + コミット |
 | 95 | POST | `/knowledge/inbox/{id}/reject` | 候補を捨てる（**管理系**） | 200 `KnowledgeRejectResult` | ファイル + コミット |
 | 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
@@ -2700,7 +2701,16 @@ author / committer は `Celeris (human) <celeris@local>`（`celerisctl knowledge
 - `items`: `id`（`_inbox/<id>.md` のファイル名から `.md` を取ったもの）/ `path` / `title` / `tags[]` /
   `scope` / `sources[]` / `confidence` / `created`（front matter のまま。RFC 3339 か `YYYY-MM-DD`）/ `body` / `html` /
   `target`（取り込み先。front matter の `path`、無ければ `scope` と題名からの既定）/ `target_exists`
+- `provenance[]`（ADR 2026-10-05 cos-chat-home D4）: この候補に pin されたチャット添付（`chat_attachment_refs`
+  owner_kind=`knowledge_inbox`）の原ファイルの出どころ。pin の古い順。`attachment_id` / `name` / `media_type` /
+  `size_bytes` / `sha256` / `thread_id` / `message_id`（その添付を最初に載せたメッセージ。無ければ欠く）/
+  `request_text`（そのメッセージの本文 = 人の依頼本文）/ `pinned_at`。SQLite の表の join だけで出すので、チャット run の
+  一時 file やチャットの作業場所を消しても残る。添付の保存が無効なら空
 - 新しい順（id の降順 = 記録した時刻の降順）
+- `GET /knowledge/inbox/{id}` は同じ形の 1 件（`KnowledgeCandidate`）。知らない id は 404 `candidate_not_found`、
+  `/` や `..` を含む id は 403 `path_forbidden`
+- accept / reject は参照（`chat_attachment_refs`）を消さない。候補が `_inbox/` から消えても参照が残る間は添付の
+  保存期限は付かない（`remove_ref` で外したときだけ保持期限が付く）
 
 #### 3.105 `POST /knowledge/inbox/{id}/accept` → 200 `KnowledgePageResult`（**管理系**）
 
@@ -3346,7 +3356,7 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 | GET `/chat/attachments/{a}/content` | なし | 200 バイト列。`Content-Disposition: attachment`、`X-Content-Type-Options: nosniff` |
 | GET `/chat/attachments/{a}/preview` | なし | 200 安全に再エンコードした raster。非対応は 404（`preview_url` は null） |
 | DELETE `/chat/attachments/{a}` | なし | 204。未参照の upload だけ。参照ありは 409、削除済みへの再送は 204 |
-| POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse` |
+| POST `/chat/attachments/{a}/references` | `{"owner_kind":"task\|knowledge_inbox","owner_id","idempotency_key"}` | 200 `ChatReferenceResponse`。owner が無ければ 404（task は `task_not_found`、KB 候補は `candidate_not_found`。CoS の `attachment.reference` も同じ） |
 
 ### 3.128 CoS run credential と監査付き操作（ADR 2026-10-05-cos-chat-home D2/D3）
 

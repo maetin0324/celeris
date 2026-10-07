@@ -3060,6 +3060,7 @@ mod cleanup_and_disk;
 mod cluster_tunnel;
 mod coding_harness_default;
 mod conversation_cos;
+mod cos_chat_attach_handoff;
 mod cron_jobs;
 mod git_workspace;
 mod integration_check_progress;

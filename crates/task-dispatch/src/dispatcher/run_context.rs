@@ -384,6 +384,8 @@ impl Dispatcher {
             budget: None,
             // 多目的 routing Phase 3: `dispatch_one` が spawn の直前に registry へ登録して埋める。
             routing_context_ref: None,
+            // ADR 2026-10-05 cos-chat-home D4: `spawn_worker` が planner でない run にだけ入れる。
+            input_attachment_source: None,
         })
     }
 

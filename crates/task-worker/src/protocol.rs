@@ -601,6 +601,60 @@ pub struct RunContext {
     /// daemon・reviewer run では `None`。adapter が LLM 要求へどう載せるかは task-worker 側が決める。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub routing_context_ref: Option<String>,
+    /// ADR 2026-10-05 cos-chat-home D4: task に pin されたチャット添付（`chat_attachment_refs`
+    /// owner_kind=task）の入力 manifest。dispatcher が run 開始時に blob から hash・size を照合して
+    /// 作業ツリーの外へ read-only に stage したもの。照合できなかった添付は `delivery = unavailable`
+    /// と理由で載り、`path` を持たない。pin の無い run・planner/reviewer・CoS chat run では空で省略
+    /// （前置きと `request.json` は従来とバイト単位で同じ）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_attachments: Vec<InputAttachment>,
+}
+
+/// `context.input_attachments` の 1 件（ADR 2026-10-05 cos-chat-home D4 の添付 manifest）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct InputAttachment {
+    pub id: String,
+    /// 元の名前（表示だけ。path には使わない）。
+    pub name: String,
+    pub media_type: String,
+    pub size_bytes: u64,
+    /// 小文字 16 進の SHA-256（DB の記録。stage 時に照合した値）。
+    pub sha256: String,
+    /// read-only に stage した写しの絶対 path。`delivery = unavailable` では `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<PathBuf>,
+    pub delivery: InputAttachmentDelivery,
+    /// `delivery = unavailable` の理由（hash/size 不一致・blob 欠落・remote 実行など）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+/// 入力添付の渡し方。`image` は画像読取の道具で読める raster、`file` はそれ以外、
+/// `unavailable` は渡していない（読めたと装わない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum InputAttachmentDelivery {
+    Image,
+    File,
+    Unavailable,
+}
+
+impl InputAttachmentDelivery {
+    /// 安全な decoder で preview できる raster（ADR D4）だけを `image` にする。
+    pub fn for_media_type(media_type: &str) -> Self {
+        match media_type {
+            "image/jpeg" | "image/png" | "image/webp" | "image/gif" => Self::Image,
+            _ => Self::File,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::File => "file",
+            Self::Unavailable => "unavailable",
+        }
+    }
 }
 
 /// `context.direct_route`（ADR-0124 D4）: 直行と判定した根拠の要約。

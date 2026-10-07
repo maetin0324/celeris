@@ -43,11 +43,11 @@ pub struct AttachmentManifest {
     pub delivery: String,
 }
 
-fn safe_id(id: &str) -> bool {
+pub(crate) fn safe_id(id: &str) -> bool {
     !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }
 
-fn reject_symlinks(path: &Path) -> Result<(), StageError> {
+pub(crate) fn reject_symlinks(path: &Path) -> Result<(), StageError> {
     if path.components().any(|c| matches!(c, Component::ParentDir)) {
         return Err(StageError::UnsafePath);
     }
@@ -62,7 +62,7 @@ fn reject_symlinks(path: &Path) -> Result<(), StageError> {
     Ok(())
 }
 
-fn private_dir(path: &Path) -> Result<(), StageError> {
+pub(crate) fn private_dir(path: &Path) -> Result<(), StageError> {
     reject_symlinks(path)?;
     if path.exists() {
         if !path.is_dir() {
@@ -95,7 +95,7 @@ pub fn workspace_dir(data_dir: &Path, thread_id: &str) -> Result<PathBuf, StageE
     Ok(workspace)
 }
 
-fn safe_filename(name: &str) -> Result<String, StageError> {
+pub(crate) fn safe_filename(name: &str) -> Result<String, StageError> {
     if name.is_empty() || name.contains("..") {
         return Err(StageError::UnsafePath);
     }
@@ -118,7 +118,12 @@ fn safe_filename(name: &str) -> Result<String, StageError> {
 }
 
 /// Check the staged bytes against the durable source record (size and SHA-256).
-fn verify_staged(path: &Path, id: &str, size_bytes: u64, sha256: &str) -> Result<(), StageError> {
+pub(crate) fn verify_staged(
+    path: &Path,
+    id: &str,
+    size_bytes: u64,
+    sha256: &str,
+) -> Result<(), StageError> {
     let io = |source| StageError::Io {
         id: id.to_owned(),
         source,

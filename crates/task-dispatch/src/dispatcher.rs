@@ -111,6 +111,7 @@ mod dispatch_run;
 /// ADR-0098（Phase R7-10）: worker の run が宣言した後続 task（`followups.json`）。
 mod followups;
 mod housekeeping;
+mod input_attachments;
 mod leases;
 /// 持ち主の居ない `running` の `runs` 行の照合（lease を持たない reviewer run 等）。
 mod ownerless_runs;
@@ -1071,6 +1072,10 @@ struct RunExtras {
     budget: Option<task_core::Budget>,
     /// 多目的 routing Phase 3: registry に登録した RoutingContext の参照（`RunContext.routing_context_ref`）。
     routing_context_ref: Option<String>,
+    /// ADR 2026-10-05 cos-chat-home D4: task に pin された添付の原本の場所。`spawn_worker` が
+    /// planner でない worker run にだけ入れ、`run_worker` が stage して `RunContext.input_attachments`
+    /// にする（CoS chat が未設定の daemon では `None`）。
+    input_attachment_source: Option<input_attachments::InputAttachmentSource>,
 }
 
 struct ReviewEntry {

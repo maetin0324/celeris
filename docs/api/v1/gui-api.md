@@ -385,6 +385,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 92 | PUT | `/knowledge/page` | ページを 1 件 1 コミットで書く（**管理系**） | 200 `KnowledgePageResult` | ファイル + コミット |
 | 93 | GET | `/knowledge/inbox` | `_inbox/` の候補（出典・取り込み先・添付の provenance つき） | `KnowledgeInbox` | ファイル + `chat_attachment_refs` |
 | 93a | GET | `/knowledge/inbox/{id}` | 候補 1 件（添付の provenance つき） | `KnowledgeCandidate` | ファイル + `chat_attachment_refs` |
+| 93b | POST | `/knowledge/inbox` | 候補を 1 件作る（添付の pin つき。**管理系**、CoS は `knowledge.record`） | 201 `KnowledgeRecordResult` | ファイル + コミット + `chat_attachment_refs` |
 | 94 | POST | `/knowledge/inbox/{id}/accept` | 候補を正本に取り込む（**管理系**） | 200 `KnowledgePageResult` | ファイル + コミット |
 | 95 | POST | `/knowledge/inbox/{id}/reject` | 候補を捨てる（**管理系**） | 200 `KnowledgeRejectResult` | ファイル + コミット |
 | 96 | POST | `/console/instruct` | CoS への指示（Console から。ADR-0048 D3、Phase 60b）（**管理系**） | 202 `ConsoleInstructAccepted` | `crate::console` + `task_ops::conversation` |
@@ -2733,6 +2734,29 @@ author / committer は `Celeris (human) <celeris@local>`（`celerisctl knowledge
 - accept / reject は参照（`chat_attachment_refs`）を消さない。候補が `_inbox/` から消えても参照が残る間は添付の
   保存期限は付かない（`remove_ref` で外したときだけ保持期限が付く）
 
+#### 3.104a `POST /knowledge/inbox` → 201 `KnowledgeRecordResult`（**管理系**。ADR 2026-10-07 cos-live-fixes D2）
+
+```json
+{"title": "fern03 の使い方", "scope": "project:agent-platform", "body": "PDF の要点。",
+ "sources": ["message:01J…"], "tags": ["fern03"], "confidence": "high", "attachment_ids": ["01J…"]}
+```
+
+- 本文は `KnowledgeRecordBody`（未知の欄は 400）。`title`・`scope`・`body`・`sources[]`（1 件以上）が必須、`tags[]`・
+  `confidence`（`high` / `medium` / `low`）・`path`（取り込み先）・`attachment_ids[]` は任意
+- 候補の検査と形は `celerisctl knowledge record` と同じ（`task_ops::knowledge::record_prepare`。秘密を含む本文・
+  置き場のガードに落ちる `path` は 422）。**scope は `user` / `environment` / `environment/<分類>` / `experience` /
+  `project:<slug>`**。`projects/<slug>` は互換で受けて `project:<slug>` に正規化して記録する。知らない scope・案件は
+  422 `validation`（`field: "scope"`）
+- `attachment_ids` の各添付を候補に pin する（`chat_attachment_refs` owner_kind=`knowledge_inbox`）。検査は §3.4 の
+  task 作成と同じ（ULID・重複・20 件まで・`ready`・期限、CoS なら credential の thread の添付だけ）。1 件でも落ちれば
+  422 `invalid_attachment` で**候補も作らない**。候補は一時名で書き、pin（と CoS の監査）を SQLite に commit してから
+  `_inbox/<id>.md` に rename して git commit する
+- 応答: `id`（`GET /knowledge/inbox/{id}` の id）/ `path` / `target` / `scope`（正規化後）/ `op` / `attachment_ids` / `sha`。
+  pin した添付は §3.104 の `provenance[]` に出る
+- CoS は `/cos/operations` の action `knowledge.record` で送る（§3.129。`result` は `sha` を除いた同じ形、`target_kind`
+  `knowledge`・`target_id` 候補 id）。CoS credential で直接叩くと 422 `cos_audit_context_required`。KB が無ければ 409
+  `knowledge_unavailable`、添付の保存が無効で `attachment_ids` を渡せば 503 `attachments_unavailable`
+
 #### 3.105 `POST /knowledge/inbox/{id}/accept` → 200 `KnowledgePageResult`（**管理系**）
 
 ```json
@@ -3388,6 +3412,10 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 | POST `/cos/operations` | `{"idempotency_key","expected_revision","reason","policy_version","request":{"method","path","body"}}` | 200 `OperationView`（再送含む） |
 | GET `/cos/operations/{o}` | なし | 200 `OperationView` |
 | POST `/cos/threads/{t}/checkpoint` | `{"run_id","summary","through_seq","expected_summary_through_seq"}` | 200 checkpoint 応答 |
+
+登録済みの KB 操作は `POST /api/v1/knowledge/inbox`（`knowledge.record`。候補の作成と添付の pin。§3.104a）と
+`POST /api/v1/knowledge/inbox/{id}/reject`（`knowledge.reject`）。`celerisctl knowledge record` は CoS credential のとき
+KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fixes D2）。
 
 操作要求は登録済みの task/decision/approval/execution/project/knowledge/comment の変更 path のみ実行する。外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 

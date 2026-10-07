@@ -851,6 +851,76 @@ pub fn record_in(
     request: &RecordRequest,
     layout: &kb::Layout,
 ) -> Result<RecordOutcome, RecordError> {
+    record_prepare(root, request, layout)?.commit(root)
+}
+
+/// [`record_prepare`] の結果: 検証を通り、id を決め、`_inbox/.<id>.md.tmp` に書いた候補。
+/// [`PreparedRecord::commit`] で `_inbox/<id>.md` へ rename して git commit する。commit しないで
+/// 捨てる（drop する）と一時ファイルは消える。ADR 2026-10-07 cos-live-fixes D2: API は添付の pin
+/// （SQLite の commit）の後に `commit` するので、pin に失敗した候補は残らない。
+#[derive(Debug)]
+pub struct PreparedRecord {
+    /// `_inbox` の中での id（ファイル名から `.md` を取ったもの）。
+    pub id: String,
+    /// `_inbox/<id>.md`。
+    pub path: String,
+    /// 取り込み先（ガードを通した KB 相対パス）。
+    pub target: String,
+    /// 正規化した scope（`project:<slug>` など）。
+    pub scope: Option<String>,
+    pub op: Option<kb::CandidateOp>,
+    pub redirect: Option<kb::Redirect>,
+    temp: Option<PathBuf>,
+}
+
+impl PreparedRecord {
+    /// 一時ファイルを `_inbox/<id>.md` にして git commit する。
+    pub fn commit(mut self, root: &Path) -> Result<RecordOutcome, RecordError> {
+        let Some(temp) = self.temp.take() else {
+            return Err(RecordError::Failed(
+                "the candidate was already committed".into(),
+            ));
+        };
+        let final_path = root.join(&self.path);
+        if let Err(e) = std::fs::rename(&temp, &final_path) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(RecordError::Failed(format!(
+                "{} を書けませんでした: {e}",
+                self.path
+            )));
+        }
+        let sha = commit_paths(
+            root,
+            &format!("knowledge: 候補 {}", self.path),
+            (kb::AGENT_AUTHOR_NAME, kb::AGENT_AUTHOR_EMAIL),
+            &[self.path.as_str()],
+        )
+        .map_err(RecordError::Failed)?;
+        Ok(RecordOutcome {
+            path: std::mem::take(&mut self.path),
+            id: std::mem::take(&mut self.id),
+            sha,
+            target: std::mem::take(&mut self.target),
+            op: self.op,
+            redirect: self.redirect.take(),
+        })
+    }
+}
+
+impl Drop for PreparedRecord {
+    fn drop(&mut self) {
+        if let Some(temp) = self.temp.take() {
+            let _ = std::fs::remove_file(temp);
+        }
+    }
+}
+
+/// [`record_in`] の前半: 検証・置き場のガード・id の決定をして、候補を一時名で書く（git には入れない）。
+pub fn record_prepare(
+    root: &Path,
+    request: &RecordRequest,
+    layout: &kb::Layout,
+) -> Result<PreparedRecord, RecordError> {
     let title = request.title.trim();
     let scope = request.scope.trim();
     let body = request.body.trim();
@@ -926,7 +996,9 @@ pub fn record_in(
     let slug = kb::slugify(title).unwrap_or_else(|| "note".to_string());
     let mut id = format!("{stamp}-{slug}");
     let mut n = 2;
-    while root.join(INBOX_DIR).join(format!("{id}.md")).exists() {
+    while root.join(INBOX_DIR).join(format!("{id}.md")).exists()
+        || root.join(INBOX_DIR).join(format!(".{id}.md.tmp")).exists()
+    {
         id = format!("{stamp}-{slug}-{n}");
         n += 1;
     }
@@ -948,22 +1020,17 @@ pub fn record_in(
     let dir = root.join(INBOX_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| RecordError::Failed(format!("{INBOX_DIR} を作れませんでした: {e}")))?;
-    std::fs::write(dir.join(format!("{id}.md")), page.as_bytes())
+    let temp = dir.join(format!(".{id}.md.tmp"));
+    std::fs::write(&temp, page.as_bytes())
         .map_err(|e| RecordError::Failed(format!("{path} を書けませんでした: {e}")))?;
-    let sha = commit_paths(
-        root,
-        &format!("knowledge: 候補 {path}"),
-        (kb::AGENT_AUTHOR_NAME, kb::AGENT_AUTHOR_EMAIL),
-        &[path.as_str()],
-    )
-    .map_err(RecordError::Failed)?;
-    Ok(RecordOutcome {
-        path,
+    Ok(PreparedRecord {
         id,
-        sha,
+        path,
         target,
+        scope: placement.scope,
         op,
         redirect: placement.redirect,
+        temp: Some(temp),
     })
 }
 

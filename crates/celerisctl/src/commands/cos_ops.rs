@@ -165,4 +165,4 @@ pub(crate) fn send(
 
 #[cfg(test)]
 #[path = "cos_ops_tests.rs"]
-mod tests;
+pub(crate) mod tests;

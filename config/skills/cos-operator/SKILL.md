@@ -59,7 +59,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | replan | `celerisctl execution plan show <task-id>` で現計画を読む | `{"method":"PUT","path":"/api/v1/tasks/<id>/execution-plan","body":<計画の全体>}`、段の確認は `/api/v1/tasks/<id>/execution/phase-gate`・`plan-gate`（`{"action":"continue"\|"replan"\|"withdraw","note":"…"}`） |
 | pause / resume | — | `{"method":"POST","path":"/api/v1/tasks/<id>/pause","body":{}}` / `…/resume`（案件は `/api/v1/projects/<id>/pause`） |
 | コメント | — | `{"method":"POST","path":"/api/v1/tasks/<id>/comments","body":{"body":"…"}}` |
-| KB | `celerisctl knowledge search <語>` / `get <path>` / `record --title … --scope … --source …` | 候補の取り込み `{"method":"POST","path":"/api/v1/knowledge/inbox/<id>/accept","body":{}}` |
+| KB | `celerisctl knowledge search <語>` / `get <path>` / `record --title … --scope project:<slug> --source …`（API 経由） | 候補の作成 `{"method":"POST","path":"/api/v1/knowledge/inbox","body":{"title":"…","scope":"project:<slug>","body":"…","sources":["message:<id>"],"attachment_ids":[]}}`（§3a） |
 | 添付の pin（既存の owner へ後から） | — | `{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references","body":{"owner_kind":"task"\|"knowledge_inbox","owner_id":"…","idempotency_key":"…"}}`（§3a。新しい task へは起票の `attachment_ids`） |
 | 監視（読み取り） | `celerisctl ls` / `show <id>` / `log <id>` | `GET /api/v1/tasks/<id>`・`/timeline`・`/events`、`GET /api/v1/inbox`、`GET /api/v1/notifications`、`GET /api/v1/cos/inbox`、`GET /api/v1/cos/operations/{o}` |
 
@@ -112,24 +112,40 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
    （存在しない・削除済み・期限切れ・重複・他の thread の添付）なら **task も作られていない**。理由つきで人に書き、
    添付を確かめて同じ本文（別の idempotency_key）で送り直すか人に回す。422 `validation` は本文の形の誤り（§3 の最小例を見る）。
 
-**KB へ渡す（PDF など資料）: 候補を作ってから pin する**（owner が無いうちに pin すると 404）。
+**KB へ渡す（PDF など資料）: 候補の作成に `attachment_ids` を入れる 1 回の operation**（ADR 2026-10-07 cos-live-fixes D2）。
+候補ファイルと pin（provenance）が一緒に入り、どちらかが失敗すれば候補も残らない。KB の根へ直接書かない。
 
-1. 候補を作り、出力の `id`（`_inbox` の候補 id。`/api/v1/knowledge/inbox/{id}` と同じ）を控える:
-   `celerisctl knowledge record --json --title … --scope … --source message:<id> < body.md`。
-2. pin する。CoS の credential で `POST /api/v1/chat/attachments/{id}/references` を直接叩くと
-   422 `cos_audit_context_required` なので、`/cos/operations` に包む（監査が付く）:
+1. **候補の作成と pin を 1 回で送る**（`POST /api/v1/knowledge/inbox`、action `knowledge.record`）:
 
    ```json
-   {"idempotency_key":"pin-<添付 id>-<候補 id>","expected_revision":null,
+   {"idempotency_key":"kb-fern03-manual-1","expected_revision":null,
     "reason":"人がチャットで PDF を KB に入れるよう依頼した（seq 14）","policy_version":"1",
-    "request":{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references",
-               "body":{"owner_kind":"knowledge_inbox","owner_id":"<候補 id>","idempotency_key":"pin-<添付 id>-<候補 id>"}}}
+    "request":{"method":"POST","path":"/api/v1/knowledge/inbox","body":{
+      "title":"fern03 の使い方","scope":"project:agent-platform",
+      "body":"PDF の要点（Markdown）","sources":["message:<message id>"],
+      "tags":["fern03"],"confidence":"high","attachment_ids":["<添付 id>"]}}}
    ```
 
-   再試行は同じ idempotency_key で（同じ key・違う owner は 409）。添付 1 件・owner 1 件ごとに 1 回。
-   既にある task へ後から添付を足すときも同じ route（`owner_kind: "task"`）を使う。
-3. 応答の operation が `state: "applied"` で、`result` に同じ `attachment_id`・`owner_kind`・`owner_id` が返っていることを
-   確かめてから「引き渡し済み」と言う。404・409・422 なら引き渡していない。
+   `celerisctl knowledge record --title … --scope project:<slug> --source message:<id> --attachment-id <添付 id> < body.md`
+   も同じ operation を送る（CoS credential のときは API 経由。`--reason` で理由を渡す）。
+   **scope は `user` / `environment` / `environment/<分類>` / `experience` / `project:<slug>` のどれか**。
+   `projects/<slug>` は KB の置き場の名前で、scope には書かない。
+2. 応答の operation が `state: "applied"` で、`result` に候補 `id` と、送った `attachment_ids` が全部返っていることを
+   確かめてから「引き渡し済み」と言う。`GET /api/v1/knowledge/inbox/<id>` の `provenance` にも添付が出る。
+   422 `invalid_attachment` なら候補も作られていない。422 `validation`（scope・sources・本文）は本文を直して別の key で送り直す。
+
+既にある task・候補へ後から添付を足すときだけ、`POST /api/v1/chat/attachments/{id}/references` を `/cos/operations`
+に包んで送る（直接叩くと 422 `cos_audit_context_required`）:
+
+```json
+{"idempotency_key":"pin-<添付 id>-<owner id>","expected_revision":null,
+ "reason":"…","policy_version":"1",
+ "request":{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references",
+            "body":{"owner_kind":"task"|"knowledge_inbox","owner_id":"<owner id>","idempotency_key":"pin-<添付 id>-<owner id>"}}}
+```
+
+再試行は同じ idempotency_key で（同じ key・違う owner は 409）。応答が `applied` で `result` に同じ
+`attachment_id`・`owner_kind`・`owner_id` が返っていれば引き渡し済み。404・409・422 なら引き渡していない。
 
 どちらも最後に、要約 checkpoint に owner id と pin した添付 id を残す（§8）。
 

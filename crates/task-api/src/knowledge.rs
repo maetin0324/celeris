@@ -4,6 +4,8 @@
 //! - `GET  /knowledge/page?path=` — 1 ページ（raw / html / front matter / 履歴 / etag）。読み取り
 //! - `PUT  /knowledge/page` — **管理系**。人の編集を 1 件 1 コミット（`etag` 必須）
 //! - `GET  /knowledge/inbox` — `_inbox/` の候補。読み取り
+//! - `POST /knowledge/inbox` — **管理系**。候補を 1 件作る（添付の provenance つき。CoS は
+//!   `/cos/operations` の `knowledge.record`。ADR 2026-10-07 cos-live-fixes D2）
 //! - `GET  /knowledge/inbox/{id}` — 候補 1 件（pin されたチャット添付の provenance つき）。読み取り
 //! - `POST /knowledge/inbox/{id}/accept` / `reject` — **管理系**。取り込み・破棄
 //!
@@ -43,7 +45,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
     axum::Router::new()
         .route("/api/v1/knowledge/tree", get(tree))
         .route("/api/v1/knowledge/page", get(page).put(put_page))
-        .route("/api/v1/knowledge/inbox", get(inbox))
+        .route("/api/v1/knowledge/inbox", get(inbox).post(record))
         .route("/api/v1/knowledge/inbox/{id}", get(inbox_detail))
         .route("/api/v1/knowledge/inbox/{id}/accept", post(accept))
         .route("/api/v1/knowledge/inbox/{id}/reject", post(reject))
@@ -262,6 +264,53 @@ pub struct KnowledgeAcceptBody {
     /// 宛先が既にあっても上書きする。
     #[serde(default)]
     pub overwrite: bool,
+}
+
+/// `POST /knowledge/inbox` の本文（ADR 2026-10-07 cos-live-fixes D2）。`celerisctl knowledge record`
+/// と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_prepare`）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct KnowledgeRecordBody {
+    pub title: String,
+    /// `user` / `environment` / `environment/<分類>` / `experience` / `project:<slug>`。互換のため
+    /// `projects/<slug>` も受けて `project:<slug>` に正規化する。
+    pub scope: String,
+    /// 本文（Markdown）。
+    pub body: String,
+    /// **1 件以上必須**（`message:<id>` / `task:<id>` / `human:instruction` / `url:<…>`）。
+    #[serde(default)]
+    pub sources: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub confidence: Option<Confidence>,
+    /// 取り込む先の KB 相対パス（省略なら accept のときに scope と題名から決まる）。
+    #[serde(default)]
+    pub path: Option<String>,
+    /// 候補に pin するチャット添付（`owner_kind: knowledge_inbox`）。CoS からは自分の thread の添付だけ。
+    #[serde(default)]
+    pub attachment_ids: Vec<String>,
+}
+
+/// `POST /knowledge/inbox` の応答（201）。CoS operation `knowledge.record` の `result` も同じ形。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct KnowledgeRecordResult {
+    /// 候補 id（`GET /knowledge/inbox/{id}` の id）。
+    pub id: String,
+    /// `_inbox/<id>.md`。
+    pub path: String,
+    /// 取り込み先（置き場のガードを通した KB 相対パス）。
+    pub target: String,
+    /// 正規化した scope（`project:<slug>` …）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    /// 取り込み先が既にあれば `append` / `merge`。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
+    /// pin した添付の id（本文の順）。
+    pub attachment_ids: Vec<String>,
+    /// 候補の git commit の sha。
+    pub sha: String,
 }
 
 /// `POST /knowledge/inbox/{id}/reject` の応答。
@@ -629,6 +678,173 @@ async fn inbox(
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))
+}
+
+// ---------------------------------------------------------------------------
+// POST /knowledge/inbox（管理系。ADR 2026-10-07 cos-live-fixes D2）
+// ---------------------------------------------------------------------------
+
+async fn record(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    headers: HeaderMap,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+    body: Body,
+) -> ApiResult {
+    no_query(&raw)?;
+    require_admin(&state, &headers)?;
+    let request: KnowledgeRecordBody = read_json(body, false).await?;
+    let root = root_of(&state)?;
+    let db = state.chat.attachment_db_path.clone();
+    let result = state
+        .blocking(move |store| record_op(store, &root, db.as_deref(), request, None)?.direct())
+        .await?;
+    Ok(json_response(StatusCode::CREATED, &result))
+}
+
+fn record_problem(e: ops_kb::RecordError) -> ApiProblem {
+    use ops_kb::RecordError as E;
+    let field = match &e {
+        E::NoTitle => "title",
+        E::NoScope | E::Placement(_) => "scope",
+        E::NoSources => "sources",
+        E::NoBody | E::Secret(_) => "body",
+        E::Failed(detail) => return knowledge_unavailable(detail.clone()),
+    };
+    ApiProblem::validation(vec![ValidationError {
+        field: Some(field.into()),
+        message: e.to_string(),
+    }])
+}
+
+/// 候補に添付を pin する（呼び手の transaction の中）。検査は D1 の task 作成と同じ
+/// （`task_pin_problem_tx`: 形式・重複・件数・`ready`・期限・CoS なら自分の thread）。
+fn pin_candidate_tx(
+    tx: &rusqlite::Transaction<'_>,
+    ids: &[String],
+    candidate: &str,
+    thread: Option<&str>,
+) -> Result<(), ApiProblem> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let now = time::OffsetDateTime::now_utc();
+    let internal =
+        |e: task_core::chat::attachments::AttachmentError| ApiProblem::internal(e.to_string());
+    if let Some(why) =
+        task_core::chat::attachments::task_pin_problem_tx(tx, ids, thread, now).map_err(internal)?
+    {
+        return Err(ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_attachment",
+            why,
+        ));
+    }
+    for id in ids {
+        task_core::chat::attachments::add_ref_tx(tx, id, "knowledge_inbox", candidate, now)
+            .map_err(internal)?;
+    }
+    Ok(())
+}
+
+fn attachments_unavailable() -> ApiProblem {
+    ApiProblem::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "attachments_unavailable",
+        "attachment storage is not configured",
+    )
+}
+
+/// `POST /knowledge/inbox` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （action `knowledge.record`）が共有する。候補は一時名で書き（`record_prepare`）、添付の pin と
+/// 監査（CoS）を SQLite に commit してから `_inbox/<id>.md` へ rename して git commit する。pin か
+/// 監査が失敗すれば一時ファイルを消すので、候補ファイルは残らない。
+pub(crate) fn record_op(
+    store: &task_core::SqliteStore,
+    root: &std::path::Path,
+    attachment_db: Option<&std::path::Path>,
+    body: KnowledgeRecordBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<KnowledgeRecordResult>, ApiProblem> {
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "knowledge", "new", problem),
+        None => problem,
+    };
+    require_kb(root).map_err(reject)?;
+    if let Some(path) = body
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        page_path(path).map_err(reject)?;
+    }
+    let projects = ops_kb::project_refs(store)
+        .map_err(|e| reject(ApiProblem::internal(format!("project list: {e}"))))?;
+    let layout = ops_kb::layout(root, Some(projects));
+    let request = ops_kb::RecordRequest {
+        title: body.title,
+        scope: body.scope,
+        tags: body.tags,
+        sources: body.sources,
+        confidence: body.confidence,
+        body: body.body,
+        path: body.path,
+        op: None,
+    };
+    let prepared =
+        ops_kb::record_prepare(root, &request, &layout).map_err(|e| reject(record_problem(e)))?;
+    let attachment_ids = body.attachment_ids;
+    let view = |sha: String, prepared: &ops_kb::PreparedRecord| KnowledgeRecordResult {
+        id: prepared.id.clone(),
+        path: prepared.path.clone(),
+        target: prepared.target.clone(),
+        scope: prepared.scope.clone(),
+        op: prepared.op.map(|o| o.as_str().to_string()),
+        attachment_ids: attachment_ids.clone(),
+        sha,
+    };
+    let Some(audit) = audit else {
+        if !attachment_ids.is_empty() {
+            let db = attachment_db.ok_or_else(attachments_unavailable)?;
+            let db_error =
+                |e: rusqlite::Error| ApiProblem::internal(format!("attachment pin: {e}"));
+            let mut conn = rusqlite::Connection::open(db).map_err(db_error)?;
+            conn.busy_timeout(std::time::Duration::from_secs(10))
+                .map_err(db_error)?;
+            let tx = conn
+                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                .map_err(db_error)?;
+            pin_candidate_tx(&tx, &attachment_ids, &prepared.id, None)?;
+            tx.commit().map_err(db_error)?;
+        }
+        let template = view(String::new(), &prepared);
+        let outcome = prepared.commit(root).map_err(record_problem)?;
+        tracing::info!(who = "admin", op = "knowledge_record", id = %outcome.id, "admin: knowledge candidate recorded");
+        return Ok(Applied::Direct(KnowledgeRecordResult {
+            sha: outcome.sha,
+            ..template
+        }));
+    };
+    let thread = audit.ctx.thread_id.clone();
+    let mut failure = None;
+    let outcome = audit.apply(store, "knowledge", &prepared.id, "knowledge.record", |tx| {
+        if let Err(problem) = pin_candidate_tx(tx, &attachment_ids, &prepared.id, Some(&thread)) {
+            let detail = problem.detail().to_string();
+            failure = Some(problem);
+            return Err(task_core::chat::ChatError::Invalid(detail));
+        }
+        let mut result = serde_json::to_value(view(String::new(), &prepared))
+            .map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
+        if let Some(map) = result.as_object_mut() {
+            map.remove("sha");
+        }
+        Ok(result)
+    });
+    let operation = outcome.map_err(|problem| failure.take().unwrap_or(problem))?;
+    // The audit row is committed; the candidate file becomes visible now. A failure here leaves an
+    // applied operation without its file, which the API reports instead of hiding.
+    prepared.commit(root).map_err(record_problem)?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---------------------------------------------------------------------------

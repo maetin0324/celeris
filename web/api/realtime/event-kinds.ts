@@ -41,6 +41,7 @@ export const EVENT_KINDS = [
   "assigned",
   "workspace_mode_downgraded",
   "workspace_pruned",
+  "target_sweep_ran",
   "routing_decided",
   "routing_features_recorded",
   "routing_request_decided",

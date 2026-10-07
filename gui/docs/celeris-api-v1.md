@@ -750,7 +750,7 @@ Console（§3.98）はこの形だけを見る。
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
 `browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
-`cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`routing_decided`、
+`cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`target_sweep_ran`、`routing_decided`、
 `checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
 `execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、
 `project_plan_proposed`、`project_plan_decided`、`child_task_created`、`child_adopted`、`unit_gate_overridden`、

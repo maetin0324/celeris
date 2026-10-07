@@ -94,3 +94,56 @@ web の試験は決定的（fake timer・試験側 stream、fake-daemon 制御 e
 - 上の未解決の (a) allowlist 追加（replan・pause/resume・KB accept）は D3「全道具・全権限」の残りの具体化として別 task へ起票するのが良い（skill と ADR が既にその前提で書かれている）。
 - 代答カードの元待ち href と `/cos/operations/{o}` の web route は API/schema 変更を伴うため、web の follow-up task にまとめるのが良い。
 - 旧 `notify::scan`/`schedule`/`schedule_routes` は依存する旧試験の移行後に別作業で削除可能（notifier.md の継続）。
+
+---
+
+# close-out 2: 差し戻し修正後の記録（統合後 HEAD `21763506`、2026-10-07）
+
+final review の差し戻し（cos_chat run が result.json 不在で failed・API 先・添付の引き継ぎ）を直した後の状態。ADR は「付記: 差し戻し修正と実機確認（close-out 2、2026-10-07）」に反映した。本葉は実装を修正していない。
+
+## 受け入れ条件ごとの証拠
+
+| 条件 | 証拠 |
+|---|---|
+| 0. ADR が置き換え範囲を明記 | `agent-docs/adr/2026-10-05-cos-chat-home.md` の「置き換えの境界」表（ADR-0033 D4・0048・0054・0089）。変更なし |
+| 1. ホームのチャット UI | web-chat の screenshot 11 枚と e2e（`web-chat.md`）。変更なし。前回 pass |
+| 2. 継続・config・celerisctl・添付・偽ハーネス・実機 | 偽ハーネス: `cos_chat_harness_{claude,codex,acp,pi}_done_without_result_json`、`cos_chat_harness_e2e_claude_without_result_json_completes`、`cos_chat_run_launch_sets_api_url_env_and_path`、`cos_chat_ops_ctl_prefers_api_url_env_over_config`、`cos_chat_attach_handoff_*`。実機（patch なし tree `5664ef5fb20e`、`live-check.md`）: (a) 5 往復 completed・new→resumed・同じ node_sessions row **PASS**、(b) 画像を読む **PASS**、(c) `--api-url` なしの起票が試験用 daemon に届き events に actor=cos **PASS**、(d) screenshot の task 入力引き継ぎ **FAIL（D1）**、(e) PDF の KB 候補 **FAIL（D2）**、codex の実機は未実施 |
+| 3. 監査・検査の記録 | events の `cos_operation` actor=cos（実機 (c)）。下の全体検査 |
+
+(d)(e) は実機で未達。試験（`cos_chat_attach_handoff_*`）は通るが、起票と pin の順序（D1）と KB 候補の操作が無いこと（D2）を偽ハーネスの試験は見ていなかった。
+
+## live-check の不具合 1〜5 の扱い
+
+| # | 扱い |
+|---|---|
+| 1 result.json 不在で failed | **修正**（result-fix、`f184f88b`）。実機 (a) で 5 run completed |
+| 2 celerisctl が本番の設定へ向かう | **修正**（api-env、`3dd632af`）。実機 (c) で試験用 daemon に届いた |
+| 3 KB に cos skill が無いと動かない | **文書化**（ops-docs2。`docs/ops/cos-chat.md`）。挙動は変えない |
+| 4 `summary_through_seq` が 0 のまま | **未解決**。実機でも 5 turn 後に 0。提案節へ |
+| 5 実効 model が null | **未解決**（設定の問題）。provider か `[cos] model` に書く運用。提案節へ |
+
+## 全体検査（統合後 HEAD `21763506`）
+
+| コマンド | 結果 |
+|---|---|
+| `bash scripts/dev/test-parallel.sh` | exit 0。157 binaries（nextest 147 + doc 10）、**4607 passed・0 failed・14 ignored** |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `check-adr-numbers.sh` / `check-doc-layout.sh scripts/dev/docs-layout.tsv` / `check-doc-links.sh` / `progress-index.sh --check` | 各 exit 0 |
+
+web の typecheck/lint/test/e2e は本葉では再実行していない（web の変更なし。直近の結果は上の close-out 節: e2e functional 278 passed）。
+
+## 未解決事項（実機で見つかった点。実装は未修正）
+
+- **D1**: CoS が起票した task が pin より先に ready になり、入力の添付が渡らない。
+- **D2**: CoS に監査つきの KB 候補作成の経路が無い。`celerisctl knowledge record` は API を通らず KB 直書き（本番 KB へ向かう穴にもなりうる）。scope 書式も skill と CLI で不一致。
+- **D3**: `cos-inbox-triage` skill の confidence を `ResolveBody` が受けない。
+- **D4**: triage thread で終わった run が orphan takeover され、続きの run が重複する。
+- 不具合 4・5、codex の実機未確認、前節の allowlist 不足（replan・pause/resume・KB accept）ほか。
+
+## 提案
+
+- D1: 作成時に attachment id を受けて同じ transaction で pin する（または draft で作って pin 後に ready）。
+- D2: KB 候補の作成を `/cos/operations` の操作（API、監査つき）にし、CoS credential の `knowledge record` はそれを使う。scope 書式を 1 つにする。
+- D3: `ResolveBody` に任意の `confidence` を足すか skill から外す。D4: 終わった run を takeover 対象から外す。
+- 4: 要約 checkpoint を前置きで必須にするか N 往復ごとでよいかを人が決める。5: `[cos] model` を本番 config に書く。
+- D1〜D4 を直す task を別に起こし、直した後に運用セッションが実機確認を再実行する。

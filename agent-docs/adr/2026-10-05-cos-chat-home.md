@@ -391,6 +391,6 @@ D5 の各項目と D6 の置き換えの境界・UI 行ごとに、実装の mod
 
 ### D6 UI 行（Playwright 必須検証）
 
-- 実装: 上の D5 各項目と同一。e2e は `web/e2e/chat/` の 7 spec・30 試験（threads・content・queue・resync・cards・attachments・mobile）。
-- 試験: 会話一覧/検索/再開（threads）、Markdown/tool/streaming（content）、停止/queue（queue）、ボタン/D&D/paste（attachments）、IME・割り込み（queue）、最新へ・cursor（resync）、320 px と desktop・下部タブバー・keyboard（mobile）、CoS 代答/人待ち（cards）。
-- 差分: 画面 screenshot を `agent-docs/progress/2026-10-05-cos-chat-home/web-chat/screenshots/` の 8 枚に記録（chat-threads-1440・chat-resume-1440・chat-content-1440・chat-queue-paused-1440・chat-resync-1440・chat-jump-latest-1440・chat-mobile-320・chat-cards-1440）。
+- 実装: 上の D5 各項目と同一。e2e は `web/e2e/chat/` の 7 spec・31 試験（threads・content・queue・resync・cards・attachments・mobile）。
+- 試験: 会話一覧/検索/再開（threads）、**長い題名の旧会話でも badge は一行に収まり、題名を省略する**（threads。fix-visual で追加）、Markdown/tool/streaming（content）、**streaming は text_delta を流し、確定 message に置き換えて二重表示にしない**（content。生成途中の caret・「停止」ボタンを撮る前に検証）、停止/queue（queue）、ボタン/D&D/paste（attachments）、IME・割り込み（queue）、最新へ・cursor（resync）、320 px と desktop・下部タブバー・keyboard（mobile）、**320/390 px: 狭い幅では会話一覧は drawer になり、開閉と Escape の focus 復元が成り立つ**（mobile）、**320 px で添付・カードは横溢れを出さず、カードの操作領域は 44 px 以上**（mobile。送信前後の preview `naturalWidth=96` を poll）、CoS 代答/人待ち（cards）。
+- 差分: 画面 screenshot を `agent-docs/progress/2026-10-05-cos-chat-home/web-chat/screenshots/` の **11 枚**に記録（chat-threads-1440・chat-resume-1440・chat-content-1440・chat-queue-paused-1440・chat-resync-1440・chat-jump-latest-1440・chat-mobile-320・chat-cards-1440 に加え、**chat-streaming-1440**（生成途中＋停止）・**chat-drawer-320**（drawer 開いた 320）・**chat-attachment-sent-320**（送信後の会話内画像 preview）を reclose 前の polish 段で追加）。reclose（統合後 HEAD `b1e61693`）で 11 枚を再生成し、final review の 4 指摘（(1) streaming 中・(2) badge 縦積み・(3) tool 状態 contrast・(4) 狭い幅の drawer と送信後添付）をそれぞれの上の試験と screenshot で満たすことを再確認（`agent-docs/progress/2026-10-05-cos-chat-home/web-chat.md`）。

@@ -1,6 +1,6 @@
 ---
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: done
+status: blocked
 updated: 2026-10-07
 ---
 # web-chat / e2e-attach（添付の入力経路・upload queue）
@@ -40,12 +40,25 @@ ADR 2026-10-05-cos-chat-home D6 の添付 UI 行を `web/e2e/chat/attachments.sp
 - `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat/attachments.spec.ts`: 最終 exit 0、2 passed。
 - `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat`: exit 0、22 passed（添付 2 + 既存 20）。
 - `git diff --check`: exit 0。
-- `git diff --name-only "$CELERIS_WU_BASE"` と untracked の一覧を web/e2e/chat/・web/e2e/support/・web/features/chat/・server/app.js・app.test.mjs・本進捗ファイルの範囲で検査: 範囲外 0 件。server の 2 ファイルは本 spec が発見した preview の CSP 不具合とその回帰検査。gui/・crates/ の差分 0 件。
+- 前 run は server の 2 ファイルを独自に許可して範囲検査したが、計画の check はこれらを許可していない。この検査では計画の check を満たしたことにならない。gui/・crates/ の差分 0 件。
 
 ## 未解決
 
-この WorkUnit の受け入れ条件について未解決なし。fixme・skip なし。通信進捗の数値は実 XHR の byte 送信で確認し、daemon の制御は応答待ちから失敗・成功への遷移を決定的に進める。
+E2E は成功しているが、計画の範囲 check は未解決。fixme・skip なし。通信進捗の数値は実 XHR の byte 送信で確認し、daemon の制御は応答待ちから失敗・成功への遷移を決定的に進める。
 
 ## 提案
 
 後続 e2e-narrow で狭い幅・mobile-audit・screenshot を検証する。
+
+## 再試行（run 01M4A34V9E35TSK5EYWQAWYEVC）
+
+変更前に計画と同じ範囲 check を実行し、exit 1、`web/server/app.js` と `web/server/app.test.mjs` が範囲外になることを再現した。前 run の修正は document CSP の img-src に blob: を許可し、composer が URL.createObjectURL で作る画像 preview を表示するためのもの。テストだけを変更して隠すことや composer の preview 方式を置き換えることは、この不具合への最小修正にならないため、修正を保持して plan_issue を返す。
+
+再確認:
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: exit 0。
+- `corepack pnpm@12.6.0 -C web exec biome format --write e2e features`: exit 0、変更なし。
+- `node --test web/server/app.test.mjs`: exit 0、6 passed（CSP 回帰検査を含む）。
+- `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat`: exit 0、22 passed（添付 2 試験を含む）、5.0 秒。
+
+計画修正の提案: e2e-attach の範囲 check に `web/server/app.js` と `web/server/app.test.mjs` の 2 パスを明示的に追加する。範囲修正後、同じ check を再実行する。受け入れ条件や E2E の assertion を弱める必要はない。

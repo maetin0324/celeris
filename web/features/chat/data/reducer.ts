@@ -248,6 +248,9 @@ function applySnapshot(state: ChatState, detail: ChatThreadDetailResponse, list:
     pending = withoutPendingFor(pending, message);
   }
   const runs = detail.active_run ? { [detail.active_run.id]: detail.active_run } : {};
+  // キューの表示は snapshot から導く（queued の message と thread.queue_paused）。
+  // 取消・停止・再開の refresh でキューが消えず、queue event が来ればすぐ置き換わる。
+  const queuedIds = list.items.filter((item) => item.state === "queued").map((item) => item.id);
   return {
     ...initialChatState(state.threadId),
     thread: detail.thread,
@@ -255,6 +258,7 @@ function applySnapshot(state: ChatState, detail: ChatThreadDetailResponse, list:
     textBytes,
     pending,
     runs,
+    queue: { message_ids: queuedIds, paused: detail.thread.queue_paused },
     cards: {},
     lastEventId: list.snapshot_event_id,
   };

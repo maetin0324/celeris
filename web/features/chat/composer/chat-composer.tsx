@@ -32,7 +32,6 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
-  const [keyboardOffset, setKeyboardOffset] = useState(0);
   const input = useRef<HTMLInputElement>(null);
   const composing = useRef(false);
   const sending = useRef(false);
@@ -40,22 +39,11 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
   const retryKey = useRef<{ fingerprint: string; id: string } | null>(null);
 
   useEffect(() => () => queue.dispose(), [queue]);
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    if (!viewport) return;
-    const update = () => setKeyboardOffset(Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop));
-    update();
-    viewport.addEventListener("resize", update);
-    viewport.addEventListener("scroll", update);
-    return () => {
-      viewport.removeEventListener("resize", update);
-      viewport.removeEventListener("scroll", update);
-    };
-  }, []);
 
   const chat = snapshot.chat;
   const activeRun = selectActiveRun(chat);
-  const paused = chat.thread?.queue_paused ?? chat.queue.paused;
+  // キュー（停止含む）は chat.queue が正本（snapshot でも queue event でも導かれる）。
+  const paused = chat.queue.paused;
   const queued = chat.queue.message_ids.map((id) => chat.messages[id]).filter((message) => message?.state === "queued");
   const uploading = uploads.some((item) => item.state !== "ready");
   const canSend = !busy && !uploading && (text.trim().length > 0 || uploads.length > 0);
@@ -136,13 +124,13 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
     }
   };
 
+  // ChatHome が visualViewport と shell の余白から枠を測る。入力欄はその末尾に置き、本文を覆わない。
   return (
     <section
       aria-label="メッセージ入力"
       onDragOver={(event) => event.preventDefault()}
       onDrop={drop}
-      className="sticky z-20 min-w-0 border-t border-border bg-background p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:p-3"
-      style={{ bottom: `calc(${keyboardOffset}px + var(--shell-bottom-inset, 0px))` }}
+      className="z-20 min-w-0 shrink-0 border-t border-border bg-background p-2 pb-[max(0.5rem,env(safe-area-inset-bottom))] md:p-3"
     >
       <div aria-live="polite" className="text-sm text-muted-foreground">
         {activeRun?.state === "stopping"

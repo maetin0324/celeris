@@ -1,5 +1,7 @@
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { inboxItemsQuery } from "../../../api/queries/inbox-notifications";
 import { ScreenFrame } from "../../../components/shell/screen-frame";
 import { ChatCardItem } from "../cards/chat-card";
 import { ChatComposer } from "../composer/chat-composer";
@@ -13,6 +15,7 @@ import { ChatThreads } from "../threads/threads";
 export function ChatHome() {
   const { thread } = useSearch({ from: "/" });
   const navigate = useNavigate();
+  const inbox = useQuery(inboxItemsQuery());
   const [model] = useState(() => new ThreadsModel());
   const [loaded, setLoaded] = useState(false);
   const threads = useSyncExternalStore(model.subscribe, model.snapshot, model.snapshot);
@@ -50,9 +53,10 @@ export function ChatHome() {
       const shellBottom = column ? Number.parseFloat(getComputedStyle(column).paddingBottom) || 0 : 0;
       const viewport = window.visualViewport;
       const visibleBottom = viewport ? viewport.offsetTop + viewport.height : window.innerHeight;
-      setHeight(
-        Math.max(160, Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - shellBottom)),
-      );
+      // keyboard が layout viewport の下部タブを覆う間は、その退避余白を重ねて引かない。
+      const keyboardInset = Math.max(0, window.innerHeight - visibleBottom);
+      const tabInset = Math.max(0, shellBottom - keyboardInset);
+      setHeight(Math.max(160, Math.floor(visibleBottom - element.getBoundingClientRect().top - mainBottom - tabInset)));
     };
     resize();
     window.addEventListener("resize", resize);
@@ -78,7 +82,12 @@ export function ChatHome() {
         style={{ height }}
       >
         <div className="shrink-0 border-b border-border p-2 md:flex md:h-full md:min-h-0 md:flex-col md:border-r md:border-b-0 md:p-0">
-          <ChatThreads model={model} selectedThreadId={thread} onSelectThread={select} />
+          <ChatThreads
+            model={model}
+            selectedThreadId={thread}
+            inboxWaitingCount={inbox.data?.counts.total ?? 0}
+            onSelectThread={select}
+          />
         </div>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
           {thread ? (

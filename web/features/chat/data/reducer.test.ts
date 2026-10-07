@@ -281,6 +281,35 @@ describe("chat reducer", () => {
     expect(selectTimeline(state)).toHaveLength(1);
   });
 
+  it("chat_data_resnapshot_keeps_queue_until_replaced", () => {
+    const queued = reduce([
+      { type: "snapshot", detail: detail(), messages: page([message("m1", 1)], "10") },
+      { type: "event", event: event(11, "queue", { message_ids: ["m1"], paused: true }) },
+    ]);
+    expect(queued.queue).toEqual({ message_ids: ["m1"], paused: true });
+    // 停止などの refresh（再 snapshot）でキューが消えず、次の queue event が来ても置き換わる。
+    const resnap = chatReducer(queued, {
+      type: "snapshot",
+      detail: detail({ thread: thread({ queue_paused: true }) }),
+      messages: page([message("m1", 1, { state: "queued" })], "12"),
+    });
+    expect(resnap.queue).toEqual({ message_ids: ["m1"], paused: true });
+    const resumed = chatReducer(resnap, {
+      type: "event",
+      event: event(13, "queue", { message_ids: [], paused: false }),
+    });
+    expect(resumed.queue).toEqual({ message_ids: [], paused: false });
+    // snapshot だけ（queue event なし）でも、queued message と thread.queue_paused からキューが導かれる。
+    const stopped = reduce([
+      {
+        type: "snapshot",
+        detail: detail({ thread: thread({ queue_paused: true }) }),
+        messages: page([message("m1", 1, { state: "queued" })], "5"),
+      },
+    ]);
+    expect(stopped.queue).toEqual({ message_ids: ["m1"], paused: true });
+  });
+
   it("chat_data_history_prepends_without_moving_cursor", () => {
     const base = fromSnapshot([message("m5", 5, { text: "新" })], "20");
     const next = chatReducer(base, {

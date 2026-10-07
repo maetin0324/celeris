@@ -1292,6 +1292,32 @@ export function inboxItemsFixture() {
   ];
 }
 
+// チャットの質問カードに対応する項目を追加する。既存の受信箱 fixture（5 件）は共用試験のため保つ。
+export function chatInboxItemsFixture() {
+  const items = inboxItemsFixture();
+  return [
+    ...items,
+    {
+      ...items[0],
+      id: "question:Q1",
+      kind: "question",
+      title: "質問: 画面の幅はどれにする",
+      detail: "モバイルの既定幅を決める質問。",
+      options: [
+        inboxOption("narrow", "320 px 向け", "最も狭い幅に合わせる"),
+        inboxOption("other", "その他", "理由を書いて詳細の画面で答える", true),
+      ],
+      recommended: "narrow",
+      due_at: null,
+      links: [],
+      project_id: null,
+      blocking: { tasks: [inboxTask("T5", "画面の確認")], units: [], summary: "1 task を止めている" },
+      task: inboxTask("T5", "画面の確認"),
+      age_secs: 300,
+    },
+  ];
+}
+
 export function noticesFixture() {
   const notice = (id, kind, title, summary, count, last_at, extra) => ({
     id,
@@ -1437,16 +1463,64 @@ export function chatSeedFixture() {
     queue_paused: false,
     queued_count: 0,
   });
-  const cardKinds = ["task", "decision", "question", "approval", "plan_gate", "notice", "operation"];
-  const cards = cardKinds.map((kind, i) => ({
-    kind,
-    id: `card-${kind}`,
-    title: kind === "operation" ? "CoS が代わりに回答しました" : `${kind} の確認`,
-    state: kind === "operation" ? "answered" : "pending",
-    href: kind === "operation" ? "/inbox" : `/tasks/T${i + 1}`,
-    actor: kind === "operation" ? "cos" : "system",
-    ...(kind === "operation" ? { operation_id: "OP1", reason: "期限前の一次対応。取消・差し戻し可能" } : {}),
-  }));
+  // カードの id は受信箱の項目 id（triage の source_key と同じ）を指し、回答は受信箱 API へ行く。
+  // 詳細 link は実在画面（/tasks/<id>・/inbox・/?thread=<id>&operation=<id>）へ置く。
+  // 受信箱 thread には人待ちの 2 枚、一般 thread には全種類を 1 枚ずつ出す。
+  const cards = [
+    { kind: "task", id: "T1", title: "タスク: web の認証", state: "pending", href: "/tasks/T1", actor: "system" },
+    {
+      kind: "decision",
+      id: "decision:D1",
+      title: "決定: 認証方式を決める",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "question",
+      id: "question:Q1",
+      title: "質問: 画面の幅はどれにする",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "approval",
+      id: "authorization:A1",
+      title: "認可: cluster-hpc への依頼",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "plan_gate",
+      id: "plan_gate:T2",
+      title: "計画の承認: 受信箱の画面",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "notice",
+      id: "N1",
+      title: "知らせ: task の完了",
+      state: "observed",
+      href: "/?thread=chat-main",
+      actor: "system",
+    },
+    {
+      kind: "operation",
+      id: "operation:OP1",
+      title: "CoS が代わりに回答しました",
+      state: "applied",
+      href: "/?thread=chat-main&operation=OP1",
+      actor: "cos",
+      operation_id: "OP1",
+      reason: "期限前の一次対応。取消・差し戻し可能",
+    },
+  ];
+  // 受信箱 thread のカードは人待ちの決定・質問。
+  const inboxCards = cards.filter((card) => card.id === "decision:D1" || card.id === "question:Q1");
   const message = (threadId, seq, role, text, messageCards = []) => ({
     id: `${threadId}-m${seq}`,
     thread_id: threadId,
@@ -1478,7 +1552,7 @@ export function chatSeedFixture() {
     },
     {
       thread: thread("chat-inbox", "受信箱の一次対応", "inbox"),
-      messages: [message("chat-inbox", 1, "assistant", "決定を確認してください", cards.slice(1, 3))],
+      messages: [message("chat-inbox", 1, "assistant", "決定を確認してください", inboxCards)],
     },
     {
       thread: thread("chat-legacy", "旧 Console の会話", "legacy"),
@@ -1505,6 +1579,9 @@ function createChatFixture() {
     ]),
   );
   const attachments = new Map();
+  // CoS 代答の取消・差し戻しの応答を決定的に切り替える。
+  const chatControl = { overrideState: "succeed", overrides: [], uploadState: "succeed" };
+  const pendingUploads = new Map();
   const at = "2026-10-05T12:00:00Z";
   let nextThread = 1;
   let nextAttachment = 1;
@@ -1585,7 +1662,8 @@ function createChatFixture() {
   // 制御用の /__fixture/chat/hold と /__fixture/chat/threads/{t}/emit。
   const handle = async (req, res, url, record) => {
     const path = url.pathname;
-    if (!path.startsWith("/api/v1/chat/") && !path.startsWith("/__fixture/chat/")) return false;
+    if (!path.startsWith("/api/v1/chat/") && !path.startsWith("/api/v1/cos/") && !path.startsWith("/__fixture/chat/"))
+      return false;
     const parts = path.split("/").filter(Boolean);
     const control = parts[0] === "__fixture";
     const tail = parts.slice(control ? 2 : 3);
@@ -1637,7 +1715,65 @@ function createChatFixture() {
           row.expiredBefore = Number(input.before_id ?? lastId(row));
           json(res, 200, { expired_before: String(row.expiredBefore) });
         }
+      } else if (tail[0] === "disconnect" && method === "POST") {
+        // 全チャットの SSE 接続を切る（再接続の試験。offline だけでは live 接続が切れないため）。
+        let count = 0;
+        for (const row of rows.values())
+          for (const client of row.clients) {
+            client.destroy();
+            count += 1;
+          }
+        json(res, 200, { disconnected: count });
+      } else if (tail[0] === "override-state" && method === "POST") {
+        // override 応答の切り替え（succeed | conflict=409）。
+        if (input.state !== "succeed" && input.state !== "conflict") error(res, 422, "invalid-state");
+        else {
+          chatControl.overrideState = input.state;
+          json(res, 200, { state: chatControl.overrideState });
+        }
+      } else if (tail[0] === "upload-state" && method === "POST") {
+        if (!["hold", "succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else {
+          chatControl.uploadState = input.state;
+          json(res, 200, { state: input.state });
+        }
+      } else if (tail[0] === "uploads" && method === "GET") {
+        json(res, 200, { pending: [...pendingUploads.values()].map(({ id, name }) => ({ id, name })) });
+      } else if (tail[0] === "uploads" && tail[2] === "release" && method === "POST") {
+        const pending = pendingUploads.get(tail[1]);
+        if (!["succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else if (!pending) error(res, 404, "not-found");
+        else {
+          pending.finish(input.state);
+          json(res, 200, { released: tail[1] });
+        }
+      } else if (tail[0] === "override-log" && method === "GET") {
+        json(res, 200, { overrides: chatControl.overrides });
       } else error(res, 404, "not-found");
+      return true;
+    }
+    if (tail[0] === "operations" && tail[2] === "override" && tail.length === 3 && method === "POST") {
+      // CoS 代答の取消（revoke）・差し戻し（return）の決定的な fake（/api/v1/cos/operations/{o}/override）。
+      // body は { action, reason }。
+      if (!["revoke", "return"].includes(input.action) || !(typeof input.reason === "string" && input.reason.trim())) {
+        error(res, 422, "validation");
+        return true;
+      }
+      chatControl.overrides.push({ operation_id: tail[1], action: input.action, reason: input.reason.trim() });
+      if (chatControl.overrideState === "conflict") {
+        error(res, 409, "stale-revision");
+      } else {
+        const state = input.action === "revoke" ? "revoked" : "returned";
+        json(res, 200, {
+          action: input.action,
+          state,
+          operation_id: tail[1],
+          new_revision: null,
+          new_wait_id: null,
+          remediation_task_id: null,
+          paused_task_ids: [],
+        });
+      }
       return true;
     }
     if (tail[0] === "attachments") {
@@ -1884,6 +2020,25 @@ function createChatFixture() {
       if (!fields?.file || !fields.client_upload_id) error(res, 400, "invalid-upload");
       else if (fields.file.bytes.length > 25 * 1024 * 1024) error(res, 413, "upload-too-large");
       else {
+        let outcome = chatControl.uploadState;
+        if (outcome === "hold") {
+          outcome = await new Promise((resolve) => {
+            const id = fields.client_upload_id;
+            const finish = (state) => {
+              pendingUploads.delete(id);
+              res.off("close", cancel);
+              resolve(state);
+            };
+            const cancel = () => finish("cancelled");
+            pendingUploads.set(id, { id, name: fields.file.name, finish });
+            res.once("close", cancel);
+          });
+        }
+        if (outcome === "cancelled") return true;
+        if (outcome === "fail") {
+          error(res, 500, "upload-failed");
+          return true;
+        }
         const existing = row.uploads.get(fields.client_upload_id);
         const sha256 = createHash("sha256").update(fields.file.bytes).digest("hex");
         if (existing && existing.sha256 !== sha256) error(res, 409, "idempotency-conflict");
@@ -1945,6 +2100,7 @@ function createChatFixture() {
     emit,
     handle,
     close() {
+      for (const pending of pendingUploads.values()) pending.finish("cancelled");
       for (const row of rows.values()) for (const client of row.clients) client.destroy();
     },
   };
@@ -2044,7 +2200,11 @@ export function createFakeDaemon({
       res.end(JSON.stringify({ error: "too_many_streams" }));
       return;
     }
-    if (pathname.startsWith("/api/v1/chat/") || pathname.startsWith("/__fixture/chat/")) {
+    if (
+      pathname.startsWith("/api/v1/chat/") ||
+      pathname.startsWith("/api/v1/cos/") ||
+      pathname.startsWith("/__fixture/chat/")
+    ) {
       chat.handle(req, res, new URL(req.url ?? "/", "http://x"), record).catch(() => {
         if (!res.headersSent) {
           res.writeHead(500, { "content-type": "application/problem+json" });

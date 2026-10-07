@@ -42,6 +42,10 @@ ADR 2026-10-07-build-tmp-hygiene D1.2 規則 4〜6・D1.3 の I/O 層を `crates
   `spawn_blocking` 等で tick の外に出す（sweep-cron 葉）。
 - `cargo clippy --workspace --all-targets -- -D warnings` は既存の 2 件（`crates/celeris/tests/model_role_assignments_consistency.rs:388`、
   `crates/task-dispatch/src/undeclared_artifacts/tests.rs:146`）で落ちる。この葉の変更ではない。
+- 2026-10-07 attempt 2: 計画の check `cargo clippy -p task-dispatch --all-targets -- -D warnings` は base（a416f89b）から変わっていない
+  `crates/task-dispatch/src/undeclared_artifacts/tests.rs:146` の `clippy::useless_vec` で落ちる（exit 101）。この葉の範囲 check はこのファイルを
+  許可しないので、この葉では直せない。`-A clippy::useless_vec` を付けると exit 0（この葉の変更は警告なし）。`target_sweep_` 試験 6 本は pass。
+  plan_issue として申告した（範囲に当該ファイルを足すか、check から除くか、別の修正葉を先に置く）。
 
 ## 提案
 

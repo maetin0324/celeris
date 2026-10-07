@@ -349,6 +349,29 @@ pub(super) async fn run_worker(
         .map(|cwd| cwd.canonicalize().unwrap_or_else(|_| cwd.to_path_buf()));
     // ADR-0036 D1: 成果物ディレクトリはタスクごと（共有 workspace では `.taskd/artifacts/<task_id>/`）。
     // 決めるのはディスパッチャで、アダプタは `req.artifacts_dir` に書くだけ。
+    // ADR 2026-10-05 cos-chat-home D4: task に pin された添付を作業ツリーの外へ照合つきで stage する。
+    // 読めない store は run を止めず警告だけ（添付が無い run と同じに扱い、読めたとは装わない）。
+    let input_attachments = match &extras.input_attachment_source {
+        Some(source) => {
+            let base = super::input_attachments::stage_base(
+                &dir,
+                extras.artifacts_dir_override.as_deref(),
+            );
+            match super::input_attachments::stage_task_input_attachments(
+                source,
+                &task_id.to_string(),
+                &base,
+                remote.is_some(),
+            ) {
+                Ok(manifest) => manifest,
+                Err(e) => {
+                    tracing::warn!(task_id = %task_id, error = %e, "could not stage pinned task attachments (ADR cos-chat-home D4)");
+                    Vec::new()
+                }
+            }
+        }
+        None => Vec::new(),
+    };
     let artifacts_dir = match &extras.artifacts_dir_override {
         // ADR-0074 D1.2（Phase F2b）: v2 の WU の run は WU ごとの成果物の置き場を使う。
         Some(dir) => {
@@ -452,6 +475,8 @@ pub(super) async fn run_worker(
             cos_chat: None,
             // 多目的 routing Phase 3: registry を差し込んだ dispatcher の worker/planner run だけ `Some`。
             routing_context_ref: extras.routing_context_ref.clone(),
+            // ADR 2026-10-05 cos-chat-home D4: task に pin された添付の入力 manifest。
+            input_attachments,
         },
     };
     // ADR-0066 D1（Phase 110b）: ローカルの git worktree のホスト実行にだけ、共有ビルドキャッシュの

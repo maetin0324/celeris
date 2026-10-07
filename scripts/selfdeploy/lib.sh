@@ -517,6 +517,9 @@ PY
   trap 'if [ -n "$pid" ]; then kill "$pid" 2>/dev/null || :; wait "$pid" 2>/dev/null || :; fi; rm -f "$log"' EXIT
   trap 'exit 1' INT TERM HUP
   sd_web_load_env
+  # probe は本番の owner socket・信頼端末に触れない（ADR 2026-10-07-browser-trusted-devices D7）。
+  unset CELERIS_WEB_OWNER_SOCKET
+  export CELERIS_WEB_PROBE=1
   export CELERIS_WEB_BIND="127.0.0.1:$port" CELERIS_WEB_RELEASE="$sha"
   cd "$app_dir" || return 1
   "${SD_WEB_NODE:-node}" server/index.js >"$log" 2>&1 &

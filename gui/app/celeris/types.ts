@@ -3929,6 +3929,11 @@ export interface OverrideResponse {
  */
 export interface ResolveBody {
   answer?: InboxAnswerBody | null;
+  /**
+   * The worker's own estimate in 0..=1 that a person would choose the same (cos-inbox-triage §4).
+   * Optional so older bodies keep working; kept in the operation payload/result, not in `reason`.
+   */
+  confidence?: number | null;
   escalation?: EscalationPacket1 | null;
   /**
    * The `source_revision` of the item the worker judged.

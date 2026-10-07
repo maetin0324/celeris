@@ -4682,6 +4682,7 @@ export type ResolutionAction = {
 
 export type ResolveBody = {
   "answer"?: InboxAnswerBody | null;
+  "confidence"?: number | null;
   "escalation"?: EscalationPacket | null;
   "expected_revision": string;
   "idempotency_key": string;

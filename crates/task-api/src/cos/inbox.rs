@@ -97,6 +97,10 @@ pub struct ResolveBody {
     pub outcome: ResolveOutcome,
     pub reason: String,
     pub policy_version: String,
+    /// The worker's own estimate in 0..=1 that a person would choose the same (cos-inbox-triage §4).
+    /// Optional so older bodies keep working; kept in the operation payload/result, not in `reason`.
+    #[serde(default)]
+    pub confidence: Option<f64>,
     #[serde(default)]
     pub answer: Option<InboxAnswerBody>,
     #[serde(default)]
@@ -360,6 +364,15 @@ async fn resolve(
             ));
         }
     }
+    if let Some(c) = req.confidence
+        && !(c.is_finite() && (0.0..=1.0).contains(&c))
+    {
+        return Err(unprocessable(
+            "validation",
+            "confidence must be a number in 0..=1",
+        ));
+    }
+    let confidence = req.confidence;
     let path = format!("/api/v1/cos/inbox/{i}/resolve");
     let action = match req.outcome {
         ResolveOutcome::Answer => "inbox.answer",
@@ -514,7 +527,7 @@ async fn resolve(
                         outcome: "observed",
                     });
                     let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
-                        Ok(serde_json::json!({"item_id": item.id, "outcome": "observed"}))
+                        Ok(serde_json::json!({"item_id": item.id, "outcome": "observed", "confidence": confidence}))
                     })?;
                     Ok((op, None))
                 }
@@ -569,6 +582,7 @@ async fn resolve(
                         "outcome": "escalated",
                         "notification_id": notification_id,
                         "already_routed": notification_id.is_none(),
+                        "confidence": confidence,
                     });
                     let op = audit.apply(store, "cos_inbox_item", &item.id, action, |_| {
                         Ok(result)

@@ -23418,6 +23418,15 @@
             }
           ]
         },
+        "confidence": {
+          "default": null,
+          "description": "The worker's own estimate in 0..=1 that a person would choose the same (cos-inbox-triage §4).\nOptional so older bodies keep working; kept in the operation payload/result, not in `reason`.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "escalation": {
           "anyOf": [
             {

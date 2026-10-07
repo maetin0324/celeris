@@ -119,3 +119,56 @@ shadow / enforce へは先頭 1 件に縮めず役割の全モデルを渡す。
 - 試験: `task-dispatch` `role_assignments::{enforce_executes_the_kernel_choice_among_role_members_and_falls_back_by_priority, shadow_records_the_kernel_choice_among_role_members}`、`llm-proxy` `tests/estimator_shadow.rs::routing_estimator_shadow_scores_every_role_member_from_the_request_time_catalog`、`tests/proxy_fallback.rs::routing_proxy_role_members_skip_an_account_rejected_in_the_same_request`、`legacy_catalog::tests::extended_with_adds_missing_members_and_inherits_family_limits`。完了状況は [進捗](../progress/2026-10-07-model-role-memberships.md)。
 
 web `/models` の主操作は全 source のモデルを横断した一覧とし、各行に 3 役割の独立した checkbox と priority 入力を置く。役割別表示では上へ / 下へボタンで順位を変更する。検索・source / 状態の絞り込み、保存前の影響確認、設定の破棄を備える。opencode go の provider 追加は既存の API とボタンを使い、`adapter=acp, llm_source=opencode_go, account_pool=opencode-go` を指定する。shell / navigation は変更しない。
+
+## 付記: 実行用モデル名の接頭辞（2026-10-07 wire-prefix、task `01M4A9F8VVESKBSK7ZQEDWZ9YS`）
+
+**見つかった問題。** 運用セッションが本番で cheap 役割の preview をしたところ、`openai-compatible:qwen` の
+`qwen3.8-27b`（catalog の model_id）を入れると provider `opencode-qwen`（adapter acp、`OPENCODE_CONFIG` の provider 名
+`qwen-local`、config の `model = "qwen-local/qwen3.8-27b"`）の after が裸の `qwen3.8-27b` になり、`qwen-local/` が落ちた。
+D1 と上の付記は opencode go の **acp 行だけ** に `opencode-go/` を前置していた（`wire_prefix_for`）ため、self-host の
+ACP 行と Pi 行（ADR 2026-10-07 coding-harness-default-pi-hashline。`model = provider/id`、`tier_models` を持てず割り当てが
+`model` を上書きする）、および opencode go の Pi 行（`grok-4.6` のような裸の名前を受けて Pi の provider/model 検査で
+失敗する）が、opencode / Pi の知らないモデル名を受け取っていた。
+
+**規則（`task_core::model_catalog::assignments::WireRule`）。** 割り当ての `model_id`（catalog の素の id）から provider 行
+ごとの実行用モデル名（wire）を作る規則を 1 か所に置き、dispatcher・llm-proxy・routing catalog・API の preview が同じ
+ものを使う。
+
+1. 行の config の wire（lane の `tier_models[lane].model_id`（無ければ `name`）→ 行の `model`）に `<prefix>/` があれば
+   その接頭辞を引き継ぐ（`configured_prefix`）。行が既に使っている形が正で、opencode の provider 名は `OPENCODE_CONFIG`
+   の中にあり celeris は知らない。`unavailable_reason` のある binding（`assignment:none` の仮の行・config で無効にした
+   lane）は config の wire ではないので使わない（`configured_wire`）。
+2. 無ければ source × adapter の表 `default_wire_prefix`: `opencode-go` × (`acp` | `pi`) → `opencode-go/`。他（claude-code /
+   codex の CLI、llm-proxy、config が接頭辞なしの self-host 行）は接頭辞なし。`adapter_takes_provider_prefix` が
+   `provider/<id>` を要する harness（acp・pi）を数える。
+3. `model_id` が既にその接頭辞で始まっていれば重ねない。
+4. llm-proxy は `WireRule::proxy(source)`（adapter = `LLM_PROXY_ADAPTER`）: config の wire に `/` が無い限り接頭辞なしで、
+   上流の OpenAI 互換 API には素の `model_id` を送る。
+5. 逆方向 `WireRule::catalog_model_id(wire)` は最初の `<prefix>/` を外して catalog の `model_id` に戻す（API の config 由来の
+   枠、routing catalog の不在・無効の突き合わせ）。
+
+**3 か所 + API の配線。**
+
+- dispatcher（`provider_select.rs`）: `effective_tier_models` が `WireRule::new(source, live.adapter, live.model)` を
+  `apply_to_bindings(.., rule, ..)` に渡し、lane ごとに `configured_wire(bindings[lane])` → 行の `model` の順で接頭辞を
+  引く。`legacy_provider_profiles` の役割メンバー候補（`<provider>/model:<id>`）も同じ規則。
+- routing catalog（`celeris::config::model_catalog`）: `assigned_upstream(dep, source, model_id, seeds)` が元の
+  `upstream_model` の接頭辞を引き継ぐ（`qwen-local/qwen3.8-27b` → `qwen-local/<model_id>`、`opencode-go/kimi` →
+  `opencode-go/<model_id>`）。adapter は `legacy:*` なら llm-proxy、`provider:<id>[/<lane>]` なら seeds の同じ provider 行
+  （無ければ `adapter_constraints` の先頭）。seed だけの行（model も `tier_models` も無い）は表で決める。
+  `apply_model_catalog` の不在・無効の照合は `<source>/` だけでなく実行用の名前の `<prefix>/` を外して比べる。
+- llm-proxy（`normalize_legacy_config_with`）: `WireRule::proxy(source_ref).model(config の wire, model_id)`。
+- API（`task-api::model_assignments`）: `Participant` が行の adapter と config の wire（接頭辞付きのまま）を持ち、preview の
+  `before` / `after` を `rule.model(None, model_id)` で実行用の名前にする（gui-api.md §3.127.4）。一覧の config 由来の枠は
+  `catalog_model_id` で catalog の id に戻す。
+
+**既知の限界。** self-host の行で config の `model` も `tier_models` も無く（seed だけ）、source が opencode-go でない場合は
+接頭辞を知る手段が無いので接頭辞なしになる。そのような行は config に `model = "<provider>/<id>"` を書く。
+
+**試験。** task-core `assignments::tests::wire_rule_inherits_the_row_prefix_and_falls_back_to_the_table`、task-dispatch
+`role_assignments::self_host_acp_and_pi_rows_inherit_the_configured_provider_prefix`（qwen の ACP / Pi 行・opencode go の
+Pi 行が実際に起動する `WorkerStarted.model`）、celeris `config::model_catalog::tests::self_host_and_pi_rows_inherit_the_configured_prefix_and_seeds_use_the_table`
+と結合 `tests/model_role_assignments_consistency.rs::self_host_acp_pi_and_proxy_agree_on_the_wire_prefix`（dispatcher・
+llm-proxy・routing catalog が同じ名前）、llm-proxy `legacy_catalog::tests::self_host_relay_wire_has_no_provider_prefix`、
+task-api `tests/model_assignments.rs::preview_shows_wire_names_for_self_host_and_pi_rows`。完了状況は
+[進捗](../progress/2026-10-07-model-role-assignments-wire-prefix.md)。本番の cheap 割り当ては配送後に運用セッションが行う。

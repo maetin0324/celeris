@@ -21,8 +21,8 @@ use axum::response::IntoResponse;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::model_catalog::assignments::{
-    AssignmentState, AssignmentView, EffectiveAssignment, RoleAssignment, RoleMember,
-    source_name_for_llm_source, tier_from_str, tier_str,
+    AssignmentState, AssignmentView, EffectiveAssignment, LLM_PROXY_ADAPTER, RoleAssignment,
+    RoleMember, WireRule, source_name_for_llm_source, tier_from_str, tier_str,
 };
 use task_core::model_catalog::{CatalogEntry, CatalogSource};
 use task_core::{ModelCatalogStore, Tier};
@@ -227,21 +227,22 @@ fn assignment_item(a: &EffectiveAssignment) -> EffectiveAssignmentView {
     }
 }
 
-/// `<source>/` 接頭辞（`opencode-go/<id>`）を外した model_id。
-fn strip_source_prefix(upstream: &str, source: &str) -> String {
-    upstream
-        .strip_prefix(source)
-        .and_then(|rest| rest.strip_prefix('/'))
-        .unwrap_or(upstream)
-        .to_string()
-}
-
-/// 1 つの枠を使う側（provider 1 件か proxy の lane）と、その config 由来の model。
+/// 1 つの枠を使う側（provider 1 件か proxy の lane）と、その config 由来の wire（接頭辞付きのまま）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Participant {
     kind: ImpactKind,
     id: String,
+    /// 行の adapter（proxy は `LLM_PROXY_ADAPTER`、一覧に無い provider は空 = 不明）。
+    adapter: String,
     config_model: Option<String>,
+}
+
+impl Participant {
+    /// 付記 2026-10-07 wire-prefix: dispatcher・llm-proxy・routing catalog と同じ規則で、割り当ての `model_id` から
+    /// この枠の実行用のモデル名を作る。
+    fn wire<'a>(&'a self, source: &'a str) -> WireRule<'a> {
+        WireRule::new(source, &self.adapter, self.config_model.as_deref())
+    }
 }
 
 fn provider_source(p: &ProviderConfigView) -> Option<String> {
@@ -250,8 +251,8 @@ fn provider_source(p: &ProviderConfigView) -> Option<String> {
         .and_then(|r| source_name_for_llm_source(&r.source))
 }
 
-/// provider 行の config 由来の model（`tier_models[lane].model_id`（無ければ `name`）→ `model`）。
-fn provider_config_model(p: &ProviderConfigView, tier: Tier, source: &str) -> Option<String> {
+/// provider 行の config 由来の wire（`tier_models[lane].model_id`（無ければ `name`）→ `model`）。接頭辞は外さない。
+fn provider_config_model(p: &ProviderConfigView, tier: Tier) -> Option<String> {
     let from_lane = p
         .tier_models
         .get(&tier)
@@ -260,7 +261,6 @@ fn provider_config_model(p: &ProviderConfigView, tier: Tier, source: &str) -> Op
     from_lane
         .or_else(|| p.model.clone())
         .filter(|m| !m.is_empty())
-        .map(|m| strip_source_prefix(&m, source))
 }
 
 /// `(source, tier)` を使う側を求める。providers は provider の一覧（`llm_source` と `tiers`）と
@@ -274,10 +274,13 @@ fn participants(
     use std::collections::BTreeMap;
     // provider id → config 由来の model。provider の一覧（`tier_models[lane]` → `model`）から求める。
     // routing catalog の hook は割り当てを既に反映していることがあるので、provider の config 値には使わない。
-    let mut provider_models: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let mut provider_models: BTreeMap<String, (String, Option<String>)> = BTreeMap::new();
     for p in providers {
         if provider_source(p).as_deref() == Some(source) && p.tiers.contains(&tier) {
-            provider_models.insert(p.id.clone(), provider_config_model(p, tier, source));
+            provider_models.insert(
+                p.id.clone(),
+                (p.adapter.clone(), provider_config_model(p, tier)),
+            );
         }
     }
     let mut proxies = Vec::new();
@@ -289,21 +292,25 @@ fn participants(
             if let Some(rest) = dep.id.strip_prefix("provider:") {
                 // 一覧に無い provider（reload 前など）は id だけ足す。config の値は分からない。
                 let pid = rest.split_once('/').map_or(rest, |(pid, _)| pid);
-                provider_models.entry(pid.to_string()).or_insert(None);
+                provider_models
+                    .entry(pid.to_string())
+                    .or_insert((String::new(), None));
             } else if dep.id.starts_with("legacy:") {
                 proxies.push(Participant {
                     kind: ImpactKind::Proxy,
                     id: dep.id.clone(),
-                    config_model: Some(strip_source_prefix(&dep.upstream_model, source)),
+                    adapter: LLM_PROXY_ADAPTER.to_string(),
+                    config_model: Some(dep.upstream_model.clone()),
                 });
             }
         }
     }
     let mut out: Vec<Participant> = provider_models
         .into_iter()
-        .map(|(id, config_model)| Participant {
+        .map(|(id, (adapter, config_model))| Participant {
             kind: ImpactKind::Provider,
             id,
+            adapter,
             config_model,
         })
         .collect();
@@ -356,10 +363,14 @@ fn effective_slots(
                 .collect();
             if !view.manages(source, tier) {
                 for part in &parts {
-                    if let Some(model) = &part.config_model
-                        && !members.iter().any(|(m, _, _, _)| m.as_ref() == Some(model))
+                    // config の wire から接頭辞を外した catalog の model_id（`qwen-local/qwen3.8-27b` → `qwen3.8-27b`）。
+                    if let Some(model) =
+                        part.config_model.as_deref().map(WireRule::catalog_model_id)
+                        && !members
+                            .iter()
+                            .any(|(m, _, _, _)| m.as_deref() == Some(model))
                     {
-                        members.push((Some(model.clone()), Some(SlotOrigin::Config), None, 0));
+                        members.push((Some(model.to_string()), Some(SlotOrigin::Config), None, 0));
                     }
                 }
             }
@@ -427,12 +438,15 @@ fn compute_impact(
     let changes = participants(source.as_str(), tier, providers, catalog)
         .into_iter()
         .map(|p| {
+            // 付記 2026-10-07 wire-prefix: before / after は枠が実際に受け取る実行用のモデル名（provider 行は
+            // config の `<prefix>/` 付き、proxy は接頭辞なし）。
+            let rule = p.wire(source.as_str());
             let before = match current {
-                Some(a) => Some(a.model_id.clone()),
+                Some(a) => Some(rule.model(None, &a.model_id)),
                 None => p.config_model.clone(),
             };
             let after = match new_model {
-                Some(m) => Some(m.to_string()),
+                Some(m) => Some(rule.model(None, m)),
                 // 解除後は config の値。provider は provider の一覧の値で常に分かる。proxy の lane は
                 // routing catalog の値しか無く、割り当てを既に反映している（割り当てと同じ値）ときは config の
                 // 値を判別できないので `null`。

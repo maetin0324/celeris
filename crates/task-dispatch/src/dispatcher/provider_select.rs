@@ -2,7 +2,8 @@
 
 use super::*;
 use task_core::model_catalog::assignments::{
-    AssignmentState, AssignmentView, apply_to_bindings, source_name_for_llm_source, wire_prefix_for,
+    AssignmentState, AssignmentView, WireRule, apply_to_bindings, configured_wire,
+    source_name_for_llm_source,
 };
 use task_core::model_router::{
     optimizer::{Candidate, OptimizationResult, legacy_rank},
@@ -129,7 +130,8 @@ impl Dispatcher {
             .llm_source
             .as_ref()
             .and_then(|s| source_name_for_llm_source(&s.source))?;
-        let prefix = wire_prefix_for(&source, &live.adapter);
+        // 付記 2026-10-07 wire-prefix: 行の config の `<prefix>/` を引き継ぐ（無ければ source × adapter の表）。
+        let rule = WireRule::new(&source, &live.adapter, live.model.as_deref());
         // ADR 2026-10-06 D3: model も `tier_models` も持たない **acp 行**（opencode go）は割り当てだけで
         // routing する。割り当てが 1 つも当たらなくても、全 lane を `assignment:none` から始める。
         // claude-code / codex の行は model が無くても CLI の既定モデルで走れるので対象にしない。
@@ -152,7 +154,7 @@ impl Dispatcher {
                 );
             }
         }
-        Some(apply_to_bindings(&base, &source, &live.tiers, prefix, view))
+        Some(apply_to_bindings(&base, &source, &live.tiers, rule, view))
     }
 
     /// provider の lane に実際に渡る model（run 起動と同じ実効 bindings。割り当て > config）。
@@ -350,11 +352,15 @@ impl Dispatcher {
                     .into_iter()
                     .filter(|a| a.state == AssignmentState::Assigned)
                 {
-                    let wire = format!(
-                        "{}{}",
-                        live.and_then(|p| wire_prefix_for(source, &p.adapter))
-                            .unwrap_or(""),
-                        member.model_id
+                    // 付記 2026-10-07 wire-prefix: `effective_tier_models` と同じ規則（config の `<prefix>/` → 表）。
+                    let wire = live.map_or_else(
+                        || member.model_id.clone(),
+                        |p| {
+                            WireRule::new(source, &p.adapter, p.model.as_deref()).model(
+                                configured_wire(p.tier_models.get(&hint.tier)),
+                                &member.model_id,
+                            )
+                        },
                     );
                     let mut model = model.clone();
                     model.id = wire.clone();

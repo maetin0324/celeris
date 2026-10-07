@@ -366,7 +366,13 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
     )]
     .into_iter()
     .collect();
-    let effective = apply_to_bindings(&configured, src.as_str(), &[Tier::Standard], None, &view);
+    let effective = apply_to_bindings(
+        &configured,
+        src.as_str(),
+        &[Tier::Standard],
+        crate::model_catalog::assignments::WireRule::proxy(src.as_str()),
+        &view,
+    );
     assert!(crate::model_routing::resolve(&effective, Tier::Standard).is_err());
     assert_eq!(
         view.get(src.as_str(), Tier::Frontier).unwrap().model_id,

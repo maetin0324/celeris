@@ -863,3 +863,147 @@ async fn shadow_records_the_kernel_choice_among_role_members() {
         Some("opencode-go/second")
     );
 }
+
+/// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: self-host（`openai-compatible:qwen`）の
+/// ACP 行と Pi 行は config の `model = qwen-local/<id>` の接頭辞を引き継ぎ、割り当ての `qwen3.8-27b` は
+/// `qwen-local/qwen3.8-27b` で run に渡る。opencode go の Pi 行（`tier_models` を持てず、割り当てが `model` を
+/// 上書きする）も同じ規則で `opencode-go/<id>` を受け取る。`effective_lane_model` と実際に起動した run の
+/// `WorkerStarted.model` の両方で確かめる。
+#[tokio::test]
+async fn self_host_acp_and_pi_rows_inherit_the_configured_provider_prefix() {
+    fn live_model(
+        id: &str,
+        adapter: &str,
+        source: &str,
+        model: &str,
+        tiers: &[&str],
+    ) -> task_ops::daemon::ProviderLive {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "adapter": adapter, "tiers": tiers, "concurrency": 2, "model": model,
+            "in_use": 0, "account_pool": false,
+            "llm_source": {"source": source, "origin": "explicit"},
+            "tier_models": {},
+        }))
+        .unwrap()
+    }
+    fn spec(id: &str, adapter: &str, tiers: Vec<Tier>, model: &str) -> ProviderSpec {
+        ProviderSpec {
+            id: id.into(),
+            adapter: adapter.into(),
+            tiers,
+            concurrency: 2,
+            model: model.into(),
+        }
+    }
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let qwen_acp = tiered_empty(done_pool_adapter(Default::default()), None);
+    let qwen_pi = tiered_empty(done_pool_adapter(Default::default()), None);
+    let go_pi = tiered_empty(done_pool_adapter(Default::default()), None);
+    let mut d = dispatcher(store.clone(), qwen_acp.clone(), 4);
+    let all = vec![Tier::Frontier, Tier::Standard, Tier::Cheap];
+    d.policy = Box::new(StaticPolicy::new(
+        vec![
+            spec(
+                "qwen-acp",
+                "acp",
+                vec![Tier::Cheap],
+                "qwen-local/qwen3.8-27b",
+            ),
+            spec("qwen-pi", "pi", vec![Tier::Cheap], "qwen-local/qwen3.8-27b"),
+            spec("go-pi", "pi", all.clone(), "opencode-go/grok-4.6"),
+        ],
+        Duration::from_secs(1),
+    ));
+    d.adapters = HashMap::from([
+        ("qwen-acp".to_string(), qwen_acp),
+        ("qwen-pi".to_string(), qwen_pi),
+        ("go-pi".to_string(), go_pi),
+    ]);
+    d.set_now_unix_fn(Arc::new(|| 10_000));
+    publish(
+        &mut d,
+        vec![
+            live_model(
+                "qwen-acp",
+                "acp",
+                "openai_compatible:qwen",
+                "qwen-local/qwen3.8-27b",
+                &["cheap"],
+            ),
+            live_model(
+                "qwen-pi",
+                "pi",
+                "openai_compatible:qwen",
+                "qwen-local/qwen3.8-27b",
+                &["cheap"],
+            ),
+            live_model(
+                "go-pi",
+                "pi",
+                "opencode_go",
+                "opencode-go/grok-4.6",
+                &["frontier", "standard", "cheap"],
+            ),
+        ],
+    );
+    d.set_role_assignment_reader(Arc::new(StaticAssignments(view(vec![
+        item(
+            "openai-compatible:qwen",
+            Tier::Cheap,
+            "qwen3.8-27b",
+            AssignmentState::Assigned,
+        ),
+        item(
+            "opencode-go",
+            Tier::Standard,
+            "glm-5",
+            AssignmentState::Assigned,
+        ),
+    ]))));
+
+    // 1. 実効 bindings: 割り当ての素の model_id に行の接頭辞が付く（本番の preview で落ちていた `qwen-local/`）。
+    for provider in ["qwen-acp", "qwen-pi"] {
+        assert_eq!(
+            d.effective_lane_model(provider, Tier::Cheap),
+            Ok(Some("qwen-local/qwen3.8-27b".into())),
+            "{provider}"
+        );
+    }
+    // opencode go の Pi 行: `opencode-go/grok-4.6` の接頭辞を引き継ぎ、割り当ての `glm-5` は `opencode-go/glm-5`。
+    assert_eq!(
+        d.effective_lane_model("go-pi", Tier::Standard),
+        Ok(Some("opencode-go/glm-5".into()))
+    );
+    // source に割り当てがあると、binding も割り当ても無い lane は `assignment:none`（ADR 付記の既存規則）。
+    assert_eq!(
+        d.effective_lane_model("go-pi", Tier::Frontier),
+        Err("frontier: assignment:none".into())
+    );
+
+    // 2. 実際の run: ACP 行（設定順の先頭）→ Pi 行 → opencode go の Pi 行。
+    let cheap = insert_task(&store, ws.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let s = started(&store, cheap).expect("worker started");
+    assert_eq!(s.provider.as_deref(), Some("qwen-acp"));
+    assert_eq!(s.model, "qwen-local/qwen3.8-27b");
+
+    d.policy = Box::new(StaticPolicy::new(
+        vec![
+            spec("qwen-pi", "pi", vec![Tier::Cheap], "qwen-local/qwen3.8-27b"),
+            spec("go-pi", "pi", all, "opencode-go/grok-4.6"),
+        ],
+        Duration::from_secs(1),
+    ));
+    let ws2 = tempfile::tempdir().unwrap();
+    let cheap_pi = insert_task(&store, ws2.path(), Tier::Cheap);
+    let ws3 = tempfile::tempdir().unwrap();
+    let standard = insert_task(&store, ws3.path(), Tier::Standard);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let s = started(&store, cheap_pi).expect("pi worker started");
+    assert_eq!(s.provider.as_deref(), Some("qwen-pi"));
+    assert_eq!(s.model, "qwen-local/qwen3.8-27b");
+    let s = started(&store, standard).expect("opencode go pi worker started");
+    assert_eq!(s.provider.as_deref(), Some("go-pi"));
+    assert_eq!(s.model, "opencode-go/glm-5");
+}

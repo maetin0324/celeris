@@ -188,7 +188,8 @@ impl AssignmentView {
 /// Legacy 用に各役割の先頭の利用可能モデルを bindings に重ねる。全候補は `members` から読む。
 ///
 /// - `lanes` のうち `source` に割り当てがある lane は binding を置き換える。`Assigned` は
-///   `name = model_id`・`model_id = Some(wire_prefix + model_id)`（`wire_prefix` が `None` なら接頭辞なし）・
+///   `name = model_id`・`model_id = Some(rule.model(<lane の config の wire>, model_id))`（付記 2026-10-07
+///   wire-prefix: 行の config の `<prefix>/` を引き継ぐか、source × adapter の表で決める）・
 ///   `unavailable_reason = None`。既存 binding の `reasoning_effort` は引き継ぐ。`Excluded` は
 ///   `model_id = None`・`unavailable_reason = Some("assignment:<model_id> <reason>")`。
 /// - 割り当てが無い lane は従来の binding のまま（移行の互換）。
@@ -201,7 +202,7 @@ pub fn apply_to_bindings(
     bindings: &TierModels,
     source: &str,
     lanes: &[Tier],
-    wire_prefix: Option<&str>,
+    rule: WireRule<'_>,
     view: &AssignmentView,
 ) -> TierModels {
     let mut out = bindings.clone();
@@ -226,7 +227,7 @@ pub fn apply_to_bindings(
         let binding = match a.state {
             AssignmentState::Assigned => ModelBinding {
                 name: a.model_id.clone(),
-                model_id: Some(format!("{}{}", wire_prefix.unwrap_or(""), a.model_id)),
+                model_id: Some(rule.model(configured_wire(bindings.get(&lane)), &a.model_id)),
                 unavailable_reason: None,
                 reasoning_effort: bindings.get(&lane).and_then(|b| b.reasoning_effort.clone()),
             },
@@ -250,6 +251,17 @@ pub fn apply_to_bindings(
         }
     }
     out
+}
+
+/// config の lane binding が指す wire（`model_id`、無ければ `name`）。`unavailable_reason` のある binding
+/// （`assignment:none` の仮の行・config で無効にした lane）は config の wire ではないので `None`。
+pub fn configured_wire(binding: Option<&ModelBinding>) -> Option<&str> {
+    let b = binding?;
+    if b.unavailable_reason.is_some() {
+        return None;
+    }
+    let wire = b.model_id.as_deref().unwrap_or(b.name.as_str());
+    (!wire.is_empty()).then_some(wire)
 }
 
 /// 3 か所（dispatcher・llm-proxy・routing catalog）が割り当てを読む口。`SqliteStore` が実装する。
@@ -278,9 +290,87 @@ pub fn source_name_for_llm_source(source: &crate::LlmSourceRef) -> Option<String
     }
 }
 
-/// routing へ渡す model_id の接頭辞（D1）。opencode go は ACP 行だけ `opencode-go/<model>` を書く慣習。
-pub fn wire_prefix_for(source: &str, adapter: &str) -> Option<&'static str> {
-    (source == CatalogSource::OPENCODE_GO && adapter == "acp").then_some("opencode-go/")
+/// llm-proxy が `WireRule.adapter` に渡す名前（proxy は上流へ接頭辞なしの model_id を送る）。
+pub const LLM_PROXY_ADAPTER: &str = "llm-proxy";
+
+/// `provider/<id>` の形のモデル名を要る harness（ACP = opencode の provider 名、Pi = Pi の provider 名）。
+pub fn adapter_takes_provider_prefix(adapter: &str) -> bool {
+    matches!(adapter, "acp" | "pi")
+}
+
+/// config に書かれた wire の `<prefix>/`（先頭の `/` まで。`qwen-local/qwen3.8-27b` → `qwen-local/`）。
+/// `/` が無い・先頭が `/` なら `None`。
+pub fn configured_prefix(wire: &str) -> Option<&str> {
+    let end = wire.find('/')?;
+    (end > 0).then(|| &wire[..=end])
+}
+
+/// source × adapter から決める既定の接頭辞の表（行の config に接頭辞が無いとき）。opencode go の ACP / Pi 行は
+/// `opencode-go/<model>`（opencode・Pi の provider 名が `opencode-go`）。それ以外（claude-code / codex の CLI、
+/// llm-proxy、self-host の ACP / Pi 行で config が接頭辞なし）は接頭辞なし。
+pub fn default_wire_prefix(source: &str, adapter: &str) -> Option<&'static str> {
+    (adapter_takes_provider_prefix(adapter) && source == CatalogSource::OPENCODE_GO)
+        .then_some("opencode-go/")
+}
+
+/// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: 割り当ての `model_id`（catalog の素の id）
+/// から provider 行ごとの実行用モデル名（wire）を作る規則。dispatcher・llm-proxy・routing catalog・API の preview が
+/// 同じ規則を使う。
+///
+/// 1. 行の config の wire（lane の `tier_models` binding → 行の `model`）に `<prefix>/` があればそれを引き継ぐ
+///    （行が既に使っている形が正。opencode の provider 名は `OPENCODE_CONFIG` の中にあり celeris は知らない）。
+/// 2. 無ければ `default_wire_prefix(source, adapter)` の表。
+/// 3. `model_id` が既にその接頭辞で始まっていれば重ねない。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WireRule<'a> {
+    /// catalog の source 名（`opencode-go` / `openai-compatible:<id>` など）。
+    pub source: &'a str,
+    /// 行の adapter（`acp` / `pi` / `claude-code` / `codex` / `LLM_PROXY_ADAPTER`）。
+    pub adapter: &'a str,
+    /// 行の `model`（lane の binding が無いときの config の wire）。
+    pub row_model: Option<&'a str>,
+}
+
+impl<'a> WireRule<'a> {
+    pub fn new(source: &'a str, adapter: &'a str, row_model: Option<&'a str>) -> Self {
+        Self {
+            source,
+            adapter,
+            row_model,
+        }
+    }
+
+    /// 接頭辞なしで解決する rule（proxy の lane・adapter が分からない deployment）。
+    pub fn proxy(source: &'a str) -> Self {
+        Self::new(source, LLM_PROXY_ADAPTER, None)
+    }
+
+    /// この lane の config の wire（`lane_wire` → `row_model`）。
+    fn configured(&self, lane_wire: Option<&'a str>) -> Option<&'a str> {
+        lane_wire
+            .filter(|w| !w.is_empty())
+            .or(self.row_model.filter(|w| !w.is_empty()))
+    }
+
+    /// この lane の接頭辞（`<prefix>/`）。
+    pub fn prefix(&self, lane_wire: Option<&'a str>) -> Option<&'a str> {
+        self.configured(lane_wire)
+            .and_then(configured_prefix)
+            .or_else(|| default_wire_prefix(self.source, self.adapter))
+    }
+
+    /// 割り当ての `model_id` から実行用のモデル名。
+    pub fn model(&self, lane_wire: Option<&'a str>, model_id: &str) -> String {
+        match self.prefix(lane_wire) {
+            Some(prefix) if !model_id.starts_with(prefix) => format!("{prefix}{model_id}"),
+            _ => model_id.to_string(),
+        }
+    }
+
+    /// config の wire から catalog の `model_id`（接頭辞を外したもの）。`<prefix>/` の無い wire はそのまま。
+    pub fn catalog_model_id(wire: &str) -> &str {
+        configured_prefix(wire).map_or(wire, |p| &wire[p.len()..])
+    }
 }
 
 #[cfg(test)]
@@ -400,7 +490,13 @@ mod tests {
         bindings.insert(Tier::Frontier, binding("old-f", Some("high")));
         bindings.insert(Tier::Cheap, binding("old-c", None));
         let view = view_of(&[("s", Tier::Frontier, "new-f", AssignmentState::Assigned)]);
-        let got = apply_to_bindings(&bindings, "s", &[Tier::Frontier, Tier::Cheap], None, &view);
+        let got = apply_to_bindings(
+            &bindings,
+            "s",
+            &[Tier::Frontier, Tier::Cheap],
+            WireRule::proxy("s"),
+            &view,
+        );
         let f = &got[&Tier::Frontier];
         assert_eq!(f.name, "new-f");
         assert_eq!(f.model_id.as_deref(), Some("new-f"));
@@ -409,7 +505,13 @@ mod tests {
         // 割り当ての無い lane は従来どおり。
         assert_eq!(got[&Tier::Cheap], bindings[&Tier::Cheap]);
         // 別 source の割り当ては効かない。
-        let other = apply_to_bindings(&bindings, "t", &[Tier::Frontier], None, &view);
+        let other = apply_to_bindings(
+            &bindings,
+            "t",
+            &[Tier::Frontier],
+            WireRule::proxy("t"),
+            &view,
+        );
         assert_eq!(other, bindings);
     }
 
@@ -419,7 +521,7 @@ mod tests {
             &TierModels::new(),
             "s",
             &[Tier::Frontier, Tier::Standard, Tier::Cheap],
-            None,
+            WireRule::proxy("s"),
             &AssignmentView::empty(),
         );
         assert!(got.is_empty());
@@ -433,11 +535,12 @@ mod tests {
             "glm-5",
             AssignmentState::Assigned,
         )]);
+        // model も tier_models も無い opencode go の acp 行: 表の `opencode-go/`。
         let got = apply_to_bindings(
             &TierModels::new(),
             "opencode-go",
             &[Tier::Cheap],
-            wire_prefix_for("opencode-go", "acp"),
+            WireRule::new("opencode-go", "acp", None),
             &view,
         );
         assert_eq!(got[&Tier::Cheap].name, "glm-5");
@@ -445,8 +548,86 @@ mod tests {
             got[&Tier::Cheap].model_id.as_deref(),
             Some("opencode-go/glm-5")
         );
-        assert_eq!(wire_prefix_for("opencode-go", "claude-code"), None);
-        assert_eq!(wire_prefix_for("claude-oauth", "acp"), None);
+        // Pi 行も同じ表（Pi の provider 名も `opencode-go`）。
+        let pi = apply_to_bindings(
+            &TierModels::new(),
+            "opencode-go",
+            &[Tier::Cheap],
+            WireRule::new("opencode-go", "pi", Some("opencode-go/kimi")),
+            &view,
+        );
+        assert_eq!(
+            pi[&Tier::Cheap].model_id.as_deref(),
+            Some("opencode-go/glm-5")
+        );
+    }
+
+    #[test]
+    fn wire_rule_inherits_the_row_prefix_and_falls_back_to_the_table() {
+        let qwen = "openai-compatible:qwen";
+        // self-host の ACP 行: config の `qwen-local/qwen3.8-27b` から `qwen-local/` を引き継ぐ。
+        let acp = WireRule::new(qwen, "acp", Some("qwen-local/qwen3.8-27b"));
+        assert_eq!(acp.prefix(None), Some("qwen-local/"));
+        assert_eq!(acp.model(None, "qwen3.8-27b"), "qwen-local/qwen3.8-27b");
+        // Pi 行（`model = provider/id`）も同じ。
+        let pi = WireRule::new(qwen, "pi", Some("qwen-local/qwen3.8-27b"));
+        assert_eq!(pi.model(None, "qwen3.8-27b"), "qwen-local/qwen3.8-27b");
+        // lane の binding が行の model より先。
+        assert_eq!(
+            acp.model(Some("other/qwen-old"), "qwen3.8-27b"),
+            "other/qwen3.8-27b"
+        );
+        // 既に接頭辞付きの model_id は重ねない。
+        assert_eq!(
+            acp.model(None, "qwen-local/qwen3.8-27b"),
+            "qwen-local/qwen3.8-27b"
+        );
+        // config が接頭辞なしの self-host 行は接頭辞なし（行が使っている形が正）。
+        assert_eq!(
+            WireRule::new(qwen, "acp", Some("qwen3")).model(None, "qwen3.8-27b"),
+            "qwen3.8-27b"
+        );
+        // llm-proxy は常に接頭辞なし（config の wire に `/` が無い）。
+        assert_eq!(
+            WireRule::proxy(qwen).model(Some("qwen3"), "qwen3.8-27b"),
+            "qwen3.8-27b"
+        );
+        // opencode go: ACP / Pi は表、claude-code / codex の CLI は接頭辞なし。
+        assert_eq!(
+            WireRule::new("opencode-go", "acp", None).model(None, "glm-5"),
+            "opencode-go/glm-5"
+        );
+        assert_eq!(
+            WireRule::new("opencode-go", "pi", None).model(None, "glm-5"),
+            "opencode-go/glm-5"
+        );
+        assert_eq!(
+            WireRule::new("opencode-go", "claude-code", None).model(None, "glm-5"),
+            "glm-5"
+        );
+        assert_eq!(
+            WireRule::new("claude-oauth", "claude-code", Some("claude-x")).model(None, "claude-y"),
+            "claude-y"
+        );
+        assert_eq!(configured_prefix("/x"), None);
+        assert_eq!(configured_prefix("x"), None);
+        assert_eq!(
+            WireRule::catalog_model_id("qwen-local/qwen3.8-27b"),
+            "qwen3.8-27b"
+        );
+        assert_eq!(WireRule::catalog_model_id("qwen3.8-27b"), "qwen3.8-27b");
+        // config の binding: `unavailable_reason` のある行は config の wire ではない。
+        let unavailable = ModelBinding {
+            name: "cheap".into(),
+            model_id: None,
+            unavailable_reason: Some("assignment:none".into()),
+            reasoning_effort: None,
+        };
+        assert_eq!(configured_wire(Some(&unavailable)), None);
+        assert_eq!(
+            configured_wire(Some(&binding("qwen-local/q", None))),
+            Some("qwen-local/q")
+        );
     }
 
     #[test]
@@ -463,7 +644,7 @@ mod tests {
             ("s", Tier::Cheap, "m", AssignmentState::Assigned),
         ]);
         let lanes = [Tier::Frontier, Tier::Standard, Tier::Cheap];
-        let got = apply_to_bindings(&TierModels::new(), "s", &lanes, None, &view);
+        let got = apply_to_bindings(&TierModels::new(), "s", &lanes, WireRule::proxy("s"), &view);
         let f = &got[&Tier::Frontier];
         assert_eq!(f.model_id, None);
         assert_eq!(

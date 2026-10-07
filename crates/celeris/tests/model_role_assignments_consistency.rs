@@ -56,6 +56,31 @@ adapter = "acp"
 tiers = ["frontier", "standard", "cheap"]
 llm_source = "opencode_go"
 
+[[providers]]
+id = "go-pi"
+adapter = "pi"
+tiers = ["frontier", "standard", "cheap"]
+llm_source = "opencode_go"
+model = "opencode-go/grok-4.6"
+extensions = ["hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+
+[[providers]]
+id = "qwen-acp"
+adapter = "acp"
+tiers = ["cheap"]
+llm_source = "openai_compatible:qwen"
+model = "qwen-local/qwen3.8-27b"
+
+[[providers]]
+id = "qwen-pi"
+adapter = "pi"
+tiers = ["cheap"]
+llm_source = "openai_compatible:qwen"
+model = "qwen-local/qwen3.8-27b"
+extensions = ["hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+
 [llm_proxy]
 enabled = true
 listen = "127.0.0.1:0"
@@ -71,6 +96,11 @@ cheap = "proxy-claude-c"
 frontier = "proxy-gpt-f"
 standard = "proxy-gpt-s"
 cheap = "proxy-gpt-c"
+[[llm_proxy.sources.openai_compatible]]
+id = "qwen"
+base_url = "http://127.0.0.1:9/v1"
+[llm_proxy.models.qwen]
+cheap = "qwen3.8-27b"
 "#,
         db = dir.join("db.sqlite3"),
         ws = dir.join("ws"),
@@ -415,5 +445,140 @@ fn role_members_catalog_proxy_and_dispatch_share_priority_and_empty_scope() {
             .iter()
             .any(|d| d.id.starts_with("provider:claude/")
                 && d.allowed_lanes.contains(&Tier::Standard))
+    );
+}
+
+/// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: self-host（`openai-compatible:qwen`）の
+/// ACP 行・Pi 行、その proxy の cheap lane、opencode go の Pi 行について、同じ割り当てから dispatcher・llm-proxy・
+/// routing catalog が同じ実行用の名前を出す。本番で見つかった形（cheap に `qwen3.8-27b`）は provider 行で
+/// `qwen-local/qwen3.8-27b` のまま、proxy では `qwen3.8-27b`。別の model でも接頭辞は行のものを引き継ぐ。
+#[test]
+fn self_host_acp_pi_and_proxy_agree_on_the_wire_prefix() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("claude-accounts")).unwrap();
+    std::fs::create_dir_all(dir.path().join("codex-accounts")).unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, config_text(dir.path())).unwrap();
+    let config = Config::load(&path).unwrap();
+    let mut dispatcher = celeris::build_dispatcher(&config, Default::default()).unwrap();
+    let (tx, _) = tokio::sync::watch::channel(None);
+    dispatcher.set_snapshot_publisher(SnapshotPublisher {
+        tx,
+        instance_id: "test".into(),
+        hostname: "test".into(),
+        started_at: String::new(),
+        tick_ms: 1000,
+        providers: celeris::provider_lives(&config),
+        provider_checks: Default::default(),
+    });
+    let store = Arc::new(SqliteStore::open(&config.db.path).unwrap());
+    let qwen = CatalogSource::new("openai-compatible:qwen");
+    let og = CatalogSource::new("opencode-go");
+    store
+        .model_catalog_apply(&qwen, &models(&["qwen3.8-27b", "qwen3.9-32b"]), 10)
+        .unwrap();
+    store
+        .model_catalog_apply(&og, &models(&["glm-5", "grok-4.6"]), 10)
+        .unwrap();
+
+    // 割り当て前: 行の config の model で走る（binding 無し）。proxy・routing catalog は config の値。
+    assert_eq!(
+        dispatcher.effective_lane_model("qwen-acp", Tier::Cheap),
+        Ok(None)
+    );
+    assert_eq!(
+        dispatcher.effective_lane_model("qwen-pi", Tier::Cheap),
+        Ok(None)
+    );
+
+    let check = |assigned: &str, wire: &str| {
+        let view = store.model_role_assignment_view().unwrap();
+        // 1. dispatcher（run が受け取る model）。ACP 行も Pi 行も `qwen-local/<id>`。
+        for provider in ["qwen-acp", "qwen-pi"] {
+            assert_eq!(
+                dispatcher.effective_lane_model(provider, Tier::Cheap),
+                Ok(Some(wire.to_string())),
+                "{provider} {assigned}"
+            );
+        }
+        // 2. llm-proxy: 上流へは素の model_id。
+        let proxy = normalize_legacy_config_with(&config.llm_proxy, &view);
+        assert_eq!(
+            proxy_wire(&proxy, "openai-compatible:qwen", Tier::Cheap).as_deref(),
+            Some(assigned)
+        );
+        // 3. routing catalog: provider の deployment は接頭辞付き、proxy の deployment は素の model_id。
+        let mut routing = config.routing_catalog().unwrap();
+        apply_role_assignments(&mut routing, &view, &config.provider_lane_seeds());
+        let dropped = apply_model_catalog(
+            &mut routing,
+            &store.model_catalog_list().unwrap(),
+            &store.model_catalog_overrides().unwrap(),
+        );
+        assert!(dropped.is_empty(), "{dropped:?}");
+        for id in ["provider:qwen-acp/cheap", "provider:qwen-pi/cheap"] {
+            assert_eq!(
+                routing_dep(&routing, id).map(|d| d.upstream_model.as_str()),
+                Some(wire),
+                "{id} {assigned}"
+            );
+        }
+        assert_eq!(
+            routing_dep(&routing, "legacy:openai-compatible:qwen:Cheap")
+                .map(|d| d.upstream_model.as_str()),
+            Some(assigned)
+        );
+        routing
+    };
+
+    // 本番の形: config と同じ `qwen3.8-27b` を割り当てる → 接頭辞は落ちない。
+    store
+        .model_role_assignment_set(&qwen, Tier::Cheap, "qwen3.8-27b", None, "test", 30)
+        .unwrap();
+    check("qwen3.8-27b", "qwen-local/qwen3.8-27b");
+    // 別の model でも行の接頭辞を引き継ぐ。
+    store
+        .model_role_assignment_set(&qwen, Tier::Cheap, "qwen3.9-32b", None, "test", 40)
+        .unwrap();
+    let routing = check("qwen3.9-32b", "qwen-local/qwen3.9-32b");
+    assert!(
+        routing
+            .models
+            .iter()
+            .any(|m| m.id == "qwen-local/qwen3.9-32b"),
+        "provider の model profile は wire の id"
+    );
+
+    // opencode go の Pi 行（`model = opencode-go/grok-4.6`、tier_models 無し）: 割り当ての `glm-5` は
+    // `opencode-go/glm-5`。model も tier_models も無い acp 行（seed）も同じ名前。
+    store
+        .model_role_assignment_set(&og, Tier::Standard, "glm-5", None, "test", 50)
+        .unwrap();
+    let view = store.model_role_assignment_view().unwrap();
+    assert_eq!(
+        dispatcher.effective_lane_model("go-pi", Tier::Standard),
+        Ok(Some("opencode-go/glm-5".into()))
+    );
+    assert_eq!(
+        dispatcher.effective_lane_model("opencode-go", Tier::Standard),
+        Ok(Some("opencode-go/glm-5".into()))
+    );
+    // source に割り当てがあると、binding も割り当ても無い lane は `assignment:none`（ADR 付記の既存規則）。
+    assert_eq!(
+        dispatcher.effective_lane_model("go-pi", Tier::Cheap),
+        Err("cheap: assignment:none".into())
+    );
+    let mut routing = config.routing_catalog().unwrap();
+    apply_role_assignments(&mut routing, &view, &config.provider_lane_seeds());
+    for id in ["provider:go-pi/standard", "provider:opencode-go/standard"] {
+        assert_eq!(
+            routing_dep(&routing, id).map(|d| d.upstream_model.as_str()),
+            Some("opencode-go/glm-5"),
+            "{id}"
+        );
+    }
+    assert_eq!(
+        routing_dep(&routing, "provider:go-pi").map(|d| d.upstream_model.as_str()),
+        Some("opencode-go/grok-4.6")
     );
 }

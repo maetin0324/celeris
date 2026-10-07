@@ -224,3 +224,10 @@ leaf family / pi-adapter / dispatch / ops-docs の統合後（branch tip `a2ca31
 - web: `corepack pnpm@12.6.0 -C web typecheck` → exit 0。gui: `corepack pnpm@11.27.0 typecheck`（gui を cwd に）→ exit 0。生成型は optional 欄の追加（`coding_default`）だけ。
 - `git diff --check` と `git diff --quiet "$CELERIS_WU_BASE" -- crates/ gui/` → exit 0。
 - 本番の導入・有効化・実 Pi/実 LLM での確認は人の手順（`docs/ops/coding-harness-pi-hashline.md`）。
+
+## 付記: 役割の割り当てと Pi 行のモデル名（2026-10-07 wire-prefix）
+
+Pi 行は `tier_models` を持てず、役割の割り当て（ADR 2026-10-06 model-role-assignments）は行の `model` を上書きする。割り当ての
+`model_id` は catalog の素の id なので、そのまま渡すと Pi の `provider/model` 検査で失敗する。`WireRule`
+（ADR 2026-10-06 model-role-assignments 付記 2026-10-07 wire-prefix）が行の `model = <provider>/<id>` の接頭辞を引き継ぎ
+（`qwen-local/qwen3.8-27b` → `qwen-local/<model_id>`）、config に接頭辞が無い opencode go の Pi 行は表で `opencode-go/` を付ける。

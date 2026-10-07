@@ -5,7 +5,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use task_core::Tier;
-use task_core::model_catalog::assignments::{AssignmentState, AssignmentView};
+use task_core::model_catalog::assignments::{AssignmentState, AssignmentView, WireRule};
 use task_core::model_router::policy::{RoutingMode, RoutingPolicy};
 use task_core::model_router::profiles::{
     Billing, Capabilities, ContextLimits, DeploymentProfile, ModelProfile, Support,
@@ -78,7 +78,8 @@ pub fn normalize_legacy_config(config: &LlmProxyConfig) -> LegacyCatalog {
 
 /// `normalize_legacy_config` に DB の割り当て（ADR 2026-10-06 model-role-assignments D2）を重ねる。
 /// `claude-oauth` → `models.claude`、`codex-oauth` → `models.gpt`、`openai-compatible:<id>` → その relay の
-/// cheap lane の wire model を割り当ての `model_id` に置き換える。割り当ての無い lane は config のまま。
+/// cheap lane の wire model を割り当ての `model_id`（`WireRule::proxy`: config の wire に `<prefix>/` が無い限り
+/// 接頭辞なし）に置き換える。割り当ての無い lane は config のまま。
 /// `Excluded` の lane は deployment を作らず `warnings` に書く。
 pub fn normalize_legacy_config_with(
     config: &LlmProxyConfig,
@@ -106,8 +107,14 @@ pub fn normalize_legacy_config_with(
         if !view.manages(source_ref, tier) {
             return configured.map(|s| vec![(s.clone(), 0)]).unwrap_or_default();
         }
+        // 付記 2026-10-07 wire-prefix: dispatcher・routing catalog と同じ規則。proxy の config の wire は接頭辞を
+        // 持たないので、割り当ての model_id がそのまま上流へ渡る。
+        let rule = WireRule::proxy(source_ref);
         view.members(source_ref, tier).into_iter().filter_map(|a| match a.state {
-            AssignmentState::Assigned => Some((a.model_id.clone(), a.priority as usize)),
+            AssignmentState::Assigned => Some((
+                rule.model(configured.map(String::as_str), &a.model_id),
+                a.priority as usize,
+            )),
             AssignmentState::Excluded { reason } => {
                 warnings.push(format!("model_role_assignments: deployment legacy:{source_ref}:{tier:?} excluded ({reason})"));
                 None
@@ -446,6 +453,30 @@ mod tests {
         assert_eq!(model.context_limits.input, Some(1000));
         // 同じ写しをもう一度重ねても増えない。
         assert_eq!(got.extended_with(&dynamic), got);
+    }
+
+    /// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: proxy の wire は常に接頭辞なしの
+    /// `model_id`（`WireRule::proxy`）。同じ割り当てを ACP / Pi 行が `qwen-local/qwen3.8-27b` で受ける一方、
+    /// 上流（OpenAI 互換 API）へは `qwen3.8-27b` をそのまま送る。
+    #[test]
+    fn self_host_relay_wire_has_no_provider_prefix() {
+        let c = config();
+        let v = view(&[(
+            "openai-compatible:relay-a",
+            Tier::Cheap,
+            "qwen3.8-27b",
+            AssignmentState::Assigned,
+        )]);
+        let got = normalize_legacy_config_with(&c, &v);
+        assert_eq!(
+            wire(&got, "openai-compatible:relay-a", Tier::Cheap),
+            Some("qwen3.8-27b")
+        );
+        let dep = got
+            .deployment("openai-compatible:relay-a", Tier::Cheap)
+            .unwrap();
+        assert_eq!(dep.model_profile_id, "legacy:qwen:qwen3.8-27b");
+        assert!(got.warnings.is_empty());
     }
 
     #[test]

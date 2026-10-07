@@ -3282,7 +3282,9 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
   その source の catalog に無いときは 400（`model_not_in_catalog`）。200 `{item, impact}`。成功すると event
   `model_role_assignment_changed` を catalog の疑似 task の列に追記する。
 - `impact.changes[]` は `{kind: "provider"|"proxy", id, tier, before, after, excluded_reason}`。枠を使う provider と proxy の lane ごとに、
-  今の実効の model と変更後の model を並べる。解除（`preview` の `model_id = null`）の `after` は config の値。provider は routing hook が割り当てを反映済みでも provider の一覧の値が出る。
+  今の実効の model と変更後の model を**実行用の名前**で並べる（ADR 2026-10-06 model-role-assignments 付記 2026-10-07 wire-prefix:
+  provider 行は config の `model` / `tier_models` の `<prefix>/` を引き継ぐ。例 `qwen-local/qwen3.8-27b`、`opencode-go/glm-5`。
+  proxy の lane は接頭辞なし）。解除（`preview` の `model_id = null`）の `after` は config の値。provider は routing hook が割り当てを反映済みでも provider の一覧の値が出る。
   proxy の lane は割り当て中に config の値を判別できないとき（catalog の値が割り当てと同じ）`after = null`。
 - `preview` は書き込みなしで `{impact}` だけ返す。`model_id` が `null`（省略）なら解除した場合。
 - `source` / `tier` の path 区間は `%` 符号化に対応する。

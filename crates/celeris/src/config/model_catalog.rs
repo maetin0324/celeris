@@ -40,7 +40,7 @@ fn default_opencode_cli() -> String {
 
 use task_core::Tier;
 use task_core::model_catalog::assignments::{
-    AssignmentState, AssignmentView, tier_str, wire_prefix_for,
+    AssignmentState, AssignmentView, LLM_PROXY_ADAPTER, WireRule, tier_str,
 };
 use task_core::model_catalog::{CatalogEntry, CatalogOverrideRow};
 use task_core::model_router::profiles::{DeploymentProfile, ModelProfile};
@@ -57,13 +57,10 @@ fn normalize_source(source_ref: &str) -> String {
     }
 }
 
-/// deployment の `upstream_model` が catalog の `model_id` を指すか（`<source>/` 接頭辞は外して比べる）。
-fn upstream_is(upstream: &str, source: &str, model_id: &str) -> bool {
-    upstream == model_id
-        || upstream
-            .strip_prefix(source)
-            .and_then(|rest| rest.strip_prefix('/'))
-            .is_some_and(|rest| rest == model_id)
+/// deployment の `upstream_model` が catalog の `model_id` を指すか。付記 2026-10-07 wire-prefix: 実行用の名前の
+/// `<prefix>/`（`opencode-go/`・`qwen-local/` など。`WireRule::catalog_model_id`）は外して比べる。
+fn upstream_is(upstream: &str, model_id: &str) -> bool {
+    upstream == model_id || WireRule::catalog_model_id(upstream) == model_id
 }
 
 /// 候補から外した deployment 1 件（API の `warnings` と ログに出す）。
@@ -90,14 +87,14 @@ pub fn apply_model_catalog(
         let disabled = overrides.iter().any(|o| {
             o.value.disabled
                 && o.source.as_str() == source
-                && upstream_is(&dep.upstream_model, &source, &o.model_id)
+                && upstream_is(&dep.upstream_model, &o.model_id)
         });
         let reason = if disabled {
             Some("override:disabled")
         } else if entries.iter().any(|e| {
             !e.available
                 && e.source.as_str() == source
-                && upstream_is(&dep.upstream_model, &source, &e.model_id)
+                && upstream_is(&dep.upstream_model, &e.model_id)
         }) {
             Some("catalog:unavailable")
         } else {
@@ -137,16 +134,32 @@ pub struct AppliedAssignment {
     pub excluded_reason: Option<&'static str>,
 }
 
-/// 割り当てた model を deployment の `upstream_model` に書く形にする。opencode go の ACP 行は `opencode-go/<model>`
-/// と書く慣習（`wire_prefix_for`）で、routing catalog は adapter を知らないので、元の `upstream_model` が
-/// `<source>/` で始まっていたときだけ同じ接頭辞を付ける。
-fn assigned_upstream(old_upstream: &str, source: &str, model_id: &str) -> String {
-    let prefix = format!("{source}/");
-    if old_upstream.starts_with(&prefix) {
-        format!("{prefix}{model_id}")
+/// 割り当てた model を deployment の `upstream_model` に書く形にする（付記 2026-10-07 wire-prefix: dispatcher・
+/// llm-proxy と同じ `WireRule`）。元の `upstream_model` が行の config の wire なので、その `<prefix>/` を引き継ぐ
+/// （`qwen-local/qwen3.8-27b` → `qwen-local/<model_id>`、`opencode-go/kimi` → `opencode-go/<model_id>`）。接頭辞が
+/// 無ければ source × adapter の表で決める。adapter は `legacy:*` なら llm-proxy、`provider:<id>[/<lane>]` なら
+/// `seeds` の同じ provider 行（無ければ `adapter_constraints` の先頭、それも無ければ不明 = 表は引かない）。
+fn assigned_upstream(
+    dep: &DeploymentProfile,
+    source: &str,
+    model_id: &str,
+    seeds: &[ProviderLaneSeed],
+) -> String {
+    let adapter = if dep.id.starts_with("legacy:") {
+        LLM_PROXY_ADAPTER
     } else {
-        model_id.to_string()
-    }
+        let provider_id = dep
+            .id
+            .strip_prefix("provider:")
+            .map(|rest| rest.split_once('/').map_or(rest, |(id, _)| id));
+        seeds
+            .iter()
+            .find(|s| Some(s.provider_id.as_str()) == provider_id)
+            .map(|s| s.adapter.as_str())
+            .or_else(|| dep.adapter_constraints.first().map(String::as_str))
+            .unwrap_or("")
+    };
+    WireRule::new(source, adapter, None).model(Some(&dep.upstream_model), model_id)
 }
 
 fn ensure_model(catalog_models: &mut Vec<ModelProfile>, id: &str, family: Option<&str>) {
@@ -191,8 +204,10 @@ pub struct ProviderLaneSeed {
 ///   割り当てのない lane の `assignment:none` 除外は dispatcher だけが行い、ここでは config のまま残す。
 /// - 上記以外の deployment（`[[model_routing.deployments]]` の手書き行）には触らない。
 /// - `seeds` の provider 行は、`Assigned` の lane に既存の `provider:<id>/<lane>` も、その lane を覆う
-///   `provider:<id>` も無ければ、`provider:<id>/<lane>` を足す（`upstream_model` は `wire_prefix_for` + model_id、
-///   `adapter_constraints = [adapter]`）。`Excluded` の lane には足さない。
+///   `provider:<id>` も無ければ、`provider:<id>/<lane>` を足す（`upstream_model` は `WireRule`（source × adapter の表）
+///   + model_id、`adapter_constraints = [adapter]`）。`Excluded` の lane には足さない。
+/// - 書き換える `upstream_model` は付記 2026-10-07 wire-prefix の `WireRule`（`assigned_upstream`）: 元の
+///   `upstream_model` の `<prefix>/` を引き継ぐ（`qwen-local/qwen3.8-27b` → `qwen-local/<model_id>`）。
 pub fn apply_role_assignments(
     catalog: &mut RoutingCatalog,
     view: &AssignmentView,
@@ -269,7 +284,7 @@ pub fn apply_role_assignments(
                     }
                     AssignmentState::Assigned => {
                         let upstream =
-                            assigned_upstream(&dep.upstream_model, &source, &assignment.model_id);
+                            assigned_upstream(&dep, &source, &assignment.model_id, seeds);
                         let (profile_id, family) = if is_legacy {
                             let family = dep.model_profile_id.split(':').nth(1).map(str::to_string);
                             (
@@ -327,8 +342,9 @@ pub fn apply_role_assignments(
                 } else {
                     format!("{lane_id}/model:{}", assignment.model_id)
                 };
-                let prefix = wire_prefix_for(&seed.source, &seed.adapter).unwrap_or("");
-                let upstream = format!("{prefix}{}", assignment.model_id);
+                // model も tier_models も無い行: config の wire が無いので source × adapter の表で決める。
+                let upstream = WireRule::new(&seed.source, &seed.adapter, None)
+                    .model(None, &assignment.model_id);
                 let mut dep = deployment(
                     lane_id.clone(),
                     seed.source.clone(),
@@ -737,5 +753,143 @@ mod tests {
         other.deployments = vec![];
         apply_role_assignments(&mut other, &v, &[seed("cc", "claude-code")]);
         assert_eq!(other.deployments[0].upstream_model, "glm-5");
+    }
+
+    /// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: self-host の ACP 行・Pi 行
+    /// （`provider:<id>`、model `qwen-local/qwen3.8-27b`）は元の `upstream_model` の接頭辞を引き継ぎ、opencode go の
+    /// Pi 行も同じ規則。proxy の `legacy:*` は接頭辞なし。seed（model も tier_models も無い行）は source × adapter の表。
+    #[test]
+    fn self_host_and_pi_rows_inherit_the_configured_prefix_and_seeds_use_the_table() {
+        let mut catalog = routing();
+        let multi = |id: &str, source_ref: &str, upstream: &str, lanes: Vec<Tier>| {
+            let mut d = dep(id, source_ref, upstream);
+            d.allowed_lanes = lanes;
+            d
+        };
+        catalog.deployments = vec![
+            multi(
+                "provider:qwen-acp",
+                "openai_compatible:qwen",
+                "qwen-local/qwen3.8-27b",
+                vec![Tier::Cheap],
+            ),
+            multi(
+                "provider:qwen-pi",
+                "openai_compatible:qwen",
+                "qwen-local/qwen3.8-27b",
+                vec![Tier::Cheap],
+            ),
+            lane_dep(
+                "legacy:openai-compatible:qwen:Cheap",
+                "openai-compatible:qwen",
+                "qwen3.8-27b",
+                "legacy:qwen:qwen3.8-27b",
+                Tier::Cheap,
+            ),
+            multi(
+                "provider:go-pi",
+                "opencode_go",
+                "opencode-go/grok-4.6",
+                vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
+            ),
+        ];
+        let v = view(&[
+            (
+                "openai-compatible:qwen",
+                Tier::Cheap,
+                "qwen3.9-32b",
+                AssignmentState::Assigned,
+            ),
+            (
+                "opencode-go",
+                Tier::Standard,
+                "glm-5",
+                AssignmentState::Assigned,
+            ),
+        ]);
+        let seed = |id: &str, source: &str, adapter: &str| ProviderLaneSeed {
+            provider_id: id.into(),
+            source: source.into(),
+            adapter: adapter.into(),
+            lanes: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
+            config_order: 9,
+        };
+        apply_role_assignments(
+            &mut catalog,
+            &v,
+            &[
+                seed("qwen-acp", "openai-compatible:qwen", "acp"),
+                seed("qwen-pi", "openai-compatible:qwen", "pi"),
+                seed("go-pi", "opencode-go", "pi"),
+                // model も tier_models も無い行（覆う deployment が無い）: 表で決める。
+                seed("go-pi-bare", "opencode-go", "pi"),
+                seed("qwen-bare", "openai-compatible:qwen", "acp"),
+            ],
+        );
+        let upstream = |id: &str| {
+            catalog
+                .deployments
+                .iter()
+                .find(|d| d.id == id)
+                .map(|d| d.upstream_model.as_str())
+                .unwrap_or_else(|| panic!("{id} present: {:?}", catalog.deployments))
+        };
+        // self-host の ACP / Pi 行: `qwen-local/` を引き継ぐ（本番で落ちていた接頭辞）。
+        assert_eq!(
+            upstream("provider:qwen-acp/cheap"),
+            "qwen-local/qwen3.9-32b"
+        );
+        assert_eq!(upstream("provider:qwen-pi/cheap"), "qwen-local/qwen3.9-32b");
+        // proxy の lane は接頭辞なし。
+        assert_eq!(
+            upstream("legacy:openai-compatible:qwen:Cheap"),
+            "qwen3.9-32b"
+        );
+        // opencode go の Pi 行: `opencode-go/` を引き継ぎ、割り当ての無い lane は元の deployment に残る。
+        assert_eq!(upstream("provider:go-pi/standard"), "opencode-go/glm-5");
+        assert_eq!(upstream("provider:go-pi"), "opencode-go/grok-4.6");
+        // seed だけの行: opencode go × pi は表で `opencode-go/`、self-host の接頭辞は config が無ければ分からない。
+        assert_eq!(
+            upstream("provider:go-pi-bare/standard"),
+            "opencode-go/glm-5"
+        );
+        assert_eq!(upstream("provider:qwen-bare/cheap"), "qwen3.9-32b");
+        // 1 lane の `provider:<id>` を割った元は消える（残る lane が無い）。
+        assert!(
+            !catalog
+                .deployments
+                .iter()
+                .any(|d| d.id == "provider:qwen-acp" || d.id == "provider:qwen-pi")
+        );
+        for id in [
+            "qwen-local/qwen3.9-32b",
+            "legacy:qwen:qwen3.9-32b",
+            "opencode-go/glm-5",
+        ] {
+            assert!(catalog.models.iter().any(|m| m.id == id), "{id}");
+        }
+        assert!(catalog.warnings.is_empty());
+        // catalog の不在・無効は実行用の名前の接頭辞を見通して効く（`qwen-local/qwen3.9-32b` ↔ `qwen3.9-32b`）。
+        let dropped = apply_model_catalog(
+            &mut catalog,
+            &[entry("openai-compatible:qwen", "qwen3.9-32b", false)],
+            &[],
+        );
+        let ids: Vec<&str> = dropped.iter().map(|d| d.deployment_id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "provider:qwen-acp/cheap",
+                "provider:qwen-pi/cheap",
+                "legacy:openai-compatible:qwen:Cheap",
+                "provider:qwen-bare/cheap",
+            ]
+        );
+        assert!(
+            catalog
+                .deployments
+                .iter()
+                .any(|d| d.id == "provider:go-pi/standard")
+        );
     }
 }

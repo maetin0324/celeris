@@ -183,10 +183,12 @@ async fn put_assigns_records_an_event_and_reports_impact() {
     assert_eq!(changes.len(), 2);
     assert_eq!(changes[0]["kind"], "provider");
     assert_eq!(changes[0]["id"], "oc");
-    assert_eq!(changes[0]["before"], "glm-5");
-    assert_eq!(changes[0]["after"], "qwen");
+    // 付記 2026-10-07 wire-prefix: before / after は実行用の名前（acp 行は config の `opencode-go/` 付き）。
+    assert_eq!(changes[0]["before"], "opencode-go/glm-5");
+    assert_eq!(changes[0]["after"], "opencode-go/qwen");
     assert_eq!(changes[1]["kind"], "proxy");
     assert_eq!(changes[1]["before"], "kimi");
+    assert_eq!(changes[1]["after"], "qwen");
 
     let events: Vec<_> = env
         .store
@@ -318,8 +320,8 @@ async fn excluded_assignment_reports_reason_and_preview_does_not_write() {
     assert_eq!(resp.status, 200, "{}", resp.text());
     let changes = resp.json()["impact"]["changes"].clone();
     assert_eq!(changes[0]["kind"], "provider");
-    assert_eq!(changes[0]["before"], "glm-5");
-    assert_eq!(changes[0]["after"], "qwen");
+    assert_eq!(changes[0]["before"], "opencode-go/glm-5");
+    assert_eq!(changes[0]["after"], "opencode-go/qwen");
     assert_eq!(changes[0]["excluded_reason"], "override:disabled");
     assert_eq!(changes[1]["kind"], "proxy");
     assert!(env.store.model_role_assignments().expect("rows").is_empty());
@@ -352,8 +354,8 @@ async fn excluded_assignment_reports_reason_and_preview_does_not_write() {
     )
     .await;
     let changes = resp.json()["impact"]["changes"].clone();
-    assert_eq!(changes[0]["before"], "qwen");
-    assert_eq!(changes[0]["after"], "glm-5");
+    assert_eq!(changes[0]["before"], "opencode-go/qwen");
+    assert_eq!(changes[0]["after"], "opencode-go/glm-5");
 
     let resp = send(
         &app,
@@ -399,8 +401,8 @@ async fn provider_config_value_survives_a_catalog_that_reflects_the_assignment()
     .await;
     let changes = resp.json()["impact"]["changes"].clone();
     assert_eq!(changes[0]["kind"], "provider");
-    assert_eq!(changes[0]["before"], "qwen");
-    assert_eq!(changes[0]["after"], "glm-5");
+    assert_eq!(changes[0]["before"], "opencode-go/qwen");
+    assert_eq!(changes[0]["after"], "opencode-go/glm-5");
     assert_eq!(changes[1]["kind"], "proxy");
     assert_eq!(changes[1]["after"], json!(null));
 
@@ -456,4 +458,204 @@ async fn role_members_api_preview_multiple_roles_and_empty_no_config_revival() {
     .await;
     assert_eq!(response.status, 400);
     assert_eq!(env.store.model_role_assignments().unwrap().len(), 2);
+}
+
+/// 付記 2026-10-07 wire-prefix 用の routing catalog: self-host（`openai-compatible:qwen`）の ACP 行・Pi 行
+/// （`provider:<id>`、config の model は `qwen-local/qwen3.8-27b`）、その proxy の cheap lane（接頭辞なし）、
+/// opencode go の Pi 行（`provider:go-pi`、model `opencode-go/kimi`）。
+struct SelfHostCatalog;
+
+impl RoutingCatalogReader for SelfHostCatalog {
+    fn view(&self) -> RoutingCatalogView {
+        let dep =
+            |id: &str, source_ref: &str, upstream: &str, lanes: Vec<Tier>| CatalogDeploymentView {
+                id: id.into(),
+                source_ref: source_ref.into(),
+                model_profile_id: upstream.into(),
+                upstream_model: upstream.into(),
+                billing: Billing::SelfHosted,
+                allowed_lanes: lanes,
+                price_override: None,
+            };
+        RoutingCatalogView {
+            catalog_version: "test".into(),
+            mode: RoutingMode::Legacy,
+            models: vec![],
+            deployments: vec![
+                dep(
+                    "provider:qwen-acp",
+                    "openai-compatible:qwen",
+                    "qwen-local/qwen3.8-27b",
+                    vec![Tier::Cheap],
+                ),
+                dep(
+                    "provider:qwen-pi",
+                    "openai-compatible:qwen",
+                    "qwen-local/qwen3.8-27b",
+                    vec![Tier::Cheap],
+                ),
+                dep(
+                    "legacy:openai-compatible:qwen:Cheap",
+                    "openai-compatible:qwen",
+                    "qwen3.8-27b",
+                    vec![Tier::Cheap],
+                ),
+                dep(
+                    "provider:go-pi",
+                    "opencode-go",
+                    "opencode-go/kimi",
+                    vec![Tier::Standard, Tier::Cheap],
+                ),
+            ],
+            policies: vec![],
+            warnings: vec![],
+        }
+    }
+}
+
+/// `model` だけを持つ行（Pi 行は `tier_models` を持てない。ACP の self-host 行も同じ形）。
+fn model_only_provider(
+    id: &str,
+    adapter: &str,
+    source: task_core::LlmSourceRef,
+    model: &str,
+    tiers: Vec<Tier>,
+) -> ProviderConfigView {
+    ProviderConfigView {
+        kind: Default::default(),
+        llm_source: Some(task_core::ResolvedLlmSource {
+            source,
+            origin: task_core::SourceOrigin::Explicit,
+        }),
+        credential_refs: Default::default(),
+        tier_models: task_core::model_routing::TierModels::new(),
+        account_id: None,
+        id: id.into(),
+        adapter: adapter.into(),
+        tiers,
+        concurrency: 1,
+        model: Some(model.into()),
+        env_keys: vec![],
+        account_pool: false,
+    }
+}
+
+/// ADR 2026-10-06 model-role-assignments 付記（2026-10-07 wire-prefix）: preview の before / after は枠が実際に
+/// 受け取る実行用の名前。self-host の ACP 行・Pi 行は config の `qwen-local/` を引き継ぎ（本番で `after` が
+/// 裸の `qwen3.8-27b` になっていた問題）、proxy の lane は接頭辞なし、opencode go の Pi 行は `opencode-go/`。
+#[tokio::test]
+async fn preview_shows_wire_names_for_self_host_and_pi_rows() {
+    let qwen = || task_core::LlmSourceRef::OpenaiCompatible("qwen".into());
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.to_string()),
+        routing_catalog: Some(Arc::new(SelfHostCatalog)),
+        extra_providers: vec![
+            model_only_provider(
+                "qwen-acp",
+                "acp",
+                qwen(),
+                "qwen-local/qwen3.8-27b",
+                vec![Tier::Cheap],
+            ),
+            model_only_provider(
+                "qwen-pi",
+                "pi",
+                qwen(),
+                "qwen-local/qwen3.8-27b",
+                vec![Tier::Cheap],
+            ),
+            model_only_provider(
+                "go-pi",
+                "pi",
+                task_core::LlmSourceRef::OpencodeGo,
+                "opencode-go/kimi",
+                vec![Tier::Standard, Tier::Cheap],
+            ),
+        ],
+        ..EnvOptions::default()
+    });
+    env.store
+        .model_catalog_apply(
+            &CatalogSource::new("openai-compatible:qwen"),
+            &[
+                DiscoveredModel::new("qwen3.8-27b"),
+                DiscoveredModel::new("qwen3.9-32b"),
+            ],
+            1_700_000_000,
+        )
+        .expect("apply");
+    env.store
+        .model_catalog_apply(
+            &CatalogSource::new("opencode-go"),
+            &[DiscoveredModel::new("kimi"), DiscoveredModel::new("qwen")],
+            1_700_000_000,
+        )
+        .expect("apply");
+    let app = env.router();
+
+    // 一覧の config 由来の枠は catalog の model_id（接頭辞を外した名前）。
+    let body = send(&app, get_admin(BASE)).await.json();
+    let cheap = slot(&body, "openai-compatible:qwen", "cheap");
+    assert_eq!(cheap["model_id"], "qwen3.8-27b");
+    assert_eq!(cheap["origin"], "config");
+    assert_eq!(cheap["providers"], json!(["qwen-acp", "qwen-pi"]));
+    assert_eq!(cheap["proxy"], true);
+
+    // 本番で見つかった形: cheap に catalog の `qwen3.8-27b` を入れる → after も `qwen-local/qwen3.8-27b`。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/preview"),
+            &json!({"source": "openai-compatible:qwen", "tier": "cheap", "model_id": "qwen3.8-27b"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let changes = resp.json()["impact"]["changes"].clone();
+    assert_eq!(changes.as_array().map(Vec::len), Some(3), "{changes}");
+    for (i, id) in ["qwen-acp", "qwen-pi"].into_iter().enumerate() {
+        assert_eq!(changes[i]["kind"], "provider");
+        assert_eq!(changes[i]["id"], id);
+        assert_eq!(changes[i]["before"], "qwen-local/qwen3.8-27b");
+        assert_eq!(changes[i]["after"], "qwen-local/qwen3.8-27b");
+    }
+    assert_eq!(changes[2]["kind"], "proxy");
+    assert_eq!(changes[2]["before"], "qwen3.8-27b");
+    assert_eq!(changes[2]["after"], "qwen3.8-27b");
+
+    // 別の model へ: provider 行は接頭辞付き、proxy は素の model_id。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/preview"),
+            &json!({"source": "openai-compatible:qwen", "tier": "cheap", "model_id": "qwen3.9-32b"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let changes = resp.json()["impact"]["changes"].clone();
+    for i in 0..2 {
+        assert_eq!(changes[i]["before"], "qwen-local/qwen3.8-27b");
+        assert_eq!(changes[i]["after"], "qwen-local/qwen3.9-32b");
+    }
+    assert_eq!(changes[2]["kind"], "proxy");
+    assert_eq!(changes[2]["after"], "qwen3.9-32b");
+
+    // opencode go の Pi 行: `opencode-go/kimi` → `opencode-go/qwen`（裸の `qwen` ではない）。
+    let resp = send(
+        &app,
+        post_admin(
+            &format!("{BASE}/preview"),
+            &json!({"source": "opencode-go", "tier": "cheap", "model_id": "qwen"}),
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let changes = resp.json()["impact"]["changes"].clone();
+    assert_eq!(changes.as_array().map(Vec::len), Some(1), "{changes}");
+    assert_eq!(changes[0]["kind"], "provider");
+    assert_eq!(changes[0]["id"], "go-pi");
+    assert_eq!(changes[0]["before"], "opencode-go/kimi");
+    assert_eq!(changes[0]["after"], "opencode-go/qwen");
+    assert!(env.store.model_role_assignments().expect("rows").is_empty());
 }

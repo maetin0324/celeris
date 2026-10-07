@@ -61,6 +61,17 @@ impl WorkerAdapter for TieredAdapter {
         }
         base.run(req, run_id, limits, sink).await
     }
+    /// ADR 2026-10-05 cos-chat-home D2: CoS run は config の model（または tier から解決した model）を
+    /// 明示で固定する。基盤アダプタに model を載せ、tier の束縛は空にする（run で別 model に置き換えない）。
+    /// account・credential の状態はそのまま保つ。基盤が model を受けられなければ None。
+    fn with_model(&self, model: &str) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(Self {
+            base: self.base.with_model(model)?,
+            models: TierModels::new(),
+            account_id: self.account_id.clone(),
+            credential_error: self.credential_error.clone(),
+        }))
+    }
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         Some(Arc::new(Self {
             base: self.base.with_env(extra)?,
@@ -110,6 +121,27 @@ mod tests {
             model_id: Some(model.into()),
             unavailable_reason: None,
             reasoning_effort: None,
+        }
+    }
+
+    /// CoS の明示 model: `with_model` は基盤に model を載せ、tier の束縛を空にした複製を返す。
+    #[test]
+    fn with_model_pins_the_base_model_and_clears_tier_bindings() {
+        let mut models = TierModels::new();
+        models.insert(Tier::Frontier, binding("claude-fable-5-1"));
+        let tiered = TieredAdapter {
+            base: Arc::new(FakeAdapter::default()),
+            models,
+            account_id: Some("acct".into()),
+            credential_error: None,
+        };
+        match FakeAdapter::default().with_model("m") {
+            Some(_) => {
+                let pinned = tiered.with_model("m").expect("base accepts a model");
+                assert_eq!(pinned.account_id(), Some("acct"));
+                assert_eq!(pinned.model_for_tier(Tier::Frontier).unwrap(), None);
+            }
+            None => assert!(tiered.with_model("m").is_none()),
         }
     }
 

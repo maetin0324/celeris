@@ -1,7 +1,7 @@
 # ADR 2026-10-07: ビルド成果物と /tmp の衛生規則（共有 cargo target の定期掃除・run の TMPDIR・試験の後片付け・ディスク監視）
 
 - 日付: 2026-10-07
-- 状態: 採択（task 01M4B4J92KBR73EQA5S7FWB21G の葉 target-sweep / run-tmpdir / rust-test-tmp / web-e2e-tmp / disk-watch が実装する。disk-watch（D4）は実装済み、末尾の付記）
+- 状態: 実装済み（2026-10-07。task 01M4B4J92KBR73EQA5S7FWB21G の葉 target-sweep / run-tmpdir / rust-test-tmp / web-e2e-tmp / tmp-fix / disk-watch。実装との突き合わせは末尾の付記。有効化は人の操作で、`docs/ops/build-tmp-hygiene.md`）
 - 関連: ADR-0066 D1（worktree 間の cargo キャッシュ共有）、ADR-0074 F5（disk guard `min_free_disk_mb`・WU ごとの target）、
   ADR-0075（scratch pool・lease・`scratch_gc`）、ADR-0131（cron job）、ADR-0133（受信箱と通知）、ADR-0136（/local の配置）、
   ADR-0125（時間依存試験の決定化）、ADR-0001 D2 原則 1（dispatcher・store に LLM を入れない）
@@ -215,3 +215,49 @@
   `Config::disk_watch_entries()` を daemon の起動（bootstrap）と reload（admin）が `Dispatcher::set_disk_watch` に渡す。
 - D1.5: 保守 executor の target sweep が `over_cap_unresolved` のとき `disk:target_sweep` の通知
   （source_key `disk:target_sweep:<task id>`、上限を超えたままの root と大きさを要約に書く）。
+
+## 付記: 実装との突き合わせ（2026-10-07、葉 close-out）
+
+D1〜D4 は実装済み。決定どおりでない所・未実装の所を先に書く。
+
+### 決定と異なる所
+
+- **D1.1 使用時刻**: 項目の使用時刻は file は `max(mtime, atime)`、**dir は mtime のみ**（走査の `read_dir` が atime を進めるため）。
+- **D1.4 手動 CLI**: `celerisctl target sweep` は config を読まない（`--config` なし）。`--root` 省略時は既定の 2 root、
+  規則は `SweepParams::default()`。config の値で計画するのは daemon の cron executor だけ（`set_target_sweep` に起動時・reload で渡す）。
+- **D2.2**: 警告 event `RunTmpCleanupFailed` は**入れていない**（Event 追加は schema 再生成と web の `event-kinds.ts` 等が要るため）。
+  削除失敗は `tracing::warn` のみ。取りこぼしの回収は `scratch_gc` の tick ではなく
+  `task_worker::workspace_prune::prunable_paths`（終端 task の `runs/*/tmp`。`workspace_prune_after_secs` 経過後。0 だと走らない）。
+- **D2.1 bind**: db_guard の namespace は workspace を覆わないので sandbox への追加 bind は不要だった。
+- **D2.4**: harness が `TMPDIR` を `/tmp` に戻さないことを確かめる adapter ごとの試験は無い（grep で claude-code・codex・acp・pi の
+  起動が `TMPDIR` を設定・除去しないことを確認しただけ）。
+- **D3.2 web e2e**: helper は `web/e2e/support/tmp-dir.ts` の `makeTmpDir`（`tmp.ts`/`makeE2eTmpDir` ではない）。作った dir は
+  process の `exit` でも消す。34 file の `mkdtempSync` を置換、各 spec の `afterAll` の `rmSync` は残した。playwright e2e 自体は走らせていない。
+- **D3.3 / D3.5**: `test-parallel.sh` は `TMPDIR=$logdir/tmp`、trap は `chmod -R u+w` の後 `rm -rf`（読み取り専用の試験残骸で
+  `set -e` が落ちたため。失敗は警告のみで exit 不変）。`tmp_leftovers` は標準エラーの警告と summary に出る。
+  「試験の中で TMPDIR を空 dir に向けて終了時に空を確かめる」は試験側に入れず、`scripts/dev/check-test-tmp-leftovers.sh -p <crate>`
+  （空 dir を TMPDIR にして `cargo test`、残りがあれば exit 1）にした。cos_chat 添付試験の 0o500 dir は
+  `task_dispatch::test_support::WritableTempDir`（Drop で権限を戻して消す）で扱う。
+- **D4.2**: 存在しない path は人へ通知せず、状態の行（`unavailable`）と `tracing::warn` のみ。
+
+### 実装の位置
+
+| 決定 | 実装 | 試験 |
+|---|---|---|
+| D1.2 規則の計画 | `crates/task-worker/src/target_sweep.rs`（`plan`・`SweepParams`） | `target_sweep_` 9 件（時計・大きさ注入） |
+| D1.2-4 build 中は消さない・rename→削除 | `crates/task-dispatch/src/target_sweep.rs`（`.cargo-lock` の非 blocking flock、`.deleting-*`） | `target_sweep_skips_profile_with_held_cargo_lock`（実 flock）ほか 6 件 |
+| D1.4 cron | `crates/task-dispatch/src/dispatcher/maintenance.rs`、`config/celeris.example.toml` の seed `target-sweep`（`enabled = false`）、`[maintenance.target_sweep]` | cron 2 件・config 5 件 |
+| D1.4 手動・`release.sh` | `crates/celerisctl/src/commands/target_sweep.rs`、`scripts/selfdeploy/release.sh`（次回 release から有効） | `cli_*` 3 件 |
+| D1.5 記録 | event `TargetSweepRan`（`target_sweep_ran`） | round trip 1 件 |
+| D2 | `crates/task-worker/src/run_tmpdir.rs`、`dispatcher/worker_task.rs`、`preamble::run_tmpdir_note()` | `run_tmpdir_` 10 件 |
+| D3 | `scripts/dev/test-parallel.sh`、`check-test-tmp-leftovers.sh`、`web/e2e/support/tmp-dir.ts`、browser 試験の `record_dir` | 各 crate で `no leftovers`、vitest 2 件 |
+| D4 | 先の付記のとおり | `disk_watch_` 13 件 |
+
+`target_sweep_` は 26 件、`disk_watch_` は 13 件（葉の進捗に所在）。
+
+### 未解決
+
+- `over_cap_unresolved` の通知 `disk:target_sweep` は executor が出す。`TargetSweepRan` に失敗理由欄は無い（`failed` の理由は task の記録）。
+- remote run の TMPDIR、`tmp_sweep`（予約語、実装しない）は範囲外のまま。
+- ADR-0133 の種類一覧（通知 9 種・受信箱 14 種）に `disk`・`disk_full` を足す追記はまだ（本 ADR の付記が唯一の記載）。
+- 本番での有効化・`/tmp` の既存残骸の掃除は人の操作（`docs/ops/build-tmp-hygiene.md`）。

@@ -43,3 +43,10 @@ ADR `agent-docs/adr/2026-10-07-coding-harness-default-pi-hashline.md` の「後�
 - 範囲 check が `crates/celerisctl/src/commands/worker_tests.rs`（`ProviderConfig` の struct literal 5 か所に `extensions`/`tools` を追加）と `crates/task-ops/src/routing_outcome/tests.rs`（`LaneResolution` の literal に `coding_default: None`）を範囲外として落とした。
 - どちらも ADR が定めた欄（provider 行の `extensions`/`tools`、監査の `coding_default`）を struct に足すと、全欄を列挙する既存試験の literal が compile できなくなるための機械的な 1 行修正で、外すと `cargo test --workspace` が build で落ちる。pi-adapter 葉が同じ理由で celeris/celerisctl 配線を差し戻した経緯と同じ。
 - plan_issue として申告: dispatch 葉の範囲 check の許可 pattern に `crates/celerisctl/src/commands/worker_tests.rs` と `crates/task-ops/src/routing_outcome/tests.rs` を加える（新 key の葉で本 branch tip を ff 取り込みさせる）。
+
+## 着地（dispatch-land, 2026-10-07）
+- `git merge --ff-only 508ff227`（base `c4a93ec9` から ff 可。HEAD = 508ff227）。差分は dispatch 葉の 28 file のみ（`git diff --name-only $CELERIS_WU_BASE HEAD` と `c4a93ec9..508ff227` が一致）。
+- check 結果（2026-10-07、land 後）:
+  - `cargo nextest run -p task-dispatch -E 'test(/coding_harness_default/)'` → 12 passed（717 skipped）。
+  - `cargo nextest run -p celeris -p celerisctl -p task-ops` → 1081 passed / 2 skipped / 0 failed。
+  - 修正不要: 明示 adapter 指定・fallback/retry・account pool・OpenCode Go・openai-compatible relay・cheap lane Qwen 優先の挙動は変更なし（land した diff にこれらに影響する差分はないことを file 一覧で確認）。

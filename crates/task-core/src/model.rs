@@ -1725,6 +1725,36 @@ pub enum Event {
         previous: Option<String>,
         actor: String,
     },
+    /// ADR 2026-10-07-browser-trusted-devices D5: 信頼できる端末を登録した。秘密も hash も載せない。
+    /// `trusted_device::trusted_device_event_task_id()` の疑似 task の列に追記する。状態は変えない。
+    TrustedDeviceRegistered {
+        device_id: String,
+        name: String,
+        method: crate::trusted_device::TrustedDeviceMethod,
+        actor: String,
+        expires_at: i64,
+        #[serde(default)]
+        absolute_expires_at: Option<i64>,
+    },
+    /// 同 D5: 登録端末で owner session を作り直した（秘密を回転し期限を延長した）。`expires_at` は延長後。
+    TrustedDeviceUsed {
+        device_id: String,
+        actor: String,
+        expires_at: i64,
+    },
+    /// 同 D5: 端末を失効させた（人の失効か、回転前の秘密の再提示）。
+    TrustedDeviceRevoked {
+        device_id: String,
+        actor: String,
+        reason: crate::trusted_device::TrustedDeviceRevokeReason,
+    },
+    /// 同 D5: 端末の検証・登録を拒否した。`device_id` は実在する id のときだけ（攻撃者が選んだ文字列を書かない）。
+    TrustedDeviceRejected {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        device_id: Option<String>,
+        actor: String,
+        reason: crate::trusted_device::TrustedDeviceRejectReason,
+    },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には
     /// 1 回だけ）。

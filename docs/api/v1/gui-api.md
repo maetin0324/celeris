@@ -727,7 +727,12 @@ subagent の道具（`kind = subagent_tool`）・別の LLM CLI（`llm_cli`）�
 run は止めない。同じ内容は `worker_progress`（`kind = status`・`error = true`・`msg` が `policy: ` で始まる）にも出る。reviewer には
 `ReviewRequest.policy_violations` として渡る（D6）。
 
-`types` の語彙は `task_api::query::EVENT_TYPES`（68 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
+`trusted_device_registered` / `trusted_device_used` / `trusted_device_revoked` / `trusted_device_rejected`
+（ADR 2026-10-07-browser-trusted-devices D5）はブラウザの信頼端末の登録・使用（回転と期限延長）・失効（`reason` = `owner` / `reuse`）・
+拒否（`reason` = `unknown` / `mismatch` / `revoked` / `expired` / `reuse` / `limit`）。task に属さず、疑似 task
+`trusted_device::trusted_device_event_task_id()` の列に入る。端末の秘密も hash も載せない。拒否の `device_id` は実在する id のときだけ。
+
+`types` の語彙は `task_api::query::EVENT_TYPES`（73 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
 `browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、

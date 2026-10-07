@@ -1,7 +1,8 @@
 # ADR 2026-10-07: ブラウザ実行の owner session に「信頼できるデバイス」を入れ、再起動・promote 後も再承認なしで復帰する
 
 - 日付: 2026-10-07
-- 状態: 提案（task 01M4ADMXWYHPSVEJBJ5JPCR6PS。方式 `cookie-then-passkey` と期限 `sliding-90` は計画承認時の人の決定）
+- 状態: 採用（2026-10-07。task 01M4ADMXWYHPSVEJBJ5JPCR6PS。人の決定 `device-method` = 今は cookie・https 化後に passkey を足せる形、
+  `device-policy` = 90 日・使うと延長・絶対上限なし・上限 5 台・使うたびに回転。運用セッションが代理入力し、計画承認時に確認）
 - 関連: ADR 2026-10-05-browser-department-web-live-view D2.1（web の owner session）、ADR-0080 D6（owner grant）、
   ADR-0099・ADR-0113（attestation 署名）、ADR-0135（web release と web-follow）、ADR-0095 付記 D-d（本番操作は人）
 
@@ -34,8 +35,9 @@
 
 ### D1. 端末の秘密の方式: 乱数 cookie（今回）→ passkey（https 化の後）
 
-人の決定 `cookie-then-passkey`。今回は cookie を実装し、WebAuthn passkey は web が https で配られるようになってから
-同じ表に方式の欄を足して追加する（今回は作らない）。
+人の決定 `device-method`（2026-10-07）: 今は cookie（httpOnly・SameSite=Strict・32 byte 乱数・https なら Secure、daemon には
+SHA-256 hash のみ）。表に方式の欄 `method`（今回は `cookie` だけ）を持たせ、web が https で配られるようになってから
+WebAuthn passkey を `method = 'passkey'` の行として足せる形にする（passkey の実装は別 task）。
 
 | | cookie に 32 byte 乱数 | WebAuthn passkey |
 |---|---|---|
@@ -63,10 +65,13 @@
 
 ### D2. 保存: daemon の SQLite に hash だけ。web は daemon token と Ed25519 assertion で呼ぶ
 
-- 表 `browser_trusted_devices`（task-core の migration。版数は store 葉が実装時点の空き番号を使う）:
-  `id`（ULID）、`name`（人が付ける名前、64 文字まで）、`secret_hash`（現行秘密の SHA-256 hex）、
+- 表 `browser_trusted_devices`（task-core の migration 0057。全ブランチを走査し、main 系の 0055・0056 の後の空き番号）:
+  `id`（ULID）、`name`（人が付ける名前、64 文字まで）、`method`（`cookie`。passkey 追加時に `passkey`）、`secret_hash`（現行秘密の SHA-256 hex）、
   `prev_secret_hash`（直前の秘密の hash。再提示検知用。1 世代だけ）、`created_at`、`last_used_at`、`expires_at`、
-  `absolute_expires_at`、`revoked_at`、`revoked_reason`、`actor_id`。
+  `absolute_expires_at`（NULL = 絶対上限なし。人の決定で今回は常に NULL）、`revoked_at`、`revoked_reason`、`actor`。
+  時刻は UNIX 秒。store 関数は `trusted_device_register` / `trusted_device_verify_and_rotate` /
+  `trusted_device_verify_readonly`（probe 用。最終使用も期限も触らない）/ `trusted_device_list` / `trusted_device_revoke`。
+  verify_and_rotate は読み切り→判定→更新を 1 つの IMMEDIATE transaction で行う。
 - **秘密の値は web の外に出さない**。web が `sha256("celeris-device\0" + secret)` を計算し、daemon には hash だけを送る。
   DB・events・log・API の応答・`result.json` のどこにも秘密の値は現れない。hash は秘密ではないが、API の応答にも返さない。
 - 時刻は store に注入した時計で扱い、期限の試験は時計の差し替えで決定的に行う。
@@ -104,15 +109,16 @@
 
 ### D4. 期限・上限・回転・失効
 
-人の決定 `sliding-90` を次のように読む（計画時の推奨どおり）。
+人の決定 `device-policy`（2026-10-07。計画時の推奨 30 日＋絶対 90 日とは異なる）:
 
-- **期限**: 最後の使用から 30 日で失効する。使う（resume が成功する）と `expires_at = min(now + 30 日, absolute_expires_at)` に延長する。
-- **絶対上限**: 登録から 90 日（`absolute_expires_at`）。延長はこれを越えない。越えたら CLI 承認から再登録する。
+- **期限**: 最後の使用から 90 日で失効する。使う（resume が成功する）と `expires_at = now + 90 日` に延長する。
+- **絶対上限**: なし（`absolute_expires_at` は NULL）。欄は残し、値があるときは延長がそれを越えない
+  （`min(now + 90 日, absolute_expires_at)`）。将来方針を変えるときに migration を要さない。
 - **上限数**: 有効（未失効・未期限切れ）な端末は 5 台まで。6 台目の登録は 409 `device_limit` で拒否する。古い端末を黙って追い出さず、人が一覧から失効させる。
 - **回転**: resume のたびに秘密を替える（D3）。登録時の秘密も一度だけ使える。
 - **再提示（使い回し）の検知**: `presented_hash` が現行の `secret_hash` ではなく `prev_secret_hash` と一致したら、盗用か複製とみなす。
   その端末を `revoked_reason = "reuse"` で失効させ、拒否する（web のメモリの owner がその端末由来なら落とす）。
-- **拒否**: 未知の id、hash 不一致、失効済み、期限切れ（`expires_at` / `absolute_expires_at` ≤ now）は 403 `device_rejected`。
+- **拒否**: 未知の id、hash 不一致、失効済み、期限切れ（`expires_at` ≤ now、または `absolute_expires_at` があってそれ ≤ now）は 403 `device_rejected`。
   web は cookie を消す。拒否の理由の区別は events に残し、HTTP 応答では区別しない。
 - **失効**: 一覧から人が失効（`revoked_reason = "owner"`）させる。daemon の行を即時に `revoked_at` にし、web はメモリの owner が
   その `device_id` 由来なら即座に `revoke()`（live の WebSocket も閉じる）。
@@ -126,12 +132,15 @@ daemon が端末の操作を events に追記する（追記専用。秘密も h
 
 | event | 主な欄 |
 |---|---|
-| `browser_trusted_device_registered` | `device_id`, `name`, `actor_id`, `expires_at`, `absolute_expires_at` |
-| `browser_trusted_device_used` | `device_id`, `actor_id`, `expires_at`（延長後） |
-| `browser_trusted_device_revoked` | `device_id`, `actor_id`, `reason`（`owner` / `reuse`） |
-| `browser_trusted_device_rejected` | `device_id`（実在する id のときだけ）, `actor_id`, `reason`（`unknown` / `mismatch` / `revoked` / `expired` / `reuse` / `limit`） |
+| `trusted_device_registered` | `device_id`, `name`, `method`, `actor`, `expires_at`, `absolute_expires_at` |
+| `trusted_device_used` | `device_id`, `actor`, `expires_at`（延長後） |
+| `trusted_device_revoked` | `device_id`, `actor`, `reason`（`owner` / `reuse`） |
+| `trusted_device_rejected` | `device_id`（実在する id のときだけ）, `actor`, `reason`（`unknown` / `mismatch` / `revoked` / `expired` / `reuse` / `limit`） |
 
-- `actor_id` は web の `CELERIS_WEB_OWNER_ID`（既定 `owner`）を claims で受ける。
+- Rust の型は `Event::TrustedDeviceRegistered` / `Used` / `Revoked` / `Rejected`。task に属さないので、疑似 task
+  `trusted_device::trusted_device_event_task_id()` の列に追記する（`ModelCatalogChanged` と同じ扱い）。
+
+- `actor` は web の `CELERIS_WEB_OWNER_ID`（既定 `owner`）を claims で受ける。
 - 実在しない id の拒否は `device_id` を載せない。攻撃者が選んだ文字列を events に書かない。
 - 期限切れは受け身なので、使われたときの `rejected(expired)` だけを残す。
 

@@ -168,6 +168,11 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   model_catalog_changed: { sets: ["llmModels", "providers"] },
   // ADR 2026-10-06 model-role-assignments D2: 役割の割り当ての変更。assignments と models は同じ key 配下（llm-models）。
   model_role_assignment_changed: { sets: ["llmModels", "providers"] },
+  // ADR 2026-10-07-browser-trusted-devices D5: 信頼端末の監査 event（疑似 task の列）。一覧の query は web-ui 葉で足す。
+  trusted_device_registered: { sets: [] },
+  trusted_device_used: { sets: [] },
+  trusted_device_revoked: { sets: [] },
+  trusted_device_rejected: { sets: [] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。

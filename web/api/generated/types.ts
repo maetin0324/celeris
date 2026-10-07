@@ -2154,6 +2154,29 @@ export type Event = {
   "tier": Tier;
   "type": "model_role_assignment_changed";
 } | {
+  "absolute_expires_at"?: number | null;
+  "actor": string;
+  "device_id": string;
+  "expires_at": number;
+  "method": TrustedDeviceMethod;
+  "name": string;
+  "type": "trusted_device_registered";
+} | {
+  "actor": string;
+  "device_id": string;
+  "expires_at": number;
+  "type": "trusted_device_used";
+} | {
+  "actor": string;
+  "device_id": string;
+  "reason": TrustedDeviceRevokeReason;
+  "type": "trusted_device_revoked";
+} | {
+  "actor": string;
+  "device_id"?: string | null;
+  "reason": TrustedDeviceRejectReason;
+  "type": "trusted_device_rejected";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -5281,6 +5304,12 @@ export type TreeView = {
   "repo": string;
   "repos": Array<TreeRepoView>;
 };
+
+export type TrustedDeviceMethod = "cookie";
+
+export type TrustedDeviceRejectReason = "unknown" | "mismatch" | "revoked" | "expired" | "reuse" | "limit";
+
+export type TrustedDeviceRevokeReason = "owner" | "reuse";
 
 export type TrustedLogin = {
   "login_url": string;

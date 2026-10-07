@@ -1055,6 +1055,33 @@ export type Event =
       type: "model_role_assignment_changed";
     }
   | {
+      absolute_expires_at?: number | null;
+      actor: string;
+      device_id: string;
+      expires_at: number;
+      method: TrustedDeviceMethod;
+      name: string;
+      type: "trusted_device_registered";
+    }
+  | {
+      actor: string;
+      device_id: string;
+      expires_at: number;
+      type: "trusted_device_used";
+    }
+  | {
+      actor: string;
+      device_id: string;
+      reason: TrustedDeviceRevokeReason;
+      type: "trusted_device_revoked";
+    }
+  | {
+      actor: string;
+      device_id?: string | null;
+      reason: TrustedDeviceRejectReason;
+      type: "trusted_device_rejected";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -1416,6 +1443,18 @@ export type DeliverySkipReason =
   | "refs_unresolvable"
   | "department_unresolved";
 export type ConflictKind = "Record" | "Migration" | "Adr" | "Generated" | "Code";
+/**
+ * 端末の秘密の方式（D1）。今回は `Cookie` だけ。https 化の後に passkey を足す。
+ */
+export type TrustedDeviceMethod = "cookie";
+/**
+ * 失効の理由（D4）。
+ */
+export type TrustedDeviceRevokeReason = "owner" | "reuse";
+/**
+ * 拒否の理由（D4・D5）。HTTP の応答では区別せず、events にだけ残す。
+ */
+export type TrustedDeviceRejectReason = "unknown" | "mismatch" | "revoked" | "expired" | "reuse" | "limit";
 /**
  * D5: `execution_plans.status`。
  */

@@ -161,6 +161,8 @@ pub mod model_catalog;
 pub mod model_router;
 pub mod pricing;
 pub mod routing;
+/// ADR 2026-10-07-browser-trusted-devices: ブラウザの信頼できる端末（hash のみ・注入した時計）。
+pub mod trusted_device;
 pub use pricing::{estimate_cost_usd, output_input_ratio};
 pub use provider_source::{LlmSourceRef, ProviderKind, ResolvedLlmSource, SourceOrigin};
 pub use routing::{RoutingDecision, RoutingPolicy, RoutingSignals, StaticRoutingPolicy};

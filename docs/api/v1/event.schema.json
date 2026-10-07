@@ -4245,6 +4245,126 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-07-browser-trusted-devices D5: 信頼できる端末を登録した。秘密も hash も載せない。\n`trusted_device::trusted_device_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
+          "properties": {
+            "absolute_expires_at": {
+              "default": null,
+              "format": "int64",
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "actor": {
+              "type": "string"
+            },
+            "device_id": {
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "method": {
+              "$ref": "#/$defs/TrustedDeviceMethod"
+            },
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "const": "trusted_device_registered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "name",
+            "method",
+            "actor",
+            "expires_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 D5: 登録端末で owner session を作り直した（秘密を回転し期限を延長した）。`expires_at` は延長後。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "device_id": {
+              "type": "string"
+            },
+            "expires_at": {
+              "format": "int64",
+              "type": "integer"
+            },
+            "type": {
+              "const": "trusted_device_used",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "actor",
+            "expires_at"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 D5: 端末を失効させた（人の失効か、回転前の秘密の再提示）。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "device_id": {
+              "type": "string"
+            },
+            "reason": {
+              "$ref": "#/$defs/TrustedDeviceRevokeReason"
+            },
+            "type": {
+              "const": "trusted_device_revoked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "device_id",
+            "actor",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "同 D5: 端末の検証・登録を拒否した。`device_id` は実在する id のときだけ（攻撃者が選んだ文字列を書かない）。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "device_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reason": {
+              "$ref": "#/$defs/TrustedDeviceRejectReason"
+            },
+            "type": {
+              "const": "trusted_device_rejected",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "actor",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -7537,6 +7657,63 @@
         "depth"
       ],
       "type": "object"
+    },
+    "TrustedDeviceMethod": {
+      "description": "端末の秘密の方式（D1）。今回は `Cookie` だけ。https 化の後に passkey を足す。",
+      "enum": [
+        "cookie"
+      ],
+      "type": "string"
+    },
+    "TrustedDeviceRejectReason": {
+      "description": "拒否の理由（D4・D5）。HTTP の応答では区別せず、events にだけ残す。",
+      "oneOf": [
+        {
+          "const": "unknown",
+          "description": "未知の端末 id。",
+          "type": "string"
+        },
+        {
+          "const": "mismatch",
+          "description": "hash が現行とも回転前とも一致しない。",
+          "type": "string"
+        },
+        {
+          "const": "revoked",
+          "description": "失効済み。",
+          "type": "string"
+        },
+        {
+          "const": "expired",
+          "description": "期限切れ。",
+          "type": "string"
+        },
+        {
+          "const": "reuse",
+          "description": "回転前の秘密の再提示（この拒否と同時に端末を失効させる）。",
+          "type": "string"
+        },
+        {
+          "const": "limit",
+          "description": "登録の上限超過。",
+          "type": "string"
+        }
+      ]
+    },
+    "TrustedDeviceRevokeReason": {
+      "description": "失効の理由（D4）。",
+      "oneOf": [
+        {
+          "const": "owner",
+          "description": "人が一覧から失効させた。",
+          "type": "string"
+        },
+        {
+          "const": "reuse",
+          "description": "回転前の秘密が再提示された（盗用・複製とみなす）。",
+          "type": "string"
+        }
+      ]
     },
     "TrustedLogin": {
       "additionalProperties": false,

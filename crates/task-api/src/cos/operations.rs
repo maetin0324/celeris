@@ -52,6 +52,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/knowledge/inbox/{id}/reject",
         "knowledge.reject",
     ),
+    (
+        "POST",
+        "/api/v1/chat/attachments/{id}/references",
+        "attachment.reference",
+    ),
 ];
 
 /// Longest path recorded on a rejection (`target_id`); longer input is truncated.
@@ -610,6 +615,17 @@ pub(crate) fn dispatch(
                 raw_id,
                 Some(audit),
             )?)
+        }
+        "attachment.reference" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let input = serde_json::from_value(body).map_err(decode)?;
+            crate::chat::attachments::add_reference_op(
+                store,
+                env.kb_root.clone(),
+                raw_id,
+                input,
+                audit,
+            )
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation"

@@ -274,6 +274,26 @@ fn cos_chat_run_proto_manifest_distinguishes_image_and_file_delivery() {
     assert!(p.contains("読めたと答えず"));
 }
 
+/// ADR cos-chat-home D4: with attachments, the CoS prompt explains how to pin them to a task or a
+/// KB inbox candidate through the references API (wrapped in `/cos/operations`).
+#[test]
+fn cos_chat_attach_handoff_cos_preamble_explains_pin() {
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(chat())));
+    assert!(p.contains("/chat/attachments/<添付 id>/references"), "{p}");
+    assert!(p.contains("/cos/operations"), "{p}");
+    assert!(p.contains("owner_kind は `task`"), "{p}");
+    assert!(p.contains("`knowledge_inbox`"), "{p}");
+    assert!(p.contains("idempotency_key"), "{p}");
+    assert!(p.contains("path を書かない"), "{p}");
+    assert!(p.contains("初めて人に「引き渡し済み」と言う"), "{p}");
+    assert!(p.contains("celerisctl knowledge record --json"), "{p}");
+    // Without attachments there is nothing to pin.
+    let mut bare = chat();
+    bare.attachments.clear();
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(bare)));
+    assert!(!p.contains("/references"), "{p}");
+}
+
 #[test]
 fn cos_chat_run_proto_unsummarized_range_is_explicit() {
     let c = chat();

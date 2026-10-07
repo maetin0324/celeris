@@ -624,6 +624,73 @@ pub fn add_ref_tx(
     Ok(())
 }
 
+/// Where a pinned attachment came from (ADR 2026-10-05 cos-chat-home D4): the original file's
+/// metadata and hash, the chat thread, and the message that carried it with its text (the human's
+/// request). Read from `chat_attachments` / `chat_attachment_refs` / `chat_messages` only, so it
+/// survives the chat run's temporary files and the chat workspace being removed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachmentProvenance {
+    pub attachment_id: String,
+    pub name: String,
+    pub media_type: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+    pub thread_id: String,
+    /// The earliest message that referenced the attachment (`owner_kind='message'`), if any.
+    pub message_id: Option<String>,
+    /// That message's text.
+    pub request_text: Option<String>,
+    /// When the attachment was pinned to the owner (`chat_attachment_refs.created_at`).
+    pub pinned_at: String,
+}
+
+/// Provenance of every attachment pinned to one owner, oldest pin first. Unlike
+/// [`ChatAttachmentStore::list_for_owner`] this keeps rows whose blob was deleted: the hash and
+/// origin stay a record even without the bytes.
+pub fn provenance_for_owner(
+    conn: &Connection,
+    owner_kind: &str,
+    owner_id: &str,
+) -> Result<Vec<AttachmentProvenance>, AttachmentError> {
+    if !matches!(owner_kind, "task" | "knowledge_inbox") || owner_id.is_empty() {
+        return Err(AttachmentError::InvalidPath);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT a.id,a.original_name,a.media_type,a.size_bytes,a.sha256,a.thread_id,r.created_at,\
+         (SELECT m.id FROM chat_attachment_refs mr JOIN chat_messages m ON m.id=mr.owner_id \
+          WHERE mr.attachment_id=a.id AND mr.owner_kind='message' ORDER BY m.created_at,m.seq,m.id LIMIT 1) \
+         FROM chat_attachment_refs r JOIN chat_attachments a ON a.id=r.attachment_id \
+         WHERE r.owner_kind=?1 AND r.owner_id=?2 ORDER BY r.created_at, a.id",
+    )?;
+    let mut rows: Vec<AttachmentProvenance> = stmt
+        .query_map(params![owner_kind, owner_id], |r| {
+            Ok(AttachmentProvenance {
+                attachment_id: r.get(0)?,
+                name: r.get(1)?,
+                media_type: r.get(2)?,
+                size_bytes: r.get::<_, i64>(3)? as u64,
+                sha256: r.get(4)?,
+                thread_id: r.get(5)?,
+                pinned_at: r.get(6)?,
+                message_id: r.get(7)?,
+                request_text: None,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    for row in &mut rows {
+        if let Some(message) = &row.message_id {
+            row.request_text = conn
+                .query_row(
+                    "SELECT text FROM chat_messages WHERE id=?1",
+                    [message],
+                    |r| r.get(0),
+                )
+                .optional()?;
+        }
+    }
+    Ok(rows)
+}
+
 fn valid_id(id: &str) -> bool {
     id.len() == 26 && id.bytes().all(|b| b.is_ascii_alphanumeric())
 }

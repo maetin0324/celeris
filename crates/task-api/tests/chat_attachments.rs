@@ -5,6 +5,7 @@ use axum::http::Request;
 use common::*;
 use serde_json::json;
 use task_core::chat::attachments::ChatAttachmentLimits;
+use task_core::{Status, TaskKind};
 
 const BASE: &str = "/api/v1/chat";
 
@@ -205,11 +206,15 @@ async fn chat_attach_api_preview_delete_and_references() {
             "chat_not_found",
         );
     }
+    // The pin's owner must exist (ADR 2026-10-05 cos-chat-home D4).
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    let task_id = task.id.to_string();
     let reference = send(
         &app,
         post_admin(
             &format!("{BASE}/attachments/{id}/references"),
-            &json!({"owner_kind":"task","owner_id":"task-1","idempotency_key":"ref-1"}),
+            &json!({"owner_kind":"task","owner_id":task_id,"idempotency_key":"ref-1"}),
         ),
     )
     .await;
@@ -218,7 +223,7 @@ async fn chat_attach_api_preview_delete_and_references() {
         &app,
         post_admin(
             &format!("{BASE}/attachments/{id}/references"),
-            &json!({"owner_kind":"task","owner_id":"task-1","idempotency_key":"ref-1"}),
+            &json!({"owner_kind":"task","owner_id":task_id,"idempotency_key":"ref-1"}),
         ),
     )
     .await;
@@ -336,7 +341,22 @@ async fn chat_attach_api_knowledge_inbox_reference() {
         .json();
     let id = created["attachment"]["id"].as_str().expect("id");
     let path = format!("{BASE}/attachments/{id}/references");
-    let body = json!({"owner_kind":"knowledge_inbox","owner_id":"inbox-1","idempotency_key":"ref-knowledge"});
+    task_ops::knowledge::init(&env.knowledge_root).expect("knowledge init");
+    let candidate = task_ops::knowledge::record(
+        &env.knowledge_root,
+        &task_ops::knowledge::RecordRequest {
+            title: "inbox".into(),
+            scope: "environment".into(),
+            tags: vec![],
+            sources: vec!["human:instruction".into()],
+            confidence: None,
+            body: "x".into(),
+            path: Some("environment/servers/inbox.md".into()),
+            op: None,
+        },
+    )
+    .expect("record");
+    let body = json!({"owner_kind":"knowledge_inbox","owner_id":candidate.id,"idempotency_key":"ref-knowledge"});
     let added = send(&app, post_admin(&path, &body)).await;
     assert_eq!(added.status.as_u16(), 200, "{}", added.text());
     assert_eq!(added.json()["owner_kind"], "knowledge_inbox");

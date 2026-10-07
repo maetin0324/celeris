@@ -1979,6 +1979,7 @@ export interface ApiV1Schema {
   integrate: IntegrateBody;
   integrate_result: IntegrateResult;
   knowledge_accept: KnowledgeAcceptBody;
+  knowledge_candidate: KnowledgeCandidate;
   knowledge_inbox: KnowledgeInbox;
   knowledge_page: KnowledgePage;
   knowledge_page_put: KnowledgePagePutBody;
@@ -7430,14 +7431,6 @@ export interface KnowledgeAcceptBody {
   path?: string | null;
 }
 /**
- * `GET /knowledge/inbox`。
- */
-export interface KnowledgeInbox {
-  initialized: boolean;
-  items: KnowledgeCandidate[];
-  root: string;
-}
-/**
  * `_inbox/` の候補 1 件。
  */
 export interface KnowledgeCandidate {
@@ -7463,6 +7456,11 @@ export interface KnowledgeCandidate {
    * `_inbox/<id>.md`。
    */
   path: string;
+  /**
+   * ADR 2026-10-05 cos-chat-home D4: この候補に pin されたチャット添付（`chat_attachment_refs`
+   * owner_kind=`knowledge_inbox`）の原ファイルの出どころ。pin が古い順。添付の保存が無効なら空。
+   */
+  provenance?: KnowledgeCandidateProvenance[];
   scope?: string | null;
   /**
    * `task:<id>` / `message:<id>` / `human` / `url:<…>`（GUI は出典へのリンクにする）。
@@ -7478,6 +7476,47 @@ export interface KnowledgeCandidate {
    */
   target_exists: boolean;
   title: string;
+}
+/**
+ * 候補に pin された原ファイル 1 件の provenance（SQLite の添付・参照・メッセージの表から読む。
+ * チャット run の一時 file やチャットの作業場所を消しても残る）。
+ */
+export interface KnowledgeCandidateProvenance {
+  attachment_id: string;
+  media_type: string;
+  /**
+   * 添付を送ったメッセージ（最初のもの）。メッセージに載せずに pin したなら無い。
+   */
+  message_id?: string | null;
+  /**
+   * 原ファイルの名前（upload 時の名前）。
+   */
+  name: string;
+  /**
+   * pin した時刻（RFC 3339）。
+   */
+  pinned_at: string;
+  /**
+   * そのメッセージの本文（人の依頼本文）。
+   */
+  request_text?: string | null;
+  /**
+   * 原ファイルの中身の sha256（16 進）。
+   */
+  sha256: string;
+  size_bytes: number;
+  /**
+   * 添付を upload したチャットのスレッド。
+   */
+  thread_id: string;
+}
+/**
+ * `GET /knowledge/inbox`。
+ */
+export interface KnowledgeInbox {
+  initialized: boolean;
+  items: KnowledgeCandidate[];
+  root: string;
 }
 /**
  * `GET /knowledge/page`。`crate::docs::DocPage` と同じ形（描画・履歴・etag）。

@@ -207,6 +207,8 @@ pub struct ApiV1Schema {
     pub knowledge_page_put: crate::knowledge::KnowledgePagePutBody,
     pub knowledge_page_result: crate::knowledge::KnowledgePageResult,
     pub knowledge_inbox: crate::knowledge::KnowledgeInbox,
+    // ADR 2026-10-05 cos-chat-home D4: `GET /knowledge/inbox/{id}`（pin された添付の provenance つき）。
+    pub knowledge_candidate: crate::knowledge::KnowledgeCandidate,
     pub knowledge_accept: crate::knowledge::KnowledgeAcceptBody,
     pub knowledge_reject_result: crate::knowledge::KnowledgeRejectResult,
     pub daemon: DaemonView,

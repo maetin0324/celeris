@@ -15114,6 +15114,14 @@
           "description": "`_inbox/<id>.md`。",
           "type": "string"
         },
+        "provenance": {
+          "default": [],
+          "description": "ADR 2026-10-05 cos-chat-home D4: この候補に pin されたチャット添付（`chat_attachment_refs`\nowner_kind=`knowledge_inbox`）の原ファイルの出どころ。pin が古い順。添付の保存が無効なら空。",
+          "items": {
+            "$ref": "#/$defs/KnowledgeCandidateProvenance"
+          },
+          "type": "array"
+        },
         "scope": {
           "type": [
             "string",
@@ -15153,6 +15161,62 @@
         "body",
         "html",
         "target_exists"
+      ],
+      "type": "object"
+    },
+    "KnowledgeCandidateProvenance": {
+      "description": "候補に pin された原ファイル 1 件の provenance（SQLite の添付・参照・メッセージの表から読む。\nチャット run の一時 file やチャットの作業場所を消しても残る）。",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "message_id": {
+          "description": "添付を送ったメッセージ（最初のもの）。メッセージに載せずに pin したなら無い。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "原ファイルの名前（upload 時の名前）。",
+          "type": "string"
+        },
+        "pinned_at": {
+          "description": "pin した時刻（RFC 3339）。",
+          "type": "string"
+        },
+        "request_text": {
+          "description": "そのメッセージの本文（人の依頼本文）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "description": "原ファイルの中身の sha256（16 進）。",
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "thread_id": {
+          "description": "添付を upload したチャットのスレッド。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "attachment_id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "sha256",
+        "thread_id",
+        "pinned_at"
       ],
       "type": "object"
     },
@@ -30020,6 +30084,9 @@
     "knowledge_accept": {
       "$ref": "#/$defs/KnowledgeAcceptBody"
     },
+    "knowledge_candidate": {
+      "$ref": "#/$defs/KnowledgeCandidate"
+    },
     "knowledge_inbox": {
       "$ref": "#/$defs/KnowledgeInbox"
     },
@@ -30502,6 +30569,7 @@
     "knowledge_page_put",
     "knowledge_page_result",
     "knowledge_inbox",
+    "knowledge_candidate",
     "knowledge_accept",
     "knowledge_reject_result",
     "daemon",

@@ -4,6 +4,7 @@
 //! - `GET  /knowledge/page?path=` — 1 ページ（raw / html / front matter / 履歴 / etag）。読み取り
 //! - `PUT  /knowledge/page` — **管理系**。人の編集を 1 件 1 コミット（`etag` 必須）
 //! - `GET  /knowledge/inbox` — `_inbox/` の候補。読み取り
+//! - `GET  /knowledge/inbox/{id}` — 候補 1 件（pin されたチャット添付の provenance つき）。読み取り
 //! - `POST /knowledge/inbox/{id}/accept` / `reject` — **管理系**。取り込み・破棄
 //!
 //! 境界（ADR-0044 D7 / ADR-0047 D1 と同じ規則）:
@@ -43,6 +44,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         .route("/api/v1/knowledge/tree", get(tree))
         .route("/api/v1/knowledge/page", get(page).put(put_page))
         .route("/api/v1/knowledge/inbox", get(inbox))
+        .route("/api/v1/knowledge/inbox/{id}", get(inbox_detail))
         .route("/api/v1/knowledge/inbox/{id}/accept", post(accept))
         .route("/api/v1/knowledge/inbox/{id}/reject", post(reject))
 }
@@ -197,6 +199,49 @@ pub struct KnowledgeCandidate {
     /// `target` の末尾に節として足す（`docs/guides/knowledge.md` 参照）。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
+    /// ADR 2026-10-05 cos-chat-home D4: この候補に pin されたチャット添付（`chat_attachment_refs`
+    /// owner_kind=`knowledge_inbox`）の原ファイルの出どころ。pin が古い順。添付の保存が無効なら空。
+    #[serde(default)]
+    pub provenance: Vec<KnowledgeCandidateProvenance>,
+}
+
+/// 候補に pin された原ファイル 1 件の provenance（SQLite の添付・参照・メッセージの表から読む。
+/// チャット run の一時 file やチャットの作業場所を消しても残る）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct KnowledgeCandidateProvenance {
+    pub attachment_id: String,
+    /// 原ファイルの名前（upload 時の名前）。
+    pub name: String,
+    pub media_type: String,
+    pub size_bytes: u64,
+    /// 原ファイルの中身の sha256（16 進）。
+    pub sha256: String,
+    /// 添付を upload したチャットのスレッド。
+    pub thread_id: String,
+    /// 添付を送ったメッセージ（最初のもの）。メッセージに載せずに pin したなら無い。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
+    /// そのメッセージの本文（人の依頼本文）。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_text: Option<String>,
+    /// pin した時刻（RFC 3339）。
+    pub pinned_at: String,
+}
+
+impl From<task_core::chat::attachments::AttachmentProvenance> for KnowledgeCandidateProvenance {
+    fn from(p: task_core::chat::attachments::AttachmentProvenance) -> Self {
+        Self {
+            attachment_id: p.attachment_id,
+            name: p.name,
+            media_type: p.media_type,
+            size_bytes: p.size_bytes,
+            sha256: p.sha256,
+            thread_id: p.thread_id,
+            message_id: p.message_id,
+            request_text: p.request_text,
+            pinned_at: p.pinned_at,
+        }
+    }
 }
 
 /// `GET /knowledge/inbox`。
@@ -504,34 +549,75 @@ async fn put_page(
 // GET /knowledge/inbox
 // ---------------------------------------------------------------------------
 
+/// 添付の表（チャットと同じ SQLite）を読み取り専用で開く。添付の保存が無効なら `None`。
+fn open_attachment_index(
+    db: Option<&std::path::Path>,
+) -> Result<Option<rusqlite::Connection>, ApiProblem> {
+    let Some(db) = db else {
+        return Ok(None);
+    };
+    let conn =
+        rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .map_err(|e| ApiProblem::internal(format!("attachment index: {e}")))?;
+    conn.busy_timeout(std::time::Duration::from_secs(10))
+        .map_err(|e| ApiProblem::internal(format!("attachment index: {e}")))?;
+    Ok(Some(conn))
+}
+
+fn candidate_provenance(
+    conn: Option<&rusqlite::Connection>,
+    id: &str,
+) -> Result<Vec<KnowledgeCandidateProvenance>, ApiProblem> {
+    let Some(conn) = conn else {
+        return Ok(Vec::new());
+    };
+    task_core::chat::attachments::provenance_for_owner(conn, "knowledge_inbox", id)
+        .map(|rows| rows.into_iter().map(Into::into).collect())
+        .map_err(|e| ApiProblem::internal(format!("attachment provenance: {e}")))
+}
+
+fn candidate_view(
+    root: &std::path::Path,
+    item: ops_kb::InboxItem,
+    provenance: Vec<KnowledgeCandidateProvenance>,
+) -> KnowledgeCandidate {
+    KnowledgeCandidate {
+        html: render_markdown(&item.body, &item.path),
+        target_exists: root.join(&item.target).exists(),
+        id: item.id,
+        path: item.path,
+        title: item.title,
+        tags: item.tags,
+        scope: item.scope,
+        sources: item.sources,
+        confidence: item.confidence,
+        target: item.target,
+        created: item.created,
+        body: item.body,
+        op: item.op.map(|o| o.as_str().to_string()),
+        provenance,
+    }
+}
+
 async fn inbox(
     axum::extract::State(state): axum::extract::State<ApiState>,
     axum::extract::RawQuery(raw): axum::extract::RawQuery,
 ) -> ApiResult {
     no_query(&raw)?;
     let root = root_of(&state)?;
+    let db = state.chat.attachment_db_path.clone();
     let view = state
         .blocking(move |_| {
             let initialized = ops_kb::exists(&root);
             let items = if initialized {
+                let conn = open_attachment_index(db.as_deref())?;
                 ops_kb::inbox_list(&root)
                     .into_iter()
-                    .map(|item| KnowledgeCandidate {
-                        html: render_markdown(&item.body, &item.path),
-                        target_exists: root.join(&item.target).exists(),
-                        id: item.id,
-                        path: item.path,
-                        title: item.title,
-                        tags: item.tags,
-                        scope: item.scope,
-                        sources: item.sources,
-                        confidence: item.confidence,
-                        target: item.target,
-                        created: item.created,
-                        body: item.body,
-                        op: item.op.map(|o| o.as_str().to_string()),
+                    .map(|item| {
+                        let provenance = candidate_provenance(conn.as_ref(), &item.id)?;
+                        Ok(candidate_view(&root, item, provenance))
                     })
-                    .collect()
+                    .collect::<Result<_, ApiProblem>>()?
             } else {
                 Vec::new()
             };
@@ -540,6 +626,31 @@ async fn inbox(
                 initialized,
                 items,
             })
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &view))
+}
+
+// ---------------------------------------------------------------------------
+// GET /knowledge/inbox/{id}
+// ---------------------------------------------------------------------------
+
+async fn inbox_detail(
+    axum::extract::State(state): axum::extract::State<ApiState>,
+    Params(id): Params<String>,
+    axum::extract::RawQuery(raw): axum::extract::RawQuery,
+) -> ApiResult {
+    no_query(&raw)?;
+    let root = root_of(&state)?;
+    let db = state.chat.attachment_db_path.clone();
+    let view = state
+        .blocking(move |_| {
+            // id の境界（`/`・`..` は 403。accept / reject と同じ）。
+            ops_kb::inbox_path(&id).map_err(path_problem)?;
+            let item = ops_kb::inbox_get(&root, &id).ok_or_else(|| candidate_not_found(&id))?;
+            let conn = open_attachment_index(db.as_deref())?;
+            let provenance = candidate_provenance(conn.as_ref(), &item.id)?;
+            Ok(candidate_view(&root, item, provenance))
         })
         .await?;
     Ok(json_response(StatusCode::OK, &view))

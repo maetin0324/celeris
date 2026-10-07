@@ -15,16 +15,23 @@ use serde::{Deserialize, Serialize};
 pub enum AccountAdapter {
     ClaudeCode,
     Codex,
+    /// opencode go の subscription（ADR 2026-10-06 D2）。
+    OpencodeGo,
 }
 
 impl AccountAdapter {
-    pub const ALL: [AccountAdapter; 2] = [AccountAdapter::ClaudeCode, AccountAdapter::Codex];
+    pub const ALL: [AccountAdapter; 3] = [
+        AccountAdapter::ClaudeCode,
+        AccountAdapter::Codex,
+        AccountAdapter::OpencodeGo,
+    ];
 
     /// `"claude-code"` / `"codex"`（設定の `adapter` や API の `?adapter=` と同じ文字列）。
     pub fn as_str(self) -> &'static str {
         match self {
             AccountAdapter::ClaudeCode => "claude-code",
             AccountAdapter::Codex => "codex",
+            AccountAdapter::OpencodeGo => "opencode-go",
         }
     }
 
@@ -33,6 +40,7 @@ impl AccountAdapter {
         match s {
             "claude-code" => Some(AccountAdapter::ClaudeCode),
             "codex" => Some(AccountAdapter::Codex),
+            "opencode-go" => Some(AccountAdapter::OpencodeGo),
             _ => None,
         }
     }
@@ -42,6 +50,7 @@ impl AccountAdapter {
         match self {
             AccountAdapter::ClaudeCode => ".credentials.json",
             AccountAdapter::Codex => "auth.json",
+            AccountAdapter::OpencodeGo => "opencode/auth.json",
         }
     }
 
@@ -50,6 +59,7 @@ impl AccountAdapter {
         match self {
             AccountAdapter::ClaudeCode => "CLAUDE_SECURESTORAGE_CONFIG_DIR",
             AccountAdapter::Codex => "CODEX_HOME",
+            AccountAdapter::OpencodeGo => "XDG_DATA_HOME",
         }
     }
 }
@@ -60,7 +70,80 @@ impl std::fmt::Display for AccountAdapter {
     }
 }
 
-/// 1 つの枠（5 時間 / 7 日）の観測値。
+/// provider 行の `account_pool`（ADR-0024 D2 / ADR 2026-10-06 D2）。
+///
+/// `false` / `true` に加え、pool の adapter 名（`"opencode-go"` 等）を文字列で書ける。`true` は
+/// 「行の adapter と同じ名前の pool」（claude-code / codex）。ACP のように行の adapter が pool の
+/// adapter と一致しない行は、pool の名前を文字列で明示する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccountPoolSetting {
+    /// pool を使わない。
+    #[default]
+    Off,
+    /// 行の adapter と同名の pool。
+    On,
+    /// 名前で指定した pool。
+    Adapter(AccountAdapter),
+}
+
+impl AccountPoolSetting {
+    /// pool を使う行か。
+    pub fn is_on(self) -> bool {
+        !matches!(self, AccountPoolSetting::Off)
+    }
+
+    /// 行の adapter 名 `row_adapter` に対する pool の adapter。`Off` や解決できなければ `None`。
+    pub fn pool_adapter(self, row_adapter: &str) -> Option<AccountAdapter> {
+        match self {
+            AccountPoolSetting::Off => None,
+            AccountPoolSetting::On => AccountAdapter::parse(row_adapter),
+            AccountPoolSetting::Adapter(a) => Some(a),
+        }
+    }
+}
+
+impl From<bool> for AccountPoolSetting {
+    fn from(on: bool) -> Self {
+        if on {
+            AccountPoolSetting::On
+        } else {
+            AccountPoolSetting::Off
+        }
+    }
+}
+
+impl Serialize for AccountPoolSetting {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            AccountPoolSetting::Off => serializer.serialize_bool(false),
+            AccountPoolSetting::On => serializer.serialize_bool(true),
+            AccountPoolSetting::Adapter(a) => serializer.serialize_str(a.as_str()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AccountPoolSetting {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Flag(bool),
+            Name(String),
+        }
+        match Raw::deserialize(deserializer)? {
+            Raw::Flag(on) => Ok(on.into()),
+            Raw::Name(name) => AccountAdapter::parse(&name)
+                .map(AccountPoolSetting::Adapter)
+                .ok_or_else(|| {
+                    serde::de::Error::custom(format!(
+                        "unknown account_pool {name:?} (true, false, \"claude-code\", \"codex\" or \"opencode-go\")"
+                    ))
+                }),
+        }
+    }
+}
+
+/// 1 つの枠（5 時間 / 7 日 / 1 か月）の観測値。
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RateWindow {
     /// 0.0〜1.0（`unifiedWindows.<w>.utilization`）
@@ -76,6 +159,9 @@ pub struct RateLimitObservation {
     pub five_hour: Option<RateWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seven_day: Option<RateWindow>,
+    /// 1 か月窓（opencode go の `monthly`。ADR 2026-10-06 D1）。観測できなければ `None`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_month: Option<RateWindow>,
     /// `rate_limit_info.status`（`allowed` / `allowed_warning` / `rejected` 等。未知の値もそのまま）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
@@ -104,6 +190,7 @@ impl RateLimitObservation {
         let obs = Self {
             five_hour: window("five_hour"),
             seven_day: window("seven_day"),
+            one_month: None,
             status: info
                 .get("status")
                 .and_then(|v| v.as_str())
@@ -145,25 +232,40 @@ impl RateLimitObservation {
         let mut obs = Self {
             five_hour: None,
             seven_day: None,
+            one_month: None,
             status: None,
             resets_at: None,
             observed_at,
         };
         for key in ["primary", "secondary"] {
-            if let Some((window, long)) = limits.get(key).and_then(|w| codex_window(w, observed_at))
+            if let Some((window, kind)) = limits.get(key).and_then(|w| codex_window(w, observed_at))
             {
-                if long {
-                    obs.seven_day = Some(window);
-                } else {
-                    obs.five_hour = Some(window);
+                match kind {
+                    CodexWindowKind::Short => obs.five_hour = Some(window),
+                    CodexWindowKind::Long => obs.seven_day = Some(window),
+                    CodexWindowKind::Month => obs.one_month = Some(window),
                 }
             }
         }
-        (obs.five_hour.is_some() || obs.seven_day.is_some()).then_some(obs)
+        (obs.five_hour.is_some() || obs.seven_day.is_some() || obs.one_month.is_some())
+            .then_some(obs)
     }
 }
 
-fn codex_window(value: &serde_json::Value, observed_at: i64) -> Option<(RateWindow, bool)> {
+/// codex の枠を窓の長さで分けた種別。
+enum CodexWindowKind {
+    /// 1440 分以下（5 時間窓）
+    Short,
+    /// 1440 分超 〜 7 日の 1.5 倍以下（週窓）
+    Long,
+    /// 7 日の 1.5 倍超（月窓）
+    Month,
+}
+
+fn codex_window(
+    value: &serde_json::Value,
+    observed_at: i64,
+) -> Option<(RateWindow, CodexWindowKind)> {
     let used_percent = value
         .get("usedPercent")
         .or_else(|| value.get("used_percent"))?
@@ -196,8 +298,61 @@ fn codex_window(value: &serde_json::Value, observed_at: i64) -> Option<(RateWind
             utilization: used_percent / 100.0,
             resets_at,
         },
-        minutes > 1440,
+        if minutes <= 1440 {
+            CodexWindowKind::Short
+        } else if minutes > 7 * 24 * 60 * 3 / 2 {
+            CodexWindowKind::Month
+        } else {
+            CodexWindowKind::Long
+        },
     ))
+}
+
+/// opencode go の `GET /zen/go/v1/usage` の本文を観測値にする（ADR 2026-10-06 D2）。
+///
+/// `rolling → five_hour`、`weekly → seven_day`、`monthly → one_month`。`percent / 100` を
+/// 0..1 に丸めて utilization にし、`status == "rate-limited"` の窓は 1.0。`resetsAt`（RFC3339）は
+/// Unix 秒にする。窓が無い・解析できない場合はその窓だけ `None`（0 にしない）。
+/// JSON でない、`usage` が無い、どの窓も読めない場合は `Err`。
+pub fn parse_opencode_go_usage(body: &str, now: i64) -> Result<RateLimitObservation, String> {
+    let value: serde_json::Value =
+        serde_json::from_str(body).map_err(|e| format!("usage 応答が JSON ではない: {e}"))?;
+    let usage = value
+        .get("usage")
+        .filter(|u| u.is_object())
+        .ok_or_else(|| "usage 応答に usage が無い".to_owned())?;
+    let window = |name: &str| -> Option<RateWindow> {
+        let w = usage.get(name)?;
+        let percent = w.get("percent")?.as_f64()?;
+        let limited = w.get("status").and_then(|s| s.as_str()) == Some("rate-limited");
+        let resets_at = time::OffsetDateTime::parse(
+            w.get("resetsAt")?.as_str()?,
+            &time::format_description::well_known::Rfc3339,
+        )
+        .ok()?
+        .unix_timestamp();
+        let utilization = if limited || percent.is_nan() {
+            if limited { 1.0 } else { return None }
+        } else {
+            (percent / 100.0).clamp(0.0, 1.0)
+        };
+        Some(RateWindow {
+            utilization,
+            resets_at,
+        })
+    };
+    let obs = RateLimitObservation {
+        five_hour: window("rolling"),
+        seven_day: window("weekly"),
+        one_month: window("monthly"),
+        status: None,
+        resets_at: None,
+        observed_at: now,
+    };
+    if obs.five_hour.is_none() && obs.seven_day.is_none() && obs.one_month.is_none() {
+        return Err("usage 応答にどの窓も読めない".to_owned());
+    }
+    Ok(obs)
 }
 
 #[cfg(test)]
@@ -260,6 +415,16 @@ mod tests {
             Some(AccountAdapter::ClaudeCode)
         );
         assert_eq!(AccountAdapter::parse("codex"), Some(AccountAdapter::Codex));
+        assert_eq!(
+            AccountAdapter::parse("opencode-go"),
+            Some(AccountAdapter::OpencodeGo)
+        );
+        assert_eq!(
+            AccountAdapter::OpencodeGo.credentials_marker(),
+            "opencode/auth.json"
+        );
+        assert_eq!(AccountAdapter::OpencodeGo.env_var(), "XDG_DATA_HOME");
+        assert_eq!(AccountAdapter::ALL.len(), 3);
         assert_eq!(AccountAdapter::parse("fake"), None);
         assert_eq!(
             AccountAdapter::ClaudeCode.credentials_marker(),
@@ -435,5 +600,95 @@ mod tests {
         let empty_limits: serde_json::Value =
             serde_json::from_str(r#"{"type":"token_count","rate_limits":{}}"#).expect("json");
         assert!(RateLimitObservation::from_codex_token_count(&empty_limits, 0).is_none());
+    }
+
+    // ---- opencode go usage（ADR 2026-10-06 D2） ----
+
+    #[test]
+    fn opencode_go_usage_parses_all_three_windows() {
+        let body = r#"{"usage":{"rolling":{"status":"ok","percent":12,"resetsAt":"2026-10-06T12:00:00.000Z"},"weekly":{"status":"ok","percent":40,"resetsAt":"2026-10-08T00:00:00Z"},"monthly":{"status":"ok","percent":55,"resetsAt":"2026-11-01T00:00:00Z"}}}"#;
+        let obs = parse_opencode_go_usage(body, 7).expect("obs");
+        assert_eq!(obs.observed_at, 7);
+        let five = obs.five_hour.expect("five");
+        assert!((five.utilization - 0.12).abs() < 1e-9);
+        assert_eq!(five.resets_at, 1_791_288_000);
+        assert!((obs.seven_day.expect("week").utilization - 0.4).abs() < 1e-9);
+        assert!((obs.one_month.expect("month").utilization - 0.55).abs() < 1e-9);
+    }
+
+    #[test]
+    fn opencode_go_usage_missing_window_is_none_and_rate_limited_is_full() {
+        let body = r#"{"usage":{"rolling":{"status":"rate-limited","percent":80,"resetsAt":"2026-10-06T12:00:00Z"},"weekly":{"status":"ok","percent":"x","resetsAt":"2026-10-08T00:00:00Z"}}}"#;
+        let obs = parse_opencode_go_usage(body, 0).expect("obs");
+        assert_eq!(obs.five_hour.expect("five").utilization, 1.0);
+        assert!(obs.seven_day.is_none(), "unparsable window is unknown");
+        assert!(obs.one_month.is_none());
+        let over = r#"{"usage":{"monthly":{"status":"ok","percent":250,"resetsAt":"2026-11-01T00:00:00Z"}}}"#;
+        assert_eq!(
+            parse_opencode_go_usage(over, 0)
+                .expect("obs")
+                .one_month
+                .expect("m")
+                .utilization,
+            1.0
+        );
+    }
+
+    #[test]
+    fn opencode_go_usage_garbage_is_err() {
+        assert!(parse_opencode_go_usage("not json", 0).is_err());
+        assert!(parse_opencode_go_usage("{}", 0).is_err());
+        assert!(parse_opencode_go_usage(r#"{"usage":{}}"#, 0).is_err());
+    }
+
+    #[test]
+    fn codex_month_window_goes_to_one_month() {
+        let result = serde_json::json!({"rateLimits": {
+            "primary": {"usedPercent": 10, "windowDurationMins": 300, "resetsAt": 100},
+            "secondary": {"usedPercent": 20, "windowDurationMins": 43200, "resetsAt": 900}
+        }});
+        let obs = RateLimitObservation::from_codex_account_limits(&result, 0).expect("obs");
+        assert!(obs.five_hour.is_some() && obs.seven_day.is_none());
+        assert_eq!(obs.one_month.expect("month").resets_at, 900);
+    }
+
+    #[test]
+    fn account_pool_setting_accepts_bool_or_adapter_name() {
+        #[derive(Deserialize)]
+        struct Row {
+            account_pool: AccountPoolSetting,
+        }
+        let parse = |t: &str| toml::from_str::<Row>(t).map(|r| r.account_pool);
+        assert_eq!(
+            parse("account_pool = false").ok(),
+            Some(AccountPoolSetting::Off)
+        );
+        assert_eq!(
+            parse("account_pool = true").ok(),
+            Some(AccountPoolSetting::On)
+        );
+        assert_eq!(
+            parse("account_pool = \"opencode-go\"").ok(),
+            Some(AccountPoolSetting::Adapter(AccountAdapter::OpencodeGo))
+        );
+        assert!(parse("account_pool = \"nope\"").is_err());
+        assert_eq!(
+            AccountPoolSetting::On.pool_adapter("codex"),
+            Some(AccountAdapter::Codex)
+        );
+        assert_eq!(AccountPoolSetting::On.pool_adapter("acp"), None);
+        assert_eq!(
+            AccountPoolSetting::Adapter(AccountAdapter::OpencodeGo).pool_adapter("acp"),
+            Some(AccountAdapter::OpencodeGo)
+        );
+        assert_eq!(
+            serde_json::to_string(&AccountPoolSetting::Adapter(AccountAdapter::OpencodeGo))
+                .expect("json"),
+            "\"opencode-go\""
+        );
+        assert_eq!(
+            serde_json::to_string(&AccountPoolSetting::On).expect("json"),
+            "true"
+        );
     }
 }

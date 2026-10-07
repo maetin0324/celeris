@@ -38,6 +38,14 @@ pub struct AccountsConfig {
     /// 暗黙の既定は入れない（ADR-0025 D1 の検査が `None` を見る）。
     #[serde(default)]
     pub codex_dir: Option<PathBuf>,
+    /// ADR 2026-10-06 D2: opencode go の account pool の根。`<opencode_dir>/<id>/opencode/auth.json` が
+    /// opencode の data dir の形そのままで、worker には `XDG_DATA_HOME=<opencode_dir>/<id>` を渡す。
+    /// 相対なら設定ファイル基準。暗黙の既定は入れない（`None` は「opencode go の pool を使わない」）。
+    #[serde(default)]
+    pub opencode_dir: Option<PathBuf>,
+    /// ADR 2026-10-06 D2: opencode go の利用量 endpoint（`GET`、`Authorization: Bearer`）。試験は偽 HTTP server に向ける。
+    #[serde(default = "default_opencode_go_usage_url")]
+    pub opencode_go_usage_url: String,
     /// 1 アカウントで同時に走らせる run の上限。
     #[serde(default = "default_max_runs_per_account")]
     pub max_runs_per_account: usize,
@@ -56,6 +64,9 @@ impl AccountsConfig {
         if let Some(dir) = &self.codex_dir {
             roots.insert(AccountAdapter::Codex, dir.clone());
         }
+        if let Some(dir) = &self.opencode_dir {
+            roots.insert(AccountAdapter::OpencodeGo, dir.clone());
+        }
         roots
     }
 
@@ -63,10 +74,14 @@ impl AccountsConfig {
         match adapter {
             AccountAdapter::ClaudeCode => self.claude_dir.as_ref(),
             AccountAdapter::Codex => self.codex_dir.as_ref(),
+            AccountAdapter::OpencodeGo => self.opencode_dir.as_ref(),
         }
     }
 }
 
+fn default_opencode_go_usage_url() -> String {
+    "https://opencode.ai/zen/go/v1/usage".to_string()
+}
 fn default_max_runs_per_account() -> usize {
     2
 }
@@ -142,7 +157,11 @@ impl AccountsConfig {
     /// `~` を展開してから、それでも相対なら従来どおり設定ファイルのディレクトリ基準。
     pub(super) fn resolve_paths(&mut self, base: &Path) {
         let home = task_core::home_dir();
-        for slot in [&mut self.claude_dir, &mut self.codex_dir] {
+        for slot in [
+            &mut self.claude_dir,
+            &mut self.codex_dir,
+            &mut self.opencode_dir,
+        ] {
             if let Some(dir) = slot {
                 let expanded = task_core::expand_home(dir, home.as_deref());
                 *slot = Some(if expanded.is_relative() {
@@ -155,9 +174,9 @@ impl AccountsConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
-        if self.claude_dir.is_none() && self.codex_dir.is_none() {
+        if self.claude_dir.is_none() && self.codex_dir.is_none() && self.opencode_dir.is_none() {
             return Err(ConfigError::Invalid(
-                "[accounts] requires at least one of claude_dir / codex_dir".into(),
+                "[accounts] requires at least one of claude_dir / codex_dir / opencode_dir".into(),
             ));
         }
         if self.max_runs_per_account == 0 {

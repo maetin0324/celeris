@@ -712,7 +712,7 @@ pub struct AccountView {
     pub usage: Option<AccountUsageView>,
     /// ADR-0024 D3 のスコア。除外なら `null`。
     pub score: Option<f64>,
-    /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "rejected"`。
+    /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
     pub excluded_reason: Option<String>,
     pub cooldown: Option<AccountCooldownView>,
     pub last_check: Option<task_ops::daemon::ProviderCheckView>,
@@ -726,6 +726,9 @@ pub struct AccountView {
 pub struct AccountUsageView {
     pub five_hour: Option<RateWindowView>,
     pub seven_day: Option<RateWindowView>,
+    /// 1 か月窓（opencode go）。観測できなければ `null`（画面では『不明』。0 にしない）。
+    #[serde(default)]
+    pub one_month: Option<RateWindowView>,
     pub status: Option<String>,
     pub observed_at: String,
     /// `"run" | "check"`。

@@ -19,9 +19,25 @@ REF = re.compile(r'@e[0-9]+\Z')
 NAME = re.compile(r'(extract|screenshot|download)-[a-f0-9]{32}\.(json|png|bin)\Z')
 
 
-def allowed_host(host):
-    return any(host.endswith(domain[1:]) if domain.startswith('*.') else host == domain
-               for domain in CONFIG['allowed_domains'])
+def allowed_origin(url):
+    """task-core origin containment: scheme and port match, `*.base` admits subdomains only."""
+    try:
+        port = url.port or {'https': 443, 'http': 80}.get(url.scheme)
+    except ValueError:
+        return False
+    host = url.hostname or ''
+    if not host or host.startswith('*.') or port is None:
+        return False
+    for domain in CONFIG['allowed_domains']:
+        scheme, _, authority = domain.partition('://')
+        base, sep, dport = ('', '', '') if authority.endswith(']') else authority.rpartition(':')
+        if not sep:
+            base, dport = authority, '443' if scheme == 'https' else '80'
+        base = base.strip('[]')
+        if (scheme == url.scheme and int(dport) == port
+                and (host.endswith(base[1:]) if base.startswith('*.') else host == base)):
+            return True
+    return False
 
 
 def command(request):
@@ -37,7 +53,7 @@ def command(request):
             raise ValueError()
         url = urlsplit(args[0])
         if (url.scheme not in ('http', 'https') or not url.hostname or url.username or url.password
-                or url.query or url.fragment or '\\' in args[0] or not allowed_host(url.hostname)):
+                or url.query or url.fragment or '\\' in args[0] or not allowed_origin(url)):
             raise ValueError()
         action = ['open', args[0]]
     elif verb in ('click', 'extract', 'download'):

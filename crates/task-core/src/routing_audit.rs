@@ -97,6 +97,9 @@ pub struct RoutingAudit {
     /// Phase 3: outcome の状態。dispatch の `RoutingDecided` も outcome も無い run は None。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome_state: Option<RoutingOutcomeState>,
+    /// ADR 2026-10-07: coding の既定ハーネス解決（`RoutingDecided.resolution.coding_default`）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding_default: Option<crate::model_routing::CodingDefaultResolution>,
 }
 
 impl RoutingAudit {
@@ -177,6 +180,7 @@ pub fn routing_audit(task: &Task, events: &[Event]) -> Vec<RoutingAudit> {
                     a.model = Some(record.resolution.model_id.clone());
                 }
                 a.reasoning_effort = record.resolution.reasoning_effort.clone();
+                a.coding_default = record.resolution.coding_default.clone();
                 a.features = Some(record.decision.features);
                 a.rule_id = Some(record.decision.rule_id.clone());
                 a.policy_version = Some(record.decision.policy_version.clone());
@@ -297,6 +301,7 @@ mod tests {
                 model_id: "model-std".into(),
                 reasoning_effort: Some("medium".into()),
                 selection: None,
+                coding_default: None,
             },
             quota_reason: None,
             work_unit_id: None,

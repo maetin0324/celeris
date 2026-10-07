@@ -246,6 +246,9 @@ fn browser_fallback_dispatcher(dir: &Path, secondary_concurrency: usize) -> Brow
         0,
     );
     task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     store.insert(&task).unwrap();
     let sessions = Arc::new(StdMutex::new(Vec::new()));
     let primary: Arc<dyn WorkerAdapter> = Arc::new(BrowserFallbackHarness {

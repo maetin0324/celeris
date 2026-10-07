@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -191,6 +206,9 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
+        },
         "role": {
           "description": "ADR-0016 D1 / M10: 子の役割名（任意）。",
           "type": [
@@ -277,6 +295,22 @@
           "type": "string"
         }
       ]
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "Tier": {
       "description": "DESIGN §5.4 の `WorkerHint`。",

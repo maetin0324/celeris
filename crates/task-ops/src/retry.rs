@@ -104,6 +104,7 @@ pub fn retry_task_with_execution(
         r
     });
     let new_task = Task {
+        requirements: original.requirements.clone(),
         tree: None,
         paused_at: None,
         routing,

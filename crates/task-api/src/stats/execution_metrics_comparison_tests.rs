@@ -8,6 +8,7 @@ fn task(status: Status, genre: &str, age: i64) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc() - time::Duration::seconds(age);
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         id,

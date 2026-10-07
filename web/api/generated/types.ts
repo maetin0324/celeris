@@ -70,6 +70,7 @@ export type AccountStats = {
 export type AccountUsageLive = {
   "five_hour"?: RateWindow | null;
   "observed_at": number;
+  "one_month"?: RateWindow | null;
   "seven_day"?: RateWindow | null;
   "source": string;
   "status"?: string | null;
@@ -78,6 +79,7 @@ export type AccountUsageLive = {
 export type AccountUsageView = {
   "five_hour"?: RateWindowView | null;
   "observed_at": string;
+  "one_month"?: RateWindowView | null;
   "seven_day"?: RateWindowView | null;
   "source": string;
   "status"?: string | null;
@@ -116,6 +118,17 @@ export type ActualWriteSetView = {
   "recorded_at": string;
   "repo_id": string;
   "status": string;
+};
+
+export type AdapterChoice = {
+  "kind": "explicit";
+} | {
+  "kind": "preferred";
+} | {
+  "kind": "fallback";
+  "reason": string;
+} | {
+  "kind": "provider_order";
 };
 
 export type AdoptRequest = {
@@ -251,6 +264,33 @@ export type ArtifactView = {
   "ts": string;
 };
 
+export type AssignmentList = {
+  "effective": Array<RoleSlotView>;
+  "items": Array<EffectiveAssignmentView>;
+};
+
+export type AssignmentPreviewBody = {
+  "model_id"?: string | null;
+  "source": string;
+  "tier": Tier;
+};
+
+export type AssignmentPreviewResponse = {
+  "impact": ImpactView;
+};
+
+export type AssignmentPutBody = {
+  "model_id": string;
+  "note"?: string | null;
+};
+
+export type AssignmentPutResponse = {
+  "impact": ImpactView;
+  "item": EffectiveAssignmentView;
+};
+
+export type AssignmentStateView = "assigned" | "excluded";
+
 export type AttentionItem = {
   "at": string;
   "class": FailureClass;
@@ -355,6 +395,9 @@ export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "scr
 export type BrowserCapability = {
   "allowed_actions"?: Array<BrowserAction> | null;
   "allowed_domains": Array<string>;
+  "credential_identity_ids"?: {
+  [key: string]: string;
+};
   "credential_policy_ids"?: Array<string>;
   "live_view_url"?: string | null;
 };
@@ -396,6 +439,10 @@ export type BrowserRequestResult = {
   "wait": BrowserWait;
 };
 
+export type BrowserRequirements = {
+  "allowed_domains": Array<string>;
+};
+
 export type BrowserRevokeBody = {
   "attestation": HumanAttestation;
   "expected_version": number;
@@ -412,6 +459,16 @@ export type BrowserRun = {
 };
 
 export type BrowserRunState = "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
+
+export type BrowserSettingsPatch = {
+  "allowed_domains"?: Array<string> | null;
+  "budget"?: BudgetPrefs | null;
+  "credential_identity_ids"?: {
+  [key: string]: string;
+} | null;
+  "credential_policy_ids"?: Array<string> | null;
+  "harnesses"?: HarnessPrefs | null;
+};
 
 export type BrowserWait = {
   "approval_id"?: string | null;
@@ -503,6 +560,13 @@ export type CatalogCapabilitiesView = {
   "vision"?: boolean | null;
 };
 
+export type CatalogDelta = {
+  "added": Array<string>;
+  "removed": Array<string>;
+  "restored": Array<string>;
+  "source": string;
+};
+
 export type CatalogDeploymentView = {
   "allowed_lanes": Array<Tier>;
   "billing": Billing;
@@ -522,6 +586,8 @@ export type CatalogModelView = {
   "quality"?: Array<QualityIndex> | null;
   "revision": string;
 };
+
+export type CatalogSource = string;
 
 export type ChangeDiffView = {
   "diff": string;
@@ -1026,6 +1092,12 @@ export type ClusterView = {
 
 export type Clusters = {
   "items": Array<ClusterView>;
+};
+
+export type CodingDefaultResolution = {
+  "adapter_choice": AdapterChoice;
+  "family": ModelFamily;
+  "family_basis": FamilyBasis;
 };
 
 export type CommentAuthorKind = "human" | "node" | "system";
@@ -1707,6 +1779,31 @@ export type DiffStat = {
   "files": number;
 };
 
+export type DiscoverBody = {
+  "source"?: string | null;
+};
+
+export type DiscoverResponse = {
+  "results": Array<DiscoverySummaryView>;
+  "unavailable": boolean;
+};
+
+export type DiscoveryRecordView = {
+  "at": string;
+  "count": number;
+  "error"?: string | null;
+  "ok": boolean;
+  "source": string;
+};
+
+export type DiscoverySummaryView = {
+  "count": number;
+  "delta": CatalogDelta;
+  "error"?: string | null;
+  "ok": boolean;
+  "source": string;
+};
+
 export type DocCommit = {
   "at": string;
   "author": string;
@@ -1783,6 +1880,18 @@ export type DraftGroup = {
 export type EditResult = {
   "fields": Array<string>;
   "task": Task;
+};
+
+export type EffectiveAssignmentView = {
+  "excluded_reason"?: string | null;
+  "model_id": string;
+  "note"?: string | null;
+  "priority": number;
+  "source": string;
+  "state": AssignmentStateView;
+  "tier": Tier;
+  "updated_at": string;
+  "updated_by": string;
 };
 
 export type EffectiveProfile = {
@@ -1979,6 +2088,13 @@ export type Event = {
   "tool"?: string | null;
   "truncated"?: boolean;
   "type": "worker_progress";
+} | {
+  "command": string;
+  "kind": ToolPolicyKind;
+  "matched": string;
+  "run_id": string;
+  "tool": string;
+  "type": "worker_policy_violation";
 } | {
   "artifact": ArtifactRef;
   "run_id": string;
@@ -2350,6 +2466,19 @@ export type Event = {
   "request_id": string;
   "type": "integration_answered";
 } | {
+  "added"?: Array<string>;
+  "removed"?: Array<string>;
+  "restored"?: Array<string>;
+  "source": string;
+  "type": "model_catalog_changed";
+} | {
+  "actor": string;
+  "model_id"?: string | null;
+  "previous"?: string | null;
+  "source": string;
+  "tier": Tier;
+  "type": "model_role_assignment_changed";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -2416,6 +2545,7 @@ export type ExecutionChildSpec = {
   "genre"?: string | null;
   "key": string;
   "objective": string;
+  "requirements"?: TaskRequirements;
   "skills"?: Array<string>;
   "title": string;
 };
@@ -2624,6 +2754,8 @@ export type FailureSummary = {
   "reason": string;
 };
 
+export type FamilyBasis = "llm_source" | "account_pool" | "model_profile" | "unknown";
+
 export type FeatureStage = "dispatch" | "proxy";
 
 export type FileDiffStat = {
@@ -2713,6 +2845,21 @@ export type HumanInboxView = {
   "suppressed": {
   [key: string]: number;
 };
+};
+
+export type ImpactChangeView = {
+  "after"?: string | null;
+  "before"?: string | null;
+  "excluded_reason"?: string | null;
+  "id": string;
+  "kind": ImpactKind;
+  "tier": string;
+};
+
+export type ImpactKind = "provider" | "proxy";
+
+export type ImpactView = {
+  "changes": Array<ImpactChangeView>;
 };
 
 export type InFlight = {
@@ -3006,6 +3153,7 @@ export type LaneDecision = {
 export type LaneResolution = {
   "account"?: string | null;
   "adapter"?: string;
+  "coding_default"?: CodingDefaultResolution | null;
   "lane"?: Tier | null;
   "model_id"?: string;
   "provider"?: string | null;
@@ -3282,6 +3430,38 @@ export type ModelBinding = {
   "unavailable_reason"?: string | null;
 };
 
+export type ModelCatalogItem = {
+  "assigned_tiers": Array<Tier>;
+  "available": boolean;
+  "capabilities": unknown;
+  "display_name"?: string | null;
+  "first_seen": string;
+  "last_seen": string;
+  "model_id": string;
+  "override"?: ModelCatalogOverrideView | null;
+  "routing": ModelCatalogRoutingView;
+  "source": string;
+};
+
+export type ModelCatalogOverrideView = {
+  "alias"?: string | null;
+  "disabled"?: boolean;
+  "note"?: string | null;
+  "tier"?: Tier | null;
+};
+
+export type ModelCatalogRoutingView = {
+  "deployments": Array<string>;
+  "tiers": Array<string>;
+};
+
+export type ModelCatalogView = {
+  "items": Array<ModelCatalogItem>;
+  "last_discovery": Array<DiscoveryRecordView>;
+};
+
+export type ModelFamily = "claude" | "gpt" | "qwen" | "other" | "unknown";
+
 export type ModelPrefs = {
   "allowed_tiers"?: Array<Tier>;
   "tier"?: Tier | null;
@@ -3342,6 +3522,7 @@ export type NewTaskBody = {
   "priority"?: PriorityInput | null;
   "project_id"?: ProjectId | null;
   "repos"?: Array<string>;
+  "requirements"?: TaskRequirements;
   "role"?: string | null;
   "skills"?: Array<string>;
   "stages_hint"?: Array<StageHint>;
@@ -3688,6 +3869,7 @@ export type PlanUnitSpec = {
   "objective": string;
   "outputs"?: Array<string>;
   "repos"?: Array<string>;
+  "requirements"?: TaskRequirements;
   "skills"?: Array<string>;
   "stage": string;
   "title": string;
@@ -4051,7 +4233,7 @@ export type QuotaUse = {
   "window": QuotaWindow;
 };
 
-export type QuotaWindow = "five_hour" | "seven_day";
+export type QuotaWindow = "five_hour" | "seven_day" | "one_month";
 
 export type QuotaWindowUse = {
   "after"?: number | null;
@@ -4490,6 +4672,35 @@ export type RoleConfigView = {
   "tier"?: Tier | null;
 };
 
+export type RoleMember = {
+  "model_id": string;
+  "priority": number;
+  "source": CatalogSource;
+};
+
+export type RoleMembersBody = {
+  "members": Array<RoleMember>;
+};
+
+export type RoleMembersResponse = {
+  "after": Array<RoleMember>;
+  "before": Array<RoleMember>;
+  "impact": ImpactView;
+};
+
+export type RoleSlotView = {
+  "available"?: boolean | null;
+  "excluded_reason"?: string | null;
+  "last_seen"?: string | null;
+  "model_id"?: string | null;
+  "origin"?: SlotOrigin | null;
+  "priority": number;
+  "providers": Array<string>;
+  "proxy": boolean;
+  "source": string;
+  "tier": Tier;
+};
+
 export type RollupMetrics = {
   "busy_ms": number;
   "child_tasks_done": number;
@@ -4693,6 +4904,7 @@ export type RunRoutingAudit = {
   "actual_sources"?: Array<ActualSource>;
   "adapter"?: string | null;
   "audit_incomplete"?: boolean | null;
+  "coding_default"?: CodingDefaultResolution | null;
   "cost_usd"?: number | null;
   "decision_id"?: string | null;
   "escalation"?: string | null;
@@ -4976,6 +5188,8 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
+export type SlotOrigin = "assignment" | "config";
+
 export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
@@ -5051,6 +5265,7 @@ export type Task = {
   "priority": number;
   "project_id"?: ProjectId | null;
   "repos"?: Array<RepoRef>;
+  "requirements"?: TaskRequirements;
   "role"?: string | null;
   "routing"?: TaskRouting | null;
   "skills"?: Array<string>;
@@ -5212,6 +5427,10 @@ export type TaskRef = {
   "kind": TaskKind;
   "status": Status;
   "title": string;
+};
+
+export type TaskRequirements = {
+  "browser"?: BrowserRequirements | null;
 };
 
 export type TaskRouting = {
@@ -5376,6 +5595,8 @@ export type TokenPricing = {
   "output_usd_per_million"?: number | null;
   "provenance": string;
 };
+
+export type ToolPolicyKind = "subagent_tool" | "llm_cli" | "llm_api";
 
 export type TransitionResult = {
   "cascaded"?: Array<TaskRef>;

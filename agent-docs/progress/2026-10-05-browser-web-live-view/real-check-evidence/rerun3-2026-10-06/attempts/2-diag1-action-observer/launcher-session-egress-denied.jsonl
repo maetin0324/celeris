@@ -1,0 +1,4 @@
+{"at":"2026-10-06T09:17:05.372050327Z","kind":"malformed","session_id":"b9a10d736badb0f08aae03c57bffe753"}
+{"at":"2026-10-06T09:17:05.374693926Z","host":"redirector.gvt1.com","kind":"not_allowed","port":443,"session_id":"b9a10d736badb0f08aae03c57bffe753"}
+{"at":"2026-10-06T09:17:05.491789949Z","host":"update.googleapis.com","kind":"not_allowed","port":443,"session_id":"b9a10d736badb0f08aae03c57bffe753"}
+{"at":"2026-10-06T09:17:05.630623493Z","host":"www.google.com","kind":"not_allowed","port":443,"session_id":"b9a10d736badb0f08aae03c57bffe753"}

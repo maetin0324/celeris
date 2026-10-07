@@ -102,16 +102,18 @@ fn a_work_genre_is_shown_right_after_the_brief_when_present() {
     assert!(!render(&no_node, "artifacts").contains("あなたの仕事で使う道具"));
 }
 
-/// 空の `RunContext` では前置きは「成果物の置き場所」と「本番 host の操作」の節だけ（ADR-0067 D1 と
-/// ADR-0095 付記 D-d。Phase 23〜110 の出力は空文字だったが、この 2 節は context に関わらず常に出る）。
+/// 空の `RunContext` では前置きは「成果物の置き場所」「本番 host の操作」「道具の起動の制約」の節だけ（ADR-0067 D1、
+/// ADR-0095 付記 D-d、ADR 2026-10-07-worker-no-subagents-no-llm-cli D4。Phase 23〜110 の出力は空文字だったが、
+/// この 3 節は context に関わらず常に出る）。
 #[test]
 fn an_empty_context_renders_only_the_deliverables_placement_note() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
 }
@@ -132,6 +134,35 @@ fn production_host_changes_are_declared_as_a_human_procedure() {
     assert!(out.contains("~/.local/celeris/releases"), "{out}");
     assert!(out.contains("`/local`"), "{out}");
     assert!(out.contains("/local/celeris/state/releases"), "{out}");
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D4: worker の前置きには常に「subagent・別の LLM の CLI や API を
+/// 自分で起動しない。並列化は計画か人への質問で」の規則が入る（空の context でも、満杯の context でも）。
+#[test]
+fn the_tool_launch_policy_rule_is_always_in_the_preamble() {
+    for context in [RunContext::default(), full_context()] {
+        let out = render(&context, "artifacts");
+        assert!(
+            out.contains("## 道具の起動の制約 (no subagents, no other LLM CLIs)"),
+            "{out}"
+        );
+        assert!(
+            out.contains("subagent・並列 agent・別の LLM の CLI"),
+            "{out}"
+        );
+        assert!(
+            out.contains("`claude`・`codex`・`opencode`・`gemini`"),
+            "{out}"
+        );
+        assert!(out.contains("api.anthropic.com"), "{out}");
+        assert!(
+            out.contains(
+                "計画（execution plan の子 task / WorkUnit）、`delegate.json`、人への質問で行う"
+            ),
+            "{out}"
+        );
+        assert_eq!(out.matches("## 道具の起動の制約").count(), 1, "{out}");
+    }
 }
 
 /// ADR-0044 D2（Phase 53）: コメントの節は**前置きの先頭**。人の割り込みがいちばん先に来て、
@@ -220,9 +251,10 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     assert_eq!(
         render(&with_instructions, "artifacts"),
         format!(
-            "## Role: lead\nYou coordinate.\n\n{}{}",
+            "## Role: lead\nYou coordinate.\n\n{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
     let bare = RunContext {
@@ -235,9 +267,10 @@ fn a_role_only_context_renders_exactly_the_old_role_section() {
     assert_eq!(
         render(&bare, "artifacts"),
         format!(
-            "## Role: lead\n\n{}{}",
+            "## Role: lead\n\n{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
 }
@@ -280,9 +313,10 @@ fn conversation_runs_get_a_reply_only_instruction_appended_at_the_end() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
 }
@@ -327,10 +361,35 @@ fn secretary_instructions_tell_cos_to_route_cluster_work_via_create_task() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
+    );
+}
+
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): CoS の `create_task`
+/// action の説明に「browser 子 task の origin は最小・親を超えない」規則と例
+/// `https://billing.example.com` が出る。
+#[test]
+fn browser_allowed_domains_prompt_cos_create_task_has_minimal_origin_rule() {
+    let secretary = RunContext {
+        conversation_addressee: Some(ConversationAddressee::Secretary),
+        ..RunContext::default()
+    };
+    let out = render(&secretary, "artifacts");
+    assert!(
+        out.contains("requirements.browser.allowed_domains"),
+        "{out}"
+    );
+    assert!(
+        out.contains("https://billing.example.com"),
+        "missing example origin in:\n{out}"
+    );
+    assert!(
+        out.contains("部署の browser grant 全体をコピーしないでください"),
+        "missing parent-scope rule in:\n{out}"
     );
 }
 
@@ -641,9 +700,10 @@ fn recent_work_is_shown_right_after_memory_and_before_conversation() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
 }
@@ -873,9 +933,10 @@ fn the_knowledge_section_lists_the_index_of_every_mount_kind() {
     assert_eq!(
         render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             deliverables_placement_note(),
-            production_host_note()
+            production_host_note(),
+            tool_launch_policy_note()
         )
     );
 }

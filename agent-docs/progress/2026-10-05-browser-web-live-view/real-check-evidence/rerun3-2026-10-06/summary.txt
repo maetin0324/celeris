@@ -1,0 +1,73 @@
+Fable rerun 3 of the browser web Live View real check, 2026-10-06, tree HEAD d750b121 (task 01M46W97H391DSFW1XJ745W0G9).
+Isolation: test daemon (127.0.0.1:17728, DB /var/tmp/cb-1001/test.sqlite3, HOME=/var/tmp/cb-1001/home), separate test
+launcher as celeris-browser via sudo -n with root-owned /var/tmp/celeris-browser-config-1001/launcher.toml containing
+test_loopback_allow = ["127.0.0.1:17730"] (exactly PAGE_PORT; the script checked the exact match and the launcher logged
+"test-only loopback egress enabled: 127.0.0.1:17730 (not for production)"). Loopback pages 17730/17731, live fixture 17732,
+web gateway 17729. Production daemon pid 639460 (7710), production web (7720/7721), production launcher pid 3335880
+(/etc/celeris-browser/launcher.toml, no test_loopback_allow) and /run/celeris-browser/launcher.sock, ~/.config/celeris and
+/local/celeris/data/db untouched. After the run: no test process or port left, /var/tmp/cb-1001,
+/var/tmp/celeris-browser-config-1001 and the diag source copy /var/tmp/fable-rerun3-src removed; the configs in config/
+were copied BEFORE deletion. /tmp/celeris-browser-1001 is a per-UID dir that already existed before this run (other
+daemons of this UID use it); it was left in place and is empty. Secrets (api.token, web.password, attestation key) were
+never copied; copied logs were grepped for the token and password (no hit).
+
+Test-only egress allowance review (code at d750b121): off unless test_loopback_allow is set in the root-owned launcher
+config; entries must be exactly 127.0.0.1:<port> (not 0/53/853); the launcher refuses to start with it if its config path is
+/etc/celeris-browser/launcher.toml, its (activated) socket is /run/celeris-browser/launcher.sock or its state_dir overlaps
+/var/lib/celeris-browser; a session gets only the intersection with its own allowed origins; a daemon that reads the
+production config or production DB/token (or cannot decide) asks the launcher via hello and refuses a launcher that
+reports any test allowance. Enabled here only in the test launcher config above.
+
+Result: FAIL (exit 1 as documented; exit 1 after 2 diagnostic attempts).
+
+Per check (attempt 1 unpatched; attempt 4 identical for these):
+- run list: PASS. /browser/runs shows a RUNNING run, live_path=/browser/live/{task}/{run}, no raw live_view_url.
+- Live View auth: PASS. authenticated owner GET 200; unauthenticated GET 401 and WS upgrade "HTTP/1.1 401 Rejected";
+  second logged-in session is not owner (isOwner=false), its GET 403 and WS upgrade "HTTP/1.1 403 Rejected".
+- gateway survives client RST: PASS (R2 fixed). The script closes each rejected upgrade with unread bytes; web.log shows the
+  gateway kept serving (next requests 200), no ECONNRESET crash.
+- lease acquire/return: PASS. pause -> paused (from agent_running), takeover -> human_control, release 200.
+- input: PASS. with lease the marked input_mouse frame reached the upstream fixture (live-upstream-frames.jsonl); without a
+  lease input_denied/lease_required and 0 upstream frames, both while the agent ran and after release.
+- waits: PASS. wait open 201 (origin https://real-check.celeris.invalid), listed pending, web deny 200.
+- settings edit: PASS (R1 fixed). gateway PATCH /api/org/browser-execution/browser-settings widen 200 (both origins),
+  javascript:alert(1) 422, restore 200, daemon GET /api/v1/org stores [http://127.0.0.1:17730].
+- cleanup: PASS (R4 fixed). launcher.sock and web-private/owner.sock were gone after each attempt.
+- allowed loopback navigation + screenshot: FAIL. The run's open of http://127.0.0.1:17730/ failed in 0.2 s; page.log has
+  only the script's readiness GET, so the script stopped before Playwright: no allowed-page.png exists.
+- out-of-scope origin denial record: FAIL. No egress-denied.json content (the file was created empty by the script's
+  redirect). denied-page.log has no GET (17731 never contacted). The launcher session record
+  (attempts/*/launcher-session-egress-denied.jsonl) only has Chrome background hosts (not_allowed) and kind=malformed.
+
+Cause (diagnostics, precise):
+- attempt 2 (read-only inotify observer of the launcher action request/result files, nothing else changed): agent-browser
+  answered {"error":"Action 'launch' denied by policy: Action 'launch' is not in the allow list","success":false}.
+  The launcher writes the session policy.json from SessionPolicy.allowed_actions via action_name() and
+  browser_launcher_run::session_policy() drops "launch" (no Verb), so policy.json is
+  {"allow":["click","close","gettext","navigate","scroll","snapshot"]} while the daemon-side policy has "launch".
+  agent-browser 0.38.1 needs "launch" to attach to the launcher's CDP endpoint, so EVERY launcher-runtime action fails.
+  This was also the real first failure in rerun 2 (it was blamed on egress there). CODE defect
+  (crates/task-worker/src/browser_launcher/backend.rs policy.json write; browser_launcher_run.rs session_policy).
+- attempt 4 (only change: launcher patched to append "launch", commands/diag2-launcher.patch): the navigate now reaches
+  Chrome and fails with net::ERR_HTTP_RESPONSE_CODE_FAILURE; the egress records kind=malformed with no host/port at
+  09:19:29.870, inside the navigate window (request 09:19:29.489, reply 09:19:29.900). The egress
+  (crates/task-worker/src/browser_egress.rs) accepts only "CONNECT host:port HTTP/1.1"; Chrome sends a plain http:// page
+  to its HTTP proxy as an absolute-form GET, which the egress refuses as malformed. test_loopback_allow is checked only for
+  a CONNECT authority, so it can never admit the http:// loopback test page. CODE/design defect of the R3 fix (unit tests
+  cover only CONNECT 127.0.0.1:<port>).
+
+Remaining defects:
+- R5 (code, launcher): agent-browser policy.json lacks "launch"; all launcher-runtime browser actions fail.
+- R6 (code/design, egress vs check): CONNECT-only egress cannot carry the http:// loopback test page; the test allowance
+  needs absolute-form GET support for the allowed test target, or the check needs an https test origin (needs a trusted
+  cert, i.e. a host change, so that is a human decision).
+- R7 (script): the denial collector reads <state_dir>/sessions/<checks session_id>/egress-denied.jsonl, but checks.json has
+  the daemon session id (celeris-0fe4c574...) while the launcher session dir/records use the launcher's own id
+  (66e34ba25c1d...). It can never find the current session's record.
+- R8 (check design): the harness opens the forbidden origin through the shim; shim origin_allowed, the daemon ActionServer
+  and the in-session browser_action.py block it before Chrome, so the egress never sees 127.0.0.1:17731 and no
+  kind=private_address record can arise. The browser must be led there by page content (link/redirect/subresource on the
+  allowed page) for the egress to deny it. Also, an http:// forbidden target would be recorded as malformed (R6), not
+  private_address with host/port.
+- Minor: the launcher killed by the script's TERM leaves the session dir in state_dir (inside the evidence dir; no
+  process left).

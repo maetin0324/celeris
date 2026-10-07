@@ -234,8 +234,10 @@ pub struct ProviderConfigFile {
     #[serde(default)]
     pub env_from_secrets: HashMap<String, String>,
     /// ADR-0024 D2: `[accounts]` のプールから選ぶ（`adapter = "claude-code"` かつ `[accounts]` があるときだけ有効）。
+    ///
+    /// ADR 2026-10-06 D2: `"opencode-go"` のように pool の adapter 名を文字列で書ける（人が書いた行を往復で保つ）。
     #[serde(default)]
-    pub account_pool: bool,
+    pub account_pool: task_core::AccountPoolSetting,
     /// ADR-0026 D7: `adapter = "acp"` のときだけ意味を持つ、ACP エージェントの実行ファイルの上書き。
     /// **管理 API はこのフィールドを読み書きしない**（`create`/`patch` の本文に来たら 422 で拒否する。
     /// `handlers::providers::reject_provider_command_and_args` を参照）。人が直接編集した `providers.d/<id>.toml` の値を
@@ -267,15 +269,24 @@ impl ProviderConfigFile {
             concurrency: self.concurrency,
             model: (!self.model.is_empty()).then(|| self.model.clone()),
             env_keys,
-            account_pool: self.account_pool,
+            account_pool: self.account_pool.is_on(),
         }
     }
 
-    fn resolved_llm_source(&self) -> ResolvedLlmSource {
+    pub(crate) fn resolved_llm_source(&self) -> ResolvedLlmSource {
         let derived = match self.adapter.as_str() {
             "fake" => LlmSourceRef::None,
             "claude-code" => LlmSourceRef::ClaudeOauth,
             "codex" => LlmSourceRef::CodexOauth,
+            "acp"
+                if self.model.starts_with("opencode-go/")
+                    || self.account_pool
+                        == task_core::AccountPoolSetting::Adapter(
+                            task_core::AccountAdapter::OpencodeGo,
+                        ) =>
+            {
+                LlmSourceRef::OpencodeGo
+            }
             _ if matches!(
                 self.model.as_str(),
                 "celeris/frontier"
@@ -332,9 +343,10 @@ pub struct ProviderCreateBody {
     pub model: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// ADR-0024 D2: 既定 `false`。`true` は `adapter = "claude-code"` かつ `[accounts]` があるときだけ有効。
+    /// ADR-0024 D2: 既定 `false`。`true` は `adapter = "claude-code"`/`"codex"` かつ `[accounts]` があるときだけ有効。
+    /// ADR 2026-10-06 D3: `"opencode-go"` のように pool 名を文字列で書ける（acp 行が opencode go の pool を使う）。
     #[serde(default)]
-    pub account_pool: bool,
+    pub account_pool: task_core::AccountPoolSetting,
 }
 
 impl ProviderCreateBody {
@@ -385,9 +397,9 @@ pub struct ProviderPatchBody {
     pub model: Option<String>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
-    /// ADR-0024 D2: 渡したときだけ上書き。
+    /// ADR-0024 D2: 渡したときだけ上書き（bool か pool 名の文字列）。
     #[serde(default)]
-    pub account_pool: Option<bool>,
+    pub account_pool: Option<task_core::AccountPoolSetting>,
 }
 
 impl ProviderPatchBody {
@@ -423,7 +435,14 @@ impl ProviderPatchBody {
             file.env = env.clone();
         }
         if let Some(account_pool) = self.account_pool {
-            file.account_pool = account_pool;
+            // 名前付き pool（"opencode-go"）の行を `true` で上書きしても名前は保つ。`false` は外す。
+            file.account_pool = match (account_pool, file.account_pool) {
+                (
+                    task_core::AccountPoolSetting::On,
+                    named @ task_core::AccountPoolSetting::Adapter(_),
+                ) => named,
+                (setting, _) => setting,
+            };
         }
         file
     }

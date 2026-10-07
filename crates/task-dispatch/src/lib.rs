@@ -39,10 +39,12 @@ pub use accounts::{
     valid_account_id,
 };
 pub use dispatcher::{
-    AccountsRuntimeConfig, ClusterSpec, ContainerDecision, ContainerRun, ContainersRuntimeConfig,
-    DispatchConfig, DispatchError, DispatchRoutingSettings, Dispatcher, ExecutionConfig,
-    KnowledgeRuntimeConfig, LocalHealthTarget, LocalProviderProbe, LocalProviderSpec,
-    RoutingShadowListener, SelfHostLoad, SnapshotPublisher, TaskFilter, TickReport,
+    AccountsRuntimeConfig, ClusterSpec, CodingHarnessDefault, ContainerDecision, ContainerRun,
+    ContainersRuntimeConfig, DispatchConfig, DispatchError, DispatchRoutingSettings, Dispatcher,
+    ExecutionConfig, KnowledgeRuntimeConfig, LocalHealthTarget, LocalProviderProbe,
+    LocalProviderSpec, MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking,
+    RoutingModelProfiles, RoutingShadowListener, SelfHostLoad, SnapshotPublisher,
+    StaticModelProfiles, TaskFilter, TickReport,
 };
 pub use policy::{
     AdapterId, ProviderId, ProviderOutcome, ProviderPolicy, ProviderSpec, StaticPolicy,

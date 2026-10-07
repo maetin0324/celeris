@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "source": "celeris-browser-conformance",
+  "results": [
+    {
+      "backend_id": "acp",
+      "version": "0.38.1",
+      "passed": [
+        "click_by_ref",
+        "download_to_artifacts",
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "screenshot_artifact",
+        "snapshot_has_refs"
+      ]
+    },
+    {
+      "backend_id": "claude-code",
+      "version": "0.38.1",
+      "passed": [
+        "click_by_ref",
+        "download_to_artifacts",
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "screenshot_artifact",
+        "snapshot_has_refs"
+      ]
+    },
+    {
+      "backend_id": "browser-specialist",
+      "version": "0.38.1",
+      "passed": [
+        "click_by_ref",
+        "download_to_artifacts",
+        "open_allowed_origin",
+        "refuse_denied_origin",
+        "resume_after_crash",
+        "screenshot_artifact",
+        "snapshot_has_refs"
+      ]
+    }
+  ]
+}

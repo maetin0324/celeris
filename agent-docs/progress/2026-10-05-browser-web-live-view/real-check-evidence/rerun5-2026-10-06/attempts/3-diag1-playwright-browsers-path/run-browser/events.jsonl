@@ -1,0 +1,5 @@
+{"operation": "navigate", "status": "success"}
+{"operation": "extract", "status": "success"}
+{"operation": "click", "status": "success"}
+{"operation": "extract", "status": "success"}
+{"operation": "extract", "status": "failure"}

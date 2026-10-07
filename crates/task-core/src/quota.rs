@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::accounts::RateLimitObservation;
 use crate::model::{RunRole, Usage};
 
-/// D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。
+/// D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -28,6 +28,8 @@ use crate::model::{RunRole, Usage};
 pub enum QuotaWindow {
     FiveHour,
     SevenDay,
+    /// opencode go の 1 か月窓（ADR 2026-10-06 D1）。
+    OneMonth,
 }
 
 impl QuotaWindow {
@@ -35,6 +37,7 @@ impl QuotaWindow {
         match self {
             QuotaWindow::FiveHour => "five_hour",
             QuotaWindow::SevenDay => "seven_day",
+            QuotaWindow::OneMonth => "one_month",
         }
     }
 }
@@ -102,6 +105,7 @@ impl WindowSnapshot {
         let w = match window {
             QuotaWindow::FiveHour => obs.five_hour?,
             QuotaWindow::SevenDay => obs.seven_day?,
+            QuotaWindow::OneMonth => obs.one_month?,
         };
         Some(WindowSnapshot {
             utilization: w.utilization,

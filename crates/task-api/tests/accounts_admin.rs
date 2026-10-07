@@ -381,6 +381,7 @@ async fn list_accounts_merges_filesystem_snapshot_and_stats() {
         logged_in: true,
         in_use: 1,
         usage: Some(AccountUsageLive {
+            one_month: None,
             five_hour: Some(task_core::RateWindow {
                 utilization: 0.2,
                 resets_at: 2_000_000_000,
@@ -855,4 +856,101 @@ async fn unknown_adapter_query_value_is_bad_request() {
 fn account_adapter_vocabulary_matches_the_api() {
     assert_eq!(AccountAdapter::parse("codex"), Some(AccountAdapter::Codex));
     assert_eq!(AccountAdapter::ClaudeCode.as_str(), "claude-code");
+}
+
+/// ADR 2026-10-06 D3: acp 行は `account_pool = "opencode-go"`（pool 名の文字列）と `llm_source = "opencode_go"` で
+/// 作れ、`providers.d` にも文字列で残る。`[accounts]` に opencode の根が無ければ 422。bool は従来どおり。
+#[tokio::test]
+async fn provider_admin_accepts_a_named_opencode_go_pool() {
+    let providers_tmp = tempfile::tempdir().expect("tempdir");
+    let dir = providers_tmp.path().join("providers.d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let oc_root = providers_tmp.path().join("opencode");
+    std::fs::create_dir_all(&oc_root).unwrap();
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        providers_dir: Some(dir.clone()),
+        opencode_accounts_root: Some(oc_root),
+        ..Default::default()
+    });
+    let app = env.router();
+    let auth = auth();
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id": "oc", "adapter": "acp", "llm_source": "opencode_go",
+                    "model": "opencode-go/glm-5", "account_pool": "opencode-go"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    let text = std::fs::read_to_string(dir.join("oc.toml")).unwrap();
+    assert!(text.contains("account_pool = \"opencode-go\""), "{text}");
+
+    // PATCH で true を渡しても名前は保たれ、false で外れる。
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/oc",
+            &json!({"account_pool": true}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let text = std::fs::read_to_string(dir.join("oc.toml")).unwrap();
+    assert!(text.contains("account_pool = \"opencode-go\""), "{text}");
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/oc",
+            &json!({"account_pool": false}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["account_pool"], json!(false));
+
+    // 知らない pool 名は 4xx。
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id": "bad", "adapter": "acp", "account_pool": "nope"}),
+            &[("authorization", &auth)],
+        ),
+    )
+    .await;
+    assert!(resp.status.is_client_error(), "{}", resp.text());
+}
+
+/// opencode の根が `[accounts]` に無い構成では名前付き pool は 422。
+#[tokio::test]
+async fn provider_admin_named_opencode_pool_requires_the_opencode_root() {
+    let providers_tmp = tempfile::tempdir().expect("tempdir");
+    let dir = providers_tmp.path().join("providers.d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let claude_root = providers_tmp.path().join("claude");
+    std::fs::create_dir_all(&claude_root).unwrap();
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        providers_dir: Some(dir.clone()),
+        accounts_root: Some(claude_root),
+        ..Default::default()
+    });
+    let app = env.router();
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id": "oc", "adapter": "acp", "account_pool": "opencode-go"}),
+            &[("authorization", &auth())],
+        ),
+    )
+    .await;
+    assert_problem(&resp, 422, "invalid_provider");
+    assert!(!dir.join("oc.toml").exists());
 }

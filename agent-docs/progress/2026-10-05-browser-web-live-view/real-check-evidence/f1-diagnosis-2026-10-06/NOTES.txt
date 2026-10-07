@@ -1,0 +1,34 @@
+F1 root cause (2026-10-06, Fable diagnosis of rerun 4)
+
+Root cause: hypothesis (a). The shared CDP relay (crates/task-worker/src/browser_shared_cdp.rs, serve())
+is strictly request/response. Chrome's pipe is read only inside CdpController::call()/read_response()
+(browser_cdp_sink.rs), and queued events are forwarded only right after the reply to an agent command.
+While the agent sends nothing, the relay thread sits in read_ws() and nobody reads the Chrome pipe.
+agent-browser 0.38.1 `open` = Page.navigate, then waits (no further CDP command) for Page.loadEventFired.
+The navigate reply arrives (so net errors like ERR_HTTP_RESPONSE_CODE_FAILURE come back in 0.4 s),
+but loadEventFired is emitted after the reply and is never forwarded -> 25 s default timeout.
+Not launcher-specific: browser.rs (daemon runtime) uses the same SharedCdp.
+
+Repro (no launcher, no bwrap, no egress, no subresources; favicon is data:):
+  real Chrome --remote-debugging-pipe + production CdpController + SharedCdp + TCP bridge (f1_relay_repro.rs)
+  agent-browser --cdp ws://127.0.0.1:<port>/<token> --json open http://127.0.0.1:17740/
+  unpatched relay: success=false "Operation timed out..." exit=1 elapsed 25125 ms / 25205 ms (fresh session);
+                   page server logged GET / 200 each time.
+  patched relay:   success=true title "F1" exit=0 elapsed 251 ms / 249 ms (fresh session);
+                   snapshot -i -> link [ref=e1] (43 ms); click @e1 -> page server GET /b.
+  control (Chrome --remote-debugging-port, agent-browser direct, no relay): open success 79 ms.
+Egress (b): forward() sends Connection: close upstream and streams to EOF then half-closes; rerun-4 304s
+show Chrome got complete responses; the repro fails with no egress at all. (c)/(d): not needed to explain;
+the page in the repro has no subresources.
+
+Patch: f1.patch (pump events while the agent is idle; per-connection event take; bounded queue)
+  + tests/browser_shared_cdp_events.rs (scripted browser on a socketpair; passes patched, fails unpatched
+  after its 10 s read timeout with "event not delivered").
+Checks run on a git-archive copy of bee1c2e4 (+patch): cargo clippy -p task-worker --all-targets -D warnings: clean;
+  cargo test -p task-worker --lib: 808 passed; browser_* integration tests passed (isolation ones skipped on this host).
+Not verified on the full launcher test setup (sudo launcher + egress); that is for rerun 5.
+
+F4: f4.patch. bwrap sets HOME=/session (browser_runtime.rs bwrap_args), so Chrome/fontconfig create
+/session/.cache and /session/.config as the subuid. The subuid holder script (browser_launcher/userns.rs)
+only empties output/home/run/actions/profile/tmp, so the final remove_dir_all hits EACCES on those dirs.
+Fix: HOME=/session/home, and the holder also removes top-level dot entries (sticky dir: subuid can only remove its own).

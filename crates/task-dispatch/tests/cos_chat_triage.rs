@@ -165,6 +165,7 @@ fn fixture_with(script: &str, edit: impl FnOnce(&mut CosChatLaunchConfig)) -> Fi
 fn new_task(dir: &Path, title: &str) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

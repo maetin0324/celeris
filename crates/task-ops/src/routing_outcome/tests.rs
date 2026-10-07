@@ -13,6 +13,7 @@ fn spec() -> NewTaskSpec {
     NewTaskSpec {
         mode: Default::default(),
         skills: Vec::new(),
+        requirements: Default::default(),
         repos: Vec::new(),
         title: "routing outcome".to_string(),
         objective: "record the run outcome".to_string(),
@@ -75,6 +76,7 @@ fn run_events(task: &task_core::Task) -> Vec<Event> {
                     model_id: "model-cheap".into(),
                     reasoning_effort: None,
                     selection: None,
+                    coding_default: None,
                 },
                 quota_reason: None,
                 work_unit_id: None,

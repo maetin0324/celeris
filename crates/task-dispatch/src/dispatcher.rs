@@ -97,7 +97,9 @@ use crate::policy::{
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
+mod coding_default;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+pub use coding_default::CodingHarnessDefault;
 mod auto_leaf;
 /// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
 mod behind_target;
@@ -120,6 +122,7 @@ mod review_spawn;
 mod review_verdict;
 mod routing_context;
 mod routing_enforce;
+mod routing_members;
 mod routing_shadow;
 mod run_context;
 mod sinks;
@@ -149,6 +152,10 @@ pub use provider_select::provider_failure_outcome;
 pub use routing_enforce::{
     DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
     enforce_quota_verdict, source_state_for_provider, source_state_from_account,
+};
+pub use routing_members::{
+    MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking, RoutingModelProfiles,
+    StaticModelProfiles,
 };
 pub use routing_shadow::{
     DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
@@ -1210,6 +1217,11 @@ pub struct Dispatcher {
     publisher: Option<SnapshotPublisher>,
     /// ADR-0024 D2: `account_pool = true` のプロバイダ id。`reload_providers` で差し替える。
     account_pool_providers: std::collections::HashSet<ProviderId>,
+    /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
+    /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
+    account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
+    /// ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネスと材料）。
+    coding_default: CodingHarnessDefault,
     /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
@@ -1275,6 +1287,11 @@ pub struct Dispatcher {
     knowledge_probe_cache: HashMap<String, (Instant, Reachability)>,
     /// ADR-0132 付記 L1/L2: cheap lane で順位付けの前に試すローカルの行（設定順）。空なら前段を走らせない。
     local_providers: Vec<LocalProviderSpec>,
+    /// ADR 2026-10-06 model-role-assignments D2: DB の `source × 役割 → model` の割り当てを読む口。
+    /// 無ければ（試験・celerisctl）従来どおり config の `tier_models` だけで解決する。
+    role_assignments: Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>>,
+    /// 付記「モデルごとの複数役割」: routing catalog の model profile（品質）を読む口。無ければ品質 unknown。
+    routing_model_profiles: Option<Arc<dyn RoutingModelProfiles>>,
     /// ADR-0132 付記 L4: ローカルの行の health 検査（既定は `task_worker::probe_models`。テストは
     /// `set_local_provider_probe` で差し替える）。**LLM は呼ばない**。
     local_probe: LocalProviderProbe,
@@ -1496,6 +1513,8 @@ impl Dispatcher {
             ticks: 0,
             publisher: None,
             account_pool_providers,
+            account_pool_adapters: HashMap::new(),
+            coding_default: CodingHarnessDefault::default(),
             account_books,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),
@@ -1520,6 +1539,8 @@ impl Dispatcher {
             }),
             knowledge_probe_cache: HashMap::new(),
             local_providers: Vec::new(),
+            role_assignments: None,
+            routing_model_profiles: None,
             local_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),
@@ -1547,6 +1568,22 @@ impl Dispatcher {
     pub fn set_knowledge_probe(&mut self, probe: KnowledgeProbe) {
         self.knowledge_probe = probe;
         self.knowledge_probe_cache.clear();
+    }
+
+    /// ADR 2026-10-06 model-role-assignments D2: 割り当ての reader を差し込む（daemon が store を渡す）。
+    /// provider 選択と run 起動のたびに読むので、DB を書けば次の解決から効く。
+    pub fn set_role_assignment_reader(
+        &mut self,
+        reader: Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>,
+    ) {
+        self.role_assignments = Some(reader);
+    }
+
+    /// 差し込んだ割り当ての reader（daemon が llm-proxy に同じ reader を渡すために使う）。
+    pub fn role_assignment_reader(
+        &self,
+    ) -> Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>> {
+        self.role_assignments.clone()
     }
 
     /// ADR-0132 付記 L1/L7: cheap lane で先に試すローカルの行を設定する（設定順。空なら付記の前と同じ）。
@@ -1816,6 +1853,24 @@ impl Dispatcher {
     /// ADR-0053 D1（Phase 65）: `llm-proxy` が同じアカウントプールの cooldown・観測値を共有するための
     /// アクセサでもある（CLI ワーカーの dispatch と**同じ帳簿**を返す。別の写しを作らない）。
     /// そのアダプタの `[accounts]` 根が設定されていなければ `None`。
+    /// `account_pool = "<adapter>"` で pool の adapter を明示した行の対応を差し替える（`reload_providers` と
+    /// 同じ場面で呼ぶ。ADR 2026-10-06 D3）。
+    pub fn set_account_pool_adapters(&mut self, adapters: HashMap<ProviderId, AccountAdapter>) {
+        self.account_pool_adapters = adapters;
+    }
+
+    /// 行 `provider`（adapter 名 `row_adapter`）が使う pool の adapter。明示があればそれ、無ければ行の adapter 名。
+    pub(super) fn pool_adapter_of(
+        &self,
+        provider: &ProviderId,
+        row_adapter: &str,
+    ) -> Option<AccountAdapter> {
+        self.account_pool_adapters
+            .get(provider)
+            .copied()
+            .or_else(|| AccountAdapter::parse(row_adapter))
+    }
+
     pub fn account_book(&self, adapter: AccountAdapter) -> Option<Arc<StdMutex<AccountBook>>> {
         self.account_books.get(&adapter).cloned()
     }

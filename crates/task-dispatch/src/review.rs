@@ -22,7 +22,7 @@ use task_core::{
 use task_worker::artifact::sha256_file;
 
 use crate::policy::ProviderOutcome;
-use task_worker::protocol::{ReviewCheckResult, ReviewDecision};
+use task_worker::protocol::{ReviewCheckResult, ReviewDecision, ReviewPolicyViolation};
 use task_worker::{
     Answer, EventSink, Evidence, PROTOCOL_VERSION, ReviewOutput, ReviewRequest, RunContext,
     RunLimits, RunRequest, Terminal, WorkerAdapter, Workspace,
@@ -210,6 +210,9 @@ pub struct ReviewExtras {
     pub decisions: Vec<ReviewDecision>,
     /// ADR-0117 D1: 対象 task と祖先の `question` への人の回答（`ReviewRequest.answers`）。
     pub answers: Vec<Answer>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の
+    /// 起動（dispatcher が `Event::WorkerPolicyViolation` から集める）。`ReviewRequest.policy_violations` に渡す。
+    pub policy_violations: Vec<ReviewPolicyViolation>,
 }
 
 /// ADR-0117 D2: `ReviewCheckResult.reason` に残す末尾の文字数。
@@ -604,6 +607,7 @@ pub async fn review_task(
         research,
         decisions,
         answers,
+        policy_violations,
     } = extras;
     let mut implicit: HashMap<usize, (&'static str, Option<String>)> = HashMap::new();
     let subject = &subject;
@@ -779,6 +783,7 @@ pub async fn review_task(
                         decisions,
                         answers,
                         checks: deterministic_check_results(task, &verdicts, &implicit),
+                        policy_violations,
                     };
                     let (result, record) = run_reviewer(
                         task,
@@ -870,6 +875,7 @@ fn check_plan_file(
 pub fn synthetic_review_task(subject_task: &Task, run_id: &str, hint: &WorkerHint) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -916,6 +922,8 @@ struct ReviewHumanContext {
     decisions: Vec<ReviewDecision>,
     answers: Vec<Answer>,
     checks: Vec<ReviewCheckResult>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6。
+    policy_violations: Vec<ReviewPolicyViolation>,
 }
 
 /// Reviewer run を実行し、判定と、その run 自身の結果（`WorkerFinished` 用。ADR-0014 D1）を返す。
@@ -1015,6 +1023,7 @@ async fn run_reviewer_inner(
                 decisions: human_context.decisions,
                 answers: human_context.answers,
                 checks: human_context.checks,
+                policy_violations: human_context.policy_violations,
             }),
             role: None,
             children: Vec::new(),

@@ -7,8 +7,9 @@ use task_worker::db_guard::{
 };
 
 use super::{
-    WorkerDbGuardAction, enforce_worker_db_guard, worker_db_guard_action, worker_db_guard_decision,
-    worker_db_guard_opt_out_action, worker_db_guard_precheck, worker_db_guard_protected_set,
+    WorkerDbGuardAction, enforce_worker_db_guard, launcher_test_loopback_refusal,
+    worker_db_guard_action, worker_db_guard_decision, worker_db_guard_opt_out_action,
+    worker_db_guard_precheck, worker_db_guard_protected_set,
 };
 
 /// 本番の home（`.config/celeris/config.toml`）と本番 DB・token、試験用の別 dir。
@@ -674,5 +675,60 @@ fn worker_guard_opt_out_precheck_refuses_before_opening_db() {
     assert_eq!(
         worker_db_guard_precheck(Some(&e.home), &config, &WorkerRunMarker::Absent),
         WorkerDbGuardAction::Probe
+    );
+}
+
+// ---- 付記 E2（daemon 側）: 本番の config・DB の daemon は試験専用 loopback 許可の launcher を拒否する ----
+
+#[test]
+fn egress_test_loopback_production_db_or_config_daemon_refuses_test_launcher() {
+    let e = env(PROD_CONFIG);
+    let prod_config = e.home.join(".config/celeris/config.toml");
+    let own_config = e.test.join("config.toml");
+    std::fs::write(&own_config, "").unwrap();
+
+    // 試験用 DB・別 config の daemon は拒否しない。
+    assert_eq!(
+        launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &test_daemon(&e)),
+        None
+    );
+    // 本番 DB の daemon。
+    let prod_db = DaemonPaths {
+        db: e.db.clone(),
+        state_dir: None,
+        token_file: None,
+    };
+    let reason = launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_db)
+        .expect("production db");
+    assert!(reason.contains("production db"), "{reason}");
+    // 本番 token の daemon（中身が同じ別 file も）。
+    let copy = e.test.join("api.token");
+    std::fs::write(&copy, "production-token\n").unwrap();
+    let mut prod_token = test_daemon(&e);
+    prod_token.token_file = Some(copy);
+    assert!(
+        launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_token).is_some()
+    );
+    let mut prod_token_file = test_daemon(&e);
+    prod_token_file.token_file = Some(e.token.clone());
+    assert!(
+        launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &prod_token_file)
+            .is_some()
+    );
+    // 本番 config を読んだ daemon（verify の staging のように DB だけ差し替えても）。
+    let reason =
+        launcher_test_loopback_refusal(Some(&e.home), Some(&prod_config), &test_daemon(&e))
+            .expect("production config");
+    assert!(reason.contains("production config"), "{reason}");
+    // symlink 経由の本番 config も同じ。
+    let link = e.test.join("config-link.toml");
+    std::os::unix::fs::symlink(&prod_config, &link).unwrap();
+    assert!(launcher_test_loopback_refusal(Some(&e.home), Some(&link), &test_daemon(&e)).is_some());
+    // home が決まらない・本番 config が壊れている（判定不能）は拒否。
+    assert!(launcher_test_loopback_refusal(None, Some(&own_config), &test_daemon(&e)).is_some());
+    std::fs::write(&prod_config, "db = [").unwrap();
+    assert!(
+        launcher_test_loopback_refusal(Some(&e.home), Some(&own_config), &test_daemon(&e))
+            .is_some()
     );
 }

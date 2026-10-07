@@ -2,7 +2,7 @@
 // 型は生成型をそのまま使い、写しを作らない。
 
 import { ApiError } from "../../api/client";
-import type { InboxItem, InboxKind, InboxOption } from "../../api/generated/types";
+import type { BrowserWait, InboxItem, InboxKind, InboxOption } from "../../api/generated/types";
 
 export const INBOX_KINDS: readonly InboxKind[] = [
   "decision",
@@ -69,7 +69,32 @@ export function needsNativeScreen(item: InboxItem): boolean {
 }
 
 /** 専用画面の行き先。項目の links（web 内の path）を優先し、無ければ種類と task から決める。 */
-export function nativeTarget(item: InboxItem): { href: string; label: string } {
+const browserId = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** 待ちの行き先は公開の待ち一覧にある task/run の組で決める。 */
+export function browserWaitTarget(
+  item: InboxItem,
+  waits: readonly BrowserWait[] = [],
+): { href: string; label: string } {
+  const taskId = item.task?.id;
+  const fallback = taskId ? `/tasks/${encodeURIComponent(taskId)}#browser-waits` : "/browser#browser-waits";
+  const waitId = item.id.startsWith("browser_wait:") ? item.id.slice("browser_wait:".length) : "";
+  const wait = waits.find((row) => row.wait_id === waitId && row.task_id === taskId && row.state === "pending");
+  return wait && browserId.test(wait.task_id) && browserId.test(wait.run_id)
+    ? { href: `/browser/runs/${wait.task_id}/${wait.run_id}#browser-waits`, label: "ブラウザの実行画面" }
+    : { href: fallback, label: taskId ? "タスクのブラウザ待ち" : "ブラウザの待ち一覧" };
+}
+
+export function browserWaitBadge(item: InboxItem, waits: readonly BrowserWait[] = []): string | null {
+  if (item.kind !== "browser_wait") return null;
+  const waitId = item.id.startsWith("browser_wait:") ? item.id.slice("browser_wait:".length) : "";
+  const wait = waits.find((row) => row.wait_id === waitId && row.task_id === item.task?.id);
+  if (wait) return wait.reason === "waiting_for_auth" ? "credential 待ち" : "ブラウザの承認待ち";
+  return item.title.includes("credential") || item.title.includes("認証") ? "credential 待ち" : "ブラウザの承認待ち";
+}
+
+export function nativeTarget(item: InboxItem, waits: readonly BrowserWait[] = []): { href: string; label: string } {
+  if (item.kind === "browser_wait") return browserWaitTarget(item, waits);
   const link = item.links.find((row) => row.href.startsWith("/") && !row.href.startsWith("//"));
   if (link) return { href: link.href, label: link.label };
   if (item.kind === "cluster_login") return { href: "/clusters", label: "クラスタの画面" };

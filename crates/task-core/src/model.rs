@@ -447,6 +447,9 @@ pub fn priority_label(priority: i32) -> &'static str {
 /// DESIGN §4.1 の `Task`。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
+    /// Per-task browser permissions. Absent for tasks created before this policy.
+    #[serde(default, skip_serializing_if = "TaskRequirements::is_empty")]
+    pub requirements: TaskRequirements,
     pub id: TaskId,
     pub parent_id: Option<TaskId>,
     pub kind: TaskKind,
@@ -540,6 +543,25 @@ pub struct Task {
     )]
     #[schemars(with = "Option<String>")]
     pub paused_at: Option<OffsetDateTime>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRequirements {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserRequirements>,
+}
+
+impl TaskRequirements {
+    pub fn is_empty(&self) -> bool {
+        self.browser.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BrowserRequirements {
+    pub allowed_domains: Vec<String>,
 }
 
 /// ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
@@ -800,6 +822,28 @@ impl RunRole {
             RunRole::Worker => "worker",
             RunRole::Reviewer => "reviewer",
             RunRole::Planner => "planner",
+        }
+    }
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPolicyKind {
+    /// subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。
+    SubagentTool,
+    /// shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。
+    LlmCli,
+    /// shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。
+    LlmApi,
+}
+
+impl ToolPolicyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolPolicyKind::SubagentTool => "subagent_tool",
+            ToolPolicyKind::LlmCli => "llm_cli",
+            ToolPolicyKind::LlmApi => "llm_api",
         }
     }
 }
@@ -1110,6 +1154,19 @@ pub enum Event {
         truncated: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         error: bool,
+    },
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を
+    /// 使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない
+    /// （警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。
+    WorkerPolicyViolation {
+        run_id: String,
+        kind: ToolPolicyKind,
+        /// 道具名（`Bash` / `command_execution` / `Agent` …）。
+        tool: String,
+        /// 一致した語（道具名・CLI 名・API host）。
+        matched: String,
+        /// 起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。
+        command: String,
     },
     ArtifactProduced {
         run_id: String,
@@ -1656,6 +1713,29 @@ pub enum Event {
         answer: String,
         #[serde(default)]
         note: Option<String>,
+    },
+    /// ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、
+    /// `model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。
+    ModelCatalogChanged {
+        source: String,
+        #[serde(default)]
+        added: Vec<String>,
+        #[serde(default)]
+        removed: Vec<String>,
+        #[serde(default)]
+        restored: Vec<String>,
+    },
+    /// ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。
+    /// `model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。
+    /// `catalog_event_task_id()` の疑似 task の列に追記する。
+    ModelRoleAssignmentChanged {
+        source: String,
+        tier: Tier,
+        #[serde(default)]
+        model_id: Option<String>,
+        #[serde(default)]
+        previous: Option<String>,
+        actor: String,
     },
     /// ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま
     /// `liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には

@@ -456,6 +456,19 @@ pub fn edit_task(
         // 何も変わらないなら書かない（イベントも積まない）。
         return Ok(EditResult { task, fields });
     }
+    if fields.iter().any(|field| field == "skills") {
+        let parent = task
+            .parent_id
+            .map(|id| store.get(id))
+            .transpose()?
+            .flatten();
+        task_core::browser::validate_task_requirements(
+            &task.skills,
+            &task.requirements,
+            parent.as_ref(),
+        )
+        .map_err(OpsError::Validation)?;
+    }
     task.updated_at = now;
     // `status` / `attempts` / `lease` はストアが**トランザクションの中で読み直した**値で上書きする
     // （編集中にディスパッチャがリースを取っていても壊さない）。返ってくるのがその結果。

@@ -47,7 +47,7 @@ impl Fixture {
             runtime.join("config.json"),
             serde_json::to_vec(&serde_json::json!({
                 "session_id": "session-gate",
-                "allowed_domains": ["example.test"],
+                "allowed_domains": ["https://example.test"],
                 "output": output,
                 "policy_sha256": format!("{:x}", Sha256::digest(policy)),
                 "credential_policy_ids": [],
@@ -66,7 +66,7 @@ impl Fixture {
         let server = ActionServer::start(
             &runtime.with_extension("action.sock"),
             &runtime,
-            vec!["example.test".into()],
+            vec!["https://example.test".into()],
             ["launch", "close", "click", "snapshot"]
                 .map(String::from)
                 .to_vec(),

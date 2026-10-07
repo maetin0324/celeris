@@ -1,0 +1,10 @@
+DIAG1 all current-session records:
+{"at": "2026-10-06T10:28:25.22168555Z", "host": "clients2.google.com", "kind": "not_allowed", "port": 80, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:28:25.2235587Z", "host": "redirector.gvt1.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:28:25.347400293Z", "host": "update.googleapis.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:28:25.46714382Z", "host": "www.google.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:28:27.685225639Z", "host": "android.clients.google.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:28:56.056905165Z", "host": "android.clients.google.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:29:25.22138508Z", "host": "update.googleapis.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+{"at": "2026-10-06T10:29:54.135193306Z", "host": "android.clients.google.com", "kind": "not_allowed", "port": 443, "session_id": "70a156cc7322242dad23b3435d2964e2"}
+current launcher session contains no denial for the forbidden origin

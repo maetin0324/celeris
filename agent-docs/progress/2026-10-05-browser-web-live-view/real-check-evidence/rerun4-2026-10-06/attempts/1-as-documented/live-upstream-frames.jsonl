@@ -1,0 +1,1 @@
+{"opcode": 1, "payload": "{\"type\": \"input_mouse\", \"event\": \"mousePressed\", \"x\": 2, \"y\": 2, \"button\": \"left\", \"clickCount\": 1, \"check_marker\": \"real-check-leased-input\"}"}

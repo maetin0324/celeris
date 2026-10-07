@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "<stdin>", line 228, in <module>
+AssertionError: egress denial collection failed: current launcher session contains no ip_literal denial for the forbidden origin
+exit=1

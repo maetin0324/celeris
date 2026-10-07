@@ -22,9 +22,9 @@ use crate::types::ValidationError;
 
 mod accounts;
 mod clusters;
-mod org;
+pub(crate) mod org;
 pub(crate) mod projects;
-mod providers;
+pub(crate) mod providers;
 mod secrets;
 mod system;
 pub(crate) mod task_actions;
@@ -39,7 +39,7 @@ use clusters::{
     cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
     submit_cluster_connect_code,
 };
-use org::{create_org_node, delete_org_node, org_list, patch_org_node};
+use org::{create_org_node, delete_org_node, org_list, patch_browser_settings, patch_org_node};
 use projects::{
     create_milestone, create_project, patch_milestone, patch_project, project_detail, project_list,
 };
@@ -141,6 +141,10 @@ pub(crate) fn router(state: ApiState) -> Router {
             "/api/v1/org/{id}",
             patch(patch_org_node).delete(delete_org_node),
         )
+        .route(
+            "/api/v1/org/{id}/browser-settings",
+            patch(patch_browser_settings),
+        )
         // ADR-0033 D4（Phase 24）: 対話。実装は `crate::conversation`。
         .route(
             "/api/v1/org/{id}/messages",
@@ -188,6 +192,9 @@ pub(crate) fn router(state: ApiState) -> Router {
         // ADR-0053 D4（Phase 65）: LLM source の観測。実装は `crate::llm_sources`。
         .merge(crate::llm_sources::routes())
         .merge(crate::routing_catalog::routes())
+        // ADR 2026-10-06 D5: モデル catalog。実装は `crate::model_catalog`。
+        .merge(crate::model_catalog::routes())
+        .merge(crate::model_assignments::routes())
         // ADR-0056 D4（Phase 78）: MCP クライアント / 呼び出しログの観測。実装は `crate::mcp_admin`。
         .merge(crate::mcp_admin::routes())
         // ADR-0056 D3 続き（Phase 82）: skills を GUI から見る・作る・mount する。実装は `crate::skills`。

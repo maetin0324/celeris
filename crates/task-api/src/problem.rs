@@ -537,6 +537,8 @@ pub(crate) fn validation_field(message: &str) -> Option<&'static str> {
         Some("objective")
     } else if message.starts_with("parent ") {
         Some("parent")
+    } else if message.starts_with("requirements.browser.") {
+        Some("requirements.browser.allowed_domains")
     } else {
         None
     }

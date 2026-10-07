@@ -1,5 +1,66 @@
 {
   "$defs": {
+    "AdapterChoice": {
+      "description": "adapter をどう決めたか（routing audit に残す）。",
+      "oneOf": [
+        {
+          "description": "task・役割で明示された adapter。",
+          "properties": {
+            "kind": {
+              "const": "explicit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "family の既定ハーネスに一致する行。",
+          "properties": {
+            "kind": {
+              "const": "preferred",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "既定ハーネスの行が使えず、絞る前の候補へ倒れた。",
+          "properties": {
+            "kind": {
+              "const": "fallback",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`AdapterPolicy::ProviderOrder`（従来どおり）。",
+          "properties": {
+            "kind": {
+              "const": "provider_order",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalId": {
       "description": "認可 1 件の識別子（ULID）。",
       "type": "string"
@@ -54,6 +115,21 @@
         "policy_id",
         "revision",
         "hash"
+      ],
+      "type": "object"
+    },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
       ],
       "type": "object"
     },
@@ -965,6 +1041,26 @@
         "slurm"
       ],
       "type": "string"
+    },
+    "CodingDefaultResolution": {
+      "description": "ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。",
+      "properties": {
+        "adapter_choice": {
+          "$ref": "#/$defs/AdapterChoice"
+        },
+        "family": {
+          "$ref": "#/$defs/ModelFamily"
+        },
+        "family_basis": {
+          "$ref": "#/$defs/FamilyBasis"
+        }
+      },
+      "required": [
+        "family",
+        "family_basis",
+        "adapter_choice"
+      ],
+      "type": "object"
     },
     "CommitIntent": {
       "properties": {
@@ -2006,6 +2102,42 @@
             "type",
             "run_id",
             "msg"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を\n使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない\n（警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。",
+          "properties": {
+            "command": {
+              "description": "起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ToolPolicyKind"
+            },
+            "matched": {
+              "description": "一致した語（道具名・CLI 名・API host）。",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "tool": {
+              "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "worker_policy_violation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "kind",
+            "tool",
+            "matched",
+            "command"
           ],
           "type": "object"
         },
@@ -4085,6 +4217,83 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
+          "properties": {
+            "added": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "removed": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "restored": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "const": "model_catalog_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。\n`model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。\n`catalog_event_task_id()` の疑似 task の列に追記する。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "model_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": {
+              "const": "model_role_assignment_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "tier",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -4341,6 +4550,9 @@
         "objective": {
           "type": "string"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
+        },
         "skills": {
           "default": [],
           "items": {
@@ -4520,6 +4732,16 @@
         "detail"
       ],
       "type": "object"
+    },
+    "FamilyBasis": {
+      "description": "family をどの材料で決めたか（routing audit に残す）。",
+      "enum": [
+        "llm_source",
+        "account_pool",
+        "model_profile",
+        "unknown"
+      ],
+      "type": "string"
     },
     "FeatureStage": {
       "description": "特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。",
@@ -4798,6 +5020,17 @@
         "adapter": {
           "type": "string"
         },
+        "coding_default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingDefaultResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-07（coding harness の既定）: `adapter_policy = \"model_family\"` のハーネスの run だけ。\n選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。"
+        },
         "lane": {
           "anyOf": [
             {
@@ -5068,6 +5301,29 @@
         "reach_criteria"
       ],
       "type": "object"
+    },
+    "ModelFamily": {
+      "description": "model の系統。未知（`Other`・`Unknown`）は非 Claude として扱う。",
+      "oneOf": [
+        {
+          "enum": [
+            "claude",
+            "gpt",
+            "qwen"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "family は書かれているが既知の系統ではない（DeepSeek 等）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "family を決める材料が無い。",
+          "type": "string"
+        }
+      ]
     },
     "OperationIntent": {
       "additionalProperties": false,
@@ -5487,6 +5743,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Browser origins for a child task. An inherited browser skill still needs an explicit set."
+        },
         "skills": {
           "items": {
             "type": "string"
@@ -5839,12 +6099,21 @@
       ]
     },
     "QuotaWindow": {
-      "description": "D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。",
-      "enum": [
-        "five_hour",
-        "seven_day"
-      ],
-      "type": "string"
+      "description": "D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。",
+      "oneOf": [
+        {
+          "enum": [
+            "five_hour",
+            "seven_day"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "one_month",
+          "description": "opencode go の 1 か月窓（ADR 2026-10-06 D1）。",
+          "type": "string"
+        }
+      ]
     },
     "QuotaWindowUse": {
       "description": "D4.3: run 1 件・窓 1 つの消費。",
@@ -6858,6 +7127,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
+        },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
           "type": [
@@ -7125,6 +7398,22 @@
         }
       ]
     },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TaskRouting": {
       "description": "ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。",
       "properties": {
@@ -7235,6 +7524,26 @@
         {
           "const": "default",
           "description": "誰も明示していない（役割・分野・親・全体の既定）。lane は policy が決める。",
+          "type": "string"
+        }
+      ]
+    },
+    "ToolPolicyKind": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。",
+      "oneOf": [
+        {
+          "const": "subagent_tool",
+          "description": "subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。",
+          "type": "string"
+        },
+        {
+          "const": "llm_cli",
+          "description": "shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。",
+          "type": "string"
+        },
+        {
+          "const": "llm_api",
+          "description": "shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。",
           "type": "string"
         }
       ]

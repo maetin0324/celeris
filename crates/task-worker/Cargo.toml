@@ -31,8 +31,10 @@ base64 = "0.22"
 # `fs` は ADR-0032 の TOTP 中継で使う `mkfifo` と `OFlag::O_NONBLOCK` のため。
 nix = { version = "0.30", features = ["signal", "process", "fs", "user"] }
 # ADR-0095: `db_guard` の statvfs（"fs"）と getuid/getgid（"user"）。unshare/mount は nix::libc を直接呼ぶ。
-time = { version = "0.3", features = ["serde", "formatting"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing"] }
 tempfile = "3"
+# ADR 2026-10-06 D2: opencode go の利用量 endpoint（http / https）を呼ぶ。celeris と同じ rustls 構成。
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "json", "charset", "http2"] }
 
 [dev-dependencies]
 celeris-credentiald = { path = "../celeris-credentiald", features = ["same-uid-harness"] }

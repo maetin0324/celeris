@@ -338,7 +338,7 @@ out = {}
 tasks = []
 cursor = None
 while True:
-    q = "/api/v1/tasks?limit=500" + (f"&cursor={urllib.parse.quote(str(cursor), safe='')}" if cursor else "")
+    q = "/api/v1/tasks?limit=500&archived=true" + (f"&cursor={urllib.parse.quote(str(cursor), safe='')}" if cursor else "")
     page = safe(q, {"items": [], "next_cursor": None, "total": 0})
     tasks.extend(page.get("items") or [])
     cursor = page.get("next_cursor")
@@ -349,7 +349,9 @@ out["tasks"] = len(tasks)
 pairs = sorted(f"{t.get('id')}:{t.get('status')}" for t in tasks)
 out["tasks_digest"] = hashlib.sha256("\n".join(pairs).encode("utf-8")).hexdigest()[:16]
 
-projects = (safe("/api/v1/projects", {"items": []}) or {}).get("items") or []
+# 2026-10-06: 案件を archive すると既定の一覧から案件とその task・messages が消え、生の行数と食い違う。
+# 件数の照合は archive 済みも含めて数える（GET /projects?archived=true・GET /tasks?archived=true）。
+projects = (safe("/api/v1/projects?archived=true", {"items": []}) or {}).get("items") or []
 out["projects"] = len(projects)
 out["latest_project"] = projects[0].get("id") if projects else ""
 

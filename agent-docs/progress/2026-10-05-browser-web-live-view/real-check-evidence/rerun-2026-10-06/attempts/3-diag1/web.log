@@ -1,0 +1,27 @@
+celeris-web: listening on 127.0.0.1:17729
+{"path":"/healthz","status":200,"ms":3.3}
+{"path":"/login","status":200,"ms":9.1}
+{"path":"/org/browser-execution/browser-settings","status":200,"ms":17.4}
+{"path":"/org/browser-execution/browser-settings","status":422,"ms":2.7}
+{"path":"/org/browser-execution/browser-settings","status":200,"ms":3.3}
+{"path":"/browser/owner-session","status":200,"ms":0.7}
+{"path":"/browser/owner-session","status":200,"ms":0.4}
+{"path":"/browser/runs","status":200,"ms":2.9}
+{"path":"/browser/runs","status":200,"ms":4.4}
+{"path":"/01M47Z6W180NH02RPVPRKSW6VA/01M47Z6W3NGD7FC5M4QTJCHYDA","status":401,"ms":0.6}
+node:events:486
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: read ECONNRESET
+    at TCP.onStreamRead (node:internal/stream_base_commons:216:20)
+Emitted 'error' event on Socket instance at:
+    at emitErrorNT (node:internal/streams/destroy:170:8)
+    at emitErrorCloseNT (node:internal/streams/destroy:129:3)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  errno: -104,
+  code: 'ECONNRESET',
+  syscall: 'read'
+}
+
+Node.js v24.14.1

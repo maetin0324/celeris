@@ -20,7 +20,7 @@ use task_api::{
 use task_core::{AccountAdapter, RateLimitObservation};
 use task_worker::{
     AccountCheckResult, CodexLoginSession, LoginOutcome, LoginSession, check_account,
-    check_account_codex, start_login, start_login_codex,
+    check_account_codex, check_account_opencode_go, start_login, start_login_codex,
 };
 use tokio::sync::{Mutex, mpsc, oneshot};
 
@@ -213,6 +213,8 @@ pub async fn remove_account(
                 session.cancel();
             }
         }
+        // opencode go にはログイン中継が無い（auth.json を置くだけ。ADR 2026-10-06 D2）。
+        AccountAdapter::OpencodeGo => {}
     }
     dispatcher.set_account_login_pending(adapter, id, false);
     // `account_dir` は `[accounts]` とそのアダプタの根の存在を既に確かめている。
@@ -250,36 +252,43 @@ pub struct UsageChecks {
 }
 
 impl UsageChecks {
+    /// 推論を使わない確認（codex の app-server、opencode go の usage endpoint）を idle の logged-in
+    /// account に 300 秒おきに行う（ADR-0049、ADR 2026-10-06 D2）。
     pub fn poll(
         &mut self,
         config: &Config,
         dispatcher: &task_dispatch::Dispatcher,
         events: mpsc::Sender<AccountAdminEvent>,
     ) {
-        let Some(root) = config.accounts.as_ref().and_then(|a| a.codex_dir.as_ref()) else {
+        let Some(accounts) = config.accounts.as_ref() else {
             return;
         };
         let now = std::time::Instant::now();
-        for account in task_dispatch::accounts::scan_accounts(root, AccountAdapter::Codex) {
-            if !account.logged_in
-                || dispatcher.account_in_use(AccountAdapter::Codex, &account.id) > 0
-                || dispatcher.account_login_pending(AccountAdapter::Codex, &account.id)
-                || self
-                    .last
-                    .get(&account.id)
-                    .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(300))
-            {
+        for adapter in [AccountAdapter::Codex, AccountAdapter::OpencodeGo] {
+            let Some(root) = accounts.root_for(adapter) else {
                 continue;
+            };
+            for account in task_dispatch::accounts::scan_accounts(root, adapter) {
+                // 同じ id でもアダプタが違えば別のアカウント（codex は従来どおり id そのまま、他は `<adapter>:<id>`）。
+                let key = if adapter == AccountAdapter::Codex {
+                    account.id.clone()
+                } else {
+                    format!("{adapter}:{}", account.id)
+                };
+                if !account.logged_in
+                    || dispatcher.account_in_use(adapter, &account.id) > 0
+                    || dispatcher.account_login_pending(adapter, &account.id)
+                    || self
+                        .last
+                        .get(&key)
+                        .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(300))
+                {
+                    continue;
+                }
+                self.last.insert(key, now);
+                let (reply, _rx) = oneshot::channel();
+                spawn_check(config, adapter, account.id, events.clone(), reply);
             }
-            self.last.insert(account.id.clone(), now);
-            let (reply, _rx) = oneshot::channel();
-            spawn_check(
-                config,
-                AccountAdapter::Codex,
-                account.id,
-                events.clone(),
-                reply,
-            );
         }
     }
 }
@@ -310,6 +319,26 @@ pub fn spawn_check(
             let (command, env) = claude_command_and_env(config);
             tokio::spawn(async move {
                 let check = check_account(&command, &dir, &check_model, CHECK_TIMEOUT, &env).await;
+                finish_check(
+                    adapter,
+                    id,
+                    check.result,
+                    check.detail,
+                    check.observation,
+                    events,
+                    reply,
+                )
+                .await;
+            });
+        }
+        AccountAdapter::OpencodeGo => {
+            let usage_url = config
+                .accounts
+                .as_ref()
+                .map(|a| a.opencode_go_usage_url.clone())
+                .unwrap_or_default();
+            tokio::spawn(async move {
+                let check = check_account_opencode_go(&dir, &usage_url, CHECK_TIMEOUT).await;
                 finish_check(
                     adapter,
                     id,
@@ -438,6 +467,14 @@ pub fn spawn_login_start(
                 }
             });
         }
+        AccountAdapter::OpencodeGo => {
+            // opencode go は中継するログインが無い。人が `opencode auth login`（`XDG_DATA_HOME=<account dir>`）で
+            // `opencode/auth.json` を作る（ADR 2026-10-06 D2）。
+            let _ = reply.send(Err(AccountAdminError::LoginFailed(
+                "opencode-go accounts have no login relay; create opencode/auth.json in the account dir (opencode auth login with XDG_DATA_HOME set)"
+                    .to_string(),
+            )));
+        }
         AccountAdapter::Codex => {
             let (command, env) = codex_command_and_env(config);
             tokio::spawn(async move {
@@ -537,6 +574,7 @@ pub fn spawn_login_cancel(
                 s.cancel();
                 true
             }),
+            AccountAdapter::OpencodeGo => false,
         };
         if cancelled {
             let _ = events

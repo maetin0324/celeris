@@ -95,7 +95,10 @@ fn account_window(
     }
 }
 
-/// pool の 1 アカウントの `SourceState`。帳簿の観測（5h / 7d 窓・rejected の reset）・cooldown・in-use
+/// 1 か月窓の長さ（30 日。ADR 2026-10-06 D1）。
+const ONE_MONTH_SECS: i64 = 30 * 24 * 3600;
+
+/// pool の 1 アカウントの `SourceState`。帳簿の観測（5h / 7d / 1 か月窓・rejected の reset）・cooldown・in-use
 /// だけを写す。帳簿に無い量（latency・rpm/tpm・queue・GPU）は None。
 pub fn source_state_from_account(
     deployment_id: &str,
@@ -143,6 +146,16 @@ pub fn source_state_from_account(
                 account_id,
                 "seven_day",
                 crate::accounts::SEVEN_DAY_SECS,
+                obs,
+                w,
+                now,
+            ));
+        }
+        if let Some(w) = obs.one_month {
+            s.quota_windows.push(account_window(
+                account_id,
+                "one_month",
+                ONE_MONTH_SECS,
                 obs,
                 w,
                 now,
@@ -272,19 +285,22 @@ pub(super) struct EnforceRound {
     pub candidates: Vec<CandidateTrace>,
     /// 選んだ source の観測時刻。
     pub observed_at: Option<String>,
+    /// 付記「モデルごとの複数役割」: 選んだ provider の役割メンバーの順位づけ（メンバーが無ければ既定）。
+    pub member_ranking: super::routing_members::MemberRanking,
 }
 
 impl EnforceRound {
     fn exclude(&mut self, provider: &str, codes: &[&str], detail: Option<String>) {
         self.excluded.insert(provider.to_string());
-        if let Some(c) = self
+        // 候補の identity はモデルごと（`<provider>/model:<id>`）なので、provider で引く。
+        for c in self
             .candidates
             .iter_mut()
-            .find(|c| c.deployment_id == provider)
+            .filter(|c| c.eligible_provider_ids.iter().any(|p| p == provider))
         {
             c.excluded_reasons
                 .extend(codes.iter().map(|s| (*s).to_string()));
-            if let Some(d) = detail {
+            if let Some(d) = &detail {
                 c.excluded_reasons.push(format!("detail:{d}"));
             }
             c.excluded_reason = codes.first().map(|code| trace_reason(code));
@@ -383,7 +399,7 @@ impl Dispatcher {
             round.candidates.push(CandidateTrace {
                 model_profile_id: p.model.id.clone(),
                 deployment_id: d.id.clone(),
-                eligible_provider_ids: vec![d.id.clone()],
+                eligible_provider_ids: vec![p.provider_id.clone()],
                 config_order: Some(d.config_order),
                 ..Default::default()
             });
@@ -442,12 +458,47 @@ impl Dispatcher {
         model: &str,
         account: Option<&str>,
     ) -> RoutingTraceV1 {
-        let fallback_order = round
-            .candidates
+        let ranking = &round.member_ranking;
+        // 選んだ provider のメンバーは kernel の順、その他は設定順（除外は外す）。
+        let mut fallback_order: Vec<String> = ranking
+            .order
             .iter()
-            .filter(|c| c.excluded_reasons.is_empty())
-            .map(|c| c.deployment_id.clone())
+            .filter(|id| {
+                round
+                    .candidates
+                    .iter()
+                    .any(|c| c.deployment_id == **id && c.excluded_reasons.is_empty())
+            })
+            .cloned()
             .collect();
+        fallback_order.extend(
+            round
+                .candidates
+                .iter()
+                .filter(|c| {
+                    c.excluded_reasons.is_empty() && !ranking.order.contains(&c.deployment_id)
+                })
+                .map(|c| c.deployment_id.clone()),
+        );
+        let mut candidates = round.candidates.clone();
+        for c in &mut candidates {
+            if let Some(t) = ranking.trace_for(&c.deployment_id) {
+                c.score = t.score;
+                c.quality = t.quality.clone();
+                c.score_breakdown = t.score_breakdown.clone();
+            }
+        }
+        let mut reasons = vec![
+            "enforce: allowlist by constraints; quota excludes the source, never the lane"
+                .to_string(),
+        ];
+        if ranking.chosen.is_some() {
+            reasons.push(format!(
+                "role members: {} ranked by {}; priority order when quality is unknown",
+                ranking.order.len(),
+                ranking.ranked_by
+            ));
+        }
         RoutingTraceV1 {
             decision_id: run_id.into(),
             parent_decision_id: None,
@@ -460,18 +511,21 @@ impl Dispatcher {
             policy_version: "dispatch-enforce-heuristic-v1".into(),
             catalog_version: "providers.tier_models".into(),
             feature_version: "legacy".into(),
-            estimator_version: "heuristic".into(),
+            estimator_version: if ranking.ranked_by
+                == super::routing_members::MEMBER_RANKING_ESTIMATOR
+            {
+                super::routing_members::MEMBER_RANKING_ESTIMATOR.into()
+            } else {
+                "heuristic".into()
+            },
             snapshot_id: "account-book+provider-state".into(),
             observed_at: round.observed_at.clone(),
             requested_lane: hint.tier,
             selected_lane: Some(hint.tier),
-            candidates: round.candidates.clone(),
+            candidates,
             selected: Some(selected.into()),
             fallback_order,
-            reasons: vec![
-                "enforce: allowlist by constraints; quota excludes the source, never the lane"
-                    .into(),
-            ],
+            reasons,
             source_id: Some(selected.into()),
             model: Some(model.into()),
             account_id: account.map(str::to_owned),
@@ -486,6 +540,7 @@ mod tests {
 
     fn obs(u5: f64, u7: Option<f64>, observed_at: i64) -> RateLimitObservation {
         RateLimitObservation {
+            one_month: None,
             five_hour: Some(RateWindow {
                 utilization: u5,
                 resets_at: observed_at + 3600,

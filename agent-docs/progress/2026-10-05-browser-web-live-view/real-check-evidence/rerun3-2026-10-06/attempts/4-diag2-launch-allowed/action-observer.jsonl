@@ -1,0 +1,4 @@
+{"observer": "started", "t": 1791278366.789}
+{"session_dir": "73bfab2e39024c652947a75868b3a344", "t": 1791278369.356}
+{"session": "73bfab2e39024c652947a75868b3a344", "file": "0000000000000001.request", "body": "{\"args\":[\"http://127.0.0.1:17730/\"],\"artifact\":null,\"verb\":\"open\"}", "t": 1791278369.489}
+{"session": "73bfab2e39024c652947a75868b3a344", "file": "0000000000000001.result", "body": "{\"status\": 1, \"stdout\": \"{\\\"_boundary\\\":{\\\"nonce\\\":\\\"7eead88a28f33e24ce18448fd735e5f0\\\",\\\"origin\\\":\\\"unknown\\\"},\\\"data\\\":null,\\\"error\\\":\\\"Navigation failed: net::ERR_HTTP_RESPONSE_CODE_FAILURE\\\",\\\"success\\\":false}\\n\"}", "t": 1791278369.9}

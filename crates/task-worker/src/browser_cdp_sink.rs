@@ -26,6 +26,8 @@ use crate::browser_relay;
 
 const MAX_FRAME: usize = 65536;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Bound on events no agent connection has taken yet (oldest dropped first).
+const MAX_QUEUED_EVENTS: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InjectionError {
@@ -354,6 +356,9 @@ impl CdpController {
 
     pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
         self.clear_injected_values()?;
+        // Drain frames produced during the stopped interval while suppression is
+        // still active, so the relay cannot forward them after the section closes.
+        self.pump_events()?;
         self.auth_section = None;
         Ok(())
     }
@@ -411,6 +416,23 @@ impl CdpController {
             events.retain(|e| !self.redisplayed(e));
             events
         }
+    }
+
+    /// Like [`Self::take_agent_events`], but only the events of `sessions`; events of
+    /// other connections' sessions stay queued for them (F1: idle pumping per connection).
+    pub fn take_agent_events_for(
+        &mut self,
+        sessions: &std::collections::HashSet<String>,
+    ) -> Vec<Value> {
+        if self.observation_stopped() {
+            self.events.clear();
+            return Vec::new();
+        }
+        let (mine, rest): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.events)
+            .into_iter()
+            .partition(|e| e["sessionId"].as_str().is_none_or(|s| sessions.contains(s)));
+        self.events = rest;
+        mine.into_iter().filter(|e| !self.redisplayed(e)).collect()
     }
 
     pub fn auth_section_active(&self) -> bool {
@@ -665,6 +687,61 @@ impl CdpController {
         Ok(reply)
     }
 
+    fn queue_event(&mut self, value: Value) {
+        if value.get("method").is_none() {
+            return;
+        }
+        if self.auth_section.is_some()
+            && value["method"] == "Network.requestWillBeSent"
+            && value["params"]["redirectResponse"].is_object()
+        {
+            self.redirect_seen = true;
+        } else if !self.observation_stopped() {
+            if self.events.len() >= MAX_QUEUED_EVENTS {
+                self.events.remove(0);
+            }
+            self.events.push(value);
+        }
+    }
+
+    /// F1: queue CDP events the browser emitted while no command was in flight
+    /// (e.g. `Page.loadEventFired` after the `Page.navigate` reply). Never waits.
+    pub fn pump_events(&mut self) -> Result<(), InjectionError> {
+        loop {
+            while let Some(end) = self.buffered.iter().position(|b| *b == 0) {
+                let mut frame: Vec<u8> = self.buffered.drain(..=end).collect();
+                let parsed = serde_json::from_slice::<Value>(&frame[..end]);
+                frame.zeroize();
+                // A reply nobody waits for (all calls hold the lock until answered) is dropped.
+                if let Ok(value) = parsed {
+                    self.queue_event(value);
+                }
+            }
+            if self.buffered.len() >= MAX_FRAME {
+                return Err(InjectionError::SinkFailed);
+            }
+            let mut pollfd = nix::libc::pollfd {
+                fd: self.read.as_raw_fd(),
+                events: nix::libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: pollfd points to one valid descriptor and structure.
+            if unsafe { nix::libc::poll(&mut pollfd, 1, 0) } <= 0 {
+                return Ok(());
+            }
+            let mut chunk = [0u8; 4096];
+            let n = self
+                .read
+                .read(&mut chunk)
+                .map_err(|_| InjectionError::SinkFailed)?;
+            if n == 0 {
+                return Err(InjectionError::SinkFailed);
+            }
+            self.buffered.extend_from_slice(&chunk[..n]);
+            chunk.zeroize();
+        }
+    }
+
     fn read_response(&mut self, id: u64) -> Result<Value, InjectionError> {
         loop {
             if let Some(end) = self.buffered.iter().position(|b| *b == 0) {
@@ -676,16 +753,7 @@ impl CdpController {
                 if value["id"] == id {
                     return Ok(value);
                 }
-                if value.get("method").is_some() {
-                    if self.auth_section.is_some()
-                        && value["method"] == "Network.requestWillBeSent"
-                        && value["params"]["redirectResponse"].is_object()
-                    {
-                        self.redirect_seen = true;
-                    } else if !self.observation_stopped() {
-                        self.events.push(value);
-                    }
-                }
+                self.queue_event(value);
                 continue;
             }
             if self.buffered.len() >= MAX_FRAME {
@@ -820,4 +888,64 @@ fn send_packet(fd: &OwnedFd, bytes: &[u8]) -> Result<(), InjectionError> {
         return Err(InjectionError::SinkFailed);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod idle_pump_tests {
+    use super::*;
+    use std::os::unix::net::UnixStream;
+
+    fn controller() -> (CdpController, UnixStream) {
+        let (controller_end, browser) = UnixStream::pair().expect("socket pair");
+        let read = File::from(OwnedFd::from(controller_end.try_clone().expect("clone")));
+        let write = File::from(OwnedFd::from(controller_end));
+        (CdpController::new(write, read), browser)
+    }
+
+    #[test]
+    fn event_queue_drops_oldest_after_4096_entries() {
+        let (mut controller, _browser) = controller();
+        for index in 0..=MAX_QUEUED_EVENTS {
+            controller.queue_event(
+                json!({"method":"Page.loadEventFired", "sessionId":"S", "params":{"index":index}}),
+            );
+        }
+        assert_eq!(controller.events.len(), MAX_QUEUED_EVENTS);
+        let sessions = ["S".to_owned()].into_iter().collect();
+        let events = controller.take_agent_events_for(&sessions);
+        assert_eq!(events.len(), MAX_QUEUED_EVENTS);
+        assert_eq!(events[0]["params"]["index"], 1);
+        assert_eq!(
+            events.last().expect("last event")["params"]["index"],
+            MAX_QUEUED_EVENTS
+        );
+    }
+
+    #[test]
+    fn taking_one_session_preserves_another_sessions_events() {
+        let (mut controller, _browser) = controller();
+        controller.queue_event(json!({"method":"Page.loadEventFired","sessionId":"OTHER"}));
+        controller.queue_event(json!({"method":"Page.loadEventFired","sessionId":"S"}));
+        let mine = ["S".to_owned()].into_iter().collect();
+        let other = ["OTHER".to_owned()].into_iter().collect();
+        assert_eq!(controller.take_agent_events_for(&mine).len(), 1);
+        assert_eq!(controller.take_agent_events_for(&other).len(), 1);
+    }
+
+    #[test]
+    fn auth_section_discards_pending_events_before_relay_resumes() {
+        let (mut controller, mut browser) = controller();
+        let sessions = ["S".to_owned()].into_iter().collect();
+        controller.open_auth_section("auth".into());
+        browser
+            .write_all(b"{\"method\":\"Page.loadEventFired\",\"sessionId\":\"S\"}\0")
+            .expect("auth event");
+        controller.close_auth_section().expect("close auth");
+        assert!(controller.take_agent_events_for(&sessions).is_empty());
+        browser
+            .write_all(b"{\"method\":\"Page.loadEventFired\",\"sessionId\":\"S\"}\0")
+            .expect("normal event");
+        controller.pump_events().expect("pump after auth");
+        assert_eq!(controller.take_agent_events_for(&sessions).len(), 1);
+    }
 }

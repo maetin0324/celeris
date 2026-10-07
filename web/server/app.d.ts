@@ -17,6 +17,9 @@ export function createApp(options?: {
   daemonTokenFile?: string;
   relayTimeoutMs?: number;
   chatUploadLimitBytes?: number | string;
+  liveUpstream?: string;
+  attestationKeyFile?: string;
+  ownerSocket?: string;
   log?: (entry: { path: string; status: number; ms: number }) => void;
   registerRoutes?: (app: Express) => void;
 }): Express;

@@ -1,0 +1,95 @@
+Fable rerun 5 of the browser web Live View real check, 2026-10-06 (task 01M46W97H391DSFW1XJ745W0G9).
+Tested code: child task 01M48DGY90GJAW2T8C95267HV3 tree at f5b9dc4e (f5b9dc4efbfeca9605e22f95ae91a83968614046,
+"integrate wu/verify (phase verify)"; includes the F1 cdp-pump fix, check-script order, session-home/cleanup and bee1c2e4).
+Binaries were built from that tree with CARGO_TARGET_DIR=/var/tmp/fable-merge-target. The script, doc and web were run
+from a git-archive copy of f5b9dc4e in /var/tmp/fable-rerun5-src (web/node_modules copied from the parent tree, web/dist
+rebuilt there; index.html sha256 is the same as reruns 3-4). The child tree was used read-only and is still clean. The
+sha256 of every binary, the script and the doc is in versions.txt.
+
+Result: PASS (code, script and doc unpatched). The as-documented attempt 2 exited 1 only at the final Playwright
+screenshot, because my operator wrapper redirected HOME to the test dir (not something the doc asks for) and Playwright
+then looked for its browser under that HOME. Diagnostic attempt 3 changed only the wrapper environment
+(PLAYWRIGHT_BROWSERS_PATH pointing at the operator's existing Playwright cache) and the unpatched script exited 0 with
+every check passed. Attempt 1 is void: my local harness (v1) had a parsing bug and never clicked.
+
+Isolation: test daemon on 127.0.0.1:17728 (DB /var/tmp/cb-1001/test.sqlite3, HOME=/var/tmp/cb-1001/home), plus a separate
+test launcher run as celeris-browser via sudo -n. Its config /var/tmp/celeris-browser-config-1001/launcher.toml was
+root:root 0644 in a root:root 0755 dir and had test_loopback_allow = ["127.0.0.1:17730"], exactly PAGE_PORT. The script
+checked that this matched exactly, and the launcher logged "test-only loopback egress enabled: 127.0.0.1:17730 (not for
+production)". Loopback pages on 17730/17731, live fixture on 17732, web gateway on 17729. Nothing production was touched:
+production daemon pid 639460 (7710), production web (7720/7721), production launcher pid 3335880
+(/etc/celeris-browser/launcher.toml) with /run/celeris-browser/launcher.sock, ~/.config/celeris, and /local/celeris/data/db.
+Another task's test daemon on this host (pid 3437932) was not touched. No test used the external network. No host
+config, packages or fonts were changed (the Playwright cache under ~/.cache/ms-playwright was only read). Possible
+exception: `npx --offline vite build` printed npm's "new version available" notice, which may come from npm's update
+check (outside the test, same command as in rerun 4). The configs were copied to config/ BEFORE cleanup. The harness
+(config/loopback-acp-harness.py, v2) is a local scripted ACP agent with no LLM. It follows the new objective: open the
+allowed page, snapshot, read #inside, click the link "forbidden" (#forbidden-link) by its snapshot @e ref, then hold.
+It never opens the forbidden URL with the wrapper. Secrets (api.token, web.password, attestation key) were never copied.
+Each attempt dir was grepped for the token, the password and "PRIVATE KEY", with no hit.
+
+Per check (attempt 3; attempt 2 gave the same results for all of these except the screenshot):
+- run list: PASS. /browser/runs shows a RUNNING run with live_path=/browser/live/{task}/{run} and no raw live_view_url.
+- Live View auth: PASS. The owner's GET returned 200. Unauthenticated: GET 401 and WS upgrade "HTTP/1.1 401 Rejected". A
+  second logged-in session has isOwner=false; its GET returned 403 and its WS upgrade "HTTP/1.1 403 Rejected".
+- gateway survives client RST: PASS. Each rejected upgrade socket was closed abruptly. The gateway kept serving (the
+  following live view, control, release and decision requests returned 200), and web.log has no ECONNRESET or crash.
+- agent open/snapshot/click timings: PASS, F1 FIXED. Attempt 2 (harness.log): open http://127.0.0.1:17730/ exit 0 in
+  0.45 s, snapshot 0.10 s (returned `- link "forbidden" [ref=e1]`), click @e1 exit 0 in 0.10 s, and the next snapshot shows
+  Chrome's "Access to 127.0.0.1 was denied" page. Attempt 3: open 0.45 s, click 0.10 s. In attempt 1 the first open
+  (just after the session launch) took 5.17 s and the later opens 0.14 s. Before the fix every open timed out at 25 s.
+  #inside: the shim's snapshot is interactive-only (snapshot -i), so the paragraph has no @e ref and its text is not
+  in the snapshot (harness logged read_inside=snapshot_text, has_inside=false). The script does not check this, and
+  Playwright confirms #inside == "inside" separately.
+- allowed loopback navigation (screenshot): PASS. page.log has the readiness GET / then the run's GET / 200 and
+  GET /favicon.ico (11:56:17), then Playwright's GET / (11:56:19). allowed-page.png shows "inside" and the "forbidden" link.
+- Chrome-initiated out-of-scope navigation denied by egress: PASS. Collected while the launcher session was alive and
+  before pause: egress-denied.json = {"at":"2026-10-06T11:56:17.387555717Z","host":"127.0.0.1","kind":"ip_literal",
+  "port":17731,"session_id":"0a9f2ffec2e0ca0d0765b07813a28415"}. The session id is the launcher's Started id taken from
+  daemon.log (R7). The run's session_id was celeris-c58ee82d145abe158fa1868ccbc1ec94. denied-page.log has no GET (17731 got
+  no request), and no record exists for the allowed port 17730. F2 (collect before pause/deny) and F3 (ip_literal) are fixed.
+- lease acquire/return: PASS. Control status agent_running, then pause gave paused, takeover gave human_control, and
+  release returned 200.
+- input with/without lease: PASS. With the lease, the marked input_mouse frame (check_marker real-check-leased-input)
+  reached the upstream fixture (live-upstream-frames.jsonl has exactly that 1 frame). Without a lease, the gateway
+  replied input_denied/lease_required and 0 frames went upstream, both while the agent ran and after release.
+- waits: PASS. wait open 201 (origin https://real-check.celeris.invalid), listed as pending, web deny 200. The task then
+  went blocked->failed (approval_denied) and the run closed. This is the expected effect of deny and happens after the
+  denial was collected.
+- settings edit: PASS. Gateway PATCH widen 200 (both origins), javascript:alert(1) 422, restore 200, and the daemon's
+  GET /api/v1/org stores [http://127.0.0.1:17730].
+- cleanup incl. session dir removal: PASS, F4 FIXED. After every attempt, launcher-state-after-stop.txt lists only
+  launcher-state/{registry,sessions,supervisor}. The session dir is gone, and launcher.log has no "Permission denied"
+  or "remove session dir" error. After the run no test process was left and nothing listened on 17728-17732.
+  /var/tmp/cb-1001, /var/tmp/celeris-browser-config-1001 and /var/tmp/fable-rerun5-src were removed
+  (commands/cleanup.sh). /tmp/celeris-browser-1001 existed before this run (other processes of this UID use it). It was
+  left in place and is empty. /var/tmp/fable-merge-target (build cache) was kept.
+
+Attempts:
+- 1-as-documented-harness-v1: exit 1 at the egress step. HARNESS defect (mine, not code/script/doc): the shim wraps the
+  JSON in <untrusted_browser_content>...</untrusted_browser_content>, and v1 parsed it without unwrapping, so the
+  escaped `link \"forbidden\"` never matched and no click happened. Fixed in harness v2. Attempt 1 is void for the
+  code verdict, but it shows that open works.
+- 2-as-documented: exit 1 after every API-driver check passed. Cause: the operator wrapper (commands/
+  run-check-as-documented.sh) exports HOME=/var/tmp/cb-1001/home to keep the test daemon away from ~/.config/celeris.
+  The script's Playwright step then looked for chromium_headless_shell-1243 under that HOME and failed with
+  "Executable doesn't exist". Category: operator environment/doc gap, not code.
+- 3-diag1-playwright-browsers-path (diagnostic 1 of 2): the same unpatched script, with only
+  PLAYWRIGHT_BROWSERS_PATH=/home/rmaeda/.cache/ms-playwright added to the wrapper. Exit 0, and checks.json ends with
+  "browser egress ... result: passed".
+
+Remaining defects: no code defect found. Minor items:
+- Doc (suggestion): when the operator isolates the daemon with HOME=..., Playwright needs PLAYWRIGHT_BROWSERS_PATH (or
+  the script could set HOME only for the daemon process). The doc does not ask for a HOME override, so the documented
+  procedure itself is not broken.
+- Objective wording: "read #inside" cannot be done through the shim's interactive-only snapshot, and extract needs an
+  @e ref, which a plain paragraph does not get. Not checked by the script, so harmless. The wording could drop it or
+  the check could rely on Playwright, as it already does.
+- Chrome logs 4x "Chrome stderr category=other-startup-error" per session (seen in every run, no functional effect).
+
+Files: attempts/{1-as-documented-harness-v1,2-as-documented,3-diag1-playwright-browsers-path}. Each holds checks.json,
+logs, harness.log, run-browser/, task-events.json, launcher-state-after-stop.txt and script-output.txt, plus
+egress-denied.json in 2-3 and allowed-page.png in 3. Top-level allowed-page.png and egress-denied.json are copies from
+attempt 3. commands/ holds setup, reset, save-attempt, cleanup, the run wrappers (as documented and diag1).
+config/ holds launcher.toml, daemon.toml, harness v2, org.toml and conformance.json.
+attempts/1-*/loopback-acp-harness-v1.py is the faulty v1 harness.

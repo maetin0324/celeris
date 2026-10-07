@@ -1,0 +1,373 @@
+diff --git a/crates/task-worker/src/browser_cdp_sink.rs b/crates/task-worker/src/browser_cdp_sink.rs
+index 7465546..c97fabc 100644
+--- a/crates/task-worker/src/browser_cdp_sink.rs
++++ b/crates/task-worker/src/browser_cdp_sink.rs
+@@ -26,6 +26,8 @@ use crate::browser_relay;
+ 
+ const MAX_FRAME: usize = 65536;
+ const TIMEOUT: Duration = Duration::from_secs(5);
++/// Bound on events no agent connection has taken yet (oldest dropped first).
++const MAX_QUEUED_EVENTS: usize = 4096;
+ 
+ #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+ pub enum InjectionError {
+@@ -413,6 +415,23 @@ impl CdpController {
+         }
+     }
+ 
++    /// Like [`Self::take_agent_events`], but only the events of `sessions`; events of
++    /// other connections' sessions stay queued for them (F1: idle pumping per connection).
++    pub fn take_agent_events_for(
++        &mut self,
++        sessions: &std::collections::HashSet<String>,
++    ) -> Vec<Value> {
++        if self.observation_stopped() {
++            self.events.clear();
++            return Vec::new();
++        }
++        let (mine, rest): (Vec<Value>, Vec<Value>) = std::mem::take(&mut self.events)
++            .into_iter()
++            .partition(|e| e["sessionId"].as_str().is_none_or(|s| sessions.contains(s)));
++        self.events = rest;
++        mine.into_iter().filter(|e| !self.redisplayed(e)).collect()
++    }
++
+     pub fn auth_section_active(&self) -> bool {
+         self.auth_section.is_some()
+     }
+@@ -665,6 +684,61 @@ impl CdpController {
+         Ok(reply)
+     }
+ 
++    fn queue_event(&mut self, value: Value) {
++        if value.get("method").is_none() {
++            return;
++        }
++        if self.auth_section.is_some()
++            && value["method"] == "Network.requestWillBeSent"
++            && value["params"]["redirectResponse"].is_object()
++        {
++            self.redirect_seen = true;
++        } else if !self.observation_stopped() {
++            if self.events.len() >= MAX_QUEUED_EVENTS {
++                self.events.remove(0);
++            }
++            self.events.push(value);
++        }
++    }
++
++    /// F1: queue CDP events the browser emitted while no command was in flight
++    /// (e.g. `Page.loadEventFired` after the `Page.navigate` reply). Never waits.
++    pub fn pump_events(&mut self) -> Result<(), InjectionError> {
++        loop {
++            while let Some(end) = self.buffered.iter().position(|b| *b == 0) {
++                let mut frame: Vec<u8> = self.buffered.drain(..=end).collect();
++                let parsed = serde_json::from_slice::<Value>(&frame[..end]);
++                frame.zeroize();
++                // A reply nobody waits for (all calls hold the lock until answered) is dropped.
++                if let Ok(value) = parsed {
++                    self.queue_event(value);
++                }
++            }
++            if self.buffered.len() >= MAX_FRAME {
++                return Err(InjectionError::SinkFailed);
++            }
++            let mut pollfd = nix::libc::pollfd {
++                fd: self.read.as_raw_fd(),
++                events: nix::libc::POLLIN,
++                revents: 0,
++            };
++            // SAFETY: pollfd points to one valid descriptor and structure.
++            if unsafe { nix::libc::poll(&mut pollfd, 1, 0) } <= 0 {
++                return Ok(());
++            }
++            let mut chunk = [0u8; 4096];
++            let n = self
++                .read
++                .read(&mut chunk)
++                .map_err(|_| InjectionError::SinkFailed)?;
++            if n == 0 {
++                return Err(InjectionError::SinkFailed);
++            }
++            self.buffered.extend_from_slice(&chunk[..n]);
++            chunk.zeroize();
++        }
++    }
++
+     fn read_response(&mut self, id: u64) -> Result<Value, InjectionError> {
+         loop {
+             if let Some(end) = self.buffered.iter().position(|b| *b == 0) {
+@@ -676,16 +750,7 @@ impl CdpController {
+                 if value["id"] == id {
+                     return Ok(value);
+                 }
+-                if value.get("method").is_some() {
+-                    if self.auth_section.is_some()
+-                        && value["method"] == "Network.requestWillBeSent"
+-                        && value["params"]["redirectResponse"].is_object()
+-                    {
+-                        self.redirect_seen = true;
+-                    } else if !self.observation_stopped() {
+-                        self.events.push(value);
+-                    }
+-                }
++                self.queue_event(value);
+                 continue;
+             }
+             if self.buffered.len() >= MAX_FRAME {
+diff --git a/crates/task-worker/src/browser_shared_cdp.rs b/crates/task-worker/src/browser_shared_cdp.rs
+index 2401f02..496b225 100644
+--- a/crates/task-worker/src/browser_shared_cdp.rs
++++ b/crates/task-worker/src/browser_shared_cdp.rs
+@@ -137,7 +137,25 @@ fn serve(
+         return;
+     }
+     let mut sessions = HashSet::new();
+-    while let Some(frame) = read_ws(&mut stream) {
++    loop {
++        // F1: while the agent sends nothing, keep delivering the browser's events
++        // (agent-browser waits for `Page.loadEventFired` after `Page.navigate` replies).
++        if !agent_readable(&stream, IDLE_PUMP) {
++            let events = match controller.lock() {
++                Ok(mut c) if !c.auth_section_active() => match c.pump_events() {
++                    Ok(()) => c.take_agent_events_for(&sessions),
++                    Err(_) => break,
++                },
++                _ => Vec::new(),
++            };
++            if forward_events(&mut stream, events, &sessions).is_err() {
++                break;
++            }
++            continue;
++        }
++        let Some(frame) = read_ws(&mut stream) else {
++            break;
++        };
+         let Ok(command) = serde_json::from_slice::<Value>(&frame) else {
+             break;
+         };
+@@ -160,13 +178,15 @@ fn serve(
+         let (response, events) = match controller.lock() {
+             Ok(mut c) if !c.auth_section_active() && !blocked => {
+                 let result = c.agent_command(method, params, session);
+-                let events = c.take_agent_events();
++                let mut events = c.take_agent_events_for(&sessions);
+                 let reply = match result {
+                     Ok(mut reply) => {
+                         if method == "Target.attachToTarget"
+                             && let Some(s) = reply["result"]["sessionId"].as_str()
+                         {
+                             sessions.insert(s.to_owned());
++                            // Events of the new session read during this call.
++                            events.extend(c.take_agent_events_for(&sessions));
+                         }
+                         reply["id"] = id.clone();
+                         reply
+@@ -192,29 +212,53 @@ fn serve(
+         if send_ws(&mut stream, &response).is_err() {
+             break;
+         }
+-        for mut event in events {
+-            let allowed = event["sessionId"]
+-                .as_str()
+-                .is_some_and(|s| sessions.contains(s));
+-            if !allowed {
+-                continue;
+-            }
+-            if let Some(request) = event
+-                .pointer_mut("/params/request")
+-                .and_then(Value::as_object_mut)
+-            {
+-                request.remove("postData");
+-                request.remove("postDataEntries");
+-                request.remove("hasPostData");
+-            }
+-            if send_ws(&mut stream, &event).is_err() {
+-                break;
+-            }
++        if forward_events(&mut stream, events, &sessions).is_err() {
++            break;
+         }
+     }
+     let _ = stream.shutdown(Shutdown::Both);
+ }
+ 
++const IDLE_PUMP: Duration = Duration::from_millis(20);
++
++/// Whether the agent has sent bytes (or closed) within `wait`.
++fn agent_readable(stream: &UnixStream, wait: Duration) -> bool {
++    use std::os::fd::AsRawFd;
++    let mut pollfd = nix::libc::pollfd {
++        fd: stream.as_raw_fd(),
++        events: nix::libc::POLLIN,
++        revents: 0,
++    };
++    // SAFETY: pollfd points to one valid descriptor and structure.
++    unsafe { nix::libc::poll(&mut pollfd, 1, wait.as_millis() as i32) != 0 }
++}
++
++/// Only events of sessions this connection attached cross; request bodies never do.
++fn forward_events(
++    stream: &mut UnixStream,
++    events: Vec<Value>,
++    sessions: &HashSet<String>,
++) -> std::io::Result<()> {
++    for mut event in events {
++        let allowed = event["sessionId"]
++            .as_str()
++            .is_some_and(|s| sessions.contains(s));
++        if !allowed {
++            continue;
++        }
++        if let Some(request) = event
++            .pointer_mut("/params/request")
++            .and_then(Value::as_object_mut)
++        {
++            request.remove("postData");
++            request.remove("postDataEntries");
++            request.remove("hasPostData");
++        }
++        send_ws(stream, &event)?;
++    }
++    Ok(())
++}
++
+ fn navigation_allowed(method: &str, params: &Value, domains: &[String]) -> bool {
+     let url = match method {
+         "Page.navigate" | "Target.createTarget" => params["url"].as_str(),
+diff --git a/crates/task-worker/tests/browser_shared_cdp_events.rs b/crates/task-worker/tests/browser_shared_cdp_events.rs
+new file mode 100644
+index 0000000..bee9594
+--- /dev/null
++++ b/crates/task-worker/tests/browser_shared_cdp_events.rs
+@@ -0,0 +1,130 @@
++//! F1: the shared CDP relay delivers browser events that arrive while the agent sends
++//! nothing (agent-browser waits for `Page.loadEventFired` after the `Page.navigate` reply).
++//! A scripted browser on a socket pair stands in for Chrome; no browser, no network.
++use std::io::{Read, Write};
++use std::os::unix::net::UnixStream;
++use std::sync::mpsc;
++use std::thread;
++use std::time::Duration;
++
++use serde_json::{Value, json};
++use task_worker::browser_cdp_sink::CdpController;
++use task_worker::browser_shared_cdp::SharedCdp;
++
++const TOKEN: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
++
++fn read_command(browser: &mut UnixStream) -> Value {
++    let mut bytes = Vec::new();
++    loop {
++        let mut byte = [0];
++        browser.read_exact(&mut byte).expect("CDP command byte");
++        if byte[0] == 0 {
++            return serde_json::from_slice(&bytes).expect("CDP command");
++        }
++        bytes.push(byte[0]);
++    }
++}
++
++fn write_message(browser: &mut UnixStream, value: Value) {
++    let mut bytes = serde_json::to_vec(&value).expect("CDP message");
++    bytes.push(0);
++    browser.write_all(&bytes).expect("CDP write");
++}
++
++fn ws_send(stream: &mut UnixStream, value: Value) {
++    let payload = serde_json::to_vec(&value).expect("frame");
++    assert!(payload.len() < 126);
++    let mask = [1u8, 2, 3, 4];
++    let mut frame = vec![0x81, 0x80 | payload.len() as u8];
++    frame.extend_from_slice(&mask);
++    frame.extend(payload.iter().enumerate().map(|(i, b)| b ^ mask[i % 4]));
++    stream.write_all(&frame).expect("ws send");
++}
++
++fn ws_recv(stream: &mut UnixStream) -> Value {
++    let mut h = [0u8; 2];
++    stream
++        .read_exact(&mut h)
++        .expect("ws frame header (event not delivered?)");
++    let mut n = (h[1] & 0x7f) as usize;
++    if n == 126 {
++        let mut ext = [0u8; 2];
++        stream.read_exact(&mut ext).expect("ws len");
++        n = u16::from_be_bytes(ext) as usize;
++    }
++    let mut payload = vec![0u8; n];
++    stream.read_exact(&mut payload).expect("ws payload");
++    serde_json::from_slice(&payload).expect("ws json")
++}
++
++#[test]
++fn relay_delivers_events_emitted_after_the_reply() {
++    let dir = tempfile::tempdir().expect("dir");
++    let (controller_end, mut browser) = UnixStream::pair().expect("pair");
++    let read = std::fs::File::from(std::os::fd::OwnedFd::from(
++        controller_end.try_clone().expect("clone"),
++    ));
++    let write = std::fs::File::from(std::os::fd::OwnedFd::from(controller_end));
++    let (replied_tx, replied_rx) = mpsc::channel::<()>();
++    let script = thread::spawn(move || {
++        let attach = read_command(&mut browser);
++        assert_eq!(attach["method"], "Target.attachToTarget");
++        write_message(
++            &mut browser,
++            json!({"id":attach["id"],"result":{"sessionId":"S1"}}),
++        );
++        let navigate = read_command(&mut browser);
++        assert_eq!(navigate["method"], "Page.navigate");
++        write_message(
++            &mut browser,
++            json!({"id":navigate["id"],"result":{"frameId":"F1","loaderId":"L1"}}),
++        );
++        // Only after the agent holds the navigate reply does the page finish loading.
++        replied_rx.recv().expect("agent got navigate reply");
++        write_message(
++            &mut browser,
++            json!({"method":"Page.loadEventFired","params":{"timestamp":1.0},"sessionId":"OTHER"}),
++        );
++        write_message(
++            &mut browser,
++            json!({"method":"Page.loadEventFired","params":{"timestamp":2.0},"sessionId":"S1"}),
++        );
++        browser
++    });
++    let socket = dir.path().join("cdp.sock");
++    let _relay = SharedCdp::start(
++        CdpController::new(write, read),
++        &socket,
++        TOKEN.into(),
++        vec!["http://127.0.0.1:17730".into()],
++    )
++    .expect("relay");
++    let mut agent = UnixStream::connect(&socket).expect("connect");
++    agent
++        .set_read_timeout(Some(Duration::from_secs(10)))
++        .expect("timeout");
++    write!(agent, "GET /{TOKEN} HTTP/1.1\r\nHost: 127.0.0.1:9223\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n").expect("upgrade");
++    let mut head = Vec::new();
++    while !head.ends_with(b"\r\n\r\n") {
++        let mut b = [0];
++        agent.read_exact(&mut b).expect("upgrade reply");
++        head.push(b[0]);
++    }
++    assert!(head.starts_with(b"HTTP/1.1 101"));
++    ws_send(
++        &mut agent,
++        json!({"id":1,"method":"Target.attachToTarget","params":{"targetId":"T","flatten":true}}),
++    );
++    assert_eq!(ws_recv(&mut agent)["result"]["sessionId"], "S1");
++    ws_send(
++        &mut agent,
++        json!({"id":2,"method":"Page.navigate","params":{"url":"http://127.0.0.1:17730/"},"sessionId":"S1"}),
++    );
++    assert_eq!(ws_recv(&mut agent)["id"], 2);
++    replied_tx.send(()).expect("signal");
++    // No further command: the load event must still arrive, and only for our session.
++    let event = ws_recv(&mut agent);
++    assert_eq!(event["method"], "Page.loadEventFired");
++    assert_eq!(event["sessionId"], "S1");
++    drop(script.join().expect("script"));
++}

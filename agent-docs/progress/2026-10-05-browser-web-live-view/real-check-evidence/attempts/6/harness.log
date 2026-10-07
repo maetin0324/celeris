@@ -1,0 +1,10 @@
+{"t": 1791258609.005, "started": true, "argv": [], "cwd": "/var/tmp/cbCao7/w/01M47NAH3FVXDAAPT9E48V4NRB"}
+{"t": 1791258609.005, "rpc": "initialize"}
+{"t": 1791258609.006, "rpc": "session/new"}
+{"t": 1791258609.007, "rpc": "session/prompt"}
+{"t": 1791258609.008, "cli": "/var/tmp/cbCao7/w/01M47NAH3FVXDAAPT9E48V4NRB/runs/01M47NAH79JR54X7XANAY66VRE/browser/celeris-browser.py"}
+{"t": 1791258609.039, "call": ["open", "http://127.0.0.1:17730/"], "exit": 2, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser policy unavailable; refusing to run\"}\n", "stderr_tail": ""}
+{"t": 1791258609.069, "call": ["snapshot"], "exit": 2, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser policy unavailable; refusing to run\"}\n", "stderr_tail": ""}
+{"t": 1791258609.102, "call": ["open", "http://127.0.0.1:17731/"], "exit": 2, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser policy unavailable; refusing to run\"}\n", "stderr_tail": ""}
+{"t": 1791258609.102, "summary": {"allowed_open_exit": 2, "snapshot_exit": 2, "snapshot_has_inside": false, "denied_open_exit": 2}}
+{"t": 1791258609.134, "call": ["snapshot"], "exit": 2, "secs": 0.03, "stdout_tail": "{\"success\":false,\"error\":\"browser policy unavailable; refusing to run\"}\n", "stderr_tail": ""}

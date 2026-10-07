@@ -158,6 +158,7 @@ impl Env {
 fn task(status: Status) -> Task {
     let now = at(0);
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

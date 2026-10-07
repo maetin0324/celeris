@@ -413,7 +413,8 @@ impl Config {
                 )));
             }
             if let Some(account) = &cos.account_id
-                && (!p.account_pool || p.account_id.as_ref().is_some_and(|fixed| fixed != account))
+                && (!p.account_pool.is_on()
+                    || p.account_id.as_ref().is_some_and(|fixed| fixed != account))
             {
                 return Err(ConfigError::Invalid(format!(
                     "[cos] provider {id:?} conflicts with account_id"
@@ -459,7 +460,8 @@ impl Config {
                         .get(&cos.tier)
                         .is_none_or(|binding| binding.unavailable_reason.is_none())
                     && cos.account_id.as_ref().is_none_or(|id| {
-                        p.account_pool && p.account_id.as_ref().is_none_or(|fixed| fixed == id)
+                        p.account_pool.is_on()
+                            && p.account_id.as_ref().is_none_or(|fixed| fixed == id)
                     })
                     && self.provider_llm_source(&p.id).is_some_and(|source| {
                         !matches!(source.source, LlmSourceRef::None | LlmSourceRef::Unknown)

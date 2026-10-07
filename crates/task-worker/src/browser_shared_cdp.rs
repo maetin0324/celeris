@@ -11,7 +11,6 @@ use std::time::Duration;
 
 use base64::Engine;
 use serde_json::{Value, json};
-use url::Url;
 
 use crate::browser_cdp_sink::{CdpController, InjectionError};
 
@@ -138,7 +137,28 @@ fn serve(
         return;
     }
     let mut sessions = HashSet::new();
-    while let Some(frame) = read_ws(&mut stream) {
+    loop {
+        // F1: while the agent sends nothing, keep delivering the browser's events
+        // (agent-browser waits for `Page.loadEventFired` after `Page.navigate` replies).
+        if !agent_readable(&stream, IDLE_PUMP) {
+            let sent = match controller.lock() {
+                Ok(mut c) if !c.observation_stopped() => match c.pump_events() {
+                    Ok(()) => {
+                        let events = c.take_agent_events_for(&sessions);
+                        forward_events(&mut stream, events, &sessions).is_ok()
+                    }
+                    Err(_) => break,
+                },
+                _ => true,
+            };
+            if !sent {
+                break;
+            }
+            continue;
+        }
+        let Some(frame) = read_ws(&mut stream) else {
+            break;
+        };
         let Ok(command) = serde_json::from_slice::<Value>(&frame) else {
             break;
         };
@@ -161,13 +181,15 @@ fn serve(
         let (response, events) = match controller.lock() {
             Ok(mut c) if !c.auth_section_active() && !blocked => {
                 let result = c.agent_command(method, params, session);
-                let events = c.take_agent_events();
+                let mut events = c.take_agent_events_for(&sessions);
                 let reply = match result {
                     Ok(mut reply) => {
                         if method == "Target.attachToTarget"
                             && let Some(s) = reply["result"]["sessionId"].as_str()
                         {
                             sessions.insert(s.to_owned());
+                            // Events of the new session read during this call.
+                            events.extend(c.take_agent_events_for(&sessions));
                         }
                         reply["id"] = id.clone();
                         reply
@@ -193,27 +215,57 @@ fn serve(
         if send_ws(&mut stream, &response).is_err() {
             break;
         }
-        for mut event in events {
-            let allowed = event["sessionId"]
-                .as_str()
-                .is_some_and(|s| sessions.contains(s));
-            if !allowed {
-                continue;
+        let sent = match controller.lock() {
+            Ok(c) if !c.observation_stopped() => {
+                forward_events(&mut stream, events, &sessions).is_ok()
             }
-            if let Some(request) = event
-                .pointer_mut("/params/request")
-                .and_then(Value::as_object_mut)
-            {
-                request.remove("postData");
-                request.remove("postDataEntries");
-                request.remove("hasPostData");
-            }
-            if send_ws(&mut stream, &event).is_err() {
-                break;
-            }
+            _ => true,
+        };
+        if !sent {
+            break;
         }
     }
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+const IDLE_PUMP: Duration = Duration::from_millis(20);
+
+/// Whether the agent has sent bytes (or closed) within `wait`.
+fn agent_readable(stream: &UnixStream, wait: Duration) -> bool {
+    use std::os::fd::AsRawFd;
+    let mut pollfd = nix::libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: nix::libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: pollfd points to one valid descriptor and structure.
+    unsafe { nix::libc::poll(&mut pollfd, 1, wait.as_millis() as i32) != 0 }
+}
+
+/// Only events of sessions this connection attached cross; request bodies never do.
+fn forward_events(
+    stream: &mut UnixStream,
+    events: Vec<Value>,
+    sessions: &HashSet<String>,
+) -> std::io::Result<()> {
+    for mut event in events {
+        let allowed = event["sessionId"]
+            .as_str()
+            .is_some_and(|s| sessions.contains(s));
+        if !allowed {
+            continue;
+        }
+        if let Some(request) = event
+            .pointer_mut("/params/request")
+            .and_then(Value::as_object_mut)
+        {
+            request.remove("postData");
+            request.remove("postDataEntries");
+            request.remove("hasPostData");
+        }
+        send_ws(stream, &event)?;
+    }
+    Ok(())
 }
 
 fn navigation_allowed(method: &str, params: &Value, domains: &[String]) -> bool {
@@ -226,19 +278,7 @@ fn navigation_allowed(method: &str, params: &Value, domains: &[String]) -> bool 
     if url == "about:blank" {
         return true;
     }
-    let Ok(url) = Url::parse(url) else {
-        return false;
-    };
-    if url.scheme() != "https" || !url.username().is_empty() || url.password().is_some() {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    domains.iter().any(|d| {
-        d.strip_prefix("*.")
-            .map_or(host == d, |base| host.ends_with(&format!(".{base}")))
-    })
+    crate::browser_policy::url_origin_allowed(url, domains)
 }
 
 fn error(id: &Value, code: &str) -> Value {

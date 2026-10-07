@@ -260,7 +260,7 @@ test("parity: /tasks/:id/runs/:runId 360px で長い 1 行がページを広げ�
       }),
     },
     files: {
-      "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+      "/api/v1/tasks/T1/runs/R1/stdout": {
         body: `${line(long)}\n${toolResult}\n${long}\n`,
         type: "text/plain; charset=utf-8",
       },

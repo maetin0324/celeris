@@ -1,0 +1,146 @@
+# 組織図の種（ADR-0033 D1 / ADR-0046 D1・D6・D7、SPEC §3.2）。`config.toml` の `org_include = "org.toml"`
+# が指すファイル。
+#
+# **このファイルは DB の `org_nodes` が空のときにだけ読まれる**。一度蒔いたら以後は DB が正で、
+# 役職を足す・分ける・消すのは GUI（`POST/PATCH/DELETE /api/v1/org`）から行う。ここを書き換えても
+# 既にある組織は変わらない（ADR-0024 の accounts と同じ「DB が正」の扱い）。
+# 既に Phase 58 までの木が入っている DB は `celerisctl org migrate-v2 --config <config.toml>` で写す。
+#
+# ADR-0046 の考え方:
+#   - 木が継がせるのは**文化・知識・権限・既定値**（`profile`）。能力は**タグ**（`skills`）。
+#   - 「組織にする」判定は機械的: そのノード以下に共通で継がせたい knowledge / harness / tools /
+#     policy / 実行環境 / 権限 / 品質基準のどれかがあるときだけ。「役割が違う」だけなら skill。
+#   - ハーネス（`[[harnesses]]`）は**組織と 1 対 1 にしない**。1 つのノードが複数を受けられる。
+#   - 担当は**決定的に**決まる（ADR-0046 D5 の matching）。LLM が組織図を読んで人選する経路は無い。
+#
+# 各行の意味:
+#   id        英小文字ケバブ。API と GUI で使う不変の名前。
+#   name      人が読む役職名。
+#   kind      secretary（根 = Chief of Staff。1 つだけ）/ department / section。
+#   parent_id 根以外は必須。
+#   genre     そのノードが**自分の仕事で使う**ハーネス（`[[harnesses]] id`）。`profile.harnesses.default`
+#             と同じ値を書いておくと、対話 run の前置きに「仕事で使う道具」として出る（Phase 30）。
+#   brief     担当の一言。run のプロンプトに前置きされる。
+#   profile   ADR-0046 D1。子は親を継ぐ（和・子勝ち・deny 勝ち・交わり・連結）。
+#             skills / knowledge / harnesses / tools / deny_tools / run / model / policy / review / permissions。
+#   position  同じ親の中での並び順（省略したらこのファイルの並び順）。
+
+# ---- 根: Chief of Staff（ADR-0046 D6）----
+[[org]]
+id = "cos"
+name = "Chief of Staff"
+kind = "secretary"
+genre = "conversation"
+brief = """人と話し、案件を理解し、組織に流し、報告を集めて人に返す。
+明示された修正・実装の依頼は、調査だけに縮めず実装と検証まで含む仕事として actions で委譲する。
+通常の作業は方針の再承認を求めない。必要な情報が欠ける場合や未許可の操作だけ質問する。
+人が案件の計画を求めたときは理解・方針・途中目標を提案する。担当の選択は celeris が行う。"""
+
+[org.profile]
+tools = []
+policy = ["人に返す文は、人が数十秒で読める分量にする。"]
+
+[org.profile.harnesses]
+allowed = ["conversation", "plan"]
+default = "conversation"
+
+[org.profile.model]
+tier = "standard"
+
+# CoS が読む知識（ADR-0047）: 人のことと、案件のこと。
+[[org.profile.knowledge]]
+kind = "kb"
+scope = "user"
+
+[[org.profile.knowledge]]
+kind = "kb"
+scope = "projects"
+
+[[org.profile.knowledge]]
+kind = "memory"
+
+# ---- Engineering ----
+[[org]]
+id = "engineering"
+name = "Engineering"
+kind = "department"
+parent_id = "cos"
+brief = "コードを書く仕事を受け持つ。"
+
+[org.profile]
+skills = ["software"]
+policy = ["変更は小さく、理由をコミットに書く。"]
+
+[org.profile.harnesses]
+allowed = ["coding"]
+
+[[org.profile.knowledge]]
+kind = "memory"
+
+[[org]]
+id = "software-engineering"
+name = "Software Engineering"
+kind = "section"
+parent_id = "engineering"
+genre = "coding"
+brief = "アプリケーションと API を作る・直す・テストする。"
+
+[org.profile]
+skills = ["software", "rust", "typescript", "react", "sqlite", "api"]
+tools = ["gh"]
+
+[org.profile.harnesses]
+default = "coding"
+
+# ADR-0073: `frontend` はここ（ui-ux）にだけ置く。画面・スマホ表示の仕事は ui-ux に、API や Rust の
+# 仕事は software-engineering に振り分けられる（`typescript` / `react` は両方が持つ）。
+[[org]]
+id = "ui-ux"
+name = "UI/UX"
+kind = "section"
+parent_id = "engineering"
+genre = "coding"
+brief = "画面・操作の流れ・見た目を設計し、作り、確かめる。スマホと PC の両方、アクセシビリティ、使いやすさを見る。"
+
+[org.profile]
+skills = ["ui-design", "ux", "accessibility", "frontend", "react", "typescript", "css", "responsive", "usability"]
+skills_mounts = ["frontend-design", "shadcn", "web-design", "ui-ux-quality-gate"]
+tools = ["gh"]
+policy = [
+  "変更前後のスクリーンショットをスマホ幅（360/390/412px）とデスクトップ幅で artifacts に残す。表示確認には gui/ の Playwright（scripts/check-*.mjs）を使う。",
+  "デザインだけで終わらせず、実装と表示確認まで行う。",
+  "skill のコード例に出るライブラリ（next-themes, motion, react-hook-form, zod, lucide-react, figma-squircle, ForesightJS, next/font/google 等）は導入しない。依存は決定済みの範囲（shadcn）のみ、それ以外は提案に留める。テストやビルドで外部ネットワークに出ない。",
+]
+
+[org.profile.harnesses]
+default = "coding"
+
+[[org]]
+id = "browser-execution"
+name = "ブラウザ実行課"
+kind = "section"
+parent_id = "engineering"
+genre = "coding"
+brief = "エージェントのブラウザ操作で Web 上の作業を行う。人の監視・承認・引き継ぎを前提に動く。"
+
+[org.profile]
+skills = ["browser-enabled", "browser", "web-automation"]
+policy = [
+  "ブラウザ操作は grant と task の browser policy の範囲だけで行う。範囲外の origin・操作が要るときは自分で広げず、waits で人に上げる。",
+  "人が control lease を持つ間は操作しない。返却されたら現在の画面を読み直してから続ける。",
+  "credential・cookie・token をメモ・成果物・会話に書かない。",
+]
+
+[org.profile.harnesses]
+allowed = ["coding"]
+default = "coding"
+
+[org.profile.budget]
+max_lane = "standard"
+max_attempts = 2
+
+[org.profile.browser]
+allowed_domains = ["http://localhost:3000", "http://127.0.0.1:3000"]
+credential_policy_ids = []
+
+# ---- Research ----

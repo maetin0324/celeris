@@ -1,4 +1,5 @@
 //! Launcher-owned browser runtime. Paths come only from the root-owned service config.
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::net::IpAddr;
 use std::os::fd::AsRawFd;
@@ -29,6 +30,110 @@ pub struct BackendConfig {
     pub chrome: PathBuf,
     pub agent_browser: PathBuf,
     pub resolver: IpAddr,
+    /// 試験専用 loopback 許可（`127.0.0.1:<port>` だけ。省略時は空 = off）。本番の path では有効に
+    /// できない（[`refuse_test_loopback_in_production`]、ADR 2026-10-05-browser-department-web-live-view
+    /// 付記 E1/E2）。
+    #[serde(default)]
+    pub test_loopback_allow: BTreeSet<String>,
+}
+
+/// 本番の launcher の固定 path（docs/ops/browser-launcher-host-setup.md）。
+pub const PRODUCTION_CONFIG: &str = "/etc/celeris-browser/launcher.toml";
+pub const PRODUCTION_SOCKET: &str = "/run/celeris-browser/launcher.sock";
+pub const PRODUCTION_STATE_DIR: &str = "/var/lib/celeris-browser";
+
+impl BackendConfig {
+    /// `test_loopback_allow` の各項目が `127.0.0.1:<port>`（port は 10 進・先頭 0 なし・0/53/853 以外）
+    /// であること。違えば config 読込みで拒否する。
+    pub fn validate_test_loopback(&self) -> Result<(), String> {
+        for entry in &self.test_loopback_allow {
+            let port = entry
+                .strip_prefix("127.0.0.1:")
+                .filter(|p| {
+                    !p.is_empty() && !p.starts_with('0') && p.bytes().all(|b| b.is_ascii_digit())
+                })
+                .and_then(|p| p.parse::<u16>().ok());
+            if !matches!(port, Some(p) if !matches!(p, 0 | 53 | 853)) {
+                return Err(format!(
+                    "test_loopback_allow entry {entry:?} must be \"127.0.0.1:<port>\" (port 1-65535, not 53/853)"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// path を正規化する（存在する祖先までを `canonicalize` し、残りを足す）。正規化できなければ `None`。
+fn normalize(path: &Path) -> Option<PathBuf> {
+    if !path.is_absolute() {
+        return None;
+    }
+    let mut rest = Vec::new();
+    let mut cur = path;
+    loop {
+        match std::fs::canonicalize(cur) {
+            Ok(base) => {
+                let mut out = base;
+                for c in rest.iter().rev() {
+                    out.push(c);
+                }
+                return Some(out);
+            }
+            Err(_) => {
+                let name = cur.file_name()?;
+                if name == ".." {
+                    return None;
+                }
+                rest.push(name.to_os_string());
+                cur = cur.parent()?;
+            }
+        }
+    }
+}
+
+/// 2 つの path が正規化後に一致するか。どちらかが正規化できなければ一致とみなす（fail closed）。
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (normalize(a), normalize(b)) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    }
+}
+
+/// 付記 E2（launcher 側）: 試験許可が空でないのに、config path・socket（socket activation なら
+/// `getsockname` の path）・state_dir のどれかが本番の固定値と一致したら拒否する。state_dir は本番の
+/// 配下・祖先も一致とみなす。試験許可が空（既定）なら何も見ない。
+pub fn refuse_test_loopback_in_production(
+    config_path: &Path,
+    cfg: &BackendConfig,
+    activated_socket: Option<&Path>,
+) -> Result<(), String> {
+    if cfg.test_loopback_allow.is_empty() {
+        return Ok(());
+    }
+    let refuse = |what: &str, p: &Path| {
+        Err(format!(
+            "test_loopback_allow is set but the {what} {} is the production one; refusing to start",
+            p.display()
+        ))
+    };
+    if same_path(config_path, Path::new(PRODUCTION_CONFIG)) {
+        return refuse("config", config_path);
+    }
+    for socket in [cfg.socket.as_deref(), activated_socket]
+        .into_iter()
+        .flatten()
+    {
+        if same_path(socket, Path::new(PRODUCTION_SOCKET)) {
+            return refuse("socket", socket);
+        }
+    }
+    match (
+        normalize(&cfg.state_dir),
+        normalize(Path::new(PRODUCTION_STATE_DIR)),
+    ) {
+        (Some(a), Some(b)) if !a.starts_with(&b) && !b.starts_with(&a) => Ok(()),
+        _ => refuse("state_dir", &cfg.state_dir),
+    }
 }
 
 pub struct RuntimeBackend {
@@ -67,6 +172,64 @@ fn write_shared(path: &Path, data: &[u8]) -> Result<(), ErrorCode> {
         eprintln!("celeris-browser-launcher: write {}: {e}", path.display());
         ErrorCode::LaunchFailed
     })
+}
+
+/// `launch` is agent-browser's CDP attach operation, not a launcher action verb.
+/// Keep it in the private agent-browser policy even when no user action is allowed.
+fn agent_browser_policy(policy: &super::protocol::SessionPolicy) -> serde_json::Value {
+    let mut allow = vec!["launch"];
+    for verb in &policy.allowed_actions {
+        let name = action_name(*verb);
+        if !allow.contains(&name) {
+            allow.push(name);
+        }
+    }
+    json!({ "allow": allow })
+}
+
+/// The launcher owns the session root, but Chrome creates nested files as its
+/// subordinate UID. Remove those contents as that UID if an ordinary removal
+/// cannot traverse them, then remove the launcher-owned directory itself.
+fn remove_session_dir(dir: &Path) -> std::io::Result<()> {
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) if e.kind() != std::io::ErrorKind::PermissionDenied => return Err(e),
+        Err(_) => {}
+    }
+    use std::os::unix::fs::PermissionsExt;
+    for child in ["output", "home", "run", "actions", "profile", "tmp"] {
+        let path = dir.join(child);
+        if path.is_dir() {
+            // These immediate children belong to the launcher. In particular,
+            // tmp is sticky while the browser runs; it can be relaxed after stop.
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))?;
+        }
+    }
+    let mut ns = userns::create()?;
+    ns.clear_session_contents(dir)?;
+    std::fs::remove_dir_all(dir)
+}
+
+struct SessionDir(PathBuf);
+
+impl std::ops::Deref for SessionDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for SessionDir {
+    fn drop(&mut self) {
+        if let Err(e) = remove_session_dir(&self.0) {
+            eprintln!(
+                "celeris-browser-launcher: remove session dir {}: {e}",
+                self.0.display()
+            );
+        }
+    }
 }
 
 fn ns_owner(f: &std::fs::File) -> std::io::Result<u32> {
@@ -134,6 +297,26 @@ fn chain_ok(chain: &[u32], uid: u32, subuid: u32, forbidden: &[u32]) -> bool {
         && !chain.iter().any(|o| forbidden.contains(o))
 }
 
+/// session の egress policy。試験専用 loopback 許可は、session の許可 origin（`host:port`）と launcher
+/// config の集合の交わりだけ（付記 E1）。
+fn egress_policy(
+    domains: &[String],
+    resolver: IpAddr,
+    test_loopback: &BTreeSet<String>,
+) -> task_core::browser_isolation::EgressPolicy {
+    let allow: BTreeSet<String> = domains
+        .iter()
+        .filter_map(|d| crate::browser_policy::origin_host_port(d))
+        .map(|(host, port)| format!("{host}:{port}"))
+        .collect();
+    task_core::browser_isolation::EgressPolicy {
+        test_loopback_allow: allow.intersection(test_loopback).cloned().collect(),
+        allow,
+        resolver,
+        allow_ipv6: false,
+    }
+}
+
 fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &[u32]) -> bool {
     let uid_map = std::fs::read_to_string(format!("/proc/{pid}/uid_map"));
     let gid_map = std::fs::read_to_string(format!("/proc/{pid}/gid_map"));
@@ -161,6 +344,10 @@ fn maps_match(pid: i32, uid: userns::Mapping, gid: userns::Mapping, forbidden: &
 }
 
 impl SessionBackend for RuntimeBackend {
+    fn test_loopback_allow(&self) -> Vec<String> {
+        self.cfg.test_loopback_allow.iter().cloned().collect()
+    }
+
     fn start(&self, req: &StartRequest) -> Result<Launched, ErrorCode> {
         let cfg = &self.cfg;
         let sid = req.session_id.as_str();
@@ -201,7 +388,8 @@ impl SessionBackend for RuntimeBackend {
             "create session dir",
             ErrorCode::LaunchFailed,
         ))?;
-        let setup = (|| {
+        let cleanup = SessionDir(dir.clone());
+        (|| {
             for child in ["output", "home", "run", "actions", "profile"] {
                 std::fs::create_dir(dir.join(child)).map_err(fail(
                     sid,
@@ -228,15 +416,9 @@ impl SessionBackend for RuntimeBackend {
                 &dir.join("upstream.json"),
                 br#"{"idleTimeout":"5m","noWebmcp":true}"#,
             )?;
-            let allowed: Vec<&str> = req
-                .policy
-                .allowed_actions
-                .iter()
-                .map(|v| action_name(*v))
-                .collect();
             write_shared(
                 &dir.join("policy.json"),
-                &serde_json::to_vec(&json!({"allow":allowed}))
+                &serde_json::to_vec(&agent_browser_policy(&req.policy))
                     .map_err(|_| ErrorCode::LaunchFailed)?,
             )?;
             let token = format!(
@@ -254,16 +436,11 @@ impl SessionBackend for RuntimeBackend {
                 }))
                 .map_err(|_| ErrorCode::LaunchFailed)?,
             )?;
-            let egress_policy = task_core::browser_isolation::EgressPolicy {
-                allow: req
-                    .policy
-                    .allowed_domains
-                    .iter()
-                    .map(|d| format!("{d}:443"))
-                    .collect(),
-                resolver: cfg.resolver,
-                allow_ipv6: false,
-            };
+            let egress_policy = egress_policy(
+                &req.policy.allowed_domains,
+                cfg.resolver,
+                &cfg.test_loopback_allow,
+            );
             let dirs = [&cfg.sandboxd, &cfg.chrome, &cfg.agent_browser];
             let mut ro_dirs: Vec<PathBuf> = dirs
                 .iter()
@@ -371,7 +548,7 @@ impl SessionBackend for RuntimeBackend {
                     sup,
                     _shared: shared,
                     sequence: 0,
-                    dir: dir.clone(),
+                    dir: cleanup,
                     uid,
                     gid,
                     subuid,
@@ -379,11 +556,7 @@ impl SessionBackend for RuntimeBackend {
                     forbidden: cfg.allowed_uids.clone(),
                 }),
             })
-        })();
-        if setup.is_err() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-        setup
+        })()
     }
 }
 
@@ -404,7 +577,7 @@ struct RuntimeSession {
     sup: Supervisor,
     _shared: SharedCdp,
     sequence: u64,
-    dir: PathBuf,
+    dir: SessionDir,
     uid: u32,
     gid: u32,
     subuid: u32,
@@ -554,13 +727,43 @@ impl BackendSession for RuntimeSession {
         } = *self;
         drop(_shared);
         sup.stop();
-        let _ = std::fs::remove_dir_all(dir);
+        drop(dir);
     }
 }
 
 #[cfg(test)]
+#[path = "backend_tests.rs"]
+mod test_loopback_tests;
+
+#[cfg(test)]
 mod chain_tests {
-    use super::chain_ok;
+    use super::{chain_ok, egress_policy};
+
+    #[test]
+    fn launcher_egress_uses_origin_scheme_and_port() {
+        let domains = [
+            "https://example.com",
+            "http://localhost",
+            "http://127.0.0.1:8123",
+            "https://billing.example.com:8443",
+            "legacy.example.com",
+        ]
+        .map(str::to_owned);
+        let policy = egress_policy(&domains, "127.0.0.53".parse().unwrap(), &Default::default());
+        assert_eq!(
+            policy.allow,
+            [
+                "example.com:443",
+                "localhost:80",
+                "127.0.0.1:8123",
+                "billing.example.com:8443",
+                "legacy.example.com:443",
+            ]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+        );
+    }
 
     #[test]
     fn owner_chain_accepts_nested_bwrap_levels_and_rejects_daemon_uid() {

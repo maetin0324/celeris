@@ -107,7 +107,7 @@ impl QueryParams {
             None => Ok(AccountAdapter::ClaudeCode),
             Some(s) => AccountAdapter::parse(s).ok_or_else(|| {
                 ApiProblem::bad_request(format!(
-                    "unknown adapter `{s}` (must be claude-code or codex)"
+                    "unknown adapter `{s}` (must be claude-code, codex or opencode-go)"
                 ))
             }),
         }
@@ -149,8 +149,10 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 67] = [
+pub(crate) const EVENT_TYPES: [&str; 70] = [
     "browser_updated",
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
+    "worker_policy_violation",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
     "browser_wait_resolved",
@@ -243,6 +245,10 @@ pub(crate) const EVENT_TYPES: [&str; 67] = [
     "integration_requested",
     "integration_answered",
     "cos_operation",
+    // ADR 2026-10-06 D4: モデル catalog の変化（疑似 task の列）。
+    "model_catalog_changed",
+    // ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更。
+    "model_role_assignment_changed",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -258,6 +264,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::Transitioned { .. } => "transitioned",
         Event::WorkerStarted { .. } => "worker_started",
         Event::WorkerProgress { .. } => "worker_progress",
+        Event::WorkerPolicyViolation { .. } => "worker_policy_violation",
         Event::ArtifactProduced { .. } => "artifact_produced",
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",
@@ -320,6 +327,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::KnowledgeCurationApplied { .. } => "knowledge_curation_applied",
         Event::IntegrationRequested { .. } => "integration_requested",
         Event::IntegrationAnswered { .. } => "integration_answered",
+        Event::ModelCatalogChanged { .. } => "model_catalog_changed",
+        Event::ModelRoleAssignmentChanged { .. } => "model_role_assignment_changed",
     }
 }
 

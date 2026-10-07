@@ -58,6 +58,23 @@ pub struct ReviewRequest {
     /// 同じ review で先に workspace で実行した決定的 check（ADR-0117 D2）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<ReviewCheckResult>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の
+    /// 起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_violations: Vec<ReviewPolicyViolation>,
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReviewPolicyViolation {
+    /// `subagent_tool` / `llm_cli` / `llm_api`。
+    pub kind: String,
+    /// 道具名（`Bash` / `command_execution` / `Agent` …）。
+    pub tool: String,
+    /// 一致した語（道具名・CLI 名・API host）。
+    pub matched: String,
+    /// 起動しようとした command（500 文字まで）。
+    pub command: String,
 }
 
 /// 人が選んだ決定と、その決定を出した task。

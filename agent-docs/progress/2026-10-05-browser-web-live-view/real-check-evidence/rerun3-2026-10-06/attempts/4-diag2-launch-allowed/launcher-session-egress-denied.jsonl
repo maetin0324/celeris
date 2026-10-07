@@ -1,0 +1,5 @@
+{"at":"2026-10-06T09:19:29.613539198Z","kind":"malformed","session_id":"73bfab2e39024c652947a75868b3a344"}
+{"at":"2026-10-06T09:19:29.617209543Z","host":"redirector.gvt1.com","kind":"not_allowed","port":443,"session_id":"73bfab2e39024c652947a75868b3a344"}
+{"at":"2026-10-06T09:19:29.733380512Z","host":"update.googleapis.com","kind":"not_allowed","port":443,"session_id":"73bfab2e39024c652947a75868b3a344"}
+{"at":"2026-10-06T09:19:29.870573016Z","kind":"malformed","session_id":"73bfab2e39024c652947a75868b3a344"}
+{"at":"2026-10-06T09:19:29.870638811Z","host":"www.google.com","kind":"not_allowed","port":443,"session_id":"73bfab2e39024c652947a75868b3a344"}

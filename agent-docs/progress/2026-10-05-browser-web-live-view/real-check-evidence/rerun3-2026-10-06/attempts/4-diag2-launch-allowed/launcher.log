@@ -1,0 +1,6 @@
+celeris-browser-launcher: test-only loopback egress enabled: 127.0.0.1:17730 (not for production)
+celeris-browser-launcher: session 73bfab2e39024c652947a75868b3a344: Chrome started pid=4 flags=remote-debugging-pipe
+celeris-browser-launcher: session 73bfab2e39024c652947a75868b3a344: Chrome stderr category=other-startup-error
+celeris-browser-launcher: session 73bfab2e39024c652947a75868b3a344: Chrome stderr category=other-startup-error
+celeris-browser-launcher: session 73bfab2e39024c652947a75868b3a344: Chrome stderr category=other-startup-error
+celeris-browser-launcher: session 73bfab2e39024c652947a75868b3a344: Chrome stderr category=other-startup-error

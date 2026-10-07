@@ -32,6 +32,7 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod model_catalog;
 mod model_routing;
 mod org;
 mod providers;
@@ -55,6 +56,7 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use model_catalog::*;
 pub use model_routing::*;
 pub use org::*;
 pub use providers::*;
@@ -236,6 +238,9 @@ pub struct Config {
     /// Phase 1 model catalog and lane policies; legacy remains the default execution mode.
     #[serde(default)]
     pub model_routing: ModelRoutingConfig,
+    /// ADR 2026-10-06 D4: `[model_catalog]`。利用可能モデルの自動発見（周期・opencode go の取得先）。
+    #[serde(default)]
+    pub model_catalog: ModelCatalogConfig,
     /// Fully validated catalog used by daemon bootstrap and replaced on successful reload.
     #[serde(skip)]
     pub routing_catalog_snapshot: Option<std::sync::Arc<RoutingCatalog>>,
@@ -310,11 +315,16 @@ impl BrowserRuntimeConfig {
     }
 
     /// ADR-0116 D5: `validate` を通した後にだけ呼ぶ想定（`runtime = "launcher"` なら
-    /// `launcher_socket` が `Some` であることを前提にする）。
-    pub fn runtime_kind(&self) -> task_worker::browser::BrowserRuntimeKind {
+    /// `launcher_socket` が `Some` であることを前提にする）。`refuse_test_loopback` は本番の daemon か
+    /// （付記 E2。`daemon::bootstrap::browser_launcher_refuses_test_loopback`）。
+    pub fn runtime_kind(
+        &self,
+        refuse_test_loopback: bool,
+    ) -> task_worker::browser::BrowserRuntimeKind {
         match self.runtime.as_str() {
             "launcher" => task_worker::browser::BrowserRuntimeKind::Launcher {
                 socket: self.launcher_socket.clone().unwrap_or_default(),
+                refuse_test_loopback,
             },
             _ => task_worker::browser::BrowserRuntimeKind::Daemon,
         }

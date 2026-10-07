@@ -43,13 +43,16 @@ pub struct ProviderConfig {
     pub env_from_secrets: HashMap<String, String>,
     /// ADR-0024 D2: `true` なら `[accounts]` のプールから残量に基づいてアカウントを選ぶ。`adapter = "claude-code"`
     /// かつ `[accounts]` があるときだけ有効（既定 `false`）。
+    ///
+    /// ADR 2026-10-06 D2: `"opencode-go"` のように pool の adapter 名を文字列で書ける（ACP 行のように
+    /// 行の adapter 名が pool の adapter と一致しない行で使う）。
     #[serde(default)]
-    pub account_pool: bool,
-    /// ADR-0026 D2: `adapter = "acp"` のときだけ意味を持つ、この行の ACP エージェント実行ファイルの上書き
+    pub account_pool: task_core::AccountPoolSetting,
+    /// ADR-0026 / ADR 2026-10-07: ACP / browser-specialist / Pi の実行ファイルの上書き
     /// （省略時は `[adapters.acp].command`）。他のアダプタで指定すると `Config::validate` が設定エラーにする。
     #[serde(default)]
     pub command: Option<String>,
-    /// ADR-0026 D2: 上と同じ（引数）。省略時は `[adapters.acp].args`。
+    /// ACP は CLI 引数、Pi は executable prefix（例: node の CLI path）。
     #[serde(default)]
     pub args: Option<Vec<String>>,
     /// ADR-0027 D3: `adapter = "paperqa"` のときだけ意味を持つ、この行の PaperQA 設定ファイルの上書き
@@ -57,6 +60,12 @@ pub struct ProviderConfig {
     /// `Config::validate` が設定エラーにする。相対パスは設定ファイルのディレクトリ基準で絶対化する。
     #[serde(default)]
     pub settings: Option<String>,
+    /// Pi: explicit Hashline extension paths, resolved relative to the config file.
+    #[serde(default)]
+    pub extensions: Vec<PathBuf>,
+    /// Pi: complete tool allowlist, including the extension's read/edit tools.
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 fn default_tiers() -> Vec<Tier> {
@@ -116,8 +125,20 @@ impl Config {
     pub fn account_pool_providers(&self) -> std::collections::HashSet<String> {
         self.providers
             .iter()
-            .filter(|p| p.account_pool)
+            .filter(|p| p.account_pool.is_on())
             .map(|p| p.id.clone())
+            .collect()
+    }
+
+    /// `account_pool = "<adapter>"` で pool の adapter を明示した行の provider id → adapter
+    /// （ADR 2026-10-06 D3。dispatcher が行の adapter 名では引けない pool の解決に使う）。
+    pub fn account_pool_adapters(&self) -> std::collections::HashMap<String, AccountAdapter> {
+        self.providers
+            .iter()
+            .filter_map(|p| match p.account_pool {
+                task_core::AccountPoolSetting::Adapter(a) => Some((p.id.clone(), a)),
+                _ => None,
+            })
             .collect()
     }
 
@@ -185,7 +206,7 @@ impl Config {
                 .is_some_and(|m| !m.trim().is_empty());
         self.providers
             .iter()
-            .filter(|p| !p.account_pool && p.tiers.contains(&Tier::Cheap))
+            .filter(|p| !p.account_pool.is_on() && p.tiers.contains(&Tier::Cheap))
             // 専用契約のアダプタ（ADR-0049。`StaticPolicy` が hint の無い仕事を渡さない）は、それに固定された
             // 仕事の唯一の行であることが多い。前段で不通として外すと従来の経路（ADR-0052 の倒し方）を
             // 塞ぐので、ローカルの行にしない。
@@ -272,6 +293,13 @@ impl Config {
             _ => {}
         }
         let model = self.effective_model(p).unwrap_or_default();
+        if matches!(p.adapter.as_str(), "acp" | "pi")
+            && (p.account_pool
+                == task_core::AccountPoolSetting::Adapter(AccountAdapter::OpencodeGo)
+                || model.starts_with("opencode-go/"))
+        {
+            return LlmSourceRef::OpencodeGo;
+        }
         if is_celeris_model(model) || self.model_from_env_is_celeris(p) {
             return LlmSourceRef::Celeris;
         }
@@ -356,6 +384,11 @@ fn is_qwen_model(model: &str) -> bool {
 /// ADR-0027 D3: 行ごとの `settings` の上書きも `[adapters.paperqa]` と同じ基準（設定ファイルのディレクトリ）で絶対化する。
 pub(super) fn resolve_provider_settings(providers: &mut [ProviderConfig], base: &Path) {
     for p in providers {
+        for path in &mut p.extensions {
+            if path.is_relative() {
+                *path = base.join(&*path);
+            }
+        }
         if let Some(settings) = &p.settings
             && Path::new(settings).is_relative()
         {
@@ -386,6 +419,8 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                     p.adapter != "codex"
                         || is_celeris_model(cfg.effective_model(p).unwrap_or_default())
                 }
+                // ADR 2026-10-06 D3: opencode_go は ACP（opencode）adapter の行だけ。
+                LlmSourceRef::OpencodeGo => !matches!(p.adapter.as_str(), "acp" | "pi"),
                 LlmSourceRef::None => !matches!(p.adapter.as_str(), "fake" | "browser-specialist"),
                 LlmSourceRef::Celeris => inferred != LlmSourceRef::Celeris,
                 LlmSourceRef::OpenaiCompatible(_) => {
@@ -414,15 +449,23 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                 )));
             }
         }
-        if p.account_id.is_some() && !p.account_pool {
+        if p.account_id.is_some() && !p.account_pool.is_on() {
             return Err(ConfigError::Invalid(format!(
                 "provider {}: account_id requires account_pool",
                 p.id
             )));
         }
-        if !p.tier_models.is_empty() && !matches!(p.adapter.as_str(), "claude-code" | "codex") {
+        // ADR 2026-10-06 D3: tier_models は claude-code / codex と、llm_source が opencode_go の ACP 行で使える。
+        let opencode_go_acp = p.adapter == "acp"
+            && cfg
+                .provider_llm_source(&p.id)
+                .is_some_and(|r| r.source == LlmSourceRef::OpencodeGo);
+        if !p.tier_models.is_empty()
+            && !matches!(p.adapter.as_str(), "claude-code" | "codex")
+            && !opencode_go_acp
+        {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: tier_models supported only for Claude/GPT",
+                "provider {}: tier_models supported only for Claude/GPT or opencode_go",
                 p.id
             )));
         }
@@ -438,6 +481,7 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
             && p.adapter != task_worker::ClaudeCodeAdapter::ID
             && p.adapter != task_worker::CodexAdapter::ID
             && p.adapter != task_worker::AiderAdapter::ID
+            && p.adapter != task_worker::PiAdapter::ID
             && p.adapter != task_worker::AcpAdapter::ID
             && p.adapter != task_worker::BrowserSpecialistAdapter::ID
             && p.adapter != task_worker::PaperQaAdapter::ID
@@ -445,7 +489,7 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
             && p.adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: adapter {:?} is not available in this build (fake, claude-code, codex, aider, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                "provider {}: adapter {:?} is not available in this build (fake, claude-code, codex, aider, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 p.id, p.adapter
             )));
         }
@@ -455,14 +499,37 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                 p.id
             )));
         }
-        // ADR-0026 D2 / ADR-0106: `command`/`args` は ACP と browser-specialist の行で意味を持つ。他のアダプタに書いたら
+        // ADR-0026 / ADR-0106 / ADR 2026-10-07: `command`/`args` は ACP / browser-specialist / Pi の行で意味を持つ。
         // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。
         if p.adapter != task_worker::AcpAdapter::ID
             && p.adapter != task_worker::BrowserSpecialistAdapter::ID
+            && p.adapter != task_worker::PiAdapter::ID
             && (p.command.is_some() || p.args.is_some())
         {
             return Err(ConfigError::Invalid(format!(
-                "provider {}: command/args are only allowed when adapter = \"acp\" or \"browser-specialist\" (ADR-0106)",
+                "provider {}: command/args are only allowed when adapter = \"acp\" or \"browser-specialist\" or \"pi\" (ADR-0106)",
+                p.id
+            )));
+        }
+        if p.adapter == task_worker::PiAdapter::ID {
+            // Model may be supplied dynamically by tier_models / role assignments.
+            let config = task_worker::PiConfig {
+                args: p.args.clone().unwrap_or_default(),
+                model: Some(if p.model.is_empty() {
+                    "dynamic/model".into()
+                } else {
+                    p.model.clone()
+                }),
+                extensions: p.extensions.clone(),
+                tools: p.tools.clone(),
+                ..Default::default()
+            };
+            config
+                .validate()
+                .map_err(|e| ConfigError::Invalid(format!("provider {}: {e}", p.id)))?;
+        } else if !p.extensions.is_empty() || !p.tools.is_empty() {
+            return Err(ConfigError::Invalid(format!(
+                "provider {}: extensions/tools are only allowed when adapter = \"pi\"",
                 p.id
             )));
         }
@@ -475,13 +542,42 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
         }
         // ADR-0024 D2 / ADR-0025 D1: `account_pool = true` は claude-code か codex だけ、かつ `[accounts]` に
         // そのアダプタの根ディレクトリが設定されている必要がある。
-        if p.account_pool {
-            let Some(account_adapter) = AccountAdapter::parse(&p.adapter) else {
+        if p.account_pool.is_on() {
+            let Some(account_adapter) = p.account_pool.pool_adapter(&p.adapter) else {
                 return Err(ConfigError::Invalid(format!(
-                    "provider {}: account_pool = true requires adapter = \"claude-code\" or \"codex\"",
+                    "provider {}: account_pool = true requires adapter = \"claude-code\" or \"codex\" (or account_pool = \"opencode-go\" on an acp row)",
                     p.id
                 )));
             };
+            if p.adapter == task_worker::PiAdapter::ID
+                && account_adapter != AccountAdapter::OpencodeGo
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: pi currently supports only the opencode-go account pool; OAuth remains on the existing adapters",
+                    p.id
+                )));
+            }
+            // opencode-go の API key は ACP または Pi に渡す（ADR 2026-10-07）。
+            if account_adapter == AccountAdapter::OpencodeGo
+                && !matches!(p.adapter.as_str(), "acp" | "pi")
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: account_pool = \"opencode-go\" requires adapter = \"acp\" or \"pi\"",
+                    p.id
+                )));
+            }
+            // 名前付き pool は行の adapter が claude-code / codex なら同名のものだけ。
+            if let task_core::AccountPoolSetting::Adapter(named) = p.account_pool
+                && let Some(own) = AccountAdapter::parse(&p.adapter)
+                && own != named
+            {
+                return Err(ConfigError::Invalid(format!(
+                    "provider {}: account_pool = {:?} conflicts with adapter {:?}",
+                    p.id,
+                    named.as_str(),
+                    p.adapter
+                )));
+            }
             match accounts {
                 Some(accounts) if accounts.root_for(account_adapter).is_some() => {}
                 Some(_) => {
@@ -491,6 +587,7 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                         match account_adapter {
                             AccountAdapter::ClaudeCode => "claude_dir",
                             AccountAdapter::Codex => "codex_dir",
+                            AccountAdapter::OpencodeGo => "opencode_dir",
                         }
                     )));
                 }

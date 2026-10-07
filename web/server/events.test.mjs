@@ -30,7 +30,7 @@ const daemon = http.createServer((req, res) => {
     return res.end('{"error":"too_many_streams"}');
   }
   res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache" });
-  res.write("event: hello\ndata: {}\n\n");
+  res.write('event: hello\ndata: {"live_view_url":"https://secret.example/dashboard"}\n\n');
   open.add(res);
   res.on("close", () => {
     open.delete(res);
@@ -112,7 +112,9 @@ test("stream is relayed with event-stream headers and forwarded cursor, past the
   assert.equal(req.headers["last-event-id"], "9");
   assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
   const reader = res.body.getReader();
-  assert.match(await readUntil(reader, "hello"), /event: hello/);
+  const first = await readUntil(reader, '"live_view_url":null');
+  assert.match(first, /event: hello/);
+  assert.doesNotMatch(first, /secret.example/);
   await new Promise((r) => setTimeout(r, 400));
   for (const client of open) client.write("event: heartbeat\ndata: {}\n\n");
   assert.match(await readUntil(reader, "heartbeat"), /event: heartbeat/);

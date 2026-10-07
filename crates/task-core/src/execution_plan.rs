@@ -283,6 +283,12 @@ impl UnitContext {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PlanUnitSpec {
+    /// Browser origins for a child task. An inherited browser skill still needs an explicit set.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::model::TaskRequirements::is_empty"
+    )]
+    pub requirements: crate::model::TaskRequirements,
     /// Optional repository-relative prefixes inherited by child tasks or leaf WUs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expected_write_paths: Option<Vec<String>>,
@@ -461,6 +467,11 @@ pub fn child_label(key: &str) -> String {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExecutionChildSpec {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::model::TaskRequirements::is_empty"
+    )]
+    pub requirements: crate::model::TaskRequirements,
     /// `[a-z0-9-]{1,32}`。`children` の中で一意（WU の key とは別の名前空間。`child:<key>` で指す）。
     pub key: String,
     pub title: String,

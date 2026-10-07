@@ -39,6 +39,17 @@ impl SqliteStore {
 
     /// `insert` の本体（トランザクション内でも使えるよう `Connection` を受ける）。
     pub(super) fn insert_tx(conn: &Connection, task: &Task) -> Result<(), StoreError> {
+        let parent = task
+            .parent_id
+            .map(|id| Self::get_locked(conn, id))
+            .transpose()?
+            .flatten();
+        crate::browser::validate_task_requirements(
+            &task.skills,
+            &task.requirements,
+            parent.as_ref(),
+        )
+        .map_err(StoreError::Invalid)?;
         let json = serde_json::to_string(task)?;
         let created_at = format_rfc3339(task.created_at)?;
         let updated_at = format_rfc3339(task.updated_at)?;

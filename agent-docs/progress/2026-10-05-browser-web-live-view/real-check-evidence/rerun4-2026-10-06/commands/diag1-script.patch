@@ -1,0 +1,130 @@
+--- /var/tmp/fable-rerun4-src/scripts/dev/browser-web-live-check.sh	2026-10-06 10:14:14.000000000 +0000
++++ /var/tmp/fable-rerun4-src/scripts/dev/browser-web-live-check-diag1.sh	2026-10-06 10:28:07.965608398 +0000
+@@ -277,6 +277,57 @@
+ done
+ [[ -s $EVIDENCE/web-health.json && -S $OWNER_SOCKET ]] || { echo "web gateway readiness timeout" >&2; exit 1; }
+ 
++DIAG_OFFSET=$(stat -c %s "$EVIDENCE/daemon.log")
++( sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$DIAG_OFFSET" "$EVIDENCE/daemon.log" <<'PY' >"$DENIAL_FILE" 2>"$EVIDENCE/collector.log"; echo $? >"$EVIDENCE/collector.status" ) &
++import json, pathlib, re, sys, time
++state = pathlib.Path(sys.argv[1])
++page_port, denied_port = map(int, sys.argv[2:4])
++daemon_log = pathlib.Path(sys.argv[5])
++offset = int(sys.argv[4])  # DIAG1: boundary taken before the API driver starts
++# The daemon logs the session_id from the launcher's Started response. Its browser
++# run session_id in /browser/runs and checks.json is a different identifier.
++ansi = re.compile(r"\x1b\[[0-9;]*m")
++marker = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
++def launcher_ids():
++    with daemon_log.open("rb") as stream:
++        stream.seek(offset)
++        tail = stream.read().decode(errors="replace")
++    return set(marker.findall(ansi.sub("", tail)))
++deadline = time.monotonic() + 30
++while not (ids := launcher_ids()) and time.monotonic() < deadline:
++    time.sleep(0.2)
++if len(ids) != 1:
++    raise SystemExit(f"expected one launcher Started session after task creation, found {len(ids)}")
++session_id = ids.pop()
++sessions = state / "sessions"
++deadline = time.monotonic() + 180  # DIAG1: was 90
++records = []
++while time.monotonic() < deadline:
++    if launcher_ids() != {session_id}:
++        raise SystemExit("multiple launcher sessions after task creation; denial is ambiguous")
++    records = []
++    record_file = sessions / session_id / "egress-denied.jsonl"
++    if record_file.is_file():
++        for line in record_file.read_text().splitlines():
++            try: record = json.loads(line)
++            except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
++            records.append(record)
++    if any(record.get("port") == denied_port for record in records): break
++    time.sleep(0.2)
++sys.stderr.write("DIAG1 all current-session records:\n" + "\n".join(json.dumps(r) for r in records) + "\n")
++if not any(record.get("port") == denied_port for record in records):
++    raise SystemExit("current launcher session contains no denial for the forbidden origin")
++# DIAG1: accept ip_literal too (task-core check_egress returns IpLiteral for 127.0.0.1 before any private-address check)
++if not any(r.get("kind") in ("private_address", "ip_literal") and r.get("host") == "127.0.0.1" and
++           r.get("port") == denied_port and r.get("session_id") == session_id and r.get("at") for r in records):
++    raise SystemExit("forbidden-origin denial must record kind=private_address and host:port")
++for record in records:
++    if record.get("port") == page_port:
++        raise SystemExit("allowed loopback test page was recorded as denied")
++# Publish only the launcher records needed as portable evidence.
++print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
++PY
++COLLECTOR_PID=$!
+ # Use one deterministic driver for all API assertions. It writes only redacted JSON.
+ python3 - "$ROOT" "$EVIDENCE" "$API" "$WEB" "$PAGE" "$DENIED_ORIGIN" "$TOKEN_FILE" "$OWNER_SOCKET" "$WEB_PASSWORD_FILE" "$DECISION_ORIGIN" <<'PY'
+ import base64, http.cookiejar, json, os, pathlib, socket, sys, time, urllib.error, urllib.parse, urllib.request
+@@ -473,6 +524,12 @@
+     wait_body = {"run_id":run_id,"session_id":session_id,"reason":"waiting_for_approval",
+       "origin":decision_origin,"purpose":"real-check decision route","operation":{"intent_id":"real-check-intent","action":"navigate"},
+       "policy_revision":1,"policy_hash":"real-check-policy","owner_id":"owner","resume_key":"real-check-wait"}
++    # DIAG1: denying the wait fails the task and cancels the run (and its launcher session),
++    # so collect the egress denial first.
++    status_file = out/"collector.status"
++    deadline = time.monotonic()+240
++    while not status_file.exists() and time.monotonic() < deadline: time.sleep(0.5)
++    log.append({"step":"DIAG1 collector before wait", "collector_status": status_file.read_text().strip() if status_file.exists() else None})
+     wait = checked("wait open", api+f"/tasks/{task_id}/browser/requests", "POST", wait_body, auth=True, expected=201)["wait"]
+     listed = checked("wait listed", api+f"/tasks/{task_id}/browser/waits", auth=True)["items"]
+     if not any(w["wait_id"] == wait["wait_id"] and w["state"] == "pending" for w in listed):
+@@ -483,54 +540,8 @@
+     (out/"checks.json").write_text(json.dumps(log, indent=2, ensure_ascii=False)+"\n")
+ PY
+ 
+-sudo -n python3 - "$LAUNCHER_STATE_DIR" "$PAGE_PORT" "$DENIED_PORT" "$EVIDENCE/checks.json" "$EVIDENCE/daemon.log" <<'PY' >"$DENIAL_FILE"
+-import json, pathlib, re, sys, time
+-state = pathlib.Path(sys.argv[1])
+-page_port, denied_port = map(int, sys.argv[2:4])
+-checks = json.loads(pathlib.Path(sys.argv[4]).read_text())
+-daemon_log = pathlib.Path(sys.argv[5])
+-offset = next(row["daemon_log_offset"] for row in checks if row.get("step") == "launcher log boundary")
+-# The daemon logs the session_id from the launcher's Started response. Its browser
+-# run session_id in /browser/runs and checks.json is a different identifier.
+-ansi = re.compile(r"\x1b\[[0-9;]*m")
+-marker = re.compile(r"browser launcher session started\s+session=([A-Za-z0-9_-]{1,64})\b")
+-def launcher_ids():
+-    with daemon_log.open("rb") as stream:
+-        stream.seek(offset)
+-        tail = stream.read().decode(errors="replace")
+-    return set(marker.findall(ansi.sub("", tail)))
+-deadline = time.monotonic() + 30
+-while not (ids := launcher_ids()) and time.monotonic() < deadline:
+-    time.sleep(0.2)
+-if len(ids) != 1:
+-    raise SystemExit(f"expected one launcher Started session after task creation, found {len(ids)}")
+-session_id = ids.pop()
+-sessions = state / "sessions"
+-deadline = time.monotonic() + 90
+-records = []
+-while time.monotonic() < deadline:
+-    if launcher_ids() != {session_id}:
+-        raise SystemExit("multiple launcher sessions after task creation; denial is ambiguous")
+-    records = []
+-    record_file = sessions / session_id / "egress-denied.jsonl"
+-    if record_file.is_file():
+-        for line in record_file.read_text().splitlines():
+-            try: record = json.loads(line)
+-            except ValueError as exc: raise SystemExit(f"invalid egress denial JSONL: {exc}")
+-            records.append(record)
+-    if any(record.get("port") == denied_port for record in records): break
+-    time.sleep(0.2)
+-if not any(record.get("port") == denied_port for record in records):
+-    raise SystemExit("current launcher session contains no denial for the forbidden origin")
+-if not any(r.get("kind") == "private_address" and r.get("host") == "127.0.0.1" and
+-           r.get("port") == denied_port and r.get("session_id") == session_id and r.get("at") for r in records):
+-    raise SystemExit("forbidden-origin denial must record kind=private_address and host:port")
+-for record in records:
+-    if record.get("port") == page_port:
+-        raise SystemExit("allowed loopback test page was recorded as denied")
+-# Publish only the launcher records needed as portable evidence.
+-print(json.dumps([r for r in records if r.get("port") == denied_port], indent=2, ensure_ascii=False))
+-PY
++wait "$COLLECTOR_PID" || true
++[[ $(cat "$EVIDENCE/collector.status" 2>/dev/null) = 0 ]] || { cat "$EVIDENCE/collector.log" >&2; exit 1; }
+ if grep -q '"GET ' "$EVIDENCE/denied-page.log"; then
+   echo "forbidden origin received a page request" >&2
+   exit 1

@@ -257,6 +257,7 @@ fn build_spec(mut args: AddArgs) -> Result<NewTaskSpec, CliError> {
         .collect::<Result<_, _>>()?;
 
     let spec = NewTaskSpec {
+        requirements: Default::default(),
         repos: Vec::new(),
         title: args.title,
         objective: args.objective,

@@ -54,7 +54,20 @@ fn finish(mut child: Child) -> Output {
 fn denied(output: &Output) {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty());
-    assert_eq!(output.stderr, b"browser egress denied\n");
+    let stderr = std::str::from_utf8(&output.stderr).unwrap();
+    let record = stderr.strip_suffix("browser egress denied\n").unwrap();
+    if !record.is_empty() {
+        let denial: serde_json::Value = serde_json::from_str(record.trim_end()).unwrap();
+        assert!(denial.get("kind").and_then(|v| v.as_str()).is_some());
+        assert!(
+            denial
+                .as_object()
+                .unwrap()
+                .keys()
+                .all(|key| matches!(key.as_str(), "kind" | "host" | "port"))
+        );
+        assert!(!record.contains("sentinel-secret"));
+    }
 }
 
 #[test]

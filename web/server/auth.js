@@ -79,6 +79,7 @@ export function createAuth({
     ? readTrimmed(secretFile, "CELERIS_WEB_SESSION_SECRET_FILE")
     : randomBytes(32).toString("base64");
   const enabled = passwordDigest !== null;
+  const logoutListeners = new Set();
 
   function verifyPassword(candidate) {
     if (!passwordDigest || typeof candidate !== "string") return false;
@@ -112,6 +113,11 @@ export function createAuth({
     return !enabled || isValid(readCookie(req, SESSION_COOKIE_NAME));
   }
 
+  function sessionKey(req) {
+    const token = readCookie(req, SESSION_COOKIE_NAME);
+    return enabled && isValid(token) ? createHash("sha256").update(`browser-owner\0${token}`).digest("hex") : null;
+  }
+
   function cookieOptions(req) {
     return { httpOnly: true, sameSite: "strict", secure: Boolean(req.socket.encrypted), path: "/" };
   }
@@ -134,6 +140,7 @@ export function createAuth({
     });
 
     app.post("/logout", (req, res) => {
+      for (const listener of logoutListeners) listener(sessionKey(req));
       res.clearCookie(SESSION_COOKIE_NAME, cookieOptions(req));
       return wantsJson(req) ? res.json({ ok: true }) : res.redirect(303, "/login");
     });
@@ -144,5 +151,14 @@ export function createAuth({
     });
   }
 
-  return { enabled, register, authenticated, issue, isValid, verifyPassword };
+  return {
+    enabled,
+    register,
+    authenticated,
+    sessionKey,
+    issue,
+    isValid,
+    verifyPassword,
+    onLogout: (listener) => logoutListeners.add(listener),
+  };
 }

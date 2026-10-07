@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { verify } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -621,6 +622,154 @@ export const routingEstimatorShadowFixture = {
   unbound_requests: [],
 };
 
+// ADR 2026-10-06-model-role-assignments D4: 割り当て（人が決めた source × 役割 → model）。config 由来の値は configSlots で足す。
+export const modelAssignmentsFixture = [
+  {
+    source: "claude-oauth",
+    tier: "frontier",
+    model_id: "claude-opus-4",
+    state: "assigned",
+    excluded_reason: null,
+    note: "最上位は opus",
+    updated_at: "2026-10-06T00:00:00Z",
+    updated_by: "web",
+  },
+  {
+    source: "claude-oauth",
+    tier: "cheap",
+    model_id: "claude-haiku-3",
+    state: "excluded",
+    excluded_reason: "catalog:unavailable",
+    note: null,
+    updated_at: "2026-10-05T00:00:00Z",
+    updated_by: "web",
+  },
+];
+const ASSIGNMENT_CONFIG_SLOTS = {
+  "claude-oauth": { standard: "claude-sonnet-4" },
+  "openai-compatible:qwen": { cheap: "qwen3-coder" },
+};
+const ASSIGNMENT_SOURCES = ["claude-oauth", "opencode-go", "openai-compatible:qwen"];
+const ASSIGNMENT_TIERS = ["frontier", "standard", "cheap"];
+
+function assignmentTiersFor(ac, source, modelId) {
+  return ac.assignments
+    .filter((a) => a.source === source && a.model_id === modelId && a.state === "assigned")
+    .map((a) => a.tier);
+}
+
+function assignmentsView(ac) {
+  const effective = [];
+  for (const source of ASSIGNMENT_SOURCES)
+    for (const tier of ASSIGNMENT_TIERS) {
+      const members = ac.assignments.filter((x) => x.source === source && x.tier === tier);
+      const configured = ac.managedRoles?.includes(tier) ? null : ASSIGNMENT_CONFIG_SLOTS[source]?.[tier];
+      const values = members.length ? members : [{ model_id: configured ?? null, priority: 0 }];
+      for (const a of values) {
+        const row = ac.models.items.find((m) => m.source === source && m.model_id === a.model_id);
+        effective.push({
+          source,
+          tier,
+          model_id: a.model_id,
+          priority: a.priority ?? 0,
+          origin: members.length ? "assignment" : configured ? "config" : null,
+          excluded_reason: a.excluded_reason ?? null,
+          providers: a.model_id && source !== "openai-compatible:qwen" ? [`${source}-main`] : [],
+          proxy: source === "openai-compatible:qwen" && tier === "cheap",
+          available: row?.available ?? null,
+          last_seen: row?.last_seen ?? null,
+        });
+      }
+    }
+  return { items: ac.assignments.map((a) => ({ priority: 0, ...a })), effective };
+}
+
+function assignmentImpact(ac, source, tier, modelId) {
+  const current = assignmentsView(ac).effective.find((s) => s.source === source && s.tier === tier);
+  const before = current?.model_id ?? null;
+  const changes = [{ kind: "provider", id: `${source}-main`, tier, before, after: modelId, excluded_reason: null }];
+  if (source === "claude-oauth")
+    changes.push({ kind: "proxy", id: "claude", tier, before, after: modelId, excluded_reason: null });
+  return { changes };
+}
+
+// ADR 2026-10-06-opencode-go-and-model-catalog D1/D2/D5: GET /llm/models。source ごとの model・発見の結果・人の上書き。
+export const modelCatalogFixture = {
+  items: [
+    {
+      source: "opencode-go",
+      model_id: "glm-5",
+      display_name: "GLM 5",
+      available: true,
+      first_seen: "2026-10-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: { tools: true },
+      override: null,
+      routing: { tiers: ["standard"], deployments: ["opencode-go/glm-5"] },
+    },
+    {
+      source: "opencode-go",
+      model_id: "kimi-k2",
+      display_name: "Kimi K2",
+      available: true,
+      first_seen: "2026-10-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: [], deployments: [] },
+    },
+    {
+      source: "opencode-go",
+      model_id: "retired-model",
+      display_name: null,
+      available: false,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-09-20T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: [], deployments: [] },
+    },
+    {
+      source: "claude-oauth",
+      model_id: "claude-opus-4",
+      display_name: "Claude Opus 4",
+      available: true,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: ["frontier"], deployments: ["claude-oauth/opus"] },
+    },
+    {
+      source: "claude-oauth",
+      model_id: "claude-sonnet-4",
+      display_name: "Claude Sonnet 4",
+      available: true,
+      first_seen: "2026-09-01T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: null,
+      routing: { tiers: ["standard"], deployments: [] },
+    },
+    {
+      source: "openai-compatible:qwen",
+      model_id: "qwen3-coder",
+      display_name: "Qwen3 Coder",
+      available: true,
+      first_seen: "2026-09-10T00:00:00Z",
+      last_seen: "2026-10-06T00:00:00Z",
+      capabilities: {},
+      override: { disabled: false, tier: "cheap", alias: null, note: null },
+      routing: { tiers: ["cheap"], deployments: ["qwen/qwen3-coder"] },
+    },
+  ],
+  last_discovery: [
+    { source: "opencode-go", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 3 },
+    { source: "claude-oauth", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 2 },
+    { source: "openai-compatible:qwen", at: "2026-10-06T00:00:00Z", ok: true, error: null, count: 1 },
+  ],
+};
+
 // ADR 2026-10-04-multi-objective-model-routing §6/§8 Phase 2: GET /llm/sources の deployment 状態。
 // 観測が無い・期限切れの値、請求と機会費用が別の欄、欠測の残量を含める（欠測は 0 にしない）。
 export const llmSourcesFixture = {
@@ -693,6 +842,24 @@ export const llmSourcesFixture = {
 const richPath =
   "src/very-long-workspace-name/feature-with-a-long-description/components/task-detail/overview-panel.tsx";
 const richNow = "2026-10-04T09:00:00Z";
+
+const browserExecutionOrgNode = () => ({
+  id: "browser-execution",
+  name: "ブラウザ実行",
+  kind: "section",
+  parent_id: "software-engineering",
+  created_at: "2026-10-06T00:00:00Z",
+  updated_at: "2026-10-06T00:00:00Z",
+  profile: {
+    browser: {
+      allowed_domains: ["http://localhost:3000", "http://127.0.0.1:3000"],
+      credential_policy_ids: [],
+      credential_identity_ids: {},
+    },
+    harnesses: { allowed: ["codex"], default: "codex" },
+    budget: { max_attempts: 2, max_lane: "standard" },
+  },
+});
 
 export function richFixtures() {
   const summary = (id, title, extra = {}) => ({
@@ -816,6 +983,7 @@ export function richFixtures() {
         created_at: richNow,
         updated_at: richNow,
       },
+      browserExecutionOrgNode(),
     ],
   };
   const docsTree = {
@@ -1115,7 +1283,7 @@ export function richFixtures() {
 
 export function richFiles() {
   return {
-    "/api/v1/tasks/T1/runs/R1/stdout.jsonl": {
+    "/api/v1/tasks/T1/runs/R1/stdout": {
       body: `${[
         { type: "user", message: { role: "user", content: [{ type: "text", text: "画面を確認してください" }] } },
         {
@@ -2106,6 +2274,464 @@ function createChatFixture() {
   };
 }
 
+// 偽 browser backend（ADR 2026-10-05-browser-department-web-live-view D2.4・D3）。`browser` を渡したときだけ動く。
+// T1（P1・browser-enabled）と T2（P2）に browser_updated（raw の live_view_url 付き）、control の状態機械、
+// waits（decision 1 件・credential 1 件）、live grant/check/read、identities、受信箱の browser_wait 項目を持つ。
+// 受けた body は `records` に残り、試験が後から読む。時刻は `now`（ms）で差し替えられる（lease 期限を時計で進める）。
+export const BROWSER_RAW_LIVE_VIEW_URL = "http://127.0.0.1:9/raw-live-view-secret";
+const browserTaskIds = ["T1", "T2"];
+const BROWSER_ID = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function createBrowserBackend({ credentialWait = true, publicKey = null, now = Date.now } = {}) {
+  const clock = { now };
+  const secs = () => Math.floor(clock.now() / 1000);
+  const run = (task_id, run_id, session_id, state) => ({
+    task_id,
+    run_id,
+    session_id,
+    state,
+    live_view_url: BROWSER_RAW_LIVE_VIEW_URL,
+    policy: null,
+  });
+  const row = (task_id, seq, browser) => ({
+    id: seq,
+    task_id,
+    seq,
+    ts: `2026-10-04T09:0${seq}:00Z`,
+    event: { type: "browser_updated", browser },
+  });
+  const tasks = {
+    T1: { title: "請求書フォームの入力", project_id: "P1", skills: ["browser-enabled"], status: "running" },
+    T2: { title: "社内ポータルの確認", project_id: "P2", skills: ["browser-enabled"], status: "running" },
+  };
+  const events = {
+    T1: [
+      row("T1", 1, run("T1", "R0", "S0", "COMPLETED")),
+      row("T1", 2, run("T1", "R1", "S1", "WAITING_FOR_APPROVAL")),
+      // 別 task の値を混ぜた行。gateway は event の task_id が経路の task と違う行を捨てる。
+      row("T1", 3, run("T2", "R9", "S9", "RUNNING")),
+      row("T1", 4, run("T1", "R1", "S1", "RUNNING")),
+    ],
+    T2: [row("T2", 1, run("T2", "R2", "S2", "RUNNING"))],
+  };
+  const runs = {
+    T1: [
+      { run_id: "R0", finished_at: "2026-10-04T08:00:00Z", outcome: "done" },
+      { run_id: "R1", finished_at: null, outcome: null },
+    ],
+    T2: [{ run_id: "R2", finished_at: null, outcome: null }],
+  };
+  const wait = (extra) => ({
+    approval_id: null,
+    created_at: "2026-10-04T09:00:00Z",
+    credential: null,
+    credential_policy_id: null,
+    deadline: "2099-01-01T00:00:00Z",
+    operation: null,
+    owner_id: null,
+    policy_revision: 3,
+    resolution_code: null,
+    resolved_at: null,
+    state: "pending",
+    trusted_login: null,
+    version: 1,
+    work_unit_id: null,
+    ...extra,
+  });
+  const waits = [
+    wait({
+      wait_id: "W1",
+      task_id: "T1",
+      run_id: "R1",
+      session_id: "S1",
+      reason: "waiting_for_approval",
+      origin: "https://billing.example.com",
+      purpose: "請求書フォームを送信する",
+      policy_hash: "ph-W1",
+      resume_key: "rk-W1",
+      operation: { intent_id: "I1", action: "submit", args_digest: "sha256:4f2a9c" },
+    }),
+  ];
+  if (credentialWait)
+    waits.push(
+      wait({
+        wait_id: "W2",
+        task_id: "T2",
+        run_id: "R2",
+        session_id: "S2",
+        reason: "waiting_for_auth",
+        origin: "https://portal.example.com",
+        purpose: "社内ポータルにログインする",
+        policy_hash: "ph-W2",
+        resume_key: "rk-W2",
+        credential: { credential_id: "C1", provider: "local", policy_id: "CP1" },
+        credential_policy_id: "CP1",
+      }),
+    );
+  const control = new Map();
+  for (const [task, run_id, session] of [
+    ["T1", "R1", "S1"],
+    ["T2", "R2", "S2"],
+  ])
+    control.set(`${task}/${run_id}/${session}`, {
+      phase: "agent_running",
+      version: 0,
+      lease_holder: null,
+      lease_expires_at: null,
+      in_flight: 0,
+      auth_section: false,
+    });
+  const live = {
+    "T1/R1/S1": [
+      { seq: 1, body: { kind: "status", state: "running" } },
+      { seq: 2, body: { kind: "tabs", count: 1, origins: ["https://billing.example.com"] } },
+      // task-api が保存前に query・fragment を落とした後の値（scrub 済み）。
+      { seq: 3, body: { kind: "url", url: "https://billing.example.com/invoices/new" } },
+      { seq: 4, body: { kind: "console", level: "info", text: "form ready" } },
+    ],
+    "T2/R2/S2": [{ seq: 1, body: { kind: "status", state: "running" } }],
+  };
+  const identities = [
+    identity("ID1", "P1", "https://billing.example.com", "active", 1),
+    identity("ID2", "P1", "https://old.example.com", "revoked", 2),
+    identity("ID3", "P2", "https://portal.example.com", "active", 1),
+  ];
+  function identity(identity_id, project_id, origin, state, generation) {
+    return {
+      identity_id,
+      project_id,
+      origin,
+      demand_confirmed_by: "owner",
+      generation,
+      created_at: 1790000000,
+      expires_at: 1790604800,
+      state,
+    };
+  }
+  const grants = new Map();
+  const replies = new Map();
+  let grantSeq = 0;
+  const records = { control: [], disconnect: [], waits: [], grants: [], checks: [], reads: [], identities: [] };
+
+  const taskSummary = (id) => ({
+    ...fixtureFor(schema.$defs.TaskSummary),
+    id,
+    kind: "execute",
+    status: tasks[id].status,
+    title: tasks[id].title,
+    created_at: "2026-10-04T08:00:00Z",
+    updated_at: "2026-10-04T09:00:00Z",
+    project_id: tasks[id].project_id,
+  });
+  const taskRef = (id) => ({ id, title: tasks[id].title, kind: "execute", status: tasks[id].status, actions: [] });
+  const runSummary = (r) => ({
+    run_id: r.run_id,
+    role: "worker",
+    adapter: "claude-code",
+    model: "sonnet",
+    started_at: "2026-10-04T08:30:00Z",
+    finished_at: r.finished_at,
+    outcome: r.outcome,
+    progress: 0,
+    artifacts: 0,
+    verdicts: 0,
+    reviewer_deferrals: 0,
+  });
+  function taskDetail(id, base) {
+    const detail = structuredClone(base ?? fixtureFor(schema.$defs.TaskDetail));
+    Object.assign(detail.task, {
+      id,
+      kind: "execute",
+      title: tasks[id].title,
+      status: tasks[id].status,
+      skills: tasks[id].skills,
+      project_id: tasks[id].project_id,
+    });
+    detail.runs = runs[id].map(runSummary);
+    return detail;
+  }
+  const waitItem = (w) => ({
+    task: taskRef(w.task_id),
+    run_state: w.reason === "waiting_for_auth" ? "WAITING_FOR_AUTH" : "WAITING_FOR_APPROVAL",
+    wait: w,
+  });
+  function inboxItems() {
+    return waits
+      .filter((w) => w.state === "pending")
+      .map((w) => ({
+        id: `browser_wait:${w.wait_id}`,
+        kind: "browser_wait",
+        title: w.reason === "waiting_for_auth" ? `credential 待ち: ${w.purpose}` : `ブラウザの承認待ち: ${w.purpose}`,
+        detail: w.origin,
+        options: [],
+        recommended: null,
+        due_at: w.deadline,
+        blocking: { tasks: [taskRef(w.task_id)], units: [], summary: "browser run を止めている" },
+        blocked_by: [],
+        answer: inboxAnswer(`browser_wait:${w.wait_id}`),
+        created_at: w.created_at,
+        age_secs: 600,
+        links: [{ label: "タスク", href: `/tasks/${w.task_id}` }],
+        project_id: tasks[w.task_id].project_id,
+        task: taskRef(w.task_id),
+      }));
+  }
+  // assertion（gateway が鍵で署名した payload）を読む。publicKey があれば署名も確かめる。
+  function claims(body) {
+    const assertion = body?.assertion ?? body?.attestation;
+    if (typeof assertion?.payload !== "string" || typeof assertion?.signature !== "string") return null;
+    if (publicKey && !verify(null, Buffer.from(assertion.payload), publicKey, Buffer.from(assertion.signature, "hex")))
+      return null;
+    try {
+      const value = JSON.parse(assertion.payload);
+      return value.expires_at > secs() ? value : null;
+    } catch {
+      return null;
+    }
+  }
+  function expire(state) {
+    if (state.phase === "human_control" && state.lease_expires_at <= secs()) {
+      Object.assign(state, { phase: "paused", lease_holder: null, lease_expires_at: null });
+      state.version += 1;
+    }
+    return state;
+  }
+  const status = (state) => ({ ...expire(state), agent_may_act: state.phase === "agent_running" });
+  function command(state, holder, input) {
+    const cmd = input.command ?? {};
+    const ttl = Math.min(Math.max(Number(cmd.ttl_secs ?? 60), 1), 300);
+    if (input.expected_version !== state.version) return [409, "version_conflict"];
+    if (state.auth_section) return [409, "auth_section_active"];
+    if (cmd.kind === "pause" && state.phase === "agent_running") state.phase = state.in_flight ? "pausing" : "paused";
+    else if (cmd.kind === "takeover" && state.phase === "paused")
+      Object.assign(state, { phase: "human_control", lease_holder: holder, lease_expires_at: secs() + ttl });
+    else if (cmd.kind === "renew" && state.phase === "human_control") {
+      if (state.lease_holder !== holder) return [403, "not_lease_holder"];
+      state.lease_expires_at = secs() + ttl;
+    } else if (cmd.kind === "resume" && ["paused", "human_control"].includes(state.phase)) {
+      if (state.phase === "human_control" && state.lease_holder !== holder) return [403, "not_lease_holder"];
+      if (cmd.fresh_snapshot !== true || cmd.policy_origin_ok !== true) return [422, "resume_not_verified"];
+      Object.assign(state, { phase: "agent_running", lease_holder: null, lease_expires_at: null });
+    } else if (cmd.kind === "stop" && state.phase !== "stopped")
+      Object.assign(state, { phase: "stopped", lease_holder: null, lease_expires_at: null });
+    else return [409, "invalid_transition"];
+    state.version += 1;
+    return [200, null];
+  }
+
+  /** browser の要求を処理する。扱わない path なら false。 */
+  function handle(req, url, input, json, base, sendEvent, inbox) {
+    const p = url.pathname;
+    const m =
+      /^\/api\/v1\/tasks\/([^/]+)\/browser\/(control|live)\/([^/]+)\/([^/]+)(?:\/(disconnect|grant|check|read))?$/.exec(
+        p,
+      );
+    if (m) {
+      const [, task, kind, runId, session, sub] = m;
+      const key = `${task}/${runId}/${session}`;
+      const found = events[task]?.some(
+        (r) => r.event.browser.run_id === runId && r.event.browser.session_id === session,
+      );
+      if (!found) return json(404, { code: "not_found" });
+      if (kind === "control") {
+        const state = control.get(key);
+        if (!state) return json(404, { code: "not_found" });
+        if (req.method === "GET" && !sub) return json(200, status(state));
+        if (req.method !== "POST" || (sub && sub !== "disconnect")) return json(405, { code: "method_not_allowed" });
+        const who = claims(input);
+        if (!who || who.task_id !== task || who.run_id !== runId || who.browser_session_id !== session)
+          return json(403, { code: "attestation_invalid" });
+        expire(state);
+        if (sub === "disconnect") {
+          records.disconnect.push({ key, holder: who.owner_session_id });
+          if (state.phase === "human_control" && state.lease_holder === who.owner_session_id) {
+            Object.assign(state, { phase: "paused", lease_holder: null, lease_expires_at: null });
+            state.version += 1;
+          }
+          return json(200, status(state));
+        }
+        records.control.push({ key, holder: who.owner_session_id, body: input });
+        const replay = replies.get(`${key}\0${input.idempotency_key}`);
+        if (replay) return json(replay[0], replay[1]);
+        const [code, error] = command(state, who.owner_session_id, input);
+        const reply = [code, error ? { code: error } : status(state)];
+        if (!error) {
+          replies.set(`${key}\0${input.idempotency_key}`, reply);
+          sendEvent("task.event", {
+            id: Date.now(),
+            seq: 0,
+            task_id: task,
+            ts: FAKE_NOW,
+            event: { type: "browser_updated", browser: run(task, runId, session, "RUNNING") },
+          });
+        }
+        return json(reply[0], reply[1]);
+      }
+      if (req.method !== "POST") return json(405, { code: "method_not_allowed" });
+      const who = claims(input);
+      if (!who || who.task_id !== task || who.run_id !== runId || who.browser_session_id !== session)
+        return json(403, { code: "attestation_invalid" });
+      if (sub === "grant") {
+        records.grants.push({ key, owner: who.owner_session_id });
+        const grant = { grant_id: `G${++grantSeq}`, expires_at: secs() + 60 };
+        grants.set(grant.grant_id, { key, expires_at: grant.expires_at });
+        return json(200, grant);
+      }
+      const grant = grants.get(input.grant_id);
+      if (!grant || grant.key !== key || grant.expires_at <= secs()) return json(410, { code: "grant_expired" });
+      if (sub === "check") {
+        records.checks.push({ key, grant_id: input.grant_id });
+        return json(200, { connected: true });
+      }
+      if (sub === "read") {
+        records.reads.push({ key, after: url.searchParams.get("after") });
+        const list = live[key] ?? [];
+        const latest = list.at(-1)?.seq ?? 0;
+        const oldest = list[0]?.seq ?? 1;
+        const raw = url.searchParams.get("after");
+        const after = raw === null ? null : Number(raw);
+        if (after === null || after > latest || after + 1 < oldest)
+          return json(200, { plan: { kind: "reset", latest_seq: latest }, events: [] });
+        return json(200, { plan: { kind: "replay", after_seq: after }, events: list.filter((e) => e.seq > after) });
+      }
+      return json(404, { code: "not_found" });
+    }
+    const w = /^\/api\/v1\/tasks\/([^/]+)\/browser\/waits(?:\/([^/]+)\/(decision|credential))?$/.exec(p);
+    // 一覧にある他の task（rich profile の T3 など）は待ちなし・browser 履歴なしの task として答える。
+    const listed = (id) => base("/api/v1/tasks")?.items?.find((x) => x.id === id) ?? null;
+    if (w) {
+      if (!tasks[w[1]] && !w[2] && req.method === "GET" && listed(w[1])) return json(200, { items: [] });
+      if (!tasks[w[1]]) return json(404, { code: "task_not_found" });
+      if (!w[2] && req.method === "GET") return json(200, { items: waits.filter((x) => x.task_id === w[1]) });
+      if (!w[2] || req.method !== "POST") return json(405, { code: "method_not_allowed" });
+      records.waits.push({ task_id: w[1], wait_id: w[2], kind: w[3], body: input });
+      const item = waits.find((x) => x.wait_id === w[2] && x.task_id === w[1]);
+      if (!item) return json(404, { code: "wait_not_found" });
+      if (!claims(input)) return json(403, { code: "attestation_invalid" });
+      if (item.reason !== (w[3] === "decision" ? "waiting_for_approval" : "waiting_for_auth"))
+        return json(409, { code: "wait_not_actionable" });
+      if (item.state !== "pending") return json(409, { code: "wait_not_actionable" });
+      if (input.expected_version !== item.version) return json(409, { code: "version_conflict" });
+      if (w[3] === "decision" && !["approve_once", "deny"].includes(input.decision))
+        return json(422, { code: "invalid_input" });
+      if (w[3] === "credential" && (!input.username || !input.password)) return json(422, { code: "invalid_input" });
+      item.state = w[3] === "credential" ? "registered" : input.decision === "deny" ? "denied" : "approved";
+      item.version += 1;
+      item.resolved_at = FAKE_NOW;
+      item.resolution_code = item.state;
+      inbox.items = inbox.items.filter((x) => x.id !== `browser_wait:${item.wait_id}`);
+      sendEvent("task.event", {
+        id: Date.now(),
+        seq: 0,
+        task_id: item.task_id,
+        ts: FAKE_NOW,
+        event: { type: "browser_wait_resolved", wait_id: item.wait_id },
+      });
+      sendEvent("inbox_changed", {});
+      return json(200, { wait: item, task_status: tasks[item.task_id].status, replayed: false });
+    }
+    if (p === "/api/v1/browser/waits" && req.method === "GET")
+      return json(200, { items: waits.filter((x) => x.state === "pending").map(waitItem) });
+    const id = /^\/api\/v1\/browser\/identities(?:\/([^/]+)(?:\/(revoke|restore))?)?$/.exec(p);
+    if (id) {
+      records.identities.push({ method: req.method, path: p, query: url.search, body: input });
+      if (!id[1] && req.method === "GET") {
+        const project = url.searchParams.get("project_id");
+        return json(200, {
+          identities: identities.filter((x) => x.project_id === project && x.state !== "deleted"),
+        });
+      }
+      if (!id[1] && req.method === "POST") {
+        if (
+          !BROWSER_ID.test(input.identity_id ?? "") ||
+          !BROWSER_ID.test(input.project_id ?? "") ||
+          !/^https:\/\/[^\s/?#]+$/.test(input.origin ?? "") ||
+          !Array.isArray(input.state?.entries)
+        )
+          return json(422, { code: "invalid_input" });
+        if (identities.some((x) => x.identity_id === input.identity_id && x.state !== "deleted"))
+          return json(409, { code: "identity_exists" });
+        const created = identity(input.identity_id, input.project_id, input.origin, "active", 1);
+        created.demand_confirmed_by = input.demand_confirmed_by;
+        created.expires_at = created.created_at + (input.ttl_secs ?? 604800);
+        identities.push(created);
+        return json(201, { identity: created });
+      }
+      const found = identities.find((x) => x.identity_id === id[1] && x.state !== "deleted");
+      if (!found) return json(404, { code: "identity_not_found" });
+      if (req.method === "DELETE" && !id[2]) {
+        found.state = "deleted";
+        return json(200, { identity: found });
+      }
+      if (req.method === "POST" && id[2] === "revoke") {
+        if (found.state !== "active") return json(409, { code: "identity_not_active" });
+        found.state = "revoked";
+        found.generation += 1;
+        return json(200, { identity: found });
+      }
+      if (req.method === "POST" && id[2] === "restore") {
+        if (found.state !== "active" || input.project_id !== found.project_id || input.origin !== found.origin)
+          return json(409, { code: "identity_not_restorable" });
+        return json(204, null);
+      }
+      return json(405, { code: "method_not_allowed" });
+    }
+    if (req.method !== "GET") return false;
+    const t = /^\/api\/v1\/tasks\/([^/]+)(\/events)?$/.exec(p);
+    if (t && !tasks[t[1]] && listed(t[1]) && base(p) === undefined) {
+      if (t[2]) return json(200, { items: [], has_more: false });
+      const detail = fixtureFor(schema.$defs.TaskDetail);
+      const summary = listed(t[1]);
+      Object.assign(detail.task, { id: summary.id, title: summary.title, status: summary.status, kind: summary.kind });
+      return json(200, detail);
+    }
+    if (t && tasks[t[1]]) {
+      if (!t[2]) return json(200, taskDetail(t[1], base(p)));
+      const after = Number(url.searchParams.get("after_seq") ?? -1);
+      const types = url.searchParams.get("types");
+      const items = events[t[1]].filter((r) => r.seq > after && (!types || types.split(",").includes(r.event.type)));
+      return json(200, { items, has_more: false });
+    }
+    if (p === "/api/v1/tasks") {
+      const list = structuredClone(base(p) ?? { items: [], total: 0, counts_by_status: {} });
+      const statuses = url.searchParams.get("status")?.split(",");
+      list.items = [
+        ...browserTaskIds.map(taskSummary),
+        ...list.items.filter((x) => !browserTaskIds.includes(x.id)),
+      ].filter((x) => !statuses || statuses.includes(x.status));
+      list.total = list.items.length;
+      list.next_cursor = null;
+      return json(200, list);
+    }
+    if (p === "/api/v1/inbox" || p === "/inbox") {
+      const value = base(p);
+      return json(200, { ...value, browser_waits: waits.filter((x) => x.state === "pending").map(waitItem) });
+    }
+    return false;
+  }
+  return {
+    handle,
+    inboxItems,
+    records,
+    waits,
+    identities,
+    control,
+    live,
+    clock,
+    /** run の control に値を入れる（in_flight・auth_section の変種）。 */
+    setControl(task, run_id, session, patch) {
+      Object.assign(control.get(`${task}/${run_id}/${session}`), patch);
+    },
+    /** scrub 済みの live event を足す。 */
+    appendLive(task, run_id, session, body) {
+      const key = `${task}/${run_id}/${session}`;
+      if (!live[key]) live[key] = [];
+      const list = live[key];
+      list.push({ seq: (list.at(-1)?.seq ?? 0) + 1, body });
+    },
+  };
+}
+
 export function createFakeDaemon({
   host = "127.0.0.1",
   port = 0,
@@ -2122,6 +2748,8 @@ export function createFakeDaemon({
   streamStatus: initialStreamStatus = 200,
   inboxItems = null,
   notices = null,
+  // 偽 browser backend（createBrowserBackend）。true か createBrowserBackend の options で有効にする。
+  browser = null,
 } = {}) {
   if (host !== "127.0.0.1" && host !== "::1" && host !== "localhost") throw new Error("fake daemon requires loopback");
   if (!Number.isInteger(port) || port < 0 || port > 65535 || reservedPorts.has(port))
@@ -2147,8 +2775,16 @@ export function createFakeDaemon({
   let faultRule = fault;
   let holdRule = hold;
   const held = [];
+  const browserBackend = browser ? createBrowserBackend(browser === true ? {} : browser) : null;
+  // browser 設定の専用管理 API。初期 grant は loopback の 2 origin だけ。
+  const browserSettingsEvents = [];
+  if (browserBackend) {
+    const org = fixtures["/api/v1/org"] ?? { items: [] };
+    fixtures["/api/v1/org"] = org;
+    if (!org.items.some((item) => item.id === "browser-execution")) org.items.push(browserExecutionOrgNode());
+  }
   const inbox = {
-    items: inboxItems ?? inboxItemsFixture(),
+    items: [...(inboxItems ?? inboxItemsFixture()), ...(browserBackend?.inboxItems() ?? [])],
     notices: notices ?? noticesFixture(),
     answers: [],
   };
@@ -2210,6 +2846,98 @@ export function createFakeDaemon({
           res.writeHead(500, { "content-type": "application/problem+json" });
           res.end(JSON.stringify({ code: "fixture-error" }));
         }
+      });
+      return;
+    }
+    if (
+      browserBackend &&
+      (/^\/api\/v1\/(tasks\/[^/]+\/)?browser(\/|$)/.test(pathname) ||
+        (req.method === "GET" && /^\/(api\/v1\/)?(tasks|inbox)(\/|$)/.test(pathname)))
+    ) {
+      const url = new URL(req.url ?? "/", "http://x");
+      const base = (key) => {
+        const raw = fixtures[key] ?? fixtures[key.replace(/^\/api\/v1/, "")];
+        return typeof raw === "function" ? raw(url) : raw;
+      };
+      const json = (status, value) => {
+        res.writeHead(status, value === null ? {} : { "content-type": "application/json" });
+        res.end(value === null ? undefined : JSON.stringify(value));
+      };
+      if (req.method === "GET") {
+        if (browserBackend.handle(req, url, {}, json, base, sendEvent, inbox) !== false) return;
+      } else {
+        const chunks = [];
+        req.on("data", (chunk) => chunks.push(chunk));
+        req.on("end", () => {
+          record.body = Buffer.concat(chunks).toString("utf8");
+          let input;
+          try {
+            input = record.body ? JSON.parse(record.body) : {};
+          } catch {
+            return json(400, { code: "invalid_json" });
+          }
+          if (browserBackend.handle(req, url, input, json, base, sendEvent, inbox) === false)
+            json(404, { code: "not_found" });
+        });
+        return;
+      }
+    }
+    if (browserBackend && pathname === "/api/v1/org/browser-execution/browser-settings" && req.method === "PATCH") {
+      const chunks = [];
+      req.on("data", (chunk) => chunks.push(chunk));
+      req.on("end", () => {
+        record.body = Buffer.concat(chunks).toString("utf8");
+        const json = (status, value) => {
+          res.writeHead(status, { "content-type": "application/json" });
+          res.end(JSON.stringify(value));
+        };
+        let patch;
+        try {
+          patch = JSON.parse(record.body);
+        } catch {
+          return json(400, { code: "bad_request" });
+        }
+        const bad = (field, message) =>
+          json(422, { code: "validation", detail: message, errors: [{ field, message }] });
+        const domains = patch.allowed_domains;
+        if (domains !== undefined) {
+          if (!Array.isArray(domains) || domains.length === 0)
+            return bad("browser.allowed_domains", "at least one origin is required");
+          for (const origin of domains) {
+            const wildcard =
+              typeof origin === "string" && /^https:\/\/\*\.([a-z0-9-]+\.)+[a-z0-9-]+(?::\d+)?$/.test(origin);
+            const wildcardBase = wildcard ? origin.slice("https://*.".length).replace(/:\d+$/, "") : "";
+            const labels = wildcardBase.split(".");
+            const publicSuffix =
+              wildcard &&
+              (labels.length === 1 ||
+                (labels.length === 2 && labels[1].length === 2) ||
+                ["github.io", "appspot.com", "pages.dev", "cloudfront.net"].includes(wildcardBase));
+            const plain = typeof origin === "string" && /^https:\/\/(?:[a-z0-9-]+\.)*[a-z0-9-]+(?::\d+)?$/.test(origin);
+            const loopback =
+              typeof origin === "string" && /^http:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::\d+)?$/.test(origin);
+            if (publicSuffix || (!wildcard && !plain && !loopback))
+              return bad("browser.allowed_domains", "expected valid browser origins (scheme or wildcard)");
+          }
+        }
+        const org = fixtures["/api/v1/org"];
+        const node = org.items.find((item) => item.id === "browser-execution");
+        const before = structuredClone(node.profile);
+        if (domains !== undefined) node.profile.browser.allowed_domains = domains;
+        if (patch.credential_policy_ids !== undefined)
+          node.profile.browser.credential_policy_ids = patch.credential_policy_ids;
+        if (patch.credential_identity_ids !== undefined)
+          node.profile.browser.credential_identity_ids = patch.credential_identity_ids;
+        if (patch.harnesses !== undefined) node.profile.harnesses = patch.harnesses;
+        if (patch.budget !== undefined) node.profile.budget = patch.budget;
+        node.updated_at = "2026-10-06T01:23:45Z";
+        browserSettingsEvents.push({
+          actor: "admin",
+          ts: node.updated_at,
+          before,
+          after: structuredClone(node.profile),
+        });
+        return json(200, node);
       });
       return;
     }
@@ -2401,10 +3129,41 @@ export function createFakeDaemon({
     // accounts/clusters (P4-13..15)
     // accounts・secrets・llm sources・mcp clients・clusters を状態付きで返す。ログイン・接続の途中状態（login_pending /
     // connect_pending）はサーバが持ち、GET で返す。secret の値は保存せず fingerprint だけ持つ。
-    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
+    if (/^\/api\/v1\/(accounts|secrets|llm\/sources|llm\/models|mcp\/clients|clusters)(\/|$)/.test(pathname)) {
       if (!server.fakeAc) {
         server.fakeAc = {
-          accounts: [{ id: "main", adapter: "claude-code", logged_in: true, login_pending: false }],
+          accounts: [
+            {
+              id: "main",
+              adapter: "claude-code",
+              logged_in: true,
+              login_pending: false,
+              usage: {
+                source: "statusline",
+                status: "allowed",
+                observed_at: "2026-10-06T00:00:00Z",
+                five_hour: { utilization: 0.2, resets_at: "2099-01-01T05:00:00Z" },
+                seven_day: { utilization: 0.4, resets_at: "2099-01-07T00:00:00Z" },
+                one_month: null,
+              },
+            },
+            {
+              id: "go-main",
+              adapter: "opencode-go",
+              logged_in: true,
+              login_pending: false,
+              usage: {
+                source: "opencode-go",
+                status: "allowed",
+                observed_at: "2026-10-06T00:00:00Z",
+                five_hour: { utilization: 0.1, resets_at: "2099-01-01T05:00:00Z" },
+                seven_day: { utilization: 0.5, resets_at: "2099-01-07T00:00:00Z" },
+                one_month: { utilization: 0.75, resets_at: "2099-02-01T00:00:00Z" },
+              },
+            },
+          ],
+          models: structuredClone(modelCatalogFixture),
+          assignments: structuredClone(modelAssignmentsFixture),
           secrets: [],
           clusters: [
             {
@@ -2511,6 +3270,126 @@ export function createFakeDaemon({
             ac.secrets = ac.secrets.filter((s) => s.id !== parts[1]);
             return json(200, {});
           }
+        }
+        if (parts[0] === "llm" && parts[1] === "models") {
+          const nowIso = new Date().toISOString();
+          if (parts.length === 2 && req.method === "GET")
+            return json(200, {
+              ...ac.models,
+              items: ac.models.items.map((m) => ({
+                ...m,
+                assigned_tiers: assignmentTiersFor(ac, m.source, m.model_id),
+              })),
+            });
+          if (parts[2] === "assignments") {
+            const asg = ac.assignments;
+            if (parts.length === 3 && req.method === "GET") return json(200, assignmentsView(ac));
+            if (parts.length === 4 && parts[3] === "preview" && req.method === "POST")
+              return json(200, { impact: assignmentImpact(ac, input.source, input.tier, input.model_id ?? null) });
+            if (parts[3] === "roles" && ["PUT", "POST"].includes(req.method)) {
+              const tier = parts[4];
+              const before = assignmentsView(ac)
+                .effective.filter((s) => s.tier === tier && s.model_id)
+                .map(({ source, model_id, priority }) => ({ source, model_id, priority }));
+              const after = input.members;
+              const impact = {
+                changes: ASSIGNMENT_SOURCES.map((source) => ({
+                  kind: "provider",
+                  id: `${source}-main`,
+                  tier,
+                  before:
+                    before
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  after:
+                    after
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  excluded_reason: null,
+                })),
+              };
+              if (req.method === "PUT") {
+                ac.assignments = ac.assignments.filter((a) => a.tier !== tier);
+                ac.assignments.push(
+                  ...after.map((m) => ({
+                    ...m,
+                    tier,
+                    state: "assigned",
+                    excluded_reason: null,
+                    note: null,
+                    updated_at: nowIso,
+                    updated_by: "web",
+                  })),
+                );
+                ac.managedRoles = [...new Set([...(ac.managedRoles ?? []), tier])];
+              }
+              return json(200, { before, after, impact });
+            }
+            if (parts.length === 5) {
+              const source = decodeURIComponent(parts[3]);
+              const tier = decodeURIComponent(parts[4]);
+              if (!["frontier", "standard", "cheap"].includes(tier)) return json(400, { error: "bad tier" });
+              const at = asg.findIndex((a) => a.source === source && a.tier === tier);
+              if (req.method === "PUT") {
+                if (!ac.models.items.some((m) => m.source === source && m.model_id === input.model_id))
+                  return json(400, { error: `model ${input.model_id} is not in the catalog` });
+                const impact = assignmentImpact(ac, source, tier, input.model_id);
+                const item = {
+                  source,
+                  tier,
+                  model_id: input.model_id,
+                  state: "assigned",
+                  excluded_reason: null,
+                  note: input.note ?? null,
+                  updated_at: nowIso,
+                  updated_by: "web",
+                };
+                if (at >= 0) asg[at] = item;
+                else asg.push(item);
+                return json(200, { item, impact });
+              }
+              if (req.method === "DELETE") {
+                if (at < 0) return json(404, { error: "not found" });
+                asg.splice(at, 1);
+                res.writeHead(204);
+                return res.end();
+              }
+            }
+            return json(404, { error: "not found" });
+          }
+          if (parts.length === 3 && parts[2] === "discover" && req.method === "POST") {
+            const sources = input.source ? [input.source] : ac.models.last_discovery.map((d) => d.source);
+            const results = sources.map((source) => {
+              const count = ac.models.items.filter((m) => m.source === source && m.available).length;
+              ac.models.last_discovery = ac.models.last_discovery.filter((d) => d.source !== source);
+              ac.models.last_discovery.push({ source, at: nowIso, ok: true, error: null, count });
+              for (const m of ac.models.items) if (m.source === source && m.available) m.last_seen = nowIso;
+              return { source, ok: true, count, error: null };
+            });
+            return json(202, { results });
+          }
+          if (parts.length === 5 && parts[4] === "override") {
+            const source = decodeURIComponent(parts[2]);
+            const modelId = decodeURIComponent(parts[3]);
+            const m = ac.models.items.find((x) => x.source === source && x.model_id === modelId);
+            if (!m) return json(404, { error: "not found" });
+            if (req.method === "PUT") {
+              m.override = {
+                disabled: input.disabled === true,
+                tier: input.tier ?? null,
+                alias: input.alias ?? null,
+                note: input.note ?? null,
+              };
+              return json(200, m.override);
+            }
+            if (req.method === "DELETE") {
+              m.override = null;
+              return json(200, {});
+            }
+          }
+          return json(404, { error: "not found" });
         }
         if (parts[0] === "llm" && req.method === "GET") return json(200, llmSourcesFixture);
         if (parts[0] === "mcp" && parts.length === 2 && req.method === "GET")
@@ -2668,6 +3547,9 @@ export function createFakeDaemon({
     sendEvent,
     // 受信箱・通知の状態（ADR-0133）。試験が項目を差し替えたら合図を送る。
     inbox,
+    // 偽 browser backend（`browser` を渡したときだけ。受けた body は browser.records）。
+    browser: browserBackend,
+    browserSettingsEvents,
     setInboxItems(items) {
       inbox.items = items;
       sendEvent("inbox_changed", {});

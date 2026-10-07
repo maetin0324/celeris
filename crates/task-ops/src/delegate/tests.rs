@@ -11,6 +11,7 @@ fn now() -> OffsetDateTime {
 
 fn dt(title: &str, deps: Vec<DelegateDep>) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: title.into(),
         objective: format!("do {title}"),
         acceptance: vec![Criterion {
@@ -58,6 +59,7 @@ fn profile_node(
 
 fn child_spec(key: &str, genre: &str, deps: &[&str]) -> task_core::ExecutionChildSpec {
     task_core::ExecutionChildSpec {
+        requirements: Default::default(),
         key: key.into(),
         title: format!("child {key}"),
         objective: format!("do {key}"),
@@ -72,6 +74,43 @@ fn child_spec(key: &str, genre: &str, deps: &[&str]) -> task_core::ExecutionChil
         skills: vec!["survey".into()],
         features: None,
         depends_on: deps.iter().map(|d| d.to_string()).collect(),
+    }
+}
+
+#[test]
+fn browser_allowed_domains_execution_plan_children_cannot_exceed_parent() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let mut parent = make_task(None, Status::Running);
+    parent.skills = vec!["browser-enabled".into()];
+    parent.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://*.example.com:8443".into()],
+    });
+    store.insert(&parent).unwrap();
+    let genres = [GenreSpec {
+        id: "coding".into(),
+        ..GenreSpec::default()
+    }];
+    let mut child = child_spec("browser", "coding", &[]);
+    child.skills = parent.skills.clone();
+    for (requirements, accepted) in [
+        (None, false),
+        (Some(vec![]), false),
+        (Some(vec!["http://example.com".into()]), false),
+        (Some(vec!["https://other.com:8443".into()]), false),
+        (Some(vec!["https://billing.example.com:8443".into()]), true),
+    ] {
+        child.requirements.browser =
+            requirements.map(|allowed_domains| task_core::BrowserRequirements { allowed_domains });
+        let result = plan_children(
+            &store,
+            &parent,
+            &[child.clone()],
+            &[],
+            &genres,
+            &DelegationLimits::default(),
+            now(),
+        );
+        assert_eq!(result.is_ok(), accepted, "{result:?}");
     }
 }
 
@@ -179,6 +218,7 @@ fn plan_children_runs_the_delegation_checks_and_asks_before_crossing_departments
 fn make_task(parent_id: Option<TaskId>, status: Status) -> Task {
     let t = now();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

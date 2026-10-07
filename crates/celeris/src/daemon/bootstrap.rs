@@ -461,6 +461,61 @@ pub(crate) fn worker_db_guard_decision(
     }
 }
 
+/// 付記 E2（ADR 2026-10-05-browser-department-web-live-view、daemon 側）: この daemon が試験専用 loopback
+/// 許可を申告した browser launcher を拒否するか（真 = 拒否）。本番判定は worker db guard と同じ P
+/// （[`worker_db_guard_protected_set`]）を使う。
+pub(crate) fn browser_launcher_refuses_test_loopback(config: &Config) -> bool {
+    match launcher_test_loopback_refusal(
+        passwd_home().as_deref(),
+        config.source_path.as_deref(),
+        &worker_db_guard_daemon_paths(config),
+    ) {
+        Some(reason) => {
+            tracing::debug!(%reason, "browser launcher: test-only loopback egress is refused for this daemon");
+            true
+        }
+        None => false,
+    }
+}
+
+/// [`browser_launcher_refuses_test_loopback`] の判定（試験から userns なしで呼ぶ）。拒否するなら理由。
+/// 次のどれかで拒否する（fail closed）: 本番 config（`home` の `.config/celeris/config.toml`）から P を
+/// 決められない、daemon が読んだ config がその本番 config そのもの（正規化して比べる。正規化できなければ
+/// 一致とみなす）、daemon の DB・DB のディレクトリ・token が本番に当たる（`judge_worker_db_guard` の
+/// `RefuseProduction`。印は見ない）。
+pub(crate) fn launcher_test_loopback_refusal(
+    home: Option<&Path>,
+    config_path: Option<&Path>,
+    daemon: &DaemonPaths,
+) -> Option<String> {
+    let protected = worker_db_guard_protected_set(home);
+    if !protected.unknown_reasons().is_empty() {
+        return Some(format!(
+            "the production config cannot be determined: {}",
+            protected.unknown_reasons().join("; ")
+        ));
+    }
+    if let (Some(home), Some(config_path)) = (home, config_path) {
+        let production = home.join(".config/celeris/config.toml");
+        if production.exists() {
+            match (production.canonicalize(), config_path.canonicalize()) {
+                (Ok(p), Ok(c)) if p != c => {}
+                _ => {
+                    return Some(format!(
+                        "config {} is the production config",
+                        config_path.display()
+                    ));
+                }
+            }
+        }
+    }
+    match task_worker::db_guard::judge_worker_db_guard(&protected, daemon, &WorkerRunMarker::Absent)
+    {
+        GuardDecision::RefuseProduction { reason, .. } => Some(reason),
+        GuardDecision::Exempt | GuardDecision::RequireUserns { .. } => None,
+    }
+}
+
 #[cfg(test)]
 #[path = "bootstrap_worker_db_guard_tests.rs"]
 mod worker_db_guard_tests;
@@ -476,7 +531,7 @@ pub fn build_dispatcher(
     config.ensure_memory_dir()?;
     // ADR-0064 D1/D5: `[db]` の `busy_timeout_ms` を使い、デーモンの書き込み接続は
     // `background_checkpoint` を立てる（別の背景 tick が `PRAGMA wal_checkpoint(PASSIVE)` を打つ）。
-    let store: Arc<SqliteStore> = Arc::new(SqliteStore::open_with(
+    let sqlite = Arc::new(SqliteStore::open_with(
         &config.db.path,
         StoreOptions {
             busy_timeout: config.db.busy_timeout(),
@@ -484,6 +539,7 @@ pub fn build_dispatcher(
             ..StoreOptions::default()
         },
     )?);
+    let store: Arc<dyn TaskStore> = sqlite.clone();
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let policy = StaticPolicy::new(
@@ -517,7 +573,7 @@ pub fn build_dispatcher(
         unavailable_reason = Some("CoS unavailable: [api] listen is not configured".into());
     }
     dispatcher.set_cos_chat_launch(
-        store,
+        sqlite.clone(),
         task_dispatch::dispatcher::cos_chat::launch::CosChatLaunchConfig {
             enabled: config.cos.enabled,
             harness: config.cos.harness.adapter().to_owned(),
@@ -547,8 +603,18 @@ pub fn build_dispatcher(
             },
         },
     );
+    // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
+    dispatcher.set_role_assignment_reader(sqlite);
+    // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
+    if let Some(shared) = config.routing_catalog_state.as_ref() {
+        dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
+    }
+    // ADR 2026-10-06 D3: `account_pool = "opencode-go"` のように pool の adapter を明示した行。
+    dispatcher.set_account_pool_adapters(config.account_pool_adapters());
     // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
     dispatcher.set_local_providers(config.local_cheap_providers());
+    // ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネス）。
+    dispatcher.set_coding_harness_default(config.coding_harness_default());
     // ADR 2026-10-04 Phase 2: `[model_routing]` の mode・観測 TTL・窓の reserve_value（既定 legacy）。
     if let Some(runtime) = &config.model_routing.runtime {
         dispatcher.set_dispatch_routing(runtime.dispatch_settings());
@@ -661,4 +727,17 @@ pub fn seed_cron_if_empty(
         "cron: seeded the cron jobs from the config"
     );
     Ok(config.cron.seed.len())
+}
+
+/// 付記「モデルごとの複数役割」: 共有の routing catalog snapshot から model profile を読む（dispatcher 用）。
+struct SharedCatalogProfiles(Arc<std::sync::RwLock<Arc<crate::config::RoutingCatalog>>>);
+
+impl task_dispatch::RoutingModelProfiles for SharedCatalogProfiles {
+    fn model_profiles(&self) -> Vec<task_core::model_router::profiles::ModelProfile> {
+        self.0
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .models
+            .clone()
+    }
 }

@@ -173,6 +173,7 @@ fn task(status: crate::Status) -> crate::Task {
     use crate::model::{Budget, Task, TaskKind, Tier, WorkerHint, WorkspaceSpec};
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         routing: None,
         mode: Default::default(),
         skills: Vec::new(),
@@ -416,6 +417,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              DROP INDEX idx_events_delivery_skipped; \
              DROP TABLE cron_job_runs; DROP TABLE cron_jobs; \
              DROP INDEX idx_events_integration_request; \
+             DROP TABLE model_role_scopes; DROP TABLE model_role_assignments; \
              DROP TABLE routing_shadow_reservations; \
              DROP INDEX idx_events_routing_decided; DROP INDEX idx_llm_proxy_requests_decision; \
              ALTER TABLE llm_proxy_requests DROP COLUMN model; ALTER TABLE llm_proxy_requests DROP COLUMN source_id; \
@@ -427,7 +429,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 53);
+    assert_eq!(crate::SCHEMA_VERSION, 56);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

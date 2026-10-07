@@ -53,6 +53,9 @@ pub struct EnvOptions {
     pub accounts_root: Option<PathBuf>,
     /// ADR-0025 D1: `[accounts] codex_dir`。`None` なら codex のプールは無し。
     pub codex_accounts_root: Option<PathBuf>,
+    pub opencode_accounts_root: Option<PathBuf>,
+    /// `config_view.providers` の末尾に足す provider 行。
+    pub extra_providers: Vec<task_api::types::ProviderConfigView>,
     pub max_runs_per_account: usize,
     /// ADR-0030 D1: `[secrets] dir`。`None` なら秘密の管理系は 409 `secrets_unavailable`。
     pub secrets_dir: Option<PathBuf>,
@@ -79,6 +82,7 @@ pub struct EnvOptions {
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources` が読む係。`None` なら 409 `llm_proxy_unavailable`。
     pub llm_sources: Option<task_api::SharedLlmSourcesReader>,
     pub routing_catalog: Option<task_api::SharedRoutingCatalogReader>,
+    pub model_discovery: Option<task_api::SharedModelDiscoveryHook>,
     /// ADR-0079 R4a: `[execution.tree]`（既定は無効）。
     pub tree_limits: task_core::TreeLimits,
 }
@@ -97,6 +101,8 @@ impl Default for EnvOptions {
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
+            opencode_accounts_root: None,
+            extra_providers: Vec::new(),
             max_runs_per_account: 0,
             secrets_dir: None,
             secret_usage: std::collections::HashMap::new(),
@@ -114,6 +120,7 @@ impl Default for EnvOptions {
             github: task_api::GithubSettings::default(),
             llm_sources: None,
             routing_catalog: None,
+            model_discovery: None,
             tree_limits: task_core::TreeLimits::default(),
         }
     }
@@ -320,7 +327,11 @@ pub fn settings(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: view_context(workspace_root),
-        config_view: config_view(),
+        config_view: {
+            let mut view = config_view();
+            view.providers.extend(options.extra_providers);
+            view
+        },
         roles: options.roles,
         genres: options.genres,
         conversation_genre: options.conversation_genre,
@@ -334,6 +345,9 @@ pub fn settings(
             let mut roots = std::collections::HashMap::new();
             if let Some(dir) = options.accounts_root {
                 roots.insert(task_core::AccountAdapter::ClaudeCode, dir);
+            }
+            if let Some(dir) = options.opencode_accounts_root {
+                roots.insert(task_core::AccountAdapter::OpencodeGo, dir);
             }
             if let Some(dir) = options.codex_accounts_root {
                 roots.insert(task_core::AccountAdapter::Codex, dir);
@@ -362,6 +376,7 @@ pub fn settings(
         knowledge_root: Some(knowledge_root.to_path_buf()),
         llm_sources: options.llm_sources,
         routing_catalog: options.routing_catalog,
+        model_discovery: options.model_discovery,
         browser: Default::default(),
         tree_limits: options.tree_limits,
     }
@@ -371,6 +386,7 @@ pub fn new_task(kind: TaskKind, status: Status) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

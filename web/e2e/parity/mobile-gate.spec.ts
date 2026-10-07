@@ -29,6 +29,9 @@ for (const screen of fixtures) {
       await page.setViewportSize({ width, height: 800 });
       await page.goto(`${gateway.base}${screen.fixture}`);
       await expect(page.getByRole("heading", { level: 1, name: screen.heading })).toBeVisible();
+      if (screen.fixture === "/browser/settings") {
+        await expect(page.getByRole("list", { name: "許可 origin の一覧" }).getByRole("listitem")).toHaveCount(2);
+      }
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );

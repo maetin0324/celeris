@@ -413,6 +413,16 @@ impl Dispatcher {
             .enforce_active()
             .then(|| self.enforce_round(&task.worker_hint));
         let mut enforce_full = full.clone();
+        // ADR 2026-10-07（coding harness の既定）: `adapter_policy = "model_family"` のハーネスで
+        // adapter の明示が無い worker run は、family の既定ハーネスの行を優先して選ぶ。
+        let coding_default_harness = !cos
+            && !is_planner_dispatch
+            && task
+                .genre
+                .as_deref()
+                .is_some_and(|g| self.coding_default.harnesses.iter().any(|h| h == g));
+        let coding_default_active = coding_default_harness && task.worker_hint.adapter.is_none();
+        let mut coding_default_outcome: Option<super::coding_default::CodingDefaultOutcome>;
         let (
             adapter_id,
             provider_id,
@@ -423,33 +433,35 @@ impl Dispatcher {
             routing_reason,
         ) = loop {
             // ADR-0132 付記 L2/L8: worker run だけ cheap lane のローカル優先を効かせ、選択の記録を残す。
-            let (picked, provider_selection) = match &enforce_round {
+            let (picked, provider_selection, outcome) = match &enforce_round {
                 Some(round) => {
                     // enforce の除外は満杯の集合へ混ぜない（他の task の判定を汚さない）。
                     let excluded = round.excluded.clone();
-                    let result = self.select_provider_excluding(
+                    let result = self.select_provider_with_default(
+                        coding_default_active,
                         &task.worker_hint,
                         now,
                         task.id,
                         &mut enforce_full,
                         sticky_session.as_ref(),
                         cos,
-                        true,
                         &excluded,
                     );
                     full.extend(enforce_full.iter().cloned());
                     result
                 }
-                None => self.select_provider_for(
+                None => self.select_provider_with_default(
+                    coding_default_active,
                     &task.worker_hint,
                     now,
                     task.id,
                     full,
                     sticky_session.as_ref(),
                     cos,
-                    true,
+                    &std::collections::HashSet::new(),
                 ),
             };
+            coding_default_outcome = outcome;
             let Some((adapter_id, provider_id, selected_account)) = picked else {
                 if let Some(round) = &enforce_round {
                     tracing::info!(task_id = %task.id, tier = ?task.worker_hint.tier, excluded = %round.summary(),
@@ -476,11 +488,36 @@ impl Dispatcher {
                 }
                 None => base_adapter,
             };
+            // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを重ねた実効 bindings で run を起こす。
+            let adapter = self.adapter_with_effective_models(
+                &provider_id,
+                adapter,
+                &self.current_assignment_view(),
+            );
             if let Some(round) = enforce_round.as_mut() {
                 let state = self.source_state_of(&provider_id, selected_account.as_ref(), now);
                 match self.enforce_check_source(task.worker_hint.tier, &state) {
                     Ok(reason) => {
                         round.observed_at = state.observed_at.clone();
+                        // 付記「モデルごとの複数役割」: 役割のメンバーが複数なら kernel の選択を実行モデルにする。
+                        let profiles = self.legacy_provider_profiles(&task.worker_hint);
+                        let ranking = self.rank_role_members(
+                            task.worker_hint.tier,
+                            &provider_id,
+                            &profiles,
+                            Some(&state),
+                        );
+                        let adapter = match &ranking.chosen {
+                            Some(model) => self.rebind_lane_model(
+                                &provider_id,
+                                adapter,
+                                task.worker_hint.tier,
+                                model,
+                                &self.current_assignment_view(),
+                            ),
+                            None => adapter,
+                        };
+                        round.member_ranking = ranking;
                         break (
                             adapter_id,
                             provider_id,
@@ -641,6 +678,20 @@ impl Dispatcher {
                         .filter(|_| adapter.supports_reasoning_effort()),
                     // ADR-0132 付記 L8: provider 選択の理由と見た候補。
                     selection: Some(provider_selection),
+                    // ADR 2026-10-07: 既定解決をしたか・明示か・倒れたかと、選んだ行の family。
+                    coding_default: if coding_default_harness {
+                        coding_default_outcome
+                            .or_else(|| {
+                                self.explicit_coding_outcome(&task.worker_hint, &provider_id)
+                            })
+                            .map(|o| task_core::model_routing::CodingDefaultResolution {
+                                family: o.family.family,
+                                family_basis: o.family.basis,
+                                adapter_choice: o.choice,
+                            })
+                    } else {
+                        None
+                    },
                 },
                 quota_reason: Some(routing_reason.clone()),
                 decision,

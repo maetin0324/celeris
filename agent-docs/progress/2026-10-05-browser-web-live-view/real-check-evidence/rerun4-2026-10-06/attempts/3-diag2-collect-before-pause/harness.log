@@ -1,0 +1,12 @@
+{"t": 1791282859.354, "started": true, "argv": [], "cwd": "/var/tmp/cb-1001/w/01M48CEK12T3C9YATFE2Z0JBRN"}
+{"t": 1791282859.354, "rpc": "initialize"}
+{"t": 1791282859.355, "rpc": "session/new"}
+{"t": 1791282859.356, "rpc": "session/prompt"}
+{"t": 1791282859.356, "cli": "/var/tmp/cb-1001/w/01M48CEK12T3C9YATFE2Z0JBRN/runs/01M48CEK6TQVKK4NP9NANGGDH2/browser/celeris-browser.py"}
+{"t": 1791282884.721, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.37, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282912.86, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.14, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282941.012, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.15, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282969.108, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.1, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791282997.27, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.16, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791283025.41, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.14, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}
+{"t": 1791283053.713, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 25.3, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}

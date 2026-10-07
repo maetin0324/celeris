@@ -40,7 +40,9 @@ pub mod langmem;
 pub mod local_deep_research;
 pub mod local_worktree;
 pub mod memory;
+pub mod opencode_account;
 pub mod paperqa;
+pub mod pi;
 pub mod preamble;
 /// ADR-0052 D1（Phase 64）: OpenAI 互換エンドポイントの到達性の検査（LLM は呼ばない）。
 pub mod probe;
@@ -63,6 +65,7 @@ pub mod subprocess;
 pub mod task_repos;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod tool_policy;
 pub mod workspace;
 /// ADR-0066 D2（Phase 110b）: 終端タスクの作業場所から、ビルド生成物だけを自動で刈る。
 pub mod workspace_prune;
@@ -98,7 +101,9 @@ pub use local_worktree::{
     current_release_sha, is_git_repo, resolve_base, status_is_clean,
 };
 pub use memory::{MEMORY_MAX_CHARS, MemoryDir, MemoryUpdate, read_result_memory};
+pub use opencode_account::check_account_opencode_go;
 pub use paperqa::{AcquireConfig, PaperQaAdapter, PaperQaConfig, PaperQaEvidence};
+pub use pi::{PiAdapter, PiConfig};
 pub use probe::{PROBE_CACHE_TTL, PROBE_TIMEOUT, Reachability, probe_models};
 pub use process_group::{ProcessGroup, kill_tree, kill_tree_with};
 pub use protocol::{

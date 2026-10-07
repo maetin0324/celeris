@@ -7,6 +7,8 @@
   エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・
   `POST /cos/operations/{o}/override`（§3.129）。`NotificationKind` に `cos_escalation` /
   `cos_fallback` が増えた。DB のマイグレーションは 0053 以降（`cos_inbox_items` ほか。§7）。
+- 改訂: 2026-10-05 Phase 1（model routing）— 読取専用 `GET /llm/routing/catalog` を追加。
+  `GET /tasks/{id}/routing` の各 run に任意の `optimizer` trace を追加。旧欄は維持し、DB migration は無い。
 - 改訂: 2026-10-04（ADR 2026-10-04-release-notes）— **追加のみ。v1 のまま**。エンドポイント 175〜176:
   `GET /releases/{sha12}/promotion-preview`・`GET /deliveries`（§3.67a / §3.67b）。`GET /releases` の
   `items[]` に `notes`（そのリリースの説明。`notes.json`）と `promotion`（`current` から昇格したら入るものの
@@ -279,7 +281,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（201 = 表 171 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
+## 2. エンドポイント一覧（206 = 表 176 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -291,6 +293,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 1 | GET | `/health` | 版、スキーマ版数、DB の journal_mode | `Health` | task-api |
 | 2 | GET | `/inbox` | 承認待ち / 質問 / draft / 注意 | `Inbox` | task-ops（+ スナップショット） |
 | 3 | GET | `/tasks` | 一覧（フィルタ・keyset ページング） | `TaskList` | store `list_page` + task-ops |
+| 3a | GET | `/tasks/counts` | 全タスクの状態別件数 | `TaskStatusCounts` | store `count_by_status` |
 | 4 | POST | `/tasks` | `celerisctl add` 相当 | 201 `Task` | task-ops |
 | 5 | GET | `/tasks/{id}` | 詳細（`celerisctl show --json` と同一） | `TaskDetail` | task-ops |
 | 6 | GET | `/tasks/{id}/events` | そのタスクのイベント（`after_seq`） | `EventsPage` | store `events_for` |
@@ -483,6 +486,11 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 199 | GET | `/cos/inbox` | 受信箱の一次対応 item（`?state` / `?limit`） | 200 `CosInboxList` | `crate::cos::inbox` |
 | 200 | POST | `/cos/inbox/{i}/resolve` | CoS の一次対応（answer / observe / escalate） | 200 `ResolveResponse` | `crate::cos::inbox` |
 | 201 | POST | `/cos/operations/{o}/override` | 人の取消・差し戻し（revoke / return。管理系） | 200 `OverrideResponse` | `crate::cos::override_op` |
+| 202 | GET | `/llm/routing/catalog` | モデル・deployment・lane policy の設定 snapshot（Phase 1、読取専用） | `RoutingCatalogView` | celeris の `RoutingCatalogReader` |
+| 203 | GET | `/llm/models` | 自動発見したモデル catalog と上書き・routing での使われ方・最終発見記録（§3.127。ADR 2026-10-06 D5） | `ModelCatalogView` | store `model_catalog_list` |
+| 204 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
+| 205 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
+| 206 | POST | `/llm/models/discover` | 発見を今すぐ走らせる（202） | `DiscoverResponse` | celeris の `ModelDiscoveryHook` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -582,6 +590,13 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
   `status` / `kind` / `genre` は同じキーの中では OR）。
 - `counts_by_status` は**フィルタに関係なく** DB 全体の status 別件数（0 件の status は現れない）。タイトルバーの件数表示用。
 - 空のときは `{"items":[],"next_cursor":null,"total":0,"counts_by_status":{…}}`。
+
+### 3.3a `GET /tasks/counts` → 200 `TaskStatusCounts`
+
+`GET /tasks/counts` → 200 `TaskStatusCounts` は `{ "counts_by_status": { "ready": 12, "running": 3 } }` を返す。
+`TaskStore::count_by_status` の SQLite `GROUP BY status` を使い、タスク行は取得しない。
+検索語・案件・状態などの一覧条件は件数に影響せず、DB 全体の各状態を数える。0 件の状態は省略する。
+クエリは受けない。読み取り専用で、`celerisctl show --json` の応答は変えない。
 
 ### 3.4 `POST /tasks` → 201 `Task`（`Location: /api/v1/tasks/{id}`。**管理系**）
 
@@ -2750,6 +2765,12 @@ Console の入力欄の文の入口。`POST /org/{id}/messages`（§3.47）と�
 
 ### 3.108 `GET /llm/sources` → 200 `LlmSourcesView`（ADR-0053 D4）
 
+Phase 1 の `GET /llm/routing/catalog` は通常の読み取り認証を要し、クエリを受け付けない。
+`catalog_version`、`mode`、`models[]`、`deployments[]`、`policies[]`、`warnings[]` を返す。
+モデルは能力・context limit・品質・価格、deployment は source/model の対応・課金種別・lane・価格上書きだけを公開する。
+品質・価格・context limit の欠測は `null`。credential、token、account dir、endpoint URL、host は返さない。
+catalog snapshot を渡せない場合は 409 `llm_proxy_unavailable`。reload が成功した後の要求は新しい snapshot を読む。
+
 LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127.0.0.1:18100`、`/api/v1` の外）が
 使っている供給元の観測。判断（選択・cooldown）はプロキシの中で決定的に行われる。ここは**見えるように
 するだけ**（GUI の表示は `/accounts` の「LLM source」節）。
@@ -3080,6 +3101,7 @@ continuation が各設定閾値（既定はともに 2、超過は 3 回目）�
 
 `task_id`、`assignee`、`routing`、`runs[]` を返す。run ごとの routing 監査はイベントから組み立てる。
 クエリは受け付けず、不明な task は 404 `task_not_found`。`routing.rs` を参照。
+各 run の `optimizer` は `RoutingDecided.record.optimizer` がある場合のみ付く任意欄。旧 event では省略する。
 
 #### 3.126.2 `POST /tasks/{id}/rereview` → 200 `TransitionResult`（管理系）
 
@@ -3203,6 +3225,47 @@ path は event の `log_path` から引き、要求からは受け取らない�
   `exit?`・`duration_ms?`・`size`（ログの大きさ。まだ無ければ 0）・`truncated`（前を切った）・`tail`（UTF-8 の境界で切る）。
 - その WU に検査の開始が無ければ 404 `file_not_found`、不明な task は 404 `task_not_found`。
 - GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
+
+### 3.127 モデル catalog（ADR 2026-10-06 D4 / D5）
+
+利用可能モデルは daemon が定期的（`[model_catalog] refresh_interval_seconds`、既定 3600、`0` で無効）に発見して
+SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行だけで、LLM は呼ばない。`source` は
+`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`。取得に失敗した source は catalog を変えず、
+失敗だけを `last_discovery` に残す（消えたと誤認しない）。今回見えなかった既存のモデルは行を残して `available = false`。
+追加・消失・復活は event `model_catalog_changed`（`source`・`added[]`・`removed[]`・`restored[]`）に追記する
+（task に属さないので、nil ULID の疑似 task の列）。
+
+#### 3.127.1 `GET /llm/models` → 200 `ModelCatalogView`
+
+通常の読み取り認証。クエリは受け付けない。
+
+```json
+{"items": [{"source": "opencode-go", "model_id": "glm-5", "display_name": null, "available": true,
+            "first_seen": "2026-10-06T00:00:00Z", "last_seen": "2026-10-06T01:00:00Z", "capabilities": {},
+            "override": {"disabled": false, "tier": "cheap", "alias": null, "note": null},
+            "routing": {"tiers": ["cheap"], "deployments": ["provider:opencode-go/cheap"]}}],
+ "last_discovery": [{"source": "opencode-go", "at": "2026-10-06T01:00:00Z", "ok": true, "error": null, "count": 12}]}
+```
+
+- `items` は `source`・`model_id` の昇順。`override` は人の上書き（無ければ `null`）。
+- `routing` は routing catalog の deployment（`source_ref` と `upstream_model`。`<source>/` 接頭辞は外して比べる）との
+  突き合わせ。routing catalog を渡せない daemon では空。catalog は config を**足さない**（新モデルを自動で routing に入れない）。
+- `last_discovery` は source ごとの最後の発見（`ok = false` なら `error` に理由。`count` は成功時の件数）。
+
+#### 3.127.2 `PUT` / `DELETE /llm/models/{source}/{model_id}/override`
+
+管理系（bearer 必須）。`PUT` の本文 `{disabled?, tier?, alias?, note?}`（`tier` は `frontier|standard|cheap`）を
+置き換えで保存し、200 で `ModelCatalogItem` を返す。catalog に無いモデルにも置ける（その場合 `available = false` の行で返る）。
+`disabled = true` か catalog で `available = false` のモデルの deployment は routing の候補から外れる
+（`celeris::config::apply_model_catalog`）。上書きは自動の発見では書き換わらない。不明な `source`・不正な `tier` は 400。
+`model_id` に `/` を含むものは `%2F` で符号化する。`DELETE` は 204、上書きが無ければ 404 `model_override_not_found`。
+
+#### 3.127.3 `POST /llm/models/discover` → 202 `DiscoverResponse`
+
+管理系。本文 `{source?}`（省略で全 source）。daemon が発見の係を渡していれば同期に走らせ、
+`{"results": [{"source", "ok", "count", "error", "delta": {"source", "added", "removed", "restored"}}], "unavailable": false}`
+を返す。係が無い process（試験・standby 等）では `{"results": [], "unavailable": true}`。不明な `source` は 400。
+`celerisctl models list|discover [--source S]` が同じ API を呼ぶ。
 
 
 ### 3.127 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）
@@ -3530,6 +3593,6 @@ Reviewer条件がある `done` の仕事、または直前の遷移が `review_f
 読み取りと同じ）。`routing` は `Task.routing`（`tier_source`・`assignee_explicit`・CoS/計画/委譲が書いたが
 捨てた担当 `dropped_assignee`・`features` の上書き）。`runs[]` はワーカー run ごとの `RoutingAudit`（古い順:
 `task_id, run_id, org_node, harness, adapter, provider, account, lane, model, reasoning_effort, features, rule_id,
-policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review`）。
+policy_version, reasons, escalation, outcome, cost_usd, input_tokens, output_tokens, wall_ms, retries, review, optimizer?`）。
 各 run の `escalation` がエスカレーションの履歴。run が無いタスクは `runs: []`、知らないタスクは 404、
 クエリパラメータは 400。

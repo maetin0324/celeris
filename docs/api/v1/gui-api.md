@@ -281,7 +281,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（201 = 表 171 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
+## 2. エンドポイント一覧（206 = 表 176 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -487,6 +487,14 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 200 | POST | `/cos/inbox/{i}/resolve` | CoS の一次対応（answer / observe / escalate） | 200 `ResolveResponse` | `crate::cos::inbox` |
 | 201 | POST | `/cos/operations/{o}/override` | 人の取消・差し戻し（revoke / return。管理系） | 200 `OverrideResponse` | `crate::cos::override_op` |
 | 202 | GET | `/llm/routing/catalog` | モデル・deployment・lane policy の設定 snapshot（Phase 1、読取専用） | `RoutingCatalogView` | celeris の `RoutingCatalogReader` |
+| 203 | GET | `/llm/models` | 自動発見したモデル catalog と上書き・routing での使われ方・最終発見記録（§3.127。ADR 2026-10-06 D5） | `ModelCatalogView` | store `model_catalog_list` |
+| 204 | PUT | `/llm/models/{source}/{model_id}/override` | モデルの上書き（`disabled` / `tier` / `alias` / `note`）を置く | `ModelCatalogItem` | store `model_catalog_set_override` |
+| 205 | DELETE | `/llm/models/{source}/{model_id}/override` | 上書きを消す（204。無ければ 404 `model_override_not_found`） | なし | store `model_catalog_delete_override` |
+| 206 | POST | `/llm/models/discover` | 発見を今すぐ走らせる（202） | `DiscoverResponse` | celeris の `ModelDiscoveryHook` |
+| 207 | GET | `/llm/models/assignments` | source × 役割（tier）→ model の割り当て（実効の状態つき）と全枠の実効（§3.127.4。ADR 2026-10-06 model-role-assignments D4） | `AssignmentList` | store `model_role_assignment_view` + routing catalog |
+| 208 | PUT | `/llm/models/assignments/{source}/{tier}` | 割り当てを置く（`{model_id, note?}`。200 `{item, impact}`） | `AssignmentPutResponse` | store `model_role_assignment_set` |
+| 209 | DELETE | `/llm/models/assignments/{source}/{tier}` | 割り当てを外す（204。無ければ 404 `model_assignment_not_found`） | なし | store `model_role_assignment_delete` |
+| 210 | POST | `/llm/models/assignments/preview` | 書かずに影響（impact）だけ返す（`{source, tier, model_id?}`） | `AssignmentPreviewResponse` | routing catalog + providers |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -742,7 +750,12 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 `truncated` / `error` を**あれば**持つ（**追加のみ**。付けないワーカー・導入前のイベントには無い。ADR-0048 D2）。
 Console（§3.98）はこの形だけを見る。
 
-`types` の語彙は `task_api::query::EVENT_TYPES`（50 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、
+`worker_policy_violation` は `{run_id, kind, tool, matched, command}`（ADR 2026-10-07-worker-no-subagents-no-llm-cli D5）: worker が
+subagent の道具（`kind = subagent_tool`）・別の LLM CLI（`llm_cli`）・LLM API（`llm_api`）を起動しようとした決定的な検出。警告で
+run は止めない。同じ内容は `worker_progress`（`kind = status`・`error = true`・`msg` が `policy: ` で始まる）にも出る。reviewer には
+`ReviewRequest.policy_violations` として渡る（D6）。
+
+`types` の語彙は `task_api::query::EVENT_TYPES`（68 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
 `browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
@@ -3221,6 +3234,80 @@ path は event の `log_path` から引き、要求からは受け取らない�
   `exit?`・`duration_ms?`・`size`（ログの大きさ。まだ無ければ 0）・`truncated`（前を切った）・`tail`（UTF-8 の境界で切る）。
 - その WU に検査の開始が無ければ 404 `file_not_found`、不明な task は 404 `task_not_found`。
 - GUI は task 詳細の WU の行で `check_progress.current` があるときにこれを数秒おきに読む。
+
+### 3.127 モデル catalog（ADR 2026-10-06 D4 / D5）
+
+利用可能モデルは daemon が定期的（`[model_catalog] refresh_interval_seconds`、既定 3600、`0` で無効）に発見して
+SQLite の catalog に残す。発見は決定的な HTTP・コマンド実行だけで、LLM は呼ばない。`source` は
+`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`。取得に失敗した source は catalog を変えず、
+失敗だけを `last_discovery` に残す（消えたと誤認しない）。今回見えなかった既存のモデルは行を残して `available = false`。
+追加・消失・復活は event `model_catalog_changed`（`source`・`added[]`・`removed[]`・`restored[]`）に追記する
+（task に属さないので、nil ULID の疑似 task の列）。
+
+#### 3.127.1 `GET /llm/models` → 200 `ModelCatalogView`
+
+通常の読み取り認証。クエリは受け付けない。
+
+```json
+{"items": [{"source": "opencode-go", "model_id": "glm-5", "display_name": null, "available": true,
+            "first_seen": "2026-10-06T00:00:00Z", "last_seen": "2026-10-06T01:00:00Z", "capabilities": {},
+            "override": {"disabled": false, "tier": "cheap", "alias": null, "note": null},
+            "routing": {"tiers": ["cheap"], "deployments": ["provider:opencode-go/cheap"]}}],
+ "last_discovery": [{"source": "opencode-go", "at": "2026-10-06T01:00:00Z", "ok": true, "error": null, "count": 12}]}
+```
+
+- `items` は `source`・`model_id` の昇順。`override` は人の上書き（無ければ `null`）。
+- `routing` は routing catalog の deployment（`source_ref` と `upstream_model`。`<source>/` 接頭辞は外して比べる）との
+  突き合わせ。routing catalog を渡せない daemon では空。catalog は config を**足さない**（新モデルを自動で routing に入れない）。
+- `last_discovery` は source ごとの最後の発見（`ok = false` なら `error` に理由。`count` は成功時の件数）。
+
+#### 3.127.2 `PUT` / `DELETE /llm/models/{source}/{model_id}/override`
+
+管理系（bearer 必須）。`PUT` の本文 `{disabled?, tier?, alias?, note?}`（`tier` は `frontier|standard|cheap`）を
+置き換えで保存し、200 で `ModelCatalogItem` を返す。catalog に無いモデルにも置ける（その場合 `available = false` の行で返る）。
+`disabled = true` か catalog で `available = false` のモデルの deployment は routing の候補から外れる
+（`celeris::config::apply_model_catalog`）。上書きは自動の発見では書き換わらない。不明な `source`・不正な `tier` は 400。
+`model_id` に `/` を含むものは `%2F` で符号化する。`DELETE` は 204、上書きが無ければ 404 `model_override_not_found`。
+
+#### 3.127.3 `POST /llm/models/discover` → 202 `DiscoverResponse`
+
+管理系。本文 `{source?}`（省略で全 source）。daemon が発見の係を渡していれば同期に走らせ、
+`{"results": [{"source", "ok", "count", "error", "delta": {"source", "added", "removed", "restored"}}], "unavailable": false}`
+を返す。係が無い process（試験・standby 等）では `{"results": [], "unavailable": true}`。不明な `source` は 400。
+`celerisctl models list|discover [--source S]` が同じ API を呼ぶ。
+
+#### 3.127.4 `/llm/models/assignments`（役割への割り当て）
+
+2026-10-07 付記: `effective` はモデルごとの候補行となり、同じ `(source, tier)` の行が複数ある。`items` / `effective` に `priority`（非負、小さい順）を追加した。
+
+- `PUT /llm/models/assignments/roles/{tier}`: `{"members":[{"source":"opencode-go","model_id":"glm-5","priority":0}]}`。全 source のその役割の集合を原子的に置換し、200 `{before, after, impact}` を返す。空の配列は役割を明示的に空にし、config を復活させない。
+- `POST /llm/models/assignments/roles/{tier}/preview`: 同じ本文、同じ応答。書き込みなし。
+- config の各モデルは未編集の scope に限って候補として互換読み取りする。旧 `PUT/DELETE …/{source}/{tier}` は互換 API（PUT はその scope を 1 モデルに置換、DELETE は config へ戻す）。web の複数モデル編集は新しい集合 API を使う。
+
+以下は旧単体 API の説明。
+
+人が「source の frontier / standard / cheap にはこのモデル」と決める表（ADR 2026-10-06 model-role-assignments）。
+catalog の自動発見は表を消さない。`GET /llm/models` の各 item には、そのモデルが割り当てられている tier の一覧
+`assigned_tiers` が付く。書き込み（`PUT`/`DELETE`/`preview`）は管理系（bearer 必須）。
+
+- `GET` → 200 `{items: [{source, tier, model_id, state: "assigned"|"excluded", excluded_reason, note, updated_at, updated_by}],
+  effective: [{source, tier, model_id, origin: "assignment"|"config"|null, excluded_reason, providers[], proxy, available, last_seen}]}`。
+  `effective` は (catalog の source ∪ provider の `llm_source` ∪ routing catalog の source) × 3 tier の全枠。割り当てがあれば
+  `origin = "assignment"`、無ければ config の値（`origin = "config"`。provider は provider の一覧の `tier_models[lane].model_id`、無ければ `model`。
+  llm-proxy の lane は routing catalog の `legacy:*` deployment の upstream model。`<source>/` 接頭辞は外す）、どちらも無ければ `null`。
+  `providers` は枠を使う provider の id、`proxy` は llm-proxy の lane が使うか。
+- `state = "excluded"` は割り当て行は残るが routing には使えない状態。`excluded_reason` は `override:disabled`（上書きで無効）か
+  `catalog:unavailable`（発見で見えなくなった）。
+- `PUT` の本文は `{model_id, note?}`（未知のキーは 400）。`source`・`tier`（`frontier|standard|cheap`）が不正、または `model_id` が
+  その source の catalog に無いときは 400（`model_not_in_catalog`）。200 `{item, impact}`。成功すると event
+  `model_role_assignment_changed` を catalog の疑似 task の列に追記する。
+- `impact.changes[]` は `{kind: "provider"|"proxy", id, tier, before, after, excluded_reason}`。枠を使う provider と proxy の lane ごとに、
+  今の実効の model と変更後の model を**実行用の名前**で並べる（ADR 2026-10-06 model-role-assignments 付記 2026-10-07 wire-prefix:
+  provider 行は config の `model` / `tier_models` の `<prefix>/` を引き継ぐ。例 `qwen-local/qwen3.8-27b`、`opencode-go/glm-5`。
+  proxy の lane は接頭辞なし）。解除（`preview` の `model_id = null`）の `after` は config の値。provider は routing hook が割り当てを反映済みでも provider の一覧の値が出る。
+  proxy の lane は割り当て中に config の値を判別できないとき（catalog の値が割り当てと同じ）`after = null`。
+- `preview` は書き込みなしで `{impact}` だけ返す。`model_id` が `null`（省略）なら解除した場合。
+- `source` / `tier` の path 区間は `%` 符号化に対応する。
 
 
 ### 3.127 CoS チャット: スレッド・メッセージ・run・添付（ADR 2026-10-05-cos-chat-home D2）

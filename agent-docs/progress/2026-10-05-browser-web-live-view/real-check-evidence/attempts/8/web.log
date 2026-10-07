@@ -1,0 +1,13 @@
+celeris-web: listening on 127.0.0.1:17729
+{"path":"/healthz","status":200,"ms":2.9}
+{"path":"/login","status":200,"ms":6}
+{"path":"/browser/owner-session","status":200,"ms":0.6}
+{"path":"/browser/owner-session","status":200,"ms":0.4}
+{"path":"/browser/runs","status":200,"ms":12.9}
+{"path":"/browser/runs","status":200,"ms":3.7}
+{"path":"/01M47NP5QD1DHHHADJ84BG9HKH/01M47NP5VDFZ4K4123QRBC0V8H","status":200,"ms":26.4}
+{"path":"/01M47NP5QD1DHHHADJ84BG9HKH/01M47NP5VDFZ4K4123QRBC0V8H/celeris-8e73469deda0d63be8a3177fb19abf19","status":200,"ms":7.4}
+{"path":"/01M47NP5QD1DHHHADJ84BG9HKH/01M47NP5VDFZ4K4123QRBC0V8H/celeris-8e73469deda0d63be8a3177fb19abf19","status":200,"ms":12.4}
+{"path":"/01M47NP5QD1DHHHADJ84BG9HKH/01M47NP5VDFZ4K4123QRBC0V8H/celeris-8e73469deda0d63be8a3177fb19abf19","status":200,"ms":8.9}
+{"path":"/01M47NP5QD1DHHHADJ84BG9HKH/01M47NP5VDFZ4K4123QRBC0V8H/celeris-8e73469deda0d63be8a3177fb19abf19/release","status":200,"ms":7.6}
+{"path":"/01M47NP6A1455RAF003XSDN4DP/decision","status":200,"ms":6.8}

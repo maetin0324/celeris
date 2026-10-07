@@ -6,6 +6,7 @@ import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
 import { createChat } from "./chat.js";
+import { createBrowserLive, guardUpgradeSocket, rejectUpgrade } from "./browser-live.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
@@ -76,10 +77,21 @@ export function createApp({
   daemonTokenFile,
   relayTimeoutMs,
   chatUploadLimitBytes,
+  liveUpstream = process.env.CELERIS_WEB_LIVE_VIEW_UPSTREAM,
+  attestationKeyFile = process.env.CELERIS_WEB_ATTESTATION_KEY_FILE,
+  ownerSocket = process.env.CELERIS_WEB_OWNER_SOCKET,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
+  const browser = createBrowserLive({
+    auth,
+    daemonUrl,
+    daemonTokenFile,
+    liveUpstream,
+    attestationKeyFile,
+    ownerSocket,
+  });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
   // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。チャットの添付・stream・ダウンロードは
   // JSON relay の body 上限と timeout を通らないよう、JSON relay より前に登録する（ADR 2026-10-05-cos-chat-home D2・D4）。
@@ -152,6 +164,15 @@ export function createApp({
     }),
   );
   auth.register(app);
+  browser.register(app);
+  app.locals.browserLive = browser;
+  app.locals.browserLiveUpgrade = (req, socket, head) => {
+    guardUpgradeSocket(socket);
+    const host = hostName(req.headers.host);
+    if (!host || !allowed.has(host))
+      return rejectUpgrade(socket, "HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n");
+    browser.upgrade(req, socket, head).catch(() => socket.destroy());
+  };
   registerRoutes(app);
   for (const relay of relays) relay.register(app);
   app.use((req, res, next) => {
@@ -177,6 +198,8 @@ export function createApp({
   });
   app.use((error, _req, res, _next) => {
     if (res.headersSent) return;
+    if (_req.originalUrl?.startsWith("/browser/") && error?.type === "entity.too.large")
+      return res.status(413).json({ code: "payload_too_large" });
     res
       .status(error.status === 404 ? 404 : 500)
       .type("text/plain")

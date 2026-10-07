@@ -63,6 +63,10 @@ pub struct ActionArgs {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
+    /// launcher の申告を問う（session は作らない）。本番の daemon は `start_session` の前に送り、
+    /// 試験専用 loopback 許可が有効な launcher を拒否する（ADR 2026-10-05-browser-department-web-live-view
+    /// 付記 E2）。
+    Hello {},
     StartSession {
         task_id: String,
         run_id: String,
@@ -195,6 +199,13 @@ pub struct Observation {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Response {
+    /// `hello` への応答。`test_loopback_allow` は launcher の root 所有 config で有効にした試験専用
+    /// loopback 許可（`127.0.0.1:<port>`）。既定（空）は出さない。
+    Hello {
+        protocol_version: u32,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        test_loopback_allow: Vec<String>,
+    },
     Started {
         session_id: String,
         instance_id: String,
@@ -326,7 +337,7 @@ impl Request {
     /// 要求が触る session id（`start_session` は無し）。
     pub fn session_id(&self) -> Option<&str> {
         match self {
-            Request::StartSession { .. } => None,
+            Request::Hello {} | Request::StartSession { .. } => None,
             Request::Action { session_id, .. }
             | Request::Observe { session_id, .. }
             | Request::Stop { session_id, .. } => Some(session_id),
@@ -335,6 +346,7 @@ impl Request {
 
     pub fn validate(&self) -> Result<(), ErrorCode> {
         match self {
+            Request::Hello {} => Ok(()),
             Request::StartSession {
                 task_id,
                 run_id,

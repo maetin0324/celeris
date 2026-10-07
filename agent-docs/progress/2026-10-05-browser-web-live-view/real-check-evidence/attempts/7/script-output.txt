@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<stdin>", line 77, in <module>
+  File "<stdin>", line 27, in checked
+AssertionError: wait open: HTTP 422, wanted 201: {'type': 'urn:celeris:problem:browser_wait_invalid', 'title': 'browser wait invalid', 'status': 422, 'detail': 'invalid browser wait field: origin', 'code': 'browser_wait_invalid', 'instance': 'urn:celeris:request:01M47NDC6W6S3ZXZY896GFH5VK', 'field': 'origin'}
+exit=1

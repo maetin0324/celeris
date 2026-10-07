@@ -1,6 +1,10 @@
 //! provider / account の選択と cooldown 判定（ADR-0012、ADR-0013、ADR-0024、ADR-0049）。ADR-0082 の L1。
 
 use super::*;
+use task_core::model_catalog::assignments::{
+    AssignmentState, AssignmentView, WireRule, apply_to_bindings, configured_wire,
+    source_name_for_llm_source,
+};
 use task_core::model_router::{
     optimizer::{Candidate, OptimizationResult, legacy_rank},
     policy::RoutingMode,
@@ -9,8 +13,12 @@ use task_core::model_router::{
 };
 use task_core::model_routing::{
     ProviderCandidate, ProviderCandidateKind, ProviderCandidateOutcome, ProviderSelection,
-    ProviderSelectionReason,
+    ProviderSelectionReason, TierModels,
 };
+
+/// ADR 2026-10-06 model-role-assignments D2: 割り当てで除外された provider を候補の記録に残すときの語彙
+/// （`ProviderCandidate.detail` の先頭。outcome は `Unsupported`）。
+pub(super) const ASSIGNMENT_EXCLUDED: &str = "assignment_excluded";
 
 /// 選んだ (アダプタ, 設定行, プールのアカウント)。プールを使わない行ならアカウントは `None`。
 pub(super) type ProviderPick = (AdapterId, ProviderId, Option<(AccountAdapter, String)>);
@@ -44,6 +52,7 @@ pub(super) fn excluded_reason_name(reason: ExcludedReason) -> &'static str {
         ExcludedReason::Cooldown => "cooldown",
         ExcludedReason::FiveHourExhausted => "five_hour_exhausted",
         ExcludedReason::SevenDayExhausted => "seven_day_exhausted",
+        ExcludedReason::OneMonthExhausted => "one_month_exhausted",
         ExcludedReason::Rejected => "rejected",
     }
 }
@@ -82,12 +91,144 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
 
 /// 設定行を正規化した 1 候補（`proxy_routed` は `llm_source` を持つ行）。
 pub(super) struct LegacyProfile {
+    /// 容量・account・cooldown の identity（設定行の id）。候補の identity は `deployment.id`。
+    pub provider_id: ProviderId,
     pub model: ModelProfile,
     pub deployment: DeploymentProfile,
     pub proxy_routed: bool,
 }
 
 impl Dispatcher {
+    /// ADR 2026-10-06 model-role-assignments D2: 割り当ての実効 view を読む（決定 1 回につき 1 回）。
+    /// reader が無ければ空。読み取りに失敗しても dispatch は止めず、空 view（= config のまま）で続ける。
+    pub(super) fn current_assignment_view(&self) -> AssignmentView {
+        let Some(reader) = &self.role_assignments else {
+            return AssignmentView::empty();
+        };
+        match reader.assignment_view() {
+            Ok(view) => view,
+            Err(error) => {
+                tracing::warn!(%error, "model_role_assignments: cannot read assignments; routing by config only");
+                AssignmentView::empty()
+            }
+        }
+    }
+
+    /// provider の catalog source 名と、その provider の実効 lane bindings（config の `tier_models` に割り当てを
+    /// 重ねたもの）。snapshot の `ProviderLive` が `llm_source` を持たない（catalog の無い source・
+    /// `llm_source` なし）provider は `None` = 割り当ての対象外。
+    pub(super) fn effective_tier_models(
+        &self,
+        provider_id: &str,
+        view: &AssignmentView,
+    ) -> Option<TierModels> {
+        let live = self
+            .publisher
+            .as_ref()
+            .and_then(|p| p.providers.iter().find(|p| p.id == provider_id))?;
+        let source = live
+            .llm_source
+            .as_ref()
+            .and_then(|s| source_name_for_llm_source(&s.source))?;
+        // 付記 2026-10-07 wire-prefix: 行の config の `<prefix>/` を引き継ぐ（無ければ source × adapter の表）。
+        let rule = WireRule::new(&source, &live.adapter, live.model.as_deref());
+        // ADR 2026-10-06 D3: model も `tier_models` も持たない **acp 行**（opencode go）は割り当てだけで
+        // routing する。割り当てが 1 つも当たらなくても、全 lane を `assignment:none` から始める。
+        // claude-code / codex の行は model が無くても CLI の既定モデルで走れるので対象にしない。
+        // reader が無い（試験・celerisctl）なら従来どおり（空の bindings = 行の既定で走る）。
+        let mut base = live.tier_models.clone();
+        if self.role_assignments.is_some()
+            && live.adapter == "acp"
+            && live.model.is_none()
+            && base.is_empty()
+        {
+            for &lane in &live.tiers {
+                base.insert(
+                    lane,
+                    task_core::model_routing::ModelBinding {
+                        name: task_core::model_catalog::assignments::tier_str(lane).to_string(),
+                        model_id: None,
+                        unavailable_reason: Some("assignment:none".to_string()),
+                        reasoning_effort: None,
+                    },
+                );
+            }
+        }
+        Some(apply_to_bindings(&base, &source, &live.tiers, rule, view))
+    }
+
+    /// provider の lane に実際に渡る model（run 起動と同じ実効 bindings。割り当て > config）。
+    /// provider が無い・adapter が無い・lane が `Excluded` / 未設定で解決できなければ `Err`、
+    /// config に束縛が無ければ `Ok(None)`（従来どおり行の `model` で走る）。
+    pub fn effective_lane_model(
+        &self,
+        provider_id: &str,
+        tier: Tier,
+    ) -> Result<Option<String>, String> {
+        let adapter = self
+            .adapters
+            .get(provider_id)
+            .cloned()
+            .ok_or_else(|| format!("no adapter instance for provider {provider_id}"))?;
+        self.adapter_with_effective_models(provider_id, adapter, &self.current_assignment_view())
+            .model_for_tier(tier)
+    }
+
+    /// `hint` に合う設定行のうち、割り当てのせいで `hint.tier` に routing できない provider とその理由
+    /// （`Excluded` の割り当て、または割り当てのある source で binding も割り当ても無い lane）。
+    /// config 由来の「未設定」「unavailable」は従来どおり `resolve` が扱うので、ここでは外さない。
+    pub(super) fn assignment_excluded_providers(
+        &self,
+        hint: &task_core::WorkerHint,
+        view: &AssignmentView,
+    ) -> Vec<(ProviderId, String)> {
+        if self.role_assignments.is_none() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for spec in self.policy.legacy_specs(hint) {
+            let Some(effective) = self.effective_tier_models(&spec.id, view) else {
+                continue;
+            };
+            if task_core::model_routing::resolve(&effective, hint.tier).is_ok() {
+                continue;
+            }
+            if let Some(reason) = effective
+                .get(&hint.tier)
+                .and_then(|b| b.unavailable_reason.as_ref())
+                .filter(|r| r.starts_with("assignment:"))
+            {
+                out.push((spec.id.clone(), reason.clone()));
+            }
+        }
+        out
+    }
+
+    /// run 用のアダプタに割り当て済みの実効 bindings を載せる。割り当てが当たらない（実効 = config）、
+    /// provider が割り当て対象でない、アダプタが `with_tier_models` を持たないときは元のアダプタのまま。
+    pub(super) fn adapter_with_effective_models(
+        &self,
+        provider_id: &str,
+        adapter: Arc<dyn WorkerAdapter>,
+        view: &AssignmentView,
+    ) -> Arc<dyn WorkerAdapter> {
+        if self.role_assignments.is_none() {
+            return adapter;
+        }
+        let Some(effective) = self.effective_tier_models(provider_id, view) else {
+            return adapter;
+        };
+        let own = self
+            .publisher
+            .as_ref()
+            .and_then(|p| p.providers.iter().find(|p| p.id == provider_id))
+            .map(|p| &p.tier_models);
+        if own == Some(&effective) {
+            return adapter;
+        }
+        adapter.with_tier_models(effective).unwrap_or(adapter)
+    }
+
     /// Normalize the legacy provider rows into model/deployment identities. The kernel
     /// preserves their config order; the existing selector still owns live capacity,
     /// cooldown and account decisions.
@@ -99,7 +240,7 @@ impl Dispatcher {
                 model: &p.model,
                 deployment: &p.deployment,
                 state: None,
-                eligible_provider_ids: vec![p.deployment.id.clone()],
+                eligible_provider_ids: vec![p.provider_id.clone()],
                 cost_usd: None,
                 latency_ms: None,
                 pressure: None,
@@ -114,14 +255,25 @@ impl Dispatcher {
         hint: &task_core::WorkerHint,
     ) -> Vec<LegacyProfile> {
         let specs = self.policy.legacy_specs(hint);
+        let view = self.current_assignment_view();
         let mut profiles = Vec::with_capacity(specs.len());
         for (order, spec) in specs.iter().enumerate() {
             let live = self
                 .publisher
                 .as_ref()
                 .and_then(|p| p.providers.iter().find(|p| p.id == spec.id));
-            let model_id = live
-                .and_then(|p| p.tier_models.get(&hint.tier))
+            // ADR 2026-10-06 model-role-assignments D2: 割り当てを重ねた実効 bindings（reader が無い・
+            // 割り当てが無ければ config の `tier_models` と同じ）。
+            let effective = self.effective_tier_models(&spec.id, &view);
+            let assigned = live
+                .and_then(|p| p.llm_source.as_ref())
+                .and_then(|s| source_name_for_llm_source(&s.source))
+                .and_then(|source| view.get(&source, hint.tier).map(|a| a.state))
+                == Some(AssignmentState::Assigned);
+            let model_id = effective
+                .as_ref()
+                .or(live.map(|p| &p.tier_models))
+                .and_then(|m| m.get(&hint.tier))
                 .and_then(|b| b.model_id.as_ref())
                 .cloned()
                 .or_else(|| {
@@ -134,7 +286,8 @@ impl Dispatcher {
             let model = ModelProfile {
                 id: model_id.clone(),
                 revision: String::new(),
-                family: String::new(),
+                // ADR 2026-10-07: routing catalog の family（無ければ空 = 導出は source / pool へ）。
+                family: self.catalog_family(&model_id),
                 capabilities: Capabilities {
                     tools: Support::Unknown,
                     structured_output: Support::Unknown,
@@ -149,7 +302,11 @@ impl Dispatcher {
                 },
                 quality: vec![],
                 pricing: None,
-                provenance: "providers.tier_models".into(),
+                provenance: if assigned {
+                    "model_role_assignments".into()
+                } else {
+                    "providers.tier_models".into()
+                },
             };
             let proxy_routed = live.and_then(|p| p.llm_source.as_ref()).is_some();
             let source_ref = live
@@ -186,12 +343,64 @@ impl Dispatcher {
                 price_override: None,
                 config_order: order,
             };
-            profiles.push(LegacyProfile {
-                model,
-                deployment,
-                proxy_routed,
-            });
+            let source = live
+                .and_then(|p| p.llm_source.as_ref())
+                .and_then(|s| source_name_for_llm_source(&s.source));
+            if let Some(source) = source.as_deref().filter(|s| view.manages(s, hint.tier)) {
+                for member in view
+                    .members(source, hint.tier)
+                    .into_iter()
+                    .filter(|a| a.state == AssignmentState::Assigned)
+                {
+                    // 付記 2026-10-07 wire-prefix: `effective_tier_models` と同じ規則（config の `<prefix>/` → 表）。
+                    let wire = live.map_or_else(
+                        || member.model_id.clone(),
+                        |p| {
+                            WireRule::new(source, &p.adapter, p.model.as_deref()).model(
+                                configured_wire(p.tier_models.get(&hint.tier)),
+                                &member.model_id,
+                            )
+                        },
+                    );
+                    let mut model = model.clone();
+                    model.id = wire.clone();
+                    model.provenance = "model_role_assignments".into();
+                    let mut deployment = deployment.clone();
+                    // 候補の identity はモデルごとに分け、容量の identity（provider）は共有する。
+                    deployment.id = format!("{}/model:{}", spec.id, member.model_id);
+                    deployment.resource_group_id = Some(spec.id.clone());
+                    deployment.model_profile_id = wire.clone();
+                    deployment.upstream_model = wire;
+                    deployment.config_order = member.priority as usize;
+                    deployment.allowed_lanes = vec![hint.tier];
+                    profiles.push(LegacyProfile {
+                        provider_id: spec.id.clone(),
+                        model,
+                        deployment,
+                        proxy_routed,
+                    });
+                }
+            } else {
+                profiles.push(LegacyProfile {
+                    provider_id: spec.id.clone(),
+                    model,
+                    deployment,
+                    proxy_routed,
+                });
+            }
         }
+        profiles.sort_by(|a, b| {
+            (
+                a.deployment.config_order,
+                &a.deployment.source_ref,
+                &a.model.id,
+            )
+                .cmp(&(
+                    b.deployment.config_order,
+                    &b.deployment.source_ref,
+                    &b.model.id,
+                ))
+        });
         profiles
     }
 
@@ -205,6 +414,10 @@ impl Dispatcher {
         if result.allowlist.is_empty() {
             return None;
         }
+        let assigned_any = self
+            .legacy_provider_profiles(hint)
+            .iter()
+            .any(|p| p.model.provenance == "model_role_assignments");
         Some(RoutingTraceV1 {
             decision_id: run_id.into(),
             parent_decision_id: None,
@@ -215,7 +428,11 @@ impl Dispatcher {
             stage: "dispatcher".into(),
             mode: RoutingMode::Legacy,
             policy_version: "legacy-provider-config-v1".into(),
-            catalog_version: "providers.tier_models".into(),
+            catalog_version: if assigned_any {
+                "model_role_assignments+providers.tier_models".into()
+            } else {
+                "providers.tier_models".into()
+            },
             feature_version: "legacy".into(),
             estimator_version: "none".into(),
             snapshot_id: "provider-config".into(),
@@ -341,11 +558,27 @@ impl Dispatcher {
         prefer_local: bool,
         excluded: &std::collections::HashSet<ProviderId>,
     ) -> (Option<ProviderPick>, ProviderSelection) {
+        let view = self.current_assignment_view();
+        let ranked_role = view.items.iter().any(|a| a.tier == hint.tier)
+            || view.managed.iter().any(|(_, tier)| *tier == hint.tier);
+        let profiles = self.legacy_provider_profiles(hint);
+        let priority = |id: &str| {
+            profiles
+                .iter()
+                .position(|p| p.provider_id == id)
+                .unwrap_or(usize::MAX)
+        };
+        let prefer_local = prefer_local && !ranked_role;
         let allowlist = self.legacy_provider_rank(hint).allowlist;
+        // ADR 2026-10-06 model-role-assignments D2: 割り当てで lane に出せない provider は候補から外す。
+        let assignment_excluded =
+            self.assignment_excluded_providers(hint, &self.current_assignment_view());
         let mut cos_full = std::collections::HashSet::new();
         let full = if cos { &mut cos_full } else { full };
         if let Some(sticky) = self.sticky_provider(sticky_session, hint, now, &*full, cos)
+            && !ranked_role
             && !excluded.contains(&sticky.1)
+            && !assignment_excluded.iter().any(|(id, _)| *id == sticky.1)
         {
             return (
                 Some(sticky),
@@ -359,6 +592,22 @@ impl Dispatcher {
         let mut visited = full.clone();
         visited.extend(excluded.iter().cloned());
         let mut candidates: Vec<ProviderCandidate> = Vec::new();
+        for (id, reason) in &assignment_excluded {
+            visited.insert(id.clone());
+            let kind = if self.account_pool_providers.contains(id) {
+                ProviderCandidateKind::Pool
+            } else if self.local_providers.iter().any(|l| l.provider == *id) {
+                ProviderCandidateKind::Local
+            } else {
+                ProviderCandidateKind::Other
+            };
+            candidates.push(ProviderCandidate {
+                provider: id.clone(),
+                kind,
+                outcome: ProviderCandidateOutcome::Unsupported,
+                detail: Some(format!("{ASSIGNMENT_EXCLUDED}: {reason}")),
+            });
+        }
         let mut local_full = false;
         let mut local_down = false;
         if prefer_local && !cos && hint.tier == Tier::Cheap && !self.local_providers.is_empty() {
@@ -378,6 +627,10 @@ impl Dispatcher {
                     detail,
                 };
                 let adapter = self.policy.adapter_of(id);
+                if assignment_excluded.iter().any(|(x, _)| x == id) {
+                    // 上で除外の記録を残してある。
+                    continue;
+                }
                 if excluded.contains(id)
                     || !self.policy.offers(id, hint)
                     || self.account_pool_providers.contains(id)
@@ -457,7 +710,8 @@ impl Dispatcher {
                         continue;
                     }
                     if is_pool {
-                        let Some(account_adapter) = AccountAdapter::parse(&adapter) else {
+                        let Some(account_adapter) = self.pool_adapter_of(&provider, &adapter)
+                        else {
                             record(ProviderCandidateOutcome::NoAccount);
                             full.insert(provider);
                             continue;
@@ -475,7 +729,11 @@ impl Dispatcher {
                             continue;
                         };
                         let index = record(ProviderCandidateOutcome::Available);
-                        let score = self.account_score(account_adapter, &account_id);
+                        let score = if ranked_role {
+                            -(priority(&provider) as f64)
+                        } else {
+                            self.account_score(account_adapter, &account_id)
+                        };
                         if score > best_score {
                             best_score = score;
                             best_pool_index = Some(index);
@@ -484,7 +742,9 @@ impl Dispatcher {
                         }
                     } else {
                         let index = record(ProviderCandidateOutcome::Available);
-                        if fallback.is_none() {
+                        if fallback.as_ref().is_none_or(|(_, id, _): &ProviderPick| {
+                            ranked_role && priority(&provider) < priority(id)
+                        }) {
                             fallback_index = Some(index);
                             fallback = Some((adapter, provider, None));
                         }
@@ -501,6 +761,27 @@ impl Dispatcher {
                     break;
                 }
             }
+        }
+        // 割り当てが除外した行しか lane に合う行が無ければ、設定に合う行が無いときと同じく経路なし。
+        if best_pool.is_none()
+            && fallback.is_none()
+            && !assignment_excluded.is_empty()
+            && self
+                .policy
+                .legacy_specs(hint)
+                .iter()
+                .all(|s| assignment_excluded.iter().any(|(id, _)| *id == s.id))
+        {
+            self.unroutable.insert(task_id);
+            if self.warned_unroutable.insert(task_id) {
+                tracing::warn!(%task_id, ?hint, "every provider for this worker_hint is excluded by model_role_assignments");
+            }
+        }
+        if ranked_role
+            && let (Some(pool), Some(other)) = (&best_pool, &fallback)
+            && priority(&other.1) < priority(&pool.1)
+        {
+            best_pool = None;
         }
         let (selected, selected_index, pool_selected) = match best_pool {
             Some(pool) => (Some(pool), best_pool_index, true),

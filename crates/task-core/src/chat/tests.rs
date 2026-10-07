@@ -256,7 +256,7 @@ fn chat_migration_upgrade_from_47_preserves_existing_rows() {
             r.get(0)
         })
         .expect("version");
-    assert_eq!(version, 53);
+    assert_eq!(version, 56);
 }
 
 #[test]

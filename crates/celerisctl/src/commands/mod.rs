@@ -21,6 +21,8 @@ pub mod gate;
 pub mod knowledge;
 /// ADR-0056 D1（Phase 78）: MCP クライアントの発行・一覧・失効、stdio 橋。
 pub mod mcp;
+/// ADR 2026-10-06 D5: HTTP API based model catalog operations.
+pub mod models;
 /// ADR-0046 D7（Phase 59）: `celerisctl org migrate-v2`。
 pub mod org;
 pub mod plan;

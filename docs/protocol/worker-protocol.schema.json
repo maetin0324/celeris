@@ -128,11 +128,18 @@
           ]
         },
         "allowed_domains": {
-          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "description": "Allowed origins. Legacy host patterns read as HTTPS on port 443 only.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Policy ID to browser identity ID. This contains identifiers only, never credentials.",
+          "type": "object"
         },
         "credential_policy_ids": {
           "description": "Credential policies a task may reference. Absent/empty means no credential use.",
@@ -202,6 +209,21 @@
         "policy_id",
         "revision",
         "hash"
+      ],
+      "type": "object"
+    },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
       ],
       "type": "object"
     },
@@ -986,6 +1008,9 @@
         },
         "objective": {
           "type": "string"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
         },
         "role": {
           "description": "役割名（任意。`[[roles]]` にあれば既定と指示文が効く）。",
@@ -2326,6 +2351,34 @@
       ],
       "type": "object"
     },
+    "ReviewPolicyViolation": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。",
+      "properties": {
+        "command": {
+          "description": "起動しようとした command（500 文字まで）。",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`subagent_tool` / `llm_cli` / `llm_api`。",
+          "type": "string"
+        },
+        "matched": {
+          "description": "一致した語（道具名・CLI 名・API host）。",
+          "type": "string"
+        },
+        "tool": {
+          "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tool",
+        "matched",
+        "command"
+      ],
+      "type": "object"
+    },
     "ReviewRepairHint": {
       "description": "ADR-0072 D16（Phase E4）: `review.json` の verdict に添える repair のヒント。reviewer が\n「これは局所的に修復できる不合格だ」と申告するための任意欄（`scope = \"local\"` だけを認識する。\nそれ以外の `scope` は `task_core::execution::classify_review_failure` が substantive として扱う）。",
       "properties": {
@@ -2386,6 +2439,13 @@
           "description": "対象 run の `done.evidence`。",
           "items": {
             "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "policy_violations": {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の\n起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。",
+          "items": {
+            "$ref": "#/$defs/ReviewPolicyViolation"
           },
           "type": "array"
         },
@@ -3090,6 +3150,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
+        },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
           "type": [
@@ -3303,6 +3367,22 @@
           "type": "string"
         }
       ]
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "TaskRouting": {
       "description": "ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。",

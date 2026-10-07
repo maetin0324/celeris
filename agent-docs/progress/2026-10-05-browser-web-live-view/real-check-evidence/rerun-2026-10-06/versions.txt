@@ -1,0 +1,21 @@
+date: 2026-10-06T06:46:05+00:00
+host kernel: 6.8.12-9-pve
+tree: /local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform
+tree HEAD: 0e1672950daccb4268f94eca210d97e825d6171a (integrate wu/review-fix (phase fix2))
+tree branch: celeris/01M46W97H391DSFW1XJ745W0G9
+script sha256: b7b3c32dee7095a47c2d6e4f88fdac9888d16ef7075d3eab2ecd3ae1251898a4  scripts/dev/browser-web-live-check.sh
+doc sha256: cb0bfc7f44dd9995f3b5117d4d099bd4259e5f8a2a69f2c935170996d9ecc6a4  docs/ops/browser-web-live-check.md
+build: CARGO_TARGET_DIR=/var/tmp/fable-merge-target cargo build (dev profile) -p celeris --bin celeris -p task-worker --bin celeris-browser-launcher --bin celeris-browser-sandboxd --bin celeris-browser-egress  -> exit 0
+sha256 5f116abab8dab724f1e18690a299bd680ce235c42c184e7027296915bf282425  /var/tmp/fable-merge-target/debug/celeris
+sha256 d8f94e9647543800ff76129c00511451452ca64ff6d45e31f20f8a90ab85fe06  /var/tmp/fable-merge-target/debug/celeris-browser-launcher
+sha256 38bd70719bed43ba9a89b5ac2cf28f71725749ac04f895ff03a3d704158e77ee  /var/tmp/fable-merge-target/debug/celeris-browser-sandboxd
+sha256 2a8f01e9c478918632311503c697fb5ce683dcb3e6d9780863329f000c357638  /var/tmp/fable-merge-target/debug/celeris-browser-egress
+(launcher/sandboxd/egress were installed root:root 0755 into /var/tmp/celeris-browser-config-1001/bin with sudo install; same bytes)
+chrome: Google Chrome for Testing 153.0.8010.12 
+agent-browser: agent-browser 0.38.1
+bwrap: bubblewrap 0.11.0
+node: v24.14.1  python3: Python 3.13.3
+launcher user: uid=995(celeris-browser) gid=989(celeris-browser) groups=989(celeris-browser)
+daemon user: rmaeda uid=1001
+conformance ledger sha256: cf0a4b7d961330a20c9554a283bbee199a5cae703cdf594b9aa4e51224b2a8b4 (same file as real-check-evidence/config/conformance.json)
+web dist: rebuilt with 'npx --offline vite build' in web/ at 06:40 (gitignored), exit 0

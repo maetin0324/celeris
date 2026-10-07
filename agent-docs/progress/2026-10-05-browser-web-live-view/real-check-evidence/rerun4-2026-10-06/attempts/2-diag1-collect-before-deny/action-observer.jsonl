@@ -1,0 +1,4 @@
+{"observer": "started", "t": 1791282502.531}
+{"session_dir": "70a156cc7322242dad23b3435d2964e2", "t": 1791282505.034}
+{"session": "70a156cc7322242dad23b3435d2964e2", "file": "0000000000000001.request", "body": "{\"args\":[\"http://127.0.0.1:17730/\"],\"artifact\":null,\"verb\":\"open\"}", "t": 1791282505.157}
+{"session": "70a156cc7322242dad23b3435d2964e2", "file": "0000000000000001.result", "body": "{\"status\": 1, \"stdout\": \"{\\\"_boundary\\\":{\\\"nonce\\\":\\\"2438779cd04cad8922bf0cbcfb27859f\\\",\\\"origin\\\":\\\"unknown\\\"},\\\"data\\\":null,\\\"error\\\":\\\"Operation timed out. The page may still be loading or the element may not exist.\\\",\\\"success\\\":false}\\n\"}", "t": 1791282530.488}

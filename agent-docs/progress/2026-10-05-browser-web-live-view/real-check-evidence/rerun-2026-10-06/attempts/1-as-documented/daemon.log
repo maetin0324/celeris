@@ -1,0 +1,19 @@
+[2m2026-10-06T06:41:29.501035Z[0m [33m WARN[0m [2mceleris::config[0m[2m:[0m provider kind compatibility warning [3mwarning[0m[2m=[0munknown_llm_source: set llm_source explicitly
+[2m2026-10-06T06:41:29.502919Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m promotion gate: skipped (release is `dev`) [3mrelease[0m[2m=[0mdev
+[2m2026-10-06T06:41:29.563177Z[0m [32m INFO[0m [2mceleris::daemon::bootstrap[0m[2m:[0m org: seeded the organization from the config [3mcount[0m[2m=[0m5
+[2m2026-10-06T06:41:29.563528Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m scratch pool enabled (ADR-0075) [3mdir[0m[2m=[0m/var/tmp/cb-1001/home/.local/celeris/scratch
+[2m2026-10-06T06:41:29.914555Z[0m [32m INFO[0m [2mtask_dispatch::dispatcher[0m[2m:[0m container runtime detected [3mruntime[0m[2m=[0m"podman" [3mpreference[0m[2m=[0mauto [3mimage_default[0m[2m=[0mceleris-worker:latest
+[2m2026-10-06T06:41:29.922131Z[0m [33m WARN[0m [2mceleris::daemon::bootstrap[0m[2m:[0m the daemon does not use the production DB/token; worker db guard not installed (ADR-0126) [3mdb[0m[2m=[0m/var/tmp/cb-1001/test.sqlite3
+[2m2026-10-06T06:41:29.922405Z[0m [33m WARN[0m [2mceleris::daemon::bootstrap[0m[2m:[0m worker db guard unavailable for a non-production daemon; running without it (ADR-0126 addendum 2) [3merror[0m[2m=[0mworker db guard: cannot make /var/tmp/cb-1001/test.sqlite3 read-only for worker runs (probe failed: No such file or directory (os error 2); ADR-0095). Worker runs must not be able to write the database: enable unprivileged user namespaces for this user, or set [db] worker_read_only = false to run without the guard (not recommended)
+[2m2026-10-06T06:41:29.922711Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance registered (ADR-0040 D4) [3minstance_id[0m[2m=[0m01M47Z48WYW12W23R3YZ8YJFX8 [3mrelease[0m[2m=[0mdev [3mpid[0m[2m=[0m3295687 [3mrole[0m[2m=[0mactive
+[2m2026-10-06T06:41:29.926732Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api listening [3maddr[0m[2m=[0m127.0.0.1:17728 [3mauth_required[0m[2m=[0mtrue
+[2m2026-10-06T06:41:29.926836Z[0m [32m INFO[0m [2mtask_api[0m[2m:[0m celeris API listening [3maddr[0m[2m=[0m127.0.0.1:17728
+[2m2026-10-06T06:41:29.969061Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m celeris started [3mdb[0m[2m=[0m/var/tmp/cb-1001/test.sqlite3 [3mworkspace_root[0m[2m=[0m/var/tmp/cb-1001/w [3mmax_concurrency[0m[2m=[0m1 [3mtick_ms[0m[2m=[0m200 [3mrole[0m[2m=[0mactive
+[2m2026-10-06T06:41:29.971228Z[0m [33m WARN[0m [2mtask_dispatch::dispatcher::housekeeping[0m[2m:[0m scratch: 実効上限 77 GB（設定 150 GB）。pool の外の使用量で縮んでいる（ADR-0075 D1）
+[2m2026-10-06T06:41:30.735866Z[0m [32m INFO[0m [2mtask_api::handlers::org[0m[2m:[0m admin: org node updated [3mwho[0m[2m=[0m"admin" [3mop[0m[2m=[0m"org_patch" [3morg_id[0m[2m=[0mbrowser-execution
+[2m2026-10-06T06:41:30.778422Z[0m [32m INFO[0m [2mceleris::daemon::tick_loop[0m[2m:[0m SIGTERM; exiting
+[2m2026-10-06T06:41:30.778581Z[0m [32m INFO[0m [2mceleris::daemon::run[0m[2m:[0m shutdown: the runs in hand were stopped and recorded (Phase F5-fix6) [3mrecorded[0m[2m=[0m0
+[2m2026-10-06T06:41:30.779162Z[0m [32m INFO[0m [2mceleris::daemon::api[0m[2m:[0m api stopped
+[2m2026-10-06T06:41:30.779226Z[0m [32m INFO[0m [2mceleris::db_maintenance[0m[2m:[0m db maintenance task stopped [3mtask[0m[2m=[0m"checkpoint"
+[2m2026-10-06T06:41:30.779424Z[0m [32m INFO[0m [2mceleris::instance[0m[2m:[0m instance row removed [3minstance_id[0m[2m=[0m01M47Z48WYW12W23R3YZ8YJFX8
+[2m2026-10-06T06:41:30.795990Z[0m [32m INFO[0m [2mceleris[0m[2m:[0m celeris stopped [3mexit[0m[2m=[0mSignal

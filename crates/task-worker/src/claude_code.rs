@@ -44,6 +44,9 @@ pub struct ClaudeCodeConfig {
     /// ADR-0043 D3（Phase 56）: `Some` なら `claude` をコンテナの中で起こす（`container::wrap`）。
     /// TOML には書かない（ディスパッチャが `with_container` で入れる）。
     pub container: Option<crate::container::SharedPlan>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D1/D7: `[adapters.claude_code] subagents`。既定 `Deny`
+    /// （`--disallowedTools Agent,Task,Workflow` を `extra_args` の後ろに付ける）。
+    pub subagents: crate::tool_policy::SubagentPolicy,
 }
 
 impl Default for ClaudeCodeConfig {
@@ -55,6 +58,7 @@ impl Default for ClaudeCodeConfig {
             model: None,
             env: Vec::new(),
             container: None,
+            subagents: Default::default(),
         }
     }
 }
@@ -549,6 +553,14 @@ async fn run_claude_code(
         command.arg("--allowedTools").arg(allowed);
     }
     command.args(&config.extra_args);
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D1: subagent の道具を既定で禁止する。`extra_args` の**後ろ**に
+    // 置く（最後の語が勝つ。運用側の `--allowedTools Agent` / `--tools default` でも外れない）。外せるのは
+    // `[adapters.claude_code] subagents = "allow" | "allow_cos"` だけ（D7）。
+    if !config.subagents.allows(req) {
+        command
+            .arg("--disallowedTools")
+            .arg(crate::tool_policy::claude_code_disallowed_tools_value());
+    }
     // F5-fix5: headless の run では background task を無効にする（Claude Code CLI 2.1.283 は
     // `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` が立っていると Bash / Agent の `run_in_background` を道具の
     // schema から外す）。background が無いぶん、foreground の Bash が run の壁時計まで待てるよう
@@ -927,6 +939,22 @@ async fn claude_image_input(req: &RunRequest, prompt: &str) -> Result<String, Ad
     ))
 }
 
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: 検出を sink に 2 系統で届ける — 専用の
+/// `policy_violation`（ディスパッチャが `Event::WorkerPolicyViolation` にする）と、人が Console で読む
+/// `WorkerProgress`（`status`・`error = true`）。全 adapter が同じ形で呼ぶ。
+pub(crate) fn report_policy_violation(
+    sink: &dyn EventSink,
+    violation: &crate::tool_policy::ToolPolicyViolation,
+) {
+    sink.policy_violation(violation);
+    let msg = violation.message();
+    let fields = progress::status()
+        .with_tool(violation.tool.as_str())
+        .with_summary(progress::truncate_chars(&msg, progress::SUMMARY_MAX_CHARS))
+        .with_error(true);
+    sink.progress_with(&msg, &fields);
+}
+
 /// stream-json の 1 行を解釈する。既知でない `type` や JSON として不正な行は無視する（ADR-0006 D5）。
 #[cfg(test)]
 fn handle_line(
@@ -1003,6 +1031,10 @@ fn handle_line_for_run(
                             let name = item.get("name").and_then(|n| n.as_str()).unwrap_or("tool");
                             let input = item.get("input");
                             exploration.observe_tool_use(name, input);
+                            // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の検出。
+                            if let Some(v) = crate::tool_policy::inspect_tool_use(name, input) {
+                                report_policy_violation(sink, &v);
+                            }
                             let shown = input
                                 .map(|v| truncate(&v.to_string(), 200))
                                 .unwrap_or_default();

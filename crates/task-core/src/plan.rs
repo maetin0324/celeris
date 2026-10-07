@@ -33,6 +33,11 @@ pub enum NewTaskKind {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NewTask {
+    #[serde(
+        default,
+        skip_serializing_if = "crate::model::TaskRequirements::is_empty"
+    )]
+    pub requirements: crate::model::TaskRequirements,
     pub title: String,
     pub objective: String,
     /// 1 件以上。`check` は DESIGN §5.7 の 4 種すべて使える。
@@ -540,6 +545,7 @@ pub fn materialize_logging(
                 genres,
             );
             Task {
+                requirements: t.requirements.clone(),
                 tree: None,
                 paused_at: None,
                 id: ids[i],

@@ -87,6 +87,256 @@ fn env_with_token() -> TestEnv {
     })
 }
 
+/// browser 設定の DB 状態（profile_json・監査 event 数・task events 数・org 行数）。失敗時の無変更を比べる。
+fn browser_db_state(env: &TestEnv) -> (String, i64, i64, i64) {
+    let conn = rusqlite::Connection::open(&env.db_path).unwrap();
+    let profile = conn
+        .query_row(
+            "SELECT profile_json FROM org_nodes WHERE id = 'browser-execution'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let events = conn
+        .query_row("SELECT count(*) FROM org_browser_events", [], |r| r.get(0))
+        .unwrap();
+    let task_events = conn
+        .query_row("SELECT count(*) FROM events", [], |r| r.get(0))
+        .unwrap();
+    let org_rows = conn
+        .query_row("SELECT count(*) FROM org_nodes", [], |r| r.get(0))
+        .unwrap();
+    (profile, events, task_events, org_rows)
+}
+
+const BROWSER_SETTINGS: &str = "/api/v1/org/browser-execution/browser-settings";
+
+/// 秘書と browser grant を持つ部署（localhost の origin と credential policy 1 件）を作る。
+async fn seed_browser_node(app: &axum::Router) {
+    assert_eq!(
+        send(
+            app,
+            p(
+                "/api/v1/org",
+                &json!({"id":"secretary", "name":"Secretary", "kind":"secretary"})
+            )
+        )
+        .await
+        .status
+        .as_u16(),
+        201
+    );
+    assert_eq!(send(app, p("/api/v1/org", &json!({"id":"browser-execution", "name":"Browser", "kind":"department", "parent_id":"secretary", "profile":{"browser":{"allowed_domains":["http://localhost:3000"], "credential_policy_ids":["policy-1"]}}}))).await.status.as_u16(), 201);
+}
+
+/// 各 body が 422 validation で拒否され、org 行・監査 event・task events が変わらないこと。
+async fn assert_rejected_unchanged(env: &TestEnv, app: &axum::Router, bodies: &[Value]) {
+    let before = browser_db_state(env);
+    for body in bodies {
+        let response = send(app, pa(BROWSER_SETTINGS, body)).await;
+        assert_problem(&response, 422, "validation");
+        assert_eq!(browser_db_state(env), before, "{body}");
+    }
+}
+
+fn domains(list: &[&str]) -> Vec<Value> {
+    list.iter()
+        .map(|d| json!({"allowed_domains":[d]}))
+        .collect()
+}
+
+async fn apply_valid_settings(app: &axum::Router) {
+    let response = send(
+        app,
+        pa(
+            BROWSER_SETTINGS,
+            &json!({
+                "allowed_domains":["https://billing.example.com"],
+                "credential_identity_ids":{"policy-1":"identity-7"},
+                "harnesses":{"allowed":["coding"],"default":"coding"},
+                "budget":{"max_attempts":2}
+            }),
+        ),
+    )
+    .await;
+    assert_eq!(response.status.as_u16(), 200, "{}", response.text());
+}
+
+fn audit_row(env: &TestEnv) -> (String, String, String) {
+    let conn = rusqlite::Connection::open(&env.db_path).unwrap();
+    conn.query_row(
+        "SELECT actor, before_json, after_json FROM org_browser_events WHERE node_id='browser-execution'",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn browser_settings_patch_updates_profile() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    let before = browser_db_state(&env);
+    apply_valid_settings(&app).await;
+    let after = browser_db_state(&env);
+    assert!(
+        after.0.contains("https://billing.example.com"),
+        "{}",
+        after.0
+    );
+    assert!(!after.0.contains("http://localhost:3000"), "{}", after.0);
+    assert!(after.0.contains("identity-7"), "{}", after.0);
+    assert_eq!(after.1, before.1 + 1);
+    assert_eq!(after.2, before.2);
+    assert_eq!(after.3, before.3);
+}
+
+#[tokio::test]
+async fn browser_settings_rejects_global_and_public_suffix_wildcards() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    assert_rejected_unchanged(
+        &env,
+        &app,
+        &domains(&["*", "https://*", "https://*.com", "https://*.co.uk"]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn browser_settings_rejects_userinfo_path_query_fragment() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    assert_rejected_unchanged(
+        &env,
+        &app,
+        &domains(&[
+            "https://user@example.com",
+            "https://user:pw@example.com",
+            "https://example.com/path",
+            "https://example.com?x=1",
+            "https://example.com#x",
+        ]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn browser_settings_rejects_invalid_scheme() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    assert_rejected_unchanged(
+        &env,
+        &app,
+        &domains(&[
+            "ftp://example.com",
+            "file:///etc/passwd",
+            "http://example.com",
+        ]),
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn browser_settings_rejects_empty_domains_and_unknown_credential_policy() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    assert_rejected_unchanged(
+        &env,
+        &app,
+        &[
+            json!({"allowed_domains":[]}),
+            json!({"credential_identity_ids":{"unknown":"identity-7"}}),
+        ],
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn browser_settings_generic_org_patch_uses_same_validation() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    let before = browser_db_state(&env);
+    for bad in [
+        "https://*.com",
+        "*",
+        "https://user@example.com",
+        "ftp://example.com",
+    ] {
+        let generic = send(
+            &app,
+            pa(
+                "/api/v1/org/browser-execution",
+                &json!({"profile":{"browser":{"allowed_domains":[bad]}}}),
+            ),
+        )
+        .await;
+        assert_problem(&generic, 422, "validation");
+        assert_eq!(browser_db_state(&env), before, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn browser_settings_requires_admin_and_same_origin() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    let before = browser_db_state(&env);
+    let body = json!({"allowed_domains":["https://billing.example.com"]});
+    let unauthenticated = send(&app, patch_json_with(BROWSER_SETTINGS, &body, &[])).await;
+    assert_eq!(unauthenticated.status.as_u16(), 401);
+    assert_eq!(browser_db_state(&env), before);
+    let csrf = send(
+        &app,
+        patch_json_with(
+            BROWSER_SETTINGS,
+            &body,
+            &[
+                ("authorization", format!("Bearer {TOKEN}").as_str()),
+                ("origin", "https://foreign.example"),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(csrf.status.as_u16(), 403);
+    assert_eq!(browser_db_state(&env), before);
+}
+
+#[tokio::test]
+async fn browser_settings_event_records_actor_and_before_after() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    apply_valid_settings(&app).await;
+    let (actor, old, new) = audit_row(&env);
+    assert_eq!(actor, "admin");
+    assert!(old.contains("http://localhost:3000"), "{old}");
+    assert!(!old.contains("https://billing.example.com"), "{old}");
+    assert!(new.contains("https://billing.example.com"), "{new}");
+    assert!(new.contains("identity-7"), "{new}");
+    assert!(new.contains("policy-1"), "{new}");
+}
+
+#[tokio::test]
+async fn browser_settings_event_has_no_secret_values() {
+    let env = env_with_token();
+    let app = env.router();
+    seed_browser_node(&app).await;
+    apply_valid_settings(&app).await;
+    let (_, old, new) = audit_row(&env);
+    for json in [&old, &new] {
+        assert!(!json.contains(TOKEN), "{json}");
+        assert!(!json.to_lowercase().contains("secret"), "{json}");
+        assert!(!json.to_lowercase().contains("password"), "{json}");
+    }
+}
+
 /// 秘書 → 研究部 → 関連研究調査課 を API から作る。
 async fn seed_org(app: &axum::Router) {
     let a = auth();

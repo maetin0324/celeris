@@ -188,7 +188,12 @@ pub enum BrowserRuntimeKind {
     Daemon,
     /// 専用 host user の launcher（ADR-0115）に Unix socket で頼む。daemon は CDP pipe も
     /// 機密 state も持たず、receipt と非機密の観測だけを受ける。不達は fail closed。
-    Launcher { socket: PathBuf },
+    /// `refuse_test_loopback` が真（本番の config・DB を使う daemon、または判定不能）なら、試験専用
+    /// loopback 許可を申告した launcher を使わない（付記 E2）。
+    Launcher {
+        socket: PathBuf,
+        refuse_test_loopback: bool,
+    },
 }
 
 #[derive(Clone)]
@@ -415,15 +420,11 @@ struct CredentialRequest {
     purpose: String,
 }
 
-fn host_in_domains(origin: &str, domains: &[String]) -> bool {
-    let authority = origin.strip_prefix("https://").unwrap_or("");
-    let host = authority.split(':').next().unwrap_or("");
+/// A concrete request origin must be covered by an effective allowed origin (scheme, host, port).
+fn origin_in_domains(origin: &str, domains: &[String]) -> bool {
     domains
         .iter()
-        .any(|domain| match domain.strip_prefix("*.") {
-            Some(base) => host.ends_with(&format!(".{base}")),
-            None => host == domain,
-        })
+        .any(|domain| task_core::browser::origin_covers(domain, origin))
 }
 
 fn read_credential_request(
@@ -449,7 +450,7 @@ fn read_credential_request(
             .contains(&request.policy_id)
         || task_core::browser::normalize_https_origin(&request.origin).as_deref()
             != Some(&request.origin)
-        || !host_in_domains(&request.origin, policy.allowed_domains())
+        || !origin_in_domains(&request.origin, policy.allowed_domains())
         || !task_core::browser_wait::valid_purpose(&request.purpose)
     {
         return Err(AdapterError::Other(
@@ -1038,16 +1039,31 @@ async fn run_with_executable_attempt(
         })?;
     capability.validate().map_err(AdapterError::Other)?;
     // Refuse before starting the substrate or the harness: no fail-open policy file.
-    let policy = crate::browser_policy::prepare(
+    let policy = crate::browser_policy::prepare_for_task(
         capability,
+        &req.task,
         req.context.browser_policy.as_ref(),
         SUPPORTED_VERSION,
     )
     .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
     let _routing = route_existing_backend(adapter.id(), &policy, record_path)?;
     let isolation = isolated_runtime_ready(ISOLATED.get())?;
-    if let BrowserRuntimeKind::Launcher { socket } = &isolation.runtime {
-        return launcher_run::run(adapter, req, run_id, limits, sink, socket, &policy).await;
+    if let BrowserRuntimeKind::Launcher {
+        socket,
+        refuse_test_loopback,
+    } = &isolation.runtime
+    {
+        return launcher_run::run(
+            adapter,
+            req,
+            run_id,
+            limits,
+            sink,
+            socket,
+            *refuse_test_loopback,
+            &policy,
+        )
+        .await;
     }
     let waits = sink
         .browser_waits()
@@ -1067,7 +1083,7 @@ async fn run_with_executable_attempt(
                 .credential_policy_id
                 .as_ref()
                 .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !host_in_domains(&wait.origin, policy.allowed_domains())
+            || !origin_in_domains(&wait.origin, policy.allowed_domains())
             || credentials.is_none())
     {
         return Err(AdapterError::Other(
@@ -1088,7 +1104,7 @@ async fn run_with_executable_attempt(
                 .credential_policy_id
                 .as_ref()
                 .is_none_or(|id| !policy.effective.credential_policy_ids.contains(id))
-            || !host_in_domains(&registered.origin, policy.allowed_domains())
+            || !origin_in_domains(&registered.origin, policy.allowed_domains())
         {
             return Err(AdapterError::Other(
                 "browser credential approval request denied".into(),
@@ -1175,7 +1191,7 @@ async fn run_with_executable_attempt(
     std::fs::create_dir_all(runtime.join("home"))?;
     std::fs::create_dir_all(runtime.join("run"))?;
     let cli = runtime.join("celeris-browser.py");
-    let action_socket = runtime.with_extension("action.sock");
+    let action_socket = crate::browser_action::action_socket_path(&runtime)?;
     write_private(&cli, CLI)?;
     write_private(&runtime.join("browser_action.py"), ACTION_RUNNER)?;
     std::fs::create_dir_all(runtime.join("actions"))?;
@@ -1194,6 +1210,7 @@ async fn run_with_executable_attempt(
         serde_json::to_vec(&serde_json::json!({
             "session_id":session,
             "allowed_domains":policy.allowed_domains(), "output":output,
+            "action_socket":action_socket,
             "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
@@ -1234,13 +1251,10 @@ async fn run_with_executable_attempt(
     )
     .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let egress_policy = task_core::browser_isolation::EgressPolicy {
-        allow: policy
-            .allowed_domains()
-            .iter()
-            .map(|d| format!("{d}:443"))
-            .collect(),
+        allow: policy.egress_allow(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,
+        test_loopback_allow: Default::default(),
     };
     let mut ro_dirs = vec![
         real_executable.parent().unwrap().to_path_buf(),

@@ -1,0 +1,1 @@
+{"api_version":"1","schema_version":51,"celeris_version":"0.1.0","instance_id":"01M47MMKCYVR5PKP9NPGR6CEB8","started_at":"2026-10-06T03:38:10.502329109Z","now":"2026-10-06T03:38:10.617377189Z","db":{"journal_mode":"wal","busy_timeout_ms":5000,"filesystem":"tmpfs","device":"tmpfs"},"release":"dev","mode":"normal","role":"active"}

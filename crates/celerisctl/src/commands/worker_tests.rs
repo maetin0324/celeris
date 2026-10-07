@@ -136,6 +136,7 @@ fn cluster_config(clusters: Vec<celeris::config::ClusterConfig>) -> Config {
         docs_maintenance: Default::default(),
         llm_proxy: Default::default(),
         model_routing: Default::default(),
+        model_catalog: Default::default(),
         routing_catalog_snapshot: None,
         routing_catalog_state: None,
         sessions: Default::default(),
@@ -173,6 +174,7 @@ fn cluster(id: &str, host: &str) -> celeris::config::ClusterConfig {
 fn task_fixture(status: Status, workspace: WorkspaceSpec) -> Task {
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -345,12 +347,16 @@ fn pool_provider_config(accounts_dir: &Path, max_runs_per_account: usize) -> Con
         model: String::new(),
         env: Default::default(),
         env_from_secrets: Default::default(),
-        account_pool: true,
+        account_pool: true.into(),
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     config.accounts = Some(celeris::config::AccountsConfig {
+        opencode_dir: None,
+        opencode_go_usage_url: "https://opencode.ai/zen/go/v1/usage".into(),
         claude_dir: Some(accounts_dir.to_path_buf()),
         codex_dir: None,
         max_runs_per_account,
@@ -391,10 +397,12 @@ fn resolve_account_ignores_or_rejects_account_flag_for_acp_provider() {
         model: "qwen-local/qwen3.8-27b".into(),
         env: Default::default(),
         env_from_secrets: Default::default(),
-        account_pool: false,
+        account_pool: false.into(),
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     assert_eq!(
         resolve_account(&config, "opencode-qwen", "acp", &args_fixture(None)).unwrap(),
@@ -425,10 +433,12 @@ fn build_adapters_resolves_an_instance_for_an_acp_provider_selected_by_worker_ru
         model: "qwen-local/qwen3.8-27b".into(),
         env: Default::default(),
         env_from_secrets: Default::default(),
-        account_pool: false,
+        account_pool: false.into(),
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     let adapters = celeris::build_adapters(&config);
     let adapter = adapters
@@ -452,10 +462,12 @@ fn resolve_account_pool_provider_without_accounts_section_errors() {
         model: String::new(),
         env: Default::default(),
         env_from_secrets: Default::default(),
-        account_pool: true,
+        account_pool: true.into(),
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     let err = resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap_err();
     assert!(
@@ -499,6 +511,7 @@ fn resolve_account_without_flag_picks_the_account_with_more_headroom_from_the_pe
     let mut book = task_dispatch::AccountBook::load(&tmp.path().join(".celeris-usage.json"));
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
     let window = |u: f64| task_core::RateLimitObservation {
+        one_month: None,
         five_hour: Some(task_core::RateWindow {
             utilization: u,
             resets_at: now + 90_000,
@@ -549,12 +562,16 @@ fn resolve_account_codex_pool_provider_uses_codex_dir_and_auth_json_marker() {
         model: String::new(),
         env: Default::default(),
         env_from_secrets: Default::default(),
-        account_pool: true,
+        account_pool: true.into(),
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     config.accounts = Some(celeris::config::AccountsConfig {
+        opencode_dir: None,
+        opencode_go_usage_url: "https://opencode.ai/zen/go/v1/usage".into(),
         claude_dir: None,
         codex_dir: Some(tmp.path().to_path_buf()),
         max_runs_per_account: 2,

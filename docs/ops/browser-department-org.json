@@ -1,0 +1,24 @@
+{
+  "id": "browser-execution",
+  "name": "ブラウザ実行課",
+  "kind": "section",
+  "parent_id": "engineering",
+  "genre": "coding",
+  "brief": "エージェントのブラウザ操作で Web 上の作業を行う。人の監視・承認・引き継ぎを前提に動く。",
+  "position": 0,
+  "profile": {
+    "skills": ["browser-enabled", "browser", "web-automation"],
+    "harnesses": { "allowed": ["coding"], "default": "coding" },
+    "budget": { "max_lane": "standard", "max_attempts": 2 },
+    "browser": {
+      "allowed_domains": ["http://localhost:3000", "http://127.0.0.1:3000"],
+      "allowed_actions": null,
+      "credential_policy_ids": []
+    },
+    "policy": [
+      "ブラウザ操作は grant と task の browser policy の範囲だけで行う。範囲外の origin・操作が要るときは自分で広げず、waits で人に上げる。",
+      "人が control lease を持つ間は操作しない。返却されたら現在の画面を読み直してから続ける。",
+      "credential・cookie・token をメモ・成果物・会話に書かない。"
+    ]
+  }
+}

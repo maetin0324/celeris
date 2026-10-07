@@ -149,6 +149,7 @@ fn question_task(store: &SqliteStore, title: &str) -> Task {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

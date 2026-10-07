@@ -1,0 +1,44 @@
+# coding の既定ハーネスを model family で決める設定例（ADR 2026-10-07-coding-harness-default-pi-hashline）。
+# 手順は docs/ops/coding-harness-pi-hashline.md。相対パスはこのファイルのあるディレクトリ基準。
+#
+# - Claude 系は claude-code 行、非 Claude（未知を含む）は pi 行が preferred になる。pi 行が全滅なら従来の選択に倒れる。
+# - task が adapter を明示していればそれが常に優先される。
+# - 戻すには [[harnesses]] coding の adapter_policy 行を消す。
+
+[accounts]
+opencode_dir = "~/.local/celeris/opencode-accounts"
+
+# Claude Code（現状どおり）。
+[[providers]]
+id = "claude"
+kind = "adapter"
+adapter = "claude-code"
+llm_source = "claude_oauth"
+tiers = ["frontier", "standard", "cheap"]
+concurrency = 1
+
+# Pi + Hashline（opencode go の鍵を使う。codex / Claude の OAuth は Pi に渡せない）。
+[[providers]]
+id = "pi-opencode-go"
+kind = "adapter"
+adapter = "pi"
+llm_source = "opencode_go"
+account_pool = "opencode-go"
+tiers = ["standard"]
+concurrency = 1
+model = "opencode-go/kimi-k3"
+# Pi の実行ファイル。PATH 上の pi でよければ省略。openclaw 同梱版を使うなら次の 2 行。
+# command = "node"
+# args = ["/usr/lib/node_modules/openclaw/node_modules/@earendil-works/pi-coding-agent/dist/cli.js"]
+# Hashline は明示した path だけ読む（extension の自動発見は止める）。無い path は run 前に失敗する。
+extensions = ["~/.local/celeris/pi-extensions/hashline"]
+# 完全な allowlist。Hashline の read/edit の tool 名は extension の実物で確かめて書く（下は仮の名前）。
+# subagent / planner を名前に含む tool は検証で拒否される。
+tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
+
+# 既定の選び方を model family にする。書かなければ今と同じ（provider の並びと残量）。
+[[harnesses]]
+id = "coding"
+description = "コードを書く・直す・テストする"
+tier = "standard"
+adapter_policy = "model_family"

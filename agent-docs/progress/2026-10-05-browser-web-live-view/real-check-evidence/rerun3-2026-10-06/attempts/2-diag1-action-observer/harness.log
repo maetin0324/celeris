@@ -1,0 +1,6 @@
+{"t": 1791278225.282, "started": true, "argv": [], "cwd": "/var/tmp/cb-1001/w/01M48815NM7828HFW4MKCHZMGX"}
+{"t": 1791278225.282, "rpc": "initialize"}
+{"t": 1791278225.282, "rpc": "session/new"}
+{"t": 1791278225.283, "rpc": "session/prompt"}
+{"t": 1791278225.283, "cli": "/var/tmp/cb-1001/w/01M48815NM7828HFW4MKCHZMGX/runs/01M48815R6RH2GSNNRDA690458/browser/celeris-browser.py"}
+{"t": 1791278225.478, "call": ["open", "http://127.0.0.1:17730/"], "exit": 1, "secs": 0.2, "stdout_tail": "{\"success\":false,\"error\":\"browser action failed or was blocked\"}\n", "stderr_tail": ""}

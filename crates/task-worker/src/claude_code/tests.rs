@@ -20,9 +20,17 @@ struct RecordingSink {
     session_established: Mutex<Vec<String>>,
     /// ADR-0054 D1（Phase 67）: `session_resume_failed` に報告された理由。
     session_resume_failed: Mutex<Vec<String>>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `policy_violation` の呼び出し。
+    violations: Mutex<Vec<crate::tool_policy::ToolPolicyViolation>>,
 }
 
 impl EventSink for RecordingSink {
+    fn policy_violation(&self, violation: &crate::tool_policy::ToolPolicyViolation) {
+        self.violations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(violation.clone());
+    }
     fn progress(&self, msg: &str) {
         self.progress
             .lock()
@@ -2302,9 +2310,10 @@ fn a_project_without_a_workspace_keeps_the_previous_prompt_byte_for_byte() {
     assert_eq!(
         crate::preamble::render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}",
+            "{}{}{}",
             crate::preamble::deliverables_placement_note(),
-            crate::preamble::production_host_note()
+            crate::preamble::production_host_note(),
+            crate::preamble::tool_launch_policy_note()
         )
     );
 }
@@ -3480,6 +3489,68 @@ fn planner_prompt_carries_depth_and_leaf_criteria() {
     assert!(!prompt.contains("Remaining depth"));
 }
 
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): /3（木の子 task unit）の
+/// planner プロンプトに「browser 子 task の origin は最小・親を超えない」規則と例
+/// `https://billing.example.com` が出る。
+#[test]
+fn browser_allowed_domains_prompt_tree_planner_has_minimal_origin_rule() {
+    let task = crate::protocol::tests::sample_task();
+    let tree = crate::protocol::TreePlannerContext {
+        remaining_depth: 2,
+        max_depth: 3,
+        ..crate::protocol::TreePlannerContext::default()
+    };
+    let context = RunContext {
+        execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+            tree: Some(tree),
+            ..crate::protocol::ExecutionPlannerContext::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(&task, &context, "run-planner-browser-origin", "artifacts");
+    assert!(
+        prompt.contains("requirements.browser.allowed_domains"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("https://billing.example.com"),
+        "missing example origin in:\n{prompt}"
+    );
+    assert!(
+        prompt.contains("never wider than this task's own `allowed_domains`"),
+        "missing minimal/parent-scope rule in:\n{prompt}"
+    );
+}
+
+/// agent-docs/adr/2026-10-05-browser-department-web-live-view.md D2.0 (e): /2（`children`）の planner
+/// プロンプトにも同じ規則と例が出る。
+#[test]
+fn browser_allowed_domains_prompt_v2_planner_has_minimal_origin_rule() {
+    let task = crate::protocol::tests::sample_task();
+    let context = RunContext {
+        execution_planner: Some(crate::protocol::ExecutionPlannerContext {
+            parallel: true,
+            ..crate::protocol::ExecutionPlannerContext::default()
+        }),
+        ..RunContext::default()
+    };
+    let prompt = build_prompt(
+        &task,
+        &context,
+        "run-planner-browser-origin-v2",
+        "artifacts",
+    );
+    assert!(prompt.contains("Phases and parallel WorkUnits"));
+    assert!(
+        prompt.contains("requirements.browser.allowed_domains"),
+        "{prompt}"
+    );
+    assert!(
+        prompt.contains("https://billing.example.com"),
+        "missing example origin in:\n{prompt}"
+    );
+}
+
 /// ADR-0079 R7-2/R7-10: /2 と /3 の planner のプロンプトに「check の書き方」の節が出る。/3 は子を作る unit
 /// だけを数える上限の説明と、dispatcher が渡す /3 の JSON の大きさの上限を出す。
 #[test]
@@ -3926,4 +3997,250 @@ fn compact_boundaries_report_completed_compactions_only() {
             .count(),
         2
     );
+}
+
+// ---- ADR 2026-10-07-worker-no-subagents-no-llm-cli: subagent の既定禁止と別 LLM の起動の検出 ----
+
+/// D1: 既定で `--disallowedTools Agent,Task,Workflow` が付き、運用側の `extra_args`（`--allowedTools Agent` /
+/// `--tools default` / 本番の応急処置 `--disallowedTools=Agent,Task`）の**後ろ**に来る（最後の語が勝つ）。
+#[tokio::test]
+async fn subagent_tools_are_disallowed_by_default_after_any_extra_args() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_claude(dir.path(), args_log_script());
+    config.extra_args = vec![
+        "--allowedTools".into(),
+        "Agent".into(),
+        "--tools".into(),
+        "default".into(),
+        "--disallowedTools=Agent,Task".into(),
+    ];
+    assert_eq!(config.subagents, crate::tool_policy::SubagentPolicy::Deny);
+    let adapter = ClaudeCodeAdapter::new(config);
+    let req = sample_req(dir.path().to_path_buf());
+    let _ = adapter
+        .run(req, "run-deny", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    let deny = args
+        .iter()
+        .position(|a| a == "--disallowedTools")
+        .expect("--disallowedTools present");
+    assert_eq!(args[deny + 1], "Agent,Task,Workflow", "{args:?}");
+    let allow = args.iter().position(|a| a == "--allowedTools").unwrap();
+    let legacy = args
+        .iter()
+        .position(|a| a == "--disallowedTools=Agent,Task")
+        .unwrap();
+    assert!(deny > allow && deny > legacy, "{args:?}");
+    assert_eq!(
+        args.iter().filter(|a| *a == "--disallowedTools").count(),
+        1,
+        "{args:?}"
+    );
+}
+
+/// D1/D7: 外せるのは明示の設定だけ。`subagents = "allow"` では付かない。`"allow_cos"` は CoS の対話 run にだけ
+/// 効き、それ以外の run には deny が残る。
+#[tokio::test]
+async fn only_an_explicit_subagents_setting_lifts_the_deny() {
+    use crate::tool_policy::SubagentPolicy;
+    async fn args_for(
+        policy: SubagentPolicy,
+        addressee: Option<crate::protocol::ConversationAddressee>,
+    ) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_claude(dir.path(), args_log_script());
+        config.subagents = policy;
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.context.conversation_addressee = addressee;
+        let _ = ClaudeCodeAdapter::new(config)
+            .run(
+                req,
+                "run-policy",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        captured_args(dir.path())
+    }
+    let has_deny = |args: &[String]| args.iter().any(|a| a == "--disallowedTools");
+    assert!(!has_deny(&args_for(SubagentPolicy::Allow, None).await));
+    assert!(has_deny(&args_for(SubagentPolicy::Deny, None).await));
+    assert!(has_deny(&args_for(SubagentPolicy::AllowCos, None).await));
+    assert!(has_deny(
+        &args_for(
+            SubagentPolicy::AllowCos,
+            Some(crate::protocol::ConversationAddressee::Other)
+        )
+        .await
+    ));
+    assert!(!has_deny(
+        &args_for(
+            SubagentPolicy::AllowCos,
+            Some(crate::protocol::ConversationAddressee::Secretary)
+        )
+        .await
+    ));
+    assert!(has_deny(
+        &args_for(
+            SubagentPolicy::Deny,
+            Some(crate::protocol::ConversationAddressee::Secretary)
+        )
+        .await
+    ));
+}
+
+/// D5: stream-json の `tool_use` から、subagent 道具（`Agent`）と shell からの別 LLM CLI（`claude -p`）・
+/// API（`curl api.anthropic.com`）の起動を検出し、sink の `policy_violation` と `error = true` の `status` 進行に
+/// 残す。普通の `Bash` / `Read` は何も出さない。
+#[test]
+fn tool_uses_that_launch_subagents_or_other_llms_are_reported_to_the_sink() {
+    use task_core::{ProgressKind, ToolPolicyKind};
+    let sink = RecordingSink::default();
+    let mut last_result = None;
+    let mut background = BackgroundTasks::default();
+    let mut exploration = ExplorationTracker::default();
+    for line in [
+        tool_use_line("Read", serde_json::json!({"file_path": "src/lib.rs"})),
+        tool_use_line(
+            "Bash",
+            serde_json::json!({"command": "cargo test -p task-worker claude_code"}),
+        ),
+        tool_use_line(
+            "Agent",
+            serde_json::json!({"prompt": "review the plan", "subagent_type": "general-purpose"}),
+        ),
+        tool_use_line(
+            "Bash",
+            serde_json::json!({"command": "cd repo && claude -p 'summarize the diff'"}),
+        ),
+        tool_use_line(
+            "Bash",
+            serde_json::json!({"command": "curl -s https://api.anthropic.com/v1/messages -d @req.json"}),
+        ),
+    ] {
+        handle_line(
+            &line,
+            &sink,
+            &mut last_result,
+            &mut background,
+            &mut exploration,
+        );
+    }
+    let violations = sink
+        .violations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    assert_eq!(
+        violations
+            .iter()
+            .map(|v| (v.kind, v.tool.as_str(), v.matched.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ToolPolicyKind::SubagentTool, "Agent", "Agent"),
+            (ToolPolicyKind::LlmCli, "Bash", "claude"),
+            (ToolPolicyKind::LlmApi, "Bash", "api.anthropic.com"),
+        ],
+        "{violations:#?}"
+    );
+    assert!(violations[0].command.contains("review the plan"));
+    assert_eq!(
+        violations[1].command,
+        "cd repo && claude -p 'summarize the diff'"
+    );
+    // 人が Console で読む行: `status`・`error = true`・`policy:` で始まる。
+    let flagged: Vec<_> = sink
+        .structured
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(_, f)| f.kind == Some(ProgressKind::Status) && f.error)
+        .map(|(m, _)| m.clone())
+        .collect();
+    assert_eq!(flagged.len(), 3, "{flagged:#?}");
+    assert!(
+        flagged.iter().all(|m| m.starts_with("policy: ")),
+        "{flagged:#?}"
+    );
+    assert!(
+        flagged[0].contains("subagent tool `Agent`"),
+        "{}",
+        flagged[0]
+    );
+    assert!(flagged[1].contains("LLM CLI `claude`"), "{}", flagged[1]);
+    assert!(
+        flagged[2].contains("LLM API `api.anthropic.com`"),
+        "{}",
+        flagged[2]
+    );
+}
+
+/// D6: reviewer のプロンプトに、celeris が記録した検出の節が出る（無ければ出ない）。
+#[test]
+fn the_review_prompt_lists_recorded_tool_policy_violations() {
+    let mut task = crate::protocol::tests::sample_task();
+    task.kind = task_core::TaskKind::Review;
+    let mut review = crate::protocol::ReviewRequest {
+        summary: "done".into(),
+        criteria: vec![0],
+        ..Default::default()
+    };
+    let without = build_prompt(
+        &task,
+        &RunContext {
+            review: Some(review.clone()),
+            ..RunContext::default()
+        },
+        "run-rv",
+        "artifacts",
+    );
+    assert!(
+        !without.contains("## Tool policy violations recorded by celeris"),
+        "{without}"
+    );
+
+    review.policy_violations = vec![
+        crate::protocol::ReviewPolicyViolation {
+            kind: "subagent_tool".into(),
+            tool: "Agent".into(),
+            matched: "Agent".into(),
+            command: "{\"prompt\":\"review the plan\"}".into(),
+        },
+        crate::protocol::ReviewPolicyViolation {
+            kind: "llm_cli".into(),
+            tool: "Bash".into(),
+            matched: "codex".into(),
+            command: "codex exec 'fix tests'".into(),
+        },
+    ];
+    let with = build_prompt(
+        &task,
+        &RunContext {
+            review: Some(review),
+            ..RunContext::default()
+        },
+        "run-rv",
+        "artifacts",
+    );
+    assert!(
+        with.contains("## Tool policy violations recorded by celeris (authoritative)"),
+        "{with}"
+    );
+    assert!(
+        with.contains(
+            "- subagent_tool via `Agent` (matched `Agent`): {\"prompt\":\"review the plan\"}"
+        ),
+        "{with}"
+    );
+    assert!(
+        with.contains("- llm_cli via `Bash` (matched `codex`): codex exec 'fix tests'"),
+        "{with}"
+    );
+    assert!(with.contains("fail that criterion"), "{with}");
+    let section = with.find("## Tool policy violations").unwrap();
+    let summary = with.find("## Worker's self-reported summary").unwrap();
+    assert!(section < summary, "{with}");
 }

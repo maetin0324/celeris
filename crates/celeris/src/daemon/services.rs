@@ -149,6 +149,8 @@ pub(crate) fn build_llm_proxy_state(
     };
     let sink: Arc<dyn ProxyEventSink> = Arc::new(TaskProxyEventSink::new(dispatcher.store()));
     let state = state.with_routing_context(Some(registry), Some(sink));
+    // ADR 2026-10-06 model-role-assignments D2: dispatcher と同じ reader（store）で lane の割り当てを読む。
+    let state = state.with_role_assignments(dispatcher.role_assignment_reader());
     // ADR 2026-10-04 §7.1・Phase 4: `[model_routing.shadow]`。既定（legacy・execute = false）は差し込まない。
     let wiring = super::routing_shadow::install_proxy_shadow(
         dispatcher,
@@ -390,6 +392,7 @@ mod routing_tests {
             labels: vec![],
             category: Default::default(),
             skills: vec![],
+            requirements: Default::default(),
             mode: Default::default(),
             conversation: None,
             routing: None,

@@ -449,6 +449,7 @@ fn routing_proxy_legacy_equivalence_tiers_and_fallback() {
         book.record_observation(
             id,
             RateLimitObservation {
+                one_month: None,
                 five_hour: Some(RateWindow {
                     utilization,
                     resets_at: 2_000,

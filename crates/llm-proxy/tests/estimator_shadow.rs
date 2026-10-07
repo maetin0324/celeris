@@ -83,11 +83,13 @@ struct Sidecar {
 }
 
 fn score(model: &str) -> f64 {
-    match model {
-        // 除外される model を最高評価にする。
-        "model-x" => 1.0,
-        "model-b" => 0.9,
-        _ => 0.5,
+    // 除外される model を最高評価にする。`legacy:<family>:<wire>` の profile id にも当たるよう末尾で見る。
+    if model.ends_with("model-x") {
+        1.0
+    } else if model.ends_with("model-b") {
+        0.9
+    } else {
+        0.5
     }
 }
 
@@ -548,4 +550,105 @@ async fn routing_estimator_shadow_unknown_cost_and_full_capacity_drop_without_si
     );
     assert!(budget.settled().is_empty());
     assert_eq!(sidecar.hits.load(Ordering::SeqCst), 0);
+}
+
+/// 付記「モデルごとの複数役割」: 役割に同じ source のモデルが複数あるとき、estimator shadow は起動時の catalog に
+/// 無いメンバーも要求時点の割り当てから候補に写し、sidecar に全メンバーを送って kernel の選択を記録する。
+/// primary は legacy（priority 順の先頭）のまま。
+#[tokio::test]
+async fn routing_estimator_shadow_scores_every_role_member_from_the_request_time_catalog() {
+    use task_core::model_catalog::CatalogSource;
+    use task_core::model_catalog::assignments::{
+        AssignmentState, AssignmentView, EffectiveAssignment, StaticAssignments,
+    };
+    let (upstream, addr) = spawn_upstream().await;
+    let config = relay_config(&[("ra", addr)]);
+    // 起動時の catalog は config の qwen cheap だけ（役割メンバーを知らない）。context 上限は family 単位で
+    // 持ち、要求時点で足すメンバーはそれを継ぐ。
+    let mut startup = normalize_legacy_config(&config);
+    for m in &mut startup.models {
+        m.context_limits = ContextLimits {
+            input: Some(100_000),
+            output: Some(8_192),
+            total: Some(108_192),
+        };
+    }
+    let members = AssignmentView {
+        managed: Vec::new(),
+        items: ["model-a", "model-b"]
+            .iter()
+            .enumerate()
+            .map(|(i, m)| EffectiveAssignment {
+                priority: i as u32,
+                source: CatalogSource::new("openai-compatible:ra"),
+                tier: Tier::Cheap,
+                model_id: (*m).to_string(),
+                state: AssignmentState::Assigned,
+                note: None,
+                updated_at: 1,
+                updated_by: "admin".into(),
+            })
+            .collect(),
+    };
+    let (sidecar, sidecar_addr) = spawn_sidecar(false).await;
+    let sink = Arc::new(Sink::default());
+    let estimator = EstimatorShadow::new(
+        shadow_config(Some(0.002)),
+        client(sidecar_addr),
+        Arc::new(startup),
+        "instance-a",
+        Arc::new(AllowAllBudget::default()),
+        sink.clone(),
+        Arc::new(SystemClock),
+    )
+    .expect("shadow_only estimator");
+    let state = ProxyState::new(
+        config,
+        reqwest::Client::new(),
+        None,
+        None,
+        None,
+        SharedRole::default(),
+        None,
+        std::time::Duration::from_secs(5),
+    )
+    .with_estimator_shadow(Some(estimator))
+    .with_role_assignments(Some(Arc::new(StaticAssignments(members))));
+    let proxy = spawn(router(state)).await;
+    let (source, _) = post_chat(proxy).await;
+    assert_eq!(source.as_deref(), Some("openai-compatible:ra"));
+    assert_eq!(upstream.chat_hits.load(Ordering::SeqCst), 1);
+    sink.wait_len(1).await;
+    let requests = sidecar
+        .requests
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    assert_eq!(requests.len(), 1);
+    let ids: Vec<&str> = requests[0]["candidates"]
+        .as_array()
+        .expect("candidates")
+        .iter()
+        .map(|c| c["model_profile_id"].as_str().unwrap_or_default())
+        .collect();
+    assert_eq!(ids, ["legacy:qwen:model-a", "legacy:qwen:model-b"]);
+    let record = sink.records().remove(0);
+    assert_eq!(record.kind, ShadowKind::Estimator);
+    assert_eq!(record.status, ShadowStatus::Completed);
+    assert_eq!(
+        record.candidate_source.as_deref(),
+        Some("openai-compatible:ra")
+    );
+    assert_eq!(
+        record.candidate_model.as_deref(),
+        Some("legacy:qwen:model-b")
+    );
+    assert!(
+        record
+            .detail
+            .as_deref()
+            .is_some_and(|d| d.starts_with("differs_from_primary")),
+        "{:?}",
+        record.detail
+    );
 }

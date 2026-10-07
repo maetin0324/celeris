@@ -62,15 +62,33 @@ impl std::fmt::Debug for LauncherRuntime {
 }
 
 impl LauncherRuntime {
-    /// 接続・起動・観測・隔離検査。どこで失敗しても session を残さず `UNAVAILABLE`。
+    /// 試験専用 loopback 許可を拒否しない（本番でない daemon の）起動。
+    #[cfg(test)]
     pub(crate) fn start(
         socket: &Path,
         task_id: &str,
         run_id: &str,
         policy: SessionPolicy,
     ) -> Result<(Self, IsolationAttestation), &'static str> {
+        Self::start_guarded(socket, false, task_id, run_id, policy)
+    }
+
+    /// 接続・起動・観測・隔離検査。どこで失敗しても session を残さず `UNAVAILABLE`。
+    /// `refuse_test_loopback` が真なら、`start_session` の前に `hello` で launcher の申告を問い、
+    /// 試験専用 loopback 許可が有効な launcher・申告を返さない launcher とは session を作らない
+    /// （付記 E2 の daemon 側。fail closed）。
+    pub(crate) fn start_guarded(
+        socket: &Path,
+        refuse_test_loopback: bool,
+        task_id: &str,
+        run_id: &str,
+        policy: SessionPolicy,
+    ) -> Result<(Self, IsolationAttestation), &'static str> {
         let mut client =
             LauncherClient::connect(socket, CLIENT_TIMEOUT).map_err(|_| UNAVAILABLE)?;
+        if refuse_test_loopback {
+            refuse_test_loopback_launcher(&mut client)?;
+        }
         let lease_id = crate::browser_launcher::random_id().map_err(|_| UNAVAILABLE)?;
         let started = client
             .start_session(task_id, run_id, &lease_id, policy)
@@ -142,6 +160,27 @@ impl LauncherRuntime {
             .stop(&self.session_id, &self.lease_id)
             .map(Some)
             .map_err(|_| UNAVAILABLE)
+    }
+}
+
+/// 本番の daemon が試験許可の launcher を使わない検査（付記 E2）。`hello` に答えない launcher
+/// （旧版・error）も申告を確かめられないので拒否する。
+pub(crate) fn refuse_test_loopback_launcher(
+    client: &mut LauncherClient,
+) -> Result<(), &'static str> {
+    match client.hello() {
+        Ok((_, allow)) if allow.is_empty() => Ok(()),
+        Ok((_, allow)) => {
+            tracing::error!(
+                test_loopback_allow = ?allow,
+                "browser launcher has test-only loopback egress enabled; a production daemon refuses it"
+            );
+            Err(UNAVAILABLE)
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "browser launcher did not answer hello; a production daemon refuses it");
+            Err(UNAVAILABLE)
+        }
     }
 }
 
@@ -431,25 +470,18 @@ fn refuse_confidential(
     Ok(())
 }
 
-/// launcher 経由の browser run。harness は従来と同じ shim（`celeris-browser.py`）を使い、
-/// shim の action は daemon の [`ActionServer`] の検査と gate を通ってから launcher に頼まれる。
-pub(super) async fn run(
-    adapter: Arc<dyn WorkerAdapter>,
-    mut req: RunRequest,
-    run_id: &str,
-    limits: RunLimits,
-    sink: &dyn EventSink,
-    socket: &Path,
+/// shim（`celeris-browser.py`）が読む `policy.json`・`config.json` を書く。形は daemon 経路と同じ
+/// （`policy_sha256` は `policy.json` の byte の sha256、`action_socket` は共通の短い path）。
+/// shim の `load_policy` はこれが揃わないと全 action を拒否する。返すのは shim と action socket の path。
+fn write_shim_files(
+    runtime_dir: &Path,
+    session: &str,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
-) -> Result<RunOutcome, AdapterError> {
-    refuse_confidential(policy, sink)?;
-    let unavailable = || AdapterError::Other(UNAVAILABLE.into());
-    let session = super::session_id(req.task.id, run_id);
-    let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
+) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
     let output = runtime_dir.join("output");
     std::fs::create_dir_all(&output)?;
     let cli = runtime_dir.join("celeris-browser.py");
-    let action_socket = runtime_dir.with_extension("action.sock");
+    let action_socket = crate::browser_action::action_socket_path(runtime_dir)?;
     write_private(&cli, CLI)?;
     write_private(&runtime_dir.join("policy.json"), &policy.action_policy)?;
     write_private(
@@ -458,10 +490,34 @@ pub(super) async fn run(
             "session_id": session,
             "allowed_domains": policy.allowed_domains(),
             "output": output,
+            "action_socket": action_socket,
+            "policy_sha256": policy.action_policy_sha256,
             "credential_policy_ids": [],
             "credential_use": false,
         }))?,
     )?;
+    Ok((cli, action_socket))
+}
+
+/// launcher 経由の browser run。harness は従来と同じ shim（`celeris-browser.py`）を使い、
+/// shim の action は daemon の [`ActionServer`] の検査と gate を通ってから launcher に頼まれる。
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn run(
+    adapter: Arc<dyn WorkerAdapter>,
+    mut req: RunRequest,
+    run_id: &str,
+    limits: RunLimits,
+    sink: &dyn EventSink,
+    socket: &Path,
+    refuse_test_loopback: bool,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<RunOutcome, AdapterError> {
+    refuse_confidential(policy, sink)?;
+    let unavailable = || AdapterError::Other(UNAVAILABLE.into());
+    let session = super::session_id(req.task.id, run_id);
+    let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
+    let output = runtime_dir.join("output");
+    let (cli, action_socket) = write_shim_files(&runtime_dir, &session, policy)?;
     let allowed: task_core::AgentBrowserActionPolicy =
         serde_json::from_slice(&policy.action_policy)
             .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
@@ -476,7 +532,13 @@ pub(super) async fn run(
         run_id.to_owned(),
     );
     let (runtime, _attestation) = tokio::task::spawn_blocking(move || {
-        LauncherRuntime::start(&socket, &task_id, &owned_run, session_policy)
+        LauncherRuntime::start_guarded(
+            &socket,
+            refuse_test_loopback,
+            &task_id,
+            &owned_run,
+            session_policy,
+        )
     })
     .await
     .map_err(|_| unavailable())?

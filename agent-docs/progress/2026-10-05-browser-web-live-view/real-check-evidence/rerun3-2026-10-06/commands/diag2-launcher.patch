@@ -1,0 +1,20 @@
+diff --git a/local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform/crates/task-worker/src/browser_launcher/backend.rs b/var/tmp/fable-rerun3-src/crates/task-worker/src/browser_launcher/backend.rs
+index 2a3cab6c..bb1d0c31 100644
+--- a/local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform/crates/task-worker/src/browser_launcher/backend.rs
++++ b/var/tmp/fable-rerun3-src/crates/task-worker/src/browser_launcher/backend.rs
+@@ -357,12 +357,14 @@ impl SessionBackend for RuntimeBackend {
+                 &dir.join("upstream.json"),
+                 br#"{"idleTimeout":"5m","noWebmcp":true}"#,
+             )?;
+-            let allowed: Vec<&str> = req
++            let mut allowed: Vec<&str> = req
+                 .policy
+                 .allowed_actions
+                 .iter()
+                 .map(|v| action_name(*v))
+                 .collect();
++            // DIAG(fable rerun3): agent-browser 0.38 needs `launch` to attach to the launcher CDP.
++            allowed.push("launch");
+             write_shared(
+                 &dir.join("policy.json"),
+                 &serde_json::to_vec(&json!({"allow":allowed}))

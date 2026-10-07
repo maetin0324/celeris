@@ -230,6 +230,7 @@ impl Dispatcher {
                         .map(|u| AccountUsageLive {
                             five_hour: u.five_hour,
                             seven_day: u.seven_day,
+                            one_month: u.one_month,
                             status: u.status.clone(),
                             observed_at: u.observed_at,
                             source: match state.and_then(|s| s.source) {

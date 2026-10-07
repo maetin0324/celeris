@@ -1,0 +1,53 @@
+# opencode go の subscription を LLM source として使う設定例（ADR 2026-10-06 D2 / D3）。
+# 相対パスはこのファイルのあるディレクトリ基準。
+#
+# 前提:
+#   - PATH 上に opencode があること（`opencode acp` が動くこと）。
+#   - account dir を 1 つ作り、その下に opencode の data dir の形（`opencode/auth.json`）で資格情報を置く。
+#       mkdir -p <opencode_dir>/main && XDG_DATA_HOME=<opencode_dir>/main opencode auth login   # provider は opencode-go
+#     本番では `<opencode_dir>/main/opencode` を `~/.local/share/opencode` への symlink か複製にしてもよい。
+#     auth.json の中身: {"opencode-go": {"type": "api", "key": "..."}}（鍵はログ・events・API に出ない）。
+#   - worker には account pool から選んだ account dir が `XDG_DATA_HOME` で渡る。opencode が自分の auth.json で
+#     gateway（https://opencode.ai/zen/go/v1）に認証する（llm-proxy は経由しない）。
+#
+# 利用枠（5 時間 / 1 週間 / 1 か月）は `GET <opencode_go_usage_url>`（Bearer）で確認し、アカウント画面に出る。
+# 取得できない窓は『不明』（0 にしない）。
+
+db = "../celeris-opencode-go.sqlite3"
+workspace_root = "../workspaces"
+tick_ms = 2000
+max_concurrency = 1
+lease_grace_secs = 60
+idle_timeout_secs = 300
+kill_grace_secs = 10
+review_timeout_secs = 600
+error_cooldown_secs = 300
+
+[plan]
+auto_accept = false
+
+[accounts]
+# 1 ディレクトリ = 1 アカウント（`<opencode_dir>/<id>/opencode/auth.json`）。相対ならこのファイル基準。
+opencode_dir = "~/.local/celeris/opencode-accounts"
+# 既定は https://opencode.ai/zen/go/v1/usage。試験では偽 HTTP server に向ける。
+# opencode_go_usage_url = "https://opencode.ai/zen/go/v1/usage"
+
+[adapters.acp]
+permission = "allow"
+model_option_id = "model"
+startup_timeout_secs = 300
+
+[[providers]]
+id = "opencode-go"
+kind = "adapter"
+adapter = "acp"
+llm_source = "opencode_go"
+# 行の adapter（acp）は pool の adapter 名ではないので、pool の名前を文字列で明示する。
+account_pool = "opencode-go"
+tiers = ["standard"]
+concurrency = 1
+model = "opencode-go/kimi-k3"
+# OPENCODE_CONFIG は任意（opencode 側の設定を固定したいときだけ）。必ず OPENCODE_DISABLE_PROJECT_CONFIG=1 を渡す
+# （ワークスペースに書かれた opencode.json で設定を上書きさせない。ADR-0026 D6）。
+env = { OPENCODE_DISABLE_PROJECT_CONFIG = "1" }
+# env = { OPENCODE_CONFIG = "/home/u/celeris/opencode/opencode-go.json", OPENCODE_DISABLE_PROJECT_CONFIG = "1" }

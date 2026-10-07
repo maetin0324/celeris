@@ -194,7 +194,7 @@ fn browser_runtime_defaults_to_daemon() {
     assert!(cfg.browser.launcher_socket.is_none());
     assert!(cfg.browser.validate().is_ok());
     assert_eq!(
-        cfg.browser.runtime_kind(),
+        cfg.browser.runtime_kind(true),
         task_worker::browser::BrowserRuntimeKind::Daemon
     );
 }
@@ -207,9 +207,10 @@ fn browser_runtime_launcher_with_socket_validates() {
     .unwrap();
     assert!(cfg.browser.validate().is_ok());
     assert_eq!(
-        cfg.browser.runtime_kind(),
+        cfg.browser.runtime_kind(true),
         task_worker::browser::BrowserRuntimeKind::Launcher {
             socket: std::path::PathBuf::from("/run/celeris/browser-launcher.sock"),
+            refuse_test_loopback: true,
         }
     );
 }
@@ -297,7 +298,7 @@ genre = "conversation"
 
 // ---- ADR-0033 D1（Phase 23）: 組織図の種 ----
 
-/// 例の設定（`config/org.example.toml`）が読め、ADR-0046 D7 の組織図（13 ノード。cos を根に
+/// 例の設定（`config/org.example.toml`）が読め、ADR-0046 D7 の組織図（15 ノード。cos を根に
 /// Engineering / Research / Operations の 3 部、それぞれの下に課）になる。`genre` は実在する
 /// harness id（`conversation` / `coding` / `literature` / `web-research` / `data-analysis` /
 /// `writing`）だけを指す。
@@ -329,6 +330,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
             "software-engineering",
             "ui-ux",
             "systems-performance",
+            "browser-execution",
             "research",
             "literature-research",
             "web-research",
@@ -341,7 +343,7 @@ fn loads_the_org_example_and_maps_it_to_org_nodes() {
         ]
     );
     let nodes = cfg.org_nodes(time::OffsetDateTime::now_utc());
-    assert_eq!(nodes.len(), 14);
+    assert_eq!(nodes.len(), 15);
     // 親が子より先に来る（cos → 部 → 課）。
     let order: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
     assert_eq!(order[0], "cos");
@@ -725,9 +727,10 @@ fn example_org_routes_ui_work_to_ui_ux_and_api_work_to_software_engineering() {
     // "software-engineering" < "ui-ux" となり software-engineering に行く。
     assert_eq!(route(&["typescript", "react"]), "software-engineering");
     assert_eq!(route(&["hpc", "perf"]), "systems-performance");
-    // skill なし: coding を許す課（engineering 配下に限らない）はすべて 0 点・同じ深さで並び、
-    // id の辞書順で先頭の cluster-hpc になる（観測値。決定的だが意味のある振り分けではない）。
+    // skill なし: browser 専用課は候補外。残る coding 課は 0 点・同じ深さで並び、
+    // id の辞書順で先頭の cluster-hpc になる。
     assert_eq!(route(&[]), "cluster-hpc");
+    assert_ne!(route(&[]), "browser-execution");
 }
 
 fn routing_sample_task() -> task_core::Task {
@@ -736,6 +739,7 @@ fn routing_sample_task() -> task_core::Task {
     };
     let now = time::OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -2220,7 +2224,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
     let cfg: Config = toml::from_str(&bogus).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
+        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
     );
 
     let empty = format!("[[roles]]\nid = \"  \"\n{providers}");
@@ -2574,6 +2578,61 @@ fn account_pool_for_codex_requires_codex_dir_specifically() {
         .unwrap();
     assert!(cfg.validate().is_ok());
     assert_eq!(cfg.account_pool_providers(), ["pool".to_string()].into());
+}
+
+/// ADR 2026-10-06 D2 / D3: `adapter = "acp"` + `llm_source = "opencode_go"` + `account_pool = "opencode-go"` の行は
+/// `[accounts] opencode_dir` があれば通り、無ければ設定エラー。
+#[test]
+fn opencode_go_pool_row_requires_opencode_dir() {
+    let row = "[[providers]]\nid = \"go\"\nadapter = \"acp\"\nllm_source = \"opencode_go\"\nmodel = \"opencode-go/kimi-k3\"\naccount_pool = \"opencode-go\"\ntiers = [\"standard\"]\n";
+    let cfg: Config =
+        toml::from_str(&format!("[accounts]\nopencode_dir = \"acct\"\n{row}")).unwrap();
+    cfg.validate().expect("opencode_dir set: valid");
+    assert_eq!(cfg.account_pool_providers(), ["go".to_string()].into());
+    assert_eq!(
+        cfg.account_pool_adapters().get("go"),
+        Some(&AccountAdapter::OpencodeGo)
+    );
+    assert_eq!(
+        cfg.accounts.as_ref().unwrap().opencode_go_usage_url,
+        "https://opencode.ai/zen/go/v1/usage"
+    );
+    assert_eq!(
+        cfg.provider_llm_source("go").unwrap().source,
+        task_core::LlmSourceRef::OpencodeGo
+    );
+
+    // opencode_dir が無い（claude_dir だけ）と拒否。
+    let cfg: Config = toml::from_str(&format!("[accounts]\nclaude_dir = \"acct\"\n{row}")).unwrap();
+    let err = cfg.validate().unwrap_err().to_string();
+    assert!(err.contains("opencode_dir"), "{err}");
+
+    // opencode_go は acp 以外の adapter では使えない。
+    let cfg: Config = toml::from_str(
+        "[accounts]\nopencode_dir = \"acct\"\n[[providers]]\nid = \"x\"\nadapter = \"codex\"\nllm_source = \"opencode_go\"\n",
+    )
+    .unwrap();
+    assert!(cfg.validate().is_err());
+}
+
+/// ADR 2026-10-06 D3: 例の設定 `config/celeris.opencode-go.example.toml` が読めて、routing の source 名が
+/// `opencode-go`（subscription）になる。
+#[test]
+fn opencode_go_example_config_loads_and_routes_as_opencode_go_subscription() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../config/celeris.opencode-go.example.toml");
+    let cfg = Config::load(&path).expect("example loads");
+    let catalog = cfg.routing_catalog().expect("catalog");
+    let dep = catalog
+        .deployments
+        .iter()
+        .find(|d| d.id == "provider:opencode-go")
+        .expect("deployment");
+    assert_eq!(dep.source_ref, "opencode-go");
+    assert_eq!(
+        dep.billing,
+        task_core::model_router::profiles::Billing::Subscription
+    );
 }
 
 /// `[accounts]` の既定値と、相対 `claude_dir`/`codex_dir` の解決（設定ファイル基準）。
@@ -4317,4 +4376,180 @@ fn routing_phase3_escalation_defaults_and_validation() {
         cfg.model_routing.runtime.as_ref().unwrap().escalation,
         task_core::EscalationThresholds::default()
     );
+}
+
+#[test]
+fn pi_adapter_provider_config_loads_and_builds_with_relative_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[[providers]]
+id = "pi-go"
+adapter = "pi"
+llm_source = "opencode_go"
+model = "opencode-go/deepseek-v4-pro"
+command = "node"
+args = ["/opt/pi/dist/cli.js"]
+extensions = ["hashline/index.ts"]
+tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
+[[harnesses]]
+id = "pi-coding"
+adapter = "pi"
+[[roles]]
+id = "pi-coder"
+adapter = "pi"
+"#,
+    )
+    .unwrap();
+    let cfg = Config::load(&path).unwrap();
+    assert_eq!(
+        cfg.providers[0].extensions,
+        vec![dir.path().join("hashline/index.ts")]
+    );
+    assert_eq!(
+        cfg.provider_llm_source("pi-go").unwrap().source,
+        task_core::LlmSourceRef::OpencodeGo
+    );
+    let adapters = crate::build_adapters(&cfg);
+    assert_eq!(adapters["pi-go"].id(), "pi");
+    assert_eq!(
+        crate::effective_models(&cfg)["pi-go"],
+        "opencode-go/deepseek-v4-pro"
+    );
+}
+
+#[test]
+fn pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters() {
+    for row in [
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']",
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\ntools = ['bash']",
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']\ntools = ['planner']",
+        "adapter = 'fake'\nextensions = ['hashline.ts']\ntools = ['read']",
+    ] {
+        let cfg: Config = toml::from_str(&format!("[[providers]]\nid = 'test'\n{row}\n")).unwrap();
+        assert!(cfg.validate().is_err(), "{row}");
+    }
+}
+
+#[test]
+fn pi_adapter_config_preserves_go_pool_and_direct_compatible_source() {
+    for source in [
+        "llm_source = 'opencode_go'\naccount_pool = 'opencode-go'",
+        "llm_source = 'openai_compatible:local'",
+    ] {
+        let model = if source.contains("openai_compatible") {
+            "local/test"
+        } else {
+            "opencode-go/test"
+        };
+        let body = format!(
+            r#"
+[accounts]
+opencode_dir = "/fixture/accounts"
+[[llm_proxy.sources.openai_compatible]]
+id = "local"
+base_url = "http://127.0.0.1:9/v1"
+[[providers]]
+id = "pi"
+adapter = "pi"
+model = "{model}"
+extensions = ["hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+{source}
+"#
+        );
+        let cfg: Config = toml::from_str(&body).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(crate::build_adapters(&cfg)["pi"].id(), "pi");
+    }
+}
+
+/// ADR 2026-10-07: `[[harnesses]] adapter_policy = "model_family"` が dispatcher の既定解決の材料になる。
+#[test]
+fn coding_harness_default_config_builds_dispatcher_inputs() {
+    let cfg: Config = toml::from_str(
+        r#"
+[[providers]]
+id = "cc"
+adapter = "claude-code"
+[[providers]]
+id = "pi-go"
+adapter = "pi"
+llm_source = "opencode_go"
+model = "opencode-go/deepseek-v4-pro"
+extensions = ["/opt/hashline/index.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+[[harnesses]]
+id = "coding"
+adapter_policy = "model_family"
+[[harnesses]]
+id = "writing"
+"#,
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    let d = cfg.coding_harness_default();
+    assert_eq!(d.harnesses, vec!["coding".to_string()]);
+    assert_eq!(d.sources["cc"], task_core::LlmSourceRef::ClaudeOauth);
+    assert_eq!(d.sources["pi-go"], task_core::LlmSourceRef::OpencodeGo);
+    assert_eq!(
+        cfg.harness_registry()
+            .get("writing")
+            .unwrap()
+            .adapter_policy,
+        task_core::AdapterPolicy::ProviderOrder
+    );
+}
+
+/// 固定 adapter・対話用ハーネスと `model_family` は両立しない。未知の値は読み込みで落ちる。
+#[test]
+fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {
+    for row in [
+        "adapter = 'claude-code'\nadapter_policy = 'model_family'",
+        "conversation = true\nadapter_policy = 'model_family'",
+    ] {
+        let cfg: Config =
+            toml::from_str(&format!("[[harnesses]]\nid = 'coding'\n{row}\n")).unwrap();
+        assert!(cfg.validate().is_err(), "{row}");
+    }
+    assert!(
+        toml::from_str::<Config>("[[harnesses]]\nid = 'coding'\nadapter_policy = 'family'\n")
+            .is_err()
+    );
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.<id>] subagents` は `deny`（既定・省略・未知の値）/
+/// `allow_cos` / `allow` に決定的に解決される。3 つの adapter で同じ。
+#[test]
+fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
+    use task_worker::tool_policy::SubagentPolicy;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n").unwrap();
+    assert_eq!(cfg.adapters.claude_code.subagents, "");
+    assert_eq!(
+        cfg.adapters.claude_code.resolved_subagents(),
+        SubagentPolicy::Deny
+    );
+    assert_eq!(
+        cfg.adapters.codex.resolved_subagents(),
+        SubagentPolicy::Deny
+    );
+    assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
+
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n\n[adapters.claude_code]\nsubagents = \"allow\"\n\n[adapters.codex]\nsubagents = \"allow_cos\"\n\n[adapters.acp]\nsubagents = \"whatever\"\n",
+    )
+    .unwrap();
+    assert!(cfg.validate().is_ok());
+    assert_eq!(
+        cfg.adapters.claude_code.resolved_subagents(),
+        SubagentPolicy::Allow
+    );
+    assert_eq!(
+        cfg.adapters.codex.resolved_subagents(),
+        SubagentPolicy::AllowCos
+    );
+    assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
 }

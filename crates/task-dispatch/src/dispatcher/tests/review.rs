@@ -2053,3 +2053,96 @@ fn review_human_inputs_collect_answered_decisions_and_answers_of_the_task_and_it
         vec![("root q", "root a"), ("child q", "child a")]
     );
 }
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run の `WorkerPolicyViolation` だけが reviewer に渡る
+/// （他の run・reviewer run 自身の検出・他の event は混ぜない。順序は追記順）。
+#[test]
+fn review_policy_violations_collects_only_the_subject_runs_detections() {
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let dir = tempfile::tempdir().unwrap();
+    let task = new_task(
+        dir.path(),
+        Check::Command {
+            cmd: ":".into(),
+            expect_exit: 0,
+        },
+        0,
+    );
+    store.insert(&task).unwrap();
+    for (run_id, kind, tool, matched, command) in [
+        (
+            "run-subject",
+            task_core::ToolPolicyKind::SubagentTool,
+            "Agent",
+            "Agent",
+            "{\"prompt\":\"review the plan\"}",
+        ),
+        (
+            "run-other",
+            task_core::ToolPolicyKind::LlmCli,
+            "Bash",
+            "codex",
+            "codex exec x",
+        ),
+        (
+            "run-subject",
+            task_core::ToolPolicyKind::LlmApi,
+            "Bash",
+            "api.anthropic.com",
+            "curl https://api.anthropic.com/v1/messages",
+        ),
+    ] {
+        store
+            .append_event(
+                task.id,
+                &Event::WorkerPolicyViolation {
+                    run_id: run_id.into(),
+                    kind,
+                    tool: tool.into(),
+                    matched: matched.into(),
+                    command: command.into(),
+                },
+            )
+            .unwrap();
+    }
+    store
+        .append_event(task.id, &Event::worker_progress("run-subject", "policy: …"))
+        .unwrap();
+
+    let d = dispatcher(store.clone(), done_adapter(), 1);
+    let found = d.review_policy_violations(task.id, "run-subject").unwrap();
+    assert_eq!(
+        found
+            .iter()
+            .map(|v| (
+                v.kind.as_str(),
+                v.tool.as_str(),
+                v.matched.as_str(),
+                v.command.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                "subagent_tool",
+                "Agent",
+                "Agent",
+                "{\"prompt\":\"review the plan\"}"
+            ),
+            (
+                "llm_api",
+                "Bash",
+                "api.anthropic.com",
+                "curl https://api.anthropic.com/v1/messages"
+            ),
+        ]
+    );
+    assert!(
+        d.review_policy_violations(task.id, "run-none")
+            .unwrap()
+            .is_empty()
+    );
+    // event は `type = worker_policy_violation` として読める（追記専用・読み戻しの契約）。
+    let serialized = serde_json::to_value(&store.events_for(task.id).unwrap()[0].1).unwrap();
+    assert_eq!(serialized["type"], "worker_policy_violation");
+    assert_eq!(serialized["kind"], "subagent_tool");
+}

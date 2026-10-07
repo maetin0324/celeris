@@ -125,7 +125,7 @@
           ]
         },
         "excluded_reason": {
-          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"rejected\"`。",
+          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"one_month_exhausted\" | \"rejected\"`。",
           "type": [
             "string",
             "null"
@@ -325,6 +325,17 @@
           "format": "int64",
           "type": "integer"
         },
+        "one_month": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateWindow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "1 か月窓（opencode go。ADR 2026-10-06 D1）。観測できなければ `None`（『不明』）。"
+        },
         "seven_day": {
           "anyOf": [
             {
@@ -367,6 +378,18 @@
         },
         "observed_at": {
           "type": "string"
+        },
+        "one_month": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RateWindowView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "1 か月窓（opencode go）。観測できなければ `null`（画面では『不明』。0 にしない）。"
         },
         "seven_day": {
           "anyOf": [
@@ -418,7 +441,7 @@
           "type": "string"
         },
         "excluded_reason": {
-          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"rejected\"`。",
+          "description": "`\"not_logged_in\" | \"at_capacity\" | \"cooldown\" | \"five_hour_exhausted\" | \"seven_day_exhausted\" | \"one_month_exhausted\" | \"rejected\"`。",
           "type": [
             "string",
             "null"
@@ -604,6 +627,67 @@
         "recorded_at"
       ],
       "type": "object"
+    },
+    "AdapterChoice": {
+      "description": "adapter をどう決めたか（routing audit に残す）。",
+      "oneOf": [
+        {
+          "description": "task・役割で明示された adapter。",
+          "properties": {
+            "kind": {
+              "const": "explicit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "family の既定ハーネスに一致する行。",
+          "properties": {
+            "kind": {
+              "const": "preferred",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "既定ハーネスの行が使えず、絞る前の候補へ倒れた。",
+          "properties": {
+            "kind": {
+              "const": "fallback",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`AdapterPolicy::ProviderOrder`（従来どおり）。",
+          "properties": {
+            "kind": {
+              "const": "provider_order",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "AdoptRequest": {
       "additionalProperties": false,
@@ -1210,6 +1294,104 @@
       ],
       "type": "object"
     },
+    "AssignmentList": {
+      "properties": {
+        "effective": {
+          "items": {
+            "$ref": "#/$defs/RoleSlotView"
+          },
+          "type": "array"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/EffectiveAssignmentView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "effective"
+      ],
+      "type": "object"
+    },
+    "AssignmentPreviewBody": {
+      "additionalProperties": false,
+      "description": "`POST …/assignments/preview` の本文。`model_id` が `null`（省略）なら解除した場合の影響。",
+      "properties": {
+        "model_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "source",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "AssignmentPreviewResponse": {
+      "properties": {
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        }
+      },
+      "required": [
+        "impact"
+      ],
+      "type": "object"
+    },
+    "AssignmentPutBody": {
+      "additionalProperties": false,
+      "description": "`PUT …/assignments/{source}/{tier}` の本文。",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "type": "object"
+    },
+    "AssignmentPutResponse": {
+      "properties": {
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        },
+        "item": {
+          "$ref": "#/$defs/EffectiveAssignmentView"
+        }
+      },
+      "required": [
+        "item",
+        "impact"
+      ],
+      "type": "object"
+    },
+    "AssignmentStateView": {
+      "enum": [
+        "assigned",
+        "excluded"
+      ],
+      "type": "string"
+    },
     "AttentionItem": {
       "oneOf": [
         {
@@ -1742,11 +1924,18 @@
           ]
         },
         "allowed_domains": {
-          "description": "Exact hosts (or `*.example.com`) passed to agent-browser's built-in domain policy.",
+          "description": "Allowed origins. Legacy host patterns read as HTTPS on port 443 only.",
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Policy ID to browser identity ID. This contains identifiers only, never credentials.",
+          "type": "object"
         },
         "credential_policy_ids": {
           "description": "Credential policies a task may reference. Absent/empty means no credential use.",
@@ -1911,6 +2100,21 @@
       ],
       "type": "object"
     },
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
     "BrowserRevokeBody": {
       "additionalProperties": false,
       "description": "`POST .../revoke` の本文。",
@@ -1985,6 +2189,60 @@
         "FAILED"
       ],
       "type": "string"
+    },
+    "BrowserSettingsPatch": {
+      "additionalProperties": false,
+      "description": "PATCH /org/{id}/browser-settings. Only browser-related profile fields are editable.",
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "budget": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BudgetPrefs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "credential_identity_ids": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "credential_policy_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "harnesses": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HarnessPrefs"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "BrowserWait": {
       "additionalProperties": false,
@@ -2470,6 +2728,39 @@
       },
       "type": "object"
     },
+    "CatalogDelta": {
+      "description": "1 回の反映で変わったモデル。",
+      "properties": {
+        "added": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "removed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "restored": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "added",
+        "removed",
+        "restored"
+      ],
+      "type": "object"
+    },
     "CatalogDeploymentView": {
       "description": "A deployment is a source/model pairing; credentials and endpoint URLs are omitted.",
       "properties": {
@@ -2561,6 +2852,10 @@
         "context_limits"
       ],
       "type": "object"
+    },
+    "CatalogSource": {
+      "description": "catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`\n（llm-proxy / routing の source 名と同じ）。",
+      "type": "string"
     },
     "ChangeDiffView": {
       "description": "`GET /tasks/{id}/changes/{repo}/diff?path=` の応答（ADR-0043 D5。200 KiB で切る）。",
@@ -4812,6 +5107,26 @@
       },
       "required": [
         "items"
+      ],
+      "type": "object"
+    },
+    "CodingDefaultResolution": {
+      "description": "ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。",
+      "properties": {
+        "adapter_choice": {
+          "$ref": "#/$defs/AdapterChoice"
+        },
+        "family": {
+          "$ref": "#/$defs/ModelFamily"
+        },
+        "family_basis": {
+          "$ref": "#/$defs/FamilyBasis"
+        }
+      },
+      "required": [
+        "family",
+        "family_basis",
+        "adapter_choice"
       ],
       "type": "object"
     },
@@ -8166,6 +8481,105 @@
       ],
       "type": "object"
     },
+    "DiscoverBody": {
+      "additionalProperties": false,
+      "description": "`POST /llm/models/discover` の本文。",
+      "properties": {
+        "source": {
+          "default": null,
+          "description": "1 source だけ走らせる（省略で全 source）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "DiscoverResponse": {
+      "description": "`POST /llm/models/discover` の応答。",
+      "properties": {
+        "results": {
+          "items": {
+            "$ref": "#/$defs/DiscoverySummaryView"
+          },
+          "type": "array"
+        },
+        "unavailable": {
+          "description": "daemon が発見の係を渡していない（この process では発見できない）とき `true`。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "results",
+        "unavailable"
+      ],
+      "type": "object"
+    },
+    "DiscoveryRecordView": {
+      "properties": {
+        "at": {
+          "type": "string"
+        },
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "at",
+        "ok",
+        "count"
+      ],
+      "type": "object"
+    },
+    "DiscoverySummaryView": {
+      "description": "発見 1 source の結果の要約。",
+      "properties": {
+        "count": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "delta": {
+          "$ref": "#/$defs/CatalogDelta",
+          "description": "失敗したときは空の delta。"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "ok",
+        "count",
+        "delta"
+      ],
+      "type": "object"
+    },
     "DocCommit": {
       "description": "コミット 1 件（ツリーの「最終コミット」とページの履歴）。",
       "properties": {
@@ -8511,6 +8925,58 @@
       "required": [
         "task",
         "fields"
+      ],
+      "type": "object"
+    },
+    "EffectiveAssignmentView": {
+      "description": "割り当て 1 件（実効の状態つき）。",
+      "properties": {
+        "excluded_reason": {
+          "description": "`override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AssignmentStateView"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        },
+        "updated_at": {
+          "description": "RFC3339（UTC）。",
+          "type": "string"
+        },
+        "updated_by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "tier",
+        "model_id",
+        "priority",
+        "state",
+        "updated_at",
+        "updated_by"
       ],
       "type": "object"
     },
@@ -9569,6 +10035,42 @@
             "type",
             "run_id",
             "msg"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を\n使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない\n（警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。",
+          "properties": {
+            "command": {
+              "description": "起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ToolPolicyKind"
+            },
+            "matched": {
+              "description": "一致した語（道具名・CLI 名・API host）。",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "tool": {
+              "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "worker_policy_violation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "kind",
+            "tool",
+            "matched",
+            "command"
           ],
           "type": "object"
         },
@@ -11648,6 +12150,83 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-06 D4: モデル catalog の変化（追加・消失・復活）。task に属さない監査イベントで、\n`model_catalog::catalog_event_task_id()` の疑似 task の列に追記する。状態は変えない。",
+          "properties": {
+            "added": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "removed": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "restored": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "source": {
+              "type": "string"
+            },
+            "type": {
+              "const": "model_catalog_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。\n`model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。\n`catalog_event_task_id()` の疑似 task の列に追記する。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "model_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": {
+              "const": "model_role_assignment_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "tier",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -11988,6 +12567,9 @@
         },
         "objective": {
           "type": "string"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
         },
         "skills": {
           "default": [],
@@ -13170,6 +13752,16 @@
       ],
       "type": "object"
     },
+    "FamilyBasis": {
+      "description": "family をどの材料で決めたか（routing audit に残す）。",
+      "enum": [
+        "llm_source",
+        "account_pool",
+        "model_profile",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "FeatureStage": {
       "description": "特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。",
       "enum": [
@@ -13530,6 +14122,64 @@
         "items",
         "counts",
         "suppressed"
+      ],
+      "type": "object"
+    },
+    "ImpactChangeView": {
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "excluded_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ImpactKind"
+        },
+        "tier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "ImpactKind": {
+      "enum": [
+        "provider",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "ImpactView": {
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ImpactChangeView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes"
       ],
       "type": "object"
     },
@@ -14952,6 +15602,17 @@
         "adapter": {
           "type": "string"
         },
+        "coding_default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingDefaultResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-07（coding harness の既定）: `adapter_policy = \"model_family\"` のハーネスの run だけ。\n選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。"
+        },
         "lane": {
           "anyOf": [
             {
@@ -16332,6 +16993,168 @@
       ],
       "type": "object"
     },
+    "ModelCatalogItem": {
+      "properties": {
+        "assigned_tiers": {
+          "description": "ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。",
+          "items": {
+            "$ref": "#/$defs/Tier"
+          },
+          "type": "array"
+        },
+        "available": {
+          "type": "boolean"
+        },
+        "capabilities": true,
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "first_seen": {
+          "description": "RFC3339（UTC）。",
+          "type": "string"
+        },
+        "last_seen": {
+          "type": "string"
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "override": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCatalogOverrideView"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "人の上書き（無ければ `null`）。"
+        },
+        "routing": {
+          "$ref": "#/$defs/ModelCatalogRoutingView"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "model_id",
+        "available",
+        "first_seen",
+        "last_seen",
+        "capabilities",
+        "routing",
+        "assigned_tiers"
+      ],
+      "type": "object"
+    },
+    "ModelCatalogOverrideView": {
+      "additionalProperties": false,
+      "description": "上書きの本文・応答。",
+      "properties": {
+        "alias": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disabled": {
+          "default": false,
+          "type": "boolean"
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Tier"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "routing で使う tier の上書き（無ければ `null`）。"
+        }
+      },
+      "type": "object"
+    },
+    "ModelCatalogRoutingView": {
+      "description": "routing で使われている tier・deployment（routing catalog の `source_ref` と `upstream_model` で突き合わせる）。",
+      "properties": {
+        "deployments": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tiers": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "tiers",
+        "deployments"
+      ],
+      "type": "object"
+    },
+    "ModelCatalogView": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ModelCatalogItem"
+          },
+          "type": "array"
+        },
+        "last_discovery": {
+          "items": {
+            "$ref": "#/$defs/DiscoveryRecordView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "last_discovery"
+      ],
+      "type": "object"
+    },
+    "ModelFamily": {
+      "description": "model の系統。未知（`Other`・`Unknown`）は非 Claude として扱う。",
+      "oneOf": [
+        {
+          "enum": [
+            "claude",
+            "gpt",
+            "qwen"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "family は書かれているが既知の系統ではない（DeepSeek 等）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "family を決める材料が無い。",
+          "type": "string"
+        }
+      ]
+    },
     "ModelPrefs": {
       "additionalProperties": false,
       "description": "ADR-0046 D1: モデルの段（`tier` は子が勝つ、`allowed_tiers` は交わり）。",
@@ -16748,6 +17571,11 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "default": {},
+          "description": "Browser origins requested by this task; required with the browser-enabled skill."
         },
         "role": {
           "default": null,
@@ -18516,6 +19344,10 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Browser origins for a child task. An inherited browser skill still needs an explicit set."
         },
         "skills": {
           "items": {
@@ -20326,12 +21158,21 @@
       "type": "object"
     },
     "QuotaWindow": {
-      "description": "D4.2: 窓の種別（ADR-0024 と同じ 2 窓）。",
-      "enum": [
-        "five_hour",
-        "seven_day"
-      ],
-      "type": "string"
+      "description": "D4.2: 窓の種別（ADR-0024 の 2 窓 + opencode go の 1 か月窓）。",
+      "oneOf": [
+        {
+          "enum": [
+            "five_hour",
+            "seven_day"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "one_month",
+          "description": "opencode go の 1 か月窓（ADR 2026-10-06 D1）。",
+          "type": "string"
+        }
+      ]
     },
     "QuotaWindowUse": {
       "description": "D4.3: run 1 件・窓 1 つの消費。",
@@ -20380,7 +21221,7 @@
       "type": "object"
     },
     "RateWindow": {
-      "description": "1 つの枠（5 時間 / 7 日）の観測値。",
+      "description": "1 つの枠（5 時間 / 7 日 / 1 か月）の観測値。",
       "properties": {
         "resets_at": {
           "description": "枠がリセットされる時刻（Unix 秒、`resetsAt`）",
@@ -22479,6 +23320,140 @@
       ],
       "type": "object"
     },
+    "RoleMember": {
+      "additionalProperties": false,
+      "description": "One model's membership in a role. Priority is global within that role.",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/CatalogSource"
+        }
+      },
+      "required": [
+        "source",
+        "model_id",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "RoleMembersBody": {
+      "additionalProperties": false,
+      "description": "Complete membership of one role, in all sources. An empty list disables the role.",
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "members"
+      ],
+      "type": "object"
+    },
+    "RoleMembersResponse": {
+      "properties": {
+        "after": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "before": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "impact"
+      ],
+      "type": "object"
+    },
+    "RoleSlotView": {
+      "description": "1 つの `(source, tier)` の枠の実効。",
+      "properties": {
+        "available": {
+          "description": "catalog に行があるときだけ。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "excluded_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_seen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SlotOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "providers": {
+          "description": "この枠を使う provider の id（昇順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "proxy": {
+          "description": "llm-proxy の lane がこの枠を使うか。",
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "source",
+        "tier",
+        "priority",
+        "providers",
+        "proxy"
+      ],
+      "type": "object"
+    },
     "RollupMetrics": {
       "description": "D11: 1 節点分（または subtree・深さ・案件の合計）の数。",
       "properties": {
@@ -23540,6 +24515,17 @@
             "boolean",
             "null"
           ]
+        },
+        "coding_default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingDefaultResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-07: coding の既定ハーネス解決（`RoutingDecided.resolution.coding_default`）。"
         },
         "cost_usd": {
           "format": "double",
@@ -25086,6 +26072,13 @@
       ],
       "type": "object"
     },
+    "SlotOrigin": {
+      "enum": [
+        "assignment",
+        "config"
+      ],
+      "type": "string"
+    },
     "SourceOrigin": {
       "enum": [
         "explicit",
@@ -25428,6 +26421,10 @@
             "$ref": "#/$defs/RepoRef"
           },
           "type": "array"
+        },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Per-task browser permissions. Absent for tasks created before this policy."
         },
         "role": {
           "description": "ADR-0016 D1: 役割名（自由記述。`[[roles]] id` と一致すれば既定と指示文が効く）。状態機械は見ない。\n導入前のタスクには無いので任意。",
@@ -26462,6 +27459,22 @@
       ],
       "type": "object"
     },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
     "TaskRouting": {
       "description": "ADR-0069 D1 / D3: タスクの routing の出自（`Task.routing`）。",
       "properties": {
@@ -27360,6 +28373,26 @@
         "provenance"
       ],
       "type": "object"
+    },
+    "ToolPolicyKind": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。",
+      "oneOf": [
+        {
+          "const": "subagent_tool",
+          "description": "subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。",
+          "type": "string"
+        },
+        {
+          "const": "llm_cli",
+          "description": "shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。",
+          "type": "string"
+        },
+        {
+          "const": "llm_api",
+          "description": "shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。",
+          "type": "string"
+        }
+      ]
     },
     "TransitionResult": {
       "description": "状態変更の結果（承認・却下・回答・取り消し共通）。",
@@ -28692,6 +29725,9 @@
     "browser_revoke": {
       "$ref": "#/$defs/BrowserRevokeBody"
     },
+    "browser_settings_patch": {
+      "$ref": "#/$defs/BrowserSettingsPatch"
+    },
     "browser_wait_list": {
       "$ref": "#/$defs/BrowserWaitList",
       "description": "`GET /tasks/{id}/browser/waits` と `GET /browser/waits`。"
@@ -29048,6 +30084,44 @@
     "milestone_patch": {
       "$ref": "#/$defs/MilestonePatchBody"
     },
+    "model_assignment_list": {
+      "$ref": "#/$defs/AssignmentList"
+    },
+    "model_assignment_preview": {
+      "$ref": "#/$defs/AssignmentPreviewBody"
+    },
+    "model_assignment_preview_result": {
+      "$ref": "#/$defs/AssignmentPreviewResponse"
+    },
+    "model_assignment_put": {
+      "$ref": "#/$defs/AssignmentPutBody"
+    },
+    "model_assignment_put_result": {
+      "$ref": "#/$defs/AssignmentPutResponse"
+    },
+    "model_catalog": {
+      "$ref": "#/$defs/ModelCatalogView",
+      "description": "ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。"
+    },
+    "model_catalog_item": {
+      "$ref": "#/$defs/ModelCatalogItem"
+    },
+    "model_catalog_override": {
+      "$ref": "#/$defs/ModelCatalogOverrideView"
+    },
+    "model_discover": {
+      "$ref": "#/$defs/DiscoverBody"
+    },
+    "model_discover_result": {
+      "$ref": "#/$defs/DiscoverResponse"
+    },
+    "model_role_members": {
+      "$ref": "#/$defs/RoleMembersBody",
+      "description": "ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。"
+    },
+    "model_role_members_result": {
+      "$ref": "#/$defs/RoleMembersResponse"
+    },
     "new_plan": {
       "$ref": "#/$defs/NewPlanSpec"
     },
@@ -29358,6 +30432,7 @@
     "org_list",
     "org_create",
     "org_patch",
+    "browser_settings_patch",
     "project_list",
     "project_create",
     "project_patch",
@@ -29510,7 +30585,19 @@
     "cos_resolve_response",
     "cos_escalation_packet",
     "cos_override_request",
-    "cos_override_response"
+    "cos_override_response",
+    "model_catalog",
+    "model_catalog_item",
+    "model_catalog_override",
+    "model_discover",
+    "model_discover_result",
+    "model_role_members",
+    "model_role_members_result",
+    "model_assignment_list",
+    "model_assignment_put",
+    "model_assignment_put_result",
+    "model_assignment_preview",
+    "model_assignment_preview_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

@@ -109,6 +109,7 @@ pub struct ApiV1Schema {
     pub org_list: OrgList,
     pub org_create: OrgCreateBody,
     pub org_patch: OrgPatchBody,
+    pub browser_settings_patch: crate::handlers::org::BrowserSettingsPatch,
     /// Phase 23（ADR-0033 D2）: 案件と途中目標。
     pub project_list: ProjectList,
     pub project_create: ProjectCreateBody,
@@ -325,6 +326,20 @@ pub struct ApiV1Schema {
     pub cos_override_request: crate::cos::override_op::OverrideBody,
     /// `POST /cos/operations/{o}/override` の応答。
     pub cos_override_response: crate::cos::override_op::OverrideResponse,
+    /// ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。
+    pub model_catalog: crate::model_catalog::ModelCatalogView,
+    pub model_catalog_item: crate::model_catalog::ModelCatalogItem,
+    pub model_catalog_override: crate::model_catalog::ModelCatalogOverrideView,
+    pub model_discover: crate::model_catalog::DiscoverBody,
+    pub model_discover_result: crate::model_catalog::DiscoverResponse,
+    /// ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
+    pub model_role_members: crate::model_assignments::RoleMembersBody,
+    pub model_role_members_result: crate::model_assignments::RoleMembersResponse,
+    pub model_assignment_list: crate::model_assignments::AssignmentList,
+    pub model_assignment_put: crate::model_assignments::AssignmentPutBody,
+    pub model_assignment_put_result: crate::model_assignments::AssignmentPutResponse,
+    pub model_assignment_preview: crate::model_assignments::AssignmentPreviewBody,
+    pub model_assignment_preview_result: crate::model_assignments::AssignmentPreviewResponse,
 }
 
 /// 生成したスキーマ（`serde_json::Value`）。

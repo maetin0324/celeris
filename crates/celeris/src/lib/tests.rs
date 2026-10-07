@@ -31,7 +31,7 @@ args = ["acp"]
 
 // ---- ADR-0033 D1（Phase 23）: 組織図の種蒔き ----
 
-/// 空の DB には例の組織図（11 ノード）が入り、2 回目は何もしない（以後は DB が正）。
+/// 空の DB には例の組織図（15 ノード）が入り、2 回目は何もしない（以後は DB が正）。
 #[test]
 fn seeds_the_org_once_into_an_empty_db_and_never_again() {
     let dir = tempfile::tempdir().unwrap();
@@ -113,9 +113,9 @@ genre = "conversation"
     let config = Config::load(&path).unwrap();
     let store = SqliteStore::open(&config.db.path).unwrap();
 
-    assert_eq!(seed_org_if_empty(&store, &config).unwrap(), 14);
+    assert_eq!(seed_org_if_empty(&store, &config).unwrap(), 15);
     let nodes = store.org_list().unwrap();
-    assert_eq!(nodes.len(), 14);
+    assert_eq!(nodes.len(), 15);
     let cos = nodes.iter().find(|n| n.id == "cos").unwrap();
     assert_eq!(cos.kind, task_core::OrgKind::Secretary);
     assert_eq!(cos.parent_id, None);
@@ -135,7 +135,7 @@ genre = "conversation"
     store.org_upsert(&renamed).unwrap();
     assert_eq!(seed_org_if_empty(&store, &config).unwrap(), 0);
     assert_eq!(store.org_get("cos").unwrap().unwrap().name, "本人");
-    assert_eq!(store.org_list().unwrap().len(), 14);
+    assert_eq!(store.org_list().unwrap().len(), 15);
 }
 
 /// 監査 D-4: `org_include` の並びに木としての不整合（種類の順序。`Config::load` は循環・順序までは
@@ -1107,6 +1107,7 @@ auth = "publickey"
     let store = SqliteStore::open(&config.db.path).unwrap_or_else(|e| panic!("open store: {e}"));
     let now = OffsetDateTime::now_utc();
     let task = task_core::Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,

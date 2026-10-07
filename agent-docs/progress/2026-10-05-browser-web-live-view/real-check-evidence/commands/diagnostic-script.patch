@@ -1,0 +1,48 @@
+--- /local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform/scripts/dev/browser-web-live-check.sh	2026-10-06 01:39:26.599476185 +0000
++++ browser-web-live-check.patched.sh	2026-10-06 03:56:29.187706369 +0000
+@@ -7,7 +7,7 @@
+ fi
+ umask 077
+ 
+-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
++ROOT=/local/celeris/data/workspaces/01M46W97H391DSFW1XJ745W0G9/repos/agent-platform  # PATCH(fable): copy runs outside the tree
+ EVIDENCE=${CELERIS_BROWSER_EVIDENCE_DIR:?set CELERIS_BROWSER_EVIDENCE_DIR}
+ LAUNCHER_CONFIG=${CELERIS_BROWSER_TEST_LAUNCHER_CONFIG:?set CELERIS_BROWSER_TEST_LAUNCHER_CONFIG}
+ DAEMON_CONFIG=${CELERIS_BROWSER_TEST_DAEMON_CONFIG:?set CELERIS_BROWSER_TEST_DAEMON_CONFIG}
+@@ -120,6 +120,7 @@
+ os.chmod(path, 0o600)
+ sock.listen(128)
+ os.dup2(sock.fileno(), 3, inheritable=True)
++os.set_inheritable(3, True)  # PATCH(fable): dup2(3,3) keeps CLOEXEC when the socket is already fd 3
+ account = pwd.getpwnam(user)
+ os.setgroups([])
+ os.setgid(account.pw_gid)
+@@ -224,6 +225,8 @@
+     body = {"title":"loopback browser live check", "objective":f"Visit {page}, read #inside, attempt navigation to {denied_origin} and report that egress denied it; then wait for this check to finish.", "skills":["browser-enabled"], "genre":"coding", "requirements":{"browser":{"allowed_domains":[page]}}, "acceptance":[{"type":"reviewer","text":"loopback browser check completed"}]}
+     task = checked("task POST", api+"/tasks", "POST", body, auth=True, expected=201)
+     task_id = task["id"]
++    # PATCH(fable, diagnostic): dispatch refuses browser runs without a stored task policy (browser_policy_required).
++    checked("task browser policy PUT", api+f"/tasks/{task_id}/browser/policy", "PUT", {"policy_id":"real-check-loopback","revision":1,"domain_mode":"common_hosts","network_domains":[page],"allowed_actions":["navigate","snapshot","extract","click","scroll"],"approval_actions":[],"credential_policy_ids":[]}, auth=True)
+     log.append({"task_id":task_id,"allowed_domains":[page]})
+     password = pathlib.Path(password_file).read_text().strip()
+     checked("web login", web+"/login", "POST", {"password":password}, origin=web)
+@@ -248,13 +251,17 @@
+     checked("live view", web+run["live_path"])
+     control_url = web+f"/browser/control/{task_id}/{run_id}/{session_id}"
+     state = checked("control status", control_url)["status"]
+-    control = checked("takeover", control_url, "POST", {"csrf":csrf,"expected_version":state["version"],"idempotency_key":"real-check-takeover","command":{"kind":"takeover","ttl_secs":60}}, origin=web)["status"]
++    # PATCH(fable, diagnostic): takeover is only valid from Paused (ControlPhase); pause first.
++    paused = checked("pause", control_url, "POST", {"csrf":csrf,"expected_version":state["version"],"idempotency_key":"real-check-pause","command":{"kind":"pause"}}, origin=web)["status"]
++    log.append({"pause_phase": paused.get("phase"), "agent_phase_before": state.get("phase")})
++    control = checked("takeover", control_url, "POST", {"csrf":csrf,"expected_version":paused["version"],"idempotency_key":"real-check-takeover","command":{"kind":"takeover","ttl_secs":60}}, origin=web)["status"]
+     if control["phase"] not in ("paused","human_control"): raise AssertionError("lease not acquired")
+     checked("release", control_url+"/release", "POST", {"csrf":csrf}, origin=web)
+     # Open a trusted, non-credential decision wait on the real run. This is independent
+     # of when the local ACP harness decides to request human input.
++    # PATCH(fable, diagnostic): NewBrowserWait.validate requires an exact https origin; the http loopback page origin is rejected (422 origin).
+     wait_body = {"run_id":run_id,"session_id":session_id,"reason":"waiting_for_approval",
+-      "origin":page,"purpose":"real-check decision route","operation":{"intent_id":"real-check-intent","action":"navigate"},
++      "origin":page.replace("http://","https://",1),"purpose":"real-check decision route","operation":{"intent_id":"real-check-intent","action":"navigate"},
+       "policy_revision":1,"policy_hash":"real-check-policy","owner_id":"owner","resume_key":"real-check-wait"}
+     wait = checked("wait open", api+f"/tasks/{task_id}/browser/requests", "POST", wait_body, auth=True, expected=201)["wait"]
+     listed = checked("wait listed", api+f"/tasks/{task_id}/browser/waits", auth=True)["items"]

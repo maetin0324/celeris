@@ -69,6 +69,15 @@ impl WorkerAdapter for TieredAdapter {
             credential_error: self.credential_error.clone(),
         }))
     }
+    /// ADR 2026-10-06 model-role-assignments D2: `models` だけを差し替えた複製（基盤アダプタ・account は同じ）。
+    fn with_tier_models(&self, models: TierModels) -> Option<Arc<dyn WorkerAdapter>> {
+        Some(Arc::new(Self {
+            base: self.base.clone(),
+            models,
+            account_id: self.account_id.clone(),
+            credential_error: self.credential_error.clone(),
+        }))
+    }
     fn with_container(&self, plan: crate::container::SharedPlan) -> Option<Arc<dyn WorkerAdapter>> {
         Some(Arc::new(Self {
             base: self.base.with_container(plan)?,
@@ -86,5 +95,54 @@ impl WorkerAdapter for TieredAdapter {
             account_id: self.account_id.clone(),
             credential_error: self.credential_error.clone(),
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::FakeAdapter;
+    use task_core::model_routing::ModelBinding;
+
+    fn binding(model: &str) -> ModelBinding {
+        ModelBinding {
+            name: model.into(),
+            model_id: Some(model.into()),
+            unavailable_reason: None,
+            reasoning_effort: None,
+        }
+    }
+
+    /// ADR 2026-10-06 model-role-assignments D2: `with_tier_models` は `models` だけを差し替えた複製を返し、
+    /// 元のアダプタは変わらない。
+    #[test]
+    fn with_tier_models_replaces_only_the_bindings() {
+        let mut old = TierModels::new();
+        old.insert(Tier::Cheap, binding("old"));
+        let adapter = TieredAdapter {
+            base: Arc::new(FakeAdapter::new(vec![])),
+            models: old,
+            account_id: Some("acct".into()),
+            credential_error: None,
+        };
+        let mut new = TierModels::new();
+        new.insert(Tier::Cheap, binding("new"));
+        let replaced = adapter.with_tier_models(new).expect("tiered supports it");
+        assert_eq!(replaced.id(), "fake");
+        assert_eq!(replaced.account_id(), Some("acct"));
+        assert_eq!(
+            replaced.model_for_tier(Tier::Cheap),
+            Ok(Some("new".to_string()))
+        );
+        assert_eq!(
+            adapter.model_for_tier(Tier::Cheap),
+            Ok(Some("old".to_string()))
+        );
+        // 束縛を持たない基盤アダプタの既定は None。
+        assert!(
+            FakeAdapter::new(vec![])
+                .with_tier_models(TierModels::new())
+                .is_none()
+        );
     }
 }

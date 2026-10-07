@@ -9,8 +9,8 @@ use task_worker::FakeAdapter;
 
 use super::api::{RunningApi, start_api};
 use super::bootstrap::{
-    build_dispatcher, install_worker_db_guard, refuse_production_db_in_worker_run,
-    warn_if_db_on_network_filesystem,
+    browser_launcher_refuses_test_loopback, build_dispatcher, install_worker_db_guard,
+    refuse_production_db_in_worker_run, warn_if_db_on_network_filesystem,
 };
 use super::clusters::{ClusterMasters, spawn_control_path_inspection, wire_cluster_liveness_hooks};
 use super::services::{
@@ -165,7 +165,11 @@ pub async fn run(config: Config, opts: RunOptions) -> Result<Exit, DaemonError> 
                             live_sessions: Some(Arc::clone(&live_sessions)),
                             // ADR-0116 D5: `[browser] runtime`（既定 `"daemon"`）。`Config::validate` が
                             // `runtime = "launcher"` のとき `launcher_socket` の有無を既に確かめている。
-                            runtime: config.browser.runtime_kind(),
+                            // 付記 E2: 本番の daemon は試験専用 loopback 許可の launcher を使わない。
+                            runtime: config.browser.runtime_kind(
+                                config.browser.runtime == "launcher"
+                                    && browser_launcher_refuses_test_loopback(&config),
+                            ),
                         },
                     );
                     // Phase F5-fix6: `daemon_instances` の自分の行を持つので、居なくなったデーモンの

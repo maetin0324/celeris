@@ -23,7 +23,7 @@ pub mod browser_wait;
 /// ADR-0090: クラスタ job（PBS / Slurm）の durable wait（`cluster_job_waits`・poll の出力の parser）。
 pub mod cluster_job;
 pub use browser::{
-    AgentBrowserActionPolicy, BrowserAction, BrowserCapability, BrowserDomainMode,
+    AgentBrowserActionPolicy, AllowedOrigin, BrowserAction, BrowserCapability, BrowserDomainMode,
     BrowserPolicyBinding, BrowserPolicyError, BrowserRun, BrowserRunState, BrowserTaskPolicy,
     EffectiveBrowserPolicy,
 };
@@ -96,7 +96,7 @@ pub mod tree_metrics;
 pub mod workspace_config;
 pub mod write_set;
 
-pub use accounts::{AccountAdapter, RateLimitObservation, RateWindow};
+pub use accounts::{AccountAdapter, AccountPoolSetting, RateLimitObservation, RateWindow};
 pub use approval::{Approval, ApprovalId, ApprovalStore, Decision, StandingRule, StandingRuleId};
 pub use artifacts::{
     ARTIFACTS_DIR_NAME, SHARED_ARTIFACTS_PREFIX, artifacts_dir_for, artifacts_rel_for,
@@ -126,9 +126,9 @@ pub use harness::{
 // `KnowledgeMount` は ADR-0047（Phase 61）の型をそのまま使う（Phase 59 追記）。
 pub use profile::resolve as resolve_profile;
 pub use profile::{
-    CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs, Permissions,
-    Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry, is_known_tool,
-    is_valid_skill, validate_profile,
+    BudgetPrefs, CLUSTER_TOOL_PREFIX, COS_ID, COS_NAME, EffectiveProfile, HarnessPrefs, ModelPrefs,
+    Permissions, Profile, ProfileError, ProfileRun, ReviewPrefs, TOOL_VOCABULARY, ancestry,
+    is_known_tool, is_valid_skill, validate_profile,
 };
 // ---- ADR-0047（Phase 61）: 知識ベース ----
 pub use knowledge::{
@@ -148,16 +148,17 @@ pub use message::{
     is_conversation, is_milestone_review, milestone_review_of,
 };
 pub use model::{
-    ArtifactRef, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY, Event,
-    FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS,
+    ArtifactRef, BrowserRequirements, Budget, Check, CreatedOrigin, Criterion, DEFAULT_PRIORITY,
+    Event, FailedWorkUnitCheck, GenreSpec, HARNESS_ADAPTERS, Lease, MAX_LABELS, MAX_SKILLS,
     PRIORITY_LABELS, PROGRESS_DETAIL_MAX_BYTES, PhaseCheckResult, PhaseMerged, ProgressFields,
     ProgressKind, ProposedMilestone, RoleSpec, RunMetrics, RunRole, Status, Task, TaskCategory,
-    TaskId, TaskKind, TaskMode, TaskRouting, Tier, TierSource, Usage, WorkerHint, WorkspaceMode,
-    WorkspaceSpec, artifact_entry_description, artifact_entry_name, expand_home, home_dir,
-    is_valid_label, normalize_labels, normalize_skills, priority_from_label, priority_label,
-    validate_human_checks_have_deliverable,
+    TaskId, TaskKind, TaskMode, TaskRequirements, TaskRouting, Tier, TierSource, ToolPolicyKind,
+    Usage, WorkerHint, WorkspaceMode, WorkspaceSpec, artifact_entry_description,
+    artifact_entry_name, expand_home, home_dir, is_valid_label, normalize_labels, normalize_skills,
+    priority_from_label, priority_label, validate_human_checks_have_deliverable,
 };
 // ---- ADR-0061（Phase 104）: harness routing 基盤（cost 推定・タスク特性ベースの routing）----
+pub mod model_catalog;
 pub mod model_router;
 pub mod pricing;
 pub mod routing;
@@ -208,9 +209,10 @@ pub use repos::{
 };
 pub use store::{
     ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
-    ListFilter, ListOrder, LockCounts, Page, ProjectPlanApply, ProjectPlanMilestoneChange,
-    SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption,
-    backup_database, event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
+    ListFilter, ListOrder, LockCounts, ModelCatalogStore, Page, ProjectPlanApply,
+    ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore,
+    TreeAdoption, backup_database, event_row_schema_value, integrity_check, is_busy_error,
+    is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----
@@ -288,6 +290,13 @@ pub use pause::{
 };
 
 pub mod model_routing;
+// ---- ADR 2026-10-07（coding harness の既定）: model family と coding の既定 adapter ----
+pub mod coding_harness;
+pub mod model_family;
+pub use coding_harness::{
+    AdapterChoice, AdapterPolicy, CodingHarness, coding_harness_default_adapter,
+};
+pub use model_family::{FamilyBasis, FamilyDecision, ModelFamily, derive_family};
 // ---- ADR-0069（Phase 114）: routing の 4 層（lane policy・retry/escalation・監査）----
 pub mod model_policy;
 pub mod retry_policy;

@@ -115,6 +115,16 @@ pub fn decide(org: &[OrgNode], task: &Task) -> Assignment {
             continue;
         }
         let effective = task_core::resolve_profile(org, &node.id);
+        // browser-enabled を掲げる専用 node は通常 task の候補にしない。
+        // 空 skill の同点判定でも browser-execution に流さないため、採点前に除外する。
+        if !task_core::browser::requests_browser(&task.skills)
+            && effective
+                .skills
+                .iter()
+                .any(|skill| skill == "browser-enabled")
+        {
+            continue;
+        }
         if task_core::browser::requests_browser(&task.skills)
             && effective
                 .browser

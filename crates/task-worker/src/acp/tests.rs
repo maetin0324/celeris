@@ -20,9 +20,17 @@ struct RecordingSink {
     sessions: Mutex<Vec<String>>,
     /// ADR-0054 D1（Phase 67）: `session_resume_failed` の呼び出し（理由）。
     resume_failures: Mutex<Vec<String>>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `policy_violation` の呼び出し。
+    violations: Mutex<Vec<crate::tool_policy::ToolPolicyViolation>>,
 }
 
 impl EventSink for RecordingSink {
+    fn policy_violation(&self, violation: &crate::tool_policy::ToolPolicyViolation) {
+        self.violations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(violation.clone());
+    }
     fn progress(&self, msg: &str) {
         self.progress
             .lock()
@@ -1278,4 +1286,149 @@ printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
     let methods = std::fs::read_to_string(dir.path().join("methods.log")).unwrap();
     assert!(methods.contains("\"method\":\"session/new\""), "{methods}");
     assert!(sink.sessions.lock().unwrap().is_empty());
+}
+
+// ---- ADR 2026-10-07-worker-no-subagents-no-llm-cli: opencode の `task` 道具の既定無効化と検出 ----
+
+/// D3: 偽 ACP agent が受け取る `OPENCODE_CONFIG_CONTENT` に `tools.task == false` が入る。運用側の env が
+/// 既に JSON を持っていればその鍵は保たれ、`tools.task: true` と書かれていても false に倒れる。
+#[tokio::test]
+async fn opencode_config_content_disables_the_task_tool_by_default() {
+    let script = format!(
+        r#"printf '%s' "$OPENCODE_CONFIG_CONTENT" > overlay.json
+{HANDSHAKE}
+read -r _prompt
+printf '%s' '{{"summary":"ok","evidence":[]}}' > artifacts/result.json
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+"#
+    );
+    // env 無し → `{"tools":{"task":false}}` だけ。
+    let dir = tempfile::tempdir().unwrap();
+    let config = stub_acp(dir.path(), &script);
+    assert_eq!(config.subagents, crate::tool_policy::SubagentPolicy::Deny);
+    AcpAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "no-env",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(overlay, serde_json::json!({"tools": {"task": false}}));
+
+    // 運用側の JSON に重ねる（他の鍵は保つ。`task: true` は倒す）。
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_acp(dir.path(), &script);
+    config.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"model":"opencode/celeris/frontier","tools":{"task":true,"webfetch":true}}"#.into(),
+    )];
+    AcpAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "with-env",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(overlay["model"], "opencode/celeris/frontier");
+    assert_eq!(overlay["tools"]["webfetch"], true);
+    assert_eq!(overlay["tools"]["task"], false);
+
+    // `subagents = "allow"` なら env に触らない（運用側の値がそのまま届く）。
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_acp(dir.path(), &script);
+    config.subagents = crate::tool_policy::SubagentPolicy::Allow;
+    config.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"tools":{"task":true}}"#.into(),
+    )];
+    AcpAdapter::new(config)
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "allowed",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(overlay, serde_json::json!({"tools": {"task": true}}));
+}
+
+/// D3 + routing: provider header の overlay（`configure_acp`）と `tools.task=false` が同じ JSON に同居する。
+#[tokio::test]
+async fn the_task_tool_override_composes_with_the_routing_context_overlay() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_acp(
+        dir.path(),
+        &format!(
+            r#"printf '%s' "$OPENCODE_CONFIG_CONTENT" > overlay.json
+{HANDSHAKE}
+read -r _prompt
+printf '%s' '{{"summary":"ok","evidence":[]}}' > artifacts/result.json
+printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
+"#
+        ),
+    );
+    config.model = Some("celeris-proxy/celeris/cheap".into());
+    config.env = vec![(
+        "OPENCODE_CONFIG_CONTENT".into(),
+        r#"{"provider":{"celeris-proxy":{"options":{"baseURL":"http://127.0.0.1:18100/v1"}}}}"#
+            .into(),
+    )];
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.routing_context_ref = Some("daemon-issued-ref".into());
+    AcpAdapter::new(config)
+        .run(req, "compose", default_limits(), &RecordingSink::default())
+        .await
+        .unwrap();
+    let overlay: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(dir.path().join("overlay.json")).unwrap()).unwrap();
+    assert_eq!(
+        overlay["provider"]["celeris-proxy"]["options"]["headers"]["x-celeris-routing-context"],
+        "daemon-issued-ref"
+    );
+    assert_eq!(overlay["tools"]["task"], false);
+}
+
+/// D5: `tool_call` の題名が subagent 道具（opencode の `task`）なら検出、`rawInput.command` に別 LLM CLI が
+/// あれば検出。普通の `Bash` は出さない。
+#[test]
+fn acp_tool_calls_that_spawn_subagents_or_launch_llm_clis_are_reported() {
+    use task_core::ToolPolicyKind;
+    let sink = RecordingSink::default();
+    let mut chunks = ChunkBuffer::default();
+    for update in [
+        serde_json::json!({"sessionUpdate":"tool_call","title":"Bash","status":"in_progress","rawInput":{"command":"cargo test"}}),
+        serde_json::json!({"sessionUpdate":"tool_call","title":"task","status":"pending","rawInput":{"subagent_type":"general","description":"review"}}),
+        serde_json::json!({"sessionUpdate":"tool_call","title":"Bash","status":"in_progress","rawInput":{"command":"gemini -p 'summarize'"}}),
+        serde_json::json!({"sessionUpdate":"tool_call_update","title":"Bash","status":"completed","content":[{"type":"content","content":{"type":"text","text":"ok"}}]}),
+    ] {
+        let value = serde_json::json!({"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":update}});
+        handle_notification(&value, &sink, &mut chunks);
+    }
+    let violations = sink
+        .violations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    assert_eq!(
+        violations
+            .iter()
+            .map(|v| (v.kind, v.tool.as_str(), v.matched.as_str()))
+            .collect::<Vec<_>>(),
+        vec![
+            (ToolPolicyKind::SubagentTool, "task", "task"),
+            (ToolPolicyKind::LlmCli, "Bash", "gemini"),
+        ],
+        "{violations:#?}"
+    );
 }

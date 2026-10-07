@@ -186,6 +186,7 @@ impl CosChatContext {
     pub fn transient_task(&self, workspace: &Path, budget: Budget, now: OffsetDateTime) -> Task {
         Task {
             id: TaskId::new(),
+            requirements: Default::default(),
             parent_id: None,
             kind: TaskKind::Execute,
             title: format!("CoS chat {}", self.thread_id),

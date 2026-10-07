@@ -192,6 +192,7 @@ fn execute_one(
 ) -> Result<ExecutedAction, String> {
     match action {
         ConsoleAction::CreateTask {
+            requirements,
             features,
             tier,
             title,
@@ -213,6 +214,7 @@ fn execute_one(
             roles,
             genres,
             known_clusters,
+            requirements,
             title,
             objective,
             acceptance,
@@ -252,6 +254,7 @@ fn create_task_action(
     roles: &[task_core::RoleSpec],
     genres: &[task_core::GenreSpec],
     known_clusters: &[String],
+    requirements: &task_core::TaskRequirements,
     title: &str,
     objective: &str,
     acceptance: &[String],
@@ -347,6 +350,7 @@ fn create_task_action(
         None => (None, None, None),
     };
     let spec = NewTaskSpec {
+        requirements: requirements.clone(),
         title: title.to_string(),
         objective: objective.to_string(),
         acceptance: acceptance

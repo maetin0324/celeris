@@ -288,7 +288,10 @@ pub fn cooldown_for_failure(
         latest = Some(latest.map_or(resets_at, |l| l.max(resets_at)));
     };
     if let Some(obs) = state.and_then(|s| s.usage.as_ref()) {
-        for w in [obs.five_hour, obs.seven_day].into_iter().flatten() {
+        for w in [obs.five_hour, obs.seven_day, obs.one_month]
+            .into_iter()
+            .flatten()
+        {
             if effective_utilization(w, now) >= EXHAUSTED_UTILIZATION {
                 consider(w.resets_at);
             }
@@ -315,6 +318,8 @@ pub enum ExcludedReason {
     Cooldown,
     FiveHourExhausted,
     SevenDayExhausted,
+    /// opencode go の 1 か月窓が枠切れ（ADR 2026-10-06 D1）。
+    OneMonthExhausted,
     Rejected,
 }
 
@@ -390,6 +395,11 @@ pub fn evaluate(
     if u7 >= EXHAUSTED_UTILIZATION {
         return excluded(ExcludedReason::SevenDayExhausted);
     }
+    let one_month = obs.and_then(|o| o.one_month);
+    let um = one_month.map_or(0.0, |w| effective_utilization(w, now));
+    if um >= EXHAUSTED_UTILIZATION {
+        return excluded(ExcludedReason::OneMonthExhausted);
+    }
 
     let score = if obs.is_none() {
         1.0 - IN_USE_PENALTY * c.in_use as f64
@@ -405,7 +415,9 @@ pub fn evaluate(
             }
             _ => 1.0 - u7,
         };
-        h5.min(h7) - IN_USE_PENALTY * c.in_use as f64
+        // 観測できた窓だけの最小値（1 か月窓はペース配分をせず、残りそのもの。D1）。
+        let hm = one_month.map_or(1.0, |_| 1.0 - um);
+        h5.min(h7).min(hm) - IN_USE_PENALTY * c.in_use as f64
     };
     AccountEvaluation {
         id,
@@ -514,7 +526,16 @@ pub fn measured_remaining(obs: &RateLimitObservation, now: i64) -> Option<f64> {
     if now < obs.observed_at || now - obs.observed_at > 300 {
         return None;
     }
-    let windows = [obs.five_hour?, obs.seven_day?];
+    // claude / codex は 5 時間と 7 日の両方が揃うことを要求する（従来どおり）。1 か月窓を持つ観測
+    // （opencode go。ADR 2026-10-06 D1）は観測できた窓だけを使い、最低 1 つを要求する。
+    let windows: Vec<RateWindow> = if obs.one_month.is_some() {
+        [obs.five_hour, obs.seven_day, obs.one_month]
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        vec![obs.five_hour?, obs.seven_day?]
+    };
     if windows.iter().any(|w| {
         w.resets_at <= now || !w.utilization.is_finite() || !(0.0..=1.0).contains(&w.utilization)
     }) {
@@ -556,6 +577,7 @@ pub fn quota_source_label(adapter: AccountAdapter) -> &'static str {
     match adapter {
         AccountAdapter::ClaudeCode => "claude-oauth",
         AccountAdapter::Codex => "codex-oauth",
+        AccountAdapter::OpencodeGo => "opencode-go",
     }
 }
 

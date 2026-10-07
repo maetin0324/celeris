@@ -21,12 +21,14 @@ const SUBUID: u32 = 5_000_000;
 #[derive(Default)]
 struct Log {
     actions: Vec<(Verb, ActionArgs)>,
+    started: usize,
     stopped: usize,
 }
 
 struct FakeBackend {
     facts: SessionFacts,
     log: Arc<Mutex<Log>>,
+    test_loopback: Vec<String>,
 }
 
 struct FakeSession {
@@ -47,6 +49,7 @@ impl SessionBackend for FakeBackend {
         let pid = child.id() as i32;
         let starttime =
             crate::browser_runtime::process_starttime(pid).ok_or(ErrorCode::LaunchFailed)?;
+        self.log.lock().expect("lock").started += 1;
         Ok(Launched {
             session: Box::new(FakeSession {
                 facts: self.facts.clone(),
@@ -61,6 +64,9 @@ impl SessionBackend for FakeBackend {
             ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
                 .map_err(|_| ErrorCode::LaunchFailed)?,
         })
+    }
+    fn test_loopback_allow(&self) -> Vec<String> {
+        self.test_loopback.clone()
     }
 }
 
@@ -112,6 +118,10 @@ struct FakeLauncher {
 }
 
 fn fake_launcher(facts: SessionFacts) -> FakeLauncher {
+    fake_launcher_with(facts, Vec::new())
+}
+
+fn fake_launcher_with(facts: SessionFacts, test_loopback: Vec<String>) -> FakeLauncher {
     let dir = tempfile::tempdir().expect("tempdir");
     let sock = dir.path().join("launcher.sock");
     let registry = Registry::open(dir.path().join("state"), "inst-test").expect("registry");
@@ -125,6 +135,7 @@ fn fake_launcher(facts: SessionFacts) -> FakeLauncher {
         Arc::new(FakeBackend {
             facts,
             log: Arc::clone(&log),
+            test_loopback,
         }),
         registry,
     )
@@ -429,6 +440,7 @@ fn default_runtime_is_the_daemon_path_and_launcher_skips_local_binaries() {
     // launcher 経路の binary は launcher 側にあり、到達性は接続時に確かめる。
     let launcher = cfg(super::super::BrowserRuntimeKind::Launcher {
         socket: dir.path().join("launcher.sock"),
+        refuse_test_loopback: true,
     });
     assert!(super::super::isolated_runtime_ready(Some(&launcher)).is_ok());
 }
@@ -646,4 +658,280 @@ fn launcher_runtime_carries_the_launcher_binding_into_the_proof() {
     ));
     drop(runtime);
     assert_eq!(wait_stopped(&launcher.log), 1);
+}
+
+// ---- ADR 2026-10-06-browser-action-socket-path: action socket の path と shim の設定 ----
+
+/// 本番相当の深さ（`/local/celeris/data/workspaces/<task>/runs/<run>/browser-fallback-N`）。
+/// 旧来の `<session dir>.action.sock` はこれで 107 byte を超えた。
+fn deep_session_dir() -> PathBuf {
+    PathBuf::from(
+        "/local/celeris/data/workspaces/01M47QXZR0QMCYZM9KAZC81BCD/wu/run-path/repos/agent-platform\
+         /01M47NP5QD1DHHHADJ84BG9HKH/runs/01M47NP5VDFZ4K4123QRBC0V8H/browser-fallback-2",
+    )
+}
+
+#[test]
+fn action_socket_path_is_short_and_fixed_length_for_a_deep_workspace() {
+    let deep = deep_session_dir();
+    assert!(
+        deep.with_extension("action.sock").as_os_str().len() > crate::browser_action::SUN_PATH_MAX
+    );
+    let a = crate::browser_action::action_socket_path(&deep).expect("socket path");
+    let b = crate::browser_action::action_socket_path(&deep.with_file_name("browser"))
+        .expect("socket path");
+    assert!(
+        a.as_os_str().len() <= crate::browser_action::SUN_PATH_MAX,
+        "{a:?}"
+    );
+    assert_eq!(a.as_os_str().len(), b.as_os_str().len());
+    assert_ne!(a, b, "session dir ごとに別の socket");
+    assert_eq!(
+        a,
+        crate::browser_action::action_socket_path(&deep).expect("again"),
+        "同じ session dir なら同じ path"
+    );
+    // 実際に bind できる（sun_path に収まる）。
+    let listener = std::os::unix::net::UnixListener::bind(&a).expect("bind short socket");
+    drop(listener);
+    // 前の run の socket が残っていても次は同じ path を使える。
+    assert_eq!(
+        crate::browser_action::action_socket_path(&deep).expect("stale removed"),
+        a
+    );
+    assert!(!a.exists());
+}
+
+#[test]
+fn action_socket_path_over_the_limit_fails_before_bind_with_path_and_length() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let base = dir.path().join("b".repeat(100));
+    let err = crate::browser_action::action_socket_path_in(&base, &deep_session_dir())
+        .expect_err("too long");
+    let AdapterError::Other(message) = err else {
+        panic!("unexpected error kind");
+    };
+    let expected = base.join(format!(
+        "celeris-browser-{}",
+        nix::unistd::geteuid().as_raw()
+    ));
+    assert!(
+        message.contains(&expected.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("bytes"), "{message}");
+    assert!(message.contains("107"), "{message}");
+    assert!(!base.exists(), "長すぎる path では何も作らない");
+}
+
+#[test]
+fn action_socket_dir_must_be_private_to_this_user() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sockets = dir.path().join(format!(
+        "celeris-browser-{}",
+        nix::unistd::geteuid().as_raw()
+    ));
+    std::fs::create_dir(&sockets).expect("mkdir");
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o777)).expect("chmod");
+    assert!(crate::browser_action::action_socket_path_in(dir.path(), &deep_session_dir()).is_err());
+    std::fs::set_permissions(&sockets, std::fs::Permissions::from_mode(0o700)).expect("chmod");
+    assert!(crate::browser_action::action_socket_path_in(dir.path(), &deep_session_dir()).is_ok());
+}
+
+fn prepared(origin: &str) -> crate::browser_policy::PreparedBrowserPolicy {
+    let grant = task_core::BrowserCapability {
+        allowed_domains: vec![origin.into()],
+        ..Default::default()
+    };
+    let task = task_core::BrowserTaskPolicy {
+        policy_id: "launcher-shim".into(),
+        revision: 1,
+        domain_mode: task_core::BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: vec![origin.into()],
+        allowed_actions: vec![
+            task_core::BrowserAction::Navigate,
+            task_core::BrowserAction::Snapshot,
+        ],
+        approval_actions: vec![],
+        credential_policy_ids: vec![],
+        artifact_policy_id: None,
+    };
+    crate::browser_policy::prepare(&grant, Some(&task), super::super::SUPPORTED_VERSION)
+        .expect("policy")
+}
+
+fn run_shim(cli: &std::path::Path, args: &[&str]) -> std::process::Output {
+    std::process::Command::new("python3")
+        .arg(cli)
+        .args(args)
+        .output()
+        .expect("python3")
+}
+
+/// D6: launcher 経路が書く config.json/policy.json を実の shim（`browser_cli.py`）が受け入れ、
+/// 許可 origin の navigate は偽 launcher に Open として届き、不許可 origin は拒否される。
+#[test]
+fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
+    for (n, (origin, allowed, denied)) in [
+        ("example.com", "https://example.com/a", "https://evil.test/"),
+        (
+            "http://127.0.0.1:17730",
+            "http://127.0.0.1:17730/",
+            "http://127.0.0.1:17731/",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let policy = prepared(origin);
+        let launcher = fake_launcher(good_facts());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime_dir = dir
+            .path()
+            .join("runs")
+            .join(format!("run-{n}"))
+            .join("browser");
+        let (cli, action_socket) =
+            write_shim_files(&runtime_dir, "celeris-test-session", &policy).expect("shim files");
+        assert!(action_socket.as_os_str().len() <= crate::browser_action::SUN_PATH_MAX);
+
+        let config: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(runtime_dir.join("config.json")).expect("config"),
+        )
+        .expect("config json");
+        let policy_bytes = std::fs::read(runtime_dir.join("policy.json")).expect("policy");
+        assert_eq!(
+            config["policy_sha256"],
+            format!(
+                "{:x}",
+                <sha2::Sha256 as sha2::Digest>::digest(&policy_bytes)
+            )
+        );
+        assert_eq!(config["action_socket"], action_socket.display().to_string());
+        let file: task_core::AgentBrowserActionPolicy =
+            serde_json::from_slice(&policy_bytes).expect("policy json");
+        assert!(file.allow.iter().any(|a| a == "launch"), "{:?}", file.allow);
+        // shim の load_policy そのものに通す。
+        let check = std::process::Command::new("python3")
+            .arg("-c")
+            .arg(
+                "import importlib.util,json,sys,pathlib\n\
+                 spec=importlib.util.spec_from_file_location('cli',sys.argv[1])\n\
+                 cli=importlib.util.module_from_spec(spec);spec.loader.exec_module(cli)\n\
+                 c=json.loads((pathlib.Path(sys.argv[1]).parent/'config.json').read_text())\n\
+                 sys.exit(0 if cli.load_policy(c) is not None else 3)",
+            )
+            .arg(&cli)
+            .output()
+            .expect("python3");
+        assert!(
+            check.status.success(),
+            "load_policy rejected the launcher files: {}",
+            String::from_utf8_lossy(&check.stderr)
+        );
+
+        let allowed_actions: task_core::AgentBrowserActionPolicy =
+            serde_json::from_slice(&policy.action_policy).expect("allow");
+        let (runtime, _) = LauncherRuntime::start(
+            &launcher.sock,
+            "task-1",
+            &format!("run-shim-{n}"),
+            session_policy(
+                &allowed_actions.allow,
+                policy.allowed_domains(),
+                Duration::from_secs(600),
+            ),
+        )
+        .expect("start");
+        let runtime = Arc::new(runtime);
+        let server = ActionServer::start_with(
+            &action_socket,
+            Arc::new(LauncherExecutor {
+                runtime: Arc::clone(&runtime),
+            }),
+            policy.allowed_domains().to_vec(),
+            allowed_actions.allow.clone(),
+            Arc::new(InMemoryGate::new()),
+        )
+        .expect("action server");
+
+        let opened = run_shim(&cli, &["open", allowed]);
+        assert!(
+            opened.status.success(),
+            "{origin}: {}",
+            String::from_utf8_lossy(&opened.stdout)
+        );
+        let blocked = run_shim(&cli, &["open", denied]);
+        assert_eq!(blocked.status.code(), Some(2), "{origin}");
+        assert!(
+            String::from_utf8_lossy(&blocked.stdout).contains("not permitted"),
+            "{}",
+            String::from_utf8_lossy(&blocked.stdout)
+        );
+        // shim を経ずに socket へ直接来た不許可 origin も daemon の検査で止まる。
+        assert_eq!(shim_request(&action_socket, "open", &[denied])["status"], 2);
+        drop(server);
+        assert!(!action_socket.exists());
+        {
+            let log = launcher.log.lock().expect("lock");
+            assert_eq!(log.actions.len(), 1, "{origin}");
+            assert_eq!(log.actions[0].0, Verb::Open);
+        }
+        drop(runtime);
+        assert_eq!(wait_stopped(&launcher.log), 1);
+    }
+}
+
+// ---- 付記 E2（daemon 側）: 本番の daemon は試験専用 loopback 許可の launcher を使わない ----
+
+#[test]
+fn egress_test_loopback_production_daemon_refuses_test_launcher() {
+    let test_launcher = fake_launcher_with(good_facts(), vec!["127.0.0.1:18080".into()]);
+    // 本番（または判定不能）の daemon: hello で申告を見て、session を作らずに拒否する。
+    let err = LauncherRuntime::start_guarded(&test_launcher.sock, true, "t", "r", policy())
+        .expect_err("production daemon must refuse");
+    assert_eq!(err, UNAVAILABLE);
+    assert_eq!(test_launcher.log.lock().expect("lock").started, 0);
+    // 本番でない daemon は同じ launcher を使える。
+    let (runtime, _) =
+        LauncherRuntime::start_guarded(&test_launcher.sock, false, "t", "r", policy())
+            .expect("non-production daemon");
+    drop(runtime);
+    assert_eq!(test_launcher.log.lock().expect("lock").started, 1);
+
+    // 試験許可の無い（既定の）launcher は本番の daemon でも使える。
+    let plain = fake_launcher(good_facts());
+    let (runtime, _) = LauncherRuntime::start_guarded(&plain.sock, true, "t", "r", policy())
+        .expect("default launcher");
+    drop(runtime);
+}
+
+#[test]
+fn egress_test_loopback_production_daemon_refuses_launcher_without_hello() {
+    use crate::browser_launcher::Response;
+    use crate::browser_launcher::protocol::{read_frame, write_message};
+    // hello を知らない（旧版の）launcher: 未知の要求に bad_request を返して閉じる。
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("old.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&sock).expect("bind");
+    let server = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept");
+        let body = read_frame(&mut stream, 64 * 1024).expect("frame");
+        let req: serde_json::Value = serde_json::from_slice(&body).expect("json");
+        write_message(
+            &mut stream,
+            &Response::Error {
+                code: ErrorCode::BadRequest,
+            },
+            64 * 1024,
+        )
+        .expect("write");
+        req["type"].as_str().map(str::to_owned)
+    });
+    let err = LauncherRuntime::start_guarded(&sock, true, "t", "r", policy())
+        .expect_err("unanswered hello must refuse");
+    assert_eq!(err, UNAVAILABLE);
+    assert_eq!(server.join().expect("join").as_deref(), Some("hello"));
 }

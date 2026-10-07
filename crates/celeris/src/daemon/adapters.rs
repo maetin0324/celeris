@@ -9,7 +9,7 @@ use task_ops::daemon::ProviderLive;
 use task_worker::{
     AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter,
     ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig,
-    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, WorkerAdapter,
+    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, PiAdapter, PiConfig, WorkerAdapter,
 };
 
 use super::secrets::{effective_model, merged_env_with_secrets, resolve_secret};
@@ -39,6 +39,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     container: None,
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.claude_code] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }))
             }
             CodexAdapter::ID => {
@@ -64,6 +66,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     resume_mode: base.resolved_resume_mode(),
                     // ADR-0054 Phase 112 D1: `[adapters.codex] resume_bypass`（既定 off）。
                     resume_bypass: base.resolved_resume_bypass(),
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.codex] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }))
             }
             AiderAdapter::ID => {
@@ -81,6 +85,61 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
+                    container: None,
+                }))
+            }
+            PiAdapter::ID => {
+                let mut env = merged_env_with_secrets(
+                    &HashMap::new(),
+                    &HashMap::new(),
+                    &p.env,
+                    &p.env_from_secrets,
+                    secrets_dir,
+                );
+                let base_url = match config.provider_llm_source(&p.id).map(|s| s.source) {
+                    Some(task_core::LlmSourceRef::Celeris) => {
+                        if let Ok(Some(key)) = config.api.read_token() {
+                            env.push(("CELERIS_PI_API_KEY".into(), key));
+                        }
+                        let listen = config.llm_proxy.listen;
+                        let ip = if listen.ip().is_unspecified() {
+                            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+                        } else {
+                            listen.ip()
+                        };
+                        Some(format!(
+                            "http://{}/v1",
+                            std::net::SocketAddr::new(ip, listen.port())
+                        ))
+                    }
+                    Some(task_core::LlmSourceRef::OpenaiCompatible(id)) => config
+                        .llm_proxy
+                        .sources
+                        .openai_compatible
+                        .iter()
+                        .find(|s| s.id == id)
+                        .map(|source| {
+                            if let Some(key) = &source.api_key {
+                                env.push(("CELERIS_PI_API_KEY".into(), key.clone()));
+                            }
+                            source.base_url.clone()
+                        }),
+                    _ => env
+                        .iter()
+                        .rev()
+                        .find(|(key, _)| {
+                            matches!(key.as_str(), "OPENAI_BASE_URL" | "OPENAI_API_BASE")
+                        })
+                        .map(|(_, value)| value.clone()),
+                };
+                Arc::new(PiAdapter::new(PiConfig {
+                    command: p.command.clone().unwrap_or_else(|| "pi".into()),
+                    args: p.args.clone().unwrap_or_default(),
+                    model: effective_model(&p.model, &None),
+                    extensions: p.extensions.clone(),
+                    tools: p.tools.clone(),
+                    base_url,
+                    env,
                     container: None,
                 }))
             }
@@ -107,6 +166,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     container: None,
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.acp] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }));
                 if p.adapter == BrowserSpecialistAdapter::ID {
                     Arc::new(BrowserSpecialistAdapter::new(inner))
@@ -347,7 +408,7 @@ pub fn provider_lives(config: &Config) -> Vec<ProviderLive> {
                 in_use_cos: 0,
                 // ADR-0022 D2: 確認の記録は Dispatcher 側（SnapshotPublisher.provider_checks）が持つ。
                 last_check: None,
-                account_pool: p.account_pool,
+                account_pool: p.account_pool.is_on(),
             }
         })
         .collect()

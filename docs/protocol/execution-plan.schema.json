@@ -1,5 +1,20 @@
 {
   "$defs": {
+    "BrowserRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "allowed_domains": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "allowed_domains"
+      ],
+      "type": "object"
+    },
     "Check": {
       "description": "DESIGN §5.3/§5.7 の `Check` 種別。",
       "oneOf": [
@@ -224,6 +239,9 @@
         "objective": {
           "type": "string"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements"
+        },
         "skills": {
           "default": [],
           "items": {
@@ -409,6 +427,10 @@
           },
           "type": "array"
         },
+        "requirements": {
+          "$ref": "#/$defs/TaskRequirements",
+          "description": "Browser origins for a child task. An inherited browser skill still needs an explicit set."
+        },
         "skills": {
           "items": {
             "type": "string"
@@ -579,6 +601,22 @@
     "TaskId": {
       "description": "タスクの一意識別子（ULID）。DESIGN §4.1。",
       "type": "string"
+    },
+    "TaskRequirements": {
+      "additionalProperties": false,
+      "properties": {
+        "browser": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BrowserRequirements"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
     },
     "UnitContext": {
       "additionalProperties": false,

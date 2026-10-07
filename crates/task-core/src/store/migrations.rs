@@ -112,22 +112,28 @@ pub(crate) const MIGRATION_0049: &str =
     include_str!("../../migrations/0049_routing_shadow_budget.sql");
 /// CoS chat D1: durable conversation, attachments, operations, and FTS.
 pub(crate) const MIGRATION_0050: &str = include_str!("../../migrations/0050_cos_chat.sql");
+pub(crate) const MIGRATION_0051: &str =
+    include_str!("../../migrations/0051_org_browser_events.sql");
+/// ADR 2026-10-06 D4: モデル catalog・上書き・発見記録（additive）。
+pub(crate) const MIGRATION_0052: &str = include_str!("../../migrations/0052_model_catalog.sql");
+/// ADR 2026-10-06 model-role-assignments D1: source × 役割 → model_id の割り当て表（additive）。
+pub(crate) const MIGRATION_0053: &str =
+    include_str!("../../migrations/0053_model_role_assignments.sql");
 /// CoS D3: hash-only, expiring credentials scoped to a chat run.
-pub(crate) const MIGRATION_0052: &str =
-    include_str!("../../migrations/0052_cos_run_credentials.sql");
+pub(crate) const MIGRATION_0055: &str =
+    include_str!("../../migrations/0055_cos_run_credentials.sql");
 /// CoS D6: old notification provenance at route cutover.
-pub(crate) const MIGRATION_0053: &str = include_str!("../../migrations/0053_cos_triage.sql");
+pub(crate) const MIGRATION_0056: &str = include_str!("../../migrations/0056_cos_triage.sql");
 
-/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0051 は並行ブランチ、
-/// 0038 work_unit_sessions、
+/// 他の celeris/* ブランチが使っていて、このブランチにはまだ無い版数（0038 work_unit_sessions、
 /// 0039 write_sets、0040 behind_targets）。`migrate` は飛ばし、
 /// `schema_migrations` にも記録しない。統合で本物の migration が入ったら、ここから外して
 /// `migration_sql` に足す（記録が無いので後から当たる）。
-pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40, 51];
+pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 53;
+pub const SCHEMA_VERSION: u32 = 56;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -179,8 +185,14 @@ impl SqliteStore {
             48 => Ok(MIGRATION_0048),
             49 => Ok(MIGRATION_0049),
             50 => Ok(MIGRATION_0050),
+            51 => Ok(MIGRATION_0051),
             52 => Ok(MIGRATION_0052),
             53 => Ok(MIGRATION_0053),
+            54 => Ok(include_str!(
+                "../../migrations/0054_model_role_memberships.sql"
+            )),
+            55 => Ok(MIGRATION_0055),
+            56 => Ok(MIGRATION_0056),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"
             ))),

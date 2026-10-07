@@ -179,7 +179,7 @@ pub fn default_window_duration_seconds(window_id: &str) -> Option<f64> {
     match window_id {
         "five_hour" | "5h" => Some(WINDOW_5H_SECONDS),
         "seven_day" | "weekly" => Some(WINDOW_WEEKLY_SECONDS),
-        "monthly" => Some(WINDOW_MONTHLY_SECONDS),
+        "monthly" | "one_month" => Some(WINDOW_MONTHLY_SECONDS),
         _ => None,
     }
 }

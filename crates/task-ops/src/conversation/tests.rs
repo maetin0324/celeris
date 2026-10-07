@@ -376,6 +376,7 @@ fn the_reply_is_recorded_with_the_run_id_and_only_for_conversation_tasks() {
 
 fn proposal(assignee: Option<&str>, title: &str) -> DelegateTask {
     DelegateTask {
+        requirements: Default::default(),
         title: title.into(),
         objective: "o".into(),
         acceptance: vec![Criterion {

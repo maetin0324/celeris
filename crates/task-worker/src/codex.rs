@@ -74,6 +74,9 @@ pub struct CodexConfig {
     pub resume_mode: CodexResumeMode,
     /// ADR-0054 Phase 112 D1: 翻訳しきれない `extra_args` の resume での扱い。
     pub resume_bypass: CodexResumeBypass,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D2/D7: `[adapters.codex] subagents`。既定 `Deny`
+    /// （`-c features.multi_agent=false` 等を `extra_args` の後ろに付ける）。
+    pub subagents: crate::tool_policy::SubagentPolicy,
 }
 
 impl Default for CodexConfig {
@@ -87,6 +90,7 @@ impl Default for CodexConfig {
             container: None,
             resume_mode: CodexResumeMode::default(),
             resume_bypass: CodexResumeBypass::default(),
+            subagents: Default::default(),
         }
     }
 }
@@ -610,6 +614,14 @@ async fn run_codex_once(
     // 載せず stdin で渡す。位置引数に `-` を置く（codex-cli の `codex exec --help`: "If not provided as an
     // argument (or if `-` is used), instructions are read from stdin"、`codex exec resume --help`:
     // "[PROMPT] … If `-` is used, read from stdin"。resume は SESSION_ID の後なので `-` を明示する）。
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent（`spawn_agent` 系の道具）を既定で無効にする。
+    // `-c key=value` は fresh / `exec resume` の両形で受け付ける（ADR-0054 Phase 68c）。`extra_args` の**後ろ**に
+    // 置くので運用側の値では外れない。外せるのは `[adapters.codex] subagents = "allow" | "allow_cos"` だけ（D7）。
+    if !config.subagents.allows(req) {
+        for kv in crate::tool_policy::CODEX_FEATURE_OVERRIDES {
+            command.arg("-c").arg(kv);
+        }
+    }
     command.arg("-");
     command
         .envs(config.env.iter().cloned())
@@ -1205,6 +1217,20 @@ fn handle_line(
         // （500 バイトで切る）で、構造化フィールドを**足すだけ**。
         let fields = item_progress(ty, value.get("item"), cos_chat);
         sink.progress_with(&truncate(line, 500), &fields);
+        // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: 始まった道具（`command_execution` の `command` など）
+        // から別 LLM CLI / API の起動と subagent 道具を検出する。
+        if ty != "item.completed"
+            && let Some(item) = value.get("item")
+        {
+            let item_type = item
+                .get("type")
+                .or_else(|| item.get("item_type"))
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            if let Some(v) = crate::tool_policy::inspect_tool_use(item_type, Some(item)) {
+                crate::claude_code::report_policy_violation(sink, &v);
+            }
+        }
         return;
     }
     match ty {

@@ -332,7 +332,7 @@ pub struct AccountLive {
     /// ADR-0024 D3 のスコア。除外されていれば `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub score: Option<f64>,
-    /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "rejected"`。
+    /// `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excluded_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -351,6 +351,9 @@ pub struct AccountUsageLive {
     pub five_hour: Option<task_core::RateWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seven_day: Option<task_core::RateWindow>,
+    /// 1 か月窓（opencode go。ADR 2026-10-06 D1）。観測できなければ `None`（『不明』）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub one_month: Option<task_core::RateWindow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub observed_at: i64,

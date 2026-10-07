@@ -113,6 +113,7 @@ pub(crate) struct Inner {
     /// ADR-0053 D4（Phase 65）: `GET /llm/sources`。`None` なら 409 `llm_proxy_unavailable`。
     pub(crate) llm_sources: Option<crate::llm_sources::SharedLlmSourcesReader>,
     pub(crate) routing_catalog: Option<crate::routing_catalog::SharedRoutingCatalogReader>,
+    pub(crate) model_discovery: Option<crate::model_catalog::SharedModelDiscoveryHook>,
     pub(crate) account_stats: Mutex<crate::stats::AccountStatsState>,
     /// ADR-0079 D3 / D11（Phase R4a）: `[execution.tree]`（木の view の上限の使用率）。
     pub(crate) tree_limits: task_core::TreeLimits,
@@ -190,6 +191,7 @@ impl ApiState {
             knowledge_root: settings.knowledge_root,
             llm_sources: settings.llm_sources,
             routing_catalog: settings.routing_catalog,
+            model_discovery: settings.model_discovery,
             tree_limits: settings.tree_limits,
             account_stats: Mutex::new(crate::stats::AccountStatsState::default()),
             instance_id: settings.instance_id,

@@ -15,6 +15,7 @@ use time::OffsetDateTime;
 fn sample_task(status: Status, workspace: WorkspaceSpec) -> Task {
     let now = OffsetDateTime::now_utc();
     Task {
+        requirements: Default::default(),
         tree: None,
         paused_at: None,
         routing: None,
@@ -114,6 +115,9 @@ fn manual_run_cannot_silently_drop_browser_capability() {
         },
     );
     task.skills = vec!["browser-enabled".into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://example.com".into()],
+    });
     store.insert(&task).unwrap();
     let out = run_celerisctl(
         &db,
@@ -585,6 +589,7 @@ fn fixed_account_and_quota_routing_reach_the_cli_without_mutating_the_store() {
             book.record_observation(
                 "b",
                 task_core::RateLimitObservation {
+                    one_month: None,
                     five_hour: Some(window),
                     seven_day: Some(window),
                     status: None,

@@ -119,6 +119,7 @@ fn least_loaded_picks_the_account_with_fewest_runs_even_at_max_plus_one() {
     book.record_observation(
         "b",
         RateLimitObservation {
+            one_month: None,
             five_hour: Some(RateWindow {
                 utilization: 0.9,
                 resets_at: 9_000,

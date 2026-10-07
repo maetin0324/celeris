@@ -355,6 +355,7 @@ impl SqliteStore {
             } else {
                 Task {
                     id: remediation_id,
+                    requirements: Default::default(),
                     parent_id: None,
                     kind: TaskKind::Execute,
                     title: String::new(),

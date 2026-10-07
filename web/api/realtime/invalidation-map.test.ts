@@ -4,7 +4,7 @@ import schemaJson from "../generated/schema.json";
 import type { EventRow } from "../generated/types";
 import { daemonKeys, projectKeys, taskKeys } from "../queries/keys";
 import { createConnectionStore } from "./connection-state";
-import { EVENT_KINDS } from "./event-kinds";
+import { EVENT_KINDS, PENDING_GENERATED_KINDS } from "./event-kinds";
 import { FakeEventSource, taskEventRow } from "./fake-event-source";
 import { EVENT_INVALIDATION, keysForTaskEvent, resolveProjectId } from "./invalidation-map";
 import { createInvalidator } from "./invalidator";
@@ -13,7 +13,9 @@ import { createRealtime } from "./realtime";
 const schema = schemaJson as unknown as {
   $defs: { Event: { oneOf: Array<{ properties: { type: { const: string } } }> } };
 };
-const schemaKinds = schema.$defs.Event.oneOf.map((o) => o.properties.type.const);
+const generatedKinds = schema.$defs.Event.oneOf.map((o) => o.properties.type.const);
+// 生成型に未反映の種類（event-kinds.ts）。schema に入ったら重複を除く。
+const schemaKinds = [...new Set([...generatedKinds, ...PENDING_GENERATED_KINDS])];
 
 const has = (keys: QueryKey[], key: QueryKey) => keys.some((k) => JSON.stringify(k) === JSON.stringify(key));
 const hasPrefix = (keys: QueryKey[], head: string) => keys.some((k) => k[0] === head);

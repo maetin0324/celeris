@@ -243,6 +243,38 @@ impl Dispatcher {
         Ok((decisions, answers))
     }
 
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run（`subject_run_id`）で検出された subagent 道具・
+    /// 別 LLM CLI / API の起動を events から集める（`WorkerPolicyViolation` のうち run_id が一致するものだけ。
+    /// reviewer run 自身の検出や他の run のものは混ぜない）。順序は events の追記順。LLM は呼ばない。
+    pub(super) fn review_policy_violations(
+        &self,
+        task_id: TaskId,
+        subject_run_id: &str,
+    ) -> Result<Vec<task_worker::protocol::ReviewPolicyViolation>, DispatchError> {
+        Ok(self
+            .store
+            .events_for(task_id)?
+            .into_iter()
+            .filter_map(|(_, ev)| match ev {
+                Event::WorkerPolicyViolation {
+                    run_id,
+                    kind,
+                    tool,
+                    matched,
+                    command,
+                } if run_id == subject_run_id => {
+                    Some(task_worker::protocol::ReviewPolicyViolation {
+                        kind: kind.as_str().to_string(),
+                        tool,
+                        matched,
+                        command,
+                    })
+                }
+                _ => None,
+            })
+            .collect())
+    }
+
     /// レビューを開始する。`Reviewer` 条件があるのにプロバイダ／並列度の枠が無いときは `Ok(false)`
     /// （タスクは `reviewing` のまま。次 tick の `recover_reviews` が再試行する。ADR-0007 D5 1.）。
     pub(super) fn spawn_review(
@@ -576,6 +608,12 @@ impl Dispatcher {
         } else {
             (Vec::new(), Vec::new())
         };
+        // ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run の検出（subagent・別 LLM の起動）を reviewer に渡す。
+        let policy_violations = if reviewer_run.is_some() {
+            self.review_policy_violations(task_id, &run_id)?
+        } else {
+            Vec::new()
+        };
         if let Some(run) = &reviewer_run {
             task_ops::delivery::begin(
                 self.store.as_ref(),
@@ -683,9 +721,11 @@ impl Dispatcher {
         let produced = artifacts_for_run(&events, &run_id);
         // ADR-0014 D1: Reviewer run も対象タスクに WorkerStarted（role: reviewer）を残す（アカウント別の集計に含めるため）。
         if let Some((provider_id, review_run_id, adapter_id)) = &review_run {
+            let view = self.current_assignment_view();
             let model = self
                 .adapters
                 .get(provider_id)
+                .map(|a| self.adapter_with_effective_models(provider_id, a.clone(), &view))
                 .and_then(|a| {
                     a.model_for_tier(self.config.reviewer_hint.tier)
                         .ok()
@@ -808,6 +848,8 @@ impl Dispatcher {
                 // ADR-0117 D1: 人の決定・回答。
                 decisions,
                 answers,
+                // ADR 2026-10-07-worker-no-subagents-no-llm-cli D6。
+                policy_violations,
             };
             let mut outcome = review_task(
                 &task,
@@ -1052,6 +1094,12 @@ impl Dispatcher {
                 return None;
             }
         };
+        // ADR 2026-10-06 model-role-assignments D2: reviewer run も割り当てを重ねた実効 bindings で起こす。
+        let base_adapter = self.adapter_with_effective_models(
+            &provider_id,
+            base_adapter,
+            &self.current_assignment_view(),
+        );
         if let Err(reason) = base_adapter.model_for_tier(hint.tier) {
             if self.warned_unroutable.insert(task.id) {
                 let _ = self.store.append_event(
@@ -1157,6 +1205,7 @@ impl Dispatcher {
                 reasoning_effort: review_reasoning_effort,
                 // ADR-0132 付記 L8: reviewer run の記録には選択の理由を付けない。
                 selection: None,
+                coding_default: None,
             },
             quota_reason: None,
             work_unit_id: None,

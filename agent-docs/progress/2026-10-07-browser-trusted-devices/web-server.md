@@ -44,4 +44,6 @@ completed: 2026-10-07
 
 ## 提案
 
+- 計画の check の矛盾（plan_issue で申告）: web-server の check 2（`pnpm -C web test && typecheck && lint`）は base c0a9159c で `web/api/realtime/event-kinds.ts`・`invalidation-map.ts` に `trusted_device_*` 4 種が無いため落ち（tsc TS2322/TS2739 を確認）、足すと check 4（範囲 `web/server/|agent-docs/progress/`）が落ちる。範囲 check に `web/api/realtime/` を許すか、check 2 を web-ui 葉へ移す。
+
 - web-ui 葉は上の web 端点（登録・resume・一覧・失効、`trustedDevice`/`resumable`）を使う。

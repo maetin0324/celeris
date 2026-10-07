@@ -29,6 +29,40 @@ use crate::dispatcher::Dispatcher;
 /// random secret; the worker must present the prefixed bearer to the API.
 const COS_RUN_BEARER_PREFIX: &str = "celeris-cos-run.";
 
+/// The API base the worker's `celerisctl` reads when no `--api-url` is given.
+pub const COS_API_URL_ENV: &str = "CELERIS_API_URL";
+
+/// Environment for a CoS chat or triage run: the run credential, the daemon's own API
+/// base (only when `[api] listen` is set) and a `PATH` that finds the daemon's own
+/// release of `celerisctl` first. Without these the worker's `celerisctl` would read the
+/// default `~/.config/celeris` and talk to a different daemon.
+pub(crate) fn cos_run_env(api_base_url: &str, token: &str) -> Vec<(String, String)> {
+    let mut env = vec![(COS_RUN_CREDENTIAL_ENV.to_owned(), token.to_owned())];
+    if !api_base_url.is_empty() {
+        env.push((COS_API_URL_ENV.to_owned(), api_base_url.to_owned()));
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf));
+    if let Some(path) = path_with_first(exe_dir.as_deref(), std::env::var_os("PATH")) {
+        env.push(("PATH".to_owned(), path));
+    }
+    env
+}
+
+/// `dir` prepended to `inherited`, once. `None` when there is no dir or the result is not UTF-8.
+pub(crate) fn path_with_first(
+    dir: Option<&std::path::Path>,
+    inherited: Option<std::ffi::OsString>,
+) -> Option<String> {
+    let dir = dir?;
+    let mut entries = vec![dir.to_path_buf()];
+    if let Some(inherited) = inherited {
+        entries.extend(std::env::split_paths(&inherited).filter(|p| p != dir));
+    }
+    std::env::join_paths(entries).ok()?.into_string().ok()
+}
+
 /// Values resolved from `[cos]` by the daemon, before the dispatcher starts.
 #[derive(Debug, Clone)]
 pub struct CosChatLaunchConfig {
@@ -505,8 +539,7 @@ impl CosChatLaunch {
             .cos_run_credential_issue_at(thread_id, run_id, time::Duration::seconds(ttl_secs), now)
             .map_err(|e| format!("CoS credential unavailable: {e}"))?;
         let token = format!("{COS_RUN_BEARER_PREFIX}{secret}");
-        let Some(adapter) = adapter.with_env(&[(COS_RUN_CREDENTIAL_ENV.into(), token.clone())])
-        else {
+        let Some(adapter) = adapter.with_env(&cos_run_env(&cfg.api_base_url, &token)) else {
             if let Err(error) = self.store.cos_run_credential_revoke(run_id, now) {
                 tracing::warn!(%error, %run_id, "CoS credential revoke after launch failure failed");
             }
@@ -706,3 +739,6 @@ async fn run_claimed(
         tracing::warn!(%error, %run_id, "CoS chat credential revoke failed");
     }
 }
+
+#[cfg(test)]
+mod tests;

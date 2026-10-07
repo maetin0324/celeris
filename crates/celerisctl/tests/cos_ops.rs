@@ -182,3 +182,78 @@ fn cos_chat_ops_ctl_api_request_without_run_credential_does_not_send() {
         "{error}"
     );
 }
+
+#[test]
+fn cos_chat_ops_ctl_prefers_api_url_env_over_config() {
+    // CELERIS_CONFIG points at nothing: reading it would fail, so success proves the env won.
+    let (url, server) = capture_one();
+    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+        .args([
+            "--reason",
+            "from env",
+            "api-request",
+            "POST",
+            "/api/v1/tasks/01ABC/comments",
+            "--body",
+            r#"{"body":"hi"}"#,
+        ])
+        .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_API_URL", &url)
+        .env("CELERIS_CONFIG", "/a/nonexistent/celeris/config.toml")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (head, body) = server.join().unwrap();
+    assert!(head.starts_with("POST /api/v1/cos/operations HTTP/1.1"));
+    assert!(head.contains("Authorization: Bearer celeris-cos-run.test"));
+    assert_eq!(body["request"]["path"], "/api/v1/tasks/01ABC/comments");
+
+    // --api-url still wins over the environment.
+    let (url, server) = capture_one();
+    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+        .args([
+            "--api-url",
+            &url,
+            "--reason",
+            "flag wins",
+            "api-request",
+            "POST",
+            "/api/v1/tasks/01ABC/comments",
+        ])
+        .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_API_URL", "http://127.0.0.1:1/not-api")
+        .env("CELERIS_CONFIG", "/a/nonexistent/celeris/config.toml")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let (head, _) = server.join().unwrap();
+    assert!(head.starts_with("POST /api/v1/cos/operations HTTP/1.1"));
+
+    // The env value gets the same /api/v1 check as the flag, before any connection.
+    let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
+        .args([
+            "--reason",
+            "bad env",
+            "api-request",
+            "POST",
+            "/api/v1/tasks/01ABC/comments",
+        ])
+        .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
+        .env("CELERIS_API_URL", "http://127.0.0.1:1/not-api")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("CELERIS_API_URL must end in /api/v1"),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

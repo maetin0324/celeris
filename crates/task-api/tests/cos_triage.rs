@@ -773,7 +773,12 @@ async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
             &app,
             post_json_with(
                 &resolve_path(&notice),
-                &resolve_body(&format!("k-d3c{n}"), "v1", "observe", json!({"confidence": c})),
+                &resolve_body(
+                    &format!("k-d3c{n}"),
+                    "v1",
+                    "observe",
+                    json!({"confidence": c}),
+                ),
                 &headers,
             ),
         )

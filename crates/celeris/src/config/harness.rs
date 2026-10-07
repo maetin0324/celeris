@@ -91,6 +91,11 @@ pub struct HarnessConfig {
     /// `fallback = false` で無効。省略すると組み込みの既定を継ぐ（`knowledge` は tier `cheap`）。
     #[serde(default)]
     pub fallback: Option<task_core::HarnessFallback>,
+    /// ADR 2026-10-07（coding harness の既定）: `adapter_policy = "model_family"` で、`adapter` の
+    /// 無い task の行選びを model family の既定ハーネス（Claude → claude-code、他 → pi）に寄せる。
+    /// 省略時は `provider_order`（従来どおり）。
+    #[serde(default)]
+    pub adapter_policy: task_core::AdapterPolicy,
 }
 
 impl HarnessConfig {
@@ -112,6 +117,7 @@ impl HarnessConfig {
                 max_retries: self.budget.max_retries,
             },
             conversation: self.conversation,
+            adapter_policy: self.adapter_policy,
         }
     }
 }
@@ -221,6 +227,8 @@ impl Config {
             command: None,
             args: None,
             settings: None,
+            extensions: Vec::new(),
+            tools: Vec::new(),
         });
         self.roles.retain(|r| r.id != SMOKE_ID);
         self.roles.push(RoleConfig {
@@ -564,6 +572,7 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
             && adapter != task_worker::FakeAdapter::ID
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
+            && adapter != task_worker::PiAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
             && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
@@ -571,7 +580,16 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                h.id
+            )));
+        }
+        // ADR 2026-10-07: 固定 adapter と family 既定は両立しない（固定 adapter が常に勝つので無意味）。
+        if h.adapter_policy == task_core::AdapterPolicy::ModelFamily
+            && (h.adapter.is_some() || h.conversation)
+        {
+            return Err(ConfigError::Invalid(format!(
+                "[[harnesses]] {}: adapter_policy = \"model_family\" cannot be combined with a fixed adapter or conversation = true",
                 h.id
             )));
         }
@@ -608,6 +626,7 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
             && adapter != task_worker::FakeAdapter::ID
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
+            && adapter != task_worker::PiAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
             && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
@@ -615,7 +634,7 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 r.id
             )));
         }

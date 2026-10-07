@@ -13,6 +13,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::coding_harness::AdapterPolicy;
 use crate::model::{GenreSpec, RoleSpec, Tier};
 
 /// ADR-0046 D3: 組み込みのハーネス id（設定が同じ id を書けば上書きされる）。
@@ -116,6 +117,10 @@ pub struct HarnessSpec {
     /// ADR-0052 D2（Phase 64）: 専用アダプタに届かないときに倒す先。`None` は「倒さない」。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback: Option<HarnessFallback>,
+    /// ADR 2026-10-07（coding harness の既定）: `adapter` が無いときの adapter の選び方。既定
+    /// `provider_order`（従来どおり）。`model_family` で family の既定ハーネスの行を優先する。
+    #[serde(default, skip_serializing_if = "AdapterPolicy::is_provider_order")]
+    pub adapter_policy: AdapterPolicy,
 }
 
 impl HarnessSpec {

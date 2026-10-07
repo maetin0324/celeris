@@ -24,6 +24,7 @@ fn routing_decided(run_id: &str) -> Event {
                 model_id: "model-cheap".into(),
                 reasoning_effort: None,
                 selection: None,
+                coding_default: None,
             },
             quota_reason: None,
             work_unit_id: None,

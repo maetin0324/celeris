@@ -2224,7 +2224,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
     let cfg: Config = toml::from_str(&bogus).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
+        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
     );
 
     let empty = format!("[[roles]]\nid = \"  \"\n{providers}");
@@ -4375,5 +4375,147 @@ fn routing_phase3_escalation_defaults_and_validation() {
     assert_eq!(
         cfg.model_routing.runtime.as_ref().unwrap().escalation,
         task_core::EscalationThresholds::default()
+    );
+}
+
+#[test]
+fn pi_adapter_provider_config_loads_and_builds_with_relative_extension() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[[providers]]
+id = "pi-go"
+adapter = "pi"
+llm_source = "opencode_go"
+model = "opencode-go/deepseek-v4-pro"
+command = "node"
+args = ["/opt/pi/dist/cli.js"]
+extensions = ["hashline/index.ts"]
+tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
+[[harnesses]]
+id = "pi-coding"
+adapter = "pi"
+[[roles]]
+id = "pi-coder"
+adapter = "pi"
+"#,
+    )
+    .unwrap();
+    let cfg = Config::load(&path).unwrap();
+    assert_eq!(
+        cfg.providers[0].extensions,
+        vec![dir.path().join("hashline/index.ts")]
+    );
+    assert_eq!(
+        cfg.provider_llm_source("pi-go").unwrap().source,
+        task_core::LlmSourceRef::OpencodeGo
+    );
+    let adapters = crate::build_adapters(&cfg);
+    assert_eq!(adapters["pi-go"].id(), "pi");
+    assert_eq!(
+        crate::effective_models(&cfg)["pi-go"],
+        "opencode-go/deepseek-v4-pro"
+    );
+}
+
+#[test]
+fn pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters() {
+    for row in [
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']",
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\ntools = ['bash']",
+        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']\ntools = ['planner']",
+        "adapter = 'fake'\nextensions = ['hashline.ts']\ntools = ['read']",
+    ] {
+        let cfg: Config = toml::from_str(&format!("[[providers]]\nid = 'test'\n{row}\n")).unwrap();
+        assert!(cfg.validate().is_err(), "{row}");
+    }
+}
+
+#[test]
+fn pi_adapter_config_preserves_go_pool_and_direct_compatible_source() {
+    for source in [
+        "llm_source = 'opencode_go'\naccount_pool = 'opencode-go'",
+        "llm_source = 'openai_compatible:local'",
+    ] {
+        let model = if source.contains("openai_compatible") {
+            "local/test"
+        } else {
+            "opencode-go/test"
+        };
+        let body = format!(
+            r#"
+[accounts]
+opencode_dir = "/fixture/accounts"
+[[llm_proxy.sources.openai_compatible]]
+id = "local"
+base_url = "http://127.0.0.1:9/v1"
+[[providers]]
+id = "pi"
+adapter = "pi"
+model = "{model}"
+extensions = ["hashline.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+{source}
+"#
+        );
+        let cfg: Config = toml::from_str(&body).unwrap();
+        cfg.validate().unwrap();
+        assert_eq!(crate::build_adapters(&cfg)["pi"].id(), "pi");
+    }
+}
+
+/// ADR 2026-10-07: `[[harnesses]] adapter_policy = "model_family"` が dispatcher の既定解決の材料になる。
+#[test]
+fn coding_harness_default_config_builds_dispatcher_inputs() {
+    let cfg: Config = toml::from_str(
+        r#"
+[[providers]]
+id = "cc"
+adapter = "claude-code"
+[[providers]]
+id = "pi-go"
+adapter = "pi"
+llm_source = "opencode_go"
+model = "opencode-go/deepseek-v4-pro"
+extensions = ["/opt/hashline/index.ts"]
+tools = ["hashline_read", "hashline_edit", "bash"]
+[[harnesses]]
+id = "coding"
+adapter_policy = "model_family"
+[[harnesses]]
+id = "writing"
+"#,
+    )
+    .unwrap();
+    cfg.validate().unwrap();
+    let d = cfg.coding_harness_default();
+    assert_eq!(d.harnesses, vec!["coding".to_string()]);
+    assert_eq!(d.sources["cc"], task_core::LlmSourceRef::ClaudeOauth);
+    assert_eq!(d.sources["pi-go"], task_core::LlmSourceRef::OpencodeGo);
+    assert_eq!(
+        cfg.harness_registry()
+            .get("writing")
+            .unwrap()
+            .adapter_policy,
+        task_core::AdapterPolicy::ProviderOrder
+    );
+}
+
+/// 固定 adapter・対話用ハーネスと `model_family` は両立しない。未知の値は読み込みで落ちる。
+#[test]
+fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {
+    for row in [
+        "adapter = 'claude-code'\nadapter_policy = 'model_family'",
+        "conversation = true\nadapter_policy = 'model_family'",
+    ] {
+        let cfg: Config =
+            toml::from_str(&format!("[[harnesses]]\nid = 'coding'\n{row}\n")).unwrap();
+        assert!(cfg.validate().is_err(), "{row}");
+    }
+    assert!(
+        toml::from_str::<Config>("[[harnesses]]\nid = 'coding'\nadapter_policy = 'family'\n")
+            .is_err()
     );
 }

@@ -350,6 +350,8 @@ fn pool_provider_config(accounts_dir: &Path, max_runs_per_account: usize) -> Con
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     config.accounts = Some(celeris::config::AccountsConfig {
         opencode_dir: None,
@@ -398,6 +400,8 @@ fn resolve_account_ignores_or_rejects_account_flag_for_acp_provider() {
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     assert_eq!(
         resolve_account(&config, "opencode-qwen", "acp", &args_fixture(None)).unwrap(),
@@ -432,6 +436,8 @@ fn build_adapters_resolves_an_instance_for_an_acp_provider_selected_by_worker_ru
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     let adapters = celeris::build_adapters(&config);
     let adapter = adapters
@@ -459,6 +465,8 @@ fn resolve_account_pool_provider_without_accounts_section_errors() {
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     let err = resolve_account(&config, "pool", "claude-code", &args_fixture(None)).unwrap_err();
     assert!(
@@ -557,6 +565,8 @@ fn resolve_account_codex_pool_provider_uses_codex_dir_and_auth_json_marker() {
         command: None,
         args: None,
         settings: None,
+        extensions: Vec::new(),
+        tools: Vec::new(),
     }];
     config.accounts = Some(celeris::config::AccountsConfig {
         opencode_dir: None,

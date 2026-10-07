@@ -119,6 +119,42 @@ pub struct PlanConfig {
 }
 
 impl Config {
+    /// ADR 2026-10-07（coding harness の既定）: dispatcher の既定解決の材料。`adapter_policy =
+    /// "model_family"` のハーネス、各 provider 行の実効 LLM source、routing catalog の model family。
+    /// catalog が組めない設定（`validate` で落ちる）では family を空にする（導出は source / pool で）。
+    pub fn coding_harness_default(&self) -> task_dispatch::CodingHarnessDefault {
+        task_dispatch::CodingHarnessDefault {
+            harnesses: self
+                .harness_registry()
+                .all()
+                .iter()
+                .filter(|h| h.adapter_policy == task_core::AdapterPolicy::ModelFamily)
+                .map(|h| h.id.clone())
+                .collect(),
+            sources: self
+                .providers
+                .iter()
+                .filter_map(|p| {
+                    self.provider_llm_source(&p.id)
+                        .map(|s| (p.id.clone(), s.source))
+                })
+                .collect(),
+            model_families: self
+                .routing_catalog()
+                .map(|c| {
+                    c.models
+                        .into_iter()
+                        // catalog に無い model の穴埋め（`unknown_model`）は family 不明として扱う。
+                        .filter(|m| {
+                            !m.family.trim().is_empty() && !m.family.eq_ignore_ascii_case("unknown")
+                        })
+                        .map(|m| (m.id, m.family))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    }
+
     pub fn dispatch_config(&self) -> DispatchConfig {
         DispatchConfig {
             delivery: task_ops::delivery::DeliveryPolicy {

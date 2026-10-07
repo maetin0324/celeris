@@ -97,7 +97,9 @@ use crate::policy::{
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
 mod cluster_job_wait;
+mod coding_default;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
+pub use coding_default::CodingHarnessDefault;
 mod auto_leaf;
 /// ADR-0130 D4: review 前 sync の前後で target からの behind を記録する。
 mod behind_target;
@@ -1211,6 +1213,8 @@ pub struct Dispatcher {
     /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
     /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
     account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
+    /// ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネスと材料）。
+    coding_default: CodingHarnessDefault,
     /// ADR-0024 D4 / ADR-0025 D1: アダプタごとのアカウントの観測値・cooldown・確認の帳簿（設定された根ディレクトリの
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
@@ -1497,6 +1501,7 @@ impl Dispatcher {
             publisher: None,
             account_pool_providers,
             account_pool_adapters: HashMap::new(),
+            coding_default: CodingHarnessDefault::default(),
             account_books,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),

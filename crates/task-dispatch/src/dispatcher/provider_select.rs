@@ -135,7 +135,8 @@ impl Dispatcher {
             let model = ModelProfile {
                 id: model_id.clone(),
                 revision: String::new(),
-                family: String::new(),
+                // ADR 2026-10-07: routing catalog の family（無ければ空 = 導出は source / pool へ）。
+                family: self.catalog_family(&model_id),
                 capabilities: Capabilities {
                     tools: Support::Unknown,
                     structured_output: Support::Unknown,

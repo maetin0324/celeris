@@ -209,6 +209,8 @@ pub(crate) fn reload_providers(
     dispatcher.set_account_pool_adapters(new_config.account_pool_adapters());
     // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
     dispatcher.set_local_providers(new_config.local_cheap_providers());
+    // ADR 2026-10-07: coding の既定ハーネス解決（`adapter_policy = "model_family"` のハーネス）。
+    dispatcher.set_coding_harness_default(new_config.coding_harness_default());
     dispatcher.set_snapshot_providers(provider_lives(&new_config));
     // Phase 44: 役割・分野・委譲設定はディスパッチャ側（次に起動する run から効く）。
     dispatcher.reload_config(

@@ -3058,6 +3058,7 @@ mod build_cache;
 mod cheap_local_first;
 mod cleanup_and_disk;
 mod cluster_tunnel;
+mod coding_harness_default;
 mod conversation_cos;
 mod cron_jobs;
 mod git_workspace;

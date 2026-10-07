@@ -1251,6 +1251,31 @@ export type ExcludedReason =
     };
 export type RoutingMode = "legacy" | "shadow" | "enforce";
 /**
+ * adapter をどう決めたか（routing audit に残す）。
+ */
+export type AdapterChoice =
+  | {
+      kind: "explicit";
+    }
+  | {
+      kind: "preferred";
+    }
+  | {
+      kind: "fallback";
+      reason: string;
+    }
+  | {
+      kind: "provider_order";
+    };
+/**
+ * model の系統。未知（`Other`・`Unknown`）は非 Claude として扱う。
+ */
+export type ModelFamily = ("claude" | "gpt" | "qwen") | "other" | "unknown";
+/**
+ * family をどの材料で決めたか（routing audit に残す）。
+ */
+export type FamilyBasis = "llm_source" | "account_pool" | "model_profile" | "unknown";
+/**
  * ADR-0132 付記 L8: 候補の種類。
  */
 export type ProviderCandidateKind = "local" | "pool" | "other";
@@ -5265,6 +5290,11 @@ export interface LaneResolution {
   account?: string | null;
   adapter?: string;
   /**
+   * ADR 2026-10-07（coding harness の既定）: `adapter_policy = "model_family"` のハーネスの run だけ。
+   * 選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。
+   */
+  coding_default?: CodingDefaultResolution | null;
+  /**
    * 残量による調整の後に実際に走らせる lane（`None` は解決前）。
    */
   lane?: Tier | null;
@@ -5278,6 +5308,14 @@ export interface LaneResolution {
    * ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。
    */
   selection?: ProviderSelection | null;
+}
+/**
+ * ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。
+ */
+export interface CodingDefaultResolution {
+  adapter_choice: AdapterChoice;
+  family: ModelFamily;
+  family_basis: FamilyBasis;
 }
 /**
  * ADR-0132 付記 L8: provider 選択の記録（`LaneResolution.selection`）。
@@ -10787,6 +10825,10 @@ export interface RunRoutingAudit {
    * 子 trace のどれかが proxy log と結べない（または決定が要求を指すのに子が無い）。旧 run は None。
    */
   audit_incomplete?: boolean | null;
+  /**
+   * ADR 2026-10-07: coding の既定ハーネス解決（`RoutingDecided.resolution.coding_default`）。
+   */
+  coding_default?: CodingDefaultResolution | null;
   cost_usd?: number | null;
   /**
    * Phase 3: dispatch の decision id（`optimizer.decision_id` の写し）。Phase 2 の trace の無い run は None。

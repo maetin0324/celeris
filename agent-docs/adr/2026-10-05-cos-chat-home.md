@@ -348,3 +348,49 @@ D2/D3 の小節ごとに、実装の場所・試験名・ADR との差分（未�
 - 実装: escalation packet の検証・web_path の照合・outbox は ta `cos/inbox.rs` と tc `chat/triage.rs`。送信（文面・1,900 文字・`allowed_mentions`・Retry-After・送信前の撤回）は cc の notifier。CoS 不在の退避は td `dispatcher/cos_chat/fallback.rs`。
 - 試験: `cos_chat_triage_escalation_packet_is_validated`・`cos_chat_triage_web_path_must_match_the_target`・`cos_chat_triage_escalate_claims_one_outbox_row`（ta）。cc `tests/cos_chat_triage_notify.rs` の 8 件（`_escalation_packet_has_bounded_text_and_absolute_link`・`_long_packet_keeps_link_within_1900_characters`・`_webhook_disables_mentions_and_obeys_retry_after` など）。`cos_chat_triage_unified_only_cos_escalation_reaches_the_webhook`（cc scenarios）。`cos_chat_triage_fallback_*`（11 件、td）。
 - 差分: Discord の返信・リアクションを無視することは、受信経路を実装していないことの帰結であり、それを積極的に確かめる試験は無い。`notify.gui_base_url` が未設定の場合の表示を docs に反映するのは ops-docs 担当。
+
+## 付記: 実装との突き合わせ（web-chat、2026-10-07）
+
+D5 の各項目と D6 の置き換えの境界・UI 行ごとに、実装の module・試験名・ADR との差分を書く。検査は統合後 HEAD `ed9ae61b`（本節を足す前の web-chat 最終 HEAD）で `bash scripts/dev/test-parallel.sh`（4355 passed）・`cargo clippy --workspace -- -D warnings`・web の typecheck/lint/test（vitest 486 + server 57）/build・e2e 全体（functional 277 passed）と文書検査 3 本が exit 0（`agent-docs/progress/2026-10-05-cos-chat-home/web-chat.md`）。web の試験は `web/features/chat/` の vitest（fake timer・試験側 stream）と `web/e2e/chat/` の Playwright（fake-daemon の制御 endpoint と `expect.poll` の出来事待ち。sleep 不使用）。
+
+### D5 ホームと会話一覧
+
+- 実装: `web/routes/index.tsx`（`/` → `ChatHome`、`?thread=<id>` を URL 正本に）と `web/features/chat/home/chat-home.tsx`（URL を選択の正本とし、未指定なら直近の人の会話を自動選択・無ければ新規作成。下部タブ・safe area・keyboard を避けた高さ計算）。一覧は `web/features/chat/threads/{threads,threads.model,threads.test}` で新規・題名変更（revision）・検索（FTS）・archive・受信箱の固定表示。狭い幅は drawer（focus 復元・Escape）。
+- 試験: vitest `chat_threads_*`（create が client_thread_id で冪等・search が FTS を使う・rename/archive の revision と 409・drawer の focus 復元）。e2e `web/e2e/chat/threads.spec.ts`（「新しい会話を作る、題名を変える、検索で見つけ、保管で一覧から消す」「共有された ?thread= URL で開き、再読込しても同じ会話と本文・composer が残る」）、`web/e2e/chat/mobile.spec.ts` の drawer 2 件。
+- 差分: 受信箱の「人待ち件数」は thread API に無いので、`chat-home.tsx` が `inboxItemsQuery` の `counts.total` を `inboxWaitingCount` として渡す（D5 の「件数だけ控えめに表示」）。100 件より古い受信箱は最初の頁に入らない限り数に入らない（`kind=inbox` フィルタが無い）。
+
+### D5 assistant の Markdown・tool・streaming・追従
+
+- 実装: `web/features/chat/messages/{message-list,message-item,parts,logic}.tsx`。Markdown は `web/lib/markdown`（sanitize・code/リンク/表）。tool は `parts.tsx` の `ToolCall`（名前・要約・成功/失敗の折りたたみ）。streaming は `web/features/chat/data/stream.ts`（reducer）が draft を確定 message に置き換えて二重表示にしない。自動追従は `logic.ts`（下端 48 px 以内だけ追従、prepend で位置保持、未読と「最新へ」ボタン `parts.tsx` の `JumpToLatest`）。
+- 試験: vitest `chat_messages_*`（sanitize・code の copy・未閉 fence を code とする・表・tool 折りたたみ/展開/streaming draft→確定が 1 回だけ・追従の閾値と未読）、`chat_data_*`（text_delta の offset 整合・cursor 410 で resync・二重表示しない）。e2e `web/e2e/chat/content.spec.ts`（Markdown・code・表・tool の表示、「streaming は text_delta を流し、確定 message に置き換えて二重表示にしない」）、`web/e2e/chat/resync.spec.ts`（cursor からの再開・410 で snapshot 再取得・「上へ scroll 中は位置を保ち、未読と『最新へ』が出て、押すと下端へ戻る」「古い頁を足しても見ている位置を保つ」）。
+- 差分: 共有 Markdown（`web/components/content/markdown.tsx`）の `textBlocks` が code fence 直後の表を解析しない（fence 除去で段落先頭に `\n` が残るため）。e2e は表を fence より前に置いて回避（`web/components/` は web-chat の範囲外。未修正を web-chat.md の未解決に記録）。
+
+### D5 composer（Enter/IME/添付/停止/割り込み/キュー）
+
+- 実装: `web/features/chat/composer/{chat-composer,upload-queue}`。Enter 送信・Shift+Enter 改行・IME composition 中の Enter は送信しない。添付ボタン・drag&drop・clipboard 貼付けを同じ upload queue（`upload-queue.ts`）に接続し、preview/原名/容量/進捗/取消/失敗を出し、upload 完了前は送信しない。停止・割り込み（`mode=interrupt`）・キューの順と取消を別操作として出す。
+- 試験: vitest `chat_composer_*`（enter/shift/ime、drop と paste が file 抽出を共有、upload の進捗/失敗/再試行/取消、queue・stop・interrupt・resume・status が別制御、quota/切断/failed の状態）。e2e `web/e2e/chat/queue.spec.ts`（Enter/Shift/IME、「キューに追加された順に表示し、取消で消す」「停止でキューが停止し、停止中の送信は resume_queue で再開」「割り込み送信は mode=interrupt で active run を stopping にする」）、`web/e2e/chat/attachments.spec.ts`（「ボタン・drop・画像 paste が同じキューに入り、upload 中の取消と進捗が表示される」「失敗は表示され送信を止め、同じ upload id の再試行成功後は画像だけ送れる」）。
+- 差分: 画像 preview は `URL.createObjectURL` のため、document CSP の `img-src` に `blob:` を許可した（`web/server/app.js`・回帰試験 `app.test.mjs`。人の replan v7 で範囲に追加許可済み）。
+
+### D5 チャット内カード（task/質問/決定/認可/plan gate/知らせ/CoS 代答）
+
+- 実装: `web/features/chat/cards/{chat-card,card-model,card-actions,override-dialog,pending-badge}`。7 種（task・decision・question・approval・plan_gate・notice・operation）を表示し、decision/question/approval/plan_gate はその場で選択肢から回答（受信箱 API）。operation（CoS 代答）は取消（revoke）・差し戻し（return）を dialog で出し、`POST /cos/operations/{o}/override` に送る。`pendingHumanCount` が人待ちを badge に出す。
+- 試験: vitest `chat_cards_*`（各 kind の表示・その場回答・operation の revoke/return・409 は競合・remediation の link・pending badge）。e2e `web/e2e/chat/cards.spec.ts`（「7 種のカードが表示され、その場で回答できるカードは選択肢で答えられる」「CoS 代答は取消・差し戻しでき、理由が必須、409 は競合として表示される」「受信箱 thread の badge は受信箱の人待ち項目数を示し、回答で減る」「詳細 link は web 内の実在画面へ SPA で行き、戻るで元会話がそのまま残る」）。
+- 差分: (a) 詳細 link は `card.href` をそのまま使うが、実 daemon が代答カードに置く `/cos/operations/{o}` 等の href に web の route が無く 404 になる（fixture は実在 route で検証）。route 追加は API/schema に触れるため別 task。(b) triage が作るカードの href は `/?thread=<inbox>` で、元の待ち画面（`/tasks/{id}` 等）へ行けない。元待ち href を Card に足す案は API schema 変更のため別 task。
+
+### D5 狭い幅・下部タブバー・keyboard・a11y
+
+- 実装: `chat-home.tsx`（タブバー/keyboard の退避量を 1 回だけ引く高さ計算）と `chat-composer.tsx`（shrink-0 でホーム枠の末尾に置く）。`web/e2e/chat/mobile.spec.ts` が 320/390 px の横溢れ・44 px 以上の操作領域・drawer・タブバーと composer の共存・`visualViewport` 縮小時の入力/送信/停止の視界・hit target を決定的に検査。
+- 試験: e2e `web/e2e/chat/mobile.spec.ts` の 8 件（320/390 の横溢れ 0 と 44 px 以上、drawer の focus 復元、タブバー共存、keyboard、320 の添付/カード、desktop のカード操作領域）。`pnpm mobile-audit`（32 paths × 4 widths）で 44×44 未満のタップ領域が無いことを確認。
+- 差分: keyboard は `visualViewport` の fake と resize イベントによる決定的検査で、実端末 OS の keyboard/IME の実機確認は含まない。
+
+### D6 置き換えの境界（web 側）
+
+- 実装: ホーム `/` は `ChatHome` に置き換え、旧 Console は `web/routes/console.tsx`（`ConsoleView`・`ConsoleRegion`・`HomeEntries`）へ移設して監視用に存続。`/console/stream` は CoS messages を legacy_message_id/run_id で重複排除して読み取る（`web/features/console/`）。CoS の入力は chat API、書込みは D3 の道具/API。
+- 試験: e2e `web/e2e/parity/console.spec.ts`・`gateway.spec.ts`（旧 Console の parity）、`mobile-audit` が `/` と `/console` の両方を検査。
+- 差分: 互換 facade（`POST /console/instruct`・`POST /org/cos/messages`・`/console/new-conversation`）の daemon 側実装は cos-run/store-api 担当で、web の UI からは使わない（web は chat API へ）。gui/ は新チャットへ触れず、生成型（`types.ts`）のみ共通 schema に従う（本 WU で不変）。
+
+### D6 UI 行（Playwright 必須検証）
+
+- 実装: 上の D5 各項目と同一。e2e は `web/e2e/chat/` の 7 spec・30 試験（threads・content・queue・resync・cards・attachments・mobile）。
+- 試験: 会話一覧/検索/再開（threads）、Markdown/tool/streaming（content）、停止/queue（queue）、ボタン/D&D/paste（attachments）、IME・割り込み（queue）、最新へ・cursor（resync）、320 px と desktop・下部タブバー・keyboard（mobile）、CoS 代答/人待ち（cards）。
+- 差分: 画面 screenshot を `agent-docs/progress/2026-10-05-cos-chat-home/web-chat/screenshots/` の 8 枚に記録（chat-threads-1440・chat-resume-1440・chat-content-1440・chat-queue-paused-1440・chat-resync-1440・chat-jump-latest-1440・chat-mobile-320・chat-cards-1440）。

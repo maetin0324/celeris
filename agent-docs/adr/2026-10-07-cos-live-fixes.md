@@ -1,7 +1,7 @@
 # ADR 2026-10-07: CoS 実機確認 live2 の不具合 D1〜D4 を直す（作成時 pin・KB 候補 operation・triage の confidence・終端 run の takeover 除外）
 
 - 日付: 2026-10-07
-- 状態: 実装済み（task 01M4APB5FP8T3TAAE51Z20E3M1。実機の再実行は未、付記 実装突き合わせ）
+- 状態: 実装済み・実機再確認済み（task 01M4APB5FP8T3TAAE51Z20E3M1。live3、tip 767a1576）
 - 関連: ADR 2026-10-05-cos-chat-home D2（chat API）/ D3（CoS credential と監査付き操作）/ D4（添付の pin）、
   ADR 2026-10-06-cos-inbox-triage（受信箱の一次対応）、ADR 2026-10-06-cos-chat-run-dispatch（CoS run の起動）、
   ADR 2026-10-03-ownerless-running-runs（lease を持たない running run の回収）、ADR-0047 D1（KB の scope）、

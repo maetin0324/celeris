@@ -450,3 +450,14 @@ final review の差し戻し（不具合 1: cos_chat run が result.json 不在�
 - 他の実機の指摘: **D3** `cos-inbox-triage` skill が求める confidence を `ResolveBody` が受けない（reason に書いて回避）。**D4** triage thread で終わった run が `orphan takeover` で interrupted になり続きの run が重複して起きた（`cos_chat/control.rs`）。
 - 未解決: 不具合 4（短い往復で `summary_through_seq` が 0 のまま）と 5（provider に model を書かないと `chat_runs` の実効 model が null）。いずれも実装は変えていない。
 - 本付記は実装を修正しない。D1〜D4 の修正方針は進捗の提案節に記す。
+
+## 付記: D1〜D4 の修正と実機再確認（close-out 3、2026-10-07）
+
+close-out 2 付記で実機 FAIL だった D1〜D4（(d)(e) 未達の原因）は、ADR `agent-docs/adr/2026-10-07-cos-live-fixes.md` の決定どおり直った。live-fixes の tip `767a15760901` で、運用セッション（Claude Opus 5.5）が試験用 daemon（本番でない shell・claude_oauth・data dir は `/var/tmp`）に `scripts/dev/cos-chat-live.sh full` を流し、**(a)〜(e) がすべて PASS**した（証跡は `agent-docs/progress/2026-10-05-cos-chat-home/live-check.md`「実機確認（D1〜D4 修正後）」）。
+
+- **D1（作成時 attachment_ids）**: `POST /tasks`（と CoS operation `task.create`）が `attachment_ids` を受け、task の作成と pin を 1 transaction で行う。実機 (d): 最初の作業 run の `prompt.txt` に「## 入力の添付」と読み取り専用の screen.png が載った。
+- **D2（knowledge.record operation）**: `POST /knowledge/inbox` を `/cos/operations` の `knowledge.record` として許可し、scope は `project:<slug>`。実機 (e): 候補が `_inbox/` に作られ、PDF の provenance・pin・events の `cos_operation`（actor=cos）がそろった。
+- **D3（confidence）**: `ResolveBody.confidence`（0..=1）を足した。実機: `cos_operations` の result に `"confidence":0.97`。
+- **D4（takeover）**: 原因は `ChatRunSink::write` が Conflict を終端と誤読したことで、終端 run を takeover しない。実機: triage thread の `chat_runs` は 1 件、takeover/orphan は 0 件。
+- 統合後 HEAD で `bash scripts/dev/test-parallel.sh`（4660 passed / 0 failed / 14 ignored）・`cargo clippy --workspace -- -D warnings`・文書検査が exit 0。gui-api の節番号は 3.127〜3.131 で重複が解消済み。
+- 未解決（実装は変えていない。進捗の提案節）: 不具合 4（`summary_through_seq` が 0 のまま）、5（provider に model が無いと実効 model が null）、台本の残り（knowledge init・project fixture・LEFTOVER の誤報・FAIL でも exit 0）、`attachment_pin_rules` の前置きが旧手順のまま。

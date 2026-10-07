@@ -36,9 +36,9 @@ completed: 2026-10-07
 
 ## 未解決事項
 
-- `pnpm typecheck` と vitest の `api/realtime/invalidation-map.test.ts` 2 本は base（c0a9159c）から落ちている:
-  schema に Event 4 種（`trusted_device_*`）が入ったが `web/api/realtime/event-kinds.ts`・`invalidation-map.ts` に未追加（store 葉が web 葉へ回した）。
-  範囲が web 画面なので web-ui 葉で足す（この葉では触らない）。
+- （attempt 2 で解消）schema の Event 4 種（`trusted_device_*`）を `web/api/realtime/event-kinds.ts`・`invalidation-map.ts` に足した
+  （store 葉 b1e99155 が戻した変更の再適用。sets は空、一覧の query 無効化は web-ui 葉で足す）。
+  `pnpm -C web test && typecheck && lint` は exit 0（vitest 71 files / 479 tests 合格）。web-ui 葉が同じ 9 行を足すと merge で重なる。
 - 不一致の秘密による拒否でも、その端末由来の owner を落とす（web は daemon の拒否理由を区別できないため、fail closed）。
   password と device id を持つ者が owner を落とせるが、owner にはなれない。
 

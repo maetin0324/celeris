@@ -36,6 +36,7 @@ export const spaRoutePatterns = [
   "/graph",
   "/browser",
   "/browser/settings",
+  "/browser/devices",
   "/browser/runs/$taskId/$runId",
   "/help",
 ];

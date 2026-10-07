@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { connect, type Server as NetServer, type Socket } from "node:net";
@@ -174,28 +174,42 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
     browser: { ...backend, publicKey: keys.publicKey },
   });
   const dashboard = await startFakeDashboard();
-  let app: { locals: Record<string, unknown> } | undefined;
-  const gateway = await startGateway({
-    daemonUrl: await daemon.start(),
-    daemonTokenFile: tokenFile,
-    passwordFile,
-    attestationKeyFile: keyFile,
-    ownerSocket,
-    liveUpstream: liveUpstream ? dashboard.authority : "",
-    failedLoginDelayMs: 0,
-    registerRoutes: (registered: { locals: Record<string, unknown> }) => {
-      app = registered;
-    },
-  });
-  if (!app) throw new Error("gateway app was not registered");
-  const locals = app.locals as {
+  const secretFile = path.join(dir, "session-secret");
+  writeFileSync(secretFile, `${randomBytes(32).toString("hex")}\n`, { mode: 0o600 });
+  const daemonUrl = await daemon.start();
+  type Locals = {
     browserLive: { startSocket(): NetServer | null };
     browserLiveUpgrade: (...args: unknown[]) => void;
   };
-  gateway.server.on("upgrade", locals.browserLiveUpgrade);
-  const owner = locals.browserLive.startSocket();
-  if (!owner) throw new Error("owner socket is not configured");
-  await new Promise<void>((resolve) => owner.once("listening", resolve));
+  // web gateway を起こす。login の署名鍵（secretFile）・daemon・owner socket の path は起こし直しても同じ。
+  async function boot(port = 0) {
+    let app: { locals: Record<string, unknown> } | undefined;
+    const gateway = await startGateway(
+      {
+        daemonUrl,
+        daemonTokenFile: tokenFile,
+        passwordFile,
+        secretFile,
+        attestationKeyFile: keyFile,
+        ownerSocket,
+        liveUpstream: liveUpstream ? dashboard.authority : "",
+        failedLoginDelayMs: 0,
+        registerRoutes: (registered: { locals: Record<string, unknown> }) => {
+          app = registered;
+        },
+      },
+      port,
+    );
+    if (!app) throw new Error("gateway app was not registered");
+    const locals = app.locals as Locals;
+    gateway.server.on("upgrade", locals.browserLiveUpgrade);
+    const owner = locals.browserLive.startSocket();
+    if (!owner) throw new Error("owner socket is not configured");
+    await new Promise<void>((resolve) => owner.once("listening", resolve));
+    return { gateway, owner };
+  }
+  let current = await boot();
+  const base = current.gateway.base;
 
   /** `celerisctl browser owner-session approve <challenge>` と同じ要求を owner socket に送る。 */
   function approveChallenge(challenge: string) {
@@ -212,8 +226,8 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
   }
   /** page の context で password login する（cookie は page と共有）。 */
   async function login(page: Page) {
-    const response = await page.request.post(`${gateway.base}/login`, {
-      headers: { Origin: gateway.base, Accept: "application/json" },
+    const response = await page.request.post(`${base}/login`, {
+      headers: { Origin: base, Accept: "application/json" },
       data: { password: BROWSER_E2E_PASSWORD },
     });
     if (!response.ok()) throw new Error(`login failed: ${response.status()}`);
@@ -221,13 +235,13 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
   /** login して本人（owner）にする。返り値は変更系に要る CSRF token。 */
   async function loginAsOwner(page: Page) {
     await login(page);
-    const issued = await page.request.post(`${gateway.base}/browser/owner-session`, {
-      headers: { Origin: gateway.base },
+    const issued = await page.request.post(`${base}/browser/owner-session`, {
+      headers: { Origin: base },
     });
     const { challenge } = (await issued.json()) as { challenge: string };
     const approved = await approveChallenge(challenge);
     if (!approved.ok) throw new Error(`owner approve failed: ${approved.code}`);
-    const session = (await (await page.request.get(`${gateway.base}/browser/owner-session`)).json()) as {
+    const session = (await (await page.request.get(`${base}/browser/owner-session`)).json()) as {
       isOwner: boolean;
       csrfToken: string | null;
     };
@@ -239,8 +253,16 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
     await login(page);
   }
 
+  /** web の再起動・promote と同じく、メモリの owner を捨てて同じ port で起こし直す（daemon はそのまま）。 */
+  async function restart() {
+    await new Promise<void>((resolve) => current.owner.close(() => resolve()));
+    await current.gateway.close();
+    current = await boot(current.gateway.port);
+  }
+
   return {
-    base: gateway.base,
+    base,
+    restart,
     daemon,
     dashboard,
     publicKey: keys.publicKey,
@@ -248,8 +270,8 @@ export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
     loginAsOwner,
     loginAsOther,
     async close() {
-      await new Promise<void>((resolve) => owner.close(() => resolve()));
-      await gateway.close();
+      await new Promise<void>((resolve) => current.owner.close(() => resolve()));
+      await current.gateway.close();
       await dashboard.close();
       await daemon.close();
       rmSync(dir, { recursive: true, force: true });

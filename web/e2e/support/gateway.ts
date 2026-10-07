@@ -2,8 +2,9 @@ import type http from "node:http";
 import { createApp } from "../../server/app.js";
 
 // e2e 用の gateway。loopback の空き port で起こす。dist/ は playwright の webServer の build が作る。
-export async function startGateway(options: Parameters<typeof createApp>[0] = {}) {
-  const server: http.Server = createApp({ log: () => {}, ...options }).listen(0, "127.0.0.1");
+// `port` は再起動の試験（同じ origin で起こし直す）だけが渡す。
+export async function startGateway(options: Parameters<typeof createApp>[0] = {}, port = 0) {
+  const server: http.Server = createApp({ log: () => {}, ...options }).listen(port, "127.0.0.1");
   await new Promise<void>((resolve, reject) => {
     server.once("listening", resolve);
     server.once("error", reject);

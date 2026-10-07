@@ -8,7 +8,7 @@ test("spa route patterns match the declared route tree", () => {
   const block = /export interface FileRoutesByFullPath \{([^}]*)\}/.exec(tree)?.[1] ?? "";
   const declared = [...block.matchAll(/'([^']+)'/g)].map((m) => (m[1] === "/" ? "/" : m[1].replace(/\/$/, "")));
   assert.deepEqual([...declared].sort(), [...spaRoutePatterns].sort());
-  assert.equal(spaRoutePatterns.length + 1, 38, "37 declared screens + the 404");
+  assert.equal(spaRoutePatterns.length + 1, 39, "38 declared screens + the 404");
 });
 
 test("isSpaRoute accepts declared paths and rejects the rest", () => {

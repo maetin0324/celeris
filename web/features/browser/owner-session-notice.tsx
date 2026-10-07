@@ -4,7 +4,7 @@ import { CodeBlock } from "../../components/ui/code-block";
 import { Notice } from "../../components/ui/notice";
 import { BrowserGatewayError, requestOwnerSession } from "./browser-query";
 
-export type OwnerAvailability = { available: boolean; isOwner: boolean };
+export type OwnerAvailability = { available: boolean; isOwner: boolean; resumeError?: string };
 
 /** notice を出すべき理由。本人として登録済み（available かつ isOwner）なら null で、waits panel は form を出してよい。 */
 export function ownerNoticeReason(owner: OwnerAvailability | undefined): "owner_unavailable" | "not_owner" | null {
@@ -23,6 +23,15 @@ const CHALLENGE_ERROR_TEXT: Record<string, string> = {
 function challengeErrorMessage(error: unknown): string {
   const code = error instanceof BrowserGatewayError ? error.code : "request_failed";
   return CHALLENGE_ERROR_TEXT[code] ?? "発行できませんでした。しばらくしてからやり直してください。";
+}
+
+/** 登録端末からの自動復帰（ADR 2026-10-07-browser-trusted-devices D3）に失敗したときの文言。 */
+export function resumeErrorMessage(code: string | undefined): string | null {
+  if (!code) return null;
+  if (code === "device_rejected")
+    return "登録した端末として確認できませんでした（失効・期限切れ・不一致）。本人確認のコードで承認し直してください。";
+  if (code === "unauthenticated") return null;
+  return "登録した端末での自動復帰ができませんでした（Celeris に接続できません）。画面を読み込み直すか、本人確認のコードで承認してください。";
 }
 
 /** `celerisctl` に渡す確定コマンド。`<path>` は web gateway の起動設定（CELERIS_WEB_OWNER_SOCKET）の socket path に置き換える。 */
@@ -97,6 +106,11 @@ export function OwnerSessionNotice({ owner }: { owner: OwnerAvailability | undef
       }
     >
       <p>登録・承認・credential 入力・Live View は、本人として登録したセッションでだけ操作できます。</p>
+      {resumeErrorMessage(owner?.resumeError) ? (
+        <p role="alert" className="text-danger-foreground" data-testid="browser-owner-resume-failed">
+          {resumeErrorMessage(owner?.resumeError)}
+        </p>
+      ) : null}
       {challenge ? <ChallengeCommand challenge={challenge} /> : null}
       {error ? (
         <p role="alert" className="text-danger-foreground">

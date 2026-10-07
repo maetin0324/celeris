@@ -150,7 +150,7 @@ web の typecheck/lint/test/e2e は本葉では再実行していない（web �
 
 ---
 
-# close-out 3: D1〜D4 修正と実機再確認の記録（2026-10-07）
+# close-out 3: D1〜D4 修正後の実機再確認の記録（2026-10-07）
 
 ADR `2026-10-05-cos-chat-home` に付記「D1〜D4 の修正と実機再確認（close-out 3）」を追加し、`2026-10-07-cos-live-fixes` の状態を実機再確認済みにした。本葉は実装を修正していない。
 
@@ -177,7 +177,7 @@ ADR `2026-10-05-cos-chat-home` に付記「D1〜D4 の修正と実機再確認�
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `check-adr-numbers.sh`（160 files）/ `check-doc-layout.sh scripts/dev/docs-layout.tsv` / `check-doc-links.sh` | 各 exit 0 |
 
-web の変更はないので web の検査は再実行していない（直近: e2e functional 278 passed）。
+web: `spa-routes.test.mjs` の宣言画面数を 40 に直した（main 取り込みで増えた route）。`corepack pnpm@12.6.0 -C web test` exit 0（node test 77 pass）。
 
 ## 未解決事項と提案
 

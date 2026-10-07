@@ -715,3 +715,75 @@ async fn cos_chat_triage_escalate_claims_one_outbox_row() {
         .expect("count");
     assert_eq!(count, 1);
 }
+
+#[tokio::test]
+async fn cos_live_fix_d3_confidence_is_recorded_in_the_operation() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-d3a", "v1", 0);
+    let (_t, _r, bearer) = cos_bearer(&env, "d3a");
+    let headers = [("authorization", bearer.as_str())];
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-d3a", "v1", "observe", json!({"confidence": 0.9})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let op = &resp.json()["operation"];
+    assert_eq!(op["payload"]["confidence"], 0.9);
+    assert_eq!(op["result"]["confidence"], 0.9);
+    assert_eq!(op["reason"], "既存の指示の範囲内の定型選択");
+}
+
+#[tokio::test]
+async fn cos_live_fix_d3_confidence_omitted_keeps_working() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-d3b", "v1", 0);
+    let (_t, _r, bearer) = cos_bearer(&env, "d3b");
+    let headers = [("authorization", bearer.as_str())];
+    let resp = send(
+        &app,
+        post_json_with(
+            &resolve_path(&notice),
+            &resolve_body("k-d3b", "v1", "observe", json!({})),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    let op = &resp.json()["operation"];
+    assert!(op["payload"].get("confidence").is_none());
+    assert!(op["result"]["confidence"].is_null());
+}
+
+#[tokio::test]
+async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
+    let env = admin_env();
+    let app = env.router();
+    let notice = ingest(&env, "notice", "notice-d3c", "v1", 0);
+    let (_t, _r, bearer) = cos_bearer(&env, "d3c");
+    let headers = [("authorization", bearer.as_str())];
+    for (n, c) in [json!(1.5), json!(-0.1)].into_iter().enumerate() {
+        let resp = send(
+            &app,
+            post_json_with(
+                &resolve_path(&notice),
+                &resolve_body(
+                    &format!("k-d3c{n}"),
+                    "v1",
+                    "observe",
+                    json!({"confidence": c}),
+                ),
+                &headers,
+            ),
+        )
+        .await;
+        assert_problem(&resp, 422, "validation");
+    }
+    assert_eq!(item_state(&env, &notice), "pending");
+}

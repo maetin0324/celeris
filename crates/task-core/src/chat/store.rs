@@ -759,127 +759,11 @@ impl SqliteStore {
         req: &ChatPostMessageRequest,
         now: OffsetDateTime,
     ) -> Result<ChatMessagePosted, ChatError> {
-        check_key("client_message_id", &req.client_message_id)?;
-        if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
-            return Err(ChatError::TooLarge(format!(
-                "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
-                req.text.len()
-            )));
-        }
-        if req.attachment_ids.len() > CHAT_MESSAGE_ATTACHMENTS_MAX {
-            return Err(ChatError::TooLarge(format!(
-                "{} attachments (max {CHAT_MESSAGE_ATTACHMENTS_MAX})",
-                req.attachment_ids.len()
-            )));
-        }
-        if req.text.trim().is_empty() && req.attachment_ids.is_empty() {
-            return Err(ChatError::Invalid("blank text needs an attachment".into()));
-        }
-        let mut seen = std::collections::BTreeSet::new();
-        if !req.attachment_ids.iter().all(|a| seen.insert(a.as_str())) {
-            return Err(ChatError::Invalid("duplicate attachment id".into()));
-        }
-        let interrupt = req.mode == ChatSendMode::Interrupt;
-        let mode = enum_str(&req.mode)?;
-        let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let thread = thread_require(&tx, thread_id)?;
-        let existing = tx
-            .query_row(
-                &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
-                params![thread_id, req.client_message_id],
-                message_raw,
-            )
-            .optional()?;
-        if let Some(raw) = existing {
-            let meta: Value = serde_json::from_str(&raw.metadata_json).unwrap_or(Value::Null);
-            let same_mode = meta.get("mode").and_then(Value::as_str) == Some(mode.as_str());
-            let message = message_from_raw(&tx, raw)?;
-            if message.text != req.text
-                || message.attachment_ids != req.attachment_ids
-                || message.reply_to_id != req.reply_to_id
-                || !same_mode
-            {
-                return Err(ChatError::Conflict(format!(
-                    "client_message_id {} was used with different content",
-                    req.client_message_id
-                )));
-            }
-            let response = post_response(&tx, message)?;
-            return Ok(ChatMessagePosted {
-                response,
-                created: false,
-            });
-        }
-        if thread.status == ChatThreadStatus::Archived {
-            return Err(ChatError::Conflict(format!(
-                "thread {thread_id} is archived"
-            )));
-        }
-        if thread.queued_count as usize >= CHAT_QUEUE_MAX {
-            return Err(ChatError::QueueFull {
-                limit: CHAT_QUEUE_MAX,
-            });
-        }
-        if let Some(reply) = &req.reply_to_id
-            && message_get_conn(&tx, thread_id, reply)?.is_none()
-        {
-            return Err(ChatError::Invalid(format!(
-                "reply_to_id {reply} is not a message of this thread"
-            )));
-        }
-        for a in &req.attachment_ids {
-            let ok: bool = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
-                 AND state='ready')",
-                params![a, thread_id],
-                |row| row.get(0),
-            )?;
-            if !ok {
-                return Err(ChatError::Invalid(format!(
-                    "attachment {a} is not a ready attachment of this thread"
-                )));
-            }
-        }
-        let meta =
-            json!({"mode": mode, "interrupt": interrupt, "attachment_ids": req.attachment_ids});
-        let id = insert_message(
-            &tx,
-            NewMessage {
-                thread_id,
-                role: ChatMessageRole::User,
-                text: &req.text,
-                state: ChatMessageState::Queued,
-                client_message_id: Some(&req.client_message_id),
-                reply_to_id: req.reply_to_id.as_deref(),
-                run_id: None,
-                metadata: &meta,
-            },
-            &at,
-        )?;
-        for a in &req.attachment_ids {
-            tx.execute(
-                "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
-                 VALUES(?1,'message',?2,?3)",
-                params![a, id, at],
-            )?;
-        }
-        let message = message_require(&tx, thread_id, &id)?;
-        emit_message(&tx, &message, &at)?;
-        if req.resume_queue && thread.queue_paused {
-            set_paused(&tx, thread_id, false, &at)?;
-        }
-        if interrupt && let Some(run_id) = &thread.active_run_id {
-            super::run_store::request_stop(&tx, thread_id, run_id, "interrupt", &at)?;
-        }
-        emit_queue(&tx, thread_id, &at)?;
-        let response = post_response(&tx, message)?;
+        let posted = message_post_conn(&tx, thread_id, req, now)?;
         tx.commit()?;
-        Ok(ChatMessagePosted {
-            response,
-            created: true,
-        })
+        Ok(posted)
     }
 
     /// D2 `GET /chat/threads/{t}/messages`: items in ascending seq, with `snapshot_event_id` read
@@ -1073,6 +957,133 @@ impl SqliteStore {
         tx.commit()?;
         Ok(message)
     }
+}
+
+/// `chat_message_post` の本体（呼び出し側の write transaction の中で走る）。ADR 2026-10-07-cos-live-fixes D4 の
+/// takeover は、run の終端の確認・続きの message の投入・run の interrupted 化を 1 つの transaction で行うために使う。
+pub(crate) fn message_post_conn(
+    tx: &Connection,
+    thread_id: &str,
+    req: &ChatPostMessageRequest,
+    now: OffsetDateTime,
+) -> Result<ChatMessagePosted, ChatError> {
+    check_key("client_message_id", &req.client_message_id)?;
+    if req.text.len() > CHAT_MESSAGE_TEXT_MAX_BYTES {
+        return Err(ChatError::TooLarge(format!(
+            "text is {} bytes (max {CHAT_MESSAGE_TEXT_MAX_BYTES})",
+            req.text.len()
+        )));
+    }
+    if req.attachment_ids.len() > CHAT_MESSAGE_ATTACHMENTS_MAX {
+        return Err(ChatError::TooLarge(format!(
+            "{} attachments (max {CHAT_MESSAGE_ATTACHMENTS_MAX})",
+            req.attachment_ids.len()
+        )));
+    }
+    if req.text.trim().is_empty() && req.attachment_ids.is_empty() {
+        return Err(ChatError::Invalid("blank text needs an attachment".into()));
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    if !req.attachment_ids.iter().all(|a| seen.insert(a.as_str())) {
+        return Err(ChatError::Invalid("duplicate attachment id".into()));
+    }
+    let interrupt = req.mode == ChatSendMode::Interrupt;
+    let mode = enum_str(&req.mode)?;
+    let at = chat_ts(now);
+    let thread = thread_require(tx, thread_id)?;
+    let existing = tx
+        .query_row(
+            &format!("{MESSAGE_SELECT} WHERE thread_id=?1 AND client_message_id=?2"),
+            params![thread_id, req.client_message_id],
+            message_raw,
+        )
+        .optional()?;
+    if let Some(raw) = existing {
+        let meta: Value = serde_json::from_str(&raw.metadata_json).unwrap_or(Value::Null);
+        let same_mode = meta.get("mode").and_then(Value::as_str) == Some(mode.as_str());
+        let message = message_from_raw(tx, raw)?;
+        if message.text != req.text
+            || message.attachment_ids != req.attachment_ids
+            || message.reply_to_id != req.reply_to_id
+            || !same_mode
+        {
+            return Err(ChatError::Conflict(format!(
+                "client_message_id {} was used with different content",
+                req.client_message_id
+            )));
+        }
+        let response = post_response(tx, message)?;
+        return Ok(ChatMessagePosted {
+            response,
+            created: false,
+        });
+    }
+    if thread.status == ChatThreadStatus::Archived {
+        return Err(ChatError::Conflict(format!(
+            "thread {thread_id} is archived"
+        )));
+    }
+    if thread.queued_count as usize >= CHAT_QUEUE_MAX {
+        return Err(ChatError::QueueFull {
+            limit: CHAT_QUEUE_MAX,
+        });
+    }
+    if let Some(reply) = &req.reply_to_id
+        && message_get_conn(tx, thread_id, reply)?.is_none()
+    {
+        return Err(ChatError::Invalid(format!(
+            "reply_to_id {reply} is not a message of this thread"
+        )));
+    }
+    for a in &req.attachment_ids {
+        let ok: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM chat_attachments WHERE id=?1 AND thread_id=?2 \
+             AND state='ready')",
+            params![a, thread_id],
+            |row| row.get(0),
+        )?;
+        if !ok {
+            return Err(ChatError::Invalid(format!(
+                "attachment {a} is not a ready attachment of this thread"
+            )));
+        }
+    }
+    let meta = json!({"mode": mode, "interrupt": interrupt, "attachment_ids": req.attachment_ids});
+    let id = insert_message(
+        tx,
+        NewMessage {
+            thread_id,
+            role: ChatMessageRole::User,
+            text: &req.text,
+            state: ChatMessageState::Queued,
+            client_message_id: Some(&req.client_message_id),
+            reply_to_id: req.reply_to_id.as_deref(),
+            run_id: None,
+            metadata: &meta,
+        },
+        &at,
+    )?;
+    for a in &req.attachment_ids {
+        tx.execute(
+            "INSERT INTO chat_attachment_refs(attachment_id,owner_kind,owner_id,created_at) \
+             VALUES(?1,'message',?2,?3)",
+            params![a, id, at],
+        )?;
+    }
+    let message = message_require(tx, thread_id, &id)?;
+    emit_message(tx, &message, &at)?;
+    if req.resume_queue && thread.queue_paused {
+        set_paused(tx, thread_id, false, &at)?;
+    }
+    if interrupt && let Some(run_id) = &thread.active_run_id {
+        super::run_store::request_stop(tx, thread_id, run_id, "interrupt", &at)?;
+    }
+    emit_queue(tx, thread_id, &at)?;
+    let response = post_response(tx, message)?;
+    Ok(ChatMessagePosted {
+        response,
+        created: true,
+    })
 }
 
 fn post_response(

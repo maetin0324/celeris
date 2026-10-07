@@ -3131,6 +3131,7 @@ mod cos_chat_harness_tests;
 mod cos_chat_launch;
 mod cos_chat_rollover;
 mod cos_chat_triage;
+mod cos_live_fix_d4;
 mod human_gates;
 
 /// ADR-0079 付記 R7-5: WU の checks の不合格の記録・次の run と replan への伝達・usage

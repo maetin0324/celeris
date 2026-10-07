@@ -161,6 +161,8 @@ pub(crate) fn replace_secrets(text: &str, secrets: &[String]) -> String {
 #[derive(Debug, Default)]
 struct SinkState {
     finished: bool,
+    /// 出力 message を持たない run（triage）。本文の追記は送らない（終端ではない）。
+    text_rejected: bool,
     next_call: u64,
     /// 未完の tool call（`(call_id, name)`）。古い順。
     open_calls: VecDeque<(String, String)>,
@@ -218,13 +220,29 @@ impl ChatRunSink {
         match f() {
             Ok(_) => {}
             Err(ChatError::Conflict(msg)) => {
-                tracing::debug!(run_id = %self.run_id, %msg, "chat run already finished; dropping progress");
-                state.finished = true;
+                // ADR 2026-10-07-cos-live-fixes D4: Conflict は「終端」だけではない（出力 message を持たない
+                // triage run への本文の追記も Conflict）。store の上で終端を確かめた時だけ以後を止める。
+                // 非終端のまま閉じると `finish` が終端を書かず、handle の終了後に orphan takeover が走る。
+                if self.run_is_terminal() {
+                    tracing::debug!(run_id = %self.run_id, %msg, "chat run already finished; dropping progress");
+                    state.finished = true;
+                } else {
+                    tracing::debug!(run_id = %self.run_id, %msg, "chat run progress rejected; run is still live");
+                    state.text_rejected |= msg.contains("no output message");
+                }
             }
             Err(e) => {
                 tracing::warn!(run_id = %self.run_id, error = %e, "failed to record chat run progress");
             }
         }
+    }
+
+    /// store の上で run が終端か。読めなければ非終端とみなす（`finish` が終端を書きにいく側に倒す。
+    /// 既に終端なら `chat_run_finish` が Conflict を返すだけ）。
+    fn run_is_terminal(&self) -> bool {
+        self.store
+            .chat_run_get(&self.thread_id, &self.run_id)
+            .is_ok_and(|run| task_core::chat::chat_run_state_is_terminal(run.state))
     }
 
     fn status(&self, state: &mut SinkState, phase: ChatStatusPhase, summary: &str) {
@@ -380,7 +398,7 @@ impl EventSink for ChatRunSink {
         match fields.kind {
             Some(ProgressKind::Text) => {
                 let text = fields.detail.as_deref().unwrap_or(msg);
-                if text.is_empty() {
+                if text.is_empty() || state.text_rejected {
                     return;
                 }
                 let now = (self.clock)();

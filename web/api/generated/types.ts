@@ -3170,6 +3170,27 @@ export type KnowledgePageResult = {
   "unchanged": boolean;
 };
 
+export type KnowledgeRecordBody = {
+  "attachment_ids"?: Array<string>;
+  "body": string;
+  "confidence"?: Confidence | null;
+  "path"?: string | null;
+  "scope": string;
+  "sources"?: Array<string>;
+  "tags"?: Array<string>;
+  "title": string;
+};
+
+export type KnowledgeRecordResult = {
+  "attachment_ids": Array<string>;
+  "id": string;
+  "op"?: string | null;
+  "path": string;
+  "scope"?: string | null;
+  "sha": string;
+  "target": string;
+};
+
 export type KnowledgeRejectResult = {
   "id": string;
   "sha": string;
@@ -3553,6 +3574,7 @@ export type NewTaskBody = {
   "adapter"?: string | null;
   "aggregate"?: boolean;
   "assignee"?: string | null;
+  "attachment_ids"?: Array<string>;
   "category"?: TaskCategory | null;
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;
@@ -4660,6 +4682,7 @@ export type ResolutionAction = {
 
 export type ResolveBody = {
   "answer"?: InboxAnswerBody | null;
+  "confidence"?: number | null;
   "escalation"?: EscalationPacket | null;
   "expected_revision": string;
   "idempotency_key": string;

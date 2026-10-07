@@ -150,3 +150,92 @@ fn the_root_flag_wins_over_an_unreadable_config() {
     });
     assert!(fallback.ends_with("knowledge"), "{}", fallback.display());
 }
+
+/// ADR 2026-10-07 cos-live-fixes D2: CoS の `record` は KB を書かず、`POST /api/v1/knowledge/inbox`
+/// を run credential で `/cos/operations` に包んで呼ぶ（偽 server。外部ネットワークなし）。
+#[test]
+fn cos_live_fix_d2_cli_record_with_cos_credential_calls_the_api() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("knowledge");
+    let (api, server) = super::super::cos_ops::tests::fake_server();
+    let args = RecordArgs {
+        title: "fern03 の使い方".into(),
+        scope: "project:agent-platform".into(),
+        tags: vec!["fern03".into()],
+        sources: vec!["message:01MSG".into()],
+        confidence: Some("high".into()),
+        path: None,
+        attachment_ids: vec!["01ATTACHMENT".into()],
+        json: false,
+        root: args(&root),
+    };
+    let options = super::super::cos_ops::Options::default();
+    let result = record_via_cos(
+        &api,
+        &args,
+        "PDF の要点。".into(),
+        &options,
+        "celeris-cos-run.secret",
+    )
+    .expect("record via api");
+    assert_eq!(result["ok"], true);
+    let (headers, body) = server.join().expect("server");
+    assert!(
+        headers.starts_with("POST /api/v1/cos/operations HTTP/1.1"),
+        "{headers}"
+    );
+    assert!(headers.contains("Authorization: Bearer celeris-cos-run.secret"));
+    assert!(!headers.contains("admin-secret"));
+    assert_eq!(body["request"]["method"], "POST");
+    assert_eq!(body["request"]["path"], "/api/v1/knowledge/inbox");
+    let request = &body["request"]["body"];
+    assert_eq!(request["title"], "fern03 の使い方");
+    assert_eq!(request["scope"], "project:agent-platform");
+    assert_eq!(request["body"], "PDF の要点。");
+    assert_eq!(request["sources"], serde_json::json!(["message:01MSG"]));
+    assert_eq!(request["confidence"], "high");
+    assert_eq!(
+        request["attachment_ids"],
+        serde_json::json!(["01ATTACHMENT"])
+    );
+    assert!(
+        body["reason"]
+            .as_str()
+            .is_some_and(|r| !r.trim().is_empty())
+    );
+    assert!(
+        body["idempotency_key"]
+            .as_str()
+            .is_some_and(|k| k.starts_with("knowledge-record-"))
+    );
+    // KB の根には何も作らない。
+    assert!(!root.exists());
+}
+
+/// 同じ題名・本文の再送は同じ冪等キー（CoS の再試行で候補が 2 つにならない）。
+#[test]
+fn cos_live_fix_d2_cli_idempotency_key_is_stable() {
+    let a = fnv1a(&[b"t", b"\n", b"body"]);
+    assert_eq!(a, fnv1a(&[b"t", b"\n", b"body"]));
+    assert_ne!(a, fnv1a(&[b"t", b"\n", b"other"]));
+}
+
+/// CoS でない `record` は `--attachment-id` を受けない（pin は API の transaction でしか書けない）。
+#[test]
+fn cos_live_fix_d2_cli_direct_record_refuses_attachment_ids() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path().join("knowledge");
+    let error = run_record(&RecordArgs {
+        title: "x".into(),
+        scope: "user".into(),
+        tags: vec![],
+        sources: vec!["task:01X".into()],
+        confidence: None,
+        path: None,
+        attachment_ids: vec!["01A".into()],
+        json: false,
+        root: args(&root),
+    })
+    .expect_err("refused");
+    assert!(error.to_string().contains("--attachment-id"), "{error}");
+}

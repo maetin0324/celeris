@@ -47,6 +47,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "execution.plan_gate",
     ),
     ("PATCH", "/api/v1/projects/{id}", "project.update"),
+    ("POST", "/api/v1/knowledge/inbox", "knowledge.record"),
     (
         "POST",
         "/api/v1/knowledge/inbox/{id}/reject",
@@ -613,6 +614,20 @@ pub(crate) fn dispatch(
                 store,
                 &root,
                 raw_id,
+                Some(audit),
+            )?)
+        }
+        "knowledge.record" => {
+            let root = env
+                .kb_root
+                .clone()
+                .map_err(|problem| audit.reject(store, "knowledge", "new", problem))?;
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::knowledge::record_op(
+                store,
+                &root,
+                None,
+                input,
                 Some(audit),
             )?)
         }

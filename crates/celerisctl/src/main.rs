@@ -348,6 +348,20 @@ fn main() -> ExitCode {
                 }
             };
         }
+        // ADR 2026-10-07 cos-live-fixes D2: CoS の `knowledge record` は KB を直接書かず、
+        // `POST /api/v1/knowledge/inbox` を監査つきの operation として呼ぶ。
+        if let Command::Knowledge {
+            command: KnowledgeCommand::Record(args),
+        } = &cli.command
+        {
+            return match knowledge::run_record_cos(args, &cos_options, &credential) {
+                Ok(code) => code,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::FAILURE
+                }
+            };
+        }
         let read_only = matches!(
             &cli.command,
             Command::Ls(_)

@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::thread;
 
-fn fake_server() -> (ApiConfig, thread::JoinHandle<(String, Value)>) {
+pub(crate) fn fake_server() -> (ApiConfig, thread::JoinHandle<(String, Value)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let handle = thread::spawn(move || {

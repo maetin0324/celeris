@@ -206,7 +206,7 @@ D2 の端点と claims は、task-api（`crates/task-api/src/browser_trusted_dev
 - 応答のコード: 上限 409 `device_limit`、拒否 403 `device_rejected`（理由は区別しない）、形の不正 422 `device_invalid`、
   未知の id の失効 404 `device_not_found`。
 - 時計は `ApiState::with_clock`（UNIX 秒）で注入する。assertion の期限（30 秒以内）も同じ時計で判定する。
-- 詳細は `docs/api/v1/gui-api.md` §3.128。
+- 詳細は `docs/api/v1/gui-api.md` §3.131。
 
 ## 付記（close-out の実装突き合わせ）
 

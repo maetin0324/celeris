@@ -2027,6 +2027,8 @@ export interface ApiV1Schema {
   knowledge_page: KnowledgePage;
   knowledge_page_put: KnowledgePagePutBody;
   knowledge_page_result: KnowledgePageResult;
+  knowledge_record: KnowledgeRecordBody;
+  knowledge_record_result: KnowledgeRecordResult;
   knowledge_reject_result: KnowledgeRejectResult;
   knowledge_tree: KnowledgeTree;
   llm_sources: LlmSourcesView;
@@ -3927,6 +3929,11 @@ export interface OverrideResponse {
  */
 export interface ResolveBody {
   answer?: InboxAnswerBody | null;
+  /**
+   * The worker's own estimate in 0..=1 that a person would choose the same (cos-inbox-triage §4).
+   * Optional so older bodies keep working; kept in the operation payload/result, not in `reason`.
+   */
+  confidence?: number | null;
   escalation?: EscalationPacket1 | null;
   /**
    * The `source_revision` of the item the worker judged.
@@ -7628,6 +7635,69 @@ export interface KnowledgePageResult {
   unchanged: boolean;
 }
 /**
+ * `POST /knowledge/inbox` の本文（ADR 2026-10-07 cos-live-fixes D2）。`celerisctl knowledge record`
+ * と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_in`）。
+ */
+export interface KnowledgeRecordBody {
+  /**
+   * 候補に pin するチャット添付（`owner_kind: knowledge_inbox`）。CoS からは自分の thread の添付だけ。
+   */
+  attachment_ids?: string[];
+  /**
+   * 本文（Markdown）。
+   */
+  body: string;
+  confidence?: Confidence | null;
+  /**
+   * 取り込む先の KB 相対パス（省略なら accept のときに scope と題名から決まる）。
+   */
+  path?: string | null;
+  /**
+   * `user` / `environment` / `environment/<分類>` / `experience` / `project:<slug>`。互換のため
+   * `projects/<slug>` も受けて `project:<slug>` に正規化する。
+   */
+  scope: string;
+  /**
+   * **1 件以上必須**（`message:<id>` / `task:<id>` / `human:instruction` / `url:<…>`）。
+   */
+  sources?: string[];
+  tags?: string[];
+  title: string;
+}
+/**
+ * `POST /knowledge/inbox` の応答（201）。CoS operation `knowledge.record` の `result` も同じ形。
+ */
+export interface KnowledgeRecordResult {
+  /**
+   * pin した添付の id（本文の順）。
+   */
+  attachment_ids: string[];
+  /**
+   * 候補 id（`GET /knowledge/inbox/{id}` の id）。
+   */
+  id: string;
+  /**
+   * 取り込み先が既にあれば `append` / `merge`。
+   */
+  op?: string | null;
+  /**
+   * `_inbox/<id>.md`。
+   */
+  path: string;
+  /**
+   * 正規化した scope（`project:<slug>` …）。
+   */
+  scope?: string | null;
+  /**
+   * 候補の git commit の sha。
+   */
+  sha: string;
+  /**
+   * 取り込み先（置き場のガードを通した KB 相対パス）。
+   */
+  target: string;
+}
+/**
  * `POST /knowledge/inbox/{id}/reject` の応答。
  */
 export interface KnowledgeRejectResult {
@@ -8368,6 +8438,13 @@ export interface NewTaskBody {
    * 存在しないノードはエラー。
    */
   assignee?: string | null;
+  /**
+   * ADR 2026-10-07 cos-live-fixes D1: chat attachment ids to pin to the new task
+   * (`owner_kind: "task"`) in the transaction that creates it, so the first run's input manifest
+   * already has them. An unknown, deleted, expired or duplicate id (or, from a CoS run, one from
+   * another thread) is 422 `invalid_attachment` and creates nothing.
+   */
+  attachment_ids?: string[];
   /**
    * ADR-0044 D3: 種類。省略時は `other`。
    */

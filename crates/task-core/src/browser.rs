@@ -164,7 +164,8 @@ pub fn validate_task_requirements(
 /// Pin capability-bearing tasks to a supported adapter: never fall back to a backend that loses it.
 pub fn browser_adapter(explicit: Option<&str>) -> Result<&str, String> {
     match explicit {
-        None => Ok("acp"),
+        // 人の決定 browser-default-adapter（2026-10-06、ADR 2026-10-05-browser-department-web-live-view）: 既定は claude-code。
+        None => Ok("claude-code"),
         Some(adapter @ ("acp" | "claude-code" | "browser-specialist")) => Ok(adapter),
         Some(_) => Err("browser capability requires acp, claude-code or browser-specialist".into()),
     }
@@ -773,7 +774,7 @@ mod tests {
 
     #[test]
     fn adapter_selection_is_explicit_and_does_not_drop_browser_capability() {
-        assert_eq!(browser_adapter(None).unwrap(), "acp");
+        assert_eq!(browser_adapter(None).unwrap(), "claude-code");
         assert_eq!(browser_adapter(Some("claude-code")).unwrap(), "claude-code");
         for adapter in ["codex", "aider", "mini-swe-agent"] {
             assert!(browser_adapter(Some(adapter)).is_err());

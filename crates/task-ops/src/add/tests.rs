@@ -2,9 +2,13 @@ use super::*;
 use task_core::{Event, SqliteStore};
 
 #[test]
-fn browser_task_routes_to_opencode_and_can_switch_to_claude() {
+fn browser_task_routes_to_claude_code_by_default_and_accepts_acp() {
     let store = SqliteStore::open_in_memory().unwrap();
-    for (explicit, expected) in [(None, "acp"), (Some("claude-code"), "claude-code")] {
+    for (explicit, expected) in [
+        (None, "claude-code"),
+        (Some("acp"), "acp"),
+        (Some("claude-code"), "claude-code"),
+    ] {
         let mut spec = base_spec();
         spec.skills = vec!["browser-enabled".into()];
         spec.requirements.browser = Some(task_core::BrowserRequirements {

@@ -5,7 +5,7 @@ tasks: [01M46VVAD0ZAVZ9C4Q0KJM9ESV]
 ---
 
 - 日付: 2026-10-05（2026-10-06 付の人の追加要望を含む）
-- 状態: **実装済み（2026-10-07 close-out 完了）**。人が既に決めた方針を以下の契約に具体化し、design 段の確認（Fable）を経て store-api・cos-run・web-chat・live-check・ops-docs 各段で実装済み。統合後 HEAD `21f38050` で `bash scripts/dev/test-parallel.sh`（4355 passed）・`cargo clippy --workspace -- -D warnings`・web の typecheck/lint/test/build・e2e（functional 278 passed）・文書検査 4 本が exit 0（`agent-docs/progress/2026-10-05-cos-chat-home.md`）。**2026-10-06 付記（cos-run 完了）: cos-run 担当の実装（`[cos]` config・CoS 特別 worker としての chat run 起動/継続/停止/queue/SSE・3 harness（claude-code/codex/opencode）の継続と全道具・画像入力の写像・受信箱一次対応と Discord escalation・CoS 不在退避・通知一本化・代答の取消/差し戻し・旧 Console/MCP 入力の legacy facade・`/cos/operations` 監査付き操作層・run credential）は実装済みで、統合後 HEAD `5434785b` で `bash scripts/dev/test-parallel.sh`（4230 passed）・`cargo clippy --workspace -- -D warnings`・文書検査 4 本が exit 0 を確認済み（`agent-docs/progress/2026-10-06-cos-run.md`）。D6 表の cos-run 担当行の `cos_chat_` 試験対応表（130 件）と、実機 1 回（live-check）・replan/pause/resume の allowlist 登録・添付→task manifest と KB provenance の連結を未解決として記録する。→ 添付の連結は 2026-10-07 の attach-handoff 付記で解決済み。**
+- 状態: **実装済み（2026-10-07 close-out 完了。同日の差し戻し修正を反映済み。ただし実機確認の (d) screenshot の task 入力引き継ぎと (e) PDF の KB 候補は未達で、下の「付記: 差し戻し修正と実機確認（close-out 2、2026-10-07）」の D1〜D4 が未解決）**。人が既に決めた方針を以下の契約に具体化し、design 段の確認（Fable）を経て store-api・cos-run・web-chat・live-check・ops-docs 各段で実装済み。統合後 HEAD `21f38050` で `bash scripts/dev/test-parallel.sh`（4355 passed）・`cargo clippy --workspace -- -D warnings`・web の typecheck/lint/test/build・e2e（functional 278 passed）・文書検査 4 本が exit 0（`agent-docs/progress/2026-10-05-cos-chat-home.md`）。**2026-10-06 付記（cos-run 完了）: cos-run 担当の実装（`[cos]` config・CoS 特別 worker としての chat run 起動/継続/停止/queue/SSE・3 harness（claude-code/codex/opencode）の継続と全道具・画像入力の写像・受信箱一次対応と Discord escalation・CoS 不在退避・通知一本化・代答の取消/差し戻し・旧 Console/MCP 入力の legacy facade・`/cos/operations` 監査付き操作層・run credential）は実装済みで、統合後 HEAD `5434785b` で `bash scripts/dev/test-parallel.sh`（4230 passed）・`cargo clippy --workspace -- -D warnings`・文書検査 4 本が exit 0 を確認済み（`agent-docs/progress/2026-10-06-cos-run.md`）。D6 表の cos-run 担当行の `cos_chat_` 試験対応表（130 件）と、実機 1 回（live-check）・replan/pause/resume の allowlist 登録・添付→task manifest と KB provenance の連結を未解決として記録する。→ 添付の連結は 2026-10-07 の attach-handoff 付記で解決済み。**
 - 対象: web のホーム、CoS の実行、会話・添付の永続化、受信箱一次対応、外向け通知。実装・実機確認の完了をこの ADR の作成で代替しない。
 - 関連: [ADR-0033 D4](0033-organization-projects-and-reports.md)、[ADR-0048](0048-console.md)、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0089](0089-cos-runs-bypass-concurrency.md)、[ADR-0140](0140-claude-session-resume.md)、[ADR-0132](0132-provider-llm-source-split-and-cheap-qwen.md)、[ADR-0133](0133-inbox-and-notifications.md)、[ADR-0037](0037-discord-notifications.md)、[ADR-0050](0050-request-completion-and-notifications.md)。
 
@@ -424,3 +424,29 @@ cos-run 付記の未解決だった「添付→task 入力 manifest と KB prove
 - 実装: CoS 側の経路は新 API でなく既存の references API（`POST /api/v1/chat/attachments/{id}/references`）を監査付き操作 `attachment.reference`（`task-api/src/cos/operations.rs` の `ALLOWED`、`chat/attachments.rs`）で包む。手順（owner 作成→応答確認→pin→応答の `state: applied` と `attachment_id`/`owner_kind`/`owner_id` を確かめてから「引き渡し済み」と言う）は `config/skills/cos-operator/SKILL.md` §3a と `task-worker/src/cos_chat.rs` の前置きに書いた。人向けの「引渡し済み」表示は CoS が応答を確認して文で言う規則であり、dispatcher や UI が自動表示する機構ではない。
 - 試験: `cos_chat_attach_handoff_cos_pins_attachment_to_created_task_and_kb_candidate`（`task-api/tests/cos_chat_attach_pin.rs`。直接 route は 422 `cos_audit_context_required`、owner 不在は 404、同じ operation の再送は行を増やさない）、`cos_chat_attach_handoff_cos_preamble_explains_pin`（`task-worker/src/cos_chat/tests.rs`）。
 - 差分: (a) 前置き・skill の規則は LLM が守る前提で、決定的に強制するのは API 側の 404/409/422 だけ。(b) KB 取り込みの accept が `/cos/operations` の allowlist に無い件（close-out 付記）は本作業の範囲外でそのまま。
+
+## 付記: 差し戻し修正と実機確認（close-out 2、2026-10-07）
+
+final review の差し戻し（不具合 1: cos_chat run が result.json 不在で failed、不具合 2: CoS run の celerisctl が本番の設定へ向かう、添付の引き継ぎ未実装）を 3 つの葉で直し、patch なしの tree で実機確認をやり直した。統合後 HEAD `21763506` で `bash scripts/dev/test-parallel.sh`（4607 passed / 0 failed / 14 ignored）・`cargo clippy --workspace -- -D warnings`・文書検査 4 本が exit 0。証拠は `agent-docs/progress/2026-10-05-cos-chat-home.md` と `…/2026-10-05-cos-chat-home/{result-fix,api-env,attach-handoff,live-check,ops-docs2}.md`。
+
+### D2「CoS chat run は result.json を必須にしない」（commit `f184f88b`、統合 `5664ef5f`）
+
+- 実装: CoS chat の前置き（`task_worker::cos_chat::build_prompt`）は result.json を求めず返事を本文で流す。adapter も `context.cos_chat` の run では result.json を必須にしない。claude-code（`claude_code.rs` の `terminal_from_result`）は success で result.json が無ければ `result` の本文（空なら流した assistant text）で Done、失敗は failed のまま、result.json があればそれが勝つ。acp（`agent_message_chunk` の連結）・pi（最後の assistant message）も同様。codex は既に最後の `agent_message` で Done になるので変更せず試験で固定。cos_chat でない run は従来どおり result.json 必須。
+- 試験: `cos_chat_harness_claude_done_without_result_json`・`…_claude_error_without_result_json_stays_failed`・`…_claude_non_chat_run_still_requires_result_json`・`…_codex_done_without_result_json`・`…_codex_failed_turn_without_result_json_stays_failed`・`…_acp_done_without_result_json`・`…_pi_done_without_result_json`（task-worker）、`cos_chat_harness_e2e_claude_without_result_json_completes`（task-dispatch。偽 claude は result.json を書かず、run は completed・reason なし）。
+- 実機: patch なしの tree `5664ef5fb20e` で claude-code の 5 往復がすべて completed（new→resumed、同じ node_sessions row）。
+
+### D3「CoS run の API 先は daemon 自身」（commit `3dd632af`、統合 `57814d95`）
+
+- 実装: `dispatcher/cos_chat/launch.rs` の `cos_run_env` が run の env に `CELERIS_API_URL`（`[api] listen` から作る `http://127.0.0.1:<port>/api/v1`）と daemon 自身の dir を先頭にした `PATH` を入れる。`celerisctl` の優先順は `--api-url` > `CELERIS_API_URL` > `CELERIS_CONFIG`（`commands/cos_ops.rs` の `api_config`）。
+- 試験: `cos_chat_run_launch_sets_api_url_env_and_path`、`cos_chat_ops_ctl_prefers_api_url_env_over_config`。
+- 実機: `--api-url` なしの `celerisctl add` が試験用 daemon に届き、events に `cos_operation` actor=cos（thread_id・run_id・reason つき）が残った。本番 API には届いていない。
+- ops: KB の `[knowledge] root` の `skills/` に `cos-operator`・`cos-inbox-triage` が無いと CoS は unavailable になる件は挙動を変えず、`docs/ops/cos-chat.md` に配置手順を書いた（ops-docs2、統合 `21763506`）。
+
+### D4 添付の引き継ぎ（attach-handoff 付記のとおり、統合 `d5b98376`）と実機の結果
+
+- 試験は attach-handoff 付記のとおり通るが、**実機では (d)(e) が未達**:
+  - (d) screenshot を pin した task: pin は成立したが、起票した task はすぐ ready になり、作業 run が pin の約 4 秒前に始まったため入力 manifest に載らなかった（**D1**。skill §3a の「起票してから pin」が dispatcher と競合）。
+  - (e) PDF の KB inbox candidate: CoS に監査つきで KB 候補を作る経路が無く（`celerisctl knowledge record` は CoS credential で拒否、`POST /knowledge/inbox` は `cos_operation_not_allowed`）候補は作られなかった（**D2**。scope の書式も skill と CLI で不一致）。
+- 他の実機の指摘: **D3** `cos-inbox-triage` skill が求める confidence を `ResolveBody` が受けない（reason に書いて回避）。**D4** triage thread で終わった run が `orphan takeover` で interrupted になり続きの run が重複して起きた（`cos_chat/control.rs`）。
+- 未解決: 不具合 4（短い往復で `summary_through_seq` が 0 のまま）と 5（provider に model を書かないと `chat_runs` の実効 model が null）。いずれも実装は変えていない。
+- 本付記は実装を修正しない。D1〜D4 の修正方針は進捗の提案節に記す。

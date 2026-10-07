@@ -14,6 +14,35 @@ const STREAM = /^\/api\/session\/(\d{1,5})\/stream$/;
 const CSP =
   "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'self'; base-uri 'none'; form-action 'none'";
 const guardedSockets = new WeakSet();
+// 信頼できる端末（ADR 2026-10-07-browser-trusted-devices D1〜D4）。値は `<device_id>.<secret>`。
+// secret は web の外に出さない（daemon には hash だけ。log・応答にも出さない）。
+export const DEVICE_COOKIE_NAME = "__celeris_web_device";
+export const DEVICE_COOKIE_PATH = "/browser/owner-session";
+const DEVICE_COOKIE = /^([0-9A-HJKMNP-TV-Z]{26})\.([A-Za-z0-9_-]{43})$/;
+const DEVICE_ID = /^[0-9A-HJKMNP-TV-Z]{26}$/;
+const OWNER_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function deviceSecretHash(secret) {
+  return createHash("sha256").update(`celeris-device\0${secret}`).digest("hex");
+}
+function readDeviceCookie(req) {
+  const header = req.headers.cookie;
+  if (typeof header !== "string") return { present: false };
+  for (const part of header.split(";")) {
+    const index = part.indexOf("=");
+    if (index < 0 || part.slice(0, index).trim() !== DEVICE_COOKIE_NAME) continue;
+    const raw = part.slice(index + 1).trim();
+    const match = raw.length <= 256 ? DEVICE_COOKIE.exec(raw) : null;
+    return match ? { present: true, id: match[1], secret: match[2] } : { present: true };
+  }
+  return { present: false };
+}
+function safeDevice(device) {
+  if (!device || typeof device !== "object") return null;
+  const { id, name, method, created_at, last_used_at, expires_at, absolute_expires_at, revoked_at, revoked_reason } =
+    device;
+  return { id, name, method, created_at, last_used_at, expires_at, absolute_expires_at, revoked_at, revoked_reason };
+}
 
 export function parseLiveUpstream(raw) {
   if (!raw) return null;
@@ -83,6 +112,8 @@ export function createBrowserLive({
   liveUpstream,
   attestationKeyFile,
   ownerSocket,
+  probe = false,
+  ownerId = process.env.CELERIS_WEB_OWNER_ID?.trim() || "owner",
   fetchImpl = fetch,
   now = Date.now,
 }) {
@@ -94,6 +125,7 @@ export function createBrowserLive({
   let owner = null;
   const bindings = new Map();
   const guardInflight = new Map();
+  const resumeInflight = new Map();
   const sockets = new Set();
   const csrfSecret = randomBytes(32);
 
@@ -144,13 +176,82 @@ export function createBrowserLive({
     });
     return { payload, signature: sign(null, Buffer.from(payload), key).toString("hex") };
   }
-  async function api(method, route, body) {
+  // DeviceClaims（crates/task-api/src/browser_trusted_devices.rs）。undefined の欄は JSON に出ない。
+  function deviceAssertion(purpose, session, fields = {}) {
+    if (!key) return null;
+    const payload = JSON.stringify({
+      purpose,
+      owner_session_id: session,
+      owner_session: purpose !== "device_resume",
+      actor_id: ownerId,
+      ...fields,
+      expires_at: Math.floor(now() / 1000) + 20,
+    });
+    return { payload, signature: sign(null, Buffer.from(payload), key).toString("hex") };
+  }
+  function assertionHeaders(signed) {
+    return {
+      "x-celeris-assertion-payload": signed.payload,
+      "x-celeris-assertion-signature": signed.signature,
+    };
+  }
+  function deviceCookieOptions(req, expiresAtSecs) {
+    return {
+      httpOnly: true,
+      sameSite: "strict",
+      secure: Boolean(req.socket.encrypted),
+      path: DEVICE_COOKIE_PATH,
+      ...(expiresAtSecs === undefined ? {} : { maxAge: Math.max(0, expiresAtSecs * 1000 - now()) }),
+    };
+  }
+  function clearDeviceCookie(req, res) {
+    res.clearCookie(DEVICE_COOKIE_NAME, deviceCookieOptions(req));
+  }
+  function setDeviceCookie(req, res, device, secret) {
+    res.cookie(DEVICE_COOKIE_NAME, `${device.id}.${secret}`, deviceCookieOptions(req, device.expires_at));
+  }
+  function sameOrigin(req) {
+    return req.headers.origin === `${req.socket.encrypted ? "https" : "http"}://${req.headers.host}`;
+  }
+  function isOwner(session) {
+    return Boolean(owner && owner.session === session && owner.expires > now());
+  }
+  // 失効した端末から作った owner はメモリからも即時に落とす（D4）。
+  function dropDevice(deviceId) {
+    if (deviceId && owner?.deviceId === deviceId) revoke();
+  }
+  // 同じ端末・同じ秘密の同時 resume は 1 回の daemon 呼び出しにまとめる（D3。旧秘密の再提示と誤判定しない）。
+  function resumeDevice(cookie, session) {
+    const id = `${cookie.id}\0${cookie.secret}`;
+    const pending = resumeInflight.get(id);
+    if (pending) return pending;
+    const result = (async () => {
+      const secret = randomBytes(32).toString("base64url");
+      const fields = {
+        device_id: cookie.id,
+        presented_hash: deviceSecretHash(cookie.secret),
+        next_hash: deviceSecretHash(secret),
+      };
+      const signed = deviceAssertion("device_resume", session, fields);
+      if (!signed) return { status: 503, code: "attestation_unavailable" };
+      const reply = await api("POST", "/api/v1/browser/trusted-devices/verify", { ...fields, assertion: signed });
+      if (reply.error) return { status: reply.status, code: reply.code };
+      if (!reply.device || reply.device.id !== cookie.id) return { status: 503, code: "celeris_unavailable" };
+      return { device: reply.device, secret };
+    })().finally(() => {
+      if (resumeInflight.get(id) === result) resumeInflight.delete(id);
+    });
+    resumeInflight.set(id, result);
+    return result;
+  }
+  async function api(method, route, body, extraHeaders = {}) {
     if (!daemon) throw new Error("daemon unavailable");
     const response = await fetchImpl(new URL(route, daemon), {
       method,
       headers: {
         ...(token ? { authorization: `Bearer ${token}` } : {}),
         ...(body ? { "content-type": "application/json" } : {}),
+        ...extraHeaders,
       },
       body: body ? JSON.stringify(body) : undefined,
       redirect: "manual",
@@ -392,11 +493,12 @@ export function createBrowserLive({
     challenges.delete(challenge);
     if (!item || item.expires <= now()) return false;
     revoke();
-    owner = { session: item.session, expires: now() + 24 * 60 * 60 * 1000 };
+    owner = { session: item.session, deviceId: null, expires: now() + OWNER_TTL_MS };
     return true;
   }
   function startSocket() {
-    if (!ownerSocket) return null;
+    // probe の web は本番の owner socket を開かない（D7）。
+    if (!ownerSocket || probe) return null;
     const dir = statSync(path.dirname(ownerSocket));
     if (dir.mode & 0o077 || dir.uid !== process.getuid())
       throw new Error("browser owner socket directory must be private");
@@ -429,11 +531,126 @@ export function createBrowserLive({
       if (!auth.enabled) return problem(res, 403, "owner_unavailable");
       const session = auth.sessionKey(req);
       if (!session) return problem(res, 401, "unauthenticated");
+      const device = readDeviceCookie(req);
+      const owned = isOwner(session);
       res.json({
         available: true,
-        isOwner: owner?.session === session && owner.expires > now(),
+        isOwner: owned,
         csrfToken: owner?.session === session ? csrf(session) : null,
+        trustedDevice: device.present,
+        resumable: !owned && !probe && Boolean(device.id),
+        deviceId: owned ? (owner.deviceId ?? null) : null,
       });
+    });
+    // 登録端末からの復帰（D3）: password login 済み session ＋ 端末 cookie ＋ daemon の検証・回転。challenge は要らない。
+    app.post("/browser/owner-session/resume", async (req, res) => {
+      try {
+        if (!auth.enabled) return problem(res, 403, "owner_unavailable");
+        const session = auth.sessionKey(req);
+        if (!session) return problem(res, 401, "unauthenticated");
+        if (!sameOrigin(req)) return problem(res, 403, "origin_mismatch");
+        if (probe) return problem(res, 503, "probe_mode");
+        const cookie = readDeviceCookie(req);
+        if (!cookie.id) {
+          if (cookie.present) clearDeviceCookie(req, res);
+          return problem(res, 403, "device_rejected");
+        }
+        if (isOwner(session) && owner.deviceId === cookie.id)
+          return res.json({ ok: true, isOwner: true, csrfToken: csrf(session), deviceId: cookie.id });
+        const result = await resumeDevice(cookie, session);
+        if (!result.device) {
+          if (result.code === "device_rejected") {
+            // 旧秘密の再提示なら daemon が端末を失効させている。その端末由来の owner も落とす。
+            dropDevice(cookie.id);
+            clearDeviceCookie(req, res);
+            return problem(res, 403, "device_rejected");
+          }
+          // daemon が使えない等。cookie は残し、次の読み込みで試し直せるようにする。
+          return problem(res, 503, result.code === "attestation_unavailable" ? result.code : "celeris_unavailable");
+        }
+        // 待つ間に logout・別の失効が起きていたら作らない。
+        const current = auth.sessionKey(req);
+        if (current !== session) return problem(res, 401, "unauthenticated");
+        setDeviceCookie(req, res, result.device, result.secret);
+        const loginExpires = auth.sessionExpiresAt?.(req) ?? now() + OWNER_TTL_MS;
+        const expires = Math.min(now() + OWNER_TTL_MS, loginExpires, result.device.expires_at * 1000);
+        if (!(owner?.session === session && owner.deviceId === result.device.id)) revoke();
+        owner = { session, deviceId: result.device.id, expires };
+        return res.json({ ok: true, isOwner: true, csrfToken: csrf(session), deviceId: result.device.id });
+      } catch {
+        return problem(res, 503, "celeris_unavailable");
+      }
+    });
+    // 端末の登録（D3）・一覧・失効（D4）。登録と失効は owner の CSRF と Origin を要する。
+    async function registerDevice(req, res) {
+      const who = ownerKey(req);
+      if (!who.session) return problem(res, who.status, who.code);
+      if (!mutation(req, who.session, req.body?.csrf ?? req.headers["x-csrf-token"]))
+        return problem(res, 403, "csrf_failed");
+      if (probe) return problem(res, 503, "probe_mode");
+      const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+      if (!name || [...name].length > 64 || [...name].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f))
+        return problem(res, 422, "invalid_input");
+      const secret = randomBytes(32).toString("base64url");
+      const secretHash = deviceSecretHash(secret);
+      const signed = deviceAssertion("device_register", who.session, { name, presented_hash: secretHash });
+      if (!signed) return problem(res, 503, "attestation_unavailable");
+      const reply = await api("POST", "/api/v1/browser/trusted-devices", {
+        name,
+        secret_hash: secretHash,
+        assertion: signed,
+      });
+      if (reply.error) return problem(res, reply.status, reply.code);
+      if (!reply.device || !DEVICE_ID.test(reply.device.id ?? "")) return problem(res, 503, "celeris_unavailable");
+      setDeviceCookie(req, res, reply.device, secret);
+      return res.status(201).json({ ok: true, device: safeDevice(reply.device) });
+    }
+    const deviceBody = [express.json({ limit: "4kb" }), express.urlencoded({ extended: false, limit: "4kb" })];
+    app.post("/browser/owner-session/device", ...deviceBody, (req, res) => {
+      registerDevice(req, res).catch(() => problem(res, 503, "celeris_unavailable"));
+    });
+    app.use("/browser/trusted-devices", ...deviceBody, async (req, res) => {
+      try {
+        const who = ownerKey(req);
+        if (!who.session) return problem(res, who.status, who.code);
+        const match = /^\/browser\/trusted-devices(?:\/([0-9A-HJKMNP-TV-Z]{26})(\/revoke)?)?$/.exec(
+          req.originalUrl.split("?")[0],
+        );
+        if (!match) return problem(res, 404, "not_found");
+        if (!match[1] && req.method === "POST") return await registerDevice(req, res);
+        if (probe) return problem(res, 503, "probe_mode");
+        if (!match[1] && req.method === "GET") {
+          const signed = deviceAssertion("device_list", who.session);
+          if (!signed) return problem(res, 503, "attestation_unavailable");
+          const reply = await api("GET", "/api/v1/browser/trusted-devices", undefined, assertionHeaders(signed));
+          if (reply.error) return problem(res, reply.status, reply.code);
+          return res.json({
+            devices: (reply.devices ?? []).map(safeDevice),
+            limit: reply.limit,
+            now: reply.now,
+            currentDeviceId: owner?.deviceId ?? null,
+          });
+        }
+        if (match[1] && ((req.method === "DELETE" && !match[2]) || (req.method === "POST" && match[2]))) {
+          if (!mutation(req, who.session, req.body?.csrf ?? req.headers["x-csrf-token"]))
+            return problem(res, 403, "csrf_failed");
+          const signed = deviceAssertion("device_revoke", who.session, { device_id: match[1] });
+          if (!signed) return problem(res, 503, "attestation_unavailable");
+          const reply = await api(
+            "DELETE",
+            `/api/v1/browser/trusted-devices/${match[1]}`,
+            undefined,
+            assertionHeaders(signed),
+          );
+          if (reply.error) return problem(res, reply.status, reply.code);
+          if (owner?.deviceId === match[1]) clearDeviceCookie(req, res);
+          dropDevice(match[1]);
+          return res.json({ ok: true, revoked: reply.revoked === true, device: safeDevice(reply.device) });
+        }
+        return problem(res, 405, "method_not_allowed");
+      } catch {
+        return problem(res, 503, "celeris_unavailable");
+      }
     });
     app.post("/browser/owner-session", (req, res) => {
       if (!auth.enabled) return problem(res, 403, "owner_unavailable");

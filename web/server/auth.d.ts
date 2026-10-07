@@ -14,6 +14,7 @@ export function createAuth(options?: {
   register(app: Express): void;
   authenticated(req: Request): boolean;
   sessionKey(req: Request): string | null;
+  sessionExpiresAt(req: Request): number | null;
   onLogout(listener: (sessionKey: string | null) => void): void;
   issue(): string;
   isValid(token: unknown): boolean;

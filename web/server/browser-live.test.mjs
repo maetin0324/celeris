@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, verify } from "node:crypto";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
@@ -473,4 +473,431 @@ test("logout revokes browser owner and live binding", async () => {
   const logout = await get("/logout", { method: "POST", headers: { Origin: base, accept: "application/json" } });
   assert.equal(logout.status, 200);
   assert.equal((await get("/browser/live/T1/R1")).status, 403);
+});
+
+// --- 信頼できる端末（ADR 2026-10-07-browser-trusted-devices）---
+// 偽の daemon は daemon の端点（crates/task-api/src/browser_trusted_devices.rs）の契約を真似る:
+// Ed25519 assertion の検証、hash だけの保存、使うたびの回転、旧秘密の再提示で失効、90 日の sliding 期限。
+const DAY_MS = 24 * 60 * 60 * 1000;
+const devicePublicKey = createPublicKey(createPrivateKey(readFileSync(keyFile)));
+const sessionSecretFile = path.join(dir, "session-secret");
+writeFileSync(sessionSecretFile, "persisted-session-secret\n", { mode: 0o600 });
+let clock = Date.UTC(2026, 9, 7);
+const deviceRows = new Map();
+const deviceRequests = [];
+let deviceSeq = 0;
+const deviceDaemon = http.createServer((req, res) => {
+  let body = "";
+  req.on("data", (chunk) => {
+    body += chunk;
+  });
+  req.on("end", () => {
+    deviceRequests.push({ method: req.method, url: req.url, body, headers: req.headers });
+    const nowSecs = Math.floor(clock / 1000);
+    const reply = (status, value) => {
+      res.statusCode = status;
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify(value));
+    };
+    if (req.headers.authorization !== "Bearer test-daemon-token") return reply(401, { code: "unauthorized" });
+    const parsed = body ? JSON.parse(body) : {};
+    const signed = parsed.assertion ?? {
+      payload: req.headers["x-celeris-assertion-payload"],
+      signature: req.headers["x-celeris-assertion-signature"],
+    };
+    if (
+      typeof signed.payload !== "string" ||
+      !verify(null, Buffer.from(signed.payload), devicePublicKey, Buffer.from(signed.signature ?? "", "hex"))
+    )
+      return reply(403, { code: "not_owner_session" });
+    const claims = JSON.parse(signed.payload);
+    if (claims.expires_at < nowSecs || claims.expires_at > nowSecs + 30 || !claims.owner_session_id)
+      return reply(403, { code: "not_owner_session" });
+    const view = ({ secret_hash, prev_secret_hash, ...row }) => row;
+    const active = (row) => !row.revoked_at && row.expires_at > nowSecs;
+    if (req.url === "/api/v1/browser/trusted-devices" && req.method === "POST") {
+      if (claims.purpose !== "device_register" || !claims.owner_session || claims.presented_hash !== parsed.secret_hash)
+        return reply(403, { code: "not_owner_session" });
+      if ([...deviceRows.values()].filter(active).length >= 5) return reply(409, { code: "device_limit" });
+      const id = `01M4ADMXWYHPSVEJBJ5JPCR${String(++deviceSeq).padStart(3, "0")}`;
+      const row = {
+        id,
+        name: parsed.name,
+        method: "cookie",
+        secret_hash: parsed.secret_hash,
+        prev_secret_hash: null,
+        created_at: nowSecs,
+        last_used_at: null,
+        expires_at: nowSecs + 90 * 86400,
+        absolute_expires_at: null,
+        revoked_at: null,
+        revoked_reason: null,
+        actor: claims.actor_id,
+      };
+      deviceRows.set(id, row);
+      return reply(201, { device: view(row) });
+    }
+    if (req.url === "/api/v1/browser/trusted-devices/verify" && req.method === "POST") {
+      if (
+        claims.purpose !== "device_resume" ||
+        claims.device_id !== parsed.device_id ||
+        claims.presented_hash !== parsed.presented_hash ||
+        claims.next_hash !== parsed.next_hash
+      )
+        return reply(403, { code: "not_owner_session" });
+      const row = deviceRows.get(parsed.device_id);
+      if (!row || !active(row)) return reply(403, { code: "device_rejected" });
+      if (row.prev_secret_hash === parsed.presented_hash) {
+        row.revoked_at = nowSecs;
+        row.revoked_reason = "reuse";
+        return reply(403, { code: "device_rejected" });
+      }
+      if (row.secret_hash !== parsed.presented_hash) return reply(403, { code: "device_rejected" });
+      row.prev_secret_hash = row.secret_hash;
+      row.secret_hash = parsed.next_hash;
+      row.last_used_at = nowSecs;
+      row.expires_at = nowSecs + 90 * 86400;
+      return reply(200, { device: view(row) });
+    }
+    if (req.url === "/api/v1/browser/trusted-devices" && req.method === "GET") {
+      if (claims.purpose !== "device_list" || !claims.owner_session) return reply(403, { code: "not_owner_session" });
+      return reply(200, { devices: [...deviceRows.values()].map(view), limit: 5, now: nowSecs });
+    }
+    const revokeMatch = /^\/api\/v1\/browser\/trusted-devices\/([0-9A-Z]{26})$/.exec(req.url);
+    if (revokeMatch && req.method === "DELETE") {
+      if (claims.purpose !== "device_revoke" || !claims.owner_session || claims.device_id !== revokeMatch[1])
+        return reply(403, { code: "not_owner_session" });
+      const row = deviceRows.get(revokeMatch[1]);
+      if (!row) return reply(404, { code: "device_not_found" });
+      const revoked = !row.revoked_at;
+      if (revoked) {
+        row.revoked_at = nowSecs;
+        row.revoked_reason = "owner";
+      }
+      return reply(200, { revoked, device: view(row) });
+    }
+    return reply(404, { code: "not_found" });
+  });
+});
+let deviceDaemonUrl;
+let socketSeq = 0;
+const webLogs = [];
+
+async function startWeb({ probe = false } = {}) {
+  deviceDaemonUrl ??= await listen(deviceDaemon);
+  const ownerSocket = path.join(dir, `device-owner-${++socketSeq}.sock`);
+  const webApp = createApp({
+    distDir: dir,
+    passwordFile,
+    secretFile: sessionSecretFile,
+    daemonUrl: deviceDaemonUrl,
+    daemonTokenFile: tokenFile,
+    attestationKeyFile: keyFile,
+    ownerSocket,
+    probe,
+    now: () => clock,
+    log: (entry) => webLogs.push(entry),
+  });
+  const server = webApp.listen(0, "127.0.0.1");
+  const url = await new Promise((resolve) =>
+    server.once("listening", () => resolve(`http://127.0.0.1:${server.address().port}`)),
+  );
+  const ownerServer = webApp.locals.browserLive.startSocket();
+  return {
+    url,
+    app: webApp,
+    ownerSocket,
+    ownerServer,
+    async close() {
+      server.closeAllConnections?.();
+      await new Promise((resolve) => server.close(resolve));
+      if (ownerServer) await new Promise((resolve) => ownerServer.close(resolve));
+    },
+  };
+}
+// 小さな cookie jar。login と端末の cookie を別々に持ち、要求ごとに組み合わせる。
+function jarFrom(response, jar = {}) {
+  for (const line of response.headers.getSetCookie()) {
+    const [pair] = line.split(";");
+    const name = pair.slice(0, pair.indexOf("="));
+    const value = pair.slice(pair.indexOf("=") + 1);
+    jar[name] = value;
+    jar[`${name}:raw`] = line;
+  }
+  return jar;
+}
+function cookieHeader(jar) {
+  return Object.entries(jar)
+    .filter(([name, value]) => !name.endsWith(":raw") && value)
+    .map(([name, value]) => `${name}=${value}`)
+    .join("; ");
+}
+function call(web, route, jar, { method = "GET", body, headers = {} } = {}) {
+  return fetch(`${web.url}${route}`, {
+    method,
+    headers: {
+      ...(cookieHeader(jar) ? { Cookie: cookieHeader(jar) } : {}),
+      ...(method === "GET" ? {} : { Origin: web.url }),
+      ...(body ? { "content-type": "application/json" } : {}),
+      ...headers,
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+async function login(web, jar = {}) {
+  const response = await call(web, "/login", jar, { method: "POST", body: { password: "pw" } });
+  assert.equal(response.status, 200);
+  return jarFrom(response, jar);
+}
+async function ownerState(web, jar) {
+  const response = await call(web, "/browser/owner-session", jar);
+  assert.equal(response.status, 200);
+  return response.json();
+}
+async function resume(web, jar) {
+  const response = await call(web, "/browser/owner-session/resume", jar, { method: "POST" });
+  jarFrom(response, jar);
+  return response;
+}
+// host CLI 承認（owner socket の approve と同じ関数）で owner になり、この端末を登録する。
+async function registerDevice(web, jar, name = "laptop") {
+  const challenge = await (await call(web, "/browser/owner-session", jar, { method: "POST" })).json();
+  assert.equal(web.app.locals.browserLive.approve(challenge.challenge), true);
+  const { csrfToken } = await ownerState(web, jar);
+  const response = await call(web, "/browser/trusted-devices", jar, {
+    method: "POST",
+    body: { name, csrf: csrfToken },
+  });
+  assert.equal(response.status, 201);
+  const reply = await response.json();
+  jarFrom(response, jar);
+  return reply.device;
+}
+const DEVICE = "__celeris_web_device";
+
+test("trusted_device: registered device resumes owner without a challenge after a web restart", async () => {
+  clock = Date.UTC(2026, 9, 7);
+  const first = await startWeb();
+  const jar = await login(first);
+  const device = await registerDevice(first, jar);
+  const raw = jar[`${DEVICE}:raw`];
+  assert.match(raw, /HttpOnly/i);
+  assert.match(raw, /SameSite=Strict/i);
+  assert.match(raw, /Path=\/browser\/owner-session/);
+  assert.match(raw, new RegExp(`Max-Age=${90 * 86400}\\b`));
+  assert.doesNotMatch(raw, /Secure/, "Secure only over https");
+  const firstSecret = jar[DEVICE].split(".")[1];
+  assert.equal(jar[DEVICE].split(".")[0], device.id);
+  assert.ok(Buffer.from(firstSecret, "base64url").length >= 32);
+  await first.close();
+
+  // web の再起動（promote）: owner はメモリから消えるが、login と端末は残る。
+  const second = await startWeb();
+  const before = await ownerState(second, jar);
+  assert.equal(before.isOwner, false);
+  assert.equal(before.trustedDevice, true);
+  assert.equal(before.resumable, true);
+  const resumed = await resume(second, jar);
+  assert.equal(resumed.status, 200);
+  const body = await resumed.json();
+  assert.equal(body.isOwner, true);
+  assert.equal(body.deviceId, device.id);
+  const after = await ownerState(second, jar);
+  assert.equal(after.isOwner, true);
+  assert.ok(after.csrfToken);
+  // 回転: 新しい秘密の cookie が置き直される。
+  const secondSecret = jar[DEVICE].split(".")[1];
+  assert.notEqual(secondSecret, firstSecret);
+  // owner で使える（一覧）。秘密も hash も応答に出ない。
+  const list = await call(second, "/browser/trusted-devices", jar);
+  assert.equal(list.status, 200);
+  const listed = await list.text();
+  assert.equal(JSON.parse(listed).currentDeviceId, device.id);
+  assert.equal(listed.includes("secret_hash"), false);
+  // 秘密の値は daemon への要求・log に出ない（daemon には hash だけ）。
+  const seen = JSON.stringify(deviceRequests) + JSON.stringify(webLogs);
+  for (const secret of [firstSecret, secondSecret]) assert.equal(seen.includes(secret), false);
+  await second.close();
+});
+
+test("trusted_device: concurrent resumes from the same cookie share one daemon verify", async () => {
+  clock = Date.UTC(2026, 9, 8);
+  const first = await startWeb();
+  const jar = await login(first);
+  await registerDevice(first, jar, "tablet");
+  await first.close();
+  const second = await startWeb();
+  const verifies = deviceRequests.filter((r) => r.url.endsWith("/verify")).length;
+  const [a, b] = await Promise.all([
+    call(second, "/browser/owner-session/resume", jar, { method: "POST" }),
+    call(second, "/browser/owner-session/resume", jar, { method: "POST" }),
+  ]);
+  assert.deepEqual([a.status, b.status], [200, 200]);
+  assert.equal(deviceRequests.filter((r) => r.url.endsWith("/verify")).length, verifies + 1);
+  await second.close();
+});
+
+test("trusted_device: revoked device is rejected and its owner session is dropped at once", async () => {
+  clock = Date.UTC(2026, 9, 9);
+  const first = await startWeb();
+  const jar = await login(first);
+  const device = await registerDevice(first, jar, "phone");
+  await first.close();
+  const web = await startWeb();
+  assert.equal((await resume(web, jar)).status, 200);
+  const { csrfToken } = await ownerState(web, jar);
+  const route = `/browser/trusted-devices/${device.id}`;
+  assert.equal((await call(web, route, jar, { method: "DELETE", body: { csrf: "wrong" } })).status, 403);
+  const kept = { ...jar };
+  const revoked = await call(web, route, jar, { method: "DELETE", body: { csrf: csrfToken } });
+  assert.equal(revoked.status, 200);
+  assert.equal((await revoked.json()).revoked, true);
+  assert.equal((await ownerState(web, jar)).isOwner, false, "owner from the revoked device is gone");
+  assert.equal((await call(web, "/browser/trusted-devices", jar)).status, 403);
+  // cookie を手元に残していても、失効した端末からは復帰できない。
+  const again = await resume(web, kept);
+  assert.equal(again.status, 403);
+  assert.equal((await again.json()).code, "device_rejected");
+  assert.match(kept[`${DEVICE}:raw`], /Expires=Thu, 01 Jan 1970/);
+  assert.equal((await ownerState(web, kept)).isOwner, false);
+  await web.close();
+});
+
+test("trusted_device: expiry slides with use and rejects after 90 idle days", async () => {
+  clock = Date.UTC(2026, 9, 10);
+  const first = await startWeb();
+  let jar = await login(first);
+  await registerDevice(first, jar, "desktop");
+  await first.close();
+  const web = await startWeb();
+  // 89 日後に使うと延長される（login は 24h で切れるので取り直す）。
+  clock += 89 * DAY_MS;
+  jar = await login(web, jar);
+  const used = await resume(web, jar);
+  assert.equal(used.status, 200);
+  assert.match(jar[`${DEVICE}:raw`], new RegExp(`Max-Age=${90 * 86400}\\b`));
+  clock += 89 * DAY_MS;
+  jar = await login(web, jar);
+  assert.equal((await resume(web, jar)).status, 200);
+  // 最後の使用から 90 日を越えると拒否。
+  clock += 91 * DAY_MS;
+  jar = await login(web, jar);
+  const expired = await resume(web, jar);
+  assert.equal(expired.status, 403);
+  assert.equal((await ownerState(web, jar)).isOwner, false);
+  await web.close();
+});
+
+test("trusted_device: wrong secret, reused old secret and malformed cookie are rejected", async () => {
+  clock = Date.UTC(2026, 9, 11);
+  const first = await startWeb();
+  const jar = await login(first);
+  const device = await registerDevice(first, jar, "work");
+  await first.close();
+  const web = await startWeb();
+  // 誤った秘密。
+  const wrong = { ...jar, [DEVICE]: `${device.id}.${randomBytes(32).toString("base64url")}` };
+  assert.equal((await resume(web, wrong)).status, 403);
+  // 形の不正な cookie は daemon に送らずに拒否して消す。
+  const verifies = deviceRequests.filter((r) => r.url.endsWith("/verify")).length;
+  const malformed = { ...jar, [DEVICE]: "not-a-device" };
+  assert.equal((await resume(web, malformed)).status, 403);
+  assert.match(malformed[`${DEVICE}:raw`], /Expires=Thu, 01 Jan 1970/);
+  assert.equal(deviceRequests.filter((r) => r.url.endsWith("/verify")).length, verifies);
+  // 正しい秘密で復帰 → 秘密が回転する。
+  const stale = jar[DEVICE];
+  assert.equal((await resume(web, jar)).status, 200);
+  assert.equal((await ownerState(web, jar)).isOwner, true);
+  // 別の login session が旧秘密を使い回す → 拒否、端末は失効し、その端末由来の owner も落ちる。
+  const thief = await login(web, { [DEVICE]: stale });
+  const reused = await resume(web, thief);
+  assert.equal(reused.status, 403);
+  assert.equal((await ownerState(web, jar)).isOwner, false);
+  assert.equal(deviceRows.get(device.id).revoked_reason, "reuse");
+  assert.equal((await resume(web, jar)).status, 403, "the rotated secret dies with the device");
+  await web.close();
+});
+
+test("trusted_device: device cookie alone (no password login) is rejected", async () => {
+  clock = Date.UTC(2026, 9, 12);
+  const first = await startWeb();
+  const jar = await login(first);
+  const device = await registerDevice(first, jar, "shared");
+  await first.close();
+  const web = await startWeb();
+  const verifies = deviceRequests.filter((r) => r.url.endsWith("/verify")).length;
+  const onlyDevice = { [DEVICE]: jar[DEVICE] };
+  const anonymous = await resume(web, onlyDevice);
+  assert.equal(anonymous.status, 401);
+  const forged = { [DEVICE]: jar[DEVICE], __celeris_web_session: "e30.forged" };
+  assert.equal((await resume(web, forged)).status, 401);
+  assert.equal((await call(web, "/browser/owner-session", onlyDevice)).status, 401);
+  assert.equal(deviceRequests.filter((r) => r.url.endsWith("/verify")).length, verifies);
+  // 端末は使われていないので、本人はそのまま復帰できる。
+  assert.equal((await resume(web, jar)).status, 200);
+  assert.equal(deviceRows.get(device.id).revoked_at, null);
+  await web.close();
+});
+
+test("trusted_device: probe mode opens no owner socket and writes no device state", async () => {
+  clock = Date.UTC(2026, 9, 13);
+  const first = await startWeb();
+  const jar = await login(first);
+  const device = await registerDevice(first, jar, "probe-target");
+  await first.close();
+  const probe = await startWeb({ probe: true });
+  assert.equal(probe.ownerServer, null);
+  assert.equal(existsSync(probe.ownerSocket), false);
+  const count = deviceRequests.length;
+  const row = JSON.stringify(deviceRows.get(device.id));
+  const state = await ownerState(probe, jar);
+  assert.equal(state.resumable, false);
+  const resumed = await resume(probe, jar);
+  assert.equal(resumed.status, 503);
+  assert.equal((await resumed.json()).code, "probe_mode");
+  assert.equal(resumed.headers.getSetCookie().length, 0);
+  assert.equal(deviceRequests.length, count, "probe sends nothing to the daemon");
+  assert.equal(JSON.stringify(deviceRows.get(device.id)), row);
+  assert.equal(await probe.app.locals.browserLive.approve("000000000000"), false);
+  await probe.close();
+  // probe の後も、本番の web は同じ cookie で復帰できる（回転されていない）。
+  const web = await startWeb();
+  assert.equal((await resume(web, jar)).status, 200);
+  await web.close();
+});
+
+test("trusted_device: registration requires owner, CSRF and origin", async () => {
+  clock = Date.UTC(2026, 9, 14);
+  const web = await startWeb();
+  const jar = await login(web);
+  const notOwner = await call(web, "/browser/trusted-devices", jar, { method: "POST", body: { name: "x", csrf: "x" } });
+  assert.equal(notOwner.status, 403);
+  assert.equal((await notOwner.json()).code, "not_owner");
+  const challenge = await (await call(web, "/browser/owner-session", jar, { method: "POST" })).json();
+  web.app.locals.browserLive.approve(challenge.challenge);
+  const { csrfToken } = await ownerState(web, jar);
+  assert.equal(
+    (await call(web, "/browser/trusted-devices", jar, { method: "POST", body: { name: "x", csrf: "bad" } })).status,
+    403,
+  );
+  assert.equal(
+    (
+      await call(web, "/browser/trusted-devices", jar, {
+        method: "POST",
+        body: { name: "x", csrf: csrfToken },
+        headers: { Origin: "http://evil.example" },
+      })
+    ).status,
+    403,
+  );
+  assert.equal(
+    (await call(web, "/browser/trusted-devices", jar, { method: "POST", body: { name: "", csrf: csrfToken } })).status,
+    422,
+  );
+  await web.close();
+});
+
+after(async () => {
+  deviceDaemon.closeAllConnections?.();
+  if (deviceDaemonUrl) await new Promise((resolve) => deviceDaemon.close(resolve));
 });

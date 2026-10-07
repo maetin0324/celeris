@@ -739,3 +739,6 @@ async fn run_claimed(
         tracing::warn!(%error, %run_id, "CoS chat credential revoke failed");
     }
 }
+
+#[cfg(test)]
+mod tests;

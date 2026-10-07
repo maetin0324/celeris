@@ -115,6 +115,7 @@ pub fn render(context: &RunContext, artifacts: &str) -> String {
     out.push_str(&deliverables_placement_note());
     out.push_str(&production_host_note());
     out.push_str(&tool_launch_policy_note());
+    out.push_str(&run_tmpdir_note());
     out.push_str(&memory_instructions(context, artifacts));
     // ADR-0044 D2（Phase 53）: コメントの書き方（`comments_enabled` の run にだけ）。
     out.push_str(&comment_instructions(context));
@@ -1018,6 +1019,15 @@ pub(crate) fn tool_launch_policy_note() -> String {
      （`api.anthropic.com`・`api.openai.com` など）を自分で起動しない。並列化や分担、別の目で見る確認が要るなら、\
      計画（execution plan の子 task / WorkUnit）、`delegate.json`、人への質問で行う。起動は検出されて event に\
      記録され、レビュアーに渡る（ADR 2026-10-07-worker-no-subagents-no-llm-cli）。\n\n"
+        .to_string()
+}
+
+/// ADR 2026-10-07-build-tmp-hygiene D2.3: 写し・ビルド出力を `/tmp`（tmpfs）に置かない（常に出る — context に
+/// 関わらない）。`$TMPDIR` は daemon が run ごとに `runs/<run_id>/tmp` へ向け、run の終了で消す（`crate::run_tmpdir`）。
+pub(crate) fn run_tmpdir_note() -> String {
+    "## 一時 file の置き場所 (no copies under /tmp)\n\
+     リポジトリの写し・pnpm store の写し・ビルド出力・大きな一時 file は `/tmp` に置かず、`$TMPDIR`\
+     （run 終了で消える）か作業場所の下に置く。残したい物は `artifacts/` に置く。\n\n"
         .to_string()
 }
 

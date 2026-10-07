@@ -17,6 +17,9 @@ pub(super) struct RunAdapterPrep {
     pub(super) followups_env: Option<Vec<(String, String)>>,
     /// ADR-0074 付記 2026-10-05 D3: WU の run の `CELERIS_WU_BASE` / `CELERIS_WU_TARGET`（followups の後、コンテナの前）。
     pub(super) work_unit_env: Option<Vec<(String, String)>>,
+    /// ADR 2026-10-07-build-tmp-hygiene D2.1: ローカルの host run の `TMPDIR`・`TMP`・`TEMP`
+    /// （`runs/<run_id>/tmp`。WU の env の後、コンテナの前）。
+    pub(super) run_tmp_env: Option<Vec<(String, String)>>,
     /// ADR-0043 D3: コンテナで走らせる run のプラン。
     pub(super) container: Option<task_worker::SharedPlan>,
     /// ADR-0072 D14: planner run の `[execution.planner].permission_mode`。
@@ -59,6 +62,16 @@ pub(super) fn prepare_run_adapter(
             Some(wrapped) => wrapped,
             None => {
                 tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CELERIS_WU_BASE / CELERIS_WU_TARGET were not applied (ADR-0074 appendix 2026-10-05)");
+                adapter
+            }
+        },
+        None => adapter,
+    };
+    let adapter = match &prep.run_tmp_env {
+        Some(env) => match adapter.with_env(env) {
+            Some(wrapped) => wrapped,
+            None => {
+                tracing::debug!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; the run TMPDIR was not applied (ADR 2026-10-07-build-tmp-hygiene D2)");
                 adapter
             }
         },
@@ -555,10 +568,26 @@ pub(super) async fn run_worker(
             run_db.as_deref(),
         )
     });
+    // ADR 2026-10-07-build-tmp-hygiene D2.1: ローカルの host run（Remote・コンテナは範囲外）は run 固有の
+    // `runs/<run_id>/tmp` を作って `TMPDIR`・`TMP`・`TEMP` を向ける。D2.2: この関数を抜ける全経路で消す
+    // （正常な終端は下の `remove`、`?` の早期 return と future ごとの中断は `Drop`）。作れなければ警告だけで
+    // run は従来の環境のまま走らせる。
+    let run_tmp = if remote.is_none() && container_plan.is_none() {
+        match task_worker::run_tmpdir::RunTmpDir::create(&req.workspace, run_id) {
+            Ok(tmp) => Some(tmp),
+            Err(e) => {
+                tracing::warn!(task_id = %task_id, run_id, error = %e, "run tmpdir: could not create; TMPDIR is left unchanged (ADR 2026-10-07-build-tmp-hygiene D2)");
+                None
+            }
+        }
+    } else {
+        None
+    };
     let prep = RunAdapterPrep {
         env: target.as_ref().map(|(_, env)| env.clone()),
         followups_env,
         work_unit_env,
+        run_tmp_env: run_tmp.as_ref().map(|tmp| tmp.env()),
         container: container_plan.clone(),
         permission_mode: planner_permission_mode.clone(),
     };
@@ -671,6 +700,14 @@ pub(super) async fn run_worker(
         Some(ws) => push_remote_after_run(ws, &sink, outcome).await,
         None => outcome,
     };
+    // ADR 2026-10-07-build-tmp-hygiene D2.2: 成否・timeout・中断に依らず run の一時 dir を消す
+    // （`runs/<run_id>/` のログ・`result.json` は残す）。消せなかった分は `run_tmpdir::sweep_stale` が拾い直す。
+    if let Some(tmp) = run_tmp {
+        let path = tmp.path().to_path_buf();
+        if let Err(e) = tmp.remove() {
+            tracing::warn!(task_id = %task_id, run_id, path = %path.display(), error = %e, "run tmpdir: cleanup failed (ADR 2026-10-07-build-tmp-hygiene D2)");
+        }
+    }
     // ADR-0098 D1: run の終わり方に依らず、run がまだ lease を持っていれば宣言した後続を作る
     // （出自 = この run。`absorb_memory` と同じく run の成否とは独立）。
     if followups_enabled {

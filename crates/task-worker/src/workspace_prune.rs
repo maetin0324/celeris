@@ -76,6 +76,17 @@ pub fn prunable_paths(task_dir: &Path) -> Vec<PathBuf> {
             }
         }
     }
+    // ADR 2026-10-07-build-tmp-hygiene D2.2: 終端タスクの run の一時 dir（`runs/<run_id>/tmp`）のうち、
+    // run の終端処理で消せなかったもの（daemon 停止中に死んだ run など）を拾い直す。ログ・`result.json` は残す。
+    if let Ok(entries) = std::fs::read_dir(task_dir.join("runs")) {
+        let mut tmps: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path().join(crate::run_tmpdir::RUN_TMPDIR_NAME))
+            .filter(|p| is_real_dir(p))
+            .collect();
+        tmps.sort();
+        out.extend(tmps);
+    }
     out
 }
 

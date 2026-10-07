@@ -2310,10 +2310,11 @@ fn a_project_without_a_workspace_keeps_the_previous_prompt_byte_for_byte() {
     assert_eq!(
         crate::preamble::render(&RunContext::default(), "artifacts"),
         format!(
-            "{}{}{}",
+            "{}{}{}{}",
             crate::preamble::deliverables_placement_note(),
             crate::preamble::production_host_note(),
-            crate::preamble::tool_launch_policy_note()
+            crate::preamble::tool_launch_policy_note(),
+            crate::preamble::run_tmpdir_note()
         )
     );
 }

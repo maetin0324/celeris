@@ -47,7 +47,7 @@ impl SharedCdp {
         if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(std::io::Error::other("invalid relay token"));
         }
-        let listener = UnixListener::bind(socket)?;
+        let listener = bind_unix_listener(socket)?;
         std::fs::set_permissions(socket, std::fs::Permissions::from_mode(mode))?;
         listener.set_nonblocking(true)?;
         let controller = Arc::new(Mutex::new(controller));
@@ -99,6 +99,45 @@ impl Drop for SharedCdp {
         }
         let _ = std::fs::remove_file(&self.socket);
     }
+}
+
+/// `socket` に unix socket を bind する。path が `sun_path`（107 byte）に収まらないとき
+/// （長い TMPDIR・深い workspace の下の session dir）は、親 dir を開いた fd の
+/// `/proc/self/fd/<fd>/<name>` という短い別名で bind する。socket の実体は同じ dir に
+/// できるので、sandbox からは従来どおり `/session/<name>` で見える。別名でも収まらなければ
+/// path と長さを含む明示の誤りにする（ADR 2026-10-07-build-tmp-hygiene 付記）。
+pub(crate) fn bind_unix_listener(socket: &Path) -> std::io::Result<UnixListener> {
+    let max = crate::browser_action::SUN_PATH_MAX;
+    if socket.as_os_str().len() <= max {
+        return UnixListener::bind(socket);
+    }
+    let too_long = |len: usize| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "unix socket path is {len} bytes (limit {max}) and has no short alias: {}",
+                socket.display()
+            ),
+        )
+    };
+    let (Some(parent), Some(name)) = (socket.parent(), socket.file_name()) else {
+        return Err(too_long(socket.as_os_str().len()));
+    };
+    // fd は bind の間だけ開いておけばよい。socket の inode は dir に残る。
+    let dir = std::fs::File::open(parent)?;
+    let alias = short_alias(&dir, name);
+    if alias.as_os_str().len() > max {
+        return Err(too_long(socket.as_os_str().len()));
+    }
+    UnixListener::bind(&alias)
+}
+
+/// 開いた dir の中の `name` を指す短い path（`/proc/self/fd/<fd>/<name>`）。
+pub(crate) fn short_alias(dir: &std::fs::File, name: &std::ffi::OsStr) -> PathBuf {
+    use std::os::fd::AsRawFd;
+    Path::new("/proc/self/fd")
+        .join(dir.as_raw_fd().to_string())
+        .join(name)
 }
 
 fn serve(
@@ -395,4 +434,85 @@ fn sha1(input: &[u8]) -> [u8; 20] {
         out[i * 4..i * 4 + 4].copy_from_slice(&word.to_be_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// sun_path（107 byte）を確実に超える深さの dir を作る。
+    fn long_dir(base: &Path) -> PathBuf {
+        let dir = base
+            .join("abcdefghijklmnopqrstuvwxyz0123")
+            .join("runs")
+            .join("01M4BH3KF5GHH13SM1RZHDJNYW")
+            .join("browser-fallback-1");
+        std::fs::create_dir_all(&dir).expect("long dir");
+        dir
+    }
+
+    #[test]
+    fn tmpdir_long_path_bind_unix_listener_binds_in_place() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = long_dir(tmp.path());
+        let socket = dir.join("cdp-relay.sock");
+        assert!(socket.as_os_str().len() > crate::browser_action::SUN_PATH_MAX);
+        assert!(
+            UnixListener::bind(&socket).is_err(),
+            "direct bind must overflow"
+        );
+        let listener = bind_unix_listener(&socket).expect("bind via short alias");
+        use std::os::unix::fs::FileTypeExt;
+        let meta = std::fs::symlink_metadata(&socket).expect("socket in session dir");
+        assert!(meta.file_type().is_socket());
+        let handle = std::fs::File::open(&dir).expect("dir");
+        let mut client =
+            UnixStream::connect(short_alias(&handle, "cdp-relay.sock".as_ref())).expect("connect");
+        let (mut server, _) = listener.accept().expect("accept");
+        client.write_all(b"ping").expect("write");
+        let mut buf = [0; 4];
+        server.read_exact(&mut buf).expect("read");
+        assert_eq!(&buf, b"ping");
+    }
+
+    #[test]
+    fn tmpdir_long_path_bind_unix_listener_short_path_unchanged() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket = tmp.path().join("s.sock");
+        let listener = bind_unix_listener(&socket).expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        assert_eq!(addr.as_pathname(), Some(socket.as_path()));
+    }
+
+    #[test]
+    fn tmpdir_long_path_bind_unix_listener_rejects_overlong_name_explicitly() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket = tmp.path().join("n".repeat(120));
+        let err = bind_unix_listener(&socket).expect_err("name alone exceeds sun_path");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(err.to_string().contains("limit 107"), "{err}");
+    }
+
+    #[test]
+    fn tmpdir_long_path_shared_cdp_starts_and_cleans_up() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dir = long_dir(tmp.path());
+        let socket = dir.join("cdp-relay.sock");
+        let devnull = || {
+            std::fs::File::options()
+                .read(true)
+                .write(true)
+                .open("/dev/null")
+        };
+        let controller = CdpController::new(devnull().expect("null"), devnull().expect("null"));
+        let shared = SharedCdp::start(controller, &socket, "a".repeat(64), vec![])
+            .expect("relay starts under a long session dir");
+        let mode = std::fs::metadata(&socket)
+            .expect("socket")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+        drop(shared);
+        assert!(!socket.exists(), "relay socket removed on drop");
+    }
 }

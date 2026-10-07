@@ -261,3 +261,7 @@ D1〜D4 は実装済み。決定どおりでない所・未実装の所を先に
 - remote run の TMPDIR、`tmp_sweep`（予約語、実装しない）は範囲外のまま。
 - ADR-0133 の種類一覧（通知 9 種・受信箱 14 種）に `disk`・`disk_full` を足す追記はまだ（本 ADR の付記が唯一の記載）。
 - 本番での有効化・`/tmp` の既存残骸の掃除は人の操作（`docs/ops/build-tmp-hygiene.md`）。
+
+### 付記（h3-tmpdir、2026-10-07）: 長い TMPDIR・深い session dir での unix socket
+
+release gate（`CELERIS_USERNS_TESTS=1`、TMPDIR が 30 文字超）で `browser_h3_injection` が `isolated_runtime_unavailable` になった原因は、`SharedCdp::start` が `<workspace>/runs/<run_id>/browser/cdp-relay.sock` を bind する際に `sun_path`（107 byte）を超えたこと（`path must be shorter than SUN_LEN`）。action socket は既に短い固定 path（ADR 2026-10-06-browser-action-socket-path）。sandbox は `/session/cdp-relay.sock` で接続するので socket は session dir に置く必要がある。そこで `browser_shared_cdp::bind_unix_listener` は、path が上限を超えるとき親 dir を開いた fd の `/proc/self/fd/<fd>/<name>` で bind し、実体を session dir に作る。別名でも収まらなければ path と長さを含む `InvalidInput` にする。daemon 経路と launcher 経路（`start_with_mode`）の両方に効き、試験側の TMPDIR を短くする回避には頼らない。試験は `tmpdir_long_path_` 4 件（userns 不要）。

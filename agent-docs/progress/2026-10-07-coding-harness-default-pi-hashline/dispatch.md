@@ -38,3 +38,8 @@ ADR `agent-docs/adr/2026-10-07-coding-harness-default-pi-hashline.md` の「後�
 
 ## 提案
 - `ModelFamily::parse` が catalog の穴埋め値 `"unknown"` を `Unknown` と読むようにすれば、config 側の除外（`crates/celeris/src/config/dispatch.rs`）が要らなくなる。
+
+## 範囲 check の不合格（attempt 1, 2026-10-07）
+- 範囲 check が `crates/celerisctl/src/commands/worker_tests.rs`（`ProviderConfig` の struct literal 5 か所に `extensions`/`tools` を追加）と `crates/task-ops/src/routing_outcome/tests.rs`（`LaneResolution` の literal に `coding_default: None`）を範囲外として落とした。
+- どちらも ADR が定めた欄（provider 行の `extensions`/`tools`、監査の `coding_default`）を struct に足すと、全欄を列挙する既存試験の literal が compile できなくなるための機械的な 1 行修正で、外すと `cargo test --workspace` が build で落ちる。pi-adapter 葉が同じ理由で celeris/celerisctl 配線を差し戻した経緯と同じ。
+- plan_issue として申告: dispatch 葉の範囲 check の許可 pattern に `crates/celerisctl/src/commands/worker_tests.rs` と `crates/task-ops/src/routing_outcome/tests.rs` を加える（新 key の葉で本 branch tip を ff 取り込みさせる）。

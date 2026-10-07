@@ -1,7 +1,7 @@
 # CoS チャットの設定と運用
 
 ---
-tasks: [01M46VVAD0ZAVZ9C4Q0KJM9ESV]
+tasks: [01M46VVAD0ZAVZ9C4Q0KJM9ESV, 01M4APB5FP8T3TAAE51Z20E3M1]
 ---
 
 [CoS チャット ADR](../../agent-docs/adr/2026-10-05-cos-chat-home.md) D1〜D6 の運用手順。本番 config・service・release・DB を変える操作は、以下を読んだ人が本番 host で実行する。導入時は [selfdeploy](selfdeploy.md) の release → verify → promote と、旧 CoS run の drain・停止、DB と添付の一体バックアップを先に計画する。
@@ -66,9 +66,40 @@ CoS run の `celerisctl` は、run の環境に入る `CELERIS_API_URL`（起動
 
 ## 添付の引き継ぎ（attach-handoff）
 
-- task へ: CoS が添付を task に pin すると（owner 作成→pin→応答確認→引渡し済み、の順）、その task の作業 run の開始時に hash・size を照合して作業ツリー外へ read-only で stage し、前置きの入力 manifest に載る（screenshot を見て画面修正する依頼など）。照合失敗と ssh remote の task は `delivery=unavailable` になる。
-- 知識ベースへ: PDF などは provenance 付きの KB inbox candidate として pin される。candidate は人が確認してから正本に入る。
+- task へ: CoS は起票の request（`POST /api/v1/tasks`・operation `task.create`）の `attachment_ids` で、task の作成と添付の pin を同じ transaction で行う（[ADR 2026-10-07-cos-live-fixes](../../agent-docs/adr/2026-10-07-cos-live-fixes.md) D1。「起票してから pin」はしない）。pin された添付は、その task の作業 run の開始時に hash・size を照合して作業ツリー外へ read-only で stage し、前置きの入力 manifest に載る（screenshot を見て画面修正する依頼など）。照合失敗と ssh remote の task は `delivery=unavailable` になる。
+- 知識ベースへ: PDF などは `POST /api/v1/knowledge/inbox`（CoS operation `knowledge.record`、scope は `project:<slug>`）の `attachment_ids` で、候補の作成と同時に provenance 付きで pin される（同 ADR D2）。candidate は人が確認してから正本に入る。
 - 確認は task 詳細の入力添付と KB の candidate で行う。stage 先の完了後削除は未実装。
+
+## 実機確認の再実行（cos-chat-live.sh）
+
+CoS chat の (a)〜(e)（往復・session の継続・画像入力・起票・screenshot の task への引き継ぎ・PDF の KB 取り込み）は
+`scripts/dev/cos-chat-live.sh` で再実行する（同 ADR D5）。試験用 data dir に専用の config・DB・KB を作り、`CELERIS_CONFIG` ほか
+`CELERIS_*` をその下だけに向けて一時 daemon を起こす。本番の設定・DB・KB・port（既定 17932、`COS_CHAT_LIVE_PORT` で変える）は
+読まない・書かない。外部への通信は `full` の LLM 呼び出し（claude_oauth の既存ログイン）だけ。試験・CI からは呼ばない。
+
+```sh
+cargo build -p celeris -p celerisctl
+bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> dry   # LLM を呼ばない疎通確認
+bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> full  # (a)〜(e) を流す
+```
+
+- 引数が 4 つでない、または 4 つ目が `dry|full` 以外なら usage を出して exit 2。`<data dir>` は毎回新しい空の場所にする。
+- 試験用 provider は `concurrency = 4`（1 では CoS の turn が task worker と受信箱の triage の後ろで止まる）。
+- 各 turn の `run_id` は `POST …/messages` の応答（queued では `null`）でなく、`GET /api/v1/chat/threads/{t}/messages` を
+  `client_message_id` で引いて待つ。
+- 終わりに一時 daemon を process group ごと止め、`pgrep -f <data dir>` で残りが無いことを `steps.log` に書く。
+
+見る証跡（`<data dir>/evidence/`）:
+
+- `verdict.txt` — (d)・(e) の PASS/FAIL。(d) は operation `task.create` が `applied` で `result` に screenshot の添付 id があり、
+  `chat_attachment_refs`（`owner_kind=task`）があり、その task の最初の run の `prompt.txt` の「## 入力の添付」に載ること。
+  (e) は operation `knowledge.record` が `applied` で、`GET /api/v1/knowledge/inbox/{id}` の `provenance` に PDF の添付 id が出ること。
+- `steps.log` — 各 turn の `run_id`・終端状態・`session_mode`、daemon の停止と残り process。
+- `db.txt` — `chat_runs`・`node_sessions`・`chat_messages`・`cos_operations`（`result_json` つき）・`cos_operation` の events・
+  `chat_attachment_refs`・`tasks`。
+- `kb-inbox.json`・`kb-inbox-<id>.json` — KB 候補の一覧と詳細（provenance）。
+- `input-manifest.txt`・`prompt-files.txt`・`staged.txt` — 起票された task の入力 manifest、`prompt.txt` の一覧、stage された添付。
+- `run-<turn>.json`・`post-<turn>.json`・`msg-<turn>.json`・`daemon.log` — 各 turn の run と daemon のログ。
 
 ## 添付と保持
 

@@ -9,7 +9,7 @@ use task_ops::daemon::ProviderLive;
 use task_worker::{
     AcpAdapter, AcpConfig, AiderAdapter, AiderConfig, BrowserSpecialistAdapter, ClaudeCodeAdapter,
     ClaudeCodeConfig, CodexAdapter, CodexConfig, FakeAdapter, LangMemAdapter, LangMemConfig,
-    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, PiAdapter, PiConfig, WorkerAdapter,
+    LdrAdapter, LdrConfig, PaperQaAdapter, PaperQaConfig, WorkerAdapter,
 };
 
 use super::secrets::{effective_model, merged_env_with_secrets, resolve_secret};
@@ -81,61 +81,6 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     ),
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
-                    container: None,
-                }))
-            }
-            PiAdapter::ID => {
-                let mut env = merged_env_with_secrets(
-                    &HashMap::new(),
-                    &HashMap::new(),
-                    &p.env,
-                    &p.env_from_secrets,
-                    secrets_dir,
-                );
-                let base_url = match config.provider_llm_source(&p.id).map(|s| s.source) {
-                    Some(task_core::LlmSourceRef::Celeris) => {
-                        if let Ok(Some(key)) = config.api.read_token() {
-                            env.push(("CELERIS_PI_API_KEY".into(), key));
-                        }
-                        let listen = config.llm_proxy.listen;
-                        let ip = if listen.ip().is_unspecified() {
-                            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
-                        } else {
-                            listen.ip()
-                        };
-                        Some(format!(
-                            "http://{}/v1",
-                            std::net::SocketAddr::new(ip, listen.port())
-                        ))
-                    }
-                    Some(task_core::LlmSourceRef::OpenaiCompatible(id)) => config
-                        .llm_proxy
-                        .sources
-                        .openai_compatible
-                        .iter()
-                        .find(|s| s.id == id)
-                        .map(|source| {
-                            if let Some(key) = &source.api_key {
-                                env.push(("CELERIS_PI_API_KEY".into(), key.clone()));
-                            }
-                            source.base_url.clone()
-                        }),
-                    _ => env
-                        .iter()
-                        .rev()
-                        .find(|(key, _)| {
-                            matches!(key.as_str(), "OPENAI_BASE_URL" | "OPENAI_API_BASE")
-                        })
-                        .map(|(_, value)| value.clone()),
-                };
-                Arc::new(PiAdapter::new(PiConfig {
-                    command: p.command.clone().unwrap_or_else(|| "pi".into()),
-                    args: p.args.clone().unwrap_or_default(),
-                    model: effective_model(&p.model, &None),
-                    extensions: p.extensions.clone(),
-                    tools: p.tools.clone(),
-                    base_url,
-                    env,
                     container: None,
                 }))
             }

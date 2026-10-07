@@ -1,5 +1,5 @@
 ---
-title: Pi + Hashline の軽量 worker adapter（task-worker・celeris config/daemon）
+title: Pi + Hashline の軽量 worker adapter（task-worker）
 tasks: [01M49X6CW5KE5HY0EZRQR0S045]
 status: done
 updated: 2026-10-07
@@ -17,16 +17,15 @@ ADR `agent-docs/adr/2026-10-07-coding-harness-default-pi-hashline.md` の「後�
   - usage: assistant の `message_end` の `usage.{input,output,cacheRead,cacheWrite,cost.total}` を `Usage` に合算（retry の途中失敗 message も token は数える）。
   - 失敗分類: `stopReason` error/aborted の `errorMessage`、stderr を `classify_provider_failure` へ。`GoUsageLimitError` → Throttled。extension の読み込み失敗は retryable=false。`agent_end` が無い・非 0 exit は retryable Error。wall clock / idle timeout は process group を kill。
   - opencode-go pool: 選ばれた account dir（`XDG_DATA_HOME`）の `opencode/auth.json` から鍵を `OPENCODE_API_KEY` に渡す（auth.json は写さない）。openai_compatible / llm-proxy（`celeris/<tier>`）は run ごとに `models.json` を書き、鍵とルーティング文脈 header は env 参照で渡す。
-- `crates/celeris/src/config/providers.rs`: `extensions`・`tools` 欄（pi 行のみ。相対 path は config dir 基準）、`pi` を adapter 許可一覧・`command/args` 許可・`opencode_go` source・`opencode-go` pool に追加。pi 行の pool は opencode-go のみ（OAuth は既存 adapter のまま。ADR の第 1 段）。
-- `crates/celeris/src/config/harness.rs`: `[[harnesses]]`・`[[roles]]` の adapter 許可一覧に `pi`。
-- `crates/celeris/src/daemon/adapters.rs`: `build_adapters` に `pi`（llm-proxy・openai_compatible の base_url と鍵を解決）。
 - `crates/task-worker/src/opencode_account.rs`: `read_go_key` を crate 内公開。
-- `crates/celerisctl/src/commands/worker_tests.rs`・`crates/celeris/src/config/tests.rs`: `ProviderConfig` の新欄、エラーメッセージの adapter 一覧に `pi`。
+
+## 範囲の訂正（attempt 2）
+attempt 1 は `crates/celeris`（config の `extensions`/`tools` 欄・adapter 許可一覧・`build_adapters` の `pi`）と `crates/celerisctl`（試験の新欄）も変えたが、この葉の範囲 check（`crates/task-worker/` ほか）を外れたため差し戻した。
+これらの config/daemon 配線は dispatch 葉（dispatcher/daemon への配線）の範囲。実装済みの差分は commit `a8b4f1e5` に残っているので、dispatch 葉は `git show a8b4f1e5 -- crates/celeris crates/celerisctl` を取り込めばよい（`pi_adapter_*` の config 試験 3 件と `rejects_duplicate_roles_unknown_role_adapter_and_zero_limits` の期待文字列の更新を含む）。
 
 ## 証拠
 - `cargo nextest run -p task-worker` → 907 passed, 9 skipped（`pi_adapter_*` 14 件を含む: 起動引数・tool 集合・隔離・subagent/planner 拒否・usage・失敗分類・timeout・skills・result 読み取り・go 鍵）。
-- `cargo test -p celeris --lib pi_adapter` → 3 passed（config 読み込み・拒否規則・go pool / openai_compatible 行）。
-- `bash scripts/dev/test-parallel.sh` → 1 回目 4200 passed / 1 failed（`rejects_duplicate_roles_unknown_role_adapter_and_zero_limits` の期待文字列に `pi` が無かった）→ 期待文字列を直して再実行: exit 0、4201 passed / 0 failed / 14 ignored。
+- attempt 2（celeris/celerisctl を差し戻した後）: `bash scripts/dev/test-parallel.sh` → exit 0、4198 passed / 0 failed / 13 skipped。
 - `cargo fmt --all --check` → 差分なし。`cargo clippy --workspace --all-targets -- -D warnings` → exit 0。
 
 ## 未解決事項
@@ -36,4 +35,5 @@ ADR `agent-docs/adr/2026-10-07-coding-harness-default-pi-hashline.md` の「後�
 - codex OAuth を Pi で使う経路は無い（設定で拒否）。
 
 ## 提案
+- dispatch 葉で `a8b4f1e5` の celeris config/daemon 配線（`ProviderConfig.extensions/tools`、adapter 許可一覧、`build_adapters` の `pi`）を取り込む。
 - dispatch 葉で `CodingHarness::Pi.adapter_id() == task_worker::PiAdapter::ID` を固定する試験を置く。

@@ -2224,7 +2224,7 @@ fn rejects_duplicate_roles_unknown_role_adapter_and_zero_limits() {
     let cfg: Config = toml::from_str(&bogus).unwrap();
     assert_eq!(
         cfg.validate().unwrap_err().to_string(),
-        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
+        "invalid config: [[roles]] lead: adapter \"bogus\" is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)"
     );
 
     let empty = format!("[[roles]]\nid = \"  \"\n{providers}");
@@ -4376,92 +4376,4 @@ fn routing_phase3_escalation_defaults_and_validation() {
         cfg.model_routing.runtime.as_ref().unwrap().escalation,
         task_core::EscalationThresholds::default()
     );
-}
-
-#[test]
-fn pi_adapter_provider_config_loads_and_builds_with_relative_extension() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    std::fs::write(
-        &path,
-        r#"
-[[providers]]
-id = "pi-go"
-adapter = "pi"
-llm_source = "opencode_go"
-model = "opencode-go/deepseek-v4-pro"
-command = "node"
-args = ["/opt/pi/dist/cli.js"]
-extensions = ["hashline/index.ts"]
-tools = ["hashline_read", "hashline_edit", "bash", "grep", "find", "ls"]
-[[harnesses]]
-id = "pi-coding"
-adapter = "pi"
-[[roles]]
-id = "pi-coder"
-adapter = "pi"
-"#,
-    )
-    .unwrap();
-    let cfg = Config::load(&path).unwrap();
-    assert_eq!(
-        cfg.providers[0].extensions,
-        vec![dir.path().join("hashline/index.ts")]
-    );
-    assert_eq!(
-        cfg.provider_llm_source("pi-go").unwrap().source,
-        task_core::LlmSourceRef::OpencodeGo
-    );
-    let adapters = crate::build_adapters(&cfg);
-    assert_eq!(adapters["pi-go"].id(), "pi");
-    assert_eq!(
-        crate::effective_models(&cfg)["pi-go"],
-        "opencode-go/deepseek-v4-pro"
-    );
-}
-
-#[test]
-fn pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters() {
-    for row in [
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']",
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\ntools = ['bash']",
-        "adapter = 'pi'\nmodel = 'opencode-go/test'\nextensions = ['hashline.ts']\ntools = ['planner']",
-        "adapter = 'fake'\nextensions = ['hashline.ts']\ntools = ['read']",
-    ] {
-        let cfg: Config = toml::from_str(&format!("[[providers]]\nid = 'test'\n{row}\n")).unwrap();
-        assert!(cfg.validate().is_err(), "{row}");
-    }
-}
-
-#[test]
-fn pi_adapter_config_preserves_go_pool_and_direct_compatible_source() {
-    for source in [
-        "llm_source = 'opencode_go'\naccount_pool = 'opencode-go'",
-        "llm_source = 'openai_compatible:local'",
-    ] {
-        let model = if source.contains("openai_compatible") {
-            "local/test"
-        } else {
-            "opencode-go/test"
-        };
-        let body = format!(
-            r#"
-[accounts]
-opencode_dir = "/fixture/accounts"
-[[llm_proxy.sources.openai_compatible]]
-id = "local"
-base_url = "http://127.0.0.1:9/v1"
-[[providers]]
-id = "pi"
-adapter = "pi"
-model = "{model}"
-extensions = ["hashline.ts"]
-tools = ["hashline_read", "hashline_edit", "bash"]
-{source}
-"#
-        );
-        let cfg: Config = toml::from_str(&body).unwrap();
-        cfg.validate().unwrap();
-        assert_eq!(crate::build_adapters(&cfg)["pi"].id(), "pi");
-    }
 }

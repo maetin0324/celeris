@@ -221,8 +221,6 @@ impl Config {
             command: None,
             args: None,
             settings: None,
-            extensions: Vec::new(),
-            tools: Vec::new(),
         });
         self.roles.retain(|r| r.id != SMOKE_ID);
         self.roles.push(RoleConfig {
@@ -566,7 +564,6 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
             && adapter != task_worker::FakeAdapter::ID
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
-            && adapter != task_worker::PiAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
             && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
@@ -574,7 +571,7 @@ pub(super) fn validate_harnesses(harnesses: &[HarnessConfig]) -> Result<(), Conf
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                "[[harnesses]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 h.id
             )));
         }
@@ -611,7 +608,6 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
             && adapter != task_worker::FakeAdapter::ID
             && adapter != task_worker::ClaudeCodeAdapter::ID
             && adapter != task_worker::CodexAdapter::ID
-            && adapter != task_worker::PiAdapter::ID
             && adapter != task_worker::AcpAdapter::ID
             && adapter != task_worker::BrowserSpecialistAdapter::ID
             && adapter != task_worker::PaperQaAdapter::ID
@@ -619,7 +615,7 @@ pub(super) fn validate_roles(roles: &[RoleConfig]) -> Result<HashSet<&String>, C
             && adapter != task_worker::LangMemAdapter::ID
         {
             return Err(ConfigError::Invalid(format!(
-                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, pi, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
+                "[[roles]] {}: adapter {adapter:?} is not available in this build (fake, claude-code, codex, acp, browser-specialist, paperqa, local-deep-research, langmem only)",
                 r.id
             )));
         }

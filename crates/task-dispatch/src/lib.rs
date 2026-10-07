@@ -11,6 +11,8 @@ pub mod auto_resolve;
 pub mod capacity;
 /// ADR-0072 D8（Phase E1）: daemon が決定的に集める mechanical checkpoint（git の読み取りだけ）。
 pub mod checkpoint;
+/// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`DiskProbe`・判定の純関数・tick の段）。
+pub mod disk_watch;
 pub mod dispatcher;
 /// ADR-0072 D6/D11/D12/D15（Phase E2）: WorkUnit の状態遷移の決定（純粋関数）。
 pub mod execution_scheduler;

@@ -31,6 +31,11 @@ pub struct Inbox {
     /// 回答は `POST /decisions/{id}/answer`。
     pub decisions: Vec<crate::decision::DecisionInboxItem>,
     pub counts: InboxCounts,
+    /// ADR 2026-10-07-build-tmp-hygiene D4.3: 使用率が `critical` の path（`disk_watch_state` の行）。
+    /// 受信箱の共通形（`human_inbox` の `disk_full`）だけが使う。旧来の `GET /inbox` には出さない。
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub disk_full: Vec<task_core::DiskWatchState>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
@@ -1138,6 +1143,13 @@ pub fn inbox(
     // ADR-0079 D7（Phase R3a）: 未回答の決定の要求（決定を出した節点が終端でないもの。古い順）。
     let decisions = crate::decision::inbox_items(store, now)?;
 
+    // ADR 2026-10-07-build-tmp-hygiene D4.3: `critical` に下がるまでの間だけ受信箱に出る（派生）。
+    let disk_full = store
+        .disk_watch_states()?
+        .into_iter()
+        .filter(|s| s.level == task_core::DiskLevel::Critical)
+        .collect();
+
     let counts = InboxCounts {
         approvals: approvals.len() as u32,
         questions: questions.len() as u32,
@@ -1158,6 +1170,7 @@ pub fn inbox(
         browser_waits,
         decisions,
         counts,
+        disk_full,
     })
 }
 

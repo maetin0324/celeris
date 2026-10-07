@@ -265,6 +265,8 @@ pub(crate) fn reload_providers(
     // ADR 2026-10-07-build-tmp-hygiene D1.4: 掃除の roots と上限も reload で入れ替える。
     config.maintenance = new_config.maintenance;
     dispatcher.set_target_sweep(config.target_sweep_params());
+    // ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（tick の段 `disk_watch`）。
+    dispatcher.set_disk_watch(config.disk_watch_entries());
     Ok(())
 }
 

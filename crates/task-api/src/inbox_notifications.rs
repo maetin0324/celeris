@@ -341,7 +341,10 @@ pub(crate) fn delegated_request(
                 (Method::PATCH, format!("/api/v1/tasks/{id}"), payload)
             }
         }
-        InboxKind::IntegrationRequest | InboxKind::DeliverySkipped | InboxKind::ClusterLogin => {
+        InboxKind::IntegrationRequest
+        | InboxKind::DeliverySkipped
+        | InboxKind::ClusterLogin
+        | InboxKind::DiskFull => {
             return Err(ApiProblem::new(
                 StatusCode::CONFLICT,
                 "native_action_required",

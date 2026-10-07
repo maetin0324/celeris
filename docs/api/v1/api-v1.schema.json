@@ -14802,6 +14802,7 @@
         "failed",
         "unroutable",
         "cluster_login",
+        "disk_full",
         "delivery_skipped",
         "integration_request",
         "knowledge_review"
@@ -18217,7 +18218,7 @@
       "type": "string"
     },
     "NoticeKind": {
-      "description": "通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。",
+      "description": "通知の種類（ADR-0133 D3.1 の 9 種。追加は ADR で）。`Disk` は ADR 2026-10-07-build-tmp-hygiene D4.3。",
       "enum": [
         "task_done",
         "report",
@@ -18227,7 +18228,8 @@
         "release",
         "cron_run",
         "auto_recovered",
-        "requeue_limit_near"
+        "requeue_limit_near",
+        "disk"
       ],
       "type": "string"
     },

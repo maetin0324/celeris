@@ -20,7 +20,12 @@ fn stub(dir: &Path, name: &str, body: &str) -> String {
 fn fixture(
     harness: &str,
     adapter: Arc<dyn WorkerAdapter>,
-) -> (crate::test_support::WritableTempDir, Arc<SqliteStore>, Dispatcher, String) {
+) -> (
+    crate::test_support::WritableTempDir,
+    Arc<SqliteStore>,
+    Dispatcher,
+    String,
+) {
     let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("chat.sqlite");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));

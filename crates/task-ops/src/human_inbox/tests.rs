@@ -97,6 +97,7 @@ fn empty_inbox() -> Inbox {
             decisions: 0,
             by_status: Default::default(),
         },
+        disk_full: Vec::new(),
     }
 }
 
@@ -303,6 +304,15 @@ fn fixture() -> Fixture {
     inbox
         .browser_waits
         .push(browser_wait_item(&task, "waiting_for_auth"));
+    // ADR 2026-10-07-build-tmp-hygiene D4.3: 使用率が critical の path。
+    inbox.disk_full.push(task_core::DiskWatchState {
+        path: "/local".to_string(),
+        level: task_core::DiskLevel::Critical,
+        since: now() - time::Duration::minutes(10),
+        last_pct: Some(96.2),
+        last_notified_at: Some(now() - time::Duration::minutes(10)),
+        updated_at: now(),
+    });
 
     let by_id: HashMap<TaskId, Task> = [task.clone(), draft, approval_task, authz_task]
         .into_iter()

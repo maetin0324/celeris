@@ -100,3 +100,67 @@ fn target_sweep_config_example_toml_matches_defaults() {
     let cfg = Config::load(example).unwrap();
     assert_eq!(cfg.maintenance.target_sweep, TargetSweepConfig::default());
 }
+
+/// D4.1: `[[maintenance.disk_watch]]` を省略すると `/`・`/local`・`/tmp` を 80% / 95% で監視する。
+/// 書けば置き換え（しきい値の省略は既定）、`disk_watch = []` で監視しない。
+#[test]
+fn disk_watch_config_defaults_and_overrides() {
+    let cfg = load("").unwrap();
+    let entries = cfg.disk_watch_entries();
+    assert_eq!(
+        entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("/"),
+            PathBuf::from("/local"),
+            PathBuf::from("/tmp")
+        ]
+    );
+    assert!(
+        entries
+            .iter()
+            .all(|e| e.warn_pct == 80.0 && e.critical_pct == 95.0)
+    );
+
+    let cfg = load(
+        "\n[[maintenance.disk_watch]]\npath = \"/srv\"\nwarn_pct = 70\n\n[[maintenance.disk_watch]]\npath = \"/data\"\ncritical_pct = 90\n",
+    )
+    .unwrap();
+    let entries = cfg.disk_watch_entries();
+    assert_eq!(entries.len(), 2);
+    assert_eq!((entries[0].warn_pct, entries[0].critical_pct), (70.0, 95.0));
+    assert_eq!((entries[1].warn_pct, entries[1].critical_pct), (80.0, 90.0));
+
+    let cfg = load("\n[maintenance]\ndisk_watch = []\n").unwrap();
+    assert!(cfg.disk_watch_entries().is_empty());
+}
+
+/// D4.1: 相対 path・しきい値の逆転・100 超え・重複は設定の読み込みで落とす。例の設定は既定どおり。
+#[test]
+fn disk_watch_config_rejects_invalid_entries() {
+    for (body, needle) in [
+        ("path = \"rel\"", "absolute"),
+        ("path = \"/a\"\nwarn_pct = 96", "thresholds"),
+        ("path = \"/a\"\ncritical_pct = 101", "thresholds"),
+        ("path = \"/a\"\nwarn_pct = 0", "thresholds"),
+        ("path = \"/a\"\nbogus = 1", "bogus"),
+    ] {
+        let err = load(&format!("\n[[maintenance.disk_watch]]\n{body}\n"))
+            .expect_err(body)
+            .to_string();
+        assert!(err.contains(needle), "{needle:?} not in {err:?}");
+    }
+    let err = load("\n[[maintenance.disk_watch]]\npath = \"/a\"\n\n[[maintenance.disk_watch]]\npath = \"/a\"\n")
+        .expect_err("duplicate")
+        .to_string();
+    assert!(err.contains("duplicate"), "{err}");
+
+    let example = Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../config/celeris.example.toml"
+    ));
+    let cfg = Config::load(example).unwrap();
+    assert_eq!(
+        cfg.maintenance.disk_watch,
+        crate::config::MaintenanceConfig::default().disk_watch
+    );
+}

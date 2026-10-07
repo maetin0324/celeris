@@ -703,6 +703,25 @@ max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target
 target_ratio = 0.8
 stale_target_days = 14               # どの profile も使われていない target dir ごと消す
 
+# ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視。dispatcher の tick が 60 秒ごとに statvfs で測り、
+# warn_pct 以上で通知（種類 disk）、critical_pct 以上で受信箱（disk_full）に出す。level が上がったときだけ作り、
+# しきい値より 5 ポイント下がると解除。run は止めない（止めるのは min_free_disk_mb）。
+# 省略すると下の 3 つ（値は既定値）。`disk_watch = []`（[maintenance] の下）で監視しない。
+[[maintenance.disk_watch]]
+path = "/"
+warn_pct = 80
+critical_pct = 95
+
+[[maintenance.disk_watch]]
+path = "/local"
+warn_pct = 80
+critical_pct = 95
+
+[[maintenance.disk_watch]]
+path = "/tmp"
+warn_pct = 80
+critical_pct = 95
+
 # CoS チャット（agent-docs/adr/2026-10-05-cos-chat-home.md D4）。値は既定値。
 # 添付は `<db のディレクトリ>/chat/attachments/<id>/blob` に置く（DB と一緒に backup する）。
 # daemon は 1 時間ごとに、未送信の upload（orphan_ttl_hours 経過）、最後の参照が外れて

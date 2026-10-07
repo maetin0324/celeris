@@ -37,6 +37,7 @@ pub trait TaskStore:
     + crate::approval::ApprovalStore
     + crate::notify::NotificationStore
     + crate::feed::NoticeStore
+    + crate::disk_watch::DiskWatchStore
     + crate::knowledge_run::KnowledgeRunStore
     + crate::delivery::DeliveryStore
     + crate::node_session::NodeSessionStore

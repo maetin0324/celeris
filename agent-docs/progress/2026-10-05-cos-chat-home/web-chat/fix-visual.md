@@ -1,6 +1,6 @@
 ---
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: done
+status: blocked
 updated: 2026-10-07
 ---
 # web-chat / fix-visual（badge と tool 状態の視認性）
@@ -28,4 +28,8 @@ final review の指摘 (2)(3) を修正した。
 
 ## 未解決・提案
 
-この葉の未解決はなし。screenshot は撮り直していない。後続 `shots` が更新し、`reclose` が一覧と ADR 付記を更新する。
+再試行で計画の範囲 check の問題を確認した。`git diff --quiet $(git merge-base HEAD main) -- crates/ gui/` は exit 1。merge-base は `ea6f0e243acf1632852c1f8ad39c5cb1b622afc3` で、WU base `65e344c1a1ed53106618fa7ac5f15088146e1bed` より前を比較しており、親タスクから継承した crates/・gui/ の162ファイルを検出する。
+
+`git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ gui/` は exit 0。修正コミット `bc0f30e4` の差分は web の5ファイルとこの進捗だけであり、検出された162ファイルは全て WU base 時点で存在した。親の実装を戻して検査を通すことはしない。計画の検査基点を `$CELERIS_WU_BASE` に訂正することを提案する。検査はこの run では変更できないため、done ではなく plan_issue を返す。今回の再試行では UI 変更も試験の再実行も行っていない。
+
+screenshot は撮り直していない。後続 `shots` が更新し、`reclose` が一覧と ADR 付記を更新する。

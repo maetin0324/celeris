@@ -504,50 +504,40 @@ impl SqliteStore {
         let at = chat_ts(now);
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let run = run_by_id(&tx, run_id)?;
-        if chat_run_state_is_terminal(run.state) {
-            if run.state == state {
-                return Ok(run);
-            }
-            return Err(ChatError::Conflict(format!(
-                "run {run_id} already finished"
-            )));
-        }
-        let reason = reason.map(str::to_string).or(run.reason.clone());
-        tx.execute(
-            "UPDATE chat_runs SET state=?2,reason=?3,finished_at=?4 WHERE run_id=?1",
-            params![run_id, enum_str(&state)?, reason, at],
-        )?;
-        super::credential::revoke_conn(&tx, run_id, &at)?;
-        let msg_state = enum_str(&message_state_for(state))?;
-        tx.execute(
-            "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",
-            params![run.input_message_id, msg_state, at],
-        )?;
-        if let Some(output) = &run.output_message_id {
-            match final_text {
-                Some(text) => tx.execute(
-                    "UPDATE chat_messages SET state=?2,text=?3,updated_at=?4 WHERE id=?1",
-                    params![output, msg_state, text, at],
-                )?,
-                None => tx.execute(
-                    "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",
-                    params![output, msg_state, at],
-                )?,
-            };
-        }
-        touch_thread(&tx, &run.thread_id, &at)?;
-        let input = message_require(&tx, &run.thread_id, &run.input_message_id)?;
-        emit_message(&tx, &input, &at)?;
-        if let Some(output) = &run.output_message_id {
-            let output = message_require(&tx, &run.thread_id, output)?;
-            emit_message(&tx, &output, &at)?;
-        }
-        let run = run_by_id(&tx, run_id)?;
-        emit_run(&tx, &run, &at)?;
-        emit_queue(&tx, &run.thread_id, &at)?;
+        let run = finish_conn(&tx, run_id, state, final_text, reason, &at)?;
         tx.commit()?;
         Ok(run)
+    }
+
+    /// ADR 2026-10-07-cos-live-fixes D4: 持ち主の居ない run の引き継ぎ。run が非終端であることの確認、
+    /// 続きの message（`continuation`。通常 `mode=interrupt`）の投入、run の `Interrupted` 化を
+    /// **1 つの write transaction**で行う。run が既に終端（completed / failed / stopped / interrupted）なら
+    /// 何も書かずに `Ok(None)` を返す（終わった run から続きの run を起こさない）。
+    pub fn chat_run_takeover(
+        &self,
+        run_id: &str,
+        continuation: &ChatPostMessageRequest,
+        reason: &str,
+        now: OffsetDateTime,
+    ) -> Result<Option<ChatRun>, ChatError> {
+        let at = chat_ts(now);
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let run = run_by_id(&tx, run_id)?;
+        if chat_run_state_is_terminal(run.state) {
+            return Ok(None);
+        }
+        super::store::message_post_conn(&tx, &run.thread_id, continuation, now)?;
+        let run = finish_conn(
+            &tx,
+            run_id,
+            ChatRunState::Interrupted,
+            None,
+            Some(reason),
+            &at,
+        )?;
+        tx.commit()?;
+        Ok(Some(run))
     }
 
     /// D2 `POST /chat/threads/{t}/stop`: only the named run. A running run becomes stopping and
@@ -701,4 +691,58 @@ impl SqliteStore {
         tx.commit()?;
         Ok(removed)
     }
+}
+
+/// `chat_run_finish` の本体（呼び出し側の write transaction の中で走る）。
+fn finish_conn(
+    tx: &Connection,
+    run_id: &str,
+    state: ChatRunState,
+    final_text: Option<&str>,
+    reason: Option<&str>,
+    at: &str,
+) -> Result<ChatRun, ChatError> {
+    let run = run_by_id(tx, run_id)?;
+    if chat_run_state_is_terminal(run.state) {
+        if run.state == state {
+            return Ok(run);
+        }
+        return Err(ChatError::Conflict(format!(
+            "run {run_id} already finished"
+        )));
+    }
+    let reason = reason.map(str::to_string).or(run.reason.clone());
+    tx.execute(
+        "UPDATE chat_runs SET state=?2,reason=?3,finished_at=?4 WHERE run_id=?1",
+        params![run_id, enum_str(&state)?, reason, at],
+    )?;
+    super::credential::revoke_conn(tx, run_id, at)?;
+    let msg_state = enum_str(&message_state_for(state))?;
+    tx.execute(
+        "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",
+        params![run.input_message_id, msg_state, at],
+    )?;
+    if let Some(output) = &run.output_message_id {
+        match final_text {
+            Some(text) => tx.execute(
+                "UPDATE chat_messages SET state=?2,text=?3,updated_at=?4 WHERE id=?1",
+                params![output, msg_state, text, at],
+            )?,
+            None => tx.execute(
+                "UPDATE chat_messages SET state=?2,updated_at=?3 WHERE id=?1",
+                params![output, msg_state, at],
+            )?,
+        };
+    }
+    touch_thread(tx, &run.thread_id, at)?;
+    let input = message_require(tx, &run.thread_id, &run.input_message_id)?;
+    emit_message(tx, &input, at)?;
+    if let Some(output) = &run.output_message_id {
+        let output = message_require(tx, &run.thread_id, output)?;
+        emit_message(tx, &output, at)?;
+    }
+    let run = run_by_id(tx, run_id)?;
+    emit_run(tx, &run, at)?;
+    emit_queue(tx, &run.thread_id, at)?;
+    Ok(run)
 }

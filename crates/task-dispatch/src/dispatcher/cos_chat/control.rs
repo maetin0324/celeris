@@ -9,13 +9,16 @@ use std::time::Duration;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatActor, ChatCard, ChatCardKind, ChatPostMessageRequest, ChatRun, ChatRunState, ChatSendMode,
-    ChatThreadQuery,
+    ChatThreadQuery, chat_run_state_is_terminal,
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::launch::CosChatLaunch;
 use super::sink::ChatStopIntent;
 use crate::dispatcher::Dispatcher;
+
+/// The reason recorded on a run that the dispatcher took over as an orphan.
+pub(super) const ORPHAN_TAKEOVER_REASON: &str = "orphan takeover; continuing in a new run";
 
 pub(super) fn stop_intent(run: &ChatRun) -> ChatStopIntent {
     if run.reason.as_deref() == Some("stopped by human") {
@@ -127,6 +130,18 @@ impl CosChatLaunch {
     }
 
     fn recover_orphan(&self, run: &ChatRun, now: OffsetDateTime) -> Result<(), String> {
+        // ADR 2026-10-07-cos-live-fixes D4: a run whose terminal state was
+        // recorded after the thread list was read is not an orphan. The final
+        // guard is the transaction of `chat_run_takeover`; this read only keeps
+        // the review card and the receipts message off finished runs.
+        let current = self
+            .store
+            .chat_run_get(&run.thread_id, &run.id)
+            .map_err(|e| e.to_string())?;
+        if chat_run_state_is_terminal(current.state) {
+            return Ok(());
+        }
+        let run = &current;
         let pending = self
             .store
             .cos_operation_pending_for_run(&run.id)
@@ -210,9 +225,13 @@ impl CosChatLaunch {
         // `interrupt` gives this continuation priority over later queue input;
         // the full original input and attachments are delivered unchanged.
         // Partial output and operation receipts remain in DB history.
-        self.store
-            .chat_message_post(
-                &run.thread_id,
+        // ADR 2026-10-07-cos-live-fixes D4: the terminal check, the continuation
+        // and the interrupted state are one store transaction. A run that became
+        // terminal meanwhile is left alone and no continuation run is queued.
+        let taken = self
+            .store
+            .chat_run_takeover(
+                &run.id,
                 &ChatPostMessageRequest {
                     client_message_id: format!("cos-recover:{}", run.id),
                     text: input.text,
@@ -221,18 +240,13 @@ impl CosChatLaunch {
                     mode: ChatSendMode::Interrupt,
                     resume_queue: false,
                 },
+                ORPHAN_TAKEOVER_REASON,
                 now,
             )
             .map_err(|e| e.to_string())?;
-        self.store
-            .chat_run_finish(
-                &run.id,
-                ChatRunState::Interrupted,
-                None,
-                Some("orphan takeover; continuing in a new run"),
-                now,
-            )
-            .map_err(|e| e.to_string())?;
+        if taken.is_none() {
+            tracing::debug!(run_id = %run.id, "CoS run finished before takeover; nothing to recover");
+        }
         Ok(())
     }
 }

@@ -3120,6 +3120,8 @@ mod knowledge_fallback;
 
 /// ADR-0079 R5b-fix2: remote workspace の run 後の push（`src/dispatcher/tests/remote_push_after_run.rs`）。
 mod remote_push_after_run;
+/// ADR-0067 付記 2026-10-07: remote の task と question / wait で終わった run の未申告成果物の登録。
+mod undeclared_artifacts_scan;
 
 mod cluster_job_wait;
 mod cos_capacity;

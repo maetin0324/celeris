@@ -36,8 +36,8 @@ impl WorkerAdapter for NamedFake {
 fn fixture(
     command: Vec<String>,
     max_cos_runs: usize,
-) -> (tempfile::TempDir, Arc<SqliteStore>, Dispatcher) {
-    let dir = tempfile::tempdir().expect("tempdir");
+) -> (crate::test_support::WritableTempDir, Arc<SqliteStore>, Dispatcher) {
+    let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(command));

@@ -23,7 +23,7 @@ fn at() -> OffsetDateTime {
 }
 
 struct Fixture {
-    _dir: tempfile::TempDir,
+    _dir: crate::test_support::WritableTempDir,
     store: Arc<SqliteStore>,
     thread: String,
     cursor: String,
@@ -31,7 +31,7 @@ struct Fixture {
 
 /// 一時 SQLite に thread を作り、1 件の発言を `RUN` として claim した状態。`cursor` は claim 後の末尾。
 fn fixture() -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::WritableTempDir::new();
     let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("store"));
     let thread = store
         .chat_thread_create(

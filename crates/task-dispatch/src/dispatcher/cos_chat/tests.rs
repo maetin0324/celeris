@@ -8,8 +8,8 @@ use task_core::chat::attachments::{AttachmentError, ChatAttachmentLimits, ChatAt
 use task_core::store::SqliteStore;
 use time::OffsetDateTime;
 
-fn fixture() -> (tempfile::TempDir, ChatAttachmentStore) {
-    let temp = tempfile::tempdir().expect("tempdir");
+fn fixture() -> (crate::test_support::WritableTempDir, ChatAttachmentStore) {
+    let temp = crate::test_support::WritableTempDir::new();
     let db = temp.path().join("test.sqlite");
     let _store = SqliteStore::open(&db).expect("migrate");
     let attachments = ChatAttachmentStore::open(temp.path(), &db, ChatAttachmentLimits::default())

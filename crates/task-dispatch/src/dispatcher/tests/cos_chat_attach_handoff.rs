@@ -48,7 +48,7 @@ impl WorkerAdapter for CaptureAdapter {
 }
 
 struct Fixture {
-    temp: tempfile::TempDir,
+    temp: crate::test_support::WritableTempDir,
     store: Arc<SqliteStore>,
     attachments: ChatAttachmentStore,
     source: InputAttachmentSource,
@@ -57,7 +57,7 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
-    let temp = tempfile::tempdir().expect("tempdir");
+    let temp = crate::test_support::WritableTempDir::new();
     let data_dir = temp.path().join("data");
     std::fs::create_dir(&data_dir).expect("data dir");
     let db_path = data_dir.join("celeris.db");

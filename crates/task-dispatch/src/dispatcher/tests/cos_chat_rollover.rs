@@ -167,8 +167,8 @@ fn fixture(adapter: Arc<dyn WorkerAdapter>, store: Arc<SqliteStore>, dir: &Path)
     d
 }
 
-fn open_store() -> (tempfile::TempDir, Arc<SqliteStore>) {
-    let dir = tempfile::tempdir().expect("tempdir");
+fn open_store() -> (crate::test_support::WritableTempDir, Arc<SqliteStore>) {
+    let dir = crate::test_support::WritableTempDir::new();
     let store = Arc::new(SqliteStore::open(&dir.path().join("celeris.db")).expect("store"));
     (dir, store)
 }

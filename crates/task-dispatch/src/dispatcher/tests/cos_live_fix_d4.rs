@@ -17,14 +17,14 @@ const TEXT_THEN_DONE: &str = "cat >/dev/null; \
      echo '{\"type\":\"done\",\"summary\":\"triaged\",\"evidence\":[]}'";
 
 struct Fixture {
-    dir: tempfile::TempDir,
+    dir: crate::test_support::WritableTempDir,
     db_path: PathBuf,
     store: Arc<SqliteStore>,
     d: Dispatcher,
 }
 
 fn fixture(script: &str) -> Fixture {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("celeris.db");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
     let adapter: Arc<dyn WorkerAdapter> = Arc::new(FakeAdapter::new(vec![

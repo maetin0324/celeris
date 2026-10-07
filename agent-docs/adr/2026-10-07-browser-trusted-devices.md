@@ -1,7 +1,7 @@
 # ADR 2026-10-07: ブラウザ実行の owner session に「信頼できるデバイス」を入れ、再起動・promote 後も再承認なしで復帰する
 
 - 日付: 2026-10-07
-- 状態: 採用（2026-10-07。task 01M4ADMXWYHPSVEJBJ5JPCR6PS。人の決定 `device-method` = 今は cookie・https 化後に passkey を足せる形、
+- 状態: 実装済み（2026-10-07。採用 2026-10-07。task 01M4ADMXWYHPSVEJBJ5JPCR6PS。人の決定 `device-method` = 今は cookie・https 化後に passkey を足せる形、
   `device-policy` = 90 日・使うと延長・絶対上限なし・上限 5 台・使うたびに回転。運用セッションが代理入力し、計画承認時に確認）
 - 関連: ADR 2026-10-05-browser-department-web-live-view D2.1（web の owner session）、ADR-0080 D6（owner grant）、
   ADR-0099・ADR-0113（attestation 署名）、ADR-0135（web release と web-follow）、ADR-0095 付記 D-d（本番操作は人）
@@ -207,3 +207,55 @@ D2 の端点と claims は、task-api（`crates/task-api/src/browser_trusted_dev
   未知の id の失効 404 `device_not_found`。
 - 時計は `ApiState::with_clock`（UNIX 秒）で注入する。assertion の期限（30 秒以内）も同じ時計で判定する。
 - 詳細は `docs/api/v1/gui-api.md` §3.128。
+
+## 付記（close-out の実装突き合わせ）
+
+2026-10-07、統合後の HEAD（`0612bf24`）のコードで D1〜D7 を突き合わせた。本番での確認手順は
+[docs/ops/browser-trusted-devices.md](../../docs/ops/browser-trusted-devices.md)。
+
+- **D1（cookie）**: `web/server/browser-live.js` の `DEVICE_COOKIE_NAME = "__celeris_web_device"`・`DEVICE_COOKIE_PATH = "/browser/owner-session"`、
+  値の形は正規表現 `DEVICE_COOKIE`（ULID 26 文字 `.` base64url 43 文字）、256 byte 超は `readDeviceCookie` が読まない。
+  属性は `deviceCookieOptions`（httpOnly・SameSite=Strict・`req.socket.encrypted` のときだけ Secure・Max-Age は daemon の `expires_at` まで）。
+  hash は `deviceSecretHash`（`sha256("celeris-device\0" + secret)`）。表の `method` 欄は migration 0057 で既定 `cookie`。
+  - 食い違い: 形の不正な cookie を `Set-Cookie` で消すのは `POST /browser/owner-session/resume` だけ。`GET /browser/owner-session` は
+    `trustedDevice: true`・`resumable: false` を返すだけで消さない（画面は resume を呼ばないので、cookie は次の resume か期限まで残る）。害は無い。
+- **D2（保存と daemon 端点）**: 表は `crates/task-core/migrations/0057_browser_trusted_devices.sql`（`RESERVED_VERSIONS` に 55・56、`SCHEMA_VERSION` 57）。
+  純粋な型・期限計算は `crates/task-core/src/trusted_device.rs`（`is_expired`・`extended_expiry`・`trusted_device_event_task_id`）、
+  store は `crates/task-core/src/store/trusted_devices.rs` の `trusted_device_register` / `trusted_device_verify_and_rotate`（IMMEDIATE transaction）/
+  `trusted_device_verify_readonly` / `trusted_device_list` / `trusted_device_get` / `trusted_device_revoke`。
+  試験は `crates/task-core/src/store/trusted_devices_tests.rs` の 11 本（`trusted_device_rotate_replaces_hash_extends_and_old_secret_no_longer_current` ほか）。
+  端点は `crates/task-api/src/browser_trusted_devices.rs` の `routes`（`register`・`verify`・`list`・`revoke`）、試験は `crates/task-api/tests/trusted_devices.rs` の 9 本。
+  - 食い違い（api 葉の付記どおり）: `…/resume` は `…/verify`、`…/{id}/revoke` は `DELETE …/{id}`。`DeviceClaims` に `owner_session`・`name`・`readonly` が足された。
+  - 食い違い: `verify` の `readonly: true`（probe 用）は daemon に実装・試験（`trusted_device_readonly_verify_does_not_change_db`）があるが、
+    web は probe mode で端末系を 503 `probe_mode` にして daemon を呼ばないので、今は呼び手がいない。
+- **D3（復帰）**: `web/server/browser-live.js` の `register` 内 `POST /browser/owner-session/resume`（login・Origin・端末 cookie → `resumeDevice` → cookie 回転 →
+  `owner = { session, deviceId, expires }`、`expires = min(now+24h, auth.sessionExpiresAt, 端末の expires_at)`）。同時 resume の集約は `resumeInflight`。
+  登録は `registerDevice`（`POST /browser/owner-session/device` と別名 `POST /browser/trusted-devices`）、owner でなければ `ownerKey` が 403 `not_owner`。
+  `GET /browser/owner-session` は `trustedDevice`・`resumable`・`deviceId` を返す。画面の自動復帰は `web/features/browser/browser-query.ts` の `fetchOwnerSession`、
+  登録 form は `web/features/browser/trusted-devices.tsx` の `TrustedDeviceOffer`・`TrustDeviceForm`。
+  試験は `web/server/browser-live.test.mjs` の `trusted_device:` 8 本（`registered device resumes owner without a challenge after a web restart` ほか）、
+  `web/features/browser/trusted-devices.test.tsx`、e2e `web/e2e/browser/trusted-devices.spec.ts` の 3 本（`register, restart the web, resume without approval, then revoke` ほか）。
+  - 食い違い: CLI 承認（`approve`）で作る owner は `deviceId: null`。登録（`registerDevice`）は今の owner に登録した `deviceId` を結び付けないので、
+    登録直後は一覧に「この端末」badge が出ず、その端末を失効させても今の owner は落ちない（次の resume からは結び付く）。web-ui 葉の進捗
+    （`agent-docs/progress/2026-10-07-browser-trusted-devices/web-ui.md`）の未解決事項・提案のとおり。直すなら `registerDevice` で `owner.deviceId` を設定する（web/server の小変更）。
+  - 食い違い: 自動復帰は画面の読み込みごとに 1 回だけ。失敗後は読み込み直すまで challenge 表示のまま（web-ui.md の未解決事項。ADR の「1 回試み」と一致）。
+- **D4（期限・上限・回転・失効）**: 定数（TTL 90 日・上限 5・名前 64 文字）は `crates/task-core/src/trusted_device.rs`。上限は `trusted_device_register` が
+  `Rejected(Limit)` → task-api が 409 `device_limit`。旧秘密の再提示は `trusted_device_verify_and_rotate` が `reuse` で失効。失効は gateway の
+  `DELETE /browser/trusted-devices/:id`（と `POST …/:id/revoke`）→ daemon の `DELETE` → `dropDevice` で owner と Live View の WebSocket を即時に落とす。
+  logout は `auth.onLogout` で owner だけを落とし、端末の行は残す。一覧の画面は `web/routes/browser.devices.tsx`（SPA の経路は `/browser/devices`。
+  gateway の JSON API `/browser/trusted-devices` と衝突しないため）。
+  - 食い違い: 不一致の秘密による拒否でも、web はその端末由来の owner を落とす（daemon の拒否理由を区別できないための fail closed。web-server.md の未解決事項）。
+    password と device id を持つ者は owner を落とせるが owner にはなれない。
+  - 食い違い: 端末の失効・一覧は web の画面からだけ。`celerisctl` に失効の command は無く、daemon の端点は web の Ed25519 署名を要するので CLI から直接は失効できない
+    （D6 の復旧は「CLI 承認 → 画面で失効」で満たす）。
+- **D5（events）**: `crates/task-core/src/model.rs` の `Event::TrustedDeviceRegistered` / `Used` / `Revoked` / `Rejected`。疑似 task
+  `trusted_device_event_task_id()` の列に追記。task-api の `EVENT_TYPES`・`event_type_name`、schema（`docs/api/v1/event.schema.json`）、
+  `web/api/realtime/{event-kinds,invalidation-map}.ts`（一覧の query と、revoked で owner-session を stale に）に入った。
+  秘密・hash が載らないことは `trusted_device_events_carry_no_secret_or_hash` で確かめる。食い違いなし。
+- **D6（CLI 承認を残す）**: `crates/celerisctl/src/commands/browser.rs` の `approve` と gateway の `startSocket` は変えていない。
+  - 食い違い: `--socket` の既定の環境変数は `CELERIS_GUI_OWNER_SOCKET`（gui/ 時代の名前）のまま。web では `--socket` に `web.env` の
+    `CELERIS_WEB_OWNER_SOCKET` の値を明示する（運用手順の手順 2）。
+- **D7（probe）**: `scripts/selfdeploy/lib.sh` の `sd_web_app_probe` が `unset CELERIS_WEB_OWNER_SOCKET` と `export CELERIS_WEB_PROBE=1`。
+  web は `web/server/app.js` の `createApp({ probe })` が既定で `CELERIS_WEB_PROBE === "1"` を読み、`startSocket()` が null、端末系の端点は 503 `probe_mode`。
+  試験は `scripts/selfdeploy/tests/web_probe_owner_isolation.sh` と `web/server/browser-live.test.mjs` の
+  `trusted_device: probe mode opens no owner socket and writes no device state`。食い違いは D2 の `readonly` 未使用だけ。

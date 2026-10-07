@@ -128,11 +128,16 @@ impl Dispatcher {
             .as_ref()
             .and_then(|s| source_name_for_llm_source(&s.source))?;
         let prefix = wire_prefix_for(&source, &live.adapter);
-        // ADR 2026-10-06 D3: model も `tier_models` も持たない行（opencode go の acp 行など）は割り当てだけで
+        // ADR 2026-10-06 D3: model も `tier_models` も持たない **acp 行**（opencode go）は割り当てだけで
         // routing する。割り当てが 1 つも当たらなくても、全 lane を `assignment:none` から始める。
+        // claude-code / codex の行は model が無くても CLI の既定モデルで走れるので対象にしない。
         // reader が無い（試験・celerisctl）なら従来どおり（空の bindings = 行の既定で走る）。
         let mut base = live.tier_models.clone();
-        if self.role_assignments.is_some() && live.model.is_none() && base.is_empty() {
+        if self.role_assignments.is_some()
+            && live.adapter == "acp"
+            && live.model.is_none()
+            && base.is_empty()
+        {
             for &lane in &live.tiers {
                 base.insert(
                     lane,

@@ -1,6 +1,6 @@
 ---
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: blocked
+status: done
 updated: 2026-10-07
 ---
 # web-chat / e2e-attach（添付の入力経路・upload queue）
@@ -44,7 +44,7 @@ ADR 2026-10-05-cos-chat-home D6 の添付 UI 行を `web/e2e/chat/attachments.sp
 
 ## 未解決
 
-E2E は成功しているが、計画の範囲 check は未解決。fixme・skip なし。通信進捗の数値は実 XHR の byte 送信で確認し、daemon の制御は応答待ちから失敗・成功への遷移を決定的に進める。
+人の replan v7 で server 2 ファイルが追加許可され、範囲 check も成功した。未解決なし。fixme・skip なし。通信進捗の数値は実 XHR の byte 送信で確認し、daemon の制御は応答待ちから失敗・成功への遷移を決定的に進める。
 
 ## 提案
 
@@ -62,3 +62,21 @@ E2E は成功しているが、計画の範囲 check は未解決。fixme・skip
 - `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat`: exit 0、22 passed（添付 2 試験を含む）、5.0 秒。
 
 計画修正の提案: e2e-attach の範囲 check に `web/server/app.js` と `web/server/app.test.mjs` の 2 パスを明示的に追加する。範囲修正後、同じ check を再実行する。受け入れ条件や E2E の assertion を弱める必要はない。
+
+## 許可更新後の完了確認（run 01M4A3869X2GGSRH6WSHPSFQ6Y）
+
+人の回答に従い、CSP 修正と回帰試験を保持して再検証した。以前の未解決事項は解消。コード・テストの追加変更は不要だった。gui/・crates/ の差分はない。
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: exit 0。
+- `corepack pnpm@12.6.0 -C web exec biome format --write e2e features`: exit 0、変更なし。
+- `corepack pnpm@12.6.0 -C web typecheck` / `lint` / `test`: すべて exit 0。Vitest 70 files / 486 tests、server 57 tests。lint は既存 styles.css の warning 4 件。
+- `node --test web/server/app.test.mjs`: exit 0、6 passed。
+- `corepack pnpm@12.6.0 -C web build`: exit 0（bundle size warning のみ）。
+- `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat`: exit 0、添付 2 件を含む 22 passed。再 build 後も成功。
+- `test -s web/e2e/chat/attachments.spec.ts` / `git diff --check`: exit 0。
+
+範囲検査は同じ cwd と CELERIS_WU_BASE を使い、従来の許可に人が指定した server 2 パスだけを追加して実行し exit 0。保存された旧 execution-plan.json の check は更新前のため、実行した許可更新後の式を以下に記録する。
+
+```sh
+out=$({ git diff --name-only "${CELERIS_WU_BASE:-HEAD}"; git ls-files --others --exclude-standard; } | sort -u | grep -vE '^(web/e2e/chat/|web/e2e/support/|web/features/chat/|web/server/app\.js$|web/server/app\.test\.mjs$|agent-docs/progress/2026-10-05-cos-chat-home/web-chat/)'); [ -z "$out" ] || { echo "out of scope:"; echo "$out"; exit 1; }
+```

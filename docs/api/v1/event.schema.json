@@ -2588,6 +2588,55 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-07-build-tmp-hygiene D1.5: 共有 cargo target の定期掃除（`target_sweep`）を 1 回走らせた記録。\ncron 由来の task に追記する。状態は変えない（`replay` は無視する）。",
+          "properties": {
+            "duration_ms": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "mode": {
+              "$ref": "#/$defs/TargetSweepMode"
+            },
+            "over_cap_unresolved": {
+              "description": "lock が取れない profile のせいで上限の 80% まで下がらなかった。",
+              "type": "boolean"
+            },
+            "roots": {
+              "items": {
+                "$ref": "#/$defs/TargetSweepRootReport"
+              },
+              "type": "array"
+            },
+            "skipped": {
+              "description": "skip した path と理由（先頭 50 件。総数は `skipped_total`）。",
+              "items": {
+                "$ref": "#/$defs/TargetSweepSkip"
+              },
+              "type": "array"
+            },
+            "skipped_total": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "type": {
+              "const": "target_sweep_ran",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "mode",
+            "roots",
+            "skipped",
+            "skipped_total",
+            "over_cap_unresolved",
+            "duration_ms"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0069 D5（Phase 114）: この run の routing の監査記録（担当・harness・lane・model・features・\n当たった規則・policy の版・エスカレーション）。同じ `run_id` の `WorkerStarted` の直後に 1 件。\n状態は変えない（`replay` は無視する）。",
           "properties": {
             "record": {
@@ -7101,6 +7150,96 @@
         "cancelled"
       ],
       "type": "string"
+    },
+    "TargetSweepByReason": {
+      "description": "消した項目の理由別の数（D1.2: 古さ・上限・放置された target dir）。",
+      "properties": {
+        "age": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "cap": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "stale_target": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "age",
+        "cap",
+        "stale_target"
+      ],
+      "type": "object"
+    },
+    "TargetSweepMode": {
+      "description": "`Event::TargetSweepRan` の実行方式（D1.4: `--dry-run` は何も消さない）。",
+      "enum": [
+        "apply",
+        "dry_run"
+      ],
+      "type": "string"
+    },
+    "TargetSweepRootReport": {
+      "description": "`Event::TargetSweepRan` の root 1 つ分。",
+      "properties": {
+        "after_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "before_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "by_reason": {
+          "$ref": "#/$defs/TargetSweepByReason"
+        },
+        "deleted_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deleted_items": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "root": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "root",
+        "before_bytes",
+        "after_bytes",
+        "deleted_bytes",
+        "deleted_items",
+        "by_reason"
+      ],
+      "type": "object"
+    },
+    "TargetSweepSkip": {
+      "description": "`Event::TargetSweepRan` の skip 1 件（例: `reason = \"build_in_progress\"`）。",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "reason"
+      ],
+      "type": "object"
     },
     "Task": {
       "description": "DESIGN §4.1 の `Task`。",

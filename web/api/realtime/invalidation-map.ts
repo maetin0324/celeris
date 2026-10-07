@@ -107,6 +107,7 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   assigned: { sets: ["T", "L", "P", "E"], projectMayChange: true },
   workspace_mode_downgraded: { sets: ["T", "files", "changes", "artifacts", "metrics"] },
   workspace_pruned: { sets: ["T", "files", "changes", "artifacts", "metrics"] },
+  target_sweep_ran: { sets: ["T"] },
   routing_decided: { sets: ["T", "R"] },
   // ADR 2026-10-04-multi-objective-model-routing Phase 3: dispatch の特徴 snapshot・proxy の要求単位
   // trace・run 単位の outcome。いずれも対象 task の routing 監査（R）だけを古くする。

@@ -107,11 +107,13 @@ pub(crate) fn now() -> u64 {
     u64::try_from(OffsetDateTime::now_utc().unix_timestamp()).unwrap_or(0)
 }
 
-pub(crate) fn verify(
+/// web の Ed25519 署名を公開鍵で確かめる（鍵の設定が無ければ `live_view_disabled`、署名不正は
+/// `not_owner_session`）。claims の解釈は呼び手が行う（Live View は `RelayClaims`、信頼端末は
+/// `browser_trusted_devices::DeviceClaims`）。
+pub(crate) fn verify_signature(
     state: &ApiState,
     assertion: &HumanAttestation,
-    path: &(String, String, String),
-) -> Result<LiveViewer, ApiProblem> {
+) -> Result<(), ApiProblem> {
     let key = state
         .browser
         .attestation_public_key
@@ -120,7 +122,15 @@ pub(crate) fn verify(
     let signature = crate::browser::decode_hex(&assertion.signature).ok_or_else(invalid)?;
     ring::signature::UnparsedPublicKey::new(&ring::signature::ED25519, key)
         .verify(assertion.payload.as_bytes(), &signature)
-        .map_err(|_| invalid())?;
+        .map_err(|_| invalid())
+}
+
+pub(crate) fn verify(
+    state: &ApiState,
+    assertion: &HumanAttestation,
+    path: &(String, String, String),
+) -> Result<LiveViewer, ApiProblem> {
+    verify_signature(state, assertion)?;
     let claims: RelayClaims = serde_json::from_str(&assertion.payload).map_err(|_| invalid())?;
     if claims.task_id != path.0
         || claims.run_id != path.1

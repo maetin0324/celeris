@@ -1865,6 +1865,10 @@ export type TimelineItem =
        */
       via?: string | null;
     };
+/**
+ * 端点ごとの用途。既存の `RelayClaims` / `AttestationClaims` と取り違えないための欄。
+ */
+export type DevicePurpose = "device_register" | "device_resume" | "device_list" | "device_revoke";
 
 /**
  * スキーマ生成のルート。
@@ -2050,6 +2054,12 @@ export interface ApiV1Schema {
   tree_adopt: AdoptRequest;
   tree_adopt_result: AdoptionOutcome;
   tree_file: TreeFileView;
+  trusted_device_claims: DeviceClaims;
+  trusted_device_list: TrustedDeviceList;
+  trusted_device_register: TrustedDeviceRegisterBody;
+  trusted_device_result: TrustedDeviceResult;
+  trusted_device_revoke_result: TrustedDeviceRevokeResult;
+  trusted_device_verify: TrustedDeviceVerifyBody;
   work_unit_check_log: WorkUnitCheckLog;
 }
 /**
@@ -11742,6 +11752,126 @@ export interface TreeFileView {
    * 512 KiB を超えたので `text` を返していない。
    */
   too_large: boolean;
+}
+/**
+ * web が署名する assertion の `payload`（ADR D2）。未知の欄は拒否する。
+ */
+export interface DeviceClaims {
+  /**
+   * events の `actor`（web の `CELERIS_WEB_OWNER_ID`）。
+   */
+  actor_id: string;
+  /**
+   * 検証・失効の対象。
+   */
+  device_id?: string | null;
+  /**
+   * UNIX 秒。現在から 30 秒以内の未来でなければ拒否する。
+   */
+  expires_at: number;
+  /**
+   * 登録: 端末の名前。
+   */
+  name?: string | null;
+  /**
+   * 検証: 回転後の新しい秘密の hash（readonly では無し）。
+   */
+  next_hash?: string | null;
+  /**
+   * web が owner session を持つか。登録・一覧・失効は `true` を要する（検証は要らない）。
+   */
+  owner_session: boolean;
+  /**
+   * web の login session に結びつく id（空は拒否）。
+   */
+  owner_session_id: string;
+  /**
+   * 登録: 秘密の hash。検証: 提示された秘密の hash。
+   */
+  presented_hash?: string | null;
+  purpose: DevicePurpose;
+  /**
+   * 検証: probe 用の読み取りだけの検証か。
+   */
+  readonly?: boolean;
+}
+/**
+ * 一覧の応答（失効・期限切れも含む。新しい順。hash は含まない）。
+ */
+export interface TrustedDeviceList {
+  devices: TrustedDevice[];
+  /**
+   * 有効な端末の上限（5）。
+   */
+  limit: number;
+  /**
+   * 応答時点の時計（UNIX 秒）。期限切れの表示に使う。
+   */
+  now: number;
+}
+/**
+ * 一覧に出す 1 行。hash は持たない（API の応答にも返さない。D2）。
+ */
+export interface TrustedDevice {
+  /**
+   * `None` = 絶対上限なし。
+   */
+  absolute_expires_at?: number | null;
+  actor: string;
+  created_at: number;
+  expires_at: number;
+  id: string;
+  last_used_at?: number | null;
+  method: TrustedDeviceMethod;
+  name: string;
+  revoked_at?: number | null;
+  revoked_reason?: TrustedDeviceRevokeReason | null;
+}
+/**
+ * ADR 2026-10-07-browser-trusted-devices: `/browser/trusted-devices` の本文・応答と assertion の claims。
+ */
+export interface TrustedDeviceRegisterBody {
+  assertion: HumanAttestation;
+  /**
+   * 人が付ける名前（1〜64 文字）。
+   */
+  name: string;
+  /**
+   * web が計算した秘密の SHA-256 hex（小文字 64 文字）。秘密そのものは送らない。
+   */
+  secret_hash: string;
+}
+/**
+ * 登録・検証の応答（hash は含まない）。
+ */
+export interface TrustedDeviceResult {
+  device: TrustedDevice;
+}
+/**
+ * 失効の応答。`revoked` は今回失効させたか（既に失効済みなら `false`）。
+ */
+export interface TrustedDeviceRevokeResult {
+  device: TrustedDevice;
+  revoked: boolean;
+}
+/**
+ * `POST /browser/trusted-devices/verify` の本文。
+ */
+export interface TrustedDeviceVerifyBody {
+  assertion: HumanAttestation;
+  device_id: string;
+  /**
+   * 回転後の新しい秘密の hash。`readonly` でなければ必須。
+   */
+  next_hash?: string | null;
+  /**
+   * 提示された秘密の hash。
+   */
+  presented_hash: string;
+  /**
+   * `true` なら判定だけを返し、回転・最終使用・期限・event のいずれも書かない（web-follow の probe 用）。
+   */
+  readonly?: boolean;
 }
 /**
  * 2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。

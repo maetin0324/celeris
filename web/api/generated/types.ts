@@ -1472,6 +1472,21 @@ export type DeliverySkipReason = "multiple_repos" | "no_marker" | "marker_repo_m
 
 export type DeliveryState = "reviewing" | "merge_queued" | "merging" | "preparing" | "ready" | "blocked";
 
+export type DeviceClaims = {
+  "actor_id": string;
+  "device_id"?: string | null;
+  "expires_at": number;
+  "name"?: string | null;
+  "next_hash"?: string | null;
+  "owner_session": boolean;
+  "owner_session_id": string;
+  "presented_hash"?: string | null;
+  "purpose": DevicePurpose;
+  "readonly"?: boolean;
+};
+
+export type DevicePurpose = "device_register" | "device_resume" | "device_list" | "device_revoke";
+
 export type DiffStat = {
   "additions": number;
   "deletions": number;
@@ -5305,11 +5320,53 @@ export type TreeView = {
   "repos": Array<TreeRepoView>;
 };
 
+export type TrustedDevice = {
+  "absolute_expires_at"?: number | null;
+  "actor": string;
+  "created_at": number;
+  "expires_at": number;
+  "id": string;
+  "last_used_at"?: number | null;
+  "method": TrustedDeviceMethod;
+  "name": string;
+  "revoked_at"?: number | null;
+  "revoked_reason"?: TrustedDeviceRevokeReason | null;
+};
+
+export type TrustedDeviceList = {
+  "devices": Array<TrustedDevice>;
+  "limit": number;
+  "now": number;
+};
+
 export type TrustedDeviceMethod = "cookie";
+
+export type TrustedDeviceRegisterBody = {
+  "assertion": HumanAttestation;
+  "name": string;
+  "secret_hash": string;
+};
 
 export type TrustedDeviceRejectReason = "unknown" | "mismatch" | "revoked" | "expired" | "reuse" | "limit";
 
+export type TrustedDeviceResult = {
+  "device": TrustedDevice;
+};
+
 export type TrustedDeviceRevokeReason = "owner" | "reuse";
+
+export type TrustedDeviceRevokeResult = {
+  "device": TrustedDevice;
+  "revoked": boolean;
+};
+
+export type TrustedDeviceVerifyBody = {
+  "assertion": HumanAttestation;
+  "device_id": string;
+  "next_hash"?: string | null;
+  "presented_hash": string;
+  "readonly"?: boolean;
+};
 
 export type TrustedLogin = {
   "login_url": string;

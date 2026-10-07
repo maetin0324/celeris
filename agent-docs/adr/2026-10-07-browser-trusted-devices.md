@@ -189,3 +189,21 @@ daemon が端末の操作を events に追記する（追記専用。秘密も h
   - 上限 5 台。probe mode で socket と書き込みが無い。
   - events と log に秘密が出ない。
 - 残る危険: http の LAN では端末 cookie が平文で流れる（D1 の緩和策を参照）。https 化と passkey は別 task。
+
+## 付記 2026-10-07（api 葉の実装突き合わせ）
+
+D2 の端点と claims は、task-api（`crates/task-api/src/browser_trusted_devices.rs`）で次の形に決めた。web-server 葉はこれを呼ぶ。
+
+- 端点（すべて管理系の Bearer ＋ web の Ed25519 assertion。検証は `browser_live::verify_signature` で Live View と同じ鍵・仕組み）:
+  - `POST /api/v1/browser/trusted-devices` 登録（本文 `{name, secret_hash, assertion}`、201。id は daemon が ULID で振る）。
+  - `POST /api/v1/browser/trusted-devices/verify` 検証と回転（D2 の `…/resume` にあたる。本文
+    `{device_id, presented_hash, next_hash?, readonly?, assertion}`）。`readonly: true` は probe 用で何も書かない（D7）。
+  - `GET /api/v1/browser/trusted-devices` 一覧、`DELETE /api/v1/browser/trusted-devices/{id}` 失効（D2 の `…/{id}/revoke` にあたる）。
+    本文を持てないので assertion は header `x-celeris-assertion-payload` / `x-celeris-assertion-signature` で渡す。
+- `DeviceClaims` は D2 の欄に `owner_session`（登録・一覧・失効は `true` 必須）・`name`（登録）・`readonly`（検証）を足した。
+  `purpose` は `device_register` / `device_resume` / `device_list` / `device_revoke`。登録では `presented_hash` が登録する hash を表す。
+  本文・path の値は claims と一致しなければ 403 `not_owner_session`。
+- 応答のコード: 上限 409 `device_limit`、拒否 403 `device_rejected`（理由は区別しない）、形の不正 422 `device_invalid`、
+  未知の id の失効 404 `device_not_found`。
+- 時計は `ApiState::with_clock`（UNIX 秒）で注入する。assertion の期限（30 秒以内）も同じ時計で判定する。
+- 詳細は `docs/api/v1/gui-api.md` §3.128。

@@ -186,6 +186,8 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::browser::routes())
         .merge(crate::browser_identity::routes())
         .merge(crate::browser_live::routes())
+        // ADR 2026-10-07-browser-trusted-devices: 信頼端末の登録・検証と回転・一覧・失効。
+        .merge(crate::browser_trusted_devices::routes())
         .merge(crate::browser_control::routes())
         // ADR-0048 D1（Phase 60a）: Console の読み取り側。実装は `crate::console`。
         .merge(crate::console::routes())

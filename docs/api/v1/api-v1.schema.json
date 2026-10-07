@@ -7251,6 +7251,83 @@
       ],
       "type": "string"
     },
+    "DeviceClaims": {
+      "additionalProperties": false,
+      "description": "web が署名する assertion の `payload`（ADR D2）。未知の欄は拒否する。",
+      "properties": {
+        "actor_id": {
+          "description": "events の `actor`（web の `CELERIS_WEB_OWNER_ID`）。",
+          "type": "string"
+        },
+        "device_id": {
+          "description": "検証・失効の対象。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "description": "UNIX 秒。現在から 30 秒以内の未来でなければ拒否する。",
+          "format": "int64",
+          "type": "integer"
+        },
+        "name": {
+          "description": "登録: 端末の名前。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "next_hash": {
+          "description": "検証: 回転後の新しい秘密の hash（readonly では無し）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner_session": {
+          "description": "web が owner session を持つか。登録・一覧・失効は `true` を要する（検証は要らない）。",
+          "type": "boolean"
+        },
+        "owner_session_id": {
+          "description": "web の login session に結びつく id（空は拒否）。",
+          "type": "string"
+        },
+        "presented_hash": {
+          "description": "登録: 秘密の hash。検証: 提示された秘密の hash。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "purpose": {
+          "$ref": "#/$defs/DevicePurpose"
+        },
+        "readonly": {
+          "default": false,
+          "description": "検証: probe 用の読み取りだけの検証か。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "purpose",
+        "owner_session_id",
+        "owner_session",
+        "actor_id",
+        "expires_at"
+      ],
+      "type": "object"
+    },
+    "DevicePurpose": {
+      "description": "端点ごとの用途。既存の `RelayClaims` / `AttestationClaims` と取り違えないための欄。",
+      "enum": [
+        "device_register",
+        "device_resume",
+        "device_list",
+        "device_revoke"
+      ],
+      "type": "string"
+    },
     "DiffStat": {
       "description": "ファイル数と ± の合計。",
       "properties": {
@@ -27321,12 +27398,129 @@
       ],
       "type": "object"
     },
+    "TrustedDevice": {
+      "description": "一覧に出す 1 行。hash は持たない（API の応答にも返さない。D2）。",
+      "properties": {
+        "absolute_expires_at": {
+          "description": "`None` = 絶対上限なし。",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "actor": {
+          "type": "string"
+        },
+        "created_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "expires_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "id": {
+          "type": "string"
+        },
+        "last_used_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "method": {
+          "$ref": "#/$defs/TrustedDeviceMethod"
+        },
+        "name": {
+          "type": "string"
+        },
+        "revoked_at": {
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "revoked_reason": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TrustedDeviceRevokeReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "method",
+        "created_at",
+        "expires_at",
+        "actor"
+      ],
+      "type": "object"
+    },
+    "TrustedDeviceList": {
+      "description": "一覧の応答（失効・期限切れも含む。新しい順。hash は含まない）。",
+      "properties": {
+        "devices": {
+          "items": {
+            "$ref": "#/$defs/TrustedDevice"
+          },
+          "type": "array"
+        },
+        "limit": {
+          "description": "有効な端末の上限（5）。",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "now": {
+          "description": "応答時点の時計（UNIX 秒）。期限切れの表示に使う。",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "devices",
+        "limit",
+        "now"
+      ],
+      "type": "object"
+    },
     "TrustedDeviceMethod": {
       "description": "端末の秘密の方式（D1）。今回は `Cookie` だけ。https 化の後に passkey を足す。",
       "enum": [
         "cookie"
       ],
       "type": "string"
+    },
+    "TrustedDeviceRegisterBody": {
+      "additionalProperties": false,
+      "description": "`POST /browser/trusted-devices` の本文。",
+      "properties": {
+        "assertion": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "name": {
+          "description": "人が付ける名前（1〜64 文字）。",
+          "type": "string"
+        },
+        "secret_hash": {
+          "description": "web が計算した秘密の SHA-256 hex（小文字 64 文字）。秘密そのものは送らない。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "secret_hash",
+        "assertion"
+      ],
+      "type": "object"
     },
     "TrustedDeviceRejectReason": {
       "description": "拒否の理由（D4・D5）。HTTP の応答では区別せず、events にだけ残す。",
@@ -27363,6 +27557,18 @@
         }
       ]
     },
+    "TrustedDeviceResult": {
+      "description": "登録・検証の応答（hash は含まない）。",
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/TrustedDevice"
+        }
+      },
+      "required": [
+        "device"
+      ],
+      "type": "object"
+    },
     "TrustedDeviceRevokeReason": {
       "description": "失効の理由（D4）。",
       "oneOf": [
@@ -27377,6 +27583,56 @@
           "type": "string"
         }
       ]
+    },
+    "TrustedDeviceRevokeResult": {
+      "description": "失効の応答。`revoked` は今回失効させたか（既に失効済みなら `false`）。",
+      "properties": {
+        "device": {
+          "$ref": "#/$defs/TrustedDevice"
+        },
+        "revoked": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "revoked",
+        "device"
+      ],
+      "type": "object"
+    },
+    "TrustedDeviceVerifyBody": {
+      "additionalProperties": false,
+      "description": "`POST /browser/trusted-devices/verify` の本文。",
+      "properties": {
+        "assertion": {
+          "$ref": "#/$defs/HumanAttestation"
+        },
+        "device_id": {
+          "type": "string"
+        },
+        "next_hash": {
+          "description": "回転後の新しい秘密の hash。`readonly` でなければ必須。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "presented_hash": {
+          "description": "提示された秘密の hash。",
+          "type": "string"
+        },
+        "readonly": {
+          "default": false,
+          "description": "`true` なら判定だけを返し、回転・最終使用・期限・event のいずれも書かない（web-follow の probe 用）。",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "device_id",
+        "presented_hash",
+        "assertion"
+      ],
+      "type": "object"
     },
     "TrustedLogin": {
       "additionalProperties": false,
@@ -28845,6 +29101,25 @@
     "tree_file": {
       "$ref": "#/$defs/TreeFileView"
     },
+    "trusted_device_claims": {
+      "$ref": "#/$defs/DeviceClaims"
+    },
+    "trusted_device_list": {
+      "$ref": "#/$defs/TrustedDeviceList"
+    },
+    "trusted_device_register": {
+      "$ref": "#/$defs/TrustedDeviceRegisterBody",
+      "description": "ADR 2026-10-07-browser-trusted-devices: `/browser/trusted-devices` の本文・応答と assertion の claims。"
+    },
+    "trusted_device_result": {
+      "$ref": "#/$defs/TrustedDeviceResult"
+    },
+    "trusted_device_revoke_result": {
+      "$ref": "#/$defs/TrustedDeviceRevokeResult"
+    },
+    "trusted_device_verify": {
+      "$ref": "#/$defs/TrustedDeviceVerifyBody"
+    },
     "work_unit_check_log": {
       "$ref": "#/$defs/WorkUnitCheckLog",
       "description": "2026-10-04 統合の検査の進み具合 D3: `GET /tasks/{id}/work-units/{wu_id}/check-log`。"
@@ -29009,6 +29284,12 @@
     "browser_revoke",
     "browser_wait_result",
     "browser_attestation_claims",
+    "trusted_device_register",
+    "trusted_device_verify",
+    "trusted_device_result",
+    "trusted_device_list",
+    "trusted_device_revoke_result",
+    "trusted_device_claims",
     "decision_list",
     "decision_answer",
     "decision_withdraw",

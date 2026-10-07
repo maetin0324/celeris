@@ -53,6 +53,16 @@ pub struct ApiState {
     /// ADR-0108 D5: 稼働中 session の registry（daemon が supervisor と共有する）。`None` なら
     /// restore は常に `isolation_required`。
     pub(crate) live_sessions: Option<Arc<dyn task_core::browser_isolation::LiveSessionRegistry>>,
+    /// ADR 2026-10-07-browser-trusted-devices: 端末の期限・assertion の期限に使う時計（UNIX 秒）。
+    /// 本番は壁時計。試験は `with_clock` で偽の時計に差し替える。
+    pub(crate) clock: ApiClock,
+}
+
+/// 注入できる時計（UNIX 秒を返す）。
+pub type ApiClock = Arc<dyn Fn() -> i64 + Send + Sync>;
+
+fn system_clock() -> ApiClock {
+    Arc::new(|| time::OffsetDateTime::now_utc().unix_timestamp())
 }
 
 pub(crate) struct Inner {
@@ -205,6 +215,7 @@ impl ApiState {
             identity_sealer: None,
             live_sessions: None,
             live_grants: Arc::new(Mutex::new(HashMap::new())),
+            clock: system_clock(),
         })
     }
 
@@ -230,6 +241,17 @@ impl ApiState {
     ) -> Self {
         self.live_sessions = Some(registry);
         self
+    }
+
+    /// 時計を差し替える（試験用。本番は壁時計のまま）。信頼端末の期限と、その端点の assertion の期限に効く。
+    pub fn with_clock(mut self, clock: ApiClock) -> Self {
+        self.clock = clock;
+        self
+    }
+
+    /// 時計の現在時刻（UNIX 秒）。
+    pub(crate) fn now_secs(&self) -> i64 {
+        (self.clock)()
     }
 
     /// SSE の上限と間隔を差し替える（テスト用。本番は既定値のまま）。

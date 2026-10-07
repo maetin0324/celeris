@@ -624,6 +624,59 @@ pub fn add_ref_tx(
     Ok(())
 }
 
+/// Most chat attachments one `POST /tasks` may pin (ADR 2026-10-07 cos-live-fixes D1).
+pub const MAX_TASK_CREATE_ATTACHMENTS: usize = 20;
+
+/// Why `ids` cannot be pinned to a task being created (ADR 2026-10-07 cos-live-fixes D1), or `None`
+/// when all of them can. Read inside the caller's transaction, right before the pins: the id format,
+/// duplicates, the count, a `ready` row that has not expired and, for a CoS caller (`thread`), that
+/// the attachment belongs to the credential's thread.
+pub fn task_pin_problem_tx(
+    tx: &Connection,
+    ids: &[String],
+    thread: Option<&str>,
+    now: OffsetDateTime,
+) -> Result<Option<String>, AttachmentError> {
+    if ids.len() > MAX_TASK_CREATE_ATTACHMENTS {
+        return Ok(Some(format!(
+            "attachment_ids has {} entries; at most {MAX_TASK_CREATE_ATTACHMENTS}",
+            ids.len()
+        )));
+    }
+    let now = stamp(now)?;
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if !valid_id(id) {
+            return Ok(Some(format!("attachment id {id:?} is not a ULID")));
+        }
+        if !seen.insert(id.as_str()) {
+            return Ok(Some(format!("attachment {id} is listed twice")));
+        }
+        let row: Option<(String, String, Option<String>)> = tx
+            .query_row(
+                "SELECT thread_id,state,expires_at FROM chat_attachments WHERE id=?1",
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((owner_thread, state, expires_at)) = row else {
+            return Ok(Some(format!("attachment {id} does not exist")));
+        };
+        if state != "ready" {
+            return Ok(Some(format!("attachment {id} was deleted")));
+        }
+        if expires_at.is_some_and(|at| at <= now) {
+            return Ok(Some(format!("attachment {id} has expired")));
+        }
+        if thread.is_some_and(|thread| thread != owner_thread) {
+            return Ok(Some(format!(
+                "attachment {id} does not belong to this CoS thread"
+            )));
+        }
+    }
+    Ok(None)
+}
+
 /// Where a pinned attachment came from (ADR 2026-10-05 cos-chat-home D4): the original file's
 /// metadata and hash, the chat thread, and the message that carried it with its text (the human's
 /// request). Read from `chat_attachments` / `chat_attachment_refs` / `chat_messages` only, so it

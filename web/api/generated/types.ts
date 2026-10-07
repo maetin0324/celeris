@@ -3553,6 +3553,7 @@ export type NewTaskBody = {
   "adapter"?: string | null;
   "aggregate"?: boolean;
   "assignee"?: string | null;
+  "attachment_ids"?: Array<string>;
   "category"?: TaskCategory | null;
   "cluster"?: string | null;
   "depends_on"?: Array<TaskId>;

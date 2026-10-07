@@ -700,6 +700,18 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
   - リモートのリポジトリを他と混ぜた → `a task cannot mix a remote repository with other repositories yet (ADR-0043 D2)`
   - 手元の `workspace` とリモートのリポジトリを組み合わせた → `a local workspace cannot be combined with the remote repo "<name>"; …`
   応答の `Task.repos[]` は `{"repo_id": "01J…", "name": "benchfs"}` の配列（空なら省略される）。
+- **`attachment_ids`** は任意（既定 空。ADR 2026-10-07 cos-live-fixes D1）。チャット添付の id
+  （`POST /chat/threads/{t}/attachments` の応答の `attachment.id`）を並べると、task の行・`ready` への遷移と
+  各添付の pin（`chat_attachment_refs` の `owner_kind: "task"`。`POST /chat/attachments/{id}/references` と同じ
+  `add_ref_tx`）を **1 つの transaction** で書く。commit まで dispatcher から task は見えないので、
+  最初の run の入力 manifest（stage と前置きの「## 入力の添付」）に添付が載る。pin した添付は期限が外れる。
+  - 1 件でも次に当たれば 422 `invalid_attachment` で、**task も pin も作らない**: ULID でない id、存在しない添付、
+    削除済み（`state = deleted`）、期限切れ（`expires_at` が過去）、同じ id の重複、21 件以上（上限 20）、
+    CoS operation 経由では credential の thread に属さない添付。
+  - CoS operation `task.create`（`POST /cos/operations` に包んだ同じ本文）も同じ欄を受け、`cos_operations` の
+    `result` は `{"task_id": "…", "attachment_ids": ["…"]}`。拒否は `state: "rejected"` の行と監査 event に残る。
+  - 既存の owner への後からの pin（KB 候補を含む）は従来どおり `POST /chat/attachments/{id}/references`。
+- **`expected_write_paths`** は任意（ADR-0130 の書き込み範囲の予告。正規化できない path は 400）。
 
 ### 3.5 `GET /tasks/{id}` → 200 `TaskDetail`
 

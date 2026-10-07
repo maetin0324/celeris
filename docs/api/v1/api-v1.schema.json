@@ -17644,6 +17644,14 @@
             "null"
           ]
         },
+        "attachment_ids": {
+          "default": [],
+          "description": "ADR 2026-10-07 cos-live-fixes D1: chat attachment ids to pin to the new task\n(`owner_kind: \"task\"`) in the transaction that creates it, so the first run's input manifest\nalready has them. An unknown, deleted, expired or duplicate id (or, from a CoS run, one from\nanother thread) is 422 `invalid_attachment` and creates nothing.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "category": {
           "anyOf": [
             {

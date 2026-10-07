@@ -1,7 +1,7 @@
 # coding タスクの既定ハーネスを model family で決める（Claude 系は Claude Code、非 Claude は Pi + Hashline）
 
 - 日付: 2026-10-07
-- 状態: 提案（後続葉 family / pi-adapter / dispatch / ops-docs で実装する。本番での有効化は人が行う）
+- 状態: 実装済み（2026-10-07 close-out。leaf の実装突き合わせは「付記（実装との突き合わせ）」節。本番での有効化は人が行う: `docs/ops/coding-harness-pi-hashline.md`）
 - 関連: ADR-0024（account pool）、ADR-0026（adapter）、ADR-0046（harness）、ADR-0049（専用 adapter の除外）、ADR-0052（harness fallback）、ADR-0061（coding harness routing の基盤）、ADR-0132（provider / llm_source 分離・cheap の Qwen）、ADR 2026-10-04（多目的 model routing）、ADR 2026-10-06（opencode go と model catalog）
 - 調査記録: `agent-docs/progress/2026-10-07-coding-harness-default-pi-hashline/survey.md`（以下「survey」。根拠の file:line はそこにある）
 
@@ -168,3 +168,59 @@ coding タスクの adapter（ハーネス実装）は、明示されなけれ�
 - 明示 adapter のある task・`adapter_policy` を書いていない harness は挙動が変わらない。
 - 有効化すると、非 Claude（未知を含む）の coding run は Pi 行があれば Pi で走り、Claude の run は claude-code 行で走る。codex 行・ACP 行は preferred でなくなり、fallback でのみ使われる。codex の account pool の消費が減ることは有効化前に人が了承する。
 - 戻し方: config の `adapter_policy = "model_family"` を消す（または `provider_order`）。データの移行は無い。
+
+## 付記（実装との突き合わせ、2026-10-07）
+
+leaf family / pi-adapter / dispatch / ops-docs の統合後（branch tip `a2ca31ad`）に実装と突き合わせた記録。進捗は `agent-docs/progress/2026-10-07-coding-harness-default-pi-hashline.md`。
+
+### 関数名と位置（「解決する関数と位置」・「Claude family 判定」節の actual）
+
+- `crates/task-core/src/model_family.rs`（新規）: `ModelFamily { Claude, Gpt, Qwen, Other, Unknown }`・`ModelFamily::parse`・`is_claude`、`FamilyBasis { LlmSource, AccountPool, ModelProfile, Unknown }`、`FamilyDecision`、`derive_family(source: &LlmSourceRef, pool: Option<AccountAdapter>, model: Option<&ModelProfile>) -> FamilyDecision`。
+  - 本文の `derive_family(source, pool, model, deployment)` の **`deployment` 引数は置かない**。`DeploymentProfile` は family の材料を持たず（`source_ref` の文字列も判定に使わないと本文が定めているため）。`model` は `Option`（catalog に行が無い provider でも呼べる）。
+  - 導出の優先順位は本文どおり（source → pool → catalog の `ModelProfile.family` → `Unknown`）。
+- `crates/task-core/src/coding_harness.rs`（新規）: `CodingHarness { ClaudeCode, Pi }`・`CodingHarness::for_family`・`CodingHarness::adapter_id`（`ClaudeCode` は `AccountAdapter::ClaudeCode.as_str()`、`Pi` は定数 `PI_ADAPTER_ID = "pi"`）、`prefers(row_adapter, family)`、`coding_harness_default_adapter(explicit: Option<&str>, family) -> &str`（明示 adapter があればそのまま返す）、`AdapterPolicy { ProviderOrder（既定）, ModelFamily }`、`AdapterChoice { Explicit, Preferred, Fallback { reason }, ProviderOrder }`。
+- `crates/task-core/src/harness.rs`: `HarnessSpec.adapter_policy: AdapterPolicy`（既定 `ProviderOrder`、serde で `provider_order` 時は省略）。
+- task-dispatch: 本文は `select_provider_excluding`（provider_select.rs）の冒頭に絞る処理を書く設計だった。**実際は `crates/task-dispatch/src/dispatcher/coding_default.rs`（新規 module）に `Dispatcher::select_provider_with_default(active, hint, …)`** として重ねた。`active = false`（対象外の run）なら従来どおり `select_provider_excluding` をそのまま呼ぶ。絞りは「`prefers` に合わない行を excluded 集合へ足して `select_provider_excluding` を呼ぶ」で、preferred の中の順序（sticky → cheap local → pool score → 設定順）は `select_provider_excluding` のまま。preferred が全滅したら除外なしで同じ関数をやり直す（fallback）。`select_provider_excluding` 本体は 3 行（catalog の family を `ModelProfile.family` に入れる処理）しか変えていない。
+- 行の family: `Dispatcher::row_family(&LegacyProfile)`（LLM source は `Config::provider_llm_source`、pool の adapter は pool を使う行だけ、catalog の family は `CodingHarnessDefault.model_families`）。`legacy_provider_profiles` が作る `ModelProfile.family` に catalog の値を入れる（catalog に無い model は空文字 → `Unknown`）。
+- 適用の条件（dispatch_run.rs）: `coding_default_harness = !cos && !is_planner_dispatch && genre ∈ coding_default.harnesses`、`coding_default_active = coding_default_harness && worker_hint.adapter.is_none()`。
+- daemon 配線: `Config::coding_harness_default()`（crates/celeris/src/config/dispatch.rs）が `CodingHarnessDefault { harnesses, sources, model_families }` を作り、`Dispatcher::set_coding_harness_default` で渡す（`crates/celeris/src/daemon/bootstrap.rs` の起動時と `daemon/admin.rs` の設定の再読込）。
+- sticky: `SUPPORTED_ADAPTERS`（sessions.rs:12）は `["claude-code", "codex", "acp"]` のまま（`pi` は未追加、本文どおり session resume 未実装）。worker run の sticky session は CoS の対話 run のみ（`cos_conversation_session`）なので、preferred 絞りとの実効的な交わりは無い（CoS は既定解決の対象外）。
+- Qwen 判定（crates/celeris/src/config/model_routing.rs:724-728）は **置換していない**（本文「残すなら判断」の分岐: `contains("qwen")` の legacy 判定を残す。`ModelFamily::parse` への置き換えは未実施・未必要 — 制約は catalog の family 以外の id/source 名にも掛かるため）。
+
+### adapter id と config 欄
+
+- adapter id: `PiAdapter::ID = "pi"`（crates/task-worker/src/pi.rs:92）。一致を固定する試験は task-dispatch の `coding_harness_default_pi_adapter_id_matches_worker`。
+- provider 行の欄: `command` / `args`（実行ファイル prefix だけ、`-`・`@` 始まりは config 検証で拒否）/ `extensions`（Hashline の path）/ `tools`（allowlist）/ `model`（`provider/id`）。pi 行の `extensions` と `tools` は必須、他の adapter 行では拒否（`crates/celeris/src/config/providers.rs`、試験 `pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters`）。
+- `build_adapters`（crates/celeris/src/daemon/adapters.rs）: `PiAdapter::ID` の match arm。`base_url` は行の LLM source から決める（`Celeris` → llm-proxy の listen + `CELERIS_PI_API_KEY`、`OpenaiCompatible(id)` → その source の `base_url` と `api_key`、その他 → 行の env の `OPENAI_BASE_URL`/`OPENAI_API_BASE`）。
+- `[[harnesses]]` の `adapter_policy = "model_family"` は固定 `adapter` と `conversation = true` との併用を config 検証で拒否（`crates/celeris/src/config/harness.rs`）。
+
+### Pi 起動形（「Pi 起動形と tool 集合」節の actual）
+
+- 起動引数（PiAdapter が組み立てる固定部分、crates/task-worker/src/pi.rs:222-241）: `--mode json -p`（prompt は **stdin**、argv 上限に当たらない）`--no-extensions --no-skills --no-prompt-templates --no-themes --session-dir <run>/pi-sessions --provider <p> --model <p>/<id> --tools <allowlist>`、各 extension を `-e <path>`。本文の「context file は読ませる」はそのまま（`--no-context-files` は付けない）。
+- `PI_CODING_AGENT_DIR=<run>/pi-agent`、そこに `settings.json`（Pi 内 retry 無効 + install telemetry 無効）と、必要なら `models.json`（openai 互換の custom provider。鍵と llm-proxy のルーティング文脈 header は env 参照 `CELERIS_PI_API_KEY` / `CELERIS_PI_ROUTING_CONTEXT` で渡す）。
+- opencode-go pool: 選ばれた account dir（`XDG_DATA_HOME`）の `opencode/auth.json` から鍵を読んで `OPENCODE_API_KEY` として渡す（auth.json を写さない。`crates/task-worker/src/opencode_account.rs::read_go_key`）。
+- **未確認点の消えたもの**: 1（Hashline の path・tool 名は config で人が書く → 導入手順書 `docs/ops/coding-harness-pi-hashline.md`）、2（`command`/`args` で行ごとに上書き可能 → openclaw 同梱の `node …/cli.js` でも npm prefix 版でも動く）、3（終端 event = `agent_end`、usage = assistant の `message_end` の `usage.{input,output,cacheRead,cacheWrite,cost.total}` を `Usage` に合算。fixture は `crates/task-worker/src/pi/tests.rs`）、4（codex の OAuth は **Pi に渡さない**。config 読み込みで pi 行の codex pool は拒否 → codex 行は fallback で今どおり。opencode-go の鍵は `OPENCODE_API_KEY`）、5（telemetry/install 確認は `PI_CODING_AGENT_DIR` の `settings.json` で止める）。
+- subagent/planner: `PiConfig::validate` が `tools` に subagent/planner を含む名前で拒否する（試験 `pi_adapter_requires_hashline_tools_and_rejects_subagent_planner_or_cli_overrides`）。`--no-extensions` + `-e` だけ + allowlist の 3 つで subagent 経路を作らない（本文どおり）。
+
+### metrics（「metrics 整合」節の actual）
+
+- `LaneResolution`（crates/task-core/src/model_routing.rs）に **`coding_default: Option<CodingDefaultResolution { family, family_basis, adapter_choice }>`** を足した（本文の 3 個の個別 Option 欄ではなく 1 つの struct 欄。`adapter`・`model_id` は既存の欄のままで、本文どおり別欄で (model, harness) が比較できる）。
+- `RoutingAudit.coding_default`（crates/task-core/src/routing_audit.rs）に写す。対象外の run・旧イベントには `None`。
+- execution metrics（task 単位）には足していない（本文どおり）。
+- schema: `UPDATE_SCHEMA=1` で `docs/api/v1`（api-v1・event の 2 file）を再生成し、`gui/app/celeris/types.ts`（gui の `pnpm gen:types`）と `web/api/generated/`（`node web/scripts/gen-types.mjs`）を反映済み。
+
+### 試験名（「後続葉」節の actual。`cargo nextest run -E 'test(/<接頭辞>/)'` で選べる）
+
+- task-core（`coding_harness_default`、crates/task-core/src/coding_harness/tests.rs、10）: `claude_uses_claude_code`、`gpt_openai_uses_pi`、`opencode_go_uses_pi`（catalog の family が Claude なら `claude-code` に戻るケースも同じ試験内）、`deepseek_uses_pi`、`unknown_provider_uses_pi`、`respects_explicit_adapter`、`parse_is_case_insensitive`、`source_wins_over_pool_and_profile`、`prefers_matches_family_harness`、`serde_names`。必須 6 ケース（Claude / GPT・OpenAI / OpenCode Go / DeepSeek / 未知 / 明示指定）は全てここ。
+- task-worker（`pi_adapter`、crates/task-worker/src/pi/tests.rs、14）: 起動引数・tool 集合・cwd・隔離（`args_tools_isolation_cwd_and_large_prompt`）、usage 合算、extension 欠落で spawn 前失敗、subagent/planner 拒否、失敗分類（`failure_classification_and_json_error_on_zero_exit`・`stderr_failure_classification`）、`agent_end` 無し・stale result 拒否、custom models・context header、result の question/yield、go account の鍵、skills 配送、wall/idle timeout、extension 読み込み失敗。
+- task-dispatch（`coding_harness_default`、crates/task-dispatch/src/dispatcher/tests/coding_harness_default.rs、12）: `claude_row_prefers_claude_code`、`gpt_openai_prefers_pi`、`opencode_go_prefers_pi`、`deepseek_prefers_pi`、`unknown_provider_prefers_pi`、`falls_back_when_pi_unavailable`（満杯・cooldown・pi 行なしの 3 種）、`provider_order_policy_unchanged`、`cheap_local_qwen_pi_first`、`pi_adapter_id_matches_worker`、`records_adapter_in_metrics`（tick 実行 → `WorkerStarted.adapter == "pi"` → routing audit）、`explicit_adapter_wins`、`other_harness_unchanged`。
+- celeris（`coding_harness_default` 2 + `pi_adapter` 3）: `coding_harness_default_config_builds_dispatcher_inputs`・`coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy`、`pi_adapter_provider_config_loads_and_builds_with_relative_extension`・`pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters`・`pi_adapter_config_preserves_go_pool_and_direct_compatible_source`。
+
+### 検証（close-out、統合後の branch tip `d0bf8b63` で再実行、2026-10-07）
+
+- `corepack pnpm install --offline` → exit 0（pnpm v12.6.0）。
+- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 4225 passed / 0 failed / 13 skipped + doctest。CELERIS_TEST_SUMMARY は ignored 14）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all --check` → 差分なし。
+- web: `corepack pnpm@12.6.0 -C web typecheck` → exit 0。gui: `corepack pnpm@11.27.0 typecheck`（gui を cwd に）→ exit 0。生成型は optional 欄の追加（`coding_default`）だけ。
+- `git diff --check` と `git diff --quiet "$CELERIS_WU_BASE" -- crates/ gui/` → exit 0。
+- 本番の導入・有効化・実 Pi/実 LLM での確認は人の手順（`docs/ops/coding-harness-pi-hashline.md`）。

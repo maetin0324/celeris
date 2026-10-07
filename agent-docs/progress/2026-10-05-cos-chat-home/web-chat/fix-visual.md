@@ -1,6 +1,6 @@
 ---
 tasks: [01M48GK6BHSW2GA1JECC7214P4]
-status: blocked
+status: done
 updated: 2026-10-07
 ---
 # web-chat / fix-visual（badge と tool 状態の視認性）
@@ -26,10 +26,18 @@ final review の指摘 (2)(3) を修正した。
 - `git diff --check`: exit 0。
 - 範囲 check: `$CELERIS_WU_BASE` からの差分と untracked を threads/messages、`web/e2e/chat/threads.spec.ts`、この進捗ファイルに限定して検査。範囲外 0 件。gui/・crates/・styles.css・screenshots の差分なし。
 
+## 再試行の検証（2026-10-07）
+
+人の replan v9 で範囲検査の基点が `CELERIS_WU_BASE` に訂正された。修正 `bc0f30e4` をそのまま維持し、以下を再実行した。
+
+- `corepack pnpm@12.6.0 -C web install --offline --frozen-lockfile`: exit 0。
+- `corepack pnpm@12.6.0 -C web typecheck`・`lint`・`test`・`build`: 全て exit 0。vitest 490 件、server 57 件成功。既存 lint warning 4 件と chunk size warning のみ。
+- `WEB_E2E_SCOPE=functional corepack pnpm@12.6.0 -C web exec playwright test e2e/chat`: exit 0、31 passed（長い題名の badge の矩形検証を含む）。
+- `corepack pnpm@12.6.0 -C web exec biome format --write e2e features`: exit 0、変更なし。
+- `git diff --quiet "$CELERIS_WU_BASE" -- crates/ gui/ web/styles.css`: exit 0。
+- `$CELERIS_WU_BASE` からの差分と untracked を threads/messages、`web/e2e/chat/threads.spec.ts`、この進捗ファイルに限定した範囲検査: exit 0、範囲外 0 件。
+- `git diff --check`: exit 0。
+
 ## 未解決・提案
 
-再試行で計画の範囲 check の問題を確認した。`git diff --quiet $(git merge-base HEAD main) -- crates/ gui/` は exit 1。merge-base は `ea6f0e243acf1632852c1f8ad39c5cb1b622afc3` で、WU base `65e344c1a1ed53106618fa7ac5f15088146e1bed` より前を比較しており、親タスクから継承した crates/・gui/ の162ファイルを検出する。
-
-`git diff --quiet "$CELERIS_WU_BASE" HEAD -- crates/ gui/` は exit 0。修正コミット `bc0f30e4` の差分は web の5ファイルとこの進捗だけであり、検出された162ファイルは全て WU base 時点で存在した。親の実装を戻して検査を通すことはしない。計画の検査基点を `$CELERIS_WU_BASE` に訂正することを提案する。検査はこの run では変更できないため、done ではなく plan_issue を返す。今回の再試行では UI 変更も試験の再実行も行っていない。
-
-screenshot は撮り直していない。後続 `shots` が更新し、`reclose` が一覧と ADR 付記を更新する。
+この葉の未解決事項なし。screenshot は撮り直していない。後続 `shots` が更新し、`reclose` が一覧と ADR 付記を更新する。

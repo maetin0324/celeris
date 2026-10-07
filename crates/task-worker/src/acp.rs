@@ -77,6 +77,9 @@ pub struct AcpConfig {
     pub startup_timeout: Duration,
     /// ADR-0043 D3（Phase 56）: `Some` なら ACP エージェントをコンテナの中で起こす（`container::wrap`）。
     pub container: Option<crate::container::SharedPlan>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D3/D7: `[adapters.acp] subagents`。既定 `Deny`
+    /// （`OPENCODE_CONFIG_CONTENT` に `tools.task=false` を重ねる）。
+    pub subagents: crate::tool_policy::SubagentPolicy,
 }
 
 impl Default for AcpConfig {
@@ -90,6 +93,7 @@ impl Default for AcpConfig {
             model_option_id: "model".to_string(),
             startup_timeout: Duration::from_secs(300),
             container: None,
+            subagents: Default::default(),
         }
     }
 }
@@ -457,6 +461,14 @@ fn handle_notification(value: &serde_json::Value, sink: &dyn EventSink, chunks: 
                 }
                 _ => {
                     let input = update.get("rawInput").or_else(|| update.get("locations"));
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具（opencode の `task`）と、
+                    // `rawInput.command` / 題名からの別 LLM CLI・API の起動の検出。
+                    if let Some(v) =
+                        crate::tool_policy::inspect_tool_use(name, update.get("rawInput"))
+                            .or_else(|| crate::tool_policy::inspect_command(name, name))
+                    {
+                        crate::claude_code::report_policy_violation(sink, &v);
+                    }
                     let fields = progress::tool_use(name, input);
                     // `rawInput` が無い実装（opencode など）では題名を要約にする。
                     if fields.summary.as_deref().unwrap_or("").is_empty() {
@@ -890,6 +902,20 @@ async fn run_acp(
         req,
     );
     crate::routing_context_transport::record(&run_dir, req, context_transport).await;
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D3: opencode の subagent 道具 `task` を既定で無効にする。
+    // 既に `OPENCODE_CONFIG_CONTENT` にある JSON（運用側の env・上の provider header の overlay）に
+    // `tools.task=false` を重ねる。外せるのは `[adapters.acp] subagents = "allow" | "allow_cos"` だけ（D7）。
+    if !config.subagents.allows(req) {
+        let existing = command
+            .as_std()
+            .get_envs()
+            .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT")
+            .and_then(|(_, value)| value.map(|v| v.to_string_lossy().into_owned()));
+        command.env(
+            "OPENCODE_CONFIG_CONTENT",
+            crate::tool_policy::opencode_overlay(existing.as_deref()),
+        );
+    }
     // ★ ADR-0043 D3 の差し込み点（コンテナ実行）。`None` ならそのまま（ホスト実行は変わらない）。
     let mut command = crate::db_guard::launch(command, config.container.as_deref());
     command

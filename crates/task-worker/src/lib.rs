@@ -63,6 +63,7 @@ pub mod subprocess;
 pub mod task_repos;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod tool_policy;
 pub mod workspace;
 /// ADR-0066 D2（Phase 110b）: 終端タスクの作業場所から、ビルド生成物だけを自動で刈る。
 pub mod workspace_prune;

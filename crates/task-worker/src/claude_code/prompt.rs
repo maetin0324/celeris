@@ -1618,6 +1618,24 @@ fn build_review_prompt(task: &Task, context: &RunContext, run_id: &str, artifact
                 }
                 out.push('\n');
             }
+            // ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: worker が subagent・別の LLM を起動した記録。
+            if !review.policy_violations.is_empty() {
+                out.push_str("## Tool policy violations recorded by celeris (authoritative)\n\
+                    celeris detected that the worker tried to launch a subagent, another LLM CLI, or an LLM API \
+                    directly (ADR 2026-10-07-worker-no-subagents-no-llm-cli). This is forbidden: the usage \
+                    escaped celeris' run/routing/quota accounting and the work it did is not in the task flow. \
+                    If such a launch substituted for a step a criterion requires to be done by a human, by an \
+                    independent review, or by a deterministic check (for example, the worker had its plan \
+                    reviewed by its own subagent instead of a human), fail that criterion. Otherwise, state \
+                    the violation in the verdict reason of every criterion you judge.\n");
+                for v in &review.policy_violations {
+                    out.push_str(&format!(
+                        "- {} via `{}` (matched `{}`): {}\n",
+                        v.kind, v.tool, v.matched, v.command
+                    ));
+                }
+                out.push('\n');
+            }
             out.push_str(&format!(
                 "## Worker's self-reported summary (not to be trusted blindly)\n{}\n\n",
                 review.summary

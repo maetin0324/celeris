@@ -149,8 +149,10 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 68] = [
+pub(crate) const EVENT_TYPES: [&str; 69] = [
     "browser_updated",
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
+    "worker_policy_violation",
     // ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）を開いた・解決した（秘密なし）。
     "browser_wait_opened",
     "browser_wait_resolved",
@@ -260,6 +262,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::Transitioned { .. } => "transitioned",
         Event::WorkerStarted { .. } => "worker_started",
         Event::WorkerProgress { .. } => "worker_progress",
+        Event::WorkerPolicyViolation { .. } => "worker_policy_violation",
         Event::ArtifactProduced { .. } => "artifact_produced",
         Event::WorkerFinished { .. } => "worker_finished",
         Event::ReviewVerdict { .. } => "review_verdict",

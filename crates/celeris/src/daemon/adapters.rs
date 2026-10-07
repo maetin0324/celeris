@@ -39,6 +39,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     container: None,
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.claude_code] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }))
             }
             CodexAdapter::ID => {
@@ -64,6 +66,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     resume_mode: base.resolved_resume_mode(),
                     // ADR-0054 Phase 112 D1: `[adapters.codex] resume_bypass`（既定 off）。
                     resume_bypass: base.resolved_resume_bypass(),
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.codex] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }))
             }
             AiderAdapter::ID => {
@@ -107,6 +111,8 @@ pub fn build_adapters(config: &Config) -> HashMap<ProviderId, Arc<dyn WorkerAdap
                     // ADR-0043 D3（Phase 56）: コンテナで走らせるかはタスクごとに決まるので、ここでは常に `None`
                     // （ディスパッチャが `with_container` で包んだ複製を作る）。
                     container: None,
+                    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.acp] subagents`（既定 deny）。
+                    subagents: base.resolved_subagents(),
                 }));
                 if p.adapter == BrowserSpecialistAdapter::ID {
                     Arc::new(BrowserSpecialistAdapter::new(inner))

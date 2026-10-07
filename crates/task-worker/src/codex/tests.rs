@@ -17,9 +17,17 @@ struct RecordingSink {
     sessions: Mutex<Vec<String>>,
     /// ADR-0054 D1（Phase 67）: `session_resume_failed` の呼び出し。
     resume_failed: Mutex<Vec<String>>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `policy_violation` の呼び出し。
+    violations: Mutex<Vec<crate::tool_policy::ToolPolicyViolation>>,
 }
 
 impl EventSink for RecordingSink {
+    fn policy_violation(&self, violation: &crate::tool_policy::ToolPolicyViolation) {
+        self.violations
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(violation.clone());
+    }
     fn progress(&self, msg: &str) {
         self.progress
             .lock()
@@ -927,6 +935,7 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
         container: None,
         resume_mode: CodexResumeMode::default(),
         resume_bypass: CodexResumeBypass::default(),
+        subagents: Default::default(),
     };
     let adapter = CodexAdapter::new(config);
     let req = sample_req(dir.path().to_path_buf());
@@ -941,7 +950,7 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
     let args: Vec<&str> = args_log.split('\0').filter(|s| !s.is_empty()).collect();
     assert_eq!(
         args.len(),
-        12,
+        16,
         "expected exactly one trailing prompt arg, got {args:?}"
     );
     assert_eq!(
@@ -959,8 +968,18 @@ async fn command_line_has_exec_json_model_then_prompt_as_last_arg() {
     assert_eq!(args[7], "--add-dir");
     assert_eq!(args[8], dir.path().join("artifacts").to_str().unwrap());
     assert_eq!(&args[9..11], ["--sandbox", "read-only"]);
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent の無効化は `extra_args` の後ろ。
+    assert_eq!(
+        &args[11..15],
+        [
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false"
+        ]
+    );
     // F5-fix10: 最終引数は stdin を指す `-`。プロンプト本文はどの引数にも載らない。
-    assert_eq!(args[11], "-", "{args:?}");
+    assert_eq!(args[15], "-", "{args:?}");
     assert!(
         args.iter().all(|a| !a.contains("# Task:")),
         "the prompt must not be passed via argv: {args:?}"
@@ -1460,7 +1479,7 @@ async fn phase_68b_fresh_cos_run_argv_has_readonly_sandbox_and_add_dir() {
         .unwrap();
     let args = captured_args(dir.path());
     let artifacts_dir = dir.path().join("artifacts").to_str().unwrap().to_string();
-    assert_eq!(args.len(), 8, "{args:?}");
+    assert_eq!(args.len(), 12, "{args:?}");
     assert_eq!(
         &args[..7],
         [
@@ -1474,8 +1493,19 @@ async fn phase_68b_fresh_cos_run_argv_has_readonly_sandbox_and_add_dir() {
         ],
         "{args:?}"
     );
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent の無効化が `-` の直前に付く。
     assert_eq!(
-        args[7], "-",
+        &args[7..11],
+        [
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false"
+        ],
+        "{args:?}"
+    );
+    assert_eq!(
+        args[11], "-",
         "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
     );
 }
@@ -1505,7 +1535,7 @@ async fn phase_68b_resume_cos_run_argv_drops_add_dir_keeps_readonly_sandbox() {
         .await
         .unwrap();
     let args = captured_args(dir.path());
-    assert_eq!(args.len(), 8, "{args:?}");
+    assert_eq!(args.len(), 12, "{args:?}");
     assert_eq!(
         &args[..7],
         [
@@ -1519,8 +1549,19 @@ async fn phase_68b_resume_cos_run_argv_drops_add_dir_keeps_readonly_sandbox() {
         ],
         "{args:?}"
     );
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent の無効化が `-` の直前に付く。
     assert_eq!(
-        args[7], "-",
+        &args[7..11],
+        [
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false"
+        ],
+        "{args:?}"
+    );
+    assert_eq!(
+        args[11], "-",
         "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
     );
     assert!(
@@ -1548,7 +1589,7 @@ async fn phase_68b_normal_run_argv_unchanged() {
         .unwrap();
     let args = captured_args(dir.path());
     let artifacts_dir = dir.path().join("artifacts").to_str().unwrap().to_string();
-    assert_eq!(args.len(), 8, "{args:?}");
+    assert_eq!(args.len(), 12, "{args:?}");
     assert_eq!(
         &args[..7],
         [
@@ -1562,8 +1603,19 @@ async fn phase_68b_normal_run_argv_unchanged() {
         ],
         "{args:?}"
     );
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent の無効化が `-` の直前に付く。
     assert_eq!(
-        args[7], "-",
+        &args[7..11],
+        [
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false"
+        ],
+        "{args:?}"
+    );
+    assert_eq!(
+        args[11], "-",
         "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
     );
 }
@@ -1678,9 +1730,20 @@ async fn f5_fix4_worktree_cwd_adds_gitdir_and_common_dir() {
         ],
         "{args:?}"
     );
-    assert_eq!(args.len(), 16, "{args:?}");
+    assert_eq!(args.len(), 20, "{args:?}");
+    // ADR 2026-10-07-worker-no-subagents-no-llm-cli D2: multi-agent の無効化が `-` の直前に付く。
     assert_eq!(
-        args[15], "-",
+        &args[15..19],
+        [
+            "-c",
+            "features.multi_agent=false",
+            "-c",
+            "features.multi_agent_v2=false"
+        ],
+        "{args:?}"
+    );
+    assert_eq!(
+        args[19], "-",
         "F5-fix10: the prompt positional is `-` (stdin): {args:?}"
     );
 }
@@ -2524,4 +2587,124 @@ exit 1
             .exists(),
         "resume していない run はやり直さない"
     );
+}
+
+// ---- ADR 2026-10-07-worker-no-subagents-no-llm-cli: multi-agent の既定無効化と別 LLM の起動の検出 ----
+
+fn has_config_override(args: &[String], kv: &str) -> bool {
+    args.windows(2).any(|pair| pair[0] == "-c" && pair[1] == kv)
+}
+
+/// D2: `exec resume` でも `-c features.multi_agent=false` / `multi_agent_v2=false` が付く（`-c` は resume の
+/// ホワイトリストにある）。運用側の `extra_args`（resume に翻訳できる本番の `--approve-for-me`）の後ろに来る。
+/// （翻訳できない `extra_args` があると ADR-0095 D-b で fresh に倒れるので、ここでは翻訳できるものだけを置く。）
+#[tokio::test]
+async fn exec_resume_also_disables_multi_agent_by_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut config = stub_codex(dir.path(), args_log_script());
+    config.extra_args = vec!["--approve-for-me".into()];
+    let adapter = CodexAdapter::new(config);
+    let mut req = sample_req(dir.path().to_path_buf());
+    req.context.session = Some(crate::protocol::SessionHandle {
+        adapter: CodexAdapter::ID.to_string(),
+        session_id: "thread-ma".to_string(),
+        resume: true,
+    });
+    let _ = adapter
+        .run(
+            req,
+            "run-resume-ma",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    let args = captured_args(dir.path());
+    assert_eq!(&args[..2], ["exec", "resume"]);
+    assert!(
+        has_config_override(&args, "features.multi_agent=false"),
+        "{args:?}"
+    );
+    assert!(
+        has_config_override(&args, "features.multi_agent_v2=false"),
+        "{args:?}"
+    );
+    // 無効化は最後（`-` の直前）に来るので、前に何があっても勝つ。
+    let last_override = args
+        .iter()
+        .rposition(|a| a == "features.multi_agent_v2=false")
+        .unwrap();
+    assert_eq!(args[last_override + 1], "-", "{args:?}");
+}
+
+/// D2/D7: `subagents = "allow"` のときだけ無効化が消える。`"allow_cos"` は CoS の対話 run にだけ効く。
+#[tokio::test]
+async fn only_an_explicit_subagents_setting_keeps_multi_agent_enabled() {
+    use crate::tool_policy::SubagentPolicy;
+    async fn args_for(
+        policy: SubagentPolicy,
+        addressee: Option<crate::protocol::ConversationAddressee>,
+    ) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = stub_codex(dir.path(), args_log_script());
+        config.subagents = policy;
+        let mut req = sample_req(dir.path().to_path_buf());
+        req.context.conversation_addressee = addressee;
+        let _ = CodexAdapter::new(config)
+            .run(
+                req,
+                "run-policy",
+                default_limits(),
+                &RecordingSink::default(),
+            )
+            .await
+            .unwrap();
+        captured_args(dir.path())
+    }
+    let disabled = |args: &[String]| has_config_override(args, "features.multi_agent=false");
+    assert!(!disabled(&args_for(SubagentPolicy::Allow, None).await));
+    assert!(disabled(&args_for(SubagentPolicy::Deny, None).await));
+    assert!(disabled(&args_for(SubagentPolicy::AllowCos, None).await));
+    assert!(!disabled(
+        &args_for(
+            SubagentPolicy::AllowCos,
+            Some(crate::protocol::ConversationAddressee::Secretary)
+        )
+        .await
+    ));
+}
+
+/// D5: `item.started` の `command_execution.command` から別 LLM CLI の起動を検出する（`item.completed` と
+/// 普通の command は出さない）。
+#[test]
+fn command_executions_that_launch_other_llm_clis_are_reported() {
+    use task_core::ToolPolicyKind;
+    let sink = RecordingSink::default();
+    let mut signal = None;
+    let mut error = None;
+    for line in [
+        r#"{"type":"item.started","item":{"type":"command_execution","command":"cargo test --workspace"}}"#,
+        r#"{"type":"item.started","item":{"type":"command_execution","command":"FOO=1 timeout 600 opencode run 'fix the failing test'"}}"#,
+        r#"{"type":"item.completed","item":{"type":"command_execution","command":"FOO=1 timeout 600 opencode run 'fix the failing test'","exit_code":0,"aggregated_output":"ok"}}"#,
+        r#"{"type":"item.started","item":{"type":"command_execution","command":"which claude"}}"#,
+    ] {
+        handle_line(line, &sink, &mut signal, &mut error);
+    }
+    let violations = sink
+        .violations
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    assert_eq!(violations.len(), 1, "{violations:#?}");
+    assert_eq!(violations[0].kind, ToolPolicyKind::LlmCli);
+    assert_eq!(violations[0].tool, "command_execution");
+    assert_eq!(violations[0].matched, "opencode");
+    let flagged = sink
+        .structured
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|(m, f)| f.error && m.starts_with("policy: "))
+        .count();
+    assert_eq!(flagged, 1);
 }

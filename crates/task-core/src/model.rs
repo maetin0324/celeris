@@ -826,6 +826,28 @@ impl RunRole {
     }
 }
 
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPolicyKind {
+    /// subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。
+    SubagentTool,
+    /// shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。
+    LlmCli,
+    /// shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。
+    LlmApi,
+}
+
+impl ToolPolicyKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ToolPolicyKind::SubagentTool => "subagent_tool",
+            ToolPolicyKind::LlmCli => "llm_cli",
+            ToolPolicyKind::LlmApi => "llm_api",
+        }
+    }
+}
+
 /// ADR-0048 D2（Phase 60a）: ワーカーの進行の種別。アダプタごとの差はアダプタ側で吸収し、
 /// Console（ADR-0048 D1）はこの 5 種だけを知る。`comment` はプロトコルの別 type（ADR-0044 D2）の
 /// ままなのでここには無い。
@@ -1120,6 +1142,19 @@ pub enum Event {
         truncated: bool,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         error: bool,
+    },
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を
+    /// 使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない
+    /// （警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。
+    WorkerPolicyViolation {
+        run_id: String,
+        kind: ToolPolicyKind,
+        /// 道具名（`Bash` / `command_execution` / `Agent` …）。
+        tool: String,
+        /// 一致した語（道具名・CLI 名・API host）。
+        matched: String,
+        /// 起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。
+        command: String,
     },
     ArtifactProduced {
         run_id: String,

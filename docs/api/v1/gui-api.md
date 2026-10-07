@@ -722,7 +722,12 @@ DB 全体の status 別件数 `by_status`）。`attention[]` は `type` で区�
 `truncated` / `error` を**あれば**持つ（**追加のみ**。付けないワーカー・導入前のイベントには無い。ADR-0048 D2）。
 Console（§3.98）はこの形だけを見る。
 
-`types` の語彙は `task_api::query::EVENT_TYPES`（50 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、
+`worker_policy_violation` は `{run_id, kind, tool, matched, command}`（ADR 2026-10-07-worker-no-subagents-no-llm-cli D5）: worker が
+subagent の道具（`kind = subagent_tool`）・別の LLM CLI（`llm_cli`）・LLM API（`llm_api`）を起動しようとした決定的な検出。警告で
+run は止めない。同じ内容は `worker_progress`（`kind = status`・`error = true`・`msg` が `policy: ` で始まる）にも出る。reviewer には
+`ReviewRequest.policy_violations` として渡る（D6）。
+
+`types` の語彙は `task_api::query::EVENT_TYPES`（68 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
 `browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、

@@ -2087,6 +2087,34 @@
       ],
       "type": "object"
     },
+    "ReviewPolicyViolation": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: reviewer に見せる検出 1 件（`Event::WorkerPolicyViolation` の写し）。",
+      "properties": {
+        "command": {
+          "description": "起動しようとした command（500 文字まで）。",
+          "type": "string"
+        },
+        "kind": {
+          "description": "`subagent_tool` / `llm_cli` / `llm_api`。",
+          "type": "string"
+        },
+        "matched": {
+          "description": "一致した語（道具名・CLI 名・API host）。",
+          "type": "string"
+        },
+        "tool": {
+          "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "tool",
+        "matched",
+        "command"
+      ],
+      "type": "object"
+    },
     "ReviewRepairHint": {
       "description": "ADR-0072 D16（Phase E4）: `review.json` の verdict に添える repair のヒント。reviewer が\n「これは局所的に修復できる不合格だ」と申告するための任意欄（`scope = \"local\"` だけを認識する。\nそれ以外の `scope` は `task_core::execution::classify_review_failure` が substantive として扱う）。",
       "properties": {
@@ -2147,6 +2175,13 @@
           "description": "対象 run の `done.evidence`。",
           "items": {
             "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "policy_violations": {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D6: 対象 run で検出された subagent 道具・別 LLM CLI / API の\n起動（dispatcher が `Event::WorkerPolicyViolation` から集める。LLM は関与しない）。",
+          "items": {
+            "$ref": "#/$defs/ReviewPolicyViolation"
           },
           "type": "array"
         },

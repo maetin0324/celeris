@@ -23,6 +23,7 @@ export const EVENT_KINDS = [
   "transitioned",
   "worker_started",
   "worker_progress",
+  "worker_policy_violation",
   "artifact_produced",
   "worker_finished",
   "review_verdict",

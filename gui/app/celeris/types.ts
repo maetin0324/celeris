@@ -444,6 +444,23 @@ export type Event =
       type: "worker_progress";
     }
   | {
+      /**
+       * 起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。
+       */
+      command: string;
+      kind: ToolPolicyKind;
+      /**
+       * 一致した語（道具名・CLI 名・API host）。
+       */
+      matched: string;
+      run_id: string;
+      /**
+       * 道具名（`Bash` / `command_execution` / `Agent` …）。
+       */
+      tool: string;
+      type: "worker_policy_violation";
+    }
+  | {
       artifact: ArtifactRef;
       run_id: string;
       type: "artifact_produced";
@@ -1167,6 +1184,10 @@ export type WorkspaceMode = "worktree" | "shared";
  * run の役割（ADR-0014 D1）。`Event::WorkerStarted` / `WorkerFinished` の `role`。
  */
 export type RunRole = ("worker" | "reviewer") | "planner";
+/**
+ * ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。
+ */
+export type ToolPolicyKind = "subagent_tool" | "llm_cli" | "llm_api";
 /**
  * D7: `task_core::execution::RunEnd`（`WorkerFinished.end` に入れる）。
  */

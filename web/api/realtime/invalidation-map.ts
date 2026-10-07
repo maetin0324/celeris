@@ -81,6 +81,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   worker_started: { sets: ["T", "R", "E", "L", "P"] },
   // 対象 run の progress/log と対象 task の timeline だけ。一覧・project・設定は取り直さない。
   worker_progress: { sets: [], extra: ({ taskId, event }) => runScoped(taskId, event) },
+  // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: 対象 run の progress/log と task の timeline だけ（worker_progress と同じ範囲）。
+  worker_policy_violation: { sets: [], extra: ({ taskId, event }) => runScoped(taskId, event) },
   artifact_produced: { sets: ["T", "R", "artifacts", "files", "P"], extra: () => [artifactListKey] },
   worker_finished: { sets: ["T", "R", "E", "L", "P", "N", "changes", "files", "artifacts", "metrics"] },
   review_verdict: { sets: ["T", "R", "E", "L"] },

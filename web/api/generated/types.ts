@@ -1744,6 +1744,13 @@ export type Event = {
   "truncated"?: boolean;
   "type": "worker_progress";
 } | {
+  "command": string;
+  "kind": ToolPolicyKind;
+  "matched": string;
+  "run_id": string;
+  "tool": string;
+  "type": "worker_policy_violation";
+} | {
   "artifact": ArtifactRef;
   "run_id": string;
   "type": "artifact_produced";
@@ -5152,6 +5159,8 @@ export type TokenPricing = {
   "output_usd_per_million"?: number | null;
   "provenance": string;
 };
+
+export type ToolPolicyKind = "subagent_tool" | "llm_cli" | "llm_api";
 
 export type TransitionResult = {
   "cascaded"?: Array<TaskRef>;

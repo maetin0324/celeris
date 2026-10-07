@@ -102,6 +102,10 @@ pub struct ClaudeCodeAdapterConfig {
     /// ADR-0030 D2: 環境変数名 → `[secrets]` の秘密 id。`env` より優先。
     #[serde(default)]
     pub env_from_secrets: HashMap<String, String>,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: subagent の道具を許すか（`"deny"` 既定 | `"allow_cos"` |
+    /// `"allow"`）。未知の値・省略は `deny`。`extra_args` では外れない。
+    #[serde(default)]
+    pub subagents: String,
 }
 
 impl Default for ClaudeCodeAdapterConfig {
@@ -113,7 +117,15 @@ impl Default for ClaudeCodeAdapterConfig {
             model: None,
             env: HashMap::new(),
             env_from_secrets: HashMap::new(),
+            subagents: String::new(),
         }
+    }
+}
+
+impl ClaudeCodeAdapterConfig {
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `subagents` を決定的に解決する（未知の値は `Deny`）。
+    pub fn resolved_subagents(&self) -> task_worker::tool_policy::SubagentPolicy {
+        task_worker::tool_policy::SubagentPolicy::parse(&self.subagents)
     }
 }
 
@@ -154,6 +166,10 @@ pub struct CodexAdapterConfig {
     /// `--dangerously-bypass-approvals-and-sandbox` を使う（意味が広いので明示設定が要る）。
     #[serde(default)]
     pub resume_bypass: String,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: subagent の道具を許すか（`"deny"` 既定 | `"allow_cos"` |
+    /// `"allow"`）。未知の値・省略は `deny`。`extra_args` では外れない。
+    #[serde(default)]
+    pub subagents: String,
 }
 
 fn default_codex_resume_mode() -> String {
@@ -170,6 +186,7 @@ impl Default for CodexAdapterConfig {
             env_from_secrets: HashMap::new(),
             resume_mode: default_codex_resume_mode(),
             resume_bypass: String::new(),
+            subagents: String::new(),
         }
     }
 }
@@ -192,6 +209,11 @@ impl CodexAdapterConfig {
             "dangerous" => task_worker::CodexResumeBypass::Dangerous,
             _ => task_worker::CodexResumeBypass::Off,
         }
+    }
+
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `subagents` を決定的に解決する（未知の値は `Deny`）。
+    pub fn resolved_subagents(&self) -> task_worker::tool_policy::SubagentPolicy {
+        task_worker::tool_policy::SubagentPolicy::parse(&self.subagents)
     }
 }
 
@@ -267,6 +289,10 @@ pub struct AcpAdapterConfig {
     /// `initialize` の応答を待つ上限（秒）。初回はエージェント側のプロバイダ取得で数分かかりうる。既定 300。
     #[serde(default = "default_acp_startup_timeout_secs")]
     pub startup_timeout_secs: u64,
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: subagent の道具を許すか（`"deny"` 既定 | `"allow_cos"` |
+    /// `"allow"`）。未知の値・省略は `deny`。`extra_args` では外れない。
+    #[serde(default)]
+    pub subagents: String,
 }
 
 impl Default for AcpAdapterConfig {
@@ -279,7 +305,15 @@ impl Default for AcpAdapterConfig {
             permission: default_acp_permission(),
             model_option_id: default_acp_model_option_id(),
             startup_timeout_secs: default_acp_startup_timeout_secs(),
+            subagents: String::new(),
         }
+    }
+}
+
+impl AcpAdapterConfig {
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `subagents` を決定的に解決する（未知の値は `Deny`）。
+    pub fn resolved_subagents(&self) -> task_worker::tool_policy::SubagentPolicy {
+        task_worker::tool_policy::SubagentPolicy::parse(&self.subagents)
     }
 }
 

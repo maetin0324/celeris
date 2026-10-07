@@ -214,6 +214,10 @@ pub trait EventSink: Send + Sync {
     /// ディスパッチャはプールのアカウントで走っている run のシンクから、この値を `AccountBook` に記録する。
     /// 既定は何もしない（`fake` アダプタや `celerisctl worker run` の観測用途など）。
     fn rate_limit(&self, _obs: RateLimitObservation) {}
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: adapter が `tool_use` の写像で subagent 道具・別の LLM CLI・
+    /// LLM API の起動を検出した（警告。run は止めない）。ディスパッチャは `Event::WorkerPolicyViolation` を追記し、
+    /// reviewer に渡す（D6）。既定は何もしない（`fake` アダプタ・`celerisctl worker run` など DB を変えない文脈）。
+    fn policy_violation(&self, _violation: &crate::tool_policy::ToolPolicyViolation) {}
     /// ADR-0054 D1（Phase 67）: アダプタが**実際に使った／割り当てられた**セッション id を報告する
     /// （高々 1 回。claude-code は `--session-id`/`--resume` に渡した値そのもの、codex は
     /// `thread.started` で観測した thread id、acp は `session/new`/`session/load` の応答の

@@ -34,7 +34,7 @@ completed: 2026-10-07
   - task-api の `EVENT_TYPES` は 73 にし、`event_type_name` も足した。
   - `UPDATE_SCHEMA=1` で `docs/api/v1/{event,api-v1}.schema.json` を再生成した。
   - gui の `pnpm gen:types` と web の `gen-types.mjs` も流した。
-  - web/api/realtime の event-kinds・invalidation-map に 4 種を足した（sets は空）。
+  - web/api/realtime の event-kinds・invalidation-map は、この葉の範囲 check の外なので触らない（attempt 2 で戻した）。
   - gui-api.md に説明を足した。
 
 ## 証拠
@@ -45,12 +45,16 @@ completed: 2026-10-07
 - `bash scripts/dev/test-parallel.sh`: exit 0（passed 4311、failed 0、ignored 14）。
   - 初回は `delivery::tests::migration_0042_fills_gaps_in_main_schema_41_database` が落ちた。期待する版数の一覧に 57 を足して直した。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- web `pnpm typecheck`: exit 0。`vitest run api/realtime`: 60 passed。gui `pnpm typecheck`: exit 0。
+- gui `pnpm typecheck`: exit 0。web の typecheck は上の 2 file を戻したので、web 葉で足すまで落ちる（未解決事項）。
+- 範囲 check（`CELERIS_WU_BASE` 比で crates/・docs/api/v1/・gui/app/・web/api/generated/・ADR・progress のみ）: exit 0。
 
 ## 未解決事項
 
 - main を取り込むと 0055・0056 が実在になる。そのとき `RESERVED_VERSIONS` から外し、試験の版数一覧も直す。
 - 時刻は UNIX 秒（i64）。API 葉は web へ返すときの形をここに合わせる。
+- web/api/realtime/event-kinds.ts と invalidation-map.ts には、まだ 4 種（trusted_device_registered・used・revoked・rejected）が無い。
+  - web/api/generated/types.ts の EventKind に 4 種が入ったため、web の `pnpm typecheck` はこの 2 file で落ちる（`Record<EventKind, …>` と網羅の型検査）。
+  - web-server 葉か web-ui 葉が足す。sets は空でよく、一覧の query を足したらそれを書く。
 
 ## 提案
 

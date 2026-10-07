@@ -11,9 +11,9 @@ completed: 2026-10-07
   型 `TargetSweepMode`・`TargetSweepRootReport`・`TargetSweepByReason`・`TargetSweepSkip` を `model.rs` に追加（task-worker に依存しない）
 - 追従: `task-api/src/query.rs` の種類名 `target_sweep_ran`、`docs/api/v1/{api-v1,event}.schema.json`（UPDATE_SCHEMA=1）、
   `web/api/generated/*`・`web/api/realtime/event-kinds.ts`、`gui/app/celeris/types.ts`、gui-api.md の種類一覧
-- `invalidation-map.ts` は書かない（表にない種類は既定で timeline に写る。試験が「文書化された種類 35 件」を固定している）
+- `web/api/realtime/invalidation-map.ts` に `target_sweep_ran: { sets: ["T"] }`（schema 照合試験が要求。`ADR_TABLE` の 35 件には足さない）
 - 証拠:
   - `cargo test -p task-core target_sweep` → target_sweep_event_round_trips 1 passed
   - `UPDATE_SCHEMA=1 cargo test -p task-core` 866 passed／`-p task-api` 全 ok（schema 照合を含む）
-  - `pnpm -C web exec vitest run` 全 pass、`cargo clippy -p task-core -p task-api -- -D warnings` 警告なし
+  - `pnpm -C web exec vitest run` 80 files 全 pass、`cargo clippy -p task-core -p task-api -- -D warnings` 警告なし
 - 未実施: dispatcher からの発行（後続の葉）

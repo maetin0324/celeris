@@ -14,6 +14,7 @@ import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { Section } from "../../components/ui/panel";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { Table, TableBody, TableCaption, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { randomId } from "../../lib/random-id";
 import { cn } from "../../lib/utils";
 import { MetaLine } from "./meta-line";
 import { useFocusOnChange } from "./use-focus-on-change";
@@ -159,7 +160,7 @@ function SkillForm({ name: selected, detail, sender }: { name?: string; detail?:
       <Button
         type="button"
         variant="secondary"
-        onClick={() => setFiles((rows) => [...rows, { id: crypto.randomUUID(), path: "", content: "" }])}
+        onClick={() => setFiles((rows) => [...rows, { id: randomId(), path: "", content: "" }])}
       >
         ファイルを追加
       </Button>

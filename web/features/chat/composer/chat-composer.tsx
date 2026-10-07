@@ -60,8 +60,6 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
 
   const send = async (mode: "queue" | "interrupt") => {
     if (!canSend || sending.current) return;
-    sending.current = true;
-    setBusy(true);
     setActionError("");
     const sentText = text;
     const sentUploads = uploads;
@@ -70,6 +68,9 @@ export function ChatComposer({ threadId, session, snapshot, uploadApi }: ChatCom
     const fingerprint = JSON.stringify([threadId, sentText, attachmentIds, mode, paused]);
     const clientId = retryKey.current?.fingerprint === fingerprint ? retryKey.current.id : newClientId();
     retryKey.current = { fingerprint, id: clientId };
+    // 送信中の印は id を作り終えてから立てる（id の生成が例外になっても『送信中』のまま固まらない）。
+    sending.current = true;
+    setBusy(true);
     sentFileIds.current = new Set(ids);
     try {
       await session.send({

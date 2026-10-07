@@ -1,5 +1,6 @@
 import { isApiError } from "../../../api/client";
 import type { ChatThread } from "../../../api/generated/types";
+import { randomId } from "../../../lib/random-id";
 import { createThread, listThreads, patchThread } from "../data/client";
 
 export type ThreadApi = {
@@ -116,7 +117,7 @@ export class ThreadsModel {
 
   async create(onSelect: (id: string) => void): Promise<void> {
     if (this.state.busy) return;
-    this.createId ??= crypto.randomUUID();
+    this.createId ??= randomId();
     this.set({ busy: true, error: null });
     try {
       const response = await this.api.create({ client_thread_id: this.createId, title: "新しい会話" });

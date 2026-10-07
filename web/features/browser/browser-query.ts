@@ -1,5 +1,6 @@
 import type { BrowserRun, BrowserWaitList } from "../../api/generated/types";
 import { getSessionQueryClient } from "../../api/query-client";
+import { randomId } from "../../lib/random-id";
 
 // Browser 操作は generic /api relay を通さず、本人確認を行う gateway の同一 origin 経路へ送る。
 const ID = /^[0-9A-Za-z_-]{1,64}$/;
@@ -218,7 +219,7 @@ export const browserActionGate = new BrowserActionGate();
 
 /** takeover から返却まで同じ値を保持する。UUID は lease holder の識別にも使う。 */
 export function newControlHolder(): string {
-  return crypto.randomUUID();
+  return randomId();
 }
 
 function invalidateBrowser(): void {
@@ -258,7 +259,7 @@ export function sendControl(
   csrf: string,
 ): Promise<{ ok: true; status: ControlStatus }> {
   const path = `/browser/control/${id(ids.taskId)}/${id(ids.runId)}/${id(ids.sessionId)}`;
-  return mutate(path, { command, expected_version: expectedVersion, idempotency_key: crypto.randomUUID() }, csrf);
+  return mutate(path, { command, expected_version: expectedVersion, idempotency_key: randomId() }, csrf);
 }
 
 export function releaseControl(ids: { taskId: string; runId: string; sessionId: string }, csrf: string) {

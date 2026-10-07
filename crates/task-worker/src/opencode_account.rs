@@ -17,7 +17,7 @@ use task_core::accounts::parse_opencode_go_usage;
 use crate::claude_account::{AccountCheck, AccountCheckResult};
 
 /// `auth.json` から読んだ opencode go の鍵。`Debug` は値を出さない。
-struct GoKey(String);
+pub(crate) struct GoKey(pub(crate) String);
 
 impl std::fmt::Debug for GoKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -26,7 +26,7 @@ impl std::fmt::Debug for GoKey {
 }
 
 /// `<account_dir>/opencode/auth.json` の `["opencode-go"]`（`type` は `api`）から鍵を取る。
-fn read_go_key(account_dir: &Path) -> Option<GoKey> {
+pub(crate) fn read_go_key(account_dir: &Path) -> Option<GoKey> {
     let text = std::fs::read_to_string(account_dir.join("opencode").join("auth.json")).ok()?;
     let value: serde_json::Value = serde_json::from_str(&text).ok()?;
     let entry = value.get("opencode-go")?;

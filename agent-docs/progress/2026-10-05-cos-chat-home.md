@@ -183,7 +183,17 @@ web: `web/server/spa-routes.test.mjs` の期待値を 40（39 宣言画面 + 404
 
 - 不具合 4: 短い往復で `summary_through_seq` が 0 のまま。前置きで run 終了時 checkpoint を必須にするか、N 往復ごとでよいかを人が決める。
 - 不具合 5: provider に model を書かないと `chat_runs` の実効 model が null。本番 config に `[cos] model` か provider の model を書く運用。
-- 台本の残り: daemon 起動前の `knowledge init`、project fixture（会話を起こさない作り方）、`pgrep -f "$OUT"` の LEFTOVER 誤報、verdict FAIL でも exit 0。
+- 台本の残り（解消済み）: 6b684c44 で 4 点が直った — daemon 起動前の `knowledge init`、project fixture（会話を起こさない作り方）、`pgrep` を `--config` 付きの daemon に限定（LEFTOVER 誤報の解消）、verdict が FAIL なら exit 1。dry 証跡: `/var/tmp/cos-live-scriptfix-103143`。
 - `task-worker/src/cos_chat.rs` の `attachment_pin_rules` が旧手順のまま（skill §3a と不一致）。
 - 拒否された CoS operation の `cos_operations.action` が `rejected` になり要求 action が残らない。
 - 前節の allowlist 不足（replan・pause/resume・KB accept）、codex の実機未確認、D1 の人の API 経路での pin event 未記録。いずれも別 task で。
+
+## close-out5（2026-10-07）
+
+- main efd38f0c を `git merge --no-ff main` で取り込んだ（衝突なし）。`git merge-base --is-ancestor efd38f0c HEAD` は exit 0、`gui/app/lib/notify.ts` は efd38f0c と差分なし。
+- `bash scripts/dev/test-parallel.sh`: exit 0（passed 4660 / failed 0 / ignored 14）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `corepack pnpm@11.27.0 -C gui install --offline` と `gui typecheck`: exit 0。
+- `corepack pnpm@12.6.0 -C web install --offline` と `web test`: exit 0（77 pass / 0 fail）。
+- 文書検査 3 本（check-doc-links、check-adr-numbers、progress-index --check）と check-doc-layout: すべて ok。
+- 「台本の残り」は解消済みの記述に直した。拒否された operation の action が rejected になる件は未解決（別 task）のまま。

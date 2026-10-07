@@ -317,6 +317,39 @@ impl ChatAttachmentStore {
         ).optional()?.ok_or(AttachmentError::NotFound)
     }
 
+    /// Ready attachments pinned to one owner (`chat_attachment_refs`), oldest pin first.
+    /// Task-run input staging and KB candidate provenance read pins through this; deleted
+    /// rows are skipped because their blob may already be gone.
+    pub fn list_for_owner(
+        &self,
+        owner_kind: &str,
+        owner_id: &str,
+    ) -> Result<Vec<StoredAttachment>, AttachmentError> {
+        if !matches!(owner_kind, "message" | "task" | "knowledge_inbox") || owner_id.is_empty() {
+            return Err(AttachmentError::InvalidPath);
+        }
+        let conn = self.conn.lock().map_err(|_| AttachmentError::Poisoned)?;
+        let mut stmt = conn.prepare(
+            "SELECT a.id,a.thread_id,a.original_name,a.media_type,a.size_bytes,a.sha256,a.relative_path \
+             FROM chat_attachment_refs r JOIN chat_attachments a ON a.id=r.attachment_id \
+             WHERE r.owner_kind=?1 AND r.owner_id=?2 AND a.state='ready' ORDER BY r.created_at, a.id",
+        )?;
+        let rows = stmt
+            .query_map(params![owner_kind, owner_id], |r| {
+                Ok(StoredAttachment {
+                    id: r.get(0)?,
+                    thread_id: r.get(1)?,
+                    original_name: r.get(2)?,
+                    media_type: r.get(3)?,
+                    size_bytes: r.get::<_, i64>(4)? as u64,
+                    sha256: r.get(5)?,
+                    relative_path: r.get(6)?,
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        Ok(rows)
+    }
+
     /// Verifies the bytes before handing them to a worker. The relative path is
     /// checked against the generated shape even if the database was tampered with.
     pub fn read_verified(&self, id: &str) -> Result<File, AttachmentError> {
@@ -842,6 +875,50 @@ mod tests {
             store.validate_message("another", std::slice::from_ref(&first.id)),
             Err(AttachmentError::Conflict)
         ));
+    }
+
+    #[test]
+    fn cos_chat_attach_handoff_list_for_owner_returns_ready_pins_in_pin_order() {
+        let (_temp, store) = fixture(ChatAttachmentLimits::default());
+        let first = store
+            .upload("thread", "k1", "a.png", None, Cursor::new(b"abc"), now())
+            .expect("first");
+        let second = store
+            .upload("thread", "k2", "b.pdf", None, Cursor::new(b"%PDF"), now())
+            .expect("second");
+        let other = store
+            .upload("thread", "k3", "c", None, Cursor::new(b"x"), now())
+            .expect("other");
+        store
+            .add_ref(&second.id, "task", "T1", now())
+            .expect("pin second");
+        store
+            .add_ref(&first.id, "task", "T1", now() + Duration::seconds(1))
+            .expect("pin first");
+        store
+            .add_ref(&other.id, "knowledge_inbox", "T1", now())
+            .expect("other owner kind");
+        let ids: Vec<String> = store
+            .list_for_owner("task", "T1")
+            .expect("list")
+            .into_iter()
+            .map(|row| row.id)
+            .collect();
+        assert_eq!(ids, vec![second.id.clone(), first.id.clone()]);
+        assert!(
+            store
+                .list_for_owner("task", "T2")
+                .expect("empty")
+                .is_empty()
+        );
+        assert!(matches!(
+            store.list_for_owner("thread", "T1"),
+            Err(AttachmentError::InvalidPath)
+        ));
+        store
+            .remove_ref(&second.id, "task", "T1", now())
+            .expect("unpin");
+        assert_eq!(store.list_for_owner("task", "T1").expect("list").len(), 1);
     }
 
     #[test]

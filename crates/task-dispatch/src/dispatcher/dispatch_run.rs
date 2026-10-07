@@ -1249,9 +1249,14 @@ impl Dispatcher {
         limits: RunLimits,
         remote: Option<SshSettings>,
         worktree: Option<task_worker::TaskWorkspaces>,
-        extras: RunExtras,
+        mut extras: RunExtras,
         container: ContainerDecision,
     ) -> JoinHandle<()> {
+        // ADR 2026-10-05 cos-chat-home D4: pin された添付は作業する run にだけ stage する
+        // （planner は計画するだけ。reviewer は別経路で、ここを通らない）。
+        if extras.planner_permission_mode.is_none() && extras.conversation_addressee.is_none() {
+            extras.input_attachment_source = self.input_attachment_source();
+        }
         let store = self.store.clone();
         // ADR-0107 D2: the dispatcher builds the browser fallback list from provider state and
         // the runner-recorded ledger; the worker wraps each candidate like the primary (ADR-0107).

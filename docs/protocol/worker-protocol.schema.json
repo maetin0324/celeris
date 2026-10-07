@@ -1691,6 +1691,65 @@
       ],
       "type": "object"
     },
+    "InputAttachment": {
+      "description": "`context.input_attachments` の 1 件（ADR 2026-10-05 cos-chat-home D4 の添付 manifest）。",
+      "properties": {
+        "delivery": {
+          "$ref": "#/$defs/InputAttachmentDelivery"
+        },
+        "id": {
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "name": {
+          "description": "元の名前（表示だけ。path には使わない）。",
+          "type": "string"
+        },
+        "path": {
+          "description": "read-only に stage した写しの絶対 path。`delivery = unavailable` では `None`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "`delivery = unavailable` の理由（hash/size 不一致・blob 欠落・remote 実行など）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha256": {
+          "description": "小文字 16 進の SHA-256（DB の記録。stage 時に照合した値）。",
+          "type": "string"
+        },
+        "size_bytes": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "media_type",
+        "size_bytes",
+        "sha256",
+        "delivery"
+      ],
+      "type": "object"
+    },
+    "InputAttachmentDelivery": {
+      "description": "入力添付の渡し方。`image` は画像読取の道具で読める raster、`file` はそれ以外、\n`unavailable` は渡していない（読めたと装わない）。",
+      "enum": [
+        "image",
+        "file",
+        "unavailable"
+      ],
+      "type": "string"
+    },
     "KnowledgeContext": {
       "description": "ADR-0047 D2（Phase 61）: 前置きに出す知識の索引（`preamble::knowledge_section` が読む）。",
       "properties": {
@@ -2706,6 +2765,13 @@
             }
           ],
           "description": "ADR-0072 D14: この run が Complexity Gate の compound 判定（または replan）で起こした\nplanner run のときだけ `Some`。`build_prompt` はこれを見て通常のワーカー用プロンプトの代わりに\n計画の作成を頼むプロンプトを組む（`claude_code::build_execution_plan_prompt`）。"
+        },
+        "input_attachments": {
+          "description": "ADR 2026-10-05 cos-chat-home D4: task に pin されたチャット添付（`chat_attachment_refs`\nowner_kind=task）の入力 manifest。dispatcher が run 開始時に blob から hash・size を照合して\n作業ツリーの外へ read-only に stage したもの。照合できなかった添付は `delivery = unavailable`\nと理由で載り、`path` を持たない。pin の無い run・planner/reviewer・CoS chat run では空で省略\n（前置きと `request.json` は従来とバイト単位で同じ）。",
+          "items": {
+            "$ref": "#/$defs/InputAttachment"
+          },
+          "type": "array"
         },
         "inputs": {
           "items": {

@@ -381,10 +381,7 @@ async fn dispatch_browser_fallback_primary_fails_alternate_runs_in_fresh_session
         live_sessions: None,
         runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
-        record_dir: std::env::temp_dir().join(format!(
-            "celeris-browser-dispatch-unit-{}",
-            std::process::id()
-        )),
+        record_dir: dir.path().join("browser-record"),
         bwrap: "/usr/bin/bwrap".into(),
         sandboxd,
         egress,

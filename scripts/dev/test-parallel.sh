@@ -49,6 +49,9 @@ jobs="${CELERIS_TEST_JOBS:-$jobs_default}"
 
 logdir="$(mktemp -d "${TMPDIR:-/tmp}/celeris-test-parallel.XXXXXX")"
 trap 'rm -rf "$logdir"' EXIT
+# 試験の一時 dir は $logdir/tmp に閉じ込め、上の trap で残った物ごと消す（ADR 2026-10-07-build-tmp-hygiene D3）
+mkdir -p "$logdir/tmp"
+export TMPDIR="$logdir/tmp"
 
 echo "test-parallel: cargo nextest run --workspace (nextest $have_ver, $jobs jobs of $ncpu cpus)" >&2
 t0="$(date +%s.%N)"
@@ -67,9 +70,14 @@ else
 fi
 t2="$(date +%s.%N)"
 
-python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" <<'PY'
+tmp_leftovers="$(find "$logdir/tmp" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')"
+if [ "$tmp_leftovers" -ne 0 ]; then
+  echo "test-parallel: warning: tests left $tmp_leftovers entries in TMPDIR (removed on exit)" >&2
+fi
+
+python3 - "$logdir/nextest.log" "$logdir/doc.log" "$have_ver" "$jobs" "$nrc" "$drc" "$t0" "$t1" "$t2" "$tmp_leftovers" <<'PY'
 import json, re, sys
-nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2 = sys.argv[1:]
+nlog, dlog, ver, jobs, nrc, drc, t0, t1, t2, tmp_left = sys.argv[1:]
 nbin = total = None
 npass = nfail = nskip = 0
 summary_seen = False
@@ -115,6 +123,7 @@ out = {
     "doctest_exit": None if drc == "skipped" else int(drc),
     "nextest_secs": round(float(t1) - float(t0), 1),
     "doctest_secs": round(float(t2) - float(t1), 1),
+    "tmp_leftovers": int(tmp_left),
     "summary_parsed": ok,
 }
 print("CELERIS_TEST_SUMMARY " + json.dumps(out, ensure_ascii=False))

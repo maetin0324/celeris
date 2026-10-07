@@ -81,8 +81,7 @@ fn request(workspace: &Path) -> RunRequest {
         live_sessions: None,
         runtime: Default::default(),
         resolver: Some("127.0.0.1".parse().unwrap()),
-        record_dir: std::env::temp_dir()
-            .join(format!("celeris-browser-unit-{}", std::process::id())),
+        record_dir: workspace.join("browser-record"),
         bwrap: "/usr/bin/bwrap".into(),
         sandboxd: bin.join("celeris-browser-sandboxd"),
         egress: bin.join("celeris-browser-egress"),

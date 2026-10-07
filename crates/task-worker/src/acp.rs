@@ -369,6 +369,8 @@ fn choose_permission_option(
 struct ChunkBuffer {
     text: String,
     cos_chat: bool,
+    /// CoS chat only: every agent message chunk of the run (the reply when `result.json` is absent).
+    reply: String,
     /// ADR-0048 D2（Phase 60a）: 溜めている本文の種別（`text` = 発話 / `thinking` = 思考）。
     /// 種別が変わったら先に出す（発話と思考を 1 件に混ぜない）。
     kind: ProgressKind,
@@ -379,6 +381,7 @@ impl Default for ChunkBuffer {
         Self {
             text: String::new(),
             cos_chat: false,
+            reply: String::new(),
             kind: ProgressKind::Text,
         }
     }
@@ -392,6 +395,9 @@ impl ChunkBuffer {
         if kind != self.kind {
             self.flush(sink);
             self.kind = kind;
+        }
+        if self.cos_chat && kind == ProgressKind::Text {
+            self.reply.push_str(chunk);
         }
         self.text.push_str(chunk);
         while let Some(idx) = self.text.find('\n') {
@@ -671,6 +677,8 @@ enum RawOutcome {
     },
     Success {
         stop_reason: String,
+        /// ADR 2026-10-05 cos-chat-home: the streamed reply of a CoS chat run (`None` otherwise).
+        cos_chat_reply: Option<String>,
     },
 }
 
@@ -755,10 +763,28 @@ async fn finish_run(
                 pf,
             )
         }
-        RawOutcome::Success { stop_reason } => (
-            terminal_from_result_file(artifacts_dir, artifacts_rel, &stop_reason).await,
-            None,
-        ),
+        RawOutcome::Success {
+            stop_reason,
+            cos_chat_reply,
+        } => {
+            // ADR 2026-10-05 cos-chat-home（live-check 不具合 1）: a CoS chat run replies in its body;
+            // without `result.json` an `end_turn` stop is done with the streamed reply.
+            let terminal = match cos_chat_reply {
+                Some(summary)
+                    if stop_reason == "end_turn"
+                        && matches!(tokio::fs::metadata(artifacts_dir.join("result.json")).await,
+                            Err(ref e) if e.kind() == std::io::ErrorKind::NotFound) =>
+                {
+                    Terminal::Done {
+                        summary,
+                        evidence: Vec::new(),
+                        usage: None,
+                    }
+                }
+                _ => terminal_from_result_file(artifacts_dir, artifacts_rel, &stop_reason).await,
+            };
+            (terminal, None)
+        }
     };
 
     forward_delegate_file(artifacts_dir, sink).await;
@@ -1538,7 +1564,11 @@ async fn run_acp(
                 } else {
                     stop_reason
                 };
-                RawOutcome::Success { stop_reason }
+                RawOutcome::Success {
+                    stop_reason,
+                    cos_chat_reply: Some(chunks.reply.trim().to_string())
+                        .filter(|reply| chunks.cos_chat && !reply.is_empty()),
+                }
             }
         },
     };

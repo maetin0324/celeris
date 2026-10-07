@@ -427,3 +427,36 @@ async fn pi_adapter_extension_load_error_cannot_be_reported_as_done() {
         }
     ));
 }
+
+/// live-check 不具合 1: a CoS chat Pi run writes no `result.json`; the last assistant message is
+/// the reply. A regular run without it still fails.
+#[tokio::test]
+async fn cos_chat_harness_pi_done_without_result_json() {
+    let script = r#"printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"了解しました"}],"stopReason":"stop"}}' '{"type":"agent_end","messages":[]}'"#;
+    let dir = tempfile::tempdir().unwrap();
+    let mut req = request(dir.path());
+    req.context.cos_chat = Some(crate::protocol::CosChatContext {
+        thread_id: "thread-1".into(),
+        run_id: "run-1".into(),
+        ..Default::default()
+    });
+    let outcome = PiAdapter::new(config(dir.path(), script))
+        .run(req, "cos", limits(), &NullSink)
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "了解しました"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let outcome = PiAdapter::new(config(dir.path(), script))
+        .run(request(dir.path()), "regular", limits(), &NullSink)
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome.terminal, Terminal::Error { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+}

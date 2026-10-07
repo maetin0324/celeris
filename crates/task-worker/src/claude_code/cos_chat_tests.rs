@@ -191,3 +191,119 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","thi
     );
     assert!(!format!("{items:?}").contains("private body"));
 }
+
+/// live-check 不具合 1: the CoS chat preamble does not ask for `result.json`, so a successful run
+/// without it is done with the `result` text (no `artifacts/result.json` is written here).
+#[tokio::test]
+async fn cos_chat_harness_claude_done_without_result_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"見ています"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"了解しました"}'
+"#;
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), script));
+    let req = chat_request(dir.path(), false);
+    let outcome = adapter
+        .run(
+            req,
+            "no-result-json",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .expect("a CoS chat run without result.json is not an adapter error");
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "了解しました"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+    assert!(!dir.path().join("artifacts/result.json").exists());
+
+    // An empty `result` falls back to the streamed assistant text.
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"一つ目"},{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}' '{"type":"assistant","message":{"content":[{"type":"text","text":"二つ目"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":""}'
+"#;
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), script));
+    let outcome = adapter
+        .run(
+            chat_request(dir.path(), false),
+            "streamed",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "一つ目\n\n二つ目"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+
+    // An existing result.json still wins.
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"
+mkdir -p artifacts
+printf '%s' '{"summary":"from file","evidence":[]}' > artifacts/result.json
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"from body"}'
+"#;
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), script));
+    let outcome = adapter
+        .run(
+            chat_request(dir.path(), false),
+            "with-file",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    match outcome.terminal {
+        Terminal::Done { summary, .. } => assert_eq!(summary, "from file"),
+        other => panic!("unexpected terminal {other:?}"),
+    }
+}
+
+/// A failed `result` (`is_error`) of a CoS chat run stays failed even without `result.json`.
+#[tokio::test]
+async fn cos_chat_harness_claude_error_without_result_json_stays_failed() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"途中"}]}}' '{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}'
+"#;
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), script));
+    let outcome = adapter
+        .run(
+            chat_request(dir.path(), false),
+            "failed",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(outcome.terminal, Terminal::Error { .. }),
+        "{:?}",
+        outcome.terminal
+    );
+}
+
+/// The exception is CoS chat only: a regular run without `result.json` keeps the
+/// `RESULT_JSON_MISSING_MARKER` adapter error (InfraRequeue).
+#[tokio::test]
+async fn cos_chat_harness_claude_non_chat_run_still_requires_result_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let script = r#"
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"done"}'
+"#;
+    let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), script));
+    let err = adapter
+        .run(
+            sample_req(dir.path().to_path_buf()),
+            "regular",
+            default_limits(),
+            &RecordingSink::default(),
+        )
+        .await
+        .expect_err("result.json is required outside CoS chat");
+    assert!(
+        err.to_string().contains(RESULT_JSON_MISSING_MARKER),
+        "{err}"
+    );
+}

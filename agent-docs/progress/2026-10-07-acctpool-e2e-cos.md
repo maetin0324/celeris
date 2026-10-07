@@ -1,5 +1,6 @@
 ---
 title: account_pool_scenarios の a/b 取り違え（CoS triage run がプールの "a" を先に取る）を台本の設定で切り分ける
+tasks: [main-direct]
 status: done
 updated: 2026-10-07
 completed: 2026-10-07

@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, expectTypeOf, it } from "vitest";
 import type { DrawerProps } from "./drawer";
-import { openOverlayFixture, OVERLAY_FIXTURE_TIMEOUT, seriousViolations } from "./overlay-browser-test";
+import { OVERLAY_FIXTURE_TIMEOUT, openOverlayFixture, seriousViolations } from "./overlay-browser-test";
 
 describe("Drawer / SidePanel", () => {
   let fixture: Awaited<ReturnType<typeof openOverlayFixture>>;

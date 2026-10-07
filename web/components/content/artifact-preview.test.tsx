@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { openOverlayFixture, OVERLAY_FIXTURE_TIMEOUT, seriousViolations } from "../ui/overlay-browser-test";
+import { OVERLAY_FIXTURE_TIMEOUT, openOverlayFixture, seriousViolations } from "../ui/overlay-browser-test";
 import { artifactKind } from "./artifact-kind";
 
 describe("artifactKind", () => {

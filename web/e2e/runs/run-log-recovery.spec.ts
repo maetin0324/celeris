@@ -35,7 +35,7 @@ test("Console の取得失敗は再試行で読み直せる", async ({ page }) =
       fail ? route.fulfill({ status: 503, body: "unavailable" }) : route.fallback(),
     );
     await page.setViewportSize({ width: 360, height: 800 });
-    await page.goto(`${gateway.base}/`);
+    await page.goto(`${gateway.base}/console`);
     const error = page.locator('[data-fetch-state="error"]');
     await expect(error).toHaveAttribute("role", "alert", timeout);
     fail = false;

@@ -6,6 +6,7 @@ try {
     bind,
     daemonUrl: process.env.CELERIS_API_URL ?? "http://127.0.0.1:7710",
     daemonTokenFile: process.env.CELERIS_API_TOKEN_FILE,
+    chatUploadLimitBytes: process.env.CELERIS_WEB_CHAT_UPLOAD_LIMIT_BYTES,
   });
   const server = app.listen(bind.port, bind.host, () => {
     process.stderr.write(`celeris-web: listening on ${bind.host}:${bind.port}\n`);

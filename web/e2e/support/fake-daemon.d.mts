@@ -12,6 +12,38 @@ export type FakeDaemonRequest = {
 export function fixtureFor(node: unknown): unknown;
 export function validateFixture(value: unknown, node: unknown): string[];
 export const defaultFixtures: Record<string, unknown>;
+export function chatInboxItemsFixture(): import("../../api/generated/types").InboxItem[];
+export function chatSeedFixture(): Array<{
+  thread: import("../../api/generated/types").ChatThread;
+  messages: import("../../api/generated/types").ChatMessage[];
+}>;
+// Deterministic chat controls (direct daemon URL, with the fixture token when configured):
+// POST /__fixture/chat/hold {thread_id, hold?: boolean} creates a held active run.
+// POST /__fixture/chat/threads/{t}/emit accepts {type, data, run_id?, message_id?}
+// and broadcasts a persisted ChatEvent. POST /__fixture/chat/threads/{t}/expire
+// {before_id} makes older SSE cursors return 410. POST /__fixture/chat/disconnect
+// tears down all chat SSE connections (to test reconnection).
+// POST /__fixture/chat/override-state {state: "succeed" | "conflict"} controls
+// POST /api/v1/cos/operations/{o}/override (409 while conflict).
+// GET /__fixture/chat/override-log lists the override bodies that were received.
+// POST /__fixture/chat/upload-state {state: "hold" | "succeed" | "fail"} applies to new uploads.
+// GET /__fixture/chat/uploads lists pending {id, name}; POST /__fixture/chat/uploads/{id}/release
+// {state: "succeed" | "fail"} resolves one held upload. Disconnected uploads leave the pending list.
+export type ChatFixtureControl = {
+  rows: Map<
+    string,
+    {
+      thread: import("../../api/generated/types").ChatThread;
+      messages: import("../../api/generated/types").ChatMessage[];
+      events: import("../../api/generated/types").ChatEvent[];
+    }
+  >;
+  emit(
+    threadId: string,
+    event: Pick<import("../../api/generated/types").ChatEvent, "type" | "data"> &
+      Partial<Pick<import("../../api/generated/types").ChatEvent, "run_id" | "message_id">>,
+  ): import("../../api/generated/types").ChatEvent;
+};
 export const routingCatalogFixture: import("../../api/generated/types").RoutingCatalogView;
 export const routingAuditFixture: import("../../api/generated/types").TaskRoutingView;
 export const routingTrajectoryFixture: import("../../api/generated/types").TaskRoutingView;
@@ -38,6 +70,7 @@ export type FakeDaemonOptions = {
 };
 export function createFakeDaemon(options?: FakeDaemonOptions): {
   requests: FakeDaemonRequest[];
+  chat: ChatFixtureControl;
   sendEvent(event: string, data?: unknown): void;
   inbox: {
     items: import("../../api/generated/types").InboxItem[];

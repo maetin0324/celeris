@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import packageInfo from "../package.json" with { type: "json" };
 import { createAuth } from "./auth.js";
+import { createChat } from "./chat.js";
 import { createConsole } from "./console.js";
 import { createEvents } from "./events.js";
 import { createFiles } from "./files.js";
@@ -16,7 +17,8 @@ const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const defaultCsp = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
 // SPA の document だけ、成果物の表示（`/files/...?view=1`）を自 origin の iframe（HTML）と object（PDF）で埋め込める。
 // 埋め込まれる側は files.js が sandbox（HTML・SVG）と frame-ancestors 'self' で縛る（ADR 2026-10-05-web-artifact-inline-view）。
-const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'`;
+// composer のローカル添付 preview（URL.createObjectURL）は画像だけ blob: を許可する。
+const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
 const fingerprint = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
 export function parseBind(value = "127.0.0.1:7720") {
@@ -73,14 +75,22 @@ export function createApp({
   daemonUrl,
   daemonTokenFile,
   relayTimeoutMs,
+  chatUploadLimitBytes,
   registerRoutes = () => {},
 } = {}) {
   validateConfig({ bind, passwordFile });
   const auth = createAuth({ passwordFile, secretFile, failedDelayMs: failedLoginDelayMs });
   // daemonUrl が無ければ中継しない（/api/* は 404）。起動時の既定は index.js が与える。
-  // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。
+  // `/files/*` と `/events` も同じ daemon へ中継する（P1-08・P1-09）。チャットの添付・stream・ダウンロードは
+  // JSON relay の body 上限と timeout を通らないよう、JSON relay より前に登録する（ADR 2026-10-05-cos-chat-home D2・D4）。
   const relays = daemonUrl
     ? [
+        createChat({
+          upstream: daemonUrl,
+          tokenFile: daemonTokenFile,
+          timeoutMs: relayTimeoutMs,
+          uploadLimitBytes: chatUploadLimitBytes,
+        }),
         createRelay({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createFiles({ upstream: daemonUrl, tokenFile: daemonTokenFile, timeoutMs: relayTimeoutMs }),
         createEvents({ upstream: daemonUrl, tokenFile: daemonTokenFile }),
@@ -153,7 +163,6 @@ export function createApp({
       req.path.startsWith("/events/") ||
       req.path === "/events" ||
       req.path.startsWith("/console/") ||
-      req.path === "/console" ||
       path.extname(req.path)
     )
       return res.status(404).type("text/plain").send("not found");

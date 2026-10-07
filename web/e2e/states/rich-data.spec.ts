@@ -29,7 +29,7 @@ test("shared rich fixture renders data on the seven task surfaces and Console", 
     await page.goto(`${gateway.base}/artifacts?project=P1`);
     await expect(page.getByTestId("artifacts-list").locator("[data-artifact]")).toHaveCount(12);
 
-    await page.goto(gateway.base);
+    await page.goto(`${gateway.base}/console`);
     await expect(page.locator("[data-console]")).toContainText("画面群の長文");
     await expect(page.locator("[data-console]")).toContainText("read_file");
   } finally {

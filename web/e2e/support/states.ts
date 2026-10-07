@@ -194,7 +194,7 @@ export const states = [
     key: "stale",
     label: "SSE 切断（stream が 503 を返し続け、再接続も失敗する）",
     daemon: { streamStatus: 503 },
-    screens: ["/", "/tasks", "/tasks/T1/runs/R1", "/providers"],
+    screens: ["/console", "/tasks", "/tasks/T1/runs/R1", "/providers"],
   },
   {
     key: "forbidden",

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -1291,6 +1292,32 @@ export function inboxItemsFixture() {
   ];
 }
 
+// チャットの質問カードに対応する項目を追加する。既存の受信箱 fixture（5 件）は共用試験のため保つ。
+export function chatInboxItemsFixture() {
+  const items = inboxItemsFixture();
+  return [
+    ...items,
+    {
+      ...items[0],
+      id: "question:Q1",
+      kind: "question",
+      title: "質問: 画面の幅はどれにする",
+      detail: "モバイルの既定幅を決める質問。",
+      options: [
+        inboxOption("narrow", "320 px 向け", "最も狭い幅に合わせる"),
+        inboxOption("other", "その他", "理由を書いて詳細の画面で答える", true),
+      ],
+      recommended: "narrow",
+      due_at: null,
+      links: [],
+      project_id: null,
+      blocking: { tasks: [inboxTask("T5", "画面の確認")], units: [], summary: "1 task を止めている" },
+      task: inboxTask("T5", "画面の確認"),
+      age_secs: 300,
+    },
+  ];
+}
+
 export function noticesFixture() {
   const notice = (id, kind, title, summary, count, last_at, extra) => ({
     id,
@@ -1419,6 +1446,666 @@ function handleInboxNotifications(state, req, res, url, body, sendEvent) {
 
 // files は daemon の path（`/api/v1/tasks/...`）→ `{ body, type?, disposition? }`。
 // token を与えると、`Authorization: Bearer <token>` の無い要求に 401 を返す（P1-07 の中継の検査）。
+// CoS chat fixture. All state changes and SSE frames are synchronous after a request is read,
+// so tests can wait for a specific event instead of waiting for a timer.
+export function chatSeedFixture() {
+  const at = "2026-10-05T12:00:00Z";
+  const thread = (id, title, kind = "human") => ({
+    id,
+    title,
+    kind,
+    status: "open",
+    revision: 1,
+    project_id: "P1",
+    created_at: at,
+    updated_at: at,
+    active_run_id: null,
+    queue_paused: false,
+    queued_count: 0,
+  });
+  // カードの id は受信箱の項目 id（triage の source_key と同じ）を指し、回答は受信箱 API へ行く。
+  // 詳細 link は実在画面（/tasks/<id>・/inbox・/?thread=<id>&operation=<id>）へ置く。
+  // 受信箱 thread には人待ちの 2 枚、一般 thread には全種類を 1 枚ずつ出す。
+  const cards = [
+    { kind: "task", id: "T1", title: "タスク: web の認証", state: "pending", href: "/tasks/T1", actor: "system" },
+    {
+      kind: "decision",
+      id: "decision:D1",
+      title: "決定: 認証方式を決める",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "question",
+      id: "question:Q1",
+      title: "質問: 画面の幅はどれにする",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "approval",
+      id: "authorization:A1",
+      title: "認可: cluster-hpc への依頼",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "plan_gate",
+      id: "plan_gate:T2",
+      title: "計画の承認: 受信箱の画面",
+      state: "pending",
+      href: "/inbox",
+      actor: "system",
+    },
+    {
+      kind: "notice",
+      id: "N1",
+      title: "知らせ: task の完了",
+      state: "observed",
+      href: "/?thread=chat-main",
+      actor: "system",
+    },
+    {
+      kind: "operation",
+      id: "operation:OP1",
+      title: "CoS が代わりに回答しました",
+      state: "applied",
+      href: "/?thread=chat-main&operation=OP1",
+      actor: "cos",
+      operation_id: "OP1",
+      reason: "期限前の一次対応。取消・差し戻し可能",
+    },
+  ];
+  // 受信箱 thread のカードは人待ちの決定・質問。
+  const inboxCards = cards.filter((card) => card.id === "decision:D1" || card.id === "question:Q1");
+  const message = (threadId, seq, role, text, messageCards = []) => ({
+    id: `${threadId}-m${seq}`,
+    thread_id: threadId,
+    seq,
+    role,
+    text,
+    state: "completed",
+    attachment_ids: [],
+    cards: messageCards,
+    created_at: at,
+    updated_at: at,
+    client_message_id: null,
+    run_id: null,
+    reply_to_id: null,
+  });
+  return [
+    {
+      thread: thread("chat-main", "CoS と相談"),
+      messages: [
+        message("chat-main", 1, "user", "進捗を教えて"),
+        message("chat-main", 2, "assistant", "## 進捗\n作業を確認しました。\n\n```sh\npnpm test\n```", cards),
+      ],
+    },
+    {
+      thread: thread("chat-history", "長い会話の確認"),
+      messages: Array.from({ length: 240 }, (_, i) =>
+        message("chat-history", i + 1, i % 2 ? "assistant" : "user", `履歴 ${i + 1}`),
+      ),
+    },
+    {
+      thread: thread("chat-inbox", "受信箱の一次対応", "inbox"),
+      messages: [message("chat-inbox", 1, "assistant", "決定を確認してください", inboxCards)],
+    },
+    {
+      thread: thread("chat-legacy", "旧 Console の会話", "legacy"),
+      messages: [message("chat-legacy", 1, "user", "以前の相談")],
+    },
+  ];
+}
+
+function createChatFixture() {
+  const rows = new Map(
+    chatSeedFixture().map(({ thread, messages }) => [
+      thread.id,
+      {
+        thread,
+        messages,
+        events: [],
+        runs: new Map(),
+        clients: new Set(),
+        ids: new Map(),
+        uploads: new Map(),
+        expiredBefore: 0,
+        hold: false,
+      },
+    ]),
+  );
+  const attachments = new Map();
+  // CoS 代答の取消・差し戻しの応答を決定的に切り替える。
+  const chatControl = { overrideState: "succeed", overrides: [], uploadState: "succeed" };
+  const pendingUploads = new Map();
+  const at = "2026-10-05T12:00:00Z";
+  let nextThread = 1;
+  let nextAttachment = 1;
+  // A colored 96x64 checkerboard stands in for the daemon's safe re-encoded image preview.
+  const previewPng = Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAAAl0lEQVR4nO3YwQmAMBQFwfTi2dYszCKsyRIsIQQvGxh45yWZ4x/H9Sztvc+l7d4fu38AEKB2HxAgQIAAhfuAAAECBCjcBwToJ1DtQbU+IECAAAEK9wEBAgQIULgPCBAgQIDCfQezyQABAgQIULgPCBAgQIDCfUCAAAECFO47mE0GCBAgQIDCfUCAAAECFO4DAgQIEKBw/wOPPwosxBMoPAAAAABJRU5ErkJggg==",
+    "base64",
+  );
+  const json = (res, status, value, problem = false) => {
+    res.writeHead(status, { "content-type": problem ? "application/problem+json" : "application/json" });
+    res.end(JSON.stringify(value));
+  };
+  const error = (res, status, code) => json(res, status, { code, title: code, status }, true);
+  const lastId = (row) => row.events.at(-1)?.id ?? "0";
+  const queue = (row) => row.messages.filter((m) => m.state === "queued");
+  const emit = (row, event) => {
+    if (event.type === "message" && event.data?.message) {
+      const message = event.data.message;
+      const index = row.messages.findIndex((item) => item.id === message.id);
+      if (index < 0) row.messages.push(message);
+      else row.messages[index] = message;
+      row.messages.sort((a, b) => a.seq - b.seq);
+    }
+    if (event.type === "run" && event.data?.run) {
+      const run = event.data.run;
+      row.runs.set(run.id, run);
+      row.thread.active_run_id = ["queued", "running", "stopping"].includes(run.state) ? run.id : null;
+    }
+    if (event.type === "thread" && event.data?.thread) row.thread = event.data.thread;
+    const value = {
+      id: String(Number(lastId(row)) + 1),
+      type: event.type,
+      thread_id: row.thread.id,
+      run_id: event.run_id ?? null,
+      message_id: event.message_id ?? null,
+      at,
+      data: event.data,
+    };
+    row.events.push(value);
+    const frame = `id: ${value.id}\nevent: ${value.type}\ndata: ${JSON.stringify(value)}\n\n`;
+    for (const client of row.clients) client.write(frame);
+    return value;
+  };
+  const updateQueue = (row) => {
+    row.thread.queued_count = queue(row).length;
+    emit(row, { type: "queue", data: { message_ids: queue(row).map((m) => m.id), paused: row.thread.queue_paused } });
+  };
+  const read = async (req) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    return Buffer.concat(chunks);
+  };
+  const multipart = (body, contentType) => {
+    const boundary =
+      /boundary=(?:"([^"]+)"|([^;]+))/.exec(contentType)?.[1] ?? /boundary=([^;]+)/.exec(contentType)?.[1];
+    if (!boundary) return null;
+    const fields = {};
+    for (const section of body.toString("latin1").split(`--${boundary}`).slice(1, -1)) {
+      const separator = section.indexOf("\r\n\r\n");
+      if (separator < 0) continue;
+      const header = section.slice(0, separator);
+      const name = /name="([^"]+)"/.exec(header)?.[1];
+      if (!name) continue;
+      const bytes = Buffer.from(section.slice(separator + 4).replace(/\r\n$/, ""), "latin1");
+      fields[name] =
+        name === "file"
+          ? {
+              bytes,
+              name: /filename="([^"]*)"/.exec(header)?.[1] ?? "upload",
+              type: /Content-Type:\s*([^\r\n]+)/i.exec(header)?.[1] ?? "application/octet-stream",
+            }
+          : bytes.toString("utf8");
+    }
+    return fields;
+  };
+  // 受ける経路: /api/v1/chat/threads（一覧・作成・PATCH・messages・stop・resume-queue・stream）、
+  // /api/v1/chat/attachments（upload・取得・preview・content・delete・references）、
+  // 制御用の /__fixture/chat/hold と /__fixture/chat/threads/{t}/emit。
+  const handle = async (req, res, url, record) => {
+    const path = url.pathname;
+    if (!path.startsWith("/api/v1/chat/") && !path.startsWith("/api/v1/cos/") && !path.startsWith("/__fixture/chat/"))
+      return false;
+    const parts = path.split("/").filter(Boolean);
+    const control = parts[0] === "__fixture";
+    const tail = parts.slice(control ? 2 : 3);
+    const method = req.method;
+    const inputBuffer = method === "GET" || method === "DELETE" ? Buffer.alloc(0) : await read(req);
+    record.body =
+      inputBuffer.length && !req.headers["content-type"]?.startsWith("multipart/")
+        ? inputBuffer.toString("utf8")
+        : undefined;
+    let input = {};
+    if (inputBuffer.length && !req.headers["content-type"]?.startsWith("multipart/")) {
+      try {
+        input = JSON.parse(inputBuffer.toString("utf8"));
+      } catch {
+        error(res, 400, "invalid-json");
+        return true;
+      }
+    }
+    if (control) {
+      if (tail[0] === "hold" && method === "POST") {
+        const row = rows.get(input.thread_id);
+        if (!row) error(res, 404, "not-found");
+        else {
+          row.hold = input.hold !== false;
+          if (row.hold && !row.thread.active_run_id) {
+            const run = {
+              id: `${row.thread.id}-run`,
+              thread_id: row.thread.id,
+              input_message_id: row.messages[0]?.id ?? `${row.thread.id}-input`,
+              state: "running",
+              started_at: at,
+              finished_at: null,
+              output_message_id: null,
+            };
+            row.runs.set(run.id, run);
+            row.thread.active_run_id = run.id;
+            emit(row, { type: "run", run_id: run.id, data: { run } });
+          }
+          json(res, 200, { held: row.hold, run_id: row.thread.active_run_id });
+        }
+      } else if (tail[0] === "threads" && tail[2] === "emit" && method === "POST") {
+        const row = rows.get(tail[1]);
+        if (!row) error(res, 404, "not-found");
+        else json(res, 200, { event: emit(row, input) });
+      } else if (tail[0] === "threads" && tail[2] === "expire" && method === "POST") {
+        const row = rows.get(tail[1]);
+        if (!row) error(res, 404, "not-found");
+        else {
+          row.expiredBefore = Number(input.before_id ?? lastId(row));
+          json(res, 200, { expired_before: String(row.expiredBefore) });
+        }
+      } else if (tail[0] === "disconnect" && method === "POST") {
+        // 全チャットの SSE 接続を切る（再接続の試験。offline だけでは live 接続が切れないため）。
+        let count = 0;
+        for (const row of rows.values())
+          for (const client of row.clients) {
+            client.destroy();
+            count += 1;
+          }
+        json(res, 200, { disconnected: count });
+      } else if (tail[0] === "override-state" && method === "POST") {
+        // override 応答の切り替え（succeed | conflict=409）。
+        if (input.state !== "succeed" && input.state !== "conflict") error(res, 422, "invalid-state");
+        else {
+          chatControl.overrideState = input.state;
+          json(res, 200, { state: chatControl.overrideState });
+        }
+      } else if (tail[0] === "upload-state" && method === "POST") {
+        if (!["hold", "succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else {
+          chatControl.uploadState = input.state;
+          json(res, 200, { state: input.state });
+        }
+      } else if (tail[0] === "uploads" && method === "GET") {
+        json(res, 200, { pending: [...pendingUploads.values()].map(({ id, name }) => ({ id, name })) });
+      } else if (tail[0] === "uploads" && tail[2] === "release" && method === "POST") {
+        const pending = pendingUploads.get(tail[1]);
+        if (!["succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else if (!pending) error(res, 404, "not-found");
+        else {
+          pending.finish(input.state);
+          json(res, 200, { released: tail[1] });
+        }
+      } else if (tail[0] === "override-log" && method === "GET") {
+        json(res, 200, { overrides: chatControl.overrides });
+      } else error(res, 404, "not-found");
+      return true;
+    }
+    if (tail[0] === "operations" && tail[2] === "override" && tail.length === 3 && method === "POST") {
+      // CoS 代答の取消（revoke）・差し戻し（return）の決定的な fake（/api/v1/cos/operations/{o}/override）。
+      // body は { action, reason }。
+      if (!["revoke", "return"].includes(input.action) || !(typeof input.reason === "string" && input.reason.trim())) {
+        error(res, 422, "validation");
+        return true;
+      }
+      chatControl.overrides.push({ operation_id: tail[1], action: input.action, reason: input.reason.trim() });
+      if (chatControl.overrideState === "conflict") {
+        error(res, 409, "stale-revision");
+      } else {
+        const state = input.action === "revoke" ? "revoked" : "returned";
+        json(res, 200, {
+          action: input.action,
+          state,
+          operation_id: tail[1],
+          new_revision: null,
+          new_wait_id: null,
+          remediation_task_id: null,
+          paused_task_ids: [],
+        });
+      }
+      return true;
+    }
+    if (tail[0] === "attachments") {
+      const entry = attachments.get(tail[1]);
+      if (!entry) {
+        error(res, 404, "not-found");
+        return true;
+      }
+      const { attachment, bytes, references } = entry;
+      if (tail.length === 2 && method === "GET") json(res, 200, { attachment });
+      else if (tail.length === 2 && method === "DELETE") {
+        if (attachment.state === "deleted") {
+          res.writeHead(204);
+          res.end();
+        } else if (references.size) error(res, 409, "attachment-referenced");
+        else {
+          attachment.state = "deleted";
+          res.writeHead(204);
+          res.end();
+        }
+      } else if (tail[2] === "references" && method === "POST") {
+        const key = `${input.owner_kind}:${input.owner_id}:${input.idempotency_key}`;
+        references.add(key);
+        json(res, 200, { attachment_id: attachment.id, owner_kind: input.owner_kind, owner_id: input.owner_id });
+      } else if ((tail[2] === "content" || tail[2] === "preview") && method === "GET") {
+        if (attachment.state === "deleted" || (tail[2] === "preview" && !attachment.preview_url))
+          error(res, 404, "not-found");
+        else {
+          res.writeHead(200, {
+            "content-type": tail[2] === "preview" ? "image/png" : attachment.media_type,
+            "content-disposition":
+              tail[2] === "preview" ? "inline" : `attachment; filename="${attachment.name.replaceAll('"', "")}"`,
+            "x-content-type-options": "nosniff",
+          });
+          res.end(tail[2] === "preview" ? previewPng : bytes);
+        }
+      } else error(res, 404, "not-found");
+      return true;
+    }
+    if (tail[0] !== "threads") {
+      error(res, 404, "not-found");
+      return true;
+    }
+    if (tail.length === 1) {
+      if (method === "GET") {
+        const q = (url.searchParams.get("q") ?? "").toLowerCase();
+        const status = url.searchParams.get("status");
+        const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 100);
+        const before = url.searchParams.get("before");
+        const sorted = [...rows.values()]
+          .filter(
+            (r) =>
+              (!status || r.thread.status === status) &&
+              (!q ||
+                r.thread.title.toLowerCase().includes(q) ||
+                r.messages.some((message) => message.text.toLowerCase().includes(q))),
+          )
+          .map((r) => r.thread)
+          .sort((a, b) => b.updated_at.localeCompare(a.updated_at) || b.id.localeCompare(a.id));
+        const start = before ? Math.max(0, sorted.findIndex((t) => `${t.updated_at}|${t.id}` === before) + 1) : 0;
+        const items = sorted.slice(start, start + limit);
+        json(res, 200, {
+          items,
+          next_cursor: sorted[start + limit] ? `${items.at(-1).updated_at}|${items.at(-1).id}` : null,
+        });
+      } else if (method === "POST") {
+        if (
+          typeof input.client_thread_id !== "string" ||
+          !input.client_thread_id ||
+          typeof input.title !== "string" ||
+          !input.title.trim() ||
+          input.title.length > 200
+        ) {
+          error(res, 422, "invalid-thread");
+          return true;
+        }
+        const existing = [...rows.values()].find((r) => r.ids.get("thread") === input.client_thread_id);
+        if (existing && (existing.createTitle !== input.title || existing.createProject !== (input.project_id ?? null)))
+          error(res, 409, "idempotency-conflict");
+        else if (existing) json(res, 200, { thread: existing.thread });
+        else {
+          const thread = chatSeedFixture()[0].thread;
+          Object.assign(thread, {
+            id: `chat-new-${nextThread++}`,
+            title: input.title ?? "",
+            project_id: input.project_id ?? null,
+          });
+          const row = {
+            thread,
+            messages: [],
+            events: [],
+            runs: new Map(),
+            clients: new Set(),
+            ids: new Map([["thread", input.client_thread_id]]),
+            uploads: new Map(),
+            createTitle: input.title,
+            createProject: input.project_id ?? null,
+            expiredBefore: 0,
+            hold: false,
+          };
+          rows.set(thread.id, row);
+          json(res, 201, { thread });
+        }
+      } else error(res, 405, "method-not-allowed");
+      return true;
+    }
+    const row = rows.get(tail[1]);
+    if (!row) {
+      error(res, 404, "not-found");
+      return true;
+    }
+    const thread = row.thread;
+    if (tail.length === 2) {
+      if (method === "GET")
+        json(res, 200, { thread, active_run: row.runs.get(thread.active_run_id) ?? null, last_event_id: lastId(row) });
+      else if (method === "PATCH") {
+        if (input.expected_revision !== thread.revision) error(res, 409, "revision-conflict");
+        else if (input.title === undefined && input.status === undefined) error(res, 422, "empty-patch");
+        else if (input.status === "archived" && thread.kind === "inbox") error(res, 409, "inbox-thread");
+        else if (input.status === "archived" && (thread.active_run_id || queue(row).length))
+          error(res, 409, "thread-busy");
+        else {
+          if (input.title !== undefined) thread.title = input.title;
+          if (input.status !== undefined) thread.status = input.status;
+          thread.revision++;
+          emit(row, { type: "thread", data: { thread } });
+          json(res, 200, { thread });
+        }
+      } else error(res, 405, "method-not-allowed");
+      return true;
+    }
+    if (tail[2] === "messages") {
+      if (tail.length === 3 && method === "GET") {
+        const before = url.searchParams.get("before_seq");
+        const after = url.searchParams.get("after_seq");
+        if (before && after) error(res, 400, "invalid-cursor");
+        else {
+          const limit = Math.min(Number(url.searchParams.get("limit") ?? 50), 200);
+          const filtered = row.messages.filter((m) =>
+            before ? m.seq < Number(before) : after ? m.seq > Number(after) : true,
+          );
+          const items = before || !after ? filtered.slice(-limit) : filtered.slice(0, limit);
+          json(res, 200, {
+            items,
+            next_before_seq: filtered.length > items.length ? items[0]?.seq : null,
+            next_after_seq: after && filtered.length > items.length ? items.at(-1)?.seq : null,
+            snapshot_event_id: lastId(row),
+          });
+        }
+      } else if (tail.length === 3 && method === "POST") {
+        const key = input.client_message_id;
+        if (
+          typeof key !== "string" ||
+          !key ||
+          typeof input.text !== "string" ||
+          (!input.text.trim() && !input.attachment_ids?.length) ||
+          !["queue", "interrupt"].includes(input.mode) ||
+          !Array.isArray(input.attachment_ids) ||
+          input.attachment_ids.length > 10
+        ) {
+          error(res, 422, "invalid-message");
+          return true;
+        }
+        const previous = row.ids.get(key);
+        if (previous) {
+          if (previous.body !== JSON.stringify(input)) error(res, 409, "idempotency-conflict");
+          else json(res, 202, previous.response);
+        } else {
+          if (queue(row).length >= 100) error(res, 429, "queue-full");
+          else if (
+            input.attachment_ids.some(
+              (id) =>
+                attachments.get(id)?.attachment.thread_id !== thread.id ||
+                attachments.get(id)?.attachment.state !== "ready",
+            )
+          ) {
+            error(res, 422, "invalid-attachment");
+          } else {
+            const message = {
+              id: `${thread.id}-m${(row.messages.at(-1)?.seq ?? 0) + 1}`,
+              thread_id: thread.id,
+              seq: (row.messages.at(-1)?.seq ?? 0) + 1,
+              role: "user",
+              text: input.text ?? "",
+              state: "queued",
+              attachment_ids: input.attachment_ids ?? [],
+              cards: [],
+              created_at: at,
+              updated_at: at,
+              client_message_id: key,
+              run_id: null,
+              reply_to_id: input.reply_to_id ?? null,
+            };
+            row.messages.push(message);
+            if (input.mode === "interrupt" && thread.active_run_id) {
+              const run = row.runs.get(thread.active_run_id);
+              run.state = "stopping";
+              emit(row, { type: "run", run_id: run.id, data: { run } });
+            }
+            if (input.resume_queue) thread.queue_paused = false;
+            emit(row, { type: "message", message_id: message.id, data: { message } });
+            updateQueue(row);
+            const response = { message, run_id: null, queue_position: queue(row).length };
+            row.ids.set(key, { body: JSON.stringify(input), response });
+            json(res, 202, response);
+          }
+        }
+      } else if (tail.length === 4 && method === "DELETE") {
+        const message = row.messages.find((m) => m.id === tail[3]);
+        if (!message) error(res, 404, "not-found");
+        else if (message.state !== "queued") error(res, 409, "message-started");
+        else {
+          message.state = "cancelled";
+          emit(row, { type: "message", message_id: message.id, data: { message } });
+          updateQueue(row);
+          json(res, 200, { message });
+        }
+      } else error(res, 404, "not-found");
+    } else if (tail[2] === "stream" && method === "GET") {
+      const after = url.searchParams.get("after");
+      const header = req.headers["last-event-id"];
+      record.query = url.search;
+      record.lastEventId = header ?? null;
+      if (after && header && after !== header) error(res, 400, "cursor-mismatch");
+      else {
+        const cursor = after ?? header ?? "0";
+        if (!/^\d+$/.test(cursor) || Number(cursor) > Number(lastId(row))) error(res, 400, "invalid-cursor");
+        else if (Number(cursor) < row.expiredBefore) error(res, 410, "chat-cursor-expired");
+        else {
+          res.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+            "x-accel-buffering": "no",
+          });
+          res.write(": connected\n\n");
+          for (const event of row.events.filter((e) => Number(e.id) > Number(cursor)))
+            res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+          row.clients.add(res);
+          res.on("close", () => row.clients.delete(res));
+        }
+      }
+    } else if (tail[2] === "attachments" && tail.length === 3 && method === "POST") {
+      const fields = multipart(inputBuffer, req.headers["content-type"] ?? "");
+      if (!fields?.file || !fields.client_upload_id) error(res, 400, "invalid-upload");
+      else if (fields.file.bytes.length > 25 * 1024 * 1024) error(res, 413, "upload-too-large");
+      else {
+        let outcome = chatControl.uploadState;
+        if (outcome === "hold") {
+          outcome = await new Promise((resolve) => {
+            const id = fields.client_upload_id;
+            const finish = (state) => {
+              pendingUploads.delete(id);
+              res.off("close", cancel);
+              resolve(state);
+            };
+            const cancel = () => finish("cancelled");
+            pendingUploads.set(id, { id, name: fields.file.name, finish });
+            res.once("close", cancel);
+          });
+        }
+        if (outcome === "cancelled") return true;
+        if (outcome === "fail") {
+          error(res, 500, "upload-failed");
+          return true;
+        }
+        const existing = row.uploads.get(fields.client_upload_id);
+        const sha256 = createHash("sha256").update(fields.file.bytes).digest("hex");
+        if (existing && existing.sha256 !== sha256) error(res, 409, "idempotency-conflict");
+        else if (existing) json(res, 200, { attachment: existing });
+        else {
+          const id = `upload-${nextAttachment++}`;
+          const attachment = {
+            id,
+            thread_id: thread.id,
+            name: fields.file.name,
+            media_type: fields.file.type,
+            size_bytes: fields.file.bytes.length,
+            sha256,
+            state: "ready",
+            download_url: `/api/v1/chat/attachments/${id}/content`,
+            preview_url: fields.file.type === "image/png" ? `/api/v1/chat/attachments/${id}/preview` : null,
+          };
+          attachments.set(id, { attachment, bytes: fields.file.bytes, references: new Set() });
+          row.uploads.set(fields.client_upload_id, attachment);
+          json(res, 201, { attachment });
+        }
+      }
+    } else if (tail[2] === "stop" && method === "POST") {
+      const run = row.runs.get(input.run_id);
+      if (!run || (thread.active_run_id && thread.active_run_id !== input.run_id)) error(res, 409, "run-conflict");
+      else if (["stopped", "completed", "failed", "interrupted"].includes(run.state))
+        json(res, 200, { run, queue_paused: thread.queue_paused });
+      else {
+        run.state = "stopped";
+        thread.active_run_id = null;
+        thread.queue_paused = true;
+        emit(row, { type: "run", run_id: run.id, data: { run } });
+        updateQueue(row);
+        json(res, 202, { run, queue_paused: true });
+      }
+    } else if (tail[2] === "resume-queue" && method === "POST") {
+      if (input.expected_revision !== thread.revision) error(res, 409, "revision-conflict");
+      else {
+        thread.queue_paused = false;
+        thread.revision++;
+        updateQueue(row);
+        json(res, 200, { thread });
+      }
+    } else if (tail[2] === "runs" && tail[3]) {
+      const run = row.runs.get(tail[3]);
+      if (tail.length === 4 && method === "GET") run ? json(res, 200, { run }) : error(res, 404, "not-found");
+      else if (tail[4] === "events" && method === "GET") {
+        const events = row.events.filter(
+          (e) => e.run_id === tail[3] && Number(e.id) > Number(url.searchParams.get("after") ?? 0),
+        );
+        const items = events.slice(0, Number(url.searchParams.get("limit") ?? 100));
+        json(res, 200, { items, next_cursor: events.length > items.length ? items.at(-1)?.id : null });
+      } else error(res, 404, "not-found");
+    } else error(res, 404, "not-found");
+    return true;
+  };
+  return {
+    rows,
+    emit,
+    handle,
+    close() {
+      for (const pending of pendingUploads.values()) pending.finish("cancelled");
+      for (const row of rows.values()) for (const client of row.clients) client.destroy();
+    },
+  };
+}
+
 export function createFakeDaemon({
   host = "127.0.0.1",
   port = 0,
@@ -1465,6 +2152,7 @@ export function createFakeDaemon({
     notices: notices ?? noticesFixture(),
     answers: [],
   };
+  const chat = createChatFixture();
   const streamPaths = new Set(["/events", "/api/v1/events", "/api/v1/stream", "/api/v1/console/stream"]);
   const matches = (rule, pathname) =>
     rule !== null &&
@@ -1510,6 +2198,19 @@ export function createFakeDaemon({
     if (pathname === "/api/v1/stream" && streamStatus !== 200) {
       res.writeHead(streamStatus, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "too_many_streams" }));
+      return;
+    }
+    if (
+      pathname.startsWith("/api/v1/chat/") ||
+      pathname.startsWith("/api/v1/cos/") ||
+      pathname.startsWith("/__fixture/chat/")
+    ) {
+      chat.handle(req, res, new URL(req.url ?? "/", "http://x"), record).catch(() => {
+        if (!res.headersSent) {
+          res.writeHead(500, { "content-type": "application/problem+json" });
+          res.end(JSON.stringify({ code: "fixture-error" }));
+        }
+      });
       return;
     }
     // ops: daemon/providers (P4-12)
@@ -1956,6 +2657,14 @@ export function createFakeDaemon({
   };
   return {
     requests,
+    chat: {
+      rows: chat.rows,
+      emit(threadId, event) {
+        const row = chat.rows.get(threadId);
+        if (!row) throw new Error(`unknown chat thread: ${threadId}`);
+        return chat.emit(row, event);
+      },
+    },
     sendEvent,
     // 受信箱・通知の状態（ADR-0133）。試験が項目を差し替えたら合図を送る。
     inbox,
@@ -2016,6 +2725,7 @@ export function createFakeDaemon({
     },
     async close() {
       clearInterval(timer);
+      chat.close();
       for (const run of held.splice(0)) run();
       for (const client of [...clients, ...consoleClients]) client.destroy();
       await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));

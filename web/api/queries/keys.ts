@@ -91,6 +91,19 @@ export const consoleKeys = {
   conversation: (scope: string, conversationId: string) => ["console", scope, conversationId] as const,
 };
 
+/** CoS チャット（ADR 2026-10-05-cos-chat-home D2）。stream の状態は query にせず features/chat/data の reducer が持つ。
+ * staleTime は表に無い key の既定（0）で足りるので queryKeys（D5 の表と対の一覧）には入れない。 */
+export const chatKeys = {
+  all: ["chat"] as const,
+  threads: () => ["chat", "threads"] as const,
+  threadList: (filters?: Filters) => ["chat", "threads", f(filters)] as const,
+  thread: (threadId: string) => ["chat", "thread", threadId] as const,
+  messages: (threadId: string, filters?: Filters) => ["chat", "messages", threadId, f(filters)] as const,
+  run: (threadId: string, runId: string) => ["chat", "run", threadId, runId] as const,
+  runEvents: (threadId: string, runId: string) => ["chat", "run-events", threadId, runId] as const,
+  attachment: (attachmentId: string) => ["chat", "attachment", attachmentId] as const,
+};
+
 export const queryKeys = {
   tasks: taskKeys,
   projects: projectKeys,

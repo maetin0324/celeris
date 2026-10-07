@@ -2,6 +2,7 @@
 // 動的 id は偽 daemon の T1 / R1 / cos を使う。
 export const screens = [
   { path: "/", fixture: "/", heading: "ホーム", v3: true },
+  { path: "/console", fixture: "/console", heading: "Console", v3: true },
   { path: "/inbox", fixture: "/inbox", heading: "受信箱", v3: true },
   { path: "/notifications", fixture: "/notifications", heading: "通知", v3: true },
   { path: "/login", fixture: "/login", heading: "Celeris にログイン" },

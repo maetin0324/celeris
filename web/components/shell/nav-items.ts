@@ -4,6 +4,7 @@ import type { IconName } from "../ui/icon";
 // group はナビの見出しの区分（DESIGN.md: 日々の仕事と管理に分ける）。並びは navItems の順のまま。
 export const navItems = [
   { to: "/", label: "ホーム", group: "work" },
+  { to: "/console", label: "Console", group: "work" },
   { to: "/inbox", label: "受信箱", group: "work" },
   { to: "/notifications", label: "通知", group: "work" },
   { to: "/tasks", label: "タスク", group: "work" },

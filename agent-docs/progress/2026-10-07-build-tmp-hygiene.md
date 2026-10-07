@@ -13,6 +13,7 @@ ADR `agent-docs/adr/2026-10-07-build-tmp-hygiene.md`（状態: 採択・実装�
 | 葉 | 状態 |
 |---|---|
 | adr | 完了（2026-10-07） |
+| main-sync / repair-design-1 | 完了（2026-10-07） |
 | run-tmpdir / rust-test-tmp / target-sweep / web-e2e-tmp | 未着手 |
 | disk-watch | 未着手 |
 | close-out | 未着手 |

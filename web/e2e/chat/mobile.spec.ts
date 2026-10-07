@@ -25,8 +25,9 @@ async function audit(page: Page) {
   });
 }
 
-const PNG_1PX = Buffer.from(
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lXcAAAAASUVORK5CYII=",
+// 青と黄色の格子（96×64）。1px の白い fixture では preview の見た目を確認できない。
+const COLORED_PNG = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAGAAAABACAIAAABqVuVZAAAAl0lEQVR4nO3YwQmAMBQFwfTi2dYszCKsyRIsIQQvGxh45yWZ4x/H9Sztvc+l7d4fu38AEKB2HxAgQIAAhfuAAAECBCjcBwToJ1DtQbU+IECAAAEK9wEBAgQIULgPCBAgQIDCfQezyQABAgQIULgPCBAgQIDCfUCAAAECFO47mE0GCBAgQIDCfUCAAAECFO4DAgQIEKBw/wOPPwosxBMoPAAAAABJRU5ErkJggg==",
   "base64",
 );
 
@@ -61,6 +62,8 @@ for (const width of [320, 390]) {
       const dialog = page.getByRole("dialog", { name: "会話一覧" });
       await expect(dialog).toBeVisible();
       await expect(dialog.getByRole("button", { name: "CoS と相談", exact: true })).toBeVisible();
+      const shots = process.env.CHAT_SHOT_DIR;
+      if (shots && width === 320) await page.screenshot({ path: `${shots}/chat-drawer-320.png` });
       expect(await audit(page)).toEqual({ overflow: 0, small: [] });
       await dialog.getByRole("button", { name: "閉じる", exact: true }).click();
       await expect(dialog).toBeHidden();
@@ -280,7 +283,7 @@ test("320 px で添付・カードは横溢れを出さず、カードの操作�
     await page.locator('input[type="file"][aria-label="添付ファイルを選択"]').setInputFiles({
       name: "image.png",
       mimeType: "image/png",
-      buffer: PNG_1PX,
+      buffer: COLORED_PNG,
     });
     await expect(page.getByRole("list", { name: "添付ファイル" }).getByRole("listitem")).toContainText("image.png");
     result = await audit(page);
@@ -295,7 +298,7 @@ test("320 px で添付・カードは横溢れを出さず、カードの操作�
           .locator("img")
           .evaluate((img: HTMLImageElement) => img.naturalWidth),
       )
-      .toBe(1);
+      .toBe(96);
     await expectComposerLayout(page);
     const shots = process.env.CHAT_SHOT_DIR;
     if (shots) {
@@ -305,6 +308,14 @@ test("320 px で添付・カードは横溢れを出さず、カードの操作�
       });
       await page.screenshot({ path: `${shots}/chat-mobile-320.png` });
     }
+    await page.getByRole("button", { name: "送信", exact: true }).click();
+    await expect(page.getByRole("list", { name: "添付ファイル", exact: true })).toHaveCount(0);
+    const sentImage = conversation(page).section.locator('[data-slot="chat-attachment"] img');
+    await sentImage.scrollIntoViewIfNeeded();
+    await expect(sentImage).toBeVisible();
+    await expect.poll(() => sentImage.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(96);
+    expect(await audit(page)).toEqual({ overflow: 0, small: [] });
+    if (shots) await page.screenshot({ path: `${shots}/chat-attachment-sent-320.png` });
   } finally {
     await gateway.close();
   }

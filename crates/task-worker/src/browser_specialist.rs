@@ -56,6 +56,13 @@ impl WorkerAdapter for BrowserSpecialistAdapter {
         Self::wrap(self.inner.with_reasoning_effort(effort))
     }
 
+    fn with_tier_models(
+        &self,
+        models: task_core::model_routing::TierModels,
+    ) -> Option<Arc<dyn WorkerAdapter>> {
+        Self::wrap(self.inner.with_tier_models(models))
+    }
+
     fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
         Self::wrap(self.inner.with_env(extra))
     }

@@ -81,6 +81,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   worker_started: { sets: ["T", "R", "E", "L", "P"] },
   // 対象 run の progress/log と対象 task の timeline だけ。一覧・project・設定は取り直さない。
   worker_progress: { sets: [], extra: ({ taskId, event }) => runScoped(taskId, event) },
+  // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: 対象 run の progress/log と task の timeline だけ（worker_progress と同じ範囲）。
+  worker_policy_violation: { sets: [], extra: ({ taskId, event }) => runScoped(taskId, event) },
   artifact_produced: { sets: ["T", "R", "artifacts", "files", "P"], extra: () => [artifactListKey] },
   worker_finished: { sets: ["T", "R", "E", "L", "P", "N", "changes", "files", "artifacts", "metrics"] },
   review_verdict: { sets: ["T", "R", "E", "L"] },
@@ -164,6 +166,8 @@ export const EVENT_INVALIDATION: Record<EventKind, KindSpec> = {
   knowledge_curation_applied: { sets: ["T", "N"] },
   // ADR 2026-10-06 opencode-go-and-model-catalog D4: catalog の入れ替わり。モデル一覧と providers（routing catalog）を古くする。
   model_catalog_changed: { sets: ["llmModels", "providers"] },
+  // ADR 2026-10-06 model-role-assignments D2: 役割の割り当ての変更。assignments と models は同じ key 配下（llm-models）。
+  model_role_assignment_changed: { sets: ["llmModels", "providers"] },
   integration_requested: { sets: ["L"] },
   integration_answered: { sets: ["L"] },
   // 統合 WU の検査の開始・終了（TaskDetail の WU 行の check_progress）。

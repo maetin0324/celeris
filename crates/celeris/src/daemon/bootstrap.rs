@@ -531,7 +531,7 @@ pub fn build_dispatcher(
     config.ensure_memory_dir()?;
     // ADR-0064 D1/D5: `[db]` の `busy_timeout_ms` を使い、デーモンの書き込み接続は
     // `background_checkpoint` を立てる（別の背景 tick が `PRAGMA wal_checkpoint(PASSIVE)` を打つ）。
-    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_with(
+    let sqlite = Arc::new(SqliteStore::open_with(
         &config.db.path,
         StoreOptions {
             busy_timeout: config.db.busy_timeout(),
@@ -539,6 +539,7 @@ pub fn build_dispatcher(
             ..StoreOptions::default()
         },
     )?);
+    let store: Arc<dyn TaskStore> = sqlite.clone();
     seed_org_if_empty(store.as_ref(), config)?;
     seed_cron_if_empty(store.as_ref(), config, OffsetDateTime::now_utc())?;
     let policy = StaticPolicy::new(
@@ -553,6 +554,12 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
+    // ADR 2026-10-06 model-role-assignments D2: DB の割り当てを同じ store から読む（run 起動のたびに解決）。
+    dispatcher.set_role_assignment_reader(sqlite);
+    // 付記「モデルごとの複数役割」: shadow / enforce の役割メンバーの順位づけに routing catalog の品質を使う。
+    if let Some(shared) = config.routing_catalog_state.as_ref() {
+        dispatcher.set_routing_model_profiles(Arc::new(SharedCatalogProfiles(Arc::clone(shared))));
+    }
     // ADR 2026-10-06 D3: `account_pool = "opencode-go"` のように pool の adapter を明示した行。
     dispatcher.set_account_pool_adapters(config.account_pool_adapters());
     // ADR-0132 付記 L1/L2: cheap lane で先に試すローカルの行（`[execution] cheap_local_first = false` なら空）。
@@ -671,4 +678,17 @@ pub fn seed_cron_if_empty(
         "cron: seeded the cron jobs from the config"
     );
     Ok(config.cron.seed.len())
+}
+
+/// 付記「モデルごとの複数役割」: 共有の routing catalog snapshot から model profile を読む（dispatcher 用）。
+struct SharedCatalogProfiles(Arc<std::sync::RwLock<Arc<crate::config::RoutingCatalog>>>);
+
+impl task_dispatch::RoutingModelProfiles for SharedCatalogProfiles {
+    fn model_profiles(&self) -> Vec<task_core::model_router::profiles::ModelProfile> {
+        self.0
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .models
+            .clone()
+    }
 }

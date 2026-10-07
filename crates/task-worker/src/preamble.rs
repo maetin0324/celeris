@@ -112,6 +112,7 @@ pub fn render(context: &RunContext, artifacts: &str) -> String {
     out.push_str(&role_section(context));
     out.push_str(&deliverables_placement_note());
     out.push_str(&production_host_note());
+    out.push_str(&tool_launch_policy_note());
     out.push_str(&memory_instructions(context, artifacts));
     // ADR-0044 D2（Phase 53）: コメントの書き方（`comments_enabled` の run にだけ）。
     out.push_str(&comment_instructions(context));
@@ -967,6 +968,17 @@ pub(crate) fn production_host_note() -> String {
      再起動・差し替え、本番 DB への書き込みはしない）。必要なら、人が実行する手順（コマンドと\
      確認方法）を成果物に書き、計画では人の決定（decisions）または人の check を置く（ADR-0095 \
      付記 D-d）。\n\n"
+        .to_string()
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D4: subagent・別の LLM CLI / API を自分で起動しない
+/// （常に出る — context に関わらない。`claude-code` / `codex` / `acp` / `paperqa` の全 run に届く）。
+pub(crate) fn tool_launch_policy_note() -> String {
+    "## 道具の起動の制約 (no subagents, no other LLM CLIs)\n\
+     subagent・並列 agent・別の LLM の CLI（`claude`・`codex`・`opencode`・`gemini`・`aider` など）や LLM の API\
+     （`api.anthropic.com`・`api.openai.com` など）を自分で起動しない。並列化や分担、別の目で見る確認が要るなら、\
+     計画（execution plan の子 task / WorkUnit）、`delegate.json`、人への質問で行う。起動は検出されて event に\
+     記録され、レビュアーに渡る（ADR 2026-10-07-worker-no-subagents-no-llm-cli）。\n\n"
         .to_string()
 }
 

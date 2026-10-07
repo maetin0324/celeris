@@ -621,6 +621,77 @@ export const routingEstimatorShadowFixture = {
   unbound_requests: [],
 };
 
+// ADR 2026-10-06-model-role-assignments D4: 割り当て（人が決めた source × 役割 → model）。config 由来の値は configSlots で足す。
+export const modelAssignmentsFixture = [
+  {
+    source: "claude-oauth",
+    tier: "frontier",
+    model_id: "claude-opus-4",
+    state: "assigned",
+    excluded_reason: null,
+    note: "最上位は opus",
+    updated_at: "2026-10-06T00:00:00Z",
+    updated_by: "web",
+  },
+  {
+    source: "claude-oauth",
+    tier: "cheap",
+    model_id: "claude-haiku-3",
+    state: "excluded",
+    excluded_reason: "catalog:unavailable",
+    note: null,
+    updated_at: "2026-10-05T00:00:00Z",
+    updated_by: "web",
+  },
+];
+const ASSIGNMENT_CONFIG_SLOTS = {
+  "claude-oauth": { standard: "claude-sonnet-4" },
+  "openai-compatible:qwen": { cheap: "qwen3-coder" },
+};
+const ASSIGNMENT_SOURCES = ["claude-oauth", "opencode-go", "openai-compatible:qwen"];
+const ASSIGNMENT_TIERS = ["frontier", "standard", "cheap"];
+
+function assignmentTiersFor(ac, source, modelId) {
+  return ac.assignments
+    .filter((a) => a.source === source && a.model_id === modelId && a.state === "assigned")
+    .map((a) => a.tier);
+}
+
+function assignmentsView(ac) {
+  const effective = [];
+  for (const source of ASSIGNMENT_SOURCES)
+    for (const tier of ASSIGNMENT_TIERS) {
+      const members = ac.assignments.filter((x) => x.source === source && x.tier === tier);
+      const configured = ac.managedRoles?.includes(tier) ? null : ASSIGNMENT_CONFIG_SLOTS[source]?.[tier];
+      const values = members.length ? members : [{ model_id: configured ?? null, priority: 0 }];
+      for (const a of values) {
+        const row = ac.models.items.find((m) => m.source === source && m.model_id === a.model_id);
+        effective.push({
+          source,
+          tier,
+          model_id: a.model_id,
+          priority: a.priority ?? 0,
+          origin: members.length ? "assignment" : configured ? "config" : null,
+          excluded_reason: a.excluded_reason ?? null,
+          providers: a.model_id && source !== "openai-compatible:qwen" ? [`${source}-main`] : [],
+          proxy: source === "openai-compatible:qwen" && tier === "cheap",
+          available: row?.available ?? null,
+          last_seen: row?.last_seen ?? null,
+        });
+      }
+    }
+  return { items: ac.assignments.map((a) => ({ priority: 0, ...a })), effective };
+}
+
+function assignmentImpact(ac, source, tier, modelId) {
+  const current = assignmentsView(ac).effective.find((s) => s.source === source && s.tier === tier);
+  const before = current?.model_id ?? null;
+  const changes = [{ kind: "provider", id: `${source}-main`, tier, before, after: modelId, excluded_reason: null }];
+  if (source === "claude-oauth")
+    changes.push({ kind: "proxy", id: "claude", tier, before, after: modelId, excluded_reason: null });
+  return { changes };
+}
+
 // ADR 2026-10-06-opencode-go-and-model-catalog D1/D2/D5: GET /llm/models。source ごとの model・発見の結果・人の上書き。
 export const modelCatalogFixture = {
   items: [
@@ -2391,6 +2462,7 @@ export function createFakeDaemon({
             },
           ],
           models: structuredClone(modelCatalogFixture),
+          assignments: structuredClone(modelAssignmentsFixture),
           secrets: [],
           clusters: [
             {
@@ -2500,7 +2572,92 @@ export function createFakeDaemon({
         }
         if (parts[0] === "llm" && parts[1] === "models") {
           const nowIso = new Date().toISOString();
-          if (parts.length === 2 && req.method === "GET") return json(200, ac.models);
+          if (parts.length === 2 && req.method === "GET")
+            return json(200, {
+              ...ac.models,
+              items: ac.models.items.map((m) => ({
+                ...m,
+                assigned_tiers: assignmentTiersFor(ac, m.source, m.model_id),
+              })),
+            });
+          if (parts[2] === "assignments") {
+            const asg = ac.assignments;
+            if (parts.length === 3 && req.method === "GET") return json(200, assignmentsView(ac));
+            if (parts.length === 4 && parts[3] === "preview" && req.method === "POST")
+              return json(200, { impact: assignmentImpact(ac, input.source, input.tier, input.model_id ?? null) });
+            if (parts[3] === "roles" && ["PUT", "POST"].includes(req.method)) {
+              const tier = parts[4];
+              const before = assignmentsView(ac)
+                .effective.filter((s) => s.tier === tier && s.model_id)
+                .map(({ source, model_id, priority }) => ({ source, model_id, priority }));
+              const after = input.members;
+              const impact = {
+                changes: ASSIGNMENT_SOURCES.map((source) => ({
+                  kind: "provider",
+                  id: `${source}-main`,
+                  tier,
+                  before:
+                    before
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  after:
+                    after
+                      .filter((m) => m.source === source)
+                      .map((m) => m.model_id)
+                      .join(", ") || null,
+                  excluded_reason: null,
+                })),
+              };
+              if (req.method === "PUT") {
+                ac.assignments = ac.assignments.filter((a) => a.tier !== tier);
+                ac.assignments.push(
+                  ...after.map((m) => ({
+                    ...m,
+                    tier,
+                    state: "assigned",
+                    excluded_reason: null,
+                    note: null,
+                    updated_at: nowIso,
+                    updated_by: "web",
+                  })),
+                );
+                ac.managedRoles = [...new Set([...(ac.managedRoles ?? []), tier])];
+              }
+              return json(200, { before, after, impact });
+            }
+            if (parts.length === 5) {
+              const source = decodeURIComponent(parts[3]);
+              const tier = decodeURIComponent(parts[4]);
+              if (!["frontier", "standard", "cheap"].includes(tier)) return json(400, { error: "bad tier" });
+              const at = asg.findIndex((a) => a.source === source && a.tier === tier);
+              if (req.method === "PUT") {
+                if (!ac.models.items.some((m) => m.source === source && m.model_id === input.model_id))
+                  return json(400, { error: `model ${input.model_id} is not in the catalog` });
+                const impact = assignmentImpact(ac, source, tier, input.model_id);
+                const item = {
+                  source,
+                  tier,
+                  model_id: input.model_id,
+                  state: "assigned",
+                  excluded_reason: null,
+                  note: input.note ?? null,
+                  updated_at: nowIso,
+                  updated_by: "web",
+                };
+                if (at >= 0) asg[at] = item;
+                else asg.push(item);
+                return json(200, { item, impact });
+              }
+              if (req.method === "DELETE") {
+                if (at < 0) return json(404, { error: "not found" });
+                asg.splice(at, 1);
+                res.writeHead(204);
+                return res.end();
+              }
+            }
+            return json(404, { error: "not found" });
+          }
           if (parts.length === 3 && parts[2] === "discover" && req.method === "POST") {
             const sources = input.source ? [input.source] : ac.models.last_discovery.map((d) => d.source);
             const results = sources.map((source) => {

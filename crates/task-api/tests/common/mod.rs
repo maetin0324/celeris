@@ -53,6 +53,9 @@ pub struct EnvOptions {
     pub accounts_root: Option<PathBuf>,
     /// ADR-0025 D1: `[accounts] codex_dir`。`None` なら codex のプールは無し。
     pub codex_accounts_root: Option<PathBuf>,
+    pub opencode_accounts_root: Option<PathBuf>,
+    /// `config_view.providers` の末尾に足す provider 行。
+    pub extra_providers: Vec<task_api::types::ProviderConfigView>,
     pub max_runs_per_account: usize,
     /// ADR-0030 D1: `[secrets] dir`。`None` なら秘密の管理系は 409 `secrets_unavailable`。
     pub secrets_dir: Option<PathBuf>,
@@ -98,6 +101,8 @@ impl Default for EnvOptions {
             admin_tx: None,
             accounts_root: None,
             codex_accounts_root: None,
+            opencode_accounts_root: None,
+            extra_providers: Vec::new(),
             max_runs_per_account: 0,
             secrets_dir: None,
             secret_usage: std::collections::HashMap::new(),
@@ -322,7 +327,11 @@ pub fn settings(
         busy_timeout: Duration::from_millis(5000),
         background_checkpoint: false,
         view: view_context(workspace_root),
-        config_view: config_view(),
+        config_view: {
+            let mut view = config_view();
+            view.providers.extend(options.extra_providers);
+            view
+        },
         roles: options.roles,
         genres: options.genres,
         conversation_genre: options.conversation_genre,
@@ -336,6 +345,9 @@ pub fn settings(
             let mut roots = std::collections::HashMap::new();
             if let Some(dir) = options.accounts_root {
                 roots.insert(task_core::AccountAdapter::ClaudeCode, dir);
+            }
+            if let Some(dir) = options.opencode_accounts_root {
+                roots.insert(task_core::AccountAdapter::OpencodeGo, dir);
             }
             if let Some(dir) = options.codex_accounts_root {
                 roots.insert(task_core::AccountAdapter::Codex, dir);

@@ -279,6 +279,21 @@ impl EventSink for StoreSink {
         }
     }
 
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5/D6: 検出を `Event::WorkerPolicyViolation` に残す
+    /// （run は止めない。reviewer が `review_spawn` 経由で読む）。
+    fn policy_violation(&self, violation: &task_worker::tool_policy::ToolPolicyViolation) {
+        let ev = Event::WorkerPolicyViolation {
+            run_id: self.run_id.clone(),
+            kind: violation.kind,
+            tool: violation.tool.clone(),
+            matched: violation.matched.clone(),
+            command: violation.command.clone(),
+        };
+        if let Err(e) = self.store.append_event(self.task_id, &ev) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record tool policy violation");
+        }
+    }
+
     fn artifact(&self, artifact: &ArtifactRef) {
         let ev = Event::ArtifactProduced {
             run_id: self.run_id.clone(),
@@ -464,6 +479,21 @@ impl EventSink for ReviewerSink {
 
     fn artifact(&self, artifact: &ArtifactRef) {
         tracing::debug!(task_id = %self.task_id, review_run_id = %self.review_run_id, name = %artifact.name, "reviewer run artifact ignored");
+    }
+
+    /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: reviewer run の検出も同じ event に残す（`run_id` は
+    /// reviewer run の id。対象 run の判定材料には混ぜない — `review_spawn` は対象 run の id で絞る）。
+    fn policy_violation(&self, violation: &task_worker::tool_policy::ToolPolicyViolation) {
+        let ev = Event::WorkerPolicyViolation {
+            run_id: self.review_run_id.clone(),
+            kind: violation.kind,
+            tool: violation.tool.clone(),
+            matched: violation.matched.clone(),
+            command: violation.command.clone(),
+        };
+        if let Err(e) = self.store.append_event(self.task_id, &ev) {
+            tracing::warn!(task_id = %self.task_id, error = %e, "failed to record reviewer tool policy violation");
+        }
     }
 
     fn rate_limit(&self, obs: RateLimitObservation) {

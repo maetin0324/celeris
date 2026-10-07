@@ -263,6 +263,33 @@ export type ArtifactView = {
   "ts": string;
 };
 
+export type AssignmentList = {
+  "effective": Array<RoleSlotView>;
+  "items": Array<EffectiveAssignmentView>;
+};
+
+export type AssignmentPreviewBody = {
+  "model_id"?: string | null;
+  "source": string;
+  "tier": Tier;
+};
+
+export type AssignmentPreviewResponse = {
+  "impact": ImpactView;
+};
+
+export type AssignmentPutBody = {
+  "model_id": string;
+  "note"?: string | null;
+};
+
+export type AssignmentPutResponse = {
+  "impact": ImpactView;
+  "item": EffectiveAssignmentView;
+};
+
+export type AssignmentStateView = "assigned" | "excluded";
+
 export type AttentionItem = {
   "at": string;
   "class": FailureClass;
@@ -558,6 +585,8 @@ export type CatalogModelView = {
   "quality"?: Array<QualityIndex> | null;
   "revision": string;
 };
+
+export type CatalogSource = string;
 
 export type ChangeDiffView = {
   "diff": string;
@@ -1552,6 +1581,18 @@ export type EditResult = {
   "task": Task;
 };
 
+export type EffectiveAssignmentView = {
+  "excluded_reason"?: string | null;
+  "model_id": string;
+  "note"?: string | null;
+  "priority": number;
+  "source": string;
+  "state": AssignmentStateView;
+  "tier": Tier;
+  "updated_at": string;
+  "updated_by": string;
+};
+
 export type EffectiveProfile = {
   "allowed_tiers"?: Array<Tier>;
   "approvals"?: Array<string>;
@@ -1722,6 +1763,13 @@ export type Event = {
   "tool"?: string | null;
   "truncated"?: boolean;
   "type": "worker_progress";
+} | {
+  "command": string;
+  "kind": ToolPolicyKind;
+  "matched": string;
+  "run_id": string;
+  "tool": string;
+  "type": "worker_policy_violation";
 } | {
   "artifact": ArtifactRef;
   "run_id": string;
@@ -2099,6 +2147,13 @@ export type Event = {
   "source": string;
   "type": "model_catalog_changed";
 } | {
+  "actor": string;
+  "model_id"?: string | null;
+  "previous"?: string | null;
+  "source": string;
+  "tier": Tier;
+  "type": "model_role_assignment_changed";
+} | {
   "detail": string;
   "path"?: Array<DecisionPathEntry>;
   "reason"?: string;
@@ -2465,6 +2520,21 @@ export type HumanInboxView = {
   "suppressed": {
   [key: string]: number;
 };
+};
+
+export type ImpactChangeView = {
+  "after"?: string | null;
+  "before"?: string | null;
+  "excluded_reason"?: string | null;
+  "id": string;
+  "kind": ImpactKind;
+  "tier": string;
+};
+
+export type ImpactKind = "provider" | "proxy";
+
+export type ImpactView = {
+  "changes": Array<ImpactChangeView>;
 };
 
 export type InFlight = {
@@ -3036,6 +3106,7 @@ export type ModelBinding = {
 };
 
 export type ModelCatalogItem = {
+  "assigned_tiers": Array<Tier>;
   "available": boolean;
   "capabilities": unknown;
   "display_name"?: string | null;
@@ -4208,6 +4279,35 @@ export type RoleConfigView = {
   "tier"?: Tier | null;
 };
 
+export type RoleMember = {
+  "model_id": string;
+  "priority": number;
+  "source": CatalogSource;
+};
+
+export type RoleMembersBody = {
+  "members": Array<RoleMember>;
+};
+
+export type RoleMembersResponse = {
+  "after": Array<RoleMember>;
+  "before": Array<RoleMember>;
+  "impact": ImpactView;
+};
+
+export type RoleSlotView = {
+  "available"?: boolean | null;
+  "excluded_reason"?: string | null;
+  "last_seen"?: string | null;
+  "model_id"?: string | null;
+  "origin"?: SlotOrigin | null;
+  "priority": number;
+  "providers": Array<string>;
+  "proxy": boolean;
+  "source": string;
+  "tier": Tier;
+};
+
 export type RollupMetrics = {
   "busy_ms": number;
   "child_tasks_done": number;
@@ -4695,6 +4795,8 @@ export type SkillSummaryView = {
   "updated"?: string | null;
 };
 
+export type SlotOrigin = "assignment" | "config";
+
 export type SourceOrigin = "explicit" | "derived";
 
 export type StageHint = {
@@ -5100,6 +5202,8 @@ export type TokenPricing = {
   "output_usd_per_million"?: number | null;
   "provenance": string;
 };
+
+export type ToolPolicyKind = "subagent_tool" | "llm_cli" | "llm_api";
 
 export type TransitionResult = {
   "cascaded"?: Array<TaskRef>;

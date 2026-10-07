@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 67);
+    assert_eq!(EVENT_TYPES.len(), 69);
 }
 
 #[test]
@@ -344,5 +344,30 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 67);
+    assert_eq!(EVENT_TYPES.len(), 69);
+}
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・
+/// `event_type_name`・`EVENT_TYPES` で一致し、`kind` は snake_case で出る。
+#[test]
+fn worker_policy_violation_event_type_matches_its_serde_name() {
+    for kind in [
+        task_core::ToolPolicyKind::SubagentTool,
+        task_core::ToolPolicyKind::LlmCli,
+        task_core::ToolPolicyKind::LlmApi,
+    ] {
+        let event = Event::WorkerPolicyViolation {
+            run_id: "r".into(),
+            kind,
+            tool: "Bash".into(),
+            matched: "claude".into(),
+            command: "claude -p x".into(),
+        };
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert_eq!(serde_name, "worker_policy_violation");
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name));
+        assert_eq!(value["kind"].as_str().unwrap(), kind.as_str());
+    }
 }

@@ -10,46 +10,20 @@ import { Button } from "../../components/ui/button";
 import { Drawer } from "../../components/ui/drawer";
 import { Input } from "../../components/ui/input";
 import { Section } from "../../components/ui/panel";
-import { Select } from "../../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { formatAbsolute } from "../../lib/time";
 import { cn } from "../../lib/utils";
+import { ModelAssignmentsSection } from "./model-assignments";
+import { type LlmModel, type ModelOverride, type ModelTier, modelSourceLabel } from "./models-catalog";
 import { deniedMessage, isDenied } from "./providers-form";
 
-// GET /api/llm/models の形（ADR 2026-10-06 opencode-go と model catalog の D1/D2/D5）。
-export type ModelTier = "frontier" | "standard" | "cheap";
-export type ModelOverride = {
-  disabled: boolean;
-  tier: ModelTier | null;
-  alias: string | null;
-  note: string | null;
-};
-export type LlmModel = {
-  source: string;
-  model_id: string;
-  display_name: string | null;
-  available: boolean;
-  first_seen: string;
-  last_seen: string;
-  capabilities: Record<string, unknown>;
-  override: ModelOverride | null;
-  routing: { tiers: string[]; deployments: string[] };
-};
+export type { LlmModel, ModelOverride, ModelTier };
+export { modelSourceLabel };
+
 export type LlmDiscovery = { source: string; at: string; ok: boolean; error: string | null; count: number };
 export type LlmModelCatalog = { items: LlmModel[]; last_discovery: LlmDiscovery[] };
 
 type Sender = ReturnType<typeof useActionResult>;
-
-const TIER_CHOICES: readonly ModelTier[] = ["frontier", "standard", "cheap"];
-
-/** 供給元 id の表示名。未知の id はそのまま出す。 */
-export function modelSourceLabel(source: string): string {
-  if (source === "claude-oauth") return "Claude（subscription）";
-  if (source === "codex-oauth") return "Codex（subscription）";
-  if (source === "opencode-go") return "OpenCode Go（subscription）";
-  if (source.startsWith("openai-compatible:")) return `self-host ${source.slice("openai-compatible:".length)}`;
-  return source;
-}
 
 export type ModelState = { label: "利用可" | "消失" | "無効化"; tone: "success" | "neutral" | "warning" };
 
@@ -96,7 +70,6 @@ function OverrideForm({
   const ids = useId();
   const current = item.override;
   const [disabled, setDisabled] = useState(current?.disabled ?? false);
-  const [tier, setTier] = useState<string>(current?.tier ?? "");
   const [alias, setAlias] = useState(current?.alias ?? "");
   const [note, setNote] = useState(current?.note ?? "");
   const saveId = `override:${item.source}:${item.model_id}`;
@@ -117,7 +90,6 @@ function OverrideForm({
               method: "PUT",
               body: {
                 disabled,
-                tier: tier === "" ? null : tier,
                 alias: alias.trim() === "" ? null : alias.trim(),
                 note: note.trim() === "" ? null : note.trim(),
               },
@@ -132,19 +104,6 @@ function OverrideForm({
         <input type="checkbox" className="size-5" checked={disabled} onChange={(e) => setDisabled(e.target.checked)} />
         無効化（routing の対象から外す）
       </label>
-      <div className="min-w-0">
-        <label htmlFor={`${ids}-tier`} className="block text-label text-foreground">
-          tier を固定
-        </label>
-        <Select id={`${ids}-tier`} value={tier} onChange={(e) => setTier(e.target.value)}>
-          <option value="">なし</option>
-          {TIER_CHOICES.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </Select>
-      </div>
       <div className="min-w-0">
         <label htmlFor={`${ids}-alias`} className="block text-label text-foreground">
           別名（alias）
@@ -193,7 +152,7 @@ function OverrideCell({ item, sender, blocked }: { item: LlmModel; sender: Sende
         open={open}
         onOpenChange={setOpen}
         title={`上書き: ${item.model_id}`}
-        description={`${modelSourceLabel(item.source)} のモデルの無効化・tier の固定・別名を設定します。`}
+        description={`${modelSourceLabel(item.source)} のモデルの無効化・別名を設定します。`}
         trigger={
           <Button size="sm" aria-label={`上書きを編集 ${item.model_id}`}>
             {o ? "上書きを編集" : "上書き"}
@@ -210,7 +169,7 @@ function ModelRow({ item, sender, blocked }: { item: LlmModel; sender: Sender; b
   const state = modelState(item);
   const muted = state.label !== "利用可";
   const tiers = item.routing.tiers;
-  const fixed = item.override?.tier ?? null;
+  const assigned = item.assigned_tiers ?? [];
   return (
     <TableRow data-model-state={state.label} className={cn(muted && "text-muted-foreground")}>
       <TableCell className="break-all font-medium">{item.model_id}</TableCell>
@@ -221,12 +180,20 @@ function ModelRow({ item, sender, blocked }: { item: LlmModel; sender: Sender; b
       <TableCell className="whitespace-nowrap tabular-nums">{formatAbsolute(item.last_seen)}</TableCell>
       <TableCell className="min-w-0">
         <div className="flex min-w-0 flex-col gap-1">
-          {fixed && <span className="font-medium">固定 {fixed}</span>}
+          {assigned.length > 0 && (
+            <span className="flex flex-wrap gap-1" data-assigned-tiers>
+              {assigned.map((t) => (
+                <Badge key={t} tone="info">
+                  割り当て {t}
+                </Badge>
+              ))}
+            </span>
+          )}
           {tiers.length > 0 && <span>tier: {tiers.join(", ")}</span>}
           {item.routing.deployments.length > 0 && (
             <span className="break-all">deployment: {item.routing.deployments.join(", ")}</span>
           )}
-          {!fixed && tiers.length === 0 && item.routing.deployments.length === 0 && <span>-</span>}
+          {assigned.length === 0 && tiers.length === 0 && item.routing.deployments.length === 0 && <span>-</span>}
         </div>
       </TableCell>
       <TableCell>
@@ -321,7 +288,7 @@ export function ModelsScreen() {
       title="モデル"
       route="/models"
       breadcrumb={[{ label: "プロバイダ", link: { to: "/providers" } }, { label: "モデル" }]}
-      description="供給元（LLM source）が公開するモデルの一覧です。発見で最新にし、無効化・tier の固定・別名を上書きできます。"
+      description="供給元（LLM source）が公開するモデルの一覧です。発見で最新にし、無効化・別名を上書きできます。役割への割り当ては先頭の「役割の割り当て」で決めます。"
       actions={
         <Button
           variant="primary"
@@ -344,6 +311,7 @@ export function ModelsScreen() {
               </p>
             )}
             <ActionResultView result={sender.results["discover:all"]} />
+            <ModelAssignmentsSection models={query.data.items} />
             <ModelsView data={query.data} sender={sender} blocked={denied} />
           </div>
         )}

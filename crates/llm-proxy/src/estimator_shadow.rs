@@ -81,6 +81,9 @@ pub struct EstimatorShadowInput {
     pub candidates: Vec<ShadowCandidate>,
     pub primary: ShadowCandidate,
     pub prompt: Option<String>,
+    /// 付記「モデルごとの複数役割」: 要求時点の割り当てを写した catalog（legacy の正規化）。起動時の catalog に
+    /// 無い役割メンバーを候補に写せるよう、`extended_with` で重ねて使う。`None` なら起動時の catalog だけ。
+    pub catalog: Option<Arc<LegacyCatalog>>,
 }
 
 /// `submit` の結果（primary はこれを見るだけで sidecar を待たない）。
@@ -293,9 +296,10 @@ impl EstimatorShadow {
             return EstimatorSubmit::NotAdmitted(reason);
         }
         let shadow_id = format!("she_{}", ulid::Ulid::new());
-        let policy = lane_policy(&self.catalog, input.lane);
+        let catalog = self.catalog_for(&input);
+        let policy = lane_policy(&catalog, input.lane);
         let heuristic = kernel_choice(
-            &self.catalog,
+            &catalog,
             &policy,
             &input.context,
             &input.candidates,
@@ -310,15 +314,24 @@ impl EstimatorShadow {
         }
         let this = Arc::clone(self);
         tokio::spawn(async move {
-            this.run(shadow_id, input, policy, heuristic).await;
+            this.run(shadow_id, input, catalog, policy, heuristic).await;
         });
         EstimatorSubmit::Started
+    }
+
+    /// 起動時の catalog に要求時点の割り当て（`input.catalog`）を重ねたもの。
+    fn catalog_for(&self, input: &EstimatorShadowInput) -> Arc<LegacyCatalog> {
+        match &input.catalog {
+            Some(dynamic) => Arc::new(self.catalog.extended_with(dynamic)),
+            None => Arc::clone(&self.catalog),
+        }
     }
 
     async fn run(
         &self,
         shadow_id: String,
         input: EstimatorShadowInput,
+        catalog: Arc<LegacyCatalog>,
         policy: RoutingPolicy,
         heuristic: KernelChoice,
     ) {
@@ -383,7 +396,7 @@ impl EstimatorShadow {
                     },
                 );
                 let choice = kernel_choice(
-                    &self.catalog,
+                    &catalog,
                     &policy,
                     &input.context,
                     &input.candidates,

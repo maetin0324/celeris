@@ -444,6 +444,23 @@ export type Event =
       type: "worker_progress";
     }
   | {
+      /**
+       * 起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。
+       */
+      command: string;
+      kind: ToolPolicyKind;
+      /**
+       * 一致した語（道具名・CLI 名・API host）。
+       */
+      matched: string;
+      run_id: string;
+      /**
+       * 道具名（`Bash` / `command_execution` / `Agent` …）。
+       */
+      tool: string;
+      type: "worker_policy_violation";
+    }
+  | {
       artifact: ArtifactRef;
       run_id: string;
       type: "artifact_produced";
@@ -1030,6 +1047,14 @@ export type Event =
       type: "model_catalog_changed";
     }
   | {
+      actor: string;
+      model_id?: string | null;
+      previous?: string | null;
+      source: string;
+      tier: Tier;
+      type: "model_role_assignment_changed";
+    }
+  | {
       detail: string;
       /**
        * Phase R3b: 木の中の位置（root からこの節点まで。決定の要求の path と同じ形）。
@@ -1159,6 +1184,10 @@ export type WorkspaceMode = "worktree" | "shared";
  * run の役割（ADR-0014 D1）。`Event::WorkerStarted` / `WorkerFinished` の `role`。
  */
 export type RunRole = ("worker" | "reviewer") | "planner";
+/**
+ * ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。
+ */
+export type ToolPolicyKind = "subagent_tool" | "llm_cli" | "llm_api";
 /**
  * D7: `task_core::execution::RunEnd`（`WorkerFinished.end` に入れる）。
  */
@@ -1540,6 +1569,14 @@ export type McpScope =
  * 誰が言ったか（ADR-0033 D4）。`user` = 人、`node` = 組織のノード（その run の返事）。
  */
 export type MessageRole = "user" | "node";
+export type SlotOrigin = "assignment" | "config";
+export type AssignmentStateView = "assigned" | "excluded";
+export type ImpactKind = "provider" | "proxy";
+/**
+ * catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`
+ * （llm-proxy / routing の source 名と同じ）。
+ */
+export type CatalogSource = string;
 /**
  * 受け入れ条件 1 件の指定。現在の `celerisctl add` の `--accept`/`--check-cmd`/
  * `--check-artifact`/`--check-reviewer` に対応する。API の `POST /tasks` の `acceptance[]` でもある（`docs/api/v1/gui-api.md` §3.4）。
@@ -1886,11 +1923,18 @@ export interface ApiV1Schema {
   milestone_decided: MilestoneDecided;
   milestone_lifecycle: MilestoneLifecycle;
   milestone_patch: MilestonePatchBody;
+  model_assignment_list: AssignmentList;
+  model_assignment_preview: AssignmentPreviewBody;
+  model_assignment_preview_result: AssignmentPreviewResponse;
+  model_assignment_put: AssignmentPutBody;
+  model_assignment_put_result: AssignmentPutResponse;
   model_catalog: ModelCatalogView;
   model_catalog_item: ModelCatalogItem;
   model_catalog_override: ModelCatalogOverrideView;
   model_discover: DiscoverBody;
   model_discover_result: DiscoverResponse;
+  model_role_members: RoleMembersBody;
+  model_role_members_result: RoleMembersResponse;
   new_plan: NewPlanSpec;
   new_task: NewTaskBody;
   notification_read: NoticeReadResult;
@@ -7537,6 +7581,87 @@ export interface MilestoneLifecycle {
 export interface MilestonePatchBody {
   status: MilestoneStatus;
 }
+export interface AssignmentList {
+  effective: RoleSlotView[];
+  items: EffectiveAssignmentView[];
+}
+/**
+ * 1 つの `(source, tier)` の枠の実効。
+ */
+export interface RoleSlotView {
+  /**
+   * catalog に行があるときだけ。
+   */
+  available?: boolean | null;
+  excluded_reason?: string | null;
+  last_seen?: string | null;
+  model_id?: string | null;
+  origin?: SlotOrigin | null;
+  priority: number;
+  /**
+   * この枠を使う provider の id（昇順）。
+   */
+  providers: string[];
+  /**
+   * llm-proxy の lane がこの枠を使うか。
+   */
+  proxy: boolean;
+  source: string;
+  tier: Tier;
+}
+/**
+ * 割り当て 1 件（実効の状態つき）。
+ */
+export interface EffectiveAssignmentView {
+  /**
+   * `override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。
+   */
+  excluded_reason?: string | null;
+  model_id: string;
+  note?: string | null;
+  priority: number;
+  source: string;
+  state: AssignmentStateView;
+  tier: Tier;
+  /**
+   * RFC3339（UTC）。
+   */
+  updated_at: string;
+  updated_by: string;
+}
+/**
+ * `POST …/assignments/preview` の本文。`model_id` が `null`（省略）なら解除した場合の影響。
+ */
+export interface AssignmentPreviewBody {
+  model_id?: string | null;
+  source: string;
+  tier: Tier;
+}
+export interface AssignmentPreviewResponse {
+  impact: ImpactView;
+}
+export interface ImpactView {
+  changes: ImpactChangeView[];
+}
+export interface ImpactChangeView {
+  after?: string | null;
+  before?: string | null;
+  excluded_reason?: string | null;
+  id: string;
+  kind: ImpactKind;
+  tier: string;
+}
+/**
+ * `PUT …/assignments/{source}/{tier}` の本文。
+ */
+export interface AssignmentPutBody {
+  model_id: string;
+  note?: string | null;
+}
+export interface AssignmentPutResponse {
+  impact: ImpactView;
+  item: EffectiveAssignmentView;
+}
 /**
  * ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。
  */
@@ -7545,6 +7670,10 @@ export interface ModelCatalogView {
   last_discovery: DiscoveryRecordView[];
 }
 export interface ModelCatalogItem {
+  /**
+   * ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。
+   */
+  assigned_tiers: Tier[];
   available: boolean;
   capabilities: unknown;
   display_name?: string | null;
@@ -7624,6 +7753,25 @@ export interface CatalogDelta {
   removed: string[];
   restored: string[];
   source: string;
+}
+/**
+ * ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。
+ */
+export interface RoleMembersBody {
+  members: RoleMember[];
+}
+/**
+ * One model's membership in a role. Priority is global within that role.
+ */
+export interface RoleMember {
+  model_id: string;
+  priority: number;
+  source: CatalogSource;
+}
+export interface RoleMembersResponse {
+  after: RoleMember[];
+  before: RoleMember[];
+  impact: ImpactView;
 }
 /**
  * `celerisctl plan` から組み立てる新規 Plan タスクの指定。API の `POST /plans` の本文でもある（`docs/api/v1/gui-api.md` §3.14）。

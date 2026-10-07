@@ -3067,6 +3067,7 @@ mod integration_ready_race;
 mod planning_and_gate;
 mod provider_and_retry;
 mod review;
+mod role_assignments;
 mod routing_and_quota;
 mod routing_enforce;
 mod routing_shadow;

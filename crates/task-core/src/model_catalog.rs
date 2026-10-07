@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{TaskId, Tier};
 
+pub mod assignments;
+
 /// `Event::ModelCatalogChanged` を追記する疑似 task の id（nil ULID）。events は task ごとの列なので、
 /// task に属さない catalog の変化はこの 1 本に集める。実在の task とは衝突しない。
 pub fn catalog_event_task_id() -> TaskId {

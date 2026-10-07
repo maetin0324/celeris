@@ -4519,3 +4519,37 @@ fn coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy() {
             .is_err()
     );
 }
+
+/// ADR 2026-10-07-worker-no-subagents-no-llm-cli D7: `[adapters.<id>] subagents` は `deny`（既定・省略・未知の値）/
+/// `allow_cos` / `allow` に決定的に解決される。3 つの adapter で同じ。
+#[test]
+fn adapter_subagents_setting_resolves_deterministically_and_defaults_to_deny() {
+    use task_worker::tool_policy::SubagentPolicy;
+    let cfg: Config =
+        toml::from_str("[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n").unwrap();
+    assert_eq!(cfg.adapters.claude_code.subagents, "");
+    assert_eq!(
+        cfg.adapters.claude_code.resolved_subagents(),
+        SubagentPolicy::Deny
+    );
+    assert_eq!(
+        cfg.adapters.codex.resolved_subagents(),
+        SubagentPolicy::Deny
+    );
+    assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
+
+    let cfg: Config = toml::from_str(
+        "[[providers]]\nid = \"x\"\nadapter = \"claude-code\"\n\n[adapters.claude_code]\nsubagents = \"allow\"\n\n[adapters.codex]\nsubagents = \"allow_cos\"\n\n[adapters.acp]\nsubagents = \"whatever\"\n",
+    )
+    .unwrap();
+    assert!(cfg.validate().is_ok());
+    assert_eq!(
+        cfg.adapters.claude_code.resolved_subagents(),
+        SubagentPolicy::Allow
+    );
+    assert_eq!(
+        cfg.adapters.codex.resolved_subagents(),
+        SubagentPolicy::AllowCos
+    );
+    assert_eq!(cfg.adapters.acp.resolved_subagents(), SubagentPolicy::Deny);
+}

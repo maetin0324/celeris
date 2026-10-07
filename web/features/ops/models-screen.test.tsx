@@ -24,7 +24,11 @@ const model = (over: Partial<LlmModel>): LlmModel => ({
 
 const catalog: LlmModelCatalog = {
   items: [
-    model({ model_id: "glm-5", routing: { tiers: ["standard"], deployments: ["opencode-go/glm-5"] } }),
+    model({
+      model_id: "glm-5",
+      routing: { tiers: ["standard"], deployments: ["opencode-go/glm-5"] },
+      assigned_tiers: ["standard", "cheap"],
+    }),
     model({ model_id: "old-model", available: false, display_name: null }),
     model({ source: "claude-oauth", model_id: "claude-opus" }),
     model({
@@ -89,10 +93,12 @@ describe("ModelsView", () => {
     expect(out.match(/発見を実行/g)?.length).toBeGreaterThanOrEqual(3);
   });
 
-  it("消失した行は語で示し、固定 tier と routing を出す", () => {
+  it("消失した行は語で示し、割り当て済みの役割と routing を出す", () => {
     expect(out).toContain('data-model-state="消失"');
     expect(out).toContain("text-muted-foreground");
-    expect(out).toContain("固定 cheap");
+    expect(out).toContain("割り当て standard");
+    expect(out).toContain("割り当て cheap");
+    expect(out).not.toContain("tier を固定");
     expect(out).toContain("tier: standard");
     expect(out).toContain("deployment: opencode-go/glm-5");
     expect(out).toContain("最終確認");

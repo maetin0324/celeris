@@ -343,9 +343,10 @@ pub struct ProviderCreateBody {
     pub model: Option<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
-    /// ADR-0024 D2: 既定 `false`。`true` は `adapter = "claude-code"` かつ `[accounts]` があるときだけ有効。
+    /// ADR-0024 D2: 既定 `false`。`true` は `adapter = "claude-code"`/`"codex"` かつ `[accounts]` があるときだけ有効。
+    /// ADR 2026-10-06 D3: `"opencode-go"` のように pool 名を文字列で書ける（acp 行が opencode go の pool を使う）。
     #[serde(default)]
-    pub account_pool: bool,
+    pub account_pool: task_core::AccountPoolSetting,
 }
 
 impl ProviderCreateBody {
@@ -364,7 +365,7 @@ impl ProviderCreateBody {
             // ADR-0030 D2: 管理 API は env_from_secrets を書かない（`create` された行は必ず空。人が後から
             // ファイルへ足す）。
             env_from_secrets: self.credential_refs,
-            account_pool: self.account_pool.into(),
+            account_pool: self.account_pool,
             // ADR-0026 D7 / ADR-0027 D3: 管理 API は command/args/settings を書かない（`create` された行は
             // 必ず `None`。人が後からファイルへ足す）。
             command: None,
@@ -396,9 +397,9 @@ pub struct ProviderPatchBody {
     pub model: Option<String>,
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
-    /// ADR-0024 D2: 渡したときだけ上書き。
+    /// ADR-0024 D2: 渡したときだけ上書き（bool か pool 名の文字列）。
     #[serde(default)]
-    pub account_pool: Option<bool>,
+    pub account_pool: Option<task_core::AccountPoolSetting>,
 }
 
 impl ProviderPatchBody {
@@ -436,8 +437,11 @@ impl ProviderPatchBody {
         if let Some(account_pool) = self.account_pool {
             // 名前付き pool（"opencode-go"）の行を `true` で上書きしても名前は保つ。`false` は外す。
             file.account_pool = match (account_pool, file.account_pool) {
-                (true, named @ task_core::AccountPoolSetting::Adapter(_)) => named,
-                (on, _) => on.into(),
+                (
+                    task_core::AccountPoolSetting::On,
+                    named @ task_core::AccountPoolSetting::Adapter(_),
+                ) => named,
+                (setting, _) => setting,
             };
         }
         file

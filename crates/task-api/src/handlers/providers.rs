@@ -30,12 +30,12 @@ fn check_account_pool_adapter(
 ) -> Result<(), ApiProblem> {
     let Some(account_adapter) = pool.pool_adapter(adapter) else {
         return Err(ApiProblem::invalid_provider(
-            "account_pool = true requires adapter = \"claude-code\" or \"codex\"",
+            "account_pool = true requires adapter = \"claude-code\" or \"codex\" (name the pool, e.g. account_pool = \"opencode-go\", for other adapters)",
         ));
     };
     if !state.inner.accounts_roots.contains_key(&account_adapter) {
         return Err(ApiProblem::invalid_provider(format!(
-            "account_pool = true requires the [accounts] section to configure a root for adapter {adapter:?}"
+            "account_pool requires the [accounts] section to configure a root for {account_adapter} (adapter {adapter:?})"
         )));
     }
     Ok(())
@@ -95,7 +95,7 @@ async fn read_provider_json<T: DeserializeOwned>(
 
 /// ADR-0017 M4: `reload` 後は `config_view.providers`（起動時に固定）ではなく、次 tick のスナップショットに
 /// 乗った一覧を正とする（`Dispatcher::set_snapshot_providers` が更新する）。最初の tick 前だけ静的な値にフォールバックする。
-pub(super) fn current_providers(
+pub(crate) fn current_providers(
     state: &ApiState,
     snapshot: Option<&task_ops::daemon::DaemonSnapshot>,
 ) -> Vec<ProviderConfigView> {
@@ -210,8 +210,8 @@ pub(super) async fn create_provider(
     }
     // ADR-0024 D2 / ADR-0025 D1 / S1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` に
     // そのアダプタの根ディレクトリが設定済みのときだけ有効。
-    if create.account_pool {
-        check_account_pool_adapter(&state, create.account_pool.into(), &create.adapter)?;
+    if create.account_pool.is_on() {
+        check_account_pool_adapter(&state, create.account_pool, &create.adapter)?;
     }
     let path = crate::admin::provider_file_path(&dir, &create.id);
     if path.exists() {

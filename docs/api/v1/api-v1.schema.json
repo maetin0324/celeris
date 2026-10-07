@@ -1294,6 +1294,104 @@
       ],
       "type": "object"
     },
+    "AssignmentList": {
+      "properties": {
+        "effective": {
+          "items": {
+            "$ref": "#/$defs/RoleSlotView"
+          },
+          "type": "array"
+        },
+        "items": {
+          "items": {
+            "$ref": "#/$defs/EffectiveAssignmentView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items",
+        "effective"
+      ],
+      "type": "object"
+    },
+    "AssignmentPreviewBody": {
+      "additionalProperties": false,
+      "description": "`POST …/assignments/preview` の本文。`model_id` が `null`（省略）なら解除した場合の影響。",
+      "properties": {
+        "model_id": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "source",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "AssignmentPreviewResponse": {
+      "properties": {
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        }
+      },
+      "required": [
+        "impact"
+      ],
+      "type": "object"
+    },
+    "AssignmentPutBody": {
+      "additionalProperties": false,
+      "description": "`PUT …/assignments/{source}/{tier}` の本文。",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "note": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "model_id"
+      ],
+      "type": "object"
+    },
+    "AssignmentPutResponse": {
+      "properties": {
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        },
+        "item": {
+          "$ref": "#/$defs/EffectiveAssignmentView"
+        }
+      },
+      "required": [
+        "item",
+        "impact"
+      ],
+      "type": "object"
+    },
+    "AssignmentStateView": {
+      "enum": [
+        "assigned",
+        "excluded"
+      ],
+      "type": "string"
+    },
     "AttentionItem": {
       "oneOf": [
         {
@@ -2754,6 +2852,10 @@
         "context_limits"
       ],
       "type": "object"
+    },
+    "CatalogSource": {
+      "description": "catalog の source 名。`claude-oauth`・`codex-oauth`・`opencode-go`・`openai-compatible:<id>`\n（llm-proxy / routing の source 名と同じ）。",
+      "type": "string"
     },
     "ChangeDiffView": {
       "description": "`GET /tasks/{id}/changes/{repo}/diff?path=` の応答（ADR-0043 D5。200 KiB で切る）。",
@@ -7622,6 +7724,58 @@
       ],
       "type": "object"
     },
+    "EffectiveAssignmentView": {
+      "description": "割り当て 1 件（実効の状態つき）。",
+      "properties": {
+        "excluded_reason": {
+          "description": "`override:disabled` か `catalog:unavailable`（`state = excluded` のとき）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/AssignmentStateView"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        },
+        "updated_at": {
+          "description": "RFC3339（UTC）。",
+          "type": "string"
+        },
+        "updated_by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "tier",
+        "model_id",
+        "priority",
+        "state",
+        "updated_at",
+        "updated_by"
+      ],
+      "type": "object"
+    },
     "EffectiveProfile": {
       "description": "ADR-0046 D1: 根から葉まで merge した結果。前置き・matching・道具の受け渡しはこれだけを見る。",
       "properties": {
@@ -8578,6 +8732,42 @@
             "type",
             "run_id",
             "msg"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を\n使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない\n（警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。",
+          "properties": {
+            "command": {
+              "description": "起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ToolPolicyKind"
+            },
+            "matched": {
+              "description": "一致した語（道具名・CLI 名・API host）。",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "tool": {
+              "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "worker_policy_violation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "kind",
+            "tool",
+            "matched",
+            "command"
           ],
           "type": "object"
         },
@@ -10695,6 +10885,45 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。\n`model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。\n`catalog_event_task_id()` の疑似 task の列に追記する。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "model_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": {
+              "const": "model_role_assignment_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "tier",
+            "actor"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0079 D10: 木の節点が「走っている / 走れる / 名指しの待ち」のどれでもないまま\n`liveness_timeout_secs`（D10 の `stall_secs`）続いた。状態は変えない（Phase R3b で発行。同じ止まり方には\n1 回だけ）。",
           "properties": {
             "detail": {
@@ -12590,6 +12819,64 @@
         "items",
         "counts",
         "suppressed"
+      ],
+      "type": "object"
+    },
+    "ImpactChangeView": {
+      "properties": {
+        "after": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "excluded_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/ImpactKind"
+        },
+        "tier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "tier"
+      ],
+      "type": "object"
+    },
+    "ImpactKind": {
+      "enum": [
+        "provider",
+        "proxy"
+      ],
+      "type": "string"
+    },
+    "ImpactView": {
+      "properties": {
+        "changes": {
+          "items": {
+            "$ref": "#/$defs/ImpactChangeView"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "changes"
       ],
       "type": "object"
     },
@@ -15405,6 +15692,13 @@
     },
     "ModelCatalogItem": {
       "properties": {
+        "assigned_tiers": {
+          "description": "ADR 2026-10-06 model-role-assignments D4: このモデルが割り当てられている役割（tier）。",
+          "items": {
+            "$ref": "#/$defs/Tier"
+          },
+          "type": "array"
+        },
         "available": {
           "type": "boolean"
         },
@@ -15450,7 +15744,8 @@
         "first_seen",
         "last_seen",
         "capabilities",
-        "routing"
+        "routing",
+        "assigned_tiers"
       ],
       "type": "object"
     },
@@ -21438,6 +21733,140 @@
       ],
       "type": "object"
     },
+    "RoleMember": {
+      "additionalProperties": false,
+      "description": "One model's membership in a role. Priority is global within that role.",
+      "properties": {
+        "model_id": {
+          "type": "string"
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/CatalogSource"
+        }
+      },
+      "required": [
+        "source",
+        "model_id",
+        "priority"
+      ],
+      "type": "object"
+    },
+    "RoleMembersBody": {
+      "additionalProperties": false,
+      "description": "Complete membership of one role, in all sources. An empty list disables the role.",
+      "properties": {
+        "members": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "members"
+      ],
+      "type": "object"
+    },
+    "RoleMembersResponse": {
+      "properties": {
+        "after": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "before": {
+          "items": {
+            "$ref": "#/$defs/RoleMember"
+          },
+          "type": "array"
+        },
+        "impact": {
+          "$ref": "#/$defs/ImpactView"
+        }
+      },
+      "required": [
+        "before",
+        "after",
+        "impact"
+      ],
+      "type": "object"
+    },
+    "RoleSlotView": {
+      "description": "1 つの `(source, tier)` の枠の実効。",
+      "properties": {
+        "available": {
+          "description": "catalog に行があるときだけ。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "excluded_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_seen": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "model_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SlotOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "priority": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "providers": {
+          "description": "この枠を使う provider の id（昇順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "proxy": {
+          "description": "llm-proxy の lane がこの枠を使うか。",
+          "type": "boolean"
+        },
+        "source": {
+          "type": "string"
+        },
+        "tier": {
+          "$ref": "#/$defs/Tier"
+        }
+      },
+      "required": [
+        "source",
+        "tier",
+        "priority",
+        "providers",
+        "proxy"
+      ],
+      "type": "object"
+    },
     "RollupMetrics": {
       "description": "D11: 1 節点分（または subtree・深さ・案件の合計）の数。",
       "properties": {
@@ -24056,6 +24485,13 @@
       ],
       "type": "object"
     },
+    "SlotOrigin": {
+      "enum": [
+        "assignment",
+        "config"
+      ],
+      "type": "string"
+    },
     "SourceOrigin": {
       "enum": [
         "explicit",
@@ -26351,6 +26787,26 @@
       ],
       "type": "object"
     },
+    "ToolPolicyKind": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。",
+      "oneOf": [
+        {
+          "const": "subagent_tool",
+          "description": "subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。",
+          "type": "string"
+        },
+        {
+          "const": "llm_cli",
+          "description": "shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。",
+          "type": "string"
+        },
+        {
+          "const": "llm_api",
+          "description": "shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。",
+          "type": "string"
+        }
+      ]
+    },
     "TransitionResult": {
       "description": "状態変更の結果（承認・却下・回答・取り消し共通）。",
       "properties": {
@@ -27921,6 +28377,21 @@
     "milestone_patch": {
       "$ref": "#/$defs/MilestonePatchBody"
     },
+    "model_assignment_list": {
+      "$ref": "#/$defs/AssignmentList"
+    },
+    "model_assignment_preview": {
+      "$ref": "#/$defs/AssignmentPreviewBody"
+    },
+    "model_assignment_preview_result": {
+      "$ref": "#/$defs/AssignmentPreviewResponse"
+    },
+    "model_assignment_put": {
+      "$ref": "#/$defs/AssignmentPutBody"
+    },
+    "model_assignment_put_result": {
+      "$ref": "#/$defs/AssignmentPutResponse"
+    },
     "model_catalog": {
       "$ref": "#/$defs/ModelCatalogView",
       "description": "ADR 2026-10-06 D5: モデル catalog。`GET /llm/models`、上書きの本文（応答は 1 項目）、発見の本文と応答。"
@@ -27936,6 +28407,13 @@
     },
     "model_discover_result": {
       "$ref": "#/$defs/DiscoverResponse"
+    },
+    "model_role_members": {
+      "$ref": "#/$defs/RoleMembersBody",
+      "description": "ADR 2026-10-06 model-role-assignments D4: 割り当て（`GET`/`PUT`/`DELETE`/`preview` の本文と応答）。"
+    },
+    "model_role_members_result": {
+      "$ref": "#/$defs/RoleMembersResponse"
     },
     "new_plan": {
       "$ref": "#/$defs/NewPlanSpec"
@@ -28369,7 +28847,14 @@
     "model_catalog_item",
     "model_catalog_override",
     "model_discover",
-    "model_discover_result"
+    "model_discover_result",
+    "model_role_members",
+    "model_role_members_result",
+    "model_assignment_list",
+    "model_assignment_put",
+    "model_assignment_put_result",
+    "model_assignment_preview",
+    "model_assignment_preview_result"
   ],
   "title": "ApiV1Schema",
   "type": "object"

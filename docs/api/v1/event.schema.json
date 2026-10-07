@@ -2057,6 +2057,42 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: worker が subagent の道具・別の LLM CLI・LLM API を\n使おうとしたことの決定的な検出（adapter の進行の写像で見つける。LLM は関与しない）。run は止めない\n（警告）。reviewer に `ReviewRequest.policy_violations` として渡る（D6）。",
+          "properties": {
+            "command": {
+              "description": "起動しようとした command（500 文字で切る。subagent 道具なら入力の要約）。",
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/ToolPolicyKind"
+            },
+            "matched": {
+              "description": "一致した語（道具名・CLI 名・API host）。",
+              "type": "string"
+            },
+            "run_id": {
+              "type": "string"
+            },
+            "tool": {
+              "description": "道具名（`Bash` / `command_execution` / `Agent` …）。",
+              "type": "string"
+            },
+            "type": {
+              "const": "worker_policy_violation",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "run_id",
+            "kind",
+            "tool",
+            "matched",
+            "command"
+          ],
+          "type": "object"
+        },
+        {
           "properties": {
             "artifact": {
               "$ref": "#/$defs/ArtifactRef"
@@ -4166,6 +4202,45 @@
           "required": [
             "type",
             "source"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-06 model-role-assignments D1: source × 役割の割り当ての変更（設定・解除）。\n`model_id` は変更後（解除なら `None`）、`previous` は変更前（無ければ `None`）。`actor` は呼び手。\n`catalog_event_task_id()` の疑似 task の列に追記する。",
+          "properties": {
+            "actor": {
+              "type": "string"
+            },
+            "model_id": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "previous": {
+              "default": null,
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "tier": {
+              "$ref": "#/$defs/Tier"
+            },
+            "type": {
+              "const": "model_role_assignment_changed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "source",
+            "tier",
+            "actor"
           ],
           "type": "object"
         },
@@ -7400,6 +7475,26 @@
         {
           "const": "default",
           "description": "誰も明示していない（役割・分野・親・全体の既定）。lane は policy が決める。",
+          "type": "string"
+        }
+      ]
+    },
+    "ToolPolicyKind": {
+      "description": "ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `Event::WorkerPolicyViolation.kind`。",
+      "oneOf": [
+        {
+          "const": "subagent_tool",
+          "description": "subagent を起こす道具そのもの（`Agent` / `Task` / `Workflow` / opencode の `task` / codex の `spawn_agent`）。",
+          "type": "string"
+        },
+        {
+          "const": "llm_cli",
+          "description": "shell から別の LLM CLI（`claude` / `codex` / `opencode` / `gemini` …）を起動した。",
+          "type": "string"
+        },
+        {
+          "const": "llm_api",
+          "description": "shell から LLM の API（`api.anthropic.com` …）を直接呼んだ。",
           "type": "string"
         }
       ]

@@ -47,6 +47,8 @@ pub mod routing;
 pub mod scratch;
 /// ADR-0122 D1: `celerisctl skills import <dir>`（repo の skill を KB へ。DB を開かない）。
 pub mod skills;
+/// ADR 2026-10-07-build-tmp-hygiene D1.4: `celerisctl target sweep`。DB は開かない。
+pub mod target_sweep;
 pub mod worker;
 /// ADR-0066 D2（Phase 110b）: `celerisctl workspace prune`。
 pub mod workspace;

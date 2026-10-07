@@ -742,6 +742,50 @@ async fn cos_chat_run_launch_fake_progress_credential_and_session() {
 }
 
 #[tokio::test]
+async fn cos_chat_run_launch_sets_api_url_env_and_path() {
+    let command = vec![
+        "sh".into(),
+        "-c".into(),
+        "cat >/dev/null; printf '%s' \"$CELERIS_API_URL\" > .api-url-for-test; \
+         printf '%s' \"$PATH\" > .path-for-test; \
+         printf '%s\\n' '{\"type\":\"done\",\"summary\":\"done\",\"evidence\":[]}'"
+            .into(),
+    ];
+    let (dir, store, mut d) = fixture(command, 2);
+    let t = thread(&store, "env");
+    post(&store, &t, "one");
+    d.tick_cos_chat_launch();
+    join(&mut d, &t).await;
+    let workspace = dir.path().join("cos/threads").join(&t).join("workspace");
+    let api_url = std::fs::read_to_string(workspace.join(".api-url-for-test")).expect("api url");
+    assert_eq!(api_url, "http://127.0.0.1:7700/api/v1");
+    let path = std::fs::read_to_string(workspace.join(".path-for-test")).expect("path");
+    let exe_dir = std::env::current_exe()
+        .expect("exe")
+        .parent()
+        .expect("exe dir")
+        .to_path_buf();
+    let entries: Vec<_> = std::env::split_paths(&path).collect();
+    assert_eq!(entries.first(), Some(&exe_dir), "PATH={path}");
+    assert_eq!(entries.iter().filter(|p| **p == exe_dir).count(), 1);
+    // The inherited PATH stays behind it, so `sh` and the harness CLIs still resolve.
+    assert!(entries.len() > 1, "PATH={path}");
+
+    // No `[api] listen`: no CELERIS_API_URL; the prompt's own explanation applies.
+    let env = crate::dispatcher::cos_chat::launch::cos_run_env("", "celeris-cos-run.x");
+    assert!(env.iter().all(|(k, _)| k != "CELERIS_API_URL"));
+    assert!(
+        env.iter()
+            .any(|(k, v)| k == "CELERIS_COS_RUN_CREDENTIAL" && v == "celeris-cos-run.x")
+    );
+    let already = crate::dispatcher::cos_chat::launch::path_with_first(
+        Some(std::path::Path::new("/rel/bin")),
+        Some("/rel/bin:/usr/bin:/rel/bin".into()),
+    );
+    assert_eq!(already.as_deref(), Some("/rel/bin:/usr/bin"));
+}
+
+#[tokio::test]
 async fn cos_chat_run_launch_two_threads_fifo_and_capacity() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 1);
     let a = thread(&store, "a");

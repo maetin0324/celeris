@@ -54,10 +54,19 @@ pub(crate) fn credential() -> Option<String> {
     std::env::var(CREDENTIAL_ENV).ok().filter(|s| !s.is_empty())
 }
 
+/// The daemon puts its own API base here for CoS chat and triage runs.
+pub(crate) const API_URL_ENV: &str = "CELERIS_API_URL";
+
+/// API base: `--api-url` > `CELERIS_API_URL` > `[api] listen` of `CELERIS_CONFIG`.
 pub(crate) fn api_config(api_url: Option<&str>) -> Result<ApiConfig, CliError> {
-    if let Some(url) = api_url {
+    let from_env = std::env::var(API_URL_ENV).ok().filter(|s| !s.is_empty());
+    let chosen = match api_url {
+        Some(url) => Some((url.to_owned(), "--api-url")),
+        None => from_env.map(|url| (url, API_URL_ENV)),
+    };
+    if let Some((url, source)) = chosen {
         if !url.trim_end_matches('/').ends_with("/api/v1") {
-            return Err(CliError::msg("--api-url must end in /api/v1"));
+            return Err(CliError::msg(format!("{source} must end in /api/v1")));
         }
         return Ok(ApiConfig {
             base_url: url.trim_end_matches('/').to_string(),

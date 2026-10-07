@@ -20,8 +20,8 @@ fn stub(dir: &Path, name: &str, body: &str) -> String {
 fn fixture(
     harness: &str,
     adapter: Arc<dyn WorkerAdapter>,
-) -> (tempfile::TempDir, Arc<SqliteStore>, Dispatcher, String) {
-    let dir = tempfile::tempdir().expect("tempdir");
+) -> (crate::test_support::WritableTempDir, Arc<SqliteStore>, Dispatcher, String) {
+    let dir = crate::test_support::WritableTempDir::new();
     let db_path = dir.path().join("chat.sqlite");
     let store = Arc::new(SqliteStore::open(&db_path).expect("store"));
     let mut d = dispatcher_with_adapter_id(store.clone(), adapter, 2, true, harness);
@@ -164,7 +164,7 @@ cat > "$dest.input"
 find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"thinking","summary":"checking"},{"type":"text","text":"hello"},{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"hello"}'
 "#;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::WritableTempDir::new();
     let command = stub(dir.path(), "claude.sh", script);
     let adapter = Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig {
         command,
@@ -215,7 +215,7 @@ cat > "$dest.input"
 find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
 printf '%s\n' '{"type":"thread.started","thread_id":"thread-cos-1"}' '{"type":"item.completed","item":{"id":"s","type":"todo_list","text":"checking"}}' '{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"hello"}}' '{"type":"item.started","item":{"id":"t","type":"command_execution","command":"pwd"}}' '{"type":"item.completed","item":{"id":"t","type":"command_execution","command":"pwd","aggregated_output":"ok","exit_code":0}}' '{"type":"turn.completed","usage":{"input_tokens":3,"output_tokens":4}}'
 "#;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::WritableTempDir::new();
     let command = stub(dir.path(), "codex.sh", script);
     let adapter = Arc::new(CodexAdapter::new(CodexConfig {
         command,
@@ -271,7 +271,7 @@ printf '%s\n' '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"s
 find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
 printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{"stopReason":"end_turn"}}'
 "#;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::WritableTempDir::new();
     let command = stub(dir.path(), "acp.sh", script);
     let adapter = Arc::new(AcpAdapter::new(AcpConfig {
         command,
@@ -338,7 +338,7 @@ async fn cos_chat_harness_e2e_claude_without_result_json_completes() {
 cat > /dev/null
 printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"確認します"},{"type":"tool_use","name":"Bash","input":{"command":"pwd"}}]}}' '{"type":"user","message":{"content":[{"type":"tool_result","content":"ok"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"了解しました"}'
 "#;
-    let dir = tempfile::tempdir().unwrap();
+    let dir = crate::test_support::WritableTempDir::new();
     let command = stub(dir.path(), "claude.sh", script);
     let adapter = Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig {
         command,

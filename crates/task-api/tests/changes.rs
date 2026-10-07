@@ -110,10 +110,9 @@ exit 1
 
 /// 偽の `gh` を使う環境（`gh auth status` はいつも成功するので、`gh` の有無の記憶が
 /// テストの順番に左右されない）。
-fn env_with_gh() -> (TestEnv, PathBuf) {
+fn env_with_gh() -> (TestEnv, tempfile::TempDir) {
     let bin = tempfile::tempdir().expect("tempdir");
     let gh = fake_gh(bin.path());
-    let dir = bin.keep();
     let env = TestEnv::with(EnvOptions {
         token: Some(TOKEN.into()),
         github: task_api::GithubSettings {
@@ -123,7 +122,7 @@ fn env_with_gh() -> (TestEnv, PathBuf) {
         ..EnvOptions::default()
     });
     task_ops::changes::forget_gh_auth();
-    (env, dir)
+    (env, bin)
 }
 
 /// git のリポジトリ（`main` に 1 コミット）と、そのタスクの worktree（ブランチに 1 コミット）と
@@ -619,7 +618,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     // 本当に push された（bare リポジトリにブランチが立っている）。
     assert!(branch_exists(&origin, &branch), "push されていない");
     // `gh pr create` の引数に題名と base が入っている。
-    let calls = std::fs::read_to_string(bin.join("calls.log")).unwrap_or_default();
+    let calls = std::fs::read_to_string(bin.path().join("calls.log")).unwrap_or_default();
     assert!(calls.contains("pr create --base main --head"), "{calls}");
 
     // 画面を開いたら同期する（まだ OPEN なので何も変わらない）。
@@ -642,7 +641,7 @@ async fn a_pull_request_is_pushed_created_refreshed_and_merged_with_a_fake_gh() 
     assert_eq!(merged.status.as_u16(), 200, "{}", merged.text());
     assert_eq!(merged.json()["integration"]["state"], "merged");
     assert!(merged.json()["integration"]["merged_at"].is_string());
-    let log = std::fs::read_to_string(bin.join("merged.log")).unwrap_or_default();
+    let log = std::fs::read_to_string(bin.path().join("merged.log")).unwrap_or_default();
     assert!(log.contains("pr merge 42 --merge --delete-branch"), "{log}");
     // merge されたら worktree とローカルのブランチを片付ける（ADR-0043 D5）。
     assert!(!tree.exists());

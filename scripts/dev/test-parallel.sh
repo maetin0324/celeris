@@ -48,7 +48,13 @@ jobs_default=$((ncpu / 3))
 jobs="${CELERIS_TEST_JOBS:-$jobs_default}"
 
 logdir="$(mktemp -d "${TMPDIR:-/tmp}/celeris-test-parallel.XXXXXX")"
-trap 'rm -rf "$logdir"' EXIT
+# 読み取り専用にした試験の残骸でも消せるよう権限を戻してから消す。後片付けの失敗は警告だけで exit code を変えない。
+cleanup_logdir() {
+  chmod -R u+w "$logdir" 2>/dev/null || true
+  rm -rf "$logdir" 2>/dev/null || echo "test-parallel: warning: could not remove $logdir" >&2
+  return 0
+}
+trap cleanup_logdir EXIT
 # 試験の一時 dir は $logdir/tmp に閉じ込め、上の trap で残った物ごと消す（ADR 2026-10-07-build-tmp-hygiene D3）
 mkdir -p "$logdir/tmp"
 export TMPDIR="$logdir/tmp"

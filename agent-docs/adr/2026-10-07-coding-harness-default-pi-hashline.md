@@ -216,9 +216,11 @@ leaf family / pi-adapter / dispatch / ops-docs の統合後（branch tip `a2ca31
 - task-dispatch（`coding_harness_default`、crates/task-dispatch/src/dispatcher/tests/coding_harness_default.rs、12）: `claude_row_prefers_claude_code`、`gpt_openai_prefers_pi`、`opencode_go_prefers_pi`、`deepseek_prefers_pi`、`unknown_provider_prefers_pi`、`falls_back_when_pi_unavailable`（満杯・cooldown・pi 行なしの 3 種）、`provider_order_policy_unchanged`、`cheap_local_qwen_pi_first`、`pi_adapter_id_matches_worker`、`records_adapter_in_metrics`（tick 実行 → `WorkerStarted.adapter == "pi"` → routing audit）、`explicit_adapter_wins`、`other_harness_unchanged`。
 - celeris（`coding_harness_default` 2 + `pi_adapter` 3）: `coding_harness_default_config_builds_dispatcher_inputs`・`coding_harness_default_config_rejects_fixed_adapter_and_unknown_policy`、`pi_adapter_provider_config_loads_and_builds_with_relative_extension`・`pi_adapter_config_rejects_missing_hashline_and_tools_on_other_adapters`・`pi_adapter_config_preserves_go_pool_and_direct_compatible_source`。
 
-### 検証（close-out、統合後の branch tip で）
+### 検証（close-out、統合後の branch tip `d0bf8b63` で再実行、2026-10-07）
 
-- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 4225 passed / 0 failed / 14 ignored + doctest）。
+- `corepack pnpm install --offline` → exit 0（pnpm v12.6.0）。
+- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 4225 passed / 0 failed / 13 skipped + doctest。CELERIS_TEST_SUMMARY は ignored 14）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all --check` → 差分なし。
 - web: `corepack pnpm@12.6.0 -C web typecheck` → exit 0。gui: `corepack pnpm@11.27.0 typecheck`（gui を cwd に）→ exit 0。生成型は optional 欄の追加（`coding_default`）だけ。
+- `git diff --check` と `git diff --quiet "$CELERIS_WU_BASE" -- crates/ gui/` → exit 0。
 - 本番の導入・有効化・実 Pi/実 LLM での確認は人の手順（`docs/ops/coding-harness-pi-hashline.md`）。

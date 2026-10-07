@@ -17,11 +17,13 @@ leaf 別の進捗は `2026-10-07-coding-harness-default-pi-hashline/`（survey /
 - 明示 adapter は従来どおり最優先。fallback / retry / cooldown / account pool / cheap lane の Qwen 優先は変更なし（preferred が全滅したら従来の候補へ倒れる）。
 - run 単位の routing 監査に `coding_default { family, family_basis, adapter_choice }`（`RoutingAudit.coding_default`）を足し、(model, harness) 別での success / token / cache-hit / cost の比較に使う（見方は `docs/ops/coding-harness-pi-hashline.md` §5）。execution metrics（task 単位）には足していない（ADR「metrics 整合」）。
 
-## 証拠（統合後の branch tip `a2ca31ad` で実行、2026-10-07）
+## 証拠（統合後の branch tip `d0bf8b63` で実行、2026-10-07）
 
-- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 4225 passed / 0 failed / 14 ignored + doctest、140 binaries）。
+- `corepack pnpm install --offline` → exit 0（Already up to date、pnpm v12.6.0）。
+- `bash scripts/dev/test-parallel.sh` → exit 0（nextest 4225 passed / 0 failed / 13 skipped + doctest。summary は ignored 14、140 binaries）。
 - `cargo clippy --workspace -- -D warnings` → exit 0。`cargo fmt --all --check` → 差分なし。
-- 試験: `coding_harness_default`（task-core 12 / task-dispatch 12 / celeris 2）、`pi_adapter`（task-worker 14）。必須 6 ケース（Claude→claude-code、GPT/OpenAI→pi、OpenCode Go→pi、DeepSeek→pi、未知→pi、明示指定の尊重）と回帰（provider_order 不変・other harness 不変・fallback）を覆盖。
+- `git diff --check` → exit 0。`git diff --quiet "$CELERIS_WU_BASE" -- crates/ gui/` → exit 0（対象外差分なし）。
+- 試験: `coding_harness_default`（task-core 10 / task-dispatch 12 / celeris 2）、`pi_adapter`（task-worker 14）。必須 6 ケース（Claude→claude-code、GPT/OpenAI→pi、OpenCode Go→pi、DeepSeek→pi、未知→pi、明示指定の尊重）と回帰（provider_order 不変・other harness 不変・fallback）を検証。
 - 生成型の typecheck（worktree で `pnpm install --offline` の後）:
   - web: `corepack pnpm@12.6.0 -C web typecheck`（`tsc -b`）→ exit 0。
   - gui: `corepack pnpm@11.27.0 typecheck`（gui を cwd に、`react-router typegen && tsc -b`）→ exit 0。

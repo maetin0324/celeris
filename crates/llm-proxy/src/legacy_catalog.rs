@@ -30,6 +30,43 @@ impl LegacyCatalog {
             .iter()
             .find(|d| d.source_ref == source_ref && d.allowed_lanes.contains(&tier))
     }
+
+    /// 付記「モデルごとの複数役割」: 起動時の catalog に、要求時点の割り当て（`normalize_legacy_config_with`）
+    /// から **無い** model profile と deployment（同じ `source_ref`・`upstream_model`・lane が無いもの）を足した
+    /// 写し。policy・既存の行は `self` のまま（起動時の品質・制約を保つ）。estimator shadow が役割の全メンバーを
+    /// 候補に写せるようにするためのもので、`self` は変えない。
+    pub fn extended_with(&self, dynamic: &LegacyCatalog) -> LegacyCatalog {
+        let mut out = self.clone();
+        for d in &dynamic.deployments {
+            let covered = out.deployments.iter().any(|e| {
+                e.source_ref == d.source_ref
+                    && e.upstream_model == d.upstream_model
+                    && d.allowed_lanes.iter().all(|l| e.allowed_lanes.contains(l))
+            });
+            if covered {
+                continue;
+            }
+            let mut dep = d.clone();
+            if out.deployments.iter().any(|e| e.id == dep.id) {
+                dep.id = format!("{}/dynamic", dep.id);
+            }
+            out.deployments.push(dep);
+        }
+        for m in &dynamic.models {
+            if out.models.iter().any(|e| e.id == m.id) {
+                continue;
+            }
+            // 起動時の同じ family の profile から context 上限・capabilities・価格を継ぐ（品質は継がない）。
+            let mut model = m.clone();
+            if let Some(base) = self.models.iter().find(|e| e.family == m.family) {
+                model.context_limits = base.context_limits.clone();
+                model.capabilities = base.capabilities.clone();
+                model.pricing = base.pricing.clone();
+            }
+            out.models.push(model);
+        }
+        out
+    }
 }
 
 /// Derive model, deployment and policy values from the existing proxy config.
@@ -356,6 +393,59 @@ mod tests {
                 "model_role_assignments: deployment legacy:openai-compatible:relay-a:Cheap excluded (override:disabled)",
             ]
         );
+    }
+
+    #[test]
+    fn extended_with_adds_missing_members_and_inherits_family_limits() {
+        let c = config();
+        let mut startup = normalize_legacy_config(&c);
+        for m in &mut startup.models {
+            if m.family == "qwen" {
+                m.context_limits = ContextLimits {
+                    input: Some(1000),
+                    output: Some(100),
+                    total: Some(1100),
+                };
+            }
+        }
+        let v = view(&[
+            (
+                "openai-compatible:relay-a",
+                Tier::Cheap,
+                "m1",
+                AssignmentState::Assigned,
+            ),
+            (
+                "openai-compatible:relay-a",
+                Tier::Cheap,
+                "m2",
+                AssignmentState::Assigned,
+            ),
+        ]);
+        let dynamic = normalize_legacy_config_with(&c, &v);
+        let got = startup.extended_with(&dynamic);
+        // 起動時の行・policy はそのまま、無いメンバーだけ足す（id の衝突は `/dynamic`）。
+        assert_eq!(got.policies, startup.policies);
+        assert!(got.deployments.len() == startup.deployments.len() + 2);
+        let m1 = got
+            .deployments
+            .iter()
+            .find(|d| d.source_ref == "openai-compatible:relay-a" && d.upstream_model == "m1")
+            .unwrap();
+        assert_eq!(m1.id, "legacy:openai-compatible:relay-a:Cheap/dynamic");
+        assert!(
+            got.deployments
+                .iter()
+                .any(|d| d.source_ref == "openai-compatible:relay-a" && d.upstream_model == "m2")
+        );
+        let model = got
+            .models
+            .iter()
+            .find(|m| m.id == "legacy:qwen:m2")
+            .unwrap();
+        assert_eq!(model.context_limits.input, Some(1000));
+        // 同じ写しをもう一度重ねても増えない。
+        assert_eq!(got.extended_with(&dynamic), got);
     }
 
     #[test]

@@ -105,6 +105,17 @@ migration `0054_model_role_memberships.sql` は旧割り当ての model・メモ
 
 legacy は利用可能な membership を優先度順に選ぶ。account の認証・枠・cooldown・同時実行数は既存の source / account 単位の判定を使う。同じ subscription 内の複数モデルが枠を共有するため、その account の枯渇時は同じ account の別モデルを試さず次の利用可能な source / account に進む。proxy の要求内で 401 / 429 を受けた account も、同じ要求の残りのモデル候補から除く。
 
-shadow / enforce へは先頭 1 件に縮めず役割の全モデルを渡す。routing catalog の各 deployment はモデルごとに分け、provider / pool の容量管理は source 側で共有する。推定器による順位づけを優先し、membership の priority は legacy の選択順と推定不能・同点時の決定的な順序に用いる。この配線の完了状況は進捗文書に記録する。
+shadow / enforce へは先頭 1 件に縮めず役割の全モデルを渡す。routing catalog の各 deployment はモデルごとに分け、provider / pool の容量管理は source 側で共有する。推定器による順位づけを優先し、membership の priority は legacy の選択順と推定不能・同点時の決定的な順序に用いる。
+
+### 付記: shadow / enforce の配線（2026-10-07、attempt 2）
+
+- **候補の identity と容量の identity を分ける。** dispatcher の候補行（`legacy_provider_profiles`）は割り当て由来のメンバーごとに `deployment.id = <provider>/model:<model_id>`、`resource_group_id = <provider>` を持ち、`LegacyProfile.provider_id` が設定行（容量・account・cooldown・満杯の判定）を指す。config 由来の行は従来どおり `deployment.id = <provider>`。enforce の除外（制約・quota）と `allowlist` は provider で引く（`eligible_provider_ids = [provider]`）。
+- **kernel の選択（`dispatcher/routing_members.rs`）。** 選んだ provider の役割メンバー（同じ source 状態を共有）を task-core の `optimize` に Shadow mode の lane policy と `HeuristicEstimator` で掛ける（dispatcher は input tokens を知らないので Enforce mode の `context_unknown` 除外は当てない）。品質は daemon が差し込む routing catalog の model profile（`RoutingModelProfiles`。共有 snapshot `routing_catalog_state` の `models`）から、同じ id か `…:<wire>` の profile を引く。`ranked` が空（品質 unknown・min_quality 未満）なら membership の priority 順。
+  - **enforce**: `enforce_check_source` を通った直後に順位づけし、kernel の先頭を run の lane 束縛に差し替えて実行する（`rebind_lane_model`）。`RoutingTraceV1` は全メンバーを別候補として持ち、`score` / `quality` / `fallback_order`（選んだ provider のメンバーは kernel の順）と `estimator_version`（`heuristic-1` = 品質で決めた、`heuristic` = priority 順）を残す。
+  - **shadow**: primary は legacy（priority 順の先頭）のまま。`decision_shadow_round` は同じ順位づけで候補 policy の選択を決め、`DecisionShadowComparison.candidates[].provider_id`（版 1 に追加、既定は空）と `candidate_model` / `differences = ["model"]` に出す。同じ provider のメンバーは source 状態の除外をまとめて受ける。
+  - **legacy**: 変更なし（`apply_to_bindings` の priority 順の先頭）。
+- **llm-proxy の estimator shadow。** `EstimatorShadowInput.catalog` に要求時点の割り当てを写した legacy catalog（`normalize_legacy_config_with`）を渡し、起動時の catalog に `LegacyCatalog::extended_with` で重ねる（無い deployment・model profile だけ足す。policy と既存行は起動時のまま。足した model profile は同じ family の起動時 profile から context 上限・capabilities・価格を継ぐ）。これで起動後に役割へ足したメンバーも sidecar へ全件送られ、kernel の選択（`candidate_model`）が記録される。primary（legacy の優先度順）は変えない。
+- **proxy の legacy fallback。** 候補列は priority 順にメンバー × account を並べ、同じ要求の中で 401 / 429 を受けた account は残りのモデル候補からも外す（`rejected_accounts`）。
+- 試験: `task-dispatch` `role_assignments::{enforce_executes_the_kernel_choice_among_role_members_and_falls_back_by_priority, shadow_records_the_kernel_choice_among_role_members}`、`llm-proxy` `tests/estimator_shadow.rs::routing_estimator_shadow_scores_every_role_member_from_the_request_time_catalog`、`tests/proxy_fallback.rs::routing_proxy_role_members_skip_an_account_rejected_in_the_same_request`、`legacy_catalog::tests::extended_with_adds_missing_members_and_inherits_family_limits`。完了状況は [進捗](../progress/2026-10-07-model-role-memberships.md)。
 
 web `/models` の主操作は全 source のモデルを横断した一覧とし、各行に 3 役割の独立した checkbox と priority 入力を置く。役割別表示では上へ / 下へボタンで順位を変更する。検索・source / 状態の絞り込み、保存前の影響確認、設定の破棄を備える。opencode go の provider 追加は既存の API とボタンを使い、`adapter=acp, llm_source=opencode_go, account_pool=opencode-go` を指定する。shell / navigation は変更しない。

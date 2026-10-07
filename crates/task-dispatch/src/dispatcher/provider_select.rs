@@ -90,6 +90,8 @@ pub fn provider_failure_outcome(e: &AdapterError) -> Option<ProviderOutcome> {
 
 /// 設定行を正規化した 1 候補（`proxy_routed` は `llm_source` を持つ行）。
 pub(super) struct LegacyProfile {
+    /// 容量・account・cooldown の identity（設定行の id）。候補の identity は `deployment.id`。
+    pub provider_id: ProviderId,
     pub model: ModelProfile,
     pub deployment: DeploymentProfile,
     pub proxy_routed: bool,
@@ -236,7 +238,7 @@ impl Dispatcher {
                 model: &p.model,
                 deployment: &p.deployment,
                 state: None,
-                eligible_provider_ids: vec![p.deployment.id.clone()],
+                eligible_provider_ids: vec![p.provider_id.clone()],
                 cost_usd: None,
                 latency_ms: None,
                 pressure: None,
@@ -357,11 +359,15 @@ impl Dispatcher {
                     model.id = wire.clone();
                     model.provenance = "model_role_assignments".into();
                     let mut deployment = deployment.clone();
+                    // 候補の identity はモデルごとに分け、容量の identity（provider）は共有する。
+                    deployment.id = format!("{}/model:{}", spec.id, member.model_id);
+                    deployment.resource_group_id = Some(spec.id.clone());
                     deployment.model_profile_id = wire.clone();
                     deployment.upstream_model = wire;
                     deployment.config_order = member.priority as usize;
                     deployment.allowed_lanes = vec![hint.tier];
                     profiles.push(LegacyProfile {
+                        provider_id: spec.id.clone(),
                         model,
                         deployment,
                         proxy_routed,
@@ -369,6 +375,7 @@ impl Dispatcher {
                 }
             } else {
                 profiles.push(LegacyProfile {
+                    provider_id: spec.id.clone(),
                     model,
                     deployment,
                     proxy_routed,
@@ -551,7 +558,7 @@ impl Dispatcher {
         let priority = |id: &str| {
             profiles
                 .iter()
-                .position(|p| p.deployment.id == id)
+                .position(|p| p.provider_id == id)
                 .unwrap_or(usize::MAX)
         };
         let prefer_local = prefer_local && !ranked_role;

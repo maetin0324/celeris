@@ -119,6 +119,7 @@ mod review_spawn;
 mod review_verdict;
 mod routing_context;
 mod routing_enforce;
+mod routing_members;
 mod routing_shadow;
 mod run_context;
 mod sinks;
@@ -148,6 +149,10 @@ pub use provider_select::provider_failure_outcome;
 pub use routing_enforce::{
     DispatchRoutingSettings, EnforceSource, SelfHostLoad, constraint_exclusions,
     enforce_quota_verdict, source_state_for_provider, source_state_from_account,
+};
+pub use routing_members::{
+    MEMBER_RANKING_ESTIMATOR, MEMBER_RANKING_PRIORITY, MemberRanking, RoutingModelProfiles,
+    StaticModelProfiles,
 };
 pub use routing_shadow::{
     DECISION_SHADOW_COMPARISON_VERSION, DECISION_SHADOW_POLICY_VERSION, DecisionShadowCandidate,
@@ -1279,6 +1284,8 @@ pub struct Dispatcher {
     /// ADR 2026-10-06 model-role-assignments D2: DB の `source × 役割 → model` の割り当てを読む口。
     /// 無ければ（試験・celerisctl）従来どおり config の `tier_models` だけで解決する。
     role_assignments: Option<Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>>,
+    /// 付記「モデルごとの複数役割」: routing catalog の model profile（品質）を読む口。無ければ品質 unknown。
+    routing_model_profiles: Option<Arc<dyn RoutingModelProfiles>>,
     /// ADR-0132 付記 L4: ローカルの行の health 検査（既定は `task_worker::probe_models`。テストは
     /// `set_local_provider_probe` で差し替える）。**LLM は呼ばない**。
     local_probe: LocalProviderProbe,
@@ -1525,6 +1532,7 @@ impl Dispatcher {
             knowledge_probe_cache: HashMap::new(),
             local_providers: Vec::new(),
             role_assignments: None,
+            routing_model_profiles: None,
             local_probe: Arc::new(|base_url, bearer_token| {
                 task_worker::probe_models(base_url, task_worker::PROBE_TIMEOUT, bearer_token)
             }),

@@ -319,6 +319,13 @@ impl ProxyState {
                 .map(|c| c.as_text())
                 .unwrap_or_default()
         });
+        // 付記「モデルごとの複数役割」: 要求時点の割り当てを写した catalog を重ねる（reader が無ければ起動時のまま）。
+        let catalog = self.role_assignments.as_ref().map(|_| {
+            Arc::new(crate::legacy_catalog::normalize_legacy_config_with(
+                &self.config,
+                &self.assignment_view(),
+            ))
+        });
         let outcome = estimator.submit(EstimatorShadowInput {
             primary_decision_id: routing.decision_id.clone(),
             task_id: routing.task_id().map(str::to_owned),
@@ -330,6 +337,7 @@ impl ProxyState {
             candidates: candidates.to_vec(),
             primary: primary.clone(),
             prompt,
+            catalog,
         });
         tracing::debug!(?outcome, "llm-proxy: estimator shadow submitted");
     }

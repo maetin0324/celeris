@@ -2,10 +2,15 @@
 //! `Excluded` の lane は provider を候補から外して次の provider へ落とす。reader が無ければ従来どおり。
 //! 外部ネットワークには出ない。
 use super::*;
+use crate::dispatcher::{DecisionShadowComparison, DispatchRoutingSettings, StaticModelProfiles};
 use task_core::Tier;
 use task_core::model_catalog::CatalogSource;
 use task_core::model_catalog::assignments::{
     AssignmentState, AssignmentView, EffectiveAssignment, StaticAssignments,
+};
+use task_core::model_router::policy::RoutingMode;
+use task_core::model_router::profiles::{
+    Capabilities, ContextLimits, ModelProfile, QualityIndex, Support,
 };
 use task_core::model_routing::{ModelBinding, ProviderCandidateOutcome};
 
@@ -245,10 +250,12 @@ async fn assignment_beats_config_tier_models() {
     assert_eq!(s.account.as_deref(), Some("a"));
     // 候補の model identity も実効 bindings（割り当て）に従う。
     let profiles = d.legacy_provider_profiles(&hint(Tier::Frontier, None));
-    let p1 = profiles.iter().find(|p| p.deployment.id == "p1").unwrap();
+    let p1 = profiles.iter().find(|p| p.provider_id == "p1").unwrap();
     assert_eq!(p1.model.id, "claude-assigned");
     assert_eq!(p1.model.provenance, "model_role_assignments");
-    let p2 = profiles.iter().find(|p| p.deployment.id == "p2").unwrap();
+    assert_eq!(p1.deployment.id, "p1/model:claude-assigned");
+    let p2 = profiles.iter().find(|p| p.provider_id == "p2").unwrap();
+    assert_eq!(p2.deployment.id, "p2");
     assert_eq!(p2.model.id, "p2-frontier-id");
     assert_eq!(p2.model.provenance, "providers.tier_models");
     let trace = d
@@ -605,16 +612,25 @@ async fn role_members_priority_all_candidates_and_opencode_execution() {
     let profiles = d.legacy_provider_profiles(&hint(Tier::Cheap, None));
     let candidates: Vec<_> = profiles
         .iter()
-        .filter(|p| p.deployment.id == "og")
+        .filter(|p| p.provider_id == "og")
         .map(|p| p.model.id.as_str())
         .collect();
     assert_eq!(candidates, ["opencode-go/preferred", "opencode-go/second"]);
+    // 候補の identity はモデルごと、容量の identity は provider。
+    assert_eq!(
+        profiles
+            .iter()
+            .filter(|p| p.provider_id == "og")
+            .map(|p| p.deployment.id.as_str())
+            .collect::<Vec<_>>(),
+        ["og/model:preferred", "og/model:second"]
+    );
     let round = d.enforce_round(&hint(Tier::Cheap, None));
     assert_eq!(
         round
             .candidates
             .iter()
-            .filter(|c| c.deployment_id == "og")
+            .filter(|c| c.eligible_provider_ids == ["og"])
             .count(),
         2
     );
@@ -647,6 +663,203 @@ async fn role_members_priority_all_candidates_and_opencode_execution() {
         d.effective_lane_model("og", Tier::Cheap)
             .unwrap()
             .as_deref(),
+        Some("opencode-go/second")
+    );
+}
+
+fn model_profile(id: &str, quality: f64) -> ModelProfile {
+    ModelProfile {
+        id: id.into(),
+        revision: "r".into(),
+        family: "f".into(),
+        capabilities: Capabilities {
+            tools: Support::Unknown,
+            structured_output: Support::Unknown,
+            vision: Support::Unknown,
+            streaming: Support::Unknown,
+            reasoning_efforts: vec![],
+        },
+        context_limits: ContextLimits {
+            input: None,
+            output: None,
+            total: None,
+        },
+        quality: vec![QualityIndex {
+            domain: "general".into(),
+            index: quality,
+            evaluation_version: "v1".into(),
+            samples: None,
+            provenance: "test".into(),
+        }],
+        pricing: None,
+        provenance: "test".into(),
+    }
+}
+
+fn cheap_members() -> AssignmentView {
+    let mut preferred = item(
+        "opencode-go",
+        Tier::Cheap,
+        "preferred",
+        AssignmentState::Assigned,
+    );
+    preferred.priority = 1;
+    let mut second = item(
+        "opencode-go",
+        Tier::Cheap,
+        "second",
+        AssignmentState::Assigned,
+    );
+    second.priority = 2;
+    let mut other = item(
+        "openai-compatible:p2",
+        Tier::Cheap,
+        "p2-cheap-id",
+        AssignmentState::Assigned,
+    );
+    other.priority = 20;
+    view(vec![second, preferred, other])
+}
+
+/// 付記「モデルごとの複数役割」: enforce は役割の全メンバーを候補にし、kernel（品質推定）の選択を実行モデルに
+/// する。品質が unknown なら priority 順。account が枯れたら次の source へ（同じ account の別モデルは試さない）。
+#[tokio::test]
+async fn enforce_executes_the_kernel_choice_among_role_members_and_falls_back_by_priority() {
+    let accounts = opencode_accounts();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut d = opencode_dispatcher(store.clone(), &accounts, cheap_members());
+    d.set_dispatch_routing(DispatchRoutingSettings {
+        mode: RoutingMode::Enforce,
+        ..Default::default()
+    });
+
+    // 1) 品質 unknown: priority 順の先頭（preferred）。trace は 2 メンバーを別候補として残す。
+    let ws = tempfile::tempdir().unwrap();
+    let t1 = insert_task(&store, ws.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    assert_eq!(started(&store, t1).unwrap().model, "opencode-go/preferred");
+    let trace = routing_record(&store.events_for(t1).unwrap())
+        .and_then(|r| r.optimizer)
+        .expect("enforce trace");
+    assert_eq!(trace.mode, RoutingMode::Enforce);
+    assert_eq!(trace.model.as_deref(), Some("opencode-go/preferred"));
+    assert_eq!(trace.estimator_version, "heuristic");
+    let og: Vec<_> = trace
+        .candidates
+        .iter()
+        .filter(|c| c.eligible_provider_ids == ["og"])
+        .map(|c| c.deployment_id.as_str())
+        .collect();
+    assert_eq!(og, ["og/model:preferred", "og/model:second"]);
+    assert_eq!(
+        &trace.fallback_order[..2],
+        ["og/model:preferred", "og/model:second"]
+    );
+    assert!(
+        trace
+            .reasons
+            .iter()
+            .any(|r| r.contains("ranked by priority"))
+    );
+
+    // 2) catalog の品質で second が上回る: kernel の選択（second）で run が起きる。
+    d.set_routing_model_profiles(Arc::new(StaticModelProfiles(vec![
+        model_profile("opencode-go/second", 0.9),
+        model_profile("opencode-go/preferred", 0.5),
+    ])));
+    let ws2 = tempfile::tempdir().unwrap();
+    let t2 = insert_task(&store, ws2.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    assert_eq!(started(&store, t2).unwrap().model, "opencode-go/second");
+    let trace = routing_record(&store.events_for(t2).unwrap())
+        .and_then(|r| r.optimizer)
+        .expect("enforce trace");
+    assert_eq!(trace.model.as_deref(), Some("opencode-go/second"));
+    assert_eq!(trace.estimator_version, "heuristic-1");
+    assert_eq!(
+        &trace.fallback_order[..2],
+        ["og/model:second", "og/model:preferred"]
+    );
+    let second = trace
+        .candidates
+        .iter()
+        .find(|c| c.deployment_id == "og/model:second")
+        .unwrap();
+    let preferred = trace
+        .candidates
+        .iter()
+        .find(|c| c.deployment_id == "og/model:preferred")
+        .unwrap();
+    assert!(second.score.unwrap() > preferred.score.unwrap());
+    assert!(second.excluded_reasons.is_empty() && preferred.excluded_reasons.is_empty());
+
+    // 3) account が枯れたら同じ account の別モデルは試さず、次の source（p2）へ。
+    d.record_account_failure(
+        AccountAdapter::OpencodeGo,
+        "a",
+        "exhausted",
+        &ProviderOutcome::Exhausted,
+    );
+    let ws3 = tempfile::tempdir().unwrap();
+    let t3 = insert_task(&store, ws3.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    let s = started(&store, t3).unwrap();
+    assert_eq!(s.provider.as_deref(), Some("p2"));
+    assert_eq!(s.model, "p2-cheap-id");
+}
+
+/// 付記「モデルごとの複数役割」: shadow は primary（legacy = priority 順）を変えず、役割の全メンバーを候補に
+/// kernel の選択を記録する（モデルの差が `differences` に出る）。
+#[tokio::test]
+async fn shadow_records_the_kernel_choice_among_role_members() {
+    let accounts = opencode_accounts();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut d = opencode_dispatcher(store.clone(), &accounts, cheap_members());
+    d.set_dispatch_routing(DispatchRoutingSettings {
+        mode: RoutingMode::Shadow,
+        ..Default::default()
+    });
+    d.set_routing_model_profiles(Arc::new(StaticModelProfiles(vec![
+        model_profile("opencode-go/second", 0.9),
+        model_profile("opencode-go/preferred", 0.5),
+    ])));
+    let ws = tempfile::tempdir().unwrap();
+    let t = insert_task(&store, ws.path(), Tier::Cheap);
+    assert!(run_until_idle(&mut d, 200).await.idle);
+    // primary は legacy のまま（priority 順の先頭）。
+    assert_eq!(started(&store, t).unwrap().model, "opencode-go/preferred");
+    let shadow = store
+        .events_for(t)
+        .unwrap()
+        .iter()
+        .find_map(|(_, e)| match e {
+            Event::RoutingShadowRecorded { record } => Some((**record).clone()),
+            _ => None,
+        })
+        .expect("decision shadow recorded");
+    let cmp: DecisionShadowComparison =
+        serde_json::from_str(shadow.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(cmp.primary_source, "og");
+    assert_eq!(cmp.primary_model, "opencode-go/preferred");
+    assert_eq!(cmp.candidate_source.as_deref(), Some("og"));
+    assert_eq!(cmp.candidate_model.as_deref(), Some("opencode-go/second"));
+    assert_eq!(cmp.differences, ["model"]);
+    let og: Vec<_> = cmp
+        .candidates
+        .iter()
+        .filter(|c| c.provider_id == "og")
+        .collect();
+    assert_eq!(og.len(), 2);
+    assert!(
+        og.iter()
+            .any(|c| c.deployment_id == "og/model:second" && c.selected)
+    );
+    assert!(
+        og.iter()
+            .any(|c| c.deployment_id == "og/model:preferred" && c.primary)
+    );
+    assert_eq!(
+        shadow.candidate_model.as_deref(),
         Some("opencode-go/second")
     );
 }

@@ -487,6 +487,25 @@ impl Dispatcher {
                 match self.enforce_check_source(task.worker_hint.tier, &state) {
                     Ok(reason) => {
                         round.observed_at = state.observed_at.clone();
+                        // 付記「モデルごとの複数役割」: 役割のメンバーが複数なら kernel の選択を実行モデルにする。
+                        let profiles = self.legacy_provider_profiles(&task.worker_hint);
+                        let ranking = self.rank_role_members(
+                            task.worker_hint.tier,
+                            &provider_id,
+                            &profiles,
+                            Some(&state),
+                        );
+                        let adapter = match &ranking.chosen {
+                            Some(model) => self.rebind_lane_model(
+                                &provider_id,
+                                adapter,
+                                task.worker_hint.tier,
+                                model,
+                                &self.current_assignment_view(),
+                            ),
+                            None => adapter,
+                        };
+                        round.member_ranking = ranking;
                         break (
                             adapter_id,
                             provider_id,

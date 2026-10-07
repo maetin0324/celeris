@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use axum::body::Body;
 use axum::extract::State as AxumState;
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -19,6 +19,7 @@ use llm_proxy::reservation::Clock;
 use llm_proxy::{ProxyState, router};
 use serde_json::{Value, json};
 use task_core::SharedRole;
+use task_core::Tier;
 use task_dispatch::accounts::AccountBook;
 use time::OffsetDateTime;
 use time::macros::datetime;
@@ -189,7 +190,7 @@ fn write_claude_credentials(dir: &std::path::Path, account_id: &str) {
     std::fs::create_dir_all(&account_dir).expect("mkdir");
     let expires = (OffsetDateTime::now_utc().unix_timestamp() + 3600) * 1000;
     let value = json!({"claudeAiOauth": {
-        "accessToken": "fake-access", "refreshToken": "fake-refresh", "expiresAt": expires,
+        "accessToken": format!("fake-access-{account_id}"), "refreshToken": "fake-refresh", "expiresAt": expires,
         "scopes": ["user:inference"], "subscriptionType": "max",
     }});
     std::fs::write(
@@ -209,6 +210,16 @@ async fn spawn_proxy(
     claude: Option<(SocketAddr, &std::path::Path)>,
     settings: FallbackSettings,
     clock: Arc<ManualClock>,
+) -> Proxy {
+    spawn_proxy_with(relays, claude, settings, clock, None).await
+}
+
+async fn spawn_proxy_with(
+    relays: &[(&str, SocketAddr)],
+    claude: Option<(SocketAddr, &std::path::Path)>,
+    settings: FallbackSettings,
+    clock: Arc<ManualClock>,
+    assignments: Option<task_core::model_catalog::assignments::AssignmentView>,
 ) -> Proxy {
     let mut config = LlmProxyConfig {
         prefer_free: true,
@@ -244,7 +255,12 @@ async fn spawn_proxy(
         None,
         std::time::Duration::from_secs(5),
     )
-    .with_fallback(settings, clock);
+    .with_fallback(settings, clock)
+    .with_role_assignments(assignments.map(|view| {
+        Arc::new(task_core::model_catalog::assignments::StaticAssignments(
+            view,
+        )) as Arc<dyn task_core::model_catalog::assignments::RoleAssignmentReader>
+    }));
     let addr = spawn(router(state.clone())).await;
     Proxy { addr, state }
 }
@@ -468,4 +484,110 @@ async fn routing_proxy_fallback_preserves_constraints_and_stream_boundary() {
         Some("20")
     );
     assert_eq!(o1.hits(), 1);
+}
+
+/// 付記「モデルごとの複数役割」: 役割に同じ source のモデルが複数あるとき（claude-oauth cheap = m1, m2）、
+/// 候補は priority 順（m1 を全 account、次に m2）。同じ要求の中で 429 を受けた account は残りのモデル候補からも
+/// 外し、次の account へ進む。全 account が 429 なら m2 は一度も送らずに 429 を返す。
+#[tokio::test]
+async fn routing_proxy_role_members_skip_an_account_rejected_in_the_same_request() {
+    use task_core::model_catalog::CatalogSource;
+    use task_core::model_catalog::assignments::{
+        AssignmentState, AssignmentView, EffectiveAssignment,
+    };
+    type Seen = Arc<StdMutex<Vec<(String, String)>>>;
+    #[derive(Clone)]
+    struct Fake {
+        seen: Seen,
+        reject_all: Arc<std::sync::atomic::AtomicBool>,
+    }
+    async fn claude_by_account(
+        AxumState(fake): AxumState<Fake>,
+        headers: HeaderMap,
+        Json(body): Json<Value>,
+    ) -> axum::response::Response {
+        let auth = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        let model = body["model"].as_str().unwrap_or_default().to_string();
+        fake.seen
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((auth.clone(), model));
+        if fake.reject_all.load(Ordering::SeqCst) || auth.ends_with("acct-a") {
+            (StatusCode::TOO_MANY_REQUESTS, [(header::RETRY_AFTER, "30")]).into_response()
+        } else {
+            Json(json!({
+                "id": "msg_ok",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1}
+            }))
+            .into_response()
+        }
+    }
+    let fake = Fake {
+        seen: Arc::new(StdMutex::new(Vec::new())),
+        reject_all: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    };
+    let app = Router::new()
+        .route("/v1/messages", post(claude_by_account))
+        .with_state(fake.clone());
+    let claude_addr = spawn(app).await;
+    let accounts = tempfile::tempdir().expect("tmp");
+    write_claude_credentials(accounts.path(), "acct-a");
+    write_claude_credentials(accounts.path(), "acct-b");
+    let members = AssignmentView {
+        managed: Vec::new(),
+        items: ["m1", "m2"]
+            .iter()
+            .enumerate()
+            .map(|(i, m)| EffectiveAssignment {
+                priority: i as u32,
+                source: CatalogSource::new("claude-oauth"),
+                tier: Tier::Cheap,
+                model_id: (*m).to_string(),
+                state: AssignmentState::Assigned,
+                note: None,
+                updated_at: 1,
+                updated_by: "admin".into(),
+            })
+            .collect(),
+    };
+    let proxy = spawn_proxy_with(
+        &[],
+        Some((claude_addr, accounts.path())),
+        no_breaker(),
+        manual_clock(),
+        Some(members),
+    )
+    .await;
+
+    // 1) acct-a が 429: acct-a の m2 は試さず acct-b の m1 で成功する。
+    let resp = post_chat(proxy.addr, "claude/cheap", false).await;
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(source_of(&resp).as_deref(), Some("claude-oauth"));
+    let seen = fake.seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert_eq!(
+        seen,
+        [
+            ("Bearer fake-access-acct-a".to_string(), "m1".to_string()),
+            ("Bearer fake-access-acct-b".to_string(), "m1".to_string()),
+        ]
+    );
+
+    // 2) 全 account が 429: m1 を両 account で試した後、m2 は一度も送らずに 429 を返す。
+    fake.seen.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    fake.reject_all.store(true, Ordering::SeqCst);
+    // acct-a は 1) で cooldown に入っているので、この要求は acct-b から始まる。
+    let resp = post_chat(proxy.addr, "claude/cheap", false).await;
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    let seen = fake.seen.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    assert!(
+        seen.iter().all(|(_, model)| model == "m1"),
+        "m2 must not be sent to an account that rejected m1: {seen:?}"
+    );
+    assert!(!seen.is_empty());
 }

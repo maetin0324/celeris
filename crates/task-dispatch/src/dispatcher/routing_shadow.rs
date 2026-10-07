@@ -29,6 +29,9 @@ pub const DECISION_SHADOW_POLICY_VERSION: &str = "dispatch-enforce-heuristic-v1"
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DecisionShadowCandidate {
     pub deployment_id: String,
+    /// 容量・account の identity（設定行の id）。複数役割の候補は `deployment_id` がモデルごとに分かれる。
+    #[serde(default)]
+    pub provider_id: String,
     pub model_profile_id: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub excluded_reasons: Vec<String>,
@@ -153,15 +156,24 @@ impl Dispatcher {
         now: Instant,
     ) -> DecisionShadowRound {
         let round = self.enforce_round(hint);
+        let profiles = self.legacy_provider_profiles(hint);
         let mut candidates: Vec<DecisionShadowCandidate> = round
             .candidates
             .iter()
             .map(|c| DecisionShadowCandidate {
                 deployment_id: c.deployment_id.clone(),
+                provider_id: c
+                    .eligible_provider_ids
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| c.deployment_id.clone()),
                 model_profile_id: c.model_profile_id.clone(),
                 excluded_reasons: c.excluded_reasons.clone(),
                 selected: false,
-                primary: c.deployment_id == primary_provider
+                primary: c
+                    .eligible_provider_ids
+                    .iter()
+                    .any(|p| p == primary_provider)
                     && self
                         .effective_lane_model(primary_provider, hint.tier)
                         .ok()
@@ -177,7 +189,7 @@ impl Dispatcher {
             )>,
         > = Vec::with_capacity(candidates.len());
         for c in &mut candidates {
-            let id = c.deployment_id.clone();
+            let id = c.provider_id.clone();
             if !c.excluded_reasons.is_empty() {
                 states.push(None);
                 continue;
@@ -236,7 +248,7 @@ impl Dispatcher {
                 .then(|| {
                     self.local_providers.iter().find_map(|l| {
                         (0..candidates.len()).filter(eligible).find(|i| {
-                            candidates[*i].deployment_id == l.provider
+                            candidates[*i].provider_id == l.provider
                                 && !self.account_pool_providers.contains(&l.provider)
                         })
                     })
@@ -246,7 +258,7 @@ impl Dispatcher {
                 .filter(eligible)
                 .filter(|i| {
                     self.account_pool_providers
-                        .contains(&candidates[*i].deployment_id)
+                        .contains(&candidates[*i].provider_id)
                 })
                 .map(|i| {
                     let score = states[i]
@@ -254,10 +266,10 @@ impl Dispatcher {
                         .and_then(|(acct, _)| {
                             let adapter = self
                                 .policy
-                                .adapter_of(&candidates[i].deployment_id)
+                                .adapter_of(&candidates[i].provider_id)
                                 .as_deref()
                                 .and_then(|row| {
-                                    self.pool_adapter_of(&candidates[i].deployment_id, row)
+                                    self.pool_adapter_of(&candidates[i].provider_id, row)
                                 })?;
                             Some(self.account_score(adapter, acct.as_deref()?))
                         })
@@ -279,19 +291,38 @@ impl Dispatcher {
             let Some((_, state)) = states[i].as_ref() else {
                 break;
             };
+            let provider = candidates[i].provider_id.clone();
             match self.enforce_check_source(hint.tier, state) {
                 Ok(_) => {
-                    candidates[i].selected = true;
+                    // 付記「モデルごとの複数役割」: 同じ provider のメンバーは kernel の順位で 1 つに決める。
+                    let ranking =
+                        self.rank_role_members(hint.tier, &provider, &profiles, Some(state));
+                    let chosen = ranking
+                        .chosen_deployment
+                        .as_ref()
+                        .and_then(|id| {
+                            (0..candidates.len())
+                                .filter(eligible)
+                                .find(|j| candidates[*j].deployment_id == *id)
+                        })
+                        .unwrap_or(i);
+                    candidates[chosen].selected = true;
                     break;
                 }
                 Err((codes, detail)) => {
-                    candidates[i]
-                        .excluded_reasons
-                        .extend(codes.iter().map(|s| (*s).to_string()));
-                    if let Some(d) = detail {
-                        candidates[i].excluded_reasons.push(format!("detail:{d}"));
+                    // 同じ provider（同じ source 状態）のメンバーはまとめて外す。
+                    for j in 0..candidates.len() {
+                        if candidates[j].provider_id != provider || states[j].is_none() {
+                            continue;
+                        }
+                        candidates[j]
+                            .excluded_reasons
+                            .extend(codes.iter().map(|s| (*s).to_string()));
+                        if let Some(d) = &detail {
+                            candidates[j].excluded_reasons.push(format!("detail:{d}"));
+                        }
+                        states[j] = None;
                     }
-                    states[i] = None;
                 }
             }
         }
@@ -311,14 +342,14 @@ impl Dispatcher {
         primary_lane: Tier,
     ) -> ShadowRecord {
         let selected = round.selected();
-        let candidate_source = selected.map(|c| c.deployment_id.clone());
+        let candidate_source = selected.map(|c| c.provider_id.clone());
         let candidate_model = selected.map(|c| c.model_profile_id.clone());
         let candidate_lane = selected.map(|_| round.requested_lane);
         let mut differences = Vec::new();
         match selected {
             None => differences.push("deferred".to_string()),
             Some(c) => {
-                if c.deployment_id != primary_source {
+                if c.provider_id != primary_source {
                     differences.push("source".into());
                 }
                 if c.model_profile_id != primary_model {
@@ -329,7 +360,7 @@ impl Dispatcher {
                 }
             }
         }
-        let agrees = selected.is_some_and(|c| c.deployment_id == primary_source)
+        let agrees = selected.is_some_and(|c| c.provider_id == primary_source)
             && round.requested_lane == primary_lane;
         let comparison = DecisionShadowComparison {
             version: DECISION_SHADOW_COMPARISON_VERSION,

@@ -50,6 +50,54 @@ pub fn task_mode(task: &Task) -> &'static str {
     }
 }
 
+/// ADR 2026-10-07-build-tmp-hygiene D1.4: 雛形の `extra["action"]` に書ける予約語。`action` を持つ雛形から
+/// 発火した task は worker（LLM）に渡さず、dispatcher の決定的な保守 executor が実行する。
+pub const CRON_ACTIONS: &[&str] = &["target_sweep", "tmp_sweep"];
+/// 予約語のうち executor が実装済みのもの（`tmp_sweep` は D2 で入れる。それまでは雛形の検証で拒否する）。
+pub const IMPLEMENTED_CRON_ACTIONS: &[&str] = &["target_sweep"];
+/// `action` を発火時に task へ写したラベルの接頭辞（例 `maintenance-action-target-sweep`。ラベルは
+/// `[a-z0-9-]` なので `_` は `-` に置き換える）。mode と同じく
+/// `Created` event に入るので、後の job PATCH で既存 task の action は変わらない。
+pub const ACTION_LABEL_PREFIX: &str = "maintenance-action-";
+
+/// 雛形の `extra["action"]` を検証する（無ければ `Ok(None)`）。値は [`CRON_ACTIONS`] の予約語だけで、
+/// 未実装の予約語（`tmp_sweep`）も拒否する。config の `[[cron.seed]]` の検証も同じ関数を通る。
+pub fn template_action(template: &CronTaskTemplate) -> Result<Option<&'static str>, String> {
+    let Some(value) = template.extra.get("action") else {
+        return Ok(None);
+    };
+    let Some(action) = value
+        .as_str()
+        .and_then(|a| CRON_ACTIONS.iter().copied().find(|known| *known == a))
+    else {
+        return Err(format!(
+            "template extra.action must be one of {CRON_ACTIONS:?}, got {value}"
+        ));
+    };
+    if !IMPLEMENTED_CRON_ACTIONS.contains(&action) {
+        return Err(format!(
+            "template extra.action {action:?} is reserved but not implemented yet"
+        ));
+    }
+    Ok(Some(action))
+}
+
+/// action を task のラベルに写す（`target_sweep` → `maintenance-action-target-sweep`）。
+pub fn action_label(action: &str) -> String {
+    format!("{ACTION_LABEL_PREFIX}{}", action.replace('_', "-"))
+}
+
+/// cron 由来の task に発火時に固定された action（ラベルが無ければ `None`）。
+pub fn task_action(task: &Task) -> Option<&'static str> {
+    task.labels.iter().find_map(|l| {
+        let name = l.strip_prefix(ACTION_LABEL_PREFIX)?;
+        IMPLEMENTED_CRON_ACTIONS
+            .iter()
+            .copied()
+            .find(|a| a.replace('_', "-") == name)
+    })
+}
+
 /// 予定時刻からの遅れがこれ以内なら通常運転（`trigger = schedule`）とみなす（ADR-0131 D3「1 tick 以内」）。
 /// tick の既定間隔（数秒）に余裕を持たせた値。
 pub const DEFAULT_ON_TIME_GRACE: Duration = Duration::minutes(2);
@@ -119,6 +167,18 @@ pub fn template_to_spec(
     }))
     .map_err(|e| OpsError::Validation(format!("template: {e}")))?;
     spec.acceptance = acceptance;
+    let action = template_action(template).map_err(OpsError::Validation)?;
+    if let Some(action) = action
+        && spec.acceptance.is_empty()
+    {
+        // 保守 task は executor が決定的に done / failed を決める（reviewer は起こさない）。雛形に
+        // acceptance が無ければ、何をもって完了とするかの記述だけを入れる。
+        spec.acceptance = vec![CriterionSpec::Reviewer {
+            text: format!(
+                "the deterministic maintenance executor ran `{action}` once and recorded its result event"
+            ),
+        }];
+    }
     spec.tier = template.lane;
     spec.priority = priority;
     spec.assignee = template.assignee.clone();
@@ -128,6 +188,9 @@ pub fn template_to_spec(
     spec.labels = vec![CRON_TASK_LABEL.to_string()];
     if let Some(label) = template_mode_label(template) {
         spec.labels.push(label.to_string());
+    }
+    if let Some(action) = action {
+        spec.labels.push(action_label(action));
     }
     spec.status = Some(Status::Ready);
     Ok(spec)
@@ -221,6 +284,7 @@ pub fn validate_job(
             "template extra.mode must be \"dry_run\" or \"apply\"".to_string(),
         ));
     }
+    template_action(&job.template).map_err(OpsError::Validation)?;
     if job.name.trim().is_empty() {
         return Err(OpsError::Validation("name must not be blank".to_string()));
     }

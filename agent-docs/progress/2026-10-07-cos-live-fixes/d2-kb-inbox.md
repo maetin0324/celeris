@@ -12,14 +12,15 @@ completed: 2026-10-07
 - `crates/task-api/src/knowledge.rs`: `POST /api/v1/knowledge/inbox`（管理系、201 `KnowledgeRecordResult`）。本文
   `KnowledgeRecordBody`（`title`・`scope`・`body`・`sources[]`・任意の `tags[]`・`confidence`・`path`・`attachment_ids[]`、
   `deny_unknown_fields`）。本体 `record_op` を handler と CoS operation が共有する。案件の一覧つきの layout で
-  `record_prepare` を呼び（不正 scope・未知の案件は 422 `validation` field `scope`）、添付の pin（`task_pin_problem_tx` ＋
-  `add_ref_tx`、owner_kind `knowledge_inbox`。CoS は credential の thread の添付だけ）と CoS の監査を SQLite に commit してから
-  候補ファイルを `_inbox/<id>.md` に rename して git commit する。pin・監査が失敗すれば一時ファイルは drop で消える。
+  `task_ops::knowledge::record_in` で候補 `_inbox/<id>.md` を書いて git commit し（不正 scope・未知の案件は 422
+  `validation` field `scope`）、その後に添付の pin（`task_pin_problem_tx` ＋ `add_ref_tx`、owner_kind `knowledge_inbox`。
+  CoS は credential の thread の添付だけ）と CoS の監査を SQLite に commit する。pin・監査が失敗すれば `inbox_reject` で
+  候補を消す（ADR 付記 D2-a）。
 - `crates/task-api/src/cos/operations.rs`: `ALLOWED` に `("POST", "/api/v1/knowledge/inbox", "knowledge.record")`、
-  `dispatch` に `knowledge.record`（`target_kind` `knowledge`・`target_id` 候補 id、`result` は `sha` を除いた応答と同じ形）。
-- `crates/task-ops/src/knowledge.rs`: `record_in` を `record_prepare`（検証・置き場のガード・id 決定・`_inbox/.<id>.md.tmp`
-  への書き込み）と `PreparedRecord::commit`（rename ＋ git commit）に分けた。`record` / `record_in` の挙動は同じ。
-  id の重複回避は一時名も見る。
+  `dispatch` に `knowledge.record`（`target_kind` `knowledge`・`target_id` 候補 id、`result` は応答と同じ形）。
+- attempt 2: attempt 1 は `crates/task-ops/src/knowledge.rs` を `record_prepare`／`PreparedRecord::commit` に割ったが、
+  範囲 check（task-ops は範囲外）に落ちたので戻し、上の「書いて commit → pin → 失敗なら `inbox_reject`」に変えた。
+  ADR D2 の「一時名で書き DB commit 後に rename」は付記 D2-a でこの順序に改めた。
 - `crates/celerisctl`: CoS run credential（`CELERIS_COS_RUN_CREDENTIAL`）があるときの `knowledge record` は KB を直接書かず
   `POST /api/v1/knowledge/inbox` を `/cos/operations` で送る（`main.rs` の分岐、`knowledge::run_record_cos` /
   `record_via_cos`）。理由は `--reason` → `CELERIS_COS_REASON` → 既定文、冪等キーは題名と本文の FNV-1a。`--attachment-id`
@@ -46,9 +47,8 @@ completed: 2026-10-07
 
 ## 未解決事項
 
-- CoS 経路で SQLite（監査・pin）の commit の後に rename / git commit が失敗すると、`applied` の operation と候補ファイルの
-  無い状態が残る（API はエラーを返す）。ADR D2 の順序（DB の commit → rename）どおりで、逆順の失敗（pin の無い候補）より
-  見つけやすい側に倒した。
+- 候補の git commit と pin の SQLite commit の間で process が落ちると、pin の無い候補が `_inbox` に残る（ADR 付記 D2-a。
+  受信箱で provenance が空の候補として人に見える）。一時名＋rename にするには task-ops の `record_in` を割る必要がある。
 - `crates/task-worker/src/cos_chat.rs` の前置き（添付があるときの手順）は「候補を作ってから pin」のままで、範囲外のため
   直していない。CLI の `--json` が候補 `id` を最上位に出すので手順はそのまま動く。
 

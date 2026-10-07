@@ -2743,17 +2743,17 @@ author / committer は `Celeris (human) <celeris@local>`（`celerisctl knowledge
 
 - 本文は `KnowledgeRecordBody`（未知の欄は 400）。`title`・`scope`・`body`・`sources[]`（1 件以上）が必須、`tags[]`・
   `confidence`（`high` / `medium` / `low`）・`path`（取り込み先）・`attachment_ids[]` は任意
-- 候補の検査と形は `celerisctl knowledge record` と同じ（`task_ops::knowledge::record_prepare`。秘密を含む本文・
+- 候補の検査と形は `celerisctl knowledge record` と同じ（`task_ops::knowledge::record_in`。秘密を含む本文・
   置き場のガードに落ちる `path` は 422）。**scope は `user` / `environment` / `environment/<分類>` / `experience` /
   `project:<slug>`**。`projects/<slug>` は互換で受けて `project:<slug>` に正規化して記録する。知らない scope・案件は
   422 `validation`（`field: "scope"`）
 - `attachment_ids` の各添付を候補に pin する（`chat_attachment_refs` owner_kind=`knowledge_inbox`）。検査は §3.4 の
   task 作成と同じ（ULID・重複・20 件まで・`ready`・期限、CoS なら credential の thread の添付だけ）。1 件でも落ちれば
-  422 `invalid_attachment` で**候補も作らない**。候補は一時名で書き、pin（と CoS の監査）を SQLite に commit してから
-  `_inbox/<id>.md` に rename して git commit する
+  422 `invalid_attachment` で**候補を残さない**。候補を `_inbox/<id>.md` に書いて git commit し、pin（と CoS の監査）を
+  SQLite に commit する。pin か監査が落ちれば候補を捨てる commit をして `_inbox` から消す
 - 応答: `id`（`GET /knowledge/inbox/{id}` の id）/ `path` / `target` / `scope`（正規化後）/ `op` / `attachment_ids` / `sha`。
   pin した添付は §3.104 の `provenance[]` に出る
-- CoS は `/cos/operations` の action `knowledge.record` で送る（§3.129。`result` は `sha` を除いた同じ形、`target_kind`
+- CoS は `/cos/operations` の action `knowledge.record` で送る（§3.129。`result` は同じ形、`target_kind`
   `knowledge`・`target_id` 候補 id）。CoS credential で直接叩くと 422 `cos_audit_context_required`。KB が無ければ 409
   `knowledge_unavailable`、添付の保存が無効で `attachment_ids` を渡せば 503 `attachments_unavailable`
 

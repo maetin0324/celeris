@@ -53,7 +53,7 @@ branch tree `5664ef5fb20e`、2026-10-07）で、(d) screenshot の task への�
   201 で候補 id（`GET /api/v1/knowledge/inbox/{id}` と同じ id）を返す。書き込みは `celerisctl knowledge record` と同じ
   task-core の関数を使う（候補ファイルの形・id の規則を 1 つに保つ）。
 - `attachment_ids` があれば、候補ファイルの作成と `chat_attachment_refs`（`owner_kind: "knowledge_inbox"`）の pin を
-  同じ処理で行い、どちらかが失敗したら候補ファイルも残さない（ファイルは一時名で書き、DB の commit の後に rename する）。
+  同じ処理で行い、どちらかが失敗したら候補ファイルも残さない（順序は付記 D2-a）。
   `GET /knowledge/inbox/{id}` の provenance（attach-handoff の kb-provenance）にその添付が出る。
 - `crates/task-api/src/cos/operations.rs` の `ALLOWED` に `("POST", "/api/v1/knowledge/inbox", "knowledge.record")` を登録する。
   CoS からは `/cos/operations` に包んだ時だけ通り、`cos_operations` の行と監査 event が付く（直接叩けば
@@ -115,3 +115,14 @@ branch tree `5664ef5fb20e`、2026-10-07）で、(d) screenshot の task への�
 - `ResolveBody` に欄が増えるので API schema（`UPDATE_SCHEMA=1`）と gui・web の生成型を再生成する。
 - 試験は決定的（偽ハーネス・fixture・`tokio::time::pause`・試験専用フック）で、名前の接頭辞は `cos_live_fix_d1_`〜`_d4_`。
 - `docs/api/v1/gui-api.md` の CoS の節（§3.128〜§3.130）に D1〜D3 の欄と route を足す。
+
+## 付記 D2-a（2026-10-07、d2-kb-inbox の実装）
+
+- 当初は「候補を一時名で書き、DB の commit の後に rename する」としたが、そのためには `crates/task-ops` の
+  `record_in` を書き込みと commit に割る必要があり、葉の範囲（task-api・celerisctl・task-core …）の外になる。
+- 実装は `task_ops::knowledge::record_in`（`celerisctl knowledge record` と同じ関数。候補の形・id の規則は 1 つのまま）で
+  `_inbox/<id>.md` を書いて git commit し、その後に pin（と CoS の監査）を SQLite に commit する。pin か監査が
+  落ちれば `inbox_reject` で候補を消す commit をする。「どちらかが失敗したら候補ファイルを残さない」は保つ
+  （git の履歴には書いて消した 2 commit が残る）。
+- 残る隙: 候補の commit と pin の commit の間に process が落ちると、pin の無い候補が `_inbox` に残る。人の受信箱で
+  見える（provenance が空）ので、捨てるか取り込むかを人が決める。

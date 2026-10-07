@@ -267,7 +267,7 @@ pub struct KnowledgeAcceptBody {
 }
 
 /// `POST /knowledge/inbox` の本文（ADR 2026-10-07 cos-live-fixes D2）。`celerisctl knowledge record`
-/// と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_prepare`）。
+/// と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_in`）。
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct KnowledgeRecordBody {
@@ -755,9 +755,9 @@ fn attachments_unavailable() -> ApiProblem {
 }
 
 /// `POST /knowledge/inbox` の本体。handler（`audit = None`）と CoS の `/cos/operations`
-/// （action `knowledge.record`）が共有する。候補は一時名で書き（`record_prepare`）、添付の pin と
-/// 監査（CoS）を SQLite に commit してから `_inbox/<id>.md` へ rename して git commit する。pin か
-/// 監査が失敗すれば一時ファイルを消すので、候補ファイルは残らない。
+/// （action `knowledge.record`）が共有する。候補を `record_in` で `_inbox/<id>.md` に書いて git commit
+/// し、添付の pin と監査（CoS）を SQLite に commit する。pin か監査が失敗すれば候補を
+/// `inbox_reject` で消す（git の履歴には残るが、`_inbox` には残らない）。
 pub(crate) fn record_op(
     store: &task_core::SqliteStore,
     root: &std::path::Path,
@@ -778,6 +778,10 @@ pub(crate) fn record_op(
     {
         page_path(path).map_err(reject)?;
     }
+    let attachment_ids = body.attachment_ids;
+    if audit.is_none() && !attachment_ids.is_empty() && attachment_db.is_none() {
+        return Err(attachments_unavailable());
+    }
     let projects = ops_kb::project_refs(store)
         .map_err(|e| reject(ApiProblem::internal(format!("project list: {e}"))))?;
     let layout = ops_kb::layout(root, Some(projects));
@@ -791,59 +795,58 @@ pub(crate) fn record_op(
         path: body.path,
         op: None,
     };
-    let prepared =
-        ops_kb::record_prepare(root, &request, &layout).map_err(|e| reject(record_problem(e)))?;
-    let attachment_ids = body.attachment_ids;
-    let view = |sha: String, prepared: &ops_kb::PreparedRecord| KnowledgeRecordResult {
-        id: prepared.id.clone(),
-        path: prepared.path.clone(),
-        target: prepared.target.clone(),
-        scope: prepared.scope.clone(),
-        op: prepared.op.map(|o| o.as_str().to_string()),
+    let recorded =
+        ops_kb::record_in(root, &request, &layout).map_err(|e| reject(record_problem(e)))?;
+    // pin か監査が失敗したら、書いた候補を消してから問題を返す。
+    let discard = |problem: ApiProblem| {
+        if let ops_kb::InboxOutcome::Failed { detail } = ops_kb::inbox_reject(root, &recorded.id) {
+            tracing::warn!(id = %recorded.id, %detail, "knowledge: could not discard candidate after failed pin");
+        }
+        problem
+    };
+    let scope = ops_kb::inbox_get(root, &recorded.id).and_then(|item| item.scope);
+    let result = KnowledgeRecordResult {
+        id: recorded.id.clone(),
+        path: recorded.path.clone(),
+        target: recorded.target.clone(),
+        scope,
+        op: recorded.op.map(|o| o.as_str().to_string()),
         attachment_ids: attachment_ids.clone(),
-        sha,
+        sha: recorded.sha.clone(),
     };
     let Some(audit) = audit else {
-        if !attachment_ids.is_empty() {
-            let db = attachment_db.ok_or_else(attachments_unavailable)?;
-            let db_error =
-                |e: rusqlite::Error| ApiProblem::internal(format!("attachment pin: {e}"));
-            let mut conn = rusqlite::Connection::open(db).map_err(db_error)?;
-            conn.busy_timeout(std::time::Duration::from_secs(10))
-                .map_err(db_error)?;
-            let tx = conn
-                .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
-                .map_err(db_error)?;
-            pin_candidate_tx(&tx, &attachment_ids, &prepared.id, None)?;
-            tx.commit().map_err(db_error)?;
+        if let Some(db) = attachment_db.filter(|_| !attachment_ids.is_empty()) {
+            let pin = || -> Result<(), ApiProblem> {
+                let db_error =
+                    |e: rusqlite::Error| ApiProblem::internal(format!("attachment pin: {e}"));
+                let mut conn = rusqlite::Connection::open(db).map_err(db_error)?;
+                conn.busy_timeout(std::time::Duration::from_secs(10))
+                    .map_err(db_error)?;
+                let tx = conn
+                    .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+                    .map_err(db_error)?;
+                pin_candidate_tx(&tx, &attachment_ids, &recorded.id, None)?;
+                tx.commit().map_err(db_error)
+            };
+            pin().map_err(discard)?;
         }
-        let template = view(String::new(), &prepared);
-        let outcome = prepared.commit(root).map_err(record_problem)?;
-        tracing::info!(who = "admin", op = "knowledge_record", id = %outcome.id, "admin: knowledge candidate recorded");
-        return Ok(Applied::Direct(KnowledgeRecordResult {
-            sha: outcome.sha,
-            ..template
-        }));
+        tracing::info!(who = "admin", op = "knowledge_record", id = %recorded.id, "admin: knowledge candidate recorded");
+        return Ok(Applied::Direct(result));
     };
     let thread = audit.ctx.thread_id.clone();
     let mut failure = None;
-    let outcome = audit.apply(store, "knowledge", &prepared.id, "knowledge.record", |tx| {
-        if let Err(problem) = pin_candidate_tx(tx, &attachment_ids, &prepared.id, Some(&thread)) {
+    let outcome = audit.apply(store, "knowledge", &recorded.id, "knowledge.record", |tx| {
+        if let Err(problem) = pin_candidate_tx(tx, &attachment_ids, &recorded.id, Some(&thread)) {
             let detail = problem.detail().to_string();
             failure = Some(problem);
             return Err(task_core::chat::ChatError::Invalid(detail));
         }
-        let mut result = serde_json::to_value(view(String::new(), &prepared))
-            .map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))?;
-        if let Some(map) = result.as_object_mut() {
-            map.remove("sha");
-        }
-        Ok(result)
+        serde_json::to_value(&result)
+            .map_err(|e| task_core::chat::ChatError::Invalid(e.to_string()))
     });
-    let operation = outcome.map_err(|problem| failure.take().unwrap_or(problem))?;
-    // The audit row is committed; the candidate file becomes visible now. A failure here leaves an
-    // applied operation without its file, which the API reports instead of hiding.
-    prepared.commit(root).map_err(record_problem)?;
+    let operation = outcome
+        .map_err(|problem| failure.take().unwrap_or(problem))
+        .map_err(discard)?;
     Ok(Applied::Audited(Box::new(operation)))
 }
 

@@ -7631,7 +7631,7 @@ export interface KnowledgePageResult {
 }
 /**
  * `POST /knowledge/inbox` の本文（ADR 2026-10-07 cos-live-fixes D2）。`celerisctl knowledge record`
- * と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_prepare`）。
+ * と同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_in`）。
  */
 export interface KnowledgeRecordBody {
   /**

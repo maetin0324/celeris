@@ -28,6 +28,9 @@ export const NOTIFY_KIND_LABEL: Record<NotificationKind, string> = {
   // celeris ADR-0079 D8（Phase R3b）: root の計画の承認待ち（その計画の決定を束ねる）。
   plan_approval: "計画の承認を待っている",
   inbox_new: "受信箱に新しい判断待ちがある",
+  // ADR 2026-10-05-cos-chat-home D3/D6: CoS からの判断依頼と、CoS 不在時の直接通知への退避。
+  cos_escalation: "CoS から判断のお願いが届いた",
+  cos_fallback: "CoS 不在のため直接通知が届いた",
 };
 
 export function notifyKindLabel(kind: NotificationKind): string {

@@ -41,6 +41,7 @@ verdict() { printf '%s %s\n' "$1" "$2" | tee -a "$EV/verdict.txt"; }
 : > "$EV/verdict.txt"
 
 # --- 設定（試験用 data dir の中だけ） --------------------------------------------------------------
+env -u CELERIS_CONFIG -u CELERIS_API_URL "$BIN/celerisctl" knowledge init --root "$OUT/kb" --config "$OUT/config.toml" --db "$OUT/celeris.sqlite3" > "$EV/kb-init.txt" 2>&1 || { echo "kb init failed"; cat "$EV/kb-init.txt"; exit 1; }
 cp -r "$REPO/config/skills/cos-operator" "$REPO/config/skills/cos-inbox-triage" "$OUT/kb/skills/"
 [ -s "$OUT/api.token" ] || { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$OUT/api.token"; }
 chmod 600 "$OUT/api.token"; TOK=$(cat "$OUT/api.token")
@@ -126,7 +127,8 @@ stop_daemon() {
   for _ in $(seq 1 30); do kill -0 "$DPID" 2>/dev/null || break; sleep 1; done
   kill -KILL -- "-$DPID" 2>/dev/null || true
   sleep 1
-  if pgrep -f "$OUT" > "$EV/pgrep-after-stop.txt"; then log "LEFTOVER processes:"; cat "$EV/pgrep-after-stop.txt"; else log "pgrep -f $OUT: none left"; fi
+  # 自分の shell と呼び出し元は "$OUT" を引数に持つので除き、試験用 config で起動した process だけを見る
+  if pgrep -f -- "--config $OUT/config.toml" > "$EV/pgrep-after-stop.txt"; then log "LEFTOVER processes:"; cat "$EV/pgrep-after-stop.txt"; else log "pgrep (config $OUT/config.toml): none left"; fi
 }
 trap stop_daemon EXIT
 
@@ -139,6 +141,9 @@ for _ in $(seq 1 60); do
 done
 [ -n "$UP" ] || { log "daemon did not answer on $API (see $OUT/daemon.log)"; exit 1; }
 log "daemon pid $DPID up on $API (commit $(git -C "$REPO" rev-parse --short=12 HEAD), mode $MODE)"
+NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+sqlite3 "$OUT/celeris.sqlite3" "insert into projects (id,title,request,status,created_at,updated_at,slug) values ('01M4AW00000000000000000PRJ','agent-platform (live fixture)','cos-chat-live fixture project for KB scope','active','$NOW','$NOW','agent-platform')"
+log "fixture project: $(sqlite3 "$OUT/celeris.sqlite3" "select id||' '||slug||' '||status from projects")"
 
 THREAD=$(api -X POST -H 'content-type: application/json' "$API/chat/threads" \
   -d '{"title":"cos-chat-live","project_id":null,"client_thread_id":"cos-chat-live-'"$$"'"}' | tee "$EV/thread.json" | js 'd["thread"]["id"]')
@@ -242,3 +247,5 @@ esac
 
 cp "$OUT/daemon.log" "$EV/daemon.log"
 log "done; evidence in $EV (verdict.txt)"
+# どれか 1 つでも FAIL なら非 0 で終わる（運用セッションの live3 の指摘）
+if grep -q 'FAIL' "$EV/verdict.txt"; then exit 1; fi

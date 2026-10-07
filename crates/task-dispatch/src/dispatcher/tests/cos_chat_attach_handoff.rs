@@ -9,10 +9,13 @@ use task_core::chat::attachments::{ChatAttachmentLimits, ChatAttachmentStore};
 use task_core::store::SqliteStore;
 use task_worker::protocol::{InputAttachment, InputAttachmentDelivery};
 
+/// 1 run 分の控え: 渡された入力 manifest と、各項目の path から読めた bytes。
+type SeenRun = (Vec<InputAttachment>, Vec<Option<Vec<u8>>>);
+
 /// 渡された入力 manifest と、run の最中に stage 先から読めた bytes を控えるアダプタ。
 #[derive(Default)]
 struct CaptureAdapter {
-    seen: StdMutex<Vec<(Vec<InputAttachment>, Vec<Option<Vec<u8>>>)>>,
+    seen: StdMutex<Vec<SeenRun>>,
 }
 
 #[async_trait]

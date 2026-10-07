@@ -1,12 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { screens } from "../support/screens";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
 // この file の試験は 1 worker で順に流す（file どうしは並列）。
@@ -59,7 +59,7 @@ test("parity: * 未定義パスの 404 と header", async ({ page }) => {
 
 test("parity-x: daemon 停止中のバナーと復旧", async ({ page }) => {
   test.setTimeout(90_000);
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-shell-"));
+  const dir = makeTmpDir("celeris-web-e2e-shell-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   let daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
@@ -108,7 +108,7 @@ test("parity-x: daemon 停止中のバナーと復旧", async ({ page }) => {
 
 // shell の時刻表示（P2-06・X7）。ブラウザの時刻帯で絶対時刻を出し、相対時刻は hello.now のずれで補正する。
 async function withDaemon<T>(run: (ctx: { base: string; daemon: ReturnType<typeof createFakeDaemon> }) => Promise<T>) {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-shell-"));
+  const dir = makeTmpDir("celeris-web-e2e-shell-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

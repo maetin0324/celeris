@@ -1,17 +1,17 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, noticesFixture } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // nav の通知の未読数は GET /notifications/unread-count の unread（未読の束数）。SSE の notifications_changed で
 // 15 s の poll を待たずに更新する。偽 daemon と gateway は loopback の空き port。
 test("nav の通知の未読数は /notifications/unread-count から出て、notifications_changed で更新される", async ({
   page,
 }) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-notifications-badge-"));
+  const dir = makeTmpDir("celeris-notifications-badge-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

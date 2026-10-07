@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures, fixtureFor } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 const runsSchema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
@@ -26,7 +26,7 @@ test.describe("P3-12", () => {
   }
 
   test("parity: /tasks/:id/runs/:runId 会話表示と追記", async ({ page }) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-run-log-"));
+    const dir = makeTmpDir("celeris-web-run-log-");
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const stdoutPath = "/api/v1/tasks/T1/runs/R1/stdout";
@@ -117,7 +117,7 @@ test.describe("P3-11", () => {
     fixtures: Record<string, unknown>,
     files: Record<string, { body: string; type?: string }> = {},
   ) {
-    const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-runs-files-"));
+    const dir = makeTmpDir("celeris-web-runs-files-");
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const daemon = createFakeDaemon({ token: FIXTURE_TOKEN, fixtures: { ...defaultFixtures, ...fixtures }, files });

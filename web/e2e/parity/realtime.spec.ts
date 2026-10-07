@@ -1,8 +1,7 @@
 /// <reference types="node" />
 // api/ を import するので tsconfig.app.json で型検査する（node の型は上の参照で足す）。
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import type http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { hashKey, QueryClient, type QueryKey, QueryObserver } from "@tanstack/react-query";
@@ -13,6 +12,7 @@ import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { NodeEventSource } from "../support/node-event-source";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
 // この file の試験は 1 worker で順に流す（file どうしは並列）。
@@ -20,7 +20,7 @@ test.describe.configure({ mode: "default" });
 
 // realtime（P2-04・P2-05）。実 gateway と偽 daemon（loopback の空き port）の間で transport と invalidate を動かす。
 // 切断は gateway の接続を実際に切って起こす。外部ネットワークには出ない。
-const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-realtime-"));
+const dir = makeTmpDir("celeris-web-e2e-realtime-");
 const tokenFile = path.join(dir, "token");
 writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
 const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

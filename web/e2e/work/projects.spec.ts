@@ -1,14 +1,14 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // qa-work fix-projects（非 parity）: 文書の保守・board・一覧の critique 指摘（W-06・W-07・W-09・W-23・W-25・W-26・W-30）を本文で確かめる。
 function harness(fixtures: Record<string, unknown>) {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-work-projects-"));
+  const dir = makeTmpDir("celeris-web-work-projects-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN, fixtures: { ...defaultFixtures, ...fixtures } });

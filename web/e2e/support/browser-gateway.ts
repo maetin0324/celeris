@@ -1,13 +1,13 @@
 import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
 import { connect, type Server as NetServer, type Socket } from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import type { Page } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { type BrowserBackendOptions, createFakeDaemon, type FakeDaemonOptions } from "./fake-daemon.mjs";
 import { startGateway } from "./gateway";
+import { makeTmpDir } from "./tmp-dir";
 
 // browser e2e 用の gateway（ADR 2026-10-05-browser-department-web-live-view D2）。一時 dir に password file・
 // 0600 の Ed25519 鍵・owner socket を用意し、偽 daemon（browser backend 付き）と偽 dashboard（loopback の
@@ -158,7 +158,7 @@ export type BrowserGatewayOptions = FakeDaemonOptions & {
 
 export async function startBrowserGateway(options: BrowserGatewayOptions = {}) {
   const { backend = {}, liveUpstream = true, ...daemonOptions } = options;
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-browser-"));
+  const dir = makeTmpDir("celeris-web-browser-");
   const passwordFile = path.join(dir, "password");
   const tokenFile = path.join(dir, "token");
   const keyFile = path.join(dir, "attestation.key");

@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, test } from "@playwright/test";
@@ -12,6 +11,7 @@ import { waitForBootIdle } from "../latency/boot-idle.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
+import { makeTmpDir } from "../support/tmp-dir";
 
 const task = {
   id: "T1",
@@ -35,7 +35,7 @@ const task = {
 };
 
 function harness() {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-p5-latency-"));
+  const dir = makeTmpDir("celeris-p5-latency-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({

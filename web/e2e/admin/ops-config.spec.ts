@@ -1,10 +1,10 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
 test.describe.configure({ mode: "default" });
@@ -25,7 +25,7 @@ async function expectFieldError(page: Page, input: Locator, text: string | RegEx
 }
 
 test.describe("ops-config", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-ops-config-"));
+  const dir = makeTmpDir("celeris-ops-config-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

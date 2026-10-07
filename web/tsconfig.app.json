@@ -13,7 +13,8 @@
     "e2e/parity/latency-gate.spec.ts",
     "e2e/support/gateway.ts",
     "e2e/support/latency-results.ts",
-    "e2e/support/node-event-source.ts"
+    "e2e/support/node-event-source.ts",
+    "e2e/support/tmp-dir.ts"
   ],
   "compilerOptions": {
     "composite": true,

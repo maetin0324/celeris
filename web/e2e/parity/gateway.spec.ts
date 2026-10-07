@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { readdirSync, rmSync, writeFileSync } from "node:fs";
 import http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
 // この file の試験は 1 worker で順に流す（file どうしは並列）。
@@ -87,7 +87,7 @@ test("parity-x: 全応答の security header", async () => {
 
 test.describe("P5-02 全経路 security gate", () => {
   const password = "security-gate-password";
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-security-gate-"));
+  const dir = makeTmpDir("celeris-web-security-gate-");
   const passwordFile = path.join(dir, "password");
   const tokenFile = path.join(dir, "token");
   writeFileSync(passwordFile, `${password}\n`);

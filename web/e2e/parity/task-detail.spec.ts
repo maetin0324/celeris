@@ -1,11 +1,11 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures, fixtureFor } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 const schema = JSON.parse(
   readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../api/generated/schema.json"), "utf8"),
@@ -26,7 +26,7 @@ function detail() {
 }
 
 test("parity: /tasks/:id 表示", async ({ page }) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-task-detail-"));
+  const dir = makeTmpDir("celeris-web-task-detail-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({
@@ -85,7 +85,7 @@ async function withDetail(
   fixtures: Record<string, unknown | ((url: URL) => unknown)>,
   body: (base: string, daemon: ReturnType<typeof createFakeDaemon>) => Promise<void>,
 ) {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-task-detail-"));
+  const dir = makeTmpDir("celeris-web-task-detail-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({

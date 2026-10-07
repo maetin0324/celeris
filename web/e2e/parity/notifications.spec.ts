@@ -1,16 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, noticesFixture } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
 test.describe.configure({ mode: "default" });
 
 // /notifications（ADR-0133 D5）: 束の一覧・未読と種類の絞り込み（URL）・1 件の既読・確認付きの一括既読・頁送り。
-const dir = mkdtempSync(path.join(tmpdir(), "celeris-notifications-"));
+const dir = makeTmpDir("celeris-notifications-");
 const tokenFile = path.join(dir, "token");
 writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
 const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

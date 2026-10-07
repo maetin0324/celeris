@@ -1,12 +1,12 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import type http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createApp } from "../../server/app.js";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // file 単位の共有状態（module で作る一時 dir・beforeAll の server）に依存するので、fullyParallel でも
 // この file の試験は 1 worker で順に流す（file どうしは並列）。
@@ -14,7 +14,7 @@ test.describe.configure({ mode: "default" });
 
 // P4-16 /releases。
 test.describe("P4-16 releases", () => {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-releases-"));
+  const dir = makeTmpDir("celeris-releases-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
@@ -103,12 +103,11 @@ test.describe("P4-12 daemon/providers", () => {
   let seen: Array<{ path: string; method?: string }> = [];
   test.beforeAll(async () => {
     const fs = await import("node:fs");
-    const os = await import("node:os");
     const nodePath = await import("node:path");
     const { FIXTURE_TOKEN } = await import("../../scripts/check-secrets.mjs");
     const { createFakeDaemon } = await import("../support/fake-daemon.mjs");
     const { startGateway } = await import("../support/gateway");
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "celeris-ops-dp-"));
+    const dir = makeTmpDir("celeris-ops-dp-");
     const tokenFile = nodePath.join(dir, "token");
     fs.writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
@@ -169,12 +168,11 @@ test.describe("P4-13..15 accounts/clusters", () => {
   let seen: Array<{ path: string; method?: string; body?: string }> = [];
   test.beforeAll(async () => {
     const fs = await import("node:fs");
-    const os = await import("node:os");
     const nodePath = await import("node:path");
     const { FIXTURE_TOKEN } = await import("../../scripts/check-secrets.mjs");
     const { createFakeDaemon } = await import("../support/fake-daemon.mjs");
     const { startGateway } = await import("../support/gateway");
-    const dir = fs.mkdtempSync(nodePath.join(os.tmpdir(), "celeris-ops-ac-"));
+    const dir = makeTmpDir("celeris-ops-ac-");
     const tokenFile = nodePath.join(dir, "token");
     fs.writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

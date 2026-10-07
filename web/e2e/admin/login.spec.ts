@@ -1,16 +1,16 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import type http from "node:http";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { createApp } from "../../server/app.js";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // beforeAll の一時 dir・server をこの file の試験で共有するので、file 内は 1 worker で順に流す（2026-10-04 の並列化と同じ扱い）。
 test.describe.configure({ mode: "default" });
 
 // /login の操作を固定する: label で欄を引ける・password 型・送信中表示・失敗時の alert と focus。
 const PASSWORD = "e2e-login-password";
-const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-login-"));
+const dir = makeTmpDir("celeris-web-e2e-login-");
 const passwordFile = path.join(dir, "password");
 writeFileSync(passwordFile, `${PASSWORD}\n`);
 

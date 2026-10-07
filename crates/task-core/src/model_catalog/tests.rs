@@ -290,7 +290,7 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
             .model_role_members_replace(
                 Tier::Standard,
                 &[member("a", 9), member("b", 1), member("c", 2)],
-                &[src.clone()],
+                std::slice::from_ref(&src),
                 "admin",
                 2,
             )
@@ -299,7 +299,7 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
             .model_role_members_replace(
                 Tier::Frontier,
                 &[member("a", 0)],
-                &[src.clone()],
+                std::slice::from_ref(&src),
                 "admin",
                 3,
             )
@@ -340,7 +340,7 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
                 .model_role_members_replace(
                     Tier::Standard,
                     &[member("a", 1), member("a", 2)],
-                    &[src.clone()],
+                    std::slice::from_ref(&src),
                     "admin",
                     6
                 )
@@ -348,7 +348,7 @@ fn role_members_multiple_roles_priority_and_explicit_empty_survive_restart() {
         );
         assert_eq!(store.model_role_assignment_view().unwrap(), view);
         store
-            .model_role_members_replace(Tier::Standard, &[], &[src.clone()], "admin", 7)
+            .model_role_members_replace(Tier::Standard, &[], std::slice::from_ref(&src), "admin", 7)
             .unwrap();
     }
     let store = SqliteStore::open(&path).unwrap();

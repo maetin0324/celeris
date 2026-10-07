@@ -118,6 +118,14 @@ export function createAuth({
     return enabled && isValid(token) ? createHash("sha256").update(`browser-owner\0${token}`).digest("hex") : null;
   }
 
+  // login session の期限（ms）。owner session をこれより長く持たせない（ADR 2026-10-07-browser-trusted-devices D3）。
+  function sessionExpiresAt(req) {
+    const token = readCookie(req, SESSION_COOKIE_NAME);
+    if (!enabled || !isValid(token)) return null;
+    const { iat } = JSON.parse(Buffer.from(token.split(".")[0], "base64url").toString("utf8"));
+    return (iat + SESSION_MAX_AGE_SECONDS) * 1000;
+  }
+
   function cookieOptions(req) {
     return { httpOnly: true, sameSite: "strict", secure: Boolean(req.socket.encrypted), path: "/" };
   }
@@ -156,6 +164,7 @@ export function createAuth({
     register,
     authenticated,
     sessionKey,
+    sessionExpiresAt,
     issue,
     isValid,
     verifyPassword,

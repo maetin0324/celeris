@@ -13,6 +13,7 @@ import { ControlBar } from "./control-bar";
 import { LiveEvents } from "./live-events";
 import { LiveViewFrame, liveViewState } from "./live-view-frame";
 import { OwnerSessionNotice } from "./owner-session-notice";
+import { TrustedDeviceOffer } from "./trusted-devices";
 
 // `/browser/runs/$taskId/$runId`（D3.1・D3.6）。狭幅でも 状態→ボタン（control bar）→Live View→待ち→イベント の順に積む。
 
@@ -50,6 +51,7 @@ export function BrowserRunScreen({ taskId, runId }: { taskId: string; runId: str
   return (
     <div className="flex flex-col gap-4" data-testid="browser-run-screen">
       <OwnerSessionNotice owner={owner} />
+      <TrustedDeviceOffer owner={owner} />
       {isOwner && runs.isError ? (
         <Notice tone="danger" title="実行を取得できません">
           Celeris に接続できるかを確かめ、画面を読み込み直してください。

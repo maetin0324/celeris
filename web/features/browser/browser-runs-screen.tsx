@@ -18,6 +18,7 @@ import {
 import { type BrowserRunRow, buildRunRows, isActiveRun } from "./browser-runs-model";
 import { BrowserWaitsList } from "./browser-waits-panel";
 import { OwnerSessionNotice, ownerNoticeReason } from "./owner-session-notice";
+import { TrustedDeviceOffer } from "./trusted-devices";
 
 // /browser: 実行中・最近の browser run の一覧と未決の待ち（ADR 2026-10-05-browser-department-web-live-view D3.1）。
 // raw の live_view_url は扱わない。行から run 画面（同一 origin の Live View）と task 詳細へ link する。
@@ -45,7 +46,13 @@ export function BrowserRunsScreen() {
       route="/browser"
       description="ブラウザ実行の状態と、人の対応を待っている依頼を確認します。"
     >
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex flex-wrap justify-end gap-x-4">
+        <Link
+          to="/browser/devices"
+          className="inline-flex min-h-11 items-center text-link underline underline-offset-2"
+        >
+          信頼できる端末
+        </Link>
         <Link
           to="/browser/settings"
           className="inline-flex min-h-11 items-center text-link underline underline-offset-2"
@@ -59,7 +66,10 @@ export function BrowserRunsScreen() {
             <OwnerSessionNotice owner={owner.data} />
           </div>
         ) : owner.data ? (
-          <OwnerContent owner={owner.data} />
+          <div className="space-y-6">
+            <TrustedDeviceOffer owner={owner.data} />
+            <OwnerContent owner={owner.data} />
+          </div>
         ) : null}
       </FetchFrame>
     </ScreenFrame>

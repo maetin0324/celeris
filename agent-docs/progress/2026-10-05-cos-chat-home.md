@@ -132,7 +132,7 @@ final review の差し戻し（cos_chat run が result.json 不在で failed・A
 
 web の typecheck/lint/test/e2e は本葉では再実行していない（web の変更なし。直近の結果は上の close-out 節: e2e functional 278 passed）。
 
-## 未解決事項（実機で見つかった点。実装は未修正）
+## 実機確認（修正後）の結果と未解決事項（実機で見つかった点。実装は未修正）
 
 - **D1**: CoS が起票した task が pin より先に ready になり、入力の添付が渡らない。
 - **D2**: CoS に監査つきの KB 候補作成の経路が無い。`celerisctl knowledge record` は API を通らず KB 直書き（本番 KB へ向かう穴にもなりうる）。scope 書式も skill と CLI で不一致。

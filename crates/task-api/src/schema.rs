@@ -262,6 +262,13 @@ pub struct ApiV1Schema {
     pub browser_wait_result: crate::browser::BrowserWaitResult,
     /// human attestation の `payload`（署名対象の JSON）。
     pub browser_attestation_claims: crate::browser::AttestationClaims,
+    /// ADR 2026-10-07-browser-trusted-devices: `/browser/trusted-devices` の本文・応答と assertion の claims。
+    pub trusted_device_register: crate::browser_trusted_devices::TrustedDeviceRegisterBody,
+    pub trusted_device_verify: crate::browser_trusted_devices::TrustedDeviceVerifyBody,
+    pub trusted_device_result: crate::browser_trusted_devices::TrustedDeviceResult,
+    pub trusted_device_list: crate::browser_trusted_devices::TrustedDeviceList,
+    pub trusted_device_revoke_result: crate::browser_trusted_devices::TrustedDeviceRevokeResult,
+    pub trusted_device_claims: crate::browser_trusted_devices::DeviceClaims,
     /// ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
     /// `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
     pub decision_list: task_ops::decision::DecisionList,

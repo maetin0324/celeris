@@ -380,9 +380,9 @@ pub(super) async fn run_worker(
         }
         None => task_core::artifacts::artifacts_dir_for(&task, &workspace),
     };
-    // ADR-0067 D3: run 完了後に未申告の成果物を拾うための控え（`workspace`/`artifacts_dir` はこの後
-    // `req` に移る）。git worktree ではない local の作業場所に限る（`remote.is_none() &&
-    // worktree.is_none()` を後段で見る）。
+    // ADR-0067 D3 / 付記 2026-10-07: run 後に未申告の成果物を拾うための控え（`workspace`/`artifacts_dir` は
+    // この後 `req` に移る）。走査の形（全体 `*.md` か `artifacts_dir` の中だけか）は後段で `remote` / `worktree`
+    // を見て決める。
     let workspace_for_undeclared_scan = workspace.clone();
     let artifacts_dir_for_undeclared_scan = artifacts_dir.clone();
     if task.kind == TaskKind::Plan {
@@ -683,31 +683,36 @@ pub(super) async fn run_worker(
             &genres_for_followups,
         );
     }
-    // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）: run が成功したら未申告の成果物を登録する。
+    // ADR-0067 D3 / ADR-0074 D6.3（Phase F1 (j)）/ ADR-0067 付記 2026-10-07: run の終端が
+    // `Done` / `Question` / `Waiting` なら未申告の成果物を登録する（判断待ち・cluster job 待ちでも
+    // 人がその時点の成果物を使う）。
     // - git worktree ではない local の作業場所（`remote`/`worktree` どちらも無い）はリポジトリ全体
     //   （`artifacts_dir` の外を含む）から `*.md` を拾う（従来どおり。取りこぼし防止）。
-    // - git worktree の Task（`worktree` が `Some`）は、そのリポジトリの全体を走査すると無関係な
-    //   コードまで拾ってしまうので、その run の `artifacts_dir` の**中だけ**を、人が読む拡張子
-    //   （md/html/pdf/csv/png）で走査する。
-    if outcome.is_ok() && remote.is_none() {
-        let existing_paths: std::collections::HashSet<String> = events
-            .iter()
-            .filter_map(|(_, ev)| match ev {
-                Event::ArtifactProduced { artifact, .. } => Some(artifact.path.clone()),
-                _ => None,
-            })
-            .collect();
-        let found = if worktree.is_none() {
+    // - git worktree の Task（`worktree` が `Some`）と remote の Task（`remote` が `Some`。写しはクラスタの
+    //   project の内容を含む）は、その run の `artifacts_dir` の**中だけ**を、人が読む拡張子で走査する。
+    // 重複は `(path, sha256)` で見る（同じ中身は増えない。中身が変われば新しい版）。
+    if outcome
+        .as_ref()
+        .is_ok_and(|o| crate::undeclared_artifacts::terminal_wants_scan(&o.terminal))
+    {
+        // この run の間に申告された成果物（`sink.artifact()`）も重複の判定に入れるため、run 後の履歴を読み直す
+        // （読めなければ run 前の控え）。
+        let after_run = store_for_undeclared_scan
+            .events_for(task_id)
+            .unwrap_or_else(|_| events.clone());
+        let existing =
+            crate::undeclared_artifacts::registered_keys(after_run.iter().map(|(_, ev)| ev));
+        let found = if worktree.is_none() && remote.is_none() {
             crate::undeclared_artifacts::scan_undeclared_markdown_artifacts(
                 &workspace_for_undeclared_scan,
                 &artifacts_dir_for_undeclared_scan,
-                &existing_paths,
+                &existing,
             )
         } else {
             crate::undeclared_artifacts::scan_undeclared_artifacts_in_dir(
                 &workspace_for_undeclared_scan,
                 &artifacts_dir_for_undeclared_scan,
-                &existing_paths,
+                &existing,
             )
         };
         for artifact in found {

@@ -38,6 +38,7 @@ export const screens = [
   { path: "/tasks/$id/runs/$runId", fixture: "/tasks/T1/runs/R1", heading: "run ログ T1 / R1", v3: true },
   { path: "/browser", fixture: "/browser", heading: "ブラウザ" },
   { path: "/browser/settings", fixture: "/browser/settings", heading: "ブラウザ実行課の設定" },
+  { path: "/browser/devices", fixture: "/browser/devices", heading: "信頼できる端末" },
   { path: "/browser/runs/$taskId/$runId", fixture: "/browser/runs/T1/R1", heading: "ブラウザ実行" },
   { path: "/plans/new", fixture: "/plans/new", heading: "計画の作成", v3: true },
   { path: "/daemon", fixture: "/daemon", heading: "daemon", v3: true },

@@ -80,7 +80,20 @@ export type BrowserBackend = {
     checks: Array<{ key: string; grant_id: string }>;
     reads: Array<{ key: string; after: string | null }>;
     identities: Array<{ method: string; path: string; query: string; body: Record<string, unknown> }>;
+    devices: Array<{ method: string; path: string; purpose: string | null; body: Record<string, unknown> }>;
   };
+  /** 信頼端末（ADR 2026-10-07-browser-trusted-devices）。hash を持つ内部の行。時刻は UNIX 秒。 */
+  devices: Array<{
+    id: string;
+    name: string;
+    created_at: number;
+    last_used_at: number | null;
+    expires_at: number;
+    revoked_at: number | null;
+    revoked_reason: string | null;
+    secret_hash: string;
+    prev_secret_hash: string | null;
+  }>;
   waits: import("../../api/generated/types").BrowserWait[];
   identities: Array<{
     identity_id: string;

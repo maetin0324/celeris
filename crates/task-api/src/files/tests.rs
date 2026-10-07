@@ -171,3 +171,99 @@ fn artifact_paths_that_are_not_workspace_relative_are_forbidden() {
         Some("file_not_found")
     );
 }
+
+// ---- ADR-0067 付記 2026-10-07: remote（cluster）の task の成果物は手元の写し（`<root>/<task_id>/`）で解決する ----
+
+fn remote_task() -> Task {
+    use task_core::{
+        Budget, Check, Criterion, Status, TaskId, TaskKind, Tier, WorkerHint, WorkspaceSpec,
+    };
+    let now = time::OffsetDateTime::now_utc();
+    Task {
+        requirements: Default::default(),
+        tree: None,
+        paused_at: None,
+        routing: None,
+        mode: Default::default(),
+        skills: Vec::new(),
+        repos: Vec::new(),
+        id: TaskId::new(),
+        parent_id: None,
+        kind: TaskKind::Execute,
+        title: "cmp4".into(),
+        objective: "compare".into(),
+        acceptance: vec![Criterion {
+            text: "c".into(),
+            check: Check::Command {
+                cmd: "true".into(),
+                expect_exit: 0,
+            },
+        }],
+        inputs: vec![],
+        depends_on: vec![],
+        status: Status::Blocked,
+        priority: 0,
+        worker_hint: WorkerHint {
+            tier: Tier::Standard,
+            adapter: None,
+        },
+        workspace: WorkspaceSpec::Remote {
+            cluster: "sirius".into(),
+            path: PathBuf::from("/work/NBB/cmp4"),
+            mode: None,
+        },
+        budget: Budget {
+            max_turns: 1,
+            max_wall_secs: 1,
+            max_retries: 0,
+        },
+        attempts: 0,
+        lease: None,
+        created_at: now,
+        updated_at: now,
+        role: None,
+        genre: None,
+        aggregate: false,
+        project_id: None,
+        milestone_id: None,
+        assignee: None,
+        labels: vec![],
+        category: Default::default(),
+        conversation: None,
+    }
+}
+
+/// dispatcher / backfill が remote の写し `artifacts/...` の相対 path で登録した `ArtifactProduced` は、
+/// `GET /tasks/{id}/artifacts` で `exists: true`・`sha256_matches: Some(true)` として出る。
+#[test]
+fn remote_task_artifacts_resolve_under_the_local_mirror() {
+    let root = tempfile::tempdir().unwrap();
+    let task = remote_task();
+    let mirror = root.path().join(task.id.to_string());
+    let final_dir = mirror.join("artifacts").join("cmp4").join("final");
+    std::fs::create_dir_all(&final_dir).unwrap();
+    std::fs::write(final_dir.join("report.md"), "# report\n").unwrap();
+    let sha256 = task_worker::artifact::sha256_file(&final_dir.join("report.md")).unwrap();
+    let rows = vec![task_core::EventRow {
+        id: 1,
+        task_id: task.id,
+        seq: 0,
+        ts: "2026-10-07T00:00:00Z".into(),
+        event: task_core::Event::ArtifactProduced {
+            run_id: "run-q".into(),
+            artifact: task_core::ArtifactRef {
+                name: "report.md".into(),
+                path: "artifacts/cmp4/final/report.md".into(),
+                sha256: sha256.clone(),
+                kind: "md".into(),
+                declared: false,
+            },
+        },
+    }];
+    let views = artifact_views(&task, root.path(), &rows);
+    assert_eq!(views.len(), 1);
+    assert!(views[0].exists, "{:?}", views[0]);
+    assert_eq!(views[0].sha256_matches, Some(true));
+    assert_eq!(views[0].run_id, "run-q");
+    assert!(!views[0].artifact.declared);
+}

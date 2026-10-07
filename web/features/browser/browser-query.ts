@@ -16,6 +16,7 @@ export const browserKeys = {
   waits: (taskId: string) => ["browser", "waits", taskId] as const,
   identities: (projectId: string) => ["browser", "identities", projectId] as const,
   owner: ["browser", "owner-session"] as const,
+  devices: ["browser", "trusted-devices"] as const,
 };
 
 export type BrowserRunItem = Omit<BrowserRun, "live_view_url"> & {
@@ -23,7 +24,37 @@ export type BrowserRunItem = Omit<BrowserRun, "live_view_url"> & {
   live?: { state: "link"; href: string } | { state: "disabled"; reason: string };
 };
 export type BrowserRunsResponse = { items: BrowserRunItem[] };
-export type OwnerSession = { available: boolean; isOwner: boolean; csrfToken: string | null };
+export type OwnerSession = {
+  available: boolean;
+  isOwner: boolean;
+  csrfToken: string | null;
+  /** 端末 cookie を受けたか（ADR 2026-10-07-browser-trusted-devices D3。cookie は httpOnly なので JS からは見えない）。 */
+  trustedDevice?: boolean;
+  /** owner でなく、登録端末からの復帰を試せるか。 */
+  resumable?: boolean;
+  /** owner がどの登録端末から作られたか（CLI 承認なら null）。 */
+  deviceId?: string | null;
+  /** 自動復帰を試して失敗したときの固定コード（画面の文言に使う。gateway の応答ではなく手元で付ける）。 */
+  resumeError?: string;
+};
+/** 登録端末（hash は gateway が返さない）。時刻は UNIX 秒。 */
+export type TrustedDevice = {
+  id: string;
+  name: string;
+  method: string;
+  created_at: number;
+  last_used_at: number | null;
+  expires_at: number;
+  absolute_expires_at: number | null;
+  revoked_at: number | null;
+  revoked_reason: string | null;
+};
+export type TrustedDeviceList = {
+  devices: TrustedDevice[];
+  limit: number;
+  now: number;
+  currentDeviceId: string | null;
+};
 export type ControlStatus = {
   phase: "agent_running" | "pausing" | "paused" | "human_control" | "stopped";
   version: number;
@@ -79,11 +110,59 @@ export function browserRunsQuery(taskId?: string) {
   };
 }
 
+// 自動復帰は 1 回の画面読み込みで 1 度だけ試す（失敗したら challenge 表示に戻り、読み込み直すまで繰り返さない）。
+// 成功したら再び試せるようにする（24 時間後の owner 期限切れでも復帰できる）。
+let resumeAttempted = false;
+let resumeInflight: Promise<OwnerSession> | null = null;
+
+/** 試験用: 自動復帰の 1 度きりの印を戻す。 */
+export function resetOwnerResumeAttempt(): void {
+  resumeAttempted = false;
+  resumeInflight = null;
+}
+
+/** 登録端末の cookie で owner session を作り直す（ADR 2026-10-07-browser-trusted-devices D3）。 */
+export function resumeOwnerSession(): Promise<{ ok: true; isOwner: true; csrfToken: string; deviceId: string }> {
+  return gateway("/browser/owner-session/resume", "POST");
+}
+
+async function resumeThenReload(signal: AbortSignal | undefined): Promise<OwnerSession> {
+  let resumeError: string | undefined;
+  try {
+    await resumeOwnerSession();
+    resumeAttempted = false;
+  } catch (error) {
+    resumeError = error instanceof BrowserGatewayError ? error.code : "request_failed";
+  }
+  const again = await gateway<OwnerSession>("/browser/owner-session", "GET", undefined, signal);
+  return resumeError && !again.isOwner ? { ...again, resumeError } : again;
+}
+
+/** owner でなく、端末 cookie があれば resume を 1 度だけ呼んでから状態を返す。 */
+export async function fetchOwnerSession(signal?: AbortSignal): Promise<OwnerSession> {
+  const first = await gateway<OwnerSession>("/browser/owner-session", "GET", undefined, signal);
+  if (first.isOwner || !first.resumable) return first;
+  if (resumeInflight) return resumeInflight;
+  if (resumeAttempted) return first;
+  resumeAttempted = true;
+  resumeInflight = resumeThenReload(signal).finally(() => {
+    resumeInflight = null;
+  });
+  return resumeInflight;
+}
+
 export function ownerSessionQuery() {
   return {
     queryKey: browserKeys.owner,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchOwnerSession(signal),
+  };
+}
+
+export function trustedDevicesQuery() {
+  return {
+    queryKey: browserKeys.devices,
     queryFn: ({ signal }: { signal: AbortSignal }) =>
-      gateway<OwnerSession>("/browser/owner-session", "GET", undefined, signal),
+      gateway<TrustedDeviceList>("/browser/trusted-devices", "GET", undefined, signal),
   };
 }
 
@@ -156,6 +235,20 @@ async function mutate<T>(path: string, body: object, csrf: string, method = "POS
 
 export function requestOwnerSession(): Promise<{ challenge: string }> {
   return browserActionGate.run(() => gateway<{ challenge: string }>("/browser/owner-session", "POST"));
+}
+
+/** この端末を信頼できる端末として登録する（owner のときだけ。cookie は gateway が httpOnly で置く）。 */
+export function registerTrustedDevice(name: string, csrf: string) {
+  return mutate<{ ok: true; device: TrustedDevice }>("/browser/owner-session/device", { name }, csrf);
+}
+
+export function revokeTrustedDevice(deviceId: string, csrf: string) {
+  if (!/^[0-9A-HJKMNP-TV-Z]{26}$/.test(deviceId)) throw new TypeError("Invalid trusted device id");
+  return mutate<{ ok: true; revoked: boolean; device: TrustedDevice | null }>(
+    `/browser/trusted-devices/${deviceId}/revoke`,
+    {},
+    csrf,
+  );
 }
 
 export function sendControl(

@@ -89,6 +89,10 @@ export const EVENT_KINDS = [
   "work_unit_checks_handed_off",
   "model_catalog_changed",
   "model_role_assignment_changed",
+  "trusted_device_registered",
+  "trusted_device_used",
+  "trusted_device_revoked",
+  "trusted_device_rejected",
 ] as const satisfies readonly EventKind[];
 
 /** EVENT_KINDS が EventKind を漏れなく含むことの型検査（漏れがあると never でなくなり代入できない）。 */

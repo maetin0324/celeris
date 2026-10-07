@@ -20,6 +20,8 @@ export function createApp(options?: {
   liveUpstream?: string;
   attestationKeyFile?: string;
   ownerSocket?: string;
+  probe?: boolean;
+  now?: () => number;
   log?: (entry: { path: string; status: number; ms: number }) => void;
   registerRoutes?: (app: Express) => void;
 }): Express;

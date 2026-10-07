@@ -26,6 +26,7 @@ mod browser_control;
 /// ADR-0101 / H5: Browser Identity の登録・一覧・失効・削除（利用は isolation_required）。
 pub mod browser_identity;
 mod browser_live;
+pub mod browser_trusted_devices;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。
 pub mod changes;
 pub mod chat;
@@ -108,7 +109,7 @@ pub use reports::{
 };
 pub use routing_catalog::{RoutingCatalogReader, RoutingCatalogView, SharedRoutingCatalogReader};
 pub use schema::{API_V1_SCHEMA_JSON, ApiV1Schema, api_v1_schema_json, api_v1_schema_value};
-pub use state::{ApiState, StreamTuning};
+pub use state::{ApiClock, ApiState, StreamTuning};
 pub use stats::classify_outcome;
 pub use tree::MAX_TEXT_BYTES;
 pub use types::{

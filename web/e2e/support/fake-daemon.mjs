@@ -2410,7 +2410,26 @@ export function createBrowserBackend({ credentialWait = true, publicKey = null, 
   const grants = new Map();
   const replies = new Map();
   let grantSeq = 0;
-  const records = { control: [], disconnect: [], waits: [], grants: [], checks: [], reads: [], identities: [] };
+  const records = {
+    control: [],
+    disconnect: [],
+    waits: [],
+    grants: [],
+    checks: [],
+    reads: [],
+    identities: [],
+    devices: [],
+  };
+  // 信頼端末（ADR 2026-10-07-browser-trusted-devices D2・D4）。hash だけを持ち、検証のたびに回転する。
+  // 期限は最後の使用から 90 日、有効な端末は 5 台まで。assertion は claims() で署名と期限を確かめ、purpose を見る。
+  const devices = [];
+  let deviceSeq = 0;
+  const DEVICE_TTL = 90 * 86400;
+  const deviceView = (d) => {
+    const { secret_hash: _h, prev_secret_hash: _p, ...view } = d;
+    return view;
+  };
+  const deviceActive = (d, now) => d.revoked_at === null && d.expires_at > now;
 
   const taskSummary = (id) => ({
     ...fixtureFor(schema.$defs.TaskSummary),
@@ -2631,6 +2650,78 @@ export function createBrowserBackend({ credentialWait = true, publicKey = null, 
     }
     if (p === "/api/v1/browser/waits" && req.method === "GET")
       return json(200, { items: waits.filter((x) => x.state === "pending").map(waitItem) });
+    const dev = /^\/api\/v1\/browser\/trusted-devices(?:\/(verify|[0-9A-HJKMNP-TV-Z]{26}))?$/.exec(p);
+    if (dev) {
+      const claim = claims(
+        req.method === "GET" || req.method === "DELETE"
+          ? {
+              assertion: {
+                payload: req.headers["x-celeris-assertion-payload"],
+                signature: req.headers["x-celeris-assertion-signature"],
+              },
+            }
+          : input,
+      );
+      records.devices.push({ method: req.method, path: p, purpose: claim?.purpose ?? null, body: input });
+      const now = secs();
+      if (!dev[1] && req.method === "GET") {
+        if (claim?.purpose !== "device_list") return json(403, { code: "not_owner_session" });
+        return json(200, { devices: devices.map(deviceView).reverse(), limit: 5, now });
+      }
+      if (!dev[1] && req.method === "POST") {
+        if (claim?.purpose !== "device_register") return json(403, { code: "not_owner_session" });
+        if (typeof input.name !== "string" || !/^[0-9a-f]{64}$/.test(input.secret_hash ?? ""))
+          return json(422, { code: "device_invalid" });
+        if (devices.filter((d) => deviceActive(d, now)).length >= 5) return json(409, { code: "device_limit" });
+        deviceSeq += 1;
+        const device = {
+          id: `01K${String(deviceSeq).padStart(23, "0")}`,
+          name: input.name,
+          method: "cookie",
+          created_at: now,
+          last_used_at: null,
+          expires_at: now + DEVICE_TTL,
+          absolute_expires_at: null,
+          revoked_at: null,
+          revoked_reason: null,
+          actor: claim.actor_id ?? "owner",
+          secret_hash: input.secret_hash,
+          prev_secret_hash: null,
+        };
+        devices.push(device);
+        return json(201, { device: deviceView(device) });
+      }
+      if (dev[1] === "verify" && req.method === "POST") {
+        if (claim?.purpose !== "device_resume") return json(403, { code: "not_owner_session" });
+        const device = devices.find((d) => d.id === input.device_id);
+        if (!device || !deviceActive(device, now)) return json(403, { code: "device_rejected" });
+        if (device.prev_secret_hash === input.presented_hash) {
+          device.revoked_at = now;
+          device.revoked_reason = "reuse";
+          return json(403, { code: "device_rejected" });
+        }
+        if (device.secret_hash !== input.presented_hash) return json(403, { code: "device_rejected" });
+        if (input.readonly) return json(200, { device: deviceView(device) });
+        device.prev_secret_hash = device.secret_hash;
+        device.secret_hash = input.next_hash;
+        device.last_used_at = now;
+        device.expires_at = now + DEVICE_TTL;
+        return json(200, { device: deviceView(device) });
+      }
+      if (dev[1] && dev[1] !== "verify" && req.method === "DELETE") {
+        if (claim?.purpose !== "device_revoke" || claim.device_id !== dev[1])
+          return json(403, { code: "not_owner_session" });
+        const device = devices.find((d) => d.id === dev[1]);
+        if (!device) return json(404, { code: "device_not_found" });
+        const revoked = device.revoked_at === null;
+        if (revoked) {
+          device.revoked_at = now;
+          device.revoked_reason = "owner";
+        }
+        return json(200, { revoked, device: deviceView(device) });
+      }
+      return json(405, { code: "method_not_allowed" });
+    }
     const id = /^\/api\/v1\/browser\/identities(?:\/([^/]+)(?:\/(revoke|restore))?)?$/.exec(p);
     if (id) {
       records.identities.push({ method: req.method, path: p, query: url.search, body: input });
@@ -2714,6 +2805,7 @@ export function createBrowserBackend({ credentialWait = true, publicKey = null, 
     records,
     waits,
     identities,
+    devices,
     control,
     live,
     clock,

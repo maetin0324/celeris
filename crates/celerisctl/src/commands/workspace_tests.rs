@@ -186,3 +186,137 @@ fn older_than_overrides_the_config() {
     .unwrap();
     assert!(target.exists(), "3600 秒はまだ経っていない");
 }
+
+// ---- ADR-0067 付記 2026-10-07 D3-d: `celerisctl workspace backfill-artifacts` ----
+
+fn insert_remote_task(store: &SqliteStore) -> TaskId {
+    let id = insert_done_task(store, OffsetDateTime::now_utc());
+    let mut task = store.get(id).unwrap().unwrap();
+    task.workspace = WorkspaceSpec::Remote {
+        cluster: "sirius".into(),
+        path: PathBuf::from("/work/NBB/cmp4"),
+        mode: None,
+    };
+    store
+        .update_task(&task, Event::worker_progress("x", "remote"))
+        .unwrap();
+    id
+}
+
+fn produced_paths(store: &SqliteStore, id: TaskId) -> Vec<String> {
+    store
+        .events_for(id)
+        .unwrap()
+        .into_iter()
+        .filter_map(|(_, ev)| match ev {
+            Event::ArtifactProduced { artifact, .. } => Some(artifact.path),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `--dry-run` は登録せず、本番の実行は remote の task の写し `<workspace_root>/<task_id>/artifacts/` から
+/// 未登録の成果物を `declared: false` で登録する。2 回目は増えない。`--task` で 1 件に絞れる。
+#[test]
+fn backfill_artifacts_registers_remote_mirror_artifacts_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_root = dir.path().join("workspaces");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let remote_id = insert_remote_task(&store);
+    // local（worktree ではない）task の作業場所はその `path` そのもの（`<workspace_root>/<task_id>` ではない）。
+    let local_id = insert_done_task(&store, OffsetDateTime::now_utc());
+    let local_ws = dir.path().join("local-ws");
+    let mut local = store.get(local_id).unwrap().unwrap();
+    local.workspace = WorkspaceSpec::Local {
+        path: local_ws.clone(),
+        mode: None,
+    };
+    store
+        .update_task(&local, Event::worker_progress("x", "local"))
+        .unwrap();
+    for ws in [workspace_root.join(remote_id.to_string()), local_ws] {
+        let final_dir = ws.join("artifacts").join("cmp4").join("final");
+        std::fs::create_dir_all(&final_dir).unwrap();
+        std::fs::write(final_dir.join("report.md"), "# report\n").unwrap();
+        std::fs::write(final_dir.join("F1-bandwidth.png"), "png").unwrap();
+    }
+    let config_path = write_config(dir.path(), &workspace_root);
+
+    let result = run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config: config_path.clone(),
+            task: None,
+            dry_run: true,
+        },
+    )
+    .unwrap();
+    assert_eq!(result, ExitCode::SUCCESS);
+    assert!(
+        produced_paths(&store, remote_id).is_empty(),
+        "dry-run must not register"
+    );
+
+    let result = run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config: config_path.clone(),
+            task: None,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(result, ExitCode::SUCCESS);
+    assert_eq!(
+        produced_paths(&store, remote_id),
+        vec![
+            "artifacts/cmp4/final/report.md".to_string(),
+            "artifacts/cmp4/final/F1-bandwidth.png".to_string(),
+        ]
+    );
+    // `--task` 無しの対象は remote だけ（local の worktree task は run ごとに拾われている）。
+    assert!(produced_paths(&store, local_id).is_empty());
+
+    // 2 回目は増えない。
+    run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config: config_path.clone(),
+            task: None,
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(produced_paths(&store, remote_id).len(), 2);
+
+    // `--task` で local の task も補完できる。
+    run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config: config_path,
+            task: Some(local_id.to_string()),
+            dry_run: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(produced_paths(&store, local_id).len(), 2);
+}
+
+#[test]
+fn backfill_artifacts_with_an_unknown_task_is_an_error() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_root = dir.path().join("workspaces");
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    let store = SqliteStore::open_in_memory().unwrap();
+    let config_path = write_config(dir.path(), &workspace_root);
+    let result = run_backfill_artifacts(
+        &store,
+        BackfillArtifactsArgs {
+            config: config_path,
+            task: Some(TaskId::new().to_string()),
+            dry_run: true,
+        },
+    );
+    assert!(matches!(result, Err(CliError::Message(_))), "{result:?}");
+}

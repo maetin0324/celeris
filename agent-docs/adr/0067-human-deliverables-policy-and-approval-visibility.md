@@ -149,3 +149,93 @@ DB 上の `draft` / `ready` のタスクの受け入れ条件を D2 の規則（
 - `ApprovalItem.artifacts` の要素形が `ArtifactRef` → `{idx} & ArtifactRef`（flatten）に変わる
   （追加のみ、既存フィールドは残る）。
 - `PlanError` / `DelegateError` に `NoHumanDeliverable { index }` を追加。
+
+## 付記（2026-10-07）: remote の task と判断待ちで終わった run の成果物を拾う
+
+### 文脈 — 実機で起きたこと（本番、BenchFS の 4 FS 比較 task 01M49KWT59、cluster sirius）
+
+worker は `artifacts/cmp4/final/`（手元の写し `/local/celeris/data/workspaces/<task_id>/artifacts/`）に
+`report.md`・F1〜F5 の png/svg/pdf・`tables.md`・csv を書き、報告でもそう述べたが、web の task の成果物には
+何も出なかった（`ArtifactProduced` は 0 件）。原因は 2 つ:
+
+1. D3 / ADR-0074 D6.3 の走査（`run_worker` の run 後）は `outcome.is_ok() && remote.is_none()` のときだけ
+   走る。remote（cluster）の task では**一度も走らない**。remote の `workspace` は手元の写し（ADR-0018 D1 の
+   mirror）で、`artifacts_dir` はその中の `artifacts/`（`task_core::artifacts::artifacts_dir_for`）なので、
+   走る材料自体はある。
+2. 走査は run の終端を見ない（`Ok` なら走る）が、この task の最後の run は question で終わり、その前の run は
+   wait（cluster job 待ち）で終わっていた。終端ごとの扱いが決まっていなかった。
+
+また、走査の `existing_paths` は `path` だけで重複を見るので、同じ path の中身が変わっても新しい版が
+登録されない。走査の上限 20 件は、成果物 dir に raw の json/csv が数千件ある task
+（この task の `artifacts/` は 15,512 file。`cmp4/run2/runs/<job>/cells/...` が深い）では、`read_dir` の順で
+raw が先に 20 件を使い切り `report.md` が落ちる。
+
+### D3-a. 走る条件（終端と作業場所）
+
+`run_worker` の run 後の走査は、run の終端が **`Done` / `Question` / `Waiting`** のとき走る
+（`undeclared_artifacts::terminal_wants_scan`）。`Question`（判断待ち）と `Waiting`（cluster job 待ち →
+`blocked`）はその時点の成果物を人が判断に使うので登録する。`Yielded`（同じ WU の次 session が続きを書く）・
+`BudgetExhausted`・adapter の `Err` は従来どおり走らない（途中の中間物を成果物として出さない。再試行の末の
+`Done` / `Question` で拾う）。remote の push（ADR-0079 R5b-fix2）が落ちて `Err` になった run も走らない
+（その run は失敗として扱われ、やり直しで拾う）。
+
+走査の形は作業場所で決める:
+
+- git worktree ではない local（`remote` も `worktree` も無い）: 従来どおり作業場所全体の `*.md`（D3）。
+- git worktree の Task（`worktree` あり）**と remote の Task（`remote` あり）**: その run の `artifacts_dir` の
+  中だけ（ADR-0074 D6.3 の `scan_undeclared_artifacts_in_dir`）。remote の写しはクラスタの project の内容
+  （コードや raw）を含むので全体は走査しない。
+
+### D3-b. 重複の規則（path と sha256）
+
+登録済みの判定は **`(path, sha256)` の組**で行う（`undeclared_artifacts::registered_keys` が同じ task の
+`ArtifactProduced` 全履歴〈申告済み・未申告どちらも〉から作る）。同じ path・同じ hash は再登録しない
+（question → 回答 → 次の run、retry、のたびに増えない）。同じ path で中身が変わったら**新しい版**として
+もう 1 件登録する（`GET /tasks/{id}/artifacts` は登場順の一覧なので、古い版は `sha256_matches: false`、
+新しい版は `true` で並ぶ。一覧を上書きしない = events は追記専用）。D3 の全体 `*.md` 走査も同じ規則にする。
+
+### D3-c. `artifacts_dir` 走査の対象・順序・上限
+
+`scan_undeclared_artifacts_in_dir`（worktree / remote）は次の規則にする。D3 の全体 `*.md` 走査（上限 20 件・
+1 MiB・除外 dir）は変えない。
+
+- 拡張子: `md` `html` `pdf` `csv` `png` `svg` `json`（`svg` と `json` を足す。人の依頼の「json の要約など」。
+  json は機械向けのものが多いので最後のクラスに置く）。
+- 除外する file 名: celeris 自身が書く `checkpoint.json` `result.json` `request.json` `prompt.txt`
+  `delegate.json` `followups.json` `plan.json` `review.json` `knowledge-candidates.json` と
+  `execution-plan*.json` / `project-plan*.json`（前方一致）。`phase-reports/` と D3 の除外 dir は配下を見ない。
+- **深さ**: `artifacts_dir` からの相対 path の要素数が `MAX_DEPTH_IN_DIR = 4` を超える file は見ない
+  （`cmp4/final/report.md` = 3 は入る。`cmp4/run2/runs/<job>/cells/<fs>/rep1/w1a/cell.json` = 8 は入らない）。
+  人が読む成果物は浅い所に置かれ、深い所にあるのは job の raw（ADR-0036 D3 の指示文も `artifacts/` 直下か
+  その 1〜2 段下を想定している）。
+- **順序**: 候補を（拡張子のクラス順〈上の並び〉→ 深さ → path）で並べ、その順に未登録のものを数える。
+  `read_dir` の順に依存しない決定的な結果になり、上限に当たるときは md/html/pdf の文書が先に残る。
+- **上限**: 1 回の走査で登録する件数は `MAX_FILES_IN_DIR = 64`（D3 の 20 とは別の定数）、1 file 1 MiB
+  （`MAX_BYTES` を共有）、空 file は対象外。`artifacts_dir` は「成果物置き場」そのものなので、全体 `*.md`
+  走査の「取りこぼし防止の保険」の 20 件より広く取る。上限を超えた分は次の run（question の回答後など）で
+  続きから登録される（登録済みは数えない）。
+
+### D3-d. 既存 task の取りこぼしの補完（一度だけ）
+
+`celerisctl workspace backfill-artifacts --config <config.toml> [--task <id>] [--dry-run]`。
+
+- 対象: `--task` があればその 1 件（作業場所の種別を問わない）。無ければ **remote（cluster）の task 全部**
+  （取りこぼしの原因が remote の条件だったため。local の worktree task は ADR-0074 D6.3 以降は run ごとに
+  拾われている）。
+- 1 task ごとに `task_ops::workspace::local_dir(task, workspace_root)` を作業場所、
+  `artifacts_dir_for(task, local_dir)` を成果物 dir として、D3-b / D3-c と同じ関数で走査し、見つかったものを
+  `Event::ArtifactProduced { run_id, artifact: { declared: false, .. } }` で登録する。`run_id` は
+  その task の最後の run（`runs` 索引の `started_at` 最新。無ければ `WorkerStarted` の最後。それも無ければ
+  空文字）。`--dry-run` は登録せず列挙するだけ。
+- 何度流しても同じ結果（D3-b の重複規則）。本番での実行は配送後に運用セッション（人）が行う。
+  LLM も daemon も使わない（DB を直接開く celerisctl の他のコマンドと同じ）。
+
+### 却下した案（付記）
+
+- **`Yielded` / `BudgetExhausted` でも走らせる**: 途中の中間物まで一覧に混ざる。`Yielded` は同じ WU の
+  次 session が続きを書くので終端で拾えば足りる。`BudgetExhausted` の末に task が failed になった場合の
+  成果物は `celerisctl workspace backfill-artifacts --task <id>` で拾える。
+- **raw らしい dir 名（`raw/` `runs/` `logs/`）を除外する**: 名前は task ごとに違い規則にできない。深さは
+  機械的に決まる。
+- **`json` を対象にしない**: 人の依頼に「json の要約など」があり、`manifest.json` のような小さな要約は
+  人が見る。機械向けの名前は除外し、クラスを最後にして上限に当たるときは先に落ちるようにした。

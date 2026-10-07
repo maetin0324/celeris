@@ -213,7 +213,7 @@ fn cluster_job_wait_event_types_match_their_serde_names() {
     }
     let unique: std::collections::BTreeSet<&str> = EVENT_TYPES.iter().copied().collect();
     assert_eq!(unique.len(), EVENT_TYPES.len());
-    assert_eq!(EVENT_TYPES.len(), 70);
+    assert_eq!(EVENT_TYPES.len(), 74);
 }
 
 #[test]
@@ -344,7 +344,7 @@ fn routing_feedback_event_types_match_their_serde_names() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
-    assert_eq!(EVENT_TYPES.len(), 70);
+    assert_eq!(EVENT_TYPES.len(), 74);
 }
 
 /// ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: `WorkerPolicyViolation` の `type` 名が serde の名前・
@@ -369,5 +369,46 @@ fn worker_policy_violation_event_type_matches_its_serde_name() {
         assert_eq!(serde_name, event_type_name(&event));
         assert!(EVENT_TYPES.contains(&serde_name));
         assert_eq!(value["kind"].as_str().unwrap(), kind.as_str());
+    }
+}
+
+/// ADR 2026-10-07-browser-trusted-devices D5: 信頼端末の Event の `type` 名が serde の名前・
+/// `event_type_name`・`EVENT_TYPES` で一致する。
+#[test]
+fn trusted_device_event_types_match_their_serde_names() {
+    use task_core::trusted_device::{
+        TrustedDeviceMethod, TrustedDeviceRejectReason, TrustedDeviceRevokeReason,
+    };
+    let events = [
+        Event::TrustedDeviceRegistered {
+            device_id: "d".into(),
+            name: "laptop".into(),
+            method: TrustedDeviceMethod::Cookie,
+            actor: "owner".into(),
+            expires_at: 1,
+            absolute_expires_at: None,
+        },
+        Event::TrustedDeviceUsed {
+            device_id: "d".into(),
+            actor: "owner".into(),
+            expires_at: 2,
+        },
+        Event::TrustedDeviceRevoked {
+            device_id: "d".into(),
+            actor: "owner".into(),
+            reason: TrustedDeviceRevokeReason::Reuse,
+        },
+        Event::TrustedDeviceRejected {
+            device_id: None,
+            actor: "owner".into(),
+            reason: TrustedDeviceRejectReason::Limit,
+        },
+    ];
+    for event in events {
+        let value = serde_json::to_value(&event).unwrap();
+        let serde_name = value["type"].as_str().unwrap();
+        assert!(serde_name.starts_with("trusted_device_"), "{serde_name}");
+        assert_eq!(serde_name, event_type_name(&event));
+        assert!(EVENT_TYPES.contains(&serde_name), "{serde_name}");
     }
 }

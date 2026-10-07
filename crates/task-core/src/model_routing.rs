@@ -49,6 +49,18 @@ pub struct LaneResolution {
     /// ADR-0132 付記 L8: worker run の provider 選択の理由と見た候補。reviewer run と旧イベントには無い。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<ProviderSelection>,
+    /// ADR 2026-10-07（coding harness の既定）: `adapter_policy = "model_family"` のハーネスの run だけ。
+    /// 選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coding_default: Option<CodingDefaultResolution>,
+}
+
+/// ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CodingDefaultResolution {
+    pub family: crate::model_family::ModelFamily,
+    pub family_basis: crate::model_family::FamilyBasis,
+    pub adapter_choice: crate::coding_harness::AdapterChoice,
 }
 
 /// ADR-0132 付記 L8: provider を選んだ理由。

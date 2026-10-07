@@ -52,6 +52,13 @@ pub enum AdapterPolicy {
     ModelFamily,
 }
 
+impl AdapterPolicy {
+    /// 既定（従来どおり）か。serde の `skip_serializing_if` 用。
+    pub fn is_provider_order(&self) -> bool {
+        *self == AdapterPolicy::ProviderOrder
+    }
+}
+
 /// adapter をどう決めたか（routing audit に残す）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]

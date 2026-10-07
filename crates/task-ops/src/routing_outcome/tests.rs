@@ -76,6 +76,7 @@ fn run_events(task: &task_core::Task) -> Vec<Event> {
                     model_id: "model-cheap".into(),
                     reasoning_effort: None,
                     selection: None,
+                    coding_default: None,
                 },
                 quota_reason: None,
                 work_unit_id: None,

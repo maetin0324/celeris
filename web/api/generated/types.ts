@@ -119,6 +119,17 @@ export type ActualWriteSetView = {
   "status": string;
 };
 
+export type AdapterChoice = {
+  "kind": "explicit";
+} | {
+  "kind": "preferred";
+} | {
+  "kind": "fallback";
+  "reason": string;
+} | {
+  "kind": "provider_order";
+};
+
 export type AdoptRequest = {
   "stage": string;
   "task_id": TaskId;
@@ -790,6 +801,12 @@ export type ClusterView = {
 
 export type Clusters = {
   "items": Array<ClusterView>;
+};
+
+export type CodingDefaultResolution = {
+  "adapter_choice": AdapterChoice;
+  "family": ModelFamily;
+  "family_basis": FamilyBasis;
 };
 
 export type CommentAuthorKind = "human" | "node" | "system";
@@ -2357,6 +2374,8 @@ export type FailureSummary = {
   "reason": string;
 };
 
+export type FamilyBasis = "llm_source" | "account_pool" | "model_profile" | "unknown";
+
 export type FeatureStage = "dispatch" | "proxy";
 
 export type FileDiffStat = {
@@ -2739,6 +2758,7 @@ export type LaneDecision = {
 export type LaneResolution = {
   "account"?: string | null;
   "adapter"?: string;
+  "coding_default"?: CodingDefaultResolution | null;
   "lane"?: Tier | null;
   "model_id"?: string;
   "provider"?: string | null;
@@ -3043,6 +3063,8 @@ export type ModelCatalogView = {
   "items": Array<ModelCatalogItem>;
   "last_discovery": Array<DiscoveryRecordView>;
 };
+
+export type ModelFamily = "claude" | "gpt" | "qwen" | "other" | "unknown";
 
 export type ModelPrefs = {
   "allowed_tiers"?: Array<Tier>;
@@ -4389,6 +4411,7 @@ export type RunRoutingAudit = {
   "actual_sources"?: Array<ActualSource>;
   "adapter"?: string | null;
   "audit_incomplete"?: boolean | null;
+  "coding_default"?: CodingDefaultResolution | null;
   "cost_usd"?: number | null;
   "decision_id"?: string | null;
   "escalation"?: string | null;

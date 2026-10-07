@@ -1,5 +1,66 @@
 {
   "$defs": {
+    "AdapterChoice": {
+      "description": "adapter をどう決めたか（routing audit に残す）。",
+      "oneOf": [
+        {
+          "description": "task・役割で明示された adapter。",
+          "properties": {
+            "kind": {
+              "const": "explicit",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "family の既定ハーネスに一致する行。",
+          "properties": {
+            "kind": {
+              "const": "preferred",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "既定ハーネスの行が使えず、絞る前の候補へ倒れた。",
+          "properties": {
+            "kind": {
+              "const": "fallback",
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "`AdapterPolicy::ProviderOrder`（従来どおり）。",
+          "properties": {
+            "kind": {
+              "const": "provider_order",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalId": {
       "description": "認可 1 件の識別子（ULID）。",
       "type": "string"
@@ -980,6 +1041,26 @@
         "slurm"
       ],
       "type": "string"
+    },
+    "CodingDefaultResolution": {
+      "description": "ADR 2026-10-07: coding の既定ハーネス解決の記録（routing audit で (model, adapter) を比べる材料）。",
+      "properties": {
+        "adapter_choice": {
+          "$ref": "#/$defs/AdapterChoice"
+        },
+        "family": {
+          "$ref": "#/$defs/ModelFamily"
+        },
+        "family_basis": {
+          "$ref": "#/$defs/FamilyBasis"
+        }
+      },
+      "required": [
+        "family",
+        "family_basis",
+        "adapter_choice"
+      ],
+      "type": "object"
     },
     "CommitIntent": {
       "properties": {
@@ -4528,6 +4609,16 @@
       ],
       "type": "object"
     },
+    "FamilyBasis": {
+      "description": "family をどの材料で決めたか（routing audit に残す）。",
+      "enum": [
+        "llm_source",
+        "account_pool",
+        "model_profile",
+        "unknown"
+      ],
+      "type": "string"
+    },
     "FeatureStage": {
       "description": "特徴を記録した時点。run の時点と proxy の更新時点を区別し、後の review 結果を当時の特徴に混ぜない。",
       "enum": [
@@ -4805,6 +4896,17 @@
         "adapter": {
           "type": "string"
         },
+        "coding_default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CodingDefaultResolution"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-07（coding harness の既定）: `adapter_policy = \"model_family\"` のハーネスの run だけ。\n選んだ行の family と、adapter を明示・既定・fallback のどれで決めたか。他の run と旧イベントには無い。"
+        },
         "lane": {
           "anyOf": [
             {
@@ -5075,6 +5177,29 @@
         "reach_criteria"
       ],
       "type": "object"
+    },
+    "ModelFamily": {
+      "description": "model の系統。未知（`Other`・`Unknown`）は非 Claude として扱う。",
+      "oneOf": [
+        {
+          "enum": [
+            "claude",
+            "gpt",
+            "qwen"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "other",
+          "description": "family は書かれているが既知の系統ではない（DeepSeek 等）。",
+          "type": "string"
+        },
+        {
+          "const": "unknown",
+          "description": "family を決める材料が無い。",
+          "type": "string"
+        }
+      ]
     },
     "OperationIntent": {
       "additionalProperties": false,

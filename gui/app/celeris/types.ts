@@ -633,6 +633,21 @@ export type Event =
       type: "workspace_pruned";
     }
   | {
+      duration_ms: number;
+      mode: TargetSweepMode;
+      /**
+       * lock が取れない profile のせいで上限の 80% まで下がらなかった。
+       */
+      over_cap_unresolved: boolean;
+      roots: TargetSweepRootReport[];
+      /**
+       * skip した path と理由（先頭 50 件。総数は `skipped_total`）。
+       */
+      skipped: TargetSweepSkip[];
+      skipped_total: number;
+      type: "target_sweep_ran";
+    }
+  | {
       record: RoutingRecord;
       run_id: string;
       type: "routing_decided";
@@ -1291,6 +1306,10 @@ export type BudgetKind = "turns" | "wall_clock" | "context";
  * D7: harness / 供給側都合の失敗の種類。
  */
 export type HarnessErrorClass = "supply" | "infra" | "lease_expired" | "idle_timeout";
+/**
+ * `Event::TargetSweepRan` の実行方式（D1.4: `--dry-run` は何も消さない）。
+ */
+export type TargetSweepMode = "apply" | "dry_run";
 /**
  * ADR-0069 D1: `worker_hint.tier` を誰が決めたか。
  */
@@ -5640,6 +5659,32 @@ export interface Usage {
    * 拒否されなかった）。session を扱わない adapter は `None`。
    */
   session_resumed?: boolean | null;
+}
+/**
+ * `Event::TargetSweepRan` の root 1 つ分。
+ */
+export interface TargetSweepRootReport {
+  after_bytes: number;
+  before_bytes: number;
+  by_reason: TargetSweepByReason;
+  deleted_bytes: number;
+  deleted_items: number;
+  root: string;
+}
+/**
+ * 消した項目の理由別の数（D1.2: 古さ・上限・放置された target dir）。
+ */
+export interface TargetSweepByReason {
+  age: number;
+  cap: number;
+  stale_target: number;
+}
+/**
+ * `Event::TargetSweepRan` の skip 1 件（例: `reason = "build_in_progress"`）。
+ */
+export interface TargetSweepSkip {
+  path: string;
+  reason: string;
 }
 /**
  * ADR-0069 D5: `Event::RoutingDecided` の中身。

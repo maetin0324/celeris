@@ -292,6 +292,7 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::WorkspaceModeDowngraded { .. } => "workspace_mode_downgraded",
         Event::ClusterMasterExited { .. } => "cluster_master_exited",
         Event::WorkspacePruned { .. } => "workspace_pruned",
+        Event::TargetSweepRan { .. } => "target_sweep_ran",
         Event::RoutingDecided { .. } => "routing_decided",
         Event::RoutingFeaturesRecorded { .. } => "routing_features_recorded",
         Event::RoutingRequestDecided { .. } => "routing_request_decided",

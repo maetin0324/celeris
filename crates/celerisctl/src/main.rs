@@ -38,6 +38,7 @@ use commands::retry::{self, RetryArgs};
 use commands::routing::{self as routing_cmd, RoutingCommand};
 use commands::scratch::{self as scratch_cmd, ScratchCommand};
 use commands::skills::{self as skills_cmd, SkillsCommand};
+use commands::target_sweep::{self as target_cmd, TargetCommand};
 use commands::worker::{self, WorkerCommand};
 use commands::workspace::{self, WorkspaceCommand};
 use error::CliError;
@@ -85,6 +86,11 @@ enum Command {
     Scratch {
         #[command(subcommand)]
         command: ScratchCommand,
+    },
+    /// ADR 2026-10-07-build-tmp-hygiene D1.4: 共有 cargo target の掃除（`sweep [--root]... [--dry-run | --apply] [--json]`）。DB は開かない。
+    Target {
+        #[command(subcommand)]
+        command: TargetCommand,
     },
     /// 共有 Cargo ビルドキャッシュの古い repo-key を列挙・削除する（DB は開かない）。
     /// ADR-0075: scratch へ移行済み。通常は `celerisctl scratch gc` を使う。
@@ -271,6 +277,7 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
         Command::BuildCache { .. } => unreachable!("handled before store open"),
         Command::Browser { .. } => unreachable!("handled before store open"),
         Command::Scratch { .. } => unreachable!("handled before store open"),
+        Command::Target { .. } => unreachable!("handled before store open"),
         Command::Release { .. } => unreachable!("handled before store open"),
         Command::Org { command } => org_cmd::run(store, db_path, command),
         // `Config` は DB を開く前に処理される（`main` を見よ）。
@@ -388,6 +395,15 @@ fn main() -> ExitCode {
     }
     if let Command::Scratch { command } = cli.command {
         return match scratch_cmd::run(cli.db, command) {
+            Ok(code) => code,
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        };
+    }
+    if let Command::Target { command } = cli.command {
+        return match target_cmd::run(command) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");

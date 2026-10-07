@@ -990,6 +990,40 @@ pub struct FailedWorkUnitCheck {
     pub detail: String,
 }
 
+/// `Event::TargetSweepRan` の実行方式（D1.4: `--dry-run` は何も消さない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TargetSweepMode {
+    Apply,
+    DryRun,
+}
+
+/// 消した項目の理由別の数（D1.2: 古さ・上限・放置された target dir）。
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TargetSweepByReason {
+    pub age: u64,
+    pub cap: u64,
+    pub stale_target: u64,
+}
+
+/// `Event::TargetSweepRan` の root 1 つ分。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TargetSweepRootReport {
+    pub root: String,
+    pub before_bytes: u64,
+    pub after_bytes: u64,
+    pub deleted_bytes: u64,
+    pub deleted_items: u64,
+    pub by_reason: TargetSweepByReason,
+}
+
+/// `Event::TargetSweepRan` の skip 1 件（例: `reason = "build_in_progress"`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TargetSweepSkip {
+    pub path: String,
+    pub reason: String,
+}
+
 /// DESIGN §4.3 の `Event`（追記専用）。ADR-0002 D2: `Transitioned` は遷移の
 /// *結果* を記録するものであり、`transition()` の入力（`Trigger`）とは別物。
 /// `JsonSchema` は ADR-0013 D8: `docs/api/v1/event.schema.json`（`EventRow` 経由）の契約に使う。
@@ -1297,6 +1331,18 @@ pub enum Event {
     WorkspacePruned {
         /// 消したパス（作業場所〈`<workspace_root>/<task_id>`〉からの相対。例: `repos/benchfs/target`）。
         removed: Vec<String>,
+    },
+    /// ADR 2026-10-07-build-tmp-hygiene D1.5: 共有 cargo target の定期掃除（`target_sweep`）を 1 回走らせた記録。
+    /// cron 由来の task に追記する。状態は変えない（`replay` は無視する）。
+    TargetSweepRan {
+        mode: TargetSweepMode,
+        roots: Vec<TargetSweepRootReport>,
+        /// skip した path と理由（先頭 50 件。総数は `skipped_total`）。
+        skipped: Vec<TargetSweepSkip>,
+        skipped_total: u64,
+        /// lock が取れない profile のせいで上限の 80% まで下がらなかった。
+        over_cap_unresolved: bool,
+        duration_ms: u64,
     },
     /// ADR-0069 D5（Phase 114）: この run の routing の監査記録（担当・harness・lane・model・features・
     /// 当たった規則・policy の版・エスカレーション）。同じ `run_id` の `WorkerStarted` の直後に 1 件。
@@ -1878,6 +1924,33 @@ impl Event {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_sweep_event_round_trips() {
+        let ev = Event::TargetSweepRan {
+            mode: TargetSweepMode::DryRun,
+            roots: vec![TargetSweepRootReport {
+                root: "/var/tmp/agent-platform-build".into(),
+                before_bytes: 200,
+                after_bytes: 80,
+                deleted_bytes: 120,
+                deleted_items: 7,
+                by_reason: TargetSweepByReason { age: 4, cap: 2, stale_target: 1 },
+            }],
+            skipped: vec![TargetSweepSkip {
+                path: "/x/debug".into(),
+                reason: "build_in_progress".into(),
+            }],
+            skipped_total: 1,
+            over_cap_unresolved: true,
+            duration_ms: 12,
+        };
+        let json = serde_json::to_string(&ev).expect("serialize");
+        assert!(json.contains(r#""type":"target_sweep_ran""#), "{json}");
+        assert!(json.contains(r#""mode":"dry_run""#), "{json}");
+        let back: Event = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, ev);
+    }
 
     fn literature() -> GenreSpec {
         GenreSpec {

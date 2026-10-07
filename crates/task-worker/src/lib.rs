@@ -64,6 +64,8 @@ pub mod ssh;
 pub mod subprocess;
 /// ADR-0043 D2 / D4（Phase 52）: タスクの作業場所を複数のリポジトリで組む（worktree とリンク、`setup`）。
 pub mod task_repos;
+/// ADR 2026-10-07-build-tmp-hygiene D1.1〜D1.3: 共有 cargo target の掃除の純粋な計画（I/O は task-dispatch）。
+pub mod target_sweep;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tool_policy;

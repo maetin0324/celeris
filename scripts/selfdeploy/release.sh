@@ -559,6 +559,11 @@ for b in celeris celerisctl celeris-credentiald; do
   cp -p "$SD_CARGO_TARGET/release/$b" "$STAGE/bin/$b"
 done
 
+# ADR 2026-10-07-build-tmp-hygiene D1.4: 梱包が済んだので（`.lock-release` を持ったまま）共有 target を 1 回掃除する。
+# 掃除の失敗は release を止めない（警告だけ）。ビルド中の profile は `.cargo-lock` が取れず消されない。
+"$STAGE/bin/celerisctl" target sweep --apply --root "$SD_CARGO_TARGET" >&2 8>&- 9>&- \
+  || sd_log "warning: target sweep failed (ignored)"
+
 [ -d "$BUILD/gui/build" ] || sd_die "gui build output missing: $BUILD/gui/build"
 cp -r "$BUILD/gui/build" "$STAGE/gui/build"
 for f in server.js package.json pnpm-lock.yaml pnpm-workspace.yaml; do

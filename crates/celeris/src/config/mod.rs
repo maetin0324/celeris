@@ -32,6 +32,7 @@ mod execution;
 mod github;
 mod harness;
 mod knowledge;
+mod maintenance;
 mod model_catalog;
 mod model_routing;
 mod org;
@@ -56,6 +57,7 @@ pub use execution::*;
 pub use github::*;
 pub use harness::*;
 pub use knowledge::*;
+pub use maintenance::*;
 pub use model_catalog::*;
 pub use model_routing::*;
 pub use org::*;
@@ -217,6 +219,9 @@ pub struct Config {
     /// （以後は DB が正。設定は再読込しない）。
     #[serde(default)]
     pub cron: CronConfig,
+    /// ADR 2026-10-07-build-tmp-hygiene D1.4: `[maintenance.target_sweep]`（共有 cargo target の掃除の roots と上限）。
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
     /// ADR 2026-10-05-cos-chat-home D4: `[cos]`（`stream_retention_days`）と `[cos.attachments]`（添付の上限・GC）。
     #[serde(default)]
     pub cos: CosConfig,
@@ -432,6 +437,7 @@ impl Config {
         }
         cfg.containers.resolve_paths(&base);
         cfg.workspace.resolve_paths(&base);
+        cfg.maintenance.target_sweep.resolve_paths(&base);
         cfg.scratch.resolve_paths(&base);
         cfg.api.resolve_paths(&base);
         if let Some(org_include) = &cfg.org_include {
@@ -510,6 +516,7 @@ impl Config {
         self.api.validate()?;
         cluster::validate_clusters(&self.clusters)?;
         self.workspace.validate()?;
+        self.maintenance.target_sweep.validate()?;
         harness::validate_harnesses(&self.harnesses)?;
         let role_ids = harness::validate_roles(&self.roles)?;
         let genre_ids = harness::validate_genres(&self.genres, &role_ids)?;

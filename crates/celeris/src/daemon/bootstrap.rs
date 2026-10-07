@@ -554,6 +554,8 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
+    // ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
+    dispatcher.set_target_sweep(config.target_sweep_params());
     let resolved = config.resolve_cos_provider();
     let (provider, llm_source, account_id, model, mut unavailable_reason) = match resolved {
         Ok(provider) => (

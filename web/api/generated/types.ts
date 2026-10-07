@@ -2188,6 +2188,14 @@ export type Event = {
   "removed": Array<string>;
   "type": "workspace_pruned";
 } | {
+  "duration_ms": number;
+  "mode": TargetSweepMode;
+  "over_cap_unresolved": boolean;
+  "roots": Array<TargetSweepRootReport>;
+  "skipped": Array<TargetSweepSkip>;
+  "skipped_total": number;
+  "type": "target_sweep_ran";
+} | {
   "record": RoutingRecord;
   "run_id": string;
   "type": "routing_decided";
@@ -5312,6 +5320,28 @@ export type StreamHello = {
 
 export type StreamReset = {
   "cursor": number;
+  "reason": string;
+};
+
+export type TargetSweepByReason = {
+  "age": number;
+  "cap": number;
+  "stale_target": number;
+};
+
+export type TargetSweepMode = "apply" | "dry_run";
+
+export type TargetSweepRootReport = {
+  "after_bytes": number;
+  "before_bytes": number;
+  "by_reason": TargetSweepByReason;
+  "deleted_bytes": number;
+  "deleted_items": number;
+  "root": string;
+};
+
+export type TargetSweepSkip = {
+  "path": string;
   "reason": string;
 };
 

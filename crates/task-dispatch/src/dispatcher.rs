@@ -113,6 +113,7 @@ mod followups;
 mod housekeeping;
 mod input_attachments;
 mod leases;
+mod maintenance;
 /// 持ち主の居ない `running` の `runs` 行の照合（lease を持たない reviewer run 等）。
 mod ownerless_runs;
 mod phase_integration;
@@ -1107,6 +1108,9 @@ pub struct Dispatcher {
     /// プロバイダ（= アカウント）ごとのアダプタのインスタンス（ADR-0012 D1）。
     adapters: HashMap<ProviderId, Arc<dyn WorkerAdapter>>,
     config: DispatchConfig,
+    /// ADR 2026-10-07-build-tmp-hygiene D1.4: cron の保守 executor（`target_sweep`）の roots と上限。
+    /// `None` は既定（`dispatcher::maintenance` を参照）。
+    target_sweep: Option<task_worker::target_sweep::SweepParams>,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     #[cfg(test)]
@@ -1462,6 +1466,7 @@ impl Dispatcher {
             models,
             adapters,
             config,
+            target_sweep: None,
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -2100,20 +2105,27 @@ impl Dispatcher {
                 genres: &self.config.genres,
                 ..Default::default()
             };
+            let mut fired = Vec::new();
             for result in
                 task_ops::cron_jobs::fire_due_with(self.store.as_ref(), &ctx, self.now_utc())
             {
                 match result {
-                    Ok(outcome) => tracing::info!(
+                    Ok(outcome) => {
+                        fired.extend(outcome.task_id);
+                        tracing::info!(
                         job_id = %outcome.job_id,
                         job_name = %outcome.job_name,
                         task_id = ?outcome.task_id,
                         runs = ?outcome.runs,
                         "cron job evaluated"
-                    ),
+                        )
+                    }
                     Err(error) => tracing::warn!(error = %error, "cron job evaluation failed"),
                 }
             }
+            // ADR 2026-10-07-build-tmp-hygiene D1.4: `action` 付きの雛形の task は worker に渡さず、
+            // ここで決定的な保守 executor が走らせる（LLM なし）。
+            self.run_maintenance_tasks(&fired);
         }
         report.dispatched = if self.accepting_new_work && self.disk_ready {
             self.dispatch_ready()?
@@ -2354,6 +2366,10 @@ impl Dispatcher {
             // ADR-0089: 非 CoS の枠が無いときは対話用タスク（CoS の候補）だけを見る（判定は dispatch_one）。
             if !load.admits(false) && !task_core::is_conversation(&task) {
                 capacity_cut = true;
+                continue;
+            }
+            // ADR 2026-10-07-build-tmp-hygiene D1.4: 手動実行・queued から作られた保守 task も worker に渡さない。
+            if self.run_maintenance_task(&task)? {
                 continue;
             }
             if self.dispatch_one(task, None, &mut full, now)? {

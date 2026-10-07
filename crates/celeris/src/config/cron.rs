@@ -74,6 +74,8 @@ impl CronConfig {
                     )));
                 }
             }
+            // ADR 2026-10-07-build-tmp-hygiene D1.4: `action` は予約語だけ（未実装の `tmp_sweep` も拒否）。
+            task_ops::cron_jobs::template_action(&seed.template).map_err(invalid)?;
             if let Some(harness) = &seed.template.harness
                 && !known_harnesses.is_empty()
                 && !known_harnesses.iter().any(|h| h == harness)

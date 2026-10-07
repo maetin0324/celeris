@@ -673,6 +673,36 @@ inputs/reports.json（前回の整理以降に終わった task の報告の抜�
 出す前に `celerisctl curation validate` を走らせ exit 0 にする（daemon と同じ検証・同じ文言。受け入れ条件も同じコマンド）。
 """
 
+# ADR 2026-10-07-build-tmp-hygiene D1.4: target-sweep。共有 cargo target（`[maintenance.target_sweep]` の roots）の
+# 定期掃除。雛形の `action = "target_sweep"`（予約語。`tmp_sweep` は未実装なので拒否される）で発火した task は
+# worker（LLM）に渡さず、dispatcher の決定的な保守 executor が掃除を 1 回走らせて `target_sweep_ran` を task に
+# 追記し done（走査・削除の失敗があれば failed）にする。build 中（`.cargo-lock` を他が保持中）の profile は消さない。
+# 有効にするのは人の `celerisctl cron resume target-sweep`（先に `celerisctl target sweep --dry-run` で計画を確かめる）。
+[[cron.seed]]
+name = "target-sweep"
+enabled = false
+schedule = "15 4 * * *"
+timezone = "Asia/Tokyo"
+overlap = "skip"
+catch_up = "latest"
+
+[cron.seed.template]
+title = "共有 cargo target の掃除: {date}"
+action = "target_sweep"              # 'target_sweep'（'tmp_sweep' は予約語・未実装）
+mode = "apply"                       # 'dry_run' | 'apply'
+objective = "共有 cargo target の定期掃除（ADR 2026-10-07-build-tmp-hygiene D1.4）。daemon の決定的な保守 executor が実行する（LLM なし）。"
+
+# ADR 2026-10-07-build-tmp-hygiene D1.1・D1.2: 共有 cargo target の掃除の対象と上限（cron の target-sweep と
+# `celerisctl target sweep` の `--root` 省略時が読む）。値は既定値。`roots` を省略すると
+# `<[workspace].build_cache_dir>/cargo` と `/var/tmp/agent-platform-build` の 2 つ。scratch pool の
+# lease（release-build 等）の target は roots に入れない。
+[maintenance.target_sweep]
+# roots = ["~/.local/celeris/build-cache/cargo", "/var/tmp/agent-platform-build"]
+max_age_days = 7                     # 最後に使ってからこの日数を過ぎた項目を消す
+max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
+target_ratio = 0.8
+stale_target_days = 14               # どの profile も使われていない target dir ごと消す
+
 # CoS チャット（agent-docs/adr/2026-10-05-cos-chat-home.md D4）。値は既定値。
 # 添付は `<db のディレクトリ>/chat/attachments/<id>/blob` に置く（DB と一緒に backup する）。
 # daemon は 1 時間ごとに、未送信の upload（orphan_ttl_hours 経過）、最後の参照が外れて

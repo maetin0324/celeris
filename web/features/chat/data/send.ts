@@ -3,6 +3,7 @@
 // 4xx（409 の本文不一致・422・413・429 など）は送り直さずに返す。
 
 import { isApiError } from "../../../api/client";
+import { randomId } from "../../../lib/random-id";
 
 export const SEND_ATTEMPTS = 3;
 export const SEND_RETRY_DELAY_MS = 1_000;
@@ -14,7 +15,7 @@ export function isRetryableSendError(error: unknown): boolean {
 
 /** client_message_id を 1 度だけ作る（再試行・再送ではこの値を使い回す）。 */
 export function newClientId(prefix = "c"): string {
-  return `${prefix}-${crypto.randomUUID()}`;
+  return `${prefix}-${randomId()}`;
 }
 
 export async function sendWithRetry<T>(

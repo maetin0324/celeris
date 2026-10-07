@@ -66,11 +66,11 @@ Claude Code 2.1.287、claude_oauth（人の既存ログイン）。外部への�
 2026-10-07。WorkUnit live-check2（run `01M4AJ3YEN0ZBD40H0236130CQ`）。修正後の branch tree **`5664ef5fb20e`**（result-fix・api-env・attach-handoff の統合後。patch は当てない）を
 `cargo build -p celeris -p celerisctl` で debug build した（exit 0、1m29s）。
 
-**LLM を伴う (a)〜(e) は未実施**。この run からは試験用 daemon に `claude` を起動させない。理由は 2 つある。
-worker が別の LLM の CLI を起動することは禁止されている（ADR 2026-10-07-worker-no-subagents-no-llm-cli。
-試験用 daemon の CoS run も task run も `claude` を起動する）。また計画承認の回答で、運用セッションが
-「LLM を伴う実機確認が要る場合は Celeris の決定の要求で止めて知らせる」よう指示している。
-LLM を呼ばない部分は確かめ、残りを流す台本を用意した。
+LLM を伴う (a)〜(e) は、人の決定 `live2-llm-run` のとおり**運用セッション（Claude Opus 5.5）が台本を `full` で流した**
+（worker は別の LLM の CLI を起動しないため。ADR 2026-10-07-worker-no-subagents-no-llm-cli）。この節の結果は、その証跡
+（WU 成果物 `artifacts/live2/full/evidence/`）を worker が読んでまとめたもの。台本は `live2-ops.sh`
+（`live2.sh` からの修正: run id を POST の応答でなく `GET …/messages` で待つ、provider の concurrency を 4 にする）。
+先の 2 回の試行（`full-attempt1-runid-null/`・`full-attempt2-capacity1/`）は台本の不備で止まったもので、結果には使っていない。
 
 ### LLM なしで確かめたこと（dry）
 
@@ -87,46 +87,68 @@ token は一時ファイル、`CELERIS_*` は run の env を継がず、すべ�
 
 本番 daemon・本番 DB・`~/.config/celeris` は読み書きしていない。外部への通信は無い（message を送っていないので LLM 呼び出しも無い）。
 
-### (a)〜(e) の結果
+### (a)〜(e) の結果（full、2026-10-07 07:09〜07:17）
 
-| 確認 | 状態 | 台本での確かめ方（`full`） |
+- 試験用 daemon: pid 1240335、`http://127.0.0.1:17932/api/v1`、data dir `artifacts/live2/full/`（ADR-0126）、harness claude-code・llm_source claude_oauth
+- code: tree `5664ef5fb20e`（daemon の表示は記録 commit `deb89817f845`。差分は live-check.md だけ）
+- thread `01M4AK3YNTX2WXSMKD8GKT6NBJ`、node_sessions row `01M4AK410K4TEHZ5P426HV65TF`（session `01a11532-0413-…`、turns 5）
+- 添付: 青い PNG `01M4AK3YPXCXAHA57ECYXFNC3C`、screenshot `01M4AK3Z8VXY7MWW94ANPRXX8K`、PDF `01M4AK3ZT5T3AX6D7EBH07YC5F`（3 件とも ready）
+
+| turn | run id | state | session_mode |
+|---|---|---|---|
+| t1 | `01M4AK40YYEC2EGYF9J944V1QC` | completed | new |
+| t2 | `01M4AK4CV5R7P3GRZ5XHQTDQG6` | completed | resumed |
+| t3 | `01M4AK4RMY5FQGZHD7JXWF9K0F` | completed | resumed |
+| t4 | `01M4AK59D7WC3M2KAXF9JCA30D` | completed | resumed |
+| t5 | `01M4AK7B9DD0PSHHQQCJHAJ8HE` | completed | resumed |
+
+| 確認 | 判定 | 証跡 |
 |---|---|---|
-| (a) 2 往復以上で completed、`session_mode` new→resumed、`node_sessions` が同じ row | 未実施（人の判断待ち） | t1〜t5 の `GET …/runs/{r}`（`evidence/run-t*.json`）、`evidence/db.txt` の `chat_runs`・`node_sessions` |
-| (b) 画像添付を CoS が読む | 未実施 | t2 で青い正方形の色を答えるか |
-| (c) `--api-url` なしの `celerisctl add` が試験用 daemon に届く、events に `cos_operation` actor=cos | 未実施 | t3。`db.txt` の `cos_operations`・`events cos_operation`。台本は `CELERIS_*` を run の env から外すので、本番 API へ向かう経路は `~/.config/celeris` の既定だけ。試験用 DB に行があれば daemon 自身の API（`CELERIS_API_URL`）に届いた |
-| (d) screenshot を pin した UI 修正 task、その task の添付 pin と入力 manifest | 未実施 | t4。`chat_attachment_refs`（owner_kind=task）、作業 run の `prompt.txt` の「## 入力の添付」（`evidence/input-manifest.txt`）と stage（`staged.txt`）。task が planner 経由になると manifest は WU の run で出る（planner run には stage しない） |
-| (e) PDF の KB inbox candidate と provenance | 未実施 | t5。`evidence/kb-inbox*.json` の候補と `provenance[]`（sha256・thread_id・message_id） |
-| codex の 1 往復 | 未実施 | 同じ理由で起動していない |
+| (a) 2 往復以上で completed、new→resumed、同じ node_sessions row | **PASS** | 5 run とも completed で `reason` は空（result.json 不在の failed は出ない＝不具合 1 の修正を実機で確認）。5 run の `session_row_id` はすべて `01M4AK410K4T…`。t2 の返事「合言葉はみかん42」で、前の turn の内容を継いでいる |
+| (b) 画像添付を CoS が読む | **PASS** | t2 の返事「添付画像は青色の正方形です」 |
+| (c) `--api-url` なしの `celerisctl add` が試験用 daemon に届き、events に `cos_operation` actor=cos | **PASS** | 試験用 DB に task `01M4AK4ZP77PVHYHSBJGBJFV0H`（done）、`cos_operations` の `01M4AK4ZP6TQGE4XV5FG1K8Q9N` は task.create applied、events seq 1 は `cos_operation` actor=cos（thread_id・run_id・reason つき）。試験用 DB に行があるので daemon 自身の API（`CELERIS_API_URL`）に届いた。本番 API には届いていない |
+| (d) screenshot を pin した UI 修正 task の添付 pin と入力 manifest | **FAIL** | task `01M4AK6NZJ8KGTT9GHZJ6YX9FH` を起票（4 回 422 の後で applied）。pin `01M4AK6TET2C…`（attachment.reference applied、`chat_attachment_refs` に owner_kind=task）はある。しかし作業 run `01M4AK6PMS0GMW6ZX95TTSF74M` は pin の約 4 秒前に始まっていて、`prompt.txt` に「## 入力の添付」が無く、stage も空（`staged.txt` 0 byte）。worker は対象を尋ね、task は blocked。原因は下の D1 |
+| (e) PDF の KB inbox candidate と provenance | **FAIL** | 候補は作られなかった（`kb-inbox.json` の items は空）。CoS は PDF を読んで codeword「SAKURA-77」を正しく答えた。しかし `celerisctl knowledge record` は CoS credential で拒否され、`POST /api/v1/knowledge/inbox` は `cos_operation_not_allowed`（422。operation `01M4AK884RQ0…` rejected）。CoS は監査を通らない直接書き込みを選ばず、人に選択肢を返した。原因は下の D2 |
+| codex の 1 往復 | 未実施 | 運用セッションの full には含めていない |
+| 停止と残り | OK | `pgrep -f <data dir>` は該当なし（`pgrep-after-stop.txt` は空） |
 
-### 不具合 2〜5 の扱い
+本番 daemon・本番 DB・`~/.config/celeris` は読み書きしていない。外部への通信は claude（claude_oauth）の LLM 呼び出しだけ。
+
+### 実機で見つかった点（運用セッションの判定 D1〜D4。未修正）
+
+- **D1**（(d) の FAIL）: skill §3a の「起票してから pin」は dispatcher と競合する。CoS が起票した task はすぐ ready になる（`crates/task-api` handlers/tasks.rs の作成経路）。そのため、pin より先に worker が始まり、入力の添付が渡らない。直し方の候補は 3 つ: draft で作って pin してから ready にする、作成時に attachment id を受ける、run の開始時に pin を stage し直す。
+- **D2**（(e) の FAIL）: CoS には、監査つきで KB 候補を作る経路が無い（`celerisctl knowledge record` は CoS credential を拒否し、`/api/v1/knowledge/inbox` は CoS operations の許可表に無い）。scope の書式も skill（`projects/agent-platform`）と CLI（`project:agent-platform`）で揃っていない。
+- **D3**: cos-inbox-triage SKILL §5 は confidence を求めるが、`ResolveBody`（deny_unknown_fields）に欄が無い。実機の triage は confidence を reason の中に書いて回避した（`01M4AK5WCD…` 0.97、`01M4AK8PKP…` 0.3）。
+- **D4**: triage thread `01M4AK5ADAQXY2GJDSFSYGT8ZW` で、終わった run（`01M4AK5ADFP337DY6C6QFR3EA3`・`01M4AK86TZA1MNEAWZMENJ7ACE`）が `orphan takeover; continuing in a new run` で interrupted になり、続きの run（`01M4AK68WJ…`・`01M4AK959T…`）が重複して起きた（cos_chat/control.rs の takeover 判定）。
+- (d) の起票で 422 が 4 回出た（`acceptance` 欠落、`description`/`path` の欄名違い、成果物の置き場所）。CoS は自分で直したが、skill に POST /tasks の最小例を置くと往復が減る。
+
+これらを直す葉は、計画で既存の段に入れる（運用セッションの指示）。修正後に運用セッションが live2 を再実行する。
+
+### 不具合 1〜5 の扱い
 
 | # | 内容 | 扱い |
 |---|---|---|
-| 1 | claude-code の CoS chat run が result.json 不在で failed | **直した**（result-fix。偽ハーネスの `cos_chat_harness_e2e_claude_without_result_json_completes` ほか）。実機での再確認は (a) で行う（未実施） |
-| 2 | CoS run の celerisctl が既定で本番の設定を読む | **直した**（api-env。run の env に `CELERIS_API_URL` と daemon の dir を先頭にした `PATH`。`cos_chat_run_launch_sets_api_url_env_and_path`）。実機での再確認は (c)（未実施） |
-| 3 | KB に cos skill が無いと CoS が動かない | **文書化する**（並行の ops-docs2 が `docs/ops/cos-chat.md` に「KB の `skills/` に置く」手順を書く）。挙動は変えない（無ければ理由つき unavailable） |
-| 4 | 短い往復で `summary_through_seq` が 0 のまま | **未解決**。ADR D2 は「通常の run 終了時に次回用を保存する」とするが機構で強制しない。resume が効く間は害が無く、rollover 時は未要約範囲を明示して履歴で補う設計。短い往復で省くのを許すかは人が決める（提案に記す） |
-| 5 | `chat_runs` の実効 model が null | **未解決（設定の問題として文書化）**。provider に model を書かないと CLI 既定で走り、実効 model は記録されない。運用では `[cos] model` か provider の model を書く |
+| 1 | claude-code の CoS chat run が result.json 不在で failed | **直した**（result-fix。偽ハーネスの `cos_chat_harness_e2e_claude_without_result_json_completes` ほか）。実機の (a) で 5 run とも completed を確認した |
+| 2 | CoS run の celerisctl が既定で本番の設定を読む | **直した**（api-env。run の env に `CELERIS_API_URL` と daemon の dir を先頭にした `PATH`。`cos_chat_run_launch_sets_api_url_env_and_path`）。実機の (c) で、`--api-url` なしの起票が試験用 daemon に届いたことを確認した |
+| 3 | KB に cos skill が無いと CoS が動かない | **文書化した**（ops-docs2 が `docs/ops/cos-chat.md` に、KB の `skills/` に置く手順を書いた）。挙動は変えない（skill が無ければ理由つきで unavailable） |
+| 4 | 短い往復で `summary_through_seq` が 0 のまま | **未解決**。実機でも 5 turn 後に 0 のまま（`db.txt` の node_sessions）。resume が効く間は害が無い。rollover 時は、未要約の範囲を明示して履歴で補う設計。短い往復で要約を省くのを許すかは人が決める |
+| 5 | `chat_runs` の実効 model が null | **未解決（設定の問題として文書化）**。実機でも `model: null`（provider に model を書いていない）。運用では `[cos] model` か provider の model を書く |
 
 ### 新たに見つけた点（コードを読んで。未修正）
 
-6. CoS run の `celerisctl knowledge record`（PDF を KB 候補にする経路）は API を通らず、KB の根を `CELERIS_KNOWLEDGE_ROOT` → `CELERIS_CONFIG` の `[knowledge] root` → 既定の順で決める
-   （`crates/celerisctl/src/commands/knowledge.rs` の `configured_root`）。CoS run の env は daemon の env を継ぐだけで、`CELERIS_KNOWLEDGE_ROOT` は入れない。
-   daemon を `--config` だけで起動した試験用・staging の daemon では、CoS の KB 候補が本番の KB に書かれうる（不具合 2 と同じ形）。
-   台本は `CELERIS_CONFIG` を export するので、この経路でも試験用の `kb/` に向かう。
+6. CoS run の `celerisctl knowledge record` は API を通らない。KB の根は `CELERIS_KNOWLEDGE_ROOT` → `CELERIS_CONFIG` の `[knowledge] root` → 既定、の順で決まる（`crates/celerisctl/src/commands/knowledge.rs` の `configured_root`）。
+   実機では CoS credential で拒否されたので書き込みは起きなかった（D2）。D2 を CLI 直書きで直すなら、同じ形の「本番 KB に書く」穴が開く。API の operation にするのが安全。
 
-### 人への依頼（LLM を伴う確認を流す手順）
+### 再実行の手順（D1〜D4 の修正後）
 
-本番でない shell（Claude Code の claude_oauth ログイン済み）で、修正後の tree の worktree から:
-
-1. `cargo build -p celeris -p celerisctl`（`CARGO_TARGET_DIR` はローカル）
-2. `bash <WU 成果物>/live2/live2.sh "$PWD" "$CARGO_TARGET_DIR/debug" <WU 成果物>/live2/full full`
-   - 試験用 daemon を `127.0.0.1:17932` で起動し、t1〜t5（(a)〜(e)）を順に送る。各 run の終端まで最長 10 分待つ
-   - 終わると `full/evidence/`（`steps.log`・`run-t*.json`・`db.txt`・`kb-inbox*.json`・`input-manifest.txt`・`staged.txt`・`daemon.log`）を残し、daemon を止めて `pgrep` の結果を `steps.log` に書く
-3. 結果を確かめる: `steps.log` で t1 `session_mode=new`、t2〜t5 `resumed`、全 run completed。`db.txt` の `node_sessions` が 1 行、`cos_operations`・`events cos_operation` に actor=cos、`chat_attachment_refs` に task と knowledge_inbox の pin 各 1、`kb-inbox-*.json` の `provenance[]`
-4. codex の 1 往復を足すなら、`config.toml` の `[cos] harness = "codex"`・`llm_source = "codex_oauth"` に変えた別の data dir で t1 だけ送る
+本番でない shell（claude_oauth ログイン済み）で、修正後の tree の worktree から `cargo build -p celeris -p celerisctl` の後、
+`bash <WU 成果物>/live2/live2-ops.sh "$PWD" "$CARGO_TARGET_DIR/debug" <新しい data dir> full`。
+`evidence/steps.log`・`db.txt`（`chat_runs`・`node_sessions`・`cos_operations`・`chat_attachment_refs`）・`kb-inbox.json`・`prompt-files.txt`・`staged.txt` を上の表と同じ観点で見る。
 
 ## 提案（live-check2）
 
+- D1: 作成時に attachment id を受けて同じ transaction で pin する（起票と pin の間に dispatcher が入らない）。
+- D2: KB 候補の作成を CoS operation（API、監査つき）として登録し、`celerisctl knowledge record` は CoS credential のときその API を使う。scope の書式を 1 つにする。
+- D3: `ResolveBody` に任意の `confidence` を足すか、skill から外す。
+- D4: 終わった run を takeover の対象から外す（終端の記録と lease の解放の順序を確かめる）。
 - 4: 「run 終了時の checkpoint」を CoS の前置きで必須にするか、N 往復ごとでよいとするかを決める。
-- 6: CoS run の env に `CELERIS_KNOWLEDGE_ROOT`（daemon の `[knowledge] root`）を入れる。`CELERIS_API_URL` と同じ `cos_run_env` で足せる。あるいは KB 候補の作成を API の操作にする。

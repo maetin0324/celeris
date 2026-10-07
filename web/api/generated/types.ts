@@ -3170,6 +3170,27 @@ export type KnowledgePageResult = {
   "unchanged": boolean;
 };
 
+export type KnowledgeRecordBody = {
+  "attachment_ids"?: Array<string>;
+  "body": string;
+  "confidence"?: Confidence | null;
+  "path"?: string | null;
+  "scope": string;
+  "sources"?: Array<string>;
+  "tags"?: Array<string>;
+  "title": string;
+};
+
+export type KnowledgeRecordResult = {
+  "attachment_ids": Array<string>;
+  "id": string;
+  "op"?: string | null;
+  "path": string;
+  "scope"?: string | null;
+  "sha": string;
+  "target": string;
+};
+
 export type KnowledgeRejectResult = {
   "id": string;
   "sha": string;

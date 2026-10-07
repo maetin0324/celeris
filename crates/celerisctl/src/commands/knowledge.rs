@@ -7,11 +7,15 @@
 //! celerisctl knowledge init    [--root …]
 //! celerisctl knowledge search <語> [--scope …] [--limit N] [--json]
 //! celerisctl knowledge get    <path> [--json]
-//! celerisctl knowledge record --title … --scope … [--tags a,b] --source task:<id> [--confidence …] [--path …] < body.md
+//! celerisctl knowledge record --title … --scope … [--tags a,b] --source task:<id> [--confidence …] [--path …] [--attachment-id …] < body.md
 //! celerisctl knowledge reindex
 //! celerisctl knowledge migrate-human-sources [--apply] [--json]   # ADR-0047 付記 H4。既定は dry-run
 //! celerisctl knowledge rerun   <task_id> [--db …]     # 管理系。**DB を開く**（ADR-0052 D3）
 //! ```
+//!
+//! CoS run（`CELERIS_COS_RUN_CREDENTIAL` がある環境）の `record` だけは KB を直接書かず、
+//! `POST /api/v1/knowledge/inbox` を `/cos/operations` 経由で呼ぶ（監査つき。ADR 2026-10-07
+//! cos-live-fixes D2）。scope は `project:<slug>` の形で書く（`projects/<slug>` は互換で受ける）。
 //!
 //! 根の決め方（ADR-0047 D3）: `--root` > `CELERIS_KNOWLEDGE_ROOT` > `[knowledge] root` > `~/.local/share/celeris/knowledge`。
 //! 設定ファイルが読めない環境（コンテナの中）では黙って次の候補に落ちる。
@@ -123,7 +127,7 @@ pub struct GetArgs {
 pub struct RecordArgs {
     #[arg(long)]
     pub title: String,
-    /// `user` / `environment` / `project:<slug>` / `experience`。
+    /// `user` / `environment` / `project:<slug>` / `experience`（`projects/<slug>` は `project:<slug>` に直る）。
     #[arg(long)]
     pub scope: String,
     /// `--tags a,b` か `--tags a --tags b`。
@@ -139,6 +143,9 @@ pub struct RecordArgs {
     /// 取り込む先の KB 相対パス（省略なら人が accept するときに `scope` と題名から決まる）。
     #[arg(long)]
     pub path: Option<String>,
+    /// 候補に pin するチャット添付の id（CoS run だけ。API が provenance として記録する）。
+    #[arg(long = "attachment-id", value_delimiter = ',')]
+    pub attachment_ids: Vec<String>,
     /// JSON で出す。
     #[arg(long)]
     pub json: bool,
@@ -337,17 +344,123 @@ fn run_get(args: &GetArgs) -> Result<ExitCode, CliError> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn run_record(args: &RecordArgs) -> Result<ExitCode, CliError> {
-    let root = root_of(&args.root);
-    require_kb(&root)?;
-    let confidence = match args.confidence.as_deref() {
-        Some(raw) => Some(raw.parse::<Confidence>().map_err(CliError::msg)?),
-        None => None,
-    };
+fn read_body() -> Result<String, CliError> {
     let mut body = String::new();
     std::io::stdin()
         .read_to_string(&mut body)
         .map_err(|e| CliError::msg(format!("failed to read body from stdin: {e}")))?;
+    Ok(body)
+}
+
+fn parse_confidence(raw: Option<&str>) -> Result<Option<Confidence>, CliError> {
+    match raw {
+        Some(raw) => Ok(Some(raw.parse::<Confidence>().map_err(CliError::msg)?)),
+        None => Ok(None),
+    }
+}
+
+/// CoS run の `record`（ADR 2026-10-07 cos-live-fixes D2）: 本文を標準入力から読み、
+/// `POST /api/v1/knowledge/inbox` を `/cos/operations` で呼ぶ。KB の根には触らない。
+pub(crate) fn run_record_cos(
+    args: &RecordArgs,
+    options: &super::cos_ops::Options,
+    credential: &str,
+) -> Result<ExitCode, CliError> {
+    let body = read_body()?;
+    let api = super::cos_ops::api_config(options.api_url.as_deref())?;
+    let value = record_via_cos(&api, args, body, options, credential)?;
+    let operation = &value["operation"];
+    let result = &operation["result"];
+    if args.json {
+        // `--json` の `id` は直書きと同じ候補 id（前置きの「出力の `id` を控える」がそのまま通る）。
+        let mut out = result.as_object().cloned().unwrap_or_default();
+        out.insert("operation".into(), operation.clone());
+        let json = serde_json::to_string_pretty(&serde_json::Value::Object(out))
+            .map_err(|e| CliError::msg(format!("failed to render json: {e}")))?;
+        outln!("{json}");
+    } else {
+        outln!(
+            "recorded {} → {}（operation {} {}。人が確認してから正本に入ります）",
+            result["path"].as_str().unwrap_or("-"),
+            result["target"].as_str().unwrap_or("-"),
+            operation["id"].as_str().unwrap_or("-"),
+            operation["state"].as_str().unwrap_or("-"),
+        );
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// 既定の監査理由（`--reason` も `CELERIS_COS_REASON` も無いとき）。
+const DEFAULT_RECORD_REASON: &str = "CoS records a knowledge candidate requested in the chat";
+
+/// [`run_record_cos`] の本体（標準入力を読まない形。試験は偽 server に向ける）。
+pub(crate) fn record_via_cos(
+    api: &super::cron::ApiConfig,
+    args: &RecordArgs,
+    body: String,
+    options: &super::cos_ops::Options,
+    credential: &str,
+) -> Result<serde_json::Value, CliError> {
+    let confidence = parse_confidence(args.confidence.as_deref())?;
+    let request = serde_json::json!({
+        "title": args.title,
+        "scope": args.scope,
+        "body": body,
+        "sources": args.sources,
+        "tags": args.tags,
+        "confidence": confidence,
+        "path": args.path,
+        "attachment_ids": args.attachment_ids,
+    });
+    let reason = options
+        .reason
+        .clone()
+        .or_else(|| std::env::var("CELERIS_COS_REASON").ok())
+        .filter(|r| !r.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_RECORD_REASON.to_string());
+    // 同じ題名・本文の再送は同じ operation になる（`/cos/operations` の冪等性）。
+    let key = options.idempotency_key.clone().unwrap_or_else(|| {
+        format!(
+            "knowledge-record-{:016x}",
+            fnv1a(&[args.title.as_bytes(), b"\n", body.as_bytes()])
+        )
+    });
+    let options = super::cos_ops::Options {
+        reason: Some(reason),
+        idempotency_key: Some(key),
+        expected_revision: options.expected_revision.clone(),
+        api_url: options.api_url.clone(),
+    };
+    super::cos_ops::send(
+        api,
+        "POST",
+        "/api/v1/knowledge/inbox",
+        request,
+        &options,
+        Some(credential),
+    )
+}
+
+/// 64 bit FNV-1a（冪等キー用。版をまたいで同じ値になる）。
+fn fnv1a(parts: &[&[u8]]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in parts.iter().flat_map(|p| p.iter()) {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn run_record(args: &RecordArgs) -> Result<ExitCode, CliError> {
+    if !args.attachment_ids.is_empty() {
+        return Err(CliError::msg(
+            "--attachment-id は CoS run（API 経由の record）でだけ使えます",
+        ));
+    }
+    let root = root_of(&args.root);
+    require_kb(&root)?;
+    let confidence = parse_confidence(args.confidence.as_deref())?;
+    let body = read_body()?;
     let request = RecordRequest {
         title: args.title.clone(),
         scope: args.scope.clone(),

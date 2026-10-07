@@ -211,6 +211,9 @@ pub struct ApiV1Schema {
     pub knowledge_candidate: crate::knowledge::KnowledgeCandidate,
     pub knowledge_accept: crate::knowledge::KnowledgeAcceptBody,
     pub knowledge_reject_result: crate::knowledge::KnowledgeRejectResult,
+    // ADR 2026-10-07 cos-live-fixes D2: `POST /knowledge/inbox`（候補の作成。CoS は `knowledge.record`）。
+    pub knowledge_record: crate::knowledge::KnowledgeRecordBody,
+    pub knowledge_record_result: crate::knowledge::KnowledgeRecordResult,
     pub daemon: DaemonView,
     pub config: ConfigView,
     pub stream_hello: StreamHello,

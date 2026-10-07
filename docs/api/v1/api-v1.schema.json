@@ -15695,6 +15695,121 @@
       ],
       "type": "object"
     },
+    "KnowledgeRecordBody": {
+      "additionalProperties": false,
+      "description": "`POST /knowledge/inbox` の本文（ADR 2026-10-07 cos-live-fixes D2）。`celerisctl knowledge record`\nと同じ検査・同じ候補ファイルの形（`task_ops::knowledge::record_in`）。",
+      "properties": {
+        "attachment_ids": {
+          "default": [],
+          "description": "候補に pin するチャット添付（`owner_kind: knowledge_inbox`）。CoS からは自分の thread の添付だけ。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "body": {
+          "description": "本文（Markdown）。",
+          "type": "string"
+        },
+        "confidence": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Confidence"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "path": {
+          "default": null,
+          "description": "取り込む先の KB 相対パス（省略なら accept のときに scope と題名から決まる）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "description": "`user` / `environment` / `environment/<分類>` / `experience` / `project:<slug>`。互換のため\n`projects/<slug>` も受けて `project:<slug>` に正規化する。",
+          "type": "string"
+        },
+        "sources": {
+          "default": [],
+          "description": "**1 件以上必須**（`message:<id>` / `task:<id>` / `human:instruction` / `url:<…>`）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "scope",
+        "body"
+      ],
+      "type": "object"
+    },
+    "KnowledgeRecordResult": {
+      "description": "`POST /knowledge/inbox` の応答（201）。CoS operation `knowledge.record` の `result` も同じ形。",
+      "properties": {
+        "attachment_ids": {
+          "description": "pin した添付の id（本文の順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "候補 id（`GET /knowledge/inbox/{id}` の id）。",
+          "type": "string"
+        },
+        "op": {
+          "description": "取り込み先が既にあれば `append` / `merge`。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "description": "`_inbox/<id>.md`。",
+          "type": "string"
+        },
+        "scope": {
+          "description": "正規化した scope（`project:<slug>` …）。",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sha": {
+          "description": "候補の git commit の sha。",
+          "type": "string"
+        },
+        "target": {
+          "description": "取り込み先（置き場のガードを通した KB 相対パス）。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "path",
+        "target",
+        "attachment_ids",
+        "sha"
+      ],
+      "type": "object"
+    },
     "KnowledgeRejectResult": {
       "description": "`POST /knowledge/inbox/{id}/reject` の応答。",
       "properties": {
@@ -30540,6 +30655,12 @@
     "knowledge_page_result": {
       "$ref": "#/$defs/KnowledgePageResult"
     },
+    "knowledge_record": {
+      "$ref": "#/$defs/KnowledgeRecordBody"
+    },
+    "knowledge_record_result": {
+      "$ref": "#/$defs/KnowledgeRecordResult"
+    },
     "knowledge_reject_result": {
       "$ref": "#/$defs/KnowledgeRejectResult"
     },
@@ -31032,6 +31153,8 @@
     "knowledge_candidate",
     "knowledge_accept",
     "knowledge_reject_result",
+    "knowledge_record",
+    "knowledge_record_result",
     "daemon",
     "config",
     "stream_hello",

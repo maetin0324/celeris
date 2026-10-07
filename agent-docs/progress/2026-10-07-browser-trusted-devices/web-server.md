@@ -47,3 +47,12 @@ completed: 2026-10-07
 - 計画の check の矛盾（plan_issue で申告）: web-server の check 2（`pnpm -C web test && typecheck && lint`）は base c0a9159c で `web/api/realtime/event-kinds.ts`・`invalidation-map.ts` に `trusted_device_*` 4 種が無いため落ち（tsc TS2322/TS2739 を確認）、足すと check 4（範囲 `web/server/|agent-docs/progress/`）が落ちる。範囲 check に `web/api/realtime/` を許すか、check 2 を web-ui 葉へ移す。
 
 - web-ui 葉は上の web 端点（登録・resume・一覧・失効、`trustedDevice`/`resumable`）を使う。
+
+## 取り込み（web-server-land 葉、2026-10-07）
+
+- `git merge --ff-only f18019eef26c99853bdc4e06fa9c7eb58975f6ff`: base c0a9159c から fast-forward（作り直しなし、修正なし）。
+  `git merge-base --is-ancestor f18019ee HEAD`: 真。
+- `node --test web/server/browser-live.test.mjs`: 19 本合格（`trusted_device:` 8 本含む）。
+- `pnpm -C web test`: exit 0（vitest と `node --test server/*.test.mjs` 67 本合格）。`pnpm -C web typecheck`: exit 0。`pnpm -C web lint`: exit 0（既存 warning 4 件）。
+- `git diff --name-only $CELERIS_WU_BASE -- crates/`: 0 件。差分は web/server/・web/api/realtime/・本進捗ファイルのみ。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`bash scripts/dev/test-parallel.sh`: exit 0（passed 4320、failed 0、ignored 14）。

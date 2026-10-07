@@ -1,15 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // qa-work fix-reports（W-10〜12・W-31〜36・W-48〜50）で直した /reports・/approvals の振る舞いを固定する（parity 外）。
 test.describe.configure({ mode: "default" });
 
-const dir = mkdtempSync(path.join(tmpdir(), "celeris-work-reports-"));
+const dir = makeTmpDir("celeris-work-reports-");
 const tokenFile = path.join(dir, "token");
 writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
 const base = { level: 2, created_at: "2026-10-01T00:00:00Z", read_at: null, sources: [] };

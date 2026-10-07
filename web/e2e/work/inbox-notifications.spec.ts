@@ -1,13 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, inboxItemsFixture, noticesFixture } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 test.describe.configure({ mode: "default" });
-const dir = mkdtempSync(path.join(tmpdir(), "celeris-work-inbox-"));
+const dir = makeTmpDir("celeris-work-inbox-");
 const tokenFile = path.join(dir, "token");
 writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
 const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

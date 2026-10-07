@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { expect, type Locator, test } from "@playwright/test";
@@ -8,6 +7,7 @@ import { createFakeDaemon, defaultFixtures } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
 import { v3Screens } from "../support/screens";
+import { makeTmpDir } from "../support/tmp-dir";
 import { waitForBootIdle } from "./boot-idle.mjs";
 import { inAppRoutes } from "./in-app-routes";
 
@@ -23,7 +23,7 @@ async function armClick(link: Locator): Promise<() => Promise<void>> {
 for (const screen of v3Screens()) {
   test(`S1 ${screen.path}: JSON 0/5/10s でも shell 遷移は独立`, async ({ page }) => {
     test.setTimeout(120_000);
-    const dir = mkdtempSync(path.join(tmpdir(), "celeris-v3-latency-"));
+    const dir = makeTmpDir("celeris-v3-latency-");
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const entry = inAppRoutes[screen.fixture];

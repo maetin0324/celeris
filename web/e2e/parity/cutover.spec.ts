@@ -1,9 +1,9 @@
 import { execFileSync, spawn } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
 import net from "node:net";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { makeTmpDir } from "../support/tmp-dir";
 
 const webRoot = path.resolve(import.meta.dirname, "../..");
 
@@ -25,7 +25,7 @@ test("parity-x: web の配布物が offline install で動く", async () => {
     stdio: "pipe",
   });
   const archive = path.join(webRoot, "release", `celeris-web-0.1.0-${release}.tar.gz`);
-  const unpack = mkdtempSync(path.join(tmpdir(), "celeris-web-release-"));
+  const unpack = makeTmpDir("celeris-web-release-");
   let child: ReturnType<typeof spawn> | undefined;
   try {
     execFileSync("tar", ["-xzf", archive, "-C", unpack]);

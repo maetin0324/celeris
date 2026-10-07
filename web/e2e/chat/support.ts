@@ -3,13 +3,13 @@
 // sleep の長さや確率に頼らない。制御 endpoint は gateway に登録されていないため、
 // FIXTURE_TOKEN を付けた daemon の URL 直接呼び出しを使う（fake-daemon.test.ts と同じ経路）。
 
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { chatInboxItemsFixture, createFakeDaemon, type FakeDaemonOptions } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 export type ChatEventInput = {
   type: string;
@@ -44,7 +44,7 @@ export type ChatGateway = {
 };
 
 export async function startChatGateway(options: FakeDaemonOptions = {}): Promise<ChatGateway> {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-chat-"));
+  const dir = makeTmpDir("celeris-web-chat-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({

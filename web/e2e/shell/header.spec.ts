@@ -1,11 +1,11 @@
 /// <reference lib="dom" />
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // shell の作り直し: page header（パンくず・説明・主操作）・接続状態・メニューの開閉。
 // 偽 daemon と gateway は loopback の空き port。外部ネットワークに出ない。
@@ -72,7 +72,7 @@ test("既存の画面は page header の追加 slot を出さない", async ({ p
 
 test("接続状態: 接続済み → 切断 → 復帰を語と tone で見せる（スマホ幅でも隠さない）", async ({ page }) => {
   test.setTimeout(90_000);
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-web-e2e-header-"));
+  const dir = makeTmpDir("celeris-web-e2e-header-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   let daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

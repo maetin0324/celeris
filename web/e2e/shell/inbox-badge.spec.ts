@@ -1,15 +1,15 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
 import { createFakeDaemon, inboxItemsFixture } from "../support/fake-daemon.mjs";
 import { startGateway } from "../support/gateway";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // nav の受信箱の件数は GET /inbox/items の counts.total（ADR-0133）。SSE の inbox_changed で 15 s の
 // poll を待たずに更新する。偽 daemon と gateway は loopback の空き port。
 test("nav の受信箱件数は /inbox/items の counts から出て、inbox_changed で更新される", async ({ page }) => {
-  const dir = mkdtempSync(path.join(tmpdir(), "celeris-inbox-badge-"));
+  const dir = makeTmpDir("celeris-inbox-badge-");
   const tokenFile = path.join(dir, "token");
   writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
   const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

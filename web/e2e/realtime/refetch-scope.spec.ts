@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
 import { FIXTURE_TOKEN } from "../../scripts/check-secrets.mjs";
@@ -8,6 +7,7 @@ import { startGateway } from "../support/gateway";
 import { recordLatency } from "../support/latency-results";
 import { installRealtimeProbe, readRealtimeProbe, waitFetchesSettled, waitHandled } from "../support/realtime-probe";
 import { v3Screens } from "../support/screens";
+import { makeTmpDir } from "../support/tmp-dir";
 
 // S2: 関係のない SSE で画面の query を取り直さない（nfr。全画面の掃引）。
 // 固定時間は待たない（agent-docs/guides/testing.md の方法 1・2）。
@@ -29,7 +29,7 @@ const CANARY_TASK = "e2e-canary";
 
 for (const screen of v3Screens()) {
   test(`S2 ${screen.path}: unrelated SSE does not refetch screen queries`, async ({ page }) => {
-    const dir = mkdtempSync(path.join(tmpdir(), "celeris-v3-refetch-"));
+    const dir = makeTmpDir("celeris-v3-refetch-");
     const tokenFile = path.join(dir, "token");
     writeFileSync(tokenFile, `${FIXTURE_TOKEN}\n`);
     const daemon = createFakeDaemon({ token: FIXTURE_TOKEN });

@@ -114,12 +114,12 @@ token は一時ファイル、`CELERIS_*` は run の env を継がず、すべ�
 
 本番 daemon・本番 DB・`~/.config/celeris` は読み書きしていない。外部への通信は claude（claude_oauth）の LLM 呼び出しだけ。
 
-### 実機で見つかった点（運用セッションの判定 D1〜D4。未修正）
+### 実機で見つかった点（運用セッションの判定 D1〜D4。2026-10-07 に直した。実機の再実行は未）
 
-- **D1**（(d) の FAIL）: skill §3a の「起票してから pin」は dispatcher と競合する。CoS が起票した task はすぐ ready になる（`crates/task-api` handlers/tasks.rs の作成経路）。そのため、pin より先に worker が始まり、入力の添付が渡らない。直し方の候補は 3 つ: draft で作って pin してから ready にする、作成時に attachment id を受ける、run の開始時に pin を stage し直す。
-- **D2**（(e) の FAIL）: CoS には、監査つきで KB 候補を作る経路が無い（`celerisctl knowledge record` は CoS credential を拒否し、`/api/v1/knowledge/inbox` は CoS operations の許可表に無い）。scope の書式も skill（`projects/agent-platform`）と CLI（`project:agent-platform`）で揃っていない。
-- **D3**: cos-inbox-triage SKILL §5 は confidence を求めるが、`ResolveBody`（deny_unknown_fields）に欄が無い。実機の triage は confidence を reason の中に書いて回避した（`01M4AK5WCD…` 0.97、`01M4AK8PKP…` 0.3）。
-- **D4**: triage thread `01M4AK5ADAQXY2GJDSFSYGT8ZW` で、終わった run（`01M4AK5ADFP337DY6C6QFR3EA3`・`01M4AK86TZA1MNEAWZMENJ7ACE`）が `orphan takeover; continuing in a new run` で interrupted になり、続きの run（`01M4AK68WJ…`・`01M4AK959T…`）が重複して起きた（cos_chat/control.rs の takeover 判定）。
+- **D1**（(d) の FAIL）: skill §3a の「起票してから pin」は dispatcher と競合する。CoS が起票した task はすぐ ready になる（`crates/task-api` handlers/tasks.rs の作成経路）。そのため、pin より先に worker が始まり、入力の添付が渡らない。直し方の候補は 3 つ: draft で作って pin してから ready にする、作成時に attachment id を受ける、run の開始時に pin を stage し直す。 **→ 直した（task 01M4APB5FP8T3TAAE51Z20E3M1、ADR 2026-10-07-cos-live-fixes D1。進捗 agent-docs/progress/2026-10-07-cos-live-fixes.md）**
+- **D2**（(e) の FAIL）: CoS には、監査つきで KB 候補を作る経路が無い（`celerisctl knowledge record` は CoS credential を拒否し、`/api/v1/knowledge/inbox` は CoS operations の許可表に無い）。scope の書式も skill（`projects/agent-platform`）と CLI（`project:agent-platform`）で揃っていない。 **→ 直した（task 01M4APB5FP8T3TAAE51Z20E3M1、ADR 2026-10-07-cos-live-fixes D2。進捗 agent-docs/progress/2026-10-07-cos-live-fixes.md）**
+- **D3**: cos-inbox-triage SKILL §5 は confidence を求めるが、`ResolveBody`（deny_unknown_fields）に欄が無い。実機の triage は confidence を reason の中に書いて回避した（`01M4AK5WCD…` 0.97、`01M4AK8PKP…` 0.3）。 **→ 直した（task 01M4APB5FP8T3TAAE51Z20E3M1、ADR 2026-10-07-cos-live-fixes D3。進捗 agent-docs/progress/2026-10-07-cos-live-fixes.md）**
+- **D4**: triage thread `01M4AK5ADAQXY2GJDSFSYGT8ZW` で、終わった run（`01M4AK5ADFP337DY6C6QFR3EA3`・`01M4AK86TZA1MNEAWZMENJ7ACE`）が `orphan takeover; continuing in a new run` で interrupted になり、続きの run（`01M4AK68WJ…`・`01M4AK959T…`）が重複して起きた（cos_chat/control.rs の takeover 判定）。 **→ 直した（task 01M4APB5FP8T3TAAE51Z20E3M1、ADR 2026-10-07-cos-live-fixes D4。進捗 agent-docs/progress/2026-10-07-cos-live-fixes.md）**
 - (d) の起票で 422 が 4 回出た（`acceptance` 欠落、`description`/`path` の欄名違い、成果物の置き場所）。CoS は自分で直したが、skill に POST /tasks の最小例を置くと往復が減る。
 
 これらを直す葉は、計画で既存の段に入れる（運用セッションの指示）。修正後に運用セッションが live2 を再実行する。

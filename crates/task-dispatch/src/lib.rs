@@ -26,6 +26,8 @@ pub mod review;
 pub mod scratch_gc;
 /// ADR-0054 D1（Phase 67）: ノードごとの継続セッションの決定的な判断（純粋関数）。
 pub mod sessions;
+/// ADR 2026-10-07-build-tmp-hygiene D1.3: 共有 cargo target の掃除の I/O 層（走査・`.cargo-lock` の flock・rename・削除）。
+pub mod target_sweep;
 #[cfg(test)]
 mod test_support;
 /// ADR-0067 D3: 未申告の成果物（`artifacts/` の外に書かれた `*.md`）を拾う走査。

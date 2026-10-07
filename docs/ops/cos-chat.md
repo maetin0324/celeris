@@ -49,6 +49,27 @@ CoS は特別 worker として shell・ファイル・git・登録済み MCP・c
 
 人への Discord 通知は通常 CoS の escalation だけ。要点・選択肢・推奨と理由・web の該当画面リンクを送る。Discord の返信・リアクションは回答にならないので、リンク先の認証済み web 画面で答える。CoS run の失敗、quota 切れ、無効化、期限超過時は、未解決の待ちを決定的な直接通知へ退避する。Webhook が未設定・送信失敗でも待ちは解決しない。旧 inbox reminder/digest を通常通知として運用しない。通知設定と到達確認は [受信箱と通知](inbox-notifications.md) を参照する。
 
+## CoS skill の配置（導入時に必須）
+
+CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
+
+```sh
+# <kb_root> は config の [knowledge] root
+cp -r config/skills/cos-operator config/skills/cos-inbox-triage <kb_root>/skills/
+```
+
+確認: `test -s <kb_root>/skills/cos-operator/SKILL.md && test -s <kb_root>/skills/cos-inbox-triage/SKILL.md`。そのうえで web の新規スレッドで一往復し、返事が返れば配置できている（`CoS skills unavailable` が出たら path と `[knowledge] root` を見直す）。
+
+## CELERIS_API_URL（API の向き先）
+
+CoS run の `celerisctl` は、run の環境に入る `CELERIS_API_URL`（起動した daemon 自身の `[api] listen` から作る `http://127.0.0.1:<port>/api/v1`）を最優先で使う。優先順は `--api-url` > `CELERIS_API_URL` > `CELERIS_CONFIG` の `[api] listen`。試験用 DB の staging daemon から起動した CoS run も、本番ではなく自分の daemon へ送る。手で `celerisctl` を使うときも staging を向けたいなら `CELERIS_API_URL` を明示する。値は `/api/v1` で終わる必要がある。
+
+## 添付の引き継ぎ（attach-handoff）
+
+- task へ: CoS が添付を task に pin すると（owner 作成→pin→応答確認→引渡し済み、の順）、その task の作業 run の開始時に hash・size を照合して作業ツリー外へ read-only で stage し、前置きの入力 manifest に載る（screenshot を見て画面修正する依頼など）。照合失敗と ssh remote の task は `delivery=unavailable` になる。
+- 知識ベースへ: PDF などは provenance 付きの KB inbox candidate として pin される。candidate は人が確認してから正本に入る。
+- 確認は task 詳細の入力添付と KB の candidate で行う。stage 先の完了後削除は未実装。
+
 ## 添付と保持
 
 画像・PDF を含む任意ファイルを送れる。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB・10 件、インスタンス全体 10 GiB。元 blob は DB の親ディレクトリを `data_dir` とした `<data_dir>/chat/attachments/<attachment_id>/blob`、upload 中は `<data_dir>/chat/staging/` に置く。DB に原名・サイズ・MIME・SHA-256・参照を保存する。CoS へは検証した添付を read-only で stage し、画像は harness の画像入力または読取 tool、その他は path と manifest で渡す。task/KB へ引き継ぐ際は参照を pin する。

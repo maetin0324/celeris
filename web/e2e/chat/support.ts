@@ -37,6 +37,9 @@ export type ChatGateway = {
   setOverrideState(state: "succeed" | "conflict"): Promise<void>;
   /** 届いた override の body（operation_id・action・reason の順）。 */
   overrideLog(): Promise<Array<{ operation_id: string; action: string; reason: string }>>;
+  setUploadState(state: "hold" | "succeed" | "fail"): Promise<void>;
+  pendingUploads(): Promise<Array<{ id: string; name: string }>>;
+  releaseUpload(id: string, state: "succeed" | "fail"): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -98,6 +101,16 @@ export async function startChatGateway(options: FakeDaemonOptions = {}): Promise
     async overrideLog() {
       const result = await control("/__fixture/chat/override-log", {}, "GET");
       return result.overrides as Array<{ operation_id: string; action: string; reason: string }>;
+    },
+    async setUploadState(state) {
+      await control("/__fixture/chat/upload-state", { state });
+    },
+    async pendingUploads() {
+      const result = await control("/__fixture/chat/uploads", {}, "GET");
+      return result.pending as Array<{ id: string; name: string }>;
+    },
+    async releaseUpload(id, state) {
+      await control(`/__fixture/chat/uploads/${encodeURIComponent(id)}/release`, { state });
     },
     async close() {
       await gateway.close();

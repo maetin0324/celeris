@@ -17,7 +17,8 @@ const unsafeMethods = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 const defaultCsp = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'";
 // SPA の document だけ、成果物の表示（`/files/...?view=1`）を自 origin の iframe（HTML）と object（PDF）で埋め込める。
 // 埋め込まれる側は files.js が sandbox（HTML・SVG）と frame-ancestors 'self' で縛る（ADR 2026-10-05-web-artifact-inline-view）。
-const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'`;
+// composer のローカル添付 preview（URL.createObjectURL）は画像だけ blob: を許可する。
+const htmlCsp = `${defaultCsp.replace("object-src 'none'", "object-src 'self'")}; frame-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self'`;
 const fingerprint = /-[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9]+$/;
 
 export function parseBind(value = "127.0.0.1:7720") {

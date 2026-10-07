@@ -26,6 +26,9 @@ export function chatSeedFixture(): Array<{
 // POST /__fixture/chat/override-state {state: "succeed" | "conflict"} controls
 // POST /api/v1/cos/operations/{o}/override (409 while conflict).
 // GET /__fixture/chat/override-log lists the override bodies that were received.
+// POST /__fixture/chat/upload-state {state: "hold" | "succeed" | "fail"} applies to new uploads.
+// GET /__fixture/chat/uploads lists pending {id, name}; POST /__fixture/chat/uploads/{id}/release
+// {state: "succeed" | "fail"} resolves one held upload. Disconnected uploads leave the pending list.
 export type ChatFixtureControl = {
   rows: Map<
     string,

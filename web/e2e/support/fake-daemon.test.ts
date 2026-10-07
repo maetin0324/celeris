@@ -389,3 +389,56 @@ it("serves stateful inbox items and notifications that match the schema", async 
   expect((await get("/notifications/unread-count")).unread).toBe(0);
   await reader.cancel();
 });
+
+it("holds uploads until explicit success/failure, preserves retry ids and removes aborted uploads", async () => {
+  daemon = createFakeDaemon({ token: FIXTURE_TOKEN });
+  const root = await daemon.start();
+  const headers = { authorization: `Bearer ${FIXTURE_TOKEN}` };
+  const control = async (path: string, body?: unknown) =>
+    fetch(`${root}/__fixture/chat${path}`, {
+      headers,
+      method: body ? "POST" : "GET",
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  const upload = (id: string, signal?: AbortSignal) => {
+    const form = new FormData();
+    form.set("client_upload_id", id);
+    form.set("file", new Blob(["hello"], { type: "text/plain" }), `${id}.txt`);
+    return fetch(`${root}/api/v1/chat/threads/chat-main/attachments`, { headers, method: "POST", body: form, signal });
+  };
+  const pending = async () => (await (await control("/uploads")).json()).pending;
+  const wait = (id: string) =>
+    expect.poll(async () => (await pending()).some((item: { id: string }) => item.id === id)).toBe(true);
+  expect((await control("/upload-state", { state: "invalid" })).status).toBe(422);
+  expect((await control("/upload-state", { state: "hold" })).status).toBe(200);
+  let settled = false;
+  const first = upload("retry").then((response) => {
+    settled = true;
+    return response;
+  });
+  await wait("retry");
+  expect(settled).toBe(false);
+  expect(await pending()).toEqual([{ id: "retry", name: "retry.txt" }]);
+  expect((await control("/uploads/retry/release", { state: "invalid" })).status).toBe(422);
+  await control("/uploads/retry/release", { state: "fail" });
+  expect((await first).status).toBe(500);
+  expect(await pending()).toEqual([]);
+  const retry = upload("retry");
+  await wait("retry");
+  await control("/uploads/retry/release", { state: "succeed" });
+  const result = await retry;
+  expect(result.status).toBe(201);
+  const attachment = (await result.json()).attachment;
+  await control("/upload-state", { state: "succeed" });
+  expect((await (await upload("retry")).json()).attachment.id).toBe(attachment.id);
+  await control("/upload-state", { state: "fail" });
+  expect((await upload("failure")).status).toBe(500);
+  await control("/upload-state", { state: "hold" });
+  const abort = new AbortController();
+  const cancelled = upload("cancel", abort.signal).catch((error: Error) => error.name);
+  await wait("cancel");
+  abort.abort();
+  expect(await cancelled).toBe("AbortError");
+  await expect.poll(pending).toEqual([]);
+  expect((await control("/uploads/cancel/release", { state: "succeed" })).status).toBe(404);
+});

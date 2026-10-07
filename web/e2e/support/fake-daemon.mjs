@@ -1580,7 +1580,8 @@ function createChatFixture() {
   );
   const attachments = new Map();
   // CoS 代答の取消・差し戻しの応答を決定的に切り替える。
-  const chatControl = { overrideState: "succeed", overrides: [] };
+  const chatControl = { overrideState: "succeed", overrides: [], uploadState: "succeed" };
+  const pendingUploads = new Map();
   const at = "2026-10-05T12:00:00Z";
   let nextThread = 1;
   let nextAttachment = 1;
@@ -1729,6 +1730,22 @@ function createChatFixture() {
         else {
           chatControl.overrideState = input.state;
           json(res, 200, { state: chatControl.overrideState });
+        }
+      } else if (tail[0] === "upload-state" && method === "POST") {
+        if (!["hold", "succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else {
+          chatControl.uploadState = input.state;
+          json(res, 200, { state: input.state });
+        }
+      } else if (tail[0] === "uploads" && method === "GET") {
+        json(res, 200, { pending: [...pendingUploads.values()].map(({ id, name }) => ({ id, name })) });
+      } else if (tail[0] === "uploads" && tail[2] === "release" && method === "POST") {
+        const pending = pendingUploads.get(tail[1]);
+        if (!["succeed", "fail"].includes(input.state)) error(res, 422, "invalid-state");
+        else if (!pending) error(res, 404, "not-found");
+        else {
+          pending.finish(input.state);
+          json(res, 200, { released: tail[1] });
         }
       } else if (tail[0] === "override-log" && method === "GET") {
         json(res, 200, { overrides: chatControl.overrides });
@@ -2003,6 +2020,25 @@ function createChatFixture() {
       if (!fields?.file || !fields.client_upload_id) error(res, 400, "invalid-upload");
       else if (fields.file.bytes.length > 25 * 1024 * 1024) error(res, 413, "upload-too-large");
       else {
+        let outcome = chatControl.uploadState;
+        if (outcome === "hold") {
+          outcome = await new Promise((resolve) => {
+            const id = fields.client_upload_id;
+            const finish = (state) => {
+              pendingUploads.delete(id);
+              res.off("close", cancel);
+              resolve(state);
+            };
+            const cancel = () => finish("cancelled");
+            pendingUploads.set(id, { id, name: fields.file.name, finish });
+            res.once("close", cancel);
+          });
+        }
+        if (outcome === "cancelled") return true;
+        if (outcome === "fail") {
+          error(res, 500, "upload-failed");
+          return true;
+        }
         const existing = row.uploads.get(fields.client_upload_id);
         const sha256 = createHash("sha256").update(fields.file.bytes).digest("hex");
         if (existing && existing.sha256 !== sha256) error(res, 409, "idempotency-conflict");
@@ -2064,6 +2100,7 @@ function createChatFixture() {
     emit,
     handle,
     close() {
+      for (const pending of pendingUploads.values()) pending.finish("cancelled");
       for (const row of rows.values()) for (const client of row.clients) client.destroy();
     },
   };

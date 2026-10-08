@@ -329,7 +329,15 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
     `GET /releases` の応答にも web の release 一覧にも台帳の状態は出ない。台帳の状態は今は `celerisctl browser doctor`・
     `GET /api/v1/browser/readiness`・web の `/browser/settings`（readiness 表）で見る。
 - **D2（台帳不足は理由つきで止める）**: `ledger_status`・`LedgerWatch`・`BrowserPrerequisiteCode` と dispatch での停止。試験 `browser_ledger_gate_`（12）。
-  - 食い違い: 受信箱の `browser_prerequisite` reason と readiness は実装したが、`TaskDetail.browser.prerequisite` 欄は未追加。web は既存 event から表示する。
+  - 食い違い: readiness は実装したが、`TaskDetail.browser.prerequisite` 欄は未追加。web は既存 event から表示する。
+  - 訂正（2026-10-08、葉 policy-missing）: close-out の時点で「受信箱の `browser_prerequisite` reason は実装した」と書いたが、
+    `crates/task-ops/src/inbox.rs` には無かった（部署 reviewer の差し戻し）。葉 policy-missing で実装した:
+    `build_attention` が `blocked` かつ直前の遷移の reason が `browser_prerequisite` の task について
+    `AttentionItem::BrowserPrerequisite { task, code, message, at }`（API の `type` は `browser_prerequisite`）を出す。
+    `message` は最後の `BrowserPrerequisiteBlocked` の文。`BrowserPrerequisiteResumed` で ready に戻った後は出さない。
+    共通形の受信箱（ADR-0133）では新しい種類を足さず、既存の `browser_wait`（browser の人手）に写す。項目の id は
+    `browser_prerequisite-<task>-<code>`、選択肢と native 操作は無い（受信箱では答えない。文が次の手を言い、前提が
+    揃えば消える）。link は `/tasks/<id>`。試験は `browser_policy_missing_inbox_item_carries_message_and_disappears_after_resume`。
 - **D3（site policy の DB 正本・grant の credential 設定）**: migration と store、`crates/task-api/src/browser.rs`、web の `/browser/settings`。試験 `browser_site_policy_db_`（6）。
   - 食い違い: `Event::BrowserSitePolicyChanged` は作らなかった。site policy には task_id が無く events 表は task 単位なので、
     `org_browser_events`（migration 0051）と同じ形の別表 `browser_site_policy_events`（migration 0060。追記専用）に
@@ -339,6 +347,20 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
     記録は葉の進捗 `site-policy-api.md`。
 - **D4（最小 policy の自動付与と retry の引き継ぎ）**: 作成の共通経路と `retry.rs`。試験 `browser_policy_autoattach_`（6）。
   - 食い違い: `BrowserTaskPolicySet { source }` event と出自欄は未実装。web は `policy_id`（`auto`・`web-human`）で出自を表す（承認・能力の判定には使わない）。
+  - 訂正（2026-10-08、葉 policy-missing）: D2 末尾の `browser_policy_missing` での停止は close-out の時点で未実装だった
+    （`BrowserPolicyMissing` を出すコードが無く、保存 policy の無い browser task は worker の `browser policy rejected` で
+    infra_requeue を上限まで繰り返した。部署 reviewer の差し戻し）。葉 policy-missing で実装した:
+    `crates/task-dispatch/src/dispatcher/browser_prereq.rs` の `browser_task_code`（dispatch 前の gate と再開の両方）が、
+    台帳より先に、保存 policy が無い・読めない（`browser_task_policy_get` の Err も止める側）・task の
+    `requirements.browser.allowed_domains` と交わらない（`task_run_policy` が Err）ときに `BrowserPolicyMissing` を返す。
+    `Ready → Blocked`（reason `browser_prerequisite`、attempts 不変、`BrowserPrerequisiteBlocked` 1 回）で worker・LLM を起こさない。
+    `PUT /tasks/{id}/browser/policy`（`browser_prerequisite` で止まった task も受ける）の後、task ごとの見直し
+    （`RESCAN_EVERY_TICKS` = 30 tick ごと）で `BrowserPrerequisiteResumed` を足して ready に戻る。worker が
+    `browser policy rejected`（担当の grant と交わらない等）を返した場合も `worker_error_code` が `BrowserPolicyMissing` に
+    分類し、infra_requeue でなく同じ trigger で止める。試験は `browser_policy_missing_`（task-dispatch 4、task-ops 1）。
+    - 残る食い違い: 担当の grant と交わらないことは dispatcher の gate では見ない（worker の `admit` だけが見る）。この形で
+      止まった task は policy を直さなくても 30 tick ごとの見直しで ready に戻り、worker の `admit` で再び止まる
+      （LLM は呼ばず attempts も変えないが、遷移と event が周期で増える）。
 - **§4 の web の event 種類**: `browser_prerequisite_blocked`・`browser_prerequisite_resumed` は `web/api/realtime/event-kinds.ts`・
   `invalidation-map.ts` にある。`browser_site_policy_changed`（D3 の食い違い）と `browser_task_policy_set`（D4 の食い違い）は
   Event が無いので足していない。

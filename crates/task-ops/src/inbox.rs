@@ -160,6 +160,15 @@ pub enum AttentionItem {
         hint: WorkerHint,
         at: String,
     },
+    /// ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提（適合台帳・task policy）が足りず
+    /// `blocked(browser_prerequisite)` で止まっている task。`message` は最後の `BrowserPrerequisiteBlocked` の文。
+    /// 前提が揃って `BrowserPrerequisiteResumed` で戻れば（直前の遷移の reason が変われば）出さない。
+    BrowserPrerequisite {
+        task: TaskRef,
+        code: task_core::browser_prerequisite::BrowserPrerequisiteCode,
+        message: String,
+        at: String,
+    },
     /// ADR-0018 D2: 直近 24 時間に `ClusterUnavailable` があったクラスタ（人がログインし直すまで用件が続く）。
     ClusterUnavailable {
         cluster: String,
@@ -304,7 +313,8 @@ fn attention_task(item: &AttentionItem) -> Option<TaskId> {
         | AttentionItem::Unroutable { task, .. }
         | AttentionItem::PhaseCheckpoint { task, .. }
         | AttentionItem::PlanApproval { task, .. }
-        | AttentionItem::DeliverySkipped { task, .. } => Some(task.id),
+        | AttentionItem::DeliverySkipped { task, .. }
+        | AttentionItem::BrowserPrerequisite { task, .. } => Some(task.id),
         // 統合依頼は Done task にも届くため、終端 task の attention 整理規則で隠さない。
         AttentionItem::ClusterUnavailable { .. } | AttentionItem::IntegrationRequest { .. } => None,
     }
@@ -320,6 +330,7 @@ fn attention_at(item: &AttentionItem) -> &str {
         AttentionItem::PlanApproval { at, .. } => at,
         AttentionItem::DeliverySkipped { at, .. } => at,
         AttentionItem::IntegrationRequest { at, .. } => at,
+        AttentionItem::BrowserPrerequisite { at, .. } => at,
     }
 }
 
@@ -873,6 +884,34 @@ fn build_attention(
             report_idx: info.report_idx,
             next_phase: info.report.next_phase.clone(),
             at,
+        });
+    }
+
+    // ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提が足りずに止まった task。項目の文は最後の
+    // `BrowserPrerequisiteBlocked` の message（人に分かる理由と次の手）。期限は設けない（前提が揃うまで続く）。
+    for t in all_tasks.iter().filter(|t| t.status == Status::Blocked) {
+        let rows = store.event_rows_for(t.id, None, view::ALL_EVENTS)?;
+        let events = view::seq_pairs(&rows);
+        if crate::phase_gate::last_transition_reason(&events)
+            != Some(task_core::browser_prerequisite::REASON_BLOCKED)
+        {
+            continue;
+        }
+        let Some((ts, code, message)) = rows.iter().rev().find_map(|r| match &r.event {
+            Event::BrowserPrerequisiteBlocked { code, message } => {
+                Some((r.ts.clone(), *code, message.clone()))
+            }
+            _ => None,
+        }) else {
+            continue;
+        };
+        let mut task_ref = view::task_ref(t);
+        task_ref.actions = view::actions_with_events(t, &events);
+        items.push(AttentionItem::BrowserPrerequisite {
+            task: task_ref,
+            code,
+            message,
+            at: ts,
         });
     }
 

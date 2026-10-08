@@ -16,6 +16,18 @@ fn last_blocked_code(events: &[(u64, Event)]) -> Option<BrowserPrerequisiteCode>
     })
 }
 
+/// worker が返した adapter の失敗文を前提の code に分類する（D2: infra_requeue に回さない）。台帳由来の文に
+/// 加え、`browser policy rejected`（task policy が無い・task の origin や grant と交わらない）も
+/// `BrowserPolicyMissing` として同じ trigger で止める。再試行しても同じ結果なので、人が task 詳細で
+/// policy を直すまで worker を起こさない（D4）。
+pub(super) fn worker_error_code(message: &str) -> Option<BrowserPrerequisiteCode> {
+    BrowserPrerequisiteCode::from_worker_error(message).or_else(|| {
+        message
+            .contains("browser policy rejected")
+            .then_some(BrowserPrerequisiteCode::BrowserPolicyMissing)
+    })
+}
+
 impl Dispatcher {
     /// 試験・点検用: 台帳の見張りを差し替える（既定は daemon の設定と PATH の agent-browser）。
     pub fn set_browser_ledger_watch(&mut self, watch: task_worker::browser_ledger::LedgerWatch) {
@@ -36,23 +48,31 @@ impl Dispatcher {
         }
     }
 
-    fn browser_task_code(&self, task_id: TaskId) -> BrowserPrerequisiteCode {
-        let credential_use = self
-            .store
-            .browser_task_policy_get(task_id)
-            .ok()
-            .flatten()
-            .is_some_and(|p| {
-                p.allowed_actions
-                    .contains(&task_core::BrowserAction::CredentialUse)
-            });
+    /// task の前提の code。保存 browser policy が無い（読めない・task の origin と交わらない）task は
+    /// 台帳より先に `BrowserPolicyMissing` で止める（D2 末尾・D4: worker を起こしても
+    /// `browser policy rejected` で infra_requeue を繰り返すだけになる）。policy があれば台帳の状態で決める。
+    fn browser_task_code(&self, task: &Task) -> BrowserPrerequisiteCode {
+        let policy = match self.store.browser_task_policy_get(task.id) {
+            Ok(Some(policy)) => policy,
+            Ok(None) => return BrowserPrerequisiteCode::BrowserPolicyMissing,
+            Err(e) => {
+                tracing::warn!(task_id = %task.id, error = %e, "could not read the browser task policy; holding the task");
+                return BrowserPrerequisiteCode::BrowserPolicyMissing;
+            }
+        };
+        if task_core::browser::task_run_policy(&task.requirements, Some(&policy)).is_err() {
+            return BrowserPrerequisiteCode::BrowserPolicyMissing;
+        }
+        let credential_use = policy
+            .allowed_actions
+            .contains(&task_core::BrowserAction::CredentialUse);
         self.browser_ledger.status().task_code(credential_use)
     }
 
     /// dispatch の直前の gate。前提が無ければ task を `blocked` にして `Ok(true)`（この tick は起こさない）。
     pub(super) fn browser_prereq_hold(&mut self, task: &Task) -> Result<bool, DispatchError> {
         self.refresh_browser_ledger();
-        let code = self.browser_task_code(task.id);
+        let code = self.browser_task_code(task);
         if code.is_ok() {
             return Ok(false);
         }
@@ -103,7 +123,7 @@ impl Dispatcher {
             if !ledger_changed && !task_level {
                 continue;
             }
-            let code = self.browser_task_code(task.id);
+            let code = self.browser_task_code(&task);
             if code.is_ok() {
                 match self.store.apply_transition_with_events(
                     task.id,

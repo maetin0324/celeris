@@ -3156,6 +3156,9 @@ mod write_set_record;
 mod browser_allowed_domains;
 mod browser_fallback;
 mod browser_ledger_gate;
+/// ADR 2026-10-08-browser-prod-enablement D2 末尾・D4: 保存 policy の無い browser task は
+/// `browser_policy_missing` で止まり、PUT で戻る（`src/dispatcher/tests/browser_policy_missing.rs`）。
+mod browser_policy_missing;
 /// ADR-0124: atomic coding task の planner なし直行経路（`src/dispatcher/tests/direct_route.rs`）。
 mod direct_route;
 /// ADR-0040 付記（2026-10-04、WU 検査の引き継ぎ）: draining の旧 instance は run の終わりで手を離す

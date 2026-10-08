@@ -312,6 +312,12 @@ export type AttentionItem = {
   "type": "unroutable";
 } | {
   "at": string;
+  "code": BrowserPrerequisiteCode;
+  "message": string;
+  "task": TaskRef;
+  "type": "browser_prerequisite";
+} | {
+  "at": string;
   "cluster": string;
   "host": string;
   "tasks": number;

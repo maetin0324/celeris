@@ -23,6 +23,8 @@ pub const OWNER_SOCKET_ENV: &str = "CELERIS_GUI_OWNER_SOCKET";
 
 #[derive(Subcommand, Debug)]
 pub enum BrowserCommand {
+    /// daemon 自身の環境で browser の前提を点検（不足=1、API 不達=2）。
+    Doctor(super::browser_doctor::DoctorArgs),
     /// browser の適合台帳を検査する（DB・daemon への接続は不要）。
     Ledger {
         #[command(subcommand)]
@@ -105,8 +107,9 @@ fn current_uid() -> u32 {
         .unwrap_or(u32::MAX)
 }
 
-pub fn run(command: BrowserCommand) -> Result<ExitCode, CliError> {
+pub fn run(command: BrowserCommand, api_url: Option<&str>) -> Result<ExitCode, CliError> {
     match command {
+        BrowserCommand::Doctor(args) => super::browser_doctor::run(args, api_url),
         BrowserCommand::Ledger {
             command: LedgerCommand::Check(args),
         } => ledger_check(args),

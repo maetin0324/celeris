@@ -576,6 +576,8 @@ pub(crate) async fn start_api(
         Some(sealer) => state.with_identity_sealer(sealer),
         None => state,
     };
+    let doctor = crate::browser_doctor::DoctorConfig::from_process(config.clone());
+    let state = state.with_browser_readiness(Arc::new(move |store| doctor.inspect(store)));
     let state = state.with_live_sessions(live_sessions);
     let state = with_chat_wiring(state, config);
     let listener = bind_reuseport(listen).map_err(|source| ApiError::Bind {

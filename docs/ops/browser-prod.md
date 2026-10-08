@@ -8,6 +8,8 @@ browser task を本番で動かすには、その release 用の適合台帳（`
 [ADR 2026-10-08-browser-prod-enablement](../../agent-docs/adr/2026-10-08-browser-prod-enablement.md) D1・D2。
 本番 host の操作（release dir への書き込み・daemon の再起動）は人が実行する。
 
+前提の点検と不足項目の修正、運用セッションの有効化手順は [本番 browser 実行の有効化と点検](browser-prod-enablement.md)を参照。
+
 ## 1. release が台帳を作って置く流れ
 
 - `scripts/selfdeploy/release.sh` の `browser-ledger` 段（`lib.sh` の `sd_browser_ledger`）が、release の組み立て中に台帳を作る。

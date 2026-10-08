@@ -22,6 +22,8 @@ use zeroize::Zeroize;
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ControlRequest {
+    /// Read-only health check, after the same UID/PID admission as every control request.
+    Ping,
     InitializeKey,
     Register {
         reference: CredentialRef,
@@ -194,6 +196,7 @@ fn serve_one(
         }
         let response = (|| -> Result<IpcReply, Error> {
             match serde_json::from_slice::<ControlRequest>(&bytes).map_err(|_| Error::Invalid)? {
+                ControlRequest::Ping => Ok(IpcReply::ok()),
                 ControlRequest::InitializeKey => {
                     broker.provider().initialize_key()?;
                     Ok(IpcReply::ok())

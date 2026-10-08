@@ -26,6 +26,7 @@ mod browser_control;
 /// ADR-0101 / H5: Browser Identity の登録・一覧・失効・削除（利用は isolation_required）。
 pub mod browser_identity;
 mod browser_live;
+pub mod browser_readiness;
 pub mod browser_site_policies;
 pub mod browser_trusted_devices;
 /// ADR-0043 D5（Phase 54）: 変更の取り込み（差分・merge・PR・衝突タスク）。

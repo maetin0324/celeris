@@ -184,6 +184,7 @@ pub(crate) fn router(state: ApiState) -> Router {
         .merge(crate::routing::routes())
         // ADR-0080 D5: browser の人待ち（登録依頼・承認）。
         .merge(crate::browser::routes())
+        .merge(crate::browser_readiness::routes())
         .merge(crate::browser_identity::routes())
         .merge(crate::browser_live::routes())
         // ADR 2026-10-07-browser-trusted-devices: 信頼端末の登録・検証と回転・一覧・失効。

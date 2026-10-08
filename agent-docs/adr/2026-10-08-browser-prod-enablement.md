@@ -5,7 +5,7 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 ---
 
 - 日付: 2026-10-08
-- 状態: 採用（実装は後続の葉。close-out で「実装済み」にする）
+- 状態: 実装済み（2026-10-08。task 01M4CDNAYX6J68WTX7SKF0DJ64。突き合わせは末尾の付記）
 - 関連: [ADR-0080](0080-browser-phase2-policy-broker-approval.md)（policy・broker・承認）、
   [ADR-0106](0106-browser-phase4-conformance-dispatch.md)（実測適合記録と fallback）、
   [ADR-0112](0112-browser-p4b-conformance-evidence-unlock.md)（P4-B 証拠と機密能力の解放）、
@@ -314,3 +314,19 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 - 台帳の生成が release の時間を延ばす（上限 1800 秒の段。cargo test のビルドは gate と target を共有する）。
 - 代償: release dir に `browser/` が増え、D1.5 の再生成だけは release dir に後から書く。config の
   `[[api.browser_site_policies]]` は種に格下げされ、DB と食い違い得る（doctor が出す）。
+
+## 付記（close-out の実装突き合わせ）
+
+2026-10-08、統合後の HEAD（`a48a440c`）で D1〜D5 を突き合わせた。証拠は
+[進捗](../progress/2026-10-08-browser-prod-enablement.md)、本番手順は
+[docs/ops/browser-prod-enablement.md](../../docs/ops/browser-prod-enablement.md)。
+
+- **D1（台帳の生成・配置・渡し方）**: runner の `--celeris-release`、`sd_browser_ledger`・release.sh の browser-ledger 段（非 blocking）・promote の記録・
+  `scripts/selfdeploy/browser-ledger.sh`、`celerisctl browser ledger check`、daemon の `configure_conformance`（release dir の台帳）。試験 `browser_ledger_release_`（celerisctl 7・celeris 3）と selfdeploy の `browser_ledger_release_stages.sh`。
+  実 agent-browser・実 Chromium での本番生成は未実施。
+- **D2（台帳不足は理由つきで止める）**: `ledger_status`・`LedgerWatch`・`BrowserPrerequisiteCode` と dispatch での停止。試験 `browser_ledger_gate_`（12）。
+  - 食い違い: 受信箱の `browser_prerequisite` reason と readiness は実装したが、`TaskDetail.browser.prerequisite` 欄は未追加。web は既存 event から表示する。
+- **D3（site policy の DB 正本・grant の credential 設定）**: migration と store、`crates/task-api/src/browser.rs`、web の `/browser/settings`。試験 `browser_site_policy_db_`（6）。
+- **D4（最小 policy の自動付与と retry の引き継ぎ）**: 作成の共通経路と `retry.rs`。試験 `browser_policy_autoattach_`（6）。
+  - 食い違い: `BrowserTaskPolicySet { source }` event と出自欄は未実装。web は `policy_id`（`auto`・`web-human`）で出自を表す（承認・能力の判定には使わない）。
+- **D5（点検コマンド）**: `celerisctl browser doctor` と `GET /api/v1/browser/readiness`（bearer 必須）、credentiald の Ping、`docs/ops/browser-prod-enablement.md`・`browser-prod.md`。試験 `browser_doctor_`（13）。

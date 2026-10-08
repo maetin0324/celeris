@@ -43,6 +43,8 @@ def run_dir(run_id):
     if os.path.isfile(os.path.join(direct, "prompt.txt")):
         return direct
     for p in glob.glob(os.path.join(out, "**", "prompt.txt"), recursive=True):
+        if os.path.basename(os.path.dirname(p)) == run_id:
+            return os.path.dirname(p)
         try:
             with open(p, "rb") as f:
                 head = f.read(600)
@@ -213,6 +215,8 @@ def main():
             th = new_thread("s2")
             for i, t in enumerate(SCRIPT["s2_same_thread"]["turns"][:n_s2], 1):
                 turn(SCRIPT, "s2", th, i, t["kind"], t["text"])
+                if runs[-1].get("state") != "completed":
+                    raise RuntimeError("same-thread requires completed runs; stopping after failed turn")
         finally:
             if runs:
                 finish()

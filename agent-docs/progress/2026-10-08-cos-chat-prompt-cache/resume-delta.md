@@ -20,7 +20,7 @@ updated: 2026-10-08
 - `cargo test -p task-dispatch cos_chat_resume_delta`: 9 passed。`cargo test -p task-worker cos_chat`: 44 passed。
 - `cargo nextest run -p task-core -p task-dispatch -p task-worker -p celerisctl --no-fail-fast`: 2967 run、2929 passed、38 failed（全て browser・launcher の sandbox 既知失敗。cos_chat は 0 件）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- live（claude_oauth、隔離 data dir・一時 DB・port 17957）: before = base 8cdd96fb のバイナリ、after = この変更。各 2 回。t2〜t10 合計の平均: 非 cache input 50 → 50（±0%）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%）。turn 別の値は task の artifacts `resume-delta-bench/compare.md`（runs.json 一式あり）。after の DB で session_mode は 1 turn 目 new・以後 resumed、cursor は 10 turn 後に 21。
+- 旧 live（account_id は全40 runで null、lab 使用は不明。判定証拠としては採用しない。claude_oauth、隔離 data dir・一時 DB・port 17957）: before = base 8cdd96fb のバイナリ、after = この変更。各 2 回。t2〜t10 合計の平均: 非 cache input 50 → 50（±0%）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%）。turn 別の値は task の artifacts `resume-delta-bench/compare.md`（runs.json 一式あり）。after の DB で session_mode は 1 turn 目 new・以後 resumed、cursor は 10 turn 後に 21。
 
 ## 人の決定（2026-10-08）
 
@@ -31,7 +31,7 @@ updated: 2026-10-08
 > 受け入れ条件 3 の末尾を「非 cache input・cache write・prompt bytes の before/after が記録され、cache write と prompt bytes のどちらかが改善している」に書き換え、目的の「改善が無ければ統合せず yield」も同じ趣旨に直し、(a)の方向性で進めてください
 
 - **選んだ選択肢: (a)** — 判定指標を cache write・prompt bytes に変えて統合する。
-- **理由**: claude-code では非 cache input は構造上動かない（prompt が cache write に入り turn ごとに 4〜6 で一定）ため、この変更の判定指標として不適。新しい基準では改善あり（cache write −13.6%、prompt bytes −21.1%）。
+- **理由**: claude-code では非 cache input は構造上動かない（prompt が cache write に入り turn ごとに 4〜6 で一定）ため、この変更の判定指標として不適。旧計測では改善あり（cache write −13.6%、prompt bytes −21.1%）だったが、account 不明のため lab 固定での判定は未確定。
 - task の受け入れ条件 3 と目的の文言更新は**人が API で行う**。
 - 本決定記録の run では製品コード（crates/・migration・schema）は一切変更していない。統合は delivery の流れの後続段で実施する。
 
@@ -59,7 +59,7 @@ updated: 2026-10-08
 - codex・acp・pi の live は未計測（不明）。
 
 ## 提案
-- 差分配送の判定指標は非 cache input でなく cache write と prompt bytes にする（baseline の提案と同じ）。この基準なら改善あり（−13.6%・−21.1%）。（2026-10-08 の人の決定で採用。）
+- 差分配送の判定指標は非 cache input でなく cache write と prompt bytes にする（baseline の提案と同じ）。旧計測では改善あり（−13.6%・−21.1%）だったが、lab 固定の判定は未確定。（2026-10-08 の人の決定で採用。）
 
 
 ## main 取り込みと代替経路の併存（2026-10-08、merge-main）
@@ -79,3 +79,13 @@ updated: 2026-10-08
 - `cargo test -p task-dispatch -p task-core cos_chat`: exit 0、task-dispatch lib 113・結合 11・task-core 28 件成功（失敗 0）。
 - `sh scripts/dev/check-doc-links.sh && sh scripts/dev/progress-index.sh --check`: exit 0。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
+
+
+## lab 固定再計測（2026-10-08、lab-bench）
+
+- same-thread は `COS_CHAT_BENCH_LAB_DIR` が必須で、basename が `claude_max_lab` 以外なら拒否する。`.credentials.json` だけを隔離 data dir の `accounts/claude_max_lab/` に mode 600 で複製し、provider の `account_pool = true`、CoS の `account_id = "claude_max_lab"`、`accounts.claude_dir` を設定する。host の認証を書き戻さない。
+- before は main `10566e5bc7666a18c0850fabb1c177aef4472483` を `$TMPDIR` に `git archive` し、渡された `CARGO_TARGET_DIR` で debug build。台本・bench script はこの branch のものを使用した。after の製品コードは merge-main `fe5d609d1751041162e527ff3ba17c4c13ea7aa3` と同じ（本 WU は bench と文書のみ変更）。
+- 指定 host lab の認証で before を開始したが、全10 turnが `Failed to authenticate: OAuth session expired and could not be refreshed` で failed。実際の `runs.json` は全て `account_id=claude_max_lab`・`llm_source=claude_oauth`、`summary.json` の `meta.account_id` も `["claude_max_lab"]`。成功した40 runという条件は未達。
+- host lab の期限は 2026-10-08 15:53:15 UTC、計測開始は18:43 UTC。以前成功した `answer-before-retry-data/accounts/claude_max_lab` の一時コピーは既に削除されていた。認証の SHA-256・mtime を前後で照合し、host 側の変更が無いことを確認。本番 config/DB/release/systemd は操作していない。
+- **lab 固定の非 cache input・cache write・prompt bytes の before/after は不明。改善の判定は保留し、統合しない。** before-2・after・after-2 は未実行。新しい lab 認証を人が用意した後、4セットを最初から実行し、成功した直前の隔離コピーを次のセットへ引き継ぐ。
+- 証跡: task の `wu/lab-bench/artifacts/resume-delta-bench-lab/compare.md` と `before/runs.json`（失敗証跡）。詳細ログと host 認証の不変確認は task artifacts の `bench-before.log`・`lab-host-integrity.json`。失敗後の無用な呼出しを避けるため、same-thread は未完了 turn で停止するよう修正した。

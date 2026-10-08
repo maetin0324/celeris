@@ -543,8 +543,17 @@ D2「再開中は未配送 seq 以後の差分と現在の規則だけを渡す�
 
 ### 計測（隔離 live、claude-code・claude_oauth、同一 thread 10 turn × before/after 各 2 回）
 
-`scripts/dev/cos-chat-bench.sh … same-thread`（S2 だけを流す mode を追加）。t2〜t10 合計の 2 回平均: 非 cache input（`Usage.input_tokens`）50 → 50（±0%、turn ごとに同じ 4〜6）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%。after は turn によらず約 4.8 KB で一定）。claude-code では prompt は cache write に入り、非 cache input は構造上ほぼ一定なので、この指標では改善が出ない。計測時は CoS が checkpoint を書かず summary が空だった（既知の不具合 4）ので、before の再送は未要約履歴だけだった。summary がある thread の差はこれより大きい見込み（未計測）。codex・acp・pi は未計測（不明）。
+**旧計測（account 不明、lab 使用は未確認。判定証拠としては採用しない）**: `scripts/dev/cos-chat-bench.sh … same-thread`（S2 だけを流す mode を追加）。t2〜t10 合計の 2 回平均: 非 cache input（`Usage.input_tokens`）50 → 50（±0%、turn ごとに同じ 4〜6）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%。after は turn によらず約 4.8 KB で一定）。claude-code では prompt は cache write に入り、非 cache input は構造上ほぼ一定なので、この指標では改善が出ない。計測時は CoS が checkpoint を書かず summary が空だった（既知の不具合 4）ので、before の再送は未要約履歴だけだった。summary がある thread の差はこれより大きい見込み（未計測）。codex・acp・pi は未計測（不明）。
 
 ### 判定指標（人の決定、2026-10-08）
 
-統合の判定は 2026-10-08 の人の決定（(a) の方向性）で「非 cache input・cache write・prompt bytes の before/after が記録され、cache write と prompt bytes のどちらかが改善している」に変更された。本変更はこれを満たす（cache write −13.6%、prompt bytes −21.1%）。非 cache input は判定指標に採用しない（claude-code では prompt が cache write に入り非 cache input は turn ごとの 4〜6 で構造上一定のため、改善が出ない）。
+統合の判定は 2026-10-08 の人の決定（(a) の方向性）で「非 cache input・cache write・prompt bytes の before/after が記録され、cache write と prompt bytes のどちらかが改善している」に変更された。旧計測は cache write −13.6%、prompt bytes −21.1% だったが、account 不明のためこの結果だけでは条件を満たしたとは判定しない。非 cache input は判定指標に採用しない（claude-code では prompt が cache write に入り非 cache input は turn ごとの 4〜6 で構造上一定のため、改善が出ない）。
+
+
+### lab 固定再計測の状態（2026-10-08）
+
+same-thread は `COS_CHAT_BENCH_LAB_DIR`（basename `claude_max_lab`）の `.credentials.json` だけを試験用 data dir へ mode 600 でコピーし、account pool と CoS account_id を固定する。実際の run.account_id を runs.json と summary.meta.account_id に保存する。host の認証は更新しない。
+
+before の出所は main `10566e5bc7666a18c0850fabb1c177aef4472483` の archive debug build、after の製品コードは merge-main `fe5d609d1751041162e527ff3ba17c4c13ea7aa3`。指定 lab 認証の期限切れ・refresh 失敗により before 10 run が全て failed（全て account_id=claude_max_lab、llm_source=claude_oauth）。以前成功した一時 lab コピーは削除済み。残り3セットは未実行。
+
+lab 固定での t2〜t10 合計の2回平均は非 cache input・cache write・prompt bytes とも **不明**。改善の判定は保留し、統合しない。人が新しい lab 認証を用意した後に4セットを再計測する。旧数値は上記の account 不明の参考値として残す。詳しい失敗証跡は task `01M4DE3G78D16NJ80SEMWVAVAK` の `wu/lab-bench/artifacts/resume-delta-bench-lab/compare.md` と `before/runs.json`。

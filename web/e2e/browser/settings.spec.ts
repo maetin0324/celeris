@@ -45,6 +45,12 @@ test("loopback の初期値を表示し、確認して設定を保存する", as
     await page.getByLabel("使える harness（カンマ区切り）").fill("codex, claude-code");
     await page.getByLabel("既定の harness").fill("codex");
     await page.getByLabel("最大試行回数").fill("3");
+    // ADR 2026-10-08: 既定はどちらも承認なし。download だけ承認対象に戻す。
+    const approvals = page.getByRole("list", { name: "毎回の承認が要る操作" });
+    await expect(approvals.getByRole("checkbox")).toHaveCount(2);
+    await expect(approvals.getByLabel(/^click/)).not.toBeChecked();
+    await expect(approvals.getByLabel(/^download/)).not.toBeChecked();
+    await approvals.getByLabel(/^download/).check();
     await page.getByLabel("使える credential policy ID（1 行に 1 件）").fill("billing-policy");
     await page.getByLabel("policy と identity の対応（policy ID=identity ID）").fill("billing-policy=ID1");
     await page.getByRole("button", { name: "変更内容を確認して保存" }).click();
@@ -56,6 +62,7 @@ test("loopback の初期値を表示し、確認して設定を保存する", as
     await expect(origins).toContainText("https://billing.example.com");
     await expect(origins).not.toContainText("127.0.0.1");
     await expect(page.getByText("変更者: admin")).toBeVisible();
+    await expect(approvals.getByLabel(/^download/)).toBeChecked();
     await captureWidths(page, "after");
     const event = gateway.daemon.browserSettingsEvents[0];
     expect(event?.actor).toBe("admin");
@@ -63,6 +70,7 @@ test("loopback の初期値を表示し、確認して設定を保存する", as
     expect(event?.after).toMatchObject({
       browser: {
         allowed_domains: ["http://localhost:3000", "https://billing.example.com"],
+        approval_actions: ["download"],
         credential_policy_ids: ["billing-policy"],
         credential_identity_ids: { "billing-policy": "ID1" },
       },

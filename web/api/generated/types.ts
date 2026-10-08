@@ -395,6 +395,7 @@ export type BrowserAction = "navigate" | "click" | "snapshot" | "extract" | "scr
 export type BrowserCapability = {
   "allowed_actions"?: Array<BrowserAction> | null;
   "allowed_domains": Array<string>;
+  "approval_actions"?: Array<BrowserAction>;
   "credential_identity_ids"?: {
   [key: string]: string;
 };
@@ -462,6 +463,7 @@ export type BrowserRunState = "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPR
 
 export type BrowserSettingsPatch = {
   "allowed_domains"?: Array<string> | null;
+  "approval_actions"?: Array<BrowserAction> | null;
   "budget"?: BudgetPrefs | null;
   "credential_identity_ids"?: {
   [key: string]: string;

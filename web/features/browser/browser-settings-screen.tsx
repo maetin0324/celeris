@@ -2,7 +2,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
 import { ApiError, apiGet, apiMutate } from "../../api/client";
-import type { BrowserSettingsPatch, OrgList, OrgNode, Tier } from "../../api/generated/types";
+import type { BrowserAction, BrowserSettingsPatch, OrgList, OrgNode, Tier } from "../../api/generated/types";
 import { orgKeys } from "../../api/queries/keys";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
@@ -26,7 +26,17 @@ const list = (value: string) =>
 const displayTime = (value: string) =>
   Number.isNaN(Date.parse(value)) ? value : new Date(value).toLocaleString("ja-JP");
 
-type Field = "origins" | "harnesses" | "budget" | "credentials" | "identity";
+type Field = "origins" | "harnesses" | "budget" | "credentials" | "identity" | "approval";
+
+/** ADR 2026-10-08: 承認対象に戻せる業務操作（既定はどちらも承認なし。credential_use は常に承認）。 */
+const APPROVAL_CHOICES: ReadonlyArray<{ action: BrowserAction; label: string; help: string }> = [
+  {
+    action: "click",
+    label: "click（ページの要素を押す）",
+    help: "許可 origin の中でも、押す前に毎回人の承認を求めます。",
+  },
+  { action: "download", label: "download（ファイルを保存する）", help: "保存する前に毎回人の承認を求めます。" },
+];
 type Errors = Partial<Record<Field, string>>;
 
 function originHint(value: string): string | null {
@@ -57,8 +67,16 @@ function errorForApi(error: unknown): Errors {
   if (/harness/i.test(field + message)) return { harnesses: message };
   if (/budget|lane|attempt/i.test(field + message)) return { budget: message };
   if (/identity/i.test(field + message)) return { identity: message };
+  if (/approval/i.test(field + message)) return { approval: message };
   if (/credential/i.test(field + message)) return { credentials: message };
-  return { origins: message, harnesses: message, budget: message, credentials: message, identity: message };
+  return {
+    origins: message,
+    harnesses: message,
+    budget: message,
+    credentials: message,
+    identity: message,
+    approval: message,
+  };
 }
 
 function FieldError({ id, message }: { id: string; message?: string }) {
@@ -79,6 +97,7 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
   const [defaultHarness, setDefaultHarness] = useState(node.profile?.harnesses?.default ?? "");
   const [attempts, setAttempts] = useState(String(node.profile?.budget?.max_attempts ?? ""));
   const [lane, setLane] = useState(node.profile?.budget?.max_lane ?? "");
+  const [approvalActions, setApprovalActions] = useState<BrowserAction[]>(browser?.approval_actions ?? []);
   const [policies, setPolicies] = useState((browser?.credential_policy_ids ?? []).join("\n"));
   const [identity, setIdentity] = useState(
     Object.entries(browser?.credential_identity_ids ?? {})
@@ -114,6 +133,7 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
       allowed_domains: origins,
       harnesses: { allowed: list(harnesses), default: defaultHarness.trim() || null },
       budget: { max_attempts: attempts ? Number(attempts) : null, max_lane: (lane || null) as Tier | null },
+      approval_actions: APPROVAL_CHOICES.map((c) => c.action).filter((a) => approvalActions.includes(a)),
       credential_policy_ids: lines(policies),
       credential_identity_ids: mappings,
     };
@@ -231,6 +251,44 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
         <FieldError id={`${id}-harness-error`} message={errors.harnesses} />
         <FieldError id={`${id}-budget-error`} message={errors.budget} />
       </Section>
+      <Section
+        title="毎回の承認が要る操作"
+        description="既定では click・download は許可 origin の中なら承認なしで実行し、記録だけ残します（人の決定 2026-10-08）。承認対象に戻す操作だけ選びます。ID・password を使う login（credential_use）は常に毎回承認です。"
+      >
+        <ul className="space-y-2" aria-label="毎回の承認が要る操作">
+          {APPROVAL_CHOICES.map((choice) => {
+            const checked = approvalActions.includes(choice.action);
+            return (
+              <li key={choice.action} className="flex min-w-0 items-start gap-3">
+                <input
+                  id={`${id}-approval-${choice.action}`}
+                  type="checkbox"
+                  className="mt-1 size-5 shrink-0 accent-primary"
+                  checked={checked}
+                  onChange={(event) =>
+                    setApprovalActions(
+                      event.target.checked
+                        ? [...approvalActions, choice.action]
+                        : approvalActions.filter((a) => a !== choice.action),
+                    )
+                  }
+                  aria-describedby={`${id}-approval-${choice.action}-help ${id}-approval-error`}
+                />
+                <label htmlFor={`${id}-approval-${choice.action}`} className="min-w-0 space-y-1 text-label font-medium">
+                  {choice.label}
+                  <span id={`${id}-approval-${choice.action}-help`} className="block font-normal text-muted-foreground">
+                    {choice.help}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+        </ul>
+        <p className="mt-2 text-label text-muted-foreground">
+          承認待ちの期限は 30 分です。期限内に承認されなければ、その task は失敗として止まります。
+        </p>
+        <FieldError id={`${id}-approval-error`} message={errors.approval} />
+      </Section>
       <Section title="credential と identity の対応" description="秘密の値は入力せず、登録済みの ID だけを指定します。">
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-1 text-label font-medium">
@@ -261,7 +319,7 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
         <ConfirmDialog
           trigger={<Button>変更内容を確認して保存</Button>}
           title="ブラウザ実行課の設定を保存"
-          target={`許可 origin: ${origins.join("、") || "なし"}。harness: ${list(harnesses).join("、") || "なし"}（既定 ${defaultHarness || "なし"}）。最大試行 ${attempts || "指定なし"}、モデル上限 ${lane || "指定なし"}。credential policy ${lines(policies).length} 件、identity 対応 ${lines(identity).length} 件`}
+          target={`許可 origin: ${origins.join("、") || "なし"}。harness: ${list(harnesses).join("、") || "なし"}（既定 ${defaultHarness || "なし"}）。最大試行 ${attempts || "指定なし"}、モデル上限 ${lane || "指定なし"}。毎回の承認が要る操作: ${approvalActions.length ? approvalActions.join("、") : "なし（credential_use のみ）"}。credential policy ${lines(policies).length} 件、identity 対応 ${lines(identity).length} 件`}
           consequence="登録内容を置き換えます。許可 origin の縮小は既存 task の次の run にも反映されます。"
           reversibility="この画面で値を戻して再保存できます。"
           followUp="保存後の設定と更新時刻をこの画面で確認できます。"

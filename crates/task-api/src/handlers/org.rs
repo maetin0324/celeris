@@ -23,6 +23,10 @@ use super::{ApiResult, Params, json_response, load_org_node, no_query, read_json
 #[serde(deny_unknown_fields)]
 pub struct BrowserSettingsPatch {
     pub allowed_domains: Option<Vec<String>>,
+    /// ADR 2026-10-08-browser-click-download-approval-policy D1: business actions that need a
+    /// per-run human approval in every task of this grant (default empty = click/download run
+    /// without approval). `credential_use` is always approved regardless of this list.
+    pub approval_actions: Option<Vec<task_core::BrowserAction>>,
     pub credential_policy_ids: Option<Vec<String>>,
     pub credential_identity_ids: Option<BTreeMap<String, String>>,
     pub harnesses: Option<task_core::HarnessPrefs>,
@@ -76,6 +80,9 @@ pub(super) async fn patch_browser_settings(
             })?;
             if let Some(domains) = patch.allowed_domains {
                 browser.allowed_domains = domains;
+            }
+            if let Some(actions) = patch.approval_actions {
+                browser.approval_actions = actions;
             }
             if let Some(ids) = patch.credential_policy_ids {
                 browser.credential_policy_ids = ids;

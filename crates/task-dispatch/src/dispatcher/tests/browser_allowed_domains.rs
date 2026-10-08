@@ -11,6 +11,7 @@ fn browser_org(store: &dyn TaskStore, grant: &[&str]) {
         None,
     );
     node.profile.browser = Some(task_core::BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: grant.iter().map(|o| o.to_string()).collect(),
         ..Default::default()
     });

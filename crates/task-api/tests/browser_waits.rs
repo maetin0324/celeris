@@ -795,7 +795,8 @@ async fn expired_wait_is_gone_and_unconfigured_api_refuses_human_actions() {
     let expired = f
         .env
         .store
-        .browser_waits_expire(OffsetDateTime::now_utc() + time::Duration::minutes(6))
+        // ADR 2026-10-08 D3: the approval deadline is 30 minutes (time is injected, not slept).
+        .browser_waits_expire(OffsetDateTime::now_utc() + time::Duration::minutes(31))
         .expect("expire");
     assert_eq!(expired.len(), 1);
     assert_eq!(f.env.status_of(task_id), Status::Failed);

@@ -296,8 +296,8 @@ fn approve_once_consumes_once_and_deny_fails_task() {
         .browser_wait_open(id, &approval_request("rk-a"), now)
         .expect("open")
         .wait;
-    // 承認待ちは既定・上限 5 分（要求の 10000 秒は丸める）。
-    assert_eq!(wait.deadline, now + Duration::minutes(5));
+    // 承認待ちは既定・上限 30 分（要求の 10000 秒は丸める。ADR 2026-10-08 D3）。
+    assert_eq!(wait.deadline, now + Duration::minutes(30));
     assert!(matches!(
         store.browser_wait_decide(
             id,
@@ -436,13 +436,15 @@ fn expiry_terminates_exactly_once_and_cancel_closes_waits() {
         .browser_wait_open(id, &approval_request("rk-e"), now)
         .expect("open")
         .wait;
+    // ADR 2026-10-08 D3: the approval deadline is 30 minutes (was 5).
+    assert_eq!(w.deadline, now + Duration::seconds(APPROVAL_WAIT_MAX_SECS as i64));
     assert!(
         store
-            .browser_waits_expire(now + Duration::minutes(4))
+            .browser_waits_expire(now + Duration::minutes(29))
             .expect("not yet")
             .is_empty()
     );
-    let later = now + Duration::minutes(6);
+    let later = now + Duration::minutes(31);
     // 期限後の承認は 410 相当で、wait は期限切れとして終端化される。
     assert!(matches!(
         store.browser_wait_decide(
@@ -833,4 +835,58 @@ fn approval_without_pinned_selector_cannot_inject() {
         consumed.injection_selector(Some("#pass")),
         Err("trusted_selector_missing")
     );
+}
+
+/// ADR 2026-10-08-browser-click-download-approval-policy D3: 承認待ちの既定・上限は 30 分、登録待ちは 24 時間のまま。
+/// 時計は `browser_wait_open` / `browser_waits_expire` の引数で差し替える（実時間は使わない）。
+#[test]
+fn approval_wait_defaults_and_caps_at_thirty_minutes_and_expires_once() {
+    assert_eq!(APPROVAL_WAIT_MAX_SECS, 30 * 60);
+    assert_eq!(AUTH_WAIT_MAX_SECS, 24 * 60 * 60);
+    let store = SqliteStore::open_in_memory().expect("open");
+    let now = OffsetDateTime::now_utc();
+
+    // ttl_secs 無し → 既定 30 分。
+    let id = running(&store);
+    let mut request = approval_request("rk-30");
+    request.ttl_secs = None;
+    let w = store.browser_wait_open(id, &request, now).expect("open").wait;
+    assert_eq!(w.deadline, now + Duration::minutes(30));
+
+    // ttl_secs が上限を超える → 30 分に clamp（approval_request は 10_000 秒を頼む）。
+    let id2 = running(&store);
+    let w2 = store
+        .browser_wait_open(id2, &approval_request("rk-cap"), now)
+        .expect("open")
+        .wait;
+    assert_eq!(w2.deadline, now + Duration::minutes(30));
+
+    // 29 分では期限切れにならず、30 分ちょうどから一度だけ終端化する。
+    assert!(
+        store
+            .browser_waits_expire(now + Duration::minutes(29) + Duration::seconds(59))
+            .expect("not yet")
+            .is_empty()
+    );
+    assert_eq!(status(&store, id), Status::Blocked);
+    let expired = store
+        .browser_waits_expire(now + Duration::minutes(30))
+        .expect("expire");
+    assert_eq!(expired.len(), 2);
+    assert_eq!(status(&store, id), Status::Failed);
+    assert_eq!(status(&store, id2), Status::Failed);
+    assert!(
+        store
+            .browser_waits_expire(now + Duration::minutes(31))
+            .expect("again")
+            .is_empty()
+    );
+
+    // 登録待ちは変わらず 24 時間。
+    let id3 = running(&store);
+    let w3 = store
+        .browser_wait_open(id3, &auth_request("rk-auth"), now)
+        .expect("open")
+        .wait;
+    assert_eq!(w3.deadline, now + Duration::hours(24));
 }

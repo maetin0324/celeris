@@ -71,6 +71,7 @@ fn browser_matching_requires_administrator_capability_grant() {
         Assignment::Unroutable { .. }
     ));
     nodes[3].profile.browser = Some(task_core::BrowserCapability {
+        approval_actions: vec![],
         credential_identity_ids: Default::default(),
         allowed_domains: vec!["example.com".into()],
         live_view_url: None,
@@ -117,6 +118,7 @@ fn browser_specialist_node_receives_browser_enabled_tasks_and_ungranted_nodes_ar
     ));
 
     nodes[last].profile.browser = Some(task_core::BrowserCapability {
+        approval_actions: vec![],
         credential_identity_ids: Default::default(),
         allowed_domains: vec!["localhost".into(), "127.0.0.1".into()],
         live_view_url: None,

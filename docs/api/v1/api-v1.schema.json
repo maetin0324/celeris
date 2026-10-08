@@ -1930,6 +1930,13 @@
           },
           "type": "array"
         },
+        "approval_actions": {
+          "description": "Business actions that need a per-run human approval in every task of this grant\n(ADR 2026-10-08-browser-click-download-approval-policy D1). Empty by default:\nclick/download run without approval inside the allowed origins. `credential_use` is\nalways approved whether or not it is listed here.",
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
+          },
+          "type": "array"
+        },
         "credential_identity_ids": {
           "additionalProperties": {
             "type": "string"
@@ -2197,6 +2204,16 @@
         "allowed_domains": {
           "items": {
             "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "approval_actions": {
+          "description": "ADR 2026-10-08-browser-click-download-approval-policy D1: business actions that need a\nper-run human approval in every task of this grant (default empty = click/download run\nwithout approval). `credential_use` is always approved regardless of this list.",
+          "items": {
+            "$ref": "#/$defs/BrowserAction"
           },
           "type": [
             "array",

@@ -7,6 +7,7 @@ tasks: [01M3MZKB3DFYJNBH015MJGQ0BT]
 - 日付: 2026-09-28
 - 状態: **Accepted（実装契約）。実装・実機検証・リリースは後続 WU**
 - 関連: [ADR-0078](0078-browser-execution-capability.md) D3/D4 補足、D5 と補足、D6、D8 P2-A〜C、[ADR-0040](0040-self-improvement-deploy.md)
+- 上書き: D4 の承認待ち期限（5 分）と D5 の「全 click/download を承認対象」は ADR [2026-10-08-browser-click-download-approval-policy](2026-10-08-browser-click-download-approval-policy.md)（人の決定 2026-10-08）が上書きする（承認待ち 30 分、click/download は既定で承認なし、credential_use は毎回承認のまま）
 - 基準: repository `93d7f2990a9c371a9cee96f29462a3f66315e551`、agent-browser **0.38.1**（source `aff6125c023b810ea3f2e5deec5379e9a4270bdc`）。
 
 ## 文脈と適用範囲

@@ -26,6 +26,12 @@ pub struct BrowserCapability {
     /// set; `credential_use` is never implied.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_actions: Option<Vec<BrowserAction>>,
+    /// Business actions that need a per-run human approval in every task of this grant
+    /// (ADR 2026-10-08-browser-click-download-approval-policy D1). Empty by default:
+    /// click/download run without approval inside the allowed origins. `credential_use` is
+    /// always approved whether or not it is listed here.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_actions: Vec<BrowserAction>,
     /// Credential policies a task may reference. Absent/empty means no credential use.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub credential_policy_ids: Vec<String>,
@@ -234,9 +240,10 @@ impl BrowserAction {
         Self::Download,
         Self::Scroll,
     ];
-    /// Phase 2 treats every click/download and credential use as high risk (ADR-0080 D5).
-    pub const ALWAYS_APPROVED: [BrowserAction; 3] =
-        [Self::Click, Self::Download, Self::CredentialUse];
+    /// Only credential use is always approved. ADR 2026-10-08-browser-click-download-approval-policy
+    /// D1 (human decision 2026-10-08) removed click/download from this set: whether they need a
+    /// per-run approval is decided by the task policy and the grant's `approval_actions`.
+    pub const ALWAYS_APPROVED: [BrowserAction; 1] = [Self::CredentialUse];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -569,10 +576,12 @@ impl EffectiveBrowserPolicy {
         if actions.iter().all(|a| *a == BrowserAction::CredentialUse) {
             return Err(BrowserPolicyError::EmptyActions);
         }
+        // ADR 2026-10-08 D1: task ∪ grant ∪ always-approved, applied to the effective set.
         let approval_actions = task
             .approval_actions
             .iter()
             .copied()
+            .chain(grant.approval_actions.iter().copied())
             .chain(BrowserAction::ALWAYS_APPROVED)
             .filter(|a| actions.contains(a))
             .collect();
@@ -613,12 +622,14 @@ impl EffectiveBrowserPolicy {
     }
 
     /// Policy for the general harness: credential actions are never included here; the
-    /// supervisor builds a dedicated policy for an approved credential segment.
+    /// supervisor builds a dedicated policy for an approved credential segment. Business
+    /// actions that need a per-run approval (`approval_actions`) are left out as well, so the
+    /// action server refuses them instead of running them unapproved (ADR 2026-10-08 D2).
     pub fn harness_action_policy(&self) -> Result<AgentBrowserActionPolicy, BrowserPolicyError> {
         let business: BTreeSet<&str> = self
             .actions
             .iter()
-            .filter(|a| **a != BrowserAction::CredentialUse)
+            .filter(|a| **a != BrowserAction::CredentialUse && !self.approval_actions.contains(a))
             .flat_map(|a| a.upstream_actions().iter().copied())
             .collect();
         if business.is_empty() {

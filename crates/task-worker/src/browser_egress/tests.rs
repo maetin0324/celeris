@@ -473,6 +473,7 @@ async fn malformed_dns_length_or_transaction_is_rejected_over_tcp() {
 #[tokio::test]
 async fn browser_allowed_domains_egress_denies_outside_task_and_grant() {
     let grant = task_core::BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: vec![
             "https://*.example.com".into(),
             "http://127.0.0.1:3000".into(),

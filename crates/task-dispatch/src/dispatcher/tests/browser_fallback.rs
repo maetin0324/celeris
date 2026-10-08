@@ -299,6 +299,7 @@ fn browser_fallback_request(task: Task, dir: &Path) -> RunRequest {
         context: RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {
+                    approval_actions: vec![],
                     allowed_domains: vec!["example.com".into()],
                     ..Default::default()
                 }),

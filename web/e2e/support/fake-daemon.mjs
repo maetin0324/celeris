@@ -852,6 +852,7 @@ const browserExecutionOrgNode = () => ({
   profile: {
     browser: {
       allowed_domains: ["http://localhost:3000", "http://127.0.0.1:3000"],
+      approval_actions: [],
       credential_policy_ids: [],
       credential_identity_ids: {},
     },
@@ -3015,6 +3016,14 @@ export function createFakeDaemon({
         const node = org.items.find((item) => item.id === "browser-execution");
         const before = structuredClone(node.profile);
         if (domains !== undefined) node.profile.browser.allowed_domains = domains;
+        if (patch.approval_actions !== undefined) {
+          if (
+            !Array.isArray(patch.approval_actions) ||
+            patch.approval_actions.some((a) => !["click", "download", "credential_use"].includes(a))
+          )
+            return bad("browser.approval_actions", "expected browser actions");
+          node.profile.browser.approval_actions = patch.approval_actions;
+        }
         if (patch.credential_policy_ids !== undefined)
           node.profile.browser.credential_policy_ids = patch.credential_policy_ids;
         if (patch.credential_identity_ids !== undefined)

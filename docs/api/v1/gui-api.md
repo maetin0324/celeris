@@ -2999,8 +2999,12 @@ task は `blocked` のまま、wait の `reason`（`waiting_for_auth` / `waiting
 - 状態: 登録待ちは `registered`（task → `ready`。使用承認は兼ねない）か拒否・期限切れで `failed`。承認待ちは
   `approved`（task → `ready`、worker が同じ run/session で一度だけ消費）か `deny` / 期限切れで `failed`
   （`approval_denied` / `browser_wait_expired`、自動 retry なし）。cancel は wait を `cancelled` に閉じる。
-- 期限: 登録待ちは既定・上限 24 時間、承認待ちは既定・上限 5 分。期限切れはディスパッチャの tick（起動直後を
-  含む）が一度だけ終端化する。
+- 期限: 登録待ちは既定・上限 24 時間、承認待ちは既定・上限 30 分（ADR 2026-10-08-browser-click-download-approval-policy
+  D3。人の決定 2026-10-08 で 5 分から変更）。期限切れはディスパッチャの tick（起動直後を含む）が一度だけ終端化する。
+- 承認の対象: `credential_use` は常に毎回承認。`click` / `download` は既定では承認なし（許可 origin の中で実行し、
+  session 記録と event に残る）で、task policy（`PUT /tasks/{id}/browser/policy` の `approval_actions`）か組織の grant
+  （`PATCH /org/{id}/browser-settings` の `approval_actions`）に書いたときだけ承認対象になる（同 ADR D1。承認対象の
+  操作は harness の allow から外れ、承認なしでは実行されない）。
 - 未解決の wait がある間、一般の `answer` / 途中確認の再開では `ready` に戻せない（409 `invalid_transition`）。
   inbox の `questions` には出さず `browser_waits`（`counts.browser_waits`）に出す。
 - エラー: 401 bearer なし、403 `attestation_invalid` / `attestation_replayed`、404 `browser_wait_not_found`、

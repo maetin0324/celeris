@@ -741,6 +741,7 @@ fn action_socket_dir_must_be_private_to_this_user() {
 
 fn prepared(origin: &str) -> crate::browser_policy::PreparedBrowserPolicy {
     let grant = task_core::BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: vec![origin.into()],
         ..Default::default()
     };

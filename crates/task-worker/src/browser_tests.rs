@@ -100,6 +100,7 @@ fn request(workspace: &Path) -> RunRequest {
         context: crate::protocol::RunContext {
             profile: Some(EffectiveProfile {
                 browser: Some(BrowserCapability {
+                    approval_actions: vec![],
                     allowed_domains: vec!["example.com".into(), "*.example.org".into()],
                     live_view_url: Some("https://browser.example.com/live".into()),
                     ..Default::default()

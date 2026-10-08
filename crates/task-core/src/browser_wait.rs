@@ -1,4 +1,5 @@
 //! ADR-0080 D4/D5: browser の人待ち（credential の登録依頼・credential 使用/高リスク操作の承認）の耐久記録。
+//! 承認待ちの期限は ADR 2026-10-08-browser-click-download-approval-policy D3 で 30 分。
 //!
 //! - task の Status は増やさない。待っている task は `Blocked`、wait の `reason` が
 //!   `waiting_for_auth` / `waiting_for_approval` を運ぶ（`BrowserRunState` に写すのは呼び出し側）。
@@ -20,8 +21,9 @@ use crate::{Event, Status, TaskId, Trigger};
 
 /// 登録待ちの既定・上限（ADR-0080 D4: 既定 24 時間、管理者上限 24 時間）。
 pub const AUTH_WAIT_MAX_SECS: u64 = 24 * 60 * 60;
-/// 承認待ちの既定・上限（ADR-0080 D4: 既定・上限 5 分）。
-pub const APPROVAL_WAIT_MAX_SECS: u64 = 5 * 60;
+/// 承認待ちの既定・上限（ADR 2026-10-08-browser-click-download-approval-policy D3: 既定・上限 30 分。
+/// ADR-0080 D4 の 5 分を人の決定 2026-10-08 で上書き）。
+pub const APPROVAL_WAIT_MAX_SECS: u64 = 30 * 60;
 /// 目的（`purpose`）の最大文字数（ADR-0080 D5）。
 pub const PURPOSE_MAX_CHARS: usize = 500;
 /// 識別子・digest・nonce などの最大長。

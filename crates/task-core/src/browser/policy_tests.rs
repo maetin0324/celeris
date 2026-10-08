@@ -2,6 +2,7 @@ use super::*;
 
 fn grant() -> BrowserCapability {
     BrowserCapability {
+        approval_actions: vec![],
         credential_identity_ids: Default::default(),
         allowed_domains: vec!["https://example.com".into(), "https://*.example.org".into()],
         allowed_actions: None,
@@ -59,10 +60,100 @@ fn generator_emits_sorted_nonempty_allow_with_default_deny() {
         all.harness_action_policy().unwrap().allow,
         HARNESS_UPSTREAM_ACTIONS.map(String::from).to_vec()
     );
-    // Phase 2 always gates click/download behind a human even if the task omitted it.
-    assert!(all.requires_approval(BrowserAction::Click));
-    assert!(all.requires_approval(BrowserAction::Download));
+    // ADR 2026-10-08 D1 (human decision): click/download run without approval by default.
+    assert!(!all.requires_approval(BrowserAction::Click));
+    assert!(!all.requires_approval(BrowserAction::Download));
     assert!(!all.requires_approval(BrowserAction::Snapshot));
+    assert!(all.approval_actions.is_empty());
+}
+
+#[test]
+fn click_and_download_are_unapproved_by_default_and_approval_is_opt_in() {
+    // Default: no approval, both actions reach the harness allow list.
+    let default = derive(&grant(), &task(&BrowserAction::PHASE1)).unwrap();
+    let allow = default.harness_action_policy().unwrap().allow;
+    assert!(allow.iter().any(|a| a == "click"));
+    assert!(allow.iter().any(|a| a == "download"));
+    assert!(!default.requires_approval(BrowserAction::Click));
+    assert!(!default.requires_approval(BrowserAction::Download));
+
+    // Task policy opt-in: click needs approval and leaves the harness allow (fail-closed).
+    let mut by_task = task(&BrowserAction::PHASE1);
+    by_task.approval_actions = vec![BrowserAction::Click];
+    let by_task = derive(&grant(), &by_task).unwrap();
+    assert!(by_task.requires_approval(BrowserAction::Click));
+    assert!(!by_task.requires_approval(BrowserAction::Download));
+    let allow = by_task.harness_action_policy().unwrap().allow;
+    assert!(!allow.iter().any(|a| a == "click"));
+    assert!(allow.iter().any(|a| a == "download"));
+    assert_ne!(default.hash(), by_task.hash());
+
+    // Grant opt-in applies to every task of the department.
+    let mut grant_opt_in = grant();
+    grant_opt_in.approval_actions = vec![BrowserAction::Download];
+    let by_grant = derive(&grant_opt_in, &task(&BrowserAction::PHASE1)).unwrap();
+    assert!(by_grant.requires_approval(BrowserAction::Download));
+    assert!(!by_grant.requires_approval(BrowserAction::Click));
+    assert!(
+        !by_grant
+            .harness_action_policy()
+            .unwrap()
+            .allow
+            .iter()
+            .any(|a| a == "download")
+    );
+    // The grant's approval only applies to actions the task actually has.
+    let by_grant_no_download = derive(&grant_opt_in, &task(&[BrowserAction::Snapshot])).unwrap();
+    assert!(by_grant_no_download.approval_actions.is_empty());
+    // The grant round-trips through JSON; an absent field reads as empty.
+    let json = serde_json::to_value(&grant_opt_in).unwrap();
+    assert_eq!(json["approval_actions"], serde_json::json!(["download"]));
+    let parsed: BrowserCapability =
+        serde_json::from_value(serde_json::to_value(grant()).unwrap()).unwrap();
+    assert!(parsed.approval_actions.is_empty());
+
+    // A model-originated edit cannot drop an approval the grant imposes.
+    let mut drop_approval = task(&BrowserAction::PHASE1);
+    drop_approval.revision = 2;
+    assert_eq!(
+        drop_approval.check_narrowing(&by_grant),
+        Err(BrowserPolicyError::PolicyExpansion)
+    );
+    let mut keep_approval = drop_approval.clone();
+    keep_approval.approval_actions = vec![BrowserAction::Download];
+    assert!(keep_approval.check_narrowing(&by_grant).is_ok());
+}
+
+#[test]
+fn credential_use_is_always_approved_without_standing_approval() {
+    let mut with_credential = task(&[
+        BrowserAction::Navigate,
+        BrowserAction::Snapshot,
+        BrowserAction::CredentialUse,
+    ]);
+    with_credential.credential_policy_ids = vec!["cred-policy-1".into()];
+    // credential_use is never implied by a grant without `allowed_actions` (ADR-0080 D1).
+    let mut grant_with_credential = grant();
+    grant_with_credential.allowed_actions = Some(BrowserAction::ALL.to_vec());
+    let policy = derive(&grant_with_credential, &with_credential).unwrap();
+    assert_eq!(
+        BrowserAction::ALWAYS_APPROVED.to_vec(),
+        vec![BrowserAction::CredentialUse]
+    );
+    assert!(policy.requires_approval(BrowserAction::CredentialUse));
+    assert!(!policy.requires_approval(BrowserAction::Navigate));
+    assert_eq!(
+        policy.approval_actions.iter().copied().collect::<Vec<_>>(),
+        vec![BrowserAction::CredentialUse]
+    );
+    // The general harness never carries the credential actions (ADR-0080 D2).
+    let allow = policy.harness_action_policy().unwrap().allow;
+    assert!(!allow.iter().any(|a| a == "auth_login"));
+    assert!(!allow.iter().any(|a| a == CREDENTIAL_PLUGIN_ACTION));
+    // A narrowing edit cannot remove the credential approval either.
+    let mut edit = with_credential.clone();
+    edit.revision = 2;
+    assert!(edit.check_narrowing(&policy).is_ok());
 }
 
 #[test]
@@ -504,6 +595,7 @@ fn requirements(origins: &[&str]) -> crate::TaskRequirements {
 #[test]
 fn browser_allowed_domains_intersection_is_task_and_grant() {
     let grant = BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: vec![
             "https://*.example.com".into(),
             "http://127.0.0.1:3000".into(),
@@ -572,6 +664,7 @@ fn browser_allowed_domains_scheme_and_port_mismatch_leave_empty_intersection() {
     );
     // Within the task but outside the grant: the effective set is empty, so no run.
     let grant = BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: vec!["https://app.example.com".into()],
         ..Default::default()
     };

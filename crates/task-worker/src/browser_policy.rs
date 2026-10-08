@@ -167,6 +167,7 @@ mod tests {
     #[test]
     fn prepared_file_is_hash_bound_nonempty_default_deny() {
         let grant = BrowserCapability {
+            approval_actions: vec![],
             allowed_domains: vec!["https://example.com".into()],
             ..Default::default()
         };
@@ -243,6 +244,7 @@ mod tests {
 
     fn grant(origins: &[&str]) -> BrowserCapability {
         BrowserCapability {
+            approval_actions: vec![],
             allowed_domains: origins.iter().map(|o| o.to_string()).collect(),
             ..Default::default()
         }

@@ -52,3 +52,10 @@ ADR [2026-10-08-browser-prod-enablement](../../adr/2026-10-08-browser-prod-enabl
 - daemon（`crates/celeris`）から `configure_conformance(<release dir>/browser/conformance.json, Some(sha12))` を呼ぶ配線は ledger-release 葉（D1.4 の release dir 解決）。それまで本番の gate は env が無いので `missing` で止める（従来の infra_requeue の代わり）。
 - 受信箱（`build_attention` の reason `browser_prerequisite`）、`TaskDetail.browser.prerequisite`、`GET /api/v1/browser/readiness` はこの葉では未実装。API 型と web の表示を伴うので preflight／web 葉で足すことを提案する（`LedgerWatch::status()` と `BrowserPrerequisiteCode::message()` をそのまま使える）。
 - `browser_policy_missing` は code だけ用意した（D4 の task-policy-auto 葉が gate から使う）。
+
+## v2 replan（2026-10-08, run 01M4CG55NBVM704Q8GE7CNCS2K）
+前回の失敗は範囲 check が再生成物 `gui/docs/celeris-api-v1.md` を許していなかったことだけ。実装は作り直さず、生成物が最新かを確かめた。
+- `UPDATE_SCHEMA=1 cargo test -p task-api schema`（3 passed）・`UPDATE_SCHEMA=1 cargo test -p task-worker protocol`（1 passed）・`pnpm -C gui gen:types`・`pnpm -C web gen:types` → `git status` 差分ゼロ。
+- `cargo test -p task-dispatch browser_ledger_gate_` → 4 passed。`cargo test -p task-worker browser_ledger` → 7 passed。
+- `bash scripts/dev/test-parallel.sh` → exit 0（passed 4726、failed 0、ignored 14、tmp_leftovers 0）。
+- `cargo clippy --workspace -- -D warnings` → exit 0。

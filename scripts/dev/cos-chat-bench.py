@@ -39,6 +39,9 @@ def new_thread(tag):
 
 
 def run_dir(run_id):
+    direct = os.path.join(out, "runs", run_id)
+    if os.path.isfile(os.path.join(direct, "prompt.txt")):
+        return direct
     for p in glob.glob(os.path.join(out, "**", "prompt.txt"), recursive=True):
         try:
             with open(p, "rb") as f:
@@ -152,14 +155,15 @@ def summarize():
 
 
 def finish():
+    json.dump(runs, open(os.path.join(EV, "runs.json"), "w"), ensure_ascii=False, indent=1)
     summary = summarize()
-    meta = {"commit": subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
+    meta = {"commit": os.environ.get("COS_CHAT_BENCH_SOURCE_SHA") or subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
             "claude_version": claude_version, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "mode": mode, "reduced": reduced, "script": "scripts/dev/cos-chat-bench-script.json",
             "harness": sorted({r.get("harness") for r in runs if r.get("harness")}),
             "model": sorted({r.get("model") for r in runs if r.get("model")}),
             "llm_source": sorted({r.get("llm_source") for r in runs if r.get("llm_source")}),
-            "account_id": sorted({str(r.get("account_id")) for r in runs}),
+            "account_id": sorted({r.get("account_id") for r in runs}, key=lambda value: value or ""),
             "llm_runs": len(runs), "model_note": "run.model is null when the CLI default is used; model comes from the stream-json init event"}
     json.dump({"meta": meta, "summary": summary, "runs": runs}, open(os.path.join(EV, "summary.json"), "w"), ensure_ascii=False, indent=1)
     cols = list(runs[0].keys()) if runs else []

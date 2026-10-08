@@ -8,6 +8,8 @@
 #               claude_oauth の既存ログインだけを使う。API 課金 source は使わない
 #   cold-ttl  : 台本の s6_cold_ttl だけを流す（1h TTL 超過後の cold。約 63 分、LLM run 4 回）
 #   same-thread : 台本の s2_same_thread（同一 thread 10 turn）だけを流す（差分配送の before/after。LLM run 10 回）
+#   COS_CHAT_BENCH_LAB_DIR : same-thread は claude_max_lab の認証だけを隔離コピーして使う（必須）。
+#   COS_CHAT_BENCH_SOURCE_SHA : 計測バイナリの出所 commit（archive build 用）。
 #   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。codex 等の確認用）
 #   第 5 引数 : harness（既定 claude-code）。codex は llm_source=codex_oauth の既存ログインが要る
 #
@@ -25,6 +27,15 @@ HARNESS=${5:-claude-code}
 REDUCED=0; [ "${6:-}" = reduced ] && REDUCED=1
 case "$HARNESS" in claude-code) SRC=claude_oauth ;; codex) SRC=codex_oauth ;; *) usage ;; esac
 REPO=$(cd "$1" && pwd); BIN=$(cd "$2" && pwd); mkdir -p "$3"; OUT=$(cd "$3" && pwd)
+COS_CHAT_BENCH_SOURCE_SHA=${COS_CHAT_BENCH_SOURCE_SHA:-$(git -C "$REPO" rev-parse HEAD)}
+export COS_CHAT_BENCH_SOURCE_SHA
+if [ "$MODE" = same-thread ]; then
+  [ "$HARNESS" = claude-code ] || usage
+  [ ! -e "$OUT/celeris.sqlite3" ] || { echo 'same-thread requires a fresh data dir' >&2; exit 2; }
+  : "${COS_CHAT_BENCH_LAB_DIR:?same-thread requires the claude_max_lab account directory}"
+  [ "$(basename "$COS_CHAT_BENCH_LAB_DIR")" = claude_max_lab ] || usage
+  [ -f "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" ] || usage
+fi
 for exe in celeris celerisctl; do
   [ -x "$BIN/$exe" ] || { echo "missing $BIN/$exe (cargo build -p celeris -p celerisctl)" >&2; exit 2; }
 done
@@ -48,6 +59,15 @@ env -u CELERIS_CONFIG -u CELERIS_API_URL "$BIN/celerisctl" knowledge init --root
 cp -r "$REPO/config/skills/cos-operator" "$REPO/config/skills/cos-inbox-triage" "$OUT/kb/skills/"
 [ -s "$OUT/api.token" ] || { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$OUT/api.token"; }
 chmod 600 "$OUT/api.token"; TOK=$(cat "$OUT/api.token")
+POOL_CONFIG=; COS_ACCOUNT=
+if [ "$MODE" = same-thread ]; then
+  mkdir -p "$OUT/accounts/claude_max_lab"
+  chmod 700 "$OUT/accounts" "$OUT/accounts/claude_max_lab"
+  cp "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" "$OUT/accounts/claude_max_lab/"
+  chmod 600 "$OUT/accounts/claude_max_lab/.credentials.json"
+  POOL_CONFIG='account_pool = true'
+  COS_ACCOUNT='account_id = "claude_max_lab"'
+fi
 cat > "$OUT/config.toml" <<EOF
 # cos-chat-bench.sh の一時設定（ADR-0126 試験用 data dir）。本番 ~/.config/celeris は使わない
 db = { path = "celeris.sqlite3", worker_read_only = false }
@@ -66,6 +86,7 @@ llm_source = "$SRC"
 tiers = ["frontier", "standard", "cheap"]
 # 1 では CoS の turn が task worker と受信箱の triage の後ろで止まった（live-check2 attempt 2）
 concurrency = 4
+$POOL_CONFIG
 
 [cos]
 enabled = true
@@ -74,6 +95,7 @@ llm_source = "$SRC"
 tier = "frontier"
 max_turns = 20
 max_wall_secs = 600
+$COS_ACCOUNT
 
 [workspace]
 build_cache_dir = "build-cache"
@@ -84,6 +106,9 @@ dir = "memory"
 [knowledge]
 root = "kb"
 EOF
+if [ "$MODE" = same-thread ]; then
+  printf '\n[accounts]\nclaude_dir = "%s/accounts"\n' "$OUT" >> "$OUT/config.toml"
+fi
 
 # --- daemon（CELERIS_* は呼び手の env を継がず、すべて data dir に向ける） ---------------------------
 for v in $(env | sed -n 's/^\(CELERIS_[A-Z_]*\)=.*/\1/p'); do unset "$v"; done
@@ -110,12 +135,13 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 [ -n "$UP" ] || { log "daemon did not answer on $API (see $OUT/daemon.log)"; exit 1; }
-log "daemon pid $DPID up on $API (commit $(git -C "$REPO" rev-parse --short=12 HEAD), mode $MODE)"
+log "daemon pid $DPID up on $API (commit $COS_CHAT_BENCH_SOURCE_SHA, mode $MODE)"
 NOW=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
 sqlite3 "$OUT/celeris.sqlite3" "insert into projects (id,title,request,status,created_at,updated_at,slug) values ('01M4AW00000000000000000PRJ','agent-platform (live fixture)','cos-chat-live fixture project for KB scope','active','$NOW','$NOW','agent-platform')"
 log "fixture project: $(sqlite3 "$OUT/celeris.sqlite3" "select id||' '||slug||' '||status from projects")"
 
-CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || echo unknown)
+CLAUDE_VERSION=unknown
+[ "$MODE" = same-thread ] || CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || echo unknown)
 [ "$HARNESS" = codex ] && CLAUDE_VERSION="codex $(codex --version 2>/dev/null | head -1 || echo unknown)"
 python3 "$REPO/scripts/dev/cos-chat-bench.py" "$API" "$TOK" "$OUT" "$REPO" "$MODE" "$REDUCED" "$CLAUDE_VERSION" || { log "driver failed"; cp "$OUT/daemon.log" "$EV/daemon.log"; exit 1; }
 cp "$OUT/daemon.log" "$EV/daemon.log"

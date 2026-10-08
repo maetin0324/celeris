@@ -1498,6 +1498,35 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提（適合台帳・task policy）が足りず\n`blocked(browser_prerequisite)` で止まっている task。`message` は最後の `BrowserPrerequisiteBlocked` の文。\n前提が揃って `BrowserPrerequisiteResumed` で戻れば（直前の遷移の reason が変われば）出さない。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "message": {
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "browser_prerequisite",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "code",
+            "message",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0018 D2: 直近 24 時間に `ClusterUnavailable` があったクラスタ（人がログインし直すまで用件が続く）。",
           "properties": {
             "at": {

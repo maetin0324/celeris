@@ -6,9 +6,9 @@ use super::*;
 use task_core::browser_prerequisite::BrowserPrerequisiteCode;
 use task_worker::browser_ledger::LedgerWatch;
 
-const RELEASE: &str = "1a2b3c4d5e6f";
+pub(super) const RELEASE: &str = "1a2b3c4d5e6f";
 
-fn write_ledger(path: &std::path::Path, release: &str, with_timestamp: bool) {
+pub(super) fn write_ledger(path: &std::path::Path, release: &str, with_timestamp: bool) {
     let cases = [
         "open_allowed_origin",
         "refuse_denied_origin",
@@ -49,8 +49,8 @@ fn write_ledger(path: &std::path::Path, release: &str, with_timestamp: bool) {
 }
 
 /// worker まで届いたら呼ばれた回数を数える adapter（届けば台帳の無い worker 経路で失敗する）。
-struct CountingBrowserAdapter {
-    calls: AtomicUsize,
+pub(super) struct CountingBrowserAdapter {
+    pub(super) calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -86,7 +86,10 @@ fn browser_task(dir: &std::path::Path) -> Task {
     task
 }
 
-fn prerequisite_events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<BrowserPrerequisiteCode> {
+pub(super) fn prerequisite_events(
+    store: &Arc<dyn TaskStore>,
+    id: TaskId,
+) -> Vec<BrowserPrerequisiteCode> {
     store
         .events_for(id)
         .unwrap()
@@ -101,7 +104,7 @@ fn prerequisite_events(store: &Arc<dyn TaskStore>, id: TaskId) -> Vec<BrowserPre
         .collect()
 }
 
-async fn tick_n(d: &mut Dispatcher, n: usize) {
+pub(super) async fn tick_n(d: &mut Dispatcher, n: usize) {
     for _ in 0..n {
         d.tick().unwrap();
         // infra 再試行のバックオフで隠れないよう毎 tick 外す（繰り返しが起きるなら見えるように）。

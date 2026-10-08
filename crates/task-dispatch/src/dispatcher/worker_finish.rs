@@ -547,16 +547,11 @@ impl Dispatcher {
                 // `WorkerError{retryable:false}`（無条件に `Failed`）で打ち切り、`"infra failure ×N"`
                 // を付ける（D1 の失敗分類がこの接頭辞を見る）。
                 None if current_wu.is_none()
-                    && task_core::browser_prerequisite::BrowserPrerequisiteCode::from_worker_error(
-                        &e.to_string(),
-                    )
-                    .is_some() =>
+                    && browser_prereq::worker_error_code(&e.to_string()).is_some() =>
                 {
-                    let code =
-                        task_core::browser_prerequisite::BrowserPrerequisiteCode::from_worker_error(
-                            &e.to_string(),
-                        )
-                        .unwrap_or(task_core::browser_prerequisite::BrowserPrerequisiteCode::Missing);
+                    let code = browser_prereq::worker_error_code(&e.to_string()).unwrap_or(
+                        task_core::browser_prerequisite::BrowserPrerequisiteCode::Missing,
+                    );
                     browser_prereq_event = Some(Event::BrowserPrerequisiteBlocked {
                         code,
                         message: code.message().to_string(),

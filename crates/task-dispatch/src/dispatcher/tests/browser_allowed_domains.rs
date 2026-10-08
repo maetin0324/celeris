@@ -3,7 +3,7 @@ use super::*;
 
 // ---- ADR 2026-10-05-browser-department-web-live-view D2.0: task ∩ grant at run time ----
 
-fn browser_org(store: &dyn TaskStore, grant: &[&str]) {
+pub(super) fn browser_org(store: &dyn TaskStore, grant: &[&str]) {
     let mut node = org_node_of(
         "browser-execution",
         Some("secretary"),

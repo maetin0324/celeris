@@ -54,3 +54,17 @@ relay.js は通常 API relay による本人確認の迂回を拒否する。bro
 既存実装を維持し、plan_issue として再計画を要求する。done は返さない。
 この再実行で typecheck・lint（既存の警告 4 件）・test（Vitest 601 件、gateway 78 件）は成功。
 crates/ 差分は 0、git diff --check も成功。本番の操作は実施していない。
+
+## 再計画後の確認（2026-10-08, run 01M4CQCK71R9V4HX6CZBZ2TZ6B）
+
+再計画で範囲に gateway 3 ファイル（browser-live.js・relay.js・browser-settings.test.mjs）が加わった。
+実装は 913c8dc5 のまま変更なし。CELERIS_WU_BASE からの変更は web/ の 9 ファイルとこの進捗ファイルだけで、すべて範囲内。
+
+| コマンド | 結果 |
+|---|---|
+| corepack pnpm@12.6.0 -C web typecheck | exit 0 |
+| corepack pnpm@12.6.0 -C web lint | exit 0（既存の警告 4 件） |
+| corepack pnpm@12.6.0 -C web test | exit 0。Vitest 83 files / 601 passed、gateway 78 passed / 0 failed |
+| git diff --name-only $CELERIS_WU_BASE HEAD -- crates/ | 0 件 |
+
+未解決: readiness API は preflight 葉との統合で有効になる。Rust の全体 gate は close-out 葉の担当。

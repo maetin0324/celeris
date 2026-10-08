@@ -216,7 +216,7 @@ harness 別の渡し方:
 
 ## 8. 付記 D7（2026-10-08、task 01M4DE37B9EE6308ZDAVXXBRTX）: skill 再構成（T5 の実装）と §3 の是正
 
-状態: **実装済み**。live の after は隔離 daemon（claude_oauth）で 1 回取った（下表）。T8 の全体比較は別。
+状態: **実装済み**。live の after は隔離 daemon（claude_oauth）で 1 回取った（下表）。T8 の全体比較は別。2026-10-08 人の決定: 計測の account は lab に限定しない（objective の「subscription の lab account（claude_oauth）のみ」は除去。どの account で計測したかは問わず、差し戻し理由にならない）。主要 full 26 run（before・after）は `runs.json` の `account_id` が null なので使用 account は不明（ambient の claude_oauth 認証）、補助 answers 台本（D7.6）のみ `claude_max_lab`。
 
 ### D7.1 cos-operator の分割と Core の最小核
 

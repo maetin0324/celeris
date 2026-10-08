@@ -1,8 +1,10 @@
-# WorkUnit 開始時 snapshot の実装・検証
-
 ---
+title: WorkUnit 開始時 snapshot の実装・検証
 tasks: [01M4E0E7SX4Q8BJ50N0K08174R]
+status: done
+updated: 2026-10-08
 ---
+# WorkUnit 開始時 snapshot の実装・検証
 
 [ADR](../adr/2026-10-08-work-unit-scope-snapshot.md) に従い、worker 起動前に範囲検査専用の snapshot を保存し、
 worker・事後 check へ `CELERIS_WU_BASE` と未追跡一覧・全差分補助を渡した。

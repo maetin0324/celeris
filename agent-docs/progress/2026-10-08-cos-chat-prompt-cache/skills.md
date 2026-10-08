@@ -26,7 +26,7 @@ updated: 2026-10-08
 
 認可・監査が skill 読込に依存しない根拠: 上の 2 件と既存の `cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_events`・`cos_chat_ops_api_idempotency_same_hash_same_operation_different_hash_409`・`cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit`・`cos_chat_ops_auth_expired_revoked_and_unknown_are_401`・`cos_chat_ops_checkpoint_api_403_for_human_and_other_run`（API に skill の概念は無い）。
 
-## 計測（before = T2 baseline、after = 本 branch。隔離 daemon・claude_oauth・同じ台本の full 26 run）
+## 計測（before = T2 baseline、after = 本 branch。隔離 daemon・claude_oauth（使用 account は不明、下の人の決定節）・同じ台本の full 26 run）
 
 | 指標 | before | after |
 |---|---|---|
@@ -165,3 +165,14 @@ doctestはexit 0。失敗は既知のbrowser・launcher・credentiald・CDP・sc
 sandbox/Unix socketの長いpath等に限られ、cos_chat・skillの失敗はない。
 ログは `answer-test-parallel.log`。fmt・doc-links・差分の空白検査はexit 0。
 既存DBを再利用しないanswersのguardはexit 2で拒否され、LLMを起動していない。
+
+
+## 人の決定: 計測 account の限定を撤回（2026-10-08）
+
+人のコメント（2026-10-08T18:39:32Z、task コメント）: 「人の決定（2026-10-08）: LLM 呼び出しを lab のサブスクリプションに限る必要はない。objective の『subscription の lab account（claude_oauth）のみ』は外す。どのアカウント（subscription）で計測したかは問わないので、この点を差し戻しの理由にしない。」
+
+計測の account の事実:
+- 主要 full 26 run（before = T3 の evidence-claude・T2 baseline と同じ full 台本、after = 本 task の `artifacts/bench-after`）: 前後とも `runs.json` の `account_id` は null（llm_source は `claude_oauth`）。使用した account は**不明**（ambient の claude_oauth 認証。account 固定の記録は無い）。
+- 補助 answers 台本（attempt 3 の `cos-chat-bench.sh answers`）は lab account `claude_max_lab` で取った（`runs.json` に記録。上記 attempt 3 節の「subscription lab account」はこれに限り事実）。
+
+この決定により、計測が lab account で行われたかは受け入れの要件ではない。

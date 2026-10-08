@@ -65,9 +65,14 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 
 ### run 2（2026-10-08、差し戻し対応の最終 SHA）
 
-- `bash scripts/dev/test-parallel.sh`: exit 0。nextest 160 binaries、passed 4723 / failed 0 / ignored 14、doctest exit 0、tmp_leftovers 0
+- `bash scripts/dev/test-parallel.sh`（3 回。1 回目は commit 前の作業ツリー、2 回目は commit 75a8a407、3 回目は最終コード commit 5f286315）:
+  1 回目 exit 0、passed 4723 / failed 0。2 回目 exit 100、passed 4722 / failed 1: task-core
+  `cos_chat_triage_store_report_open_items_and_digest_bookkeeping`（run 1 で足した試験。同じ時刻で ingest した 2 件を `claim.item_ids[0]` で
+  「a」と仮定していたが、ULID は同一 ms 内で乱数順。機能の退行ではなく試験の順序依存）→ source_key で引く形に直して commit 5f286315。
+  3 回目（5f286315）exit 0、nextest 160 binaries、passed 4723 / failed 0 / ignored 14、doctest exit 0、tmp_leftovers 0
   （`CELERIS_TEST_SUMMARY {"passed": 4723, "failed": 0, "ignored": 14, "nextest_exit": 0, "doctest_exit": 0}`）。
-- `cargo clippy --workspace -- -D warnings`: exit 0（Finished）。
+  以後の commit はこの進捗ファイルの記述だけ（コードは 5f286315 と同一）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。`cargo clippy --workspace --all-targets -- -D warnings`（試験 code も含む）: exit 0（5f286315）。
 - `cargo test -p task-api --test cos_triage`: 13 passed（`cos_chat_inbox_thread_instructed_by_relays_the_human_answer`・
   `cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_answer` を含む）。`cargo test -p task-worker --lib cos_chat`: 42 passed。
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema`: 3 passed（schema 再生成）。`node web/scripts/gen-types.mjs`・`pnpm -C gui gen:types`: 再生成。

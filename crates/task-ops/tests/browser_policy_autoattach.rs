@@ -44,6 +44,7 @@ fn store_with_grant() -> SqliteStore {
         updated_at: now,
     };
     node.profile.browser = Some(BrowserCapability {
+        approval_actions: vec![],
         allowed_domains: vec![ORIGIN.into(), "https://other.example".into()],
         allowed_actions: None,
         credential_policy_ids: vec!["manaba".into(), "elsewhere".into()],

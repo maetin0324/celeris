@@ -63,7 +63,8 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
     ("POST", "/api/v1/inbox/items/{id}/answer", "inbox.answer"),
 ];
 
-/// Problem code of an `instructed_by` that is not a human message of the caller's thread.
+/// Problem code of an `instructed_by` that is not the human message the caller's run answers
+/// in the inbox thread (D3: triage runs, earlier or foreign messages and other threads are refused).
 pub const INSTRUCTION_INVALID: &str = "cos_instruction_invalid";
 
 /// Longest path recorded on a rejection (`target_id`); longer input is truncated.
@@ -206,9 +207,11 @@ pub struct OperationBody {
     reason: String,
     policy_version: String,
     request: OperationRequest,
-    /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message (same
-    /// thread, `role=user`) this operation relays. Recorded in the payload and the audit reason;
-    /// waives the explicit human_required refusal (the person decided, CoS only relays).
+    /// ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message this
+    /// operation relays. Accepted only when it is the `role=user` input message of the caller's
+    /// own run in the inbox thread (`kind=inbox`); any other message is 422
+    /// `cos_instruction_invalid`. Recorded in the payload and the audit reason; waives the
+    /// explicit human_required refusal (the person decided, CoS only relays).
     #[serde(default)]
     instructed_by: Option<String>,
 }
@@ -484,34 +487,18 @@ async fn create_operation(
                 return Ok(existing);
             }
             if let Some(message_id) = instructed_by.as_deref() {
-                // D3: the instruction must be a human message of this very thread.
-                let message = match store.chat_message_get(&audit.ctx.thread_id, message_id) {
-                    Ok(message) if message.role == task_core::chat::ChatMessageRole::User => {
-                        message
-                    }
-                    Ok(_) => {
+                // D3: the instruction must be the human message that started this very run, in
+                // the inbox thread. Checked from the caller's run (`CosCaller.run_id`), never from
+                // the request alone: a triage run (system input), an earlier message of the thread,
+                // a message of another thread or a human thread cannot waive human_required.
+                let message = match instructed_message(store, &audit.ctx, message_id) {
+                    Ok(message) => message,
+                    Err(why) => {
                         return Err(audit.reject(
                             store,
                             "api",
                             &path,
-                            unprocessable(
-                                INSTRUCTION_INVALID,
-                                format!("instructed_by {message_id} is not a human message"),
-                            ),
-                        ));
-                    }
-                    Err(_) => {
-                        return Err(audit.reject(
-                            store,
-                            "api",
-                            &path,
-                            unprocessable(
-                                INSTRUCTION_INVALID,
-                                format!(
-                                    "instructed_by {message_id} is not a message of thread {}",
-                                    audit.ctx.thread_id
-                                ),
-                            ),
+                            unprocessable(INSTRUCTION_INVALID, why),
                         ));
                     }
                 };
@@ -538,6 +525,44 @@ async fn create_operation(
         .await?;
     state.chat.events.notify_waiters();
     Ok(operation_response(operation))
+}
+
+/// D3: the message `instructed_by` names, when it is the `role=user` input of the caller's run
+/// in the inbox thread. Otherwise the reason it is refused (`cos_instruction_invalid`).
+fn instructed_message(
+    store: &SqliteStore,
+    ctx: &AuditContext,
+    message_id: &str,
+) -> Result<task_core::chat::ChatMessage, String> {
+    let thread_id = &ctx.thread_id;
+    let Ok(message) = store.chat_message_get(thread_id, message_id) else {
+        return Err(format!(
+            "instructed_by {message_id} is not a message of thread {thread_id}"
+        ));
+    };
+    if message.role != task_core::chat::ChatMessageRole::User {
+        return Err(format!("instructed_by {message_id} is not a human message"));
+    }
+    let thread = match store.chat_thread_get(thread_id) {
+        Ok(Some(thread)) => thread,
+        _ => return Err(format!("thread {thread_id} is not readable")),
+    };
+    if thread.kind != task_core::chat::ChatThreadKind::Inbox {
+        return Err(format!(
+            "instructed_by is accepted only in the inbox thread (thread {thread_id} is {:?})",
+            thread.kind
+        ));
+    }
+    let Ok(run) = store.chat_run_get(thread_id, &ctx.run_id) else {
+        return Err(format!("run {} is not a run of thread {thread_id}", ctx.run_id));
+    };
+    if run.input_message_id != message.id {
+        return Err(format!(
+            "instructed_by {message_id} is not the human message run {} answers (its input is {})",
+            ctx.run_id, run.input_message_id
+        ));
+    }
+    Ok(message)
 }
 
 /// What the operation functions need from [`ApiState`], captured before the blocking section.

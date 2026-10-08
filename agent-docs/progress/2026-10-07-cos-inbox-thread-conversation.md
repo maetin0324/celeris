@@ -3,7 +3,7 @@ task: 01M4CAKADGDTZA7QKDJ9GX35MW
 title: 受信箱スレッドを「受信箱の件を CoS と話す場所」にする
 status: done
 started: 2026-10-07
-completed: 2026-10-07
+completed: 2026-10-08
 adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 ---
 
@@ -11,7 +11,8 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 
 ## 現在地
 
-実装・試験・検査まで完了（1 run、commit a84e5c32 + 検査結果の追記）。
+実装・試験・検査まで完了（run 1: commit a84e5c32・6088cd79。run 2（2026-10-08、差し戻し対応）: `instructed_by` の検査を
+呼び出し元 run に結び付け、最終 SHA で test-parallel.sh を流した）。
 
 ## やったこと
 
@@ -26,6 +27,14 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 5. D4: 人の発言の run が triage より先（既存の tick 順）。中断された triage run の件は digest 時に `pending` へ戻す。
 6. D5: web の system 行の折りたたみ（`message-item.tsx`）と受信箱 thread の composer placeholder。
 7. schema 再生成: `docs/api/v1/api-v1.schema.json`・`docs/protocol/worker-protocol.schema.json`・`web/api/generated/*`・`gui/app/celeris/types.ts`。
+8. 差し戻し対応（2026-10-08、reviewer の基準 1・3）: `create_operation` の `instructed_by` 検査が「同じスレッドの role=user」だけで、
+   一次対応 run・過去の無関係な発言・他スレッドの発言の id で human_required を外せた。`instructed_message`
+   （`crates/task-api/src/cos/operations.rs`）に置き換え、(1) スレッドの message、(2) `role=user`、(3) スレッドが `kind=inbox`、
+   (4) `chat_run_get(thread, CosCaller.run_id).input_message_id` と一致、を全て要求（違えば 422 `cos_instruction_invalid`、
+   `cos_operations` に `rejected`）。prompt（`cos_chat.rs`）・skill §9・ADR D3 と付記・schema を合わせた。
+   否定試験 `cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_answer`（一次対応 run が過去の人の発言／自分の
+   system 行を引く、人の run が過去の無関係な発言を引く、他スレッドの発言、会話スレッドの自分の入力、終端済み run の bearer）を追加し、
+   肯定試験は受信箱スレッドで run を起こす形に直した。
 
 ## 証拠（コマンドと結果）
 
@@ -35,7 +44,8 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 | 0 store の報告と digest の冪等 | `cargo test -p task-core --lib cos_chat_triage_store_report` | 1 passed |
 | 1 人の書き込み → run、文脈、重なり | 同上 dispatcher 群（`cos_chat_triage_human_interrupt_requeues_items_and_runs_the_human_message_first`、`cos_chat_inbox_human_message_while_triage_runs_is_queued_then_served_before_new_items`） | passed |
 | 1 prompt に未解決の件 | `cargo test -p task-worker --lib cos_chat_prompt_inbox` | 1 passed |
-| 1 人の指示の中継（instructed_by・human_required・記録） | `cargo test -p task-api --test cos_triage instructed_by` | 1 passed |
+| 1 人の指示の中継（instructed_by・human_required・記録） | `cargo test -p task-api --test cos_triage instructed_by` | run 1: 1 passed / run 2: 2 passed（肯定 + 否定 5 経路） |
+| 1 否定経路（一次対応 run・過去の発言・他スレッド・会話スレッド → 422 rejected） | `cargo test -p task-api --test cos_triage` | 13 passed（run 2） |
 | 1 web の表示（折りたたみ・人待ちは通常・placeholder） | `pnpm -C web test` | 82 files / 598 tests passed（`chat_inbox_rows_*`・`chat_inbox_composer_*`） |
 | 2 clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | 2 web | `pnpm -C web typecheck` / `pnpm -C web lint` | exit 0 / exit 0（既存の styles.css の警告 4 件のみ） |
@@ -53,11 +63,23 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 - `cargo clippy --workspace -- -D warnings`: exit 0（Finished）。
 - `pnpm -C web typecheck` exit 0、`pnpm -C web lint` exit 0（既存 styles.css の警告 4 件）、`pnpm -C web test` 82 files / 598 tests passed。
 
+### run 2（2026-10-08、差し戻し対応の最終 SHA）
+
+- `bash scripts/dev/test-parallel.sh`: exit 0。nextest 160 binaries、passed 4723 / failed 0 / ignored 14、doctest exit 0、tmp_leftovers 0
+  （`CELERIS_TEST_SUMMARY {"passed": 4723, "failed": 0, "ignored": 14, "nextest_exit": 0, "doctest_exit": 0}`）。
+- `cargo clippy --workspace -- -D warnings`: exit 0（Finished）。
+- `cargo test -p task-api --test cos_triage`: 13 passed（`cos_chat_inbox_thread_instructed_by_relays_the_human_answer`・
+  `cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_answer` を含む）。`cargo test -p task-worker --lib cos_chat`: 42 passed。
+- `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema`: 3 passed（schema 再生成）。`node web/scripts/gen-types.mjs`・`pnpm -C gui gen:types`: 再生成。
+- `pnpm -C web typecheck` exit 0、`pnpm -C web lint` exit 0（既存 styles.css の警告 4 件）、`pnpm -C web test` 82 files / 598 tests passed。
+
 ## 未解決事項
 
 - digest は run の終端を観測した tick で書く。終端と tick の間に daemon が落ちた場合は再起動時の reconcile で書かれる（件を持つ run だけ）。
 - 導入前から残っている終端済み triage run にも、初回起動で 1 度だけ digest が付く（件を持つ run に限る。以後は増えない）。
 - `instructed_by` の「どの件か曖昧なら聞き返す」は skill と prompt の指示であり、API では強制しない（判断は CoS、検証は API の境界）。
+  API が強制するのは「その run の入力になった人の発言である」こと（run 2）。発言をどの件への回答と読むかは CoS の判断で、誤読は領域 API の
+  検証（選択肢の妥当性・revision）と監査（payload の `instructed_by`、reason の「人の指示（seq n）」）で追える。
 - 本番の実機（LLM）での確認は未実施（この run は fake adapter と単体・結合試験のみ）。
 
 ## 提案

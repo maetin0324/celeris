@@ -55,11 +55,19 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   worker の prompt に「## 受信箱の未解決の件」節として出す。直近のやり取りは既存の `unsummarized` 履歴で渡る。
 - 人の自由文（「(b) にして、ただし host 1 台だけで」）への応答: CoS は該当の件を文脈から選び、`/cos/operations` で
   `POST /api/v1/inbox/items/{id}/answer`（**新規 ALLOWED、action `inbox.answer`**。`delegated_request` で元の領域 API へ委ね、
-  同じ検証を通す）を呼ぶ。本文に **`instructed_by`**（人の発言の message id）を付ける。API は同じスレッドの `role=user` の message であることを
-  確かめ（違えば 422 `cos_instruction_invalid`）、operation の payload に `instructed_by: {message_id, seq}` を、監査の reason に
+  同じ検証を通す）を呼ぶ。本文に **`instructed_by`**（人の発言の message id）を付ける。API は **呼び出し元の run（bearer の
+  `run_id`）から** 次を確かめる（1 つでも違えば 422 `cos_instruction_invalid`、operation は `rejected` として記録）:
+  (1) そのスレッドの message であること、(2) `role=user` であること、(3) スレッドが `kind=inbox` であること、
+  (4) その message が **この run の入力（`chat_runs.input_message_id`）** であること。
+  これで、一次対応の run（入力は system 行）、スレッドの過去の無関係な発言（「こんにちは」）、他のスレッドの発言、通常の会話スレッドの
+  発言では human_required を外せない。LLM の申告ではなく、run と人の発言の結び付き（人が書いた → その発言で run が起きた）を API が確かめる。
+  終端した run の bearer は credential の検査で先に拒まれる。
+  通れば operation の payload に `instructed_by: {message_id, seq}` を、監査の reason に
   「人の指示（seq N）: …」の接頭辞を記録する。actor は wire 上 `cos` のまま（worker が人を名乗る経路は作らない。ADR D3）が、
   指示の出所は payload と reason で追える。`instructed_by` 付きの operation では **明示 human_required の拒否を外す**
-  （決めたのは人で、CoS は伝えただけ）。`instructed_by` の無い operation は従来どおり。
+  （決めたのは人で、CoS は伝えただけ。人の発言 1 つにつき run は 1 つで、その run だけが外せる）。`instructed_by` の無い operation は従来どおり。
+  ADR cos-chat-home の「人が設定した human_required は skill で解除できない」は保たれる: 解除の根拠は人の発言そのものであり、
+  CoS が選べるのは「その発言をどの件への回答と読むか」だけ（誤読は領域 API の検証と監査で追える）。
 - どの件か曖昧なら CoS は operation を出さず、返事で聞き返す（skill §9）。
 
 ### D4. 並び順と取りこぼし
@@ -91,7 +99,7 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   `cos_chat_triage_fallback_*`（handoff 文に題名と選択肢）、`cos_chat_triage_requeue_on_interrupt`、
   `cos_chat_inbox_human_message_*`（人の発言で run が起き、`inbox_items` が文脈に入る。triage と重なっても両方処理）。
 - task-worker: `cos_chat_prompt_inbox_items_section`。
-- task-api: `cos_operation_instructed_by_*`（検証・記録・human_required の解除）、`cos_operation_inbox_answer_*`。
+- task-api: `cos_chat_inbox_thread_instructed_by_*`（検証・記録・human_required の解除。`refuses_messages_the_run_does_not_answer` が一次対応 run・過去の発言・他スレッド・会話スレッドの 422 を固定）、`cos_operation_inbox_answer_*`。
 - web: vitest `chat_inbox_*`（折りたたみ・人待ちは通常表示・placeholder）。
 
 ## 付記: 実装との突き合わせ（2026-10-07）
@@ -105,6 +113,9 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
 - D3: `CosChatContext.inbox_items`（`crates/task-worker/src/protocol/cos_chat.rs`）を `launch.rs` が受信箱スレッドの run に入れる（上限 50）。
   prompt は `crates/task-worker/src/cos_chat.rs` の `inbox_section`。API は `OperationBody.instructed_by`・`ALLOWED` の `inbox.answer`
   （`crates/task-api/src/cos/operations.rs`。`delegated_request` で領域 API へ）。skill は `config/skills/cos-inbox-triage/SKILL.md` §9。
+  `instructed_by` の検査は `instructed_message`（同 file）: message の存在と `role=user` → thread の `kind=inbox` → `chat_run_get(thread, CosCaller.run_id)` の
+  `input_message_id` と一致、の順。却下は `audit.reject` で `cos_operations` に `rejected` として残る（2026-10-08 の差し戻しで追加。
+  それまでは「同じスレッドの role=user」だけを見ていて、一次対応 run や過去の無関係な発言の id で human_required を外せた）。
   決定との差分: 「どの件か曖昧なら聞き返す」は skill と prompt の指示であり、API は強制しない（判断は CoS、検証は API という D3 の境界のまま）。
 - D4: 中断された run の件の戻しは digest の中（`cos_triage_requeue_run`）。completed の取り残しは従来どおり退避。
 - D5: `web/features/chat/messages/message-item.tsx`（`foldedSummary`・`data-slot="chat-system-folded"`）、

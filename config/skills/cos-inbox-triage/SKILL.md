@@ -118,6 +118,8 @@ metadata:
   どの件か（選択肢・条件）を特定できたら、`/cos/operations` に **`instructed_by`**（その人の発言の message id）を付けて
   その件の「回答の経路」（`POST /api/v1/inbox/items/<id>/answer`、body は `option`・`note`）を呼ぶ。人の指示は payload と監査に
   「人の指示（seq n）」として残り、`human_required` の件でも人が決めたものとして通る（領域 API の検証は同じ）。
+  `instructed_by` に使えるのは**この run の入力になった発言だけ**（API が run の入力と突き合わせる）。前の発言・他のスレッドの発言・
+  一次対応の system 行を付けても 422 で却下され、記録に残る。一次対応の run には人の指示は無いので `instructed_by` は使わない。
 - 候補が 2 つ以上あるか、どの選択肢か読めなければ、operation を出さずに返事で聞き返す（件名と選択肢を示す）。
 - 人待ち（escalated / fallback）の件は `resolve` では閉じられない（終端済み）。人の指示を伝える経路は上だけ。
 - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したこと、答えられなかった理由を書く。

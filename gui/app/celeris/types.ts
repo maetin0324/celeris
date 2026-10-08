@@ -3895,9 +3895,11 @@ export interface OperationBody {
   expected_revision?: string | null;
   idempotency_key: string;
   /**
-   * ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message (same
-   * thread, `role=user`) this operation relays. Recorded in the payload and the audit reason;
-   * waives the explicit human_required refusal (the person decided, CoS only relays).
+   * ADR 2026-10-07-cos-inbox-thread-conversation D3: the id of the human message this
+   * operation relays. Accepted only when it is the `role=user` input message of the caller's
+   * own run in the inbox thread (`kind=inbox`); any other message is 422
+   * `cos_instruction_invalid`. Recorded in the payload and the audit reason; waives the
+   * explicit human_required refusal (the person decided, CoS only relays).
    */
   instructed_by?: string | null;
   policy_version: string;

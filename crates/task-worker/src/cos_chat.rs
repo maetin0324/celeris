@@ -207,7 +207,7 @@ fn inbox_section(chat: &CosChatContext) -> String {
          - 人の発言がどの件への回答か（選択肢・条件）を上の一覧から特定する。候補が 2 つ以上あるか、どの選択肢か読めなければ、operation を出さずに返事で聞き返す。\n\
          - 特定できたら `{api}/cos/operations` に **`instructed_by`**（その人の発言の message id）を付けて回答の経路を呼ぶ:\n\
          `curl -sf -X POST -H \"Authorization: Bearer ${env}\" -H 'Content-Type: application/json' {api}/cos/operations -d '{{\"idempotency_key\":\"relay-<item id>-<message id>\",\"expected_revision\":null,\"reason\":\"人の発言 seq <n> の指示: …\",\"policy_version\":\"1\",\"instructed_by\":\"<message id>\",\"request\":{{\"method\":\"POST\",\"path\":\"<回答の経路>\",\"body\":{{\"option\":\"<key>\",\"note\":\"<人が付けた条件>\"}}}}}}'`\n\
-         `instructed_by` は同じスレッドの人の発言でなければ 422。人の指示は payload と監査に「人の指示（seq n）」として残る。人の指示の無い件を自分の判断で答えるときは `instructed_by` を付けない（skill の基準に従う）。\n\
+         `instructed_by` に使えるのは **この run の入力になった人の発言（上の「今回の入力」の message id）だけ**。それ以外（前の発言・他のスレッド・一次対応の system 行）は 422 `cos_instruction_invalid` で、操作は却下として記録される。人の指示は payload と監査に「人の指示（seq n）」として残る。人の指示の無い件を自分の判断で答えるときは `instructed_by` を付けない（skill の基準に従う）。\n\
          - 「人待ち」の件は `/cos/inbox/{{i}}/resolve` では閉じられない（終端済み）。人の指示を伝えるのは上の経路だけ。\n\
          - 返事には、どの件にどう答えたか（件名・選択肢・operation の id と state）、聞き返したことを書く。\n\n",
     ));

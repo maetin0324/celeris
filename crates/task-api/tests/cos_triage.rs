@@ -788,6 +788,88 @@ async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
     assert_eq!(item_state(&env, &notice), "pending");
 }
 
+fn inbox_thread_id(env: &TestEnv) -> String {
+    db(env)
+        .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| r.get(0))
+        .expect("inbox thread")
+}
+
+/// Posts `text` as the human into the inbox thread (queued) and returns the message id.
+fn inbox_human_post(env: &TestEnv, key: &str, text: &str) -> String {
+    let thread = inbox_thread_id(env);
+    env.store
+        .chat_message_post(
+            &thread,
+            &ChatPostMessageRequest {
+                client_message_id: format!("message-{key}"),
+                text: text.into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .expect("post")
+        .response
+        .message
+        .id
+}
+
+/// Claims the next queued human message of the inbox thread as `run-{key}` and returns
+/// `(run id, input message id, bearer)`.
+fn inbox_human_run(env: &TestEnv, key: &str) -> (String, String, String) {
+    let thread = inbox_thread_id(env);
+    let run = format!("run-{key}");
+    let claimed = env
+        .store
+        .chat_run_claim_next(&thread, &run, &json!({}), OffsetDateTime::now_utc())
+        .expect("claim")
+        .expect("run");
+    let bearer = task_api::cos::issue_run_bearer(&env.store, &thread, &run, Duration::hours(1))
+        .expect("issue");
+    (run, claimed.input_message_id, format!("Bearer {bearer}"))
+}
+
+/// Claims the pending triage items as `run-{key}` (a system input message) and returns
+/// `(run id, system message id, bearer)`.
+fn inbox_triage_run(env: &TestEnv, key: &str) -> (String, String, String) {
+    let run = format!("run-{key}");
+    let claim = env
+        .store
+        .cos_triage_claim(&run, OffsetDateTime::now_utc())
+        .expect("claim")
+        .expect("triage run");
+    let bearer =
+        task_api::cos::issue_run_bearer(&env.store, &claim.thread_id, &run, Duration::hours(1))
+            .expect("issue");
+    (run, claim.message_id, format!("Bearer {bearer}"))
+}
+
+fn finish_run(env: &TestEnv, run: &str) {
+    env.store
+        .chat_run_finish(
+            run,
+            task_core::chat::ChatRunState::Completed,
+            None,
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .expect("finish");
+}
+
+fn relay_body(key: &str, inbox_id: &str, instructed_by: Value) -> Value {
+    json!({
+        "idempotency_key": key,
+        "expected_revision": null,
+        "reason": "(b) にして、ただし host 1 台だけで",
+        "policy_version": "1",
+        "instructed_by": instructed_by,
+        "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{inbox_id}/answer"),
+                    "body": {"option": "manual", "note": "host 1 台だけ"}},
+    })
+}
+
 /// ADR 2026-10-07-cos-inbox-thread-conversation D3: a human instruction written in the inbox
 /// thread is relayed through `/cos/operations` with `instructed_by`; the operation records the
 /// instruction, the explicit human_required refusal is waived, and the domain path is the one a
@@ -798,33 +880,25 @@ async fn cos_chat_inbox_thread_instructed_by_relays_the_human_answer() {
     let app = env.router();
     let (task, inbox_id) = decision_wait(&env, "dec-h", &["human_required"]);
     let item = ingest(&env, "inbox", &inbox_id, "r1", 0);
-    let (thread, _r, bearer) = cos_bearer(&env, "relay");
+    let human_message = inbox_human_post(&env, "relay", "(b) にして、ただし host 1 台だけで");
+    let (_run, input, bearer) = inbox_human_run(&env, "relay");
+    assert_eq!(input, human_message);
     let headers = [("authorization", bearer.as_str())];
-    let (human_message, human_seq): (String, i64) = db(&env)
+    let human_seq: i64 = db(&env)
         .query_row(
-            "SELECT id,seq FROM chat_messages WHERE thread_id=?1 AND role='user'",
-            [&thread],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            "SELECT seq FROM chat_messages WHERE id=?1",
+            [&human_message],
+            |r| r.get(0),
         )
         .expect("human message");
-    let relay = |key: &str, instructed_by: Value| {
-        json!({
-            "idempotency_key": key,
-            "expected_revision": null,
-            "reason": "(b) にして、ただし host 1 台だけで",
-            "policy_version": "1",
-            "instructed_by": instructed_by,
-            "request": {"method": "POST", "path": format!("/api/v1/inbox/items/{inbox_id}/answer"),
-                        "body": {"option": "manual", "note": "host 1 台だけ"}},
-        })
-    };
+    let relay = |key: &str, instructed_by: Value| relay_body(key, &inbox_id, instructed_by);
 
     // Without an instruction the human_required wait is refused (same as a direct call).
     let resp = send(&app, post_json_with(OPS, &relay("k-no-instruction", Value::Null), &headers)).await;
     assert_problem(&resp, 403, "cos_human_required");
     assert!(decision_answered_by(&env, &task).is_empty());
 
-    // An instruction must be a human message of this thread.
+    // An instruction must be a message of this thread.
     let resp = send(&app, post_json_with(OPS, &relay("k-bad", json!("not-a-message")), &headers)).await;
     assert_problem(&resp, 422, "cos_instruction_invalid");
     assert!(decision_answered_by(&env, &task).is_empty());
@@ -855,4 +929,80 @@ async fn cos_chat_inbox_thread_instructed_by_relays_the_human_answer() {
     // A closed wait is a conflict, recorded as rejected.
     let resp = send(&app, post_json_with(OPS, &relay("k-again", json!(human_message)), &headers)).await;
     assert_problem(&resp, 409, "cos_revision_conflict");
+}
+
+/// D3 (review of attempt 1): `instructed_by` only waives human_required when it is the human
+/// message the caller's own run answers. A triage run (system input) citing an earlier human
+/// message or its own system message, a human run citing an earlier unrelated message, and a
+/// message of another thread are all refused with 422 and recorded as rejected; the wait stays
+/// unanswered.
+#[tokio::test]
+async fn cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_answer() {
+    let env = admin_env();
+    let app = env.router();
+    let (task, inbox_id) = decision_wait(&env, "dec-h", &["human_required"]);
+    let item = ingest(&env, "inbox", &inbox_id, "r1", 0);
+    let relay = |key: &str, instructed_by: Value| relay_body(key, &inbox_id, instructed_by);
+    let refused = |resp: &Resp, op_key: &str| {
+        assert_problem(resp, 422, "cos_instruction_invalid");
+        assert!(decision_answered_by(&env, &task).is_empty(), "{op_key}");
+        let rejected: i64 = db(&env)
+            .query_row(
+                "SELECT COUNT(*) FROM cos_operations WHERE idempotency_key=?1 AND state='rejected'",
+                [op_key],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(rejected, 1, "{op_key} is recorded as rejected");
+    };
+
+    // (a) An unrelated earlier human message ("こんにちは") answered by a finished run.
+    let hello = inbox_human_post(&env, "hello", "こんにちは");
+    let (hello_run, _, hello_bearer) = inbox_human_run(&env, "hello");
+    finish_run(&env, &hello_run);
+
+    // (b) A triage run cannot cite the earlier human message nor its own system input.
+    let (triage_run, system_message, triage_bearer) = inbox_triage_run(&env, "triage");
+    let headers = [("authorization", triage_bearer.as_str())];
+    let resp = send(&app, post_json_with(OPS, &relay("k-triage-hello", json!(hello)), &headers)).await;
+    refused(&resp, "k-triage-hello");
+    let resp = send(&app, post_json_with(OPS, &relay("k-triage-system", json!(system_message)), &headers)).await;
+    refused(&resp, "k-triage-system");
+    finish_run(&env, &triage_run);
+    assert_eq!(item_state(&env, &item), "running", "the triage item is untouched");
+
+    // (c) A later human run cannot cite the earlier unrelated message either, only its own input.
+    let instruction = inbox_human_post(&env, "instruction", "(b) にして、ただし host 1 台だけで");
+    let (_run, input, bearer) = inbox_human_run(&env, "instruction");
+    assert_eq!(input, instruction);
+    let headers = [("authorization", bearer.as_str())];
+    let resp = send(&app, post_json_with(OPS, &relay("k-earlier", json!(hello)), &headers)).await;
+    refused(&resp, "k-earlier");
+
+    // (d) A message of another thread, and a human thread's own input, are refused too.
+    let (other_thread, _other_run, other_bearer) = cos_bearer(&env, "other");
+    let other_message: String = db(&env)
+        .query_row(
+            "SELECT id FROM chat_messages WHERE thread_id=?1 AND role='user'",
+            [&other_thread],
+            |r| r.get(0),
+        )
+        .expect("other message");
+    let resp = send(&app, post_json_with(OPS, &relay("k-foreign", json!(other_message)), &headers)).await;
+    refused(&resp, "k-foreign");
+    let other_headers = [("authorization", other_bearer.as_str())];
+    let resp = send(&app, post_json_with(OPS, &relay("k-human-thread", json!(other_message)), &other_headers)).await;
+    refused(&resp, "k-human-thread");
+
+    // The stale bearer of the finished "hello" run is refused by the credential check, not here.
+    let hello_headers = [("authorization", hello_bearer.as_str())];
+    let resp = send(&app, post_json_with(OPS, &relay("k-stale", json!(hello)), &hello_headers)).await;
+    assert_ne!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert!(decision_answered_by(&env, &task).is_empty());
+
+    // The run's own input still relays.
+    let resp = send(&app, post_json_with(OPS, &relay("k-relay", json!(instruction)), &headers)).await;
+    assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
+    assert_eq!(resp.json()["operation"]["state"], "applied");
+    assert_eq!(decision_answered_by(&env, &task).len(), 1);
 }

@@ -35,14 +35,14 @@ pub struct ChatEventQuery {
 }
 
 /// Stop result: `accepted=false` is a replay against a finished run (API 200 instead of 202).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ChatStopOutcome {
     pub response: ChatStopResponse,
     pub accepted: bool,
 }
 
 const RUN_SELECT: &str = "SELECT run_id,thread_id,input_message_id,output_message_id,state,reason,\
- resolved_config_json,started_at,finished_at FROM chat_runs";
+ resolved_config_json,started_at,finished_at,usage_json,skill_reads,first_output_at FROM chat_runs";
 
 fn run_row(row: &Row<'_>) -> rusqlite::Result<(ChatRunRaw, String)> {
     Ok((
@@ -55,6 +55,9 @@ fn run_row(row: &Row<'_>) -> rusqlite::Result<(ChatRunRaw, String)> {
             reason: row.get(5)?,
             started_at: row.get(7)?,
             finished_at: row.get(8)?,
+            usage_json: row.get(9)?,
+            skill_reads: row.get(10)?,
+            first_output_at: row.get(11)?,
         },
         row.get(6)?,
     ))
@@ -69,6 +72,9 @@ struct ChatRunRaw {
     reason: Option<String>,
     started_at: Option<String>,
     finished_at: Option<String>,
+    usage_json: Option<String>,
+    skill_reads: Option<u64>,
+    first_output_at: Option<String>,
 }
 
 fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError> {
@@ -92,9 +98,26 @@ fn run_from_raw((r, config): (ChatRunRaw, String)) -> Result<ChatRun, ChatError>
         model: s("model"),
         tier: s("tier"),
         session_mode,
+        usage: r
+            .usage_json
+            .as_deref()
+            .map(serde_json::from_str::<crate::Usage>)
+            .transpose()
+            .map_err(|e| ChatError::Invalid(format!("invalid chat usage: {e}")))?
+            .map(Box::new),
+        skill_reads: r.skill_reads,
+        latency_ms: elapsed_ms(r.started_at.as_deref(), r.finished_at.as_deref()),
+        time_to_first_output_ms: elapsed_ms(r.started_at.as_deref(), r.first_output_at.as_deref()),
+        first_output_at: r.first_output_at,
         started_at: r.started_at,
         finished_at: r.finished_at,
     })
+}
+
+fn elapsed_ms(start: Option<&str>, end: Option<&str>) -> Option<u64> {
+    let parse = |s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok();
+    let elapsed = parse(end?)? - parse(start?)?;
+    u64::try_from(elapsed.whole_milliseconds()).ok()
 }
 
 pub(crate) fn run_get_conn(
@@ -376,6 +399,71 @@ impl SqliteStore {
             run_get_conn(conn, thread_id, run_id)?
                 .ok_or_else(|| ChatError::not_found("run", run_id))
         })
+    }
+
+    /// Newest runs first; run_id is a stable opaque cursor (ordered by SQLite rowid).
+    pub fn chat_run_list(
+        &self,
+        thread_id: &str,
+        before: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<ChatRunListResponse, ChatError> {
+        read_tx(self, |conn| {
+            thread_require(conn, thread_id)?;
+            let before_row: Option<i64> = before
+                .map(|id| {
+                    conn.query_row(
+                        "SELECT rowid FROM chat_runs WHERE thread_id=?1 AND run_id=?2",
+                        params![thread_id, id],
+                        |r| r.get(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| ChatError::BadRequest("unknown run cursor".into()))
+                })
+                .transpose()?;
+            let limit = page_limit(limit, 50, 200)?;
+            let mut stmt = conn.prepare(&format!("{RUN_SELECT} WHERE thread_id=?1 AND (?2 IS NULL OR rowid<?2) ORDER BY rowid DESC LIMIT ?3"))?;
+            let mut items = stmt
+                .query_map(params![thread_id, before_row, limit + 1], run_row)?
+                .map(|r| run_from_raw(r?))
+                .collect::<Result<Vec<_>, ChatError>>()?;
+            let more = items.len() > limit as usize;
+            items.truncate(limit as usize);
+            let next_before = more.then(|| items.last().map(|r| r.id.clone())).flatten();
+            Ok(ChatRunListResponse { items, next_before })
+        })
+    }
+
+    /// Atomically stores telemetry and emits the terminal run event containing it.
+    #[allow(clippy::too_many_arguments)]
+    pub fn chat_run_finish_with_telemetry(
+        &self,
+        run_id: &str,
+        state: ChatRunState,
+        final_text: Option<&str>,
+        reason: Option<&str>,
+        now: OffsetDateTime,
+        usage: Option<&crate::Usage>,
+        skill_reads: u64,
+        first_output_at: Option<OffsetDateTime>,
+    ) -> Result<ChatRun, ChatError> {
+        if !chat_run_state_is_terminal(state) {
+            return Err(ChatError::Invalid("not a terminal run state".into()));
+        }
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let old = run_by_id(&tx, run_id)?;
+        if !chat_run_state_is_terminal(old.state) {
+            let usage_json = usage
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|e| ChatError::Invalid(e.to_string()))?;
+            tx.execute("UPDATE chat_runs SET usage_json=?2,skill_reads=?3,first_output_at=?4 WHERE run_id=?1",
+                params![run_id, usage_json, skill_reads, first_output_at.map(chat_ts)])?;
+        }
+        let run = finish_conn(&tx, run_id, state, final_text, reason, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(run)
     }
 
     /// Appends assistant text to the run's output message and records a `text_delta` whose

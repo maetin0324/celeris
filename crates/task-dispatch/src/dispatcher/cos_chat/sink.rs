@@ -26,7 +26,7 @@ use task_core::chat::{
     ChatActor, ChatCard, ChatCardKind, ChatError, ChatRun, ChatRunState, ChatStatusPhase,
     ChatToolData, ChatToolState,
 };
-use task_core::{ArtifactRef, BudgetKind, ProgressFields, ProgressKind, SqliteStore};
+use task_core::{ArtifactRef, BudgetKind, ProgressFields, ProgressKind, SqliteStore, Usage};
 use task_worker::adapter::{AdapterError, EventSink, RunOutcome, Terminal};
 use task_worker::result_report::ParsedActions;
 use time::OffsetDateTime;
@@ -161,6 +161,9 @@ pub(crate) fn replace_secrets(text: &str, secrets: &[String]) -> String {
 #[derive(Debug, Default)]
 struct SinkState {
     finished: bool,
+    usage: Option<Usage>,
+    skill_reads: u64,
+    first_output_at: Option<OffsetDateTime>,
     /// 出力 message を持たない run（triage）。本文の追記は送らない（終端ではない）。
     text_rejected: bool,
     next_call: u64,
@@ -200,6 +203,51 @@ impl ChatRunSink {
 
     fn state(&self) -> MutexGuard<'_, SinkState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Copy only telemetry across the existing fresh retry; session behavior is unchanged.
+    pub(crate) fn inherit_telemetry(&self, previous: &Self) {
+        let old = previous.state();
+        let mut state = self.state();
+        state.usage = old.usage;
+        state.skill_reads = old.skill_reads;
+        state.first_output_at = old.first_output_at;
+    }
+
+    pub(crate) fn record_usage(&self, usage: Option<Usage>) {
+        let Some(usage) = usage else { return };
+        let mut state = self.state();
+        let Some(old) = state.usage else {
+            state.usage = Some(usage);
+            return;
+        };
+        fn add<T: Copy>(a: Option<T>, b: Option<T>, sum: impl FnOnce(T, T) -> T) -> Option<T> {
+            match (a, b) {
+                (Some(a), Some(b)) => Some(sum(a, b)),
+                _ => None,
+            }
+        }
+        state.usage = Some(Usage {
+            input_tokens: add(old.input_tokens, usage.input_tokens, u64::saturating_add),
+            output_tokens: add(old.output_tokens, usage.output_tokens, u64::saturating_add),
+            cache_read_tokens: add(
+                old.cache_read_tokens,
+                usage.cache_read_tokens,
+                u64::saturating_add,
+            ),
+            cache_creation_tokens: add(
+                old.cache_creation_tokens,
+                usage.cache_creation_tokens,
+                u64::saturating_add,
+            ),
+            cost_usd: add(old.cost_usd, usage.cost_usd, |a, b| a + b),
+            duplicate_reads: add(
+                old.duplicate_reads,
+                usage.duplicate_reads,
+                u32::saturating_add,
+            ),
+            session_resumed: usage.session_resumed,
+        });
     }
 
     /// run 途中の session の出来事の写し。
@@ -284,6 +332,9 @@ impl ChatRunSink {
     }
 
     fn tool_use(&self, state: &mut SinkState, fields: &ProgressFields) {
+        if !state.finished && skill_read(fields) {
+            state.skill_reads = state.skill_reads.saturating_add(1);
+        }
         state.next_call += 1;
         let call_id = format!("call-{}", state.next_call);
         let name = fields.tool.clone().unwrap_or_else(|| "tool".to_string());
@@ -343,12 +394,15 @@ impl ChatRunSink {
             return Ok(None);
         }
         let now = (self.clock)();
-        let result = self.store.chat_run_finish(
+        let result = self.store.chat_run_finish_with_telemetry(
             &self.run_id,
             finish.state,
             finish.final_text.as_deref(),
             finish.reason.as_deref(),
             now,
+            state.usage.as_ref(),
+            state.skill_reads,
+            state.first_output_at,
         );
         state.finished = true;
         result.map(Some)
@@ -387,6 +441,37 @@ impl ChatRunSink {
     }
 }
 
+/// Inputs are the adapter's structured tool_use detail, before display redaction/truncation.
+fn skill_read(fields: &ProgressFields) -> bool {
+    match fields.tool.as_deref() {
+        Some("Skill") => true,
+        Some("Read") => {
+            let input = fields
+                .detail
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            let path = input
+                .as_ref()
+                .and_then(|v| v.get("file_path").or_else(|| v.get("path")))
+                .and_then(serde_json::Value::as_str);
+            let Some(path) = path else { return false };
+            let mut parts = Vec::new();
+            for part in path.split('/') {
+                match part {
+                    "" | "." => {}
+                    ".." => {
+                        parts.pop();
+                    }
+                    part => parts.push(part),
+                }
+            }
+            parts.last() == Some(&"SKILL.md")
+                && parts.windows(2).any(|p| p == [".claude", "skills"])
+        }
+        _ => false,
+    }
+}
+
 impl EventSink for ChatRunSink {
     fn progress(&self, msg: &str) {
         let mut state = self.state();
@@ -402,6 +487,9 @@ impl EventSink for ChatRunSink {
                     return;
                 }
                 let now = (self.clock)();
+                if !state.finished {
+                    state.first_output_at.get_or_insert(now);
+                }
                 self.write(&mut state, || {
                     self.store.chat_run_append_text(&self.run_id, text, now)
                 });

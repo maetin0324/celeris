@@ -2005,6 +2005,7 @@ export interface ApiV1Schema {
   chat_reference_response: ChatReferenceResponse;
   chat_resume_queue: ChatResumeQueueRequest;
   chat_run: ChatRun;
+  chat_run_list_response: ChatRunListResponse;
   chat_run_response: ChatRunResponse;
   chat_stop: ChatStopRequest;
   chat_stop_response: ChatStopResponse;
@@ -3052,19 +3053,72 @@ export interface ChatRunData {
 export interface ChatRun {
   account_id?: string | null;
   finished_at?: string | null;
+  /**
+   * First nonempty assistant text delta, using the dispatch clock.
+   */
+  first_output_at?: string | null;
   harness?: string | null;
   id: string;
   input_message_id: string;
+  /**
+   * Start to finish wall time, in milliseconds; unknown for unfinished runs.
+   */
+  latency_ms?: number | null;
   llm_source?: string | null;
   model?: string | null;
   output_message_id?: string | null;
   provider?: string | null;
   reason?: string | null;
   session_mode?: ChatSessionMode | null;
+  /**
+   * Observed Skill calls and reads of .claude/skills/** /SKILL.md (tool_use only).
+   */
+  skill_reads?: number | null;
   started_at?: string | null;
   state: ChatRunState;
   thread_id: string;
   tier?: string | null;
+  /**
+   * Start to first assistant text delta, in milliseconds; unknown without a delta.
+   */
+  time_to_first_output_ms?: number | null;
+  /**
+   * Nominal adapter usage; absent when the harness did not report it.
+   */
+  usage?: Usage | null;
+}
+/**
+ * DESIGN §5.3 の `usage`。取れない項目は省略可。
+ *
+ * ADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /
+ * `cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。
+ * `Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。
+ */
+export interface Usage {
+  /**
+   * prompt cache の作成（書き込み）トークン。
+   */
+  cache_creation_tokens?: number | null;
+  /**
+   * prompt cache の読み取りトークン（アダプタが取得できた場合のみ）。
+   */
+  cache_read_tokens?: number | null;
+  /**
+   * `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
+   */
+  cost_usd?: number | null;
+  /**
+   * ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
+   * の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
+   */
+  duplicate_reads?: number | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  /**
+   * ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
+   * 拒否されなかった）。session を扱わない adapter は `None`。
+   */
+  session_resumed?: boolean | null;
 }
 export interface ChatQueueData {
   message_ids: string[];
@@ -3127,6 +3181,10 @@ export interface ChatReferenceResponse {
 }
 export interface ChatResumeQueueRequest {
   expected_revision: number;
+}
+export interface ChatRunListResponse {
+  items: ChatRun[];
+  next_before?: string | null;
 }
 export interface ChatRunResponse {
   run: ChatRun;
@@ -5694,39 +5752,6 @@ export interface RunMetrics {
    * dispatch してからこの run が終わるまでの壁時計時間（ミリ秒）。
    */
   wall_ms: number;
-}
-/**
- * DESIGN §5.3 の `usage`。取れない項目は省略可。
- *
- * ADR-0061（Phase 104）: harness routing 基盤で `cache_read_tokens` / `cache_creation_tokens` /
- * `cost_usd` を追加した（追加のみ。既存の `input_tokens` / `output_tokens` の意味は変えない）。
- * `Eq` は落とした（`cost_usd: Option<f64>` は `Eq` を持てない）。
- */
-export interface Usage {
-  /**
-   * prompt cache の作成（書き込み）トークン。
-   */
-  cache_creation_tokens?: number | null;
-  /**
-   * prompt cache の読み取りトークン（アダプタが取得できた場合のみ）。
-   */
-  cache_read_tokens?: number | null;
-  /**
-   * `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
-   */
-  cost_usd?: number | null;
-  /**
-   * ADR-0140 D4: run 内の再探索の重複（`Read` の同じ正規化 path・`Grep`/`Glob` の同じ pattern + path
-   * の 2 回目以降の回数）。tool_use を観測できない adapter は `None`。
-   */
-  duplicate_reads?: number | null;
-  input_tokens?: number | null;
-  output_tokens?: number | null;
-  /**
-   * ADR-0140 D4: この run が既存の Claude Code session を resume したか（`--resume` で起動し、
-   * 拒否されなかった）。session を扱わない adapter は `None`。
-   */
-  session_resumed?: boolean | null;
 }
 /**
  * `Event::TargetSweepRan` の root 1 つ分。

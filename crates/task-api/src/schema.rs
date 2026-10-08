@@ -311,6 +311,7 @@ pub struct ApiV1Schema {
     pub chat_message_response: ChatMessageResponse,
     pub chat_post_message_response: ChatPostMessageResponse,
     pub chat_run_response: ChatRunResponse,
+    pub chat_run_list_response: task_core::chat::ChatRunListResponse,
     pub chat_stop_response: ChatStopResponse,
     pub chat_event_list: ChatEventListResponse,
     pub chat_attachment_response: ChatAttachmentResponse,

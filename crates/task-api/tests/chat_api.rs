@@ -597,3 +597,92 @@ async fn chat_api_cross_thread_cancel_is_not_found() {
         "queued"
     );
 }
+
+#[tokio::test]
+async fn cos_chat_usage_api_detail_list_pagination_and_missing_usage() {
+    let env = admin_env();
+    let app = env.router();
+    let t = create(&app, "usage-thread", "usage").await;
+    let t = t["id"].as_str().expect("thread");
+    let start = OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock");
+    for (id, usage) in [
+        (
+            "usage-run",
+            Some(task_core::Usage {
+                input_tokens: Some(9),
+                output_tokens: Some(3),
+                cache_read_tokens: Some(17),
+                cache_creation_tokens: Some(5),
+                cost_usd: Some(0.004),
+                duplicate_reads: Some(1),
+                session_resumed: Some(true),
+            }),
+        ),
+        ("no-usage-run", None),
+    ] {
+        assert_eq!(
+            send(
+                &app,
+                post_admin(&format!("{BASE}/{t}/messages"), &message_body(id, id))
+            )
+            .await
+            .status
+            .as_u16(),
+            202
+        );
+        env.store
+            .chat_run_claim_next(
+                t,
+                id,
+                &json!({"harness":"fake","model":"lab","session_mode":"resumed"}),
+                start,
+            )
+            .expect("claim");
+        env.store
+            .chat_run_finish_with_telemetry(
+                id,
+                ChatRunState::Completed,
+                Some("reply"),
+                None,
+                start + time::Duration::seconds(4),
+                usage.as_ref(),
+                2,
+                Some(start + time::Duration::seconds(1)),
+            )
+            .expect("finish");
+    }
+    let detail = send(&app, get_admin(&format!("{BASE}/{t}/runs/usage-run")))
+        .await
+        .json();
+    assert_eq!(detail["run"]["usage"]["cache_read_tokens"], 17);
+    assert_eq!(detail["run"]["usage"]["cache_creation_tokens"], 5);
+    assert_eq!(detail["run"]["usage"]["cost_usd"], 0.004);
+    assert_eq!(detail["run"]["usage"]["session_resumed"], true);
+    assert_eq!(detail["run"]["usage"]["duplicate_reads"], 1);
+    assert_eq!(detail["run"]["skill_reads"], 2);
+    assert_eq!(detail["run"]["latency_ms"], 4000);
+    assert_eq!(detail["run"]["time_to_first_output_ms"], 1000);
+    assert_eq!(detail["run"]["model"], "lab");
+    let missing = send(&app, get_admin(&format!("{BASE}/{t}/runs/no-usage-run")))
+        .await
+        .json();
+    assert!(missing["run"].get("usage").is_none());
+    let page = send(&app, get_admin(&format!("{BASE}/{t}/runs?limit=1")))
+        .await
+        .json();
+    assert_eq!(page["items"][0], missing["run"]);
+    let cursor = page["next_before"].as_str().expect("cursor");
+    let next = send(
+        &app,
+        get_admin(&format!("{BASE}/{t}/runs?before={cursor}&limit=1")),
+    )
+    .await
+    .json();
+    assert_eq!(next["items"][0], detail["run"]);
+    assert!(next["next_before"].is_null());
+    assert_problem(
+        &send(&app, get_admin(&format!("{BASE}/{t}/runs?before=unknown"))).await,
+        400,
+        "bad_request",
+    );
+}

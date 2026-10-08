@@ -277,3 +277,61 @@ fn cos_chat_run_session_does_not_disturb_conversation_and_continuation_rows() {
             .is_some()
     );
 }
+
+#[test]
+fn cos_chat_usage_store_unknown_metrics_and_idempotent_finish() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db = dir.path().join("usage.db");
+    let s = SqliteStore::open(&db).expect("store");
+    let t = thread(&s, "usage");
+    let claimed = post_and_claim(&s, &t, "run", 0);
+    assert!(
+        serde_json::to_value(&claimed)
+            .expect("json")
+            .get("usage")
+            .is_none()
+    );
+    let usage = crate::Usage {
+        input_tokens: Some(4),
+        output_tokens: Some(2),
+        ..Default::default()
+    };
+    let run = s
+        .chat_run_finish_with_telemetry(
+            "run",
+            ChatRunState::Failed,
+            None,
+            Some("failed"),
+            at(3),
+            Some(&usage),
+            0,
+            None,
+        )
+        .expect("finish");
+    assert_eq!(run.usage.as_deref(), Some(&usage));
+    assert_eq!(run.latency_ms, Some(3000));
+    assert_eq!(run.time_to_first_output_ms, None);
+    let wire = serde_json::to_value(&run).expect("wire");
+    assert!(wire["usage"].get("cache_read_tokens").is_none());
+    assert!(wire["usage"].get("cache_creation_tokens").is_none());
+    assert!(wire["usage"].get("cost_usd").is_none());
+    assert!(wire["usage"].get("session_resumed").is_none());
+    let replay = s
+        .chat_run_finish_with_telemetry(
+            "run",
+            ChatRunState::Failed,
+            None,
+            None,
+            at(9),
+            None,
+            99,
+            Some(at(2)),
+        )
+        .expect("replay");
+    assert_eq!(replay, run);
+    let reopened = SqliteStore::open(&db).expect("reopen");
+    assert_eq!(reopened.chat_run_get(&t, "run").expect("persisted"), run);
+    let other = thread(&s, "other");
+    assert!(s.chat_run_get(&other, "run").is_err());
+    assert!(s.chat_run_list(&other, Some("run"), Some(1)).is_err());
+}

@@ -3710,6 +3710,13 @@
             "null"
           ]
         },
+        "first_output_at": {
+          "description": "First nonempty assistant text delta, using the dispatch clock.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "harness": {
           "type": [
             "string",
@@ -3721,6 +3728,15 @@
         },
         "input_message_id": {
           "type": "string"
+        },
+        "latency_ms": {
+          "description": "Start to finish wall time, in milliseconds; unknown for unfinished runs.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "llm_source": {
           "type": [
@@ -3762,6 +3778,15 @@
             }
           ]
         },
+        "skill_reads": {
+          "description": "Observed Skill calls and reads of .claude/skills/**/SKILL.md (tool_use only).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "started_at": {
           "type": [
             "string",
@@ -3779,6 +3804,26 @@
             "string",
             "null"
           ]
+        },
+        "time_to_first_output_ms": {
+          "description": "Start to first assistant text delta, in milliseconds; unknown without a delta.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Usage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Nominal adapter usage; absent when the harness did not report it."
         }
       },
       "required": [
@@ -3798,6 +3843,26 @@
       },
       "required": [
         "run"
+      ],
+      "type": "object"
+    },
+    "ChatRunListResponse": {
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/ChatRun"
+          },
+          "type": "array"
+        },
+        "next_before": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "items"
       ],
       "type": "object"
     },
@@ -30813,6 +30878,9 @@
     "chat_run": {
       "$ref": "#/$defs/ChatRun"
     },
+    "chat_run_list_response": {
+      "$ref": "#/$defs/ChatRunListResponse"
+    },
     "chat_run_response": {
       "$ref": "#/$defs/ChatRunResponse"
     },
@@ -31645,6 +31713,7 @@
     "chat_message_response",
     "chat_post_message_response",
     "chat_run_response",
+    "chat_run_list_response",
     "chat_stop_response",
     "chat_event_list",
     "chat_attachment_response",

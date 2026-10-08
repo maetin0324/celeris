@@ -70,6 +70,7 @@ pub(crate) fn routes() -> axum::Router<ApiState> {
         )
         .route("/api/v1/chat/threads/{t}/stop", post(stop_run))
         .route("/api/v1/chat/threads/{t}/resume-queue", post(resume_queue))
+        .route("/api/v1/chat/threads/{t}/runs", get(list_runs))
         .route("/api/v1/chat/threads/{t}/runs/{r}", get(get_run))
         .merge(stream::routes())
         .merge(attachments::routes())
@@ -337,4 +338,24 @@ async fn get_run(
         .blocking(move |store| store.chat_run_get(&t, &r).map_err(chat_problem))
         .await?;
     Ok(json_response(StatusCode::OK, &ChatRunResponse { run }))
+}
+
+async fn list_runs(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    Params(t): Params<String>,
+    RawQuery(raw): RawQuery,
+) -> ApiResult {
+    authorize(&state, &headers)?;
+    let query = QueryParams::parse(raw.as_deref(), &["before", "limit"])?;
+    let before = query.single("before")?.map(str::to_owned);
+    let limit = Some(query.limit("limit", 50, 200)? as u32);
+    let page = state
+        .blocking(move |store| {
+            store
+                .chat_run_list(&t, before.as_deref(), limit)
+                .map_err(chat_problem)
+        })
+        .await?;
+    Ok(json_response(StatusCode::OK, &page))
 }

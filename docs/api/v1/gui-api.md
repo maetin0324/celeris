@@ -501,6 +501,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 212 | POST | `/browser/trusted-devices/verify` | 提示された hash を検証し回転する（`readonly: true` は何も書かない。§3.131.2）（**管理系** + assertion） | `TrustedDeviceResult` | store `trusted_device_verify_and_rotate` / `trusted_device_verify_readonly` |
 | 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.131.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
 | 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
+| 215 | GET | `/chat/threads/{t}/runs` | run 一覧（`before` / `limit`）と usage telemetry | `ChatRunListResponse` | `crate::chat` |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -3405,6 +3406,7 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 | DELETE `/chat/threads/{t}/messages/{m}` | なし | 200 `ChatMessageResponse`（`state=cancelled`）。queued の人の発言だけ可、開始済みは 409 |
 | POST `/chat/threads/{t}/stop` | `{"run_id"}` | 202 `ChatStopResponse`。終端への再送は 200、現在の run と違えば 409 |
 | POST `/chat/threads/{t}/resume-queue` | `{"expected_revision"}` | 200 `ChatThreadResponse` |
+| GET `/chat/threads/{t}/runs` | `before`（前ページの `next_before`）、`limit`（既定 50、最大 200） | 200 `ChatRunListResponse` |
 | GET `/chat/threads/{t}/runs/{r}` | なし | 200 `ChatRunResponse` |
 | GET `/chat/threads/{t}/runs/{r}/events` | `after`、`limit`（既定 100、最大 500） | 200 `ChatEventListResponse` |
 | GET `/chat/threads/{t}/stream` | `after`、または `Last-Event-ID`（両方あり不一致は 400） | 200 `text/event-stream`（§4） |
@@ -3589,6 +3591,12 @@ data: {"reason":"cursor_too_old","cursor":20000}
 | 期限切れ | retention（30 日）で cursor が消えたら HTTP 410 `application/problem+json`（code=`chat-cursor-expired`）。クライアントは `GET /chat/threads/{t}` と messages を取り直す |
 | 未来の cursor | 400 |
 | 切断 | run の停止とはみなさない |
+
+run の詳細・一覧・終端の `run` event は同じ `ChatRun` を返す。一覧は新しい run から順に返し、`items` と `next_before`（末尾なら null）でページングする。不明または別 thread の `before` は 400。
+
+CoS chat の `usage` は worker の Terminal Usage を保存したもので、`input_tokens`・`output_tokens`・`cache_read_tokens`・`cache_creation_tokens`・`cost_usd`（名目 USD、請求額ではない）・`session_resumed`・`duplicate_reads` を含む。usage を報告しない harness や旧 run では `usage` 自体を省略する。未知の cache・cost・session 指標を 0 として補完しない。既存の fresh retry がある場合は、報告された試行の token・cost・duplicate_reads を加算し、両試行で項目が取得できなければその項目は不明とする。`session_resumed` は最後に usage を報告した試行の値。既存の `session_mode` は最終 session 選択のまま。
+
+`skill_reads` は stream の `tool_use` で観測した `Skill` 呼び出しと `.claude/skills/**/SKILL.md` の `Read` の合計（再試行を含む）。tool_result や通常ファイルの Read は数えない。これは観測回数であり、harness 内部の暗黙の読み込みは不明。`first_output_at` は最初の空でない本文差分の時刻で、thinking/status/tool は含めない。`latency_ms` は保存した `started_at` → `finished_at`、`time_to_first_output_ms` は `started_at` → `first_output_at` のミリ秒差。本文差分がなければ first output の指標を省略する。これらは dispatcher の時計で計測する。prompt・skill 配送・session 選択・rollover の条件は変えない。
 
 run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/runs/{r}/events` で必要なときだけ読む。Console の `since` cursor と差分 reply の仕組みと、このチャット stream の cursor は混ぜない。
 

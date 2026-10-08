@@ -787,23 +787,33 @@ export type ChatResumeQueueRequest = {
 export type ChatRun = {
   "account_id"?: string | null;
   "finished_at"?: string | null;
+  "first_output_at"?: string | null;
   "harness"?: string | null;
   "id": string;
   "input_message_id": string;
+  "latency_ms"?: number | null;
   "llm_source"?: string | null;
   "model"?: string | null;
   "output_message_id"?: string | null;
   "provider"?: string | null;
   "reason"?: string | null;
   "session_mode"?: ChatSessionMode | null;
+  "skill_reads"?: number | null;
   "started_at"?: string | null;
   "state": ChatRunState;
   "thread_id": string;
   "tier"?: string | null;
+  "time_to_first_output_ms"?: number | null;
+  "usage"?: Usage | null;
 };
 
 export type ChatRunData = {
   "run": ChatRun;
+};
+
+export type ChatRunListResponse = {
+  "items": Array<ChatRun>;
+  "next_before"?: string | null;
 };
 
 export type ChatRunResponse = {

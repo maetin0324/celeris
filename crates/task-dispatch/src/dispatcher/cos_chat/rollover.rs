@@ -229,7 +229,14 @@ pub(crate) fn history_since_summary(
 
 /// run の usage（input+output）。session の `approx_tokens` に積む（rollover_tokens の材料）。
 pub(crate) fn usage_tokens(outcome: &Result<RunOutcome, AdapterError>) -> i64 {
-    let usage = match outcome {
+    let usage = outcome_usage(outcome);
+    usage
+        .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
+        .map_or(0, |t| i64::try_from(t).unwrap_or(i64::MAX))
+}
+
+fn outcome_usage(outcome: &Result<RunOutcome, AdapterError>) -> Option<task_core::Usage> {
+    match outcome {
         Ok(RunOutcome {
             terminal:
                 Terminal::Done { usage, .. }
@@ -237,12 +244,9 @@ pub(crate) fn usage_tokens(outcome: &Result<RunOutcome, AdapterError>) -> i64 {
                 | Terminal::BudgetExhausted { usage, .. }
                 | Terminal::Waiting { usage, .. },
             ..
-        }) => usage.as_ref(),
+        }) => *usage,
         _ => None,
-    };
-    usage
-        .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
-        .map_or(0, |t| i64::try_from(t).unwrap_or(i64::MAX))
+    }
 }
 
 /// 1 回の試行の後始末: harness の決めた session id と usage を session 行に残す。
@@ -254,6 +258,7 @@ fn record_attempt(
     run_id: &str,
     now: OffsetDateTime,
 ) {
+    sink.record_usage(outcome_usage(outcome));
     if let Some(session_id) = sink.signals().established
         && let Err(error) = store.chat_session_set_id(session_row_id, &session_id)
     {
@@ -328,6 +333,7 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
                 Arc::clone(&a.clock),
                 a.secrets.clone(),
             );
+            retry.inherit_telemetry(&sink);
             let outcome = a.adapter.run(req, &a.run_id, a.limits, &retry).await;
             record_attempt(
                 &a.store,

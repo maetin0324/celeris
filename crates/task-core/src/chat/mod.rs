@@ -166,7 +166,7 @@ pub struct ChatWorkspaceFile {
     pub path: String,
     pub attachment_id: String,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatRun {
     pub id: String,
     pub thread_id: String,
@@ -181,6 +181,21 @@ pub struct ChatRun {
     pub model: Option<String>,
     pub tier: Option<String>,
     pub session_mode: Option<ChatSessionMode>,
+    /// Nominal adapter usage; absent when the harness did not report it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<Box<crate::Usage>>,
+    /// Observed Skill calls and reads of .claude/skills/**/SKILL.md (tool_use only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_reads: Option<u64>,
+    /// First nonempty assistant text delta, using the dispatch clock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_output_at: Option<String>,
+    /// Start to finish wall time, in milliseconds; unknown for unfinished runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latency_ms: Option<u64>,
+    /// Start to first assistant text delta, in milliseconds; unknown without a delta.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_to_first_output_ms: Option<u64>,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
 }
@@ -197,7 +212,7 @@ pub struct ChatAttachment {
     pub download_url: String,
     pub expires_at: Option<String>,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatEvent {
     pub id: String,
     #[serde(rename = "type")]
@@ -210,7 +225,7 @@ pub struct ChatEvent {
 }
 // Each variant has a distinct field set. `untagged` keeps data as the D2 object,
 // without inserting another discriminator into the SSE envelope.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ChatEventData {
     Message(ChatMessageData),
@@ -250,7 +265,7 @@ pub struct ChatToolData {
     pub error: bool,
     pub truncated: bool,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ChatRunData {
     pub run: ChatRun,
@@ -327,7 +342,7 @@ pub struct ChatThreadListResponse {
 pub struct ChatThreadResponse {
     pub thread: ChatThread,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatThreadDetailResponse {
     pub thread: ChatThread,
     pub active_run: Option<ChatRun>,
@@ -350,16 +365,21 @@ pub struct ChatPostMessageResponse {
     pub run_id: Option<String>,
     pub queue_position: u32,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatRunListResponse {
+    pub items: Vec<ChatRun>,
+    pub next_before: Option<String>,
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatRunResponse {
     pub run: ChatRun,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatStopResponse {
     pub run: ChatRun,
     pub queue_paused: bool,
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatEventListResponse {
     pub items: Vec<ChatEvent>,
     pub next_cursor: Option<String>,

@@ -503,3 +503,51 @@ async fn cos_chat_run_rollover_context_exhaustion_makes_next_run_fresh() {
     );
     assert_eq!(record3.session_row_id, record.session_row_id);
 }
+
+#[tokio::test]
+async fn cos_chat_usage_fake_adapter_persists_usage_and_omits_missing_usage() {
+    let (dir, store) = open_store();
+    let adapter = Arc::new(FakeAdapter::new(vec![
+        "sh".into(), "-c".into(), r#"cat >/dev/null
+echo '{"type":"progress","msg":"skill","kind":"tool_use","tool":"Skill","detail":"{\"skill\":\"cos-operator\"}"}'
+echo '{"type":"progress","msg":"read","kind":"tool_use","tool":"Read","detail":"{\"file_path\":\"/workspace/.claude/skills/cos-operator/SKILL.md\"}"}'
+echo '{"type":"progress","msg":"answer","kind":"text","detail":"answer"}'
+echo '{"type":"done","summary":"answer","evidence":[],"usage":{"input_tokens":11,"output_tokens":7,"cache_read_tokens":23,"cache_creation_tokens":5,"cost_usd":0.012,"duplicate_reads":2,"session_resumed":false}}'
+"#.into(),
+    ]));
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    let t = thread(&store);
+    post(&store, &t, "usage");
+    let id = tick_and_join(&mut d, &store, &t).await;
+    let run = store.chat_run_get(&t, &id).expect("run");
+    let usage = run.usage.as_deref().expect("usage");
+    assert_eq!(usage.input_tokens, Some(11));
+    assert_eq!(usage.output_tokens, Some(7));
+    assert_eq!(usage.cache_read_tokens, Some(23));
+    assert_eq!(usage.cache_creation_tokens, Some(5));
+    assert_eq!(usage.cost_usd, Some(0.012));
+    assert_eq!(usage.duplicate_reads, Some(2));
+    assert_eq!(usage.session_resumed, Some(false));
+    assert_eq!(run.skill_reads, Some(2));
+    assert!(run.first_output_at.is_some());
+    assert!(run.latency_ms.is_some());
+    assert!(run.time_to_first_output_ms.is_some());
+    assert_eq!(run.harness.as_deref(), Some("fake"));
+    assert!(run.session_mode.is_some());
+    let reopened = SqliteStore::open(&dir.path().join("celeris.db")).expect("reopen");
+    assert_eq!(reopened.chat_run_get(&t, &id).expect("persisted"), run);
+    assert_eq!(
+        reopened.chat_run_list(&t, None, None).expect("list").items,
+        vec![run]
+    );
+
+    let mut d = fixture(Arc::new(FakeAdapter::default()), store.clone(), dir.path());
+    post(&store, &t, "no-usage");
+    let id = tick_and_join(&mut d, &store, &t).await;
+    let run = store.chat_run_get(&t, &id).expect("run");
+    let wire = serde_json::to_value(&run).expect("json");
+    assert!(wire.get("usage").is_none());
+    assert!(wire.get("first_output_at").is_none());
+    assert!(wire.get("time_to_first_output_ms").is_none());
+    assert_eq!(run.skill_reads, Some(0));
+}

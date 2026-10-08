@@ -522,3 +522,146 @@ fn cos_chat_run_sink_terminal_mapping() {
         (ChatRunState::Completed, Some("どれ?"))
     );
 }
+
+#[test]
+fn cos_chat_usage_fixed_clock_skill_count_latency_retry_and_terminal_event() {
+    let f = fixture();
+    let sink = ChatRunSink::new(
+        f.store.clone(),
+        &f.thread,
+        RUN,
+        Arc::new(|| at() + time::Duration::seconds(2)),
+        vec![],
+    );
+    for (tool, input) in [
+        ("Skill", json!({"skill":"cos-operator"})),
+        (
+            "Read",
+            json!({"file_path":"/long/.claude/skills/cos/SKILL.md"}),
+        ),
+        ("Read", json!({"path":".claude/skills/cos/./SKILL.md"})),
+        ("Read", json!({"file_path":".claude/skills/../../SKILL.md"})),
+        ("Read", json!({"file_path":"docs/SKILL.md"})),
+        ("Read", json!({"file_path":".claude/skills/cos/README.md"})),
+        ("Bash", json!({"command":"cat .claude/skills/cos/SKILL.md"})),
+    ] {
+        sink.progress_with(
+            "",
+            &ProgressFields::of(ProgressKind::ToolUse)
+                .with_tool(tool)
+                .with_detail(input.to_string()),
+        );
+        sink.progress_with(
+            "",
+            &ProgressFields::of(ProgressKind::ToolResult).with_tool(tool),
+        );
+    }
+    sink.progress_with("", &ProgressFields::of(ProgressKind::Text).with_detail(""));
+    sink.progress_with(
+        "",
+        &ProgressFields::of(ProgressKind::Thinking).with_detail("thinking"),
+    );
+    sink.progress_with(
+        "",
+        &ProgressFields::of(ProgressKind::Text).with_detail("answer"),
+    );
+    sink.record_usage(Some(task_core::Usage {
+        input_tokens: Some(10),
+        output_tokens: Some(5),
+        cost_usd: Some(0.01),
+        cache_read_tokens: Some(8),
+        cache_creation_tokens: Some(3),
+        duplicate_reads: Some(1),
+        session_resumed: Some(true),
+    }));
+    let retry = ChatRunSink::new(
+        f.store.clone(),
+        &f.thread,
+        RUN,
+        Arc::new(|| at() + time::Duration::seconds(5)),
+        vec![],
+    );
+    retry.inherit_telemetry(&sink);
+    retry.record_usage(Some(task_core::Usage {
+        input_tokens: Some(20),
+        output_tokens: Some(2),
+        cost_usd: Some(0.02),
+        cache_read_tokens: Some(4),
+        cache_creation_tokens: Some(1),
+        duplicate_reads: Some(2),
+        session_resumed: Some(false),
+    }));
+    let finish = ChatFinish {
+        state: ChatRunState::Completed,
+        final_text: None,
+        reason: None,
+        context_exhausted: false,
+    };
+    let run = retry
+        .finish(&finish, &ParsedActions::default())
+        .expect("finish")
+        .expect("run");
+    assert_eq!(run.skill_reads, Some(3));
+    assert_eq!(run.latency_ms, Some(5000));
+    assert_eq!(run.time_to_first_output_ms, Some(2000));
+    let usage = run.usage.as_deref().expect("usage");
+    assert_eq!(usage.input_tokens, Some(30));
+    assert_eq!(usage.output_tokens, Some(7));
+    assert_eq!(usage.cache_read_tokens, Some(12));
+    assert_eq!(usage.cache_creation_tokens, Some(4));
+    assert_eq!(usage.cost_usd, Some(0.03));
+    assert_eq!(usage.duplicate_reads, Some(3));
+    assert_eq!(usage.session_resumed, Some(false));
+    assert!(
+        f.events()
+            .iter()
+            .any(|e| matches!(&e.data, ChatEventData::Run(data) if data.run == run))
+    );
+    retry.progress_with(
+        "",
+        &ProgressFields::of(ProgressKind::ToolUse).with_tool("Skill"),
+    );
+    assert!(
+        retry
+            .finish(&finish, &ParsedActions::default())
+            .expect("repeat")
+            .is_none()
+    );
+    assert_eq!(f.store.chat_run_get(&f.thread, RUN).expect("get"), run);
+}
+
+#[test]
+fn cos_chat_usage_retry_keeps_unreported_fields_unknown() {
+    let f = fixture();
+    let sink = f.sink(vec![]);
+    sink.record_usage(Some(task_core::Usage {
+        input_tokens: Some(4),
+        output_tokens: Some(1),
+        cache_read_tokens: Some(12),
+        cost_usd: Some(0.01),
+        ..Default::default()
+    }));
+    sink.record_usage(Some(task_core::Usage {
+        input_tokens: Some(5),
+        output_tokens: Some(2),
+        ..Default::default()
+    }));
+    let run = sink
+        .finish(
+            &ChatFinish {
+                state: ChatRunState::Interrupted,
+                final_text: None,
+                reason: None,
+                context_exhausted: false,
+            },
+            &ParsedActions::default(),
+        )
+        .expect("finish")
+        .expect("run");
+    let usage = run.usage.as_deref().expect("usage");
+    assert_eq!(usage.input_tokens, Some(9));
+    assert_eq!(usage.output_tokens, Some(3));
+    assert_eq!(usage.cache_read_tokens, None);
+    assert_eq!(usage.cost_usd, None);
+    assert_eq!(usage.session_resumed, None);
+}

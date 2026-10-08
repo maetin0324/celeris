@@ -267,7 +267,7 @@ fn chat_migration_upgrade_from_47_preserves_existing_rows() {
             r.get(0)
         })
         .expect("version");
-    assert_eq!(version, 60);
+    assert_eq!(version, 61);
 }
 
 #[test]
@@ -292,4 +292,49 @@ fn chat_migration_one_active_run_per_thread() {
     assert!(conn.execute(insert_run, params!["r3", "running"]).is_err());
     conn.execute(insert_run, params!["r4", "completed"])
         .expect("completed run does not consume the active slot");
+}
+
+#[test]
+fn cos_chat_usage_migration_preserves_legacy_run_and_omits_unknown_usage() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("legacy.sqlite3");
+    let mut conn = Connection::open(&path).expect("open");
+    conn.execute_batch(
+        "CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)",
+    )
+    .expect("ledger");
+    for version in (1..=37).chain(41..=60) {
+        SqliteStore::apply_migration_version(&mut conn, version).expect("schema 60");
+    }
+    conn.execute_batch(
+        "INSERT INTO chat_threads(id,kind,title,status,created_at,updated_at)
+         VALUES('legacy','human','legacy','open','2026-10-05T00:00:00Z','2026-10-05T00:00:00Z');
+         INSERT INTO chat_runs(run_id,thread_id,input_message_id,state,resolved_config_json,started_at,finished_at)
+         VALUES('old','legacy','input','completed','{\"harness\":\"fake\",\"model\":\"m1\",\"session_mode\":\"new\"}','2026-10-05T00:00:00Z','2026-10-05T00:00:02Z');"
+    ).expect("legacy run");
+    drop(conn);
+    let store = SqliteStore::open(&path).expect("upgrade");
+    let run = store
+        .chat_run_get("legacy", "old")
+        .expect("legacy run readable");
+    assert_eq!(run.harness.as_deref(), Some("fake"));
+    assert_eq!(run.model.as_deref(), Some("m1"));
+    assert_eq!(run.session_mode, Some(ChatSessionMode::New));
+    assert_eq!(run.latency_ms, Some(2000));
+    let wire = serde_json::to_value(&run).expect("wire");
+    for field in [
+        "usage",
+        "skill_reads",
+        "first_output_at",
+        "time_to_first_output_ms",
+    ] {
+        assert!(wire.get(field).is_none(), "{field} must remain unknown");
+    }
+    assert_eq!(
+        store
+            .chat_run_list("legacy", None, None)
+            .expect("list")
+            .items,
+        vec![run]
+    );
 }

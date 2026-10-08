@@ -35,6 +35,17 @@ updated: 2026-10-08
 - task の受け入れ条件 3 と目的の文言更新は**人が API で行う**。
 - 本決定記録の run では製品コード（crates/・migration・schema）は一切変更していない。統合は delivery の流れの後続段で実施する。
 
+## 試験の修正（Core 分離後）
+
+**原因**: main の Core 分離（ddc6a895/8ce73e81）で checkpoint の JSON テンプレートが Core へ移り、可変部では「run 固有の操作パラメータ」節に `` `<through_seq>` = 11、`<expected>` = 2（checkpoint） `` の形で出るようになった。`cos_chat_resume_delta_prompt_omits_summary_and_names_the_cursor`（task-worker cos_chat/tests.rs）が Core 分離前の JSON 文字列 `\"expected_summary_through_seq\":2` を prompt 内で探していたため exit 101 で落ちた（同 file の `cos_chat_run_proto_prompt_puts_interrupt_first_and_forbids_actions` は 426 行で同形の可変部断言を使い済み）。
+
+**修正**: 製品コード（prompt 組み立て）は不変。assert を `` p.contains("`<through_seq>` = 11、`<expected>` = 2") `` に置き換え、試験の意図（resume の差分配送でも checkpoint 水位 `summary_through_seq=2` が cursor（`delivered_through_seq`）と独立に渡る）は維持。
+
+**検証**（2026-10-08、修正後）:
+- `cargo test -p task-dispatch -p task-core -p task-worker cos_chat_resume_delta`: exit 0 — task-core 1 passed、task-dispatch 9 passed、task-worker 1 passed（全 11 件・失敗 0）。
+- `cargo test -p task-worker cos_chat`: exit 0 — 51 passed。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+
 ## 未解決事項
 - 非 cache input（`Usage.input_tokens`）では改善が無い（claude-code は prompt が cache write に入るので構造上ほぼ一定）。判定指標の扱いは 2026-10-08 の人の決定（上の「人の決定」節）で (a) に決まった。
 - 計測中、CoS は checkpoint を書かず summary は空だった（既知の不具合 4）。summary がある thread の効果は未計測。

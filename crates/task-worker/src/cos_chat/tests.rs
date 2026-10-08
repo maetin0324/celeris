@@ -370,9 +370,11 @@ fn cos_chat_resume_delta_prompt_omits_summary_and_names_the_cursor() {
         p.contains("このプロンプトに載せていない範囲: seq 9。"),
         "{p}"
     );
-    // The inputs and the checkpoint rule are delivered as before.
+    // The inputs and the checkpoint rule are delivered as before. After the Core split the
+    // checkpoint JSON template lives in the Core; the prompt names the cursor-independent
+    // water mark in the run specific parameters.
     assert!(p.contains("### seq 10 (message m10) 【割り込み】"), "{p}");
-    assert!(p.contains("\"expected_summary_through_seq\":2"), "{p}");
+    assert!(p.contains("`<through_seq>` = 11、`<expected>` = 2"), "{p}");
     // Nothing new besides the inputs.
     c.unsummarized = CosChatHistory {
         from_seq: 10,

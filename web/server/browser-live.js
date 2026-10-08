@@ -259,7 +259,13 @@ export function createBrowserLive({
     });
     if (response.status >= 300 && response.status < 400) throw new Error("daemon redirected");
     const value = await response.json().catch(() => ({}));
-    if (!response.ok) return { error: true, status: response.status, code: value.code ?? "daemon_rejected" };
+    if (!response.ok) {
+      const validation =
+        route === "/api/v1/org/browser-execution/browser-settings" && response.status === 422
+          ? { errors: value.errors, detail: value.detail }
+          : {};
+      return { error: true, status: response.status, code: value.code ?? "daemon_rejected", ...validation };
+    }
     return value;
   }
   async function runs(task) {
@@ -527,6 +533,36 @@ export function createBrowserLive({
     return server;
   }
   function register(app) {
+    // D3: site policy / grant edits require the same owner and CSRF proof as approvals.
+    for (const [route, upstream, methods] of [
+      ["/browser/site-policies", "/api/v1/browser/site-policies", ["PUT", "DELETE"]],
+      ["/browser/settings", "/api/v1/org/browser-execution/browser-settings", ["PATCH"]],
+    ]) {
+      app.use(route, express.json({ limit: "32kb" }), async (req, res, next) => {
+        if (route === "/browser/settings" && ["GET", "HEAD"].includes(req.method)) return next();
+        try {
+          const who = ownerKey(req);
+          if (!who.session) return problem(res, who.status, who.code);
+          const suffix = req.path === "/" ? "" : req.path;
+          if (suffix && (route !== "/browser/site-policies" || !/^\/[A-Za-z0-9._-]{1,64}$/.test(suffix)))
+            return problem(res, 404, "not_found");
+          if (!methods.includes(req.method) || (route === "/browser/site-policies" && !suffix))
+            return problem(res, 405, "method_not_allowed");
+          if (!mutation(req, who.session, req.body?.csrf)) return problem(res, 403, "csrf_failed");
+          const { csrf: _csrf, ...payload } = req.body ?? {};
+          const result = await api(req.method, upstream + suffix, req.method === "DELETE" ? undefined : payload);
+          if (result.error) {
+            if (route === "/browser/settings" && result.status === 422)
+              return res.status(422).json({ code: result.code, errors: result.errors, detail: result.detail });
+            return problem(res, result.status, result.code);
+          }
+          return res.json(result);
+        } catch {
+          return problem(res, 503, "celeris_unavailable");
+        }
+      });
+    }
+
     app.get("/browser/owner-session", (req, res) => {
       if (!auth.enabled) return problem(res, 403, "owner_unavailable");
       const session = auth.sessionKey(req);

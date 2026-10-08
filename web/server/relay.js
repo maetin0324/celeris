@@ -77,6 +77,12 @@ function redactLiveUrls(value) {
 }
 
 function browserRouteRequired(path, method) {
+  path = decodeURIComponent(path);
+  if (
+    method !== "GET" &&
+    (/^\/api\/v1\/browser\/site-policies(?:\/|$)/.test(path) || /^\/api\/v1\/org\/[^/]+\/browser-settings$/.test(path))
+  )
+    return true;
   if (/^\/api\/v1\/browser\/identities(?:\/|$)/.test(path)) return true;
   if (!/^\/api\/v1\/tasks\/[^/]+\/browser(?:\/|$)/.test(path)) return false;
   if (/\/browser\/live(?:\/|$)/.test(path)) return true;

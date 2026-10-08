@@ -304,7 +304,9 @@ fn rules_section(chat: &CosChatContext) -> String {
         .unwrap_or(chat.summary_through_seq);
     format!(
         "## 返事と操作 (how to reply and act)\n\
-         - 人への返事は普通の本文として書く。そのまま chat に流れる。\n\
+         - 人への返事は普通の本文として書く。そのまま chat に流れる。最初の 1〜3 行に結論（人が今何をすればよいか）を書く。\n\
+         - 人に頼む操作は web の画面名とボタン名で書く。curl・config・systemd の作業は人に求めず「運用者の作業」として分ける（skill `cos-operator` §10）。\n\
+         - この作業 dir に書いた file（md・画像・csv など）と、返事で path に触れた file は返事の添付になり、人は chat の中で開ける。長い手順は md に書き、返事では要点と file 名を示す。\n\
          - 結果ファイルの `actions`（旧 CoS の宣言）は**使わない**。この run では実行されず、出すとエラーのカードになる。\n\
          - task の起票・回答・決定・コメントなどの変更は `celerisctl` か `{api}/cos/operations` を通す（監査が付く）。\n\
          - 認証は環境変数 `${env}`（run credential）。値を表示・記録・返事・ファイルに書かない。\n\

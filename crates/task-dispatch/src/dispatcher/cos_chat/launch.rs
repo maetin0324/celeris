@@ -528,6 +528,13 @@ impl CosChatLaunch {
             max_wall_secs: cfg.max_wall_secs,
             max_retries: 0,
         };
+        let capture = super::workspace_files::WorkspaceCapture {
+            before: super::workspace_files::snapshot(&workspace),
+            workspace: workspace.clone(),
+            data_dir: cfg.data_dir.clone(),
+            db_path: cfg.db_path.clone(),
+            limits: cfg.attachment_limits,
+        };
         let task = chat.transient_task(&workspace, budget, now);
         let artifacts_dir = workspace.join(".taskd").join("chat-runs").join(run_id);
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
@@ -644,6 +651,7 @@ impl CosChatLaunch {
                     &session_row_id,
                     token,
                     artifacts_dir,
+                    capture,
                     wall,
                     idle,
                     grace,
@@ -703,6 +711,7 @@ async fn run_claimed(
     session_row_id: &str,
     token: String,
     artifacts_dir: PathBuf,
+    capture: super::workspace_files::WorkspaceCapture,
     wall: u64,
     idle: Duration,
     grace: Duration,
@@ -794,6 +803,26 @@ async fn run_claimed(
                 let _ = store.cos_run_credential_revoke(run_id, (clock)());
                 return;
             }
+        }
+    }
+    // ADR 2026-10-08-cos-workspace-files-in-chat D1: files written in the thread workspace and
+    // paths the reply mentions become attachments of the reply, before its terminal event.
+    if let Some(output) = current.output_message_id.as_deref() {
+        let text = finish
+            .final_text
+            .clone()
+            .or_else(|| super::workspace_files::message_text(&store, thread_id, output))
+            .unwrap_or_default();
+        if let Err(error) = super::workspace_files::attach(
+            &store,
+            &capture,
+            thread_id,
+            output,
+            run_id,
+            &text,
+            (clock)(),
+        ) {
+            tracing::warn!(%error, %run_id, "CoS workspace files not attached");
         }
     }
     let actions = task_worker::read_result_actions(&artifacts_dir);

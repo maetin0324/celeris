@@ -153,8 +153,18 @@ pub struct ChatMessage {
     pub run_id: Option<String>,
     pub attachment_ids: Vec<String>,
     pub cards: Vec<ChatCard>,
+    /// ADR 2026-10-08-cos-workspace-files-in-chat D2: files of the CoS thread workspace attached
+    /// to this reply, with the workspace-relative path the reply may mention. Empty for others.
+    #[serde(default)]
+    pub workspace_files: Vec<ChatWorkspaceFile>,
     pub created_at: String,
     pub updated_at: String,
+}
+/// One workspace file attached to a CoS reply (`path` is relative to the thread workspace).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ChatWorkspaceFile {
+    pub path: String,
+    pub attachment_id: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ChatRun {

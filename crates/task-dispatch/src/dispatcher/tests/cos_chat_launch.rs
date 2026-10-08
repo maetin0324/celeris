@@ -1413,3 +1413,158 @@ async fn cos_chat_run_e2e_send_stream_interrupt_stop_resume_and_restart() {
     assert_eq!(resumed_input.text, "after-restart");
     join(&mut d, &restarted_thread).await;
 }
+
+/// ADR 2026-10-08-cos-workspace-files-in-chat D1/D2: files the fake CoS writes in its thread
+/// workspace, and a pre-existing file its reply mentions, become attachments of the reply with
+/// their workspace paths; internal files, symlinks and unchanged unmentioned files do not.
+#[tokio::test]
+async fn cos_workspace_files_reply_gets_attachments_and_paths() {
+    let command = vec![
+        "sh".into(),
+        "-c".into(),
+        "cat >/dev/null; mkdir -p artifacts; \
+         printf '# 手順\\n\\n1. 「受信箱」を開く\\n' > artifacts/setup.md; \
+         printf 'a,b\\n1,2\\n' > table.csv; \
+         printf 'x' > .scratch; ln -s /etc/hostname link.md; \
+         printf '{\"type\":\"done\",\"summary\":\"結論: `%s` と notes.md を見て。\",\"evidence\":[]}\\n' \"$PWD/artifacts/setup.md\""
+            .into(),
+    ];
+    let (dir, store, mut d) = fixture(command, 2);
+    let t = thread(&store, "ws-files");
+    let workspace =
+        crate::dispatcher::cos_chat::attachments::workspace_dir(dir.path(), &t).expect("workspace");
+    std::fs::write(workspace.join("notes.md"), "# notes\n").expect("pre-existing note");
+    std::fs::write(workspace.join("old.txt"), "unchanged\n").expect("pre-existing file");
+    post(&store, &t, "manaba");
+    d.tick_cos_chat_launch();
+    let run = runs(&store, &t).pop().expect("claimed run");
+    join(&mut d, &t).await;
+    assert_eq!(
+        store.chat_run_get(&t, &run.id).expect("run").state,
+        ChatRunState::Completed
+    );
+    let reply = store
+        .chat_message_list(&t, &ChatMessageQuery::default())
+        .expect("messages")
+        .items
+        .into_iter()
+        .find(|m| Some(&m.id) == run.output_message_id.as_ref())
+        .expect("reply");
+    assert!(reply.text.contains("artifacts/setup.md"), "{}", reply.text);
+    let paths: Vec<&str> = reply
+        .workspace_files
+        .iter()
+        .map(|f| f.path.as_str())
+        .collect();
+    assert_eq!(paths, vec!["artifacts/setup.md", "notes.md", "table.csv"]);
+    let ids: Vec<String> = reply
+        .workspace_files
+        .iter()
+        .map(|f| f.attachment_id.clone())
+        .collect();
+    // attachment_ids without explicit metadata order are sorted by ULID, whose random
+    // suffix does not preserve upload order within a millisecond.
+    let mut attached_ids = reply.attachment_ids.clone();
+    let mut expected_ids = ids.clone();
+    attached_ids.sort();
+    expected_ids.sort();
+    assert_eq!(attached_ids, expected_ids);
+    let attachments = ChatAttachmentStore::open(
+        dir.path(),
+        &dir.path().join("celeris.db"),
+        Default::default(),
+    )
+    .expect("attachment store");
+    let md = attachments.get(&ids[0]).expect("md attachment");
+    assert_eq!(md.thread_id, t);
+    assert_eq!(md.original_name, "setup.md");
+    let mut body = String::new();
+    std::io::Read::read_to_string(
+        &mut attachments.read_verified(&ids[0]).expect("blob"),
+        &mut body,
+    )
+    .expect("read");
+    assert_eq!(body, "# 手順\n\n1. 「受信箱」を開く\n");
+    // The terminal message event (what the web receives over SSE) carries the files.
+    let events = store
+        .chat_events_page(
+            &t,
+            &ChatEventQuery {
+                after: None,
+                run_id: None,
+                limit: Some(200),
+            },
+        )
+        .expect("events")
+        .items;
+    let last_message = events
+        .iter()
+        .rev()
+        .find_map(|e| match &e.data {
+            ChatEventData::Message(m) if m.message.id == reply.id => Some(m.message.clone()),
+            _ => None,
+        })
+        .expect("message event");
+    assert_eq!(last_message.workspace_files, reply.workspace_files);
+}
+
+#[tokio::test]
+async fn cos_workspace_files_limits_do_not_fail_reply() {
+    use task_core::chat::attachments::ChatAttachmentLimits;
+    for (limits, expected) in [
+        (
+            ChatAttachmentLimits {
+                max_file_bytes: 3,
+                ..Default::default()
+            },
+            vec!["a.md", "c.csv"],
+        ),
+        (
+            ChatAttachmentLimits {
+                max_message_bytes: 4,
+                ..Default::default()
+            },
+            vec!["a.md", "c.csv"],
+        ),
+        (
+            ChatAttachmentLimits {
+                max_files_per_message: 1,
+                ..Default::default()
+            },
+            vec!["a.md"],
+        ),
+    ] {
+        let command = vec!["sh".into(), "-c".into(),
+            "cat >/dev/null; printf aa > a.md; printf bbbb > b.md; printf cc > c.csv; printf '%s\\n' '{\"type\":\"done\",\"summary\":\"a.md b.md c.csv\",\"evidence\":[]}'".into()];
+        let (_dir, store, mut d) = fixture(command, 1);
+        d.cos_chat_launch
+            .as_mut()
+            .expect("launch")
+            .config
+            .attachment_limits = limits;
+        let t = thread(&store, "limits");
+        post(&store, &t, "write");
+        d.tick_cos_chat_launch();
+        let run = runs(&store, &t).pop().expect("run");
+        join(&mut d, &t).await;
+        assert_eq!(
+            store.chat_run_get(&t, &run.id).expect("run").state,
+            ChatRunState::Completed
+        );
+        let reply = store
+            .chat_message_list(&t, &ChatMessageQuery::default())
+            .expect("messages")
+            .items
+            .into_iter()
+            .find(|m| Some(&m.id) == run.output_message_id.as_ref())
+            .expect("reply");
+        assert_eq!(
+            reply
+                .workspace_files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+    }
+}

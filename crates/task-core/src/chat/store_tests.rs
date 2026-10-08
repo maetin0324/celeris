@@ -1142,3 +1142,80 @@ fn chat_store_future_and_malformed_cursors_are_bad_requests() {
         .expect_err("limit");
     assert_eq!(status(e), 400);
 }
+
+/// ADR 2026-10-08-cos-workspace-files-in-chat D1/D2: workspace files pinned to a CoS reply appear
+/// in `attachment_ids` and `workspace_files`; only assistant replies and same-thread blobs.
+#[test]
+fn cos_workspace_files_attach_to_assistant_reply() {
+    let s = store();
+    let t = create(&s, "ws-files", "Workspace", 0);
+    let other = create(&s, "ws-other", "Other", 0);
+    let input = post(&s, &t.id, "c1", "手順を書いて", 1);
+    let run = claim(&s, &t.id, "run-ws", 2).expect("claimed");
+    let output = run.output_message_id.clone().expect("output message");
+    let md = "01M4CDNAZF1CDBZVHFDZ1JZJA1";
+    let foreign = "01M4CDNAZF1CDBZVHFDZ1JZJA2";
+    add_attachment(&s, md, &t.id);
+    add_attachment(&s, foreign, &other.id);
+    let files = vec![ChatWorkspaceFile {
+        path: "artifacts/setup.md".into(),
+        attachment_id: md.into(),
+    }];
+
+    assert_eq!(
+        status(
+            s.chat_message_attach_workspace_files(&t.id, &input.id, &files, at(3))
+                .expect_err("user message")
+        ),
+        422
+    );
+    let wrong = vec![ChatWorkspaceFile {
+        path: "x.md".into(),
+        attachment_id: foreign.into(),
+    }];
+    assert_eq!(
+        status(
+            s.chat_message_attach_workspace_files(&t.id, &output, &wrong, at(3))
+                .expect_err("other thread")
+        ),
+        409
+    );
+
+    let message = s
+        .chat_message_attach_workspace_files(&t.id, &output, &files, at(3))
+        .expect("attach");
+    assert_eq!(message.attachment_ids, vec![md.to_string()]);
+    assert_eq!(message.workspace_files, files);
+    // Idempotent, and the run's terminal message event carries the files.
+    s.chat_message_attach_workspace_files(&t.id, &output, &files, at(4))
+        .expect("repeat");
+    s.chat_run_finish(
+        "run-ws",
+        ChatRunState::Completed,
+        Some("`artifacts/setup.md` を見て"),
+        None,
+        at(5),
+    )
+    .expect("finish");
+    let listed = s
+        .chat_message_list(&t.id, &ChatMessageQuery::default())
+        .expect("list")
+        .items
+        .into_iter()
+        .find(|m| m.id == output)
+        .expect("reply");
+    assert_eq!(listed.attachment_ids, vec![md.to_string()]);
+    assert_eq!(listed.workspace_files, files);
+    let json = serde_json::to_value(&listed).expect("json");
+    assert_eq!(json["workspace_files"][0]["path"], "artifacts/setup.md");
+    let expires: Option<String> = s
+        .lock()
+        .expect("lock")
+        .query_row(
+            "SELECT expires_at FROM chat_attachments WHERE id=?1",
+            [md],
+            |r| r.get(0),
+        )
+        .expect("row");
+    assert_eq!(expires, None, "a pinned blob is not an orphan");
+}

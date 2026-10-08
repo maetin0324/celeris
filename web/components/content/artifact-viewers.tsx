@@ -71,10 +71,13 @@ export function TextViewer({
   href,
   name,
   chunkBytes = TEXT_CHUNK_BYTES,
+  ranged = true,
 }: {
   href: string;
   name: string;
   chunkBytes?: number;
+  /** false: 範囲取得の無い URL（チャットの添付の content。query を拒む）。1 回で全体を読む。 */
+  ranged?: boolean;
 }) {
   const [state, setState] = useState<TextState>({ text: "", loaded: 0 });
   const [loading, setLoading] = useState(true);
@@ -91,7 +94,10 @@ export function TextViewer({
       if (offset === 0) decoder.current = new TextDecoder("utf-8");
       setLoading(true);
       setError(false);
-      fetch(`${href}?offset=${offset}&length=${chunkBytes}`, { signal: current.signal, credentials: "same-origin" })
+      fetch(ranged ? `${href}?offset=${offset}&length=${chunkBytes}` : href, {
+        signal: current.signal,
+        credentials: "same-origin",
+      })
         .then(async (response) => {
           // offset が末尾ちょうどを越えた（file が縮んだ）ときは、読めた所までで終える。
           if (response.status === 416) return { body: new Uint8Array(), size: offset };
@@ -104,7 +110,7 @@ export function TextViewer({
         .then(({ body, size }) => {
           if (current.signal.aborted) return;
           const loaded = offset + body.length;
-          const total = size ?? (body.length < chunkBytes ? loaded : undefined);
+          const total = size ?? (!ranged || body.length < chunkBytes ? loaded : undefined);
           const more = total === undefined || loaded < total;
           // 範囲の境目で UTF-8 の文字が割れても、続きの範囲と合わせて復号する（stream）。
           const chunk = decoder.current.decode(body, { stream: more });
@@ -117,7 +123,7 @@ export function TextViewer({
           setError(true);
         });
     },
-    [href, chunkBytes],
+    [href, chunkBytes, ranged],
   );
 
   useEffect(() => {

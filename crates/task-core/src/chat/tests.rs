@@ -17,7 +17,7 @@ fn thread() -> Value {
 fn message() -> Value {
     json!({"id":"m","thread_id":"t","seq":1,"role":"user","text":"直して",
       "state":"queued","client_message_id":"c","reply_to_id":null,"run_id":null,
-      "attachment_ids":["a"],"cards":[],"created_at":"2026-10-05T00:00:00Z",
+      "attachment_ids":["a"],"cards":[],"workspace_files":[],"created_at":"2026-10-05T00:00:00Z",
       "updated_at":"2026-10-05T00:00:00Z"})
 }
 fn run() -> Value {
@@ -42,6 +42,17 @@ fn chat_model_adr_examples_roundtrip() {
       "preview_url":"/api/v1/chat/attachments/a/preview",
       "download_url":"/api/v1/chat/attachments/a/content","expires_at":null}));
 }
+#[test]
+fn chat_model_legacy_message_defaults_workspace_files() {
+    let mut legacy = message();
+    legacy
+        .as_object_mut()
+        .expect("message")
+        .remove("workspace_files");
+    let decoded: ChatMessage = serde_json::from_value(legacy).expect("legacy message");
+    assert!(decoded.workspace_files.is_empty());
+}
+
 #[test]
 fn chat_model_event_data_roundtrip() {
     let data = [

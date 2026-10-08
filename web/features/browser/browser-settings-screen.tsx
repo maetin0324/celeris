@@ -266,11 +266,11 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
           {APPROVAL_CHOICES.map((choice) => {
             const checked = approvalActions.includes(choice.action);
             return (
-              <li key={choice.action} className="flex min-w-0 items-start gap-3">
+              <li key={choice.action} className="flex min-w-0 items-start gap-1">
                 <input
                   id={`${id}-approval-${choice.action}`}
                   type="checkbox"
-                  className="mt-1 size-5 shrink-0 accent-primary"
+                  className="size-11 shrink-0 accent-primary"
                   checked={checked}
                   onChange={(event) =>
                     setApprovalActions(

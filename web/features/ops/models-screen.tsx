@@ -101,7 +101,7 @@ function OverrideForm({
       }}
     >
       <label className="flex min-h-11 items-center gap-2 text-body text-foreground">
-        <input type="checkbox" className="size-5" checked={disabled} onChange={(e) => setDisabled(e.target.checked)} />
+        <input type="checkbox" className="size-11" checked={disabled} onChange={(e) => setDisabled(e.target.checked)} />
         無効化（routing の対象から外す）
       </label>
       <div className="min-w-0">

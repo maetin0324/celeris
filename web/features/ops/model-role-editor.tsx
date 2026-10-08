@@ -217,7 +217,7 @@ export function RoleMembershipEditor({
                         <label className="flex min-h-11 min-w-11 items-center justify-center">
                           <input
                             type="checkbox"
-                            className="size-5"
+                            className="size-11"
                             aria-label={`${m.source} ${m.model_id} ${tier}`}
                             checked={!!member}
                             disabled={busy || denied}
@@ -244,6 +244,7 @@ export function RoleMembershipEditor({
                             min={0}
                             max={4294967295}
                             aria-label={`${m.source} ${m.model_id} ${tier} 優先度`}
+                            className="w-16 shrink-0"
                             value={member.priority}
                             disabled={busy || denied}
                             onChange={(e) => {

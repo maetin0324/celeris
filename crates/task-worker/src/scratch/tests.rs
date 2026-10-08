@@ -772,13 +772,26 @@ fn is_empty_dir(p: &Path) -> bool {
 
 /// reflink できない tmp（tmpfs / ext 系）では、seed があっても共有を確かめられず空の target に戻る。残骸は無い。
 #[test]
-fn reflink_unavailable_tmp_falls_back_to_empty_target() {
+fn reflink_unavailable_falls_back_to_empty_target() {
     let tmp = tempfile::tempdir().unwrap();
     let pool = Pool::new(tmp.path());
     write_seed(&pool, MANIFEST);
     let owner = Owner::work_unit("T1", "W1");
     let none = |_: &AdoptCandidate| None;
-    let a = allocate(&pool, &seed_req(&owner, &none)).unwrap();
+    // TMPDIR may be on btrfs (including a run's scratch directory). Inject the
+    // unsupported result instead of assuming that temporary files cannot share extents.
+    let unavailable = |_: &Path| Ok(false);
+    let ops = SeedCopyOps {
+        copy: &cp_reflink_auto,
+        is_shared: &unavailable,
+    };
+    let a = allocate_with_seed(
+        &pool,
+        &seed_req(&owner, &none),
+        &SeedPolicy::unchecked(),
+        &ops,
+    )
+    .unwrap();
     let TargetOrigin::Empty {
         reason: Some(reason),
     } = &a.origin

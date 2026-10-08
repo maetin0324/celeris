@@ -17,6 +17,8 @@ pub mod browser_identity;
 pub mod browser_isolation;
 /// ADR-0100 D2: browser の live proxy（P3-B）の ACL と記録の規則。
 pub mod browser_live;
+/// ADR 2026-10-08-browser-prod-enablement D2: browser 実行の前提（適合台帳）の code と人向けの文。
+pub mod browser_prerequisite;
 pub mod browser_store;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;

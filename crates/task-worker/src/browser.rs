@@ -872,8 +872,7 @@ pub async fn run_with_candidates(
     {
         return adapter.run(req, run_id, limits, sink).await;
     }
-    let record_path = std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE")
-        .map(PathBuf::from)
+    let record_path = conformance_record_path()
         .ok_or_else(|| AdapterError::Other("browser conformance record unavailable".into()))?;
     run_with_executable_candidates_record(
         adapter,
@@ -949,7 +948,7 @@ const OBSERVATION_UPSTREAM_ACTIONS: [&str; 4] = ["download", "gettext", "screens
 
 /// Public (non-sensitive) capabilities the existing-harness backends declare. Sensitive
 /// capabilities remain undeclared until P4-A/B record real conformance.
-fn public_capabilities() -> BTreeSet<Capability> {
+pub(crate) fn public_capabilities() -> BTreeSet<Capability> {
     use Capability as C;
     [
         C::Navigate,
@@ -982,9 +981,12 @@ fn existing_backends(declared: &BTreeSet<Capability>) -> Vec<BackendDescriptor> 
 /// Adapter ids that can carry the browser capability (ADR-0103 D2).
 pub const BROWSER_BACKEND_IDS: [&str; 3] = ["acp", "claude-code", "browser-specialist"];
 
-/// The operator-supplied runner ledger (`CELERIS_BROWSER_CONFORMANCE_FILE`), if configured.
+/// The runner ledger: `CELERIS_BROWSER_CONFORMANCE_FILE` (test/dev override) first, then the
+/// path the daemon configured (ADR 2026-10-08-browser-prod-enablement D1.4).
 pub fn conformance_record_path() -> Option<PathBuf> {
-    std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").map(PathBuf::from)
+    std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE")
+        .map(PathBuf::from)
+        .or_else(|| crate::browser_ledger::configured_path().map(Path::to_path_buf))
 }
 
 /// ADR-0109 D1: adapter ids whose runner-recorded conformance certifies every declared public
@@ -1092,10 +1094,27 @@ fn isolated_runtime_ready(
 struct ConformanceLedger {
     schema: u32,
     source: String,
+    /// ADR 2026-10-08-browser-prod-enablement D1.2: どの release・agent-browser の版で作ったか。
+    /// 旧台帳には無い（`stale_release` の判定で古いと扱う）。
+    #[serde(default)]
+    generated_for: Option<crate::browser_ledger::GeneratedFor>,
     results: Vec<ConformanceResult>,
 }
 
 fn load_conformance(path: &Path) -> Result<BTreeMap<String, ConformanceResult>, AdapterError> {
+    load_ledger(path).map(|(results, _)| results)
+}
+
+/// 台帳の結果と `generated_for`。読めない・壊れた台帳は fail closed。
+pub(crate) fn load_ledger(
+    path: &Path,
+) -> Result<
+    (
+        BTreeMap<String, ConformanceResult>,
+        Option<crate::browser_ledger::GeneratedFor>,
+    ),
+    AdapterError,
+> {
     let metadata = std::fs::symlink_metadata(path)
         .map_err(|_| AdapterError::Other("browser conformance record unavailable".into()))?;
     if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 64 * 1024 {
@@ -1119,7 +1138,7 @@ fn load_conformance(path: &Path) -> Result<BTreeMap<String, ConformanceResult>, 
             ));
         }
     }
-    Ok(results)
+    Ok((results, ledger.generated_for))
 }
 
 /// `run` with an explicit substrate and credential broker (integration tests use fakes).
@@ -1139,8 +1158,8 @@ pub async fn run_with_executable(
     {
         return adapter.run(req, run_id, limits, sink).await;
     }
-    let record_path = match std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE") {
-        Some(path) => PathBuf::from(path),
+    let record_path = match conformance_record_path() {
+        Some(path) => path,
         None => {
             #[cfg(test)]
             {

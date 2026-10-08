@@ -16,6 +16,8 @@ export const EVENT_KINDS = [
   "browser_updated",
   "browser_wait_opened",
   "browser_wait_resolved",
+  "browser_prerequisite_blocked",
+  "browser_prerequisite_resumed",
   "cluster_job_wait_started",
   "cluster_job_wait_polled",
   "cluster_job_wait_finished",

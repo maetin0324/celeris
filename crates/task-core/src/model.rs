@@ -1120,6 +1120,17 @@ pub enum Event {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         actor_id: Option<String>,
     },
+    /// ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳・task policy）が無いので
+    /// task を止めた。`message` は code ごとの固定の人向けの文（path・秘密は載せない）。止まっている間は再追記しない。
+    BrowserPrerequisiteBlocked {
+        code: crate::browser_prerequisite::BrowserPrerequisiteCode,
+        message: String,
+    },
+    /// ADR 2026-10-08-browser-prod-enablement D2: 前提が揃い、止めていた task を `ready` に戻した。
+    /// `code` は止めたときの code。
+    BrowserPrerequisiteResumed {
+        code: crate::browser_prerequisite::BrowserPrerequisiteCode,
+    },
     /// ADR-0090 D3: worker の run が `result.json` の `wait` でクラスタ job の終了待ちに入った（`state = waiting`）。
     /// `cluster_job_waits` の行は同じトランザクションで作る（`cluster_job::apply_event_tx`）。
     ClusterJobWaitStarted {

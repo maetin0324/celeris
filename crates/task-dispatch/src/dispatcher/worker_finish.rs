@@ -366,6 +366,9 @@ impl Dispatcher {
         // ADR-0070 D3（Phase 116）: `Trigger::InfraRequeue` を選んだときだけ `Some(n)`（n 回目の
         // インフラ再試行）。`Ok(outcome) =>` の中で `self.infra_backoff` のバックオフ期限を立てるのに使う。
         let mut infra_requeue_n: Option<u32> = None;
+        // ADR 2026-10-08-browser-prod-enablement D2: worker が台帳由来の失敗を返した atomic の run は
+        // infra 再試行に回さず `BrowserPrereqBlock` で止める（同じトランザクションで残す event）。
+        let mut browser_prereq_event: Option<Event> = None;
         // ADR-0072 D7（Phase E1）: この run の構造化した終わり方（`WorkerFinished.end` に写す）。
         let mut run_end: Option<task_core::RunEnd> = None;
         // ADR-0072 D9: `Terminal::Yielded` の生の checkpoint JSON（`result.json` の `yield`）。
@@ -543,6 +546,28 @@ impl Dispatcher {
                 // `max_infra_retries` までバックオフして再試行する。上限に達したときだけ
                 // `WorkerError{retryable:false}`（無条件に `Failed`）で打ち切り、`"infra failure ×N"`
                 // を付ける（D1 の失敗分類がこの接頭辞を見る）。
+                None if current_wu.is_none()
+                    && task_core::browser_prerequisite::BrowserPrerequisiteCode::from_worker_error(
+                        &e.to_string(),
+                    )
+                    .is_some() =>
+                {
+                    let code =
+                        task_core::browser_prerequisite::BrowserPrerequisiteCode::from_worker_error(
+                            &e.to_string(),
+                        )
+                        .unwrap_or(task_core::browser_prerequisite::BrowserPrerequisiteCode::Missing);
+                    browser_prereq_event = Some(Event::BrowserPrerequisiteBlocked {
+                        code,
+                        message: code.message().to_string(),
+                    });
+                    (
+                        Trigger::BrowserPrereqBlock,
+                        format!("browser_prerequisite: {}: adapter: {e}", code.as_str()),
+                        None,
+                        ProviderOutcome::Ok,
+                    )
+                }
                 None => {
                     let infra_n = consecutive_infra_requeues(&self.store.events_for(task_id)?) + 1;
                     if infra_n <= self.config.max_infra_retries {
@@ -1335,6 +1360,9 @@ impl Dispatcher {
             }
         }
         if let Some(ev) = committed_event {
+            events.push(ev);
+        }
+        if let Some(ev) = browser_prereq_event.take() {
             events.push(ev);
         }
         // ADR-0074 D4（Phase F3 quota）: この run の quota 消費を見積もる（`WorkerFinished` と同じ

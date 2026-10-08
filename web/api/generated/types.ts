@@ -429,6 +429,8 @@ export type BrowserPolicyBinding = {
   "revision": number;
 };
 
+export type BrowserPrerequisiteCode = "ok" | "missing" | "invalid" | "stale_release" | "stale_agent_browser" | "agent_browser_missing" | "no_conformant_backend" | "ledger_lacks_credential" | "browser_policy_missing";
+
 export type BrowserRegisteredBody = {
   "attestation": HumanAttestation;
   "expected_version": number;
@@ -2070,6 +2072,13 @@ export type Event = {
   "type": "browser_wait_resolved";
   "version": number;
   "wait_id": string;
+} | {
+  "code": BrowserPrerequisiteCode;
+  "message": string;
+  "type": "browser_prerequisite_blocked";
+} | {
+  "code": BrowserPrerequisiteCode;
+  "type": "browser_prerequisite_resumed";
 } | {
   "type": "cluster_job_wait_started";
   "wait": ClusterJobWait;

@@ -2067,6 +2067,21 @@
       ],
       "type": "object"
     },
+    "BrowserPrerequisiteCode": {
+      "description": "台帳の状態（D1.4 の表）。`Ok` 以外は browser task を dispatch の前で止める。",
+      "enum": [
+        "ok",
+        "missing",
+        "invalid",
+        "stale_release",
+        "stale_agent_browser",
+        "agent_browser_missing",
+        "no_conformant_backend",
+        "ledger_lacks_credential",
+        "browser_policy_missing"
+      ],
+      "type": "string"
+    },
     "BrowserRegisteredBody": {
       "additionalProperties": false,
       "description": "`POST .../registered` の本文。",
@@ -9920,6 +9935,44 @@
             "state",
             "code",
             "version"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳・task policy）が無いので\ntask を止めた。`message` は code ごとの固定の人向けの文（path・秘密は載せない）。止まっている間は再追記しない。",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "browser_prerequisite_blocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2: 前提が揃い、止めていた task を `ready` に戻した。\n`code` は止めたときの code。",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "type": {
+              "const": "browser_prerequisite_resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
           ],
           "type": "object"
         },

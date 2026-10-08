@@ -210,6 +210,21 @@ fn expected_simple(kind: TaskKind, status: Status, trigger: &Trigger) -> Expecte
                 expect_err()
             }
         }
+        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ちと再開。
+        Trigger::BrowserPrereqBlock => {
+            if matches!(status, Status::Ready | Status::Running) {
+                expect_ok(Status::Blocked)
+            } else {
+                expect_err()
+            }
+        }
+        Trigger::BrowserPrereqResume => {
+            if status == Status::Blocked {
+                expect_ok(Status::Ready)
+            } else {
+                expect_err()
+            }
+        }
         _ => unreachable!("handled by retry-aware helper"),
     }
 }
@@ -265,6 +280,9 @@ fn table_simple_triggers_full_cross_product() {
         // ADR-0090 D2: クラスタ job の durable wait と再開（attempts 据え置き）。
         Trigger::ClusterJobWait,
         Trigger::ClusterJobResume,
+        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ちと再開（attempts 据え置き）。
+        Trigger::BrowserPrereqBlock,
+        Trigger::BrowserPrereqResume,
     ];
 
     let mut count = 0usize;

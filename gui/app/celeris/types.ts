@@ -416,6 +416,15 @@ export type Event =
       wait_id: string;
     }
   | {
+      code: BrowserPrerequisiteCode;
+      message: string;
+      type: "browser_prerequisite_blocked";
+    }
+  | {
+      code: BrowserPrerequisiteCode;
+      type: "browser_prerequisite_resumed";
+    }
+  | {
       type: "cluster_job_wait_started";
       wait: ClusterJobWait;
     }
@@ -1163,6 +1172,19 @@ export type IntegrationRepairExhaustReason =
   | "worktree_unavailable";
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
+/**
+ * 台帳の状態（D1.4 の表）。`Ok` 以外は browser task を dispatch の前で止める。
+ */
+export type BrowserPrerequisiteCode =
+  | "ok"
+  | "missing"
+  | "invalid"
+  | "stale_release"
+  | "stale_agent_browser"
+  | "agent_browser_missing"
+  | "no_conformant_backend"
+  | "ledger_lacks_credential"
+  | "browser_policy_missing";
 /**
  * 1 つの job の状態（scheduler の文字を正規化したもの）。
  */

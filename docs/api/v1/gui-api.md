@@ -778,10 +778,10 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 拒否（`reason` = `unknown` / `mismatch` / `revoked` / `expired` / `reuse` / `limit`）。task に属さず、疑似 task
 `trusted_device::trusted_device_event_task_id()` の列に入る。端末の秘密も hash も載せない。拒否の `device_id` は実在する id のときだけ。
 
-`types` の語彙は `task_api::query::EVENT_TYPES`（73 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
+`types` の語彙は `task_api::query::EVENT_TYPES`（76 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
-`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
+`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`browser_prerequisite_blocked`、`browser_prerequisite_resumed`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
 `cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`target_sweep_ran`、`routing_decided`、
 `checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
 `execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、
@@ -3091,6 +3091,8 @@ task の **subtree の一時停止**。本文は `{}` か空（未知の欄は 4
 `TaskSummary`（`GET /tasks` の `items[]`）には `is_root_task` と `paused`（この task 自身の `paused_at` の有無）、`TaskDetail`（`GET /tasks/{id}`）には `is_root_task` と `paused_by?`（dispatch を止めている task: 自分か `paused_at` を持つ一番近い祖先）が付く。`Task.paused_at` は `Task` の JSON にも出る（無ければ省略）。
 
 ADR-0090 D5: `TaskDetail.cluster_job_wait?: ClusterJobWaitView` — この task が待っているクラスタ job（`cluster_job_waits` の `waiting` の行。無ければ省略）。欄は `wait_id`、`work_unit_id?`（WU の run の wait）、`run_id`、`cluster`、`scheduler`（`pbs` | `slurm`）、`jobs[]`（`ClusterJobStatus`: `job_id`、`state` = `queued` | `held` | `running` | `exiting` | `finished` | `gone` | `unknown`、`exit_status?`、`raw_state?`。申告の順、まだ poll していない job は `unknown`）、`status_line`（`42634 (R) 42635 (Q)`）、`poll_secs`、`created_at`、`deadline`、`last_polled_at?`、`next_poll_at?`（`last_polled_at + poll_secs`）、`summary?`。wait の間の task は `blocked`（直前の遷移の reason `waiting_for_cluster_jobs`）で、受信箱の質問には出ず、`POST /tasks/{id}/answer` は 409 `invalid_transition`（trigger `cluster_job_wait_pending`）。すべての job が終われば daemon が `cluster_job_resume` で `ready` に戻す。上限（`deadline`）を過ぎると wait は `timed_out` になり、質問（延長／job の取り消し／取り下げ）が受信箱に出る。v2 / v3 の計画の unit の wait では task は `ready` のままで、unit が `blocked(cluster_jobs)`（`WorkUnitBlockedReason::ClusterJobs`）になる。`runs[].status` / `WorkerFinished.end` に `waiting` が加わった。events の `types` は `cluster_job_wait_started` / `cluster_job_wait_polled`（状態が変わった poll だけ）/ `cluster_job_wait_finished`（`state` = `satisfied` | `timed_out` | `cancelled`）を受ける。
+
+ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いとき、browser task は dispatch の前に `blocked`（直前の遷移の reason `browser_prerequisite`、attempts 不変）になり、`browser_prerequisite_blocked`（`code` = `missing` | `invalid` | `stale_release` | `stale_agent_browser` | `agent_browser_missing` | `no_conformant_backend` | `ledger_lacks_credential` | `browser_policy_missing`、`message` = 人向けの固定の文。path・秘密は載せない）を 1 回残す。worker が台帳を読めなかった run も infra_requeue にせず同じく止める。台帳が揃うと daemon が `browser_prerequisite_resolved` で `ready` に戻し、`browser_prerequisite_resumed`（`code` は止めたときの code）を残す。
 
 #### 3.125.10 `GET /tasks/{id}/task-tree?root=` → 200 `TaskTreeView`
 

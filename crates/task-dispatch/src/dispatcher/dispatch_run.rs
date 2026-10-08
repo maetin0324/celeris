@@ -184,6 +184,14 @@ impl Dispatcher {
             }
             self.infra_backoff.remove(&task.id);
         }
+        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いなら、lease・worker の
+        // 前に理由つきで止める（worker 起動後の infra_requeue を繰り返さない）。
+        if !second_pass
+            && Self::browser_prereq_applies(&task, is_planner_dispatch)
+            && self.browser_prereq_hold(&task)?
+        {
+            return Ok(false);
+        }
         // ADR-0130 D3: 同じ repo で走っている run と expected write-set が強く重なれば、起動を次 tick に回す
         // （lease・遷移・attempts の前。見送りは `Ok(false)` だけ）。planner run は書き込みを予約しない。
         let run_key = RunKey {

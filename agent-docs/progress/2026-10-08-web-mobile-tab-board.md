@@ -1,6 +1,8 @@
 ---
+title: web/ SPA スマホ版の画面下タブの 3 列目をボードにする
 tasks: [01M4CRGVA0Z9T2SQ2QR4XFR6H5]
 status: done
+updated: 2026-10-08
 completed: 2026-10-08
 ---
 

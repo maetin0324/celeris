@@ -517,3 +517,49 @@ worker 一般の `Usage` と既存パーサは変えず、CoS の `session_usage
 `cos_chat_billed_input_codex_cached_input_is_not_added_twice`・`cos_chat_billed_input_claude_adds_external_cache_tokens`・`cos_chat_billed_input_unknown_cache_definition_uses_input_only`（dispatcher）で会計と context/fallback の分離を確認する。
 
 `cos_chat_run_rollover_measure_prefers_context_occupancy`・`…_falls_back_for_legacy_rows`（`sessions/cos_chat/tests.rs`）、`cos_chat_run_session_touch_separates_occupancy_from_cumulative`（task-core）、`cos_chat_run_rollover_cache_heavy_run_is_not_underestimated`・`…_occupancy_is_replaced_not_accumulated`・`…_unknown_occupancy_falls_back_to_cumulative`（dispatcher 結合）、`context_tokens_is_last_main_thread_call_not_result_sum`・`…_unknown_without_assistant_usage`（task-worker）。実機（LLM 呼び出し）での占有の実測は本葉では行っていない（「不明」）。
+
+## 付記: resume 時の差分配送（cos-chat-prompt-cache T6、2026-10-08）
+
+D2「再開中は未配送 seq 以後の差分と現在の規則だけを渡す」の実装。従来の `launch.rs` は session_mode に関係なく `history_since_summary` を呼び、resume でも summary と未要約履歴を毎回渡していた（prompt-cache ADR の H3）。
+
+### D1 配送 cursor
+
+- migration `0063_cos_chat_delivered_through`（schema 63）で `node_sessions.delivered_through_seq INTEGER NOT NULL DEFAULT 0` を足す。「この session に配送済みの thread seq の水位」。0 は不明（既存行・まだ completed の run が無い）。
+- 上げるのは `run_claimed` の終端の後だけ（`launch::advance_delivery_cursor`）。DB に記録された run の状態が `completed` のときに、run の session 行（`chat_runs.session_row_id`。fresh 再試行なら新しい行）を `MAX(cursor, 入力の seq)` に上げる。入力と同じ run の返事（claim 時に挿入）の間に user 以外の発言が無ければ返事の seq まで上げる（間の user 発言は待ち行列の入力で、cursor に関係なく入力として配送される）。間に system などがあれば入力の seq で止め、次の resume で再配送する。`store.chat_session_set_delivered_through` は下げない・retire 済みの行は動かさない。
+- 試験 `cos_chat_resume_delta_cursor_covers_the_reply_only_over_queued_user_messages`・`…_cursor_stops_at_the_input_before_an_unseen_message`（launch/tests.rs）、`…_cursor_rises_only_on_live_row_and_is_independent_of_summary`（task-core）。
+
+### D2 resume で差分、それ以外は全文
+
+- `rollover::choose_session` が `SessionChoice.delta_from` を決める: mode が resumed、cursor > 0、かつ前回の run（この session の最新の終端 run）が再起動後の回収（`control::ORPHAN_TAKEOVER_REASON`）で終わっていないときだけ `Some(cursor)`。
+- `rollover::history_for_run`: `Some(cursor)` なら summary を省き、cursor より後で入力より前の発言だけを `unsummarized` に入れる（summary の水位は checkpoint の期待値に要るので thread の値をそのまま渡す）。`None` なら従来の summary＋未要約履歴。
+- worker protocol `CosChatContext.delivered_through_seq: Option<i64>`（追加のみ・省略可。`docs/protocol/worker-protocol.schema.json` を再生成）。worker の prompt は、ある時「## これまでの要約」を「要約は session 内。水位 seq N。」の 1 行にし、「## 前回の配送以後の発言 (seq a..=b)」を出す。入力・規則（返事と操作・checkpoint・履歴 API）は従来どおり毎回渡す。
+- 全文の場合: new、fresh（key 変更・cache 消失・context 枯渇・token rollover。新しい行の cursor は 0）、resume 拒否後の fresh 再試行（`prepare_fresh_retry` が `delivered_through_seq = None` にして全文を組み直す）、再起動後の回収、cursor 0。
+- 試験: `cos_chat_resume_delta_resumed_run_gets_only_messages_after_the_cursor`・`…_fresh_reasons_deliver_the_full_text`（4 理由）・`…_refused_resume_retries_fresh_with_the_full_text`・`…_restart_recovery_delivers_the_full_text`（harness_tests.rs）、`cos_chat_resume_delta_prompt_omits_summary_and_names_the_cursor`（task-worker）。
+
+### D3 入力の必達と失敗時
+
+- 入力（割り込み・待ち行列・回収の継続）は `inputs` で cursor に関係なく渡す。配送記録は従来どおり `input_message_id`・`message.state`、checkpoint の水位 `summary_through_seq` は別管理。cursor より前の seq の待ち入力（割り込みが追い越した発言）も入力として届く（`…_interrupt_and_queued_inputs_are_always_delivered`）。
+- completed にならなかった run（failed・interrupted・stopped・終端前の process 消失）は cursor を動かさない。次の resume は古い cursor から再配送する（再配送は許し、欠落は許さない。`…_failed_run_keeps_the_cursor_and_redelivers`）。checkpoint の水位と cursor は互いに動かさない（`…_checkpoint_watermark_and_cursor_are_independent`）。
+
+### 計測（隔離 live、claude-code・claude_oauth、同一 thread 10 turn × before/after 各 2 回）
+
+**旧計測（account 不明。今回の固定計測とは別の参考値）**: `scripts/dev/cos-chat-bench.sh … same-thread`（S2 だけを流す mode を追加）。t2〜t10 合計の 2 回平均: 非 cache input（`Usage.input_tokens`）50 → 50（±0%、turn ごとに同じ 4〜6）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%。after は turn によらず約 4.8 KB で一定）。claude-code では prompt は cache write に入り、非 cache input は構造上ほぼ一定なので、この指標では改善が出ない。計測時は CoS が checkpoint を書かず summary が空だった（既知の不具合 4）ので、before の再送は未要約履歴だけだった。summary がある thread の差はこれより大きい見込み（未計測）。codex・acp・pi は未計測（不明）。
+
+### 判定指標（人の決定、2026-10-08）
+
+統合の判定は 2026-10-08 の人の決定（(a) の方向性）で「非 cache input・cache write・prompt bytes の before/after が記録され、cache write と prompt bytes のどちらかが改善している」に変更された。旧計測は cache write −13.6%、prompt bytes −21.1% だった。今回の明示account固定再計測でも改善を確認した（下段）。非 cache input は判定指標に採用しない（claude-code では prompt が cache write に入り非 cache input は turn ごとの 4〜6 で構造上一定のため、改善が出ない）。
+
+
+### subscription account 固定再計測（2026-10-08、lab-bench）
+
+- 人の回答「claude_max_labは再ログインしましたが、CoSはlabアカウント固定である必要はないです。personalアカウントのbudgetも使用して構いません」に従い、account 限定を変更した。更新済み lab は2ターン成功後、週間利用率98%（選択上限97%）で選択できなくなったため、本計測4セットは `claude_max_personal` に明示固定した。lab の名前への付け替えはしていない。
+- 計測 account の受け入れ条件は、人の上記回答を出典とする許可集合 `{claude_max_lab, claude_max_personal}` から1 accountを明示固定し、各 set 内で一致すること。全 run が `llm_source=claude_oauth`・`state=completed` で、各 `summary.meta.account_id` が set の実 account と一致することを確認する。今回の4 set 40 run はすべて `claude_max_personal` でこの条件を満たす。既存の実測を再検証して使用し、account_id の書き換え・再計測は行わない。
+- `COS_CHAT_BENCH_LAB_DIR` は従来どおり basename `claude_max_lab` 以外を拒否する。追加した `COS_CHAT_BENCH_ACCOUNT_DIR` は明示した subscription account の実 basename を保持する。両指定の同時使用・無効な account id を拒否。`.credentials.json` だけを隔離 data dir の `accounts/<account_id>/` に mode 600 で複製し、provider の `account_pool = true`、CoS の `account_id`、`accounts.claude_dir` を設定する。session cache も `CLAUDE_CONFIG_DIR=<data dir>/claude-config` に隔離する。
+- before は開始時の main `10566e5bc7666a18c0850fabb1c177aef4472483` を `$TMPDIR` に `git archive` して debug build。after は branch `5e65a547521aff0ce8b389e73a8b27df0983d29f` の debug build（製品コードは merge-main `fe5d609d` と同じ）。渡された `CARGO_TARGET_DIR` と compiler 設定を使用。台本と bench script は両方とも `5e65a547521aff0ce8b389e73a8b27df0983d29f`。port 17957、一時DB、隔離 data dir で計測した。
+- main は計測中に `fb300299` へ進んだ。before の呼び手が記録した `summary.meta.commit` はその可変 ref だが、実バイナリは開始時の archive build のまま。実出所はバイナリ SHA-256 で固定し、`summary.meta.binary_source_sha` と `binary-provenance.json` に記録。元の `meta.commit` は監査のため残した。
+- before → before-2 → after → after-2 と、成功した直前の隔離認証コピーを引き継いだ。**40 runすべて completed・account_id=claude_max_personal・llm_source=claude_oauth**。各 `summary.meta.account_id` も `["claude_max_personal"]`。account_id は実際のAPI run行から取得し、設定値で補完していない。全4セットでt1はnew、t2〜t10はresumed。beforeのDBには配送cursor列がなく、afterには存在することを確認。
+- t2〜t10 **合計の2回平均**: 非 cache input 51.0 → 54.0（+5.88%）、cache write 40,377.0 → 36,487.5（-9.63%）、prompt bytes 75,254.5 → 64,258.5（-14.61%）。判定: **改善あり**（cache write か prompt bytes の改善という人の指定条件を満たす）。統合は delivery の後続段に委ね、本 run では main への統合・本番操作を行っていない。
+- 最初のpersonal試行は host の session cache が読取専用で全fresh_after_refusalとなり、afterの依存ビルドもmainのschema62を再利用していたため無効。session cache隔離と変更対象crateのclean build後に4セットを再実行した。same-threadはfailed turnに加え、t2以降がresumedでない場合も停止する。無効試行は `invalid-fresh-*/`、lab停止は `lab-quota-before-attempt3/`、前attemptの認証切れは `failed-before-attempt2/` に分け、本平均に含めない。
+- host lab/personalの認証のSHA-256・mtime・sizeは前後不変。hostの認証・本番config/DB/release/systemdを変更していない。隔離認証コピーは計測後に削除。summaryありthread・他harnessの効果は不明。
+- 証跡: task `01M4DE3G78D16NJ80SEMWVAVAK` の `wu/lab-bench/artifacts/resume-delta-bench-lab/` に `{before,before-2,after,after-2}/runs.json`、各 `summary.json`、`compare.md`（全runのaccount_idとcommit出所）、`validation.json`、`binary-provenance.json`、`host-integrity.json`。
+- 検証: CoS chat 152件、resume差分配送12件、workspace clippy、shell構文、引数拒否4ケース、driverのcompleted/failed/fresh停止3ケース、文書リンク・progress-indexはすべて成功。

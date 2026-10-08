@@ -390,3 +390,45 @@ fn cos_chat_run_session_touch_separates_occupancy_from_cumulative() {
     assert_eq!(got.last_context_tokens, Some(400));
     assert_eq!(got.approx_tokens, 35);
 }
+
+#[test]
+fn cos_chat_resume_delta_cursor_rises_only_on_live_row_and_is_independent_of_summary() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    let t = thread(&s, "t1");
+    let row = ChatSession::new(key(&t), "11111111-1111-4111-8111-111111111111", at(1));
+    s.chat_session_rotate(&row, at(1)).expect("create");
+    let live = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(live.delivered_through_seq, 0, "a new row knows nothing");
+
+    assert!(
+        s.chat_session_set_delivered_through(&row.id, 6)
+            .expect("cursor")
+    );
+    assert!(
+        s.chat_session_set_delivered_through(&row.id, 4)
+            .expect("cursor")
+    );
+    let live = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(live.delivered_through_seq, 6, "the cursor never goes back");
+    assert_eq!(live.summary_through_seq, 0, "the cursor is not the summary");
+
+    // The checkpoint watermark moves alone.
+    assert!(s.chat_session_set_summary_through(&row.id, 9).expect("wm"));
+    let live = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(
+        (live.summary_through_seq, live.delivered_through_seq),
+        (9, 6)
+    );
+
+    // A fresh row starts at 0 and a retired row is not advanced.
+    let fresh = ChatSession::new(key(&t), "22222222-2222-4222-8222-222222222222", at(2));
+    s.chat_session_rotate(&fresh, at(2)).expect("rotate");
+    assert!(
+        !s.chat_session_set_delivered_through(&row.id, 20)
+            .expect("retired")
+    );
+    let old = s.chat_session_get(&row.id).expect("get").expect("row");
+    assert_eq!(old.delivered_through_seq, 6);
+    let live = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(live.delivered_through_seq, 0);
+}

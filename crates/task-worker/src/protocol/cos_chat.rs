@@ -47,6 +47,12 @@ pub struct CosChatContext {
     /// History after `summary_through_seq` that the summary does not cover yet.
     #[serde(default)]
     pub unsummarized: CosChatHistory,
+    /// Delivery cursor of a resumed session (ADR 2026-10-05 D2 付記): the harness session already
+    /// holds the thread through this seq. Then `summary` is omitted (it is in the session) and
+    /// `unsummarized` holds only the messages after this seq. Absent = full delivery (new, fresh,
+    /// fresh retry, restart recovery, or an unknown cursor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivered_through_seq: Option<i64>,
     /// Attachments staged read-only under `<workspace>/attachments` (D4).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<CosChatAttachment>,

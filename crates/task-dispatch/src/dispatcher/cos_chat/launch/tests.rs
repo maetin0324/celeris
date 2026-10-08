@@ -51,3 +51,128 @@ fn cos_chat_run_launch_sets_api_url_env_and_path() {
     assert_eq!(already.as_deref(), Some("/rel/bin:/usr/bin"));
     assert_eq!(path_with_first(None, Some("/usr/bin".into())), None);
 }
+
+mod resume_delta {
+    use super::super::advance_delivery_cursor;
+    use serde_json::json;
+    use task_core::SqliteStore;
+    use task_core::chat::{
+        ChatCreateThreadRequest, ChatPostMessageRequest, ChatRunSessionMode, ChatRunState,
+        ChatSendMode, ChatSession, ChatSessionKey,
+    };
+    use time::OffsetDateTime;
+
+    fn now() -> OffsetDateTime {
+        OffsetDateTime::from_unix_timestamp(1_791_158_400).expect("clock")
+    }
+
+    fn post(s: &SqliteStore, t: &str, key: &str) {
+        s.chat_message_post(
+            t,
+            &ChatPostMessageRequest {
+                client_message_id: key.into(),
+                text: key.into(),
+                attachment_ids: vec![],
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            now(),
+        )
+        .expect("post");
+    }
+
+    /// Thread with a live session; returns (thread, session row id).
+    fn setup(s: &SqliteStore) -> (String, String) {
+        let t = s
+            .chat_thread_create(
+                "admin",
+                &ChatCreateThreadRequest {
+                    title: "t".into(),
+                    project_id: None,
+                    client_thread_id: "t".into(),
+                },
+                now(),
+            )
+            .expect("thread")
+            .thread
+            .id;
+        let row = ChatSession::new(
+            ChatSessionKey {
+                thread_id: t.clone(),
+                harness: "fake".into(),
+                ..Default::default()
+            },
+            "sid",
+            now(),
+        );
+        s.chat_session_rotate(&row, now()).expect("session");
+        (t, row.id)
+    }
+
+    fn claim(s: &SqliteStore, t: &str, run: &str, row: &str) {
+        s.chat_run_claim_next(t, run, &json!({}), now())
+            .expect("claim")
+            .expect("claimed");
+        s.chat_run_record_session(run, ChatRunSessionMode::Resumed, row, None, now())
+            .expect("record");
+    }
+
+    fn cursor(s: &SqliteStore, t: &str) -> i64 {
+        s.chat_session_active(t)
+            .expect("session")
+            .expect("live")
+            .delivered_through_seq
+    }
+
+    #[test]
+    fn cos_chat_resume_delta_cursor_covers_the_reply_only_over_queued_user_messages() {
+        let s = SqliteStore::open_in_memory().expect("store");
+        let (t, row) = setup(&s);
+        post(&s, &t, "one"); // seq 1
+        post(&s, &t, "two"); // seq 2, waits in the queue
+        claim(&s, &t, "r1", &row); // reply seq 3
+        // Not completed yet: nothing moves.
+        assert_eq!(
+            advance_delivery_cursor(&s, &t, "r1").expect("advance"),
+            None
+        );
+        assert_eq!(cursor(&s, &t), 0);
+        s.chat_run_finish("r1", ChatRunState::Completed, Some("ok"), None, now())
+            .expect("finish");
+        // Only a queued user message lies between the input and the reply.
+        assert_eq!(
+            advance_delivery_cursor(&s, &t, "r1").expect("advance"),
+            Some(3)
+        );
+        assert_eq!(cursor(&s, &t), 3);
+    }
+
+    #[test]
+    fn cos_chat_resume_delta_cursor_stops_at_the_input_before_an_unseen_message() {
+        let s = SqliteStore::open_in_memory().expect("store");
+        let (t, row) = setup(&s);
+        post(&s, &t, "one"); // seq 1
+        s.chat_system_message_add(&t, "card", &[], now())
+            .expect("system"); // seq 2: not in this run's prompt
+        claim(&s, &t, "r1", &row); // reply seq 3
+        s.chat_run_finish("r1", ChatRunState::Completed, Some("ok"), None, now())
+            .expect("finish");
+        assert_eq!(
+            advance_delivery_cursor(&s, &t, "r1").expect("advance"),
+            Some(1)
+        );
+        assert_eq!(cursor(&s, &t), 1, "seq 2 is redelivered by the next resume");
+
+        // A failed run leaves the cursor.
+        post(&s, &t, "two"); // seq 4
+        claim(&s, &t, "r2", &row);
+        s.chat_run_finish("r2", ChatRunState::Failed, None, Some("boom"), now())
+            .expect("finish");
+        assert_eq!(
+            advance_delivery_cursor(&s, &t, "r2").expect("advance"),
+            None
+        );
+        assert_eq!(cursor(&s, &t), 1);
+    }
+}

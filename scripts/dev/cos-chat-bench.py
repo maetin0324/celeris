@@ -45,6 +45,8 @@ def run_dir(run_id):
     if len(matches) == 1:
         return os.path.dirname(matches[0])
     for p in glob.glob(os.path.join(out, "**", "prompt.txt"), recursive=True):
+        if os.path.basename(os.path.dirname(p)) == run_id:
+            return os.path.dirname(p)
         try:
             with open(p, "rb") as f:
                 head = f.read(600)
@@ -157,8 +159,8 @@ def summarize():
 
 
 def finish():
-    summary = summarize()
     json.dump(runs, open(os.path.join(EV, "runs.json"), "w"), ensure_ascii=False, indent=1)
+    summary = summarize()
     meta = {"commit": os.environ.get("COS_CHAT_BENCH_SOURCE_SHA") or subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
             "claude_version": claude_version, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "mode": mode, "reduced": reduced,
@@ -166,7 +168,7 @@ def finish():
             "harness": sorted({r.get("harness") for r in runs if r.get("harness")}),
             "model": sorted({r.get("model") for r in runs if r.get("model")}),
             "llm_source": sorted({r.get("llm_source") for r in runs if r.get("llm_source")}),
-            "account_id": sorted({str(r.get("account_id")) for r in runs}),
+            "account_id": sorted({r.get("account_id") for r in runs}, key=lambda value: value or ""),
             "llm_runs": len(runs), "model_note": "run.model is null when the CLI default is used; model comes from the stream-json init event"}
     json.dump({"meta": meta, "summary": summary, "runs": runs}, open(os.path.join(EV, "summary.json"), "w"), ensure_ascii=False, indent=1)
     cols = list(runs[0].keys()) if runs else []
@@ -215,6 +217,19 @@ def main():
             turn(SCRIPT, "s6_cold_new_thread", new_thread("s6-new"), 1, "consult", SCRIPT["consult"], c["gap_secs"])
             time.sleep(c["warm_gap_secs"])
             turn(SCRIPT, "s6_warm_resumed", th, 3, "consult", c["text"], c["warm_gap_secs"])
+        finally:
+            if runs:
+                finish()
+        return
+    if mode == "same-thread":  # 同一 thread 10 turn だけ（台本 s2_same_thread、差分配送の before/after）
+        try:
+            th = new_thread("s2")
+            for i, t in enumerate(SCRIPT["s2_same_thread"]["turns"][:n_s2], 1):
+                turn(SCRIPT, "s2", th, i, t["kind"], t["text"])
+                if runs[-1].get("state") != "completed":
+                    raise RuntimeError("same-thread requires completed runs; stopping after failed turn")
+                if i > 1 and runs[-1].get("session_mode") != "resumed":
+                    raise RuntimeError("same-thread requires resumed sessions after turn 1; comparison is invalid")
         finally:
             if runs:
                 finish()

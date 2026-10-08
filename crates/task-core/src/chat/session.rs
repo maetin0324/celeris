@@ -65,6 +65,10 @@ pub struct ChatSession {
     pub billed_input_tokens: i64,
     /// Messages up to this thread seq are covered by the summary the worker wrote.
     pub summary_through_seq: i64,
+    /// Delivery cursor (ADR 2026-10-05 D2 付記): the harness session already holds the thread up
+    /// to this seq, raised when a run on this row ends `done`. `0` = unknown (the next resume gets
+    /// the full summary and history). Independent of `summary_through_seq`.
+    pub delivered_through_seq: i64,
     pub created_at: OffsetDateTime,
     pub last_used_at: OffsetDateTime,
     pub retired_at: Option<OffsetDateTime>,
@@ -81,6 +85,7 @@ impl ChatSession {
             last_context_tokens: None,
             billed_input_tokens: 0,
             summary_through_seq: 0,
+            delivered_through_seq: 0,
             created_at: now,
             last_used_at: now,
             retired_at: None,
@@ -135,8 +140,8 @@ pub struct ChatRunSessionRecord {
 }
 
 const SELECT: &str = "SELECT id,thread_id,adapter,provider,llm_source,account_id,cwd,model,\
- session_id,turns,approx_tokens,summary_through_seq,created_at,last_used_at,retired_at,last_context_tokens,billed_input_tokens \
- FROM node_sessions WHERE kind='cos_chat'";
+ session_id,turns,approx_tokens,summary_through_seq,created_at,last_used_at,retired_at,last_context_tokens,billed_input_tokens,\
+ delivered_through_seq FROM node_sessions WHERE kind='cos_chat'";
 
 type RawRow = (ChatSession, String, String, Option<String>);
 
@@ -159,6 +164,7 @@ fn raw(row: &Row<'_>) -> rusqlite::Result<RawRow> {
             last_context_tokens: row.get(15)?,
             billed_input_tokens: row.get(16)?,
             summary_through_seq: row.get(11)?,
+            delivered_through_seq: row.get(17)?,
             created_at: OffsetDateTime::UNIX_EPOCH,
             last_used_at: OffsetDateTime::UNIX_EPOCH,
             retired_at: None,
@@ -228,8 +234,8 @@ impl SqliteStore {
         tx.execute(
             "INSERT INTO node_sessions(id,node_id,kind,project_id,adapter,account_id,session_id,\
              turns,approx_tokens,created_at,last_used_at,retired_at,thread_id,llm_source,model,\
-             summary_through_seq,provider,cwd) \
-             VALUES(?1,?2,'cos_chat',NULL,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,?14,?15)",
+             summary_through_seq,provider,cwd,delivered_through_seq) \
+             VALUES(?1,?2,'cos_chat',NULL,?3,?4,?5,?6,?7,?8,?9,NULL,?10,?11,?12,?13,?14,?15,?16)",
             params![
                 session.id,
                 COS_CHAT_SESSION_NODE,
@@ -246,6 +252,7 @@ impl SqliteStore {
                 session.summary_through_seq,
                 k.provider,
                 k.cwd,
+                session.delivered_through_seq,
             ],
         )?;
         tx.commit()?;
@@ -313,6 +320,21 @@ impl SqliteStore {
         Ok(conn.execute(
             "UPDATE node_sessions SET summary_through_seq=MAX(summary_through_seq,?2) \
              WHERE id=?1 AND kind='cos_chat'",
+            params![row_id, seq.max(0)],
+        )? > 0)
+    }
+
+    /// Raises the delivery cursor of the live row `row_id` to `seq` (never lowers it). Called only
+    /// after a run on this row ended `done`; a retired or unknown row is left alone (`false`).
+    pub fn chat_session_set_delivered_through(
+        &self,
+        row_id: &str,
+        seq: i64,
+    ) -> Result<bool, ChatError> {
+        let conn = writer(self)?;
+        Ok(conn.execute(
+            "UPDATE node_sessions SET delivered_through_seq=MAX(delivered_through_seq,?2) \
+             WHERE id=?1 AND kind='cos_chat' AND retired_at IS NULL",
             params![row_id, seq.max(0)],
         )? > 0)
     }

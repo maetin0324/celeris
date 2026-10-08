@@ -2,7 +2,7 @@
 import { expect, test } from "@playwright/test";
 import { startFixtureGateway } from "../support/fixture-gateway";
 
-// md 未満の画面下の固定タブ（旧 GUI の MobileTabBar と同等）。主要 4 つ（ホーム・受信箱・タスク・案件）と「その他」。
+// md 未満の画面下の固定タブ（旧 GUI の MobileTabBar と同等）。主要 4 つ（ホーム・受信箱・ボード・案件）と「その他」。
 // 「その他」は残りの項目を下からのシート（Radix Dialog）で出す。md 以上は出さず、側面の nav のまま。
 // 偽 daemon（rich profile。受信箱 5 件・未読の通知 3 件）と gateway は loopback の空き port。外部ネットワークに出ない。
 let gateway: Awaited<ReturnType<typeof startFixtureGateway>>;
@@ -13,15 +13,15 @@ test.afterAll(async () => {
   await gateway.close();
 });
 
-const TABS = ["ホーム", "受信箱", "タスク", "案件"] as const;
+const TABS = ["ホーム", "受信箱", "ボード", "案件"] as const;
 
 for (const width of [360, 390, 412]) {
   test(`タブ: 4 つの link と「その他」が画面下に固定され、44px 以上で、現在地を示す（${width}px）`, async ({
     page,
   }) => {
     await page.setViewportSize({ width, height: 800 });
-    await page.goto(`${gateway.base}/tasks`);
-    await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
+    await page.goto(`${gateway.base}/board`);
+    await expect(page.getByRole("heading", { level: 1, name: "ボード" })).toBeVisible();
     const bar = page.getByTestId("mobile-tabbar");
     await expect(bar).toBeVisible();
     const nav = page.getByRole("navigation", { name: "主要（モバイル）" });
@@ -49,10 +49,13 @@ for (const width of [360, 390, 412]) {
     expect(box.x).toBe(0);
     expect(box.width).toBe(width);
 
-    await expect(nav.getByRole("link", { name: "タスク" })).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("link", { name: "ボード" })).toHaveAttribute("aria-current", "page");
     for (const name of ["ホーム", "受信箱", "案件"])
       await expect(nav.getByRole("link", { name })).not.toHaveAttribute("aria-current", /.*/);
     await expect(more).not.toHaveAttribute("data-active", "true");
+    await page.goto(`${gateway.base}/tasks`);
+    await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
+    await expect(more).toHaveAttribute("data-active", "true");
     // ページ全体に横スクロールを作らない。
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
@@ -60,7 +63,9 @@ for (const width of [360, 390, 412]) {
 
 test("タブ: 受信箱の件数を badge で出し、未読の通知は「その他」の点で知らせる", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto(`${gateway.base}/tasks`);
+  // タスクは「その他」内の項目なので、未読点の表示を確かめる画面は主要タブにする。
+  await page.goto(`${gateway.base}/board`);
+  await expect(page.getByRole("heading", { level: 1, name: "ボード" })).toBeVisible();
   const nav = page.getByRole("navigation", { name: "主要（モバイル）" });
   const inbox = nav.getByRole("link", { name: /受信箱/ });
   await expect(inbox.locator("[data-badge]")).toHaveText("5");
@@ -76,8 +81,8 @@ test("その他: シートが開き、Escape で閉じて focus を戻す。知�
   page,
 }) => {
   await page.setViewportSize({ width: 360, height: 740 });
-  await page.goto(`${gateway.base}/tasks`);
-  await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
+  await page.goto(`${gateway.base}/board`);
+  await expect(page.getByRole("heading", { level: 1, name: "ボード" })).toBeVisible();
   const nav = page.getByRole("navigation", { name: "主要（モバイル）" });
   const more = nav.getByRole("button", { name: "その他" });
   await more.click();
@@ -91,6 +96,8 @@ test("その他: シートが開き、Escape で閉じて focus を戻す。知�
   // 主要 4 つはシートに重ねて出さない。
   for (const name of TABS) await expect(sheet.getByRole("link", { name, exact: true })).toHaveCount(0);
   await expect(sheet.getByRole("link", { name: "知識" })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: "タスク", exact: true })).toBeVisible();
+  await expect(sheet.getByRole("link", { name: "タスク", exact: true }).getByRole("img")).toHaveCount(0);
 
   await page.keyboard.press("Escape");
   await expect(sheet).toBeHidden();
@@ -110,8 +117,8 @@ test("その他: シートが開き、Escape で閉じて focus を戻す。知�
 
 test("タブ: Tab で 4 つの link と「その他」を順に辿り、Enter で移る", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
-  await page.goto(`${gateway.base}/tasks`);
-  await expect(page.getByRole("heading", { level: 1, name: "タスク" })).toBeVisible();
+  await page.goto(`${gateway.base}/board`);
+  await expect(page.getByRole("heading", { level: 1, name: "ボード" })).toBeVisible();
   const nav = page.getByRole("navigation", { name: "主要（モバイル）" });
   const home = nav.getByRole("link", { name: "ホーム" });
   await home.focus();

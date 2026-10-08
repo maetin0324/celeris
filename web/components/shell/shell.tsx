@@ -209,7 +209,7 @@ function NavBadge({ badge }: { badge: { view: NavBadgeView; tone: BadgeTone } | 
 const tabClass =
   "relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-1 border-t-2 text-label font-medium whitespace-nowrap hover:text-foreground focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring";
 
-// md 未満の画面下の固定タブ（旧 GUI の MobileTabBar）。主要 4 つと「その他」。「その他」は残りの項目を下からのシートで出す。
+// md 未満の画面下の固定タブ（旧 GUI の MobileTabBar）。ホーム・受信箱・ボード・案件と「その他」。「その他」は残りの項目を下からのシートで出す。
 // シートは Radix Dialog（focus trap・Escape・aria-modal・閉じた後に「その他」へ focus を戻す）。
 function MobileTabBar({
   badges,

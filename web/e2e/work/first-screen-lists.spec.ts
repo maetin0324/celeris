@@ -3,6 +3,7 @@ import { expectInFirstScreen, FIRST_SCREEN_SIZES, waitForScreen } from "../suppo
 import { startFixtureGateway } from "../support/fixture-gateway";
 
 // 一覧画面（/tasks・/board・/releases）の先頭行が、scroll 前の最初の 1 画面に入る（2026-10-06 の要望）。
+// /board は mobile tabbar の上に先頭行が見えることも、360px の viewport で同じ gate により確認する。
 // 狭い幅ではフィルタを 1 行 toolbar・状態の横 scroll 1 行・折りたたみに詰めたので、その位置を測る。
 // 詰めてもフィルタは URL の query から復元される（選択状態が見える）ことも確かめる。
 

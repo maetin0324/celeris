@@ -12,6 +12,7 @@
 //! | `run` | `run`: 起動順と停止順（interrupt → api → llm_proxy → mcp → checkpoint → backup → deregister） |
 //! | `tick_loop` | tick ループ本体（シグナル・役割の変化・裏方の定期処理） |
 //! | `admin` | API から委譲された reload / provider check / notify test |
+//! | `browser_ledger_path` | 適合台帳の path 解決と `configure_conformance`（ADR 2026-10-08-browser-prod-enablement D1.4） |
 //!
 //! 依存は `run` → {`bootstrap`, `api`, `services`, `clusters`, `tick_loop`} → `tick_loop` → `admin` の一方向。
 //! `wire_cluster_liveness_hooks` は `run` からだけ呼ぶ（`build_dispatcher` の中へ入れない）。
@@ -20,6 +21,7 @@ pub(crate) mod adapters;
 pub(crate) mod admin;
 pub(crate) mod api;
 pub(crate) mod bootstrap;
+pub(crate) mod browser_ledger_path;
 pub(crate) mod clusters;
 pub(crate) mod routing_shadow;
 pub(crate) mod routing_sidecar;

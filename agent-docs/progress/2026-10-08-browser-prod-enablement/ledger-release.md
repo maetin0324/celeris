@@ -20,12 +20,12 @@ tasks: [01M4CH1MPV1KB69SYKXS79E0SP]
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo test -p celerisctl browser_ledger_release_` → exit 0、7 passed。
 - `cargo test -p celeris browser_ledger_release_` → exit 0、3 passed。
-- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0。
+- `sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0。`sh scripts/dev/check-doc-links.sh` は exit 1（`docs/ops/browser-prod.md` 未作成。下の未解決）。
 - `sh scripts/selfdeploy/tests/browser_ledger_release_stages.sh` → exit 0（1 本）。未配置・古い version・配置済み・生成器失敗でも release が落ちないことを fake と一時 dir で確認。
 
 ## 未解決
 - 本番の台帳生成は人が release（または `browser-ledger.sh`）で回す。実 agent-browser・実 LLM での生成は未実施。
-- D1.5 の docs/ops 手順: `docs/ops/browser-prod.md` を台帳の作り直し手順だけで新設（task-core の案内文が参照していて doc-links 検査が落ちたため）。site policy・credential の節は preflight 葉が追記する。
+- D1.5 の docs/ops 手順 `docs/ops/browser-prod.md` は未作成（この WU の範囲が agent-docs/progress・adr に限られ、preflight 葉の担当）。task-core の `browser_prerequisite.rs`（49・52 行）の案内文が参照しているため、preflight 葉が作るまで `check-doc-links.sh` は 2 件の broken reference で落ちる。台帳の作り直し手順（`browser-ledger.sh` の実行）を最初の節に入れること。
 - 実装の不足は見つからなかった。
 
 ## 提案

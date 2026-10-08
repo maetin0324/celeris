@@ -49,3 +49,8 @@ completed: 2026-10-08
 - 修正: `session_usage` で pi も claude-code と同じく `billed_input = input+cache_read+cache_creation`。codex は input のみ、acp は usage なしのまま。worker 一般の Usage は不変。
 - 試験: `cos_chat_pi_cache_is_external_occupancy_and_billed_input`（2 呼出し input=100,cacheRead=40,cacheWrite=5: 占有 145、累積入力 290）。`cos_chat_billed_input_unknown_cache_definition_uses_input_only` から pi を外した。
 - ADR 2026-10-05-cos-chat-home の付記 D1・D4 を「pi は外数・確定」で一致させ pi-ai の path:行を出典に記載。ADR 2026-10-08-cos-chat-prompt-cache に pi の包含関係の記述は無く変更不要。
+
+## 再試行（check-doc-links の是正）
+- 前回 check 不合格の原因: `sink_tests.rs:544` の試験入力 `docs/SKILL.md` が check-doc-links の「生きた参照」として壊れた docs パス扱いになった。入力を `notes/SKILL.md` に変更（試験の意味＝.claude/skills 外の SKILL.md は対象外、は不変）。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → 全て ok（exit 0）。
+- `cargo test -p task-dispatch cos_chat` → 94 passed / 0 failed（cos_chat_pi_ 含む）。

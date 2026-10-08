@@ -541,7 +541,7 @@ fn cos_chat_usage_fixed_clock_skill_count_latency_retry_and_terminal_event() {
         ),
         ("Read", json!({"path":".claude/skills/cos/./SKILL.md"})),
         ("Read", json!({"file_path":".claude/skills/../../SKILL.md"})),
-        ("Read", json!({"file_path":"docs/SKILL.md"})),
+        ("Read", json!({"file_path":"notes/SKILL.md"})),
         ("Read", json!({"file_path":".claude/skills/cos/README.md"})),
         ("Bash", json!({"command":"cat .claude/skills/cos/SKILL.md"})),
     ] {

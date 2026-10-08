@@ -74,14 +74,19 @@ S1 の latency・cache read は増えた（Core 分離と本変更が両方入�
 前回の隔離計測を再利用し、今回 LLM 呼び出しと本番環境の変更は行っていない。
 
 
-## 人の承認後の検証（run 01M4DY8AA57S8J65W7JE7VZTT8）
+## 人の承認後の検証（最終再確認: run 01M4DYFS1GFYJAV0NGFE8T3PZW）
 
 人の回答「受け入れ条件をそのように変更して構わないので、進めてください」に従い、
 条件 1 を `cargo test -p task-dispatch -p task-ops -- cos_chat skill 2>&1 | tee /dev/stderr | grep -qE 'test result: ok\. [1-9]'`
 で検証した（exit 0、129 passed）。条件 0（4,650 B）、workspace clippy、fmt も exit 0。
 登録表・未登録操作の拒否・credential の認可と監査・checkpoint・Core の試験は 11 passed、exit 0。
-ログは task artifacts の `attempt2-acceptance.log`・`attempt2-clippy.log`・`attempt2-auth-core.log`。
+今回も同じ結果を確認した。ログは task artifacts の `attempt3-acceptance.log`・`attempt3-clippy.log`・`attempt3-auth-core.log`。
 Cargo や検査環境の変更は行っていない。
+
+ただし、この run に渡された検査定義には承認前の `--` 無しコマンドが残っている。
+原文も再実行し、`unexpected argument 'skill'` による exit 1 を確認した（`attempt3-original-acceptance.log`）。
+承認済みコマンドの成功と、未更新の検査定義の失敗は区別する。worktree から検査定義は変更できないため、
+最終レビューでは人の承認を反映したコマンドを使う必要がある。追加の承認は求めていない。
 
 skill 本文・参照 file は計測時の `087afd6d` と同一。Rust の差分は整形のみ（空白・末尾カンマを正規化した比較で一致）で、scripts は差分なし。SOURCE.md と運用文書は計測後に更新した。
 前回の隔離計測を再利用し、今回 LLM 呼び出しと本番環境の変更は行っていない。

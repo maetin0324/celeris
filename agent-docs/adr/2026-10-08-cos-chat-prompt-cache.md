@@ -1,7 +1,7 @@
 # ADR 2026-10-08: CoS chat の prompt cache 最適化 — 現状の事実・仮説表・計測設計（草案）
 
 ---
-tasks: [01M4D3XKDS8DK9QEK081QKA8VE]
+tasks: [01M4D3XKDS8DK9QEK081QKA8VE, 01M4EVARH4NPTQ73Y1NXK5WJY4]
 ---
 
 - 日付: 2026-10-08
@@ -299,3 +299,44 @@ OAuth認証失敗）は [進捗](../progress/2026-10-08-cos-chat-prompt-cache/sk
 task artifactsの `answer-comparison.json`・`answer-bench-{before,after}/domain-state.json` に記録した。
 Core以降のpromptのenrichはrunディレクトリを直接探すようにし、既存出力に対してofflineで再集計した。
 今回Rust/skill本文の変更・main統合・本番反映は行っていない。
+
+## 9. 付記 D8（2026-10-08、task 01M4EVARH4NPTQ73Y1NXK5WJY4）: 保存証拠の再検算と最終検証の前提
+
+**T8 は未完了。統合後 after の結果として確定しない。** 検査対象 main は
+`f81b98540b2c`。T6 の merge commit `1168e6c7` はその祖先でなく、
+`node_sessions.delivered_through_seq` も存在しない。T7 は D4 のとおり追加実装を削除済み。
+本 run は LLM/別 agent の起動禁止に従い、新しい LLM run を起動しなかった。
+T6 の統合と、隔離 bench での LLM 起動の扱いが決まるまで、統合 main の再計測は残る。
+
+保存済み full 26 run の部分比較（D7 と同じ before / after）を再集計した。
+S1 の cache write 中央値は 21,864 → 17,566（−19.66%）、skill 読込は 1 → 0。
+総 latency は 15,802.5 → 18,895 ms（+19.57%）で改善していない。
+after run `01M4DFZK0MJWNRG8BW6GDC434J` は総 46,760 ms、初回 45,969 ms。
+S2 の総 latency は 19,672 → 13,781.5 ms。S1 非 cache input は 8 → 12、S2 は 6 → 6。
+after full の model・prompt bytes・名目 cost が未保存なので同一条件の独立確認は不明。
+before の申告 commit `c7e60aa7` はこの git に存在せず、バイナリ出所 SHA と同一視しない。
+各 turn の期待結果は定義したが、full の回答本文と domain 適用抜粋がないため、
+completed 26/26 を指示達成率に読み替えない。S3 pin・S4 triage・web_path 付き回答は不明。
+S5 の370秒は1h TTL内であり、TTL超の after は未計測。
+
+D7.6 の補助回答台本は保存 domain-state を再採点し、前後とも3/3で
+`applied` と正確な回答内容の `answered` event を確認した。
+別の補助 T6 台本（同一 thread 10 turn を各2回）は40 runすべて
+claude-code / claude-opus-5-5 / claude_oauth / claude_max_personal / completed、
+各 turn 2〜10 は resumed を再確認した。バイナリ出所は before `10566e5b`、after `5e65a547`。
+turn 2〜10 合計の2回平均は cache write 40,377 → 36,487.5（−9.63%）、
+prompt bytes 75,254.5 → 64,258.5（−14.61%）、非 cache input 51 → 54。
+これは未統合 T6 branch の比較であり、今回 main の after に混ぜない。
+account 制限は D7 冒頭の人の決定を適用し、personal 利用自体を失敗理由にしない。
+
+改善しない変更の扱い: Core `ddc6a895` と pi 補正 `8ce73e81` の単独効果は
+skill 再構成 `b3e7c93b` と分離できないため、現証拠で単独 revert を決めない。
+統合後の反復で S1 遅延増が再現し、cache write/bytes 削減も消える場合には
+Core の2 commit を対として戻す検討を行う。rollover `d514aa37` は会計の正確性の修正なので、
+非 cache input が減らないことを理由に戻さない。T6 は人が決めた cache write/bytes 指標で
+改善しており、現証拠は戻しを支持しない。
+
+再集計の出所と未知値、台本別・turn別の数値、回帰・release の実行ログは task の
+`artifacts/cos-chat-bench-after.json`・`artifacts/cos-chat-bench-comparison.md`・
+`artifacts/regression.json`・`artifacts/release-verification.json` に保存する。
+本番 config/DB/KB/release/systemd の変更と promote は行っていない。

@@ -493,15 +493,27 @@ close-out 2 付記で実機 FAIL だった D1〜D4（(d)(e) 未達の原因）�
 ### D2 保存と判定
 
 - `Usage.context_tokens: Option<u64>`（追加のみ。省略可）。API schema・gui/web 生成型に反映。
-- migration 0061（schema 61）で `node_sessions` に `last_context_tokens INTEGER NULL`（最後に観測した占有。**置き換え**で保存、累積しない。占有を報告しない run は直前の値を残す）と `billed_input_tokens INTEGER NOT NULL DEFAULT 0`（run ごとの `input+cache_read+cache_creation` の累積＝課金相当の入力。**情報用で判定に使わない**）を足す。`approx_tokens` は従来の `input+output` 累積のまま残す。
+- migration `0062_cos_chat_context_tokens`（schema 62）で `node_sessions` に `last_context_tokens INTEGER NULL`（最後に観測した占有。**置き換え**で保存、累積しない。占有を報告しない run は直前の値を残す）と `billed_input_tokens INTEGER NOT NULL DEFAULT 0`（run ごとの harness 別の課金相当入力の累積（定義は D4）。**情報用で判定に使わない**）を足す。`approx_tokens` は従来の `input+output` 累積のまま残す。
 - CoS chat の rollover 判定は `rollover_measure(session) = last_context_tokens ?? approx_tokens` が `rollover_tokens` 以上なら次 run を fresh（`token_rollover`）。cache token を累積して context 長とみなさない。
 - **config 名 `[sessions] rollover_tokens` は保つ**（既定 400,000）。意味は「CoS chat では context 占有の閾値」（`crates/celeris/src/config/dispatch.rs` の注釈に明記）。WU・review の継続セッション（`sessions.rs`）は従来どおり `approx_tokens` の累計で、挙動を変えない。
 
 ### D3 互換と fallback
 
-- 既存行（0061 以前）は `last_context_tokens = NULL` なので `approx_tokens` で判定し、従来と同じ結果になる。旧い run の usage（`context_tokens` 欠落）も同じ。
+- 既存行（0062 未適用）は `last_context_tokens = NULL` なので `approx_tokens` で判定し、従来と同じ結果になる。旧い run の usage（`context_tokens` 欠落）も同じ。
 - 占有を報告しない harness（codex・acp・aider）は、`last_context_tokens` が NULL のまま `approx_tokens`（`input+output` の累積）へ fallback する。この場合は従来どおり cache を含まない過小評価が残る（cache 込みの値が取れないので、是正できない）。
 
+### D4 課金相当入力の harness 別定義（billed-input-fix）
+
+worker 一般の `Usage` と既存パーサは変えず、CoS の `session_usage` に実行した `WorkerAdapter::id()` を渡す。`billed_input_tokens` は金額ではなく入力 token の累積で、rollover 判定に使わない。
+
+- **claude-code（外数）**: `claude_code.rs` の result パーサは Anthropic の `input_tokens`（cache を含まない）、`cache_read_input_tokens`、`cache_creation_input_tokens` を個別に保持する。`billed_input = input + cache_read + cache_creation`。
+- **codex（内数）**: `codex.rs` の `turn.completed` パーサは `input_tokens` をそのまま、内数の `cached_input_tokens` を `cache_read_tokens` にも保持する。`billed_input = input` のみ（cache を足さない）。既存 fixture の input=10 / cached=4 / output=20 は billed_input=10、fallback 加算=30。
+- **acp / opencode（不明）**: `acp.rs` の `PromptResponse` 処理は安定版に token usage フィールドが無く、常に `usage: None`。内数・外数は判定不能。現在は入力計上なし。将来 usage が来ても、定義を確認するまで保守的に input のみとする。
+- **pi（不明）**: `pi.rs::PiStream::event` は assistant の `message_end.usage.{input,output,cacheRead,cacheWrite}` をそれぞれ `Usage` へ合算する。`pi_adapter_usage_counts_only_final_message_events` もこの個別合算を確認するが、input と cache の包含関係はパーサ・fixture からは確定できない。保守的に `billed_input = input` のみ。既存の `context_tokens = input + cacheRead + cacheWrite` の最後の観測と `approx_tokens` fallback は今回変更しない。
+- **その他の定義不明の harness**: input のみ。欠落値は 0、加算と i64 変換の飽和処理は維持する。
+
 ### 試験
+
+`cos_chat_billed_input_codex_cached_input_is_not_added_twice`・`cos_chat_billed_input_claude_adds_external_cache_tokens`・`cos_chat_billed_input_unknown_cache_definition_uses_input_only`（dispatcher）で会計と context/fallback の分離を確認する。
 
 `cos_chat_run_rollover_measure_prefers_context_occupancy`・`…_falls_back_for_legacy_rows`（`sessions/cos_chat/tests.rs`）、`cos_chat_run_session_touch_separates_occupancy_from_cumulative`（task-core）、`cos_chat_run_rollover_cache_heavy_run_is_not_underestimated`・`…_occupancy_is_replaced_not_accumulated`・`…_unknown_occupancy_falls_back_to_cumulative`（dispatcher 結合）、`context_tokens_is_last_main_thread_call_not_result_sum`・`…_unknown_without_assistant_usage`（task-worker）。実機（LLM 呼び出し）での占有の実測は本葉では行っていない（「不明」）。

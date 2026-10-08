@@ -39,7 +39,7 @@ pub struct ChatSessionKey {
 pub struct ChatSessionUsage {
     /// Legacy `input+output` (accumulated into `approx_tokens`).
     pub add_tokens: i64,
-    /// `input+cache_read+cache_creation` of the whole run (accumulated into `billed_input_tokens`).
+    /// Harness-defined input of the whole run (accumulated into `billed_input_tokens`).
     pub billed_input: i64,
     /// Context occupancy at the run's last API call, if the harness reported it (replaces).
     pub context_tokens: Option<i64>,
@@ -55,12 +55,12 @@ pub struct ChatSession {
     pub session_id: String,
     pub turns: i64,
     /// Legacy cumulative `input+output` of every run. Only the rollover fallback when
-    /// `last_context_tokens` is unknown (harness reports no context occupancy, or a pre-0061 row).
+    /// `last_context_tokens` is unknown (harness reports no context occupancy, or a pre-0062 row).
     pub approx_tokens: i64,
     /// Context occupancy at the last API call of the latest run that reported one
     /// (`input+cache_read+cache_creation`; it is replaced, never accumulated). `None` = unknown.
     pub last_context_tokens: Option<i64>,
-    /// Cumulative billing-equivalent input (`input+cache_read+cache_creation` summed over runs).
+    /// Cumulative billing-equivalent input (harness-defined input summed over runs).
     /// Informational; never compared with `rollover_tokens`.
     pub billed_input_tokens: i64,
     /// Messages up to this thread seq are covered by the summary the worker wrote.

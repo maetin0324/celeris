@@ -484,7 +484,7 @@ async fn cos_chat_run_rollover_cache_heavy_run_is_not_underestimated() {
     let first = store.chat_session_active(&t).expect("s").expect("live");
     assert_eq!(first.approx_tokens, 15);
     assert_eq!(first.last_context_tokens, Some(600));
-    assert_eq!(first.billed_input_tokens, 600);
+    assert_eq!(first.billed_input_tokens, 10);
     post(&store, &t, "two");
     let second = tick_and_join(&mut d, &store, &t).await;
     let record = store.chat_run_session_record(&second).expect("record");
@@ -494,7 +494,7 @@ async fn cos_chat_run_rollover_cache_heavy_run_is_not_underestimated() {
 
 #[tokio::test]
 async fn cos_chat_run_rollover_occupancy_is_replaced_not_accumulated() {
-    // Each run reports 300 of context; cumulative billing grows (300 → 600) but occupancy stays 300,
+    // Each run reports 300 of context; cumulative billing grows (10 → 20) but occupancy stays 300,
     // below the 500 threshold, so the next runs resume.
     let (dir, store) = open_store();
     let (_, adapter) = harness(
@@ -515,7 +515,7 @@ async fn cos_chat_run_rollover_occupancy_is_replaced_not_accumulated() {
     let live = store.chat_session_active(&t).expect("s").expect("live");
     assert_eq!(live.turns, 2);
     assert_eq!(live.last_context_tokens, Some(300));
-    assert_eq!(live.billed_input_tokens, 600);
+    assert_eq!(live.billed_input_tokens, 20);
     post(&store, &t, "three");
     let third = tick_and_join(&mut d, &store, &t).await;
     for run in [&second, &third] {
@@ -660,4 +660,99 @@ echo '{"type":"done","summary":"answer","evidence":[],"usage":{"input_tokens":11
     assert!(wire.get("first_output_at").is_none());
     assert!(wire.get("time_to_first_output_ms").is_none());
     assert_eq!(run.skill_reads, Some(0));
+}
+
+// These are the unchanged worker parser results for the codex turn.completed fixture
+// (input_tokens=10, cached_input_tokens=4, output_tokens=20) and Anthropic result.usage.
+fn billed_input_outcome(usage: task_core::Usage) -> Result<RunOutcome, AdapterError> {
+    Ok(RunOutcome {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: Some(usage),
+        },
+        exit_code: Some(0),
+    })
+}
+
+#[test]
+fn cos_chat_billed_input_codex_cached_input_is_not_added_twice() {
+    let outcome = billed_input_outcome(task_core::Usage {
+        input_tokens: Some(10),
+        cache_read_tokens: Some(4),
+        output_tokens: Some(20),
+        ..Default::default()
+    });
+    let usage = crate::dispatcher::cos_chat::rollover::session_usage("codex", &outcome);
+    assert_eq!(usage.billed_input, 10);
+    assert_eq!(usage.add_tokens, 30);
+    assert_eq!(usage.context_tokens, None);
+    assert_billed_input_persisted("codex", usage, 10);
+}
+
+#[test]
+fn cos_chat_billed_input_claude_adds_external_cache_tokens() {
+    let outcome = billed_input_outcome(task_core::Usage {
+        input_tokens: Some(10),
+        cache_read_tokens: Some(4),
+        cache_creation_tokens: Some(2),
+        output_tokens: Some(20),
+        context_tokens: Some(12),
+        ..Default::default()
+    });
+    let usage = crate::dispatcher::cos_chat::rollover::session_usage("claude-code", &outcome);
+    assert_eq!(usage.billed_input, 16);
+    assert_eq!(usage.add_tokens, 30);
+    assert_eq!(usage.context_tokens, Some(12));
+    assert_billed_input_persisted("claude-code", usage, 16);
+}
+
+fn assert_billed_input_persisted(
+    harness: &str,
+    usage: task_core::chat::ChatSessionUsage,
+    expected: i64,
+) {
+    let store = SqliteStore::open_in_memory().expect("store");
+    let t = thread(&store);
+    let now = OffsetDateTime::now_utc();
+    let row = task_core::chat::ChatSession::new(
+        task_core::chat::ChatSessionKey {
+            thread_id: t.clone(),
+            harness: harness.into(),
+            ..Default::default()
+        },
+        "fixture-session",
+        now,
+    );
+    store.chat_session_rotate(&row, now).expect("rotate");
+    for runs in 1..=2 {
+        store
+            .chat_session_touch(&row.id, usage, now)
+            .expect("touch");
+        let saved = store
+            .chat_session_active(&t)
+            .expect("session")
+            .expect("live");
+        assert_eq!(saved.billed_input_tokens, expected * runs);
+        assert_eq!(saved.approx_tokens, 30 * runs);
+        assert_eq!(saved.last_context_tokens, usage.context_tokens);
+    }
+}
+
+#[test]
+fn cos_chat_billed_input_unknown_cache_definition_uses_input_only() {
+    let outcome = billed_input_outcome(task_core::Usage {
+        input_tokens: Some(10),
+        cache_read_tokens: Some(4),
+        cache_creation_tokens: Some(2),
+        output_tokens: Some(20),
+        context_tokens: Some(16),
+        ..Default::default()
+    });
+    for harness in ["acp", "opencode", "pi", "fake", "unknown"] {
+        let usage = crate::dispatcher::cos_chat::rollover::session_usage(harness, &outcome);
+        assert_eq!(usage.billed_input, 10, "{harness}");
+        assert_eq!(usage.add_tokens, 30, "{harness}");
+        assert_eq!(usage.context_tokens, Some(16), "{harness}");
+    }
 }

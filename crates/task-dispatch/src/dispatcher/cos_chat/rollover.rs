@@ -228,12 +228,27 @@ pub(crate) fn history_since_summary(
 }
 
 /// run の usage から session 行へ足す値。`add_tokens` は従来どおり `input+output`（占有が取れない
-/// harness の fallback）、`billed_input` は `input+cache_read+cache_creation` の run 合算（課金相当の
-/// 入力。判定に使わない）、`context_tokens` は最後の API 呼び出しの占有（取れた時だけ。rollover の判定値）。
-pub(crate) fn session_usage(outcome: &Result<RunOutcome, AdapterError>) -> ChatSessionUsage {
+/// harness の fallback）、`billed_input` は harness 別の run 合算入力（claude-code は cache を
+/// 加算、codex と定義不明の harness は input のみ。判定に使わない）。`context_tokens` は最後の
+/// API 呼び出しの占有（取れた時だけ。rollover の判定値）。
+pub(crate) fn session_usage(
+    harness: &str,
+    outcome: &Result<RunOutcome, AdapterError>,
+) -> ChatSessionUsage {
     let to_i64 = |t: u64| i64::try_from(t).unwrap_or(i64::MAX);
     let Some(u) = outcome_usage(outcome) else {
         return ChatSessionUsage::default();
+    };
+    // Anthropic input excludes both cache counters. Codex cached input is a subset of input;
+    // ACP reports no usage, and pi's parser does not establish whether cache is included.
+    // Keep unknown harnesses conservative without changing worker Usage or occupancy.
+    let billed_input = if harness == "claude-code" {
+        u.input_tokens
+            .unwrap_or(0)
+            .saturating_add(u.cache_read_tokens.unwrap_or(0))
+            .saturating_add(u.cache_creation_tokens.unwrap_or(0))
+    } else {
+        u.input_tokens.unwrap_or(0)
     };
     ChatSessionUsage {
         add_tokens: to_i64(
@@ -241,12 +256,7 @@ pub(crate) fn session_usage(outcome: &Result<RunOutcome, AdapterError>) -> ChatS
                 .unwrap_or(0)
                 .saturating_add(u.output_tokens.unwrap_or(0)),
         ),
-        billed_input: to_i64(
-            u.input_tokens
-                .unwrap_or(0)
-                .saturating_add(u.cache_read_tokens.unwrap_or(0))
-                .saturating_add(u.cache_creation_tokens.unwrap_or(0)),
-        ),
+        billed_input: to_i64(billed_input),
         context_tokens: u.context_tokens.map(to_i64),
     }
 }
@@ -270,6 +280,7 @@ fn record_attempt(
     store: &SqliteStore,
     session_row_id: &str,
     sink: &ChatRunSink,
+    harness: &str,
     outcome: &Result<RunOutcome, AdapterError>,
     run_id: &str,
     now: OffsetDateTime,
@@ -280,7 +291,9 @@ fn record_attempt(
     {
         tracing::warn!(%error, %run_id, "CoS session id was not saved");
     }
-    if let Err(error) = store.chat_session_touch(session_row_id, session_usage(outcome), now) {
+    if let Err(error) =
+        store.chat_session_touch(session_row_id, session_usage(harness, outcome), now)
+    {
         tracing::warn!(%error, %run_id, "CoS session usage was not saved");
     }
 }
@@ -322,6 +335,7 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
         &a.store,
         &a.session_row_id,
         &sink,
+        a.adapter.id(),
         &outcome,
         &a.run_id,
         (a.clock)(),
@@ -355,6 +369,7 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
                 &a.store,
                 &session_row_id,
                 &retry,
+                a.adapter.id(),
                 &outcome,
                 &a.run_id,
                 (a.clock)(),

@@ -217,6 +217,8 @@ def main():
                 turn(SCRIPT, "s2", th, i, t["kind"], t["text"])
                 if runs[-1].get("state") != "completed":
                     raise RuntimeError("same-thread requires completed runs; stopping after failed turn")
+                if i > 1 and runs[-1].get("session_mode") != "resumed":
+                    raise RuntimeError("same-thread requires resumed sessions after turn 1; comparison is invalid")
         finally:
             if runs:
                 finish()

@@ -565,10 +565,7 @@ async fn cos_chat_skill_inbox_thread_runs_mount_inbox_triage() {
             "{}",
             request.display()
         );
-        assert_eq!(
-            json["context"]["skills"].as_array().map(Vec::len),
-            Some(2)
-        );
+        assert_eq!(json["context"]["skills"].as_array().map(Vec::len), Some(2));
         seen += 1;
     }
     assert_eq!(seen, 2, "the triage run and the human message's run");

@@ -61,12 +61,14 @@ CoS は特別 worker として shell・ファイル・git・登録済み MCP・c
 
 ## CoS skill の配置（導入時に必須）
 
-CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
+CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く（cos-operator は入口の `SKILL.md` と参照 file `operations.md`・`attachments.md`・`production.md`・`explaining.md` の組。全部が要る）。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
 
 ```sh
-# <kb_root> は config の [knowledge] root
-cp -r config/skills/cos-operator config/skills/cos-inbox-triage <kb_root>/skills/
+# <kb_root> は config の [knowledge] root。付属 file ごと取り込む（冪等）
+celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage --root <kb_root>
 ```
+
+mount は場面で変わる。`cos-operator` は全ての CoS run に、`cos-inbox-triage` は受信箱スレッドの run と受信箱の件を渡された run にだけ載る。毎 run 要る最小の規則（操作経路・idempotency・秘密・actions 禁止・checkpoint・添付 pin の要点）は prompt の Core にあり、skill は必要な場面でだけ読まれる。認可と監査は API（`/cos/operations` の登録表・run credential・standing rule）が強制するので、skill を読まない run でも未登録の操作は 422 で拒否される（ADR 2026-10-08-cos-chat-prompt-cache 付記 D7）。
 
 確認: `test -s <kb_root>/skills/cos-operator/SKILL.md && test -s <kb_root>/skills/cos-inbox-triage/SKILL.md`。そのうえで web の新規スレッドで一往復し、返事が返れば配置できている（`CoS skills unavailable` が出たら path と `[knowledge] root` を見直す）。
 

@@ -73,7 +73,10 @@ const COS_INBOX_CONTEXT_ITEMS: usize = 50;
 /// `cos-operator` always; `cos-inbox-triage` only in the inbox thread or when the run is handed
 /// inbox items, so an ordinary thread does not get the triage procedure. Authorization does not
 /// depend on this: `/cos/operations` and the inbox resolve API enforce it whatever was mounted.
-pub(crate) fn cos_chat_skills(in_inbox_thread: bool, inbox_items: &[CosChatInboxItem]) -> Vec<String> {
+pub(crate) fn cos_chat_skills(
+    in_inbox_thread: bool,
+    inbox_items: &[CosChatInboxItem],
+) -> Vec<String> {
     let mut skills = vec!["cos-operator".to_string()];
     if in_inbox_thread || !inbox_items.is_empty() {
         skills.push("cos-inbox-triage".to_string());
@@ -602,10 +605,8 @@ impl CosChatLaunch {
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
             return Err(format!("CoS artifacts unavailable: {e}"));
         }
-        let (skills, missing_skills) = dispatcher.skills_context(
-            &skill_names,
-            task_ops::knowledge::SkillUse::Work,
-        );
+        let (skills, missing_skills) =
+            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
         if !missing_skills.is_empty() {
             return Err(format!(
                 "CoS skills unavailable: {}",

@@ -9,7 +9,7 @@ completed: 2026-10-08
 
 ## 完了したこと
 
-- base `f8033f144296` で、CoS chat の起動（`dispatcher/cos_chat/launch.rs`・`rollover.rs`）、prompt の組み立て（`task-worker/src/cos_chat.rs`・`claude_code.rs`・`codex.rs`・`acp.rs`・`pi.rs`・`skills.rs`）、chat run の保存（`0050_cos_chat.sql`・`chat/session.rs`）、`/cos/operations` の `ALLOWED` を読み、[ADR 草案](../adr/2026-10-08-cos-chat-prompt-cache.md)の D1 に書いた。
+- main `9d2a73141f0e`（skill 配送の hash 照合 9d2a7314 を含む）で、CoS chat の起動（`dispatcher/cos_chat/launch.rs`・`rollover.rs`）、prompt の組み立て（`task-worker/src/cos_chat.rs`・`claude_code.rs`・`codex.rs`・`acp.rs`・`pi.rs`・`skills.rs`）、chat run の保存（`0050_cos_chat.sql`・`chat/session.rs`）、`/cos/operations` の `ALLOWED` を読み、[ADR 草案](../adr/2026-10-08-cos-chat-prompt-cache.md)の D1 に書いた。
 - LLM を呼ばない決定的な計測（$TMPDIR の scratch crate から `task_worker::claude_code::build_prompt` を呼んだ。repo には入れていない）: 新規 thread の 1 turn 目は 4,927 B（固定文は約 4.2 KB）。先頭一致は別 thread どうしで 29 B、同じ thread の turn 間で 67 B。summary 3 KB と履歴 18 件の turn では 10,692 B。
 - skill の大きさ: repo は cos-operator 20,158 B・cos-inbox-triage 11,386 B。本番 KB の写し（`celerisctl knowledge get`、読み取りだけ）は 17,801 / 8,633 B。依頼文の数値と一致した。
 - 仮説 H1〜H6 の検証方法と判定基準、指標・台本・2 種類のベンチ・測れない指標、後続 T1〜T8 の受け入れ条件案を ADR に書いた。

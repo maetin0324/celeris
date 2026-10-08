@@ -5,7 +5,7 @@ tasks: [01M4D3XKDS8DK9QEK081QKA8VE]
 ---
 
 - 日付: 2026-10-08
-- 状態: **草案（提案）**。この ADR はコードを変えない。D1 は最新 main（base `f8033f144296`）の読解と、LLM を呼ばない決定的な計測で確かめた事実。D2〜D5 は後続 task の提案で、人の採否を待つ
+- 状態: **草案（提案）**。この ADR はコードを変えない。D1 は最新 main（`9d2a73141f0e`。skill 配送の v3 content hash 照合を含む）の読解と、LLM を呼ばない決定的な計測で確かめた事実。D2〜D5 は後続 task の提案で、人の採否を待つ
 - 関連: [ADR 2026-10-05 cos-chat-home](2026-10-05-cos-chat-home.md)（D2 の session・要約・差分配送）、[ADR 2026-10-06 cos-chat-harness-adapters](2026-10-06-cos-chat-harness-adapters.md)、[ADR 2026-10-07 cos-live-fixes](2026-10-07-cos-live-fixes.md)（`scripts/dev/cos-chat-live.sh`）、[ADR-0054](0054-stateful-sessions-and-streaming-chat.md)、[ADR-0140](0140-claude-session-resume.md)、ADR-0056 D3・[ADR-0127](0127-skills-native-delivery.md)（skill の配送）、ADR-0072（実行 metrics・単価表）
 - 範囲: CoS chat run だけ。worker 一般（task run・planner・reviewer）の既存挙動は変えない。計測は隔離環境だけで行い、本番の config・DB・KB・release・systemd に触れない。LLM 呼び出しは subscription の lab account（`claude_oauth`）だけ。API 課金 source の利用・promote・権限変更は人の決定
 
@@ -48,10 +48,10 @@ harness 別の渡し方:
 
 | harness | system 側 | stdin / 入力 message 側 | skill の届け方 | session 継続 |
 |---|---|---|---|---|
-| claude-code（`claude_code.rs`） | Claude Code 自身の system prompt と道具定義、`--append-system-prompt` の `HEADLESS_RUN_NOTE`（固定）。Claude Code は `.claude/skills/*/SKILL.md` の frontmatter（name・description）を自動で一覧に入れる。cwd・日付などの環境情報も Claude Code が自分で入れる（入る位置と内容は Claude Code の版に依存し、**不明**。D3 で実測） | `-p` の stdin に上の本文の全文（画像が native のときは stream-json の user message） | `skills::deliver_claude_code`。run ごとに `<cwd>/.claude/skills/<name>/` を消して丸写しする | 初回は `--session-id <uuid>`、2 回目以降は `--resume <uuid>`。session が無い run は `--no-session-persistence` |
-| codex（`codex.rs`） | codex 自身の instructions と、作業場所の `AGENTS.md` の celeris 節（skill の一覧。`skills::deliver_agents_md`） | stdin に `work_dir_note`＋本文 | `.agents/skills/<name>/` に丸写し＋AGENTS.md の一覧 | `codex exec resume <id>`（`resume_mode = exec_resume` のとき）。保証できない設定では明示的に fresh になり、status に理由を出す |
-| acp（opencode 等。`acp.rs`） | agent 側の system prompt | `session/prompt` に本文＋`skills::preamble_section`（一覧 1,310 B。**本文の末尾**に付く） | `.agents/skills/` に丸写し | `loadSession` 能力があれば `session/load`、拒否されたら fresh |
-| pi（`pi.rs`） | pi 側 | stdin に本文＋`skills::preamble_section` | `.agents/skills/` に丸写し | `--session-dir <run_dir>/pi-sessions`（run ごと）。thread をまたいだ継続は無い |
+| claude-code（`claude_code.rs`） | Claude Code 自身の system prompt と道具定義、`--append-system-prompt` の `HEADLESS_RUN_NOTE`（固定）。Claude Code は `.claude/skills/*/SKILL.md` の frontmatter（name・description）を自動で一覧に入れる。cwd・日付などの環境情報も Claude Code が自分で入れる（入る位置と内容は Claude Code の版に依存し、**不明**。D3 で実測） | `-p` の stdin に上の本文の全文（画像が native のときは stream-json の user message） | `skills::deliver_claude_code`。`<cwd>/.claude/skills/<name>/` へ写す。内容 hash（marker v3）と届け先の実内容が一致すれば書き直さない（9d2a7314） | 初回は `--session-id <uuid>`、2 回目以降は `--resume <uuid>`。session が無い run は `--no-session-persistence` |
+| codex（`codex.rs`） | codex 自身の instructions と、作業場所の `AGENTS.md` の celeris 節（skill の一覧。`skills::deliver_agents_md`） | stdin に `work_dir_note`＋本文 | `.agents/skills/<name>/` に写す（同一内容なら省略。9d2a7314）＋AGENTS.md の一覧 | `codex exec resume <id>`（`resume_mode = exec_resume` のとき）。保証できない設定では明示的に fresh になり、status に理由を出す |
+| acp（opencode 等。`acp.rs`） | agent 側の system prompt | `session/prompt` に本文＋`skills::preamble_section`（一覧 1,310 B。**本文の末尾**に付く） | `.agents/skills/` に写す（同一内容なら省略。9d2a7314） | `loadSession` 能力があれば `session/load`、拒否されたら fresh |
+| pi（`pi.rs`） | pi 側 | stdin に本文＋`skills::preamble_section` | `.agents/skills/` に写す（同一内容なら省略。9d2a7314） | `--session-dir <run_dir>/pi-sessions`（run ごと）。thread をまたいだ継続は無い |
 
 ### D1.3 thread session の resume 規則と再送の中身
 
@@ -78,7 +78,7 @@ harness 別の渡し方:
 
 ### D1.6 skill の大きさ（依頼文の数値の是正）
 
-| skill | repo（`config/skills/<name>/SKILL.md`、base `f8033f144296`） | 本番 KB の写し（`celerisctl knowledge get skills/<name>/SKILL.md`、2026-10-08 読取り） |
+| skill | repo（`config/skills/<name>/SKILL.md`、`9d2a73141f0e`） | 本番 KB の写し（`celerisctl knowledge get skills/<name>/SKILL.md`、2026-10-08 読取り） |
 |---|---|---|
 | cos-operator | 20,158 B（`SOURCE.md` 1,226 B は別） | 17,801 B（repo より古い。frontmatter は同じ） |
 | cos-inbox-triage | 11,386 B（`SOURCE.md` 964 B は別） | 8,633 B（repo より古い） |
@@ -105,7 +105,7 @@ harness 別の渡し方:
 | H2 | 毎 run の skill 全文の読込（31,544 B）が、非 cache input と初回応答 latency を押し上げている | description が「常に読む」と指示している（D1.6） | live: run ごとの SKILL.md への Read/Skill tool call の回数と、その tool_result の bytes。単純相談の台本で、skill 読込のある run と無い run の初回応答 latency・非 cache input を比べる | 単純相談の 80% 以上の run で両 skill を読んでおり、読込がある run の初回応答 latency の中央値が無い run より 20% 以上大きい、または非 cache input の 30% 以上が skill 本文にあたる |
 | H3 | resume の turn でも summary＋未要約履歴＋固定規則を毎回再送しているため、同じ thread の turn が進むほど 1 turn あたりの入力 token が線形以上に増える（D2「差分だけ渡す」と不一致） | `history_since_summary` が mode を見ない（D1.3） | (a) LLM 無しベンチ: resumed の run の stdin bytes を turn 1〜10 で出す。(b) live: 同じ thread の 10 turn で、turn ごとの cache read＋cache write＋非 cache input の合計 | (a) resumed の stdin のうち、summary・未要約履歴・固定規則の重複が 50% 以上。(b) turn 10 の入力合計が turn 2 の 2 倍以上で、その増分の半分以上が重複した再送にあたる |
 | H4 | rollover の `approx_tokens`（input+output）は cache read を含まないので、実際の context 占有と大きくずれる | D1.5 | live: 同じ thread の 10 turn で、`node_sessions.approx_tokens` の値と、各 turn の `input+cache_read+cache_creation`（＝その turn の context 長）を並べる | turn 10 の時点で context 長 / `approx_tokens` ≥ 3。そうなら `approx_tokens` を context 長（最新 turn の入力合計）にする案を T3 で採る |
-| H5 | 内容が同じ skill の丸写し（run ごとに消して書き直す）を省いても、prompt と cache への影響は無い。省くと起動 latency が少し縮む | `deliver_to` は毎回 `remove_dir_all`＋copy する（D1.2） | LLM 無しベンチ: 配送前後の file の hash と、Claude Code に見える一覧（frontmatter）が同じであること。配送にかかる時間（ms）を 10 回測る | prompt に入る一覧が bytes 単位で同じで、配送時間の中央値が 50 ms 未満なら「効果は小さい」として優先度を下げる。50 ms 以上、または mtime の変化で harness が再読込を起こすことを観測したら T7 で採る |
+| H5 | 内容が同じ skill の書き直しの省略は **9d2a7314 で実装済み**。残る問いは、その効果（起動 latency、prompt への影響）が測れるほどあるか | `skills.rs` の `deliver_to` が marker v3 の元内容 hash・所有印・届け先の実内容 hash がすべて一致すると `replace_copy` を呼ばない（`agent-docs/progress/2026-10-08-cos-chat-prompt-cache/skill-delivery.md`） | 新しい実装はしない。T2 baseline と T8 after の LLM 無しベンチで 2 回目以降の配送時間（ms、10 回）と file の mtime/inode 不変を測る。実 chat の latency・token への効果は live ベンチまで **不明** | 2 回目以降の配送で書き込みが無く、prompt に入る一覧が bytes 単位で同じなら「実装どおり」として採択。配送時間が測定誤差内なら「効果は小さい」と記録 |
 | H6 | cold（TTL 切れ・新規）と warm（TTL 内の続き）で、非 cache input と初回 latency が大きく違う。したがって cache の効果は、turn 間隔の分布に左右される | provider 規則（D1.4） | live: 同じ thread で、turn 間隔を 30 秒（warm）と 6 分以上（5 分 TTL 切れ。1 時間 TTL なら 61 分以上）で比べる。usage の `ephemeral_5m/1h` の内訳も記録する | warm の非 cache input が cold の 50% 以下で、初回応答 latency の中央値が 20% 以上短い。TTL の種類（5m / 1h）を確定し、記録する |
 
 ## 4. D3: 計測設計
@@ -162,8 +162,8 @@ harness 別の渡し方:
 | T4 | Core 分離（H1 採択時） | (1) CoS chat の prompt を「固定 Core → thread 固定 → turn 可変」の順に組み直し、run id・一時 task id・seq は可変部へ移す。(2) LLM 無しベンチで、別 thread どうしの先頭一致 ≥ 固定 Core の bytes。(3) 既存の cos_chat の試験（割り込みが先頭・actions 禁止・未要約の範囲の明示）を意味を保って直し、通す。(4) 隔離 live の S1 で、非 cache input が baseline 比で H1 の基準を満たす（満たさなければ結果を記録して止める） |
 | T5 | skill 再構成（H2 採択時）と §3 の是正 | (1) cos-operator §3 の表から、`ALLOWED` に無い操作（PUT execution-plan・pause/resume・standing-rules）を外すか「未登録」と明記する。表の各行が `ALLOWED` に存在することを決定的な検査（試験か台本）で確かめる。(2) 毎 run 必要な最小部分を Core（T4）に移し、残りは参照時だけ読む節に分ける。description から「常に読む」を外す。(3) 隔離 live の S3 で、skill 読込の tool call が H2 の基準を下回る。S4 の成功率は baseline 以上 |
 | T6 | 差分配送（H3 採択時） | (1) resumed の run には、前回の配送以後の差分（新しい入力と、前回以降に変わった summary だけ）と、変わった規則だけを渡す。fresh・fresh_after_refusal には今までどおり summary＋未要約履歴を渡す。(2) 前回に何を渡したかは DB から決める（worker やメモリに持たない）。(3) 決定的な試験: resumed の stdin に、前回 turn と同じ summary・履歴・固定規則が入らない。resume 拒否の後の fresh 再試行には全文が入る。(4) cos-chat-home D2 の付記に実装を書く |
-| T7 | skill 配送の同一内容省略（H5 採択時） | (1) 届け先の内容の hash が KB と同じなら、消して書き直さない。(2) 内容が変わったとき・名前が外れたときの掃除は今までどおり（既存の skills の試験が通る）。(3) 適用は CoS chat の作業場所だけか、worker 一般にも広げるかを ADR に書く（一般に広げるなら人の決定） |
-| T8 | after 比較 | (1) T3〜T7 のうち入ったものの後に、T2 と同じ隔離 live ベンチ（同じ台本・同じ model・同じ lab account）で S1〜S5 を流す。(2) 指標ごとに baseline との差の表を作り、仮説ごとに採択 / 棄却 / 不明を書く。(3) 成功率が baseline を下回る変更があれば、その変更の戻しを提案する。(4) 本番への反映（promote）は人の決定として手順だけを書く |
+| T7 | （削除）skill 配送の同一内容省略は 9d2a7314 で実装済み | 後続 task は作らない。効果の測定は T2（baseline）と T8（after）に含める。worker 一般への適用範囲は既に `deliver_to` が共通経路（Claude Code・Codex/ACP）なので、追加の判断は無い |
+| T8 | after 比較 | (1) T3〜T6 のうち入ったものの後に、T2 と同じ隔離 live ベンチ（同じ台本・同じ model・同じ lab account）で S1〜S5 を流す。(2) 指標ごとに baseline との差の表を作り、仮説ごとに採択 / 棄却 / 不明を書く。(3) 成功率が baseline を下回る変更があれば、その変更の戻しを提案する。(4) 本番への反映（promote）は人の決定として手順だけを書く |
 
 ## 6. D5: やらないこと・人の決定
 

@@ -39,10 +39,14 @@ ADR `agent-docs/adr/2026-10-08-browser-prod-enablement.md`（状態: 実装済�
 ### 実装側の残り
 - ADR D4 の `BrowserTaskPolicySet { source }` event と task 詳細の出自欄は未実装（task-policy-auto・web-task-policy 葉の記録どおり）。web は `policy_id`（`auto`・`web-human`）で表示している。
 - `TaskDetail.browser.prerequisite` 欄は未追加（web は既存 event から表示）。
+- ADR D1.3 の「`promoted.json` の `browser_ledger` を `GET /releases` 経由で web の release 一覧に出す」は未実装。promote.sh・release.sh は欄を書くが、`crates/celeris/src/releases.rs`・`crates/task-api/src/releases.rs` が読まず、web にも表示が無い（台帳の状態は doctor・readiness・`/browser/settings` で見る）。
+- ADR D3 の `Event::BrowserSitePolicyChanged` は作らず、別表 `browser_site_policy_events`（migration 0060）に追記している（site-policy-api 葉の判断）。web の `event-kinds.ts` に `browser_site_policy_changed` は無く、site policy 一覧は SSE で更新されない。
 - web readiness 型は生成 schema に未収録で局所型を使っている。
 - `POST /org`・`PATCH /org/{id}` の profile 経由の `credential_policy_ids` は実在検査していない（doctor が未知 ID を出す）。
 - ledger-release の runner-release（`scripts/browser-conformance.py --celeris-release`）には葉の進捗ファイルが無い。
 
 ## 提案
 - 出自 event（`BrowserTaskPolicySet`）と `TaskDetail.browser.prerequisite` を後続の core/API 葉で足す。
+- `GET /releases` の release 要素に `browser_ledger`（`promoted.json`・`manifest.json` から）を足し、web の release 一覧に出す。
+- site policy の変更を SSE で web に届けるなら、`browser_site_policy_events` を通知 feed に流す口か、ADR を別表方式に改める付記を入れる。
 - 本番昇格後の doctor 結果と manaba 再開の実測を、運用セッションがこの file か新しい進捗に追記する。

@@ -324,9 +324,22 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 - **D1（台帳の生成・配置・渡し方）**: runner の `--celeris-release`、`sd_browser_ledger`・release.sh の browser-ledger 段（非 blocking）・promote の記録・
   `scripts/selfdeploy/browser-ledger.sh`、`celerisctl browser ledger check`、daemon の `configure_conformance`（release dir の台帳）。試験 `browser_ledger_release_`（celerisctl 7・celeris 3）と selfdeploy の `browser_ledger_release_stages.sh`。
   実 agent-browser・実 Chromium での本番生成は未実施。
+  - 食い違い（D1.3）: `promote.sh` は `promoted.json` に `browser_ledger: {ok, code}` を書き、release.sh も `gate.json`・`manifest.json` に
+    同じ欄を書くが、`crates/celeris/src/releases.rs`（`read_release`）と `crates/task-api/src/releases.rs` はこの欄を読まず、
+    `GET /releases` の応答にも web の release 一覧にも台帳の状態は出ない。台帳の状態は今は `celerisctl browser doctor`・
+    `GET /api/v1/browser/readiness`・web の `/browser/settings`（readiness 表）で見る。
 - **D2（台帳不足は理由つきで止める）**: `ledger_status`・`LedgerWatch`・`BrowserPrerequisiteCode` と dispatch での停止。試験 `browser_ledger_gate_`（12）。
   - 食い違い: 受信箱の `browser_prerequisite` reason と readiness は実装したが、`TaskDetail.browser.prerequisite` 欄は未追加。web は既存 event から表示する。
 - **D3（site policy の DB 正本・grant の credential 設定）**: migration と store、`crates/task-api/src/browser.rs`、web の `/browser/settings`。試験 `browser_site_policy_db_`（6）。
+  - 食い違い: `Event::BrowserSitePolicyChanged` は作らなかった。site policy には task_id が無く events 表は task 単位なので、
+    `org_browser_events`（migration 0051）と同じ形の別表 `browser_site_policy_events`（migration 0060。追記専用）に
+    `crates/task-core/src/store/site_policies.rs` の `append_event` が `{policy_id, op, source}` を同じ transaction で書く
+    （selector・URL は載せない点は ADR どおり）。このため §4 が web の `event-kinds.ts`・`invalidation-map.ts` に足すとした
+    `browser_site_policy_changed` は無く、web の site policy 一覧は SSE では更新されず、自分の PUT/DELETE の後の再取得で更新する。
+    記録は葉の進捗 `site-policy-api.md`。
 - **D4（最小 policy の自動付与と retry の引き継ぎ）**: 作成の共通経路と `retry.rs`。試験 `browser_policy_autoattach_`（6）。
   - 食い違い: `BrowserTaskPolicySet { source }` event と出自欄は未実装。web は `policy_id`（`auto`・`web-human`）で出自を表す（承認・能力の判定には使わない）。
+- **§4 の web の event 種類**: `browser_prerequisite_blocked`・`browser_prerequisite_resumed` は `web/api/realtime/event-kinds.ts`・
+  `invalidation-map.ts` にある。`browser_site_policy_changed`（D3 の食い違い）と `browser_task_policy_set`（D4 の食い違い）は
+  Event が無いので足していない。
 - **D5（点検コマンド）**: `celerisctl browser doctor` と `GET /api/v1/browser/readiness`（bearer 必須）、credentiald の Ping、`docs/ops/browser-prod-enablement.md`・`browser-prod.md`。試験 `browser_doctor_`（13）。

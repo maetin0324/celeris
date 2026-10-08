@@ -989,6 +989,45 @@ printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
     assert!(received.contains("\"configId\":\"model\""), "{received}");
 }
 
+/// `with_model` の複製は、config の model を置き換えて `session/set_config_option` に渡す。
+#[tokio::test]
+async fn with_model_sends_the_tier_model_instead_of_the_configured_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = AcpConfig {
+        model: Some("configured/model".to_string()),
+        ..stub_acp(
+            dir.path(),
+            r#"
+mkdir -p artifacts
+read -r _init
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}'
+read -r _new
+printf '%s\n' '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"sess-1","configOptions":[{"id":"model","type":"select","currentValue":"a","options":["a","b"]}]}}'
+read -r l3
+echo "$l3" >> received.log
+printf '%s\n' '{"jsonrpc":"2.0","id":3,"result":{}}'
+read -r l4
+echo "$l4" >> received.log
+printf '%s' '{"summary":"ok","evidence":[]}' > artifacts/result.json
+printf '%s\n' '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}'
+"#,
+        )
+    };
+    let adapter = AcpAdapter::new(config)
+        .with_model("qwen-local/tier-model")
+        .expect("acp supports with_model");
+    let req = sample_req(dir.path().to_path_buf());
+    let sink = RecordingSink::default();
+    let outcome = adapter
+        .run(req, "run-11m", default_limits(), &sink)
+        .await
+        .unwrap();
+    assert!(matches!(outcome.terminal, Terminal::Done { .. }));
+    let received = std::fs::read_to_string(dir.path().join("received.log")).unwrap();
+    assert!(received.contains("qwen-local/tier-model"), "{received}");
+    assert!(!received.contains("configured/model"), "{received}");
+}
+
 /// `model` が空ならば `session/set_config_option` は送らない。
 #[tokio::test]
 async fn model_option_is_not_set_when_model_is_empty() {

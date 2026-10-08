@@ -91,3 +91,12 @@ Cargo や検査環境の変更は行っていない。
 skill 本文・参照 file は計測時の `087afd6d` と同一。Rust の差分は整形のみ（空白・末尾カンマを正規化した比較で一致）で、scripts は差分なし。SOURCE.md と運用文書は計測後に更新した。
 前回の隔離計測を再利用し、今回 LLM 呼び出しと本番環境の変更は行っていない。
 回答操作の live before/after は依然として不明。起票・コメントの 5/5 の結果を回答操作に拡張しない。
+
+
+## attempt 2 の再確認（run 01M4E0MVNGF558MSX16A6G05BK）
+
+- 条件 0: `wc -c` は 4,650 B、exit 0。
+- 条件 1 の `--` 付き cargo test は task-dispatch 106 + triage 11 + task-ops 12 = 129 passed。なお、この実行環境では acceptance の `tee /dev/stderr` が `No such device or address` となるため、同じ test pipeline を `cargo test ...` 単体で検証した。
+- 条件 2: `cargo clippy --workspace -- -D warnings` exit 0。
+- 必須 workspace gate: `bash scripts/dev/test-parallel.sh` は既知の sandbox socket path (`SUN_LEN`) 失敗を含む 4,778 passed / 65 failed、exit 100。CoS 関連試験は上記の局所検証で成功し、失敗は browser/CDP 等の既知環境依存。
+- 実装・文書は既存 commit `d9b0ca65` に含まれ、作業 tree は clean。

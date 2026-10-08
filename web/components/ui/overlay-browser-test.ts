@@ -1,4 +1,7 @@
+import { randomUUID } from "node:crypto";
+import { rm } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { type Browser, chromium, type Page } from "@playwright/test";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -26,9 +29,14 @@ export async function seriousViolations(page: Page) {
 export async function openOverlayFixture(
   fixturePath = "/components/ui/fixtures/overlay.html",
 ): Promise<{ page: Page; close: () => Promise<void> }> {
+  // UI test files run concurrently. Each fixture server gets its own deps cache so that one server's
+  // re-optimization does not invalidate the optimized deps another server's page is loading (the page
+  // would then never render and the hook would hang until it times out).
+  const cacheDir = join(process.cwd(), "node_modules", ".vite", `overlay-${randomUUID()}`);
   const server: ViteDevServer = await createServer({
     configFile: false,
     root: process.cwd(),
+    cacheDir,
     plugins: [react(), tailwindcss()],
     server: { host: "127.0.0.1", port: 0, strictPort: false },
   });
@@ -49,11 +57,13 @@ export async function openOverlayFixture(
       close: async () => {
         await browser?.close();
         await server.close();
+        await rm(cacheDir, { recursive: true, force: true });
       },
     };
   } catch (error) {
     await browser?.close();
     await server.close();
+    await rm(cacheDir, { recursive: true, force: true });
     throw error;
   }
 }

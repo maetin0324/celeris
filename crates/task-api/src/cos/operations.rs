@@ -447,9 +447,7 @@ async fn create_operation(
     let mut env = DispatchEnv::of(&state);
     let matched = match_operation(&method, &path).ok();
     let mut human_required = match &matched {
-        Some(matched) => {
-            super::inbox::human_required_for_operation(&state, matched, &path).await?
-        }
+        Some(matched) => super::inbox::human_required_for_operation(&state, matched, &path).await?,
         None => None,
     };
     if matched.as_ref().is_some_and(|m| m.action == "inbox.answer") {
@@ -554,7 +552,10 @@ fn instructed_message(
         ));
     }
     let Ok(run) = store.chat_run_get(thread_id, &ctx.run_id) else {
-        return Err(format!("run {} is not a run of thread {thread_id}", ctx.run_id));
+        return Err(format!(
+            "run {} is not a run of thread {thread_id}",
+            ctx.run_id
+        ));
     };
     if run.input_message_id != message.id {
         return Err(format!(

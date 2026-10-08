@@ -439,11 +439,20 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
     }];
     let p = prompt(&request(Path::new("/tmp/w"), Some(c)));
     assert!(p.contains("## 受信箱の未解決の件"), "{p}");
-    assert!(p.contains("item i1 [人待ち（CoS が人に回した）] question: 「公開前の確認」"), "{p}");
+    assert!(
+        p.contains("item i1 [人待ち（CoS が人に回した）] question: 「公開前の確認」"),
+        "{p}"
+    );
     assert!(p.contains("CoS の理由: 外部公開なので人の判断"), "{p}");
     assert!(p.contains("決めること: 公開してよいか"), "{p}");
-    assert!(p.contains("選択肢: 公開する (key `publish`) / 保留 (key `hold`, 推奨)"), "{p}");
-    assert!(p.contains("回答の経路: POST /api/v1/inbox/items/q1/answer"), "{p}");
+    assert!(
+        p.contains("選択肢: 公開する (key `publish`) / 保留 (key `hold`, 推奨)"),
+        "{p}"
+    );
+    assert!(
+        p.contains("回答の経路: POST /api/v1/inbox/items/q1/answer"),
+        "{p}"
+    );
     assert!(p.contains("\"instructed_by\":\"<message id>\""), "{p}");
     assert!(p.contains("operation を出さずに返事で聞き返す"), "{p}");
 }

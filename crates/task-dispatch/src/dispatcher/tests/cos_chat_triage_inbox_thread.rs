@@ -16,11 +16,9 @@ impl Fixture {
 
     fn item_state(&self, id: &str) -> String {
         let conn = rusqlite::Connection::open(&self.db_path).expect("db");
-        conn.query_row(
-            "SELECT state FROM cos_inbox_items WHERE id=?1",
-            [id],
-            |r| r.get(0),
-        )
+        conn.query_row("SELECT state FROM cos_inbox_items WHERE id=?1", [id], |r| {
+            r.get(0)
+        })
         .expect("state")
     }
 
@@ -109,16 +107,31 @@ async fn cos_chat_triage_digest_records_each_judgment_with_an_answerable_card() 
     // CoS (the run) escalates the item through the resolve path.
     f.escalate(&item, "外部公開なので人の判断");
     assert!(f.join_inbox().await);
-    assert!(f.digests().is_empty(), "no digest before the tick observes the end");
+    assert!(
+        f.digests().is_empty(),
+        "no digest before the tick observes the end"
+    );
     f.tick();
     let digests = f.digests();
     assert_eq!(digests.len(), 1, "one digest per run");
     let d = &digests[0];
     assert!(d.text.contains("### 質問: deploy（質問）"), "{}", d.text);
     assert!(d.text.contains("- 判断: 人に回した"), "{}", d.text);
-    assert!(d.text.contains("- 理由: 外部公開なので人の判断"), "{}", d.text);
-    assert!(d.text.contains("- 人が決めること: 公開してよいか"), "{}", d.text);
-    assert!(d.text.contains("- 選択肢: 公開する / 保留（推奨）"), "{}", d.text);
+    assert!(
+        d.text.contains("- 理由: 外部公開なので人の判断"),
+        "{}",
+        d.text
+    );
+    assert!(
+        d.text.contains("- 人が決めること: 公開してよいか"),
+        "{}",
+        d.text
+    );
+    assert!(
+        d.text.contains("- 選択肢: 公開する / 保留（推奨）"),
+        "{}",
+        d.text
+    );
     assert_eq!(d.cards.len(), 1);
     let card = &d.cards[0];
     assert_eq!(card.kind, ChatCardKind::Question);
@@ -130,10 +143,17 @@ async fn cos_chat_triage_digest_records_each_judgment_with_an_answerable_card() 
     assert!(d.run_id.is_some());
     // Idempotent across ticks and a restart.
     f.tick();
-    f.d.cos_chat_launch.as_mut().expect("launch").triage.digest_due = true;
+    f.d.cos_chat_launch
+        .as_mut()
+        .expect("launch")
+        .triage
+        .digest_due = true;
     f.tick();
     assert_eq!(f.digests().len(), 1);
-    assert_eq!(f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"), 0);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"),
+        0
+    );
 }
 
 #[tokio::test]
@@ -149,18 +169,33 @@ async fn cos_chat_triage_digest_without_reason_names_the_item_and_fallback_names
     assert_eq!(digests.len(), 1);
     let d = &digests[0];
     assert!(d.text.contains("### 質問: deploy（質問）"), "{}", d.text);
-    assert!(d.text.contains("- 判断: 未処理（人へ直接通知する）"), "{}", d.text);
+    assert!(
+        d.text.contains("- 判断: 未処理（人へ直接通知する）"),
+        "{}",
+        d.text
+    );
     assert!(d.text.contains("- 理由: 理由の記録なし"), "{}", d.text);
     // The fallback of the same pass hands it over, naming the wait and what to decide.
-    assert_eq!(f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"), 1);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"),
+        1
+    );
     let handoff: Vec<ChatMessage> = f
         .inbox_messages()
         .into_iter()
-        .filter(|m| m.client_message_id.as_deref().is_some_and(|k| k.starts_with("cos-fallback:")))
+        .filter(|m| {
+            m.client_message_id
+                .as_deref()
+                .is_some_and(|k| k.starts_with("cos-fallback:"))
+        })
         .collect();
     assert_eq!(handoff.len(), 1);
     let h = &handoff[0];
-    assert!(h.text.contains("「質問: deploy」（質問）は人へ委ねた"), "{}", h.text);
+    assert!(
+        h.text.contains("「質問: deploy」（質問）は人へ委ねた"),
+        "{}",
+        h.text
+    );
     assert!(h.text.contains("決めること: "), "{}", h.text);
     assert!(h.text.contains("選択肢: "), "{}", h.text);
     assert!(h.text.contains("回答: /tasks/"), "{}", h.text);
@@ -179,15 +214,25 @@ async fn cos_chat_triage_human_interrupt_requeues_items_and_runs_the_human_messa
     assert_eq!(f.inbox_runs(), 1);
     let item = f.single_item();
     // The person interrupts the triage run with an instruction before it polls.
-    f.human_says("(b) にして、ただし host 1 台だけで", ChatSendMode::Interrupt);
+    f.human_says(
+        "(b) にして、ただし host 1 台だけで",
+        ChatSendMode::Interrupt,
+    );
     assert!(f.join_inbox().await);
     f.tick();
     // The interrupted run's item went back to the queue instead of the fallback …
     assert_eq!(f.item_state(&item), "pending");
-    assert_eq!(f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"), 0);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM notifications WHERE kind='cos_fallback'"),
+        0
+    );
     let digests = f.digests();
     assert_eq!(digests.len(), 1);
-    assert!(digests[0].text.contains("中断されたので次の run で扱う"), "{}", digests[0].text);
+    assert!(
+        digests[0].text.contains("中断されたので次の run で扱う"),
+        "{}",
+        digests[0].text
+    );
     // … and the human message's run started first (one run per thread).
     assert_eq!(f.inbox_runs(), 2);
     assert_eq!(f.user_input_runs(), 1);
@@ -218,11 +263,17 @@ async fn cos_chat_inbox_human_message_while_triage_runs_is_queued_then_served_be
     // The human message is served before the new item.
     assert_eq!(f.inbox_runs(), 2);
     assert_eq!(f.user_input_runs(), 1);
-    assert_eq!(f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='pending'"), 1);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='pending'"),
+        1
+    );
     assert!(f.join_inbox().await);
     f.tick();
     assert_eq!(f.inbox_runs(), 3);
-    assert_eq!(f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='running'"), 1);
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM cos_inbox_items WHERE state='running'"),
+        1
+    );
     assert!(f.join_inbox().await);
 }
 
@@ -254,12 +305,18 @@ fn cos_chat_inbox_context_item_maps_the_report_and_answer_path() {
         }),
     };
     let ctx = inbox_context_item(report);
-    assert_eq!(ctx.summary, "decision:decision-d1", "empty summary falls back to the source");
+    assert_eq!(
+        ctx.summary, "decision:decision-d1",
+        "empty summary falls back to the source"
+    );
     assert_eq!(
         ctx.answer_path.as_deref(),
         Some("/api/v1/inbox/items/decision-d1/answer")
     );
-    assert_eq!(ctx.decision.as_ref().map(|d| d.options[0].label.as_str()), Some("A"));
+    assert_eq!(
+        ctx.decision.as_ref().map(|d| d.options[0].label.as_str()),
+        Some("A")
+    );
     let mut notice = CosTriageItemReport {
         source_kind: "notice".into(),
         decision: None,

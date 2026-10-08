@@ -115,11 +115,7 @@ pub(crate) fn digest_message(
                 if let Some(options) = options_line(item) {
                     text.push_str(&format!("- 選択肢: {options}\n"));
                 }
-                if let Some(why) = d
-                    .recommendation_reason
-                    .as_deref()
-                    .filter(|r| !r.is_empty())
-                {
+                if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
                     text.push_str(&format!("- 推奨の理由: {why}\n"));
                     card_reason = Some(why.to_owned());
                 }
@@ -153,7 +149,10 @@ impl CosChatLaunch {
     /// One digest pass: every finished triage run without a digest gets its message; stopped
     /// and interrupted runs give their unhandled items back to the queue.
     pub(crate) fn triage_digest(&mut self, now: OffsetDateTime) {
-        let runs = match self.store.cos_triage_runs_without_digest(DIGEST_RUNS_PER_PASS) {
+        let runs = match self
+            .store
+            .cos_triage_runs_without_digest(DIGEST_RUNS_PER_PASS)
+        {
             Ok(runs) => runs,
             Err(error) => {
                 tracing::warn!(%error, "CoS triage digest scan failed");

@@ -165,13 +165,18 @@ fn inbox_section(chat: &CosChatContext) -> String {
             item.created_at,
         ));
         if let Some(reason) = item.reason.as_deref().filter(|r| !r.trim().is_empty()) {
-            out.push_str(&format!("  CoS の理由: {reason}
-"));
+            out.push_str(&format!(
+                "  CoS の理由: {reason}
+"
+            ));
         }
         if let Some(d) = &item.decision {
             if !d.summary.is_empty() {
-                out.push_str(&format!("  決めること: {}
-", d.summary));
+                out.push_str(&format!(
+                    "  決めること: {}
+",
+                    d.summary
+                ));
             }
             if !d.options.is_empty() {
                 let options: Vec<String> = d
@@ -185,21 +190,31 @@ fn inbox_section(chat: &CosChatContext) -> String {
                         }
                     })
                     .collect();
-                out.push_str(&format!("  選択肢: {}
-", options.join(" / ")));
+                out.push_str(&format!(
+                    "  選択肢: {}
+",
+                    options.join(" / ")
+                ));
             }
             if let Some(why) = d.recommendation_reason.as_deref().filter(|r| !r.is_empty()) {
-                out.push_str(&format!("  推奨の理由: {why}
-"));
+                out.push_str(&format!(
+                    "  推奨の理由: {why}
+"
+                ));
             }
             if !d.web_path.is_empty() {
-                out.push_str(&format!("  画面: {}
-", d.web_path));
+                out.push_str(&format!(
+                    "  画面: {}
+",
+                    d.web_path
+                ));
             }
         }
         if let Some(path) = &item.answer_path {
-            out.push_str(&format!("  回答の経路: POST {path}
-"));
+            out.push_str(&format!(
+                "  回答の経路: POST {path}
+"
+            ));
         }
     }
     out.push_str(&format!(

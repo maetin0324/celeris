@@ -790,7 +790,9 @@ async fn cos_live_fix_d3_confidence_out_of_range_is_422() {
 
 fn inbox_thread_id(env: &TestEnv) -> String {
     db(env)
-        .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| r.get(0))
+        .query_row("SELECT id FROM chat_threads WHERE kind='inbox'", [], |r| {
+            r.get(0)
+        })
         .expect("inbox thread")
 }
 
@@ -894,22 +896,37 @@ async fn cos_chat_inbox_thread_instructed_by_relays_the_human_answer() {
     let relay = |key: &str, instructed_by: Value| relay_body(key, &inbox_id, instructed_by);
 
     // Without an instruction the human_required wait is refused (same as a direct call).
-    let resp = send(&app, post_json_with(OPS, &relay("k-no-instruction", Value::Null), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-no-instruction", Value::Null), &headers),
+    )
+    .await;
     assert_problem(&resp, 403, "cos_human_required");
     assert!(decision_answered_by(&env, &task).is_empty());
 
     // An instruction must be a message of this thread.
-    let resp = send(&app, post_json_with(OPS, &relay("k-bad", json!("not-a-message")), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-bad", json!("not-a-message")), &headers),
+    )
+    .await;
     assert_problem(&resp, 422, "cos_instruction_invalid");
     assert!(decision_answered_by(&env, &task).is_empty());
 
     // With the human's message the relay applies through the decision's own domain path.
-    let resp = send(&app, post_json_with(OPS, &relay("k-relay", json!(human_message)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-relay", json!(human_message)), &headers),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     let op: Value = resp.json()["operation"].clone();
     assert_eq!(op["state"], "applied");
     assert_eq!(op["action"], "decision.answer");
-    assert_eq!(op["payload"]["instructed_by"]["message_id"], json!(human_message));
+    assert_eq!(
+        op["payload"]["instructed_by"]["message_id"],
+        json!(human_message)
+    );
     assert_eq!(op["payload"]["instructed_by"]["seq"], json!(human_seq));
     let reason = op["reason"].as_str().expect("reason");
     assert!(
@@ -921,13 +938,23 @@ async fn cos_chat_inbox_thread_instructed_by_relays_the_human_answer() {
     assert!(
         audit.iter().any(|e| e["state"] == "applied"
             && e["actor"] == "cos"
-            && e["reason"].as_str().is_some_and(|r| r.contains("人の指示（seq"))),
+            && e["reason"]
+                .as_str()
+                .is_some_and(|r| r.contains("人の指示（seq"))),
         "{audit:?}"
     );
-    assert_eq!(item_state(&env, &item), "pending", "the triage item is not CoS's outcome");
+    assert_eq!(
+        item_state(&env, &item),
+        "pending",
+        "the triage item is not CoS's outcome"
+    );
 
     // A closed wait is a conflict, recorded as rejected.
-    let resp = send(&app, post_json_with(OPS, &relay("k-again", json!(human_message)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-again", json!(human_message)), &headers),
+    )
+    .await;
     assert_problem(&resp, 409, "cos_revision_conflict");
 }
 
@@ -964,19 +991,39 @@ async fn cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_a
     // (b) A triage run cannot cite the earlier human message nor its own system input.
     let (triage_run, system_message, triage_bearer) = inbox_triage_run(&env, "triage");
     let headers = [("authorization", triage_bearer.as_str())];
-    let resp = send(&app, post_json_with(OPS, &relay("k-triage-hello", json!(hello)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-triage-hello", json!(hello)), &headers),
+    )
+    .await;
     refused(&resp, "k-triage-hello");
-    let resp = send(&app, post_json_with(OPS, &relay("k-triage-system", json!(system_message)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &relay("k-triage-system", json!(system_message)),
+            &headers,
+        ),
+    )
+    .await;
     refused(&resp, "k-triage-system");
     finish_run(&env, &triage_run);
-    assert_eq!(item_state(&env, &item), "running", "the triage item is untouched");
+    assert_eq!(
+        item_state(&env, &item),
+        "running",
+        "the triage item is untouched"
+    );
 
     // (c) A later human run cannot cite the earlier unrelated message either, only its own input.
     let instruction = inbox_human_post(&env, "instruction", "(b) にして、ただし host 1 台だけで");
     let (_run, input, bearer) = inbox_human_run(&env, "instruction");
     assert_eq!(input, instruction);
     let headers = [("authorization", bearer.as_str())];
-    let resp = send(&app, post_json_with(OPS, &relay("k-earlier", json!(hello)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-earlier", json!(hello)), &headers),
+    )
+    .await;
     refused(&resp, "k-earlier");
 
     // (d) A message of another thread, and a human thread's own input, are refused too.
@@ -988,20 +1035,40 @@ async fn cos_chat_inbox_thread_instructed_by_refuses_messages_the_run_does_not_a
             |r| r.get(0),
         )
         .expect("other message");
-    let resp = send(&app, post_json_with(OPS, &relay("k-foreign", json!(other_message)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-foreign", json!(other_message)), &headers),
+    )
+    .await;
     refused(&resp, "k-foreign");
     let other_headers = [("authorization", other_bearer.as_str())];
-    let resp = send(&app, post_json_with(OPS, &relay("k-human-thread", json!(other_message)), &other_headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(
+            OPS,
+            &relay("k-human-thread", json!(other_message)),
+            &other_headers,
+        ),
+    )
+    .await;
     refused(&resp, "k-human-thread");
 
     // The stale bearer of the finished "hello" run is refused by the credential check, not here.
     let hello_headers = [("authorization", hello_bearer.as_str())];
-    let resp = send(&app, post_json_with(OPS, &relay("k-stale", json!(hello)), &hello_headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-stale", json!(hello)), &hello_headers),
+    )
+    .await;
     assert_ne!(resp.status.as_u16(), 200, "{}", resp.text());
     assert!(decision_answered_by(&env, &task).is_empty());
 
     // The run's own input still relays.
-    let resp = send(&app, post_json_with(OPS, &relay("k-relay", json!(instruction)), &headers)).await;
+    let resp = send(
+        &app,
+        post_json_with(OPS, &relay("k-relay", json!(instruction)), &headers),
+    )
+    .await;
     assert_eq!(resp.status.as_u16(), 200, "{}", resp.text());
     assert_eq!(resp.json()["operation"]["state"], "applied");
     assert_eq!(decision_answered_by(&env, &task).len(), 1);

@@ -309,7 +309,7 @@ Core以降のpromptのenrichはrunディレクトリを直接探すようにし�
 T6 の統合と、隔離 bench での LLM 起動の扱いが決まるまで、統合 main の再計測は残る。
 
 保存済み full 26 run の部分比較（D7 と同じ before / after）を再集計した。
-S1 の cache write 中央値は 21,864 → 17,566（−19.66%）、skill 読込は 1 → 0。
+S1 の cache write 中央値は 21,864.5 → 17,566（−19.66%）、skill 読込は 1 → 0。
 総 latency は 15,802.5 → 18,895 ms（+19.57%）で改善していない。
 after run `01M4DFZK0MJWNRG8BW6GDC434J` は総 46,760 ms、初回 45,969 ms。
 S2 の総 latency は 19,672 → 13,781.5 ms。S1 非 cache input は 8 → 12、S2 は 6 → 6。
@@ -340,3 +340,40 @@ Core の2 commit を対として戻す検討を行う。rollover `d514aa37` は�
 `artifacts/cos-chat-bench-after.json`・`artifacts/cos-chat-bench-comparison.md`・
 `artifacts/regression.json`・`artifacts/release-verification.json` に保存する。
 本番 config/DB/KB/release/systemd の変更と promote は行っていない。
+
+### D8.1 この main の回帰と境界検査
+
+- worker の関連 lib（cos_chat・attachments・triage・continuation・credential・restart/control・
+  acp・claude_code・codex・db_guard）は335件成功。API CoS は65件、dispatcher CoS は118件、
+  決定的 prompt bench は1件成功、workspace clippy は exit 0。
+- API の `cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit`、
+  `cos_chat_ops_auth_identity_claims_are_ignored_or_422`、
+  `cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill`、
+  `cos_chat_ops_checkpoint_api_403_for_human_and_other_run` は成功。
+  DB guard unit は成功したが、実 userns 境界の実証はこの sandbox では未完了。
+- `cargo test --workspace` は exit 101。最初の celeris lib は411成功・2失敗で、
+  browser doctor の Unix socket path が `SUN_LEN` を超えた。
+  指定 acceptance の `tail | grep -qvE` は exit 0 だったが、これは1行でも非一致なら成功するので
+  cargo の失敗を隠す。全体成功の根拠として使わない。
+- `test-parallel.sh` は exit 100、4,803成功・63失敗・14 ignored、doc-test は exit 0。
+  失敗一覧を保存した。63件のうち credentiald 19・task-worker 36・task-api 5・
+  celeris 2・celerisctl 1。CoS chat・triage・continuation・claude_code・codex 名の試験に失敗なし。
+  worker の integration を含む選択検査も `browser_control_gate_wire` が失敗し exit 101。
+- web lint/typecheck は exit 0。長い run TMPDIR では Unix socket 起動待ちが完了しなかったため停止し、
+  run TMPDIR への短い symlink で web 全試験を再実行すると exit 0（Vitest625件、Node78件）。
+  ファイル本体を `/tmp` に移していない。Rust全体へは canonical path 比較のためこの回避を流用しない。
+
+この付記は製品コードを変更しない。全体回帰の失敗と統合後 after の不足があるため、
+検証完了・本番反映可能とは結論しない。
+
+### D8.2 隔離 release の結果
+
+候補 `51b21e1f71e922bdf43fb4ea3bb842d231bd7619`（main `f81b9854` と製品コード同一）を
+task artifacts 内の state/config と指定 CARGO_TARGET_DIR で `release.sh` に渡した。
+exit 1、`gate.json.ok=false`、cargo-test exit 100（4,770成功・96失敗・14 ignored、doc-test exit 0）。
+必須 namespace 検査は `unshare: Operation not permitted`、socket fixture は `SUN_LEN` 等で失敗した。
+gate 条件は緩めていない。release は生成されず、`verify.sh` は exit 1（release なし）で拒否。
+`verify.json` は未生成で、**verify ok の SHA はない**。
+`status.sh` は exit 0、隔離 state の候補 release 一覧は空。
+status の本番 GUI health にある `ok=true` は既存本番の値で、候補の検証を表さない。
+本番 health は読み取りのみ。promote は未実行。

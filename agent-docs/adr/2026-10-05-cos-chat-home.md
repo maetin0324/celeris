@@ -486,7 +486,7 @@ close-out 2 付記で実機 FAIL だった D1〜D4（(d)(e) 未達の原因）�
 ### D1 占有が取れるか（harness 別）
 
 - **claude-code: 取れる。** `result.usage` は run 内の全 API 呼び出しの合算（占有にならない）。一方 stream-json の各 `assistant` 行の `message.usage`（`input_tokens`・`cache_read_input_tokens`・`cache_creation_input_tokens`）はその 1 呼び出しの値なので、**最後の main thread の assistant 行**の 3 値の和が、その run の終わりの context 占有。sub-agent の行（`parent_tool_use_id` が非 null）は別 context なので数えない。`ExplorationTracker::observe_assistant_usage` が観測し、`annotate` が `result.usage.context_tokens` に載せる。
-- **pi: 取れる。** `message_end` の assistant message の `usage.input + cacheRead + cacheWrite` の最後の値（`PiStream`）。
+- **pi: 取れる（cache は input の外数で確定）。** `message_end` の assistant message の `usage.input + cacheRead + cacheWrite` の最後の値（`PiStream`）が占有。出典: pi-ai 0.84.2（`~/.local/celeris/npm/pi-0.84.2/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/`）の `api/anthropic-messages.js:398-401`（input=input_tokens、cacheRead=cache_read_input_tokens、cacheWrite=cache_creation_input_tokens）、`api/openai-completions.js:1106-1125`・`api/openai-responses-shared.js:441-447`（input=prompt から cached・cache_write を差し引き）、`utils/estimate.js:3-4`（calculateContextTokens = totalTokens || input+output+cacheRead+cacheWrite）。
 - **codex: 取れない（None）。** `turn.completed.usage` は turn 合算で呼び出し単位の値が無い（`cached_input_tokens` は input の内数）。**acp / aider も None。** 実機で確認していないので、これらが占有を持つかは「不明」。
 - 取れない場合は D3 の fallback。
 
@@ -509,7 +509,7 @@ worker 一般の `Usage` と既存パーサは変えず、CoS の `session_usage
 - **claude-code（外数）**: `claude_code.rs` の result パーサは Anthropic の `input_tokens`（cache を含まない）、`cache_read_input_tokens`、`cache_creation_input_tokens` を個別に保持する。`billed_input = input + cache_read + cache_creation`。
 - **codex（内数）**: `codex.rs` の `turn.completed` パーサは `input_tokens` をそのまま、内数の `cached_input_tokens` を `cache_read_tokens` にも保持する。`billed_input = input` のみ（cache を足さない）。既存 fixture の input=10 / cached=4 / output=20 は billed_input=10、fallback 加算=30。
 - **acp / opencode（不明）**: `acp.rs` の `PromptResponse` 処理は安定版に token usage フィールドが無く、常に `usage: None`。内数・外数は判定不能。現在は入力計上なし。将来 usage が来ても、定義を確認するまで保守的に input のみとする。
-- **pi（不明）**: `pi.rs::PiStream::event` は assistant の `message_end.usage.{input,output,cacheRead,cacheWrite}` をそれぞれ `Usage` へ合算する。`pi_adapter_usage_counts_only_final_message_events` もこの個別合算を確認するが、input と cache の包含関係はパーサ・fixture からは確定できない。保守的に `billed_input = input` のみ。既存の `context_tokens = input + cacheRead + cacheWrite` の最後の観測と `approx_tokens` fallback は今回変更しない。
+- **pi（外数・確定）**: `pi.rs::PiStream::event` は assistant の `message_end.usage.{input,output,cacheRead,cacheWrite}` を個別に合算する。pi-ai は provider 差を正規化し `usage.input` は cache を含まない外数なので、`billed_input = input+cache_read+cache_creation`（claude-code と同じ）。占有（最後の呼出しの input+cacheRead+cacheWrite）と累積入力の両方が確定。試験 `cos_chat_pi_cache_is_external_occupancy_and_billed_input`（input=100,cacheRead=40,cacheWrite=5 を 2 呼出し: 占有 145、累積入力 290）。出典: pi-ai 0.84.2（`~/.local/celeris/npm/pi-0.84.2/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/`）の `api/anthropic-messages.js:398-401`（input=input_tokens、cacheRead=cache_read_input_tokens、cacheWrite=cache_creation_input_tokens）、`api/openai-completions.js:1106-1125`・`api/openai-responses-shared.js:441-447`（input=prompt から cached・cache_write を差し引き）、`utils/estimate.js:3-4`（calculateContextTokens = totalTokens || input+output+cacheRead+cacheWrite）。
 - **その他の定義不明の harness**: input のみ。欠落値は 0、加算と i64 変換の飽和処理は維持する。
 
 ### 試験

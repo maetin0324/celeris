@@ -707,6 +707,24 @@ fn cos_chat_billed_input_claude_adds_external_cache_tokens() {
     assert_billed_input_persisted("claude-code", usage, 16);
 }
 
+// pi fixture: two calls of input=100, cacheRead=40, cacheWrite=5 (cache is outside input).
+// The worker sums the calls; occupancy is the last call: 100+40+5.
+#[test]
+fn cos_chat_pi_cache_is_external_occupancy_and_billed_input() {
+    let outcome = billed_input_outcome(task_core::Usage {
+        input_tokens: Some(200),
+        cache_read_tokens: Some(80),
+        cache_creation_tokens: Some(10),
+        output_tokens: Some(20),
+        context_tokens: Some(145),
+        ..Default::default()
+    });
+    let usage = crate::dispatcher::cos_chat::rollover::session_usage("pi", &outcome);
+    assert_eq!(usage.context_tokens, Some(145));
+    assert_eq!(usage.billed_input, 290);
+    assert_eq!(usage.add_tokens, 220);
+}
+
 fn assert_billed_input_persisted(
     harness: &str,
     usage: task_core::chat::ChatSessionUsage,
@@ -749,7 +767,7 @@ fn cos_chat_billed_input_unknown_cache_definition_uses_input_only() {
         context_tokens: Some(16),
         ..Default::default()
     });
-    for harness in ["acp", "opencode", "pi", "fake", "unknown"] {
+    for harness in ["acp", "opencode", "fake", "unknown"] {
         let usage = crate::dispatcher::cos_chat::rollover::session_usage(harness, &outcome);
         assert_eq!(usage.billed_input, 10, "{harness}");
         assert_eq!(usage.add_tokens, 30, "{harness}");

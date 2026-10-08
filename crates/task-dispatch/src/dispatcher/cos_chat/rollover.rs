@@ -228,7 +228,7 @@ pub(crate) fn history_since_summary(
 }
 
 /// run の usage から session 行へ足す値。`add_tokens` は従来どおり `input+output`（占有が取れない
-/// harness の fallback）、`billed_input` は harness 別の run 合算入力（claude-code は cache を
+/// harness の fallback）、`billed_input` は harness 別の run 合算入力（claude-code・pi は cache を
 /// 加算、codex と定義不明の harness は input のみ。判定に使わない）。`context_tokens` は最後の
 /// API 呼び出しの占有（取れた時だけ。rollover の判定値）。
 pub(crate) fn session_usage(
@@ -239,10 +239,12 @@ pub(crate) fn session_usage(
     let Some(u) = outcome_usage(outcome) else {
         return ChatSessionUsage::default();
     };
-    // Anthropic input excludes both cache counters. Codex cached input is a subset of input;
-    // ACP reports no usage, and pi's parser does not establish whether cache is included.
-    // Keep unknown harnesses conservative without changing worker Usage or occupancy.
-    let billed_input = if harness == "claude-code" {
+    // Anthropic input excludes both cache counters. pi-ai 0.84.2 normalizes providers so that
+    // usage.input excludes cacheRead/cacheWrite too (anthropic-messages.js:398-401,
+    // openai-completions.js:1106-1125, openai-responses-shared.js:441-447). Codex cached input
+    // is a subset of input; ACP reports no usage. Keep unknown harnesses conservative without
+    // changing worker Usage or occupancy.
+    let billed_input = if harness == "claude-code" || harness == "pi" {
         u.input_tokens
             .unwrap_or(0)
             .saturating_add(u.cache_read_tokens.unwrap_or(0))

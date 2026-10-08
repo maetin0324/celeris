@@ -42,3 +42,10 @@ completed: 2026-10-08
 - `sh scripts/dev/check-doc-links.sh`: exit 1。未変更の `crates/task-dispatch/src/dispatcher/cos_chat/sink_tests.rs:544` のテスト入力文字列 `docs/SKILL.md` を壊れた参照として拾う（修正前 HEAD にも同じ文字列あり）。今回編集した ADR / 進捗への指摘はない。
 - Python で ADR と本進捗の両方に `0062_cos_chat_context_tokens` / `schema 62` があり、旧 `0061` / `schema 61` がないことを検査: exit 0。
 - run の検査ログ: 成果物ディレクトリの `billed-input-cos-chat-test.log`・`billed-input-clippy.log`・`billed-input-test-parallel.log`・`billed-input-doc-links.log`。
+
+## pi-accounting-fix（2026-10-08）
+
+- 一次情報: pi-ai 0.84.2 は provider 差を正規化し usage.input は cache を含まない外数（anthropic-messages.js:398-401、openai-completions.js:1106-1125、openai-responses-shared.js:441-447、utils/estimate.js:3-4）。占有 input+cacheRead+cacheWrite（pi.rs:534-539）は正しく、誤りは累積入力側だった。
+- 修正: `session_usage` で pi も claude-code と同じく `billed_input = input+cache_read+cache_creation`。codex は input のみ、acp は usage なしのまま。worker 一般の Usage は不変。
+- 試験: `cos_chat_pi_cache_is_external_occupancy_and_billed_input`（2 呼出し input=100,cacheRead=40,cacheWrite=5: 占有 145、累積入力 290）。`cos_chat_billed_input_unknown_cache_definition_uses_input_only` から pi を外した。
+- ADR 2026-10-05-cos-chat-home の付記 D1・D4 を「pi は外数・確定」で一致させ pi-ai の path:行を出典に記載。ADR 2026-10-08-cos-chat-prompt-cache に pi の包含関係の記述は無く変更不要。

@@ -419,6 +419,7 @@ write_gate_json() {
     printf '  "cargo_test": %s,\n' "$(cargo_test_summary_json)"
     printf '  "bundle": %s,\n' "${BUNDLE_JSON:-null}"
     printf '  "web": %s,\n' "$(web_json)"
+    printf '  "browser_ledger": %s,\n' "${BROWSER_LEDGER_JSON:-null}"
     printf '  "steps": %s\n' "$steps"
     printf '}\n'
   } >"$dest"
@@ -665,6 +666,17 @@ WEB_BUNDLE_T0="$(sd_now)"
 bundle_web
 WEB_BUNDLE_SECS="$(sd_secs_since "$WEB_BUNDLE_T0")"
 
+# ---- browser 適合台帳（ADR 2026-10-08-browser-prod-enablement D1.2）: 非 blocking ----
+# 実 agent-browser が無い・生成器が落ちた・上限（SD_BROWSER_LEDGER_TIMEOUT、既定 1800 秒）を超えたときは台帳を置かず、
+# `browser/ledger-status.json` に理由（code）を残す。**release は失敗にしない**（失敗は dispatcher の gate が browser task だけを止める）。
+# ログは `.gate-browser-ledger.log` → release の gate-logs/browser-ledger.log。
+BROWSER_LEDGER_LOG="$BUILD/.gate-browser-ledger.log"
+: >"$BROWSER_LEDGER_LOG"
+CARGO_TARGET_DIR="$SD_CARGO_TARGET" CELERIS_USERNS_TESTS=1 \
+  sd_browser_ledger "$BUILD" "$STAGE" "$SHA12" >>"$BROWSER_LEDGER_LOG" 2>&1 || true
+BROWSER_LEDGER_JSON="{\"ok\": ${SD_BROWSER_LEDGER_OK:-false}, \"code\": $(sd_json_str "${SD_BROWSER_LEDGER_CODE:-unknown}")}"
+sd_log "browser-ledger: ok=${SD_BROWSER_LEDGER_OK:-false} code=${SD_BROWSER_LEDGER_CODE:-unknown} (non-blocking; log $BROWSER_LEDGER_LOG)"
+
 SCHEMA_VERSION="$(sd_schema_version_of_tree "$BUILD")" \
   || sd_die "cannot parse SCHEMA_VERSION from crates/task-core/src/store/migrations.rs (or store/mod.rs, store.rs) at $SHA12"
 # `celeris` の版は Cargo.toml から読む（バイナリを起こさない。`--version` は無い）。
@@ -688,6 +700,7 @@ GUI_VERSION="$(sd_json_get "$STAGE/gui/package.json" version || true)"
   printf '  "gui_prod_deps": {"cache_key": %s, "reused": %s, "created_by_sha12": %s},\n' \
     "$(sd_json_str "$GUI_DEPS_KEY")" "$GUI_DEPS_REUSED" "$(sd_json_str "$GUI_DEPS_CREATED_BY")"
   printf '  "web": %s,\n' "$(web_json)"
+  printf '  "browser_ledger": %s,\n' "$BROWSER_LEDGER_JSON"
   printf '  "gate_ok": true\n'
   printf '}\n'
 } >"$STAGE/manifest.json"

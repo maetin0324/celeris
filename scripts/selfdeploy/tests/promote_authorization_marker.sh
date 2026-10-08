@@ -210,6 +210,9 @@ check_marker_at_start stop-start "$NEW" promote.sh stop-start
 check_no_marker_left stop-start
 assert_eq "stop-start: current -> new" "releases/$NEW" "$(readlink "$CELERIS_STATE_DIR/current")"
 [ -f "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" ] && ok "stop-start: promoted.json written" || ng "stop-start: promoted.json missing"
+# ADR 2026-10-08-browser-prod-enablement D1.3: 台帳が無くても昇格は進み、promoted.json に browser_ledger（missing）が写る。
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); sys.exit(0 if d["browser_ledger"]=={"ok":False,"code":"missing"} else 1)' \
+  "$CELERIS_STATE_DIR/releases/$NEW/promoted.json" && ok "stop-start: promoted.json records browser_ledger missing" || ng "stop-start: promoted.json browser_ledger wrong"
 dump_on_fail
 
 # ---- ケース 3: live で start が失敗 → EXIT トラップが印を消す --------------------

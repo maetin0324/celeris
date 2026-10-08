@@ -45,6 +45,12 @@ export type BrowserWaitReason = "waiting_for_auth" | "waiting_for_approval";
 export type BrowserWaitState =
   ("pending" | "denied" | "expired" | "cancelled" | "revoked" | "invalidated") | "registered" | "approved" | "resumed";
 /**
+ * Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:
+ * no aliases, categories or pass-through of upstream names.
+ */
+export type BrowserAction =
+  "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
+/**
  * DESIGN §5.4 の `WorkerHint`。
  */
 export type Tier = "frontier" | "standard" | "cheap";
@@ -1665,8 +1671,7 @@ export type InboxKind =
   | "cluster_login"
   | "disk_full"
   | "delivery_skipped"
-  | "integration_request"
-  | "knowledge_review";
+  | "integration_request";
 /**
  * ADR-0047 D1 / D4。
  */
@@ -1776,12 +1781,6 @@ export type NotificationKind =
  * 組織のノードの種類（ADR-0033 D1）。`secretary` は根で 1 つだけ。
  */
 export type OrgKind = "secretary" | "department" | "section";
-/**
- * Task-level browser operation vocabulary (ADR-0080 D1). Unknown names are schema errors:
- * no aliases, categories or pass-through of upstream names.
- */
-export type BrowserAction =
-  "navigate" | "click" | "snapshot" | "extract" | "screenshot" | "download" | "scroll" | "credential_use";
 /**
  * ADR-0047 D2: 何をマウントするか。
  */
@@ -2727,6 +2726,12 @@ export interface BrowserRevokeBody {
  */
 export interface BrowserSettingsPatch {
   allowed_domains?: string[] | null;
+  /**
+   * ADR 2026-10-08-browser-click-download-approval-policy D1: business actions that need a
+   * per-run human approval in every task of this grant (default empty = click/download run
+   * without approval). `credential_use` is always approved regardless of this list.
+   */
+  approval_actions?: BrowserAction[] | null;
   budget?: BudgetPrefs | null;
   credential_identity_ids?: {
     [k: string]: string;
@@ -8872,6 +8877,13 @@ export interface BrowserCapability {
    * Allowed origins. Legacy host patterns read as HTTPS on port 443 only.
    */
   allowed_domains: string[];
+  /**
+   * Business actions that need a per-run human approval in every task of this grant
+   * (ADR 2026-10-08-browser-click-download-approval-policy D1). Empty by default:
+   * click/download run without approval inside the allowed origins. `credential_use` is
+   * always approved whether or not it is listed here.
+   */
+  approval_actions?: BrowserAction[];
   /**
    * Policy ID to browser identity ID. This contains identifiers only, never credentials.
    */

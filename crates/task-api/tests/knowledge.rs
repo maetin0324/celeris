@@ -789,3 +789,83 @@ async fn a_gui_edit_marks_the_page_as_human_authored() {
     assert_eq!(again.status.as_u16(), 200, "{}", again.text());
     assert_eq!(again.json()["unchanged"], true);
 }
+
+/// 人の決定 2026-10-08（ADR-0133 付記）: KB の候補が何件あっても受信箱（`/inbox/items`）に
+/// 「KB の取り込み待ち」の項目は出ない。`knowledge_review` は 404 `inbox-item-gone`、通知にも出さない。
+/// 候補の accept は知識画面の経路で従来どおり動く。
+#[tokio::test]
+async fn candidates_never_appear_in_the_human_inbox() {
+    let env = env();
+    init_kb(&env.knowledge_root);
+    let mut ids = Vec::new();
+    for (i, title) in ["候補 A", "候補 B"].iter().enumerate() {
+        let c = task_ops::knowledge::record(
+            &env.knowledge_root,
+            &task_ops::knowledge::RecordRequest {
+                title: (*title).into(),
+                scope: "environment".into(),
+                tags: vec![],
+                sources: vec!["task:01J1".into()],
+                confidence: None,
+                body: "本文".into(),
+                path: Some(format!("environment/servers/c{i}.md")),
+                op: None,
+            },
+        )
+        .expect("record");
+        ids.push(c.id);
+    }
+    let app = env.router();
+    let cands = send(&app, g("/api/v1/knowledge/inbox")).await;
+    assert_eq!(cands.json()["items"].as_array().expect("items").len(), 2);
+
+    let inbox = send(&app, g("/api/v1/inbox/items")).await;
+    assert_eq!(inbox.status.as_u16(), 200, "{}", inbox.text());
+    let body = inbox.json();
+    let items = body["items"].as_array().expect("items");
+    assert!(
+        items
+            .iter()
+            .all(|x| x["kind"] != "knowledge_review" && x["id"] != "knowledge_review"),
+        "{}",
+        inbox.text()
+    );
+    assert!(body["counts"]["by_kind"].get("knowledge_review").is_none());
+    assert_problem(
+        &send(&app, g("/api/v1/inbox/items/knowledge_review")).await,
+        404,
+        "inbox-item-gone",
+    );
+    assert_problem(
+        &send(
+            &app,
+            p(
+                "/api/v1/inbox/items/knowledge_review/answer",
+                &json!({"option": "accept", "payload": {"candidate_id": ids[0]}}),
+            ),
+        )
+        .await,
+        404,
+        "inbox-item-gone",
+    );
+    let notices = send(&app, g("/api/v1/notifications")).await;
+    assert_eq!(notices.status.as_u16(), 200, "{}", notices.text());
+    assert!(
+        !notices.text().contains("knowledge_review") && !notices.text().contains("取り込み待ち"),
+        "{}",
+        notices.text()
+    );
+
+    // 知識画面の accept は従来どおり。
+    let accepted = send(
+        &app,
+        p(
+            &format!("/api/v1/knowledge/inbox/{}/accept", ids[0]),
+            &json!({}),
+        ),
+    )
+    .await;
+    assert_eq!(accepted.status.as_u16(), 200, "{}", accepted.text());
+    let rest = send(&app, g("/api/v1/knowledge/inbox")).await;
+    assert_eq!(rest.json()["items"].as_array().expect("items").len(), 1);
+}

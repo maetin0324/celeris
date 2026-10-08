@@ -989,9 +989,8 @@ pub fn schedule_routes(
     use task_core::feed::NoticeQuery;
     let mut created = Vec::new();
     let timestamp = now.unix_timestamp();
-    let inbox =
-        task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new(), None)
-            .map_err(|error| StoreError::Invalid(error.to_string()))?;
+    let inbox = task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new())
+        .map_err(|error| StoreError::Invalid(error.to_string()))?;
     let mut state: InboxOutboundState = store
         .feed_cursor_get("outbound_inbox")?
         .and_then(|value| serde_json::from_str(&value).ok())

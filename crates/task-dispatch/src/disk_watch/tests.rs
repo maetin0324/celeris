@@ -108,7 +108,7 @@ impl Env {
             max_requeues: 5,
             clusters: Default::default(),
         };
-        task_ops::human_inbox::human_inbox(&self.store, None, &ctx, t0(), &|_, _| Vec::new(), None)
+        task_ops::human_inbox::human_inbox(&self.store, None, &ctx, t0(), &|_, _| Vec::new())
             .unwrap()
             .items
             .into_iter()

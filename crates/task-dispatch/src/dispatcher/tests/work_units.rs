@@ -1536,7 +1536,6 @@ async fn phase_integration_request_is_the_only_inbox_item() {
         &ctx,
         OffsetDateTime::now_utc(),
         &|_, _| Vec::new(),
-        None,
     )
     .unwrap();
     let for_task: Vec<_> = inbox
@@ -1558,7 +1557,6 @@ async fn phase_integration_request_is_the_only_inbox_item() {
         &ctx,
         OffsetDateTime::now_utc(),
         &|_, _| Vec::new(),
-        None,
     )
     .unwrap();
     assert_eq!(
@@ -3262,7 +3260,6 @@ fn inbox_integration_requests(store: &Arc<dyn TaskStore>, task_id: TaskId) -> us
         &ctx,
         OffsetDateTime::now_utc(),
         &|_, _| Vec::new(),
-        None,
     )
     .unwrap()
     .items

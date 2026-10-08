@@ -3600,6 +3600,8 @@ run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/run
 
 `GET /api/v1/inbox/items` の `kind: "integration_request"` は、未回答の統合依頼を `(task, target_sha, source_sha)` ごとに 1 件だけ返す。一般通知の `GET /api/v1/notifications` には載せない。管理者は `POST /api/v1/inbox/items/{id}/answer` に `{"option":"integrated"|"declined"|"retry", "note":"任意のメモ"}` を送る。回答は task の `IntegrationAnswered` 事象として追記され、その依頼は受信箱から消える。未知または回答済みの id は 404。
 
+KB の取り込み待ち（`GET /knowledge/inbox` の候補）は `GET /api/v1/inbox/items` に出さない。`InboxKind` に `knowledge_review` は無く（人の決定 2026-10-08、ADR-0133 末尾の付記）、`GET /api/v1/inbox/items/knowledge_review` と answer は 404 `inbox-item-gone`。候補は知識画面で `POST /knowledge/inbox/{id}/accept|reject`（§3 の 94・95）で扱う。通知にも代わりの項目は作らない。
+
 `Inbox { approvals, questions, drafts, attention, browser_waits, decisions, counts }`。`evidence` は task-api が渡す関数で、`<ws>/runs/<run_id>/result.json` の `evidence[]` を読む（読めなければ `[]`）。
 
 | 区画 | 抽出 | 各項目の埋め方 | 並び |

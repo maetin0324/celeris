@@ -213,7 +213,7 @@ fn escalate(store: &SqliteStore, db: &std::path::Path, task: &Task, summary: &st
     // The revision is the derived item's `created_at`, as the dispatcher's intake keys it.
     let dir = db.parent().expect("dir");
     let derived =
-        task_ops::human_inbox::human_inbox(store, None, &view(dir), at(), &|_, _| Vec::new(), None)
+        task_ops::human_inbox::human_inbox(store, None, &view(dir), at(), &|_, _| Vec::new())
             .expect("inbox")
             .items
             .into_iter()

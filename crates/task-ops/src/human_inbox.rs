@@ -43,11 +43,11 @@ pub enum InboxKind {
     DiskFull,
     DeliverySkipped,
     IntegrationRequest,
-    KnowledgeReview,
+    // 人の決定 2026-10-08: KB の取り込み待ち（旧 `knowledge_review`）は受信箱に出さない。知識画面で扱う。
 }
 
 impl InboxKind {
-    pub const ALL: [InboxKind; 16] = [
+    pub const ALL: [InboxKind; 15] = [
         InboxKind::Decision,
         InboxKind::PlanGate,
         InboxKind::PhaseGate,
@@ -63,7 +63,6 @@ impl InboxKind {
         InboxKind::DiskFull,
         InboxKind::DeliverySkipped,
         InboxKind::IntegrationRequest,
-        InboxKind::KnowledgeReview,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -83,7 +82,6 @@ impl InboxKind {
             InboxKind::DiskFull => "disk_full",
             InboxKind::DeliverySkipped => "delivery_skipped",
             InboxKind::IntegrationRequest => "integration_request",
-            InboxKind::KnowledgeReview => "knowledge_review",
         }
     }
 }
@@ -172,15 +170,6 @@ pub struct HumanInbox {
     pub suppressed: BTreeMap<String, u32>,
 }
 
-/// D1.2 `knowledge_review`: KB の取り込み待ち（`_inbox/` の候補）の件数。KB は task-api が読むので呼び出し側が渡す。
-/// ADR-0131 D6 の日次整理 job が `enabled ∧ mode=apply` の間は呼び出し側が `None` を渡す（判断は `decision` で来る）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct KnowledgePending {
-    pub count: u32,
-    /// 最も古い候補の作成時刻（RFC 3339）。無ければ `now`。
-    pub oldest_created: Option<String>,
-}
-
 /// D1.1: attention の種類の割り当て。`None` は通知側（受信箱には出さない）。
 pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
     match item {
@@ -203,20 +192,14 @@ pub fn human_inbox(
     ctx: &ViewContext,
     now: OffsetDateTime,
     evidence: &dyn Fn(&Task, &str) -> Vec<EvidenceView>,
-    knowledge: Option<&KnowledgePending>,
 ) -> Result<HumanInbox, OpsError> {
     let inbox = crate::inbox::inbox(store, snapshot, ctx, now, evidence)?;
     let by_id: HashMap<TaskId, Task> = store.list(None)?.into_iter().map(|t| (t.id, t)).collect();
-    Ok(from_inbox(&inbox, knowledge, &by_id, now))
+    Ok(from_inbox(&inbox, &by_id, now))
 }
 
 /// 既存の `Inbox` を D2 の共通形へ写す（純関数。`by_id` は案件 id と root の参照を引くためだけに使う）。
-pub fn from_inbox(
-    inbox: &Inbox,
-    knowledge: Option<&KnowledgePending>,
-    by_id: &HashMap<TaskId, Task>,
-    now: OffsetDateTime,
-) -> HumanInbox {
+pub fn from_inbox(inbox: &Inbox, by_id: &HashMap<TaskId, Task>, now: OffsetDateTime) -> HumanInbox {
     let b = Builder { by_id, now };
     let mut items = Vec::new();
 
@@ -247,9 +230,6 @@ pub fn from_inbox(
     }
     for w in &inbox.browser_waits {
         items.push(b.browser_wait(w));
-    }
-    if let Some(k) = knowledge.filter(|k| k.count > 0) {
-        items.push(b.knowledge_review(k));
     }
     for d in &inbox.disk_full {
         items.push(b.disk_full(d));
@@ -1084,43 +1064,6 @@ impl Builder<'_> {
                 .format(&Rfc3339)
                 .unwrap_or_else(|_| self.now_str()),
             links: Vec::new(),
-        })
-    }
-
-    fn knowledge_review(&self, k: &KnowledgePending) -> InboxItem {
-        self.finish(Draft {
-            id: "knowledge_review".to_string(),
-            kind: InboxKind::KnowledgeReview,
-            title: format!("KB の取り込み待ち {} 件を確かめる", k.count),
-            detail: None,
-            options: vec![
-                opt(
-                    "accept",
-                    "取り込む（KB 画面で 1 件ずつ）",
-                    false,
-                    "POST /knowledge/inbox/{id}/accept",
-                ),
-                opt(
-                    "reject",
-                    "捨てる（KB 画面で 1 件ずつ）",
-                    false,
-                    "POST /knowledge/inbox/{id}/reject",
-                ),
-            ],
-            recommended: None,
-            due_at: None,
-            blocking: InboxBlocking {
-                tasks: Vec::new(),
-                units: Vec::new(),
-                root: None,
-                summary: "KB の候補（0 件で消える）".to_string(),
-            },
-            blocked_by: Vec::new(),
-            native: None,
-            task: None,
-            project_id: None,
-            created_at: k.oldest_created.clone().unwrap_or_else(|| self.now_str()),
-            links: vec![link("候補", "/api/v1/knowledge/inbox".to_string())],
         })
     }
 

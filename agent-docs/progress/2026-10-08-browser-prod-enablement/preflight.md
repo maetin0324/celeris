@@ -1,8 +1,12 @@
-# Browser 本番有効化: preflight（D5）
-
 ---
+task: browser-prod-enablement
+wu: preflight
+status: done
+completed: 2026-10-08
 tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 ---
+
+# preflight: 本番の browser 前提の点検（ADR 2026-10-08-browser-prod-enablement D5）
 
 ## 実装
 

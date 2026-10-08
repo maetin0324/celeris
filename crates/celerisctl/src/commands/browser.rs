@@ -3,6 +3,9 @@
 //! GUI が発行した非秘密の challenge を、GUI の Unix control socket（runtime directory 0700 / socket 0600）へ
 //! 渡して、その GUI ログイン session を browser の本人（owner）に束縛する。一般 HTTP bearer API は使わない。
 //! DB は開かない。cookie・cookie ID は扱わない。
+//!
+//! ADR 2026-10-08-browser-prod-enablement D1.2 / D1.4: `browser ledger check` は
+//! worker と共通の台帳判定を使い、release の配置前検査に使える JSON を返す。
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -20,11 +23,41 @@ pub const OWNER_SOCKET_ENV: &str = "CELERIS_GUI_OWNER_SOCKET";
 
 #[derive(Subcommand, Debug)]
 pub enum BrowserCommand {
+    /// browser の適合台帳を検査する（DB・daemon への接続は不要）。
+    Ledger {
+        #[command(subcommand)]
+        command: LedgerCommand,
+    },
     /// 本人（owner）の GUI session を確定する。
     OwnerSession {
         #[command(subcommand)]
         command: OwnerSessionCommand,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum LedgerCommand {
+    /// daemon と同じ判定で台帳を検査する。有効なら 0、それ以外は 3。
+    Check(LedgerCheckArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct LedgerCheckArgs {
+    /// 検査する conformance.json。
+    #[arg(long)]
+    pub file: PathBuf,
+    /// 台帳が対象にする release の sha12。省略時は release を比較しない。
+    #[arg(long)]
+    pub release: Option<String>,
+    /// 版を調べる実行ファイル。既定は PATH の agent-browser。
+    #[arg(long, default_value = "agent-browser")]
+    pub agent_browser: PathBuf,
+    /// host の agent-browser を起動せず、台帳だけを検査する。
+    #[arg(long)]
+    pub no_host_probe: bool,
+    /// 判定を 1 行の JSON で出す（ledger-status.json 用）。
+    #[arg(long)]
+    pub json: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -74,10 +107,44 @@ fn current_uid() -> u32 {
 
 pub fn run(command: BrowserCommand) -> Result<ExitCode, CliError> {
     match command {
+        BrowserCommand::Ledger {
+            command: LedgerCommand::Check(args),
+        } => ledger_check(args),
         BrowserCommand::OwnerSession {
             command: OwnerSessionCommand::Approve(args),
         } => approve(args),
     }
+}
+
+fn ledger_check(args: LedgerCheckArgs) -> Result<ExitCode, CliError> {
+    use task_worker::browser_ledger::{HostAgentBrowser, ledger_status, probe_agent_browser};
+
+    let host = if args.no_host_probe {
+        HostAgentBrowser::NotChecked
+    } else {
+        probe_agent_browser(&args.agent_browser)
+    };
+    let status = ledger_status(Some(&args.file), args.release.as_deref(), &host);
+    let ok = status.code.is_ok();
+    if args.json {
+        let output = serde_json::json!({
+            "ok": ok,
+            "code": status.code.as_str(),
+            "message": status.code.message(),
+            "release": status.generated_for.as_ref().map(|g| &g.celeris_release),
+            "agent_browser": status.generated_for.as_ref().map(|g| &g.agent_browser),
+            "backends": status.public_backends,
+            "credential_backends": status.credential_backends,
+        });
+        println!("{output}");
+    } else {
+        println!("{} (code={})", status.code.message(), status.code.as_str());
+    }
+    Ok(if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(3)
+    })
 }
 
 fn approve(args: ApproveArgs) -> Result<ExitCode, CliError> {

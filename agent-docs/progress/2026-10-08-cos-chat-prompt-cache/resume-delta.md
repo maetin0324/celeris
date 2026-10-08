@@ -94,3 +94,22 @@ updated: 2026-10-08
 - host lab/personalの認証のSHA-256・mtime・sizeは前後不変。hostの認証・本番config/DB/release/systemdを変更していない。隔離認証コピーは計測後に削除。summaryありthread・他harnessの効果は不明。
 - 証跡: task `01M4DE3G78D16NJ80SEMWVAVAK` の `wu/lab-bench/artifacts/resume-delta-bench-lab/` に `{before,before-2,after,after-2}/runs.json`、各 `summary.json`、`compare.md`（全runのaccount_idとcommit出所）、`validation.json`、`binary-provenance.json`、`host-integrity.json`。
 - 検証: CoS chat 152件、resume差分配送12件、workspace clippy、shell構文、引数拒否4ケース、driverのcompleted/failed/fresh停止3ケース、文書リンク・progress-indexはすべて成功。
+
+
+## main 追従 merge（2026-10-08、merge-main-2）
+
+- 現 main `f81b98540b2c4af08759d95a115a0d2ed2a6c431`（reviewer が確認した `fb300299cf09e96a43baabf1cba3055766c64af9` の 1 件先。CoS 設定 reload の `cos_launch.rs` 分離と `run_configs` スナップショット）を `git merge --no-ff` で branch（merge 前 HEAD `ee43c9d3a4854187613debcf964d3c326fe527fd`）へ取り込んだ。共通祖先（merge base）は `10566e5bc7666a18c0850fabb1c177aef4472483`。
+- 衝突は read-only `git merge-tree --write-tree` の事前見積もりと一致し 3 file（いずれも両側を残す）:
+  - `scripts/dev/cos-chat-bench.sh`: mode 一覧は `dry|full|cold-ttl|same-thread|answers`。usage・case・account 検証・pool 設定・`[accounts]` 追記・`CLAUDE_VERSION` 取得の各箇所で same-thread と answers の分岐を併存。driver 呼び出しで使う `DRIVER_REPO` 定義は main 側から保持（HEAD 側には無く、共有行が参照するため必須）。
+  - `scripts/dev/cos-chat-bench.py`: run dir 探索は main 側の `glob **/runs/<run_id>/prompt.txt`（Core が run id より前に来る prompt 対応）を採り、HEAD 側の直接 path 判定は冗長なので除去。`finish()` の `runs.json` 書き出しは HEAD 側の順序（`summarize()` 前、enrich 済み runs の永続化）を維持し、main 側の重複行を除去。
+  - `crates/task-dispatch/src/dispatcher/cos_chat/harness_tests.rs`: HEAD 側の `DeltaProbe`・`cos_chat_resume_delta_*` 試験群（10 件）と main 側の skill mount 試験 2 件（`cos_chat_skills_mount_triage_only_in_the_inbox_thread_or_with_inbox_items`・`cos_chat_skill_ordinary_thread_run_does_not_mount_inbox_triage`）を両方残した。import は両側で同一だったため追加の重複は無し。
+- 他（`launch.rs`・task-worker の `cos_chat.rs`/`tests.rs`・`crates/celeris` の daemon 系・skill 文書など）は自動 merge を採用。`launch.rs` は delta 配送（`delta_from`・`history_for_run`・`rotate_fresh`・route fallback の全文）と main の T5 skill 解決（`cos_chat_skills`）・設定 reload（`run_configs`・`reload_cos_chat_launch`）の併存を確認。task-worker の prompt テキストは main 側の skill v3 文言へ更新され、delta 節は不変。
+- 本 run は LLM 再計測・本番操作をしていない（人が計測の再実行を免除。既存の 4 set 40 run 再集計で criterion 2 は合格済み）。
+
+検証（統合後 tree、merge commit 直後）:
+- `cargo test -p task-dispatch -p task-core cos_chat`: exit 0（task-core 28・task-dispatch lib 117・結合 11 件、失敗 0）。
+- `cargo test -p task-dispatch cos_chat_resume_delta`: 10 passed（harness 群）。launch/tests 側の 2 件と合わせ計 12 件。main 側の新試験 2 件も成功。
+- `cargo test -p task-worker cos_chat`: 52 passed（失敗 0）。
+- `cargo clippy --workspace -- -D warnings`: exit 0。
+- `sh scripts/dev/check-doc-links.sh`: ok。`sh scripts/dev/progress-index.sh --check`: ok。
+- `bash -n scripts/dev/cos-chat-bench.sh`: 構文 ok。`python3 -m py_compile scripts/dev/cos-chat-bench.py`: ok。

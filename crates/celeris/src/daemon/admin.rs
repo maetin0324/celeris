@@ -169,7 +169,7 @@ pub(crate) fn notify_test_outcome(
 }
 
 /// `Config::load` を読み直し、稼働中のプロバイダ選定・アダプタ一式・次 tick のスナップショット提供元、
-/// および `[[roles]]` / `[[genres]]` / `[delegation]` / `[reports]` / `[notify]` / `[conversation]` の
+/// および `[[roles]]` / `[[genres]]` / `[delegation]` / `[reports]` / `[notify]` / `[conversation]` / `[cos]` の
 /// 設定値を差し替える（Phase 44、実機 2026-09-18: `[[roles]] implementer` の `max_turns` を変えて
 /// reload しても、以前はプロバイダ・アダプタ・モデルしか差し替えなかったため、委譲された子の budget が
 /// 古い値のままだった）。失敗したら稼働中の状態には触れない（古い設定のまま動き続ける）。
@@ -177,6 +177,7 @@ pub(crate) fn notify_test_outcome(
 /// S7: `[accounts]` は reload の対象外（`Dispatcher::accounts` はプロセス起動時に固定され、`AccountBook` の
 /// 保存先もそこから決まる）。`claude_dir` / `max_runs_per_account` / `check_model` のどれかが変わっていたら、
 /// 反映されない値のまま動き続けるより、エラーにしてタスクを止めずに知らせる（400。再起動が必要と伝える）。
+/// `[cos.attachments]` / `[cos] stream_retention_days` も API / GC に固定されるため変更を拒否する。
 /// `[[clusters]]` / `[api]` / `db` / `workspace_root` も同様に再起動が要る（reload では触れない。従来どおり）。
 pub(crate) fn reload_providers(
     dispatcher: &mut Dispatcher,
@@ -194,6 +195,16 @@ pub(crate) fn reload_providers(
                 .to_string(),
         );
     }
+    // Upload middleware and the background GC capture these values at startup.
+    if config.cos.attachments != new_config.cos.attachments
+        || config.cos.stream_retention_days != new_config.cos.stream_retention_days
+    {
+        return Err("[cos.attachments] or [cos] stream_retention_days changed; \
+             these settings are not reloaded, restart celeris to apply the change"
+            .to_string());
+    }
+    let cos_launch =
+        super::cos_launch::build_cos_chat_launch(&new_config, &config.db.path, config.api.listen);
     let policy = StaticPolicy::new(
         new_config.provider_specs(),
         Duration::from_secs(new_config.error_cooldown_secs),
@@ -206,6 +217,7 @@ pub(crate) fn reload_providers(
         adapters,
         new_config.account_pool_providers(),
     );
+    dispatcher.reload_cos_chat_launch(cos_launch);
     dispatcher.set_account_pool_adapters(new_config.account_pool_adapters());
     // ADR-0132 付記 L1/L7: ローカルの行と probe 先も新しい設定から作り直す（health のキャッシュも捨てる）。
     dispatcher.set_local_providers(new_config.local_cheap_providers());

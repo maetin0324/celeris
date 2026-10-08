@@ -2,7 +2,7 @@
 # CoS chat の prompt cache baseline / after 用 live ベンチ（ADR 2026-10-08-cos-chat-prompt-cache D3.4-2）。
 # scripts/dev/cos-chat-live.sh と同じ隔離方式（試験用 data dir・一時 DB・別 port・本番を読まない）。
 #
-#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread [claude-code|codex] [reduced]
+#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code|codex] [reduced]
 #
 #   full      : 台本 scripts/dev/cos-chat-bench-script.json を流す（claude-code は LLM run 26 回）。
 #               claude_oauth の既存ログインだけを使う。API 課金 source は使わない
@@ -12,6 +12,9 @@
 #   COS_CHAT_BENCH_ACCOUNT_DIR : 人が許可した subscription account の認証を隔離コピーする。
 #   same-thread は上記のどちらか一方が必須。account_id はディレクトリ名を保持する。
 #   COS_CHAT_BENCH_SOURCE_SHA : 計測バイナリの出所 commit（archive build 用）。
+#   answers   : 補助台本の質問回答 3 件。COS_CHAT_BENCH_LAB_DIR に claude_max_lab の場所を指定。
+#               archive の repo では COS_CHAT_BENCH_SOURCE_SHA を指定し、
+#               COS_CHAT_BENCH_DRIVER_REPO にこの補助台本を含む worktree を指定。
 #   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。codex 等の確認用）
 #   第 5 引数 : harness（既定 claude-code）。codex は llm_source=codex_oauth の既存ログインが要る
 #
@@ -19,16 +22,17 @@
 # 本番の設定・DB・KB・port は読まない・書かない。終わりに daemon の process group を止める。
 set -eu
 usage() {
-  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread [claude-code|codex] [reduced]" >&2
+  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread|answers [claude-code|codex] [reduced]" >&2
   exit 2
 }
 [ "$#" -ge 4 ] && [ "$#" -le 6 ] || usage
-case "$4" in dry|full|cold-ttl|same-thread) ;; *) usage ;; esac
+case "$4" in dry|full|cold-ttl|same-thread|answers) ;; *) usage ;; esac
 MODE=$4
 HARNESS=${5:-claude-code}
 REDUCED=0; [ "${6:-}" = reduced ] && REDUCED=1
 case "$HARNESS" in claude-code) SRC=claude_oauth ;; codex) SRC=codex_oauth ;; *) usage ;; esac
 REPO=$(cd "$1" && pwd); BIN=$(cd "$2" && pwd); mkdir -p "$3"; OUT=$(cd "$3" && pwd)
+DRIVER_REPO=${COS_CHAT_BENCH_DRIVER_REPO:-$REPO}
 COS_CHAT_BENCH_SOURCE_SHA=${COS_CHAT_BENCH_SOURCE_SHA:-$(git -C "$REPO" rev-parse HEAD)}
 export COS_CHAT_BENCH_SOURCE_SHA
 if [ "$MODE" = same-thread ]; then
@@ -45,6 +49,15 @@ if [ "$MODE" = same-thread ]; then
   ACCOUNT_ID=$(basename "$ACCOUNT_DIR")
   [[ "$ACCOUNT_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || usage
   [ -f "$ACCOUNT_DIR/.credentials.json" ] || usage
+fi
+# answers is a supplemental comparison; it does not change the original 26-run script.
+# Only a private copy of the subscription lab credentials is used; host account files stay untouched.
+if [ "$MODE" = answers ]; then
+  [ "$HARNESS" = claude-code ] || usage
+  [ ! -e "$OUT/celeris.sqlite3" ] || { echo 'answers requires a fresh data dir' >&2; exit 2; }
+  : "${COS_CHAT_BENCH_LAB_DIR:?answers requires the claude_max_lab account directory}"
+  [ "$(basename "$COS_CHAT_BENCH_LAB_DIR")" = claude_max_lab ] || usage
+  [ -f "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" ] || usage
 fi
 for exe in celeris celerisctl; do
   [ -x "$BIN/$exe" ] || { echo "missing $BIN/$exe (cargo build -p celeris -p celerisctl)" >&2; exit 2; }
@@ -81,6 +94,14 @@ if [ "$MODE" = same-thread ]; then
   export CLAUDE_CONFIG_DIR="$OUT/claude-config"
   POOL_CONFIG='account_pool = true'
   COS_ACCOUNT="account_id = \"$ACCOUNT_ID\""
+fi
+if [ "$MODE" = answers ]; then
+  mkdir -p "$OUT/accounts/claude_max_lab"
+  chmod 700 "$OUT/accounts" "$OUT/accounts/claude_max_lab"
+  cp "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" "$OUT/accounts/claude_max_lab/"
+  chmod 600 "$OUT/accounts/claude_max_lab/.credentials.json"
+  POOL_CONFIG='account_pool = true'
+  COS_ACCOUNT='account_id = "claude_max_lab"'
 fi
 cat > "$OUT/config.toml" <<EOF
 # cos-chat-bench.sh の一時設定（ADR-0126 試験用 data dir）。本番 ~/.config/celeris は使わない
@@ -120,7 +141,7 @@ dir = "memory"
 [knowledge]
 root = "kb"
 EOF
-if [ "$MODE" = same-thread ]; then
+if [ "$MODE" = same-thread ] || [ "$MODE" = answers ]; then
   printf '\n[accounts]\nclaude_dir = "%s/accounts"\n' "$OUT" >> "$OUT/config.toml"
 fi
 
@@ -155,8 +176,11 @@ sqlite3 "$OUT/celeris.sqlite3" "insert into projects (id,title,request,status,cr
 log "fixture project: $(sqlite3 "$OUT/celeris.sqlite3" "select id||' '||slug||' '||status from projects")"
 
 CLAUDE_VERSION=unknown
-[ "$MODE" = same-thread ] || CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || echo unknown)
+# The supplemental modes invoke the harness only through the isolated daemon.
+if [ "$MODE" != same-thread ] && [ "$MODE" != answers ]; then
+  CLAUDE_VERSION=$(claude --version 2>/dev/null | head -1 || echo unknown)
+fi
 [ "$HARNESS" = codex ] && CLAUDE_VERSION="codex $(codex --version 2>/dev/null | head -1 || echo unknown)"
-python3 "$REPO/scripts/dev/cos-chat-bench.py" "$API" "$TOK" "$OUT" "$REPO" "$MODE" "$REDUCED" "$CLAUDE_VERSION" || { log "driver failed"; cp "$OUT/daemon.log" "$EV/daemon.log"; exit 1; }
+python3 "$DRIVER_REPO/scripts/dev/cos-chat-bench.py" "$API" "$TOK" "$OUT" "$REPO" "$MODE" "$REDUCED" "$CLAUDE_VERSION" || { log "driver failed"; cp "$OUT/daemon.log" "$EV/daemon.log"; exit 1; }
 cp "$OUT/daemon.log" "$EV/daemon.log"
 log "done; evidence in $EV (summary.json, tables.md)"

@@ -39,9 +39,11 @@ def new_thread(tag):
 
 
 def run_dir(run_id):
-    direct = os.path.join(out, "runs", run_id)
-    if os.path.isfile(os.path.join(direct, "prompt.txt")):
-        return direct
+    # Core is now placed before the run id in prompt.txt. Find the exact run
+    # directory first; looking only in the first 600 bytes misses split prompts.
+    matches = glob.glob(os.path.join(out, "**", "runs", glob.escape(run_id), "prompt.txt"), recursive=True)
+    if len(matches) == 1:
+        return os.path.dirname(matches[0])
     for p in glob.glob(os.path.join(out, "**", "prompt.txt"), recursive=True):
         if os.path.basename(os.path.dirname(p)) == run_id:
             return os.path.dirname(p)
@@ -161,7 +163,8 @@ def finish():
     summary = summarize()
     meta = {"commit": os.environ.get("COS_CHAT_BENCH_SOURCE_SHA") or subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip(),
             "claude_version": claude_version, "finished_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "mode": mode, "reduced": reduced, "script": "scripts/dev/cos-chat-bench-script.json",
+            "mode": mode, "reduced": reduced,
+            "script": "scripts/dev/cos_chat_answer_bench.py" if runs and all(r["group"] == "answers" for r in runs) else "scripts/dev/cos-chat-bench-script.json",
             "harness": sorted({r.get("harness") for r in runs if r.get("harness")}),
             "model": sorted({r.get("model") for r in runs if r.get("model")}),
             "llm_source": sorted({r.get("llm_source") for r in runs if r.get("llm_source")}),
@@ -186,6 +189,14 @@ def finish():
 
 
 def main():
+    if mode == "answers":
+        from cos_chat_answer_bench import run_answers
+        try:
+            run_answers(call, turn, new_thread, DB, EV)
+        finally:
+            if runs:
+                finish()
+        return
     n_s1 = SCRIPT["reduced"]["s1_new_threads"] if reduced else SCRIPT["s1_new_threads"]["count"]
     n_s2 = SCRIPT["reduced"]["s2_turns"] if reduced else len(SCRIPT["s2_same_thread"]["turns"])
     if mode == "enrich":  # 既存の runs.json に enrich をかけ直して summary を作り直す（LLM は呼ばない）

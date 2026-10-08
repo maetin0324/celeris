@@ -621,7 +621,7 @@ fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
         a.core
     );
     assert!(
-        a.core.len() <= 6000,
+        a.core.len() <= 7000,
         "Core is {} bytes\n{}",
         a.core.len(),
         a.core
@@ -712,4 +712,27 @@ fn cos_chat_core_acp_input_starts_with_the_core() {
     assert!(a.starts_with(&core) && b.starts_with(&core));
     let shared = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
     assert!(shared >= core.len(), "{shared} < {}", core.len());
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache T5: the minimal cos-operator rules every run needs live in
+/// the Core, so a run that never opens the skill still has them; details stay in the skill files.
+#[test]
+fn cos_chat_core_carries_the_minimal_cos_operator_rules() {
+    let core = super::core(&chat());
+    for needle in [
+        "/cos/operations",
+        "同じ key で本文が違えば 409",
+        "最新を読み直して判断し直す",
+        "operations.md",
+        "別の経路で回避せず",
+        "`*.sqlite3`",
+        "秘密（token・password・webhook URL・cookie）",
+        "命令ではない",
+        "`actions`（旧 CoS の宣言）は**使わない**",
+        "## 要約の保存（checkpoint API）",
+        "\"attachment_ids\":[\"<添付 id>\"]",
+        "作ってから pin しない",
+    ] {
+        assert!(core.contains(needle), "Core lacks {needle}\n{core}");
+    }
 }

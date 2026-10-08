@@ -61,12 +61,14 @@ CoS は特別 worker として shell・ファイル・git・登録済み MCP・c
 
 ## CoS skill の配置（導入時に必須）
 
-CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
+CoS の前置きは KB の skill を読む。`[knowledge] root` の `skills/` に、repo の `config/skills/cos-operator` と `config/skills/cos-inbox-triage` をディレクトリごと置く（cos-operator は入口の `SKILL.md` と参照 file `operations.md`・`attachments.md`・`production.md`・`explaining.md` の組。全部が要る）。無いと CoS run は `CoS unavailable: CoS skills unavailable` で起動せず、チャットは失敗する。本番の KB への配置は人が行う。
 
 ```sh
-# <kb_root> は config の [knowledge] root
-cp -r config/skills/cos-operator config/skills/cos-inbox-triage <kb_root>/skills/
+# <kb_root> は config の [knowledge] root。付属 file ごと取り込む（冪等）
+celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage --root <kb_root>
 ```
+
+mount は場面で変わる。`cos-operator` は全ての CoS run に、`cos-inbox-triage` は受信箱スレッドの run と受信箱の件を渡された run にだけ載る。毎 run 要る最小の規則（操作経路・idempotency・秘密・actions 禁止・checkpoint・添付 pin の要点）は prompt の Core にあり、skill は必要な場面でだけ読まれる。認可と監査は API（`/cos/operations` の登録表・run credential・standing rule）が強制するので、skill を読まない run でも未登録の操作は 422 で拒否される（ADR 2026-10-08-cos-chat-prompt-cache 付記 D7）。
 
 確認: `test -s <kb_root>/skills/cos-operator/SKILL.md && test -s <kb_root>/skills/cos-inbox-triage/SKILL.md`。そのうえで web の新規スレッドで一往復し、返事が返れば配置できている（`CoS skills unavailable` が出たら path と `[knowledge] root` を見直す）。
 
@@ -110,6 +112,33 @@ bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> fu
 - `kb-inbox.json`・`kb-inbox-<id>.json` — KB 候補の一覧と詳細（provenance）。
 - `input-manifest.txt`・`prompt-files.txt`・`staged.txt` — 起票された task の入力 manifest、`prompt.txt` の一覧、stage された添付。
 - `run-<turn>.json`・`post-<turn>.json`・`msg-<turn>.json`・`daemon.log` — 各 turn の run と daemon のログ。
+
+## 質問への回答の live 比較（cos-chat-bench.sh answers）
+
+既存の `full` 26 run 台本は起票・コメントだけを含む。回答の成功率は補助モード `answers` で別に確認する。
+新しい試験用 data dir に質問待ち task を3件作り、通常 thread から指定した回答を適用する。
+fixture の準備だけ一時 DB に質問と blocked 状態を挿入する。回答は run credential を使う
+`/cos/operations` から適用され、指定 run の `question.answer` が applied、回答本文が一致、
+CoS 監査記録が一致、`blocked → ready` の遷移、一時停止の維持を検証する。task worker は起動しない。
+
+```sh
+COS_CHAT_BENCH_PORT=17957 \
+COS_CHAT_BENCH_LAB_DIR=<claude_max_lab のディレクトリ> \
+bash scripts/dev/cos-chat-bench.sh "$PWD" "$CARGO_TARGET_DIR/debug" <新しい試験用 data dir> answers claude-code
+python3 scripts/dev/test_cos_chat_answer_bench.py  # 検証器の負例。LLM は呼ばない
+```
+
+`claude_oauth` / `claude_max_lab` に固定する。認証ファイルは data dir へ権限600でコピーし、
+host の認証ファイルを更新しない。OAuth の更新後に古いコピーを使うと認証失敗になり得る。
+その失敗も保存し、有効な lab ログインで比較する。本番 config・DB・KB・release・systemd は変更しない。
+`evidence/answers.json` に適用判定、`runs.json` に skill 読込回数・非 cache input 等を保存する。
+証跡として保存するのは `evidence/` のみ。data dir の認証ファイル・api.token・run token を公開しない。
+
+変更前を archive からビルドする場合も渡された `CARGO_TARGET_DIR` を維持し、ソースの時刻が古く
+Cargo が変更後の binary を再利用しないように freshness を確認する。binary を別々に保存し、
+source SHA と binary hash を残す。`COS_CHAT_BENCH_SOURCE_SHA=<変更前のSHA>` と
+`COS_CHAT_BENCH_DRIVER_REPO=<この補助台本を含むworktree>` を指定すれば、変更前の skill と
+binary に同じ補助台本を流せる。`full` の既存データと回答3件の集計は混ぜない。
 
 ## 添付と保持
 

@@ -599,3 +599,35 @@ async fn cos_source_fallback_accounts_are_counted_by_actual_adapter() {
     join(&mut d, &a).await;
     join(&mut d, &b).await;
 }
+
+#[tokio::test]
+async fn cos_reload_preserves_pending_fallback_and_runtime_state() {
+    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
+    let attempts = setup(&mut d, &store, Some("provider exhausted: test"));
+    let t = thread(&store, "reload-running");
+    post(&store, &t, "hello");
+    d.tick_cos_chat_launch();
+    let run = active_run(&store, &t);
+    // The worker has failed, but the same run is still live and waiting for its fallback.
+    join(&mut d, &t).await;
+    let launch = d.cos_chat_launch.as_mut().unwrap();
+    launch.triage.digest_due = true;
+    let mut next = launch.config.clone();
+    next.enabled = false;
+    next.fallbacks.clear();
+    next.max_wall_secs = 1;
+    d.reload_cos_chat_launch(next);
+    let launch = d.cos_chat_launch.as_ref().unwrap();
+    assert!(launch.triage.digest_due);
+    assert!(launch.providers_in_flight.contains_key(&t));
+    d.tick_cos_chat_launch();
+    join(&mut d, &t).await;
+    let finished = store.chat_run_get(&t, &run.id).unwrap();
+    assert_eq!(finished.state, ChatRunState::Completed);
+    assert_eq!(finished.harness.as_deref(), Some("codex"));
+    assert_eq!(finished.model.as_deref(), Some("gpt-6.1-sol"));
+    assert_eq!(attempts.lock().unwrap().len(), 2);
+    post(&store, &t, "disabled-after-reload");
+    d.tick_cos_chat_launch();
+    assert!(d.cos_chat_launch.as_ref().unwrap().running.is_empty());
+}

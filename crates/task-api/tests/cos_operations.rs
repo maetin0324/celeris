@@ -494,3 +494,32 @@ async fn cos_chat_ops_api_get_operation_is_scoped_to_the_thread() {
     .await;
     assert_problem(&missing, 404, "chat_not_found");
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D1.7/T5: authorization is the API's, not the skill's.
+/// The operations the old cos-operator skill listed but `/cos/operations` never registered are
+/// refused with 422 and recorded, whatever skill the run did or did not read (the API has no
+/// notion of skills).
+#[tokio::test]
+async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() {
+    let env = admin_env();
+    let app = env.router();
+    let (_thread, _run, bearer) = cos_bearer(&env, "noskill");
+    let cases = [
+        ("plan", "PUT", "/api/v1/tasks/t1/execution-plan"),
+        ("pause", "POST", "/api/v1/tasks/t1/pause"),
+        ("resume", "POST", "/api/v1/tasks/t1/resume"),
+        ("project-pause", "POST", "/api/v1/projects/p1/pause"),
+        ("standing", "POST", "/api/v1/standing-rules"),
+    ];
+    for (key, method, path) in cases {
+        let resp = post_op(&app, &bearer, &op_body(key, method, path, json!({}))).await;
+        assert_problem(&resp, 422, "cos_operation_not_allowed");
+    }
+    assert_eq!(
+        count(
+            &env,
+            "SELECT COUNT(*) FROM cos_operations WHERE state='rejected'"
+        ),
+        cases.len() as i64
+    );
+}

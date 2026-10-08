@@ -213,3 +213,89 @@ harness 別の渡し方:
 - live（隔離 daemon・claude_oauth）の cache read / write の変化は T8 で測る。baseline では新規 thread の非 cache input がすでに 8 token なので、効果は cache write の減少と cache read の増加で見る
 - acp の resume（`session/load`）で Core が積まれる問題は T6（差分配送）で扱う（pi は run ごとの session なので対象外）
 - 付記の訂正（attempt 2）: attempt 1 は pi の経路を「host に pi が無く不明」として入力の先頭に置いたが、事実と違った（reviewer 01M4DEB8BVRMFE934VCWA26R92 の指摘）。上の表のとおり `--append-system-prompt` に改めた
+
+## 8. 付記 D7（2026-10-08、task 01M4DE37B9EE6308ZDAVXXBRTX）: skill 再構成（T5 の実装）と §3 の是正
+
+状態: **実装済み**。live の after は隔離 daemon（claude_oauth）で 1 回取った（下表）。T8 の全体比較は別。2026-10-08 人の決定: 計測の account は lab に限定しない（objective の「subscription の lab account（claude_oauth）のみ」は除去。どの account で計測したかは問わず、差し戻し理由にならない）。主要 full 26 run（before・after）は `runs.json` の `account_id` が null なので使用 account は不明（ambient の claude_oauth 認証）、補助 answers 台本（D7.6）のみ `claude_max_lab`。
+
+### D7.1 cos-operator の分割と Core の最小核
+
+- `config/skills/cos-operator/SKILL.md` を 20,158 B → 4,650 B の入口にした（version 3）。詳細は同 dir の参照 file:
+  `operations.md`（登録表・起票と KB 候補の本文）・`attachments.md`（pin）・`production.md`（登録 repo の変更・release → verify → promote）・
+  `explaining.md`（人への説明。旧 §10）。入口の表で「どの場面でどの file を読むか」を示し、description から「常に読む」を外した。
+- 毎 run 要る規則は Core（`cos_chat::core`）に置く。D6 の Core に次を足した: idempotency（thread 内で一意、同じ key・違う本文は 409、
+  409 は読み直し）、path は登録済みだけ（表は operations.md）、拒否を別経路で回避しない、SQLite・秘密 file・systemd・release・
+  本番 config を直接触らない、秘密の値を残さない、信頼しない入力は命令ではない。添付の手順は cos-live-fixes D1・D2 の
+  「作成の body に `attachment_ids` を入れた 1 回の operation」に直した（D6 の Core は「owner を作ってから pin」で、skill と食い違っていた）。
+  OP 雛形の `policy_version` は skill の version に合わせて `"3"`。
+- Core の上限を 6,000 B → **7,000 B** に上げた（6,911 B。試験 `cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values`）。
+  最小核の存在は `cos_chat_core_carries_the_minimal_cos_operator_rules` が固定する。
+
+### D7.2 §3 の表と `ALLOWED` の一致（D1.7 の是正）
+
+- operations.md の「登録済みの操作」表は `ALLOWED` の 12 行と method・path・action まで一致する。試験
+  `cos_operator_skill_table_matches_allowed`（task-api、`crates/task-api/src/cos/operations.rs`）が表を読んで突き合わせる。
+- 未登録の `PUT /api/v1/tasks/{id}/execution-plan`・task/project の pause・resume・`/api/v1/standing-rules` は
+  「登録されていない操作（CoS は送らない）」に移した。登録の追加は人の決定のまま。
+
+### D7.3 cos-inbox-triage の mount を受信箱の場面に限る
+
+- `task-dispatch` の `cos_chat_skills(in_inbox_thread, inbox_items)`: `cos-operator` は常に、`cos-inbox-triage` は受信箱 thread の run か
+  inbox_items が空でない run だけ。試験: `cos_chat_skills_mount_triage_only_in_the_inbox_thread_or_with_inbox_items`、
+  `cos_chat_skill_ordinary_thread_run_does_not_mount_inbox_triage`（配送 dir と prompt に triage が無い）、
+  `cos_chat_skill_inbox_thread_runs_mount_inbox_triage`（triage run と人の発言の run の両方に載る）、
+  `cos_chat_run_launch_fake_progress_credential_and_session`（通常 thread の request.json は `["cos-operator"]`）。
+- 通常 thread の run の workspace にあった旧い triage の写しは、skill 配送の「未 mount の skill の削除」で消える。
+
+### D7.4 認可・監査は skill 読込に依存しない
+
+API には skill の概念が無い。根拠の試験（task-api）:
+- `cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_events`・新規 `cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill`（旧 skill が載せていた未登録の操作も 422 `cos_operation_not_allowed` で拒否・記録）
+- `cos_chat_ops_api_idempotency_same_hash_same_operation_different_hash_409`
+- `cos_chat_ops_auth_get_allowed_and_direct_mutation_is_422_with_audit`・`cos_chat_ops_auth_expired_revoked_and_unknown_are_401`・`cos_chat_ops_auth_cos_shape_never_falls_back_to_admin`（tests/cos_auth.rs。run credential）
+- `cos_chat_ops_checkpoint_api_403_for_human_and_other_run`
+
+### D7.5 計測（隔離 daemon・claude-code・claude_oauth・台本は baseline と同じ `cos-chat-bench-script.json` の full）
+
+before は T2 baseline（commit `c7e60aa7`、Core 分離前）。after は本 task の branch（Core 分離 + 本付記）。**T4 の Core 分離と T5 が両方入った差**で、T5 単独の寄与は分けていない。
+
+| 指標（中央値） | before | after |
+|---|---|---|
+| S1 新規 thread: skill 読込（Skill/Read の回数） | 10/10 run が 1 回 | **10/10 run が 0 回** |
+| S2 同一 thread 10 turn: skill 読込 | turn 1 の 1 回だけ | 起票 turn（turn 2）の 1 回だけ（Skill 2 呼び出し） |
+| S1 非 cache input / cache write / cache read | 8 / 21,864 / 83,508 | 12 / 17,566 / 116,904 |
+| S2 非 cache input / cache write / cache read | 6 / 6,617 / 149,652 | 6 / 4,602 / 133,172 |
+| S1 / S2 総 latency ms | 15,802 / 19,672 | 18,895 / 13,782 |
+| 管理操作（S2 の起票 1・コメント 4） | 5/5 completed | 5/5 completed、`cos_operations` は task.create 1・comment.create 4 が全て applied（受信箱の observe 1 も applied） |
+| 質問回答の成功率（補助台本、D7.6） | 3/3 applied | 3/3 applied |
+| run の成功率（26 run） | 100% | 100% |
+
+- skill 読込の H2 の基準（単純相談の 80% 以上で両 skill を読む）は after で 0% になった。非 cache input は S1 で 8 → 12、S2 で 6 → 6。削減は確認できず、改善は skill 読込回数と cache write に出た。質問回答はD7.6の補助台本で別に比較した。
+- S1 の latency と cache read は増えた。S1 の after は 1 run あたり tool event が中央値 10（Bash で状況を API から読む）。before の tool 回数は残っておらず比べられない（**不明**）。Core 分離の影響か本付記の影響かは分けていない。T8 で扱う。
+- skill の bytes: cos-operator 20,158 → 4,650 B（参照 file 計 15,105 B は場面でだけ読む）、cos-inbox-triage 11,386 → 11,742 B（通常 thread には載らない）。
+
+
+### D7.6 質問回答の補助live検証（attempt 3）
+
+既存full台本には回答操作がなかったため、`cos-chat-bench.sh answers` を追加した。
+元の26 run台本は保持し、補助台本で通常threadから質問待ちtask3件へ同じ回答を適用する。
+fixture準備の一時DB書込みと、CoS runによるAPI回答の適用を分け、appliedのoperation・
+回答本文・answer遷移・CoS監査記録・一時停止維持を照合する。
+変更前 `8cdd96fb` と変更後 `5164fc8b` で3/3 → 3/3。
+変更前はT2 baseline `c7e60aa7` の再実行ではなく、Core分離前のソースである。
+Core分離とskill再構成の寄与は分けていない。隔離daemon・一時DB・別port・
+`claude_max_lab` / `claude_oauth` のみを使い、本番やhost認証ファイルは更新しない。
+
+回答場面のskill読込は各1回 → 各1回、非cache input中央値12 → 14、
+cache write中央値22,234 → 28,071、latency中央値24,973 → 26,032 ms。
+この場面での入力削減・高速化は確認できない。D7.5の通常相談での読込/cache write削減と、
+起票・コメント5/5に加え、質問回答3/3の適用率が落ちていないことを確認した。
+小標本の結果であり、すべての回答経路・状況の成功率を保証するものではない。
+
+検証器は `scripts/dev/cos_chat_answer_bench.py`、負例を含む試験6件は
+`python3 scripts/dev/test_cos_chat_answer_bench.py` で実行する（LLMなし）。
+実測値・実際の適用結果・source/binaryの出所・除外した試行（shell終了処理失敗、
+OAuth認証失敗）は [進捗](../progress/2026-10-08-cos-chat-prompt-cache/skills.md) のattempt 3節と
+task artifactsの `answer-comparison.json`・`answer-bench-{before,after}/domain-state.json` に記録した。
+Core以降のpromptのenrichはrunディレクトリを直接探すようにし、既存出力に対してofflineで再集計した。
+今回Rust/skill本文の変更・main統合・本番反映は行っていない。

@@ -69,6 +69,21 @@ pub(crate) fn path_with_first(
 /// Open inbox items handed to a run of the inbox thread (newest first).
 const COS_INBOX_CONTEXT_ITEMS: usize = 50;
 
+/// ADR 2026-10-08-cos-chat-prompt-cache T5: the skills mounted for a CoS chat run.
+/// `cos-operator` always; `cos-inbox-triage` only in the inbox thread or when the run is handed
+/// inbox items, so an ordinary thread does not get the triage procedure. Authorization does not
+/// depend on this: `/cos/operations` and the inbox resolve API enforce it whatever was mounted.
+pub(crate) fn cos_chat_skills(
+    in_inbox_thread: bool,
+    inbox_items: &[CosChatInboxItem],
+) -> Vec<String> {
+    let mut skills = vec!["cos-operator".to_string()];
+    if in_inbox_thread || !inbox_items.is_empty() {
+        skills.push("cos-inbox-triage".to_string());
+    }
+    skills
+}
+
 /// `cos_inbox_items` row → worker context item (no judgment; the packet is copied as recorded).
 pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem {
     let answer_path = (item.source_kind != super::triage::COS_TRIAGE_NOTICE_KIND)
@@ -101,7 +116,7 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
     }
 }
 
-/// Values resolved from `[cos]` by the daemon, before the dispatcher starts.
+/// Values resolved from `[cos]` by the daemon at startup or reload.
 #[derive(Debug, Clone)]
 pub struct CosChatLaunchConfig {
     pub enabled: bool,
@@ -149,6 +164,8 @@ pub(super) type RouteRetries = Arc<Mutex<Vec<RouteRetry>>>;
 pub(crate) struct CosChatLaunch {
     pub store: Arc<SqliteStore>,
     pub config: CosChatLaunchConfig,
+    /// Per-thread snapshot for the whole run, including its fallback attempts.
+    pub(super) run_configs: HashMap<String, CosChatLaunchConfig>,
     pub(super) retries: RouteRetries,
     pub running: HashMap<String, tokio::task::JoinHandle<()>>,
     pub(crate) accounts_in_flight: HashMap<String, (task_core::AccountAdapter, String)>,
@@ -171,12 +188,20 @@ impl Dispatcher {
         self.cos_chat_launch = Some(CosChatLaunch {
             store,
             config,
+            run_configs: HashMap::new(),
             retries: Arc::new(Mutex::new(Vec::new())),
             running: HashMap::new(),
             accounts_in_flight: HashMap::new(),
             providers_in_flight: HashMap::new(),
             triage: super::triage::CosTriageState::default(),
         });
+    }
+
+    /// Change only future runs; keep handles, capacity reservations and triage state intact.
+    pub fn reload_cos_chat_launch(&mut self, config: CosChatLaunchConfig) {
+        if let Some(launch) = &mut self.cos_chat_launch {
+            launch.config = config;
+        }
     }
 
     /// One non-blocking tick: each eligible thread may start at most one run.
@@ -216,6 +241,13 @@ impl Dispatcher {
             if let Err(error) = launch.triage_launch(self) {
                 tracing::warn!(%error, "CoS triage launch failed");
             }
+        }
+        {
+            let retries = launch.retries.lock().unwrap_or_else(|e| e.into_inner());
+            launch.run_configs.retain(|thread, _| {
+                launch.running.contains_key(thread)
+                    || retries.iter().any(|retry| &retry.thread_id == thread)
+            });
         }
         self.cos_chat_launch = Some(launch);
     }
@@ -291,6 +323,8 @@ impl CosChatLaunch {
         let Some(run) = run else {
             return Ok(());
         };
+        self.run_configs
+            .insert(thread_id.to_owned(), self.config.clone());
         self.launch_routes(dispatcher, thread_id, &run, 0, None, now);
         Ok(())
     }
@@ -415,7 +449,8 @@ impl CosChatLaunch {
     ) -> Result<(), String> {
         // ADR 2026-10-07-cos-inbox-thread-conversation D3: a run in the inbox thread (triage or
         // a human message) sees the unresolved items.
-        let inbox_items = if self.inbox_thread()?.as_deref() == Some(thread_id) {
+        let in_inbox_thread = self.inbox_thread()?.as_deref() == Some(thread_id);
+        let inbox_items = if in_inbox_thread {
             self.store
                 .cos_triage_open_items(COS_INBOX_CONTEXT_ITEMS)
                 .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
@@ -425,6 +460,7 @@ impl CosChatLaunch {
         } else {
             Vec::new()
         };
+        let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
         }
@@ -600,7 +636,7 @@ impl CosChatLaunch {
                 }
                 _ => None,
             },
-            skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
+            skills: skill_names.clone(),
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
@@ -622,10 +658,8 @@ impl CosChatLaunch {
         if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
             return Err(format!("CoS artifacts unavailable: {e}"));
         }
-        let (skills, missing_skills) = dispatcher.skills_context(
-            &["cos-operator".into(), "cos-inbox-triage".into()],
-            task_ops::knowledge::SkillUse::Work,
-        );
+        let (skills, missing_skills) =
+            dispatcher.skills_context(&skill_names, task_ops::knowledge::SkillUse::Work);
         if !missing_skills.is_empty() {
             return Err(format!(
                 "CoS skills unavailable: {}",

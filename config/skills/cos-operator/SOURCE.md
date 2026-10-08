@@ -11,3 +11,10 @@ license: このリポジトリと同じ（外部の license は無い）
 - 進捗: [agent-docs/progress/2026-10-06-cos-run/prompt-skill.md](../../../agent-docs/progress/2026-10-06-cos-run/prompt-skill.md)
 - 2026-10-08: §10「人への説明の書き方」を追加（ADR 2026-10-08-cos-workspace-files-in-chat D4。人の指摘: 手順が
   curl・toml・systemctl で、場所の分からない workspace の file を案内された）。cos-inbox-triage の packet の summary にも同じ規則を足した。
+- 2026-10-08（version 3、ADR 2026-10-08-cos-chat-prompt-cache 付記 D7）: 20,158 B の 1 file を、入口の SKILL.md と
+  参照 file（operations.md・attachments.md・production.md・explaining.md）に分けた。毎 run 要る最小の規則は
+  prompt の Core（`crates/task-worker/src/cos_chat.rs`）に移し、description から「常に読む」を外した。
+  operations.md の登録表は `/cos/operations` の `ALLOWED` と一致させ、試験 `cos_operator_skill_table_matches_allowed`
+  （task-api）で固定した。未登録の PUT execution-plan・pause/resume・standing-rules は「登録されていない操作」に移した。
+  KB へは `celerisctl skills import config/skills --name cos-operator --name cos-inbox-triage --root <kb_root>` で
+  参照 file ごと取り込む（本番 KB への取り込みは人が行う）。

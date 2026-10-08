@@ -530,3 +530,43 @@ async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
     assert!(!f.digest_due());
     assert_eq!(f.digests().len(), 1);
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache T5: the inbox thread's runs (triage and a human message)
+/// mount `cos-inbox-triage` next to `cos-operator`; ordinary threads do not (cos_chat_launch).
+#[tokio::test]
+async fn cos_chat_skill_inbox_thread_runs_mount_inbox_triage() {
+    let mut f = fixture(true);
+    f.tick();
+    f.question("deploy", vec![]);
+    f.tick();
+    assert_eq!(f.inbox_runs(), 1);
+    assert!(f.join_inbox().await);
+    f.human_says("deploy はどうなった?", ChatSendMode::Queue);
+    f.tick();
+    assert_eq!(f.user_input_runs(), 1);
+    assert!(f.join_inbox().await);
+    let inbox = f.inbox_thread().expect("inbox thread");
+    let runs = f
+        .dir
+        .path()
+        .join("cos/threads")
+        .join(&inbox)
+        .join("workspace/runs");
+    let mut seen = 0;
+    for entry in std::fs::read_dir(&runs).expect("runs dir") {
+        let request = entry.expect("entry").path().join("request.json");
+        let Ok(text) = std::fs::read_to_string(&request) else {
+            continue;
+        };
+        let json: serde_json::Value = serde_json::from_str(&text).expect("request json");
+        assert_eq!(
+            json["context"]["cos_chat"]["skills"],
+            serde_json::json!(["cos-operator", "cos-inbox-triage"]),
+            "{}",
+            request.display()
+        );
+        assert_eq!(json["context"]["skills"].as_array().map(Vec::len), Some(2));
+        seen += 1;
+    }
+    assert_eq!(seen, 2, "the triage run and the human message's run");
+}

@@ -9,3 +9,6 @@ license: このリポジトリと同じ（外部の license は無い）
   決めたので、その内容を CoS 特別 worker に渡す skill として書いた。契約の正本は ADR で、食い違えば ADR が優先する。
 - ADR を改訂したら、この skill の該当節と `metadata.version`（policy_version）を一緒に直す。
 - 進捗: [agent-docs/progress/2026-10-06-cos-run/prompt-skill.md](../../../agent-docs/progress/2026-10-06-cos-run/prompt-skill.md)
+- 2026-10-08（ADR 2026-10-08-cos-chat-prompt-cache 付記 D7）: 受信箱スレッドの run と、受信箱の件を渡された run にだけ
+  mount するようにした（`task-dispatch` の `cos_chat_skills`）。通常のスレッドには載らない。policy（version 2）は変えていない。
+  cos-operator の §5・§10 への参照を production.md・explaining.md に直した。

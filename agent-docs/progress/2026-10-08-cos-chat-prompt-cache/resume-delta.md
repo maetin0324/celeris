@@ -20,7 +20,7 @@ updated: 2026-10-08
 - `cargo test -p task-dispatch cos_chat_resume_delta`: 9 passed。`cargo test -p task-worker cos_chat`: 44 passed。
 - `cargo nextest run -p task-core -p task-dispatch -p task-worker -p celerisctl --no-fail-fast`: 2967 run、2929 passed、38 failed（全て browser・launcher の sandbox 既知失敗。cos_chat は 0 件）。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
-- 旧 live（account_id は全40 runで null、lab 使用は不明。判定証拠としては採用しない。claude_oauth、隔離 data dir・一時 DB・port 17957）: before = base 8cdd96fb のバイナリ、after = この変更。各 2 回。t2〜t10 合計の平均: 非 cache input 50 → 50（±0%）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%）。turn 別の値は task の artifacts `resume-delta-bench/compare.md`（runs.json 一式あり）。after の DB で session_mode は 1 turn 目 new・以後 resumed、cursor は 10 turn 後に 21。
+- 旧 live（account_id は全40 runで null、account 不明。今回の固定計測とは別の参考値。claude_oauth、隔離 data dir・一時 DB・port 17957）: before = base 8cdd96fb のバイナリ、after = この変更。各 2 回。t2〜t10 合計の平均: 非 cache input 50 → 50（±0%）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%）。turn 別の値は task の artifacts `resume-delta-bench/compare.md`（runs.json 一式あり）。after の DB で session_mode は 1 turn 目 new・以後 resumed、cursor は 10 turn 後に 21。
 
 ## 人の決定（2026-10-08）
 
@@ -31,7 +31,7 @@ updated: 2026-10-08
 > 受け入れ条件 3 の末尾を「非 cache input・cache write・prompt bytes の before/after が記録され、cache write と prompt bytes のどちらかが改善している」に書き換え、目的の「改善が無ければ統合せず yield」も同じ趣旨に直し、(a)の方向性で進めてください
 
 - **選んだ選択肢: (a)** — 判定指標を cache write・prompt bytes に変えて統合する。
-- **理由**: claude-code では非 cache input は構造上動かない（prompt が cache write に入り turn ごとに 4〜6 で一定）ため、この変更の判定指標として不適。旧計測では改善あり（cache write −13.6%、prompt bytes −21.1%）だったが、account 不明のため lab 固定での判定は未確定。
+- **理由**: claude-code では非 cache input は構造上動かない（prompt が cache write に入り turn ごとに 4〜6 で一定）ため、この変更の判定指標として不適。旧計測では改善あり（cache write −13.6%、prompt bytes −21.1%）。今回の明示account固定再計測でも改善を確認した（下段）。
 - task の受け入れ条件 3 と目的の文言更新は**人が API で行う**。
 - 本決定記録の run では製品コード（crates/・migration・schema）は一切変更していない。統合は delivery の流れの後続段で実施する。
 
@@ -59,7 +59,7 @@ updated: 2026-10-08
 - codex・acp・pi の live は未計測（不明）。
 
 ## 提案
-- 差分配送の判定指標は非 cache input でなく cache write と prompt bytes にする（baseline の提案と同じ）。旧計測では改善あり（−13.6%・−21.1%）だったが、lab 固定の判定は未確定。（2026-10-08 の人の決定で採用。）
+- 差分配送の判定指標は非 cache input でなく cache write と prompt bytes にする（baseline の提案と同じ）。明示account固定の再計測でも改善あり（下段）。（2026-10-08 の人の決定で採用。）
 
 
 ## main 取り込みと代替経路の併存（2026-10-08、merge-main）
@@ -81,11 +81,15 @@ updated: 2026-10-08
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 
 
-## lab 固定再計測（2026-10-08、lab-bench）
+## subscription account 固定再計測（2026-10-08、lab-bench）
 
-- same-thread は `COS_CHAT_BENCH_LAB_DIR` が必須で、basename が `claude_max_lab` 以外なら拒否する。`.credentials.json` だけを隔離 data dir の `accounts/claude_max_lab/` に mode 600 で複製し、provider の `account_pool = true`、CoS の `account_id = "claude_max_lab"`、`accounts.claude_dir` を設定する。host の認証を書き戻さない。
-- before は main `10566e5bc7666a18c0850fabb1c177aef4472483` を `$TMPDIR` に `git archive` し、渡された `CARGO_TARGET_DIR` で debug build。台本・bench script はこの branch のものを使用した。after の製品コードは merge-main `fe5d609d1751041162e527ff3ba17c4c13ea7aa3` と同じ（本 WU は bench と文書のみ変更）。
-- 指定 host lab の認証で before を開始したが、全10 turnが `Failed to authenticate: OAuth session expired and could not be refreshed` で failed。実際の `runs.json` は全て `account_id=claude_max_lab`・`llm_source=claude_oauth`、`summary.json` の `meta.account_id` も `["claude_max_lab"]`。成功した40 runという条件は未達。
-- host lab の期限は 2026-10-08 15:53:15 UTC、計測開始は18:43 UTC。以前成功した `answer-before-retry-data/accounts/claude_max_lab` の一時コピーは既に削除されていた。認証の SHA-256・mtime を前後で照合し、host 側の変更が無いことを確認。本番 config/DB/release/systemd は操作していない。
-- **lab 固定の非 cache input・cache write・prompt bytes の before/after は不明。改善の判定は保留し、統合しない。** before-2・after・after-2 は未実行。新しい lab 認証を人が用意した後、4セットを最初から実行し、成功した直前の隔離コピーを次のセットへ引き継ぐ。
-- 証跡: task の `wu/lab-bench/artifacts/resume-delta-bench-lab/compare.md` と `before/runs.json`（失敗証跡）。詳細ログと host 認証の不変確認は task artifacts の `bench-before.log`・`lab-host-integrity.json`。失敗後の無用な呼出しを避けるため、same-thread は未完了 turn で停止するよう修正した。
+- 人の回答「claude_max_labは再ログインしましたが、CoSはlabアカウント固定である必要はないです。personalアカウントのbudgetも使用して構いません」に従い、account 限定を変更した。更新済み lab は2ターン成功後、週間利用率98%（選択上限97%）で選択できなくなったため、本計測4セットは `claude_max_personal` に明示固定した。lab の名前への付け替えはしていない。
+- `COS_CHAT_BENCH_LAB_DIR` は従来どおり basename `claude_max_lab` 以外を拒否する。追加した `COS_CHAT_BENCH_ACCOUNT_DIR` は明示した subscription account の実 basename を保持する。両指定の同時使用・無効な account id を拒否。`.credentials.json` だけを隔離 data dir の `accounts/<account_id>/` に mode 600 で複製し、provider の `account_pool = true`、CoS の `account_id`、`accounts.claude_dir` を設定する。session cache も `CLAUDE_CONFIG_DIR=<data dir>/claude-config` に隔離する。
+- before は開始時の main `10566e5bc7666a18c0850fabb1c177aef4472483` を `$TMPDIR` に `git archive` して debug build。after は branch `5e65a547521aff0ce8b389e73a8b27df0983d29f` の debug build（製品コードは merge-main `fe5d609d` と同じ）。渡された `CARGO_TARGET_DIR` と compiler 設定を使用。台本と bench script は両方とも `5e65a547521aff0ce8b389e73a8b27df0983d29f`。port 17957、一時DB、隔離 data dir で計測した。
+- main は計測中に `fb300299` へ進んだ。before の呼び手が記録した `summary.meta.commit` はその可変 ref だが、実バイナリは開始時の archive build のまま。実出所はバイナリ SHA-256 で固定し、`summary.meta.binary_source_sha` と `binary-provenance.json` に記録。元の `meta.commit` は監査のため残した。
+- before → before-2 → after → after-2 と、成功した直前の隔離認証コピーを引き継いだ。**40 runすべて completed・account_id=claude_max_personal・llm_source=claude_oauth**。各 `summary.meta.account_id` も `["claude_max_personal"]`。account_id は実際のAPI run行から取得し、設定値で補完していない。全4セットでt1はnew、t2〜t10はresumed。beforeのDBには配送cursor列がなく、afterには存在することを確認。
+- t2〜t10 **合計の2回平均**: 非 cache input 51.0 → 54.0（+5.88%）、cache write 40,377.0 → 36,487.5（-9.63%）、prompt bytes 75,254.5 → 64,258.5（-14.61%）。判定: **改善あり**（cache write か prompt bytes の改善という人の指定条件を満たす）。統合は delivery の後続段に委ね、本 run では main への統合・本番操作を行っていない。
+- 最初のpersonal試行は host の session cache が読取専用で全fresh_after_refusalとなり、afterの依存ビルドもmainのschema62を再利用していたため無効。session cache隔離と変更対象crateのclean build後に4セットを再実行した。same-threadはfailed turnに加え、t2以降がresumedでない場合も停止する。無効試行は `invalid-fresh-*/`、lab停止は `lab-quota-before-attempt3/`、前attemptの認証切れは `failed-before-attempt2/` に分け、本平均に含めない。
+- host lab/personalの認証のSHA-256・mtime・sizeは前後不変。hostの認証・本番config/DB/release/systemdを変更していない。隔離認証コピーは計測後に削除。summaryありthread・他harnessの効果は不明。
+- 証跡: task `01M4DE3G78D16NJ80SEMWVAVAK` の `wu/lab-bench/artifacts/resume-delta-bench-lab/` に `{before,before-2,after,after-2}/runs.json`、各 `summary.json`、`compare.md`（全runのaccount_idとcommit出所）、`validation.json`、`binary-provenance.json`、`host-integrity.json`。
+- 検証: CoS chat 152件、resume差分配送12件、workspace clippy、shell構文、引数拒否4ケース、driverのcompleted/failed/fresh停止3ケース、文書リンク・progress-indexはすべて成功。

@@ -246,13 +246,28 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
         .expect("claim")
         .expect("items");
     assert_eq!(claim.item_ids.len(), 2);
-    let (a, b) = (&claim.item_ids[0], &claim.item_ids[1]);
+    // Both items share `created_at`, so their claim order (ULID within one millisecond) is not
+    // deterministic: find them by source key instead of by index.
+    let by_key = |key: &str| -> String {
+        s.lock()
+            .expect("lock")
+            .query_row(
+                "SELECT id FROM cos_inbox_items WHERE source_key=?1",
+                [key],
+                |r| r.get(0),
+            )
+            .expect("item id")
+    };
+    let (a, b) = (&by_key("a"), &by_key("b"));
+    assert!(claim.item_ids.contains(a) && claim.item_ids.contains(b));
     let report = s.cos_triage_run_report("run-1").expect("report");
     assert_eq!(report.len(), 2);
-    assert_eq!(report[0].summary, "approve?");
-    assert_eq!(report[1].title(), "second");
-    assert_eq!(report[0].state, "running");
-    assert!(report[0].decision.is_none());
+    let ra = report.iter().find(|r| &r.item_id == a).expect("a");
+    let rb = report.iter().find(|r| &r.item_id == b).expect("b");
+    assert_eq!(ra.summary, "approve?");
+    assert_eq!(rb.title(), "second");
+    assert_eq!(ra.state, "running");
+    assert!(ra.decision.is_none());
 
     let body = serde_json::json!({"summary":"公開前の確認","options":[{"key":"go","label":"公開する"},{"key":"hold","label":"保留"}],"recommended":"hold","recommendation_reason":"未確認","web_path":"/tasks/t1"});
     s.cos_triage_outbox_claim(a, "escalation", &body.to_string(), at(2))
@@ -263,14 +278,15 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
             .expect("resolve")
     );
     let report = s.cos_triage_run_report("run-1").expect("report");
-    let d = report[0].decision.as_ref().expect("packet");
+    let ra = report.iter().find(|r| &r.item_id == a).expect("a");
+    let d = ra.decision.as_ref().expect("packet");
     assert_eq!(d.summary, "公開前の確認");
     assert_eq!(d.options.len(), 2);
     assert_eq!(d.options[1].label, "保留");
     assert_eq!(d.recommended.as_deref(), Some("hold"));
     assert_eq!(d.web_path, "/tasks/t1");
-    assert_eq!(report[0].route.as_deref(), Some("escalation"));
-    assert_eq!(report[0].reason.as_deref(), Some("人の判断"));
+    assert_eq!(ra.route.as_deref(), Some("escalation"));
+    assert_eq!(ra.reason.as_deref(), Some("人の判断"));
     let fb = decision_from_outbox(
         r#"{"summary":"x","options":["公開する","保留"],"recommended":"保留","recommendation_text":"CoS の推奨なし","web_path":"/inbox"}"#,
     )

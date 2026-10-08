@@ -63,6 +63,12 @@ def enrich(rec):
     if not d:
         return
     rec["prompt_bytes"] = os.path.getsize(os.path.join(d, "prompt.txt"))
+    prompt = open(os.path.join(d, "prompt.txt"), "rb").read()
+    marker = b"\n<!-- celeris:cos-input (stdin) -->\n"
+    if prompt.startswith(b"<!-- celeris:cos-core (") and marker in prompt:
+        core, variable = prompt.split(marker, 1)
+        rec["core_bytes"] = len(core.split(b"\n", 1)[1])
+        rec["variable_bytes"] = len(variable)
     try:
         for line in open(os.path.join(d, "stdout.jsonl")):
             try:

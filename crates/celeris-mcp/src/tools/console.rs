@@ -1,4 +1,4 @@
-//! ADR-0056 D2 / CoS chat D6: MCP の旧入力を legacy chat thread に渡す。
+//! ADR-0056 D2 / CoS chat D6: MCP 入力を通常の CoS chat thread に渡す。
 
 use std::future::Future;
 use std::pin::Pin;
@@ -7,11 +7,19 @@ use std::time::{Duration, Instant};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use task_core::{COS_ID, MessageRole, ProjectId, TaskId, TaskStore};
+use task_core::{ProjectId, TaskId};
 
 use super::{ToolDef, ToolError, ToolOutput, schema};
 use crate::auth::AuthedClient;
 use crate::state::McpState;
+
+fn chat_error(error: task_core::chat::ChatError) -> ToolError {
+    if matches!(error, task_core::chat::ChatError::Store(_)) {
+        ToolError::internal(error.to_string())
+    } else {
+        ToolError::invalid_params(error.to_string())
+    }
+}
 
 // ---- console_instruct ----
 
@@ -21,12 +29,15 @@ pub struct InstructArgs {
     pub text: String,
     #[serde(default)]
     pub project_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 #[derive(Debug, Serialize, JsonSchema)]
 pub struct InstructOutput {
     pub message_id: String,
     pub task_id: String,
+    pub thread_id: String,
 }
 
 async fn instruct_impl(
@@ -46,28 +57,24 @@ async fn instruct_impl(
         ),
         None => None,
     };
-    let roles = state.roles.clone();
-    let genres = state.genres.clone();
-    let conversation_genre = state.conversation_genre.clone();
-    let author = format!("mcp:{}", client.id);
-    let started = state
+    let client_id = client.id.clone();
+    let posted = state
         .blocking(move |store| {
-            task_ops::conversation::start_legacy_cos(
-                store,
-                project_id,
-                Some(&author),
+            store.chat_mcp_instruct(
+                &client_id,
+                args.thread_id.as_deref(),
+                project_id.map(|p| p.to_string()).as_deref(),
                 &args.text,
-                &roles,
-                &genres,
-                &conversation_genre,
                 time::OffsetDateTime::now_utc(),
             )
         })
         .await
-        .map_err(|e| ToolError::invalid_params(e.to_string()))?;
+        .map_err(chat_error)?;
+    let message = posted.response.message;
     ToolOutput::from_serialize(&InstructOutput {
-        message_id: started.message.id.to_string(),
-        task_id: started.task.id.to_string(),
+        task_id: message.id.clone(),
+        message_id: message.id,
+        thread_id: message.thread_id,
     })
 }
 
@@ -82,7 +89,7 @@ fn instruct_call<'a>(
 pub fn instruct_def() -> ToolDef {
     ToolDef {
         name: "console_instruct",
-        description: "CoS の互換 legacy thread に発言を積む（author は mcp:<client_id>）。",
+        description: "新しい CoS 会話を作って発言を積む。thread_id 指定で続ける（author は mcp:<client_id>）。",
         scope: task_core::McpScope::ConsoleInstruct,
         input_schema: schema::<InstructArgs>,
         call: instruct_call,
@@ -94,7 +101,10 @@ pub fn instruct_def() -> ToolDef {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReplyArgs {
-    pub task_id: String,
+    #[serde(default)]
+    pub task_id: Option<String>,
+    #[serde(default)]
+    pub thread_id: Option<String>,
     #[serde(default)]
     pub wait_secs: Option<u64>,
 }
@@ -117,7 +127,6 @@ pub enum ReplyOutput {
     Pending,
     Done {
         reply: String,
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         actions: Vec<ActionSummary>,
     },
     Failed {
@@ -138,29 +147,25 @@ async fn reply_impl(
 ) -> Result<ToolOutput, ToolError> {
     let args: ReplyArgs =
         serde_json::from_value(args).map_err(|e| ToolError::invalid_params(e.to_string()))?;
-    let task_id: TaskId = args
-        .task_id
-        .parse()
-        .map_err(|_| ToolError::invalid_params(format!("{:?} is not a task id", args.task_id)))?;
+    if args.task_id.is_some() == args.thread_id.is_some() {
+        return Err(ToolError::invalid_params(
+            "specify exactly one of task_id or thread_id",
+        ));
+    }
+    if let Some(id) = &args.task_id {
+        id.parse::<TaskId>()
+            .map_err(|_| ToolError::invalid_params(format!("{id:?} is not a task id")))?;
+    }
     let wait = Duration::from_secs(args.wait_secs.unwrap_or(0).min(MAX_WAIT_SECS));
     let out = state
         .blocking(move |store| -> Result<ReplyOutput, ToolError> {
             let deadline = Instant::now() + wait;
             loop {
-                let Some(task) = store
-                    .get(task_id)
-                    .map_err(|e| ToolError::internal(e.to_string()))?
-                else {
-                    return Err(ToolError::not_found(format!(
-                        "task {task_id} was not found"
-                    )));
-                };
-                if task.status == task_core::Status::Draft
-                    && let Some((state, reply)) = store
-                        .chat_legacy_reply(task_id)
-                        .map_err(|e| ToolError::internal(e.to_string()))?
-                {
-                    match state.as_str() {
+                let reply = store
+                    .chat_mcp_reply(args.task_id.as_deref(), args.thread_id.as_deref())
+                    .map_err(chat_error)?;
+                match reply {
+                    Some((state, reply)) => match state.as_str() {
                         "completed" => {
                             return Ok(ReplyOutput::Done {
                                 reply: reply.unwrap_or_default(),
@@ -168,12 +173,15 @@ async fn reply_impl(
                             });
                         }
                         "failed" => return Ok(ReplyOutput::Failed { reply }),
-                        "stopped" | "interrupted" => return Ok(ReplyOutput::Cancelled),
+                        "stopped" | "interrupted" | "cancelled" => {
+                            return Ok(ReplyOutput::Cancelled);
+                        }
                         _ => {}
+                    },
+                    None if args.task_id.is_some() => {
+                        return Err(ToolError::not_found("MCP receipt was not found"));
                     }
-                }
-                if task.status.is_terminal() {
-                    return terminal_reply(store, &task);
+                    None => {}
                 }
                 if Instant::now() >= deadline {
                     return Ok(ReplyOutput::Pending);
@@ -187,56 +195,6 @@ async fn reply_impl(
         })
         .await?;
     ToolOutput::from_serialize(&out)
-}
-
-fn terminal_reply(store: &dyn TaskStore, task: &task_core::Task) -> Result<ReplyOutput, ToolError> {
-    use task_core::Status;
-    match task.status {
-        Status::Done => {
-            let messages = store
-                .message_page(Some(COS_ID), task.project_id, None, 4_000)
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let reply_message = messages
-                .into_iter()
-                .rfind(|m| m.role == MessageRole::Node && m.task_id == Some(task.id));
-            let Some(reply_message) = reply_message else {
-                return Ok(ReplyOutput::Done {
-                    reply: String::new(),
-                    actions: Vec::new(),
-                });
-            };
-            let actions = reply_message
-                .metadata
-                .map(|m| {
-                    m.actions_executed
-                        .into_iter()
-                        .map(|a| ActionSummary {
-                            kind: a.kind,
-                            summary: a.summary,
-                            task_id: a.task_id.map(|t| t.to_string()),
-                            project_id: a.project_id.map(|p| p.to_string()),
-                            milestone_id: a.milestone_id.map(|m| m.to_string()),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            Ok(ReplyOutput::Done {
-                reply: reply_message.text,
-                actions,
-            })
-        }
-        Status::Failed => {
-            let messages = store
-                .message_page(Some(COS_ID), task.project_id, None, 4_000)
-                .map_err(|e| ToolError::internal(e.to_string()))?;
-            let reply = messages
-                .into_iter()
-                .rfind(|m| m.role == MessageRole::Node && m.task_id == Some(task.id))
-                .map(|m| m.text);
-            Ok(ReplyOutput::Failed { reply })
-        }
-        _ => Ok(ReplyOutput::Cancelled),
-    }
 }
 
 fn reply_call<'a>(

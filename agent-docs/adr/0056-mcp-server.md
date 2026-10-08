@@ -65,11 +65,18 @@ Celeris の入口は今まで GUI（Console）と `celerisctl` だけだった�
 **タスク・案件（読むだけ。作るのは CoS 経由）**
 - `tasks_list { status?, project_id?, limit? }`、`tasks_get { id }`（状態・担当・直近の報告の要約・成果物一覧。run の生ログは返さない）。
 - `projects_list { status?, limit? }`、`projects_get { id }`（途中目標とタスクの一覧）。
-- `console_instruct { text, project_id? }` — **人の発言と同じ経路**（`POST /console/instruct` の中身）で CoS に渡す。発言の `author` は
-  `mcp:<client_id>`（Console では「外部（<client name>）」の帯で人の発言と区別して見せる。ADR-0048 D4 の `human` ブロックの variant）。
-  返値は `message_id` / `task_id`（対話 run）。案件化・タスク化は CoS が判断し、actions で作る（ADR-0048 D3。作ったタスクは今までどおり ready）。
-- `console_reply { task_id, wait_secs? }` — 対話 run の返事（`reply` の本文）と、その run が起こした actions の結果（作った案件・タスクの id と題名）
-  を返す。終わっていなければ `wait_secs`（上限 60）まで待ってから `{ state: "pending" }`。Deep Research のような一往復の客が結果を取るための道具。
+- `console_instruct { text, project_id?, thread_id? }` — 人の決定（CoS チャット、2026-10-08）により、
+  MCP の入力を REST Console の互換 facade から外す。全 MCP client（chatgpt/chatgpt-rdc 等）は、
+  ID 省略時に `kind=human` の新しい CoS スレッドを作り、通常の queue に人の発言として積む。
+  題名は `<client_id>: <先頭行、最大60文字>`、metadata の author は `mcp:<client_id>`、
+  project_id は thread に保存する。thread_id 指定時はその thread に続け、不存在/archived/legacy と
+  project 不一致は invalid_params。返値は `{ message_id, task_id, thread_id }`。
+  task_id は入力メッセージ ID を互換の受付 ID として返す（裏方 task や legacy message は作らない）。
+- `console_reply { task_id?, thread_id?, wait_secs? }` — ID はどちらか一つ。受付 ID はその入力、
+  thread_id は最新の人の発言を対象に chat_runs と assistant message から返事を読む。
+  completed → done（reply と常に空の actions[]）、failed → failed（reply?）、
+  stopped/interrupted/cancelled → cancelled、それ以外 → pending。wait_secs は上限60秒。
+  通常の queue/stop/SSE/checkpoint を使う。REST の旧入力と既存 legacy データは維持する。
 
 **組織（ADR-0046）**
 - `org_list {}` — 木（id / name / parent / kind / skills / harness の既定 / 継続セッションの有無）。
@@ -109,7 +116,7 @@ Celeris の入口は今まで GUI（Console）と `celerisctl` だけだった�
   `--no-token` の客（`auth = "none"` の口に固定する客）も同じ規則。ChatGPT に skills を書かせたいなら `--scope skills:write` を明示する。
   スコープ外の tool は `tools/list` に**出さない**（呼ばれたら JSON-RPC の `-32601`）。
 - すべての `tools/call` を **`mcp_calls` 表**（`client_id`、`tool`、`ok`、`error_kind`、`latency_ms`、`at`）に残す（引数と結果の本文は残さない）。
-  `console_instruct` は Console にも出るので二重には書かない。
+  `console_instruct` はチャットに発言を保存するので二重には書かない。
 - 流量: `[mcp] rate_limit_per_min`（既定 60、クライアントごと）。超えたら JSON-RPC エラー（`-32000`、`retry_after`）。
 - 管理 API: `GET /mcp/clients`（id / name / scopes / last_used_at。トークンは出ない）と `GET /mcp/calls?client=`（直近 100 件）。GUI の
   「アカウント」画面に「MCP クライアント」の節（後続の GUI Phase）。

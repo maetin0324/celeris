@@ -576,8 +576,244 @@ async fn knowledge_propose_writes_to_inbox_with_the_mcp_source_and_rejects_secre
 // console_instruct / console_reply
 // ---------------------------------------------------------------------------
 
+async fn console_call(
+    client: &reqwest::Client,
+    server: &Server,
+    session: &str,
+    name: &str,
+    arguments: Value,
+) -> Value {
+    let response = rpc(client, &server.base_url, Some("secret"), Some(session),
+        json!({"jsonrpc":"2.0", "id":2, "method":"tools/call", "params":{"name":name, "arguments":arguments}})).await;
+    let body: Value = response.json().await.unwrap();
+    if body["result"]["isError"] == true || body.get("error").is_some() {
+        return body;
+    }
+    serde_json::from_str(
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .expect("tool result"),
+    )
+    .unwrap()
+}
+
 #[tokio::test]
-async fn cos_chat_legacy_mcp_instruct_and_reply_use_chat_run() {
+async fn cos_chat_mcp_new_threads_continuation_and_reply() {
+    use task_core::chat::{
+        ChatMessageQuery, ChatPatchThreadRequest, ChatRunState, ChatThreadKind, ChatThreadStatus,
+    };
+    let server = spawn_token_server(60).await;
+    create_client(
+        &server.store,
+        "chatgpt-rdc",
+        Some("secret"),
+        vec![McpScope::ConsoleInstruct],
+    );
+    let client = reqwest::Client::new();
+    let session = initialize(&client, &server.base_url, Some("secret")).await;
+    let now = OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        id: task_core::ProjectId::new(),
+        title: "MCP project".into(),
+        request: "MCP".into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        auto_advance: false,
+        slug: None,
+        created_at: now,
+        updated_at: now,
+    };
+    server.store.project_create(&project).unwrap();
+    let first = console_call(
+        &client,
+        &server,
+        &session,
+        "console_instruct",
+        json!({"text":"調査結果をタスクにして\n本文", "project_id":project.id.to_string()}),
+    )
+    .await;
+    let thread = first["thread_id"].as_str().unwrap();
+    let t = server.store.chat_thread_get(thread).unwrap().unwrap();
+    assert_eq!(t.kind, ChatThreadKind::Human);
+    assert_eq!(t.project_id, Some(project.id.to_string()));
+    assert_eq!(t.title, "chatgpt-rdc: 調査結果をタスクにして");
+    assert_eq!(first["message_id"], first["task_id"]);
+    assert!(
+        server
+            .store
+            .message_page(Some("cos"), None, None, 100)
+            .unwrap()
+            .is_empty()
+    );
+    let legacy = server
+        .store
+        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
+        .unwrap();
+    assert_eq!(
+        server
+            .store
+            .chat_thread_get(&legacy)
+            .unwrap()
+            .unwrap()
+            .queued_count,
+        0
+    );
+    assert_ne!(thread, legacy);
+    let listed = server
+        .store
+        .chat_thread_list(&task_core::chat::ChatThreadQuery::default())
+        .unwrap();
+    assert!(
+        listed
+            .items
+            .iter()
+            .any(|t| t.id == thread && t.kind == ChatThreadKind::Human)
+    );
+    let second = console_call(
+        &client,
+        &server,
+        &session,
+        "console_instruct",
+        json!({"text":"別の依頼"}),
+    )
+    .await;
+    assert_ne!(second["thread_id"], first["thread_id"]);
+    for selector in [
+        json!({"task_id":first["task_id"]}),
+        json!({"thread_id":thread}),
+    ] {
+        assert_eq!(
+            console_call(&client, &server, &session, "console_reply", selector).await["state"],
+            "pending"
+        );
+    }
+    server
+        .store
+        .chat_run_claim_next(thread, "mcp-run", &json!({}), OffsetDateTime::now_utc())
+        .unwrap()
+        .unwrap();
+    server
+        .store
+        .chat_run_finish(
+            "mcp-run",
+            ChatRunState::Completed,
+            Some("受け付けました"),
+            None,
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    for selector in [
+        json!({"task_id":first["task_id"], "wait_secs":100}),
+        json!({"thread_id":thread}),
+    ] {
+        let reply = console_call(&client, &server, &session, "console_reply", selector).await;
+        assert_eq!(reply["state"], "done");
+        assert_eq!(reply["reply"], "受け付けました");
+        assert_eq!(reply["actions"], json!([]));
+    }
+    let follow = console_call(
+        &client,
+        &server,
+        &session,
+        "console_instruct",
+        json!({"text":"続き", "thread_id":thread}),
+    )
+    .await;
+    assert_eq!(follow["thread_id"], thread);
+    assert_ne!(follow["task_id"], first["task_id"]);
+    let items = server
+        .store
+        .chat_message_list(thread, &ChatMessageQuery::default())
+        .unwrap()
+        .items;
+    assert_eq!(
+        items
+            .iter()
+            .filter(|m| m.role == task_core::chat::ChatMessageRole::User)
+            .count(),
+        2
+    );
+    assert_eq!(
+        console_call(
+            &client,
+            &server,
+            &session,
+            "console_reply",
+            json!({"thread_id":thread})
+        )
+        .await["state"],
+        "pending"
+    );
+    assert_eq!(
+        console_call(
+            &client,
+            &server,
+            &session,
+            "console_reply",
+            json!({"task_id":first["task_id"]})
+        )
+        .await["state"],
+        "done"
+    );
+    server
+        .store
+        .chat_message_cancel(
+            thread,
+            follow["message_id"].as_str().unwrap(),
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    for selector in [
+        json!({"task_id":follow["task_id"]}),
+        json!({"thread_id":thread}),
+    ] {
+        assert_eq!(
+            console_call(&client, &server, &session, "console_reply", selector).await["state"],
+            "cancelled"
+        );
+    }
+    let mismatch = console_call(&client, &server, &session, "console_instruct", json!({"text":"invalid", "thread_id":second["thread_id"], "project_id":project.id.to_string()})).await;
+    assert_eq!(mismatch["error"]["code"], -32602, "{mismatch}");
+    let t = server.store.chat_thread_get(thread).unwrap().unwrap();
+    server
+        .store
+        .chat_thread_patch(
+            thread,
+            &ChatPatchThreadRequest {
+                title: None,
+                status: Some(ChatThreadStatus::Archived),
+                expected_revision: t.revision,
+            },
+            OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    for id in [thread, "missing", legacy.as_str()] {
+        let error = console_call(
+            &client,
+            &server,
+            &session,
+            "console_instruct",
+            json!({"text":"invalid", "thread_id":id}),
+        )
+        .await;
+        assert_eq!(error["error"]["code"], -32602, "{error}");
+    }
+    for selector in [
+        json!({}),
+        json!({"thread_id":thread, "task_id":first["task_id"]}),
+    ] {
+        let error = console_call(&client, &server, &session, "console_reply", selector).await;
+        assert_eq!(error["error"]["code"], -32602, "{error}");
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn cos_chat_mcp_reply_failed_stopped_and_interrupted() {
+    use task_core::chat::ChatRunState;
     let server = spawn_token_server(60).await;
     create_client(
         &server.store,
@@ -587,100 +823,46 @@ async fn cos_chat_legacy_mcp_instruct_and_reply_use_chat_run() {
     );
     let client = reqwest::Client::new();
     let session = initialize(&client, &server.base_url, Some("secret")).await;
-
-    let resp = rpc(
-        &client,
-        &server.base_url,
-        Some("secret"),
-        Some(&session),
-        json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
-            "name": "console_instruct",
-            "arguments": {"text": "調査結果をタスクにして"}
-        }}),
-    )
-    .await;
-    let body: Value = resp.json().await.expect("json");
-    let text = body["result"]["content"][0]["text"].as_str().expect("text");
-    let parsed: Value = serde_json::from_str(text).expect("inner json");
-    let task_id: task_core::TaskId = parsed["task_id"]
-        .as_str()
-        .expect("task_id")
-        .parse()
-        .expect("ulid");
-
-    // `author = mcp:chatgpt` の人の発言が入っている。
-    let messages = server
-        .store
-        .message_page(Some("cos"), None, None, 100)
-        .unwrap();
-    let human = messages
-        .iter()
-        .find(|m| m.role == task_core::MessageRole::User && m.task_id == Some(task_id))
-        .expect("human message");
-    assert_eq!(
-        human.metadata.as_ref().and_then(|m| m.author.clone()),
-        Some("mcp:chatgpt".to_string())
-    );
-
-    // まだ終わっていないので pending。
-    let resp = rpc(
-        &client,
-        &server.base_url,
-        Some("secret"),
-        Some(&session),
-        json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
-            "name": "console_reply",
-            "arguments": {"task_id": task_id.to_string()}
-        }}),
-    )
-    .await;
-    let body: Value = resp.json().await.expect("json");
-    let text = body["result"]["content"][0]["text"].as_str().expect("text");
-    let parsed: Value = serde_json::from_str(text).expect("inner json");
-    assert_eq!(parsed["state"], "pending");
-
-    // The compatibility task is a receipt; the chat queue owns the actual run.
-    let thread = server
-        .store
-        .chat_legacy_default_thread(None, OffsetDateTime::now_utc())
-        .unwrap();
-    assert_eq!(
-        server.store.get(task_id).unwrap().unwrap().status,
-        Status::Draft
-    );
-    let run = server
-        .store
-        .chat_run_claim_next(&thread, "run-1", &json!({}), OffsetDateTime::now_utc())
-        .unwrap();
-    assert!(run.is_some());
-    server
-        .store
-        .chat_run_finish(
-            "run-1",
-            task_core::chat::ChatRunState::Completed,
-            Some("3 件のタスクを作りました"),
-            None,
-            OffsetDateTime::now_utc(),
+    for (i, state, expected) in [
+        (0, ChatRunState::Failed, "failed"),
+        (1, ChatRunState::Stopped, "cancelled"),
+        (2, ChatRunState::Interrupted, "cancelled"),
+    ] {
+        let input = console_call(
+            &client,
+            &server,
+            &session,
+            "console_instruct",
+            json!({"text":"依頼"}),
         )
-        .unwrap();
-
-    let resp = rpc(
-        &client,
-        &server.base_url,
-        Some("secret"),
-        Some(&session),
-        json!({"jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": {
-            "name": "console_reply",
-            "arguments": {"task_id": task_id.to_string(), "wait_secs": 1}
-        }}),
-    )
-    .await;
-    let body: Value = resp.json().await.expect("json");
-    let text = body["result"]["content"][0]["text"].as_str().expect("text");
-    let parsed: Value = serde_json::from_str(text).expect("inner json");
-    assert_eq!(parsed["state"], "done");
-    assert_eq!(parsed["reply"], "3 件のタスクを作りました");
-
+        .await;
+        let thread = input["thread_id"].as_str().unwrap();
+        let run = format!("mcp-terminal-{i}");
+        server
+            .store
+            .chat_run_claim_next(thread, &run, &json!({}), OffsetDateTime::now_utc())
+            .unwrap()
+            .unwrap();
+        server
+            .store
+            .chat_run_finish(
+                &run,
+                state,
+                Some("partial"),
+                None,
+                OffsetDateTime::now_utc(),
+            )
+            .unwrap();
+        for selector in [
+            json!({"task_id":input["task_id"]}),
+            json!({"thread_id":thread}),
+        ] {
+            assert_eq!(
+                console_call(&client, &server, &session, "console_reply", selector).await["state"],
+                expected
+            );
+        }
+    }
     server.stop().await;
 }
 

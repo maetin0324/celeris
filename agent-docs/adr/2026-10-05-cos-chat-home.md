@@ -252,7 +252,24 @@ CoS が screenshot を task に渡すときは attachment references API で tas
 | ADR-0037/0050 の直接通知と ADR-0133 D6 の inbox_new/reminder/digest | **通常の人への通知は CoS の escalation だけ**。既存の直接送信候補生成・直接 reminder/digest を停止。下記 unavailable fallback だけ例外 |
 | ADR-0050 の依頼の保持 | 維持。task 起票時の人の依頼と当時の添付を snapshot し、後続発言を過去の依頼へ混入させない。調査だけへ縮小しない |
 
-`/console`・`/console/stream` は新しい CoS messages も legacy_message_id/run_id で重複排除して読み取る。旧 `POST /console/instruct`、`POST /org/cos/messages`、MCP の CoS 入力は当面互換 facade とし、scope ごとに選ぶ既定 legacy thread へ投入する。旧応答の message_id/task_id/node_id は維持（受付時に裏方 task id を確保する）。新 UI は task_id を会話 id に使わない。`/console/new-conversation` は互換 scope の既定 thread を新規作成して 204 を返す。新 UI の別 thread を retire しない。非 CoS の `@node`/org 会話は従来経路へ委ねる。
+`/console`・`/console/stream` は新しい CoS messages も legacy_message_id/run_id で重複排除して読み取る。旧 `POST /console/instruct`、`POST /org/cos/messages` は当面互換 facade とし、scope ごとに選ぶ既定 legacy thread へ投入する。旧応答の message_id/task_id/node_id は維持（受付時に裏方 task id を確保する）。新 UI は task_id を会話 id に使わない。`/console/new-conversation` は互換 scope の既定 thread を新規作成して 204 を返す。新 UI の別 thread を retire しない。非 CoS の `@node`/org 会話は従来経路へ委ねる。
+
+### 互換 facade の改訂（人の決定、2026-10-08）
+
+CoS チャットで「chatgpt-rdc 経由の依頼は新しい CoS スレッドを作成して受け入れる」と決定されたため、
+MCP の `console_instruct` を互換 facade から外す。全 MCP client で、thread_id を省略した呼び出しは
+`kind=human` の新 thread を作る。題名は client_id と本文先頭行（最大60文字）、project_id は thread に保持し、
+user message の metadata.author に `mcp:<client_id>` を保存する。通常の queue と CoS chat run が動く。
+thread_id 指定は同じ thread に続ける。不存在/archived/legacy と project 不一致は invalid_params。
+作成と投入・出どころは一つの transaction。message_id/task_id に thread_id を追加して返す。
+task_id は入力メッセージ ID と同じ互換の受付 ID で、task 行や legacy message は作らない。
+console_reply は task_id または thread_id のどちらか一つで取得する。受付 ID はその入力、thread_id は
+最新の user input の run/output を読む。completed→done、failed→failed、stopped/interrupted/cancelled→cancelled、
+その他→pending（wait_secs は上限60秒）。actions[] は常に空。
+REST の POST /console/instruct・POST /org/cos/messages・/console/new-conversation と旧データは維持する。
+実装は task-core chat store の chat_mcp_instruct/chat_mcp_reply と celeris-mcp tools/console.rs。
+試験は mcp_integration の cos_chat_mcp_*、task-core の cos_chat_mcp_metadata_and_atomic_validation、
+task-api の cos_chat_legacy_console_instruct_queues_and_keeps_ids。
 
 新 CoS run では result.actions を実行しない。旧 role の実行中 run を drain した後、互換 actions は非移行の旧ノードに限って残し、旧 console_action_runs の冪等記録は消さない。actions による起票を使う旧 prompt/skill は CoS から外して celerisctl/API に更新する。新 CoS が誤って actions を出したら明示エラーのカードにし、黙って無視/重複実行しない。
 

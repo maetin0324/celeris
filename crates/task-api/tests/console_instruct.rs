@@ -92,6 +92,14 @@ async fn cos_chat_legacy_console_instruct_queues_and_keeps_ids() {
         env.store.get(task_id).unwrap().unwrap().status,
         Status::Draft
     );
+    let thread = env
+        .store
+        .chat_legacy_default_thread(None, time::OffsetDateTime::now_utc())
+        .unwrap();
+    assert_eq!(
+        env.store.chat_thread_get(&thread).unwrap().unwrap().kind,
+        task_core::chat::ChatThreadKind::Legacy
+    );
     let items = legacy_items(&env, None);
     assert_eq!(items.len(), 1);
     assert_eq!(items[0].text, "互換入力");

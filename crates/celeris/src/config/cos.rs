@@ -19,6 +19,10 @@ pub struct CosConfig {
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     #[serde(default)]
+    pub fallbacks: Vec<CosRouteConfig>,
+    #[serde(default = "default_worker_reserve")]
+    pub worker_reserve_five_hour: f64,
+    #[serde(default)]
     pub harness: CosHarness,
     #[serde(default)]
     pub llm_source: Option<LlmSourceRef>,
@@ -47,6 +51,8 @@ impl Default for CosConfig {
     fn default() -> Self {
         Self {
             enabled: default_enabled(),
+            fallbacks: Vec::new(),
+            worker_reserve_five_hour: default_worker_reserve(),
             harness: CosHarness::default(),
             llm_source: None,
             provider: None,
@@ -60,6 +66,39 @@ impl Default for CosConfig {
             attachments: CosAttachmentsConfig::default(),
         }
     }
+}
+
+/// An explicitly authorized alternative; never inherits the primary account or model.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CosRouteConfig {
+    pub harness: CosHarness,
+    #[serde(default)]
+    pub llm_source: Option<LlmSourceRef>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub account_id: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default = "default_tier")]
+    pub tier: Tier,
+}
+
+impl CosRouteConfig {
+    fn apply(&self, cos: &mut CosConfig) {
+        cos.harness = self.harness;
+        cos.llm_source = self.llm_source.clone();
+        cos.provider = self.provider.clone();
+        cos.account_id = self.account_id.clone();
+        cos.model = self.model.clone();
+        cos.tier = self.tier;
+        cos.fallbacks.clear();
+    }
+}
+
+fn default_worker_reserve() -> f64 {
+    0.90
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -264,6 +303,24 @@ impl CosConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if !self.worker_reserve_five_hour.is_finite()
+            || self.worker_reserve_five_hour <= 0.0
+            || self.worker_reserve_five_hour > 0.97
+        {
+            return Err(ConfigError::Invalid(
+                "[cos] worker_reserve_five_hour must be > 0 and <= 0.97".into(),
+            ));
+        }
+        if self.fallbacks.len() > 8 {
+            return Err(ConfigError::Invalid(
+                "[cos] at most 8 fallbacks are allowed".into(),
+            ));
+        }
+        for route in &self.fallbacks {
+            let mut cos = self.clone();
+            route.apply(&mut cos);
+            cos.validate()?;
+        }
         if self.max_turns == 0 || self.max_wall_secs == 0 {
             return Err(ConfigError::Invalid(
                 "[cos] max_turns and max_wall_secs must be >= 1".into(),
@@ -348,6 +405,11 @@ impl Config {
     /// Reject contradictions written explicitly, while allowing a valid configuration to have
     /// no currently usable provider. Runtime availability is reported by `resolve_cos_provider`.
     pub(super) fn validate_cos_mapping(&self) -> Result<(), ConfigError> {
+        for route in &self.cos.fallbacks {
+            let mut config = self.clone();
+            route.apply(&mut config.cos);
+            config.validate_cos_mapping()?;
+        }
         let cos = &self.cos;
         if let Some(source) = &cos.llm_source {
             let compatible = match cos.harness {
@@ -355,7 +417,9 @@ impl Config {
                 CosHarness::Codex => *source == LlmSourceRef::CodexOauth,
                 CosHarness::Opencode => matches!(
                     source,
-                    LlmSourceRef::Celeris | LlmSourceRef::OpenaiCompatible(_)
+                    LlmSourceRef::Celeris
+                        | LlmSourceRef::OpencodeGo
+                        | LlmSourceRef::OpenaiCompatible(_)
                 ),
             };
             if !compatible {
@@ -422,6 +486,18 @@ impl Config {
             }
         }
         Ok(())
+    }
+
+    pub fn resolve_cos_fallbacks(&self) -> Vec<Result<ResolvedCosProvider, String>> {
+        self.cos
+            .fallbacks
+            .iter()
+            .map(|route| {
+                let mut config = self.clone();
+                route.apply(&mut config.cos);
+                config.resolve_cos_provider()
+            })
+            .collect()
     }
 
     /// D2 harness capability table: non-fatal reasons for abilities the configured harness's

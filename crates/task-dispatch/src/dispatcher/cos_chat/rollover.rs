@@ -302,6 +302,7 @@ fn record_attempt(
 
 /// worker を走らせるのに要る値（launch が組む）。
 pub(crate) struct ChatAttempt {
+    pub previous: Option<Arc<ChatRunSink>>,
     pub store: Arc<SqliteStore>,
     pub adapter: Arc<dyn WorkerAdapter>,
     pub req: RunRequest,
@@ -329,6 +330,9 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
         Arc::clone(&a.clock),
         a.secrets.clone(),
     );
+    if let Some(previous) = &a.previous {
+        sink.inherit_telemetry(previous);
+    }
     let outcome = a
         .adapter
         .run(a.req.clone(), &a.run_id, a.limits, &sink)

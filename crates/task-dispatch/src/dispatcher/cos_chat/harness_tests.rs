@@ -48,6 +48,8 @@ fn fixture(
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
+            fallbacks: Vec::new(),
+            worker_reserve_five_hour: 0.90,
             harness: harness.into(),
             llm_source: Some("test".into()),
             provider: Some("p1".into()),

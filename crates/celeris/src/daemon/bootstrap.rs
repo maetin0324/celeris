@@ -562,7 +562,7 @@ pub fn build_dispatcher(
     let (provider, llm_source, account_id, model, mut unavailable_reason) = match resolved {
         Ok(provider) => (
             Some(provider.provider),
-            Some(provider.llm_source.as_str().to_owned()),
+            Some(cos_source_name(&provider.llm_source)),
             provider.account_id,
             provider.model,
             None,
@@ -580,6 +580,37 @@ pub fn build_dispatcher(
         sqlite.clone(),
         task_dispatch::dispatcher::cos_chat::launch::CosChatLaunchConfig {
             enabled: config.cos.enabled,
+            fallbacks: config
+                .resolve_cos_fallbacks()
+                .into_iter()
+                .zip(&config.cos.fallbacks)
+                .map(|(resolved, route)| {
+                    let (provider, source, account, model, unavailable_reason) = match resolved {
+                        Ok(r) => (
+                            Some(r.provider),
+                            Some(cos_source_name(&r.llm_source)),
+                            r.account_id,
+                            r.model,
+                            None,
+                        ),
+                        Err(reason) => (None, None, None, None, Some(reason)),
+                    };
+                    task_dispatch::dispatcher::cos_chat::launch::CosChatRoute {
+                        harness: route.harness.adapter().to_owned(),
+                        provider,
+                        llm_source: source,
+                        account_id: account,
+                        model,
+                        tier: route.tier,
+                        unavailable_reason: if api_base_url.is_none() {
+                            Some("CoS unavailable: [api] listen is not configured".into())
+                        } else {
+                            unavailable_reason
+                        },
+                    }
+                })
+                .collect(),
+            worker_reserve_five_hour: config.cos.worker_reserve_five_hour,
             harness: config.cos.harness.adapter().to_owned(),
             llm_source,
             provider,
@@ -743,5 +774,13 @@ impl task_dispatch::RoutingModelProfiles for SharedCatalogProfiles {
             .unwrap_or_else(|e| e.into_inner())
             .models
             .clone()
+    }
+}
+
+// Preserve the named endpoint in both the run record and the session identity.
+fn cos_source_name(source: &task_core::LlmSourceRef) -> String {
+    match source {
+        task_core::LlmSourceRef::OpenaiCompatible(id) => format!("openai_compatible:{id}"),
+        other => other.as_str().to_owned(),
     }
 }

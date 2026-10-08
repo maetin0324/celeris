@@ -62,6 +62,8 @@ fn fixture(
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
+            fallbacks: Vec::new(),
+            worker_reserve_five_hour: 0.90,
             harness: "fake".into(),
             llm_source: Some("test".into()),
             provider: Some("p1".into()),
@@ -929,7 +931,7 @@ async fn cos_chat_run_launch_missing_required_skill_is_unavailable() {
 }
 
 #[tokio::test]
-async fn cos_chat_run_launch_fixed_account_gets_one_extra_slot_then_waits() {
+async fn cos_chat_run_launch_fixed_account_gets_one_extra_slot_then_reports_unavailable() {
     let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 2);
     let account_root = _dir.path().join("accounts");
     let account_dir = account_root.join("a");
@@ -971,15 +973,25 @@ async fn cos_chat_run_launch_fixed_account_gets_one_extra_slot_then_waits() {
         .cloned()
         .expect("first");
     let second = if first == a { &b } else { &a };
-    assert_eq!(
-        runs(&store, second).len(),
-        0,
-        "pinned account waits without claiming"
+    let failed = runs(&store, second).pop().expect("unavailable run");
+    assert_eq!(failed.state, ChatRunState::Failed);
+    assert!(
+        store
+            .chat_message_list(second, &ChatMessageQuery::default())
+            .unwrap()
+            .items
+            .iter()
+            .any(|m| m.text.contains("再送してください"))
     );
     join(&mut d, &first).await;
     d.tick_cos_chat_launch();
-    assert_eq!(d.cos_chat_launch.as_ref().expect("launch").running.len(), 1);
-    join(&mut d, second).await;
+    assert!(
+        d.cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .running
+            .is_empty()
+    );
     assert_eq!(runs(&store, &a).len(), 1);
     assert_eq!(runs(&store, &b).len(), 1);
 }
@@ -1568,3 +1580,6 @@ async fn cos_workspace_files_limits_do_not_fail_reply() {
         );
     }
 }
+
+#[path = "cos_source_fallback.rs"]
+mod source_fallback;

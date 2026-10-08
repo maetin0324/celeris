@@ -38,7 +38,7 @@ export const navGroups: readonly { key: NavGroup; label: string }[] = [
 export const mobileTabs = [
   { to: "/", label: "ホーム", icon: "home" },
   { to: "/inbox", label: "受信箱", icon: "inbox" },
-  { to: "/tasks", label: "タスク", icon: "list-checks" },
+  { to: "/board", label: "ボード", icon: "kanban" },
   { to: "/projects", label: "案件", icon: "folder" },
 ] as const satisfies readonly { to: (typeof navItems)[number]["to"]; label: string; icon: IconName }[];
 

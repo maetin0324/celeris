@@ -1,7 +1,7 @@
 # ADR 2026-10-08: CoS の代替経路と Claude 利用枠の予約
 
 ---
-tasks: [01M4E0WA5ZYVT32A4W6E74GQGC]
+tasks: [01M4E0WA5ZYVT32A4W6E74GQGC, 01M4EKPXZF7M6QT78Q86GBDCVR]
 ---
 
 状態: 採用（実装・検証は進捗ファイルに記録）。
@@ -40,7 +40,7 @@ provider/source/model は導入済みの設定と整合する必要がある。�
 
 ## 実装付記
 
-設定は daemon 起動時に解決する。配送後の運用変更では再起動が必要。run の最終経路は既存の `harness` / `llm_source` / `provider` / `account_id` / `model` / `tier` に記録し、切替前後の Run event と system message を保存する。既存チャット UI は system message を表示するため、新しい API schema・画面変更は不要。
+設定は daemon 起動時と `POST /api/v1/reload` 時に同じ関数で解決する。`[cos]` の経路（harness / llm_source / provider / account_id / model / tier / fallbacks）・enabled・worker_reserve_five_hour・実行予算は reload 後の新しい run / admission から反映し、triage 設定は次の tick から反映する。実行中 run のハンドル・account/provider の使用数・triage 状態は保持し、同じ run 内の代替経路と予算には開始時の設定を使う。`[cos.attachments]` と `stream_retention_days` は API middleware と背景 GC が起動時に保持するため、変更を含む reload 全体を更新前に 400 で拒否し、再起動が必要と返す。reload 時も DB path と API base URL は稼働 daemon の値を使う。run の最終経路は既存の `harness` / `llm_source` / `provider` / `account_id` / `model` / `tier` に記録し、切替前後の Run event と system message を保存する。既存チャット UI は system message を表示するため、新しい API schema・画面変更は不要。
 
 予約対象は通常 worker の account 選択、sticky 再利用、routing shadow の候補に共通で適用する。CoS の account 使用数は主経路の harness ではなく実際の account adapter と ID で会計する。使用量の不明な account は予約しない。全体・account の同時実行上限と quota は ADR-0089 の例外の範囲内にとどめる。
 

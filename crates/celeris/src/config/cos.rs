@@ -225,7 +225,7 @@ fn default_unavailable_after_secs() -> u64 {
 
 /// `[cos.attachments]`。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB/10 件、保存量 10 GiB、
 /// 未送信 24 時間、最後の参照が外れてから 30 日。
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CosAttachmentsConfig {
     #[serde(default = "default_max_file_bytes")]

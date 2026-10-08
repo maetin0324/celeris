@@ -81,12 +81,17 @@ impl CosChatLaunch {
             if run.state != ChatRunState::Running {
                 continue;
             }
+            let config = self
+                .run_configs
+                .get(&retry.thread_id)
+                .unwrap_or(&self.config)
+                .clone();
             if run
                 .started_at
                 .as_deref()
                 .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
                 .is_some_and(|start| {
-                    (now - start).whole_seconds().max(0) as u64 >= self.config.max_wall_secs
+                    (now - start).whole_seconds().max(0) as u64 >= config.max_wall_secs
                 })
             {
                 self.fail_routes(
@@ -97,7 +102,7 @@ impl CosChatLaunch {
                 );
                 continue;
             }
-            let summary = if retry.next_route <= self.config.fallbacks.len() {
+            let summary = if retry.next_route <= config.fallbacks.len() {
                 format!(
                     "CoS の経路が利用上限・認証で失敗しました。次の代替経路で再試行します。理由: {}",
                     retry.reason
@@ -116,12 +121,9 @@ impl CosChatLaunch {
                 &summary,
                 now,
             );
-            if retry.next_route > self.config.fallbacks.len() {
+            if retry.next_route > config.fallbacks.len() {
                 self.fail_routes(&run, &retry.reason, Some(&retry.previous), now);
-            } else if !dispatcher.accepting_new_work
-                || !dispatcher.disk_ready
-                || !self.config.enabled
-            {
+            } else if !dispatcher.accepting_new_work || !dispatcher.disk_ready || !config.enabled {
                 self.fail_routes(
                     &run,
                     "CoS の再試行を開始できません（停止中・ディスク・設定を確認してください）",
@@ -156,11 +158,12 @@ impl CosChatLaunch {
         previous: Option<Arc<ChatRunSink>>,
         now: OffsetDateTime,
     ) {
+        let config = self.run_configs.get(thread).unwrap_or(&self.config).clone();
         let mut last = "CoS unavailable: no usable route".to_string();
-        for index in first..=self.config.fallbacks.len() {
-            let mut cfg = self.config.clone();
+        for index in first..=config.fallbacks.len() {
+            let mut cfg = config.clone();
             if index > 0 {
-                let route = &self.config.fallbacks[index - 1];
+                let route = &config.fallbacks[index - 1];
                 cfg.harness.clone_from(&route.harness);
                 cfg.llm_source.clone_from(&route.llm_source);
                 cfg.provider.clone_from(&route.provider);
@@ -198,7 +201,7 @@ impl CosChatLaunch {
                 Ok(()) => return,
                 Err(reason) => {
                     let _ = self.store.cos_run_credential_revoke(&run.id, now);
-                    let next = if index < self.config.fallbacks.len() {
+                    let next = if index < config.fallbacks.len() {
                         "次の代替経路で再試行します。"
                     } else {
                         "再送してください。"

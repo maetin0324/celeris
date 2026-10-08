@@ -149,6 +149,33 @@ def main(args):
         audit("credential_request", "success")
         print('{"success":true,"status":"waiting_for_auth"}')
         return 0
+    if args and args[0] == "request-approval":
+        # ADR 2026-10-08 D2: freeze one click/download for a human to approve. The run stops
+        # here and resumes in the same session once the human decides.
+        policy = load_policy(config)
+        try:
+            if policy is None or len(args) != 5:
+                raise ValueError()
+            action, target, origin, purpose = args[1:]
+            parsed = urlsplit(origin)
+            if (action not in config.get("approval_actions", []) or action not in VERB_ACTIONS
+                    or VERB_ACTIONS[action] in policy["allow"]
+                    or not re.fullmatch(r"@e[0-9]{1,14}", target)
+                    or parsed.scheme != "https" or not parsed.hostname
+                    or parsed.username or parsed.password or parsed.path or parsed.query or parsed.fragment
+                    or parsed.netloc.lower() != parsed.netloc
+                    or not origin_allowed(origin, config["allowed_domains"])
+                    or not 1 <= len(purpose) <= 500 or any(ord(c) < 32 for c in purpose)):
+                raise ValueError()
+            with (ROOT / "approval-request.json").open("x") as request:
+                json.dump({"action": action, "target": target, "origin": origin, "purpose": purpose}, request)
+        except (ValueError, OSError):
+            audit("policy_block", "blocked")
+            print('{"success":false,"error":"approval request blocked"}')
+            return 2
+        audit("approval_request", "success")
+        print('{"success":true,"status":"waiting_for_approval"}')
+        return 0
     try:
         operation, command, artifact = plan(args, output)
     except (ValueError, OverflowError):
@@ -165,7 +192,11 @@ def main(args):
     if (VERB_ACTIONS[args[0]] not in policy["allow"]
             or (args[0] == "open" and not origin_allowed(args[1], config["allowed_domains"]))):
         audit("policy_block", "blocked")
-        print('{"success":false,"error":"command not permitted by the task browser policy"}')
+        if args[0] in config.get("approval_actions", []):
+            print('{"success":false,"error":"command needs a human approval; use request-approval '
+                  '<click|download> <@eN> <exact-HTTPS-origin> <purpose> and stop"}')
+        else:
+            print('{"success":false,"error":"command not permitted by the task browser policy"}')
         return 2
     try:
         # Serialize calls within a session so refs/artifact/event order stays meaningful.

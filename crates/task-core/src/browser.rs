@@ -623,13 +623,43 @@ impl EffectiveBrowserPolicy {
 
     /// Policy for the general harness: credential actions are never included here; the
     /// supervisor builds a dedicated policy for an approved credential segment. Business
-    /// actions that need a per-run approval (`approval_actions`) are left out as well, so the
-    /// action server refuses them instead of running them unapproved (ADR 2026-10-08 D2).
+    /// actions that need a per-run approval (`approval_actions`) are left out as well: the
+    /// agent asks for them through the shim's `request-approval`, which opens a
+    /// `waiting_for_approval` wait (ADR 2026-10-08 D2).
     pub fn harness_action_policy(&self) -> Result<AgentBrowserActionPolicy, BrowserPolicyError> {
+        self.harness_action_policy_with_approved(None)
+    }
+
+    /// Business actions that need a per-run human approval (`approval_actions` without
+    /// `credential_use`, which the supervisor handles separately).
+    pub fn operation_approval_actions(&self) -> Vec<BrowserAction> {
+        self.approval_actions
+            .iter()
+            .copied()
+            .filter(|a| *a != BrowserAction::CredentialUse)
+            .collect()
+    }
+
+    /// Harness policy for a run that resumes an approved operation (ADR 2026-10-08 D2): the
+    /// approved business action joins the allow list for this session (the worker's action
+    /// server lets it run once). `credential_use` never enters this policy, and an action that
+    /// is not an effective approval action is ignored.
+    pub fn harness_action_policy_with_approved(
+        &self,
+        approved: Option<BrowserAction>,
+    ) -> Result<AgentBrowserActionPolicy, BrowserPolicyError> {
+        let approved = approved.filter(|a| {
+            *a != BrowserAction::CredentialUse
+                && self.actions.contains(a)
+                && self.approval_actions.contains(a)
+        });
         let business: BTreeSet<&str> = self
             .actions
             .iter()
-            .filter(|a| **a != BrowserAction::CredentialUse && !self.approval_actions.contains(a))
+            .filter(|a| {
+                **a != BrowserAction::CredentialUse
+                    && (!self.approval_actions.contains(a) || Some(**a) == approved)
+            })
             .flat_map(|a| a.upstream_actions().iter().copied())
             .collect();
         if business.is_empty() {

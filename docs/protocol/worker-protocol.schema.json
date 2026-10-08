@@ -71,6 +71,29 @@
       ],
       "type": "object"
     },
+    "ApprovedOperation": {
+      "description": "ADR 2026-10-08 D2: the one operation a human approved for this browser session. The\nsupervisor fills it from the consumed wait; the harness may run that action exactly once.",
+      "properties": {
+        "action": {
+          "description": "Shim verb (`click` / `download`).",
+          "type": "string"
+        },
+        "origin": {
+          "description": "Exact HTTPS origin the agent named in its request.",
+          "type": "string"
+        },
+        "purpose": {
+          "description": "The agent's own stated purpose (shown to the human; untrusted plain text).",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "origin",
+        "purpose"
+      ],
+      "type": "object"
+    },
     "ArtifactRef": {
       "description": "DESIGN §4.4 の `ArtifactRef`。実体は `workspace/<task_id>/artifacts/` 配下。",
       "properties": {
@@ -170,6 +193,24 @@
     },
     "BrowserContext": {
       "properties": {
+        "approval_actions": {
+          "description": "ADR 2026-10-08 D2: shim verbs (`click` / `download`) that need a human approval before\neach use in this task; the agent asks with `request-approval`.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "approved_operation": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ApprovedOperation"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The operation a human approved once for this session, if the run resumes one."
+        },
         "cli": {
           "type": "string"
         },

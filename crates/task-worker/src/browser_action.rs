@@ -6,7 +6,7 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -105,20 +105,24 @@ impl ActionServer {
         session: &Path,
         allowed_domains: Vec<String>,
         allowed: Vec<String>,
+        single_use: Vec<String>,
         gate: Arc<dyn ControlGate>,
     ) -> std::io::Result<Self> {
         let executor = Arc::new(FileExecutor {
             root: session.to_path_buf(),
         });
-        Self::start_with(socket, executor, allowed_domains, allowed, gate)
+        Self::start_with(socket, executor, allowed_domains, allowed, single_use, gate)
     }
 
-    /// 同じ検査と gate で、action を `executor` に出す。
+    /// 同じ検査と gate で、action を `executor` に出す。`single_use` の upstream action
+    /// （ADR 2026-10-08 D2: 人が一回だけ承認した click / download）は、browser に届いた最初の 1 回で
+    /// allow から外れる。
     pub(crate) fn start_with(
         socket: &Path,
         executor: Arc<dyn ActionExecutor>,
         allowed_domains: Vec<String>,
         allowed: Vec<String>,
+        single_use: Vec<String>,
         gate: Arc<dyn ControlGate>,
     ) -> std::io::Result<Self> {
         let socket = socket.to_path_buf();
@@ -131,6 +135,7 @@ impl ActionServer {
             .spawn(move || {
                 let mut sequence = 0u64;
                 let closed = AtomicBool::new(false);
+                let allowed = Mutex::new(allowed);
                 while rx.try_recv().is_err() {
                     match listener.accept() {
                         Ok((stream, _)) => {
@@ -139,6 +144,7 @@ impl ActionServer {
                                 executor: executor.as_ref(),
                                 domains: &allowed_domains,
                                 actions: &allowed,
+                                single_use: &single_use,
                                 gate: gate.as_ref(),
                                 closed: &closed,
                             };
@@ -169,8 +175,9 @@ impl Drop for ActionServer {
     }
 }
 
-fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool {
-    let action = match req.verb.as_str() {
+/// shim の verb に対応する upstream action 名。
+fn upstream_action(verb: &str) -> Option<&'static str> {
+    Some(match verb {
         "open" => "navigate",
         "click" => "click",
         "snapshot" => "snapshot",
@@ -180,7 +187,13 @@ fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool 
         "scroll" => "scroll",
         "close" => "close",
         "__version__" => "launch",
-        _ => return false,
+        _ => return None,
+    })
+}
+
+fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool {
+    let Some(action) = upstream_action(&req.verb) else {
+        return false;
     };
     if !actions.iter().any(|a| a == action)
         || req
@@ -226,7 +239,9 @@ fn allowed(req: &ActionRequest, domains: &[String], actions: &[String]) -> bool 
 struct Serve<'a> {
     executor: &'a dyn ActionExecutor,
     domains: &'a [String],
-    actions: &'a [String],
+    /// この session で許す upstream action。一回承認の action は最初の実行後に外れる。
+    actions: &'a Mutex<Vec<String>>,
+    single_use: &'a [String],
     gate: &'a dyn ControlGate,
     closed: &'a AtomicBool,
 }
@@ -265,7 +280,10 @@ fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
         None
     };
     let failed = || serde_json::json!({"status":1,"stdout":""});
-    let response = match req.filter(|r| allowed(r, ctx.domains, ctx.actions)) {
+    // The allow list is held for the whole request so a single-use action cannot be issued
+    // twice by concurrent shim calls.
+    let mut actions = ctx.actions.lock().unwrap_or_else(|e| e.into_inner());
+    let response = match req.filter(|r| allowed(r, ctx.domains, &actions)) {
         // The supervisor's own version probe is trusted and not an agent action.
         Some(req) if req.verb == "__version__" => ctx
             .executor
@@ -280,7 +298,16 @@ fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
                 closed: ctx.closed,
             };
             match run_gated(ctx.gate, &closer, || ctx.executor.run(sequence, &req)) {
-                GatedOutcome::Ran(out) => out.unwrap_or_else(|_| failed()),
+                GatedOutcome::Ran(out) => {
+                    // ADR 2026-10-08 D2: the approved action was handed to the browser once;
+                    // whatever the outcome, the approval is spent.
+                    if let Some(action) = upstream_action(&req.verb)
+                        && ctx.single_use.iter().any(|a| a == action)
+                    {
+                        actions.retain(|a| a != action);
+                    }
+                    out.unwrap_or_else(|_| failed())
+                }
                 GatedOutcome::Blocked(_) | GatedOutcome::Closed => {
                     serde_json::json!({"status":3,"stdout":""})
                 }
@@ -288,6 +315,7 @@ fn serve(mut stream: UnixStream, ctx: &Serve<'_>, sequence: u64) {
         }
         None => serde_json::json!({"status":2,"stdout":""}),
     };
+    drop(actions);
     let _ = stream.write_all(response.to_string().as_bytes());
 }
 

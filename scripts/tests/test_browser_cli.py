@@ -343,6 +343,46 @@ class BrowserCliTest(unittest.TestCase):
                 code, _ = self.run_cli(*args)
                 self.assertEqual(code, 0)
 
+    def test_request_approval_freezes_one_operation_and_approval_actions_hint(self):
+        # ADR 2026-10-08 D2: click is under approval → not in allow, listed in approval_actions.
+        self.config['approval_actions'] = ['click']
+        self.policy(['close', 'download', 'gettext', 'launch', 'navigate', 'screenshot', 'scroll', 'snapshot'])
+        code, out = self.run_cli('click', '@e1')
+        self.assertEqual(code, 2)
+        self.assertIn('needs a human approval', out)
+        self.assertIn('request-approval', out)
+        self.assertFalse((self.root / 'invocation.json').exists())
+        # Blocked requests: wrong action, a verb still allowed, bad ref, origin with a path or
+        # outside the allowed domains, empty purpose, wrong arity.
+        for args in (['download', '@e1', 'https://example.com', 'p'],
+                     ['snapshot', '@e1', 'https://example.com', 'p'],
+                     ['click', 'e1', 'https://example.com', 'p'],
+                     ['click', '@e1', 'https://example.com/login', 'p'],
+                     ['click', '@e1', 'https://evil.test', 'p'],
+                     ['click', '@e1', 'https://example.com', ''],
+                     ['click', '@e1', 'https://example.com']):
+            code, out = self.run_cli('request-approval', *args)
+            self.assertEqual(code, 2, args)
+            self.assertIn('approval request blocked', out)
+        self.assertFalse((self.root / 'approval-request.json').exists())
+        code, out = self.run_cli('request-approval', 'click', '@e1', 'https://example.com', 'Press export')
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out), {'success': True, 'status': 'waiting_for_approval'})
+        self.assertEqual(json.loads((self.root / 'approval-request.json').read_text()),
+                         {'action': 'click', 'target': '@e1', 'origin': 'https://example.com', 'purpose': 'Press export'})
+        # One request per session; the substrate never ran.
+        code, out = self.run_cli('request-approval', 'click', '@e2', 'https://example.com', 'Again')
+        self.assertEqual(code, 2)
+        self.assertFalse((self.root / 'invocation.json').exists())
+        self.assertEqual([e['operation'] for e in self.events()],
+                         ['policy_block'] * 8 + ['approval_request', 'policy_block'])
+        # Without the approval_actions list the hint is the plain policy refusal.
+        del self.config['approval_actions']
+        self.policy(['close', 'launch', 'navigate'])
+        code, out = self.run_cli('click', '@e1')
+        self.assertEqual(code, 2)
+        self.assertIn('not permitted by the task browser policy', out)
+
     def test_navigation_outside_allowed_domains_is_blocked(self):
         # Page content asking the model to go elsewhere is untrusted: the shim refuses.
         for url in ['https://evil.example/', 'https://example.org/', 'https://example.com.evil.example/',

@@ -437,7 +437,10 @@ fn expiry_terminates_exactly_once_and_cancel_closes_waits() {
         .expect("open")
         .wait;
     // ADR 2026-10-08 D3: the approval deadline is 30 minutes (was 5).
-    assert_eq!(w.deadline, now + Duration::seconds(APPROVAL_WAIT_MAX_SECS as i64));
+    assert_eq!(
+        w.deadline,
+        now + Duration::seconds(APPROVAL_WAIT_MAX_SECS as i64)
+    );
     assert!(
         store
             .browser_waits_expire(now + Duration::minutes(29))
@@ -850,7 +853,10 @@ fn approval_wait_defaults_and_caps_at_thirty_minutes_and_expires_once() {
     let id = running(&store);
     let mut request = approval_request("rk-30");
     request.ttl_secs = None;
-    let w = store.browser_wait_open(id, &request, now).expect("open").wait;
+    let w = store
+        .browser_wait_open(id, &request, now)
+        .expect("open")
+        .wait;
     assert_eq!(w.deadline, now + Duration::minutes(30));
 
     // ttl_secs が上限を超える → 30 分に clamp（approval_request は 10_000 秒を頼む）。
@@ -889,4 +895,125 @@ fn approval_wait_defaults_and_caps_at_thirty_minutes_and_expires_once() {
         .expect("open")
         .wait;
     assert_eq!(w3.deadline, now + Duration::hours(24));
+}
+
+fn operation_request(key: &str) -> NewBrowserWait {
+    NewBrowserWait {
+        reason: BrowserWaitReason::WaitingForApproval,
+        credential_policy_id: None,
+        credential: None,
+        operation: Some(OperationIntent {
+            intent_id: "intent-click-1".into(),
+            action: "click".into(),
+            args_digest: Some("sha256-click-e3".into()),
+        }),
+        origin: "https://example.com".into(),
+        purpose: "Press the export button".into(),
+        ttl_secs: None,
+        ..auth_request(key)
+    }
+}
+
+/// ADR 2026-10-08 D2: click / download を承認対象に戻したときの承認待ち。credential 無しの操作 intent で開き、
+/// 承認後に同じ run/session で一度だけ消費し、30 分で期限切れになる（時計は引数）。
+#[test]
+fn operation_approval_opens_without_credential_consumes_once_and_expires_at_thirty_minutes() {
+    let store = SqliteStore::open_in_memory().expect("open");
+    let now = OffsetDateTime::now_utc();
+    let id = running(&store);
+    let opened = store
+        .browser_wait_open(id, &operation_request("rk-op"), now)
+        .expect("open")
+        .wait;
+    assert_eq!(opened.reason, BrowserWaitReason::WaitingForApproval);
+    assert_eq!(opened.deadline, now + Duration::minutes(30));
+    assert!(opened.credential.is_none());
+    assert_eq!(
+        opened.operation.as_ref().map(|o| o.action.as_str()),
+        Some("click")
+    );
+    assert_eq!(status(&store, id), Status::Blocked);
+    assert_eq!(store.browser_waits_pending().expect("pending").len(), 1);
+
+    // 未承認では消費できない（credential 用の消費経路も操作 wait を受けない）。
+    assert_eq!(
+        consume_operation_approval(&store, id, &opened, now).unwrap_err(),
+        "browser_wait_state"
+    );
+    assert_eq!(
+        consume_credential_approval(&store, id, &opened, now).unwrap_err(),
+        "browser approval is not a credential use"
+    );
+
+    let approved = store
+        .browser_wait_decide(
+            id,
+            &opened.wait_id,
+            &decision(BrowserDecision::ApproveOnce, opened.version, "n-op"),
+            now,
+        )
+        .expect("approve");
+    assert_eq!(approved.task_status, Status::Ready);
+    assert_eq!(approved.wait.state, BrowserWaitState::Approved);
+
+    // 呼出し側の intent が store と食い違えば消費しない。
+    let mut swapped = approved.wait.clone();
+    swapped.operation = Some(OperationIntent {
+        intent_id: "intent-click-1".into(),
+        action: "download".into(),
+        args_digest: Some("sha256-click-e3".into()),
+    });
+    assert_eq!(
+        consume_operation_approval(&store, id, &swapped, now).unwrap_err(),
+        "browser approval intent mismatch"
+    );
+    assert_eq!(
+        store
+            .browser_wait_get(&opened.wait_id)
+            .expect("get")
+            .expect("wait")
+            .state,
+        BrowserWaitState::Approved
+    );
+
+    // 同じ run/session の continuation として一度だけ。
+    let consumed = consume_operation_approval(&store, id, &approved.wait, now).expect("consume");
+    assert_eq!(consumed.action, "click");
+    assert_eq!(consumed.approved_by, "owner");
+    assert_eq!(consumed.wait.state, BrowserWaitState::Resumed);
+    assert_eq!(consumed.wait.session_id, "sess-1");
+    assert_eq!(
+        consume_operation_approval(&store, id, &approved.wait, now).unwrap_err(),
+        "browser_wait_state"
+    );
+
+    // 期限: 29 分 59 秒では残り、30 分で一度だけ期限切れ（pending の task は failed）。
+    let id2 = running(&store);
+    let w2 = store
+        .browser_wait_open(id2, &operation_request("rk-op-2"), now)
+        .expect("open")
+        .wait;
+    assert!(
+        store
+            .browser_waits_expire(now + Duration::minutes(29) + Duration::seconds(59))
+            .expect("not yet")
+            .is_empty()
+    );
+    let expired = store
+        .browser_waits_expire(now + Duration::minutes(30))
+        .expect("expire");
+    assert_eq!(
+        expired
+            .iter()
+            .map(|w| w.wait_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![w2.wait_id.as_str()]
+    );
+    assert_eq!(status(&store, id2), Status::Failed);
+    assert!(
+        store
+            .browser_waits_expire(now + Duration::minutes(31))
+            .expect("again")
+            .is_empty()
+    );
 }

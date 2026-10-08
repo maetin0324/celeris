@@ -28,14 +28,21 @@ const displayTime = (value: string) =>
 
 type Field = "origins" | "harnesses" | "budget" | "credentials" | "identity" | "approval";
 
-/** ADR 2026-10-08: 承認対象に戻せる業務操作（既定はどちらも承認なし。credential_use は常に承認）。 */
+/**
+ * ADR 2026-10-08 D2: 承認対象に戻せる業務操作（既定はどちらも承認なし。credential_use は常に承認）。
+ * 承認対象の操作は、agent が request-approval で承認待ちを開き、承認後に同じ session で一度だけ実行する。
+ */
 const APPROVAL_CHOICES: ReadonlyArray<{ action: BrowserAction; label: string; help: string }> = [
   {
     action: "click",
     label: "click（ページの要素を押す）",
-    help: "許可 origin の中でも、押す前に毎回人の承認を求めます。",
+    help: "許可 origin の中でも、押す前に毎回承認待ちになります。承認すると同じ session で一度だけ押します。",
   },
-  { action: "download", label: "download（ファイルを保存する）", help: "保存する前に毎回人の承認を求めます。" },
+  {
+    action: "download",
+    label: "download（ファイルを保存する）",
+    help: "保存する前に毎回承認待ちになります。承認すると同じ session で一度だけ保存します。",
+  },
 ];
 type Errors = Partial<Record<Field, string>>;
 
@@ -285,7 +292,8 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
           })}
         </ul>
         <p className="mt-2 text-label text-muted-foreground">
-          承認待ちの期限は 30 分です。期限内に承認されなければ、その task は失敗として止まります。
+          承認待ちは受信箱の「ブラウザの承認」に出ます（何を・どの origin で・何のために）。期限は 30
+          分で、期限内に承認されなければその task は失敗として止まります。
         </p>
         <FieldError id={`${id}-approval-error`} message={errors.approval} />
       </Section>

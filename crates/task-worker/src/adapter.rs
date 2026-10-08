@@ -152,6 +152,14 @@ pub trait EventSink: Send + Sync {
     ) -> Result<task_core::browser_wait::ConsumedBrowserApproval, String> {
         Err("browser wait store unavailable".into())
     }
+    /// Trusted browser supervisor only (ADR 2026-10-08 D2): consume an approved click/download
+    /// operation exactly once.
+    fn browser_operation_approval_consume(
+        &self,
+        _wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        Err("browser wait store unavailable".into())
+    }
     /// Trusted browser supervisor only (ADR-0080 H3): the credential-injection section of a
     /// browser session starts (`true`) / ends (`false`). Implementations record it in the
     /// session's control state through the same store op as task-api's `auth-section`

@@ -723,6 +723,8 @@ async fn browser_cli_result_errors_are_redacted_before_normalized_result_write()
     let mut req = sample_req(dir.path().to_path_buf());
     req.context.browser = Some(crate::browser::BrowserContext {
         credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-error-test".into(),
@@ -766,6 +768,8 @@ echo '{"type":"result","subtype":"success","is_error":false}'
     let mut req = sample_req(dir.path().to_path_buf());
     req.context.browser = Some(crate::browser::BrowserContext {
         credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-log-test".into(),

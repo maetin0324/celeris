@@ -96,9 +96,12 @@ JSON
 （ADR 2026-10-08-browser-click-download-approval-policy D1、人の決定 2026-10-08）。既定は空で、click・download は
 許可 origin の中なら承認なしで実行し、session 記録と event に残る。承認対象に戻すには `["click"]` のように書く
 （task 単位なら `PUT /api/v1/tasks/{id}/browser/policy` の `approval_actions`）。承認対象に戻した操作は harness の
-allow から外れ、承認なしでは実行されない（fail-closed）。`credential_use` はここに書かなくても常に毎回承認で、
+allow から外れ、agent は shim の `request-approval <click|download> <@eN> <origin> <purpose>` で承認待ち
+（`waiting_for_approval`、操作 intent 付き）を開いて止まる（同 ADR D2）。人が `approve_once` すると task は
+`ready` に戻り、次の run が**同じ論理 session** でその操作を一度だけ実行する（2 回目は action server が拒否）。
+`deny` と期限切れは task を `failed` にする。`credential_use` はここに書かなくても常に毎回承認で、
 standing approval は無い。承認待ちの期限は既定・上限 30 分（登録待ちは 24 時間）。web では `/browser/settings` の
-「毎回の承認が要る操作」の checkbox が同じ欄を書く。
+「毎回の承認が要る操作」の checkbox が同じ欄を書き、承認待ちは受信箱の「ブラウザの承認」に出る。
 
 `credential_policy_ids` を足す場合も同一 endpoint で `credential_policy_ids` に id を書き、
 `credential_identity_ids` に policy ID → identity ID の対応を入れる（policy 自体は別途登録してから

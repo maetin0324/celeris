@@ -198,6 +198,18 @@ impl EventSink for StoreSink {
         )
         .map_err(String::from)
     }
+    fn browser_operation_approval_consume(
+        &self,
+        wait: &task_core::browser_wait::BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        task_core::browser_wait::consume_operation_approval(
+            self.store.as_ref(),
+            self.task_id,
+            wait,
+            OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
+    }
     fn browser_auth_section(
         &self,
         run_id: &str,

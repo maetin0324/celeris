@@ -18,7 +18,7 @@ use task_core::browser_isolation::{
     CdpEndpoint, IsolationAttestation, LauncherSessionProof, Namespace, REQUIRED_NAMESPACES,
     RuntimeFacts, verify_isolation,
 };
-use task_core::browser_wait::BrowserWaitState;
+use task_core::browser_wait::{BrowserWait, BrowserWaitState};
 use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
@@ -459,15 +459,36 @@ fn refuse_confidential(
     let waits = sink
         .browser_waits()
         .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
+    // ADR 2026-10-08 D2: an approved click/download (no credential) may resume here; a
+    // registered credential or an approved credential use may not.
     if waits.last().is_some_and(|w| {
-        matches!(
-            w.state,
-            BrowserWaitState::Approved | BrowserWaitState::Registered
-        )
+        w.state == BrowserWaitState::Registered
+            || (w.state == BrowserWaitState::Approved
+                && w.operation
+                    .as_ref()
+                    .is_none_or(|o| o.action == "credential_use"))
     }) {
         return Err(denied());
     }
     Ok(())
+}
+
+/// The approved click/download this run resumes (ADR 2026-10-08 D2), if the last wait is one.
+fn approved_operation_wait(
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    sink: &dyn EventSink,
+) -> Result<Option<(BrowserWait, task_core::BrowserAction)>, AdapterError> {
+    let waits = sink
+        .browser_waits()
+        .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?;
+    let Some(wait) = waits
+        .last()
+        .filter(|w| w.state == BrowserWaitState::Approved)
+        .cloned()
+    else {
+        return Ok(None);
+    };
+    Ok(super::approved_operation(&wait, policy)?.map(|action| (wait, action)))
 }
 
 /// shim（`celeris-browser.py`）が読む `policy.json`・`config.json` を書く。形は daemon 経路と同じ
@@ -477,13 +498,16 @@ fn write_shim_files(
     runtime_dir: &Path,
     session: &str,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
+    action_policy: &[u8],
+    approval_actions: &[String],
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
+    use sha2::Digest;
     let output = runtime_dir.join("output");
     std::fs::create_dir_all(&output)?;
     let cli = runtime_dir.join("celeris-browser.py");
     let action_socket = crate::browser_action::action_socket_path(runtime_dir)?;
     write_private(&cli, CLI)?;
-    write_private(&runtime_dir.join("policy.json"), &policy.action_policy)?;
+    write_private(&runtime_dir.join("policy.json"), action_policy)?;
     write_private(
         &runtime_dir.join("config.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -491,9 +515,10 @@ fn write_shim_files(
             "allowed_domains": policy.allowed_domains(),
             "output": output,
             "action_socket": action_socket,
-            "policy_sha256": policy.action_policy_sha256,
+            "policy_sha256": format!("{:x}", sha2::Sha256::digest(action_policy)),
             "credential_policy_ids": [],
             "credential_use": false,
+            "approval_actions": approval_actions,
         }))?,
     )?;
     Ok((cli, action_socket))
@@ -514,13 +539,30 @@ pub(super) async fn run(
 ) -> Result<RunOutcome, AdapterError> {
     refuse_confidential(policy, sink)?;
     let unavailable = || AdapterError::Other(UNAVAILABLE.into());
-    let session = super::session_id(req.task.id, run_id);
+    // ADR 2026-10-08 D2: an approved operation resumes the logical session that asked for it,
+    // with that one action allowed once.
+    let approved = approved_operation_wait(policy, sink)?;
+    let approved_action = approved.as_ref().map(|(_, a)| *a);
+    let session = match &approved {
+        Some((wait, _)) => wait.session_id.clone(),
+        None => super::session_id(req.task.id, run_id),
+    };
+    let action_policy = match approved_action {
+        Some(action) => super::resumed_policy_bytes(policy, action)?,
+        None => policy.action_policy.clone(),
+    };
+    let approval_actions = super::shim_approval_actions(policy, approved_action);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
-    let (cli, action_socket) = write_shim_files(&runtime_dir, &session, policy)?;
-    let allowed: task_core::AgentBrowserActionPolicy =
-        serde_json::from_slice(&policy.action_policy)
-            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    let (cli, action_socket) = write_shim_files(
+        &runtime_dir,
+        &session,
+        policy,
+        &action_policy,
+        &approval_actions,
+    )?;
+    let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&action_policy)
+        .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
     let control_gate = sink
         .browser_control_gate(run_id, &session)
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
@@ -550,6 +592,27 @@ pub(super) async fn run(
         "browser launcher session started"
     );
     let runtime = Arc::new(runtime);
+    // The launcher session is up; only now is the one-time approval spent.
+    let approved_operation = match &approved {
+        Some((wait, action)) => {
+            let consumed = match sink.browser_operation_approval_consume(wait) {
+                Ok(consumed) => consumed,
+                Err(_) => {
+                    let stop_runtime = Arc::clone(&runtime);
+                    let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+                    return Err(AdapterError::Other(
+                        "browser approval could not be consumed".into(),
+                    ));
+                }
+            };
+            Some(super::ApprovedOperation {
+                action: action.as_str().into(),
+                origin: consumed.wait.origin,
+                purpose: consumed.wait.purpose,
+            })
+        }
+        None => None,
+    };
     let action_server = ActionServer::start_with(
         &action_socket,
         Arc::new(LauncherExecutor {
@@ -557,6 +620,9 @@ pub(super) async fn run(
         }),
         policy.allowed_domains().to_vec(),
         allowed.allow,
+        approved_action
+            .map(|a| a.upstream_actions().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default(),
         control_gate,
     )
     .map_err(|_| unavailable())?;
@@ -580,9 +646,11 @@ pub(super) async fn run(
         run: browser.clone(),
         cli,
         credential_used: false,
+        approval_actions,
+        approved_operation,
     });
     let monitor_req = req.clone();
-    let outcome = {
+    let mut outcome = {
         let browser_sink = BrowserSink(sink);
         let future = adapter.run(req, run_id, limits, &browser_sink);
         tokio::pin!(future);
@@ -596,6 +664,38 @@ pub(super) async fn run(
     };
     forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
     drop(action_server);
+    // ADR 2026-10-08 D2: the shim's approval request becomes a durable wait (same as the
+    // daemon path); the run resumes in this logical session once the human approves.
+    let mut waiting_for_approval = false;
+    if runtime_dir.join("approval-request.json").exists() {
+        match super::read_approval_request(&runtime_dir.join("approval-request.json"), policy) {
+            Ok((action, intent)) => {
+                let wait = super::operation_wait(
+                    monitor_req.task.id,
+                    run_id,
+                    &browser.session_id,
+                    policy,
+                    action,
+                    &intent,
+                );
+                outcome = match sink.browser_wait_open(&wait) {
+                    Ok(()) => {
+                        waiting_for_approval = true;
+                        Ok(RunOutcome {
+                            terminal: crate::Terminal::Question {
+                                text: format!("Browser {} approval requested", action.as_str()),
+                            },
+                            exit_code: None,
+                        })
+                    }
+                    Err(_) => Err(AdapterError::Other(
+                        "browser wait could not be opened".into(),
+                    )),
+                };
+            }
+            Err(e) => outcome = Err(e),
+        }
+    }
     let stop_runtime = Arc::clone(&runtime);
     let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
         .await
@@ -614,6 +714,7 @@ pub(super) async fn run(
         }),
     };
     browser.state = match &outcome {
+        _ if waiting_for_approval => BrowserRunState::WaitingForApproval,
         Ok(RunOutcome {
             terminal: crate::Terminal::Done { .. },
             ..

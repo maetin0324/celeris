@@ -272,6 +272,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"401 U
         let mut req = sample_req(dir.path().to_path_buf());
         req.context.browser = Some(crate::browser::BrowserContext {
             credential_used: false,
+            approval_actions: Vec::new(),
+            approved_operation: None,
             run: task_core::BrowserRun {
                 task_id: req.task.id,
                 run_id: "browser-error-test".into(),
@@ -319,6 +321,8 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
     let mut req = sample_req(dir.path().to_path_buf());
     req.context.browser = Some(crate::browser::BrowserContext {
         credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-log-test".into(),

@@ -77,7 +77,8 @@ fn click_and_download_are_unapproved_by_default_and_approval_is_opt_in() {
     assert!(!default.requires_approval(BrowserAction::Click));
     assert!(!default.requires_approval(BrowserAction::Download));
 
-    // Task policy opt-in: click needs approval and leaves the harness allow (fail-closed).
+    // Task policy opt-in: click needs approval and leaves the harness allow until a human
+    // approves one; the resumed session gets it back (ADR 2026-10-08 D2).
     let mut by_task = task(&BrowserAction::PHASE1);
     by_task.approval_actions = vec![BrowserAction::Click];
     let by_task = derive(&grant(), &by_task).unwrap();
@@ -87,6 +88,28 @@ fn click_and_download_are_unapproved_by_default_and_approval_is_opt_in() {
     assert!(!allow.iter().any(|a| a == "click"));
     assert!(allow.iter().any(|a| a == "download"));
     assert_ne!(default.hash(), by_task.hash());
+    assert_eq!(
+        by_task.operation_approval_actions(),
+        vec![BrowserAction::Click]
+    );
+    let resumed = by_task
+        .harness_action_policy_with_approved(Some(BrowserAction::Click))
+        .unwrap()
+        .allow;
+    assert!(resumed.iter().any(|a| a == "click"));
+    assert_eq!(resumed, default.harness_action_policy().unwrap().allow);
+    // An approval for an action that is not an approval action changes nothing; credential
+    // use never enters the harness policy through this path.
+    for not_resumable in [BrowserAction::Download, BrowserAction::CredentialUse] {
+        assert_eq!(
+            by_task
+                .harness_action_policy_with_approved(Some(not_resumable))
+                .unwrap()
+                .allow,
+            allow
+        );
+    }
+    assert!(default.operation_approval_actions().is_empty());
 
     // Grant opt-in applies to every task of the department.
     let mut grant_opt_in = grant();

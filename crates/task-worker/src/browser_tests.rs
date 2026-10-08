@@ -205,6 +205,8 @@ async fn p4c_conformance_backend_protocol() {
         },
         cli,
         credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
     });
     let command = script.to_string_lossy().into_owned();
     let adapter: Arc<dyn WorkerAdapter> = match backend.as_str() {
@@ -495,6 +497,8 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
     );
     let prompt = prompt(&BrowserContext {
         credential_used: false,
+        approval_actions: Vec::new(),
+        approved_operation: None,
         cli: PathBuf::from("/workspace/runs/run1/browser/celeris-browser.py"),
         run: BrowserRun {
             task_id: first,
@@ -1153,6 +1157,18 @@ impl EventSink for WaitSink {
         self.store
             .browser_waits_for_task(self.task_id)
             .map_err(|e| e.to_string())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        wait: &BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        task_core::browser_wait::consume_operation_approval(
+            &self.store,
+            self.task_id,
+            wait,
+            time::OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
     }
 }
 
@@ -2116,4 +2132,502 @@ mod live_wiring {
         assert!(sink.artifacts.lock().unwrap().is_empty());
         assert!(emitter.in_auth_section());
     }
+}
+
+/// ADR 2026-10-08 D2 fixtures: a task whose policy allows click but asks a human approval for it.
+fn click_approval_request(workspace: &Path) -> RunRequest {
+    let mut req = request(workspace);
+    let policy = req.context.browser_policy.as_mut().unwrap();
+    policy.allowed_actions = vec![
+        BrowserAction::Navigate,
+        BrowserAction::Snapshot,
+        BrowserAction::Click,
+        BrowserAction::Download,
+    ];
+    policy.approval_actions = vec![BrowserAction::Click];
+    req
+}
+
+fn prepared(req: &RunRequest) -> crate::browser_policy::PreparedBrowserPolicy {
+    crate::browser_policy::prepare_for_task(
+        req.context
+            .profile
+            .as_ref()
+            .unwrap()
+            .browser
+            .as_ref()
+            .unwrap(),
+        &req.task,
+        req.context.browser_policy.as_ref(),
+        SUPPORTED_VERSION,
+    )
+    .unwrap()
+}
+
+fn approved_click_wait(policy: &crate::browser_policy::PreparedBrowserPolicy) -> BrowserWait {
+    let now = time::OffsetDateTime::now_utc();
+    BrowserWait {
+        wait_id: "wait-1".into(),
+        task_id: TaskId::new(),
+        work_unit_id: None,
+        run_id: "run-1".into(),
+        session_id: "celeris-session-1".into(),
+        reason: task_core::browser_wait::BrowserWaitReason::WaitingForApproval,
+        origin: "https://example.com".into(),
+        purpose: "Press export".into(),
+        credential_policy_id: None,
+        credential: None,
+        operation: Some(task_core::browser_wait::OperationIntent {
+            intent_id: "intent-1".into(),
+            action: "click".into(),
+            args_digest: None,
+        }),
+        trusted_login: None,
+        approval_id: Some("approval-1".into()),
+        policy_revision: policy.binding.revision,
+        policy_hash: policy.binding.hash.clone(),
+        owner_id: None,
+        deadline: now,
+        resume_key: "operation:x:run-1".into(),
+        version: 2,
+        state: BrowserWaitState::Approved,
+        resolution_code: None,
+        created_at: now,
+        resolved_at: None,
+    }
+}
+
+/// ADR 2026-10-08 D2: the shim's approval request is validated against the effective policy
+/// before it becomes a wait, and an approved operation only resumes under the same policy.
+#[test]
+fn approval_request_is_bound_to_the_policy_and_resumes_only_under_the_same_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let req = click_approval_request(temp.path());
+    let policy = prepared(&req);
+    assert_eq!(
+        policy.effective.operation_approval_actions(),
+        vec![BrowserAction::Click]
+    );
+    assert_eq!(
+        shim_approval_actions(&policy, None),
+        vec!["click".to_string()]
+    );
+    assert!(shim_approval_actions(&policy, Some(BrowserAction::Click)).is_empty());
+    let path = temp.path().join("approval-request.json");
+    let write = |value: serde_json::Value| {
+        let _ = std::fs::remove_file(&path);
+        std::fs::write(&path, value.to_string()).unwrap();
+    };
+    let valid = serde_json::json!({
+        "action": "click", "target": "@e7", "origin": "https://example.com", "purpose": "Press export"
+    });
+    write(valid.clone());
+    let (action, intent) = read_approval_request(&path, &policy).unwrap();
+    assert_eq!(action, BrowserAction::Click);
+    let wait = operation_wait(req.task.id, "run-1", "celeris-s1", &policy, action, &intent);
+    wait.validate().unwrap();
+    assert_eq!(
+        wait.reason,
+        task_core::browser_wait::BrowserWaitReason::WaitingForApproval
+    );
+    assert!(wait.credential.is_none() && wait.credential_policy_id.is_none());
+    let op = wait.operation.as_ref().unwrap();
+    assert_eq!(op.action, "click");
+    assert_eq!(
+        op.args_digest.as_deref(),
+        Some(format!("sha256:{:x}", Sha256::digest("click @e7")).as_str())
+    );
+    assert_eq!(wait.resume_key, format!("operation:{}:run-1", req.task.id));
+    assert_eq!(wait.policy_hash, policy.binding.hash);
+
+    // Denied: an action without approval, credential use, a bad ref, an origin outside the
+    // effective domains, an invalid purpose, an unknown field.
+    for (bad, code) in [
+        (
+            serde_json::json!({"action": "download", "target": "@e7", "origin": "https://example.com", "purpose": "p"}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "credential_use", "target": "@e7", "origin": "https://example.com", "purpose": "p"}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "click", "target": "e7", "origin": "https://example.com", "purpose": "p"}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "click", "target": "@e7", "origin": "https://evil.example", "purpose": "p"}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "click", "target": "@e7", "origin": "https://example.com/", "purpose": "p"}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "click", "target": "@e7", "origin": "https://example.com", "purpose": ""}),
+            "denied",
+        ),
+        (
+            serde_json::json!({"action": "click", "target": "@e7", "origin": "https://example.com", "purpose": "p", "selector": "#x"}),
+            "invalid",
+        ),
+    ] {
+        write(bad);
+        let error = read_approval_request(&path, &policy)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(code), "{error}");
+    }
+
+    // Resume: the approved click is accepted only under the same policy hash/revision.
+    let approved = approved_click_wait(&policy);
+    assert_eq!(
+        approved_operation(&approved, &policy).unwrap(),
+        Some(BrowserAction::Click)
+    );
+    let mut other_hash = approved.clone();
+    other_hash.policy_hash = "sha256:other".into();
+    assert!(approved_operation(&other_hash, &policy).is_err());
+    let mut download = approved.clone();
+    download.operation.as_mut().unwrap().action = "download".into();
+    assert!(approved_operation(&download, &policy).is_err());
+    let mut with_credential = approved.clone();
+    with_credential.credential = Some(task_core::browser_wait::CredentialRef {
+        credential_id: "c".into(),
+        provider: "manual".into(),
+        policy_id: "pol".into(),
+    });
+    assert!(approved_operation(&with_credential, &policy).is_err());
+    let mut credential_use = approved.clone();
+    credential_use.operation.as_mut().unwrap().action = "credential_use".into();
+    assert_eq!(approved_operation(&credential_use, &policy).unwrap(), None);
+    // The resumed harness policy carries click once more; the launcher refuses nothing here.
+    let resumed: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&resumed_policy_bytes(&policy, BrowserAction::Click).unwrap())
+            .unwrap();
+    assert!(resumed.allow.iter().any(|a| a == "click"));
+    let base: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&policy.action_policy).unwrap();
+    assert!(!base.allow.iter().any(|a| a == "click"));
+
+    // The prompt explains both the request and the one approved operation.
+    let context = BrowserContext {
+        run: BrowserRun {
+            task_id: req.task.id,
+            run_id: "run-1".into(),
+            session_id: "celeris-s1".into(),
+            state: BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli: PathBuf::from("/w/celeris-browser.py"),
+        credential_used: false,
+        approval_actions: vec!["click".into()],
+        approved_operation: None,
+    };
+    let text = prompt(&context);
+    assert!(text.contains("need a human approval before each use: click"));
+    assert!(text.contains("request-approval <click|download> <@eN>"));
+    let text = prompt(&BrowserContext {
+        approval_actions: Vec::new(),
+        approved_operation: Some(ApprovedOperation {
+            action: "click".into(),
+            origin: "https://example.com".into(),
+            purpose: "Press\nexport".into(),
+        }),
+        ..context
+    });
+    assert!(text.contains("approved ONE `click` on https://example.com"));
+    assert!(text.contains("purpose: Press export"));
+    assert!(!text.contains("request-approval <click|download>"));
+}
+
+struct ApprovalSink {
+    store: SqliteStore,
+    task_id: TaskId,
+    browsers: Mutex<Vec<BrowserRun>>,
+    progress: Mutex<Vec<(String, ProgressFields)>>,
+    contexts: Mutex<Vec<BrowserContext>>,
+}
+impl EventSink for ApprovalSink {
+    fn browser_control_gate(
+        &self,
+        _run_id: &str,
+        _session_id: &str,
+    ) -> Option<std::sync::Arc<dyn crate::browser_live::ControlGate>> {
+        Some(std::sync::Arc::new(crate::browser_live::InMemoryGate::new()))
+    }
+    fn progress(&self, msg: &str) {
+        self.progress_with(msg, &ProgressFields::default());
+    }
+    fn progress_with(&self, msg: &str, fields: &ProgressFields) {
+        self.progress
+            .lock()
+            .unwrap()
+            .push((msg.into(), fields.clone()));
+    }
+    fn artifact(&self, _: &ArtifactRef) {}
+    fn browser_updated(&self, browser: &BrowserRun) {
+        self.browsers.lock().unwrap().push(browser.clone());
+    }
+    fn browser_wait_open(&self, request: &NewBrowserWait) -> Result<(), String> {
+        self.store
+            .browser_wait_open(self.task_id, request, time::OffsetDateTime::now_utc())
+            .map(|_| ())
+            .map_err(|e| e.code().into())
+    }
+    fn browser_waits(&self) -> Result<Vec<BrowserWait>, String> {
+        self.store
+            .browser_waits_for_task(self.task_id)
+            .map_err(|e| e.to_string())
+    }
+    fn browser_operation_approval_consume(
+        &self,
+        wait: &BrowserWait,
+    ) -> Result<task_core::browser_wait::ConsumedBrowserOperation, String> {
+        task_core::browser_wait::consume_operation_approval(
+            &self.store,
+            self.task_id,
+            wait,
+            time::OffsetDateTime::now_utc(),
+        )
+        .map_err(String::from)
+    }
+}
+
+/// Run 1: a click is refused with the approval hint, then `request-approval` stops the run.
+/// Run 2 (after approval): one click reaches the browser, the second is blocked.
+struct ApprovalHarness {
+    contexts: std::sync::Arc<Mutex<Vec<BrowserContext>>>,
+}
+#[async_trait::async_trait]
+impl WorkerAdapter for ApprovalHarness {
+    fn id(&self) -> &str {
+        "acp"
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _: &str,
+        _: RunLimits,
+        _: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        let browser = req.context.browser.clone().expect("browser");
+        self.contexts.lock().unwrap().push(browser.clone());
+        let cli = &browser.cli;
+        let commands: Vec<Vec<&str>> = if browser.approved_operation.is_none() {
+            vec![
+                vec!["open", "https://example.com/export"],
+                vec!["click", "@e1"],
+                vec![
+                    "request-approval",
+                    "click",
+                    "@e1",
+                    "https://example.com",
+                    "Press export",
+                ],
+            ]
+        } else {
+            vec![
+                vec!["open", "https://example.com/export"],
+                vec!["click", "@e1"],
+                vec!["click", "@e1"],
+                vec!["scroll", "up", "10"],
+            ]
+        };
+        let mut codes = Vec::new();
+        let mut outputs = Vec::new();
+        for args in commands {
+            let output = tokio::process::Command::new("python3")
+                .arg(cli)
+                .args(args)
+                .output()
+                .await?;
+            codes.push(output.status.code().unwrap_or(-1));
+            outputs.push(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+        Ok(RunOutcome {
+            terminal: Terminal::Done {
+                summary: format!("{codes:?}|{}", outputs.join("|")),
+                evidence: vec![],
+                usage: None,
+            },
+            exit_code: Some(0),
+        })
+    }
+}
+
+/// ADR 2026-10-08 D2 (criterion 0): a click put back under approval opens a durable
+/// `waiting_for_approval` wait with the operation intent, and the run resumes in the same
+/// logical session after the human's one-time approval, running the click exactly once.
+#[tokio::test]
+async fn click_approval_opens_a_wait_and_resumes_the_same_session_once() {
+    if crate::test_support::skip_unless_userns_tests() {
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let executable = substrate(temp.path());
+    let mut req = click_approval_request(temp.path());
+    req.task.status = Status::Ready;
+    let task_id = req.task.id;
+    let store = SqliteStore::open(&temp.path().join("celeris.db")).unwrap();
+    store.insert(&req.task).unwrap();
+    assert!(
+        store
+            .acquire_lease(task_id, "run-1", Duration::from_secs(600))
+            .unwrap()
+    );
+    let contexts = std::sync::Arc::new(Mutex::new(Vec::new()));
+    let sink = ApprovalSink {
+        store,
+        task_id,
+        browsers: Mutex::default(),
+        progress: Mutex::default(),
+        contexts: Mutex::default(),
+    };
+    let harness = std::sync::Arc::new(ApprovalHarness {
+        contexts: contexts.clone(),
+    });
+
+    // Run 1: the click is refused with the approval hint; the request opens the wait.
+    let outcome = run_with_executable(
+        harness.clone(),
+        req.clone(),
+        "run-1",
+        limits(),
+        &sink,
+        &executable,
+        None,
+    )
+    .await
+    .unwrap();
+    let Terminal::Question { text } = outcome.terminal else {
+        panic!("expected a question, got {:?}", outcome.terminal);
+    };
+    assert_eq!(text, "Browser click approval requested");
+    let first = contexts.lock().unwrap()[0].clone();
+    assert_eq!(first.approval_actions, vec!["click".to_string()]);
+    assert!(first.approved_operation.is_none());
+    let waits = sink.store.browser_waits_for_task(task_id).unwrap();
+    assert_eq!(waits.len(), 1);
+    let wait = &waits[0];
+    assert_eq!(wait.state, BrowserWaitState::Pending);
+    assert_eq!(
+        wait.reason,
+        task_core::browser_wait::BrowserWaitReason::WaitingForApproval
+    );
+    assert_eq!(wait.origin, "https://example.com");
+    assert_eq!(wait.purpose, "Press export");
+    assert!(wait.credential.is_none());
+    let intent = wait.operation.as_ref().unwrap();
+    assert_eq!(intent.action, "click");
+    assert_eq!(
+        intent.args_digest.as_deref(),
+        Some(format!("sha256:{:x}", Sha256::digest("click @e1")).as_str())
+    );
+    assert_eq!(wait.session_id, first.run.session_id);
+    assert_eq!(
+        sink.store.get(task_id).unwrap().unwrap().status,
+        Status::Blocked
+    );
+    assert_eq!(
+        sink.browsers.lock().unwrap().last().unwrap().state,
+        BrowserRunState::WaitingForApproval
+    );
+    // No click reached the substrate; the refusal and the request are audited.
+    let calls =
+        std::fs::read_to_string(temp.path().join("runs/run-1/browser/commands.jsonl")).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        ["[\"open\", \"https://example.com/export\"]", "[\"close\"]"]
+    );
+    let tools: Vec<String> = sink
+        .progress
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|(_, f)| f.tool.clone())
+        .collect();
+    assert!(tools.contains(&"browser.policy_block".to_string()));
+    assert!(tools.contains(&"browser.approval_request".to_string()));
+
+    // The human approves once (task → ready); the dispatcher leases a new run.
+    let decided = sink
+        .store
+        .browser_wait_decide(
+            task_id,
+            &wait.wait_id,
+            &task_core::browser_wait::HumanDecision {
+                decision: task_core::browser_wait::BrowserDecision::ApproveOnce,
+                expected_version: wait.version,
+                actor_id: "owner".into(),
+                owner_session_hash: "sess-hash".into(),
+                policy_hash: wait.policy_hash.clone(),
+                nonce: "n-1".into(),
+                idempotency_key: "idem-1".into(),
+            },
+            time::OffsetDateTime::now_utc(),
+        )
+        .unwrap();
+    assert_eq!(decided.task_status, Status::Ready);
+    assert!(
+        sink.store
+            .acquire_lease(task_id, "run-2", Duration::from_secs(600))
+            .unwrap()
+    );
+
+    // Run 2: the same logical session, the click runs once, the second click is refused by
+    // the action server, and an action outside the policy is still refused by the shim.
+    let outcome = run_with_executable(
+        harness.clone(),
+        req,
+        "run-2",
+        limits(),
+        &sink,
+        &executable,
+        None,
+    )
+    .await
+    .unwrap();
+    let Terminal::Done { summary, .. } = outcome.terminal else {
+        panic!("unexpected terminal {:?}", outcome.terminal);
+    };
+    let (codes, outputs) = summary.split_once('|').unwrap();
+    assert_eq!(codes, "[0, 0, 1, 2]", "{outputs}");
+    let second = contexts.lock().unwrap()[1].clone();
+    assert_eq!(second.run.session_id, wait.session_id);
+    assert!(second.approval_actions.is_empty());
+    assert_eq!(
+        second.approved_operation,
+        Some(ApprovedOperation {
+            action: "click".into(),
+            origin: "https://example.com".into(),
+            purpose: "Press export".into(),
+        })
+    );
+    let calls =
+        std::fs::read_to_string(temp.path().join("runs/run-2/browser/commands.jsonl")).unwrap();
+    assert_eq!(
+        calls.lines().collect::<Vec<_>>(),
+        [
+            "[\"open\", \"https://example.com/export\"]",
+            "[\"click\", \"@e1\"]",
+            "[\"close\"]"
+        ]
+    );
+    let policy: task_core::AgentBrowserActionPolicy = serde_json::from_slice(
+        &std::fs::read(temp.path().join("runs/run-2/browser/policy.json")).unwrap(),
+    )
+    .unwrap();
+    assert!(policy.allow.iter().any(|a| a == "click"));
+    // download has no approval in this task policy and stays allowed; scroll is not granted.
+    assert!(policy.allow.iter().any(|a| a == "download"));
+    assert!(!policy.allow.iter().any(|a| a == "scroll"));
+    let resumed = sink.store.browser_wait_get(&wait.wait_id).unwrap().unwrap();
+    assert_eq!(resumed.state, BrowserWaitState::Resumed);
+    assert_eq!(
+        sink.browsers.lock().unwrap().last().unwrap().state,
+        BrowserRunState::Completed
+    );
+    assert!(sink.contexts.lock().unwrap().is_empty());
 }

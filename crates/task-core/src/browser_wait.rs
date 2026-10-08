@@ -716,6 +716,74 @@ pub fn consume_credential_approval<S: BrowserWaitStore + ?Sized>(
     })
 }
 
+/// 承認済みの操作（click / download）の一回消費の結果（ADR 2026-10-08 D2）。秘密は持たない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConsumedBrowserOperation {
+    pub wait: BrowserWait,
+    /// 承認した操作（`OperationIntent.action`、`BrowserAction::as_str` の語）。
+    pub action: String,
+    pub approved_by: String,
+}
+
+/// 承認済みの操作 wait（`credential_use` 以外の `waiting_for_approval`）を、それを開いた論理 run/session の
+/// continuation として一度だけ消費する（ADR 2026-10-08 D2）。store の wait と呼出し側の wait の intent が
+/// 食い違えば消費せずに拒否する。承認記録（`approve_once`、消費済み）が無ければ拒否する。
+pub fn consume_operation_approval<S: BrowserWaitStore + ?Sized>(
+    store: &S,
+    task_id: TaskId,
+    wait: &BrowserWait,
+    now: OffsetDateTime,
+) -> Result<ConsumedBrowserOperation, &'static str> {
+    let Some(intent) = wait
+        .operation
+        .as_ref()
+        .filter(|_| wait.reason == BrowserWaitReason::WaitingForApproval)
+        .filter(|o| o.action != "credential_use")
+    else {
+        return Err("browser approval is not an operation approval");
+    };
+    let stored = store
+        .browser_wait_get(&wait.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .ok_or("browser approval missing")?;
+    if stored.operation.as_ref() != Some(intent)
+        || stored.origin != wait.origin
+        || stored.credential.is_some()
+    {
+        return Err("browser approval intent mismatch");
+    }
+    let consumed = store
+        .browser_wait_consume(
+            task_id,
+            &wait.wait_id,
+            &wait.resume_key,
+            &wait.run_id,
+            &wait.session_id,
+            now,
+        )
+        .map_err(|e| e.code())?;
+    let approval_id = consumed
+        .approval_id
+        .clone()
+        .ok_or("approval record missing")?;
+    let approved_by = store
+        .browser_approvals_for_wait(&consumed.wait_id)
+        .map_err(|_| "browser approval store unavailable")?
+        .into_iter()
+        .find(|a| {
+            a.approval_id == approval_id
+                && a.decision == BrowserDecision::ApproveOnce
+                && a.consumed_at.is_some()
+        })
+        .map(|a| a.actor_id)
+        .ok_or("approval record missing")?;
+    Ok(ConsumedBrowserOperation {
+        wait: consumed,
+        action: intent.action.clone(),
+        approved_by,
+    })
+}
+
 // ---- 検証 ----
 
 fn valid_token(s: &str) -> bool {

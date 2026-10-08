@@ -301,6 +301,18 @@ fn action_request(
     ))
 }
 
+/// ADR 2026-10-08 D2: the one operation a human approved for this browser session. The
+/// supervisor fills it from the consumed wait; the harness may run that action exactly once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ApprovedOperation {
+    /// Shim verb (`click` / `download`).
+    pub action: String,
+    /// Exact HTTPS origin the agent named in its request.
+    pub origin: String,
+    /// The agent's own stated purpose (shown to the human; untrusted plain text).
+    pub purpose: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BrowserContext {
     pub run: BrowserRun,
@@ -309,9 +321,37 @@ pub struct BrowserContext {
     /// actions are off until the session ends.
     #[serde(default)]
     pub credential_used: bool,
+    /// ADR 2026-10-08 D2: shim verbs (`click` / `download`) that need a human approval before
+    /// each use in this task; the agent asks with `request-approval`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub approval_actions: Vec<String>,
+    /// The operation a human approved once for this session, if the run resumes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_operation: Option<ApprovedOperation>,
 }
 
 pub fn prompt(browser: &BrowserContext) -> String {
+    let approval = if browser.approval_actions.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "These commands need a human approval before each use: {}. To use one, run\n\
+             request-approval <click|download> <@eN> <exact-HTTPS-origin> <short-purpose>, then\n\
+             stop; the run resumes in the same session once the human decides.\n",
+            browser.approval_actions.join(", ")
+        )
+    };
+    let approved = match &browser.approved_operation {
+        Some(op) => format!(
+            "The human approved ONE `{action}` on {origin} for this session (purpose: {purpose}).\n\
+             Navigate there, snapshot, then run `{action} @eN` exactly once; a second {action} is\n\
+             blocked until a new request-approval is approved.\n",
+            action = op.action,
+            origin = op.origin,
+            purpose = op.purpose.replace(['\n', '\r'], " "),
+        ),
+        None => String::new(),
+    };
     format!(
         "\n## Browser capability (agent-browser 0.38.1)\n\
          Use `python3 {cli:?} <command>` for session `{session}`.\n\
@@ -326,7 +366,7 @@ pub fn prompt(browser: &BrowserContext) -> String {
          <short-purpose>, then stop. The task policy may block this request. Never enter\n\
          credentials or use auth, cookies, storage, eval, CDP, profiles, plugins, other\n\
          browser sessions or raw CLI.\n\
-         Never include secrets in model output or artifacts.\n{credential}",
+         Never include secrets in model output or artifacts.\n{approval}{approved}{credential}",
         cli = browser.cli.display().to_string(),
         session = browser.run.session_id,
         credential = if browser.credential_used {
@@ -460,6 +500,149 @@ fn read_credential_request(
     Ok(request)
 }
 
+/// ADR 2026-10-08 D2: the shim's `request-approval` record (`approval-request.json`). No secret.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApprovalRequest {
+    /// Shim verb (`click` / `download`).
+    pub(crate) action: String,
+    /// Snapshot ref (`@eN`) of the element the agent wants to act on.
+    pub(crate) target: String,
+    pub(crate) origin: String,
+    pub(crate) purpose: String,
+}
+
+fn valid_snapshot_ref(target: &str) -> bool {
+    target.len() <= 16
+        && target
+            .strip_prefix("@e")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The operation an agent may ask approval for: a business action of the effective policy that
+/// needs a per-run approval, on an exact HTTPS origin inside the allowed domains.
+pub(crate) fn read_approval_request(
+    path: &Path,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<(task_core::BrowserAction, ApprovalRequest), AdapterError> {
+    let invalid = || AdapterError::Other("browser approval request invalid".into());
+    let metadata = std::fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() || metadata.len() > 2048 {
+        return Err(invalid());
+    }
+    let bytes = std::fs::read(path)?;
+    let request: ApprovalRequest = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+    let action = task_core::BrowserAction::parse(&request.action)
+        .map_err(|_| AdapterError::Other("browser approval request denied".into()))?;
+    if !policy
+        .effective
+        .operation_approval_actions()
+        .contains(&action)
+        || !valid_snapshot_ref(&request.target)
+        || task_core::browser::normalize_https_origin(&request.origin).as_deref()
+            != Some(&request.origin)
+        || !origin_in_domains(&request.origin, policy.allowed_domains())
+        || !task_core::browser_wait::valid_purpose(&request.purpose)
+    {
+        return Err(AdapterError::Other(
+            "browser approval request denied".into(),
+        ));
+    }
+    Ok((action, request))
+}
+
+/// The durable wait for an approval request: the intent (action + digest of its target) is
+/// frozen so the human decides on exactly what the agent asked for.
+pub(crate) fn operation_wait(
+    task_id: task_core::TaskId,
+    run_id: &str,
+    session_id: &str,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    action: task_core::BrowserAction,
+    request: &ApprovalRequest,
+) -> NewBrowserWait {
+    let digest = Sha256::digest(format!("{} {}", action.as_str(), request.target));
+    NewBrowserWait {
+        work_unit_id: None,
+        run_id: run_id.into(),
+        session_id: session_id.into(),
+        reason: BrowserWaitReason::WaitingForApproval,
+        origin: request.origin.clone(),
+        purpose: request.purpose.clone(),
+        credential_policy_id: None,
+        credential: None,
+        operation: Some(OperationIntent {
+            intent_id: format!("intent-{:x}", Sha256::digest(format!("{task_id}/{run_id}")))[..48]
+                .to_string(),
+            action: action.as_str().into(),
+            args_digest: Some(format!("sha256:{digest:x}")),
+        }),
+        trusted_login: None,
+        policy_revision: policy.binding.revision,
+        policy_hash: policy.binding.hash.clone(),
+        owner_id: None,
+        ttl_secs: None,
+        resume_key: format!("operation:{task_id}:{run_id}"),
+    }
+}
+
+/// The approved business action a resumed run may perform once, or `None` when the approved
+/// wait is a credential use (handled by the credential path). An approval that no longer
+/// matches the task's effective policy is refused (the approval is not consumed).
+pub(crate) fn approved_operation(
+    wait: &task_core::browser_wait::BrowserWait,
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+) -> Result<Option<task_core::BrowserAction>, AdapterError> {
+    let Some(intent) = wait
+        .operation
+        .as_ref()
+        .filter(|o| o.action != "credential_use")
+    else {
+        return Ok(None);
+    };
+    let denied = || AdapterError::Other("approved browser operation denied".into());
+    let action = task_core::BrowserAction::parse(&intent.action).map_err(|_| denied())?;
+    if wait.reason != BrowserWaitReason::WaitingForApproval
+        || wait.policy_hash != policy.binding.hash
+        || wait.policy_revision != policy.binding.revision
+        || wait.credential.is_some()
+        || !policy
+            .effective
+            .operation_approval_actions()
+            .contains(&action)
+        || !origin_in_domains(&wait.origin, policy.allowed_domains())
+    {
+        return Err(denied());
+    }
+    Ok(Some(action))
+}
+
+/// Shim verbs that still need an approval in this session (`config.json` `approval_actions`).
+pub(crate) fn shim_approval_actions(
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    approved: Option<task_core::BrowserAction>,
+) -> Vec<String> {
+    policy
+        .effective
+        .operation_approval_actions()
+        .into_iter()
+        .filter(|a| Some(*a) != approved)
+        .map(|a| a.as_str().to_string())
+        .collect()
+}
+
+/// `policy.json` bytes for a run that resumes an approved operation.
+pub(crate) fn resumed_policy_bytes(
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    approved: task_core::BrowserAction,
+) -> Result<Vec<u8>, AdapterError> {
+    let file = policy
+        .effective
+        .harness_action_policy_with_approved(Some(approved))
+        .map_err(|e| AdapterError::Other(format!("browser policy rejected: {}", e.code())))?;
+    serde_json::to_vec(&file).map_err(|_| AdapterError::Other("browser policy rejected".into()))
+}
+
 /// Harness tool titles/inputs/outputs may contain rejected credential URLs or page
 /// text. Only the supervisor's typed lifecycle and the shim's bounded audit records
 /// are browser audit sources. Do not let page-driven comments/delegation publish data.
@@ -579,6 +762,7 @@ fn forward_events<S: crate::browser_live::LiveSink>(
             "close",
             "policy_block",
             "credential_request",
+            "approval_request",
         ]
         .contains(&event.operation.as_str())
             || !["success", "failure", "blocked"].contains(&event.status.as_str())
@@ -1072,7 +1256,14 @@ async fn run_with_executable_attempt(
         .last()
         .filter(|w| w.state == BrowserWaitState::Approved)
         .cloned();
-    if let Some(wait) = &approved
+    // ADR 2026-10-08 D2: an approved click/download resumes in the same logical session with
+    // that one action allowed; an approved credential use takes the injection path below.
+    let approved_operation = match &approved {
+        Some(wait) => approved_operation(wait, &policy)?,
+        None => None,
+    };
+    let credential_approved = approved.clone().filter(|_| approved_operation.is_none());
+    if let Some(wait) = &credential_approved
         && (wait.policy_hash != policy.binding.hash
             || wait.policy_revision != policy.binding.revision
             || !policy
@@ -1171,11 +1362,14 @@ async fn run_with_executable_attempt(
         .as_ref()
         .map(|a| a.session_id.clone())
         .unwrap_or_else(|| session_id(req.task.id, &attempt_session));
-    let harness_policy = if approved.is_some() {
+    let harness_policy = if let Some(action) = approved_operation {
+        resumed_policy_bytes(&policy, action)?
+    } else if credential_approved.is_some() {
         credential_harness_policy(&policy.action_policy)?
     } else {
         policy.action_policy.clone()
     };
+    let approval_actions = shim_approval_actions(&policy, approved_operation);
     let runtime = req
         .workspace
         .join("runs")
@@ -1196,7 +1390,7 @@ async fn run_with_executable_attempt(
     write_private(&runtime.join("browser_action.py"), ACTION_RUNNER)?;
     std::fs::create_dir_all(runtime.join("actions"))?;
     // Bound orphan lifetime after a supervisor crash; no profile/auth state is restored.
-    let segment_active = approved.is_some();
+    let segment_active = credential_approved.is_some();
     let upstream = br#"{"idleTimeout":"5m","noWebmcp":true}"#.to_vec();
     write_private(&runtime.join("upstream.json"), &upstream)?;
     let initial_policy = if segment_active {
@@ -1214,6 +1408,7 @@ async fn run_with_executable_attempt(
             "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
             "credential_policy_ids":policy.effective.credential_policy_ids,
             "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
+            "approval_actions":approval_actions,
         }))?,
     )?;
     let real_executable = resolve_executable(executable)
@@ -1247,6 +1442,9 @@ async fn run_with_executable_attempt(
         &runtime,
         policy.allowed_domains().to_vec(),
         allowed.allow,
+        approved_operation
+            .map(|a| a.upstream_actions().iter().map(|s| s.to_string()).collect())
+            .unwrap_or_default(),
         control_gate,
     )
     .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
@@ -1309,7 +1507,7 @@ async fn run_with_executable_attempt(
     };
     // ADR-0114 D1: identity 復元の state は controller の CDP にだけ投入する。
     supervisor.attach_controller(shared_cdp.controller());
-    let broker_session = match (&approved, credentials) {
+    let broker_session = match (&credential_approved, credentials) {
         (Some(_), Some(sup)) => Some(
             register_broker_session(sup, &supervisor, &session)
                 .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?,
@@ -1324,7 +1522,20 @@ async fn run_with_executable_attempt(
         )));
     }
     // A failed sandbox version check does not consume the one-time approval.
-    let approval = match (&approved, credentials) {
+    let operation = match (&approved, approved_operation) {
+        (Some(wait), Some(action)) => {
+            let consumed = sink.browser_operation_approval_consume(wait).map_err(|_| {
+                AdapterError::Other("browser approval could not be consumed".into())
+            })?;
+            Some(ApprovedOperation {
+                action: action.as_str().into(),
+                origin: consumed.wait.origin,
+                purpose: consumed.wait.purpose,
+            })
+        }
+        _ => None,
+    };
+    let approval = match (&credential_approved, credentials) {
         (Some(wait), Some(_)) => {
             // A missing or changed trusted selector is rejected before consuming the approval.
             let pinned = wait
@@ -1500,6 +1711,8 @@ async fn run_with_executable_attempt(
         run: browser.clone(),
         cli: cli.clone(),
         credential_used: credential_segment.is_some(),
+        approval_actions,
+        approved_operation: operation,
     });
     let monitor_req = req.clone();
     let mut guard = SessionGuard {
@@ -1555,6 +1768,36 @@ async fn run_with_executable_attempt(
             }
             Err(e) => outcome = Err(e),
         }
+    } else if runtime.join("approval-request.json").exists() {
+        // ADR 2026-10-08 D2: freeze the requested operation in a durable wait; the run resumes
+        // in this logical session after the human approves once.
+        match read_approval_request(&runtime.join("approval-request.json"), &policy) {
+            Ok((action, intent)) => {
+                let wait = operation_wait(
+                    monitor_req.task.id,
+                    run_id,
+                    &browser.session_id,
+                    &policy,
+                    action,
+                    &intent,
+                );
+                outcome = match sink.browser_wait_open(&wait) {
+                    Ok(()) => {
+                        browser.state = BrowserRunState::WaitingForApproval;
+                        Ok(RunOutcome {
+                            terminal: Terminal::Question {
+                                text: format!("Browser {} approval requested", action.as_str()),
+                            },
+                            exit_code: None,
+                        })
+                    }
+                    Err(_) => Err(AdapterError::Other(
+                        "browser wait could not be opened".into(),
+                    )),
+                };
+            }
+            Err(e) => outcome = Err(e),
+        }
     }
     // After credential use the harness policy may be close-less; the supervisor's segment
     // policy always carries `close`.
@@ -1593,8 +1836,11 @@ async fn run_with_executable_attempt(
         }
     }
     drop(injected_session_guard);
-    browser.state = if browser.state == BrowserRunState::WaitingForAuth {
-        BrowserRunState::WaitingForAuth
+    browser.state = if matches!(
+        browser.state,
+        BrowserRunState::WaitingForAuth | BrowserRunState::WaitingForApproval
+    ) {
+        browser.state
     } else {
         match &outcome {
             Ok(RunOutcome {

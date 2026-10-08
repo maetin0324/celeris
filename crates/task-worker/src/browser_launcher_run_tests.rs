@@ -365,6 +365,7 @@ fn harness_actions_reach_the_launcher_through_the_gated_action_server() {
         }),
         vec!["example.com".into()],
         vec!["navigate".into(), "snapshot".into(), "scroll".into()],
+        Vec::new(),
         Arc::new(InMemoryGate::new()),
     )
     .expect("action server");
@@ -398,6 +399,52 @@ fn harness_actions_reach_the_launcher_through_the_gated_action_server() {
     }
     drop(runtime);
     assert_eq!(wait_stopped(&launcher.log), 1);
+}
+
+/// ADR 2026-10-08 D2: a human-approved action is handed to the browser once; the second
+/// request is refused by the action server before it reaches the launcher.
+#[test]
+fn single_use_action_reaches_the_launcher_once() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, _) = LauncherRuntime::start(
+        &launcher.sock,
+        "task-1",
+        "run-4",
+        session_policy(
+            &["navigate".into(), "snapshot".into(), "click".into()],
+            &["example.com".into()],
+            Duration::from_secs(600),
+        ),
+    )
+    .expect("start");
+    let runtime = Arc::new(runtime);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sock = dir.path().join("browser.action.sock");
+    let server = ActionServer::start_with(
+        &sock,
+        Arc::new(LauncherExecutor {
+            runtime: Arc::clone(&runtime),
+        }),
+        vec!["example.com".into()],
+        vec!["navigate".into(), "snapshot".into(), "click".into()],
+        vec!["click".into()],
+        Arc::new(InMemoryGate::new()),
+    )
+    .expect("action server");
+    assert_eq!(
+        shim_request(&sock, "open", &["https://example.com/a"])["status"],
+        0
+    );
+    assert_eq!(shim_request(&sock, "click", &["@e1"])["status"], 0);
+    assert_eq!(shim_request(&sock, "click", &["@e2"])["status"], 2);
+    // Other actions stay available after the approval is spent.
+    assert_eq!(shim_request(&sock, "snapshot", &[])["status"], 0);
+    drop(server);
+    let log = launcher.log.lock().expect("lock");
+    assert_eq!(
+        log.actions.iter().map(|(v, _)| *v).collect::<Vec<_>>(),
+        vec![Verb::Open, Verb::Click, Verb::Snapshot]
+    );
 }
 
 #[test]
@@ -794,8 +841,14 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
             .join("runs")
             .join(format!("run-{n}"))
             .join("browser");
-        let (cli, action_socket) =
-            write_shim_files(&runtime_dir, "celeris-test-session", &policy).expect("shim files");
+        let (cli, action_socket) = write_shim_files(
+            &runtime_dir,
+            "celeris-test-session",
+            &policy,
+            &policy.action_policy,
+            &[],
+        )
+        .expect("shim files");
         assert!(action_socket.as_os_str().len() <= crate::browser_action::SUN_PATH_MAX);
 
         let config: serde_json::Value = serde_json::from_slice(
@@ -854,6 +907,7 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
             }),
             policy.allowed_domains().to_vec(),
             allowed_actions.allow.clone(),
+            Vec::new(),
             Arc::new(InMemoryGate::new()),
         )
         .expect("action server");

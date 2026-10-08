@@ -3003,8 +3003,10 @@ task は `blocked` のまま、wait の `reason`（`waiting_for_auth` / `waiting
   D3。人の決定 2026-10-08 で 5 分から変更）。期限切れはディスパッチャの tick（起動直後を含む）が一度だけ終端化する。
 - 承認の対象: `credential_use` は常に毎回承認。`click` / `download` は既定では承認なし（許可 origin の中で実行し、
   session 記録と event に残る）で、task policy（`PUT /tasks/{id}/browser/policy` の `approval_actions`）か組織の grant
-  （`PATCH /org/{id}/browser-settings` の `approval_actions`）に書いたときだけ承認対象になる（同 ADR D1。承認対象の
-  操作は harness の allow から外れ、承認なしでは実行されない）。
+  （`PATCH /org/{id}/browser-settings` の `approval_actions`）に書いたときだけ承認対象になる（同 ADR D1）。承認対象の
+  操作は harness の allow から外れ、agent が shim の `request-approval` で開いた `waiting_for_approval`
+  （`operation.action` が `click` / `download`、`args_digest` は対象 ref の digest、`credential` 無し）を人が
+  `approve_once` すると、次の run が同じ論理 session でその操作を一度だけ実行する（同 ADR D2）。
 - 未解決の wait がある間、一般の `answer` / 途中確認の再開では `ready` に戻せない（409 `invalid_transition`）。
   inbox の `questions` には出さず `browser_waits`（`counts.browser_waits`）に出す。
 - エラー: 401 bearer なし、403 `attestation_invalid` / `attestation_replayed`、404 `browser_wait_not_found`、

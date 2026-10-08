@@ -70,6 +70,7 @@ impl Fixture {
             ["launch", "close", "click", "snapshot"]
                 .map(String::from)
                 .to_vec(),
+            Vec::new(),
             gate,
         )
         .unwrap();

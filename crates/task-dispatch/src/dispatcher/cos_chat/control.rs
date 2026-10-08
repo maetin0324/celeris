@@ -18,7 +18,7 @@ use super::sink::ChatStopIntent;
 use crate::dispatcher::Dispatcher;
 
 /// The reason recorded on a run that the dispatcher took over as an orphan.
-pub(super) const ORPHAN_TAKEOVER_REASON: &str = "orphan takeover; continuing in a new run";
+pub(crate) const ORPHAN_TAKEOVER_REASON: &str = "orphan takeover; continuing in a new run";
 
 pub(super) fn stop_intent(run: &ChatRun) -> ChatStopIntent {
     if run.reason.as_deref() == Some("stopped by human") {

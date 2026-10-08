@@ -204,6 +204,15 @@ def main():
             if runs:
                 finish()
         return
+    if mode == "same-thread":  # 同一 thread 10 turn だけ（台本 s2_same_thread、差分配送の before/after）
+        try:
+            th = new_thread("s2")
+            for i, t in enumerate(SCRIPT["s2_same_thread"]["turns"][:n_s2], 1):
+                turn(SCRIPT, "s2", th, i, t["kind"], t["text"])
+        finally:
+            if runs:
+                finish()
+        return
     try:
         for i in range(1, n_s1 + 1):
             turn(SCRIPT, "s1", new_thread(f"s1-{i}"), 1, "consult", SCRIPT["consult"])

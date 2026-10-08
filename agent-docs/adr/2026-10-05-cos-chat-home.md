@@ -517,3 +517,30 @@ worker 一般の `Usage` と既存パーサは変えず、CoS の `session_usage
 `cos_chat_billed_input_codex_cached_input_is_not_added_twice`・`cos_chat_billed_input_claude_adds_external_cache_tokens`・`cos_chat_billed_input_unknown_cache_definition_uses_input_only`（dispatcher）で会計と context/fallback の分離を確認する。
 
 `cos_chat_run_rollover_measure_prefers_context_occupancy`・`…_falls_back_for_legacy_rows`（`sessions/cos_chat/tests.rs`）、`cos_chat_run_session_touch_separates_occupancy_from_cumulative`（task-core）、`cos_chat_run_rollover_cache_heavy_run_is_not_underestimated`・`…_occupancy_is_replaced_not_accumulated`・`…_unknown_occupancy_falls_back_to_cumulative`（dispatcher 結合）、`context_tokens_is_last_main_thread_call_not_result_sum`・`…_unknown_without_assistant_usage`（task-worker）。実機（LLM 呼び出し）での占有の実測は本葉では行っていない（「不明」）。
+
+## 付記: resume 時の差分配送（cos-chat-prompt-cache T6、2026-10-08）
+
+D2「再開中は未配送 seq 以後の差分と現在の規則だけを渡す」の実装。従来の `launch.rs` は session_mode に関係なく `history_since_summary` を呼び、resume でも summary と未要約履歴を毎回渡していた（prompt-cache ADR の H3）。
+
+### D1 配送 cursor
+
+- migration `0063_cos_chat_delivered_through`（schema 63）で `node_sessions.delivered_through_seq INTEGER NOT NULL DEFAULT 0` を足す。「この session に配送済みの thread seq の水位」。0 は不明（既存行・まだ completed の run が無い）。
+- 上げるのは `run_claimed` の終端の後だけ（`launch::advance_delivery_cursor`）。DB に記録された run の状態が `completed` のときに、run の session 行（`chat_runs.session_row_id`。fresh 再試行なら新しい行）を `MAX(cursor, 入力の seq)` に上げる。入力と同じ run の返事（claim 時に挿入）の間に user 以外の発言が無ければ返事の seq まで上げる（間の user 発言は待ち行列の入力で、cursor に関係なく入力として配送される）。間に system などがあれば入力の seq で止め、次の resume で再配送する。`store.chat_session_set_delivered_through` は下げない・retire 済みの行は動かさない。
+- 試験 `cos_chat_resume_delta_cursor_covers_the_reply_only_over_queued_user_messages`・`…_cursor_stops_at_the_input_before_an_unseen_message`（launch/tests.rs）、`…_cursor_rises_only_on_live_row_and_is_independent_of_summary`（task-core）。
+
+### D2 resume で差分、それ以外は全文
+
+- `rollover::choose_session` が `SessionChoice.delta_from` を決める: mode が resumed、cursor > 0、かつ前回の run（この session の最新の終端 run）が再起動後の回収（`control::ORPHAN_TAKEOVER_REASON`）で終わっていないときだけ `Some(cursor)`。
+- `rollover::history_for_run`: `Some(cursor)` なら summary を省き、cursor より後で入力より前の発言だけを `unsummarized` に入れる（summary の水位は checkpoint の期待値に要るので thread の値をそのまま渡す）。`None` なら従来の summary＋未要約履歴。
+- worker protocol `CosChatContext.delivered_through_seq: Option<i64>`（追加のみ・省略可。`docs/protocol/worker-protocol.schema.json` を再生成）。worker の prompt は、ある時「## これまでの要約」を「要約は session 内。水位 seq N。」の 1 行にし、「## 前回の配送以後の発言 (seq a..=b)」を出す。入力・規則（返事と操作・checkpoint・履歴 API）は従来どおり毎回渡す。
+- 全文の場合: new、fresh（key 変更・cache 消失・context 枯渇・token rollover。新しい行の cursor は 0）、resume 拒否後の fresh 再試行（`prepare_fresh_retry` が `delivered_through_seq = None` にして全文を組み直す）、再起動後の回収、cursor 0。
+- 試験: `cos_chat_resume_delta_resumed_run_gets_only_messages_after_the_cursor`・`…_fresh_reasons_deliver_the_full_text`（4 理由）・`…_refused_resume_retries_fresh_with_the_full_text`・`…_restart_recovery_delivers_the_full_text`（harness_tests.rs）、`cos_chat_resume_delta_prompt_omits_summary_and_names_the_cursor`（task-worker）。
+
+### D3 入力の必達と失敗時
+
+- 入力（割り込み・待ち行列・回収の継続）は `inputs` で cursor に関係なく渡す。配送記録は従来どおり `input_message_id`・`message.state`、checkpoint の水位 `summary_through_seq` は別管理。cursor より前の seq の待ち入力（割り込みが追い越した発言）も入力として届く（`…_interrupt_and_queued_inputs_are_always_delivered`）。
+- completed にならなかった run（failed・interrupted・stopped・終端前の process 消失）は cursor を動かさない。次の resume は古い cursor から再配送する（再配送は許し、欠落は許さない。`…_failed_run_keeps_the_cursor_and_redelivers`）。checkpoint の水位と cursor は互いに動かさない（`…_checkpoint_watermark_and_cursor_are_independent`）。
+
+### 計測（隔離 live、claude-code・claude_oauth、同一 thread 10 turn × before/after 各 2 回）
+
+`scripts/dev/cos-chat-bench.sh … same-thread`（S2 だけを流す mode を追加）。t2〜t10 合計の 2 回平均: 非 cache input（`Usage.input_tokens`）50 → 50（±0%、turn ごとに同じ 4〜6）、cache write 51,647 → 44,630（−13.6%）、cache read −5.6%、prompt bytes 55,064 → 43,457（−21.1%。after は turn によらず約 4.8 KB で一定）。claude-code では prompt は cache write に入り、非 cache input は構造上ほぼ一定なので、この指標では改善が出ない。計測時は CoS が checkpoint を書かず summary が空だった（既知の不具合 4）ので、before の再送は未要約履歴だけだった。summary がある thread の差はこれより大きい見込み（未計測）。codex・acp・pi は未計測（不明）。

@@ -494,15 +494,22 @@ impl CosChatLaunch {
             cwd: Some(workspace.to_string_lossy().into_owned()),
             model: cfg.model.clone(),
         };
-        let super::rollover::SessionChoice { session, mode, .. } = super::rollover::choose_session(
+        let super::rollover::SessionChoice {
+            session,
+            mode,
+            delta_from,
+            ..
+        } = super::rollover::choose_session(
             &self.store,
             run_id,
             session_key,
             dispatcher.config.session_rollover_tokens,
             now,
         )?;
-        let (summary, summary_through_seq, unsummarized) =
-            super::rollover::history_since_summary(&self.store, thread_id, input.seq)?;
+        // ADR 2026-10-05 D2 付記: a resumed session with a known delivery cursor gets only the
+        // messages after it; every other mode gets the summary and the unsummarized history.
+        let history =
+            super::rollover::history_for_run(&self.store, thread_id, input.seq, delta_from)?;
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
@@ -513,9 +520,12 @@ impl CosChatLaunch {
                 interrupt: false,
                 attachment_ids: input.attachment_ids.clone(),
             }],
-            summary,
-            summary_through_seq: i64::try_from(summary_through_seq).unwrap_or(i64::MAX),
-            unsummarized,
+            summary: history.summary,
+            summary_through_seq: i64::try_from(history.summary_through_seq).unwrap_or(i64::MAX),
+            unsummarized: history.history,
+            delivered_through_seq: history
+                .delivered_through_seq
+                .map(|cursor| i64::try_from(cursor).unwrap_or(i64::MAX)),
             attachments,
             // These two concrete CLI adapters implement native image input. ACP abilities
             // are negotiated by the agent at runtime, so they stay unconfirmed here.
@@ -836,9 +846,87 @@ async fn run_claimed(
     if let Err(error) = sink.finish(&finish, &actions) {
         tracing::warn!(%error, %run_id, "CoS chat run finish failed");
     }
+    // ADR 2026-10-05 D2 付記: only a run recorded `completed` moves the delivery cursor. A run
+    // that ends otherwise (or never reaches here) leaves it, so the next run redelivers.
+    if let Err(error) = advance_delivery_cursor(&store, thread_id, run_id) {
+        tracing::warn!(%error, %run_id, "CoS delivery cursor was not advanced");
+    }
     if let Err(error) = store.cos_run_credential_revoke(run_id, OffsetDateTime::now_utc()) {
         tracing::warn!(%error, %run_id, "CoS chat credential revoke failed");
     }
+}
+
+/// After a run ends, raise its session's delivery cursor (ADR 2026-10-05 D2 付記). Reads the
+/// recorded terminal state and session from the DB: nothing moves unless the run is `completed`.
+/// The session then holds everything up to its input (earlier messages were in the summary,
+/// the history or an earlier run of the session). The cursor also covers the run's own reply when
+/// every message between the input and that reply is a user message: those are queued inputs,
+/// which are delivered as inputs whatever the cursor says. Returns the new cursor, if moved.
+pub(super) fn advance_delivery_cursor(
+    store: &SqliteStore,
+    thread_id: &str,
+    run_id: &str,
+) -> Result<Option<i64>, String> {
+    let run = store
+        .chat_run_get(thread_id, run_id)
+        .map_err(|e| e.to_string())?;
+    if run.state != ChatRunState::Completed {
+        return Ok(None);
+    }
+    let Some(row_id) = store
+        .chat_run_session_record(run_id)
+        .map_err(|e| e.to_string())?
+        .session_row_id
+    else {
+        return Ok(None);
+    };
+    let input_seq = store
+        .chat_message_get(thread_id, &run.input_message_id)
+        .map_err(|e| e.to_string())?
+        .seq;
+    let output_seq = match run.output_message_id.as_deref() {
+        Some(id) => Some(
+            store
+                .chat_message_get(thread_id, id)
+                .map_err(|e| e.to_string())?
+                .seq,
+        ),
+        None => None,
+    };
+    let mut through = input_seq;
+    if let Some(output_seq) = output_seq.filter(|seq| *seq > input_seq) {
+        let mut users_only = true;
+        let mut after = input_seq;
+        while after + 1 < output_seq && users_only {
+            let page = store
+                .chat_message_list(
+                    thread_id,
+                    &ChatMessageQuery {
+                        after_seq: Some(after),
+                        limit: Some(200),
+                        ..ChatMessageQuery::default()
+                    },
+                )
+                .map_err(|e| e.to_string())?;
+            let Some(last) = page.items.iter().map(|m| m.seq).max() else {
+                break;
+            };
+            users_only = page
+                .items
+                .iter()
+                .filter(|m| m.seq < output_seq)
+                .all(|m| m.role == task_core::chat::ChatMessageRole::User);
+            after = last;
+        }
+        if users_only {
+            through = output_seq;
+        }
+    }
+    let through = i64::try_from(through).unwrap_or(i64::MAX);
+    store
+        .chat_session_set_delivered_through(&row_id, through)
+        .map_err(|e| e.to_string())?;
+    Ok(Some(through))
 }
 
 #[cfg(test)]

@@ -6,7 +6,7 @@
 
 use task_core::Task;
 
-use crate::protocol::{CosChatContext, RunContext};
+use crate::protocol::{CosChatContext, CosChatHistory, RunContext};
 
 pub mod capabilities;
 pub use capabilities::{
@@ -230,6 +230,14 @@ fn inputs_section(chat: &CosChatContext) -> String {
 }
 
 fn summary_section(chat: &CosChatContext) -> String {
+    // ADR 2026-10-05 D2 付記: a resumed session already holds the summary it was given; resend
+    // only its watermark.
+    if chat.delivered_through_seq.is_some() {
+        return format!(
+            "## これまでの要約\n要約は session 内。水位 seq {}。\n\n",
+            chat.summary_through_seq
+        );
+    }
     match &chat.summary {
         Some(summary) => format!(
             "## これまでの要約 (summary through seq {})\n{summary}\n\n",
@@ -241,6 +249,9 @@ fn summary_section(chat: &CosChatContext) -> String {
 
 fn history_section(chat: &CosChatContext) -> String {
     let h = &chat.unsummarized;
+    if let Some(cursor) = chat.delivered_through_seq {
+        return delta_section(cursor, h);
+    }
     if h.from_seq > h.through_seq {
         return "## 要約未作成の範囲\n無い（要約が最新の配送済み発言まで覆っている）。\n\n"
             .to_string();
@@ -255,6 +266,36 @@ fn history_section(chat: &CosChatContext) -> String {
             m.seq, m.role, m.id, m.text
         ));
     }
+    out.push_str(&missing_line(h));
+    out.push('\n');
+    out
+}
+
+/// ADR 2026-10-05 D2 付記: on a resumed session, only the messages after the delivery cursor.
+fn delta_section(cursor: i64, h: &CosChatHistory) -> String {
+    if h.from_seq > h.through_seq {
+        return format!(
+            "## 前回の配送以後の発言\nseq {cursor} までは session 内にある。新しい発言は上の入力だけ。\n\n"
+        );
+    }
+    let mut out = format!(
+        "## 前回の配送以後の発言 (seq {}..={})\nseq {cursor} までは session 内にある。下はその後に増えた発言（止まった run の途中の返事を含む）。\n",
+        h.from_seq, h.through_seq
+    );
+    for m in &h.messages {
+        out.push_str(&format!(
+            "- seq {} [{}] {}: {}\n",
+            m.seq, m.role, m.id, m.text
+        ));
+    }
+    out.push_str(&missing_line(h));
+    out.push('\n');
+    out
+}
+
+/// The ranges of `h` not handed over in the prompt, as one line (empty when none).
+fn missing_line(h: &CosChatHistory) -> String {
+    let mut out = String::new();
     let missing = h.missing_ranges();
     if !missing.is_empty() {
         let ranges: Vec<String> = missing
@@ -272,7 +313,6 @@ fn history_section(chat: &CosChatContext) -> String {
             ranges.join(", ")
         ));
     }
-    out.push('\n');
     out
 }
 

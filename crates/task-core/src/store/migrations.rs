@@ -133,7 +133,7 @@ pub(crate) const RESERVED_VERSIONS: &[u32] = &[38, 39, 40];
 
 /// このバイナリが知っている最新のスキーマ版数（ADR-0013 D5）。DB の版数がこれより大きければ
 /// `SqliteStore::open`/`open_with` は `StoreError::SchemaTooNew` で失敗する。
-pub const SCHEMA_VERSION: u32 = 62;
+pub const SCHEMA_VERSION: u32 = 63;
 
 impl SqliteStore {
     fn migration_sql(version: u32) -> Result<&'static str, StoreError> {
@@ -211,6 +211,10 @@ impl SqliteStore {
             // ADR 2026-10-05-cos-chat-home 付記: rollover の context 占有と累積の課金相当入力。
             62 => Ok(include_str!(
                 "../../migrations/0062_cos_chat_context_tokens.sql"
+            )),
+            // ADR 2026-10-05-cos-chat-home 付記: resume 時の差分配送の cursor。
+            63 => Ok(include_str!(
+                "../../migrations/0063_cos_chat_delivered_through.sql"
             )),
             other => Err(StoreError::Invalid(format!(
                 "unknown migration version: {other}"

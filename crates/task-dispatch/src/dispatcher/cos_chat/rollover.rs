@@ -13,6 +13,10 @@
 //! - summary の水位（`summary_through_seq`）は配送 cursor（入力 message）と別に扱う。再試行の直前に
 //!   thread の summary を読み直し、1 回目の worker が checkpoint で水位を上げていればそれ以降だけを
 //!   未要約履歴として渡す。入力は変えない。
+//! - 差分配送（D2 付記）: resume で session の配送 cursor（`delivered_through_seq`）が分かれば、summary を
+//!   省き cursor より後の発言だけを渡す（[`history_for_run`]）。new・fresh・resume 拒否後の fresh 再試行・
+//!   再起動後の回収（前回の run が孤児の引き継ぎで終わった）・cursor 0 は全文。cursor は launch が
+//!   `completed` の run の後にだけ上げる。入力は cursor に関係なく `inputs` で必ず渡す。
 //! - 終端で context 枯渇（harness の event か `BudgetExhausted{kind: Context}`）を観測したら run の理由に
 //!   [`CONTEXT_EXHAUSTED_MARK`] を残し、次の run を fresh（`context_exhausted`）にする。
 //!
@@ -46,6 +50,9 @@ pub(crate) struct SessionChoice {
     pub session: ChatSession,
     pub mode: ChatRunSessionMode,
     pub reason: Option<&'static str>,
+    /// 差分配送の起点（D2 付記）: resume する session が既に持っている seq の水位。`None` は全文
+    /// （new・fresh・cursor 不明・前回の run が再起動後の回収で終わった session）。
+    pub delta_from: Option<u64>,
 }
 
 /// 前回の run（この thread の最新の終端 run）の終わり方。
@@ -53,6 +60,8 @@ pub(crate) struct SessionChoice {
 pub(crate) struct PreviousRunSignals {
     pub resume_refused: bool,
     pub context_exhausted: bool,
+    /// 再起動後の回収（孤児の引き継ぎ）で終わった。session の中身が不確かなので次は全文を渡す。
+    pub orphan_takeover: bool,
 }
 
 /// `run_id` を除く、この thread の最新の run の終わり方を DB から読む。現役 session（`session_row_id`）
@@ -100,6 +109,7 @@ pub(crate) fn previous_run_signals(
             return Ok(PreviousRunSignals {
                 resume_refused: reason.starts_with(RESUME_REFUSED_MARK),
                 context_exhausted: reason.starts_with(CONTEXT_EXHAUSTED_MARK),
+                orphan_takeover: reason == super::control::ORPHAN_TAKEOVER_REASON,
             });
         }
         before = page.next_before_seq;
@@ -137,6 +147,9 @@ pub(crate) fn choose_session(
     });
     let choice = match (decision, existing) {
         (CosChatSessionDecision::Resume, Some(old)) => SessionChoice {
+            delta_from: u64::try_from(old.delivered_through_seq)
+                .ok()
+                .filter(|cursor| *cursor > 0 && !previous.orphan_takeover),
             session: old,
             mode: ChatRunSessionMode::Resumed,
             reason: None,
@@ -145,6 +158,7 @@ pub(crate) fn choose_session(
             session: rotate_fresh(store, key, now)?,
             mode: decision.run_mode(),
             reason: decision.reason(),
+            delta_from: None,
         },
     };
     store
@@ -174,6 +188,44 @@ fn rotate_fresh(
     Ok(next)
 }
 
+/// run に渡す要約と履歴（D2 付記）。`delivered_through_seq` が `Some` のときは差分配送。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunHistory {
+    pub summary: Option<String>,
+    pub summary_through_seq: u64,
+    pub history: CosChatHistory,
+    pub delivered_through_seq: Option<u64>,
+}
+
+/// 起動時の要約と履歴。`delta_from` が `Some(cursor)`（resume で cursor が分かる）なら summary を省き、
+/// cursor より後で入力より前の発言だけを渡す。`None` なら summary＋未要約履歴の全文。summary の水位は
+/// どちらでも thread の値（checkpoint の期待値に使う）で、cursor とは独立。
+pub(crate) fn history_for_run(
+    store: &SqliteStore,
+    thread_id: &str,
+    input_seq: u64,
+    delta_from: Option<u64>,
+) -> Result<RunHistory, String> {
+    let Some(cursor) = delta_from else {
+        let (summary, through, history) = history_since_summary(store, thread_id, input_seq)?;
+        return Ok(RunHistory {
+            summary,
+            summary_through_seq: through,
+            history,
+            delivered_through_seq: None,
+        });
+    };
+    let (_, through) = store
+        .chat_thread_summary(thread_id)
+        .map_err(|e| e.to_string())?;
+    Ok(RunHistory {
+        summary: None,
+        summary_through_seq: through,
+        history: history_range(store, thread_id, cursor, input_seq)?,
+        delivered_through_seq: Some(cursor),
+    })
+}
+
 /// thread の summary を読み直し、入力 `input_seq` より前の未要約履歴を作る（配送 cursor と別）。
 pub(crate) fn history_since_summary(
     store: &SqliteStore,
@@ -183,6 +235,21 @@ pub(crate) fn history_since_summary(
     let (summary, through) = store
         .chat_thread_summary(thread_id)
         .map_err(|e| e.to_string())?;
+    Ok((
+        (!summary.is_empty()).then_some(summary),
+        through,
+        history_range(store, thread_id, through, input_seq)?,
+    ))
+}
+
+/// seq が `after` より後で `input_seq` より前の発言（`from_seq > through_seq` は空）。
+fn history_range(
+    store: &SqliteStore,
+    thread_id: &str,
+    after_seq: u64,
+    input_seq: u64,
+) -> Result<CosChatHistory, String> {
+    let through = after_seq;
     let from = through.saturating_add(1);
     let until = input_seq.saturating_sub(1);
     let mut messages = Vec::new();
@@ -216,15 +283,11 @@ pub(crate) fn history_since_summary(
     }
     messages.sort_by_key(|m| m.seq);
     messages.dedup_by_key(|m| m.seq);
-    Ok((
-        (!summary.is_empty()).then_some(summary),
-        through,
-        CosChatHistory {
-            from_seq: from as i64,
-            through_seq: until as i64,
-            messages,
-        },
-    ))
+    Ok(CosChatHistory {
+        from_seq: from as i64,
+        through_seq: until as i64,
+        messages,
+    })
 }
 
 /// run の usage から session 行へ足す値。`add_tokens` は従来どおり `input+output`（占有が取れない
@@ -457,6 +520,8 @@ fn prepare_fresh_retry(a: &ChatAttempt, refusal: &str) -> Result<(RunRequest, St
         chat.summary = summary;
         chat.summary_through_seq = i64::try_from(through).unwrap_or(i64::MAX);
         chat.unsummarized = history;
+        // D2 付記: the fresh session holds nothing yet, so the retry gets the full text.
+        chat.delivered_through_seq = None;
     }
     req.context.session = Some(SessionHandle {
         adapter: fresh.key.harness.clone(),

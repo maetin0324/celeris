@@ -2,11 +2,12 @@
 # CoS chat の prompt cache baseline / after 用 live ベンチ（ADR 2026-10-08-cos-chat-prompt-cache D3.4-2）。
 # scripts/dev/cos-chat-live.sh と同じ隔離方式（試験用 data dir・一時 DB・別 port・本番を読まない）。
 #
-#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl [claude-code|codex] [reduced]
+#   bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread [claude-code|codex] [reduced]
 #
 #   full      : 台本 scripts/dev/cos-chat-bench-script.json を流す（claude-code は LLM run 26 回）。
 #               claude_oauth の既存ログインだけを使う。API 課金 source は使わない
 #   cold-ttl  : 台本の s6_cold_ttl だけを流す（1h TTL 超過後の cold。約 63 分、LLM run 4 回）
+#   same-thread : 台本の s2_same_thread（同一 thread 10 turn）だけを流す（差分配送の before/after。LLM run 10 回）
 #   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。codex 等の確認用）
 #   第 5 引数 : harness（既定 claude-code）。codex は llm_source=codex_oauth の既存ログインが要る
 #
@@ -14,11 +15,11 @@
 # 本番の設定・DB・KB・port は読まない・書かない。終わりに daemon の process group を止める。
 set -eu
 usage() {
-  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl [claude-code|codex] [reduced]" >&2
+  echo "usage: bash scripts/dev/cos-chat-bench.sh <repo> <bin dir> <data dir> dry|full|cold-ttl|same-thread [claude-code|codex] [reduced]" >&2
   exit 2
 }
 [ "$#" -ge 4 ] && [ "$#" -le 6 ] || usage
-case "$4" in dry|full|cold-ttl) ;; *) usage ;; esac
+case "$4" in dry|full|cold-ttl|same-thread) ;; *) usage ;; esac
 MODE=$4
 HARNESS=${5:-claude-code}
 REDUCED=0; [ "${6:-}" = reduced ] && REDUCED=1

@@ -829,6 +829,14 @@
           "description": "Name of the environment variable holding the run credential. Never the value.",
           "type": "string"
         },
+        "delivered_through_seq": {
+          "description": "Delivery cursor of a resumed session (ADR 2026-10-05 D2 付記): the harness session already\nholds the thread through this seq. Then `summary` is omitted (it is in the session) and\n`unsummarized` holds only the messages after this seq. Absent = full delivery (new, fresh,\nfresh retry, restart recovery, or an unknown cursor).",
+          "format": "int64",
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
         "harness_capabilities": {
           "anyOf": [
             {

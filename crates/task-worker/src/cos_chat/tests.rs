@@ -78,6 +78,7 @@ fn chat() -> CosChatContext {
                 },
             ],
         },
+        delivered_through_seq: None,
         attachments: vec![
             attachment("a1", "screen.png", "image/png"),
             attachment("a2", "spec.pdf", "application/pdf"),
@@ -341,6 +342,46 @@ fn cos_chat_run_proto_unsummarized_range_is_explicit() {
     assert!(p.contains("- seq 6 [user] m6: 六"));
     assert!(
         p.contains("このプロンプトに載せていない範囲: seq 3..=5, seq 7, seq 9。"),
+        "{p}"
+    );
+}
+
+#[test]
+fn cos_chat_resume_delta_prompt_omits_summary_and_names_the_cursor() {
+    let mut c = chat();
+    c.delivered_through_seq = Some(7);
+    c.unsummarized = CosChatHistory {
+        from_seq: 8,
+        through_seq: 9,
+        messages: vec![CosChatHistoryMessage {
+            id: "m8".into(),
+            seq: 8,
+            role: "assistant".into(),
+            text: "八".into(),
+        }],
+    };
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(c.clone())));
+    assert!(!p.contains("決定: X を採用"), "{p}");
+    assert!(p.contains("要約は session 内。水位 seq 2。"), "{p}");
+    assert!(!p.contains("要約未作成の範囲"), "{p}");
+    assert!(p.contains("## 前回の配送以後の発言 (seq 8..=9)"), "{p}");
+    assert!(p.contains("- seq 8 [assistant] m8: 八"), "{p}");
+    assert!(
+        p.contains("このプロンプトに載せていない範囲: seq 9。"),
+        "{p}"
+    );
+    // The inputs and the checkpoint rule are delivered as before.
+    assert!(p.contains("### seq 10 (message m10) 【割り込み】"), "{p}");
+    assert!(p.contains("\"expected_summary_through_seq\":2"), "{p}");
+    // Nothing new besides the inputs.
+    c.unsummarized = CosChatHistory {
+        from_seq: 10,
+        through_seq: 9,
+        messages: vec![],
+    };
+    let p = prompt(&request(Path::new("/tmp/ws"), Some(c)));
+    assert!(
+        p.contains("## 前回の配送以後の発言\nseq 7 までは session 内にある。"),
         "{p}"
     );
 }

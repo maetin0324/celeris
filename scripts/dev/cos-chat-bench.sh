@@ -8,7 +8,9 @@
 #               claude_oauth の既存ログインだけを使う。API 課金 source は使わない
 #   cold-ttl  : 台本の s6_cold_ttl だけを流す（1h TTL 超過後の cold。約 63 分、LLM run 4 回）
 #   same-thread : 台本の s2_same_thread（同一 thread 10 turn）だけを流す（差分配送の before/after。LLM run 10 回）
-#   COS_CHAT_BENCH_LAB_DIR : same-thread は claude_max_lab の認証だけを隔離コピーして使う（必須）。
+#   COS_CHAT_BENCH_LAB_DIR : claude_max_lab の認証だけを隔離コピーして使う。
+#   COS_CHAT_BENCH_ACCOUNT_DIR : 人が許可した subscription account の認証を隔離コピーする。
+#   same-thread は上記のどちらか一方が必須。account_id はディレクトリ名を保持する。
 #   COS_CHAT_BENCH_SOURCE_SHA : 計測バイナリの出所 commit（archive build 用）。
 #   reduced   : 縮小版（新規 2 thread + 同一 thread 3 turn。codex 等の確認用）
 #   第 5 引数 : harness（既定 claude-code）。codex は llm_source=codex_oauth の既存ログインが要る
@@ -32,9 +34,17 @@ export COS_CHAT_BENCH_SOURCE_SHA
 if [ "$MODE" = same-thread ]; then
   [ "$HARNESS" = claude-code ] || usage
   [ ! -e "$OUT/celeris.sqlite3" ] || { echo 'same-thread requires a fresh data dir' >&2; exit 2; }
-  : "${COS_CHAT_BENCH_LAB_DIR:?same-thread requires the claude_max_lab account directory}"
-  [ "$(basename "$COS_CHAT_BENCH_LAB_DIR")" = claude_max_lab ] || usage
-  [ -f "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" ] || usage
+  if [ -n "${COS_CHAT_BENCH_LAB_DIR:-}" ]; then
+    [ -z "${COS_CHAT_BENCH_ACCOUNT_DIR:-}" ] || usage
+    [ "$(basename "$COS_CHAT_BENCH_LAB_DIR")" = claude_max_lab ] || usage
+    ACCOUNT_DIR=$COS_CHAT_BENCH_LAB_DIR
+  else
+    : "${COS_CHAT_BENCH_ACCOUNT_DIR:?same-thread requires an explicitly authorized subscription account directory}"
+    ACCOUNT_DIR=$COS_CHAT_BENCH_ACCOUNT_DIR
+  fi
+  ACCOUNT_ID=$(basename "$ACCOUNT_DIR")
+  [[ "$ACCOUNT_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || usage
+  [ -f "$ACCOUNT_DIR/.credentials.json" ] || usage
 fi
 for exe in celeris celerisctl; do
   [ -x "$BIN/$exe" ] || { echo "missing $BIN/$exe (cargo build -p celeris -p celerisctl)" >&2; exit 2; }
@@ -61,12 +71,12 @@ cp -r "$REPO/config/skills/cos-operator" "$REPO/config/skills/cos-inbox-triage" 
 chmod 600 "$OUT/api.token"; TOK=$(cat "$OUT/api.token")
 POOL_CONFIG=; COS_ACCOUNT=
 if [ "$MODE" = same-thread ]; then
-  mkdir -p "$OUT/accounts/claude_max_lab"
-  chmod 700 "$OUT/accounts" "$OUT/accounts/claude_max_lab"
-  cp "$COS_CHAT_BENCH_LAB_DIR/.credentials.json" "$OUT/accounts/claude_max_lab/"
-  chmod 600 "$OUT/accounts/claude_max_lab/.credentials.json"
+  mkdir -p "$OUT/accounts/$ACCOUNT_ID"
+  chmod 700 "$OUT/accounts" "$OUT/accounts/$ACCOUNT_ID"
+  cp "$ACCOUNT_DIR/.credentials.json" "$OUT/accounts/$ACCOUNT_ID/"
+  chmod 600 "$OUT/accounts/$ACCOUNT_ID/.credentials.json"
   POOL_CONFIG='account_pool = true'
-  COS_ACCOUNT='account_id = "claude_max_lab"'
+  COS_ACCOUNT="account_id = \"$ACCOUNT_ID\""
 fi
 cat > "$OUT/config.toml" <<EOF
 # cos-chat-bench.sh の一時設定（ADR-0126 試験用 data dir）。本番 ~/.config/celeris は使わない

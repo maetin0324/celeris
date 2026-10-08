@@ -17,31 +17,37 @@ completed: 2026-10-08
 - ADR `2026-10-06-web-bottom-tabbar-first-screen` D2 を追記で改訂（人の決定 2026-10-08）、`docs/frontend/DESIGN.md` とコードコメントを更新。
 - `/models`・`/browser/settings` の操作要素を 44×44px 以上にして mobile-audit を通した（audit-fix）。
 
-## 各葉の証拠
-
-- tabbar: `e2e:all e2e/shell/ e2e/chat/ e2e/work/first-screen` 83 passed（`2026-10-08-web-mobile-tab-board/tabbar.md`）。
-- docs: ADR D2・DESIGN.md 改訂（`.../docs.md`）。
-- audit-fix: mobile-audit exit 0（`.../audit-fix.md`）。
-- web-verify: lint・typecheck・test（Vitest 608・server 77）・e2e functional 313 passed・shell/chat/first-screen 83 passed・build・mobile-audit（38 path × 4 幅）すべて exit 0（`.../web-verify.md`）。
-
 ## 検証済み sha
 
-- sha12: **edb778e05fbb**（web-verify 後の HEAD edb778e05fbbb24a3dcc4512f55dedfd669edf27）。
-- `release.sh`: exit 0。gate.json ok=true、schema_version=59。
-- `verify.sh`: exit 1、**verify.json ok=false**（live_ok=false）。落ちた 2 件はどちらも web と無関係:
-  - `n-1-compat`: 本番 current 0b1cefac7ff7 は schema 57 で、この sha（main 由来の schema 59）の DB を開けない（`db schema version 59 is newer than the 57 this binary supports`）。本番を 59 以上へ昇格するまで解消しない既知の状態。
-  - `gui-e2e`: この run の sandbox に `@playwright/test` が無い（release の gui は `--prod` install）。環境起因。
-  - 通った: start-and-migrate, counts-match, main-gets, gui, smoke, web-app-start。
-- 成果物: `/local/celeris/data/workspaces/01M4CRGVA0Z9T2SQ2QR4XFR6H5/wu/release/artifacts/release/{gate.json,verify.json,sha12.txt}`。
+- S = `3828033aca7b6a7b851df9ba56fa0854ad18f3d8`（sha12 `3828033aca7b`）。S 以降の差分は `agent-docs/progress/` だけ（この整理 commit のみ）。
+- `release.sh S`: exit 0（gate.json ok、schema_version=59）。`SD_REPO=$PWD verify.sh 3828033aca7b`: exit 0、**verify.json ok=true**（live_ok=false）。
+  - 通った検査: start-and-migrate、counts-match、main-gets、gui、gui-e2e（`pnpm e2e:staging`、gui に `@playwright/test` を入れて実行）、smoke、web-app-start。
+  - `live_ok=false` は n-1-compat だけ。本番 current 0b1cefac7ff7 は schema 57 で、schema 59 の DB を開けない（`db schema version 59 is newer than the 57 this binary supports`）。本番 schema 57 との N-1 互換が構造的に無いためで、web の変更とは無関係。`ok` の判定（検査 1〜4・4b・6）には効かない。
+- 成果物: `wu/release2/artifacts/release/{gate.json,verify.json,sha12.txt}`。
+
+## web-recheck の結果
+
+main 統合後の HEAD（6641bfba）での再検証（`wu/web-recheck/artifacts/web-recheck.md`）。lint exit 0、typecheck exit 0、Vitest 608 passed・server 77 passed、e2e functional 313 passed、**e2e:nfr 111 passed**（`[nfr]` project、a11y/axe・parity/mobile-gate・realtime/refetch-scope を含む）、shell/chat/first-screen 83 passed、build・mobile-audit（38 path × 4 幅）exit 0。Rust は `test-parallel.sh`（4746 passed）と clippy -D warnings が exit 0。
 
 ## screenshot
 
-`/local/celeris/data/workspaces/01M4CRGVA0Z9T2SQ2QR4XFR6H5/wu/web-verify/artifacts/screenshots/`: `board-360.png`・`board-1440.png`・`tasks-360.png`・`tasks-1440.png`。
+`wu/web-recheck/artifacts/screenshots/`（`/board`・`/tasks` の 360px・1440px 各 1 枚、計 4 枚）。
+
+## 変更点
+
+- `web/components/shell/nav-items.ts` の `mobileTabs` 3 列目を `/board`（ボード、`kanban`）にした。並びは ホーム・受信箱・ボード・案件・その他。`/tasks` は「その他」のシートに落ち、`/tasks` では「その他」が現在地になる。md 以上の側面 nav は不変。
+- e2e を新しい並びに直し、`/board` が 360px の最初の 1 画面に入ることを first-screen の方式で確認。
+- ADR `2026-10-06-web-bottom-tabbar-first-screen` D2 を追記で改訂（人の決定 2026-10-08）。`docs/frontend/DESIGN.md` とコメントを更新。
+- `/models`・`/browser/settings` の操作要素を 44×44px 以上にして mobile-audit を通した。
 
 ## 人の昇格手順
 
-promote.sh は実行していない。GUI のリリース画面で `edb778e05fbb` を確認して昇格する。昇格は本番 DB の schema 59 への migration を伴うので、バックアップ後に行う。昇格後は verify を再実行すれば n-1-compat は新 current 基準になる。
+promote.sh は実行していない。人が GUI のリリース画面で `3828033aca7b` を選んで昇格する。昇格は schema 59 への migration を伴うので、バックアップ後に行う。
 
 ## 未解決事項
 
-- verify.json ok=false（上記 2 件。web の変更が原因ではない）。
+- なし（live_ok=false は上記のとおり本番が schema 57 のためで、昇格で解消する）。
+
+## 葉別の記録
+
+葉別 4 file（docs・tabbar・audit-fix・web-verify）は repo から外し、`wu/release2/artifacts/leaf-records/` に写した。

@@ -1,0 +1,28 @@
+{
+  "schema": "celeris.cos-chat-bench-script/1",
+  "note": "ADR 2026-10-08-cos-chat-prompt-cache D3.3 の台本。after 計測（T8）は同じ file を使う。変えたら baseline と比べない。",
+  "consult": "今の受信箱と走っている task の状況を 3 行で教えてください。",
+  "s1_new_threads": {"count": 10, "text_key": "consult"},
+  "s2_same_thread": {
+    "turns": [
+      {"kind": "consult", "text": "今の受信箱と走っている task の状況を 3 行で教えてください。"},
+      {"kind": "ops", "text": "試験用 daemon に task を 1 件起票してください。title は「bench: 確認用」、objective は「cos-chat-bench の計測用。作業は不要。」、check-cmd は「true」、reason は「人が bench で起票を依頼」。起票した task id を 1 行で返してください。"},
+      {"kind": "consult", "text": "さっき起票した task の状態を 1 行で教えてください。"},
+      {"kind": "ops", "text": "さっき起票した task にコメント「bench: 1 件目のコメント」を付けてください。付けたら「済」とだけ返してください。"},
+      {"kind": "consult", "text": "この thread でここまでにやったことを 2 行でまとめてください。"},
+      {"kind": "ops", "text": "さっきの task にコメント「bench: 2 件目のコメント」を付けてください。付けたら「済」とだけ返してください。"},
+      {"kind": "consult", "text": "今の受信箱に人の判断待ちはありますか。1 行で。"},
+      {"kind": "ops", "text": "さっきの task にコメント「bench: 3 件目のコメント」を付けてください。付けたら「済」とだけ返してください。"},
+      {"kind": "consult", "text": "この thread で付けたコメントの数を答えてください。"},
+      {"kind": "ops", "text": "さっきの task にコメント「bench: 4 件目のコメント」を付けてください。付けたら「済」とだけ返してください。"}
+    ]
+  },
+  "s5_cold_warm": {
+    "warm_gap_secs": 30,
+    "cold_gap_secs": 370,
+    "warm_turns": 3,
+    "cold_turns": 3,
+    "text": "今の受信箱の状況を 1 行で教えてください。"
+  },
+  "reduced": {"s1_new_threads": 2, "s2_turns": 3}
+}

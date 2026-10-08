@@ -19,7 +19,12 @@ fn id(prefix: &str, n: usize) -> String {
     format!("01M4{prefix}{:0>width$}", n, width = 22 - prefix.len())
 }
 
-fn chat(thread: usize, run: usize, inputs: Vec<CosChatInput>, history: Vec<CosChatHistoryMessage>) -> CosChatContext {
+fn chat(
+    thread: usize,
+    run: usize,
+    inputs: Vec<CosChatInput>,
+    history: Vec<CosChatHistoryMessage>,
+) -> CosChatContext {
     let through = inputs.iter().map(|i| i.seq).max().unwrap_or(0);
     CosChatContext {
         thread_id: id("THR", thread),
@@ -30,10 +35,20 @@ fn chat(thread: usize, run: usize, inputs: Vec<CosChatInput>, history: Vec<CosCh
 }
 
 trait With {
-    fn with(self, inputs: Vec<CosChatInput>, history: Vec<CosChatHistoryMessage>, through: i64) -> Self;
+    fn with(
+        self,
+        inputs: Vec<CosChatInput>,
+        history: Vec<CosChatHistoryMessage>,
+        through: i64,
+    ) -> Self;
 }
 impl With for CosChatContext {
-    fn with(mut self, inputs: Vec<CosChatInput>, history: Vec<CosChatHistoryMessage>, _through: i64) -> Self {
+    fn with(
+        mut self,
+        inputs: Vec<CosChatInput>,
+        history: Vec<CosChatHistoryMessage>,
+        _through: i64,
+    ) -> Self {
         let first = inputs.first().map(|i| i.seq).unwrap_or(1);
         self.unsummarized = CosChatHistory {
             from_seq: 1,
@@ -74,8 +89,12 @@ fn lcp_all(ps: &[String]) -> usize {
 }
 
 fn skill_bytes(name: &str) -> Value {
-    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../config/skills").join(name);
-    let skill = std::fs::metadata(dir.join("SKILL.md")).map(|m| m.len()).ok();
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../config/skills")
+        .join(name);
+    let skill = std::fs::metadata(dir.join("SKILL.md"))
+        .map(|m| m.len())
+        .ok();
     json!({ "skill_md_bytes": skill })
 }
 
@@ -98,14 +117,30 @@ fn cos_chat_bench_prompt_bytes() {
         let seq = (2 * turn - 1) as i64;
         let c = chat(100, 100 + turn, vec![input(seq, &user_text)], hist.clone());
         s2.push(prompt(&c, 100 + turn));
-        hist.push(CosChatHistoryMessage { id: id("MSG", seq as usize), seq, role: "user".into(), text: user_text.clone() });
-        hist.push(CosChatHistoryMessage { id: id("MSG", seq as usize + 1), seq: seq + 1, role: "assistant".into(), text: reply_text.clone() });
+        hist.push(CosChatHistoryMessage {
+            id: id("MSG", seq as usize),
+            seq,
+            role: "user".into(),
+            text: user_text.clone(),
+        });
+        hist.push(CosChatHistoryMessage {
+            id: id("MSG", seq as usize + 1),
+            seq: seq + 1,
+            role: "assistant".into(),
+            text: reply_text.clone(),
+        });
     }
     let s2_consecutive: Vec<usize> = s2.windows(2).map(|w| lcp(&w[0], &w[1])).collect();
 
     // Section sizes of the turn-1 prompt.
     let c1 = chat(1, 1, vec![input(1, CONSULT)], vec![]);
-    let header = format!("# CoS chat: thread {}\n\n(worker run {}, chat run {}, task {})\n\n", c1.thread_id, id("WRUN", 1), c1.run_id, id("TASK", 1));
+    let header = format!(
+        "# CoS chat: thread {}\n\n(worker run {}, chat run {}, task {})\n\n",
+        c1.thread_id,
+        id("WRUN", 1),
+        c1.run_id,
+        id("TASK", 1)
+    );
     let skills_sec = super::skills_section(&c1).len();
     let rules_sec = super::rules_section(&c1).len();
     let inputs_sec = super::inputs_section(&c1).len();
@@ -118,7 +153,13 @@ fn cos_chat_bench_prompt_bytes() {
         .enumerate()
         .map(|(i, p)| {
             let turn = i + 1;
-            let history_bytes = super::history_section(&chat(100, 100 + turn, vec![input((2 * turn - 1) as i64, &user_text)], s2_history(turn, &user_text, &reply_text))).len();
+            let history_bytes = super::history_section(&chat(
+                100,
+                100 + turn,
+                vec![input((2 * turn - 1) as i64, &user_text)],
+                s2_history(turn, &user_text, &reply_text),
+            ))
+            .len();
             json!({
                 "turn": turn,
                 "stdin_bytes": p.len(),
@@ -166,8 +207,18 @@ fn s2_history(turn: usize, user: &str, reply: &str) -> Vec<CosChatHistoryMessage
     let mut h = Vec::new();
     for t in 1..turn {
         let seq = (2 * t - 1) as i64;
-        h.push(CosChatHistoryMessage { id: id("MSG", seq as usize), seq, role: "user".into(), text: user.into() });
-        h.push(CosChatHistoryMessage { id: id("MSG", seq as usize + 1), seq: seq + 1, role: "assistant".into(), text: reply.into() });
+        h.push(CosChatHistoryMessage {
+            id: id("MSG", seq as usize),
+            seq,
+            role: "user".into(),
+            text: user.into(),
+        });
+        h.push(CosChatHistoryMessage {
+            id: id("MSG", seq as usize + 1),
+            seq: seq + 1,
+            role: "assistant".into(),
+            text: reply.into(),
+        });
     }
     h
 }

@@ -422,6 +422,15 @@ export type Event =
       wait_id: string;
     }
   | {
+      code: BrowserPrerequisiteCode;
+      message: string;
+      type: "browser_prerequisite_blocked";
+    }
+  | {
+      code: BrowserPrerequisiteCode;
+      type: "browser_prerequisite_resumed";
+    }
+  | {
       type: "cluster_job_wait_started";
       wait: ClusterJobWait;
     }
@@ -1170,6 +1179,19 @@ export type IntegrationRepairExhaustReason =
 export type BrowserRunState =
   "RUNNING" | "WAITING_FOR_AUTH" | "WAITING_FOR_APPROVAL" | "WAITING_FOR_HUMAN" | "COMPLETED" | "FAILED";
 /**
+ * 台帳の状態（D1.4 の表）。`Ok` 以外は browser task を dispatch の前で止める。
+ */
+export type BrowserPrerequisiteCode =
+  | "ok"
+  | "missing"
+  | "invalid"
+  | "stale_release"
+  | "stale_agent_browser"
+  | "agent_browser_missing"
+  | "no_conformant_backend"
+  | "ledger_lacks_credential"
+  | "browser_policy_missing";
+/**
  * 1 つの job の状態（scheduler の文字を正規化したもの）。
  */
 export type ClusterJobState = "queued" | "held" | "running" | "exiting" | "finished" | "gone" | "unknown";
@@ -1566,6 +1588,13 @@ export type AttentionItem =
     }
   | {
       at: string;
+      code: BrowserPrerequisiteCode;
+      message: string;
+      task: TaskRef;
+      type: "browser_prerequisite";
+    }
+  | {
+      at: string;
       cluster: string;
       host: string;
       tasks: number;
@@ -1812,6 +1841,10 @@ export type InstanceRole = "active" | "standby" | "draining" | "verify";
 export type RepoRun = "auto" | "host" | "container";
 export type Billing = "subscription" | "metered_api" | "self_hosted";
 export type Objective = "quality_first" | "balanced" | "resource_first";
+/**
+ * 行がどこから来たか。
+ */
+export type BrowserSitePolicySource = "api" | "config";
 /**
  * ADR-0072 D20（Phase E5）: タスクの状態バッジの横に出す、今どの段階かの導出値（D6 の R3 の代替。
  * 状態機械そのものには足さない）。`Task.status` から次のとおり決める（[`build_execution_view`] 参照）:
@@ -2125,6 +2158,9 @@ export interface ApiV1Schema {
   run_list: RunList;
   secret_put: SecretPutResult;
   secrets: SecretList;
+  site_policy_list: SitePolicyList;
+  site_policy_put: SitePolicyPutBody;
+  site_policy_put_result: SitePolicyPutResult;
   skill_detail: SkillDetailView;
   skill_list: SkillList;
   skill_put: SkillPutBody;
@@ -2708,6 +2744,11 @@ export interface BrowserSettingsPatch {
     [k: string]: string;
   } | null;
   credential_policy_ids?: string[] | null;
+  /**
+   * ADR 2026-10-08-browser-prod-enablement D3: `true` は grant の `allowed_actions` に `credential_use` を
+   * 加え（欄が無い grant は Phase 1 の集合を実体化してから）、`false` は外す。使用は毎回人の承認（変わらない）。
+   */
+  credential_use?: boolean | null;
   harnesses?: HarnessPrefs | null;
 }
 /**
@@ -10694,6 +10735,53 @@ export interface SecretUse {
    * `"adapter" | "provider"`。
    */
   scope: string;
+}
+/**
+ * `GET /browser/site-policies` の応答。
+ */
+export interface SitePolicyList {
+  items: BrowserSitePolicyRecord[];
+}
+/**
+ * 保存された site policy（中身＋出自と時刻）。
+ */
+export interface BrowserSitePolicyRecord {
+  /**
+   * RFC3339。
+   */
+  created_at: string;
+  exact_origin: string;
+  login_url: string;
+  password_selector: string;
+  policy_id: string;
+  source: BrowserSitePolicySource;
+  submit_selector?: string | null;
+  /**
+   * RFC3339。
+   */
+  updated_at: string;
+}
+/**
+ * ADR 2026-10-08-browser-prod-enablement D3: `/browser/site-policies` の本文・応答。
+ */
+export interface SitePolicyPutBody {
+  /**
+   * 正規形の origin（`https://host[:port]`）。
+   */
+  exact_origin: string;
+  /**
+   * `exact_origin` 直下のログイン URL。
+   */
+  login_url: string;
+  password_selector: string;
+  submit_selector?: string | null;
+}
+/**
+ * `PUT` の応答（新規作成は 201、置換は 200）。
+ */
+export interface SitePolicyPutResult {
+  created: boolean;
+  policy: BrowserSitePolicyRecord;
 }
 /**
  * `GET /skills/{name}`。

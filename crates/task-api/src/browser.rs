@@ -121,19 +121,127 @@ impl TrustedSitePolicy {
     }
 }
 
+impl From<task_core::BrowserSitePolicy> for TrustedSitePolicy {
+    fn from(p: task_core::BrowserSitePolicy) -> Self {
+        Self {
+            policy_id: p.policy_id,
+            exact_origin: p.exact_origin,
+            login_url: p.login_url,
+            password_selector: p.password_selector,
+            submit_selector: p.submit_selector,
+        }
+    }
+}
+
+impl From<TrustedSitePolicy> for task_core::BrowserSitePolicy {
+    fn from(p: TrustedSitePolicy) -> Self {
+        Self {
+            policy_id: p.policy_id,
+            exact_origin: p.exact_origin,
+            login_url: p.login_url,
+            password_selector: p.password_selector,
+            submit_selector: p.submit_selector,
+        }
+    }
+}
+
+/// ADR 2026-10-08-browser-prod-enablement D3: 手動登録のたびに site policy を引く口。
+/// 本番は DB（`StoreSitePolicies`）を毎回読むので、API の変更が daemon の再起動なしに次の登録から効く。
+pub trait SitePolicyLookup: Send + Sync {
+    /// `policy_id` と `origin` が両方一致する policy。引けない（DB の失敗）ときは `Unavailable`。
+    fn lookup(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Result<Option<TrustedSitePolicy>, BrokerFailure>;
+}
+
+impl SitePolicyLookup for Vec<TrustedSitePolicy> {
+    fn lookup(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Result<Option<TrustedSitePolicy>, BrokerFailure> {
+        Ok(self
+            .iter()
+            .find(|p| p.policy_id == policy_id && p.exact_origin == origin)
+            .cloned())
+    }
+}
+
+/// DB の `browser_site_policies` を毎回読む lookup（正本。ADR 2026-10-08 D3）。
+pub struct StoreSitePolicies(pub Arc<task_core::SqliteStore>);
+
+impl SitePolicyLookup for StoreSitePolicies {
+    fn lookup(
+        &self,
+        policy_id: &str,
+        origin: &str,
+    ) -> Result<Option<TrustedSitePolicy>, BrokerFailure> {
+        let record = self
+            .0
+            .browser_site_policy_get(policy_id)
+            .map_err(|_| BrokerFailure::Unavailable)?;
+        Ok(record
+            .filter(|r| r.policy.exact_origin == origin)
+            .map(|r| r.policy.into()))
+    }
+}
+
+/// broker control が持つ site policy の口（既定は空の固定集合）。
+#[derive(Clone)]
+pub struct SitePolicies(pub Arc<dyn SitePolicyLookup>);
+
+impl Default for SitePolicies {
+    fn default() -> Self {
+        Self(Arc::new(Vec::<TrustedSitePolicy>::new()))
+    }
+}
+
+impl std::fmt::Debug for SitePolicies {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SitePolicies(<lookup>)")
+    }
+}
+
+impl From<Vec<TrustedSitePolicy>> for SitePolicies {
+    fn from(policies: Vec<TrustedSitePolicy>) -> Self {
+        Self(Arc::new(policies))
+    }
+}
+
 /// Production control client. Only the daemon PID admitted by credentiald may use this socket.
 #[derive(Debug, Clone, Default)]
 pub struct UnixCredentialBrokerControl {
     pub socket: std::path::PathBuf,
     /// 管理者の site policy。該当が無い登録は selector 無しの policy になり、broker は注入を拒否する。
-    pub site_policies: Vec<TrustedSitePolicy>,
+    pub site_policies: SitePolicies,
 }
 
 impl UnixCredentialBrokerControl {
-    fn site_policy(&self, policy_id: &str, origin: &str) -> Option<&TrustedSitePolicy> {
-        self.site_policies
-            .iter()
-            .find(|p| p.policy_id == policy_id && p.exact_origin == origin)
+    /// 手動登録で broker に渡す `CredentialPolicy`（登録のたびに site policy を引き直す）。
+    pub fn credential_policy(
+        &self,
+        task_id: &str,
+        policy_id: &str,
+        origin: &str,
+    ) -> Result<celeris_credentiald::CredentialPolicy, BrokerFailure> {
+        let site = self.site_policies.0.lookup(policy_id, origin)?;
+        if site.as_ref().is_some_and(|p| p.validate().is_err()) {
+            return Err(BrokerFailure::Rejected("site_policy_invalid"));
+        }
+        Ok(celeris_credentiald::CredentialPolicy {
+            policy_id: policy_id.to_string(),
+            revision: 1,
+            exact_origin: origin.to_string(),
+            task_id: task_id.to_string(),
+            max_ttl_seconds: 60,
+            require_approval: true,
+            allow_persistence: false,
+            login_url: site.as_ref().map(|p| p.login_url.clone()),
+            password_selector: site.as_ref().map(|p| p.password_selector.clone()),
+            submit_selector: site.and_then(|p| p.submit_selector),
+        })
     }
 }
 
@@ -153,27 +261,16 @@ impl CredentialBrokerControl for UnixCredentialBrokerControl {
             revision: u64,
             secret: Secret<'a>,
         }
-        let site = self.site_policy(&registration.policy_id, &registration.origin);
-        if site.is_some_and(|p| p.validate().is_err()) {
-            return Err(BrokerFailure::Rejected("site_policy_invalid"));
-        }
+        let policy = self.credential_policy(
+            &registration.task_id.to_string(),
+            &registration.policy_id,
+            &registration.origin,
+        )?;
         let credential_id = format!("cred-{}", registration.wait_id);
         let reference = CredentialRef {
             credential_id: credential_id.clone(),
             provider: "manual".into(),
             policy_id: registration.policy_id.clone(),
-        };
-        let policy = CredentialPolicy {
-            policy_id: registration.policy_id.clone(),
-            revision: 1,
-            exact_origin: registration.origin.clone(),
-            task_id: registration.task_id.to_string(),
-            max_ttl_seconds: 60,
-            require_approval: true,
-            allow_persistence: false,
-            login_url: site.map(|p| p.login_url.clone()),
-            password_selector: site.map(|p| p.password_selector.clone()),
-            submit_selector: site.and_then(|p| p.submit_selector.clone()),
         };
         let request = Request {
             op: "register",

@@ -1,7 +1,7 @@
 //! `celerisctl cron` — manage scheduled jobs through the daemon HTTP API.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -174,8 +174,20 @@ pub(crate) fn request(
     let (authority, base_path) = rest
         .split_once('/')
         .map_or((rest, ""), |(host, path)| (host, path));
-    let mut stream = TcpStream::connect(authority)
-        .map_err(|e| CliError::msg(format!("cron API connection failed: {e}")))?;
+    let timeout = std::time::Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + timeout;
+    let mut stream = authority
+        .to_socket_addrs()
+        .map_err(|_| CliError::msg("invalid API address"))?
+        .find_map(|addr| {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            TcpStream::connect_timeout(&addr, remaining).ok()
+        })
+        .ok_or_else(|| CliError::msg("API connection failed"))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .and_then(|()| stream.set_write_timeout(Some(timeout)))
+        .map_err(|e| CliError::msg(e.to_string()))?;
     let payload = body
         .map(|v| serde_json::to_vec(&v).map_err(|e| CliError::msg(e.to_string())))
         .transpose()?

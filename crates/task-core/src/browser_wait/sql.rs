@@ -443,6 +443,11 @@ impl BrowserWaitStore for SqliteStore {
             .optional()?;
         match state.as_deref() {
             Some("draft" | "ready") => {}
+            // ADR 2026-10-08-browser-prod-enablement D4: D2 の前提 gate で止めた task も編集を受ける
+            // （人待ちの `blocked` は binding hash があるので変えない）。
+            Some("blocked")
+                if SqliteStore::last_transitioned_reason_tx(&tx, task_id)?.as_deref()
+                    == Some(crate::browser_prerequisite::REASON_BLOCKED) => {}
             Some(_) => {
                 return Err(StoreError::Invalid(
                     "browser policy can only change while draft or ready".into(),

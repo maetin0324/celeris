@@ -120,6 +120,13 @@ pub enum Trigger {
     /// ADR-0090 D2: 待っていた job がすべて終わった（daemon の poll）。`Blocked → Ready`、attempts 不変、
     /// `reason = "cluster_job_resume"`。次の run は continuation（前置きに job の最終状態と終了コード）。
     ClusterJobResume,
+    /// ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳・task policy）が無いので
+    /// dispatch の前に止めた（`Ready → Blocked`）、または worker が台帳由来の失敗を返した
+    /// （`Running → Blocked`）。attempts 不変、`reason = "browser_prerequisite"`。infra 再試行に回さない。
+    BrowserPrereqBlock,
+    /// ADR 2026-10-08-browser-prod-enablement D2: 前提が揃った（dispatcher の tick の再評価）。
+    /// `Blocked → Ready`、attempts 不変、`reason = "browser_prerequisite_resolved"`。
+    BrowserPrereqResume,
 }
 
 impl Trigger {
@@ -164,6 +171,8 @@ impl Trigger {
             Trigger::PlanComplete => "plan_complete",
             Trigger::ClusterJobWait => crate::cluster_job::REASON_WAITING,
             Trigger::ClusterJobResume => crate::cluster_job::REASON_RESUME,
+            Trigger::BrowserPrereqBlock => crate::browser_prerequisite::REASON_BLOCKED,
+            Trigger::BrowserPrereqResume => crate::browser_prerequisite::REASON_RESOLVED,
         }
     }
 
@@ -624,6 +633,29 @@ pub fn transition(s: &StateView, t: &Trigger) -> Result<Outcome, InvalidTransiti
             }
         }
         Trigger::ClusterJobResume => {
+            if s.status == Status::Blocked {
+                Ok(Outcome {
+                    next: Status::Ready,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提待ち（Status は増やさず `Blocked`）。
+        Trigger::BrowserPrereqBlock => {
+            if matches!(s.status, Status::Ready | Status::Running) {
+                Ok(Outcome {
+                    next: Status::Blocked,
+                    attempts: s.attempts,
+                    reason: t.name(),
+                })
+            } else {
+                Err(invalid(s, t))
+            }
+        }
+        Trigger::BrowserPrereqResume => {
             if s.status == Status::Blocked {
                 Ok(Outcome {
                     next: Status::Ready,

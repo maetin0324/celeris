@@ -281,7 +281,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（210 = 表 180 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
+## 2. エンドポイント一覧（210 = 表 180 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3。site policy の 3 端点は §3.132）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -778,10 +778,10 @@ run は止めない。同じ内容は `worker_progress`（`kind = status`・`err
 拒否（`reason` = `unknown` / `mismatch` / `revoked` / `expired` / `reuse` / `limit`）。task に属さず、疑似 task
 `trusted_device::trusted_device_event_task_id()` の列に入る。端末の秘密も hash も載せない。拒否の `device_id` は実在する id のときだけ。
 
-`types` の語彙は `task_api::query::EVENT_TYPES`（73 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
+`types` の語彙は `task_api::query::EVENT_TYPES`（76 種。主なもの）: `created`、`transitioned`、`worker_started`、`worker_progress`、`worker_policy_violation`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
-`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
+`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`browser_prerequisite_blocked`、`browser_prerequisite_resumed`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
 `cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`target_sweep_ran`、`routing_decided`、
 `checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
 `execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、
@@ -3092,6 +3092,8 @@ task の **subtree の一時停止**。本文は `{}` か空（未知の欄は 4
 
 ADR-0090 D5: `TaskDetail.cluster_job_wait?: ClusterJobWaitView` — この task が待っているクラスタ job（`cluster_job_waits` の `waiting` の行。無ければ省略）。欄は `wait_id`、`work_unit_id?`（WU の run の wait）、`run_id`、`cluster`、`scheduler`（`pbs` | `slurm`）、`jobs[]`（`ClusterJobStatus`: `job_id`、`state` = `queued` | `held` | `running` | `exiting` | `finished` | `gone` | `unknown`、`exit_status?`、`raw_state?`。申告の順、まだ poll していない job は `unknown`）、`status_line`（`42634 (R) 42635 (Q)`）、`poll_secs`、`created_at`、`deadline`、`last_polled_at?`、`next_poll_at?`（`last_polled_at + poll_secs`）、`summary?`。wait の間の task は `blocked`（直前の遷移の reason `waiting_for_cluster_jobs`）で、受信箱の質問には出ず、`POST /tasks/{id}/answer` は 409 `invalid_transition`（trigger `cluster_job_wait_pending`）。すべての job が終われば daemon が `cluster_job_resume` で `ready` に戻す。上限（`deadline`）を過ぎると wait は `timed_out` になり、質問（延長／job の取り消し／取り下げ）が受信箱に出る。v2 / v3 の計画の unit の wait では task は `ready` のままで、unit が `blocked(cluster_jobs)`（`WorkUnitBlockedReason::ClusterJobs`）になる。`runs[].status` / `WorkerFinished.end` に `waiting` が加わった。events の `types` は `cluster_job_wait_started` / `cluster_job_wait_polled`（状態が変わった poll だけ）/ `cluster_job_wait_finished`（`state` = `satisfied` | `timed_out` | `cancelled`）を受ける。
 
+ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳）が無い・古いとき、browser task は dispatch の前に `blocked`（直前の遷移の reason `browser_prerequisite`、attempts 不変）になり、`browser_prerequisite_blocked`（`code` = `missing` | `invalid` | `stale_release` | `stale_agent_browser` | `agent_browser_missing` | `no_conformant_backend` | `ledger_lacks_credential` | `browser_policy_missing`、`message` = 人向けの固定の文。path・秘密は載せない）を 1 回残す。worker が台帳を読めなかった run も infra_requeue にせず同じく止める。台帳が揃うと daemon が `browser_prerequisite_resolved` で `ready` に戻し、`browser_prerequisite_resumed`（`code` は止めたときの code）を残す。
+
 #### 3.125.10 `GET /tasks/{id}/task-tree?root=` → 200 `TaskTreeView`
 
 ADR-0079 D11: 再帰的な task の木と roll-up（読み取り。トークン不要）。ADR の `GET /tasks/{id}/tree` は ADR-0043 D6 の作業ツリーの閲覧（`TreeView`）が既に使っているため、パスは `task-tree`（ADR-0079 付記「R4a 実装時の逸脱・明確化」）。既定は問い合わせた task を根にした subtree、`root=true` なら木の root から。応答は `root_id`（木の root）、`subtree_root`（この view の根）、`tree_enabled`（`[execution.tree] enabled`）、`nodes[]`（`TaskTreeNode`。前順 = 親が子より先、先頭が view の根）、`totals`（view の根の subtree の合計。`nodes[0].subtree` と同じ）が必須で、`limits`（`TreeLimitsUsage`: `leaves` / `max_leaves`、`runs` / `max_runs`〈reviewer を除く〉、`replans` / `max_replans`、`tokens` / `max_tokens?`、`open_decisions` / `max_open_decisions`。`max_*` は `raise-once` / `replan` の回答の余裕を当てた値）は view の根が木の root のときだけ。各節点は `id`、`title`、`status`、`phase?`（`TreeNodePhase`: `planning` / `executing` / `repairing` / `verifying` / `awaiting_human` / `awaiting_children` / `awaiting_plan_approval` / `held_on_decision`〈節点の `self` の決定、または答えを待つ `blocked(decision)` の unit〉/ `blocked_infra`〈子の基盤の失敗の unit〉。終端・待ちの無い task は省略）、`depth`（root = 1）、`parent_id?`（view の根では省略）、`parent_unit_key?` / `parent_stage?`（この節点を作った親の unit）、`plan_version?`、`open_decisions`（この節点が出した未回答の決定）、`stall?`（ADR-0079 D10。`TreeNodeStall`: `reason`、`since?`、`detail`。節点の最後の event が `StallDetected` で終端でないときだけ = D10 の「理由なく止まっています」。何か event が積まれれば消える）、`children[]`（作られた順）、`units[]`（`TreeUnitView`: `key`、`stage?`、`kind`、`title`、`status`、`blocked_reason?`、`child_task_id?`。統合 WU と superseded を含む履歴）、`own`（自分の分）、`subtree`（自分と子孫の合計）。`own` / `subtree` は `RollupMetrics`（§3.125.5 の `group_by=depth` と同じ形）で、件数・トークン・定価・quota は和、`cost_usd_complete` は論理積、壁時計は最小の開始と最大の終わりなので、root の `subtree` は各節点の `own` の和と一致する。木の無い task（`[execution.tree] enabled = false` の旧い task を含む）は 1 節点（深さ 1）の木。不明な task は 404 `task_not_found`、知らないクエリ・真偽値でない `root` は 400。`GET /tasks/{id}/execution` の `metrics` は自分の分のまま（互換）。
@@ -3491,6 +3493,40 @@ KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fix
 
 claims の `device_id` が path と一致すること。行を即時に失効させ（`revoked_reason = owner`）、`trusted_device_revoked` を actor 付きで追記する。
 `{revoked, device}` の `revoked` は今回失効させたか（既に失効済みなら `false`・event なし）。未知の id は 404 `device_not_found`。
+
+### 3.132 ブラウザの site policy と grant の credential 設定（ADR 2026-10-08-browser-prod-enablement D3）
+
+site policy（ログインの exact origin・URL・selector。秘密は持たない）の正本は DB の `browser_site_policies`（migration 0060）。
+全端点が**管理系**（daemon token）。web は owner session を要求してから呼ぶ。daemon の broker control は手動登録のたびに DB を
+読む（`task_api::browser::StoreSitePolicies`）ので、変更は daemon の再起動なしに次の判定から効く。変更は同じ transaction で
+追記専用の `browser_site_policy_events`（`policy_id`・`op`〈`upsert` / `delete`〉・`source`・`actor`。URL・selector は載せない）に残す
+（site policy には task_id が無いので、`org_browser_events` と同じく task の events とは別の流れ）。
+
+config の `[[api.browser_site_policies]]` は空の DB に入れる種: daemon 起動時に検証し（失敗は起動エラー）、DB に同じ `policy_id` が
+無いものだけを `source = config` で入れる。DB にあれば DB が勝つ。
+
+#### 3.132.1 `GET /browser/site-policies` → 200 `SitePolicyList`
+
+`{items}`。`items[]` は `policy_id` 昇順の `BrowserSitePolicyRecord`（`policy_id`・`exact_origin`・`login_url`・`password_selector`・
+`submit_selector?`・`source`〈`api` / `config`〉・`created_at`・`updated_at`）。
+
+#### 3.132.2 `PUT /browser/site-policies/{policy_id}` → 201（作成）/ 200（置換） `SitePolicyPutResult`
+
+本文 `SitePolicyPutBody` `{exact_origin, login_url, password_selector, submit_selector?}`（`deny_unknown_fields`）。`policy_id` は
+`[A-Za-z0-9._-]` の 1〜64 文字。ADR-0110 D2 の形式検証（`TrustedSitePolicy::validate`）に落ちれば 422 `site_policy_invalid`
+（`reason` に固定 code。id の形・本文の形は `policy_id` / `body`）。応答 `{created, policy}`。置換は `source = api` にする。
+
+#### 3.132.3 `DELETE /browser/site-policies/{policy_id}` → 204
+
+いずれかの組織のノードの grant の `credential_policy_ids` が参照している、または未解決（`pending` / `registered` / `approved`）の
+browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`wait_ids`）。無ければ 404 `site_policy_not_found`。
+
+#### 3.132.4 `PATCH /org/{id}/browser-settings` の追加欄
+
+- `credential_use: bool`: `true` は grant の `allowed_actions` に `credential_use` を加える（欄が無い grant は Phase 1 の集合を実体化して
+  から）。`false` は外す。`allowed_actions` の任意編集は開けない。使用は毎回人の承認のまま（`BrowserAction::ALWAYS_APPROVED`）。
+- `credential_policy_ids` の各 id が `browser_site_policies` に無ければ 422 `unknown_site_policy`（`policy_ids`）。
+- 変化は従来どおり `org_browser_events` の before/after（`allowed_actions` を含む）に残る。
 
 ---
 

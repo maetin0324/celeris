@@ -54,3 +54,5 @@ pub mod worker;
 pub mod workspace;
 
 pub mod docs_maintenance;
+
+mod browser_doctor;

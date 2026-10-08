@@ -312,6 +312,12 @@ export type AttentionItem = {
   "type": "unroutable";
 } | {
   "at": string;
+  "code": BrowserPrerequisiteCode;
+  "message": string;
+  "task": TaskRef;
+  "type": "browser_prerequisite";
+} | {
+  "at": string;
   "cluster": string;
   "host": string;
   "tasks": number;
@@ -429,6 +435,8 @@ export type BrowserPolicyBinding = {
   "revision": number;
 };
 
+export type BrowserPrerequisiteCode = "ok" | "missing" | "invalid" | "stale_release" | "stale_agent_browser" | "agent_browser_missing" | "no_conformant_backend" | "ledger_lacks_credential" | "browser_policy_missing";
+
 export type BrowserRegisteredBody = {
   "attestation": HumanAttestation;
   "expected_version": number;
@@ -469,8 +477,22 @@ export type BrowserSettingsPatch = {
   [key: string]: string;
 } | null;
   "credential_policy_ids"?: Array<string> | null;
+  "credential_use"?: boolean | null;
   "harnesses"?: HarnessPrefs | null;
 };
+
+export type BrowserSitePolicyRecord = {
+  "created_at": string;
+  "exact_origin": string;
+  "login_url": string;
+  "password_selector": string;
+  "policy_id": string;
+  "source": BrowserSitePolicySource;
+  "submit_selector"?: string | null;
+  "updated_at": string;
+};
+
+export type BrowserSitePolicySource = "api" | "config";
 
 export type BrowserWait = {
   "approval_id"?: string | null;
@@ -2070,6 +2092,13 @@ export type Event = {
   "type": "browser_wait_resolved";
   "version": number;
   "wait_id": string;
+} | {
+  "code": BrowserPrerequisiteCode;
+  "message": string;
+  "type": "browser_prerequisite_blocked";
+} | {
+  "code": BrowserPrerequisiteCode;
+  "type": "browser_prerequisite_resumed";
 } | {
   "type": "cluster_job_wait_started";
   "wait": ClusterJobWait;
@@ -5242,6 +5271,22 @@ export type SideIntent = {
   "diffstat"?: FileDiffStat | null;
   "path": string;
   "unavailable"?: string | null;
+};
+
+export type SitePolicyList = {
+  "items": Array<BrowserSitePolicyRecord>;
+};
+
+export type SitePolicyPutBody = {
+  "exact_origin": string;
+  "login_url": string;
+  "password_selector": string;
+  "submit_selector"?: string | null;
+};
+
+export type SitePolicyPutResult = {
+  "created": boolean;
+  "policy": BrowserSitePolicyRecord;
 };
 
 export type SkillDetailView = {

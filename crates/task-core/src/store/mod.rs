@@ -98,6 +98,7 @@ use crate::transition::{InvalidTransition, Trigger};
 
 mod approvals;
 mod behind_targets;
+mod browser_policy_auto;
 mod cluster;
 mod events;
 mod execution;
@@ -114,7 +115,12 @@ mod query;
 mod repos;
 mod routing_log;
 mod routing_shadow;
+mod site_policies;
 pub use routing_shadow::ShadowReservationAudit;
+pub use site_policies::{
+    BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
+    BrowserSitePolicyReferences, BrowserSitePolicySource,
+};
 mod task_store;
 mod task_store_impl;
 mod tasks;

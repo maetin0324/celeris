@@ -47,6 +47,7 @@ pub struct ApiState {
     pub(crate) tuning: StreamTuning,
     /// ADR-0080 D5: browser の人の操作に要る鍵と broker。
     pub(crate) browser: Arc<crate::browser::BrowserApiConfig>,
+    pub(crate) browser_readiness: Option<crate::browser_readiness::ReadinessProbe>,
     /// ADR-0101（P3-A）: identity の封緘。`None` なら identity API は 503 `identity_unavailable`。
     pub(crate) identity_sealer: Option<Arc<celeris_credentiald::identity_seal::IdentitySealer>>,
     pub(crate) live_grants: Arc<Mutex<HashMap<String, crate::browser_live::LiveGrantRecord>>>,
@@ -218,12 +219,22 @@ impl ApiState {
             inner: Arc::new(inner),
             tuning: StreamTuning::default(),
             browser,
+            browser_readiness: None,
             identity_sealer: None,
             live_sessions: None,
             chat: Arc::new(chat),
             live_grants: Arc::new(Mutex::new(HashMap::new())),
             clock: system_clock(),
         })
+    }
+
+    /// D5: daemon 自身の設定・環境で行う読み取り専用点検を結線する。
+    pub fn with_browser_readiness(
+        mut self,
+        probe: crate::browser_readiness::ReadinessProbe,
+    ) -> Self {
+        self.browser_readiness = Some(probe);
+        self
     }
 
     /// ADR-0080 D5: browser の鍵・broker を差し替える（テストと、起動後に broker を結線する経路）。

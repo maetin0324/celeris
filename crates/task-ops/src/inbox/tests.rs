@@ -1393,3 +1393,82 @@ fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
     );
     assert_eq!(attention_ids().len(), 2);
 }
+
+/// ADR 2026-10-08-browser-prod-enablement D2・D4: `blocked(browser_prerequisite)` の task は受信箱の attention に
+/// 最後の `BrowserPrerequisiteBlocked` の message 付きで出て（共通形では browser の人手の項目）、
+/// `BrowserPrerequisiteResumed` で ready に戻った後は出ない。
+#[test]
+fn browser_policy_missing_inbox_item_carries_message_and_disappears_after_resume() {
+    use task_core::browser_prerequisite::BrowserPrerequisiteCode;
+    let store = SqliteStore::open_in_memory().expect("open store");
+    let mut task = sample_task(TaskKind::Execute, Status::Ready);
+    task.skills = vec![task_core::browser::BROWSER_SKILL.into()];
+    task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec!["https://app.example.com".into()],
+    });
+    store.insert(&task).expect("insert task");
+    let code = BrowserPrerequisiteCode::BrowserPolicyMissing;
+    store
+        .apply_transition_with_events(
+            task.id,
+            task_core::Trigger::BrowserPrereqBlock,
+            vec![Event::BrowserPrerequisiteBlocked {
+                code,
+                message: code.message().to_string(),
+            }],
+        )
+        .expect("block");
+
+    let ctx = view_ctx();
+    let now = OffsetDateTime::now_utc();
+    let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
+    let items: Vec<_> = result
+        .attention
+        .iter()
+        .filter_map(|a| match a {
+            AttentionItem::BrowserPrerequisite {
+                task: t,
+                code,
+                message,
+                ..
+            } => Some((t.id, *code, message.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(items, [(task.id, code, code.message().to_string())]);
+    assert!(items[0].2.contains("task 詳細"));
+    let human = crate::human_inbox::human_inbox(&store, None, &ctx, now, &no_evidence)
+        .expect("human inbox");
+    let item = human
+        .items
+        .iter()
+        .find(|i| i.id.starts_with("browser_prerequisite-"))
+        .expect("human inbox item");
+    assert_eq!(item.kind, crate::human_inbox::InboxKind::BrowserWait);
+    assert_eq!(item.detail.as_deref(), Some(code.message()));
+    assert_eq!(item.task.as_ref().map(|t| t.id), Some(task.id));
+    assert!(item.options.is_empty());
+
+    store
+        .apply_transition_with_events(
+            task.id,
+            task_core::Trigger::BrowserPrereqResume,
+            vec![Event::BrowserPrerequisiteResumed { code }],
+        )
+        .expect("resume");
+    let result = inbox(&store, None, &ctx, now, &no_evidence).expect("inbox");
+    assert!(
+        !result
+            .attention
+            .iter()
+            .any(|a| matches!(a, AttentionItem::BrowserPrerequisite { .. }))
+    );
+    let human = crate::human_inbox::human_inbox(&store, None, &ctx, now, &no_evidence)
+        .expect("human inbox");
+    assert!(
+        !human
+            .items
+            .iter()
+            .any(|i| i.id.starts_with("browser_prerequisite-"))
+    );
+}

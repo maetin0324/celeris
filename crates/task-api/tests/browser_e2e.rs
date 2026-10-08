@@ -116,7 +116,7 @@ fn world(site: Value) -> World {
         attestation_public_key: Some(key.public_key().as_ref().to_vec()),
         broker: Some(Arc::new(UnixCredentialBrokerControl {
             socket: control.clone(),
-            site_policies: Vec::new(),
+            site_policies: Vec::new().into(),
         })),
     }));
     let fixture = root.join("browser-fixture");

@@ -5,6 +5,7 @@ import { FetchFrame } from "../../components/fetch-state/fetch-frame";
 import { ScreenFrame } from "../../components/shell/screen-frame";
 import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
+import { TaskBrowserPrerequisite } from "../browser/task-browser-policy";
 import { TaskChangesPanel } from "../changes/changes-view";
 import { TaskFilesPanel } from "../files/task-files-view";
 import { DecisionPanel } from "./decision-panel";
@@ -31,6 +32,7 @@ export function TaskDetailScreen({ taskId, tab }: { taskId: string; tab: TaskDet
   return (
     <ScreenFrame title={`タスクの詳細 ${taskId}`} route="/tasks/:id">
       <TaskDetailHeader taskId={taskId} />
+      <BrowserPrerequisiteBanner taskId={taskId} />
       {/* 360 では 5 つの tab が 1 行に収まらず末尾の「成果物」が右で切れていた。狭い幅は tab の左右の余白を詰め、
           それでも収まらない幅では折り返して、どの tab も枠の中に全文で出す（fix-r6 narrow）。 */}
       <nav aria-label="タスクの表示" className="min-w-0 border-b border-border">
@@ -159,4 +161,11 @@ function SectionSwitcher({
 function TimelineTab({ taskId }: { taskId: string }) {
   const timeline = useQuery(taskTimelineQuery(taskId));
   return <FetchFrame query={timeline}>{timeline.data ? <TimelineView timeline={timeline.data} /> : null}</FetchFrame>;
+}
+
+function BrowserPrerequisiteBanner({ taskId }: { taskId: string }) {
+  const detail = useQuery(taskDetailQuery(taskId));
+  return detail.data?.task.skills?.includes("browser-enabled") ? (
+    <TaskBrowserPrerequisite detail={detail.data} />
+  ) : null;
 }

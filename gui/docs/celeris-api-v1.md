@@ -749,7 +749,7 @@ Console（§3.98）はこの形だけを見る。
 `types` の語彙は `task_api::query::EVENT_TYPES`（50 種）: `created`、`transitioned`、`worker_started`、`worker_progress`、
 `artifact_produced`、`worker_finished`、`review_verdict`、`approval_requested`、`approval_decided`、`approvals_withdrawn`、
 `answered`、`provider_throttled`、`cluster_unavailable`、`delegated`、`question_raised`、`retried`、`edited`、`assigned`、
-`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
+`browser_updated`、`browser_wait_opened`、`browser_wait_resolved`、`browser_prerequisite_blocked`、`browser_prerequisite_resumed`、`cluster_job_wait_started`、`cluster_job_wait_polled`、
 `cluster_job_wait_finished`、`workspace_mode_downgraded`、`cluster_master_exited`、`workspace_pruned`、`target_sweep_ran`、`routing_decided`、
 `checkpoint_saved`、`execution_planned`、`work_unit_transitioned`、`work_unit_spec_overridden`、`work_unit_checks_failed`、
 `execution_gated`、`execution_hint_set`、`repair_scheduled`、`quota_estimated`、`pause_points_resolved`、`phase_reported`、

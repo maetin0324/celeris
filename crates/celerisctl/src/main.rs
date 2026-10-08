@@ -421,7 +421,7 @@ fn main() -> ExitCode {
         };
     }
     if let Command::Browser { command } = cli.command {
-        return match browser_cmd::run(command) {
+        return match browser_cmd::run(command, cos_options.api_url.as_deref()) {
             Ok(code) => code,
             Err(e) => {
                 eprintln!("error: {e}");

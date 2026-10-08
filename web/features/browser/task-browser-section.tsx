@@ -15,6 +15,7 @@ import {
 import { buildRunRows, isActiveRun } from "./browser-runs-model";
 import { BrowserWaitsList } from "./browser-waits-panel";
 import { OwnerSessionNotice } from "./owner-session-notice";
+import { TaskBrowserPolicySection } from "./task-browser-policy";
 
 /** task の概要から browser run と未決の待ちに直接入る。生の live URL は扱わない。 */
 export function TaskBrowserSection({ detail }: { detail: TaskDetail }) {
@@ -34,7 +35,7 @@ export function TaskBrowserSection({ detail }: { detail: TaskDetail }) {
       retry: false,
     })),
   });
-  if (!browserTask || (!runs.data?.items.length && !waits.data?.items.length && !detail.runs.length)) return null;
+  if (!browserTask) return null;
 
   const phases = new Map<string, ControlStatus["phase"]>();
   active.forEach((run, index) => {
@@ -45,6 +46,7 @@ export function TaskBrowserSection({ detail }: { detail: TaskDetail }) {
   const taskWaits = waits.data?.items ?? [];
   return (
     <div className="flex min-w-0 flex-col gap-4" data-testid="task-browser-section">
+      <TaskBrowserPolicySection detail={detail} />
       <Section title="ブラウザ実行" description="実行ごとの状態と、人の対応待ちを確認します。">
         {owner.data && !owner.data.isOwner && taskWaits.length === 0 ? <OwnerSessionNotice owner={owner.data} /> : null}
         {owner.isError ? (
@@ -83,7 +85,9 @@ export function TaskBrowserSection({ detail }: { detail: TaskDetail }) {
             ))}
           </ul>
         ) : (
-          <p className="text-label text-muted-foreground">ブラウザ実行の状態を確認中です。</p>
+          <p className="text-label text-muted-foreground">
+            {detail.runs.length ? "ブラウザ実行の状態を確認中です。" : "まだブラウザ実行はありません。"}
+          </p>
         )}
       </Section>
       {taskWaits.length > 0 ? (

@@ -121,21 +121,24 @@ fn world() -> World {
     }
     assert!(control.exists());
     let key = keypair();
-    let app = task_api::router(env.state.clone().with_browser(BrowserApiConfig {
-        attestation_public_key: Some(key.public_key().as_ref().to_vec()),
-        // ADR-0110 D2: the administrator's site policy is daemon configuration handed to the
-        // production control client; the HTTP registration cannot name a URL or selector.
-        broker: Some(Arc::new(UnixCredentialBrokerControl {
-            socket: control.clone(),
-            site_policies: vec![TrustedSitePolicy {
-                policy_id: "pol-login".into(),
-                exact_origin: ORIGIN.into(),
-                login_url: format!("{ORIGIN}/login"),
-                password_selector: "#password".into(),
-                submit_selector: Some("#submit".into()),
-            }],
-        })),
-    }));
+    let app = task_api::router(
+        env.state.clone().with_browser(BrowserApiConfig {
+            attestation_public_key: Some(key.public_key().as_ref().to_vec()),
+            // ADR-0110 D2: the administrator's site policy is daemon configuration handed to the
+            // production control client; the HTTP registration cannot name a URL or selector.
+            broker: Some(Arc::new(UnixCredentialBrokerControl {
+                socket: control.clone(),
+                site_policies: vec![TrustedSitePolicy {
+                    policy_id: "pol-login".into(),
+                    exact_origin: ORIGIN.into(),
+                    login_url: format!("{ORIGIN}/login"),
+                    password_selector: "#password".into(),
+                    submit_selector: Some("#submit".into()),
+                }]
+                .into(),
+            })),
+        }),
+    );
     let fixture = root.join("browser-fixture");
     std::fs::create_dir(&fixture).expect("test fixture");
     let substrate = fixture.join("fake-agent-browser");

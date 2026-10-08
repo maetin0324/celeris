@@ -17,6 +17,8 @@ pub mod browser_identity;
 pub mod browser_isolation;
 /// ADR-0100 D2: browser の live proxy（P3-B）の ACL と記録の規則。
 pub mod browser_live;
+/// ADR 2026-10-08-browser-prod-enablement D2: browser 実行の前提（適合台帳）の code と人向けの文。
+pub mod browser_prerequisite;
 pub mod browser_store;
 /// ADR-0080 D4/D5: browser の人待ち（登録依頼・承認）の耐久記録。
 pub mod browser_wait;
@@ -213,11 +215,12 @@ pub use repos::{
     resolve_task_repos, valid_repo_name,
 };
 pub use store::{
-    ClientAccess, ClusterConnectionRecord, ClusterConnectionStats, ClusterSettings, EventRow,
-    ListFilter, ListOrder, LockCounts, ModelCatalogStore, Page, ProjectPlanApply,
-    ProjectPlanMilestoneChange, SCHEMA_VERSION, SqliteStore, StoreError, StoreOptions, TaskStore,
-    TreeAdoption, backup_database, event_row_schema_value, integrity_check, is_busy_error,
-    is_readonly_error,
+    BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,
+    BrowserSitePolicyReferences, BrowserSitePolicySource, ClientAccess, ClusterConnectionRecord,
+    ClusterConnectionStats, ClusterSettings, EventRow, ListFilter, ListOrder, LockCounts,
+    ModelCatalogStore, Page, ProjectPlanApply, ProjectPlanMilestoneChange, SCHEMA_VERSION,
+    SqliteStore, StoreError, StoreOptions, TaskStore, TreeAdoption, backup_database,
+    event_row_schema_value, integrity_check, is_busy_error, is_readonly_error,
 };
 pub use transition::{InvalidTransition, Outcome, StateView, Trigger, transition};
 // ---- ADR-0072（Phase E1）: Run lifecycle / checkpoint / continuation ----

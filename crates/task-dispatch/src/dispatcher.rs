@@ -96,6 +96,7 @@ use crate::policy::{
 };
 
 // ADR-0082: 責務別の子モジュール（層は L1 ← L2 ← L3 ← L4 ← tick）。
+mod browser_prereq;
 mod cluster_job_wait;
 mod coding_default;
 pub use cluster_job_wait::{ClusterJobPollRequest, ClusterJobPoller, ssh_cluster_job_poller};
@@ -1144,6 +1145,10 @@ pub struct Dispatcher {
     /// 永続化しない。dispatcher の再起動で猶予は失われるが、上限判定自体は `consecutive_infra_requeues`
     /// が events から数え直すので安全側。ADR-0070 §2 D3 参照）。
     infra_backoff: HashMap<TaskId, OffsetDateTime>,
+    /// ADR 2026-10-08-browser-prod-enablement D2: 適合台帳の状態の cache（file が変わったときだけ計算し直す）。
+    browser_ledger: task_worker::browser_ledger::LedgerWatch,
+    /// 台帳が変わった（または差し替えた）ので、`browser_prerequisite` で止めた task を次の tick で見直す。
+    browser_prereq_rescan: bool,
     /// ADR-0074「Phase F5-fix7 実装時の明確化」: WU（id）の worktree の用意の一時的な失敗の回数と
     /// 次に試してよい時刻。成功・blocked にしたら消す。プロセス内メモリのみ（再起動で数え直す）。
     wu_prepare_failures: HashMap<String, WuPrepareFailures>,
@@ -1487,6 +1492,8 @@ impl Dispatcher {
             reviewing: HashMap::new(),
             pending_subjects: HashMap::new(),
             infra_backoff: HashMap::new(),
+            browser_ledger: task_worker::browser_ledger::LedgerWatch::from_process(),
+            browser_prereq_rescan: true,
             wu_prepare_failures: HashMap::new(),
             run_write_bases: HashMap::new(),
             stall_watch: HashMap::new(),
@@ -2135,6 +2142,10 @@ impl Dispatcher {
             // ADR 2026-10-07-build-tmp-hygiene D1.4: `action` 付きの雛形の task は worker に渡さず、
             // ここで決定的な保守 executor が走らせる（LLM なし）。
             self.run_maintenance_tasks(&fired);
+        }
+        // ADR 2026-10-08-browser-prod-enablement D2: 前提が揃った browser task を dispatch の前に戻す。
+        if let Err(e) = self.resume_browser_prereq_blocked() {
+            tracing::warn!(error = %e, "browser prerequisite re-evaluation failed");
         }
         report.dispatched = if self.accepting_new_work && self.disk_ready {
             self.dispatch_ready()?

@@ -1498,6 +1498,35 @@
           "type": "object"
         },
         {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2・D4: browser の前提（適合台帳・task policy）が足りず\n`blocked(browser_prerequisite)` で止まっている task。`message` は最後の `BrowserPrerequisiteBlocked` の文。\n前提が揃って `BrowserPrerequisiteResumed` で戻れば（直前の遷移の reason が変われば）出さない。",
+          "properties": {
+            "at": {
+              "type": "string"
+            },
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "message": {
+              "type": "string"
+            },
+            "task": {
+              "$ref": "#/$defs/TaskRef"
+            },
+            "type": {
+              "const": "browser_prerequisite",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "task",
+            "code",
+            "message",
+            "at"
+          ],
+          "type": "object"
+        },
+        {
           "description": "ADR-0018 D2: 直近 24 時間に `ClusterUnavailable` があったクラスタ（人がログインし直すまで用件が続く）。",
           "properties": {
             "at": {
@@ -2067,6 +2096,21 @@
       ],
       "type": "object"
     },
+    "BrowserPrerequisiteCode": {
+      "description": "台帳の状態（D1.4 の表）。`Ok` 以外は browser task を dispatch の前で止める。",
+      "enum": [
+        "ok",
+        "missing",
+        "invalid",
+        "stale_release",
+        "stale_agent_browser",
+        "agent_browser_missing",
+        "no_conformant_backend",
+        "ledger_lacks_credential",
+        "browser_policy_missing"
+      ],
+      "type": "string"
+    },
     "BrowserRegisteredBody": {
       "additionalProperties": false,
       "description": "`POST .../registered` の本文。",
@@ -2248,6 +2292,13 @@
             "null"
           ]
         },
+        "credential_use": {
+          "description": "ADR 2026-10-08-browser-prod-enablement D3: `true` は grant の `allowed_actions` に `credential_use` を\n加え（欄が無い grant は Phase 1 の集合を実体化してから）、`false` は外す。使用は毎回人の承認（変わらない）。",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
         "harnesses": {
           "anyOf": [
             {
@@ -2260,6 +2311,65 @@
         }
       },
       "type": "object"
+    },
+    "BrowserSitePolicyRecord": {
+      "description": "保存された site policy（中身＋出自と時刻）。",
+      "properties": {
+        "created_at": {
+          "description": "RFC3339。",
+          "type": "string"
+        },
+        "exact_origin": {
+          "type": "string"
+        },
+        "login_url": {
+          "type": "string"
+        },
+        "password_selector": {
+          "type": "string"
+        },
+        "policy_id": {
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/BrowserSitePolicySource"
+        },
+        "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "RFC3339。",
+          "type": "string"
+        }
+      },
+      "required": [
+        "policy_id",
+        "exact_origin",
+        "login_url",
+        "password_selector",
+        "source",
+        "created_at",
+        "updated_at"
+      ],
+      "type": "object"
+    },
+    "BrowserSitePolicySource": {
+      "description": "行がどこから来たか。",
+      "oneOf": [
+        {
+          "const": "api",
+          "description": "API（web の `/browser/settings`）で書いた。",
+          "type": "string"
+        },
+        {
+          "const": "config",
+          "description": "config.toml の `[[api.browser_site_policies]]` から空の DB に入れた種。",
+          "type": "string"
+        }
+      ]
     },
     "BrowserWait": {
       "additionalProperties": false,
@@ -9920,6 +10030,44 @@
             "state",
             "code",
             "version"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2: browser の前提（適合台帳・task policy）が無いので\ntask を止めた。`message` は code ごとの固定の人向けの文（path・秘密は載せない）。止まっている間は再追記しない。",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "const": "browser_prerequisite_blocked",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "ADR 2026-10-08-browser-prod-enablement D2: 前提が揃い、止めていた task を `ready` に戻した。\n`code` は止めたときの code。",
+          "properties": {
+            "code": {
+              "$ref": "#/$defs/BrowserPrerequisiteCode"
+            },
+            "type": {
+              "const": "browser_prerequisite_resumed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "code"
           ],
           "type": "object"
         },
@@ -26423,6 +26571,66 @@
       ],
       "type": "object"
     },
+    "SitePolicyList": {
+      "description": "`GET /browser/site-policies` の応答。",
+      "properties": {
+        "items": {
+          "items": {
+            "$ref": "#/$defs/BrowserSitePolicyRecord"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "type": "object"
+    },
+    "SitePolicyPutBody": {
+      "additionalProperties": false,
+      "description": "`PUT /browser/site-policies/{policy_id}` の本文（`policy_id` は path）。",
+      "properties": {
+        "exact_origin": {
+          "description": "正規形の origin（`https://host[:port]`）。",
+          "type": "string"
+        },
+        "login_url": {
+          "description": "`exact_origin` 直下のログイン URL。",
+          "type": "string"
+        },
+        "password_selector": {
+          "type": "string"
+        },
+        "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "exact_origin",
+        "login_url",
+        "password_selector"
+      ],
+      "type": "object"
+    },
+    "SitePolicyPutResult": {
+      "description": "`PUT` の応答（新規作成は 201、置換は 200）。",
+      "properties": {
+        "created": {
+          "type": "boolean"
+        },
+        "policy": {
+          "$ref": "#/$defs/BrowserSitePolicyRecord"
+        }
+      },
+      "required": [
+        "created",
+        "policy"
+      ],
+      "type": "object"
+    },
     "SkillDetailView": {
       "description": "`GET /skills/{name}`。",
       "properties": {
@@ -31112,6 +31320,16 @@
       "$ref": "#/$defs/SecretList",
       "description": "Phase 20（ADR-0030）: GUI から預かる秘密（API キー等）。`GET /secrets` と `PUT /secrets/{id}` の応答。"
     },
+    "site_policy_list": {
+      "$ref": "#/$defs/SitePolicyList"
+    },
+    "site_policy_put": {
+      "$ref": "#/$defs/SitePolicyPutBody",
+      "description": "ADR 2026-10-08-browser-prod-enablement D3: `/browser/site-policies` の本文・応答。"
+    },
+    "site_policy_put_result": {
+      "$ref": "#/$defs/SitePolicyPutResult"
+    },
     "skill_detail": {
       "$ref": "#/$defs/SkillDetailView"
     },
@@ -31394,6 +31612,9 @@
     "trusted_device_list",
     "trusted_device_revoke_result",
     "trusted_device_claims",
+    "site_policy_put",
+    "site_policy_put_result",
+    "site_policy_list",
     "decision_list",
     "decision_answer",
     "decision_withdraw",

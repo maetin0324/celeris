@@ -182,6 +182,9 @@ pub fn route_attention(item: &AttentionItem) -> Option<InboxKind> {
         AttentionItem::PlanApproval { .. } => Some(InboxKind::PlanGate),
         AttentionItem::DeliverySkipped { .. } => Some(InboxKind::DeliverySkipped),
         AttentionItem::IntegrationRequest { .. } => Some(InboxKind::IntegrationRequest),
+        // ADR 2026-10-08-browser-prod-enablement D2: browser の前提で止まった task。人の手は task 詳細の
+        // browser 節（policy の編集）か release・台帳の作り直しなので、browser の人手の種類に入れる。
+        AttentionItem::BrowserPrerequisite { .. } => Some(InboxKind::BrowserWait),
     }
 }
 
@@ -951,6 +954,29 @@ impl Builder<'_> {
                 task: Some(task.clone()),
                 created_at: at.clone(),
                 links: Vec::new(),
+            }),
+            // ADR 2026-10-08-browser-prod-enablement D2・D4: 受信箱では答えない（選択肢なし・native なし）。
+            // 文が次の手（release・台帳の作り直し、task 詳細で policy を入れる）を言い、前提が揃えば消える。
+            AttentionItem::BrowserPrerequisite {
+                task,
+                code,
+                message,
+                at,
+            } => self.finish(Draft {
+                id: format!("browser_prerequisite-{}-{}", task.id, code.as_str()),
+                kind: InboxKind::BrowserWait,
+                title: format!("browser の前提が足りない: {}", task.title),
+                detail: clip(message),
+                options: Vec::new(),
+                recommended: None,
+                due_at: None,
+                blocking: self.only_task(task),
+                blocked_by: Vec::new(),
+                native: None,
+                project_id: self.project_of(task.id),
+                task: Some(task.clone()),
+                created_at: at.clone(),
+                links: vec![link("task 詳細", format!("/tasks/{}", task.id))],
             }),
             AttentionItem::IntegrationRequest {
                 task,

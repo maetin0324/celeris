@@ -572,6 +572,18 @@ print(json.dumps({
 }, ensure_ascii=False))
 PY
 }
+# ADR 2026-10-08-browser-prod-enablement D1.3: browser の適合台帳は無くても昇格を止めない。release の
+# `browser/ledger-status.json` の {ok, code} を写す（無ければ ok=false, code=missing）。
+BROWSER_LEDGER_JSON='{"ok": false, "code": "missing"}'
+if [ -f "$REL/browser/ledger-status.json" ] && command -v python3 >/dev/null 2>&1; then
+  BROWSER_LEDGER_JSON="$(python3 - "$REL/browser/ledger-status.json" <<'PY' 2>/dev/null || printf '{"ok": false, "code": "invalid"}'
+import json, sys
+d = json.load(open(sys.argv[1], encoding="utf-8"))
+print(json.dumps({"ok": bool(d.get("ok")), "code": str(d.get("code") or "unknown")}))
+PY
+)"
+fi
+sd_log "browser_ledger: $BROWSER_LEDGER_JSON (not required to promote)"
 {
   printf '{\n'
   printf '  "promoted_at": %s,\n' "$(sd_json_str "$(sd_ts)")"
@@ -581,6 +593,7 @@ PY
   else
     printf '  "from": null,\n'
   fi
+  printf '  "browser_ledger": %s,\n' "$BROWSER_LEDGER_JSON"
   printf '  "included": %s\n' "$(promoted_included_json)"
   printf '}\n'
 } >"$REL/promoted.json"

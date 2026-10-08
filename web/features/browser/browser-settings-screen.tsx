@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
-import { ApiError, apiGet, apiMutate } from "../../api/client";
+import { ApiError, apiGet } from "../../api/client";
 import type { BrowserAction, BrowserSettingsPatch, OrgList, OrgNode, Tier } from "../../api/generated/types";
 import { orgKeys } from "../../api/queries/keys";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";
@@ -10,9 +10,14 @@ import { Button } from "../../components/ui/button";
 import { ConfirmDialog } from "../../components/ui/confirm-dialog";
 import { fieldClassName, Input } from "../../components/ui/input";
 import { Section } from "../../components/ui/panel";
+import { ownerSessionQuery } from "./browser-query";
+import { BrowserReadinessPanel } from "./browser-readiness-panel";
+import { OwnerSessionNotice, ownerNoticeReason } from "./owner-session-notice";
+import { SitePoliciesPanel } from "./site-policies-panel";
+import { saveBrowserSettings, sitePoliciesQuery, sitePolicyError } from "./site-policy-query";
 
 const NODE_ID = "browser-execution";
-const SETTINGS_PATH = `/api/org/${NODE_ID}/browser-settings`;
+
 const lines = (value: string) =>
   value
     .split("\n")
@@ -94,7 +99,15 @@ function FieldError({ id, message }: { id: string; message?: string }) {
   ) : null;
 }
 
-function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNode) => void }) {
+export function SettingsForm({
+  node,
+  onSaved,
+  csrf,
+}: {
+  node: OrgNode;
+  onSaved: (node: OrgNode) => void;
+  csrf: string;
+}) {
   const id = useId();
   const queryClient = useQueryClient();
   const browser = node.profile?.browser;
@@ -105,6 +118,8 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
   const [attempts, setAttempts] = useState(String(node.profile?.budget?.max_attempts ?? ""));
   const [lane, setLane] = useState(node.profile?.budget?.max_lane ?? "");
   const [approvalActions, setApprovalActions] = useState<BrowserAction[]>(browser?.approval_actions ?? []);
+  const sitePolicies = useQuery(sitePoliciesQuery());
+  const [credentialUse, setCredentialUse] = useState(browser?.allowed_actions?.includes("credential_use") ?? false);
   const [policies, setPolicies] = useState((browser?.credential_policy_ids ?? []).join("\n"));
   const [identity, setIdentity] = useState(
     Object.entries(browser?.credential_identity_ids ?? {})
@@ -141,20 +156,20 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
       harnesses: { allowed: list(harnesses), default: defaultHarness.trim() || null },
       budget: { max_attempts: attempts ? Number(attempts) : null, max_lane: (lane || null) as Tier | null },
       approval_actions: APPROVAL_CHOICES.map((c) => c.action).filter((a) => approvalActions.includes(a)),
+      credential_use: credentialUse,
       credential_policy_ids: lines(policies),
       credential_identity_ids: mappings,
     };
     try {
-      const updated = await apiMutate<OrgNode>("PATCH", SETTINGS_PATH, patch);
+      const updated = await saveBrowserSettings(queryClient, patch, csrf);
       onSaved(updated);
-      await queryClient.invalidateQueries({ queryKey: orgKeys.all });
     } catch (error) {
       setErrors(errorForApi(error));
       if (error instanceof ApiError && error.kind === "forbidden")
         throw new Error("管理権限または送信元を確認してください。");
       if (error instanceof ApiError && error.kind === "validation")
         throw new Error("入力を確認してください。項目ごとに理由を表示しました。");
-      throw new Error("保存できませんでした。状態を確認してからやり直してください。");
+      throw new Error(sitePolicyError(error));
     }
   }
 
@@ -299,16 +314,45 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
       </Section>
       <Section title="credential と identity の対応" description="秘密の値は入力せず、登録済みの ID だけを指定します。">
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="space-y-1 text-label font-medium">
-            使える credential policy ID（1 行に 1 件）
-            <textarea
-              className={fieldClassName}
-              rows={3}
-              value={policies}
-              onChange={(event) => setPolicies(event.target.value)}
-              aria-describedby={`${id}-policy-error`}
-            />
-          </label>
+          <div className="space-y-2">
+            <label className="flex min-h-11 min-w-11 items-center gap-2 text-label font-medium">
+              <input
+                type="checkbox"
+                checked={credentialUse}
+                onChange={(event) => setCredentialUse(event.target.checked)}
+              />
+              credential の使用を許可（credential_use）
+            </label>
+            <p className="text-label text-muted-foreground">使用するたびに本人の承認が必要です。</p>
+            <p className="text-label font-medium">使える credential policy ID</p>
+            <FetchFrame query={sitePolicies} subject="選択できるログイン先">
+              {sitePolicies.data?.items.length === 0 ? (
+                <p className="text-label">先にログイン先を登録してください。</p>
+              ) : null}
+              {Array.from(
+                new Set([...lines(policies), ...(sitePolicies.data?.items.map((policy) => policy.policy_id) ?? [])]),
+              ).map((policyId) => (
+                <label key={policyId} className="flex min-h-11 min-w-11 items-center gap-2 break-all text-label">
+                  <input
+                    type="checkbox"
+                    checked={lines(policies).includes(policyId)}
+                    onChange={(event) => {
+                      setPolicies(
+                        (event.target.checked
+                          ? [...lines(policies), policyId]
+                          : lines(policies).filter((item) => item !== policyId)
+                        ).join("\n"),
+                      );
+                    }}
+                  />
+                  {policyId}
+                  {sitePolicies.data && !sitePolicies.data.items.some((policy) => policy.policy_id === policyId)
+                    ? "（未登録・選択を外して保存してください）"
+                    : ""}
+                </label>
+              ))}
+            </FetchFrame>
+          </div>
           <label className="space-y-1 text-label font-medium">
             policy と identity の対応（policy ID=identity ID）
             <textarea
@@ -327,7 +371,7 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
         <ConfirmDialog
           trigger={<Button>変更内容を確認して保存</Button>}
           title="ブラウザ実行課の設定を保存"
-          target={`許可 origin: ${origins.join("、") || "なし"}。harness: ${list(harnesses).join("、") || "なし"}（既定 ${defaultHarness || "なし"}）。最大試行 ${attempts || "指定なし"}、モデル上限 ${lane || "指定なし"}。毎回の承認が要る操作: ${approvalActions.length ? approvalActions.join("、") : "なし（credential_use のみ）"}。credential policy ${lines(policies).length} 件、identity 対応 ${lines(identity).length} 件`}
+          target={`許可 origin: ${origins.join("、") || "なし"}。harness: ${list(harnesses).join("、") || "なし"}（既定 ${defaultHarness || "なし"}）。最大試行 ${attempts || "指定なし"}、モデル上限 ${lane || "指定なし"}。毎回の承認が要る操作: ${approvalActions.length ? approvalActions.join("、") : "なし（credential_use のみ）"}。credential 使用 ${credentialUse ? "許可（毎回承認）" : "不許可"}、credential policy ${lines(policies).length} 件、identity 対応 ${lines(identity).length} 件`}
           consequence="登録内容を置き換えます。許可 origin の縮小は既存 task の次の run にも反映されます。"
           reversibility="この画面で値を戻して再保存できます。"
           followUp="保存後の設定と更新時刻をこの画面で確認できます。"
@@ -341,6 +385,7 @@ function SettingsForm({ node, onSaved }: { node: OrgNode; onSaved: (node: OrgNod
 
 export function BrowserSettingsScreen() {
   const query = useQuery({ queryKey: orgKeys.list(), queryFn: ({ signal }) => apiGet<OrgList>("/api/org", signal) });
+  const owner = useQuery(ownerSessionQuery());
   const [saved, setSaved] = useState<OrgNode | null>(null);
   const [sessionEvent, setSessionEvent] = useState<{ at: string; actor: string } | null>(null);
   const node = saved ?? query.data?.items.find((item) => item.id === NODE_ID);
@@ -355,39 +400,46 @@ export function BrowserSettingsScreen() {
         <Link to="/browser" className="inline-flex min-h-11 items-center text-link underline underline-offset-2">
           ブラウザ実行へ戻る
         </Link>
+        <BrowserReadinessPanel />
         <FetchFrame query={query} subject="ブラウザ実行課の設定">
-          {node?.profile?.browser ? (
-            <>
-              <SettingsForm
-                key={node.updated_at}
-                node={node}
-                onSaved={(updated) => {
-                  setSaved(updated);
-                  setSessionEvent({ at: updated.updated_at, actor: "admin" });
-                }}
-              />
-              {sessionEvent ? (
-                <p role="status" className="text-label text-success-foreground">
-                  設定を保存しました。更新後の値を表示しています。
-                </p>
-              ) : null}
-              <Section title="変更の記録" description="この画面で保存した変更を表示します。">
-                <p className="text-label">
-                  現在の設定の更新時刻: <time dateTime={node.updated_at}>{displayTime(node.updated_at)}</time>
-                </p>
+          <FetchFrame query={owner} subject="本人確認">
+            {ownerNoticeReason(owner.data) !== null ? (
+              <OwnerSessionNotice owner={owner.data} />
+            ) : node?.profile?.browser ? (
+              <>
+                <SitePoliciesPanel csrf={owner.data?.csrfToken ?? ""} />
+                <SettingsForm
+                  key={node.updated_at}
+                  node={node}
+                  csrf={owner.data?.csrfToken ?? ""}
+                  onSaved={(updated) => {
+                    setSaved(updated);
+                    setSessionEvent({ at: updated.updated_at, actor: "admin" });
+                  }}
+                />
                 {sessionEvent ? (
-                  <p className="text-label">
-                    変更者: {sessionEvent.actor} · 保存時刻:{" "}
-                    <time dateTime={sessionEvent.at}>{displayTime(sessionEvent.at)}</time>
+                  <p role="status" className="text-label text-success-foreground">
+                    設定を保存しました。更新後の値を表示しています。
                   </p>
-                ) : (
-                  <p className="text-label text-muted-foreground">この画面での保存はまだありません。</p>
-                )}
-              </Section>
-            </>
-          ) : query.data ? (
-            <p role="alert">browser grant を持つ実行課が見つかりません。</p>
-          ) : null}
+                ) : null}
+                <Section title="変更の記録" description="この画面で保存した変更を表示します。">
+                  <p className="text-label">
+                    現在の設定の更新時刻: <time dateTime={node.updated_at}>{displayTime(node.updated_at)}</time>
+                  </p>
+                  {sessionEvent ? (
+                    <p className="text-label">
+                      変更者: {sessionEvent.actor} · 保存時刻:{" "}
+                      <time dateTime={sessionEvent.at}>{displayTime(sessionEvent.at)}</time>
+                    </p>
+                  ) : (
+                    <p className="text-label text-muted-foreground">この画面での保存はまだありません。</p>
+                  )}
+                </Section>
+              </>
+            ) : query.data ? (
+              <p role="alert">browser grant を持つ実行課が見つかりません。</p>
+            ) : null}
+          </FetchFrame>
         </FetchFrame>
       </div>
     </ScreenFrame>

@@ -149,7 +149,7 @@ pub(crate) fn parse_snake<T: DeserializeOwned>(what: &str, value: &str) -> Resul
 }
 
 /// `Event` の serde の `type` 名（`types` クエリの語彙）。
-pub(crate) const EVENT_TYPES: [&str; 74] = [
+pub(crate) const EVENT_TYPES: [&str; 76] = [
     "browser_updated",
     // ADR 2026-10-07-worker-no-subagents-no-llm-cli D5: subagent 道具・別 LLM CLI/API の起動の検出。
     "worker_policy_violation",
@@ -254,6 +254,8 @@ pub(crate) const EVENT_TYPES: [&str; 74] = [
     "trusted_device_used",
     "trusted_device_revoked",
     "trusted_device_rejected",
+    "browser_prerequisite_blocked",
+    "browser_prerequisite_resumed",
 ];
 
 pub(crate) fn event_type_name(event: &Event) -> &'static str {
@@ -263,6 +265,8 @@ pub(crate) fn event_type_name(event: &Event) -> &'static str {
         Event::BrowserUpdated { .. } => "browser_updated",
         Event::BrowserWaitOpened { .. } => "browser_wait_opened",
         Event::BrowserWaitResolved { .. } => "browser_wait_resolved",
+        Event::BrowserPrerequisiteBlocked { .. } => "browser_prerequisite_blocked",
+        Event::BrowserPrerequisiteResumed { .. } => "browser_prerequisite_resumed",
         Event::ClusterJobWaitStarted { .. } => "cluster_job_wait_started",
         Event::ClusterJobWaitPolled { .. } => "cluster_job_wait_polled",
         Event::ClusterJobWaitFinished { .. } => "cluster_job_wait_finished",

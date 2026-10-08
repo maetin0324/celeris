@@ -912,3 +912,139 @@ sd_list_stale_celeris_units() {
         printf '%s\n' "$sha"
       done
 }
+
+# ---- browser 適合台帳（ADR 2026-10-08-browser-prod-enablement D1.2 / D1.5）---------------------------------
+#
+# `sd_browser_ledger <build worktree> <out dir> <sha12>` — release の browser 適合台帳を作って `<out>/browser/` に置く。
+# release.sh の段と `browser-ledger.sh`（D1.5 の作り直し）が共有する。**失敗しても release を落とさない**ので、
+# 呼ぶ側は戻り値（成功 0 / 台帳なし 1）を無視してよい。結果は `<out>/browser/ledger-status.json`（失敗でも
+# `{ok:false, code}`）に書く。ログは標準出力・標準エラーへ（呼ぶ側が gate-logs/browser-ledger.log へ向ける）。
+# 差し替え（試験用）: SD_BROWSER_LEDGER_RUNNER（生成器。既定 <build>/scripts/browser-conformance.py を python3 で）、
+#   SD_AGENT_BROWSER（既定 agent-browser）、SD_BROWSER_LEDGER_CHECK_BIN（既定 <out>/bin/celerisctl）、
+#   SD_BROWSER_AGENT_VERSION（既定 0.38.1）、SD_BROWSER_LEDGER_TIMEOUT（既定 1800 秒。全体の上限）。
+# 結果の code: ok / agent_browser_missing / agent_browser_version / generator_failed / check_failed / timeout /
+#   または `celerisctl browser ledger check` の code（stale_release・invalid など）。
+# 結果の変数: SD_BROWSER_LEDGER_OK（true/false）と SD_BROWSER_LEDGER_CODE（呼んだ shell に残る。subshell で呼ぶと消える）。
+SD_BROWSER_AGENT_VERSION="${SD_BROWSER_AGENT_VERSION:-0.38.1}"
+SD_BROWSER_LEDGER_OK=false
+SD_BROWSER_LEDGER_CODE=""
+
+# `_sd_bl_run <deadline-epoch> <cmd…>` — 残り時間で打ち切って実行する（超過は 124 / 137）。
+_sd_bl_run() {
+  local deadline="$1" left
+  shift
+  left=$((deadline - $(date +%s)))
+  [ "$left" -ge 1 ] || return 124
+  timeout --kill-after=30s "$left" "$@"
+}
+
+_sd_bl_write_status() {
+  # $1=out/browser $2=ok $3=code $4=agent-browser version $5=p4b(true/false) $6=check の JSON（空でもよい）
+  python3 - "$1/ledger-status.json" "$2" "$3" "$4" "$5" "$6" <<'PY'
+import json, sys, datetime
+path, ok, code, ab, p4b, chk = sys.argv[1:7]
+try:
+    c = json.loads(chk) if chk.strip() else {}
+except Exception:
+    c = {}
+doc = {
+    "ok": ok == "true",
+    "code": code,
+    "generated_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "agent_browser": ab or None,
+    "p4b": p4b == "true",
+    "backends": c.get("backends") or [],
+    "credential_backends": c.get("credential_backends") or [],
+}
+with open(path, "w", encoding="utf-8") as fh:
+    json.dump(doc, fh, ensure_ascii=False)
+    fh.write("\n")
+PY
+}
+
+sd_browser_ledger() {
+  local build="$1" out="$2" sha12="$3"
+  local partial="$out/browser.partial" final="$out/browser"
+  local timeout_s="${SD_BROWSER_LEDGER_TIMEOUT:-1800}" deadline
+  local ab="${SD_AGENT_BROWSER:-agent-browser}" ab_out ab_ver="" p4b=false
+  local check_bin="${SD_BROWSER_LEDGER_CHECK_BIN:-$out/bin/celerisctl}"
+  local sha_full chk_json="" chk_rc rc
+  local -a runner
+  deadline=$(($(date +%s) + timeout_s))
+  SD_BROWSER_LEDGER_OK=false
+  SD_BROWSER_LEDGER_CODE=""
+  rm -rf "$partial"
+  mkdir -p "$partial"
+
+  _sd_bl_fail() { # <code> — 台帳を置かず ledger-status.json だけを残す
+    SD_BROWSER_LEDGER_CODE="$1"
+    sd_log "browser-ledger: no ledger placed (code=$1)"
+    rm -rf "$partial" "$final"
+    mkdir -p "$final"
+    _sd_bl_write_status "$final" false "$1" "$ab_ver" "$p4b" ""
+    return 1
+  }
+
+  # 1. agent-browser の版
+  if ! ab_out="$(_sd_bl_run "$deadline" "$ab" --version 2>&1)"; then
+    _sd_bl_fail agent_browser_missing
+    return 1
+  fi
+  ab_ver="$(printf '%s' "$ab_out" | tail -n 1 | awk '{print $NF}')"
+  if [ "$ab_ver" != "$SD_BROWSER_AGENT_VERSION" ]; then
+    sd_log "browser-ledger: agent-browser is '$ab_ver', want $SD_BROWSER_AGENT_VERSION"
+    _sd_bl_fail agent_browser_version
+    return 1
+  fi
+
+  # 2. 公開能力の台帳（protocol-scripted）
+  if [ -n "${SD_BROWSER_LEDGER_RUNNER:-}" ]; then
+    runner=("$SD_BROWSER_LEDGER_RUNNER")
+  else
+    runner=(python3 "$build/scripts/browser-conformance.py")
+  fi
+  sha_full="$(git -C "$build" rev-parse HEAD 2>/dev/null || true)"
+  set -- --protocol-scripted --fallback-scenario --agent-browser "$ab" --celeris-release "$sha12"
+  if [ -n "$sha_full" ] && [ "${#sha_full}" -eq 40 ]; then set -- "$@" --celeris-sha "$sha_full"; fi
+  sd_log "browser-ledger: ${runner[*]} $* --output-dir $partial"
+  _sd_bl_run "$deadline" "${runner[@]}" "$@" --output-dir "$partial" 8>&- 9>&-
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then _sd_bl_fail timeout; return 1; fi
+  if [ "$rc" -ne 0 ] || [ ! -f "$partial/conformance.json" ]; then
+    sd_log "browser-ledger: generator exit $rc"
+    _sd_bl_fail generator_failed
+    return 1
+  fi
+
+  # 3. P4-B 証拠（失敗しても公開能力の台帳は残す。ADR-0112 の fail closed）
+  _sd_bl_run "$deadline" "${runner[@]}" --agent-browser "$ab" --p4b-evidence "$partial/conformance.json" \
+    --p4b-backend claude-code --p4b-backend browser-specialist --output-dir "$partial" 8>&- 9>&-
+  rc=$?
+  if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then _sd_bl_fail timeout; return 1; fi
+  if [ "$rc" -eq 0 ]; then p4b=true; else sd_log "browser-ledger: p4b evidence exit $rc (public-capability ledger kept)"; fi
+
+  # 4. daemon と同じ判定で検査
+  if [ ! -x "$check_bin" ]; then sd_log "browser-ledger: check binary $check_bin is not executable"; _sd_bl_fail check_failed; return 1; fi
+  chk_json="$(_sd_bl_run "$deadline" "$check_bin" browser ledger check --file "$partial/conformance.json" \
+    --release "$sha12" --no-host-probe --json 2>>/dev/stderr)"
+  chk_rc=$?
+  if [ "$chk_rc" -eq 124 ] || [ "$chk_rc" -eq 137 ]; then _sd_bl_fail timeout; return 1; fi
+  if [ "$chk_rc" -ne 0 ]; then
+    local code
+    code="$(printf '%s' "$chk_json" | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("code",""))
+except Exception: print("")' 2>/dev/null || true)"
+    sd_log "browser-ledger: ledger check exit $chk_rc (code=${code:-?})"
+    _sd_bl_fail "${code:-check_failed}"
+    return 1
+  fi
+
+  # 5. 置く（status は partial の中に書いてから rename する）
+  _sd_bl_write_status "$partial" true ok "$ab_ver" "$p4b" "$chk_json"
+  rm -rf "$final"
+  mv -T "$partial" "$final" || { _sd_bl_fail check_failed; return 1; }
+  SD_BROWSER_LEDGER_OK=true
+  SD_BROWSER_LEDGER_CODE=ok
+  sd_log "browser-ledger: placed $final/conformance.json (p4b=$p4b)"
+  return 0
+}

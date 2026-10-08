@@ -104,6 +104,8 @@ impl SqliteStore {
                 task.tree.as_ref().map(|t| t.root_id.to_string()),
             ],
         )?;
+        // ADR 2026-10-08-browser-prod-enablement D4: 作成のすべての経路で最小の browser policy を付ける。
+        Self::attach_auto_browser_policy_tx(conn, task)?;
         Ok(())
     }
 
@@ -550,6 +552,8 @@ impl SqliteStore {
             },
         )?;
         Self::append_event_tx(&tx, new_task.id, &Event::Retried { from: original })?;
+        // ADR 2026-10-08-browser-prod-enablement D4: 元の task の保存 policy を引き継ぐ（無ければ自動付与のまま）。
+        Self::inherit_browser_policy_tx(&tx, original, new_task.id)?;
 
         let mut rewired = Vec::new();
         for dep_id in Self::dependents_of_tx(&tx, original)? {

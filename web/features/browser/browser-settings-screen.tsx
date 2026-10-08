@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useId, useState } from "react";
-import { ApiError, apiGet, apiMutate } from "../../api/client";
+import { ApiError, apiGet } from "../../api/client";
 import type { BrowserAction, BrowserSettingsPatch, OrgList, OrgNode, Tier } from "../../api/generated/types";
 import { orgKeys } from "../../api/queries/keys";
 import { FetchFrame } from "../../components/fetch-state/fetch-frame";

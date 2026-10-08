@@ -77,6 +77,7 @@ const CARD_STATES: Record<string, { tone: BadgeTone; label: string }> = {
   running: { tone: "running", label: "対応中" },
   applied: { tone: "success", label: "適用済み" },
   answered: { tone: "success", label: "回答済み" },
+  closed: { tone: "neutral", label: "終了" },
   resolved: { tone: "success", label: "解決済み" },
   observed: { tone: "neutral", label: "確認のみ" },
   superseded: { tone: "neutral", label: "置き換え済み" },

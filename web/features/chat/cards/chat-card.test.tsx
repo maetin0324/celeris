@@ -185,6 +185,61 @@ describe("chat cards: その場の回答", () => {
     expect(answered).not.toContain("<button");
   });
 
+  it("chat_inbox_cards_live_answer_state_closes_waiting_badges_and_keeps_the_result", () => {
+    for (const kind of ["decision", "question", "approval", "plan_gate"] as const) {
+      for (const state of ["pending", "escalated"]) {
+        for (const live of [
+          { status: "gone" as const },
+          { status: "answered" as const, label: "案 A", removed: true },
+          { status: "answered" as const, label: "案 A", removed: false },
+        ]) {
+          const html = renderToStaticMarkup(
+            <ChatCardView card={card({ kind, state })} answer={{ ...ready(), state: live }} />,
+          );
+          expect(html).toContain(`data-card-state="${live.status === "gone" ? "closed" : "answered"}"`);
+          expect(html).toContain(live.status === "gone" ? "終了" : "回答済み");
+          expect(html).toContain(
+            live.status === "gone" ? "既に答えられたか、失効しています" : "「案 A」で答えました。",
+          );
+          expect(html).not.toContain("人待ち");
+          expect(html).not.toContain("人の判断待ち");
+          expect(html).not.toContain("<button");
+        }
+      }
+    }
+  });
+
+  it("chat_inbox_cards_404_closes_even_when_a_previous_inbox_item_is_cached", async () => {
+    for (const cached of [false, true]) {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false, retryOnMount: false, refetchOnMount: false } },
+      });
+      try {
+        const queryKey = inboxKeys.item("decision-d1");
+        if (cached) client.setQueryData(queryKey, inboxItem());
+        await expect(
+          client.fetchQuery({
+            queryKey,
+            queryFn: async () => {
+              throw new ApiError("not_found", { method: "GET", path: "/api/inbox/items/decision-d1", status: 404 });
+            },
+          }),
+        ).rejects.toBeInstanceOf(ApiError);
+        const html = renderToStaticMarkup(
+          <QueryClientProvider client={client}>
+            <ChatCardItem card={card({ id: "decision-d1", state: "escalated", actor: "cos" })} api={fakeApi().api} />
+          </QueryClientProvider>,
+        );
+        expect(html).toContain('data-card-state="closed"');
+        expect(html).toContain("既に答えられたか、失効しています");
+        expect(html).not.toContain("人の判断待ち");
+        expect(html).not.toContain("<button");
+      } finally {
+        client.clear();
+      }
+    }
+  });
+
   it("chat_cards_answered_and_superseded_cards_hide_actions", () => {
     for (const state of ["answered", "superseded", "revoked", "returned", "expired"]) {
       for (const kind of ["decision", "question", "approval", "plan_gate"] as const) {

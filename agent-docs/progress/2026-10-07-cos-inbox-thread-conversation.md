@@ -105,6 +105,36 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 - 本番サービス・DB・元のチェックアウトは変更していない。release prepare・デプロイは実行していない。
   今回確認したのは失敗した整形 gate と上記検査までで、release 全工程の再実行は配送側で行う。
 
+## 表示の差し戻し対応（2026-10-08、attempt 2）
+
+- reviewer が指摘した実際の `assistant` / `notice` / `observed` の digest を折りたたむ。
+  人待ちや通知以外のカードを含む発言・通常の会話・配信中の返事は開いたままにし、本文とカードは展開して読める。
+- 回答成功を `answered`（回答済み）、受信箱 API の 404 を `closed`（終了）としてバッジとカード属性へ反映。
+  404 だけでは回答済みと失効を区別できないので断定しない。回答内容・閉じた理由は残し、操作ボタンは消す。
+  再取得失敗後も query cache に古い項目が残るため、404 判定を cache より先にした。
+- ADR D5 と実装との突き合わせを更新。Rust・schema・migration に今回の変更は無い。
+
+| 検査 | 結果 |
+|---|---|
+| `pnpm -C web exec vitest run features/chat/cards/chat-card.test.tsx features/chat/messages/messages.test.tsx` | 58 passed。追加した回帰試験は修正前に 3 件失敗し、不備を再現 |
+| `bash scripts/dev/test-parallel.sh` | exit 0、4723 passed / 0 failed / 14 ignored、160 binaries、tmp_leftovers 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web test` | exit 0、82 files / 601 tests、server 77 tests passed |
+| `pnpm -C web lint` | exit 0（既存 styles.css の警告 4 件） |
+| `pnpm -C web check:boundaries` | exit 0 |
+| `pnpm -C web e2e chat/cards.spec.ts` | exit 0、7 passed。決定・質問・認可・計画承認の回答直後と再読み込み後の閉じた表示、assistant 通知の開閉を確認 |
+| `pnpm -C web mobile-audit --only /` | exit 0、360 / 390 / 412 / 1440 px |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0 |
+| `git diff --check` / `git merge-base --is-ancestor main HEAD` | exit 0 / exit 0（main は 186701fa、取り込み不要） |
+
+- 追加したブラウザ試験でも上記 4 幅で横溢れ 0、summary の高さ 44px 以上、axe critical / serious 0 を確認。
+  初回は既存 fixture と追加カードに同じボタンがあり locator が曖昧で失敗。対象カードの名前で絞って再実行し、全件成功。
+- 証拠は `/local/celeris/data/workspaces/01M4CAKADGDTZA7QKDJ9GX35MW/artifacts/retry-*.log`。
+  変更後の 4 幅の画像は同ディレクトリの `retry-screenshots/inbox-digest-<width>.png`。
+  fake daemon・fake adapter とローカルの browser のみで検証。本番サービス・DB・元のチェックアウトの変更、デプロイ、実機 LLM の起動は行っていない。
+
 ## 未解決事項
 
 - digest は run の終端を観測した tick で書く。終端と tick の間に daemon が落ちた場合は再起動時の reconcile で書かれる（件を持つ run だけ）。

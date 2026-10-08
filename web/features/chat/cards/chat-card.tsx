@@ -195,17 +195,25 @@ function OverrideResult({ outcome }: { outcome: OverrideOutcome }) {
 /** カード 1 枚の表示。状態は props だけから決める。 */
 export function ChatCardView({ card, answer, override }: ChatCardViewProps) {
   const kind = CARD_KIND_LABELS[card.kind];
-  const state = cardStateView(card.state);
   const detail = internalHref(card.href);
   const closed = isClosedState(card.state);
   const showAnswer = answer !== undefined && isAnswerKind(card.kind) && !closed;
+  // The saved card is a historical snapshot. Live answer results also update its badge,
+  // while AnswerOptions keeps the answer/closure explanation visible without buttons.
+  const displayState =
+    showAnswer && answer.state.status === "gone"
+      ? "closed"
+      : showAnswer && answer.state.status === "answered"
+        ? "answered"
+        : card.state;
+  const state = cardStateView(displayState);
   const overridden = override?.outcome?.ok === true;
   const showOverride = override !== undefined && canOverride(card) && !overridden;
   return (
     <article
       aria-label={`${kind}: ${card.title}`}
       data-card-kind={card.kind}
-      data-card-state={card.state}
+      data-card-state={displayState}
       className="flex min-w-0 max-w-full flex-col gap-2 rounded-md border border-border bg-surface p-3 text-body text-foreground"
     >
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -268,8 +276,8 @@ function useCardAnswer(card: ChatCard, api: CardApi, enabled: boolean): CardAnsw
 
   let state: CardAnswerState;
   if (answered) state = { status: "answered", ...answered };
-  else if (query.data) state = { status: "ready", item: query.data };
   else if (query.error instanceof ApiError && query.error.status === 404) state = { status: "gone" };
+  else if (query.data) state = { status: "ready", item: query.data };
   else if (query.error)
     state = { status: "error", message: "受信箱の項目を読めませんでした。詳細の画面で確かめてください。" };
   else state = { status: "loading" };

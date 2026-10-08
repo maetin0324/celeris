@@ -3,8 +3,9 @@
 // 代答の取消・差し戻し（override API）・409 の競合表示・詳細 link の遷移、受信箱 thread の人待ち件数。
 
 import { expect, type Page, test } from "@playwright/test";
+import { seriousViolations } from "../support/axe";
 import { chatInboxItemsFixture } from "../support/fake-daemon.mjs";
-import { startChatGateway, waitForStream } from "./support";
+import { makeMessage, startChatGateway, waitForStream } from "./support";
 
 const card = (page: Page, kind: string) => page.locator(`article[data-card-kind="${kind}"]`);
 
@@ -49,6 +50,8 @@ test("7 種のカードが表示され、その場で回答できるカードは
       })
       .toBe(404);
     await expect(decision.getByText("「daemon token」で答えました。")).toBeVisible();
+    await expect(decision).toHaveAttribute("data-card-state", "answered");
+    await expect(decision.getByText("人待ち", { exact: true })).toHaveCount(0);
     const plan = card(page, "plan_gate");
     await expect(plan.getByRole("button", { name: "取り下げる", exact: true })).toHaveCount(0);
     await expect(plan.getByText(/「取り下げる」は理由|「計画をやり直す」・「取り下げる」は理由/)).toBeVisible();
@@ -62,9 +65,18 @@ test("7 種のカードが表示され、その場で回答できるカードは
       const one = card(page, kind);
       await one.getByRole("button", { name: label, exact: true }).click();
       await expect(one.getByRole("status")).toContainText("で答えました。");
+      await expect(one).toHaveAttribute("data-card-state", "answered");
       await expect
         .poll(async () => (await fetch(`${gateway.base}/api/inbox/items/${encodeURIComponent(id)}`)).status)
         .toBe(404);
+    }
+    // Reload uses GET 404 rather than the local answer result; all four kinds stay closed.
+    await page.reload();
+    for (const kind of ["decision", "question", "approval", "plan_gate"]) {
+      const one = card(page, kind);
+      await expect(one).toHaveAttribute("data-card-state", "closed");
+      await expect(one.getByText("終了", { exact: true })).toBeVisible();
+      await expect(one.getByRole("button")).toHaveCount(0);
     }
   } finally {
     await gateway.close();
@@ -226,4 +238,74 @@ test("受信箱 thread の badge は受信箱の人待ち項目数を示し、�
   } finally {
     await gateway.close();
   }
+});
+
+test.describe("受信箱の通知だけの CoS digest", () => {
+  test.use({ bypassCSP: true });
+
+  test("通知を折りたたんで人待ちを見せ、本文を開いて確認できる", async ({ page }) => {
+    const gateway = await startChatGateway();
+    try {
+      await page.goto(`${gateway.base}/?thread=chat-inbox`);
+      await waitForStream(gateway, "chat-inbox");
+      const notice = {
+        kind: "notice",
+        id: "notice:n1",
+        title: "検証完了",
+        state: "observed",
+        actor: "cos",
+        reason: "対応不要",
+        href: "/inbox",
+        operation_id: null,
+      };
+      const digest = makeMessage(
+        "chat-inbox",
+        100,
+        "assistant",
+        "受信箱の一次対応の結果（1 件）\n\n### 検証完了（知らせ）\n\n- 判断: 見ただけ（判断は不要）\n- 理由: 対応不要",
+        { cards: [notice], client_message_id: "cos-triage-digest:r1", run_id: "r1" },
+      );
+      await gateway.emit("chat-inbox", { type: "message", data: { message: digest } });
+      const waiting = makeMessage("chat-inbox", 101, "assistant", "人が決めること: 認証方式", {
+        cards: [
+          notice,
+          {
+            kind: "decision",
+            id: "decision:D1",
+            title: "認証方式",
+            state: "escalated",
+            actor: "cos",
+            reason: "人の判断が必要",
+            href: "/inbox",
+            operation_id: null,
+          },
+        ],
+      });
+      await gateway.emit("chat-inbox", { type: "message", data: { message: waiting } });
+      const folded = page.locator('[data-slot="chat-notice-folded"]');
+      const waitingCard = page.getByRole("article", { name: "決定: 認証方式", exact: true });
+      for (const width of [360, 390, 412, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await expect(folded).toHaveCount(1);
+        await expect(folded).not.toHaveAttribute("open");
+        await expect(waitingCard.getByText("人の判断待ち", { exact: true })).toBeVisible();
+        await expect(waitingCard.getByRole("button", { name: "daemon token" })).toBeVisible();
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth),
+        ).toBe(0);
+        const summary = folded.locator("summary");
+        await summary.scrollIntoViewIfNeeded();
+        const box = await summary.boundingBox();
+        expect(box?.height).toBeGreaterThanOrEqual(44);
+        expect(await seriousViolations(page)).toEqual([]);
+        const shots = process.env.CHAT_SHOT_DIR;
+        if (shots) await page.screenshot({ path: `${shots}/inbox-digest-${width}.png`, fullPage: true });
+        await summary.click();
+        await expect(folded.getByText("対応不要", { exact: false }).first()).toBeVisible();
+        await summary.click();
+      }
+    } finally {
+      await gateway.close();
+    }
+  });
 });

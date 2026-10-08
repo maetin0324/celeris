@@ -82,8 +82,12 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
 ### D5. web
 
 - 人待ちのカードを持たない system 行（triage の入力行・知らせ・閉じた退避の行）を折りたたみ（`<details>`。1 行目だけ見せる）で出す。
-  人待ちのカード（`pending` / `escalated` の decision/question/approval/plan_gate）を持つ発言と、人・CoS の発言は通常の表示。
-  判定は message の role と cards だけで決まるので、thread の種類に依らず同じ（system 行が人待ちを持つのは受信箱スレッドだけ）。
+  CoS の assistant 発言も、カードが 1 件以上あり全て `notice/observed` なら折りたたむ（triage digest の実際の role/state）。
+  人待ちのカード（`pending` / `escalated` の decision/question/approval/plan_gate）を持つ発言、通知以外を含む発言、通常の会話、配信中の発言は通常の表示。
+  折りたたんでも CoS の発言者表示と本文・カード・添付・tool の内容は保つ。判定は role と cards で決め、thread の種類には依らない。
+- カードの保存時の状態より、回答結果・受信箱 API の実状態を表示に優先する。回答成功は `answered`（回答済み）、404 は
+  `closed`（終了。回答済みか失効かは断定しない）として、状態バッジ・`data-card-state`・操作の有無を揃える。
+  回答結果や閉じた理由の説明は残す。再取得が 404 なら古い query cache の選択肢より優先する。
 - composer は受信箱スレッドでも使える。placeholder を「受信箱の件について CoS に聞く・指示する」にする。
 
 ## 3. 帰結
@@ -118,7 +122,9 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   それまでは「同じスレッドの role=user」だけを見ていて、一次対応 run や過去の無関係な発言の id で human_required を外せた）。
   決定との差分: 「どの件か曖昧なら聞き返す」は skill と prompt の指示であり、API は強制しない（判断は CoS、検証は API という D3 の境界のまま）。
 - D4: 中断された run の件の戻しは digest の中（`cos_triage_requeue_run`）。completed の取り残しは従来どおり退避。
-- D5: `web/features/chat/messages/message-item.tsx`（`foldedSummary`・`data-slot="chat-system-folded"`）、
+- D5: `web/features/chat/messages/message-item.tsx`（`foldedSummary`・`chat-system-folded`・`chat-notice-folded`）。
+  2026-10-08 の表示差し戻しで、assistant の `notice/observed` だけの発言を折りたたむ条件を追加。混在する人待ちは通常表示。
+  `cards/chat-card.tsx` は回答結果から表示状態を決め、query の 404 を古いキャッシュより優先する。`card-model.ts` の `closed` は「終了」。
   `web/features/chat/composer/chat-composer.tsx`（`placeholder`・`INBOX_COMPOSER_PLACEHOLDER`）、`chat-home.tsx` が受信箱 thread で渡す。
 - 試験: 本文 §4 のとおり（名前は `cos_chat_triage_digest_*`・`cos_chat_triage_human_interrupt_*`・`cos_chat_inbox_*`・
   `cos_chat_prompt_inbox_items_*`・`cos_chat_triage_store_report_*`・`cos_chat_inbox_thread_instructed_by_*`・web の `chat_inbox_*`）。

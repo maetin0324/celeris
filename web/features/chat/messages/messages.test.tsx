@@ -524,6 +524,41 @@ describe("chat_inbox_rows", () => {
     expect(human).not.toContain('data-slot="chat-system-folded"');
   });
 
+  it("chat_inbox_rows_assistant_observed_notices_fold_but_mixed_and_streaming_messages_stay_open", () => {
+    // digest.rs emits assistant messages with CoS notice/observed cards, not system rows.
+    const notice = card({ kind: "notice", id: "n1", title: "検証完了", state: "observed", actor: "cos" });
+    const digest = message("digest", 7, {
+      role: "assistant",
+      client_message_id: "cos-triage-digest:r1",
+      run_id: "r1",
+      text: "受信箱の一次対応の結果（1 件）\n\n### 検証完了（知らせ）\n- 判断: 見ただけ（判断は不要）\n- 理由: 対応不要",
+      cards: [notice],
+    });
+    const html = renderToStaticMarkup(<MessageItem message={digest} streaming={false} renderCards={render} />);
+    expect(html).toContain('data-slot="chat-notice-folded"');
+    expect(html).not.toMatch(/<details[^>]* open/);
+    expect(html).toContain('data-role="assistant"');
+    expect(html).toContain('aria-label="CoS"');
+    expect(html).toContain("判断は不要");
+    expect(html).toContain("対応不要");
+    expect(html).toContain("カード 検証完了");
+    for (const cards of [
+      [],
+      [notice, card({ kind: "question", state: "escalated" })],
+      [notice, card({ kind: "decision", state: "answered" })],
+      [card({ kind: "notice", state: "running" })],
+    ]) {
+      const open = renderToStaticMarkup(
+        <MessageItem message={{ ...digest, cards }} streaming={false} renderCards={render} />,
+      );
+      expect(open).not.toContain("<details");
+    }
+    const streaming = renderToStaticMarkup(<MessageItem message={digest} streaming />);
+    expect(streaming).not.toContain("<details");
+    const human = renderToStaticMarkup(<MessageItem message={{ ...digest, role: "user" }} streaming={false} />);
+    expect(human).not.toContain("<details");
+  });
+
   it("chat_inbox_rows_folded_summary_is_the_first_line", () => {
     expect(foldedSummary({ text: "\n一行目\n二行目", cards: [] })).toBe("一行目");
     expect(foldedSummary({ text: "", cards: [card(), card({ id: "d2" })] })).toBe("2 件の知らせ");

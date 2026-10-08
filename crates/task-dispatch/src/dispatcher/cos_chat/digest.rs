@@ -149,6 +149,9 @@ impl CosChatLaunch {
     /// One digest pass: every finished triage run without a digest gets its message; stopped
     /// and interrupted runs give their unhandled items back to the queue.
     pub(crate) fn triage_digest(&mut self, now: OffsetDateTime) {
+        // Keep the reservation until an empty scan succeeds. A bounded pass or any
+        // lookup/write failure must continue on the next tick without another run.
+        self.triage.digest_due = true;
         let runs = match self
             .store
             .cos_triage_runs_without_digest(DIGEST_RUNS_PER_PASS)
@@ -160,6 +163,7 @@ impl CosChatLaunch {
             }
         };
         if runs.is_empty() {
+            self.triage.digest_due = false;
             return;
         }
         let thread = match self.inbox_thread() {

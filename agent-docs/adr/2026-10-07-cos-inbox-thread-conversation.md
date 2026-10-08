@@ -37,6 +37,7 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   十分だから。CoS が reason を書かなかった場合も「理由の記録なし」として件は必ず残る（受け入れ条件 0 の「決定的に補う」）。
 - 終端が completed なのに `running` のまま残った件は「未処理（人へ直接通知する）」と書き、処理は D6 の退避に任せる。
 - 回収: 終端済みで digest の無い triage run は、run の終了を観測した tick と起動時の reconcile で拾う（上限 20 run/tick）。
+  起動失敗と ownerless run の回収も生成を予約する。予約は走査が空になるまで維持し、残件・走査失敗・書き込み失敗は次の通常 tick で再試行する。
   対象は件を 1 つ以上持つ run だけなので、導入前の古い run にも 1 度だけ digest が付く（以後は増えない）。
 
 ### D2. 退避（fallback）の行は題名と「人が決めること」を書く
@@ -100,6 +101,8 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
 
 - store: `cos_triage_report_*`（run の件の報告と packet の取り出し）、`cos_triage_open_items_*`、`chat_assistant_message_add_once_*`。
 - dispatcher: `cos_chat_triage_digest_*`（終端後に assistant 発言が残る・reason 無しでも残る・escalate のカードが `escalated`）、
+  `cos_chat_triage_digest_launch_failure_*` / `restart_drains_more_than_twenty_*` / `scan_failure_*` / `write_failure_*` /
+  `orphan_recovery_*`（起動失敗・41 run の回収・DB 読み書き失敗・孤立 run 回収後も通常 tick で生成）、
   `cos_chat_triage_fallback_*`（handoff 文に題名と選択肢）、`cos_chat_triage_requeue_on_interrupt`、
   `cos_chat_inbox_human_message_*`（人の発言で run が起き、`inbox_items` が文脈に入る。triage と重なっても両方処理）。
 - task-worker: `cos_chat_prompt_inbox_items_section`。
@@ -109,7 +112,8 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
 ## 付記: 実装との突き合わせ（2026-10-07）
 
 - D1: `crates/task-dispatch/src/dispatcher/cos_chat/digest.rs`（`digest_message` は純粋。`triage_digest` は tick の `triage_ingest` で
-  `digest_due` のときだけ走る。`digest_due` は reconcile と、受信箱スレッドの run が `running` から消えたとき（`inbox_run_live`）に立つ）。
+  `digest_due` のときだけ走る。`digest_due` は reconcile と、受信箱スレッドの run が `running` から消えたとき（`inbox_run_live`）、
+  `start_thread` の起動失敗、`control_hook` の ownerless run 回収時に立つ。空の走査が成功するまで予約を維持する）。
   store は `cos_triage_run_report` / `cos_triage_runs_without_digest` / `chat_assistant_message_add_once`（`crates/task-core/src/chat/{triage,store}.rs`）。
   migration `0059_cos_inbox_item_summary.sql`（`summary` 列と `run_id` の index）。digest の冪等 key は `cos-triage-digest:<run_id>`。
   run の終端と次の tick の間に process が落ちると digest は再起動時の reconcile で書かれる（件を持つ run だけ）。

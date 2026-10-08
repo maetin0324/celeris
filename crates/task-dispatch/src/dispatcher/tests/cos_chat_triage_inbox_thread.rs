@@ -342,3 +342,191 @@ fn ctx_report_seed() -> task_core::chat::triage::CosTriageItemReport {
         decision: None,
     }
 }
+
+impl Fixture {
+    /// Durable terminal runs from a previous process, without spawning a worker.
+    fn seed_digest_run(&self, id: &str, state: task_core::chat::ChatRunState) {
+        let now = self.d.now_utc();
+        self.store
+            .cos_triage_ingest_batch(
+                "digest-test",
+                id,
+                &[task_core::chat::triage::CosTriageSource {
+                    source_kind: "notice".into(),
+                    source_key: id.into(),
+                    source_revision: "1".into(),
+                    source_event_id: None,
+                    operation_id: None,
+                    summary: format!("知らせ {id}"),
+                    policy_version: "1".into(),
+                }],
+                now,
+            )
+            .expect("ingest");
+        let claim = self
+            .store
+            .cos_triage_claim(id, now)
+            .expect("claim")
+            .expect("run");
+        if state == task_core::chat::ChatRunState::Completed {
+            self.store
+                .cos_triage_resolve(&claim.item_ids[0], "observed", None, Some("確認済み"), now)
+                .expect("resolve");
+        }
+        self.store
+            .chat_run_finish(id, state, None, None, now)
+            .expect("finish");
+    }
+
+    fn digest_due(&self) -> bool {
+        self.d
+            .cos_chat_launch
+            .as_ref()
+            .expect("launch")
+            .triage
+            .digest_due
+    }
+}
+
+#[tokio::test]
+async fn cos_chat_triage_digest_launch_failure_after_startup_is_recovered_on_normal_tick() {
+    let mut f = fixture(true);
+    f.tick(); // Startup reconciliation has already consumed its digest reservation.
+    assert!(!f.digest_due());
+    f.d.cos_chat_launch
+        .as_mut()
+        .expect("launch")
+        .config
+        .unavailable_reason = Some("CoS unavailable: quota or login".into());
+    f.question("deploy", vec![]);
+    f.tick();
+    assert_eq!(
+        f.count("SELECT COUNT(*) FROM chat_runs WHERE state='failed'"),
+        1
+    );
+    assert!(!f.join_inbox().await, "failure occurred before spawn");
+    f.tick(); // No reconcile request, new input, or restart.
+    let digests = f.digests();
+    assert_eq!(digests.len(), 1);
+    assert!(digests[0].text.contains("質問: deploy"));
+    assert!(digests[0].text.contains("quota or login"));
+    for _ in 0..3 {
+        f.tick();
+    }
+    assert_eq!(f.digests().len(), 1);
+    assert_eq!(f.inbox_runs(), 1);
+    assert!(!f.digest_due());
+}
+
+#[tokio::test]
+async fn cos_chat_triage_digest_restart_drains_more_than_twenty_runs_on_normal_ticks() {
+    let mut f = fixture(true);
+    for i in 0..41 {
+        f.seed_digest_run(
+            &format!("old-{i:02}"),
+            task_core::chat::ChatRunState::Completed,
+        );
+    }
+    // Fresh launch state sees durable history once, then ordinary ticks drain it.
+    f.tick();
+    assert_eq!(f.digests().len(), 20, "bounded first pass");
+    f.tick();
+    assert_eq!(f.digests().len(), 40, "bounded second pass");
+    f.tick();
+    assert_eq!(f.digests().len(), 41, "last run is not stranded");
+    f.tick();
+    assert!(!f.digest_due(), "stop scanning after the backlog is empty");
+    let ids: std::collections::HashSet<_> =
+        f.digests().into_iter().map(|m| m.run_id.unwrap()).collect();
+    assert_eq!(ids.len(), 41);
+    assert_eq!(f.inbox_runs(), 41, "no new run needed to drive recovery");
+    assert!(!f.join_inbox().await);
+}
+
+#[tokio::test]
+async fn cos_chat_triage_digest_write_failure_retries_on_normal_tick() {
+    let mut f = fixture(true);
+    f.seed_digest_run("old", task_core::chat::ChatRunState::Completed);
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    conn.execute_batch(
+        "CREATE TRIGGER fail_digest BEFORE INSERT ON chat_messages
+        WHEN NEW.client_message_id LIKE 'cos-triage-digest:%'
+        BEGIN SELECT RAISE(FAIL, 'injected digest failure'); END;",
+    )
+    .expect("trigger");
+    f.tick();
+    assert!(f.digests().is_empty());
+    conn.execute_batch("DROP TRIGGER fail_digest")
+        .expect("restore writes");
+    f.tick();
+    assert_eq!(f.digests().len(), 1, "failed write remains scheduled");
+    f.tick();
+    assert!(!f.digest_due());
+}
+
+#[tokio::test]
+async fn cos_chat_triage_digest_scan_failure_retries_on_normal_tick() {
+    let mut f = fixture(true);
+    f.tick();
+    f.seed_digest_run("old", task_core::chat::ChatRunState::Completed);
+    f.d.cos_chat_launch
+        .as_mut()
+        .expect("launch")
+        .triage
+        .digest_due = true;
+    let conn = rusqlite::Connection::open(&f.db_path).expect("db");
+    conn.execute_batch("ALTER TABLE cos_inbox_items RENAME TO hidden_items")
+        .expect("hide table");
+    f.tick();
+    assert!(f.digests().is_empty());
+    conn.execute_batch("ALTER TABLE hidden_items RENAME TO cos_inbox_items")
+        .expect("restore table");
+    f.tick();
+    assert_eq!(f.digests().len(), 1, "failed scan remains scheduled");
+    f.tick();
+    assert!(!f.digest_due());
+}
+
+#[tokio::test]
+async fn cos_chat_triage_digest_orphan_recovery_after_startup_is_scheduled() {
+    let mut f = fixture(true);
+    f.tick();
+    assert!(!f.digest_due());
+    // Intake is allowed while launches are paused. The previous owner left an
+    // escalated item and a stopped run whose terminal transition is still due.
+    f.d.accepting_new_work = false;
+    f.question("deploy", vec![]);
+    f.tick();
+    let claim = f
+        .store
+        .cos_triage_claim("orphan", f.d.now_utc())
+        .expect("claim")
+        .expect("run");
+    f.escalate(&claim.item_ids[0], "人の判断");
+    f.store
+        .chat_run_stop(&claim.thread_id, &claim.run_id, f.d.now_utc())
+        .expect("stop");
+    f.d.set_orphan_takeover(crate::orphan::OrphanTakeover {
+        instance_id: "restarted-daemon".into(),
+        freshness: std::time::Duration::from_secs(60),
+        pid_alive: Arc::new(|_| false),
+    });
+    f.d.accepting_new_work = true;
+    f.tick();
+    assert_eq!(
+        f.store
+            .chat_run_get(&claim.thread_id, &claim.run_id)
+            .expect("run")
+            .state,
+        task_core::chat::ChatRunState::Stopped
+    );
+    let digests = f.digests();
+    assert_eq!(digests.len(), 1);
+    assert_eq!(digests[0].run_id.as_deref(), Some("orphan"));
+    assert!(digests[0].text.contains("質問: deploy"));
+    assert!(digests[0].text.contains("人に回した"));
+    assert!(!f.join_inbox().await);
+    f.tick();
+    assert!(!f.digest_due());
+    assert_eq!(f.digests().len(), 1);
+}

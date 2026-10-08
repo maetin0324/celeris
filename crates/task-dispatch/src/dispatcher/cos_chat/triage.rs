@@ -313,7 +313,6 @@ impl CosChatLaunch {
         // assistant message (and the requeue of an interrupted run's items), before the
         // fallback looks at what is left.
         if self.triage.digest_due {
-            self.triage.digest_due = false;
             self.triage_digest(now);
         }
         // D6: LLM-free direct notice for items CoS cannot answer.

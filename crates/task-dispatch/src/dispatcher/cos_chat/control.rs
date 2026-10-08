@@ -121,6 +121,11 @@ impl CosChatLaunch {
                 if let Err(error) = self.recover_orphan(&run, dispatcher.now_utc()) {
                     tracing::warn!(%error, %run_id, "CoS orphan recovery failed");
                 }
+                // Recovery can end an inbox run after startup reconciliation,
+                // without a local worker handle whose completion we can observe.
+                if thread.kind == task_core::chat::ChatThreadKind::Inbox {
+                    self.triage.digest_due = true;
+                }
             }
             before = page.next_cursor;
             if before.is_none() {

@@ -356,6 +356,13 @@ impl CosChatLaunch {
         };
         if let Err(reason) = self.launch_claimed(dispatcher, thread_id, &run_id, &run, account, now)
         {
+            // No worker handle exists on this path, so inbox_run_live cannot
+            // observe its terminal transition. Reserve the digest explicitly.
+            if source == ClaimSource::Triage
+                || self.triage.inbox_thread.as_deref() == Some(thread_id)
+            {
+                self.triage.digest_due = true;
+            }
             let reason = if reason.starts_with("CoS unavailable:") {
                 reason
             } else {

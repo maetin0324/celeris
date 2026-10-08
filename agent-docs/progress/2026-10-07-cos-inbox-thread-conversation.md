@@ -135,6 +135,37 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
   変更後の 4 幅の画像は同ディレクトリの `retry-screenshots/inbox-digest-<width>.png`。
   fake daemon・fake adapter とローカルの browser のみで検証。本番サービス・DB・元のチェックアウトの変更、デプロイ、実機 LLM の起動は行っていない。
 
+## 判断文生成の差し戻し対応（2026-10-08、attempt 3）
+
+- 起動時 reconcile 後に quota / login 等で起動前に失敗した run は、worker handle が無く終了検知されない。
+  `start_thread` の失敗経路でも判断文生成を予約した。孤立 run の回収による終端も `control_hook` から予約する。
+- `triage_ingest` が予約を先に消す処理を除き、`triage_digest` が空の走査に成功したときだけ消す。
+  1 tick 20 run の上限を保ち、残件・走査失敗・判断文保存失敗を次の通常 tick で再試行する。
+  新しい run・明示 reconcile・再起動を継続の条件にしない。冪等 key は既存のまま。
+- 回帰試験を5件追加。起動失敗、41 run の回収（20 → 40 → 41）、一時DBの走査/保存失敗の復旧、
+  起動時 reconcile 後の孤立 run 回収を固定した。時計注入・fake adapter・一時DBのみで、待ち時間や外部ネットワークに依存しない。
+  起動失敗・残件・走査失敗・保存失敗の4件は修正前に失敗を確認。修正後は既存2件と合わせ7件成功。
+- ADR D1・実装との突き合わせ・試験一覧を更新。元の prepare.log の fmt 失敗は `599b30e6` で修正済み。
+  main は `186701fa` で、この branch の祖先のため取り込みは不要。
+
+| 検査 | 結果 |
+|---|---|
+| `cargo test -p task-dispatch --lib cos_chat_triage_digest_` | exit 0、7 passed（新規5件 + 既存2件） |
+| `cargo build -p celeris -p celerisctl` | exit 0（新しい scratch target の E2E 前提バイナリ） |
+| `bash scripts/dev/test-parallel.sh` | exit 0、4728 passed / 0 failed / 14 ignored、160 binaries、doctest exit 0、tmp_leftovers 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web test` | exit 0、82 files / 601 tests、server 77 tests passed |
+| `pnpm -C web lint` | exit 0（既存 styles.css の警告4件） |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0 |
+| `git diff --check` / `git merge-base --is-ancestor main HEAD` | exit 0 / exit 0 |
+
+- ログ: `/local/celeris/data/workspaces/01M4CAKADGDTZA7QKDJ9GX35MW/artifacts/retry3-*.log`。
+  全体試験は `retry3-test-parallel.log`、回帰試験は `retry3-regression-after.log`。
+- 本番サービス・DB・元のチェックアウトを変更せず、この task branch のみで修正・検証した。
+  release prepare・デプロイ・実機 LLM の起動は行っていない。
+
 ## 未解決事項
 
 - digest は run の終端を観測した tick で書く。終端と tick の間に daemon が落ちた場合は再起動時の reconcile で書かれる（件を持つ run だけ）。

@@ -1452,9 +1452,12 @@ export function inboxItemsFixture() {
       task: inboxTask("T4", "ベンチを流す"),
       age_secs: 600,
     }),
-    item("knowledge_review:K1", "knowledge_review", "知識の候補を確かめる: New knowledge", {
-      options: [inboxOption("accept", "採用する", "正本に入れる"), inboxOption("reject", "捨てる", "候補を消す")],
-      links: [{ label: "知識の候補", href: "/knowledge/inbox" }],
+    // 人の決定 2026-10-08: KB の取り込み待ち（旧 knowledge_review）は受信箱に出さない。5 件目は cluster_login。
+    item("cluster_login-pegasus", "cluster_login", "クラスタ pegasus に再ログインする", {
+      detail: "pegasus への接続が切れている。クラスタ接続画面で TOTP を入力する",
+      options: [inboxOption("logged_in", "ログインした", "接続の回復で消える")],
+      recommended: "logged_in",
+      blocking: { tasks: [], units: [], summary: "クラスタ pegasus を使う task 1 件" },
       age_secs: 120,
     }),
   ];

@@ -166,10 +166,18 @@ token: <64+ 文字の値。この 1 回しか出ない>
     `Event::ApprovalDecided.by` に `mcp:<client_id>` が入る）。
   - `task_reject { id, reason }`（scope `tasks:decide`。`POST /tasks/{id}/reject` と同じ。`reason` は
     必須・空白不可。`by` は `mcp:<client_id>`）。
-- **Console**: `console_instruct { text, project_id? }`（人の発言と同じ経路で CoS に渡す。発言の
-  `author` は `mcp:<client_id>`。返値は `message_id` / `task_id`）、
-  `console_reply { task_id, wait_secs? }`（`wait_secs` 上限 60。対話 run が終わっていれば `state: "done"`
-  + `reply` + `actions[]`、失敗なら `state: "failed"`、終わっていなければ `state: "pending"`）。
+- **CoS チャット**: `console_instruct { text, project_id?, thread_id? }`。`thread_id` を省略すると
+  呼び出しごとに通常の会話（`kind=human`）を作る。題名は `<client_id>: <本文の先頭行、最大60文字>`、
+  発言の metadata の `author` は `mcp:<client_id>`。`project_id` はスレッドに保持する。
+  続きは返値の `thread_id` を指定する。存在しない・archived・legacy のスレッド、またはスレッドと異なる
+  `project_id` は `invalid_params`。返値は `{ message_id, task_id, thread_id }`。
+  `task_id` は入力メッセージ ID と同じ互換の受付 ID（実行タスクは作らない）なので、従来の prompt は
+  そのまま `console_reply` に渡せる。legacy スレッドや REST の Console 入力には投入しない。
+  `console_reply { task_id?, thread_id?, wait_secs? }` は ID を**どちらか一つ**指定する。
+  `task_id` はその入力の返信、`thread_id` は最新の人の発言の返信を返す（古い完了済みの返信へ戻らない）。
+  `wait_secs` は既定0、上限60秒。run が completed なら `{ state: "done", reply, actions: [] }`、
+  failed なら `{ state: "failed", reply? }`、stopped/interrupted または入力が cancelled なら
+  `{ state: "cancelled" }`、それ以外は `{ state: "pending" }`。新 CoS は actions を実行しない。
 - **組織**: `org_list {}`、`org_get { node_id }`（実効 profile。`skills_mounts` を含む）、
   `org_create_node { parent_id, id, name, profile? }`（`profile` は `skills` / `knowledge` /
   `skills_mounts` / `harnesses` / `model` / `policy` / `run` だけ反映される。`tools` / `permissions` /
@@ -189,7 +197,7 @@ token: <64+ 文字の値。この 1 回しか出ない>
 ## 6. 監査と流量制限
 
 - すべての `tools/call` を `mcp_calls`（`client_id` / `tool` / `ok` / `error_kind` / `latency_ms` /
-  `at`）に残す（引数と結果の本文は残さない）。`console_instruct` は Console にも出るので二重には
+  `at`）に残す（引数と結果の本文は残さない）。`console_instruct` はチャットに発言を保存するので二重には
   書かない。
 - クライアントごとに 1 分あたり `[mcp] rate_limit_per_min`（既定 60）。超えたら JSON-RPC エラー
   `-32000` + `data.retry_after`（秒）。
@@ -324,6 +332,7 @@ $ celeris-chat --list
 $ celeris-chat tasks_list '{"status":"blocked","limit":5}'
 $ celeris-chat knowledge_search '{"query":"pegasus"}'
 $ celeris-chat console_instruct '{"text":"調査結果をタスクにして"}'
+# 続きは console_instruct に返値の thread_id を指定。返信は task_id または thread_id で取得。
 $ celeris-chat console_reply '{"task_id":"<上の task_id>","wait_secs":30}'
 $ celeris-chat task_comment '{"id":"<task ulid>","text":"見ました。続けてください"}'
 ```

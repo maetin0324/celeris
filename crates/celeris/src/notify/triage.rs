@@ -151,9 +151,8 @@ pub fn source_unresolved(
             }
         }
     }
-    let inbox =
-        task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new(), None)
-            .map_err(|e| e.to_string())?;
+    let inbox = task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new())
+        .map_err(|e| e.to_string())?;
     Ok(inbox
         .items
         .iter()
@@ -185,9 +184,8 @@ pub fn cutover(store: &SqliteStore, view: &ViewContext, now: OffsetDateTime) -> 
     {
         return Ok(());
     }
-    let inbox =
-        task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new(), None)
-            .map_err(|e| e.to_string())?;
+    let inbox = task_ops::human_inbox::human_inbox(store, None, view, now, &|_, _| Vec::new())
+        .map_err(|e| e.to_string())?;
     let mut initial: Vec<CosTriageSource> = inbox
         .items
         .iter()

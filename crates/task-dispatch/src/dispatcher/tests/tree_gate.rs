@@ -1008,7 +1008,6 @@ async fn auto_leaf_excess_compaction_interrupts_live_run_and_resume_resets_windo
         },
         OffsetDateTime::now_utc(),
         &|_, _| vec![],
-        None,
     )
     .unwrap();
     let item = inbox

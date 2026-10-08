@@ -1310,7 +1310,6 @@ fn answered_integrated_and_superseded_integration_requests_leave_the_inbox() {
             &view_ctx(),
             OffsetDateTime::now_utc(),
             &no_evidence,
-            None,
         )
         .expect("human inbox")
         .items

@@ -2591,7 +2591,7 @@ CoS の `actions` は ADR-0048 D3（§3.107）。
 
 | `kind` | 中身 | 由来 |
 |---|---|---|
-| `human` | 人の発言（`text` / `node_id` / `project_id` / `task_id`）。ADR-0056 D2: `author`（`mcp:<client_id>`。MCP の `console_instruct` が付けた発言だけ。人の発言は省略）で GUI は「外部（<client name>）」の帯を出せる | `messages`（`role = user`） |
+| `human` | 人の発言（`text` / `node_id` / `project_id` / `task_id`）。ADR-0056 D2: `author`（`mcp:<client_id>`。旧 MCP 入力が付けた発言。2026-10-08 以降の MCP は通常チャットへ投入。人の発言は省略）で GUI は「外部（<client name>）」の帯を出せる | `messages`（`role = user`） |
 | `reply` | CoS・部署ノードの返事（Markdown。`run_id` 付き）。CoS が `actions`（§3.107）を宣言していれば `actions_result`（`MessageMetadata`: `actions_executed[]` / `actions_failed[]`）。ADR-0054 D2: `state`（`streaming` \| `done`。省略時 `done`）・`thinking`（run 中の最新の思考 1 行。置き換え式）・`steps[]`（`{kind: tool_use\|tool_result, tool?, text, error?}`。run 中の道具の呼び出しを順番どおり） | `messages`（`role = node`）。`state = streaming` のときは対話 run の `Event::WorkerProgress` から合成（まだ `messages` に確定していない） |
 | `task` | 開始・終了・失敗・中止・割り込みの 1 行（`task`: `from` / `to` / `reason` / `assignee` / `harness` / `tier` / `mode` / `elapsed_secs`） | `Event::Transitioned` |
 | `progress` | run ごとに束ねたワーカーの進行。`progress`: `run_id` / `count` / `tool_count` / `last_status` / `started_at` / `updated_at` / `first[]` / `last[]` / `truncated`。見出し用に `title` / `assignee` / `harness` / `tier` | `Event::WorkerProgress`（ADR-0048 D2 の正規化） |
@@ -2898,7 +2898,7 @@ LLM source のローカル OpenAI 互換プロキシ（`crates/llm-proxy`。`127
 - `GET /mcp/calls?client=<id>` → 200 `{"items": [McpCall]}`。`client` は省略可（省略時は全クライアント）。
   新しい順、直近 100 件。`McpCall` は `id` / `client_id` / `tool` / `ok` / `error_kind`（成功なら省略） /
   `latency_ms` / `at`。**引数と結果の本文は残さない**（ADR-0056 D4）。`console_instruct` の呼び出しは
-  Console（§3.98）にも出るので二重には書かない。
+  チャットに発言を保存する（2026-10-08 の変更。§3.128）。
 - どちらも読み取り専用。`token_file` があれば Bearer 必須。
 
 ### 3.112〜3.117 skills を GUI から見る・作る・mount する（ADR-0056 D3）
@@ -3375,6 +3375,10 @@ catalog の自動発見は表を消さない。`GET /llm/models` の各 item に
 
 §2 の 178〜195。パスは `/api/v1` から。閲覧は既存の認証（Bearer / Host）、書込みは管理権限。型は `ChatThread`・`ChatMessage`・`ChatRun`・`ChatAttachment`・`ChatCard`・`ChatEvent` と各 request/response（§6、`api-v1.schema.json` の `$defs`）。設計の正本は [ADR 2026-10-05](../../../agent-docs/adr/2026-10-05-cos-chat-home.md) D2。
 
+MCP の console_instruct は 2026-10-08 の人の決定で legacy facade から独立した。
+通常の human スレッドに queue し、thread_id を返す（引数・返信は [MCP ガイド §5](../../guides/mcp.md)）。
+REST の旧 Console エンドポイントは既定 legacy スレッドを使う従来の契約を維持する。
+
 | 事項 | 決め |
 |---|---|
 | 時刻・id | 時刻は RFC3339 UTC、id は文字列（SSE cursor も文字列） |
@@ -3563,6 +3567,8 @@ run の詳細（`tool` の大きな出力など）は `GET /chat/threads/{t}/run
 ### 5.1 受信箱（`task_ops::inbox::inbox(store, snapshot, ctx: &ViewContext, now, evidence)`）
 
 `GET /api/v1/inbox/items` の `kind: "integration_request"` は、未回答の統合依頼を `(task, target_sha, source_sha)` ごとに 1 件だけ返す。一般通知の `GET /api/v1/notifications` には載せない。管理者は `POST /api/v1/inbox/items/{id}/answer` に `{"option":"integrated"|"declined"|"retry", "note":"任意のメモ"}` を送る。回答は task の `IntegrationAnswered` 事象として追記され、その依頼は受信箱から消える。未知または回答済みの id は 404。
+
+KB の取り込み待ち（`GET /knowledge/inbox` の候補）は `GET /api/v1/inbox/items` に出さない。`InboxKind` に `knowledge_review` は無く（人の決定 2026-10-08、ADR-0133 末尾の付記）、`GET /api/v1/inbox/items/knowledge_review` と answer は 404 `inbox-item-gone`。候補は知識画面で `POST /knowledge/inbox/{id}/accept|reject`（§3 の 94・95）で扱う。通知にも代わりの項目は作らない。
 
 `Inbox { approvals, questions, drafts, attention, browser_waits, decisions, counts }`。`evidence` は task-api が渡す関数で、`<ws>/runs/<run_id>/result.json` の `evidence[]` を読む（読めなければ `[]`）。
 

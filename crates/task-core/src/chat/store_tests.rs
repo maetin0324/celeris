@@ -1219,3 +1219,48 @@ fn cos_workspace_files_attach_to_assistant_reply() {
         .expect("row");
     assert_eq!(expires, None, "a pinned blob is not an orphan");
 }
+
+#[test]
+fn cos_chat_mcp_metadata_and_atomic_validation() {
+    let s = store();
+    let input = s
+        .chat_mcp_instruct("chatgpt-rdc", None, None, "依頼", at(0))
+        .unwrap()
+        .response
+        .message;
+    store::read_tx(&s, |conn| {
+        let (author, legacy): (String, Option<String>) = conn.query_row(
+            "SELECT json_extract(metadata_json,'$.author'),legacy_message_id FROM chat_messages WHERE id=?1",
+            [&input.id], |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        assert_eq!(author, "mcp:chatgpt-rdc");
+        assert_eq!(legacy, None);
+        Ok(())
+    }).unwrap();
+    assert!(
+        s.chat_mcp_instruct("chatgpt", None, None, "", at(1))
+            .is_err()
+    );
+    assert!(
+        s.chat_mcp_instruct("chatgpt", None, Some("missing"), "依頼", at(1))
+            .is_err()
+    );
+    let threads = s.chat_thread_list(&ChatThreadQuery::default()).unwrap();
+    assert_eq!(threads.items.len(), 1);
+}
+
+#[test]
+fn cos_chat_mcp_title_truncates_unicode_without_truncating_input() {
+    let s = store();
+    let text = format!("{}\nsecond line", "調".repeat(80));
+    let input = s
+        .chat_mcp_instruct("chatgpt", None, None, &text, at(0))
+        .unwrap()
+        .response
+        .message;
+    assert_eq!(input.text, text);
+    assert_eq!(
+        s.chat_thread_get(&input.thread_id).unwrap().unwrap().title,
+        format!("chatgpt: {}", "調".repeat(60))
+    );
+}

@@ -326,16 +326,9 @@ fn fixture() -> Fixture {
     }
 }
 
-fn knowledge() -> KnowledgePending {
-    KnowledgePending {
-        count: 3,
-        oldest_created: Some("2026-10-01T00:00:00Z".to_string()),
-    }
-}
-
 fn build() -> (Fixture, HumanInbox) {
     let f = fixture();
-    let out = from_inbox(&f.inbox, Some(&knowledge()), &f.by_id, now());
+    let out = from_inbox(&f.inbox, &f.by_id, now());
     (f, out)
 }
 
@@ -404,7 +397,7 @@ fn human_inbox_notice_kinds_do_not_appear() {
     // 通知側だけの Inbox からは何も出ない。
     let mut only_notice = empty_inbox();
     only_notice.attention.push(f.inbox.attention[1].clone());
-    let out = from_inbox(&only_notice, None, &f.by_id, now());
+    let out = from_inbox(&only_notice, &f.by_id, now());
     assert!(out.items.is_empty(), "{:?}", out.items);
     assert_eq!(out.counts.total, 0);
 }
@@ -482,7 +475,7 @@ fn human_inbox_browser_wait_has_deadline_and_native_credential_path() {
     inbox
         .browser_waits
         .push(browser_wait_item(&f.task, "waiting_for_approval"));
-    let out = from_inbox(&inbox, None, &f.by_id, now());
+    let out = from_inbox(&inbox, &f.by_id, now());
     let keys: Vec<&str> = out.items[0]
         .options
         .iter()
@@ -552,7 +545,7 @@ fn human_inbox_failed_recommends_retry_only_for_infra() {
         delivered_release: None,
         integration_repair: None,
     });
-    let out = from_inbox(&inbox, None, &f.by_id, now());
+    let out = from_inbox(&inbox, &f.by_id, now());
     assert_eq!(out.items[0].recommended, None);
 }
 
@@ -627,7 +620,7 @@ fn human_inbox_integration_request_preserves_decision_material() {
         at: AT.into(),
     });
     let by_id = [(task.id, task.clone())].into();
-    let out = from_inbox(&inbox, None, &by_id, now());
+    let out = from_inbox(&inbox, &by_id, now());
     let item = one(&out, InboxKind::IntegrationRequest);
     assert_eq!(
         item.id,
@@ -661,26 +654,21 @@ fn human_inbox_integration_request_preserves_decision_material() {
 }
 
 #[test]
-fn human_inbox_knowledge_review_is_one_item_and_disappears_at_zero() {
-    let (_, out) = build();
-    let k = one(&out, InboxKind::KnowledgeReview);
-    assert!(k.title.contains("3 件"));
-    let f = fixture();
-    let zero = KnowledgePending {
-        count: 0,
-        oldest_created: None,
-    };
-    let out = from_inbox(&f.inbox, Some(&zero), &f.by_id, now());
+fn human_inbox_never_has_knowledge_review() {
+    // 人の決定 2026-10-08: KB の取り込み待ちは受信箱に出さない（種類ごと無い）。
     assert!(
-        out.items
+        InboxKind::ALL
             .iter()
-            .all(|i| i.kind != InboxKind::KnowledgeReview)
+            .all(|k| k.as_str() != "knowledge_review")
     );
-    let out = from_inbox(&f.inbox, None, &f.by_id, now());
+    let (_, out) = build();
     assert!(
         out.items
             .iter()
-            .all(|i| i.kind != InboxKind::KnowledgeReview)
+            .all(|i| !i.id.starts_with("knowledge_review")
+                && i.kind.as_str() != "knowledge_review"),
+        "{:?}",
+        out.items
     );
 }
 
@@ -708,7 +696,7 @@ fn human_inbox_answered_items_disappear() {
     let blocked = sample_task(TaskKind::Execute, Status::Blocked);
     store.insert(&blocked).expect("insert blocked");
 
-    let before = human_inbox(&store, None, &ctx, now(), &no_evidence, None).expect("inbox before");
+    let before = human_inbox(&store, None, &ctx, now(), &no_evidence).expect("inbox before");
     let draft_id = "draft_accept-root".to_string();
     let question_id = format!("question-{}", blocked.id);
     assert!(
@@ -725,7 +713,7 @@ fn human_inbox_answered_items_disappear() {
     crate::gate::accept(&store, draft.id, None).expect("accept");
     crate::gate::answer(&store, blocked.id, "A を使う".to_string(), None).expect("answer");
 
-    let after = human_inbox(&store, None, &ctx, now(), &no_evidence, None).expect("inbox after");
+    let after = human_inbox(&store, None, &ctx, now(), &no_evidence).expect("inbox after");
     assert!(
         after.items.iter().all(|i| i.id != draft_id),
         "{:?}",

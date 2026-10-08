@@ -488,6 +488,120 @@ fn parse_thread_cursor(s: &str) -> Result<(String, String), ChatError> {
 }
 
 impl SqliteStore {
+    /// MCP inputs use the normal human queue. Thread creation, input and provenance
+    /// commit together; the input id is also the compatibility task receipt.
+    pub fn chat_mcp_instruct(
+        &self,
+        client_id: &str,
+        thread_id: Option<&str>,
+        project_id: Option<&str>,
+        text: &str,
+        now: OffsetDateTime,
+    ) -> Result<ChatMessagePosted, ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let at = chat_ts(now);
+        if let Some(project) = project_id {
+            let found: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM projects WHERE id=?1)",
+                [project],
+                |r| r.get(0),
+            )?;
+            if !found {
+                return Err(ChatError::Invalid(format!("project {project} not found")));
+            }
+        }
+        let id = match thread_id {
+            Some(id) => {
+                let thread = thread_require(&tx, id)?;
+                if thread.status == ChatThreadStatus::Archived
+                    || thread.kind == ChatThreadKind::Legacy
+                {
+                    return Err(ChatError::Invalid(format!(
+                        "thread {id} is archived or legacy"
+                    )));
+                }
+                if project_id.is_some() && thread.project_id.as_deref() != project_id {
+                    return Err(ChatError::Invalid(
+                        "project_id differs from thread project".into(),
+                    ));
+                }
+                id.to_owned()
+            }
+            None => {
+                let id = Ulid::new().to_string();
+                let source: String = client_id.chars().take(100).collect();
+                let summary: String = text
+                    .trim()
+                    .lines()
+                    .next()
+                    .unwrap_or_default()
+                    .chars()
+                    .take(60)
+                    .collect();
+                let title = format!("{source}: {summary}");
+                tx.execute(
+                    "INSERT INTO chat_threads(id,kind,title,project_id,status,created_at,updated_at) VALUES(?1,'human',?2,?3,'open',?4,?4)",
+                    params![id, title, project_id, at],
+                )?;
+                emit_thread(&tx, &id, &at)?;
+                id
+            }
+        };
+        let posted = message_post_conn(
+            &tx,
+            &id,
+            &ChatPostMessageRequest {
+                client_message_id: Ulid::new().to_string(),
+                text: text.to_owned(),
+                attachment_ids: Vec::new(),
+                reply_to_id: None,
+                mode: ChatSendMode::Queue,
+                resume_queue: false,
+            },
+            now,
+        )?;
+        tx.execute(
+            "UPDATE chat_messages SET metadata_json=json_set(metadata_json,'$.author',?2,'$.mcp_receipt',1) WHERE id=?1",
+            params![posted.response.message.id, format!("mcp:{client_id}")],
+        )?;
+        tx.commit()?;
+        Ok(posted)
+    }
+
+    /// Resolve a specific MCP receipt, or the latest user input of a thread.
+    /// Runs take precedence over input state (a stopped run cancels its reply).
+    pub fn chat_mcp_reply(
+        &self,
+        receipt: Option<&str>,
+        thread_id: Option<&str>,
+    ) -> Result<Option<(String, Option<String>)>, ChatError> {
+        read_tx(self, |conn| {
+            if let Some(id) = thread_id {
+                thread_require(conn, id)?;
+            }
+            let (predicate, id) = match receipt {
+                Some(id) => (
+                    "i.id=?1 AND json_extract(i.metadata_json,'$.mcp_receipt')=1",
+                    id,
+                ),
+                None => ("i.thread_id=?1", thread_id.unwrap_or_default()),
+            };
+            conn.query_row(
+                &format!(
+                    "SELECT COALESCE(r.state,i.state),o.text FROM chat_messages i \
+                 LEFT JOIN chat_runs r ON r.run_id=i.run_id \
+                 LEFT JOIN chat_messages o ON o.id=r.output_message_id \
+                 WHERE i.role='user' AND {predicate} ORDER BY i.seq DESC LIMIT 1"
+                ),
+                [id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(ChatError::from)
+        })
+    }
+
     /// D2 `POST /chat/threads`: idempotent on `(scope_id, client_thread_id)` via
     /// `chat_client_requests`. The same key with the same title/project returns the same thread;
     /// different content is a conflict. kind is always `human`.

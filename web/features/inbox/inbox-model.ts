@@ -20,7 +20,6 @@ export const INBOX_KINDS: readonly InboxKind[] = [
   "disk_full",
   "delivery_skipped",
   "integration_request",
-  "knowledge_review",
 ];
 
 export const KIND_LABELS: Record<InboxKind, string> = {
@@ -39,7 +38,6 @@ export const KIND_LABELS: Record<InboxKind, string> = {
   disk_full: "ディスクの逼迫",
   delivery_skipped: "配送の見送り",
   integration_request: "統合の依頼",
-  knowledge_review: "知識の候補",
 };
 
 export function isInboxKind(value: unknown): value is InboxKind {

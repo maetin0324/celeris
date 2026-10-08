@@ -24,5 +24,11 @@
     "cold_turns": 3,
     "text": "今の受信箱の状況を 1 行で教えてください。"
   },
+  "s6_cold_ttl": {
+    "note": "mode cold-ttl。1h TTL を超えた cold（S5 の 370 秒は TTL 内だった）。seed 1 turn → gap_secs 待つ → 同 thread の resumed 1 turn → 新規 thread 1 turn → warm_gap_secs 後に同 thread 1 turn（計 4 run）",
+    "gap_secs": 3720,
+    "warm_gap_secs": 30,
+    "text": "今の受信箱の状況を 1 行で教えてください。"
+  },
   "reduced": {"s1_new_threads": 2, "s2_turns": 3}
 }

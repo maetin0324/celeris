@@ -189,6 +189,21 @@ def main():
         finish(); return
     if mode == "dry":
         log("dry: thread " + new_thread("dry")); return
+    if mode == "cold-ttl":  # 1h TTL を超えた cold（台本 s6_cold_ttl、LLM run 4 回）
+        c = SCRIPT["s6_cold_ttl"]
+        try:
+            th = new_thread("s6")
+            turn(SCRIPT, "s6_seed", th, 1, "consult", c["text"])
+            log(f"s6: waiting {c['gap_secs']} s for the cache TTL to pass")
+            time.sleep(c["gap_secs"])
+            turn(SCRIPT, "s6_cold_resumed", th, 2, "consult", c["text"], c["gap_secs"])
+            turn(SCRIPT, "s6_cold_new_thread", new_thread("s6-new"), 1, "consult", SCRIPT["consult"], c["gap_secs"])
+            time.sleep(c["warm_gap_secs"])
+            turn(SCRIPT, "s6_warm_resumed", th, 3, "consult", c["text"], c["warm_gap_secs"])
+        finally:
+            if runs:
+                finish()
+        return
     try:
         for i in range(1, n_s1 + 1):
             turn(SCRIPT, "s1", new_thread(f"s1-{i}"), 1, "consult", SCRIPT["consult"])

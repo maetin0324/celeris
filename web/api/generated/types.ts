@@ -694,6 +694,7 @@ export type ChatMessage = {
   "text": string;
   "thread_id": string;
   "updated_at": string;
+  "workspace_files"?: Array<ChatWorkspaceFile>;
 };
 
 export type ChatMessageData = {
@@ -860,6 +861,11 @@ export type ChatToolData = {
 };
 
 export type ChatToolState = "running" | "completed" | "failed";
+
+export type ChatWorkspaceFile = {
+  "attachment_id": string;
+  "path": string;
+};
 
 export type Check = {
   "cmd": string;

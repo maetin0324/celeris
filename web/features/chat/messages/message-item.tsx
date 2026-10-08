@@ -1,12 +1,14 @@
 // 吹き出し 1 件: 人の発言・CoS の返事（Markdown・tool・添付・カード）・システム・送信中の発言。
-import type { ReactNode } from "react";
+import { type MouseEvent, type ReactNode, useState } from "react";
 import type { ChatAttachment, ChatCard, ChatMessage } from "../../../api/generated/types";
 import { Markdown } from "../../../components/content/markdown";
 import { Button } from "../../../components/ui/button";
 import { cn } from "../../../lib/utils";
 import { pendingHumanCount } from "../cards/card-model";
+import { chatPaths } from "../data/client";
 import type { DraftMessage, PendingMessage, ToolEntry } from "../data/reducer";
-import { AttachmentList, ToolCallList } from "./parts";
+import { AttachmentList, chatAttachmentElementId, chatPreviewKind, ToolCallList } from "./parts";
+import { linkWorkspacePaths, workspaceAttachmentFor } from "./workspace-links";
 
 /** カードを差し込む slot。cards 葉の部品を home が渡す。 */
 export type RenderCards = (cards: ChatCard[], message: ChatMessage) => ReactNode;
@@ -51,10 +53,21 @@ const bodyClass: Record<ChatMessage["role"], string> = {
   system: "max-w-full rounded-md bg-muted px-3 py-1 text-label text-muted-foreground",
 };
 
-function Body({ speaker, text, streaming }: { speaker: ChatMessage["role"]; text: string; streaming?: boolean }) {
+function Body({
+  speaker,
+  text,
+  streaming,
+  onClick,
+}: {
+  speaker: ChatMessage["role"];
+  text: string;
+  streaming?: boolean;
+  onClick?: (event: MouseEvent<HTMLDivElement>) => void;
+}) {
   if (text === "" && !streaming) return null;
   return (
-    <div data-slot="chat-body" className={cn("min-w-0 break-words", bodyClass[speaker])}>
+    // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 本文の中の link（a 要素）の click を委譲で受けるだけ。keyboard の Enter も a の click になる。
+    <div data-slot="chat-body" className={cn("min-w-0 break-words", bodyClass[speaker])} onClick={onClick}>
       {speaker === "assistant" ? (
         <Markdown source={text} links="target" />
       ) : (
@@ -94,6 +107,39 @@ export function MessageItem({
   renderCards?: RenderCards;
 }) {
   const note = streaming ? undefined : stateNote[message.state];
+  const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
+  const toggle = (id: string) =>
+    setOpen((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  // ADR 2026-10-08-cos-workspace-files-in-chat D3: CoS が触れた workspace の path を添付への link にする。
+  const files = message.role === "assistant" ? message.workspace_files : undefined;
+  const text = linkWorkspacePaths(message.text, files, chatPaths.attachmentContent);
+  const openFromLink = (event: MouseEvent<HTMLDivElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    )
+      return;
+    const anchor = (event.target as Element).closest?.("a");
+    const id = anchor
+      ? workspaceAttachmentFor(anchor.getAttribute("href") ?? "", files, chatPaths.attachmentContent)
+      : undefined;
+    if (!id || !attachments[id] || !chatPreviewKind(attachments[id])) return;
+    // 画面遷移（download）せずに、この返事の添付の本文を開いてそこへ移る。
+    event.preventDefault();
+    setOpen((current) => (current.has(id) ? current : new Set(current).add(id)));
+    requestAnimationFrame(() =>
+      document.getElementById(chatAttachmentElementId(id))?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+    );
+  };
   // D5: triage digests are assistant messages. Only observed notices fold; mixed digests,
   // ordinary conversation and streaming replies stay open so decisions remain visible.
   const noticesOnly =
@@ -113,8 +159,8 @@ export function MessageItem({
           </summary>
           <div className="mt-2 flex min-w-0 flex-col items-center gap-2">
             <ToolCallList tools={tools} />
-            <Body speaker={message.role} text={message.text} />
-            <AttachmentList ids={message.attachment_ids} attachments={attachments} />
+            <Body speaker={message.role} text={text} onClick={files?.length ? openFromLink : undefined} />
+            <AttachmentList ids={message.attachment_ids} attachments={attachments} open={open} onToggle={toggle} />
             {note ? <p className="text-label text-muted-foreground">{note}</p> : null}
             {message.cards.length > 0 && renderCards ? (
               <div data-slot="chat-cards" className="w-full min-w-0">
@@ -129,8 +175,13 @@ export function MessageItem({
   return (
     <Bubble speaker={message.role} busy={streaming} label={roleName[message.role]}>
       <ToolCallList tools={tools} />
-      <Body speaker={message.role} text={message.text} streaming={streaming} />
-      <AttachmentList ids={message.attachment_ids} attachments={attachments} />
+      <Body
+        speaker={message.role}
+        text={text}
+        streaming={streaming}
+        onClick={files?.length ? openFromLink : undefined}
+      />
+      <AttachmentList ids={message.attachment_ids} attachments={attachments} open={open} onToggle={toggle} />
       {note ? (
         <p className={cn("text-label", message.state === "failed" ? "text-danger" : "text-muted-foreground")}>{note}</p>
       ) : null}

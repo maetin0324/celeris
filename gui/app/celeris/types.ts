@@ -2970,6 +2970,18 @@ export interface ChatMessage {
   text: string;
   thread_id: string;
   updated_at: string;
+  /**
+   * ADR 2026-10-08-cos-workspace-files-in-chat D2: files of the CoS thread workspace attached
+   * to this reply, with the workspace-relative path the reply may mention. Empty for others.
+   */
+  workspace_files?: ChatWorkspaceFile[];
+}
+/**
+ * One workspace file attached to a CoS reply (`path` is relative to the thread workspace).
+ */
+export interface ChatWorkspaceFile {
+  attachment_id: string;
+  path: string;
 }
 export interface ChatTextDeltaData {
   offset: number;

@@ -105,6 +105,8 @@ bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> fu
 
 画像・PDF を含む任意ファイルを送れる。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB・10 件、インスタンス全体 10 GiB。元 blob は DB の親ディレクトリを `data_dir` とした `<data_dir>/chat/attachments/<attachment_id>/blob`、upload 中は `<data_dir>/chat/staging/` に置く。DB に原名・サイズ・MIME・SHA-256・参照を保存する。CoS へは検証した添付を read-only で stage し、画像は harness の画像入力または読取 tool、その他は path と manifest で渡す。task/KB へ引き継ぐ際は参照を pin する。
 
+CoS が thread workspace に書いた file（run の前後で新しく現れたか変わった通常 file）と、返事の本文が path で触れた workspace の file は、その返事の添付になる（[ADR 2026-10-08-cos-workspace-files-in-chat](../../agent-docs/adr/2026-10-08-cos-workspace-files-in-chat.md)）。dot で始まる名前・`attachments/`・`runs/`・symlink は除き、件数・大きさは上と同じ上限で、超える分は付けない。web では返事の本文の path が添付への link になり、押すとチャットの中で本文が開く（md は描画、text・csv は行番号付き。HTML・SVG・PDF は download だけ）。API の message には `workspace_files`（`path` と `attachment_id`）が載る。
+
 未送信 upload は 24 時間後、最後の参照が外れた blob は 30 日後に GC される。参照中の message・task・KB candidate と実行中 run の blob は自動削除しない。本文・要約・監査は保持し、終端 run の text/tool stream 詳細だけ既定 30 日で GC する。daemon の周期 GC は約 1 時間ごと。容量不足時は参照と保持期限を web/API で確認し、管理外の `rm` で blob だけを消さない。backup/restore は SQLite と `chat/attachments` を同じ整合点で扱い、復元後に hash と参照の整合を確かめる。
 
 ## 本番への反映と昇格

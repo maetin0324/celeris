@@ -1,12 +1,12 @@
 ---
 name: cos-inbox-triage
-description: Celeris の受信箱の一次対応 policy（policy_version 1）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run と resolve を呼ぶ前には必ず読む。
+description: Celeris の受信箱の一次対応 policy（policy_version 2）。CoS が新しい通知・decision・question・approval・plan/phase gate・失敗・browser/cluster/KB の待ちを受け取ったとき、answer（代答）/ observe（見届け）/ escalate（人に回す）を選ぶ基準、人に回す基準の表、escalation packet の形、confidence の扱い、Discord の扱いを定める。受信箱スレッドの run と resolve を呼ぶ前には必ず読む。
 metadata:
   author: celeris
-  version: "1"
+  version: "2"
 ---
 
-# CoS inbox triage（policy_version "1"）
+# CoS inbox triage（policy_version "2"）
 
 受信箱に届く待ちは全て最初に CoS（あなた）に渡る。あなたは各 item について
 **answer / observe / escalate** のどれかを選び、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
@@ -43,7 +43,8 @@ metadata:
 - 対象に人が設定した `human_required` と API の既存認可は、この skill でも config でも解除できない。
 - CoS が新しい standing permission（永続の認可）を自分で作ることは「秘密・権限・セキュリティ」の行として escalate。
 - 人が本番操作を人だけに限定しているもの（`promote.sh`・`rollback.sh`・`systemctl` 等。cos-operator §5）は、
-  代わりに実行せず escalate して、人が実行する手順を packet に書く。
+  代わりに実行せず escalate する。技術手順は「運用者の作業」に分け、packet では web での判断・承認だけを依頼する
+  （cos-operator §10）。運用者向け task を起票しても人だけの実行認可は解除されない。
 
 ## 3. answer / observe / escalate の選び方
 
@@ -69,10 +70,10 @@ metadata:
 ```json
 {"idempotency_key":"k","expected_revision":"1","outcome":"answer",
  "answer":{"option":"continue","note":"既定手順内","payload":null},
- "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"1","escalation":null}
+ "reason":"承認済み計画と一致","confidence":0.97,"policy_version":"2","escalation":null}
 ```
 
-- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"1"`（config の値があればそれ）。
+- `expected_revision` は item の `source_revision`。`policy_version` はこの skill の `"2"`（config の値があればそれ）。
 - `outcome` が answer 以外なら `answer=null`。answer・observe なら `escalation=null`。escalate では escalation packet が必須。
 - `idempotency_key` は item ごとに一意にし、再試行では同じ key を使う。
 
@@ -85,7 +86,9 @@ metadata:
  "web_path":"/tasks/task-id"}
 ```
 
-- `summary`: 人が数十秒で読める要点（何が止まっていて、何を決めてほしいか）。
+- `summary`: 人が数十秒で読める要点（何が止まっていて、何を決めてほしいか）。**最初の 1 文が結論**（人が今何をすればよいか）。
+  人への依頼は web の画面名とボタン名で書く（例: 「受信箱」画面で「続ける」を押す）。curl・config・systemd の作業を
+  人に求めない。運用者の作業が要るなら運用者向けの task を起票し、人にはその判断だけを頼む（cos-operator §10）。
 - `options`: 元の問いの現在の選択肢。自由記述の問いには `{"key":"reply","label":"web で回答"}` を使う。
 - `recommended`: 推奨する option の key。推奨しないなら `null` にして `recommendation_reason` に理由を書く。
 - `web_path`: 対象の web 画面の、同じアプリ内の path（`/tasks/<id>` など）。サーバが対象から導く path と照合するので、

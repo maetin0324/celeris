@@ -3,7 +3,7 @@ name: cos-operator
 description: Celeris の CoS（Chief of Staff）チャット run の操作手順。全道具を持つ特別 worker として、本番 DB・制御状態の変更は認証済み API（/api/v1/cos/operations）か celerisctl だけで行い、起票・回答・決定・認可・replan・pause/resume・コメント・KB・監視を監査付きで実行する。本番運用（release → verify → promote）の安全確認、秘密と信頼しない入力の扱い、要約 checkpoint の更新規則を含む。CoS チャット・受信箱スレッドの run では常に読む。
 metadata:
   author: celeris
-  version: "1"
+  version: "2"
 ---
 
 # CoS operator
@@ -69,7 +69,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ```json
 {"idempotency_key":"create-screen-fix-1","expected_revision":null,
- "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"1",
+ "reason":"人がチャットで画面の修正を依頼した（seq 12）","policy_version":"2",
  "request":{"method":"POST","path":"/api/v1/tasks","body":{
    "title":"画面修正","objective":"依頼の全文",
    "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}]}}}
@@ -99,7 +99,7 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
 
    ```json
    {"idempotency_key":"create-screen-fix-1","expected_revision":null,
-    "reason":"人がチャットで screenshot つきで画面修正を依頼した（seq 12）","policy_version":"1",
+    "reason":"人がチャットで screenshot つきで画面修正を依頼した（seq 12）","policy_version":"2",
     "request":{"method":"POST","path":"/api/v1/tasks","body":{
       "title":"画面修正","objective":"依頼の全文（添付の screenshot の画面）",
       "acceptance":[{"type":"reviewer","text":"添付の screenshot の崩れが直っている"}],
@@ -119,7 +119,7 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
 
    ```json
    {"idempotency_key":"kb-fern03-manual-1","expected_revision":null,
-    "reason":"人がチャットで PDF を KB に入れるよう依頼した（seq 14）","policy_version":"1",
+    "reason":"人がチャットで PDF を KB に入れるよう依頼した（seq 14）","policy_version":"2",
     "request":{"method":"POST","path":"/api/v1/knowledge/inbox","body":{
       "title":"fern03 の使い方","scope":"project:agent-platform",
       "body":"PDF の要点（Markdown）","sources":["message:<message id>"],
@@ -139,7 +139,7 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
 
 ```json
 {"idempotency_key":"pin-<添付 id>-<owner id>","expected_revision":null,
- "reason":"…","policy_version":"1",
+ "reason":"…","policy_version":"2",
  "request":{"method":"POST","path":"/api/v1/chat/attachments/<添付 id>/references",
             "body":{"owner_kind":"task"|"knowledge_inbox","owner_id":"<owner id>","idempotency_key":"pin-<添付 id>-<owner id>"}}}
 ```
@@ -166,9 +166,10 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
   `verify.json.ok` と `live_ok` を確かめてから昇格する。検査を飛ばす・`ok` が偽のまま進めることはしない。
 - selfdeploy.md §4「昇格する（人だけ）」・§5 rollback・§5b relocate-db・§7「禁止」は、人が人だけに限定した本番操作である。
   `promote.sh`・`rollback.sh`・`install-units.sh` の実行、`POST /releases/{sha12}/promote`、`systemctl`、
-  本番 config の編集は **CoS もしない**。必要なら escalation で人に依頼し、人が実行するコマンドと確認方法を書いて渡す。
+  本番 config の編集は **CoS もしない**。必要なら運用者向け task を起票し、コマンドと確認方法を「運用者の作業」に分ける。
+  人には web でできる判断・承認だけを依頼する（§10）。人だけの実行認可は task 起票で解除されない。
 - その他の運用手順は [docs/ops/](../../../docs/ops/) の各文書（例: 受信箱・通知の設定は
-  [inbox-notifications.md](../../../docs/ops/inbox-notifications.md)）に従う。手順書に「人が実行」とあるものは人へ依頼する。
+  [inbox-notifications.md](../../../docs/ops/inbox-notifications.md)）に従う。手順書に「人が実行」とあるものも実行制約を守り、運用者の作業として分ける（§10）。
 
 ## 6. 秘密と信頼しない入力
 
@@ -206,3 +207,22 @@ task の作成と pin が同じ transaction で入るので、最初の run の�
 
 受信箱スレッドの run（system message に item_ids が並ぶ）では、各 item を
 cos-inbox-triage skill に従って answer/observe/escalate し、`POST /api/v1/cos/inbox/{i}/resolve` で 1 件ずつ記録する。
+
+## 10. 人への説明の書き方（ADR 2026-10-08-cos-workspace-files-in-chat D4）
+
+人は web の画面から使う。運用者の作業（shell・config・systemd）を人の手順にしない。
+
+- **結論を最初に 1〜3 行で書く**。人が今何をすればよいか（または「何もしなくてよい」）を先に言い、理由や経緯はその後。
+- **人にしてほしいことは web の画面名とボタン名で書く**。左の一覧・下部タブの画面名（ホーム・受信箱・通知・タスク・
+  案件・成果物・承認・知識・クラスタ など）と、画面にあるボタン・欄の名前をそのまま使う。
+  例: 「受信箱」画面で「manaba の監視を始めるか」の行を開き、「続ける」を押してください。
+  分からない画面名・ボタン名を推測で書かない。画面で済まない操作なら、それは運用者の作業として扱う。
+- **curl・config（toml）・systemd・shell の作業を人に求めない**。必要な作業は返事の中で「運用者の作業」の節に分ける。
+  - CoS 自身が §2 の経路（`/cos/operations`・`celerisctl`）でできるものは自分で行い、結果だけ書く。
+  - 本番 host の変更（systemd・`~/.config/celeris`・release の差し替え）など CoS ができないものは、
+    運用者向けの task を起票し（§3 の起票。手順・確認方法・受け入れ条件を objective に書く）、返事ではその task の
+    card を示す。人には「その task の承認」など画面の操作だけを頼む。
+- **長い手順・表・設定の写しは workspace に Markdown で書いてよい**。この作業 dir に書いた file と、返事で path に
+  触れた file は返事の添付になり、人はチャットの中で開ける（md は描画される）。返事には要点と file 名を書き、
+  「添付の `<file 名>` を開いてください」と案内する。返事の本文だけで完結しない説明を path だけで済ませない。
+- 秘密・token・認証情報は添付にも書かない（§6）。

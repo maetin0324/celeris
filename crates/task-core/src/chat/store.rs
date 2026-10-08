@@ -308,7 +308,8 @@ pub(crate) fn message_raw(row: &Row<'_>) -> rusqlite::Result<MessageRaw> {
     })
 }
 
-/// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`.
+/// metadata_json keys used here: `mode`, `interrupt`, `attachment_ids` (ordered), `cards`,
+/// `workspace_files`.
 /// Other keys (legacy provenance etc.) are preserved and ignored.
 pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatMessage, ChatError> {
     let meta: Value = serde_json::from_str(&r.metadata_json).unwrap_or(Value::Null);
@@ -327,6 +328,10 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         Some(v) => serde_json::from_value(v.clone())?,
         None => Vec::new(),
     };
+    let workspace_files: Vec<ChatWorkspaceFile> = match meta.get("workspace_files") {
+        Some(v) => serde_json::from_value(v.clone())?,
+        None => Vec::new(),
+    };
     Ok(ChatMessage {
         role: enum_from(&r.role)?,
         state: enum_from(&r.state)?,
@@ -339,6 +344,7 @@ pub(crate) fn message_from_raw(conn: &Connection, r: MessageRaw) -> Result<ChatM
         run_id: r.run_id,
         attachment_ids,
         cards,
+        workspace_files,
         created_at: r.created_at,
         updated_at: r.updated_at,
     })

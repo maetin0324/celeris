@@ -1,7 +1,8 @@
 ---
-task: 01M4CAKADGDTZA7QKDJ9GX35MW
+tasks: [01M4CAKADGDTZA7QKDJ9GX35MW]
 title: 受信箱スレッドを「受信箱の件を CoS と話す場所」にする
 status: done
+updated: 2026-10-08
 started: 2026-10-07
 completed: 2026-10-08
 adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
@@ -146,7 +147,7 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
   起動時 reconcile 後の孤立 run 回収を固定した。時計注入・fake adapter・一時DBのみで、待ち時間や外部ネットワークに依存しない。
   起動失敗・残件・走査失敗・保存失敗の4件は修正前に失敗を確認。修正後は既存2件と合わせ7件成功。
 - ADR D1・実装との突き合わせ・試験一覧を更新。元の prepare.log の fmt 失敗は `599b30e6` で修正済み。
-  main は `186701fa` で、この branch の祖先のため取り込みは不要。
+  初回検証時の main は `186701fa` で、この branch の祖先だった。最終確認時の進行に伴う同期は下記。
 
 | 検査 | 結果 |
 |---|---|
@@ -165,6 +166,29 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
   全体試験は `retry3-test-parallel.log`、回帰試験は `retry3-regression-after.log`。
 - 本番サービス・DB・元のチェックアウトを変更せず、この task branch のみで修正・検証した。
   release prepare・デプロイ・実機 LLM の起動は行っていない。
+
+### 検証中に進んだ main との同期
+
+- 初回修正コミットは `1c7f6b1e`。その後の最終確認で main が `5e6664f3` へ進んでいたため、この worktree に `merge --no-ff` で取り込んだ。
+  CoS 文書添付機能（`4d4a30f8`）と整形・検証記録を含む。既定ブランチと元のチェックアウトは変更していない。
+- 競合は `digest.rs`（整形と生成予約）と `message-item.tsx`（折りたたみと文書添付）の2箇所。
+  生成予約・通知の折りたたみを維持し、通常の返事と折りたたんだ通知の双方で添付リンク・プレビューが働くように統合した。
+  workspace 文書の E2E を通常の返事・折りたたんだ通知の2通りで実行するよう拡張した。
+
+同期後の最終コードでの検証（ログは `artifacts` の絶対ディレクトリ内 `retry3-sync-*.log`）:
+
+| 検査 | 結果 |
+|---|---|
+| `cargo build -p celeris -p celerisctl` | exit 0 |
+| `bash scripts/dev/test-parallel.sh` | exit 0、4735 passed / 0 failed / 14 ignored、160 binaries、doctest exit 0、tmp_leftovers 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web test` | exit 0、83 files / 608 tests、server 77 tests passed |
+| `pnpm -C web lint` | exit 0（既存 styles.css の警告4件） |
+| `pnpm -C web e2e chat/cards.spec.ts chat/workspace-files.spec.ts` | exit 0、9 passed（折りたたみ内の添付の開閉・本文リンク・PDF download を含む） |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0 |
+| `git diff --check` / `git diff --cached --check` | exit 0 / exit 0 |
 
 ## 未解決事項
 

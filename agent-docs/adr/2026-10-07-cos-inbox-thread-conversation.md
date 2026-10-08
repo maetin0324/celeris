@@ -86,6 +86,7 @@ assistant の発言が 1 件も残らない。判断（何の件か・answer/esc
   CoS の assistant 発言も、カードが 1 件以上あり全て `notice/observed` なら折りたたむ（triage digest の実際の role/state）。
   人待ちのカード（`pending` / `escalated` の decision/question/approval/plan_gate）を持つ発言、通知以外を含む発言、通常の会話、配信中の発言は通常の表示。
   折りたたんでも CoS の発言者表示と本文・カード・添付・tool の内容は保つ。判定は role と cards で決め、thread の種類には依らない。
+  workspace 文書添付（ADR 2026-10-08-cos-workspace-files-in-chat）の本文リンク・プレビューも、展開した通知内で同じように使える。
 - カードの保存時の状態より、回答結果・受信箱 API の実状態を表示に優先する。回答成功は `answered`（回答済み）、404 は
   `closed`（終了。回答済みか失効かは断定しない）として、状態バッジ・`data-card-state`・操作の有無を揃える。
   回答結果や閉じた理由の説明は残す。再取得が 404 なら古い query cache の選択肢より優先する。

@@ -3,6 +3,14 @@
 実行・計画・木・決定の要求のエンドポイントは §3.125 にある。
 
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
+- 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
+  `PATCH /accounts/{adapter}/{id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
+  `effective_max_runs` / `max_runs_source` / `implicit` / `provider` を追加し、`dir` は暗黙アカウントで `null` になる。
+  `GET /accounts` はアカウントを持たない行ごとの**暗黙アカウント**（`adapter = "implicit"`）も返す。`max_runs_per_account` は
+  「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
+  `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
+  意味を持たない）。`POST`/`PATCH /providers` の本文の `concurrency` は受け付けるが保存しない（§3.24・3.25）。
+  DB の migration 0062（`account_limits`）。
 - 改訂: 2026-10-06（ADR 2026-10-06-cos-inbox-triage / 2026-10-05-cos-chat-home D3・D6）— **追加のみ。v1 のまま**。
   エンドポイント 199〜201: `GET /cos/inbox`・`POST /cos/inbox/{i}/resolve`・
   `POST /cos/operations/{o}/override`（§3.130）。`NotificationKind` に `cos_escalation` /
@@ -405,7 +413,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 110 | POST | `/tasks/{id}/rereview` | `done`（または最終レビューの不合格だけで `failed`）の task の最終レビューをやり直す（**管理系**） | `TransitionResult` | `task_ops::comment::rereview` |
 | 111 | POST | `/tasks/{id}/pause` | task の subtree を一時停止する（ADR-0079 D13。§3.125.9）（**管理系**） | `TaskPauseResult` | `task_ops::lifecycle::pause_task` |
 | 112 | POST | `/tasks/{id}/resume` | subtree の一時停止を解く（§3.125.9）（**管理系**） | `TaskPauseResult` | `task_ops::lifecycle::resume_task` |
-| 113 | GET | `/accounts` | アカウントのプール（claude-code / codex。ADR-0024・ADR-0025。§3.29） | `AccountList` | `[accounts]` のディレクトリ + スナップショット |
+| 113 | GET | `/accounts` | アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と暗黙アカウント、各アカウントの実効上限（§3.29） | `AccountList` | `[accounts]` のディレクトリ + スナップショット + `account_limits` |
 | 114 | POST | `/accounts` | アカウントを足す（§3.30）（**管理系**） | 201 `AccountView`（`Location`） | celeris（ディレクトリ作成） |
 | 115 | DELETE | `/accounts/{id}` | アカウントを消す（使用中は 409。§3.31）（**管理系**） | 200 `{}` | celeris（`AdminRequest`） |
 | 116 | POST | `/accounts/{id}/check` | アカウントの疎通確認（§3.32）（**管理系**） | `AccountCheckResponse` | celeris（`AdminRequest`） |
@@ -502,6 +510,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 | 213 | GET | `/browser/trusted-devices` | 信頼端末の一覧（hash は返さない。§3.131.3）（**管理系** + header の assertion） | `TrustedDeviceList` | store `trusted_device_list` |
 | 214 | DELETE | `/browser/trusted-devices/{id}` | 信頼端末を失効させる（actor 付き event。§3.131.4）（**管理系** + header の assertion） | `TrustedDeviceRevokeResult` | store `trusted_device_revoke` |
 | 215 | GET | `/chat/threads/{t}/runs` | run 一覧（`before` / `limit`）と usage telemetry | `ChatRunListResponse` | `crate::chat` |
+| 216 | PATCH | `/accounts/{adapter}/{id}` | アカウント（暗黙アカウントを含む）の上限 `max_runs` を設定・解除する（§3.29a）（**管理系**） | `AccountView` | celeris（`AdminRequest::AccountLimitSet`） |
 
 browser の制御（`crate::browser_control`）の 6 本は、route を定数 `BASE`（`/api/v1/tasks/{id}/browser/control/{run}/{session}`）と `format!` で組み立てて登録している（`browser_control.rs` の `routes()`）。詳細は `docs/guides/browser-capability.md`。
 
@@ -925,9 +934,13 @@ planner が行う（`POST /tasks` で root task を作る。§3.4）。既存の
 `account_pool` / `account_id` / `tier_models` / `credential_refs`）は設定から、`in_use` と `in_use_cos` と `cooldown` と
 `last_check` はスナップショット（無ければ `null`）、`stats` は §5.8 の集計。クエリは受けない。
 
-`in_use_cos`: そのプロバイダで走っている **CoS の対話 run**（Console から CoS に話しかけた一言）の数。
-CoS の対話 run は `max_concurrency` とアカウントプールのプロバイダの `concurrency` の外で走るので、`in_use` には含めず別に出す
-（`in_use` + `in_use_cos` が `concurrency` を超えることがある。ADR-0089）。
+`concurrency` は **deprecated**（ADR 2026-10-08-account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）を
+出すだけで、dispatch では使わず何とも比べない。同時実行数はアカウントの上限（§3.29 の `effective_max_runs`。アカウントを持たない行は
+その行の暗黙アカウント）で決まる。削除は別の ADR で決める。
+
+`in_use`: その行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。`in_use_cos`: そのプロバイダで走っている
+**CoS の対話 run**（Console から CoS に話しかけた一言）の数。どちらも**観測値**で、上限と比べる値ではない（ADR-0089 規則 3 の
+「`in_use` は CoS を含まない」は維持）。
 
 `last_check`（ADR-0022 D2）は直近の `POST /providers/{id}/check` の結果 `{at, result, detail?}`
 （`result` は §3.27 と同じ 4 値、`detail` は人が読む一行で、無ければ省略。ADR-0022 M1）。
@@ -953,6 +966,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 - `reports`（秘書レベルの未読の報告と通知の判定）・`approvals_pending`（未決定の認可の件数）・`decisions_open`（未回答の決定の要求の件数）は
   ディスパッチャではなく **API が応答を組むときに埋める**（ADR-0033 D3/D5、ADR-0079 D7）。
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
+  `implicit_accounts[]`（`{provider, in_use, legacy_concurrency?}`。暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
 - `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
   （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する
@@ -1069,7 +1083,9 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 #### 3.24 `POST /providers` → 201 `ProviderConfigView`（`Location: /api/v1/providers/{id}`）
 
 要求本文: `{"id": "acct-b", "adapter": "fake"|"claude-code"|"codex"|"acp"|"paperqa"|"local-deep-research", "tiers"?: [...], "concurrency"?: 1, "model"?: "", "env"?: {...}, "account_pool"?: false, "account_id"?: "…", "tier_models"?: {...}, "credential_refs"?: {...}}`
-（省略したものは `[[providers]]` と同じ既定。`tiers` は 3 tier 全部、`concurrency` は 1）。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
+（省略したものは `[[providers]]` と同じ既定。`tiers` は 3 tier 全部）。**`concurrency` は deprecated**（ADR 2026-10-08-account-concurrency-limits
+§(a)）: 型だけ検査し（0 は従来どおり 400）、`providers.d/<id>.toml` には**保存しない**（warn を 1 行出す）。応答の `concurrency` は 1。
+上限はアカウント画面（§3.29a。この行がプールでなければ暗黙アカウント `implicit/<id>`）で設定する。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
 （`providers.d/<id>.toml` のファイル名になるため、パス区切りは拒否）。`adapter` は既知の 6 種類のみ。
 `id`・`adapter` の形が不正、`concurrency` が 0 は 400 `bad_request`。`id` が既にあれば 409 `provider_exists`。
 応答・ログとも `env` は `env_keys`（キー名だけ）で、値は一切出さない。
@@ -1094,7 +1110,8 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 #### 3.25 `PATCH /providers/{id}` → 200 `ProviderConfigView`
 
 要求本文は `{"tiers"?, "concurrency"?, "model"?, "env"?, "account_pool"?, "account_id"?, "tier_models"?, "credential_refs"?}`
-（渡したフィールドだけ上書き。`id`/`adapter` は変更不可。空の本文は `{}` と同じ）。`account_id: ""` は固定を外す。
+（渡したフィールドだけ上書き。`id`/`adapter` は変更不可。空の本文は `{}` と同じ）。`concurrency` は 3.24 と同じく deprecated で、
+受け付けるが保存しない（file に人が書いた旧値はそのまま往復で残る）。`account_id: ""` は固定を外す。
 `credential_refs` は既存の認証用キーの参照を置き換え、それ以外の `env_from_secrets` は残す。検証と 400 の条件は 3.24 と同じ
 （patch 後の組み合わせで判定する）。存在しない `id`（形が不正な `id` を含む）は 404 `provider_not_found`。
 **`command`/`args`/`settings`/`env_from_secrets` は 3.24 と同じく本文に含められない**（422
@@ -1148,7 +1165,7 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 `claude_dir` / `codex_dir` / `max_runs_per_account` / `check_model` のどれかが読み直した設定で変わっていれば、`detail` に
 再起動が必要な旨を書いて拒否する（それ以外のフィールドの変更は反映されない）。
 
-### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）
+### 3.29〜3.35 アカウントのプール（claude-code / codex。ADR-0024・ADR-0025）と上限（ADR 2026-10-08-account-concurrency-limits）
 
 設計は ADR-0024（claude-code）と ADR-0025（codex を追加）。`[accounts] claude_dir` / `codex_dir` の下の 1
 ディレクトリ（`<claude_dir>/<id>/` または `<codex_dir>/<id>/`）が 1 アカウントで、アカウントは `(adapter, id)`
@@ -1157,8 +1174,8 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 `token_count` の `rate_limits` が出す `five_hour` / `seven_day` の `utilization`）から選んだアカウントの環境変数
 （claude-code は `CLAUDE_SECURESTORAGE_CONFIG_DIR`、codex は `CODEX_HOME`）で起動する（選び方は ADR-0024 D3。
 アダプタが違っても同じ計算式を使う）。`[accounts]` はどちらか一方の根ディレクトリだけでもよい。
-`[accounts]` が無い構成では、`GET /accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 0, "items": []}`、管理系は 409
-`accounts_unavailable`。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。3.29 は無認証の読み取り。
+`[accounts]` が無い構成では、`GET /accounts` は `{"root": null, "roots": {}, "max_runs_per_account": 2, "items": [<暗黙アカウントだけ>]}`、
+3.30〜3.35 は 409 `accounts_unavailable`（3.29a の暗黙アカウントの編集は使える）。**3.30 以降はすべて管理系**（`token_file` 未設定でも 401。ADR-0017 M3）。3.29 は無認証の読み取り。
 `id` の規則はプロバイダと同じ（1〜64 文字の ASCII 英数字・`-`・`_`）。3.31〜3.35 は `?adapter=` クエリを受け取る
 （省略時 `"claude-code"`。未知の値は 400 `bad_request`）。3.30 はクエリを受け取らず、本文の `adapter` で指定する。
 3.31〜3.35 は `active` のときだけ受け、`standby`/`draining` の間は 503 `standby`（§1.5）。celeris への管理要求の経路が
@@ -1180,8 +1197,16 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
    {"adapter": "codex", "id": "c", "dir": "/home/u/celeris/codex-accounts/c", "logged_in": false, "in_use": 0,
      "usage": null, "score": null, "excluded_reason": "not_logged_in", "cooldown": null,
      "last_check": null, "login_pending": false,
-     "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0}}]}
+     "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0},
+     "max_runs": 3, "effective_max_runs": 3, "max_runs_source": "account", "implicit": false, "provider": null},
+   {"adapter": "implicit", "id": "opencode-qwen", "dir": null, "logged_in": true, "in_use": 1,
+     "usage": null, "score": null, "excluded_reason": "at_capacity", "cooldown": null,
+     "last_check": null, "login_pending": false,
+     "stats": {"runs": 40, "done": 38, "error": 1, "input_tokens": 0, "output_tokens": 0},
+     "max_runs": null, "effective_max_runs": 1, "max_runs_source": "legacy_concurrency", "implicit": true, "provider": "opencode-qwen"}]}
 ```
+
+（1 件目の `claude-code/a` も同じ 5 欄を持つ。例では省略した。）
 
 - `root` は `roots["claude-code"]` の別名として残す（後方互換。ADR-0025 D6）。`roots` はアダプタ →
   設定されていればその絶対パス・無ければ `null`。
@@ -1193,8 +1218,39 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 - `cooldown` は `{until, reason}`。`reason`: `auth_failed`（再ログインが必要）/ `throttled` / `exhausted`。
 - `stats` は `WorkerStarted.account` と対応する `WorkerFinished` から、同じ `WorkerStarted.adapter` のものだけ集計する（§5.8 のプロバイダ集計と同じ規則。同じ id でもアダプタが違えば別集計）。
 - 時刻はすべて RFC 3339。
+- **上限**（ADR 2026-10-08-account-concurrency-limits §(c)）: `max_runs` はそのアカウントに保存された上限（3.29a で設定。無ければ `null`）。
+  `effective_max_runs` は実効上限で、`max_runs` → （暗黙アカウントだけ）行に書かれた旧 `[[providers]].concurrency` →
+  `max_runs_per_account` の順に決まる。どれを使ったかが `max_runs_source`（`"account"` / `"legacy_concurrency"` / `"default"`）。
+  実アカウントは非 CoS の run を `effective_max_runs` 本まで、CoS run はその +1 まで載せる（ADR-0089 規則 2）。
+  `max_runs` / `effective_max_runs` / `max_runs_source` は DB（`account_limits`）から読むので、3.29a の直後から反映される
+  （`in_use` / `excluded_reason` はスナップショットなので次の tick から）。
+- `max_runs_per_account` は保存値の無いアカウントの**既定**（`[accounts] max_runs_per_account`。`[accounts]` が無ければ組み込みの 2）。
+  これの変更は従来どおり再起動が要る。
+- **暗黙アカウント**（§(e)）: アカウントを持たない行（`account_pool` が off。`providers.d` を含む）ごとに 1 件、`adapter = "implicit"`・
+  `id = <行の id>`・`implicit: true`・`provider: <行の id>`。実アカウントの後ろに行の設定順で並ぶ（スナップショットから作るので最初の tick 前は出ない）。
+  `dir: null`・`logged_in: true`・`usage` / `score` / `cooldown` / `last_check` は `null`。`in_use` はその行の全 run（非 CoS・CoS・レビュー）で、
+  CoS の +1 は無い（全数を `effective_max_runs` と比べ、満杯なら `excluded_reason: "at_capacity"`）。`stats` はその行の run
+  （`WorkerStarted.provider`）の集計。3.30〜3.35（作成・削除・確認・ログイン）の対象外で、行の追加・削除に追従する
+  （行を消す・プールに変えて reload / 再起動すると、その暗黙アカウントの保存値も消える。`DELETE /providers/{id}` の後も次の reload で消える）。
+  実アカウントの `id`・`max_runs` は `(adapter, id)` ごとで、`DELETE /accounts/{id}` で保存値も消え、`POST /accounts` で作り直すと古い保存値は引き継がない。
 
-#### 3.30 `POST /accounts` → 201 `AccountView`（`Location: /api/v1/accounts/{id}`）
+#### 3.29a `PATCH /accounts/{adapter}/{id}` → 200 `AccountView`
+
+**管理系**（`token_file` 未設定でも 401）。`active` のときだけ受け、`standby`/`draining` の間は 503 `standby`。クエリは受けない。
+アカウントの上限を設定・解除する（ADR 2026-10-08-account-concurrency-limits §(d)）。
+
+- 要求本文 `{"max_runs": 3}` で設定、`{"max_runs": null}` で保存値を消して既定（3.29 の `effective_max_runs` の 2・3 番目）に戻す。
+  `max_runs` の欄が無い本文・未知の欄・オブジェクトでない本文・1..=32 の整数でない値（0、負数、33 以上、小数、文字列）は 400 `bad_request`。
+- `{adapter}` は `claude-code` / `codex` / `opencode-go` / `implicit`。それ以外、または `{id}` が 1〜64 文字の ASCII 英数字・`-`・`_` で
+  なければ 400 `bad_request`。
+- 存在しないアカウント（実: 根の下にディレクトリが無い。暗黙: その id の非プール行が今の設定に無い。プール行の id も含む）は 404
+  `account_not_found`。実アダプタの根が設定されていない構成・celeris への管理要求の経路が無い構成は 409 `accounts_unavailable`。
+  暗黙アカウントは `[accounts]` が無くても編集できる。
+- **使用中でも変更できる**。下げても走っている run は止めない（新しい run が `in_use` が下がるまで待つ）。celeris が DB に書いてから
+  ディスパッチャの表を更新するので、**次の tick から効く**。再起動も `POST /reload` も要らず、どちらを跨いでも残る（DB が正本。backups の対象）。
+- `id` が `check` / `login` のアカウントも同じ形で編集できる（`/accounts/{adapter}/check`・`/login` の路でも PATCH を受ける）。
+- 応答は更新後の `AccountView`（3.29 と同じ形）。
+ `POST /accounts` → 201 `AccountView`（`Location: /api/v1/accounts/{id}`）
 
 要求本文 `{"id": "b", "adapter": "codex"}`（`adapter` 省略時 `"claude-code"`）。`id` の形が不正、または `adapter` が
 `"claude-code"`/`"codex"` 以外なら 400 `bad_request`。`<root>/<id>/` を 0700 で作る

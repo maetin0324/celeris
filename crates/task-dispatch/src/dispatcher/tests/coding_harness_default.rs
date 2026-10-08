@@ -52,7 +52,7 @@ fn family_dispatcher(store: Arc<dyn TaskStore>, rows: &[Row]) -> Dispatcher {
                 id: r.id.into(),
                 adapter: r.adapter.into(),
                 tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
-                concurrency: 2,
+                concurrency: Some(2),
                 model: r.model.into(),
             })
             .collect(),

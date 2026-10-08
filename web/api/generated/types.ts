@@ -88,13 +88,18 @@ export type AccountUsageView = {
 export type AccountView = {
   "adapter"?: string;
   "cooldown"?: AccountCooldownView | null;
-  "dir": string;
+  "dir"?: string | null;
+  "effective_max_runs": number;
   "excluded_reason"?: string | null;
   "id": string;
+  "implicit": boolean;
   "in_use": number;
   "last_check"?: ProviderCheckView | null;
   "logged_in": boolean;
   "login_pending": boolean;
+  "max_runs"?: number | null;
+  "max_runs_source": string;
+  "provider"?: string | null;
   "score"?: number | null;
   "stats": AccountStats;
   "usage"?: AccountUsageView | null;
@@ -1592,6 +1597,7 @@ export type DaemonSnapshot = {
   "cooldowns": Array<CooldownView>;
   "decisions_open"?: number;
   "hostname": string;
+  "implicit_accounts"?: Array<ImplicitAccountLive>;
   "in_flight": Array<InFlight>;
   "instance_id": string;
   "last_tick_at": string;
@@ -2953,6 +2959,12 @@ export type ImpactKind = "provider" | "proxy";
 
 export type ImpactView = {
   "changes": Array<ImpactChangeView>;
+};
+
+export type ImplicitAccountLive = {
+  "in_use": number;
+  "legacy_concurrency"?: number | null;
+  "provider": string;
 };
 
 export type InFlight = {

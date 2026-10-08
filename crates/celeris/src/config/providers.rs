@@ -28,8 +28,9 @@ pub struct ProviderConfig {
     pub adapter: String,
     #[serde(default = "default_tiers")]
     pub tiers: Vec<Tier>,
-    #[serde(default = "default_provider_concurrency")]
-    pub concurrency: usize,
+    /// Deprecated compatibility value, retained for the implicit-account migration.
+    #[serde(default)]
+    pub concurrency: Option<usize>,
     /// 空でなければ、このプロバイダの run の `--model` に使う（空なら `[adapters.<種別>].model`。ADR-0012 D1）。
     #[serde(default)]
     pub model: String,
@@ -70,9 +71,6 @@ pub struct ProviderConfig {
 
 fn default_tiers() -> Vec<Tier> {
     vec![Tier::Frontier, Tier::Standard, Tier::Cheap]
-}
-fn default_provider_concurrency() -> usize {
-    1
 }
 
 /// `providers_include` の glob（`<dir>/*.toml` の形だけを受け付ける）からディレクトリを取り出し、
@@ -493,11 +491,13 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
                 p.id, p.adapter
             )));
         }
-        if p.concurrency == 0 {
-            return Err(ConfigError::Invalid(format!(
-                "provider {}: concurrency must be >= 1",
-                p.id
-            )));
+        if let Some(concurrency) = p.concurrency {
+            let handling = if p.account_pool.is_on() {
+                "ignored for account pools; use per-account max_runs"
+            } else {
+                "kept only as the default max_runs of its implicit account; edit it on the accounts screen"
+            };
+            tracing::warn!(provider = %p.id, concurrency, "provider {}: concurrency is deprecated (ADR 2026-10-08 account-concurrency-limits); {} (implicit/{})", p.id, handling, p.id);
         }
         // ADR-0026 / ADR-0106 / ADR 2026-10-07: `command`/`args` は ACP / browser-specialist / Pi の行で意味を持つ。
         // 静かに無視せず設定エラーにする（書いた本人の勘違いを早く見つけるため）。

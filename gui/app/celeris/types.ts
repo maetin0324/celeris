@@ -2207,14 +2207,22 @@ export interface AccountView {
   adapter?: string;
   cooldown?: AccountCooldownView | null;
   /**
-   * アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。
+   * アカウントディレクトリの絶対パス（ログイン手順に要る。秘密の中身は含まない）。暗黙アカウントは `null`。
    */
-  dir: string;
+  dir?: string | null;
+  /**
+   * 実効上限（非 CoS の run の同時数。実アカウントの CoS run はこれ +1 まで、暗黙アカウントは CoS を含めた全数で比べる）。
+   */
+  effective_max_runs: number;
   /**
    * `"not_logged_in" | "at_capacity" | "cooldown" | "five_hour_exhausted" | "seven_day_exhausted" | "one_month_exhausted" | "rejected"`。
    */
   excluded_reason?: string | null;
   id: string;
+  /**
+   * §(e): 暗黙アカウント（`adapter = "implicit"`、アカウントを持たない行ごとに 1 件）か。
+   */
+  implicit: boolean;
   /**
    * 実行中の run の数。最初の tick 前は `0`。
    */
@@ -2229,6 +2237,18 @@ export interface AccountView {
    * ADR-0024 D7: 進行中のログイン中継があるか。
    */
   login_pending: boolean;
+  /**
+   * ADR 2026-10-08 account-concurrency-limits §(c): このアカウントに保存された上限（`PATCH` で設定）。無ければ `null`（既定に従う）。
+   */
+  max_runs?: number | null;
+  /**
+   * 実効上限の出どころ: `"account"`（保存値）| `"legacy_concurrency"`（暗黙アカウントの行の旧 `concurrency`）| `"default"`（`max_runs_per_account`）。
+   */
+  max_runs_source: string;
+  /**
+   * 暗黙アカウントの行の id（`id` と同じ）。実アカウントは `null`。
+   */
+  provider?: string | null;
   /**
    * ADR-0024 D3 のスコア。除外なら `null`。
    */
@@ -2305,9 +2325,13 @@ export interface AccountCheckResponse {
  */
 export interface AccountList {
   /**
-   * `adapter` → `id` の順。
+   * 実アカウントを `adapter` → `id` の順に並べ、その後ろに暗黙アカウント（`implicit = true`）を行の設定順に並べる。
    */
   items: AccountView[];
+  /**
+   * ADR 2026-10-08 account-concurrency-limits §(c): 保存値（`max_runs`）の無いアカウントの既定の上限
+   * （`[accounts] max_runs_per_account`。`[accounts]` が無い構成では組み込みの既定 2）。
+   */
   max_runs_per_account: number;
   /**
    * `[accounts] claude_dir` の絶対パス。`[accounts]` が無ければ `null`。ADR-0025 D6: `roots["claude-code"]`
@@ -3574,6 +3598,10 @@ export interface ProviderConfigView {
    */
   account_pool?: boolean;
   adapter: string;
+  /**
+   * @deprecated
+   * Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。
+   */
   concurrency: number;
   credential_refs?: {
     [k: string]: string;
@@ -4326,6 +4354,11 @@ export interface DaemonSnapshot {
    */
   decisions_open?: number;
   hostname: string;
+  /**
+   * ADR 2026-10-08 account-concurrency-limits §(e): アカウントを持たない行（`account_pool` が off）ごとの
+   * 暗黙アカウント（`implicit/<provider id>`）。行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
+   */
+  implicit_accounts?: ImplicitAccountLive[];
   in_flight: InFlight[];
   /**
    * 起動ごとの ULID（`GET /health` の `instance_id` と同じ）。
@@ -4567,6 +4600,24 @@ export interface CooldownView {
   until: string;
 }
 /**
+ * ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB
+ * （`account_limits`）が正本なので、ここには既定を作るための旧 `concurrency` だけを持つ。
+ */
+export interface ImplicitAccountLive {
+  /**
+   * この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
+   */
+  in_use: number;
+  /**
+   * 行に書かれた旧 `[[providers]].concurrency`（保存値が無いときの既定。書かれていなければ `None`）。
+   */
+  legacy_concurrency?: number | null;
+  /**
+   * 行の id（= 暗黙アカウントの id）。
+   */
+  provider: string;
+}
+/**
  * 実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。
  */
 export interface InFlight {
@@ -4586,6 +4637,11 @@ export interface ProviderLive {
    */
   account_pool?: boolean;
   adapter: string;
+  /**
+   * @deprecated
+   * Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config に書かれた旧値（無ければ 1）。
+   * dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の上限で決まる。
+   */
   concurrency: number;
   credential_refs?: {
     [k: string]: string;
@@ -9726,6 +9782,10 @@ export interface ProviderConfigView1 {
    */
   account_pool?: boolean;
   adapter: string;
+  /**
+   * @deprecated
+   * Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 書かれた旧値（無ければ 1）。意味を持たない。
+   */
   concurrency: number;
   credential_refs?: {
     [k: string]: string;
@@ -9761,6 +9821,11 @@ export interface ProviderView {
    */
   account_pool?: boolean;
   adapter: string;
+  /**
+   * @deprecated
+   * Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: config / `providers.d` に書かれた旧値（無ければ 1）。
+   * dispatch では使わず、何とも比べない。同時実行数はアカウント（暗黙アカウントを含む）の `max_runs` で決まる。
+   */
   concurrency: number;
   /**
    * スナップショットが無い、または cooldown 中でなければ `null`。
@@ -9775,12 +9840,13 @@ export interface ProviderView {
   env_keys: string[];
   id: string;
   /**
+   * この行で走っている CoS 以外の run（プロバイダを使うレビュー run を含む）の数。観測値で、上限とは比べない。
    * スナップショットが無ければ `null`。ADR-0089（Phase R6-5）: CoS の対話 run は含めない（`in_use_cos`）。
    */
   in_use?: number | null;
   /**
-   * ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`concurrency` の外で
-   * 走る。`in_use` とは別に数える）。スナップショットが無ければ `null`。
+   * ADR-0089（Phase R6-5）: このプロバイダで走っている CoS の対話 run の数（`in_use` とは別に数える観測値）。
+   * スナップショットが無ければ `null`。
    */
   in_use_cos?: number | null;
   kind?: "adapter";

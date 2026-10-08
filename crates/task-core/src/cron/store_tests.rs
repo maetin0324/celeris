@@ -300,7 +300,8 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
         // 版数 37 の DB に戻す。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TRIGGER chat_node_session_thread_insert; \
+            "DROP TABLE account_limits; \
+             DROP TRIGGER chat_node_session_thread_insert; \
              DROP TRIGGER chat_node_session_thread_update; \
              DROP INDEX idx_node_sessions_cos_chat_active; \
              ALTER TABLE node_sessions DROP COLUMN thread_id; \
@@ -343,7 +344,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 61);
+    assert_eq!(SCHEMA_VERSION, 62);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

@@ -481,6 +481,9 @@ async fn remove_account_moves_the_directory_cancels_login_and_clears_the_book() 
     }
     let config = config_for_dispatcher(tmp.path(), acct.clone());
     let mut dispatcher = crate::build_dispatcher(&config, Default::default()).unwrap();
+    dispatcher
+        .set_account_limit("claude-code", "a", Some(3))
+        .unwrap();
     let sessions = new_sessions();
     let codex_sessions = new_codex_sessions();
     // 進行中のログインがあれば、削除で止められる。
@@ -519,6 +522,9 @@ sleep 30
     .await;
     assert!(result.is_ok(), "{result:?}");
     assert!(!acct.join("a").exists());
+    assert_eq!(dispatcher.account_max_runs("claude-code", "a"), None);
+    let restarted = crate::build_dispatcher(&config, Default::default()).unwrap();
+    assert_eq!(restarted.account_max_runs("claude-code", "a"), None);
     assert!(!sessions.lock().await.contains_key("a"));
     let removed: Vec<_> = std::fs::read_dir(acct.join(".removed")).unwrap().collect();
     assert_eq!(removed.len(), 1);

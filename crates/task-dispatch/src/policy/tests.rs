@@ -5,7 +5,7 @@ fn spec(id: &str, adapter: &str, tiers: &[Tier], concurrency: usize) -> Provider
         id: id.to_string(),
         adapter: adapter.to_string(),
         tiers: tiers.to_vec(),
-        concurrency,
+        concurrency: Some(concurrency),
         model: format!("{id}-model"),
     }
 }
@@ -209,13 +209,20 @@ fn report_unknown_provider_does_not_panic() {
 }
 
 #[test]
-fn concurrency_limit_returns_spec_value_or_zero() {
+fn legacy_concurrency_returns_the_written_value_only() {
+    let mut unset = spec("p2", "codex", &[Tier::Frontier], 1);
+    unset.concurrency = None;
     let policy = StaticPolicy::new(
-        vec![spec("p1", "claude-code", &[Tier::Frontier], 3)],
+        vec![spec("p1", "claude-code", &[Tier::Frontier], 3), unset],
         Duration::from_secs(5),
     );
-    assert_eq!(policy.concurrency_limit("p1".to_string()), 3);
-    assert_eq!(policy.concurrency_limit("unknown".to_string()), 0);
+    assert_eq!(policy.legacy_concurrency("p1".to_string()), Some(3));
+    assert_eq!(policy.legacy_concurrency("p2".to_string()), None);
+    assert_eq!(policy.legacy_concurrency("unknown".to_string()), None);
+    assert_eq!(
+        policy.provider_ids(),
+        vec!["p1".to_string(), "p2".to_string()]
+    );
 }
 
 /// ADR-0012 D2（P-20）: 除外されたプロバイダ（並列度の上限）と cooldown 中のプロバイダを飛ばして次の行へフォールバックする。
@@ -330,8 +337,8 @@ fn default_select_is_derived_from_pick() {
             Some(("fake".into(), "only".into()))
         }
         fn report(&mut self, _provider: ProviderId, _outcome: &ProviderOutcome) {}
-        fn concurrency_limit(&self, _provider: ProviderId) -> usize {
-            1
+        fn legacy_concurrency(&self, _provider: ProviderId) -> Option<usize> {
+            Some(1)
         }
     }
     let now = Instant::now();

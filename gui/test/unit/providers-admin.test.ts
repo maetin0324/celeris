@@ -44,13 +44,12 @@ describe("parseEnvText", () => {
 });
 
 describe("buildProviderCreateInput", () => {
-  it("reads id/adapter/tiers/concurrency/model/account_pool/env from a FormData", () => {
+  it("reads id/adapter/tiers/model/account_pool/env from a FormData", () => {
     const form = new FormData();
     form.set("id", "acct-b");
     form.set("adapter", "claude-code");
     form.append("tiers", "standard");
     form.append("tiers", "frontier");
-    form.set("concurrency", "3");
     form.set("model", "claude-sonnet-5");
     form.set("account_pool", "on");
     form.set("env", "KEY=value\n");
@@ -59,7 +58,6 @@ describe("buildProviderCreateInput", () => {
       id: "acct-b",
       adapter: "claude-code",
       tiers: ["frontier", "standard"],
-      concurrency: 3,
       model: "claude-sonnet-5",
       account_pool: true,
       env: { KEY: "value" },
@@ -75,13 +73,12 @@ describe("buildProviderCreateInput", () => {
 });
 
 describe("buildProviderPatchInput", () => {
-  it("always sends tiers/concurrency/model/account_pool (pre-filled edit form), env only when non-empty", () => {
+  it("always sends tiers/model/account_pool (pre-filled edit form), env only when non-empty", () => {
     const form = new FormData();
     form.append("tiers", "cheap");
-    form.set("concurrency", "1");
     form.set("model", "");
     const patch = buildProviderPatchInput(form);
-    expect(patch).toEqual({ tiers: ["cheap"], concurrency: 1, model: "", account_pool: false });
+    expect(patch).toEqual({ tiers: ["cheap"], model: "", account_pool: false });
   });
 
   it("includes env only when the textarea has at least one KEY=VALUE line (empty means unchanged)", () => {
@@ -159,7 +156,7 @@ describe("patchProvider", () => {
     mock.on("PATCH", "/api/v1/providers/acct-b", (_req, res) => sendJson(res, 200, providerConfig));
     mock.on("POST", "/api/v1/reload", (_req, res) => sendJson(res, 200, { reloaded: true } satisfies ReloadResult));
 
-    const result = await patchProvider(client, "acct-b", { concurrency: 2 });
+    const result = await patchProvider(client, "acct-b", { model: "m2" });
     expect(result.op).toEqual({ ok: true, op: "patch", id: "acct-b", provider: providerConfig });
     expect(result.reload).toEqual({ ok: true, result: { reloaded: true } });
   });

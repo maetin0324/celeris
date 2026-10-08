@@ -426,10 +426,10 @@ fi"#,
     assert_eq!(checked.json()["result"], "auth_failed", "{}", checked.body);
     assert!(checked.json()["checked_at"].is_string());
 
-    // --- 変更: concurrency を PATCH ---
+    // --- 変更: concurrency を PATCH（ADR 2026-10-08 account-concurrency-limits §(a): deprecated。受け付けるが保存しない） ---
     let patched = env.patch("/providers/acct-c-authfail", json!({"concurrency": 5}));
     assert_eq!(patched.status, 200, "{}", patched.body);
-    assert_eq!(patched.json()["concurrency"], 5, "{}", patched.body);
+    assert_eq!(patched.json()["concurrency"], 1, "{}", patched.body);
 
     // --- 作成: acct-b（正常。dispatch の overflow 先として使う） ---
     let good = env.post("/providers", json!({"id": "acct-b", "adapter": "fake"}));

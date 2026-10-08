@@ -838,7 +838,7 @@ async fn cos_chat_run_launch_non_pool_provider_keeps_its_limit() {
             id: "p1".into(),
             adapter: "fake".into(),
             tiers: vec![Tier::Frontier],
-            concurrency: 1,
+            concurrency: Some(1),
             model: "m".into(),
         }],
         Duration::from_secs(1),
@@ -1567,4 +1567,70 @@ async fn cos_workspace_files_limits_do_not_fail_reply() {
             expected
         );
     }
+}
+
+#[tokio::test]
+async fn cos_chat_pool_uses_account_override_plus_one_and_ignores_provider_zero() {
+    let (_dir, store, mut d) = fixture(FakeAdapter::default_command(), 4);
+    let account_root = _dir.path().join("accounts");
+    let account_dir = account_root.join("a");
+    std::fs::create_dir_all(&account_dir).expect("account dir");
+    std::fs::write(account_dir.join(".credentials.json"), "{}").expect("login marker");
+    d.config.accounts = Some(AccountsRuntimeConfig {
+        roots: HashMap::from([(AccountAdapter::ClaudeCode, account_root.clone())]),
+        max_runs_per_account: 2,
+        check_model: "test".into(),
+        fallback_cooldown_secs: 60,
+    });
+    d.account_books.insert(
+        AccountAdapter::ClaudeCode,
+        Arc::new(StdMutex::new(crate::accounts::AccountBook::load(
+            &account_root.join(".celeris-usage.json"),
+        ))),
+    );
+    d.account_pool_providers.insert("p1".into());
+    d.adapters.insert(
+        "p1".into(),
+        Arc::new(NamedFake(Arc::new(FakeAdapter::default()))),
+    );
+    let launch = d.cos_chat_launch.as_mut().expect("launch");
+    launch.config.harness = "claude-code".into();
+    launch.config.account_id = Some("a".into());
+
+    d.set_account_limit("claude-code", "a", Some(1)).unwrap();
+    d.policy = Box::new(StaticPolicy::new(
+        vec![ProviderSpec {
+            id: "p1".into(),
+            adapter: "claude-code".into(),
+            tiers: vec![Tier::Frontier],
+            concurrency: Some(0),
+            model: "m".into(),
+        }],
+        Duration::from_secs(1),
+    ));
+    let threads: Vec<_> = (0..3)
+        .map(|i| {
+            let t = thread(&store, &format!("override-{i}"));
+            post(&store, &t, "hello");
+            t
+        })
+        .collect();
+    d.tick_cos_chat_launch();
+    let launch = d.cos_chat_launch.as_ref().unwrap();
+    assert_eq!(
+        launch.running.len(),
+        2,
+        "account max_runs=1 plus one CoS slot"
+    );
+    let active: Vec<_> = launch.running.keys().cloned().collect();
+    let waiting = threads.iter().find(|t| !active.contains(t)).unwrap();
+    assert!(
+        runs(&store, waiting).is_empty(),
+        "full account leaves request queued"
+    );
+    for t in active {
+        join(&mut d, &t).await;
+    }
+    d.tick_cos_chat_launch();
+    join(&mut d, waiting).await;
 }

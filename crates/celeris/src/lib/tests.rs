@@ -922,14 +922,88 @@ fn reload_providers_rejects_changes_to_the_accounts_section() {
     let mut dispatcher =
         build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
 
-    // [accounts] が変わっていなければ通る。
+    // Individual settings survive reload, and reload reads authoritative DB values.
+    dispatcher
+        .set_account_limit("claude-code", "a", Some(3))
+        .unwrap();
     assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.account_max_runs("claude-code", "a"), Some(3));
+    let store = SqliteStore::open(&db).unwrap();
+    store
+        .set_account_limit("claude-code", "a", Some(4))
+        .unwrap();
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.account_max_runs("claude-code", "a"), Some(4));
 
     // max_runs_per_account を変えると、次の reload はエラーになる。
     write_config(3);
     let err = reload_providers(&mut dispatcher, &mut config).unwrap_err();
     assert!(err.contains("[accounts]"), "{err}");
     assert!(err.contains("restart"), "{err}");
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(d)(e): a non-pool row of an old config
+/// (`concurrency = 1`, no `[accounts]`) gets `implicit/<id>` with limit 1. A stored override
+/// survives `POST /reload` and a restart (new `build_dispatcher` on the same DB); removing the
+/// row from config and reloading forgets it.
+#[test]
+fn implicit_account_limit_follows_legacy_concurrency_and_survives_reload() {
+    let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+    let config_path = dir.path().join("config.toml");
+    let db = dir.path().join("celeris.db");
+    let ws = dir.path().join("ws");
+    let write_config = |rows: &str| {
+        std::fs::write(
+            &config_path,
+            format!(
+                "db = {db:?}\nworkspace_root = {ws:?}\n\
+                 [[providers]]\nid = \"x\"\nadapter = \"fake\"\n{rows}"
+            ),
+        )
+        .unwrap_or_else(|e| panic!("{e}"));
+    };
+    let qwen = "[[providers]]\nid = \"qwen\"\nadapter = \"fake\"\nconcurrency = 1\n";
+    write_config(qwen);
+    let mut config = Config::load(&config_path).unwrap_or_else(|e| panic!("{e}"));
+    let mut dispatcher =
+        build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(dispatcher.implicit_account_ids(), vec!["x", "qwen"]);
+    assert_eq!(
+        dispatcher.implicit_account_limit("qwen"),
+        Some((1, task_dispatch::capacity::MaxRunsSource::LegacyConcurrency))
+    );
+    assert_eq!(
+        dispatcher.implicit_account_limit("x"),
+        Some((2, task_dispatch::capacity::MaxRunsSource::Default))
+    );
+
+    dispatcher
+        .set_account_limit("implicit", "qwen", Some(2))
+        .unwrap();
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(
+        dispatcher.implicit_account_limit("qwen"),
+        Some((2, task_dispatch::capacity::MaxRunsSource::Account))
+    );
+    drop(dispatcher);
+    let mut dispatcher =
+        build_dispatcher(&config, Default::default()).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(dispatcher.account_max_runs("implicit", "qwen"), Some(2));
+
+    // 行を config から消して reload すると、その暗黙アカウントの保存値も消える。
+    write_config("");
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(dispatcher.implicit_account_ids(), vec!["x"]);
+    assert_eq!(dispatcher.account_max_runs("implicit", "qwen"), None);
+    let store = SqliteStore::open(&db).unwrap();
+    assert!(store.account_limits().unwrap().is_empty());
+    // 同じ id の行を戻しても古い上書きは引き継がない（既定 = 旧 concurrency に戻る）。
+    write_config(qwen);
+    assert!(reload_providers(&mut dispatcher, &mut config).is_ok());
+    assert_eq!(
+        dispatcher.implicit_account_limit("qwen"),
+        Some((1, task_dispatch::capacity::MaxRunsSource::LegacyConcurrency))
+    );
 }
 
 /// Phase 44（実機 2026-09-18）: `[[roles]]` の `max_turns` を変えて `reload` すると、次に作られる子の

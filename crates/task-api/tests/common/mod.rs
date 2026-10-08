@@ -466,6 +466,7 @@ pub fn snapshot(ticks: u64) -> DaemonSnapshot {
         max_runs_per_account: None,
         accounts_roots: std::collections::HashMap::new(),
         accounts: vec![],
+        implicit_accounts: vec![],
         containers: None,
         scratch: None,
         clusters: vec![ClusterLive {

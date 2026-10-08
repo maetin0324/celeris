@@ -124,7 +124,7 @@ pub fn config_view(config: &Config, listen: SocketAddr) -> ConfigView {
                     id: p.id.clone(),
                     adapter: p.adapter.clone(),
                     tiers: p.tiers.clone(),
-                    concurrency: p.concurrency,
+                    concurrency: p.concurrency.unwrap_or(1),
                     model: models.get(&p.id).filter(|m| !m.is_empty()).cloned(),
                     env_keys,
                     account_pool: p.account_pool.is_on(),
@@ -314,7 +314,8 @@ pub fn api_settings(
             .accounts
             .as_ref()
             .map(|a| a.max_runs_per_account)
-            .unwrap_or(0),
+            // ADR 2026-10-08 account-concurrency-limits §(d): 暗黙アカウントの既定（組み込みの 2）。
+            .unwrap_or(task_dispatch::DEFAULT_MAX_RUNS_PER_ACCOUNT),
         secrets_dir: config.secrets.as_ref().map(|s| s.dir.clone()),
         secret_usage: secret_usage(config),
         memory_dir: config.memory.as_ref().map(|m| m.dir.clone()),
@@ -668,3 +669,7 @@ mod routing_catalog_tests {
         assert!(view.models[0].pricing.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "api_account_limits_tests.rs"]
+mod account_limits_tests;

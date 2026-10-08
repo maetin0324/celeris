@@ -266,8 +266,10 @@ kind = "adapter"
 adapter = "langmem"
 llm_source = "celeris"
 tiers = ["cheap"]
-concurrency = 1
 ```
+
+同時実行数はこの行の暗黙アカウント `implicit/langmem-main` の上限で決まる（既定は `[accounts] max_runs_per_account`）。
+アカウント画面で変える（[providers ガイド](providers.md#同時実行数はアカウントで決める)）。`[[providers]].concurrency` は deprecated。
 
 celeris を再起動（または `POST /reload` で読み直せない設定なので再起動）すれば、次の tick から
 知識整理 run が起き始める。

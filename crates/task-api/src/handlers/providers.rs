@@ -208,6 +208,9 @@ pub(super) async fn create_provider(
     if create.concurrency.is_some_and(|c| c == 0) {
         return Err(ApiProblem::bad_request("concurrency must be >= 1"));
     }
+    if create.concurrency.is_some() {
+        warn_deprecated_concurrency(&create.id);
+    }
     // ADR-0024 D2 / ADR-0025 D1 / S1: `account_pool = true` は claude-code/codex だけ、かつ `[accounts]` に
     // そのアダプタの根ディレクトリが設定済みのときだけ有効。
     if create.account_pool.is_on() {
@@ -231,6 +234,16 @@ pub(super) async fn create_provider(
         response.headers_mut().insert(header::LOCATION, location);
     }
     Ok(response)
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(a): 本文の `concurrency` は型だけ検査して保存しない。
+fn warn_deprecated_concurrency(id: &str) {
+    tracing::warn!(
+        who = "admin",
+        provider_id = %id,
+        "provider {id}: concurrency is deprecated (ADR 2026-10-08 account-concurrency-limits) \
+         and was not saved; set max_runs on the account (PATCH /api/v1/accounts/{{adapter}}/{{id}})"
+    );
 }
 
 pub(super) async fn patch_provider(
@@ -257,6 +270,9 @@ pub(super) async fn patch_provider(
     let patch: ProviderPatchBody = read_provider_json(body, true).await?;
     if patch.concurrency.is_some_and(|c| c == 0) {
         return Err(ApiProblem::bad_request("concurrency must be >= 1"));
+    }
+    if patch.concurrency.is_some() {
+        warn_deprecated_concurrency(&id);
     }
     if let Some(refs) = &patch.credential_refs {
         validate_credential_refs(refs)?;

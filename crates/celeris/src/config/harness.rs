@@ -219,7 +219,7 @@ impl Config {
             id: SMOKE_ID.to_string(),
             adapter: FakeAdapter::ID.to_string(),
             tiers: vec![Tier::Standard],
-            concurrency: 1,
+            concurrency: None,
             model: FakeAdapter::ID.to_string(),
             env: HashMap::new(),
             env_from_secrets: HashMap::new(),

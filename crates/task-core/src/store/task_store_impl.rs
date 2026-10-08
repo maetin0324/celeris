@@ -26,6 +26,18 @@ use super::{
 };
 
 impl TaskStore for SqliteStore {
+    fn account_limits(&self) -> Result<Vec<super::AccountLimit>, StoreError> {
+        self.account_limits_impl()
+    }
+    fn set_account_limit(
+        &self,
+        adapter: &str,
+        id: &str,
+        max_runs: Option<usize>,
+    ) -> Result<(), StoreError> {
+        self.set_account_limit_impl(adapter, id, max_runs)
+    }
+
     fn record_behind_target(
         &self,
         obs: &crate::behind_target::BehindTargetObservation,

@@ -1,3 +1,9 @@
+---
+title: ADR: アカウントごとの同時実行数、暗黙アカウント、プロバイダ concurrency の deprecate
+tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
+status: done
+updated: 2026-10-08
+---
 # 進捗: アカウントごとの同時実行数（WorkUnit adr）
 
 - task: `01M4D7RVKXY9A967ZXDADWVHQJ`、run `01M4D9PZY1SHNH1D0BFN3BARKG`（2026-10-08）

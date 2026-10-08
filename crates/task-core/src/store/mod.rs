@@ -108,6 +108,7 @@ mod legacy;
 mod messages;
 mod model_catalog;
 pub use model_catalog::ModelCatalogStore;
+mod account_limits;
 pub(crate) mod migrations;
 mod org;
 mod projects;
@@ -116,6 +117,7 @@ mod repos;
 mod routing_log;
 mod routing_shadow;
 mod site_policies;
+pub use account_limits::AccountLimit;
 pub use routing_shadow::ShadowReservationAudit;
 pub use site_policies::{
     BrowserSitePolicy, BrowserSitePolicyDelete, BrowserSitePolicyRecord,

@@ -59,6 +59,15 @@ pub enum AdminRequest {
         id: String,
         reply: oneshot::Sender<Result<(), AccountAdminError>>,
     },
+    /// ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。celeris 側で存在を
+    /// 確かめ（実: 根の下のディレクトリ、暗黙: 非プール行）、DB に書いてからディスパッチャの表を更新する
+    /// （次の tick から効く）。`adapter` は `AccountAdapter::as_str()` か `"implicit"`。`None` は保存値を消す。
+    AccountLimitSet {
+        adapter: String,
+        id: String,
+        max_runs: Option<usize>,
+        reply: oneshot::Sender<Result<(), AccountAdminError>>,
+    },
     /// ADR-0032 D5: `POST /clusters/{id}/connect`。コード無しで張れれば `kind = "connected"`、TOTP 等の
     /// プロンプトが要れば `kind = "needs_code"`。
     ClusterConnectStart {
@@ -222,8 +231,10 @@ pub struct ProviderConfigFile {
     pub adapter: String,
     #[serde(default = "default_tiers")]
     pub tiers: Vec<Tier>,
-    #[serde(default = "default_concurrency")]
-    pub concurrency: usize,
+    /// Deprecated（ADR 2026-10-08 account-concurrency-limits §(a)）: 人が書いた旧値は読めて往復で保つが、
+    /// 管理 API は新しく書かない。dispatch では使わない（非プール行の暗黙アカウントの既定にだけ使う）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub concurrency: Option<usize>,
     #[serde(default)]
     pub model: String,
     #[serde(default)]
@@ -266,7 +277,7 @@ impl ProviderConfigFile {
             id: self.id.clone(),
             adapter: self.adapter.clone(),
             tiers: self.tiers.clone(),
-            concurrency: self.concurrency,
+            concurrency: self.concurrency.unwrap_or_else(default_concurrency),
             model: (!self.model.is_empty()).then(|| self.model.clone()),
             env_keys,
             account_pool: self.account_pool.is_on(),
@@ -359,7 +370,8 @@ impl ProviderCreateBody {
             id: self.id,
             adapter: self.adapter,
             tiers: self.tiers.unwrap_or_else(default_tiers),
-            concurrency: self.concurrency.unwrap_or_else(default_concurrency),
+            // ADR 2026-10-08 §(a): 本文の `concurrency` は受け付けるが保存しない（効かない deprecated 欄）。
+            concurrency: None,
             model: self.model.unwrap_or_default(),
             env: self.env,
             // ADR-0030 D2: 管理 API は env_from_secrets を書かない（`create` された行は必ず空。人が後から
@@ -375,7 +387,8 @@ impl ProviderCreateBody {
     }
 }
 
-/// `PATCH /api/v1/providers/{id}` の本文。`id`/`adapter` は変更できない（ADR-0017 D1: 並列度・tier・model。
+/// `PATCH /api/v1/providers/{id}` の本文。`id`/`adapter` は変更できない（ADR-0017 D1: tier・model。並列度
+/// `concurrency` は ADR 2026-10-08 account-concurrency-limits §(a) で deprecated: 受け付けるが保存しない。
 /// `env` も自然な拡張として一緒に patch できるようにした）。
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct ProviderPatchBody {
@@ -425,9 +438,7 @@ impl ProviderPatchBody {
         if let Some(tiers) = &self.tiers {
             file.tiers = tiers.clone();
         }
-        if let Some(concurrency) = self.concurrency {
-            file.concurrency = concurrency;
-        }
+        // ADR 2026-10-08 §(a): `concurrency` は受け付けるが保存しない（既存の file の値はそのまま保つ）。
         if let Some(model) = &self.model {
             file.model = model.clone();
         }

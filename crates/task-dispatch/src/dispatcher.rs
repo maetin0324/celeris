@@ -89,7 +89,6 @@ use tokio::task::JoinHandle;
 use crate::accounts::{
     AccountBook, AccountCandidate, AccountCheckRecord, AccountCooldownReason, AccountDir,
     ExcludedReason, ObservationSource, cooldown_for_failure, evaluate, scan_accounts,
-    select_account,
 };
 use crate::policy::{
     AdapterId, CooldownReason, ProviderId, ProviderOutcome, ProviderPolicy, Selection,
@@ -418,6 +417,10 @@ fn to_answers(notes: Vec<AnswerNote>) -> Vec<Answer> {
         })
         .collect()
 }
+
+/// Built-in `max_runs_per_account` when `[accounts]` is absent (implicit accounts still
+/// need a default; ADR 2026-10-08 §(d)).
+pub const DEFAULT_MAX_RUNS_PER_ACCOUNT: usize = 2;
 
 /// ADR-0024/0025: `[accounts]` があるときのプール実行時設定（`celeris::config::AccountsConfig` の写し）。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1243,6 +1246,7 @@ pub struct Dispatcher {
     /// アダプタだけキーを持つ）。実行中の run のシンクとも共有する。reload では差し替えない（設定ファイルの
     /// 再読込では消えない観測値）。
     account_books: HashMap<AccountAdapter, Arc<StdMutex<AccountBook>>>,
+    account_limits: Option<HashMap<(String, String), usize>>,
     /// ADR-0024 D1: 選択のたびにディレクトリを読み直さないよう、tick につき高々 1 回だけスキャンする（アダプタごと）。
     accounts_scan_cache: HashMap<AccountAdapter, Vec<AccountDir>>,
     /// ADR-0024 D5/D7 / ADR-0025 D5: celeris（GUI の管理 API）が進行中のログイン中継を持っているアカウント
@@ -1438,6 +1442,17 @@ impl Dispatcher {
         account_pool_providers: std::collections::HashSet<ProviderId>,
         config: DispatchConfig,
     ) -> Self {
+        let account_limits = match store.account_limits() {
+            Ok(rows) => Some(
+                rows.into_iter()
+                    .map(|row| ((row.adapter, row.account_id), row.max_runs))
+                    .collect(),
+            ),
+            Err(error) => {
+                tracing::error!(%error, "cannot load account limits; account dispatch is blocked");
+                None
+            }
+        };
         let (tx, rx) = mpsc::unbounded_channel();
         // ADR-0024 D4 / ADR-0025 D1: `<root>/.celeris-usage.json` から観測値・cooldown を読む（無ければ空から始める）。
         // アダプタごとに別の根ディレクトリ・別の帳簿（アカウントの記録はそのアダプタの中で閉じる）。
@@ -1537,6 +1552,7 @@ impl Dispatcher {
             account_pool_adapters: HashMap::new(),
             coding_default: CodingHarnessDefault::default(),
             account_books,
+            account_limits,
             accounts_scan_cache: HashMap::new(),
             login_pending_accounts: std::collections::HashSet::new(),
             container_probe: task_worker::RuntimeProbe::default(),
@@ -1821,6 +1837,149 @@ impl Dispatcher {
         self.config.roles = roles;
         self.config.genres = genres;
         self.config.delegation = delegation;
+    }
+
+    /// Reload authoritative account settings. On failure keep account dispatch blocked.
+    pub fn reload_account_limits(&mut self) -> Result<(), task_core::StoreError> {
+        self.account_limits = None;
+        let rows = self.store.account_limits()?;
+        self.account_limits = Some(
+            rows.into_iter()
+                .map(|r| ((r.adapter, r.account_id), r.max_runs))
+                .collect(),
+        );
+        Ok(())
+    }
+
+    /// Set/clear an override, updating memory only after SQLite commits.
+    pub fn set_account_limit(
+        &mut self,
+        adapter: &str,
+        id: &str,
+        max_runs: Option<usize>,
+    ) -> Result<(), task_core::StoreError> {
+        self.store.set_account_limit(adapter, id, max_runs)?;
+        if let Some(limits) = self.account_limits.as_mut() {
+            let key = (adapter.to_owned(), id.to_owned());
+            if let Some(max_runs) = max_runs {
+                limits.insert(key, max_runs);
+            } else {
+                limits.remove(&key);
+            }
+            Ok(())
+        } else {
+            self.reload_account_limits()
+        }
+    }
+
+    pub fn account_max_runs(&self, adapter: &str, id: &str) -> Option<usize> {
+        self.account_limits
+            .as_ref()?
+            .get(&(adapter.to_owned(), id.to_owned()))
+            .copied()
+    }
+
+    /// `[accounts] max_runs_per_account`, or the built-in default 2 without `[accounts]`.
+    pub fn default_max_runs(&self) -> usize {
+        self.config
+            .accounts
+            .as_ref()
+            .map_or(DEFAULT_MAX_RUNS_PER_ACCOUNT, |a| a.max_runs_per_account)
+    }
+
+    pub(super) fn account_run_limit(&self, adapter: AccountAdapter, id: &str, cos: bool) -> usize {
+        if self.account_limits.is_none() {
+            return 0;
+        }
+        let (effective, _) = crate::capacity::effective_account_limit(
+            self.account_max_runs(adapter.as_str(), id),
+            None,
+            self.default_max_runs(),
+        );
+        crate::capacity::account_run_limit(effective, cos)
+    }
+
+    /// Implicit accounts (ADR 2026-10-08 §(e)): one per non-pool row, in config order.
+    pub fn implicit_account_ids(&self) -> Vec<ProviderId> {
+        self.policy
+            .provider_ids()
+            .into_iter()
+            .filter(|id| !self.account_pool_providers.contains(id))
+            .collect()
+    }
+
+    /// Effective limit of `implicit/<provider>` and where it came from. `None` when
+    /// the row is not a non-pool row of the current config or the stored limits are unreadable.
+    pub fn implicit_account_limit(
+        &self,
+        provider: &str,
+    ) -> Option<(usize, crate::capacity::MaxRunsSource)> {
+        if self.account_pool_providers.contains(provider) {
+            return None;
+        }
+        let stored = self
+            .account_limits
+            .as_ref()?
+            .get(&(
+                crate::capacity::IMPLICIT_ACCOUNT_ADAPTER.to_owned(),
+                provider.to_owned(),
+            ))
+            .copied();
+        Some(crate::capacity::effective_account_limit(
+            stored,
+            self.policy.legacy_concurrency(provider.to_owned()),
+            self.default_max_runs(),
+        ))
+    }
+
+    /// Runs counted against `implicit/<provider>` (every run on the row).
+    pub fn implicit_account_in_use(&self, provider: &str) -> usize {
+        let provider = provider.to_owned();
+        self.provider_in_use(&provider) + self.provider_in_use_cos(&provider)
+    }
+
+    /// ADR 2026-10-08 §(d): drop stored implicit limits whose non-pool row no longer
+    /// exists (row removed or turned into a pool). Called at start-up and after reload.
+    pub fn prune_implicit_account_limits(&mut self) -> Result<Vec<String>, task_core::StoreError> {
+        let live: std::collections::HashSet<ProviderId> =
+            self.implicit_account_ids().into_iter().collect();
+        let stale: Vec<String> = self
+            .store
+            .account_limits()?
+            .into_iter()
+            .filter(|row| {
+                row.adapter == crate::capacity::IMPLICIT_ACCOUNT_ADAPTER
+                    && !live.contains(&row.account_id)
+            })
+            .map(|row| row.account_id)
+            .collect();
+        for id in &stale {
+            self.set_account_limit(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER, id, None)?;
+            tracing::info!(
+                provider = %id,
+                "implicit account limit removed: no non-pool provider row with this id"
+            );
+        }
+        Ok(stale)
+    }
+
+    /// Load used for admission: CoS consumes only the extra CoS slot, not leaf slots.
+    fn account_admission_in_use(&self, adapter: AccountAdapter, id: &str, cos: bool) -> usize {
+        if cos {
+            return self.account_in_use(adapter, id);
+        }
+        let matches = |a: &Option<AccountAdapter>, acct: &Option<String>| {
+            *a == Some(adapter) && acct.as_deref() == Some(id)
+        };
+        self.running
+            .values()
+            .filter(|e| !e.cos && matches(&e.account_adapter, &e.account))
+            .count()
+            + self
+                .reviewing
+                .values()
+                .filter(|e| matches(&e.account_adapter, &e.account))
+                .count()
     }
 
     // ---- ADR-0024/0025: celeris（GUI の管理 API）が使うアカウント操作 ----
@@ -2297,14 +2456,19 @@ impl Dispatcher {
         Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
     }
 
-    /// ADR-0089 規則 2 / 3（Phase R6-5）: `cos` の run にとってそのプロバイダが満杯か。
-    fn provider_full(&self, provider: &ProviderId, cos: bool) -> bool {
-        crate::capacity::provider_full(
-            cos,
-            self.account_pool_providers.contains(provider),
-            self.provider_in_use(provider),
-            self.provider_in_use_cos(provider),
-            self.policy.concurrency_limit(provider.clone()),
+    /// ADR 2026-10-08 §(e): is this non-pool row's implicit account at its limit?
+    /// Pool rows have no implicit account (their real accounts limit them) and are never full here.
+    /// `extra` counts runs not yet visible in `running` (CoS chat launches in flight).
+    pub(super) fn implicit_account_full(&self, provider: &ProviderId, extra: usize) -> bool {
+        if self.account_pool_providers.contains(provider) {
+            return false;
+        }
+        let Some((limit, _)) = self.implicit_account_limit(provider) else {
+            return true;
+        };
+        crate::capacity::implicit_account_full(
+            self.provider_in_use(provider) + self.provider_in_use_cos(provider) + extra,
+            limit,
         )
     }
 

@@ -145,9 +145,10 @@ test.describe("P4-12 daemon/providers", () => {
     await page.getByRole("button", { name: "追加" }).click();
     await expect(page.getByRole("heading", { name: "codex-2" })).toBeVisible();
     const card = page.getByRole("listitem", { name: "プロバイダ codex-2" });
-    await card.getByLabel("concurrency").fill("4");
+    await expect(card.getByLabel(/concurrency|同時実行数/)).toHaveCount(0);
+    await card.getByLabel("モデル（model）").fill("gpt-5.5");
     await card.getByRole("button", { name: "変更を保存" }).click();
-    await expect(card.getByText(/concurrency 4/)).toBeVisible();
+    await expect(card.getByText(/モデル gpt-5\.5/)).toBeVisible();
     await card.getByRole("button", { name: "接続を確認" }).click();
     await expect(card.getByText("確認結果: ok")).toBeVisible();
     await card.getByRole("button", { name: "削除" }).click();

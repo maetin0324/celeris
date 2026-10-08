@@ -23,11 +23,13 @@ ALWAYS_EXCLUDE="scripts/dev/testdata/ scripts/dev/docs-layout.tsv scripts/dev/ch
 # celeris の文書機能（docs/ を持つ案件リポジトリ）と、その試験の fixture。(2) の素のパスを見ない。
 # auto_resolve・delivery の試験は独立した一時 repo に docs/ を作る。
 # classify.rs の旧 docs パスも分類器の入力値で、この repo の参照ではない。
+# sink_tests.rs の docs/SKILL.md も試験の入力値（skill 配送の fixture 文字列）で、この repo の参照ではない。
 FOREIGN_DOCS="crates/task-api/src/docs.rs crates/task-api/tests/docs.rs crates/task-ops/src/docs.rs
 crates/task-ops/src/docs/ crates/task-ops/src/docs_maintenance/ crates/celeris/src/doc_gardener/tests.rs
 crates/task-dispatch/src/undeclared_artifacts/tests.rs crates/task-worker/src/preamble/tests.rs
 crates/task-core/src/execution/tests.rs scripts/tests/test_source_size_report.py
 crates/celeris/src/delivery/tests.rs crates/task-dispatch/src/auto_resolve/classify.rs
+crates/task-dispatch/src/dispatcher/cos_chat/sink_tests.rs
 crates/task-dispatch/src/auto_resolve/tests.rs
 crates/task-dispatch/src/auto_resolve/generated/tests.rs
 crates/task-dispatch/src/auto_resolve/records/tests.rs

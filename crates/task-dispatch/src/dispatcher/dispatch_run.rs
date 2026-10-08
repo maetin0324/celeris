@@ -1183,7 +1183,9 @@ impl Dispatcher {
                 continue;
             }
             let reason = if self.account_pool_providers.contains(provider)
-                || self.policy.concurrency_limit(provider.clone()) == 0
+                || self
+                    .implicit_account_limit(provider)
+                    .is_none_or(|(limit, _)| limit == 0)
             {
                 Some("disabled")
             } else if cooling.contains(provider) {

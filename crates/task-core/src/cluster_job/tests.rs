@@ -386,7 +386,8 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
         // schema 33 の DB に戻す（34 以降の表・列を落とし、版数 34 以降の記録を消す）。
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "DROP TRIGGER chat_node_session_thread_insert; \
+            "DROP TABLE account_limits; \
+             DROP TRIGGER chat_node_session_thread_insert; \
              DROP TRIGGER chat_node_session_thread_update; \
              DROP INDEX idx_node_sessions_cos_chat_active; \
              ALTER TABLE node_sessions DROP COLUMN thread_id; \
@@ -429,7 +430,7 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), crate::SCHEMA_VERSION);
-    assert_eq!(crate::SCHEMA_VERSION, 61);
+    assert_eq!(crate::SCHEMA_VERSION, 62);
     assert!(store.cluster_job_waits_waiting().unwrap().is_empty());
     assert!(store.get(t.id).unwrap().is_some());
 }

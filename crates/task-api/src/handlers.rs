@@ -33,7 +33,8 @@ pub(crate) mod tasks;
 
 use accounts::{
     accounts, cancel_account_login, check_account, create_account, delete_account,
-    start_account_login, submit_account_login_code,
+    patch_account_limit, patch_account_limit_check, patch_account_limit_login, start_account_login,
+    submit_account_login_code,
 };
 use clusters::{
     cancel_cluster_connect, clusters, put_cluster_settings, start_cluster_connect,
@@ -112,10 +113,22 @@ pub(crate) fn router(state: ApiState) -> Router {
         .route("/api/v1/reload", post(reload))
         .route("/api/v1/accounts", get(accounts).post(create_account))
         .route("/api/v1/accounts/{id}", delete(delete_account))
-        .route("/api/v1/accounts/{id}/check", post(check_account))
+        // ADR 2026-10-08 account-concurrency-limits §(d): `PATCH /accounts/{adapter}/{id}`。最初の段の引数名は
+        // 既存の路と同じ `{id}`（意味は adapter）。静的な `check` / `login` が優先されるので、その id の PATCH は
+        // それぞれの路で受ける。
+        .route(
+            "/api/v1/accounts/{id}/{account}",
+            patch(patch_account_limit),
+        )
+        .route(
+            "/api/v1/accounts/{id}/check",
+            post(check_account).patch(patch_account_limit_check),
+        )
         .route(
             "/api/v1/accounts/{id}/login",
-            post(start_account_login).delete(cancel_account_login),
+            post(start_account_login)
+                .delete(cancel_account_login)
+                .patch(patch_account_limit_login),
         )
         .route(
             "/api/v1/accounts/{id}/login/code",

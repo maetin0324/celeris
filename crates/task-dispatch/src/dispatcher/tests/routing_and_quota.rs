@@ -843,7 +843,7 @@ fn portable_work_uses_headroom_across_pools_then_falls_back() {
             id: id.into(),
             adapter: adapter.into(),
             tiers: vec![Tier::Standard],
-            concurrency: 2,
+            concurrency: Some(2),
             model: String::new(),
         })
         .collect(),

@@ -172,7 +172,9 @@ async fn cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max
         provider_checks: Default::default(),
     });
 
-    // 葉 3 本でプールの concurrency (3) が埋まる（a に 2 本、b に 1 本）。4 本目の葉は待つ。
+    // Individual overrides, rather than provider concurrency, admit a=2 and b=1.
+    d.set_account_limit("claude-code", "a", Some(2)).unwrap();
+    d.set_account_limit("claude-code", "b", Some(1)).unwrap();
     let leaves: Vec<Task> = (0..4).map(|_| leaf(ws.path())).collect();
     for t in &leaves {
         store.insert(t).unwrap();
@@ -202,7 +204,7 @@ async fn cos_run_bypasses_pool_concurrency_on_the_least_loaded_account_up_to_max
     assert_eq!(snap.providers[0].in_use, 3);
     assert_eq!(snap.providers[0].in_use_cos, 1);
 
-    // 2 本目の CoS は、どちらのアカウントも max (2) に達していても +1 の 3 本目として載る。
+    // 2 本目の CoS は、個別上限に達していても +1 の追加枠として載る。
     let chat2 = cos_chat(ws.path());
     store.insert(&chat2).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 1);
@@ -250,4 +252,306 @@ async fn max_cos_runs_zero_disables_the_exemption() {
     store.insert(&chat).unwrap();
     assert_eq!(d.tick().unwrap().dispatched, 0);
     assert_eq!(status(&store, chat.id), Status::Ready);
+}
+
+/// A pool can run four leaves despite legacy provider concurrency=1, and stops at
+/// the two accounts' limits. Clearing a live override immediately restores default.
+#[tokio::test]
+async fn pool_ignores_provider_concurrency_and_uses_account_overrides() {
+    let accounts = accounts_fixture();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = pool_dispatcher(
+        store.clone(),
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        2,
+        1,
+    );
+    d.config.max_concurrency = 8;
+    d.set_account_limit("claude-code", "a", Some(1)).unwrap();
+    let leaves: Vec<_> = (0..5).map(|_| leaf(ws.path())).collect();
+    for task in &leaves {
+        store.insert(task).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 3);
+    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 1);
+    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "b"), 2);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert!(!d.account_usable(AccountAdapter::ClaudeCode, "a", false));
+    assert!(d.account_usable(AccountAdapter::ClaudeCode, "a", true));
+    assert_eq!(
+        d.peek_account(AccountAdapter::ClaudeCode, "p1", false),
+        None
+    );
+    assert!(
+        d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
+            .iter()
+            .all(|p| p.deployment.concurrency_limit.is_none())
+    );
+    d.set_account_limit("claude-code", "a", None).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert_eq!(d.account_in_use(AccountAdapter::ClaudeCode, "a"), 2);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+}
+
+#[test]
+fn dispatcher_account_limits_load_on_start_and_reload() {
+    let accounts = accounts_fixture();
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = db_dir.path().join("limits.db");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let mut d = pool_dispatcher(
+        store.clone(),
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        2,
+        1,
+    );
+    d.set_account_limit("claude-code", "a", Some(3)).unwrap();
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", false),
+        3
+    );
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", true),
+        4
+    );
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "b", false),
+        2
+    );
+    assert!(d.set_account_limit("claude-code", "a", Some(0)).is_err());
+    assert_eq!(d.account_max_runs("claude-code", "a"), Some(3));
+    drop(d);
+    drop(store);
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let mut d = pool_dispatcher(
+        store.clone(),
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        2,
+        1,
+    );
+    assert_eq!(d.account_max_runs("claude-code", "a"), Some(3));
+    store
+        .set_account_limit("claude-code", "a", Some(1))
+        .unwrap();
+    d.reload_account_limits().unwrap();
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", true),
+        2
+    );
+    d.set_account_limit("claude-code", "a", None).unwrap();
+    d.reload_account_limits().unwrap();
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "a", false),
+        2
+    );
+}
+
+/// A CoS run using its extra slot does not consume the remaining leaf slot.
+#[tokio::test]
+async fn cos_account_usage_does_not_consume_leaf_capacity() {
+    let accounts = accounts_fixture();
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = pool_dispatcher(
+        store.clone(),
+        slow_pool_adapter(),
+        None,
+        accounts.path().to_path_buf(),
+        1,
+        1,
+    );
+    d.config.max_concurrency = 8;
+    let chat = cos_chat(ws.path());
+    store.insert(&chat).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    let leaves: Vec<_> = (0..3).map(|_| leaf(ws.path())).collect();
+    for task in &leaves {
+        store.insert(task).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 2);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+}
+
+/// A non-pool row (`account_pool = false`) as in production Qwen: `p1` with the
+/// deprecated `concurrency` written as `legacy` (`None` = not written).
+fn non_pool_dispatcher(store: Arc<dyn TaskStore>, legacy: Option<usize>) -> Dispatcher {
+    let mut d = dispatcher(store, slow_pool_adapter(), 8);
+    d.policy = Box::new(StaticPolicy::new(
+        vec![ProviderSpec {
+            id: "p1".into(),
+            adapter: "instant".into(),
+            tiers: vec![Tier::Frontier, Tier::Standard, Tier::Cheap],
+            concurrency: legacy,
+            model: "m".into(),
+        }],
+        Duration::from_secs(1),
+    ));
+    d
+}
+
+/// ADR 2026-10-08 §(e): an old config's `concurrency = 1` on a non-pool row becomes
+/// the default of `implicit/p1`, so the row still runs one at a time. A stored
+/// override of 2 admits a second run on the next tick; `null` restores the legacy 1.
+#[tokio::test]
+async fn non_pool_row_is_limited_by_its_implicit_account() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    assert_eq!(d.implicit_account_ids(), vec!["p1".to_string()]);
+    assert_eq!(
+        d.implicit_account_limit("p1"),
+        Some((1, crate::capacity::MaxRunsSource::LegacyConcurrency))
+    );
+    let leaves: Vec<_> = (0..4).map(|_| leaf(ws.path())).collect();
+    for task in &leaves {
+        store.insert(task).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("p1"), 1);
+    // provider_select・routing の候補にも同じ上限が渡る（旧 concurrency を直接見ない）。
+    assert!(
+        d.legacy_provider_profiles(&leaf(ws.path()).worker_hint)
+            .iter()
+            .all(|p| p.deployment.concurrency_limit == Some(1))
+    );
+
+    d.set_account_limit("implicit", "p1", Some(2)).unwrap();
+    assert_eq!(
+        d.implicit_account_limit("p1"),
+        Some((2, crate::capacity::MaxRunsSource::Account))
+    );
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("p1"), 2);
+
+    // 解除すると既定（旧 concurrency = 1）に戻る。走っている 2 本は止めず、新しい run が待つ。
+    d.set_account_limit("implicit", "p1", None).unwrap();
+    assert_eq!(
+        d.implicit_account_limit("p1"),
+        Some((1, crate::capacity::MaxRunsSource::LegacyConcurrency))
+    );
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("p1"), 2);
+}
+
+/// Without a written `concurrency`, the implicit account falls back to
+/// `max_runs_per_account` (built-in 2 without `[accounts]`).
+#[tokio::test]
+async fn implicit_account_without_legacy_concurrency_uses_the_default() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = non_pool_dispatcher(store.clone(), None);
+    assert!(d.config.accounts.is_none());
+    assert_eq!(
+        d.implicit_account_limit("p1"),
+        Some((
+            crate::dispatcher::DEFAULT_MAX_RUNS_PER_ACCOUNT,
+            crate::capacity::MaxRunsSource::Default
+        ))
+    );
+    for task in (0..3).map(|_| leaf(ws.path())) {
+        store.insert(&task).unwrap();
+    }
+    assert_eq!(d.tick().unwrap().dispatched, 2);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+}
+
+/// ADR 2026-10-08 §(e): CoS gets no +1 on an implicit account — a CoS run and a
+/// leaf share the single slot of `concurrency = 1` (GPU 1 枚の Qwen に 2 本目を載せない).
+#[tokio::test]
+async fn implicit_account_counts_cos_runs_without_an_extra_slot() {
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    let chat = cos_chat(ws.path());
+    store.insert(&chat).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    store.insert(&leaf(ws.path())).unwrap();
+    store.insert(&cos_chat(ws.path())).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("p1"), 1);
+}
+
+/// Overrides survive a reload that keeps the row; a reload that drops the row (or
+/// makes it a pool) prunes the implicit override. Real-account rows are never touched,
+/// even when a real account shares the provider id (`implicit` is a reserved adapter).
+#[test]
+fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
+    let db_dir = tempfile::tempdir().unwrap();
+    let db = db_dir.path().join("implicit.db");
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    d.set_account_limit("implicit", "p1", Some(2)).unwrap();
+    d.set_account_limit("claude-code", "p1", Some(5)).unwrap();
+    d.set_account_limit("implicit", "gone", Some(3)).unwrap();
+    // 実アカウント `claude-code/p1` と暗黙アカウント `implicit/p1` は別の鍵。
+    assert_eq!(
+        d.account_run_limit(AccountAdapter::ClaudeCode, "p1", false),
+        5
+    );
+    assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
+    assert!(
+        AccountAdapter::parse(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER).is_none(),
+        "implicit must stay a reserved adapter name"
+    );
+
+    // 起動時の prune: 行の無い `implicit/gone` だけ消える。
+    assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["gone"]);
+    assert_eq!(d.account_max_runs("implicit", "gone"), None);
+
+    // 同じ行のままの reload（＋ daemon 再起動）を跨いで残る。
+    let same = |legacy| -> Box<dyn ProviderPolicy> {
+        Box::new(StaticPolicy::new(
+            vec![ProviderSpec {
+                id: "p1".into(),
+                adapter: "instant".into(),
+                tiers: vec![Tier::Standard],
+                concurrency: legacy,
+                model: "m".into(),
+            }],
+            Duration::from_secs(1),
+        ))
+    };
+    d.reload_account_limits().unwrap();
+    d.reload_providers(
+        same(Some(1)),
+        HashMap::new(),
+        HashMap::new(),
+        Default::default(),
+    );
+    assert!(d.prune_implicit_account_limits().unwrap().is_empty());
+    assert_eq!(d.implicit_account_limit("p1").unwrap().0, 2);
+    drop(d);
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open(&db).unwrap());
+    let mut d = non_pool_dispatcher(store.clone(), Some(1));
+    assert_eq!(
+        d.implicit_account_limit("p1"),
+        Some((2, crate::capacity::MaxRunsSource::Account))
+    );
+
+    // 行がプールに変わると暗黙アカウントは無くなり、保存値も消える。実アカウントの値は残る。
+    d.reload_providers(
+        same(Some(1)),
+        HashMap::new(),
+        HashMap::new(),
+        std::collections::HashSet::from(["p1".to_string()]),
+    );
+    assert!(d.implicit_account_ids().is_empty());
+    assert_eq!(d.implicit_account_limit("p1"), None);
+    assert_eq!(d.prune_implicit_account_limits().unwrap(), vec!["p1"]);
+    assert_eq!(store.account_limits().unwrap().len(), 1);
+    assert_eq!(d.account_max_runs("claude-code", "p1"), Some(5));
 }

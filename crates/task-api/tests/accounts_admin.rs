@@ -135,6 +135,17 @@ async fn management_routes_all_require_a_token() {
     .await;
     assert_problem(&resp, 401, "unauthorized");
 
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/claude-code/a",
+            &json!({"max_runs": 2}),
+            &[],
+        ),
+    )
+    .await;
+    assert_problem(&resp, 401, "unauthorized");
+
     // GET /accounts は読み取りなので token 不要（他のトークン無しの読み取りエンドポイントと同じ扱い）。
     let resp = send(&app, get("/api/v1/accounts")).await;
     assert_eq!(resp.status, 200, "{}", resp.text());
@@ -953,4 +964,213 @@ async fn provider_admin_named_opencode_pool_requires_the_opencode_root() {
     .await;
     assert_problem(&resp, 422, "invalid_provider");
     assert!(!dir.join("oc.toml").exists());
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(d): `AdminRequest::AccountLimitSet` を celeris の代わりに受ける
+/// ダブル（存在の確認と DB への保存。本物は `celeris::accounts_admin::set_account_limit`。本物を通す試験は
+/// `crates/celeris/src/daemon/api_account_limits_tests.rs`）。
+fn spawn_account_limit_double(
+    mut rx: mpsc::Receiver<AdminRequest>,
+    db_path: std::path::PathBuf,
+    implicit: Vec<String>,
+) {
+    tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            if let AdminRequest::AccountLimitSet {
+                adapter,
+                id,
+                max_runs,
+                reply,
+            } = req
+            {
+                let result = if adapter == "implicit" && !implicit.contains(&id) {
+                    Err(AccountAdminError::NotFound)
+                } else {
+                    task_core::SqliteStore::open(&db_path)
+                        .and_then(|store| {
+                            task_core::TaskStore::set_account_limit(&store, &adapter, &id, max_runs)
+                        })
+                        .map_err(|e| AccountAdminError::Unavailable(e.to_string()))
+                };
+                let _ = reply.send(result);
+            }
+        }
+    });
+}
+
+/// §(e): `[accounts]` が無い構成でも、スナップショットの暗黙アカウントが `GET /accounts` に出て、
+/// `PATCH /accounts/implicit/{id}` で編集できる。実アダプタは 409。`max_runs_per_account` は既定値として返る。
+#[tokio::test]
+async fn implicit_accounts_are_listed_and_patchable_without_the_accounts_section() {
+    let (admin_tx, admin_rx) = mpsc::channel::<AdminRequest>(8);
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        max_runs_per_account: 2,
+        admin_tx: Some(admin_tx),
+        ..Default::default()
+    });
+    // ダブルは env の DB を使うので、env を作ってから受け口を繋ぐ。
+    spawn_account_limit_double(
+        admin_rx,
+        env.db_path.clone(),
+        vec!["qwen".into(), "x".into()],
+    );
+    let mut snap = snapshot(1);
+    snap.implicit_accounts = vec![
+        task_ops::daemon::ImplicitAccountLive {
+            provider: "qwen".into(),
+            in_use: 1,
+            legacy_concurrency: Some(1),
+        },
+        task_ops::daemon::ImplicitAccountLive {
+            provider: "x".into(),
+            in_use: 0,
+            legacy_concurrency: None,
+        },
+    ];
+    env.daemon_tx.send(Some(snap)).unwrap();
+    let app = env.router();
+    let auth = auth();
+    let headers = [("authorization", auth.as_str())];
+
+    let resp = send(&app, get_with("/api/v1/accounts", &headers)).await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let v = resp.json();
+    assert_eq!(v["root"], json!(null));
+    assert_eq!(v["max_runs_per_account"], json!(2));
+    let items = v["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{items:?}");
+    assert_eq!(items[0]["adapter"], json!("implicit"));
+    assert_eq!(items[0]["id"], json!("qwen"));
+    assert_eq!(items[0]["provider"], json!("qwen"));
+    assert_eq!(items[0]["implicit"], json!(true));
+    assert_eq!(items[0]["dir"], json!(null));
+    assert_eq!(items[0]["logged_in"], json!(true));
+    assert_eq!(items[0]["in_use"], json!(1));
+    assert_eq!(items[0]["max_runs"], json!(null));
+    assert_eq!(items[0]["effective_max_runs"], json!(1));
+    assert_eq!(items[0]["max_runs_source"], json!("legacy_concurrency"));
+    assert_eq!(items[0]["excluded_reason"], json!("at_capacity"));
+    assert_eq!(items[1]["effective_max_runs"], json!(2));
+    assert_eq!(items[1]["max_runs_source"], json!("default"));
+
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/implicit/qwen",
+            &json!({"max_runs": 2}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    let body = resp.json();
+    assert_eq!(body["max_runs"], json!(2));
+    assert_eq!(body["effective_max_runs"], json!(2));
+    assert_eq!(body["max_runs_source"], json!("account"));
+    assert_eq!(body["excluded_reason"], json!(null));
+    // GET にもすぐ出る（DB が正本。スナップショットの更新を待たない）。
+    let resp = send(&app, get_with("/api/v1/accounts", &headers)).await;
+    assert_eq!(resp.json()["items"][0]["max_runs"], json!(2));
+
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/implicit/nope",
+            &json!({"max_runs": 2}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&resp, 404, "account_not_found");
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/implicit/qwen",
+            &json!({"max_runs": 0}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&resp, 400, "bad_request");
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/claude-code/a",
+            &json!({"max_runs": 2}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&resp, 409, "accounts_unavailable");
+
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/accounts/implicit/qwen",
+            &json!({"max_runs": null}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["max_runs_source"], json!("legacy_concurrency"));
+}
+
+/// ADR 2026-10-08 account-concurrency-limits §(a): `POST`/`PATCH /providers` の `concurrency` は受け付ける
+/// （0 は 400 のまま）が保存しない。人が書いた旧値は PATCH の往復で保つ。応答の `concurrency` は残る。
+#[tokio::test]
+async fn provider_concurrency_is_accepted_but_not_saved() {
+    let providers_tmp = tempfile::tempdir().expect("tempdir");
+    let dir = providers_tmp.path().join("providers.d");
+    std::fs::create_dir_all(&dir).unwrap();
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        providers_dir: Some(dir.clone()),
+        ..Default::default()
+    });
+    let app = env.router();
+    let auth = auth();
+    let headers = [("authorization", auth.as_str())];
+
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id": "p", "adapter": "fake", "concurrency": 0}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_problem(&resp, 400, "bad_request");
+    let resp = send(
+        &app,
+        post_json_with(
+            "/api/v1/providers",
+            &json!({"id": "p", "adapter": "fake", "concurrency": 4}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 201, "{}", resp.text());
+    assert_eq!(resp.json()["concurrency"], json!(1));
+    let text = std::fs::read_to_string(dir.join("p.toml")).unwrap();
+    assert!(!text.contains("concurrency"), "{text}");
+
+    // 手で書かれた旧値は PATCH の往復で残り、PATCH の値は保存されない。
+    std::fs::write(dir.join("p.toml"), format!("concurrency = 3\n{text}")).unwrap();
+    let resp = send(
+        &app,
+        patch_json_with(
+            "/api/v1/providers/p",
+            &json!({"concurrency": 7, "model": "m"}),
+            &headers,
+        ),
+    )
+    .await;
+    assert_eq!(resp.status, 200, "{}", resp.text());
+    assert_eq!(resp.json()["concurrency"], json!(3));
+    let text = std::fs::read_to_string(dir.join("p.toml")).unwrap();
+    assert!(text.contains("concurrency = 3"), "{text}");
+    assert!(!text.contains("concurrency = 7"), "{text}");
 }

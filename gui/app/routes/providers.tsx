@@ -237,18 +237,6 @@ export default function ProvidersPage({ loaderData }: Route.ComponentProps) {
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label htmlFor="add-concurrency" className={labelClass}>
-                    concurrency
-                  </label>
-                  <input
-                    id="add-concurrency"
-                    name="concurrency"
-                    type="number"
-                    min={0}
-                    className={cnField(inputClass)}
-                  />
-                </div>
                 <div className="col-span-2 sm:col-span-3">
                   <label htmlFor="add-model" className={labelClass}>
                     共通モデル（階層別設定が無効な場合）
@@ -584,7 +572,6 @@ function ProviderCard({
               ))}
             </div>
           </DataItem>
-          <DataItem label="concurrency">{item.concurrency}</DataItem>
           <ProviderLlmSourceItem item={item} />
           <DataItem label="旧設定の共通モデル">{item.model ?? "-"}</DataItem>
           <DataItem label="認証アカウント" wide>
@@ -691,19 +678,6 @@ function ProviderCard({
               <input type="hidden" name="intent" value="patch" />
               <input type="hidden" name="id" value={item.id} />
               <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                <div>
-                  <label className={labelClass} htmlFor={`edit-concurrency-${item.id}`}>
-                    concurrency
-                  </label>
-                  <input
-                    id={`edit-concurrency-${item.id}`}
-                    name="concurrency"
-                    type="number"
-                    min={0}
-                    defaultValue={item.concurrency}
-                    className={cnField(inputClass)}
-                  />
-                </div>
                 <div className="col-span-2">
                   <label className={labelClass} htmlFor={`edit-model-${item.id}`}>
                     共通モデル（階層別設定が無効な場合）

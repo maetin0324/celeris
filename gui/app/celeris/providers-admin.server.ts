@@ -16,7 +16,6 @@ export interface ProviderCreateInput {
   id: string;
   adapter: string;
   tiers?: Tier[];
-  concurrency?: number;
   model?: string;
   account_id?: string;
   credential_refs?: Record<string, string>;
@@ -27,7 +26,6 @@ export interface ProviderCreateInput {
 
 export interface ProviderPatchInput {
   tiers?: Tier[];
-  concurrency?: number;
   model?: string;
   account_id?: string;
   credential_refs?: Record<string, string>;
@@ -64,7 +62,7 @@ function readNumber(form: FormData, name: string): number | undefined {
   return Number.isNaN(n) ? undefined : n;
 }
 
-/** 新規プロバイダのフォーム（`id` / `adapter` / `tiers` / `concurrency` / `model` / `account_pool` / `env`）を組み立てる。 */
+/** 新規プロバイダのフォーム（`id` / `adapter` / `tiers` / `model` / `account_pool` / `env`）を組み立てる。 */
 export function buildProviderCreateInput(form: FormData): ProviderCreateInput {
   const input: ProviderCreateInput = {
     id: formString(form, "id") ?? "",
@@ -72,8 +70,6 @@ export function buildProviderCreateInput(form: FormData): ProviderCreateInput {
   };
   const tiers = readTiers(form);
   if (tiers.length > 0) input.tiers = tiers;
-  const concurrency = readNumber(form, "concurrency");
-  if (concurrency !== undefined) input.concurrency = concurrency;
   const model = formString(form, "model");
   if (model) input.model = model;
   if (form.get("account_pool") != null) input.account_pool = true;
@@ -105,13 +101,11 @@ export function buildProviderCreateInput(form: FormData): ProviderCreateInput {
 }
 
 /**
- * 編集フォーム（既存の値をフィールドに事前入力してある前提で `tiers` / `concurrency` / `model` / `account_pool` は
+ * 編集フォーム（既存の値をフィールドに事前入力してある前提で `tiers` / `model` / `account_pool` は
  * 常に送る）。`env` だけ「空欄なら変更しない」（ADR-GUI-0012 D2）: 1 行も無ければ本文から省く。
  */
 export function buildProviderPatchInput(form: FormData): ProviderPatchInput {
   const input: ProviderPatchInput = { tiers: readTiers(form) };
-  const concurrency = readNumber(form, "concurrency");
-  if (concurrency !== undefined) input.concurrency = concurrency;
   input.model = formString(form, "model") ?? "";
   if (form.get("account_pool") != null) input.account_pool = true;
   else input.account_pool = false;

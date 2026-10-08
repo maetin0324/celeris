@@ -434,9 +434,19 @@ pub fn select_account(
     max_runs_per_account: usize,
     now: i64,
 ) -> Option<String> {
+    select_account_with_limits(cands, book, |_| max_runs_per_account, now)
+}
+
+/// Score-based selection using each candidate account's resolved admission limit.
+pub fn select_account_with_limits(
+    cands: &[AccountCandidate<'_>],
+    book: &AccountBook,
+    limit: impl Fn(&str) -> usize,
+    now: i64,
+) -> Option<String> {
     let mut best: Option<(String, f64, usize)> = None;
     for c in cands {
-        let eval = evaluate(c, book.state(c.id), max_runs_per_account, now);
+        let eval = evaluate(c, book.state(c.id), limit(c.id), now);
         let Some(score) = eval.score else { continue };
         let take = match &best {
             None => true,
@@ -470,9 +480,19 @@ pub fn select_account_least_loaded(
     max_runs_per_account: usize,
     now: i64,
 ) -> Option<String> {
+    select_account_least_loaded_with_limits(cands, book, |_| max_runs_per_account, now)
+}
+
+/// CoS selection using each candidate account's resolved admission limit.
+pub fn select_account_least_loaded_with_limits(
+    cands: &[AccountCandidate<'_>],
+    book: &AccountBook,
+    limit: impl Fn(&str) -> usize,
+    now: i64,
+) -> Option<String> {
     let mut best: Option<(String, usize, f64)> = None;
     for c in cands {
-        let eval = evaluate(c, book.state(c.id), max_runs_per_account, now);
+        let eval = evaluate(c, book.state(c.id), limit(c.id), now);
         let Some(score) = eval.score else { continue };
         let take = match &best {
             None => true,

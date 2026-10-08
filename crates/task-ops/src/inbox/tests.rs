@@ -646,6 +646,7 @@ fn inbox_attention_unroutable_only_populated_with_snapshot() {
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,
         accounts: vec![],
+        implicit_accounts: vec![],
         containers: None,
         scratch: None,
     };
@@ -931,6 +932,7 @@ fn inbox_attention_cluster_unavailable_hidden_once_reconnected_and_host_filled_f
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,
         accounts: vec![],
+        implicit_accounts: vec![],
         containers: None,
         scratch: None,
     };
@@ -1163,6 +1165,7 @@ fn inbox_cleanup_r3_terminal_snapshot_unroutable_is_hidden() {
         accounts_roots: std::collections::HashMap::new(),
         max_runs_per_account: None,
         accounts: vec![],
+        implicit_accounts: vec![],
         containers: None,
         scratch: None,
     };

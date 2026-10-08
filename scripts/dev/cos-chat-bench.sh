@@ -75,6 +75,10 @@ if [ "$MODE" = same-thread ]; then
   chmod 700 "$OUT/accounts" "$OUT/accounts/$ACCOUNT_ID"
   cp "$ACCOUNT_DIR/.credentials.json" "$OUT/accounts/$ACCOUNT_ID/"
   chmod 600 "$OUT/accounts/$ACCOUNT_ID/.credentials.json"
+  # session cache も隔離する。read-only な host の ~/.claude では resume が拒否される。
+  mkdir -p "$OUT/claude-config"
+  chmod 700 "$OUT/claude-config"
+  export CLAUDE_CONFIG_DIR="$OUT/claude-config"
   POOL_CONFIG='account_pool = true'
   COS_ACCOUNT="account_id = \"$ACCOUNT_ID\""
 fi

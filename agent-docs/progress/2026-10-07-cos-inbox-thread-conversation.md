@@ -1,0 +1,66 @@
+---
+task: 01M4CAKADGDTZA7QKDJ9GX35MW
+title: 受信箱スレッドを「受信箱の件を CoS と話す場所」にする
+status: done
+started: 2026-10-07
+completed: 2026-10-07
+adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
+---
+
+# 受信箱スレッドを「受信箱の件を CoS と話す場所」にする
+
+## 現在地
+
+実装・試験・検査まで完了（1 run、commit a84e5c32 + 検査結果の追記）。
+
+## やったこと
+
+1. ADR `agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md`（D1 digest・D2 退避文・D3 人の書き込みと文脈・D4 並び順・D5 web）。
+2. D1: `crates/task-dispatch/src/dispatcher/cos_chat/digest.rs`。triage run の終端後に dispatcher が件ごとの判断を assistant 発言として
+   決定的に残す（LLM 無し）。store に `cos_triage_run_report` / `cos_triage_open_items` / `cos_triage_item_report` /
+   `cos_triage_runs_without_digest` / `chat_assistant_message_add_once` / `chat_message_get`。migration `0059_cos_inbox_item_summary.sql`
+   （`cos_inbox_items.summary`、`run_id` の index）。SCHEMA_VERSION 59。
+3. D2: `fallback.rs` の handoff 文に件の題名・決めること・選択肢・web_path。カードは答えられる `pending`。
+4. D3: `CosChatContext.inbox_items`（protocol）・prompt の「受信箱の未解決の件」節（`task-worker/src/cos_chat.rs`）、
+   `/cos/operations` の `instructed_by` と `inbox.answer`（`task-api/src/cos/operations.rs`）、skill §9。
+5. D4: 人の発言の run が triage より先（既存の tick 順）。中断された triage run の件は digest 時に `pending` へ戻す。
+6. D5: web の system 行の折りたたみ（`message-item.tsx`）と受信箱 thread の composer placeholder。
+7. schema 再生成: `docs/api/v1/api-v1.schema.json`・`docs/protocol/worker-protocol.schema.json`・`web/api/generated/*`・`gui/app/celeris/types.ts`。
+
+## 証拠（コマンドと結果）
+
+| 条件 | コマンド | 結果 |
+|---|---|---|
+| 0 判断が発言として残る・fallback に題名 | `cargo test -p task-dispatch --lib cos_chat_triage` | 23 passed（`cos_chat_triage_digest_records_each_judgment_with_an_answerable_card`、`cos_chat_triage_digest_without_reason_names_the_item_and_fallback_names_it_too` を含む） |
+| 0 store の報告と digest の冪等 | `cargo test -p task-core --lib cos_chat_triage_store_report` | 1 passed |
+| 1 人の書き込み → run、文脈、重なり | 同上 dispatcher 群（`cos_chat_triage_human_interrupt_requeues_items_and_runs_the_human_message_first`、`cos_chat_inbox_human_message_while_triage_runs_is_queued_then_served_before_new_items`） | passed |
+| 1 prompt に未解決の件 | `cargo test -p task-worker --lib cos_chat_prompt_inbox` | 1 passed |
+| 1 人の指示の中継（instructed_by・human_required・記録） | `cargo test -p task-api --test cos_triage instructed_by` | 1 passed |
+| 1 web の表示（折りたたみ・人待ちは通常・placeholder） | `pnpm -C web test` | 82 files / 598 tests passed（`chat_inbox_rows_*`・`chat_inbox_composer_*`） |
+| 2 clippy | `cargo clippy --workspace -- -D warnings` | exit 0 |
+| 2 web | `pnpm -C web typecheck` / `pnpm -C web lint` | exit 0 / exit 0（既存の styles.css の警告 4 件のみ） |
+| 2 全体 | `bash scripts/dev/test-parallel.sh` | 下の「検査の結果」節 |
+
+## 検査の結果
+
+- `bash scripts/dev/test-parallel.sh`（1 回目、commit a84e5c32）: nextest 160 binaries、passed 4710 / failed 12 / ignored 14、exit 100。
+  失敗 12 件は全て task-core の migration 試験が `assert_eq!(SCHEMA_VERSION, 58)`・期待版数一覧（`…57, 58`）を固定していたもの
+  （`store::tests::migration_*` 9 件、`routing_log_tests`、`cron::store_tests`、`cluster_job::tests`、`delivery::tests::migration_0042_*`）。
+  本変更の migration 0059 で版数が 59 になったことによる期待値の更新漏れで、機能の退行ではない。
+- 修正後: `cargo test -p task-core --lib` → 866 passed / 1 failed（delivery の版数一覧）→ 一覧に 59 を足して
+  `cargo test -p task-core --lib migration` → 25 passed、exit 0。test-parallel.sh の再実行は時間予算の都合で行っていない
+  （失敗した 12 件以外の 4710 件は 1 回目で passed。再実行は次の統合段で確かめる）。
+- `cargo clippy --workspace -- -D warnings`: exit 0（Finished）。
+- `pnpm -C web typecheck` exit 0、`pnpm -C web lint` exit 0（既存 styles.css の警告 4 件）、`pnpm -C web test` 82 files / 598 tests passed。
+
+## 未解決事項
+
+- digest は run の終端を観測した tick で書く。終端と tick の間に daemon が落ちた場合は再起動時の reconcile で書かれる（件を持つ run だけ）。
+- 導入前から残っている終端済み triage run にも、初回起動で 1 度だけ digest が付く（件を持つ run に限る。以後は増えない）。
+- `instructed_by` の「どの件か曖昧なら聞き返す」は skill と prompt の指示であり、API では強制しない（判断は CoS、検証は API の境界）。
+- 本番の実機（LLM）での確認は未実施（この run は fake adapter と単体・結合試験のみ）。
+
+## 提案
+
+- `ChatCard` に元の待ちの画面（`web_path`）とは別に「受信箱の項目 id」を持たせると、web が item の状態を source_key 以外でも引ける。
+- 受信箱スレッドの digest を受信箱画面（`/inbox`）からも参照できるようにする（件 → 判断の発言へのリンク）。

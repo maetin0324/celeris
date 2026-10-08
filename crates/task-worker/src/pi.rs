@@ -153,6 +153,17 @@ fn lenient_evidence(value: serde_json::Value) -> Vec<Evidence> {
     }
 }
 
+/// ADR 2026-10-08-cos-chat-prompt-cache D6.2: the stdin of a CoS chat pi run — the skill list
+/// (pi runs with `--no-skills`, so the list stays in the input) followed by the run specific part.
+pub(crate) fn cos_chat_pi_input(skills: &[crate::protocol::SkillMount], variable: &str) -> String {
+    format!(
+        "{}{variable}",
+        crate::skills::skills_block(skills)
+            .map(|block| format!("{block}\n"))
+            .unwrap_or_default()
+    )
+}
+
 async fn run_pi(
     config: &PiConfig,
     req: &RunRequest,
@@ -188,10 +199,24 @@ async fn run_pi(
     clear_delegate_file(&req.artifacts_dir).await;
     tokio::fs::create_dir_all(&req.artifacts_dir).await?;
 
-    let prompt = build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel);
+    // ADR 2026-10-08-cos-chat-prompt-cache D6.2: a CoS chat run gives pi the fixed Core with
+    // `--append-system-prompt` (pi appends it right after its own base prompt, ahead of the project
+    // context files and the cwd line) and only the skill list and the run specific part on stdin.
+    let cos_parts =
+        crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+    let prompt = match &cos_parts {
+        Some(parts) => cos_chat_pi_input(&req.context.skills, &parts.variable),
+        None => build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel),
+    };
     crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await?;
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
-    crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
+    let recorded = match &cos_parts {
+        Some(parts) => {
+            crate::cos_chat::prompt_record("--append-system-prompt", &parts.core, &prompt)
+        }
+        None => prompt.clone(),
+    };
+    crate::subprocess::write_run_prompt(&run_dir, &recorded, run_id).await;
 
     let agent_dir = run_dir.join("pi-agent");
     tokio::fs::create_dir_all(&agent_dir).await?;
@@ -234,7 +259,11 @@ async fn run_pi(
         .arg("--model")
         .arg(&cli_model)
         .arg("--tools")
-        .arg(config.tools.join(","))
+        .arg(config.tools.join(","));
+    if let Some(parts) = &cos_parts {
+        command.arg("--append-system-prompt").arg(&parts.core);
+    }
+    command
         .envs(config.env.iter().cloned())
         .env("PI_CODING_AGENT_DIR", &agent_dir)
         .current_dir(req.cwd());

@@ -80,7 +80,8 @@ pub fn build_cos_chat_parts(
 }
 
 /// acp / pi の入力の全文（ADR-0127: 末尾に skill の一覧）。CoS chat run は固定 Core → skill の一覧 → run 固有の
-/// 部分の順（ADR 2026-10-08-cos-chat-prompt-cache D6。両 harness に system の経路が無いため入力の先頭に置く）。
+/// 部分の順（ADR 2026-10-08-cos-chat-prompt-cache D6。acp には system の経路が無いため入力の先頭に置く。
+/// pi の CoS chat run は Core を `--append-system-prompt` で渡し、この関数を使わない — `pi::run_pi`）。
 /// CoS chat でない run は `build_prompt` に一覧を足した従来の文面と 1 バイトも変わらない。
 pub fn build_prompt_with_skill_list(
     task: &Task,

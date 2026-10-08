@@ -460,3 +460,68 @@ async fn cos_chat_harness_pi_done_without_result_json() {
         outcome.terminal
     );
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6.2: a CoS chat Pi run passes the fixed Core as one
+/// `--append-system-prompt` argument (byte-identical across threads and runs), keeps the skill list
+/// and the run specific part on stdin, and records both in `prompt.txt`. A regular run gets no flag.
+#[tokio::test]
+async fn cos_chat_core_pi_append_system_prompt_stdin_and_prompt_txt() {
+    let script = r#"for arg in "$@"; do printf '%s\0' "$arg" >> args.nul; done
+printf '%s\n' '{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"ok"}],"stopReason":"stop"}}' '{"type":"agent_end","messages":[]}'"#;
+    let mut systems = Vec::new();
+    for (thread, run, seq) in [
+        ("thread-a", "chat-run-a", 3),
+        ("thread-b", "chat-run-b", 41),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut req = request(dir.path());
+        let chat = crate::protocol::CosChatContext {
+            thread_id: thread.into(),
+            run_id: run.into(),
+            inputs: vec![crate::protocol::CosChatInput {
+                id: format!("msg-{seq}"),
+                seq,
+                text: format!("相談 {seq}"),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let core = crate::cos_chat::core(&chat);
+        req.context.cos_chat = Some(chat);
+        PiAdapter::new(config(dir.path(), script))
+            .run(req, run, limits(), &NullSink)
+            .await
+            .unwrap();
+        let raw = std::fs::read_to_string(dir.path().join("args.nul")).unwrap();
+        let args: Vec<&str> = raw.split('\0').collect();
+        let i = args
+            .iter()
+            .position(|a| *a == "--append-system-prompt")
+            .expect("--append-system-prompt present");
+        let system = args[i + 1];
+        assert_eq!(system, core);
+        assert!(!system.contains(thread) && !system.contains(run));
+        assert!(!system.contains(&format!("seq {seq}")));
+        let stdin = std::fs::read_to_string(dir.path().join("prompt.copy")).unwrap();
+        assert!(!stdin.contains("# CoS chat Core"), "{stdin}");
+        assert!(stdin.starts_with(&format!("# CoS chat: thread {thread}\n")));
+        assert!(stdin.contains(&format!("- `<chat run id>` = `{run}`")));
+        assert!(stdin.contains(&format!("### seq {seq} (message msg-{seq})")));
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs").join(run).join("prompt.txt")).unwrap();
+        assert_eq!(
+            recorded,
+            crate::cos_chat::prompt_record("--append-system-prompt", &core, &stdin)
+        );
+        systems.push(system.to_string());
+    }
+    assert_eq!(systems[0].as_bytes(), systems[1].as_bytes());
+
+    let dir = tempfile::tempdir().unwrap();
+    let _ = PiAdapter::new(config(dir.path(), script))
+        .run(request(dir.path()), "regular", limits(), &NullSink)
+        .await
+        .unwrap();
+    let raw = std::fs::read_to_string(dir.path().join("args.nul")).unwrap();
+    assert!(!raw.split('\0').any(|a| a == "--append-system-prompt"));
+}

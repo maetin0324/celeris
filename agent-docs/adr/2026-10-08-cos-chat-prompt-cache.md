@@ -191,17 +191,17 @@ harness 別の渡し方:
 | claude-code | `--append-system-prompt` の 1 引数: `HEADLESS_RUN_NOTE` + `\n` + Core | stdin | Anthropic の cache は tools → system → messages の完全 prefix 一致。system は `--resume` でも毎 request の先頭に同じ bytes で載り、会話（messages）に積まれない。従来は Core 相当の約 4 KB が resume の turn ごとに user message として積まれていた（D1.3） |
 | codex | `-c developer_instructions=<TOML 文字列>`（`exec` と `exec resume` の両方に同じ bytes） | stdin | codex-cli 0.161.0（この host の版。`codex exec --help` と binary の文字列で確認）は AGENTS.md を `# AGENTS.md instructions for <cwd>` の見出し付きの user message にする。CoS chat の cwd は thread ごとの workspace なので、AGENTS.md 方式では thread をまたぐ prefix が Core の手前で切れる。`developer_instructions` は developer message で、AGENTS.md と環境情報（cwd）より前に入り、cwd を含まない。値は TOML 文字列にして渡す（`-c` は TOML として解釈し、失敗時だけ生の文字列になる。`cos_chat_core_codex_developer_instructions_round_trip` で往復を確認）。`instructions`（base instructions）は codex 自身の system prompt を置き換えるので採らない。resume で developer message が再挿入されるか（同じ bytes なので prefix は保たれるが、積まれるかどうか）は live 未確認で**不明** |
 | acp（opencode 等） | 入力（`session/prompt`）の先頭: Core → skill 一覧 → 可変部 | 同じ入力の後半 | ACP の `session/new` には system prompt の欄が無い（cwd・mcpServers だけ）。agent 固有の経路（opencode の instructions 等）は agent ごとに違い、汎用の adapter から決められない。`session/load` の resume では turn ごとに Core が積まれる（T6 の差分配送で扱う） |
-| pi | 入力（stdin）の先頭: Core → skill 一覧 → 可変部 | 同じ入力の後半 | pi の session は run ごと（`--session-dir <run_dir>/pi-sessions`）で thread をまたがない。system への経路（CLI の system prompt 追記の flag）は、この host に pi が無く版も確かめられないので採らない（**不明**）。入力の先頭に置けば、pi 自身の system prompt が run 間で同じなら Core まで prefix が一致する |
+| pi | `--append-system-prompt <Core>`（1 引数。CoS chat run だけ） | stdin: skill 一覧（`--no-skills` で走るため入力側に残す）→ 可変部 | pi-coding-agent 0.84.2（`~/.local/celeris/npm/pi-0.84.2`、Celeris が起動する版）の一次情報: `dist/cli/args.js:49-51,258` が `--append-system-prompt <text>` を受け（複数可）、`dist/core/system-prompt.js` は system prompt を「pi の base prompt（tools の一覧・指針・pi の docs の path。run ごとの値を含まない）→ `\n\n` + append の節 → project_context（cwd とその祖先の AGENTS.md 等）→ skills → `Current working directory: <cwd>`」の順に組む（91-107 行）。thread ごとに違う cwd と AGENTS.md は append より後ろなので、同じ pi 版・tools なら thread をまたいで Core の末尾まで prefix が一致する。入力の先頭に置く方式（attempt 1 の誤り）では cwd 行が Core より前に来て、thread をまたぐ prefix が Core に届かない。`resolvePromptInput`（`dist/core/resource-loader.js:16`）は値が既存 path なら file を読むが、Core は path でない文字列なのでそのまま使われる。flag を渡すと APPEND_SYSTEM.md の発見（`<cwd>/.pi/APPEND_SYSTEM.md`〈trusted のみ〉と agent dir）は使われなくなる。agent dir は run ごとの `runs/<id>/pi-agent` なので影響は project 側の APPEND_SYSTEM.md だけ。pi の session は run ごと（`--session-dir <run_dir>/pi-sessions`）で resume しないので、Core が turn ごとに積まれる問題は無い。CoS chat でない run の引数・入力は変えない |
 
 ### D6.3 記録
 
-`runs/<run_id>/prompt.txt` は、Core と入力を別の経路で渡す harness（claude-code・codex）では `<!-- celeris:cos-core (<経路>) -->` と `<!-- celeris:cos-input (stdin) -->` の 2 区画で両方を残す（`cos_chat::prompt_record`）。acp・pi は入力の全文がそのまま両方を含む。
+`runs/<run_id>/prompt.txt` は、Core と入力を別の経路で渡す harness（claude-code・codex・pi）では `<!-- celeris:cos-core (<経路>) -->` と `<!-- celeris:cos-input (stdin) -->` の 2 区画で両方を残す（`cos_chat::prompt_record`）。acp は入力の全文がそのまま両方を含む。
 
 ### D6.4 決定的ベンチの before / after（`cargo test -p task-worker cos_chat_bench_`）
 
 | 指標 | before（main `8cdd96fb`） | after |
 |---|---|---|
-| 新規 thread 10 件の先頭一致（1 本の入力として連結） | 43 B | 5,962 B |
+| 新規 thread 10 件の先頭一致（1 本の入力として連結。acp。pi は system = Core + stdin で同じ値） | 43 B | 5,962 B |
 | 同上、claude-code（system 引数 + stdin） | 1,262 B（system は HEADLESS_RUN_NOTE 1,219 B だけ + stdin 43 B） | 7,182 B（system 7,139 B が 10 件で同一 + stdin 43 B） |
 | 同 thread の turn 間の先頭一致（連結 / claude-code） | 84 B / 1,303 B | 6,257 B / 7,477 B |
 | 固定部の bytes | 4,226 B（preamble 1,995 + 規則 2,103 + skill 名 128。run ごとの値で分断） | Core 5,919 B（run 間で byte 一致）+ skill 名 128 B |
@@ -211,4 +211,5 @@ harness 別の渡し方:
 ### D6.5 残り
 
 - live（隔離 daemon・claude_oauth）の cache read / write の変化は T8 で測る。baseline では新規 thread の非 cache input がすでに 8 token なので、効果は cache write の減少と cache read の増加で見る
-- acp・pi の resume で Core が積まれる問題は T6（差分配送）で扱う
+- acp の resume（`session/load`）で Core が積まれる問題は T6（差分配送）で扱う（pi は run ごとの session なので対象外）
+- 付記の訂正（attempt 2）: attempt 1 は pi の経路を「host に pi が無く不明」として入力の先頭に置いたが、事実と違った（reviewer 01M4DEB8BVRMFE934VCWA26R92 の指摘）。上の表のとおり `--append-system-prompt` に改めた

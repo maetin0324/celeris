@@ -20,8 +20,8 @@ pub use capabilities::{
 /// runs with the same config get byte-identical bytes whatever their thread, run, seq or input.
 /// `variable` carries everything run specific (ids, inputs, summary, history, inbox items,
 /// attachments, skill names and the checkpoint values). Each harness puts `core` on its most
-/// stable channel (claude-code: `--append-system-prompt`; codex: the AGENTS.md celeris section;
-/// acp/pi: the head of the prompt) and `variable` on the input.
+/// stable channel (claude-code and pi: `--append-system-prompt`; codex: `-c developer_instructions`;
+/// acp: the head of the prompt) and `variable` on the input.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CosChatPrompt {
     pub core: String,

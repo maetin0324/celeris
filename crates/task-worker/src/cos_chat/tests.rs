@@ -646,10 +646,11 @@ fn cos_chat_core_codex_developer_instructions_round_trip() {
     assert_eq!(parsed["v"].as_str(), Some(core.as_str()));
 }
 
-/// ADR 2026-10-08-cos-chat-prompt-cache D6: acp / pi put the Core first, then the skill list, then the
-/// run specific part, so two runs share at least the Core as a prefix.
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: acp puts the Core first, then the skill list, then the
+/// run specific part, so two runs share at least the Core as a prefix (pi uses
+/// `--append-system-prompt` instead — `pi::tests::cos_chat_core_pi_append_system_prompt_stdin_and_prompt_txt`).
 #[test]
-fn cos_chat_core_acp_pi_input_starts_with_the_core() {
+fn cos_chat_core_acp_input_starts_with_the_core() {
     let a_req = request(Path::new("/tmp/ws"), Some(chat()));
     let b_req = request(Path::new("/tmp/ws"), Some(other_chat()));
     let a = crate::claude_code::build_prompt_with_skill_list(

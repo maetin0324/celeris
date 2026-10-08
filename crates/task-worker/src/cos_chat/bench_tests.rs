@@ -83,7 +83,7 @@ fn parts(chat: &CosChatContext, n: usize) -> super::CosChatPrompt {
         .expect("CoS chat parts")
 }
 
-/// The single input of acp / pi (and the layout before D6): Core first, then the rest.
+/// The single input of acp (and the layout before D6; pi has the same shared prefix: Core as system + stdin): Core first, then the rest.
 fn prompt(chat: &CosChatContext, n: usize) -> String {
     let mut task = sample_task();
     task.id = serde_json::from_value(json!(id("TASK", n))).unwrap();

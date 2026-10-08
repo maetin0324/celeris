@@ -29,7 +29,8 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 | corepack pnpm@12.6.0 -C web build | 成功 |
 | corepack pnpm@12.6.0 -C web check:boundaries | 成功 |
 | corepack pnpm@12.6.0 -C web check:secrets | 成功 |
-| git diff --check / CELERIS_WU_BASE からの差分範囲検査 | 成功、crates/ 差分 0 |
+| git diff --check / crates/ 差分検査 | 成功、crates/ 差分 0 |
+| CELERIS_WU_BASE からの計画の差分範囲検査 | 不合格。必要な gateway 3 ファイルが許可範囲から欠落（下記） |
 
 Vitest は追加・置換・削除と grant 有効化/無効化の送信内容、active QueryObserver の再取得、失敗時の非再送、owner CSRF 不在時の拒否、フォームの既存値、点検結果の表示を確認する。
 実画面 E2E は loopback の偽 daemon と page.route の site-policy/readiness fixture を使用する。
@@ -38,3 +39,18 @@ Vitest は追加・置換・削除と grant 有効化/無効化の送信内容�
 実行ログと 4 幅の設定保存前後・site policy 編集中の screenshot は run の成果物ディレクトリ
 `/local/celeris/data/workspaces/01M4CDNAYX6J68WTX7SKF0DJ64/wu/web-site-policy/artifacts/`
 の web-*.log、settings-e2e.log、gateway-test.log、mobile-audit.log、settings-screenshots/ に保存。
+
+## 範囲チェックの再確認
+
+2026-10-08 の再実行で、計画の範囲チェックが exit 1 になることを確認した。
+`web/server/browser-live.js`、`web/server/relay.js`、`web/server/browser-settings.test.mjs`
+が許可範囲から欠落している。ADR D3 は編集操作に owner session を要求する。
+browser-live.js は owner session・same-origin・CSRF を検査して daemon へ転送し、
+relay.js は通常 API relay による本人確認の迂回を拒否する。browser-settings.test.mjs は
+その拒否と正常な転送を検証する。画面だけでの検査は直接 HTTP 要求で迂回できるため、
+これらを削除して範囲チェックを通すことはできない。
+
+同じチェックの許可パターンに上記 3 ファイルを追加する必要がある。
+既存実装を維持し、plan_issue として再計画を要求する。done は返さない。
+この再実行で typecheck・lint（既存の警告 4 件）・test（Vitest 601 件、gateway 78 件）は成功。
+crates/ 差分は 0、git diff --check も成功。本番の操作は実施していない。

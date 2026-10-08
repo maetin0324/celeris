@@ -267,9 +267,35 @@ before は T2 baseline（commit `c7e60aa7`、Core 分離前）。after は本 ta
 | S2 非 cache input / cache write / cache read | 6 / 6,617 / 149,652 | 6 / 4,602 / 133,172 |
 | S1 / S2 総 latency ms | 15,802 / 19,672 | 18,895 / 13,782 |
 | 管理操作（S2 の起票 1・コメント 4） | 5/5 completed | 5/5 completed、`cos_operations` は task.create 1・comment.create 4 が全て applied（受信箱の observe 1 も applied） |
-| 回答操作の成功率 | 不明（台本に回答操作なし） | 不明（台本に回答操作なし） |
+| 質問回答の成功率（補助台本、D7.6） | 3/3 applied | 3/3 applied |
 | run の成功率（26 run） | 100% | 100% |
 
-- skill 読込の H2 の基準（単純相談の 80% 以上で両 skill を読む）は after で 0% になった。非 cache input は S1 で 8 → 12、S2 で 6 → 6。削減は確認できず、改善は skill 読込回数と cache write に出た。回答操作の成功率は未計測で、起票・コメントの結果を適用できない。
+- skill 読込の H2 の基準（単純相談の 80% 以上で両 skill を読む）は after で 0% になった。非 cache input は S1 で 8 → 12、S2 で 6 → 6。削減は確認できず、改善は skill 読込回数と cache write に出た。質問回答はD7.6の補助台本で別に比較した。
 - S1 の latency と cache read は増えた。S1 の after は 1 run あたり tool event が中央値 10（Bash で状況を API から読む）。before の tool 回数は残っておらず比べられない（**不明**）。Core 分離の影響か本付記の影響かは分けていない。T8 で扱う。
 - skill の bytes: cos-operator 20,158 → 4,650 B（参照 file 計 15,105 B は場面でだけ読む）、cos-inbox-triage 11,386 → 11,742 B（通常 thread には載らない）。
+
+
+### D7.6 質問回答の補助live検証（attempt 3）
+
+既存full台本には回答操作がなかったため、`cos-chat-bench.sh answers` を追加した。
+元の26 run台本は保持し、補助台本で通常threadから質問待ちtask3件へ同じ回答を適用する。
+fixture準備の一時DB書込みと、CoS runによるAPI回答の適用を分け、appliedのoperation・
+回答本文・answer遷移・CoS監査記録・一時停止維持を照合する。
+変更前 `8cdd96fb` と変更後 `5164fc8b` で3/3 → 3/3。
+変更前はT2 baseline `c7e60aa7` の再実行ではなく、Core分離前のソースである。
+Core分離とskill再構成の寄与は分けていない。隔離daemon・一時DB・別port・
+`claude_max_lab` / `claude_oauth` のみを使い、本番やhost認証ファイルは更新しない。
+
+回答場面のskill読込は各1回 → 各1回、非cache input中央値12 → 14、
+cache write中央値22,234 → 28,071、latency中央値24,973 → 26,032 ms。
+この場面での入力削減・高速化は確認できない。D7.5の通常相談での読込/cache write削減と、
+起票・コメント5/5に加え、質問回答3/3の適用率が落ちていないことを確認した。
+小標本の結果であり、すべての回答経路・状況の成功率を保証するものではない。
+
+検証器は `scripts/dev/cos_chat_answer_bench.py`、負例を含む試験6件は
+`python3 scripts/dev/test_cos_chat_answer_bench.py` で実行する（LLMなし）。
+実測値・実際の適用結果・source/binaryの出所・除外した試行（shell終了処理失敗、
+OAuth認証失敗）は [進捗](../progress/2026-10-08-cos-chat-prompt-cache/skills.md) のattempt 3節と
+task artifactsの `answer-comparison.json`・`answer-bench-{before,after}/domain-state.json` に記録した。
+Core以降のpromptのenrichはrunディレクトリを直接探すようにし、既存出力に対してofflineで再集計した。
+今回Rust/skill本文の変更・main統合・本番反映は行っていない。

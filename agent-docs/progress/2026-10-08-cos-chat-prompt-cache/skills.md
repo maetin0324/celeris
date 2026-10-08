@@ -1,7 +1,7 @@
 ---
 title: CoS chat 最適化 6 — cos-operator / cos-inbox-triage の再構成（T5）
 tasks: [01M4DE37B9EE6308ZDAVXXBRTX]
-status: implemented
+status: done
 updated: 2026-10-08
 ---
 
@@ -36,9 +36,9 @@ updated: 2026-10-08
 | S2 非 cache input / cache write | 6 / 6,617 | 6 / 4,602 |
 | S1 / S2 総 latency ms | 15,802 / 19,672 | 18,895 / 13,782 |
 | 管理操作（起票 1・コメント 4） | 5/5 completed | 5/5、`cos_operations` 全て applied |
-| 回答操作の成功率 | 不明（台本に回答操作なし） | 不明（台本に回答操作なし） |
+| 質問回答の成功率（補助台本、下記） | 3/3 applied | 3/3 applied |
 
-S1 の latency・cache read は増えた（Core 分離と本変更が両方入った差で、寄与は分けていない。before の全 tool 回数は残っておらず不明）。skill 読込と cache write は減り、計測した起票・コメントの成功率は落ちていない。回答操作にはこの結論を適用できない。変更は task branch にある。受け入れ条件 1 は人が `--` を追加したコマンドへの変更を承認し、今回の再検証で成功した。main への統合と本番反映は行っていない。生データ: task artifacts の `bench-after/`、`prompt-bench-after.json`。
+S1 の latency・cache read は増えた（Core 分離と本変更が両方入った差で、寄与は分けていない。before の全 tool 回数は残っておらず不明）。skill 読込と cache write は減り、計測した起票・コメントの成功率は落ちていない。質問回答は下記の補助台本で別に比較し、前後とも3/3 applied を確認した。変更は task branch にある。受け入れ条件 1 は人が `--` を追加したコマンドへの変更を承認し、今回の再検証で成功した。main への統合と本番反映は行っていない。生データ: task artifacts の `bench-after/`、`prompt-bench-after.json`。
 
 ## 証拠
 
@@ -54,7 +54,7 @@ S1 の latency・cache read は増えた（Core 分離と本変更が両方入�
 
 - 本番 KB への取り込み（`celerisctl skills import`）は人が行う。本番 config/DB/KB/release/systemd には触れていない。
 - S1 の latency 増の原因（Core 分離か skill 再構成か）は不明。T8 で切り分ける。
-- 回答操作の live before/after は未計測。既存の full 台本が確認する管理操作は起票・コメントのみ。
+- 既存 full 台本は起票・コメントのみ。質問回答は別の補助台本で前後3件ずつ確認した（下記）。
 
 ## 提案
 
@@ -100,3 +100,68 @@ skill 本文・参照 file は計測時の `087afd6d` と同一。Rust の差分
 - 条件 2: `cargo clippy --workspace -- -D warnings` exit 0。
 - 必須 workspace gate: `bash scripts/dev/test-parallel.sh` は既知の sandbox socket path (`SUN_LEN`) 失敗を含む 4,778 passed / 65 failed、exit 100。CoS 関連試験は上記の局所検証で成功し、失敗は browser/CDP 等の既知環境依存。
 - 実装・文書は既存 commit `d9b0ca65` に含まれ、作業 tree は clean。
+
+
+## attempt 3: 質問回答の live 比較を完了（run 01M4E2RDM82TZYWW02GTVMJ2RH）
+
+前回レビューの指摘に従い、`cos-chat-bench.sh answers` と補助台本
+`scripts/dev/cos_chat_answer_bench.py` を追加した。既存の26 run台本は変更していない。
+変更前は `8cdd96fb`（Core分離前、元のcos-operatorと通常threadにも載るtriage）、
+変更後は `5164fc8b`。元のT2 baseline `c7e60aa7` の再実行ではない。
+前後に同じ質問回答の補助台本を流し、Core分離＋skill再構成を含む差を比較した。
+変更前のarchiveの時刻でCargoが新しいbinaryを再利用しないように、archiveのRustソースと
+manifestの時刻を更新して再ビルドした。内容は変更せず、変更後binaryは先に別保存した。
+source SHA・binaryのSHA-256は `answer-binary-provenance.json` に記録した。
+今回のRust・skill本文は `5164fc8b` から変更していない。
+
+隔離daemon・新しい一時DB・port 17958/17957・subscription lab account
+`claude_max_lab` / `claude_oauth` のみ。認証ファイルを一時領域へコピーし、
+本番config/DB/KB/release/systemd・host認証ファイルを更新しなかった。
+回答対象は一時停止したtask3件。fixtureの準備で一時DBへ質問とblocked状態を入れたが、
+回答の適用にはAPIを使うlive CoS runが必要で、回答結果をfixtureで書いていない。
+
+| 補助台本の指標 | before | after |
+|---|---|---|
+| 質問回答（`question.answer`）成功率 | 3/3 (100%) | 3/3 (100%) |
+| skill読込回数 | 各run 1回（計3） | 各run 1回（計3） |
+| 非cache input（中央値） | 12 | 14 |
+| cache write / read（中央値） | 22,234 / 147,092 | 28,071 / 163,313 |
+| prompt.txt bytes（中央値） | 4,956 | 8,048 |
+| latency ms（中央値） | 24,973 | 26,032 |
+
+各runがcompletedであることに加え、指定runのoperationがapplied、
+`Event::Answered` が質問「確認用の色を答えてください。」と回答「青色を選びます。」に一致、
+`blocked → ready` のanswer遷移、同じoperation/runのCoS applied監査記録、
+taskの一時停止維持を検証した。task workerは起動していない。
+3件の小標本であり、全操作・全状況への一般化はしない。回答場面で読込回数・非cache inputの
+改善は確認していない。既存S1のskill読込とcache writeの改善、起票・コメント5/5に加え、
+質問回答3/3の適用率が落ちていないことを確認した。mainへの統合・本番反映は行っていない。
+
+最終のliveコマンドは前後ともexit 0、終了後pgrepは残存なし。
+変更前の最初の試行も3/3 appliedだったが、実行中のshell fileを編集したため
+summary保存後にexit 127となり、固定コピーの台本で再実行した。
+その再実行は古いOAuthコピーの失効で0/3（全件認証段階の失敗、回答操作なし）。
+これも保存し、成功した一時環境内の更新済みlab認証コピーで再実行した結果を上表にした。
+比較から外した試行を隠しておらず、`answer-comparison.json` の `excluded_attempts` に記録した。
+
+証跡はtask artifactsの `answer-bench-before/`・`answer-bench-after/`：
+`answers.json`（各操作の判定）、`domain-state.json`（実際のtask・event・operationのDB抜粋）、
+`runs.json`・`summary.json`（telemetry）、`pgrep-after-stop.txt`。
+`answer-bench-before-first/`・`answer-bench-before-auth-failure/` は上記の別試行。
+認証ファイル・api.token・run tokenは成果物に含めていない。
+Coreでrun idがprompt先頭600 Bより後へ移ったため、benchのenrichを
+`runs/<run_id>/prompt.txt` の直接探索に修正し、LLMを呼ばずbytes・CLI詳細を補完した。
+`enrich` は `runs.json` も更新する。最初のafter summaryは `summary-original.json` に保存した。
+
+検証器の6試験（`python3 scripts/dev/test_cos_chat_answer_bench.py`）はexit 0。
+別run・回答なし・監査なし・誤回答・rejected operationを成功と数えない。
+条件0は4,650 B、条件1は承認済み `--` 付きの指定pipelineで129 passed、
+条件2はworkspace clippy exit 0。認可/監査/登録表/Coreは11 passed、exit 0。
+一時KBに `celerisctl skills import` を再実行し、cos-operatorの参照file5件を含めて成功した。
+本番へのimportはSOURCE.mdと運用文書の人向け手順のまま。
+
+全体検査 `bash scripts/dev/test-parallel.sh` は今回もexit 100：4,779 passed / 64 failed、
+doctestはexit 0。失敗は既知のbrowser・launcher・credentiald・CDP・scratchの
+sandbox/Unix socketの長いpath等に限られ、cos_chat・skillの失敗はない。
+ログは `answer-test-parallel.log`。fmt・doc-links・差分の空白検査はexit 0。
+既存DBを再利用しないanswersのguardはexit 2で拒否され、LLMを起動していない。

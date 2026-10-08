@@ -113,6 +113,33 @@ bash scripts/dev/cos-chat-live.sh "$PWD" "$CARGO_TARGET_DIR/debug" <data dir> fu
 - `input-manifest.txt`・`prompt-files.txt`・`staged.txt` — 起票された task の入力 manifest、`prompt.txt` の一覧、stage された添付。
 - `run-<turn>.json`・`post-<turn>.json`・`msg-<turn>.json`・`daemon.log` — 各 turn の run と daemon のログ。
 
+## 質問への回答の live 比較（cos-chat-bench.sh answers）
+
+既存の `full` 26 run 台本は起票・コメントだけを含む。回答の成功率は補助モード `answers` で別に確認する。
+新しい試験用 data dir に質問待ち task を3件作り、通常 thread から指定した回答を適用する。
+fixture の準備だけ一時 DB に質問と blocked 状態を挿入する。回答は run credential を使う
+`/cos/operations` から適用され、指定 run の `question.answer` が applied、回答本文が一致、
+CoS 監査記録が一致、`blocked → ready` の遷移、一時停止の維持を検証する。task worker は起動しない。
+
+```sh
+COS_CHAT_BENCH_PORT=17957 \
+COS_CHAT_BENCH_LAB_DIR=<claude_max_lab のディレクトリ> \
+bash scripts/dev/cos-chat-bench.sh "$PWD" "$CARGO_TARGET_DIR/debug" <新しい試験用 data dir> answers claude-code
+python3 scripts/dev/test_cos_chat_answer_bench.py  # 検証器の負例。LLM は呼ばない
+```
+
+`claude_oauth` / `claude_max_lab` に固定する。認証ファイルは data dir へ権限600でコピーし、
+host の認証ファイルを更新しない。OAuth の更新後に古いコピーを使うと認証失敗になり得る。
+その失敗も保存し、有効な lab ログインで比較する。本番 config・DB・KB・release・systemd は変更しない。
+`evidence/answers.json` に適用判定、`runs.json` に skill 読込回数・非 cache input 等を保存する。
+証跡として保存するのは `evidence/` のみ。data dir の認証ファイル・api.token・run token を公開しない。
+
+変更前を archive からビルドする場合も渡された `CARGO_TARGET_DIR` を維持し、ソースの時刻が古く
+Cargo が変更後の binary を再利用しないように freshness を確認する。binary を別々に保存し、
+source SHA と binary hash を残す。`COS_CHAT_BENCH_SOURCE_SHA=<変更前のSHA>` と
+`COS_CHAT_BENCH_DRIVER_REPO=<この補助台本を含むworktree>` を指定すれば、変更前の skill と
+binary に同じ補助台本を流せる。`full` の既存データと回答3件の集計は混ぜない。
+
 ## 添付と保持
 
 画像・PDF を含む任意ファイルを送れる。既定は 1 ファイル 25 MiB、1 メッセージ 100 MiB・10 件、インスタンス全体 10 GiB。元 blob は DB の親ディレクトリを `data_dir` とした `<data_dir>/chat/attachments/<attachment_id>/blob`、upload 中は `<data_dir>/chat/staging/` に置く。DB に原名・サイズ・MIME・SHA-256・参照を保存する。CoS へは検証した添付を read-only で stage し、画像は harness の画像入力または読取 tool、その他は path と manifest で渡す。task/KB へ引き継ぐ際は参照を pin する。

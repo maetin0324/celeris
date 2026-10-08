@@ -178,7 +178,6 @@ fn derived(env: &TestEnv) -> Vec<task_ops::human_inbox::InboxItem> {
         &env.view_context(),
         OffsetDateTime::now_utc(),
         &|_, _| Vec::new(),
-        None,
     )
     .expect("human inbox")
     .items

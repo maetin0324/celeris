@@ -68,7 +68,8 @@ ADR-0133 で daemon に「受信箱 = 人の判断が要るものだけ（答え
 ### D6. fake daemon の受信箱・通知は状態を持つ
 
 - `web/e2e/support/fake-daemon.mjs` は 5 種の受信箱の項目（`decision`・`plan_gate`・`failed`・
-  `authorization`・`knowledge_review`。answer で消え、`needs_note` の選択肢は note が無いと 422）と 4 束の通知
+  `authorization`・`cluster_login`（2026-10-08 改訂: 旧 `knowledge_review` は人の決定「KB の取り込み待ちは
+  受信箱に出さない」で種類ごと削除。ADR-0133 末尾の付記）。answer で消え、`needs_note` の選択肢は note が無いと 422）と 4 束の通知
   （未読 3・既読 1。`read`・`read-all` の `kind`/`project`/`before` 条件、`limit`/`before` の頁送り）を持つ。
   変わったら SSE の合図を送る。試験は `setInboxItems`・`setNotices` で差し替えられ、`fixtures` に同じ path を
   渡せばそちらが勝つ。応答は schema で検証する（`fake-daemon.test.ts`）。

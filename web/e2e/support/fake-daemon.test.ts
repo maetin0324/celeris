@@ -351,7 +351,7 @@ it("serves stateful inbox items and notifications that match the schema", async 
   const inbox = await get("/inbox/items");
   expect(validateFixture(inbox, props.inbox_items)).toEqual([]);
   const kinds = inbox.items.map((item: { kind: string }) => item.kind);
-  expect(kinds).toEqual(["decision", "plan_gate", "failed", "authorization", "knowledge_review"]);
+  expect(kinds).toEqual(["decision", "plan_gate", "failed", "authorization", "cluster_login"]);
   expect(inbox.counts.total).toBe(5);
   expect((await get("/inbox/items?kind=decision")).counts).toEqual({ total: 1, by_kind: { decision: 1 } });
   const one = await get("/inbox/items/decision%3AD1");

@@ -341,7 +341,7 @@ impl CosChatLaunch {
             clusters: HashMap::new(),
         };
         let store: &dyn TaskStore = self.store.as_ref();
-        task_ops::human_inbox::human_inbox(store, None, &ctx, now, &|_, _| Vec::new(), None)
+        task_ops::human_inbox::human_inbox(store, None, &ctx, now, &|_, _| Vec::new())
             .map_err(|e| e.to_string())
     }
 

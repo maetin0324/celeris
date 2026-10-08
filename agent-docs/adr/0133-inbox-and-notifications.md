@@ -88,7 +88,7 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 | `GET /decisions`（未回答） | 受信箱 | `decision` | D1.1 の `decisions[]` と同じ項目。回答済み・取り下げ済みの一覧は領域の一覧として残す |
 | `POST /tasks/{id}/approve` / `accept` / `answer` / `retry` / `reopen` | 受信箱（答える操作） | — | 出口ではなく**答える操作**。D5 の answer が委ねる先 |
 | `GET /browser/waits`、`GET /tasks/{id}/browser/waits` | 受信箱 | `browser_wait` | D1.1 の `browser_waits[]` と同じ項目。task ごとの browser 認可方針（`/tasks/{id}/browser/policy`）は設定であり出口ではない |
-| `GET /knowledge/inbox`（`_inbox/` の候補） | 受信箱 | `knowledge_review` | 候補 1 件ずつではなく「KB 取り込み待ち n 件」の **1 項目**に束ねる（答えは KB 画面で `accept` / `reject`、0 件で消える）。ADR-0131 D6 の日次整理 job が `enabled ∧ mode=apply` の間はこの項目を作らない（判断は日次整理の `decision` で来る） |
+| `GET /knowledge/inbox`（`_inbox/` の候補） | どちらでもない（知識画面） | — | **改訂 2026-10-08（人の決定「受信箱には出さない」、末尾の付記）**: 受信箱にも通知にも項目を作らない。候補の確認は知識画面（`/knowledge` の候補、`POST /knowledge/inbox/{id}/accept\|reject`）だけで行う。旧: 「KB 取り込み待ち n 件」の 1 項目 `knowledge_review` に束ね、日次整理 job が `enabled ∧ mode=apply` の間は作らない |
 | `GET /reports`（`kind=progress`・`result`） | 通知 | `report` | 報告の本文は `/reports/{id}` に残る。既読は通知へ移す（D5） |
 | `GET /reports`（`kind=bad_news`） | 通知 | `bad_news` | 判断が要るなら起こした側が `decision` を出す（悪い知らせ自体は知らせ） |
 | `GET /reports`（`kind=question`） | 受信箱 | `question` | 止まっている task の `question` 項目に吸収（報告から通知を作らない） |
@@ -136,7 +136,7 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 | 欄 | 型 | 内容 |
 |---|---|---|
 | `id` | string | 決定的な id `<kind>-<元の id>`（例 `decision-01M3…`、`plan_gate-01M3…-v2`、`failed-01M3…-<遷移番号>`）。URL にそのまま使える文字だけ |
-| `kind` | `InboxKind` | D1 の 14 種: `decision`・`plan_gate`・`phase_gate`・`question`・`authorization`・`acceptance_check`・`draft_accept`・`project_plan`・`browser_wait`・`failed`・`unroutable`・`cluster_login`・`delivery_skipped`・`knowledge_review` |
+| `kind` | `InboxKind` | D1 の種類: `decision`・`plan_gate`・`phase_gate`・`question`・`authorization`・`acceptance_check`・`draft_accept`・`project_plan`・`browser_wait`・`failed`・`unroutable`・`cluster_login`・`delivery_skipped`（後の ADR で `disk_full`・`integration_request` が加わった）。`knowledge_review` は 2026-10-08 の人の決定で削除（末尾の付記） |
 | `title` | string | **何を決めるか**（1 行、決定的な定型文 + 元の問い） |
 | `detail` | string? | 判断材料の短い本文（質問文・失敗の理由・計画の要約など。600 字で切る） |
 | `options[]` | `{key, label, needs_note, effect}` | **選択肢**。`needs_note=true` は note 必須（replan 等）。`effect` は選んだら何が起きるかの 1 行 |
@@ -152,8 +152,8 @@ tasks: [01M3YFCJKMNWQ13HRS52M5BSWW]
 選択肢は kind ごとに決定的に固定する（例 `failed`: `retry`・`reopen`・`cancel`。`plan_gate`: `approve`・
 `replan`・`withdraw`。`decision`: 元の `options[]` をそのまま）。並びは `due_at` の近い順 → `kind` の固定順
 （`decision`・`plan_gate`・`phase_gate`・`authorization`・`browser_wait`・`question`・`acceptance_check`・
-`draft_accept`・`project_plan`・`failed`・`unroutable`・`cluster_login`・`delivery_skipped`・`knowledge_review`）
-→ `created_at` の古い順。
+`draft_accept`・`project_plan`・`failed`・`unroutable`・`cluster_login`・`delivery_skipped`）
+→ `created_at` の古い順。（`knowledge_review` は 2026-10-08 に削除。末尾の付記）
 
 ### D3. 通知の型・保存・出来事から通知を作る規則
 
@@ -445,7 +445,8 @@ events と reports を読み、D1.5 の `classify` で `Notice` になるもの�
 - Discord の通知は種類ごとの個別送信から 2 経路に減る。既存の `NotificationKind` の旧値は読み取り専用で残る。
 - 自動で閉じる規則は ADR-0131 の 1 か所だけにあり、この ADR はそれを読むだけ。規則の変更が受信箱と通知の
   両方に同時に効く。
-- 未解決: `knowledge_review` を 1 項目に束ねる形が使いやすいかは日次整理 job を有効にした後に見直す。
+- ~~未解決: `knowledge_review` を 1 項目に束ねる形が使いやすいかは日次整理 job を有効にした後に見直す。~~
+  **閉じた（2026-10-08、人の決定「受信箱には出さない」）**。末尾の付記を見よ。
 
 ## 付記: 通知フィードの同期を差分にする（2026-10-03、release 3527c8e39ee2 の verify 退行）
 
@@ -494,3 +495,23 @@ smoke と同じ台本）を手元で再現し、修正後の debug build で煙�
 代答は events の actor=cos と理由、チャットのカード、人の取消/差し戻し経路を持つ。
 人への通常通知は CoS のみ。不在時だけ決定的な直接通知へ退避する。自動片付けの規則や API の検証は保持する。
 旧 outbox/cursor の移行と送信入口の一本化、偽 harness/webhook の 3 経路試験は新 ADR D6 に従う。
+
+## 付記: KB の取り込み待ちを受信箱に出さない（2026-10-08、人の決定）
+
+**決定**（人、CoS チャット 2026-10-08）: 「KB の知識の受け入れの確認は受信箱のなかに入れない」。日次整理 job
+（ADR-0131 D6）の設定に関わらず、常に出さない。
+
+**改訂**:
+- D1.2 の `GET /knowledge/inbox` 行は「どちらでもない（知識画面）」。受信箱にも通知（`GET /notifications`）にも
+  代わりの項目を作らない。候補の受け入れ・却下は従来どおり知識画面（`/knowledge` の候補、
+  `POST /knowledge/inbox/{id}/accept|reject`）で行う。KB の候補の仕組み（`_inbox/`・accept/reject・日次整理 job）は変えない。
+- `InboxKind` から `knowledge_review` を削除した（`task_ops::human_inbox`。`KnowledgePending` と
+  `human_inbox(.., knowledge)` 引数も削除）。task-api の `human_feed` は KB を読まない。`GET /inbox/items/knowledge_review`
+  と `POST /inbox/items/knowledge_review/answer` は 404 `inbox-item-gone`、`GET /inbox/items?kind=knowledge_review` は
+  知らない種類として 400。CoS の受信箱（`GET /cos/inbox`、dispatcher の triage）は元々 KB を渡していなかったが、
+  種類ごと無くなったので流れ得ない。
+- 生成物: `docs/api/v1/api-v1.schema.json`・`gui/app/celeris/types.ts`・`web/api/generated/` を再生成。web の
+  `INBOX_KINDS`・`KIND_LABELS` と fake daemon の受信箱 fixture（5 件目を `cluster_login` に置換）を揃えた。
+- 試験: `task_ops::human_inbox::tests::human_inbox_never_has_knowledge_review`、
+  `task-api` `tests/knowledge.rs::candidates_never_appear_in_the_human_inbox`（候補 2 件で受信箱に項目無し・404・
+  通知に無し・知識画面の accept は動く）。

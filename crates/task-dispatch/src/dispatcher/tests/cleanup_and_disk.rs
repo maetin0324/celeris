@@ -275,7 +275,6 @@ async fn disk_watch_tick_phase_notifies_and_opens_inbox_without_stopping_runs() 
         &ctx,
         OffsetDateTime::now_utc(),
         &|_, _| vec![],
-        None,
     )
     .unwrap();
     assert!(

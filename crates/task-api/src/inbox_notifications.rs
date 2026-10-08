@@ -11,7 +11,7 @@ use task_core::{
     Event, Notice, NoticeId, NoticeKind, NoticeQuery, NoticeStore, Status, TaskStore,
     WorkUnitBlockedReason, WorkUnitStatus,
 };
-use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind, KnowledgePending};
+use task_ops::human_inbox::{HumanInbox, InboxItem, InboxKind};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tower::ServiceExt;
@@ -66,19 +66,9 @@ fn gone(id: &str) -> ApiProblem {
 pub(crate) async fn human_feed(state: &ApiState) -> Result<HumanInbox, ApiProblem> {
     let snapshot = state.snapshot();
     let ctx = state.inner.view.clone();
-    let knowledge_root = state.inner.knowledge_root.clone();
+    // 人の決定 2026-10-08: KB の取り込み待ちは受信箱に出さない（知識画面の候補で扱う）。
     state
         .blocking(move |store| {
-            let knowledge = knowledge_root
-                .as_deref()
-                .filter(|r| task_ops::knowledge::exists(r))
-                .map(|r| {
-                    let candidates = task_ops::knowledge::inbox_list(r);
-                    KnowledgePending {
-                        count: candidates.len() as u32,
-                        oldest_created: candidates.iter().filter_map(|c| c.created.clone()).min(),
-                    }
-                });
             let root = ctx.workspace_root.clone();
             task_ops::human_inbox::human_inbox(
                 store,
@@ -86,7 +76,6 @@ pub(crate) async fn human_feed(state: &ApiState) -> Result<HumanInbox, ApiProble
                 &ctx,
                 OffsetDateTime::now_utc(),
                 &|task, run| crate::files::read_evidence(task, &root, run),
-                knowledge.as_ref(),
             )
             .map_err(|e| ops_problem(store, e, None))
         })
@@ -296,31 +285,6 @@ pub(crate) fn delegated_request(
                 );
             }
             (Method::POST, p, serde_json::Value::Object(payload))
-        }
-        InboxKind::KnowledgeReview => {
-            let candidate = input
-                .payload
-                .as_ref()
-                .and_then(|p| p.get("candidate_id"))
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| ApiProblem::bad_request("payload.candidate_id is required"))?;
-            if !candidate
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-            {
-                return Err(ApiProblem::bad_request("invalid candidate_id"));
-            }
-            let mut payload = input
-                .payload
-                .clone()
-                .and_then(|v| v.as_object().cloned())
-                .unwrap_or_default();
-            payload.remove("candidate_id");
-            (
-                Method::POST,
-                format!("/api/v1/knowledge/inbox/{candidate}/{}", input.option),
-                serde_json::Value::Object(payload),
-            )
         }
         InboxKind::Unroutable => {
             let id = task.ok_or_else(|| gone(&item.id))?;

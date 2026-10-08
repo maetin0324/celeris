@@ -41,6 +41,8 @@ describe("inbox model", () => {
   it("search param の種類を検証する", () => {
     expect(isInboxKind("authorization")).toBe(true);
     expect(isInboxKind("nope")).toBe(false);
+    // 人の決定 2026-10-08: KB の取り込み待ちは受信箱の種類に無い（知識画面で扱う）。
+    expect(isInboxKind("knowledge_review")).toBe(false);
   });
 
   it("409 native_action_required は専用画面への誘導にする", () => {

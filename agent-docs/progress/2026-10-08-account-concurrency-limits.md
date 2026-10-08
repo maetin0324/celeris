@@ -24,6 +24,7 @@ ADR `agent-docs/adr/2026-10-08-account-concurrency-limits.md`（状態: Accepted
 | gui | 完了。旧 gui のプロバイダ画面から concurrency の入力・送信・表示を除去（最小変更。置き換え予定のため） |
 | web | 完了。アカウント画面で各アカウント（暗黙アカウントを含む）の上限を編集（保存・既定に戻す・検証・API エラー表示）。プロバイダ画面から concurrency 入力と `in_use / concurrency` 表示を外しアカウント画面への導線 |
 | verify | 完了（このファイル）。統合後の全試験と文書検査を流し、本番移行の人の手順は `artifacts/production-migration.md`（task の成果物） |
+| land | 完了。limits〜verify の未 commit 成果を task ブランチに 1 commit（`1740c9e4`）として commit し、repo の中で全検査を再実行（次節「close-out」） |
 
 ## 試験の結果（統合後。2026-10-08、run 01M4E2RS1XM2C8V2HJ2W9J5X3D）
 
@@ -46,6 +47,33 @@ run の長い `TMPDIR` では credentiald の UNIX socket パスが `SUN_LEN` �
 | `sh scripts/dev/progress-index.sh --check` | 0 | 本体と葉 6 件とも front matter 合格。索引はこの script が都度生成する（commit しない） |
 
 本番 config・`~/.config/celeris`・systemd・daemon・本番 DB は変更していない。
+
+## close-out（commit と再検証、run 01M4EKPF0A1DWMETY7DPJJ385M）
+
+limits〜verify の未 commit 成果（94 file）を task ブランチ `celeris/01M4D7RVKXY9A967ZXDADWVHQJ` に
+ADR commit `d2ced79b` の上に 1 commit `1740c9e482430d7848539a0807ba7b5ac7fbfe7c` として commit した。
+検証用の一時物 `.verify/` は commit せず、`.git/info/exclude` に登録して残す。commit 後の git status は clean。
+この節自体は進捗ファイルの追記なので、上記 commit の後の小さな commit で入る。
+
+commit 済みのブランチで repo の中（repos/agent-platform）から全検査を再実行した（2026-10-08）。
+test-parallel と clippy は上の「試験の結果」と同じ形態（unshare+setpriv で bounding set を引き下げ、
+短い TMPDIR `/var/tmp/celeris-verify` を bind mount）で回す。
+
+| コマンド | exit |
+| --- | --- |
+| `bash scripts/dev/test-parallel.sh` | 0 |
+| `cargo clippy --workspace -- -D warnings` | 0 |
+| `cd web && node_modules/.bin/tsc -b`（`gen-types.mjs --check`・`check-boundaries.mjs`・`check-parity.mjs` も 0） | 0 |
+| `corepack pnpm@11.27.0 -C gui typecheck` | 0 |
+| `cd web && TMPDIR=/var/tmp/celeris-verify corepack pnpm@12.6.0 test` | 0 |
+| `TMPDIR=/var/tmp/celeris-verify corepack pnpm@11.27.0 -C gui test` | 0 |
+| `sh scripts/dev/check-doc-links.sh`（`--self-test` も） | 0 |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 |
+| `sh scripts/dev/progress-index.sh --check` | 0 |
+
+test-parallel: `CELERIS_TEST_SUMMARY` `{"passed":4832,"failed":0,"ignored":14,"nextest_exit":0,"doctest_exit":0,"tmp_leftovers":0}`（統合後と同じ）。
+web test: vitest 85 files / 642 tests 通過、node --test 78 通過。gui test: 96 files / 1342 tests 通過。
 
 ## 本番への移行（人が実行）
 

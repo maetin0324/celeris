@@ -182,9 +182,9 @@ send t1 "cos-chat-live です（試験用 daemon）。合言葉は「みかん42
 send t2 "前の発言の合言葉を答えてください。また添付画像は何色の正方形ですか。2 点を 1 行で。" "[\"$A_BLUE\"]"
 send t3 "試験用 daemon に task を 1 件起票してください。PATH の celerisctl を --api-url を付けずに使ってください（celerisctl add）。title は「cos-chat-live: CoS 起票の確認」、objective は「CoS チャットからの起票の実機確認。作業は不要。」、check-cmd は「true」、reason は「人が cos-chat-live で起票を依頼」。起票した task id を 1 行で返してください。" '[]'
 # (d) D1: 起票の request（POST /api/v1/tasks）の attachment_ids で作成と pin を 1 回の operation にする
-send t4 "添付の screenshot は設定画面です。赤いボタンが右端で画面からはみ出しています。ボタンが画面内に収まるよう直す UI 修正の task を起票し、この screenshot をその task に引き渡してください。cos-operator skill の §3a のとおり、POST /api/v1/tasks の本文の attachment_ids にこの添付 id を入れた 1 回の operation で起票と pin を行ってください（起票してから pin はしない）。作った task id と、operation の result に返った attachment_ids を返してください。" "[\"$A_SCREEN\"]"
+send t4 "添付の screenshot は設定画面です。赤いボタンが右端で画面からはみ出しています。ボタンが画面内に収まるよう直す UI 修正の task を起票し、この screenshot をその task に引き渡してください。cos-operator skill の attachments.md のとおり、POST /api/v1/tasks の本文の attachment_ids にこの添付 id を入れた 1 回の operation で起票と pin を行ってください（起票してから pin はしない）。作った task id と、operation の result に返った attachment_ids を返してください。" "[\"$A_SCREEN\"]"
 # (e) D2: POST /api/v1/knowledge/inbox（operation knowledge.record）で候補作成と pin を 1 回にする
-send t5 "添付の PDF を知識ベースに取り込みたいです。内容を読んで KB の候補（scope は project:agent-platform）を作り、PDF をその候補に pin してください。cos-operator skill の §3a のとおり、POST /api/v1/knowledge/inbox の本文の attachment_ids にこの添付 id を入れた 1 回の operation（knowledge.record）で行ってください（celerisctl knowledge record --attachment-id でも同じ operation になります）。候補 id と result に返った attachment_ids、PDF に書かれた codeword を返してください。" "[\"$A_PDF\"]"
+send t5 "添付の PDF を知識ベースに取り込みたいです。内容を読んで KB の候補（scope は project:agent-platform）を作り、PDF をその候補に pin してください。cos-operator skill の attachments.md のとおり、POST /api/v1/knowledge/inbox の本文の attachment_ids にこの添付 id を入れた 1 回の operation（knowledge.record）で行ってください（celerisctl knowledge record --attachment-id でも同じ operation になります）。候補 id と result に返った attachment_ids、PDF に書かれた codeword を返してください。" "[\"$A_PDF\"]"
 
 # --- 証跡の採取（試験用 DB だけを読む） -----------------------------------------------------------
 DB="$OUT/celeris.sqlite3"

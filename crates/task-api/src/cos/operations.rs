@@ -802,3 +802,49 @@ async fn get_operation(
         })),
     }
 }
+
+#[cfg(test)]
+mod skill_table_tests {
+    use std::collections::BTreeSet;
+
+    /// ADR 2026-10-08-cos-chat-prompt-cache D1.7/T5: the cos-operator skill's table of registered
+    /// operations (`config/skills/cos-operator/operations.md`) lists exactly [`super::ALLOWED`].
+    #[test]
+    fn cos_operator_skill_table_matches_allowed() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../config/skills/cos-operator/operations.md"
+        );
+        let text = std::fs::read_to_string(path).expect("operations.md");
+        let section = text
+            .split("## 登録済みの操作")
+            .nth(1)
+            .and_then(|rest| rest.split("\n## ").next())
+            .and_then(|rest| rest.split("### ").next())
+            .expect("registered operations section");
+        let mut listed = BTreeSet::new();
+        for line in section.lines().filter(|l| l.starts_with("| ")) {
+            let cells: Vec<&str> = line.split(" | ").collect();
+            let (Some(route), Some(action)) = (cells.get(1), cells.get(2)) else {
+                continue;
+            };
+            let Some(route) = route.strip_prefix('`').and_then(|r| r.strip_suffix('`')) else {
+                continue;
+            };
+            let Some((method, path)) = route.split_once(' ') else {
+                continue;
+            };
+            let path = path
+                .split('/')
+                .map(|seg| if seg == "<id>" { "{id}" } else { seg })
+                .collect::<Vec<_>>()
+                .join("/");
+            listed.insert((method.to_string(), path, action.trim().to_string()));
+        }
+        let allowed: BTreeSet<_> = super::ALLOWED
+            .iter()
+            .map(|(m, p, a)| (m.to_string(), p.to_string(), a.to_string()))
+            .collect();
+        assert_eq!(listed, allowed);
+    }
+}

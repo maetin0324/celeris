@@ -372,3 +372,61 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
         .expect("output message row");
     assert_eq!(output.text, "了解しました");
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache T5: `cos-inbox-triage` is mounted only for the inbox scene.
+#[test]
+fn cos_chat_skills_mount_triage_only_in_the_inbox_thread_or_with_inbox_items() {
+    use crate::dispatcher::cos_chat::launch::cos_chat_skills;
+    assert_eq!(cos_chat_skills(false, &[]), vec!["cos-operator"]);
+    assert_eq!(
+        cos_chat_skills(true, &[]),
+        vec!["cos-operator", "cos-inbox-triage"]
+    );
+    let item = task_worker::protocol::CosChatInboxItem {
+        item_id: "i1".into(),
+        state: "pending".into(),
+        source_kind: "question".into(),
+        source_key: "q1".into(),
+        source_revision: "1".into(),
+        summary: "s".into(),
+        reason: None,
+        decision: None,
+        answer_path: None,
+        created_at: "2026-10-08T00:00:00Z".into(),
+    };
+    assert_eq!(
+        cos_chat_skills(false, &[item]),
+        vec!["cos-operator", "cos-inbox-triage"]
+    );
+}
+
+/// An ordinary thread's run gets `cos-operator` only: neither the delivered skill directory nor
+/// the prompt carries the triage procedure.
+#[tokio::test]
+async fn cos_chat_skill_ordinary_thread_run_does_not_mount_inbox_triage() {
+    let script = r#"
+cat > first.input
+find .taskd/chat-runs -mindepth 1 -maxdepth 1 -type d -exec sh -c 'printf "%s" "{\"summary\":\"hello\",\"evidence\":[]}" > "$1/result.json"' sh {} \;
+printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}' '{"type":"result","subtype":"success","is_error":false,"result":"hello"}'
+"#;
+    let dir = crate::test_support::WritableTempDir::new();
+    let command = stub(dir.path(), "claude.sh", script);
+    let adapter = Arc::new(ClaudeCodeAdapter::new(ClaudeCodeConfig {
+        command,
+        ..Default::default()
+    }));
+    let (data, store, mut d, thread) = fixture("claude-code", adapter);
+    let workspace = data
+        .path()
+        .join("cos/threads")
+        .join(&thread)
+        .join("workspace");
+    post(&store, &d, &thread, "one", vec![]);
+    run(&mut d, &store, &thread).await;
+    let skills = workspace.join(".claude/skills");
+    assert!(skills.join("cos-operator/SKILL.md").is_file());
+    assert!(!skills.join("cos-inbox-triage").exists());
+    let input = std::fs::read_to_string(workspace.join("first.input")).unwrap();
+    assert!(input.contains("`cos-operator`"), "{input}");
+    assert!(!input.contains("cos-inbox-triage"), "{input}");
+}

@@ -69,6 +69,18 @@ pub(crate) fn path_with_first(
 /// Open inbox items handed to a run of the inbox thread (newest first).
 const COS_INBOX_CONTEXT_ITEMS: usize = 50;
 
+/// ADR 2026-10-08-cos-chat-prompt-cache T5: the skills mounted for a CoS chat run.
+/// `cos-operator` always; `cos-inbox-triage` only in the inbox thread or when the run is handed
+/// inbox items, so an ordinary thread does not get the triage procedure. Authorization does not
+/// depend on this: `/cos/operations` and the inbox resolve API enforce it whatever was mounted.
+pub(crate) fn cos_chat_skills(in_inbox_thread: bool, inbox_items: &[CosChatInboxItem]) -> Vec<String> {
+    let mut skills = vec!["cos-operator".to_string()];
+    if in_inbox_thread || !inbox_items.is_empty() {
+        skills.push("cos-inbox-triage".to_string());
+    }
+    skills
+}
+
 /// `cos_inbox_items` row → worker context item (no judgment; the packet is copied as recorded).
 pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem {
     let answer_path = (item.source_kind != super::triage::COS_TRIAGE_NOTICE_KIND)
@@ -415,7 +427,8 @@ impl CosChatLaunch {
     ) -> Result<(), String> {
         // ADR 2026-10-07-cos-inbox-thread-conversation D3: a run in the inbox thread (triage or
         // a human message) sees the unresolved items.
-        let inbox_items = if self.inbox_thread()?.as_deref() == Some(thread_id) {
+        let in_inbox_thread = self.inbox_thread()?.as_deref() == Some(thread_id);
+        let inbox_items = if in_inbox_thread {
             self.store
                 .cos_triage_open_items(COS_INBOX_CONTEXT_ITEMS)
                 .map_err(|e| format!("CoS inbox context unavailable: {e}"))?
@@ -425,6 +438,7 @@ impl CosChatLaunch {
         } else {
             Vec::new()
         };
+        let skill_names = cos_chat_skills(in_inbox_thread, &inbox_items);
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
         }
@@ -566,7 +580,7 @@ impl CosChatLaunch {
                 }
                 _ => None,
             },
-            skills: vec!["cos-operator".into(), "cos-inbox-triage".into()],
+            skills: skill_names.clone(),
             credential_env: COS_RUN_CREDENTIAL_ENV.into(),
             api_base_url: cfg.api_base_url.clone(),
             inbox_items,
@@ -589,7 +603,7 @@ impl CosChatLaunch {
             return Err(format!("CoS artifacts unavailable: {e}"));
         }
         let (skills, missing_skills) = dispatcher.skills_context(
-            &["cos-operator".into(), "cos-inbox-triage".into()],
+            &skill_names,
             task_ops::knowledge::SkillUse::Work,
         );
         if !missing_skills.is_empty() {

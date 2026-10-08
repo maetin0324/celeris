@@ -170,3 +170,45 @@ harness 別の渡し方:
 - API 課金 source での計測、本番 KB の skill の同期、`/cos/operations` への登録の追加、promote と本番への反映は人の決定。この ADR と T1〜T8 の葉は手順と材料だけを書く
 - dispatcher に LLM 呼び出しは入れない（要約は今までどおり worker の checkpoint）
 - cache の breakpoint を celeris から直接置くこと（Claude Code の CLI を通す限りできない）は範囲外
+
+## 7. 付記 D6（2026-10-08、task 01M4D3XKE2PZKTNSKHJGBQMEK0）: 固定 Core と可変部の分離（T4 の実装）
+
+状態: **実装済み**。H1 の決定的な部分（LLM 無しベンチ）を満たした。live の cache read の変化は未計測（T8）。
+
+### D6.1 分け方
+
+`crates/task-worker/src/cos_chat.rs` の `build_parts` が `CosChatPrompt { core, variable }` を返す（`claude_code::build_cos_chat_parts` が browser の節を可変部の末尾に足す）。
+
+- **Core**（`cos_chat::core`）: 返事と操作の規則、OP（`/cos/operations`）の雛形、checkpoint と履歴 API の雛形、添付の扱いと pin の規則、受信箱の件への relay の規則、headless の注意、作業の規則（成果物の置き場所・本番 host・subagent と別 LLM CLI の禁止・`/tmp`）。パラメータは `api_base_url` と `credential_env` の**名前**だけ。thread/run/task id・seq・日時・checkpoint の値は入れず、`<thread id>`・`<chat run id>`・`<through_seq>`・`<expected>` の置き場だけを書く。5,919 B（ベンチの API URL で。上限 6,000 B を試験で固定）
+- 作業の規則は `preamble::fixed_notes()`（全 run 共通の 4 節、1,995 B）の CoS 向けの短縮版（`WORK_RULES`）。Core を 6 KB に収めるため。worker 一般の preamble は変えない（`preamble::render` は従来と同じ bytes。`render_without_fixed_notes` を足しただけ）。片方を変えたらもう片方も直す
+- 添付の pin 規則と受信箱の relay 規則は、これまで添付・受信箱の件があるときだけ出していた。Core を run 間で同じ bytes にするため常に入れる（件と添付の一覧は可変部）
+- **可変部**: `# CoS chat: thread <id>`、skill 名、「run 固有の操作パラメータ」節（thread id・chat run id・checkpoint の through_seq と expected・worker run id・一時 task id）、context 依存の preamble（今は空）、今回の入力、要約、未要約範囲、受信箱の件、添付の一覧
+
+### D6.2 harness ごとの載せ方と根拠
+
+| harness | Core の経路 | 可変部 | 根拠 |
+|---|---|---|---|
+| claude-code | `--append-system-prompt` の 1 引数: `HEADLESS_RUN_NOTE` + `\n` + Core | stdin | Anthropic の cache は tools → system → messages の完全 prefix 一致。system は `--resume` でも毎 request の先頭に同じ bytes で載り、会話（messages）に積まれない。従来は Core 相当の約 4 KB が resume の turn ごとに user message として積まれていた（D1.3） |
+| codex | `-c developer_instructions=<TOML 文字列>`（`exec` と `exec resume` の両方に同じ bytes） | stdin | codex-cli 0.161.0（この host の版。`codex exec --help` と binary の文字列で確認）は AGENTS.md を `# AGENTS.md instructions for <cwd>` の見出し付きの user message にする。CoS chat の cwd は thread ごとの workspace なので、AGENTS.md 方式では thread をまたぐ prefix が Core の手前で切れる。`developer_instructions` は developer message で、AGENTS.md と環境情報（cwd）より前に入り、cwd を含まない。値は TOML 文字列にして渡す（`-c` は TOML として解釈し、失敗時だけ生の文字列になる。`cos_chat_core_codex_developer_instructions_round_trip` で往復を確認）。`instructions`（base instructions）は codex 自身の system prompt を置き換えるので採らない。resume で developer message が再挿入されるか（同じ bytes なので prefix は保たれるが、積まれるかどうか）は live 未確認で**不明** |
+| acp（opencode 等） | 入力（`session/prompt`）の先頭: Core → skill 一覧 → 可変部 | 同じ入力の後半 | ACP の `session/new` には system prompt の欄が無い（cwd・mcpServers だけ）。agent 固有の経路（opencode の instructions 等）は agent ごとに違い、汎用の adapter から決められない。`session/load` の resume では turn ごとに Core が積まれる（T6 の差分配送で扱う） |
+| pi | 入力（stdin）の先頭: Core → skill 一覧 → 可変部 | 同じ入力の後半 | pi の session は run ごと（`--session-dir <run_dir>/pi-sessions`）で thread をまたがない。system への経路（CLI の system prompt 追記の flag）は、この host に pi が無く版も確かめられないので採らない（**不明**）。入力の先頭に置けば、pi 自身の system prompt が run 間で同じなら Core まで prefix が一致する |
+
+### D6.3 記録
+
+`runs/<run_id>/prompt.txt` は、Core と入力を別の経路で渡す harness（claude-code・codex）では `<!-- celeris:cos-core (<経路>) -->` と `<!-- celeris:cos-input (stdin) -->` の 2 区画で両方を残す（`cos_chat::prompt_record`）。acp・pi は入力の全文がそのまま両方を含む。
+
+### D6.4 決定的ベンチの before / after（`cargo test -p task-worker cos_chat_bench_`）
+
+| 指標 | before（main `8cdd96fb`） | after |
+|---|---|---|
+| 新規 thread 10 件の先頭一致（1 本の入力として連結） | 43 B | 5,962 B |
+| 同上、claude-code（system 引数 + stdin） | 1,262 B（system は HEADLESS_RUN_NOTE 1,219 B だけ + stdin 43 B） | 7,182 B（system 7,139 B が 10 件で同一 + stdin 43 B） |
+| 同 thread の turn 間の先頭一致（連結 / claude-code） | 84 B / 1,303 B | 6,257 B / 7,477 B |
+| 固定部の bytes | 4,226 B（preamble 1,995 + 規則 2,103 + skill 名 128。run ごとの値で分断） | Core 5,919 B（run 間で byte 一致）+ skill 名 128 B |
+| claude-code の stdin（turn 1 / turn 10） | 4,783 B / 11,097 B | 883 B / 7,117 B |
+| 入力の総 bytes（連結。acp/pi の入力） | 4,747 B | 6,766 B（pin・relay の規則を常に入れるため +2.0 KB） |
+
+### D6.5 残り
+
+- live（隔離 daemon・claude_oauth）の cache read / write の変化は T8 で測る。baseline では新規 thread の非 cache input がすでに 8 token なので、効果は cache write の減少と cache read の増加で見る
+- acp・pi の resume で Core が積まれる問題は T6（差分配送）で扱う

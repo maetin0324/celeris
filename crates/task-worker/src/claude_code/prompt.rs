@@ -52,6 +52,9 @@ pub(crate) fn work_dir_note(
 /// `artifacts` は成果物ディレクトリの workspace 相対表記（`RunRequest::artifacts_rel`。ADR-0036 D3。
 /// 単独タスクでは `artifacts` なので、文面は Phase 34 までと 1 バイトも変わらない）。
 pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
+    if let Some(parts) = build_cos_chat_parts(task, context, run_id, artifacts) {
+        return parts.joined();
+    }
     let mut prompt = build_prompt_inner(task, context, run_id, artifacts);
     if let Some(browser) = &context.browser {
         prompt.push_str(&crate::browser::prompt(browser));
@@ -59,12 +62,50 @@ pub fn build_prompt(task: &Task, context: &RunContext, run_id: &str, artifacts: 
     prompt
 }
 
-fn build_prompt_inner(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
-    // ADR 2026-10-06 cos-chat-run-dispatch: CoS chat run は `task.kind` に依らず、
-    // `context.cos_chat` の有無だけで専用の前置きを組む（一時の Task は保存されない）。
-    if let Some(chat) = &context.cos_chat {
-        return crate::cos_chat::build_prompt(task, context, chat, run_id, artifacts);
+/// ADR 2026-10-06 cos-chat-run-dispatch: CoS chat run は `task.kind` に依らず、`context.cos_chat` の
+/// 有無だけで専用の前置きを組む（一時の Task は保存されない）。ADR 2026-10-08-cos-chat-prompt-cache D6:
+/// 固定 Core と run 固有の部分に分けて返す（browser の節は run 固有の側の末尾）。CoS chat でなければ `None`。
+pub fn build_cos_chat_parts(
+    task: &Task,
+    context: &RunContext,
+    run_id: &str,
+    artifacts: &str,
+) -> Option<crate::cos_chat::CosChatPrompt> {
+    let chat = context.cos_chat.as_ref()?;
+    let mut parts = crate::cos_chat::build_parts(task, context, chat, run_id, artifacts);
+    if let Some(browser) = &context.browser {
+        parts.variable.push_str(&crate::browser::prompt(browser));
     }
+    Some(parts)
+}
+
+/// acp / pi の入力の全文（ADR-0127: 末尾に skill の一覧）。CoS chat run は固定 Core → skill の一覧 → run 固有の
+/// 部分の順（ADR 2026-10-08-cos-chat-prompt-cache D6。両 harness に system の経路が無いため入力の先頭に置く）。
+/// CoS chat でない run は `build_prompt` に一覧を足した従来の文面と 1 バイトも変わらない。
+pub fn build_prompt_with_skill_list(
+    task: &Task,
+    context: &RunContext,
+    run_id: &str,
+    artifacts: &str,
+) -> String {
+    match build_cos_chat_parts(task, context, run_id, artifacts) {
+        Some(parts) => format!(
+            "{}{}{}",
+            parts.core,
+            crate::skills::skills_block(&context.skills)
+                .map(|block| format!("{block}\n"))
+                .unwrap_or_default(),
+            parts.variable
+        ),
+        None => {
+            let mut prompt = build_prompt(task, context, run_id, artifacts);
+            prompt.push_str(&crate::skills::preamble_section(&context.skills));
+            prompt
+        }
+    }
+}
+
+fn build_prompt_inner(task: &Task, context: &RunContext, run_id: &str, artifacts: &str) -> String {
     // ADR-0072 D14（Phase E3）: task-local な planner run は `task.kind` に依らず（常に `Execute`）、
     // `context.execution_planner` の有無で選ぶ。
     if context.execution_planner.is_some() {

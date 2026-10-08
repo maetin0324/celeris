@@ -12,7 +12,7 @@ use tokio::process::Command;
 use tracing::warn;
 
 use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
-use crate::claude_code::build_prompt;
+use crate::claude_code::build_prompt_with_skill_list;
 use crate::delegate_file::{clear_delegate_file, forward_delegate_file};
 use crate::protocol::{Evidence, RunRequest};
 use crate::provider::classify_provider_failure;
@@ -188,9 +188,8 @@ async fn run_pi(
     clear_delegate_file(&req.artifacts_dir).await;
     tokio::fs::create_dir_all(&req.artifacts_dir).await?;
 
-    let mut prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
+    let prompt = build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel);
     crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await?;
-    prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 

@@ -41,7 +41,7 @@ use base64::Engine;
 use task_core::ProgressKind;
 
 use crate::adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};
-use crate::claude_code::build_prompt;
+use crate::claude_code::build_prompt_with_skill_list;
 use crate::cos_chat::capabilities::{
     Continuation, HarnessCapabilities, ImageDelivery, MissingCapability, capability_reason,
     image_delivery, image_delivery_reason,
@@ -918,14 +918,13 @@ async fn run_acp(
     let _ = tokio::fs::remove_file(&result_path).await;
     clear_delegate_file(&req.artifacts_dir).await;
 
-    let mut prompt = build_prompt(&req.task, &req.context, run_id, &artifacts_rel);
+    let mut prompt = build_prompt_with_skill_list(&req.task, &req.context, run_id, &artifacts_rel);
     // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（opencode が
     // ネイティブに読む。他の ACP エージェントは前置きの一覧から読む）、前置きには名前・説明・パスの
     // 一覧だけを足す（本文は埋め込まない。`skills` が空なら前置きは 1 バイトも変わらない）。
     if let Err(e) = crate::skills::deliver_agent_skills(req.cwd(), &req.context.skills).await {
         warn!("run {run_id}: failed to deliver skills to .agents/skills: {e}");
     }
-    prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
     crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
 
@@ -1123,8 +1122,7 @@ async fn run_acp(
                 .and_then(|v| v.as_bool())
                 == Some(true),
         });
-        prompt = build_prompt(&req.task, &context, run_id, &artifacts_rel);
-        prompt.push_str(&crate::skills::preamble_section(&req.context.skills));
+        prompt = build_prompt_with_skill_list(&req.task, &context, run_id, &artifacts_rel);
         crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
     }
     if cos_chat.is_some()

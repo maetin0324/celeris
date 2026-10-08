@@ -307,3 +307,64 @@ printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"d
         "{err}"
     );
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: claude-code gets the fixed Core in one
+/// `--append-system-prompt` argument after HEADLESS_RUN_NOTE, the run specific part on stdin, and
+/// `prompt.txt` records both. Two runs of different threads send the same system argument.
+#[tokio::test]
+async fn cos_chat_core_claude_append_system_prompt_stdin_and_prompt_txt() {
+    let mut systems = Vec::new();
+    for (thread, run, seq) in [
+        ("thread-a", "chat-run-a", 3),
+        ("thread-b", "chat-run-b", 41),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let script = format!("cat > stdin.log\n{}", args_log_script());
+        let adapter = ClaudeCodeAdapter::new(stub_claude(dir.path(), &script));
+        let mut req = chat_request(dir.path(), false);
+        let chat = req.context.cos_chat.as_mut().unwrap();
+        chat.thread_id = thread.into();
+        chat.run_id = run.into();
+        chat.inputs = vec![crate::protocol::CosChatInput {
+            id: format!("msg-{seq}"),
+            seq,
+            text: format!("相談 {seq}"),
+            ..Default::default()
+        }];
+        let core = crate::cos_chat::core(chat);
+        adapter
+            .run(req, run, default_limits(), &RecordingSink::default())
+            .await
+            .unwrap();
+        let args = captured_args(dir.path());
+        let i = args
+            .iter()
+            .position(|a| a == "--append-system-prompt")
+            .expect("--append-system-prompt present");
+        let system = &args[i + 1];
+        assert_eq!(
+            system,
+            &format!("{}\n{core}", crate::preamble::HEADLESS_RUN_NOTE)
+        );
+        assert!(!system.contains(thread) && !system.contains(run));
+        assert!(!system.contains(&format!("seq {seq}")));
+        let stdin = std::fs::read_to_string(dir.path().join("stdin.log")).unwrap();
+        assert!(!stdin.contains("# CoS chat Core"), "{stdin}");
+        assert!(stdin.contains(&format!("# CoS chat: thread {thread}\n")));
+        assert!(stdin.contains(&format!("- `<chat run id>` = `{run}`")));
+        assert!(stdin.contains(&format!("### seq {seq} (message msg-{seq})")));
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs").join(run).join("prompt.txt")).unwrap();
+        assert_eq!(
+            recorded,
+            crate::cos_chat::prompt_record(
+                "--append-system-prompt, after HEADLESS_RUN_NOTE",
+                &core,
+                &stdin
+            )
+        );
+        assert!(recorded.contains(&core) && recorded.contains(&stdin));
+        systems.push(system.clone());
+    }
+    assert_eq!(systems[0].as_bytes(), systems[1].as_bytes());
+}

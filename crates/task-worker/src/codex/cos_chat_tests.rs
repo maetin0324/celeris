@@ -515,3 +515,35 @@ async fn cos_chat_harness_codex_failed_turn_without_result_json_stays_failed() {
         outcome.terminal
     );
 }
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: codex gets the fixed Core as
+/// `-c developer_instructions=<TOML string>` on `exec` and on `exec resume` alike (the same bytes),
+/// and only the run specific part on stdin; `prompt.txt` records both.
+#[tokio::test]
+async fn cos_chat_core_codex_developer_instructions_on_exec_and_resume() {
+    let core = crate::cos_chat::core(&chat());
+    let expected = cos_chat_developer_instructions(&core);
+    for session in [None, resume("thread-cos-1")] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = fake_codex(dir.path(), &[THREAD_STARTED, REPLY, TURN_COMPLETED]);
+        let resumed = session.is_some();
+        run(
+            config,
+            cos_req(dir.path(), chat(), session),
+            &Sink::default(),
+        )
+        .await;
+        let args = args(dir.path());
+        assert_eq!(args.iter().any(|a| a == "resume"), resumed, "{args:?}");
+        assert!(
+            args.windows(2).any(|w| w[0] == "-c" && w[1] == expected),
+            "{args:?}"
+        );
+        let stdin = std::fs::read_to_string(dir.path().join("stdin.txt")).unwrap();
+        assert!(!stdin.contains("# CoS chat Core"), "{stdin}");
+        assert!(stdin.contains("# CoS chat: thread thread-a\n"), "{stdin}");
+        let recorded =
+            std::fs::read_to_string(dir.path().join("runs/worker-run-1/prompt.txt")).unwrap();
+        assert!(recorded.contains(&core) && recorded.contains(&stdin));
+    }
+}

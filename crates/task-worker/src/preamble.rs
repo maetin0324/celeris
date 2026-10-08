@@ -84,6 +84,26 @@ pub fn work_unit_branch_section(wu: &crate::protocol::WorkUnitPromptContext) -> 
 }
 
 pub fn render(context: &RunContext, artifacts: &str) -> String {
+    render_parts(context, artifacts, true)
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: the context dependent part of [`render`] without the
+/// fixed notes ([`fixed_notes`]). A CoS chat run puts the fixed notes in its Core instead.
+pub fn render_without_fixed_notes(context: &RunContext, artifacts: &str) -> String {
+    render_parts(context, artifacts, false)
+}
+
+/// The notes every run gets regardless of its context (deliverables, production host, tool
+/// launch, `/tmp`), in the order [`render`] writes them.
+pub fn fixed_notes() -> String {
+    let mut out = deliverables_placement_note();
+    out.push_str(&production_host_note());
+    out.push_str(&tool_launch_policy_note());
+    out.push_str(&run_tmpdir_note());
+    out
+}
+
+fn render_parts(context: &RunContext, artifacts: &str, with_fixed_notes: bool) -> String {
     // ADR-0044 D2（Phase 53）: コメントは**前置きの先頭**（人が割り込んだら最初に目に入る）。
     // コメントが 1 件も無ければ何も出さないので、Phase 52 までの出力とバイト単位で同じ。
     let mut out = comments_section(context);
@@ -112,10 +132,9 @@ pub fn render(context: &RunContext, artifacts: &str) -> String {
         out.push_str(&knowledge_section(&knowledge.mounts, &knowledge.index));
     }
     out.push_str(&role_section(context));
-    out.push_str(&deliverables_placement_note());
-    out.push_str(&production_host_note());
-    out.push_str(&tool_launch_policy_note());
-    out.push_str(&run_tmpdir_note());
+    if with_fixed_notes {
+        out.push_str(&fixed_notes());
+    }
     out.push_str(&memory_instructions(context, artifacts));
     // ADR-0044 D2（Phase 53）: コメントの書き方（`comments_enabled` の run にだけ）。
     out.push_str(&comment_instructions(context));

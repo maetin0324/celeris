@@ -622,6 +622,16 @@ async fn run_codex_once(
             command.arg("-c").arg(kv);
         }
     }
+    // ADR 2026-10-08-cos-chat-prompt-cache D6: a CoS chat run's fixed Core goes in as codex's
+    // developer instructions (a developer message ahead of AGENTS.md and the environment context,
+    // the same bytes on `exec` and `exec resume`); only the run specific part is on stdin.
+    if let Some(chat) = req.context.cos_chat.as_ref() {
+        command
+            .arg("-c")
+            .arg(cos_chat_developer_instructions(&crate::cos_chat::core(
+                chat,
+            )));
+    }
     command.arg("-");
     command
         .envs(config.env.iter().cloned())
@@ -808,14 +818,25 @@ async fn run_codex(
         let _ = tokio::fs::remove_file(work_dir.join("artifacts").join("result.json")).await;
     }
 
-    let prompt = format!(
-        "{}{}",
-        work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir),
-        build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
-    );
+    let cos_parts =
+        crate::claude_code::build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+    let work_note = work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir);
+    let prompt = match &cos_parts {
+        Some(parts) => format!("{work_note}{}", parts.variable),
+        None => format!(
+            "{work_note}{}",
+            build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
+        ),
+    };
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
-    crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
+    let recorded = match &cos_parts {
+        Some(parts) => {
+            crate::cos_chat::prompt_record("-c developer_instructions", &parts.core, &prompt)
+        }
+        None => prompt.clone(),
+    };
+    crate::subprocess::write_run_prompt(&run_dir, &recorded, run_id).await;
     // ADR-0127 D1/D3: mount された skill のディレクトリを `.agents/skills/<name>/` に丸写しし（codex が
     // ネイティブに読む作業場所内の場所。account 共有の CODEX_HOME には書かない）、`AGENTS.md` の
     // celeris:skills 節は名前・説明・パスの一覧にする（本文は埋め込まない。run は落とさない）。
@@ -1118,6 +1139,15 @@ fn codex_session_requested(req: &RunRequest) -> bool {
         .session
         .as_ref()
         .is_some_and(|s| s.adapter == CodexAdapter::ID && s.resume)
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: `developer_instructions=<TOML string>` for `-c`. The
+/// value is a TOML string so codex parses it as one string whatever the Core contains.
+pub fn cos_chat_developer_instructions(core: &str) -> String {
+    format!(
+        "developer_instructions={}",
+        toml::Value::String(core.to_string())
+    )
 }
 
 /// The explicit fresh start of a CoS chat run: the prompt already carries the summary and the

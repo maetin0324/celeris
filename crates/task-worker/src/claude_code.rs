@@ -125,8 +125,8 @@ impl WorkerAdapter for ClaudeCodeAdapter {
 // プロンプト文面と子プロセスの実行・結果処理は別の変更境界。
 mod prompt;
 pub use prompt::CLUSTER_JOB_PLANNER_GUIDANCE;
-pub use prompt::build_prompt;
 pub(crate) use prompt::work_dir_note;
+pub use prompt::{build_cos_chat_parts, build_prompt, build_prompt_with_skill_list};
 #[cfg(test)]
 use prompt::{
     delegate_workspace_instruction, harness_artifacts_section_for_plan,
@@ -473,11 +473,21 @@ async fn run_claude_code(
         let _ = tokio::fs::remove_file(work_dir.join("artifacts").join("result.json")).await;
     }
 
-    let prompt = format!(
-        "{}{}",
-        work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir),
-        build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
-    );
+    // ADR 2026-10-08-cos-chat-prompt-cache D6: a CoS chat run puts its fixed Core in the system
+    // prompt (after HEADLESS_RUN_NOTE, one argument) and only the run specific part on stdin.
+    let cos_parts = build_cos_chat_parts(&req.task, &req.context, run_id, &artifacts_rel);
+    let work_note = work_dir_note(req.work_dir.as_deref(), &req.workspace, &req.artifacts_dir);
+    let prompt = match &cos_parts {
+        Some(parts) => format!("{work_note}{}", parts.variable),
+        None => format!(
+            "{work_note}{}",
+            build_prompt(&req.task, &req.context, run_id, &artifacts_rel)
+        ),
+    };
+    let append_system_prompt = match &cos_parts {
+        Some(parts) => cos_chat_system_prompt(&parts.core),
+        None => crate::preamble::HEADLESS_RUN_NOTE.to_string(),
+    };
     // Claude's print mode accepts a stream-json user message when the run has native images.
     // Keep ordinary runs on their original text stdin path byte for byte.
     let native_images = req.context.cos_chat.as_ref().is_some_and(|chat| {
@@ -493,7 +503,15 @@ async fn run_claude_code(
     };
     // ADR-0023 D2 / M1: この run で何を渡したかを残す（`request.json` は構造、`prompt.txt` は実際の文面）。
     crate::subprocess::write_run_request(&run_dir, req, run_id).await;
-    crate::subprocess::write_run_prompt(&run_dir, &prompt, run_id).await;
+    let recorded = match &cos_parts {
+        Some(parts) => crate::cos_chat::prompt_record(
+            "--append-system-prompt, after HEADLESS_RUN_NOTE",
+            &parts.core,
+            &prompt,
+        ),
+        None => prompt.clone(),
+    };
+    crate::subprocess::write_run_prompt(&run_dir, &recorded, run_id).await;
     // ADR-0056 D3（Phase 79）: mount された skills を `.claude/skills/<name>/` に写す（claude-code が
     // 自動で読む形式。run が失敗しても打ち切らない。読み取れる限りは失敗しない見込み — 失敗すれば
     // ワーカー起動前の警告としてログに残す）。
@@ -519,7 +537,7 @@ async fn run_claude_code(
         // F5-fix5: どの run（worker / planner / reviewer / 対話）にも、headless であること・turn を
         // 終えると run が終わること・長い command も foreground で走らせることを system prompt に足す。
         .arg("--append-system-prompt")
-        .arg(crate::preamble::HEADLESS_RUN_NOTE);
+        .arg(&append_system_prompt);
     if native_images {
         command.arg("--input-format").arg("stream-json");
     }
@@ -1263,6 +1281,12 @@ fn usage_with_cost(usage: Option<Usage>, model: Option<&str>) -> Option<Usage> {
 /// `Terminal::Error.message` の接頭辞。`run` がこの接頭辞を見て `Err(AdapterError)`（InfraRequeue）に
 /// 倒す（他の `result.json` の失敗〈壊れた JSON・必須欄の欠落〉は worker 自身の誤りのまま）。
 const RESULT_JSON_MISSING_MARKER: &str = "claude exited without ";
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: the single `--append-system-prompt` argument of a CoS
+/// chat run — HEADLESS_RUN_NOTE followed by the fixed Core.
+pub fn cos_chat_system_prompt(core: &str) -> String {
+    format!("{}\n{core}", crate::preamble::HEADLESS_RUN_NOTE)
+}
 
 /// F5-fix5: headless の run が background task を残して turn を終えた失敗の分類名（`Terminal` の文言・
 /// 進行のメッセージに載せる。GUI の run の終わり方・進行の欄にそのまま出る）。

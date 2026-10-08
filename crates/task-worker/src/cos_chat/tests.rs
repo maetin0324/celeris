@@ -121,6 +121,11 @@ fn prompt(req: &RunRequest) -> String {
     crate::claude_code::build_prompt(&req.task, &req.context, "wrun1", "artifacts")
 }
 
+fn parts(req: &RunRequest) -> super::CosChatPrompt {
+    crate::claude_code::build_cos_chat_parts(&req.task, &req.context, "wrun1", "artifacts")
+        .expect("CoS chat run")
+}
+
 #[test]
 fn cos_chat_harness_caps_native_image_route() {
     for adapter in ["claude-code", "codex"] {
@@ -288,11 +293,17 @@ fn cos_chat_attach_handoff_cos_preamble_explains_pin() {
     assert!(p.contains("path を書かない"), "{p}");
     assert!(p.contains("初めて人に「引き渡し済み」と言う"), "{p}");
     assert!(p.contains("celerisctl knowledge record --json"), "{p}");
-    // Without attachments there is nothing to pin.
+    // The pin rules are part of the fixed Core; without attachments the run specific part lists none.
     let mut bare = chat();
     bare.attachments.clear();
-    let p = prompt(&request(Path::new("/tmp/ws"), Some(bare)));
-    assert!(!p.contains("/references"), "{p}");
+    let parts = parts(&request(Path::new("/tmp/ws"), Some(bare)));
+    assert!(parts.core.contains("/references"), "{}", parts.core);
+    assert!(!parts.variable.contains("## 添付"), "{}", parts.variable);
+    assert!(
+        !parts.variable.contains("/references"),
+        "{}",
+        parts.variable
+    );
 }
 
 #[test]
@@ -341,7 +352,9 @@ fn cos_chat_run_proto_prompt_puts_interrupt_first_and_forbids_actions() {
     // A legacy CoS conversation marker must not bring back the `actions` instructions.
     req.context.conversation_addressee = Some(ConversationAddressee::Secretary);
     let p = prompt(&req);
-    assert!(p.starts_with("# CoS chat: thread thr1\n"));
+    let split = parts(&req);
+    assert!(p.starts_with("# CoS chat Core"), "{p}");
+    assert!(split.variable.starts_with("# CoS chat: thread thr1\n"));
     let interrupt = p
         .find("### seq 10 (message m10) 【割り込み】")
         .unwrap_or(usize::MAX);
@@ -349,9 +362,29 @@ fn cos_chat_run_proto_prompt_puts_interrupt_first_and_forbids_actions() {
     assert!(interrupt < queued, "{p}");
     assert!(!p.contains("declaring actions"), "{p}");
     assert!(p.contains("`actions`（旧 CoS の宣言）は**使わない**"));
-    assert!(p.contains("http://127.0.0.1:7070/api/v1/cos/threads/thr1/checkpoint"));
-    assert!(p.contains("\"run_id\":\"crun1\",\"summary\":\"…\",\"through_seq\":11,\"expected_summary_through_seq\":2"), "{p}");
-    assert!(p.contains("/api/v1/chat/threads/thr1/messages?before_seq=<seq>&limit=50"));
+    // The Core holds the templates; the run specific part holds the values that fill them.
+    assert!(
+        split
+            .core
+            .contains("http://127.0.0.1:7070/api/v1/cos/threads/<thread id>/checkpoint")
+    );
+    assert!(split.core.contains("\"run_id\":\"<chat run id>\",\"summary\":\"…\",\"through_seq\":<through_seq>,\"expected_summary_through_seq\":<expected>"), "{p}");
+    assert!(
+        split
+            .core
+            .contains("/api/v1/chat/threads/<thread id>/messages?before_seq=<seq>&limit=50")
+    );
+    assert!(split.variable.contains("- `<thread id>` = `thr1`"), "{p}");
+    assert!(
+        split.variable.contains("- `<chat run id>` = `crun1`"),
+        "{p}"
+    );
+    assert!(
+        split
+            .variable
+            .contains("`<through_seq>` = 11、`<expected>` = 2"),
+        "{p}"
+    );
     assert!(p.contains("`cos-operator`、`cos-inbox-triage`"));
     // No summary yet: said so explicitly.
     c.summary = None;
@@ -455,4 +488,184 @@ fn cos_chat_prompt_inbox_items_section_lists_open_items_and_relay_rules() {
     );
     assert!(p.contains("\"instructed_by\":\"<message id>\""), "{p}");
     assert!(p.contains("operation を出さずに返事で聞き返す"), "{p}");
+}
+
+fn inbox_item(created_at: &str) -> crate::protocol::CosChatInboxItem {
+    crate::protocol::CosChatInboxItem {
+        item_id: "i1".into(),
+        source_kind: "question".into(),
+        source_key: "q1".into(),
+        source_revision: "r1".into(),
+        state: "pending".into(),
+        summary: "確認".into(),
+        reason: None,
+        created_at: created_at.into(),
+        decision: None,
+        answer_path: Some("/api/v1/inbox/items/q1/answer".into()),
+    }
+}
+
+/// A second run of another thread: every id, seq, input, summary, attachment and inbox item differs.
+fn other_chat() -> CosChatContext {
+    let mut c = chat();
+    c.thread_id = "thr2-other".into();
+    c.run_id = "crun2-other".into();
+    c.inputs = vec![CosChatInput {
+        id: "m99".into(),
+        seq: 99,
+        text: "別の相談".into(),
+        interrupt: false,
+        attachment_ids: vec![],
+    }];
+    c.summary = None;
+    c.summary_through_seq = 0;
+    c.unsummarized = CosChatHistory {
+        from_seq: 1,
+        through_seq: 98,
+        messages: vec![],
+    };
+    c.attachments.clear();
+    c.inbox_items = vec![inbox_item("2026-10-08T09:10:11.000Z")];
+    c
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: the Core is the same bytes for any thread, run, seq and
+/// input of the same config, carries no id, seq or date of the run, and stays within 6 KB.
+#[test]
+fn cos_chat_core_is_byte_identical_across_runs_and_free_of_run_values() {
+    let ws = Path::new("/tmp/ws");
+    let a_req = request(ws, Some(chat()));
+    let b_req = request(Path::new("/tmp/other-ws"), Some(other_chat()));
+    let a =
+        crate::claude_code::build_cos_chat_parts(&a_req.task, &a_req.context, "wrun1", "artifacts")
+            .expect("a");
+    let b = crate::claude_code::build_cos_chat_parts(
+        &b_req.task,
+        &b_req.context,
+        "wrun2-other",
+        "artifacts/other",
+    )
+    .expect("b");
+    assert_eq!(a.core.as_bytes(), b.core.as_bytes());
+    assert_ne!(a.variable, b.variable);
+    for (req, run, p) in [(&a_req, "wrun1", &a), (&b_req, "wrun2-other", &b)] {
+        let chat = req.context.cos_chat.as_ref().expect("chat");
+        let task_id = req.task.id.to_string();
+        for value in [
+            chat.thread_id.as_str(),
+            chat.run_id.as_str(),
+            run,
+            task_id.as_str(),
+        ] {
+            assert!(!p.core.contains(value), "Core contains {value}");
+        }
+        for input in &chat.inputs {
+            assert!(!p.core.contains(&format!("seq {}", input.seq)));
+            assert!(!p.core.contains(&input.id));
+            assert!(!p.core.contains(&input.text));
+        }
+    }
+    assert!(!a.core.contains("2026-10-08T09"), "no run date in the Core");
+    // No clock time (`HH:MM`) of any run: the inbox item's and the transient task's dates stay out.
+    let b = a.core.as_bytes();
+    assert!(
+        !b.windows(5).any(|w| w[0].is_ascii_digit()
+            && w[1].is_ascii_digit()
+            && w[2] == b':'
+            && w[3].is_ascii_digit()
+            && w[4].is_ascii_digit()),
+        "{}",
+        a.core
+    );
+    assert!(
+        a.core.len() <= 6000,
+        "Core is {} bytes\n{}",
+        a.core.len(),
+        a.core
+    );
+    // The Core's only parameters are the API base URL and the credential's variable name.
+    let mut c = chat();
+    c.api_base_url = "http://127.0.0.1:9999/api/v1".into();
+    c.credential_env = "OTHER_TOKEN".into();
+    let moved = super::core(&c);
+    assert!(moved.contains("http://127.0.0.1:9999/api/v1/cos/operations"));
+    assert!(moved.contains("`$OTHER_TOKEN`"));
+    assert_ne!(moved, a.core);
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: the run specific part keeps every value the run needs.
+#[test]
+fn cos_chat_core_variable_part_keeps_every_run_value() {
+    let mut c = chat();
+    c.inbox_items = vec![inbox_item("2026-10-07T00:00:00.000Z")];
+    let req = request(Path::new("/tmp/ws"), Some(c));
+    let p = parts(&req);
+    let v = &p.variable;
+    let task_id = req.task.id.to_string();
+    for needle in [
+        "# CoS chat: thread thr1\n",
+        "- `<thread id>` = `thr1`",
+        "- `<chat run id>` = `crun1`",
+        "`<through_seq>` = 11、`<expected>` = 2",
+        "worker run `wrun1`",
+        task_id.as_str(),
+        "### seq 10 (message m10) 【割り込み】",
+        "止めてこれを先に",
+        "### seq 11 (message m11)",
+        "添付: a1",
+        "## これまでの要約 (summary through seq 2)\n決定: X を採用",
+        "## 要約未作成の範囲 (seq 3..=9)",
+        "- seq 8 [assistant] m8: 八",
+        "このプロンプトに載せていない範囲: seq 3..=5, seq 7, seq 9。",
+        "item i1 [CoS 未処理] question: 「確認」",
+        "2026-10-07T00:00:00.000Z",
+        "回答の経路: POST /api/v1/inbox/items/q1/answer",
+        "delivery=image path=`/ws/attachments/a1/screen.png`",
+        "delivery=file path=`/ws/attachments/a2/spec.pdf`",
+        "`cos-operator`、`cos-inbox-triage`",
+    ] {
+        assert!(v.contains(needle), "variable part lacks {needle:?}:\n{v}");
+    }
+    // Nothing of the Core is repeated in the run specific part.
+    assert!(!v.contains("# CoS chat Core"));
+    assert!(!v.contains("## 要約の保存"));
+    assert!(!v.contains("## 成果物の置き場所"));
+    // The single input of the other harnesses is exactly the Core followed by the rest.
+    assert_eq!(prompt(&req), format!("{}{}", p.core, p.variable));
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: codex gets the Core as `-c developer_instructions=<TOML
+/// string>`; the value parses back to the same bytes.
+#[test]
+fn cos_chat_core_codex_developer_instructions_round_trip() {
+    let core = super::core(&chat());
+    let arg = crate::codex::cos_chat_developer_instructions(&core);
+    let (key, value) = arg.split_once('=').expect("key=value");
+    assert_eq!(key, "developer_instructions");
+    let parsed: toml::Table = toml::from_str(&format!("v = {value}")).expect("TOML string");
+    assert_eq!(parsed["v"].as_str(), Some(core.as_str()));
+}
+
+/// ADR 2026-10-08-cos-chat-prompt-cache D6: acp / pi put the Core first, then the skill list, then the
+/// run specific part, so two runs share at least the Core as a prefix.
+#[test]
+fn cos_chat_core_acp_pi_input_starts_with_the_core() {
+    let a_req = request(Path::new("/tmp/ws"), Some(chat()));
+    let b_req = request(Path::new("/tmp/ws"), Some(other_chat()));
+    let a = crate::claude_code::build_prompt_with_skill_list(
+        &a_req.task,
+        &a_req.context,
+        "wrun1",
+        "artifacts",
+    );
+    let b = crate::claude_code::build_prompt_with_skill_list(
+        &b_req.task,
+        &b_req.context,
+        "wrun2",
+        "artifacts",
+    );
+    let core = super::core(&chat());
+    assert!(a.starts_with(&core) && b.starts_with(&core));
+    let shared = a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count();
+    assert!(shared >= core.len(), "{shared} < {}", core.len());
 }

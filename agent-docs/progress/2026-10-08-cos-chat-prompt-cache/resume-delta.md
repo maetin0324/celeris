@@ -46,6 +46,13 @@ updated: 2026-10-08
 - `cargo test -p task-worker cos_chat`: exit 0 — 51 passed。
 - `cargo clippy --workspace -- -D warnings`: exit 0。
 
+**WU check 不合格の再確認と修正**（2026-10-08、retry）:
+- 前 run の事後 check `sh scripts/dev/check-doc-links.sh && sh scripts/dev/progress-index.sh --check` が exit 1 で不合格（stdout: `check-doc-links: ok`、stderr: `agent-docs/progress/2026-10-08-work-unit-scope-snapshot.md:1: front matter（--- で囲んだ title, tasks, status, updated）が無い`）。
+- 原因: 本 WU 由来ではない。main の bb03f5a0（WU 開始時 snapshot task）が追加した `agent-docs/progress/2026-10-08-work-unit-scope-snapshot.md` が `# title` 行を `---` fence の前に置き、`title`・`status`・`updated` 欄も無く、`progress-index.sh --check` の front matter 規則（1 行目が `---` で始まり `title, tasks, status, updated` を含む fence）に違反していた。check は全 progress file を見るため、本 WU の成果とは無関係に不合格になる。
+- 修正: 当該 file の front matter を同ディレクトリの他 file と同じ fenced 形（`title`・`tasks`・`status: done`・`updated: 2026-10-08`）に整形し title 行を fence 後に移した（本文・リンクは不変、commit 02f25686）。
+- 再検証: `sh scripts/dev/check-doc-links.sh && sh scripts/dev/progress-index.sh --check`: exit 0（`check-doc-links: ok`・`progress-index --check: ok`）。
+- 上記の 3 crate の試験件数・exit code は再 run でも不変（`cargo test -p task-dispatch -p task-core -p task-worker cos_chat_resume_delta` exit 0、全 11 件 / `cargo test -p task-worker cos_chat` exit 0 / `cargo clippy --workspace -- -D warnings` exit 0）。
+
 ## 未解決事項
 - 非 cache input（`Usage.input_tokens`）では改善が無い（claude-code は prompt が cache write に入るので構造上ほぼ一定）。判定指標の扱いは 2026-10-08 の人の決定（上の「人の決定」節）で (a) に決まった。
 - 計測中、CoS は checkpoint を書かず summary は空だった（既知の不具合 4）。summary がある thread の効果は未計測。

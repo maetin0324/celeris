@@ -20,11 +20,12 @@ tasks: [01M4CH1MPV1KB69SYKXS79E0SP]
 - `cargo clippy --workspace -- -D warnings` → exit 0。
 - `cargo test -p celerisctl browser_ledger_release_` → exit 0、7 passed。
 - `cargo test -p celeris browser_ledger_release_` → exit 0、3 passed。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/check-adr-numbers.sh && sh scripts/dev/progress-index.sh --check` → exit 0。
 - `sh scripts/selfdeploy/tests/browser_ledger_release_stages.sh` → exit 0（1 本）。未配置・古い version・配置済み・生成器失敗でも release が落ちないことを fake と一時 dir で確認。
 
 ## 未解決
 - 本番の台帳生成は人が release（または `browser-ledger.sh`）で回す。実 agent-browser・実 LLM での生成は未実施。
-- D1.5 の docs/ops 手順は preflight 葉の担当。
+- D1.5 の docs/ops 手順: `docs/ops/browser-prod.md` を台帳の作り直し手順だけで新設（task-core の案内文が参照していて doc-links 検査が落ちたため）。site policy・credential の節は preflight 葉が追記する。
 - 実装の不足は見つからなかった。
 
 ## 提案

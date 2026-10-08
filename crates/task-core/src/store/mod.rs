@@ -98,6 +98,7 @@ use crate::transition::{InvalidTransition, Trigger};
 
 mod approvals;
 mod behind_targets;
+mod browser_policy_auto;
 mod cluster;
 mod events;
 mod execution;

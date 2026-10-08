@@ -336,7 +336,7 @@ impl SqliteStore {
 
     /// `task_id` の最後の `Event::Transitioned` の `reason`。無ければ `None`。Phase 31 が「`cancelled` が
     /// `dependency_failed` 由来か」を見分けるのに使う。
-    pub(super) fn last_transitioned_reason_tx(
+    pub(crate) fn last_transitioned_reason_tx(
         tx: &Connection,
         task_id: TaskId,
     ) -> Result<Option<String>, StoreError> {

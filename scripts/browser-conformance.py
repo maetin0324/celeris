@@ -18,6 +18,7 @@ import signal
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 BACKENDS = ("acp", "claude-code", "browser-specialist")
 CASES = (
@@ -179,11 +180,43 @@ P4B_H3_TESTS = (
     "injected_leak_is_caught_by_the_same_scanner",
 )
 
+AGENT_BROWSER_VERSION = "0.38.1"
+CONFORMANCE_FIXTURE = "p4c-local-v1"
+
+
+def write_ledger(output, results, *, source="celeris-browser-conformance", generated_for=None):
+    """Atomically write the schema-1 conformance ledger and optional release provenance."""
+    ledger = {"schema": 1, "source": source, "results": results}
+    if generated_for is not None:
+        ledger["generated_for"] = generated_for
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
+    temporary = output / "conformance.json.next"
+    temporary.write_text(json.dumps(ledger, indent=2) + "\n")
+    temporary.replace(output / "conformance.json")
+    return output / "conformance.json"
+
+
+def release_provenance(release, celeris_sha=None, *, generated_at=None):
+    """Build the generated_for object shared with task-worker's GeneratedFor type."""
+    generated_at = generated_at or datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    provenance = {
+        "celeris_release": release,
+        "agent_browser": AGENT_BROWSER_VERSION,
+        "fixture": CONFORMANCE_FIXTURE,
+        "generated_at": generated_at,
+    }
+    if celeris_sha is not None:
+        provenance["celeris_sha"] = celeris_sha
+    return provenance
+
 
 def p4b_evidence(ledger_path, backends, output):
     """Run the real attack matrix and H3 e2e, then add their per-test results to a measured
     ledger. The P4-B cases enter `passed` only when every required test passed; otherwise the
     evidence is kept with its failed/not_run outcome and the cases stay out (fail closed)."""
+    output = Path(output)
+    output.mkdir(parents=True, exist_ok=True)
     manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
     ledger = json.loads(Path(ledger_path).read_text())
     if ledger.get("schema") != 1 or ledger.get("source") != "celeris-browser-conformance":
@@ -224,9 +257,9 @@ def p4b_evidence(ledger_path, backends, output):
         if complete:
             passed |= {"injection_attack_suite", "auth_section_observation_stop"}
         result["passed"] = sorted(passed)
-    temporary = output / "conformance.json.tmp"
-    temporary.write_text(json.dumps(ledger, indent=2) + "\n")
-    temporary.replace(output / "conformance.json")
+    # Preserve provenance from the original P4-C run while updating evidence.
+    write_ledger(output, ledger["results"], source=ledger["source"],
+                 generated_for=ledger.get("generated_for"))
     print(json.dumps({"record": str(output / "conformance.json"), "p4b_complete": complete,
                       "evidence": evidence}))
     return 0 if complete else 1
@@ -239,6 +272,8 @@ def main():
     parser.add_argument("--p4b-backend", action="append", default=[],
                         help="backend id that receives the P4-B evidence (repeatable)")
     parser.add_argument("--agent-browser", default="agent-browser")
+    parser.add_argument("--celeris-release", help="release sha12 this conformance ledger certifies")
+    parser.add_argument("--celeris-sha", help="full 40-character Celeris commit SHA")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--backend-command", action="append", default=[],
                         help='ID=["command","arg",...] (one per backend)')
@@ -250,6 +285,14 @@ def main():
                         help="after protocol conformance, exercise worker fallback with the real browser")
     parser.add_argument("--drive", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.celeris_sha and not re.fullmatch(r"[0-9a-fA-F]{40}", args.celeris_sha):
+        parser.error("--celeris-sha must be a 40-character hexadecimal SHA")
+    if args.celeris_release and not re.fullmatch(r"[0-9a-fA-F]{12}", args.celeris_release):
+        parser.error("--celeris-release must be a 12-character hexadecimal SHA")
+    if args.celeris_sha and not args.celeris_release:
+        parser.error("--celeris-sha requires --celeris-release")
+    if args.p4b_evidence and (args.celeris_release or args.celeris_sha):
+        parser.error("--celeris-release/--celeris-sha apply only when generating a conformance ledger")
     if args.drive:
         return drive()
     if args.p4b_evidence:
@@ -310,9 +353,10 @@ def main():
         # Legacy direct-scripted mode skips harness protocols. The worker deliberately
         # refuses its ledger as backend certification.
         source = "celeris-browser-conformance-scripted" if args.scripted else "celeris-browser-conformance"
-        ledger = {"schema": 1, "source": source, "results": results}
-        temporary = output / "conformance.json.next"
-        temporary.write_text(json.dumps(ledger, indent=2) + "\n")
+        generated_for = (release_provenance(args.celeris_release, args.celeris_sha)
+                         if args.celeris_release else None)
+        ledger_path = write_ledger(output, results, source=source, generated_for=generated_for)
+        temporary = output / "conformance.json"
         if args.protocol_scripted and all(run["accepted"] for run in comparison):
             env = os.environ.copy()
             env["CELERIS_BROWSER_CONFORMANCE_FILE"] = str(temporary)
@@ -361,9 +405,8 @@ def main():
                     temporary.unlink()
                     print("fallback completion not observed by fixture", file=sys.stderr)
                     return 1
-        temporary.replace(output / "conformance.json")
         (output / "same-task.json").write_text(json.dumps(comparison, indent=2) + "\n")
-        print(json.dumps({"record": str(output / "conformance.json"), "comparison": comparison}))
+        print(json.dumps({"record": str(ledger_path), "comparison": comparison}))
         return 0 if all(run["accepted"] for run in comparison) else 1
     finally:
         server.shutdown()

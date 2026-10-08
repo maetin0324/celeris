@@ -24,7 +24,7 @@ use std::sync::Arc;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSession, ChatSessionKey,
-    ChatStatusPhase,
+    ChatSessionUsage, ChatStatusPhase,
 };
 use task_worker::adapter::{AdapterError, RunLimits, RunOutcome, Terminal, WorkerAdapter};
 use task_worker::protocol::{CosChatHistory, CosChatHistoryMessage, RunRequest, SessionHandle};
@@ -227,12 +227,28 @@ pub(crate) fn history_since_summary(
     ))
 }
 
-/// run の usage（input+output）。session の `approx_tokens` に積む（rollover_tokens の材料）。
-pub(crate) fn usage_tokens(outcome: &Result<RunOutcome, AdapterError>) -> i64 {
-    let usage = outcome_usage(outcome);
-    usage
-        .map(|u| u.input_tokens.unwrap_or(0) + u.output_tokens.unwrap_or(0))
-        .map_or(0, |t| i64::try_from(t).unwrap_or(i64::MAX))
+/// run の usage から session 行へ足す値。`add_tokens` は従来どおり `input+output`（占有が取れない
+/// harness の fallback）、`billed_input` は `input+cache_read+cache_creation` の run 合算（課金相当の
+/// 入力。判定に使わない）、`context_tokens` は最後の API 呼び出しの占有（取れた時だけ。rollover の判定値）。
+pub(crate) fn session_usage(outcome: &Result<RunOutcome, AdapterError>) -> ChatSessionUsage {
+    let to_i64 = |t: u64| i64::try_from(t).unwrap_or(i64::MAX);
+    let Some(u) = outcome_usage(outcome) else {
+        return ChatSessionUsage::default();
+    };
+    ChatSessionUsage {
+        add_tokens: to_i64(
+            u.input_tokens
+                .unwrap_or(0)
+                .saturating_add(u.output_tokens.unwrap_or(0)),
+        ),
+        billed_input: to_i64(
+            u.input_tokens
+                .unwrap_or(0)
+                .saturating_add(u.cache_read_tokens.unwrap_or(0))
+                .saturating_add(u.cache_creation_tokens.unwrap_or(0)),
+        ),
+        context_tokens: u.context_tokens.map(to_i64),
+    }
 }
 
 fn outcome_usage(outcome: &Result<RunOutcome, AdapterError>) -> Option<task_core::Usage> {
@@ -264,7 +280,7 @@ fn record_attempt(
     {
         tracing::warn!(%error, %run_id, "CoS session id was not saved");
     }
-    if let Err(error) = store.chat_session_touch(session_row_id, usage_tokens(outcome), now) {
+    if let Err(error) = store.chat_session_touch(session_row_id, session_usage(outcome), now) {
         tracing::warn!(%error, %run_id, "CoS session usage was not saved");
     }
 }

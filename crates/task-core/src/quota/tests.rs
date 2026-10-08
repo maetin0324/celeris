@@ -20,6 +20,7 @@ fn weighted_tokens_applies_the_formula() {
         cost_usd: None,
         duplicate_reads: None,
         session_resumed: None,
+        context_tokens: None,
     };
     // 100 + 0.1*1000 + 1.25*40 + 5*10 = 100 + 100 + 50 + 50 = 300
     let w = weighted_tokens(&usage, 5.0);

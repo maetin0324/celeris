@@ -176,6 +176,7 @@ fn run(
                 cost_usd: Some(cost),
                 duplicate_reads: None,
                 session_resumed: None,
+                context_tokens: None,
             }),
             metrics: None,
             started_at: start.to_string(),

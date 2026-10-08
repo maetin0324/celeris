@@ -780,6 +780,11 @@ pub struct Usage {
     /// 拒否されなかった）。session を扱わない adapter は `None`。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_resumed: Option<bool>,
+    /// ADR 2026-10-05 cos-chat-home 付記（rollover の会計）: run 内の**最後の** API 呼び出しの
+    /// `input + cache_read + cache_creation`（= その時点の context 占有）。`input_tokens` 等は run 内の
+    /// 全呼び出しの合算なので context 長ではない。取れない harness は `None`（rollover は累積へ fallback）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_tokens: Option<u64>,
 }
 
 /// ADR-0061（Phase 104）: `Event::WorkerFinished` に添える run 単位のメトリクス。

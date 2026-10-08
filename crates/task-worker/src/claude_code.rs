@@ -250,6 +250,9 @@ struct ExplorationTracker {
     session_resumed: bool,
     seen: std::collections::BTreeSet<String>,
     duplicates: u32,
+    /// 最後に観測した main thread の assistant message の `input + cache_read + cache_creation`
+    /// （context 占有。`result.usage` は run 内の合算なので占有にならない）。
+    last_context: Option<u64>,
 }
 
 impl ExplorationTracker {
@@ -317,6 +320,31 @@ impl ExplorationTracker {
     fn annotate(&self, usage: &mut Usage) {
         usage.duplicate_reads = Some(self.duplicates);
         usage.session_resumed = Some(self.session_resumed);
+        usage.context_tokens = self.last_context;
+    }
+
+    /// `assistant` 行の `message.usage` から context 占有を更新する。sub-agent の行
+    /// （`parent_tool_use_id` が非 null）は別 context なので数えない。
+    fn observe_assistant_usage(&mut self, line: &serde_json::Value) {
+        if line.get("parent_tool_use_id").is_some_and(|v| !v.is_null()) {
+            return;
+        }
+        let Some(u) = line.pointer("/message/usage") else {
+            return;
+        };
+        let field = |k: &str| u.get(k).and_then(|v| v.as_u64());
+        let (input, read, create) = (
+            field("input_tokens"),
+            field("cache_read_input_tokens"),
+            field("cache_creation_input_tokens"),
+        );
+        if input.is_none() && read.is_none() && create.is_none() {
+            return;
+        }
+        let total = input.unwrap_or(0) + read.unwrap_or(0) + create.unwrap_or(0);
+        if total > 0 {
+            self.last_context = Some(total);
+        }
     }
 }
 
@@ -1043,6 +1071,7 @@ fn handle_line_for_run(
         // （`tool_use: <名前> <入力>` / 本文そのまま）で、構造化フィールドを**足すだけ**。
         // 本文（`text`）は 1 つの assistant メッセージ分をまとめて 1 件にする。
         "assistant" => {
+            exploration.observe_assistant_usage(&value);
             if let Some(content) = value.pointer("/message/content").and_then(|c| c.as_array()) {
                 let mut texts: Vec<&str> = Vec::new();
                 let flush = |texts: &mut Vec<&str>, sink: &dyn EventSink| {
@@ -1147,6 +1176,7 @@ fn handle_line_for_run(
                 cost_usd: None,
                 duplicate_reads: None,
                 session_resumed: None,
+                context_tokens: None,
             });
             // ADR-0140 D4: 再探索の重複と resume の印は usage に同乗させる（usage の無い result には付けない）。
             if let Some(usage) = usage.as_mut() {

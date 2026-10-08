@@ -667,7 +667,7 @@ async fn kill_and_classify(
 
 /// Phase B（セッションが存在する状態）で run を終えるときの生データ。
 enum RawOutcome {
-    TimedOut(Terminal),
+    TimedOut(Box<Terminal>),
     Eof {
         context: &'static str,
     },
@@ -730,7 +730,7 @@ async fn finish_run(
 
     let (terminal, provider_failure): (Terminal, Option<ProviderFailure>) = match outcome {
         // タイムアウトは分類しない（ADR-0010 D5 と同じ方針）。
-        RawOutcome::TimedOut(t) => (t, None),
+        RawOutcome::TimedOut(t) => (*t, None),
         RawOutcome::Eof { context } => {
             let exit_repr = match exit_status.code() {
                 Some(code) => code.to_string(),
@@ -1445,7 +1445,7 @@ async fn run_acp(
                             &artifacts_rel,
                             &stderr_log_path,
                             sink,
-                            RawOutcome::TimedOut(*terminal),
+                            RawOutcome::TimedOut(terminal),
                             run_id,
                         )
                         .await;
@@ -1540,7 +1540,7 @@ async fn run_acp(
     chunks.flush(sink);
 
     let outcome = match prompt_wait {
-        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(*terminal),
+        WaitOutcome::TimedOut(terminal) => RawOutcome::TimedOut(terminal),
         WaitOutcome::Eof => RawOutcome::Eof {
             context: "session/prompt",
         },

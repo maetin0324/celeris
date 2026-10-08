@@ -117,8 +117,28 @@ fn cos_chat_run_session_touch_set_id_and_summary_watermark() {
         s.chat_session_set_id(&row.id, "thread-abc")
             .expect("set id")
     );
-    assert!(s.chat_session_touch(&row.id, 1200, at(5)).expect("touch"));
-    assert!(s.chat_session_touch(&row.id, -5, at(6)).expect("touch"));
+    assert!(
+        s.chat_session_touch(
+            &row.id,
+            ChatSessionUsage {
+                add_tokens: 1200,
+                ..Default::default()
+            },
+            at(5)
+        )
+        .expect("touch")
+    );
+    assert!(
+        s.chat_session_touch(
+            &row.id,
+            ChatSessionUsage {
+                add_tokens: -5,
+                ..Default::default()
+            },
+            at(6)
+        )
+        .expect("touch")
+    );
     assert!(s.chat_session_set_summary_through(&row.id, 7).expect("wm"));
     assert!(s.chat_session_set_summary_through(&row.id, 3).expect("wm"));
     let got = s.chat_session_active(&t).expect("active").expect("live");
@@ -130,8 +150,15 @@ fn cos_chat_run_session_touch_set_id_and_summary_watermark() {
 
     s.chat_session_retire(&t, at(7)).expect("retire");
     assert!(
-        !s.chat_session_touch(&row.id, 1, at(8))
-            .expect("touch retired")
+        !s.chat_session_touch(
+            &row.id,
+            ChatSessionUsage {
+                add_tokens: 1,
+                ..Default::default()
+            },
+            at(8)
+        )
+        .expect("touch retired")
     );
     assert!(!s.chat_session_set_id(&row.id, "x").expect("set id retired"));
 }
@@ -334,4 +361,32 @@ fn cos_chat_usage_store_unknown_metrics_and_idempotent_finish() {
     let other = thread(&s, "other");
     assert!(s.chat_run_get(&other, "run").is_err());
     assert!(s.chat_run_list(&other, Some("run"), Some(1)).is_err());
+}
+
+#[test]
+fn cos_chat_run_session_touch_separates_occupancy_from_cumulative() {
+    let s = SqliteStore::open_in_memory().expect("store");
+    let t = thread(&s, "t1");
+    let row = ChatSession::new(key(&t), "", at(1));
+    s.chat_session_rotate(&row, at(1)).expect("create");
+    let usage = |add, billed, ctx| ChatSessionUsage {
+        add_tokens: add,
+        billed_input: billed,
+        context_tokens: ctx,
+    };
+    s.chat_session_touch(&row.id, usage(15, 600, Some(600)), at(2))
+        .expect("touch");
+    s.chat_session_touch(&row.id, usage(15, 400, Some(400)), at(3))
+        .expect("touch");
+    let got = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(got.approx_tokens, 30);
+    assert_eq!(got.billed_input_tokens, 1000);
+    // Occupancy is replaced by the latest observation, not summed.
+    assert_eq!(got.last_context_tokens, Some(400));
+    // A run that reports no occupancy keeps the last known one.
+    s.chat_session_touch(&row.id, usage(5, 50, None), at(4))
+        .expect("touch");
+    let got = s.chat_session_active(&t).expect("active").expect("live");
+    assert_eq!(got.last_context_tokens, Some(400));
+    assert_eq!(got.approx_tokens, 35);
 }

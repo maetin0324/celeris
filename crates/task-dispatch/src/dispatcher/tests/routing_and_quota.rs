@@ -1830,6 +1830,7 @@ async fn planner_and_reviewer_runs_emit_quota_estimates() {
                         cost_usd: None,
                         duplicate_reads: None,
                         session_resumed: None,
+                        context_tokens: None,
                     }),
                 },
                 exit_code: Some(0),

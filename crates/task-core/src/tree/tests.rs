@@ -659,6 +659,7 @@ fn run(task: TaskId, role: RunIndexRole, tokens: (u64, u64), cost: Option<f64>) 
             cost_usd: cost,
             duplicate_reads: None,
             session_resumed: None,
+            context_tokens: None,
         }),
         metrics: None,
         started_at: String::new(),

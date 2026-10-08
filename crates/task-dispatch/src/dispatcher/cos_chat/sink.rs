@@ -247,6 +247,8 @@ impl ChatRunSink {
                 u32::saturating_add,
             ),
             session_resumed: usage.session_resumed,
+            // 占有は最後の観測（合算しない）。
+            context_tokens: usage.context_tokens.or(old.context_tokens),
         });
     }
 

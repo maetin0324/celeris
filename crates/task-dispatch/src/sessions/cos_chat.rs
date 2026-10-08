@@ -18,7 +18,7 @@ pub enum CosChatRetireReason {
     CacheMissing,
     /// 前回の run で harness が resume を拒否した。
     ResumeRefused,
-    /// `approx_tokens` が `[sessions] rollover_tokens` に達した。
+    /// context 占有（[`rollover_measure`]）が `[sessions] rollover_tokens` に達した。
     TokenRollover,
     /// 前回の run で harness が context の枯渇を報告した。
     ContextExhausted,
@@ -88,6 +88,17 @@ pub struct CosChatSessionFacts<'a> {
     pub rollover_tokens: u64,
 }
 
+/// rollover 判定に使う値（ADR 2026-10-05-cos-chat-home 付記）。最後に観測した context 占有
+/// （`last_context_tokens` = 最後の API 呼び出しの `input+cache_read+cache_creation`）を使う。
+/// 占有を報告しない harness・0061 以前の行（`None`）は従来の `approx_tokens`（`input+output` の累積）へ
+/// fallback する。cache token を累積して context 長とみなすことはしない。
+pub fn rollover_measure(stored: &ChatSession) -> u64 {
+    stored
+        .last_context_tokens
+        .unwrap_or(stored.approx_tokens)
+        .max(0) as u64
+}
+
 /// 上から順に見る: 現役なし → New、key 変更 → 前回の拒否 → cache 消失・不正 id → context 枯渇 →
 /// token 超過 → Resume。
 pub fn decide_cos_chat_session(f: &CosChatSessionFacts<'_>) -> CosChatSessionDecision {
@@ -110,7 +121,7 @@ pub fn decide_cos_chat_session(f: &CosChatSessionFacts<'_>) -> CosChatSessionDec
     if f.context_exhausted {
         return D::Retire(R::ContextExhausted);
     }
-    if stored.approx_tokens.max(0) as u64 >= f.rollover_tokens {
+    if rollover_measure(stored) >= f.rollover_tokens {
         return D::Retire(R::TokenRollover);
     }
     D::Resume

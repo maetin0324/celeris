@@ -188,6 +188,7 @@ fn runs_include_reviewer_runs_with_role() {
                 cost_usd: None,
                 duplicate_reads: None,
                 session_resumed: None,
+                context_tokens: None,
             }),
             role: Some(RunRole::Reviewer),
             metrics: None,

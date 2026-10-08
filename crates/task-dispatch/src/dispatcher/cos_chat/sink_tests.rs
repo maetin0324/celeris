@@ -573,6 +573,7 @@ fn cos_chat_usage_fixed_clock_skill_count_latency_retry_and_terminal_event() {
         cache_creation_tokens: Some(3),
         duplicate_reads: Some(1),
         session_resumed: Some(true),
+        context_tokens: None,
     }));
     let retry = ChatRunSink::new(
         f.store.clone(),
@@ -590,6 +591,7 @@ fn cos_chat_usage_fixed_clock_skill_count_latency_retry_and_terminal_event() {
         cache_creation_tokens: Some(1),
         duplicate_reads: Some(2),
         session_resumed: Some(false),
+        context_tokens: None,
     }));
     let finish = ChatFinish {
         state: ChatRunState::Completed,

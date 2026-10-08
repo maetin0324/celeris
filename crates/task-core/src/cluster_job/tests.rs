@@ -410,6 +410,8 @@ fn migration_0034_adds_cluster_job_waits_to_a_schema_33_db() {
              ALTER TABLE deliveries DROP COLUMN reviewed_sha; \
              ALTER TABLE deliveries DROP COLUMN merge_candidate_sha; \
              DROP INDEX idx_node_sessions_work_unit_active; \
+             ALTER TABLE node_sessions DROP COLUMN last_context_tokens; \
+             ALTER TABLE node_sessions DROP COLUMN billed_input_tokens; \
              ALTER TABLE node_sessions DROP COLUMN task_id; \
              ALTER TABLE node_sessions DROP COLUMN work_unit_id; \
              ALTER TABLE node_sessions DROP COLUMN provider; \

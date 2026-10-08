@@ -478,3 +478,30 @@ close-out 2 付記で実機 FAIL だった D1〜D4（(d)(e) 未達の原因）�
 - **D4（takeover）**: 原因は `ChatRunSink::write` が Conflict を終端と誤読したことで、終端 run を takeover しない。実機: triage thread の `chat_runs` は 1 件、takeover/orphan は 0 件。
 - 統合後 HEAD で `bash scripts/dev/test-parallel.sh`（4660 passed / 0 failed / 14 ignored）・`cargo clippy --workspace -- -D warnings`・文書検査が exit 0。gui-api の節番号は 3.127〜3.131 で重複が解消済み。
 - 未解決（実装は変えていない。進捗の提案節）: 不具合 4（`summary_through_seq` が 0 のまま）、5（provider に model が無いと実効 model が null）、台本の残り（knowledge init・project fixture・LEFTOVER の誤報・FAIL でも exit 0）、`attachment_pin_rules` の前置きが旧手順のまま。
+
+## 付記: rollover の token 会計を context 占有へ是正（cos-chat-prompt-cache T4、2026-10-08）
+
+仮説 H4（`agent-docs/adr/2026-10-08-cos-chat-prompt-cache.md`）: 従来の `usage_tokens` は `input+output` を `node_sessions.approx_tokens` に**累積**して `[sessions] rollover_tokens` と比べていた。この値は (a) cache_read/cache_creation を含まず、(b) 1 run 内の全 API 呼び出しの合算なので、その時点の context 長とも課金相当の入力とも一致しない（cache 中心の run で大きく過小評価する）。
+
+### D1 占有が取れるか（harness 別）
+
+- **claude-code: 取れる。** `result.usage` は run 内の全 API 呼び出しの合算（占有にならない）。一方 stream-json の各 `assistant` 行の `message.usage`（`input_tokens`・`cache_read_input_tokens`・`cache_creation_input_tokens`）はその 1 呼び出しの値なので、**最後の main thread の assistant 行**の 3 値の和が、その run の終わりの context 占有。sub-agent の行（`parent_tool_use_id` が非 null）は別 context なので数えない。`ExplorationTracker::observe_assistant_usage` が観測し、`annotate` が `result.usage.context_tokens` に載せる。
+- **pi: 取れる。** `message_end` の assistant message の `usage.input + cacheRead + cacheWrite` の最後の値（`PiStream`）。
+- **codex: 取れない（None）。** `turn.completed.usage` は turn 合算で呼び出し単位の値が無い（`cached_input_tokens` は input の内数）。**acp / aider も None。** 実機で確認していないので、これらが占有を持つかは「不明」。
+- 取れない場合は D3 の fallback。
+
+### D2 保存と判定
+
+- `Usage.context_tokens: Option<u64>`（追加のみ。省略可）。API schema・gui/web 生成型に反映。
+- migration 0061（schema 61）で `node_sessions` に `last_context_tokens INTEGER NULL`（最後に観測した占有。**置き換え**で保存、累積しない。占有を報告しない run は直前の値を残す）と `billed_input_tokens INTEGER NOT NULL DEFAULT 0`（run ごとの `input+cache_read+cache_creation` の累積＝課金相当の入力。**情報用で判定に使わない**）を足す。`approx_tokens` は従来の `input+output` 累積のまま残す。
+- CoS chat の rollover 判定は `rollover_measure(session) = last_context_tokens ?? approx_tokens` が `rollover_tokens` 以上なら次 run を fresh（`token_rollover`）。cache token を累積して context 長とみなさない。
+- **config 名 `[sessions] rollover_tokens` は保つ**（既定 400,000）。意味は「CoS chat では context 占有の閾値」（`crates/celeris/src/config/dispatch.rs` の注釈に明記）。WU・review の継続セッション（`sessions.rs`）は従来どおり `approx_tokens` の累計で、挙動を変えない。
+
+### D3 互換と fallback
+
+- 既存行（0061 以前）は `last_context_tokens = NULL` なので `approx_tokens` で判定し、従来と同じ結果になる。旧い run の usage（`context_tokens` 欠落）も同じ。
+- 占有を報告しない harness（codex・acp・aider）は、`last_context_tokens` が NULL のまま `approx_tokens`（`input+output` の累積）へ fallback する。この場合は従来どおり cache を含まない過小評価が残る（cache 込みの値が取れないので、是正できない）。
+
+### 試験
+
+`cos_chat_run_rollover_measure_prefers_context_occupancy`・`…_falls_back_for_legacy_rows`（`sessions/cos_chat/tests.rs`）、`cos_chat_run_session_touch_separates_occupancy_from_cumulative`（task-core）、`cos_chat_run_rollover_cache_heavy_run_is_not_underestimated`・`…_occupancy_is_replaced_not_accumulated`・`…_unknown_occupancy_falls_back_to_cumulative`（dispatcher 結合）、`context_tokens_is_last_main_thread_call_not_result_sum`・`…_unknown_without_assistant_usage`（task-worker）。実機（LLM 呼び出し）での占有の実測は本葉では行っていない（「不明」）。

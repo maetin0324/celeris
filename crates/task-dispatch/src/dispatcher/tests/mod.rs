@@ -402,6 +402,7 @@ impl WorkerAdapter for ReviewerUsageAdapter {
                     cost_usd: Some(0.03),
                     duplicate_reads: None,
                     session_resumed: None,
+                    context_tokens: None,
                 })
             }
             _ => {
@@ -2905,6 +2906,7 @@ fn gate_done_terminal() -> Terminal {
             cost_usd: None,
             duplicate_reads: None,
             session_resumed: None,
+            context_tokens: None,
         }),
     }
 }

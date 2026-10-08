@@ -458,6 +458,116 @@ async fn cos_chat_run_rollover_token_limit_makes_next_run_fresh() {
     );
 }
 
+fn usage_script(usage: &str) -> Vec<String> {
+    script(&format!(
+        "printf '%s\\n' '{{\"type\":\"done\",\"summary\":\"ok\",\"evidence\":[],\"usage\":{usage}}}'"
+    ))
+}
+
+#[tokio::test]
+async fn cos_chat_run_rollover_cache_heavy_run_is_not_underestimated() {
+    // input+output is only 15, but the last call held 600 tokens of context (mostly cache reads).
+    let (dir, store) = open_store();
+    let (_, adapter) = harness(
+        &store,
+        usize::MAX,
+        false,
+        usage_script(
+            "{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":550,\"cache_creation_tokens\":40,\"context_tokens\":600}",
+        ),
+    );
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    d.config.session_rollover_tokens = 500;
+    let t = thread(&store);
+    post(&store, &t, "one");
+    tick_and_join(&mut d, &store, &t).await;
+    let first = store.chat_session_active(&t).expect("s").expect("live");
+    assert_eq!(first.approx_tokens, 15);
+    assert_eq!(first.last_context_tokens, Some(600));
+    assert_eq!(first.billed_input_tokens, 600);
+    post(&store, &t, "two");
+    let second = tick_and_join(&mut d, &store, &t).await;
+    let record = store.chat_run_session_record(&second).expect("record");
+    assert_eq!(record.reason.as_deref(), Some("token_rollover"));
+    assert_ne!(record.session_row_id.as_deref(), Some(first.id.as_str()));
+}
+
+#[tokio::test]
+async fn cos_chat_run_rollover_occupancy_is_replaced_not_accumulated() {
+    // Each run reports 300 of context; cumulative billing grows (300 → 600) but occupancy stays 300,
+    // below the 500 threshold, so the next runs resume.
+    let (dir, store) = open_store();
+    let (_, adapter) = harness(
+        &store,
+        usize::MAX,
+        false,
+        usage_script(
+            "{\"input_tokens\":10,\"output_tokens\":5,\"cache_read_tokens\":290,\"context_tokens\":300}",
+        ),
+    );
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    d.config.session_rollover_tokens = 500;
+    let t = thread(&store);
+    post(&store, &t, "one");
+    tick_and_join(&mut d, &store, &t).await;
+    post(&store, &t, "two");
+    let second = tick_and_join(&mut d, &store, &t).await;
+    let live = store.chat_session_active(&t).expect("s").expect("live");
+    assert_eq!(live.turns, 2);
+    assert_eq!(live.last_context_tokens, Some(300));
+    assert_eq!(live.billed_input_tokens, 600);
+    post(&store, &t, "three");
+    let third = tick_and_join(&mut d, &store, &t).await;
+    for run in [&second, &third] {
+        let record = store.chat_run_session_record(run).expect("record");
+        assert_eq!(
+            record.detail.as_deref(),
+            Some(ChatRunSessionMode::Resumed.as_str())
+        );
+        assert_eq!(record.session_row_id.as_deref(), Some(live.id.as_str()));
+    }
+}
+
+#[tokio::test]
+async fn cos_chat_run_rollover_unknown_occupancy_falls_back_to_cumulative() {
+    // No context_tokens (e.g. codex/aider): approx_tokens (input+output) accumulates as before.
+    let (dir, store) = open_store();
+    let (_, adapter) = harness(
+        &store,
+        usize::MAX,
+        false,
+        usage_script("{\"input_tokens\":40,\"output_tokens\":20,\"cache_read_tokens\":9000}"),
+    );
+    let mut d = fixture(adapter, store.clone(), dir.path());
+    d.config.session_rollover_tokens = 100;
+    let t = thread(&store);
+    post(&store, &t, "one");
+    tick_and_join(&mut d, &store, &t).await;
+    let first = store.chat_session_active(&t).expect("s").expect("live");
+    assert_eq!(first.last_context_tokens, None);
+    assert_eq!(first.approx_tokens, 60);
+    post(&store, &t, "two");
+    let second = tick_and_join(&mut d, &store, &t).await;
+    assert_eq!(
+        store
+            .chat_run_session_record(&second)
+            .expect("record")
+            .detail
+            .as_deref(),
+        Some(ChatRunSessionMode::Resumed.as_str())
+    );
+    post(&store, &t, "three");
+    let third = tick_and_join(&mut d, &store, &t).await;
+    assert_eq!(
+        store
+            .chat_run_session_record(&third)
+            .expect("record")
+            .reason
+            .as_deref(),
+        Some("token_rollover")
+    );
+}
+
 #[tokio::test]
 async fn cos_chat_run_rollover_context_exhaustion_makes_next_run_fresh() {
     let (dir, store) = open_store();

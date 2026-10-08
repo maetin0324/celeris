@@ -616,6 +616,7 @@ async fn cos_chat_usage_api_detail_list_pagination_and_missing_usage() {
                 cost_usd: Some(0.004),
                 duplicate_reads: Some(1),
                 session_resumed: Some(true),
+                context_tokens: None,
             }),
         ),
         ("no-usage-run", None),

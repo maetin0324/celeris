@@ -3104,6 +3104,12 @@ export interface Usage {
    */
   cache_read_tokens?: number | null;
   /**
+   * ADR 2026-10-05 cos-chat-home 付記（rollover の会計）: run 内の**最後の** API 呼び出しの
+   * `input + cache_read + cache_creation`（= その時点の context 占有）。`input_tokens` 等は run 内の
+   * 全呼び出しの合算なので context 長ではない。取れない harness は `None`（rollover は累積へ fallback）。
+   */
+  context_tokens?: number | null;
+  /**
    * `task_core::pricing` の静的単価表から推定した USD（不明なモデル・トークン欠落は `None`）。
    */
   cost_usd?: number | null;

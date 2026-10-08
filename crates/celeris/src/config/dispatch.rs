@@ -11,6 +11,11 @@ use super::{Config, ConfigError, ProviderConfig};
 /// `[sessions]`（ADR-0054 D1。Phase 67）: CoS の対話・部門長のレビュー run の継続セッション
 /// （`node_sessions`）の逼迫判定。`approx_tokens`（run の usage の累計）がこれを超えたら、次の run は
 /// 新しいセッションから始める（要約を前置きに。`preamble::session_diff_section`）。
+///
+/// CoS chat の `rollover_tokens` は **context 占有**の閾値: 最後に観測した 1 API 呼び出しの
+/// `input+cache_read+cache_creation`（置き換えで保存。累積しない）と比べる。占有を報告しない harness と
+/// 既存行は従来どおり `approx_tokens`（`input+output` の累積）と比べる（ADR 2026-10-05-cos-chat-home 付記）。
+/// WU・review の継続セッションは従来どおり `approx_tokens` の累計。
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SessionsConfig {

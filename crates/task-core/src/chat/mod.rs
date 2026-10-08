@@ -31,7 +31,7 @@ pub use run_store::{
 };
 pub use session::{
     COS_CHAT_SESSION_KIND, COS_CHAT_SESSION_NODE, ChatRunSessionMode, ChatRunSessionRecord,
-    ChatSession, ChatSessionKey,
+    ChatSession, ChatSessionKey, ChatSessionUsage,
 };
 pub use store::{
     CHAT_CLIENT_KEY_MAX_BYTES, CHAT_MESSAGE_ATTACHMENTS_MAX, CHAT_MESSAGE_PAGE_DEFAULT,

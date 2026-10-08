@@ -34,6 +34,17 @@ pub struct ChatSessionKey {
     pub model: Option<String>,
 }
 
+/// What one run adds to a session row ([`SqliteStore::chat_session_touch`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ChatSessionUsage {
+    /// Legacy `input+output` (accumulated into `approx_tokens`).
+    pub add_tokens: i64,
+    /// `input+cache_read+cache_creation` of the whole run (accumulated into `billed_input_tokens`).
+    pub billed_input: i64,
+    /// Context occupancy at the run's last API call, if the harness reported it (replaces).
+    pub context_tokens: Option<i64>,
+}
+
 /// A `node_sessions` row of `kind='cos_chat'`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatSession {
@@ -43,7 +54,15 @@ pub struct ChatSession {
     /// until the harness reports it).
     pub session_id: String,
     pub turns: i64,
+    /// Legacy cumulative `input+output` of every run. Only the rollover fallback when
+    /// `last_context_tokens` is unknown (harness reports no context occupancy, or a pre-0061 row).
     pub approx_tokens: i64,
+    /// Context occupancy at the last API call of the latest run that reported one
+    /// (`input+cache_read+cache_creation`; it is replaced, never accumulated). `None` = unknown.
+    pub last_context_tokens: Option<i64>,
+    /// Cumulative billing-equivalent input (`input+cache_read+cache_creation` summed over runs).
+    /// Informational; never compared with `rollover_tokens`.
+    pub billed_input_tokens: i64,
     /// Messages up to this thread seq are covered by the summary the worker wrote.
     pub summary_through_seq: i64,
     pub created_at: OffsetDateTime,
@@ -59,6 +78,8 @@ impl ChatSession {
             session_id: session_id.into(),
             turns: 0,
             approx_tokens: 0,
+            last_context_tokens: None,
+            billed_input_tokens: 0,
             summary_through_seq: 0,
             created_at: now,
             last_used_at: now,
@@ -114,7 +135,7 @@ pub struct ChatRunSessionRecord {
 }
 
 const SELECT: &str = "SELECT id,thread_id,adapter,provider,llm_source,account_id,cwd,model,\
- session_id,turns,approx_tokens,summary_through_seq,created_at,last_used_at,retired_at \
+ session_id,turns,approx_tokens,summary_through_seq,created_at,last_used_at,retired_at,last_context_tokens,billed_input_tokens \
  FROM node_sessions WHERE kind='cos_chat'";
 
 type RawRow = (ChatSession, String, String, Option<String>);
@@ -135,6 +156,8 @@ fn raw(row: &Row<'_>) -> rusqlite::Result<RawRow> {
             session_id: row.get(8)?,
             turns: row.get(9)?,
             approx_tokens: row.get(10)?,
+            last_context_tokens: row.get(15)?,
+            billed_input_tokens: row.get(16)?,
             summary_through_seq: row.get(11)?,
             created_at: OffsetDateTime::UNIX_EPOCH,
             last_used_at: OffsetDateTime::UNIX_EPOCH,
@@ -244,19 +267,29 @@ impl SqliteStore {
         Ok(retired)
     }
 
-    /// After a run: `turns += 1`, `approx_tokens += add_tokens`, `last_used_at = now` on the live
-    /// row `row_id`. A retired or unknown row is left alone (`false`).
+    /// After a run: `turns += 1`, `approx_tokens += usage.add_tokens`, `billed_input_tokens +=
+    /// usage.billed_input`, `last_used_at = now`, and `last_context_tokens` is *replaced* when the
+    /// run observed one (kept otherwise) on the live row `row_id`. A retired or unknown row is left
+    /// alone (`false`).
     pub fn chat_session_touch(
         &self,
         row_id: &str,
-        add_tokens: i64,
+        usage: ChatSessionUsage,
         now: OffsetDateTime,
     ) -> Result<bool, ChatError> {
         let conn = writer(self)?;
         Ok(conn.execute(
             "UPDATE node_sessions SET turns=turns+1,approx_tokens=approx_tokens+?2,\
-             last_used_at=?3 WHERE id=?1 AND kind='cos_chat' AND retired_at IS NULL",
-            params![row_id, add_tokens.max(0), chat_ts(now)],
+             billed_input_tokens=billed_input_tokens+?3,\
+             last_context_tokens=COALESCE(?4,last_context_tokens),\
+             last_used_at=?5 WHERE id=?1 AND kind='cos_chat' AND retired_at IS NULL",
+            params![
+                row_id,
+                usage.add_tokens.max(0),
+                usage.billed_input.max(0),
+                usage.context_tokens.map(|t| t.max(0)),
+                chat_ts(now)
+            ],
         )? > 0)
     }
 

@@ -531,6 +531,13 @@ impl PiStream {
                         &mut total.cache_creation_tokens,
                         usage["cacheWrite"].as_u64(),
                     );
+                    let context: u64 = ["input", "cacheRead", "cacheWrite"]
+                        .iter()
+                        .filter_map(|k| usage[*k].as_u64())
+                        .sum();
+                    if context > 0 {
+                        total.context_tokens = Some(context);
+                    }
                     if let Some(cost) = usage["cost"]["total"]
                         .as_f64()
                         .filter(|n| n.is_finite() && *n >= 0.0)

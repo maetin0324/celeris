@@ -835,6 +835,7 @@ echo '{"type":"result","subtype":"success","is_error":false,"usage":{"input_toke
                     cost_usd: None,
                     duplicate_reads: Some(0),
                     session_resumed: Some(false),
+                    context_tokens: None,
                 })
             );
         }
@@ -4248,4 +4249,44 @@ fn the_review_prompt_lists_recorded_tool_policy_violations() {
     let section = with.find("## Tool policy violations").unwrap();
     let summary = with.find("## Worker's self-reported summary").unwrap();
     assert!(section < summary, "{with}");
+}
+
+fn assistant_usage_line(parent: Option<&str>, input: u64, read: u64, create: u64) -> String {
+    serde_json::json!({
+        "type": "assistant",
+        "parent_tool_use_id": parent,
+        "message": {
+            "content": [{"type": "text", "text": "x"}],
+            "usage": {
+                "input_tokens": input,
+                "cache_read_input_tokens": read,
+                "cache_creation_input_tokens": create,
+                "output_tokens": 7
+            }
+        }
+    })
+    .to_string()
+}
+
+/// ADR 2026-10-05 cos-chat-home 付記: context 占有は**最後の** main thread の assistant message の
+/// `input+cache_read+cache_creation`。`result.usage`（run 合算）は占有にならず、sub-agent の行は数えない。
+#[test]
+fn context_tokens_is_last_main_thread_call_not_result_sum() {
+    let lines = vec![
+        assistant_usage_line(None, 5, 1000, 200),
+        assistant_usage_line(Some("toolu_1"), 1, 9000, 0),
+        assistant_usage_line(None, 3, 1500, 100),
+        r#"{"type":"result","subtype":"success","is_error":false,"usage":{"input_tokens":9,"output_tokens":21,"cache_read_input_tokens":11500,"cache_creation_input_tokens":300}}"#.to_string(),
+    ];
+    let usage = duplicate_reads_after(Path::new("/w"), false, &lines).expect("usage");
+    assert_eq!(usage.context_tokens, Some(1603));
+    assert_eq!(usage.cache_read_tokens, Some(11500));
+}
+
+/// 占有を報告する assistant 行が無ければ `None`（rollover は累積へ fallback）。
+#[test]
+fn context_tokens_unknown_without_assistant_usage() {
+    let lines = vec![result_line()];
+    let usage = duplicate_reads_after(Path::new("/w"), false, &lines).expect("usage");
+    assert_eq!(usage.context_tokens, None);
 }

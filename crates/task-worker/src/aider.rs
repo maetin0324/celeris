@@ -416,6 +416,7 @@ fn parse_aider_usage(stdout: &str) -> Option<Usage> {
         cost_usd: session_cost,
         duplicate_reads: None,
         session_resumed: None,
+        context_tokens: None,
     })
 }
 

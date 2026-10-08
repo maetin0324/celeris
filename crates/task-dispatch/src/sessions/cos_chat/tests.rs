@@ -166,3 +166,43 @@ fn cos_chat_run_session_reason_precedence_is_fixed() {
     f.context_exhausted = false;
     assert_eq!(decide_cos_chat_session(&f).reason(), Some("token_rollover"));
 }
+
+#[test]
+fn cos_chat_run_rollover_measure_prefers_context_occupancy() {
+    let k = key();
+    // Occupancy known: it decides, whatever the cumulative approx_tokens says.
+    let mut s = stored(5000);
+    s.last_context_tokens = Some(999);
+    assert_eq!(rollover_measure(&s), 999);
+    assert_eq!(
+        decide_cos_chat_session(&facts(&k, Some(&s))),
+        CosChatSessionDecision::Resume
+    );
+    s.last_context_tokens = Some(1000);
+    s.approx_tokens = 1;
+    assert_eq!(
+        decide_cos_chat_session(&facts(&k, Some(&s))).reason(),
+        Some("token_rollover")
+    );
+    // The billing-equivalent cumulative input is never compared.
+    s.last_context_tokens = Some(1);
+    s.billed_input_tokens = 1_000_000;
+    assert_eq!(
+        decide_cos_chat_session(&facts(&k, Some(&s))),
+        CosChatSessionDecision::Resume
+    );
+}
+
+#[test]
+fn cos_chat_run_rollover_measure_falls_back_for_legacy_rows() {
+    let k = key();
+    // Pre-0061 row / harness without occupancy: last_context_tokens is None → approx_tokens.
+    let s = stored(1000);
+    assert_eq!(s.last_context_tokens, None);
+    assert_eq!(rollover_measure(&s), 1000);
+    assert_eq!(
+        decide_cos_chat_session(&facts(&k, Some(&s))).reason(),
+        Some("token_rollover")
+    );
+    assert_eq!(rollover_measure(&stored(-5)), 0);
+}

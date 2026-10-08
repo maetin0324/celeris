@@ -330,6 +330,7 @@ fn continuation_metrics_api_groups_task_and_work_unit_runs() {
         cache_read_tokens: Some(2),
         duplicate_reads: Some(3),
         session_resumed: Some(true),
+        context_tokens: None,
         ..Default::default()
     };
     let metrics = task_core::RunMetrics {

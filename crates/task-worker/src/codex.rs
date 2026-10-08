@@ -1265,6 +1265,7 @@ fn handle_line(
                 cost_usd: None,
                 duplicate_reads: None,
                 session_resumed: None,
+                context_tokens: None,
             });
             *last_signal = Some(TurnSignal::Completed { usage });
         }

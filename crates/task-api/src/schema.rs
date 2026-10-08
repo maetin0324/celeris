@@ -272,6 +272,10 @@ pub struct ApiV1Schema {
     pub trusted_device_list: crate::browser_trusted_devices::TrustedDeviceList,
     pub trusted_device_revoke_result: crate::browser_trusted_devices::TrustedDeviceRevokeResult,
     pub trusted_device_claims: crate::browser_trusted_devices::DeviceClaims,
+    /// ADR 2026-10-08-browser-prod-enablement D3: `/browser/site-policies` の本文・応答。
+    pub site_policy_put: crate::browser_site_policies::SitePolicyPutBody,
+    pub site_policy_put_result: crate::browser_site_policies::SitePolicyPutResult,
+    pub site_policy_list: crate::browser_site_policies::SitePolicyList,
     /// ADR-0079 D7（Phase R3a）: `GET /decisions`・`GET /tasks/{id}/decisions` の応答、
     /// `POST /decisions/{id}/answer`・`revise` の本文、`withdraw` の本文、3 つの操作の応答。
     pub decision_list: task_ops::decision::DecisionList,

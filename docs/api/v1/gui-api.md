@@ -281,7 +281,7 @@ listen = "127.0.0.1:7710"      # これを書いたときだけ API が動く（
 
 ---
 
-## 2. エンドポイント一覧（210 = 表 180 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3）
+## 2. エンドポイント一覧（210 = 表 180 + browser 制御 6 + chat 18 + CoS operations 3 + CoS triage 3。site policy の 3 端点は §3.132）
 
 `crates/task-api/src` の `.route(…)` の全パス（146 本）をメソッドごとに 1 行で並べる（174 行。パスは `/api/v1` を除いた形）。
 番号は追加の順で、§3 の見出しや改訂履歴の「エンドポイント N」はこの番号を指す。#108 以降は 2026-10-02 に router と照らして足した行。
@@ -3489,6 +3489,40 @@ KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fix
 
 claims の `device_id` が path と一致すること。行を即時に失効させ（`revoked_reason = owner`）、`trusted_device_revoked` を actor 付きで追記する。
 `{revoked, device}` の `revoked` は今回失効させたか（既に失効済みなら `false`・event なし）。未知の id は 404 `device_not_found`。
+
+### 3.132 ブラウザの site policy と grant の credential 設定（ADR 2026-10-08-browser-prod-enablement D3）
+
+site policy（ログインの exact origin・URL・selector。秘密は持たない）の正本は DB の `browser_site_policies`（migration 0060）。
+全端点が**管理系**（daemon token）。web は owner session を要求してから呼ぶ。daemon の broker control は手動登録のたびに DB を
+読む（`task_api::browser::StoreSitePolicies`）ので、変更は daemon の再起動なしに次の判定から効く。変更は同じ transaction で
+追記専用の `browser_site_policy_events`（`policy_id`・`op`〈`upsert` / `delete`〉・`source`・`actor`。URL・selector は載せない）に残す
+（site policy には task_id が無いので、`org_browser_events` と同じく task の events とは別の流れ）。
+
+config の `[[api.browser_site_policies]]` は空の DB に入れる種: daemon 起動時に検証し（失敗は起動エラー）、DB に同じ `policy_id` が
+無いものだけを `source = config` で入れる。DB にあれば DB が勝つ。
+
+#### 3.132.1 `GET /browser/site-policies` → 200 `SitePolicyList`
+
+`{items}`。`items[]` は `policy_id` 昇順の `BrowserSitePolicyRecord`（`policy_id`・`exact_origin`・`login_url`・`password_selector`・
+`submit_selector?`・`source`〈`api` / `config`〉・`created_at`・`updated_at`）。
+
+#### 3.132.2 `PUT /browser/site-policies/{policy_id}` → 201（作成）/ 200（置換） `SitePolicyPutResult`
+
+本文 `SitePolicyPutBody` `{exact_origin, login_url, password_selector, submit_selector?}`（`deny_unknown_fields`）。`policy_id` は
+`[A-Za-z0-9._-]` の 1〜64 文字。ADR-0110 D2 の形式検証（`TrustedSitePolicy::validate`）に落ちれば 422 `site_policy_invalid`
+（`reason` に固定 code。id の形・本文の形は `policy_id` / `body`）。応答 `{created, policy}`。置換は `source = api` にする。
+
+#### 3.132.3 `DELETE /browser/site-policies/{policy_id}` → 204
+
+いずれかの組織のノードの grant の `credential_policy_ids` が参照している、または未解決（`pending` / `registered` / `approved`）の
+browser wait が参照していれば 409 `site_policy_in_use`（`node_ids`・`wait_ids`）。無ければ 404 `site_policy_not_found`。
+
+#### 3.132.4 `PATCH /org/{id}/browser-settings` の追加欄
+
+- `credential_use: bool`: `true` は grant の `allowed_actions` に `credential_use` を加える（欄が無い grant は Phase 1 の集合を実体化して
+  から）。`false` は外す。`allowed_actions` の任意編集は開けない。使用は毎回人の承認のまま（`BrowserAction::ALWAYS_APPROVED`）。
+- `credential_policy_ids` の各 id が `browser_site_policies` に無ければ 422 `unknown_site_policy`（`policy_ids`）。
+- 変化は従来どおり `org_browser_events` の before/after（`allowed_actions` を含む）に残る。
 
 ---
 

@@ -401,6 +401,46 @@ pub(crate) fn with_chat_wiring(state: ApiState, config: &Config) -> ApiState {
     )
 }
 
+/// ADR 2026-10-08-browser-prod-enablement D3: site policy を引く store を開き、config の種を入れる。
+/// broker も種も無い構成では開かない（`None`）。種は検証してから、DB に同じ `policy_id` が無いものだけを入れる。
+fn site_policy_store(
+    config: &Config,
+    settings: &task_api::ApiSettings,
+) -> Result<Option<Arc<task_core::SqliteStore>>, DaemonError> {
+    for policy in &config.api.browser_site_policies {
+        policy.validate().map_err(|code| {
+            ApiError::Startup(format!("browser site policy {}: {code}", policy.policy_id))
+        })?;
+    }
+    if config.api.browser_site_policies.is_empty()
+        && config.api.browser_credentiald_control_socket.is_none()
+    {
+        return Ok(None);
+    }
+    let store = task_core::SqliteStore::open_with(
+        &settings.db_path,
+        task_core::StoreOptions {
+            busy_timeout: settings.busy_timeout,
+            ..task_core::StoreOptions::default()
+        },
+    )
+    .map_err(|e| ApiError::Startup(format!("browser site policy store: {e}")))?;
+    let seeds: Vec<task_core::BrowserSitePolicy> = config
+        .api
+        .browser_site_policies
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
+    let inserted = store
+        .browser_site_policy_seed(&seeds, OffsetDateTime::now_utc())
+        .map_err(|e| ApiError::Startup(format!("browser site policy seed: {e}")))?;
+    if !inserted.is_empty() {
+        tracing::info!(policies = ?inserted, "browser site policies seeded from config");
+    }
+    Ok(Some(Arc::new(store)))
+}
+
 /// ADR-0013 D3 / D4: ディスパッチャにスナップショットの送り口を付け、API 専用の DB 接続を開いて bind する。
 /// 開けない・bind できないときは起動を失敗させる（黙って API 無しで動かない）。
 /// ADR-0040 D3 / D4: `admin = false`（verify モード）では管理系の委譲チャネルを作らない（tick ループが
@@ -464,6 +504,9 @@ pub(crate) async fn start_api(
         store: dispatcher.store(),
         config: Arc::new(config.clone()),
     }));
+    // ADR 2026-10-08-browser-prod-enablement D3: site policy の正本は DB。config の
+    // `[[api.browser_site_policies]]` は空の DB に入れる種（壊れた種は従来どおり起動エラー）。
+    let site_policy_store = site_policy_store(config, &settings)?;
     match (
         &config.api.browser_attestation_public_key_file,
         &config.api.browser_credentiald_control_socket,
@@ -471,16 +514,17 @@ pub(crate) async fn start_api(
         (Some(key_path), Some(socket)) => {
             let key = task_api::browser::BrowserApiConfig::read_public_key(key_path)
                 .map_err(|e| ApiError::Startup(format!("browser attestation key: {e}")))?;
-            for policy in &config.api.browser_site_policies {
-                policy.validate().map_err(|code| {
-                    ApiError::Startup(format!("browser site policy {}: {code}", policy.policy_id))
-                })?;
-            }
+            let site_policies = match &site_policy_store {
+                Some(store) => task_api::browser::SitePolicies(Arc::new(
+                    task_api::browser::StoreSitePolicies(Arc::clone(store)),
+                )),
+                None => task_api::browser::SitePolicies::default(),
+            };
             settings.browser = task_api::browser::BrowserApiConfig {
                 attestation_public_key: Some(key),
                 broker: Some(Arc::new(task_api::browser::UnixCredentialBrokerControl {
                     socket: socket.clone(),
-                    site_policies: config.api.browser_site_policies.clone(),
+                    site_policies,
                 })),
             };
             // ADR-0080 D2: the browser supervisor asks the same broker for one-use leases and

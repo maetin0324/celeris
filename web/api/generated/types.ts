@@ -471,8 +471,22 @@ export type BrowserSettingsPatch = {
   [key: string]: string;
 } | null;
   "credential_policy_ids"?: Array<string> | null;
+  "credential_use"?: boolean | null;
   "harnesses"?: HarnessPrefs | null;
 };
+
+export type BrowserSitePolicyRecord = {
+  "created_at": string;
+  "exact_origin": string;
+  "login_url": string;
+  "password_selector": string;
+  "policy_id": string;
+  "source": BrowserSitePolicySource;
+  "submit_selector"?: string | null;
+  "updated_at": string;
+};
+
+export type BrowserSitePolicySource = "api" | "config";
 
 export type BrowserWait = {
   "approval_id"?: string | null;
@@ -5251,6 +5265,22 @@ export type SideIntent = {
   "diffstat"?: FileDiffStat | null;
   "path": string;
   "unavailable"?: string | null;
+};
+
+export type SitePolicyList = {
+  "items": Array<BrowserSitePolicyRecord>;
+};
+
+export type SitePolicyPutBody = {
+  "exact_origin": string;
+  "login_url": string;
+  "password_selector": string;
+  "submit_selector"?: string | null;
+};
+
+export type SitePolicyPutResult = {
+  "created": boolean;
+  "policy": BrowserSitePolicyRecord;
 };
 
 export type SkillDetailView = {

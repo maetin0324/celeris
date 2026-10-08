@@ -29,6 +29,9 @@ pub struct BrowserSettingsPatch {
     pub approval_actions: Option<Vec<task_core::BrowserAction>>,
     pub credential_policy_ids: Option<Vec<String>>,
     pub credential_identity_ids: Option<BTreeMap<String, String>>,
+    /// ADR 2026-10-08-browser-prod-enablement D3: `true` は grant の `allowed_actions` に `credential_use` を
+    /// 加え（欄が無い grant は Phase 1 の集合を実体化してから）、`false` は外す。使用は毎回人の承認（変わらない）。
+    pub credential_use: Option<bool>,
     pub harnesses: Option<task_core::HarnessPrefs>,
     pub budget: Option<task_core::BudgetPrefs>,
 }
@@ -85,10 +88,32 @@ pub(super) async fn patch_browser_settings(
                 browser.approval_actions = actions;
             }
             if let Some(ids) = patch.credential_policy_ids {
+                // ADR 2026-10-08 D3: 実在する site policy だけを grant に入れる。
+                let mut missing = Vec::new();
+                for id in &ids {
+                    if store
+                        .browser_site_policy_get(id)
+                        .map_err(store_problem)?
+                        .is_none()
+                    {
+                        missing.push(id.clone());
+                    }
+                }
+                if !missing.is_empty() {
+                    return Err(ApiProblem::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "unknown_site_policy",
+                        format!("unknown site policy: {}", missing.join(", ")),
+                    )
+                    .with_extra("policy_ids", missing));
+                }
                 browser.credential_policy_ids = ids;
             }
             if let Some(ids) = patch.credential_identity_ids {
                 browser.credential_identity_ids = ids;
+            }
+            if let Some(enabled) = patch.credential_use {
+                set_credential_use(browser, enabled);
             }
             if let Some(harnesses) = patch.harnesses {
                 node.profile.harnesses = harnesses;
@@ -109,6 +134,22 @@ pub(super) async fn patch_browser_settings(
         })
         .await?;
     Ok(json_response(StatusCode::OK, &node))
+}
+
+/// grant の `allowed_actions` に `credential_use` を入れる・外す（他の action は変えない）。
+fn set_credential_use(browser: &mut task_core::BrowserCapability, enabled: bool) {
+    use task_core::BrowserAction;
+    if !enabled && browser.allowed_actions.is_none() {
+        // 欄が無い grant は Phase 1 の集合（`credential_use` を含まない）。
+        return;
+    }
+    let actions = browser
+        .allowed_actions
+        .get_or_insert_with(|| BrowserAction::PHASE1.to_vec());
+    actions.retain(|a| *a != BrowserAction::CredentialUse);
+    if enabled {
+        actions.push(BrowserAction::CredentialUse);
+    }
 }
 
 /// 監査 L-1: 組織のノードの `genre` は設定の `[[genres]]` にあるものだけ（分野を 1 つも設定していない

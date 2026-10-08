@@ -20,23 +20,21 @@ pub struct McpState {
     pub(crate) store: Arc<SqliteStore>,
     pub(crate) rate_limit_per_min: u32,
     pub(crate) limiter: Mutex<RateLimiter>,
-    pub(crate) roles: Vec<RoleSpec>,
-    pub(crate) genres: Vec<task_core::GenreSpec>,
-    pub(crate) conversation_genre: String,
     pub(crate) knowledge_root: Option<PathBuf>,
     /// MCP セッション（`initialize` で発行）。`session_id -> client_id`。
     pub(crate) sessions: Mutex<HashMap<String, String>>,
 }
 
 impl McpState {
+    // Routing arguments remain accepted for constructor compatibility; the chat dispatcher resolves them.
     #[allow(clippy::too_many_arguments)]
     pub fn open(
         db_path: &std::path::Path,
         busy_timeout: std::time::Duration,
         rate_limit_per_min: u32,
-        roles: Vec<RoleSpec>,
-        genres: Vec<task_core::GenreSpec>,
-        conversation_genre: String,
+        _roles: Vec<RoleSpec>,
+        _genres: Vec<task_core::GenreSpec>,
+        _conversation_genre: String,
         knowledge_root: Option<PathBuf>,
         // ADR-0064 D5: `true` なら `wal_autocheckpoint=0`（celeris の背景チェックポイント tick が
         // 別に打つ前提。デーモンの本番経路だけ `true`）。
@@ -54,9 +52,6 @@ impl McpState {
             store: Arc::new(store),
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
-            roles,
-            genres,
-            conversation_genre,
             knowledge_root,
             sessions: Mutex::new(HashMap::new()),
         }))
@@ -68,18 +63,15 @@ impl McpState {
     pub fn from_store(
         store: Arc<SqliteStore>,
         rate_limit_per_min: u32,
-        roles: Vec<RoleSpec>,
-        genres: Vec<task_core::GenreSpec>,
-        conversation_genre: String,
+        _roles: Vec<RoleSpec>,
+        _genres: Vec<task_core::GenreSpec>,
+        _conversation_genre: String,
         knowledge_root: Option<PathBuf>,
     ) -> Arc<Self> {
         Arc::new(Self {
             store,
             rate_limit_per_min,
             limiter: Mutex::new(RateLimiter::default()),
-            roles,
-            genres,
-            conversation_genre,
             knowledge_root,
             sessions: Mutex::new(HashMap::new()),
         })

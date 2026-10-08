@@ -1,7 +1,7 @@
 ---
 title: CoS chat 最適化 6 — cos-operator / cos-inbox-triage の再構成（T5）
 tasks: [01M4DE37B9EE6308ZDAVXXBRTX]
-status: done
+status: in-progress
 updated: 2026-10-08
 ---
 
@@ -36,8 +36,9 @@ updated: 2026-10-08
 | S2 非 cache input / cache write | 6 / 6,617 | 6 / 4,602 |
 | S1 / S2 総 latency ms | 15,802 / 19,672 | 18,895 / 13,782 |
 | 管理操作（起票 1・コメント 4） | 5/5 completed | 5/5、`cos_operations` 全て applied |
+| 回答操作の成功率 | 不明（台本に回答操作なし） | 不明（台本に回答操作なし） |
 
-S1 の latency・cache read は増えた（Core 分離と本変更が両方入った差で、寄与は分けていない。before の tool 回数は残っておらず不明）。skill 読込と cache write は減り、管理操作の成功率は落ちていないので統合する。生データ: task artifacts の `bench-after/`、`prompt-bench-after.json`。
+S1 の latency・cache read は増えた（Core 分離と本変更が両方入った差で、寄与は分けていない。before の全 tool 回数は残っておらず不明）。skill 読込と cache write は減り、計測した起票・コメントの成功率は落ちていない。回答操作にはこの結論を適用できない。変更は task branch にあり、受け入れ条件 1 が失敗しているため完了・統合済みとは扱わない。生データ: task artifacts の `bench-after/`、`prompt-bench-after.json`。
 
 ## 証拠
 
@@ -54,8 +55,22 @@ S1 の latency・cache read は増えた（Core 分離と本変更が両方入�
 - 本番 KB への取り込み（`celerisctl skills import`）は人が行う。本番 config/DB/KB/release/systemd には触れていない。
 - S1 の latency 増の原因（Core 分離か skill 再構成か）は不明。T8 で切り分ける。
 - 受け入れ条件 1 のコマンド形（`--` が要る）。
+- 回答操作の live before/after は未計測。既存の full 台本が確認する管理操作は起票・コメントのみ。
 
 ## 提案
 
 - 受け入れ条件 1 を `cargo test -p task-dispatch -p task-ops -- cos_chat skill …` に直す。
 - T8 で S1 の tool 回数を before と同じ方法で残す（bench の runs.json に tool event 数を足す）。
+
+## 再試行 2 の検証（run 01M4DJ4M60DRGRSAX8VA0VA6A9）
+
+実装コミット `087afd6d`・文書コミット `3d99fc22` を保持して再検証した。
+受け入れ条件 0 は exit 0（4,650 B）、条件 2 の workspace clippy は exit 0。
+条件 1 を原文通り実行すると、再び `unexpected argument 'skill'` で exit 1。
+`--` を追加した同じパイプラインは exit 0。関連試験は 129 件成功（106 + 11 + 12）。
+登録表・未登録操作の拒否・credential の拒否と監査・checkpoint・Core の試験も
+`cargo test -p task-api -p task-worker -- cos_operator_skill_table cos_chat_ops_api_rejects cos_chat_ops_auth cos_chat_ops_checkpoint cos_chat_core_carries`
+で exit 0。ログは task artifacts の `retry-*.log`。
+
+元の検査定義の修正はこの worktree の実装ではできない。Cargo の置換や検査の迂回は行っていない。
+前回の隔離計測を再利用し、今回 LLM 呼び出しと本番環境の変更は行っていない。

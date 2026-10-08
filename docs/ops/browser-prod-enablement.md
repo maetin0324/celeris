@@ -1,7 +1,7 @@
 # 本番 browser 実行の有効化と点検
 
 ---
-tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
+tasks: [01M4CDNAYX6J68WTX7SKF0DJ64, 01M4D6TWCKEH25YVZK1YHMBFJQ]
 ---
 
 この手順は運用セッション向け。利用者の日常操作は **web で owner session を立てる、初回に credential form に ID/password を入力する、run 中の承認ボタンを押す**の三つにする。release の生成・昇格、host の設定・unit の配置は運用側が準備する。この文書の本番変更コマンドは、人が本番操作を実行する運用セッションの手順であり、coding run からは実行しない。
@@ -69,6 +69,13 @@ doctor は能力や認可を変更しない。DNS は固定名 `example.com` に
 | `attestation-key` | `[api] browser_attestation_public_key_file` に web の署名鍵と対になる Ed25519 公開鍵を指定する（32 byte raw または hex）。web の `CELERIS_WEB_ATTESTATION_KEY_FILE` の秘密鍵を daemon に渡さない。 |
 | `site-policies` / `site-policy` | web `/browser/settings` で owner session を立て、対象の exact origin・login URL・password/submit selector を登録・修正する。DB が正本。config の `[[api.browser_site_policies]]` は未登録 ID の種であり、取り込み済みなら削除してよい。DB と食い違う種は WARN。 |
 | `grant` | web `/browser/settings` で browser-execution の許可 origin、`credential_use`、実在する credential policy ID を設定する。存在しない ID は NG。credential_use が off または ID が空なら WARN（公開 task だけでよい場合はそのまま）。 |
+
+SSO（IdP 経由）の login では、password を入力する画面の origin を exact origin、IdP の静的入口を login URL にする。
+manaba の例は exact origin が `https://idp.account.tsukuba.ac.jp`、login URL が
+`https://idp.account.tsukuba.ac.jp/idp/profile/SAML2/Unsolicited/SSO?providerId=https%3A%2F%2Fmanaba.tsukuba.ac.jp%2Fshibboleth`。
+同一 origin の redirect（最大 32 hop）と JS 自動 POST の中継画面は許可する。15 秒以内に password 欄が現れなければ中止する。
+注入前に別 origin への redirect・文書遷移があれば拒否する。submit 後の SP への戻りは通常遷移として扱う。
+password/submit selector は人が IdP の入力画面で確認して登録する（selector 文法は従来どおり）。多要素認証の完了は password 注入だけでは保証しない。
 
 ## 4. 有効化から manaba 確認まで
 

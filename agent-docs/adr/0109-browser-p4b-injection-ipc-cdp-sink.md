@@ -1,7 +1,7 @@
 # ADR-0109: P4-B injection-only IPC・CDP sink・実攻撃試験と機密能力の解放条件
 
 ---
-tasks: [01M3RK6XG30KD3QC0Z67XBB5G5]
+tasks: [01M3RK6XG30KD3QC0Z67XBB5G5, 01M4D6TWCKEH25YVZK1YHMBFJQ]
 ---
 
 - 日付: 2026-09-30
@@ -240,3 +240,28 @@ H3 sentinel 検査面（実注入を含む認証区間を 1 回通した後、�
 - 悪い: controller の mux（daemon process）は broker の frame を一瞬 memory に持つ（解釈・記録はしない）。page の main world の
   script は注入後に同じ origin の欄の値を読める（正当な site が password を受け取るのと同じで、egress allowlist の範囲に限られる）。
   この host では正例が試験 feature に依存し、機密能力の解放は別 UID の host での実行まで得られない。
+
+## 付記: Shibboleth 型 trusted login（2026-10-08）
+
+タスク: `01M4D6TWCKEH25YVZK1YHMBFJQ`。D3 検査 3 の全 exact origin という条件を worker にも適用する。
+
+- H3 を開き、対象 page session に Network を有効化してから静的 login URL に移動する。
+  対象 session の top-level Document request のみを記録する。redirectResponse の旧 URL と
+  request の新 URL の origin を保持する（query・SAML 本文は保持しない）。JS 自動 POST 等の
+  文書遷移の origin も記録し、別 origin の履歴は戻ってきても拒否する。subresource と他 session は対象外。
+  redirect は最大 32 hop、broker wire の鎖と文書 request の記録も最大 32 件、超過・origin 不明は `redirected` で閉じる。
+- 移動開始から 15 秒以内に exact origin 上で password selector が一意の HTMLInputElement
+  （type=password）に解決できる文書を待つ。isolated world の判定は真偽値だけで、DOM・値を観測しない。
+  前後の frame_id/loader_id が異なる場合は再度待つ。期限まで現れなければ `navigation_failed`。
+  注入に渡す redirect_chain は実際に記録した origin の鎖。注入直前にも履歴を照合し、既存の
+  origin・要素型・broker の同期 TOCTOU 検査、単回 lease、H3 観測遮断、RedisplayGuard は維持する。
+- 注入成功後の submit は既存の loaderId 変更待機を維持する。その後の IdP→SP 自動 POST は
+  通常遷移であり、この redirect 判定には含めない。selector 文法（ADR-0110 D2）と毎回承認は不変。
+
+実装: `crates/task-worker/src/browser_cdp_sink.rs` の `begin_login_navigation` は移動前の
+main frame ID を取得し、`queue_event` は session/frame/type を照合して origin だけを保持する。
+`login_password_document` が同一文書の前後検査と type=password の一意性を確認し、
+`browser.rs` の `complete_trusted_login` が期限内の文書を `inject` に渡す。`inject` は broker
+呼出し直前に最新履歴を再検査する。成功後にこの履歴を閉じ、submit 後の SP 遷移を許可する。
+試験は `browser_trusted_login_sso_`（実 Chromium/HTTPS の SSO 3 件、履歴の scope・拒否・上限 3 件）。
+SSO 試験の broker transport は検証用であり、隔離・admission の適合証拠は既存 H3 wire/攻撃行列で確認する。

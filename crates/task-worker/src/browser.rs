@@ -112,72 +112,135 @@ async fn inject_h3(
     async {
         let own = {
             let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
-            c.controller_command("Target.attachToTarget", json!({"targetId":target,"flatten":true}), None)
-                .map_err(|_| "cdp_unavailable")?["result"]["sessionId"]
-                .as_str().ok_or("cdp_unavailable")?.to_owned()
+            c.controller_command(
+                "Target.attachToTarget",
+                json!({"targetId":target,"flatten":true}),
+                None,
+            )
+            .map_err(|_| "cdp_unavailable")?["result"]["sessionId"]
+                .as_str()
+                .ok_or("cdp_unavailable")?
+                .to_owned()
         };
         {
             let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
             c.controller_command("Network.enable", json!({}), Some(&own))
                 .map_err(|_| "navigation_failed")?;
-            let nav = c.controller_command("Page.navigate", json!({"url":trusted.login_url}), Some(&own))
+            c.begin_login_navigation(&own, Duration::from_secs(15))
+                .map_err(|_| "navigation_failed")?;
+            let nav = c
+                .controller_command(
+                    "Page.navigate",
+                    json!({"url":trusted.login_url}),
+                    Some(&own),
+                )
                 .map_err(|_| "navigation_failed")?;
             if !nav["error"].is_null() || nav["result"]["errorText"].is_string() {
                 return Err("navigation_failed");
             }
         }
-        let until = std::time::Instant::now() + Duration::from_secs(10);
-        let (frame_id, loader_id) = loop {
-            let tree = controller.lock().map_err(|_| "cdp_unavailable")?
-                .controller_command("Page.getFrameTree", json!({}), Some(&own))
-                .map_err(|_| "cdp_unavailable")?;
-            if controller.lock().map_err(|_| "cdp_unavailable")?.redirect_seen() {
-                return Err("redirected");
-            }
-            let frame = &tree["result"]["frameTree"]["frame"];
-            let url = frame["url"].as_str().unwrap_or("");
-            if url::Url::parse(url)
-                .is_ok_and(|parsed| parsed.origin().ascii_serialization() == origin)
-                && let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) {
-                break (id.to_owned(), loader.to_owned());
-            }
-            if std::time::Instant::now() >= until { return Err("navigation_failed"); }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        };
         let request = crate::browser_cdp_sink::InjectionRequest {
-            request_id: format!("inject-{auth_id}"), session_id: session_id.into(),
-            cdp_target_id: target, frame_id, loader_id: loader_id.clone(), exact_origin: origin.into(),
-            redirect_chain: vec![origin.into()], selector: trusted.password_selector.clone(),
-            field: "password".into(), auth_section_id: auth_id.into(), lease_id: lease_id.into(),
+            request_id: format!("inject-{auth_id}"),
+            session_id: session_id.into(),
+            cdp_target_id: target,
+            frame_id: String::new(),
+            loader_id: String::new(),
+            exact_origin: origin.into(),
+            redirect_chain: Vec::new(),
+            selector: trusted.password_selector.clone(),
+            field: "password".into(),
+            auth_section_id: auth_id.into(),
+            lease_id: lease_id.into(),
         };
-        {
+        complete_trusted_login(&controller, broker, &own, request, trusted).await
+    }
+    .await
+}
+
+async fn complete_trusted_login(
+    controller: &Arc<std::sync::Mutex<crate::browser_cdp_sink::CdpController>>,
+    broker: &mut (dyn crate::browser_cdp_sink::BrokerClient + Send),
+    own: &str,
+    mut request: crate::browser_cdp_sink::InjectionRequest,
+    trusted: &task_core::browser_wait::TrustedLogin,
+) -> Result<(), &'static str> {
+    use serde_json::json;
+    let until = controller
+        .lock()
+        .map_err(|_| "cdp_unavailable")?
+        .login_deadline()
+        .ok_or("navigation_failed")?;
+    let (frame_id, loader_id, redirect_chain) = loop {
+        let ready = {
             let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
-            c.inject(&request, &own, broker).map_err(|e| e.code())?;
-        }
-        if let Some(selector) = &trusted.submit_selector {
-            let expr = format!(
-                "(()=>{{let e=document.querySelector({});if(!e)return 'missing';if(e.form)e.form.requestSubmit();else e.click();return 'ok'}})()",
-                serde_json::to_string(selector).map_err(|_| "submit_failed")?
-            );
-            let submitted = controller.lock().map_err(|_| "cdp_unavailable")?
-                .controller_command("Runtime.evaluate", json!({"expression":expr,"returnByValue":true}), Some(&own))
-                .map_err(|_| "submit_failed")?;
-            if submitted["result"]["result"]["value"] != "ok" { return Err("submit_failed"); }
-            // requestSubmit starts navigation asynchronously. Keep H3 closed to
-            // observation until the old document is gone, then field cleanup
-            // can safely skip its now-invalid CDP object ID.
-            let deadline = std::time::Instant::now() + Duration::from_secs(5);
-            while std::time::Instant::now() < deadline {
-                let tree = controller.lock().map_err(|_| "cdp_unavailable")?
-                    .controller_command("Page.getFrameTree", json!({}), Some(&own));
-                if tree.is_ok_and(|tree| tree["result"]["frameTree"]["frame"]["loaderId"] != loader_id) {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
+            let ready = c
+                .login_password_document(own, &request.exact_origin, &trusted.password_selector)
+                .map_err(|e| {
+                    if e == crate::browser_cdp_sink::InjectionError::Redirected {
+                        "redirected"
+                    } else {
+                        "navigation_failed"
+                    }
+                })?;
+            match ready {
+                Some((frame, loader)) => Some((
+                    frame,
+                    loader,
+                    c.login_redirect_chain(&request.exact_origin)
+                        .map_err(|e| e.code())?,
+                )),
+                None => None,
             }
+        };
+        if let Some(document) = ready {
+            break document;
         }
-        Ok(())
-    }.await
+        if std::time::Instant::now() >= until {
+            return Err("navigation_failed");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    };
+    request.frame_id = frame_id;
+    request.loader_id = loader_id.clone();
+    request.redirect_chain = redirect_chain;
+    {
+        let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
+        c.inject(&request, own, broker).map_err(|e| e.code())?;
+    }
+    if let Some(selector) = &trusted.submit_selector {
+        let expr = format!(
+            "(()=>{{let e=document.querySelector({});if(!e)return 'missing';if(e.form)e.form.requestSubmit();else e.click();return 'ok'}})()",
+            serde_json::to_string(selector).map_err(|_| "submit_failed")?
+        );
+        let submitted = controller
+            .lock()
+            .map_err(|_| "cdp_unavailable")?
+            .controller_command(
+                "Runtime.evaluate",
+                json!({"expression":expr,"returnByValue":true}),
+                Some(own),
+            )
+            .map_err(|_| "submit_failed")?;
+        if submitted["result"]["result"]["value"] != "ok" {
+            return Err("submit_failed");
+        }
+        // requestSubmit starts navigation asynchronously. Keep H3 closed to
+        // observation until the old document is gone, then field cleanup
+        // can safely skip its now-invalid CDP object ID.
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            let tree = controller
+                .lock()
+                .map_err(|_| "cdp_unavailable")?
+                .controller_command("Page.getFrameTree", json!({}), Some(own));
+            if tree.is_ok_and(|tree| tree["result"]["frameTree"]["frame"]["loaderId"] != loader_id)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+    Ok(())
 }
 
 /// ADR-0116 D5: isolated browser の runtime を誰が持つか。
@@ -1937,3 +2000,7 @@ pub fn launcher_session_proof(
 #[cfg(test)]
 #[path = "browser_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "browser_sso_tests.rs"]
+mod sso_tests;

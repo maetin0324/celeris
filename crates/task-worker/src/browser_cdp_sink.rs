@@ -247,7 +247,7 @@ pub struct CdpController {
     restored: bool,
     injected: Vec<(String, String, String, String)>,
     events: Vec<Value>,
-    redirect_seen: bool,
+    login_navigation: Option<LoginNavigation>,
     /// ADR-0111: one guard per injected value, kept for the controller's (= session's) lifetime.
     guards: Vec<RedisplayGuard>,
     /// Test-only (ADR-0109 A1): navigate the page after all checks and before the
@@ -256,6 +256,18 @@ pub struct CdpController {
     retarget_before_sink: Option<String>,
     #[cfg(feature = "attack-test-hooks")]
     response_timeout: Duration,
+}
+
+/// Non-secret, bounded history for the trusted login top document only.
+struct LoginNavigation {
+    session: String,
+    frame: Option<String>,
+    origins: Vec<String>,
+    redirects: usize,
+    documents: usize,
+    invalid: bool,
+    deadline: std::time::Instant,
+    waiting: bool,
 }
 
 impl CdpController {
@@ -269,7 +281,7 @@ impl CdpController {
             restored: false,
             injected: Vec::new(),
             events: Vec::new(),
-            redirect_seen: false,
+            login_navigation: None,
             guards: Vec::new(),
             #[cfg(feature = "attack-test-hooks")]
             retarget_before_sink: None,
@@ -314,13 +326,108 @@ impl CdpController {
 
     pub fn open_auth_section(&mut self, id: String) {
         self.events.clear();
-        self.redirect_seen = false;
+        self.login_navigation = None;
         self.auth_section = Some(id);
     }
 
-    /// Only a non-secret redirect bit survives H3 event suppression.
-    pub fn redirect_seen(&self) -> bool {
-        self.redirect_seen
+    /// Start before Page.navigate; history survives same-origin JS relay documents.
+    pub fn begin_login_navigation(
+        &mut self,
+        session: &str,
+        timeout: Duration,
+    ) -> Result<(), InjectionError> {
+        let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
+        let frame = tree["result"]["frameTree"]["frame"]["id"]
+            .as_str()
+            .ok_or(InjectionError::TargetMismatch)?
+            .to_owned();
+        self.login_navigation = Some(LoginNavigation {
+            session: session.into(),
+            frame: Some(frame),
+            origins: Vec::new(),
+            redirects: 0,
+            documents: 0,
+            invalid: false,
+            deadline: std::time::Instant::now() + timeout,
+            waiting: true,
+        });
+        Ok(())
+    }
+
+    pub fn login_deadline(&self) -> Option<std::time::Instant> {
+        self.login_navigation.as_ref().map(|nav| nav.deadline)
+    }
+
+    pub fn login_redirect_chain(&self, exact_origin: &str) -> Result<Vec<String>, InjectionError> {
+        let nav = self
+            .login_navigation
+            .as_ref()
+            .ok_or(InjectionError::AuthSectionRequired)?;
+        if nav.invalid || nav.origins.iter().any(|o| o != exact_origin) {
+            return Err(InjectionError::Redirected);
+        }
+        Ok(nav.origins.clone())
+    }
+
+    /// Only readiness is returned; no input value or page text crosses H3.
+    pub fn login_password_document(
+        &mut self,
+        session: &str,
+        exact_origin: &str,
+        selector: &str,
+    ) -> Result<Option<(String, String)>, InjectionError> {
+        let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
+        self.login_redirect_chain(exact_origin)?;
+        let frame = &tree["result"]["frameTree"]["frame"];
+        let url = frame["url"].as_str();
+        if url == Some("about:blank") {
+            return Ok(None);
+        }
+        if origin(url).as_deref() != Some(exact_origin) {
+            return Err(InjectionError::Redirected);
+        }
+        let (Some(id), Some(loader)) = (frame["id"].as_str(), frame["loaderId"].as_str()) else {
+            return Ok(None);
+        };
+        let world = match self.call(
+            "Page.createIsolatedWorld",
+            json!({"frameId":id,"worldName":"celeris-credential"}),
+            Some(session),
+        ) {
+            Ok(world) => world,
+            Err(InjectionError::TargetChanged) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let Some(context) = world["result"]["executionContextId"].as_i64() else {
+            return Ok(None);
+        };
+        let expr = format!(
+            "(()=>{{const es=document.querySelectorAll({});return es.length===1 && es[0] instanceof HTMLInputElement && es[0].type==='password';}})()",
+            serde_json::to_string(selector).map_err(|_| InjectionError::TargetMismatch)?
+        );
+        let ready = self.call(
+            "Runtime.evaluate",
+            json!({"expression":expr,"contextId":context,"returnByValue":true,"silent":true}),
+            Some(session),
+        );
+        // Even a destroyed context can carry navigation events: inspect the history first.
+        self.login_redirect_chain(exact_origin)?;
+        if !ready.is_ok_and(|r| r["result"]["result"]["value"] == true) {
+            return Ok(None);
+        }
+        let after = self.call("Page.getFrameTree", json!({}), Some(session))?;
+        self.login_redirect_chain(exact_origin)?;
+        let after = &after["result"]["frameTree"]["frame"];
+        if origin(after["url"].as_str()).as_deref() != Some(exact_origin) {
+            return Err(InjectionError::Redirected);
+        }
+        if after["id"] != id || after["loaderId"] != loader {
+            return Ok(None);
+        }
+        if let Some(nav) = self.login_navigation.as_mut() {
+            nav.waiting = false;
+        }
+        Ok(Some((id.into(), loader.into())))
     }
 
     /// Remove injected values while the agent relay remains blocked.
@@ -360,6 +467,7 @@ impl CdpController {
         // still active, so the relay cannot forward them after the section closes.
         self.pump_events()?;
         self.auth_section = None;
+        self.login_navigation = None;
         Ok(())
     }
 
@@ -547,6 +655,15 @@ impl CdpController {
             "username" => Field::Username,
             _ => return Err(InjectionError::RedisplayField),
         };
+        let redirect_chain = if self.login_navigation.is_some() {
+            let chain = self.login_redirect_chain(&request.exact_origin)?;
+            if chain.is_empty() {
+                return Err(InjectionError::Redirected);
+            }
+            chain
+        } else {
+            request.redirect_chain.clone()
+        };
         let wire = serde_json::to_value(WireRequest {
             v: 1,
             request_id: request.request_id.clone(),
@@ -559,7 +676,7 @@ impl CdpController {
                 .iter()
                 .filter_map(|f| origin(f["url"].as_str()))
                 .collect(),
-            redirect_chain: request.redirect_chain.clone(),
+            redirect_chain,
             selector: request.selector.clone(),
             object_id: object_id.to_owned(),
             field,
@@ -643,6 +760,7 @@ impl CdpController {
             .and_then(RedisplayGuard::from_wire)
             .ok_or(InjectionError::SinkFailed)?;
         self.guards.push(guard);
+        self.login_navigation = None;
         self.injected.push((
             object_id.to_owned(),
             cdp_session.to_owned(),
@@ -693,10 +811,45 @@ impl CdpController {
         }
         if self.auth_section.is_some()
             && value["method"] == "Network.requestWillBeSent"
-            && value["params"]["redirectResponse"].is_object()
+            && let Some(nav) = self.login_navigation.as_mut()
+            && value["sessionId"] == nav.session
+            && value["params"]["type"] == "Document"
         {
-            self.redirect_seen = true;
-        } else if !self.observation_stopped() {
+            let params = &value["params"];
+            if let Some(frame) = params["frameId"].as_str() {
+                if nav.frame.as_deref() == Some(frame) {
+                    nav.documents += 1;
+                    if params["redirectResponse"].is_object() {
+                        nav.redirects += 1;
+                    }
+                    if nav.redirects > 32 || nav.documents > 32 {
+                        nav.invalid = true;
+                    } else {
+                        if params["redirectResponse"].is_object() {
+                            match origin(params["redirectResponse"]["url"].as_str()) {
+                                Some(o) => {
+                                    if nav.origins.last() != Some(&o) {
+                                        nav.origins.push(o);
+                                    }
+                                }
+                                None => nav.invalid = true,
+                            }
+                        }
+                        match origin(params["request"]["url"].as_str()) {
+                            Some(o) => nav.origins.push(o),
+                            None => nav.invalid = true,
+                        }
+                        if nav.origins.len() > 32 {
+                            nav.origins.truncate(32);
+                            nav.invalid = true;
+                        }
+                    }
+                }
+            } else {
+                nav.invalid = true;
+            }
+        }
+        if !self.observation_stopped() {
             if self.events.len() >= MAX_QUEUED_EVENTS {
                 self.events.remove(0);
             }
@@ -743,7 +896,20 @@ impl CdpController {
     }
 
     fn read_response(&mut self, id: u64) -> Result<Value, InjectionError> {
+        #[cfg(feature = "attack-test-hooks")]
+        let timeout = self.response_timeout;
+        #[cfg(not(feature = "attack-test-hooks"))]
+        let timeout = TIMEOUT;
+        let deadline = std::time::Instant::now() + timeout;
+        let deadline = self
+            .login_navigation
+            .as_ref()
+            .filter(|nav| nav.waiting)
+            .map_or(deadline, |nav| deadline.min(nav.deadline));
         loop {
+            if std::time::Instant::now() >= deadline {
+                return Err(InjectionError::SinkFailed);
+            }
             if let Some(end) = self.buffered.iter().position(|b| *b == 0) {
                 let mut frame: Vec<u8> = self.buffered.drain(..=end).collect();
                 let parsed = serde_json::from_slice::<Value>(&frame[..end])
@@ -765,11 +931,16 @@ impl CdpController {
                 revents: 0,
             };
             // SAFETY: pollfd points to one valid descriptor and structure.
-            #[cfg(feature = "attack-test-hooks")]
-            let timeout = self.response_timeout;
-            #[cfg(not(feature = "attack-test-hooks"))]
-            let timeout = TIMEOUT;
-            if unsafe { nix::libc::poll(&mut pollfd, 1, timeout.as_millis() as i32) } <= 0 {
+            if unsafe {
+                nix::libc::poll(
+                    &mut pollfd,
+                    1,
+                    timeout
+                        .min(deadline.saturating_duration_since(std::time::Instant::now()))
+                        .as_millis() as i32,
+                )
+            } <= 0
+            {
                 return Err(InjectionError::SinkFailed);
             }
             let mut chunk = [0u8; 4096];
@@ -900,6 +1071,98 @@ mod idle_pump_tests {
         let read = File::from(OwnedFd::from(controller_end.try_clone().expect("clone")));
         let write = File::from(OwnedFd::from(controller_end));
         (CdpController::new(write, read), browser)
+    }
+
+    fn login_controller() -> (CdpController, UnixStream) {
+        let (mut c, stream) = controller();
+        c.open_auth_section("auth".into());
+        c.login_navigation = Some(LoginNavigation {
+            session: "S".into(),
+            frame: Some("F".into()),
+            origins: Vec::new(),
+            redirects: 0,
+            documents: 0,
+            invalid: false,
+            deadline: std::time::Instant::now() + Duration::from_secs(15),
+            waiting: true,
+        });
+        (c, stream)
+    }
+
+    fn document(url: &str) -> Value {
+        json!({"method":"Network.requestWillBeSent","sessionId":"S",
+            "params":{"type":"Document","frameId":"F","request":{"url":url}}})
+    }
+
+    #[test]
+    fn browser_trusted_login_sso_origin_history_is_session_and_top_document_scoped() {
+        let (mut c, _stream) = login_controller();
+        let mut other = document("https://other.test/secret?SAMLRequest=opaque");
+        other["sessionId"] = "OTHER".into();
+        c.queue_event(other);
+        let mut subresource = document("https://other.test/script");
+        subresource["params"]["type"] = "Script".into();
+        c.queue_event(subresource);
+        let mut iframe = document("https://other.test/frame");
+        iframe["params"]["frameId"] = "CHILD".into();
+        c.queue_event(iframe);
+        c.queue_event(document("https://idp.test/entry?SAMLRequest=opaque"));
+        let mut redirect = document("https://idp.test/entry?execution=e1s1");
+        redirect["params"]["redirectResponse"] =
+            json!({"url":"https://idp.test/entry?SAMLRequest=opaque"});
+        c.queue_event(redirect);
+        c.queue_event(document("https://idp.test/form?execution=e1s2"));
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test").unwrap(),
+            vec!["https://idp.test"; 3]
+        );
+        assert!(c.take_agent_events().is_empty());
+    }
+
+    #[test]
+    fn browser_trusted_login_sso_cross_origin_source_and_js_history_stay_rejected() {
+        let (mut c, _stream) = login_controller();
+        let mut redirect = document("https://idp.test/form");
+        redirect["params"]["redirectResponse"] = json!({"url":"https://other.test/entry"});
+        c.queue_event(redirect);
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test"),
+            Err(InjectionError::Redirected)
+        );
+        let (mut c, _stream) = login_controller();
+        c.queue_event(document("https://idp.test/relay"));
+        c.queue_event(document("https://other.test/relay"));
+        c.queue_event(document("https://idp.test/form"));
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test"),
+            Err(InjectionError::Redirected)
+        );
+    }
+
+    #[test]
+    fn browser_trusted_login_sso_history_limit_and_invalid_origin_fail_closed() {
+        let (mut c, _stream) = login_controller();
+        for _ in 0..32 {
+            c.queue_event(document("https://idp.test/loop"));
+        }
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test").unwrap().len(),
+            32
+        );
+        for _ in 0..100 {
+            c.queue_event(document("https://idp.test/loop"));
+        }
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test"),
+            Err(InjectionError::Redirected)
+        );
+        assert_eq!(c.login_navigation.as_ref().unwrap().origins.len(), 32);
+        let (mut c, _stream) = login_controller();
+        c.queue_event(document("not-a-url"));
+        assert_eq!(
+            c.login_redirect_chain("https://idp.test"),
+            Err(InjectionError::Redirected)
+        );
     }
 
     #[test]

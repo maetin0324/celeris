@@ -236,3 +236,11 @@ fn valid_uuid_rejects_a_ulid_and_other_non_uuid_shapes() {
     // 16 進数でない文字を含む。
     assert!(!is_valid_uuid("550e8400-e29b-41d4-a716-44665544000g"));
 }
+
+#[test]
+fn cos_source_fallback_session_limit_is_exhausted() {
+    assert_eq!(
+        classify_provider_failure("You've hit your session limit"),
+        Some(ProviderFailure::Exhausted)
+    );
+}

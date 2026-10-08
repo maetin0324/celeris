@@ -101,6 +101,15 @@ impl CosChatLaunch {
                     }
                     continue;
                 }
+                if self
+                    .retries
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .iter()
+                    .any(|retry| retry.run_id == run.id)
+                {
+                    continue;
+                }
                 if !dispatcher.accepting_new_work || dispatcher.orphan_takeover.is_none() {
                     continue;
                 }

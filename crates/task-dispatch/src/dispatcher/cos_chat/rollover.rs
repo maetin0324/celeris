@@ -168,7 +168,7 @@ pub(crate) fn choose_session(
 }
 
 /// 旧 session を retire し、thread の summary の水位から始まる fresh session を作る。
-fn rotate_fresh(
+pub(super) fn rotate_fresh(
     store: &SqliteStore,
     key: ChatSessionKey,
     now: OffsetDateTime,
@@ -365,6 +365,7 @@ fn record_attempt(
 
 /// worker を走らせるのに要る値（launch が組む）。
 pub(crate) struct ChatAttempt {
+    pub previous: Option<Arc<ChatRunSink>>,
     pub store: Arc<SqliteStore>,
     pub adapter: Arc<dyn WorkerAdapter>,
     pub req: RunRequest,
@@ -392,6 +393,9 @@ pub(crate) async fn run_attempts(a: ChatAttempt) -> (ChatRunSink, ChatFinish) {
         Arc::clone(&a.clock),
         a.secrets.clone(),
     );
+    if let Some(previous) = &a.previous {
+        sink.inherit_telemetry(previous);
+    }
     let outcome = a
         .adapter
         .run(a.req.clone(), &a.run_id, a.limits, &sink)

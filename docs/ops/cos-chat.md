@@ -1,7 +1,7 @@
 # CoS チャットの設定と運用
 
 ---
-tasks: [01M46VVAD0ZAVZ9C4Q0KJM9ESV, 01M4APB5FP8T3TAAE51Z20E3M1]
+tasks: [01M4E0WA5ZYVT32A4W6E74GQGC, 01M46VVAD0ZAVZ9C4Q0KJM9ESV, 01M4APB5FP8T3TAAE51Z20E3M1]
 ---
 
 [CoS チャット ADR](../../agent-docs/adr/2026-10-05-cos-chat-home.md) D1〜D6 の運用手順。本番 config・service・release・DB を変える操作は、以下を読んだ人が本番 host で実行する。導入時は [selfdeploy](selfdeploy.md) の release → verify → promote と、旧 CoS run の drain・停止、DB と添付の一体バックアップを先に計画する。
@@ -22,6 +22,14 @@ tier = "frontier"
 max_turns = 70
 max_wall_secs = 900
 stream_retention_days = 30
+worker_reserve_five_hour = 0.90
+
+# 任意。登録済み provider に適合する経路を順に指定する。
+[[cos.fallbacks]]
+harness = "codex"
+llm_source = "codex_oauth"
+model = "gpt-6.1-sol"
+tier = "frontier"
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"
@@ -39,7 +47,9 @@ orphan_ttl_hours = 24
 unreferenced_retention_days = 30
 ```
 
-`llm_source` は `claude_oauth` / `codex_oauth` / `celeris` / `openai_compatible:<id>` などの登録済み source を指定する。harness・source・provider・account・model の不整合は config 検証で拒否される。`[execution] max_cos_runs` の既定は 2。0 は専用並列枠を使わない設定であり、CoS の停止は `cos.enabled = false` で行う。変更は次の run から有効になり、session の照合条件が変われば旧 session を retire して DB の要約・履歴から再開する。quota 切れの固定 account を他 account に自動変更しない。
+`llm_source` は `claude_oauth` / `codex_oauth` / `celeris` / `openai_compatible:<id>` などの登録済み source を指定する。harness・source・provider・account・model の不整合は config 検証で拒否される。`[execution] max_cos_runs` の既定は 2。0 は専用並列枠を使わない設定であり、CoS の停止は `cos.enabled = false` で行う。CoS の経路・予約設定は daemon 起動時に解決されるため、運用者が設定変更後に再起動する。新しい設定の run で、session の照合条件が変われば旧 session を retire して DB の要約・履歴から再開する。quota 切れの固定 account を同じ経路の別 account に自動変更しない。`[[cos.fallbacks]]` を指定した順（最大8件）に試し、利用上限の応答でも同じ run・入力を次経路で再試行する。harness/source/account/model が変わると新しい session に要約・履歴・添付を渡す。全経路が使えなければ失敗本文に理由と再送の案内が出る。チャットの「CoS 実行経路」と run 詳細で実効経路を確認できる。
+
+`worker_reserve_five_hour` は 0 より大きく 0.97 以下。CoS 有効時、Claude の観測済み5時間使用率がこの値以上なら通常 worker に新しく割り当てない。reset 後は解除し、観測不明なら通常どおり選ぶ。既に走っている worker は止めず、CoS も quota・ログイン制約は迂回しない。[代替経路と予約の ADR](../adr/2026-10-08-cos-source-fallback.md) を参照。
 
 ## 権限と受信箱
 

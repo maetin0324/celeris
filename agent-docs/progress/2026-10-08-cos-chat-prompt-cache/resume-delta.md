@@ -12,7 +12,7 @@ updated: 2026-10-08
 - migration `0063_cos_chat_delivered_through`（schema 63）: `node_sessions.delivered_through_seq`（配送 cursor）。completed の run の終端でだけ上げる。
 - resume で cursor が分かれば summary を省き cursor 以後の差分だけを渡す。new・fresh（4 理由）・resume 拒否後の fresh 再試行・再起動後の回収・cursor 0 は全文。
 - worker protocol `CosChatContext.delivered_through_seq`（schema 再生成）と prompt の差分節。
-- 試験 `cos_chat_resume_delta_` 11 件（task-dispatch 9・task-core 1・task-worker 1）。
+- 試験 `cos_chat_resume_delta_` 12 件（task-dispatch 10・task-core 1・task-worker 1。merge-main で経路切替の回帰試験を追加）。
 - `scripts/dev/cos-chat-bench.sh` に mode `same-thread`（同一 thread 10 turn だけ）を追加。
 
 ## 証拠
@@ -60,3 +60,22 @@ updated: 2026-10-08
 
 ## 提案
 - 差分配送の判定指標は非 cache input でなく cache write と prompt bytes にする（baseline の提案と同じ）。この基準なら改善あり（−13.6%・−21.1%）。（2026-10-08 の人の決定で採用。）
+
+
+## main 取り込みと代替経路の併存（2026-10-08、merge-main）
+
+- task branch へ `git merge --no-ff main` を実施。取り込み対象は `10566e5bc7666a18c0850fabb1c177aef4472483`（CoS 代替経路と Claude 利用枠の予約）。`merge-tree` と実 merge の衝突は `crates/task-dispatch/src/dispatcher/cos_chat/launch.rs` のみ。
+- 衝突解消後、通常の resume は `history_for_run(..., delta_from)` で summary を省き、cursor より後を渡す。`route_index > 0` は常に別 session を作り、cursor に関係なく summary と未要約履歴の全文を渡す。main の適用済み操作 receipts の summary 追記、source・credential の切替、残り実行時間での再試行を保持した。同じ session key の代替経路でも失敗した session を再利用しない。
+- cursor 更新は既存の `advance_delivery_cursor` を保持。経路再試行を enqueue している間は更新せず、completed 終端の run に記録された session 行だけを進める。resume 拒否後の fresh 再試行も、その最終 session 行を使う。
+- `cos_chat_resume_delta_fallback_route_gets_full_history` を追加。summary と既配送履歴を持つ thread の resume 中に利用上限を返す fake adapter で再現し、同じ run/input のまま新 session に全文と receipts が配送され、旧 cursor は不変・完走 session の cursor だけが進むことを断言する。LLM は使用しない。
+- main の経路開始通知も永続 message の seq を消費するため、既存 delta 試験の期待 seq を通知込みに更新。経路通知を欠落させず配送する動作を確認する。
+- main の `routes.rs`、`cos_source_fallback.rs`、`provider_select.rs`、`config/cos.rs` と試験、`bootstrap.rs`、task-worker の `provider.rs` と試験、fallback ADR/progress、`celeris.example.toml` は main と差分ゼロ。
+- 本 WU では本番 config/DB/release/systemd の操作も LLM 計測も行っていない。既存の before/after 計測は lab account provenance 未確認であり、その補完は後続 `lab-bench` WU の対象。上の旧計測結果だけでは lab 使用の証明にならない。
+
+検証（統合後 tree）:
+- `cargo test -p task-dispatch -p task-core -p task-worker cos_chat_resume_delta`: exit 0、task-dispatch 10・task-core 1・task-worker 1、計 12 件成功。追加した `cos_chat_resume_delta_fallback_route_gets_full_history` も成功。
+- `cargo test -p task-dispatch cos_source_fallback`: exit 0、9 件成功。main の同試験 file は不変。
+
+- `cargo test -p task-dispatch -p task-core cos_chat`: exit 0、task-dispatch lib 113・結合 11・task-core 28 件成功（失敗 0）。
+- `sh scripts/dev/check-doc-links.sh && sh scripts/dev/progress-index.sh --check`: exit 0。
+- `cargo clippy --workspace -- -D warnings`: exit 0。

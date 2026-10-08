@@ -41,6 +41,8 @@ struct Fixture {
 
 fn launch_config(dir: &Path, db_path: &Path, enabled: bool) -> CosChatLaunchConfig {
     CosChatLaunchConfig {
+        fallbacks: Vec::new(),
+        worker_reserve_five_hour: 0.90,
         enabled,
         harness: "fake".into(),
         llm_source: Some("test".into()),

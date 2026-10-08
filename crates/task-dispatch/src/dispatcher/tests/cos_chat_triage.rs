@@ -48,6 +48,8 @@ fn fixture_script(enabled: bool, script: &str) -> Fixture {
     d.set_cos_chat_launch(
         store.clone(),
         CosChatLaunchConfig {
+            fallbacks: Vec::new(),
+            worker_reserve_five_hour: 0.90,
             enabled,
             harness: "fake".into(),
             llm_source: Some("test".into()),

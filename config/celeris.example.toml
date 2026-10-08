@@ -739,6 +739,15 @@ tier = "frontier"
 max_turns = 70
 max_wall_secs = 900
 stream_retention_days = 30
+# Claude の観測済み 5 時間使用率がこの値以上なら通常 worker に新規割当しない。
+# CoS は quota / login 制約を守りつつ残り枠を使える（0 < 値 <= 0.97）。
+worker_reserve_five_hour = 0.90
+# 明示設定した順で、同じ run と発言を再試行する。設定後は daemon 再起動が必要。
+# [[cos.fallbacks]]
+# harness = "codex"
+# llm_source = "codex_oauth"
+# model = "gpt-6.1-sol"
+# tier = "frontier"
 
 [cos.triage]
 policy_skill = "cos-inbox-triage"

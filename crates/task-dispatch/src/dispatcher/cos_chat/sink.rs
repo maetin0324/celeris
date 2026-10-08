@@ -184,6 +184,22 @@ pub(crate) struct ChatRunSink {
 }
 
 impl ChatRunSink {
+    /// Close abandoned tool calls before the next route shares this run's event stream.
+    pub(super) fn close_attempt_tools(&self) {
+        let mut state = self.state();
+        let open: Vec<_> = state.open_calls.drain(..).collect();
+        for (call_id, name) in open {
+            let fields = ProgressFields::of(ProgressKind::ToolResult)
+                .with_summary("route ended before the tool result")
+                .with_error(true);
+            self.tool(&mut state, call_id, name, ChatToolState::Failed, &fields);
+        }
+    }
+
+    pub(super) fn redact_reason(&self, reason: &str) -> String {
+        redact_text(reason, &self.secrets).0
+    }
+
     pub(crate) fn new(
         store: Arc<SqliteStore>,
         thread_id: impl Into<String>,
@@ -211,6 +227,7 @@ impl ChatRunSink {
         let mut state = self.state();
         state.usage = old.usage;
         state.skill_reads = old.skill_reads;
+        state.next_call = old.next_call;
         state.first_output_at = old.first_output_at;
     }
 

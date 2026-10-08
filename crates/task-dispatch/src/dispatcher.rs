@@ -1843,12 +1843,9 @@ impl Dispatcher {
                 .filter(|e| matches(&e.account_adapter, &e.account))
                 .count()
             + self.cos_chat_launch.as_ref().map_or(0, |chat| {
-                if chat.config.harness != adapter.as_str() {
-                    return 0;
-                }
                 chat.accounts_in_flight
                     .values()
-                    .filter(|account| *account == id)
+                    .filter(|(a, account)| *a == adapter && account == id)
                     .count()
             })
     }

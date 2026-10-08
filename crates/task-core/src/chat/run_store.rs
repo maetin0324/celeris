@@ -508,6 +508,53 @@ impl SqliteStore {
         Ok(id)
     }
 
+    /// Records the selected route without changing the run/input/output identity.
+    /// The session fields set by choose_session are retained.
+    pub fn chat_run_route(
+        &self,
+        run_id: &str,
+        route: &Value,
+        now: OffsetDateTime,
+    ) -> Result<(), ChatError> {
+        let mut conn = writer(self)?;
+        let tx = immediate(&mut conn)?;
+        let run = live_run(&tx, run_id)?;
+        if run.state != ChatRunState::Running {
+            return Err(ChatError::Conflict("run is stopping".into()));
+        }
+        let raw: String = tx.query_row(
+            "SELECT resolved_config_json FROM chat_runs WHERE run_id=?1",
+            [run_id],
+            |r| r.get(0),
+        )?;
+        let mut config: Value = serde_json::from_str(&raw)?;
+        let fields = route
+            .as_object()
+            .ok_or_else(|| ChatError::Invalid("route must be an object".into()))?;
+        for (key, value) in fields {
+            config[key] = value.clone();
+        }
+        tx.execute(
+            "UPDATE chat_runs SET resolved_config_json=?2 WHERE run_id=?1",
+            params![run_id, config.to_string()],
+        )?;
+        super::store::append_event(
+            &tx,
+            &run.thread_id,
+            Some(run_id),
+            run.output_message_id.as_deref(),
+            ChatEventType::Status,
+            &ChatEventData::Status(ChatStatusData {
+                phase: ChatStatusPhase::Working,
+                summary: format!("CoS route: {}", route),
+            }),
+            &chat_ts(now),
+        )?;
+        emit_run(&tx, &run_by_id(&tx, run_id)?, &chat_ts(now))?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Records a public `status` phase for a live run. Returns the event id.
     pub fn chat_run_status(
         &self,

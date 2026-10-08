@@ -63,6 +63,8 @@ fn fixture_on(
         store.clone(),
         CosChatLaunchConfig {
             enabled: true,
+            fallbacks: Vec::new(),
+            worker_reserve_five_hour: 0.90,
             harness: harness.into(),
             llm_source: Some("test".into()),
             provider: Some("p1".into()),
@@ -387,6 +389,8 @@ printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"
 }
 
 // ---- ADR 2026-10-05 D2 付記: resume 時の差分配送（delivery cursor） ----
+// Each route start also adds a system notice after the claimed input/reply pair.
+// Notices are durable history and must be included in subsequent delivery ranges.
 
 /// What the delta probe does on one attempt (1-based order of `DeltaProbe::steps`).
 #[derive(Clone, Copy, Debug)]
@@ -399,6 +403,8 @@ enum DeltaStep {
     Refuse,
     /// Ends with an error before the run completes.
     Fail,
+    /// Applies an operation before hitting a supply limit and switching routes.
+    SupplyFail,
     /// Ends with the context budget exhausted.
     ContextExhausted,
     /// The daemon "restarted": the run is taken over as an orphan while the worker is alive.
@@ -484,6 +490,29 @@ impl WorkerAdapter for DeltaProbe {
             }
             DeltaStep::Refuse => {}
             DeltaStep::Fail => return error("worker crashed before the end"),
+            DeltaStep::SupplyFail => {
+                self.store
+                    .cos_operation_apply(
+                        &task_core::chat::AuditContext {
+                            actor: task_core::chat::ChatActor::Cos,
+                            thread_id: chat.thread_id.clone(),
+                            run_id: chat.run_id.clone(),
+                            operation_id: ulid::Ulid::new().to_string(),
+                            reason: "fixture operation".into(),
+                            policy_version: "v1".into(),
+                        },
+                        "delta-fallback-key",
+                        "fixture-hash",
+                        "project",
+                        "fixture-project",
+                        None,
+                        "edit",
+                        &serde_json::json!({}),
+                        |_, _| Ok(serde_json::json!({"done": true})),
+                    )
+                    .expect("applied receipt");
+                return error("provider exhausted: session limit");
+            }
             DeltaStep::ContextExhausted => {
                 return Ok(RunOutcome {
                     terminal: Terminal::BudgetExhausted {
@@ -612,8 +641,8 @@ async fn cos_chat_resume_delta_resumed_run_gets_only_messages_after_the_cursor()
 
     store
         .chat_system_message_add(&t, "card between turns", &[], d.now_utc())
-        .expect("system message"); // seq 3
-    post(&store, &d, &t, "two", vec![]); // seq 4, reply seq 5
+        .expect("system message"); // seq 4
+    post(&store, &d, &t, "two", vec![]); // seq 5, reply seq 6
     let second = run(&mut d, &store, &t).await;
     assert_eq!(session_detail(&store, &second.id), "resumed");
     let c2 = probe.chat(1);
@@ -622,21 +651,24 @@ async fn cos_chat_resume_delta_resumed_run_gets_only_messages_after_the_cursor()
     assert_eq!(c2.summary_through_seq, 1, "the watermark is still passed");
     assert_eq!(
         (c2.unsummarized.from_seq, c2.unsummarized.through_seq),
-        (3, 3)
+        (3, 4)
     );
-    assert_eq!(seqs(&c2), vec![3]);
+    assert_eq!(seqs(&c2), vec![3, 4]);
     assert_eq!(c2.inputs.len(), 1);
-    assert_eq!(c2.inputs[0].seq, 4);
-    assert_eq!(live_cursor(&store, &t), (5, 1));
+    assert_eq!(c2.inputs[0].seq, 5);
+    assert_eq!(live_cursor(&store, &t), (6, 1));
 
-    post(&store, &d, &t, "three", vec![]); // seq 6
+    post(&store, &d, &t, "three", vec![]); // seq 8
     run(&mut d, &store, &t).await;
     let c3 = probe.chat(2);
-    assert_eq!(c3.delivered_through_seq, Some(5));
-    assert!(c3.unsummarized.from_seq > c3.unsummarized.through_seq);
-    assert!(c3.unsummarized.messages.is_empty());
+    assert_eq!(c3.delivered_through_seq, Some(6));
+    assert_eq!(
+        seqs(&c3),
+        vec![7],
+        "the route notice after the reply is new"
+    );
     assert_eq!(c3.inputs[0].text, "message three");
-    assert_eq!(live_cursor(&store, &t), (7, 1));
+    assert_eq!(live_cursor(&store, &t), (9, 1));
 }
 
 /// A fresh session for every retire reason gets the summary and the unsummarized history.
@@ -702,7 +734,7 @@ async fn cos_chat_resume_delta_fresh_reasons_deliver_the_full_text() {
         assert_eq!(
             seqs(&c).first(),
             Some(&2),
-            "{reason}: the reply after the summary"
+            "{reason}: history after the summary"
         );
         // The fresh row starts its own cursor at this run's input/reply.
         let (cursor, _) = live_cursor(&store, &t);
@@ -717,7 +749,7 @@ async fn cos_chat_resume_delta_refused_resume_retries_fresh_with_the_full_text()
     post(&store, &d, &t, "one", vec![]); // seq 1, reply 2
     run(&mut d, &store, &t).await;
     let old = store.chat_session_active(&t).expect("s").expect("live");
-    post(&store, &d, &t, "two", vec![]); // seq 3, reply 4
+    post(&store, &d, &t, "two", vec![]); // seq 4, reply 5
     let second = run(&mut d, &store, &t).await;
     assert_eq!(session_detail(&store, &second.id), "fresh_after_refusal");
     let refused = probe.chat(1);
@@ -726,7 +758,7 @@ async fn cos_chat_resume_delta_refused_resume_retries_fresh_with_the_full_text()
     assert_eq!(refused.summary, None);
     assert_eq!(retry.delivered_through_seq, None);
     assert_eq!(retry.summary.as_deref(), Some("S1"));
-    assert_eq!(seqs(&retry), vec![2]);
+    assert_eq!(seqs(&retry), vec![2, 3]);
     assert_eq!(
         retry.inputs, refused.inputs,
         "same input, not claimed again"
@@ -734,7 +766,7 @@ async fn cos_chat_resume_delta_refused_resume_retries_fresh_with_the_full_text()
     // The retired row keeps its cursor; the fresh row covers this run.
     let old = store.chat_session_get(&old.id).expect("get").expect("row");
     assert_eq!(old.delivered_through_seq, 2);
-    assert_eq!(live_cursor(&store, &t), (4, 1));
+    assert_eq!(live_cursor(&store, &t), (5, 1));
 }
 
 #[tokio::test]
@@ -742,7 +774,7 @@ async fn cos_chat_resume_delta_interrupt_and_queued_inputs_are_always_delivered(
     let (_dir, store, mut d, t, probe) = delta_fixture(vec![]);
     post(&store, &d, &t, "one", vec![]); // seq 1, reply 2
     run(&mut d, &store, &t).await;
-    post(&store, &d, &t, "two", vec![]); // seq 3, queued
+    post(&store, &d, &t, "two", vec![]); // seq 4, queued
     store
         .chat_message_post(
             &t,
@@ -756,25 +788,25 @@ async fn cos_chat_resume_delta_interrupt_and_queued_inputs_are_always_delivered(
             },
             d.now_utc(),
         )
-        .expect("interrupt"); // seq 4
-    run(&mut d, &store, &t).await; // the interrupt first, reply seq 5
+        .expect("interrupt"); // seq 5
+    run(&mut d, &store, &t).await; // the interrupt first, reply seq 6
     let c2 = probe.chat(1);
-    assert_eq!(c2.inputs[0].seq, 4);
+    assert_eq!(c2.inputs[0].seq, 5);
     assert_eq!(c2.inputs[0].text, "interrupt three");
     assert_eq!(c2.delivered_through_seq, Some(2));
     assert_eq!(
         seqs(&c2),
-        vec![3],
+        vec![3, 4],
         "the waiting message is visible as history"
     );
-    assert_eq!(live_cursor(&store, &t).0, 5);
+    assert_eq!(live_cursor(&store, &t).0, 6);
 
     // The waiting message is now below the cursor, and still delivered as the input.
     run(&mut d, &store, &t).await;
     let c3 = probe.chat(2);
-    assert_eq!(c3.inputs[0].seq, 3);
+    assert_eq!(c3.inputs[0].seq, 4);
     assert_eq!(c3.inputs[0].text, "message two");
-    assert_eq!(c3.delivered_through_seq, Some(5));
+    assert_eq!(c3.delivered_through_seq, Some(6));
     assert!(c3.unsummarized.messages.is_empty());
     let users = store
         .chat_message_list(
@@ -803,7 +835,7 @@ async fn cos_chat_resume_delta_failed_run_keeps_the_cursor_and_redelivers() {
     let (_dir, store, mut d, t, probe) = delta_fixture(vec![DeltaStep::Ok, DeltaStep::Fail]);
     post(&store, &d, &t, "one", vec![]); // seq 1, reply 2
     run(&mut d, &store, &t).await;
-    post(&store, &d, &t, "two", vec![]); // seq 3, reply 4
+    post(&store, &d, &t, "two", vec![]); // seq 4, reply 5
     let failed = run_any(&mut d, &store, &t).await;
     assert_eq!(failed.state, ChatRunState::Failed);
     assert_eq!(
@@ -812,13 +844,17 @@ async fn cos_chat_resume_delta_failed_run_keeps_the_cursor_and_redelivers() {
         "a failed run does not move the cursor"
     );
 
-    post(&store, &d, &t, "three", vec![]); // seq 5
+    post(&store, &d, &t, "three", vec![]); // seq 7
     let third = run(&mut d, &store, &t).await;
     assert_eq!(session_detail(&store, &third.id), "resumed");
     let c3 = probe.chat(2);
     assert_eq!(c3.delivered_through_seq, Some(2));
-    assert_eq!(seqs(&c3), vec![3, 4], "the failed turn is delivered again");
-    assert_eq!(live_cursor(&store, &t).0, 6);
+    assert_eq!(
+        seqs(&c3),
+        vec![3, 4, 5, 6],
+        "the failed turn is delivered again"
+    );
+    assert_eq!(live_cursor(&store, &t).0, 8);
 }
 
 #[tokio::test]
@@ -827,19 +863,19 @@ async fn cos_chat_resume_delta_restart_recovery_delivers_the_full_text() {
         delta_fixture(vec![DeltaStep::Checkpoint("S1"), DeltaStep::Orphan]);
     post(&store, &d, &t, "one", vec![]); // seq 1, reply 2
     run(&mut d, &store, &t).await;
-    post(&store, &d, &t, "two", vec![]); // seq 3, reply 4
+    post(&store, &d, &t, "two", vec![]); // seq 4, reply 5
     let orphan = run_any(&mut d, &store, &t).await;
     assert_eq!(orphan.state, ChatRunState::Interrupted);
     assert_eq!(live_cursor(&store, &t).0, 2);
 
-    // The continuation (seq 5) resumes the same session but gets the full text.
+    // The continuation (seq 7) resumes the same session but gets the full text.
     let next = run(&mut d, &store, &t).await;
     assert_eq!(session_detail(&store, &next.id), "resumed");
     let c3 = probe.chat(2);
     assert_eq!(c3.inputs[0].text, "message two");
     assert_eq!(c3.delivered_through_seq, None);
     assert_eq!(c3.summary.as_deref(), Some("S1"));
-    assert_eq!(seqs(&c3), vec![2, 3, 4]);
+    assert_eq!(seqs(&c3), vec![2, 3, 4, 5, 6]);
 }
 
 #[tokio::test]
@@ -852,21 +888,131 @@ async fn cos_chat_resume_delta_checkpoint_watermark_and_cursor_are_independent()
     post(&store, &d, &t, "one", vec![]); // seq 1, reply 2
     run(&mut d, &store, &t).await;
     assert_eq!(live_cursor(&store, &t), (2, 1));
-    post(&store, &d, &t, "two", vec![]); // seq 3, reply 4
+    post(&store, &d, &t, "two", vec![]); // seq 4, reply 5
     run(&mut d, &store, &t).await;
-    // The summary moved to 3 and the cursor to 4: neither follows the other.
-    assert_eq!(live_cursor(&store, &t), (4, 3));
-    assert_eq!(store.chat_thread_summary(&t).expect("summary").1, 3);
+    // The summary moved to 4 and the cursor to 5: neither follows the other.
+    assert_eq!(live_cursor(&store, &t), (5, 4));
+    assert_eq!(store.chat_thread_summary(&t).expect("summary").1, 4);
 
     // A failed run does not move the cursor even though nothing about the summary changed.
-    post(&store, &d, &t, "three", vec![]); // seq 5, reply 6
+    post(&store, &d, &t, "three", vec![]); // seq 7, reply 8
     run_any(&mut d, &store, &t).await;
-    assert_eq!(live_cursor(&store, &t), (4, 3));
-    post(&store, &d, &t, "four", vec![]); // seq 7
+    assert_eq!(live_cursor(&store, &t), (5, 4));
+    post(&store, &d, &t, "four", vec![]); // seq 10
     run(&mut d, &store, &t).await;
     let c = probe.chat(3);
-    // The summary covers up to 3, but the session only holds up to 4: the delta starts at 5.
-    assert_eq!(c.summary_through_seq, 3);
-    assert_eq!(c.delivered_through_seq, Some(4));
-    assert_eq!(seqs(&c), vec![5, 6]);
+    // The summary covers up to 4, but the session only holds up to 5: the delta starts at 6.
+    assert_eq!(c.summary_through_seq, 4);
+    assert_eq!(c.delivered_through_seq, Some(5));
+    assert_eq!(seqs(&c), vec![6, 7, 8, 9]);
+}
+
+#[tokio::test]
+async fn cos_chat_resume_delta_fallback_route_gets_full_history() {
+    let (_dir, store, mut d, t, probe) = delta_fixture(vec![
+        DeltaStep::Checkpoint("saved summary"),
+        DeltaStep::Ok,
+        DeltaStep::SupplyFail,
+        DeltaStep::Ok,
+    ]);
+    // Use the same key for both routes to ensure switching always starts another session.
+    d.cos_chat_launch.as_mut().unwrap().config.fallbacks =
+        vec![crate::dispatcher::cos_chat::launch::CosChatRoute {
+            harness: "fake".into(),
+            llm_source: Some("test".into()),
+            provider: Some("p1".into()),
+            account_id: None,
+            model: None,
+            tier: Tier::Frontier,
+            unavailable_reason: None,
+        }];
+    post(&store, &d, &t, "one", vec![]);
+    run(&mut d, &store, &t).await;
+    post(&store, &d, &t, "two", vec![]);
+    run(&mut d, &store, &t).await;
+    let old = store.chat_session_active(&t).unwrap().unwrap();
+    assert!(old.delivered_through_seq > 1);
+    post(&store, &d, &t, "three", vec![]);
+    let failed_attempt = run_any(&mut d, &store, &t).await;
+    assert_eq!(failed_attempt.state, ChatRunState::Running);
+    assert_eq!(session_detail(&store, &failed_attempt.id), "resumed");
+    assert_eq!(probe.chat(2).summary, None);
+    assert_eq!(
+        probe.chat(2).delivered_through_seq,
+        Some(old.delivered_through_seq)
+    );
+    assert!(!seqs(&probe.chat(2)).contains(&2));
+    assert_eq!(
+        store
+            .chat_session_get(&old.id)
+            .unwrap()
+            .unwrap()
+            .delivered_through_seq,
+        old.delivered_through_seq,
+        "a failed attempt must not move the cursor"
+    );
+
+    // The route retry continues the same durable run/input after the first worker exited.
+    let finished = run(&mut d, &store, &t).await;
+    assert_eq!(finished.id, failed_attempt.id);
+    assert_eq!(finished.input_message_id, failed_attempt.input_message_id);
+    let full = probe.chat(3);
+    assert_eq!(full.delivered_through_seq, None);
+    let summary = full.summary.as_deref().expect("full summary with receipt");
+    assert!(summary.starts_with("saved summary"));
+    assert!(summary.contains("Applied operations from the previous route (do not reapply)"));
+    assert!(summary.contains("edit project:fixture-project"));
+    assert!(summary.contains("idempotency_key=delta-fallback-key"));
+    assert_eq!(full.summary_through_seq, 1);
+    let expected = crate::dispatcher::cos_chat::rollover::history_since_summary(
+        &store,
+        &t,
+        full.inputs[0].seq as u64,
+    )
+    .unwrap()
+    .2;
+    assert_eq!(
+        full.unsummarized, expected,
+        "all unsummarized history is sent"
+    );
+    assert!(
+        seqs(&full).contains(&2),
+        "history already held by the old session is resent"
+    );
+    assert!(
+        full.unsummarized
+            .messages
+            .iter()
+            .any(|m| m.text == "message two")
+    );
+    assert_eq!(full.inputs[0].text, "message three");
+    let seen = probe.seen.lock().unwrap();
+    assert!(!seen[3].context.session.as_ref().unwrap().resume);
+    drop(seen);
+    let active = store.chat_session_active(&t).unwrap().unwrap();
+    assert_ne!(active.id, old.id);
+    assert!(active.delivered_through_seq >= full.inputs[0].seq);
+    assert_eq!(
+        store
+            .chat_run_session_record(&finished.id)
+            .unwrap()
+            .session_row_id,
+        Some(active.id)
+    );
+    assert_eq!(
+        store
+            .chat_session_get(&old.id)
+            .unwrap()
+            .unwrap()
+            .delivered_through_seq,
+        old.delivered_through_seq,
+        "only the completing session advances"
+    );
+    assert_eq!(
+        store
+            .cos_operation_applied_for_run(&finished.id)
+            .unwrap()
+            .len(),
+        1
+    );
 }

@@ -237,3 +237,37 @@ fn cos_chat_ops_checkpoint_rejects_queued_gap_before_interrupt_input() {
         Err(store::ChatError::Invalid(_))
     ));
 }
+
+#[test]
+fn cos_source_fallback_credential_replacement_requires_revocation_and_running() {
+    let store = SqliteStore::open_in_memory().unwrap();
+    let (thread, run) = live_run(&store, "rotate", 0);
+    let first = store
+        .cos_run_credential_issue_at(&thread, &run, Duration::seconds(30), at(3))
+        .unwrap();
+    assert!(
+        store
+            .cos_run_credential_issue_at(&thread, &run, Duration::seconds(30), at(4))
+            .is_err()
+    );
+    store.cos_run_credential_revoke(&run, at(4)).unwrap();
+    let next = store
+        .cos_run_credential_issue_at(&thread, &run, Duration::seconds(30), at(5))
+        .unwrap();
+    assert_ne!(first, next);
+    assert!(store.cos_run_credential_verify(&first, at(6)).is_err());
+    assert_eq!(
+        store
+            .cos_run_credential_verify(&next, at(6))
+            .unwrap()
+            .run_id,
+        run
+    );
+    store.chat_run_stop(&thread, &run, at(7)).unwrap();
+    store.cos_run_credential_revoke(&run, at(8)).unwrap();
+    assert!(
+        store
+            .cos_run_credential_issue_at(&thread, &run, Duration::seconds(30), at(9))
+            .is_err()
+    );
+}

@@ -319,3 +319,75 @@ fn cos_chat_config_unavailable_tier_keeps_reason() {
             .contains("account cannot access this model")
     );
 }
+
+#[test]
+fn cos_source_fallback_config_order_resolution_and_validation() {
+    let text = r#"
+[cos]
+account_id = "primary-only"
+worker_reserve_five_hour = 0.85
+[[cos.fallbacks]]
+harness = "codex"
+llm_source = "codex_oauth"
+model = "gpt-6.1-sol"
+[[cos.fallbacks]]
+harness = "claude-code"
+provider = "claude"
+[[providers]]
+id = "claude"
+adapter = "claude-code"
+[[providers]]
+id = "codex"
+adapter = "codex"
+"#;
+    let cfg = load(text).unwrap();
+    let routes = cfg.resolve_cos_fallbacks();
+    assert_eq!(routes.len(), 2);
+    assert_eq!(routes[0].as_ref().unwrap().provider, "codex");
+    assert_eq!(
+        routes[0].as_ref().unwrap().model.as_deref(),
+        Some("gpt-6.1-sol")
+    );
+    assert_eq!(routes[1].as_ref().unwrap().provider, "claude");
+    assert!(
+        routes
+            .iter()
+            .all(|r| r.as_ref().unwrap().account_id.is_none())
+    );
+    assert_eq!(cfg.cos.worker_reserve_five_hour, 0.85);
+    let defaults = load("").unwrap();
+    assert!(defaults.cos.fallbacks.is_empty());
+    assert_eq!(defaults.cos.worker_reserve_five_hour, 0.90);
+    for value in ["0", "-0.1", "0.98", "nan", "inf"] {
+        assert!(load(&format!("[cos]\nworker_reserve_five_hour = {value}\n")).is_err());
+    }
+    for route in [
+        "harness = 'codex'\nllm_source = 'claude_oauth'",
+        "harness = 'codex'\nprovider = 'missing'",
+        "harness = 'fake'",
+        "harness = 'codex'\nbogus = 1",
+    ] {
+        assert!(
+            load(&format!("[[cos.fallbacks]]\n{route}\n")).is_err(),
+            "{route}"
+        );
+    }
+    assert!(load(&"[[cos.fallbacks]]\nharness = 'codex'\n".repeat(9)).is_err());
+    // Missing runtime providers are non-fatal, allowing a later route to serve CoS.
+    let cfg = load("[[cos.fallbacks]]\nharness = 'codex'\n").unwrap();
+    assert!(cfg.resolve_cos_fallbacks()[0].is_err());
+}
+
+#[test]
+fn cos_source_fallback_opencode_go_is_compatible() {
+    let cfg =
+        load("[[cos.fallbacks]]\nharness = 'opencode'\nllm_source = 'opencode_go'\n[accounts]\nopencode_dir = 'acct'\n[[providers]]\nid = 'go'\nadapter = 'acp'\nllm_source = 'opencode_go'\nmodel = 'opencode-go/kimi-k3'\naccount_pool = 'opencode-go'\ntiers = ['frontier']\n").unwrap();
+    assert_eq!(
+        cfg.cos.fallbacks[0].llm_source,
+        Some(LlmSourceRef::OpencodeGo)
+    );
+    assert_eq!(
+        cfg.resolve_cos_fallbacks()[0].as_ref().unwrap().provider,
+        "go"
+    );
+}

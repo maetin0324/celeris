@@ -59,7 +59,8 @@ impl SqliteStore {
         self.cos_run_credential_issue_at(thread_id, run_id, ttl, OffsetDateTime::now_utc())
     }
 
-    /// Clock-injected issuance for deterministic tests and controlled daemon scheduling.
+    /// Clock-injected issuance. A revoked credential may be replaced only while the run
+    /// is running (route failover after the former worker exits); its old hash stays invalid.
     pub fn cos_run_credential_issue_at(
         &self,
         thread_id: &str,
@@ -106,6 +107,11 @@ impl SqliteStore {
         if !live {
             return Err(ChatError::Conflict(format!("run {run_id} is finished")));
         }
+        tx.execute(
+            "DELETE FROM cos_run_credentials WHERE run_id=?1 AND revoked_at IS NOT NULL \
+             AND EXISTS(SELECT 1 FROM chat_runs WHERE run_id=?1 AND state='running')",
+            [run_id],
+        )?;
         let existing: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM cos_run_credentials WHERE run_id=?1)",
             params![run_id],

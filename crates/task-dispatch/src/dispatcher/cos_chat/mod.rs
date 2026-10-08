@@ -7,3 +7,5 @@ pub(crate) mod rollover;
 pub(crate) mod sink;
 pub mod triage;
 pub(crate) mod workspace_files;
+
+mod routes;

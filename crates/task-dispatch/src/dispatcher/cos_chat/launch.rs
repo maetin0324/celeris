@@ -5,14 +5,14 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::json;
 use task_core::SqliteStore;
 use task_core::chat::{
     ChatMessage, ChatMessageQuery, ChatRunSessionMode, ChatRunState, ChatSessionKey,
-    ChatStatusPhase, ChatThreadQuery,
+    ChatThreadQuery,
 };
 use task_worker::adapter::{RunLimits, WorkerAdapter};
 use task_worker::protocol::{
@@ -105,6 +105,8 @@ pub(crate) fn inbox_context_item(item: CosTriageItemReport) -> CosChatInboxItem 
 #[derive(Debug, Clone)]
 pub struct CosChatLaunchConfig {
     pub enabled: bool,
+    pub fallbacks: Vec<CosChatRoute>,
+    pub worker_reserve_five_hour: f64,
     pub harness: String,
     pub llm_source: Option<String>,
     pub provider: Option<String>,
@@ -122,11 +124,34 @@ pub struct CosChatLaunchConfig {
     pub triage: super::triage::CosTriageSettings,
 }
 
+/// One resolved, explicitly configured route.
+#[derive(Debug, Clone)]
+pub struct CosChatRoute {
+    pub harness: String,
+    pub llm_source: Option<String>,
+    pub provider: Option<String>,
+    pub account_id: Option<String>,
+    pub model: Option<String>,
+    pub tier: task_core::Tier,
+    pub unavailable_reason: Option<String>,
+}
+
+pub(super) struct RouteRetry {
+    pub thread_id: String,
+    pub run_id: String,
+    pub next_route: usize,
+    pub reason: String,
+    pub previous: Arc<ChatRunSink>,
+}
+
+pub(super) type RouteRetries = Arc<Mutex<Vec<RouteRetry>>>;
+
 pub(crate) struct CosChatLaunch {
     pub store: Arc<SqliteStore>,
     pub config: CosChatLaunchConfig,
+    pub(super) retries: RouteRetries,
     pub running: HashMap<String, tokio::task::JoinHandle<()>>,
-    pub(crate) accounts_in_flight: HashMap<String, String>,
+    pub(crate) accounts_in_flight: HashMap<String, (task_core::AccountAdapter, String)>,
     pub(crate) providers_in_flight: HashMap<String, String>,
     pub(crate) triage: super::triage::CosTriageState,
 }
@@ -146,6 +171,7 @@ impl Dispatcher {
         self.cos_chat_launch = Some(CosChatLaunch {
             store,
             config,
+            retries: Arc::new(Mutex::new(Vec::new())),
             running: HashMap::new(),
             accounts_in_flight: HashMap::new(),
             providers_in_flight: HashMap::new(),
@@ -176,6 +202,7 @@ impl Dispatcher {
         launch
             .providers_in_flight
             .retain(|thread, _| launch.running.contains_key(thread));
+        launch.retry_routes(self);
         // Reconcile stop and ownerless runs before a new claim, so an old
         // process cannot overlap a new one in the same thread.
         launch.control_hook(self);
@@ -245,9 +272,42 @@ impl CosChatLaunch {
     ) -> Result<(), String> {
         let now = dispatcher.now_utc();
         let cfg = &self.config;
-        let account = if let Some(provider) = cfg.provider.as_deref() {
+        let run_id = ulid::Ulid::new().to_string();
+        let resolved = json!({
+            "harness": cfg.harness,
+            "llm_source": cfg.llm_source,
+            "provider": cfg.provider,
+            "account_id": cfg.account_id,
+            "model": cfg.model,
+            "tier": format!("{:?}", cfg.tier).to_lowercase(),
+        });
+        let run = match source {
+            ClaimSource::Queue => self
+                .store
+                .chat_run_claim_next(thread_id, &run_id, &resolved, now)
+                .map_err(|e| e.to_string())?,
+            ClaimSource::Triage => self.triage_claim(thread_id, &run_id, now)?,
+        };
+        let Some(run) = run else {
+            return Ok(());
+        };
+        self.launch_routes(dispatcher, thread_id, &run, 0, None, now);
+        Ok(())
+    }
+
+    pub(super) fn select_route_account(
+        &self,
+        dispatcher: &mut Dispatcher,
+        thread_id: &str,
+        cfg: &CosChatLaunchConfig,
+    ) -> Result<Option<String>, String> {
+        let account = if let Some(provider) = cfg.provider.as_ref() {
             if dispatcher.account_pool_providers.contains(provider) {
-                let Some(account_adapter) = task_core::AccountAdapter::parse(&cfg.harness) else {
+                let Some(account_adapter) = dispatcher
+                    .adapters
+                    .get(provider)
+                    .and_then(|a| dispatcher.pool_adapter_of(provider, a.id()))
+                else {
                     return Err(format!("CoS account pool does not support {}", cfg.harness));
                 };
                 let existing = self
@@ -265,7 +325,7 @@ impl CosChatLaunch {
                     let chat_count = self
                         .accounts_in_flight
                         .values()
-                        .filter(|account| account.as_str() == id)
+                        .filter(|(adapter, account)| *adapter == account_adapter && account == id)
                         .count();
                     let limit = crate::capacity::account_run_limit(
                         dispatcher
@@ -285,7 +345,7 @@ impl CosChatLaunch {
                 if let Some(id) = cfg.account_id.as_deref() {
                     if !available(dispatcher, id) {
                         // A pinned account must not silently fall back to another one.
-                        return Ok(());
+                        return Ok(None);
                     }
                     Some(id.to_owned())
                 } else if let Some(id) = sticky.filter(|id| available(dispatcher, id)) {
@@ -307,7 +367,9 @@ impl CosChatLaunch {
                                 + self
                                     .accounts_in_flight
                                     .values()
-                                    .filter(|account| *account == &dir.id)
+                                    .filter(|(adapter, account)| {
+                                        *adapter == account_adapter && account == &dir.id
+                                    })
                                     .count(),
                         })
                         .collect();
@@ -335,58 +397,16 @@ impl CosChatLaunch {
         } else {
             cfg.account_id.clone()
         };
-        let run_id = ulid::Ulid::new().to_string();
-        let resolved = json!({
-            "harness": cfg.harness,
-            "llm_source": cfg.llm_source,
-            "provider": cfg.provider,
-            "account_id": account,
-            "model": cfg.model,
-            "tier": format!("{:?}", cfg.tier).to_lowercase(),
-        });
-        let run = match source {
-            ClaimSource::Queue => self
-                .store
-                .chat_run_claim_next(thread_id, &run_id, &resolved, now)
-                .map_err(|e| e.to_string())?,
-            ClaimSource::Triage => self.triage_claim(thread_id, &run_id, now)?,
-        };
-        let Some(run) = run else {
-            return Ok(());
-        };
-        if let Err(reason) = self.launch_claimed(dispatcher, thread_id, &run_id, &run, account, now)
-        {
-            // No worker handle exists on this path, so inbox_run_live cannot
-            // observe its terminal transition. Reserve the digest explicitly.
-            if source == ClaimSource::Triage
-                || self.triage.inbox_thread.as_deref() == Some(thread_id)
-            {
-                self.triage.digest_due = true;
-            }
-            let reason = if reason.starts_with("CoS unavailable:") {
-                reason
-            } else {
-                format!("CoS unavailable: {reason}")
-            };
-            if let Err(error) =
-                self.store
-                    .chat_run_status(&run_id, ChatStatusPhase::Waiting, &reason, now)
-            {
-                tracing::warn!(%error, %run_id, "CoS unavailable status failed");
-            }
-            if let Err(error) =
-                self.store
-                    .chat_run_finish(&run_id, ChatRunState::Failed, None, Some(&reason), now)
-            {
-                tracing::warn!(%error, %run_id, "CoS unavailable finish failed");
-            }
-        }
-        Ok(())
+        Ok(account)
     }
 
-    fn launch_claimed(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn launch_claimed(
         &mut self,
         dispatcher: &Dispatcher,
+        cfg: &CosChatLaunchConfig,
+        route_index: usize,
+        previous: Option<Arc<ChatRunSink>>,
         thread_id: &str,
         run_id: &str,
         run: &task_core::chat::ChatRun,
@@ -405,7 +425,6 @@ impl CosChatLaunch {
         } else {
             Vec::new()
         };
-        let cfg = &self.config;
         if let Some(reason) = cfg.unavailable_reason.clone() {
             return Err(reason);
         }
@@ -494,22 +513,68 @@ impl CosChatLaunch {
             cwd: Some(workspace.to_string_lossy().into_owned()),
             model: cfg.model.clone(),
         };
+        let choice = if route_index > 0 {
+            // Even two configured routes with the same session key must not reuse the failed
+            // route's session. Only the session that completes may advance its cursor.
+            let session = super::rollover::rotate_fresh(&self.store, session_key, now)?;
+            self.store
+                .chat_run_record_session(
+                    run_id,
+                    ChatRunSessionMode::Fresh,
+                    &session.id,
+                    Some("route_changed"),
+                    now,
+                )
+                .map_err(|e| e.to_string())?;
+            super::rollover::SessionChoice {
+                session,
+                mode: ChatRunSessionMode::Fresh,
+                reason: Some("route_changed"),
+                delta_from: None,
+            }
+        } else {
+            super::rollover::choose_session(
+                &self.store,
+                run_id,
+                session_key,
+                dispatcher.config.session_rollover_tokens,
+                now,
+            )?
+        };
         let super::rollover::SessionChoice {
             session,
             mode,
             delta_from,
             ..
-        } = super::rollover::choose_session(
-            &self.store,
-            run_id,
-            session_key,
-            dispatcher.config.session_rollover_tokens,
-            now,
-        )?;
-        // ADR 2026-10-05 D2 付記: a resumed session with a known delivery cursor gets only the
-        // messages after it; every other mode gets the summary and the unsummarized history.
-        let history =
+        } = choice;
+        // A fallback route uses another session: it needs the full summary and history even
+        // when the original attempt resumed with a delivery cursor.
+        let delta_from = if route_index == 0 { delta_from } else { None };
+        let mut history =
             super::rollover::history_for_run(&self.store, thread_id, input.seq, delta_from)?;
+        if route_index > 0 {
+            let applied = self
+                .store
+                .cos_operation_applied_for_run(run_id)
+                .map_err(|e| format!("CoS operation receipts unavailable: {e}"))?;
+            if !applied.is_empty() {
+                let receipts = applied
+                    .iter()
+                    .map(|op| {
+                        format!(
+                            "{} {} {}:{} (idempotency_key={})",
+                            op.id, op.action, op.target_kind, op.target_id, op.idempotency_key
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                history.summary = Some(format!(
+                    "{}\nApplied operations from the previous route (do not reapply): {receipts}",
+                    history.summary.unwrap_or_default()
+                ));
+            }
+        }
+
         let chat = CosChatContext {
             thread_id: thread_id.to_string(),
             run_id: run_id.to_owned(),
@@ -587,7 +652,7 @@ impl CosChatLaunch {
             cargo_target_dir: None,
         };
         let adapter = if let Some(account_id) = account.as_deref() {
-            if let Some(account_adapter) = task_core::AccountAdapter::parse(&cfg.harness) {
+            if let Some(account_adapter) = dispatcher.pool_adapter_of(provider, adapter.id()) {
                 if dispatcher.account_pool_providers.contains(provider) {
                     match dispatcher.adapter_for_account(&adapter, account_adapter, account_id) {
                         Some(adapter) => adapter,
@@ -656,6 +721,32 @@ impl CosChatLaunch {
                 Arc::new(OffsetDateTime::now_utc)
             }
         };
+        self.store
+            .chat_run_route(
+                run_id,
+                &json!({
+                    "harness": cfg.harness, "llm_source": cfg.llm_source,
+                    "provider": cfg.provider, "account_id": account, "model": cfg.model,
+                    "tier": format!("{:?}", cfg.tier).to_lowercase(),
+                }),
+                now,
+            )
+            .map_err(|e| e.to_string())?;
+        self.route_notice(
+            run_id,
+            thread_id,
+            route_index,
+            "started",
+            &format!(
+                "CoS 実行経路: {} / {} / {} / {}",
+                cfg.harness,
+                cfg.llm_source.as_deref().unwrap_or("unknown"),
+                provider,
+                cfg.model.as_deref().unwrap_or("default")
+            ),
+            now,
+        );
+        let retries = Arc::clone(&self.retries);
         self.running.insert(
             thread.clone(),
             tokio::spawn(async move {
@@ -673,6 +764,9 @@ impl CosChatLaunch {
                     idle,
                     grace,
                     clock,
+                    retries,
+                    route_index,
+                    previous,
                 )
                 .await;
             }),
@@ -680,9 +774,14 @@ impl CosChatLaunch {
         if self.triage.inbox_thread.as_deref() == Some(thread_id) {
             self.triage.inbox_run_live = true;
         }
-        if let Some(account) = account {
+        if let Some(account) = account
+            && let Some(account_adapter) = dispatcher
+                .adapters
+                .get(provider)
+                .and_then(|a| dispatcher.pool_adapter_of(provider, a.id()))
+        {
             self.accounts_in_flight
-                .insert(thread_id.to_owned(), account);
+                .insert(thread_id.to_owned(), (account_adapter, account));
         }
         self.providers_in_flight
             .insert(thread_id.to_owned(), provider.clone());
@@ -733,6 +832,9 @@ async fn run_claimed(
     idle: Duration,
     grace: Duration,
     clock: ChatClock,
+    retries: RouteRetries,
+    route_index: usize,
+    previous: Option<Arc<ChatRunSink>>,
 ) {
     // A stop may be committed between the claim and the spawned task's first poll.
     match store.chat_run_get(thread_id, run_id) {
@@ -774,6 +876,7 @@ async fn run_claimed(
     // run_attempts owns the sink(s) and saves the session id and usage per attempt.
     let (sink, mut finish) = super::rollover::run_attempts(super::rollover::ChatAttempt {
         store: Arc::clone(&store),
+        previous,
         adapter,
         req,
         thread_id: thread_id.to_owned(),
@@ -821,6 +924,30 @@ async fn run_claimed(
                 return;
             }
         }
+    }
+    if finish.state == ChatRunState::Failed
+        && !pending
+        && super::routes::supply_failure(finish.reason.as_deref().unwrap_or(""))
+    {
+        sink.close_attempt_tools();
+        let reason = sink.redact_reason(finish.reason.as_deref().unwrap_or("利用上限"));
+        let _ = store.cos_run_credential_revoke(run_id, (clock)());
+        retries
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(RouteRetry {
+                thread_id: thread_id.to_owned(),
+                run_id: run_id.to_owned(),
+                next_route: route_index + 1,
+                reason,
+                previous: Arc::new(sink),
+            });
+        return;
+    }
+    if finish.state == ChatRunState::Failed {
+        finish.final_text = Some(super::routes::failure_text(
+            &sink.redact_reason(finish.reason.as_deref().unwrap_or("worker failed")),
+        ));
     }
     // ADR 2026-10-08-cos-workspace-files-in-chat D1: files written in the thread workspace and
     // paths the reply mentions become attachments of the reply, before its terminal event.

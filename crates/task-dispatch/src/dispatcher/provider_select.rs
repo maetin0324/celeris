@@ -883,6 +883,28 @@ impl Dispatcher {
         None
     }
 
+    /// Keep the observed last portion of Claude's five-hour budget for CoS.
+    pub(super) fn reserved_for_cos(
+        &self,
+        adapter: AccountAdapter,
+        state: Option<&crate::accounts::AccountState>,
+        cos: bool,
+        now: i64,
+    ) -> bool {
+        if cos || adapter != AccountAdapter::ClaudeCode {
+            return false;
+        }
+        let Some(launch) = self.cos_chat_launch.as_ref().filter(|l| l.config.enabled) else {
+            return false;
+        };
+        state
+            .and_then(|s| s.usage.as_ref())
+            .and_then(|o| o.five_hour)
+            .is_some_and(|w| {
+                w.resets_at > now && w.utilization >= launch.config.worker_reserve_five_hour
+            })
+    }
+
     /// ADR-0054 Phase 67c: 指定した 1 アカウントが今すぐ使えるか（ログイン済み・cooldown 外・上限未満・
     /// 枯渇していない。`crate::accounts::evaluate` の除外判定をそのまま使う）。`pick_account` と同じ
     /// 読み取りだが、ベストスコアを探すのではなく特定の 1 件が使えるかだけを見る。
@@ -911,6 +933,9 @@ impl Dispatcher {
         };
         let now = (self.now_unix_fn)();
         let book = book.lock().unwrap_or_else(|e| e.into_inner());
+        if self.reserved_for_cos(adapter, book.state(account_id), cos, now) {
+            return false;
+        }
         let candidate = AccountCandidate {
             id: account_id,
             logged_in: dir.logged_in,
@@ -970,6 +995,7 @@ impl Dispatcher {
         let book = book.lock().unwrap_or_else(|e| e.into_inner());
         let candidates: Vec<AccountCandidate<'_>> = dirs
             .iter()
+            .filter(|d| !self.reserved_for_cos(adapter, book.state(&d.id), cos, now))
             .filter(|d| requested.is_none_or(|id| d.id == id))
             .map(|d| AccountCandidate {
                 id: d.id.as_str(),

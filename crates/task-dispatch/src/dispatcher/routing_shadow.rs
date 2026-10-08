@@ -129,6 +129,7 @@ impl Dispatcher {
         let book = book.lock().unwrap_or_else(|e| e.into_inner());
         let candidates: Vec<AccountCandidate<'_>> = dirs
             .iter()
+            .filter(|d| !self.reserved_for_cos(adapter, book.state(&d.id), cos, now))
             .filter(|d| requested.as_deref().is_none_or(|id| d.id == id))
             .map(|d| AccountCandidate {
                 id: d.id.as_str(),

@@ -267,8 +267,9 @@ before は T2 baseline（commit `c7e60aa7`、Core 分離前）。after は本 ta
 | S2 非 cache input / cache write / cache read | 6 / 6,617 / 149,652 | 6 / 4,602 / 133,172 |
 | S1 / S2 総 latency ms | 15,802 / 19,672 | 18,895 / 13,782 |
 | 管理操作（S2 の起票 1・コメント 4） | 5/5 completed | 5/5 completed、`cos_operations` は task.create 1・comment.create 4 が全て applied（受信箱の observe 1 も applied） |
+| 回答操作の成功率 | 不明（台本に回答操作なし） | 不明（台本に回答操作なし） |
 | run の成功率（26 run） | 100% | 100% |
 
-- skill 読込の H2 の基準（単純相談の 80% 以上で両 skill を読む）は after で 0% になった。非 cache input は before も after も 1 桁で差は測定の下限。
+- skill 読込の H2 の基準（単純相談の 80% 以上で両 skill を読む）は after で 0% になった。非 cache input は S1 で 8 → 12、S2 で 6 → 6。削減は確認できず、改善は skill 読込回数と cache write に出た。回答操作の成功率は未計測で、起票・コメントの結果を適用できない。
 - S1 の latency と cache read は増えた。S1 の after は 1 run あたり tool event が中央値 10（Bash で状況を API から読む）。before の tool 回数は残っておらず比べられない（**不明**）。Core 分離の影響か本付記の影響かは分けていない。T8 で扱う。
 - skill の bytes: cos-operator 20,158 → 4,650 B（参照 file 計 15,105 B は場面でだけ読む）、cos-inbox-triage 11,386 → 11,742 B（通常 thread には載らない）。

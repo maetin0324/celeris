@@ -78,6 +78,33 @@ adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md
 - `UPDATE_SCHEMA=1 cargo test -p task-api --lib schema`: 3 passed（schema 再生成）。`node web/scripts/gen-types.mjs`・`pnpm -C gui gen:types`: 再生成。
 - `pnpm -C web typecheck` exit 0、`pnpm -C web lint` exit 0（既存 styles.css の警告 4 件）、`pnpm -C web test` 82 files / 598 tests passed。
 
+### delivery-repair（2026-10-08、run 01M4CESJNJBWPPQ5JQ7WNDA3YX）
+
+- prepare.log の失敗は `cargo-fmt-check`（exit 1）。HEAD / main とも `186701fa7188` で、同じ
+  `cargo fmt --all -- --check` をこの worktree でも実行して再現した。
+- `cargo fmt --all` で受信箱機能に関係する Rust 10 ファイルを整形。機能・API・migration の変更はない。
+  既定ブランチの追加取り込みは不要。ADR の決定も変更なし。
+- 修正後の検証（この節の記録以外は以後変更なし）:
+
+| コマンド | 結果 |
+|---|---|
+| `cargo fmt --all -- --check` | exit 0 |
+| `cargo build -p celeris -p celerisctl` | exit 0（新しい scratch target の E2E 前提バイナリ） |
+| `bash scripts/dev/test-parallel.sh` | exit 0、4723 passed / 0 failed / 14 ignored、160 binaries、doctest exit 0、tmp_leftovers 0 |
+| `cargo clippy --workspace -- -D warnings` | exit 0 |
+| `pnpm -C web typecheck` | exit 0 |
+| `pnpm -C web lint` | exit 0（既存 styles.css の警告 4 件） |
+| `pnpm -C web test` | exit 0、82 files / 598 tests、server 77 tests passed |
+| `git diff --check` | exit 0 |
+
+- ログは task の成果物ディレクトリ
+  `/local/celeris/data/workspaces/01M4CAKADGDTZA7QKDJ9GX35MW/artifacts/repair-*.log`。
+  全体試験の最終実行は `repair-test-parallel-final.log`（nextest 104.2 秒、doctest 50.1 秒）。
+  起動順を直す際に先行実行の出力が同じログの末尾に残ったため、元の `repair-test-parallel.log` を保存し、
+  先頭の最終実行の開始から最初の `test-parallel: ok` までを別ファイルに抽出した。
+- 本番サービス・DB・元のチェックアウトは変更していない。release prepare・デプロイは実行していない。
+  今回確認したのは失敗した整形 gate と上記検査までで、release 全工程の再実行は配送側で行う。
+
 ## 未解決事項
 
 - digest は run の終端を観測した tick で書く。終端と tick の間に daemon が落ちた場合は再起動時の reconcile で書かれる（件を持つ run だけ）。

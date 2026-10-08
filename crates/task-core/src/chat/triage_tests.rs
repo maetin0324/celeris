@@ -296,14 +296,24 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
 
     let open = s.cos_triage_open_items(10).expect("open");
     assert_eq!(open.len(), 2);
-    assert!(open.iter().any(|i| &i.item_id == a && i.state == "escalated"));
+    assert!(
+        open.iter()
+            .any(|i| &i.item_id == a && i.state == "escalated")
+    );
     assert!(open.iter().any(|i| &i.item_id == b && i.state == "running"));
     assert_eq!(
-        s.cos_triage_item_report(a).expect("one").expect("row").item_id,
+        s.cos_triage_item_report(a)
+            .expect("one")
+            .expect("row")
+            .item_id,
         *a
     );
 
-    assert!(s.cos_triage_runs_without_digest(10).expect("scan").is_empty());
+    assert!(
+        s.cos_triage_runs_without_digest(10)
+            .expect("scan")
+            .is_empty()
+    );
     s.chat_run_finish("run-1", ChatRunState::Completed, None, None, at(3))
         .expect("finish");
     assert_eq!(
@@ -335,12 +345,25 @@ fn cos_chat_triage_store_report_open_items_and_digest_bookkeeping() {
     assert_eq!(m.run_id.as_deref(), Some("run-1"));
     assert_eq!(m.cards, vec![card.clone()]);
     let again = s
-        .chat_assistant_message_add_once(&claim.thread_id, &key, "digest", &[card], Some("run-1"), at(5))
+        .chat_assistant_message_add_once(
+            &claim.thread_id,
+            &key,
+            "digest",
+            &[card],
+            Some("run-1"),
+            at(5),
+        )
         .expect("idempotent");
     assert_eq!(again.id, m.id);
-    assert!(s.cos_triage_runs_without_digest(10).expect("scan").is_empty());
+    assert!(
+        s.cos_triage_runs_without_digest(10)
+            .expect("scan")
+            .is_empty()
+    );
     assert_eq!(
-        s.chat_message_get(&claim.thread_id, &m.id).expect("get").text,
+        s.chat_message_get(&claim.thread_id, &m.id)
+            .expect("get")
+            .text,
         "digest"
     );
 }

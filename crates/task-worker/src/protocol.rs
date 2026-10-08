@@ -1269,8 +1269,8 @@ pub fn schema_value() -> serde_json::Value {
 mod cos_chat;
 pub use cos_chat::{
     COS_CHAT_IMAGE_MEDIA_TYPES, COS_RUN_CREDENTIAL_ENV, CosChatAttachment, CosChatContext,
-    CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInboxDecision,
-    CosChatInboxItem, CosChatInboxOption, CosChatInput, is_cos_chat_run,
+    CosChatDelivery, CosChatHistory, CosChatHistoryMessage, CosChatInboxDecision, CosChatInboxItem,
+    CosChatInboxOption, CosChatInput, is_cos_chat_run,
 };
 
 #[cfg(test)]

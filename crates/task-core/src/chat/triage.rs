@@ -489,7 +489,10 @@ fn report_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CosTriageItemReport> {
 
 impl SqliteStore {
     /// D1: the items one triage run claimed, in claim order (requeued items no longer count).
-    pub fn cos_triage_run_report(&self, run_id: &str) -> Result<Vec<CosTriageItemReport>, ChatError> {
+    pub fn cos_triage_run_report(
+        &self,
+        run_id: &str,
+    ) -> Result<Vec<CosTriageItemReport>, ChatError> {
         let conn = writer(self)?;
         let mut stmt = conn.prepare(&format!(
             "{REPORT_SELECT} WHERE i.run_id=?1 ORDER BY i.created_at,i.id"
@@ -514,7 +517,10 @@ impl SqliteStore {
     }
 
     /// D3: unresolved items (waiting on the person, handed over, or not yet judged), newest first.
-    pub fn cos_triage_open_items(&self, limit: usize) -> Result<Vec<CosTriageItemReport>, ChatError> {
+    pub fn cos_triage_open_items(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<CosTriageItemReport>, ChatError> {
         let conn = writer(self)?;
         let mut stmt = conn.prepare(&format!(
             "{REPORT_SELECT} WHERE i.state IN ('escalated','fallback','pending','running') \
@@ -542,7 +548,10 @@ impl SqliteStore {
              ORDER BY r.started_at,r.run_id LIMIT ?2",
         )?;
         let rows = stmt.query_map(
-            params![COS_TRIAGE_DIGEST_KEY_PREFIX, i64::try_from(limit).unwrap_or(i64::MAX)],
+            params![
+                COS_TRIAGE_DIGEST_KEY_PREFIX,
+                i64::try_from(limit).unwrap_or(i64::MAX)
+            ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
         Ok(rows.collect::<Result<_, _>>()?)

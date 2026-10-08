@@ -185,7 +185,10 @@ async fn cos_chat_triage_fallback_restart_and_recovery_neither_resend_nor_answer
         )
         .expect("messages")
         .items;
-    let dump: Vec<String> = all.iter().map(|m| format!("{} {:?}", m.text, m.cards)).collect();
+    let dump: Vec<String> = all
+        .iter()
+        .map(|m| format!("{} {:?}", m.text, m.cards))
+        .collect();
     let handoff = all
         .into_iter()
         .filter(|m| {

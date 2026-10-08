@@ -106,3 +106,8 @@ D1〜D4 の決定は変えていない。実装時に決めた細部:
   `[conversation]` も同様に古いままだったので、`tick_loop` の `Config` を `&mut` にし、`reload_providers` が
   その場でこれらのフィールドだけを書き戻すようにした（`[accounts]` / `[[clusters]]` / `[api]` / `db` /
   `workspace_root` は D1・S7 のとおり再起動が要る。触れない）。
+
+## 付記（2026-10-08、concurrency の検証と編集）
+
+[ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) により、`POST/PATCH /providers` の `concurrency` は受け付けても保存せず効かない deprecated 欄になる。
+アカウントごとの上限は `PATCH /api/v1/accounts/{adapter}/{id}`（管理系）で編集し、SQLite の `account_limits` に保存して次の tick から効く。

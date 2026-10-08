@@ -99,3 +99,8 @@ task `01M44G5KKF8VJ0ARJH8J843T7D`。進捗は [2026-10-04-cheap-local-first](../
 - fake provider と偽の probe で、cheap はローカルが空いていればローカル、満杯・不通ならプール、standard は従来どおり、を決定的に確かめる。試験は外部ネットワークに出ない（probe は差し替える）。
 - `routing_decided` に `selection.reason` が残ることを tick を通した試験で確かめる。
 - 設定からローカルの行と probe 先が決まること、`cheap_local_first = false` で無効になることを `celeris` の config 試験で確かめる。
+
+## 付記（2026-10-08、concurrency の deprecate）
+
+[ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) が D1 の「`concurrency` は道具の欄として維持する」と付記 L2(c)・L6 を上書きする。`concurrency` は deprecated（読めて警告、dispatch では見ない）。
+ローカルの行の空きはその行の暗黙アカウント（`implicit/<provider id>`）の上限で判定し、既定は旧 `concurrency` を引き継ぐ（本番の Qwen 行は config を変えずに 1 本のまま）。上限はアカウント画面で変える。

@@ -93,3 +93,8 @@ taskctl [--db <db>] worker run --config <taskd.toml> --task <id> [--provider <id
 - `taskctl`: `worker run`。
 - `docs/DESIGN.md` への反映（§3、§4.3 `WorkerStarted.provider`、§5.2 フォールバック、§5.3 evidence、§5.4 プロバイダ別 env/model、
   §5.5 `select` / `Selection`、§5.9 `worker run` の仕様、§6 Phase 8 の節と非目標の整理）は、人間の許可を得て 2026-09-14 に行った（P-41）。
+
+## 付記（2026-10-08、同時実行数はアカウントごと）
+
+[ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) により、`[[providers]].concurrency` は deprecated（読めて警告、dispatch では見ない）。同時実行数はアカウントごとの `max_runs`
+（非プール行は行ごとの暗黙アカウント）で決める。プロバイダ行の同時実行数に関するこの ADR の記述はそちらが優先する。

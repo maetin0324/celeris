@@ -1,8 +1,11 @@
-# CoS の作成文書をチャットで開く — 実装・検証記録
-
 ---
+title: CoS の作成文書をチャットで開く — 実装・検証記録
 tasks: [01M4CDNAZF1CDBZVHFDZ1JZJPX]
+status: done
+updated: 2026-10-08
 ---
+
+# CoS の作成文書をチャットで開く — 実装・検証記録
 
 [ADR](../adr/2026-10-08-cos-workspace-files-in-chat.md) に従い実装。run 01M4CEWHJ5BKRMXD3TAZZ75GR6（attempt 2）で前回の作業を引き継いだ。本番サービス・DB・KB 正本は変更していない。外部 LLM・外部ネットワークを使わず、fake adapter と一時 DB、loopback の fake daemon/gateway で検証する。
 
@@ -28,13 +31,14 @@ repo の `config/skills/{cos-operator,cos-inbox-triage}/SKILL.md` は配置用�
 
 | コマンド | 結果 |
 |---|---|
-| `bash scripts/dev/test-parallel.sh` | exit 0、4721 passed / 0 failed / 14 ignored、tmp leftovers 0 |
+| `bash scripts/dev/test-parallel.sh` | exit 0、4730 passed / 0 failed / 14 ignored、tmp leftovers 0（整形後の tree） |
 | `cargo clippy --workspace -- -D warnings` | exit 0 |
 | `pnpm -C web typecheck` | exit 0 |
 | `pnpm -C web test` | exit 0、Vitest 83 files / 601 tests、gateway 77 tests |
 | `pnpm -C web lint` | exit 0、既存 styles.css の `!important` 警告4件 |
 | `pnpm -C web build` | exit 0 |
-| `cargo fmt --all --check` / `git diff --check` | exit 0 |
+| `cargo fmt --all -- --check` | exit 0（整形後の tree） |
+| `git diff --check` | exit 0 |
 | `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | exit 0 |
 | `pnpm -C web e2e chat/workspace-files.spec.ts` | exit 0、1 passed（md/csv 表示・path/Markdown link・PDF download） |
 
@@ -45,3 +49,11 @@ repo の `config/skills/{cos-operator,cos-inbox-triage}/SKILL.md` は配置用�
 実機 LLM・本番反映は試験していない。
 
 ログ: run 成果物の `test-parallel-attempt2.log`、`clippy.log`、`web-{typecheck,test,lint,build,e2e}.log`。前回の失敗ログは `test-parallel.log` に保持。
+
+## 差し戻し対応（attempt 3）
+
+- 検査対象 SHA: `4d4a30f815d741309b657da3e6471cba02253a8b`。整形コミット: `293161a9`。進捗コミット: `9f1ff787`。最終 SHA: `9f1ff78749bc4abbe53f0361092cb56a0893d202`。
+- 旧記録の `cargo fmt --all --check` exit 0 は誤り。指定 SHA では fmt が exit 1 だったため、`cargo fmt --all` の出力だけを適用した。
+- 整形したファイル: `crates/task-api/src/cos/operations.rs`, `crates/task-api/tests/cos_triage.rs`, `crates/task-core/src/chat/triage.rs`, `crates/task-core/src/chat/triage_tests.rs`, `crates/task-dispatch/src/dispatcher/cos_chat/digest.rs`, `crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_fallback.rs`, `crates/task-dispatch/src/dispatcher/tests/cos_chat_triage_inbox_thread.rs`, `crates/task-worker/src/cos_chat.rs`, `crates/task-worker/src/cos_chat/tests.rs`, `crates/task-worker/src/protocol.rs`。
+- 再検査: `bash scripts/dev/test-parallel.sh` exit 0（4730 passed / 0 failed / 14 ignored）、`cargo clippy --workspace -- -D warnings` exit 0、`cargo fmt --all -- --check` exit 0。
+- 文書検査: `sh scripts/dev/progress-index.sh --check`, `sh scripts/dev/check-doc-links.sh`, `sh scripts/dev/check-adr-numbers.sh` は全て exit 0。

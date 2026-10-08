@@ -1,7 +1,8 @@
 ---
-task: 01M4CAKADGDTZA7QKDJ9GX35MW
+tasks: [01M4CAKADGDTZA7QKDJ9GX35MW]
 title: 受信箱スレッドを「受信箱の件を CoS と話す場所」にする
 status: done
+updated: 2026-10-08
 started: 2026-10-07
 completed: 2026-10-08
 adr: agent-docs/adr/2026-10-07-cos-inbox-thread-conversation.md

@@ -44,6 +44,14 @@ tasks: [01M4CDNAYX6J68WTX7SKF0DJ64]
 - web: `pnpm run typecheck` exit 0、`pnpm run test` exit 0（vitest 625 passed + server node tests）、`pnpm run lint` exit 0（既存の warning 4）。
 - gui: `pnpm typecheck` exit 0。
 
+### 再試行（attempt 3、2026-10-08）
+
+前回は範囲 check が API schema の再生成物 `gui/app/celeris/types.ts` を許していなかっただけ。commit e84fe740 をそのまま残して再検査した。
+
+- `cargo nextest run -p task-dispatch -p task-ops -E 'test(browser_policy_missing_)'` — 5 passed。
+- `bash scripts/dev/test-parallel.sh` — exit 0。passed 4798 / failed 0 / ignored 14、doctest exit 0。
+- `cargo clippy --workspace -- -D warnings` — exit 0。
+
 ## 未解決
 
 - 担当の grant と交わらないことは dispatcher の gate では見ない（worker の `admit` だけ）。この形で止まった task は

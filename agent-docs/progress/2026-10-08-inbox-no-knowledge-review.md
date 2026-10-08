@@ -33,7 +33,13 @@ ADR-0133 末尾の付記「KB の取り込み待ちを受信箱に出さない�
 - `pnpm -C web lint`（exit 0）・`typecheck`（exit 0）・`test`（vitest 608 passed、node --test 77 passed）。
 - `pnpm -C web e2e:all` で受信箱関係 9 spec（parity/inbox・work/inbox-notifications・shell/inbox-badge・shell/tabbar・
   chat/cards・parity/knowledge・parity/notifications・states・realtime/refetch-scope）→ 97 passed / 3 skipped。
-- release.sh / verify.sh: 報告本文と下の節を参照。
+- release.sh / verify.sh（run の私有 state dir `artifacts/sd-state`、`SD_CELERISCTL=/nonexistent`・`SD_RELEASE_PRUNE=0`。
+  本番の releases には書いていない。promote は実行していない）:
+  - `release.sh HEAD` → exit 0（706 秒）、sha12 `a7d2badd3f85`、gate.json `ok=true`（cargo-test・clippy・GUI・web 全段 exit 0）、schema_version 59。
+  - `verify.sh a7d2badd3f85` → exit 0（86 秒）、verify.json `ok=true`・`live_ok=false`。live_ok を落としたのは
+    check 5（n-1-compat）: 本番 current `0b1cefac7ff7` が schema 57 で、base（main）の migration 済み schema 59 の DB を
+    開けない。本変更は migration を足していない（base 由来）。smoke・web-app-start は true。
+  - 以後のコミットは本進捗ファイルのみ。
 
 ## 未解決事項
 

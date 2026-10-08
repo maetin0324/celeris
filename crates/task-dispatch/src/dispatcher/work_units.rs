@@ -60,6 +60,14 @@ impl Dispatcher {
         check_env
             .set
             .extend(self.work_unit_scope_env(&task, wu.base_commit.as_deref()));
+        let cwd = work_dir.as_deref().filter(|w| w.is_dir()).unwrap_or(&dir);
+        let scope = super::wu_base::scope_env(cwd, &wu.id, false)?;
+        if !scope.is_empty() {
+            check_env
+                .set
+                .retain(|(k, _)| k != task_core::execution_plan::WU_BASE_ENV);
+            check_env.set.extend(scope);
+        }
         let ws: task_worker::LocalWorkspace = match work_dir {
             Some(w) if w.is_dir() => task_worker::LocalWorkspace::new(&dir).with_work_dir(w),
             _ => task_worker::LocalWorkspace::new(&dir),

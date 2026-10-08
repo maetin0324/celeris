@@ -312,3 +312,238 @@ fn repair_scope_checks_include_scope_flag_and_git_diff_heuristic() {
     )));
     assert!(!is_repair_scope_check(&check("cargo test", false)));
 }
+
+#[derive(Clone)]
+struct WuBaseAdapter {
+    env: Vec<(String, String)>,
+    seen: Arc<StdMutex<Vec<Vec<(String, String)>>>>,
+    bad: bool,
+    retry: bool,
+}
+
+#[async_trait]
+impl WorkerAdapter for WuBaseAdapter {
+    fn id(&self) -> &str {
+        "instant"
+    }
+    fn with_env(&self, extra: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+        let mut next = self.clone();
+        next.env.extend_from_slice(extra);
+        Some(Arc::new(next))
+    }
+    async fn run(
+        &self,
+        req: RunRequest,
+        _run_id: &str,
+        _limits: RunLimits,
+        _sink: &dyn EventSink,
+    ) -> Result<RunOutcome, AdapterError> {
+        let cwd = req.work_dir.as_deref().unwrap_or(&req.workspace);
+        let key = &req.context.work_unit.as_ref().unwrap().key;
+        let mut terminal = Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        };
+        if key == "a" {
+            write_files(&[
+                ("a/previous.txt", "untracked predecessor\n"),
+                ("README.md", "tracked predecessor\n"),
+            ])(cwd);
+        } else if key == "b" {
+            let env: Vec<_> = self
+                .env
+                .iter()
+                .filter(|(k, _)| k.starts_with("CELERIS_WU_"))
+                .cloned()
+                .collect();
+            let base = env
+                .iter()
+                .find(|(k, _)| k == "CELERIS_WU_BASE")
+                .expect("worker gets base");
+            let helper = env
+                .iter()
+                .find(|(k, _)| k == "CELERIS_WU_SCOPE_PATHS")
+                .expect("worker gets helper");
+            assert!(Path::new(&helper.1).is_file());
+            std::fs::create_dir_all(cwd.join("b")).unwrap();
+            std::fs::write(cwd.join("b/base"), &base.1).unwrap();
+            std::fs::write(cwd.join("b/helper"), &helper.1).unwrap();
+            if self.bad {
+                std::fs::write(cwd.join("a/previous.txt"), "out of scope\n").unwrap();
+            }
+            let mut seen = self.seen.lock().unwrap();
+            if self.retry && seen.is_empty() {
+                terminal = Terminal::Error {
+                    message: "retry fixture".into(),
+                    retryable: true,
+                };
+            }
+            seen.push(env);
+        }
+        Ok(RunOutcome {
+            terminal,
+            exit_code: Some(0),
+        })
+    }
+}
+
+fn wu_base_scope_cmd() -> &'static str {
+    "paths=$(if [ -n \"${CELERIS_WU_SCOPE_PATHS:-}\" ]; then sh \"$CELERIS_WU_SCOPE_PATHS\"; else git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\" && git ls-files --others --exclude-standard; fi) || exit 1; out=$(printf '%s\n' \"$paths\" | sort -u | grep -vE '^b/'); [ -z \"$out\" ] || { echo 'out of scope:'; echo \"$out\"; exit 1; }"
+}
+
+async fn wu_base_dispatch_case(shared: bool, bad: bool, retry: bool) {
+    let repo = tempfile::tempdir().unwrap();
+    let initial = init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(repo.path(), "true");
+    if shared {
+        task.workspace = WorkspaceSpec::Local {
+            path: repo.path().to_path_buf(),
+            mode: Some(task_core::WorkspaceMode::Shared),
+        };
+        // Runtime bookkeeping must not count as WU source changes.
+        std::fs::write(
+            repo.path().join(".gitignore"),
+            ".taskd/\nruns/\ninputs/\nartifacts/\nwork-unit-checks/\n",
+        )
+        .unwrap();
+        git_out(repo.path(), &["add", ".gitignore"]);
+        git_out(repo.path(), &["commit", "-qm", "ignore runtime files"]);
+    }
+    let before = git_out(repo.path(), &["rev-parse", "HEAD"]);
+    store.insert(&task).unwrap();
+    let a = v2_wu("a", "build", &[]);
+    let mut b = v2_wu("b", "build", &["a"]);
+    b.checks = vec![
+        check(
+            "test \"$(cat b/base)\" = \"$CELERIS_WU_BASE\" && test \"$(cat b/helper)\" = \"$CELERIS_WU_SCOPE_PATHS\"",
+            true,
+        ),
+        check(wu_base_scope_cmd(), true),
+    ];
+    adopt_v2_plan(&store, task.id, &["build"], vec![a, b]);
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let adapter = Arc::new(WuBaseAdapter {
+        env: vec![],
+        seen: seen.clone(),
+        bad,
+        retry,
+    });
+    let mut d = parallel_dispatcher(store.clone(), adapter, root.path(), 3, 3, 3);
+    run_until_idle(&mut d, 800).await;
+    let events = events_of(&store, task.id);
+    let checks = work_unit_check_cmds(&events, "b");
+    assert!(
+        checks.contains(&(b_env_check().into(), true)),
+        "{events:#?}"
+    );
+    assert!(
+        checks.contains(&(wu_base_scope_cmd().into(), !bad)),
+        "{events:#?}"
+    );
+    let seen = seen.lock().unwrap();
+    assert!(!seen.is_empty());
+    if retry {
+        assert!(seen.len() >= 2);
+        assert_eq!(seen[0], seen[1], "retry must reuse base and helper");
+    }
+    if shared {
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, Event::WorkUnitsSerialized { .. }))
+        );
+        assert_eq!(
+            git_out(repo.path(), &["rev-parse", "HEAD"]),
+            before,
+            "predecessor remains uncommitted"
+        );
+    } else {
+        assert_eq!(
+            git_out(repo.path(), &["rev-parse", "HEAD"]),
+            initial,
+            "source repo untouched"
+        );
+    }
+    if bad {
+        assert!(events.iter().any(|e| matches!(e, Event::WorkUnitChecksFailed { key, failed, .. } if key == "b" && failed.iter().any(|f| f.detail.contains("a/previous.txt")))));
+    } else {
+        assert_eq!(
+            store.get(task.id).unwrap().unwrap().status,
+            Status::Done,
+            "{events:#?}"
+        );
+    }
+}
+
+fn b_env_check() -> &'static str {
+    "test \"$(cat b/base)\" = \"$CELERIS_WU_BASE\" && test \"$(cat b/helper)\" = \"$CELERIS_WU_SCOPE_PATHS\""
+}
+
+#[tokio::test]
+async fn wu_base_serialized_ignores_uncommitted_predecessor_and_reuses_on_retry() {
+    wu_base_dispatch_case(true, false, true).await;
+}
+
+#[tokio::test]
+async fn wu_base_serialized_rejects_edit_to_predecessor_untracked_file() {
+    wu_base_dispatch_case(true, true, false).await;
+}
+
+#[tokio::test]
+async fn wu_base_own_worktree_worker_and_checks_get_same_snapshot() {
+    wu_base_dispatch_case(false, false, true).await;
+}
+
+#[tokio::test]
+async fn wu_base_snapshot_prepare_failures_accumulate_and_never_start_worker() {
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    let root = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let mut task = parallel_task(repo.path(), "true");
+    task.workspace = WorkspaceSpec::Local {
+        path: repo.path().into(),
+        mode: Some(WorkspaceMode::Shared),
+    };
+    store.insert(&task).unwrap();
+    adopt_v2_plan(&store, task.id, &["build"], vec![v2_wu("a", "build", &[])]);
+    let wu = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|w| w.key == "a")
+        .unwrap();
+    super::super::wu_base::scope_env(repo.path(), &wu.id, true).unwrap();
+    std::fs::write(
+        repo.path()
+            .join(".git/celeris-wu-bases")
+            .join(&wu.id)
+            .join("snapshot.json"),
+        "corrupt",
+    )
+    .unwrap();
+    let adapter = Arc::new(WuScriptAdapter::new(HashMap::new()));
+    let mut d = parallel_dispatcher(store.clone(), adapter.clone(), root.path(), 3, 3, 3);
+    // Advance only the prepare retry deadline, without sleeps or clock races.
+    for _ in 0..super::super::MAX_WU_PREPARE_ATTEMPTS {
+        d.tick().unwrap();
+        if let Some(f) = d.wu_prepare_failures.get_mut(&wu.id) {
+            f.retry_at = OffsetDateTime::UNIX_EPOCH;
+        }
+    }
+    assert!(adapter.seen.lock().unwrap().is_empty());
+    let row = store
+        .work_units_for(task.id)
+        .unwrap()
+        .into_iter()
+        .find(|w| w.id == wu.id)
+        .unwrap();
+    assert_eq!(row.status, task_core::WorkUnitStatus::Blocked);
+    assert_eq!(
+        row.blocked_reason,
+        Some(task_core::WorkUnitBlockedReason::Question)
+    );
+}

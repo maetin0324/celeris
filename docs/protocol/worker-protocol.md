@@ -472,6 +472,24 @@ job の最終状態を渡す。`yielded` と違い、continuation の回数・�
 分だけ遅れて処理されることを含めて `kill_grace + tick_ms < lease_grace / 2` のときに成り立つ。`celeris` は設定検証でこれを要求する
 （ADR-0010 D7）。
 
+### WorkUnit の計画 check の書き方
+
+`checks` の範囲検査は `scope: true` とし、unit 開始時の基点からの差分を使う。
+ローカル git の直列実行・専用 worktree のどちらでも、daemon は worker と事後 check に
+`CELERIS_WU_BASE`（先行 unit の未 commit の追跡済み成果を含む一時 commit）、
+`CELERIS_WU_BASE_UNTRACKED`（開始時の未追跡 path 一覧）、`CELERIS_WU_SCOPE_PATHS`（全 file の差分補助）を渡す。
+retry と daemon の検査引き継ぎでは初回の snapshot を再利用する。
+
+```sh
+paths=$(if [ -n "${CELERIS_WU_SCOPE_PATHS:-}" ]; then sh "$CELERIS_WU_SCOPE_PATHS"; else git diff --name-only "${CELERIS_WU_BASE:-HEAD}" && git ls-files --others --exclude-standard; fi) || exit 1
+out=$(printf '%s\n' "$paths" | sort -u | grep -vE '^(<許可 path の正規表現>)'); [ -z "$out" ] || { echo "out of scope:"; echo "$out"; exit 1; }
+```
+
+開始時の未追跡 file を単に `git ls-files --others` で足すと先行成果を誤検知する。
+補助は開始時の未追跡 file の編集・削除も検出するため、設定されていれば必ず使う。
+詳細は [WU checks の指針](../../agent-docs/guides/work-unit-checks.md) と
+[開始時 snapshot の ADR](../../agent-docs/adr/2026-10-08-work-unit-scope-snapshot.md)。
+
 ## 7. JSON Schema
 
 正は隣の [`worker-protocol.schema.json`](worker-protocol.schema.json)（`task_worker::protocol::schema_value()` が

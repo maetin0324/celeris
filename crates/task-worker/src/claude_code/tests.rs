@@ -3569,9 +3569,11 @@ fn planner_prompt_has_the_check_writing_section() {
         // ADR-0074 付記 2026-10-05: 範囲 check は `scope: true`・`$CELERIS_WU_BASE` 基点・path を出してから非 0。
         "`{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true}`. It runs only at work-unit time",
         "is NOT rerun after stage integration or in a child task's final review, so never write it as task acceptance",
-        "`out=$({ git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\"; git ls-files --others --exclude-standard; } | sort -u | grep -vE '^(<allowed path regex>)'); [ -z \"$out\" ] || { echo \"out of scope:\"; echo \"$out\"; exit 1; }`",
-        "never compare a scope check with a hard-coded sha or `$(git merge-base HEAD main)`",
-        "`git log --format= --name-only \"$CELERIS_WU_BASE..HEAD\" --not \"$CELERIS_WU_TARGET\"`",
+        "`paths=$(if [ -n \"${CELERIS_WU_SCOPE_PATHS:-}\" ]; then",
+        "sh \"$CELERIS_WU_SCOPE_PATHS\";",
+        "initially untracked files",
+        "Never compare with a hard-coded sha or `$(git merge-base HEAD main)`",
+        "use the integration base (not the scope snapshot) for commit-history checks",
         "never write the silent `test -z \"$(...)\"` form",
         // ADR-0128 D3・D5・D7: 記録の置き場所と land 系 check の 3 本。
         "a new ADR is `agent-docs/adr/YYYY-MM-DD-<slug>.md` (no new ADR numbers)",

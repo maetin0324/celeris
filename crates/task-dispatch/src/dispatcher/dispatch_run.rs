@@ -314,7 +314,7 @@ impl Dispatcher {
         let v2_wu = current_wu.as_ref().filter(|w| w.phase.is_some()).cloned();
         let task_worktree = worktree.clone();
         let mut wu_workspace: Option<WorkUnitWorkspace> = None;
-        if let Some(wu) = &v2_wu {
+        if let Some(wu) = &current_wu {
             // ADR-0074「Phase F5-fix7 実装時の明確化」: 一時的な失敗の後のバックオフ中は試さない。
             if let Some(f) = self.wu_prepare_failures.get(&wu.id)
                 && self.now_utc() < f.retry_at
@@ -322,9 +322,10 @@ impl Dispatcher {
                 tracing::debug!(task_id = %task.id, work_unit = %wu.key, failures = f.count, retry_at = %f.retry_at, "work unit worktree backoff; not dispatching yet");
                 return Ok(false);
             }
+        }
+        if let Some(wu) = &v2_wu {
             match self.prepare_work_unit_workspace(&task, wu, task_worktree.as_ref()) {
                 Ok(prepared) => {
-                    self.wu_prepare_failures.remove(&wu.id);
                     wu_workspace = prepared;
                 }
                 Err(e) => {
@@ -337,6 +338,47 @@ impl Dispatcher {
             Some(w) => Some(w.workspaces.clone()),
             None => worktree,
         };
+        // Capture before any worker can write; retries load the same WU-id snapshot.
+        let mut wu_scope_env = Vec::new();
+        if let Some(wu) = &current_wu
+            && !matches!(task.workspace, WorkspaceSpec::Remote { .. })
+        {
+            let prepared = (|| {
+                if let Some(ws) = &worktree {
+                    for repo in &ws.repos {
+                        if let Some(wt) = &repo.worktree {
+                            wt.ensure_blocking()
+                                .map_err(|e| WuPrepareError::transient(e.to_string()))?;
+                        }
+                    }
+                }
+                // A shared repository's workspace symlink is installed by the
+                // worker later; its source resolves to the same git directory.
+                let cwd = worktree
+                    .as_ref()
+                    .and_then(|ws| ws.repos.first())
+                    .map(|repo| {
+                        if repo.worktree.is_some() {
+                            repo.dir.as_path()
+                        } else {
+                            repo.source.as_path()
+                        }
+                    })
+                    .unwrap_or(&dir);
+                super::wu_base::scope_env(cwd, &wu.id, true)
+                    .map_err(|e| WuPrepareError::transient(e.to_string()))
+            })();
+            match prepared {
+                Ok(env) => {
+                    self.wu_prepare_failures.remove(&wu.id);
+                    wu_scope_env = env;
+                }
+                Err(e) => {
+                    self.on_work_unit_prepare_failed(&task, wu, &e, second_pass)?;
+                    return Ok(false);
+                }
+            }
+        }
         // ADR-0052 D1 / D2（Phase 64）: 知識整理 run は dispatch の直前に `langmem` の接続先へ
         // `GET /models` を当て、届かなければ tier `cheap` の**汎用**ハーネスへ倒す
         // （`worker_hint.adapter` を外すだけ ＝ ADR-0049 の選び方にそのまま乗る）。LLM は呼ばない。
@@ -901,7 +943,12 @@ impl Dispatcher {
                 .as_ref()
                 .map(|w| w.base.as_str())
                 .or(wu.base_commit.as_deref());
-            let env = self.work_unit_scope_env(&task, base);
+            let mut env = self.work_unit_scope_env(&task, base);
+            // A scope snapshot overrides the integration ancestry base.
+            if !wu_scope_env.is_empty() {
+                env.retain(|(k, _)| k != task_core::execution_plan::WU_BASE_ENV);
+                env.extend(wu_scope_env);
+            }
             extras.work_unit_env = (!env.is_empty()).then_some(env);
         }
         if let Some(w) = &wu_workspace {

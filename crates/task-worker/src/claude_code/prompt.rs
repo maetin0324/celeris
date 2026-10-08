@@ -1750,12 +1750,17 @@ pub const PLANNER_CHECK_GUIDANCE: &str = "### check の書き方 (how to write `
      `{\"cmd\":\"...\",\"expect_exit\":0,\"scope\":true}`. It runs only at work-unit time in the unit's own \
      worktree and is NOT rerun after stage integration or in a child task's final review, so never write it as \
      task acceptance; put it on the leaf that makes the change.\n\
-     - Write a scope check exactly in this form: `out=$({ git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\"; git ls-files \
-     --others --exclude-standard; } | sort -u | grep -vE '^(<allowed path regex>)'); [ -z \"$out\" ] || { echo \
-     \"out of scope:\"; echo \"$out\"; exit 1; }`. `$CELERIS_WU_BASE` is the unit's recorded base commit, set by \
-     celeris; never compare a scope check with a hard-coded sha or `$(git merge-base HEAD main)`. Checks run \
-     before celeris commits the unit, so both the working-tree diff and untracked files are needed. To look at \
-     commits only, use `git log --format= --name-only \"$CELERIS_WU_BASE..HEAD\" --not \"$CELERIS_WU_TARGET\"`.\n\
+     - Write a scope check exactly in this form: `paths=$(if [ -n \"${CELERIS_WU_SCOPE_PATHS:-}\" ]; then \
+     sh \"$CELERIS_WU_SCOPE_PATHS\"; else git diff --name-only \"${CELERIS_WU_BASE:-HEAD}\" && \
+     git ls-files --others --exclude-standard; fi) || exit 1; out=$(printf '%s\\n' \"$paths\" | sort -u | \
+     grep -vE '^(<allowed path regex>)'); [ -z \"$out\" ] || { echo \"out of scope:\"; echo \"$out\"; exit 1; }`. \
+     `$CELERIS_WU_BASE` includes preceding units' uncommitted tracked changes. \
+     `$CELERIS_WU_SCOPE_PATHS` is a shell helper comparing all files to the recorded start snapshot, including \
+     additions, edits and deletions of initially untracked files (listed in `$CELERIS_WU_BASE_UNTRACKED`). \
+     Run the helper when present; raw `git ls-files --others` also lists preceding units' files. \
+     The same snapshot is passed to the worker and its checks and reused on retry. Never compare with a \
+     hard-coded sha or `$(git merge-base HEAD main)`. The scope snapshot need not be an ancestor of HEAD; \
+     use the integration base (not the scope snapshot) for commit-history checks.\n\
      - A scope check must print the out-of-scope paths before exiting non-zero (the form above); never write the \
      silent `test -z \"$(...)\"` form, whose failure log is empty.\n\
      - A scope check's allowed regex must include the paths the unit is allowed to write as records: \

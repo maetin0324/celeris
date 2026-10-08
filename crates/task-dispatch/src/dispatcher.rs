@@ -135,6 +135,7 @@ mod stale_priority;
 mod tree_units;
 use sinks::{ReviewerSink, StoreSink};
 mod work_units;
+mod wu_base;
 #[cfg(test)]
 use work_units::previous_check_failure_lines;
 use work_units::{WorkUnitCheckFailure, WorkUnitCheckRun};
@@ -683,6 +684,8 @@ pub struct TickReport {
 pub enum DispatchError {
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    WorkUnitSnapshot(#[from] std::io::Error),
 }
 
 enum Completion {

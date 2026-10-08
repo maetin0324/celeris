@@ -73,6 +73,7 @@ pub fn work_unit_branch_section(wu: &crate::protocol::WorkUnitPromptContext) -> 
     out.push_str(
         "- この run の環境には `CELERIS_WU_BASE`（この WorkUnit の base commit）と `CELERIS_WU_TARGET`（統合先のブランチ）が入っています。範囲 check（`\"scope\":true`）は同じ変数を使うので、done を返す前に同じコマンドを自分で走らせて範囲外の path が無いことを確かめてください。\n",
     );
+    out.push_str("- `CELERIS_WU_SCOPE_PATHS` が設定されていれば `sh \"$CELERIS_WU_SCOPE_PATHS\"` で開始時 snapshot からの変更 path を確認してください。先行 unit の未追跡成果も含めた比較になり、retry でも同じ基点を使います。\n");
     if !wu.parallel_siblings.is_empty() {
         out.push_str("- 並行しうる WorkUnit:\n");
         for s in &wu.parallel_siblings {

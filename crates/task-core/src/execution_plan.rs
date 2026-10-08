@@ -107,7 +107,7 @@ fn is_false(v: &bool) -> bool {
     !*v
 }
 
-/// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、WU の `base_commit`（範囲 check の基点）。
+/// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、WU 初回 run の追跡済み作業木 snapshot（範囲 check の基点。統合用 `base_commit` とは別）。
 pub const WU_BASE_ENV: &str = "CELERIS_WU_BASE";
 /// ADR-0074 付記 2026-10-05 D3: WU の checks と WU の run の環境に入る、統合先（Task のブランチ `celeris/<task_id>`）。
 pub const WU_TARGET_ENV: &str = "CELERIS_WU_TARGET";

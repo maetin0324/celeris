@@ -273,7 +273,10 @@ async fn deliver_claude_code_removes_unmounted_directories_but_keeps_user_author
     let marker: SkillsMarker =
         serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
     assert_eq!(
-        marker.roots[CLAUDE_ROOT],
+        marker.roots[CLAUDE_ROOT]
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
         vec!["a".to_string(), "b".to_string()]
     );
 
@@ -291,7 +294,13 @@ async fn deliver_claude_code_removes_unmounted_directories_but_keeps_user_author
     );
     let marker: SkillsMarker =
         serde_json::from_str(&std::fs::read_to_string(&marker_path).unwrap()).unwrap();
-    assert_eq!(marker.roots[CLAUDE_ROOT], vec!["a".to_string()]);
+    assert_eq!(
+        marker.roots[CLAUDE_ROOT]
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec!["a".to_string()]
+    );
 }
 
 /// mount A+B の後に skills が空になったら、A と B の両方が消え、マーカーも空になる
@@ -457,11 +466,11 @@ async fn skills_marker_ignore_is_idempotent_and_preserves_existing_lines() {
     let dir = cwd.path().join(".celeris");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join(".gitignore"), "# human line\n!keep.txt\n").unwrap();
-    write_skills_marker(cwd.path(), AGENTS_ROOT, &[])
+    write_skills_marker(cwd.path(), AGENTS_ROOT, &BTreeMap::new())
         .await
         .unwrap();
     let first = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
-    write_skills_marker(cwd.path(), AGENTS_ROOT, &[])
+    write_skills_marker(cwd.path(), AGENTS_ROOT, &BTreeMap::new())
         .await
         .unwrap();
     assert_eq!(
@@ -526,4 +535,225 @@ async fn skills_agents_md_removes_only_celeris_section_on_unmount() {
         std::fs::read_to_string(&path).unwrap(),
         "# Human instructions\n"
     );
+}
+
+#[tokio::test]
+async fn skills_identical_delivery_preserves_mtime_and_inode_for_both_adapters() {
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "same", "d", "");
+    // Delivery replaces only the root ignore file; it must still be cacheable.
+    std::fs::write(kb.path().join("same/.gitignore"), "source ignore\n").unwrap();
+    std::fs::create_dir_all(kb.path().join("same/empty")).unwrap();
+    for root in [CLAUDE_ROOT, AGENTS_ROOT] {
+        let cwd = tempfile::tempdir().unwrap();
+        deliver_to(cwd.path(), root, std::slice::from_ref(&mount))
+            .await
+            .unwrap();
+        let path = cwd.path().join(root).join("same/SKILL.md");
+        let old_time = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1234);
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(std::fs::FileTimes::new().set_modified(old_time))
+            .unwrap();
+        let before = std::fs::metadata(&path).unwrap();
+        let dir_before = std::fs::metadata(path.parent().unwrap()).unwrap();
+        deliver_to(cwd.path(), root, std::slice::from_ref(&mount))
+            .await
+            .unwrap();
+        let after = std::fs::metadata(&path).unwrap();
+        assert_eq!(before.modified().unwrap(), after.modified().unwrap());
+        assert_eq!(
+            dir_before.modified().unwrap(),
+            std::fs::metadata(path.parent().unwrap())
+                .unwrap()
+                .modified()
+                .unwrap()
+        );
+        #[cfg(unix)]
+        assert_eq!(before.ino(), after.ino());
+        let marker = read_skills_marker(cwd.path()).await;
+        assert_eq!(marker.version, 3);
+        assert_eq!(marker.roots[root]["same"].len(), 64);
+    }
+}
+
+#[tokio::test]
+async fn skills_changed_source_and_tampered_or_missing_destination_are_replaced() {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "change", "d", "");
+    let cwd = tempfile::tempdir().unwrap();
+    let dest = cwd.path().join(".agents/skills/change");
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    let before_hash = read_skills_marker(cwd.path()).await.roots[AGENTS_ROOT]["change"].clone();
+    std::fs::write(kb.path().join("change/SKILL.md"), "updated").unwrap();
+    std::fs::write(dest.join("stale"), "stale").unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+        "updated"
+    );
+    assert!(!dest.join("stale").exists());
+    assert_ne!(
+        before_hash,
+        read_skills_marker(cwd.path()).await.roots[AGENTS_ROOT]["change"]
+    );
+    // Even a matching marker cannot hide destination edits, additions or loss.
+    for action in ["edit", "add", "delete", "ownership", "missing"] {
+        match action {
+            "edit" => std::fs::write(dest.join("SKILL.md"), "tampered").unwrap(),
+            "add" => std::fs::write(dest.join("extra"), "extra").unwrap(),
+            "delete" => std::fs::remove_file(dest.join("SKILL.md")).unwrap(),
+            "ownership" => std::fs::remove_file(dest.join(".gitignore")).unwrap(),
+            _ => std::fs::remove_dir_all(&dest).unwrap(),
+        }
+        deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+            "updated"
+        );
+        assert!(!dest.join("extra").exists());
+        assert!(owned_copy(&dest).await);
+    }
+}
+
+#[tokio::test]
+async fn skills_v2_marker_migrates_and_missing_hash_forces_replacement() {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "legacy", "d", "");
+    let cwd = tempfile::tempdir().unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    std::fs::write(
+        cwd.path().join(SKILLS_MARKER_REL),
+        r#"{"version":2,"roots":{".agents/skills":["legacy"]}}"#,
+    )
+    .unwrap();
+    let path = cwd.path().join(".agents/skills/legacy/SKILL.md");
+    let old = std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1234);
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(old))
+        .unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    assert_ne!(std::fs::metadata(path).unwrap().modified().unwrap(), old);
+    let marker = read_skills_marker(cwd.path()).await;
+    assert_eq!(marker.version, 3);
+    assert_eq!(marker.roots[AGENTS_ROOT]["legacy"].len(), 64);
+    deliver_claude_code(cwd.path(), &[mount]).await.unwrap();
+    assert!(!cwd.path().join(".agents/skills/legacy").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn skills_hash_and_copy_do_not_follow_symlinks() {
+    use std::os::unix::fs::symlink;
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "links", "d", "");
+    let outside = kb.path().join("outside");
+    std::fs::write(&outside, "outside").unwrap();
+    symlink(&outside, kb.path().join("links/link")).unwrap();
+    let cwd = tempfile::tempdir().unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    let dest = cwd.path().join(".agents/skills/links");
+    assert!(!dest.join("link").exists());
+    let before = std::fs::metadata(dest.join("SKILL.md"))
+        .unwrap()
+        .modified()
+        .unwrap();
+    std::fs::write(&outside, "changed outside").unwrap();
+    deliver_agent_skills(cwd.path(), std::slice::from_ref(&mount))
+        .await
+        .unwrap();
+    assert_eq!(
+        before,
+        std::fs::metadata(dest.join("SKILL.md"))
+            .unwrap()
+            .modified()
+            .unwrap()
+    );
+    symlink(&outside, dest.join("injected")).unwrap();
+    deliver_agent_skills(cwd.path(), &[mount]).await.unwrap();
+    assert!(std::fs::symlink_metadata(dest.join("injected")).is_err());
+    assert_eq!(std::fs::read_to_string(outside).unwrap(), "changed outside");
+}
+
+#[tokio::test]
+async fn skills_failed_staging_keeps_previous_copy_and_leaves_no_partial_directory() {
+    let cwd = tempfile::tempdir().unwrap();
+    let dest = cwd.path().join("old");
+    std::fs::create_dir(&dest).unwrap();
+    std::fs::write(dest.join("SKILL.md"), "previous").unwrap();
+    let error = replace_copy(&cwd.path().join("missing"), &dest)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(
+        std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+        "previous"
+    );
+    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 1);
+    // Fail after copying files: a source directory cannot become our ignore file.
+    let source = tempfile::tempdir().unwrap();
+    std::fs::write(source.path().join("SKILL.md"), "replacement").unwrap();
+    std::fs::create_dir(source.path().join(".gitignore")).unwrap();
+    assert!(replace_copy(source.path(), &dest).await.is_err());
+    assert_eq!(
+        std::fs::read_to_string(dest.join("SKILL.md")).unwrap(),
+        "previous"
+    );
+    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 1);
+}
+
+#[tokio::test]
+async fn skills_invalid_names_are_rejected_before_delivery_changes() {
+    let cwd = tempfile::tempdir().unwrap();
+    let mount = SkillMount {
+        name: "../escape".into(),
+        path: "missing".into(),
+        description: String::new(),
+    };
+    assert_eq!(
+        deliver_agent_skills(cwd.path(), &[mount])
+            .await
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidInput
+    );
+    assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn skills_hash_tracks_relative_paths_bytes_and_source_ignore() {
+    let kb = tempfile::tempdir().unwrap();
+    let mount = write_skill(kb.path(), "hash", "d", "");
+    let root = Path::new(&mount.path);
+    std::fs::write(root.join("one"), "bytes").unwrap();
+    let first = content_hash(root, true).await.unwrap();
+    std::fs::rename(root.join("one"), root.join("two")).unwrap();
+    let renamed = content_hash(root, true).await.unwrap();
+    assert_ne!(first.content, renamed.content);
+    std::fs::write(root.join("two"), "other").unwrap();
+    let changed = content_hash(root, true).await.unwrap();
+    assert_ne!(renamed.content, changed.content);
+    std::fs::write(root.join(".gitignore"), "human ignore").unwrap();
+    let ignored = content_hash(root, true).await.unwrap();
+    assert_ne!(changed.content, ignored.content);
+    assert_eq!(changed.delivered, ignored.delivered);
 }

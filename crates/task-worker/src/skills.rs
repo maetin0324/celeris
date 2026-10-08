@@ -6,6 +6,7 @@ use std::path::Path;
 use std::pin::Pin;
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::protocol::SkillMount;
 
@@ -19,7 +20,7 @@ const MARKER_IGNORE: &str = "*\n";
 #[derive(Default, Serialize, Deserialize)]
 struct SkillsMarker {
     version: u8,
-    roots: BTreeMap<String, Vec<String>>,
+    roots: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -30,28 +31,59 @@ async fn read_skills_marker(cwd: &Path) -> SkillsMarker {
     let Ok(text) = tokio::fs::read_to_string(cwd.join(SKILLS_MARKER_REL)).await else {
         return SkillsMarker::default();
     };
-    if let Ok(names) = serde_json::from_str::<Vec<String>>(&text) {
-        return SkillsMarker {
-            version: 2,
-            roots: BTreeMap::from([(CLAUDE_ROOT.to_string(), names)]),
-        };
+    if let Ok(marker) = serde_json::from_str::<SkillsMarker>(&text)
+        && marker.version == 3
+    {
+        return marker;
     }
-    match serde_json::from_str::<SkillsMarker>(&text) {
-        Ok(marker) if marker.version == 2 => marker,
-        _ => SkillsMarker::default(),
+    #[derive(Deserialize)]
+    struct LegacyMarker {
+        version: u8,
+        roots: BTreeMap<String, Vec<String>>,
+    }
+    let roots = if let Ok(names) = serde_json::from_str::<Vec<String>>(&text) {
+        BTreeMap::from([(CLAUDE_ROOT.to_string(), names)])
+    } else if let Ok(marker) = serde_json::from_str::<LegacyMarker>(&text)
+        && marker.version == 2
+    {
+        marker.roots
+    } else {
+        return SkillsMarker::default();
+    };
+    SkillsMarker {
+        version: 3,
+        roots: roots
+            .into_iter()
+            .map(|(root, names)| {
+                (
+                    root,
+                    names
+                        .into_iter()
+                        .map(|name| (name, String::new()))
+                        .collect(),
+                )
+            })
+            .collect(),
     }
 }
 
-async fn write_skills_marker(cwd: &Path, root: &str, names: &[String]) -> std::io::Result<()> {
+async fn write_skills_marker(
+    cwd: &Path,
+    root: &str,
+    hashes: &BTreeMap<String, String>,
+) -> std::io::Result<()> {
     let dir = cwd.join(".celeris");
     tokio::fs::create_dir_all(&dir).await?;
     append_marker_ignore(&dir).await?;
     let marker = SkillsMarker {
-        version: 2,
-        roots: BTreeMap::from([(root.to_string(), names.to_vec())]),
+        version: 3,
+        roots: BTreeMap::from([(root.to_string(), hashes.clone())]),
     };
     let json = serde_json::to_vec(&marker).map_err(std::io::Error::other)?;
-    tokio::fs::write(dir.join("skills.json"), json).await
+    let staging = tempfile::tempdir_in(&dir)?;
+    let path = staging.path().join("skills.json");
+    tokio::fs::write(&path, json).await?;
+    tokio::fs::rename(path, dir.join("skills.json")).await
 }
 
 async fn append_marker_ignore(dir: &Path) -> std::io::Result<()> {
@@ -199,6 +231,100 @@ fn copy_dir<'a>(src: &'a Path, dest: &'a Path) -> BoxFuture<'a, std::io::Result<
     })
 }
 
+// Source content includes its own root .gitignore. Delivery overwrites that file,
+// so also compute the expected delivered hash with COPY_IGNORE substituted.
+struct ContentHashes {
+    content: String,
+    delivered: String,
+}
+
+async fn content_hash(root: &Path, source: bool) -> std::io::Result<ContentHashes> {
+    if !tokio::fs::symlink_metadata(root).await?.is_dir() {
+        return Err(std::io::Error::other("skill root is not a directory"));
+    }
+    let mut pending = vec![std::path::PathBuf::new()];
+    let mut records = BTreeMap::new();
+    while let Some(relative) = pending.pop() {
+        let mut entries = tokio::fs::read_dir(root.join(&relative)).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let path = relative.join(entry.file_name());
+            let kind = entry.file_type().await?;
+            if kind.is_dir() {
+                records.insert(path.clone(), b'd');
+                pending.push(path);
+            } else if kind.is_file() {
+                records.insert(path, b'f');
+            } else if !source {
+                return Err(std::io::Error::other("unexpected entry in skill copy"));
+            }
+            // Source symlinks and special files are ignored, just as in copy_dir.
+        }
+    }
+    if source {
+        records.entry(".gitignore".into()).or_insert(b'x');
+    }
+    let mut content = Sha256::new();
+    let mut delivered = Sha256::new();
+    for (path, kind) in records {
+        let bytes = if kind == b'f' {
+            tokio::fs::read(root.join(&path)).await?
+        } else {
+            Vec::new()
+        };
+        if kind != b'x' {
+            hash_record(&mut content, &path, kind, &bytes);
+        }
+        if source && path == Path::new(".gitignore") {
+            hash_record(&mut delivered, &path, b'f', COPY_IGNORE.as_bytes());
+        } else {
+            hash_record(&mut delivered, &path, kind, &bytes);
+        }
+    }
+    Ok(ContentHashes {
+        content: format!("{:x}", content.finalize()),
+        delivered: format!("{:x}", delivered.finalize()),
+    })
+}
+
+// Sorted relative paths, entry kinds and length framing avoid ambiguous trees.
+fn hash_record(hash: &mut Sha256, path: &Path, kind: u8, bytes: &[u8]) {
+    let path = path.as_os_str().as_encoded_bytes();
+    hash.update([kind]);
+    hash.update((path.len() as u64).to_le_bytes());
+    hash.update(path);
+    hash.update((bytes.len() as u64).to_le_bytes());
+    hash.update(bytes);
+}
+
+async fn replace_copy(source: &Path, dest: &Path) -> std::io::Result<()> {
+    let staging = tempfile::tempdir_in(dest.parent().expect("skill has a parent"))?;
+    let new = staging.path().join("new");
+    copy_dir(source, &new).await?;
+    tokio::fs::write(new.join(".gitignore"), COPY_IGNORE).await?;
+    let backup = staging.path().join("old");
+    let had_old = match tokio::fs::rename(dest, &backup).await {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = tokio::fs::rename(&new, dest).await {
+        if had_old && let Err(restore_error) = tokio::fs::rename(&backup, dest).await {
+            // Do not let TempDir cleanup delete the last complete copy if the
+            // filesystem also refuses rollback. Retain it for recovery.
+            let retained = staging.keep();
+            return Err(std::io::Error::new(
+                restore_error.kind(),
+                format!(
+                    "skill replacement failed ({error}); restore failed ({restore_error}); backup retained at {}",
+                    retained.join("old").display()
+                ),
+            ));
+        }
+        return Err(error);
+    }
+    Ok(())
+}
+
 async fn owned_copy(path: &Path) -> bool {
     tokio::fs::read_to_string(path.join(".gitignore"))
         .await
@@ -209,7 +335,7 @@ async fn known_copies(cwd: &Path, marker: &SkillsMarker) -> std::io::Result<Vec<
     let mut copies = Vec::new();
     for root in [CLAUDE_ROOT, AGENTS_ROOT] {
         if let Some(names) = marker.roots.get(root) {
-            for name in names {
+            for name in names.keys() {
                 if valid_name(name) {
                     copies.push((root.to_string(), name.clone()));
                 }
@@ -263,13 +389,36 @@ async fn deliver_to(cwd: &Path, root: &str, skills: &[SkillMount]) -> std::io::R
                 && !marker
                     .roots
                     .get(root)
-                    .is_some_and(|names| names.contains(&mount.name))
+                    .is_some_and(|names| names.contains_key(&mount.name))
             {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::AlreadyExists,
                     "unowned skill directory already exists",
                 ));
             }
+        }
+    }
+    let mut hashes = BTreeMap::new();
+    if !skills.is_empty() {
+        let target_root = cwd.join(root);
+        tokio::fs::create_dir_all(&target_root).await?;
+        for mount in skills {
+            let source = Path::new(&mount.path);
+            let hash = content_hash(source, true).await?;
+            let dest = target_root.join(&mount.name);
+            let unchanged = owned_copy(&dest).await
+                && marker
+                    .roots
+                    .get(root)
+                    .and_then(|names| names.get(&mount.name))
+                    == Some(&hash.content)
+                && content_hash(&dest, false)
+                    .await
+                    .is_ok_and(|actual| actual.content == hash.delivered);
+            if !unchanged {
+                replace_copy(source, &dest).await?;
+            }
+            hashes.insert(mount.name.clone(), hash.content);
         }
     }
     for (old_root, name) in copies {
@@ -284,22 +433,10 @@ async fn deliver_to(cwd: &Path, root: &str, skills: &[SkillMount]) -> std::io::R
             tokio::fs::remove_dir_all(dest).await?;
         }
     }
-    if !skills.is_empty() {
-        let target_root = cwd.join(root);
-        tokio::fs::create_dir_all(&target_root).await?;
-        for mount in skills {
-            let dest = target_root.join(&mount.name);
-            if tokio::fs::symlink_metadata(&dest).await.is_ok() {
-                tokio::fs::remove_dir_all(&dest).await?;
-            }
-            copy_dir(Path::new(&mount.path), &dest).await?;
-            tokio::fs::write(dest.join(".gitignore"), COPY_IGNORE).await?;
-        }
-    }
-    write_skills_marker(cwd, root, &names).await
+    write_skills_marker(cwd, root, &hashes).await
 }
 
-/// Claude Code の従来の届け先。marker は v1 も読み、v2 を書く。
+/// Claude Code の従来の届け先。marker は v1/v2 も読み、v3 を書く。
 pub async fn deliver_claude_code(cwd: &Path, skills: &[SkillMount]) -> std::io::Result<()> {
     deliver_to(cwd, CLAUDE_ROOT, skills).await
 }

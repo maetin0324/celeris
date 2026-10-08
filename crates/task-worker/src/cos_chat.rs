@@ -341,3 +341,6 @@ fn rules_section(chat: &CosChatContext) -> String {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod bench_tests;

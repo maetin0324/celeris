@@ -35,9 +35,9 @@ REPO=$(cd "$1" && pwd); BIN=$(cd "$2" && pwd); mkdir -p "$3"; OUT=$(cd "$3" && p
 DRIVER_REPO=${COS_CHAT_BENCH_DRIVER_REPO:-$REPO}
 COS_CHAT_BENCH_SOURCE_SHA=${COS_CHAT_BENCH_SOURCE_SHA:-$(git -C "$REPO" rev-parse HEAD)}
 export COS_CHAT_BENCH_SOURCE_SHA
-if [ "$MODE" = same-thread ]; then
+if [ "$MODE" = same-thread ] || { [ "$MODE" != answers ] && { [ -n "${COS_CHAT_BENCH_ACCOUNT_DIR:-}" ] || [ -n "${COS_CHAT_BENCH_LAB_DIR:-}" ]; }; }; then
   [ "$HARNESS" = claude-code ] || usage
-  [ ! -e "$OUT/celeris.sqlite3" ] || { echo 'same-thread requires a fresh data dir' >&2; exit 2; }
+  [ ! -e "$OUT/celeris.sqlite3" ] || { echo 'account-isolated bench requires a fresh data dir' >&2; exit 2; }
   if [ -n "${COS_CHAT_BENCH_LAB_DIR:-}" ]; then
     [ -z "${COS_CHAT_BENCH_ACCOUNT_DIR:-}" ] || usage
     [ "$(basename "$COS_CHAT_BENCH_LAB_DIR")" = claude_max_lab ] || usage
@@ -83,7 +83,7 @@ cp -r "$REPO/config/skills/cos-operator" "$REPO/config/skills/cos-inbox-triage" 
 [ -s "$OUT/api.token" ] || { head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$OUT/api.token"; }
 chmod 600 "$OUT/api.token"; TOK=$(cat "$OUT/api.token")
 POOL_CONFIG=; COS_ACCOUNT=
-if [ "$MODE" = same-thread ]; then
+if [ "$MODE" = same-thread ] || { [ "$MODE" != answers ] && { [ -n "${COS_CHAT_BENCH_ACCOUNT_DIR:-}" ] || [ -n "${COS_CHAT_BENCH_LAB_DIR:-}" ]; }; }; then
   mkdir -p "$OUT/accounts/$ACCOUNT_ID"
   chmod 700 "$OUT/accounts" "$OUT/accounts/$ACCOUNT_ID"
   cp "$ACCOUNT_DIR/.credentials.json" "$OUT/accounts/$ACCOUNT_ID/"
@@ -141,7 +141,7 @@ dir = "memory"
 [knowledge]
 root = "kb"
 EOF
-if [ "$MODE" = same-thread ] || [ "$MODE" = answers ]; then
+if [ -n "$COS_ACCOUNT" ]; then
   printf '\n[accounts]\nclaude_dir = "%s/accounts"\n' "$OUT" >> "$OUT/config.toml"
 fi
 

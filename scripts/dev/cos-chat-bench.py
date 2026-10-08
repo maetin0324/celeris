@@ -128,6 +128,9 @@ def turn(script, group, thread, idx, kind, text, gap_label=None):
                approx_tokens_after=approx_tokens(thread))
     if all(rec.get(k) is not None for k in ("input_tokens", "cache_read_tokens", "cache_creation_tokens")):
         rec["context_tokens"] = rec["input_tokens"] + rec["cache_read_tokens"] + rec["cache_creation_tokens"]
+    # Save the actual reply and applied receipts at the terminal boundary, so
+    # completion and instruction achievement can be assessed independently.
+    rec["messages_at_completion"] = call("GET", f"/chat/threads/{thread}/messages?limit=200")["items"]
     enrich(rec)
     runs.append(rec)
     json.dump(runs, open(os.path.join(EV, "runs.json"), "w"), ensure_ascii=False, indent=1)

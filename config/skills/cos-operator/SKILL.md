@@ -63,8 +63,9 @@ CoS の chat 書き込みは完了済みの発言として入り、CoS run を�
 - 領域 API（`/api/v1/tasks/...` 等）を CoS credential で直接叩いても監査 context が無ければ 422。経路を変えて監査を外さない。
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
-- 登録済みの path は [operations.md](operations.md) の表だけ。表に無い変更（秘密の値・`/console/instruct`・
-  browser の credential/attestation 系などの除外）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+- API で人ができる変更操作は全て [operations.md](operations.md) の表にある。表に無いのは人の決定で**除外**した操作
+  （秘密の値・`/console/instruct`・browser の credential/attestation 系・`/cos/*` 自身・撤去済みの入口）だけで、
+  送ると理由付きの 422 になる。拒否を回避する別経路を探さず、人に回す。
 - 外部効果の操作（daemon への依頼・git・Discord・release の昇格。表に「外部効果」）は pending → applied で記録される。
   結果が分からず pending のまま残ったら同じ key で再送しても再実行されないので、人に確認を頼む。
 - 認可と監査は API が強制する。この skill を読んだかどうかで通る操作は変わらない。

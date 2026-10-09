@@ -23,3 +23,7 @@ license: このリポジトリと同じ（外部の license は無い）
 - 2026-10-09（ADR 2026-10-09-cos-operations-all-mutations）: 操作表に task の編集・reopen・retry・pause・resume、
   execution-plan PUT（replan）、decision の revise・withdraw、knowledge の accept、LLM 割り当ての PUT・DELETE を足した。
   「登録されていない操作」を除外（人の決定）と登録待ちに分けた。
+- 2026-10-09（ops-closeout、ADR 2026-10-09-cos-operations-all-mutations）: 全領域の PENDING が空になったので、
+  「登録されていない操作」「登録待ち」の案内を消し、operations.md に「除外する操作」の表（`EXCLUDED` の系列と理由）を置いた。
+  `PATCH /api/v1/tasks/<id>` が登録済みになったので起票節の「PATCH は操作表に無い」を直した。cos-inbox-triage には
+  standing_rule.create・release.promote を一次対応では使わない旨を足した。

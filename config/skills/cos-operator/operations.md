@@ -20,7 +20,8 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ## 登録済みの操作（`crates/task-api/src/cos/ops/*.rs` の `ALLOWED` の連結と同じ）
 
-`request.path` に使えるのはこの表の行だけ。これ以外（外部 URL・任意の proxy・`/cos/*` 自身・未登録の path）は
+`request.path` に使えるのはこの表の行だけ。API の変更操作はこの表か下の「除外する操作」のどちらか一方にある。
+それ以外（外部 URL・任意の proxy・存在しない path）は
 422 `cos_operation_not_allowed` で拒否され、拒否も記録される。表と `ALLOWED` の一致は試験
 `cos_operator_skill_table_matches_allowed`（task-api）が固定している。
 
@@ -155,13 +156,18 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | browser の認証区間 | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>/auth-section` | browser.auth_section | `{"active":true\|false}`。外部効果 |
 | browser の live event | `POST /api/v1/tasks/<id>/browser/live/<run>/<session>/events` | browser.live_event | `{"kind":"status"\|"tabs"\|"url"\|"console",…}`。run が動いている間だけ。外部効果 |
 
-## 登録されていない操作（CoS は送らない）
+## 除外する操作（人の決定。CoS は送らない）
 
-未登録の変更操作は `/cos/operations` に送れない。送ると 422 `cos_operation_not_allowed` になり、拒否も理由付きで記録される。
+次の変更操作は `/cos/operations` に送れない（`crates/task-api/src/cos/ops/*.rs` の `EXCLUDED`）。送ると 422
+`cos_operation_not_allowed` と下の理由が返り、拒否も理由付きで記録される。人に web の画面で行うよう頼む。
 
-- **除外（人の決定。今後も登録しない）**: 秘密の値を扱う操作（`/secrets/*`・`/accounts/<id>/login*`・
-  `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
-  人に web の画面で行うよう頼む。
+| 系列 | path | 理由 |
+|---|---|---|
+| `secret_operations` | `/secrets/<id>`（PUT・DELETE）、`/accounts/<id>/login*`、`/clusters/<id>/connect*` | 秘密の値を扱う（取消・削除も含め全て除外） |
+| `browser_credential_attestation` | `/browser/identities*`、`/browser/trusted-devices*`、`/tasks/<id>/browser/waits/<w>/{credential,decision,registered,revoke}`、`/tasks/<id>/browser/live/<run>/<session>/{check,grant,read}` | credential・封緘 state・receipt・owner attestation／信頼端末を扱う |
+| `console_instruction_chain` | `POST /console/instruct` | 別の指示経路へ入り監査の鎖が二重になる |
+| `recursive_cos` | `/cos/operations`・`/cos/operations/<o>/override`・`/cos/inbox/<i>/resolve`・`/cos/threads/<t>/checkpoint` | CoS 制御 API の再帰。受信箱の解決は envelope の外で直接呼ぶ |
+| `removed_by_adr_0079` | `POST /plans`、`/milestones/*`、`/projects/<id>/{milestones,plan,project-plan/<v>/decide}` | 撤去済みの 410 の互換入口 |
 
 ## 監視（読み取り）
 
@@ -180,9 +186,9 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 `repos` は名前の配列（例: `["agent-platform"]`）で送る。thread の案件から自動で付くと考えない。
 案件や repo を特定できなければ起票前に確認する。workspace の path だけを書いて代用しない。
 不足は 422 `repository_required` で、task は作られない。本文を補って新しい idempotency_key で送る。
-既存の未実行・blocked の task（子も含む）は、人が `PATCH /api/v1/tasks/<id>` に
+既存の未実行・blocked の task（子も含む）は `PATCH /api/v1/tasks/<id>` に
 `{"project_id":"<案件 ID>","repos":["agent-platform"]}` を送れば修復できる。blocked の解除は別操作。
-PATCH は現在 CoS の操作表に無いので、CoS が直接実行する別経路を探さない。
+CoS も上の表の `PATCH /api/v1/tasks/<id>`（task.update）で同じ修復を監査付きで送れる。
 
 ```json
 {"idempotency_key":"create-screen-fix-1","expected_revision":null,

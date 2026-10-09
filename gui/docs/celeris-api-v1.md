@@ -3468,6 +3468,11 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | decisions | `POST /knowledge/inbox/{id}/accept` | `knowledge.accept` |
 | decisions | `POST /inbox/items/{id}/answer` | `inbox.answer` |
 | projects | `PATCH /projects/{id}` | `project.update` |
+| projects | `POST /projects/{id}/cancel` | `project.cancel`（`result.cancelled_tasks`） |
+| projects | `POST /projects/{id}/pause` | `project.pause` |
+| projects | `POST /projects/{id}/resume` | `project.resume` |
+| projects | `POST /projects/{id}/archive` | `project.archive` |
+| projects | `POST /projects/{id}/unarchive` | `project.unarchive` |
 | admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
 | admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
 | admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |

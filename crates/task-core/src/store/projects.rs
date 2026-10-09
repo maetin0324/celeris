@@ -400,6 +400,16 @@ impl SqliteStore {
         paused_from: Option<Option<ProjectStatus>>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_lifecycle_tx(&conn, id, status, paused_from)
+    }
+
+    /// `project_set_lifecycle` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn project_set_lifecycle_tx(
+        conn: &Connection,
+        id: ProjectId,
+        status: ProjectStatus,
+        paused_from: Option<Option<ProjectStatus>>,
+    ) -> Result<bool, StoreError> {
         let now = format_rfc3339(OffsetDateTime::now_utc())?;
         let affected = match paused_from {
             Some(from) => conn.execute(
@@ -425,6 +435,15 @@ impl SqliteStore {
         at: Option<OffsetDateTime>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::project_set_archived_at_tx(&conn, id, at)
+    }
+
+    /// `project_set_archived_at` on a caller-owned transaction.
+    pub fn project_set_archived_at_tx(
+        conn: &Connection,
+        id: ProjectId,
+        at: Option<OffsetDateTime>,
+    ) -> Result<bool, StoreError> {
         let affected = conn.execute(
             "UPDATE projects SET archived_at = ?1, updated_at = ?2 WHERE id = ?3",
             params![
@@ -721,6 +740,16 @@ impl SqliteStore {
         paused_from: Option<Option<MilestoneStatus>>,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
+        Self::milestone_set_lifecycle_tx(&conn, id, status, paused_from)
+    }
+
+    /// `milestone_set_lifecycle` on a caller-owned transaction.
+    pub fn milestone_set_lifecycle_tx(
+        conn: &Connection,
+        id: MilestoneId,
+        status: MilestoneStatus,
+        paused_from: Option<Option<MilestoneStatus>>,
+    ) -> Result<bool, StoreError> {
         let now = format_rfc3339(OffsetDateTime::now_utc())?;
         let affected = match paused_from {
             Some(from) => conn.execute(

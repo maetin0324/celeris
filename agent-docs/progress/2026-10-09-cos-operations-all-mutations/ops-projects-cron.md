@@ -29,8 +29,19 @@ status: running
 - `cargo nextest run -p celerisctl cos_mapped cron` → 11 passed
 - `cargo clippy -p task-core -p task-ops -p task-api -p celerisctl --all-targets -- -D warnings` → 成功、`git diff --check` → 成功
 
+## projects lifecycle 5 route（完了）
+
+`POST /projects/{id}/{cancel,pause,resume,archive,unarchive}` を B で登録。task-ops の `plan_project_action` が直接経路と
+同じ 404/409 規則で書き込みを決め、`apply_project_change_tx` が案件の状態・中止の連鎖（各 task を transaction 内で
+読み直して `apply_transition_tx(ProjectCancelled)`）・途中目標の中止を caller-owned transaction で書く。task-core に
+`project_set_lifecycle_tx`・`project_set_archived_at_tx`・`milestone_set_lifecycle_tx`・`task_status_tx` を追加。
+handler と CoS は `lifecycle::project_action_op` を共有。celerisctl の `projects` は読み取りだけなので包みは不要。
+
+検証: `cargo nextest run -p task-api --test cos_ops_registry --test lifecycle --test cos_operations_domains --test cos_ops_projects_cron`
+→ 21 passed、`cargo nextest run -p task-ops lifecycle` → 10 passed、task-api lib cos 4 passed、clippy（3 crate all-targets）成功。
+
 ## 残り
 
-- projects PENDING 14: `POST /projects`、`/projects/{id}/{archive,cancel,pause,resume,unarchive}`、`/projects/{id}/docs/{init,maintenance}`、
+- projects PENDING 9: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
   `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）、`POST /reports/{notified,read}`、`POST /standing-rules`、`DELETE /standing-rules/{id}`
 - tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

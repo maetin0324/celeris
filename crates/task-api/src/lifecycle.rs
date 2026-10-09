@@ -39,14 +39,71 @@ pub struct MilestoneLifecycle {
 #[serde(deny_unknown_fields)]
 pub(crate) struct EmptyBody {}
 
-/// 案件の 5 つの操作（URL の末尾）。
-#[derive(Debug, Clone, Copy)]
-enum ProjectAction {
-    Cancel,
-    Pause,
-    Resume,
-    Archive,
-    Unarchive,
+use lifecycle::ProjectAction;
+
+fn project_trigger(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Cancel => "project_cancel",
+        ProjectAction::Pause => "project_pause",
+        ProjectAction::Resume => "project_resume",
+        ProjectAction::Archive => "project_archive",
+        ProjectAction::Unarchive => "project_unarchive",
+    }
+}
+
+/// The CoS action name of a project lifecycle operation.
+pub(crate) fn project_action_name(action: ProjectAction) -> &'static str {
+    match action {
+        ProjectAction::Cancel => "project.cancel",
+        ProjectAction::Pause => "project.pause",
+        ProjectAction::Resume => "project.resume",
+        ProjectAction::Archive => "project.archive",
+        ProjectAction::Unarchive => "project.unarchive",
+    }
+}
+
+/// `POST /projects/{id}/{cancel|pause|resume|archive|unarchive}` shared by the handler
+/// (`audit = None`) and `/cos/operations` (ADR 2026-10-09-cos-operations-all-mutations D3). The
+/// CoS form checks with `plan_project_action` and writes the project change, the cancel cascade
+/// and the audit record in one transaction.
+pub(crate) fn project_action_op(
+    store: &task_core::store::SqliteStore,
+    project_id: task_core::ProjectId,
+    action: ProjectAction,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<lifecycle::ProjectLifecycle>, ApiProblem> {
+    let trigger = project_trigger(action);
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        let outcome = match action {
+            ProjectAction::Cancel => lifecycle::cancel_project(store, project_id),
+            ProjectAction::Pause => lifecycle::pause_project(store, project_id),
+            ProjectAction::Resume => lifecycle::resume_project(store, project_id),
+            ProjectAction::Archive => lifecycle::archive_project(store, project_id, now),
+            ProjectAction::Unarchive => lifecycle::unarchive_project(store, project_id),
+        };
+        return outcome
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some(trigger)));
+    };
+    let target_id = project_id.to_string();
+    let change = lifecycle::plan_project_action(store, project_id, action, now).map_err(|e| {
+        audit.reject(
+            store,
+            "project",
+            &target_id,
+            ops_problem(store, e, Some(trigger)),
+        )
+    })?;
+    let name = project_action_name(action);
+    let operation = audit.apply(store, "project", &target_id, name, |tx| {
+        let cancelled = lifecycle::apply_project_change_tx(tx, project_id, &change)?;
+        Ok(serde_json::json!({
+            "project_id": target_id,
+            "cancelled_tasks": cancelled.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 async fn project_action(
@@ -61,26 +118,9 @@ async fn project_action(
     require_admin(&state, &headers)?;
     let project_id = parse_project_id(&id)?;
     let EmptyBody {} = read_json(body, true).await?;
-    let trigger = match action {
-        ProjectAction::Cancel => "project_cancel",
-        ProjectAction::Pause => "project_pause",
-        ProjectAction::Resume => "project_resume",
-        ProjectAction::Archive => "project_archive",
-        ProjectAction::Unarchive => "project_unarchive",
-    };
+    let trigger = project_trigger(action);
     let result = state
-        .blocking(move |store| {
-            let outcome = match action {
-                ProjectAction::Cancel => lifecycle::cancel_project(store, project_id),
-                ProjectAction::Pause => lifecycle::pause_project(store, project_id),
-                ProjectAction::Resume => lifecycle::resume_project(store, project_id),
-                ProjectAction::Archive => {
-                    lifecycle::archive_project(store, project_id, OffsetDateTime::now_utc())
-                }
-                ProjectAction::Unarchive => lifecycle::unarchive_project(store, project_id),
-            };
-            outcome.map_err(|e| ops_problem(store, e, Some(trigger)))
-        })
+        .blocking(move |store| project_action_op(store, project_id, action, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = trigger, project_id = %project_id, status = %result.project.status.as_str(), "admin: project lifecycle");
     Ok(json_response(StatusCode::OK, &result))

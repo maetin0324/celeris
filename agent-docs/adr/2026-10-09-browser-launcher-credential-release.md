@@ -84,3 +84,17 @@ final review は「条件を満たさない session も launcher に接続・ses
 - 回答の要旨: 接続前に決まる条件（設定・uid 分離・credentiald 経路・wait store）は launcher 接続前に拒否する。証明に依存する条件（証明の検証・owner≠daemon・isolation_ok）は session 作成後かつ credentiald 登録・shim 有効化・`Authenticate`・harness 起動より前に検査し、不成立なら session を止めて拒否する。上の「付記 2026-10-09: 接続前 gate」の二段がこれに当たる。
 - この task の段の決定 `confirm-two-stage-gate`（二段 gate を『接続前』の意味として認めるか）に対し、2026-10-09 に **承認する**（推奨どおり、選択肢: 承認する / 不承認）と回答された。回答者は上記の運用セッションである。
 - 不承認だった場合は、この付記を有効な決定としない。本節の記録と実装の扱いは、その時点で replan により決める。
+
+## 付記 2026-10-09: launcher runtime の credential-request → WaitingForAuth wait（共有段）
+
+理由: final review が「launcher runtime（`browser_launcher_run.rs::run`）は run 後に `approval-request.json` だけを読み、shim の `credential-request.json` を wait に変えない」ことを指摘した。このままだと launcher 経路の run は credential 登録を人に聞かずに終わり（`Completed` / `WaitingForHuman`）、`WaitingForAuth` の wait も `auth:<task>:<run>` の resume key も残らない。daemon 経路（`browser.rs`）には同じ意味の段が既にあったので、両経路が同じ関数を呼ぶ形にして差を無くした。
+
+決定:
+
+1. **wait の組み立ては 1 箇所**。`browser.rs::credential_wait(task_id, run_id, session_id, policy, &CredentialRequest) -> NewBrowserWait`（`pub(super)`）を approval の `operation_wait` と同じ置き方で追加し、`WaitingForAuth` wait（`credential_policy_id = Some(policy_id)`、`credential: None`、`resume_key = auth:<task>:<run>`、policy binding 固定）はここでだけ組む。daemon 経路の inline 組み立てはこれを呼ぶ形に置き換えた（挙動不変）。
+2. **request file を見る段も共有**。`browser.rs::shim_request_wait(runtime, task_id, run_id, session_id, policy, sink, outcome) -> (outcome, Option<BrowserRunState>)` を追加し、daemon 経路（`run_with_executable_attempt`）と launcher 経路（`browser_launcher_run.rs::run`）の両方が run 後にこれを呼ぶ。
+3. **順は daemon 経路に合わせる**。`credential-request.json` があればそれを先に処理して `WaitingForAuth` wait を開き、outcome は `Terminal::Question`、最終 `browser.state` は `WaitingForAuth`（launcher 経路では従来の `waiting_for_approval` フラグの代わりに `Option<BrowserRunState>` を state 決定に入れる）。`credential-request.json` が無いときだけ `approval-request.json` を見て `WaitingForApproval`（ADR 2026-10-08 D2）。この順はコードの comment にも書いた。
+4. **fail closed**。`read_credential_request` が policy 不一致で `Err` なら wait を開かず `Err`、`sink.browser_wait_open` が失敗しても `Err`（resume できない Question を返さない）。
+5. **秘密は wait・event・log に入れない**。wait に入るのは `origin` / `purpose` / `credential_policy_id` だけで `credential` は常に `None`。Question の文面も固定文（origin も秘密も含まない）。request の未知の欄は `deny_unknown_fields` で拒否し、拒否の文言に request の中身を写さない。
+
+試験: `browser_launcher_run_tests.rs` に `launcher_credential_request_` 接頭辞で 5 件（wait が 1 件開く・resume key・Question・state、policy 不一致 4 通りの拒否、credential 優先と approval への fallback、wait store 不成立の fail closed、秘密文字列が wait / browser 更新 / progress / outcome に出ないこと）。偽 sink と tempdir の request file だけで回り、userns・実 launcher・実 process・socket・外部ネットワーク・CPU 負荷を使わない。進捗は `agent-docs/progress/2026-10-09-browser-launcher-credential-release/launcher-cred-wait.md`。

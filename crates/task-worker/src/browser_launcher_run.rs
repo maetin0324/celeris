@@ -908,7 +908,7 @@ pub(super) async fn run(
         approved_operation,
     });
     let monitor_req = req.clone();
-    let mut outcome = {
+    let outcome = {
         let browser_sink = BrowserSink(sink);
         let future = adapter.run(req, run_id, limits, &browser_sink);
         tokio::pin!(future);
@@ -922,38 +922,22 @@ pub(super) async fn run(
     };
     forward_events(&events, &mut offset, &monitor_req, &output, sink, &live);
     drop(action_server);
-    // ADR 2026-10-08 D2: the shim's approval request becomes a durable wait (same as the
-    // daemon path); the run resumes in this logical session once the human approves.
-    let mut waiting_for_approval = false;
-    if runtime_dir.join("approval-request.json").exists() {
-        match super::read_approval_request(&runtime_dir.join("approval-request.json"), policy) {
-            Ok((action, intent)) => {
-                let wait = super::operation_wait(
-                    monitor_req.task.id,
-                    run_id,
-                    &browser.session_id,
-                    policy,
-                    action,
-                    &intent,
-                );
-                outcome = match sink.browser_wait_open(&wait) {
-                    Ok(()) => {
-                        waiting_for_approval = true;
-                        Ok(RunOutcome {
-                            terminal: crate::Terminal::Question {
-                                text: format!("Browser {} approval requested", action.as_str()),
-                            },
-                            exit_code: None,
-                        })
-                    }
-                    Err(_) => Err(AdapterError::Other(
-                        "browser wait could not be opened".into(),
-                    )),
-                };
-            }
-            Err(e) => outcome = Err(e),
-        }
-    }
+    // ADR 2026-10-09 付記: shim が run 後に残した request は daemon 経路と同じ共有段で durable wait
+    // になる。順も daemon 経路と同じ — `credential-request.json` があれば**それを先に**処理して
+    // `WaitingForAuth` wait（resume key `auth:<task>:<run>`、outcome は `Terminal::Question`）を開き、
+    // `credential-request.json` が無いときだけ `approval-request.json` を見て `WaitingForApproval`
+    // wait を開く（ADR 2026-10-08 D2）。policy に合わない request と wait を開けなかった場合は
+    // wait を開かず `Err`（fail closed）。wait・event・log には origin / purpose / policy_id だけが
+    // 入り、credential 値は入らない。
+    let (outcome, wait_state) = super::shim_request_wait(
+        &runtime_dir,
+        monitor_req.task.id,
+        run_id,
+        &browser.session_id,
+        policy,
+        sink,
+        outcome,
+    );
     let stop_runtime = Arc::clone(&runtime);
     let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
         .await
@@ -971,17 +955,20 @@ pub(super) async fn run(
             exit_code: None,
         }),
     };
-    browser.state = match &outcome {
-        _ if waiting_for_approval => BrowserRunState::WaitingForApproval,
-        Ok(RunOutcome {
-            terminal: crate::Terminal::Done { .. },
-            ..
-        }) => BrowserRunState::Completed,
-        Ok(RunOutcome {
-            terminal: crate::Terminal::Question { .. },
-            ..
-        }) => BrowserRunState::WaitingForHuman,
-        _ => BrowserRunState::Failed,
+    browser.state = match wait_state {
+        // A wait is open: the state follows the wait, whatever the harness reported.
+        Some(state) => state,
+        None => match &outcome {
+            Ok(RunOutcome {
+                terminal: crate::Terminal::Done { .. },
+                ..
+            }) => BrowserRunState::Completed,
+            Ok(RunOutcome {
+                terminal: crate::Terminal::Question { .. },
+                ..
+            }) => BrowserRunState::WaitingForHuman,
+            _ => BrowserRunState::Failed,
+        },
     };
     sink.browser_updated(&browser);
     outcome

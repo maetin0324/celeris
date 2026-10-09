@@ -463,7 +463,12 @@ fi"#,
     // source `none` の枠が埋まる（= 別の行 acct-b にも载らない）ことを確かめる。
     let limit = env.patch("/accounts/implicit/none", json!({"max_runs": 1}));
     assert_eq!(limit.status, 200, "{}", limit.body);
-    assert_eq!(limit.json()["providers"], json!(["acct-a"]), "{}", limit.body);
+    assert_eq!(
+        limit.json()["providers"],
+        json!(["acct-a"]),
+        "{}",
+        limit.body
+    );
     // --- 受け入れ 1: acct-a をゲート付きタスクで埋めてから acct-b を追加・reload し、次の tick から使われることを確かめる。
     // 実行中の run（acct-a 側）は影響を受けない。
     let ws_slow = env.workspace("ws-slow");

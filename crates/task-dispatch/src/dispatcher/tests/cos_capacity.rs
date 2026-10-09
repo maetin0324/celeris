@@ -594,7 +594,10 @@ async fn implicit_account_is_per_llm_source() {
         d.models.insert(id.to_string(), "m".to_string());
     }
     d.set_provider_llm_sources(HashMap::from([
-        ("opencode-qwen".to_string(), "openai_compatible:qwen".to_string()),
+        (
+            "opencode-qwen".to_string(),
+            "openai_compatible:qwen".to_string(),
+        ),
         ("pi-qwen".to_string(), "openai_compatible:qwen".to_string()),
         ("ldr-main".to_string(), "celeris".to_string()),
     ]));
@@ -608,7 +611,10 @@ async fn implicit_account_is_per_llm_source() {
         d.implicit_account_providers("openai_compatible:qwen"),
         vec!["opencode-qwen".to_string(), "pi-qwen".to_string()]
     );
-    assert_eq!(d.implicit_account_providers("opencode-qwen"), Vec::<String>::new());
+    assert_eq!(
+        d.implicit_account_providers("opencode-qwen"),
+        Vec::<String>::new()
+    );
     // No stored value → the default, not the written `concurrency = 1`.
     assert_eq!(
         d.implicit_account_limit("openai_compatible:qwen"),

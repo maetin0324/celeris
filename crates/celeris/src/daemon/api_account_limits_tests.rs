@@ -238,7 +238,12 @@ async fn patch_account_limits_validate_persist_and_survive_reload_and_restart() 
         assert_eq!((status, body["code"].clone()), (400, json!("bad_request")));
 
         // 存在しないアカウント（404）: 実アカウントのディレクトリが無い、非プール行が無い、プール行の id。
-        for path in ["claude-code/missing", "implicit/nope", "implicit/pool", "implicit/qwen"] {
+        for path in [
+            "claude-code/missing",
+            "implicit/nope",
+            "implicit/pool",
+            "implicit/qwen",
+        ] {
             let (status, body) = patch(path.into(), json!({"max_runs": 2})).await;
             assert_eq!(status, 404, "{path}: {body}");
             assert_eq!(body["code"], json!("account_not_found"), "{path}");
@@ -383,7 +388,11 @@ async fn implicit_source_account_limit_survives_reload() {
             .expect("get");
         let list = resp.json::<Value>().await.expect("json");
         let after = item(&list, "implicit", "none");
-        assert_eq!(after["max_runs"], json!(1), "reload must keep the source limit");
+        assert_eq!(
+            after["max_runs"],
+            json!(1),
+            "reload must keep the source limit"
+        );
         assert_eq!(after["effective_max_runs"], json!(1));
         assert_eq!(after["max_runs_source"], json!("account"));
         assert_eq!(after["providers"], json!(["qwen", "qwen2"]));

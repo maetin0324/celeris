@@ -515,10 +515,9 @@ pub(super) fn validate_providers(cfg: &Config) -> Result<(), ConfigError> {
             } else {
                 "ignored; the limit is the max_runs of its LLM source's implicit account; edit it on the accounts screen"
             };
-            let source = cfg.provider_llm_source(&p.id).map_or_else(
-                || p.id.clone(),
-                |resolved| resolved.source.to_key(),
-            );
+            let source = cfg
+                .provider_llm_source(&p.id)
+                .map_or_else(|| p.id.clone(), |resolved| resolved.source.to_key());
             tracing::warn!(provider = %p.id, concurrency, llm_source = %source, "provider {}: concurrency is deprecated (ADR 2026-10-08 account-concurrency-limits); {} (implicit/{})", p.id, handling, source);
         }
         // ADR-0026 / ADR-0106 / ADR 2026-10-07: `command`/`args` は ACP / browser-specialist / Pi の行で意味を持つ。

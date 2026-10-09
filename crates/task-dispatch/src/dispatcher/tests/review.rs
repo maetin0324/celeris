@@ -473,13 +473,13 @@ async fn reviewer_run_shares_concurrency_and_is_deferred_when_at_capacity() {
     let adapter = Arc::new(FileAdapter {
         plan_json: String::new(),
         review_json: r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#.into(),
-        delay: Duration::from_millis(150),
+        delay: Duration::ZERO,
     });
     let mut d = dispatcher(store.clone(), adapter, 1);
     let first = d.tick().unwrap();
     assert_eq!(first.dispatched, 1);
     // ワーカーが終わるのを待ってから、次の tick で reviewing に入る。
-    tokio::time::sleep(Duration::from_millis(250)).await;
+    await_worker_completion(&mut d, r.id).await;
     // 2 つ目のタスクを ready にしておき、Reviewer run が枠を取っている間は dispatch されないことを見る。
     let other = new_task(
         dir.path(),

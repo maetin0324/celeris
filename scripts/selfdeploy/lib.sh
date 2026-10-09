@@ -921,7 +921,9 @@ sd_list_stale_celeris_units() {
 # `{ok:false, code}`）に書く。ログは標準出力・標準エラーへ（呼ぶ側が gate-logs/browser-ledger.log へ向ける）。
 # 差し替え（試験用）: SD_BROWSER_LEDGER_RUNNER（生成器。既定 <build>/scripts/browser-conformance.py を python3 で）、
 #   SD_AGENT_BROWSER（既定 agent-browser）、SD_BROWSER_LEDGER_CHECK_BIN（既定 <out>/bin/celerisctl）、
-#   SD_BROWSER_AGENT_VERSION（既定 0.38.1）、SD_BROWSER_LEDGER_TIMEOUT（既定 3600 秒。全体の上限）。
+#   SD_BROWSER_AGENT_VERSION（既定 0.38.1）、SD_BROWSER_LEDGER_TIMEOUT（既定 3600 秒。全体の上限）、
+#   SD_BROWSER_LAUNCHER_SOCKET（launcher credential 証拠の socket。既定 /run/celeris-browser/launcher.sock。
+#   無ければ空にして launcher_unavailable と理由を残す。空文字で明示的に無効化できる）。
 # 結果の code: ok / agent_browser_missing / agent_browser_version / generator_failed / check_failed / timeout /
 #   または `celerisctl browser ledger check` の code（stale_release・invalid など）。
 # 結果の変数: SD_BROWSER_LEDGER_OK（true/false）と SD_BROWSER_LEDGER_CODE（呼んだ shell に残る。subshell で呼ぶと消える）。
@@ -1024,11 +1026,15 @@ sd_browser_ledger() {
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then _sd_bl_fail timeout; return 1; fi
   if [ "$rc" -eq 0 ]; then p4b=true; else sd_log "browser-ledger: p4b evidence exit $rc (public-capability ledger kept)"; fi
 
-  # 3b. credential 証拠（P4-B 完了時だけ。失敗しても公開台帳を維持）
+  # 3b. credential 証拠（P4-B 完了時だけ。失敗しても公開台帳を維持）。launcher runtime で取る
+  #     （ADR 2026-10-09-browser-launcher-credential-release）。launcher socket が無い host は生成器が
+  #     launcher_unavailable と理由を出し、credential を空にした台帳を返す（release は止めない）。
   if [ "$p4b" = true ]; then
     mkdir -p "$partial/credential"
-    _sd_bl_run "$deadline" env CELERIS_USERNS_TESTS=1 "${runner[@]}" \
-        --credential-evidence "$partial/conformance.json" \
+    local launcher_sock="${SD_BROWSER_LAUNCHER_SOCKET-/run/celeris-browser/launcher.sock}"
+    [ -S "$launcher_sock" ] || launcher_sock=""
+    _sd_bl_run "$deadline" env CELERIS_USERNS_TESTS=1 CELERIS_BROWSER_LAUNCHER_SOCKET="$launcher_sock" "${runner[@]}" \
+        --credential-evidence "$partial/conformance.json" --credential-runtime launcher \
         --credential-backend claude-code --credential-backend browser-specialist \
         --output-dir "$partial/credential" 8>&- 9>&-
     rc=$?
@@ -1055,6 +1061,9 @@ PY
         cred_ok=true
         cred_code=ok
         cred_reason=""
+    elif [ -f "$partial/credential/conformance.json" ]; then
+        # 失敗（launcher 無し等）の生成器の台帳は credential の claim を消している。それを採って credential を空にする。
+        mv -f "$partial/credential/conformance.json" "$partial/conformance.json"
     fi
   else
     cred_code=p4b_incomplete

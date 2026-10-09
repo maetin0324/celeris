@@ -340,12 +340,30 @@ P4A_EGRESS_NEGATIVE_TESTS = tuple(
     ))
 
 
-def credential_evidence(ledger_path, backends, output):
+def credential_evidence(ledger_path, backends, output, runtime="daemon"):
     output = Path(output)
     output.mkdir(parents=True, exist_ok=True)
     ledger = json.loads(Path(ledger_path).read_text())
     if ledger.get("schema") != 1 or ledger.get("source") != "celeris-browser-conformance":
         print("ledger is not a measured celeris-browser-conformance record", file=sys.stderr)
+        return 1
+    if runtime == "launcher" and not os.environ.get("CELERIS_BROWSER_LAUNCHER_SOCKET"):
+        report = {"complete": False, "code": "launcher_unavailable",
+                  "reason": "CELERIS_BROWSER_LAUNCHER_SOCKET is not configured", "evidence": []}
+        # A prior run may have certified credential injection. Remove that claim
+        # when this host cannot produce launcher evidence, while preserving the
+        # public and P4-B evidence already in the input ledger.
+        for result in ledger["results"]:
+            if result["backend_id"] not in backends:
+                continue
+            result["evidence"] = [row for row in result.get("evidence", [])
+                                  if row.get("case") not in ("isolation_suite", "egress_negative_suite")]
+            result["passed"] = sorted(set(result.get("passed", [])) -
+                                      {"isolation_suite", "egress_negative_suite"})
+        write_ledger(output, ledger["results"], source=ledger["source"], generated_for=ledger.get("generated_for"))
+        report["record"] = str(output / "conformance.json")
+        (output / "credential-evidence.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps(report))
         return 1
     cargo = os.environ.get("CELERIS_CONFORMANCE_CARGO", "cargo")
     manifest = Path(__file__).resolve().parents[1] / "Cargo.toml"
@@ -371,7 +389,7 @@ def credential_evidence(ledger_path, backends, output):
                 target_args = ["--lib"] if target == "lib" else ["--test", target]
                 env = os.environ.copy()
                 env["CELERIS_USERNS_TESTS"] = "1"
-                env["CELERIS_LAUNCHER_TESTS"] = "require"
+                env["CELERIS_LAUNCHER_TESTS"] = "require" if runtime == "launcher" else "0"
                 env.pop("CELERIS_ISOLATION_TESTS", None)
                 tmpdir = None
                 if len(env.get("TMPDIR", "")) > 40:
@@ -399,7 +417,7 @@ def credential_evidence(ledger_path, backends, output):
                     if tmpdir:
                         shutil.rmtree(tmpdir, ignore_errors=True)
             outcomes[full_name] = outcome
-            all_evidence.append({"case": case, "test": full_name, "outcome": outcome})
+            all_evidence.append({"case": case, "test": full_name, "outcome": outcome, "runtime": runtime})
     complete = build_ok and all(row["outcome"] == "passed" for row in all_evidence)
     for result in ledger["results"]:
         if result["backend_id"] not in backends:
@@ -510,6 +528,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--credential-evidence", metavar="LEDGER",
                         help="add measured P4-A isolation and egress evidence")
+    parser.add_argument("--credential-runtime", choices=("daemon", "launcher"), default="daemon",
+                        help="runtime that produces the credential evidence")
     parser.add_argument("--credential-backend", action="append", default=[],
                         help="backend id that receives credential evidence (repeatable)")
     parser.add_argument("--p4b-evidence", metavar="LEDGER",
@@ -551,7 +571,7 @@ def main():
     if args.credential_evidence:
         if not args.credential_backend or not set(args.credential_backend) <= set(BACKENDS):
             parser.error("--credential-evidence needs one or more known --credential-backend ids")
-        return credential_evidence(args.credential_evidence, set(args.credential_backend), args.output_dir)
+        return credential_evidence(args.credential_evidence, set(args.credential_backend), args.output_dir, args.credential_runtime)
     if args.credential_backend:
         parser.error("--credential-backend requires --credential-evidence")
     command = {}

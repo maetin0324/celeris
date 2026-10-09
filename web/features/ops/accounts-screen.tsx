@@ -205,12 +205,21 @@ export function parseMaxRunsInput(raw: string): { value: number } | { error: str
   return { value };
 }
 
+/**
+ * URL の path 断片。`encodeURIComponent` は `:` も符号化するが、暗黙アカウントの id は
+ * `openai_compatible:<source id>` で `:` を含む（ADR 2026-10-08 §(e)・gui-api.md §3.29a）。
+ * `:` は RFC 3986 の pchar なので path 断片にそのまま書ける。文書と e2e の fake daemon も生の `:` を期待する。
+ */
+function pathSegment(value: string): string {
+  return encodeURIComponent(value).replaceAll("%3A", ":");
+}
+
 /** 上限を設定（数値）・解除（null）する要求。暗黙アカウントも adapter = "implicit" で同じ形。 */
 export function accountLimitTarget(item: AccountView, maxRuns: number | null): ActionTarget {
   const adapter = item.adapter ?? "claude-code";
   return {
     id: `limit:${accountKey(item)}`,
-    path: `/api/accounts/${encodeURIComponent(adapter)}/${encodeURIComponent(item.id)}`,
+    path: `/api/accounts/${pathSegment(adapter)}/${pathSegment(item.id)}`,
     method: "PATCH",
     body: { max_runs: maxRuns } satisfies Pick<AccountView, "max_runs">,
   };

@@ -5,8 +5,9 @@
 - 状態: **Accepted**（人間の決定 H1 / H5〜H7。celeris 側の ADR-0013、GUI 側の ADR-GUI-0001）。改訂日 2026-09-14
 - 改訂: 2026-10-08（ADR 2026-10-08-account-concurrency-limits）— **追加と deprecate。v1 のまま**。エンドポイント 216:
   `PATCH /accounts/{adapter}/{id}`（アカウントごとの上限 `max_runs`。§3.29a）。`AccountView` に `max_runs` /
-  `effective_max_runs` / `max_runs_source` / `implicit` / `provider` を追加し、`dir` は暗黙アカウントで `null` になる。
-  `GET /accounts` はアカウントを持たない行ごとの**暗黙アカウント**（`adapter = "implicit"`）も返す。`max_runs_per_account` は
+  `effective_max_runs` / `max_runs_source` / `implicit` / `providers` を追加し、`dir` は暗黙アカウントで `null` になる。
+  `GET /accounts` はアカウントを持たない行の **LLM source ごとの暗黙アカウント**（`adapter = "implicit"`、`id = <llm source id>`。
+  同じ source を使う行は 1 件を共有する）も返す。`max_runs_per_account` は
   「保存値の無いアカウントの既定」になり、`[accounts]` が無い構成でも組み込みの既定 2 を返す。`DaemonSnapshot.implicit_accounts` を追加。
   `ProviderView` / `ProviderConfigView` / `ProviderLive` の `concurrency` は **deprecated**（schema に `deprecated: true`。値は残るが
   意味を持たない）。`POST`/`PATCH /providers` の本文の `concurrency` は受け付けるが保存しない（§3.24・3.25）。
@@ -966,7 +967,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 - `reports`（秘書レベルの未読の報告と通知の判定）・`approvals_pending`（未決定の認可の件数）・`decisions_open`（未回答の決定の要求の件数）は
   ディスパッチャではなく **API が応答を組むときに埋める**（ADR-0033 D3/D5、ADR-0079 D7）。
 - `clusters[]`（ADR-0018）、`accounts_root` / `max_runs_per_account` / `accounts_roots` / `accounts[]`（ADR-0024 / ADR-0025）、
-  `implicit_accounts[]`（`{provider, in_use}`。暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
+  `implicit_accounts[]`（`{source, providers[], in_use}`。LLM source 単位の暗黙アカウント。ADR 2026-10-08-account-concurrency-limits）、
   `scratch`（scratch pool の観測値。無ければ省略。`GET /metrics/scratch` と同じ。ADR-0075 D6）も載る。
 - `awaiting_human[]` は承認待ちで延期中のタスク、`awaiting_children[]` は**委譲した子が終わるのを待っている親**
   （どちらも `reviewing` のままだが理由が違う。ADR-0023 D3）。GUI はこれを見て「判定中」と「部下待ち」を区別する

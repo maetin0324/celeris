@@ -338,7 +338,7 @@ impl Dispatcher {
                 allowed_lanes: spec.tiers.clone(),
                 resource_group_id: None,
                 concurrency_limit: self
-                    .implicit_account_limit(&spec.id)
+                    .implicit_account_limit(&self.implicit_source_of(&spec.id))
                     .map(|(limit, _)| limit as u32),
                 rpm_limit: None,
                 tpm_limit: None,

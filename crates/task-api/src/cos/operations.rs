@@ -87,6 +87,43 @@ pub(crate) struct ItemMark {
 }
 
 impl OperationAudit {
+    /// Persist the first half of a C-class operation before its external effect. `now` is
+    /// injected so retries and stale-pending behavior can be tested without wall-clock waits.
+    pub(crate) fn begin_external(
+        &self,
+        store: &SqliteStore,
+        target_kind: &str,
+        target_id: &str,
+        action: &str,
+        now: time::OffsetDateTime,
+    ) -> Result<(CosOperation, bool), ApiProblem> {
+        store
+            .cos_operation_begin_external(
+                &self.ctx,
+                &self.idempotency_key,
+                &self.request_hash,
+                target_kind,
+                target_id,
+                self.expected_revision.as_deref(),
+                action,
+                &self.payload,
+                now,
+            )
+            .map_err(cos_problem)
+    }
+
+    /// Record the known result after an external effect has completed.
+    pub(crate) fn finish_external(
+        &self,
+        store: &SqliteStore,
+        result: &Value,
+        now: time::OffsetDateTime,
+    ) -> Result<CosOperation, ApiProblem> {
+        store
+            .cos_operation_finish_external(&self.ctx, result, now)
+            .map_err(cos_problem)
+    }
+
     /// Run `write` inside the `cos_operation_apply` transaction. All domain writes go through `tx`.
     pub(crate) fn apply<F>(
         &self,

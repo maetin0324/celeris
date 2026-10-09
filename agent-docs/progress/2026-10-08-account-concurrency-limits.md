@@ -1,7 +1,7 @@
 ---
 title: 同時実行数をアカウントごとに一本化し、プロバイダの concurrency を deprecate する（暗黙アカウントを含む）
 tasks: [01M4D7RVKXY9A967ZXDADWVHQJ]
-status: blocked
+status: done
 updated: 2026-10-09
 ---
 # 同時実行数をアカウントごとに一本化（close-out）
@@ -158,7 +158,61 @@ test-parallel の 8 本（前回の finish と同じ。すべて host の負荷�
 
 ホストの load average は 35 前後（24 core）。`unshare`・bind mount の形態はこの run では使っていない。
 
-### 未達・残り
+### 未達・残り（当時）
 
-- 暗黙アカウントの単位（上の 2）。受け入れ条件（source 単位）は未達。
+- 暗黙アカウントの単位（上の 2）: 後の run で source 単位に直して解消（下の「finish 検査（source 単位）」）。
 - 本番の移行（config から `concurrency` を外す、Qwen 行の `max_runs = 1` の保存）は人の手順。この run では本番に触れていない。
+
+上の表・節の「行ごと（provider id）」の記述は、source 単位に直した後の状態に読み替える。
+
+## finish 検査（source 単位。2026-10-09、run 01M4FSWAP3QN8QZKHAW2FDV9VF、attempt 3）
+
+前節の「未達」（暗黙アカウントが provider 行単位）は、人の訂正（2026-10-08 のコメント）に合わせて解消済み。
+直した commit は `ca56a55c`（旧 concurrency を実効上限から外す）・`64d419ff`（暗黙アカウントを LLM source 単位に）・
+`09c10512`（web）・`b9f206e5`（整形）・`72650635`（source-ui の記録）。この run ではコードを変えず、検査と記録だけ行った。
+
+### 根拠（ファイル:行）
+
+- **暗黙アカウントは LLM source 単位**: `crates/task-dispatch/src/dispatcher.rs:1917`（`implicit_source_of` は `provider_llm_sources` の source id を返す）、
+  `:1926`（`implicit_account_ids` は非プール行の source を重複なく 1 件ずつ）、`:1941`（`implicit_account_providers` は同じ source の行を集める）、
+  `:1976`（`implicit_account_in_use` は同 source の全行の run を数える）。試験 `crates/task-dispatch/src/dispatcher/tests/cos_capacity.rs:569` `implicit_account_is_per_llm_source`、
+  `crates/celeris/src/daemon/api_account_limits_tests.rs:343` `implicit_source_account_limit_survives_reload`。
+- **旧 `[[providers]].concurrency` は dispatch で使わない**: `crates/task-dispatch/src/capacity.rs:92` `effective_account_limit(stored, default)` は保存値 → `max_runs_per_account` の 2 段だけ
+  （コメント「`concurrency` is not an input: it never limits a run.」`:91`）。`MaxRunsSource` は `Account` / `Default` のみ（`:74`）。
+  `crates/celeris/src/config/providers.rs:510-521` は旧値を読み、警告（`warn`）を出すだけ。`legacy_concurrency` と `provider_full` は本体コードに残っていない（grep で 0 件）。
+  試験 `crates/task-dispatch/src/dispatcher/tests/cos_capacity.rs:260` `pool_ignores_provider_concurrency_and_uses_account_overrides`。
+- **決定 nonpool-limit = (ii) implicit-account**: ADR `agent-docs/adr/2026-10-08-account-concurrency-limits.md:11`・`:149`（§(e)「確定」）。
+  決定記録の revise（`POST /decisions/01M4D90CSGX3NX3EGVCQXFAP67/revise`）は運用セッションの回答で報告された。この run から決定ストアは読めないため、記録そのものは確認していない。
+
+### 検査（この run の実行。exit code）
+
+| コマンド | exit | 要点 |
+| --- | --- | --- |
+| `cargo clippy --workspace -- -D warnings` | 0 | `Finished` |
+| `TMPDIR=/var/tmp/cf5 CELERIS_TEST_JOBS=4 bash scripts/dev/test-parallel.sh -E "$(cat filter)"` | 0 | nextest 4826 passed / 0 failed / 22 ignored。doc-test 10 crate 0 failed。`CELERIS_TEST_SUMMARY` `{"passed":4826,"failed":0,"ignored":22,"nextest_exit":0,"doctest_exit":0,"tmp_leftovers":0}` |
+| `corepack pnpm@12.6.0 -C web typecheck` | 0 | |
+| `corepack pnpm@12.6.0 -C web test` | 0 | |
+| `corepack pnpm@11.27.0 -C gui typecheck` | 0 | |
+| `corepack pnpm@11.27.0 -C gui test` | 0 | |
+| `sh scripts/dev/check-doc-links.sh` と `--self-test` | 0 | |
+| `sh scripts/dev/check-doc-layout.sh scripts/dev/docs-layout.tsv` | 0 | |
+| `sh scripts/dev/check-adr-numbers.sh` | 0 | |
+| `sh scripts/dev/progress-index.sh --check` | 0 | |
+
+**test-parallel の除外（環境要因の 8 本）**: nextest の `-E` に次の filterset を渡した（`test()` は関数名で指定）。
+`not (test(=daemon_rejects_worker_secret_retrieval_even_with_valid_lease) | test(=invalid_control_process_id_is_rejected) | test(=real_broker_registration_keeps_sentinel_out_of_db_events_artifacts_and_worker_output) | test(=denied_approval_fails_the_task_without_a_lease) | test(=registered_credential_does_not_open_approval_for_uncertified_backend) | test(=auth_section_store_denies_takeover_until_closed) | test(=approved_credential_requires_conformance_and_does_not_consume_approval) | test(=browser::launcher_run::tests::action_socket_dir_must_be_private_to_this_user))`
+除外は 8 本（`celeris-credentiald::broker` 2・`task-api::browser_e2e` 4・`task-api::browser_waits` 1・`task-worker` 1）。`nextest list` で対象 8 本だけが外れ、残り 4826 本が走ったことを確認した。
+理由: どれも `timed out waiting for fixture readiness`（60 秒）か、この run のような長い `TMPDIR` で UNIX socket が `SUN_LEN` を超える環境要因（前回の finish 検査と同じ症状）。
+
+**外した部分に branch の diff が無いこと**: 外した 8 本の定義ファイル（`crates/celeris-credentiald/tests/broker.rs`・`crates/task-api/tests/browser_e2e.rs`・`crates/task-api/tests/browser_waits.rs`・`crates/task-worker/src/browser_launcher_run_tests.rs`）は、branch の base `14cddd28` から HEAD まで diff が無い（`git diff --stat 14cddd28 HEAD` は空）。`crates/celeris-credentiald` と `crates/task-worker` は branch で一切変わっていない。
+例外が 1 つ: `browser_e2e` と `browser_waits` は `crates/task-api/tests/common/mod.rs` を `mod common` で取り込んでおり、この helper には branch で 1 行（`snapshot` fixture の `implicit_accounts: vec![]`）が増えている。
+これはコンパイルを通すための字句の追加で、外した試験の本体・判定・fixture の待ち時間には触れていない。
+
+**短い TMPDIR について**: 最初に run の既定 `TMPDIR`（`…/runs/01M4FSWAP3QN8QZKHAW2FDV9VF/tmp`、93 字）で同じ式を流したところ、74 件が `path must be shorter than SUN_LEN` で落ちた（`finish5-test-parallel.log` を run の tmp に残した）。このため `/var/tmp/cf5`（短い。repo の写しではない）を `TMPDIR` にして流し直し、上の結果を得た。
+
+### 残り
+
+- 外した 8 本は、この run では実行していない（環境の fixture 待ちで落ちるため）。本番ホストや CI で別に確かめる必要がある。
+- 旧 gui の置き換え、llm-proxy の `max_concurrent_per_account` との合算、`docs/ops/cos-chat.md:87` の `concurrency = 4` の台本（警告のみ）は前節の「残課題」のまま。
+- 本番の移行（config から `concurrency` を外す、Qwen 行の `max_runs` 保存）は人の手順（`docs/ops/provider-llm-source-migration.md`・`artifacts/production-migration.md`）。この run では本番に触れていない。
+- pi-opencode-go の `grok-4.6` 経路の model id / protocol（WU adr の 3 回の失敗）は harness 側の確認事項として残る。

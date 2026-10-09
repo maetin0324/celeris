@@ -265,14 +265,41 @@ fn insert_run(conn: &Connection, run: &CronJobRun) -> Result<(), StoreError> {
     Ok(())
 }
 
-impl CronJobStore for SqliteStore {
-    fn cron_job_insert(&self, job: &CronJob) -> Result<(), StoreError> {
-        let conn = self.lock()?;
-        conn.execute(
-            &format!(
-                "INSERT INTO cron_jobs ({JOB_COLUMNS}) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
-            ),
+// Caller-owned transaction forms (ADR 2026-10-09-cos-operations-all-mutations D3): the CoS
+// operation audit writes the job change, the operation row and the audit event in one commit.
+
+/// `INSERT` a job on `conn`. A duplicate `name` is `StoreError::InUse`.
+pub fn cron_job_insert_tx(conn: &Connection, job: &CronJob) -> Result<(), StoreError> {
+    conn.execute(
+        &format!(
+            "INSERT INTO cron_jobs ({JOB_COLUMNS}) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)"
+        ),
+        params![
+            job.id.to_string(),
+            job.name,
+            i64::from(job.enabled),
+            job.schedule,
+            job.timezone,
+            job.overlap.as_str(),
+            job.catch_up.as_str(),
+            serde_json::to_string(&job.template)?,
+            job.next_fire_at.map(format_rfc3339).transpose()?,
+            format_rfc3339(job.created_at)?,
+            format_rfc3339(job.updated_at)?,
+        ],
+    )
+    .map_err(|e| map_unique(e, "cron_job", job.name.clone(), "name already exists"))?;
+    Ok(())
+}
+
+/// `UPDATE` a job on `conn`. `false` when the job does not exist.
+pub fn cron_job_update_tx(conn: &Connection, job: &CronJob) -> Result<bool, StoreError> {
+    let n = conn
+        .execute(
+            "UPDATE cron_jobs SET name = ?2, enabled = ?3, schedule = ?4, timezone = ?5, \
+             overlap = ?6, catch_up = ?7, template_json = ?8, next_fire_at = ?9, updated_at = ?10 \
+             WHERE id = ?1",
             params![
                 job.id.to_string(),
                 job.name,
@@ -283,12 +310,51 @@ impl CronJobStore for SqliteStore {
                 job.catch_up.as_str(),
                 serde_json::to_string(&job.template)?,
                 job.next_fire_at.map(format_rfc3339).transpose()?,
-                format_rfc3339(job.created_at)?,
                 format_rfc3339(job.updated_at)?,
             ],
         )
         .map_err(|e| map_unique(e, "cron_job", job.name.clone(), "name already exists"))?;
-        Ok(())
+    Ok(n > 0)
+}
+
+/// Delete a job and its runs on `conn`. `false` when the job does not exist.
+pub fn cron_job_delete_tx(conn: &Connection, id: CronJobId) -> Result<bool, StoreError> {
+    // `foreign_keys` は有効にしていないので ON DELETE CASCADE に頼らず消す。
+    conn.execute(
+        "DELETE FROM cron_job_runs WHERE job_id = ?1",
+        params![id.to_string()],
+    )?;
+    let n = conn.execute(
+        "DELETE FROM cron_jobs WHERE id = ?1",
+        params![id.to_string()],
+    )?;
+    Ok(n > 0)
+}
+
+/// Rewrite one run row on `conn` (`queued` → `skipped_overlap` and the like).
+pub fn cron_job_run_update_tx(
+    conn: &Connection,
+    run_id: CronJobRunId,
+    update: &CronJobRunUpdate,
+) -> Result<bool, StoreError> {
+    let n = conn.execute(
+        "UPDATE cron_job_runs SET outcome = ?2, task_id = ?3, detail = ?4, recorded_at = ?5 \
+         WHERE id = ?1",
+        params![
+            run_id.to_string(),
+            update.outcome.as_str(),
+            update.task_id.map(|t| t.to_string()),
+            update.detail,
+            format_rfc3339(update.recorded_at)?,
+        ],
+    )?;
+    Ok(n > 0)
+}
+
+impl CronJobStore for SqliteStore {
+    fn cron_job_insert(&self, job: &CronJob) -> Result<(), StoreError> {
+        let conn = self.lock()?;
+        cron_job_insert_tx(&conn, job)
     }
 
     fn cron_job_get(&self, id: CronJobId) -> Result<Option<CronJob>, StoreError> {
@@ -313,42 +379,15 @@ impl CronJobStore for SqliteStore {
 
     fn cron_job_update(&self, job: &CronJob) -> Result<bool, StoreError> {
         let conn = self.lock()?;
-        let n = conn
-            .execute(
-                "UPDATE cron_jobs SET name = ?2, enabled = ?3, schedule = ?4, timezone = ?5, \
-                 overlap = ?6, catch_up = ?7, template_json = ?8, next_fire_at = ?9, updated_at = ?10 \
-                 WHERE id = ?1",
-                params![
-                    job.id.to_string(),
-                    job.name,
-                    i64::from(job.enabled),
-                    job.schedule,
-                    job.timezone,
-                    job.overlap.as_str(),
-                    job.catch_up.as_str(),
-                    serde_json::to_string(&job.template)?,
-                    job.next_fire_at.map(format_rfc3339).transpose()?,
-                    format_rfc3339(job.updated_at)?,
-                ],
-            )
-            .map_err(|e| map_unique(e, "cron_job", job.name.clone(), "name already exists"))?;
-        Ok(n > 0)
+        cron_job_update_tx(&conn, job)
     }
 
     fn cron_job_delete(&self, id: CronJobId) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        // `foreign_keys` は有効にしていないので ON DELETE CASCADE に頼らず消す。
-        tx.execute(
-            "DELETE FROM cron_job_runs WHERE job_id = ?1",
-            params![id.to_string()],
-        )?;
-        let n = tx.execute(
-            "DELETE FROM cron_jobs WHERE id = ?1",
-            params![id.to_string()],
-        )?;
+        let deleted = cron_job_delete_tx(&tx, id)?;
         tx.commit()?;
-        Ok(n > 0)
+        Ok(deleted)
     }
 
     fn cron_job_due(&self, now: OffsetDateTime) -> Result<Vec<CronJob>, StoreError> {
@@ -403,18 +442,7 @@ impl CronJobStore for SqliteStore {
         update: &CronJobRunUpdate,
     ) -> Result<bool, StoreError> {
         let conn = self.lock()?;
-        let n = conn.execute(
-            "UPDATE cron_job_runs SET outcome = ?2, task_id = ?3, detail = ?4, recorded_at = ?5 \
-             WHERE id = ?1",
-            params![
-                run_id.to_string(),
-                update.outcome.as_str(),
-                update.task_id.map(|t| t.to_string()),
-                update.detail,
-                format_rfc3339(update.recorded_at)?,
-            ],
-        )?;
-        Ok(n > 0)
+        cron_job_run_update_tx(&conn, run_id, update)
     }
 
     fn cron_job_runs(

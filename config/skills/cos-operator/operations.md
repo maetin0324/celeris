@@ -75,6 +75,12 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 |---|---|---|---|
 | モデルの割り当て（source × tier） | `PUT /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.put | `{"model_id":"…","note":"…"}`。model は catalog にあるもの |
 | 割り当ての解除 | `DELETE /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.delete | body なし（無ければ 404） |
+| 定期実行の作成 | `POST /api/v1/cron-jobs` | cron_job.create | `{"name","schedule","timezone","template",…}`（`docs/api/cron-jobs.md`）。名前の重複は 409 |
+| 定期実行の更新 | `PATCH /api/v1/cron-jobs/<id>` | cron_job.update | `<id>` は ULID か name。変える欄だけ。有効/無効は pause・resume で変える |
+| 定期実行の削除 | `DELETE /api/v1/cron-jobs/<id>` | cron_job.delete | body なし。履歴も消え、作った task は残る |
+| 定期実行の一時停止 | `POST /api/v1/cron-jobs/<id>/pause` | cron_job.pause | body は `{}` |
+| 定期実行の再開 | `POST /api/v1/cron-jobs/<id>/resume` | cron_job.resume | body は `{}` |
+| 定期実行の手動実行 | `POST /api/v1/cron-jobs/<id>/run` | cron_job.run | body は `{}`。外部効果扱い（pending → applied）。同じ idempotency_key の再送は再実行しない |
 
 ### surface
 
@@ -90,7 +96,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
 - **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: task の integrate・PR merge、案件・永続の認可（`/standing-rules`）・cron・org・provider・release promote・
+  （例: task の integrate・PR merge、案件・永続の認可（`/standing-rules`）・org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

@@ -329,6 +329,18 @@ pub fn create_job(
     new: NewCronJob,
     now: OffsetDateTime,
 ) -> Result<CronJob, OpsError> {
+    let job = prepare_create(store, ctx, new, now)?;
+    store.cron_job_insert(&job)?;
+    Ok(job)
+}
+
+/// 作成する job を組み立てて検証する（書き込まない）。書くのは呼び出し側（`cron_job_insert[_tx]`）。
+pub fn prepare_create(
+    store: &dyn TaskStore,
+    ctx: &CronFireContext<'_>,
+    new: NewCronJob,
+    now: OffsetDateTime,
+) -> Result<CronJob, OpsError> {
     let mut job = CronJob {
         id: CronJobId::new(),
         name: new.name,
@@ -348,12 +360,24 @@ pub fn create_job(
             .compute_next_after(now)
             .map_err(|e| OpsError::Validation(e.to_string()))?;
     }
-    store.cron_job_insert(&job)?;
     Ok(job)
 }
 
 /// 更新。schedule / timezone を変えたら（有効なら）`next_fire_at` を `now` から計算し直す。
 pub fn update_job(
+    store: &dyn TaskStore,
+    ctx: &CronFireContext<'_>,
+    id: CronJobId,
+    patch: CronJobPatch,
+    now: OffsetDateTime,
+) -> Result<CronJob, OpsError> {
+    let job = prepare_update(store, ctx, id, patch, now)?;
+    store.cron_job_update(&job)?;
+    Ok(job)
+}
+
+/// 更新後の job を組み立てて検証する（書き込まない）。
+pub fn prepare_update(
     store: &dyn TaskStore,
     ctx: &CronFireContext<'_>,
     id: CronJobId,
@@ -388,7 +412,6 @@ pub fn update_job(
             .map_err(|e| OpsError::Validation(e.to_string()))?;
     }
     job.updated_at = now;
-    store.cron_job_update(&job)?;
     Ok(job)
 }
 
@@ -398,23 +421,39 @@ pub fn pause_job(
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<CronJob, OpsError> {
+    let (job, queued) = prepare_pause(store, id, now)?;
+    if let Some((run_id, update)) = &queued {
+        store.cron_job_run_update(*run_id, update)?;
+    }
+    store.cron_job_update(&job)?;
+    Ok(job)
+}
+
+/// 一時停止で閉じる `queued` の履歴と、その書き換え。
+pub type QueuedClose = (CronJobRunId, CronJobRunUpdate);
+
+/// 一時停止後の job と、閉じる `queued` の書き換え（あれば）を返す（書き込まない）。
+pub fn prepare_pause(
+    store: &dyn TaskStore,
+    id: CronJobId,
+    now: OffsetDateTime,
+) -> Result<(CronJob, Option<QueuedClose>), OpsError> {
     let mut job = require_job(store, id)?;
-    if let Some(queued) = store.cron_job_run_queued(id)? {
-        store.cron_job_run_update(
+    let queued = store.cron_job_run_queued(id)?.map(|queued| {
+        (
             queued.id,
-            &CronJobRunUpdate {
+            CronJobRunUpdate {
                 outcome: CronRunOutcome::SkippedOverlap,
                 task_id: None,
                 detail: Some("paused".to_string()),
                 recorded_at: now,
             },
-        )?;
-    }
+        )
+    });
     job.enabled = false;
     job.next_fire_at = None;
     job.updated_at = now;
-    store.cron_job_update(&job)?;
-    Ok(job)
+    Ok((job, queued))
 }
 
 /// 再開: 一時停止中に過ぎた時刻は取りこぼしにしない（`next_fire_at = next_after(now)`、ADR-0131 D3）。
@@ -424,17 +463,29 @@ pub fn resume_job(
     id: CronJobId,
     now: OffsetDateTime,
 ) -> Result<CronJob, OpsError> {
+    let (job, changed) = prepare_resume(store, id, now)?;
+    if changed {
+        store.cron_job_update(&job)?;
+    }
+    Ok(job)
+}
+
+/// 再開後の job と、書き込みが要るか（既に有効なら `false`）を返す（書き込まない）。
+pub fn prepare_resume(
+    store: &dyn TaskStore,
+    id: CronJobId,
+    now: OffsetDateTime,
+) -> Result<(CronJob, bool), OpsError> {
     let mut job = require_job(store, id)?;
     if job.enabled {
-        return Ok(job);
+        return Ok((job, false));
     }
     job.enabled = true;
     job.next_fire_at = job
         .compute_next_after(now)
         .map_err(|e| OpsError::Validation(e.to_string()))?;
     job.updated_at = now;
-    store.cron_job_update(&job)?;
-    Ok(job)
+    Ok((job, true))
 }
 
 /// 削除（履歴も消える。作った task は残る）。無ければ `Ok(false)`。

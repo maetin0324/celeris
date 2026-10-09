@@ -379,6 +379,19 @@ fn cos_mapped(
             task_path(&args.root, "/tree/adopt")?,
             json!({"task_id": args.task, "stage": args.stage, "unit_key": args.unit}),
         )),
+        Command::Cron { command, .. }
+            if !matches!(
+                command,
+                CronCommand::List | CronCommand::Show(_) | CronCommand::History(_)
+            ) =>
+        {
+            let (method, path, body) = cron_cmd::request_of(command.clone())?;
+            Some((
+                method,
+                format!("/api/v1{path}"),
+                body.unwrap_or_else(|| json!({})),
+            ))
+        }
         _ => None,
     })
 }
@@ -788,6 +801,36 @@ mod cos_mapping_tests {
         assert_eq!(path, format!("/api/v1/tasks/{id}/tree/adopt"));
         assert_eq!(body["stage"], "s1");
         assert_eq!(body["unit_key"], "u1");
+        let (method, path, body) = cos_mapped(&parse(&["cron", "pause", "daily"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(
+            (method, path.as_str(), body),
+            (
+                "POST",
+                "/api/v1/cron-jobs/daily/pause",
+                serde_json::json!({})
+            )
+        );
+        let (method, path, body) = cos_mapped(&parse(&[
+            "cron",
+            "update",
+            "daily",
+            "--schedule",
+            "0 5 * * *",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(
+            (method, path.as_str()),
+            ("PATCH", "/api/v1/cron-jobs/daily")
+        );
+        assert_eq!(body, serde_json::json!({"schedule": "0 5 * * *"}));
+        assert!(
+            cos_mapped(&parse(&["cron", "list"]))
+                .expect("map")
+                .is_none()
+        );
         assert!(
             cos_mapped(&parse(&["cancel", &id.to_string()]))
                 .expect("map")

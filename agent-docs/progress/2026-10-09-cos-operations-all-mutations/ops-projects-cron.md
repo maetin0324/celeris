@@ -1,0 +1,36 @@
+---
+tasks: [01M4F5KS8E1MXZDNJTRAVFJESW]
+wu: ops-projects-cron
+status: running
+---
+# ops-projects-cron: tasks の C 3 route・projects 14・cron-jobs 6 の監査付き登録
+
+## cron-jobs 6 route（完了）
+
+- B（caller-owned transaction）: `POST /cron-jobs`・`PATCH /cron-jobs/{id}`・`DELETE /cron-jobs/{id}`・`POST …/pause`・`POST …/resume`。
+  task-core に `cron_job_{insert,update,delete,run_update}_tx` を足し（既存の trait 実装も同じ関数を使う）、task-ops に
+  検証だけの `prepare_{create,update,pause,resume}` を分けた。API の `crates/task-api/src/cron_jobs.rs` の
+  `*_job_op(…, audit: Option<&OperationAudit>)` を handler と `/cos/operations` が共有し、CoS では job の変更・operation 行・
+  監査 event・chat card を同じ transaction で書く。名前の重複は 409（rejected で記録）。
+- C（外部効果の手順）: `POST /cron-jobs/{id}/run`。手動実行は task 作成を含む複数 commit なので
+  `begin_external`（pending + 監査 event）→ `run_now_with` を 1 回 → `finish_external`（applied）。同じ idempotency key の
+  再送は記録を返して再実行しない。begin 後に実行が失敗した場合は pending のまま残り、起動時の stale 回収で
+  needs_remediation になる（部分的な効果の有無が分からないため）。
+- `celerisctl cron create|update|pause|resume|run` は CoS credential のとき `cos_mapped` で同じ operation を送る
+  （`commands/cron.rs` の `request_of` を共有）。
+- skill の操作表（`config/skills/cos-operator/operations.md`）、`docs/api/v1/gui-api.md`（と `scripts/sync-gui-docs.sh` の写し）、
+  `docs/api/cron-jobs.md` を更新。gui 写しにだけあった plan_adopt/tree.adopt の段落は正本へ移した。
+
+検証:
+- `cargo nextest run -p task-api --test cos_ops_projects_cron --test cos_ops_registry --test cron_jobs` → 13 passed
+  （経由 applied＋監査・直接 422・409/404/422 の rejected 記録・run の pending→applied と再送で再実行しない）
+- `cargo nextest run -p task-api --lib cos` → 4 passed（skill 表と ALLOWED の一致を含む）
+- `cargo nextest run -p task-ops cron` → 14 passed、`cargo nextest run -p task-core cron` → 19 passed
+- `cargo nextest run -p celerisctl cos_mapped cron` → 11 passed
+- `cargo clippy -p task-core -p task-ops -p task-api -p celerisctl --all-targets -- -D warnings` → 成功、`git diff --check` → 成功
+
+## 残り
+
+- projects PENDING 14: `POST /projects`、`/projects/{id}/{archive,cancel,pause,resume,unarchive}`、`/projects/{id}/docs/{init,maintenance}`、
+  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）、`POST /reports/{notified,read}`、`POST /standing-rules`、`DELETE /standing-rules/{id}`
+- tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

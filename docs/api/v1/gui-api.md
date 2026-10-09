@@ -3470,7 +3470,15 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `PATCH /projects/{id}` | `project.update` |
 | admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
 | admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
+| admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |
+| admin | `PATCH /cron-jobs/{id}` | `cron_job.update` |
+| admin | `DELETE /cron-jobs/{id}` | `cron_job.delete` |
+| admin | `POST /cron-jobs/{id}/pause` | `cron_job.pause` |
+| admin | `POST /cron-jobs/{id}/resume` | `cron_job.resume` |
+| admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
 | surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
+
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。task の GitHub integration/PR merge は外部副作用の監査経路を実装中で、登録待ち。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系

@@ -3441,9 +3441,52 @@ REST の旧 Console エンドポイントは既定 legacy スレッドを使う�
 `POST /api/v1/knowledge/inbox/{id}/reject`（`knowledge.reject`）。`celerisctl knowledge record` は CoS credential のとき
 KB を直接書かず `knowledge.record` を送る（ADR 2026-10-07 cos-live-fixes D2）。
 
-操作要求は登録済みの task/decision/approval/execution/project/knowledge/comment の変更 path のみ実行する。外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
+操作の範囲は ADR 2026-10-09-cos-operations-all-mutations（人の決定「API で人ができる変更操作の全て」）で決まり、
+registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surface}.rs` の `ALLOWED`（登録済み）・
+`EXCLUDED`（人の決定による除外。理由コード付き）・`PENDING`（範囲内だが監査経路の実装待ち）の 3 つに分かれる。
+登録済みの操作（action）:
 
-tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。task の GitHub integration/PR merge は外部副作用の監査経路を実装中で、登録待ち。
+| 領域 | method と path | action |
+|---|---|---|
+| tasks | `POST /tasks` | `task.create` |
+| tasks | `POST /tasks/{id}/comments` | `comment.create` |
+| tasks | `POST /tasks/{id}/answer` | `question.answer` |
+| tasks | `POST /tasks/{id}/execution/phase-gate` | `execution.phase_gate` |
+| tasks | `POST /tasks/{id}/execution/plan-gate` | `execution.plan_gate` |
+| tasks | `PATCH /tasks/{id}` | `task.update`（`Edited.by = cos`） |
+| tasks | `POST /tasks/{id}/reopen` | `task.reopen` |
+| tasks | `POST /tasks/{id}/retry` | `task.retry`（`result.new_task_id`） |
+| tasks | `POST /tasks/{id}/pause` | `task.pause` |
+| tasks | `POST /tasks/{id}/resume` | `task.resume` |
+| tasks | `PUT /tasks/{id}/execution-plan` | `execution.put_plan`（active な計画の replan だけ。計画が無い task への初回採用は `execution.adopt_plan` と同じく登録待ちで 422） |
+| decisions | `POST /decisions/{id}/answer` | `decision.answer` |
+| decisions | `POST /decisions/{id}/revise` | `decision.revise` |
+| decisions | `POST /decisions/{id}/withdraw` | `decision.withdraw` |
+| decisions | `POST /approvals/{id}/decide` | `approval.decide` |
+| decisions | `POST /knowledge/inbox` | `knowledge.record` |
+| decisions | `POST /knowledge/inbox/{id}/reject` | `knowledge.reject` |
+| decisions | `POST /knowledge/inbox/{id}/accept` | `knowledge.accept` |
+| decisions | `POST /inbox/items/{id}/answer` | `inbox.answer` |
+| projects | `PATCH /projects/{id}` | `project.update` |
+| admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
+| admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
+| admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |
+| admin | `PATCH /cron-jobs/{id}` | `cron_job.update` |
+| admin | `DELETE /cron-jobs/{id}` | `cron_job.delete` |
+| admin | `POST /cron-jobs/{id}/pause` | `cron_job.pause` |
+| admin | `POST /cron-jobs/{id}/resume` | `cron_job.resume` |
+| admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
+| surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
+
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。task の GitHub integration/PR merge は外部副作用の監査経路を実装中で、登録待ち。
+
+除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
+`/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系
+（`browser_credential_attestation`）、`/console/instruct`（`console_instruction_chain`）、`/cos/*`（`recursive_cos`）、
+ADR-0079 で撤去済みの入口（`removed_by_adr_0079`）。登録待ちは detail が `pending in <領域>` の 422。
+path の placeholder は 1 segment（英数字・`-`・`_`・`.`・`:`）に一致する。
+
+外部 URL、任意 proxy、`/cos` 以下の再帰操作、未登録 path は 422 で拒否理由付き監査 event に残す。`reason`・`policy_version`・`idempotency_key` は必須（reason は空白不可）。`expected_revision` は対象が revision を持つ操作で必須。idempotency key は thread 内一意で、同じ key の異なる request hash は 409。適用結果・`cos_operations` 行・監査 envelope event・chat card は同じ transaction に記録する。checkpoint は credential の run/thread に限り、run に配送済みの `through_seq` 以下、本文 32 KiB 以下。現在の checkpoint revision と `expected_summary_through_seq` が異なる場合は 409。
 
 スレッドの種類 `kind`（`human` / `inbox` / `legacy`）は人からは指定できない。`inbox` の thread は archive できない。`legacy` は旧 Console の履歴を移したもの（ADR D6）。
 

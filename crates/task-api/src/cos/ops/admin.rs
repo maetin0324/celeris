@@ -1,7 +1,9 @@
 //! admin registry and shared-operation dispatch (ADR 2026-10-09 D3).
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
-use super::super::operations::{decode_problem, path_param, unprocessable};
+use super::super::operations::{
+    audited, decode_optional, decode_problem, path_param, unprocessable,
+};
 use crate::problem::ApiProblem;
 use serde_json::Value;
 use task_core::chat::CosOperation;
@@ -19,6 +21,12 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/llm/models/assignments/{source}/{tier}",
         "model_assignment.delete",
     ),
+    ("POST", "/api/v1/cron-jobs", "cron_job.create"),
+    ("PATCH", "/api/v1/cron-jobs/{id}", "cron_job.update"),
+    ("DELETE", "/api/v1/cron-jobs/{id}", "cron_job.delete"),
+    ("POST", "/api/v1/cron-jobs/{id}/pause", "cron_job.pause"),
+    ("POST", "/api/v1/cron-jobs/{id}/resume", "cron_job.resume"),
+    ("POST", "/api/v1/cron-jobs/{id}/run", "cron_job.run"),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -71,12 +79,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("DELETE", "/api/v1/accounts/{id}"),
     ("POST", "/api/v1/accounts/{id}/check"),
     ("PUT", "/api/v1/clusters/{id}/settings"),
-    ("POST", "/api/v1/cron-jobs"),
-    ("DELETE", "/api/v1/cron-jobs/{id}"),
-    ("PATCH", "/api/v1/cron-jobs/{id}"),
-    ("POST", "/api/v1/cron-jobs/{id}/pause"),
-    ("POST", "/api/v1/cron-jobs/{id}/resume"),
-    ("POST", "/api/v1/cron-jobs/{id}/run"),
     ("POST", "/api/v1/llm/models/assignments/preview"),
     ("PUT", "/api/v1/llm/models/assignments/roles/{tier}"),
     (
@@ -109,9 +111,28 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
 
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
 
+/// The CoS form of a route whose domain request has no body: `null` or `{}` only.
+fn require_empty_body(
+    store: &SqliteStore,
+    audit: &OperationAudit,
+    kind: &str,
+    path: &str,
+    body: &Value,
+) -> Result<(), ApiProblem> {
+    if body.is_null() || *body == serde_json::json!({}) {
+        return Ok(());
+    }
+    Err(audit.reject(
+        store,
+        kind,
+        path,
+        unprocessable("validation", "request.body must be empty"),
+    ))
+}
+
 pub(crate) fn dispatch(
     store: &SqliteStore,
-    _env: &DispatchEnv,
+    env: &DispatchEnv,
     audit: &OperationAudit,
     matched: Matched,
     path: &str,
@@ -130,20 +151,57 @@ pub(crate) fn dispatch(
             )
         }
         "model_assignment.delete" => {
-            if !body.is_null() && body != serde_json::json!({}) {
-                return Err(audit.reject(
-                    store,
-                    "model_assignment",
-                    path,
-                    unprocessable("validation", "request.body must be empty"),
-                ));
-            }
+            require_empty_body(store, audit, "model_assignment", path, &body)?;
             crate::model_assignments::delete_assignment_audited(
                 store,
                 &path_param(ASSIGNMENT, path, "{source}"),
                 &path_param(ASSIGNMENT, path, "{tier}"),
                 audit,
             )
+        }
+        "cron_job.create" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::cron_jobs::create_job_op(
+                store,
+                &env.roles,
+                &env.genres,
+                input,
+                Some(audit),
+            )?)
+        }
+        "cron_job.update" => {
+            let input = decode_optional(body).map_err(decode)?;
+            audited(crate::cron_jobs::update_job_op(
+                store,
+                &env.roles,
+                &env.genres,
+                &matched.id.unwrap_or_default(),
+                input,
+                Some(audit),
+            )?)
+        }
+        "cron_job.delete" | "cron_job.pause" | "cron_job.resume" | "cron_job.run" => {
+            require_empty_body(store, audit, "cron_job", path, &body)?;
+            let key = matched.id.unwrap_or_default();
+            match matched.action {
+                "cron_job.delete" => {
+                    audited(crate::cron_jobs::delete_job_op(store, &key, Some(audit))?)
+                }
+                "cron_job.pause" => {
+                    audited(crate::cron_jobs::pause_job_op(store, &key, Some(audit))?)
+                }
+                "cron_job.resume" => {
+                    audited(crate::cron_jobs::resume_job_op(store, &key, Some(audit))?)
+                }
+                _ => audited(crate::cron_jobs::run_job_op(
+                    store,
+                    &env.roles,
+                    &env.genres,
+                    &key,
+                    Some(audit),
+                    time::OffsetDateTime::now_utc(),
+                )?),
+            }
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation in admin"

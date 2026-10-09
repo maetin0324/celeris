@@ -29,7 +29,10 @@ mod store_tests;
 #[cfg(test)]
 mod tests;
 
-pub use store::{CronJobRunUpdate, CronJobStore};
+pub use store::{
+    CronJobRunUpdate, CronJobStore, cron_job_delete_tx, cron_job_insert_tx, cron_job_run_update_tx,
+    cron_job_update_tx,
+};
 
 /// `next_after` の探索を打ち切る先（年）。ADR-0131 D1「探索は 5 年先で打ち切り」。
 pub const SEARCH_YEARS: i16 = 5;

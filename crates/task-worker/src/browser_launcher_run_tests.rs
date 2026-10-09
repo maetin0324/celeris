@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::*;
+use crate::browser_launcher::protocol::AuthenticateArgs;
 use crate::browser_launcher::{
     BackendSession, ErrorCode, Launched, LauncherLimits, LauncherServer, Registry, ServerConfig,
     ServerHandle, SessionBackend, StartRequest,
@@ -89,6 +90,17 @@ impl BackendSession for FakeSession {
     }
     fn isolation_ok(&mut self) -> bool {
         true
+    }
+    fn authenticate(&mut self, args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+        if args.session_id.is_empty()
+            || args.auth_section_id.is_empty()
+            || args.lease_id.is_empty()
+            || args.origin.is_empty()
+            || args.target.is_empty()
+        {
+            return Err(ErrorCode::BadRequest);
+        }
+        Ok(())
     }
     fn stop(mut self: Box<Self>) {
         let _ = self.child.kill();
@@ -199,6 +211,24 @@ fn launcher_runtime_starts_acts_observes_and_stops_through_the_client() {
         log.actions[0].1.url.as_deref(),
         Some("https://example.com/")
     );
+}
+
+#[test]
+fn launcher_credential_authenticate_fake_backend_returns_status_only() {
+    let launcher = fake_launcher(good_facts());
+    let (runtime, _) =
+        LauncherRuntime::start(&launcher.sock, "task-1", "run-auth", policy()).expect("start");
+    let status = runtime
+        .authenticate(AuthenticateArgs {
+            session_id: runtime.session_id.clone(),
+            auth_section_id: "credential-ref".into(),
+            lease_id: runtime.lease_id.clone(),
+            origin: "https://example.com".into(),
+            target: "input[type=password]".into(),
+        })
+        .expect("fake broker accepted authentication");
+    assert_eq!(status, AuthenticationStatus::Success);
+    runtime.stop().expect("stop");
 }
 
 #[test]
@@ -561,6 +591,117 @@ fn launcher_proof_is_built_only_when_pid_starttime_and_owner_match() {
     reap(child);
 }
 
+fn test_credential_proof() -> LauncherSessionProof {
+    LauncherSessionProof {
+        session_id: "credential-session".into(),
+        instance_id: "credential-instance".into(),
+        pid: 42,
+        starttime: 99,
+        ns_owner_uid: Some(LAUNCHER_UID),
+        launcher_uid: LAUNCHER_UID,
+        isolation_ok: true,
+        ns_inodes: REQUIRED_NAMESPACES.iter().map(|ns| (*ns, 1)).collect(),
+    }
+}
+
+#[test]
+fn launcher_credential_admits_proven_isolated_session() {
+    assert!(credential_admitted(
+        true,
+        Some(&test_credential_proof()),
+        true,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_missing_proof() {
+    assert!(!credential_admitted(true, None, true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_forged_isolation_claim() {
+    let mut proof = test_credential_proof();
+    proof.isolation_ok = false;
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_expired_process_proof() {
+    let (child, pid, st) = leader();
+    let mut proof = test_credential_proof();
+    proof.pid = pid;
+    proof.starttime = st + 1;
+    // The same live-process/starttime verifier used when creating proofs rejects stale bindings.
+    assert!(live_starttime(pid).is_some_and(|actual| actual != proof.starttime));
+    assert!(!credential_admitted(true, None, true, 1000));
+    reap(child);
+}
+
+#[test]
+fn launcher_credential_rejects_daemon_namespace_owner() {
+    let mut proof = test_credential_proof();
+    proof.ns_owner_uid = Some(1000);
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_rejects_failed_isolation_attestation() {
+    assert!(!credential_admitted(
+        true,
+        Some(&test_credential_proof()),
+        false,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_missing_namespace_binding() {
+    let mut proof = test_credential_proof();
+    proof.ns_inodes.clear();
+    assert!(!credential_admitted(true, Some(&proof), true, 1000));
+}
+
+#[test]
+fn launcher_credential_requires_a_credential_request() {
+    assert!(!credential_admitted(
+        false,
+        Some(&test_credential_proof()),
+        true,
+        1000
+    ));
+}
+
+#[test]
+fn launcher_credential_rejects_uid_mismatch() {
+    let mut proof = test_credential_proof();
+    proof.ns_owner_uid = Some(1001);
+    assert!(credential_admitted(true, Some(&proof), true, 1000));
+    assert!(!credential_admitted(true, Some(&proof), true, 1001));
+}
+
+#[test]
+fn launcher_credential_shim_flags_follow_admission() {
+    let policy = prepared("example.com");
+    for admitted in [false, true] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let runtime = dir.path().join("browser");
+        write_shim_files(&runtime, "s", &policy, &policy.action_policy, &[], admitted)
+            .expect("shim");
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(runtime.join("config.json")).expect("config"))
+                .expect("json");
+        assert_eq!(config["credential_use"], admitted);
+        assert_eq!(
+            config["credential_policy_ids"]
+                .as_array()
+                .unwrap()
+                .is_empty(),
+            !admitted || policy.effective.credential_policy_ids.is_empty()
+        );
+    }
+}
+
 #[test]
 fn launcher_proof_is_not_built_on_starttime_mismatch() {
     let daemon = DaemonIds::current();
@@ -847,6 +988,7 @@ fn launcher_shim_files_pass_load_policy_and_gate_navigation_by_origin() {
             &policy,
             &policy.action_policy,
             &[],
+            false,
         )
         .expect("shim files");
         assert!(action_socket.as_os_str().len() <= crate::browser_action::SUN_PATH_MAX);

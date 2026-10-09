@@ -307,7 +307,10 @@ fn launcher_credential_authenticate_requires_bounded_nonempty_arguments() {
         origin: "https://example.test".into(),
         target: "target-1".into(),
     };
-    assert_eq!(Request::Authenticate { args: args.clone() }.validate(), Ok(()));
+    assert_eq!(
+        Request::Authenticate { args: args.clone() }.validate(),
+        Ok(())
+    );
     args.auth_section_id.clear();
     assert_eq!(
         Request::Authenticate { args }.validate(),

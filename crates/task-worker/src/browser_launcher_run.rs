@@ -6,8 +6,8 @@
 //! [`RuntimeFacts`] を組んで `verify_isolation` に通し、通らなければ session を止めて
 //! `isolated_runtime_unavailable` にする。どの失敗も daemon 所有経路へ fallback しない。
 //!
-//! 機密能力（CredentialInjection / IdentityRestore）はこの経路では解放しない: credential を使う
-//! policy・承認待ちは接続前に拒否し、identity 復元の state は daemon にも launcher にも渡さない。
+//! CredentialUse は launcher session proof と isolation attestation が成立した場合だけ許可する。
+//! IdentityRestore は引き続き拒否し、秘密は harness に渡さない。
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -23,6 +23,7 @@ use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
+use crate::browser_launcher::protocol::{AuthenticateArgs, AuthenticationStatus};
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
     SessionState, StartedSession, Verb,
@@ -142,6 +143,14 @@ impl LauncherRuntime {
         let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
         client
             .observe(&self.session_id, &self.lease_id)
+            .map_err(|_| UNAVAILABLE)
+    }
+
+    fn authenticate(&self, args: AuthenticateArgs) -> Result<AuthenticationStatus, &'static str> {
+        self.client
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .authenticate(args)
             .map_err(|_| UNAVAILABLE)
     }
 
@@ -440,9 +449,27 @@ impl ActionExecutor for LauncherExecutor {
 }
 
 /// 機密能力はこの経路で解放しない（ADR-0116「機密能力」）。接続より前に拒否する。
+fn credential_admitted(
+    requested: bool,
+    proof: Option<&LauncherSessionProof>,
+    isolation_ok: bool,
+    daemon_uid: u32,
+) -> bool {
+    requested
+        && isolation_ok
+        && proof.is_some_and(|proof| {
+            proof.isolation_ok
+                && proof.ns_owner_uid.is_some_and(|owner| owner != daemon_uid)
+                && REQUIRED_NAMESPACES
+                    .iter()
+                    .all(|ns| proof.ns_inodes.contains_key(ns))
+        })
+}
+
 fn refuse_confidential(
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     sink: &dyn EventSink,
+    credential_admitted: bool,
 ) -> Result<(), AdapterError> {
     let denied = || {
         AdapterError::Other(
@@ -453,6 +480,7 @@ fn refuse_confidential(
         .effective
         .actions
         .contains(&task_core::BrowserAction::CredentialUse)
+        && !credential_admitted
     {
         return Err(denied());
     }
@@ -467,7 +495,8 @@ fn refuse_confidential(
                 && w.operation
                     .as_ref()
                     .is_none_or(|o| o.action == "credential_use"))
-    }) {
+    }) && !credential_admitted
+    {
         return Err(denied());
     }
     Ok(())
@@ -500,6 +529,7 @@ fn write_shim_files(
     policy: &crate::browser_policy::PreparedBrowserPolicy,
     action_policy: &[u8],
     approval_actions: &[String],
+    credential_admitted: bool,
 ) -> Result<(std::path::PathBuf, std::path::PathBuf), AdapterError> {
     use sha2::Digest;
     let output = runtime_dir.join("output");
@@ -516,8 +546,8 @@ fn write_shim_files(
             "output": output,
             "action_socket": action_socket,
             "policy_sha256": format!("{:x}", sha2::Sha256::digest(action_policy)),
-            "credential_policy_ids": [],
-            "credential_use": false,
+            "credential_policy_ids": if credential_admitted { policy.effective.credential_policy_ids.clone() } else { BTreeSet::<String>::new() },
+            "credential_use": credential_admitted,
             "approval_actions": approval_actions,
         }))?,
     )?;
@@ -537,11 +567,21 @@ pub(super) async fn run(
     refuse_test_loopback: bool,
     policy: &crate::browser_policy::PreparedBrowserPolicy,
 ) -> Result<RunOutcome, AdapterError> {
-    refuse_confidential(policy, sink)?;
     let unavailable = || AdapterError::Other(UNAVAILABLE.into());
     // ADR 2026-10-08 D2: an approved operation resumes the logical session that asked for it,
     // with that one action allowed once.
     let approved = approved_operation_wait(policy, sink)?;
+    let approved_credential = sink
+        .browser_waits()
+        .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?
+        .last()
+        .filter(|w| {
+            w.state == BrowserWaitState::Approved
+                && w.operation
+                    .as_ref()
+                    .is_some_and(|o| o.action == "credential_use")
+        })
+        .cloned();
     let approved_action = approved.as_ref().map(|(_, a)| *a);
     let session = match &approved {
         Some((wait, _)) => wait.session_id.clone(),
@@ -554,12 +594,13 @@ pub(super) async fn run(
     let approval_actions = super::shim_approval_actions(policy, approved_action);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
-    let (cli, action_socket) = write_shim_files(
+    let _ = write_shim_files(
         &runtime_dir,
         &session,
         policy,
         &action_policy,
         &approval_actions,
+        false,
     )?;
     let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&action_policy)
         .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
@@ -573,7 +614,7 @@ pub(super) async fn run(
         req.task.id.to_string(),
         run_id.to_owned(),
     );
-    let (runtime, _attestation) = tokio::task::spawn_blocking(move || {
+    let (runtime, attestation) = tokio::task::spawn_blocking(move || {
         LauncherRuntime::start_guarded(
             &socket,
             refuse_test_loopback,
@@ -585,7 +626,92 @@ pub(super) async fn run(
     .await
     .map_err(|_| unavailable())?
     .map_err(|_| unavailable())?;
-    // 機密能力はこの経路では解放しないので、証明の有無は記録だけする。
+    let credential_requested = policy
+        .effective
+        .actions
+        .contains(&task_core::BrowserAction::CredentialUse)
+        || sink
+            .browser_waits()
+            .map_err(|_| AdapterError::Other("browser wait store unavailable".into()))?
+            .last()
+            .is_some_and(|w| {
+                (w.state == BrowserWaitState::Registered
+                    && w.operation
+                        .as_ref()
+                        .is_some_and(|o| o.action == "credential_use"))
+                    || (w.state == BrowserWaitState::Approved
+                        && w.operation
+                            .as_ref()
+                            .is_some_and(|o| o.action == "credential_use"))
+            });
+    let credential_admitted = credential_admitted(
+        credential_requested,
+        runtime.session_proof(),
+        attestation.session_id() == runtime.session_id,
+        DaemonIds::current().uid,
+    );
+    refuse_confidential(policy, sink, credential_admitted)?;
+    // Rewrite the shim config only after the proof and isolation gate has passed.
+    // An unproven session leaves the pre-created fail-closed config in place.
+    let (cli, action_socket) = write_shim_files(
+        &runtime_dir,
+        &session,
+        policy,
+        &action_policy,
+        &approval_actions,
+        credential_admitted,
+    )?;
+    // Bind the proof to credentiald before enabling the shim's credential capability.
+    // The control client is derived from the daemon's configured credentiald runtime.
+    if credential_admitted {
+        let proof = runtime.session_proof().ok_or_else(|| {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        })?;
+        let runtime_dir = crate::browser_credential::configured()
+            .and_then(|sup| sup.runtime_dir.clone())
+            .or_else(|| std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from))
+            .ok_or_else(|| {
+                AdapterError::Other(
+                    "browser credential use is not available through the launcher runtime".into(),
+                )
+            })?;
+        let client = crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&runtime_dir),
+        );
+        let registration = celeris_credentiald::injection_ipc::LiveSessionRegistration {
+            session_id: runtime.session_id.clone(),
+            controller_pid: std::process::id(),
+            controller_start: crate::browser_runtime::process_starttime(std::process::id() as i32)
+                .ok_or_else(|| {
+                    AdapterError::Other(
+                        "browser credential use is not available through the launcher runtime"
+                            .into(),
+                    )
+                })?,
+            runtime_pid: proof.pid as u32,
+            runtime_start: proof.starttime,
+        };
+        let denied = || {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        };
+        client
+            .register_live_session(registration)
+            .map_err(|_| denied())?;
+        client
+            .attach_launcher_proof(
+                celeris_credentiald::injection_ipc::LauncherProofRegistration {
+                    session_id: runtime.session_id.clone(),
+                    instance_id: proof.instance_id.clone(),
+                    peer_uid: Some(proof.launcher_uid),
+                    proof: proof.clone(),
+                },
+            )
+            .map_err(|_| denied())?;
+    }
     tracing::info!(
         session = %runtime.session_id,
         launcher_proof = runtime.session_proof().is_some(),
@@ -613,6 +739,51 @@ pub(super) async fn run(
         }
         None => None,
     };
+    let mut credential_used = false;
+    if let Some(wait) = approved_credential.as_ref() {
+        if !credential_admitted {
+            let stop_runtime = runtime;
+            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+            return Err(AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            ));
+        }
+        let consumed = sink.browser_operation_approval_consume(wait).map_err(|_| {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        })?;
+        let credential = consumed.wait.credential.as_ref().ok_or_else(|| {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        })?;
+        let trusted = consumed.wait.trusted_login.as_ref().ok_or_else(|| {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        })?;
+        let args = AuthenticateArgs {
+            session_id: runtime.session_id.clone(),
+            auth_section_id: credential.credential_id.clone(),
+            lease_id: runtime.lease_id.clone(),
+            origin: consumed.wait.origin.clone(),
+            target: trusted.password_selector.clone(),
+        };
+        let status = runtime.authenticate(args).map_err(|_| {
+            AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            )
+        })?;
+        if status != AuthenticationStatus::Success {
+            let stop_runtime = runtime;
+            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
+            return Err(AdapterError::Other(
+                "browser credential use is not available through the launcher runtime".into(),
+            ));
+        }
+        credential_used = true;
+    }
     let action_server = ActionServer::start_with(
         &action_socket,
         Arc::new(LauncherExecutor {
@@ -645,7 +816,7 @@ pub(super) async fn run(
     req.context.browser = Some(BrowserContext {
         run: browser.clone(),
         cli,
-        credential_used: false,
+        credential_used,
         approval_actions,
         approved_operation,
     });

@@ -616,6 +616,34 @@ pub fn test_loopback_target(policy: &EgressPolicy, host: &str, port: u16) -> Opt
     Some(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port))
 }
 
+/// 検査済みの解決結果から接続先を 1 つ選ぶ。IPv6 無効なら v4（v4-mapped を含む正規形）だけから選ぶ。
+pub fn egress_destination(policy: &EgressPolicy, resolved: &[IpAddr]) -> Option<IpAddr> {
+    resolved
+        .iter()
+        .map(|ip| ip.to_canonical())
+        .find(|ip| policy.allow_ipv6 || ip.is_ipv4())
+}
+
+/// `host:port` が許可に入るか。完全一致、または `*.<base>:<port>` の下位 host（apex は含まない）。
+/// wildcard は origin 許可と同じ包含規則（ADR 2026-10-05-browser-allowed-origins、
+/// ADR 2026-10-09-egress-wildcard-origin）。public suffix への wildcard は origin の解析で拒否済みだが、
+/// ここでも同じ判定（`*.com`・`*.ac.jp` など）で認めない。port は完全一致だけ。
+fn allow_covers(policy: &EgressPolicy, host: &str, port: u16) -> bool {
+    if policy.allow.contains(&format!("{host}:{port}")) {
+        return true;
+    }
+    let port_suffix = format!(":{port}");
+    policy.allow.iter().any(|entry| {
+        entry
+            .strip_suffix(&port_suffix)
+            .and_then(|pattern| pattern.strip_prefix("*."))
+            .filter(|base| valid_host(base) && !crate::browser::public_suffix(base))
+            .and_then(|base| host.strip_suffix(base))
+            .and_then(|sub| sub.strip_suffix('.'))
+            .is_some_and(|sub| !sub.is_empty())
+    })
+}
+
 /// egress の判定。解決先は全部を検査する（DNS rebinding で 1 つだけ private も拒否）。
 pub fn check_egress(policy: &EgressPolicy, req: &EgressRequest) -> Result<(), EgressDenied> {
     match req {
@@ -641,19 +669,21 @@ pub fn check_egress(policy: &EgressPolicy, req: &EgressRequest) -> Result<(), Eg
             if !valid_host(host) {
                 return Err(EgressDenied::InvalidHost);
             }
-            if !policy.allow.contains(&format!("{host}:{port}")) {
+            if !allow_covers(policy, host, *port) {
                 return Err(EgressDenied::NotAllowed);
             }
             if resolved.is_empty() {
                 return Err(EgressDenied::Unresolved);
             }
-            for ip in resolved {
-                if is_non_public(*ip) {
-                    return Err(EgressDenied::PrivateAddress);
-                }
-                if ip.is_ipv6() && !policy.allow_ipv6 && ip.to_canonical().is_ipv6() {
-                    return Err(EgressDenied::Ipv6Disabled);
-                }
+            // 非公開の判定は v4・v6 の全部に掛ける（rebinding で 1 つだけ private も拒否）。
+            if resolved.iter().any(|ip| is_non_public(*ip)) {
+                return Err(EgressDenied::PrivateAddress);
+            }
+            // IPv6 無効なら v6 の宛先へは決してつながない。公開 v6 が混ざる dual-stack の名前は
+            // v4 だけで足りるので拒否しない（接続先は [`egress_destination`] が v4 から選ぶ）。
+            // v4 が 1 つも無ければ拒否（ADR 2026-10-09-egress-wildcard-origin）。
+            if egress_destination(policy, resolved).is_none() {
+                return Err(EgressDenied::Ipv6Disabled);
             }
             Ok(())
         }

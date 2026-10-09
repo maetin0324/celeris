@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
 use task_core::browser_isolation::{
-    EgressDenied, EgressPolicy, EgressRequest, check_egress, test_loopback_target,
+    EgressDenied, EgressPolicy, EgressRequest, check_egress, egress_destination,
+    test_loopback_target,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UnixStream};
@@ -454,6 +455,7 @@ fn answer(packet: &[u8], host: &str, kind: u16, id: u16) -> Result<Vec<IpAddr>, 
     pos += 4;
     let mut aliases = BTreeMap::new();
     let mut addresses = Vec::new();
+    let mut soa_owners = Vec::new();
     let counts = [word(packet, 6)?, word(packet, 8)?, word(packet, 10)?];
     for (section, count) in counts.into_iter().enumerate() {
         for _ in 0..count {
@@ -489,6 +491,8 @@ fn answer(packet: &[u8], host: &str, kind: u16, id: u16) -> Result<Vec<IpAddr>, 
                     1 | 28 => return Err(EgressError::Resolution),
                     _ => return Err(EgressError::Resolution),
                 }
+            } else if section == 1 && record_kind == 6 && class == 1 {
+                soa_owners.push(owner);
             }
             pos += size;
         }
@@ -507,10 +511,23 @@ fn answer(packet: &[u8], host: &str, kind: u16, id: u16) -> Result<Vec<IpAddr>, 
     if addresses.iter().any(|(owner, _)| owner != &terminal) {
         return Err(EgressError::Resolution);
     }
-    // A CNAME without a terminal answer is not silently treated as NODATA. The
-    // recursive resolver must complete it; no arbitrary follow-up resolver exists.
+    // A CNAME without a terminal answer is NODATA only in the RFC 2308 form: the
+    // authority section carries the SOA of the terminal name's zone, i.e. the
+    // recursive resolver completed the chain and the terminal has no record of this
+    // type (CloudFront names without AAAA). Otherwise the chain is incomplete; no
+    // arbitrary follow-up resolver exists.
     if !aliases.is_empty() && addresses.is_empty() {
-        return Err(EgressError::Resolution);
+        let completed = soa_owners.iter().any(|zone| {
+            terminal == *zone
+                || terminal
+                    .strip_suffix(zone.as_str())
+                    .is_some_and(|sub| sub.ends_with('.'))
+        });
+        return if completed {
+            Ok(vec![])
+        } else {
+            Err(EgressError::Resolution)
+        };
     }
     Ok(addresses.into_iter().map(|(_, ip)| ip).collect())
 }
@@ -580,10 +597,7 @@ async fn destination_recorded(
         *denial = Some(Denial::policy(reason, &host, port));
         EgressError::Denied
     })?;
-    let ip = resolved
-        .first()
-        .ok_or(EgressError::Resolution)?
-        .to_canonical();
+    let ip = egress_destination(policy, &resolved).ok_or(EgressError::Resolution)?;
     Ok((SocketAddr::new(ip, port), mode))
 }
 

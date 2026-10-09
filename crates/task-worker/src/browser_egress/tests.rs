@@ -440,6 +440,67 @@ fn dns_cname_requires_terminal_owner_and_refuses_cycles() {
     );
 }
 
+/// `www.example.com AAAA` → `CNAME edge.cdn.example.net` and no AAAA at the terminal.
+/// `soa_owner` is `None` for no authority record, or the encoded owner to put on one
+/// record of `authority_kind` (6 = SOA).
+fn cname_nodata(soa_owner: Option<&str>, authority_kind: u16) -> Vec<u8> {
+    let q = query("www.example.com", 28, 7);
+    let mut packet = response(&q, &[]);
+    packet[6..8].copy_from_slice(&1u16.to_be_bytes());
+    packet.extend([0xc0, 0x0c, 0, 5, 0, 1, 0, 0, 0, 30]);
+    let alias = query("edge.cdn.example.net", 1, 0);
+    let encoded = &alias[12..alias.len() - 4];
+    packet.extend((encoded.len() as u16).to_be_bytes());
+    packet.extend(encoded);
+    if let Some(owner) = soa_owner {
+        packet[8..10].copy_from_slice(&1u16.to_be_bytes());
+        let zone = query(owner, 1, 0);
+        packet.extend(&zone[12..zone.len() - 4]);
+        packet.extend(authority_kind.to_be_bytes());
+        packet.extend([0, 1, 0, 0, 0, 30, 0, 22, 0, 0]);
+        packet.extend([0u8; 20]);
+    }
+    packet
+}
+
+/// 本番 2026-10-09: `www.tsukuba.ac.jp` は CloudFront への CNAME で AAAA が無く、1.1.1.1 は CNAME と
+/// terminal zone の SOA だけを返す（RFC 2308 の NODATA）。これを解決失敗にすると A があっても届かない。
+#[test]
+fn dns_cname_nodata_is_empty_only_with_the_terminal_zone_soa() {
+    for zone in ["edge.cdn.example.net", "cdn.example.net", "example.net"] {
+        assert_eq!(
+            answer(&cname_nodata(Some(zone), 6), "www.example.com", 28, 7),
+            Ok(vec![]),
+            "{zone}"
+        );
+    }
+    // SOA が無い・別 zone の SOA・SOA 以外（referral の NS）は不完全な chain のまま。
+    for (owner, kind) in [
+        (None, 6),
+        (Some("example.com"), 6),
+        (Some("evil.test"), 6),
+        (Some("dn.example.net"), 6),
+        (Some("edge.cdn.example.net"), 2),
+    ] {
+        assert_eq!(
+            answer(&cname_nodata(owner, kind), "www.example.com", 28, 7),
+            Err(EgressError::Resolution),
+            "{owner:?} {kind}"
+        );
+    }
+}
+
+/// 本番 2026-10-09: dual-stack の名前（AAAA も返る）は IPv6 無効でも拒否せず、v4 に固定してつなぐ。
+#[tokio::test]
+async fn actual_dns_transport_pins_ipv4_for_a_dual_stack_name() {
+    let (address, job) = dns_fixture(&["2606:2800:220:1::1", "93.184.216.34"]).await;
+    let (mut client, mut server) = UnixStream::pair().unwrap();
+    client.write_all(&connect("example.com:443")).await.unwrap();
+    let result = destination(&mut server, &policy(), address).await.unwrap();
+    assert_eq!(result, "93.184.216.34:443".parse().unwrap());
+    assert_eq!(job.await.unwrap(), vec![1, 28]);
+}
+
 #[tokio::test]
 async fn malformed_dns_length_or_transaction_is_rejected_over_tcp() {
     for invalid_length in [false, true] {

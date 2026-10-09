@@ -10,6 +10,7 @@ use crate::TaskId;
 
 #[path = "browser/origin.rs"]
 mod origin;
+pub(crate) use origin::public_suffix;
 pub use origin::{
     AllowedOrigin, intersect_origins, minimize_origins, origin_covers, parse_allowed_origin,
 };

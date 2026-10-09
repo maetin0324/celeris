@@ -122,7 +122,7 @@ impl AllowedOrigin {
     }
 }
 
-fn public_suffix(base: &str) -> bool {
+pub(crate) fn public_suffix(base: &str) -> bool {
     const PRIVATE_SUFFIXES: &[&str] = &["github.io", "appspot.com", "pages.dev", "cloudfront.net"];
     let labels: Vec<_> = base.split('.').collect();
     labels.len() == 1

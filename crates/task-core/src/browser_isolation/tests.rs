@@ -492,6 +492,109 @@ fn egress_rejects_ip_literals_and_unlisted_hosts() {
     );
 }
 
+/// 本番 2026-10-09: 公開 v6 を併せ持つ dual-stack の名前は、IPv6 無効でも v4 があれば許し、接続先は v4。
+/// v6 だけ・v6 側が非公開（rebinding）は従来どおり拒否。
+#[test]
+fn egress_dual_stack_uses_ipv4_when_ipv6_disabled() {
+    let dual = ["93.184.216.34", "2606:2800:220:1::1"];
+    assert_eq!(
+        check_egress(&policy(), &connect("example.com", &dual)),
+        Ok(())
+    );
+    let resolved: Vec<IpAddr> = dual.iter().map(|s| s.parse().unwrap()).collect();
+    let reversed: Vec<IpAddr> = resolved.iter().rev().copied().collect();
+    for ips in [&resolved, &reversed] {
+        assert_eq!(
+            egress_destination(&policy(), ips),
+            Some("93.184.216.34".parse().unwrap())
+        );
+    }
+    assert_eq!(
+        check_egress(&policy(), &connect("example.com", &["2606:2800:220:1::1"])),
+        Err(EgressDenied::Ipv6Disabled)
+    );
+    assert_eq!(
+        check_egress(
+            &policy(),
+            &connect("example.com", &["93.184.216.34", "fd00::1"])
+        ),
+        Err(EgressDenied::PrivateAddress)
+    );
+    let mut p = policy();
+    p.allow_ipv6 = true;
+    assert_eq!(
+        egress_destination(&p, &reversed),
+        Some("2606:2800:220:1::1".parse().unwrap())
+    );
+}
+
+/// 本番 2026-10-09: task policy `https://*.tsukuba.ac.jp` は egress 許可 `*.tsukuba.ac.jp:443` になる。
+/// 完全一致しか見ないと manaba.tsukuba.ac.jp が not_allowed になり、browser はどこにも届かなかった。
+#[test]
+fn egress_wildcard_entry_covers_subdomains_only() {
+    let mut p = policy();
+    p.allow = ["*.tsukuba.ac.jp:443".to_string()].into_iter().collect();
+    for host in [
+        "manaba.tsukuba.ac.jp",
+        "www.tsukuba.ac.jp",
+        "a.b.tsukuba.ac.jp",
+    ] {
+        assert_eq!(
+            check_egress(&p, &connect(host, &["122.249.253.244"])),
+            Ok(()),
+            "{host}"
+        );
+    }
+    // apex・似た名前・別 port・別の suffix は許さない。
+    for host in [
+        "tsukuba.ac.jp",
+        "eviltsukuba.ac.jp",
+        "manaba.tsukuba.ac.jp.evil.com",
+        "ac.jp",
+    ] {
+        assert_eq!(
+            check_egress(&p, &connect(host, &["122.249.253.244"])),
+            Err(EgressDenied::NotAllowed),
+            "{host}"
+        );
+    }
+    let other_port = connect_port("manaba.tsukuba.ac.jp", 8443, &["122.249.253.244"]);
+    assert_eq!(check_egress(&p, &other_port), Err(EgressDenied::NotAllowed));
+    // wildcard に当たっても、解決先の検査（private・IPv6・未解決）は変わらない。
+    assert_eq!(
+        check_egress(&p, &connect("manaba.tsukuba.ac.jp", &["10.0.0.5"])),
+        Err(EgressDenied::PrivateAddress)
+    );
+    assert_eq!(
+        check_egress(
+            &p,
+            &connect("manaba.tsukuba.ac.jp", &["2606:2800:220:1::1"])
+        ),
+        Err(EgressDenied::Ipv6Disabled)
+    );
+    assert_eq!(
+        check_egress(&p, &connect("manaba.tsukuba.ac.jp", &[])),
+        Err(EgressDenied::Unresolved)
+    );
+    // public suffix への wildcard・壊れた pattern は何も許さない。
+    for (entry, host) in [
+        ("*.com:443", "evil.com"),
+        ("*.ac.jp:443", "manaba.tsukuba.ac.jp"),
+        ("*.github.io:443", "evil.github.io"),
+        ("*.:443", "manaba.tsukuba.ac.jp"),
+        ("*..ac.jp:443", "manaba.tsukuba.ac.jp"),
+        ("**.tsukuba.ac.jp:443", "manaba.tsukuba.ac.jp"),
+        ("*.tsukuba.ac.jp", "manaba.tsukuba.ac.jp"),
+    ] {
+        p.allow = [entry.to_string()].into_iter().collect();
+        assert_eq!(
+            check_egress(&p, &connect(host, &["122.249.253.244"])),
+            Err(EgressDenied::NotAllowed),
+            "{entry} {host}"
+        );
+    }
+}
+
 #[test]
 fn egress_rejects_dns_bypass_and_proxy_chain() {
     let p = policy();

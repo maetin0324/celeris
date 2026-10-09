@@ -23,6 +23,12 @@ export const taskKeys = {
   artifacts: (taskId: string) => ["tasks", "artifacts", taskId] as const,
 };
 
+export const decisionKeys = {
+  all: ["decisions"] as const,
+  task: (taskId: string) => ["decisions", "task", taskId] as const,
+  history: (taskId: string) => ["decisions", "history", taskId] as const,
+};
+
 export const projectKeys = {
   all: ["projects"] as const,
   lists: () => ["projects", "list"] as const,

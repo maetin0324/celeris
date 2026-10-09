@@ -2,7 +2,7 @@ import { QueryClient, type QueryKey, QueryObserver } from "@tanstack/react-query
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import schemaJson from "../generated/schema.json";
 import type { EventRow } from "../generated/types";
-import { daemonKeys, projectKeys, taskKeys } from "../queries/keys";
+import { daemonKeys, decisionKeys, projectKeys, taskKeys } from "../queries/keys";
 import { createConnectionStore } from "./connection-state";
 import { EVENT_KINDS, PENDING_GENERATED_KINDS } from "./event-kinds";
 import { FakeEventSource, taskEventRow } from "./fake-event-source";
@@ -103,6 +103,18 @@ function fixtureEvent(kind: string): EventRow["event"] {
 }
 
 describe("D6 table fixtures", () => {
+  it("decision events refresh subtree lists and answer histories, unrelated events do not", () => {
+    for (const kind of ["decision_requested", "decision_answered", "decision_withdrawn"]) {
+      const keys = keysForTaskEvent({ taskId: "child", event: fixtureEvent(kind), projectId: null });
+      expect(has(keys, decisionKeys.all)).toBe(true);
+    }
+    expect(
+      has(
+        keysForTaskEvent({ taskId: "child", event: fixtureEvent("worker_progress"), projectId: null }),
+        decisionKeys.all,
+      ),
+    ).toBe(false);
+  });
   for (const [kind, tokens] of Object.entries(ADR_TABLE)) {
     it(`${kind} invalidates the D6 set`, () => {
       // 所属不明（fallback）で評価する。

@@ -35,6 +35,8 @@ describe("task detail mobile sections", () => {
   it("opens the section that holds the hash target and keeps desktop layout", () => {
     expect(MOBILE_SECTIONS.map((section) => section.key)).toEqual(["summary", "decision", "execution", "tree"]);
     expect(sectionForHash("#decision-panel")).toBe("decision");
+    expect(sectionForHash("#decision-01ABC")).toBe("decision");
+    expect(sectionForHash("task-decisions")).toBe("decision");
     expect(sectionForHash("execution-panel")).toBe("execution");
     expect(sectionForHash("integration-repair")).toBe("tree");
     expect(sectionForHash("")).toBeNull();

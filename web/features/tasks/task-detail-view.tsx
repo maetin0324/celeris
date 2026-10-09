@@ -7,6 +7,7 @@ import { ScrollTabs } from "../../components/ui/scroll-tabs";
 import { TaskArtifactsPanel } from "../artifacts/task-artifacts-view";
 import { TaskBrowserPrerequisite } from "../browser/task-browser-policy";
 import { TaskChangesPanel } from "../changes/changes-view";
+import { TaskDecisionsPanel } from "../decisions/decision-detail";
 import { TaskFilesPanel } from "../files/task-files-view";
 import { DecisionPanel } from "./decision-panel";
 import { ExecutionPanel } from "./execution-panel";
@@ -95,6 +96,7 @@ function OverviewTab({ taskId }: { taskId: string }) {
               <>
                 <div className={mobileSectionClass("decision", section.current)}>
                   <DecisionPanel key={detail.data.task.id} detail={detail.data} />
+                  <TaskDecisionsPanel key={`decisions-${detail.data.task.id}`} taskId={detail.data.task.id} />
                 </div>
                 <div className={mobileSectionClass("execution", section.current)}>
                   <ExecutionPanel key={`execution-${detail.data.task.id}`} detail={detail.data} />

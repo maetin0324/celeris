@@ -30,6 +30,7 @@ export type MobileSection = (typeof MOBILE_SECTIONS)[number]["key"];
 const SECTION_BY_HASH: Record<string, MobileSection> = {
   "browser-waits": "summary",
   "decision-panel": "decision",
+  "task-decisions": "decision",
   "execution-panel": "execution",
   "task-tree": "tree",
   "integration-repair": "tree",
@@ -38,7 +39,8 @@ const SECTION_BY_HASH: Record<string, MobileSection> = {
 /** hash（# の有無を問わない）から開く区画。知らない hash は null（今の区画のまま）。 */
 export function sectionForHash(hash: string | undefined): MobileSection | null {
   const key = (hash ?? "").replace(/^#/, "");
-  return SECTION_BY_HASH[key] ?? null;
+  // 決定 1 件への移動（`#decision-<id>`。受信箱・チャットのカードから）は判断の区画にある。
+  return SECTION_BY_HASH[key] ?? (key.startsWith("decision-") ? "decision" : null);
 }
 
 /**

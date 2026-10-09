@@ -22,6 +22,7 @@ import { Section } from "../../components/ui/panel";
 import { shortId } from "../../components/ui/short-id";
 import { formatAbsolute, formatRelative, serverNowMs } from "../../lib/time";
 import { openBrowserWaitsQuery } from "../browser/browser-runs-screen";
+import { decisionHref, decisionIdFromItemId } from "../decisions/decision-model";
 import {
   type AnswerOutcome,
   answerFailure,
@@ -314,6 +315,7 @@ function InboxRow({
 }) {
   const headingId = `item-${item.id}-title`;
   const recommended = item.options.find((option) => option.key === item.recommended);
+  const decisionId = item.kind === "decision" ? decisionIdFromItemId(item.id) : null;
   return (
     <li
       id={`item-${encodeURIComponent(item.id)}`}
@@ -363,6 +365,11 @@ function InboxRow({
           <Meta label="期限">
             <Due dueAt={item.due_at} />
           </Meta>
+          {decisionId && item.task ? (
+            <Meta label="決定">
+              <InternalLink href={decisionHref(item.task.id, decisionId)}>決定の詳細と回答の履歴</InternalLink>
+            </Meta>
+          ) : null}
           {item.project_id ? (
             <Meta label="案件">
               <Link

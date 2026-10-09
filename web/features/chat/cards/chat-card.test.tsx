@@ -233,7 +233,9 @@ describe("chat cards: その場の回答", () => {
         expect(html).toContain('data-card-state="closed"');
         expect(html).toContain("既に答えられたか、失効しています");
         expect(html).not.toContain("人の判断待ち");
-        expect(html).not.toContain("<button");
+        // 回答の button は出さない。決定の詳細へ移る button（回答済みでも答えを変えられる）だけ残る。
+        expect(html).toContain("決定の詳細・答えを変える");
+        expect(html.replace(/<button[^>]*>決定の詳細・答えを変える<\/button>/, "")).not.toContain("<button");
       } finally {
         client.clear();
       }

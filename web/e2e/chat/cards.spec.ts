@@ -76,8 +76,22 @@ test("7 種のカードが表示され、その場で回答できるカードは
       const one = card(page, kind);
       await expect(one).toHaveAttribute("data-card-state", "closed");
       await expect(one.getByText("終了", { exact: true })).toBeVisible();
-      await expect(one.getByRole("button")).toHaveCount(0);
+      // 回答の button は消える。決定カードだけ、回答済みの答えを変えに詳細へ移る button が残る。
+      if (kind === "decision") {
+        await expect(one.getByRole("button")).toHaveCount(1);
+        await expect(one.getByRole("button", { name: "決定の詳細・答えを変える" })).toBeVisible();
+      } else await expect(one.getByRole("button")).toHaveCount(0);
     }
+    // 回答済みの決定カードから、決定を出した task の詳細の決定の行へ移る（GET /decisions で出した task を引く）。
+    await page.route("**/api/decisions", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ items: [{ task_id: "T1", root_id: "T1", created_at: "", decision: { id: "D1" } }] }),
+      }),
+    );
+    await card(page, "decision").getByRole("button", { name: "決定の詳細・答えを変える" }).click();
+    await expect(page).toHaveURL(/\/tasks\/T1#decision-D1$/);
   } finally {
     await gateway.close();
   }

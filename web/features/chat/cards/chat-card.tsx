@@ -9,6 +9,8 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { ConfirmDialog } from "../../../components/ui/confirm-dialog";
 import { Notice } from "../../../components/ui/notice";
+import { DecisionLocateButton } from "../../decisions/decision-locate";
+import { decisionIdFromItemId } from "../../decisions/decision-model";
 import { type AnswerOutcome, isDestructive } from "../../inbox/inbox-model";
 import { type CardApi, defaultCardApi, sendCardAnswer, sendOverride } from "./card-actions";
 import {
@@ -208,6 +210,7 @@ export function ChatCardView({ card, answer, override }: ChatCardViewProps) {
         : card.state;
   const state = cardStateView(displayState);
   const overridden = override?.outcome?.ok === true;
+  const decisionId = card.kind === "decision" ? decisionIdFromItemId(card.id) : null;
   const showOverride = override !== undefined && canOverride(card) && !overridden;
   return (
     <article
@@ -243,6 +246,7 @@ export function ChatCardView({ card, answer, override }: ChatCardViewProps) {
           </>
         ) : null}
         {detail ? <CardLink href={detail}>詳細</CardLink> : null}
+        {decisionId ? <DecisionLocateButton decisionId={decisionId} /> : null}
       </div>
     </article>
   );

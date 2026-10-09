@@ -257,10 +257,16 @@ fn libc_fcntl(fd: i32, cmd: i32, arg: i32) -> std::io::Result<i32> {
 
 /// Issue a lease for the pinned site policy without starting the retired bridge.
 /// The lease is consumed only by the injection IPC after its target checks.
+///
+/// `live_session_id` is the session registered with credentiald (`register_live_session`), which
+/// every injection request names and `consume_for_injection` compares with the lease. On the
+/// daemon runtime it is the wait's session; on the launcher runtime it is the launcher-assigned
+/// session id (ADR 2026-10-09 付記「launcher の Authenticate 経路」1).
 pub(crate) fn grant_h3_lease(
     sup: &CredentialSupervisor,
     approval: &ConsumedBrowserApproval,
     task_id: &str,
+    live_session_id: &str,
 ) -> Result<String, &'static str> {
     let wait = &approval.wait;
     let trusted = approval
@@ -285,7 +291,7 @@ pub(crate) fn grant_h3_lease(
         token: String::new(),
         task_id: task_id.into(),
         run_id: wait.run_id.clone(),
-        session_id: wait.session_id.clone(),
+        session_id: live_session_id.into(),
         exact_origin: wait.origin.clone(),
         policy_hash: policy_hash.clone(),
         expires_at: expires,
@@ -311,7 +317,7 @@ pub(crate) fn grant_h3_lease(
         credential_revision: approval.credential.credential_revision,
         task_id: task_id.into(),
         run_id: wait.run_id.clone(),
-        session_id: wait.session_id.clone(),
+        session_id: live_session_id.into(),
         approval_id: wait.approval_id.clone().ok_or("approval record missing")?,
         approved_by: approval.approved_by.clone(),
         policy_hash,

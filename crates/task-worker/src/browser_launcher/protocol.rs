@@ -36,16 +36,25 @@ pub enum Verb {
     Close,
 }
 
-/// Fixed, secret-free authorization request. Credential selectors and values are resolved by the
-/// broker; the daemon may identify only the already approved section and destination.
+/// Fixed, secret-free login request (protocol v4, ADR 2026-10-09 付記「launcher の Authenticate
+/// 経路」4). `lease_id` authorizes the launcher session; `credential_lease_id` is the credentiald
+/// lease the daemon granted for this section. `login_url` and the selectors are the trusted login
+/// pinned in the approved wait (administrator site policy); credentiald compares the password
+/// selector with its own copy before it consumes the lease. No credential value is ever carried.
+/// The request travels with exactly one `SCM_RIGHTS` FD: an `injection.sock` connection the daemon
+/// opened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AuthenticateArgs {
     pub session_id: String,
-    pub auth_section_id: String,
     pub lease_id: String,
+    pub auth_section_id: String,
+    pub credential_lease_id: String,
     pub origin: String,
-    pub target: String,
+    pub login_url: String,
+    pub password_selector: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub submit_selector: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,6 +116,12 @@ pub enum Request {
         session_id: String,
         lease_id: String,
     },
+    /// v4: stop agent observation on the launcher's controller and create the login target.
+    AuthBegin {
+        session_id: String,
+        lease_id: String,
+        auth_section_id: String,
+    },
     Authenticate {
         args: AuthenticateArgs,
     },
@@ -157,8 +172,14 @@ pub enum Outcome {
 /// （ADR-0138 D-L）。v3 で束縛の pid を launcher が隔離を検査した runtime process にし、その
 /// namespace の inode（`ns_inodes`）を足した（daemon UID は別 UID の runtime の
 /// `/proc/<pid>/ns/*` を開けないため）。v1 の receipt（`binding` 無し）と v2 の束縛（`ns_inodes`
-/// 無し）は decode できるが、daemon は証明なしとして扱う。
-pub const PROTOCOL_VERSION: u32 = 3;
+/// 無し）は decode できるが、daemon は証明なしとして扱う。v4 で credential login の
+/// `auth_begin` と `authenticate`（login_url・selector・credentiald lease と、`SCM_RIGHTS` で渡す
+/// injection 接続）を足した（ADR 2026-10-09 付記「launcher の Authenticate 経路」）。daemon は
+/// v4 未満の launcher に credential login を頼まない。
+pub const PROTOCOL_VERSION: u32 = 4;
+
+/// credential login（`auth_begin` / `authenticate`）を受ける最小の protocol 版。
+pub const CREDENTIAL_LOGIN_PROTOCOL: u32 = 4;
 
 /// launcher が `start_session` で返す session の束縛（launcher が `verify_isolation` を掛けた
 /// runtime process の pid・starttime、launcher が採った userns の owner UID と 6 つの namespace の
@@ -243,6 +264,10 @@ pub enum Response {
     },
     Stopped {
         receipt: Receipt,
+    },
+    /// v4: the login target the launcher created (an opaque CDP target id, no page data).
+    AuthBegun {
+        cdp_target_id: String,
     },
     AuthenticateResult {
         status: AuthenticationStatus,
@@ -366,6 +391,7 @@ impl Request {
             Request::Action { session_id, .. }
             | Request::Observe { session_id, .. }
             | Request::Stop { session_id, .. } => Some(session_id),
+            Request::AuthBegin { session_id, .. } => Some(session_id),
             Request::Authenticate { args } => Some(&args.session_id),
         }
     }
@@ -405,12 +431,37 @@ impl Request {
                 check_id(session_id)?;
                 check_id(lease_id)
             }
+            Request::AuthBegin {
+                session_id,
+                lease_id,
+                auth_section_id,
+            } => {
+                check_id(session_id)?;
+                check_id(lease_id)?;
+                check_id(auth_section_id)
+            }
             Request::Authenticate { args } => {
                 check_id(&args.session_id)?;
-                check_id(&args.auth_section_id)?;
                 check_id(&args.lease_id)?;
-                check_str(&args.origin)?;
-                check_str(&args.target)
+                check_id(&args.auth_section_id)?;
+                check_id(&args.credential_lease_id)?;
+                for s in [&args.origin, &args.login_url, &args.password_selector]
+                    .into_iter()
+                    .chain(args.submit_selector.as_ref())
+                {
+                    check_str(s)?;
+                    if s.is_empty() {
+                        return Err(ErrorCode::BadRequest);
+                    }
+                }
+                // ADR-0110 D2 の形式検証（https・login_url の origin・selector の文法）。
+                task_core::browser_wait::validate_trusted_login(
+                    &args.login_url,
+                    &args.origin,
+                    &args.password_selector,
+                    args.submit_selector.as_deref(),
+                )
+                .map_err(|_| ErrorCode::BadRequest)
             }
         }
     }

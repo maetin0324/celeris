@@ -25,10 +25,9 @@ fn load(path: &Path) -> Result<BackendConfig, String> {
         return Err("launcher config must be a root-owned, non-writable regular file".into());
     }
     let contents = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let mut cfg: BackendConfig = toml::from_str(&contents).map_err(|e| e.to_string())?;
-    if let Some(path) = std::env::var_os("CELERIS_CREDENTIALD_INJECTION_SOCKET") {
-        cfg.injection_socket = Some(PathBuf::from(path));
-    }
+    // ADR 2026-10-09 付記「launcher の Authenticate 経路」2: the launcher never opens
+    // credentiald; the daemon passes the injection connection with each `authenticate`.
+    let cfg: BackendConfig = toml::from_str(&contents).map_err(|e| e.to_string())?;
     cfg.validate_test_loopback()?;
     // 付記 E2: 試験許可を本番の config path・socket・state_dir で有効にしない（listen の前に止める）。
     refuse_test_loopback_in_production(path, &cfg, None)?;

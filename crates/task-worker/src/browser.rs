@@ -1877,9 +1877,13 @@ async fn run_with_executable_attempt(
                 .trusted_login
                 .as_ref()
                 .ok_or_else(|| AdapterError::Other("trusted_selector_missing".into()))?;
-            let lease_id =
-                crate::browser_credential::grant_h3_lease(sup, approval, &req.task.id.to_string())
-                    .map_err(|code| AdapterError::Other(code.into()))?;
+            let lease_id = crate::browser_credential::grant_h3_lease(
+                sup,
+                approval,
+                &req.task.id.to_string(),
+                &browser.session_id,
+            )
+            .map_err(|code| AdapterError::Other(code.into()))?;
             let auth_id = format!("auth-{}", approval.wait.wait_id);
             let mut broker = broker_client(sup).map_err(|code| AdapterError::Other(code.into()))?;
             // Stop every agent CDP command/event before opening broker H3.

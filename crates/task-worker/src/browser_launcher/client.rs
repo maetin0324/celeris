@@ -126,6 +126,25 @@ impl LauncherClient {
     /// 要求を 1 個送り、応答を 1 個受ける。`error` 応答は `Remote` にする。
     pub fn request(&mut self, req: &Request) -> Result<Response, ClientError> {
         write_message(&mut self.stream, req, self.max_frame)?;
+        self.read_response()
+    }
+
+    /// 要求を 1 個、FD 1 本（`SCM_RIGHTS`）を付けて送り、応答を 1 個受ける（v4 の `authenticate`）。
+    /// この process の FD の写しは送った直後に閉じる（応答を待つ間も持たない）。
+    fn request_with_fd(
+        &mut self,
+        req: &Request,
+        fd: std::os::fd::OwnedFd,
+    ) -> Result<Response, ClientError> {
+        use std::os::fd::AsFd;
+        let body = serde_json::to_vec(req).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        let sent = send_frame_with_fd(&self.stream, &body, self.max_frame, fd.as_fd());
+        drop(fd);
+        sent?;
+        self.read_response()
+    }
+
+    fn read_response(&mut self) -> Result<Response, ClientError> {
         // 応答の先頭を覗いて送り手を記録してから frame を読む（覗くだけなので frame は崩れない）。
         match peek_sender(&self.stream)? {
             Peeked::Closed => return Err(ClientError::Closed),
@@ -223,12 +242,31 @@ impl LauncherClient {
         }
     }
 
-    /// Ask the launcher to perform a credential operation. The only result is a fixed status.
+    /// v4: stop agent observation in the launcher session and create the login target.
+    pub fn auth_begin(
+        &mut self,
+        session_id: &str,
+        lease_id: &str,
+        auth_section_id: &str,
+    ) -> Result<String, ClientError> {
+        match self.request(&Request::AuthBegin {
+            session_id: session_id.into(),
+            lease_id: lease_id.into(),
+            auth_section_id: auth_section_id.into(),
+        })? {
+            Response::AuthBegun { cdp_target_id } => Ok(cdp_target_id),
+            other => Err(unexpected("auth_begun", &other)),
+        }
+    }
+
+    /// Ask the launcher to perform the credential login over `broker` (an `injection.sock`
+    /// connection this daemon opened; passed with `SCM_RIGHTS`). The only result is a fixed status.
     pub fn authenticate(
         &mut self,
         args: AuthenticateArgs,
+        broker: std::os::fd::OwnedFd,
     ) -> Result<AuthenticationStatus, ClientError> {
-        match self.request(&Request::Authenticate { args })? {
+        match self.request_with_fd(&Request::Authenticate { args }, broker)? {
             Response::AuthenticateResult { status } => Ok(status),
             other => Err(unexpected("authenticate_result", &other)),
         }
@@ -253,10 +291,56 @@ fn unexpected(want: &str, got: &Response) -> ClientError {
         Response::ActionResult { .. } => "action_result",
         Response::Observed { .. } => "observed",
         Response::Stopped { .. } => "stopped",
+        Response::AuthBegun { .. } => "auth_begun",
         Response::AuthenticateResult { .. } => "authenticate_result",
         Response::Error { .. } => "error",
     };
     ClientError::Protocol(format!("expected a {want} response, got {got}"))
+}
+
+/// 長さ前置きの frame を、先頭に `SCM_RIGHTS` の FD 1 本を付けて書く。
+pub(super) fn send_frame_with_fd(
+    stream: &UnixStream,
+    body: &[u8],
+    max: usize,
+    fd: std::os::fd::BorrowedFd<'_>,
+) -> Result<(), FrameError> {
+    if body.len() > max {
+        return Err(FrameError::TooLarge(body.len()));
+    }
+    let len = u32::try_from(body.len()).map_err(|_| FrameError::TooLarge(body.len()))?;
+    let mut frame = len.to_be_bytes().to_vec();
+    frame.extend_from_slice(body);
+    let mut iov = libc::iovec {
+        iov_base: frame.as_mut_ptr().cast(),
+        iov_len: frame.len(),
+    };
+    let mut control = [0u64; 4];
+    // SAFETY: msghdr・iov・整列した control buffer は SCM_RIGHTS の FD 1 本に足りる。
+    let sent = unsafe {
+        let mut msg: libc::msghdr = std::mem::zeroed();
+        msg.msg_iov = &mut iov;
+        msg.msg_iovlen = 1;
+        msg.msg_control = control.as_mut_ptr().cast();
+        msg.msg_controllen = libc::CMSG_SPACE(std::mem::size_of::<libc::c_int>() as u32) as _;
+        let cmsg = libc::CMSG_FIRSTHDR(&msg);
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<libc::c_int>() as u32) as _;
+        std::ptr::write_unaligned(libc::CMSG_DATA(cmsg).cast::<libc::c_int>(), fd.as_raw_fd());
+        libc::sendmsg(stream.as_raw_fd(), &msg, libc::MSG_NOSIGNAL)
+    };
+    if sent < 0 {
+        return Err(FrameError::Io(std::io::Error::last_os_error()));
+    }
+    // FD は最初の送信に付いた。残りがあれば普通に書く。
+    let rest = frame.get(sent as usize..).unwrap_or_default();
+    if !rest.is_empty() {
+        use std::io::Write;
+        let mut w = stream;
+        w.write_all(rest)?;
+    }
+    Ok(())
 }
 
 fn set_passcred(stream: &UnixStream) -> std::io::Result<()> {

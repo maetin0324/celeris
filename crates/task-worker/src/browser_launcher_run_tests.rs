@@ -91,12 +91,18 @@ impl BackendSession for FakeSession {
     fn isolation_ok(&mut self) -> bool {
         true
     }
-    fn authenticate(&mut self, args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+    fn auth_begin(&mut self, _auth_section_id: &str) -> Result<String, ErrorCode> {
+        Ok("TARGET-FAKE".into())
+    }
+    fn authenticate(
+        &mut self,
+        args: &AuthenticateArgs,
+        _broker: UnixStream,
+    ) -> Result<(), ErrorCode> {
         if args.session_id.is_empty()
             || args.auth_section_id.is_empty()
-            || args.lease_id.is_empty()
-            || args.origin.is_empty()
-            || args.target.is_empty()
+            || args.credential_lease_id.is_empty()
+            || args.login_url.is_empty()
         {
             return Err(ErrorCode::BadRequest);
         }
@@ -218,14 +224,29 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
     let launcher = fake_launcher(good_facts());
     let (runtime, _) =
         LauncherRuntime::start(&launcher.sock, "task-1", "run-auth", policy()).expect("start");
+    assert_eq!(
+        runtime.protocol_version().expect("hello"),
+        CREDENTIAL_LOGIN_PROTOCOL
+    );
+    assert_eq!(
+        runtime.auth_begin("auth-1").expect("auth_begin"),
+        "TARGET-FAKE"
+    );
+    let (broker, _peer) = UnixStream::pair().expect("pair");
     let status = runtime
-        .authenticate(AuthenticateArgs {
-            session_id: runtime.session_id.clone(),
-            auth_section_id: "credential-ref".into(),
-            lease_id: runtime.lease_id.clone(),
-            origin: "https://example.com".into(),
-            target: "input[type=password]".into(),
-        })
+        .authenticate(
+            AuthenticateArgs {
+                session_id: runtime.session_id.clone(),
+                lease_id: runtime.lease_id.clone(),
+                auth_section_id: "auth-1".into(),
+                credential_lease_id: "credlease1".into(),
+                origin: "https://example.com".into(),
+                login_url: "https://example.com/login".into(),
+                password_selector: "#password".into(),
+                submit_selector: None,
+            },
+            std::os::fd::OwnedFd::from(broker),
+        )
         .expect("fake broker accepted authentication");
     assert_eq!(status, AuthenticationStatus::Success);
     runtime.stop().expect("stop");
@@ -2189,4 +2210,458 @@ async fn launcher_stale_credential_approval_is_refused_before_connecting() {
     assert_eq!(denied_text(err), "approved browser credential use denied");
     assert!(sink.opened().is_empty());
     assert_eq!(connections(&listener), 0);
+}
+
+// ---- 2026-10-09 付記「launcher の Authenticate 経路」: 承認後の launcher login ----
+
+mod launcher_login {
+    use super::*;
+    use crate::browser::sso_tests::ChromeFixture;
+    use crate::browser_launcher::backend::{
+        LoginSection, begin_login, begin_login_once, run_login,
+    };
+    use crate::browser_launcher::protocol::AuthenticationStatus;
+    use celeris_credentiald::injection_ipc::{Admission, LiveSessionRegistration, process_start};
+    use celeris_credentiald::{Broker, CredentialPolicy, ManualProvider, ipc};
+    use std::os::unix::fs::PermissionsExt;
+    use task_core::browser_isolation::{CdpEndpoint, RuntimeFacts};
+    use task_core::browser_wait::{ConsumedBrowserApproval, CredentialRecord};
+
+    const SECRET: &str = "launcher-login-secret-7c1e5a90";
+    const POLICY_ID: &str = "sso-fixture";
+
+    /// The launcher-owned side of a session, with a real Chromium controller (the launcher's
+    /// `RuntimeSession` minus bwrap / userns). Uses the production `begin_login` / `run_login`.
+    struct ChromeSession {
+        controller: Arc<Mutex<crate::browser_cdp_sink::CdpController>>,
+        login: Option<LoginSection>,
+        child: std::process::Child,
+        brokers: Arc<Mutex<usize>>,
+    }
+
+    impl BackendSession for ChromeSession {
+        fn action(&mut self, _verb: Verb, _args: &ActionArgs) -> Result<Observation, ErrorCode> {
+            Err(ErrorCode::Unauthorized)
+        }
+        fn observe(&mut self) -> (SessionState, SessionFacts) {
+            (SessionState::Running, good_facts())
+        }
+        fn isolation_ok(&mut self) -> bool {
+            true
+        }
+        fn auth_begin(&mut self, auth_section_id: &str) -> Result<String, ErrorCode> {
+            begin_login_once(&self.controller, &mut self.login, auth_section_id)
+        }
+        fn authenticate(
+            &mut self,
+            args: &AuthenticateArgs,
+            broker: UnixStream,
+        ) -> Result<(), ErrorCode> {
+            *self.brokers.lock().expect("lock") += 1;
+            let section = self.login.as_mut().ok_or(ErrorCode::Unauthorized)?;
+            run_login(
+                &self.controller,
+                section,
+                args,
+                &mut crate::browser_cdp_sink::PassedInjectionStream::new(broker),
+            )
+        }
+        fn stop(mut self: Box<Self>) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+
+    struct ChromeBackend {
+        controller: Arc<Mutex<crate::browser_cdp_sink::CdpController>>,
+        chrome_pid: i32,
+        brokers: Arc<Mutex<usize>>,
+    }
+
+    impl SessionBackend for ChromeBackend {
+        fn start(&self, _req: &StartRequest) -> Result<Launched, ErrorCode> {
+            use std::os::unix::process::CommandExt;
+            // The launcher's process group is a private `sleep` (teardown signals it, never the
+            // test's own group); the runtime binding is the real Chromium.
+            let child = std::process::Command::new("sleep")
+                .arg("600")
+                .process_group(0)
+                .stdin(std::process::Stdio::null())
+                .spawn()
+                .map_err(|_| ErrorCode::LaunchFailed)?;
+            let pid = child.id() as i32;
+            let starttime =
+                crate::browser_runtime::process_starttime(pid).ok_or(ErrorCode::LaunchFailed)?;
+            Ok(Launched {
+                session: Box::new(ChromeSession {
+                    controller: Arc::clone(&self.controller),
+                    login: None,
+                    child,
+                    brokers: Arc::clone(&self.brokers),
+                }),
+                pid,
+                pgid: pid,
+                starttime,
+                runtime_pid: self.chrome_pid,
+                runtime_starttime: crate::browser_runtime::process_starttime(self.chrome_pid)
+                    .ok_or(ErrorCode::LaunchFailed)?,
+                ns_inodes: task_core::browser_isolation::collect_ns_inodes("self")
+                    .map_err(|_| ErrorCode::LaunchFailed)?,
+            })
+        }
+    }
+
+    /// Test admission facts (the same-UID harness; isolation evidence lives in the userns suites).
+    fn isolated_facts(session_id: &str, _pid: i32) -> RuntimeFacts {
+        RuntimeFacts {
+            session_id: session_id.into(),
+            host_uid: 1000,
+            runtime_uid: 1000,
+            userns_owner_uid: Some(1001),
+            namespaces: task_core::browser_isolation::REQUIRED_NAMESPACES
+                .into_iter()
+                .collect(),
+            root_readonly: true,
+            writable_mounts: vec!["/session".into()],
+            visible_paths: vec![],
+            cdp: CdpEndpoint::Pipe,
+            no_new_privs: true,
+            capabilities_dropped: true,
+            pgid: 4242,
+        }
+    }
+
+    /// A real credentiald (manual provider, control + injection sockets) whose only control peer is
+    /// this test process — the daemon's role.
+    fn credentiald(root: &Path, origin: &str, task_id: &str) {
+        for name in ["config", "data", "run"] {
+            let path = root.join(name);
+            std::fs::create_dir(&path).expect("broker dir");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).expect("mode");
+        }
+        let manual =
+            ManualProvider::open(root.join("config/keys"), root.join("data/vault")).expect("vault");
+        manual.initialize_key().expect("key");
+        let broker = Arc::new(Broker::new(manual, root.join("data/audit")).expect("broker"));
+        let run = root.join("run");
+        std::thread::spawn(move || {
+            ipc::serve_with(
+                broker,
+                &run,
+                vec![std::process::id()],
+                Admission::SameUidHarnessFacts(isolated_facts),
+            )
+        });
+        let control = root.join("run/celeris-credentiald/control.sock");
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
+        while !(control.exists() && root.join("run/celeris-credentiald/injection.sock").exists()) {
+            assert!(std::time::Instant::now() < deadline, "credentiald startup");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let policy = CredentialPolicy {
+            policy_id: POLICY_ID.into(),
+            revision: 1,
+            exact_origin: origin.into(),
+            task_id: task_id.into(),
+            max_ttl_seconds: 60,
+            require_approval: true,
+            allow_persistence: false,
+            login_url: Some(format!("{origin}/entry")),
+            password_selector: Some("input[name=j_password]".into()),
+            submit_selector: Some("button[name=_eventId_proceed]".into()),
+        };
+        let reference = celeris_credentiald::CredentialRef {
+            credential_id: "cred-1".into(),
+            provider: "manual".into(),
+            policy_id: POLICY_ID.into(),
+        };
+        let reply = ipc::call(
+            &control,
+            serde_json::json!({"op":"register","reference":reference,"policy":policy,
+                "revision":1,"secret":{"username":"user-1","password":SECRET}})
+            .to_string()
+            .as_bytes(),
+        )
+        .expect("register");
+        assert!(reply.success, "register: {:?}", reply.code);
+    }
+
+    /// The approved credential_use wait, consumed (what `browser_approval_consume` returns), for
+    /// the fixture's IdP origin. The wait's session is the logical Celeris session.
+    fn consumed(origin: &str, task_id: task_core::TaskId) -> ConsumedBrowserApproval {
+        let policy = credential_policy();
+        let mut wait = registered_wait(&policy);
+        wait.task_id = task_id;
+        wait.origin = origin.into();
+        wait.reason = BrowserWaitReason::WaitingForApproval;
+        wait.state = BrowserWaitState::Resumed;
+        wait.approval_id = Some("approval-1".into());
+        wait.policy_hash = "sha256:00aa11bb".into();
+        wait.deadline = time::OffsetDateTime::now_utc() + time::Duration::minutes(5);
+        wait.credential = Some(CredentialRef {
+            credential_id: "cred-1".into(),
+            provider: "manual".into(),
+            policy_id: POLICY_ID.into(),
+        });
+        let trusted = TrustedLogin {
+            policy_id: POLICY_ID.into(),
+            revision: 1,
+            // Shibboleth shape: the origin root has no form; the login URL starts the flow.
+            login_url: format!("{origin}/entry"),
+            password_selector: "input[name=j_password]".into(),
+            submit_selector: Some("button[name=_eventId_proceed]".into()),
+        };
+        wait.trusted_login = Some(trusted.clone());
+        ConsumedBrowserApproval {
+            wait,
+            credential: CredentialRecord {
+                credential_id: "cred-1".into(),
+                provider: "manual".into(),
+                policy_id: POLICY_ID.into(),
+                credential_revision: 1,
+                origin: origin.into(),
+                receipt_id: "receipt-1".into(),
+            },
+            approved_by: "human-1".into(),
+            trusted_login: Some(trusted),
+        }
+    }
+
+    /// Records every store call the login makes (auth section) and any progress text.
+    #[derive(Default)]
+    struct AuthSink {
+        calls: Mutex<Vec<String>>,
+    }
+
+    impl EventSink for AuthSink {
+        fn browser_auth_section(
+            &self,
+            run_id: &str,
+            session_id: &str,
+            active: bool,
+        ) -> Result<(), String> {
+            self.calls
+                .lock()
+                .expect("lock")
+                .push(format!("auth_section {run_id} {session_id} {active}"));
+            Ok(())
+        }
+        fn progress(&self, msg: &str) {
+            self.calls.lock().expect("lock").push(msg.into());
+        }
+        fn artifact(&self, _artifact: &task_core::ArtifactRef) {}
+    }
+
+    /// Registered → approval → Approved → launcher `auth_begin` / `authenticate`: the daemon grants
+    /// the lease bound to the launcher session, opens the credentiald section and passes its own
+    /// `injection.sock` connection; the launcher navigates to the trusted `login_url` (the fixture
+    /// root has no form), injects through credentiald, submits, and the SP receives the password.
+    /// The lease is consumed once, the auth section is recorded (released only after stop), and
+    /// the secret appears in no daemon-visible value.
+    #[tokio::test]
+    async fn launcher_credential_login_navigates_injects_submits_and_consumes_the_granted_lease() {
+        let chrome = ChromeFixture::start();
+        let brokers = Arc::new(Mutex::new(0));
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sock = dir.path().join("launcher.sock");
+        let server = LauncherServer::bind(
+            &sock,
+            ServerConfig {
+                allowed_uids: vec![DaemonIds::current().uid],
+                limits: LauncherLimits::default(),
+            },
+            Arc::new(ChromeBackend {
+                controller: Arc::clone(&chrome.controller),
+                chrome_pid: chrome.chrome_pid as i32,
+                brokers: Arc::clone(&brokers),
+            }),
+            Registry::open(dir.path().join("state"), "inst-login").expect("registry"),
+        )
+        .expect("bind");
+        let _handle = server.spawn().expect("spawn");
+        let task_id = task_core::TaskId::new();
+        let credd = tempfile::tempdir().expect("credd");
+        credentiald(credd.path(), &chrome.origin, &task_id.to_string());
+        let run_dir = credd.path().join("run");
+        let (runtime, _) = LauncherRuntime::start(&sock, "task-1", "run-login", policy())
+            .expect("launcher session");
+        let runtime = Arc::new(runtime);
+        // What `register_launcher_proof` does after admission: the live session is the
+        // launcher-assigned id, controller = this (daemon) process, runtime = the browser.
+        crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(&run_dir),
+        )
+        .register_live_session(LiveSessionRegistration {
+            session_id: runtime.session_id().to_owned(),
+            controller_pid: std::process::id(),
+            controller_start: process_start(std::process::id()).expect("self start"),
+            runtime_pid: chrome.chrome_pid,
+            runtime_start: process_start(chrome.chrome_pid).expect("chrome start"),
+        })
+        .expect("register live session");
+        let approval = consumed(&chrome.origin, task_id);
+        assert_ne!(runtime.session_id(), approval.wait.session_id);
+        let sup = crate::browser_credential::CredentialSupervisor {
+            broker: Arc::new(crate::browser_credential::UnixLeaseBroker {
+                control_socket: run_dir.join("celeris-credentiald/control.sock"),
+            }),
+            bridge: PathBuf::from("/nonexistent/celeris-credentiald"),
+            runtime_dir: Some(run_dir.clone()),
+        };
+        let sink = AuthSink::default();
+        let login = launcher_credential_login(
+            &runtime,
+            &approval,
+            &sup,
+            &run_dir,
+            &task_id.to_string(),
+            "run-resumed",
+            &approval.wait.session_id,
+            &sink,
+        )
+        .await;
+        assert_eq!(login, CredentialLogin::Recorded(Ok(())));
+        assert_eq!(
+            *brokers.lock().expect("lock"),
+            1,
+            "one passed broker stream"
+        );
+        // Submitted: the SP received exactly the injected password.
+        let received = chrome.directory.path().join("received");
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !received.exists() {
+            assert!(std::time::Instant::now() < deadline, "SP never received");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert_eq!(
+            std::fs::read_to_string(&received).expect("received"),
+            SECRET
+        );
+        // The granted lease was consumed by credentiald for the launcher session.
+        let journal = std::fs::read_to_string(credd.path().join("data/audit/journal.jsonl"))
+            .expect("journal");
+        let consumed_lines: Vec<&str> = journal
+            .lines()
+            .filter(|l| l.contains("\"consumed\""))
+            .collect();
+        assert_eq!(consumed_lines.len(), 1, "{journal}");
+        assert!(consumed_lines[0].contains(runtime.session_id()));
+        assert!(journal.contains("\"injected\""), "{journal}");
+        // Store: the auth section was recorded on the logical session and is not released while
+        // the session lives (ADR-0080 H3); the launcher's controller keeps observation stopped.
+        let calls = sink.calls.lock().expect("lock").clone();
+        assert_eq!(
+            calls,
+            vec![format!(
+                "auth_section run-resumed {} true",
+                approval.wait.session_id
+            )]
+        );
+        {
+            let c = chrome.controller.lock().expect("lock");
+            assert!(c.auth_section_active());
+            assert_eq!(c.redisplay_guards(), 1);
+        }
+        // A second login in the same session is refused (one auth section per session).
+        assert!(runtime.auth_begin("auth-again").is_err());
+        // No daemon-visible value carries the secret.
+        for seen in [format!("{login:?}"), format!("{calls:?}"), journal] {
+            assert!(!seen.contains(SECRET), "{seen}");
+        }
+        runtime.stop().expect("stop");
+        drop(chrome);
+    }
+
+    /// A forged broker on the passed stream cannot use the sink for anything but the fixed
+    /// injection call: a cookie read never reaches Chrome and the login fails closed.
+    #[test]
+    fn launcher_credential_login_forged_sink_frame_never_reaches_chrome() {
+        struct Forged(Arc<Mutex<Option<isize>>>);
+        struct Done(std::thread::JoinHandle<()>);
+        impl crate::browser_cdp_sink::PendingInjection for Done {
+            fn finish(
+                self: Box<Self>,
+            ) -> Result<serde_json::Value, crate::browser_cdp_sink::InjectionError> {
+                let _ = self.0.join();
+                Ok(serde_json::json!({"v":1,"request_id":"","ok":false,"code":"sink_failed"}))
+            }
+        }
+        impl crate::browser_cdp_sink::BrokerClient for Forged {
+            fn start(
+                &mut self,
+                request: serde_json::Value,
+                sink: std::os::fd::OwnedFd,
+            ) -> Result<
+                Box<dyn crate::browser_cdp_sink::PendingInjection>,
+                crate::browser_cdp_sink::InjectionError,
+            > {
+                use std::os::fd::AsRawFd;
+                let seen = Arc::clone(&self.0);
+                Ok(Box::new(Done(std::thread::spawn(move || {
+                    let mut frame = serde_json::to_vec(&serde_json::json!({
+                        "id": request["cdp_command_id"], "sessionId": request["cdp_session_id"],
+                        "method": "Network.getAllCookies", "params": {}
+                    }))
+                    .expect("json");
+                    frame.push(0);
+                    // SAFETY: a connected seqpacket FD and valid buffers.
+                    let sent = unsafe {
+                        nix::libc::send(sink.as_raw_fd(), frame.as_ptr().cast(), frame.len(), 0)
+                    };
+                    assert_eq!(sent, frame.len() as isize);
+                    let mut reply = [0u8; 4096];
+                    // SAFETY: as above. The controller closes its end without answering.
+                    let n = unsafe {
+                        nix::libc::recv(sink.as_raw_fd(), reply.as_mut_ptr().cast(), reply.len(), 0)
+                    };
+                    *seen.lock().expect("lock") = Some(n);
+                }))))
+            }
+        }
+        let chrome = ChromeFixture::start();
+        let mut section = begin_login(&chrome.controller, "auth-forged").expect("begin");
+        let reply = Arc::new(Mutex::new(None));
+        let args = AuthenticateArgs {
+            session_id: "launcher-session".into(),
+            lease_id: "lease".into(),
+            auth_section_id: "auth-forged".into(),
+            credential_lease_id: "credlease".into(),
+            origin: chrome.origin.clone(),
+            login_url: format!("{}/entry", chrome.origin),
+            password_selector: "input[name=j_password]".into(),
+            submit_selector: Some("button[name=_eventId_proceed]".into()),
+        };
+        let result = run_login(
+            &chrome.controller,
+            &mut section,
+            &args,
+            &mut Forged(Arc::clone(&reply)),
+        );
+        assert!(result.is_err());
+        assert_eq!(
+            *reply.lock().expect("lock"),
+            Some(0),
+            "the sink closed without a CDP reply"
+        );
+        assert!(!chrome.directory.path().join("received").exists());
+        // The section is single-use.
+        assert_eq!(
+            run_login(
+                &chrome.controller,
+                &mut section,
+                &args,
+                &mut Forged(Arc::new(Mutex::new(None)))
+            ),
+            Err(ErrorCode::Unauthorized)
+        );
+    }
+
+    #[test]
+    fn launcher_credential_login_old_launcher_message_is_explicit() {
+        let text = denied_text(launcher_too_old(3));
+        assert!(text.contains("protocol 3"), "{text}");
+        assert!(text.contains("rebuild and replace celeris-browser-launcher"));
+        assert!(text.contains(&format!("protocol {CREDENTIAL_LOGIN_PROTOCOL} required")));
+        let _ = AuthenticationStatus::Rejected;
+    }
 }

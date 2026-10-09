@@ -273,20 +273,38 @@ fn protocol_roundtrip_and_unknown_fields_rejected() {
     }
 }
 
+fn login_args(session_id: &str, lease_id: &str) -> AuthenticateArgs {
+    AuthenticateArgs {
+        session_id: session_id.into(),
+        lease_id: lease_id.into(),
+        auth_section_id: "auth-1".into(),
+        credential_lease_id: "credlease1".into(),
+        origin: "https://idp.example.test".into(),
+        login_url: "https://idp.example.test/idp/profile/SAML2/Unsolicited/SSO?providerId=x".into(),
+        password_selector: "input[name=\"j_password\"]".into(),
+        submit_selector: Some("button[name=\"_eventId_proceed\"]".into()),
+    }
+}
+
 #[test]
 fn launcher_credential_authenticate_is_fixed_and_status_only() {
-    let args = AuthenticateArgs {
-        session_id: "s".into(),
-        auth_section_id: "a".into(),
-        lease_id: "l".into(),
-        origin: "https://example.test".into(),
-        target: "target-1".into(),
+    let req = Request::Authenticate {
+        args: login_args("s", "l"),
     };
-    let req = Request::Authenticate { args };
     let body = serde_json::to_vec(&req).expect("serialize fixed request");
     assert_eq!(decode_request(&body), Ok(req));
-    let bad = br#"{"type":"authenticate","args":{"session_id":"s","auth_section_id":"a","lease_id":"l","origin":"https://example.test","target":"t","password":"do-not-leak"}}"#;
-    assert_eq!(decode_request(bad), Err(ErrorCode::BadRequest));
+    // No field can carry a credential value; the v3 shape (`target`) is refused by a v4 launcher.
+    let mut with_password = serde_json::to_value(Request::Authenticate {
+        args: login_args("s", "l"),
+    })
+    .expect("json");
+    with_password["args"]["password"] = "do-not-leak".into();
+    assert_eq!(
+        decode_request(&serde_json::to_vec(&with_password).expect("json")),
+        Err(ErrorCode::BadRequest)
+    );
+    let v3 = br#"{"type":"authenticate","args":{"session_id":"s","auth_section_id":"a","lease_id":"l","origin":"https://example.test","target":"t"}}"#;
+    assert_eq!(decode_request(v3), Err(ErrorCode::BadRequest));
     let response = serde_json::to_string(&Response::AuthenticateResult {
         status: AuthenticationStatus::Success,
     })
@@ -295,25 +313,50 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
         response,
         r#"{"type":"authenticate_result","status":"success"}"#
     );
-    assert!(!response.contains("secret"));
+    let begun = serde_json::to_string(&Response::AuthBegun {
+        cdp_target_id: "T1".into(),
+    })
+    .expect("serialize begun");
+    assert_eq!(begun, r#"{"type":"auth_begun","cdp_target_id":"T1"}"#);
+    assert_eq!(PROTOCOL_VERSION, CREDENTIAL_LOGIN_PROTOCOL);
 }
 
 #[test]
-fn launcher_credential_authenticate_requires_bounded_nonempty_arguments() {
-    let mut args = AuthenticateArgs {
-        session_id: "s".into(),
-        auth_section_id: "a".into(),
-        lease_id: "l".into(),
-        origin: "https://example.test".into(),
-        target: "target-1".into(),
-    };
+fn launcher_credential_authenticate_requires_bounded_trusted_login_arguments() {
+    let ok = login_args("s", "l");
     assert_eq!(
-        Request::Authenticate { args: args.clone() }.validate(),
+        Request::Authenticate { args: ok.clone() }.validate(),
         Ok(())
     );
-    args.auth_section_id.clear();
+    type Mutation = Box<dyn Fn(&mut AuthenticateArgs)>;
+    let mutations: Vec<Mutation> = vec![
+        Box::new(|a| a.auth_section_id.clear()),
+        Box::new(|a| a.credential_lease_id = "../x".into()),
+        // login_url must stay on the exact https origin (not another host, not http).
+        Box::new(|a| a.login_url = "https://evil.example.test/login".into()),
+        Box::new(|a| a.origin = "http://idp.example.test".into()),
+        Box::new(|a| a.login_url = "https://idp.example.test".into()),
+        // selector grammar (ADR-0110 D2): no lists, pseudo classes or engines.
+        Box::new(|a| a.password_selector = "input, textarea".into()),
+        Box::new(|a| a.submit_selector = Some("button:first-child".into())),
+        Box::new(|a| a.password_selector.clear()),
+    ];
+    for (i, mutate) in mutations.iter().enumerate() {
+        let mut args = ok.clone();
+        mutate(&mut args);
+        assert_eq!(
+            Request::Authenticate { args }.validate(),
+            Err(ErrorCode::BadRequest),
+            "mutation {i}"
+        );
+    }
     assert_eq!(
-        Request::Authenticate { args }.validate(),
+        Request::AuthBegin {
+            session_id: "s".into(),
+            lease_id: "l".into(),
+            auth_section_id: "../a".into(),
+        }
+        .validate(),
         Err(ErrorCode::BadRequest)
     );
 }
@@ -325,16 +368,79 @@ fn launcher_credential_authenticate_backend_rejection_has_status_only_response()
     let session = c
         .start_session("t1", "r1", "lease1", policy(60))
         .expect("start");
+    // The fake backend has no login support: auth_begin is refused with a fixed code.
+    assert!(matches!(
+        c.auth_begin(&session.session_id, "lease1", "auth-1"),
+        Err(ClientError::Remote(ErrorCode::Unauthorized))
+    ));
+    let (broker, _peer) = UnixStream::pair().expect("pair");
     let status = c
-        .authenticate(AuthenticateArgs {
-            session_id: session.session_id,
-            auth_section_id: "auth1".into(),
-            lease_id: "lease1".into(),
-            origin: "https://example.com".into(),
-            target: "target1".into(),
-        })
+        .authenticate(
+            login_args(&session.session_id, "lease1"),
+            std::os::fd::OwnedFd::from(broker),
+        )
         .expect("fixed authentication response");
     assert_eq!(status, AuthenticationStatus::Rejected);
+}
+
+/// FD は `authenticate` にちょうど 1 本だけ。FD 無しの `authenticate`・FD 付きの他の要求は
+/// `bad_request` で接続ごと閉じる。socket でない FD は backend に渡さず rejected。
+#[test]
+fn launcher_credential_authenticate_fd_rules_fail_closed() {
+    use std::os::fd::AsFd;
+    let f = fixture();
+    let max = DEFAULT_MAX_FRAME;
+    // authenticate without an FD.
+    let mut c = connect(&f.sock);
+    let session = c
+        .start_session("t1", "r1", "lease1", policy(60))
+        .expect("start");
+    let mut raw = UnixStream::connect(&f.sock).expect("raw");
+    write_message(
+        &mut raw,
+        &Request::Authenticate {
+            args: login_args(&session.session_id, "lease1"),
+        },
+        max,
+    )
+    .expect("write");
+    let body = read_frame(&mut raw, max).expect("reply");
+    assert_eq!(
+        serde_json::from_slice::<Response>(&body).expect("response"),
+        Response::Error {
+            code: ErrorCode::BadRequest
+        }
+    );
+    assert!(matches!(read_frame(&mut raw, max), Err(FrameError::Closed)));
+    // An FD on any other request.
+    let (a, _b) = UnixStream::pair().expect("pair");
+    let raw = UnixStream::connect(&f.sock).expect("raw");
+    super::client::send_frame_with_fd(
+        &raw,
+        &serde_json::to_vec(&Request::Hello {}).expect("json"),
+        max,
+        a.as_fd(),
+    )
+    .expect("send");
+    let mut raw = raw;
+    let body = read_frame(&mut raw, max).expect("reply");
+    assert_eq!(
+        serde_json::from_slice::<Response>(&body).expect("response"),
+        Response::Error {
+            code: ErrorCode::BadRequest
+        }
+    );
+    // A non-socket FD never reaches the backend.
+    let file = std::fs::File::open("/dev/null").expect("null");
+    let status = c
+        .authenticate(
+            login_args(&session.session_id, "lease1"),
+            std::os::fd::OwnedFd::from(file),
+        )
+        .expect("status");
+    assert_eq!(status, AuthenticationStatus::Rejected);
+    // The session and the connection are still usable.
+    assert!(c.observe(&session.session_id, "lease1").is_ok());
 }
 
 #[test]

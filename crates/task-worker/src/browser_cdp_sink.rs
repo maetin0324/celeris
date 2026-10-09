@@ -204,49 +204,81 @@ impl BrokerClient for UnixInjectionClient {
     ) -> Result<Box<dyn PendingInjection>, InjectionError> {
         self.check_socket()?;
         let stream = UnixStream::connect(&self.socket).map_err(|_| InjectionError::SinkFailed)?;
-        stream
-            .set_read_timeout(Some(TIMEOUT))
-            .map_err(|_| InjectionError::SinkFailed)?;
-        stream
-            .set_write_timeout(Some(TIMEOUT))
-            .map_err(|_| InjectionError::SinkFailed)?;
-        let mut body = serde_json::to_vec(&request).map_err(|_| InjectionError::SinkFailed)?;
-        if body.len() > 16 * 1024 {
-            body.zeroize();
-            return Err(InjectionError::SinkFailed);
-        }
-        let mut header = (body.len() as u32).to_be_bytes();
-        let mut iov = [
-            nix::libc::iovec {
-                iov_base: header.as_mut_ptr().cast(),
-                iov_len: header.len(),
-            },
-            nix::libc::iovec {
-                iov_base: body.as_mut_ptr().cast(),
-                iov_len: body.len(),
-            },
-        ];
-        let mut control = [0u64; 4];
-        // SAFETY: msghdr and aligned CMSG buffer are valid for one SCM_RIGHTS fd.
-        let sent = unsafe {
-            let mut msg: nix::libc::msghdr = std::mem::zeroed();
-            msg.msg_iov = iov.as_mut_ptr();
-            msg.msg_iovlen = iov.len();
-            msg.msg_control = control.as_mut_ptr().cast();
-            msg.msg_controllen = nix::libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as _;
-            let cmsg = nix::libc::CMSG_FIRSTHDR(&msg);
-            (*cmsg).cmsg_level = nix::libc::SOL_SOCKET;
-            (*cmsg).cmsg_type = nix::libc::SCM_RIGHTS;
-            (*cmsg).cmsg_len = nix::libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
-            std::ptr::write_unaligned(nix::libc::CMSG_DATA(cmsg).cast::<i32>(), sink.as_raw_fd());
-            nix::libc::sendmsg(stream.as_raw_fd(), &msg, nix::libc::MSG_NOSIGNAL)
-        };
-        body.zeroize();
-        if sent != (header.len() + iov[1].iov_len) as isize {
-            return Err(InjectionError::SinkFailed);
-        }
-        Ok(Box::new(UnixPending(stream)))
+        start_on_stream(stream, request, sink)
     }
+}
+
+/// ADR 2026-10-09 付記（launcher の Authenticate 経路）2: an `injection.sock` connection the
+/// daemon opened (so credentiald sees the registered controller as the peer) and handed to the
+/// launcher with `SCM_RIGHTS`. It carries exactly one injection; the launcher never learns the
+/// broker's path and never talks to its control socket.
+pub struct PassedInjectionStream(Option<UnixStream>);
+
+impl PassedInjectionStream {
+    pub fn new(stream: UnixStream) -> Self {
+        Self(Some(stream))
+    }
+}
+
+impl BrokerClient for PassedInjectionStream {
+    fn start(
+        &mut self,
+        request: Value,
+        sink: OwnedFd,
+    ) -> Result<Box<dyn PendingInjection>, InjectionError> {
+        let stream = self.0.take().ok_or(InjectionError::SinkFailed)?;
+        start_on_stream(stream, request, sink)
+    }
+}
+
+/// Send one injection request with its sink FD on a connected `injection.sock` stream.
+fn start_on_stream(
+    stream: UnixStream,
+    request: Value,
+    sink: OwnedFd,
+) -> Result<Box<dyn PendingInjection>, InjectionError> {
+    stream
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|_| InjectionError::SinkFailed)?;
+    stream
+        .set_write_timeout(Some(TIMEOUT))
+        .map_err(|_| InjectionError::SinkFailed)?;
+    let mut body = serde_json::to_vec(&request).map_err(|_| InjectionError::SinkFailed)?;
+    if body.len() > 16 * 1024 {
+        body.zeroize();
+        return Err(InjectionError::SinkFailed);
+    }
+    let mut header = (body.len() as u32).to_be_bytes();
+    let mut iov = [
+        nix::libc::iovec {
+            iov_base: header.as_mut_ptr().cast(),
+            iov_len: header.len(),
+        },
+        nix::libc::iovec {
+            iov_base: body.as_mut_ptr().cast(),
+            iov_len: body.len(),
+        },
+    ];
+    let mut control = [0u64; 4];
+    // SAFETY: msghdr and aligned CMSG buffer are valid for one SCM_RIGHTS fd.
+    let sent = unsafe {
+        let mut msg: nix::libc::msghdr = std::mem::zeroed();
+        msg.msg_iov = iov.as_mut_ptr();
+        msg.msg_iovlen = iov.len();
+        msg.msg_control = control.as_mut_ptr().cast();
+        msg.msg_controllen = nix::libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as _;
+        let cmsg = nix::libc::CMSG_FIRSTHDR(&msg);
+        (*cmsg).cmsg_level = nix::libc::SOL_SOCKET;
+        (*cmsg).cmsg_type = nix::libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len = nix::libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
+        std::ptr::write_unaligned(nix::libc::CMSG_DATA(cmsg).cast::<i32>(), sink.as_raw_fd());
+        nix::libc::sendmsg(stream.as_raw_fd(), &msg, nix::libc::MSG_NOSIGNAL)
+    };
+    body.zeroize();
+    if sent != (header.len() + iov[1].iov_len) as isize {
+        return Err(InjectionError::SinkFailed);
+    }
+    Ok(Box::new(UnixPending(stream)))
 }
 
 pub struct CdpController {
@@ -711,6 +743,24 @@ impl CdpController {
             command.zeroize();
             return Err(InjectionError::SinkFailed);
         }
+        // ADR 2026-10-09 付記（launcher の Authenticate 経路）3: only the fixed injection call on
+        // the resolved element may reach Chrome, whoever holds the broker end of the sink.
+        if !fixed_injection_frame(
+            &command,
+            &SinkExpectation {
+                command_id,
+                cdp_session,
+                object_id,
+                origin: &request.exact_origin,
+                field: request.field.as_str(),
+            },
+        ) {
+            command.zeroize();
+            // Close the sink unanswered and let the broker finish (it records its own failure).
+            drop(controller_fd);
+            let _ = pending.finish();
+            return Err(InjectionError::SinkFailed);
+        }
         #[cfg(feature = "attack-test-hooks")]
         if let Some(url) = self.retarget_before_sink.take()
             && let Err(e) = self.retarget_for_test(&url, cdp_session)
@@ -970,6 +1020,73 @@ impl CdpController {
     }
 }
 
+/// What the controller reserved for one injection; the broker's sink frame must match it.
+struct SinkExpectation<'a> {
+    command_id: u64,
+    cdp_session: &'a str,
+    object_id: &'a str,
+    origin: &'a str,
+    field: &'a str,
+}
+
+/// ADR 2026-10-09 付記（launcher の Authenticate 経路）3: the sink frame is exactly
+/// `Runtime.callFunctionOn` of credentiald's fixed `INJECT_FUNCTION` on the resolved element in
+/// the injection session, with the reserved id and `[origin, 0, field, <string>]`. Anything else
+/// (another method, extra keys, another object/session) is refused before it reaches Chrome.
+/// The parsed copy of the value is zeroized here.
+fn fixed_injection_frame(command: &[u8], want: &SinkExpectation<'_>) -> bool {
+    let Some(body) = command.strip_suffix(&[0]) else {
+        return false;
+    };
+    let Ok(mut frame) = serde_json::from_slice::<Value>(body) else {
+        return false;
+    };
+    let ok = (|| {
+        let top = frame.as_object()?;
+        let params = top.get("params")?.as_object()?;
+        let args = params.get("arguments")?.as_array()?;
+        let keys_ok = top.len() == 4
+            && ["id", "method", "params", "sessionId"]
+                .iter()
+                .all(|k| top.contains_key(*k))
+            && params.len() == 5
+            && [
+                "objectId",
+                "functionDeclaration",
+                "arguments",
+                "returnByValue",
+                "silent",
+            ]
+            .iter()
+            .all(|k| params.contains_key(*k));
+        let arg = |i: usize| -> Option<&Value> {
+            let a = args.get(i)?.as_object()?;
+            (a.len() == 1).then(|| a.get("value")).flatten()
+        };
+        Some(
+            keys_ok
+                && top.get("id")?.as_u64() == Some(want.command_id)
+                && top.get("method")?.as_str() == Some("Runtime.callFunctionOn")
+                && top.get("sessionId")?.as_str() == Some(want.cdp_session)
+                && params.get("objectId")?.as_str() == Some(want.object_id)
+                && params.get("functionDeclaration")?.as_str()
+                    == Some(celeris_credentiald::injection_ipc::INJECT_FUNCTION)
+                && params.get("returnByValue")? == &Value::Bool(true)
+                && params.get("silent")? == &Value::Bool(true)
+                && args.len() == 4
+                && arg(0)?.as_str() == Some(want.origin)
+                && arg(1)?.as_u64() == Some(0)
+                && arg(2)?.as_str() == Some(want.field)
+                && arg(3)?.is_string(),
+        )
+    })()
+    .unwrap_or(false);
+    if let Some(Value::String(value)) = frame.pointer_mut("/params/arguments/3/value") {
+        value.zeroize();
+    }
+    ok
+}
+
 fn broker_denial(reply: &Value) -> InjectionError {
     // Only the broker's fixed ADR-0109 vocabulary may cross this boundary.
     let code = match reply["code"].as_str() {
@@ -1206,6 +1323,74 @@ mod idle_pump_tests {
         let other = ["OTHER".to_owned()].into_iter().collect();
         assert_eq!(controller.take_agent_events_for(&mine).len(), 1);
         assert_eq!(controller.take_agent_events_for(&other).len(), 1);
+    }
+
+    fn frame(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+        let mut v = json!({
+            "id": 77, "sessionId": "S", "method": "Runtime.callFunctionOn",
+            "params": {
+                "objectId": "OBJ",
+                "functionDeclaration": celeris_credentiald::injection_ipc::INJECT_FUNCTION,
+                "arguments": [{"value":"https://idp.test"},{"value":0},{"value":"password"},{"value":"s3cret"}],
+                "returnByValue": true, "silent": true
+            }
+        });
+        edit(&mut v);
+        let mut bytes = serde_json::to_vec(&v).expect("json");
+        bytes.push(0);
+        bytes
+    }
+
+    /// ADR 2026-10-09 付記「launcher の Authenticate 経路」3: only credentiald's fixed injection
+    /// call on the resolved element passes the sink; any other frame is refused.
+    #[test]
+    fn launcher_credential_sink_accepts_only_the_fixed_injection_frame() {
+        let want = SinkExpectation {
+            command_id: 77,
+            cdp_session: "S",
+            object_id: "OBJ",
+            origin: "https://idp.test",
+            field: "password",
+        };
+        assert!(fixed_injection_frame(&frame(|_| {}), &want));
+        type Edit = Box<dyn Fn(&mut Value)>;
+        let forged: Vec<Edit> = vec![
+            Box::new(|v| v["method"] = "Network.getAllCookies".into()),
+            Box::new(|v| v["method"] = "Runtime.evaluate".into()),
+            Box::new(|v| v["id"] = 78.into()),
+            Box::new(|v| v["sessionId"] = "OTHER".into()),
+            Box::new(|v| {
+                v.as_object_mut().expect("obj").remove("sessionId");
+            }),
+            Box::new(|v| v["extra"] = 1.into()),
+            Box::new(|v| v["params"]["objectId"] = "OTHER".into()),
+            Box::new(|v| {
+                v["params"]["functionDeclaration"] = "function(){return document.cookie}".into()
+            }),
+            Box::new(|v| v["params"]["returnByValue"] = false.into()),
+            Box::new(|v| v["params"]["expression"] = "1".into()),
+            Box::new(|v| v["params"]["arguments"][0]["value"] = "https://evil.test".into()),
+            Box::new(|v| v["params"]["arguments"][1]["value"] = 1.into()),
+            Box::new(|v| v["params"]["arguments"][2]["value"] = "username".into()),
+            Box::new(|v| v["params"]["arguments"][3]["value"] = 5.into()),
+            Box::new(|v| v["params"]["arguments"][3]["objectId"] = "X".into()),
+            Box::new(|v| {
+                v["params"]["arguments"]
+                    .as_array_mut()
+                    .expect("args")
+                    .push(json!({"value":1}))
+            }),
+        ];
+        for (i, edit) in forged.iter().enumerate() {
+            assert!(
+                !fixed_injection_frame(&frame(|v| edit(v)), &want),
+                "forged frame {i} accepted"
+            );
+        }
+        let mut no_nul = frame(|_| {});
+        no_nul.pop();
+        assert!(!fixed_injection_frame(&no_nul, &want));
+        assert!(!fixed_injection_frame(b"not json\0", &want));
     }
 
     #[test]

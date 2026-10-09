@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
@@ -100,9 +100,19 @@ pub trait SessionBackend: Send + Sync + 'static {
 /// 起動済みの 1 session。
 pub trait BackendSession: Send + 'static {
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode>;
-    /// Runs the fixed credential operation inside the launcher-owned controller. Implementations
-    /// must never return credential material or CDP data.
-    fn authenticate(&mut self, _args: &AuthenticateArgs) -> Result<(), ErrorCode> {
+    /// v4 `auth_begin`: stop agent observation on the launcher-owned controller and create the
+    /// login target. Returns only the opaque CDP target id.
+    fn auth_begin(&mut self, _auth_section_id: &str) -> Result<String, ErrorCode> {
+        Err(ErrorCode::Unauthorized)
+    }
+    /// Runs the fixed credential login inside the launcher-owned controller. `broker` is the
+    /// `injection.sock` connection the daemon opened and passed with `SCM_RIGHTS`.
+    /// Implementations must never return credential material or CDP data.
+    fn authenticate(
+        &mut self,
+        _args: &AuthenticateArgs,
+        _broker: UnixStream,
+    ) -> Result<(), ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
     fn observe(&mut self) -> (SessionState, SessionFacts);
@@ -380,6 +390,7 @@ fn admit(inner: &Arc<Inner>, mut stream: UnixStream) {
             let peer = Peer {
                 conn_id,
                 pid: peer_pid,
+                uid: peer_uid,
                 starttime: process_starttime(peer_pid).unwrap_or(0),
             };
             serve_conn(&inner2, stream, &peer);
@@ -398,15 +409,84 @@ fn admit(inner: &Arc<Inner>, mut stream: UnixStream) {
 struct Peer {
     conn_id: u64,
     pid: i32,
+    uid: u32,
     starttime: u64,
 }
 
+/// FD の上限（`authenticate` は 1 本だけ使う。余分は受けてから閉じる）。
+const MAX_PASSED_FDS: usize = 4;
+
+/// `recvmsg` で `buf` を読み、付いていた `SCM_RIGHTS` の FD を `fds` に集める（CLOEXEC）。
+/// 読めた byte 数（0 = 切断）。control の切り詰めは失敗にする。
+fn recv_with_fds(
+    stream: &UnixStream,
+    buf: &mut [u8],
+    fds: &mut Vec<OwnedFd>,
+) -> std::io::Result<usize> {
+    let mut iov = libc::iovec {
+        iov_base: buf.as_mut_ptr().cast(),
+        iov_len: buf.len(),
+    };
+    let mut control = [0u64; 8];
+    // SAFETY: msghdr は全 field 0 で有効。iov・control は有効な buffer を指す。
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov = &mut iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = control.as_mut_ptr().cast();
+    msg.msg_controllen = std::mem::size_of_val(&control) as _;
+    let n = loop {
+        // SAFETY: msg は上の有効な buffer を指す。
+        let n = unsafe { libc::recvmsg(stream.as_raw_fd(), &mut msg, libc::MSG_CMSG_CLOEXEC) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            if e.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(e);
+        }
+        break n as usize;
+    };
+    // SAFETY: recvmsg が埋めた control buffer を CMSG_* で辿る。受けた FD は必ず OwnedFd にする。
+    unsafe {
+        let mut c = libc::CMSG_FIRSTHDR(&msg);
+        while !c.is_null() {
+            if (*c).cmsg_level == libc::SOL_SOCKET && (*c).cmsg_type == libc::SCM_RIGHTS {
+                let payload = (*c).cmsg_len as usize - libc::CMSG_LEN(0) as usize;
+                let p = libc::CMSG_DATA(c).cast::<libc::c_int>();
+                for i in 0..payload / std::mem::size_of::<libc::c_int>() {
+                    let raw = std::ptr::read_unaligned(p.add(i));
+                    if raw >= 0 {
+                        fds.push(OwnedFd::from_raw_fd(raw));
+                    }
+                }
+            }
+            c = libc::CMSG_NXTHDR(&msg, c);
+        }
+    }
+    if msg.msg_flags & libc::MSG_CTRUNC != 0 {
+        return Err(std::io::Error::other("control data truncated"));
+    }
+    Ok(n)
+}
+
 /// 1 frame を読む。idle の間は `idle`、長さを読んだ後は `request_read` で切る。
-/// 上限超過・期限切れ・切断はどれも `None`（接続を閉じる）。
-fn read_request(stream: &mut UnixStream, limits: &LauncherLimits) -> Option<Vec<u8>> {
+/// 上限超過・期限切れ・切断はどれも `None`（接続を閉じる）。frame の先頭（長さ）に付いた
+/// `SCM_RIGHTS` の FD も返す（v4 の `authenticate` だけが 1 本使う）。
+fn read_request(
+    stream: &mut UnixStream,
+    limits: &LauncherLimits,
+) -> Option<(Vec<u8>, Vec<OwnedFd>)> {
     stream.set_read_timeout(Some(limits.idle)).ok()?;
     let mut len = [0u8; 4];
-    stream.read_exact(&mut len).ok()?;
+    let mut fds = Vec::new();
+    let mut got = 0;
+    while got < len.len() {
+        let n = recv_with_fds(stream, &mut len[got..], &mut fds).ok()?;
+        if n == 0 || fds.len() > MAX_PASSED_FDS {
+            return None;
+        }
+        got += n;
+    }
     let n = u32::from_be_bytes(len) as usize;
     if n > limits.max_frame {
         return None;
@@ -414,20 +494,64 @@ fn read_request(stream: &mut UnixStream, limits: &LauncherLimits) -> Option<Vec<
     stream.set_read_timeout(Some(limits.request_read)).ok()?;
     let mut body = vec![0u8; n];
     stream.read_exact(&mut body).ok()?;
-    Some(body)
+    Some((body, fds))
+}
+
+/// `authenticate` に付いた FD: 接続済みの unix stream socket で、相手（credentiald）の UID が
+/// 要求元 daemon 接続の UID と同じこと（credentiald は daemon と同じ UID で動く）。
+fn passed_broker_stream(fd: OwnedFd, peer: &Peer) -> Result<UnixStream, ErrorCode> {
+    let mut ty: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    // SAFETY: ty は c_int の書込み先で、len はその大きさ。
+    let rc = unsafe {
+        libc::getsockopt(
+            fd.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_TYPE,
+            (&raw mut ty).cast(),
+            &mut len,
+        )
+    };
+    if rc != 0 || ty != libc::SOCK_STREAM {
+        return Err(ErrorCode::BadRequest);
+    }
+    let stream = UnixStream::from(fd);
+    // unix socket でなければ local_addr が失敗する。未接続なら peer_cred が採れない。
+    stream.local_addr().map_err(|_| ErrorCode::BadRequest)?;
+    match peer_cred(&stream) {
+        Some((pid, uid)) if pid > 0 && uid == peer.uid => Ok(stream),
+        _ => Err(ErrorCode::Unauthorized),
+    }
 }
 
 fn serve_conn(inner: &Arc<Inner>, mut stream: UnixStream, peer: &Peer) {
     let limits = inner.cfg.limits.clone();
     let _ = stream.set_write_timeout(Some(limits.request_read));
     while !inner.shutdown.load(Ordering::SeqCst) {
-        let Some(body) = read_request(&mut stream, &limits) else {
+        let Some((body, mut fds)) = read_request(&mut stream, &limits) else {
             return;
         };
+        // FD は `authenticate` にちょうど 1 本だけ。それ以外の組み合わせは bad_request で閉じる。
         let (resp, close) = match decode_request(&body) {
+            Ok(Request::Authenticate { args }) => match (fds.pop(), fds.is_empty()) {
+                (Some(fd), true) => (handle_authenticate(inner, args, fd, peer), false),
+                _ => (
+                    Response::Error {
+                        code: ErrorCode::BadRequest,
+                    },
+                    true,
+                ),
+            },
+            Ok(_) if !fds.is_empty() => (
+                Response::Error {
+                    code: ErrorCode::BadRequest,
+                },
+                true,
+            ),
             Ok(req) => (handle(inner, req, peer), false),
             Err(code) => (Response::Error { code }, true),
         };
+        drop(fds);
         if write_message(&mut stream, &resp, limits.max_frame).is_err() || close {
             let _ = stream.flush();
             return;
@@ -546,14 +670,15 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
                 receipt: receipt(&entry.record, None, Outcome::Stopped, true),
             }
         }
-        Request::Authenticate { args } => {
-            let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
+        Request::AuthBegin {
+            session_id,
+            lease_id,
+            auth_section_id,
+        } => {
+            let entry = match authorize(inner, peer, &session_id, &lease_id) {
                 Ok(e) => e,
                 Err(code) => return err(code),
             };
-            if args.auth_section_id.is_empty() || args.origin.is_empty() || args.target.is_empty() {
-                return err(ErrorCode::BadRequest);
-            }
             let e2 = entry.clone();
             let out = run_with_deadline(
                 move || {
@@ -562,19 +687,66 @@ fn handle(inner: &Arc<Inner>, req: Request, peer: &Peer) -> Response {
                     if !session.isolation_ok() {
                         return Err(ErrorCode::IsolationFailed);
                     }
-                    session.authenticate(&args)
+                    session.auth_begin(&auth_section_id)
                 },
                 inner.cfg.limits.action,
                 |_| {},
             );
             match out {
-                Some(Ok(())) => Response::AuthenticateResult {
-                    status: AuthenticationStatus::Success,
-                },
-                Some(Err(_)) | None => Response::AuthenticateResult {
-                    status: AuthenticationStatus::Rejected,
-                },
+                Some(Ok(cdp_target_id)) => Response::AuthBegun { cdp_target_id },
+                Some(Err(code)) => err(code),
+                None => {
+                    remove_and_teardown(inner, &entry.record.session_id);
+                    err(ErrorCode::Timeout)
+                }
             }
+        }
+        // `serve_conn` routes `authenticate` (with its FD) to `handle_authenticate`.
+        Request::Authenticate { .. } => err(ErrorCode::BadRequest),
+    }
+}
+
+/// v4 `authenticate`: the request and the daemon's `injection.sock` connection. The answer is a
+/// fixed status only; no credential material, CDP data or reason crosses back.
+fn handle_authenticate(
+    inner: &Arc<Inner>,
+    args: AuthenticateArgs,
+    fd: OwnedFd,
+    peer: &Peer,
+) -> Response {
+    let rejected = Response::AuthenticateResult {
+        status: AuthenticationStatus::Rejected,
+    };
+    let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
+        Ok(e) => e,
+        Err(code) => return err(code),
+    };
+    let broker = match passed_broker_stream(fd, peer) {
+        Ok(stream) => stream,
+        Err(_) => return rejected,
+    };
+    let e2 = entry.clone();
+    let out = run_with_deadline(
+        move || {
+            let mut g = lock(&e2.backend);
+            let session = g.as_mut().ok_or(ErrorCode::LeaseMismatch)?;
+            if !session.isolation_ok() {
+                return Err(ErrorCode::IsolationFailed);
+            }
+            session.authenticate(&args, broker)
+        },
+        inner.cfg.limits.action,
+        |_| {},
+    );
+    match out {
+        Some(Ok(())) => Response::AuthenticateResult {
+            status: AuthenticationStatus::Success,
+        },
+        Some(Err(_)) => rejected,
+        None => {
+            // A login that outlived the deadline leaves the session in an unknown H3 state.
+            remove_and_teardown(inner, &entry.record.session_id);
+            rejected
         }
     }
 }

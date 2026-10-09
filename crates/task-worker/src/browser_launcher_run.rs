@@ -23,7 +23,9 @@ use task_core::{BrowserRun, BrowserRunState};
 
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
-use crate::browser_launcher::protocol::{AuthenticateArgs, AuthenticationStatus};
+use crate::browser_launcher::protocol::{
+    AuthenticateArgs, AuthenticationStatus, CREDENTIAL_LOGIN_PROTOCOL,
+};
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
     SessionState, StartedSession, Verb,
@@ -146,12 +148,39 @@ impl LauncherRuntime {
             .map_err(|_| UNAVAILABLE)
     }
 
-    fn authenticate(&self, args: AuthenticateArgs) -> Result<AuthenticationStatus, &'static str> {
+    /// launcher の protocol 版（同じ接続の `hello`）。session には触らない。
+    pub(crate) fn protocol_version(&self) -> Result<u32, &'static str> {
         self.client
             .lock()
             .map_err(|_| UNAVAILABLE)?
-            .authenticate(args)
+            .hello()
+            .map(|(version, _)| version)
             .map_err(|_| UNAVAILABLE)
+    }
+
+    /// v4 `auth_begin`: the launcher stops agent observation and creates the login target.
+    pub(crate) fn auth_begin(&self, auth_section_id: &str) -> Result<String, &'static str> {
+        self.client
+            .lock()
+            .map_err(|_| UNAVAILABLE)?
+            .auth_begin(&self.session_id, &self.lease_id, auth_section_id)
+            .map_err(|_| UNAVAILABLE)
+    }
+
+    /// v4 `authenticate` over `broker` (an `injection.sock` connection this daemon opened). The
+    /// FD is passed with `SCM_RIGHTS`; this process's copy is closed as soon as it has been sent.
+    pub(crate) fn authenticate(
+        &self,
+        args: AuthenticateArgs,
+        broker: std::os::fd::OwnedFd,
+    ) -> Result<AuthenticationStatus, &'static str> {
+        let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
+        client.authenticate(args, broker).map_err(|_| UNAVAILABLE)
+    }
+
+    /// launcher が採番した session id（credentiald に登録した稼働 session）。
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
     }
 
     /// daemon 側で照合できた launcher の session 証明。無ければ機密能力の admission は拒否される。
@@ -829,8 +858,13 @@ pub(super) async fn run(
         (Some((wait, _)), _) | (None, Some(wait)) => wait.session_id.clone(),
         (None, None) => super::session_id(req.task.id, run_id),
     };
+    // After credential use the harness gets the same reduced policy as on the daemon path
+    // (launch / close / navigate; ADR-0080 H3 keeps observation stopped for the session).
     let action_policy = match approved_action {
         Some(action) => super::resumed_policy_bytes(policy, action)?,
+        None if approved_credential.is_some() => {
+            super::credential_harness_policy(&policy.action_policy)?
+        }
         None => policy.action_policy.clone(),
     };
     let approval_actions = super::shim_approval_actions(policy, approved_action);
@@ -905,47 +939,137 @@ pub(super) async fn run(
         }
         None => None,
     };
+    let mut browser = BrowserRun {
+        task_id: req.task.id,
+        run_id: run_id.into(),
+        session_id: session,
+        state: BrowserRunState::Running,
+        live_view_url: None,
+        policy: Some(policy.binding.clone()),
+    };
+    sink.browser_updated(&browser);
+    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
+        sink,
+        run_id: run_id.into(),
+        session_id: browser.session_id.clone(),
+    });
     let mut credential_used = false;
+    // ADR 2026-10-09 付記「launcher の Authenticate 経路」5: once the store records the auth
+    // section it stays recorded (and worker events stay dropped) until the session has stopped.
+    let mut auth_recorded = false;
+    let mut auth_guard = None;
     if let Some(wait) = approved_credential.as_ref() {
+        let refuse = |runtime: Arc<LauncherRuntime>, error: AdapterError| async move {
+            let _ = tokio::task::spawn_blocking(move || runtime.stop()).await;
+            Err(error)
+        };
         if !credential_admitted {
-            let stop_runtime = runtime;
-            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
-            return Err(credential_denied());
+            return refuse(runtime, credential_denied()).await;
         }
+        // Version check before the approval is spent: an old launcher fails closed with a clear
+        // message and the approval stays usable once the launcher is replaced.
+        let probe = Arc::clone(&runtime);
+        let version = tokio::task::spawn_blocking(move || probe.protocol_version())
+            .await
+            .map_err(|_| unavailable())?;
+        match version {
+            Ok(v) if v >= CREDENTIAL_LOGIN_PROTOCOL => {}
+            Ok(v) => {
+                tracing::error!(
+                    launcher_protocol = v,
+                    required = CREDENTIAL_LOGIN_PROTOCOL,
+                    "browser launcher is too old for credential login"
+                );
+                return refuse(runtime, launcher_too_old(v)).await;
+            }
+            Err(_) => return refuse(runtime, credential_denied()).await,
+        }
+        let (Some(sup), Some(credentiald_dir)) = (credentials, credentiald_runtime.as_deref())
+        else {
+            return refuse(runtime, credential_denied()).await;
+        };
         // A credential-use approval is spent through the credential consume (the operation
         // consume refuses `credential_use` by design).
         let consumed = match sink.browser_approval_consume(wait) {
             Ok(consumed) => consumed,
-            Err(_) => {
+            Err(_) => return refuse(runtime, credential_denied()).await,
+        };
+        let login = launcher_credential_login(
+            &runtime,
+            &consumed,
+            sup,
+            credentiald_dir,
+            &req.task.id.to_string(),
+            run_id,
+            &browser.session_id,
+            sink,
+        )
+        .await;
+        let live_session = runtime.session_id().to_owned();
+        let result = match login {
+            CredentialLogin::NotRecorded => {
                 let stop_runtime = runtime;
-                let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
-                return Err(credential_denied());
+                let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
+                    .await
+                    .is_ok_and(|r| r.is_ok());
+                unregister_live_session(credentiald_dir, &live_session, stopped);
+                browser.state = BrowserRunState::Failed;
+                sink.browser_updated(&browser);
+                return Ok(RunOutcome {
+                    terminal: crate::Terminal::Error {
+                        message: "browser auth section could not be recorded".into(),
+                        retryable: true,
+                    },
+                    exit_code: None,
+                });
+            }
+            CredentialLogin::Failed(code) => Err(code),
+            CredentialLogin::Recorded(result) => {
+                auth_recorded = true;
+                // Nothing has been forwarded since the launcher stopped observation; from here
+                // on every worker event of this session is dropped (ADR-0080 H3).
+                auth_guard = Some(live.auth_section());
+                result
             }
         };
-        let credential = consumed
-            .wait
-            .credential
-            .as_ref()
-            .ok_or_else(credential_denied)?;
-        let trusted = consumed
-            .wait
-            .trusted_login
-            .as_ref()
-            .ok_or_else(credential_denied)?;
-        let args = AuthenticateArgs {
-            session_id: runtime.session_id.clone(),
-            auth_section_id: credential.credential_id.clone(),
-            lease_id: runtime.lease_id.clone(),
-            origin: consumed.wait.origin.clone(),
-            target: trusted.password_selector.clone(),
-        };
-        let status = runtime
-            .authenticate(args)
-            .map_err(|_| credential_denied())?;
-        if status != AuthenticationStatus::Success {
+        let status = if result.is_ok() { "success" } else { "failure" };
+        sink.progress_with(
+            &format!("browser.credential_use: {status}"),
+            &task_core::ProgressFields {
+                kind: Some(task_core::ProgressKind::ToolResult),
+                tool: Some("browser.credential_use".into()),
+                summary: Some(result.err().unwrap_or(status).into()),
+                error: result.is_err(),
+                ..Default::default()
+            },
+        );
+        if let Err(code) = result {
             let stop_runtime = runtime;
-            let _ = tokio::task::spawn_blocking(move || stop_runtime.stop()).await;
-            return Err(credential_denied());
+            let stopped = tokio::task::spawn_blocking(move || stop_runtime.stop())
+                .await
+                .is_ok_and(|r| r.is_ok());
+            unregister_live_session(credentiald_dir, &live_session, stopped);
+            if stopped && auth_recorded {
+                // The session has ended; only now may the auth interval be released.
+                let _ = sink.browser_auth_section(run_id, &browser.session_id, false);
+            }
+            drop(auth_guard);
+            browser.state = BrowserRunState::Failed;
+            sink.browser_updated(&browser);
+            return Ok(RunOutcome {
+                terminal: crate::Terminal::Error {
+                    message: format!(
+                        "browser credential use failed ({code}){}",
+                        if stopped {
+                            ""
+                        } else {
+                            "; session cleanup failed"
+                        }
+                    ),
+                    retryable: false,
+                },
+                exit_code: None,
+            });
         }
         credential_used = true;
     }
@@ -962,20 +1086,6 @@ pub(super) async fn run(
         control_gate,
     )
     .map_err(|_| unavailable())?;
-    let mut browser = BrowserRun {
-        task_id: req.task.id,
-        run_id: run_id.into(),
-        session_id: session,
-        state: BrowserRunState::Running,
-        live_view_url: None,
-        policy: Some(policy.binding.clone()),
-    };
-    sink.browser_updated(&browser);
-    let live = crate::browser_live::LiveEmitter::new(EventSinkLive {
-        sink,
-        run_id: run_id.into(),
-        session_id: browser.session_id.clone(),
-    });
     let events = runtime_dir.join("events.jsonl");
     let mut offset = 0;
     req.context.browser = Some(BrowserContext {
@@ -1021,7 +1131,10 @@ pub(super) async fn run(
         .await
         .map_err(|_| unavailable())
         .and_then(|r| r.map_err(|_| unavailable()));
-    let outcome = match stopped {
+    if credential_admitted && let Some(dir) = credentiald_runtime.as_deref() {
+        unregister_live_session(dir, runtime.session_id(), stopped.is_ok());
+    }
+    let mut outcome = match stopped {
         Ok(_) => outcome,
         Err(_) => Ok(RunOutcome {
             terminal: crate::Terminal::Error {
@@ -1033,6 +1146,23 @@ pub(super) async fn run(
             exit_code: None,
         }),
     };
+    if auth_recorded && stopped.is_ok() {
+        // The session is gone; no observation can resume. A failed stop leaves the store's
+        // auth section recorded (fail closed), as on the daemon path.
+        if sink
+            .browser_auth_section(run_id, &browser.session_id, false)
+            .is_err()
+        {
+            outcome = Ok(RunOutcome {
+                terminal: crate::Terminal::Error {
+                    message: "browser auth section could not be closed after session end".into(),
+                    retryable: true,
+                },
+                exit_code: None,
+            });
+        }
+    }
+    drop(auth_guard);
     browser.state = match wait_state {
         // A wait is open: the state follows the wait, whatever the harness reported.
         Some(state) => state,
@@ -1050,6 +1180,144 @@ pub(super) async fn run(
     };
     sink.browser_updated(&browser);
     outcome
+}
+
+/// launcher の protocol が credential login（v4）に足りない。承認は消費していない。
+fn launcher_too_old(version: u32) -> AdapterError {
+    AdapterError::Other(format!(
+        "browser launcher protocol {version} lacks the credential login verbs; rebuild and replace \
+         celeris-browser-launcher (protocol {CREDENTIAL_LOGIN_PROTOCOL} required)"
+    ))
+}
+
+/// credentiald から launcher session の登録を外す（session を止められたときだけ）。失敗は無視
+/// （登録は credentiald の memory だけにあり、runtime の pid が消えれば注入は通らない）。
+fn unregister_live_session(credentiald_runtime: &Path, session_id: &str, stopped: bool) {
+    if stopped {
+        let _ = crate::browser_cdp_sink::UnixInjectionClient::new(
+            celeris_credentiald::injection_ipc::injection_socket(credentiald_runtime),
+        )
+        .unregister_live_session(session_id);
+    }
+}
+
+/// [`launcher_credential_login`] の結果。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CredentialLogin {
+    /// store に auth section を記録できなかった（lease は revoke 済み、注入なし）。
+    NotRecorded,
+    /// auth section を記録する前に失敗した（lease を発行していれば revoke 済み、注入なし）。
+    Failed(&'static str),
+    /// store に auth section を記録した（解除は session の stop 後だけ）。中身は login の成否で、
+    /// 失敗なら lease は revoke 済み。
+    Recorded(Result<(), &'static str>),
+}
+
+/// ADR 2026-10-09 付記「launcher の Authenticate 経路」: 承認を消費した後の launcher の login。
+/// daemon 経路（`browser.rs` の credential segment）と同じ順で、
+/// 1. credentiald の lease を launcher の稼働 session（`runtime.session_id`）に束縛して発行し、
+/// 2. launcher に `auth_begin` させ（launcher の controller が agent の観測を止め、target を作る）、
+/// 3. store に auth section を記録し、
+/// 4. credentiald に auth section を開き（control は daemon だけが呼べる）、
+/// 5. daemon が `injection.sock` に接続し、その接続を `authenticate` に付けて launcher に渡し、
+/// 6. credentiald の auth section を閉じる。失敗なら lease を revoke する。
+///
+/// 秘密は credentiald → launcher の sink だけを通る。この関数・daemon・store・event に入るのは
+/// id・origin・固定 code だけ。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn launcher_credential_login(
+    runtime: &Arc<LauncherRuntime>,
+    consumed: &task_core::browser_wait::ConsumedBrowserApproval,
+    sup: &crate::browser_credential::CredentialSupervisor,
+    credentiald_runtime: &Path,
+    task_id: &str,
+    run_id: &str,
+    session: &str,
+    sink: &dyn EventSink,
+) -> CredentialLogin {
+    let Some(trusted) = consumed.trusted_login.as_ref() else {
+        return CredentialLogin::Failed("trusted_selector_missing");
+    };
+    let lease = match crate::browser_credential::grant_h3_lease(
+        sup,
+        consumed,
+        task_id,
+        &runtime.session_id,
+    ) {
+        Ok(lease) => lease,
+        Err(code) => return CredentialLogin::Failed(code),
+    };
+    let auth_id = format!("auth-{}", consumed.wait.wait_id);
+    let begin = {
+        let runtime = Arc::clone(runtime);
+        let auth_id = auth_id.clone();
+        tokio::task::spawn_blocking(move || runtime.auth_begin(&auth_id)).await
+    };
+    let target = match begin {
+        Ok(Ok(target)) => target,
+        _ => {
+            sup.broker.revoke(&lease, "supervisor");
+            return CredentialLogin::Failed("auth_begin_failed");
+        }
+    };
+    if sink.browser_auth_section(run_id, session, true).is_err() {
+        sup.broker.revoke(&lease, "supervisor");
+        return CredentialLogin::NotRecorded;
+    }
+    let injection = celeris_credentiald::injection_ipc::injection_socket(credentiald_runtime);
+    let broker = crate::browser_cdp_sink::UnixInjectionClient::new(injection.clone());
+    let opened = broker
+        .open_auth_section(
+            celeris_credentiald::injection_ipc::AuthSectionRegistration {
+                session_id: runtime.session_id.clone(),
+                auth_section_id: auth_id.clone(),
+                lease_id: lease.clone(),
+                exact_origin: consumed.wait.origin.clone(),
+                cdp_target_id: target,
+            },
+        )
+        .is_ok();
+    let mut result = if opened {
+        let args = AuthenticateArgs {
+            session_id: runtime.session_id.clone(),
+            lease_id: runtime.lease_id.clone(),
+            auth_section_id: auth_id.clone(),
+            credential_lease_id: lease.clone(),
+            origin: consumed.wait.origin.clone(),
+            login_url: trusted.login_url.clone(),
+            password_selector: trusted.password_selector.clone(),
+            submit_selector: trusted.submit_selector.clone(),
+        };
+        // This process connects, so credentiald admits the registered controller as the peer.
+        match std::os::unix::net::UnixStream::connect(&injection) {
+            Ok(stream) => {
+                let runtime = Arc::clone(runtime);
+                match tokio::task::spawn_blocking(move || {
+                    runtime.authenticate(args, std::os::fd::OwnedFd::from(stream))
+                })
+                .await
+                {
+                    Ok(Ok(AuthenticationStatus::Success)) => Ok(()),
+                    Ok(Ok(AuthenticationStatus::Rejected)) => Err("launcher_authenticate_rejected"),
+                    _ => Err("launcher_authenticate_failed"),
+                }
+            }
+            Err(_) => Err("broker_unavailable"),
+        }
+    } else {
+        Err("auth_section_open_failed")
+    };
+    if opened
+        && broker
+            .close_auth_section(&runtime.session_id, &auth_id)
+            .is_err()
+    {
+        result = Err("auth_section_close_failed");
+    }
+    if result.is_err() {
+        sup.broker.revoke(&lease, "supervisor");
+    }
+    CredentialLogin::Recorded(result)
 }
 
 #[cfg(test)]

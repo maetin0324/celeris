@@ -16,7 +16,7 @@ use std::time::Instant;
 
 const SECRET: &str = "sso-test-password-394ea91";
 
-struct Children(Vec<Child>);
+pub(crate) struct Children(Vec<Child>);
 impl Drop for Children {
     fn drop(&mut self) {
         for child in &mut self.0 {
@@ -36,8 +36,19 @@ struct Fixture {
     directory: tempfile::TempDir,
 }
 
-impl Fixture {
-    fn new() -> Self {
+/// The Shibboleth-shaped HTTPS fixture and a real Chromium on a CDP pipe, with a bare controller
+/// (no target, no auth section). Shared with the launcher login tests.
+pub(crate) struct ChromeFixture {
+    pub(crate) controller: Arc<Mutex<CdpController>>,
+    pub(crate) origin: String,
+    pub(crate) chrome_pid: u32,
+    // Stop fixture/browser before deleting the profile and HTTPS files.
+    pub(crate) children: Children,
+    pub(crate) directory: tempfile::TempDir,
+}
+
+impl ChromeFixture {
+    pub(crate) fn start() -> Self {
         let directory = tempfile::tempdir().unwrap();
         let cert = Command::new("openssl")
             .args([
@@ -127,7 +138,9 @@ impl Fixture {
                 Ok(())
             });
         }
-        children.0.push(cmd.spawn().unwrap());
+        let chrome = cmd.spawn().unwrap();
+        let chrome_pid = chrome.id();
+        children.0.push(chrome);
         drop(child_read);
         drop(child_write);
         let mut c = CdpController::new(
@@ -137,6 +150,26 @@ impl Fixture {
         c.response_timeout_for_test(Duration::from_secs(30));
         c.controller_command("Browser.getVersion", json!({}), None)
             .unwrap();
+        Self {
+            controller: Arc::new(Mutex::new(c)),
+            origin,
+            chrome_pid,
+            children,
+            directory,
+        }
+    }
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let ChromeFixture {
+            controller,
+            origin,
+            children,
+            directory,
+            ..
+        } = ChromeFixture::start();
+        let mut c = controller.lock().unwrap();
         let target = c
             .controller_command("Target.createTarget", json!({"url":"about:blank"}), None)
             .unwrap()["result"]["targetId"]
@@ -156,8 +189,9 @@ impl Fixture {
         c.open_auth_section("auth".into());
         c.controller_command("Network.enable", json!({}), Some(&session))
             .unwrap();
+        drop(c);
         Self {
-            controller: Arc::new(Mutex::new(c)),
+            controller,
             target,
             session,
             origin,

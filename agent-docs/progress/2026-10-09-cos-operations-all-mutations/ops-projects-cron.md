@@ -107,3 +107,16 @@ CoS の記録の target は task（task の event 列に監査が積まれる）
 
 - projects PENDING: 無し
 - tasks・decisions・projects の PENDING は空。admin の PENDING に cron-jobs は無い（受け入れ条件 0）。残りは全体検査
+
+## 全体検査（2026-10-09、HEAD 03e04e4d の上）
+
+- `cargo clippy --workspace -- -D warnings` → exit 0
+- `TMPDIR=/tmp bash scripts/dev/test-parallel.sh` → exit 0（passed 4936、failed 0、ignored 14、doctest exit 0）
+- run の既定 TMPDIR（93 文字）では exit 100: 63 件が `path must be shorter than SUN_LEN`（browser launcher・credentiald 等の
+  Unix socket）。短い TMPDIR（`/tmp/cx.XXXX`）でも script 内の `<TMPDIR>/celeris-test-parallel.XXXXXX/tmp` が長く、
+  `browser_e2e` 4 件が fixture 待ちで時間切れ（単独では 4 passed）。どちらもこの WU の変更と無関係の環境要因。
+
+## 提案
+
+- test-parallel.sh の内側 TMPDIR は Unix socket を張る試験の SUN_LEN 上限に当たりやすい。内側 dir 名を短くする
+  （例: `ctp.XXXX/t`）か、socket だけ短い専用 dir に作る試験基盤の整理を別 task で検討する。

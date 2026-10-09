@@ -10,9 +10,11 @@ use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
+use task_core::feed::{NoticeEvent, NoticeKind, NoticeStore};
 use task_core::model_catalog::{CatalogSource, DiscoveredModel};
 use task_core::{
-    Check, Criterion, Event, ModelCatalogStore, Status, TaskId, TaskKind, TaskStore, Tier,
+    Check, Criterion, Event, ModelCatalogStore, Status, TaskId, TaskKind, TaskRouting, TaskStore,
+    Tier,
 };
 
 fn raise_decision(env: &TestEnv, task: TaskId, id: &str) {
@@ -224,6 +226,94 @@ async fn cos_ops_mutations_task_rereview() {
         env.store.get(task.id).expect("task").expect("row").status,
         Status::Reviewing
     );
+}
+
+#[tokio::test]
+async fn cos_ops_mutations_execution_decompose() {
+    let env = admin_env();
+    let mut task = new_task(TaskKind::Execute, Status::Ready);
+    task.routing = Some(TaskRouting::default());
+    env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/execution/decompose", task.id);
+    let operation = run_domain(
+        &env,
+        "execution-decompose",
+        "POST",
+        &path,
+        json!({"mode":"compound", "note":"split this work"}),
+        "execution.decompose",
+    )
+    .await;
+    assert_eq!(operation["state"], "applied");
+    let updated = env.store.get(task.id).expect("task").expect("row");
+    assert_eq!(
+        updated
+            .routing
+            .expect("routing")
+            .execution_hint
+            .expect("hint")
+            .mode,
+        task_core::ExecutionMode::Compound
+    );
+    assert!(env
+        .store
+        .events_for(task.id)
+        .expect("events")
+        .iter()
+        .any(|(_, event)| matches!(event, Event::ExecutionHintSet { source, mode: task_core::ExecutionMode::Compound, .. } if source == "cos")));
+}
+
+#[tokio::test]
+async fn cos_ops_mutations_notification_reads() {
+    let env = admin_env();
+    let now = time::OffsetDateTime::now_utc();
+    let make_notice = |source: &str| {
+        env.store
+            .notice_record(&NoticeEvent {
+                source_key: source.into(),
+                kind: NoticeKind::TaskDone,
+                group_key: format!("task_done:{source}"),
+                title: source.into(),
+                summary: source.into(),
+                project_id: None,
+                task_id: None,
+                target: None,
+                links: vec![],
+                at: now,
+            })
+            .expect("record notice")
+            .notice_id()
+    };
+    let one = make_notice("cos-read-one");
+    run_domain(
+        &env,
+        "notification-read",
+        "POST",
+        &format!("/api/v1/notifications/{one}/read"),
+        json!({}),
+        "notification.read",
+    )
+    .await;
+    assert!(
+        env.store
+            .notice_get(one)
+            .expect("notice")
+            .expect("row")
+            .read_at
+            .is_some()
+    );
+
+    let _two = make_notice("cos-read-all");
+    let op = run_domain(
+        &env,
+        "notification-read-all",
+        "POST",
+        "/api/v1/notifications/read-all",
+        json!({"kind":"task_done"}),
+        "notification.read_all",
+    )
+    .await;
+    assert_eq!(op["result"]["marked"], 1);
 }
 
 #[tokio::test]

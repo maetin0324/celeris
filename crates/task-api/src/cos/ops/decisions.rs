@@ -31,17 +31,23 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/knowledge/inbox/{id}/accept",
         "knowledge.accept",
     ),
+    (
+        "POST",
+        "/api/v1/notifications/read-all",
+        "notification.read_all",
+    ),
+    (
+        "POST",
+        "/api/v1/notifications/{id}/read",
+        "notification.read",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[];
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("PUT", "/api/v1/knowledge/page"),
-    ("POST", "/api/v1/notifications/read-all"),
-    ("POST", "/api/v1/notifications/{id}/read"),
-];
+pub(crate) const PENDING: &[(&str, &str)] = &[("PUT", "/api/v1/knowledge/page")];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,
@@ -95,6 +101,34 @@ pub(crate) fn dispatch(
                 &root,
                 raw_id,
                 input,
+                Some(audit),
+            )?)
+        }
+        "notification.read" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = crate::inbox_notifications::parse_notice(&raw_id)
+                .map_err(|problem| audit.reject(store, "notification", &raw_id, problem))?;
+            let _: crate::inbox_notifications::EmptyBody =
+                serde_json::from_value(body).map_err(decode)?;
+            audited(crate::inbox_notifications::notice_read_op(
+                store,
+                id,
+                Some(audit),
+            )?)
+        }
+        "notification.read_all" => {
+            let input: crate::inbox_notifications::ReadAllBody =
+                serde_json::from_value(body).map_err(decode)?;
+            let before = input
+                .before
+                .as_deref()
+                .map(crate::inbox_notifications::parse_time)
+                .transpose()
+                .map_err(|problem| audit.reject(store, "notification", "all", problem))?;
+            audited(crate::inbox_notifications::notice_read_all_op(
+                store,
+                input,
+                before,
                 Some(audit),
             )?)
         }

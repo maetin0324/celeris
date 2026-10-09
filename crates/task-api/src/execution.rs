@@ -594,20 +594,59 @@ async fn post_decompose(
     let task_id = parse_task_id(&id)?;
     let req: task_ops::regate::DecomposeRequest = read_json(body, false).await?;
     let result = state
-        .blocking(move |store| {
-            task_ops::regate::set_execution_mode(
-                store,
-                task_id,
-                req.mode,
-                "human",
-                req.note,
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("execution_decompose")))
-        })
+        .blocking(move |store| decompose_op(store, task_id, req, None)?.direct())
         .await?;
     tracing::info!(who = "admin", op = "execution_decompose", task_id = %task_id, mode = result.mode.as_str(), replan = result.replan, "admin: execution mode set by a human");
     Ok(json_response(StatusCode::OK, &result))
+}
+
+pub(crate) fn decompose_op(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    req: task_ops::regate::DecomposeRequest,
+    audit: Option<&crate::cos::operations::OperationAudit>,
+) -> Result<crate::cos::operations::Applied<task_ops::regate::DecomposeResult>, ApiProblem> {
+    use crate::cos::operations::Applied;
+    let Some(audit) = audit else {
+        return task_ops::regate::set_execution_mode(
+            store,
+            task_id,
+            req.mode,
+            "human",
+            req.note,
+            OffsetDateTime::now_utc(),
+        )
+        .map(Applied::Direct)
+        .map_err(|error| ops_problem(store, error, Some("execution_decompose")));
+    };
+    let target_id = task_id.to_string();
+    let (result, event) = task_ops::regate::plan_execution_mode(
+        store,
+        task_id,
+        req.mode,
+        "cos",
+        req.note,
+        OffsetDateTime::now_utc(),
+    )
+    .map_err(|error| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, error, Some("execution_decompose")),
+        )
+    })?;
+    let operation = audit.apply(store, "task", &target_id, "execution.decompose", |tx| {
+        let updated = task_core::store::SqliteStore::edit_task_tx(tx, &result.task, &event)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "mode": result.mode,
+            "replan": result.replan,
+            "previous_decision": result.previous_decision,
+            "task": updated,
+        }))
+    })?;
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 fn bad_group_by(group_by: &str) -> ApiProblem {

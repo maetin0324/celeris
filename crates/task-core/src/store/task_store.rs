@@ -783,6 +783,7 @@ pub trait TaskStore:
     ) -> Result<bool, StoreError>;
 
     /// Caller-owned transaction variant used when late adoption must commit with an audit envelope.
+    #[allow(clippy::too_many_arguments)]
     fn tree_adopt_apply_tx(
         &self,
         tx: &Connection,

@@ -169,16 +169,16 @@ impl SqliteStore {
         adoptions: Vec<TreeAdoption>,
     ) -> Result<bool, StoreError> {
         for a in &adoptions {
-            if !Self::tree_adoption_ok_tx(&tx, a)? {
+            if !Self::tree_adoption_ok_tx(tx, a)? {
                 return Ok(false);
             }
         }
-        Self::adopt_plan_tx(&tx, task_id, plan, work_units, extra_events, event)?;
+        Self::adopt_plan_tx(tx, task_id, plan, work_units, extra_events, event)?;
         for ev in &after_events {
-            Self::append_event_tx(&tx, task_id, ev)?;
+            Self::append_event_tx(tx, task_id, ev)?;
         }
         for a in &adoptions {
-            Self::apply_tree_adoption_tx(&tx, a)?;
+            Self::apply_tree_adoption_tx(tx, a)?;
         }
         Ok(true)
     }
@@ -248,12 +248,12 @@ impl SqliteStore {
             return Ok(false);
         }
         for wu in &updated {
-            Self::update_work_unit_tx(&tx, wu)?;
+            Self::update_work_unit_tx(tx, wu)?;
         }
         for ev in &events {
-            Self::append_event_tx(&tx, owner_id, ev)?;
+            Self::append_event_tx(tx, owner_id, ev)?;
         }
-        Self::apply_tree_adoption_tx(&tx, &adoption)?;
+        Self::apply_tree_adoption_tx(tx, &adoption)?;
         Ok(true)
     }
 }

@@ -23,6 +23,11 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/tasks/{id}/execution/plan-gate",
         "execution.plan_gate",
     ),
+    (
+        "POST",
+        "/api/v1/tasks/{id}/execution-plan",
+        "execution.plan_adopt",
+    ),
     ("PATCH", "/api/v1/tasks/{id}", "task.update"),
     ("POST", "/api/v1/tasks/{id}/reopen", "task.reopen"),
     ("POST", "/api/v1/tasks/{id}/retry", "task.retry"),
@@ -43,6 +48,7 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/tasks/{id}/execution-plan",
         "execution.put_plan",
     ),
+    ("POST", "/api/v1/tasks/{id}/tree/adopt", "tree.adopt"),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -56,8 +62,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
 pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/integrate"),
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/pr/merge"),
-    ("POST", "/api/v1/tasks/{id}/execution-plan"),
-    ("POST", "/api/v1/tasks/{id}/tree/adopt"),
 ];
 
 pub(crate) fn dispatch(
@@ -132,6 +136,33 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 input,
+                Some(audit),
+            )?)
+        }
+        "tree.adopt" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id).map_err(|p| audit.reject(store, "task", &raw_id, p))?;
+            let req = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::execution::tree_adopt_op(
+                store,
+                id,
+                req,
+                env.tree_limits,
+                Some(audit),
+            )?)
+        }
+        "execution.plan_adopt" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id).map_err(|p| audit.reject(store, "task", &raw_id, p))?;
+            let spec = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::execution::execution_plan_adopt_op(
+                store,
+                id,
+                spec,
+                task_core::ExecutionLimits {
+                    tree: env.tree_limits,
+                    ..task_core::ExecutionLimits::default()
+                },
                 Some(audit),
             )?)
         }

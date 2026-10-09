@@ -32,13 +32,21 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | コメント | `POST /api/v1/tasks/<id>/comments` | comment.create | `{"body":"…"}` |
 | 段の確認（phase gate） | `POST /api/v1/tasks/<id>/execution/phase-gate` | execution.phase_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}` |
 | task の質問への回答 | `POST /api/v1/tasks/<id>/answer` | question.answer | `celerisctl answer <task-id> <答え>` |
+| task の accept | `POST /api/v1/tasks/<id>/accept` | task.accept | body は `{}` |
+| task の approve | `POST /api/v1/tasks/<id>/approve` | task.approve | `{"note":"…"}` |
+| task の reject | `POST /api/v1/tasks/<id>/reject` | task.reject | `{"note":"…"}` |
+| task の cancel | `POST /api/v1/tasks/<id>/cancel` | task.cancel | `{"expected_status":"…"}`（省略可） |
 | 計画の確認（plan gate） | `POST /api/v1/tasks/<id>/execution/plan-gate` | execution.plan_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}`。replan は gate の `replan` で planner に返す |
 | task の編集（受け入れ条件・題・担当など） | `PATCH /api/v1/tasks/<id>` | task.update | 変える欄だけを送る（`PATCH /tasks/{id}` の schema。`expected_status` で競合を防ぐ）。`Edited.by` は `cos` |
 | task の再開（done/failed → ready） | `POST /api/v1/tasks/<id>/reopen` | task.reopen | `{"expected_status":"failed"}` か `{}` |
 | task のやり直し（failed/cancelled を複製） | `POST /api/v1/tasks/<id>/retry` | task.retry | `{"accept":true}`（省略なら draft）。`workspace`・`execution` も人の経路と同じ |
+| task の再レビュー依頼 | `POST /api/v1/tasks/<id>/rereview` | task.rereview | `{"expected_status":"done"}` |
 | task の subtree の一時停止 | `POST /api/v1/tasks/<id>/pause` | task.pause | body は `{}`。走っている run は止めない |
 | 一時停止の解除 | `POST /api/v1/tasks/<id>/resume` | task.resume | body は `{}` |
-| 実行計画の差し替え（replan） | `PUT /api/v1/tasks/<id>/execution-plan` | execution.put_plan | 本文は計画 JSON（`celeris.execution-plan/*`）。active な計画がある task だけ。初回の採用は未登録（422） |
+| 初回の実行計画採用 | `POST /api/v1/tasks/<id>/execution-plan` | execution.plan_adopt | 計画 JSON。active な計画が無い task 用。`celerisctl execution plan set` |
+| 実行計画の差し替え（replan） | `PUT /api/v1/tasks/<id>/execution-plan` | execution.put_plan | 本文は計画 JSON（`celeris.execution-plan/*`）。active な計画がある task だけ |
+| execution を compound / atomic に切替 | `POST /api/v1/tasks/<id>/execution/decompose` | execution.decompose | `{"mode":"compound\|atomic","note":"…"}` |
+| 計画 unit への task 採用 | `POST /api/v1/tasks/<id>/tree/adopt` | tree.adopt | `{"task_id":"…","stage":"…","unit_key":"…"}`。`celerisctl tree adopt` |
 
 ### decisions
 
@@ -51,6 +59,8 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 受信箱の件への回答（relay） | `POST /api/v1/inbox/items/<id>/answer` | inbox.answer | Core の「受信箱の件への回答（relay）」。`instructed_by` を付ける |
 | 決定の答えの訂正（回答済みの choice） | `POST /api/v1/decisions/<id>/revise` | decision.revise | `{"option":"…","note":"…"}`。既に作られた子は作り直さずコメントで届く |
 | 決定の取り下げ（open のもの） | `POST /api/v1/decisions/<id>/withdraw` | decision.withdraw | `{"reason":"…"}` か `{}`。止めていた unit を取り下げる |
+| 通知を既読化 | `POST /api/v1/notifications/<id>/read` | notification.read | body は `{}` |
+| 通知を全て既読化 | `POST /api/v1/notifications/read-all` | notification.read_all | body は `{}` |
 | KB 候補の取り込み（正本へ） | `POST /api/v1/knowledge/inbox/<id>/accept` | knowledge.accept | `{}` か `{"path":"…","overwrite":false}` |
 
 ### projects
@@ -74,13 +84,13 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ## 登録されていない操作（CoS は送らない）
 
-次は `/cos/operations` に登録されていない。送ると 422 `cos_operation_not_allowed` になり、拒否も理由付きで記録される。
+未登録の変更操作は `/cos/operations` に送れない。送ると 422 `cos_operation_not_allowed` になり、拒否も理由付きで記録される。
 
 - **除外（人の決定。今後も登録しない）**: 秘密の値を扱う操作（`/secrets/*`・`/accounts/<id>/login*`・
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
-- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。各領域の監査経路を実装中）**: 上の表に無い変更操作
-  （例: task の承認・中止・初回の計画採用、案件・永続の認可（`/standing-rules`）・cron・org・provider・release promote・
+- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
+  （例: task の integrate・PR merge、案件・永続の認可（`/standing-rules`）・cron・org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

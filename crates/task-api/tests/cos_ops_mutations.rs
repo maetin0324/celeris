@@ -264,6 +264,105 @@ async fn cos_ops_mutations_execution_decompose() {
 }
 
 #[tokio::test]
+async fn cos_ops_mutations_execution_plan_post_adopts_atomically() {
+    let env = admin_env();
+    let task = new_task(TaskKind::Execute, Status::Ready);
+    env.seed(&task);
+    let path = format!("/api/v1/tasks/{}/execution-plan", task.id);
+    let operation = run_domain(
+        &env,
+        "execution-plan-post",
+        "POST",
+        &path,
+        plan_body("b"),
+        "execution.plan_adopt",
+    )
+    .await;
+    assert_eq!(operation["state"], "applied");
+    assert!(
+        env.store
+            .execution_plan_active(task.id)
+            .expect("plan")
+            .is_some()
+    );
+    assert_eq!(env.store.work_units_for(task.id).expect("units").len(), 2);
+}
+
+#[tokio::test]
+async fn cos_ops_mutations_tree_adopt_is_audited_atomically() {
+    let env = TestEnv::with(EnvOptions {
+        token: Some(TOKEN.into()),
+        tree_limits: task_core::TreeLimits {
+            enabled: true,
+            ..Default::default()
+        },
+        ..EnvOptions::default()
+    });
+    let now = time::OffsetDateTime::now_utc();
+    let project = task_core::Project {
+        auto_advance: false,
+        slug: None,
+        id: task_core::ProjectId::new(),
+        title: "tree adoption".into(),
+        request: "request".into(),
+        status: task_core::ProjectStatus::Active,
+        secretary_summary: None,
+        workspace: None,
+        archived_at: None,
+        paused_from: None,
+        created_at: now,
+        updated_at: now,
+    };
+    env.store.project_create(&project).expect("project");
+    let mut owner = new_task(TaskKind::Execute, Status::Ready);
+    owner.project_id = Some(project.id);
+    env.seed(&owner);
+    let mut child = new_task(TaskKind::Execute, Status::Reviewing);
+    child.project_id = Some(project.id);
+    env.seed(&child);
+    let app = env.router();
+    let spec = json!({
+        "schema":"celeris.execution-plan/3", "rationale":"adopt a child",
+        "stages":[{"key":"s1","kind":"implement","title":"Stage 1"}],
+        "units":[{"key":"u1","stage":"s1","kind":"task","title":"Child task",
+            "objective":"adopt the completed task", "acceptance":[{"text":"reviewed","check":{"type":"reviewer"}}],
+            "adopt":child.id.to_string()}], "decisions":[]
+    });
+    let created = send(
+        &app,
+        post_admin(&format!("/api/v1/tasks/{}/execution-plan", owner.id), &spec),
+    )
+    .await;
+    assert_eq!(created.status.as_u16(), 201, "{}", created.text());
+    env.store
+        .apply_transition(child.id, task_core::Trigger::ReviewPass, None)
+        .expect("review");
+    let path = format!("/api/v1/tasks/{}/tree/adopt", owner.id);
+    let operation = run_domain(
+        &env,
+        "tree-adopt",
+        "POST",
+        &path,
+        json!({"task_id":child.id.to_string(),"stage":"s1","unit_key":"u1"}),
+        "tree.adopt",
+    )
+    .await;
+    assert_eq!(operation["state"], "applied");
+    assert_eq!(
+        env.store.work_units_for(owner.id).expect("units")[0].status,
+        task_core::WorkUnitStatus::Done
+    );
+    assert!(
+        env.store
+            .get(child.id)
+            .expect("child")
+            .expect("row")
+            .tree
+            .is_some()
+    );
+}
+
+#[tokio::test]
 async fn cos_ops_mutations_notification_reads() {
     let env = admin_env();
     let now = time::OffsetDateTime::now_utc();

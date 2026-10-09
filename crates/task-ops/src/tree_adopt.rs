@@ -64,6 +64,18 @@ pub struct AdoptionOutcome {
     pub detail: String,
 }
 
+/// Validated late adoption write set, ready to apply in a caller-owned transaction.
+#[derive(Debug, Clone)]
+pub struct PreparedAdoption {
+    pub owner_id: TaskId,
+    pub unit_id: String,
+    pub expect_unit_status: WorkUnitStatus,
+    pub updated: Vec<WorkUnitRow>,
+    pub events: Vec<Event>,
+    pub adoption: TreeAdoption,
+    pub outcome: AdoptionOutcome,
+}
+
 fn refuse(conflict: bool, code: &'static str, detail: impl Into<String>) -> OpsError {
     OpsError::TreeAdopt {
         conflict,
@@ -388,6 +400,34 @@ pub fn adopt(
     by: &str,
     now: OffsetDateTime,
 ) -> Result<AdoptionOutcome, OpsError> {
+    let prepared = prepare_adopt(store, owner_id, req, limits, by, now)?;
+    if !store.tree_adopt_apply(
+        prepared.owner_id,
+        &prepared.unit_id,
+        prepared.expect_unit_status,
+        prepared.updated,
+        prepared.events,
+        prepared.adoption,
+    )? {
+        return Err(refuse(
+            true,
+            "adopt_conflict",
+            "the task, the unit or the adopted task changed concurrently; read them again",
+        ));
+    }
+    Ok(prepared.outcome)
+}
+
+/// Read and validate a late adoption without writing. The returned set can be applied atomically
+/// with operation audit rows by `tree_adopt_apply_tx`.
+pub fn prepare_adopt(
+    store: &dyn TaskStore,
+    owner_id: TaskId,
+    req: &AdoptRequest,
+    limits: &TreeLimits,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<PreparedAdoption, OpsError> {
     if !limits.enabled {
         return Err(refuse(
             false,
@@ -515,21 +555,7 @@ pub fn adopt(
     events.extend(more);
     let mut updated = vec![row];
     updated.extend(rows.iter().filter(|r| released.contains(&r.id)).cloned());
-    if !store.tree_adopt_apply(
-        owner_id,
-        &current.id,
-        current.status,
-        updated,
-        events,
-        adoption,
-    )? {
-        return Err(refuse(
-            true,
-            "adopt_conflict",
-            "the task, the unit or the adopted task changed concurrently; read them again",
-        ));
-    }
-    Ok(AdoptionOutcome {
+    let outcome = AdoptionOutcome {
         plan_id: plan.id.clone(),
         unit_key: unit.key.clone(),
         stage: unit.stage.clone(),
@@ -541,5 +567,14 @@ pub fn adopt(
             "task {} ({:?}) adopted as unit {}; its output is integrated at the end of stage {} (skipped when already in the base)",
             target.id, target.status, unit.key, unit.stage
         ),
+    };
+    Ok(PreparedAdoption {
+        owner_id,
+        unit_id: current.id,
+        expect_unit_status: current.status,
+        updated,
+        events,
+        adoption,
+        outcome,
     })
 }

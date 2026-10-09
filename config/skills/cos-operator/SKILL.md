@@ -25,15 +25,15 @@ metadata:
 
 ## 領域ごとの操作表
 
-登録済みの method/path・action・本文は次の節を参照する。未登録の操作は移行中の PENDING であり、まだ送れない。
+登録済みの method/path・action・本文は次の節を参照する。表にない変更操作は登録待ちか除外であり、まだ送れない。
 
 ### tasks
 
-起票・コメント・質問への回答・execution gate・task の編集／再開／やり直し／一時停止・計画の差し替え: [tasks の操作表](operations.md#tasks)。
+起票・コメント・質問への回答・accept/approve/reject/cancel・execution gate/decompose・task の編集／再開／再レビュー／やり直し／一時停止・execution plan の採用／差し替え・tree adoption: [tasks の操作表](operations.md#tasks)。
 
 ### decisions
 
-decision の回答／訂正／取り下げ・approval・inbox・knowledge の候補作成／却下／取り込み: [decisions の操作表](operations.md#decisions)。
+decision の回答／訂正／取り下げ・approval・通知既読化・inbox・knowledge の候補作成／却下／取り込み: [decisions の操作表](operations.md#decisions)。
 
 ### projects
 

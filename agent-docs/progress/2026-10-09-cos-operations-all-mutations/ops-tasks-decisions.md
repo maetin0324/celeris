@@ -19,3 +19,11 @@ commit `01786777` で C 操作の `begin_external` / `finish_external` と起動
 検証: `cargo test -p task-core cos_external_`（2 件成功）、`cargo fmt --check`、`git diff --check`。helper はまだ C route に接続していない。tasks の PENDING 4 件（integrate・PR merge・execution-plan POST・tree/adopt）と decisions の knowledge page PUT は残り、ALLOWED への移動、fake GitHub を使った経路試験、skill/ctl/API 文書同期、全体検査も未完了。各 domain write と監査の transaction 境界を共有化してから route を登録する。
 
 Run continuation: `SqliteStore` と `TaskStore` に caller-owned transaction API `execution_plan_adopt_tree_tx` / `tree_adopt_apply_tx` を追加し、既存の独自 transaction wrapper は新 API を利用するよう変更した。`cargo fmt`、`cargo check -p task-core --tests`、`git diff --check` は成功。task-ops の計画準備と transaction 内の適用の分離、API handler/CoS の共有関数化、ALLOWED 移動、経由/直接拒否試験、skill/ctl/API 文書更新は未完了。このため PENDING は維持する。
+
+Run #4: `tree/adopt` は `prepare_adopt` の結果を通常 handler と CoS operation が共有し、後者では `tree_adopt_apply_tx` を audit apply transaction 内で呼ぶ。`POST /tasks/{id}/tree/adopt` を ALLOWED に移動。execution-plan POST は task-ops の `prepare_human_plan_adoption` が plan・unit・event・adoption write set を準備し、`execution_plan_adopt_tree_tx` により operation audit と同時適用する共有 API 関数を追加。直接 CoS credential 422 と `/cos/operations` applied + plan/unit 作成を統合試験で確認。`execution plan set` の celerisctl CoS mapping、skill 表、GUI API 文書も同期した。
+
+追加: tree/adopt と execution-plan POST の両経路で `run_domain` 統合試験を追加し、それぞれ直接呼び出しの 422 と監査付き applied を検証した。celerisctl の `execution plan set` と `tree adopt` も CoS credential 時に対応 route を `/cos/operations` 経由で呼ぶ mapping を追加。skill の表が既存 ALLOWED の task accept/approve/reject/cancel・rereview・decompose・notification read も欠いていたため、それらを補って同期試験を通した。
+
+検証: `cargo test -p task-api --test cos_ops_mutations`（11 passed）、`cargo test -p task-ops`（515 passed + 5 passed、manual measure 1 ignored）、`cargo test -p task-api cos_operator_skill_table_matches_allowed`（成功）、`cargo test -p task-api --test cos_ops_registry`（3 passed）、`cargo test -p celerisctl cos_mapped_subcommands_match_registered_operations`（成功）、`cargo clippy --workspace -- -D warnings`（成功）、`git diff --check`（成功）。task-core transaction API の needless-borrow を修正し、将来の external-effect route で使う監査 helper は現在 dead code のため局所 `allow(dead_code)` を付けた。
+
+この葉の実装・検証・文書同期は完了。`tasks.rs` の PENDING には external side effect の task integration と PR merge だけ残す。commit は close-out 前に作成する。

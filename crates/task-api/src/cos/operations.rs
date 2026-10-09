@@ -89,6 +89,7 @@ pub(crate) struct ItemMark {
 impl OperationAudit {
     /// Persist the first half of a C-class operation before its external effect. `now` is
     /// injected so retries and stale-pending behavior can be tested without wall-clock waits.
+    #[allow(dead_code)] // Routed by the pending external-effect operations in later domain stages.
     pub(crate) fn begin_external(
         &self,
         store: &SqliteStore,
@@ -113,6 +114,7 @@ impl OperationAudit {
     }
 
     /// Record the known result after an external effect has completed.
+    #[allow(dead_code)] // Routed by the pending external-effect operations in later domain stages.
     pub(crate) fn finish_external(
         &self,
         store: &SqliteStore,

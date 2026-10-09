@@ -361,6 +361,24 @@ fn cos_mapped(
                 .map_err(|e| CliError::msg(format!("plan file is not JSON: {e}")))?;
             Some(("PUT", task_path(&args.task_id, "/execution-plan")?, body))
         }
+        Command::Execution {
+            command:
+                ExecutionCommand::Plan {
+                    command: ExecutionPlanCommand::Set(args),
+                },
+        } => {
+            let raw = execution_cmd::read_plan_file(&args.file)?;
+            let body: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| CliError::msg(format!("plan file is not JSON: {e}")))?;
+            Some(("POST", task_path(&args.task_id, "/execution-plan")?, body))
+        }
+        Command::Tree {
+            command: execution_cmd::TreeCommand::Adopt(args),
+        } => Some((
+            "POST",
+            task_path(&args.root, "/tree/adopt")?,
+            json!({"task_id": args.task, "stage": args.stage, "unit_key": args.unit}),
+        )),
         _ => None,
     })
 }
@@ -737,6 +755,39 @@ mod cos_mapping_tests {
             body,
             serde_json::json!({"action": "replan", "note": "直す"})
         );
+        let (method, path, body) = cos_mapped(&parse(&[
+            "execution",
+            "plan",
+            "set",
+            &id.to_string(),
+            "--file",
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../task-api/tests/fixtures/browser-plan.json"
+            ),
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/execution-plan"));
+        assert_eq!(body["schema"], "celeris.execution-plan/3");
+        let (method, path, body) = cos_mapped(&parse(&[
+            "tree",
+            "adopt",
+            &id.to_string(),
+            "--task",
+            &task_core::TaskId::new().to_string(),
+            "--stage",
+            "s1",
+            "--unit",
+            "u1",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/tree/adopt"));
+        assert_eq!(body["stage"], "s1");
+        assert_eq!(body["unit_key"], "u1");
         assert!(
             cos_mapped(&parse(&["cancel", &id.to_string()]))
                 .expect("map")

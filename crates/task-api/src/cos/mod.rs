@@ -7,6 +7,7 @@
 
 pub mod inbox;
 pub mod operations;
+pub(crate) mod ops;
 pub mod override_op;
 pub mod triage_view;
 

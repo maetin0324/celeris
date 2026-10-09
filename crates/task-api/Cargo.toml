@@ -37,3 +37,4 @@ async-trait = "0.1"
 tempfile = "3"
 base64 = "0.22"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "net", "time", "test-util"] }
+syn = { version = "2", features = ["full", "visit"] }

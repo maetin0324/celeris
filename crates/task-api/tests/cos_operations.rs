@@ -135,7 +135,7 @@ async fn cos_chat_ops_api_rejects_paths_outside_the_allowlist_with_reasoned_even
         .map(|(_, e)| e["reason"].as_str().unwrap_or_default().to_string())
         .collect();
     assert!(reasons.iter().any(|r| r.contains("not a URL or host")));
-    assert!(reasons.iter().any(|r| r.contains("recursively")));
+    assert!(reasons.iter().any(|r| r.contains("recursive_cos")));
     assert!(
         reasons
             .iter()

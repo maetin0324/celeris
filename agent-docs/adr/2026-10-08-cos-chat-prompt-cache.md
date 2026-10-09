@@ -397,7 +397,7 @@ beforeはT3の保存summary（申告SHA`c7e60aa7`）、afterは製品SHA`6de17ea
 | completed | 10/10→10/10 | 10/10→10/10 |
 | session_mode | new 10→new 10 | new 1/resumed 9→同じ |
 
-S5 warm/coldも各3/3 completed/resumed。after記録Coreは6,931 B（Global Core body）。可変部はstdin body、prompt bytesは記録markerを含む。CLI内蔵環境とHEADLESS_RUN_NOTEを含む全native prefixのbytesは不明。baselineのprompt bytes・固定部/可変部bytesは不明。cache read比率・cache read/write・output・名目cost・skill読込・bytes・session分布・全turnの前後と差はtask artifactsの比較JSON/Markdownに保存した。subscription実枠消費は不明で、CLI costを実際の請求額とは扱わない。
+S5 warm/coldも各3/3 completed/resumed。after記録Coreは6,931 B（Global Core body）。可変部はstdin body、prompt bytesは記録markerを含む。CLI内蔵環境とHEADLESS_RUN_NOTEを含む全native prefixのbytesは不明。beforeのprompt bytesは保存summaryから比較し、固定部/可変部の内訳は不明。cache read比率・cache read/write・output・名目cost・skill読込・bytes・session分布・全turnの前後と差はtask artifactsの比較JSON/Markdownに保存した。subscription実枠消費は不明で、CLI costを実際の請求額とは扱わない。
 
 指示採点: after内容26/26はfixtureと一致するが、指定行数を含む厳密達成は17/26（65.38%）：S1 2/10、S2 9/10、S5各3/3。S1は結論文を足して3行指定を超える失敗が8件、S2初回にも1件あった。beforeの生回答が無いため厳密達成率の差は不明。起票1・コメント4はafter5/5 applied、before5/5はD7.5の二次報告。旧補助回答の3/3→3/3は保存domain eventを再検算したが、統合afterのweb_path確認には置き換えない。S3 pin・S4 triage・web_pathはfull台本にないのでlive前後は不明。追加S6の62分待機はrun予算を圧迫するためafter未計測。S5の370秒は1h TTL内である。
 

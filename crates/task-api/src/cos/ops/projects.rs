@@ -25,6 +25,8 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/standing-rules/{id}",
         "standing_rule.delete",
     ),
+    ("POST", "/api/v1/reports/read", "report.read"),
+    ("POST", "/api/v1/reports/notified", "report.notified"),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -78,13 +80,11 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("POST", "/api/v1/projects/{id}/docs/maintenance"),
     ("DELETE", "/api/v1/projects/{id}/docs/page"),
     ("PUT", "/api/v1/projects/{id}/docs/page"),
-    ("POST", "/api/v1/reports/notified"),
-    ("POST", "/api/v1/reports/read"),
 ];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,
-    _env: &DispatchEnv,
+    env: &DispatchEnv,
     audit: &OperationAudit,
     matched: Matched,
     path: &str,
@@ -137,6 +137,14 @@ pub(crate) fn dispatch(
                 &matched.id.unwrap_or_default(),
                 Some(audit),
             )?)
+        }
+        "report.read" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::reports::mark_read_op(store, input, Some(audit))?)
+        }
+        "report.notified" => {
+            let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
+            crate::reports::notified_op(store, &env.api, audit)
         }
         other => Err(ApiProblem::internal(format!(
             "registered CoS operation {other} has no implementation in projects"

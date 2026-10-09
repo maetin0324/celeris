@@ -369,3 +369,51 @@ async fn cos_ops_projects_cron_standing_rules_are_audited() {
     .await;
     assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }
+
+#[tokio::test]
+async fn cos_ops_projects_cron_reports_read_and_notified_are_audited() {
+    use task_core::report::{Report, ReportId, ReportKind, ReportStore};
+    let env = admin_env();
+    let report = Report {
+        id: ReportId::new(),
+        project_id: None,
+        node_id: "software-engineering".into(),
+        task_id: None,
+        kind: ReportKind::Progress,
+        level: 1,
+        headline: "進捗".into(),
+        body: "本文".into(),
+        sources: vec![],
+        read_at: None,
+        created_at: time::OffsetDateTime::now_utc(),
+    };
+    env.store.report_append(&report).expect("append");
+
+    let op = run_domain(
+        &env,
+        "reports-read",
+        "POST",
+        "/api/v1/reports/read",
+        json!({"ids": [report.id.to_string()]}),
+        "report.read",
+    )
+    .await;
+    assert_eq!(op["result"]["updated"], 1);
+    let read = env
+        .store
+        .report_get(report.id)
+        .expect("get")
+        .expect("report");
+    assert!(read.read_at.is_some());
+
+    let op = run_domain(
+        &env,
+        "reports-notified",
+        "POST",
+        "/api/v1/reports/notified",
+        json!({}),
+        "report.notified",
+    )
+    .await;
+    assert!(op["result"]["last_notified_at"].is_string(), "{op}");
+}

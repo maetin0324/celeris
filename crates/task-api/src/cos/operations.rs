@@ -614,6 +614,8 @@ pub(crate) struct DispatchEnv {
     pub(crate) tree_limits: task_core::TreeLimits,
     /// The derived human inbox, when the operation is `inbox.answer` (built before blocking).
     pub(crate) inbox_feed: Option<std::sync::Arc<Vec<task_ops::human_inbox::InboxItem>>>,
+    /// The API state, for operations whose effect is API-process state (`report.notified`).
+    pub(crate) api: ApiState,
 }
 
 impl DispatchEnv {
@@ -625,6 +627,7 @@ impl DispatchEnv {
             clusters: crate::handlers::cluster_ids(state),
             tree_limits: state.inner.tree_limits,
             inbox_feed: None,
+            api: state.clone(),
         }
     }
 }

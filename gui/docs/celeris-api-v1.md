@@ -3475,6 +3475,8 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `POST /projects/{id}/unarchive` | `project.unarchive` |
 | projects | `POST /standing-rules` | `standing_rule.create`（人の決定で CoS にも許可） |
 | projects | `DELETE /standing-rules/{id}` | `standing_rule.delete` |
+| projects | `POST /reports/read` | `report.read`（対応する通知も同じ transaction で既読） |
+| projects | `POST /reports/notified` | `report.notified`（API のメモリの通知時刻。再送では進めない） |
 | admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
 | admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
 | admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |

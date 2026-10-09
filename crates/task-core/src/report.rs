@@ -857,16 +857,9 @@ impl ReportStore for SqliteStore {
         if ids.is_empty() {
             return Ok(0);
         }
-        let ts = format_rfc3339(at)?;
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let mut changed = 0usize;
-        for id in ids {
-            changed += tx.execute(
-                "UPDATE reports SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL",
-                params![id.to_string(), ts],
-            )?;
-        }
+        let changed = SqliteStore::report_mark_read_tx(&tx, ids, at)?;
         tx.commit()?;
         Ok(changed)
     }
@@ -909,3 +902,22 @@ impl ReportStore for SqliteStore {
 #[cfg(test)]
 #[path = "report/tests.rs"]
 mod tests;
+
+impl SqliteStore {
+    /// `report_mark_read` on a caller-owned transaction (ADR 2026-10-09-cos-operations-all-mutations D3).
+    pub fn report_mark_read_tx(
+        conn: &rusqlite::Connection,
+        ids: &[ReportId],
+        at: OffsetDateTime,
+    ) -> Result<usize, StoreError> {
+        let ts = format_rfc3339(at)?;
+        let mut changed = 0usize;
+        for id in ids {
+            changed += conn.execute(
+                "UPDATE reports SET read_at = ?2 WHERE id = ?1 AND read_at IS NULL",
+                params![id.to_string(), ts],
+            )?;
+        }
+        Ok(changed)
+    }
+}

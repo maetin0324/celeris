@@ -51,8 +51,18 @@ API に `create_standing_rule_op`・`delete_standing_rule_op`（handler と共�
 （run の TMPDIR 93 文字で Unix socket path 上限）で、短い TMPDIR で `--test browser_e2e --test browser_waits` を流すと
 10 passed。clippy（task-core・task-api all-targets）成功。
 
+## reports 2 route（完了）
+
+`POST /reports/read`（`report.read`、B）: task-core に `report_mark_read_tx` を足し、報告と対応する通知
+（`notice_mark_ids_read_tx`）を監査と同じ transaction で既読にする。handler と `mark_read_op` を共有。
+`POST /reports/notified`（`report.notified`）: 効果は API process のメモリの通知時刻（DB 列なし）。`DispatchEnv` に
+`api: ApiState` を足し、`audit.apply` の closure の中で進める（同じ key の再送は closure を走らせないので進めない）。
+
+検証: `cargo nextest run -p task-api --test reports --test inbox_notifications --test cos_ops_registry --test cos_operations`
+→ 23 passed、`cos_ops_projects_cron` 6 passed、clippy 成功。
+
 ## 残り
 
-- projects PENDING 7: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
-  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）、`POST /reports/{notified,read}`
+- projects PENDING 5: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
+  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）
 - tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

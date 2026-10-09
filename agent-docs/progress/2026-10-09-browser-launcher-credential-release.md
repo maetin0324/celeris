@@ -92,10 +92,10 @@ ADR 付記の確認: final review 差し戻し 2 件に対応する日付付き�
 
 ## 最終検証（final-record）
 
-最終 HEAD `fbbfb2d7e1e9b501ef13b03b65ce96be7282ed68` での検査結果（詳細は [final-record.md](2026-10-09-browser-launcher-credential-release/final-record.md)）。
+最終 HEAD `87f8b8a5257cdb3b2d9959499616d7261b81ccc6` の検査記録は [final-record.md](2026-10-09-browser-launcher-credential-release/final-record.md) にある。
 
 - `bash scripts/dev/test-parallel.sh`: exit 0, passed 4986, failed 0
 - `cargo clippy --workspace -- -D warnings`: exit 0
 - `cargo fmt --all -- --check`: exit 0
 
-未解決事項: host の必須モード実証（stutter 3 回）、merge 後 HEAD での `ADMISSION[real-session]` 再取得、本番での解放は運用セッションの作業として未実施。
+未解決事項: host の必須モード実証（stutter 3 回）と `ADMISSION[real-session]` の再取得、本番での解放は運用セッションの作業として未実施。

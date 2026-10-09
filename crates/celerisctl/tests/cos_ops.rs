@@ -149,7 +149,13 @@ fn cos_chat_ops_ctl_reason_and_policy_can_come_from_environment() {
 #[test]
 fn cos_chat_ops_ctl_unsupported_db_mutation_is_rejected_before_db_open() {
     let out = Command::new(env!("CARGO_BIN_EXE_celerisctl"))
-        .args(["--db", "/a/nonexistent/celeris.sqlite3", "rereview", "01ABC"])
+        .args([
+            "--db",
+            "/a/nonexistent/celeris.sqlite3",
+            "knowledge",
+            "rerun",
+            "01ABC",
+        ])
         .env("CELERIS_COS_RUN_CREDENTIAL", "celeris-cos-run.test")
         .output()
         .unwrap();

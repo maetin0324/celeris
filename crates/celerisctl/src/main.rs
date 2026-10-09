@@ -343,6 +343,7 @@ fn cos_mapped(
         )),
         Command::Accept(args) => Some(("POST", task_path(&args.id, "/accept")?, json!({}))),
         Command::Cancel(args) => Some(("POST", task_path(&args.id, "/cancel")?, json!({}))),
+        Command::Rereview(args) => Some(("POST", task_path(&args.id, "/rereview")?, json!({}))),
         Command::Answer(args) => Some((
             "POST",
             task_path(&args.id, "/answer")?,
@@ -862,7 +863,7 @@ mod cos_mapping_tests {
                 .is_none()
         );
         assert!(
-            cos_mapped(&parse(&["rereview", &id.to_string()]))
+            cos_mapped(&parse(&["knowledge", "reindex"]))
                 .expect("map")
                 .is_none()
         );
@@ -872,6 +873,7 @@ mod cos_mapping_tests {
             ("reject", "/reject"),
             ("accept", "/accept"),
             ("cancel", "/cancel"),
+            ("rereview", "/rereview"),
         ] {
             let (method, path, _) = cos_mapped(&parse(&[verb, &id.to_string()]))
                 .expect("map")

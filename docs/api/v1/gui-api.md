@@ -3451,6 +3451,16 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | tasks | `POST /tasks` | `task.create` |
 | tasks | `POST /tasks/{id}/changes/{repo}/integrate` | `task.integrate`（外部効果: git・GitHub。pending → applied。`default_branch_busy` は変更前の拒否で `rejected`） |
 | tasks | `POST /tasks/{id}/changes/{repo}/pr/merge` | `task.pr_merge`（外部効果。`gh pr merge` の失敗は取り込み記録の `failed` として applied） |
+| tasks | `POST /tasks/{id}/approve` | `task.approve` |
+| tasks | `POST /tasks/{id}/reject` | `task.reject` |
+| tasks | `POST /tasks/{id}/accept` | `task.accept` |
+| tasks | `POST /tasks/{id}/cancel` | `task.cancel` |
+| tasks | `POST /tasks/{id}/rereview` | `task.rereview` |
+| tasks | `POST /tasks/{id}/execution-plan` | `execution.plan_adopt` |
+| tasks | `POST /tasks/{id}/tree/adopt` | `tree.adopt` |
+| tasks | `POST /tasks/{id}/execution/decompose` | `execution.decompose` |
+| decisions | `POST /notifications/{id}/read` | `notification.read` |
+| decisions | `POST /notifications/read-all` | `notification.read_all` |
 | tasks | `POST /tasks/{id}/comments` | `comment.create` |
 | tasks | `POST /tasks/{id}/answer` | `question.answer` |
 | tasks | `POST /tasks/{id}/execution/phase-gate` | `execution.phase_gate` |
@@ -3460,7 +3470,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | tasks | `POST /tasks/{id}/retry` | `task.retry`（`result.new_task_id`） |
 | tasks | `POST /tasks/{id}/pause` | `task.pause` |
 | tasks | `POST /tasks/{id}/resume` | `task.resume` |
-| tasks | `PUT /tasks/{id}/execution-plan` | `execution.put_plan`（active な計画の replan だけ。計画が無い task への初回採用は `execution.adopt_plan` と同じく登録待ちで 422） |
+| tasks | `PUT /tasks/{id}/execution-plan` | `execution.put_plan`（active な計画の replan だけ。計画が無い task への初回採用は `POST …/execution-plan`（`execution.plan_adopt`）） |
 | decisions | `POST /decisions/{id}/answer` | `decision.answer` |
 | decisions | `POST /decisions/{id}/revise` | `decision.revise` |
 | decisions | `POST /decisions/{id}/withdraw` | `decision.withdraw` |
@@ -3487,6 +3497,35 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | projects | `POST /projects/{id}/docs/maintenance` | `docs.maintenance`（記録の action は `docs.maintenance_<op>`。apply 後の失敗 `docs_maintenance_partial` は pending のまま人の確認へ） |
 | admin | `PUT /llm/models/assignments/{source}/{tier}` | `model_assignment.put`（actor `cos`） |
 | admin | `DELETE /llm/models/assignments/{source}/{tier}` | `model_assignment.delete`（無ければ 404） |
+| admin | `POST /llm/models/assignments/preview` | `model_assignment.preview`（書き込まない。影響を `result` に記録） |
+| admin | `PUT /llm/models/assignments/roles/{tier}` | `model_role.replace`（構成員の丸ごと置き換え。`updated_by = cos`） |
+| admin | `POST /llm/models/assignments/roles/{tier}/preview` | `model_role.preview`（書き込まない） |
+| admin | `PUT /llm/models/{source}/{model_id}/override` | `model_override.put` |
+| admin | `DELETE /llm/models/{source}/{model_id}/override` | `model_override.delete`（無ければ 404） |
+| admin | `POST /llm/models/discover` | `model_catalog.discover`（外部効果: daemon の発見 hook を 1 回） |
+| admin | `POST /org` | `org.create` |
+| admin | `PATCH /org/{id}` | `org.update`（browser grant が変われば `org_browser_events` に actor `cos`） |
+| admin | `DELETE /org/{id}` | `org.delete`（未終了 task・子ノードがあれば 409） |
+| admin | `PATCH /org/{id}/browser-settings` | `org.browser_settings`（actor `cos` の browser 設定監査行も同じ transaction） |
+| admin | `POST /org/{id}/skills` | `org.skill_mount` |
+| admin | `DELETE /org/{id}/skills/{skill}` | `org.skill_unmount` |
+| admin | `PUT /skills/{name}` | `skill.put`（外部効果: KB の git。入力の誤りは `rejected`、I/O 失敗は pending） |
+| admin | `DELETE /skills/{name}` | `skill.delete`（外部効果。mount 中は 409） |
+| admin | `POST /projects/{id}/repos` | `repo.create` |
+| admin | `PATCH /repos/{id}` | `repo.update` |
+| admin | `DELETE /repos/{id}` | `repo.delete`（未終了 task が使っていれば 409） |
+| admin | `PUT /clusters/{id}/settings` | `cluster.settings_put` |
+| admin | `POST /providers` | `provider.create`（`providers.d` の file 書き込みを監査 transaction の最後に行う。`env` に秘密の値があれば 422 `secret_operations`、本文は記録しない） |
+| admin | `PATCH /providers/{id}` | `provider.update`（同上） |
+| admin | `DELETE /providers/{id}` | `provider.delete` |
+| admin | `POST /providers/{id}/check` | `provider.check`（外部効果: daemon channel） |
+| admin | `POST /accounts` | `account.create`（ディレクトリ作成を監査 transaction の最後に行う） |
+| admin | `DELETE /accounts/{id}` | `account.delete`（外部効果: daemon が退避する。`?adapter=` の代わりに body `{"adapter"}`） |
+| admin | `POST /accounts/{id}/check` | `account.check`（外部効果。body `{"adapter"}` 任意） |
+| admin | `POST /notify/test` | `notify.test`（外部効果: Discord に 1 通） |
+| admin | `POST /reload` | `daemon.reload`（外部効果。設定の誤りは 400 で `rejected`） |
+| admin | `POST /replay` | `daemon.replay`（同時に 1 つ。実行中は 409） |
+| admin | `POST /releases/{sha12}/promote` | `release.promote`（人の決定で許可。外部効果: `promote.sh` の起動。昇格できない release は 409 で `rejected`） |
 | admin | `POST /cron-jobs` | `cron_job.create`（名前の重複は 409） |
 | admin | `PATCH /cron-jobs/{id}` | `cron_job.update` |
 | admin | `DELETE /cron-jobs/{id}` | `cron_job.delete` |
@@ -3495,7 +3534,7 @@ registry は `crates/task-api/src/cos/ops/{tasks,decisions,projects,admin,surfac
 | admin | `POST /cron-jobs/{id}/run` | `cron_job.run`（外部効果の手順。`pending` を先に記録して 1 回だけ実行し `applied`。同じ key の再送は記録を返し再実行しない） |
 | surface | `POST /chat/attachments/{id}/references` | `attachment.reference` |
 
-tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
+tasks の実行計画初回採用 `POST /api/v1/tasks/{id}/execution-plan`（`execution.plan_adopt`）と既存計画への late tree adoption `POST /api/v1/tasks/{id}/tree/adopt`（`tree.adopt`）も登録済み。両方とも domain write と operation audit を同一 transaction で commit する。CoS credential での `celerisctl execution plan set` と `celerisctl tree adopt` はこれらの operation 経由で送る。CoS credential の `celerisctl cron create|update|pause|resume|run` は `cron_job.*` を送る。`celerisctl models discover|assign|unassign` は `model_catalog.discover`・`model_assignment.*`、`celerisctl replay`（`--check`/`--apply` なし）は `daemon.replay`、`celerisctl approve|reject|accept|cancel|rereview` は `task.*` を送る。daemon channel（reload・check・account 退避・notify test）・発見・release 昇格・skill の KB 書き込みも外部効果の手順で記録する。task の取り込み（integrate）と PR merge、案件の文書、KB ページの編集、定期実行の手動実行は外部効果の手順（ADR 2026-10-09-cos-operations-external-effects: pending を先に記録し 1 回だけ実行、再送は再実行しない、変更前の拒否は `rejected`、結果不明は pending のまま起動時に `needs_remediation`）で記録する。
 
 除外（422 `cos_operation_not_allowed`、detail に理由コード）: 秘密の値を扱う操作（`secret_operations`。`/secrets/*`・
 `/accounts/{id}/login*`・`/clusters/{id}/connect*`）、browser の credential/attestation 系

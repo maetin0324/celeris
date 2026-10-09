@@ -267,7 +267,10 @@ async fn cos_ops_projects_cron_project_lifecycle_is_audited() {
     )
     .await;
     assert_eq!(project(&env, id).status, ProjectStatus::Cancelled);
-    assert_eq!(op["result"]["cancelled_tasks"], json!([open.id.to_string()]));
+    assert_eq!(
+        op["result"]["cancelled_tasks"],
+        json!([open.id.to_string()])
+    );
     let task = env.store.get(open.id).expect("get").expect("task");
     assert_eq!(task.status, Status::Cancelled);
 
@@ -317,4 +320,52 @@ async fn cos_ops_projects_cron_project_lifecycle_is_audited() {
         )
         .expect("count");
     assert_eq!(rejected, 1);
+}
+
+#[tokio::test]
+async fn cos_ops_projects_cron_standing_rules_are_audited() {
+    use task_core::ApprovalStore;
+    let env = admin_env();
+    let op = run_domain(
+        &env,
+        "rule-create",
+        "POST",
+        "/api/v1/standing-rules",
+        json!({"rule": "cluster への読み取りは許可", "node_id": "software-engineering"}),
+        "standing_rule.create",
+    )
+    .await;
+    let rules = env.store.standing_rule_list(None).expect("list");
+    assert_eq!(rules.len(), 1);
+    let id = rules[0].id.to_string();
+    assert_eq!(op["target_id"], id.as_str());
+    assert_eq!(rules[0].node_id.as_deref(), Some("software-engineering"));
+
+    run_domain(
+        &env,
+        "rule-delete",
+        "DELETE",
+        &format!("/api/v1/standing-rules/{id}"),
+        json!(null),
+        "standing_rule.delete",
+    )
+    .await;
+    assert!(env.store.standing_rule_list(None).expect("list").is_empty());
+
+    let (_, _, bearer) = cos_bearer(&env, "rule-missing");
+    let resp = send(
+        &env.router(),
+        post_json_with(
+            OPS,
+            &op_body(
+                "missing",
+                "DELETE",
+                &format!("/api/v1/standing-rules/{id}"),
+                json!(null),
+            ),
+            &[("authorization", bearer.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(resp.status.as_u16(), 404, "{}", resp.text());
 }

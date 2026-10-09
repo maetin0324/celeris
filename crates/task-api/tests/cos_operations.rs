@@ -505,9 +505,11 @@ async fn cos_chat_ops_api_rejects_unregistered_operations_regardless_of_skill() 
     let app = env.router();
     let (_thread, _run, bearer) = cos_bearer(&env, "noskill");
     let cases = [
-        ("cron", "POST", "/api/v1/cron-jobs"),
-        ("project-pause", "POST", "/api/v1/projects/p1/pause"),
-        ("standing", "POST", "/api/v1/standing-rules"),
+        // Excluded by the human decision, and paths no registry knows (cron, project lifecycle and
+        // standing rules are registered since ADR 2026-10-09-cos-operations-all-mutations D3).
+        ("console", "POST", "/api/v1/console/instruct"),
+        ("secret", "PUT", "/api/v1/secrets/s1"),
+        ("unknown", "POST", "/api/v1/no-such-route"),
     ];
     for (key, method, path) in cases {
         let resp = post_op(&app, &bearer, &op_body(key, method, path, json!({}))).await;

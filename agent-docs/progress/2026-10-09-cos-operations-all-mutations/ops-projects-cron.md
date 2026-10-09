@@ -40,8 +40,19 @@ handler と CoS は `lifecycle::project_action_op` を共有。celerisctl の `p
 検証: `cargo nextest run -p task-api --test cos_ops_registry --test lifecycle --test cos_operations_domains --test cos_ops_projects_cron`
 → 21 passed、`cargo nextest run -p task-ops lifecycle` → 10 passed、task-api lib cos 4 passed、clippy（3 crate all-targets）成功。
 
+## standing-rules 2 route（完了）
+
+人の決定（standing-rules の作成・削除を CoS にも許す）どおり `POST /standing-rules`（`standing_rule.create`）と
+`DELETE /standing-rules/{id}`（`standing_rule.delete`）を B で登録。task-core に `standing_rule_delete_tx`、
+API に `create_standing_rule_op`・`delete_standing_rule_op`（handler と共有）。`cos_operations.rs` の「未登録は拒否」
+試験は登録済みになった cron・project pause・standing-rules から、除外（console/instruct・secrets）と未知 path に差し替えた。
+
+検証: `cargo nextest run -p task-api` → 631 中 626 passed。落ちた 5 件は browser_e2e/browser_waits の fixture 待ち
+（run の TMPDIR 93 文字で Unix socket path 上限）で、短い TMPDIR で `--test browser_e2e --test browser_waits` を流すと
+10 passed。clippy（task-core・task-api all-targets）成功。
+
 ## 残り
 
-- projects PENDING 9: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
-  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）、`POST /reports/{notified,read}`、`POST /standing-rules`、`DELETE /standing-rules/{id}`
+- projects PENDING 7: `POST /projects`、`/projects/{id}/docs/{init,maintenance}`、
+  `PUT|DELETE /projects/{id}/docs/page`（KB/git は C）、`POST /reports/{notified,read}`
 - tasks の C: `POST /tasks/{id}/changes/{repo}/integrate`、`/pr/merge`。decisions の C: `PUT /knowledge/page`

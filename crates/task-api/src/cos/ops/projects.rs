@@ -19,6 +19,12 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/projects/{id}/unarchive",
         "project.unarchive",
     ),
+    ("POST", "/api/v1/standing-rules", "standing_rule.create"),
+    (
+        "DELETE",
+        "/api/v1/standing-rules/{id}",
+        "standing_rule.delete",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -74,8 +80,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("PUT", "/api/v1/projects/{id}/docs/page"),
     ("POST", "/api/v1/reports/notified"),
     ("POST", "/api/v1/reports/read"),
-    ("POST", "/api/v1/standing-rules"),
-    ("DELETE", "/api/v1/standing-rules/{id}"),
 ];
 
 pub(crate) fn dispatch(
@@ -115,6 +119,22 @@ pub(crate) fn dispatch(
                 store,
                 id,
                 action,
+                Some(audit),
+            )?)
+        }
+        "standing_rule.create" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::approvals::create_standing_rule_op(
+                store,
+                input,
+                Some(audit),
+            )?)
+        }
+        "standing_rule.delete" => {
+            let crate::lifecycle::EmptyBody {} = decode_optional(body).map_err(decode)?;
+            audited(crate::approvals::delete_standing_rule_op(
+                store,
+                &matched.id.unwrap_or_default(),
                 Some(audit),
             )?)
         }

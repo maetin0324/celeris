@@ -262,6 +262,91 @@ pub(crate) async fn list_standing_rules(
     Ok(json_response(StatusCode::OK, &StandingRuleList { items }))
 }
 
+/// `POST /standing-rules` shared by the handler and `/cos/operations` (`standing_rule.create`,
+/// 人の決定で CoS にも許可。ADR 2026-10-09-cos-operations-all-mutations D3).
+pub(crate) fn create_standing_rule_op(
+    store: &SqliteStore,
+    payload: StandingRuleCreateBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<StandingRule>, ApiProblem> {
+    if payload.rule.trim().is_empty() {
+        let problem = ApiProblem::validation(vec![crate::types::ValidationError {
+            field: Some("rule".to_string()),
+            message: "rule must not be blank".to_string(),
+        }]);
+        return Err(match audit {
+            Some(audit) => audit.reject(store, "standing_rule", "-", problem),
+            None => problem,
+        });
+    }
+    let rule = StandingRule {
+        id: StandingRuleId::new(),
+        node_id: payload.node_id,
+        rule: payload.rule,
+        created_at: OffsetDateTime::now_utc(),
+    };
+    let Some(audit) = audit else {
+        store.standing_rule_append(&rule).map_err(store_problem)?;
+        return Ok(Applied::Direct(rule));
+    };
+    let target_id = rule.id.to_string();
+    let operation = audit.apply(
+        store,
+        "standing_rule",
+        &target_id,
+        "standing_rule.create",
+        |tx| {
+            SqliteStore::standing_rule_append_tx(tx, &rule)?;
+            Ok(serde_json::json!({"standing_rule": serde_json::to_value(&rule)?}))
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
+/// `DELETE /standing-rules/{id}` shared by the handler and `/cos/operations` (`standing_rule.delete`).
+pub(crate) fn delete_standing_rule_op(
+    store: &SqliteStore,
+    raw_id: &str,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<StandingRuleId>, ApiProblem> {
+    let reject = |problem| match audit {
+        Some(audit) => audit.reject(store, "standing_rule", raw_id, problem),
+        None => problem,
+    };
+    let rule_id = parse_standing_rule_id(raw_id).map_err(reject)?;
+    let Some(audit) = audit else {
+        if !store.standing_rule_delete(rule_id).map_err(store_problem)? {
+            return Err(standing_rule_not_found(&rule_id.to_string()));
+        }
+        return Ok(Applied::Direct(rule_id));
+    };
+    let exists = store
+        .standing_rule_list(None)
+        .map_err(|e| reject(store_problem(e)))?
+        .iter()
+        .any(|rule| rule.id == rule_id);
+    if !exists {
+        return Err(reject(standing_rule_not_found(raw_id)));
+    }
+    let target_id = rule_id.to_string();
+    let operation = audit.apply(
+        store,
+        "standing_rule",
+        &target_id,
+        "standing_rule.delete",
+        |tx| {
+            if !SqliteStore::standing_rule_delete_tx(tx, rule_id)? {
+                return Err(task_core::chat::ChatError::NotFound {
+                    kind: "standing_rule",
+                    id: target_id.clone(),
+                });
+            }
+            Ok(serde_json::json!({"standing_rule_id": target_id}))
+        },
+    )?;
+    Ok(Applied::Audited(Box::new(operation)))
+}
+
 pub(crate) async fn create_standing_rule(
     State(state): State<ApiState>,
     headers: HeaderMap,
@@ -271,23 +356,8 @@ pub(crate) async fn create_standing_rule(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let payload: StandingRuleCreateBody = read_json(body, false).await?;
-    if payload.rule.trim().is_empty() {
-        return Err(ApiProblem::validation(vec![
-            crate::types::ValidationError {
-                field: Some("rule".to_string()),
-                message: "rule must not be blank".to_string(),
-            },
-        ]));
-    }
-    let rule = StandingRule {
-        id: StandingRuleId::new(),
-        node_id: payload.node_id,
-        rule: payload.rule,
-        created_at: OffsetDateTime::now_utc(),
-    };
-    let created = rule.clone();
-    state
-        .blocking(move |store| store.standing_rule_append(&rule).map_err(store_problem))
+    let created = state
+        .blocking(move |store| create_standing_rule_op(store, payload, None)?.direct())
         .await?;
     tracing::info!(
         who = "admin",
@@ -307,16 +377,10 @@ pub(crate) async fn delete_standing_rule(
 ) -> ApiResult {
     no_query(&raw)?;
     require_admin(&state, &headers)?;
-    let rule_id = parse_standing_rule_id(&id)?;
-    state
-        .blocking(move |store| {
-            if !store.standing_rule_delete(rule_id).map_err(store_problem)? {
-                return Err(standing_rule_not_found(&rule_id.to_string()));
-            }
-            tracing::info!(who = "admin", op = "standing_rule_delete", standing_rule_id = %rule_id, "admin: standing rule deleted");
-            Ok(())
-        })
+    let rule_id = state
+        .blocking(move |store| delete_standing_rule_op(store, &id, None)?.direct())
         .await?;
+    tracing::info!(who = "admin", op = "standing_rule_delete", standing_rule_id = %rule_id, "admin: standing rule deleted");
     Ok(axum::response::IntoResponse::into_response(
         StatusCode::NO_CONTENT,
     ))

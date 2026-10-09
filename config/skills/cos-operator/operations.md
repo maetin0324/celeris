@@ -73,6 +73,8 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 案件の再開 | `POST /api/v1/projects/<id>/resume` | project.resume | body は `{}`。停止中でなければ 409 |
 | 案件のアーカイブ | `POST /api/v1/projects/<id>/archive` | project.archive | body は `{}`。終端の案件だけ |
 | アーカイブの解除 | `POST /api/v1/projects/<id>/unarchive` | project.unarchive | body は `{}` |
+| 永続の認可の追加 | `POST /api/v1/standing-rules` | standing_rule.create | `{"rule":"…","node_id":"…"}`（node_id 省略で全員向け）。人の決定で CoS にも許可 |
+| 永続の認可の削除 | `DELETE /api/v1/standing-rules/<id>` | standing_rule.delete | body なし。無ければ 404 |
 
 ### admin
 
@@ -101,7 +103,7 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
 - **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。領域別に実装中）**: 上の表に無い変更操作
-  （例: task の integrate・PR merge、案件・永続の認可（`/standing-rules`）・org・provider・release promote・
+  （例: task の integrate・PR merge、案件の作成・docs・org・provider・release promote・
   `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
   一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 

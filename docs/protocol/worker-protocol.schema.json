@@ -219,6 +219,17 @@
           "description": "Celeris already logged in with an approved credential in this session. Observation\nactions are off until the session ends.",
           "type": "boolean"
         },
+        "post_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostLoginRead"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "ADR 2026-10-09 credential username / post-login D2-5: after the login the auth section\nclosed on the post-login conditions; these origins and actions are readable."
+        },
         "run": {
           "$ref": "#/$defs/BrowserRun"
         }
@@ -2323,6 +2334,28 @@
           "type": "string"
         }
       ]
+    },
+    "PostLoginRead": {
+      "description": "ADR 2026-10-09 credential username / post-login D2-1・D2-5: what the agent may read after the\nlogin of an opted-in site. `read_origins` is the site policy's list narrowed to the task's\nallowed domains, `actions` the shim verbs of `post_login.actions` that the task policy (task ∩\ngrant) allows. Either empty means no opt-in (H3 until the session ends).",
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "read_origins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "read_origins",
+        "actions"
+      ],
+      "type": "object"
     },
     "PriorReview": {
       "description": "直前のレビュー結果（`context.prior_review[]`）。",

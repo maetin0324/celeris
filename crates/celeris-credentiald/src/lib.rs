@@ -106,6 +106,12 @@ pub fn canonical_origin(input: &str) -> Result<String, Error> {
         format!("https://{host}:{port}")
     })
 }
+/// lease の policy 断面が持つ trusted selector（照合 4b）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LeaseSelectors {
+    pub(crate) password: Option<String>,
+    pub(crate) username: Option<String>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CredentialRef {
@@ -133,6 +139,13 @@ pub struct CredentialPolicy {
     /// 管理者が設定する任意の submit selector（同じ文法）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_selector: Option<String>,
+    /// ADR 2026-10-09 credential username / post-login D1: 管理者が設定する username 欄の selector。
+    /// あれば注入要求は username 欄を伴わなければならない（照合 4b）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_selector: Option<String>,
+    /// 同 D2: ログイン後の読み取りの opt-in（承認画面・TrustedLogin に写すだけで、broker は使わない）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_login: Option<task_core::browser_wait::PostLogin>,
 }
 impl CredentialPolicy {
     /// 注入に使える管理者の password selector（`login_url` と揃っているときだけ）。
@@ -140,14 +153,24 @@ impl CredentialPolicy {
         self.login_url.as_ref()?;
         self.password_selector.as_deref()
     }
+    /// 注入に使える管理者の username selector（`login_url` と password selector が揃っているときだけ）。
+    pub fn trusted_username_selector(&self) -> Option<&str> {
+        self.trusted_password_selector()?;
+        self.username_selector.as_deref()
+    }
     pub fn validate(&self) -> Result<(), Error> {
         match (&self.login_url, &self.password_selector) {
-            (None, None) if self.submit_selector.is_none() => {}
-            (Some(url), Some(password)) => task_core::browser_wait::validate_trusted_login(
+            (None, None)
+                if self.submit_selector.is_none()
+                    && self.username_selector.is_none()
+                    && self.post_login.is_none() => {}
+            (Some(url), Some(password)) => task_core::browser_wait::validate_trusted_login_full(
                 url,
                 &self.exact_origin,
                 password,
                 self.submit_selector.as_deref(),
+                self.username_selector.as_deref(),
+                self.post_login.as_ref(),
             )
             .map_err(|_| Error::Invalid)?,
             _ => return Err(Error::Invalid),
@@ -312,6 +335,10 @@ struct Stored {
     password_selector: Option<String>,
     #[serde(default)]
     submit_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    username_selector: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    post_login: Option<task_core::browser_wait::PostLogin>,
     nonce: String,
     ciphertext: String,
     tag: String,
@@ -407,6 +434,8 @@ impl ManualProvider {
             login_url: policy.login_url.clone(),
             password_selector: policy.password_selector.clone(),
             submit_selector: policy.submit_selector.clone(),
+            username_selector: policy.username_selector.clone(),
+            post_login: policy.post_login.clone(),
             nonce: String::new(),
             ciphertext: String::new(),
             tag: String::new(),
@@ -479,11 +508,13 @@ impl ManualProvider {
         }
         let login_url = s.login_url.ok_or(Error::Denied)?;
         let password_selector = s.password_selector.ok_or(Error::Denied)?;
-        task_core::browser_wait::validate_trusted_login(
+        task_core::browser_wait::validate_trusted_login_full(
             &login_url,
             origin,
             &password_selector,
             s.submit_selector.as_deref(),
+            s.username_selector.as_deref(),
+            s.post_login.as_ref(),
         )
         .map_err(|_| Error::Invalid)?;
         Ok(task_core::browser_wait::TrustedLogin {
@@ -492,6 +523,8 @@ impl ManualProvider {
             login_url,
             password_selector,
             submit_selector: s.submit_selector,
+            username_selector: s.username_selector,
+            post_login: s.post_login,
         })
     }
     pub fn resolve_registered(
@@ -775,6 +808,8 @@ impl Broker {
                 || Some(&stored.login_url) != req.policy.login_url.as_ref()
                 || Some(&stored.password_selector) != req.policy.password_selector.as_ref()
                 || stored.submit_selector != req.policy.submit_selector
+                || stored.username_selector != req.policy.username_selector
+                || stored.post_login != req.policy.post_login
             {
                 return Err(Error::Denied);
             }
@@ -984,18 +1019,17 @@ impl Broker {
     pub fn provider(&self) -> &ManualProvider {
         &self.manual
     }
-    /// ADR-0110 D2 照合 3: lease が保持する policy 断面の trusted password selector を消費せずに読む。
+    /// ADR-0110 D2 照合 3: lease が保持する policy 断面の trusted password selector と（ADR 2026-10-09
+    /// credential username / post-login D1-3）username selector を消費せずに読む。
     /// lease が無ければ `None`（その拒否は消費の段で出す）。
-    pub(crate) fn lease_trusted_selector(&self, lease_id: &str) -> Option<Option<String>> {
+    pub(crate) fn lease_trusted_selector(&self, lease_id: &str) -> Option<LeaseSelectors> {
         let s = self.state.lock().ok()?;
         let lease = s.leases.get(lease_id)?;
-        Some(
-            lease
-                .request
-                .policy
-                .trusted_password_selector()
-                .map(str::to_owned),
-        )
+        let policy = &lease.request.policy;
+        Some(LeaseSelectors {
+            password: policy.trusted_password_selector().map(str::to_owned),
+            username: policy.trusted_username_selector().map(str::to_owned),
+        })
     }
     /// ADR-0109 D3 step 5: the trusted-injection path consumes a lease without a
     /// plugin binding. Same lease checks as [`Broker::resolve`]; the durable

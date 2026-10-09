@@ -219,6 +219,8 @@ fn grant(root: &tempfile::TempDir) -> String {
         login_url: Some(format!("{ORIGIN}/login")),
         password_selector: Some("#pass".into()),
         submit_selector: None,
+        username_selector: None,
+        post_login: None,
     };
     let reference = CredentialRef {
         credential_id: "login-1".into(),
@@ -418,6 +420,7 @@ fn inner() {
         field: "password".into(),
         auth_section_id: "auth-1".into(),
         lease_id: "lease-1".into(),
+        username_selector: None,
     };
     let mut broker = UnixInjectionClient::new(
         broker_dir

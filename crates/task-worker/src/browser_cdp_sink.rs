@@ -15,7 +15,7 @@ use std::time::Duration;
 use celeris_credentiald::injection::RedisplayGuard;
 use celeris_credentiald::injection_ipc::{
     AuthSectionRegistration, Field, InjectionReply, InjectionRequest as WireRequest,
-    LiveSessionRegistration,
+    LiveSessionRegistration, PAIR_REQUEST_VERSION, UsernameTarget,
 };
 use celeris_credentiald::ipc;
 use serde_json::{Value, json};
@@ -24,8 +24,22 @@ use zeroize::Zeroize;
 
 use crate::browser_relay;
 
+/// Bound on one broker sink frame (ADR-0109 D4).
 const MAX_FRAME: usize = 65536;
+/// Bound on one CDP message read from the browser pipe. Screenshots and large DOM/AX trees are
+/// single messages well above the sink bound (ADR 2026-10-09 credential username / post-login D2-6).
+const MAX_CDP_MESSAGE: usize = 64 << 20;
 const TIMEOUT: Duration = Duration::from_secs(5);
+/// Isolated world for the controller's own post-login checks (never visible to the agent).
+const CHECK_WORLD: &str = "celeris-post-login";
+/// Counts `input[type=password]` in the document, its open shadow roots and same-origin frames.
+/// Runs in the controller's isolated world, so page script cannot replace the DOM accessors.
+const PASSWORD_COUNT_JS: &str = "(()=>{let n=0;const walk=(root,depth)=>{if(depth>8)return;\
+for(const e of root.querySelectorAll('*')){const tag=String(e.localName||'').toLowerCase();\
+if(tag==='input'&&String(e.type||'').toLowerCase()==='password')n++;\
+if(e.shadowRoot)walk(e.shadowRoot,depth+1);\
+if(tag==='iframe'||tag==='frame'){let d=null;try{d=e.contentDocument;}catch(_){}if(d)walk(d,depth+1);}}};\
+walk(document,0);return n;})()";
 /// Bound on events no agent connection has taken yet (oldest dropped first).
 const MAX_QUEUED_EVENTS: usize = 4096;
 
@@ -40,6 +54,13 @@ pub enum InjectionError {
     SinkFailed,
     /// ADR-0111: an agent observation re-displayed an injected value; it was discarded.
     RedisplayDetected,
+    /// ADR 2026-10-09 credential username / post-login D2-3: after login, the observed top
+    /// document is not on a `read_origins` origin (the IdP, another allowed domain, no target).
+    ObservationOriginDenied,
+    /// Same D2-3: the observed document (or a same-origin frame) has a password input.
+    PasswordFieldPresent,
+    /// Same D2-2: the auth section close conditions did not hold in time; observation stays stopped.
+    PostLoginUnconfirmed,
     BrokerRejected(&'static str),
 }
 
@@ -54,6 +75,9 @@ impl InjectionError {
             Self::TargetChanged => "target_changed",
             Self::SinkFailed => "sink_failed",
             Self::RedisplayDetected => "redisplay_detected",
+            Self::ObservationOriginDenied => "observation_origin_denied",
+            Self::PasswordFieldPresent => "password_field_present",
+            Self::PostLoginUnconfirmed => "post_login_unconfirmed",
             Self::BrokerRejected(code) => code,
         }
     }
@@ -74,6 +98,17 @@ pub struct InjectionRequest {
     pub field: String,
     pub auth_section_id: String,
     pub lease_id: String,
+    /// ADR 2026-10-09 credential username / post-login D1-4: the administrator's username selector,
+    /// resolved on the same top document as the password field (only with `field = password`).
+    pub username_selector: Option<String>,
+}
+
+/// Whether the post-login close conditions hold now (ADR 2026-10-09 credential username /
+/// post-login D2-2). `Pending` keeps observation stopped; the caller retries until its deadline.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PostLoginCheck {
+    Ready,
+    Pending,
 }
 
 /// A completed broker call returns only a receipt. The FD carries the CDP
@@ -295,6 +330,20 @@ pub struct CdpController {
     login_navigation: Option<LoginNavigation>,
     /// ADR-0111: one guard per injected value, kept for the controller's (= session's) lifetime.
     guards: Vec<RedisplayGuard>,
+    /// ADR 2026-10-09 credential username / post-login D2: the `read_origins` once the auth
+    /// section closed on the post-login conditions. Every agent observation is checked against it.
+    post_login: Option<Vec<String>>,
+    /// Agent CDP session -> the target it attached to (recorded from the agent's own attach).
+    agent_targets: std::collections::HashMap<String, String>,
+    /// Target -> the controller's own flatten session used for post-login checks.
+    check_sessions: std::collections::HashMap<String, String>,
+    /// Controller-only sessions (login target, check sessions): their events are never queued.
+    private_sessions: std::collections::HashSet<String>,
+    /// Downloads that began outside `read_origins` (cancelled the moment they begin).
+    denied_downloads: std::collections::HashSet<String>,
+    /// A denied download completed before its cancel took effect: observation stops for the rest
+    /// of the session (fail closed; the file may already exist).
+    download_breach: bool,
     /// Test-only (ADR-0109 A1): navigate the page after all checks and before the
     /// broker's `Runtime.callFunctionOn` frame is written. Absent from production builds.
     #[cfg(feature = "attack-test-hooks")]
@@ -328,6 +377,12 @@ impl CdpController {
             events: Vec::new(),
             login_navigation: None,
             guards: Vec::new(),
+            post_login: None,
+            agent_targets: std::collections::HashMap::new(),
+            check_sessions: std::collections::HashMap::new(),
+            private_sessions: std::collections::HashSet::new(),
+            denied_downloads: std::collections::HashSet::new(),
+            download_breach: false,
             #[cfg(feature = "attack-test-hooks")]
             retarget_before_sink: None,
             #[cfg(feature = "attack-test-hooks")]
@@ -420,6 +475,7 @@ impl CdpController {
         session: &str,
         exact_origin: &str,
         selector: &str,
+        username_selector: Option<&str>,
     ) -> Result<Option<(String, String)>, InjectionError> {
         let tree = self.call("Page.getFrameTree", json!({}), Some(session))?;
         self.login_redirect_chain(exact_origin)?;
@@ -446,8 +502,17 @@ impl CdpController {
         let Some(context) = world["result"]["executionContextId"].as_i64() else {
             return Ok(None);
         };
+        // The username field (when the policy has one) must be on the same document: exactly one
+        // text/email input next to exactly one password input.
+        let user = match username_selector {
+            Some(u) => format!(
+                "const us=document.querySelectorAll({});if(us.length!==1||!(us[0] instanceof HTMLInputElement)||(us[0].type!=='text'&&us[0].type!=='email'))return false;",
+                serde_json::to_string(u).map_err(|_| InjectionError::TargetMismatch)?
+            ),
+            None => String::new(),
+        };
         let expr = format!(
-            "(()=>{{const es=document.querySelectorAll({});return es.length===1 && es[0] instanceof HTMLInputElement && es[0].type==='password';}})()",
+            "(()=>{{{user}const es=document.querySelectorAll({});return es.length===1 && es[0] instanceof HTMLInputElement && es[0].type==='password';}})()",
             serde_json::to_string(selector).map_err(|_| InjectionError::TargetMismatch)?
         );
         let ready = self.call(
@@ -503,7 +568,7 @@ impl CdpController {
 
     /// 認証区間中か、復元を受けた session か（どちらも agent の観測を止める）。
     pub fn observation_stopped(&self) -> bool {
-        self.auth_section.is_some() || self.restored
+        self.auth_section.is_some() || self.restored || self.download_breach
     }
 
     pub fn close_auth_section(&mut self) -> Result<(), InjectionError> {
@@ -527,13 +592,197 @@ impl CdpController {
         if self.observation_stopped() {
             return Err(InjectionError::AuthSectionRequired);
         }
+        // ADR 2026-10-09 credential username / post-login D2-3: after login every agent command on a
+        // page session that can read or act on the page is checked before it runs and its result is
+        // checked again before it crosses (the page may have navigated meanwhile).
+        let gated = self.post_login.is_some()
+            && session.is_some_and(|_| !post_login_control_method(method));
+        if gated && let Some(s) = session {
+            self.post_login_gate(s)?;
+        }
+        let attach_target = (method == "Target.attachToTarget")
+            .then(|| params["targetId"].as_str().map(str::to_owned))
+            .flatten();
         let reply = self.call(method, params, session)?;
+        if self.download_breach {
+            return Err(InjectionError::ObservationOriginDenied);
+        }
+        if let (Some(target), Some(agent_session)) =
+            (attach_target, reply["result"]["sessionId"].as_str())
+        {
+            self.agent_targets.insert(agent_session.to_owned(), target);
+        }
         if self.redisplayed(&reply) {
             // The whole observation is dropped; only the fixed reason crosses.
             drop(reply);
             return Err(InjectionError::RedisplayDetected);
         }
+        if gated && let Some(s) = session {
+            self.post_login_gate(s)?;
+        }
         Ok(reply)
+    }
+
+    /// Whether the session's auth section closed on the post-login conditions.
+    pub fn post_login_active(&self) -> bool {
+        self.post_login.is_some()
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-2: the auth section may close only when
+    /// the login tab (`own`) left the injected document (`login_loader`), its top document is on a
+    /// `read_origins` origin, and no password input remains. Nothing about the page crosses: the
+    /// result is a fixed state.
+    pub fn post_login_ready(
+        &mut self,
+        own: &str,
+        login_loader: &str,
+        read_origins: &[String],
+    ) -> Result<PostLoginCheck, InjectionError> {
+        if self.auth_section.is_none() || self.restored {
+            return Err(InjectionError::AuthSectionRequired);
+        }
+        let tree = self.call("Page.getFrameTree", json!({}), Some(own))?;
+        let frame = &tree["result"]["frameTree"]["frame"];
+        if frame["loaderId"].as_str().is_none_or(|l| l == login_loader) {
+            return Ok(PostLoginCheck::Pending);
+        }
+        let Some(top) = origin(frame["url"].as_str()) else {
+            return Ok(PostLoginCheck::Pending);
+        };
+        if !read_origins.contains(&top) {
+            return Ok(PostLoginCheck::Pending);
+        }
+        let Some(frame_id) = frame["id"].as_str().map(str::to_owned) else {
+            return Ok(PostLoginCheck::Pending);
+        };
+        match self.password_inputs(own, &frame_id) {
+            Ok(0) => {}
+            Ok(_) | Err(_) => return Ok(PostLoginCheck::Pending),
+        }
+        // The same document must still be the top document after the count.
+        let after = self.call("Page.getFrameTree", json!({}), Some(own))?;
+        if after["result"]["frameTree"]["frame"]["loaderId"] != frame["loaderId"] {
+            return Ok(PostLoginCheck::Pending);
+        }
+        Ok(PostLoginCheck::Ready)
+    }
+
+    /// Close the auth section after [`Self::post_login_ready`] returned `Ready`: clear injected values
+    /// (skipped when their document is gone), discard everything produced while stopped, and resume
+    /// agent observation under the post-login checks for the rest of the session. `own` (the login
+    /// tab's controller session) stays private: its events are never queued for the agent.
+    pub fn resume_after_login(
+        &mut self,
+        own: &str,
+        read_origins: Vec<String>,
+    ) -> Result<(), InjectionError> {
+        if self.auth_section.is_none() || self.restored || read_origins.is_empty() {
+            return Err(InjectionError::AuthSectionRequired);
+        }
+        self.clear_injected_values()?;
+        self.private_sessions.insert(own.to_owned());
+        self.pump_events()?;
+        self.events.clear();
+        self.post_login = Some(read_origins);
+        self.auth_section = None;
+        self.login_navigation = None;
+        Ok(())
+    }
+
+    /// The controller's own session on `target`, attached once (flatten) and kept private.
+    fn check_session(&mut self, target: &str) -> Result<String, InjectionError> {
+        if let Some(s) = self.check_sessions.get(target) {
+            return Ok(s.clone());
+        }
+        let attached = self.call(
+            "Target.attachToTarget",
+            json!({"targetId":target,"flatten":true}),
+            None,
+        )?;
+        let session = attached["result"]["sessionId"]
+            .as_str()
+            .ok_or(InjectionError::ObservationOriginDenied)?
+            .to_owned();
+        self.private_sessions.insert(session.clone());
+        self.check_sessions
+            .insert(target.to_owned(), session.clone());
+        Ok(session)
+    }
+
+    /// Number of password inputs in `frame_id`'s document (open shadow roots and same-origin frames
+    /// included), counted in the controller's isolated world on `session`.
+    fn password_inputs(&mut self, session: &str, frame_id: &str) -> Result<u64, InjectionError> {
+        let world = self.call(
+            "Page.createIsolatedWorld",
+            json!({"frameId":frame_id,"worldName":CHECK_WORLD}),
+            Some(session),
+        )?;
+        let context = world["result"]["executionContextId"]
+            .as_i64()
+            .ok_or(InjectionError::PasswordFieldPresent)?;
+        let counted = self.call(
+            "Runtime.evaluate",
+            json!({"expression":PASSWORD_COUNT_JS,"contextId":context,"returnByValue":true,"silent":true}),
+            Some(session),
+        )?;
+        counted["result"]["result"]["value"]
+            .as_u64()
+            .ok_or(InjectionError::PasswordFieldPresent)
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-3: the agent session's top document must be
+    /// on a `read_origins` origin (an empty `about:blank` tab carries no page data) and have no
+    /// password input. Any failure to check is a denial.
+    fn post_login_gate(&mut self, agent_session: &str) -> Result<(), InjectionError> {
+        let read_origins = self
+            .post_login
+            .clone()
+            .ok_or(InjectionError::AuthSectionRequired)?;
+        let target = self
+            .agent_targets
+            .get(agent_session)
+            .cloned()
+            .ok_or(InjectionError::ObservationOriginDenied)?;
+        let check = self
+            .check_session(&target)
+            .map_err(|_| InjectionError::ObservationOriginDenied)?;
+        let tree = self
+            .call("Page.getFrameTree", json!({}), Some(&check))
+            .map_err(|_| InjectionError::ObservationOriginDenied)?;
+        let frame = &tree["result"]["frameTree"]["frame"];
+        let url = frame["url"].as_str();
+        if url == Some("about:blank") && frame["childFrames"].is_null() {
+            return Ok(());
+        }
+        match origin(url) {
+            Some(o) if read_origins.contains(&o) => {}
+            _ => return Err(InjectionError::ObservationOriginDenied),
+        }
+        let frame_id = frame["id"]
+            .as_str()
+            .ok_or(InjectionError::ObservationOriginDenied)?
+            .to_owned();
+        match self.password_inputs(&check, &frame_id) {
+            Ok(0) => Ok(()),
+            _ => Err(InjectionError::PasswordFieldPresent),
+        }
+    }
+
+    /// Write a CDP command without waiting for its reply (the reply is dropped as unsolicited).
+    /// Used from the event path, where no call can be made. A failed write stops observation.
+    fn send_untracked(&mut self, method: &str, params: Value) {
+        let id = self.next_id;
+        self.next_id = self.next_id.saturating_add(1);
+        let sent = serde_json::to_vec(&json!({"id":id,"method":method,"params":params}))
+            .map(|mut bytes| {
+                bytes.push(0);
+                bytes
+            })
+            .ok()
+            .is_some_and(|bytes| self.write.write_all(&bytes).is_ok());
+        if !sent {
+            self.download_breach = true;
+        }
     }
 
     /// ADR-0111: whether an observation carries an injected value in any
@@ -676,18 +925,60 @@ impl CdpController {
         let object_id = resolved["result"]["object"]["objectId"]
             .as_str()
             .ok_or(InjectionError::TargetChanged)?;
-        let check = self.call("Runtime.callFunctionOn", json!({"objectId":object_id,"functionDeclaration":"function(){return this instanceof HTMLInputElement ? this.type.toLowerCase() : '';}","returnByValue":true,"silent":true}), Some(cdp_session))?;
-        let input_type = check["result"]["result"]["value"]
-            .as_str()
-            .ok_or(InjectionError::TargetChanged)?;
+        let object_id = object_id.to_owned();
+        let input_type = self.input_type(&object_id, cdp_session)?;
         let valid = match request.field.as_str() {
             "password" => input_type == "password",
-            "username" => matches!(input_type, "text" | "email"),
+            "username" => matches!(input_type.as_str(), "text" | "email"),
             _ => false,
         };
         if !valid {
             return Err(InjectionError::RedisplayField);
         }
+        // ADR 2026-10-09 credential username / post-login D1-4: the username field is resolved with
+        // the administrator's selector on the same top document (same frame id and loader id as the
+        // password field, checked above), exactly one text/email input that is not the password field.
+        let username = match &request.username_selector {
+            None => None,
+            Some(_) if request.field != "password" => return Err(InjectionError::TargetMismatch),
+            Some(selector) => {
+                let queried = self.call(
+                    "DOM.querySelectorAll",
+                    json!({"nodeId":root_id,"selector":selector}),
+                    Some(cdp_session),
+                )?;
+                let nodes = queried["result"]["nodeIds"]
+                    .as_array()
+                    .ok_or(InjectionError::TargetMismatch)?;
+                if nodes.len() != 1 {
+                    return Err(InjectionError::TargetMismatch);
+                }
+                let user_node = nodes[0]
+                    .as_i64()
+                    .filter(|id| *id > 0 && *id != node_id)
+                    .ok_or(InjectionError::TargetMismatch)?;
+                let resolved = self.call(
+                    "DOM.resolveNode",
+                    json!({"nodeId":user_node,"executionContextId":context}),
+                    Some(cdp_session),
+                )?;
+                let user_object = resolved["result"]["object"]["objectId"]
+                    .as_str()
+                    .ok_or(InjectionError::TargetChanged)?
+                    .to_owned();
+                let user_type = self.input_type(&user_object, cdp_session)?;
+                if !matches!(user_type.as_str(), "text" | "email") {
+                    return Err(InjectionError::RedisplayField);
+                }
+                Some(UsernameTarget {
+                    selector: selector.clone(),
+                    object_id: user_object,
+                    input_type: user_type,
+                })
+            }
+        };
+        // The broker's frame must not be confused with the frame tree re-read above.
+        let object_id = object_id.as_str();
         let command_id = self.next_id;
         self.next_id = self
             .next_id
@@ -709,8 +1000,13 @@ impl CdpController {
         } else {
             request.redirect_chain.clone()
         };
+        let username_object = username.as_ref().map(|u| u.object_id.clone());
         let wire = serde_json::to_value(WireRequest {
-            v: 1,
+            v: if username.is_some() {
+                PAIR_REQUEST_VERSION
+            } else {
+                1
+            },
             request_id: request.request_id.clone(),
             session_id: request.session_id.clone(),
             cdp_target_id: request.cdp_target_id.clone(),
@@ -729,6 +1025,7 @@ impl CdpController {
             auth_section_id: request.auth_section_id.clone(),
             lease_id: request.lease_id.clone(),
             cdp_command_id: command_id,
+            username,
         })
         .map_err(|_| InjectionError::SinkFailed)?;
         let pending = broker.start(wire, broker_fd)?;
@@ -753,6 +1050,7 @@ impl CdpController {
                 object_id,
                 origin: &request.exact_origin,
                 field: request.field.as_str(),
+                username_object: username_object.as_deref(),
             },
         ) {
             command.zeroize();
@@ -830,6 +1128,14 @@ impl CdpController {
             request.frame_id.clone(),
             request.loader_id.clone(),
         ));
+        if let Some(user) = username_object {
+            self.injected.push((
+                user,
+                cdp_session.to_owned(),
+                request.frame_id.clone(),
+                request.loader_id.clone(),
+            ));
+        }
         Ok(
             json!({"v":1,"request_id":request.request_id,"ok":true,"receipt":{
                 "lease_id":request.lease_id,"auth_section_id":request.auth_section_id,
@@ -838,6 +1144,15 @@ impl CdpController {
                 "field":request.field,"injected_at":injected_at
             }}),
         )
+    }
+
+    /// The resolved element's input type (lower case), `""` for a non-input.
+    fn input_type(&mut self, object_id: &str, session: &str) -> Result<String, InjectionError> {
+        let check = self.call("Runtime.callFunctionOn", json!({"objectId":object_id,"functionDeclaration":"function(){return this instanceof HTMLInputElement ? this.type.toLowerCase() : '';}","returnByValue":true,"silent":true}), Some(session))?;
+        check["result"]["result"]["value"]
+            .as_str()
+            .map(str::to_owned)
+            .ok_or(InjectionError::TargetChanged)
     }
 
     fn call(
@@ -912,6 +1227,38 @@ impl CdpController {
                 nav.invalid = true;
             }
         }
+        // ADR 2026-10-09 credential username / post-login D2-6: after login a download may only come
+        // from a `read_origins` origin; any other is cancelled the moment it begins. If it still
+        // completes (its body arrived before the cancel), observation stops for the session.
+        if let Some(read_origins) = &self.post_login
+            && matches!(
+                value["method"].as_str(),
+                Some("Browser.downloadWillBegin" | "Page.downloadWillBegin")
+            )
+            && origin(value["params"]["url"].as_str()).is_none_or(|o| !read_origins.contains(&o))
+            && let Some(guid) = value["params"]["guid"].as_str()
+        {
+            let guid = guid.to_owned();
+            self.send_untracked("Browser.cancelDownload", json!({"guid":guid}));
+            self.denied_downloads.insert(guid);
+        }
+        if matches!(
+            value["method"].as_str(),
+            Some("Browser.downloadProgress" | "Page.downloadProgress")
+        ) && value["params"]["state"] == "completed"
+            && value["params"]["guid"]
+                .as_str()
+                .is_some_and(|g| self.denied_downloads.contains(g))
+        {
+            self.download_breach = true;
+            self.events.clear();
+        }
+        if value["sessionId"]
+            .as_str()
+            .is_some_and(|s| self.private_sessions.contains(s))
+        {
+            return;
+        }
         if !self.observation_stopped() {
             if self.events.len() >= MAX_QUEUED_EVENTS {
                 self.events.remove(0);
@@ -933,7 +1280,8 @@ impl CdpController {
                     self.queue_event(value);
                 }
             }
-            if self.buffered.len() >= MAX_FRAME {
+
+            if self.buffered.len() >= MAX_CDP_MESSAGE {
                 return Err(InjectionError::SinkFailed);
             }
             let mut pollfd = nix::libc::pollfd {
@@ -985,7 +1333,7 @@ impl CdpController {
                 self.queue_event(value);
                 continue;
             }
-            if self.buffered.len() >= MAX_FRAME {
+            if self.buffered.len() >= MAX_CDP_MESSAGE {
                 return Err(InjectionError::SinkFailed);
             }
             let mut pollfd = nix::libc::pollfd {
@@ -1020,6 +1368,37 @@ impl CdpController {
     }
 }
 
+/// ADR 2026-10-09 credential username / post-login D2-2 for a blocking caller (the launcher):
+/// poll [`CdpController::post_login_ready`] every 50 ms until `Ready` or `timeout`, then close the
+/// auth section with [`CdpController::resume_after_login`]. `false` keeps observation stopped
+/// (`post_login_unconfirmed`).
+pub fn resume_after_login_blocking(
+    controller: &std::sync::Arc<std::sync::Mutex<CdpController>>,
+    own: &str,
+    login_loader: &str,
+    read_origins: &[String],
+    timeout: Duration,
+) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let ready = match controller.lock() {
+            Ok(mut c) => c.post_login_ready(own, login_loader, read_origins),
+            Err(_) => return false,
+        };
+        match ready {
+            Ok(PostLoginCheck::Ready) => {
+                return controller
+                    .lock()
+                    .is_ok_and(|mut c| c.resume_after_login(own, read_origins.to_vec()).is_ok());
+            }
+            Ok(PostLoginCheck::Pending) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            _ => return false,
+        }
+    }
+}
+
 /// What the controller reserved for one injection; the broker's sink frame must match it.
 struct SinkExpectation<'a> {
     command_id: u64,
@@ -1027,6 +1406,9 @@ struct SinkExpectation<'a> {
     object_id: &'a str,
     origin: &'a str,
     field: &'a str,
+    /// ADR 2026-10-09 credential username / post-login D1-4: the username element the controller
+    /// resolved itself; a pair frame must name exactly this object.
+    username_object: Option<&'a str>,
 }
 
 /// ADR 2026-10-09 付記（launcher の Authenticate 経路）3: the sink frame is exactly
@@ -1063,28 +1445,97 @@ fn fixed_injection_frame(command: &[u8], want: &SinkExpectation<'_>) -> bool {
             let a = args.get(i)?.as_object()?;
             (a.len() == 1).then(|| a.get("value")).flatten()
         };
-        Some(
-            keys_ok
-                && top.get("id")?.as_u64() == Some(want.command_id)
-                && top.get("method")?.as_str() == Some("Runtime.callFunctionOn")
-                && top.get("sessionId")?.as_str() == Some(want.cdp_session)
-                && params.get("objectId")?.as_str() == Some(want.object_id)
-                && params.get("functionDeclaration")?.as_str()
+        let common = keys_ok
+            && top.get("id")?.as_u64() == Some(want.command_id)
+            && top.get("method")?.as_str() == Some("Runtime.callFunctionOn")
+            && top.get("sessionId")?.as_str() == Some(want.cdp_session)
+            && params.get("objectId")?.as_str() == Some(want.object_id)
+            && params.get("returnByValue")? == &Value::Bool(true)
+            && params.get("silent")? == &Value::Bool(true)
+            && arg(0)?.as_str() == Some(want.origin)
+            && arg(1)?.as_u64() == Some(0);
+        let shape = match want.username_object {
+            None => {
+                params.get("functionDeclaration")?.as_str()
                     == Some(celeris_credentiald::injection_ipc::INJECT_FUNCTION)
-                && params.get("returnByValue")? == &Value::Bool(true)
-                && params.get("silent")? == &Value::Bool(true)
-                && args.len() == 4
-                && arg(0)?.as_str() == Some(want.origin)
-                && arg(1)?.as_u64() == Some(0)
-                && arg(2)?.as_str() == Some(want.field)
-                && arg(3)?.is_string(),
-        )
+                    && args.len() == 4
+                    && arg(2)?.as_str() == Some(want.field)
+                    && arg(3)?.is_string()
+            }
+            Some(user) => {
+                let by_object = args.get(2)?.as_object()?;
+                params.get("functionDeclaration")?.as_str()
+                    == Some(celeris_credentiald::injection_ipc::INJECT_PAIR_FUNCTION)
+                    && want.field == "password"
+                    && args.len() == 5
+                    && by_object.len() == 1
+                    && by_object.get("objectId")?.as_str() == Some(user)
+                    && arg(3)?.is_string()
+                    && arg(4)?.is_string()
+            }
+        };
+        Some(common && shape)
     })()
     .unwrap_or(false);
-    if let Some(Value::String(value)) = frame.pointer_mut("/params/arguments/3/value") {
-        value.zeroize();
+    for at in ["/params/arguments/3/value", "/params/arguments/4/value"] {
+        if let Some(Value::String(value)) = frame.pointer_mut(at) {
+            value.zeroize();
+        }
     }
     ok
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-3: page-session commands that neither read
+/// the page nor act on its content (domain enables, navigation, emulation, target plumbing). Every
+/// other page-session command passes the post-login gate before and after it runs.
+fn post_login_control_method(method: &str) -> bool {
+    method.starts_with("Target.")
+        || method.starts_with("Emulation.")
+        || method.starts_with("Browser.")
+        || matches!(
+            method,
+            "Page.enable"
+                | "Page.disable"
+                | "Page.navigate"
+                | "Page.reload"
+                | "Page.stopLoading"
+                | "Page.getFrameTree"
+                | "Page.setLifecycleEventsEnabled"
+                | "Page.addScriptToEvaluateOnNewDocument"
+                | "Page.removeScriptToEvaluateOnNewDocument"
+                | "Page.createIsolatedWorld"
+                | "Page.setInterceptFileChooserDialog"
+                | "Page.bringToFront"
+                | "Page.setBypassCSP"
+                | "Page.setDownloadBehavior"
+                | "Network.enable"
+                | "Network.disable"
+                | "Network.setCacheDisabled"
+                | "Network.setExtraHTTPHeaders"
+                | "Network.setUserAgentOverride"
+                | "Network.setBypassServiceWorker"
+                | "Runtime.enable"
+                | "Runtime.disable"
+                | "Runtime.runIfWaitingForDebugger"
+                | "Runtime.releaseObject"
+                | "Runtime.releaseObjectGroup"
+                | "Runtime.discardConsoleEntries"
+                | "Log.enable"
+                | "Log.disable"
+                | "Inspector.enable"
+                | "Performance.enable"
+                | "Performance.disable"
+                | "Security.enable"
+                | "Security.disable"
+                | "DOM.enable"
+                | "DOM.disable"
+                | "CSS.enable"
+                | "CSS.disable"
+                | "Accessibility.enable"
+                | "Accessibility.disable"
+                | "Overlay.enable"
+                | "Overlay.disable"
+        )
 }
 
 fn broker_denial(reply: &Value) -> InjectionError {
@@ -1351,6 +1802,7 @@ mod idle_pump_tests {
             object_id: "OBJ",
             origin: "https://idp.test",
             field: "password",
+            username_object: None,
         };
         assert!(fixed_injection_frame(&frame(|_| {}), &want));
         type Edit = Box<dyn Fn(&mut Value)>;
@@ -1391,6 +1843,147 @@ mod idle_pump_tests {
         no_nul.pop();
         assert!(!fixed_injection_frame(&no_nul, &want));
         assert!(!fixed_injection_frame(b"not json\0", &want));
+    }
+
+    fn pair_frame(edit: impl FnOnce(&mut Value)) -> Vec<u8> {
+        frame(|v| {
+            v["params"]["functionDeclaration"] =
+                celeris_credentiald::injection_ipc::INJECT_PAIR_FUNCTION.into();
+            v["params"]["arguments"] = json!([
+                {"value":"https://idp.test"},{"value":0},{"objectId":"USER"},
+                {"value":"student-1"},{"value":"s3cret"}
+            ]);
+            edit(v);
+        })
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D1-4: a pair frame passes only with the fixed
+    /// pair function, the username element the controller resolved, and two string values.
+    #[test]
+    fn launcher_credential_sink_accepts_only_the_fixed_pair_injection_frame() {
+        let want = SinkExpectation {
+            command_id: 77,
+            cdp_session: "S",
+            object_id: "OBJ",
+            origin: "https://idp.test",
+            field: "password",
+            username_object: Some("USER"),
+        };
+        assert!(fixed_injection_frame(&pair_frame(|_| {}), &want));
+        // The single-field frame is refused where a pair is expected, and vice versa.
+        assert!(!fixed_injection_frame(&frame(|_| {}), &want));
+        let single = SinkExpectation {
+            username_object: None,
+            ..want
+        };
+        assert!(!fixed_injection_frame(&pair_frame(|_| {}), &single));
+        type Edit = Box<dyn Fn(&mut Value)>;
+        let forged: Vec<Edit> = vec![
+            Box::new(|v| v["params"]["arguments"][2] = json!({"objectId":"OTHER"})),
+            Box::new(|v| v["params"]["arguments"][2] = json!({"objectId":"USER","value":1})),
+            Box::new(|v| v["params"]["arguments"][2] = json!({"value":"USER"})),
+            Box::new(|v| v["params"]["arguments"][3] = json!({"value":5})),
+            Box::new(|v| v["params"]["arguments"][4] = json!({"objectId":"X"})),
+            Box::new(|v| {
+                v["params"]["arguments"]
+                    .as_array_mut()
+                    .expect("args")
+                    .push(json!({"value":1}))
+            }),
+            Box::new(|v| {
+                v["params"]["functionDeclaration"] =
+                    celeris_credentiald::injection_ipc::INJECT_FUNCTION.into()
+            }),
+            Box::new(|v| v["params"]["objectId"] = "USER".into()),
+            Box::new(|v| v["method"] = "Runtime.evaluate".into()),
+        ];
+        for (i, edit) in forged.iter().enumerate() {
+            assert!(
+                !fixed_injection_frame(&pair_frame(|v| edit(v)), &want),
+                "forged pair frame {i} accepted"
+            );
+        }
+        let username_field = SinkExpectation {
+            field: "username",
+            ..want
+        };
+        assert!(!fixed_injection_frame(&pair_frame(|_| {}), &username_field));
+    }
+
+    /// D2-3: only page-session commands that neither read nor act on the page skip the gate.
+    #[test]
+    fn post_login_gate_skips_only_plumbing_methods() {
+        for m in [
+            "Page.enable",
+            "Page.navigate",
+            "Target.attachToTarget",
+            "Emulation.setDeviceMetricsOverride",
+            "Network.enable",
+            "Runtime.enable",
+            "Browser.setDownloadBehavior",
+        ] {
+            assert!(post_login_control_method(m), "{m}");
+        }
+        for m in [
+            "Runtime.evaluate",
+            "Runtime.callFunctionOn",
+            "DOM.getDocument",
+            "DOM.getOuterHTML",
+            "Accessibility.getFullAXTree",
+            "DOMSnapshot.captureSnapshot",
+            "Page.captureScreenshot",
+            "Page.printToPDF",
+            "Input.dispatchMouseEvent",
+            "Input.insertText",
+            "Runtime.getProperties",
+            "Fetch.continueRequest",
+        ] {
+            assert!(!post_login_control_method(m), "{m}");
+        }
+    }
+
+    /// D2-6: after login a download outside `read_origins` is recorded for cancellation; events of
+    /// controller-private sessions (login tab, check sessions) are never queued for the agent.
+    #[test]
+    fn post_login_downloads_outside_read_origins_are_cancelled_and_private_events_dropped() {
+        let (mut c, mut browser) = controller();
+        c.post_login = Some(vec!["https://lms.test".into()]);
+        c.private_sessions.insert("OWN".into());
+        c.queue_event(json!({"method":"Browser.downloadWillBegin",
+            "params":{"guid":"g1","url":"https://other.test/f.bin"}}));
+        c.queue_event(json!({"method":"Page.downloadWillBegin","sessionId":"S",
+            "params":{"guid":"g2","url":"blob:https://lms.test/abc"}}));
+        c.queue_event(json!({"method":"Browser.downloadWillBegin",
+            "params":{"guid":"g3","url":"https://lms.test/ct/a.pdf"}}));
+        c.queue_event(json!({"method":"Network.requestWillBeSent","sessionId":"OWN","params":{}}));
+        let mut denied: Vec<_> = c.denied_downloads.iter().cloned().collect();
+        denied.sort();
+        assert_eq!(denied, vec!["g1".to_string(), "g2".to_string()]);
+        assert!(c.events.iter().all(|e| e["sessionId"] != "OWN"));
+        assert_eq!(c.events.len(), 3);
+        // The cancels were written to the browser at once (no reply awaited).
+        browser
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .expect("timeout");
+        let mut written = Vec::new();
+        let mut buf = [0u8; 4096];
+        while written.iter().filter(|b| **b == 0).count() < 2 {
+            let n = browser.read(&mut buf).expect("cancel written");
+            written.extend_from_slice(&buf[..n]);
+        }
+        let text = String::from_utf8_lossy(&written);
+        assert_eq!(text.matches("Browser.cancelDownload").count(), 2, "{text}");
+        assert!(text.contains("\"g1\"") && text.contains("\"g2\""));
+        // An allowed download completing is fine; a denied one completing stops observation.
+        c.queue_event(
+            json!({"method":"Browser.downloadProgress","params":{"guid":"g3","state":"completed"}}),
+        );
+        assert!(!c.observation_stopped());
+        c.queue_event(
+            json!({"method":"Browser.downloadProgress","params":{"guid":"g1","state":"completed"}}),
+        );
+        assert!(c.observation_stopped());
+        assert!(c.take_agent_events().is_empty());
     }
 
     #[test]

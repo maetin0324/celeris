@@ -103,6 +103,20 @@ pub enum Field {
     Password,
 }
 
+/// ADR 2026-10-09 credential username / post-login D1-3: password 欄と同じ document の username 欄。
+/// controller が trusted selector で解決した要素の objectId と型だけで、値は持たない。
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UsernameTarget {
+    pub selector: String,
+    pub object_id: String,
+    pub input_type: String,
+}
+
+/// username 欄を伴う注入要求の IPC 版（`v`）。旧い broker は `unsupported_version` で、旧い controller の
+/// 要求（v1）は username 欄を持てない（`deny_unknown_fields`）。
+pub const PAIR_REQUEST_VERSION: u32 = 2;
+
 /// controller の injection client → broker（D1）。秘密・value・長さ・hash は持たない。
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,6 +140,9 @@ pub struct InjectionRequest {
     pub auth_section_id: String,
     pub lease_id: String,
     pub cdp_command_id: u64,
+    /// v2: username 欄（policy が `username_selector` を持つときだけ、必ず）。`field` は password。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username: Option<UsernameTarget>,
 }
 
 /// 成功時の receipt。値・長さ・hash・selector・object id・DOM 観測を入れない。
@@ -555,23 +572,68 @@ this.dispatchEvent(new w.Event('input',{bubbles:true}));\
 this.dispatchEvent(new w.Event('change',{bubbles:true}));\
 return 'ok';}catch(e){return 'target_changed';}}";
 
-fn cdp_frame(req: &InjectionRequest, origin: &str, value: &str) -> Result<Vec<u8>, InjectCode> {
+/// ADR 2026-10-09 credential username / post-login D1-3: username と password の 2 欄を 1 回の同期実行で
+/// 入れる固定関数。`this` は password 要素、`user` は username 要素（objectId で渡す）。両方が同じ
+/// document・接続済み・origin / depth 一致・型（password / text|email）・別の要素であることを確かめてから
+/// 代入する。どれか外れれば何も入れず `target_changed`。戻り値は固定語彙だけ。
+pub const INJECT_PAIR_FUNCTION: &str = "function(expected,depth,user,uname,pw){try{\
+if(!this.isConnected||!user||user===this||!user.isConnected)return 'target_changed';\
+var w=this.ownerDocument&&this.ownerDocument.defaultView;\
+if(!w||user.ownerDocument!==this.ownerDocument)return 'target_changed';\
+if(!(this instanceof w.HTMLInputElement)||!(user instanceof w.HTMLInputElement)||w.location.origin!==expected)return 'target_changed';\
+var d=0,f=w;while(f!==f.top){f=f.parent;if(f.location.origin!==expected)return 'target_changed';d++;}\
+if(d!==depth)return 'target_changed';\
+if(String(this.type).toLowerCase()!=='password')return 'target_changed';\
+var t=String(user.type).toLowerCase();if(t!=='text'&&t!=='email')return 'target_changed';\
+var set=Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype,'value').set;\
+set.call(user,uname);\
+user.dispatchEvent(new w.Event('input',{bubbles:true}));\
+user.dispatchEvent(new w.Event('change',{bubbles:true}));\
+set.call(this,pw);\
+this.dispatchEvent(new w.Event('input',{bubbles:true}));\
+this.dispatchEvent(new w.Event('change',{bubbles:true}));\
+return 'ok';}catch(e){return 'target_changed';}}";
+
+fn cdp_frame(
+    req: &InjectionRequest,
+    origin: &str,
+    value: &str,
+    username: Option<&str>,
+) -> Result<Vec<u8>, InjectCode> {
     let field = match req.field {
         Field::Username => "username",
         Field::Password => "password",
+    };
+    let depth = req.frame_chain.len().saturating_sub(1);
+    let (function, arguments) = match (&req.username, username) {
+        (Some(target), Some(name)) => (
+            INJECT_PAIR_FUNCTION,
+            serde_json::json!([
+                {"value": origin},
+                {"value": depth},
+                {"objectId": target.object_id},
+                {"value": name},
+                {"value": value},
+            ]),
+        ),
+        (None, None) => (
+            INJECT_FUNCTION,
+            serde_json::json!([
+                {"value": origin},
+                {"value": depth},
+                {"value": field},
+                {"value": value},
+            ]),
+        ),
+        _ => return Err(InjectCode::SinkFailed),
     };
     let mut frame = serde_json::json!({
         "id": req.cdp_command_id,
         "method": "Runtime.callFunctionOn",
         "params": {
             "objectId": req.object_id,
-            "functionDeclaration": INJECT_FUNCTION,
-            "arguments": [
-                {"value": origin},
-                {"value": req.frame_chain.len().saturating_sub(1)},
-                {"value": field},
-                {"value": value},
-            ],
+            "functionDeclaration": function,
+            "arguments": arguments,
             "returnByValue": true,
             "silent": true,
         },
@@ -586,15 +648,11 @@ fn cdp_frame(req: &InjectionRequest, origin: &str, value: &str) -> Result<Vec<u8
             bytes
         })
         .map_err(|_| InjectCode::SinkFailed);
-    // serde_json::Value の中の秘密の写しを消す。
-    if let Some(args) = frame
-        .pointer_mut("/params/arguments/3/value")
-        .and_then(|v| match v {
-            serde_json::Value::String(s) => Some(s),
-            _ => None,
-        })
-    {
-        args.zeroize();
+    // serde_json::Value の中の秘密の写しを消す（1 欄は 3 番、2 欄は 3・4 番）。
+    for at in ["/params/arguments/3/value", "/params/arguments/4/value"] {
+        if let Some(serde_json::Value::String(secret)) = frame.pointer_mut(at) {
+            secret.zeroize();
+        }
     }
     bytes
 }
@@ -736,9 +794,22 @@ impl InjectionService {
         req: &InjectionRequest,
         sink: &mut dyn CdpSink,
     ) -> Result<(InjectionReceipt, RedisplayGuardWire), InjectCode> {
-        // 0. 形
-        if req.v != 1 {
-            return Err(InjectCode::UnsupportedVersion);
+        // 0. 形（v2 は username 欄を伴う要求だけ。username 欄は password 欄の注入にだけ付く）
+        match (req.v, &req.username) {
+            (1, None) => {}
+            (PAIR_REQUEST_VERSION, Some(u)) => {
+                if req.field != Field::Password
+                    || u.selector.is_empty()
+                    || u.selector.len() > 512
+                    || !short_id(&u.object_id, 256)
+                    || u.object_id == req.object_id
+                    || u.input_type.len() > 32
+                {
+                    return Err(InjectCode::InvalidRequest);
+                }
+            }
+            (1 | PAIR_REQUEST_VERSION, _) => return Err(InjectCode::InvalidRequest),
+            _ => return Err(InjectCode::UnsupportedVersion),
         }
         if !valid_id(&req.request_id)
             || !valid_id(&req.session_id)
@@ -807,7 +878,12 @@ impl InjectionService {
             Field::Password => req.input_type == "password",
             Field::Username => matches!(req.input_type.as_str(), "text" | "email"),
         };
-        if !ok_type {
+        if !ok_type
+            || req
+                .username
+                .as_ref()
+                .is_some_and(|u| !matches!(u.input_type.as_str(), "text" | "email"))
+        {
             return Err(InjectCode::RedisplayField);
         }
         // 4. auth_section
@@ -818,10 +894,16 @@ impl InjectionService {
         // 要求の selector は byte 一致でなければ拒否し、lease は消費しない。policy に selector が無ければ注入しない。
         // lease が無い場合は順 5 が `lease_invalid` を返す。
         if let Some(pinned) = self.broker.lease_trusted_selector(&req.lease_id) {
-            let pinned = pinned.ok_or(InjectCode::TrustedSelectorMissing)?;
-            // username 欄の trusted selector は ADR-0110 の範囲外（未解決）。password 欄だけ照合する。
-            if req.field == Field::Password && pinned.as_bytes() != req.selector.as_bytes() {
+            let password = pinned.password.ok_or(InjectCode::TrustedSelectorMissing)?;
+            if req.field == Field::Password && password.as_bytes() != req.selector.as_bytes() {
                 return Err(InjectCode::SelectorMismatch);
+            }
+            // ADR 2026-10-09 credential username / post-login D1-3: policy が username 欄を持つなら要求も
+            // 同じ selector の username 欄を伴い、持たないなら伴わない。どちらの食い違いも lease 未消費。
+            match (pinned.username.as_deref(), req.username.as_ref()) {
+                (None, None) => {}
+                (Some(p), Some(u)) if p.as_bytes() == u.selector.as_bytes() => {}
+                _ => return Err(InjectCode::SelectorMismatch),
             }
         }
         // 5. lease（ここで消費）
@@ -835,8 +917,11 @@ impl InjectionService {
             Field::Username => &secret.username,
             Field::Password => &secret.password,
         };
+        // guard は password（注入した欄の値）だけで作る。username は「機密だが秘密ではない」
+        // （ADR 2026-10-09 credential username / post-login A1）ので掛けない。
         let guard = RedisplayGuard::new(value).to_wire();
-        let mut frame = cdp_frame(req, origin, value)?;
+        let username = req.username.as_ref().map(|_| secret.username.as_str());
+        let mut frame = cdp_frame(req, origin, value, username)?;
         drop(secret);
         let reply = sink.exchange(&frame);
         frame.zeroize();
@@ -888,6 +973,9 @@ impl InjectionService {
                 ("lease_id", &r.lease_id),
             ] {
                 o.insert(k.into(), v.clone().into());
+            }
+            if let Some(u) = &r.username {
+                o.insert("username_selector".into(), u.selector.clone().into());
             }
             o.insert("frame_chain".into(), r.frame_chain.clone().into());
             o.insert("redirect_chain".into(), r.redirect_chain.clone().into());

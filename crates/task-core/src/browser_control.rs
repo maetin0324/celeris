@@ -132,6 +132,10 @@ pub struct BrowserControl {
     in_flight: u32,
     lease: Option<ControlLease>,
     auth_section_active: bool,
+    /// ADR 2026-10-09 credential username / post-login D2-3: credential を注入した session の印。
+    /// 認証区間が閉じた後（ログイン後の読み取り）も session の終わりまで残り、takeover・renew を拒否する。
+    #[serde(default)]
+    credential_used: bool,
     applied: BTreeMap<String, (ControlCommand, ControlOutcome)>,
 }
 
@@ -149,6 +153,7 @@ impl BrowserControl {
             in_flight: 0,
             lease: None,
             auth_section_active: false,
+            credential_used: false,
             applied: BTreeMap::new(),
         }
     }
@@ -172,6 +177,11 @@ impl BrowserControl {
 
     pub fn auth_section_active(&self) -> bool {
         self.auth_section_active
+    }
+
+    /// credential を注入した session か（区間が閉じても session の終わりまで真）。
+    pub fn credential_used(&self) -> bool {
+        self.credential_used
     }
 
     /// agent の操作を 1 つ始める。agent が controller のときだけ通る。
@@ -200,6 +210,7 @@ impl BrowserControl {
     /// 人が lease を持っていれば取り上げる。
     pub fn enter_auth_section(&mut self) {
         self.auth_section_active = true;
+        self.credential_used = true;
         if self.phase == ControlPhase::HumanControl {
             self.lease = None;
             self.transition(ControlPhase::Paused);
@@ -334,7 +345,7 @@ impl BrowserControl {
         ttl_secs: Option<u64>,
         now: u64,
     ) -> Result<(), ControlError> {
-        if self.auth_section_active {
+        if self.auth_section_active || self.credential_used {
             return Err(ControlError::AuthSectionActive);
         }
         match self.phase {
@@ -357,7 +368,7 @@ impl BrowserControl {
     }
 
     fn renew(&mut self, holder: &str, ttl_secs: Option<u64>, now: u64) -> Result<(), ControlError> {
-        if self.auth_section_active {
+        if self.auth_section_active || self.credential_used {
             return Err(ControlError::AuthSectionActive);
         }
         self.check_holder(holder, now)?;
@@ -616,5 +627,31 @@ mod tests {
             Err(ControlError::AuthSectionActive)
         );
         assert!(c.auth_section_active());
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-3: 区間が閉じた後（ログイン後の読み取り）も
+    /// credential を使った session は takeover・renew を拒否し、agent の操作だけが戻る。
+    #[test]
+    fn post_login_credential_session_keeps_takeover_refused_after_auth_section() {
+        let mut c = BrowserControl::new();
+        c.enter_auth_section();
+        assert!(c.begin_agent_action().is_ok());
+        c.end_agent_action();
+        c.leave_auth_section();
+        assert!(!c.auth_section_active());
+        assert!(c.credential_used());
+        assert!(c.begin_agent_action().is_ok());
+        c.end_agent_action();
+        let v = c.version();
+        let out = c.apply(&req(ControlCommand::Pause, v, "p"), 110).unwrap();
+        assert_eq!(
+            c.apply(&req(takeover("owner", None), out.version, "t"), 110),
+            Err(ControlError::AuthSectionActive)
+        );
+        // 旧い state（欄なし）は credential を使っていない session として読める。
+        let mut json = serde_json::to_value(BrowserControl::new()).unwrap();
+        json.as_object_mut().unwrap().remove("credential_used");
+        let old: BrowserControl = serde_json::from_value(json).unwrap();
+        assert!(!old.credential_used());
     }
 }

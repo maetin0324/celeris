@@ -268,6 +268,8 @@ fn grant(root: &tempfile::TempDir, n: u32) -> String {
         login_url: Some(format!("{ORIGIN}/login.html")),
         password_selector: Some("#pass".into()),
         submit_selector: None,
+        username_selector: None,
+        post_login: None,
     };
     let reference = CredentialRef {
         credential_id: format!("login-{n}"),
@@ -534,6 +536,7 @@ impl Ctx {
             field: "password".into(),
             auth_section_id: auth.into(),
             lease_id: lease.into(),
+            username_selector: None,
         }
     }
 

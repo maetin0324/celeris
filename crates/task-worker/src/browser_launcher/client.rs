@@ -18,8 +18,8 @@ use std::time::Duration;
 
 use super::protocol::{
     ActionArgs, AuthenticateArgs, AuthenticationStatus, DEFAULT_MAX_FRAME, ErrorCode, FrameError,
-    Observation, Receipt, Request, Response, SessionFacts, SessionPolicy, SessionState, Verb,
-    read_frame, write_message,
+    LoginObservation, Observation, Receipt, Request, Response, SessionFacts, SessionPolicy,
+    SessionState, Verb, read_frame, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -265,9 +265,13 @@ impl LauncherClient {
         &mut self,
         args: AuthenticateArgs,
         broker: std::os::fd::OwnedFd,
-    ) -> Result<AuthenticationStatus, ClientError> {
+    ) -> Result<(AuthenticationStatus, LoginObservation), ClientError> {
         match self.request_with_fd(&Request::Authenticate { args }, broker)? {
-            Response::AuthenticateResult { status } => Ok(status),
+            // A v4 launcher answers without `observation`: observation stays stopped.
+            Response::AuthenticateResult {
+                status,
+                observation,
+            } => Ok((status, observation.unwrap_or(LoginObservation::Held))),
             other => Err(unexpected("authenticate_result", &other)),
         }
     }

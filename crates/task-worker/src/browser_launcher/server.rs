@@ -19,9 +19,9 @@ use std::time::{Duration, Instant};
 use nix::libc;
 
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, Observation, Outcome, Receipt,
-    Request, Response, SessionBinding, SessionFacts, SessionPolicy, SessionState, Verb,
-    decode_request, write_message,
+    ActionArgs, AuthenticateArgs, AuthenticationStatus, ErrorCode, LoginObservation, Observation,
+    Outcome, Receipt, Request, Response, SessionBinding, SessionFacts, SessionPolicy, SessionState,
+    Verb, decode_request, write_message,
 };
 use super::registry::{Registry, SessionRecord, stop_group};
 use super::{now_unix_ms, random_id};
@@ -107,12 +107,13 @@ pub trait BackendSession: Send + 'static {
     }
     /// Runs the fixed credential login inside the launcher-owned controller. `broker` is the
     /// `injection.sock` connection the daemon opened and passed with `SCM_RIGHTS`.
-    /// Implementations must never return credential material or CDP data.
+    /// Implementations must never return credential material or CDP data; the success value says
+    /// only whether agent observation resumed (v5, ADR 2026-10-09 credential username / post-login).
     fn authenticate(
         &mut self,
         _args: &AuthenticateArgs,
         _broker: UnixStream,
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<LoginObservation, ErrorCode> {
         Err(ErrorCode::Unauthorized)
     }
     fn observe(&mut self) -> (SessionState, SessionFacts);
@@ -716,6 +717,7 @@ fn handle_authenticate(
 ) -> Response {
     let rejected = Response::AuthenticateResult {
         status: AuthenticationStatus::Rejected,
+        observation: None,
     };
     let entry = match authorize(inner, peer, &args.session_id, &args.lease_id) {
         Ok(e) => e,
@@ -739,8 +741,9 @@ fn handle_authenticate(
         |_| {},
     );
     match out {
-        Some(Ok(())) => Response::AuthenticateResult {
+        Some(Ok(observation)) => Response::AuthenticateResult {
             status: AuthenticationStatus::Success,
+            observation: Some(observation),
         },
         Some(Err(_)) => rejected,
         None => {

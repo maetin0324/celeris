@@ -47,6 +47,12 @@ pub struct BrowserSitePolicy {
     pub password_selector: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_selector: Option<String>,
+    /// ADR 2026-10-09 credential username / post-login D1: username 欄の selector（任意）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_selector: Option<String>,
+    /// 同 D2: ログイン後の読み取りの opt-in（任意。無ければ観測停止のまま）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_login: Option<crate::browser_wait::PostLogin>,
 }
 
 /// 保存された site policy（中身＋出自と時刻）。
@@ -86,10 +92,17 @@ pub enum BrowserSitePolicyDelete {
 }
 
 const COLUMNS: &str = "policy_id, exact_origin, login_url, password_selector, submit_selector, \
-                       source, created_at, updated_at";
+                       source, created_at, updated_at, username_selector, post_login_json";
 
 fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
     let source: String = r.get(5)?;
+    let post_login = r
+        .get::<_, Option<String>>(9)?
+        .map(|json| serde_json::from_str(&json))
+        .transpose()
+        .map_err(|e| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(e))
+        })?;
     Ok(BrowserSitePolicyRecord {
         policy: BrowserSitePolicy {
             policy_id: r.get(0)?,
@@ -97,6 +110,8 @@ fn read_row(r: &Row<'_>) -> rusqlite::Result<BrowserSitePolicyRecord> {
             login_url: r.get(2)?,
             password_selector: r.get(3)?,
             submit_selector: r.get(4)?,
+            username_selector: r.get(8)?,
+            post_login,
         },
         source: BrowserSitePolicySource::parse(&source),
         created_at: r.get(6)?,
@@ -136,13 +151,20 @@ fn insert_or_replace(
     source: BrowserSitePolicySource,
     now: &str,
 ) -> Result<(), StoreError> {
+    let post_login = policy
+        .post_login
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()?;
     tx.execute(
         "INSERT INTO browser_site_policies (policy_id, exact_origin, login_url, password_selector, \
-         submit_selector, source, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7) \
+         submit_selector, source, created_at, updated_at, username_selector, post_login_json) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7, ?8, ?9) \
          ON CONFLICT(policy_id) DO UPDATE SET exact_origin = excluded.exact_origin, \
          login_url = excluded.login_url, password_selector = excluded.password_selector, \
          submit_selector = excluded.submit_selector, source = excluded.source, \
-         updated_at = excluded.updated_at",
+         updated_at = excluded.updated_at, username_selector = excluded.username_selector, \
+         post_login_json = excluded.post_login_json",
         params![
             policy.policy_id,
             policy.exact_origin,
@@ -151,6 +173,8 @@ fn insert_or_replace(
             policy.submit_selector,
             source.as_str(),
             now,
+            policy.username_selector,
+            post_login,
         ],
     )?;
     Ok(())
@@ -317,6 +341,8 @@ mod tests {
             login_url: "https://manaba.example/login".into(),
             password_selector: "#p".into(),
             submit_selector: None,
+            username_selector: None,
+            post_login: None,
         }
     }
 
@@ -330,6 +356,39 @@ mod tests {
             params![wait_id, state],
         )
         .expect("insert wait");
+    }
+
+    #[test]
+    fn browser_site_policy_db_round_trips_username_selector_and_post_login() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SqliteStore::open(&dir.path().join("c.db")).expect("open");
+        let now = OffsetDateTime::now_utc();
+        let mut p = policy("manaba");
+        store
+            .browser_site_policy_upsert(&p, "admin", now)
+            .expect("upsert");
+        assert_eq!(
+            store
+                .browser_site_policy_get("manaba")
+                .expect("get")
+                .expect("row")
+                .policy,
+            p
+        );
+        p.username_selector = Some("#u".into());
+        p.post_login = Some(crate::browser_wait::PostLogin {
+            read_origins: vec!["https://lms.example".into()],
+            actions: vec![
+                crate::browser_wait::PostLoginAction::Snapshot,
+                crate::browser_wait::PostLoginAction::Download,
+            ],
+        });
+        let (stored, created) = store
+            .browser_site_policy_upsert(&p, "admin", now)
+            .expect("replace");
+        assert!(!created);
+        assert_eq!(stored.policy, p);
+        assert_eq!(store.browser_site_policy_list().expect("list")[0].policy, p);
     }
 
     #[test]

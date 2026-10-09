@@ -329,6 +329,8 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
              ALTER TABLE deliveries DROP COLUMN reviewed_sha; \
              ALTER TABLE deliveries DROP COLUMN merge_candidate_sha; \
              DROP INDEX idx_node_sessions_work_unit_active; \
+             ALTER TABLE browser_site_policies DROP COLUMN post_login_json; \
+             ALTER TABLE browser_site_policies DROP COLUMN username_selector; \
              ALTER TABLE node_sessions DROP COLUMN delivered_through_seq; \
              ALTER TABLE node_sessions DROP COLUMN last_context_tokens; \
              ALTER TABLE node_sessions DROP COLUMN billed_input_tokens; \
@@ -346,7 +348,7 @@ fn cron_job_migration_applies_to_an_existing_schema_37_db() {
     }
     let store = SqliteStore::open(&path).unwrap();
     assert_eq!(store.schema_version().unwrap(), SCHEMA_VERSION);
-    assert_eq!(SCHEMA_VERSION, 63);
+    assert_eq!(SCHEMA_VERSION, 64);
     assert_eq!(
         store
             .cluster_settings_get("pegasus")

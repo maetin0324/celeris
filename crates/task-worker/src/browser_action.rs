@@ -95,6 +95,8 @@ pub(crate) fn action_socket_path_in(
 
 pub struct ActionServer {
     socket: PathBuf,
+    /// この session で許す upstream action（serve と共有）。
+    allowed: Arc<Mutex<Vec<String>>>,
     stop: mpsc::Sender<()>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -130,12 +132,13 @@ impl ActionServer {
         std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600))?;
         listener.set_nonblocking(true)?;
         let (stop, rx) = mpsc::channel();
+        let shared = Arc::new(Mutex::new(allowed));
+        let allowed = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("celeris-browser-actions".into())
             .spawn(move || {
                 let mut sequence = 0u64;
                 let closed = AtomicBool::new(false);
-                let allowed = Mutex::new(allowed);
                 while rx.try_recv().is_err() {
                     match listener.accept() {
                         Ok((stream, _)) => {
@@ -143,7 +146,7 @@ impl ActionServer {
                             let ctx = Serve {
                                 executor: executor.as_ref(),
                                 domains: &allowed_domains,
-                                actions: &allowed,
+                                actions: allowed.as_ref(),
                                 single_use: &single_use,
                                 gate: gate.as_ref(),
                                 closed: &closed,
@@ -159,9 +162,17 @@ impl ActionServer {
             })?;
         Ok(Self {
             socket,
+            allowed: shared,
             stop,
             thread: Some(thread),
         })
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-5: replace the allowed upstream actions
+    /// (the post-login policy once the auth section closed). Takes effect for the next request.
+    pub fn replace_allowed(&self, allowed: Vec<String>) {
+        let mut actions = self.allowed.lock().unwrap_or_else(|e| e.into_inner());
+        *actions = allowed;
     }
 }
 

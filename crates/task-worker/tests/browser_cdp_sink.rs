@@ -355,6 +355,7 @@ fn inner() {
         field: "password".into(),
         auth_section_id: "auth-1".into(),
         lease_id: "lease-1".into(),
+        username_selector: None,
     };
     let mut broker = FakeBroker {
         value: SECRET.into(),

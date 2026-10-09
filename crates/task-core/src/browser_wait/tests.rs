@@ -578,7 +578,41 @@ fn trusted() -> TrustedLogin {
         login_url: format!("{LOGIN_ORIGIN}/signin?next=%2F"),
         password_selector: "form#login > input[name=\"password\"]".into(),
         submit_selector: Some("button[type=submit]".into()),
+        username_selector: None,
+        post_login: None,
     }
+}
+
+/// ADR 2026-10-09 credential username / post-login D1-1・D2-1: 2 欄と post_login の TrustedLogin。
+#[test]
+fn trusted_login_with_username_and_post_login_validates_and_round_trips() {
+    let mut t = trusted();
+    t.username_selector = Some("input[name=j_username]".into());
+    t.post_login = Some(PostLogin {
+        read_origins: vec!["https://lms.example.com".into()],
+        actions: vec![PostLoginAction::Snapshot, PostLoginAction::Download],
+    });
+    assert_eq!(t.validate(LOGIN_ORIGIN), Ok(()));
+    let json = serde_json::to_string(&t).expect("json");
+    assert_eq!(
+        serde_json::from_str::<TrustedLogin>(&json).expect("back"),
+        t
+    );
+    // 旧い wait の JSON（欄なし）はそのまま読め、比較では別物になる（policy_changed）。
+    let old = serde_json::to_string(&trusted()).expect("json");
+    assert!(!old.contains("username_selector") && !old.contains("post_login"));
+    assert_ne!(serde_json::from_str::<TrustedLogin>(&old).expect("old"), t);
+    let mut bad = t.clone();
+    bad.username_selector = Some("input:focus".into());
+    assert_eq!(bad.validate(LOGIN_ORIGIN), Err("username_selector"));
+    let mut bad = t.clone();
+    bad.post_login = Some(PostLogin {
+        read_origins: vec![LOGIN_ORIGIN.into()],
+        actions: vec![PostLoginAction::Snapshot],
+    });
+    assert_eq!(bad.validate(LOGIN_ORIGIN), Err("post_login_idp_origin"));
+    assert_eq!(PostLoginAction::Extract.upstream_action(), "gettext");
+    assert_eq!(PostLoginAction::Click.upstream_action(), "click");
 }
 
 #[test]

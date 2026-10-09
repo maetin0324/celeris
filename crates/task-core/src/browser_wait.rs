@@ -152,6 +152,117 @@ pub struct TrustedLogin {
     pub password_selector: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_selector: Option<String>,
+    /// ADR 2026-10-09 credential username / post-login D1: 管理者が設定する username 欄の selector
+    /// （password 欄と同じ頁・同じ文法）。あれば 1 回の注入で username と password の 2 欄を入れる。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_selector: Option<String>,
+    /// 同 D2: ログイン後の読み取りの opt-in。無ければ ADR-0080 H3 のまま（session の終わりまで観測停止）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_login: Option<PostLogin>,
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-6: ログイン後に戻せる agent の action。
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, JsonSchema,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PostLoginAction {
+    Snapshot,
+    Extract,
+    Screenshot,
+    Download,
+    Click,
+}
+
+impl PostLoginAction {
+    pub const ALL: [PostLoginAction; 5] = [
+        Self::Snapshot,
+        Self::Extract,
+        Self::Screenshot,
+        Self::Download,
+        Self::Click,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Snapshot => "snapshot",
+            Self::Extract => "extract",
+            Self::Screenshot => "screenshot",
+            Self::Download => "download",
+            Self::Click => "click",
+        }
+    }
+
+    /// agent-browser の upstream action 名（harness の `policy.json` の `allow`）。
+    pub fn upstream_action(self) -> &'static str {
+        match self {
+            Self::Extract => "gettext",
+            other => other.as_str(),
+        }
+    }
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-1: site policy の opt-in。管理者だけが書く。
+/// `read_origins` は exact HTTPS origin（credential の origin = IdP は入れられない）、`actions` は
+/// 戻してよい action（task の allowed actions・grant と積を取る）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct PostLogin {
+    pub read_origins: Vec<String>,
+    pub actions: Vec<PostLoginAction>,
+}
+
+/// `post_login.read_origins` の上限。
+pub const POST_LOGIN_MAX_ORIGINS: usize = 8;
+
+impl PostLogin {
+    /// 形式検証: origin は 1〜8 個の正規形 exact HTTPS origin で重複なし・IdP（`exact_origin`）を含まない。
+    /// action は 1〜5 個で重複なし。
+    pub fn validate(&self, exact_origin: &str) -> Result<(), &'static str> {
+        if self.read_origins.is_empty() || self.read_origins.len() > POST_LOGIN_MAX_ORIGINS {
+            return Err("post_login_origins");
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for origin in &self.read_origins {
+            if !valid_exact_origin(origin) || !seen.insert(origin.as_str()) {
+                return Err("post_login_origins");
+            }
+            if origin == exact_origin {
+                return Err("post_login_idp_origin");
+            }
+        }
+        let actions: std::collections::BTreeSet<_> = self.actions.iter().collect();
+        if self.actions.is_empty() || actions.len() != self.actions.len() {
+            return Err("post_login_actions");
+        }
+        Ok(())
+    }
+
+    pub fn allows(&self, action: PostLoginAction) -> bool {
+        self.actions.contains(&action)
+    }
+}
+
+/// ADR 2026-10-09 credential username / post-login の site policy 全体の形式検証（API・broker・pin 時）。
+pub fn validate_trusted_login_full(
+    login_url: &str,
+    exact_origin: &str,
+    password_selector: &str,
+    submit_selector: Option<&str>,
+    username_selector: Option<&str>,
+    post_login: Option<&PostLogin>,
+) -> Result<(), &'static str> {
+    validate_trusted_login(login_url, exact_origin, password_selector, submit_selector)?;
+    if let Some(u) = username_selector {
+        validate_trusted_selector(u).map_err(|_| "username_selector")?;
+        if u == password_selector {
+            return Err("username_selector");
+        }
+    }
+    if let Some(p) = post_login {
+        p.validate(exact_origin)?;
+    }
+    Ok(())
 }
 
 /// trusted selector の上限（ADR-0110 D2）。
@@ -299,11 +410,13 @@ impl TrustedLogin {
         if !valid_token(&self.policy_id) || self.revision == 0 {
             return Err("trusted_login_invalid");
         }
-        validate_trusted_login(
+        validate_trusted_login_full(
             &self.login_url,
             exact_origin,
             &self.password_selector,
             self.submit_selector.as_deref(),
+            self.username_selector.as_deref(),
+            self.post_login.as_ref(),
         )
     }
 }
@@ -624,13 +737,7 @@ impl ConsumedBrowserApproval {
             .as_ref()
             .ok_or("trusted_selector_missing")?;
         if pinned.policy_id != self.credential.policy_id
-            || validate_trusted_login(
-                &pinned.login_url,
-                &self.wait.origin,
-                &pinned.password_selector,
-                pinned.submit_selector.as_deref(),
-            )
-            .is_err()
+            || pinned.validate(&self.wait.origin).is_err()
         {
             return Err("trusted_selector_missing");
         }

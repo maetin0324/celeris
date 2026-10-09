@@ -2331,6 +2331,17 @@
         "policy_id": {
           "type": "string"
         },
+        "post_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "同 D2: ログイン後の読み取りの opt-in（任意。無ければ観測停止のまま）。"
+        },
         "source": {
           "$ref": "#/$defs/BrowserSitePolicySource"
         },
@@ -2343,6 +2354,13 @@
         "updated_at": {
           "description": "RFC3339。",
           "type": "string"
+        },
+        "username_selector": {
+          "description": "ADR 2026-10-09 credential username / post-login D1: username 欄の selector（任意）。",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [
@@ -20068,6 +20086,40 @@
       ],
       "type": "object"
     },
+    "PostLogin": {
+      "additionalProperties": false,
+      "description": "ADR 2026-10-09 credential username / post-login D2-1: site policy の opt-in。管理者だけが書く。\n`read_origins` は exact HTTPS origin（credential の origin = IdP は入れられない）、`actions` は\n戻してよい action（task の allowed actions・grant と積を取る）。",
+      "properties": {
+        "actions": {
+          "items": {
+            "$ref": "#/$defs/PostLoginAction"
+          },
+          "type": "array"
+        },
+        "read_origins": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "read_origins",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "PostLoginAction": {
+      "description": "ADR 2026-10-09 credential username / post-login D2-6: ログイン後に戻せる agent の action。",
+      "enum": [
+        "snapshot",
+        "extract",
+        "screenshot",
+        "download",
+        "click"
+      ],
+      "type": "string"
+    },
     "PriorityInput": {
       "anyOf": [
         {
@@ -26666,7 +26718,25 @@
         "password_selector": {
           "type": "string"
         },
+        "post_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "同 D2-1: ログイン後に読み取ってよい origin と action（任意。無ければ観測停止のまま）。"
+        },
         "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username_selector": {
+          "description": "ADR 2026-10-09 credential username / post-login D1-1: password 欄と同じ頁の username 欄（任意）。",
           "type": [
             "string",
             "null"
@@ -29892,12 +29962,30 @@
         "policy_id": {
           "type": "string"
         },
+        "post_login": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PostLogin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "同 D2: ログイン後の読み取りの opt-in。無ければ ADR-0080 H3 のまま（session の終わりまで観測停止）。"
+        },
         "revision": {
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
         },
         "submit_selector": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username_selector": {
+          "description": "ADR 2026-10-09 credential username / post-login D1: 管理者が設定する username 欄の selector\n（password 欄と同じ頁・同じ文法）。あれば 1 回の注入で username と password の 2 欄を入れる。",
           "type": [
             "string",
             "null"

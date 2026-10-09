@@ -41,6 +41,8 @@ struct Fixture {
 pub(crate) struct ChromeFixture {
     pub(crate) controller: Arc<Mutex<CdpController>>,
     pub(crate) origin: String,
+    /// Every origin the fixture serves (the first is `origin`).
+    pub(crate) origins: Vec<String>,
     pub(crate) chrome_pid: u32,
     // Stop fixture/browser before deleting the profile and HTTPS files.
     pub(crate) children: Children,
@@ -49,6 +51,11 @@ pub(crate) struct ChromeFixture {
 
 impl ChromeFixture {
     pub(crate) fn start() -> Self {
+        Self::start_with(include_str!("browser_sso_fixture.py"))
+    }
+
+    /// Start `script` (an HTTPS fixture that writes its ports to `ports`) and a real Chromium.
+    pub(crate) fn start_with(script: &str) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let cert = Command::new("openssl")
             .args([
@@ -70,11 +77,7 @@ impl ChromeFixture {
             .output()
             .unwrap();
         assert!(cert.status.success());
-        std::fs::write(
-            directory.path().join("server.py"),
-            include_str!("browser_sso_fixture.py"),
-        )
-        .unwrap();
+        std::fs::write(directory.path().join("server.py"), script).unwrap();
         let mut children = Children(Vec::new());
         children.0.push(
             Command::new("python3")
@@ -92,10 +95,11 @@ impl ChromeFixture {
             thread::sleep(Duration::from_millis(10));
         }
         let ports = std::fs::read_to_string(port_file).unwrap();
-        let origin = format!(
-            "https://127.0.0.1:{}",
-            ports.split_whitespace().next().unwrap()
-        );
+        let origins: Vec<String> = ports
+            .split_whitespace()
+            .map(|p| format!("https://127.0.0.1:{p}"))
+            .collect();
+        let origin = origins[0].clone();
         let browser = shared_browser_executable(&browser_install_dirs())
             .expect("Playwright Chromium installed");
         let (read_end, child_write) = UnixStream::pair().unwrap();
@@ -153,6 +157,7 @@ impl ChromeFixture {
         Self {
             controller: Arc::new(Mutex::new(c)),
             origin,
+            origins,
             chrome_pid,
             children,
             directory,
@@ -212,6 +217,8 @@ impl Fixture {
             login_url: format!("{}{path}", self.origin),
             password_selector: "input[name=j_password]".into(),
             submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
         };
         {
             let mut c = self.controller.lock().unwrap();
@@ -235,8 +242,11 @@ impl Fixture {
             field: "password".into(),
             auth_section_id: "auth".into(),
             lease_id: "lease".into(),
+            username_selector: None,
         };
-        complete_trusted_login(&self.controller, broker, &self.session, request, &trusted).await
+        complete_trusted_login(&self.controller, broker, &self.session, request, &trusted)
+            .await
+            .map(|_| ())
     }
 }
 

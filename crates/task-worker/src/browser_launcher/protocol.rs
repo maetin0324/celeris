@@ -55,6 +55,15 @@ pub struct AuthenticateArgs {
     pub password_selector: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub submit_selector: Option<String>,
+    /// v5 (ADR 2026-10-09 credential username / post-login D1-5): the pinned username selector.
+    /// The launcher fills username and password in one injection.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub username_selector: Option<String>,
+    /// v5 (same D2): the effective post-login read. When present the launcher closes the auth
+    /// section only on the post-login conditions and then lets the agent read `read_origins` with
+    /// `actions`; otherwise observation stays stopped until the session ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_login: Option<task_core::browser_wait::PostLogin>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -62,6 +71,17 @@ pub struct AuthenticateArgs {
 pub enum AuthenticationStatus {
     Success,
     Rejected,
+}
+
+/// v5: whether agent observation resumed after a successful login (fixed; no page data).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginObservation {
+    /// ADR-0080 H3 holds until the session ends (no opt-in, or the post-login conditions did
+    /// not hold within 15 s: `post_login_unconfirmed`).
+    Held,
+    /// The auth section closed on the post-login conditions.
+    Resumed,
 }
 
 /// browser policy の非機密部分（許可 domain・許可 action・lease の長さ）。
@@ -175,11 +195,16 @@ pub enum Outcome {
 /// 無し）は decode できるが、daemon は証明なしとして扱う。v4 で credential login の
 /// `auth_begin` と `authenticate`（login_url・selector・credentiald lease と、`SCM_RIGHTS` で渡す
 /// injection 接続）を足した（ADR 2026-10-09 付記「launcher の Authenticate 経路」）。daemon は
-/// v4 未満の launcher に credential login を頼まない。
-pub const PROTOCOL_VERSION: u32 = 4;
+/// v4 未満の launcher に credential login を頼まない。v5 で `authenticate` に username selector と
+/// post_login、応答に `observation` を足した（ADR 2026-10-09 credential username / post-login D1-5）。
+/// daemon は policy がそのどちらかを使うなら v5 未満の launcher に頼まない（承認は消費しない）。
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// credential login（`auth_begin` / `authenticate`）を受ける最小の protocol 版。
 pub const CREDENTIAL_LOGIN_PROTOCOL: u32 = 4;
+
+/// username 欄の注入・ログイン後の読み取りを受ける最小の protocol 版。
+pub const POST_LOGIN_PROTOCOL: u32 = 5;
 
 /// launcher が `start_session` で返す session の束縛（launcher が `verify_isolation` を掛けた
 /// runtime process の pid・starttime、launcher が採った userns の owner UID と 6 つの namespace の
@@ -271,6 +296,9 @@ pub enum Response {
     },
     AuthenticateResult {
         status: AuthenticationStatus,
+        /// v5. v4 の launcher は出さない（= 観測停止のまま）。
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        observation: Option<LoginObservation>,
     },
     Error {
         code: ErrorCode,
@@ -448,18 +476,27 @@ impl Request {
                 for s in [&args.origin, &args.login_url, &args.password_selector]
                     .into_iter()
                     .chain(args.submit_selector.as_ref())
+                    .chain(args.username_selector.as_ref())
                 {
                     check_str(s)?;
                     if s.is_empty() {
                         return Err(ErrorCode::BadRequest);
                     }
                 }
-                // ADR-0110 D2 の形式検証（https・login_url の origin・selector の文法）。
-                task_core::browser_wait::validate_trusted_login(
+                if let Some(post) = &args.post_login {
+                    for s in &post.read_origins {
+                        check_str(s)?;
+                    }
+                }
+                // ADR-0110 D2 の形式検証（https・login_url の origin・selector の文法）と、username
+                // selector・post_login の形式（ADR 2026-10-09 credential username / post-login）。
+                task_core::browser_wait::validate_trusted_login_full(
                     &args.login_url,
                     &args.origin,
                     &args.password_selector,
                     args.submit_selector.as_deref(),
+                    args.username_selector.as_deref(),
+                    args.post_login.as_ref(),
                 )
                 .map_err(|_| ErrorCode::BadRequest)
             }

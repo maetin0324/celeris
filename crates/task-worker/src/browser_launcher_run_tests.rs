@@ -98,7 +98,7 @@ impl BackendSession for FakeSession {
         &mut self,
         args: &AuthenticateArgs,
         _broker: UnixStream,
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<crate::browser_launcher::protocol::LoginObservation, ErrorCode> {
         if args.session_id.is_empty()
             || args.auth_section_id.is_empty()
             || args.credential_lease_id.is_empty()
@@ -106,7 +106,7 @@ impl BackendSession for FakeSession {
         {
             return Err(ErrorCode::BadRequest);
         }
-        Ok(())
+        Ok(crate::browser_launcher::protocol::LoginObservation::Held)
     }
     fn stop(mut self: Box<Self>) {
         let _ = self.child.kill();
@@ -226,7 +226,7 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
         LauncherRuntime::start(&launcher.sock, "task-1", "run-auth", policy()).expect("start");
     assert_eq!(
         runtime.protocol_version().expect("hello"),
-        CREDENTIAL_LOGIN_PROTOCOL
+        crate::browser_launcher::protocol::POST_LOGIN_PROTOCOL
     );
     assert_eq!(
         runtime.auth_begin("auth-1").expect("auth_begin"),
@@ -244,11 +244,19 @@ fn launcher_credential_authenticate_fake_backend_returns_status_only() {
                 login_url: "https://example.com/login".into(),
                 password_selector: "#password".into(),
                 submit_selector: None,
+                username_selector: None,
+                post_login: None,
             },
             std::os::fd::OwnedFd::from(broker),
         )
         .expect("fake broker accepted authentication");
-    assert_eq!(status, AuthenticationStatus::Success);
+    assert_eq!(
+        status,
+        (
+            AuthenticationStatus::Success,
+            crate::browser_launcher::protocol::LoginObservation::Held
+        )
+    );
     runtime.stop().expect("stop");
 }
 
@@ -1936,6 +1944,8 @@ fn trusted_login() -> TrustedLogin {
         login_url: "https://example.com/login".into(),
         password_selector: "#password".into(),
         submit_selector: Some("#submit".into()),
+        username_selector: None,
+        post_login: None,
     }
 }
 
@@ -2256,7 +2266,7 @@ mod launcher_login {
             &mut self,
             args: &AuthenticateArgs,
             broker: UnixStream,
-        ) -> Result<(), ErrorCode> {
+        ) -> Result<crate::browser_launcher::protocol::LoginObservation, ErrorCode> {
             *self.brokers.lock().expect("lock") += 1;
             let section = self.login.as_mut().ok_or(ErrorCode::Unauthorized)?;
             run_login(
@@ -2369,6 +2379,8 @@ mod launcher_login {
             login_url: Some(format!("{origin}/entry")),
             password_selector: Some("input[name=j_password]".into()),
             submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
         };
         let reference = celeris_credentiald::CredentialRef {
             credential_id: "cred-1".into(),
@@ -2410,6 +2422,8 @@ mod launcher_login {
             login_url: format!("{origin}/entry"),
             password_selector: "input[name=j_password]".into(),
             submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
         };
         wait.trusted_login = Some(trusted.clone());
         ConsumedBrowserApproval {
@@ -2512,6 +2526,7 @@ mod launcher_login {
         let login = launcher_credential_login(
             &runtime,
             &approval,
+            None,
             &sup,
             &run_dir,
             &task_id.to_string(),
@@ -2520,7 +2535,12 @@ mod launcher_login {
             &sink,
         )
         .await;
-        assert_eq!(login, CredentialLogin::Recorded(Ok(())));
+        assert_eq!(
+            login,
+            CredentialLogin::Recorded(Ok(
+                crate::browser_launcher::protocol::LoginObservation::Held
+            ))
+        );
         assert_eq!(
             *brokers.lock().expect("lock"),
             1,
@@ -2630,6 +2650,8 @@ mod launcher_login {
             login_url: format!("{}/entry", chrome.origin),
             password_selector: "input[name=j_password]".into(),
             submit_selector: Some("button[name=_eventId_proceed]".into()),
+            username_selector: None,
+            post_login: None,
         };
         let result = run_login(
             &chrome.controller,
@@ -2658,10 +2680,174 @@ mod launcher_login {
 
     #[test]
     fn launcher_credential_login_old_launcher_message_is_explicit() {
-        let text = denied_text(launcher_too_old(3));
+        let text = denied_text(launcher_too_old(3, 4));
         assert!(text.contains("protocol 3"), "{text}");
         assert!(text.contains("rebuild and replace celeris-browser-launcher"));
         assert!(text.contains(&format!("protocol {CREDENTIAL_LOGIN_PROTOCOL} required")));
         let _ = AuthenticationStatus::Rejected;
     }
+}
+
+// ---- ADR 2026-10-09 credential username / post-login ----
+
+fn multi_domain_policy(
+    actions: &[task_core::BrowserAction],
+) -> crate::browser_policy::PreparedBrowserPolicy {
+    let domains: Vec<String> = ["idp.example.com", "lms.example.com", "other.example.com"]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    let grant = task_core::BrowserCapability {
+        allowed_domains: domains.clone(),
+        allowed_actions: Some(actions.to_vec()),
+        approval_actions: vec![],
+        credential_policy_ids: vec!["pol-example".into()],
+        ..Default::default()
+    };
+    let task = task_core::BrowserTaskPolicy {
+        policy_id: "post-login".into(),
+        revision: 1,
+        domain_mode: task_core::BrowserDomainMode::CommonHosts,
+        navigation_origins: vec![],
+        network_domains: domains,
+        allowed_actions: actions.to_vec(),
+        approval_actions: vec![],
+        credential_policy_ids: vec!["pol-example".into()],
+        artifact_policy_id: None,
+    };
+    crate::browser_policy::prepare(&grant, Some(&task), super::super::SUPPORTED_VERSION)
+        .expect("policy")
+}
+
+/// D2-1・D2-5: the effective read is the site policy's opt-in narrowed by the task policy (task ∩
+/// grant): read origins outside the allowed domains and actions the task does not allow drop out,
+/// and the harness policy gains only those actions (never auth / the credential plugin).
+#[test]
+fn post_login_read_is_the_site_opt_in_narrowed_by_the_task_policy() {
+    use task_core::BrowserAction as B;
+    use task_core::browser_wait::{PostLogin, PostLoginAction as P};
+    let policy = multi_domain_policy(&[
+        B::Navigate,
+        B::Snapshot,
+        B::Extract,
+        B::Click,
+        B::Scroll,
+        B::CredentialUse,
+    ]);
+    let mut trusted = trusted_login();
+    assert_eq!(
+        super::super::post_login_read(&policy, &trusted).expect("ok"),
+        None
+    );
+    trusted.post_login = Some(PostLogin {
+        read_origins: vec![
+            "https://lms.example.com".into(),
+            "https://not-allowed.example.net".into(),
+        ],
+        actions: vec![P::Snapshot, P::Extract, P::Download, P::Click],
+    });
+    let (read, bytes) = super::super::post_login_read(&policy, &trusted)
+        .expect("ok")
+        .expect("opt-in");
+    assert_eq!(
+        read.read_origins,
+        vec!["https://lms.example.com".to_string()]
+    );
+    assert_eq!(read.actions, vec!["snapshot", "extract", "click"]);
+    let allow = serde_json::from_slice::<task_core::AgentBrowserActionPolicy>(&bytes)
+        .expect("policy")
+        .allow;
+    for a in [
+        "snapshot", "gettext", "click", "navigate", "scroll", "launch", "close",
+    ] {
+        assert!(allow.iter().any(|x| x == a), "{a} in {allow:?}");
+    }
+    for a in [
+        "screenshot",
+        "download",
+        "auth_login",
+        task_core::browser::CREDENTIAL_PLUGIN_ACTION,
+    ] {
+        assert!(!allow.iter().any(|x| x == a), "{a} in {allow:?}");
+    }
+    // Opted-in actions the task does not allow, or origins outside the task, mean no opt-in.
+    trusted.post_login = Some(PostLogin {
+        read_origins: vec!["https://lms.example.com".into()],
+        actions: vec![P::Screenshot, P::Download],
+    });
+    assert_eq!(
+        super::super::post_login_read(&policy, &trusted).expect("ok"),
+        None
+    );
+    trusted.post_login = Some(PostLogin {
+        read_origins: vec!["https://not-allowed.example.net".into()],
+        actions: vec![P::Snapshot],
+    });
+    assert_eq!(
+        super::super::post_login_read(&policy, &trusted).expect("ok"),
+        None
+    );
+}
+
+/// D1-5: a pinned login with a username field or a post-login read needs launcher protocol 5;
+/// the refusal (before the approval is spent) names the required version.
+#[test]
+fn launcher_credential_v5_required_for_username_or_post_login_with_explicit_message() {
+    let policy = credential_policy();
+    let mut wait = registered_wait(&policy);
+    wait.trusted_login = Some(trusted_login());
+    assert_eq!(required_launcher_protocol(&wait), 4);
+    let mut t = trusted_login();
+    t.username_selector = Some("#user".into());
+    wait.trusted_login = Some(t);
+    assert_eq!(required_launcher_protocol(&wait), 5);
+    let mut t = trusted_login();
+    t.post_login = Some(task_core::browser_wait::PostLogin {
+        read_origins: vec!["https://lms.example.com".into()],
+        actions: vec![task_core::browser_wait::PostLoginAction::Snapshot],
+    });
+    wait.trusted_login = Some(t);
+    assert_eq!(required_launcher_protocol(&wait), 5);
+    let text = denied_text(launcher_too_old(4, 5));
+    assert!(text.contains("protocol 4"), "{text}");
+    assert!(
+        text.contains("rebuild and replace celeris-browser-launcher (protocol 5 required)"),
+        "{text}"
+    );
+}
+
+/// D2-5: the prompt says what may be read after login, and the H3 wording stays for held sessions.
+#[test]
+fn post_login_prompt_names_origins_and_actions_only_when_resumed() {
+    let mut context = super::super::BrowserContext {
+        run: BrowserRun {
+            task_id: task_core::TaskId::new(),
+            run_id: "r".into(),
+            session_id: "celeris-s".into(),
+            state: BrowserRunState::Running,
+            live_view_url: None,
+            policy: None,
+        },
+        cli: PathBuf::from("/w/celeris-browser.py"),
+        credential_used: true,
+        approval_actions: vec![],
+        approved_operation: None,
+        post_login: None,
+    };
+    let held = super::super::prompt(&context);
+    assert!(
+        held.contains("disabled for the rest of this session"),
+        "{held}"
+    );
+    context.post_login = Some(super::super::PostLoginRead {
+        read_origins: vec!["https://lms.example.com".into()],
+        actions: vec!["snapshot".into(), "extract".into()],
+    });
+    let resumed = super::super::prompt(&context);
+    assert!(
+        resumed.contains("you may use snapshot, extract only on pages of https://lms.example.com"),
+        "{resumed}"
+    );
+    assert!(resumed.contains("password field cannot be"), "{resumed}");
+    assert!(!resumed.contains("disabled for the rest of this session"));
 }

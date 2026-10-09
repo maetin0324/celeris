@@ -24,7 +24,8 @@ use task_core::{BrowserRun, BrowserRunState};
 use super::{BrowserContext, BrowserSink, CLI, EventSinkLive, forward_events, write_private};
 use crate::browser_action::{ActionExecutor, ActionRequest, ActionServer};
 use crate::browser_launcher::protocol::{
-    AuthenticateArgs, AuthenticationStatus, CREDENTIAL_LOGIN_PROTOCOL,
+    AuthenticateArgs, AuthenticationStatus, CREDENTIAL_LOGIN_PROTOCOL, LoginObservation,
+    POST_LOGIN_PROTOCOL,
 };
 use crate::browser_launcher::{
     ActionArgs, LauncherClient, Observation, Outcome, Receipt, SessionFacts, SessionPolicy,
@@ -173,7 +174,7 @@ impl LauncherRuntime {
         &self,
         args: AuthenticateArgs,
         broker: std::os::fd::OwnedFd,
-    ) -> Result<AuthenticationStatus, &'static str> {
+    ) -> Result<(AuthenticationStatus, LoginObservation), &'static str> {
         let mut client = self.client.lock().map_err(|_| UNAVAILABLE)?;
         client.authenticate(args, broker).map_err(|_| UNAVAILABLE)
     }
@@ -867,6 +868,17 @@ pub(super) async fn run(
         }
         None => policy.action_policy.clone(),
     };
+    // ADR 2026-10-09 credential username / post-login D2: the read the pinned site policy opts into.
+    // The launcher session is started with the post-login verbs so they can run once the auth
+    // section closes on the post-login conditions; until then (or if it never does) the launcher's
+    // controller refuses every agent command and the daemon's action server does not allow them.
+    let post_login_plan = match approved_credential
+        .as_ref()
+        .and_then(|w| w.trusted_login.as_ref())
+    {
+        Some(pinned) => super::post_login_read(policy, pinned)?,
+        None => None,
+    };
     let approval_actions = super::shim_approval_actions(policy, approved_action);
     let runtime_dir = req.workspace.join("runs").join(run_id).join("browser");
     let output = runtime_dir.join("output");
@@ -879,13 +891,22 @@ pub(super) async fn run(
         &approval_actions,
         false,
     )?;
-    let allowed: task_core::AgentBrowserActionPolicy = serde_json::from_slice(&action_policy)
-        .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    let mut allowed: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&action_policy)
+            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
     let control_gate = sink
         .browser_control_gate(run_id, &session)
         .ok_or_else(|| AdapterError::Other("browser control store unavailable".into()))?;
+    let launcher_allow = match &post_login_plan {
+        Some((_, bytes)) => {
+            serde_json::from_slice::<task_core::AgentBrowserActionPolicy>(bytes)
+                .map_err(|_| AdapterError::Other("browser policy rejected".into()))?
+                .allow
+        }
+        None => allowed.allow.clone(),
+    };
     let session_policy =
-        session_policy(&allowed.allow, policy.allowed_domains(), limits.wall_clock);
+        session_policy(&launcher_allow, policy.allowed_domains(), limits.wall_clock);
     let credentiald_runtime = credentiald_runtime_dir();
     let (runtime, credential_admitted) = open_launcher_session(
         target,
@@ -954,6 +975,7 @@ pub(super) async fn run(
         session_id: browser.session_id.clone(),
     });
     let mut credential_used = false;
+    let mut post_login_context = None;
     // ADR 2026-10-09 付記「launcher の Authenticate 経路」5: once the store records the auth
     // section it stays recorded (and worker events stay dropped) until the session has stopped.
     let mut auth_recorded = false;
@@ -967,20 +989,23 @@ pub(super) async fn run(
             return refuse(runtime, credential_denied()).await;
         }
         // Version check before the approval is spent: an old launcher fails closed with a clear
-        // message and the approval stays usable once the launcher is replaced.
+        // message and the approval stays usable once the launcher is replaced. A pinned login with
+        // a username field or a post-login read needs protocol 5 (ADR 2026-10-09 credential
+        // username / post-login D1-5).
+        let required = required_launcher_protocol(wait);
         let probe = Arc::clone(&runtime);
         let version = tokio::task::spawn_blocking(move || probe.protocol_version())
             .await
             .map_err(|_| unavailable())?;
         match version {
-            Ok(v) if v >= CREDENTIAL_LOGIN_PROTOCOL => {}
+            Ok(v) if v >= required => {}
             Ok(v) => {
                 tracing::error!(
                     launcher_protocol = v,
-                    required = CREDENTIAL_LOGIN_PROTOCOL,
+                    required,
                     "browser launcher is too old for credential login"
                 );
-                return refuse(runtime, launcher_too_old(v)).await;
+                return refuse(runtime, launcher_too_old(v, required)).await;
             }
             Err(_) => return refuse(runtime, credential_denied()).await,
         }
@@ -997,6 +1022,7 @@ pub(super) async fn run(
         let login = launcher_credential_login(
             &runtime,
             &consumed,
+            post_login_plan.as_ref().map(|(read, _)| read),
             sup,
             credentiald_dir,
             &req.task.id.to_string(),
@@ -1006,6 +1032,7 @@ pub(super) async fn run(
         )
         .await;
         let live_session = runtime.session_id().to_owned();
+        let mut login_observation: Result<LoginObservation, &'static str> = Err("not_logged_in");
         let result = match login {
             CredentialLogin::NotRecorded => {
                 let stop_runtime = runtime;
@@ -1025,11 +1052,12 @@ pub(super) async fn run(
             }
             CredentialLogin::Failed(code) => Err(code),
             CredentialLogin::Recorded(result) => {
+                login_observation = result;
                 auth_recorded = true;
                 // Nothing has been forwarded since the launcher stopped observation; from here
                 // on every worker event of this session is dropped (ADR-0080 H3).
                 auth_guard = Some(live.auth_section());
-                result
+                result.map(|_| ())
             }
         };
         let status = if result.is_ok() { "success" } else { "failure" };
@@ -1072,6 +1100,68 @@ pub(super) async fn run(
             });
         }
         credential_used = true;
+        // ADR 2026-10-09 credential username / post-login D2-2: the launcher closed the auth section
+        // on the post-login conditions. Store (auth section closed; the credential-session mark keeps
+        // takeover refused), worker events (Live View stays off: no live view URL) and the shim
+        // policy follow, before the harness starts.
+        if let (Ok(LoginObservation::Resumed), Some((read, bytes))) =
+            (&login_observation, &post_login_plan)
+        {
+            let reopened = sink
+                .browser_auth_section(run_id, &browser.session_id, false)
+                .is_ok()
+                && super::replace_private(&runtime_dir.join("policy.json"), bytes).is_ok()
+                && admit_shim_config(
+                    &runtime_dir,
+                    &browser.session_id,
+                    policy,
+                    bytes,
+                    &approval_actions,
+                    true,
+                )
+                .is_ok();
+            if reopened {
+                allowed = serde_json::from_slice(bytes)
+                    .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+                post_login_context = Some(read.clone());
+                drop(auth_guard.take());
+            }
+            sink.progress_with(
+                &format!(
+                    "browser.post_login: {}",
+                    if reopened {
+                        "resumed"
+                    } else {
+                        "post_login_unconfirmed"
+                    }
+                ),
+                &task_core::ProgressFields {
+                    kind: Some(task_core::ProgressKind::ToolResult),
+                    tool: Some("browser.post_login".into()),
+                    summary: Some(
+                        if reopened {
+                            "resumed"
+                        } else {
+                            "post_login_unconfirmed"
+                        }
+                        .into(),
+                    ),
+                    error: !reopened,
+                    ..Default::default()
+                },
+            );
+        } else if post_login_plan.is_some() {
+            sink.progress_with(
+                "browser.post_login: post_login_unconfirmed",
+                &task_core::ProgressFields {
+                    kind: Some(task_core::ProgressKind::ToolResult),
+                    tool: Some("browser.post_login".into()),
+                    summary: Some("post_login_unconfirmed".into()),
+                    error: true,
+                    ..Default::default()
+                },
+            );
+        }
     }
     let action_server = ActionServer::start_with(
         &action_socket,
@@ -1094,6 +1184,7 @@ pub(super) async fn run(
         credential_used,
         approval_actions,
         approved_operation,
+        post_login: post_login_context,
     });
     let monitor_req = req.clone();
     let outcome = {
@@ -1182,12 +1273,22 @@ pub(super) async fn run(
     outcome
 }
 
-/// launcher の protocol が credential login（v4）に足りない。承認は消費していない。
-fn launcher_too_old(version: u32) -> AdapterError {
+/// launcher の protocol が credential login（v4、username 欄・ログイン後の読み取りは v5）に足りない。
+/// 承認は消費していない。
+fn launcher_too_old(version: u32, required: u32) -> AdapterError {
     AdapterError::Other(format!(
         "browser launcher protocol {version} lacks the credential login verbs; rebuild and replace \
-         celeris-browser-launcher (protocol {CREDENTIAL_LOGIN_PROTOCOL} required)"
+         celeris-browser-launcher (protocol {required} required)"
     ))
+}
+
+/// The launcher protocol the pinned login needs (ADR 2026-10-09 credential username / post-login
+/// D1-5): 5 when it fills a username field or opts into the post-login read, else 4.
+pub(crate) fn required_launcher_protocol(wait: &BrowserWait) -> u32 {
+    match &wait.trusted_login {
+        Some(t) if t.username_selector.is_some() || t.post_login.is_some() => POST_LOGIN_PROTOCOL,
+        _ => CREDENTIAL_LOGIN_PROTOCOL,
+    }
 }
 
 /// credentiald から launcher session の登録を外す（session を止められたときだけ）。失敗は無視
@@ -1208,9 +1309,9 @@ pub(crate) enum CredentialLogin {
     NotRecorded,
     /// auth section を記録する前に失敗した（lease を発行していれば revoke 済み、注入なし）。
     Failed(&'static str),
-    /// store に auth section を記録した（解除は session の stop 後だけ）。中身は login の成否で、
-    /// 失敗なら lease は revoke 済み。
-    Recorded(Result<(), &'static str>),
+    /// store に auth section を記録した（解除は session の stop 後、または v5 で launcher が観測を
+    /// 再開した後）。中身は login の成否と観測の再開の有無で、失敗なら lease は revoke 済み。
+    Recorded(Result<LoginObservation, &'static str>),
 }
 
 /// ADR 2026-10-09 付記「launcher の Authenticate 経路」: 承認を消費した後の launcher の login。
@@ -1228,6 +1329,7 @@ pub(crate) enum CredentialLogin {
 pub(crate) async fn launcher_credential_login(
     runtime: &Arc<LauncherRuntime>,
     consumed: &task_core::browser_wait::ConsumedBrowserApproval,
+    post_login: Option<&super::PostLoginRead>,
     sup: &crate::browser_credential::CredentialSupervisor,
     credentiald_runtime: &Path,
     task_id: &str,
@@ -1287,6 +1389,20 @@ pub(crate) async fn launcher_credential_login(
             login_url: trusted.login_url.clone(),
             password_selector: trusted.password_selector.clone(),
             submit_selector: trusted.submit_selector.clone(),
+            username_selector: trusted.username_selector.clone(),
+            // Only the effective read (site policy ∩ task policy) crosses to the launcher.
+            post_login: post_login.map(|read| task_core::browser_wait::PostLogin {
+                read_origins: read.read_origins.clone(),
+                actions: read
+                    .actions
+                    .iter()
+                    .filter_map(|a| {
+                        task_core::browser_wait::PostLoginAction::ALL
+                            .into_iter()
+                            .find(|p| p.as_str() == a)
+                    })
+                    .collect(),
+            }),
         };
         // This process connects, so credentiald admits the registered controller as the peer.
         match std::os::unix::net::UnixStream::connect(&injection) {
@@ -1297,8 +1413,10 @@ pub(crate) async fn launcher_credential_login(
                 })
                 .await
                 {
-                    Ok(Ok(AuthenticationStatus::Success)) => Ok(()),
-                    Ok(Ok(AuthenticationStatus::Rejected)) => Err("launcher_authenticate_rejected"),
+                    Ok(Ok((AuthenticationStatus::Success, observation))) => Ok(observation),
+                    Ok(Ok((AuthenticationStatus::Rejected, _))) => {
+                        Err("launcher_authenticate_rejected")
+                    }
                     _ => Err("launcher_authenticate_failed"),
                 }
             }

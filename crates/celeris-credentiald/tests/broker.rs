@@ -54,6 +54,8 @@ impl Fixture {
             login_url: None,
             password_selector: None,
             submit_selector: None,
+            username_selector: None,
+            post_login: None,
         };
         Self {
             root,
@@ -648,4 +650,45 @@ fn failed_consume_audit_never_returns_secret_or_consumes_lease() {
     assert_eq!(secret.password, SENTINEL);
     drop(secret);
     assert!(!f.audit().contains(SENTINEL));
+}
+
+/// ADR 2026-10-09 credential username / post-login D1-1・D2-1: 登録時の site policy の username selector と
+/// post_login は vault に入り（秘密ではない）、承認画面用の describe に出て、grant は登録時の値と一致する
+/// policy だけを受ける。
+#[test]
+fn registered_username_selector_and_post_login_pin_the_grant() {
+    use task_core::browser_wait::{PostLogin, PostLoginAction};
+    let mut f = Fixture::new();
+    f.policy.login_url = Some("https://example.test/idp/login".into());
+    f.policy.password_selector = Some("input[name=j_password]".into());
+    f.policy.username_selector = Some("input[name=j_username]".into());
+    f.policy.post_login = Some(PostLogin {
+        read_origins: vec!["https://lms.example.test".into()],
+        actions: vec![PostLoginAction::Snapshot, PostLoginAction::Click],
+    });
+    f.register();
+    let described = f
+        .manual
+        .describe_registered(&f.reference, "https://example.test", Some(1))
+        .expect("describe");
+    assert_eq!(
+        described.username_selector.as_deref(),
+        Some("input[name=j_username]")
+    );
+    assert_eq!(described.post_login, f.policy.post_login);
+    let vault = fs::read_to_string(f.root.path().join("data/vault/login-1.json")).expect("vault");
+    assert!(!vault.contains(SENTINEL) && !vault.contains("test-user"));
+    let mut swapped = f.request("k-user", 60);
+    swapped.policy.username_selector = Some("#attacker".into());
+    assert!(f.broker.grant(swapped).is_err());
+    let mut dropped = f.request("k-none", 60);
+    dropped.policy.username_selector = None;
+    assert!(f.broker.grant(dropped).is_err());
+    let mut widened = f.request("k-post", 60);
+    widened.policy.post_login = Some(PostLogin {
+        read_origins: vec!["https://other.example.test".into()],
+        actions: vec![PostLoginAction::Snapshot],
+    });
+    assert!(f.broker.grant(widened).is_err());
+    assert!(f.broker.grant(f.request("k-ok", 60)).is_ok());
 }

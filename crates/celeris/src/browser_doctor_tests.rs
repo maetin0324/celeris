@@ -145,6 +145,8 @@ fn add_policy_grant(store: &SqliteStore) {
         login_url: "https://example.com/login".into(),
         password_selector: "#password".into(),
         submit_selector: None,
+        username_selector: None,
+        post_login: None,
     };
     let now = time::OffsetDateTime::now_utc();
     store

@@ -15,6 +15,8 @@ fn policy() -> CredentialPolicy {
         login_url: Some(format!("{ORIGIN}/login?next=%2F")),
         password_selector: Some("form#login > input[name=\"password\"]".into()),
         submit_selector: Some("button[type=submit]".into()),
+        username_selector: None,
+        post_login: None,
     }
 }
 
@@ -134,8 +136,81 @@ fn legacy_policy_json_reads_without_selectors_and_unknown_fields_are_rejected() 
     assert_eq!(p.validate(), Ok(()));
     // 旧い形で書き出すと欄は出ない（skip_serializing_if）。
     assert_eq!(serde_json::to_value(&p).expect("ser"), legacy);
-    // username selector はこの ADR の範囲外で、欄を持つ policy は読まない。
+    // 未知の欄は読まない。
     let mut v = legacy;
-    v["username_selector"] = "input[name=user]".into();
+    v["user_selector"] = "input[name=user]".into();
     assert!(serde_json::from_value::<CredentialPolicy>(v).is_err());
+}
+
+/// ADR 2026-10-09 credential username / post-login D1-1・D2-1: username selector と post_login の形式検証。
+#[test]
+fn username_selector_and_post_login_are_validated_like_the_login_fields() {
+    use task_core::browser_wait::{PostLogin, PostLoginAction};
+    let read = || PostLogin {
+        read_origins: vec!["https://lms.example.test".into()],
+        actions: vec![PostLoginAction::Snapshot, PostLoginAction::Extract],
+    };
+    assert_eq!(
+        with(|p| {
+            p.username_selector = Some("input[name=\"j_username\"]".into());
+            p.post_login = Some(read());
+        }),
+        Ok(())
+    );
+    let mut ok = policy();
+    ok.username_selector = Some("#u".into());
+    assert_eq!(ok.trusted_username_selector(), Some("#u"));
+    ok.login_url = None;
+    assert_eq!(ok.trusted_username_selector(), None);
+    for bad in ["", "input, #u", "input:focus", "*", "#a\\b"] {
+        assert_eq!(
+            with(|p| p.username_selector = Some(bad.into())),
+            Err(Error::Invalid),
+            "username {bad:?}"
+        );
+    }
+    // username 欄と password 欄が同じ selector。
+    assert_eq!(
+        with(|p| p.username_selector = p.password_selector.clone()),
+        Err(Error::Invalid)
+    );
+    // login 無しの policy は username / post_login を持てない。
+    assert_eq!(
+        with(|p| {
+            p.login_url = None;
+            p.password_selector = None;
+            p.submit_selector = None;
+            p.username_selector = Some("#u".into());
+        }),
+        Err(Error::Invalid)
+    );
+    type Edit = Box<dyn Fn(&mut PostLogin)>;
+    let bad_post: Vec<Edit> = vec![
+        Box::new(|r| r.read_origins.clear()),
+        Box::new(|r| r.read_origins = vec![ORIGIN.into()]),
+        Box::new(|r| r.read_origins = vec!["http://lms.example.test".into()]),
+        Box::new(|r| r.read_origins = vec!["https://lms.example.test/".into()]),
+        Box::new(|r| r.read_origins = vec!["https://LMS.example.test".into()]),
+        Box::new(|r| r.read_origins = vec!["https://lms.example.test:443".into()]),
+        Box::new(|r| r.read_origins.push("https://lms.example.test".into())),
+        Box::new(|r| {
+            r.read_origins = (0..9)
+                .map(|i| format!("https://h{i}.example.test"))
+                .collect()
+        }),
+        Box::new(|r| r.actions.clear()),
+        Box::new(|r| r.actions.push(PostLoginAction::Snapshot)),
+    ];
+    for (i, edit) in bad_post.iter().enumerate() {
+        let mut post = read();
+        edit(&mut post);
+        assert_eq!(
+            with(|p| p.post_login = Some(post.clone())),
+            Err(Error::Invalid),
+            "post_login {i}"
+        );
+    }
+    // 未知の action 名は読まない。
+    let v = serde_json::json!({"read_origins": ["https://lms.example.test"], "actions": ["eval"]});
+    assert!(serde_json::from_value::<PostLogin>(v).is_err());
 }

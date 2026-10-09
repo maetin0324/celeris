@@ -619,6 +619,7 @@ fn inner() {
         field: "password".into(),
         auth_section_id: "h3".into(),
         lease_id: "lease-shared".into(),
+        username_selector: None,
     };
     let receipt = controller
         .lock()

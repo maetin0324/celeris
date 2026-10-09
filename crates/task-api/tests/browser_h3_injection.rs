@@ -134,6 +134,8 @@ fn world() -> World {
                     login_url: format!("{ORIGIN}/login"),
                     password_selector: "#password".into(),
                     submit_selector: Some("#submit".into()),
+                    username_selector: None,
+                    post_login: None,
                 }]
                 .into(),
             })),

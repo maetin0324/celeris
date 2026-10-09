@@ -207,6 +207,7 @@ async fn p4c_conformance_backend_protocol() {
         credential_used: false,
         approval_actions: Vec::new(),
         approved_operation: None,
+        post_login: None,
     });
     let command = script.to_string_lossy().into_owned();
     let adapter: Arc<dyn WorkerAdapter> = match backend.as_str() {
@@ -509,6 +510,7 @@ fn task_and_execution_isolate_sessions_and_prompt_describes_capability() {
         credential_used: false,
         approval_actions: Vec::new(),
         approved_operation: None,
+        post_login: None,
         cli: PathBuf::from("/workspace/runs/run1/browser/celeris-browser.py"),
         run: BrowserRun {
             task_id: first,
@@ -2344,6 +2346,7 @@ fn approval_request_is_bound_to_the_policy_and_resumes_only_under_the_same_polic
         credential_used: false,
         approval_actions: vec!["click".into()],
         approved_operation: None,
+        post_login: None,
     };
     let text = prompt(&context);
     assert!(text.contains("need a human approval before each use: click"));

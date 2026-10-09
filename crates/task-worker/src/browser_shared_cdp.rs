@@ -208,15 +208,7 @@ fn serve(
         let session = command["sessionId"].as_str();
         let blocked = session.is_some_and(|s| !sessions.contains(s))
             || !navigation_allowed(method, &params, domains)
-            || matches!(
-                method,
-                "Network.getRequestPostData"
-                    | "Network.getResponseBody"
-                    | "Fetch.getResponseBody"
-                    | "Network.replayXHR"
-            )
-            || method.starts_with("Tracing.")
-            || method == "Page.startScreencast";
+            || denied_method(method);
         let (response, events) = match controller.lock() {
             Ok(mut c) if !c.auth_section_active() && !blocked => {
                 let result = c.agent_command(method, params, session);
@@ -233,7 +225,11 @@ fn serve(
                         reply["id"] = id.clone();
                         reply
                     }
-                    Err(e @ InjectionError::RedisplayDetected) => error(id, e.code()),
+                    Err(
+                        e @ (InjectionError::RedisplayDetected
+                        | InjectionError::ObservationOriginDenied
+                        | InjectionError::PasswordFieldPresent),
+                    ) => error(id, e.code()),
                     Err(_) => error(id, "cdp_command_failed"),
                 };
                 (reply, events)
@@ -281,7 +277,101 @@ fn agent_readable(stream: &UnixStream, wait: Duration) -> bool {
     unsafe { nix::libc::poll(&mut pollfd, 1, wait.as_millis() as i32) != 0 }
 }
 
-/// Only events of sessions this connection attached cross; request bodies never do.
+/// CDP methods no agent connection may call: request/response bodies, cookie and storage reads
+/// (ADR 2026-10-09 credential username / post-login D2-3), tracing and screencast.
+pub(crate) fn denied_method(method: &str) -> bool {
+    matches!(
+        method,
+        "Network.getRequestPostData"
+            | "Network.getResponseBody"
+            | "Network.getResponseBodyForInterception"
+            | "Network.takeResponseBodyForInterceptionAsStream"
+            | "Network.getCookies"
+            | "Network.getAllCookies"
+            | "Network.replayXHR"
+            | "Fetch.getResponseBody"
+            | "Fetch.takeResponseBodyAsStream"
+            | "Storage.getCookies"
+            | "Storage.getSharedStorageEntries"
+            | "Page.getResourceContent"
+            | "Page.searchInResource"
+            | "Page.startScreencast"
+            | "IO.read"
+    ) || method.starts_with("Tracing.")
+        || method.starts_with("DOMStorage.")
+        || method.starts_with("IndexedDB.")
+        || method.starts_with("CacheStorage.")
+}
+
+/// Header names never forwarded to an agent connection (case-insensitive).
+const STRIPPED_HEADERS: [&str; 4] = [
+    "cookie",
+    "set-cookie",
+    "authorization",
+    "proxy-authorization",
+];
+
+/// Remove credential-bearing headers and cookie lists from a CDP `Network.*` / `Fetch.*` event
+/// (ADR 2026-10-09 credential username / post-login D2-3). Raw header text is dropped entirely.
+pub(crate) fn strip_credential_headers(event: &mut Value) {
+    let Some(params) = event.get_mut("params").and_then(Value::as_object_mut) else {
+        return;
+    };
+    for key in [
+        "headersText",
+        "associatedCookies",
+        "blockedCookies",
+        "exemptedCookies",
+        "cookiePartitionKey",
+    ] {
+        params.remove(key);
+    }
+    let strip = |headers: &mut Value| match headers {
+        Value::Object(map) => {
+            map.retain(|name, _| !STRIPPED_HEADERS.contains(&name.to_ascii_lowercase().as_str()))
+        }
+        // Fetch domain: [{name, value}].
+        Value::Array(entries) => entries.retain(|h| {
+            h["name"]
+                .as_str()
+                .is_none_or(|n| !STRIPPED_HEADERS.contains(&n.to_ascii_lowercase().as_str()))
+        }),
+        _ => {}
+    };
+    for key in ["headers", "responseHeaders"] {
+        if let Some(h) = params.get_mut(key) {
+            strip(h);
+        }
+    }
+    for holder in ["request", "response", "redirectResponse"] {
+        if let Some(obj) = params.get_mut(holder).and_then(Value::as_object_mut) {
+            obj.remove("headersText");
+            obj.remove("requestHeadersText");
+            for key in ["headers", "requestHeaders"] {
+                if let Some(h) = obj.get_mut(key) {
+                    strip(h);
+                }
+            }
+        }
+    }
+}
+
+/// What every event crossing to an agent connection loses: request bodies (ADR-0110 D1) and
+/// credential headers / cookie lists (ADR 2026-10-09 credential username / post-login D2-3).
+pub(crate) fn sanitize_agent_event(event: &mut Value) {
+    if let Some(request) = event
+        .pointer_mut("/params/request")
+        .and_then(Value::as_object_mut)
+    {
+        request.remove("postData");
+        request.remove("postDataEntries");
+        request.remove("hasPostData");
+    }
+    strip_credential_headers(event);
+}
+
+/// Only events of sessions this connection attached cross; request bodies and credential headers
+/// never do.
 fn forward_events(
     stream: &mut UnixStream,
     events: Vec<Value>,
@@ -294,14 +384,7 @@ fn forward_events(
         if !allowed {
             continue;
         }
-        if let Some(request) = event
-            .pointer_mut("/params/request")
-            .and_then(Value::as_object_mut)
-        {
-            request.remove("postData");
-            request.remove("postDataEntries");
-            request.remove("hasPostData");
-        }
+        sanitize_agent_event(&mut event);
         send_ws(stream, &event)?;
     }
     Ok(())
@@ -514,5 +597,67 @@ mod tests {
         assert_eq!(mode & 0o777, 0o600);
         drop(shared);
         assert!(!socket.exists(), "relay socket removed on drop");
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-3: cookie / storage / body reads are refused
+    /// and credential headers never reach the agent.
+    #[test]
+    fn post_login_relay_denies_cookie_storage_body_and_strips_credential_headers() {
+        for m in [
+            "Network.getCookies",
+            "Network.getAllCookies",
+            "Storage.getCookies",
+            "DOMStorage.getDOMStorageItems",
+            "IndexedDB.requestData",
+            "CacheStorage.requestEntries",
+            "Network.getResponseBody",
+            "Fetch.getResponseBody",
+            "Network.getRequestPostData",
+            "Page.getResourceContent",
+            "Tracing.start",
+            "Page.startScreencast",
+        ] {
+            assert!(denied_method(m), "{m}");
+        }
+        for m in [
+            "Page.navigate",
+            "Runtime.evaluate",
+            "Page.captureScreenshot",
+            "Network.enable",
+        ] {
+            assert!(!denied_method(m), "{m}");
+        }
+        let mut sent = json!({"method":"Network.requestWillBeSent","sessionId":"S","params":{
+            "request":{"url":"https://lms.test/","headers":{"Cookie":"sid=1","Accept":"x","AUTHORIZATION":"Bearer t"}},
+            "redirectResponse":{"headers":{"set-cookie":"sid=2","x":"y"},"requestHeadersText":"Cookie: sid=1"}}});
+        strip_credential_headers(&mut sent);
+        assert_eq!(sent["params"]["request"]["headers"], json!({"Accept":"x"}));
+        assert_eq!(
+            sent["params"]["redirectResponse"]["headers"],
+            json!({"x":"y"})
+        );
+        assert!(sent["params"]["redirectResponse"]["requestHeadersText"].is_null());
+        let mut extra = json!({"method":"Network.responseReceivedExtraInfo","params":{
+            "headers":{"Set-Cookie":"sid=3","Content-Type":"text/html"},"headersText":"Set-Cookie: sid=3",
+            "blockedCookies":[{"cookie":{"value":"v"}}]}});
+        strip_credential_headers(&mut extra);
+        assert_eq!(
+            extra["params"]["headers"],
+            json!({"Content-Type":"text/html"})
+        );
+        assert!(
+            extra["params"]["headersText"].is_null() && extra["params"]["blockedCookies"].is_null()
+        );
+        let mut paused = json!({"method":"Fetch.requestPaused","params":{
+            "request":{"headers":{"cookie":"a"}},
+            "responseHeaders":[{"name":"Set-Cookie","value":"b"},{"name":"X","value":"c"}]}});
+        strip_credential_headers(&mut paused);
+        assert_eq!(paused["params"]["request"]["headers"], json!({}));
+        assert_eq!(
+            paused["params"]["responseHeaders"],
+            json!([{"name":"X","value":"c"}])
+        );
+        let text = serde_json::to_string(&[sent, extra, paused]).unwrap();
+        assert!(!text.contains("sid=") && !text.contains("Bearer"));
     }
 }

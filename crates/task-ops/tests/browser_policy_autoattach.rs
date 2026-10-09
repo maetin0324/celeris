@@ -25,6 +25,8 @@ fn store_with_grant() -> SqliteStore {
                     login_url: format!("{origin}/login"),
                     password_selector: "#p".into(),
                     submit_selector: None,
+                    username_selector: None,
+                    post_login: None,
                 },
                 "admin",
                 now,

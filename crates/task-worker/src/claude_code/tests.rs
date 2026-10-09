@@ -725,6 +725,7 @@ async fn browser_cli_result_errors_are_redacted_before_normalized_result_write()
         credential_used: false,
         approval_actions: Vec::new(),
         approved_operation: None,
+        post_login: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-error-test".into(),
@@ -770,6 +771,7 @@ echo '{"type":"result","subtype":"success","is_error":false}'
         credential_used: false,
         approval_actions: Vec::new(),
         approved_operation: None,
+        post_login: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-log-test".into(),

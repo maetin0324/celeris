@@ -274,6 +274,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"401 U
             credential_used: false,
             approval_actions: Vec::new(),
             approved_operation: None,
+            post_login: None,
             run: task_core::BrowserRun {
                 task_id: req.task.id,
                 run_id: "browser-error-test".into(),
@@ -323,6 +324,7 @@ printf '%s\n' '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}'
         credential_used: false,
         approval_actions: Vec::new(),
         approved_operation: None,
+        post_login: None,
         run: task_core::BrowserRun {
             task_id: req.task.id,
             run_id: "browser-log-test".into(),

@@ -10,7 +10,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::protocol::{
-    ActionArgs, AuthenticateArgs, ErrorCode, Observation, SessionFacts, SessionState, Verb,
+    ActionArgs, AuthenticateArgs, ErrorCode, LoginObservation, Observation, SessionFacts,
+    SessionState, Verb,
 };
 use super::server::{BackendSession, Launched, SessionBackend, StartRequest};
 use super::userns;
@@ -551,6 +552,7 @@ impl SessionBackend for RuntimeBackend {
                     sup,
                     shared,
                     login: None,
+                    after_login: None,
                     sequence: 0,
                     dir: cleanup,
                     uid,
@@ -582,6 +584,9 @@ struct RuntimeSession {
     shared: SharedCdp,
     /// v4 の login 区間（`auth_begin` で作り、`authenticate` で一度だけ使う）。
     login: Option<LoginSection>,
+    /// v5: the login's outcome for the agent's verbs (ADR 2026-10-09 credential username /
+    /// post-login D2-6). `None` until a login ran in this session.
+    after_login: Option<AfterLogin>,
     sequence: u64,
     dir: SessionDir,
     uid: u32,
@@ -610,6 +615,50 @@ impl RuntimeSession {
             no_new_privs: field("NoNewPrivs:").as_deref() == Some("1"),
             listen_count: listening_tcp(pid).ok()? as u32,
         })
+    }
+}
+
+/// What the agent may do after a login in this session (ADR 2026-10-09 credential username /
+/// post-login D2-6). The controller's CDP gate is the enforcement; this refuses the verbs earlier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AfterLogin {
+    /// Observation stays stopped until the session ends (ADR-0080 H3).
+    Held,
+    /// The auth section closed on the post-login conditions; these reading/acting verbs may run.
+    Resumed(Vec<Verb>),
+}
+
+impl AfterLogin {
+    fn from_login(observation: LoginObservation, args: &AuthenticateArgs) -> Self {
+        use task_core::browser_wait::PostLoginAction as A;
+        match (observation, &args.post_login) {
+            (LoginObservation::Resumed, Some(post)) => Self::Resumed(
+                post.actions
+                    .iter()
+                    .map(|a| match a {
+                        A::Snapshot => Verb::Snapshot,
+                        A::Extract => Verb::Extract,
+                        A::Screenshot => Verb::Screenshot,
+                        A::Download => Verb::Download,
+                        A::Click => Verb::Click,
+                    })
+                    .collect(),
+            ),
+            _ => Self::Held,
+        }
+    }
+
+    /// Whether `verb` may run in this session after the login.
+    pub(crate) fn permits(&self, verb: Verb) -> bool {
+        let reads = matches!(
+            verb,
+            Verb::Snapshot | Verb::Extract | Verb::Screenshot | Verb::Download | Verb::Click
+        );
+        match self {
+            _ if !reads => true,
+            Self::Held => false,
+            Self::Resumed(verbs) => verbs.contains(&verb),
+        }
     }
 }
 
@@ -652,27 +701,32 @@ pub(crate) fn begin_login(
 /// `authenticate`: daemon 経路の `browser.rs::inject_h3` / `complete_trusted_login` と同じ順で、
 /// trusted login の `login_url` へ navigate し、`origin` の top document に password 欄がちょうど
 /// 1 個現れるまで待ち、credentiald（`broker`）経由で password を注入し、`submit_selector` が
-/// あれば送信し、元の document が消えるまで待つ。成否に関わらず注入値を消す。controller の
-/// auth section は閉じない（session の終わりまで観測停止）。返すのは成否だけ。
+/// あれば送信し、元の document が消えるまで待つ。成否に関わらず注入値を消す。v5 で policy が
+/// username selector を持てば username と password を 1 回の注入で入れる。`post_login` が無ければ
+/// controller の auth section は閉じない（session の終わりまで観測停止）。あれば ADR 2026-10-09
+/// credential username / post-login D2-2 の条件が 15 秒以内に揃ったときだけ閉じる。返すのは
+/// 成否と観測の再開の有無（固定値）だけ。
 pub(crate) fn run_login(
     controller: &std::sync::Arc<std::sync::Mutex<CdpController>>,
     section: &mut LoginSection,
     args: &AuthenticateArgs,
     broker: &mut dyn BrokerClient,
-) -> Result<(), ErrorCode> {
+) -> Result<LoginObservation, ErrorCode> {
     if section.used || section.auth_section_id != args.auth_section_id {
         return Err(ErrorCode::Unauthorized);
     }
     section.used = true;
-    task_core::browser_wait::validate_trusted_login(
+    task_core::browser_wait::validate_trusted_login_full(
         &args.login_url,
         &args.origin,
         &args.password_selector,
         args.submit_selector.as_deref(),
+        args.username_selector.as_deref(),
+        args.post_login.as_ref(),
     )
     .map_err(|_| ErrorCode::BadRequest)?;
     let lock = || controller.lock().map_err(|_| ErrorCode::LaunchFailed);
-    let result = (|| -> Result<(), ErrorCode> {
+    let result = (|| -> Result<(String, String), ErrorCode> {
         let own = {
             let mut c = lock()?;
             let own = c
@@ -702,7 +756,12 @@ pub(crate) fn run_login(
             let ready = {
                 let mut c = lock()?;
                 match c
-                    .login_password_document(&own, &args.origin, &args.password_selector)
+                    .login_password_document(
+                        &own,
+                        &args.origin,
+                        &args.password_selector,
+                        args.username_selector.as_deref(),
+                    )
                     .map_err(|_| ErrorCode::Unauthorized)?
                 {
                     Some((frame, loader)) => Some((
@@ -734,6 +793,7 @@ pub(crate) fn run_login(
             field: "password".into(),
             auth_section_id: args.auth_section_id.clone(),
             lease_id: args.credential_lease_id.clone(),
+            username_selector: args.username_selector.clone(),
         };
         lock()?
             .inject(&request, &own, broker)
@@ -763,14 +823,31 @@ pub(crate) fn run_login(
                 std::thread::sleep(std::time::Duration::from_millis(50));
             }
         }
-        Ok(())
+        Ok((own, loader_id))
     })();
     // Clear injected values on the same document while observation stays stopped.
     let cleared = lock().and_then(|mut c| {
         c.clear_injected_values()
             .map_err(|_| ErrorCode::LaunchFailed)
     });
-    result.and(cleared)
+    let (own, loader) = result?;
+    cleared?;
+    let Some(post) = &args.post_login else {
+        return Ok(LoginObservation::Held);
+    };
+    Ok(
+        if crate::browser_cdp_sink::resume_after_login_blocking(
+            controller,
+            &own,
+            &loader,
+            &post.read_origins,
+            std::time::Duration::from_secs(15),
+        ) {
+            LoginObservation::Resumed
+        } else {
+            LoginObservation::Held
+        },
+    )
 }
 
 /// One login per launcher session (the H3 interval lasts until the session ends): a second
@@ -801,7 +878,7 @@ impl BackendSession for RuntimeSession {
         &mut self,
         args: &AuthenticateArgs,
         broker: std::os::unix::net::UnixStream,
-    ) -> Result<(), ErrorCode> {
+    ) -> Result<LoginObservation, ErrorCode> {
         if args.session_id != self.sup.session_id() {
             return Err(ErrorCode::Unauthorized);
         }
@@ -810,17 +887,24 @@ impl BackendSession for RuntimeSession {
         }
         let controller = self.shared.controller();
         let section = self.login.as_mut().ok_or(ErrorCode::Unauthorized)?;
-        run_login(
+        // A login attempt (successful or not) fixes what the agent may still do in this session.
+        self.after_login = Some(AfterLogin::Held);
+        let observation = run_login(
             &controller,
             section,
             args,
             &mut PassedInjectionStream::new(broker),
-        )
+        )?;
+        self.after_login = Some(AfterLogin::from_login(observation, args));
+        Ok(observation)
     }
 
     fn action(&mut self, verb: Verb, args: &ActionArgs) -> Result<Observation, ErrorCode> {
         if !self.isolation_ok() {
             return Err(ErrorCode::IsolationFailed);
+        }
+        if self.after_login.as_ref().is_some_and(|a| !a.permits(verb)) {
+            return Err(ErrorCode::Unauthorized);
         }
         let name = match verb {
             Verb::Open => "open",
@@ -944,6 +1028,57 @@ impl BackendSession for RuntimeSession {
 #[cfg(test)]
 #[path = "backend_tests.rs"]
 mod test_loopback_tests;
+
+#[cfg(test)]
+mod after_login_tests {
+    use super::{AfterLogin, AuthenticateArgs, LoginObservation, Verb};
+    use task_core::browser_wait::{PostLogin, PostLoginAction};
+
+    fn args(post: Option<PostLogin>) -> AuthenticateArgs {
+        AuthenticateArgs {
+            session_id: "s".into(),
+            lease_id: "l".into(),
+            auth_section_id: "a".into(),
+            credential_lease_id: "c".into(),
+            origin: "https://idp.test".into(),
+            login_url: "https://idp.test/login".into(),
+            password_selector: "#p".into(),
+            submit_selector: None,
+            username_selector: Some("#u".into()),
+            post_login: post,
+        }
+    }
+
+    /// ADR 2026-10-09 credential username / post-login D2-6: after a login the launcher refuses the
+    /// reading/acting verbs unless observation resumed and the verb is in the post-login actions.
+    #[test]
+    fn launcher_post_login_verbs_follow_the_login_outcome() {
+        let post = PostLogin {
+            read_origins: vec!["https://lms.test".into()],
+            actions: vec![PostLoginAction::Snapshot, PostLoginAction::Click],
+        };
+        let resumed = AfterLogin::from_login(LoginObservation::Resumed, &args(Some(post.clone())));
+        assert!(resumed.permits(Verb::Snapshot) && resumed.permits(Verb::Click));
+        assert!(!resumed.permits(Verb::Extract) && !resumed.permits(Verb::Download));
+        assert!(resumed.permits(Verb::Open) && resumed.permits(Verb::Scroll));
+        for held in [
+            AfterLogin::from_login(LoginObservation::Held, &args(Some(post))),
+            AfterLogin::from_login(LoginObservation::Resumed, &args(None)),
+        ] {
+            assert_eq!(held, AfterLogin::Held);
+            for v in [
+                Verb::Snapshot,
+                Verb::Extract,
+                Verb::Screenshot,
+                Verb::Download,
+                Verb::Click,
+            ] {
+                assert!(!held.permits(v), "{v:?}");
+            }
+            assert!(held.permits(Verb::Open) && held.permits(Verb::Close));
+        }
+    }
+}
 
 #[cfg(test)]
 mod chain_tests {

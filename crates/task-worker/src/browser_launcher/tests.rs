@@ -283,6 +283,8 @@ fn login_args(session_id: &str, lease_id: &str) -> AuthenticateArgs {
         login_url: "https://idp.example.test/idp/profile/SAML2/Unsolicited/SSO?providerId=x".into(),
         password_selector: "input[name=\"j_password\"]".into(),
         submit_selector: Some("button[name=\"_eventId_proceed\"]".into()),
+        username_selector: None,
+        post_login: None,
     }
 }
 
@@ -307,6 +309,7 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
     assert_eq!(decode_request(v3), Err(ErrorCode::BadRequest));
     let response = serde_json::to_string(&Response::AuthenticateResult {
         status: AuthenticationStatus::Success,
+        observation: None,
     })
     .expect("serialize status");
     assert_eq!(
@@ -318,7 +321,78 @@ fn launcher_credential_authenticate_is_fixed_and_status_only() {
     })
     .expect("serialize begun");
     assert_eq!(begun, r#"{"type":"auth_begun","cdp_target_id":"T1"}"#);
-    assert_eq!(PROTOCOL_VERSION, CREDENTIAL_LOGIN_PROTOCOL);
+    assert_eq!(PROTOCOL_VERSION, POST_LOGIN_PROTOCOL);
+    const { assert!(CREDENTIAL_LOGIN_PROTOCOL < POST_LOGIN_PROTOCOL) };
+}
+
+/// ADR 2026-10-09 credential username / post-login D1-5: protocol v5 carries the username selector
+/// and the effective post-login read, validated like the site policy; the answer adds a fixed
+/// `observation` (a v4 answer without it decodes as "held").
+#[test]
+fn launcher_credential_v5_authenticate_carries_username_and_post_login_only_in_fixed_shapes() {
+    use task_core::browser_wait::{PostLogin, PostLoginAction};
+    let mut args = login_args("s", "l");
+    args.username_selector = Some("input[name=j_username]".into());
+    args.post_login = Some(PostLogin {
+        read_origins: vec!["https://lms.example.test".into()],
+        actions: vec![PostLoginAction::Snapshot, PostLoginAction::Click],
+    });
+    let req = Request::Authenticate { args: args.clone() };
+    let body = serde_json::to_vec(&req).expect("json");
+    assert_eq!(decode_request(&body), Ok(req));
+    type Edit = Box<dyn Fn(&mut AuthenticateArgs)>;
+    let bad: Vec<Edit> = vec![
+        Box::new(|a| a.username_selector = Some("input:focus".into())),
+        Box::new(|a| a.username_selector = Some(String::new())),
+        Box::new(|a| a.username_selector = a.password_selector.clone().into()),
+        Box::new(|a| {
+            a.post_login = Some(PostLogin {
+                read_origins: vec![a.origin.clone()],
+                actions: vec![PostLoginAction::Snapshot],
+            })
+        }),
+        Box::new(|a| {
+            a.post_login = Some(PostLogin {
+                read_origins: vec!["https://lms.example.test".into()],
+                actions: vec![],
+            })
+        }),
+    ];
+    for (i, edit) in bad.iter().enumerate() {
+        let mut a = args.clone();
+        edit(&mut a);
+        let body = serde_json::to_vec(&Request::Authenticate { args: a }).expect("json");
+        assert_eq!(
+            decode_request(&body),
+            Err(ErrorCode::BadRequest),
+            "case {i}"
+        );
+    }
+    // Unknown fields (a value, a free-form read list) never decode.
+    let mut v = serde_json::to_value(&Request::Authenticate { args }).expect("json");
+    v["args"]["post_login"]["eval"] = "1".into();
+    assert_eq!(
+        decode_request(&serde_json::to_vec(&v).expect("json")),
+        Err(ErrorCode::BadRequest)
+    );
+    let resumed = serde_json::to_string(&Response::AuthenticateResult {
+        status: AuthenticationStatus::Success,
+        observation: Some(LoginObservation::Resumed),
+    })
+    .expect("json");
+    assert_eq!(
+        resumed,
+        r#"{"type":"authenticate_result","status":"success","observation":"resumed"}"#
+    );
+    let v4: Response =
+        serde_json::from_str(r#"{"type":"authenticate_result","status":"success"}"#).expect("v4");
+    assert_eq!(
+        v4,
+        Response::AuthenticateResult {
+            status: AuthenticationStatus::Success,
+            observation: None
+        }
+    );
 }
 
 #[test]
@@ -380,7 +454,10 @@ fn launcher_credential_authenticate_backend_rejection_has_status_only_response()
             std::os::fd::OwnedFd::from(broker),
         )
         .expect("fixed authentication response");
-    assert_eq!(status, AuthenticationStatus::Rejected);
+    assert_eq!(
+        status,
+        (AuthenticationStatus::Rejected, LoginObservation::Held)
+    );
 }
 
 /// FD は `authenticate` にちょうど 1 本だけ。FD 無しの `authenticate`・FD 付きの他の要求は
@@ -438,7 +515,10 @@ fn launcher_credential_authenticate_fd_rules_fail_closed() {
             std::os::fd::OwnedFd::from(file),
         )
         .expect("status");
-    assert_eq!(status, AuthenticationStatus::Rejected);
+    assert_eq!(
+        status,
+        (AuthenticationStatus::Rejected, LoginObservation::Held)
+    );
     // The session and the connection are still usable.
     assert!(c.observe(&session.session_id, "lease1").is_ok());
 }

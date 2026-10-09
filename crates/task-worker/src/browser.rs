@@ -79,6 +79,17 @@ fn register_broker_session(
     })
 }
 
+/// The login tab after injection: the controller's own CDP session on it and the loader id of the
+/// injected document (ADR 2026-10-09 credential username / post-login D2-2 checks both).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoginTab {
+    pub(crate) own: String,
+    pub(crate) loader: String,
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-2: how long the close conditions may take.
+pub(crate) const POST_LOGIN_TIMEOUT: Duration = Duration::from_secs(15);
+
 async fn inject_h3(
     relay: &crate::browser_shared_cdp::SharedCdp,
     broker: &mut crate::browser_cdp_sink::UnixInjectionClient,
@@ -87,7 +98,7 @@ async fn inject_h3(
     lease_id: &str,
     origin: &str,
     trusted: &task_core::browser_wait::TrustedLogin,
-) -> Result<(), &'static str> {
+) -> Result<LoginTab, &'static str> {
     use serde_json::json;
     let controller = relay.controller();
     let target = {
@@ -151,6 +162,7 @@ async fn inject_h3(
             field: "password".into(),
             auth_section_id: auth_id.into(),
             lease_id: lease_id.into(),
+            username_selector: trusted.username_selector.clone(),
         };
         complete_trusted_login(&controller, broker, &own, request, trusted).await
     }
@@ -163,7 +175,7 @@ async fn complete_trusted_login(
     own: &str,
     mut request: crate::browser_cdp_sink::InjectionRequest,
     trusted: &task_core::browser_wait::TrustedLogin,
-) -> Result<(), &'static str> {
+) -> Result<LoginTab, &'static str> {
     use serde_json::json;
     let until = controller
         .lock()
@@ -174,7 +186,12 @@ async fn complete_trusted_login(
         let ready = {
             let mut c = controller.lock().map_err(|_| "cdp_unavailable")?;
             let ready = c
-                .login_password_document(own, &request.exact_origin, &trusted.password_selector)
+                .login_password_document(
+                    own,
+                    &request.exact_origin,
+                    &trusted.password_selector,
+                    trusted.username_selector.as_deref(),
+                )
                 .map_err(|e| {
                     if e == crate::browser_cdp_sink::InjectionError::Redirected {
                         "redirected"
@@ -240,7 +257,91 @@ async fn complete_trusted_login(
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
     }
-    Ok(())
+    Ok(LoginTab {
+        own: own.to_owned(),
+        loader: loader_id,
+    })
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-2: wait (polling every 50 ms, at most
+/// [`POST_LOGIN_TIMEOUT`]) until the login tab left the injected document for a `read_origins`
+/// page without a password input. Observation stays stopped throughout; only a fixed code returns.
+pub(crate) async fn await_post_login(
+    controller: &Arc<std::sync::Mutex<crate::browser_cdp_sink::CdpController>>,
+    tab: &LoginTab,
+    read_origins: &[String],
+    timeout: Duration,
+) -> Result<(), &'static str> {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let ready = controller
+            .lock()
+            .map_err(|_| "post_login_unconfirmed")?
+            .post_login_ready(&tab.own, &tab.loader, read_origins)
+            .map_err(|_| "post_login_unconfirmed")?;
+        if ready == crate::browser_cdp_sink::PostLoginCheck::Ready {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("post_login_unconfirmed");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// ADR 2026-10-09 credential username / post-login D2-1・D2-5: what the agent may read after the
+/// login of an opted-in site. `read_origins` is the site policy's list narrowed to the task's
+/// allowed domains, `actions` the shim verbs of `post_login.actions` that the task policy (task ∩
+/// grant) allows. Either empty means no opt-in (H3 until the session ends).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PostLoginRead {
+    pub read_origins: Vec<String>,
+    pub actions: Vec<String>,
+}
+
+/// The effective post-login read and the harness `policy.json` that goes with it, or `None` when
+/// the pinned trusted login has no (effective) opt-in.
+pub(crate) fn post_login_read(
+    policy: &crate::browser_policy::PreparedBrowserPolicy,
+    trusted: &task_core::browser_wait::TrustedLogin,
+) -> Result<Option<(PostLoginRead, Vec<u8>)>, AdapterError> {
+    let Some(post) = &trusted.post_login else {
+        return Ok(None);
+    };
+    let read_origins: Vec<String> = post
+        .read_origins
+        .iter()
+        .filter(|o| origin_in_domains(o, policy.allowed_domains()))
+        .cloned()
+        .collect();
+    let mut file: task_core::AgentBrowserActionPolicy =
+        serde_json::from_slice(&policy.action_policy)
+            .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    let granted = file.allow.clone();
+    let actions: Vec<task_core::browser_wait::PostLoginAction> = post
+        .actions
+        .iter()
+        .copied()
+        .filter(|a| granted.iter().any(|g| g == a.upstream_action()))
+        .collect();
+    if read_origins.is_empty() || actions.is_empty() {
+        return Ok(None);
+    }
+    file.allow.retain(|a| {
+        let gated = OBSERVATION_UPSTREAM_ACTIONS.contains(&a.as_str()) || a == "click";
+        a != "auth_login"
+            && a != task_core::browser::CREDENTIAL_PLUGIN_ACTION
+            && (!gated || actions.iter().any(|p| p.upstream_action() == a))
+    });
+    let bytes = serde_json::to_vec(&file)
+        .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+    Ok(Some((
+        PostLoginRead {
+            read_origins,
+            actions: actions.iter().map(|a| a.as_str().to_owned()).collect(),
+        },
+        bytes,
+    )))
 }
 
 /// ADR-0116 D5: isolated browser の runtime を誰が持つか。
@@ -416,6 +517,10 @@ pub struct BrowserContext {
     /// The operation a human approved once for this session, if the run resumes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approved_operation: Option<ApprovedOperation>,
+    /// ADR 2026-10-09 credential username / post-login D2-5: after the login the auth section
+    /// closed on the post-login conditions; these origins and actions are readable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_login: Option<PostLoginRead>,
 }
 
 pub fn prompt(browser: &BrowserContext) -> String {
@@ -457,11 +562,19 @@ pub fn prompt(browser: &BrowserContext) -> String {
          Never include secrets in model output or artifacts.\n{approval}{approved}{credential}",
         cli = browser.cli.display().to_string(),
         session = browser.run.session_id,
-        credential = if browser.credential_used {
-            "Celeris already signed in to this session with the approved credential (result: success).\n\
+        credential = match (&browser.post_login, browser.credential_used) {
+            (Some(read), true) => format!(
+                "Celeris already signed in to this session with the approved credential (result: success).\n\
+                 After sign-in you may use {actions} only on pages of {origins}.\n\
+                 The sign-in (identity provider) pages and any page with a password field cannot be\n\
+                 read or clicked; such commands fail. Signing in again needs a new approval.\n",
+                actions = read.actions.join(", "),
+                origins = read.read_origins.join(", "),
+            ),
+            (None, true) => "Celeris already signed in to this session with the approved credential (result: success).\n\
              Snapshot, extract, screenshot and download are disabled for the rest of this session.\n"
-        } else {
-            ""
+                .to_string(),
+            _ => String::new(),
         },
     )
 }
@@ -1651,6 +1764,15 @@ async fn run_with_executable_attempt(
     } else {
         policy.action_policy.clone()
     };
+    // ADR 2026-10-09 credential username / post-login D2: the read the pinned site policy opts into
+    // (applied only if the auth section closes on the post-login conditions).
+    let post_login_plan = match credential_approved
+        .as_ref()
+        .and_then(|w| w.trusted_login.as_ref())
+    {
+        Some(pinned) => post_login_read(&policy, pinned)?,
+        None => None,
+    };
     let approval_actions = shim_approval_actions(&policy, approved_operation);
     let runtime = req
         .workspace
@@ -1681,18 +1803,23 @@ async fn run_with_executable_attempt(
         harness_policy.clone()
     };
     write_private(&runtime.join("policy.json"), &initial_policy)?;
-    write_private(
-        &runtime.join("config.json"),
+    let config_session = session.clone();
+    let config_approvals = approval_actions.clone();
+    let config_output = output.clone();
+    let config_socket = action_socket.clone();
+    let config_policy = &policy;
+    let shim_config = move |policy_bytes: &[u8]| {
         serde_json::to_vec(&serde_json::json!({
-            "session_id":session,
-            "allowed_domains":policy.allowed_domains(), "output":output,
-            "action_socket":action_socket,
-            "policy_sha256":format!("{:x}", Sha256::digest(&harness_policy)),
-            "credential_policy_ids":policy.effective.credential_policy_ids,
-            "credential_use":policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
-            "approval_actions":approval_actions,
-        }))?,
-    )?;
+            "session_id":config_session,
+            "allowed_domains":config_policy.allowed_domains(), "output":config_output,
+            "action_socket":config_socket,
+            "policy_sha256":format!("{:x}", Sha256::digest(policy_bytes)),
+            "credential_policy_ids":config_policy.effective.credential_policy_ids,
+            "credential_use":config_policy.effective.actions.contains(&task_core::BrowserAction::CredentialUse),
+            "approval_actions":config_approvals,
+        }))
+    };
+    write_private(&runtime.join("config.json"), shim_config(&harness_policy)?)?;
     let real_executable = resolve_executable(executable)
         .map_err(|_| AdapterError::Other("isolated_runtime_unavailable".into()))?;
     let browser_dirs = browser_install_dirs();
@@ -1824,13 +1951,9 @@ async fn run_with_executable_attempt(
                 .trusted_login
                 .as_ref()
                 .ok_or_else(|| AdapterError::Other("policy_changed".into()))?;
-            task_core::browser_wait::validate_trusted_login(
-                &pinned.login_url,
-                &wait.origin,
-                &pinned.password_selector,
-                pinned.submit_selector.as_deref(),
-            )
-            .map_err(|_| AdapterError::Other("policy_changed".into()))?;
+            pinned
+                .validate(&wait.origin)
+                .map_err(|_| AdapterError::Other("policy_changed".into()))?;
             let current = crate::browser_credential::describe_policy(
                 credentials.ok_or_else(|| AdapterError::Other("policy_changed".into()))?,
                 wait.credential
@@ -1871,6 +1994,7 @@ async fn run_with_executable_attempt(
     // H3 belongs to the session, not just the injection call. Keep the live guard
     // through adapter.run and the final event drain.
     let mut injected_session_guard = None;
+    let mut post_login_context = None;
     let credential_segment = match (&approval, credentials) {
         (Some(approval), Some(sup)) => {
             let trusted = approval
@@ -1922,7 +2046,7 @@ async fn run_with_executable_attempt(
                 trusted,
             )
             .await;
-            // Clear the field before closing broker H3 or resuming agent observation.
+            // Clear the fields before closing broker H3 or resuming agent observation.
             let cleared = shared_cdp
                 .controller()
                 .lock()
@@ -1941,16 +2065,80 @@ async fn run_with_executable_attempt(
             if result.is_err() {
                 sup.broker.revoke(&lease_id, "supervisor");
             }
+            // Consume (never buffer) whatever H3 wrote while the guard is active.
+            forward_events(&events, &mut offset, &req, &output, sink, &live);
+            // ADR 2026-10-09 credential username / post-login D2-2: an opted-in site resumes agent
+            // observation only once the login tab is on a read origin without a password field, in
+            // the order controller check → store auth section closed → controller section closed.
+            // Otherwise the H3 of ADR-0080 holds until the session ends.
+            let mut resumed = None;
+            if let (Ok(tab), Some((read, bytes))) = (&result, &post_login_plan) {
+                let controller = shared_cdp.controller();
+                let confirmed =
+                    await_post_login(&controller, tab, &read.read_origins, POST_LOGIN_TIMEOUT)
+                        .await;
+                let reopened = confirmed.is_ok()
+                    && sink
+                        .browser_auth_section(run_id, &browser.session_id, false)
+                        .is_ok()
+                    && controller
+                        .lock()
+                        .map_err(|_| crate::browser_cdp_sink::InjectionError::SinkFailed)
+                        .and_then(|mut c| c.resume_after_login(&tab.own, read.read_origins.clone()))
+                        .is_ok();
+                if reopened {
+                    resumed = Some((read.clone(), bytes.clone()));
+                }
+                sink.progress_with(
+                    &format!(
+                        "browser.post_login: {}",
+                        if reopened {
+                            "resumed"
+                        } else {
+                            "post_login_unconfirmed"
+                        }
+                    ),
+                    &ProgressFields {
+                        kind: Some(ProgressKind::ToolResult),
+                        tool: Some("browser.post_login".into()),
+                        summary: Some(
+                            if reopened {
+                                "resumed"
+                            } else {
+                                "post_login_unconfirmed"
+                            }
+                            .into(),
+                        ),
+                        error: !reopened,
+                        ..Default::default()
+                    },
+                );
+            }
             // 0.38.1 reuses the daemon only while config and policy paths stay
             // fixed. Rewrite the policy in place before the harness can run.
+            let next_policy = resumed
+                .as_ref()
+                .map_or(harness_policy.as_slice(), |(_, bytes)| bytes.as_slice());
             if result.is_ok()
-                && replace_private(&runtime.join("policy.json"), &harness_policy).is_err()
+                && (replace_private(&runtime.join("policy.json"), next_policy).is_err()
+                    || (resumed.is_some()
+                        && shim_config(next_policy)
+                            .map_err(std::io::Error::other)
+                            .and_then(|c| replace_private(&runtime.join("config.json"), &c))
+                            .is_err()))
             {
                 result = Err("policy_transition_failed");
             }
-            // Consume (never buffer) whatever H3 wrote. The guard remains active
-            // for all subsequent adapter events in this session.
-            forward_events(&events, &mut offset, &req, &output, sink, &live);
+            if let (Ok(_), Some((read, bytes))) = (&result, &resumed) {
+                let allow: task_core::AgentBrowserActionPolicy = serde_json::from_slice(bytes)
+                    .map_err(|_| AdapterError::Other("browser policy rejected".into()))?;
+                action_server.replace_allowed(allow.allow);
+                post_login_context = Some(read.clone());
+                // Worker events of this session flow again (Live View and takeover stay off:
+                // no live view URL, and the store keeps the credential-session mark).
+                injected_session_guard = None;
+            }
+            let result = result.map(|_| ());
             let status = if result.is_ok() { "success" } else { "failure" };
             sink.progress_with(
                 &format!("browser.credential_use: {status}"),
@@ -1999,6 +2187,7 @@ async fn run_with_executable_attempt(
         credential_used: credential_segment.is_some(),
         approval_actions,
         approved_operation: operation,
+        post_login: post_login_context,
     });
     let monitor_req = req.clone();
     let mut guard = SessionGuard {
@@ -2156,3 +2345,7 @@ mod tests;
 #[cfg(test)]
 #[path = "browser_sso_tests.rs"]
 mod sso_tests;
+
+#[cfg(test)]
+#[path = "browser_post_login_tests.rs"]
+pub(crate) mod post_login_tests;

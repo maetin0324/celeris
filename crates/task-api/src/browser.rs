@@ -107,16 +107,24 @@ pub struct TrustedSitePolicy {
     pub password_selector: String,
     #[serde(default)]
     pub submit_selector: Option<String>,
+    /// ADR 2026-10-09 credential username / post-login D1-1: username 欄の selector（任意）。
+    #[serde(default)]
+    pub username_selector: Option<String>,
+    /// 同 D2-1: ログイン後の読み取りの opt-in（任意）。
+    #[serde(default)]
+    pub post_login: Option<task_core::browser_wait::PostLogin>,
 }
 
 impl TrustedSitePolicy {
-    /// ADR-0110 D2 の形式検証（broker と同じ検査）。
+    /// ADR-0110 D2 の形式検証（broker と同じ検査）。username selector と post_login も同じ関数で見る。
     pub fn validate(&self) -> Result<(), &'static str> {
-        task_core::browser_wait::validate_trusted_login(
+        task_core::browser_wait::validate_trusted_login_full(
             &self.login_url,
             &self.exact_origin,
             &self.password_selector,
             self.submit_selector.as_deref(),
+            self.username_selector.as_deref(),
+            self.post_login.as_ref(),
         )
     }
 }
@@ -129,6 +137,8 @@ impl From<task_core::BrowserSitePolicy> for TrustedSitePolicy {
             login_url: p.login_url,
             password_selector: p.password_selector,
             submit_selector: p.submit_selector,
+            username_selector: p.username_selector,
+            post_login: p.post_login,
         }
     }
 }
@@ -141,6 +151,8 @@ impl From<TrustedSitePolicy> for task_core::BrowserSitePolicy {
             login_url: p.login_url,
             password_selector: p.password_selector,
             submit_selector: p.submit_selector,
+            username_selector: p.username_selector,
+            post_login: p.post_login,
         }
     }
 }
@@ -240,7 +252,9 @@ impl UnixCredentialBrokerControl {
             allow_persistence: false,
             login_url: site.as_ref().map(|p| p.login_url.clone()),
             password_selector: site.as_ref().map(|p| p.password_selector.clone()),
-            submit_selector: site.and_then(|p| p.submit_selector),
+            submit_selector: site.as_ref().and_then(|p| p.submit_selector.clone()),
+            username_selector: site.as_ref().and_then(|p| p.username_selector.clone()),
+            post_login: site.and_then(|p| p.post_login),
         })
     }
 }

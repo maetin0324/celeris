@@ -8,7 +8,7 @@ use celeris_credentiald::{
     LeaseRequest, ManualProvider, ProviderCapabilities, SecretEnvelope,
     injection_ipc::{
         self, Admission, CdpSink, Field, InjectionReply, InjectionRequest, InjectionService,
-        LiveRegistry, PeerCred, SinkFailed, process_start,
+        LiveRegistry, PeerCred, SinkFailed, UsernameTarget, process_start,
     },
     ipc,
 };
@@ -181,6 +181,16 @@ impl Fx {
     }
     /// `selector` が `None` なら管理者 selector の無い（旧い）policy で grant する。
     fn grant_with(&self, session_id: &str, key: &str, ttl: u64, selector: Option<&str>) -> String {
+        self.grant_full(session_id, key, ttl, selector, None)
+    }
+    fn grant_full(
+        &self,
+        session_id: &str,
+        key: &str,
+        ttl: u64,
+        selector: Option<&str>,
+        username_selector: Option<&str>,
+    ) -> String {
         let policy = CredentialPolicy {
             policy_id: "site-1".into(),
             revision: 1,
@@ -192,6 +202,8 @@ impl Fx {
             login_url: selector.map(|_| format!("{ORIGIN}/login")),
             password_selector: selector.map(str::to_owned),
             submit_selector: None,
+            username_selector: username_selector.map(str::to_owned),
+            post_login: None,
         };
         self.broker
             .grant(LeaseRequest {
@@ -286,7 +298,23 @@ fn request(session_id: &str, section: &str, lease: &str) -> InjectionRequest {
         auth_section_id: section.into(),
         lease_id: lease.into(),
         cdp_command_id: 900_001,
+        username: None,
     }
+}
+
+const USER_SELECTOR: &str = "input[name=j_username]";
+const USER_OBJECT: &str = "-4611686018427387903.1.9";
+
+/// ADR 2026-10-09 credential username / post-login D1-3: username 欄を伴う v2 の要求。
+fn pair_request(session_id: &str, section: &str, lease: &str) -> InjectionRequest {
+    let mut req = request(session_id, section, lease);
+    req.v = injection_ipc::PAIR_REQUEST_VERSION;
+    req.username = Some(UsernameTarget {
+        selector: USER_SELECTOR.into(),
+        object_id: USER_OBJECT.into(),
+        input_type: "text".into(),
+    });
+    req
 }
 
 type Mutate = Box<dyn Fn(&mut InjectionRequest)>;
@@ -656,7 +684,8 @@ fn target_origin_and_field_mismatches_are_rejected() {
             "auth_section_mismatch",
             Box::new(|r| r.auth_section_id = "auth-2".into()),
         ),
-        ("unsupported_version", Box::new(|r| r.v = 2)),
+        ("unsupported_version", Box::new(|r| r.v = 3)),
+        ("invalid_request", Box::new(|r| r.v = 2)),
     ];
     for (want, mutate) in cases {
         let mut req = base.clone();
@@ -829,4 +858,134 @@ fn policy_without_admin_selector_cannot_inject() {
         "trusted_selector_missing"
     );
     assert_eq!(fx.calls(), before);
+}
+
+#[test]
+fn pair_injection_fills_username_and_password_in_one_frame_and_guards_only_the_password() {
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let lease = fx.grant_full(
+        "sess-1",
+        "k1",
+        60,
+        Some("input[name=password]"),
+        Some(USER_SELECTOR),
+    );
+    fx.live("sess-1");
+    fx.open("sess-1", "auth-1", &lease);
+    let before = fx.calls();
+    let (reply, raw, frame) = inject(&fx, &pair_request("sess-1", "auth-1", &lease));
+    assert!(reply.ok, "{:?}", reply.code);
+    assert_eq!(
+        fx.calls(),
+        before + 1,
+        "one provider resolve for both fields"
+    );
+    assert_eq!(reply.receipt.expect("receipt").field, Field::Password);
+    assert!(!contains(&raw, SENTINEL));
+    assert!(!contains(&raw, "user@example.test"));
+    assert!(!contains(&raw, USER_OBJECT));
+    let frame = frame.expect("frame");
+    let f: serde_json::Value =
+        serde_json::from_slice(frame.strip_suffix(&[0]).unwrap_or(&frame)).expect("frame");
+    assert_eq!(
+        f["params"]["functionDeclaration"],
+        injection_ipc::INJECT_PAIR_FUNCTION
+    );
+    assert_eq!(f["params"]["objectId"], "-4611686018427387903.1.7");
+    let args = f["params"]["arguments"].as_array().expect("args");
+    assert_eq!(args.len(), 5);
+    assert_eq!(args[0]["value"], ORIGIN);
+    assert_eq!(args[1]["value"], 0);
+    assert_eq!(args[2], serde_json::json!({"objectId": USER_OBJECT}));
+    assert_eq!(args[3]["value"], "user@example.test");
+    assert_eq!(args[4]["value"], SENTINEL);
+    // guard は password だけ（username は機密だが秘密ではない: A1）。
+    let guard = celeris_credentiald::injection::RedisplayGuard::from_wire(
+        reply.redisplay_guard.as_ref().expect("guard"),
+    )
+    .expect("guard wire");
+    assert!(guard.exposes(&format!("x{SENTINEL}y")));
+    assert!(!guard.exposes("student user@example.test is signed in"));
+    let journal = fx.journal();
+    assert!(journal.contains(USER_SELECTOR));
+    assert!(!journal.contains("user@example.test"));
+    assert!(!journal.contains(SENTINEL));
+    // 単回 lease: 2 欄でも消費は 1 回、再使用は lease_used。
+    assert_eq!(
+        code(&fx, &pair_request("sess-1", "auth-1", &lease)),
+        "lease_used"
+    );
+}
+
+#[test]
+fn pair_injection_selector_and_shape_mismatches_never_consume_the_lease() {
+    let mut fx = Fx::new(Admission::SameUidHarnessFacts(facts));
+    let pair = fx.grant_full(
+        "sess-1",
+        "k1",
+        60,
+        Some("input[name=password]"),
+        Some(USER_SELECTOR),
+    );
+    fx.live("sess-1");
+    fx.open("sess-1", "auth-1", &pair);
+    let before = fx.calls();
+    // policy が username 欄を持つのに要求に無い。
+    assert_eq!(
+        code(&fx, &request("sess-1", "auth-1", &pair)),
+        "selector_mismatch"
+    );
+    // username selector の byte 不一致。
+    for other in [
+        "#user",
+        "input[name=j_username] ",
+        "input[name=\"j_username\"]",
+    ] {
+        let mut req = pair_request("sess-1", "auth-1", &pair);
+        req.username.as_mut().expect("username").selector = other.into();
+        assert_eq!(code(&fx, &req), "selector_mismatch", "{other:?}");
+    }
+    // 型: username 欄が password / hidden。
+    for ty in ["password", "hidden"] {
+        let mut req = pair_request("sess-1", "auth-1", &pair);
+        req.username.as_mut().expect("username").input_type = ty.into();
+        assert_eq!(code(&fx, &req), "redisplay_field", "{ty}");
+    }
+    // 形: v1 に username・v2 に username 無し・username 欄が同じ要素・field が username・未知の版。
+    let mut req = pair_request("sess-1", "auth-1", &pair);
+    req.v = 1;
+    assert_eq!(code(&fx, &req), "invalid_request");
+    let mut req = request("sess-1", "auth-1", &pair);
+    req.v = injection_ipc::PAIR_REQUEST_VERSION;
+    assert_eq!(code(&fx, &req), "invalid_request");
+    let mut req = pair_request("sess-1", "auth-1", &pair);
+    req.username.as_mut().expect("username").object_id = req.object_id.clone();
+    assert_eq!(code(&fx, &req), "invalid_request");
+    let mut req = pair_request("sess-1", "auth-1", &pair);
+    req.field = Field::Username;
+    req.input_type = "text".into();
+    assert_eq!(code(&fx, &req), "invalid_request");
+    let mut req = pair_request("sess-1", "auth-1", &pair);
+    req.v = 3;
+    assert_eq!(code(&fx, &req), "unsupported_version");
+    assert_eq!(
+        fx.calls(),
+        before,
+        "no provider call before the lease is consumed"
+    );
+    // 1 欄 policy の lease に username 欄を付けた要求も lease 未消費で拒否。
+    let single = fx.grant("sess-2", "k2", 60);
+    fx.live("sess-2");
+    fx.open("sess-2", "auth-2", &single);
+    let before = fx.calls();
+    assert_eq!(
+        code(&fx, &pair_request("sess-2", "auth-2", &single)),
+        "selector_mismatch"
+    );
+    assert_eq!(fx.calls(), before);
+    // どの拒否の後も lease は使える。
+    let (reply, _, _) = inject(&fx, &pair_request("sess-1", "auth-1", &pair));
+    assert!(reply.ok, "{:?}", reply.code);
+    let (reply, _, _) = inject(&fx, &request("sess-2", "auth-2", &single));
+    assert!(reply.ok, "{:?}", reply.code);
 }

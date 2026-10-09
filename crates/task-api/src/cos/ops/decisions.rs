@@ -47,8 +47,6 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[];
 
-/// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,

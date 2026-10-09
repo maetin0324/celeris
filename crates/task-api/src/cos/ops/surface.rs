@@ -213,8 +213,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Assigned mutations awaiting audited implementation (none left in surface).
-pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 const THREAD: &str = "/api/v1/chat/threads/{t}";
 const MESSAGE: &str = "/api/v1/chat/threads/{t}/messages/{m}";

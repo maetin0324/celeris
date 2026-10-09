@@ -24,7 +24,6 @@ pub(crate) struct Registry {
     pub(crate) name: &'static str,
     pub(crate) allowed: &'static [(&'static str, &'static str, &'static str)],
     pub(crate) excluded: &'static [(&'static str, &'static str, &'static str)],
-    pub(crate) pending: &'static [(&'static str, &'static str)],
     pub(crate) dispatch: Dispatcher,
 }
 
@@ -33,35 +32,30 @@ pub(crate) const REGISTRIES: &[Registry] = &[
         name: "tasks",
         allowed: tasks::ALLOWED,
         excluded: tasks::EXCLUDED,
-        pending: tasks::PENDING,
         dispatch: tasks::dispatch,
     },
     Registry {
         name: "decisions",
         allowed: decisions::ALLOWED,
         excluded: decisions::EXCLUDED,
-        pending: decisions::PENDING,
         dispatch: decisions::dispatch,
     },
     Registry {
         name: "projects",
         allowed: projects::ALLOWED,
         excluded: projects::EXCLUDED,
-        pending: projects::PENDING,
         dispatch: projects::dispatch,
     },
     Registry {
         name: "admin",
         allowed: admin::ALLOWED,
         excluded: admin::EXCLUDED,
-        pending: admin::PENDING,
         dispatch: admin::dispatch,
     },
     Registry {
         name: "surface",
         allowed: surface::ALLOWED,
         excluded: surface::EXCLUDED,
-        pending: surface::PENDING,
         dispatch: surface::dispatch,
     },
 ];

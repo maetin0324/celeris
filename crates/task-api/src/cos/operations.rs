@@ -526,16 +526,6 @@ pub(crate) fn match_operation(method: &str, path: &str) -> Result<Matched, Strin
             });
         }
     }
-    for registry in super::ops::REGISTRIES {
-        for (pending_method, pattern) in registry.pending {
-            if method.eq_ignore_ascii_case(pending_method) && path_matches(pattern, path) {
-                return Err(format!(
-                    "{method} {pattern} is not a registered CoS operation (pending in {})",
-                    registry.name
-                ));
-            }
-        }
-    }
     Err(format!("{method} {path} is not a registered CoS operation"))
 }
 

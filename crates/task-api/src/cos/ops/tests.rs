@@ -188,7 +188,7 @@ fn api_table_inventory(text: &str) -> BTreeSet<Route> {
 }
 
 #[test]
-fn cos_ops_registry_covers_every_mutation_exactly_once() {
+fn cos_ops_registry_classifies_every_mutation_as_allowed_or_excluded() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut expected = BTreeSet::new();
     router_inventory(&root.join("crates/task-api/src"), &mut expected);
@@ -219,7 +219,6 @@ fn cos_ops_registry_covers_every_mutation_exactly_once() {
                 "EXCLUDED",
                 registry.excluded.iter().map(|(m, p, _)| (*m, *p)).collect(),
             ),
-            ("PENDING", registry.pending.to_vec()),
         ] {
             for (method, path) in rows {
                 let key = route(method, path);
@@ -234,8 +233,32 @@ fn cos_ops_registry_covers_every_mutation_exactly_once() {
     assert_eq!(
         expected,
         registered.keys().cloned().collect(),
-        "unclassified mutation or registry entry without endpoint"
+        "every mutation must be ALLOWED or EXCLUDED (no pending), and every row must name an endpoint"
     );
+}
+
+#[test]
+fn cos_ops_every_allowed_row_is_reachable_through_match_operation() {
+    for registry in REGISTRIES {
+        for (method, pattern, _) in registry.allowed {
+            let path = pattern
+                .split('/')
+                .map(|segment| {
+                    if segment.starts_with('{') {
+                        "example"
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            assert!(
+                match_operation(method, &path).is_ok(),
+                "{}: {method} {pattern} is ALLOWED but not reachable",
+                registry.name
+            );
+        }
+    }
 }
 
 #[test]
@@ -274,7 +297,6 @@ fn cos_ops_registry_matches_adr_domain_assignment_and_exclusions() {
             .iter()
             .map(|(m, p, _)| (*m, *p))
             .chain(registry.excluded.iter().map(|(m, p, _)| (*m, *p)))
-            .chain(registry.pending.iter().copied())
         {
             actual.insert(route(method, path), registry.name);
         }

@@ -143,8 +143,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Assigned mutations awaiting audited implementation (none left in admin).
-pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
 const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";

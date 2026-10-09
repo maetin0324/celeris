@@ -68,8 +68,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
     "removed_by_adr_0079: ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。",
 )];
 
-/// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
-pub(crate) const PENDING: &[(&str, &str)] = &[];
 
 pub(crate) fn dispatch(
     store: &SqliteStore,

@@ -7,6 +7,7 @@ each named backend process and checking its browser events and fixture server ob
 """
 
 import argparse
+import contextlib
 import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
@@ -15,9 +16,13 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
+import tempfile
+from threading import Thread
 import time
+from urllib.parse import urlsplit
 from datetime import datetime, timezone
 
 BACKENDS = ("acp", "claude-code", "browser-specialist")
@@ -36,12 +41,18 @@ class Site(BaseHTTPRequestHandler):
 
     def do_GET(self):
         self.requests.append(("GET", self.path))
+        if self.path == "/clicked":
+            # GET, not POST: the isolated runtime's egress forwards only GET/HEAD for plain
+            # HTTP, so the fallback scenario could not observe a POST click.
+            self.send_response(204)
+            self.end_headers()
+            return
         if self.path == "/download":
             body = b"celeris local fixture\n"
             kind = "application/octet-stream"
         elif self.path == "/":
             body = (b"<!doctype html><html><body>"
-                    b"<button onclick=\"fetch('/clicked',{method:'POST'})\">Click fixture</button>"
+                    b"<button onclick=\"fetch('/clicked',{cache:'no-store'})\">Click fixture</button>"
                     b"<a href='/download' download='fixture.bin'>Download fixture</a>"
                     b"</body></html>")
             kind = "text/html; charset=utf-8"
@@ -98,8 +109,98 @@ def drive():
     return 0 if call(cli, "close")[0] == 0 else 1
 
 
-def backend_run(backend, command, agent_browser, origin, root, protocol_scripted=False):
-    first_request = len(Site.requests)
+# The shim (browser_cli.py) only talks to an action socket; in production the worker's
+# daemon/launcher runtime serves it. The protocol pass has no worker runtime, so the runner
+# serves the same request format on the host and runs the real agent-browser with the
+# same upstream flags (action policy, domain filter, content boundaries) the shim used
+# before the isolated runtime existed. The browser sandbox itself is not a P4-C case.
+ACTION_VERBS = {"open": "navigate", "click": "click", "snapshot": "snapshot",
+                "extract": "gettext", "screenshot": "screenshot", "download": "download",
+                "scroll": "scroll", "close": "close"}
+ACTION_ARTIFACT = re.compile(r"(screenshot|download)-[a-f0-9]{32}\.(png|bin)")
+
+
+def action_argv(runtime, config, allow, request):
+    """Upstream argv for one shim request, or ValueError. Mirrors browser_action.py."""
+    verb, args, artifact = request.get("verb"), request.get("args"), request.get("artifact")
+    if verb == "__version__" and args == []:
+        return [config["executable"], "--version"]
+    if (verb not in ACTION_VERBS or ACTION_VERBS[verb] not in allow or not isinstance(args, list)
+            or len(args) > 2 or any(not isinstance(a, str) or len(a) > 4096 for a in args)):
+        raise ValueError()
+    ref = lambda value: re.fullmatch(r"@e[0-9]+", value) is not None
+    target = None
+    if verb in ("screenshot", "download"):
+        if not isinstance(artifact, str) or not ACTION_ARTIFACT.fullmatch(artifact):
+            raise ValueError()
+        target = str(Path(config["output"]) / artifact)
+    elif artifact is not None:
+        raise ValueError()
+    if verb == "open" and len(args) == 1 and urlsplit(args[0]).scheme in ("http", "https"):
+        action = ["open", args[0]]
+    elif verb == "click" and len(args) == 1 and ref(args[0]):
+        action = ["click", args[0]]
+    elif verb == "extract" and len(args) == 1 and ref(args[0]):
+        action = ["get", "text", args[0]]
+    elif verb == "download" and len(args) == 1 and ref(args[0]):
+        action = ["download", args[0], target]
+    elif verb == "snapshot" and not args:
+        action = ["snapshot", "-i"]
+    elif verb == "screenshot" and not args:
+        action = ["screenshot", target]
+    elif verb == "scroll" and len(args) == 2 and args[0] in ("up", "down") and args[1].isdigit():
+        action = ["scroll", *args]
+    elif verb == "close" and not args:
+        action = ["close"]
+    else:
+        raise ValueError()
+    hosts = sorted({urlsplit(d).hostname for d in config["allowed_domains"]})
+    return [config["executable"], "--config", str(runtime / "upstream.json"),
+            "--session", config["session_id"], "--action-policy", str(runtime / "policy.json"),
+            "--allowed-domains", ",".join(hosts),
+            "--content-boundaries", "--max-output", "16000", "--json", *action]
+
+
+def serve_actions(runtime, path):
+    """Serve the shim's action socket for one backend runtime until the socket is closed."""
+    config = json.loads((runtime / "config.json").read_text())
+    allow = set(json.loads((runtime / "policy.json").read_text())["allow"])
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AGENT_BROWSER_")}
+    env.update(AGENT_BROWSER_NAMESPACE="celeris", HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="",
+               NO_PROXY="localhost,127.0.0.1")
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind(str(path))
+    listener.listen(4)
+
+    def loop():
+        while True:
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            with connection:
+                try:
+                    data = b""
+                    while chunk := connection.recv(65536):
+                        data += chunk
+                    argv = action_argv(runtime, config, allow, json.loads(data))
+                    result = subprocess.run(argv, cwd=runtime, env=env, stdout=subprocess.PIPE,
+                                            stderr=subprocess.DEVNULL, timeout=45, check=False)
+                    response = {"status": result.returncode,
+                                "stdout": result.stdout[:1048576].decode("utf-8", errors="replace")}
+                except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired):
+                    response = {"status": 2, "stdout": ""}
+                try:
+                    connection.sendall(json.dumps(response).encode())
+                except OSError:
+                    pass
+
+    Thread(target=loop, daemon=True).start()
+    return listener
+
+
+def prepare_runtime(backend, agent_browser, origin, root, socket_dir):
+    """Write the shim, policy and config for one backend session; return (runtime, output, cli)."""
     runtime = root / backend
     runtime.mkdir(mode=0o700)
     output = runtime / "output"
@@ -111,30 +212,49 @@ def backend_run(backend, command, agent_browser, origin, root, protocol_scripted
     encoded = json.dumps(policy, separators=(",", ":")).encode()
     (runtime / "policy.json").write_bytes(encoded)
     (runtime / "upstream.json").write_text('{"idleTimeout":"5m","noWebmcp":true}')
+    # Canonical origin (scheme, host, port) as task-core and the shim compare it; a bare
+    # "localhost" would mean https://localhost:443 and refuse the loopback fixture.
     (runtime / "config.json").write_text(json.dumps({
         "executable": str(agent_browser), "session_id": f"celeris-p4c-{backend}",
-        "allowed_domains": ["localhost"], "output": str(output),
+        "allowed_domains": [origin.rstrip("/")], "output": str(output),
         "policy_sha256": hashlib.sha256(encoded).hexdigest(),
         "credential_policy_ids": [], "credential_use": False,
+        "action_socket": str(Path(socket_dir) / "a.sock"),
     }))
+    return runtime, output, cli
+
+
+def backend_run(backend, command, agent_browser, origin, root, protocol_scripted=False):
+    first_request = len(Site.requests)
+    # Short path: unix sun_path is 108 bytes and the output dir may be deep.
+    socket_dir = Path(tempfile.mkdtemp(prefix="cbc-"))
+    runtime, output, cli = prepare_runtime(backend, agent_browser, origin, root, socket_dir)
+    action_socket = socket_dir / "a.sock"
+    listener = serve_actions(runtime, action_socket)
     env = os.environ.copy()
     env.update(CELERIS_BROWSER_CLI=str(cli), CELERIS_BROWSER_ORIGIN=origin,
                CELERIS_BROWSER_BACKEND=backend, CELERIS_BROWSER_RUNTIME=str(runtime),
                HTTP_PROXY="", HTTPS_PROXY="", ALL_PROXY="", NO_PROXY="localhost,127.0.0.1")
     start = time.monotonic()
     process_ok = []
-    for phase in ("open", "resume"):
-        env["CELERIS_BROWSER_PHASE"] = phase
-        result = subprocess.run(command, cwd=runtime, env=env, text=True,
-                                capture_output=True, timeout=180, check=False)
-        expected = 0 if protocol_scripted else (-signal.SIGKILL if phase == "open" else 0)
-        process_ok.append(result.returncode == expected)
-        (runtime / f"{phase}-driver.json").write_text(json.dumps({
-            "exit": result.returncode, "stdout_tail": result.stdout[-2000:],
-            "stderr_tail": result.stderr[-2000:],
-        }))
-        if not process_ok[-1]:
-            break
+    try:
+        for phase in ("open", "resume"):
+            env["CELERIS_BROWSER_PHASE"] = phase
+            result = subprocess.run(command, cwd=runtime, env=env, text=True,
+                                    capture_output=True, timeout=180, check=False)
+            expected = 0 if protocol_scripted else (-signal.SIGKILL if phase == "open" else 0)
+            process_ok.append(result.returncode == expected)
+            (runtime / f"{phase}-driver.json").write_text(json.dumps({
+                "exit": result.returncode, "stdout_tail": result.stdout[-2000:],
+                "stderr_tail": result.stderr[-2000:],
+            }))
+            if not process_ok[-1]:
+                break
+    finally:
+        with contextlib.suppress(OSError):
+            listener.shutdown(socket.SHUT_RDWR)
+        listener.close()
+        shutil.rmtree(socket_dir, ignore_errors=True)
     events = []
     event_file = runtime / "events.jsonl"
     if event_file.exists():
@@ -156,7 +276,7 @@ def backend_run(backend, command, agent_browser, origin, root, protocol_scripted
     snapshot = runtime / "snapshot-output.txt"
     if snapshot.exists() and re.search(r"\bref=e[0-9]+\b", snapshot.read_text()) and event("extract", "success"):
         passed.add("snapshot_has_refs")
-    if event("click", "success") and ("POST", "/clicked") in requests:
+    if event("click", "success") and ("GET", "/clicked") in requests:
         passed.add("click_by_ref")
     if event("screenshot", "success") and any(output.glob("screenshot-*.png")):
         passed.add("screenshot_artifact")
@@ -339,7 +459,6 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     Site.requests = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), Site)
-    from threading import Thread
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -360,6 +479,19 @@ def main():
         if args.protocol_scripted and all(run["accepted"] for run in comparison):
             env = os.environ.copy()
             env["CELERIS_BROWSER_CONFORMANCE_FILE"] = str(temporary)
+            # The routing and fallback tests launch the worker's isolated runtime, which
+            # needs these binaries next to the test executable; `cargo test --lib` does not
+            # build them (isolated_runtime_unavailable otherwise).
+            bins = subprocess.run(
+                ["cargo", "build", "--manifest-path", str(manifest), "-p", "task-worker",
+                 "--bin", "celeris-browser-sandboxd", "--bin", "celeris-browser-egress"],
+                cwd=output, env=env, text=True, capture_output=True, timeout=900, check=False,
+            )
+            if bins.returncode:
+                (output / "runtime-build.log").write_text(bins.stdout + "\n" + bins.stderr)
+                temporary.unlink()
+                print("isolated runtime binaries failed to build", file=sys.stderr)
+                return 1
             route = subprocess.run(
                 ["cargo", "test", "--manifest-path", str(manifest), "-p", "task-worker", "--lib",
                  "p4c_runner_record_routes_and_falls_back", "--", "--ignored", "--nocapture"],
@@ -398,10 +530,10 @@ def main():
                 observed = Site.requests[first_fallback_request:]
                 (output / "fallback-fixture.json").write_text(json.dumps({
                     "requests": observed,
-                    "alternate_clicked": ("POST", "/clicked") in observed,
+                    "alternate_clicked": ("GET", "/clicked") in observed,
                     "navigation_count": observed.count(("GET", "/")),
                 }, indent=2) + "\n")
-                if ("POST", "/clicked") not in observed or observed.count(("GET", "/")) < 2:
+                if ("GET", "/clicked") not in observed or observed.count(("GET", "/")) < 2:
                     temporary.unlink()
                     print("fallback completion not observed by fixture", file=sys.stderr)
                     return 1

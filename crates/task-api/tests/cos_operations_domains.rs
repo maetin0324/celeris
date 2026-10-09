@@ -3,157 +3,16 @@
 //! context, and the same mutation called directly with the CoS run credential is 422.
 mod common;
 
+use common::cos_ops::{OPS, cos_bearer, op_body, run_domain};
 use common::*;
-use serde_json::{Value, json};
+use serde_json::json;
 use task_core::approval::{Approval, ApprovalId, ApprovalStore, Decision};
-use task_core::chat::{ChatCreateThreadRequest, ChatPostMessageRequest, ChatSendMode};
 use task_core::decision::{
     CostOfReversal, DecisionKind, DecisionOption, DecisionOrigin, DecisionPathEntry,
     DecisionRaisedBy, DecisionRequest, DecisionStatus,
 };
 use task_core::{Event, Status, TaskKind, TaskStore};
-use time::{Duration, OffsetDateTime};
-
-const OPS: &str = "/api/v1/cos/operations";
-
-/// A live CoS run of a new thread: `(thread_id, run_id, "Bearer …")`.
-fn cos_bearer(env: &TestEnv, key: &str) -> (String, String, String) {
-    let store = &env.store;
-    let now = OffsetDateTime::now_utc();
-    let thread = store
-        .chat_thread_create(
-            "admin",
-            &ChatCreateThreadRequest {
-                title: format!("thread {key}"),
-                project_id: None,
-                client_thread_id: key.into(),
-            },
-            now,
-        )
-        .expect("thread")
-        .thread;
-    store
-        .chat_message_post(
-            &thread.id,
-            &ChatPostMessageRequest {
-                client_message_id: format!("message-{key}"),
-                text: "input".into(),
-                attachment_ids: vec![],
-                reply_to_id: None,
-                mode: ChatSendMode::Queue,
-                resume_queue: false,
-            },
-            now,
-        )
-        .expect("message");
-    let run = format!("run-{key}");
-    store
-        .chat_run_claim_next(&thread.id, &run, &json!({}), now)
-        .expect("claim")
-        .expect("run");
-    let bearer = task_api::cos::issue_run_bearer(store, &thread.id, &run, Duration::hours(1))
-        .expect("issue");
-    (thread.id, run, format!("Bearer {bearer}"))
-}
-
-fn op_body(key: &str, method: &str, path: &str, body: Value) -> Value {
-    json!({
-        "idempotency_key": key,
-        "expected_revision": null,
-        "reason": "人が依頼した",
-        "policy_version": "1",
-        "request": {"method": method, "path": path, "body": body},
-    })
-}
-
-fn db(env: &TestEnv) -> rusqlite::Connection {
-    rusqlite::Connection::open(&env.db_path).expect("open db")
-}
-
-/// One domain: the operation succeeds with `action`, leaves its audit envelope event and its chat
-/// card, and the same request sent directly with the CoS credential is 422 without a domain write.
-async fn run_domain(
-    env: &TestEnv,
-    key: &str,
-    method: &str,
-    path: &str,
-    body: Value,
-    action: &str,
-) -> Value {
-    let app = env.router();
-    let (thread, run, bearer) = cos_bearer(env, key);
-    let headers = [("authorization", bearer.as_str())];
-
-    // Direct call first: the domain state stays untouched, so the operation below still applies.
-    let direct = match method {
-        "PATCH" => send(&app, patch_json_with(path, &body, &headers)).await,
-        _ => send(&app, post_json_with(path, &body, &headers)).await,
-    };
-    let problem = assert_problem(&direct, 422, "cos_audit_context_required");
-    assert_eq!(problem["instead"], OPS, "{key}");
-
-    let resp = send(
-        &app,
-        post_json_with(OPS, &op_body(key, method, path, body), &headers),
-    )
-    .await;
-    assert_eq!(resp.status.as_u16(), 200, "{key}: {}", resp.text());
-    let op = resp.json()["operation"].clone();
-    assert_eq!(op["state"], "applied", "{key}: {op}");
-    assert_eq!(op["action"], action, "{key}");
-    assert_eq!(op["actor"], "cos");
-    assert_eq!(op["thread_id"], thread.as_str());
-    assert_eq!(op["run_id"], run.as_str());
-    let op_id = op["id"].as_str().expect("id").to_string();
-
-    // The audit envelope event of this operation.
-    let conn = db(env);
-    let mut stmt = conn
-        .prepare("SELECT json FROM events ORDER BY seq")
-        .expect("prepare");
-    let audits: Vec<Value> = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .expect("query")
-        .map(|raw| serde_json::from_str::<Value>(&raw.expect("row")).expect("json"))
-        .filter(|e| e["type"] == "cos_operation" && e["operation_id"] == op_id.as_str())
-        .collect();
-    assert_eq!(audits.len(), 1, "{key}: {audits:?}");
-    for (field, want) in [
-        ("actor", "cos"),
-        ("thread_id", thread.as_str()),
-        ("run_id", run.as_str()),
-        ("reason", "人が依頼した"),
-        ("policy_version", "1"),
-        ("state", "applied"),
-    ] {
-        assert_eq!(audits[0][field], want, "{key}: {field}");
-    }
-    // The chat card event the operation points at.
-    let card: String = conn
-        .query_row(
-            "SELECT payload_json FROM chat_events WHERE thread_id=?1 AND type='card' AND id=?2",
-            rusqlite::params![
-                thread,
-                op["event_id"]
-                    .as_str()
-                    .expect("event id")
-                    .parse::<i64>()
-                    .expect("int")
-            ],
-            |row| row.get(0),
-        )
-        .expect("card event");
-    assert!(card.contains(&op_id), "{key}: {card}");
-    let rows: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM cos_operations WHERE id=?1 AND state='applied'",
-            [&op_id],
-            |row| row.get(0),
-        )
-        .expect("row");
-    assert_eq!(rows, 1, "{key}");
-    op
-}
+use time::OffsetDateTime;
 
 fn raise_decision(env: &TestEnv, task: &task_core::Task, id: &str) {
     let opt = |key: &str| DecisionOption {

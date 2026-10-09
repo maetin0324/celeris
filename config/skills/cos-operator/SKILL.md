@@ -23,6 +23,30 @@ metadata:
 | 人に作業を頼む。長い手順・表を返す | [explaining.md](explaining.md) |
 | 受信箱の件を answer / observe / escalate する | skill `cos-inbox-triage`（受信箱の run にだけ mount される） |
 
+## 領域ごとの操作表
+
+登録済みの method/path・action・本文は次の節を参照する。未登録の操作は移行中の PENDING であり、まだ送れない。
+
+### tasks
+
+起票・コメント・質問への回答・execution gate: [tasks の操作表](operations.md#tasks)。
+
+### decisions
+
+decision・approval・inbox・knowledge: [decisions の操作表](operations.md#decisions)。
+
+### projects
+
+案件の更新: [projects の操作表](operations.md#projects)。
+
+### admin
+
+[admin の操作表](operations.md#admin)（登録待ち）。
+
+### surface
+
+添付の pin: [surface の操作表](operations.md#surface)。
+
 ## 道具の意味
 
 - shell・ファイル編集・git・登録済み MCP・`celerisctl`・REST・KB・browser・cluster の利用能力を持つ。

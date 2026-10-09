@@ -3,6 +3,8 @@
 
 #![allow(dead_code)]
 
+pub mod cos_ops;
+
 use std::path::PathBuf;
 use std::time::Duration;
 

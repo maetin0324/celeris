@@ -18,35 +18,56 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
  "request":{"method":"POST","path":"<下の表の path>","body":{}}}
 ```
 
-## 登録済みの操作（`crates/task-api/src/cos/operations.rs` の `ALLOWED` と同じ）
+## 登録済みの操作（`crates/task-api/src/cos/ops/*.rs` の `ALLOWED` の連結と同じ）
 
 `request.path` に使えるのはこの表の行だけ。これ以外（外部 URL・任意の proxy・`/cos/*` 自身・未登録の path）は
 422 `cos_operation_not_allowed` で拒否され、拒否も記録される。表と `ALLOWED` の一致は試験
 `cos_operator_skill_table_matches_allowed`（task-api）が固定している。
 
+### tasks
+
 | 操作 | `request` の method と path | action | celerisctl・本文の要点 |
 |---|---|---|---|
 | 起票 | `POST /api/v1/tasks` | task.create | `celerisctl add --title … --objective … --check-cmd …`。本文は下の「起票」。添付は `attachment_ids`（[attachments.md](attachments.md)） |
 | コメント | `POST /api/v1/tasks/<id>/comments` | comment.create | `{"body":"…"}` |
-| 決定（decision）への回答 | `POST /api/v1/decisions/<id>/answer` | decision.answer | `{"option":"…","note":"…"}` |
-| 承認・認可 | `POST /api/v1/approvals/<id>/decide` | approval.decide | `celerisctl approve <task-id> --note …` |
 | 段の確認（phase gate） | `POST /api/v1/tasks/<id>/execution/phase-gate` | execution.phase_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}` |
 | task の質問への回答 | `POST /api/v1/tasks/<id>/answer` | question.answer | `celerisctl answer <task-id> <答え>` |
 | 計画の確認（plan gate） | `POST /api/v1/tasks/<id>/execution/plan-gate` | execution.plan_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}`。replan は gate の `replan` で planner に返す |
-| 案件の更新 | `PATCH /api/v1/projects/<id>` | project.update | 変える欄だけを送る |
+
+### decisions
+
+| 操作 | `request` の method と path | action | celerisctl・本文の要点 |
+|---|---|---|---|
+| 決定（decision）への回答 | `POST /api/v1/decisions/<id>/answer` | decision.answer | `{"option":"…","note":"…"}` |
+| 承認・認可 | `POST /api/v1/approvals/<id>/decide` | approval.decide | `celerisctl approve <task-id> --note …` |
 | KB 候補の作成 | `POST /api/v1/knowledge/inbox` | knowledge.record | `celerisctl knowledge record --title … --scope project:<slug> --source …`（CoS credential では API 経由）。下の「KB 候補」 |
 | KB 候補の却下 | `POST /api/v1/knowledge/inbox/<id>/reject` | knowledge.reject | body は `{}`（理由は operation の `reason` に書く） |
-| 添付の pin（既存の owner へ後から） | `POST /api/v1/chat/attachments/<id>/references` | attachment.reference | [attachments.md](attachments.md) |
 | 受信箱の件への回答（relay） | `POST /api/v1/inbox/items/<id>/answer` | inbox.answer | Core の「受信箱の件への回答（relay）」。`instructed_by` を付ける |
 
-### 登録されていない操作（CoS は送らない）
+### projects
+
+| 操作 | `request` の method と path | action | celerisctl・本文の要点 |
+|---|---|---|---|
+| 案件の更新 | `PATCH /api/v1/projects/<id>` | project.update | 変える欄だけを送る |
+
+### admin
+
+登録済みの操作はまだない。
+
+### surface
+
+| 操作 | `request` の method と path | action | celerisctl・本文の要点 |
+|---|---|---|---|
+| 添付の pin（既存の owner へ後から） | `POST /api/v1/chat/attachments/<id>/references` | attachment.reference | [attachments.md](attachments.md) |
+
+## 登録されていない操作（CoS は送らない）
 
 次は `/cos/operations` に登録されていない。送ると 422 になる。必要なら人に web の画面で行うよう頼むか、
-運用者向けの task を起票する。登録を足すのは権限の変更なので人の決定。
+運用者向けの task を起票する。許可範囲は ADR 2026-10-09 で決定済みで、各領域の監査経路を実装中。
 
 - 実行計画の直接の差し替え（`PUT /api/v1/tasks/<id>/execution-plan`）。現計画は `celerisctl execution plan show <task-id>` で読める。直したいときは plan/phase gate の `replan`
 - task・案件の pause / resume（`POST /api/v1/tasks/<id>/pause`・`…/resume`、`POST /api/v1/projects/<id>/pause`）
-- 永続の認可（`/api/v1/standing-rules`）の作成・変更。読むのは `GET /api/v1/standing-rules`。新しい standing permission は security として人に回す
+- 永続の認可（`/api/v1/standing-rules`）の作成・変更。読むのは `GET /api/v1/standing-rules`。監査付きの登録は実装待ち
 
 ## 監視（読み取り）
 

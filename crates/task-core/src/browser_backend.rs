@@ -289,13 +289,11 @@ pub fn certify(
             .copied()
             .filter(|c| {
                 if cap.is_sensitive() {
-                    ![FixtureCase::IsolationSuite, FixtureCase::EgressNegativeSuite]
-                        .iter()
-                        .all(|required| r.case_passed_for_runtime(*required, EvidenceRuntime::Launcher))
-                        || !required_cases(*cap)
-                            .iter()
-                            .filter(|required| !matches!(required, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite))
-                            .all(|required| r.case_passed(*required))
+                    let runtime = match c {
+                        FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite => EvidenceRuntime::Launcher,
+                        _ => EvidenceRuntime::Daemon,
+                    };
+                    !r.case_passed_for_runtime(*c, runtime)
                 } else {
                     !r.case_passed(*c)
                 }
@@ -511,6 +509,22 @@ mod tests {
         let mut bare = passing(&b);
         bare.evidence.clear();
         assert!(gap(&bare));
+        // Isolation and egress require launcher measurements; P4-B observations
+        // remain daemon measurements, matching the conformance generator output.
+        let mut wrong_runtime = passing(&b);
+        for evidence in &mut wrong_runtime.evidence {
+            if matches!(evidence.case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) {
+                evidence.runtime = EvidenceRuntime::Daemon;
+            }
+        }
+        assert!(gap(&wrong_runtime));
+        let mut wrong_runtime = passing(&b);
+        for evidence in &mut wrong_runtime.evidence {
+            if matches!(evidence.case, FixtureCase::InjectionAttackSuite | FixtureCase::AuthSectionObservationStop) {
+                evidence.runtime = EvidenceRuntime::Launcher;
+            }
+        }
+        assert!(gap(&wrong_runtime));
         // 攻撃の印が 1 つ欠けても通らない
         let mut short = passing(&b);
         short

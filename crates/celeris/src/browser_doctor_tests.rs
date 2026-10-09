@@ -46,7 +46,7 @@ fn install_ledger(doctor: &DoctorConfig) {
     .flat_map(|case| {
         required_evidence(case)
             .into_iter()
-            .map(move |test| json!({"case":case,"test":test,"outcome":"passed"}))
+            .map(move |test| json!({"case":case,"test":test,"outcome":"passed","runtime": if matches!(case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) { "launcher" } else { "daemon" }}))
     })
     .collect();
     std::fs::write(doctor.ledger.as_ref().unwrap(), serde_json::to_vec(&json!({

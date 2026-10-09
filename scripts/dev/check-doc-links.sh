@@ -33,6 +33,7 @@ crates/task-dispatch/src/auto_resolve/generated/tests.rs
 crates/task-dispatch/src/auto_resolve/records/tests.rs
 crates/task-dispatch/src/auto_resolve/renumber/tests.rs
 crates/task-dispatch/src/integration/tests.rs scripts/dev/tests/progress_union_merge.sh
+crates/task-api/tests/cos_ops_projects_cron_docs.rs crates/task-api/tests/cos_ops_ops_surface.rs
 gui/app/lib/docs.ts gui/test/ gui/scripts/lib/celeris-fixture.mjs web/e2e/"
 
 # progress・ADR・report の本文の素のパスは履歴なので、(2) は次の形のファイルだけ見る。

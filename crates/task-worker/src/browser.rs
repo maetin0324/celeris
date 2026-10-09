@@ -293,6 +293,13 @@ fn daemon_test_loopback_allow() -> std::collections::BTreeSet<String> {
     Default::default()
 }
 
+/// Exposes the daemon's build-time loopback exception for an integration test, where this
+/// crate is linked without `cfg(test)` just like a production build.
+#[doc(hidden)]
+pub fn daemon_test_loopback_allow_for_test_build_check() -> std::collections::BTreeSet<String> {
+    daemon_test_loopback_allow()
+}
+
 fn browser_install_dirs() -> Vec<PathBuf> {
     let Some(cache) = std::env::var_os("HOME")
         .map(PathBuf::from)

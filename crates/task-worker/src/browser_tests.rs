@@ -803,7 +803,12 @@ async fn p4c_fallback_real_harness_scenario() {
     let root = PathBuf::from(std::env::var_os("CELERIS_BROWSER_FALLBACK_ROOT").unwrap());
     let record = PathBuf::from(std::env::var_os("CELERIS_BROWSER_CONFORMANCE_FILE").unwrap());
     let executable = PathBuf::from(std::env::var_os("CELERIS_BROWSER_EXECUTABLE").unwrap());
-    let origin = std::env::var("CELERIS_BROWSER_ORIGIN").unwrap();
+    // The browser runs in the isolated runtime, whose egress refuses loopback except a
+    // test-only `127.0.0.1:<port>` literal; reach the runner's fixture through that.
+    let fixture = url::Url::parse(&std::env::var("CELERIS_BROWSER_ORIGIN").unwrap()).unwrap();
+    let port = fixture.port().expect("runner fixture port");
+    let origin = format!("http://127.0.0.1:{port}/");
+    let _ = crate::browser::TEST_LOOPBACK_ALLOW.set([format!("127.0.0.1:{port}")].into());
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/browser-conformance-harness.py");
     let command = script.to_string_lossy().into_owned();
@@ -865,7 +870,12 @@ async fn p4c_fallback_real_harness_scenario() {
         )])
         .unwrap();
     let mut req = request(&root);
-    let host = "localhost".to_string();
+    // Canonical origin (scheme, host, port): a bare "localhost" means https://localhost:443,
+    // which neither intersects the task requirement nor reaches the loopback fixture.
+    let host = origin.trim_end_matches('/').to_string();
+    req.task.requirements.browser = Some(task_core::BrowserRequirements {
+        allowed_domains: vec![host.clone()],
+    });
     req.context
         .profile
         .as_mut()

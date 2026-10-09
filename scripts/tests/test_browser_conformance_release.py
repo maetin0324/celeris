@@ -2,6 +2,8 @@
 
 import importlib.util
 import json
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import unittest
@@ -77,6 +79,43 @@ class BrowserConformanceReleaseTests(unittest.TestCase):
 
         self.assertEqual(updated["generated_for"], generated_for)
         self.assertIn("injection_attack_suite", updated["results"][0]["passed"])
+
+
+    def test_runner_serves_shim_actions_for_the_loopback_origin(self):
+        """The shim only reaches agent-browser through its action socket and compares full
+        origins; the runner must provide both or every case fails (no events but blocks)."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "argv.log"
+            fake = root / "agent-browser"
+            fake.write_text("#!/bin/sh\n"
+                            f"printf '%s\\n' \"$*\" >> {log}\n"
+                            "echo '{\"success\":true,\"data\":{}}'\n")
+            fake.chmod(0o755)
+            socket_dir = root / "sock"
+            socket_dir.mkdir()
+            runtime, _output, cli = browser_conformance.prepare_runtime(
+                "acp", fake, "http://localhost:43210/", root, socket_dir)
+            listener = browser_conformance.serve_actions(runtime, socket_dir / "a.sock")
+            try:
+                def shim(*args):
+                    return subprocess.run([sys.executable, str(cli), *args], capture_output=True,
+                                          text=True, timeout=30, check=False).returncode
+                self.assertEqual(shim("open", "http://localhost:43210/"), 0)
+                self.assertNotEqual(shim("open", "http://denied.invalid/"), 0)
+                self.assertNotEqual(shim("open", "https://localhost/"), 0)
+                self.assertEqual(shim("click", "@e1"), 0)
+            finally:
+                listener.close()
+            events = [json.loads(line) for line in (runtime / "events.jsonl").read_text().splitlines()]
+            calls = log.read_text().splitlines()
+
+        self.assertEqual([e["operation"] for e in events],
+                         ["navigate", "policy_block", "policy_block", "click"])
+        self.assertEqual(len(calls), 2)
+        self.assertIn("--allowed-domains localhost ", calls[0])
+        self.assertTrue(calls[0].endswith("--json open http://localhost:43210/"))
+        self.assertTrue(calls[1].endswith("--json click @e1"))
 
 
 if __name__ == "__main__":

@@ -278,6 +278,21 @@ pub fn configure_isolated_runtime(config: IsolatedBrowserConfig) {
     let _ = ISOLATED.set(config);
 }
 
+/// Test-only loopback egress for the daemon runtime (the conformance runner's real-browser
+/// fallback fixture listens on `127.0.0.1:<port>`). Compiled only into test builds; in
+/// production only the launcher's root-owned config can set it (ADR 2026-10-05 addendum E1).
+#[cfg(test)]
+pub(crate) static TEST_LOOPBACK_ALLOW: OnceLock<std::collections::BTreeSet<String>> =
+    OnceLock::new();
+
+fn daemon_test_loopback_allow() -> std::collections::BTreeSet<String> {
+    #[cfg(test)]
+    if let Some(allow) = TEST_LOOPBACK_ALLOW.get() {
+        return allow.clone();
+    }
+    Default::default()
+}
+
 fn browser_install_dirs() -> Vec<PathBuf> {
     let Some(cache) = std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -1534,7 +1549,7 @@ async fn run_with_executable_attempt(
         allow: policy.egress_allow(),
         resolver: isolation.resolver.unwrap(),
         allow_ipv6: false,
-        test_loopback_allow: Default::default(),
+        test_loopback_allow: daemon_test_loopback_allow(),
     };
     let mut ro_dirs = vec![
         real_executable.parent().unwrap().to_path_buf(),

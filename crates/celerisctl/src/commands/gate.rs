@@ -38,10 +38,40 @@ pub struct AnswerArgs {
 }
 
 pub fn run_approve(store: &dyn TaskStore, args: ApproveArgs) -> Result<ExitCode, CliError> {
+    if let Some(credential) = super::cos_ops::credential() {
+        let id = crate::error::parse_task_id(&args.id)?;
+        let api = super::cos_ops::api_config(None)?;
+        let result = send_cos_approve(
+            &api,
+            id,
+            args.note,
+            &credential,
+            &super::cos_ops::Options::default(),
+        )?;
+        outln!("{result}");
+        return Ok(ExitCode::SUCCESS);
+    }
     let id = crate::error::parse_task_id(&args.id)?;
     let result = ops_approve(store, id, args.note, None)?;
     outln!("{:?}", result.to);
     Ok(ExitCode::SUCCESS)
+}
+
+fn send_cos_approve(
+    api: &super::cron::ApiConfig,
+    id: task_core::TaskId,
+    note: Option<String>,
+    credential: &str,
+    options: &super::cos_ops::Options,
+) -> Result<serde_json::Value, CliError> {
+    super::cos_ops::send(
+        api,
+        "POST",
+        &format!("/api/v1/tasks/{id}/approve"),
+        serde_json::json!({"note": note, "expected_status": null}),
+        options,
+        Some(credential),
+    )
 }
 
 pub fn run_reject(store: &dyn TaskStore, args: RejectArgs) -> Result<ExitCode, CliError> {
@@ -79,6 +109,29 @@ mod tests {
             },
         );
         assert!(matches!(result, Err(CliError::Message(_))));
+    }
+
+    #[test]
+    fn cos_credential_approve_uses_audited_operations_endpoint() {
+        let (api, server) = super::super::cos_ops::tests::fake_server();
+        let id = task_core::TaskId::new();
+        send_cos_approve(
+            &api,
+            id,
+            Some("looks good".into()),
+            "cos-run-token",
+            &super::super::cos_ops::Options {
+                reason: Some("operator requested".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (headers, body) = server.join().unwrap();
+        assert!(headers.starts_with("POST /api/v1/cos/operations HTTP/1.1"));
+        assert!(headers.contains("Authorization: Bearer cos-run-token"));
+        assert_eq!(body["request"]["method"], "POST");
+        assert_eq!(body["request"]["path"], format!("/api/v1/tasks/{id}/approve"));
+        assert_eq!(body["request"]["body"]["note"], "looks good");
     }
 
     #[test]

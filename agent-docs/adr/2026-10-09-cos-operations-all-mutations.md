@@ -392,4 +392,3 @@ D6 の必須例を先に登録した。各操作は handler と CoS dispatch が
   カード、領域 write の書き手、競合・catalog 外・初回採用の理由付き拒否）。除外は既存の `tests/cos_ops_registry.rs`。
 - 残り: 各領域の `PENDING`（tasks 10・decisions 3・projects 14・admin 35・surface 21 本）は同じ形で登録する
   後続の子 task に分けた（進捗 `agent-docs/progress/2026-10-09-cos-operations-all-mutations.md`）。
-

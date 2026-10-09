@@ -219,16 +219,7 @@ async fn new_conversation(
 ) -> ApiResult {
     require_admin(&state, &headers)?;
     let query = QueryParams::parse(raw.as_deref(), &["scope"])?;
-    let project_id = match Scope::parse(query.single("scope")?)? {
-        Scope::All => None,
-        Scope::Node(id) if id == COS_ID => None,
-        Scope::Node(_) => {
-            return Err(ApiProblem::bad_request(
-                "new conversation requires a CoS scope",
-            ));
-        }
-        Scope::Project(id) => Some(id),
-    };
+    let project_id = new_conversation_project(query.single("scope")?)?;
     state
         .blocking(move |store| {
             let thread_id = store
@@ -247,6 +238,21 @@ async fn new_conversation(
     Ok(axum::response::IntoResponse::into_response(
         StatusCode::NO_CONTENT,
     ))
+}
+
+/// `scope` of `POST /console/new-conversation` (the CoS operation `console.new_conversation`
+/// reads it from the body): the project of the new legacy thread, or `None` for the CoS scope.
+pub(crate) fn new_conversation_project(
+    scope: Option<&str>,
+) -> Result<Option<task_core::ProjectId>, ApiProblem> {
+    match Scope::parse(scope)? {
+        Scope::All => Ok(None),
+        Scope::Node(id) if id == COS_ID => Ok(None),
+        Scope::Node(_) => Err(ApiProblem::bad_request(
+            "new conversation requires a CoS scope",
+        )),
+        Scope::Project(id) => Ok(Some(id)),
+    }
 }
 
 // ---- 範囲 ----

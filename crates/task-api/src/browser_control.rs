@@ -15,6 +15,7 @@ use task_core::browser_store::{BrowserSessionKey, BrowserStoreError};
 
 use crate::browser::HumanAttestation;
 use crate::browser_live::{now, parse_body, verify};
+use crate::cos::operations::{OperationAudit, external_store};
 use crate::problem::ApiProblem;
 use crate::state::ApiState;
 
@@ -53,7 +54,7 @@ struct DisconnectBody {
     assertion: HumanAttestation,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct ControlStatus {
     phase: ControlPhase,
     version: u64,
@@ -136,13 +137,14 @@ fn require_daemon(state: &ApiState) -> Result<(), ApiProblem> {
     Ok(())
 }
 
-async fn control(
-    State(state): State<ApiState>,
-    Path(path): Path<SessionPath>,
-    body: Result<Json<ControlBody>, JsonRejection>,
-) -> Result<Json<ControlOutcome>, ApiProblem> {
-    let body = parse_body(body)?;
-    let viewer = verify(&state, &body.assertion, &path)?;
+/// Verify the owner session's signed assertion for `path` and build the transition. The lease
+/// holder is the assertion's owner session; `policy_origin_ok` also needs the assertion's origin.
+fn control_request(
+    state: &ApiState,
+    path: &SessionPath,
+    body: ControlBody,
+) -> Result<ControlRequest, ApiProblem> {
+    let viewer = verify(state, &body.assertion, path)?;
     if !viewer.owner_session {
         return Err(ApiProblem::new(
             StatusCode::FORBIDDEN,
@@ -166,11 +168,20 @@ async fn control(
         },
         HumanCommand::Stop => ControlCommand::Stop,
     };
-    let req = ControlRequest {
+    Ok(ControlRequest {
         command,
         expected_version: body.expected_version,
         idempotency_key: body.idempotency_key,
-    };
+    })
+}
+
+async fn control(
+    State(state): State<ApiState>,
+    Path(path): Path<SessionPath>,
+    body: Result<Json<ControlBody>, JsonRejection>,
+) -> Result<Json<ControlOutcome>, ApiProblem> {
+    let body = parse_body(body)?;
+    let req = control_request(&state, &path, body)?;
     let outcome = state
         .blocking(move |store| mutate(store, &path, |s| s.apply(&req, now())))
         .await?;
@@ -183,15 +194,11 @@ async fn disconnect(
     body: Result<Json<DisconnectBody>, JsonRejection>,
 ) -> Result<Json<ControlStatus>, ApiProblem> {
     let body = parse_body(body)?;
-    let viewer = verify(&state, &body.assertion, &path)?;
-    let holder = viewer.session_id.unwrap_or_default();
+    let holder = verify(&state, &body.assertion, &path)?
+        .session_id
+        .unwrap_or_default();
     let status = state
-        .blocking(move |store| {
-            mutate(store, &path, |s| {
-                s.human_disconnected(&holder);
-                Ok(status_of(s))
-            })
-        })
+        .blocking(move |store| disconnect_in(store, &path, &holder))
         .await?;
     Ok(Json(status))
 }
@@ -219,13 +226,7 @@ async fn agent_begin(
 ) -> Result<Json<ControlStatus>, ApiProblem> {
     require_daemon(&state)?;
     let status = state
-        .blocking(move |store| {
-            mutate(store, &path, |s| {
-                s.expire(now());
-                s.begin_agent_action()?;
-                Ok(status_of(s))
-            })
-        })
+        .blocking(move |store| agent_begin_in(store, &path))
         .await?;
     Ok(Json(status))
 }
@@ -236,12 +237,7 @@ async fn agent_end(
 ) -> Result<Json<ControlStatus>, ApiProblem> {
     require_daemon(&state)?;
     let status = state
-        .blocking(move |store| {
-            mutate(store, &path, |s| {
-                s.end_agent_action();
-                Ok(status_of(s))
-            })
-        })
+        .blocking(move |store| agent_end_in(store, &path))
         .await?;
     Ok(Json(status))
 }
@@ -266,19 +262,143 @@ async fn auth_section(
     require_daemon(&state)?;
     let active = body.is_none_or(|Json(b)| b.active);
     let status = state
-        .blocking(move |store| {
-            let key = BrowserSessionKey {
-                task_id: &path.0,
-                run_id: &path.1,
-                session_id: &path.2,
-            };
-            store
-                .browser_control_auth_section(key, active)
-                .map(|s| status_of(&s))
-                .map_err(store_problem)
-        })
+        .blocking(move |store| auth_section_in(store, &path, active))
         .await?;
     Ok(Json(status))
+}
+
+fn disconnect_in(
+    store: &SqliteStore,
+    path: &SessionPath,
+    holder: &str,
+) -> Result<ControlStatus, ApiProblem> {
+    mutate(store, path, |s| {
+        s.human_disconnected(holder);
+        Ok(status_of(s))
+    })
+}
+
+fn agent_begin_in(store: &SqliteStore, path: &SessionPath) -> Result<ControlStatus, ApiProblem> {
+    mutate(store, path, |s| {
+        s.expire(now());
+        s.begin_agent_action()?;
+        Ok(status_of(s))
+    })
+}
+
+fn agent_end_in(store: &SqliteStore, path: &SessionPath) -> Result<ControlStatus, ApiProblem> {
+    mutate(store, path, |s| {
+        s.end_agent_action();
+        Ok(status_of(s))
+    })
+}
+
+fn auth_section_in(
+    store: &SqliteStore,
+    path: &SessionPath,
+    active: bool,
+) -> Result<ControlStatus, ApiProblem> {
+    let key = BrowserSessionKey {
+        task_id: &path.0,
+        run_id: &path.1,
+        session_id: &path.2,
+    };
+    store
+        .browser_control_auth_section(key, active)
+        .map(|s| status_of(&s))
+        .map_err(store_problem)
+}
+
+/// The audit record of a browser operation keeps the request without the signed assertion
+/// (ADR D2: attestations stay out of CoS records; the route still verifies it).
+fn without_assertion(audit: &OperationAudit) -> OperationAudit {
+    let mut audit = audit.clone();
+    if let Some(body) = audit
+        .payload
+        .get_mut("body")
+        .and_then(|b| b.as_object_mut())
+        && body.contains_key("assertion")
+    {
+        body.insert("assertion".into(), serde_json::json!({"redacted": true}));
+    }
+    audit
+}
+
+/// The CoS operations on `/tasks/{id}/browser/control/{run}/{session}[/…]` (ADR
+/// 2026-10-09-cos-operations-all-mutations, C: browser control). The owner session's signed
+/// assertion, the owner/origin checks and the lease rules are the route's own: CoS relays a
+/// request, it never becomes the holder. The worker routes (`agent/*`, `auth-section`) keep the
+/// daemon-auth requirement.
+pub(crate) fn control_op(
+    store: &SqliteStore,
+    state: &ApiState,
+    path: SessionPath,
+    body: serde_json::Value,
+    audit: &OperationAudit,
+    action: &str,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let audit = without_assertion(audit);
+    let target = format!("{}/{}/{}", path.0, path.1, path.2);
+    let reject = |problem: ApiProblem| audit.reject(store, "browser_session", &target, problem);
+    let body_invalid = || {
+        ApiProblem::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "browser_body_invalid",
+            "invalid live request",
+        )
+    };
+    let empty = body.is_null() || body == serde_json::json!({});
+    let target_ref = ("browser_session", target.as_str());
+    match action {
+        "browser.control" => {
+            let body: ControlBody =
+                serde_json::from_value(body).map_err(|_| reject(body_invalid()))?;
+            let req = control_request(state, &path, body).map_err(reject)?;
+            external_store(store, &audit, target_ref, action, || {
+                mutate(store, &path, |s| s.apply(&req, now()))
+            })
+        }
+        "browser.control_disconnect" => {
+            let body: DisconnectBody =
+                serde_json::from_value(body).map_err(|_| reject(body_invalid()))?;
+            let holder = verify(state, &body.assertion, &path)
+                .map_err(reject)?
+                .session_id
+                .unwrap_or_default();
+            external_store(store, &audit, target_ref, action, || {
+                disconnect_in(store, &path, &holder)
+            })
+        }
+        "browser.agent_begin" | "browser.agent_end" => {
+            require_daemon(state).map_err(reject)?;
+            if !empty {
+                return Err(reject(body_invalid()));
+            }
+            external_store(store, &audit, target_ref, action, || {
+                if action == "browser.agent_begin" {
+                    agent_begin_in(store, &path)
+                } else {
+                    agent_end_in(store, &path)
+                }
+            })
+        }
+        "browser.auth_section" => {
+            require_daemon(state).map_err(reject)?;
+            let active = if body.is_null() {
+                true
+            } else {
+                serde_json::from_value::<AuthSectionBody>(body)
+                    .map_err(|_| reject(body_invalid()))?
+                    .active
+            };
+            external_store(store, &audit, target_ref, action, || {
+                auth_section_in(store, &path, active)
+            })
+        }
+        other => Err(ApiProblem::internal(format!(
+            "browser control has no CoS operation {other}"
+        ))),
+    }
 }
 
 pub(crate) fn routes() -> axum::Router<ApiState> {

@@ -133,6 +133,27 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 操作 | `request` の method と path | action | celerisctl・本文の要点 |
 |---|---|---|---|
 | 添付の pin（既存の owner へ後から） | `POST /api/v1/chat/attachments/<id>/references` | attachment.reference | [attachments.md](attachments.md) |
+| chat thread の作成 | `POST /api/v1/chat/threads` | chat.thread_create | `{"title","project_id"?,"client_thread_id"}`。同じ client_thread_id・同じ内容は同じ thread |
+| chat thread の改名・アーカイブ | `PATCH /api/v1/chat/threads/<t>` | chat.thread_update | `{"title"?,"status"?:"open"\|"archived","expected_revision"}`。受信箱 thread はアーカイブ不可 |
+| chat thread への書き込み | `POST /api/v1/chat/threads/<t>/messages` | chat.message_post | `{"client_message_id","text","attachment_ids":[],"reply_to_id":null,"mode":"queue","resume_queue":false}`。CoS の書き込みは完了済みの assistant 発言として入り、run を起こさない（`mode=interrupt`・`resume_queue=true` は 422） |
+| 待ち行列の入力の取消 | `DELETE /api/v1/chat/threads/<t>/messages/<m>` | chat.message_cancel | body なし。queued の user 入力だけ |
+| chat run の停止 | `POST /api/v1/chat/threads/<t>/stop` | chat.run_stop | `{"run_id"}`。待ち行列は一時停止になる |
+| 待ち行列の再開 | `POST /api/v1/chat/threads/<t>/resume-queue` | chat.queue_resume | `{"expected_revision"}` |
+| chat 添付のアップロード | `POST /api/v1/chat/threads/<t>/attachments` | chat.attachment_upload | `{"client_upload_id","name","content_base64"}`。外部効果（file）。記録に中身は残らない |
+| chat 添付の削除 | `DELETE /api/v1/chat/attachments/<a>` | chat.attachment_delete | body なし。参照のある添付は 409。外部効果（file） |
+| 互換 console の新しい会話 | `POST /api/v1/console/new-conversation` | console.new_conversation | `{"scope":"all"\|"project:<id>"\|"node:cos"}`（省略は all） |
+| 組織のノードへ話しかける | `POST /api/v1/org/<id>/messages` | org.message | `{"text","project_id"?}`。対話用 task を作り run を起こす外部効果。CoS ノード自身へは 422 `cos_self_chain` |
+| 成果物を文書へ昇格 | `POST /api/v1/tasks/<id>/artifacts/promote` | artifact.promote | `{"name","path","title"?,"overwrite"?}`。外部効果（docs git） |
+| browser site policy の作成・置換 | `PUT /api/v1/browser/site-policies/<policy_id>` | browser.site_policy_put | `{"exact_origin","login_url","password_selector","submit_selector"?}`。外部効果 |
+| browser site policy の削除 | `DELETE /api/v1/browser/site-policies/<policy_id>` | browser.site_policy_delete | body なし。参照中は 409。外部効果 |
+| task の browser policy | `PUT /api/v1/tasks/<id>/browser/policy` | browser.task_policy_put | 本文は policy の JSON。外部効果 |
+| browser の待ちを開く | `POST /api/v1/tasks/<id>/browser/requests` | browser.request_open | `NewBrowserWait`。credential・credential_policy_id・trusted_login を含む待ちは除外（422 `browser_credential_attestation`）。外部効果 |
+| browser の制御（pause・takeover 等） | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>` | browser.control | `{"assertion","command","expected_version","idempotency_key"}`。owner session の署名付き assertion・origin・lease の検査は route と同じ（記録では assertion を伏せる）。外部効果 |
+| browser の人の切断 | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>/disconnect` | browser.control_disconnect | `{"assertion"}`。外部効果 |
+| browser の agent 操作の開始 | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>/agent/begin` | browser.agent_begin | body なし。daemon 認証のある構成だけ。外部効果 |
+| browser の agent 操作の終了 | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>/agent/end` | browser.agent_end | body なし。外部効果 |
+| browser の認証区間 | `POST /api/v1/tasks/<id>/browser/control/<run>/<session>/auth-section` | browser.auth_section | `{"active":true\|false}`。外部効果 |
+| browser の live event | `POST /api/v1/tasks/<id>/browser/live/<run>/<session>/events` | browser.live_event | `{"kind":"status"\|"tabs"\|"url"\|"console",…}`。run が動いている間だけ。外部効果 |
 
 ## 登録されていない操作（CoS は送らない）
 
@@ -141,9 +162,6 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 - **除外（人の決定。今後も登録しない）**: 秘密の値を扱う操作（`/secrets/*`・`/accounts/<id>/login*`・
   `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
   人に web の画面で行うよう頼む。
-- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み）**: surface 領域（chat・console・org messages・
-  artifacts promote・browser 操作）の残りだけ。必要なら人に web の画面で行うよう頼む。
-  一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 
 ## 監視（読み取り）
 

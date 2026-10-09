@@ -526,6 +526,9 @@ fn refused_before_change(problem: &ApiProblem) -> bool {
             | "path_forbidden"
             | "validation"
             | "bad_request"
+            | "page_exists"
+            | "artifact_not_found"
+            | "docs_unavailable"
     )
 }
 
@@ -773,65 +776,101 @@ async fn promote(
     require_admin(&state, &headers)?;
     let task_id = parse_task_id(&id)?;
     let request: ArtifactPromoteBody = read_json(body, false).await?;
-    if request.name.trim().is_empty() {
-        return Err(ApiProblem::validation(vec![ValidationError {
-            field: Some("name".into()),
-            message: "name must not be blank".into(),
-        }]));
-    }
-    let docs_repo_root = state.inner.docs_repo_root.clone();
+    let env = DocsEnv::of(&state);
     let documentation_state_dir = state.inner.documentation_state_dir.clone();
-    let workspace_root = state.inner.view.workspace_root.clone();
     let result = state
         .blocking(move |store| {
-            let task = store
-                .get(task_id)
-                .map_err(store_problem)?
-                .ok_or_else(|| ApiProblem::task_not_found(task_id))?;
-            let project_id = task.project_id.ok_or_else(|| {
-                docs_unavailable("このタスクは案件に属していません（文書の置き場がありません）")
-            })?;
-            let project = load_project(store, project_id)?;
-            let target = docs_target(store, &project, docs_repo_root.as_deref(), true)?;
-            let path = page_path(&target.root, &request.path)?;
-            // Promotion is an explicit human publication decision. An adopted policy may
-            // still forbid publishing residue/history/generated/unknown destinations.
-            let policy = task_ops::docs_maintenance::load_policy(
-                &documentation_state_dir, &format!("{project_id}:{}", target.repo),
-            ).map_err(maintenance_problem)?;
-            let category = policy.categories.get(&path).copied()
-                .unwrap_or(task_ops::docs_maintenance::Category::Canonical);
-            if !task_ops::docs_maintenance::may_publish(category, true, true) {
-                return Err(maintenance_problem("policy does not classify this destination as current human-facing documentation"));
-            }
-            let content = artifact_text(store, &task, &workspace_root, request.name.trim())?;
-            let current = ops_docs::blob_sha(&target.path, &target.default_branch, &path);
-            if current.is_some() && !request.overwrite {
-                return Err(ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "page_exists",
-                    format!("page already exists: {path}（上書きするなら overwrite: true）"),
-                ));
-            }
-            let title = request
-                .title
-                .as_deref()
-                .map(str::trim)
-                .filter(|t| !t.is_empty())
-                .map(str::to_string)
-                .unwrap_or_else(|| ops_docs::title_of(&content, &path));
-            let body = ops_docs::merge_front_matter(&content, Some(&title), &task_id.to_string());
-            let edit = PageEdit {
-                message: format!("docs: {path}（{} から昇格）", request.name.trim()),
-                path,
-                body: Some(body),
-                etag: current,
-                overwrite: true,
-            };
-            write_page(&target, &workspace_root, project_id, edit)
+            promote_op(
+                store,
+                &env,
+                &documentation_state_dir,
+                task_id,
+                request,
+                None,
+            )?
+            .direct()
         })
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `POST /tasks/{id}/artifacts/promote` (`artifact.promote`, C: a docs git commit). The task,
+/// its project and the name are checked before the effect; the policy, artifact and page checks
+/// run inside it as refusals before any change.
+pub(crate) fn promote_op(
+    store: &SqliteStore,
+    env: &DocsEnv,
+    documentation_state_dir: &Path,
+    task_id: task_core::TaskId,
+    request: ArtifactPromoteBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<DocPageResult>, ApiProblem> {
+    let target_id = task_id.to_string();
+    let reject = reject_for(store, audit, &target_id);
+    if request.name.trim().is_empty() {
+        return Err(reject(ApiProblem::validation(vec![ValidationError {
+            field: Some("name".into()),
+            message: "name must not be blank".into(),
+        }])));
+    }
+    let task = store
+        .get(task_id)
+        .map_err(store_problem)
+        .and_then(|task| task.ok_or_else(|| ApiProblem::task_not_found(task_id)))
+        .map_err(&reject)?;
+    let project_id = task
+        .project_id
+        .ok_or_else(|| {
+            docs_unavailable("このタスクは案件に属していません（文書の置き場がありません）")
+        })
+        .map_err(&reject)?;
+    let project = load_project(store, project_id).map_err(&reject)?;
+    docs_effect(store, audit, &target_id, "artifact.promote", || {
+        let target = docs_target(store, &project, env.docs_repo_root.as_deref(), true)?;
+        let path = page_path(&target.root, &request.path)?;
+        // Promotion is an explicit human publication decision. An adopted policy may
+        // still forbid publishing residue/history/generated/unknown destinations.
+        let policy = task_ops::docs_maintenance::load_policy(
+            documentation_state_dir,
+            &format!("{project_id}:{}", target.repo),
+        )
+        .map_err(maintenance_problem)?;
+        let category = policy
+            .categories
+            .get(&path)
+            .copied()
+            .unwrap_or(task_ops::docs_maintenance::Category::Canonical);
+        if !task_ops::docs_maintenance::may_publish(category, true, true) {
+            return Err(maintenance_problem(
+                "policy does not classify this destination as current human-facing documentation",
+            ));
+        }
+        let content = artifact_text(store, &task, &env.workspace_root, request.name.trim())?;
+        let current = ops_docs::blob_sha(&target.path, &target.default_branch, &path);
+        if current.is_some() && !request.overwrite {
+            return Err(ApiProblem::new(
+                StatusCode::CONFLICT,
+                "page_exists",
+                format!("page already exists: {path}（上書きするなら overwrite: true）"),
+            ));
+        }
+        let title = request
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| ops_docs::title_of(&content, &path));
+        let body = ops_docs::merge_front_matter(&content, Some(&title), &task_id.to_string());
+        let edit = PageEdit {
+            message: format!("docs: {path}（{} から昇格）", request.name.trim()),
+            path,
+            body: Some(body),
+            etag: current,
+            overwrite: true,
+        };
+        write_page(&target, &env.workspace_root, project_id, edit)
+    })
 }
 
 /// そのタスクの成果物（`ArtifactProduced` に記録された名前）の中身。無ければ 404。

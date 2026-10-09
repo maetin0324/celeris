@@ -25,7 +25,7 @@ metadata:
 
 ## 領域ごとの操作表
 
-登録済みの method/path・action・本文は次の節を参照する。表にない変更操作は登録待ちか除外であり、まだ送れない。
+登録済みの method/path・action・本文は次の節を参照する。表にない変更操作は除外（人の決定）であり、送れない。
 
 ### tasks
 
@@ -45,7 +45,8 @@ decision の回答／訂正／取り下げ・approval・通知既読化・inbox�
 
 ### surface
 
-添付の pin: [surface の操作表](operations.md#surface)。
+chat thread・添付・console・ノードへの話しかけ・成果物の昇格・browser 操作: [surface の操作表](operations.md#surface)。
+CoS の chat 書き込みは完了済みの発言として入り、CoS run を連鎖させない。
 
 ## 道具の意味
 
@@ -62,8 +63,8 @@ decision の回答／訂正／取り下げ・approval・通知既読化・inbox�
 - 領域 API（`/api/v1/tasks/...` 等）を CoS credential で直接叩いても監査 context が無ければ 422。経路を変えて監査を外さない。
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
-- 登録済みの path は [operations.md](operations.md) の表だけ。表に無い変更（秘密の値・`/console/instruct` などの除外と、
-  surface 領域の登録待ち）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+- 登録済みの path は [operations.md](operations.md) の表だけ。表に無い変更（秘密の値・`/console/instruct`・
+  browser の credential/attestation 系などの除外）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
 - 外部効果の操作（daemon への依頼・git・Discord・release の昇格。表に「外部効果」）は pending → applied で記録される。
   結果が分からず pending のまま残ったら同じ key で再送しても再実行されないので、人に確認を頼む。
 - 認可と監査は API が強制する。この skill を読んだかどうかで通る操作は変わらない。

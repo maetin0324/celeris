@@ -618,6 +618,60 @@ fn load_wait(
     }
 }
 
+/// `POST /tasks/{id}/browser/requests`: open (or replay) a browser wait. Shared by the route and
+/// the CoS operation `browser.request_open`.
+pub(crate) fn open_wait(
+    store: &task_core::SqliteStore,
+    task_id: TaskId,
+    request: &NewBrowserWait,
+) -> Result<BrowserRequestResult, ApiProblem> {
+    if store.get(task_id).map_err(store_problem)?.is_none() {
+        return Err(ApiProblem::task_not_found(task_id));
+    }
+    let result = store
+        .browser_wait_open(task_id, request, OffsetDateTime::now_utc())
+        .map_err(wait_problem)?;
+    Ok(BrowserRequestResult {
+        wait: result.wait,
+        created: result.created,
+    })
+}
+
+/// Decode a `NewBrowserWait` the CoS operation carries as JSON (same fixed-code refusal).
+pub(crate) fn decode_wait(body: serde_json::Value) -> Result<NewBrowserWait, ApiProblem> {
+    if body.to_string().len() > BROWSER_BODY_MAX_BYTES {
+        return Err(ApiProblem::new(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "payload_too_large",
+            "browser request body is too large",
+        ));
+    }
+    serde_json::from_value(body).map_err(|_| body_invalid())
+}
+
+/// `PUT /tasks/{id}/browser/policy` body (size and schema checked, fixed-code refusal).
+pub(crate) fn parse_task_policy(raw: &str) -> Result<BrowserTaskPolicy, ApiProblem> {
+    if raw.len() > BROWSER_BODY_MAX_BYTES {
+        return Err(body_invalid());
+    }
+    BrowserTaskPolicy::from_json(raw).map_err(|_| body_invalid())
+}
+
+/// Store the task's browser policy (route and CoS `browser.task_policy_put`).
+pub(crate) fn set_task_policy(
+    store: &task_core::SqliteStore,
+    task_id: TaskId,
+    policy: &BrowserTaskPolicy,
+) -> Result<(), ApiProblem> {
+    store.browser_task_policy_set(task_id, policy).map_err(|_| {
+        ApiProblem::new(
+            StatusCode::CONFLICT,
+            "browser_policy_state",
+            "browser policy cannot be changed in this task state",
+        )
+    })
+}
+
 // ---- handlers ----
 
 pub(crate) async fn open_request(
@@ -632,14 +686,7 @@ pub(crate) async fn open_request(
     let task_id = parse_task_id(&id)?;
     let request: NewBrowserWait = read_browser_json(body).await?;
     let result = state
-        .blocking(move |store| {
-            if store.get(task_id).map_err(store_problem)?.is_none() {
-                return Err(ApiProblem::task_not_found(task_id));
-            }
-            store
-                .browser_wait_open(task_id, &request, OffsetDateTime::now_utc())
-                .map_err(wait_problem)
-        })
+        .blocking(move |store| open_wait(store, task_id, &request))
         .await?;
     tracing::info!(
         op = "browser_wait_open",
@@ -654,13 +701,7 @@ pub(crate) async fn open_request(
     } else {
         StatusCode::OK
     };
-    Ok(no_store(json_response(
-        status,
-        &BrowserRequestResult {
-            wait: result.wait,
-            created: result.created,
-        },
-    )))
+    Ok(no_store(json_response(status, &result)))
 }
 
 pub(crate) async fn task_waits(
@@ -722,19 +763,9 @@ pub(crate) async fn put_task_policy(
         return Err(body_invalid());
     }
     let raw = std::str::from_utf8(&bytes).map_err(|_| body_invalid())?;
-    let policy = BrowserTaskPolicy::from_json(raw).map_err(|_| body_invalid())?;
+    let policy = parse_task_policy(raw)?;
     state
-        .blocking(move |store| {
-            store
-                .browser_task_policy_set(task_id, &policy)
-                .map_err(|_| {
-                    ApiProblem::new(
-                        StatusCode::CONFLICT,
-                        "browser_policy_state",
-                        "browser policy cannot be changed in this task state",
-                    )
-                })
-        })
+        .blocking(move |store| set_task_policy(store, task_id, &policy))
         .await?;
     Ok(no_store(json_response(
         StatusCode::OK,

@@ -160,7 +160,7 @@ impl SqliteStore {
     ) -> Result<String, ChatError> {
         let mut conn = writer(self)?;
         let tx = immediate(&mut conn)?;
-        let id = legacy_thread(&tx, project_id, &chat_ts(now), true)?;
+        let id = chat_legacy_new_conversation_tx(&tx, project_id, now)?;
         tx.commit()?;
         Ok(id)
     }
@@ -387,4 +387,13 @@ fn legacy_thread(
         params![key, id],
     )?;
     Ok(id)
+}
+
+/// [`SqliteStore::chat_legacy_new_conversation`] inside the caller's transaction.
+pub fn chat_legacy_new_conversation_tx(
+    tx: &rusqlite::Transaction<'_>,
+    project_id: Option<crate::ProjectId>,
+    now: OffsetDateTime,
+) -> Result<String, ChatError> {
+    legacy_thread(tx, project_id, &chat_ts(now), true)
 }

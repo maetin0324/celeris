@@ -108,6 +108,25 @@ where
     Ok(Applied::Audited(Box::new(operation)))
 }
 
+/// A C operation whose effect is one store write that either commits or changes nothing (a
+/// browser control transition, a run start): any failure of `effect` settles `rejected`.
+pub(crate) fn external_store<T: Serialize>(
+    store: &SqliteStore,
+    audit: &OperationAudit,
+    target: (&str, &str),
+    action: &str,
+    effect: impl FnOnce() -> Result<T, ApiProblem>,
+) -> Result<CosOperation, ApiProblem> {
+    audit.external(
+        store,
+        target.0,
+        target.1,
+        action,
+        time::OffsetDateTime::now_utc(),
+        || effect_value(Ok(effect())),
+    )
+}
+
 /// Audit context of one `/cos/operations` request, passed to the shared operation functions.
 #[derive(Debug, Clone)]
 pub(crate) struct OperationAudit {

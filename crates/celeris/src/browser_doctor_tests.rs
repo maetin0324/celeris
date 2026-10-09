@@ -187,6 +187,40 @@ fn browser_doctor_each_missing_item_has_a_fix_without_touching_production() {
 }
 
 #[test]
+fn browser_doctor_reports_username_selector_and_post_login_per_site_policy() {
+    let dir = tempfile::tempdir().unwrap();
+    let (doctor, store) = fixture(dir.path());
+    add_policy_grant(&store);
+    let mut policy = store.browser_site_policy_list().unwrap()[0].policy.clone();
+    policy.username_selector = Some("#user".into());
+    policy.post_login = Some(task_core::browser_wait::PostLogin {
+        read_origins: vec!["https://lms.example.com".into()],
+        actions: vec![task_core::browser_wait::PostLoginAction::Snapshot],
+    });
+    store
+        .browser_site_policy_upsert(&policy, "admin", time::OffsetDateTime::now_utc())
+        .unwrap();
+    let report = doctor.inspect(&store);
+    let row = report
+        .items
+        .iter()
+        .find(|i| i.check == "site-policy-login")
+        .expect("row");
+    assert!(
+        row.detail.contains("username_selector=あり"),
+        "{}",
+        row.detail
+    );
+    assert!(
+        row.detail
+            .contains("post_login=https://lms.example.com（snapshot）"),
+        "{}",
+        row.detail
+    );
+    assert_eq!(status(&report, "site-policy"), "OK");
+}
+
+#[test]
 fn browser_doctor_launcher_dns_credential_ping_and_versions_are_checked() {
     let dir = tempfile::tempdir().unwrap();
     let (mut doctor, store) = fixture(dir.path());

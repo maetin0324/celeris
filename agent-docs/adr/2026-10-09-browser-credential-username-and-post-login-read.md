@@ -239,3 +239,32 @@ T1・T2・T5 は区間後の観測を再開しても既存の仕組み（遮断�
 
 順は policy → broker → controller → daemon-wire / launcher-v5 → web → ops。D1（username）だけを先に出し、D2 を後に出す分割も可
 （D1 だけでは manaba の課題監視は成立しない）。
+
+## 付記 2026-10-09: 実装時の決定（branch `ops/credential-login-v5`）
+
+本文の範囲内で、実装で決めたこと。
+
+1. **store の区間と credential session の印。** 区間が条件どおり閉じたら store の `browser_auth_section(false)` を書き（agent の操作
+   gate が再び通る）、Live View・takeover の拒否は control 状態の `credential_used`（`enter_auth_section` で立ち、session の終わり
+   まで下りない。旧い state の JSON は欄なし = 偽）で続ける（D2-3）。worker event の破棄（`LiveEmitter` の guard）は区間を閉じた
+   時点で外す（extract 等の artifact 登録に要る）。Live View の URL は credential session では元から出さない。
+2. **観測ごとの検査の単位は CDP command。** 区間後、agent の page session への command は、固定の「頁を読まず操作もしない」一覧
+   （domain の enable、navigate、emulation、Target・Browser、`Page.createIsolatedWorld` 等。`post_login_control_method`）以外の
+   すべてが、実行の**前と後**に検査を通る。検査は controller だけの CDP session（agent に event を流さない）で、top document の
+   origin が `read_origins` にあること（空の `about:blank` の tab は可）と、controller の isolated world で数えた password 入力欄
+   （open shadow root・同 origin の frame を含む）が 0 個であること。どちらかを確かめられなければ拒否。区間を閉じる条件の
+   password 欄も同じ数え方。
+3. **download。** 区間後、`read_origins` 外の URL の download は `downloadWillBegin` を受けた時点で取消を送る。取消より先に完了した
+   場合は、その session の観測を以後すべて止める（fail closed）。download 元の origin は egress（task の許可 domain）でも絞られる。
+4. **CDP の受信上限。** screenshot・大きな DOM/AX tree の応答は 1 message で sink frame の上限（64 KiB）を超えるので、browser から
+   読む 1 message の上限を 64 MiB にした（sink frame の上限は 64 KiB のまま）。
+5. **launcher の版ずれ。** v5 launcher は username 欄も post_login も持たない（v4 の形の）要求には `observation` の無い v4 の形で
+   答える（launcher を先に差し替えても旧 daemon が decode できる）。v5 の daemon は `observation` の無い答えを「観測停止のまま」
+   と読む。launcher は session 開始時に post-login の verb を含めて起動し、login の後は `AfterLogin`（再開した・その verb が
+   post_login.actions にある）でしか snapshot / extract / screenshot / download / click を通さない。
+6. **実効集合。** `post_login.actions` は task の harness policy（task ∩ grant、承認が要る action は除く）に入っている action
+   だけ、`read_origins` は task の許可 domain に入る origin だけが効く。どちらかが空なら opt-in 無しと同じ。
+7. **登録し直し。** broker の vault は登録時の site policy（login URL・selector・post_login）を写して持ち、承認で固定するログインは
+   その写しなので、site policy を変えた後は credential を登録し直す（運用手順 §4）。
+8. **残る制限。** launcher runtime の screenshot / download の artifact は daemon に渡らない（`LauncherExecutor` の既存の制限）。
+   A3/A4 で許したが、launcher runtime では成果物にならない。artifact の受け渡し（protocol の拡張）は別 task。

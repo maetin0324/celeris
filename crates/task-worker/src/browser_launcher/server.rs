@@ -727,6 +727,10 @@ fn handle_authenticate(
         Ok(stream) => stream,
         Err(_) => return rejected,
     };
+    // A v4-shaped request (no username field, no post-login read) gets the v4 answer without
+    // `observation`, so a daemon that predates protocol 5 still decodes it while the launcher is
+    // replaced first (ADR 2026-10-09 credential username / post-login D1-5).
+    let v5 = args.username_selector.is_some() || args.post_login.is_some();
     let e2 = entry.clone();
     let out = run_with_deadline(
         move || {
@@ -743,7 +747,7 @@ fn handle_authenticate(
     match out {
         Some(Ok(observation)) => Response::AuthenticateResult {
             status: AuthenticationStatus::Success,
-            observation: Some(observation),
+            observation: v5.then_some(observation),
         },
         Some(Err(_)) => rejected,
         None => {

@@ -121,7 +121,7 @@ impl DoctorConfig {
                                 && loopback.is_empty()
                         })
                 });
-            report.push(if ok { "OK" } else { "NG" }, "launcher", "固定 Hello IPC（本番は loopback 許可なし）; 修正: launcher_socket と launcher の許可 UID・socket/service を運用セッションで確認");
+            report.push(if ok { "OK" } else { "NG" }, "launcher", format!("固定 Hello IPC（protocol {}、本番は loopback 許可なし）; 修正: launcher_socket と launcher の許可 UID・socket/service を運用セッションで確認、版が違えば celeris-browser-launcher を再 build して差し替え", task_worker::browser_launcher::PROTOCOL_VERSION));
         } else {
             report.push("SKIP", "launcher", "runtime=daemon");
         }
@@ -187,6 +187,21 @@ impl DoctorConfig {
                         format!(
                             "{}; 修正: web で origin・login URL・selector を確認",
                             trusted.policy_id
+                        ),
+                    );
+                    // ADR 2026-10-09 credential username / post-login: 2 欄の注入とログイン後の読み取りの有無。
+                    report.push(
+                        "OK",
+                        "site-policy-login",
+                        format!(
+                            "{}: username_selector={} post_login={}; 修正: 変えるなら web /browser/settings（変更後の credential は登録し直す）",
+                            trusted.policy_id,
+                            if trusted.username_selector.is_some() { "あり" } else { "なし" },
+                            trusted.post_login.as_ref().map_or("なし".to_string(), |p| format!(
+                                "{}（{}）",
+                                p.read_origins.join(","),
+                                p.actions.iter().map(|a| a.as_str()).collect::<Vec<_>>().join(",")
+                            )),
                         ),
                     );
                     if self.config.api.browser_site_policies.iter().any(|seed| {

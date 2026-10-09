@@ -56,10 +56,12 @@ launcher と同じ pid namespace・`celeris-browser` の UID が写る user name
 
 ```sh
 cd "$W"
-sh crates/task-worker/scripts/launcher-admission-evidence.sh /tmp/launcher-admission-evidence.log
+sh crates/task-worker/scripts/launcher-admission-evidence.sh --stutter 3 /tmp/launcher-admission-evidence.log
 echo "exit=$?"
 systemctl show celeris-browser-launcher.service -p MainPID   # 下の responder の pid と比べる
 ```
+
+必須モードは `CELERIS_LAUNCHER_TESTS=require` の実証を 3 回実行する。各回が SIGSTOP stutter を含む launcher admission 試験を通ること。通常の 1 回だけの再取得には引数を付けずに実行する。credential 経路の回帰試験は `--credential <log>` で別に実行できる。
 
 期待（`/tmp/launcher-admission-evidence.log`）:
 

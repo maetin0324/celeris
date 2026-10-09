@@ -65,3 +65,14 @@ daemon→launcher の protocol には固定 `Verb::Authenticate` と対応する
 | secret 非露出（log/event/artifact/stdout）と 인증 sink の遮断 | `task-worker` `browser.rs`（`inject_h3`）、`browser_cdp_sink.rs`、`browser_launcher/`、`celeris-credentiald` `injection_ipc.rs` |
 
 各試験名は `launcher_credential_` を接頭辞とする。userns を要する実 process 試験は `CELERIS_USERNS_TESTS=1` の opt-in とし、通常試験では決定的な証明・登録・policy 分岐を検査する。
+
+## 付記 2026-10-09: 接続前 gate
+
+final review は「条件を満たさない session も launcher に接続・session 起動した後に拒否している」として差し戻した。launcher session 証明（ns owner・ns inode・responder UID）は launcher が session を作らないと採れないため、人の決定（preconnect-meaning = a）に従い、「接続前に拒否」を次の二段 gate として実装する。
+
+1. **接続前 gate**（`browser_launcher_run.rs::preconnect_credential_gate`、`open_launcher_session` の最初）。CredentialUse を求める run（policy の `CredentialUse`、または最後の wait が credential_use の Registered / Approved）について、launcher socket の設定がある・`[browser] launcher_uid`（credentiald の `--launcher-uid` と同じ値）が設定され 0 でも daemon UID でもない・credentiald の制御経路（credentiald 設定の `runtime_dir`、無ければ `XDG_RUNTIME_DIR`）が取れる・wait store が読める、の全部を `LauncherRuntime::start_guarded` の `spawn_blocking` より前に検査する。不成立なら launcher socket に接続せず `browser credential use is not available through the launcher runtime` で拒否する。admission の対象にならないが admission 無しでは必ず拒否される run（credential 以外の登録済み wait、操作の無い承認）もここで拒否する。
+2. **証明依存 gate**（session 起動・隔離検査の後、credentiald 登録より前）。`launcher_session_proof` の検証成功・ns owner が daemon UID でない・`isolation_ok`・証明の launcher UID が `[browser] launcher_uid` と一致、のどれかが欠ければ `runtime.stop()` で session を止めてから同じ文言で拒否する。credentiald への `register_live_session` / `attach_launcher_proof`、shim の `credential_use: true`、`Authenticate`、harness 起動はどれも起きない。credentiald 登録の失敗も stop してから同じ文言で拒否する。上の実装付記の `refuse_confidential` はこの二段（`credential_demand` で拒否対象を決め、`open_launcher_session` で判定）に置き換えた。
+
+境界: 接続前に決まる条件（設定・UID 分離・credentiald 経路・wait store）は launcher に接続する前、証明に依存する条件は launcher session 作成後・credentiald / CDP / harness への接続と秘密の注入より前。秘密が launcher・Chrome に渡るのは両方の gate と credentiald の Attested admission を通った後だけである。CredentialUse を求めない run は接続前 gate を素通しし、`launcher_uid` 未設定でも従来どおり動く。
+
+試験（`task-worker` の `launcher_credential_preconnect_`、偽 launcher は試験内の `UnixListener` / `LauncherServer`、userns・外部ネットワーク・CPU 負荷なし）: 接続前条件の不成立 5 通りと admission 不能な wait で launcher socket の接続数 0・従来文言、証明依存の不成立で session stop・credentiald の control socket 接続数 0、条件成立で launcher に接続、CredentialUse を求めない run は従来どおり。同一 process の偽 launcher では responder UID が daemon UID と同じになるため、admission 成立から credentiald 登録までの経路は host 実証（運用セッション）で確かめる。

@@ -66,20 +66,23 @@ case "$mode" in
             done
             stops=0
             if [ -n "$pgid" ]; then
+                # A failed kill here (ESRCH) means the test group has ended
+                # while we were stopping it. That is the end of the stutter,
+                # not a failure of the test: leave the loop, and let stops and
+                # wait's exit code decide the result below.
                 while kill -0 "$test_pid" 2>/dev/null; do
-                    if kill -STOP -"$pgid" 2>/dev/null; then
-                        stops=$((stops + 1))
-                    else
-                        code=1
-                        break
-                    fi
+                    kill -STOP -"$pgid" 2>/dev/null || break
+                    stops=$((stops + 1))
                     sleep 0.002
-                    if ! kill -CONT -"$pgid" 2>/dev/null; then code=1; break; fi
+                    kill -CONT -"$pgid" 2>/dev/null || break
                     sleep 0.001
                 done
                 # Do not leave the group stopped if it raced with completion.
                 kill -CONT -"$pgid" 2>/dev/null || true
             else
+                # The child ended before its process group could be read, so
+                # no SIGSTOP reached a live test. That run is not evidence of
+                # the stutter: keep stops=0 and fail it (see the check below).
                 code=1
             fi
             wait "$test_pid"

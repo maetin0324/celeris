@@ -98,3 +98,15 @@ final review は「条件を満たさない session も launcher に接続・ses
 5. **秘密は wait・event・log に入れない**。wait に入るのは `origin` / `purpose` / `credential_policy_id` だけで `credential` は常に `None`。Question の文面も固定文（origin も秘密も含まない）。request の未知の欄は `deny_unknown_fields` で拒否し、拒否の文言に request の中身を写さない。
 
 試験: `browser_launcher_run_tests.rs` に `launcher_credential_request_` 接頭辞で 5 件（wait が 1 件開く・resume key・Question・state、policy 不一致 4 通りの拒否、credential 優先と approval への fallback、wait store 不成立の fail closed、秘密文字列が wait / browser 更新 / progress / outcome に出ないこと）。偽 sink と tempdir の request file だけで回り、userns・実 launcher・実 process・socket・外部ネットワーク・CPU 負荷を使わない。進捗は `agent-docs/progress/2026-10-09-browser-launcher-credential-release/launcher-cred-wait.md`。
+
+## 付記 2026-10-09: stutter 台本の signal 競合（ESRCH）
+
+理由: 必須モード stutter の再実行で、試験 process group が終わる瞬間に `kill -STOP` / `kill -CONT` が ESRCH で失敗し、台本が `code=1` にして偽の失敗を出した（2 回中 1 回）。
+
+決定:
+
+1. **試験 group の終了と競合した signal の失敗（ESRCH）は失敗にしない。** その時点で stutter は終わっているので loop を抜けるだけにする。合否は従来どおり `stops>0` と `wait` の終了コードで決める。抜けた後の `kill -CONT` は残す（停止したまま残さないため）。
+2. **pgid が取れる前に子が終わった場合は失敗のまま。** 停止が一度も live な試験に届いていないので、`stops=0` の回は証跡にならない。`STUTTER[stutter-N]: stops=0` を記録し `EXIT` は非 0 にする。これは signal の競合とは別で、偽の失敗ではなく停止が届かなかった回として扱う。
+3. 台本は dash で動く形（`kill -STOP -"$pgid"`、`--` は使わない）のままとする。
+
+試験: `crates/task-worker/scripts/tests/launcher-admission-evidence-stutter.sh` に、`LAUNCHER_EVIDENCE_TEST_CMD='sleep 0.3'` の `--stutter 3` を 10 回繰り返す段を足した（全回 exit 0、各回 `stops>0`、末尾 `EXIT: 0`）。sleep だけで CPU を使わず、launcher・userns・実 process は使わない。進捗は `agent-docs/progress/2026-10-09-browser-launcher-credential-release/stutter-race.md`。

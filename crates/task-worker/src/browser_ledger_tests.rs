@@ -47,7 +47,11 @@ fn write_credential_ledger(dir: &Path, mode: &str) -> PathBuf {
         ),
     ] {
         for test in names {
-            let credential_case = matches!(case, browser_backend::FixtureCase::IsolationSuite | browser_backend::FixtureCase::EgressNegativeSuite);
+            let credential_case = matches!(
+                case,
+                browser_backend::FixtureCase::IsolationSuite
+                    | browser_backend::FixtureCase::EgressNegativeSuite
+            );
             evidence.push(serde_json::json!({"case": case, "test": test, "runtime": if (mode == "launcher" || mode == "complete") && credential_case { "launcher" } else { "daemon" }, "outcome": if mode == "failed" && *test == names[0] { "failed" } else if mode == "not_run" && *test == names[0] { "not_run" } else { "passed" }}));
         }
     }
@@ -309,7 +313,6 @@ fn browser_ledger_gate_probe_reports_missing_executable() {
     );
 }
 
-
 #[test]
 fn browser_ledger_launcher_daemon_only_evidence_does_not_certify() {
     let dir = tempfile::tempdir().unwrap();
@@ -317,7 +320,10 @@ fn browser_ledger_launcher_daemon_only_evidence_does_not_certify() {
     let status = ledger_status(Some(&path), None, &HostAgentBrowser::NotChecked);
     assert!(status.public_backends.contains("claude-code"));
     assert!(status.credential_backends.is_empty());
-    assert_eq!(status.task_code(true), BrowserPrerequisiteCode::LedgerLacksCredential);
+    assert_eq!(
+        status.task_code(true),
+        BrowserPrerequisiteCode::LedgerLacksCredential
+    );
 }
 
 #[test]
@@ -332,9 +338,13 @@ fn browser_ledger_launcher_fake_evidence_certifies_launcher_runtime() {
 fn browser_ledger_launcher_mixed_runtime_evidence_does_not_certify() {
     let dir = tempfile::tempdir().unwrap();
     let path = write_credential_ledger(dir.path(), "launcher");
-    let mut ledger: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    let mut ledger: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     let evidence = ledger["results"][0]["evidence"].as_array_mut().unwrap();
-    if let Some(row) = evidence.iter_mut().find(|row| row["case"] == "isolation_suite") {
+    if let Some(row) = evidence
+        .iter_mut()
+        .find(|row| row["case"] == "isolation_suite")
+    {
         row["runtime"] = serde_json::json!("daemon");
     }
     std::fs::write(&path, serde_json::to_vec(&ledger).unwrap()).unwrap();

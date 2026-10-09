@@ -143,7 +143,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-
 const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
 const ROLE: &str = "/api/v1/llm/models/assignments/roles/{tier}";
 const SKILL: &str = "/api/v1/skills/{name}";

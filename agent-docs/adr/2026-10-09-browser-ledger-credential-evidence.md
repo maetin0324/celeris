@@ -5,7 +5,7 @@ tasks: [01M4F73EKB2FFGAKRY2041RZ49]
 ---
 
 - 日付: 2026-10-09
-- 状態: 採用（実装前）
+- 状態: 実装済み（2026-10-09。task 01M4F73EKB2FFGAKRY2041RZ49。突き合わせは末尾の付記。進捗は [進捗文書](../progress/2026-10-09-browser-ledger-credential-evidence.md)）
 - 関連: [ADR-0102](0102-browser-phase4-isolation-injection-routing.md)（機密能力に要る件）、
   [ADR-0106](0106-browser-phase4-conformance-dispatch.md)（実測適合記録）、
   [ADR-0109](0109-browser-p4b-injection-ipc-cdp-sink.md)（解放条件 1: 別 host UID の実 runtime で違反 0）、
@@ -161,3 +161,24 @@ P4-A の隔離・egress そのものの否定ではない）、`inner_relay_in_t
   無い host では `credential_evidence.code = tests_not_run` が残り、理由が `ledger-status.json` と `celerisctl browser doctor` で見える。
 - 試験名を変えるときは `task_core::browser_backend` の定数・生成器の定数・本 ADR の表を揃える。
 - 本番への台帳配置は従来どおり人が行う（release.sh か `browser-ledger.sh`。ADR-0095 付記 D-d）。
+
+## 付記: 実装との突き合わせ（2026-10-09）
+
+実装は ADR どおり。差はなく、次の点を確かめた（証拠は進捗文書の各 WU と close-out の検査）。
+
+- **D1（試験名）**: `task_core::browser_backend` の `P4A_ISOLATION_TESTS`（19 件）・`P4A_EGRESS_NEGATIVE_TESTS`（21 件）と
+  `scripts/browser-conformance.py` の同名の組（40 件）を、正規化した名前の集合で比べて一致（`lib::` の表記だけ違うが、
+  正規化後は同じ集合）。ADR の表の試験は全部この 2 つの定数にある。`ops/ledger-fix` の loopback 試験は一覧に入れていない（D1 のとおり）。
+- **D2（生成器）**: CLI `--credential-evidence` / `--credential-backend` / `--output-dir`、`CELERIS_CONFORMANCE_CARGO`、
+  TMPDIR が 40 文字を超えるときの `cel-ce-` の短い dir、skip 印の検出、`credential-evidence.json`・`credential-logs/` の出力は実装どおり。
+  単体試験は `scripts/tests/test_browser_conformance_credential.py`（偽 cargo。実 cargo・userns は使わない）。
+  生成器の定数と Rust 定数の一致も同じ試験で Rust の source を読んで確かめる。
+- **D3（selfdeploy）**: `sd_browser_ledger` の P4-B の後・check の前に credential 段を置いた（`scripts/selfdeploy/lib.sh`）。
+  `ledger-status.json` の `credential_evidence {ok, code, reason}`、既定 timeout 3600 秒、`browser-ledger.sh` は同じ関数を呼ぶ。
+  試験は `scripts/selfdeploy/tests/browser_ledger_credential_evidence.sh`（偽 runner）。
+- **D4（判定）**: `required_evidence` が 2 件も P4-A の全試験を返す。名前だけの旧台帳では `credential_backends` が空のまま
+  （task-worker `browser_ledger_credential_` 試験で固定）。admission は変えていない。
+- **ops/ledger-fix の本番 loopback 例外**: `crates/task-worker/tests/browser_loopback_prod_build.rs` で、`cfg(test)` を付けない
+  library build の daemon runtime 側の許可集合が空であることを固定した。読み出しは `#[doc(hidden)]` の関数だけ。
+- **未実施（この WU の範囲外）**: 本番 host での台帳の作り直しは人が行う（下の進捗文書の手順）。この実装が生成する証拠は
+  userns・launcher・daemon UID 1001 相当の別 UID が揃った host でしか `passed` にならない（`launcher_chrome_denies_daemon_uid_ptrace`）。

@@ -213,7 +213,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-
 const THREAD: &str = "/api/v1/chat/threads/{t}";
 const MESSAGE: &str = "/api/v1/chat/threads/{t}/messages/{m}";
 const ATTACHMENT: &str = "/api/v1/chat/attachments/{a}";

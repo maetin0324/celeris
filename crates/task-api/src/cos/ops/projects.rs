@@ -86,7 +86,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
     ),
 ];
 
-
 pub(crate) fn dispatch(
     store: &SqliteStore,
     env: &DispatchEnv,

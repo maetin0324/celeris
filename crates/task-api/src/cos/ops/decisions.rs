@@ -47,7 +47,6 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[];
 
-
 pub(crate) fn dispatch(
     store: &SqliteStore,
     env: &DispatchEnv,

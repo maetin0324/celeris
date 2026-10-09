@@ -68,7 +68,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
     "removed_by_adr_0079: ADR-0079 D13/R5a で撤去済み。人にも変更できない 410 の互換入口を復活させない。",
 )];
 
-
 pub(crate) fn dispatch(
     store: &SqliteStore,
     env: &DispatchEnv,

@@ -1118,6 +1118,8 @@ pub struct Dispatcher {
     /// ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視（`None` は無効。celeris が
     /// `[[maintenance.disk_watch]]` から `set_disk_watch` で渡す）。
     disk_watch: Option<crate::disk_watch::DiskWatchRunner>,
+    /// ADR 2026-10-07-build-tmp-hygiene 付記 A2・A3: 保守 executor の掃除の範囲。
+    target_sweep_scope: crate::target_sweep::SweepScope,
     #[cfg(test)]
     test_now: Option<Arc<StdMutex<OffsetDateTime>>>,
     #[cfg(test)]
@@ -1479,6 +1481,7 @@ impl Dispatcher {
             config,
             target_sweep: None,
             disk_watch: None,
+            target_sweep_scope: crate::target_sweep::SweepScope::default(),
             #[cfg(test)]
             test_now: None,
             #[cfg(test)]
@@ -2006,6 +2009,11 @@ impl Dispatcher {
         }
         // drain_completions からも reviewer run が起動されるため、完了処理より先に判定する。
         self.disk_ready = !self.accepting_new_work || self.check_disk_space();
+        // Critical also gates reviewers started by drain_completions. Sample before that phase.
+        // Draining instances leave monitoring to the new owner.
+        if self.accepting_new_work {
+            self.tick_disk_watch();
+        }
         let mut report = TickReport::default();
         // ADR-0015 D2: 遅い tick の内訳を出せるよう、段階ごとに所要時間を測る。
         let started = Instant::now();
@@ -2089,11 +2097,6 @@ impl Dispatcher {
         // ADR-0066 D2（Phase 110b）: 終端になってから `prune_after_secs` 経った作業場所から、ビルド
         // 生成物だけを刈る（1 tick に最大 1 か所。探すところまでは軽いので同期、削除は別スレッド）。
         self.prune_one_workspace();
-        // ADR 2026-10-07-build-tmp-hygiene D4: 使用率の監視（60 秒ごと。statvfs だけで軽い）。draining の
-        // インスタンスは測らない（状態の正本は DB にあり、引き継いだ側が続ける）。
-        if self.accepting_new_work {
-            self.tick_disk_watch();
-        }
         let prune_ms = lap(&mut at);
         // ADR-0040 D4: draining のインスタンスは新しい仕事を始めない（拾い上げも dispatch もしない）。
         // 手元の run とレビューの完了・リース更新・後処理は上の `drain_completions` 以下でそのまま動く。

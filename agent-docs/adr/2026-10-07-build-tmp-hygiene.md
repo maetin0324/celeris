@@ -265,3 +265,59 @@ D1〜D4 は実装済み。決定どおりでない所・未実装の所を先に
 ### 付記（h3-tmpdir、2026-10-07）: 長い TMPDIR・深い session dir での unix socket
 
 release gate（`CELERIS_USERNS_TESTS=1`、TMPDIR が 30 文字超）で `browser_h3_injection` が `isolated_runtime_unavailable` になった原因は、`SharedCdp::start` が `<workspace>/runs/<run_id>/browser/cdp-relay.sock` を bind する際に `sun_path`（107 byte）を超えたこと（`path must be shorter than SUN_LEN`）。action socket は既に短い固定 path（ADR 2026-10-06-browser-action-socket-path）。sandbox は `/session/cdp-relay.sock` で接続するので socket は session dir に置く必要がある。そこで `browser_shared_cdp::bind_unix_listener` は、path が上限を超えるとき親 dir を開いた fd の `/proc/self/fd/<fd>/<name>` で bind し、実体を session dir に作る。別名でも収まらなければ path と長さを含む `InvalidInput` にする。daemon 経路と launcher 経路（`start_with_mode`）の両方に効き、試験側の TMPDIR を短くする回避には頼らない。試験は `tmpdir_long_path_` 4 件（userns 不要）。
+
+## 付記: 作業場所の cargo target を止める（2026-10-09、task 01M4FDM87P9QJEBSYW5XPZFM7T）
+
+### 文脈
+
+2026-10-09 に `/local`（300G）が 99% に達した。主因は task の作業場所の中の `repos/<repo>/target`（1 件 36〜200G）。
+同日 00:35 の本番 DB 破損も worker の cargo build（target 91G）で thin pool が尽きたのがきっかけだった。
+読んだこと:
+
+- run（`run_worker`）は ADR-0075 の scratch（`<scratch>/targets/task-<id>[/wu-<id>]/target`、lease = owner）を
+  `CARGO_TARGET_DIR` に与えている。**reviewer run**（`review::run_reviewer`）は `RunRequest.cargo_target_dir: None` のまま
+  adapter に env を重ねていない。final review は反証の self-execution を求めるので、reviewer が作業場所で cargo を
+  走らせると `repos/<repo>/target` ができる（実装上、通常 worker と異なる経路だった）。
+- `prune_one_workspace`（ADR-0066 D2）は終端 task の `target/` を消すが cargo の lock を見ない。target sweep（D1）の
+  roots は `<build_cache_dir>/cargo` と `/var/tmp/agent-platform-build` だけで、作業場所も scratch も見ない。
+- D4 の通知は使用率だけを書き、何が大きいかは人が `du` で探していた。D4.5 で run は止めない。
+
+### 決定
+
+- **A1（run の `CARGO_TARGET_DIR`）**: 置き場は ADR-0075 の scratch pool のまま（lease の単位: task 単位の run は
+  owner `task-<id>`、自分の worktree の WU は `task-<id>/wu-<id>`。並列の WU は別 target なので互いに壊さない。
+  子 task は自分の task id の owner）。scratch が無効なら従来の `<build_cache_dir>/cargo/<repo-key>[/wu-<id>]`。
+  **reviewer run にも同じ規則の env を重ねる**（検査コマンドと同じ `check_cargo_target_env(task, None)`。owner は
+  対象 task。lease は touch するだけで adopt しない）。Rust の repo（先頭 repo に `Cargo.toml`）で env を
+  重ねられない adapter のときは `warn` を出す（従来は `debug`）。
+- **A2（掃除 a: 置き場を sweep の root に）**: 既定の roots に `<scratch>/targets` を足す（D1.1 の「scratch pool の target は
+  root にしない」を改める）。scratch の root では **owner 配置**（`<root>/<owner>/target`、`<root>/<owner>/wu-*/target`）を
+  target dir として扱い、`lease.json` 等の owner dir の file には触れない。`release-build` は D1.1 のとおり lease 本人が
+  掃除するので対象外。規則（古さ 7 日・上限 120 GiB・放置 14 日・build 中の profile は消さない）は D1.2 と同じ。
+  scratch_gc（ADR-0075）の owner 単位の回収はそのまま残る（sweep は owner の中の古い項目を削るだけ）。
+- **A3（掃除 b: 終わった task の作業場所の target）**: target sweep の executor（cron・`celerisctl` ではなく daemon の保守
+  task）が、終端（`done`・`cancelled`・`failed`）になってから `workspace_target_after_hours`（既定 6 時間）経った
+  task の `<workspace_root>/<task>/repos/<repo>/target` のうち、**cargo の target**（`CACHEDIR.TAG` を持つか、
+  `<profile>/.cargo-lock` を持つ dir。symlink は辿らない）を消す。実行中の task（終端でない）は見ない。どれかの
+  profile の `.cargo-lock` が `flock(LOCK_EX|LOCK_NB)` で取れなければ `build_in_progress` で残す。lock を持ったまま
+  `<repo>/.deleting-<ulid>` へ rename し、放してから消す。記録は `TargetSweepRan.roots` に root = `<workspace_root>`
+  の 1 行（`by_reason.stale_target` に件数）として載せる（event の形は変えない）。`prune_one_workspace` も同じ lock の
+  確かめを通し、lock 中の target は消さない。
+- **A4（監視）**: D4 の `warn` の通知（初回・24h ごとの再通知）に**大きい target の上位 5 件**（作業場所の target・scratch の
+  owner・`<build_cache_dir>/cargo` の直下。`st_blocks × 512` の合計）を本文に足す。測り方は注入できる trait
+  `TargetCensus`（試験は固定の一覧を返し host を見ない）。測るのは通知を作るときだけ。
+  D4.5 を改める: 監視している path のどれかが **`critical` のあいだは新しい coding run（task の genre が `coding`、
+  または未指定）を起こさない**（ready のまま。`min_free_disk_mb` と同じく attempts を消費しない。CoS chat・
+  保守 task は止めない。coding task の新規 reviewer・検査も reviewing のまま保留する。target sweep が critical 中も走れるよう、全体の `disk_ready` は使わない）。
+  解除は level が下がった測定の tick から。
+- 本番の cron（`target-sweep`）の有効化は配送後に運用が `resume` で行う（D1.4 のまま）。
+
+### A1–A4 実装時の補足
+
+- reviewer の adapter env に加えて `RunRequest.cargo_target_dir` にも同じ値を記録する。Codex の書き込み先追加は既存の adapter env 経路を利用する。`shared_build_cache = false`、remote、container の既存の除外は維持する。
+- scratch sweep は DB で終端と確認できる task owner（WU 含む）だけを対象とする。非終端・不明・外部 owner は `active_or_unknown_owner` で残す。pool lock で allocate/adopt/GC と直列化し、Cargo profile lock も保持して rename する。上限は回収可能な項目の上限であり、稼働中 target を強制削除する hard quota ではない。
+- workspace は `repos/<repo>/target`、旧 `tree/target` と `wu/<key>/repos/<repo>/target` を調べる。終端でも running の runs 行があれば保護する。掃除の残骸は専用の `.deleting-cargo-target-*` のみ拾い、任意の `.deleting-*` は消さない。symlink の task/repo/target は辿らない。
+- 既存の scratch GC、終端 WU キャッシュ掃除、workspace prune と cancelled worktree の片付けにも Cargo lock 保護を適用する。
+- 新しい scope 設定は起動時と reload 時に適用する。DB を開かない CLI の `target sweep` は既存の共有 root のみ。scratch と workspace を含む正確な dry-run は daemon の保守 task（cron `mode = "dry_run"`）で行う。本番有効化は人の操作。
+
+検証（2026-10-09）: 対象 nextest 64 件、全体 `test-parallel.sh` 4,900 件と doc-test、`cargo clippy --workspace -- -D warnings` が成功。詳細は [進捗](../../docs/progress/2026-10-09-workspace-cargo-targets.md)。本番有効化は未実施。

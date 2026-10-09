@@ -304,7 +304,9 @@ fn disk_watch_runner_measures_every_60s() {
     let mut runner = DiskWatchRunner {
         entries: env.entries.clone(),
         probe: Box::new(env.probe.clone()),
+        census: None,
         last_at: None,
+        critical: false,
     };
     assert!(runner.tick(&env.store, t0()).is_some());
     assert!(
@@ -320,7 +322,9 @@ fn disk_watch_runner_measures_every_60s() {
     let mut empty = DiskWatchRunner {
         entries: Vec::new(),
         probe: Box::new(env.probe.clone()),
+        census: None,
         last_at: None,
+        critical: false,
     };
     assert!(empty.tick(&env.store, t0()).is_none());
     assert_eq!(env.disk_notices().len(), 1);
@@ -353,4 +357,48 @@ fn disk_watch_target_sweep_over_cap_notice() {
         store.notice_record(&n).unwrap(),
         NoticeRecordOutcome::Duplicate(_)
     ));
+}
+
+#[test]
+fn disk_watch_warn_includes_largest_targets_and_only_measures_on_notice() {
+    struct Census(std::sync::atomic::AtomicUsize);
+    impl TargetCensus for Census {
+        fn largest(&self, limit: usize) -> Vec<(PathBuf, u64)> {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            top_targets(
+                vec![
+                    ("/fake/small/target".into(), 1 << 30),
+                    ("/fake/large/target".into(), 10 << 30),
+                ],
+                limit,
+            )
+        }
+    }
+    let env = Env::new(&["/fake/local", "/fake/tmp"]);
+    let census = Census(std::sync::atomic::AtomicUsize::new(0));
+    for path in ["/fake/local", "/fake/tmp"] {
+        env.probe.set(path, Some(85.0));
+    }
+    run_disk_watch_with(&env.store, &env.probe, Some(&census), &env.entries, t0()).unwrap();
+    let notices = env
+        .store
+        .notice_list(&NoticeQuery {
+            kinds: vec![NoticeKind::Disk],
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(notices.items.len(), 2);
+    for n in notices.items {
+        assert!(n.summary.contains("/fake/large/target（10.0 GiB）"));
+        assert!(n.summary.find("large").unwrap() < n.summary.find("small").unwrap());
+    }
+    run_disk_watch_with(
+        &env.store,
+        &env.probe,
+        Some(&census),
+        &env.entries,
+        t0() + time::Duration::minutes(1),
+    )
+    .unwrap();
+    assert_eq!(census.0.load(std::sync::atomic::Ordering::SeqCst), 1);
 }

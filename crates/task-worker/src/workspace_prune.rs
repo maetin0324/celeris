@@ -42,9 +42,12 @@ fn is_real_dir(path: &Path) -> bool {
 /// `task_dir` の下にある worktree（git worktree。シンボリックリンクは含まない）を 1 段だけ列挙する。
 /// ADR-0043 D2 の複数リポジトリ（`repos/<name>/`）と、Phase 49 の 1 リポジトリだけの旧い形
 /// （`tree/`）の両方を見る。
-fn worktree_dirs(task_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn worktree_dirs(task_dir: &Path) -> Vec<PathBuf> {
+    if !is_real_dir(task_dir) {
+        return Vec::new();
+    }
     let repos_dir = task_dir.join(crate::task_repos::REPOS_DIR_NAME);
-    if repos_dir.is_dir() {
+    if is_real_dir(&repos_dir) {
         let mut out = Vec::new();
         if let Ok(entries) = std::fs::read_dir(&repos_dir) {
             for entry in entries.flatten() {
@@ -101,6 +104,11 @@ pub fn find_prune_candidates(
     if after_secs == 0 {
         return Ok(Vec::new());
     }
+    let running: std::collections::HashSet<_> = store
+        .runs_running()?
+        .into_iter()
+        .map(|r| r.task_id)
+        .collect();
     let mut terminal = Vec::new();
     for status in [Status::Done, Status::Failed, Status::Cancelled] {
         terminal.extend(store.list(Some(status))?);
@@ -109,7 +117,9 @@ pub fn find_prune_candidates(
     let mut out = Vec::new();
     for task in terminal {
         let age = now - task.updated_at;
-        if age.whole_seconds() < after_secs as i64 {
+        if running.contains(&task.id.to_string())
+            || age.whole_seconds() < i64::try_from(after_secs).unwrap_or(i64::MAX)
+        {
             continue;
         }
         let task_dir = workspace_root.join(task.id.to_string());
@@ -141,11 +151,22 @@ pub fn find_prune_candidate(
 
 /// 実際に消す。消せなかったパスは無視して残りを続ける（途中で 1 つ失敗しても他は消す）。
 /// 戻り値は実際に消せたパス（呼び出し側が `workspace_pruned` イベントの `removed` に使う）。
+/// ADR 2026-10-07-build-tmp-hygiene 付記 A3: cargo の target（`CACHEDIR.TAG`・`.cargo-lock`）で build 中（lock が
+/// 取れない）のものは消さずに残す（次の tick でまた候補になる）。
 pub fn prune(candidate: &PruneCandidate) -> Vec<PathBuf> {
     candidate
         .paths
         .iter()
-        .filter(|path| std::fs::remove_dir_all(path).is_ok())
+        .filter(|path| {
+            if crate::workspace_targets::is_cargo_target(path) {
+                // lock を持ったまま消す（消している間に cargo が始まっても同じ lock で待つ）。
+                let Some(_lock) = crate::workspace_targets::try_lock_target(path) else {
+                    return false;
+                };
+                return std::fs::remove_dir_all(path).is_ok();
+            }
+            std::fs::remove_dir_all(path).is_ok()
+        })
         .cloned()
         .collect()
 }
@@ -163,4 +184,4 @@ pub fn relative_removed(task_dir: &Path, removed: &[PathBuf]) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

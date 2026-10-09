@@ -173,6 +173,7 @@ struct Scan {
     /// 前回の `.deleting-*`。
     leftovers: Vec<PathBuf>,
     errors: Vec<String>,
+    skipped: Vec<SkippedItem>,
 }
 
 fn is_real_dir(path: &Path) -> bool {
@@ -290,14 +291,78 @@ fn scan_profile(env: &dyn SweepEnv, root: &Path, target: &Path, profile: &Path, 
     }
 }
 
+/// scratch pool の root（`<scratch>/targets`）の中で触らない owner（lease の本人が掃除する。D1.1）。
+pub const SCRATCH_EXCLUDED_OWNERS: &[&str] = &["release-build"];
+
+/// scratch の owner 配置（`<owner>/target`・`<owner>/wu-*/target`）の target dir を走査する（付記 A2）。
+/// owner dir の file（`lease.json` 等）と `<root>` 直下の `.deleting-*`（scratch_gc のもの）には触れない。
+fn scan_scratch_root(
+    env: &dyn SweepEnv,
+    root: &Path,
+    lookup: &dyn task_worker::scratch::StatusLookup,
+    scan: &mut Scan,
+) {
+    for (name, owner) in entries(root) {
+        if name.starts_with('.') || SCRATCH_EXCLUDED_OWNERS.contains(&name.as_str()) {
+            continue;
+        }
+        if !is_real_dir(&owner) {
+            continue;
+        }
+        // A task may run tests between cargo invocations, when no cargo lock is held.
+        // Unknown/external owners stay protected: only a confirmed terminal task is eligible.
+        let finished = name
+            .strip_prefix("task-")
+            .and_then(|id| lookup.task_status(id))
+            .is_some_and(|s| s.is_terminal());
+        if !finished {
+            scan.skipped.push(SkippedItem {
+                path: owner,
+                reason: "active_or_unknown_owner".into(),
+            });
+            continue;
+        }
+        let mut owner_dirs = vec![owner.clone()];
+        for (sub, d2) in entries(&owner) {
+            if sub.starts_with("wu-") && is_real_dir(&d2) {
+                owner_dirs.push(d2);
+            }
+        }
+        for dir in owner_dirs {
+            for (sub, p) in entries(&dir) {
+                if is_deleting(&sub) && is_real_dir(&p) {
+                    scan.leftovers.push(p);
+                }
+            }
+            let target = dir.join(task_worker::workspace_targets::WORKSPACE_TARGET_NAME);
+            if !is_real_dir(&target) {
+                continue;
+            }
+            for p in profile_dirs(&target) {
+                scan_profile(env, root, &target, &p, scan);
+            }
+        }
+    }
+}
+
 /// root の直下（深さ 1）と `<root>/<repo-key>/wu-*`（深さ 2）の target dir を走査する。
-fn scan_roots(env: &dyn SweepEnv, roots: &[PathBuf]) -> Scan {
+/// `scratch_roots` に入っている root は scratch の owner 配置で走査する（付記 A2）。
+fn scan_roots(
+    env: &dyn SweepEnv,
+    roots: &[PathBuf],
+    scratch_roots: &[PathBuf],
+    lookup: &dyn task_worker::scratch::StatusLookup,
+) -> Scan {
     let mut scan = Scan::default();
     for root in roots {
         // root 自体は呼び出し側が明示したものなので、symlink でも辿る（中は辿らない）。
         if !root.is_dir() {
             scan.errors
                 .push(format!("root {} is not a directory", root.display()));
+            continue;
+        }
+        if scratch_roots.contains(root) {
+            scan_scratch_root(env, root, lookup, &mut scan);
             continue;
         }
         for (name, d1) in entries(root) {
@@ -388,13 +453,26 @@ pub fn run_sweep(
     mode: TargetSweepMode,
     env: &dyn SweepEnv,
 ) -> SweepReport {
+    run_sweep_with_scratch(roots, &[], params, mode, env, &task_worker::scratch::NoDb)
+}
+
+/// [`run_sweep`] に scratch pool の root（`<scratch>/targets`。`roots` にも入れる）を足したもの（付記 A2）。
+/// scratch の root は owner 配置（`<owner>/target`・`<owner>/wu-*/target`）で走査し、`release-build` は除く。
+pub fn run_sweep_with_scratch(
+    roots: &[PathBuf],
+    scratch_roots: &[PathBuf],
+    params: &SweepParams,
+    mode: TargetSweepMode,
+    env: &dyn SweepEnv,
+    lookup: &dyn task_worker::scratch::StatusLookup,
+) -> SweepReport {
     let started = Instant::now();
     let apply = mode == TargetSweepMode::Apply;
     let params = SweepParams {
         roots: roots.to_vec(),
         ..params.clone()
     };
-    let scan = scan_roots(env, roots);
+    let scan = scan_roots(env, roots, scratch_roots, lookup);
     let mut errors = scan.errors;
 
     // 規則 4: profile ごとの lock。apply は rename まで持ち続け、dry_run は確かめたらすぐ放す。
@@ -420,6 +498,8 @@ pub fn run_sweep(
             reason: skip_reason(s.reason).to_string(),
         })
         .collect();
+
+    skipped.extend(scan.skipped);
 
     let item_profile: BTreeMap<&Path, &Path> = scan
         .items
@@ -547,6 +627,115 @@ pub fn run_sweep(
         errors,
         duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
     }
+}
+
+/// 付記 A2・A3: daemon の保守 executor だけが足す範囲（`celerisctl target sweep` は使わない）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SweepScope {
+    /// `<scratch>/targets` を root に足す（scratch が有効なときだけ）。
+    pub scratch_targets: bool,
+    /// 終端から何秒経った task の作業場所の target を消すか（`0` で無効）。
+    pub workspace_target_after_secs: u64,
+}
+
+impl Default for SweepScope {
+    fn default() -> Self {
+        Self {
+            scratch_targets: true,
+            workspace_target_after_secs: DEFAULT_WORKSPACE_TARGET_AFTER_SECS,
+        }
+    }
+}
+
+/// 付記 A3: 終わった task の作業場所の target の掃除（[`sweep_workspace_targets`]）の既定の猶予（6 時間）。
+pub const DEFAULT_WORKSPACE_TARGET_AFTER_SECS: u64 = 6 * 3600;
+
+/// 付記 A3: 終端（done・cancelled・failed）になってから `after_secs` 経った task の作業場所に残る cargo の target を
+/// 消し、`report` に root = `workspace_root` の 1 行（`by_reason.stale_target` に件数）として足す。
+/// 終端でない task は見ない。build 中（どれかの profile の lock が取れない）は `build_in_progress` で残す。
+/// `dry_run` は木を変えない。
+pub fn sweep_workspace_targets(
+    report: &mut SweepReport,
+    store: &dyn task_core::TaskStore,
+    workspace_root: &Path,
+    after_secs: u64,
+    now: time::OffsetDateTime,
+) {
+    use task_worker::workspace_targets::{RemoveTarget, finished_task_targets, remove_target};
+    let started = Instant::now();
+    let apply = report.mode == TargetSweepMode::Apply;
+    let found = match finished_task_targets(store, workspace_root, now, after_secs) {
+        Ok(found) => found,
+        Err(e) => {
+            report
+                .errors
+                .push(format!("workspace targets: list finished tasks: {e}"));
+            return;
+        }
+    };
+    let mut root = RootReport {
+        root: workspace_root.to_path_buf(),
+        ..RootReport::default()
+    };
+    let mut to_remove: Vec<PathBuf> = Vec::new();
+    for task in found {
+        for target in task.targets {
+            root.before_bytes = root
+                .before_bytes
+                .saturating_add(task_worker::workspace_targets::tree_bytes(&target));
+            match remove_target(&target, &deleting_name()[DELETING_PREFIX.len()..], apply) {
+                Ok(RemoveTarget::Locked) => report.skipped.push(SkippedItem {
+                    path: target,
+                    reason: "build_in_progress".to_string(),
+                }),
+                Ok(RemoveTarget::Moved { moved, bytes }) => {
+                    root.deleted_bytes = root.deleted_bytes.saturating_add(bytes);
+                    root.deleted_items += 1;
+                    root.by_reason.stale_target += 1;
+                    report.deleted.push(DeletedItem {
+                        root: workspace_root.to_path_buf(),
+                        path: target,
+                        bytes,
+                        reason: "stale_target".to_string(),
+                    });
+                    if apply {
+                        to_remove.push(moved);
+                    }
+                }
+                Err(e) => {
+                    report
+                        .errors
+                        .push(format!("rename {}: {e}", target.display()));
+                    report.skipped.push(SkippedItem {
+                        path: target,
+                        reason: "rename_failed".to_string(),
+                    });
+                }
+            }
+        }
+        for path in task.leftovers {
+            if let Some(_lock) = task_worker::workspace_targets::try_lock_target(&path) {
+                report.leftovers.push(path.clone());
+                if apply {
+                    to_remove.push(path);
+                }
+            }
+        }
+    }
+    for path in to_remove {
+        if let Err(e) = remove_any(&path) {
+            report
+                .errors
+                .push(format!("remove {}: {e}", path.display()));
+        }
+    }
+    root.after_bytes = root.before_bytes.saturating_sub(root.deleted_bytes);
+    if root.before_bytes > 0 || root.deleted_items > 0 {
+        report.roots.push(root);
+    }
+    report.duration_ms = report
+        .duration_ms
+        .saturating_add(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
 }
 
 #[cfg(test)]

@@ -864,3 +864,107 @@ async fn seed_housekeeping_runs_on_its_interval_and_retires_stale_generations() 
     d.seed_housekeeping(t0 + Duration::from_secs(10 * sc::SEED_CHECK_INTERVAL_SECS));
     assert!(repo_dir.join("gen-d").is_dir());
 }
+
+/// Reviewers use the same bounded owner target as workers, including child tasks.
+#[tokio::test]
+async fn reviewer_cargo_target_env_and_request_use_subject_owner() {
+    #[derive(Clone)]
+    struct Capture {
+        env: Vec<(String, String)>,
+        seen: Arc<StdMutex<Vec<(TaskKind, PathBuf)>>>,
+    }
+    #[async_trait]
+    impl WorkerAdapter for Capture {
+        fn id(&self) -> &str {
+            "instant"
+        }
+        fn with_env(&self, env: &[(String, String)]) -> Option<Arc<dyn WorkerAdapter>> {
+            let mut next = self.clone();
+            next.env.extend_from_slice(env);
+            Some(Arc::new(next))
+        }
+        async fn run(
+            &self,
+            req: RunRequest,
+            _: &str,
+            _: RunLimits,
+            _: &dyn EventSink,
+        ) -> Result<RunOutcome, AdapterError> {
+            let target = PathBuf::from(
+                &self
+                    .env
+                    .iter()
+                    .rev()
+                    .find(|(k, _)| k == "CARGO_TARGET_DIR")
+                    .expect("target env")
+                    .1,
+            );
+            assert_eq!(req.cargo_target_dir.as_ref(), Some(&target));
+            assert!(!target.starts_with(&req.workspace));
+            self.seen.lock().unwrap().push((req.task.kind, target));
+            if req.context.review.is_some() {
+                std::fs::write(
+                    req.artifacts_dir.join("review.json"),
+                    r#"{"verdicts":[{"criterion":0,"pass":true,"reason":"ok"}]}"#,
+                )
+                .unwrap();
+            }
+            Ok(RunOutcome {
+                terminal: Terminal::Done {
+                    summary: "ok".into(),
+                    evidence: vec![],
+                    usage: None,
+                },
+                exit_code: Some(0),
+            })
+        }
+    }
+    let repo = tempfile::tempdir().unwrap();
+    init_test_repo(repo.path());
+    std::fs::write(repo.path().join("Cargo.toml"), "[workspace]\n").unwrap();
+    let root = tempfile::tempdir().unwrap();
+    let scratch = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let parent = git_task(
+        repo.path(),
+        None,
+        Check::Command {
+            cmd: "true".into(),
+            expect_exit: 0,
+        },
+    );
+    store.insert(&parent).unwrap();
+    let mut task = git_task(repo.path(), None, Check::Reviewer);
+    task.parent_id = Some(parent.id);
+    store.insert(&task).unwrap();
+    let seen = Arc::new(StdMutex::new(Vec::new()));
+    let adapter = Arc::new(Capture {
+        env: vec![],
+        seen: seen.clone(),
+    });
+    let mut d = worktree_dispatcher(store.clone(), adapter, root.path(), None);
+    let settings = scratch_on(&mut d, scratch.path());
+    run_until_task_terminal(&mut d, &store, task.id).await;
+    assert_eq!(store.get(task.id).unwrap().unwrap().status, Status::Done);
+    let expected = settings
+        .pool()
+        .target_dir(&task_worker::scratch::Owner::task(task.id.to_string()));
+    let runs = seen.lock().unwrap();
+    assert!(
+        runs.iter()
+            .any(|(kind, path)| *kind == TaskKind::Review && path == &expected),
+        "{runs:?}"
+    );
+    assert!(
+        runs.iter()
+            .any(|(kind, path)| *kind == TaskKind::Execute && path == &expected),
+        "{runs:?}"
+    );
+    assert!(
+        !root
+            .path()
+            .join(task.id.to_string())
+            .join("repos/agent-platform/target")
+            .exists()
+    );
+}

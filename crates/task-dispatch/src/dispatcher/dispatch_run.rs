@@ -32,6 +32,11 @@ impl Dispatcher {
         if !self.is_eligible(&task) {
             return Ok(false);
         }
+        // ADR 2026-10-07-build-tmp-hygiene 付記 A4: 監視している path が `critical` のあいだは新しい coding run を
+        // 起こさない（ready のまま。attempts を消費しない。並列 WU の 2 本目以降も同じ）。
+        if self.held_by_disk_critical(&task) {
+            return Ok(false);
+        }
         // ADR-0046 D5（Phase 59）: 担当が決まっていないタスクは dispatch の前に matching で決める
         // （計画 run の子、人が作ったタスク、Console から作られたタスクが全部ここを通る）。
         let mut task = if second_pass {

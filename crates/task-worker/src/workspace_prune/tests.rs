@@ -13,7 +13,11 @@ fn store_with_task(status: Status, updated_at: OffsetDateTime) -> (SqliteStore, 
 /// `store` に 1 件タスクを足し、`Trigger` を積み重ねて `status` まで進めてから、`updated_at` だけを
 /// 望みの時刻に書き戻す（`update_task` は `status`/`attempts`/`lease` を DB の現在値から取るので、
 /// 状態機械を通さずに `status` を直接書くことはできない。ADR-0002 の保護）。
-fn insert_task(store: &SqliteStore, status: Status, updated_at: OffsetDateTime) -> TaskId {
+pub(crate) fn insert_task(
+    store: &SqliteStore,
+    status: Status,
+    updated_at: OffsetDateTime,
+) -> TaskId {
     let id = TaskId::new();
     let now = OffsetDateTime::now_utc();
     let task = Task {
@@ -94,6 +98,11 @@ fn insert_task(store: &SqliteStore, status: Status, updated_at: OffsetDateTime) 
                 .expect("worker_error");
         }
         Status::Ready => {}
+        Status::Running => {
+            store
+                .apply_transition_with_events(id, Trigger::Dispatch, vec![])
+                .expect("dispatch");
+        }
         other => panic!("unsupported status for this test helper: {other:?}"),
     }
     let mut current = store.get(id).expect("get").expect("task exists");

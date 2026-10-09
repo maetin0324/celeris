@@ -366,3 +366,88 @@ fn target_sweep_cleans_leftover_deleting_dirs() {
     assert!(report.deleted.is_empty(), "{report:?}");
     assert!(report.errors.is_empty(), "{report:?}");
 }
+
+#[test]
+fn target_sweep_scratch_cap_preserves_live_owners_and_cargo_locks() {
+    struct Lookup;
+    impl task_worker::scratch::StatusLookup for Lookup {
+        fn task_status(&self, id: &str) -> Option<task_core::Status> {
+            Some(if id == "running" {
+                task_core::Status::Running
+            } else {
+                task_core::Status::Done
+            })
+        }
+        fn work_unit_status(&self, _: &str) -> Option<task_core::WorkUnitStatus> {
+            None
+        }
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("targets");
+    let old = now() - DAY * 2;
+    let mut items = Vec::new();
+    for owner in [
+        "task-done",
+        "task-done/wu-one",
+        "task-locked",
+        "task-running",
+        "release-build",
+        "agent-external",
+    ] {
+        let dir = root.join(owner);
+        let p = profile(&dir.join("target"), "debug");
+        let (paths, _) = add_crate(&p, "foo-1234567890abcdef", old);
+        std::fs::write(dir.join("lease.json"), "preserved").unwrap();
+        items.push((dir, p, paths));
+    }
+    let held = Flock::lock(
+        File::open(items[2].1.join(CARGO_LOCK)).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let params = SweepParams {
+        max_bytes_per_root: 4000,
+        target_ratio: 0.5,
+        ..Default::default()
+    };
+    let before = tree(&root);
+    let dry = run_sweep_with_scratch(
+        std::slice::from_ref(&root),
+        std::slice::from_ref(&root),
+        &params,
+        TargetSweepMode::DryRun,
+        &FixedEnv { now: now() },
+        &Lookup,
+    );
+    assert!(dry.errors.is_empty(), "{:?}", dry.errors);
+    assert_eq!(tree(&root), before);
+    let applied = run_sweep_with_scratch(
+        std::slice::from_ref(&root),
+        std::slice::from_ref(&root),
+        &params,
+        TargetSweepMode::Apply,
+        &FixedEnv { now: now() },
+        &Lookup,
+    );
+    assert!(applied.errors.is_empty(), "{:?}", applied.errors);
+    assert!(applied.roots[0].by_reason.cap > 0);
+    for (i, (dir, _, paths)) in items.iter().enumerate() {
+        assert!(dir.join("lease.json").exists());
+        for p in paths {
+            assert_eq!(p.exists(), i >= 2, "{}", p.display());
+        }
+    }
+    assert!(
+        applied
+            .skipped
+            .iter()
+            .any(|s| s.reason == "build_in_progress")
+    );
+    assert!(
+        applied
+            .skipped
+            .iter()
+            .any(|s| s.reason == "active_or_unknown_owner")
+    );
+    drop(held);
+}

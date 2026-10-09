@@ -703,6 +703,7 @@ impl EventSink for RecordingSink {
 
 fn reviewer_run(adapter: Arc<StubReviewer>) -> ReviewerRun {
     ReviewerRun {
+        cargo_target_dir: None,
         node: None,
         profile: None,
         skills: Vec::new(),
@@ -739,6 +740,7 @@ async fn reviewer_uses_department_identity_and_profile_in_the_same_run() {
         seen: Mutex::new(vec![]),
     });
     let mut run = reviewer_run(adapter.clone());
+    run.cargo_target_dir = Some(dir.path().join("shared-target"));
     run.node = Some(task_worker::NodeContext {
         id: "engineering".into(),
         name: "Engineering".into(),
@@ -766,6 +768,7 @@ async fn reviewer_uses_department_identity_and_profile_in_the_same_run() {
     let seen = adapter.seen.lock().unwrap();
     assert_eq!(seen.len(), 1);
     let req = &seen[0];
+    assert_eq!(req.cargo_target_dir, Some(dir.path().join("shared-target")));
     assert_eq!(req.task.assignee.as_deref(), Some("engineering"));
     assert_eq!(req.context.node.as_ref().unwrap().id, "engineering");
     assert!(req.context.conversation.is_empty());
@@ -813,6 +816,7 @@ async fn reviewer_provider_failure_is_reported_instead_of_failing_criteria() {
         dir.path(),
     );
     let run = ReviewerRun {
+        cargo_target_dir: None,
         node: None,
         profile: None,
         skills: Vec::new(),

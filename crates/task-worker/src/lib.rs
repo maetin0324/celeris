@@ -73,6 +73,8 @@ pub mod tool_policy;
 pub mod workspace;
 /// ADR-0066 D2（Phase 110b）: 終端タスクの作業場所から、ビルド生成物だけを自動で刈る。
 pub mod workspace_prune;
+/// ADR 2026-10-07-build-tmp-hygiene 付記 A3: 終わった task の作業場所の cargo target。
+pub mod workspace_targets;
 
 pub use acp::{AcpAdapter, AcpConfig, AcpPermission};
 pub use adapter::{AdapterError, EventSink, RunLimits, RunOutcome, Terminal, WorkerAdapter};

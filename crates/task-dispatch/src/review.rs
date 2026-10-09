@@ -48,6 +48,8 @@ pub struct ReviewSubject {
 
 /// `Reviewer` 条件のためにディスパッチャが選んだ run（ADR-0007 D5 1./3.）。
 pub struct ReviewerRun {
+    /// Build output shared with the subject task; also used by the run prompt.
+    pub cargo_target_dir: Option<std::path::PathBuf>,
     pub node: Option<task_worker::NodeContext>,
     pub profile: Option<task_core::EffectiveProfile>,
     /// Skills mounted by the subject task's assignee for review (ADR-0122 D4).
@@ -998,7 +1000,7 @@ async fn run_reviewer_inner(
         review_task.assignee = Some(node.id.clone());
     }
     let req = RunRequest {
-        cargo_target_dir: None,
+        cargo_target_dir: run.cargo_target_dir.clone(),
         protocol: PROTOCOL_VERSION,
         task: review_task,
         workspace: workspace_dir.to_path_buf(),

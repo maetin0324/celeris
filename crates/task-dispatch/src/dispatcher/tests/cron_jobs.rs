@@ -282,3 +282,133 @@ fn target_sweep_cron_rejects_unknown_action() {
     assert!(store.cron_job_list().unwrap().is_empty());
     sweep_job(&store, "target_sweep", "dry_run").unwrap();
 }
+
+#[tokio::test]
+async fn target_sweep_executor_cleans_finished_workspaces_and_scratch_at_critical() {
+    use nix::fcntl::{Flock, FlockArg};
+    let store = Arc::new(SqliteStore::open_in_memory().unwrap());
+    let tmp = tempfile::tempdir().unwrap();
+    let ws = tmp.path().join("workspaces");
+    let scratch = tmp.path().join("scratch");
+    let now = at("2026-10-09T12:00:00Z");
+    let mut targets = Vec::new();
+    for (status, age) in [
+        (Status::Done, 7),
+        (Status::Cancelled, 7),
+        (Status::Failed, 7),
+        (Status::Done, 1),
+        (Status::Running, 7),
+        (Status::Done, 7),
+    ] {
+        let task = new_task(tmp.path(), Check::Reviewer, 0);
+        store.insert(&task).unwrap();
+        if status == Status::Cancelled {
+            store
+                .apply_transition(task.id, Trigger::Cancel, None)
+                .unwrap();
+        } else {
+            store
+                .apply_transition(task.id, Trigger::Dispatch, None)
+                .unwrap();
+            if status == Status::Failed {
+                store
+                    .apply_transition(task.id, Trigger::WorkerError { retryable: false }, None)
+                    .unwrap();
+            } else if status == Status::Done {
+                store
+                    .apply_transition(task.id, Trigger::WorkerDone, None)
+                    .unwrap();
+                store
+                    .apply_transition(task.id, Trigger::ReviewPass, None)
+                    .unwrap();
+            }
+        }
+        let mut terminal = store.get(task.id).unwrap().unwrap();
+        terminal.updated_at = now - time::Duration::hours(age);
+        store
+            .update_task(&terminal, Event::worker_progress("test", "backdated"))
+            .unwrap();
+        let repo = ws.join(task.id.to_string()).join("repos/r");
+        let target = repo.join("target");
+        std::fs::create_dir_all(target.join("debug")).unwrap();
+        std::fs::write(
+            target.join("CACHEDIR.TAG"),
+            "Signature: 8a477f597d28d172789f06886806bc55",
+        )
+        .unwrap();
+        std::fs::write(target.join("debug/.cargo-lock"), "").unwrap();
+        std::fs::write(repo.join("source.rs"), "preserve").unwrap();
+        std::fs::create_dir_all(repo.join(".deleting-user-data")).unwrap();
+        let scratch_target = scratch
+            .join("targets")
+            .join(format!("task-{}", task.id))
+            .join("target/debug");
+        std::fs::create_dir_all(&scratch_target).unwrap();
+        std::fs::write(scratch_target.join(".cargo-lock"), "").unwrap();
+        let old = rlib(
+            &scratch_target,
+            "old-0000000a",
+            std::time::SystemTime::from(now - time::Duration::days(8)),
+        );
+        targets.push((repo, target, old));
+    }
+    let lock = Flock::lock(
+        std::fs::File::open(targets[5].1.join("debug/.cargo-lock")).unwrap(),
+        FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let adapter = Arc::new(InstantAdapter {
+        terminal: Terminal::Done {
+            summary: "ok".into(),
+            evidence: vec![],
+            usage: None,
+        },
+        delay: Duration::ZERO,
+    });
+    let mut d = dispatcher(store.clone(), adapter, 1);
+    d.config.workspace_root = ws.clone();
+    scratch_on(&mut d, &scratch);
+    d.test_now = Some(Arc::new(StdMutex::new(now)));
+    d.set_target_sweep(task_worker::target_sweep::SweepParams {
+        roots: vec![],
+        ..Default::default()
+    });
+    struct Critical;
+    impl crate::disk_watch::DiskProbe for Critical {
+        fn usage(&self, _: &std::path::Path) -> Result<crate::disk_watch::DiskUsage, String> {
+            Ok(crate::disk_watch::DiskUsage {
+                blocks: 100,
+                bfree: 1,
+                bavail: 1,
+            })
+        }
+    }
+    d.set_disk_watch_with_probe(
+        vec![crate::disk_watch::DiskWatchEntry {
+            path: "/fake/local".into(),
+            warn_pct: 80.0,
+            critical_pct: 95.0,
+        }],
+        Box::new(Critical),
+    );
+    d.tick_disk_watch();
+    assert!(d.disk_watch_critical());
+    let mut maintenance = new_task(tmp.path(), Check::Reviewer, 0);
+    maintenance.labels = vec![
+        "maintenance-action-target-sweep".into(),
+        "mode-apply".into(),
+    ];
+    store.insert(&maintenance).unwrap();
+    assert!(d.run_maintenance_task(&maintenance).unwrap());
+    assert_eq!(
+        store.get(maintenance.id).unwrap().unwrap().status,
+        Status::Done
+    );
+    for (i, (repo, target, scratch_item)) in targets.iter().enumerate() {
+        assert_eq!(target.exists(), i >= 3, "{}", target.display());
+        assert_eq!(scratch_item.exists(), i == 4, "{}", scratch_item.display());
+        assert!(repo.join("source.rs").exists());
+        assert!(repo.join(".deleting-user-data").exists());
+    }
+    drop(lock);
+}

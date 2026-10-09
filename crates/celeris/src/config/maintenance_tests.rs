@@ -164,3 +164,17 @@ fn disk_watch_config_rejects_invalid_entries() {
         crate::config::MaintenanceConfig::default().disk_watch
     );
 }
+
+#[test]
+fn target_sweep_scope_defaults_and_disable_are_resolved() {
+    let default = load("").unwrap().target_sweep_scope();
+    assert!(default.scratch_targets);
+    assert_eq!(default.workspace_target_after_secs, 6 * 3600);
+    let disabled = load(
+        "\n[maintenance.target_sweep]\nscratch_targets = false\nworkspace_target_after_hours = 0\n",
+    )
+    .unwrap()
+    .target_sweep_scope();
+    assert!(!disabled.scratch_targets);
+    assert_eq!(disabled.workspace_target_after_secs, 0);
+}

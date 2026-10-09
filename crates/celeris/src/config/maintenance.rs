@@ -113,6 +113,22 @@ pub struct TargetSweepConfig {
     pub target_ratio: f64,
     #[serde(default = "default_stale_target_days")]
     pub stale_target_days: u64,
+    /// 付記 A2（2026-10-09）: scratch pool の `<scratch>/targets`（run の `CARGO_TARGET_DIR`）も daemon の掃除の
+    /// root に足す（`release-build` は除く）。既定 true。scratch が無効なら足さない。
+    #[serde(default = "default_true")]
+    pub scratch_targets: bool,
+    /// 付記 A3（2026-10-09）: 終端になってからこの時間（時）経った task の作業場所の cargo target を消す。
+    /// 既定 6。`0` で無効。
+    #[serde(default = "default_workspace_target_after_hours")]
+    pub workspace_target_after_hours: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_workspace_target_after_hours() -> u64 {
+    task_dispatch::target_sweep::DEFAULT_WORKSPACE_TARGET_AFTER_SECS / 3600
 }
 
 impl Default for TargetSweepConfig {
@@ -123,6 +139,8 @@ impl Default for TargetSweepConfig {
             max_bytes_per_root: default_max_bytes_per_root(),
             target_ratio: default_target_ratio(),
             stale_target_days: default_stale_target_days(),
+            scratch_targets: true,
+            workspace_target_after_hours: default_workspace_target_after_hours(),
         }
     }
 }
@@ -215,6 +233,15 @@ impl super::Config {
                 critical_pct: w.critical_pct,
             })
             .collect()
+    }
+
+    /// 付記 A2・A3: daemon の保守 executor だけが使う範囲（scratch の root・終わった task の作業場所）。
+    pub fn target_sweep_scope(&self) -> task_dispatch::target_sweep::SweepScope {
+        let t = &self.maintenance.target_sweep;
+        task_dispatch::target_sweep::SweepScope {
+            scratch_targets: t.scratch_targets,
+            workspace_target_after_secs: t.workspace_target_after_hours.saturating_mul(3600),
+        }
     }
 
     /// cron の保守 executor と `celerisctl target sweep`（`--root` 省略時）が使う掃除の roots と上限。

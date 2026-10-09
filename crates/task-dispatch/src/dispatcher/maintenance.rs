@@ -14,10 +14,13 @@ use task_core::{Task, Trigger};
 use task_worker::target_sweep::SweepParams;
 
 use super::{DispatchError, Dispatcher};
-use crate::target_sweep::{SweepEnv, run_sweep};
+use crate::target_sweep::{SweepEnv, run_sweep_with_scratch, sweep_workspace_targets};
 
 /// `[maintenance.target_sweep]` を渡されなかったときの 2 つ目の既定 root（D1.1）。
 const DEFAULT_DEV_BUILD_CACHE: &str = "/var/tmp/agent-platform-build";
+
+/// 付記 A4: disk_watch の `critical` で止める run の genre。
+const CODING_GENRE: &str = "coding";
 
 /// 掃除の時計を dispatcher の時計（試験では差し替えた時計）に揃える。大きさ・使用時刻は `stat` のまま。
 struct DispatcherClock(SystemTime);
@@ -35,10 +38,28 @@ impl Dispatcher {
         self.target_sweep = Some(params);
     }
 
+    /// 付記 A2・A3（2026-10-09）: 保守 executor が足す範囲（scratch の root・終わった task の作業場所）。
+    /// 渡されなければ [`crate::target_sweep::SweepScope::default`]。
+    pub fn set_target_sweep_scope(&mut self, scope: crate::target_sweep::SweepScope) {
+        self.target_sweep_scope = scope;
+    }
+
     /// ADR 2026-10-07-build-tmp-hygiene D4: 監視する path としきい値（celeris が `[[maintenance.disk_watch]]` から
     /// 渡す）。測るのは本物の `statvfs`。空なら監視しない。
     pub fn set_disk_watch(&mut self, entries: Vec<crate::disk_watch::DiskWatchEntry>) {
-        self.set_disk_watch_with_probe(entries, Box::new(crate::disk_watch::StatvfsProbe));
+        // 付記 A4: warn の通知に載せる大きい target は、作業場所・scratch・共有 target から測る。
+        let census = crate::disk_watch::FsTargetCensus {
+            workspace_root: self.config.workspace_root.clone(),
+            scratch_targets: self
+                .scratch_active()
+                .then(|| self.config.scratch.pool().targets_dir()),
+            build_cache_cargo: self.config.build_cache_dir.join("cargo"),
+        };
+        self.set_disk_watch_with(
+            entries,
+            Box::new(crate::disk_watch::StatvfsProbe),
+            Some(Box::new(census)),
+        );
     }
 
     /// [`Self::set_disk_watch`] の測り方を差し替える（試験は偽の使用率を返す probe を渡す）。
@@ -47,11 +68,33 @@ impl Dispatcher {
         entries: Vec<crate::disk_watch::DiskWatchEntry>,
         probe: Box<dyn crate::disk_watch::DiskProbe>,
     ) {
+        self.set_disk_watch_with(entries, probe, None);
+    }
+
+    /// [`Self::set_disk_watch`] の probe と census（付記 A4）を差し替える（試験は host を見ない偽物を渡す）。
+    pub fn set_disk_watch_with(
+        &mut self,
+        entries: Vec<crate::disk_watch::DiskWatchEntry>,
+        probe: Box<dyn crate::disk_watch::DiskProbe>,
+        census: Option<Box<dyn crate::disk_watch::TargetCensus>>,
+    ) {
         self.disk_watch = Some(crate::disk_watch::DiskWatchRunner {
             entries,
             probe,
+            census,
             last_at: None,
+            critical: false,
         });
+    }
+
+    /// 付記 A4: 最後の測定で監視している path のどれかが `critical` か（新しい coding run を起こさない）。
+    pub fn disk_watch_critical(&self) -> bool {
+        self.disk_watch.as_ref().is_some_and(|r| r.critical)
+    }
+
+    /// 付記 A4: この task の run は `critical` のあいだ止める coding run か（genre が `coding` か未指定）。
+    pub(super) fn held_by_disk_critical(&self, task: &Task) -> bool {
+        self.disk_watch_critical() && task.genre.as_deref().is_none_or(|g| g == CODING_GENRE)
     }
 
     /// tick の段 `disk_watch`（前回から 60 秒経っていれば測る。時計は注入時計）。
@@ -124,9 +167,41 @@ impl Dispatcher {
         };
         let params = self.target_sweep_params();
         let clock = DispatcherClock(SystemTime::from(self.now_utc()));
+        // 付記 A2: scratch の `<scratch>/targets` を owner 配置の root として足す。
+        let scope = self.target_sweep_scope;
+        let mut roots = params.roots.clone();
+        let mut scratch_roots = Vec::new();
+        if scope.scratch_targets && self.scratch_active() {
+            let root = self.config.scratch.pool().targets_dir();
+            if root.is_dir() {
+                if !roots.contains(&root) {
+                    roots.push(root.clone());
+                }
+                scratch_roots.push(root);
+            }
+        }
+        // Serialize scratch allocation/adoption and GC while paths are scanned and renamed.
+        let _pool_lock = if scratch_roots.is_empty() {
+            None
+        } else {
+            Some(self.config.scratch.pool().lock()?)
+        };
         self.store
             .apply_transition(task.id, Trigger::Dispatch, None)?;
-        let report = run_sweep(&params.roots, &params, mode, &clock);
+        let lookup = task_worker::scratch::StoreLookup(self.store.as_ref());
+        let mut report =
+            run_sweep_with_scratch(&roots, &scratch_roots, &params, mode, &clock, &lookup);
+        drop(_pool_lock);
+        // 付記 A3: 終わった task の作業場所に残った cargo target（build 中は残す）。
+        if scope.workspace_target_after_secs > 0 {
+            sweep_workspace_targets(
+                &mut report,
+                self.store.as_ref(),
+                &self.config.workspace_root,
+                scope.workspace_target_after_secs,
+                self.now_utc(),
+            );
+        }
         let event = report.to_event();
         // D1.5: 上限まで下げきれなければ D4 の `disk` 通知（`disk:target_sweep`）も出す。
         if report.over_cap_unresolved {

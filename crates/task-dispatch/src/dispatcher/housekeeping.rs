@@ -397,6 +397,41 @@ impl Dispatcher {
         )])
     }
 
+    /// ADR 2026-10-07-build-tmp-hygiene 付記 A1（2026-10-09）: reviewer run の adapter に、検査と同じ
+    /// `CARGO_TARGET_DIR`（[`Self::check_cargo_target_env`] の `work_unit_id = None`）を重ねる。条件に当たらない
+    /// （共有キャッシュ無効・git でない）なら env は空で、adapter をそのまま返す。重ねられない adapter で、
+    /// 先頭 repo が Rust（`Cargo.toml` がある）なら警告する。
+    pub(super) fn with_review_cargo_env(
+        &self,
+        task: &Task,
+        adapter: Arc<dyn WorkerAdapter>,
+    ) -> (Arc<dyn WorkerAdapter>, Option<PathBuf>) {
+        let env = self.check_cargo_target_env(task, None);
+        if env.set.is_empty() {
+            return (adapter, None);
+        }
+        match adapter.with_env(&env.set) {
+            Some(wrapped) => {
+                let target = env
+                    .set
+                    .iter()
+                    .find(|(k, _)| k == "CARGO_TARGET_DIR")
+                    .map(|(_, v)| PathBuf::from(v));
+                (wrapped, target)
+            }
+            None => {
+                let rust = self
+                    .task_workspaces_for(task)
+                    .and_then(|ws| ws.repos.first().map(|r| r.dir.join("Cargo.toml").is_file()))
+                    .unwrap_or(false);
+                if rust {
+                    tracing::warn!(task_id = %task.id, adapter = %adapter.id(), "reviewer adapter does not support with_env; CARGO_TARGET_DIR was not applied (ADR 2026-10-07-build-tmp-hygiene A1)");
+                }
+                (adapter, None)
+            }
+        }
+    }
+
     /// ADR-0074 F5-fix（不具合 1）: 終端（done / cancelled / superseded）になった WU の target
     /// （`<build_cache_dir>/cargo/<repo-key>/wu-<id>`）を消す。消す前に同じ親の中で
     /// `.deleting-wu-<id>` へ rename し（この tick のうちにパスから消える）、中身の削除は別スレッドで
@@ -433,6 +468,11 @@ impl Dispatcher {
                 };
                 match self.store.work_unit_get(id) {
                     Ok(Some(row)) if row.status.is_terminal() => {
+                        let Some(_cargo_locks) =
+                            task_worker::workspace_targets::try_lock_target(&entry.path())
+                        else {
+                            continue;
+                        };
                         let trash = repo.path().join(format!(".deleting-{name}"));
                         match std::fs::rename(entry.path(), &trash) {
                             Ok(()) => {
@@ -498,6 +538,16 @@ impl Dispatcher {
                     self.task_workspaces.remove(&id);
                 }
                 Some(Status::Cancelled) => {
+                    let (targets, _) = task_worker::workspace_targets::task_targets(
+                        &self.config.workspace_root.join(id.to_string()),
+                    );
+                    let locks: Option<Vec<_>> = targets
+                        .iter()
+                        .map(|p| task_worker::workspace_targets::try_lock_target(p))
+                        .collect();
+                    let Some(_locks) = locks else {
+                        continue;
+                    };
                     let Some(workspaces) = self.task_workspaces.remove(&id) else {
                         continue;
                     };

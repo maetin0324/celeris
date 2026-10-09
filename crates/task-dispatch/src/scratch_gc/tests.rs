@@ -39,6 +39,29 @@ fn gc_dry_run_lists_without_removing_and_execute_renames() {
     )
     .unwrap();
     scratch::release(&pool, &owner).unwrap();
+    let profile = pool.target_dir(&owner).join("debug");
+    std::fs::create_dir_all(&profile).unwrap();
+    let lock_path = profile.join(".cargo-lock");
+    std::fs::write(&lock_path, "").unwrap();
+    let held = nix::fcntl::Flock::lock(
+        std::fs::File::open(&lock_path).unwrap(),
+        nix::fcntl::FlockArg::LockExclusiveNonblock,
+    )
+    .unwrap();
+    let locked = run_gc(
+        &s,
+        &[],
+        &NoDb,
+        false,
+        &HashMap::new(),
+        0,
+        false,
+        &BTreeSet::new(),
+        false,
+    );
+    assert!(locked.executed.unwrap().removed.is_empty());
+    assert!(pool.target_dir(&owner).exists());
+    drop(held);
     let run = run_gc(
         &s,
         &[],

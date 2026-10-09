@@ -335,6 +335,11 @@ pub fn execute(pool: &Pool, plan: &GcPlan, scan: &Scan, emergency: bool) -> Exec
     };
     let now = SystemTime::now();
     for pick in &plan.selected {
+        // A terminal task can still have an external cargo holding its target.
+        let Some(_cargo_locks) = task_worker::workspace_targets::try_lock_target(&pick.path) else {
+            tracing::debug!(path = %pick.path.display(), "scratch: cargo is building; keeping target");
+            continue;
+        };
         let flat = match &pick.owner {
             Some(o) => o.flat(),
             None => pick

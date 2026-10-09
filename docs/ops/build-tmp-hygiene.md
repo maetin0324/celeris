@@ -50,6 +50,8 @@ max_age_days = 7                     # 最後に使ってからこの日数を�
 max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
 target_ratio = 0.8
 stale_target_days = 14               # どの profile も使われていない target dir ごと消す
+scratch_targets = true              # scratch の終端 task（WU 含む）を root に追加
+workspace_target_after_hours = 6    # workspace 内の cargo target の猶予（0 は無効）
 
 # ディスク監視（省略すると下の 3 つ。止めるなら [maintenance] に disk_watch = []）
 [[maintenance.disk_watch]]
@@ -155,3 +157,13 @@ df -h /tmp
 - 掃除を止める: `cron pause target-sweep`。config の `[maintenance.target_sweep]` を消せば既定値に戻る。
 - 監視を止める: `[maintenance]` に `disk_watch = []` を書いて再起動。
 - 掃除で消えたものは cargo が次の build で作り直す（データの損失は無い）。
+
+## 2026-10-09: workspace target 対策の運用
+
+通常 worker・WorkUnit・子 task に加え、reviewer も対象 task の `CARGO_TARGET_DIR` を使う。scratch 有効時は `<scratch>/targets/task-<id>[/wu-<id>]/target`。既存の `shared_build_cache = false` と remote/container の除外は維持する。
+
+配送後、人が §3 の cron を `dry_run` で手動発火する。CLI 単独の `target sweep` は DB を見ないため、scratch の task 状態判定と workspace 掃除を含まない。保守 task の `TargetSweepRan` で scratch root と workspace root、`build_in_progress`・`active_or_unknown_owner` を確認してから、§3 の `apply` と `resume` を行う。
+
+workspace の対象は終端（done/cancelled/failed）から既定 6 時間経過した task の cargo target。非終端、running run のある task、Cargo lock 中、symlink は残す。ソース・成果物は保持する。scratch sweep も非終端・不明・外部 owner を残すため、上限まで回収できない場合がある。
+
+warn の通知には大きい target 上位 5 件の path と実使用量を載せる。critical では新しい coding run とそのレビュー・検査を保留し、使用率が critical 閾値から 5 ポイント下がった測定で再開する。実行中 run は中断しない。`min_free_disk_mb` による従来の停止も有効。cron の掃除は critical 中も実行できる（ただし `min_free_disk_mb` による全体停止中は既存の制約どおり）。

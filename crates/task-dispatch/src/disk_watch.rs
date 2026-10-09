@@ -3,11 +3,12 @@
 //! config `[[maintenance.disk_watch]]` の path（既定 `/`・`/local`・`/tmp`）の使用率を 60 秒ごとに
 //! `statvfs`（注入できる [`DiskProbe`]）で測り、`warn_pct`（既定 80%）以上で通知（ADR-0133 `NoticeKind::Disk`、
 //! group_key `disk:<path>`）、`critical_pct`（既定 95%）以上で受信箱（`disk_full`。`disk_watch_state` の
-//! `critical` の行から派生）に出す。**LLM は呼ばない。** run は止めない（止めるのは ADR-0074 の
-//! `min_free_disk_mb`）。
+//! `critical` の行から派生）に出す。**LLM は呼ばない。** 付記 A4（2026-10-09）: `warn` の通知には大きい
+//! target の上位を載せ（[`TargetCensus`]）、`critical` のあいだは新しい coding run を起こさない
+//! （ADR-0074 の `min_free_disk_mb` は全体の停止のまま）。
 //!
 //! - 状態は SQLite の `disk_watch_state`（[`task_core::DiskWatchStore`]）。daemon のメモリに持つのは
-//!   測る間隔の時刻だけ。
+//!   測る間隔の時刻と直近の critical 判定。
 //! - 通知・受信箱は **level が上がったとき**だけ作る。`critical` への遷移は受信箱だけ（ADR-0133 D1.5「1 出来事 →
 //!   ちょうど 1 経路」）。同じ `warn` が続くあいだは 24 時間ごとに 1 回だけ再通知（未読の束の `count` が増える）。
 //! - level を下げるのは、しきい値より [`HYSTERESIS_PCT`] ポイント下回ったとき。
@@ -99,6 +100,81 @@ impl DiskProbe for StatvfsProbe {
             bavail: stat.blocks_available(),
         })
     }
+}
+
+/// 付記 A4（2026-10-09）: `warn` の通知に載せる「大きい target の上位」の数。
+pub const TOP_TARGETS: usize = 5;
+
+/// 付記 A4: 大きい cargo target を測る口（試験は固定の一覧を返す実装を注入し、host のディスクを見ない）。
+pub trait TargetCensus: Send {
+    /// 大きい順（同じ大きさは path 順）に最大 `limit` 件の `(path, bytes)`。
+    fn largest(&self, limit: usize) -> Vec<(PathBuf, u64)>;
+}
+
+/// 本物の測り方: 作業場所の cargo target（`<workspace_root>/<task>/repos/<repo>/target`）、scratch の owner
+/// （`<scratch>/targets/<owner>`）、`<build_cache_dir>/cargo` の直下を `st_blocks × 512` で測る。
+/// 測るのは通知を作るときだけ（24 時間に 1 回程度）。
+pub struct FsTargetCensus {
+    pub workspace_root: PathBuf,
+    pub scratch_targets: Option<PathBuf>,
+    pub build_cache_cargo: PathBuf,
+}
+
+fn child_dirs(dir: &Path) -> Vec<PathBuf> {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    rd.flatten()
+        .filter(|e| !e.file_name().to_string_lossy().starts_with('.'))
+        .map(|e| e.path())
+        .filter(|p| {
+            std::fs::symlink_metadata(p)
+                .map(|m| m.file_type().is_dir())
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
+impl TargetCensus for FsTargetCensus {
+    fn largest(&self, limit: usize) -> Vec<(PathBuf, u64)> {
+        let mut dirs: Vec<PathBuf> = Vec::new();
+        for task in child_dirs(&self.workspace_root) {
+            dirs.extend(task_worker::workspace_targets::task_targets(&task).0);
+        }
+        if let Some(scratch) = &self.scratch_targets {
+            dirs.extend(child_dirs(scratch));
+        }
+        dirs.extend(child_dirs(&self.build_cache_cargo));
+        let sized: Vec<(PathBuf, u64)> = dirs
+            .into_iter()
+            .map(|d| {
+                let bytes = task_worker::workspace_targets::tree_bytes(&d);
+                (d, bytes)
+            })
+            .collect();
+        top_targets(sized, limit)
+    }
+}
+
+/// 大きい順（同じ大きさは path 順）に `limit` 件。
+pub fn top_targets(mut sized: Vec<(PathBuf, u64)>, limit: usize) -> Vec<(PathBuf, u64)> {
+    sized.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    sized.truncate(limit);
+    sized
+}
+
+/// 通知の本文に足す「大きい target」の文（無ければ空）。
+pub fn top_targets_text(top: &[(PathBuf, u64)]) -> String {
+    const GIB: f64 = (1u64 << 30) as f64;
+    if top.is_empty() {
+        return String::new();
+    }
+    let list = top
+        .iter()
+        .map(|(p, b)| format!("{}（{:.1} GiB）", p.display(), *b as f64 / GIB))
+        .collect::<Vec<_>>()
+        .join("、");
+    format!(" 大きい target: {list}。")
 }
 
 /// `prev`（`Unavailable` は `Ok` として扱う）から使用率 `pct` での level。上げるのはしきい値以上で即時、
@@ -347,6 +423,19 @@ pub fn run_disk_watch(
     entries: &[DiskWatchEntry],
     now: OffsetDateTime,
 ) -> Result<Vec<DiskWatchOutcome>, StoreError> {
+    run_disk_watch_with(store, probe, None, entries, now)
+}
+
+/// [`run_disk_watch`] に付記 A4 の census を足したもの。`warn` の通知（初回・再通知）を作るときだけ census で
+/// 大きい target の上位 [`TOP_TARGETS`] 件を測り、本文に足す（1 回の測定で複数 path が warn なら 1 回だけ測る）。
+pub fn run_disk_watch_with(
+    store: &dyn DiskWatchStore,
+    probe: &dyn DiskProbe,
+    census: Option<&dyn TargetCensus>,
+    entries: &[DiskWatchEntry],
+    now: OffsetDateTime,
+) -> Result<Vec<DiskWatchOutcome>, StoreError> {
+    let mut top: Option<String> = None;
     let states = store.disk_watch_states()?;
     let mut out = Vec::with_capacity(entries.len());
     for entry in entries {
@@ -361,7 +450,11 @@ pub fn run_disk_watch(
         {
             tracing::warn!(path = %key, %reason, "disk watch: path unavailable");
         }
-        let step = evaluate(prev, entry, reading, now);
+        let mut step = evaluate(prev, entry, reading, now);
+        if let (Some(notice), Some(census)) = (step.notice.as_mut(), census) {
+            let text = top.get_or_insert_with(|| top_targets_text(&census.largest(TOP_TARGETS)));
+            notice.summary.push_str(text);
+        }
         let notice = match &step.write {
             Some(state) => store.disk_watch_apply(state, step.notice.as_ref())?,
             None => None,
@@ -393,7 +486,11 @@ pub fn run_disk_watch(
 pub(crate) struct DiskWatchRunner {
     pub(crate) entries: Vec<DiskWatchEntry>,
     pub(crate) probe: Box<dyn DiskProbe>,
+    /// 付記 A4: `warn` の通知に大きい target を載せる census（無ければ載せない）。
+    pub(crate) census: Option<Box<dyn TargetCensus>>,
     pub(crate) last_at: Option<OffsetDateTime>,
+    /// 付記 A4: 最後の測定で、どれかの path が `critical` だったか（新しい coding run を止める）。
+    pub(crate) critical: bool,
 }
 
 impl DiskWatchRunner {
@@ -411,8 +508,27 @@ impl DiskWatchRunner {
             return None;
         }
         self.last_at = Some(now);
-        match run_disk_watch(store, self.probe.as_ref(), &self.entries, now) {
-            Ok(out) => Some(out),
+        match run_disk_watch_with(
+            store,
+            self.probe.as_ref(),
+            self.census.as_deref(),
+            &self.entries,
+            now,
+        ) {
+            Ok(out) => {
+                let critical = out.iter().any(|o| o.level == DiskLevel::Critical);
+                if critical != self.critical {
+                    if critical {
+                        tracing::warn!(
+                            "disk watch: critical; new coding runs are held (ADR 2026-10-07-build-tmp-hygiene A4)"
+                        );
+                    } else {
+                        tracing::info!("disk watch: below critical; coding runs resume");
+                    }
+                }
+                self.critical = critical;
+                Some(out)
+            }
             Err(error) => {
                 tracing::warn!(%error, "disk watch failed");
                 None

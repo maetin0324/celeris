@@ -194,9 +194,9 @@ async fn workspace_prune_after_secs_zero_disables_pruning() {
 }
 
 /// ADR 2026-10-07-build-tmp-hygiene D4: tick の段 `disk_watch` は注入した probe と時計で 60 秒ごとに測り、
-/// warn で通知・critical で受信箱に出す。run は止めない（task は dispatch される）。
+/// warn で通知・critical で受信箱に出し、新しい coding run を保留する。
 #[tokio::test]
-async fn disk_watch_tick_phase_notifies_and_opens_inbox_without_stopping_runs() {
+async fn disk_watch_tick_phase_holds_coding_until_pressure_recovers() {
     use crate::disk_watch::{DiskProbe, DiskUsage, DiskWatchEntry};
 
     /// 使用率 = `pct` の偽の filesystem（試験の途中で値を変える）。
@@ -284,7 +284,7 @@ async fn disk_watch_tick_phase_notifies_and_opens_inbox_without_stopping_runs() 
     );
     assert_eq!(disk_notices().len(), 1, "critical goes to the inbox only");
 
-    // 監視は run を止めない。
+    // critical 中は attempts を消費せず ready に留める。
     let task = new_task(
         dir.path(),
         Check::Command {
@@ -294,5 +294,43 @@ async fn disk_watch_tick_phase_notifies_and_opens_inbox_without_stopping_runs() 
         0,
     );
     store.insert(&task).unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    let held = store.get(task.id).unwrap().unwrap();
+    assert_eq!(held.status, Status::Ready);
+    assert_eq!(held.attempts, task.attempts);
+    assert!(d.disk_watch_critical());
+    let mut conversation = task.clone();
+    conversation.genre = Some("conversation".into());
+    assert!(!d.held_by_disk_critical(&conversation));
+    let review = new_task(dir.path(), Check::Reviewer, 0);
+    store.insert(&review).unwrap();
+    store
+        .apply_transition(review.id, Trigger::Dispatch, None)
+        .unwrap();
+    store
+        .apply_transition(review.id, Trigger::WorkerDone, None)
+        .unwrap();
+    assert!(
+        !d.spawn_review(
+            review.id,
+            "test-review".into(),
+            &ReviewSubject {
+                summary: "ok".into(),
+                evidence: vec![]
+            }
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        store.get(review.id).unwrap().unwrap().status,
+        Status::Reviewing
+    );
+    // Remove this fixture from scheduling before testing the held worker's recovery.
+    store
+        .apply_transition(review.id, Trigger::ReviewPass, None)
+        .unwrap();
+    *pct.lock().unwrap() = 89;
+    *clock.lock().unwrap() += time::Duration::seconds(60);
     assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert!(!d.disk_watch_critical());
 }

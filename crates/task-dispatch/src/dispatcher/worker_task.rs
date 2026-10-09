@@ -592,6 +592,17 @@ pub(super) async fn run_worker(
         permission_mode: planner_permission_mode.clone(),
     };
     let (adapter, env_applied) = prepare_run_adapter(adapter, &prep, task_id);
+    // ADR 2026-10-07-build-tmp-hygiene 付記 A1（2026-10-09）: Rust の repo（`Cargo.toml`）で env を重ねられなければ
+    // cargo は作業場所に `target/` を作る。黙らせず警告する。
+    if !env_applied
+        && prep.env.is_some()
+        && worktree
+            .as_ref()
+            .and_then(|wt| wt.repos.first())
+            .is_some_and(|r| r.dir.join("Cargo.toml").is_file())
+    {
+        tracing::warn!(task_id = %task_id, adapter = %adapter.id(), "adapter does not support with_env; CARGO_TARGET_DIR was not applied to a Rust repository (ADR 2026-10-07-build-tmp-hygiene A1)");
+    }
     if env_applied {
         req.cargo_target_dir = target.map(|(dir, _)| dir);
     }

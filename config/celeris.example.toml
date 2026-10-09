@@ -693,19 +693,21 @@ mode = "apply"                       # 'dry_run' | 'apply'
 objective = "共有 cargo target の定期掃除（ADR 2026-10-07-build-tmp-hygiene D1.4）。daemon の決定的な保守 executor が実行する（LLM なし）。"
 
 # ADR 2026-10-07-build-tmp-hygiene D1.1・D1.2: 共有 cargo target の掃除の対象と上限（cron の target-sweep と
-# `celerisctl target sweep` の `--root` 省略時が読む）。値は既定値。`roots` を省略すると
+# daemon の保守 executor が読む）。値は既定値。`roots` を省略すると
 # `<[workspace].build_cache_dir>/cargo` と `/var/tmp/agent-platform-build` の 2 つ。scratch pool の
-# lease（release-build 等）の target は roots に入れない。
+# task target は scratch_targets = true で自動追加（外部 lease は対象外）。
 [maintenance.target_sweep]
 # roots = ["~/.local/celeris/build-cache/cargo", "/var/tmp/agent-platform-build"]
 max_age_days = 7                     # 最後に使ってからこの日数を過ぎた項目を消す
 max_bytes_per_root = 128849018880    # 120 GiB。超えたら古い順に target_ratio まで下げる
 target_ratio = 0.8
 stale_target_days = 14               # どの profile も使われていない target dir ごと消す
+scratch_targets = true              # scratch の終端 task の target も対象
+workspace_target_after_hours = 6    # 終端 task の workspace target を消す（0 で無効）
 
 # ADR 2026-10-07-build-tmp-hygiene D4: ディスク使用率の監視。dispatcher の tick が 60 秒ごとに statvfs で測り、
 # warn_pct 以上で通知（種類 disk）、critical_pct 以上で受信箱（disk_full）に出す。level が上がったときだけ作り、
-# しきい値より 5 ポイント下がると解除。run は止めない（止めるのは min_free_disk_mb）。
+# しきい値より 5 ポイント下がると解除。critical 中は新規 coding run・そのレビューを保留（min_free_disk_mb も引き続き有効）。
 # 省略すると下の 3 つ（値は既定値）。`disk_watch = []`（[maintenance] の下）で監視しない。
 [[maintenance.disk_watch]]
 path = "/"

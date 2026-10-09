@@ -292,6 +292,9 @@ impl Dispatcher {
         if task.status != Status::Reviewing {
             return Ok(true);
         }
+        if self.held_by_disk_critical(&task) {
+            return Ok(false);
+        }
         let Some(dir) = self.task_dir(&task) else {
             tracing::warn!(%task_id, "cannot review task with remote workspace");
             return Ok(true);
@@ -1219,10 +1222,14 @@ impl Dispatcher {
                 record: Box::new(review_record),
             },
         );
+        // ADR 2026-10-07-build-tmp-hygiene 付記 A1（2026-10-09）: reviewer は反証の self-execution で cargo を
+        // 走らせうる。run・検査と同じ `CARGO_TARGET_DIR`（対象 task の owner）を重ね、作業場所に target を作らせない。
+        let (adapter, cargo_target_dir) = self.with_review_cargo_env(task, adapter);
         Some((
             provider_id,
             selected_account,
             ReviewerRun {
+                cargo_target_dir,
                 node,
                 profile,
                 skills,

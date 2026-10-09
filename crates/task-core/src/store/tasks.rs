@@ -802,7 +802,7 @@ impl SqliteStore {
                 return Err(StoreError::Invalid("project attachment requires an unstarted draft/ready or lease-free blocked task without a project".into()));
             }
             if let Some(parent_id) = current.parent_id
-                && let Some(parent) = Self::get_locked(&tx, parent_id)?
+                && let Some(parent) = Self::get_locked(tx, parent_id)?
                 && parent.project_id.is_some()
                 && parent.project_id != task.project_id
             {

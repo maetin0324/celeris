@@ -2468,3 +2468,24 @@ fn replan_skips_a_done_delivery_repair_unit_without_a_phase() {
     assert!(daemon_added_key_errors(&validated.spec, &v2.spec, &[retired]).is_empty());
     assert!(DAEMON_ADDED_HINT.contains("配送"));
 }
+
+/// 持ち越しの done の unit には文字数の上限を掛けない。上限より長い objective で記録された done の unit
+/// （暗黙の WU を task の objective のまま実体化したもの）を持つ task でも replan が通る（2026-10-09 本番
+/// task 01M4F5KS8E）。done の写しでない unit の長すぎる objective は従来どおり拒む。
+#[test]
+fn carried_done_unit_is_exempt_from_text_size_limits() {
+    let mut p = v3_fixture();
+    p.units[0].objective = "x".repeat(ExecutionLimits::default().max_objective_chars + 500);
+    let key = p.units[0].key.clone();
+    let done = [(key.clone(), p.units[0].to_work_unit_spec())];
+    validate_with(&p, tree_on(), &done, ctx(PlanOrigin::Planner))
+        .expect("a verbatim done carry-over keeps its long objective");
+
+    let errs = validate_with(&p, tree_on(), &[], ctx(PlanOrigin::Planner)).unwrap_err();
+    assert!(
+        errs.iter().any(
+            |e| matches!(e, PlanValidationError::ObjectiveTooLong { key: k, .. } if *k == key)
+        ),
+        "{errs:?}"
+    );
+}

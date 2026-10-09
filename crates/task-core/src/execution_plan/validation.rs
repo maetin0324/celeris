@@ -759,6 +759,19 @@ fn is_done_carry_over(unit: &PlanUnitSpec, done_work_units: &[(String, WorkUnitS
         .any(|(k, s)| *k == unit.key && same_except_checks(s, &unit.to_work_unit_spec()))
 }
 
+/// 持ち越しの done の WU（spec が done の spec と `checks` の他は同じ）か。大きさの上限（title・objective・
+/// done_when）は新しく書く WU のためのもので、持ち越しの done の WU には掛けない。掛けると、上限より長い
+/// objective で記録された done の WU（例: 暗黙の WU を task の objective のまま実体化したもの）を持つ task は、
+/// done の WU を変えられないので、どの replan も必ず拒まれる（2026-10-09 本番 task 01M4F5KS8E）。
+fn is_unchanged_done_work_unit(
+    wu: &WorkUnitSpec,
+    done_work_units: &[(String, WorkUnitSpec)],
+) -> bool {
+    done_work_units
+        .iter()
+        .any(|(k, s)| *k == wu.key && same_except_checks(s, wu))
+}
+
 /// ADR-0079 付記「R7-3」D1: 2 つの WU の spec が `checks` の他は同じか。
 pub fn same_except_checks(a: &WorkUnitSpec, b: &WorkUnitSpec) -> bool {
     let mut b = b.clone();
@@ -1108,6 +1121,17 @@ pub fn validate_with(
         });
     }
     for wu in &spec.work_units {
+        if wu.checks.len() > limits.max_checks {
+            errors.push(PlanValidationError::TooManyChecks {
+                key: wu.key.clone(),
+                count: wu.checks.len(),
+                max: limits.max_checks,
+            });
+        }
+        // 持ち越しの done の WU は文字数の上限を掛けない（`checks` の数は planner が書き換えられるので掛ける）。
+        if is_unchanged_done_work_unit(wu, done_work_units) {
+            continue;
+        }
         let title_len = wu.title.chars().count();
         if title_len > limits.max_title_chars {
             errors.push(PlanValidationError::TitleTooLong {
@@ -1141,13 +1165,6 @@ pub fn validate_with(
                     max: limits.max_done_when_chars,
                 });
             }
-        }
-        if wu.checks.len() > limits.max_checks {
-            errors.push(PlanValidationError::TooManyChecks {
-                key: wu.key.clone(),
-                count: wu.checks.len(),
-                max: limits.max_checks,
-            });
         }
     }
     let plan_bytes = serde_json::to_vec(spec).map(|v| v.len()).unwrap_or(0);
@@ -1663,6 +1680,17 @@ fn validate_v3(
         });
     }
     for wu in &internal.work_units {
+        if wu.checks.len() > limits.max_checks {
+            errors.push(PlanValidationError::TooManyChecks {
+                key: wu.key.clone(),
+                count: wu.checks.len(),
+                max: limits.max_checks,
+            });
+        }
+        // 持ち越しの done の WU は文字数の上限を掛けない（`checks` の数は planner が書き換えられるので掛ける）。
+        if is_unchanged_done_work_unit(wu, done_work_units) {
+            continue;
+        }
         let title_len = wu.title.chars().count();
         if title_len > limits.max_title_chars {
             errors.push(PlanValidationError::TitleTooLong {
@@ -1696,13 +1724,6 @@ fn validate_v3(
                     max: limits.max_done_when_chars,
                 });
             }
-        }
-        if wu.checks.len() > limits.max_checks {
-            errors.push(PlanValidationError::TooManyChecks {
-                key: wu.key.clone(),
-                count: wu.checks.len(),
-                max: limits.max_checks,
-            });
         }
     }
     // ADR-0079 R7-2: /3 は `max_plan_json_bytes_v3`（既定 64 KiB）で測る。

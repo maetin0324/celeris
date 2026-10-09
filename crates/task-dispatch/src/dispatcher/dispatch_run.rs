@@ -1184,7 +1184,7 @@ impl Dispatcher {
             }
             let reason = if self.account_pool_providers.contains(provider)
                 || self
-                    .implicit_account_limit(provider)
+                    .implicit_account_limit(&self.implicit_source_of(provider))
                     .is_none_or(|(limit, _)| limit == 0)
             {
                 Some("disabled")

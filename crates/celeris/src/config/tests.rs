@@ -4599,6 +4599,9 @@ fn legacy_provider_concurrency_is_optional_and_warns_including_zero_and_include(
     }
     assert!(!log.contains("provider omitted:"), "{log}");
     assert!(log.contains("ignored for account pools"), "{log}");
+    // 非プール行の警告は上限の持ち主（その行の LLM source の暗黙アカウント）を指す。fake 行の source は `none`。
+    assert!(log.contains("ignored; the limit is the max_runs"), "{log}");
+    assert!(log.contains("(implicit/none)"), "{log}");
     assert_eq!(
         cfg.providers
             .iter()

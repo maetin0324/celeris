@@ -132,7 +132,7 @@ cheap lane の worker run は、アカウントプール（`claude-pool`・`code
 | 項目 | 内容 |
 | --- | --- |
 | ローカルの行 | `account_pool` が無く、`tiers` に cheap を含み、実効 `llm_source` が `openai_compatible:<id>`（本番の `opencode-qwen`）か、`celeris` で proxy に有効な `openai_compatible` source と `[llm_proxy.models.qwen].cheap` がある行。`paperqa`・`local-deep-research`・`langmem` の行は含めない |
-| 同時実行数 | その行の暗黙アカウント `implicit/<行の id>` の実効上限（ADR 2026-10-08 account-concurrency-limits）。保存値が無ければ旧 `[[providers]].concurrency` を引き継ぐ。GPU 1 枚の Qwen は 1 のままにする（アカウント画面で設定。[下の節](#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)） |
+| 同時実行数 | その行の LLM source の暗黙アカウント `implicit/<llm source id>` の実効上限（ADR 2026-10-08 account-concurrency-limits §(e)。同じ source を使う行は 1 件を共有する）。保存値が無ければ `[accounts] max_runs_per_account`（旧 `[[providers]].concurrency` は引き継がない）。GPU 1 枚の Qwen は 1 のままにする（アカウント画面で設定。[下の節](#プロバイダの-concurrency-を外し同時実行数をアカウントで管理する)） |
 | health | `GET <source の base_url>/models`（本番は `http://127.0.0.1:18000/v1/models`）。時間切れ 3 秒、結果は 60 秒キャッシュ。LLM は呼ばない |
 | プールに倒す条件 | ローカルの行が満杯・不通・cooldown 中・その仕事の adapter 指定に合わない |
 | 変わらないもの | standard / frontier、reviewer run、CoS の対話 run、継続セッション |
@@ -216,7 +216,7 @@ Qwen を非 cheap tier に戻すことはない。戻した後も providers API�
 | --- | --- | --- |
 | `[[providers]].concurrency` | 行の同時実行数の上限 | deprecated。読めるが dispatch では使わない。読み込むたびに行ごとに警告が出る |
 | プール行（`account_pool = true`） | 行の `concurrency` と各アカウントの `max_runs_per_account` の両方で止まる | 各アカウントの実効上限（`effective_max_runs`）だけで止まる |
-| 非プール行（本番の `opencode-qwen`・`pi-qwen`・`ldr-qwen`・`paperqa-qwen`・`langmem-main`） | 行の `concurrency` | 行の**暗黙アカウント** `implicit/<行の id>` の実効上限。保存値が無ければ `max_runs_per_account`（既定 2）。旧 `concurrency` は使わない |
+| 非プール行（本番の `opencode-qwen`・`pi-qwen`・`ldr-qwen`・`paperqa-qwen`・`langmem-main`） | 行の `concurrency` | その行の LLM source の**暗黙アカウント** `implicit/<llm source id>` の実効上限（同じ source を使う行は 1 件を共有する）。保存値が無ければ `max_runs_per_account`（既定 2）。旧 `concurrency` は使わない |
 | `[accounts] max_runs_per_account` | 全アカウント共通の上限 | 保存値の無いアカウントの既定値（変更には再起動が要る。従来どおり） |
 | アカウントごとの上限 | 無い | アカウント画面か `PATCH /api/v1/accounts/{adapter}/{id}` で即時に設定（DB に保存） |
 
@@ -272,8 +272,9 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/accounts" \
 
 期待:
 
-- 非プール行ごとに `implicit	<行の id>	<行の id>	null	2	default` の行がある（既定 2。`[accounts]` が無ければ 2）。
-  本番の Qwen 行（`opencode-qwen`・`pi-qwen`）は、新リリースに入れ替えた直後なら `effective_max_runs = 2`・`max_runs_source = default` になる
+- 非プール行の LLM source ごとに `implicit	<llm source id>	<llm source id>	null	2	default` の行がある（既定 2。`[accounts]` が無ければ 2）。
+  `providers` の欄にその source を使う行の id が出る（本番の Qwen 行は `opencode-qwen`・`pi-qwen` 等が同じ `openai_compatible:qwen` の 1 件にまとまる）。
+  本番の Qwen 行は、新リリースに入れ替えた直後なら `effective_max_runs = 2`・`max_runs_source = default` になる
   （config の `concurrency = 1` は効かない）。手順 3 で保存すると `1`・`account` に変わる。
   既に `max_runs` が保存されている行は `max_runs_source = account` になり、保存値が優先される。
   確認のために保存値を解除せず、控えと現在の `effective_max_runs` を照合する。
@@ -289,19 +290,23 @@ journalctl --user -u 'celeris@<現在のリリース>.service' --since today --n
 GUI の「アカウント」画面で各アカウント（「暗黙アカウント」の印が付いた行を含む）の上限を編集して保存する。API で行う場合:
 
 ```sh
-# 暗黙アカウント: GPU 1 枚の Qwen 行は 1 本に保つ（config から concurrency を消しても 1 のまま）
+# 暗黙アカウント: GPU 1 枚の Qwen は 1 本に保つ（config から concurrency を消しても 1 のまま）。
+# id は行の id ではなく LLM source。同じ source を使う行（opencode-qwen・pi-qwen・ldr-qwen・paperqa-qwen）は
+# この 1 件でまとめて止まるので、PATCH は source ごとに 1 回でよい。
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"max_runs": 1}' "$API/accounts/implicit/opencode-qwen" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
+  -d '{"max_runs": 1}' "$API/accounts/implicit/openai_compatible:qwen" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
+# langmem-main のように source が celeris の行（同じ source を使う他の非プール行と 1 件を共有する）
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-  -d '{"max_runs": 1}' "$API/accounts/implicit/pi-qwen" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
+  -d '{"max_runs": 1}' "$API/accounts/implicit/celeris" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
 # 実アカウント: プールの同時数を旧 concurrency に近づけたいときだけ（例: opencode-go のアカウントを 1 本に）
 curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"max_runs": 1}' "$API/accounts/opencode-go/<アカウント id>" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
 ```
 
+- 自分の構成の source id は `GET /accounts` の暗黙アカウントの `id` と `providers` で確認する（行の id では引けない）。
 - 応答の `max_runs_source` が `account` になっていればよい。値は 1〜32。反映は次の tick からで、再起動も reload も要らない。
-- 旧 `concurrency` と同じ上限を残したい非プール行（`ldr-qwen`・`paperqa-qwen`・`langmem-main` 等）も、同じく `max_runs` を保存する。
-  保存しない行は手順 4 の後で `max_runs_per_account`（本番は 2）に変わる。旧値と異なる場合は、その変更を意図していることを確認する。
+- 旧 `concurrency` と同じ上限を残したい非プール行も、その source の暗黙アカウントに `max_runs` を保存する。
+  保存しない source は手順 4 の後で `max_runs_per_account`（本番は 2）に変わる。旧値と異なる場合は、その変更を意図していることを確認する。
 - プール行の目安: 旧 `claude-pool` の `concurrency = 4` を保ちたいなら、Claude アカウントの `effective_max_runs` の和を 4 にする。
   下げても走っている run は止まらない（`in_use` が下がるまで新しい run が待つ）。
 
@@ -352,7 +357,7 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/providers" | jq -r '.items[] |
 
 期待:
 
-- Qwen の暗黙アカウントが `effective_max_runs = 1`（`max_runs_source = account`）。
+- Qwen の暗黙アカウント（`implicit/openai_compatible:qwen`。`providers` に `opencode-qwen`・`pi-qwen` 等が出る）が `effective_max_runs = 1`（`max_runs_source = account`）。
 - 保存値の無いアカウントは `max_runs_source = default`、`effective_max_runs` が `max_runs_per_account`。
 - `grep -c` が `0`（一致が無いため grep の exit は 1）。journalctl 自体が成功していることも確かめる。
 - 数分後、`in_use` が各アカウントの `effective_max_runs` を超えていない（CoS run を含めると実アカウントは +1 まで）。
@@ -366,12 +371,12 @@ curl -fsS -H "Authorization: Bearer $TOKEN" "$API/providers" | jq -r '.items[] |
 
   ```sh
   curl -fsS -X PATCH -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
-    -d '{"max_runs": null}' "$API/accounts/implicit/opencode-qwen" | jq '{id, max_runs, effective_max_runs, max_runs_source}'
+    -d '{"max_runs": null}' "$API/accounts/implicit/openai_compatible:qwen" | jq '{id, providers, max_runs, effective_max_runs, max_runs_source}'
   ```
 
   即時に効く。解除後は GET の実効上限を再確認する。暗黙アカウントは保存値が無ければ `default`（`max_runs_per_account`）に戻る。旧 `concurrency` は上限に効かない。
 - **config を戻す**: 手順 1 の控えを元の場所に戻し（`cp -a ~/.config/celeris/config.toml.bak-account-limits-20261008 ~/.config/celeris/config.toml`、
-  `providers.d` は `cp -a ~/.config/celeris/providers.d.bak-account-limits-20261008/. ~/.config/celeris/providers.d/` で中身を戻す）、手順 4 の検査と手順 5 の reload を行う。警告ログが再び出て、保存値の無い暗黙アカウントは旧 `concurrency` を引き継ぐ。
+  `providers.d` は `cp -a ~/.config/celeris/providers.d.bak-account-limits-20261008/. ~/.config/celeris/providers.d/` で中身を戻す）、手順 4 の検査と手順 5 の reload を行う。警告ログが再び出るが、保存値の無い暗黙アカウントは旧 `concurrency` を**引き継がない**（`max_runs_per_account` になる）。
   config を外す前の挙動に戻す場合は、先に config を復元・reload してから保存値を控えの値へ戻す
   （先に保存値を解除すると、一時的に既定の上限へ変わるため）。
   プール行の `concurrency` は戻しても効かない（このリリースの仕様）。プールの同時数を絞るには、手順 3 でアカウントの `max_runs` を下げる。

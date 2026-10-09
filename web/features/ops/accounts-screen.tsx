@@ -397,7 +397,8 @@ export function AccountCard({
     />
   );
   if (item.implicit) {
-    // 暗黙アカウント（アカウントを持たない実行枠ごとに 1 件）: ログイン・確認・削除は無く、上限だけを編集する。
+    // 暗黙アカウント（LLM source ごとに 1 件。同じ source を使う行が共有する）: ログイン・確認・削除は無く、上限だけを編集する。
+    const rows = item.providers ?? [];
     return (
       <li
         className="min-w-0 space-y-3 rounded-lg border border-border bg-surface p-4"
@@ -414,12 +415,16 @@ export function AccountCard({
           )}
         </div>
         <p className="break-words text-label text-muted-foreground">
-          アカウントを持たない実行枠 {item.provider ?? item.id}{" "}
+          アカウントを持たない行の LLM source「{item.id}」{" "}
           の同時実行数をここで管理します。ログイン・確認・削除はありません。
         </p>
         <DataList
           items={[
-            { key: "provider", label: "実行枠", value: item.provider ?? item.id },
+            {
+              key: "provider",
+              label: "実行枠（この source を使う行）",
+              value: rows.length > 0 ? rows.join(", ") : item.id,
+            },
             {
               key: "state",
               label: "状態",

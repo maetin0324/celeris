@@ -1237,6 +1237,11 @@ pub struct Dispatcher {
     publisher: Option<SnapshotPublisher>,
     /// ADR-0024 D2: `account_pool = true` のプロバイダ id。`reload_providers` で差し替える。
     account_pool_providers: std::collections::HashSet<ProviderId>,
+    /// ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: provider id →
+    /// 解決済みの LLM source の文字列（`Config::provider_llm_source`）。非プール行の暗黙アカウントは
+    /// **この source 単位**（`implicit/<llm source id>`）で、同じ source を使う行は上限と in_use を共有する。
+    /// `set_provider_llm_sources` が起動時と reload で差し替える。
+    provider_llm_sources: HashMap<ProviderId, String>,
     /// 行の adapter 名と pool の adapter が一致しない行（ACP + opencode-go。ADR 2026-10-06 D3）の
     /// provider id → pool の adapter。`account_pool = "<adapter>"` と書かれた行だけが入る。
     account_pool_adapters: HashMap<ProviderId, AccountAdapter>,
@@ -1549,6 +1554,7 @@ impl Dispatcher {
             ticks: 0,
             publisher: None,
             account_pool_providers,
+            provider_llm_sources: HashMap::new(),
             account_pool_adapters: HashMap::new(),
             coding_default: CodingHarnessDefault::default(),
             account_books,
@@ -1824,6 +1830,12 @@ impl Dispatcher {
         self.account_pool_providers = account_pool_providers;
     }
 
+    /// ADR 2026-10-08 §(e): provider id → 解決済み LLM source の表を差し替える（起動時と reload で呼ぶ。
+    /// 暗黙アカウントの id がこの表から決まるので `prune_implicit_account_limits` より前に呼ぶこと）。
+    pub fn set_provider_llm_sources(&mut self, sources: HashMap<ProviderId, String>) {
+        self.provider_llm_sources = sources;
+    }
+
     /// Phase 44（実機 2026-09-18）: `POST /reload` で `[[roles]]` / `[[genres]]` / `[delegation]` も読み直す。
     /// `reload_providers` とは別トランザクション（呼び出し側が両方呼ぶ）。実行中の run はそれぞれ `spawn_worker`
     /// 時点でこれらの値の写しを既に掴んでいるので、反映されるのは**次に起動する run から**
@@ -1898,22 +1910,51 @@ impl Dispatcher {
         crate::capacity::account_run_limit(effective, cos)
     }
 
-    /// Implicit accounts (ADR 2026-10-08 §(e)): one per non-pool row, in config order.
+    /// ADR 2026-10-08 §(e)（人の決定 implicit-account）: the resolved LLM source of a row
+    /// (`Config::provider_llm_source`), i.e. the implicit account id the row runs on. Rows
+    /// without a source mapping (tests that never set one) fall back to their own id, so each
+    /// such row keeps an implicit account of its own.
+    pub(super) fn implicit_source_of(&self, provider: &str) -> ProviderId {
+        self.provider_llm_sources
+            .get(provider)
+            .cloned()
+            .unwrap_or_else(|| provider.to_owned())
+    }
+
+    /// Implicit accounts (ADR 2026-10-08 §(e)): one per LLM source used by non-pool rows,
+    /// in config order of the first row that uses it.
     pub fn implicit_account_ids(&self) -> Vec<ProviderId> {
+        let mut sources: Vec<ProviderId> = Vec::new();
+        for id in self.policy.provider_ids() {
+            if self.account_pool_providers.contains(&id) {
+                continue;
+            }
+            let source = self.implicit_source_of(&id);
+            if !sources.contains(&source) {
+                sources.push(source);
+            }
+        }
+        sources
+    }
+
+    /// Non-pool rows that run on the implicit account `<source>` (config order).
+    pub fn implicit_account_providers(&self, source: &str) -> Vec<ProviderId> {
         self.policy
             .provider_ids()
             .into_iter()
-            .filter(|id| !self.account_pool_providers.contains(id))
+            .filter(|id| {
+                !self.account_pool_providers.contains(id) && self.implicit_source_of(id) == source
+            })
             .collect()
     }
 
-    /// Effective limit of `implicit/<provider>` and where it came from. `None` when
-    /// the row is not a non-pool row of the current config or the stored limits are unreadable.
+    /// Effective limit of `implicit/<llm source id>` and where it came from. `None` when
+    /// no non-pool row of the current config uses that source or the stored limits are unreadable.
     pub fn implicit_account_limit(
         &self,
-        provider: &str,
+        source: &str,
     ) -> Option<(usize, crate::capacity::MaxRunsSource)> {
-        if self.account_pool_providers.contains(provider) {
+        if self.implicit_account_providers(source).is_empty() {
             return None;
         }
         let stored = self
@@ -1921,7 +1962,7 @@ impl Dispatcher {
             .as_ref()?
             .get(&(
                 crate::capacity::IMPLICIT_ACCOUNT_ADAPTER.to_owned(),
-                provider.to_owned(),
+                source.to_owned(),
             ))
             .copied();
         Some(crate::capacity::effective_account_limit(
@@ -1930,14 +1971,18 @@ impl Dispatcher {
         ))
     }
 
-    /// Runs counted against `implicit/<provider>` (every run on the row).
-    pub fn implicit_account_in_use(&self, provider: &str) -> usize {
-        let provider = provider.to_owned();
-        self.provider_in_use(&provider) + self.provider_in_use_cos(&provider)
+    /// Runs counted against `implicit/<llm source id>`: every run on every non-pool row that
+    /// uses the source (ordinary, CoS and provider-backed reviews).
+    pub fn implicit_account_in_use(&self, source: &str) -> usize {
+        self.implicit_account_providers(source)
+            .iter()
+            .map(|p| self.provider_in_use(p) + self.provider_in_use_cos(p))
+            .sum()
     }
 
-    /// ADR 2026-10-08 §(d): drop stored implicit limits whose non-pool row no longer
-    /// exists (row removed or turned into a pool). Called at start-up and after reload.
+    /// ADR 2026-10-08 §(d): drop stored implicit limits whose LLM source is no longer used by
+    /// any non-pool row (every row removed, turned into a pool, or moved to another source).
+    /// Called at start-up and after reload.
     pub fn prune_implicit_account_limits(&mut self) -> Result<Vec<String>, task_core::StoreError> {
         let live: std::collections::HashSet<ProviderId> =
             self.implicit_account_ids().into_iter().collect();
@@ -1954,8 +1999,8 @@ impl Dispatcher {
         for id in &stale {
             self.set_account_limit(crate::capacity::IMPLICIT_ACCOUNT_ADAPTER, id, None)?;
             tracing::info!(
-                provider = %id,
-                "implicit account limit removed: no non-pool provider row with this id"
+                llm_source = %id,
+                "implicit account limit removed: no non-pool provider row uses this LLM source"
             );
         }
         Ok(stale)
@@ -2454,20 +2499,19 @@ impl Dispatcher {
         Ok(crate::capacity::is_cos_run(task, &self.store.org_list()?))
     }
 
-    /// ADR 2026-10-08 §(e): is this non-pool row's implicit account at its limit?
+    /// ADR 2026-10-08 §(e): is this non-pool row's LLM source at its implicit account's limit?
     /// Pool rows have no implicit account (their real accounts limit them) and are never full here.
+    /// Rows that share a source share one limit and one in-use count.
     /// `extra` counts runs not yet visible in `running` (CoS chat launches in flight).
     pub(super) fn implicit_account_full(&self, provider: &ProviderId, extra: usize) -> bool {
         if self.account_pool_providers.contains(provider) {
             return false;
         }
-        let Some((limit, _)) = self.implicit_account_limit(provider) else {
+        let source = self.implicit_source_of(provider);
+        let Some((limit, _)) = self.implicit_account_limit(&source) else {
             return true;
         };
-        crate::capacity::implicit_account_full(
-            self.provider_in_use(provider) + self.provider_in_use_cos(provider) + extra,
-            limit,
-        )
+        crate::capacity::implicit_account_full(self.implicit_account_in_use(&source) + extra, limit)
     }
 
     /// ADR-0089（Phase R6-5）: そのプロバイダで走っている CoS の対話 run の数（`GET /providers` の `in_use_cos`）。

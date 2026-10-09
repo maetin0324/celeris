@@ -99,7 +99,7 @@ export type AccountView = {
   "login_pending": boolean;
   "max_runs"?: number | null;
   "max_runs_source": string;
-  "provider"?: string | null;
+  "providers"?: Array<string>;
   "score"?: number | null;
   "stats": AccountStats;
   "usage"?: AccountUsageView | null;
@@ -2963,7 +2963,8 @@ export type ImpactView = {
 
 export type ImplicitAccountLive = {
   "in_use": number;
-  "provider": string;
+  "providers"?: Array<string>;
+  "source": string;
 };
 
 export type InFlight = {

@@ -1085,7 +1085,7 @@ ADR-0017 M4: `POST /reload` に成功すると、次の tick のスナップシ�
 要求本文: `{"id": "acct-b", "adapter": "fake"|"claude-code"|"codex"|"acp"|"paperqa"|"local-deep-research", "tiers"?: [...], "concurrency"?: 1, "model"?: "", "env"?: {...}, "account_pool"?: false, "account_id"?: "…", "tier_models"?: {...}, "credential_refs"?: {...}}`
 （省略したものは `[[providers]]` と同じ既定。`tiers` は 3 tier 全部）。**`concurrency` は deprecated**（ADR 2026-10-08-account-concurrency-limits
 §(a)）: 型だけ検査し（0 は従来どおり 400）、`providers.d/<id>.toml` には**保存しない**（warn を 1 行出す）。応答の `concurrency` は 1。
-上限はアカウント画面（§3.29a。この行がプールでなければ暗黙アカウント `implicit/<id>`）で設定する。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
+上限はアカウント画面（§3.29a。この行がプールでなければ、その行の LLM source の暗黙アカウント `implicit/<llm source id>`）で設定する。`id` は 1〜64 文字の ASCII 英数字・`-`・`_`
 （`providers.d/<id>.toml` のファイル名になるため、パス区切りは拒否）。`adapter` は既知の 6 種類のみ。
 `id`・`adapter` の形が不正、`concurrency` が 0 は 400 `bad_request`。`id` が既にあれば 409 `provider_exists`。
 応答・ログとも `env` は `env_keys`（キー名だけ）で、値は一切出さない。
@@ -1198,12 +1198,13 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
      "usage": null, "score": null, "excluded_reason": "not_logged_in", "cooldown": null,
      "last_check": null, "login_pending": false,
      "stats": {"runs": 0, "done": 0, "error": 0, "input_tokens": 0, "output_tokens": 0},
-     "max_runs": 3, "effective_max_runs": 3, "max_runs_source": "account", "implicit": false, "provider": null},
-   {"adapter": "implicit", "id": "opencode-qwen", "dir": null, "logged_in": true, "in_use": 2,
+     "max_runs": 3, "effective_max_runs": 3, "max_runs_source": "account", "implicit": false, "providers": []},
+   {"adapter": "implicit", "id": "openai_compatible:qwen", "dir": null, "logged_in": true, "in_use": 2,
      "usage": null, "score": null, "excluded_reason": "at_capacity", "cooldown": null,
      "last_check": null, "login_pending": false,
      "stats": {"runs": 40, "done": 38, "error": 1, "input_tokens": 0, "output_tokens": 0},
-     "max_runs": null, "effective_max_runs": 2, "max_runs_source": "default", "implicit": true, "provider": "opencode-qwen"}]}
+     "max_runs": null, "effective_max_runs": 2, "max_runs_source": "default", "implicit": true,
+     "providers": ["opencode-qwen", "pi-qwen"]}]}
 ```
 
 （1 件目の `claude-code/a` も同じ 5 欄を持つ。例では省略した。）
@@ -1226,12 +1227,16 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
   （`in_use` / `excluded_reason` はスナップショットなので次の tick から）。
 - `max_runs_per_account` は保存値の無いアカウントの**既定**（`[accounts] max_runs_per_account`。`[accounts]` が無ければ組み込みの 2）。
   これの変更は従来どおり再起動が要る。
-- **暗黙アカウント**（§(e)）: アカウントを持たない行（`account_pool` が off。`providers.d` を含む）ごとに 1 件、`adapter = "implicit"`・
-  `id = <行の id>`・`implicit: true`・`provider: <行の id>`。実アカウントの後ろに行の設定順で並ぶ（スナップショットから作るので最初の tick 前は出ない）。
-  `dir: null`・`logged_in: true`・`usage` / `score` / `cooldown` / `last_check` は `null`。`in_use` はその行の全 run（非 CoS・CoS・レビュー）で、
-  CoS の +1 は無い（全数を `effective_max_runs` と比べ、満杯なら `excluded_reason: "at_capacity"`）。`stats` はその行の run
-  （`WorkerStarted.provider`）の集計。3.30〜3.35（作成・削除・確認・ログイン）の対象外で、行の追加・削除に追従する
-  （行を消す・プールに変えて reload / 再起動すると、その暗黙アカウントの保存値も消える。`DELETE /providers/{id}` の後も次の reload で消える）。
+- **暗黙アカウント**（§(e)）: アカウントを持たない行（`account_pool` が off。`providers.d` を含む）が使う **LLM source ごとに 1 件**、
+  `adapter = "implicit"`・`id = <llm source id>`（`celeris` / `claude_oauth` / `codex_oauth` / `opencode_go` / `openai_compatible:<source id>` /
+  `none` / `unknown`）・`implicit: true`・`providers: [その source を使う非プール行の id…]`（設定順）。同じ source を使う行は 1 件を共有する
+  （本番の `opencode-qwen` と `pi-qwen` はどちらも `openai_compatible:qwen` なので 1 件）。実アカウントの後ろに source を使い始めた行の
+  設定順で並ぶ（スナップショットから作るので最初の tick 前は出ない）。
+  `dir: null`・`logged_in: true`・`usage` / `score` / `cooldown` / `last_check` は `null`。`in_use` はその source を使う行の全 run
+  （非 CoS・CoS・レビュー）の合計で、CoS の +1 は無い（全数を `effective_max_runs` と比べ、満杯なら `excluded_reason: "at_capacity"`）。
+  `stats` は `providers` の行の run（`WorkerStarted.provider`）の集計（行をまたいで合計）。3.30〜3.35（作成・削除・確認・ログイン）の対象外で、
+  その source を使う行の有無に追従する（行を消す・プールに変える・`llm_source` を変えて reload / 再起動し、source を使う行が無くなると
+  保存値も消える。`DELETE /providers/{id}` の後も次の reload で同じ判定。他の行が同じ source を使い続けていれば保存値は残る）。
   実アカウントの `id`・`max_runs` は `(adapter, id)` ごとで、`DELETE /accounts/{id}` で保存値も消え、`POST /accounts` で作り直すと古い保存値は引き継がない。
 
 #### 3.29a `PATCH /accounts/{adapter}/{id}` → 200 `AccountView`
@@ -1242,8 +1247,8 @@ HTTP から差し替えられないようにするため。`providers.d/<id>.tom
 - 要求本文 `{"max_runs": 3}` で設定、`{"max_runs": null}` で保存値を消して既定（3.29 の `effective_max_runs` の 2・3 番目）に戻す。
   `max_runs` の欄が無い本文・未知の欄・オブジェクトでない本文・1..=32 の整数でない値（0、負数、33 以上、小数、文字列）は 400 `bad_request`。
 - `{adapter}` は `claude-code` / `codex` / `opencode-go` / `implicit`。それ以外、または `{id}` が 1〜64 文字の ASCII 英数字・`-`・`_` で
-  なければ 400 `bad_request`。
-- 存在しないアカウント（実: 根の下にディレクトリが無い。暗黙: その id の非プール行が今の設定に無い。プール行の id も含む）は 404
+  なければ 400 `bad_request`。暗黙アカウントの `{id}` は LLM source なので `openai_compatible:<source id>` の `:` だけは追加で許す。
+- 存在しないアカウント（実: 根の下にディレクトリが無い。暗黙: その source を使う非プール行が今の設定に無い。プール行の id も含む）は 404
   `account_not_found`。実アダプタの根が設定されていない構成・celeris への管理要求の経路が無い構成は 409 `accounts_unavailable`。
   暗黙アカウントは `[accounts]` が無くても編集できる。
 - **使用中でも変更できる**。下げても走っている run は止めない（新しい run が `in_use` が下がるまで待つ）。celeris が DB に書いてから

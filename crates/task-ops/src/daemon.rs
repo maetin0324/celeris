@@ -59,8 +59,9 @@ pub struct DaemonSnapshot {
     /// ADR-0024/0025: プールのアカウント（`adapter` → `id` の順、id 昇順）。`[accounts]` が無ければ空。
     #[serde(default)]
     pub accounts: Vec<AccountLive>,
-    /// ADR 2026-10-08 account-concurrency-limits §(e): アカウントを持たない行（`account_pool` が off）ごとの
-    /// 暗黙アカウント（`implicit/<provider id>`）。行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
+    /// ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: アカウントを持たない行
+    /// （`account_pool` が off）の**LLM source ごとの暗黙アカウント**（`implicit/<llm source id>`）。
+    /// 最初の行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
     #[serde(default)]
     pub implicit_accounts: Vec<ImplicitAccountLive>,
     /// ADR-0043 D3（Phase 56）: `[containers]` の設定と、起動時に調べたコンテナ runtime。
@@ -320,13 +321,17 @@ pub struct ContainerProbeView {
     pub detail: String,
 }
 
-/// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB
-/// （`account_limits`）が正本で、旧 `[[providers]].concurrency` は上限に使わない。
+/// ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、
+/// 同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、
+/// 旧 `[[providers]].concurrency` は上限に使わない。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ImplicitAccountLive {
-    /// 行の id（= 暗黙アカウントの id）。
-    pub provider: String,
-    /// この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
+    /// 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。
+    pub source: String,
+    /// この source を使う非プール行の id（設定順）。
+    #[serde(default)]
+    pub providers: Vec<String>,
+    /// これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
     pub in_use: u32,
 }
 

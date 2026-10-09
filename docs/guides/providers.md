@@ -68,12 +68,15 @@ CoS の指示文や他のハーネスを消す必要はありません。
   行に書かれた旧 `[[providers]].concurrency` は、プールの行でも暗黙アカウントでも上限に使いません（読めて警告が出るだけです）。
 - `[accounts] max_runs_per_account` は、保存値の無いアカウントの**既定値**です。これを変えたときは、従来どおり再起動が必要です。
 - **暗黙アカウント**: アカウントを持たない行（`account_pool` が無い、または false。ローカルの Qwen、PaperQA、LDR、LangMem など）には、
-  行ごとに暗黙のアカウントが 1 件あります（`adapter = "implicit"`、id は行の id）。アカウント画面に「暗黙アカウント」の印が付き、他のアカウントと同じ上限の欄で出ます。
-  API のパスは `/api/v1/accounts/implicit/<provider id>` です。ログイン・確認・削除はありません。
-  行を消す、またはプールに変えると、次の reload か再起動でその暗黙アカウントの保存値も消えます。
+  その行の **LLM source ごとに**暗黙のアカウントが 1 件あります（`adapter = "implicit"`、id は解決済み LLM source の id）。
+  同じ source を使う行は 1 件を共有します（例: `opencode-qwen` と `pi-qwen` はどちらも `openai_compatible:qwen` なので、上限も実行中の数も 1 件分）。
+  アカウント画面に「暗黙アカウント」の印と、その source を使う行の一覧（`providers`）が出ます。上限の欄は他のアカウントと同じです。
+  API のパスは `/api/v1/accounts/implicit/<llm source id>`（例: `/api/v1/accounts/implicit/openai_compatible:qwen`）です。ログイン・確認・削除はありません。
+  その source を使う行を消す、またはプールに変えると、次の reload か再起動でその暗黙アカウントの保存値も消えます
+  （同じ source を使う他の行が残っていれば保存値は残ります）。
 - **CoS の対話 run**（ADR-0089、Phase R6-5）は、全体の `max_concurrency` に数えません。葉の run で枠が埋まっていても起動します。
   CoS の run もアカウントを消費します。実アカウントでは、走っている run が最も少ないアカウントに `effective_max_runs + 1` 本目まで載ります。
-  暗黙アカウントでは +1 しません（CoS を含む全数で比べます。GPU 1 枚の Qwen に 2 本目を載せないため）。
+  暗黙アカウントでは +1 しません（CoS を含む全数で、その source を使う行の合計を比べます。GPU 1 枚の Qwen に 2 本目を載せないため）。
   CoS の同時数の絶対上限は `[execution] max_cos_runs` です（既定 2、0..=8。`0` で例外を無効化）。
 - `GET /providers` の `in_use`（CoS 以外）と `in_use_cos`（CoS）は、その行で走っている run の**観測値**です。上限と比べる値ではありません。
 - プール行の実質的な同時数は、「そのプールで選べるアカウントの実効上限の和」と `[execution] max_concurrency` で決まります。

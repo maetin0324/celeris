@@ -233,10 +233,11 @@ function fakeRun(result: Omit<ActionResult, "id"> | null) {
 
 const implicitAccount = account({
   adapter: "implicit",
-  id: "opencode-qwen",
+  // 暗黙アカウントの id は LLM source。同じ source を使う行が 1 件を共有する。
+  id: "openai_compatible:qwen",
   dir: null,
   implicit: true,
-  provider: "opencode-qwen",
+  providers: ["opencode-qwen", "pi-qwen"],
   in_use: 1,
   max_runs: null,
   effective_max_runs: 1,
@@ -342,7 +343,8 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     const out = renderCard(implicitAccount);
     expect(out).toContain('data-implicit="true"');
     expect(out).toContain(">暗黙アカウント</span>");
-    expect(out).toContain("アカウントを持たない実行枠 opencode-qwen");
+    expect(out).toContain("アカウントを持たない行の LLM source「openai_compatible:qwen」");
+    expect(out).toContain("opencode-qwen, pi-qwen");
     expect(out).toContain("1 / 実効上限 1（既定（max_runs_per_account = 2））");
     expect(out).toContain("上限を保存");
     expect(out).not.toContain("ログイン開始");
@@ -350,8 +352,8 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(out).not.toContain(">削除</button>");
     expect(out).not.toContain("使用量");
     expect(accountLimitTarget(implicitAccount, 2)).toEqual({
-      id: "limit:implicit:opencode-qwen",
-      path: "/api/accounts/implicit/opencode-qwen",
+      id: "limit:implicit:openai_compatible:qwen",
+      path: "/api/accounts/implicit/openai_compatible:qwen",
       method: "PATCH",
       body: { max_runs: 2 },
     });
@@ -359,8 +361,8 @@ describe("アカウントごとの上限（PATCH /accounts/{adapter}/{id}）", (
     expect(await submitAccountLimit(run, implicitAccount, "2")).toEqual({ ok: true });
     expect(await submitAccountLimit(run, implicitAccount, null)).toEqual({ ok: true });
     expect(sent.map((t) => [t.path, t.body])).toEqual([
-      ["/api/accounts/implicit/opencode-qwen", { max_runs: 2 }],
-      ["/api/accounts/implicit/opencode-qwen", { max_runs: null }],
+      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: 2 }],
+      ["/api/accounts/implicit/openai_compatible:qwen", { max_runs: null }],
     ]);
   });
 

@@ -733,10 +733,11 @@ pub struct AccountView {
     pub effective_max_runs: usize,
     /// 実効上限の出どころ: `"account"`（保存値）| `"default"`（`max_runs_per_account`）。
     pub max_runs_source: String,
-    /// §(e): 暗黙アカウント（`adapter = "implicit"`、アカウントを持たない行ごとに 1 件）か。
+    /// §(e): 暗黙アカウント（`adapter = "implicit"`、非プール行の LLM source ごとに 1 件）か。
     pub implicit: bool,
-    /// 暗黙アカウントの行の id（`id` と同じ）。実アカウントは `null`。
-    pub provider: Option<String>,
+    /// 暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。
+    #[serde(default)]
+    pub providers: Vec<String>,
 }
 
 /// `PATCH /accounts/{adapter}/{id}` の要求本文（ADR 2026-10-08 account-concurrency-limits §(d)）。

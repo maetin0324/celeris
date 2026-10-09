@@ -103,4 +103,4 @@ task `01M44G5KKF8VJ0ARJH8J843T7D`。進捗は [2026-10-04-cheap-local-first](../
 ## 付記（2026-10-08、concurrency の deprecate）
 
 [ADR 2026-10-08 account-concurrency-limits](2026-10-08-account-concurrency-limits.md) が D1 の「`concurrency` は道具の欄として維持する」と付記 L2(c)・L6 を上書きする。`concurrency` は deprecated（読めて警告、dispatch では見ない）。
-ローカルの行の空きはその行の暗黙アカウント（`implicit/<provider id>`）の上限で判定し、既定は旧 `concurrency` を引き継ぐ（本番の Qwen 行は config を変えずに 1 本のまま）。上限はアカウント画面で変える。
+ローカルの行の空きはその行の LLM source の暗黙アカウント（`implicit/<llm source id>`。同じ source を使う行は 1 件を共有する）の上限で判定し、既定は `[accounts] max_runs_per_account`（旧 `concurrency` は引き継がない）。上限はアカウント画面で変える。

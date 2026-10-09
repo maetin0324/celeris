@@ -559,3 +559,86 @@ fn implicit_account_overrides_survive_reload_and_are_pruned_with_their_row() {
     assert_eq!(store.account_limits().unwrap().len(), 1);
     assert_eq!(d.account_max_runs("claude-code", "p1"), Some(5));
 }
+
+/// Two non-pool rows on one LLM source (`opencode-qwen` + `pi-qwen` → `openai_compatible:qwen`)
+/// share **one** implicit account: one stored limit and one in-use count for both rows. A stored
+/// `max_runs = 1` holds the pair to a single run; with no stored value the written
+/// `concurrency = 1` is not read and `[accounts] max_runs_per_account` (built-in 2) decides.
+/// Rows on another source keep their own implicit account.
+#[tokio::test]
+async fn implicit_account_is_per_llm_source() {
+    use crate::capacity::MaxRunsSource;
+    let ws = tempfile::tempdir().unwrap();
+    let store: Arc<dyn TaskStore> = Arc::new(SqliteStore::open_in_memory().unwrap());
+    seed_org(&store);
+    let adapter = slow_pool_adapter();
+    let mut d = dispatcher(store.clone(), adapter.clone(), 8);
+    let row = |id: &str, legacy: Option<usize>| ProviderSpec {
+        id: id.into(),
+        adapter: "instant".into(),
+        tiers: vec![Tier::Standard],
+        concurrency: legacy,
+        model: "m".into(),
+    };
+    // Both Qwen rows write the deprecated `concurrency = 1`; it must not limit anything.
+    d.policy = Box::new(StaticPolicy::new(
+        vec![
+            row("opencode-qwen", Some(1)),
+            row("pi-qwen", Some(1)),
+            row("ldr-main", None),
+        ],
+        Duration::from_secs(1),
+    ));
+    for id in ["opencode-qwen", "pi-qwen", "ldr-main"] {
+        d.adapters.insert(id.to_string(), adapter.clone());
+        d.models.insert(id.to_string(), "m".to_string());
+    }
+    d.set_provider_llm_sources(HashMap::from([
+        ("opencode-qwen".to_string(), "openai_compatible:qwen".to_string()),
+        ("pi-qwen".to_string(), "openai_compatible:qwen".to_string()),
+        ("ldr-main".to_string(), "celeris".to_string()),
+    ]));
+
+    // The key is the LLM source, not the row: two rows, one implicit account.
+    assert_eq!(
+        d.implicit_account_ids(),
+        vec!["openai_compatible:qwen".to_string(), "celeris".to_string()]
+    );
+    assert_eq!(
+        d.implicit_account_providers("openai_compatible:qwen"),
+        vec!["opencode-qwen".to_string(), "pi-qwen".to_string()]
+    );
+    assert_eq!(d.implicit_account_providers("opencode-qwen"), Vec::<String>::new());
+    // No stored value → the default, not the written `concurrency = 1`.
+    assert_eq!(
+        d.implicit_account_limit("openai_compatible:qwen"),
+        Some((2, MaxRunsSource::Default))
+    );
+
+    for task in (0..6).map(|_| leaf(ws.path())) {
+        store.insert(&task).unwrap();
+    }
+    // Two runs at most on the shared source (a per-row limit would have admitted four there),
+    // and two on the other source's own implicit account.
+    assert_eq!(d.tick().unwrap().dispatched, 4);
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 2);
+    assert_eq!(d.implicit_account_in_use("celeris"), 2);
+
+    // A stored 1 on the source holds both rows: nothing new is admitted.
+    d.set_account_limit("implicit", "openai_compatible:qwen", Some(1))
+        .unwrap();
+    assert_eq!(
+        d.implicit_account_limit("openai_compatible:qwen"),
+        Some((1, MaxRunsSource::Account))
+    );
+    assert!(d.implicit_account_full(&"opencode-qwen".to_string(), 0));
+    assert!(d.implicit_account_full(&"pi-qwen".to_string(), 0));
+    assert_eq!(d.tick().unwrap().dispatched, 0);
+    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 2);
+    // Raising the shared limit frees both rows again.
+    d.set_account_limit("implicit", "openai_compatible:qwen", Some(3))
+        .unwrap();
+    assert_eq!(d.tick().unwrap().dispatched, 1);
+    assert_eq!(d.implicit_account_in_use("openai_compatible:qwen"), 3);
+}

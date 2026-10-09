@@ -180,14 +180,16 @@ impl Dispatcher {
     /// ADR-0024 D5 / ADR-0025 D6: スナップショットに載せる `accounts_root`（claude-code の別名）/ `accounts_roots`
     /// （アダプタ → 根ディレクトリ）/ `max_runs_per_account` / `accounts[]`（`adapter` → `id` の順）。
     /// `[accounts]` が無ければ全て空。
-    /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行ごとの暗黙アカウント（行の設定順）。
+    /// ADR 2026-10-08 account-concurrency-limits §(e): 非プール行の LLM source ごとの暗黙アカウント
+    /// （最初の行の設定順）。
     /// 上限の保存値は DB が正本なので、API が `account_limits` を読んで実効上限を組む。
     pub(super) fn implicit_accounts_snapshot(&self) -> Vec<task_ops::daemon::ImplicitAccountLive> {
         self.implicit_account_ids()
             .into_iter()
-            .map(|provider| task_ops::daemon::ImplicitAccountLive {
-                in_use: self.implicit_account_in_use(&provider) as u32,
-                provider,
+            .map(|source| task_ops::daemon::ImplicitAccountLive {
+                in_use: self.implicit_account_in_use(&source) as u32,
+                providers: self.implicit_account_providers(&source),
+                source,
             })
             .collect()
     }

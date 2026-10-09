@@ -451,10 +451,12 @@ fi"#,
         "acct-b must not be in rotation before reload: {before}"
     );
 
-    // 非プールの行 acct-a の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。
-    // 1 本で埋まる前提のまま、アカウント画面と同じ PATCH で 1 にする。
-    let limit = env.patch("/accounts/implicit/acct-a", json!({"max_runs": 1}));
+    // 非プールの行の上限は暗黙アカウントが持つ（旧 `concurrency = 1` は上限に効かない）。暗黙アカウントは
+    // **LLM source 単位**（`implicit/<llm source id>`）で、fake 行はどれも source `none` なので acct-a と
+    // あとで足す acct-b は 1 件を共有する。acct-a の 1 本のほかにもう 1 本（acct-b への溢れ）を許す 2 にする。
+    let limit = env.patch("/accounts/implicit/none", json!({"max_runs": 2}));
     assert_eq!(limit.status, 200, "{}", limit.body);
+    assert_eq!(limit.json()["providers"], json!(["acct-a"]), "{}", limit.body);
     // --- 受け入れ 1: acct-a をゲート付きタスクで埋めてから acct-b を追加・reload し、次の tick から使われることを確かめる。
     // 実行中の run（acct-a 側）は影響を受けない。
     let ws_slow = env.workspace("ws-slow");

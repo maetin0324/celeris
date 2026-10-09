@@ -268,7 +268,7 @@ llm_source = "celeris"
 tiers = ["cheap"]
 ```
 
-同時実行数はこの行の暗黙アカウント `implicit/langmem-main` の上限で決まる（既定は `[accounts] max_runs_per_account`）。
+同時実行数はこの行の LLM source の暗黙アカウント `implicit/celeris` の上限で決まる（既定は `[accounts] max_runs_per_account`。同じ source `celeris` を使う他の非プール行と 1 件を共有する）。
 アカウント画面で変える（[providers ガイド](providers.md#同時実行数はアカウントで決める)）。`[[providers]].concurrency` は deprecated。
 
 celeris を再起動（または `POST /reload` で読み直せない設定なので再起動）すれば、次の tick から

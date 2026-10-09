@@ -225,8 +225,11 @@ pub(crate) fn reload_providers(
         adapters,
         new_config.account_pool_providers(),
     );
-    // ADR 2026-10-08 account-concurrency-limits §(d): a removed (or now pooled) non-pool row
-    // takes its implicit account's stored limit with it. Other stored limits survive the reload.
+    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
+    // new config's resolved sources must be in place before pruning or limiting.
+    dispatcher.set_provider_llm_sources(new_config.provider_llm_sources());
+    // §(d): a stored implicit limit goes away when no non-pool row uses its LLM source any more
+    // (row removed, turned into a pool, or moved to another source). Other stored limits survive.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }

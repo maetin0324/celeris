@@ -3,7 +3,7 @@
 //! CoS runs have a separate global `max_cos_runs` cap and one extra slot per real
 //! account. Ordinary runs count only ordinary account usage. Provider concurrency is
 //! deprecated and never compared: pool rows are limited by their accounts, non-pool
-//! rows by their implicit account (`implicit/<provider id>`, no CoS +1).
+//! rows by their LLM source's implicit account (`implicit/<llm source id>`, no CoS +1).
 
 use task_core::{OrgKind, OrgNode, Task};
 
@@ -96,8 +96,9 @@ pub fn effective_account_limit(stored: Option<usize>, default: usize) -> (usize,
     }
 }
 
-/// ADR 2026-10-08 §(e): an implicit account counts every run on its row (ordinary,
-/// CoS and provider-backed reviews) against `effective_max_runs`; CoS gets no +1.
+/// ADR 2026-10-08 §(e): an implicit account counts every run on every non-pool row that uses
+/// its LLM source (ordinary, CoS and provider-backed reviews) against `effective_max_runs`;
+/// CoS gets no +1.
 pub fn implicit_account_full(in_use_total: usize, effective_max_runs: usize) -> bool {
     in_use_total >= effective_max_runs
 }

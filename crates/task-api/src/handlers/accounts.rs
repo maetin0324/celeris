@@ -58,7 +58,8 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
         .iter()
         .map(|(a, d)| (a.as_str().to_string(), d.id.clone()))
         .collect();
-    let providers: Vec<String> = implicit.iter().map(|i| i.provider.clone()).collect();
+    // §(e): 暗黙アカウントは LLM source 単位。同じ source を使う行の集計を足し合わせる。
+    let implicit_rows: Vec<Vec<String>> = implicit.iter().map(|i| i.providers.clone()).collect();
     let inner = Arc::clone(&state.inner);
     let today = time::OffsetDateTime::now_utc().date();
     let (limits, real_stats, implicit_stats) = state
@@ -79,8 +80,8 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
                     .map(|(adapter, id)| guard.view(adapter, id))
                     .collect::<Vec<_>>()
             };
-            // §(e): 暗黙アカウントの集計はその行の run（`WorkerStarted.provider`）。
-            let implicit_stats = if providers.is_empty() {
+            // §(e): 暗黙アカウントの集計はその source を使う行の run（`WorkerStarted.provider`）の合計。
+            let implicit_stats = if implicit_rows.is_empty() {
                 Vec::new()
             } else {
                 let mut guard = inner
@@ -88,17 +89,28 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
                     .lock()
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
                 guard.catch_up(store).map_err(store_problem)?;
-                providers
+                implicit_rows
                     .iter()
-                    .map(|p| {
-                        let v = guard.view(p, today);
-                        AccountStats {
-                            runs: v.runs,
-                            done: v.done,
-                            error: v.error,
-                            input_tokens: v.input_tokens,
-                            output_tokens: v.output_tokens,
-                        }
+                    .map(|rows| {
+                        rows.iter()
+                            .map(|p| {
+                                let v = guard.view(p, today);
+                                AccountStats {
+                                    runs: v.runs,
+                                    done: v.done,
+                                    error: v.error,
+                                    input_tokens: v.input_tokens,
+                                    output_tokens: v.output_tokens,
+                                }
+                            })
+                            .fold(AccountStats::default(), |mut acc, s| {
+                                acc.runs += s.runs;
+                                acc.done += s.done;
+                                acc.error += s.error;
+                                acc.input_tokens += s.input_tokens;
+                                acc.output_tokens += s.output_tokens;
+                                acc
+                            })
                     })
                     .collect()
             };
@@ -137,19 +149,19 @@ async fn account_items(state: &ApiState) -> Result<Vec<AccountView>, ApiProblem>
             effective_max_runs: effective,
             max_runs_source: source.to_string(),
             implicit: false,
-            provider: None,
+            providers: Vec::new(),
         });
     }
     for (live, stats) in implicit.iter().zip(implicit_stats) {
         let stored = limits
-            .get(&(IMPLICIT_ADAPTER.to_string(), live.provider.clone()))
+            .get(&(IMPLICIT_ADAPTER.to_string(), live.source.clone()))
             .copied();
         items.push(implicit_view(live, stored, default, stats));
     }
     Ok(items)
 }
 
-/// §(e): 暗黙アカウントの 1 件（ログイン・使用量・スコアの概念は無い）。
+/// §(e): 暗黙アカウントの 1 件（LLM source 単位。ログイン・使用量・スコアの概念は無い）。
 fn implicit_view(
     live: &task_ops::daemon::ImplicitAccountLive,
     stored: Option<usize>,
@@ -159,7 +171,7 @@ fn implicit_view(
     let (effective, source) = effective_max_runs(stored, default);
     AccountView {
         adapter: IMPLICIT_ADAPTER.to_string(),
-        id: live.provider.clone(),
+        id: live.source.clone(),
         dir: None,
         logged_in: true,
         in_use: live.in_use,
@@ -174,7 +186,7 @@ fn implicit_view(
         effective_max_runs: effective,
         max_runs_source: source.to_string(),
         implicit: true,
-        provider: Some(live.provider.clone()),
+        providers: live.providers.clone(),
     }
 }
 
@@ -294,9 +306,15 @@ async fn patch_account_limit_inner(
             "adapter must be claude-code, codex, opencode-go or implicit",
         ));
     }
-    if !crate::accounts::valid_account_id(&id) {
+    // §(e): 暗黙アカウントの id は LLM source（`openai_compatible:<id>` は `:` を含む）。
+    let id_ok = if implicit {
+        crate::accounts::valid_implicit_account_id(&id)
+    } else {
+        crate::accounts::valid_account_id(&id)
+    };
+    if !id_ok {
         return Err(ApiProblem::bad_request(
-            "id must be 1-64 ASCII alphanumeric/-/_ characters",
+            "id must be 1-64 ASCII alphanumeric/-/_ characters (implicit: an LLM source id, which may contain ':')",
         ));
     }
     let max_runs = parse_limit_patch(read_json(body, false).await?)?;
@@ -343,7 +361,8 @@ async fn patch_account_limit_inner(
         // スナップショットにまだ現れていない暗黙アカウント（最初の tick 前・reload 直後）。
         None if implicit => implicit_view(
             &task_ops::daemon::ImplicitAccountLive {
-                provider: id.clone(),
+                source: id.clone(),
+                providers: Vec::new(),
                 in_use: 0,
             },
             max_runs,
@@ -418,7 +437,7 @@ pub(super) async fn create_account(
         effective_max_runs: state.inner.max_runs_per_account,
         max_runs_source: "default".to_string(),
         implicit: false,
-        provider: None,
+        providers: Vec::new(),
     };
     let mut response = json_response(StatusCode::CREATED, &view);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/accounts/{}", create.id)) {

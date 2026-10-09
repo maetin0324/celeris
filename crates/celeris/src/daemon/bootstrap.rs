@@ -554,7 +554,10 @@ pub fn build_dispatcher(
         config.account_pool_providers(),
         config.dispatch_config(),
     );
-    // ADR 2026-10-08 account-concurrency-limits §(d): forget limits of implicit accounts whose row is gone.
+    // ADR 2026-10-08 account-concurrency-limits §(e): implicit accounts are per LLM source, so the
+    // dispatcher needs the resolved source of every row before it can prune or limit them.
+    dispatcher.set_provider_llm_sources(config.provider_llm_sources());
+    // §(d): forget limits of implicit accounts whose LLM source no non-pool row uses any more.
     if let Err(error) = dispatcher.prune_implicit_account_limits() {
         tracing::warn!(%error, "cannot prune implicit account limits");
     }

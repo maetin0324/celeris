@@ -2220,7 +2220,7 @@ export interface AccountView {
   excluded_reason?: string | null;
   id: string;
   /**
-   * §(e): 暗黙アカウント（`adapter = "implicit"`、アカウントを持たない行ごとに 1 件）か。
+   * §(e): 暗黙アカウント（`adapter = "implicit"`、非プール行の LLM source ごとに 1 件）か。
    */
   implicit: boolean;
   /**
@@ -2246,9 +2246,9 @@ export interface AccountView {
    */
   max_runs_source: string;
   /**
-   * 暗黙アカウントの行の id（`id` と同じ）。実アカウントは `null`。
+   * 暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。
    */
-  provider?: string | null;
+  providers?: string[];
   /**
    * ADR-0024 D3 のスコア。除外なら `null`。
    */
@@ -4355,8 +4355,9 @@ export interface DaemonSnapshot {
   decisions_open?: number;
   hostname: string;
   /**
-   * ADR 2026-10-08 account-concurrency-limits §(e): アカウントを持たない行（`account_pool` が off）ごとの
-   * 暗黙アカウント（`implicit/<provider id>`）。行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
+   * ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: アカウントを持たない行
+   * （`account_pool` が off）の**LLM source ごとの暗黙アカウント**（`implicit/<llm source id>`）。
+   * 最初の行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。
    */
   implicit_accounts?: ImplicitAccountLive[];
   in_flight: InFlight[];
@@ -4600,18 +4601,23 @@ export interface CooldownView {
   until: string;
 }
 /**
- * ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB
- * （`account_limits`）が正本で、旧 `[[providers]].concurrency` は上限に使わない。
+ * ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、
+ * 同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、
+ * 旧 `[[providers]].concurrency` は上限に使わない。
  */
 export interface ImplicitAccountLive {
   /**
-   * この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
+   * これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。
    */
   in_use: number;
   /**
-   * 行の id（= 暗黙アカウントの id）。
+   * この source を使う非プール行の id（設定順）。
    */
-  provider: string;
+  providers?: string[];
+  /**
+   * 解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。
+   */
+  source: string;
 }
 /**
  * 実行中の run（ワーカー run、またはプロバイダを使う Reviewer run）。

@@ -172,17 +172,21 @@ test.describe("ops-config", () => {
     );
     await main.getByRole("button", { name: "既定に戻す" }).click();
     await expect(main.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
-    // 暗黙アカウント: 印があり、ログイン・削除は無く、同じ欄で上限を変える。
-    const implicit = page.getByRole("listitem", { name: "アカウント qwen-local" });
+    // 暗黙アカウント（LLM source 単位。同じ source を使う行を `providers` で出す）: 印があり、
+    // ログイン・削除は無く、同じ欄で上限を変える。
+    const implicit = page.getByRole("listitem", { name: "アカウント openai_compatible:qwen" });
     await expect(implicit.getByText("暗黙アカウント", { exact: true })).toBeVisible();
+    await expect(implicit.getByText("qwen-local")).toBeVisible();
     await expect(implicit.getByRole("button", { name: "ログイン開始" })).toHaveCount(0);
     await expect(implicit.getByRole("button", { name: "削除" })).toHaveCount(0);
     await implicit.getByLabel("同時実行数の上限（1〜32）").fill("2");
     await implicit.getByRole("button", { name: "上限を保存" }).click();
     await expect(implicit.getByText("0 / 実効上限 2（このアカウントに保存した上限）")).toBeVisible();
-    expect(daemon.requests.some((r) => r.method === "PATCH" && r.path === "/api/v1/accounts/implicit/qwen-local")).toBe(
-      true,
-    );
+    expect(
+      daemon.requests.some(
+        (r) => r.method === "PATCH" && r.path === "/api/v1/accounts/implicit/openai_compatible:qwen",
+      ),
+    ).toBe(true);
     await implicit.getByRole("button", { name: "既定に戻す" }).click();
     await expect(implicit.getByText("0 / 実効上限 1（既定（max_runs_per_account = 1））")).toBeVisible();
   });

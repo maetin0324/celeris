@@ -461,7 +461,7 @@
           "type": "string"
         },
         "implicit": {
-          "description": "§(e): 暗黙アカウント（`adapter = \"implicit\"`、アカウントを持たない行ごとに 1 件）か。",
+          "description": "§(e): 暗黙アカウント（`adapter = \"implicit\"`、非プール行の LLM source ごとに 1 件）か。",
           "type": "boolean"
         },
         "in_use": {
@@ -501,12 +501,13 @@
           "description": "実効上限の出どころ: `\"account\"`（保存値）| `\"default\"`（`max_runs_per_account`）。",
           "type": "string"
         },
-        "provider": {
-          "description": "暗黙アカウントの行の id（`id` と同じ）。実アカウントは `null`。",
-          "type": [
-            "string",
-            "null"
-          ]
+        "providers": {
+          "default": [],
+          "description": "暗黙アカウントの LLM source（= `id`）を使う非プール行の id（設定順）。実アカウントは空。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "score": {
           "description": "ADR-0024 D3 のスコア。除外なら `null`。",
@@ -7588,7 +7589,7 @@
         },
         "implicit_accounts": {
           "default": [],
-          "description": "ADR 2026-10-08 account-concurrency-limits §(e): アカウントを持たない行（`account_pool` が off）ごとの\n暗黙アカウント（`implicit/<provider id>`）。行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。",
+          "description": "ADR 2026-10-08 account-concurrency-limits §(e)（人の決定 implicit-account）: アカウントを持たない行\n（`account_pool` が off）の**LLM source ごとの暗黙アカウント**（`implicit/<llm source id>`）。\n最初の行の設定順。`[accounts]` が無くても出る。古いスナップショットには無いので既定は空。",
           "items": {
             "$ref": "#/$defs/ImplicitAccountLive"
           },
@@ -14728,21 +14729,29 @@
       "type": "object"
     },
     "ImplicitAccountLive": {
-      "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。上限の保存値は DB\n（`account_limits`）が正本で、旧 `[[providers]].concurrency` は上限に使わない。",
+      "description": "ADR 2026-10-08 account-concurrency-limits §(e): 暗黙アカウント 1 件の観測値。単位は LLM source で、\n同じ source を使う非プール行は 1 件を共有する。上限の保存値は DB（`account_limits`）が正本で、\n旧 `[[providers]].concurrency` は上限に使わない。",
       "properties": {
         "in_use": {
-          "description": "この行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。",
+          "description": "これらの行で走っている全 run（非 CoS・CoS・プロバイダを使うレビュー run）の数。",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
         },
-        "provider": {
-          "description": "行の id（= 暗黙アカウントの id）。",
+        "providers": {
+          "default": [],
+          "description": "この source を使う非プール行の id（設定順）。",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "source": {
+          "description": "解決済み LLM source の id（= 暗黙アカウントの id。`celeris` / `openai_compatible:<id>` 等）。",
           "type": "string"
         }
       },
       "required": [
-        "provider",
+        "source",
         "in_use"
       ],
       "type": "object"

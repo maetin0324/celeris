@@ -3265,8 +3265,8 @@ export function createFakeDaemon({
               },
             },
           ],
-          // アカウントを持たない実行枠の暗黙アカウント（ADR 2026-10-08-account-concurrency-limits §(e)）。
-          implicit: [{ id: "qwen-local" }],
+          // アカウントを持たない行の暗黙アカウント（LLM source 単位。ADR 2026-10-08-account-concurrency-limits §(e)）。
+          implicit: [{ id: "openai_compatible:qwen", providers: ["qwen-local"] }],
           limits: {},
           models: structuredClone(modelCatalogFixture),
           assignments: structuredClone(modelAssignmentsFixture),
@@ -3316,7 +3316,7 @@ export function createFakeDaemon({
           login_pending: false,
           in_use: 0,
           implicit: true,
-          provider: a.id,
+          providers: a.providers ?? [],
           stats: { done: 0, error: 0, input_tokens: 0, output_tokens: 0, runs: 0 },
           ...limitView("implicit", a.id),
         });

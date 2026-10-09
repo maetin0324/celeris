@@ -233,7 +233,11 @@ impl ConformanceResult {
         if !self.passed.contains(&case) {
             return false;
         }
-        let of_case = || self.evidence.iter().filter(move |e| e.case == case && e.runtime == runtime);
+        let of_case = || {
+            self.evidence
+                .iter()
+                .filter(move |e| e.case == case && e.runtime == runtime)
+        };
         if of_case().any(|e| e.outcome != EvidenceOutcome::Passed) {
             return false;
         }
@@ -290,7 +294,9 @@ pub fn certify(
             .filter(|c| {
                 if cap.is_sensitive() {
                     let runtime = match c {
-                        FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite => EvidenceRuntime::Launcher,
+                        FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite => {
+                            EvidenceRuntime::Launcher
+                        }
                         _ => EvidenceRuntime::Daemon,
                     };
                     !r.case_passed_for_runtime(*c, runtime)
@@ -473,7 +479,10 @@ mod tests {
                     case,
                     test,
                     outcome: EvidenceOutcome::Passed,
-                    runtime: if matches!(case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) {
+                    runtime: if matches!(
+                        case,
+                        FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite
+                    ) {
                         EvidenceRuntime::Launcher
                     } else {
                         EvidenceRuntime::Daemon
@@ -513,14 +522,20 @@ mod tests {
         // remain daemon measurements, matching the conformance generator output.
         let mut wrong_runtime = passing(&b);
         for evidence in &mut wrong_runtime.evidence {
-            if matches!(evidence.case, FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite) {
+            if matches!(
+                evidence.case,
+                FixtureCase::IsolationSuite | FixtureCase::EgressNegativeSuite
+            ) {
                 evidence.runtime = EvidenceRuntime::Daemon;
             }
         }
         assert!(gap(&wrong_runtime));
         let mut wrong_runtime = passing(&b);
         for evidence in &mut wrong_runtime.evidence {
-            if matches!(evidence.case, FixtureCase::InjectionAttackSuite | FixtureCase::AuthSectionObservationStop) {
+            if matches!(
+                evidence.case,
+                FixtureCase::InjectionAttackSuite | FixtureCase::AuthSectionObservationStop
+            ) {
                 evidence.runtime = EvidenceRuntime::Launcher;
             }
         }

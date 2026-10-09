@@ -246,9 +246,21 @@ async fn spawned_tasks_run_on_their_interval_and_stop_cleanly() {
         Duration::from_millis(2000),
     );
 
-    // 両方とも少なくとも 1 回は tick が回るだけ待つ（内容はロジック側のテストで確認済みなので、
-    // ここでは「バックアップ tick が実際にファイルを作った」ことだけ見る）。
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    // 公開済みの backup（atomic rename 後）が現れてから停止する。
+    // 固定時間で stop すると、遅いファイル I/O では最初のコピー自体を cancel してしまう。
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            if std::fs::read_dir(&backup_dir)
+                .unwrap()
+                .any(|entry| entry.is_ok_and(|entry| is_backup_file_name(&entry.path())))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("backup tick did not publish a file");
 
     checkpoint.stop().await;
     backup.stop().await;

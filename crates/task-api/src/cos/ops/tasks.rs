@@ -1,7 +1,7 @@
 //! tasks registry and shared-operation dispatch (ADR 2026-10-09 D3).
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
-use super::super::operations::{audited, decode_problem};
+use super::super::operations::{audited, decode_optional, decode_problem};
 use crate::problem::ApiProblem;
 use crate::query::parse_task_id;
 use serde_json::Value;
@@ -23,6 +23,16 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "/api/v1/tasks/{id}/execution/plan-gate",
         "execution.plan_gate",
     ),
+    ("PATCH", "/api/v1/tasks/{id}", "task.update"),
+    ("POST", "/api/v1/tasks/{id}/reopen", "task.reopen"),
+    ("POST", "/api/v1/tasks/{id}/retry", "task.retry"),
+    ("POST", "/api/v1/tasks/{id}/pause", "task.pause"),
+    ("POST", "/api/v1/tasks/{id}/resume", "task.resume"),
+    (
+        "PUT",
+        "/api/v1/tasks/{id}/execution-plan",
+        "execution.put_plan",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -34,21 +44,15 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[(
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
 pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("PATCH", "/api/v1/tasks/{id}"),
     ("POST", "/api/v1/tasks/{id}/accept"),
     ("POST", "/api/v1/tasks/{id}/approve"),
     ("POST", "/api/v1/tasks/{id}/cancel"),
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/integrate"),
     ("POST", "/api/v1/tasks/{id}/changes/{repo}/pr/merge"),
     ("POST", "/api/v1/tasks/{id}/execution-plan"),
-    ("PUT", "/api/v1/tasks/{id}/execution-plan"),
     ("POST", "/api/v1/tasks/{id}/execution/decompose"),
-    ("POST", "/api/v1/tasks/{id}/pause"),
     ("POST", "/api/v1/tasks/{id}/reject"),
-    ("POST", "/api/v1/tasks/{id}/reopen"),
     ("POST", "/api/v1/tasks/{id}/rereview"),
-    ("POST", "/api/v1/tasks/{id}/resume"),
-    ("POST", "/api/v1/tasks/{id}/retry"),
     ("POST", "/api/v1/tasks/{id}/tree/adopt"),
 ];
 
@@ -108,6 +112,57 @@ pub(crate) fn dispatch(
             } else {
                 let input = serde_json::from_value(body).map_err(decode)?;
                 audited(crate::execution::plan_gate_op(store, id, input, audit)?)
+            }
+        }
+        "task.update" | "task.reopen" | "task.retry" | "task.pause" | "task.resume"
+        | "execution.put_plan" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let id = parse_task_id(&raw_id)
+                .map_err(|problem| audit.reject(store, "task", &raw_id, problem))?;
+            match matched.action {
+                "task.update" => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    audited(crate::handlers::task_actions::patch_task_op(
+                        store,
+                        &env.genres,
+                        &env.clusters,
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+                "task.reopen" => {
+                    let input = decode_optional(body).map_err(decode)?;
+                    audited(crate::handlers::task_actions::reopen_op(
+                        store,
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+                "task.retry" => {
+                    let input = decode_optional(body).map_err(decode)?;
+                    audited(crate::handlers::task_actions::retry_op(
+                        store,
+                        &env.clusters,
+                        id,
+                        input,
+                        Some(audit),
+                    )?)
+                }
+                "execution.put_plan" => {
+                    let input = serde_json::from_value(body).map_err(decode)?;
+                    crate::execution::put_plan_audited(store, id, input, env.tree_limits, audit)
+                }
+                pause => {
+                    let _: crate::lifecycle::EmptyBody = decode_optional(body).map_err(decode)?;
+                    audited(crate::lifecycle::task_pause_op(
+                        store,
+                        id,
+                        pause == "task.pause",
+                        Some(audit),
+                    )?)
+                }
             }
         }
         other => Err(ApiProblem::internal(format!(

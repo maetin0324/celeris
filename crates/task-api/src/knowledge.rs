@@ -891,35 +891,78 @@ async fn accept(
     let request: KnowledgeAcceptBody = read_json(body, true).await?;
     let root = root_of(&state)?;
     let result = state
-        .blocking(move |_| {
-            require_kb(&root)?;
-            // id の境界（`/`・`..` は 403）。
-            ops_kb::inbox_path(&id).map_err(path_problem)?;
-            if let Some(path) = request.path.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-                page_path(path)?;
-            }
-            match ops_kb::inbox_accept(&root, &id, request.path.as_deref(), request.overwrite) {
-                InboxOutcome::Accepted { path, sha, etag } => {
-                    tracing::info!(who = "admin", op = "knowledge_accept", id = %id, path = %path, "admin: knowledge candidate accepted");
-                    Ok(KnowledgePageResult {
-                        path,
-                        etag,
-                        sha,
-                        unchanged: false,
-                    })
-                }
-                InboxOutcome::Missing => Err(candidate_not_found(&id)),
-                InboxOutcome::Exists { path } => Err(ApiProblem::new(
-                    StatusCode::CONFLICT,
-                    "page_exists",
-                    format!("page already exists: {path}（上書きするなら overwrite: true）"),
-                )),
-                InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
-                InboxOutcome::Rejected { .. } => Err(knowledge_unavailable("unexpected outcome")),
-            }
-        })
+        .blocking(move |store| accept_op(store, &root, id, request, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `POST /knowledge/inbox/{id}/accept` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （ADR 2026-10-09 D3/D5、`knowledge.accept`）が共有する。KB は SQLite の外（git）なので、監査ありでは
+/// 正本への取り込みを `cos_operation_apply` の transaction の中で行い、失敗すれば監査の行は rejected になる
+/// （`reject_op` と同じ形。git の commit は取り込みが成功したときだけ起きる）。
+pub(crate) fn accept_op(
+    store: &task_core::SqliteStore,
+    root: &std::path::Path,
+    id: String,
+    request: KnowledgeAcceptBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<KnowledgePageResult>, ApiProblem> {
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "knowledge", &id, problem),
+        None => problem,
+    };
+    require_kb(root).map_err(reject)?;
+    // id の境界（`/`・`..` は 403）。
+    ops_kb::inbox_path(&id).map_err(|e| reject(path_problem(e)))?;
+    if let Some(path) = request
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        page_path(path).map_err(reject)?;
+    }
+    let accept =
+        || match ops_kb::inbox_accept(root, &id, request.path.as_deref(), request.overwrite) {
+            InboxOutcome::Accepted { path, sha, etag } => Ok(KnowledgePageResult {
+                path,
+                etag,
+                sha,
+                unchanged: false,
+            }),
+            InboxOutcome::Missing => Err(candidate_not_found(&id)),
+            InboxOutcome::Exists { path } => Err(ApiProblem::new(
+                StatusCode::CONFLICT,
+                "page_exists",
+                format!("page already exists: {path}（上書きするなら overwrite: true）"),
+            )),
+            InboxOutcome::Failed { detail } => Err(knowledge_unavailable(detail)),
+            InboxOutcome::Rejected { .. } => Err(knowledge_unavailable("unexpected outcome")),
+        };
+    let Some(audit) = audit else {
+        let result = accept()?;
+        tracing::info!(who = "admin", op = "knowledge_accept", id = %id, path = %result.path, "admin: knowledge candidate accepted");
+        return Ok(Applied::Direct(result));
+    };
+    let mut failure = None;
+    let outcome = audit.apply(
+        store,
+        "knowledge",
+        &id,
+        "knowledge.accept",
+        |_tx| match accept() {
+            Ok(page) => Ok(serde_json::json!({"id": id, "path": page.path, "sha": page.sha})),
+            Err(problem) => {
+                let detail = problem.detail().to_string();
+                failure = Some(problem);
+                Err(task_core::chat::ChatError::Conflict(detail))
+            }
+        },
+    );
+    match outcome {
+        Ok(operation) => Ok(Applied::Audited(Box::new(operation))),
+        Err(problem) => Err(failure.unwrap_or(problem)),
+    }
 }
 
 async fn reject(

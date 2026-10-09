@@ -1,13 +1,25 @@
 //! admin registry and shared-operation dispatch (ADR 2026-10-09 D3).
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
+use super::super::operations::{decode_problem, path_param, unprocessable};
 use crate::problem::ApiProblem;
 use serde_json::Value;
 use task_core::chat::CosOperation;
 use task_core::store::SqliteStore;
 
 /// Registered `(method, path, action)` operations.
-pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[];
+pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
+    (
+        "PUT",
+        "/api/v1/llm/models/assignments/{source}/{tier}",
+        "model_assignment.put",
+    ),
+    (
+        "DELETE",
+        "/api/v1/llm/models/assignments/{source}/{tier}",
+        "model_assignment.delete",
+    ),
+];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
 pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[
@@ -71,8 +83,6 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
         "POST",
         "/api/v1/llm/models/assignments/roles/{tier}/preview",
     ),
-    ("DELETE", "/api/v1/llm/models/assignments/{source}/{tier}"),
-    ("PUT", "/api/v1/llm/models/assignments/{source}/{tier}"),
     ("POST", "/api/v1/llm/models/discover"),
     ("DELETE", "/api/v1/llm/models/{source}/{model_id}/override"),
     ("PUT", "/api/v1/llm/models/{source}/{model_id}/override"),
@@ -97,16 +107,46 @@ pub(crate) const PENDING: &[(&str, &str)] = &[
     ("PUT", "/api/v1/skills/{name}"),
 ];
 
+const ASSIGNMENT: &str = "/api/v1/llm/models/assignments/{source}/{tier}";
+
 pub(crate) fn dispatch(
-    _store: &SqliteStore,
+    store: &SqliteStore,
     _env: &DispatchEnv,
-    _audit: &OperationAudit,
+    audit: &OperationAudit,
     matched: Matched,
-    _path: &str,
-    _body: Value,
+    path: &str,
+    body: Value,
 ) -> Result<CosOperation, ApiProblem> {
-    Err(ApiProblem::internal(format!(
-        "registered CoS operation {} has no implementation in admin",
-        matched.action
-    )))
+    let decode = |error| decode_problem(store, audit, path, error);
+    match matched.action {
+        "model_assignment.put" => {
+            let input = serde_json::from_value(body).map_err(decode)?;
+            crate::model_assignments::put_assignment_audited(
+                store,
+                &path_param(ASSIGNMENT, path, "{source}"),
+                &path_param(ASSIGNMENT, path, "{tier}"),
+                input,
+                audit,
+            )
+        }
+        "model_assignment.delete" => {
+            if !body.is_null() && body != serde_json::json!({}) {
+                return Err(audit.reject(
+                    store,
+                    "model_assignment",
+                    path,
+                    unprocessable("validation", "request.body must be empty"),
+                ));
+            }
+            crate::model_assignments::delete_assignment_audited(
+                store,
+                &path_param(ASSIGNMENT, path, "{source}"),
+                &path_param(ASSIGNMENT, path, "{tier}"),
+                audit,
+            )
+        }
+        other => Err(ApiProblem::internal(format!(
+            "registered CoS operation {other} has no implementation in admin"
+        ))),
+    }
 }

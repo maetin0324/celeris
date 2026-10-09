@@ -21,7 +21,9 @@ use commands::cos_ops::{self, ApiRequestArgs};
 use commands::cron::{self as cron_cmd, CronCommand};
 use commands::curation::{self as curation_cmd, CurationCommand};
 use commands::db::{self as db_cmd, DbCommand};
-use commands::execution::{self as execution_cmd, ExecutionCommand, TreeCommand};
+use commands::execution::{
+    self as execution_cmd, ExecutionCommand, ExecutionPlanCommand, PhaseGateActionArg, TreeCommand,
+};
 use commands::gate::{self, AnswerArgs, ApproveArgs, RejectArgs};
 use commands::knowledge::{self, KnowledgeCommand};
 use commands::mcp::{self, McpCommand};
@@ -313,6 +315,56 @@ fn dispatch(store: &SqliteStore, db_path: &Path, command: Command) -> Result<Exi
     }
 }
 
+/// The registered CoS operation (method, domain path, body) of a mutating subcommand, if any
+/// (ADR 2026-10-09-cos-operations-all-mutations D3; `config/skills/cos-operator/operations.md`).
+fn cos_mapped(
+    command: &Command,
+) -> Result<Option<(&'static str, String, serde_json::Value)>, CliError> {
+    use serde_json::json;
+    let task_path = |id: &str, tail: &str| -> Result<String, CliError> {
+        let id = error::parse_task_id(id)?;
+        Ok(format!("/api/v1/tasks/{id}{tail}"))
+    };
+    Ok(match command {
+        Command::Retry(args) => Some((
+            "POST",
+            task_path(&args.id, "/retry")?,
+            json!({"accept": !args.draft}),
+        )),
+        Command::Answer(args) => Some((
+            "POST",
+            task_path(&args.id, "/answer")?,
+            json!({"answer": args.answer}),
+        )),
+        Command::Execution {
+            command: ExecutionCommand::PhaseGate(args),
+        } => {
+            let action = match args.action {
+                PhaseGateActionArg::Continue => "continue",
+                PhaseGateActionArg::Replan => "replan",
+                PhaseGateActionArg::Withdraw => "withdraw",
+            };
+            Some((
+                "POST",
+                task_path(&args.task_id, "/execution/phase-gate")?,
+                json!({"action": action, "note": args.note}),
+            ))
+        }
+        Command::Execution {
+            command:
+                ExecutionCommand::Plan {
+                    command: ExecutionPlanCommand::Replan(args),
+                },
+        } => {
+            let raw = execution_cmd::read_plan_file(&args.file)?;
+            let body: serde_json::Value = serde_json::from_str(&raw)
+                .map_err(|e| CliError::msg(format!("plan file is not JSON: {e}")))?;
+            Some(("PUT", task_path(&args.task_id, "/execution-plan")?, body))
+        }
+        _ => None,
+    })
+}
+
 fn main() -> ExitCode {
     let mut cli = Cli::parse();
     let cos_options = cos_ops::Options {
@@ -368,6 +420,30 @@ fn main() -> ExitCode {
                     ExitCode::FAILURE
                 }
             };
+        }
+        // ADR 2026-10-09-cos-operations-all-mutations D3: subcommands whose domain request is a
+        // registered CoS operation go through `/cos/operations` with the run credential.
+        match cos_mapped(&cli.command) {
+            Ok(Some((method, path, body))) => {
+                let result = cos_ops::api_config(cos_options.api_url.as_deref()).and_then(|api| {
+                    cos_ops::send(&api, method, &path, body, &cos_options, Some(&credential))
+                });
+                return match result {
+                    Ok(value) => {
+                        println!("{value}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("error: {e}");
+                        ExitCode::FAILURE
+                    }
+                };
+            }
+            Ok(None) => {}
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::FAILURE;
+            }
         }
         let read_only = matches!(
             &cli.command,
@@ -617,5 +693,54 @@ fn main() -> ExitCode {
             eprintln!("error: {}", error::render(&e));
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod cos_mapping_tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Command {
+        Cli::try_parse_from(std::iter::once("celerisctl").chain(args.iter().copied()))
+            .expect("parse")
+            .command
+    }
+
+    /// ADR 2026-10-09-cos-operations-all-mutations D3: subcommands of registered operations map to
+    /// the same domain request the API registry allows; others stay unmapped (refused under CoS).
+    #[test]
+    fn cos_mapped_subcommands_match_registered_operations() {
+        let id = task_core::TaskId::new();
+        let (method, path, body) = cos_mapped(&parse(&["retry", &id.to_string(), "--draft"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(method, "POST");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/retry"));
+        assert_eq!(body, serde_json::json!({"accept": false}));
+        let (_, path, body) = cos_mapped(&parse(&["answer", &id.to_string(), "はい"]))
+            .expect("map")
+            .expect("mapped");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/answer"));
+        assert_eq!(body["answer"], "はい");
+        let (_, path, body) = cos_mapped(&parse(&[
+            "execution",
+            "phase-gate",
+            &id.to_string(),
+            "replan",
+            "--note",
+            "直す",
+        ]))
+        .expect("map")
+        .expect("mapped");
+        assert_eq!(path, format!("/api/v1/tasks/{id}/execution/phase-gate"));
+        assert_eq!(
+            body,
+            serde_json::json!({"action": "replan", "note": "直す"})
+        );
+        assert!(
+            cos_mapped(&parse(&["cancel", &id.to_string()]))
+                .expect("map")
+                .is_none()
+        );
     }
 }

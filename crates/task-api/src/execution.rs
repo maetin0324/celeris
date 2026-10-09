@@ -257,6 +257,79 @@ async fn put_execution_plan(
     Ok(json_response(status, &view))
 }
 
+/// CoS の `PUT /tasks/{id}/execution-plan`（ADR 2026-10-09 D3/D5、`execution.put_plan`）。人の `PUT` と同じ
+/// 検証（`task_ops::execution::plan_replan`）で組み立てた版の置き換えを、監査と同じ transaction で書く。
+/// active な計画が無い task への初回の採用（`adopt_human_plan`）は `execution.adopt_plan` と同じく未登録で、
+/// 理由付きの 422 で記録する。
+pub(crate) fn put_plan_audited(
+    store: &task_core::store::SqliteStore,
+    task_id: task_core::TaskId,
+    spec: task_core::ExecutionPlanSpec,
+    tree: task_core::TreeLimits,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let target_id = task_id.to_string();
+    let limits = ExecutionLimits {
+        tree,
+        ..ExecutionLimits::default()
+    };
+    let has_active = store
+        .execution_plan_active(task_id)
+        .map_err(|e| audit.reject(store, "task", &target_id, store_problem(e)))?
+        .is_some();
+    if !has_active {
+        return Err(audit.reject(
+            store,
+            "task",
+            &target_id,
+            crate::cos::operations::unprocessable(
+                "cos_operation_not_allowed",
+                "PUT /api/v1/tasks/{id}/execution-plan without an active plan adopts a first plan, \
+                 which is not a registered CoS operation yet (pending with execution.adopt_plan); \
+                 only a replan of an active plan is",
+            ),
+        ));
+    }
+    let now = OffsetDateTime::now_utc();
+    let (write, diff) = task_ops::execution::plan_replan(
+        store,
+        task_id,
+        spec,
+        "replan (cos PUT)".to_string(),
+        task_core::PlanOrigin::Human,
+        None,
+        limits,
+        now,
+    )
+    .map_err(|e| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, e, Some("execution_plan_replan")),
+        )
+    })?;
+    audit.apply(store, "task", &target_id, "execution.put_plan", |tx| {
+        let result = serde_json::json!({
+            "task_id": target_id,
+            "plan_id": write.new_plan.id,
+            "version": write.new_plan.version,
+            "replan": diff,
+        });
+        task_core::store::SqliteStore::execution_plan_replan_tx(
+            tx,
+            write.task_id,
+            write.old_plan_id,
+            write.new_plan,
+            write.updated_work_units,
+            write.new_work_units,
+            write.extra_events,
+            write.plan_event,
+        )?;
+        Ok(result)
+    })
+}
+
 /// ADR-0079 D15（Phase R5b-prep）: `POST /tasks/{id}/tree/adopt {task_id, stage, unit_key}`（管理系 = 人だけ）。
 /// 採用済みの /3 の計画の kind task の unit（`adopt: <task_id>` を持つ）に既存の task を結ぶ（`task_ops::tree_adopt::adopt`）。
 /// 200 は `AdoptionOutcome`。404: task が無い。422: 木が無効・計画が /3 でない・unit が無い / kind task でない /

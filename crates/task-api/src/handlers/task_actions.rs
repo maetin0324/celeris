@@ -18,7 +18,7 @@ use crate::types::{
     ValidationError,
 };
 
-use super::{ApiResult, Params, json_response, no_query, read_json, validated_workspace};
+use super::{ApiResult, Params, json_response, no_query, read_json};
 
 /// PATCH /tasks/{id}: omitted hint leaves it unchanged; null or [] clears it.
 #[derive(Deserialize, JsonSchema)]
@@ -174,34 +174,70 @@ pub(super) async fn retry(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let RetryBody {
-        accept,
-        workspace,
-        execution,
-    } = read_json(body, true).await?;
-    // ADR-0062 Phase 108: `workspace` の検証は `PATCH /tasks/{id}` と同じ（先に 422 を返す）。
-    let workspace = workspace
-        .map(|spec| validated_workspace(&state, spec))
-        .transpose()?;
+    let body: RetryBody = read_json(body, true).await?;
+    let clusters = super::cluster_ids(&state);
     let result = state
-        .blocking(move |store| {
-            task_ops::retry::retry_task_with_execution(
-                store,
-                id,
-                accept,
-                workspace,
-                execution,
-                "human",
-                OffsetDateTime::now_utc(),
-            )
-            .map_err(|e| ops_problem(store, e, Some("retry")))
-        })
+        .blocking(move |store| retry_op(store, &clusters, id, body, None)?.direct())
         .await?;
     let mut response = json_response(StatusCode::CREATED, &result);
     if let Ok(location) = HeaderValue::from_str(&format!("/api/v1/tasks/{}", result.task_id)) {
         response.headers_mut().insert(header::LOCATION, location);
     }
     Ok(response)
+}
+
+/// `POST /tasks/{id}/retry` の本体。handler（`audit = None`、`source = human`）と CoS の
+/// `/cos/operations`（ADR 2026-10-09 D3/D5。複製・依存の付け替え・監査を同じ transaction、`execution` の
+/// 明示は commit 後）が共有する。
+pub(crate) fn retry_op(
+    store: &task_core::store::SqliteStore,
+    clusters: &[String],
+    id: task_core::TaskId,
+    RetryBody {
+        accept,
+        workspace,
+        execution,
+    }: RetryBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::retry::RetryResult>, ApiProblem> {
+    let target_id = id.to_string();
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "task", &target_id, problem),
+        None => problem,
+    };
+    // ADR-0062 Phase 108: `workspace` の検証は `PATCH /tasks/{id}` と同じ（先に 422 を返す）。
+    let workspace = workspace
+        .map(|spec| super::validated_workspace_in(clusters, spec))
+        .transpose()
+        .map_err(reject)?;
+    let now = OffsetDateTime::now_utc();
+    let Some(audit) = audit else {
+        return task_ops::retry::retry_task_with_execution(
+            store, id, accept, workspace, execution, "human", now,
+        )
+        .map(Applied::Direct)
+        .map_err(|e| ops_problem(store, e, Some("retry")));
+    };
+    let new_task =
+        task_ops::retry::plan_retry(store, id, accept, workspace, execution.is_some(), now)
+            .map_err(|e| reject(ops_problem(store, e, Some("retry"))))?;
+    let new_id = new_task.id;
+    let mut rewired = Vec::new();
+    let operation = audit.apply(store, "task", &target_id, "task.retry", |tx| {
+        rewired = task_core::store::SqliteStore::retry_task_tx(tx, id, &new_task)?;
+        Ok(serde_json::json!({
+            "task_id": target_id,
+            "new_task_id": new_id.to_string(),
+            "rewired": rewired.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+        }))
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let Err(error) =
+            task_ops::retry::finish_retry(store, new_id, rewired, execution, "cos", now)
+    {
+        tracing::warn!(operation_id = %operation.id, %error, "cos retry follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 // ---- ADR-0044 D1/D2（Phase 53）: 編集・コメント・再開 ----
@@ -218,10 +254,33 @@ pub(super) async fn patch_task(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let TaskPatchBody {
+    let body: TaskPatchBody = read_json(body, true).await?;
+    let genres = state.inner.genres.clone();
+    let clusters = super::cluster_ids(&state);
+    let result = state
+        .blocking(move |store| patch_task_op(store, &genres, &clusters, id, body, None)?.direct())
+        .await?;
+    Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `PATCH /tasks/{id}` の本体。handler（`audit = None`）と CoS の `/cos/operations`（ADR 2026-10-09 D3/D5。
+/// `Edited.by = cos`、task・書き込み範囲の hint・監査を同じ transaction）が共有する。
+pub(crate) fn patch_task_op(
+    store: &task_core::store::SqliteStore,
+    genres: &[task_core::GenreSpec],
+    clusters: &[String],
+    id: task_core::TaskId,
+    TaskPatchBody {
         mut task,
         expected_write_paths,
-    } = read_json(body, true).await?;
+    }: TaskPatchBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::edit::EditResult>, ApiProblem> {
+    let target_id = id.to_string();
+    let reject = |problem: ApiProblem| match audit {
+        Some(audit) => audit.reject(store, "task", &target_id, problem),
+        None => problem,
+    };
     let paths = expected_write_paths
         .map(|paths| {
             paths
@@ -229,67 +288,114 @@ pub(super) async fn patch_task(
                 .transpose()
         })
         .transpose()
-        .map_err(ApiProblem::bad_request)?;
+        .map_err(|e| reject(ApiProblem::bad_request(e)))?;
     if task.is_empty() && paths.is_none() {
-        return Err(ApiProblem::validation(vec![ValidationError {
+        return Err(reject(ApiProblem::validation(vec![ValidationError {
             field: None,
             message: "at least one field must be given".to_string(),
-        }]));
+        }])));
     }
     // ADR-0062 Phase 108: `workspace` の検証（`Remote.cluster` が設定にあること、`~` の展開）は
     // `PATCH /projects/{id}` と同じ `validated_workspace` を使う（422 はここで返す）。
     if let Some(spec) = task.workspace.take() {
-        task.workspace = Some(validated_workspace(&state, spec)?);
+        task.workspace = Some(super::validated_workspace_in(clusters, spec).map_err(reject)?);
     }
-    let genres = state.inner.genres.clone();
-    let result = state
-        .blocking(move |store| {
-            let now = OffsetDateTime::now_utc();
-            let result = if task.is_empty() {
-                let existing = store
+    let now = OffsetDateTime::now_utc();
+    let by = if audit.is_some() { "cos" } else { "human" };
+    let plan = if task.is_empty() {
+        let existing = store
+            .get(id)
+            .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))
+            .map_err(reject)?
+            .ok_or_else(|| reject(ApiProblem::task_not_found(id)))?;
+        if let Some(expected) = task.expected_status
+            && expected != existing.status
+        {
+            return Err(reject(ops_problem(
+                store,
+                task_ops::OpsError::Conflict {
+                    expected,
+                    actual: existing.status,
+                },
+                Some("edit"),
+            )));
+        }
+        if existing.status.is_terminal() {
+            return Err(reject(ops_problem(
+                store,
+                task_ops::OpsError::InvalidState {
+                    id,
+                    context: format!("status={:?}", existing.status),
+                    action: "edited; terminal tasks cannot be edited".into(),
+                },
+                Some("edit"),
+            )));
+        }
+        None
+    } else {
+        Some(
+            task_ops::edit::plan_edit(store, id, task, genres, now, by)
+                .map_err(|e| reject(ops_problem(store, e, Some("edit"))))?,
+        )
+    };
+    let now_text = now.to_string();
+    let Some(audit) = audit else {
+        let result = match plan {
+            None => task_ops::edit::EditResult {
+                task: store
                     .get(id)
                     .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?
-                    .ok_or_else(|| ApiProblem::task_not_found(id))?;
-                if let Some(expected) = task.expected_status
-                    && expected != existing.status
-                {
-                    return Err(ops_problem(
-                        store,
-                        task_ops::OpsError::Conflict {
-                            expected,
-                            actual: existing.status,
-                        },
-                        Some("edit"),
-                    ));
-                }
-                if existing.status.is_terminal() {
-                    return Err(ops_problem(
-                        store,
-                        task_ops::OpsError::InvalidState {
-                            id,
-                            context: format!("status={:?}", existing.status),
-                            action: "edited; terminal tasks cannot be edited".into(),
-                        },
-                        Some("edit"),
-                    ));
-                }
-                task_ops::edit::EditResult {
-                    task: existing,
-                    fields: vec![],
-                }
-            } else {
-                task_ops::edit::edit_task(store, id, task, &genres, now)
-                    .map_err(|e| ops_problem(store, e, Some("edit")))?
-            };
-            if let Some(paths) = &paths {
-                store
-                    .set_task_expected_write_paths(id, paths.as_deref(), &now.to_string())
+                    .ok_or_else(|| ApiProblem::task_not_found(id))?,
+                fields: vec![],
+            },
+            Some(plan) if plan.fields.is_empty() => task_ops::edit::EditResult {
+                task: plan.task,
+                fields: plan.fields,
+            },
+            Some(plan) => {
+                let updated = store
+                    .update_task(&plan.task, plan.event())
                     .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?;
+                task_ops::edit::finish_edit(store, plan, updated)
+                    .map_err(|e| ops_problem(store, e, Some("edit")))?
             }
-            Ok(result)
-        })
-        .await?;
-    Ok(json_response(StatusCode::OK, &result))
+        };
+        if let Some(paths) = &paths {
+            store
+                .set_task_expected_write_paths(id, paths.as_deref(), &now_text)
+                .map_err(|e| ops_problem(store, task_ops::OpsError::Store(e), Some("edit")))?;
+        }
+        return Ok(Applied::Direct(result));
+    };
+    let mut updated = None;
+    let operation = audit.apply(store, "task", &target_id, "task.update", |tx| {
+        let mut fields = Vec::new();
+        if let Some(plan) = plan.as_ref().filter(|plan| !plan.fields.is_empty()) {
+            updated = Some(task_core::store::SqliteStore::edit_task_tx(
+                tx,
+                &plan.task,
+                &plan.event(),
+            )?);
+            fields.extend(plan.fields.iter().cloned());
+        }
+        if let Some(paths) = &paths {
+            task_core::store::SqliteStore::set_task_expected_write_paths_tx(
+                tx,
+                id,
+                paths.clone(),
+                &now_text,
+            )?;
+            fields.push("expected_write_paths".to_string());
+        }
+        Ok(serde_json::json!({"task_id": target_id, "fields": fields}))
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let (Some(plan), Some(updated)) = (plan, updated)
+        && let Err(error) = task_ops::edit::finish_edit(store, plan, updated)
+    {
+        tracing::warn!(operation_id = %operation.id, %error, "cos task edit follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 /// `GET /tasks/{id}/comments`（読み取り。古い順）。
@@ -382,14 +488,59 @@ pub(super) async fn reopen(
     no_query(&raw)?;
     require_admin(&state, &headers)?;
     let id = parse_task_id(&id)?;
-    let ReopenBody { expected_status } = read_json(body, true).await?;
+    let body: ReopenBody = read_json(body, true).await?;
     let result = state
-        .blocking(move |store| {
-            task_ops::comment::reopen(store, id, expected_status)
-                .map_err(|e| ops_problem(store, e, Some("reopen")))
-        })
+        .blocking(move |store| reopen_op(store, id, body, None)?.direct())
         .await?;
     Ok(json_response(StatusCode::OK, &result))
+}
+
+/// `POST /tasks/{id}/reopen` の本体。handler（`audit = None`）と CoS の `/cos/operations`
+/// （ADR 2026-10-09 D3/D5。遷移・監査を同じ transaction、run 履歴の区切りは commit 後に冪等で）が共有する。
+pub(crate) fn reopen_op(
+    store: &task_core::store::SqliteStore,
+    id: task_core::TaskId,
+    ReopenBody { expected_status }: ReopenBody,
+    audit: Option<&OperationAudit>,
+) -> Result<Applied<task_ops::gate::TransitionResult>, ApiProblem> {
+    let Some(audit) = audit else {
+        return task_ops::comment::reopen(store, id, expected_status)
+            .map(Applied::Direct)
+            .map_err(|e| ops_problem(store, e, Some("reopen")));
+    };
+    let target_id = id.to_string();
+    let from = task_ops::comment::plan_reopen(store, id, expected_status).map_err(|e| {
+        audit.reject(
+            store,
+            "task",
+            &target_id,
+            ops_problem(store, e, Some("reopen")),
+        )
+    })?;
+    let mut outcome = None;
+    let operation = audit.apply(store, "task", &target_id, "task.reopen", |tx| {
+        let applied = task_core::store::SqliteStore::apply_transition_tx(
+            tx,
+            id,
+            task_core::Trigger::Reopen,
+            Vec::new(),
+        )?;
+        let result = serde_json::json!({
+            "task_id": target_id,
+            "from": from,
+            "to": applied.next,
+            "reason": applied.reason.to_string(),
+        });
+        outcome = Some(applied);
+        Ok(result)
+    })?;
+    if operation.id == audit.ctx.operation_id
+        && let Some(outcome) = outcome
+        && let Err(error) = task_ops::comment::finish_reopen(store, id, from, outcome)
+    {
+        tracing::warn!(operation_id = %operation.id, %error, "cos reopen follow-up failed");
+    }
+    Ok(Applied::Audited(Box::new(operation)))
 }
 
 pub(super) async fn rereview(

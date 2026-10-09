@@ -339,13 +339,27 @@ pub(crate) fn validated_workspace(
     state: &ApiState,
     spec: task_core::WorkspaceSpec,
 ) -> Result<task_core::WorkspaceSpec, ApiProblem> {
+    validated_workspace_in(&cluster_ids(state), spec)
+}
+
+/// Configured cluster ids (captured before a blocking section, e.g. for the CoS dispatch).
+pub(crate) fn cluster_ids(state: &ApiState) -> Vec<String> {
+    state
+        .inner
+        .config_view
+        .clusters
+        .iter()
+        .map(|c| c.id.clone())
+        .collect()
+}
+
+/// [`validated_workspace`] against an already captured list of configured cluster ids.
+pub(crate) fn validated_workspace_in(
+    clusters: &[String],
+    spec: task_core::WorkspaceSpec,
+) -> Result<task_core::WorkspaceSpec, ApiProblem> {
     if let task_core::WorkspaceSpec::Remote { cluster, .. } = &spec
-        && !state
-            .inner
-            .config_view
-            .clusters
-            .iter()
-            .any(|c| &c.id == cluster)
+        && !clusters.iter().any(|c| c == cluster)
     {
         return Err(ApiProblem::validation(vec![ValidationError {
             field: Some("workspace.cluster".into()),

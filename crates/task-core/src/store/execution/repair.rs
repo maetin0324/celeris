@@ -82,6 +82,32 @@ impl SqliteStore {
     ) -> Result<(), StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        Self::execution_plan_replan_tx(
+            &tx,
+            task_id,
+            old_plan_id,
+            new_plan,
+            updated_work_units,
+            new_work_units,
+            extra_events,
+            plan_event,
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// `execution_plan_replan` の本体（呼び出し側の transaction の中で書く。ADR 2026-10-09 D5 の CoS 監査経路）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn execution_plan_replan_tx(
+        tx: &rusqlite::Connection,
+        task_id: TaskId,
+        old_plan_id: String,
+        new_plan: ExecutionPlanRow,
+        updated_work_units: Vec<WorkUnitRow>,
+        new_work_units: Vec<WorkUnitRow>,
+        extra_events: Vec<Event>,
+        plan_event: Event,
+    ) -> Result<(), StoreError> {
         let superseded_at = format_rfc3339(OffsetDateTime::now_utc())?;
         let n = tx.execute(
             "UPDATE execution_plans SET status = 'superseded', superseded_at = ?1 \
@@ -111,16 +137,15 @@ impl SqliteStore {
             ],
         )?;
         for wu in &updated_work_units {
-            Self::update_work_unit_tx(&tx, wu)?;
+            Self::update_work_unit_tx(tx, wu)?;
         }
         for wu in &new_work_units {
-            Self::insert_work_unit_tx(&tx, wu)?;
+            Self::insert_work_unit_tx(tx, wu)?;
         }
         for ev in &extra_events {
-            Self::append_event_tx(&tx, task_id, ev)?;
+            Self::append_event_tx(tx, task_id, ev)?;
         }
-        Self::append_event_tx(&tx, task_id, &plan_event)?;
-        tx.commit()?;
+        Self::append_event_tx(tx, task_id, &plan_event)?;
         Ok(())
     }
 }

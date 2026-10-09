@@ -20,3 +20,6 @@ license: このリポジトリと同じ（外部の license は無い）
   参照 file ごと取り込む（本番 KB への取り込みは人が行う）。
 - 2026-10-09（version 4）: [案件・repo 必須検査の ADR](../../../docs/adr/2026-10-09-cos-task-repository-required.md)
   に従い、operations.md の起票節へ project_id・repos の規則、登録一覧の確認、例、既存 task の修復手順を追加した。
+- 2026-10-09（ADR 2026-10-09-cos-operations-all-mutations）: 操作表に task の編集・reopen・retry・pause・resume、
+  execution-plan PUT（replan）、decision の revise・withdraw、knowledge の accept、LLM 割り当ての PUT・DELETE を足した。
+  「登録されていない操作」を除外（人の決定）と登録待ちに分けた。

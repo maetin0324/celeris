@@ -400,49 +400,11 @@ impl ModelCatalogStore for SqliteStore {
     ) -> Result<RoleAssignment, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous: Option<String> = tx
-            .query_row(
-                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
-                params![source.as_str(), tier_str(tier)],
-                |r| r.get(0),
-            )
-            .optional()?;
-        tx.execute(
-            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
-            params![source.as_str(), tier_str(tier)],
-        )?;
-        tx.execute(
-            "INSERT OR IGNORE INTO model_role_scopes (source, tier) VALUES (?1, ?2)",
-            params![source.as_str(), tier_str(tier)],
-        )?;
-        tx.execute(
-            "INSERT INTO model_role_assignments (source, tier, model_id, note, updated_at, \
-             updated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
-             ON CONFLICT(source, tier, model_id) DO UPDATE SET model_id = ?3, note = ?4, updated_at = ?5, \
-             updated_by = ?6",
-            params![source.as_str(), tier_str(tier), model_id, note, now, actor],
-        )?;
-        Self::append_event_tx(
-            &tx,
-            catalog_event_task_id(),
-            &Event::ModelRoleAssignmentChanged {
-                source: source.0.clone(),
-                tier,
-                model_id: Some(model_id.to_string()),
-                previous,
-                actor: actor.to_string(),
-            },
+        let assignment = SqliteStore::model_role_assignment_set_tx(
+            &tx, source, tier, model_id, note, actor, now,
         )?;
         tx.commit()?;
-        Ok(RoleAssignment {
-            priority: 0,
-            source: source.clone(),
-            tier,
-            model_id: model_id.to_string(),
-            note: note.map(str::to_string),
-            updated_at: now,
-            updated_by: actor.to_string(),
-        })
+        Ok(assignment)
     }
 
     fn model_role_assignment_delete(
@@ -454,38 +416,9 @@ impl ModelCatalogStore for SqliteStore {
     ) -> Result<bool, StoreError> {
         let mut conn = self.lock()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let previous: Option<String> = tx
-            .query_row(
-                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
-                params![source.as_str(), tier_str(tier)],
-                |r| r.get(0),
-            )
-            .optional()?;
-        tx.execute(
-            "DELETE FROM model_role_scopes WHERE source = ?1 AND tier = ?2",
-            params![source.as_str(), tier_str(tier)],
-        )?;
-        let Some(previous) = previous else {
-            tx.commit()?;
-            return Ok(false);
-        };
-        tx.execute(
-            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
-            params![source.as_str(), tier_str(tier)],
-        )?;
-        Self::append_event_tx(
-            &tx,
-            catalog_event_task_id(),
-            &Event::ModelRoleAssignmentChanged {
-                source: source.0.clone(),
-                tier,
-                model_id: None,
-                previous: Some(previous),
-                actor: actor.to_string(),
-            },
-        )?;
+        let deleted = SqliteStore::model_role_assignment_delete_tx(&tx, source, tier, actor)?;
         tx.commit()?;
-        Ok(true)
+        Ok(deleted)
     }
 
     fn model_role_members_replace(
@@ -632,5 +565,100 @@ impl ModelCatalogStore for SqliteStore {
             }
             Ok(out)
         })
+    }
+}
+
+/// 割り当ての書き込みを呼び出し側の transaction の中で行う（ADR 2026-10-09 D5 の CoS 監査経路）。
+impl SqliteStore {
+    #[allow(clippy::too_many_arguments)]
+    pub fn model_role_assignment_set_tx(
+        tx: &Connection,
+        source: &CatalogSource,
+        tier: Tier,
+        model_id: &str,
+        note: Option<&str>,
+        actor: &str,
+        now: i64,
+    ) -> Result<RoleAssignment, StoreError> {
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+                params![source.as_str(), tier_str(tier)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.execute(
+            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        tx.execute(
+            "INSERT OR IGNORE INTO model_role_scopes (source, tier) VALUES (?1, ?2)",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        tx.execute(
+            "INSERT INTO model_role_assignments (source, tier, model_id, note, updated_at, \
+             updated_by) VALUES (?1, ?2, ?3, ?4, ?5, ?6) \
+             ON CONFLICT(source, tier, model_id) DO UPDATE SET model_id = ?3, note = ?4, updated_at = ?5, \
+             updated_by = ?6",
+            params![source.as_str(), tier_str(tier), model_id, note, now, actor],
+        )?;
+        Self::append_event_tx(
+            tx,
+            catalog_event_task_id(),
+            &Event::ModelRoleAssignmentChanged {
+                source: source.0.clone(),
+                tier,
+                model_id: Some(model_id.to_string()),
+                previous,
+                actor: actor.to_string(),
+            },
+        )?;
+        Ok(RoleAssignment {
+            priority: 0,
+            source: source.clone(),
+            tier,
+            model_id: model_id.to_string(),
+            note: note.map(str::to_string),
+            updated_at: now,
+            updated_by: actor.to_string(),
+        })
+    }
+
+    pub fn model_role_assignment_delete_tx(
+        tx: &Connection,
+        source: &CatalogSource,
+        tier: Tier,
+        actor: &str,
+    ) -> Result<bool, StoreError> {
+        let previous: Option<String> = tx
+            .query_row(
+                "SELECT model_id FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+                params![source.as_str(), tier_str(tier)],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.execute(
+            "DELETE FROM model_role_scopes WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        let Some(previous) = previous else {
+            return Ok(false);
+        };
+        tx.execute(
+            "DELETE FROM model_role_assignments WHERE source = ?1 AND tier = ?2",
+            params![source.as_str(), tier_str(tier)],
+        )?;
+        Self::append_event_tx(
+            tx,
+            catalog_event_task_id(),
+            &Event::ModelRoleAssignmentChanged {
+                source: source.0.clone(),
+                tier,
+                model_id: None,
+                previous: Some(previous),
+                actor: actor.to_string(),
+            },
+        )?;
+        Ok(true)
     }
 }

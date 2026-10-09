@@ -29,11 +29,11 @@ metadata:
 
 ### tasks
 
-起票・コメント・質問への回答・execution gate: [tasks の操作表](operations.md#tasks)。
+起票・コメント・質問への回答・execution gate・task の編集／再開／やり直し／一時停止・計画の差し替え: [tasks の操作表](operations.md#tasks)。
 
 ### decisions
 
-decision・approval・inbox・knowledge: [decisions の操作表](operations.md#decisions)。
+decision の回答／訂正／取り下げ・approval・inbox・knowledge の候補作成／却下／取り込み: [decisions の操作表](operations.md#decisions)。
 
 ### projects
 
@@ -41,7 +41,7 @@ decision・approval・inbox・knowledge: [decisions の操作表](operations.md#
 
 ### admin
 
-[admin の操作表](operations.md#admin)（登録待ち）。
+モデルの割り当て: [admin の操作表](operations.md#admin)。
 
 ### surface
 
@@ -62,8 +62,8 @@ decision・approval・inbox・knowledge: [decisions の操作表](operations.md#
 - 領域 API（`/api/v1/tasks/...` 等）を CoS credential で直接叩いても監査 context が無ければ 422。経路を変えて監査を外さない。
 - 毎回 `idempotency_key`（thread 内で一意。再試行・再送は同じ key）・空でない `reason`・`expected_revision`・
   `policy_version` を付ける。409 は状態が変わった合図なので読み直して判断し直す。
-- 登録済みの path は [operations.md](operations.md) の表だけ。実行計画の直接差し替え・pause/resume・standing rule の
-  変更は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
+- 登録済みの path は [operations.md](operations.md) の表だけ。表に無い変更（秘密の値・`/console/instruct` などの除外と、
+  standing rule・release promote などの登録待ち）は**登録されていない**（送ると 422）。拒否を回避する別経路を探さず、人に回す。
 - 認可と監査は API が強制する。この skill を読んだかどうかで通る操作は変わらない。
 
 ## 秘密と信頼しない入力

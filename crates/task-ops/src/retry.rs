@@ -61,6 +61,21 @@ pub fn retry_task_with_execution(
     source: &str,
     now: OffsetDateTime,
 ) -> Result<RetryResult, OpsError> {
+    let new_task = plan_retry(store, id, accept, workspace, execution.is_some(), now)?;
+    let rewired = store.retry_task(id, &new_task)?;
+    finish_retry(store, new_task.id, rewired, execution, source, now)
+}
+
+/// [`retry_task_with_execution`] の検証と複製先の組み立て（読むだけ）。返った task を `retry_task`
+/// （CoS の監査経路では `SqliteStore::retry_task_tx`）で書き、[`finish_retry`] に渡す。
+pub fn plan_retry(
+    store: &dyn TaskStore,
+    id: TaskId,
+    accept: bool,
+    workspace: Option<WorkspaceSpec>,
+    with_execution: bool,
+    now: OffsetDateTime,
+) -> Result<Task, OpsError> {
     let original = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     if !matches!(original.status, Status::Failed | Status::Cancelled) {
         return Err(OpsError::InvalidState {
@@ -69,7 +84,7 @@ pub fn retry_task_with_execution(
             action: "retried".to_string(),
         });
     }
-    if execution.is_some() && task_core::execution_gate::out_of_scope_rule(&original).is_some() {
+    if with_execution && task_core::execution_gate::out_of_scope_rule(&original).is_some() {
         return Err(OpsError::Validation(
             "execution: this task is out of scope of the Complexity Gate (it always runs atomic)"
                 .to_string(),
@@ -141,8 +156,18 @@ pub fn retry_task_with_execution(
         skills: original.skills.clone(),
         mode: original.mode,
     };
-    let new_id = new_task.id;
-    let rewired = store.retry_task(id, &new_task)?;
+    Ok(new_task)
+}
+
+/// 複製を書いた後の後始末（`execution` の明示）と結果。
+pub fn finish_retry(
+    store: &dyn TaskStore,
+    new_id: TaskId,
+    rewired: Vec<TaskId>,
+    execution: Option<task_core::ExecutionMode>,
+    source: &str,
+    now: OffsetDateTime,
+) -> Result<RetryResult, OpsError> {
     if let Some(mode) = execution {
         crate::regate::set_execution_mode(store, new_id, mode, source, None, now)?;
     }

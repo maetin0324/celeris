@@ -206,7 +206,7 @@ fn run_phase_gate(
     Ok(ExitCode::SUCCESS)
 }
 
-fn read_plan_file(path: &PathBuf) -> Result<String, CliError> {
+pub(crate) fn read_plan_file(path: &PathBuf) -> Result<String, CliError> {
     if path.as_os_str() == "-" {
         let mut text = String::new();
         std::io::stdin()

@@ -142,6 +142,48 @@ pub fn edit_task(
     genres: &[GenreSpec],
     now: OffsetDateTime,
 ) -> Result<EditResult, OpsError> {
+    let plan = plan_edit(store, id, edit, genres, now, "human")?;
+    if plan.fields.is_empty() {
+        // 何も変わらないなら書かない（イベントも積まない）。
+        return Ok(EditResult {
+            task: plan.task,
+            fields: plan.fields,
+        });
+    }
+    // `status` / `attempts` / `lease` はストアが**トランザクションの中で読み直した**値で上書きする
+    // （編集中にディスパッチャがリースを取っていても壊さない）。返ってくるのがその結果。
+    let updated = store.update_task(&plan.task, plan.event())?;
+    finish_edit(store, plan, updated)
+}
+
+/// [`edit_task`] の書き込み計画（読むだけ。検証は全てここ）。`fields` が空なら書かない。書くときは
+/// `task` と [`EditPlan::event`] を `update_task`（CoS の監査経路では `SqliteStore::edit_task_tx`）に渡し、
+/// 結果を [`finish_edit`] に渡す。`by` は `Event::Edited.by`。
+#[derive(Debug, Clone)]
+pub struct EditPlan {
+    pub task: Task,
+    pub fields: Vec<String>,
+    original_status: Status,
+    by: String,
+}
+
+impl EditPlan {
+    pub fn event(&self) -> Event {
+        Event::Edited {
+            fields: self.fields.clone(),
+            by: self.by.clone(),
+        }
+    }
+}
+
+pub fn plan_edit(
+    store: &dyn TaskStore,
+    id: TaskId,
+    edit: TaskEdit,
+    genres: &[GenreSpec],
+    now: OffsetDateTime,
+    by: &str,
+) -> Result<EditPlan, OpsError> {
     let mut task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
     if let Some(expected) = edit.expected_status
         && expected != task.status
@@ -455,8 +497,12 @@ pub fn edit_task(
     }
 
     if fields.is_empty() {
-        // 何も変わらないなら書かない（イベントも積まない）。
-        return Ok(EditResult { task, fields });
+        return Ok(EditPlan {
+            task,
+            fields,
+            original_status,
+            by: by.to_string(),
+        });
     }
     if fields.iter().any(|field| field == "skills") {
         let parent = task
@@ -472,16 +518,26 @@ pub fn edit_task(
         .map_err(OpsError::Validation)?;
     }
     task.updated_at = now;
-    // `status` / `attempts` / `lease` はストアが**トランザクションの中で読み直した**値で上書きする
-    // （編集中にディスパッチャがリースを取っていても壊さない）。返ってくるのがその結果。
-    let mut task = store.update_task(
-        &task,
-        Event::Edited {
-            fields: fields.clone(),
-            by: "human".to_string(),
-        },
-    )?;
+    Ok(EditPlan {
+        task,
+        fields,
+        original_status,
+        by: by.to_string(),
+    })
+}
 
+/// 編集を書いた後の後始末と結果。`updated` は書いた結果の task。
+pub fn finish_edit(
+    store: &dyn TaskStore,
+    plan: EditPlan,
+    mut task: Task,
+) -> Result<EditResult, OpsError> {
+    let EditPlan {
+        fields,
+        original_status,
+        ..
+    } = plan;
+    let id = task.id;
     // ADR-0062 Phase 108: `blocked`（B1/ADR-0046 D5 の unroutable）だったタスクで、この編集が
     // `workspace`/`assignee` を変えたなら、上の検証を通った時点で経路は解決している
     // （明示 `Remote` は `cluster:<id>` の検証を済ませ、`assignee` の harness は D5 の検証を済ませて

@@ -33,6 +33,12 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | 段の確認（phase gate） | `POST /api/v1/tasks/<id>/execution/phase-gate` | execution.phase_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}` |
 | task の質問への回答 | `POST /api/v1/tasks/<id>/answer` | question.answer | `celerisctl answer <task-id> <答え>` |
 | 計画の確認（plan gate） | `POST /api/v1/tasks/<id>/execution/plan-gate` | execution.plan_gate | `{"action":"continue"\|"replan"\|"withdraw","note":"…"}`。replan は gate の `replan` で planner に返す |
+| task の編集（受け入れ条件・題・担当など） | `PATCH /api/v1/tasks/<id>` | task.update | 変える欄だけを送る（`PATCH /tasks/{id}` の schema。`expected_status` で競合を防ぐ）。`Edited.by` は `cos` |
+| task の再開（done/failed → ready） | `POST /api/v1/tasks/<id>/reopen` | task.reopen | `{"expected_status":"failed"}` か `{}` |
+| task のやり直し（failed/cancelled を複製） | `POST /api/v1/tasks/<id>/retry` | task.retry | `{"accept":true}`（省略なら draft）。`workspace`・`execution` も人の経路と同じ |
+| task の subtree の一時停止 | `POST /api/v1/tasks/<id>/pause` | task.pause | body は `{}`。走っている run は止めない |
+| 一時停止の解除 | `POST /api/v1/tasks/<id>/resume` | task.resume | body は `{}` |
+| 実行計画の差し替え（replan） | `PUT /api/v1/tasks/<id>/execution-plan` | execution.put_plan | 本文は計画 JSON（`celeris.execution-plan/*`）。active な計画がある task だけ。初回の採用は未登録（422） |
 
 ### decisions
 
@@ -43,6 +49,9 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 | KB 候補の作成 | `POST /api/v1/knowledge/inbox` | knowledge.record | `celerisctl knowledge record --title … --scope project:<slug> --source …`（CoS credential では API 経由）。下の「KB 候補」 |
 | KB 候補の却下 | `POST /api/v1/knowledge/inbox/<id>/reject` | knowledge.reject | body は `{}`（理由は operation の `reason` に書く） |
 | 受信箱の件への回答（relay） | `POST /api/v1/inbox/items/<id>/answer` | inbox.answer | Core の「受信箱の件への回答（relay）」。`instructed_by` を付ける |
+| 決定の答えの訂正（回答済みの choice） | `POST /api/v1/decisions/<id>/revise` | decision.revise | `{"option":"…","note":"…"}`。既に作られた子は作り直さずコメントで届く |
+| 決定の取り下げ（open のもの） | `POST /api/v1/decisions/<id>/withdraw` | decision.withdraw | `{"reason":"…"}` か `{}`。止めていた unit を取り下げる |
+| KB 候補の取り込み（正本へ） | `POST /api/v1/knowledge/inbox/<id>/accept` | knowledge.accept | `{}` か `{"path":"…","overwrite":false}` |
 
 ### projects
 
@@ -52,7 +61,10 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ### admin
 
-登録済みの操作はまだない。
+| 操作 | `request` の method と path | action | celerisctl・本文の要点 |
+|---|---|---|---|
+| モデルの割り当て（source × tier） | `PUT /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.put | `{"model_id":"…","note":"…"}`。model は catalog にあるもの |
+| 割り当ての解除 | `DELETE /api/v1/llm/models/assignments/<source>/<tier>` | model_assignment.delete | body なし（無ければ 404） |
 
 ### surface
 
@@ -62,12 +74,15 @@ curl -sS -X POST "$API/api/v1/cos/operations" -H "Authorization: Bearer $CELERIS
 
 ## 登録されていない操作（CoS は送らない）
 
-次は `/cos/operations` に登録されていない。送ると 422 になる。必要なら人に web の画面で行うよう頼むか、
-運用者向けの task を起票する。許可範囲は ADR 2026-10-09 で決定済みで、各領域の監査経路を実装中。
+次は `/cos/operations` に登録されていない。送ると 422 `cos_operation_not_allowed` になり、拒否も理由付きで記録される。
 
-- 実行計画の直接の差し替え（`PUT /api/v1/tasks/<id>/execution-plan`）。現計画は `celerisctl execution plan show <task-id>` で読める。直したいときは plan/phase gate の `replan`
-- task・案件の pause / resume（`POST /api/v1/tasks/<id>/pause`・`…/resume`、`POST /api/v1/projects/<id>/pause`）
-- 永続の認可（`/api/v1/standing-rules`）の作成・変更。読むのは `GET /api/v1/standing-rules`。監査付きの登録は実装待ち
+- **除外（人の決定。今後も登録しない）**: 秘密の値を扱う操作（`/secrets/*`・`/accounts/<id>/login*`・
+  `/clusters/<id>/connect*`・browser の credential/attestation 系）、`/console/instruct`、`/cos/*` 自身、撤去済みの入口。
+  人に web の画面で行うよう頼む。
+- **登録待ち（許可範囲は ADR 2026-10-09 で決定済み。各領域の監査経路を実装中）**: 上の表に無い変更操作
+  （例: task の承認・中止・初回の計画採用、案件・永続の認可（`/standing-rules`）・cron・org・provider・release promote・
+  `/reload`・browser 操作など）。必要なら人に web の画面で行うよう頼むか、運用者向けの task を起票する。
+  一覧はエラー本文の `pending in <領域>` と `crates/task-api/src/cos/ops/*.rs` の `PENDING` にある。
 
 ## 監視（読み取り）
 

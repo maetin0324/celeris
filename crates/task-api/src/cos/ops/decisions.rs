@@ -1,7 +1,7 @@
 //! decisions registry and shared-operation dispatch (ADR 2026-10-09 D3).
 
 use super::super::operations::{DispatchEnv, Matched, OperationAudit};
-use super::super::operations::{audited, decode_problem};
+use super::super::operations::{audited, decode_optional, decode_problem};
 use super::super::operations::{dispatch as dispatch_operation, unprocessable};
 use crate::problem::ApiProblem;
 use axum::http::StatusCode;
@@ -20,6 +20,17 @@ pub(crate) const ALLOWED: &[(&str, &str, &str)] = &[
         "knowledge.reject",
     ),
     ("POST", "/api/v1/inbox/items/{id}/answer", "inbox.answer"),
+    ("POST", "/api/v1/decisions/{id}/revise", "decision.revise"),
+    (
+        "POST",
+        "/api/v1/decisions/{id}/withdraw",
+        "decision.withdraw",
+    ),
+    (
+        "POST",
+        "/api/v1/knowledge/inbox/{id}/accept",
+        "knowledge.accept",
+    ),
 ];
 
 /// ADR D2 exclusions: `(method, path, reason code and detail)`.
@@ -27,9 +38,6 @@ pub(crate) const EXCLUDED: &[(&str, &str, &str)] = &[];
 
 /// Assigned mutations awaiting audited implementation. Move a row to ALLOWED when implemented.
 pub(crate) const PENDING: &[(&str, &str)] = &[
-    ("POST", "/api/v1/decisions/{id}/revise"),
-    ("POST", "/api/v1/decisions/{id}/withdraw"),
-    ("POST", "/api/v1/knowledge/inbox/{id}/accept"),
     ("PUT", "/api/v1/knowledge/page"),
     ("POST", "/api/v1/notifications/read-all"),
     ("POST", "/api/v1/notifications/{id}/read"),
@@ -51,6 +59,41 @@ pub(crate) fn dispatch(
             audited(crate::decisions::answer_op(
                 store,
                 &decision_id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "decision.revise" => {
+            let decision_id = matched.id.unwrap_or_default();
+            let input = serde_json::from_value(body).map_err(decode)?;
+            audited(crate::decisions::revise_op(
+                store,
+                &decision_id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "decision.withdraw" => {
+            let decision_id = matched.id.unwrap_or_default();
+            let input = decode_optional(body).map_err(decode)?;
+            audited(crate::decisions::withdraw_op(
+                store,
+                &decision_id,
+                input,
+                Some(audit),
+            )?)
+        }
+        "knowledge.accept" => {
+            let raw_id = matched.id.unwrap_or_default();
+            let root = env
+                .kb_root
+                .clone()
+                .map_err(|problem| audit.reject(store, "knowledge", &raw_id, problem))?;
+            let input = decode_optional(body).map_err(decode)?;
+            audited(crate::knowledge::accept_op(
+                store,
+                &root,
+                raw_id,
                 input,
                 Some(audit),
             )?)

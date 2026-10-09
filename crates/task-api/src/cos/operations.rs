@@ -362,7 +362,7 @@ pub(crate) fn path_matches(pattern: &str, path: &str) -> bool {
             if p.starts_with('{') && p.ends_with('}') {
                 !s.is_empty()
                     && s.chars()
-                        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'))
             } else {
                 p == s
             }
@@ -571,6 +571,10 @@ pub(crate) struct DispatchEnv {
     pub(crate) roles: Vec<task_core::RoleSpec>,
     pub(crate) genres: Vec<task_core::GenreSpec>,
     pub(crate) kb_root: Result<std::path::PathBuf, ApiProblem>,
+    /// Configured cluster ids (workspace validation of task edit/retry).
+    pub(crate) clusters: Vec<String>,
+    /// Effective `[execution.tree]` limits (execution-plan replan validation).
+    pub(crate) tree_limits: task_core::TreeLimits,
     /// The derived human inbox, when the operation is `inbox.answer` (built before blocking).
     pub(crate) inbox_feed: Option<std::sync::Arc<Vec<task_ops::human_inbox::InboxItem>>>,
 }
@@ -581,6 +585,8 @@ impl DispatchEnv {
             roles: state.inner.roles.clone(),
             genres: state.inner.genres.clone(),
             kb_root: crate::knowledge::root_of(state),
+            clusters: crate::handlers::cluster_ids(state),
+            tree_limits: state.inner.tree_limits,
             inbox_feed: None,
         }
     }
@@ -609,6 +615,26 @@ pub(crate) fn dispatch(
     })?;
     reject_identity_claims(&body).map_err(|problem| audit.reject(store, "api", path, problem))?;
     (super::ops::REGISTRIES[matched.registry].dispatch)(store, env, audit, matched, path, body)
+}
+
+/// The value of placeholder `name` of the matched `pattern` in `path` (e.g. `{source}`).
+pub(crate) fn path_param(pattern: &str, path: &str, name: &str) -> String {
+    pattern
+        .split('/')
+        .zip(path.split('/'))
+        .find_map(|(p, s)| (p == name).then(|| s.to_string()))
+        .unwrap_or_default()
+}
+
+/// Decode a body the domain route accepts empty (`read_json(body, true)`): `null` reads as `{}`.
+pub(crate) fn decode_optional<T: serde::de::DeserializeOwned>(
+    body: Value,
+) -> Result<T, serde_json::Error> {
+    if body.is_null() {
+        serde_json::from_value(serde_json::json!({}))
+    } else {
+        serde_json::from_value(body)
+    }
 }
 
 pub(crate) fn decode_problem(
@@ -683,7 +709,12 @@ mod skill_table_tests {
             };
             let path = path
                 .split('/')
-                .map(|seg| if seg == "<id>" { "{id}" } else { seg })
+                .map(
+                    |seg| match seg.strip_prefix('<').and_then(|s| s.strip_suffix('>')) {
+                        Some(name) => format!("{{{name}}}"),
+                        None => seg.to_string(),
+                    },
+                )
                 .collect::<Vec<_>>()
                 .join("/");
             listed.insert((method.to_string(), path, action.trim().to_string()));

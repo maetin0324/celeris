@@ -1,7 +1,7 @@
 # ADR 2026-10-09: CoS の全 API 変更操作を監査付き操作層へ登録する
 
 ---
-tasks: [01M4F24B0GAEVZQPP35830PA0F]
+tasks: [01M4F24B0GAEVZQPP35830PA0F, 01M4F5KS8E1MXZDNJTRAVFJESW]
 ---
 
 - 日付: 2026-10-09
@@ -360,3 +360,36 @@ LLM assignments PUT/DELETE、knowledge accept。除外各理由では 422・reje
 この ADR WorkUnit の検査は文書リンク・ADR 採番・progress front matter・コード差分無しであり、
 ここでは API を実装済みとはしない。[旧 D3 の差分節](2026-10-05-cos-chat-home.md) は本決定への参照で設計判断を解消し、
 実装完了の追記は skill-docs/verify が行う。
+
+## 付記: 実装（2026-10-09、task 01M4F5KS8E1MXZDNJTRAVFJESW）
+
+D6 の必須例を先に登録した。各操作は handler と CoS dispatch が同じ共有関数を通り、検証（読むだけ）→
+`OperationAudit::apply` の transaction 内の書き込み → commit 後の冪等な後始末、の形にした（既存 12 操作と同じ）。
+
+| action | method / path | 共有の関数（検証 → tx 内の書き込み） | commit 後の後始末 |
+|---|---|---|---|
+| `decision.revise` | POST `/decisions/{id}/revise` | ta `decisions::revise_op` → to `decision::plan_revise` → tc `decision_resolve_apply_tx`（期待 `answered`） | 既にある子への訂正コメント（`finish_answer`） |
+| `decision.withdraw` | POST `/decisions/{id}/withdraw` | ta `decisions::withdraw_op` → to `decision::plan_withdraw` → 同上（期待 `open`） | `self` の節点の中止 |
+| `task.update` | PATCH `/tasks/{id}` | ta `task_actions::patch_task_op` → to `edit::plan_edit` → tc `edit_task_tx`・`set_task_expected_write_paths_tx` | unroutable な blocked の解除（`finish_edit`） |
+| `task.reopen` | POST `/tasks/{id}/reopen` | ta `reopen_op` → to `comment::plan_reopen` → tc `apply_transition_tx(Reopen)` | routing 結果の追記（`finish_reopen`） |
+| `task.retry` | POST `/tasks/{id}/retry` | ta `retry_op` → to `retry::plan_retry` → tc `retry_task_tx` | `execution` の明示（`finish_retry`） |
+| `task.pause` / `task.resume` | POST `/tasks/{id}/pause`・`resume` | ta `lifecycle::task_pause_op` → to `lifecycle::plan_set_paused` → tc `edit_task_tx` | なし |
+| `execution.put_plan` | PUT `/tasks/{id}/execution-plan` | ta `execution::put_plan_audited` → to `execution::plan_replan` → tc `execution_plan_replan_tx` | なし |
+| `model_assignment.put` / `.delete` | PUT・DELETE `/llm/models/assignments/{source}/{tier}` | ta `model_assignments::{put,delete}_assignment_audited` → tc `model_role_assignment_{set,delete}_tx` | なし |
+| `knowledge.accept` | POST `/knowledge/inbox/{id}/accept` | ta `knowledge::accept_op`（`reject_op` と同じく git の取り込みを tx の中で行い、失敗は rejected） | なし |
+
+- 領域 event の書き手は `cos`（`Edited.by`・`DecisionAnswered.by`・`DecisionWithdrawn.reason` の接頭辞・割り当ての
+  `updated_by`）。人の経路は従来どおり `human` / `admin`。
+- `execution.put_plan` は active な計画がある task の replan だけ。計画の無い task への PUT は初回の採用
+  （`adopt_human_plan`。子 task の作成・決定の要求を伴う）なので `execution.adopt_plan`（POST）と同じく登録待ちで、
+  理由付きの 422 と rejected 行で記録する。
+- path の placeholder は英数字・`-`・`_` に加えて `.`・`:` も 1 segment として受ける（model id・
+  `openai-compatible:<id>` の source）。`.`・`..` だけの segment は従来どおり拒否する。
+- celerisctl: CoS credential のとき `retry`・`answer`・`execution phase-gate`・`execution plan replan` を
+  `/cos/operations` に包む（`cos_mapped`。試験 `cos_mapped_subcommands_match_registered_operations`）。
+  他の変更サブコマンドは従来どおり拒否し、`api-request` で登録済みの path を送る。
+- 試験: ta `tests/cos_ops_mutations.rs`（直接呼び出しの 422・rejected 行、`/cos/operations` 経由の applied・監査 event・
+  カード、領域 write の書き手、競合・catalog 外・初回採用の理由付き拒否）。除外は既存の `tests/cos_ops_registry.rs`。
+- 残り: 各領域の `PENDING`（tasks 10・decisions 3・projects 14・admin 35・surface 21 本）は同じ形で登録する
+  後続の子 task に分けた（進捗 `agent-docs/progress/2026-10-09-cos-operations-all-mutations.md`）。
+

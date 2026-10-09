@@ -286,28 +286,70 @@ fn set_paused(
     paused_at: Option<OffsetDateTime>,
     now: OffsetDateTime,
 ) -> Result<TaskPauseResult, OpsError> {
+    let (next, event) = paused_edit(task, paused_at, now, "human");
+    // `status` / `attempts` / `lease` はストアがトランザクションの中で読み直した値で上書きする（編集と同じ。
+    // 走っている run のリースを壊さない）。
+    let updated = store.update_task(&next, event)?;
+    pause_result(store, &updated)
+}
+
+fn paused_edit(
+    task: &task_core::Task,
+    paused_at: Option<OffsetDateTime>,
+    now: OffsetDateTime,
+    by: &str,
+) -> (task_core::Task, task_core::Event) {
     let mut next = task.clone();
     next.paused_at = paused_at;
     next.updated_at = now;
-    // `status` / `attempts` / `lease` はストアがトランザクションの中で読み直した値で上書きする（編集と同じ。
-    // 走っている run のリースを壊さない）。
-    let updated = store.update_task(
-        &next,
-        task_core::Event::Edited {
-            fields: vec!["paused_at".to_string()],
-            by: "human".to_string(),
-        },
-    )?;
-    let subtree = descendants(store, &updated)?
+    let event = task_core::Event::Edited {
+        fields: vec!["paused_at".to_string()],
+        by: by.to_string(),
+    };
+    (next, event)
+}
+
+/// 一時停止・再開の結果（書いた後の task から組み立てる。読むだけ）。
+pub fn pause_result(
+    store: &dyn TaskStore,
+    updated: &task_core::Task,
+) -> Result<TaskPauseResult, OpsError> {
+    let subtree = descendants(store, updated)?
         .iter()
         .filter(|t| !t.status.is_terminal())
         .map(task_ref)
         .collect();
     Ok(TaskPauseResult {
-        task: task_ref(&updated),
+        task: task_ref(updated),
         paused_at: updated.paused_at.map(crate::view::to_rfc3339),
         subtree,
     })
+}
+
+/// [`pause_task`]（`paused = true`）・[`resume_task`]（`false`）の書き込み計画（読むだけ）。返った task と
+/// event を `update_task`（CoS の監査経路では `SqliteStore::edit_task_tx`）で書く。`by` は `Edited.by`。
+pub fn plan_set_paused(
+    store: &dyn TaskStore,
+    id: task_core::TaskId,
+    paused: bool,
+    by: &str,
+    now: OffsetDateTime,
+) -> Result<(task_core::Task, task_core::Event), OpsError> {
+    let task = store.get(id)?.ok_or(OpsError::NotFound(id))?;
+    if paused {
+        if task.status.is_terminal()
+            || task.paused_at.is_some()
+            || task_core::is_conversation(&task)
+        {
+            return Err(task_conflict(&task, "paused"));
+        }
+        Ok(paused_edit(&task, Some(now), now, by))
+    } else {
+        if task.paused_at.is_none() {
+            return Err(task_conflict(&task, "resumed"));
+        }
+        Ok(paused_edit(&task, None, now, by))
+    }
 }
 
 /// `POST /tasks/{id}/pause`（ADR-0079 D13、Phase R5a）: task の **subtree を一時停止**する。

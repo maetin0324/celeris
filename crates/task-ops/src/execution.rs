@@ -391,6 +391,41 @@ pub fn replan(
     limits: ExecutionLimits,
     now: OffsetDateTime,
 ) -> Result<(ExecutionPlanRow, ReplanDiff), OpsError> {
+    let (write, diff) = plan_replan(
+        store,
+        task_id,
+        spec,
+        reason,
+        origin,
+        planner_run_id,
+        limits,
+        now,
+    )?;
+    let new_plan = write.new_plan.clone();
+    store.execution_plan_replan(
+        write.task_id,
+        write.old_plan_id,
+        write.new_plan,
+        write.updated_work_units,
+        write.new_work_units,
+        write.extra_events,
+        write.plan_event,
+    )?;
+    Ok((new_plan, diff))
+}
+
+/// [`replan`] の検証と書き込みの組み立て（読むだけ）。
+#[allow(clippy::too_many_arguments)]
+pub fn plan_replan(
+    store: &dyn TaskStore,
+    task_id: TaskId,
+    spec: ExecutionPlanSpec,
+    reason: String,
+    origin: PlanOrigin,
+    planner_run_id: Option<String>,
+    limits: ExecutionLimits,
+    now: OffsetDateTime,
+) -> Result<(ReplanWrite, ReplanDiff), OpsError> {
     let Some(task) = store.get(task_id)? else {
         return Err(OpsError::NotFound(task_id));
     };
@@ -881,16 +916,31 @@ pub fn replan(
         reason: Some(reason_with_diff),
         plan: Box::new(validated.spec),
     };
-    store.execution_plan_replan(
-        task_id,
-        active.id,
-        new_plan.clone(),
-        updated_work_units,
-        new_work_units,
-        extra_events,
-        plan_event,
-    )?;
-    Ok((new_plan, diff))
+    Ok((
+        ReplanWrite {
+            task_id,
+            old_plan_id: active.id,
+            new_plan,
+            updated_work_units,
+            new_work_units,
+            extra_events,
+            plan_event,
+        },
+        diff,
+    ))
+}
+
+/// [`plan_replan`] が組み立てた書き込み（`execution_plan_replan` の引数そのもの）。CoS の監査経路
+/// （ADR 2026-10-09 D5）は同じ値を `SqliteStore::execution_plan_replan_tx` に渡す。
+#[derive(Debug, Clone)]
+pub struct ReplanWrite {
+    pub task_id: TaskId,
+    pub old_plan_id: String,
+    pub new_plan: ExecutionPlanRow,
+    pub updated_work_units: Vec<WorkUnitRow>,
+    pub new_work_units: Vec<WorkUnitRow>,
+    pub extra_events: Vec<Event>,
+    pub plan_event: Event,
 }
 
 /// タスクの `active` な計画と WorkUnit（`GET`/`celerisctl execution plan show` が使う）。

@@ -207,6 +207,92 @@ fn model_not_in_catalog(source: &CatalogSource, model_id: &str) -> ApiProblem {
     )
 }
 
+/// CoS の `PUT …/assignments/{source}/{tier}`（ADR 2026-10-09 D3/D5、`model_assignment.put`）。人の `PUT` と
+/// 同じ検証（source・tier・空でない model_id・catalog にある model）の後、割り当てと
+/// `ModelRoleAssignmentChanged`（actor = cos）を監査と同じ transaction で書く。
+pub(crate) fn put_assignment_audited(
+    store: &task_core::store::SqliteStore,
+    raw_source: &str,
+    raw_tier: &str,
+    payload: AssignmentPutBody,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let target_id = format!("{raw_source}/{raw_tier}");
+    let reject = |problem| audit.reject(store, "model_assignment", &target_id, problem);
+    let source = parse_source(raw_source).map_err(reject)?;
+    let tier = parse_tier(raw_tier).map_err(reject)?;
+    if payload.model_id.trim().is_empty() {
+        return Err(reject(ApiProblem::bad_request("model_id is empty")));
+    }
+    let entries = store
+        .model_catalog_list()
+        .map_err(|e| reject(store_problem(e)))?;
+    if !entries
+        .iter()
+        .any(|e| e.source == source && e.model_id == payload.model_id)
+    {
+        return Err(reject(model_not_in_catalog(&source, &payload.model_id)));
+    }
+    let now = time::OffsetDateTime::now_utc().unix_timestamp();
+    audit.apply(
+        store,
+        "model_assignment",
+        &target_id,
+        "model_assignment.put",
+        |tx| {
+            let item = task_core::store::SqliteStore::model_role_assignment_set_tx(
+                tx,
+                &source,
+                tier,
+                &payload.model_id,
+                payload.note.as_deref(),
+                "cos",
+                now,
+            )?;
+            Ok(serde_json::json!({
+                "source": item.source.as_str(),
+                "tier": tier_str(tier),
+                "model_id": item.model_id,
+            }))
+        },
+    )
+}
+
+/// CoS の `DELETE …/assignments/{source}/{tier}`（ADR 2026-10-09 D3/D5、`model_assignment.delete`）。無い割り当ては
+/// 人の経路と同じく 404 で、理由付きの rejected 行として記録する。
+pub(crate) fn delete_assignment_audited(
+    store: &task_core::store::SqliteStore,
+    raw_source: &str,
+    raw_tier: &str,
+    audit: &crate::cos::operations::OperationAudit,
+) -> Result<task_core::chat::CosOperation, ApiProblem> {
+    let target_id = format!("{raw_source}/{raw_tier}");
+    let reject = |problem| audit.reject(store, "model_assignment", &target_id, problem);
+    let source = parse_source(raw_source).map_err(reject)?;
+    let tier = parse_tier(raw_tier).map_err(reject)?;
+    let present = store
+        .model_role_assignments()
+        .map_err(|e| reject(store_problem(e)))?
+        .iter()
+        .any(|a| a.source == source && a.tier == tier);
+    if !present {
+        return Err(reject(ApiProblem::new(
+            StatusCode::NOT_FOUND,
+            "model_assignment_not_found",
+            "no assignment for that source and tier",
+        )));
+    }
+    audit.apply(store, "model_assignment", &target_id, "model_assignment.delete", |tx| {
+        if !task_core::store::SqliteStore::model_role_assignment_delete_tx(tx, &source, tier, "cos")? {
+            return Err(task_core::chat::ChatError::NotFound {
+                kind: "model_assignment",
+                id: target_id.clone(),
+            });
+        }
+        Ok(serde_json::json!({"source": source.as_str(), "tier": tier_str(tier), "deleted": true}))
+    })
+}
+
 fn assignment_item(a: &EffectiveAssignment) -> EffectiveAssignmentView {
     let (state, excluded_reason) = match a.state {
         AssignmentState::Assigned => (AssignmentStateView::Assigned, None),

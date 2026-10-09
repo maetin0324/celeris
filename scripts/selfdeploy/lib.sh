@@ -921,7 +921,7 @@ sd_list_stale_celeris_units() {
 # `{ok:false, code}`）に書く。ログは標準出力・標準エラーへ（呼ぶ側が gate-logs/browser-ledger.log へ向ける）。
 # 差し替え（試験用）: SD_BROWSER_LEDGER_RUNNER（生成器。既定 <build>/scripts/browser-conformance.py を python3 で）、
 #   SD_AGENT_BROWSER（既定 agent-browser）、SD_BROWSER_LEDGER_CHECK_BIN（既定 <out>/bin/celerisctl）、
-#   SD_BROWSER_AGENT_VERSION（既定 0.38.1）、SD_BROWSER_LEDGER_TIMEOUT（既定 1800 秒。全体の上限）。
+#   SD_BROWSER_AGENT_VERSION（既定 0.38.1）、SD_BROWSER_LEDGER_TIMEOUT（既定 3600 秒。全体の上限）。
 # 結果の code: ok / agent_browser_missing / agent_browser_version / generator_failed / check_failed / timeout /
 #   または `celerisctl browser ledger check` の code（stale_release・invalid など）。
 # 結果の変数: SD_BROWSER_LEDGER_OK（true/false）と SD_BROWSER_LEDGER_CODE（呼んだ shell に残る。subshell で呼ぶと消える）。
@@ -939,10 +939,10 @@ _sd_bl_run() {
 }
 
 _sd_bl_write_status() {
-  # $1=out/browser $2=ok $3=code $4=agent-browser version $5=p4b(true/false) $6=check の JSON（空でもよい）
-  python3 - "$1/ledger-status.json" "$2" "$3" "$4" "$5" "$6" <<'PY'
+  # $1=out/browser $2=ok $3=code $4=agent-browser version $5=p4b $6=check JSON $7=credential ok $8=code $9=reason
+  python3 - "$1/ledger-status.json" "$2" "$3" "$4" "$5" "$6" "${7:-false}" "${8:-not_reached}" "${9:-}" <<'PY'
 import json, sys, datetime
-path, ok, code, ab, p4b, chk = sys.argv[1:7]
+path, ok, code, ab, p4b, chk, cred_ok, cred_code, cred_reason = sys.argv[1:10]
 try:
     c = json.loads(chk) if chk.strip() else {}
 except Exception:
@@ -955,6 +955,7 @@ doc = {
     "p4b": p4b == "true",
     "backends": c.get("backends") or [],
     "credential_backends": c.get("credential_backends") or [],
+    "credential_evidence": {"ok": cred_ok == "true", "code": cred_code, "reason": cred_reason},
 }
 with open(path, "w", encoding="utf-8") as fh:
     json.dump(doc, fh, ensure_ascii=False)
@@ -965,10 +966,10 @@ PY
 sd_browser_ledger() {
   local build="$1" out="$2" sha12="$3"
   local partial="$out/browser.partial" final="$out/browser"
-  local timeout_s="${SD_BROWSER_LEDGER_TIMEOUT:-1800}" deadline
+  local timeout_s="${SD_BROWSER_LEDGER_TIMEOUT:-3600}" deadline
   local ab="${SD_AGENT_BROWSER:-agent-browser}" ab_out ab_ver="" p4b=false
   local check_bin="${SD_BROWSER_LEDGER_CHECK_BIN:-$out/bin/celerisctl}"
-  local sha_full chk_json="" chk_rc rc
+  local sha_full chk_json="" chk_rc rc cred_ok=false cred_code=not_reached cred_reason="" cred_json=""
   local -a runner
   deadline=$(($(date +%s) + timeout_s))
   SD_BROWSER_LEDGER_OK=false
@@ -981,7 +982,7 @@ sd_browser_ledger() {
     sd_log "browser-ledger: no ledger placed (code=$1)"
     rm -rf "$partial" "$final"
     mkdir -p "$final"
-    _sd_bl_write_status "$final" false "$1" "$ab_ver" "$p4b" ""
+    _sd_bl_write_status "$final" false "$1" "$ab_ver" "$p4b" "" false not_reached ""
     return 1
   }
 
@@ -1023,6 +1024,44 @@ sd_browser_ledger() {
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then _sd_bl_fail timeout; return 1; fi
   if [ "$rc" -eq 0 ]; then p4b=true; else sd_log "browser-ledger: p4b evidence exit $rc (public-capability ledger kept)"; fi
 
+  # 3b. credential 証拠（P4-B 完了時だけ。失敗しても公開台帳を維持）
+  if [ "$p4b" = true ]; then
+    mkdir -p "$partial/credential"
+    _sd_bl_run "$deadline" env CELERIS_USERNS_TESTS=1 "${runner[@]}" \
+        --credential-evidence "$partial/conformance.json" \
+        --credential-backend claude-code --credential-backend browser-specialist \
+        --output-dir "$partial/credential" 8>&- 9>&-
+    rc=$?
+    cred_json="$partial/credential/credential-evidence.json"
+    if [ -f "$cred_json" ]; then
+        cred_code="$(python3 - "$cred_json" "$rc" <<'PY'
+import json,sys
+try: print(json.load(open(sys.argv[1])).get('code') or ('ok' if sys.argv[2]=='0' else 'generator_failed'))
+except Exception: print('ok' if sys.argv[2]=='0' else 'generator_failed')
+PY
+)"
+        cred_reason="$(python3 - "$cred_json" <<'PY'
+import json,sys
+try: print(str(json.load(open(sys.argv[1])).get('reason') or '').replace('\\n',' ')[:500])
+except Exception: pass
+PY
+)"
+      elif [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then cred_code=timeout; cred_reason="credential evidence timed out"
+      elif [ "$rc" -eq 0 ]; then cred_code=generator_failed; cred_reason="credential evidence output missing"
+      else cred_code=generator_failed; cred_reason="credential evidence generator exit $rc"
+      fi
+    if [ "$rc" -eq 0 ] && [ -f "$partial/credential/conformance.json" ]; then
+        mv -f "$partial/credential/conformance.json" "$partial/conformance.json"
+        cred_ok=true
+        cred_code=ok
+        cred_reason=""
+    fi
+  else
+    cred_code=p4b_incomplete
+    cred_reason="P4-B evidence incomplete"
+  fi
+  sd_log "browser-ledger: credential evidence exit ${rc:-not-run} (code=$cred_code)${cred_reason:+: $cred_reason}"
+
   # 4. daemon と同じ判定で検査
   if [ ! -x "$check_bin" ]; then sd_log "browser-ledger: check binary $check_bin is not executable"; _sd_bl_fail check_failed; return 1; fi
   chk_json="$(_sd_bl_run "$deadline" "$check_bin" browser ledger check --file "$partial/conformance.json" \
@@ -1040,7 +1079,7 @@ except Exception: print("")' 2>/dev/null || true)"
   fi
 
   # 5. 置く（status は partial の中に書いてから rename する）
-  _sd_bl_write_status "$partial" true ok "$ab_ver" "$p4b" "$chk_json"
+  _sd_bl_write_status "$partial" true ok "$ab_ver" "$p4b" "$chk_json" "$cred_ok" "$cred_code" "$cred_reason"
   rm -rf "$final"
   mv -T "$partial" "$final" || { _sd_bl_fail check_failed; return 1; }
   SD_BROWSER_LEDGER_OK=true

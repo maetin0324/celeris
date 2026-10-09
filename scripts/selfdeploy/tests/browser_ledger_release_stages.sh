@@ -110,23 +110,40 @@ except Exception:
     print(json.dumps({"ok": False, "code": "invalid"})); sys.exit(3)
 if d.get("generated_for", {}).get("celeris_release") != sys.argv[2]:
     print(json.dumps({"ok": False, "code": "stale_release"})); sys.exit(3)
-print(json.dumps({"ok": True, "code": "ok", "backends": ["claude-code", "browser-specialist"], "credential_backends": ["claude-code"]}))
+credential = any(x.get("test") == "credential-proof" for x in d.get("results", []))
+print(json.dumps({"ok": True, "code": "ok", "backends": ["claude-code", "browser-specialist"], "credential_backends": ["claude-code"] if credential else []}))
 PY
   exit $?
 fi
 exit 0
 EOF2
-# 偽の生成器（browser-conformance.py の代わり）。FAKE_RUNNER_FAIL=1 で落ちる。--p4b-evidence は FAKE_P4B_EXIT で終わる。
+# 偽の生成器（browser-conformance.py の代わり）。credential evidence は FAKE_CREDENTIAL_EXIT で制御。
 cat >"$root/bin/fake-runner" <<'EOF2'
 #!/usr/bin/env bash
 echo "runner $*" >>"$FAKE_LOG"
 [ "${FAKE_RUNNER_FAIL:-0}" = 1 ] && { echo "runner failed (fake)" >&2; exit 1; }
-out=""; rel=""; p4b=false
+out=""; rel=""; p4b=false; credential=false; ledger=""
 while [ $# -gt 0 ]; do
-  case "$1" in --output-dir) out="$2" ;; --celeris-release) rel="$2" ;; --p4b-evidence) p4b=true ;; esac
+  case "$1" in --output-dir) out="$2" ;; --celeris-release) rel="$2" ;; --p4b-evidence) p4b=true ;; --credential-evidence) credential=true; ledger="$2" ;; esac
   shift
 done
 if [ "$p4b" = true ]; then exit "${FAKE_P4B_EXIT:-0}"; fi
+if [ "$credential" = true ]; then
+  [ "${CELERIS_USERNS_TESTS:-}" = 1 ] || { echo 'missing CELERIS_USERNS_TESTS' >&2; exit 9; }
+  mkdir -p "$out/credential-logs"
+  code=tests_failed; reason='fixture isolation failed'
+  if [ "${FAKE_CREDENTIAL_EXIT:-0}" = 0 ]; then
+    code=ok; reason=''
+    cp "$ledger" "$out/conformance.json"
+    python3 - "$ledger" "$out/conformance.json" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1])); d['results'].append({'test':'credential-proof','status':'passed'})
+json.dump(d,open(sys.argv[2],'w'))
+PY
+  fi
+  printf '{"complete":%s,"code":"%s","reason":"%s","evidence":[]}' "$([ "$code" = ok ] && echo true || echo false)" "$code" "$reason" >"$out/credential-evidence.json"
+  exit "${FAKE_CREDENTIAL_EXIT:-0}"
+fi
 mkdir -p "$out"
 printf '{"schema":1,"source":"celeris-browser-conformance-protocol-scripted","generated_for":{"celeris_release":"%s"},"results":[]}\n' "$rel" >"$out/conformance.json"
 EOF2
@@ -243,6 +260,9 @@ json_is "$rel3/manifest.json" "d['browser_ledger'] == {'ok': True, 'code': 'ok'}
 json_is "$rel3/browser/conformance.json" "d['generated_for']['celeris_release'] == '$c3_12'" || fail "ledger is not for this release"
 grep -q -- "--celeris-release $c3_12" "$root/fake.log" || fail "generator did not get --celeris-release"
 grep -q -- "--p4b-backend claude-code --p4b-backend browser-specialist" "$root/fake.log" || fail "p4b evidence step did not run"
+grep -q -- '--credential-evidence .*--credential-backend claude-code --credential-backend browser-specialist' "$root/fake.log" || fail "credential evidence step did not run"
+json_is "$rel3/browser/ledger-status.json" "d['credential_evidence'] == {'ok': True, 'code': 'ok', 'reason': ''}" || fail "credential evidence status is wrong"
+json_is "$rel3/browser/conformance.json" "any(x.get('test') == 'credential-proof' for x in d['results'])" || fail "credential evidence ledger was not adopted"
 
 # ---- (2b) P4-B が落ちても公開能力の台帳は残る ----
 c4="$(commit v4)"
@@ -251,14 +271,25 @@ FAKE_P4B_EXIT=1 run_release "$c4" || fail "release failed on a p4b failure"
 rel4="$root/state/releases/$c4_12"
 [ -f "$rel4/browser/conformance.json" ] || fail "public-capability ledger was dropped on a p4b failure"
 json_is "$rel4/browser/ledger-status.json" "d['ok'] is True and d['p4b'] is False" || fail "ledger-status (p4b failed) is wrong"
+json_is "$rel4/browser/ledger-status.json" "d['credential_evidence'] == {'ok': False, 'code': 'p4b_incomplete', 'reason': 'P4-B evidence incomplete'}" || fail "credential evidence was not marked skipped after P4-B failure"
+
+# ---- (2c) credential evidence が失敗しても公開台帳を維持し理由を記録 ----
+c5="$(commit v5)"
+c5_12="${c5:0:12}"
+FAKE_CREDENTIAL_EXIT=1 run_release "$c5" || fail "release failed on credential evidence failure"
+rel5="$root/state/releases/$c5_12"
+[ -f "$rel5/browser/conformance.json" ] || fail "public ledger was dropped on credential failure"
+json_is "$rel5/browser/ledger-status.json" "d['ok'] is True and d['credential_evidence']['ok'] is False and d['credential_evidence']['code'] == 'tests_failed' and d['credential_backends'] == []" || fail "credential failure status/backends are wrong"
+grep -q 'credential evidence exit 1 (code=tests_failed)' "$rel5/gate-logs/browser-ledger.log" || fail "credential failure reason is absent from release log"
 
 # ---- (3) browser-ledger.sh ----
 # 未配置の rel0 を作り直す（agent-browser は今は通る）。
 : >"$root/fake.log"
 run_ledger "$c0_12" || { cat "$root/ledger.out" >&2; fail "browser-ledger.sh failed on a release without a ledger"; }
 [ -f "$rel0/browser/conformance.json" ] || fail "browser-ledger.sh did not place the ledger"
-json_is "$rel0/browser/ledger-status.json" "d['ok'] is True" || fail "ledger-status after rebuild is wrong"
+json_is "$rel0/browser/ledger-status.json" "d['ok'] is True and d['credential_evidence']['ok'] is True and d['credential_backends'] == ['claude-code']" || fail "ledger-status after rebuild is wrong"
 [ "$(runner_calls)" = 1 ] || fail "expected one generator run, got $(runner_calls)"
+grep -q -- '--credential-evidence .*--credential-backend claude-code --credential-backend browser-specialist' "$root/fake.log" || fail "browser-ledger.sh did not run credential evidence"
 [ ! -e "$rel0/browser.new" ] && [ ! -e "$rel0/browser.old" ] || fail "temporary browser dirs were left behind"
 # 有効なら作り直さない。
 run_ledger "$c0_12" || fail "browser-ledger.sh failed on a valid ledger"
